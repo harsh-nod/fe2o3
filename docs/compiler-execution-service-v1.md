@@ -38,8 +38,12 @@ only to the fixed authenticated listener path.
 The complete receipt carriage, subject-bound current-record recovery operation,
 bounded restart-safe client state machine, backend acquisition, attempt-scoped
 sidecar transport, and receipt-bearing Cargo/host V2 route are implemented.
-External monotonic rollback anchoring, verifier authority, the deployed
-distinct-UID service entrypoint, and the exact Cargo-to-KFD run remain open.
+The Worker V3 verifier request and decision now losslessly bind the exact
+subject, carriage, policy, occurrence, Worker-ledger record, sequence, and
+rollback anchors, and fail closed without independent protected-policy, ledger,
+and external rollback verification identities. The concrete protected verifier,
+external monotonic rollback anchor, deployed distinct-UID service entrypoint,
+and exact Cargo-to-KFD run remain open.
 
 The caller-pinned policy, service launch manifest, and service-owned Ed25519 key
 have reusable immutable memfd capabilities in
@@ -57,7 +61,8 @@ both inherited descriptors, publishes its exact V3 handoff, acquires and
 independently decodes the signed receipt carriage for that subject, and
 durably publishes the exact carriage bytes beside the handoff. Cargo admits
 the sidecar against the same sealed profile before consuming the handoff. The
-carriage remains inert until protected verifier and rollback admission.
+carriage remains inert until the implemented verifier boundary is backed by a
+real protected verifier and external rollback admission.
 
 ## Transport And Ownership
 

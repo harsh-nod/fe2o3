@@ -185,9 +185,10 @@ The Cargo wrapper transports that profile through its authenticated broker,
 creates the selected rustc's service endpoint at fd 195 after fork, installs
 the exact policy at fd 202, transfers the live endpoint and pidfd only to the
 fixed distinct-UID supervisor socket, and gates fresh Worker V3 publication on
-canonical readiness while retaining exact invocation custody. Distinct-UID
-service deployment, backend receipt acquisition/carriage, and the Worker V3
-authority join remain absent. A fixed
+canonical readiness while retaining exact invocation custody. Backend receipt
+acquisition, lossless V2 carriage, and the receipt-complete Worker V3 promotion
+boundary are implemented. Distinct-UID service deployment, the concrete
+protected verifier, and external monotonic anchor remain absent. A fixed
 receipt sidecar and publication ACK now
 carry the exact journal, occurrence, receipt, Worker record, sequence, and
 advanced rollback anchor without granting authority from wire bytes. The
@@ -732,6 +733,12 @@ is complete, and the recorded runs grant no current production authority.
   retirement of the duplicate current-generation replay intent, while
   registry-rooted scavenging removes only superseded custody. The envelope
   still grants no compiler, semantic, HSA readiness, load, or launch authority.
+  Host admission reconstructs the exact compiler subject and binds it together
+  with the complete carriage bytes into the Worker V3 lineage challenge. The
+  verifier request lends both canonical records without projection; promotion
+  compares every policy, occurrence, receipt, publication, Worker-ledger,
+  sequence, and rollback coordinate and rejects missing protected-policy,
+  Worker-ledger, or external rollback verification identities before HSA load.
   Production transfers only the canonical V3 envelope and artifact-directory
   descriptors to an identity-pinned sealed application. A
   fresh occurrence binds those descriptors and the ACK channel; Cargo checks
@@ -750,8 +757,10 @@ is complete, and the recorded runs grant no current production authority.
   emits only the generic Worker V3 adapter. The old
   `qualification_worker_v2` macro option, embedded vecadd artifact contract,
   generated `Kernel`/`Prepared` API, and example feature have been deleted.
-  Protected compiler-policy and monotonic rollback promotion in the Worker V3
-  verifier remains open. Recovery and
+  The receipt-complete Worker V3 promotion boundary is implemented, including
+  exhaustive substitution checks. A concrete protected verifier that
+  independently reacquires current policy, Worker-ledger, and external
+  monotonic rollback authority remains open. Recovery and
   verification admission are device-independent; the canonical KFD transition
   binds one checked physical device only when it joins generated host-memory
   packing to the exact current artifact, geometry, effects, and authenticated

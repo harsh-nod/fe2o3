@@ -111,9 +111,13 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   readiness, and owns pidfd cancellation and exactly-once reaping. The
   backend consumes the inherited service and policy descriptors, acquires the
   exact receipt after V3 handoff publication, and carries it through the sole
-  top-level V2 load envelope into host admission. The distinct-UID deployment
-  entrypoint, external monotonic rollback anchoring, and Worker V3 verifier
-  authority join remain open.
+  top-level V2 load envelope into host admission. Host lineage and the Worker V3
+  verifier request now bind the exact subject and complete carriage. Promotion
+  compares every receipt, occurrence, Worker-ledger, sequence, and rollback
+  coordinate and requires nonzero independent protected-policy, ledger, and
+  external rollback verification identities. The concrete protected verifier,
+  distinct-UID deployment entrypoint, external monotonic rollback anchor, and
+  real Cargo-to-KFD qualification remain open.
 - Production has one unselected compilation transaction. Cargo owns it as
   `ManagedProductionBuild`, whose `Fresh`, `Recovered`, and `Ready` values are
   restart states rather than pipeline variants. The backend configuration and
