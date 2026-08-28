@@ -11,12 +11,13 @@ use std::os::fd::{AsFd, OwnedFd};
 use std::os::unix::fs::FileExt;
 
 use ed25519_dalek::SigningKey;
+use fe2o3_compiler_closure_capability::CompilerExecutionSigningKeyCapabilityV1;
 use fe2o3_runtime_protocol::{
     CompilerExecutionAttestationErrorV1, CompilerExecutionIssuerMeasurementV1,
     CompilerExecutionIssuerPolicyV1, SealedStaticApplicationErrorV1,
     sealed_static_application_identity_v1,
 };
-use rustix::fs::{FileType, SealFlags};
+use rustix::fs::FileType;
 use sha2::{Digest, Sha256};
 use zeroize::Zeroize;
 
@@ -33,12 +34,6 @@ pub const SEALED_STATIC_ISSUER_RUNTIME_CLOSURE_V1: &[u8] =
 pub const PROTECTED_COMPILER_EXECUTION_ISSUER_AUTHORITY_V1: &str = "admission-only";
 
 const KEY_BYTES: usize = 32;
-const SECRET_FILE_MODE: u32 = 0o400;
-const PERMISSION_AND_SPECIAL_BITS: u32 = 0o7777;
-const REQUIRED_KEY_SEALS: SealFlags = SealFlags::WRITE
-    .union(SealFlags::GROW)
-    .union(SealFlags::SHRINK)
-    .union(SealFlags::SEAL);
 
 /// Returns the only runtime-closure measurement accepted for a sealed-static issuer.
 pub fn sealed_static_issuer_runtime_measurement_v1() -> CompilerExecutionIssuerMeasurementV1 {
@@ -373,9 +368,7 @@ fn measure_static_executable(
 
 struct ProtectedIssuerSigningKeyV1 {
     key: SigningKey,
-    image: File,
-    snapshot: FileSnapshotV1,
-    seals: SealFlags,
+    capability: CompilerExecutionSigningKeyCapabilityV1,
 }
 
 impl fmt::Debug for ProtectedIssuerSigningKeyV1 {
@@ -383,71 +376,30 @@ impl fmt::Debug for ProtectedIssuerSigningKeyV1 {
         formatter
             .debug_struct("ProtectedIssuerSigningKeyV1")
             .field("authority", &"key-custody-only")
-            .field("snapshot", &self.snapshot)
-            .field("seals", &self.seals)
+            .field("capability", &self.capability)
             .finish_non_exhaustive()
     }
 }
 
 impl ProtectedIssuerSigningKeyV1 {
     fn admit(
-        descriptor: OwnedFd,
+        capability: CompilerExecutionSigningKeyCapabilityV1,
         policy: &CompilerExecutionIssuerPolicyV1,
     ) -> Result<Self, ProtectedCompilerExecutionIssuerAdmissionErrorV1> {
-        require_close_on_exec(
-            &descriptor,
-            IssuerAdmissionErrorKindV1::KeyCloseOnExec,
-            "issuer signing key",
-        )?;
-        let image = File::from(descriptor);
-        let snapshot = FileSnapshotV1::inspect(
-            &image,
-            IssuerAdmissionErrorKindV1::KeyInspect,
-            "issuer signing-key image",
-        )?;
-        if snapshot.file_type() != FileType::RegularFile || snapshot.links != 0 {
-            return Err(ProtectedCompilerExecutionIssuerAdmissionErrorV1::new(
-                IssuerAdmissionErrorKindV1::KeyShape,
-                "issuer signing key is not an anonymous regular file",
-            ));
-        }
-        if snapshot.uid != rustix::process::geteuid().as_raw()
-            || snapshot.mode & PERMISSION_AND_SPECIAL_BITS != SECRET_FILE_MODE
-        {
-            return Err(ProtectedCompilerExecutionIssuerAdmissionErrorV1::new(
-                IssuerAdmissionErrorKindV1::KeyPermissions,
-                "issuer signing key is not service-owned with exact mode 0400",
-            ));
-        }
-        if snapshot.size != KEY_BYTES as u64 {
-            return Err(ProtectedCompilerExecutionIssuerAdmissionErrorV1::new(
-                IssuerAdmissionErrorKindV1::KeySize,
-                "issuer signing-key image is not exactly 32 bytes",
-            ));
-        }
-        let seals = inspect_key_seals(&image)?;
-        let mut bytes = [0_u8; KEY_BYTES];
-        image.read_exact_at(&mut bytes, 0).map_err(|error| {
-            ProtectedCompilerExecutionIssuerAdmissionErrorV1::io(
-                IssuerAdmissionErrorKindV1::KeyRead,
-                "cannot read the exact issuer signing key",
-                error,
+        capability.revalidate(policy).map_err(|error| {
+            ProtectedCompilerExecutionIssuerAdmissionErrorV1::new(
+                IssuerAdmissionErrorKindV1::KeyCapability,
+                format!("issuer signing-key capability is invalid: {error}"),
             )
         })?;
-        let key = SigningKey::from_bytes(&bytes);
-        bytes.zeroize();
+        let key = read_capability_signing_key(&capability)?;
         if key.verifying_key().as_bytes() != policy.verifying_key() {
             return Err(ProtectedCompilerExecutionIssuerAdmissionErrorV1::new(
                 IssuerAdmissionErrorKindV1::SigningKeyMismatch,
                 "issuer signing key does not match the caller-pinned policy",
             ));
         }
-        let admitted = Self {
-            key,
-            image,
-            snapshot,
-            seals,
-        };
+        let admitted = Self { key, capability };
         admitted.validate(policy)?;
         Ok(admitted)
     }
@@ -456,34 +408,15 @@ impl ProtectedIssuerSigningKeyV1 {
         &self,
         policy: &CompilerExecutionIssuerPolicyV1,
     ) -> Result<(), ProtectedCompilerExecutionIssuerAdmissionErrorV1> {
-        require_close_on_exec(
-            &self.image,
-            IssuerAdmissionErrorKindV1::KeyCloseOnExec,
-            "issuer signing key",
-        )?;
-        if FileSnapshotV1::inspect(
-            &self.image,
-            IssuerAdmissionErrorKindV1::KeyInspect,
-            "issuer signing-key image",
-        )? != self.snapshot
-            || inspect_key_seals(&self.image)? != self.seals
-        {
-            return Err(ProtectedCompilerExecutionIssuerAdmissionErrorV1::new(
+        self.capability.revalidate(policy).map_err(|error| {
+            ProtectedCompilerExecutionIssuerAdmissionErrorV1::new(
                 IssuerAdmissionErrorKindV1::KeyChanged,
-                "issuer signing-key descriptor, metadata, or seals changed",
-            ));
-        }
-        let mut bytes = [0_u8; KEY_BYTES];
-        self.image.read_exact_at(&mut bytes, 0).map_err(|error| {
-            ProtectedCompilerExecutionIssuerAdmissionErrorV1::io(
-                IssuerAdmissionErrorKindV1::KeyRead,
-                "cannot re-read the exact issuer signing key",
-                error,
+                format!("issuer signing-key capability changed: {error}"),
             )
         })?;
-        let matches = self.key.as_bytes() == &bytes
+        let current = read_capability_signing_key(&self.capability)?;
+        let matches = self.key.as_bytes() == current.as_bytes()
             && self.key.verifying_key().as_bytes() == policy.verifying_key();
-        bytes.zeroize();
         if !matches {
             return Err(ProtectedCompilerExecutionIssuerAdmissionErrorV1::new(
                 IssuerAdmissionErrorKindV1::KeyChanged,
@@ -533,7 +466,7 @@ impl ProtectedCompilerExecutionIssuerAdmissionV1 {
         process: ProtectedIssuerProcessV1,
         service: ProtectedServiceAdmissionV1,
         policy: CompilerExecutionIssuerPolicyV1,
-        signing_key: OwnedFd,
+        signing_key: CompilerExecutionSigningKeyCapabilityV1,
     ) -> Result<Self, ProtectedCompilerExecutionIssuerAdmissionErrorV1> {
         process.validate()?;
         service
@@ -631,25 +564,27 @@ impl ProtectedCompilerExecutionIssuerAdmissionV1 {
     }
 }
 
-fn inspect_key_seals(
-    image: &File,
-) -> Result<SealFlags, ProtectedCompilerExecutionIssuerAdmissionErrorV1> {
-    let seals = rustix::fs::fcntl_get_seals(image).map_err(|error| {
-        ProtectedCompilerExecutionIssuerAdmissionErrorV1::io(
-            IssuerAdmissionErrorKindV1::KeySeals,
-            "issuer signing key is not an inspectable sealed memfd",
-            io::Error::from(error),
+fn read_capability_signing_key(
+    capability: &CompilerExecutionSigningKeyCapabilityV1,
+) -> Result<SigningKey, ProtectedCompilerExecutionIssuerAdmissionErrorV1> {
+    let image = capability.try_clone_for_transfer().map_err(|error| {
+        ProtectedCompilerExecutionIssuerAdmissionErrorV1::new(
+            IssuerAdmissionErrorKindV1::KeyCapability,
+            format!("cannot retain issuer signing-key capability: {error}"),
         )
     })?;
-    let optional = SealFlags::FUTURE_WRITE | SealFlags::EXEC;
-    let unexpected = seals - REQUIRED_KEY_SEALS - optional;
-    if !seals.contains(REQUIRED_KEY_SEALS) || !unexpected.is_empty() {
-        return Err(ProtectedCompilerExecutionIssuerAdmissionErrorV1::new(
-            IssuerAdmissionErrorKindV1::KeySeals,
-            "issuer signing key does not have the exact immutable seal profile",
+    let mut bytes = [0_u8; KEY_BYTES];
+    if let Err(error) = image.read_exact_at(&mut bytes, 0) {
+        bytes.zeroize();
+        return Err(ProtectedCompilerExecutionIssuerAdmissionErrorV1::io(
+            IssuerAdmissionErrorKindV1::KeyRead,
+            "cannot read the exact issuer signing key",
+            error,
         ));
     }
-    Ok(seals)
+    let key = SigningKey::from_bytes(&bytes);
+    bytes.zeroize();
+    Ok(key)
 }
 
 fn require_close_on_exec(
@@ -688,12 +623,7 @@ pub enum IssuerAdmissionErrorKindV1 {
     ExecutableNotStatic,
     ExecutablePolicyMismatch,
     RuntimePolicyMismatch,
-    KeyCloseOnExec,
-    KeyInspect,
-    KeyShape,
-    KeyPermissions,
-    KeySize,
-    KeySeals,
+    KeyCapability,
     KeyRead,
     KeyChanged,
     SigningKeyMismatch,
@@ -778,10 +708,7 @@ impl Error for ProtectedCompilerExecutionIssuerAdmissionErrorV1 {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Write;
     use std::process::{Command, Stdio};
-
-    use rustix::fs::{MemfdFlags, Mode};
 
     use super::*;
     use crate::test_process_execution;
@@ -796,26 +723,6 @@ mod tests {
         .unwrap()
     }
 
-    fn key_image(seed: [u8; 32], sealed: bool, mode: u32) -> OwnedFd {
-        let image = rustix::fs::memfd_create(
-            "fe2o3-compiler-execution-issuer-key-v1",
-            MemfdFlags::CLOEXEC | MemfdFlags::ALLOW_SEALING,
-        )
-        .unwrap();
-        let mut file = File::from(image);
-        file.write_all(&seed).unwrap();
-        rustix::fs::fchmod(&file, Mode::from_raw_mode(mode)).unwrap();
-        if sealed {
-            rustix::fs::fcntl_add_seals(
-                &file,
-                SealFlags::WRITE | SealFlags::GROW | SealFlags::SHRINK,
-            )
-            .unwrap();
-            rustix::fs::fcntl_add_seals(&file, SealFlags::SEAL).unwrap();
-        }
-        file.into()
-    }
-
     #[test]
     fn runtime_measurement_is_exact_and_nonzero() {
         let measurement = sealed_static_issuer_runtime_measurement_v1();
@@ -828,115 +735,34 @@ mod tests {
     }
 
     #[test]
-    fn signing_key_admission_requires_every_security_axis() {
+    fn signing_key_capability_is_revalidated_and_retained() {
         let key = SigningKey::from_bytes(&[0x31; 32]);
         let policy = policy(&key);
-        let admitted = ProtectedIssuerSigningKeyV1::admit(
-            key_image(key.to_bytes(), true, SECRET_FILE_MODE),
-            &policy,
-        )
-        .unwrap();
+        let mut seed = key.to_bytes();
+        let capability =
+            CompilerExecutionSigningKeyCapabilityV1::create_and_zeroize(&mut seed, &policy)
+                .unwrap();
+        assert_eq!(seed, [0; KEY_BYTES]);
+        let admitted = ProtectedIssuerSigningKeyV1::admit(capability, &policy).unwrap();
         admitted.validate(&policy).unwrap();
+        assert_eq!(admitted.key.as_bytes(), key.as_bytes());
 
-        for (image, expected) in [
-            (
-                key_image(key.to_bytes(), false, SECRET_FILE_MODE),
-                IssuerAdmissionErrorKindV1::KeySeals,
-            ),
-            (
-                key_image(key.to_bytes(), true, 0o600),
-                IssuerAdmissionErrorKindV1::KeyPermissions,
-            ),
-            (
-                key_image([0x32; 32], true, SECRET_FILE_MODE),
-                IssuerAdmissionErrorKindV1::SigningKeyMismatch,
-            ),
-            (
-                key_image([0x31; 32], true, SECRET_FILE_MODE),
-                IssuerAdmissionErrorKindV1::SigningKeyMismatch,
-            ),
-        ] {
-            let other_policy = if expected == IssuerAdmissionErrorKindV1::SigningKeyMismatch {
-                CompilerExecutionIssuerPolicyV1::new(
-                    1,
-                    policy.executable(),
-                    policy.runtime(),
-                    SigningKey::from_bytes(&[0x7f; 32])
-                        .verifying_key()
-                        .to_bytes(),
-                )
-                .unwrap()
-            } else {
-                policy.clone()
-            };
-            let error = ProtectedIssuerSigningKeyV1::admit(image, &other_policy).unwrap_err();
-            assert_eq!(error.kind(), expected);
-        }
-    }
-
-    #[test]
-    fn signing_key_rejects_length_and_cloexec_substitution() {
-        let key = SigningKey::from_bytes(&[0x41; 32]);
-        let policy = policy(&key);
-        let short = key_image([0x41; 32], false, SECRET_FILE_MODE);
-        let short_file = File::from(short);
-        short_file.set_len(31).unwrap();
-        rustix::fs::fcntl_add_seals(
-            &short_file,
-            SealFlags::WRITE | SealFlags::GROW | SealFlags::SHRINK,
+        let mut other_seed = key.to_bytes();
+        let other_capability =
+            CompilerExecutionSigningKeyCapabilityV1::create_and_zeroize(&mut other_seed, &policy)
+                .unwrap();
+        let other_policy = CompilerExecutionIssuerPolicyV1::new(
+            1,
+            policy.executable(),
+            policy.runtime(),
+            SigningKey::from_bytes(&[0x7f; 32])
+                .verifying_key()
+                .to_bytes(),
         )
         .unwrap();
-        rustix::fs::fcntl_add_seals(&short_file, SealFlags::SEAL).unwrap();
-        let error = ProtectedIssuerSigningKeyV1::admit(short_file.into(), &policy).unwrap_err();
-        assert_eq!(error.kind(), IssuerAdmissionErrorKindV1::KeySize);
-
-        let no_cloexec = key_image(key.to_bytes(), true, SECRET_FILE_MODE);
-        rustix::io::fcntl_setfd(&no_cloexec, rustix::io::FdFlags::empty()).unwrap();
-        let error = ProtectedIssuerSigningKeyV1::admit(no_cloexec, &policy).unwrap_err();
-        assert_eq!(error.kind(), IssuerAdmissionErrorKindV1::KeyCloseOnExec);
-    }
-
-    #[test]
-    fn signing_key_continuity_rejects_descriptor_and_metadata_drift() {
-        let key = SigningKey::from_bytes(&[0x45; 32]);
-        let policy = policy(&key);
-        let admitted = ProtectedIssuerSigningKeyV1::admit(
-            key_image(key.to_bytes(), true, SECRET_FILE_MODE),
-            &policy,
-        )
-        .unwrap();
-        rustix::io::fcntl_setfd(&admitted.image, rustix::io::FdFlags::empty()).unwrap();
-        let error = admitted.validate(&policy).unwrap_err();
-        assert_eq!(error.kind(), IssuerAdmissionErrorKindV1::KeyCloseOnExec);
-
-        let admitted = ProtectedIssuerSigningKeyV1::admit(
-            key_image(key.to_bytes(), true, SECRET_FILE_MODE),
-            &policy,
-        )
-        .unwrap();
-        rustix::fs::fchmod(&admitted.image, Mode::from_raw_mode(0o600)).unwrap();
-        let error = admitted.validate(&policy).unwrap_err();
-        assert_eq!(error.kind(), IssuerAdmissionErrorKindV1::KeyChanged);
-
-        let admitted = ProtectedIssuerSigningKeyV1::admit(
-            key_image(key.to_bytes(), true, SECRET_FILE_MODE),
-            &policy,
-        )
-        .unwrap();
-        assert!(admitted.image.write_all_at(&[0; 32], 0).is_err());
-        let current_snapshot = FileSnapshotV1::inspect(
-            &admitted.image,
-            IssuerAdmissionErrorKindV1::KeyInspect,
-            "issuer signing-key image",
-        )
-        .unwrap();
-        match admitted.validate(&policy) {
-            Ok(()) => assert_eq!(current_snapshot, admitted.snapshot),
-            Err(error) => {
-                assert_ne!(current_snapshot, admitted.snapshot);
-                assert_eq!(error.kind(), IssuerAdmissionErrorKindV1::KeyChanged);
-            }
-        }
+        let error =
+            ProtectedIssuerSigningKeyV1::admit(other_capability, &other_policy).unwrap_err();
+        assert_eq!(error.kind(), IssuerAdmissionErrorKindV1::KeyCapability);
     }
 
     #[test]

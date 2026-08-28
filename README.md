@@ -109,9 +109,11 @@ records. This removes ambiguity at the future service boundary, but all of
 these values remain authority-free. The protected authority service now has a
 shared Linux admission primitive and an issuer-admission owner that requires an
 irreversibly hardened process, a loader-independent static executable matching
-the caller policy, and an immutable service-owned sealed signing-key image.
-It retains and remeasures the exact executable and key at every continuity
-boundary. A signed fixed-width singleton journal now durably commits fresh
+the caller policy, and the canonical move-only service-owned signing-key
+capability. That capability enforces an anonymous exact mode-0400, read-only,
+sealed key image, zeroizes admitted seed buffers, and exposes neither descriptor
+nor signing authority. The issuer retains and remeasures the exact executable
+and key at every continuity boundary. A signed fixed-width singleton journal now durably commits fresh
 subject-bound challenges and exact receipts, recovers only immediate legal
 successors, re-emits prepared/issued outputs after crashes, and advances its
 rollback chain idempotently. Its signing APIs require a live move-only compiler
