@@ -139,7 +139,8 @@ pub fn import_rocprofv3_counter_capture_v2(
 
     let mut definitions = Vec::new();
     let mut catalogs = Vec::new();
-    let mut devices = std::collections::BTreeSet::new();
+    let mut device_catalog = std::collections::BTreeMap::new();
+    let mut devices = Vec::new();
     let mut definition_ordinal = 0_u64;
     for process in document.processes.iter() {
         let mut catalog = std::collections::BTreeMap::new();
@@ -156,19 +157,37 @@ pub fn import_rocprofv3_counter_capture_v2(
             if catalog.contains_key(&key) {
                 return Err(ImportErrorV1::InvalidCounterCatalog);
             }
-            let device_identity: CaptureIdentityV1 = derived_handle_identity(
-                b"fe2o3.rocprofv3-json.device.v1\0",
-                source_identity.digest(),
-                key.0,
-            )?
-            .into();
-            devices.insert(device_identity);
-            let identity = capture::derive_identity(
-                COUNTER_DEFINITION_IDENTITY_DOMAIN_V2,
+            let device_identity = match device_catalog.get(&key.0).copied() {
+                Some(identity) => identity,
+                None => {
+                    let ordinal =
+                        u64::try_from(devices.len()).map_err(|_| ImportErrorV1::SizeOverflow)?;
+                    let identity = capture::derive_identity(
+                        capture::DEVICE_IDENTITY_DOMAIN_V1,
+                        source_record.digest,
+                        ordinal,
+                    )
+                    .map_err(ImportErrorV1::Capture)?;
+                    device_catalog.insert(key.0, identity);
+                    devices.push(CaptureDeviceV1 {
+                        identity,
+                        identity_origin: TruthOriginV1::Observed,
+                        source_device_ordinal: ordinal,
+                    });
+                    identity
+                }
+            };
+            let is_constant = definition.is_constant == 1;
+            let is_derived = definition.is_derived == 1;
+            let identity = counter_capture::derive_counter_definition_identity_v2(
                 source_record.digest,
                 definition_ordinal,
+                device_identity,
+                &definition.name,
+                is_constant,
+                is_derived,
             )
-            .map_err(ImportErrorV1::Capture)?;
+            .map_err(ImportErrorV1::CounterCapture)?;
             catalog.insert(key, identity);
             definitions.push(CounterDefinitionV2 {
                 identity,
@@ -177,8 +196,8 @@ pub fn import_rocprofv3_counter_capture_v2(
                 device_identity,
                 name: definition.name.clone(),
                 name_origin: TruthOriginV1::Observed,
-                is_constant: definition.is_constant == 1,
-                is_derived: definition.is_derived == 1,
+                is_constant,
+                is_derived,
             });
             definition_ordinal = definition_ordinal
                 .checked_add(1)
@@ -209,15 +228,10 @@ pub fn import_rocprofv3_counter_capture_v2(
             let agent = info
                 .agent_id
                 .ok_or(ImportErrorV1::MissingCaptureDeviceIdentity)?;
-            let device_identity: CaptureIdentityV1 = derived_handle_identity(
-                b"fe2o3.rocprofv3-json.device.v1\0",
-                source_identity.digest(),
-                agent.handle,
-            )?
-            .into();
-            if !devices.contains(&device_identity) {
-                return Err(ImportErrorV1::InvalidCounterCatalog);
-            }
+            let device_identity = device_catalog
+                .get(&agent.handle)
+                .copied()
+                .ok_or(ImportErrorV1::InvalidCounterCatalog)?;
             let mut values = Vec::new();
             for record in collection.records.iter() {
                 if !record.value.is_finite() {
@@ -300,13 +314,7 @@ pub fn import_rocprofv3_counter_capture_v2(
             identity_origin: TruthOriginV1::Observed,
             source: source_record,
         }],
-        devices: devices
-            .into_iter()
-            .map(|identity| CaptureDeviceV1 {
-                identity,
-                identity_origin: TruthOriginV1::Observed,
-            })
-            .collect(),
+        devices,
         counter_definitions: definitions,
         dispatches,
         coverage: CounterCaptureCoverageV2 {
@@ -629,7 +637,8 @@ pub fn import_rocprofv3_capture_v1(
         .source_map
         .map(|identity| IdentityFactV1::declared(identity.into()))
         .unwrap_or_else(|| IdentityFactV1::unavailable(CaptureUnavailableReasonV1::NotProvided));
-    let mut device_ids = std::collections::BTreeSet::new();
+    let mut device_catalog = std::collections::BTreeMap::new();
+    let mut devices = Vec::new();
     let mut dispatches = Vec::new();
     dispatches
         .try_reserve_exact(total_dispatch_count)
@@ -645,13 +654,26 @@ pub fn import_rocprofv3_capture_v1(
                 .dispatch_info
                 .agent_id
                 .ok_or(ImportErrorV1::MissingCaptureDeviceIdentity)?;
-            let device_identity: CaptureIdentityV1 = derived_handle_identity(
-                b"fe2o3.rocprofv3-json.device.v1\0",
-                source_identity.digest(),
-                agent.handle,
-            )?
-            .into();
-            device_ids.insert(device_identity);
+            let device_identity = match device_catalog.get(&agent.handle).copied() {
+                Some(identity) => identity,
+                None => {
+                    let source_device_ordinal =
+                        u64::try_from(devices.len()).map_err(|_| ImportErrorV1::SizeOverflow)?;
+                    let identity = capture::derive_identity(
+                        capture::DEVICE_IDENTITY_DOMAIN_V1,
+                        source_record.digest,
+                        source_device_ordinal,
+                    )
+                    .map_err(ImportErrorV1::Capture)?;
+                    device_catalog.insert(agent.handle, identity);
+                    devices.push(CaptureDeviceV1 {
+                        identity,
+                        identity_origin: TruthOriginV1::Observed,
+                        source_device_ordinal,
+                    });
+                    identity
+                }
+            };
             let dispatch_identity = capture::derive_identity(
                 ROCPROF_DISPATCH_IDENTITY_DOMAIN_V1,
                 source_record.digest,
@@ -681,13 +703,6 @@ pub fn import_rocprofv3_capture_v1(
             ordinal = ordinal.checked_add(1).ok_or(ImportErrorV1::SizeOverflow)?;
         }
     }
-    let devices = device_ids
-        .into_iter()
-        .map(|identity| CaptureDeviceV1 {
-            identity,
-            identity_origin: TruthOriginV1::Observed,
-        })
-        .collect();
     let count = u64::try_from(total_dispatch_count).map_err(|_| ImportErrorV1::SizeOverflow)?;
     let capture = SemanticCaptureV1 {
         schema_version: CAPTURE_SCHEMA_VERSION_V1,

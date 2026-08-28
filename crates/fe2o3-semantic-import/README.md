@@ -100,7 +100,9 @@ remain `observed`.
 
 The CLI accepts evidence only on stdin and writes canonical binary Trace V1 or
 canonical JSON Capture V1 on stdout. It does not accept paths, directories, devices, FIFOs, raw ATT
-files, or handles. Input is capped at 8 MiB before parsing and output at 64 KiB;
+files, or handles. Input is capped at 8 MiB before parsing. Trace V1 output is
+capped at 64 KiB; Capture V1 and Counter Capture V2 output is independently
+capped at 8 MiB by the canonical encoder.
 arguments, JSON recursion, process/record counts, trace events, evidence sets,
 and all integer conversions are independently checked.
 

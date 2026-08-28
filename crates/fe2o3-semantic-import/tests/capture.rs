@@ -135,6 +135,17 @@ fn capture_rejects_noncanonical_malformed_and_stale_documents() {
 fn capture_rejects_provenance_upgrades_and_noncanonical_source_selectors() {
     let capture =
         import_rocprofv3_capture_v1(&source(), binding(), ImportLimitsV1::default()).unwrap();
+    let mut rewritten_device = capture.clone();
+    rewritten_device.devices[0].identity = CaptureIdentityV1::new([0xdd; 32]).unwrap();
+    for dispatch in &mut rewritten_device.dispatches {
+        if dispatch.device_identity == capture.devices[0].identity {
+            dispatch.device_identity = rewritten_device.devices[0].identity;
+        }
+    }
+    assert!(matches!(
+        decode_capture_v1(&serde_json::to_vec(&rewritten_device).unwrap()),
+        Err(CaptureErrorV1::InvalidDeviceIdentity)
+    ));
     for origin in [
         TruthOriginV1::Proved,
         TruthOriginV1::Observed,

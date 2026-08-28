@@ -116,6 +116,28 @@ fn malformed_catalogs_and_collections_are_rejected() {
 fn stale_identities_origins_ordinals_and_noncanonical_bytes_are_rejected() {
     let capture = imported_capture();
     let mut hostile = capture.clone();
+    hostile.devices[0].identity = CaptureIdentityV1::new([0xdd; 32]).unwrap();
+    for definition in &mut hostile.counter_definitions {
+        if definition.device_identity == capture.devices[0].identity {
+            definition.device_identity = hostile.devices[0].identity;
+        }
+    }
+    for dispatch in &mut hostile.dispatches {
+        if dispatch.device_identity == capture.devices[0].identity {
+            dispatch.device_identity = hostile.devices[0].identity;
+        }
+    }
+    assert!(matches!(
+        decode_counter_capture_v2(&serde_json::to_vec(&hostile).unwrap()),
+        Err(CounterCaptureErrorV2::InvalidDeviceCatalog)
+    ));
+    let mut hostile = capture.clone();
+    hostile.counter_definitions[0].name.push_str("_forged");
+    assert!(matches!(
+        decode_counter_capture_v2(&serde_json::to_vec(&hostile).unwrap()),
+        Err(CounterCaptureErrorV2::InvalidCounterCatalog)
+    ));
+    let mut hostile = capture.clone();
     hostile.dispatches[0].values[0].identity = CaptureIdentityV1::new([0xee; 32]).unwrap();
     assert!(matches!(
         decode_counter_capture_v2(&serde_json::to_vec(&hostile).unwrap()),
@@ -123,6 +145,12 @@ fn stale_identities_origins_ordinals_and_noncanonical_bytes_are_rejected() {
     ));
     let mut hostile = capture.clone();
     hostile.counter_definitions[0].source_definition_ordinal = 8;
+    assert!(matches!(
+        decode_counter_capture_v2(&serde_json::to_vec(&hostile).unwrap()),
+        Err(CounterCaptureErrorV2::InvalidCounterCatalog)
+    ));
+    let mut hostile = capture.clone();
+    hostile.counter_definitions[1].source_definition_ordinal = 3;
     assert!(matches!(
         decode_counter_capture_v2(&serde_json::to_vec(&hostile).unwrap()),
         Err(CounterCaptureErrorV2::InvalidCounterCatalog)

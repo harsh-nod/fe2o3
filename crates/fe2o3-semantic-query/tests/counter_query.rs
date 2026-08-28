@@ -160,3 +160,68 @@ fn capabilities_and_hard_response_bounds_do_not_overclaim() {
         Err(CounterQueryErrorV2::LimitOutOfRange)
     ));
 }
+
+#[test]
+fn late_value_pages_and_dispatch_pages_remain_page_bounded() {
+    let mut records = String::new();
+    for index in 0..5_000 {
+        if index != 0 {
+            records.push(',');
+        }
+        records.push_str(&format!(
+            r#"{{"counter_id":{{"handle":101}},"value":{index}.0}}"#
+        ));
+    }
+    let source = format!(
+        r#"{{"rocprofiler-sdk-tool":[{{"buffer_records":{{}},"counters":[{{"agent_id":{{"handle":17}},"id":{{"handle":101}},"is_constant":0,"is_derived":0,"name":"SQ_WAVES"}}],"callback_records":{{"counter_collection":[{{"dispatch_data":{{"start_timestamp":1,"end_timestamp":2,"dispatch_info":{{"agent_id":{{"handle":17}},"workgroup_size":{{"x":64,"y":1,"z":1}},"grid_size":{{"x":64,"y":1,"z":1}}}}}},"records":[{records}]}}]}}}}]}}"#
+    );
+    let id = OpaqueIdentityV1::new([1; 32]).unwrap();
+    let capture = import_rocprofv3_counter_capture_v2(
+        source.as_bytes(),
+        RocprofCaptureBindingV1 {
+            kernel_ir_claim: KernelIrIdentityClaimV1::canonical_v7_claim(id, 97).unwrap(),
+            artifact: None,
+            source_map: None,
+            wave_width: WaveWidthV1::Wave64,
+        },
+        ImportLimitsV1::default(),
+    )
+    .unwrap();
+    let bytes = encode_counter_capture_v2(&capture).unwrap();
+    let session = CounterQuerySessionV2::open(&bytes, CounterQueryLimitsV2::default()).unwrap();
+    let mut cursor = None;
+    let mut seen = 0;
+    loop {
+        let CounterQueryResponseV2::Page { page } = session
+            .query(CounterQueryRequestV2::List {
+                kind: CounterListKindV2::Values,
+                page: CounterPageRequestV2 {
+                    limit: 127,
+                    cursor,
+                    dispatch_filter: None,
+                    counter_filter: None,
+                },
+            })
+            .unwrap()
+        else {
+            panic!("expected page")
+        };
+        assert!(page.items.len() <= 127);
+        seen += page.items.len();
+        cursor = page.next_cursor;
+        if cursor.is_none() {
+            break;
+        }
+    }
+    assert_eq!(seen, 5_000);
+    let output = session
+        .query_json(CounterQueryRequestV2::List {
+            kind: CounterListKindV2::Dispatches,
+            page: CounterPageRequestV2 {
+                limit: 1,
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    assert!(output.len() < 4_096);
+}

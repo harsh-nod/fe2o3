@@ -15,6 +15,7 @@ pub const MAX_CAPTURE_BYTES_V1: u64 = 8 * 1024 * 1024;
 pub const MAX_CAPTURE_DISPATCHES_V1: usize = 16_384;
 pub const CAPTURE_IDENTITY_DOMAIN_V1: &[u8] = b"fe2o3.semantic-capture.v1\0";
 pub(crate) const RUN_IDENTITY_DOMAIN_V1: &[u8] = b"fe2o3.semantic-capture.run.v1\0";
+pub(crate) const DEVICE_IDENTITY_DOMAIN_V1: &[u8] = b"fe2o3.semantic-capture.device.v1\0";
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct CaptureIdentityV1([u8; 32]);
@@ -235,6 +236,7 @@ pub struct CaptureRunV1 {
 pub struct CaptureDeviceV1 {
     pub identity: CaptureIdentityV1,
     pub identity_origin: TruthOriginV1,
+    pub source_device_ordinal: u64,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -366,18 +368,16 @@ impl SemanticCaptureV1 {
         {
             return Err(CaptureErrorV1::StaleRunIdentity);
         }
-        let device_ids: BTreeSet<_> = self.devices.iter().map(|device| device.identity).collect();
-        if device_ids.len() != self.devices.len()
-            || self
-                .devices
-                .windows(2)
-                .any(|pair| pair[0].identity >= pair[1].identity)
-            || self
-                .devices
-                .iter()
-                .any(|device| device.identity_origin != TruthOriginV1::Observed)
-        {
-            return Err(CaptureErrorV1::InvalidDeviceIdentity);
+        let mut device_ids = BTreeSet::new();
+        for (ordinal, device) in (0_u64..).zip(&self.devices) {
+            if device.source_device_ordinal != ordinal
+                || device.identity_origin != TruthOriginV1::Observed
+                || device.identity
+                    != derive_identity(DEVICE_IDENTITY_DOMAIN_V1, run.source.digest, ordinal)?
+                || !device_ids.insert(device.identity)
+            {
+                return Err(CaptureErrorV1::InvalidDeviceIdentity);
+            }
         }
         let mut prior_selector: Option<(u32, u32)> = None;
         let mut dispatch_ids = BTreeSet::new();

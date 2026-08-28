@@ -13,6 +13,7 @@ use sha2::{Digest, Sha256};
 
 pub const MAX_COUNTER_QUERY_RESPONSE_BYTES_V2: u64 = 1024 * 1024;
 pub const MAX_COUNTER_QUERY_PAGE_ITEMS_V2: u16 = 4096;
+pub const MAX_COUNTER_HOTSPOT_GROUPS_V2: usize = 65_536;
 const MIN_RESPONSE_BYTES: u64 = 4096;
 const CONSERVATIVE_ITEM_BYTES: u64 = 4096;
 
@@ -143,7 +144,7 @@ pub enum CounterQueryItemV2 {
         definition: CounterDefinitionV2,
     },
     Dispatch {
-        dispatch: Box<CounterDispatchV2>,
+        dispatch: CounterDispatchSummaryV2,
     },
     Value {
         dispatch_identity: CaptureIdentityV1,
@@ -152,6 +153,20 @@ pub enum CounterQueryItemV2 {
     Hotspot {
         hotspot: CounterHotspotV2,
     },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub struct CounterDispatchSummaryV2 {
+    pub identity: CaptureIdentityV1,
+    pub run_identity: CaptureIdentityV1,
+    pub device_identity: CaptureIdentityV1,
+    pub process_index: u32,
+    pub collection_index: u32,
+    pub source_collection_ordinal: u64,
+    pub start_timestamp: u64,
+    pub end_timestamp: u64,
+    pub duration_ticks: u64,
+    pub raw_value_count: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -323,13 +338,21 @@ impl CounterQuerySessionV2 {
                 .map_err(|_| CounterQueryErrorV2::CursorOutOfRange)?,
             Some(_) => return Err(CounterQueryErrorV2::CursorQueryMismatch),
         };
-        let mut all = self.items(kind, page.dispatch_filter, page.counter_filter)?;
-        if start > all.len() {
+        let take = usize::from(page.limit)
+            .checked_add(1)
+            .ok_or(CounterQueryErrorV2::SizeOverflow)?;
+        let mut items = self.items(kind, page.dispatch_filter, page.counter_filter, start, take)?;
+        let has_more = items.len() > usize::from(page.limit);
+        if has_more {
+            items.pop();
+        }
+        if start != 0 && items.is_empty() {
             return Err(CounterQueryErrorV2::CursorOutOfRange);
         }
-        let end = start.saturating_add(usize::from(page.limit)).min(all.len());
-        let items: Vec<_> = all.drain(start..end).collect();
-        let next_cursor = (end < all.len() + items.len()).then_some(CounterCursorV2 {
+        let end = start
+            .checked_add(items.len())
+            .ok_or(CounterQueryErrorV2::SizeOverflow)?;
+        let next_cursor = has_more.then_some(CounterCursorV2 {
             query_binding: binding,
             position: u64::try_from(end).map_err(|_| CounterQueryErrorV2::SizeOverflow)?,
         });
@@ -347,12 +370,16 @@ impl CounterQuerySessionV2 {
         kind: CounterListKindV2,
         dispatch_filter: Option<CaptureIdentityV1>,
         counter_filter: Option<CaptureIdentityV1>,
+        start: usize,
+        take: usize,
     ) -> Result<Vec<CounterQueryItemV2>, CounterQueryErrorV2> {
         match kind {
             CounterListKindV2::Definitions => Ok(self
                 .capture
                 .counter_definitions
                 .iter()
+                .skip(start)
+                .take(take)
                 .cloned()
                 .map(|definition| CounterQueryItemV2::Definition { definition })
                 .collect()),
@@ -360,33 +387,47 @@ impl CounterQuerySessionV2 {
                 .capture
                 .dispatches
                 .iter()
-                .cloned()
-                .map(|dispatch| CounterQueryItemV2::Dispatch {
-                    dispatch: Box::new(dispatch),
+                .skip(start)
+                .take(take)
+                .map(|dispatch| {
+                    Ok(CounterQueryItemV2::Dispatch {
+                        dispatch: CounterDispatchSummaryV2 {
+                            identity: dispatch.identity,
+                            run_identity: dispatch.run_identity,
+                            device_identity: dispatch.device_identity,
+                            process_index: dispatch.process_index,
+                            collection_index: dispatch.collection_index,
+                            source_collection_ordinal: dispatch.source_collection_ordinal,
+                            start_timestamp: dispatch.start_timestamp,
+                            end_timestamp: dispatch.end_timestamp,
+                            duration_ticks: dispatch.duration_ticks,
+                            raw_value_count: u64::try_from(dispatch.values.len())
+                                .map_err(|_| CounterQueryErrorV2::SizeOverflow)?,
+                        },
+                    })
                 })
+                .collect::<Result<Vec<_>, _>>()?),
+            CounterListKindV2::Values => Ok(self
+                .capture
+                .dispatches
+                .iter()
+                .filter(|dispatch| dispatch_filter.is_none_or(|id| id == dispatch.identity))
+                .flat_map(|dispatch| {
+                    dispatch
+                        .values
+                        .iter()
+                        .filter(|value| {
+                            counter_filter.is_none_or(|id| id == value.counter_identity)
+                        })
+                        .copied()
+                        .map(|value| CounterQueryItemV2::Value {
+                            dispatch_identity: dispatch.identity,
+                            value,
+                        })
+                })
+                .skip(start)
+                .take(take)
                 .collect()),
-            CounterListKindV2::Values => {
-                let mut items = Vec::new();
-                for dispatch in &self.capture.dispatches {
-                    if dispatch_filter.is_some_and(|id| id != dispatch.identity) {
-                        continue;
-                    }
-                    items.extend(
-                        dispatch
-                            .values
-                            .iter()
-                            .filter(|value| {
-                                counter_filter.is_none_or(|id| id == value.counter_identity)
-                            })
-                            .copied()
-                            .map(|value| CounterQueryItemV2::Value {
-                                dispatch_identity: dispatch.identity,
-                                value,
-                            }),
-                    );
-                }
-                Ok(items)
-            }
             CounterListKindV2::Hotspots => {
                 let mut groups: BTreeMap<(CaptureIdentityV1, CaptureIdentityV1), (f64, u64)> =
                     BTreeMap::new();
@@ -398,9 +439,13 @@ impl CounterQuerySessionV2 {
                         if counter_filter.is_some_and(|id| id != value.counter_identity) {
                             continue;
                         }
-                        let entry = groups
-                            .entry((dispatch.identity, value.counter_identity))
-                            .or_default();
+                        let key = (dispatch.identity, value.counter_identity);
+                        if !groups.contains_key(&key)
+                            && groups.len() == MAX_COUNTER_HOTSPOT_GROUPS_V2
+                        {
+                            return Err(CounterQueryErrorV2::TooManyHotspotGroups);
+                        }
+                        let entry = groups.entry(key).or_default();
                         entry.0 += value.value();
                         entry.1 = entry
                             .1
@@ -419,14 +464,20 @@ impl CounterQuerySessionV2 {
                         .total_cmp(&left.1.0)
                         .then_with(|| left.0.cmp(&right.0))
                 });
-                Ok(groups
+                groups
                     .into_iter()
                     .enumerate()
+                    .skip(start)
+                    .take(take)
                     .map(
                         |(rank, ((dispatch_identity, counter_identity), (value, count)))| {
-                            CounterQueryItemV2::Hotspot {
+                            Ok(CounterQueryItemV2::Hotspot {
                                 hotspot: CounterHotspotV2 {
-                                    rank: u64::try_from(rank + 1).unwrap_or(u64::MAX),
+                                    rank: u64::try_from(
+                                        rank.checked_add(1)
+                                            .ok_or(CounterQueryErrorV2::SizeOverflow)?,
+                                    )
+                                    .map_err(|_| CounterQueryErrorV2::SizeOverflow)?,
                                     dispatch_identity,
                                     counter_identity,
                                     aggregate_f64_bits: value.to_bits(),
@@ -434,10 +485,10 @@ impl CounterQuerySessionV2 {
                                     origin: TruthOriginV1::Inferred,
                                     aggregation: "sum_raw_records_by_dispatch_and_counter_id",
                                 },
-                            }
+                            })
                         },
                     )
-                    .collect())
+                    .collect()
             }
         }
     }
@@ -549,6 +600,7 @@ pub enum CounterQueryErrorV2 {
     FilterNotSupported,
     DispatchNotFound,
     NonFiniteAggregate,
+    TooManyHotspotGroups,
     SizeOverflow,
     IdentityFailure,
     AllocationFailure,

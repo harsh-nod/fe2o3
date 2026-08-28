@@ -168,34 +168,37 @@ impl SemanticCounterCaptureV2 {
         {
             return Err(CounterCaptureErrorV2::StaleRunIdentity);
         }
-        let device_ids: BTreeSet<_> = self.devices.iter().map(|device| device.identity).collect();
-        if device_ids.len() != self.devices.len()
-            || self
-                .devices
-                .windows(2)
-                .any(|pair| pair[0].identity >= pair[1].identity)
-            || self
-                .devices
-                .iter()
-                .any(|device| device.identity_origin != TruthOriginV1::Observed)
-        {
-            return Err(CounterCaptureErrorV2::InvalidDeviceCatalog);
+        let mut device_ids = BTreeSet::new();
+        for (ordinal, device) in (0_u64..).zip(&self.devices) {
+            if device.source_device_ordinal != ordinal
+                || device.identity_origin != TruthOriginV1::Observed
+                || device.identity
+                    != crate::capture::derive_identity(
+                        crate::capture::DEVICE_IDENTITY_DOMAIN_V1,
+                        run.source.digest,
+                        ordinal,
+                    )
+                    .map_err(|_| CounterCaptureErrorV2::IdentityFailure)?
+                || !device_ids.insert(device.identity)
+            {
+                return Err(CounterCaptureErrorV2::InvalidDeviceCatalog);
+            }
         }
         let mut counter_ids = BTreeSet::new();
-        let mut prior_definition_ordinal = None;
-        for definition in &self.counter_definitions {
+        for (expected_definition_ordinal, definition) in (0_u64..).zip(&self.counter_definitions) {
             if !counter_ids.insert(definition.identity)
                 || !device_ids.contains(&definition.device_identity)
                 || definition.identity_origin != TruthOriginV1::Observed
                 || definition.identity
-                    != crate::capture::derive_identity(
-                        COUNTER_DEFINITION_IDENTITY_DOMAIN_V2,
+                    != derive_counter_definition_identity_v2(
                         run.source.digest,
                         definition.source_definition_ordinal,
-                    )
-                    .map_err(|_| CounterCaptureErrorV2::IdentityFailure)?
-                || prior_definition_ordinal
-                    .is_some_and(|prior| prior >= definition.source_definition_ordinal)
+                        definition.device_identity,
+                        &definition.name,
+                        definition.is_constant,
+                        definition.is_derived,
+                    )?
+                || definition.source_definition_ordinal != expected_definition_ordinal
                 || definition.name_origin != TruthOriginV1::Observed
                 || definition.name.is_empty()
                 || definition.name.len() > MAX_COUNTER_NAME_BYTES_V2
@@ -203,7 +206,6 @@ impl SemanticCounterCaptureV2 {
             {
                 return Err(CounterCaptureErrorV2::InvalidCounterCatalog);
             }
-            prior_definition_ordinal = Some(definition.source_definition_ordinal);
         }
 
         let mut value_count = 0_u64;
@@ -319,6 +321,27 @@ impl SemanticCounterCaptureV2 {
         }
         Ok(())
     }
+}
+
+pub(crate) fn derive_counter_definition_identity_v2(
+    source: CaptureIdentityV1,
+    ordinal: u64,
+    device: CaptureIdentityV1,
+    name: &str,
+    is_constant: bool,
+    is_derived: bool,
+) -> Result<CaptureIdentityV1, CounterCaptureErrorV2> {
+    let name_len = u64::try_from(name.len()).map_err(|_| CounterCaptureErrorV2::SizeOverflow)?;
+    let mut hasher = Sha256::new();
+    hasher.update(COUNTER_DEFINITION_IDENTITY_DOMAIN_V2);
+    hasher.update(source.as_bytes());
+    hasher.update(ordinal.to_le_bytes());
+    hasher.update(device.as_bytes());
+    hasher.update(name_len.to_le_bytes());
+    hasher.update(name.as_bytes());
+    hasher.update([u8::from(is_constant), u8::from(is_derived)]);
+    CaptureIdentityV1::new(hasher.finalize().into())
+        .map_err(|_| CounterCaptureErrorV2::IdentityFailure)
 }
 
 fn validate_selector(
