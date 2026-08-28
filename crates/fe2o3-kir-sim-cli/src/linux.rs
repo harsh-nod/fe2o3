@@ -12,18 +12,23 @@ use std::process::ExitCode;
 use fe2o3_kernel_ir::{
     AccessMode, FunctionId, MAX_SIMULATION_BUNDLE_BYTES_V1, MAX_SIMULATION_BUNDLE_BYTES_V2,
     ScalarType, VerifiedCanonicalKernelIrErrorV7, VerifiedCanonicalKernelIrV7,
-    VerifiedSimulationBundleV1, VerifiedSimulationBundleV2,
+    VerifiedSimulationBundleV1, VerifiedSimulationBundleV2, WaveWidth,
 };
 use fe2o3_kir_sim::{
     AdmittedSimulationModuleV1, BufferArgumentV1, BufferBackingIdV1, BufferViewArgumentV1,
+    MAX_EXPLORATION_RETAINED_DECISIONS_V1, MAX_EXPLORATION_SCHEDULES_V1,
     MAX_PERSISTED_SCHEDULE_BYTES_V1, MAX_SCHEDULE_DECISIONS_V1,
-    PersistedSimulationScheduleBindingV1, PersistedSimulationScheduleDocumentV1, ScalarBitsV1,
-    SharedBufferV1, SimulationAdmissionErrorV1, SimulationArgumentV1,
-    SimulationConflictAssessmentV1, SimulationErrorV1, SimulationExecutionErrorKindV1,
-    SimulationExecutionErrorV1, SimulationExecutionV1, SimulationInvocationV1, SimulationLimitsV1,
-    SimulationMemoryConflictV1, SimulationPreflightErrorV1, SimulationRequestV1,
-    SimulationScheduleIdentityV1, SimulationScheduleRequestV1, SimulationSiteV1,
-    SimulationTargetV1, UnsupportedFeatureV1, UnsupportedSimulationSiteV1,
+    PersistedSimulationScheduleArtifactV1, PersistedSimulationScheduleBindingV1,
+    PersistedSimulationScheduleDocumentV1, ScalarBitsV1, SharedBufferV1,
+    SimulationAdmissionErrorV1, SimulationArgumentV1, SimulationConflictAssessmentV1,
+    SimulationDataRaceV1, SimulationErrorV1, SimulationExecutionErrorKindV1,
+    SimulationExecutionErrorV1, SimulationExecutionV1, SimulationExplorationFailureV1,
+    SimulationExplorationRequestV1, SimulationExplorationV1, SimulationExplorationWitnessV1,
+    SimulationHappensBeforeReasonV1, SimulationInvocationV1, SimulationLimitsV1,
+    SimulationMemoryConflictV1, SimulationOrderedMemoryConflictV1, SimulationPreflightErrorV1,
+    SimulationRaceAssessmentV1, SimulationRequestV1, SimulationScheduleIdentityV1,
+    SimulationScheduleRequestV1, SimulationSiteV1, SimulationTargetV1, UnsupportedFeatureV1,
+    UnsupportedSimulationSiteV1,
 };
 use rustix::fs::{
     AtFlags, FileType, Mode, OFlags, PROC_SUPER_MAGIC, ResolveFlags, fchmod, fstat, fstatfs, fsync,
@@ -36,9 +41,10 @@ use sha2::{Digest, Sha256};
 
 use crate::schema::{ErrorKind, Stage};
 
-const USAGE: &str = "usage: fe2o3-kir-sim (--kir-v7 PATH | --bundle PATH) --request PATH [--output PATH] [--record-canonical-schedule PATH [--schedule-max-decisions COUNT] | --record-seeded-schedule PATH --schedule-seed U64 [--schedule-max-decisions COUNT] | --replay-schedule PATH]";
+const USAGE: &str = "usage: fe2o3-kir-sim (--kir-v7 PATH | --bundle PATH) --request PATH [--output PATH] [--race-evidence] [--record-canonical-schedule PATH [--schedule-max-decisions COUNT] | --record-seeded-schedule PATH --schedule-seed U64 [--schedule-max-decisions COUNT] | --replay-schedule PATH | --explore-seeded-schedules COUNT --schedule-seed FIRST_U64 [--schedule-max-decisions COUNT] [--exploration-max-retained-decisions COUNT]]";
 const REQUEST_SCHEMA: &str = "fe2o3-simulation-request-v1";
 const RESULT_SCHEMA: &str = "fe2o3-simulation-result-v1";
+const EXPLORATION_SCHEMA: &str = "fe2o3-simulation-exploration-v1";
 const ERROR_SCHEMA: &str = "fe2o3-simulation-error-v1";
 const MAX_KIR_BYTES: usize = 16 * 1024 * 1024;
 const MAX_REQUEST_BYTES: usize = 16 * 1024 * 1024;
@@ -55,6 +61,22 @@ const MAX_UNSUPPORTED_JSON_BYTES: usize = MAX_ERROR_BYTES - 128 * 1024;
 const HEX_INPUT_CHUNK_BYTES: usize = 4 * 1024;
 const MAX_UNSUPPORTED_FINDINGS: usize = 128;
 const DEFAULT_MAX_SCHEDULE_DECISIONS: usize = 1 << 20;
+const DEFAULT_MAX_EXPLORATION_RETAINED_DECISIONS: usize = 65_536;
+const MAX_CLI_EXPLORATION_RETAINED_DECISIONS: usize =
+    if 65_536 < MAX_EXPLORATION_RETAINED_DECISIONS_V1 {
+        65_536
+    } else {
+        MAX_EXPLORATION_RETAINED_DECISIONS_V1
+    };
+// One maximally spelled persisted decision remains below 256 bytes after the
+// canonical document is JSON-string escaped. Fixed artifact, assessment, and
+// bounded-site framing remains below the separate 1 MiB allowance.
+const MAX_ESCAPED_EXPLORATION_DECISION_BYTES: usize = 256;
+const MAX_EXPLORATION_FIXED_OUTPUT_BYTES: usize = 1024 * 1024;
+const MAX_CLI_EXPLORATION_ENVELOPE_BYTES: usize = MAX_CLI_EXPLORATION_RETAINED_DECISIONS
+    * MAX_ESCAPED_EXPLORATION_DECISION_BYTES
+    + MAX_EXPLORATION_FIXED_OUTPUT_BYTES;
+const _: () = assert!(MAX_CLI_EXPLORATION_ENVELOPE_BYTES < MAX_SUCCESS_BYTES);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -123,6 +145,8 @@ struct ErrorDocument {
     #[serde(skip_serializing_if = "Option::is_none")]
     site: Option<SiteDocument>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    detail: Option<ExecutionDetailDocument>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     publication_state: Option<PublicationState>,
     #[serde(skip_serializing_if = "Option::is_none")]
     schedule_published: Option<bool>,
@@ -143,6 +167,37 @@ struct SiteDocument {
     function: BoundedFunctionId,
     function_bytes: usize,
     function_truncated: bool,
+    block: u32,
+    operation: Option<u32>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum ExecutionDetailDocument {
+    IncompleteWave {
+        width: &'static str,
+        wave_in_workgroup: u64,
+        active_mask: String,
+        required_mask: String,
+    },
+    DivergentWave {
+        width: &'static str,
+        wave_in_workgroup: u64,
+        nonparticipating_local: [u32; 3],
+    },
+    MismatchedWave {
+        width: &'static str,
+        expected: EventSiteDocument,
+    },
+    WaveShuffleSourceOutOfRange {
+        source_lane: u32,
+        tile_width: u32,
+    },
+}
+
+#[derive(Debug, Serialize)]
+struct EventSiteDocument {
+    function_ordinal: usize,
     block: u32,
     operation: Option<u32>,
 }
@@ -201,6 +256,7 @@ impl Failure {
                 input: None,
                 invocation: None,
                 site: None,
+                detail: None,
                 publication_state: None,
                 schedule_published: None,
             }),
@@ -278,6 +334,7 @@ impl Failure {
                 input: None,
                 invocation: None,
                 site: None,
+                detail: None,
                 publication_state: None,
                 schedule_published: None,
             }),
@@ -299,6 +356,7 @@ impl Failure {
             launch_extent: value.launch_extent,
         });
         let site = error.site.map(site_document);
+        let detail = execution_detail(&error.kind);
         Self(
             Box::new(ErrorDocument {
                 schema: ERROR_SCHEMA,
@@ -309,6 +367,7 @@ impl Failure {
                 input: None,
                 invocation,
                 site,
+                detail,
                 publication_state: None,
                 schedule_published: None,
             }),
@@ -394,6 +453,13 @@ struct Options {
     request: OsString,
     output: Option<OsString>,
     schedule: ScheduleOption,
+    race_evidence: bool,
+}
+
+struct RunPolicy {
+    output: Option<OsString>,
+    schedule: ScheduleOption,
+    race_evidence: bool,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -410,6 +476,12 @@ enum ScheduleOption {
     },
     Replay {
         input: OsString,
+    },
+    ExploreSeeded {
+        first_seed: u64,
+        max_schedules: usize,
+        max_decisions: usize,
+        max_retained_decisions: usize,
     },
 }
 
@@ -893,8 +965,11 @@ pub(crate) fn run_captured_kir_v7(
         canonical_kir_v7,
         Path::new(&request),
         expected_request,
-        output,
-        ScheduleOption::None,
+        RunPolicy {
+            output,
+            schedule: ScheduleOption::None,
+            race_evidence: false,
+        },
         SimulationTargetV1::amdgpu_64(),
         None,
     );
@@ -1021,8 +1096,19 @@ fn serialized_tag(value: impl Serialize) -> String {
 }
 
 fn run(arguments: impl Iterator<Item = OsString>) -> Result<(), Failure> {
-    let options = parse_options(arguments)?;
-    match options.program {
+    let Options {
+        program,
+        request,
+        output,
+        schedule,
+        race_evidence,
+    } = parse_options(arguments)?;
+    let policy = RunPolicy {
+        output,
+        schedule,
+        race_evidence,
+    };
+    match program {
         ProgramInput::KirV7(path) => {
             let kir = secure_read(
                 Path::new(&path),
@@ -1032,17 +1118,16 @@ fn run(arguments: impl Iterator<Item = OsString>) -> Result<(), Failure> {
             )?;
             run_with_captured_kir(
                 &kir,
-                Path::new(&options.request),
+                Path::new(&request),
                 None,
-                options.output,
-                options.schedule,
+                policy,
                 SimulationTargetV1::amdgpu_64(),
                 None,
             )
         }
         ProgramInput::Bundle(path) => {
-            let admitted = load_admitted_bundle(Path::new(&path), Path::new(&options.request))?;
-            run_with_admitted_input(admitted.input, options.output, options.schedule)
+            let admitted = load_admitted_bundle(Path::new(&path), Path::new(&request))?;
+            run_with_admitted_input(admitted.input, policy)
         }
     }
 }
@@ -1051,20 +1136,39 @@ fn run_with_captured_kir(
     kir: &[u8],
     request: &Path,
     expected_request: Option<crate::SimulationRequestIdentityV1>,
-    output: Option<OsString>,
-    schedule: ScheduleOption,
+    policy: RunPolicy,
     target: SimulationTargetV1,
     bundle_identity: Option<([u8; 32], [u8; 32])>,
 ) -> Result<(), Failure> {
     let input = load_admitted_input(kir, request, expected_request, target, bundle_identity)?;
-    run_with_admitted_input(input, output, schedule)
+    run_with_admitted_input(input, policy)
 }
 
 fn run_with_admitted_input(
     input: crate::AdmittedSimulationInputV1,
-    output: Option<OsString>,
-    schedule: ScheduleOption,
+    policy: RunPolicy,
 ) -> Result<(), Failure> {
+    let RunPolicy {
+        output,
+        schedule,
+        race_evidence,
+    } = policy;
+    if let ScheduleOption::ExploreSeeded {
+        first_seed,
+        max_schedules,
+        max_decisions,
+        max_retained_decisions,
+    } = schedule
+    {
+        return run_seeded_exploration(
+            input,
+            output,
+            first_seed,
+            max_schedules,
+            max_decisions,
+            max_retained_decisions,
+        );
+    }
     let binding = schedule_binding(&input);
     let replay = match &schedule {
         ScheduleOption::Replay { input: path } => {
@@ -1110,6 +1214,7 @@ fn run_with_admitted_input(
             input.simulation_limits,
             SimulationScheduleRequestV1::Replay(document.record()),
         ),
+        (ScheduleOption::ExploreSeeded { .. }, _) => unreachable!("exploration returned above"),
         _ => unreachable!("schedule option and admitted replay document remain paired"),
     }
     .map_err(|error| match error {
@@ -1136,11 +1241,13 @@ fn run_with_admitted_input(
                 })?;
             Some((output.clone(), bytes))
         }
-        ScheduleOption::None | ScheduleOption::Replay { .. } => None,
+        ScheduleOption::None
+        | ScheduleOption::Replay { .. }
+        | ScheduleOption::ExploreSeeded { .. } => None,
     };
     drop(input);
     drop(replay);
-    let maximum = measure_success_bytes(&execution)?;
+    let maximum = measure_success_bytes(&execution, race_evidence)?;
     let publishes_schedule = schedule_output.is_some();
     if let Some((path, bytes)) = schedule_output {
         publish_payload(
@@ -1150,14 +1257,94 @@ fn run_with_admitted_input(
         )?;
     }
     let result = match output {
-        Some(path) => publish_transactionally(Path::new(&path), &execution, maximum),
-        None => write_success_stdout(&execution, maximum),
+        Some(path) => publish_transactionally(Path::new(&path), &execution, maximum, race_evidence),
+        None => write_success_stdout(&execution, maximum, race_evidence),
     };
     if publishes_schedule {
         result.map_err(Failure::after_schedule_published)
     } else {
         result
     }
+}
+
+struct EncodedExplorationWitnesses {
+    first_race: Option<Vec<u8>>,
+    first_no_race: Option<Vec<u8>>,
+    first_incomplete: Option<Vec<u8>>,
+}
+
+fn run_seeded_exploration(
+    input: crate::AdmittedSimulationInputV1,
+    output: Option<OsString>,
+    first_seed: u64,
+    max_schedules: usize,
+    max_decisions: usize,
+    max_retained_decisions: usize,
+) -> Result<(), Failure> {
+    let request = SimulationExplorationRequestV1::new(
+        first_seed,
+        max_schedules,
+        max_decisions,
+        max_retained_decisions,
+    )
+    .map_err(|error| {
+        Failure::new(
+            Stage::Arguments,
+            ErrorKind::InvalidCommandLine,
+            bounded_display(&error),
+        )
+    })?;
+    let binding = schedule_binding(&input);
+    let exploration = input
+        .module
+        .explore_seeded_schedules(
+            &input.request,
+            input.simulation_target,
+            input.simulation_limits,
+            request,
+        )
+        .map_err(|error| match error {
+            SimulationErrorV1::Preflight(error) => Failure::preflight(error),
+            SimulationErrorV1::Execution(error) => Failure::execution(error),
+        })?;
+    let witnesses = encode_exploration_witnesses(binding, &exploration)?;
+    drop(input);
+    let maximum = measure_exploration_bytes(binding, request, &exploration, &witnesses)?;
+    match output {
+        Some(path) => publish_payload(Path::new(&path), maximum, |writer| {
+            write_exploration(writer, binding, request, &exploration, &witnesses)?;
+            writer.write_all(b"\n")
+        }),
+        None => write_exploration_stdout(binding, request, &exploration, &witnesses, maximum),
+    }
+}
+
+fn encode_exploration_witnesses(
+    binding: PersistedSimulationScheduleBindingV1,
+    exploration: &SimulationExplorationV1,
+) -> Result<EncodedExplorationWitnesses, Failure> {
+    fn encode(
+        binding: PersistedSimulationScheduleBindingV1,
+        witness: Option<&SimulationExplorationWitnessV1>,
+    ) -> Result<Option<Vec<u8>>, Failure> {
+        witness
+            .map(|witness| {
+                PersistedSimulationScheduleDocumentV1::encode_record(binding, witness.schedule())
+                    .map_err(|error| {
+                        Failure::new(
+                            Stage::Output,
+                            ErrorKind::OutputSerializationFailed,
+                            bounded_display(&error),
+                        )
+                    })
+            })
+            .transpose()
+    }
+    Ok(EncodedExplorationWitnesses {
+        first_race: encode(binding, exploration.first_race())?,
+        first_no_race: encode(binding, exploration.first_no_race())?,
+        first_incomplete: encode(binding, exploration.first_incomplete())?,
+    })
 }
 
 fn schedule_binding(
@@ -1422,10 +1609,24 @@ fn parse_options(arguments: impl Iterator<Item = OsString>) -> Result<Options, F
     let mut record_canonical_schedule = None;
     let mut record_seeded_schedule = None;
     let mut replay_schedule = None;
+    let mut explore_seeded_schedules = None;
     let mut schedule_seed = None;
     let mut schedule_max_decisions = None;
+    let mut exploration_max_retained_decisions = None;
+    let mut race_evidence = false;
     let mut arguments = arguments.peekable();
     while let Some(argument) = arguments.next() {
+        if argument == OsStr::new("--race-evidence") {
+            if race_evidence {
+                return Err(Failure::new(
+                    Stage::Arguments,
+                    ErrorKind::InvalidCommandLine,
+                    format!("--race-evidence may be supplied once; {USAGE}"),
+                ));
+            }
+            race_evidence = true;
+            continue;
+        }
         let (slot, name) = if argument == OsStr::new("--kir-v7") {
             (&mut kir_v7, "--kir-v7")
         } else if argument == OsStr::new("--bundle") {
@@ -1443,10 +1644,17 @@ fn parse_options(arguments: impl Iterator<Item = OsString>) -> Result<Options, F
             (&mut record_seeded_schedule, "--record-seeded-schedule")
         } else if argument == OsStr::new("--replay-schedule") {
             (&mut replay_schedule, "--replay-schedule")
+        } else if argument == OsStr::new("--explore-seeded-schedules") {
+            (&mut explore_seeded_schedules, "--explore-seeded-schedules")
         } else if argument == OsStr::new("--schedule-seed") {
             (&mut schedule_seed, "--schedule-seed")
         } else if argument == OsStr::new("--schedule-max-decisions") {
             (&mut schedule_max_decisions, "--schedule-max-decisions")
+        } else if argument == OsStr::new("--exploration-max-retained-decisions") {
+            (
+                &mut exploration_max_retained_decisions,
+                "--exploration-max-retained-decisions",
+            )
         } else {
             return Err(Failure::new(
                 Stage::Arguments,
@@ -1509,38 +1717,102 @@ fn parse_options(arguments: impl Iterator<Item = OsString>) -> Result<Options, F
         .as_ref()
         .map(|value| parse_schedule_u64(value, "--schedule-seed"))
         .transpose()?;
+    let exploration_schedules = explore_seeded_schedules
+        .as_ref()
+        .map(|value| {
+            parse_schedule_usize(value, "--explore-seeded-schedules").and_then(|value| {
+                if value == 0 || value > MAX_EXPLORATION_SCHEDULES_V1 {
+                    Err(Failure::new(
+                        Stage::Arguments,
+                        ErrorKind::InvalidCommandLine,
+                        format!(
+                            "--explore-seeded-schedules must be from 1 through {MAX_EXPLORATION_SCHEDULES_V1}; {USAGE}"
+                        ),
+                    ))
+                } else {
+                    Ok(value)
+                }
+            })
+        })
+        .transpose()?;
+    let exploration_retained = exploration_max_retained_decisions
+        .as_ref()
+        .map(|value| {
+            parse_schedule_usize(value, "--exploration-max-retained-decisions").and_then(
+                |value| {
+                    if value == 0 || value > MAX_CLI_EXPLORATION_RETAINED_DECISIONS {
+                        Err(Failure::new(
+                            Stage::Arguments,
+                            ErrorKind::InvalidCommandLine,
+                            format!(
+                                "--exploration-max-retained-decisions must be from 1 through {MAX_CLI_EXPLORATION_RETAINED_DECISIONS}; {USAGE}"
+                            ),
+                        ))
+                    } else {
+                        Ok(value)
+                    }
+                },
+            )
+        })
+        .transpose()?;
     let schedule = match (
         record_canonical_schedule,
         record_seeded_schedule,
         replay_schedule,
+        exploration_schedules,
     ) {
-        (None, None, None) if seed.is_none() && schedule_max_decisions.is_none() => {
+        (None, None, None, None)
+            if seed.is_none()
+                && schedule_max_decisions.is_none()
+                && exploration_retained.is_none() =>
+        {
             ScheduleOption::None
         }
-        (Some(output), None, None) if seed.is_none() => ScheduleOption::RecordCanonical {
-            output,
-            max_decisions,
-        },
-        (None, Some(output), None) => ScheduleOption::RecordSeeded {
-            output,
-            seed: seed.ok_or_else(|| {
+        (Some(output), None, None, None) if seed.is_none() && exploration_retained.is_none() => {
+            ScheduleOption::RecordCanonical {
+                output,
+                max_decisions,
+            }
+        }
+        (None, Some(output), None, None) if exploration_retained.is_none() => {
+            ScheduleOption::RecordSeeded {
+                output,
+                seed: seed.ok_or_else(|| {
+                    Failure::new(
+                        Stage::Arguments,
+                        ErrorKind::InvalidCommandLine,
+                        format!("--record-seeded-schedule requires --schedule-seed; {USAGE}"),
+                    )
+                })?,
+                max_decisions,
+            }
+        }
+        (None, None, Some(input), None)
+            if seed.is_none()
+                && schedule_max_decisions.is_none()
+                && exploration_retained.is_none() =>
+        {
+            ScheduleOption::Replay { input }
+        }
+        (None, None, None, Some(max_schedules)) => ScheduleOption::ExploreSeeded {
+            first_seed: seed.ok_or_else(|| {
                 Failure::new(
                     Stage::Arguments,
                     ErrorKind::InvalidCommandLine,
-                    format!("--record-seeded-schedule requires --schedule-seed; {USAGE}"),
+                    format!("--explore-seeded-schedules requires --schedule-seed; {USAGE}"),
                 )
             })?,
+            max_schedules,
             max_decisions,
+            max_retained_decisions: exploration_retained
+                .unwrap_or(DEFAULT_MAX_EXPLORATION_RETAINED_DECISIONS),
         },
-        (None, None, Some(input)) if seed.is_none() && schedule_max_decisions.is_none() => {
-            ScheduleOption::Replay { input }
-        }
         _ => {
             return Err(Failure::new(
                 Stage::Arguments,
                 ErrorKind::InvalidCommandLine,
                 format!(
-                    "record-canonical, record-seeded, and replay schedule modes are mutually exclusive, and seed/decision bounds apply only to recording; {USAGE}"
+                    "record-canonical, record-seeded, replay, and exploration schedule modes are mutually exclusive; seed/decision/retention bounds apply only to their documented modes; {USAGE}"
                 ),
             ));
         }
@@ -1556,6 +1828,7 @@ fn parse_options(arguments: impl Iterator<Item = OsString>) -> Result<Options, F
         })?,
         output,
         schedule,
+        race_evidence,
     })
 }
 
@@ -2246,6 +2519,58 @@ fn execution_kind(error: &SimulationExecutionErrorKindV1) -> ErrorKind {
     }
 }
 
+fn execution_detail(error: &SimulationExecutionErrorKindV1) -> Option<ExecutionDetailDocument> {
+    match error {
+        SimulationExecutionErrorKindV1::IncompleteWave(detail) => {
+            Some(ExecutionDetailDocument::IncompleteWave {
+                width: wave_width_name(detail.width),
+                wave_in_workgroup: detail.wave_in_workgroup,
+                active_mask: wave_mask(detail.width, detail.active_mask),
+                required_mask: wave_mask(detail.width, detail.required_mask),
+            })
+        }
+        SimulationExecutionErrorKindV1::DivergentWave(detail) => {
+            Some(ExecutionDetailDocument::DivergentWave {
+                width: wave_width_name(detail.width),
+                wave_in_workgroup: detail.wave_in_workgroup,
+                nonparticipating_local: detail.nonparticipating.local,
+            })
+        }
+        SimulationExecutionErrorKindV1::MismatchedWave(detail) => {
+            Some(ExecutionDetailDocument::MismatchedWave {
+                width: wave_width_name(detail.width),
+                expected: EventSiteDocument {
+                    function_ordinal: detail.expected.function_ordinal,
+                    block: detail.expected.block.0,
+                    operation: detail.expected.operation,
+                },
+            })
+        }
+        SimulationExecutionErrorKindV1::WaveShuffleSourceOutOfRange {
+            source_lane,
+            tile_width,
+        } => Some(ExecutionDetailDocument::WaveShuffleSourceOutOfRange {
+            source_lane: *source_lane,
+            tile_width: *tile_width,
+        }),
+        _ => None,
+    }
+}
+
+const fn wave_width_name(width: WaveWidth) -> &'static str {
+    match width {
+        WaveWidth::Wave32 => "wave32",
+        WaveWidth::Wave64 => "wave64",
+    }
+}
+
+fn wave_mask(width: WaveWidth, mask: u64) -> String {
+    match width {
+        WaveWidth::Wave32 => format!("0x{mask:08x}"),
+        WaveWidth::Wave64 => format!("0x{mask:016x}"),
+    }
+}
+
 fn unsupported_code(feature: &UnsupportedFeatureV1) -> UnsupportedFeatureCode {
     match feature {
         UnsupportedFeatureV1::FloatType(_) => UnsupportedFeatureCode::FloatType,
@@ -2323,12 +2648,15 @@ fn site_document(site: SimulationSiteV1) -> SiteDocument {
     }
 }
 
-fn measure_success_bytes(execution: &SimulationExecutionV1) -> Result<usize, Failure> {
+fn measure_success_bytes(
+    execution: &SimulationExecutionV1,
+    race_evidence: bool,
+) -> Result<usize, Failure> {
     let mut bounded = BoundedWriter::new(
         CountingWriter::default(),
         MAX_SUCCESS_BYTES.saturating_sub(1),
     );
-    if let Err(error) = write_success(&mut bounded, execution) {
+    if let Err(error) = write_success(&mut bounded, execution, race_evidence) {
         return if error.kind() == io::ErrorKind::FileTooLarge {
             Err(output_too_large())
         } else {
@@ -2348,6 +2676,195 @@ fn output_too_large() -> Failure {
         ErrorKind::OutputTooLarge,
         format!("result exceeds its {MAX_SUCCESS_BYTES}-byte bound"),
     )
+}
+
+fn measure_exploration_bytes(
+    binding: PersistedSimulationScheduleBindingV1,
+    request: SimulationExplorationRequestV1,
+    exploration: &SimulationExplorationV1,
+    witnesses: &EncodedExplorationWitnesses,
+) -> Result<usize, Failure> {
+    let mut bounded = BoundedWriter::new(
+        CountingWriter::default(),
+        MAX_SUCCESS_BYTES.saturating_sub(1),
+    );
+    if let Err(error) = write_exploration(&mut bounded, binding, request, exploration, witnesses) {
+        return if error.kind() == io::ErrorKind::FileTooLarge {
+            Err(output_too_large())
+        } else {
+            Err(output_write_failure(error))
+        };
+    }
+    bounded
+        .into_inner()
+        .0
+        .checked_add(1)
+        .ok_or_else(output_too_large)
+}
+
+fn write_exploration_stdout(
+    binding: PersistedSimulationScheduleBindingV1,
+    request: SimulationExplorationRequestV1,
+    exploration: &SimulationExplorationV1,
+    witnesses: &EncodedExplorationWitnesses,
+    maximum: usize,
+) -> Result<(), Failure> {
+    let stdout = io::stdout();
+    let bounded = BoundedWriter::new(stdout.lock(), maximum);
+    let mut output = BufWriter::with_capacity(32 * 1024, bounded);
+    write_exploration(&mut output, binding, request, exploration, witnesses)
+        .and_then(|()| output.write_all(b"\n"))
+        .and_then(|()| output.flush())
+        .map_err(output_write_failure)
+}
+
+fn write_exploration<W: Write + ?Sized>(
+    writer: &mut W,
+    binding: PersistedSimulationScheduleBindingV1,
+    request: SimulationExplorationRequestV1,
+    exploration: &SimulationExplorationV1,
+    witnesses: &EncodedExplorationWitnesses,
+) -> io::Result<()> {
+    writer.write_all(b"{\"schema\":\"")?;
+    writer.write_all(EXPLORATION_SCHEMA.as_bytes())?;
+    writer.write_all(b"\",\"status\":\"ok\",\"authority\":\"observation_only\",\"simulated\":true,\"hardware_observed\":false,\"hardware_validation\":false,\"performance_prediction\":false,\"schedule_space_exhausted\":false,\"target_profile\":{\"identity\":\"amdgpu_64_little_endian_v1\",\"index_bits\":64,\"max_workgroup_invocations\":1024},\"input\":")?;
+    write_exploration_input(writer, binding)?;
+    let wraps = request.max_schedules() > 1
+        && request
+            .first_seed()
+            .checked_add((request.max_schedules() - 1) as u64)
+            .is_none();
+    write!(
+        writer,
+        ",\"exploration\":{{\"schedule_identity\":\"workgroup_major_seeded_runnable_cooperative_v1\",\"first_seed\":{},\"seed_interval_wraps\":{},\"requested_schedules\":{},\"max_decisions_per_schedule\":{},\"max_retained_decisions\":{},\"hard_max_schedules\":{},\"hard_max_decisions_per_schedule\":{},\"hard_max_retained_decisions\":{},\"attempted\":{},\"completed\":{},\"failures\":{},\"races_observed\":{},\"no_races_observed\":{},\"incomplete_assessments\":{},\"retained_decisions\":{},\"requested_seed_budget_consumed\":{},\"witness_retention_exhausted\":{}}},\"witnesses\":{{\"first_race\":",
+        request.first_seed(),
+        wraps,
+        request.max_schedules(),
+        request.max_decisions_per_schedule(),
+        request.max_retained_decisions(),
+        MAX_EXPLORATION_SCHEDULES_V1,
+        MAX_SCHEDULE_DECISIONS_V1,
+        MAX_CLI_EXPLORATION_RETAINED_DECISIONS,
+        exploration.attempted(),
+        exploration.completed(),
+        exploration.failures(),
+        exploration.races_observed(),
+        exploration.no_races_observed(),
+        exploration.incomplete_assessments(),
+        exploration.retained_decisions(),
+        exploration.requested_seed_budget_consumed(),
+        exploration.witness_retention_exhausted(),
+    )?;
+    write_exploration_witness(
+        writer,
+        exploration.first_race(),
+        witnesses.first_race.as_deref(),
+    )?;
+    writer.write_all(b",\"first_no_race\":")?;
+    write_exploration_witness(
+        writer,
+        exploration.first_no_race(),
+        witnesses.first_no_race.as_deref(),
+    )?;
+    writer.write_all(b",\"first_incomplete\":")?;
+    write_exploration_witness(
+        writer,
+        exploration.first_incomplete(),
+        witnesses.first_incomplete.as_deref(),
+    )?;
+    writer.write_all(b"},\"first_failure\":")?;
+    write_exploration_failure(writer, exploration.first_failure())?;
+    writer.write_all(b"}")
+}
+
+fn write_exploration_input<W: Write + ?Sized>(
+    writer: &mut W,
+    binding: PersistedSimulationScheduleBindingV1,
+) -> io::Result<()> {
+    match binding.artifact() {
+        PersistedSimulationScheduleArtifactV1::CanonicalKirV7 => {
+            writer.write_all(b"{\"kind\":\"canonical_kir_v7\",\"kir_sha256\":\"")?;
+        }
+        PersistedSimulationScheduleArtifactV1::SimulationBundleV1 {
+            bundle_sha256,
+            subject_sha256,
+        } => {
+            writer.write_all(b"{\"kind\":\"simulation_bundle_v1\",\"bundle_sha256\":\"")?;
+            write_lower_hex(writer, &bundle_sha256, false)?;
+            writer.write_all(b"\",\"subject_sha256\":\"")?;
+            write_lower_hex(writer, &subject_sha256, false)?;
+            writer.write_all(b"\",\"kir_sha256\":\"")?;
+        }
+    }
+    write_lower_hex(writer, &binding.kir_sha256(), false)?;
+    write!(
+        writer,
+        "\",\"kir_canonical_bytes\":{},\"request_sha256\":\"",
+        binding.kir_canonical_bytes(),
+    )?;
+    write_lower_hex(writer, &binding.request_sha256(), false)?;
+    write!(writer, "\",\"request_bytes\":{}}}", binding.request_bytes())
+}
+
+fn write_exploration_witness<W: Write + ?Sized>(
+    writer: &mut W,
+    witness: Option<&SimulationExplorationWitnessV1>,
+    canonical_schedule: Option<&[u8]>,
+) -> io::Result<()> {
+    let Some(witness) = witness else {
+        if canonical_schedule.is_some() {
+            return Err(io::Error::other(
+                "encoded exploration schedule without witness",
+            ));
+        }
+        return writer.write_all(b"null");
+    };
+    let canonical_schedule = canonical_schedule
+        .ok_or_else(|| io::Error::other("retained exploration witness lacks encoded schedule"))?;
+    let canonical_schedule = std::str::from_utf8(canonical_schedule).map_err(io::Error::other)?;
+    write!(writer, "{{\"seed\":{},\"assessment\":", witness.seed())?;
+    write_race_assessment(writer, witness.assessment(), true)?;
+    write!(
+        writer,
+        ",\"replay_schedule\":{{\"encoding\":\"utf8_canonical_json\",\"bytes\":{},\"sha256\":\"",
+        canonical_schedule.len(),
+    )?;
+    write_lower_hex(
+        writer,
+        &Sha256::digest(canonical_schedule.as_bytes()),
+        false,
+    )?;
+    writer.write_all(b"\",\"document\":")?;
+    serde_json::to_writer(&mut *writer, canonical_schedule).map_err(io::Error::other)?;
+    writer.write_all(b"}}")
+}
+
+fn write_exploration_failure<W: Write + ?Sized>(
+    writer: &mut W,
+    failure: Option<&SimulationExplorationFailureV1>,
+) -> io::Result<()> {
+    let Some(failure) = failure else {
+        return writer.write_all(b"null");
+    };
+    write!(writer, "{{\"seed\":{},\"kind\":", failure.seed)?;
+    serde_json::to_writer(&mut *writer, &execution_kind(&failure.kind))
+        .map_err(io::Error::other)?;
+    writer.write_all(b",\"invocation\":")?;
+    match &failure.invocation {
+        Some(invocation) => write_invocation(writer, invocation)?,
+        None => writer.write_all(b"null")?,
+    }
+    writer.write_all(b",\"site\":")?;
+    match &failure.site {
+        Some(site) => write_bounded_site(writer, site)?,
+        None => writer.write_all(b"null")?,
+    }
+    writer.write_all(b",\"detail\":")?;
+    match execution_detail(&failure.kind) {
+        Some(detail) => serde_json::to_writer(&mut *writer, &detail).map_err(io::Error::other)?,
+        None => writer.write_all(b"null")?,
+    }
+    writer.write_all(b"}")
 }
 
 struct BoundedWriter<W> {
@@ -2391,11 +2908,15 @@ impl<W: Write> Write for BoundedWriter<W> {
     }
 }
 
-fn write_success_stdout(execution: &SimulationExecutionV1, maximum: usize) -> Result<(), Failure> {
+fn write_success_stdout(
+    execution: &SimulationExecutionV1,
+    maximum: usize,
+    race_evidence: bool,
+) -> Result<(), Failure> {
     let stdout = io::stdout();
     let bounded = BoundedWriter::new(stdout.lock(), maximum);
     let mut output = BufWriter::with_capacity(32 * 1024, bounded);
-    write_success(&mut output, execution)
+    write_success(&mut output, execution, race_evidence)
         .and_then(|()| output.write_all(b"\n"))
         .and_then(|()| output.flush())
         .map_err(output_write_failure)
@@ -2404,6 +2925,7 @@ fn write_success_stdout(execution: &SimulationExecutionV1, maximum: usize) -> Re
 fn write_success<W: Write + ?Sized>(
     writer: &mut W,
     execution: &SimulationExecutionV1,
+    race_evidence: bool,
 ) -> io::Result<()> {
     writer.write_all(b"{\"schema\":\"")?;
     writer.write_all(RESULT_SCHEMA.as_bytes())?;
@@ -2432,6 +2954,10 @@ fn write_success<W: Write + ?Sized>(
         coverage.barrier_releases(),
     )?;
     write_conflict_assessment(writer, execution.conflict_assessment())?;
+    if race_evidence {
+        writer.write_all(b",\"race_assessment\":")?;
+        write_race_assessment(writer, execution.race_assessment(), true)?;
+    }
     writer.write_all(b",\"arguments\":[")?;
     for (index, argument) in execution.arguments().iter().enumerate() {
         if index != 0 {
@@ -2502,6 +3028,116 @@ fn write_conflict_assessment<W: Write + ?Sized>(
     }
 }
 
+fn write_race_assessment<W: Write + ?Sized>(
+    writer: &mut W,
+    assessment: &SimulationRaceAssessmentV1,
+    bounded_sites: bool,
+) -> io::Result<()> {
+    match assessment {
+        SimulationRaceAssessmentV1::NoRacesObserved {
+            first_ordered_conflict,
+        } => {
+            writer.write_all(b"{\"status\":\"no_races_observed\",\"first_ordered_conflict\":")?;
+            write_ordered_conflict(writer, first_ordered_conflict.as_ref(), bounded_sites)?;
+            writer.write_all(b"}")
+        }
+        SimulationRaceAssessmentV1::RacesObserved {
+            racing_bytes,
+            first,
+            first_ordered_conflict,
+        } => {
+            write!(
+                writer,
+                "{{\"status\":\"races_observed\",\"racing_bytes\":{racing_bytes},\"first\":"
+            )?;
+            write_data_race(writer, first, bounded_sites)?;
+            writer.write_all(b",\"first_ordered_conflict\":")?;
+            write_ordered_conflict(writer, first_ordered_conflict.as_ref(), bounded_sites)?;
+            writer.write_all(b"}")
+        }
+        SimulationRaceAssessmentV1::Incomplete {
+            racing_bytes,
+            first,
+            first_ordered_conflict,
+            access_record_limit_reached,
+            atomic_or_fence_happens_before_unmodeled,
+            record_limit,
+        } => {
+            write!(
+                writer,
+                "{{\"status\":\"incomplete\",\"racing_bytes\":{racing_bytes},\"access_record_limit_reached\":{access_record_limit_reached},\"atomic_or_fence_happens_before_unmodeled\":{atomic_or_fence_happens_before_unmodeled},\"record_limit\":{record_limit},\"first\":"
+            )?;
+            match first {
+                Some(first) => write_data_race(writer, first, bounded_sites)?,
+                None => writer.write_all(b"null")?,
+            }
+            writer.write_all(b",\"first_ordered_conflict\":")?;
+            write_ordered_conflict(writer, first_ordered_conflict.as_ref(), bounded_sites)?;
+            writer.write_all(b"}")
+        }
+    }
+}
+
+fn write_data_race<W: Write + ?Sized>(
+    writer: &mut W,
+    race: &SimulationDataRaceV1,
+    bounded_sites: bool,
+) -> io::Result<()> {
+    writer.write_all(b"{\"conflict\":")?;
+    write_memory_conflict_with_site_policy(writer, &race.conflict, bounded_sites)?;
+    write!(
+        writer,
+        ",\"earlier_atomic\":{},\"later_atomic\":{}}}",
+        race.earlier_atomic, race.later_atomic,
+    )
+}
+
+fn write_ordered_conflict<W: Write + ?Sized>(
+    writer: &mut W,
+    ordered: Option<&SimulationOrderedMemoryConflictV1>,
+    bounded_sites: bool,
+) -> io::Result<()> {
+    let Some(ordered) = ordered else {
+        return writer.write_all(b"null");
+    };
+    writer.write_all(b"{\"reason\":\"")?;
+    writer.write_all(match ordered.reason {
+        SimulationHappensBeforeReasonV1::AtomicSerialization => b"atomic_serialization",
+        SimulationHappensBeforeReasonV1::GlobalWorkgroupBarrier => b"global_workgroup_barrier",
+    })?;
+    writer.write_all(b"\",\"conflict\":")?;
+    write_memory_conflict_with_site_policy(writer, &ordered.conflict, bounded_sites)?;
+    writer.write_all(b"}")
+}
+
+fn write_memory_conflict_with_site_policy<W: Write + ?Sized>(
+    writer: &mut W,
+    conflict: &SimulationMemoryConflictV1,
+    bounded_sites: bool,
+) -> io::Result<()> {
+    write!(
+        writer,
+        "{{\"allocation\":{},\"offset\":{},\"earlier\":",
+        conflict.allocation, conflict.offset,
+    )?;
+    write_invocation(writer, &conflict.earlier)?;
+    writer.write_all(b",\"later\":")?;
+    write_invocation(writer, &conflict.later)?;
+    writer.write_all(b",\"earlier_site\":")?;
+    if bounded_sites {
+        write_bounded_site(writer, &conflict.earlier_site)?;
+    } else {
+        write_site(writer, &conflict.earlier_site)?;
+    }
+    writer.write_all(b",\"later_site\":")?;
+    if bounded_sites {
+        write_bounded_site(writer, &conflict.later_site)?;
+    } else {
+        write_site(writer, &conflict.later_site)?;
+    }
+    writer.write_all(b"}")
+}
+
 fn write_memory_conflict<W: Write + ?Sized>(
     writer: &mut W,
     conflict: &SimulationMemoryConflictV1,
@@ -2553,6 +3189,28 @@ fn write_site<W: Write + ?Sized>(writer: &mut W, site: &SimulationSiteV1) -> io:
     writer.write_all(b"{\"function\":")?;
     serde_json::to_writer(&mut *writer, site.function.as_str()).map_err(io::Error::other)?;
     write!(writer, ",\"block\":{},\"operation\":", site.block.0)?;
+    match site.operation {
+        Some(operation) => write!(writer, "{operation}")?,
+        None => writer.write_all(b"null")?,
+    }
+    writer.write_all(b"}")
+}
+
+fn write_bounded_site<W: Write + ?Sized>(
+    writer: &mut W,
+    site: &SimulationSiteV1,
+) -> io::Result<()> {
+    let function = site.function.as_str();
+    let prefix = bounded_str(function, MAX_ERROR_FUNCTION_BYTES);
+    writer.write_all(b"{\"function\":")?;
+    serde_json::to_writer(&mut *writer, prefix).map_err(io::Error::other)?;
+    write!(
+        writer,
+        ",\"function_bytes\":{},\"function_truncated\":{},\"block\":{},\"operation\":",
+        function.len(),
+        prefix.len() != function.len(),
+        site.block.0,
+    )?;
     match site.operation {
         Some(operation) => write!(writer, "{operation}")?,
         None => writer.write_all(b"null")?,
@@ -2668,9 +3326,10 @@ fn publish_transactionally(
     path: &Path,
     execution: &SimulationExecutionV1,
     maximum: usize,
+    race_evidence: bool,
 ) -> Result<(), Failure> {
     publish_payload(path, maximum, |writer| {
-        write_success(writer, execution)?;
+        write_success(writer, execution, race_evidence)?;
         writer.write_all(b"\n")
     })
 }
@@ -2980,6 +3639,8 @@ struct ErrorDocumentView<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     site: Option<&'a SiteDocument>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    detail: Option<&'a ExecutionDetailDocument>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     publication_state: Option<PublicationState>,
     #[serde(skip_serializing_if = "Option::is_none")]
     schedule_published: Option<bool>,
@@ -3070,6 +3731,7 @@ fn error_document_view(error: &Failure) -> ErrorDocumentView<'_> {
         input: error.0.input,
         invocation: error.0.invocation.as_ref(),
         site: error.0.site.as_ref(),
+        detail: error.0.detail.as_ref(),
         publication_state: error.0.publication_state,
         schedule_published: error.0.schedule_published,
         unsupported,
@@ -3184,6 +3846,45 @@ mod tests {
         assert_eq!(options.request, OsString::from("request"));
         assert_eq!(options.output, Some(OsString::from("output")));
         assert_eq!(options.schedule, ScheduleOption::None);
+        assert!(!options.race_evidence);
+    }
+
+    #[test]
+    fn exploration_command_line_is_closed_and_exact() {
+        let options = parse_options(
+            [
+                "--bundle",
+                "kernel.fe2sim",
+                "--request",
+                "request.json",
+                "--race-evidence",
+                "--explore-seeded-schedules",
+                "17",
+                "--schedule-seed",
+                "18446744073709551615",
+                "--schedule-max-decisions",
+                "19",
+                "--exploration-max-retained-decisions",
+                "23",
+            ]
+            .into_iter()
+            .map(OsString::from),
+        )
+        .unwrap();
+        assert_eq!(
+            options.program,
+            ProgramInput::Bundle(OsString::from("kernel.fe2sim"))
+        );
+        assert!(options.race_evidence);
+        assert_eq!(
+            options.schedule,
+            ScheduleOption::ExploreSeeded {
+                first_seed: u64::MAX,
+                max_schedules: 17,
+                max_decisions: 19,
+                max_retained_decisions: 23,
+            }
+        );
     }
 
     #[test]
@@ -3846,6 +4547,137 @@ mod tests {
             serde_json::json!([1, 2, 3])
         );
         assert_eq!(value["first"]["later_site"]["operation"], 3);
+    }
+
+    #[test]
+    fn race_output_closes_ordered_and_incomplete_evidence() {
+        let invocation = SimulationInvocationV1 {
+            global: [1, 0, 0],
+            workgroup: [0, 0, 0],
+            local: [1, 0, 0],
+            workgroup_size: [2, 1, 1],
+            workgroup_count: [1, 1, 1],
+            launch_extent: [2, 1, 1],
+        };
+        let conflict = SimulationMemoryConflictV1 {
+            allocation: 3,
+            offset: 4,
+            earlier: invocation,
+            later: invocation,
+            earlier_site: SimulationSiteV1 {
+                function: FunctionId::new("entry"),
+                block: BlockId(1),
+                operation: Some(2),
+            },
+            later_site: SimulationSiteV1 {
+                function: FunctionId::new("entry"),
+                block: BlockId(1),
+                operation: Some(3),
+            },
+        };
+        let ordered = SimulationRaceAssessmentV1::NoRacesObserved {
+            first_ordered_conflict: Some(SimulationOrderedMemoryConflictV1 {
+                conflict: conflict.clone(),
+                reason: SimulationHappensBeforeReasonV1::GlobalWorkgroupBarrier,
+            }),
+        };
+        let mut bytes = Vec::new();
+        write_race_assessment(&mut bytes, &ordered, true).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value["status"], "no_races_observed");
+        assert_eq!(
+            value["first_ordered_conflict"]["reason"],
+            "global_workgroup_barrier"
+        );
+        assert_eq!(
+            value["first_ordered_conflict"]["conflict"]["earlier_site"]["function_bytes"],
+            5
+        );
+
+        let incomplete = SimulationRaceAssessmentV1::Incomplete {
+            racing_bytes: 1,
+            first: Some(SimulationDataRaceV1 {
+                conflict,
+                earlier_atomic: true,
+                later_atomic: false,
+            }),
+            first_ordered_conflict: None,
+            access_record_limit_reached: false,
+            atomic_or_fence_happens_before_unmodeled: true,
+            record_limit: 8,
+        };
+        let mut bytes = Vec::new();
+        write_race_assessment(&mut bytes, &incomplete, true).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value["status"], "incomplete");
+        assert_eq!(value["racing_bytes"], 1);
+        assert_eq!(value["atomic_or_fence_happens_before_unmodeled"], true);
+        assert_eq!(value["first"]["earlier_atomic"], true);
+        assert!(value["first_ordered_conflict"].is_null());
+    }
+
+    #[test]
+    fn every_wave_failure_has_closed_structured_detail() {
+        let details = [
+            execution_detail(&SimulationExecutionErrorKindV1::IncompleteWave(
+                fe2o3_kir_sim::IncompleteWaveV1 {
+                    width: WaveWidth::Wave32,
+                    wave_in_workgroup: 2,
+                    active_mask: 3,
+                    required_mask: u64::from(u32::MAX),
+                },
+            )),
+            execution_detail(&SimulationExecutionErrorKindV1::DivergentWave(
+                fe2o3_kir_sim::DivergentWaveV1 {
+                    width: WaveWidth::Wave64,
+                    wave_in_workgroup: 1,
+                    nonparticipating: fe2o3_kir_sim::WorkgroupParticipantV1 { local: [7, 8, 9] },
+                },
+            )),
+            execution_detail(&SimulationExecutionErrorKindV1::MismatchedWave(
+                fe2o3_kir_sim::MismatchedWaveV1 {
+                    width: WaveWidth::Wave32,
+                    expected: fe2o3_kir_sim::SimulationEventSiteV1 {
+                        function_ordinal: 4,
+                        block: BlockId(5),
+                        operation: Some(6),
+                    },
+                },
+            )),
+            execution_detail(
+                &SimulationExecutionErrorKindV1::WaveShuffleSourceOutOfRange {
+                    source_lane: 8,
+                    tile_width: 8,
+                },
+            ),
+        ];
+        let values: Vec<serde_json::Value> = details
+            .into_iter()
+            .map(|detail| serde_json::to_value(detail.unwrap()).unwrap())
+            .collect();
+        assert_eq!(values[0]["kind"], "incomplete_wave");
+        assert_eq!(values[0]["active_mask"], "0x00000003");
+        assert_eq!(values[1]["kind"], "divergent_wave");
+        assert_eq!(
+            values[1]["nonparticipating_local"],
+            serde_json::json!([7, 8, 9])
+        );
+        assert_eq!(values[2]["kind"], "mismatched_wave");
+        assert_eq!(values[2]["expected"]["function_ordinal"], 4);
+        assert_eq!(values[3]["kind"], "wave_shuffle_source_out_of_range");
+        assert_eq!(values[3]["tile_width"], 8);
+    }
+
+    #[test]
+    fn exploration_decision_envelope_bound_covers_maximal_json_spelling() {
+        let decision = serde_json::json!({
+            "workgroup": [u64::MAX, u64::MAX, u64::MAX],
+            "phase": u64::MAX,
+            "local": [u32::MAX, u32::MAX, u32::MAX],
+        });
+        let canonical = serde_json::to_string(&decision).unwrap();
+        let escaped = serde_json::to_string(&canonical).unwrap();
+        assert!(escaped.len() <= MAX_ESCAPED_EXPLORATION_DECISION_BYTES);
     }
 
     #[test]

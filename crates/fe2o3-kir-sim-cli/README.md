@@ -10,6 +10,12 @@ deterministic CPU execution of exact verified canonical Kernel IR V7:
       --record-seeded-schedule schedule.json --schedule-seed 42
     fe2o3-kir-sim --bundle kernel.fe2sim --request request.json \
       --replay-schedule schedule.json
+    fe2o3-kir-sim --kir-v7 kernel.kir --request request.json \
+      --race-evidence
+    fe2o3-kir-sim --bundle kernel.fe2sim --request request.json \
+      --explore-seeded-schedules 64 --schedule-seed 42 \
+      --schedule-max-decisions 1048576 \
+      --exploration-max-retained-decisions 65536
 
 It does not link or initialize HSA, HIP, KFD, ROCm, or a GPU. Simulation is an
 observation only. It grants no source-refinement, proof, compiler, artifact,
@@ -69,6 +75,26 @@ subject, request bytes, target, limits, context, transcript, seed, coverage, and
 decisions.
 Binding drift is rejected before execution; runnable-decision and transcript
 validation remains in the simulator itself.
+
+`--explore-seeded-schedules COUNT --schedule-seed FIRST_U64` is a separate,
+bounded multi-schedule mode. It sweeps the contiguous wrapping seed interval,
+uses `--schedule-max-decisions` as the per-schedule dynamic bound, and retains
+at most `--exploration-max-retained-decisions` decisions across one race, one
+no-race, and one incomplete witness. The CLI caps schedules at 4,096 and
+retained witness decisions at 65,536; the simulator caps one schedule at
+4,194,304 decisions. Zero and above-cap values fail as closed command-line
+errors. Consuming the requested seed interval is reported separately from
+schedule-space exhaustion. Exploration never claims to exhaust the schedule
+space or prove race freedom.
+
+Each retained witness contains its race assessment and an exact canonical
+`fe2o3-simulation-schedule-v1` document encoded as a JSON string, together with
+its byte length and SHA-256. Decode that string and write its UTF-8 bytes
+unchanged to use it with `--replay-schedule`; object reserialization is neither
+required nor trusted. The embedded document preserves the existing exact KIR,
+raw-versus-bundle route, bundle identity and subject, request, target, limits,
+context, transcript, seed, coverage, and decision binding. Substitution is
+rejected before replay.
 
 For recording, the schedule is the primary durable artifact and is published
 before the ordinary result is delivered. Simulation or schedule-encoding
@@ -165,7 +191,45 @@ and copied shared backing buffers and views. With no schedule option the V1 CLI
 retains canonical cooperative ordering. Recording and replay are command
 policy, not request-document fields, so an unchanged request cannot silently
 opt into a different execution order.
+`--race-evidence` additively includes the bounded race assessment for one
+ordinary run; without that flag the result remains byte-compatible with the
+previous V1 output. Evidence distinguishes unordered races, conflicts ordered
+by integer atomic serialization or a compatible same-workgroup global
+acquire-release barrier, and incomplete assessment. Release/acquire atomic and
+fence edges into ordinary memory are not fully modeled, so a potentially
+affected ordinary conflict is reported as incomplete rather than as an exact
+race or no-race result. Source sites in this agent-facing evidence carry an
+explicit bounded function prefix, original byte count, and truncation flag.
 Scalar bits, buffer bytes, and initialization bitsets retain their exact typed
 lowercase hexadecimal encodings. Result bytes are measured exactly and capped
 at 64 MiB before output publication begins, then emitted directly through a
 bounded writer rather than assembled as one JSON string.
+
+## Exploration V1
+
+Exploration emits `fe2o3-simulation-exploration-v1`, not an ordinary copied-back
+execution result. Its fixed authority fields state observation-only CPU
+simulation, no hardware observation or validation, no performance prediction,
+and no schedule-space exhaustion. The input block identifies exact raw KIR or
+the complete simulation-bundle identity and subject. The exploration block
+reports requested and hard bounds, seed wrapping, attempted/completed/failure
+counts, race/no-race/incomplete counts, retained decisions, requested-budget
+consumption, and witness-retention exhaustion. Dynamic failures retain the
+seed, stable execution kind, invocation, bounded site, and structured wave
+detail when applicable.
+
+Race witnesses contain first byte-level access sites and invocation hierarchy,
+atomic flags, ordered-conflict reason, incomplete record/synchronization flags,
+and the exact replay schedule string. Valid retention exhaustion is a successful
+bounded result with a null witness and `witness_retention_exhausted:true`, not
+silent truncation. Per-schedule decision exhaustion is counted as a typed
+dynamic failure. The 65,536 retained-decision cap leaves the maximally spelled,
+JSON-escaped witness set within the existing 64 MiB response envelope; the
+bounded writer and typed `output_too_large` error remain a defensive backstop.
+
+Wave32/Wave64 logical collective failures are machine-readable. Incomplete
+waves include width, logical wave ordinal, and fixed-width hexadecimal active
+and required masks. Divergent waves identify the nonparticipating local lane;
+mismatched waves identify the expected operation site; invalid tiled shuffles
+include source lane and tile width. These are logical KIR diagnostics, not GPU
+`EXEC` state, ISA simulation, or hardware-wave claims.

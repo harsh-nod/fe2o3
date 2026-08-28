@@ -8,13 +8,15 @@ use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use fe2o3_kernel_ir::{
-    AccessMode, AddressSpace, BasicBlock, BlockId, DebugSourceMapDocumentV1, DebugSourceMapFileV1,
-    Function, Kernel, LaunchDomain, LaunchExtent, MAX_SIMULATION_BUNDLE_BYTES_V1, Module,
+    AccessMode, AddressSpace, BasicBlock, BlockId, Constant, DebugSourceMapDocumentV1,
+    DebugSourceMapFileV1, Function, Kernel, LaunchDomain, LaunchExtent,
+    MAX_SIMULATION_BUNDLE_BYTES_V1, MemoryAccess, Module, Operation, OperationKind,
     PreparedSimulationBundleV1, ScalarType, Signature, SimulationCompilerExecutionBindingV1,
-    SimulationProductionKirIdentityV1, SimulationSourceLineageV1, Terminator, Type, ValueId,
-    VerifiedCanonicalKernelIrV7, VerifiedCanonicalKernelIrV8,
+    SimulationProductionKirIdentityV1, SimulationSourceLineageV1, TargetCapability, Terminator,
+    Type, ValueDef, ValueId, VerifiedCanonicalKernelIrV7, VerifiedCanonicalKernelIrV8,
+    WaveOperation, WaveOperationKind, WaveWidth,
 };
-use fe2o3_kir_sim::MAX_PERSISTED_SCHEDULE_BYTES_V1;
+use fe2o3_kir_sim::{MAX_PERSISTED_SCHEDULE_BYTES_V1, MAX_SCHEDULE_DECISIONS_V1};
 use sha2::{Digest, Sha256};
 
 static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
@@ -89,7 +91,14 @@ fn simulation_bundle(target: &str) -> Vec<u8> {
 }
 
 fn simulation_bundle_with_debug_map(target: &str, debug_source: Option<&[u8]>) -> Vec<u8> {
-    let module = noop_with_buffer_module();
+    simulation_bundle_for_module(noop_with_buffer_module(), target, debug_source)
+}
+
+fn simulation_bundle_for_module(
+    module: Module,
+    target: &str,
+    debug_source: Option<&[u8]>,
+) -> Vec<u8> {
     let production = VerifiedCanonicalKernelIrV8::from_module(module.clone()).unwrap();
     let production_identity = SimulationProductionKirIdentityV1::v8(
         *production.identity().digest(),
@@ -127,6 +136,82 @@ fn simulation_bundle_with_debug_map(target: &str, debug_source: Option<&[u8]>) -
     bundle.into_canonical_bytes()
 }
 
+fn op(result: u32, ty: Type, kind: OperationKind) -> Operation {
+    Operation::effect_free(ValueDef::new(ValueId(result), ty), kind)
+}
+
+fn conflicting_store_module(entry_name: &str) -> Module {
+    let scalar = Type::Scalar(ScalarType::U32);
+    let pointer = Type::pointer(scalar.clone(), AddressSpace::Global, AccessMode::ReadWrite);
+    let mut block = BasicBlock::new(BlockId(0));
+    block.operations = vec![
+        op(1, scalar, OperationKind::Constant(Constant::U32(42))),
+        Operation::new(
+            vec![],
+            OperationKind::Store {
+                pointer: ValueId(0),
+                value: ValueId(1),
+                access: MemoryAccess::new(AddressSpace::Global, 4),
+            },
+        ),
+    ];
+    block.terminator = Some(Terminator::Return { values: vec![] });
+    let entry = Function::kernel_entry(
+        entry_name,
+        Signature::new(vec![pointer], vec![]),
+        vec![ValueId(0)],
+        vec![block],
+    );
+    let mut module = Module::new("cli-command-race-test");
+    module.functions.push(entry);
+    module.kernels.push(Kernel::new(
+        "conflict",
+        entry_name,
+        LaunchDomain::D1 {
+            x: LaunchExtent::Dynamic,
+        },
+    ));
+    module
+}
+
+fn partial_wave_module() -> Module {
+    let mut block = BasicBlock::new(BlockId(0));
+    block.operations.push(op(
+        0,
+        Type::Scalar(ScalarType::U32),
+        OperationKind::Wave(WaveOperation::full(
+            WaveOperationKind::LaneId,
+            WaveWidth::Wave32,
+        )),
+    ));
+    block.terminator = Some(Terminator::Return { values: vec![] });
+    let capabilities = std::collections::BTreeSet::from([
+        TargetCapability::Subgroups,
+        TargetCapability::SubgroupSize(32),
+        TargetCapability::WaveWidth(WaveWidth::Wave32),
+    ]);
+    let mut entry = Function::kernel_entry(
+        "partial_wave_impl",
+        Signature::new(vec![], vec![]),
+        vec![],
+        vec![block],
+    );
+    entry.required_capabilities = capabilities.clone();
+    let mut kernel = Kernel::new(
+        "partial_wave",
+        "partial_wave_impl",
+        LaunchDomain::D1 {
+            x: LaunchExtent::Dynamic,
+        },
+    );
+    kernel.required_capabilities = capabilities.clone();
+    let mut module = Module::new("cli-command-wave-test");
+    module.required_capabilities = capabilities;
+    module.functions.push(entry);
+    module.kernels.push(kernel);
+    module
+}
+
 fn write_success_fixture(directory: &TestDirectory) -> (PathBuf, PathBuf) {
     let kir = directory.path().join("kernel.kir");
     let request = directory.path().join("request.json");
@@ -146,7 +231,7 @@ fn help_is_a_successful_input_free_command() {
         assert!(output.status.success());
         assert_eq!(
             String::from_utf8(output.stdout).unwrap(),
-            "usage: fe2o3-kir-sim (--kir-v7 PATH | --bundle PATH) --request PATH [--output PATH] [--record-canonical-schedule PATH [--schedule-max-decisions COUNT] | --record-seeded-schedule PATH --schedule-seed U64 [--schedule-max-decisions COUNT] | --replay-schedule PATH]\n"
+            "usage: fe2o3-kir-sim (--kir-v7 PATH | --bundle PATH) --request PATH [--output PATH] [--race-evidence] [--record-canonical-schedule PATH [--schedule-max-decisions COUNT] | --record-seeded-schedule PATH --schedule-seed U64 [--schedule-max-decisions COUNT] | --replay-schedule PATH | --explore-seeded-schedules COUNT --schedule-seed FIRST_U64 [--schedule-max-decisions COUNT] [--exploration-max-retained-decisions COUNT]]\n"
         );
         assert!(output.stderr.is_empty());
     }
@@ -177,6 +262,21 @@ fn schedule_modes_and_record_only_parameters_are_mutually_exclusive() {
             "--schedule-max-decisions",
             "8",
         ],
+        vec![
+            "--record-canonical-schedule",
+            "canonical.json",
+            "--explore-seeded-schedules",
+            "2",
+            "--schedule-seed",
+            "7",
+        ],
+        vec![
+            "--replay-schedule",
+            "replay.json",
+            "--exploration-max-retained-decisions",
+            "8",
+        ],
+        vec!["--race-evidence", "--race-evidence"],
     ] {
         let output = binary()
             .args(["--kir-v7", "missing.kir", "--request", "missing.json"])
@@ -428,6 +528,415 @@ fn successful_stdout_is_complete_machine_readable_json() {
     assert_eq!(value["counts"]["invocations_executed"], 2);
     assert_eq!(value["counts"]["scheduled_slots_visited"], 2);
     assert_eq!(value["arguments"][0]["value"]["bytes"], "0x2a");
+    assert!(value.get("race_assessment").is_none());
+}
+
+#[test]
+fn single_run_race_evidence_is_opt_in_and_machine_readable() {
+    let directory = TestDirectory::new();
+    let kir = directory.path().join("race.kir");
+    let request = directory.path().join("race-request.json");
+    fs::write(
+        &kir,
+        VerifiedCanonicalKernelIrV7::from_module(conflicting_store_module("race_impl"))
+            .unwrap()
+            .into_canonical_bytes(),
+    )
+    .unwrap();
+    fs::write(
+        &request,
+        br#"{"schema":"fe2o3-simulation-request-v1","kernel":"conflict","grid":[2,1,1],"workgroup":[2,1,1],"arguments":[{"kind":"buffer","element":"u32","access":"read_write","alignment":4,"bytes":"0x00000000"}]}"#,
+    )
+    .unwrap();
+
+    let ordinary = binary()
+        .arg("--kir-v7")
+        .arg(&kir)
+        .arg("--request")
+        .arg(&request)
+        .output()
+        .unwrap();
+    assert!(ordinary.status.success());
+    let ordinary: serde_json::Value = serde_json::from_slice(&ordinary.stdout).unwrap();
+    assert!(ordinary.get("race_assessment").is_none());
+
+    let evidenced = binary()
+        .arg("--kir-v7")
+        .arg(&kir)
+        .arg("--request")
+        .arg(&request)
+        .arg("--race-evidence")
+        .output()
+        .unwrap();
+    assert!(
+        evidenced.status.success(),
+        "{}",
+        String::from_utf8_lossy(&evidenced.stderr)
+    );
+    let evidenced: serde_json::Value = serde_json::from_slice(&evidenced.stdout).unwrap();
+    assert_eq!(evidenced["race_assessment"]["status"], "races_observed");
+    assert_eq!(evidenced["race_assessment"]["racing_bytes"], 4);
+    assert_eq!(
+        evidenced["race_assessment"]["first"]["earlier_atomic"],
+        false
+    );
+    assert_eq!(
+        evidenced["race_assessment"]["first"]["conflict"]["earlier_site"]["function_truncated"],
+        false
+    );
+}
+
+#[test]
+fn seeded_exploration_is_bounded_agent_native_and_exactly_replayable() {
+    let directory = TestDirectory::new();
+    let hostile_entry = "race_impl_\"\\\n\u{0001}";
+    let module = conflicting_store_module(hostile_entry);
+    let kir_bytes = VerifiedCanonicalKernelIrV7::from_module(module)
+        .unwrap()
+        .into_canonical_bytes();
+    let kir = directory.path().join("race.kir");
+    let request = directory.path().join("race-request.json");
+    fs::write(&kir, kir_bytes).unwrap();
+    let request_bytes = br#"{"schema":"fe2o3-simulation-request-v1","kernel":"conflict","grid":[2,1,1],"workgroup":[2,1,1],"arguments":[{"kind":"buffer","element":"u32","access":"read_write","alignment":4,"bytes":"0x00000000"}]}"#;
+    fs::write(&request, request_bytes).unwrap();
+
+    let explored = binary()
+        .arg("--kir-v7")
+        .arg(&kir)
+        .arg("--request")
+        .arg(&request)
+        .args([
+            "--explore-seeded-schedules",
+            "3",
+            "--schedule-seed",
+            "18446744073709551614",
+            "--schedule-max-decisions",
+            "16",
+            "--exploration-max-retained-decisions",
+            "16",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        explored.status.success(),
+        "{}",
+        String::from_utf8_lossy(&explored.stderr)
+    );
+    assert!(explored.stderr.is_empty());
+    assert_eq!(explored.stdout.last(), Some(&b'\n'));
+    let value: serde_json::Value = serde_json::from_slice(&explored.stdout).unwrap();
+    assert_eq!(value["schema"], "fe2o3-simulation-exploration-v1");
+    assert_eq!(value["authority"], "observation_only");
+    assert_eq!(value["hardware_observed"], false);
+    assert_eq!(value["performance_prediction"], false);
+    assert_eq!(value["schedule_space_exhausted"], false);
+    assert_eq!(value["exploration"]["seed_interval_wraps"], true);
+    assert_eq!(value["exploration"]["attempted"], 3);
+    assert_eq!(value["exploration"]["completed"], 3);
+    assert_eq!(value["exploration"]["races_observed"], 3);
+    assert_eq!(value["exploration"]["requested_seed_budget_consumed"], true);
+    assert_eq!(value["exploration"]["witness_retention_exhausted"], false);
+
+    let witness = &value["witnesses"]["first_race"];
+    assert_eq!(witness["assessment"]["status"], "races_observed");
+    assert_eq!(
+        witness["assessment"]["first"]["conflict"]["earlier_site"]["function"],
+        hostile_entry
+    );
+    let schedule = witness["replay_schedule"]["document"].as_str().unwrap();
+    assert_eq!(witness["replay_schedule"]["bytes"], schedule.len());
+    let mut schedule_sha256 = String::with_capacity(64);
+    for byte in Sha256::digest(schedule.as_bytes()) {
+        write!(&mut schedule_sha256, "{byte:02x}").unwrap();
+    }
+    assert_eq!(witness["replay_schedule"]["sha256"], schedule_sha256);
+    let schedule_value: serde_json::Value = serde_json::from_str(schedule).unwrap();
+    assert_eq!(schedule_value["schema"], "fe2o3-simulation-schedule-v1");
+    assert_eq!(schedule_value["artifact"]["kind"], "canonical_kir_v7");
+    assert_eq!(schedule_value["schedule"]["seed"], witness["seed"]);
+
+    let schedule_path = directory.path().join("race-schedule.json");
+    fs::write(&schedule_path, schedule).unwrap();
+    let replayed = binary()
+        .arg("--kir-v7")
+        .arg(&kir)
+        .arg("--request")
+        .arg(&request)
+        .arg("--replay-schedule")
+        .arg(&schedule_path)
+        .arg("--race-evidence")
+        .output()
+        .unwrap();
+    assert!(
+        replayed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&replayed.stderr)
+    );
+    let replayed: serde_json::Value = serde_json::from_slice(&replayed.stdout).unwrap();
+    assert_eq!(replayed["race_assessment"], witness["assessment"]);
+
+    let stale_request = directory.path().join("stale-request.json");
+    let mut stale_bytes = request_bytes.to_vec();
+    stale_bytes.push(b'\n');
+    fs::write(&stale_request, stale_bytes).unwrap();
+    let rejected = binary()
+        .arg("--kir-v7")
+        .arg(&kir)
+        .arg("--request")
+        .arg(stale_request)
+        .arg("--replay-schedule")
+        .arg(schedule_path)
+        .output()
+        .unwrap();
+    assert!(!rejected.status.success());
+    let rejected: serde_json::Value = serde_json::from_slice(&rejected.stderr).unwrap();
+    assert_eq!(rejected["kind"], "schedule_binding_mismatch");
+}
+
+#[test]
+fn exploration_witness_preserves_bundle_route_and_rejects_raw_substitution() {
+    let directory = TestDirectory::new();
+    let module = conflicting_store_module("bundle_race_impl");
+    let raw = directory.path().join("bundle-race.kir");
+    fs::write(
+        &raw,
+        VerifiedCanonicalKernelIrV7::from_module(module.clone())
+            .unwrap()
+            .into_canonical_bytes(),
+    )
+    .unwrap();
+    let bundle = directory.path().join("bundle-race.fe2sim");
+    fs::write(
+        &bundle,
+        simulation_bundle_for_module(module, "gfx942:xnack-", None),
+    )
+    .unwrap();
+    let request = directory.path().join("bundle-race-request.json");
+    fs::write(
+        &request,
+        br#"{"schema":"fe2o3-simulation-request-v1","kernel":"conflict","grid":[2,1,1],"workgroup":[2,1,1],"arguments":[{"kind":"buffer","element":"u32","access":"read_write","alignment":4,"bytes":"0x00000000"}]}"#,
+    )
+    .unwrap();
+    let explored = binary()
+        .arg("--bundle")
+        .arg(&bundle)
+        .arg("--request")
+        .arg(&request)
+        .args([
+            "--explore-seeded-schedules",
+            "1",
+            "--schedule-seed",
+            "7",
+            "--schedule-max-decisions",
+            "8",
+            "--exploration-max-retained-decisions",
+            "8",
+        ])
+        .output()
+        .unwrap();
+    assert!(explored.status.success());
+    let explored: serde_json::Value = serde_json::from_slice(&explored.stdout).unwrap();
+    assert_eq!(explored["input"]["kind"], "simulation_bundle_v1");
+    let schedule = explored["witnesses"]["first_race"]["replay_schedule"]["document"]
+        .as_str()
+        .unwrap();
+    let schedule_value: serde_json::Value = serde_json::from_str(schedule).unwrap();
+    assert_eq!(schedule_value["artifact"]["kind"], "simulation_bundle_v1");
+    let schedule_path = directory.path().join("bundle-witness.json");
+    fs::write(&schedule_path, schedule).unwrap();
+    let rejected = binary()
+        .arg("--kir-v7")
+        .arg(raw)
+        .arg("--request")
+        .arg(request)
+        .arg("--replay-schedule")
+        .arg(schedule_path)
+        .output()
+        .unwrap();
+    assert!(!rejected.status.success());
+    let rejected: serde_json::Value = serde_json::from_slice(&rejected.stderr).unwrap();
+    assert_eq!(rejected["kind"], "schedule_binding_mismatch");
+}
+
+#[test]
+fn exploration_limits_and_dynamic_exhaustion_are_typed_bounded_results() {
+    let directory = TestDirectory::new();
+    let kir = directory.path().join("race.kir");
+    let request = directory.path().join("race-request.json");
+    fs::write(
+        &kir,
+        VerifiedCanonicalKernelIrV7::from_module(conflicting_store_module("race_impl"))
+            .unwrap()
+            .into_canonical_bytes(),
+    )
+    .unwrap();
+    fs::write(
+        &request,
+        br#"{"schema":"fe2o3-simulation-request-v1","kernel":"conflict","grid":[2,1,1],"workgroup":[2,1,1],"arguments":[{"kind":"buffer","element":"u32","access":"read_write","alignment":4,"bytes":"0x00000000"}]}"#,
+    )
+    .unwrap();
+    for extra in [
+        vec!["--explore-seeded-schedules", "0", "--schedule-seed", "1"],
+        vec!["--explore-seeded-schedules", "4097", "--schedule-seed", "1"],
+        vec!["--explore-seeded-schedules", "1"],
+        vec![
+            "--explore-seeded-schedules",
+            "1",
+            "--schedule-seed",
+            "1",
+            "--exploration-max-retained-decisions",
+            "65537",
+        ],
+    ] {
+        let rejected = binary()
+            .arg("--kir-v7")
+            .arg(&kir)
+            .arg("--request")
+            .arg(&request)
+            .args(extra)
+            .output()
+            .unwrap();
+        assert!(!rejected.status.success());
+        let error: serde_json::Value = serde_json::from_slice(&rejected.stderr).unwrap();
+        assert_eq!(error["kind"], "invalid_command_line");
+    }
+    let above_decision_limit = (MAX_SCHEDULE_DECISIONS_V1 + 1).to_string();
+    let rejected = binary()
+        .arg("--kir-v7")
+        .arg(&kir)
+        .arg("--request")
+        .arg(&request)
+        .args([
+            "--explore-seeded-schedules",
+            "1",
+            "--schedule-seed",
+            "1",
+            "--schedule-max-decisions",
+            &above_decision_limit,
+        ])
+        .output()
+        .unwrap();
+    assert!(!rejected.status.success());
+
+    let retention_limited = binary()
+        .arg("--kir-v7")
+        .arg(&kir)
+        .arg("--request")
+        .arg(&request)
+        .args([
+            "--explore-seeded-schedules",
+            "1",
+            "--schedule-seed",
+            "1",
+            "--schedule-max-decisions",
+            "8",
+            "--exploration-max-retained-decisions",
+            "1",
+        ])
+        .output()
+        .unwrap();
+    assert!(retention_limited.status.success());
+    let retention_limited: serde_json::Value =
+        serde_json::from_slice(&retention_limited.stdout).unwrap();
+    assert_eq!(
+        retention_limited["exploration"]["witness_retention_exhausted"],
+        true
+    );
+    assert!(retention_limited["witnesses"]["first_race"].is_null());
+
+    let decision_limited = binary()
+        .arg("--kir-v7")
+        .arg(&kir)
+        .arg("--request")
+        .arg(&request)
+        .args([
+            "--explore-seeded-schedules",
+            "2",
+            "--schedule-seed",
+            "1",
+            "--schedule-max-decisions",
+            "1",
+            "--exploration-max-retained-decisions",
+            "2",
+        ])
+        .output()
+        .unwrap();
+    assert!(decision_limited.status.success());
+    let decision_limited: serde_json::Value =
+        serde_json::from_slice(&decision_limited.stdout).unwrap();
+    assert_eq!(decision_limited["exploration"]["failures"], 2);
+    assert_eq!(
+        decision_limited["first_failure"]["kind"],
+        "execution_schedule_decision_limit"
+    );
+    assert_eq!(
+        decision_limited["exploration"]["requested_seed_budget_consumed"],
+        true
+    );
+}
+
+#[test]
+fn wave_failures_have_exact_structured_details_in_error_and_exploration() {
+    let directory = TestDirectory::new();
+    let kir = directory.path().join("partial-wave.kir");
+    let request = directory.path().join("partial-wave-request.json");
+    fs::write(
+        &kir,
+        VerifiedCanonicalKernelIrV7::from_module(partial_wave_module())
+            .unwrap()
+            .into_canonical_bytes(),
+    )
+    .unwrap();
+    fs::write(
+        &request,
+        br#"{"schema":"fe2o3-simulation-request-v1","kernel":"partial_wave","grid":[1,1,1],"workgroup":[1,1,1],"arguments":[]}"#,
+    )
+    .unwrap();
+    let failed = binary()
+        .arg("--kir-v7")
+        .arg(&kir)
+        .arg("--request")
+        .arg(&request)
+        .output()
+        .unwrap();
+    assert!(!failed.status.success());
+    let failed: serde_json::Value = serde_json::from_slice(&failed.stderr).unwrap();
+    assert_eq!(failed["kind"], "execution_incomplete_wave");
+    assert_eq!(failed["detail"]["kind"], "incomplete_wave");
+    assert_eq!(failed["detail"]["width"], "wave32");
+    assert_eq!(failed["detail"]["wave_in_workgroup"], 0);
+    assert_eq!(failed["detail"]["active_mask"], "0x00000001");
+    assert_eq!(failed["detail"]["required_mask"], "0xffffffff");
+
+    let explored = binary()
+        .arg("--kir-v7")
+        .arg(&kir)
+        .arg("--request")
+        .arg(&request)
+        .args([
+            "--explore-seeded-schedules",
+            "1",
+            "--schedule-seed",
+            "9",
+            "--schedule-max-decisions",
+            "4",
+            "--exploration-max-retained-decisions",
+            "4",
+        ])
+        .output()
+        .unwrap();
+    assert!(explored.status.success());
+    let explored: serde_json::Value = serde_json::from_slice(&explored.stdout).unwrap();
+    assert_eq!(explored["exploration"]["failures"], 1);
+    assert_eq!(
+        explored["first_failure"]["kind"],
+        "execution_incomplete_wave"
+    );
+    assert_eq!(
+        explored["first_failure"]["detail"]["active_mask"],
+        "0x00000001"
+    );
+    assert_eq!(explored["schedule_space_exhausted"], false);
 }
 
 #[test]
