@@ -27,8 +27,8 @@ const MAX_SOURCE_TREE_FILES: usize = 100_000;
 const CRATES_IO_SOURCE: &str = "registry+https://github.com/rust-lang/crates.io-index";
 const TRUSTED_FE2O3_EXTERNAL_SOURCE: &str = concat!(
     "git+https://github.com/harsh-nod/fe2o3.git?rev=",
-    "1e3c185ed57e751d53c8da19a4fb01ee00b59e4e#",
-    "1e3c185ed57e751d53c8da19a4fb01ee00b59e4e",
+    "2c7668d233263b5346b76ccc11b27c6af33e8bfb#",
+    "2c7668d233263b5346b76ccc11b27c6af33e8bfb",
 );
 const TRUSTED_REGISTRY_BUILD_SCRIPTS: [(&str, &str, &str); 25] = [
     (
@@ -1566,9 +1566,9 @@ mod tests {
         }
 
         for source in [
-            "git+https://github.com/harsh-nod/fe2o3.git?rev=1e3c185ed57e751d53c8da19a4fb01ee00b59e4e#ffffffffffffffffffffffffffffffffffffffff",
-            "git+https://example.invalid/fe2o3.git?rev=1e3c185ed57e751d53c8da19a4fb01ee00b59e4e#1e3c185ed57e751d53c8da19a4fb01ee00b59e4e",
-            "git+https://github.com/harsh-nod/fe2o3.git?branch=main#1e3c185ed57e751d53c8da19a4fb01ee00b59e4e",
+            "git+https://github.com/harsh-nod/fe2o3.git?rev=2c7668d233263b5346b76ccc11b27c6af33e8bfb#ffffffffffffffffffffffffffffffffffffffff",
+            "git+https://example.invalid/fe2o3.git?rev=2c7668d233263b5346b76ccc11b27c6af33e8bfb#2c7668d233263b5346b76ccc11b27c6af33e8bfb",
+            "git+https://github.com/harsh-nod/fe2o3.git?branch=main#2c7668d233263b5346b76ccc11b27c6af33e8bfb",
             "git+https://github.com/harsh-nod/fe2o3.git?rev=0123456789abcdef0123456789abcdef01234567#0123456789abcdef0123456789abcdef01234567",
         ] {
             for (package, package_digest) in [(&git, &external_macro_digest), (&hip, &hip_digest)] {
