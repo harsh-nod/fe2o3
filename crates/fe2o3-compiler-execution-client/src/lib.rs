@@ -7,7 +7,7 @@ use std::error::Error;
 use std::fmt;
 use std::io;
 use std::mem;
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::fd::{AsRawFd, OwnedFd};
 use std::time::{Duration, Instant};
 
 use fe2o3_artifact_transaction::InertCompilerExecutionSubjectV1;
@@ -21,7 +21,6 @@ use fe2o3_compiler_execution_protocol::{
 };
 
 mod child_channel;
-mod receipt_return;
 mod supervisor_handoff;
 
 pub use child_channel::{
@@ -29,11 +28,6 @@ pub use child_channel::{
     PendingCompilerExecutionChildChannelV1,
 };
 pub use fe2o3_compiler_execution_protocol::CompilerExecutionClientProcessIdentityV1;
-pub use receipt_return::{
-    COMPILER_EXECUTION_RECEIPT_RETURN_CHILD_FD_V1, CompilerExecutionReceiptReceiverV1,
-    CompilerExecutionReceiptReturnErrorV1, CompilerExecutionReceiptSenderV1,
-    PendingCompilerExecutionReceiptReturnV1,
-};
 pub use supervisor_handoff::{
     CompilerExecutionHandoffErrorV1, CompilerExecutionSupervisorCredentialsV1,
     MAX_COMPILER_EXECUTION_SUPERVISOR_HANDOFF_TIMEOUT_V1, PendingCompilerExecutionSupervisorV1,
@@ -93,46 +87,6 @@ impl fmt::Debug for CompilerExecutionClientV1 {
 }
 
 impl CompilerExecutionClientV1 {
-    /// Admits and removes the exact compiler-service endpoint inherited by rustc at fixed FD 195.
-    pub fn admit_inherited_child(
-        timeout: Duration,
-    ) -> Result<Self, CompilerExecutionClientErrorV1> {
-        // SAFETY: F_GETFD consumes only the fixed scalar descriptor.
-        let flags = unsafe { libc::fcntl(COMPILER_EXECUTION_SERVICE_CHILD_FD_V1, libc::F_GETFD) };
-        if flags < 0 {
-            let error = io::Error::last_os_error();
-            if error.raw_os_error() == Some(libc::EBADF) {
-                return Err(CompilerExecutionClientErrorV1::MissingInheritedPeer);
-            }
-            return Err(CompilerExecutionClientErrorV1::Descriptor(error));
-        }
-        if flags & libc::FD_CLOEXEC != 0 {
-            return Err(CompilerExecutionClientErrorV1::InheritedPeerCloseOnExec);
-        }
-        // SAFETY: F_DUPFD_CLOEXEC returns one independent descriptor or reports failure.
-        let retained = unsafe {
-            libc::fcntl(
-                COMPILER_EXECUTION_SERVICE_CHILD_FD_V1,
-                libc::F_DUPFD_CLOEXEC,
-                3,
-            )
-        };
-        if retained < 0 {
-            return Err(CompilerExecutionClientErrorV1::Descriptor(
-                io::Error::last_os_error(),
-            ));
-        }
-        // SAFETY: the fixed inherited descriptor is consumed exactly once by this operation.
-        if unsafe { libc::close(COMPILER_EXECUTION_SERVICE_CHILD_FD_V1) } != 0 {
-            let error = io::Error::last_os_error();
-            // SAFETY: successful duplication returned one owned descriptor not yet wrapped.
-            unsafe { libc::close(retained) };
-            return Err(CompilerExecutionClientErrorV1::Descriptor(error));
-        }
-        // SAFETY: successful F_DUPFD_CLOEXEC returned one newly owned descriptor.
-        Self::admit(unsafe { OwnedFd::from_raw_fd(retained) }, timeout)
-    }
-
     /// Admits one owned connected peer and fixes the absolute deadline for its complete session.
     pub fn admit(peer: OwnedFd, timeout: Duration) -> Result<Self, CompilerExecutionClientErrorV1> {
         if timeout.is_zero() {
@@ -652,8 +606,6 @@ fn duration_to_poll_millis(duration: Duration) -> i32 {
 pub enum CompilerExecutionClientErrorV1 {
     InvalidTimeout,
     DeadlineOverflow,
-    MissingInheritedPeer,
-    InheritedPeerCloseOnExec,
     Descriptor(io::Error),
     NotSeqpacket,
     NamedOrNonUnixPeer,
@@ -686,11 +638,6 @@ impl fmt::Display for CompilerExecutionClientErrorV1 {
         match self {
             Self::InvalidTimeout => formatter.write_str("compiler service timeout must be nonzero"),
             Self::DeadlineOverflow => formatter.write_str("compiler service deadline overflowed"),
-            Self::MissingInheritedPeer => formatter.write_str(
-                "rustc child has no inherited compiler-service peer at fixed descriptor 195",
-            ),
-            Self::InheritedPeerCloseOnExec => formatter
-                .write_str("inherited rustc compiler-service peer is unexpectedly close-on-exec"),
             Self::Descriptor(error) => {
                 write!(formatter, "compiler service peer is invalid: {error}")
             }

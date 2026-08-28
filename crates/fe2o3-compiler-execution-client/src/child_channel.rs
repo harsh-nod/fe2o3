@@ -16,9 +16,9 @@ use rustix::net::{RecvAncillaryBuffer, RecvAncillaryMessage, RecvFlags, ReturnFl
 
 use crate::{COMPILER_EXECUTION_SERVICE_CHILD_FD_V1, validate_seqpacket_peer};
 
-pub(crate) const SERVICE_TRANSFER_MAGIC: [u8; 8] = *b"FE2CEC2\0";
-pub(crate) const TRANSFER_VERSION: u32 = 2;
-pub(crate) const TRANSFER_BYTES: usize = 24;
+const TRANSFER_MAGIC: [u8; 8] = *b"FE2CEC2\0";
+const TRANSFER_VERSION: u32 = 2;
+const TRANSFER_BYTES: usize = 24;
 
 /// Move-only service launch inputs bound to one still-live rustc child.
 ///
@@ -121,19 +121,13 @@ impl fmt::Debug for PendingCompilerExecutionChildChannelV1 {
 impl PendingCompilerExecutionChildChannelV1 {
     /// Registers exact child-side channel creation on one rustc command.
     pub fn prepare(command: &mut Command) -> Result<Self, CompilerExecutionChildChannelErrorV1> {
-        require_reserved_descriptor_unused(COMPILER_EXECUTION_SERVICE_CHILD_FD_V1)?;
+        require_reserved_descriptor_unused()?;
         let (receiver, sender) = seqpacket_pair()?;
         // The command owns this descriptor through every spawn. The callback creates the actual
         // service channel after fork, so SO_PEERCRED records the rustc child's PID rather than its
         // parent wrapper. Every operation below is an async-signal-safe Linux descriptor syscall.
         unsafe {
-            command.pre_exec(move || {
-                child_create_and_transfer(
-                    sender.as_raw_fd(),
-                    COMPILER_EXECUTION_SERVICE_CHILD_FD_V1,
-                    SERVICE_TRANSFER_MAGIC,
-                )
-            });
+            command.pre_exec(move || child_create_and_transfer(sender.as_raw_fd()));
         }
         Ok(Self { receiver })
     }
@@ -155,11 +149,8 @@ impl PendingCompilerExecutionChildChannelV1 {
             .ok_or(CompilerExecutionChildChannelErrorV1::DeadlineOverflow)?;
         let client_pidfd = open_pidfd(child_pid)?;
         wait_for_transfer(&self.receiver, &client_pidfd, deadline)?;
-        let (service_peer, transferred_pid, transferred_parent_pid) = receive_transferred_peer(
-            &self.receiver,
-            COMPILER_EXECUTION_SERVICE_CHILD_FD_V1,
-            SERVICE_TRANSFER_MAGIC,
-        )?;
+        let (service_peer, transferred_pid, transferred_parent_pid) =
+            receive_service_peer(&self.receiver)?;
         if transferred_pid != child_pid {
             return Err(CompilerExecutionChildChannelErrorV1::ChildPidMismatch);
         }
@@ -193,11 +184,9 @@ impl PendingCompilerExecutionChildChannelV1 {
     }
 }
 
-pub(crate) fn require_reserved_descriptor_unused(
-    target_fd: RawFd,
-) -> Result<(), CompilerExecutionChildChannelErrorV1> {
+fn require_reserved_descriptor_unused() -> Result<(), CompilerExecutionChildChannelErrorV1> {
     // SAFETY: F_GETFD uses only the scalar descriptor and reports absence through EBADF.
-    let result = unsafe { libc::fcntl(target_fd, libc::F_GETFD) };
+    let result = unsafe { libc::fcntl(COMPILER_EXECUTION_SERVICE_CHILD_FD_V1, libc::F_GETFD) };
     if result >= 0 {
         return Err(CompilerExecutionChildChannelErrorV1::ReservedDescriptorInUse);
     }
@@ -208,7 +197,7 @@ pub(crate) fn require_reserved_descriptor_unused(
     Ok(())
 }
 
-pub(crate) fn seqpacket_pair() -> Result<(OwnedFd, OwnedFd), CompilerExecutionChildChannelErrorV1> {
+fn seqpacket_pair() -> Result<(OwnedFd, OwnedFd), CompilerExecutionChildChannelErrorV1> {
     let mut descriptors = [-1_i32; 2];
     // SAFETY: successful socketpair initializes both output descriptor slots.
     if unsafe {
@@ -233,15 +222,11 @@ pub(crate) fn seqpacket_pair() -> Result<(OwnedFd, OwnedFd), CompilerExecutionCh
     })
 }
 
-pub(crate) fn child_create_and_transfer(
-    control: RawFd,
-    target_fd: RawFd,
-    transfer_magic: [u8; 8],
-) -> io::Result<()> {
+fn child_create_and_transfer(control: RawFd) -> io::Result<()> {
     // A preexisting target would let another callback or inherited ambient state substitute the
     // backend endpoint after parent-side preparation.
     // SAFETY: F_GETFD reports descriptor validity without dereferencing memory.
-    let target = unsafe { libc::fcntl(target_fd, libc::F_GETFD) };
+    let target = unsafe { libc::fcntl(COMPILER_EXECUTION_SERVICE_CHILD_FD_V1, libc::F_GETFD) };
     if target >= 0 || io::Error::last_os_error().raw_os_error() != Some(libc::EBADF) {
         return Err(io::Error::from_raw_os_error(libc::EBUSY));
     }
@@ -259,47 +244,44 @@ pub(crate) fn child_create_and_transfer(
     {
         return Err(io::Error::last_os_error());
     }
-    let (service, client) = if peers[0] == target_fd {
+    let (service, client) = if peers[0] == COMPILER_EXECUTION_SERVICE_CHILD_FD_V1 {
         (peers[1], peers[0])
     } else {
         (peers[0], peers[1])
     };
 
     let result = (|| {
-        if client == target_fd {
+        if client == COMPILER_EXECUTION_SERVICE_CHILD_FD_V1 {
             // SAFETY: F_SETFD consumes only the inherited descriptor flag value.
             if unsafe { libc::fcntl(client, libc::F_SETFD, 0) } != 0 {
                 return Err(io::Error::last_os_error());
             }
         } else {
             // SAFETY: dup3 atomically installs the live socket endpoint at the reserved target.
-            if unsafe { libc::dup3(client, target_fd, 0) } != target_fd {
+            if unsafe { libc::dup3(client, COMPILER_EXECUTION_SERVICE_CHILD_FD_V1, 0) }
+                != COMPILER_EXECUTION_SERVICE_CHILD_FD_V1
+            {
                 return Err(io::Error::last_os_error());
             }
         }
-        send_transferred_peer(control, service, target_fd, transfer_magic)
+        send_service_peer(control, service)
     })();
 
     // SAFETY: these are child-local descriptors returned by socketpair. Avoid closing the
-    // installed target when socketpair itself selected the reserved client endpoint.
+    // installed target when socketpair itself selected FD 195 for the client endpoint.
     unsafe {
         libc::close(service);
-        if client != target_fd {
+        if client != COMPILER_EXECUTION_SERVICE_CHILD_FD_V1 {
             libc::close(client);
         }
         if result.is_err() {
-            libc::close(target_fd);
+            libc::close(COMPILER_EXECUTION_SERVICE_CHILD_FD_V1);
         }
     }
     result
 }
 
-fn send_transferred_peer(
-    control: RawFd,
-    service: RawFd,
-    target_fd: RawFd,
-    transfer_magic: [u8; 8],
-) -> io::Result<()> {
+fn send_service_peer(control: RawFd, service: RawFd) -> io::Result<()> {
     let pid = u32::try_from(unsafe { libc::getpid() })
         .map_err(|_| io::Error::from_raw_os_error(libc::EOVERFLOW))?;
     let parent_pid = u32::try_from(unsafe { libc::getppid() })
@@ -308,10 +290,10 @@ fn send_transferred_peer(
         return Err(io::Error::from_raw_os_error(libc::ESRCH));
     }
     let mut payload = [0_u8; TRANSFER_BYTES];
-    payload[..8].copy_from_slice(&transfer_magic);
+    payload[..8].copy_from_slice(&TRANSFER_MAGIC);
     payload[8..12].copy_from_slice(&TRANSFER_VERSION.to_le_bytes());
     payload[12..16].copy_from_slice(&pid.to_le_bytes());
-    payload[16..20].copy_from_slice(&target_fd.to_le_bytes());
+    payload[16..20].copy_from_slice(&COMPILER_EXECUTION_SERVICE_CHILD_FD_V1.to_le_bytes());
     payload[20..24].copy_from_slice(&parent_pid.to_le_bytes());
 
     let mut vector = libc::iovec {
@@ -344,7 +326,7 @@ fn send_transferred_peer(
     Ok(())
 }
 
-pub(crate) fn open_pidfd(child_pid: u32) -> Result<OwnedFd, CompilerExecutionChildChannelErrorV1> {
+fn open_pidfd(child_pid: u32) -> Result<OwnedFd, CompilerExecutionChildChannelErrorV1> {
     // SAFETY: pidfd_open consumes one positive scalar PID and zero flags.
     let descriptor = unsafe { libc::syscall(libc::SYS_pidfd_open, child_pid, 0) };
     if descriptor < 0 {
@@ -363,7 +345,7 @@ pub(crate) fn open_pidfd(child_pid: u32) -> Result<OwnedFd, CompilerExecutionChi
     Ok(pidfd)
 }
 
-pub(crate) fn wait_for_transfer(
+fn wait_for_transfer(
     receiver: &OwnedFd,
     pidfd: &OwnedFd,
     deadline: Instant,
@@ -424,10 +406,8 @@ pub(crate) fn wait_for_transfer(
     }
 }
 
-pub(crate) fn receive_transferred_peer(
+fn receive_service_peer(
     receiver: &OwnedFd,
-    target_fd: RawFd,
-    transfer_magic: [u8; 8],
 ) -> Result<(OwnedFd, u32, u32), CompilerExecutionChildChannelErrorV1> {
     let mut payload = [0_u8; TRANSFER_BYTES];
     let mut vectors = [IoSliceMut::new(&mut payload)];
@@ -464,9 +444,10 @@ pub(crate) fn receive_transferred_peer(
         return Err(CompilerExecutionChildChannelErrorV1::MalformedTransfer);
     }
     let descriptor = descriptor.ok_or(CompilerExecutionChildChannelErrorV1::MalformedTransfer)?;
-    if payload[..8] != transfer_magic
+    if payload[..8] != TRANSFER_MAGIC
         || u32::from_le_bytes(payload[8..12].try_into().unwrap()) != TRANSFER_VERSION
-        || i32::from_le_bytes(payload[16..20].try_into().unwrap()) != target_fd
+        || i32::from_le_bytes(payload[16..20].try_into().unwrap())
+            != COMPILER_EXECUTION_SERVICE_CHILD_FD_V1
     {
         return Err(CompilerExecutionChildChannelErrorV1::MalformedTransfer);
     }
@@ -482,7 +463,7 @@ pub(crate) fn receive_transferred_peer(
     Ok((descriptor, child_pid, parent_pid))
 }
 
-pub(crate) fn peer_identity(
+fn peer_identity(
     service_peer: &OwnedFd,
 ) -> Result<CompilerExecutionClientProcessIdentityV1, CompilerExecutionChildChannelErrorV1> {
     let credentials = rustix::net::sockopt::socket_peercred(service_peer).map_err(|error| {
@@ -498,9 +479,7 @@ pub(crate) fn peer_identity(
     .map_err(|_| CompilerExecutionChildChannelErrorV1::PeerCredentialsMismatch)
 }
 
-pub(crate) fn require_close_on_exec(
-    descriptor: &OwnedFd,
-) -> Result<(), CompilerExecutionChildChannelErrorV1> {
+fn require_close_on_exec(descriptor: &OwnedFd) -> Result<(), CompilerExecutionChildChannelErrorV1> {
     let flags = rustix::io::fcntl_getfd(descriptor).map_err(|error| {
         CompilerExecutionChildChannelErrorV1::Descriptor(io::Error::from(error))
     })?;
@@ -510,9 +489,7 @@ pub(crate) fn require_close_on_exec(
     Ok(())
 }
 
-pub(crate) fn require_pidfd_live(
-    pidfd: &OwnedFd,
-) -> Result<(), CompilerExecutionChildChannelErrorV1> {
+fn require_pidfd_live(pidfd: &OwnedFd) -> Result<(), CompilerExecutionChildChannelErrorV1> {
     require_not_poll_ready(pidfd, CompilerExecutionChildChannelErrorV1::ChildExited)
 }
 
@@ -547,7 +524,7 @@ fn require_not_poll_ready(
     Ok(())
 }
 
-pub(crate) fn duration_to_poll_millis(duration: Duration) -> i32 {
+fn duration_to_poll_millis(duration: Duration) -> i32 {
     let millis = duration.as_millis();
     let rounded = if duration.subsec_nanos().is_multiple_of(1_000_000) {
         millis
@@ -592,7 +569,7 @@ impl fmt::Display for CompilerExecutionChildChannelErrorV1 {
             Self::DeadlineOverflow => formatter.write_str("rustc channel deadline overflowed"),
             Self::ReservedDescriptorInUse => write!(
                 formatter,
-                "a reserved rustc compiler channel descriptor is already in use"
+                "reserved rustc compiler-service descriptor {COMPILER_EXECUTION_SERVICE_CHILD_FD_V1} is already in use"
             ),
             Self::Descriptor(error) => {
                 write!(formatter, "rustc channel descriptor failed: {error}")

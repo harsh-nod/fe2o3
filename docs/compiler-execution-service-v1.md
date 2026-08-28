@@ -203,29 +203,11 @@ parent, then repeats policy, service-peer, pidfd target/liveness, socket shape,
 descriptor identity, and alias checks. It can consume the accepted value into
 the exact sealed static-launcher input set, repeating those checks together with
 all source-object, capability, parent, pipe, and canonical-manifest checks. The
-supervisor now launches, admits readiness from, publishes that exact readiness
-to Cargo over the retained control connection, and holds serving pidfd custody
-until exactly-once termination and reaping.
-
-A second child-created `SOCK_SEQPACKET` channel at fixed rustc FD 196 returns
-one canonical inert receipt carriage to the direct parent. Both endpoints are
-move-only; the parent authenticates the spawned PID, reported direct-parent
-PID, `SO_PEERCRED`, and live pidfd, while the final receive repeats exact policy
-and compiler-subject joins and requires one canonical packet followed by clean
-EOF, rejecting malformed, truncated, extended, trailing, or ancillary packets.
-Rustc can independently consume fixed service FD 195 into a private
-close-on-exec client before acquisition. This transport does not
-provision the distinct-UID service or grant signing, compilation, publication,
-load, or launch authority.
-
-The binding wrapper now invokes the sealed-profile path for the selected
-protected kernel root, waits for exact issuer readiness, and kills/reaps rustc
-on any failed handoff. Fresh publication fails closed unless the parent still
-retains both exact rustc-invocation and compiler-execution-readiness custody. It
-does not yet coordinate the receipt-return channel with that ready protected
-issuer or return an acquired carriage from the backend to V2 envelope
-construction. A deployed service entrypoint and backend receipt acquisition
-remain separate requirements.
+binding wrapper now invokes this path for the selected protected kernel root,
+waits for exact issuer readiness, and kills/reaps rustc on any failed handoff.
+Fresh publication fails closed unless the parent still retains both exact
+rustc-invocation and compiler-execution-readiness custody. A deployed service
+entrypoint and backend receipt acquisition remain separate requirements.
 
 ## Authority Limit
 
