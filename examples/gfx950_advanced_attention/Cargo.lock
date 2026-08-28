@@ -228,6 +228,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe2o3-compiler-execution-protocol"
+version = "0.1.0"
+dependencies = [
+ "ed25519-dalek",
+ "fe2o3-artifact-transaction",
+ "sha2 0.11.0",
+]
+
+[[package]]
 name = "fe2o3-compiler-ffi"
 version = "0.1.0"
 dependencies = [
@@ -427,8 +436,8 @@ version = "0.1.0"
 name = "fe2o3-runtime-protocol"
 version = "0.1.0"
 dependencies = [
- "ed25519-dalek",
  "fe2o3-artifact-transaction",
+ "fe2o3-compiler-execution-protocol",
  "fe2o3-compiler-ffi",
  "fe2o3-hsaco-finalize",
  "sha2 0.11.0",
