@@ -1013,7 +1013,7 @@ fn presburger_proves_no_conflicts(
     if invocations <= u128::from(MAX_PLIRON_RACE_INVOCATIONS_V1) {
         return false;
     }
-    if !presburger_pair_inventory_fits_budget(effects.len()) {
+    if !effect_pair_inventory_fits_budget(effects.len()) {
         return false;
     }
     let relevant_pairs = (0..effects.len())
@@ -1076,7 +1076,7 @@ fn presburger_proves_no_conflicts(
     true
 }
 
-fn presburger_pair_inventory_fits_budget(effect_count: usize) -> bool {
+fn effect_pair_inventory_fits_budget(effect_count: usize) -> bool {
     let effect_count = effect_count as u128;
     effect_count
         .checked_add(1)
@@ -1145,6 +1145,9 @@ fn effect_family_is_symbolically_disjoint(
     launch_extents: &[u64],
     invocation_bounds: Option<&[[Option<u64>; MAX_RANKED_MEMORY_RANK]]>,
 ) -> bool {
+    if !effect_pair_inventory_fits_budget(effects.len()) {
+        return false;
+    }
     if effects.iter().any(|effect| {
         !effect_affine_map_is_injective(effect, sparse, launch_extents, invocation_bounds)
     }) {
@@ -1625,9 +1628,9 @@ mod status_tests {
     }
 
     #[test]
-    fn presburger_pair_inventory_is_charged_before_enumeration() {
-        assert!(presburger_pair_inventory_fits_budget(1_447));
-        assert!(!presburger_pair_inventory_fits_budget(1_448));
-        assert!(!presburger_pair_inventory_fits_budget(usize::MAX));
+    fn effect_pair_inventory_is_charged_before_enumeration() {
+        assert!(effect_pair_inventory_fits_budget(1_447));
+        assert!(!effect_pair_inventory_fits_budget(1_448));
+        assert!(!effect_pair_inventory_fits_budget(usize::MAX));
     }
 }
