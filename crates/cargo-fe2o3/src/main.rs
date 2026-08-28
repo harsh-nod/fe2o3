@@ -12,6 +12,7 @@ mod capability_broker;
 mod cargo_binding_trampoline;
 mod cargo_invocation_boundary;
 mod clean;
+mod compiler_execution_boundary;
 mod compiler_toolchain;
 mod example_manifest;
 mod generation;
@@ -1072,6 +1073,13 @@ fn cargo_with_backend_result(
         .transpose()?;
     let protected_compiler_closure =
         protected_release.map(authority_release::ProtectedReleaseAdmission::compiler_closure);
+    let compiler_execution_profile = protected_release
+        .map(authority_release::ProtectedReleaseAdmission::compiler_execution_profile)
+        .cloned()
+        .ok_or_else(|| {
+            "production compilation requires the protected compiler-execution client profile"
+                .to_owned()
+        })?;
     let preparation = BackendRunPreparation {
         project,
         build_config,
@@ -1081,6 +1089,7 @@ fn cargo_with_backend_result(
         protected_binding_wrapper,
         cargo_binding_trampoline,
         protected_compiler_closure,
+        compiler_execution_profile,
         authorized_closure,
     };
     let mut context = BackendRunContext::prepare(preparation, args)?;
@@ -1221,6 +1230,7 @@ struct BackendRunContext {
     build_config_identity: Option<build_config::BuildConfigIdentity>,
     compiler_closure_sha256: [u8; 32],
     protected_compiler_closure: Option<fe2o3_build_authority::CompilerClosureV2>,
+    compiler_execution_profile: fe2o3_compiler_execution_protocol::CompilerExecutionClientProfileV1,
     target_dir: project::PinnedDirectory,
     generation: generation::PreparedGeneration,
     managed_rustc_args: OsString,
@@ -1241,6 +1251,7 @@ struct BackendRunPreparation {
     protected_binding_wrapper: Option<pinned_executable::PinnedExecutable>,
     cargo_binding_trampoline: Option<pinned_executable::PinnedExecutable>,
     protected_compiler_closure: Option<fe2o3_build_authority::CompilerClosureV2>,
+    compiler_execution_profile: fe2o3_compiler_execution_protocol::CompilerExecutionClientProfileV1,
     authorized_closure: Option<authorized_kernel_closure::AuthorizedKernelClosureV1>,
 }
 
@@ -1255,6 +1266,7 @@ impl BackendRunContext {
             protected_binding_wrapper,
             cargo_binding_trampoline,
             protected_compiler_closure,
+            compiler_execution_profile,
             authorized_closure,
         } = preparation;
         let target_profile = production_target_profile(env::var_os(TARGET_ENV).as_deref())?;
@@ -1344,6 +1356,10 @@ impl BackendRunContext {
             cargo_configuration.extend_from_slice(authorized_closure.snapshot());
         }
         append_production_target_semantic_configuration(&mut cargo_configuration, target_profile);
+        append_compiler_execution_profile_semantic_configuration(
+            &mut cargo_configuration,
+            &compiler_execution_profile,
+        );
         let backend_reference = pinned_backend
             .fixed_child_descriptor_path(BACKEND_CHILD_FD)
             .map_err(|error| format!("failed to retain pinned codegen backend: {error}"))?;
@@ -1369,6 +1385,7 @@ impl BackendRunContext {
             build_config_identity,
             compiler_closure_sha256,
             protected_compiler_closure: protected_closure,
+            compiler_execution_profile,
             target_dir,
             generation,
             managed_rustc_args,
@@ -1391,6 +1408,14 @@ fn append_production_target_semantic_configuration(
     configuration.push(0);
     configuration.extend_from_slice(profile.cargo_rustflags().as_bytes());
     configuration.push(0);
+}
+
+fn append_compiler_execution_profile_semantic_configuration(
+    configuration: &mut Vec<u8>,
+    profile: &fe2o3_compiler_execution_protocol::CompilerExecutionClientProfileV1,
+) {
+    configuration.extend_from_slice(b"fe2o3-compiler-execution-client-profile-v1\0");
+    configuration.extend_from_slice(profile.identity().as_bytes());
 }
 
 fn run_cargo_with_backend(
@@ -1463,6 +1488,15 @@ fn run_cargo_with_backend_inner(
         .build_config_identity
         .map(|identity| *identity.as_bytes());
     let capability_broker = if let Some(compiler_closure) = context.protected_compiler_closure {
+        let protected_release = protected_release.ok_or_else(|| {
+            "protected compiler closure has no retained authority release".to_owned()
+        })?;
+        if protected_release.compiler_execution_profile() != &context.compiler_execution_profile {
+            return Err(
+                "retained compiler-execution client profile changed after generation preparation"
+                    .to_owned(),
+            );
+        }
         let binding = capability_broker::CapabilityBindingV3::new_protected(
             capability_profile,
             config_identity,
@@ -1473,6 +1507,7 @@ fn run_cargo_with_backend_inner(
             context.build_session,
             binding,
             compiler_closure,
+            protected_release.compiler_execution_profile_capability(),
             &context.pinned_backend,
             artifact_dir,
             &context.pinned_cargo,
@@ -3405,7 +3440,8 @@ fn print_help() {
 #[cfg(test)]
 mod tests {
     use super::{
-        BindingHostMode, TARGET_ENV, aggregate_post_spawn_results, binding_host_target_key,
+        BindingHostMode, TARGET_ENV, aggregate_post_spawn_results,
+        append_compiler_execution_profile_semantic_configuration, binding_host_target_key,
         clear_cargo_unit_identity_names, configure_production_target_environment,
         inject_binding_host_test_custody, is_cargo_target_runner_environment_name,
         normalize_invocation, parse_rocminfo_target, parse_rustup_tool_path,
@@ -3722,6 +3758,45 @@ mod tests {
                 fe2o3_amd_target::PRODUCTION_GFX950_CARGO_RUSTFLAGS_V1,
             ))
         );
+    }
+
+    #[test]
+    fn compiler_execution_profile_identity_is_generation_semantic_input() {
+        fn profile(
+            seed: u8,
+        ) -> fe2o3_compiler_execution_protocol::CompilerExecutionClientProfileV1 {
+            use ed25519_dalek::SigningKey;
+            use fe2o3_compiler_execution_protocol::{
+                CompilerExecutionIssuerMeasurementV1, CompilerExecutionIssuerPolicyV1,
+            };
+
+            let policy = CompilerExecutionIssuerPolicyV1::new(
+                u64::from(seed),
+                CompilerExecutionIssuerMeasurementV1::new([seed + 1; 32], 123).unwrap(),
+                CompilerExecutionIssuerMeasurementV1::new([seed + 2; 32], 456).unwrap(),
+                SigningKey::from_bytes(&[seed; 32])
+                    .verifying_key()
+                    .to_bytes(),
+            )
+            .unwrap();
+            fe2o3_compiler_execution_protocol::CompilerExecutionClientProfileV1::new(
+                1_234, 5_678, policy,
+            )
+            .unwrap()
+        }
+
+        let first = profile(7);
+        let second = profile(8);
+        let mut first_configuration = b"existing-semantic-input".to_vec();
+        let mut second_configuration = first_configuration.clone();
+        append_compiler_execution_profile_semantic_configuration(&mut first_configuration, &first);
+        append_compiler_execution_profile_semantic_configuration(
+            &mut second_configuration,
+            &second,
+        );
+        assert_ne!(first_configuration, second_configuration);
+        assert!(first_configuration.ends_with(first.identity().as_bytes()));
+        assert!(second_configuration.ends_with(second.identity().as_bytes()));
     }
 
     #[test]

@@ -56,7 +56,9 @@ mod platform {
     use crate::pinned_codegen_backend::PinnedCodegenBackend;
     use crate::pinned_executable::{PinExecutableError, PinnedExecutable};
     use crate::project::PinnedDirectory;
-    use fe2o3_compiler_closure_capability::CompilerClosureCapabilityV1;
+    use fe2o3_compiler_closure_capability::{
+        CompilerClosureCapabilityV1, CompilerExecutionClientProfileCapabilityV1,
+    };
 
     pub(crate) const CAPABILITY_BROKER_ENV: &str = "FE2O3_CAPABILITY_BROKER_V1";
     const REQUEST_MAGIC: &[u8] = b"FE2O3-CARGO-CAPABILITY-BROKER-V3\0";
@@ -111,6 +113,31 @@ mod platform {
         invocation_frame_timeout: BROKER_INVOCATION_FRAME_TIMEOUT,
         invocation_lifetime: BROKER_INVOCATION_LIFETIME,
     };
+
+    #[derive(Clone, Copy)]
+    struct BrokerCompilerCapabilities<'profile> {
+        closure: Option<fe2o3_build_authority::CompilerClosureV2>,
+        execution_profile: Option<&'profile CompilerExecutionClientProfileCapabilityV1>,
+    }
+
+    impl<'profile> BrokerCompilerCapabilities<'profile> {
+        const fn ordinary() -> Self {
+            Self {
+                closure: None,
+                execution_profile: None,
+            }
+        }
+
+        const fn protected(
+            closure: fe2o3_build_authority::CompilerClosureV2,
+            execution_profile: &'profile CompilerExecutionClientProfileCapabilityV1,
+        ) -> Self {
+            Self {
+                closure: Some(closure),
+                execution_profile: Some(execution_profile),
+            }
+        }
+    }
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     pub(crate) enum CapabilityProfileV1 {
@@ -225,7 +252,12 @@ mod platform {
         }
 
         const fn descriptor_count(self) -> usize {
-            self.profile.descriptor_count() + self.protected_compiler_closure_v2 as usize
+            self.profile.descriptor_count()
+                + if self.protected_compiler_closure_v2 {
+                    2
+                } else {
+                    0
+                }
         }
 
         pub(crate) const fn rustc_executable_sha256(self) -> [u8; 32] {
@@ -635,7 +667,7 @@ mod platform {
                 ));
             }
             deadline.require_remaining()?;
-            let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(3))];
+            let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(4))];
             let mut ancillary = SendAncillaryBuffer::new(&mut space);
             if !ancillary.push(SendAncillaryMessage::ScmRights(descriptors)) {
                 return Err(io::Error::other("capability control buffer is too small"));
@@ -701,14 +733,15 @@ mod platform {
             session: BuildSession,
             binding: CapabilityBindingV3,
             compiler_closure: fe2o3_build_authority::CompilerClosureV2,
+            compiler_execution_profile: &CompilerExecutionClientProfileCapabilityV1,
             backend: &PinnedCodegenBackend,
             artifact: &PinnedDirectory,
             pinned_cargo_image: &PinnedExecutable,
         ) -> Result<Self, String> {
-            Self::start_with_compiler_closure(
+            Self::start_with_compiler_capabilities(
                 session,
                 binding,
-                Some(compiler_closure),
+                BrokerCompilerCapabilities::protected(compiler_closure, compiler_execution_profile),
                 backend,
                 artifact,
                 pinned_cargo_image,
@@ -724,10 +757,10 @@ mod platform {
             pinned_cargo_image: &PinnedExecutable,
             limits: BrokerLimits,
         ) -> Result<Self, String> {
-            Self::start_with_compiler_closure(
+            Self::start_with_compiler_capabilities(
                 session,
                 binding,
-                None,
+                BrokerCompilerCapabilities::ordinary(),
                 backend,
                 artifact,
                 pinned_cargo_image,
@@ -735,10 +768,10 @@ mod platform {
             )
         }
 
-        fn start_with_compiler_closure(
+        fn start_with_compiler_capabilities(
             session: BuildSession,
             binding: CapabilityBindingV3,
-            compiler_closure: Option<fe2o3_build_authority::CompilerClosureV2>,
+            compiler: BrokerCompilerCapabilities<'_>,
             backend: &PinnedCodegenBackend,
             artifact: &PinnedDirectory,
             pinned_cargo_image: &PinnedExecutable,
@@ -751,12 +784,16 @@ mod platform {
             {
                 return Err("capability broker limits must be nonzero".to_owned());
             }
-            if binding.requires_compiler_closure_v2() != compiler_closure.is_some() {
+            if binding.requires_compiler_closure_v2() != compiler.closure.is_some()
+                || compiler.closure.is_some() != compiler.execution_profile.is_some()
+            {
                 return Err(
-                    "capability binding and compiler-closure descriptor presence differ".to_owned(),
+                    "capability binding and protected compiler capability presence differ"
+                        .to_owned(),
                 );
             }
-            let compiler_closure = compiler_closure
+            let compiler_closure = compiler
+                .closure
                 .map(|closure| {
                     if closure.identity_sha256() != binding.compiler_closure_sha256()
                         || closure.rustc_executable_sha256() != binding.rustc_executable_sha256()
@@ -769,6 +806,15 @@ mod platform {
                         );
                     }
                     CompilerClosureCapabilityV1::create(closure)
+                })
+                .transpose()?;
+            let compiler_execution_profile = compiler
+                .execution_profile
+                .map(|profile| {
+                    profile.revalidate()?;
+                    CompilerExecutionClientProfileCapabilityV1::from_file(
+                        profile.try_clone_for_transfer()?,
+                    )
                 })
                 .transpose()?;
             let endpoint = random_endpoint().map_err(|error| {
@@ -814,6 +860,7 @@ mod platform {
                         backend,
                         artifact,
                         compiler_closure,
+                        compiler_execution_profile,
                         authentication_timeout: limits.authentication_timeout,
                         invocation_frame_timeout: limits.invocation_frame_timeout,
                         invocation_lifetime: limits.invocation_lifetime,
@@ -853,6 +900,7 @@ mod platform {
         pub(crate) backend: PinnedCodegenBackend,
         pub(crate) artifact: PinnedDirectory,
         pub(crate) compiler_closure: Option<CompilerClosureCapabilityV1>,
+        pub(crate) compiler_execution_profile: Option<CompilerExecutionClientProfileCapabilityV1>,
         pub(crate) invocation_authority: Option<BrokeredInvocationAuthorityV1>,
     }
 
@@ -975,6 +1023,19 @@ mod platform {
                 binding.profile.name(),
             ));
         }
+        let compiler_execution_profile = if binding.requires_compiler_closure_v2() {
+            let image = normalize_received_descriptor(
+                descriptors
+                    .pop()
+                    .expect("compiler-execution profile descriptor count checked"),
+                "compiler-execution client profile",
+            )?;
+            Some(CompilerExecutionClientProfileCapabilityV1::from_file(
+                image,
+            )?)
+        } else {
+            None
+        };
         let compiler_closure = if binding.requires_compiler_closure_v2() {
             let image = normalize_received_descriptor(
                 descriptors
@@ -1012,6 +1073,7 @@ mod platform {
             backend,
             artifact,
             compiler_closure,
+            compiler_execution_profile,
             invocation_authority: None,
         })
     }
@@ -1037,6 +1099,7 @@ mod platform {
         backend: File,
         artifact: File,
         compiler_closure: Option<CompilerClosureCapabilityV1>,
+        compiler_execution_profile: Option<CompilerExecutionClientProfileCapabilityV1>,
         authentication_timeout: Duration,
         invocation_frame_timeout: Duration,
         invocation_lifetime: Duration,
@@ -1137,6 +1200,15 @@ mod platform {
                 .map_err(io::Error::other)?;
             if let Some(compiler_closure) = &compiler_closure {
                 descriptors.push(compiler_closure.as_fd());
+            }
+            let compiler_execution_profile = self
+                .compiler_execution_profile
+                .as_ref()
+                .map(CompilerExecutionClientProfileCapabilityV1::try_clone_for_transfer)
+                .transpose()
+                .map_err(io::Error::other)?;
+            if let Some(compiler_execution_profile) = &compiler_execution_profile {
+                descriptors.push(compiler_execution_profile.as_fd());
             }
             let response = response_bytes(&self.secret, challenge, request_auth);
             self.shutdown
@@ -1535,7 +1607,9 @@ mod unsupported {
     use crate::pinned_codegen_backend::PinnedCodegenBackend;
     use crate::pinned_executable::PinnedExecutable;
     use crate::project::PinnedDirectory;
-    use fe2o3_compiler_closure_capability::CompilerClosureCapabilityV1;
+    use fe2o3_compiler_closure_capability::{
+        CompilerClosureCapabilityV1, CompilerExecutionClientProfileCapabilityV1,
+    };
 
     pub(crate) const CAPABILITY_BROKER_ENV: &str = "FE2O3_CAPABILITY_BROKER_V1";
 
@@ -1608,6 +1682,7 @@ mod unsupported {
             _session: BuildSession,
             _binding: CapabilityBindingV3,
             _compiler_closure: fe2o3_build_authority::CompilerClosureV2,
+            _compiler_execution_profile: &CompilerExecutionClientProfileCapabilityV1,
             _backend: &PinnedCodegenBackend,
             _artifact: &PinnedDirectory,
             _pinned_cargo_image: &PinnedExecutable,
@@ -1643,6 +1718,7 @@ mod unsupported {
         pub(crate) backend: PinnedCodegenBackend,
         pub(crate) artifact: PinnedDirectory,
         pub(crate) compiler_closure: Option<CompilerClosureCapabilityV1>,
+        pub(crate) compiler_execution_profile: Option<CompilerExecutionClientProfileCapabilityV1>,
         pub(crate) invocation_authority: Option<BrokeredInvocationAuthorityV1>,
     }
 
