@@ -939,11 +939,16 @@ fn validate_data_layout_inputs_v3(
         "final LLVM data layout",
         inputs.final_llvm_data_layout.as_bytes(),
     )?;
-    if live_layout != final_layout {
-        return Err(ProductionTargetLineageErrorV3::AssociationInvariant {
-            detail: "live rustc and final LLVM data layouts must be byte-identical",
-        });
-    }
+    require_exact_text(
+        "live rustc data layout",
+        live_layout,
+        crate::production_target_v1::PRODUCTION_RUSTC_DATA_LAYOUT_V1,
+    )?;
+    require_exact_text(
+        "final LLVM data layout",
+        final_layout,
+        crate::production_target_v1::PRODUCTION_WORKER_DATA_LAYOUT_V1,
+    )?;
     if inputs.default_pointer_width_bits != 64 {
         return Err(ProductionTargetLineageErrorV3::InvalidInteger {
             field: "default pointer width",
@@ -1390,9 +1395,10 @@ mod tests {
 
     type DecoderV3 = fn(&[u8]) -> bool;
 
-    const DATA_LAYOUT: &str = "e-m:e-p:64:64-p1:64:64-n32:64-S32-A5-G1";
+    const DATA_LAYOUT: &str = crate::production_target_v1::PRODUCTION_RUSTC_DATA_LAYOUT_V1;
+    const WORKER_DATA_LAYOUT: &str = crate::production_target_v1::PRODUCTION_WORKER_DATA_LAYOUT_V1;
     const LLVM: &[u8] = b"target triple = \"amdgcn-amd-amdhsa\"\n\
-target datalayout = \"e-m:e-p:64:64-p1:64:64-n32:64-S32-A5-G1\"\n\n\
+target datalayout = \"e-p:64:64-p1:64:64-n32:64-S32-A5-G1\"\n\n\
 define amdgpu_kernel void @kernel() {\nentry:\n  ret void\n}\n";
 
     fn identity(seed: u8) -> TargetLineageIdentityV3 {
@@ -1424,7 +1430,7 @@ define amdgpu_kernel void @kernel() {\nentry:\n  ret void\n}\n";
             rustc_llvm_target: EXACT_RUSTC_LLVM_TARGET_V3,
             live_rustc_data_layout: DATA_LAYOUT,
             final_llvm_target: EXACT_RUSTC_LLVM_TARGET_V3,
-            final_llvm_data_layout: DATA_LAYOUT,
+            final_llvm_data_layout: WORKER_DATA_LAYOUT,
             default_pointer_width_bits: 64,
         })
         .unwrap()
@@ -1478,7 +1484,7 @@ define amdgpu_kernel void @kernel() {\nentry:\n  ret void\n}\n";
         assert_eq!(decoded.canonical_bytes(), layout.canonical_bytes());
         assert_eq!(
             decoded.inputs().unwrap().final_llvm_data_layout,
-            DATA_LAYOUT
+            WORKER_DATA_LAYOUT
         );
         assert_eq!(
             DataLayoutTranscriptV3::new(decoded.inputs().unwrap())
@@ -1641,7 +1647,7 @@ define amdgpu_kernel void @kernel() {\nentry:\n  ret void\n}\n";
     }
 
     #[test]
-    fn layout_policy_requires_exact_live_to_final_agreement() {
+    fn layout_policy_requires_the_exact_reviewed_rustc_to_worker_bridge() {
         let base = DataLayoutTranscriptInputsV3 {
             semantic_mir: identity(2),
             target_binding: identity(5),
@@ -1649,7 +1655,7 @@ define amdgpu_kernel void @kernel() {\nentry:\n  ret void\n}\n";
             rustc_llvm_target: EXACT_RUSTC_LLVM_TARGET_V3,
             live_rustc_data_layout: DATA_LAYOUT,
             final_llvm_target: EXACT_RUSTC_LLVM_TARGET_V3,
-            final_llvm_data_layout: DATA_LAYOUT,
+            final_llvm_data_layout: WORKER_DATA_LAYOUT,
             default_pointer_width_bits: 64,
         };
         assert!(
@@ -1662,6 +1668,20 @@ define amdgpu_kernel void @kernel() {\nentry:\n  ret void\n}\n";
         assert!(
             DataLayoutTranscriptV3::new(DataLayoutTranscriptInputsV3 {
                 final_llvm_data_layout: "e-p:32:32",
+                ..base
+            })
+            .is_err()
+        );
+        assert!(
+            DataLayoutTranscriptV3::new(DataLayoutTranscriptInputsV3 {
+                live_rustc_data_layout: WORKER_DATA_LAYOUT,
+                ..base
+            })
+            .is_err()
+        );
+        assert!(
+            DataLayoutTranscriptV3::new(DataLayoutTranscriptInputsV3 {
+                final_llvm_data_layout: DATA_LAYOUT,
                 ..base
             })
             .is_err()
