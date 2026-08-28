@@ -23,6 +23,7 @@ pub enum SemanticMirDecodeErrorV1 {
         expected: SemanticMirWireVersionV1,
         actual: SemanticMirWireVersionV1,
     },
+    UnsupportedProductionWireVersion(SemanticMirWireVersionV1),
     InvalidBoolean {
         offset: usize,
         value: u8,
@@ -66,6 +67,10 @@ impl fmt::Display for SemanticMirDecodeErrorV1 {
             Self::WireVersionMismatch { expected, actual } => write!(
                 formatter,
                 "semantic MIR wire version {actual:?} does not match required {expected:?}"
+            ),
+            Self::UnsupportedProductionWireVersion(actual) => write!(
+                formatter,
+                "semantic MIR wire version {actual:?} is outside the current production custody policy"
             ),
             Self::InvalidBoolean { offset, value } => {
                 write!(
@@ -137,7 +142,22 @@ impl AdmittedInertSemanticMirV1 {
         bytes: &[u8],
         limits: SemanticMirLimitsV1,
     ) -> Result<Self, SemanticMirDecodeErrorV1> {
-        Self::decode_for_schema(bytes, limits, None)
+        Self::decode_with_policy(bytes, limits, CanonicalDecodePolicyV1::MinimalCompatible)
+    }
+
+    /// Decodes one exact canonical semantic-MIR value admitted by the current
+    /// production custody policy.
+    ///
+    /// Production collection deliberately selects at least V5 even when an
+    /// older schema could represent the same model. This decoder preserves the
+    /// declared V5, V6, or V7 schema instead of re-admitting under the minimum
+    /// compatible version. It grants no producer, proof, compiler, artifact,
+    /// publication, load, or launch authority.
+    pub fn decode_current_production_canonical(
+        bytes: &[u8],
+        limits: SemanticMirLimitsV1,
+    ) -> Result<Self, SemanticMirDecodeErrorV1> {
+        Self::decode_with_policy(bytes, limits, CanonicalDecodePolicyV1::CurrentProduction)
     }
 
     /// Decodes bytes that are canonical specifically under the closed V3 wire
@@ -152,7 +172,11 @@ impl AdmittedInertSemanticMirV1 {
         bytes: &[u8],
         limits: SemanticMirLimitsV1,
     ) -> Result<Self, SemanticMirDecodeErrorV1> {
-        Self::decode_for_schema(bytes, limits, Some(SemanticMirWireVersionV1::V3))
+        Self::decode_with_policy(
+            bytes,
+            limits,
+            CanonicalDecodePolicyV1::Exact(SemanticMirWireVersionV1::V3),
+        )
     }
 
     /// Decodes bytes canonical specifically under the closed ownership-bearing
@@ -161,7 +185,11 @@ impl AdmittedInertSemanticMirV1 {
         bytes: &[u8],
         limits: SemanticMirLimitsV1,
     ) -> Result<Self, SemanticMirDecodeErrorV1> {
-        Self::decode_for_schema(bytes, limits, Some(SemanticMirWireVersionV1::V4))
+        Self::decode_with_policy(
+            bytes,
+            limits,
+            CanonicalDecodePolicyV1::Exact(SemanticMirWireVersionV1::V4),
+        )
     }
 
     /// Decodes bytes canonical specifically under the closed V5 schema.
@@ -169,7 +197,11 @@ impl AdmittedInertSemanticMirV1 {
         bytes: &[u8],
         limits: SemanticMirLimitsV1,
     ) -> Result<Self, SemanticMirDecodeErrorV1> {
-        Self::decode_for_schema(bytes, limits, Some(SemanticMirWireVersionV1::V5))
+        Self::decode_with_policy(
+            bytes,
+            limits,
+            CanonicalDecodePolicyV1::Exact(SemanticMirWireVersionV1::V5),
+        )
     }
 
     /// Decodes bytes canonical specifically under the closed V6 collective and LDS transpose
@@ -178,7 +210,11 @@ impl AdmittedInertSemanticMirV1 {
         bytes: &[u8],
         limits: SemanticMirLimitsV1,
     ) -> Result<Self, SemanticMirDecodeErrorV1> {
-        Self::decode_for_schema(bytes, limits, Some(SemanticMirWireVersionV1::V6))
+        Self::decode_with_policy(
+            bytes,
+            limits,
+            CanonicalDecodePolicyV1::Exact(SemanticMirWireVersionV1::V6),
+        )
     }
 
     /// Decodes bytes canonical specifically under the closed V7
@@ -187,13 +223,17 @@ impl AdmittedInertSemanticMirV1 {
         bytes: &[u8],
         limits: SemanticMirLimitsV1,
     ) -> Result<Self, SemanticMirDecodeErrorV1> {
-        Self::decode_for_schema(bytes, limits, Some(SemanticMirWireVersionV1::V7))
+        Self::decode_with_policy(
+            bytes,
+            limits,
+            CanonicalDecodePolicyV1::Exact(SemanticMirWireVersionV1::V7),
+        )
     }
 
-    fn decode_for_schema(
+    fn decode_with_policy(
         bytes: &[u8],
         limits: SemanticMirLimitsV1,
-        expected_wire_version: Option<SemanticMirWireVersionV1>,
+        policy: CanonicalDecodePolicyV1,
     ) -> Result<Self, SemanticMirDecodeErrorV1> {
         let actual = u64::try_from(bytes.len())
             .map_err(|_| SemanticMirDecodeErrorV1::LengthOverflow { context: "input" })?;
@@ -202,23 +242,54 @@ impl AdmittedInertSemanticMirV1 {
             return Err(SemanticMirDecodeErrorV1::InputLimitExceeded { actual, max });
         }
 
-        let mut decoder =
-            CanonicalDecoderV1::with_expected_wire_version(bytes, limits, expected_wire_version);
+        let mut decoder = CanonicalDecoderV1::with_expected_wire_version(
+            bytes,
+            limits,
+            policy.expected_wire_version(),
+        );
         let request = decoder.request()?;
+        let wire_version = decoder.wire_version;
         decoder.finish()?;
-        let admitted = match expected_wire_version {
-            Some(SemanticMirWireVersionV1::V7) => request.admit_exact_v7(limits)?,
-            Some(SemanticMirWireVersionV1::V6) => request.admit_exact_v6(limits)?,
-            Some(SemanticMirWireVersionV1::V5) => request.admit_exact_v5(limits)?,
-            Some(SemanticMirWireVersionV1::V4) => request.admit_exact_v4(limits)?,
-            Some(SemanticMirWireVersionV1::V3) => request.admit_exact_v3(limits)?,
-            Some(SemanticMirWireVersionV1::V2) => unreachable!("no exact V2 public decoder"),
-            None => request.admit(limits)?,
+        let admitted = match policy {
+            CanonicalDecodePolicyV1::MinimalCompatible => request.admit(limits)?,
+            CanonicalDecodePolicyV1::Exact(expected) => {
+                debug_assert_eq!(wire_version, expected);
+                request.admit_for_wire_version(wire_version, limits)?
+            }
+            CanonicalDecodePolicyV1::CurrentProduction => {
+                if !matches!(
+                    wire_version,
+                    SemanticMirWireVersionV1::V5
+                        | SemanticMirWireVersionV1::V6
+                        | SemanticMirWireVersionV1::V7
+                ) {
+                    return Err(SemanticMirDecodeErrorV1::UnsupportedProductionWireVersion(
+                        wire_version,
+                    ));
+                }
+                request.admit_for_wire_version(wire_version, limits)?
+            }
         };
         if admitted.canonical_encoding() != bytes {
             return Err(SemanticMirDecodeErrorV1::NonCanonical);
         }
         Ok(admitted)
+    }
+}
+
+#[derive(Clone, Copy)]
+enum CanonicalDecodePolicyV1 {
+    MinimalCompatible,
+    Exact(SemanticMirWireVersionV1),
+    CurrentProduction,
+}
+
+impl CanonicalDecodePolicyV1 {
+    const fn expected_wire_version(self) -> Option<SemanticMirWireVersionV1> {
+        match self {
+            Self::Exact(version) => Some(version),
+            Self::MinimalCompatible | Self::CurrentProduction => None,
+        }
     }
 }
 
@@ -2493,6 +2564,38 @@ mod tests {
         assert_eq!(decoded.functions(), original.functions());
         assert_eq!(decoded.callables(), original.callables());
         assert_eq!(decoded.roots(), original.roots());
+    }
+
+    #[test]
+    fn current_production_decoder_preserves_exact_v5_through_v7_custody() {
+        let limits = SemanticMirLimitsV1::default();
+        let admitted = [
+            minimal_request().admit_exact_v5(limits).unwrap(),
+            minimal_request().admit_exact_v6(limits).unwrap(),
+            minimal_request().admit_exact_v7(limits).unwrap(),
+        ];
+        for original in admitted {
+            let decoded = AdmittedInertSemanticMirV1::decode_current_production_canonical(
+                original.canonical_encoding(),
+                limits,
+            )
+            .unwrap();
+            assert_eq!(decoded.wire_version(), original.wire_version());
+            assert_eq!(decoded.canonical_encoding(), original.canonical_encoding());
+            assert_eq!(decoded.semantic_sha256(), original.semantic_sha256());
+        }
+
+        let legacy = minimal_request().admit_exact_v4(limits).unwrap();
+        assert_eq!(
+            AdmittedInertSemanticMirV1::decode_current_production_canonical(
+                legacy.canonical_encoding(),
+                limits,
+            )
+            .unwrap_err(),
+            SemanticMirDecodeErrorV1::UnsupportedProductionWireVersion(
+                SemanticMirWireVersionV1::V4
+            )
+        );
     }
 
     #[test]
