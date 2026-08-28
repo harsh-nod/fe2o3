@@ -11,13 +11,20 @@ use std::os::fd::{AsRawFd, OwnedFd};
 use std::time::{Duration, Instant};
 
 use fe2o3_artifact_transaction::InertCompilerExecutionSubjectV1;
-use fe2o3_runtime_protocol::{
+use fe2o3_compiler_execution_protocol::{
     CompilerExecutionAttestationChallengeV1, CompilerExecutionAttestationErrorV1,
     CompilerExecutionAttestationRequestV1, CompilerExecutionIssuerPolicyV1,
     CompilerExecutionReceiptCarriageV1, CompilerExecutionReceiptPublicationErrorV1,
     CompilerExecutionReceiptPublicationV1, CompilerExecutionServiceProtocolErrorV1,
     CompilerExecutionServiceRequestV1, CompilerExecutionServiceResponseKindV1,
     CompilerExecutionServiceResponseV1, MAX_COMPILER_EXECUTION_SERVICE_RESPONSE_BYTES_V1,
+};
+
+mod child_channel;
+
+pub use child_channel::{
+    CompilerExecutionChildChannelErrorV1, CompilerExecutionClientProcessIdentityV1,
+    CompilerExecutionServiceLaunchV1, PendingCompilerExecutionChildChannelV1,
 };
 
 /// Fixed rustc descriptor reserved for the compiler-execution service peer.

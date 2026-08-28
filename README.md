@@ -136,9 +136,12 @@ its complete receipt carriage, or reports nonterminal absence only when no
 canonical Worker record exists; a different or damaged current record fails
 closed. The issuer's direct transition methods are private. One shared bounded
 client now recovers first and resumes Ready, Prepared, or Issued under one
-absolute deadline, including exact issued-request reconstruction. Its inherited
-peer integration still remains; the pinned policy now has an immutable sealed
-memfd capability reserved at rustc fd 202. Distinct-UID launch and
+absolute deadline, including exact issued-request reconstruction. Its child
+channel now creates the peer after fork inside rustc, installs fd 195, transfers
+only the service endpoint to the direct parent, and binds it to exact child
+credentials and a live pidfd. Binding-wrapper/supervisor integration still
+remains; the pinned policy has an immutable sealed memfd capability reserved at
+rustc fd 202. Distinct-UID launch and
 inspection policy and the Worker V3 authority join remain absent. A fixed
 receipt sidecar and publication ACK now
 carry the exact journal, occurrence, receipt, Worker record, sequence, and
@@ -418,7 +421,8 @@ target lowering, and host execution into explicit ownership boundaries:
 - Artifact, build, proof, and evidence boundaries remain in
   `fe2o3-artifacts`, `fe2o3-kernel-descriptor`, `fe2o3-hsaco`,
   `fe2o3-hsaco-finalize`, `fe2o3-artifact-transaction`,
-  `fe2o3-runtime-protocol`, `fe2o3-compiler-execution-client`,
+  `fe2o3-compiler-execution-protocol`, `fe2o3-runtime-protocol`,
+  `fe2o3-compiler-execution-client`,
   `fe2o3-build-authority`,
   `fe2o3-host-link-closure`, `fe2o3-broker-authority-service`,
   `fe2o3-external-anchor-protocol`, `fe2o3-process-identity`,

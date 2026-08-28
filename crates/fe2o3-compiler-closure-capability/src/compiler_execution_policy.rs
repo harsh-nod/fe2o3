@@ -2,7 +2,7 @@ use std::fs::File;
 use std::os::fd::RawFd;
 use std::process::Command;
 
-use fe2o3_runtime_protocol::{
+use fe2o3_compiler_execution_protocol::{
     COMPILER_EXECUTION_ISSUER_POLICY_BYTES_V1, CompilerExecutionIssuerPolicyV1,
 };
 
@@ -107,7 +107,7 @@ mod tests {
     use std::sync::Mutex;
 
     use ed25519_dalek::SigningKey;
-    use fe2o3_runtime_protocol::CompilerExecutionIssuerMeasurementV1;
+    use fe2o3_compiler_execution_protocol::CompilerExecutionIssuerMeasurementV1;
 
     use super::*;
     use crate::sealed_image::REQUIRED_SEALS;

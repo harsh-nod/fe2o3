@@ -9,8 +9,8 @@ compiler pipelines. Legacy Worker V2 codecs remain outside this crate.
 
 ## Compiler-execution attestation V1
 
-The crate defines four fixed, allocation-free records for the protected
-compiler-attestation boundary:
+The crate re-exports four fixed, allocation-free records from the lower-layer
+`fe2o3-compiler-execution-protocol` crate for use by its Worker V3 envelopes:
 
 - a 184-byte caller-pinned issuer policy;
 - a 200-byte issuer challenge bound to one canonical compiler-execution
@@ -29,9 +29,10 @@ those properties while consuming the same exact bytes.
 
 ## Compiler-execution receipt publication V1
 
-The crate also defines a 584-byte immutable receipt sidecar and a 288-byte
-publication ACK claim. The sidecar binds the complete signed receipt to the
-exact issuer journal and supervised compiler occurrence. The ACK additionally
+The canonical compiler-execution protocol also defines a 584-byte immutable
+receipt sidecar and a 288-byte publication ACK claim. The sidecar binds the
+complete signed receipt to the exact issuer journal and supervised compiler
+occurrence. The ACK additionally
 binds one protected Worker ledger record, sequence, and advanced rollback
 anchor. Both records strictly rederive nested identities and reject every
 noncanonical byte.
@@ -50,10 +51,10 @@ before granting compiler authority.
 
 ## Compiler-execution service V1
 
-The packet codec carries the attestation lifecycle over one connected Unix
-`SOCK_SEQPACKET` boundary. Requests select inspect, prepare, issue, publish,
-cancel, or exact-subject recovery and bind the caller-pinned policy plus the
-operation's complete state. Responses carry ready state, the complete challenge,
+The re-exported packet codec carries the attestation lifecycle over one
+connected Unix `SOCK_SEQPACKET` boundary. Requests select inspect, prepare,
+issue, publish, cancel, or exact-subject recovery and bind the caller-pinned
+policy plus the operation's complete state. Responses carry ready state, the complete challenge,
 the complete receipt publication, the complete Worker-ledger ACK, a nonterminal
 receipt-absent result, or the exact 2,058-byte receipt carriage reacquired from
 the current Worker record. Receipt absence is distinct from a mismatched or

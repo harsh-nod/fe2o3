@@ -11,7 +11,7 @@ use fe2o3_artifact_transaction::{
 use fe2o3_compiler_execution_client::{
     CompilerExecutionClientErrorV1, CompilerExecutionClientV1, CompilerExecutionReceiptRecoveryV1,
 };
-use fe2o3_runtime_protocol::{
+use fe2o3_compiler_execution_protocol::{
     CompilerExecutionAttestationChallengeV1, CompilerExecutionAttestationReceiptV1,
     CompilerExecutionAttestationRequestV1, CompilerExecutionIssuerMeasurementV1,
     CompilerExecutionIssuerPolicyV1, CompilerExecutionReceiptCarriageV1,

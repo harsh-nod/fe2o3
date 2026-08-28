@@ -133,6 +133,14 @@ Ready, Prepared, or Issued. Issued restart reconstructs the exact challenge and
 request from authenticated receipt fields before Publish. Recovery-only clients
 send Cancel after ReceiptAbsent so the service terminates without mutation.
 
+The same crate now implements the direct-parent channel handoff. The socketpair
+is created after fork inside the rustc child, its client endpoint is installed
+at fixed FD 195, and only its service endpoint crosses `SCM_RIGHTS` to the
+parent. The parent requires the transferred PID, `SO_PEERCRED`, child PID, and
+live pidfd to agree, and rejects descriptor collision, endpoint replacement,
+truncation, ancillary ambiguity, timeout, or child exit. The binding wrapper
+does not yet transfer these launch inputs to the distinct-UID protected issuer.
+
 ## Authority Limit
 
 The service authenticates and durably publishes one protected compiler
