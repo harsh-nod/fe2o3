@@ -30,6 +30,10 @@ impl AuthenticatedMirPlironPerCompilationVerificationV1 {
     pub(crate) const fn report(&self) -> ProductionMirPlironPerCompilationVerusReportV1 {
         self.execution.report()
     }
+
+    pub(crate) const fn execution(&self) -> &ProductionMirPlironPerCompilationVerusExecutionV1 {
+        &self.execution
+    }
 }
 
 /// Production integration point after mandatory middle-end evidence and exact

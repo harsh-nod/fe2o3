@@ -14,11 +14,11 @@ use fe2o3_compiler_lineage::{
     InertFinalCompilerModuleCommitmentReceiptV3, InertFormalMemoryReceiptV3,
     InertKernelIrReceiptV3, InertLineageContentIdentityV3, InertMiddleEndReceiptV3,
     InertMirToKirCorrespondenceReceiptV3, InertProductionSemanticCapsuleV3,
-    InertProofBindingAssociationErrorV3, InertProofBindingAssociationInputsV3,
-    InertProofBindingAssociationV3, InertProofBindingReceiptV3,
-    InertRustcIdentityInventoryReceiptV3, InertRustcPreflightPlanReceiptV3,
-    InertSemanticToLlvmReceiptV3, InertTargetBindingReceiptV3, LineageErrorV3,
-    OrderedInertSemanticLineageReceiptsV3,
+    InertProofBindingAssociationErrorV3, InertProofBindingAssociationErrorV4,
+    InertProofBindingAssociationInputsV4, InertProofBindingAssociationV4,
+    InertProofBindingReceiptV3, InertRustcIdentityInventoryReceiptV3,
+    InertRustcPreflightPlanReceiptV3, InertSemanticToLlvmReceiptV3, InertTargetBindingReceiptV3,
+    LineageErrorV3, OrderedInertSemanticLineageReceiptsV3,
 };
 use fe2o3_kernel_ir::{FunctionRole, Module, VerifiedCanonicalKernelIrErrorV5};
 use fe2o3_lower_mir_kernel::{
@@ -26,6 +26,10 @@ use fe2o3_lower_mir_kernel::{
     ProductionFormalMemoryOwnerV1, ProductionLineageEvidenceErrorV3,
 };
 use fe2o3_rustc_invocation::{InvocationDigestV3, encode_descriptor_v3};
+use fe2o3_verifier::{
+    CanonicalProductionMirPlironVerusExecutionEvidenceV1,
+    ProductionMirPlironVerusExecutionEvidenceErrorV1,
+};
 use sha2::{Digest, Sha256};
 
 use crate::production_ranked_projection_v1::AuthenticatedRankedVerificationV5;
@@ -52,6 +56,7 @@ pub(crate) struct PreparedProductionSemanticLineageV3 {
     kernel_ir: InertKernelIrReceiptV3,
     mir_to_kir_correspondence: InertMirToKirCorrespondenceReceiptV3,
     formal_memory: InertFormalMemoryReceiptV3,
+    verus_execution: CanonicalProductionMirPlironVerusExecutionEvidenceV1,
     neutral_kir_identity: TargetLineageIdentityV3,
     bound_kir_identity: TargetLineageIdentityV3,
     semantic_layout_identity: TargetLineageIdentityV3,
@@ -131,6 +136,32 @@ impl PreparedProductionSemanticLineageV3 {
         let formal_memory =
             InertFormalMemoryReceiptV3::from_canonical_preimage(formal.canonical_bytes())?;
 
+        if !ranked_verification.retained_functional_verification_is_coherent() {
+            return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
+                "retained functional verification is incoherent",
+            ));
+        }
+        let aggregate_verus = ranked_verification.aggregate_verus_execution().ok_or(
+            ProductionSemanticLineageErrorV3::AxisMismatch(
+                "production handoff requires an authenticated aggregate MIR-to-PLIRON Verus execution",
+            ),
+        )?;
+        let verus_execution =
+            CanonicalProductionMirPlironVerusExecutionEvidenceV1::from_execution(aggregate_verus)?;
+        if verus_execution
+            .claims()
+            .pliron_evidence_identity()
+            .as_bytes()
+            != ranked_verification
+                .middle_end_evidence()
+                .identity()
+                .sha256()
+        {
+            return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
+                "aggregate Verus execution names a different live middle-end PLIRON record",
+            ));
+        }
+
         let target_layout = crate::rustc_semantic_adapter_v1::canonical_target_layout_transcript_v1(
             rustc_target.rustc_layout(),
         );
@@ -160,6 +191,7 @@ impl PreparedProductionSemanticLineageV3 {
             kernel_ir,
             mir_to_kir_correspondence,
             formal_memory,
+            verus_execution,
             neutral_kir_identity,
             bound_kir_identity,
             semantic_layout_identity,
@@ -227,8 +259,8 @@ impl PreparedProductionSemanticLineageV3 {
             self.formal_memory.identity().byte_len(),
         )?;
 
-        let proof_binding =
-            InertProofBindingAssociationV3::new(InertProofBindingAssociationInputsV3::new(
+        let proof_binding = InertProofBindingAssociationV4::new(
+            InertProofBindingAssociationInputsV4::new(
                 proof_association_identity(
                     self.semantic_mir.identity().sha256(),
                     self.semantic_mir.identity().byte_len(),
@@ -249,7 +281,9 @@ impl PreparedProductionSemanticLineageV3 {
                     self.formal_memory.identity().sha256(),
                     self.formal_memory.identity().byte_len(),
                 )?,
-            ))?;
+            ),
+            self.verus_execution.canonical_bytes(),
+        )?;
         let proof_binding =
             InertProofBindingReceiptV3::from_canonical_preimage(proof_binding.canonical_bytes())?;
         let proof_binding_identity = receipt_identity(
@@ -521,8 +555,10 @@ pub(crate) enum ProductionSemanticLineageErrorV3 {
     LiveOwner(String),
     CanonicalKir(VerifiedCanonicalKernelIrErrorV5),
     Evidence(ProductionLineageEvidenceErrorV3),
+    VerusEvidence(ProductionMirPlironVerusExecutionEvidenceErrorV1),
     Receipt(LineageErrorV3),
-    ProofBinding(InertProofBindingAssociationErrorV3),
+    ProofIdentity(InertProofBindingAssociationErrorV3),
+    ProofBinding(InertProofBindingAssociationErrorV4),
     Transcript(ProductionTargetLineageErrorV3),
     FinalCommitment(FinalCompilerModuleCommitmentErrorV3),
     Capsule(InertSemanticCompilerModuleHandoffErrorV3),
@@ -548,7 +584,16 @@ impl fmt::Display for ProductionSemanticLineageErrorV3 {
                 write!(formatter, "production V3 canonical KIR failed: {error}")
             }
             Self::Evidence(error) => write!(formatter, "production V3 evidence failed: {error}"),
+            Self::VerusEvidence(error) => {
+                write!(
+                    formatter,
+                    "production V3 aggregate Verus evidence failed: {error}"
+                )
+            }
             Self::Receipt(error) => write!(formatter, "production V3 receipt failed: {error}"),
+            Self::ProofIdentity(error) => {
+                write!(formatter, "production V3 proof identity failed: {error}")
+            }
             Self::ProofBinding(error) => {
                 write!(formatter, "production V3 proof binding failed: {error}")
             }
@@ -583,8 +628,20 @@ impl From<LineageErrorV3> for ProductionSemanticLineageErrorV3 {
     }
 }
 
+impl From<ProductionMirPlironVerusExecutionEvidenceErrorV1> for ProductionSemanticLineageErrorV3 {
+    fn from(error: ProductionMirPlironVerusExecutionEvidenceErrorV1) -> Self {
+        Self::VerusEvidence(error)
+    }
+}
+
 impl From<InertProofBindingAssociationErrorV3> for ProductionSemanticLineageErrorV3 {
     fn from(error: InertProofBindingAssociationErrorV3) -> Self {
+        Self::ProofIdentity(error)
+    }
+}
+
+impl From<InertProofBindingAssociationErrorV4> for ProductionSemanticLineageErrorV3 {
+    fn from(error: InertProofBindingAssociationErrorV4) -> Self {
         Self::ProofBinding(error)
     }
 }

@@ -614,6 +614,14 @@ impl AuthenticatedRankedVerificationV5 {
                     == functional.semantics.contract().canonical_sha256()
         })
     }
+
+    pub(crate) fn aggregate_verus_execution(
+        &self,
+    ) -> Option<&fe2o3_verifier::ProductionMirPlironPerCompilationVerusExecutionV1> {
+        self.functional
+            .as_ref()
+            .map(|functional| functional.aggregate.execution())
+    }
 }
 
 #[derive(Debug)]
