@@ -17,6 +17,7 @@ worker-v3-envelope-integration-test-only = [
     "application-handoff-fault-injection-test-only",
     "dep:fe2o3-core",
     "dep:fe2o3-hsa-runtime",
+    "fe2o3-host/worker-v3-verifier-test-support",
     "worker-v3-host-consumer-fixture",
 ]
 

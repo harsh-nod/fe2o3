@@ -52,7 +52,8 @@ transport and durable receipt publication, but not the production distinct-UID
 launcher and inspection policy, external monotonic rollback anchor, or
 production Worker verifier. The next major gates are:
 
-1. implement the reviewed production Worker V3 verifier, make generated
+1. implement the reviewed concrete production Worker V3 verifier behind the
+   sealed host boundary, make generated
    applications invoke the canonical inherited pure-KFD transition, and prove
    one public build/publish/run command on MI300X without external HSACO
    injection;
@@ -462,7 +463,9 @@ earlier authority transition.
    invocation adapter, and measured unsafe-diagnostic replay. The generated
    adapter and authenticated Worker V3 executable now join into one private,
    move-only KFD invocation, and an exact scalar-GEMM replay passes on MI300X
-   with a synthetic verifier. The canonical inherited-application API now
+   only under the explicit synthetic-verifier test feature. Default builds
+   seal verifier implementation and keep decision construction private. The
+   canonical inherited-application API now
    derives the kernel from its generated type and consumes the Cargo handoff,
    verifier, generated arguments, current publication, and checked device into
    that invocation. A production verifier, generated-application adoption, and
@@ -477,8 +480,9 @@ earlier authority transition.
    and executable-evidence records exist. They do not give Rust source an
    operational semantics, establish compiler/machine refinement, or bind
    production proof authority to the final payload.
-10. **Production verification authentication.** Implement a
-   `WorkerV3VerifierV1` only from reviewed immutable compiler,
+10. **Production verification authentication.** Implement the crate-owned
+   concrete `WorkerV3VerifierV1` behind the existing sealed boundary only from
+   reviewed immutable compiler,
    Verus/solver, proof-to-executable, Rust-layout, and machine-effect records.
    Every digest, identity, mutation, and stale-replay edge must fail closed.
 11. **Implemented API foundation: split mutable views.** Safe two-way and
@@ -715,9 +719,11 @@ revalidation, the generic authenticated load/dispatch state machine, the
 reviewed runtime adapter, durable lease reacquisition, Cargo
 publication of the canonical load envelope, V3-only production descriptor
 handoff, and safe split mutable views already exist. The recovered Worker V2
-host route is deleted. Still missing is a production `WorkerV3VerifierV1` that
-can authenticate the carried evidence before invocation-specific pure-KFD
-launch custody is created. The runtime authority gate and compiler-generated
+host route is deleted. Default builds now seal `WorkerV3VerifierV1`, keep its
+decision constructor private, and omit the synthetic implementation surface.
+Still missing is the crate-owned concrete verifier that can independently
+authenticate the carried evidence before invocation-specific pure-KFD launch
+custody is created. The runtime authority gate and compiler-generated
 host-memory KFD preparation now bind the exact current HSACO, geometry, effects,
 checked device, and authenticated decision into one private move-only
 invocation. The existing hardware proof uses a synthetic verifier and the

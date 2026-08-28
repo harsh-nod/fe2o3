@@ -9,6 +9,7 @@ description = "Host-side launch helpers for fe2o3."
 
 [features]
 hardware-test-hooks = ["dep:rmpv", "fe2o3-artifact-transaction/test-hooks"]
+worker-v3-verifier-test-support = []
 
 [dependencies]
 fe2o3-aql.workspace = true

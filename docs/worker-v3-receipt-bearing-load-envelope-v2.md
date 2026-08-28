@@ -16,6 +16,15 @@ restart recovery. Cargo durable readiness, application descriptor transfer,
 and `fe2o3-host` admission accept only top-level V2. Top-level V1 is therefore
 not a production route; its codec remains the complete nested replay format.
 
+Host admission reconstructs and retains the exact compiler subject, binds the
+subject and complete carriage bytes into the host-lineage challenge, and lends
+both exact canonical records to `WorkerV3VerifierV1`. Verification promotion
+compares the returned subject, carriage, policy, issuer journal, compiler
+occurrence, receipt, publication, acknowledgment, Worker-ledger record,
+sequence, and both rollback anchors. It also rejects absent protected-policy,
+Worker-ledger, or external rollback verification identities before any HSA
+load can be authorized.
+
 ## Wire
 
 The V2 wire preserves the exact canonical V1 replay bytes without projection:
@@ -65,10 +74,13 @@ grant compiler authority; load and launch remain separate move-only transitions.
 
 ## Remaining Authority Promotion
 
-- bind the carriage identity and protected-policy decision into the Worker
-  verification request and decision;
-- compare the carried policy with independently retained verifier configuration;
-- atomically enforce the external monotonic rollback anchor and Worker-ledger
-  record before compiler authority exists; and
-- qualify that authority through the final KFD/HSA load and gfx942 execution
-  route under the deployed root-owned supervisor.
+The request and promotion boundary are receipt-complete. The unsafe verifier
+contract now requires independent protected-policy comparison, exact
+Worker-ledger reacquisition, and an external rollback-currentness decision; a
+15-case adversarial matrix rejects every substituted coordinate and each absent
+protected verification identity.
+
+The remaining work is to implement that contract with a concrete protected
+verifier instead of synthetic test evidence, deploy the distinct-UID supervisor
+and external monotonic anchor, and qualify the resulting authority through the
+final Cargo-to-KFD gfx942 execution route.

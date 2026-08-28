@@ -15,11 +15,15 @@ also fixes authority-free sidecar and ACK bytes. The descriptor-relative Worker
 ledger now implements durable publication and rollback verification. Bounded
 service packets and the allocation-free service loop are implemented over one
 already admitted issuer. The production distinct-UID launcher and inspection
-policy and the Worker V3 authority join remain open. Complete receipt carriage,
+policy and the concrete protected Worker V3 verifier remain open. Complete
+receipt carriage,
 backend acquisition, subject-bound sidecar transport, and the lossless
 receipt-bearing V2 route through Cargo, application transfer, and host
-admission are implemented. That association alone does not authenticate
-protected compiler execution.
+admission are implemented. Host verification now receives the exact subject and
+carriage and rejects substitutions across every receipt, ledger, and rollback
+coordinate before promotion. That checked association alone does not
+authenticate protected compiler execution: the production verifier must still
+perform the independent protected checks required by its unsafe contract.
 
 ## Records
 
@@ -136,9 +140,10 @@ receipt was signed by the policy-pinned key and matches the supplied rollback
 input. Its API explicitly reports false for protected execution, compiler
 authority, load authority, and launch authority.
 
-Only the future protected issuer can establish supervised execution. Only the
-future durable Worker V3 verifier join can promote that fact into compiler
-authority. No wire value can be deserialized directly into authority.
+Only the protected issuer can establish supervised execution. Only a concrete
+durable Worker V3 verifier implementation can satisfy the implemented promotion
+contract and promote that fact into compiler authority. No wire value can be
+deserialized directly into authority.
 
 ## Test Requirements
 
@@ -160,6 +165,6 @@ These tests qualify only the codec and pinned-key signature boundary. The
 local protected signer and supervised occurrence foundation. The receipt
 sidecar codec and [Worker ledger](compiler-execution-worker-ledger-v1.md) are
 frozen separately. The [bounded service](compiler-execution-service-v1.md) is
-implemented over an admitted connection. Production distinct-UID deployment,
-protected authority verification, external anti-rollback, and MI300X
+implemented over an admitted connection. Production distinct-UID deployment, a
+concrete protected verifier, external anti-rollback, and MI300X
 end-to-end tests remain required.

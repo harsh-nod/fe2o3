@@ -1,8 +1,11 @@
 use std::{error::Error, fmt, marker::PhantomData};
 
-use fe2o3_artifact_transaction::DurableCurrentLinkPublicationTokenV1;
+use fe2o3_artifact_transaction::{
+    DurableCurrentLinkPublicationTokenV1, InertCompilerExecutionSubjectV1,
+};
 use fe2o3_hsaco::CodeObjectVersion;
 use fe2o3_kernel_descriptor::{KernelDescriptorV1, KernelId};
+use fe2o3_runtime_protocol::CompilerExecutionReceiptCarriageV1;
 use sha2::{Digest, Sha256};
 
 use crate::recovered_worker_v3_admission::WorkerV3HostLineageEvidenceV1;
@@ -13,6 +16,10 @@ use crate::{
 
 const WORKER_V3_VERIFICATION_CHALLENGE_DOMAIN_V1: &[u8] =
     b"fe2o3.host.worker-v3-verification-challenge.v1\0";
+
+mod verifier_seal {
+    pub trait Sealed<K> {}
+}
 
 /// Safety property established by a reviewed V3 verifier for one exact executable lineage.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -83,6 +90,8 @@ impl WorkerV3VerificationChallengeIdentityV1 {
 pub struct WorkerV3VerificationRequestV1<'admission, K> {
     challenge: WorkerV3VerificationChallengeIdentityV1,
     lineage: WorkerV3HostLineageEvidenceV1,
+    compiler_execution_subject: &'admission InertCompilerExecutionSubjectV1,
+    compiler_execution_receipt: &'admission CompilerExecutionReceiptCarriageV1,
     handoff: &'admission fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffV3,
     finalized_hsaco: &'admission [u8],
     descriptor: &'admission KernelDescriptorV1,
@@ -99,6 +108,105 @@ impl<K: CompilerGeneratedKernelExpectationV1> WorkerV3VerificationRequestV1<'_, 
 
     pub const fn lineage_identity(&self) -> WorkerV3HostLineageIdentityV1 {
         self.lineage.identity()
+    }
+
+    /// Returns the exact canonical compiler occurrence reconstructed from durable V3 replay.
+    pub const fn compiler_execution_subject(&self) -> &InertCompilerExecutionSubjectV1 {
+        self.compiler_execution_subject
+    }
+
+    /// Returns the complete canonical compiler occurrence bytes.
+    pub const fn compiler_execution_subject_bytes(&self) -> &[u8] {
+        self.compiler_execution_subject.canonical_bytes()
+    }
+
+    /// Returns the complete receipt carriage retained by the V2 production envelope.
+    ///
+    /// The carriage is internally consistent but inert. A reviewed verifier must compare its
+    /// policy with protected configuration, reacquire its exact Worker ledger record, and establish
+    /// that its rollback position is current before reporting authenticated compiler execution.
+    pub const fn compiler_execution_receipt_carriage(&self) -> &CompilerExecutionReceiptCarriageV1 {
+        self.compiler_execution_receipt
+    }
+
+    /// Returns the exact canonical receipt carriage bytes, without a projected schema.
+    pub const fn compiler_execution_receipt_bytes(&self) -> &[u8] {
+        self.compiler_execution_receipt.canonical_bytes()
+    }
+
+    pub const fn compiler_execution_subject_sha256(&self) -> [u8; 32] {
+        *self.compiler_execution_subject.identity().sha256()
+    }
+
+    pub const fn compiler_execution_carriage_sha256(&self) -> [u8; 32] {
+        *self.compiler_execution_receipt.identity().as_bytes()
+    }
+
+    pub const fn compiler_execution_policy_sha256(&self) -> [u8; 32] {
+        *self
+            .compiler_execution_receipt
+            .policy()
+            .identity()
+            .as_bytes()
+    }
+
+    pub const fn compiler_execution_issuer_journal_sha256(&self) -> [u8; 32] {
+        self.compiler_execution_receipt
+            .acknowledgment()
+            .issuer_journal_identity()
+    }
+
+    pub const fn compiler_occurrence_sha256(&self) -> [u8; 32] {
+        self.compiler_execution_receipt
+            .acknowledgment()
+            .compiler_occurrence_identity()
+    }
+
+    pub const fn compiler_execution_receipt_sha256(&self) -> [u8; 32] {
+        *self
+            .compiler_execution_receipt
+            .acknowledgment()
+            .receipt_identity()
+            .as_bytes()
+    }
+
+    pub const fn compiler_execution_publication_sha256(&self) -> [u8; 32] {
+        *self
+            .compiler_execution_receipt
+            .acknowledgment()
+            .publication_identity()
+            .as_bytes()
+    }
+
+    pub const fn compiler_execution_acknowledgment_sha256(&self) -> [u8; 32] {
+        *self
+            .compiler_execution_receipt
+            .acknowledgment()
+            .identity()
+            .as_bytes()
+    }
+
+    pub const fn compiler_execution_worker_ledger_record_sha256(&self) -> [u8; 32] {
+        self.compiler_execution_receipt
+            .acknowledgment()
+            .worker_ledger_record_identity()
+    }
+
+    pub const fn compiler_execution_sequence(&self) -> u64 {
+        self.compiler_execution_receipt.acknowledgment().sequence()
+    }
+
+    pub const fn compiler_execution_prior_rollback_anchor(&self) -> [u8; 32] {
+        self.compiler_execution_receipt
+            .publication()
+            .receipt()
+            .prior_rollback_anchor()
+    }
+
+    pub const fn compiler_execution_current_rollback_anchor(&self) -> [u8; 32] {
+        self.compiler_execution_receipt
+            .acknowledgment()
+            .current_rollback_anchor()
     }
 
     pub const fn descriptor(&self) -> &KernelDescriptorV1 {
@@ -197,15 +305,23 @@ impl<K: CompilerGeneratedKernelExpectationV1> WorkerV3VerificationRequestV1<'_, 
 /// # Safety
 ///
 /// Implementations must authenticate immutable compiler and verifier executions under an
-/// approved policy. They must establish that the formal-memory and proof-binding receipts apply
-/// to this exact semantic capsule, descriptor, final HSACO, and generated Rust marker, and that
-/// every reported safety property covers all executable memory effects for every concrete
-/// invocation satisfying the generated ABI, effect, alias, initialization, and launch contracts.
+/// approved policy. They must compare the carried compiler-execution policy with independently
+/// retained protected configuration, reacquire and match the exact protected Worker ledger record,
+/// and establish the carried sequence and rollback anchor as current through an external protected
+/// anti-rollback authority. The resulting policy, ledger, and rollback verification identities must
+/// bind the exact subject, carriage, compiler occurrence, and complete verification transcript;
+/// they must not be copied or derived solely from request fields. Implementations must also
+/// establish that the formal-memory and proof-binding receipts apply to this exact semantic
+/// capsule, descriptor, final HSACO, and generated Rust marker, and that every reported safety
+/// property covers all executable memory effects for every concrete invocation satisfying the
+/// generated ABI, effect, alias, initialization, and launch contracts.
 /// This is a universally quantified kernel theorem: the later safe composition boundary may
 /// instantiate it only with compiler-generated capabilities and independently checked physical
 /// runtime inputs. The inert V3 receipts do not establish these claims by themselves. A false
 /// implementation can later authorize native code loading from safe generated code.
-pub unsafe trait WorkerV3VerifierV1<K: CompilerGeneratedKernelExpectationV1> {
+pub unsafe trait WorkerV3VerifierV1<K: CompilerGeneratedKernelExpectationV1>:
+    verifier_seal::Sealed<K>
+{
     type Error;
 
     /// Authenticates one exact request and returns independently checked identities.
@@ -219,6 +335,56 @@ pub unsafe trait WorkerV3VerifierV1<K: CompilerGeneratedKernelExpectationV1> {
         &mut self,
         request: &WorkerV3VerificationRequestV1<'_, K>,
     ) -> Result<WorkerV3VerificationDecisionV1, Self::Error>;
+}
+
+/// Explicit synthetic-verifier hook for the receipt-bearing integration harness.
+///
+/// This trait is absent from default and production builds. Enabling it permits downstream test
+/// code to satisfy the otherwise sealed verifier boundary and must never be used to construct a
+/// production application or authority claim.
+#[cfg(feature = "worker-v3-verifier-test-support")]
+#[doc(hidden)]
+pub unsafe trait WorkerV3SyntheticVerifierV1<K: CompilerGeneratedKernelExpectationV1> {
+    type Error;
+
+    /// Returns synthetic descriptive evidence for hostile transition testing only.
+    ///
+    /// # Safety
+    ///
+    /// The implementation must remain confined to a test-only build and must not represent its
+    /// result as protected compiler, proof, rollback, load, or launch authority.
+    unsafe fn verify_synthetic(
+        &mut self,
+        request: &WorkerV3VerificationRequestV1<'_, K>,
+    ) -> Result<WorkerV3VerificationDecisionV1, Self::Error>;
+}
+
+#[cfg(feature = "worker-v3-verifier-test-support")]
+impl<K, V> verifier_seal::Sealed<K> for V
+where
+    K: CompilerGeneratedKernelExpectationV1,
+    V: WorkerV3SyntheticVerifierV1<K>,
+{
+}
+
+#[cfg(feature = "worker-v3-verifier-test-support")]
+// SAFETY: this blanket exists only under the explicit test-support feature. Implementors must
+// satisfy the unsafe synthetic trait contract; default and production builds contain no such seam.
+unsafe impl<K, V> WorkerV3VerifierV1<K> for V
+where
+    K: CompilerGeneratedKernelExpectationV1,
+    V: WorkerV3SyntheticVerifierV1<K>,
+{
+    type Error = V::Error;
+
+    unsafe fn verify(
+        &mut self,
+        request: &WorkerV3VerificationRequestV1<'_, K>,
+    ) -> Result<WorkerV3VerificationDecisionV1, Self::Error> {
+        // SAFETY: the caller is inside the unsafe production verifier transition and the explicit
+        // test-support implementation owns the synthetic invariants for this test-only build.
+        unsafe { self.verify_synthetic(request) }
+    }
 }
 
 /// Non-authoritative review of one exact V3 verification request.
@@ -235,6 +401,131 @@ pub trait WorkerV3AuditorV1<K: CompilerGeneratedKernelExpectationV1> {
         &mut self,
         request: &WorkerV3VerificationRequestV1<'_, K>,
     ) -> Result<Self::Evidence, Self::Error>;
+}
+
+/// Compiler-execution result returned by a reviewed protected verifier.
+///
+/// The exact coordinates must come from independently authenticated protected state, not merely
+/// from copying an inert request. The final three identities bind the verifier's protected-policy
+/// comparison, exact Worker-ledger reacquisition, and external rollback-currentness decision.
+/// Public construction is descriptive and grants no authority; promotion compares every carried
+/// coordinate with the exact receipt-bearing host request and rejects zero verification identities.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WorkerV3CompilerExecutionVerificationV1 {
+    subject_sha256: [u8; 32],
+    carriage_sha256: [u8; 32],
+    policy_sha256: [u8; 32],
+    issuer_journal_sha256: [u8; 32],
+    compiler_occurrence_sha256: [u8; 32],
+    receipt_sha256: [u8; 32],
+    publication_sha256: [u8; 32],
+    acknowledgment_sha256: [u8; 32],
+    worker_ledger_record_sha256: [u8; 32],
+    sequence: u64,
+    prior_rollback_anchor: [u8; 32],
+    current_rollback_anchor: [u8; 32],
+    protected_policy_verification_sha256: [u8; 32],
+    protected_worker_ledger_verification_sha256: [u8; 32],
+    external_rollback_verification_sha256: [u8; 32],
+}
+
+impl WorkerV3CompilerExecutionVerificationV1 {
+    #[allow(clippy::too_many_arguments)]
+    pub const fn new(
+        subject_sha256: [u8; 32],
+        carriage_sha256: [u8; 32],
+        policy_sha256: [u8; 32],
+        issuer_journal_sha256: [u8; 32],
+        compiler_occurrence_sha256: [u8; 32],
+        receipt_sha256: [u8; 32],
+        publication_sha256: [u8; 32],
+        acknowledgment_sha256: [u8; 32],
+        worker_ledger_record_sha256: [u8; 32],
+        sequence: u64,
+        prior_rollback_anchor: [u8; 32],
+        current_rollback_anchor: [u8; 32],
+        protected_policy_verification_sha256: [u8; 32],
+        protected_worker_ledger_verification_sha256: [u8; 32],
+        external_rollback_verification_sha256: [u8; 32],
+    ) -> Self {
+        Self {
+            subject_sha256,
+            carriage_sha256,
+            policy_sha256,
+            issuer_journal_sha256,
+            compiler_occurrence_sha256,
+            receipt_sha256,
+            publication_sha256,
+            acknowledgment_sha256,
+            worker_ledger_record_sha256,
+            sequence,
+            prior_rollback_anchor,
+            current_rollback_anchor,
+            protected_policy_verification_sha256,
+            protected_worker_ledger_verification_sha256,
+            external_rollback_verification_sha256,
+        }
+    }
+
+    pub const fn subject_sha256(self) -> [u8; 32] {
+        self.subject_sha256
+    }
+
+    pub const fn carriage_sha256(self) -> [u8; 32] {
+        self.carriage_sha256
+    }
+
+    pub const fn policy_sha256(self) -> [u8; 32] {
+        self.policy_sha256
+    }
+
+    pub const fn issuer_journal_sha256(self) -> [u8; 32] {
+        self.issuer_journal_sha256
+    }
+
+    pub const fn compiler_occurrence_sha256(self) -> [u8; 32] {
+        self.compiler_occurrence_sha256
+    }
+
+    pub const fn receipt_sha256(self) -> [u8; 32] {
+        self.receipt_sha256
+    }
+
+    pub const fn publication_sha256(self) -> [u8; 32] {
+        self.publication_sha256
+    }
+
+    pub const fn acknowledgment_sha256(self) -> [u8; 32] {
+        self.acknowledgment_sha256
+    }
+
+    pub const fn worker_ledger_record_sha256(self) -> [u8; 32] {
+        self.worker_ledger_record_sha256
+    }
+
+    pub const fn sequence(self) -> u64 {
+        self.sequence
+    }
+
+    pub const fn prior_rollback_anchor(self) -> [u8; 32] {
+        self.prior_rollback_anchor
+    }
+
+    pub const fn current_rollback_anchor(self) -> [u8; 32] {
+        self.current_rollback_anchor
+    }
+
+    pub const fn protected_policy_verification_sha256(self) -> [u8; 32] {
+        self.protected_policy_verification_sha256
+    }
+
+    pub const fn protected_worker_ledger_verification_sha256(self) -> [u8; 32] {
+        self.protected_worker_ledger_verification_sha256
+    }
+
+    pub const fn external_rollback_verification_sha256(self) -> [u8; 32] {
+        self.external_rollback_verification_sha256
+    }
 }
 
 /// Descriptive result returned by a reviewed V3 verifier.
@@ -255,6 +546,7 @@ pub struct WorkerV3VerificationDecisionV1 {
     finalized_length: u64,
     target: fe2o3_amd_target::AmdTargetId,
     code_object_version: CodeObjectVersion,
+    compiler_execution: WorkerV3CompilerExecutionVerificationV1,
     verifier_measurement_sha256: [u8; 32],
     verification_transcript_sha256: [u8; 32],
     proof_executable_binding_sha256: [u8; 32],
@@ -264,8 +556,12 @@ pub struct WorkerV3VerificationDecisionV1 {
 }
 
 impl WorkerV3VerificationDecisionV1 {
+    #[allow(
+        dead_code,
+        reason = "reserved for the crate-owned production verifier; synthetic builds enter through the explicitly gated constructor"
+    )]
     #[allow(clippy::too_many_arguments)]
-    pub const fn new(
+    pub(crate) const fn new(
         challenge: WorkerV3VerificationChallengeIdentityV1,
         lineage: WorkerV3HostLineageIdentityV1,
         kernel_id: KernelId,
@@ -278,6 +574,7 @@ impl WorkerV3VerificationDecisionV1 {
         finalized_length: u64,
         target: fe2o3_amd_target::AmdTargetId,
         code_object_version: CodeObjectVersion,
+        compiler_execution: WorkerV3CompilerExecutionVerificationV1,
         verifier_measurement_sha256: [u8; 32],
         verification_transcript_sha256: [u8; 32],
         proof_executable_binding_sha256: [u8; 32],
@@ -298,6 +595,7 @@ impl WorkerV3VerificationDecisionV1 {
             finalized_length,
             target,
             code_object_version,
+            compiler_execution,
             verifier_measurement_sha256,
             verification_transcript_sha256,
             proof_executable_binding_sha256,
@@ -305,6 +603,54 @@ impl WorkerV3VerificationDecisionV1 {
             rust_effect_contract_sha256,
             safety_properties,
         }
+    }
+
+    /// Constructs a descriptive decision only for the explicit integration-test verifier seam.
+    #[cfg(feature = "worker-v3-verifier-test-support")]
+    #[doc(hidden)]
+    #[allow(clippy::too_many_arguments)]
+    pub const fn synthetic_for_test_only(
+        challenge: WorkerV3VerificationChallengeIdentityV1,
+        lineage: WorkerV3HostLineageIdentityV1,
+        kernel_id: KernelId,
+        marker_binding: [u8; 32],
+        generated_host_contract: [u8; 32],
+        capsule_sha256: [u8; 32],
+        formal_memory_sha256: [u8; 32],
+        proof_binding_sha256: [u8; 32],
+        finalized_sha256: [u8; 32],
+        finalized_length: u64,
+        target: fe2o3_amd_target::AmdTargetId,
+        code_object_version: CodeObjectVersion,
+        compiler_execution: WorkerV3CompilerExecutionVerificationV1,
+        verifier_measurement_sha256: [u8; 32],
+        verification_transcript_sha256: [u8; 32],
+        proof_executable_binding_sha256: [u8; 32],
+        rust_type_layout_contract_sha256: [u8; 32],
+        rust_effect_contract_sha256: [u8; 32],
+        safety_properties: WorkerV3SafetyPropertiesV1,
+    ) -> Self {
+        Self::new(
+            challenge,
+            lineage,
+            kernel_id,
+            marker_binding,
+            generated_host_contract,
+            capsule_sha256,
+            formal_memory_sha256,
+            proof_binding_sha256,
+            finalized_sha256,
+            finalized_length,
+            target,
+            code_object_version,
+            compiler_execution,
+            verifier_measurement_sha256,
+            verification_transcript_sha256,
+            proof_executable_binding_sha256,
+            rust_type_layout_contract_sha256,
+            rust_effect_contract_sha256,
+            safety_properties,
+        )
     }
 
     pub const fn challenge_identity(&self) -> WorkerV3VerificationChallengeIdentityV1 {
@@ -325,6 +671,10 @@ impl WorkerV3VerificationDecisionV1 {
 
     pub const fn finalized_hsaco_length(&self) -> u64 {
         self.finalized_length
+    }
+
+    pub const fn compiler_execution(&self) -> WorkerV3CompilerExecutionVerificationV1 {
+        self.compiler_execution
     }
 }
 
@@ -475,6 +825,8 @@ fn prepare_request<'admission, K: CompilerGeneratedKernelExpectationV1>(
     Ok(WorkerV3VerificationRequestV1 {
         challenge,
         lineage,
+        compiler_execution_subject: admission.compiler_execution_subject(),
+        compiler_execution_receipt: admission.compiler_execution_receipt(),
         handoff: admission.outer_handoff(),
         finalized_hsaco: current.exact_artifact_bytes(),
         descriptor: admission.descriptor(),
@@ -583,6 +935,64 @@ fn validate_decision<K: CompilerGeneratedKernelExpectationV1>(
             decision.code_object_version == request.code_object_version,
             "code-object version",
         ),
+        (
+            decision.compiler_execution.subject_sha256
+                == request.compiler_execution_subject_sha256(),
+            "compiler-execution subject",
+        ),
+        (
+            decision.compiler_execution.carriage_sha256
+                == request.compiler_execution_carriage_sha256(),
+            "compiler-execution carriage",
+        ),
+        (
+            decision.compiler_execution.policy_sha256 == request.compiler_execution_policy_sha256(),
+            "compiler-execution policy",
+        ),
+        (
+            decision.compiler_execution.issuer_journal_sha256
+                == request.compiler_execution_issuer_journal_sha256(),
+            "compiler-execution issuer journal",
+        ),
+        (
+            decision.compiler_execution.compiler_occurrence_sha256
+                == request.compiler_occurrence_sha256(),
+            "compiler occurrence",
+        ),
+        (
+            decision.compiler_execution.receipt_sha256
+                == request.compiler_execution_receipt_sha256(),
+            "compiler-execution receipt",
+        ),
+        (
+            decision.compiler_execution.publication_sha256
+                == request.compiler_execution_publication_sha256(),
+            "compiler-execution receipt publication",
+        ),
+        (
+            decision.compiler_execution.acknowledgment_sha256
+                == request.compiler_execution_acknowledgment_sha256(),
+            "compiler-execution publication acknowledgment",
+        ),
+        (
+            decision.compiler_execution.worker_ledger_record_sha256
+                == request.compiler_execution_worker_ledger_record_sha256(),
+            "compiler-execution Worker ledger record",
+        ),
+        (
+            decision.compiler_execution.sequence == request.compiler_execution_sequence(),
+            "compiler-execution rollback sequence",
+        ),
+        (
+            decision.compiler_execution.prior_rollback_anchor
+                == request.compiler_execution_prior_rollback_anchor(),
+            "compiler-execution prior rollback anchor",
+        ),
+        (
+            decision.compiler_execution.current_rollback_anchor
+                == request.compiler_execution_current_rollback_anchor(),
+            "compiler-execution current rollback anchor",
+        ),
     ] {
         if !matches {
             return Err(WorkerV3VerificationDecisionErrorV1::IdentityMismatch(field));
@@ -597,6 +1007,24 @@ fn validate_decision<K: CompilerGeneratedKernelExpectationV1>(
         (
             decision.proof_executable_binding_sha256,
             "proof/executable binding",
+        ),
+        (
+            decision
+                .compiler_execution
+                .protected_policy_verification_sha256,
+            "protected compiler policy verification",
+        ),
+        (
+            decision
+                .compiler_execution
+                .protected_worker_ledger_verification_sha256,
+            "protected Worker ledger verification",
+        ),
+        (
+            decision
+                .compiler_execution
+                .external_rollback_verification_sha256,
+            "external rollback verification",
         ),
         (
             decision.rust_type_layout_contract_sha256,
