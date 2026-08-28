@@ -141,8 +141,14 @@ client now recovers first and resumes Ready, Prepared, or Issued under one
 absolute deadline, including exact issued-request reconstruction. Its child
 channel now creates the peer after fork inside rustc, installs fd 195, transfers
 only the service endpoint to the direct parent, and binds it to exact child
-credentials and a live pidfd. A canonical sealed launch manifest now binds that
-exact PID/UID/GID to the pinned policy, and a descriptor-only musl-static issuer
+credentials, child-reported direct-parent identity, and a live pidfd. A
+canonical outer handoff binds that exact direct parent to the sealed launch
+manifest, and the client can transfer its service peer and pidfd over one
+authenticated `SOCK_SEQPACKET` connection to the distinct-UID supervisor. The
+supervisor repeats direct-parent `SO_PEERCRED`, policy, rustc peer credentials,
+pidfd target/liveness, descriptor identity, and alias checks. The launch
+manifest binds the exact rustc PID/UID/GID to the pinned policy, and a
+descriptor-only musl-static issuer
 enters through a syscall-only shim that restores nondumpability before musl or
 Rust startup and then consumes fixed FDs 3 through 9. After complete
 admission and durable recovery it emits one canonical PID/manifest/policy-bound
@@ -154,9 +160,10 @@ against that sealed policy before copying both into distinct read-only
 mode-0555 memfds with complete content and executable seals. The resulting
 move-only program is now consumed into one prepared supervisor together with
 the canonical signing-key capability, dedicated non-root UID/GID profile, and
-an exact service-owned mode-0700 root. It still exposes no descriptor, key,
-signing operation, or launch API. Complete child credential/capability/namespace
-enforcement, `clone3` launch, and readiness consumption remain; the pinned policy has an
+an exact service-owned mode-0700 root. Accepted handoffs remain move-only and
+expose no descriptor, key, signing operation, or launch API. Complete child
+credential/capability/namespace enforcement, ten-entry manifest construction,
+`clone3` launch, and readiness consumption remain; the pinned policy has an
 immutable sealed memfd capability reserved at rustc fd 202. Distinct-UID
 supervisor launch and inspection policy and the Worker V3 authority join remain
 absent. A fixed

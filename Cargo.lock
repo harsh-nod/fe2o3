@@ -820,6 +820,7 @@ dependencies = [
  "ed25519-dalek",
  "fe2o3-broker-authority-service",
  "fe2o3-compiler-closure-capability",
+ "fe2o3-compiler-execution-client",
  "fe2o3-compiler-execution-protocol",
  "fe2o3-runtime-protocol",
  "fe2o3-static-preexec-manifest",

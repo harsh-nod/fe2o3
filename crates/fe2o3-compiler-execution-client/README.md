@@ -15,8 +15,14 @@ The crate also owns the authority-free child-channel handoff used by the direct
 rustc parent. Its post-fork callback creates the unnamed `SOCK_SEQPACKET` pair
 inside the rustc child, installs only the client endpoint at FD 195, and
 transfers only the service endpoint to the parent. Parent admission binds the
-transfer to the exact child PID, `SO_PEERCRED`, and a live pidfd under one
-absolute deadline. This avoids attributing an outer-Cargo-created socket to
-rustc. Binding-wrapper integration, distinct-UID protected service launch,
-policy provisioning, HSACO publication, and runtime admission remain outside
-this component.
+transfer to the exact child PID, child-reported direct-parent PID,
+`SO_PEERCRED`, and a live pidfd under one absolute deadline. The resulting
+move-only value can cross exactly one authenticated Unix `SOCK_SEQPACKET`
+control connection to a dedicated supervisor. That transfer sends one
+canonical direct-parent/launch-manifest record and exactly two ordered
+`SCM_RIGHTS` descriptors. It authenticates the supervisor UID/GID first and
+retains the control connection for the pending readiness exchange. This avoids
+attributing an outer-Cargo-created socket to rustc or accepting a same-user
+relay as the direct parent. Binding-wrapper integration, issuer readiness,
+distinct-UID child launch, HSACO publication, and runtime admission remain
+outside this checkpoint.

@@ -26,8 +26,16 @@ real/effective/saved/filesystem IDs, no supplementary groups, empty capability
 sets including bounding and ambient sets, locked `NOROOT`, locked set-ID fixup
 and ambient-capability prevention, `no_new_privs`, nondumpability, zero core
 limit, umask `077`, and unchanged supervisor namespaces. This checkpoint binds
-the configured effective UID/GID but deliberately exposes no process-launch
-method and does not claim the complete child profile yet. The next checkpoint
-must enforce and observe it while consuming the rustc handoff, constructing the
-exact static pre-exec manifest, launching with `clone3(CLONE_PIDFD)`, and owning
-readiness, cancellation, restart, and exactly-once reaping.
+the configured effective UID/GID and now accepts one authenticated cross-process
+rustc handoff. The handoff is one canonical direct-parent/launch-manifest packet
+with exactly two `SCM_RIGHTS` descriptors. Admission requires the control
+socket's exact submitter PID/UID/GID, nested policy, rustc service-peer
+`SO_PEERCRED`, pidfd target/liveness, descriptor identities, and all role
+non-aliasing checks to agree; all observations are repeated without exposing a
+descriptor.
+
+The supervisor still exposes no process-launch method and does not claim the
+complete child profile. The next checkpoint must construct and seal the exact
+ten-entry static pre-exec manifest, launch with `clone3(CLONE_PIDFD)`, enforce
+and observe the complete child profile, and own readiness, cancellation,
+restart, and exactly-once reaping.

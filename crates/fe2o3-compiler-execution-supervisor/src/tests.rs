@@ -1,11 +1,21 @@
 use std::fs::{self, OpenOptions};
-use std::os::fd::AsRawFd;
+use std::io::IoSlice;
+use std::mem::MaybeUninit;
+use std::os::fd::{AsFd, AsRawFd, OwnedFd};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::process::Command;
+use std::time::Duration;
 
 use ed25519_dalek::SigningKey;
 use fe2o3_compiler_closure_capability::CompilerExecutionSigningKeyCapabilityV1;
+use fe2o3_compiler_execution_client::PendingCompilerExecutionChildChannelV1;
 use fe2o3_compiler_execution_protocol::{
     CompilerExecutionIssuerMeasurementV1, CompilerExecutionIssuerPolicyV1,
+    CompilerExecutionServiceLaunchManifestV1, CompilerExecutionSupervisorHandoffV1,
+};
+use rustix::net::{
+    AddressFamily, SendAncillaryBuffer, SendAncillaryMessage, SendFlags, SocketFlags, SocketType,
+    sendmsg, socketpair,
 };
 
 use super::*;
@@ -192,6 +202,63 @@ fn admitted_program(fixture: &Fixture) -> AdmittedIssuerProgramV1 {
         policy(fixture.issuer_measurement()),
     )
     .unwrap()
+}
+
+fn bound_supervisor(fixture: &Fixture) -> Option<ProtectedIssuerSupervisorV1> {
+    let profile = credentials()?;
+    let program = admitted_program(fixture);
+    let key = signing_key(program.policy());
+    Some(
+        ProtectedIssuerSupervisorV1::bind(
+            program,
+            profile,
+            File::open(&fixture.root).unwrap(),
+            key,
+        )
+        .unwrap(),
+    )
+}
+
+fn seqpacket_pair() -> (OwnedFd, OwnedFd) {
+    socketpair(
+        AddressFamily::UNIX,
+        SocketType::SEQPACKET,
+        SocketFlags::CLOEXEC,
+        None,
+    )
+    .unwrap()
+}
+
+fn send_handoff_fixture(
+    control: &OwnedFd,
+    handoff: &CompilerExecutionSupervisorHandoffV1,
+    descriptors: &[std::os::fd::BorrowedFd<'_>],
+) {
+    let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(3))];
+    let mut ancillary = SendAncillaryBuffer::new(&mut space);
+    assert!(ancillary.push(SendAncillaryMessage::ScmRights(descriptors)));
+    assert_eq!(
+        sendmsg(
+            control,
+            &[IoSlice::new(handoff.canonical_bytes())],
+            &mut ancillary,
+            SendFlags::NOSIGNAL,
+        )
+        .unwrap(),
+        handoff.canonical_bytes().len()
+    );
+}
+
+fn live_launch() -> (
+    std::process::Child,
+    fe2o3_compiler_execution_client::CompilerExecutionServiceLaunchV1,
+) {
+    let mut command = Command::new("/bin/sleep");
+    command.arg("30");
+    let pending = PendingCompilerExecutionChildChannelV1::prepare(&mut command).unwrap();
+    let child = command.spawn().unwrap();
+    let launch = pending.finish(child.id(), Duration::from_secs(2)).unwrap();
+    (child, launch)
 }
 
 #[test]
@@ -597,4 +664,160 @@ fn supervisor_debug_exposes_no_descriptor_path_or_secret_seed() {
     assert!(!rendered.contains(fixture.root.to_str().unwrap()));
     assert!(!rendered.contains("fd:"));
     assert!(!rendered.contains("[7, 7, 7"));
+}
+
+#[test]
+fn exact_cross_process_handoff_is_admitted_and_revalidated() {
+    let fixture = Fixture::new("exact-handoff");
+    let Some(supervisor) = bound_supervisor(&fixture) else {
+        return;
+    };
+    let (mut child, launch) = live_launch();
+    let client = launch.client();
+    let submitter = launch.submitter();
+    let manifest = CompilerExecutionServiceLaunchManifestV1::new(client, supervisor.policy());
+    let handoff = CompilerExecutionSupervisorHandoffV1::new(submitter, manifest.clone()).unwrap();
+    let (service_peer, pidfd) = launch.into_descriptors();
+    let (sender, receiver) = seqpacket_pair();
+    send_handoff_fixture(&sender, &handoff, &[service_peer.as_fd(), pidfd.as_fd()]);
+
+    let accepted = supervisor
+        .accept_handoff_inner::<false>(receiver, Duration::from_secs(2))
+        .unwrap();
+    assert_eq!(accepted.manifest(), &manifest);
+    assert_eq!(accepted.submitter().pid(), std::process::id());
+    accepted.revalidate(&supervisor).unwrap();
+
+    child.kill().unwrap();
+    child.wait().unwrap();
+    assert!(matches!(
+        accepted.revalidate(&supervisor),
+        Err(ProtectedIssuerHandoffErrorV1::Pidfd(_))
+    ));
+}
+
+#[test]
+fn production_handoff_rejects_a_same_uid_submitter_before_receive() {
+    let fixture = Fixture::new("same-uid-handoff");
+    let Some(supervisor) = bound_supervisor(&fixture) else {
+        return;
+    };
+    let (sender, receiver) = seqpacket_pair();
+    assert!(matches!(
+        supervisor.accept_handoff(receiver, Duration::from_secs(1)),
+        Err(ProtectedIssuerHandoffErrorV1::ClientAndSupervisorUidMatch)
+    ));
+    drop(sender);
+}
+
+#[test]
+fn malformed_wrong_policy_and_extra_descriptors_fail_closed() {
+    let fixture = Fixture::new("hostile-handoff");
+    let Some(supervisor) = bound_supervisor(&fixture) else {
+        return;
+    };
+
+    let (sender, receiver) = seqpacket_pair();
+    rustix::net::send(&sender, b"short", SendFlags::NOSIGNAL).unwrap();
+    assert!(matches!(
+        supervisor.accept_handoff_inner::<false>(receiver, Duration::from_secs(1)),
+        Err(ProtectedIssuerHandoffErrorV1::MalformedTransfer)
+    ));
+
+    let (mut child, launch) = live_launch();
+    let actual_submitter = launch.submitter();
+    let substituted_pid = if actual_submitter.pid() == 1 {
+        2
+    } else {
+        actual_submitter.pid() - 1
+    };
+    let substituted_submitter =
+        fe2o3_compiler_execution_protocol::CompilerExecutionClientProcessIdentityV1::new(
+            substituted_pid,
+            actual_submitter.uid(),
+            actual_submitter.gid(),
+        )
+        .unwrap();
+    let manifest =
+        CompilerExecutionServiceLaunchManifestV1::new(launch.client(), supervisor.policy());
+    let substituted =
+        CompilerExecutionSupervisorHandoffV1::new(substituted_submitter, manifest).unwrap();
+    let (service_peer, pidfd) = launch.into_descriptors();
+    let (sender, receiver) = seqpacket_pair();
+    send_handoff_fixture(
+        &sender,
+        &substituted,
+        &[service_peer.as_fd(), pidfd.as_fd()],
+    );
+    assert!(matches!(
+        supervisor.accept_handoff_inner::<false>(receiver, Duration::from_secs(1)),
+        Err(ProtectedIssuerHandoffErrorV1::SubmitterCredentialsMismatch)
+    ));
+    child.kill().unwrap();
+    child.wait().unwrap();
+
+    let (mut child, launch) = live_launch();
+    let wrong_key = SigningKey::from_bytes(&[8; 32]);
+    let wrong_policy = CompilerExecutionIssuerPolicyV1::new(
+        1,
+        fixture.issuer_measurement(),
+        sealed_static_issuer_runtime_measurement_v1(),
+        wrong_key.verifying_key().to_bytes(),
+    )
+    .unwrap();
+    let wrong_manifest =
+        CompilerExecutionServiceLaunchManifestV1::new(launch.client(), &wrong_policy);
+    let wrong_handoff =
+        CompilerExecutionSupervisorHandoffV1::new(launch.submitter(), wrong_manifest).unwrap();
+    let (service_peer, pidfd) = launch.into_descriptors();
+    let (sender, receiver) = seqpacket_pair();
+    send_handoff_fixture(
+        &sender,
+        &wrong_handoff,
+        &[service_peer.as_fd(), pidfd.as_fd()],
+    );
+    assert!(matches!(
+        supervisor.accept_handoff_inner::<false>(receiver, Duration::from_secs(1)),
+        Err(ProtectedIssuerHandoffErrorV1::PolicyMismatch)
+    ));
+    child.kill().unwrap();
+    child.wait().unwrap();
+
+    let (mut child, launch) = live_launch();
+    let manifest =
+        CompilerExecutionServiceLaunchManifestV1::new(launch.client(), supervisor.policy());
+    let handoff = CompilerExecutionSupervisorHandoffV1::new(launch.submitter(), manifest).unwrap();
+    let (service_peer, _pidfd) = launch.into_descriptors();
+    let duplicate = rustix::io::fcntl_dupfd_cloexec(&service_peer, 0).unwrap();
+    let (sender, receiver) = seqpacket_pair();
+    send_handoff_fixture(
+        &sender,
+        &handoff,
+        &[service_peer.as_fd(), duplicate.as_fd()],
+    );
+    assert!(matches!(
+        supervisor.accept_handoff_inner::<false>(receiver, Duration::from_secs(1)),
+        Err(ProtectedIssuerHandoffErrorV1::DescriptorAlias)
+    ));
+    child.kill().unwrap();
+    child.wait().unwrap();
+
+    let (mut child, launch) = live_launch();
+    let manifest =
+        CompilerExecutionServiceLaunchManifestV1::new(launch.client(), supervisor.policy());
+    let handoff = CompilerExecutionSupervisorHandoffV1::new(launch.submitter(), manifest).unwrap();
+    let (service_peer, pidfd) = launch.into_descriptors();
+    let extra = File::open("/dev/null").unwrap();
+    let (sender, receiver) = seqpacket_pair();
+    send_handoff_fixture(
+        &sender,
+        &handoff,
+        &[service_peer.as_fd(), pidfd.as_fd(), extra.as_fd()],
+    );
+    assert!(matches!(
+        supervisor.accept_handoff_inner::<false>(receiver, Duration::from_secs(1)),
+        Err(ProtectedIssuerHandoffErrorV1::MalformedTransfer)
+    ));
+    child.kill().unwrap();
+    child.wait().unwrap();
 }

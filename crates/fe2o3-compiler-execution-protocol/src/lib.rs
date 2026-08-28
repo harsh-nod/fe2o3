@@ -6,6 +6,7 @@ mod launch_manifest;
 mod receipt_publication;
 mod service;
 mod service_ready;
+mod supervisor_handoff;
 
 pub use attestation::{
     COMPILER_EXECUTION_ATTESTATION_CHALLENGE_BYTES_V1,
@@ -52,4 +53,8 @@ pub use service::{
 pub use service_ready::{
     COMPILER_EXECUTION_SERVICE_READY_BYTES_V1, CompilerExecutionServiceReadyErrorV1,
     CompilerExecutionServiceReadyIdentityV1, CompilerExecutionServiceReadyV1,
+};
+pub use supervisor_handoff::{
+    COMPILER_EXECUTION_SUPERVISOR_HANDOFF_BYTES_V1, CompilerExecutionSupervisorHandoffErrorV1,
+    CompilerExecutionSupervisorHandoffIdentityV1, CompilerExecutionSupervisorHandoffV1,
 };
