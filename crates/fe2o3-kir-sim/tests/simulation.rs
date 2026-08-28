@@ -1,3 +1,5 @@
+use std::mem::size_of;
+
 use fe2o3_kernel_ir::{
     AccessMode, AddressSpace, Atomic, AtomicKind, Axis, BarrierSemantics, BasicBlock, BinaryOp,
     BlockId, CheckedBinaryOperator, ComparePredicate, Constant, Convergence, DiagnosticCode, Fence,
@@ -19,10 +21,11 @@ use fe2o3_kir_sim::{
     SimulationDebugRecordKindV1, SimulationDebugRecordV1, SimulationDebugSinkControlV1,
     SimulationDebugSinkV1, SimulationErrorV1, SimulationEventKindV1, SimulationEventSinkControlV1,
     SimulationEventSinkV1, SimulationEventV1, SimulationExecutionErrorKindV1,
-    SimulationExecutionOutcomeV1, SimulationExplorationRequestV1, SimulationLimitsV1,
-    SimulationPreflightErrorV1, SimulationRaceAssessmentV1, SimulationRequestV1,
-    SimulationScheduleIdentityV1, SimulationScheduleReplayErrorV1, SimulationScheduleRequestV1,
-    SimulationTargetV1, UnsupportedFeatureV1,
+    SimulationExecutionOutcomeV1, SimulationExplorationRequestV1, SimulationExplorationV1,
+    SimulationLimitsV1, SimulationPreflightErrorV1, SimulationRaceAssessmentV1,
+    SimulationRequestV1, SimulationScheduleDecisionV1, SimulationScheduleIdentityV1,
+    SimulationScheduleReplayErrorV1, SimulationScheduleRequestV1, SimulationTargetV1,
+    UnsupportedFeatureV1,
 };
 
 fn op(result: u32, ty: Type, kind: OperationKind) -> Operation {
@@ -1834,6 +1837,108 @@ fn exploration_request_bounds_fail_closed() {
     assert!(SimulationExplorationRequestV1::new(0, 4097, 1, 1).is_err());
 }
 
+fn one_decision_schedule_resident_bytes(
+    module: &AdmittedSimulationModuleV1,
+    request: &SimulationRequestV1,
+    max_decisions: usize,
+) -> usize {
+    let target = SimulationTargetV1::amdgpu_64();
+    let plan = module
+        .preflight(request, target, SimulationLimitsV1::default())
+        .unwrap();
+    let error = module
+        .simulate_scheduled(
+            request,
+            target,
+            SimulationLimitsV1 {
+                max_resident_bytes: plan.resident_bytes(),
+                ..SimulationLimitsV1::default()
+            },
+            SimulationScheduleRequestV1::RecordSeeded {
+                seed: 1,
+                max_decisions,
+            },
+        )
+        .unwrap_err();
+    match error {
+        SimulationErrorV1::Execution(fe2o3_kir_sim::SimulationExecutionErrorV1 {
+            kind: SimulationExecutionErrorKindV1::ScheduleResidentLimit { actual, .. },
+            ..
+        }) => actual,
+        other => panic!("expected exact scheduled resident requirement, got {other:?}"),
+    }
+}
+
+#[test]
+fn one_decision_million_limit_schedule_is_compact_before_the_next_exploration_run() {
+    const MAX_DECISIONS: usize = 1_000_000;
+    let module = admitted(empty_kernel_module(
+        "compact_schedule",
+        Signature::new(vec![], vec![]),
+        vec![],
+    ));
+    let request = SimulationRequestV1::new("compact_schedule", [1, 1, 1], [1, 1, 1], vec![]);
+    let scheduled = one_decision_schedule_resident_bytes(&module, &request, MAX_DECISIONS);
+    let retained_decision = size_of::<SimulationScheduleDecisionV1>();
+    let exploration_inline = size_of::<SimulationExplorationV1>();
+    let exploration = module
+        .explore_seeded_schedules(
+            &request,
+            SimulationTargetV1::amdgpu_64(),
+            SimulationLimitsV1 {
+                max_resident_bytes: scheduled + exploration_inline + retained_decision,
+                ..SimulationLimitsV1::default()
+            },
+            SimulationExplorationRequestV1::new(9, 2, MAX_DECISIONS, 2).unwrap(),
+        )
+        .unwrap();
+    assert_eq!(exploration.completed(), 2);
+    assert_eq!(exploration.failures(), 0);
+    assert_eq!(exploration.retained_decisions(), 1);
+    assert_eq!(
+        exploration
+            .first_no_race()
+            .expect("one retained no-race witness")
+            .schedule()
+            .decisions()
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn retained_witness_bytes_are_cumulative_with_each_later_scheduled_run() {
+    const MAX_DECISIONS: usize = 1_000_000;
+    let module = admitted(empty_kernel_module(
+        "cumulative_schedule",
+        Signature::new(vec![], vec![]),
+        vec![],
+    ));
+    let request = SimulationRequestV1::new("cumulative_schedule", [1, 1, 1], [1, 1, 1], vec![]);
+    let scheduled = one_decision_schedule_resident_bytes(&module, &request, MAX_DECISIONS);
+    let exploration_inline = size_of::<SimulationExplorationV1>();
+    let resident_limit =
+        scheduled + exploration_inline + size_of::<SimulationScheduleDecisionV1>() - 1;
+    let exploration = module
+        .explore_seeded_schedules(
+            &request,
+            SimulationTargetV1::amdgpu_64(),
+            SimulationLimitsV1 {
+                max_resident_bytes: resident_limit,
+                ..SimulationLimitsV1::default()
+            },
+            SimulationExplorationRequestV1::new(9, 2, MAX_DECISIONS, 2).unwrap(),
+        )
+        .unwrap();
+    assert_eq!(exploration.completed(), 1);
+    assert_eq!(exploration.failures(), 1);
+    assert!(matches!(
+        exploration.first_failure().map(|failure| &failure.kind),
+        Some(SimulationExecutionErrorKindV1::ScheduleResidentLimit { actual, limit })
+            if *actual == resident_limit + 1 && *limit == resident_limit
+    ));
+}
+
 fn write_then_read_or_read_module() -> Module {
     let scalar = Type::Scalar(ScalarType::U32);
     let pointer = Type::pointer(scalar.clone(), AddressSpace::Global, AccessMode::ReadWrite);
@@ -2128,6 +2233,67 @@ fn same_invocation_access_after_a_barrier_starts_a_new_happens_before_epoch() {
         execution.race_assessment(),
         SimulationRaceAssessmentV1::RacesObserved {
             racing_bytes: 4,
+            ..
+        }
+    ));
+}
+
+fn ordered_read_then_cross_workgroup_read_module() -> Module {
+    let mut module = global_barrier_order_module(true);
+    let function = &mut module.functions[0];
+    let body = function.body.as_mut().expect("entry body");
+    let OperationKind::Intrinsic(intrinsic) = &mut body.blocks[0].operations[0].kind else {
+        panic!("expected invocation index")
+    };
+    intrinsic.kind = IntrinsicKind::InvocationIndex {
+        kind: IndexKind::Global,
+        axis: Axis::X,
+    };
+    let scalar = Type::Scalar(ScalarType::U32);
+    body.blocks[4].operations.push(op(
+        6,
+        scalar,
+        OperationKind::Load {
+            pointer: ValueId(0),
+            access: MemoryAccess::new(AddressSpace::Global, 4),
+        },
+    ));
+    module
+}
+
+#[test]
+fn ordered_epoch_reads_do_not_erase_a_write_visible_to_another_workgroup() {
+    let execution = admitted(ordered_read_then_cross_workgroup_read_module())
+        .simulate(
+            &SimulationRequestV1::new(
+                "global_order",
+                [4, 1, 1],
+                [2, 1, 1],
+                vec![SimulationArgumentV1::Buffer(u32_buffer(&[0]))],
+            ),
+            SimulationTargetV1::amdgpu_64(),
+            SimulationLimitsV1::default(),
+        )
+        .unwrap();
+    assert!(matches!(
+        execution.race_assessment(),
+        SimulationRaceAssessmentV1::RacesObserved {
+            first: fe2o3_kir_sim::SimulationDataRaceV1 {
+                earlier_atomic: false,
+                later_atomic: false,
+                ..
+            },
+            first_ordered_conflict: Some(fe2o3_kir_sim::SimulationOrderedMemoryConflictV1 {
+                reason: fe2o3_kir_sim::SimulationHappensBeforeReasonV1::GlobalWorkgroupBarrier,
+                ..
+            }),
+            ..
+        }
+    ));
+    assert!(matches!(
+        execution.conflict_assessment(),
+        SimulationConflictAssessmentV1::ConflictsObserved {
+            conflicting_bytes: 4,
             ..
         }
     ));
@@ -5577,6 +5743,224 @@ fn atomic_then_non_atomic_conflict_module(ordering: MemoryOrdering) -> Module {
     module.kernels[0].required_capabilities = function.required_capabilities.clone();
     module.required_capabilities = function.required_capabilities.clone();
     module
+}
+
+fn atomic_store_then_atomic_and_ordinary_load_module() -> Module {
+    let scalar = Type::Scalar(ScalarType::U32);
+    let pointer = Type::pointer(scalar.clone(), AddressSpace::Global, AccessMode::ReadWrite);
+    let mut entry = BasicBlock::new(BlockId(0));
+    entry.operations = vec![
+        op(
+            2,
+            Type::INDEX,
+            OperationKind::Intrinsic(IntrinsicOperation::new(
+                IntrinsicKind::InvocationIndex {
+                    kind: IndexKind::Global,
+                    axis: Axis::X,
+                },
+                Type::INDEX,
+            )),
+        ),
+        op(3, Type::INDEX, OperationKind::Constant(Constant::Index(0))),
+        op(
+            4,
+            Type::BOOL,
+            OperationKind::Compare {
+                predicate: ComparePredicate::Equal,
+                lhs: ValueId(2),
+                rhs: ValueId(3),
+            },
+        ),
+    ];
+    entry.terminator = Some(Terminator::ConditionalBranch {
+        condition: ValueId(4),
+        then_target: BlockId(1),
+        then_arguments: vec![],
+        else_target: BlockId(2),
+        else_arguments: vec![],
+    });
+
+    let atomic_access = MemoryAccess::new(AddressSpace::Global, 4);
+    let mut store = BasicBlock::new(BlockId(1));
+    store.operations.push(Operation::new(
+        vec![],
+        OperationKind::Atomic(Atomic {
+            kind: AtomicKind::Store,
+            pointer: ValueId(0),
+            value: Some(ValueId(1)),
+            compare: None,
+            access: atomic_access,
+            scope: SynchronizationScope::System,
+            ordering: MemoryOrdering::Relaxed,
+            failure_ordering: None,
+        }),
+    ));
+    store.terminator = Some(Terminator::Return { values: vec![] });
+
+    let mut select_load = BasicBlock::new(BlockId(2));
+    select_load.operations = vec![
+        op(5, Type::INDEX, OperationKind::Constant(Constant::Index(1))),
+        op(
+            6,
+            Type::BOOL,
+            OperationKind::Compare {
+                predicate: ComparePredicate::Equal,
+                lhs: ValueId(2),
+                rhs: ValueId(5),
+            },
+        ),
+    ];
+    select_load.terminator = Some(Terminator::ConditionalBranch {
+        condition: ValueId(6),
+        then_target: BlockId(3),
+        then_arguments: vec![],
+        else_target: BlockId(4),
+        else_arguments: vec![],
+    });
+
+    let mut atomic_load = BasicBlock::new(BlockId(3));
+    atomic_load.operations.push(Operation::new(
+        vec![ValueDef::new(ValueId(7), scalar.clone())],
+        OperationKind::Atomic(Atomic {
+            kind: AtomicKind::Load,
+            pointer: ValueId(0),
+            value: None,
+            compare: None,
+            access: atomic_access,
+            scope: SynchronizationScope::System,
+            ordering: MemoryOrdering::Relaxed,
+            failure_ordering: None,
+        }),
+    ));
+    atomic_load.terminator = Some(Terminator::Return { values: vec![] });
+
+    let mut ordinary_load = BasicBlock::new(BlockId(4));
+    ordinary_load.operations.push(op(
+        8,
+        scalar.clone(),
+        OperationKind::Load {
+            pointer: ValueId(0),
+            access: atomic_access,
+        },
+    ));
+    ordinary_load.terminator = Some(Terminator::Return { values: vec![] });
+
+    let capability = atomic_capability(
+        ScalarType::U32,
+        AddressSpace::Global,
+        SynchronizationScope::System,
+    );
+    let mut function = Function::kernel_entry(
+        "mixed_atomic_frontier_impl",
+        Signature::new(vec![pointer, scalar], vec![]),
+        vec![ValueId(0), ValueId(1)],
+        vec![entry, store, select_load, atomic_load, ordinary_load],
+    );
+    function.required_capabilities.insert(capability);
+    let mut kernel = Kernel::new(
+        "mixed_atomic_frontier",
+        "mixed_atomic_frontier_impl",
+        dynamic_domain_1d(),
+    );
+    kernel.required_capabilities = function.required_capabilities.clone();
+    let mut module = Module::new("sim-tests::mixed-atomic-frontier");
+    module.required_capabilities = function.required_capabilities.clone();
+    module.functions.push(function);
+    module.kernels.push(kernel);
+    module
+}
+
+#[test]
+fn atomic_load_does_not_erase_a_store_visible_to_an_ordinary_load() {
+    let execution = admitted(atomic_store_then_atomic_and_ordinary_load_module())
+        .simulate(
+            &SimulationRequestV1::new(
+                "mixed_atomic_frontier",
+                [3, 1, 1],
+                [3, 1, 1],
+                vec![
+                    SimulationArgumentV1::Buffer(u32_buffer(&[0])),
+                    SimulationArgumentV1::Scalar(ScalarBitsV1::u32(7)),
+                ],
+            ),
+            SimulationTargetV1::amdgpu_64(),
+            SimulationLimitsV1::default(),
+        )
+        .unwrap();
+    assert!(matches!(
+        execution.race_assessment(),
+        SimulationRaceAssessmentV1::RacesObserved {
+            first: fe2o3_kir_sim::SimulationDataRaceV1 {
+                earlier_atomic: true,
+                later_atomic: false,
+                ..
+            },
+            first_ordered_conflict: Some(fe2o3_kir_sim::SimulationOrderedMemoryConflictV1 {
+                reason: fe2o3_kir_sim::SimulationHappensBeforeReasonV1::AtomicSerialization,
+                ..
+            }),
+            ..
+        }
+    ));
+}
+
+fn ordered_atomic_store_replacement_module() -> Module {
+    let mut module = atomic_store_then_atomic_and_ordinary_load_module();
+    let block = &mut module.functions[0]
+        .body
+        .as_mut()
+        .expect("entry body")
+        .blocks[3];
+    let atomic = &mut block.operations[0];
+    atomic.results.clear();
+    let OperationKind::Atomic(atomic) = &mut atomic.kind else {
+        panic!("expected atomic load")
+    };
+    atomic.kind = AtomicKind::Store;
+    atomic.value = Some(ValueId(1));
+    block.operations.push(op(
+        9,
+        Type::Scalar(ScalarType::U32),
+        OperationKind::Load {
+            pointer: ValueId(0),
+            access: MemoryAccess::new(AddressSpace::Global, 4),
+        },
+    ));
+    module
+}
+
+#[test]
+fn ordered_atomic_writer_replacement_cannot_hide_a_race_with_the_replacement_writer() {
+    let execution = admitted(ordered_atomic_store_replacement_module())
+        .simulate(
+            &SimulationRequestV1::new(
+                "mixed_atomic_frontier",
+                [2, 1, 1],
+                [2, 1, 1],
+                vec![
+                    SimulationArgumentV1::Buffer(u32_buffer(&[0])),
+                    SimulationArgumentV1::Scalar(ScalarBitsV1::u32(7)),
+                ],
+            ),
+            SimulationTargetV1::amdgpu_64(),
+            SimulationLimitsV1::default(),
+        )
+        .unwrap();
+    assert!(matches!(
+        execution.race_assessment(),
+        SimulationRaceAssessmentV1::RacesObserved {
+            first: fe2o3_kir_sim::SimulationDataRaceV1 {
+                earlier_atomic: true,
+                later_atomic: false,
+                ..
+            },
+            first_ordered_conflict: Some(fe2o3_kir_sim::SimulationOrderedMemoryConflictV1 {
+                reason: fe2o3_kir_sim::SimulationHappensBeforeReasonV1::AtomicSerialization,
+                ..
+            }),
+            ..
+        }
+    ));
 }
 
 #[test]

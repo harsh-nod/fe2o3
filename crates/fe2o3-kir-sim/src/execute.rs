@@ -167,6 +167,11 @@ pub enum SimulationConflictAssessmentV1 {
     Incomplete {
         conflicting_bytes: u64,
         first: Option<SimulationMemoryConflictV1>,
+        /// The byte-access table reached its caller-supplied record bound.
+        access_record_limit_reached: bool,
+        /// A later access could depend on a representative evicted from the
+        /// bounded per-byte read/write frontier.
+        access_frontier_incomplete: bool,
         record_limit: usize,
     },
 }
@@ -201,6 +206,9 @@ pub enum SimulationRaceAssessmentV1 {
         first_ordered_conflict: Option<SimulationOrderedMemoryConflictV1>,
         /// The byte-access table reached its caller-supplied record bound.
         access_record_limit_reached: bool,
+        /// A later access could depend on a representative evicted from the
+        /// bounded per-byte read/write frontier.
+        access_frontier_incomplete: bool,
         /// Release/acquire atomic or fence HB may order an observed ordinary conflict.
         atomic_or_fence_happens_before_unmodeled: bool,
         record_limit: usize,
@@ -598,6 +606,53 @@ pub enum SimulationExecutionErrorKindV1 {
     EventSinkFailure(SimulationEventSinkErrorV1),
 }
 
+impl SimulationExecutionErrorKindV1 {
+    pub(crate) fn retained_heap_bytes(&self) -> usize {
+        match self {
+            Self::MissingFunction(function) | Self::MissingBody(function) => {
+                function.retained_capacity_bytes()
+            }
+            Self::EventSinkFailure(error) => error.detail.capacity(),
+            Self::StepLimit { .. }
+            | Self::EventLimit { .. }
+            | Self::CallDepthLimit { .. }
+            | Self::SsaValueLimit { .. }
+            | Self::AllocationLimit { .. }
+            | Self::AllocationBytesLimit { .. }
+            | Self::TotalBytesLimit { .. }
+            | Self::AllocationFailure
+            | Self::UnknownBlock(_)
+            | Self::MissingTerminator(_)
+            | Self::UndefinedValue(_)
+            | Self::RuntimeType { .. }
+            | Self::ResultArity { .. }
+            | Self::BlockArgumentArity { .. }
+            | Self::UndefinedIntegerOperation(_)
+            | Self::IntegerOutOfRange
+            | Self::PointerOffsetOverflow
+            | Self::DanglingPointer { .. }
+            | Self::AddressSpaceMismatch
+            | Self::ReadOnlyWrite
+            | Self::MisalignedAccess { .. }
+            | Self::OutOfBounds { .. }
+            | Self::UninitializedRead { .. }
+            | Self::WorkgroupUseBeforePublish { .. }
+            | Self::DivergentWorkgroupBarrier(_)
+            | Self::MismatchedWorkgroupBarrier(_)
+            | Self::IncompleteWave(_)
+            | Self::DivergentWave(_)
+            | Self::MismatchedWave(_)
+            | Self::WaveShuffleSourceOutOfRange { .. }
+            | Self::WorkgroupSchedulerNoProgress { .. }
+            | Self::ScheduleDecisionLimit { .. }
+            | Self::ScheduleResidentLimit { .. }
+            | Self::ScheduleReplay(_)
+            | Self::ReachedUnreachable
+            | Self::InternalInvariant(_) => 0,
+        }
+    }
+}
+
 /// Which part of two same-phase workgroup barrier arrivals was incompatible.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum WorkgroupBarrierMismatchV1 {
@@ -687,6 +742,17 @@ impl AdmittedSimulationModuleV1 {
         limits: SimulationLimitsV1,
         schedule: SimulationScheduleRequestV1<'_>,
     ) -> Result<SimulationExecutionV1, SimulationErrorV1> {
+        self.simulate_scheduled_with_resident_offset(request, target, limits, schedule, 0)
+    }
+
+    pub(crate) fn simulate_scheduled_with_resident_offset(
+        &self,
+        request: &SimulationRequestV1,
+        target: SimulationTargetV1,
+        limits: SimulationLimitsV1,
+        schedule: SimulationScheduleRequestV1<'_>,
+        resident_offset: usize,
+    ) -> Result<SimulationExecutionV1, SimulationErrorV1> {
         let plan = self
             .preflight(request, target, limits)
             .map_err(SimulationErrorV1::Preflight)?;
@@ -702,6 +768,7 @@ impl AdmittedSimulationModuleV1 {
                 plan,
                 debug_capture: SimulationDebugCaptureLimitsV1::disabled(),
                 schedule: Some(schedule),
+                resident_offset,
             },
             &mut event_sink,
             &mut debug_sink,
@@ -760,6 +827,7 @@ impl AdmittedSimulationModuleV1 {
                 plan,
                 debug_capture: capture,
                 schedule: None,
+                resident_offset: 0,
             },
             &mut event_sink,
             debug_sink,
@@ -791,6 +859,7 @@ impl AdmittedSimulationModuleV1 {
                 plan,
                 debug_capture: capture,
                 schedule: Some(schedule),
+                resident_offset: 0,
             },
             &mut event_sink,
             debug_sink,
@@ -820,6 +889,7 @@ impl AdmittedSimulationModuleV1 {
                 plan,
                 debug_capture: SimulationDebugCaptureLimitsV1::disabled(),
                 schedule: None,
+                resident_offset: 0,
             },
             sink,
             &mut debug_sink,
@@ -1278,7 +1348,7 @@ struct Engine<'a, S> {
     reserved_event_closures: u64,
     event_delivery_stopped: bool,
     invocation: Option<SimulationInvocationV1>,
-    accesses: HashMap<(u64, usize), LastAccess>,
+    accesses: HashMap<(u64, usize), AccessFrontier>,
     conflicting_bytes: u64,
     first_conflict: Option<SimulationMemoryConflictV1>,
     conflict_incomplete: bool,
@@ -1294,15 +1364,27 @@ struct RaceTracker {
     first_ordered_conflict: Option<SimulationOrderedMemoryConflictV1>,
 }
 
+#[derive(Clone, Copy, Default)]
+struct AccessFrontier {
+    write: Option<LastAccess>,
+    displaced_write: Option<LastAccess>,
+    read: Option<LastAccess>,
+    displaced_read: Option<LastAccess>,
+    conflicted: bool,
+    raced: bool,
+    incomplete: bool,
+    lost_write: bool,
+    lost_writes_all_atomic: bool,
+    lost_read: bool,
+    lost_reads_all_atomic: bool,
+}
+
 #[derive(Clone, Copy)]
 struct LastAccess {
     invocation: SimulationInvocationV1,
     site: CompactSite,
-    write: bool,
     atomic: bool,
     happens_before_epoch: u64,
-    conflicted: bool,
-    raced: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -1531,10 +1613,11 @@ pub(crate) fn conservative_execution_resident_bytes(
     resident.add_bytes(plan_identity_bytes)?;
     resident.add_vec::<usize>(reachable_indices_capacity)?;
     resident.add_bytes(execution_index_resident_bytes)?;
-    // A successful first-conflict assessment owns two sites in the live
-    // engine, then clones both into the returned assessment. Dynamic primary
-    // plus bounded secondary errors require no more identifier clones.
-    resident.add_product(maximum_reachable_identifier_bytes, 4)?;
+    // At successful return the live engine can own first conflict, first race,
+    // and first ordered-conflict evidence while the returned conflict and race
+    // assessments own clones of all four sites: twelve function identities.
+    // Dynamic primary plus bounded secondary errors require no more clones.
+    resident.add_product(maximum_reachable_identifier_bytes, 12)?;
 
     // The borrowed request and completed result coexist with simulated memory at copy-back.
     resident.add_product(
@@ -1614,10 +1697,46 @@ pub(crate) fn conservative_execution_resident_bytes(
     resident.add_bytes(reserved_bool_vec_bytes(workgroup_static_bytes)?)?;
     resident.add_product(workgroup_static_bytes, size_of::<u64>())?;
 
-    resident.add_bytes(reserved_hash_map_bytes::<(u64, usize), LastAccess>(
+    resident.add_bytes(reserved_hash_map_bytes::<(u64, usize), AccessFrontier>(
         limits.max_memory_access_records,
     )?)?;
     Some(resident.bytes())
+}
+
+#[cfg(test)]
+mod execution_resident_tests {
+    use super::*;
+
+    #[test]
+    fn successful_assessment_accounts_twelve_live_function_identity_allocations() {
+        let request = SimulationRequestV1::new("resident", [1, 1, 1], [1, 1, 1], vec![]);
+        let limits = SimulationLimitsV1 {
+            max_call_depth: 1,
+            max_ssa_values: 1,
+            max_allocations: 1,
+            max_allocation_bytes: 1,
+            max_total_bytes: 1,
+            max_memory_access_records: 1,
+            ..SimulationLimitsV1::default()
+        };
+        let accounted = |identifier_bytes| {
+            conservative_execution_resident_bytes(
+                0,
+                &request,
+                limits,
+                0,
+                0,
+                0,
+                0,
+                identifier_bytes,
+                1,
+                0,
+                0,
+            )
+            .expect("bounded resident accounting")
+        };
+        assert_eq!(accounted(257) - accounted(0), 12 * 257);
+    }
 }
 
 impl<S: SimulationEventSinkV1> Engine<'_, S> {
@@ -2180,11 +2299,25 @@ impl<S: SimulationEventSinkV1> Engine<'_, S> {
         for byte in offset..end {
             let key = (allocation, byte);
             let previous = self.accesses.get(&key).copied();
-            let conflict = previous.and_then(|previous| {
-                (previous.invocation != invocation && (previous.write || write)).then_some(previous)
-            });
-            let mut racing_conflict = false;
-            if let Some(earlier_access) = conflict {
+            let mut frontier = previous.unwrap_or_default();
+            let candidates = if write {
+                [
+                    frontier.write,
+                    frontier.displaced_write,
+                    frontier.read,
+                    frontier.displaced_read,
+                ]
+            } else {
+                [frontier.write, frontier.displaced_write, None, None]
+            };
+            let mut conflicting = false;
+            let mut racing = false;
+            for earlier_access in candidates
+                .into_iter()
+                .flatten()
+                .filter(|earlier| earlier.invocation != invocation)
+            {
+                conflicting = true;
                 let conflict_evidence = SimulationMemoryConflictV1 {
                     allocation,
                     offset: byte,
@@ -2193,9 +2326,6 @@ impl<S: SimulationEventSinkV1> Engine<'_, S> {
                     earlier_site: self.materialize_site(earlier_access.site),
                     later_site: self.materialize_site(*site),
                 };
-                if !earlier_access.conflicted {
-                    self.conflicting_bytes = self.conflicting_bytes.saturating_add(1);
-                }
                 if self.first_conflict.is_none() {
                     self.first_conflict = Some(conflict_evidence.clone());
                 }
@@ -2233,10 +2363,7 @@ impl<S: SimulationEventSinkV1> Engine<'_, S> {
                         });
                     }
                 } else {
-                    racing_conflict = true;
-                    if !earlier_access.raced {
-                        race.racing_bytes = race.racing_bytes.saturating_add(1);
-                    }
+                    racing = true;
                     if race.first_race.is_none() {
                         race.first_race = Some(SimulationDataRaceV1 {
                             conflict: conflict_evidence,
@@ -2246,56 +2373,102 @@ impl<S: SimulationEventSinkV1> Engine<'_, S> {
                     }
                 }
             }
+            if conflicting && !frontier.conflicted {
+                self.conflicting_bytes = self.conflicting_bytes.saturating_add(1);
+            }
+            if racing && !frontier.raced {
+                let missing_tracker = self.at(
+                    *site,
+                    SimulationExecutionErrorKindV1::InternalInvariant("recorded data race tracker"),
+                );
+                let race = self.race_trackers.first_mut().ok_or(missing_tracker)?;
+                race.racing_bytes = race.racing_bytes.saturating_add(1);
+            }
+            frontier.conflicted |= conflicting;
+            frontier.raced |= racing;
+            if frontier.raced {
+                // A proven race fixes this byte's race classification and
+                // unique-byte count even if older representatives were lost.
+                frontier.incomplete = false;
+            } else if (frontier.lost_write && !(atomic && frontier.lost_writes_all_atomic))
+                || (write && frontier.lost_read && !(atomic && frontier.lost_reads_all_atomic))
+            {
+                // A prior bounded-frontier eviction can matter only once a
+                // later access is not known to serialize with every lost
+                // representative. Atomic-only histories remain exact.
+                frontier.incomplete = true;
+            }
+
             if previous.is_some() || self.accesses.len() < self.limits.max_memory_access_records {
-                let access = match previous {
-                    Some(previous)
-                        if previous.invocation == invocation
-                            && previous.happens_before_epoch
+                let slot = if write {
+                    if let Some(earlier) = frontier.write
+                        && earlier.invocation != invocation
+                        && !frontier.raced
+                    {
+                        if frontier
+                            .displaced_write
+                            .is_some_and(|displaced| displaced.invocation != earlier.invocation)
+                        {
+                            let displaced = frontier
+                                .displaced_write
+                                .expect("checked displaced write frontier");
+                            frontier.lost_writes_all_atomic = if frontier.lost_write {
+                                frontier.lost_writes_all_atomic && displaced.atomic
+                            } else {
+                                displaced.atomic
+                            };
+                            frontier.lost_write = true;
+                        }
+                        // Keep the immediately displaced writer so an
+                        // ordinary access by the replacement writer is still
+                        // compared with its atomic predecessor.
+                        frontier.displaced_write = Some(earlier);
+                    }
+                    &mut frontier.write
+                } else {
+                    if let Some(earlier) = frontier.read
+                        && earlier.invocation != invocation
+                        && !frontier.raced
+                    {
+                        if frontier
+                            .displaced_read
+                            .is_some_and(|displaced| displaced.invocation != earlier.invocation)
+                        {
+                            let displaced = frontier
+                                .displaced_read
+                                .expect("checked displaced read frontier");
+                            frontier.lost_reads_all_atomic = if frontier.lost_read {
+                                frontier.lost_reads_all_atomic && displaced.atomic
+                            } else {
+                                displaced.atomic
+                            };
+                            frontier.lost_read = true;
+                        }
+                        frontier.displaced_read = Some(earlier);
+                    }
+                    &mut frontier.read
+                };
+                *slot = Some(match *slot {
+                    Some(earlier)
+                        if earlier.invocation == invocation
+                            && earlier.happens_before_epoch
                                 == self.workgroup_happens_before_epoch =>
                     {
                         LastAccess {
                             invocation,
-                            site: if write && !previous.write {
-                                compact_site
-                            } else {
-                                previous.site
-                            },
-                            write: previous.write || write,
-                            atomic: previous.atomic && atomic,
-                            happens_before_epoch: previous.happens_before_epoch,
-                            conflicted: previous.conflicted,
-                            raced: previous.raced,
+                            site: earlier.site,
+                            atomic: earlier.atomic && atomic,
+                            happens_before_epoch: earlier.happens_before_epoch,
                         }
                     }
-                    Some(previous) if previous.invocation == invocation => LastAccess {
+                    _ => LastAccess {
                         invocation,
                         site: compact_site,
-                        write,
                         atomic,
                         happens_before_epoch: self.workgroup_happens_before_epoch,
-                        conflicted: previous.conflicted,
-                        raced: previous.raced,
                     },
-                    Some(previous) => LastAccess {
-                        invocation,
-                        site: compact_site,
-                        write,
-                        atomic,
-                        happens_before_epoch: self.workgroup_happens_before_epoch,
-                        conflicted: previous.conflicted || conflict.is_some(),
-                        raced: previous.raced || racing_conflict,
-                    },
-                    None => LastAccess {
-                        invocation,
-                        site: compact_site,
-                        write,
-                        atomic,
-                        happens_before_epoch: self.workgroup_happens_before_epoch,
-                        conflicted: false,
-                        raced: false,
-                    },
-                };
-                self.accesses.insert(key, access);
+                });
+                self.accesses.insert(key, frontier);
             } else {
                 self.conflict_incomplete = true;
             }
@@ -2304,10 +2477,13 @@ impl<S: SimulationEventSinkV1> Engine<'_, S> {
     }
 
     fn conflict_assessment(&self) -> SimulationConflictAssessmentV1 {
-        if self.conflict_incomplete {
+        let access_frontier_incomplete = self.accesses.values().any(|frontier| frontier.incomplete);
+        if self.conflict_incomplete || access_frontier_incomplete {
             SimulationConflictAssessmentV1::Incomplete {
                 conflicting_bytes: self.conflicting_bytes,
                 first: self.first_conflict.clone(),
+                access_record_limit_reached: self.conflict_incomplete,
+                access_frontier_incomplete,
                 record_limit: self.limits.max_memory_access_records,
             }
         } else if let Some(first) = self.first_conflict.clone() {
@@ -2322,14 +2498,16 @@ impl<S: SimulationEventSinkV1> Engine<'_, S> {
 
     fn race_assessment(&self) -> SimulationRaceAssessmentV1 {
         let race = self.race_trackers.first();
+        let access_frontier_incomplete = self.accesses.values().any(|frontier| frontier.incomplete);
         let synchronization_incomplete = self.unmodeled_atomic_or_fence_happens_before
             && race.is_some_and(|race| race.first_race.is_some());
-        if self.conflict_incomplete || synchronization_incomplete {
+        if self.conflict_incomplete || access_frontier_incomplete || synchronization_incomplete {
             return SimulationRaceAssessmentV1::Incomplete {
                 racing_bytes: race.map_or(0, |race| race.racing_bytes),
                 first: race.and_then(|race| race.first_race.clone()),
                 first_ordered_conflict: race.and_then(|race| race.first_ordered_conflict.clone()),
                 access_record_limit_reached: self.conflict_incomplete,
+                access_frontier_incomplete,
                 atomic_or_fence_happens_before_unmodeled: synchronization_incomplete,
                 record_limit: self.limits.max_memory_access_records,
             };
@@ -2637,6 +2815,7 @@ struct ExecutionConfiguration<'a> {
     plan: SimulationPlanV1,
     debug_capture: SimulationDebugCaptureLimitsV1,
     schedule: Option<SimulationScheduleRequestV1<'a>>,
+    resident_offset: usize,
 }
 
 fn execute(
@@ -2653,6 +2832,7 @@ fn execute(
         plan,
         debug_capture,
         schedule,
+        resident_offset,
     } = configuration;
     let workgroup_participants = usize::try_from(plan.workgroup[0])
         .ok()
@@ -2671,6 +2851,7 @@ fn execute(
         limits,
         &plan,
         workgroup_participants,
+        resident_offset,
     )
     .map_err(|error| top_level_error(schedule_prepare_error(error)))?;
     let indices =

@@ -3013,12 +3013,18 @@ fn write_conflict_assessment<W: Write + ?Sized>(
         SimulationConflictAssessmentV1::Incomplete {
             conflicting_bytes,
             first,
+            access_record_limit_reached: _,
+            access_frontier_incomplete,
             record_limit,
         } => {
             write!(
                 writer,
-                "{{\"status\":\"incomplete\",\"conflicting_bytes\":{conflicting_bytes},\"record_limit\":{record_limit},\"first\":"
+                "{{\"status\":\"incomplete\",\"conflicting_bytes\":{conflicting_bytes}"
             )?;
+            if *access_frontier_incomplete {
+                writer.write_all(b",\"access_frontier_incomplete\":true")?;
+            }
+            write!(writer, ",\"record_limit\":{record_limit},\"first\":")?;
             match first {
                 Some(first) => write_memory_conflict(writer, first)?,
                 None => writer.write_all(b"null")?,
@@ -3060,12 +3066,20 @@ fn write_race_assessment<W: Write + ?Sized>(
             first,
             first_ordered_conflict,
             access_record_limit_reached,
+            access_frontier_incomplete,
             atomic_or_fence_happens_before_unmodeled,
             record_limit,
         } => {
             write!(
                 writer,
-                "{{\"status\":\"incomplete\",\"racing_bytes\":{racing_bytes},\"access_record_limit_reached\":{access_record_limit_reached},\"atomic_or_fence_happens_before_unmodeled\":{atomic_or_fence_happens_before_unmodeled},\"record_limit\":{record_limit},\"first\":"
+                "{{\"status\":\"incomplete\",\"racing_bytes\":{racing_bytes},\"access_record_limit_reached\":{access_record_limit_reached}"
+            )?;
+            if *access_frontier_incomplete {
+                writer.write_all(b",\"access_frontier_incomplete\":true")?;
+            }
+            write!(
+                writer,
+                ",\"atomic_or_fence_happens_before_unmodeled\":{atomic_or_fence_happens_before_unmodeled},\"record_limit\":{record_limit},\"first\":"
             )?;
             match first {
                 Some(first) => write_data_race(writer, first, bounded_sites)?,
@@ -4603,6 +4617,7 @@ mod tests {
             }),
             first_ordered_conflict: None,
             access_record_limit_reached: false,
+            access_frontier_incomplete: false,
             atomic_or_fence_happens_before_unmodeled: true,
             record_limit: 8,
         };

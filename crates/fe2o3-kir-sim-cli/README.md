@@ -86,6 +86,10 @@ retained witness decisions at 65,536; the simulator caps one schedule at
 errors. Consuming the requested seed interval is reported separately from
 schedule-space exhaustion. Exploration never claims to exhaust the schedule
 space or prove race freedom.
+Completed schedule records retain only realized decisions. The exploration
+summary and all earlier retained witness/failure payloads are included in the
+resident-memory check for each later run, in addition to the explicit retained
+decision count.
 
 Each retained witness contains its race assessment and an exact canonical
 `fe2o3-simulation-schedule-v1` document encoded as a JSON string, together with
@@ -200,6 +204,10 @@ fence edges into ordinary memory are not fully modeled, so a potentially
 affected ordinary conflict is reported as incomplete rather than as an exact
 race or no-race result. Source sites in this agent-facing evidence carry an
 explicit bounded function prefix, original byte count, and truncation flag.
+When a bounded per-byte read/write frontier cannot retain another distinct
+representative, a later potentially affected access reports
+`"access_frontier_incomplete":true`; that key is absent from unchanged exact
+results.
 Scalar bits, buffer bytes, and initialization bitsets retain their exact typed
 lowercase hexadecimal encodings. Result bytes are measured exactly and capped
 at 64 MiB before output publication begins, then emitted directly through a

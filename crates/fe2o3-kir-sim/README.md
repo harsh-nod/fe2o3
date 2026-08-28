@@ -65,6 +65,15 @@ operation is therefore typed incomplete instead of being called a race. Even a
 complete clean observation covers only that deterministic CPU order; it is not
 a proof of race freedom or a model of GPU scheduling.
 
+Each tracked global byte retains bounded current and displaced read/write
+frontiers. Ordered reads and atomic accesses therefore cannot erase an older
+writer before a later conflicting access is classified. If more representatives
+must be evicted, a later access that is not known to serialize with the lost
+history makes both conflict and race evidence explicitly incomplete;
+it can never produce a false clean result. Once a race is observed for that
+byte, later frontier replacement cannot weaken its classification or increment
+the unique racing-byte count again.
+
 The ordinary `simulate` paths retain the canonical cooperative order. Opt-in
 `simulate_scheduled` and `simulate_debugged_scheduled_with_sink` calls can
 record either that order or a deterministic seeded order. A schedule decision
@@ -85,6 +94,8 @@ coverage drift, and transcript corruption. Decision retention has an explicit
 caller bound, a fixed hard cap, fallible reservation, and resident-byte
 admission. Unrecorded canonical execution retains no decision vector and never
 fails a legacy run because of the recording bound.
+Successful records compact the execution-time reservation to the exact realized
+decision count before the record is returned.
 
 `explore_seeded_schedules` sweeps a bounded contiguous, wrapping seed interval
 and retains at most one exact replayable schedule for each race, no-race, and
@@ -94,6 +105,9 @@ retained across witnesses. Results state whether the requested seed budget was
 consumed and whether witness retention was exhausted. Consuming that caller
 budget does not exhaust or characterize the possible schedule space and cannot
 prove absence of another behavior.
+The inline exploration result and all retained schedule, assessment, and first
+failure payloads are charged together with every later scheduled run under
+`max_resident_bytes`; decision retention is charged by actual compact capacity.
 
 `PersistedSimulationScheduleDocumentV1` is the canonical, bounded JSON custody
 form for that same record. It adds exact raw-KIR versus simulation-bundle route,

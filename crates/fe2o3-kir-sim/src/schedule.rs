@@ -126,6 +126,12 @@ impl SimulationScheduleRecordV1 {
         &self.decisions
     }
 
+    pub(crate) fn retained_heap_bytes(&self) -> Option<usize> {
+        self.decisions
+            .capacity()
+            .checked_mul(size_of::<SimulationScheduleDecisionV1>())
+    }
+
     pub const fn coverage(&self) -> SimulationScheduleCoverageV1 {
         self.coverage
     }
@@ -200,6 +206,7 @@ impl<'a> PreparedScheduleV1<'a> {
         limits: SimulationLimitsV1,
         plan: &SimulationPlanV1,
         participants: usize,
+        resident_offset: usize,
     ) -> Result<Self, SchedulePrepareErrorV1> {
         let Some(request) = request else {
             return Ok(Self {
@@ -291,12 +298,14 @@ impl<'a> PreparedScheduleV1<'a> {
                 actual: usize::MAX,
                 limit: limits.max_resident_bytes,
             })?;
-        let resident = plan.resident_bytes().checked_add(extra).ok_or(
-            SchedulePrepareErrorV1::ResidentLimit {
+        let resident = plan
+            .resident_bytes()
+            .checked_add(extra)
+            .and_then(|bytes| bytes.checked_add(resident_offset))
+            .ok_or(SchedulePrepareErrorV1::ResidentLimit {
                 actual: usize::MAX,
                 limit: limits.max_resident_bytes,
-            },
-        )?;
+            })?;
         if resident > limits.max_resident_bytes {
             return Err(SchedulePrepareErrorV1::ResidentLimit {
                 actual: resident,
@@ -527,6 +536,11 @@ impl<'a> PreparedScheduleV1<'a> {
         }) = state
         {
             records = retained_records;
+            // Recording reserves the caller's decision bound so execution never
+            // reallocates. A completed witness retains only realized decisions;
+            // this prevents a one-decision run from escaping with a multi-million
+            // element capacity.
+            let decisions = decisions.into_boxed_slice().into_vec();
             records.push(SimulationScheduleRecordV1 {
                 context_identity,
                 transcript_identity,

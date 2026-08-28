@@ -1,11 +1,12 @@
 use std::error::Error;
 use std::fmt;
+use std::mem::size_of;
 
 use crate::{
     AdmittedSimulationModuleV1, SimulationErrorV1, SimulationExecutionErrorKindV1,
     SimulationExecutionErrorV1, SimulationInvocationV1, SimulationLimitsV1,
-    SimulationRaceAssessmentV1, SimulationRequestV1, SimulationScheduleRecordV1,
-    SimulationScheduleRequestV1, SimulationSiteV1, SimulationTargetV1,
+    SimulationMemoryConflictV1, SimulationRaceAssessmentV1, SimulationRequestV1,
+    SimulationScheduleRecordV1, SimulationScheduleRequestV1, SimulationSiteV1, SimulationTargetV1,
 };
 
 /// Hard upper bound on schedules attempted by one exploration call.
@@ -218,10 +219,14 @@ impl AdmittedSimulationModuleV1 {
             first_incomplete: None,
             first_failure: None,
         };
+        // The exploration summary itself remains live around every scheduled
+        // execution; per-run accounting charges SimulationExecutionV1 instead.
+        let mut retained_result_bytes = size_of::<SimulationExplorationV1>();
+        let mut first_failure_seen = false;
         for offset in 0..request.max_schedules {
             let seed = request.first_seed.wrapping_add(offset as u64);
             result.attempted += 1;
-            match self.simulate_scheduled(
+            match self.simulate_scheduled_with_resident_offset(
                 simulation,
                 target,
                 limits,
@@ -229,6 +234,7 @@ impl AdmittedSimulationModuleV1 {
                     seed,
                     max_decisions: request.max_decisions_per_schedule,
                 },
+                retained_result_bytes,
             ) {
                 Ok(execution) => {
                     result.completed += 1;
@@ -259,10 +265,22 @@ impl AdmittedSimulationModuleV1 {
                     };
                     if slot.is_none() {
                         let decisions = schedule.decisions().len();
-                        if result.retained_decisions.saturating_add(decisions)
-                            <= request.max_retained_decisions
+                        let witness_bytes = schedule.retained_heap_bytes().and_then(|bytes| {
+                            race_assessment_retained_bytes(&assessment)
+                                .and_then(|assessment| bytes.checked_add(assessment))
+                        });
+                        let retained_after = witness_bytes
+                            .and_then(|bytes| retained_result_bytes.checked_add(bytes));
+                        if result
+                            .retained_decisions
+                            .checked_add(decisions)
+                            .is_some_and(|retained| retained <= request.max_retained_decisions)
+                            && retained_after
+                                .is_some_and(|retained| retained <= limits.max_resident_bytes)
                         {
                             result.retained_decisions += decisions;
+                            retained_result_bytes =
+                                retained_after.expect("checked retained exploration witness bytes");
                             *slot = Some(SimulationExplorationWitnessV1 {
                                 seed,
                                 schedule,
@@ -278,13 +296,25 @@ impl AdmittedSimulationModuleV1 {
                 }
                 Err(SimulationErrorV1::Execution(error)) => {
                     result.failures += 1;
-                    if result.first_failure.is_none() {
-                        result.first_failure = Some(SimulationExplorationFailureV1 {
+                    if !first_failure_seen {
+                        first_failure_seen = true;
+                        let failure = SimulationExplorationFailureV1 {
                             seed,
                             invocation: error.invocation,
                             site: error.site,
                             kind: error.kind,
-                        });
+                        };
+                        let retained_after = exploration_failure_retained_bytes(&failure)
+                            .and_then(|bytes| retained_result_bytes.checked_add(bytes));
+                        if retained_after
+                            .is_some_and(|retained| retained <= limits.max_resident_bytes)
+                        {
+                            retained_result_bytes =
+                                retained_after.expect("checked retained exploration failure bytes");
+                            result.first_failure = Some(failure);
+                        } else {
+                            result.witness_retention_exhausted = true;
+                        }
                     }
                 }
             }
@@ -292,4 +322,55 @@ impl AdmittedSimulationModuleV1 {
         result.requested_seed_budget_consumed = true;
         Ok(result)
     }
+}
+
+fn race_assessment_retained_bytes(assessment: &SimulationRaceAssessmentV1) -> Option<usize> {
+    match assessment {
+        SimulationRaceAssessmentV1::NoRacesObserved {
+            first_ordered_conflict,
+        } => first_ordered_conflict.as_ref().map_or(Some(0), |ordered| {
+            conflict_retained_bytes(&ordered.conflict)
+        }),
+        SimulationRaceAssessmentV1::RacesObserved {
+            first,
+            first_ordered_conflict,
+            ..
+        }
+        | SimulationRaceAssessmentV1::Incomplete {
+            first: Some(first),
+            first_ordered_conflict,
+            ..
+        } => conflict_retained_bytes(&first.conflict).and_then(|bytes| {
+            first_ordered_conflict
+                .as_ref()
+                .map_or(Some(bytes), |ordered| {
+                    conflict_retained_bytes(&ordered.conflict)
+                        .and_then(|ordered_bytes| bytes.checked_add(ordered_bytes))
+                })
+        }),
+        SimulationRaceAssessmentV1::Incomplete {
+            first: None,
+            first_ordered_conflict,
+            ..
+        } => first_ordered_conflict.as_ref().map_or(Some(0), |ordered| {
+            conflict_retained_bytes(&ordered.conflict)
+        }),
+    }
+}
+
+fn conflict_retained_bytes(conflict: &SimulationMemoryConflictV1) -> Option<usize> {
+    conflict
+        .earlier_site
+        .function
+        .retained_capacity_bytes()
+        .checked_add(conflict.later_site.function.retained_capacity_bytes())
+}
+
+fn exploration_failure_retained_bytes(failure: &SimulationExplorationFailureV1) -> Option<usize> {
+    let site = failure
+        .site
+        .as_ref()
+        .map_or(0, |site| site.function.retained_capacity_bytes());
+    let kind = failure.kind.retained_heap_bytes();
+    site.checked_add(kind)
 }
