@@ -1269,12 +1269,22 @@ impl ProtectedCompilerExecutionIssuerV1 {
     pub(super) fn recover_current_carriage_for_service(
         &self,
         expected_subject: &InertCompilerExecutionSubjectV1,
-    ) -> Result<CompilerExecutionReceiptCarriageV1, ProtectedCompilerExecutionIssuerErrorV1> {
+    ) -> Result<Option<CompilerExecutionReceiptCarriageV1>, ProtectedCompilerExecutionIssuerErrorV1>
+    {
         self.admission.validate_continuity()?;
         validate_worker_ledger_join(&self.ledger.record, &self.worker_ledger)?;
-        let carriage = self
+        let carriage = match self
             .worker_ledger
-            .recover_current_carriage(expected_subject)?;
+            .recover_current_carriage(expected_subject)
+        {
+            Ok(carriage) => carriage,
+            Err(ProtectedCompilerExecutionWorkerLedgerErrorV1::MissingCanonicalRecord) => {
+                self.admission.validate_continuity()?;
+                validate_worker_ledger_join(&self.ledger.record, &self.worker_ledger)?;
+                return Ok(None);
+            }
+            Err(error) => return Err(error.into()),
+        };
         if carriage.policy() != self.admission.policy()
             || carriage.request().subject() != expected_subject
         {
@@ -1284,7 +1294,7 @@ impl ProtectedCompilerExecutionIssuerV1 {
         }
         self.admission.validate_continuity()?;
         validate_worker_ledger_join(&self.ledger.record, &self.worker_ledger)?;
-        Ok(carriage)
+        Ok(Some(carriage))
     }
 
     pub(super) fn validate_service_continuity(

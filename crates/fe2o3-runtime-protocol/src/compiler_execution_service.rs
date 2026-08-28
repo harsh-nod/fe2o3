@@ -481,6 +481,7 @@ pub enum CompilerExecutionServiceResponseKindV1 {
     Published = 4,
     Cancelled = 5,
     Recovered = 6,
+    ReceiptAbsent = 7,
 }
 
 impl CompilerExecutionServiceResponseKindV1 {
@@ -492,13 +493,16 @@ impl CompilerExecutionServiceResponseKindV1 {
             4 => Ok(Self::Published),
             5 => Ok(Self::Cancelled),
             6 => Ok(Self::Recovered),
+            7 => Ok(Self::ReceiptAbsent),
             other => Err(CompilerExecutionServiceProtocolErrorV1::UnknownResponseKind(other)),
         }
     }
 
     const fn packet_bytes(self) -> usize {
         match self {
-            Self::Ready | Self::Cancelled => COMPILER_EXECUTION_SERVICE_CONTROL_RESPONSE_BYTES_V1,
+            Self::Ready | Self::Cancelled | Self::ReceiptAbsent => {
+                COMPILER_EXECUTION_SERVICE_CONTROL_RESPONSE_BYTES_V1
+            }
             Self::Prepared => COMPILER_EXECUTION_SERVICE_PREPARED_RESPONSE_BYTES_V1,
             Self::Issued => COMPILER_EXECUTION_SERVICE_ISSUED_RESPONSE_BYTES_V1,
             Self::Published => COMPILER_EXECUTION_SERVICE_PUBLISHED_RESPONSE_BYTES_V1,
@@ -651,6 +655,30 @@ impl CompilerExecutionServiceResponseV1 {
         )
     }
 
+    /// Reports that no current Worker receipt exists for the requested subject.
+    ///
+    /// This is nonterminal service state, not evidence that a previously published receipt was
+    /// lost. A current record for a different subject remains a fail-closed subject mismatch.
+    pub fn receipt_absent(
+        request_identity: CompilerExecutionServiceRequestIdentityV1,
+        policy: &CompilerExecutionIssuerPolicyV1,
+        sequence: u64,
+        rollback_anchor: [u8; SHA256_BYTES],
+    ) -> Result<Self, CompilerExecutionServiceProtocolErrorV1> {
+        Self::encode(
+            CompilerExecutionServiceResponseKindV1::ReceiptAbsent,
+            request_identity,
+            policy.identity(),
+            sequence,
+            rollback_anchor,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+    }
+
     pub fn cancelled(
         request_identity: CompilerExecutionServiceRequestIdentityV1,
         policy: &CompilerExecutionIssuerPolicyV1,
@@ -695,7 +723,10 @@ impl CompilerExecutionServiceResponseV1 {
         let rollback_anchor = reader.fixed::<SHA256_BYTES>()?;
         let (challenge, publication, carriage, acknowledgment, disposition) = match kind {
             CompilerExecutionServiceResponseKindV1::Ready
-            | CompilerExecutionServiceResponseKindV1::Cancelled => (None, None, None, None, None),
+            | CompilerExecutionServiceResponseKindV1::Cancelled
+            | CompilerExecutionServiceResponseKindV1::ReceiptAbsent => {
+                (None, None, None, None, None)
+            }
             CompilerExecutionServiceResponseKindV1::Prepared => (
                 Some(CompilerExecutionAttestationChallengeV1::decode(
                     reader.take(COMPILER_EXECUTION_ATTESTATION_CHALLENGE_BYTES_V1)?,
@@ -1023,7 +1054,8 @@ fn validate_response_fields(
     }
     match kind {
         CompilerExecutionServiceResponseKindV1::Ready
-        | CompilerExecutionServiceResponseKindV1::Cancelled => {
+        | CompilerExecutionServiceResponseKindV1::Cancelled
+        | CompilerExecutionServiceResponseKindV1::ReceiptAbsent => {
             validate_prior_position(sequence, rollback_anchor)?;
             if challenge.is_some()
                 || publication.is_some()
@@ -1450,8 +1482,15 @@ mod tests {
         .unwrap();
         let recovered =
             CompilerExecutionServiceResponseV1::recovered(recover.identity(), carriage).unwrap();
+        let absent = CompilerExecutionServiceResponseV1::receipt_absent(
+            recover.identity(),
+            &fixture.policy,
+            1,
+            [0; 32],
+        )
+        .unwrap();
         for response in [
-            &ready, &prepared, &issued, &published, &cancelled, &recovered,
+            &ready, &prepared, &issued, &published, &cancelled, &recovered, &absent,
         ] {
             let decoded =
                 CompilerExecutionServiceResponseV1::decode(response.canonical_bytes()).unwrap();
@@ -1530,6 +1569,13 @@ mod tests {
                     fixture.acknowledgment.clone(),
                 )
                 .unwrap(),
+            )
+            .unwrap(),
+            CompilerExecutionServiceResponseV1::receipt_absent(
+                requests[5].identity(),
+                &fixture.policy,
+                1,
+                [0; 32],
             )
             .unwrap(),
         ];

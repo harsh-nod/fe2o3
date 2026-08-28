@@ -54,8 +54,10 @@ The packet codec carries the attestation lifecycle over one connected Unix
 `SOCK_SEQPACKET` boundary. Requests select inspect, prepare, issue, publish,
 cancel, or exact-subject recovery and bind the caller-pinned policy plus the
 operation's complete state. Responses carry ready state, the complete challenge,
-the complete receipt publication, the complete Worker-ledger ACK, or the exact
-2,058-byte receipt carriage reacquired from the current Worker record. Every
+the complete receipt publication, the complete Worker-ledger ACK, a nonterminal
+receipt-absent result, or the exact 2,058-byte receipt carriage reacquired from
+the current Worker record. Receipt absence is distinct from a mismatched or
+damaged current record. Every
 packet has an exact operation-specific length and a terminal domain-separated
 identity. The maximum request is 1,658 bytes and the maximum response is 2,218
 bytes.

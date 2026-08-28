@@ -57,7 +57,7 @@ The session accepts exactly six operation kinds:
 | `Issue` | Matching `Prepared`, or the same `Issued` request | Durable signed sidecar, or exact sidecar replay |
 | `Publish` | Matching `Issued`, or the immediately acknowledged request | Worker commit followed by issuer ACK; terminal exact ACK |
 | `Cancel` | Any valid state | Current rollback position; terminal without mutation |
-| `Recover` | Exact current Worker record with the requested compiler subject | Strict post-fsync reacquisition and complete carriage; terminal without mutation |
+| `Recover` | Requested compiler subject | Strict post-fsync reacquisition and complete carriage when the exact current record exists; terminal without mutation. If no Worker record exists yet, return nonterminal `ReceiptAbsent`. A different current subject fails closed. |
 
 Each request commits to the caller-pinned policy identity and a
 domain-separated identity over its complete canonical bytes. Prepare names the
@@ -82,7 +82,7 @@ diagnostic protocol and keeps crash recovery authoritative.
 | Issue request | 1,074 |
 | Publish request | 1,658 |
 | Recover request | 818 |
-| Ready or Cancelled response | 160 |
+| Ready, Cancelled, or ReceiptAbsent response | 160 |
 | Prepared response | 360 |
 | Issued response | 744 |
 | Published response | 456 |
@@ -112,9 +112,12 @@ sequence, or anchor fails closed.
 
 Recover rereads the canonical Worker record, repeats strict policy, signature,
 request, publication, identity, and ACK validation, and requires exact compiler
-subject equality before returning the complete carriage. It recovers only the
-current record; immutable history and custody confirmation before successor
-issuance remain part of the production service deployment.
+subject equality before returning the complete carriage. A genuinely absent
+canonical Worker record produces a canonical nonterminal `ReceiptAbsent`
+response so the same bounded client can continue with issuance. A corrupt record
+or a current record for another subject is never reported as absent. Recovery
+still covers only the current record; immutable history and custody confirmation
+before successor issuance remain part of the production service deployment.
 
 ## Authority Limit
 
@@ -126,11 +129,12 @@ machine-effect evidence and close `CompilerExecutionProvenance`.
 
 ## Qualification
 
-The protocol suite mutates every byte of all six request and six response
+The protocol suite mutates every byte of all six request and seven response
 forms and checks exact lengths, canonical re-encoding, nested pairing, policy,
 position, and terminal identities. The service suite covers exact packet
 boundaries, oversize and ancillary rejection, deadline and pidfd cancellation,
 blocked response delivery, all operation transitions and exact replay, complete
-carriage recovery, subject and policy substitution without mutation, four
-continuity checks per packet, cancellation, and packet exhaustion. Compile-fail
-tests reject direct external access to all issuer transition methods.
+carriage recovery, nonterminal absence, subject and policy substitution without
+mutation, four continuity checks per packet, cancellation, and packet
+exhaustion. Compile-fail tests reject direct external access to all issuer
+transition methods.
