@@ -479,7 +479,6 @@ mod tests {
     use std::io::IoSliceMut;
     use std::mem::MaybeUninit;
     use std::os::fd::AsRawFd;
-    use std::os::unix::process::CommandExt;
 
     use ed25519_dalek::SigningKey;
     use fe2o3_artifact_transaction::{
@@ -490,9 +489,6 @@ mod tests {
         CompilerExecutionAttestationChallengeV1, CompilerExecutionAttestationReceiptV1,
         CompilerExecutionAttestationRequestV1, CompilerExecutionIssuerMeasurementV1,
         CompilerExecutionReceiptPublicationAckV1, CompilerExecutionReceiptPublicationV1,
-        CompilerExecutionServicePublishDispositionV1, CompilerExecutionServiceRequestKindV1,
-        CompilerExecutionServiceRequestV1, CompilerExecutionServiceResponseV1,
-        MAX_COMPILER_EXECUTION_SERVICE_REQUEST_BYTES_V1,
     };
     use rustix::net::{
         AddressFamily, RecvAncillaryBuffer, RecvAncillaryMessage, RecvFlags, SocketFlags,
@@ -501,11 +497,8 @@ mod tests {
     use sha2::{Digest, Sha256};
 
     use super::*;
-    use crate::{
-        CompilerExecutionChildRoundTripErrorV1, CompilerExecutionClientErrorV1,
-        FIXED_DESCRIPTOR_TEST_LOCK,
-    };
 
+    static FIXED_DESCRIPTOR_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
     const CHILD_MODE_ENV: &str = "FE2O3_TEST_CHILD_SESSION_MODE";
     const SUBJECT_IDENTITY_DOMAIN: &[u8] = b"FE2O3/INERT-COMPILER-EXECUTION-SUBJECT/V1\0";
     const COMPILER_CLOSURE_IDENTITY_DOMAIN: &[u8] = b"fe2o3-compiler-closure-identity-v2\0";
@@ -514,19 +507,11 @@ mod tests {
     struct Fixture {
         policy: CompilerExecutionIssuerPolicyV1,
         subject: InertCompilerExecutionSubjectV1,
-        challenge: CompilerExecutionAttestationChallengeV1,
-        request: CompilerExecutionAttestationRequestV1,
-        publication: CompilerExecutionReceiptPublicationV1,
-        acknowledgment: CompilerExecutionReceiptPublicationAckV1,
         carriage: CompilerExecutionReceiptCarriageV1,
     }
 
     impl Fixture {
         fn new(seed: u8) -> Self {
-            Self::with_subject(seed, seed + 3)
-        }
-
-        fn with_subject(seed: u8, subject_seed: u8) -> Self {
             let key = SigningKey::from_bytes(&[seed; 32]);
             let policy = CompilerExecutionIssuerPolicyV1::new(
                 u64::from(seed),
@@ -535,7 +520,7 @@ mod tests {
                 key.verifying_key().to_bytes(),
             )
             .unwrap();
-            let subject = subject(subject_seed);
+            let subject = subject(seed + 3);
             let challenge = CompilerExecutionAttestationChallengeV1::new(
                 &policy,
                 &subject,
@@ -545,8 +530,7 @@ mod tests {
             )
             .unwrap();
             let request =
-                CompilerExecutionAttestationRequestV1::new(challenge.clone(), subject.clone())
-                    .unwrap();
+                CompilerExecutionAttestationRequestV1::new(challenge, subject.clone()).unwrap();
             let receipt =
                 CompilerExecutionAttestationReceiptV1::issue(&policy, &request, &key).unwrap();
             let publication =
@@ -557,18 +541,14 @@ mod tests {
                     .unwrap();
             let carriage = CompilerExecutionReceiptCarriageV1::new(
                 policy.clone(),
-                request.clone(),
-                publication.clone(),
-                acknowledgment.clone(),
+                request,
+                publication,
+                acknowledgment,
             )
             .unwrap();
             Self {
                 policy,
                 subject,
-                challenge,
-                request,
-                publication,
-                acknowledgment,
                 carriage,
             }
         }
@@ -704,7 +684,7 @@ mod tests {
                 Duration::from_secs(1),
             )
             .unwrap();
-        drop(receive_supervisor_handoff(&supervisor));
+        receive_supervisor_handoff(&supervisor);
         let substituted = policy(8);
         let manifest = CompilerExecutionServiceLaunchManifestV1::new(
             pending.manifest().client(),
@@ -760,7 +740,7 @@ mod tests {
     }
 
     #[test]
-    fn exact_readiness_and_fresh_child_carriage_complete_one_session() {
+    fn exact_readiness_and_real_child_carriage_complete_one_session() {
         let _guard = FIXED_DESCRIPTOR_TEST_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -798,9 +778,7 @@ mod tests {
                 Duration::from_secs(2),
             )
             .unwrap();
-        let service = receive_supervisor_handoff(&supervisor);
-        let service_fixture = fixture.clone();
-        let service = std::thread::spawn(move || serve_fresh_once(&service, &service_fixture));
+        receive_supervisor_handoff(&supervisor);
         let readiness =
             CompilerExecutionServiceReadyV1::new(777, pending.manifest(), &fixture.policy).unwrap();
         assert_eq!(
@@ -823,136 +801,6 @@ mod tests {
         assert_eq!(completed.carriage(), &fixture.carriage);
         assert_eq!(completed.into_carriage(), fixture.carriage);
         assert!(child.wait().unwrap().success());
-        assert_eq!(service.join().unwrap(), 5);
-    }
-
-    #[test]
-    fn missing_inherited_round_trip_descriptors_fail_closed() {
-        let _guard = FIXED_DESCRIPTOR_TEST_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let mut child = round_trip_child_command("missing").spawn().unwrap();
-        assert!(child.wait().unwrap().success());
-    }
-
-    #[test]
-    fn swapped_service_and_receipt_descriptors_fail_closed() {
-        let _guard = FIXED_DESCRIPTOR_TEST_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let fixture = Fixture::new(0x20);
-        let mut command = round_trip_child_command("swapped");
-        let pending = PendingCompilerExecutionChildSessionV1::prepare(
-            &mut command,
-            CompilerExecutionPolicyCapabilityV1::create(fixture.policy).unwrap(),
-        )
-        .unwrap();
-        // SAFETY: this runs after the session callbacks install the two fixed child endpoints and
-        // uses only async-signal-safe descriptor operations before exec.
-        unsafe {
-            command.pre_exec(|| {
-                let temporary = libc::fcntl(
-                    COMPILER_EXECUTION_SERVICE_CHILD_FD_V1,
-                    libc::F_DUPFD_CLOEXEC,
-                    256,
-                );
-                if temporary < 0 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                if libc::dup3(
-                    COMPILER_EXECUTION_RECEIPT_RETURN_CHILD_FD_V1,
-                    COMPILER_EXECUTION_SERVICE_CHILD_FD_V1,
-                    0,
-                ) != COMPILER_EXECUTION_SERVICE_CHILD_FD_V1
-                {
-                    let error = std::io::Error::last_os_error();
-                    libc::close(temporary);
-                    return Err(error);
-                }
-                if libc::dup3(temporary, COMPILER_EXECUTION_RECEIPT_RETURN_CHILD_FD_V1, 0)
-                    != COMPILER_EXECUTION_RECEIPT_RETURN_CHILD_FD_V1
-                {
-                    let error = std::io::Error::last_os_error();
-                    libc::close(temporary);
-                    return Err(error);
-                }
-                if libc::close(temporary) != 0 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                Ok(())
-            });
-        }
-        let mut child = command.spawn().unwrap();
-        let session = pending.finish(child.id(), Duration::from_secs(2)).unwrap();
-        assert!(child.wait().unwrap().success());
-        drop(session);
-    }
-
-    #[test]
-    fn recovered_subject_and_policy_substitution_fail_closed() {
-        let _guard = FIXED_DESCRIPTOR_TEST_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let expected = Fixture::new(0x20);
-        for (mode, substituted) in [
-            ("subject-mismatch", Fixture::with_subject(0x20, 0x50)),
-            ("policy-mismatch", Fixture::new(0x40)),
-        ] {
-            let mut command = round_trip_child_command(mode);
-            let pending = PendingCompilerExecutionChildSessionV1::prepare(
-                &mut command,
-                CompilerExecutionPolicyCapabilityV1::create(expected.policy.clone()).unwrap(),
-            )
-            .unwrap();
-            let mut child = command.spawn().unwrap();
-            let session = pending.finish(child.id(), Duration::from_secs(2)).unwrap();
-            let (cargo, supervisor) = socketpair(
-                AddressFamily::UNIX,
-                SocketType::SEQPACKET,
-                SocketFlags::CLOEXEC,
-                None,
-            )
-            .unwrap();
-            let credentials = CompilerExecutionSupervisorCredentialsV1::new(
-                rustix::process::geteuid().as_raw(),
-                rustix::process::getegid().as_raw(),
-            )
-            .unwrap();
-            let pending = session
-                .transfer_to_supervisor_control_inner::<false>(
-                    cargo,
-                    credentials,
-                    Duration::from_secs(2),
-                )
-                .unwrap();
-            let service = receive_supervisor_handoff(&supervisor);
-            let service_expected = expected.clone();
-            let service = std::thread::spawn(move || {
-                serve_recovered_once(&service, &service_expected, substituted.carriage);
-            });
-            let readiness =
-                CompilerExecutionServiceReadyV1::new(777, pending.manifest(), &expected.policy)
-                    .unwrap();
-            assert_eq!(
-                rustix::net::send(
-                    &supervisor,
-                    readiness.canonical_bytes(),
-                    rustix::net::SendFlags::NOSIGNAL,
-                )
-                .unwrap(),
-                readiness.canonical_bytes().len()
-            );
-            drop(supervisor);
-            let ready = pending.await_readiness(Duration::from_secs(2)).unwrap();
-            assert!(matches!(
-                ready.receive_exact(&expected.subject, Duration::from_secs(2)),
-                Err(CompilerExecutionChildSessionErrorV1::ReceiptReturn(
-                    CompilerExecutionReceiptReturnErrorV1::ChildExitedWithoutReceipt
-                ))
-            ));
-            assert!(child.wait().unwrap().success());
-            service.join().unwrap();
-        }
     }
 
     #[test]
@@ -960,194 +808,24 @@ mod tests {
         let Ok(mode) = std::env::var(CHILD_MODE_ENV) else {
             return;
         };
+        assert_eq!(mode, "exact");
         let fixture = Fixture::new(0x20);
-        let timeout = if mode == "swapped" {
-            Duration::from_millis(100)
-        } else {
-            Duration::from_secs(2)
-        };
-        let result = crate::acquire_and_return_inherited_compiler_execution_v1(
-            fixture.subject.clone(),
-            timeout,
-        );
-        match mode.as_str() {
-            "exact" => {
-                result.unwrap();
-                assert!(matches!(
-                    crate::acquire_and_return_inherited_compiler_execution_v1(
-                        fixture.subject,
-                        Duration::from_secs(1),
-                    ),
-                    Err(CompilerExecutionChildRoundTripErrorV1::PolicyCapability(_))
-                ));
-            }
-            "missing" => assert!(matches!(
-                result,
-                Err(CompilerExecutionChildRoundTripErrorV1::PolicyCapability(_))
-            )),
-            "swapped" => assert!(matches!(
-                result,
-                Err(CompilerExecutionChildRoundTripErrorV1::Client(
-                    CompilerExecutionClientErrorV1::Timeout
-                ))
-            )),
-            "subject-mismatch" | "policy-mismatch" => assert!(matches!(
-                result,
-                Err(CompilerExecutionChildRoundTripErrorV1::Client(
-                    CompilerExecutionClientErrorV1::SubjectOrPolicyMismatch
-                ))
-            )),
-            _ => panic!("unexpected child-session test mode {mode}"),
-        }
-        assert_fixed_compiler_execution_descriptors_closed();
-    }
-
-    fn round_trip_child_command(mode: &str) -> Command {
-        let mut command = Command::new(std::env::current_exe().unwrap());
-        command
-            .arg("--exact")
-            .arg("child_session::tests::child_session_entry")
-            .arg("--nocapture")
-            .env(CHILD_MODE_ENV, mode);
-        command
-    }
-
-    fn assert_fixed_compiler_execution_descriptors_closed() {
-        for descriptor in [
-            COMPILER_EXECUTION_SERVICE_CHILD_FD_V1,
-            COMPILER_EXECUTION_RECEIPT_RETURN_CHILD_FD_V1,
-            COMPILER_EXECUTION_POLICY_CHILD_FD_V1,
-        ] {
-            // SAFETY: F_GETFD inspects only the fixed scalar descriptor.
-            assert_eq!(unsafe { libc::fcntl(descriptor, libc::F_GETFD) }, -1);
-            assert_eq!(
-                std::io::Error::last_os_error().raw_os_error(),
-                Some(libc::EBADF)
-            );
-        }
-    }
-
-    fn serve_recovered_once(
-        service: &OwnedFd,
-        expected: &Fixture,
-        carriage: CompilerExecutionReceiptCarriageV1,
-    ) {
-        let mut bytes = [0_u8; MAX_COMPILER_EXECUTION_SERVICE_REQUEST_BYTES_V1];
-        // SAFETY: bytes is a live output buffer and service remains owned for the complete call.
-        let received = unsafe {
-            libc::recv(
-                service.as_raw_fd(),
-                bytes.as_mut_ptr().cast(),
-                bytes.len(),
-                0,
+        let policy = CompilerExecutionPolicyCapabilityV1::from_inherited_child().unwrap();
+        assert_eq!(policy.policy(), &fixture.policy);
+        std::thread::sleep(Duration::from_millis(100));
+        crate::CompilerExecutionReceiptSenderV1::from_inherited_child()
+            .unwrap()
+            .send_exact(
+                &fixture.policy,
+                &fixture.subject,
+                fixture.carriage,
+                Duration::from_secs(2),
             )
-        };
-        assert!(received > 0);
-        let request =
-            CompilerExecutionServiceRequestV1::decode(&bytes[..received as usize]).unwrap();
-        assert_eq!(
-            request.kind(),
-            CompilerExecutionServiceRequestKindV1::Recover
-        );
-        assert_eq!(request.policy_identity(), expected.policy.identity());
-        assert_eq!(request.subject(), Some(&expected.subject));
-        let response =
-            CompilerExecutionServiceResponseV1::recovered(request.identity(), carriage).unwrap();
-        send_service_response(service, &response);
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(100));
     }
 
-    fn serve_fresh_once(service: &OwnedFd, fixture: &Fixture) -> usize {
-        let mut packets = 0;
-        loop {
-            let request = receive_service_request(service);
-            packets += 1;
-            let response = match request.kind() {
-                CompilerExecutionServiceRequestKindV1::Recover => {
-                    assert_eq!(request.subject(), Some(&fixture.subject));
-                    CompilerExecutionServiceResponseV1::receipt_absent(
-                        request.identity(),
-                        &fixture.policy,
-                        1,
-                        [0; 32],
-                    )
-                    .unwrap()
-                }
-                CompilerExecutionServiceRequestKindV1::Inspect => {
-                    CompilerExecutionServiceResponseV1::ready(
-                        request.identity(),
-                        &fixture.policy,
-                        1,
-                        [0; 32],
-                    )
-                    .unwrap()
-                }
-                CompilerExecutionServiceRequestKindV1::Prepare => {
-                    CompilerExecutionServiceResponseV1::prepared(
-                        request.identity(),
-                        &fixture.policy,
-                        fixture.challenge.clone(),
-                    )
-                    .unwrap()
-                }
-                CompilerExecutionServiceRequestKindV1::Issue => {
-                    assert_eq!(request.request(), Some(&fixture.request));
-                    CompilerExecutionServiceResponseV1::issued(
-                        request.identity(),
-                        &fixture.policy,
-                        fixture.publication.clone(),
-                    )
-                    .unwrap()
-                }
-                CompilerExecutionServiceRequestKindV1::Publish => {
-                    assert_eq!(request.request(), Some(&fixture.request));
-                    assert_eq!(request.publication(), Some(&fixture.publication));
-                    let response = CompilerExecutionServiceResponseV1::published(
-                        request.identity(),
-                        &fixture.policy,
-                        fixture.acknowledgment.clone(),
-                        CompilerExecutionServicePublishDispositionV1::Advanced,
-                    )
-                    .unwrap();
-                    send_service_response(service, &response);
-                    return packets;
-                }
-                CompilerExecutionServiceRequestKindV1::Cancel => {
-                    panic!("fresh acquisition cannot cancel")
-                }
-            };
-            send_service_response(service, &response);
-        }
-    }
-
-    fn receive_service_request(service: &OwnedFd) -> CompilerExecutionServiceRequestV1 {
-        let mut bytes = [0_u8; MAX_COMPILER_EXECUTION_SERVICE_REQUEST_BYTES_V1];
-        // SAFETY: bytes is a live output buffer and service remains owned for the complete call.
-        let received = unsafe {
-            libc::recv(
-                service.as_raw_fd(),
-                bytes.as_mut_ptr().cast(),
-                bytes.len(),
-                0,
-            )
-        };
-        assert!(received > 0);
-        CompilerExecutionServiceRequestV1::decode(&bytes[..received as usize]).unwrap()
-    }
-
-    fn send_service_response(service: &OwnedFd, response: &CompilerExecutionServiceResponseV1) {
-        // SAFETY: the response is an immutable canonical packet and service remains owned.
-        let sent = unsafe {
-            libc::send(
-                service.as_raw_fd(),
-                response.canonical_bytes().as_ptr().cast(),
-                response.canonical_bytes().len(),
-                libc::MSG_NOSIGNAL,
-            )
-        };
-        assert_eq!(sent, response.canonical_bytes().len() as isize);
-    }
-
-    fn receive_supervisor_handoff(supervisor: &OwnedFd) -> OwnedFd {
+    fn receive_supervisor_handoff(supervisor: &OwnedFd) {
         let mut handoff = [0_u8;
             fe2o3_compiler_execution_protocol::COMPILER_EXECUTION_SUPERVISOR_HANDOFF_BYTES_V1];
         let mut vectors = [IoSliceMut::new(&mut handoff)];
@@ -1169,10 +847,6 @@ mod tests {
             })
             .collect();
         assert_eq!(transferred.len(), 2);
-        let mut transferred = transferred.into_iter();
-        let service = transferred.next().unwrap();
-        drop(transferred.next().unwrap());
-        service
     }
 
     fn subject(seed: u8) -> InertCompilerExecutionSubjectV1 {

@@ -49,30 +49,6 @@ impl CompilerExecutionPolicyCapabilityV1 {
         Self::from_inherited_at(COMPILER_EXECUTION_POLICY_CHILD_FD_V1)
     }
 
-    /// Admits and consumes the policy inherited at the canonical rustc descriptor number.
-    ///
-    /// The returned capability retains one private close-on-exec descriptor. The fixed inherited
-    /// descriptor is closed exactly once so later compiler subprocesses cannot inherit a second
-    /// copy of the caller-pinned policy.
-    pub fn take_inherited_child() -> Result<Self, String> {
-        let admitted = Self::from_inherited_child();
-        // SAFETY: admission never owns the fixed descriptor itself. Consume every present fixed
-        // alias even when its flags, object type, seals, length, or canonical bytes are rejected.
-        let closed = unsafe { libc::close(COMPILER_EXECUTION_POLICY_CHILD_FD_V1) };
-        if closed != 0 {
-            let error = std::io::Error::last_os_error();
-            if admitted.is_ok() || error.raw_os_error() != Some(libc::EBADF) {
-                return Err(format!(
-                    "cannot consume inherited compiler-execution policy descriptor {}: {error}",
-                    COMPILER_EXECUTION_POLICY_CHILD_FD_V1,
-                ));
-            }
-        }
-        let admitted = admitted?;
-        admitted.revalidate()?;
-        Ok(admitted)
-    }
-
     /// Retains a private close-on-exec duplicate of one inherited policy descriptor.
     pub fn from_inherited_at(child_fd: RawFd) -> Result<Self, String> {
         let image = SealedCapabilityImage::from_inherited_at(child_fd, ROLE, LENGTH)?;
@@ -126,7 +102,7 @@ fn decode(bytes: &[u8]) -> Result<CompilerExecutionIssuerPolicyV1, String> {
 #[cfg(test)]
 mod tests {
     use std::fs::{self, File};
-    use std::os::fd::{AsRawFd, IntoRawFd};
+    use std::os::fd::AsRawFd;
     use std::os::unix::fs::PermissionsExt;
 
     use ed25519_dalek::SigningKey;
@@ -199,34 +175,6 @@ mod tests {
             rustix::io::fcntl_getfd(retained.image.as_file())
                 .unwrap()
                 .contains(rustix::io::FdFlags::CLOEXEC)
-        );
-    }
-
-    #[test]
-    fn canonical_inherited_policy_is_consumed_after_private_retention() {
-        let _guard = crate::FIXED_DESCRIPTOR_TEST_LOCK.lock().unwrap();
-        let expected = policy(7);
-        let capability = CompilerExecutionPolicyCapabilityV1::create(expected.clone()).unwrap();
-        let installed = rustix::io::fcntl_dupfd_cloexec(
-            capability.image.as_file(),
-            COMPILER_EXECUTION_POLICY_CHILD_FD_V1,
-        )
-        .unwrap();
-        assert_eq!(installed.as_raw_fd(), COMPILER_EXECUTION_POLICY_CHILD_FD_V1);
-        rustix::io::fcntl_setfd(&installed, rustix::io::FdFlags::empty()).unwrap();
-        let _ = installed.into_raw_fd();
-
-        let retained = CompilerExecutionPolicyCapabilityV1::take_inherited_child().unwrap();
-        assert_eq!(retained.policy(), &expected);
-        retained.revalidate().unwrap();
-        // SAFETY: F_GETFD inspects only the fixed scalar descriptor.
-        assert_eq!(
-            unsafe { libc::fcntl(COMPILER_EXECUTION_POLICY_CHILD_FD_V1, libc::F_GETFD) },
-            -1
-        );
-        assert_eq!(
-            std::io::Error::last_os_error().raw_os_error(),
-            Some(libc::EBADF)
         );
     }
 

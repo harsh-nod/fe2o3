@@ -3,9 +3,6 @@
 #[cfg(not(target_os = "linux"))]
 compile_error!("fe2o3-compiler-execution-client requires Linux SOCK_SEQPACKET semantics");
 
-#[cfg(test)]
-static FIXED_DESCRIPTOR_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
 use std::error::Error;
 use std::fmt;
 use std::io;
@@ -24,7 +21,6 @@ use fe2o3_compiler_execution_protocol::{
 };
 
 mod child_channel;
-mod child_round_trip;
 mod child_session;
 mod receipt_return;
 mod supervisor_handoff;
@@ -32,9 +28,6 @@ mod supervisor_handoff;
 pub use child_channel::{
     CompilerExecutionChildChannelErrorV1, CompilerExecutionServiceLaunchV1,
     PendingCompilerExecutionChildChannelV1,
-};
-pub use child_round_trip::{
-    CompilerExecutionChildRoundTripErrorV1, acquire_and_return_inherited_compiler_execution_v1,
 };
 pub use child_session::{
     CompilerExecutionChildSessionErrorV1, CompilerExecutionChildSessionV1,
@@ -54,57 +47,6 @@ pub use supervisor_handoff::{
 
 /// Fixed rustc descriptor reserved for the compiler-execution service peer.
 pub const COMPILER_EXECUTION_SERVICE_CHILD_FD_V1: i32 = 195;
-
-#[derive(Debug)]
-enum TakeInheritedDescriptorErrorV1 {
-    Missing,
-    UnexpectedCloseOnExec,
-    Descriptor(io::Error),
-}
-
-fn take_inherited_descriptor_v1(
-    descriptor: i32,
-) -> Result<OwnedFd, TakeInheritedDescriptorErrorV1> {
-    // SAFETY: F_GETFD inspects only the fixed scalar descriptor.
-    let flags = unsafe { libc::fcntl(descriptor, libc::F_GETFD) };
-    if flags < 0 {
-        let error = io::Error::last_os_error();
-        if error.raw_os_error() == Some(libc::EBADF) {
-            return Err(TakeInheritedDescriptorErrorV1::Missing);
-        }
-        // SAFETY: an inspection failure does not transfer ownership; still consume the canonical
-        // scalar slot if the kernel considers it present. Never retry or search another slot.
-        let _ = unsafe { libc::close(descriptor) };
-        return Err(TakeInheritedDescriptorErrorV1::Descriptor(error));
-    }
-    if flags & libc::FD_CLOEXEC != 0 {
-        // SAFETY: a present canonical descriptor is consumed even when its flags reject admission.
-        if unsafe { libc::close(descriptor) } != 0 {
-            return Err(TakeInheritedDescriptorErrorV1::Descriptor(
-                io::Error::last_os_error(),
-            ));
-        }
-        return Err(TakeInheritedDescriptorErrorV1::UnexpectedCloseOnExec);
-    }
-
-    // SAFETY: F_DUPFD_CLOEXEC returns one independent descriptor or reports failure.
-    let retained = unsafe { libc::fcntl(descriptor, libc::F_DUPFD_CLOEXEC, 3) };
-    if retained < 0 {
-        let error = io::Error::last_os_error();
-        // SAFETY: failure to retain does not release the present canonical descriptor.
-        let _ = unsafe { libc::close(descriptor) };
-        return Err(TakeInheritedDescriptorErrorV1::Descriptor(error));
-    }
-    // SAFETY: the canonical descriptor is consumed exactly once after successful retention.
-    if unsafe { libc::close(descriptor) } != 0 {
-        let error = io::Error::last_os_error();
-        // SAFETY: successful duplication returned one descriptor not yet wrapped by OwnedFd.
-        unsafe { libc::close(retained) };
-        return Err(TakeInheritedDescriptorErrorV1::Descriptor(error));
-    }
-    // SAFETY: successful F_DUPFD_CLOEXEC returned one newly owned descriptor.
-    Ok(unsafe { OwnedFd::from_raw_fd(retained) })
-}
 
 /// Outcome of a recovery-only compiler-receipt session.
 // Keep the complete bounded carriage inline so the authority boundary does not introduce a
@@ -161,44 +103,52 @@ impl CompilerExecutionClientV1 {
     pub fn admit_inherited_child(
         timeout: Duration,
     ) -> Result<Self, CompilerExecutionClientErrorV1> {
-        let deadline = client_deadline(timeout)?;
-        Self::admit_inherited_child_until(deadline)
+        // SAFETY: F_GETFD consumes only the fixed scalar descriptor.
+        let flags = unsafe { libc::fcntl(COMPILER_EXECUTION_SERVICE_CHILD_FD_V1, libc::F_GETFD) };
+        if flags < 0 {
+            let error = io::Error::last_os_error();
+            if error.raw_os_error() == Some(libc::EBADF) {
+                return Err(CompilerExecutionClientErrorV1::MissingInheritedPeer);
+            }
+            return Err(CompilerExecutionClientErrorV1::Descriptor(error));
+        }
+        if flags & libc::FD_CLOEXEC != 0 {
+            return Err(CompilerExecutionClientErrorV1::InheritedPeerCloseOnExec);
+        }
+        // SAFETY: F_DUPFD_CLOEXEC returns one independent descriptor or reports failure.
+        let retained = unsafe {
+            libc::fcntl(
+                COMPILER_EXECUTION_SERVICE_CHILD_FD_V1,
+                libc::F_DUPFD_CLOEXEC,
+                3,
+            )
+        };
+        if retained < 0 {
+            return Err(CompilerExecutionClientErrorV1::Descriptor(
+                io::Error::last_os_error(),
+            ));
+        }
+        // SAFETY: the fixed inherited descriptor is consumed exactly once by this operation.
+        if unsafe { libc::close(COMPILER_EXECUTION_SERVICE_CHILD_FD_V1) } != 0 {
+            let error = io::Error::last_os_error();
+            // SAFETY: successful duplication returned one owned descriptor not yet wrapped.
+            unsafe { libc::close(retained) };
+            return Err(CompilerExecutionClientErrorV1::Descriptor(error));
+        }
+        // SAFETY: successful F_DUPFD_CLOEXEC returned one newly owned descriptor.
+        Self::admit(unsafe { OwnedFd::from_raw_fd(retained) }, timeout)
     }
 
     /// Admits one owned connected peer and fixes the absolute deadline for its complete session.
     pub fn admit(peer: OwnedFd, timeout: Duration) -> Result<Self, CompilerExecutionClientErrorV1> {
-        let deadline = client_deadline(timeout)?;
-        Self::admit_until(peer, deadline)
-    }
-
-    pub(crate) fn admit_inherited_child_until(
-        deadline: Instant,
-    ) -> Result<Self, CompilerExecutionClientErrorV1> {
-        let peer = take_inherited_descriptor_v1(COMPILER_EXECUTION_SERVICE_CHILD_FD_V1).map_err(
-            |error| match error {
-                TakeInheritedDescriptorErrorV1::Missing => {
-                    CompilerExecutionClientErrorV1::MissingInheritedPeer
-                }
-                TakeInheritedDescriptorErrorV1::UnexpectedCloseOnExec => {
-                    CompilerExecutionClientErrorV1::InheritedPeerCloseOnExec
-                }
-                TakeInheritedDescriptorErrorV1::Descriptor(error) => {
-                    CompilerExecutionClientErrorV1::Descriptor(error)
-                }
-            },
-        )?;
-        Self::admit_until(peer, deadline)
-    }
-
-    fn admit_until(
-        peer: OwnedFd,
-        deadline: Instant,
-    ) -> Result<Self, CompilerExecutionClientErrorV1> {
-        require_client_deadline(deadline)?;
+        if timeout.is_zero() {
+            return Err(CompilerExecutionClientErrorV1::InvalidTimeout);
+        }
         set_close_on_exec(&peer)?;
-        require_client_deadline(deadline)?;
         validate_seqpacket_peer(&peer)?;
-        require_client_deadline(deadline)?;
+        let deadline = Instant::now()
+            .checked_add(timeout)
+            .ok_or(CompilerExecutionClientErrorV1::DeadlineOverflow)?;
         Ok(Self { peer, deadline })
     }
 
@@ -208,11 +158,10 @@ impl CompilerExecutionClientV1 {
         policy: &CompilerExecutionIssuerPolicyV1,
         subject: InertCompilerExecutionSubjectV1,
     ) -> Result<CompilerExecutionReceiptRecoveryV1, CompilerExecutionClientErrorV1> {
-        self.require_deadline()?;
         let recovery = self.recover_once(policy, subject)?;
-        let result = match recovery {
+        match recovery {
             RecoveryStepV1::Recovered(carriage) => {
-                CompilerExecutionReceiptRecoveryV1::Recovered(carriage)
+                Ok(CompilerExecutionReceiptRecoveryV1::Recovered(carriage))
             }
             RecoveryStepV1::Absent {
                 sequence,
@@ -225,14 +174,12 @@ impl CompilerExecutionClientV1 {
                 {
                     return Err(CompilerExecutionClientErrorV1::DurableStateChanged);
                 }
-                CompilerExecutionReceiptRecoveryV1::Absent {
+                Ok(CompilerExecutionReceiptRecoveryV1::Absent {
                     sequence,
                     rollback_anchor,
-                }
+                })
             }
-        };
-        self.require_deadline()?;
-        Ok(result)
+        }
     }
 
     /// Recovers or completes one exact compiler receipt and returns its full carriage.
@@ -244,18 +191,13 @@ impl CompilerExecutionClientV1 {
         policy: &CompilerExecutionIssuerPolicyV1,
         subject: InertCompilerExecutionSubjectV1,
     ) -> Result<CompilerExecutionReceiptCarriageV1, CompilerExecutionClientErrorV1> {
-        self.require_deadline()?;
         let absent_position = match self.recover_once(policy, subject.clone())? {
-            RecoveryStepV1::Recovered(carriage) => {
-                self.require_deadline()?;
-                return Ok(carriage);
-            }
+            RecoveryStepV1::Recovered(carriage) => return Ok(carriage),
             RecoveryStepV1::Absent {
                 sequence,
                 rollback_anchor,
             } => (sequence, rollback_anchor),
         };
-        self.require_deadline()?;
 
         let inspect = CompilerExecutionServiceRequestV1::inspect(policy);
         let inspected = self.exchange(policy, &inspect)?;
@@ -319,15 +261,13 @@ impl CompilerExecutionClientV1 {
             CompilerExecutionClientErrorV1::MissingPayload("publication acknowledgment"),
         )?;
         acknowledgment.matches_publication(&publication)?;
-        let carriage = CompilerExecutionReceiptCarriageV1::new(
+        CompilerExecutionReceiptCarriageV1::new(
             policy.clone(),
             request,
             publication,
             acknowledgment,
         )
-        .map_err(CompilerExecutionClientErrorV1::from)?;
-        self.require_deadline()?;
-        Ok(carriage)
+        .map_err(Into::into)
     }
 
     fn recover_once(
@@ -395,7 +335,6 @@ impl CompilerExecutionClientV1 {
         policy: &CompilerExecutionIssuerPolicyV1,
         request: &CompilerExecutionServiceRequestV1,
     ) -> Result<CompilerExecutionServiceResponseV1, CompilerExecutionClientErrorV1> {
-        self.require_deadline()?;
         send_packet(&self.peer, request.canonical_bytes(), self.deadline)?;
         let received = receive_packet(&self.peer, self.deadline)?;
         let response = CompilerExecutionServiceResponseV1::decode(received.as_slice())?;
@@ -405,29 +344,7 @@ impl CompilerExecutionClientV1 {
         if response.policy_identity() != policy.identity() {
             return Err(CompilerExecutionClientErrorV1::SubjectOrPolicyMismatch);
         }
-        self.require_deadline()?;
         Ok(response)
-    }
-
-    fn require_deadline(&self) -> Result<(), CompilerExecutionClientErrorV1> {
-        require_client_deadline(self.deadline)
-    }
-}
-
-fn client_deadline(timeout: Duration) -> Result<Instant, CompilerExecutionClientErrorV1> {
-    if timeout.is_zero() {
-        return Err(CompilerExecutionClientErrorV1::InvalidTimeout);
-    }
-    Instant::now()
-        .checked_add(timeout)
-        .ok_or(CompilerExecutionClientErrorV1::DeadlineOverflow)
-}
-
-fn require_client_deadline(deadline: Instant) -> Result<(), CompilerExecutionClientErrorV1> {
-    if deadline.saturating_duration_since(Instant::now()).is_zero() {
-        Err(CompilerExecutionClientErrorV1::Timeout)
-    } else {
-        Ok(())
     }
 }
 

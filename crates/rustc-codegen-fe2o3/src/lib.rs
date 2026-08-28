@@ -78,7 +78,6 @@ use std::any::Any;
 use std::env;
 use std::fmt;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 pub const TARGET_ENV: &str = "FE2O3_TARGET";
 pub const BACKEND_ENV: &str = "FE2O3_BACKEND";
@@ -88,7 +87,6 @@ pub const DUMP_LLVM_ENV: &str = "FE2O3_DUMP_LLVM";
 pub const OBSOLETE_CODEGEN_PIPELINE_ENV: &str = "FE2O3_CODEGEN_PIPELINE";
 pub const HSACO_DIR_ENV: &str = "FE2O3_HSACO_DIR";
 pub const BUILD_ATTEMPT_ENV: &str = artifact_transaction::BUILD_ATTEMPT_ENV_V1;
-const PROTECTED_COMPILER_EXECUTION_ROUND_TRIP_TIMEOUT_V1: Duration = Duration::from_secs(120);
 
 fn encode_hex(bytes: &[u8]) -> String {
     const DIGITS: &[u8; 16] = b"0123456789abcdef";
@@ -314,35 +312,27 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             "[rustc-codegen-fe2o3] protected rustc producer identity failed: {error}"
                         )),
                     };
-                    let transaction = match production_pipeline::ProductionCompilation::from_collected_device_closure(
-                        tcx,
-                        closure,
-                        producer.clone(),
-                        output_dir,
-                        build_attempt,
-                        invocation,
-                    ) {
-                        Ok(transaction) => transaction,
+                    let publication =
+                        production_pipeline::ProductionCompilation::from_collected_device_closure(
+                            tcx,
+                            closure,
+                            producer.clone(),
+                            output_dir,
+                            build_attempt,
+                            invocation,
+                        )
+                        .and_then(|transaction| transaction.publish_worker_handoff())
+                        .map(|subject| subject.outer_handoff().byte_len());
+                    match publication {
+                        Ok(publication_length) => {
+                            production_device_transaction_complete = true;
+                            eprintln!(
+                                "[rustc-codegen-fe2o3] production compilation published {} canonical byte(s) of inert exact gfx942:xnack- LLVM handoff into the preselected managed compiler-module transaction; link, artifact, load, and launch authority remain false",
+                                publication_length,
+                            );
+                        }
                         Err(error) => tcx.dcx().fatal(format!("[rustc-codegen-fe2o3] {error}")),
-                    };
-                    let subject = match transaction.publish_worker_handoff() {
-                        Ok(subject) => subject,
-                        Err(error) => tcx.dcx().fatal(format!("[rustc-codegen-fe2o3] {error}")),
-                    };
-                    let publication_length = subject.outer_handoff().byte_len();
-                    if let Err(error) = fe2o3_compiler_execution_client::acquire_and_return_inherited_compiler_execution_v1(
-                        subject,
-                        PROTECTED_COMPILER_EXECUTION_ROUND_TRIP_TIMEOUT_V1,
-                    ) {
-                        tcx.dcx().fatal(format!(
-                            "[rustc-codegen-fe2o3] exact compiler-execution acquisition and receipt return failed without fallback: {error}"
-                        ));
                     }
-                    production_device_transaction_complete = true;
-                    eprintln!(
-                        "[rustc-codegen-fe2o3] production compilation published {} canonical byte(s) of inert exact gfx942:xnack- LLVM handoff and returned its exact compiler-execution receipt carriage to Cargo; link, artifact, load, and launch authority remain false",
-                        publication_length,
-                    );
                 }
             }
             if kernel_count > 0 && !production_device_transaction_complete {
@@ -467,13 +457,6 @@ mod tests {
         assert!(!production.contains("build_attempt.unwrap_or_else"));
         assert!(production.contains("from_collected_device_closure("));
         assert!(production.contains("publish_worker_handoff()"));
-        let publication = production
-            .find("publish_worker_handoff()")
-            .expect("strict publication derives the compiler-execution subject");
-        let round_trip = production
-            .find("acquire_and_return_inherited_compiler_execution_v1(")
-            .expect("exact child compiler-execution round trip");
-        assert!(publication < round_trip);
         assert!(!production.contains("from_collected_device_closure_with_protected_invocation_v3"));
         assert!(!production.contains("publish_worker_handoff_v3"));
         assert!(!production.contains("None =>"));
