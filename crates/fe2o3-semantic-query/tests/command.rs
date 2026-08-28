@@ -1,6 +1,6 @@
 mod common;
 
-use std::io::Write;
+use std::io::{ErrorKind, Write};
 use std::process::{Command, Stdio};
 
 use common::encoded_trace;
@@ -13,7 +13,13 @@ fn run(arguments: &[&str], input: &[u8]) -> std::process::Output {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    child.stdin.take().unwrap().write_all(input).unwrap();
+    if let Err(error) = child.stdin.take().unwrap().write_all(input) {
+        assert_eq!(
+            error.kind(),
+            ErrorKind::BrokenPipe,
+            "unexpected stdin write failure: {error}"
+        );
+    }
     child.wait_with_output().unwrap()
 }
 
