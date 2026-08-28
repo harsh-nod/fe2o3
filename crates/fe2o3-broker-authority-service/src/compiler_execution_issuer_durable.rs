@@ -17,9 +17,10 @@ use fe2o3_runtime_protocol::{
     COMPILER_EXECUTION_ATTESTATION_REQUEST_BYTES_V1,
     COMPILER_EXECUTION_RECEIPT_PUBLICATION_ACK_BYTES_V1, CompilerExecutionAttestationChallengeV1,
     CompilerExecutionAttestationErrorV1, CompilerExecutionAttestationReceiptV1,
-    CompilerExecutionAttestationRequestV1, CompilerExecutionIssuerPolicyV1,
-    CompilerExecutionReceiptCarriageV1, CompilerExecutionReceiptPublicationAckV1,
-    CompilerExecutionReceiptPublicationErrorV1, CompilerExecutionReceiptPublicationV1,
+    CompilerExecutionAttestationRequestV1, CompilerExecutionCurrentRecordVerificationV1,
+    CompilerExecutionIssuerPolicyV1, CompilerExecutionReceiptCarriageV1,
+    CompilerExecutionReceiptPublicationAckV1, CompilerExecutionReceiptPublicationErrorV1,
+    CompilerExecutionReceiptPublicationV1,
 };
 use rustix::fs::{FlockOperation, Mode, OFlags, flock};
 use sha2::{Digest, Sha256};
@@ -1295,6 +1296,31 @@ impl ProtectedCompilerExecutionIssuerV1 {
         self.admission.validate_continuity()?;
         validate_worker_ledger_join(&self.ledger.record, &self.worker_ledger)?;
         Ok(Some(carriage))
+    }
+
+    /// Reacquires and verifies one complete expected carriage under protected service custody.
+    pub(super) fn verify_current_carriage_for_service(
+        &self,
+        expected_carriage: &CompilerExecutionReceiptCarriageV1,
+    ) -> Result<CompilerExecutionCurrentRecordVerificationV1, ProtectedCompilerExecutionIssuerErrorV1>
+    {
+        self.admission.validate_continuity()?;
+        validate_worker_ledger_join(&self.ledger.record, &self.worker_ledger)?;
+        let verification = self
+            .worker_ledger
+            .verify_current_carriage(expected_carriage)?;
+        if verification.policy_identity() != *self.admission.policy().identity().as_bytes()
+            || verification.subject_identity()
+                != *expected_carriage.request().subject().identity().sha256()
+            || verification.carriage_identity() != *expected_carriage.identity().as_bytes()
+        {
+            return Err(ProtectedCompilerExecutionIssuerErrorV1::WorkerLedgerJoin(
+                "current-record verification differs from protected policy or expected carriage",
+            ));
+        }
+        self.admission.validate_continuity()?;
+        validate_worker_ledger_join(&self.ledger.record, &self.worker_ledger)?;
+        Ok(verification)
     }
 
     pub(super) fn validate_service_continuity(
