@@ -4,7 +4,7 @@ use fe2o3_tiled_gemm_general_v1::{
     GENERAL_TILED_GEMM_PROTECTED_EXECUTION_SUPPORTED_V1,
     GENERAL_TILED_GEMM_QUALIFICATION_EXECUTION_SUPPORTED_V1,
     GENERAL_TILED_GEMM_SAFE_SOURCE_PRESENT_V1, GENERAL_TILED_GEMM_SOURCE_LOWERING_SUPPORTED_V1,
-    GENERAL_TILED_GEMM_SOURCE_TO_IR_SUPPORTED_V1,
+    GENERAL_TILED_GEMM_SOURCE_LOWERING_BLOCKER_V1, GENERAL_TILED_GEMM_SOURCE_TO_IR_SUPPORTED_V1,
     kernel::{__fe2o3_kernel_marker_tiled_gemm_general_v1, GENERAL_TILED_GEMM_WORKGROUP_V1},
 };
 use syn::visit::Visit;
@@ -142,7 +142,9 @@ fn source_forbids_unsafe_and_contains_matrix_tiling_and_epilogue() {
         "F32AccumulatorFragment::zero",
         "let phase_count = (k as usize + 15) / 16",
         "while phase_index < phase_count",
-        "let phase = phase_index * 16",
+        "let next_phase = (phase_index + 1) * 16",
+        "lhs = next_lhs",
+        "rhs = next_rhs",
         "alpha * values[0] + beta * *output",
     ] {
         assert!(KERNEL_SOURCE.contains(required), "missing `{required}`");
@@ -202,7 +204,7 @@ fn ordinary_host_execution_panics_before_output_mutation() {
 }
 
 #[test]
-fn status_records_end_to_end_qualification_and_protected_boundary() {
+fn status_records_current_fail_closed_boundaries() {
     assert_eq!(GENERAL_TILED_GEMM_WORKGROUP_V1, [64, 1, 1]);
     assert!(std::hint::black_box(
         GENERAL_TILED_GEMM_SAFE_SOURCE_PRESENT_V1
@@ -210,12 +212,16 @@ fn status_records_end_to_end_qualification_and_protected_boundary() {
     assert!(std::hint::black_box(
         GENERAL_TILED_GEMM_SOURCE_TO_IR_SUPPORTED_V1
     ));
-    assert!(std::hint::black_box(
+    assert!(!std::hint::black_box(
         GENERAL_TILED_GEMM_SOURCE_LOWERING_SUPPORTED_V1
     ));
-    assert!(std::hint::black_box(
+    assert!(!std::hint::black_box(
         GENERAL_TILED_GEMM_QUALIFICATION_EXECUTION_SUPPORTED_V1
     ));
+    assert_eq!(
+        GENERAL_TILED_GEMM_SOURCE_LOWERING_BLOCKER_V1,
+        "FE2O3-RACE-002: dynamic-launch checked-tiled ownership is not yet proved"
+    );
     assert!(!std::hint::black_box(
         GENERAL_TILED_GEMM_PROTECTED_EXECUTION_SUPPORTED_V1
     ));

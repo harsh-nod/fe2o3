@@ -1,4 +1,8 @@
-//! Safe Rust, memory-bounded attention with MFMA score tiles.
+//! Safe Rust, memory-bounded attention with double-buffered MFMA score fragments.
+//!
+//! The score loop pipelines lane-local register fragments. Shared workgroup
+//! ring storage is represented separately by the target-neutral
+//! `kernel.pipeline` PLIRON protocol and is not synthesized from this source yet.
 
 #![allow(missing_docs)]
 
@@ -180,12 +184,20 @@ pub fn flash_attention_general_v1(
     while key_base < keys_padded as usize {
         let key_column = key_base + lane_column;
         let mut scores = F32AccumulatorFragment::zero(&wave_lane);
-        let mut phase = 0_usize;
-        while phase < depth as usize {
-            let lhs = q_matrix.load_m16k16(&wave_lane, query_row_base, phase);
-            let rhs = k_matrix.load_k16n16(&wave_lane, phase, key_base);
+        let phase_count = (depth as usize + 15) / 16;
+        // The current score operands and the next prefetched epoch form a
+        // two-buffer software pipeline. Logical edges are positive BF16 zero.
+        let mut lhs = q_matrix.load_m16k16(&wave_lane, query_row_base, 0);
+        let mut rhs = k_matrix.load_k16n16(&wave_lane, 0, key_base);
+        let mut phase_index = 0_usize;
+        while phase_index < phase_count {
+            let next_phase = (phase_index + 1) * 16;
+            let next_lhs = q_matrix.load_m16k16(&wave_lane, query_row_base, next_phase);
+            let next_rhs = k_matrix.load_k16n16(&wave_lane, next_phase, key_base);
             scores = matrix.multiply_accumulate(lhs, rhs, scores);
-            phase += 16;
+            lhs = next_lhs;
+            rhs = next_rhs;
+            phase_index += 1;
         }
         let values = scores.into_values();
         let score0 =
@@ -367,5 +379,8 @@ mod tests {
         let mfma = ["matrix.multiply", "_accumulate"].concat();
         assert_eq!(source.matches(&key_loop).count(), 1);
         assert_eq!(source.matches(&mfma).count(), 1);
+        assert!(source.contains("let next_phase = (phase_index + 1) * 16"));
+        assert!(source.contains("lhs = next_lhs"));
+        assert!(source.contains("rhs = next_rhs"));
     }
 }
