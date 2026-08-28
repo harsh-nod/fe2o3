@@ -37,11 +37,11 @@ The V2 wire preserves the exact canonical V1 replay bytes without projection:
 | 12 | 8 | Complete V2 byte length |
 | 20 | 4 | Exact nested V1 replay byte length |
 | 24 | variable | Exact canonical V1 replay |
-| next | 2,058 | Complete compiler-execution receipt carriage |
+| next | 2,090 | Complete compiler-execution receipt carriage |
 | final | 32 | Domain-separated V2 checksum over every preceding byte |
 
-V2 adds exactly 2,114 bytes. Its maximum is therefore the complete 256 MiB V1
-limit plus 2,114 bytes; no valid V1 replay is truncated or excluded. The opaque
+V2 adds exactly 2,146 bytes. Its maximum is therefore the complete 256 MiB V1
+limit plus 2,146 bytes; no valid V1 replay is truncated or excluded. The opaque
 durable-readiness ceiling is widened by the same exact amount and a compile-time
 assertion prevents the two crate limits from drifting.
 

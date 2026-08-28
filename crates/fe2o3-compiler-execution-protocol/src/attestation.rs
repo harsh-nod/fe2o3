@@ -27,8 +27,14 @@ const RECEIPT_IDENTITY_DOMAIN: &[u8] = b"FE2O3/COMPILER-EXECUTION-RECEIPT/V1\0";
 const RECEIPT_SIGNATURE_DOMAIN: &[u8] = b"FE2O3/COMPILER-EXECUTION-RECEIPT-SIGNATURE/V1\0";
 const ROLLBACK_ANCHOR_DOMAIN: &[u8] = b"FE2O3/COMPILER-EXECUTION-ROLLBACK-ANCHOR/V1\0";
 
-const POLICY_PREIMAGE_BYTES: usize =
-    HEADER_BYTES + 8 + CONTENT_BINDING_BYTES + CONTENT_BINDING_BYTES + SHA256_BYTES + 2 + 6;
+const POLICY_PREIMAGE_BYTES: usize = HEADER_BYTES
+    + 8
+    + CONTENT_BINDING_BYTES
+    + CONTENT_BINDING_BYTES
+    + SHA256_BYTES
+    + SHA256_BYTES
+    + 2
+    + 6;
 /// Exact canonical byte length of one compiler-execution issuer policy V1.
 pub const COMPILER_EXECUTION_ISSUER_POLICY_BYTES_V1: usize = POLICY_PREIMAGE_BYTES + SHA256_BYTES;
 
@@ -163,6 +169,7 @@ pub struct CompilerExecutionIssuerPolicyV1 {
     executable: CompilerExecutionIssuerMeasurementV1,
     runtime: CompilerExecutionIssuerMeasurementV1,
     verifying_key: [u8; SHA256_BYTES],
+    external_anchor_verifying_key: [u8; SHA256_BYTES],
     identity: CompilerExecutionIssuerPolicyIdentityV1,
     canonical_bytes: [u8; COMPILER_EXECUTION_ISSUER_POLICY_BYTES_V1],
 }
@@ -174,6 +181,7 @@ impl CompilerExecutionIssuerPolicyV1 {
         executable: CompilerExecutionIssuerMeasurementV1,
         runtime: CompilerExecutionIssuerMeasurementV1,
         verifying_key: [u8; SHA256_BYTES],
+        external_anchor_verifying_key: [u8; SHA256_BYTES],
     ) -> Result<Self, CompilerExecutionAttestationErrorV1> {
         if generation == 0 {
             return Err(CompilerExecutionAttestationErrorV1::ZeroValue(
@@ -181,6 +189,10 @@ impl CompilerExecutionIssuerPolicyV1 {
             ));
         }
         validate_verifying_key(verifying_key)?;
+        validate_verifying_key(external_anchor_verifying_key)?;
+        if external_anchor_verifying_key == verifying_key {
+            return Err(CompilerExecutionAttestationErrorV1::NonDistinctVerifyingKeys);
+        }
 
         let mut bytes = [0_u8; COMPILER_EXECUTION_ISSUER_POLICY_BYTES_V1];
         let mut offset = encode_header(&mut bytes, POLICY_MAGIC);
@@ -188,6 +200,7 @@ impl CompilerExecutionIssuerPolicyV1 {
         encode_measurement(&mut bytes, &mut offset, executable);
         encode_measurement(&mut bytes, &mut offset, runtime);
         put(&mut bytes, &mut offset, &verifying_key);
+        put(&mut bytes, &mut offset, &external_anchor_verifying_key);
         put(
             &mut bytes,
             &mut offset,
@@ -206,6 +219,7 @@ impl CompilerExecutionIssuerPolicyV1 {
             executable,
             runtime,
             verifying_key,
+            external_anchor_verifying_key,
             identity,
             canonical_bytes: bytes,
         })
@@ -224,6 +238,7 @@ impl CompilerExecutionIssuerPolicyV1 {
         let executable = decode_measurement(&mut reader, "issuer executable")?;
         let runtime = decode_measurement(&mut reader, "issuer runtime")?;
         let verifying_key = reader.fixed::<32>()?;
+        let external_anchor_verifying_key = reader.fixed::<32>()?;
         let subject_version = reader.u16()?;
         if subject_version != INERT_COMPILER_EXECUTION_SUBJECT_VERSION_V1 {
             return Err(
@@ -235,7 +250,13 @@ impl CompilerExecutionIssuerPolicyV1 {
         }
         let declared_identity = reader.fixed::<32>()?;
         require_identity(declared_identity, "issuer policy")?;
-        let decoded = Self::new(generation, executable, runtime, verifying_key)?;
+        let decoded = Self::new(
+            generation,
+            executable,
+            runtime,
+            verifying_key,
+            external_anchor_verifying_key,
+        )?;
         if decoded.identity.0 != declared_identity || decoded.canonical_bytes.as_slice() != bytes {
             return Err(CompilerExecutionAttestationErrorV1::IdentityMismatch(
                 "issuer policy",
@@ -264,6 +285,11 @@ impl CompilerExecutionIssuerPolicyV1 {
         &self.verifying_key
     }
 
+    /// Returns the policy-pinned external monotonic-anchor verifying key.
+    pub const fn external_anchor_verifying_key(&self) -> &[u8; SHA256_BYTES] {
+        &self.external_anchor_verifying_key
+    }
+
     /// Returns the complete canonical policy identity.
     pub const fn identity(&self) -> CompilerExecutionIssuerPolicyIdentityV1 {
         self.identity
@@ -283,6 +309,10 @@ impl fmt::Debug for CompilerExecutionIssuerPolicyV1 {
             .field("executable", &self.executable)
             .field("runtime", &self.runtime)
             .field("verifying_key", &self.verifying_key)
+            .field(
+                "external_anchor_verifying_key",
+                &self.external_anchor_verifying_key,
+            )
             .field("identity", &self.identity)
             .finish_non_exhaustive()
     }
@@ -1220,6 +1250,7 @@ pub enum CompilerExecutionAttestationErrorV1 {
     SubjectLengthMismatch,
     InvalidVerifyingKey,
     WeakVerifyingKey,
+    NonDistinctVerifyingKeys,
     InvalidRollbackPosition,
     Subject(fe2o3_artifact_transaction::CompilerExecutionSubjectErrorV1),
     SubjectMismatch,
@@ -1275,6 +1306,9 @@ impl fmt::Display for CompilerExecutionAttestationErrorV1 {
             }
             Self::InvalidVerifyingKey => formatter.write_str("Ed25519 verifying key is invalid"),
             Self::WeakVerifyingKey => formatter.write_str("Ed25519 verifying key is weak"),
+            Self::NonDistinctVerifyingKeys => {
+                formatter.write_str("issuer and external-anchor verifying keys must be distinct")
+            }
             Self::InvalidRollbackPosition => formatter
                 .write_str("attestation sequence and prior rollback anchor are inconsistent"),
             Self::Subject(error) => write!(formatter, "compiler-execution subject failed: {error}"),

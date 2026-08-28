@@ -9,11 +9,13 @@ exact signed receipt and returns the complete inert receipt carriage.
 The terminal `verify_current_only` operation sends one complete expected
 carriage and a fresh internally generated challenge to the protected service.
 It accepts only a canonical issuer-signed `VerifiedCurrent` response under the
-caller-pinned policy key, bound to that challenge and the exact request,
-policy, subject, carriage, issuer journal, Worker record, sequence, and
-rollback anchors. The returned move-only evidence authenticates the pinned-key
-response, but remains non-authoritative until protected key custody, external
-rollback, and compiler-refinement evidence are joined.
+caller-pinned issuer key, bound to that challenge and the exact request, policy,
+subject, carriage, issuer journal, Worker record, sequence, and rollback
+anchors. The same policy pins a distinct external-anchor key; this client does
+not yet carry or verify that service's signed transition receipt. The returned
+move-only evidence authenticates the issuer-key response, but remains
+non-authoritative until protected key custody, externally anchored rollback,
+and compiler-refinement evidence are joined.
 
 The client uses one absolute monotonic deadline, fixed stack packet storage,
 strict request/response identity correlation, pinned-policy validation, and no

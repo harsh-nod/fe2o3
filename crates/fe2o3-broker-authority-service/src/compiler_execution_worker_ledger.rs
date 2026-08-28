@@ -1203,6 +1203,9 @@ mod tests {
             CompilerExecutionIssuerMeasurementV1::new([0x61; SHA256_BYTES], 12_345).unwrap(),
             CompilerExecutionIssuerMeasurementV1::new([0x62; SHA256_BYTES], 67_890).unwrap(),
             verifying_key.to_bytes(),
+            SigningKey::from_bytes(&[0xa1; 32])
+                .verifying_key()
+                .to_bytes(),
         )
         .unwrap()
     }

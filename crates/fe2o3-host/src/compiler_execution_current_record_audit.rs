@@ -233,6 +233,9 @@ mod tests {
                 CompilerExecutionIssuerMeasurementV1::new([0x61; 32], 123).unwrap(),
                 CompilerExecutionIssuerMeasurementV1::new([0x62; 32], 456).unwrap(),
                 signing_key.verifying_key().to_bytes(),
+                SigningKey::from_bytes(&[0x52; 32])
+                    .verifying_key()
+                    .to_bytes(),
             )
             .unwrap();
             let subject = subject(subject_seed);

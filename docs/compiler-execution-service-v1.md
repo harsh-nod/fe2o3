@@ -147,7 +147,7 @@ expected sequence and prior rollback anchor. Issue and Publish derive that
 position from their complete nested attestation request. Recover carries the
 complete canonical compiler subject and names no caller-asserted rollback
 position. VerifyCurrent names the expected sequence and current rollback anchor,
-carries the complete 2,058-byte carriage, and adds a nonzero 32-byte caller
+carries the complete 2,090-byte carriage, and adds a nonzero 32-byte caller
 challenge. Every response binds
 the exact request identity, policy identity, resulting position, payload, and
 its own terminal identity.
@@ -166,16 +166,16 @@ diagnostic protocol and keeps crash recovery authoritative.
 | Issue request | 1,074 |
 | Publish request | 1,658 |
 | Recover request | 818 |
-| VerifyCurrent request | 2,218 |
+| VerifyCurrent request | 2,250 |
 | Ready, Cancelled, or ReceiptAbsent response | 160 |
 | Prepared response | 360 |
 | Issued response | 744 |
 | Published response | 456 |
-| Recovered response | 2,218 |
+| Recovered response | 2,250 |
 | VerifiedCurrent response | 696 |
 
 The implementation uses fixed stack storage sized to the maximum request and
-response. The complete publication ACK or recovered 2,058-byte carriage remains
+response. The complete publication ACK or recovered 2,090-byte carriage remains
 inline in the terminal result; the authority boundary does not add a fallible
 heap allocation path.
 

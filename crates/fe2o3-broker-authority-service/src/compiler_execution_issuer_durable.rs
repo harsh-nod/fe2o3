@@ -1837,6 +1837,9 @@ mod tests {
                 measurement,
                 measurement,
                 signing_key.verifying_key().to_bytes(),
+                SigningKey::from_bytes(&[0x52; 32])
+                    .verifying_key()
+                    .to_bytes(),
             )
             .unwrap();
             let directory = TempDir::new().unwrap();
@@ -2104,7 +2107,7 @@ mod tests {
         extended.push(0);
         assert!(IssuerRecordV2::decode(&extended, &fixture.policy).is_err());
 
-        let wrong_key = SigningKey::from_bytes(&[0x52; 32]);
+        let wrong_key = SigningKey::from_bytes(&[0x53; 32]);
         let measurement =
             fe2o3_runtime_protocol::CompilerExecutionIssuerMeasurementV1::new([0x61; 32], 12_345)
                 .unwrap();
@@ -2113,6 +2116,7 @@ mod tests {
             measurement,
             measurement,
             wrong_key.verifying_key().to_bytes(),
+            *fixture.policy.external_anchor_verifying_key(),
         )
         .unwrap();
         assert!(IssuerRecordV2::decode(&record.canonical, &wrong_policy).is_err());

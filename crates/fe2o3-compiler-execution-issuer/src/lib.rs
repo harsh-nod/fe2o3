@@ -367,6 +367,7 @@ mod tests {
             CompilerExecutionIssuerMeasurementV1::new([8; 32], 123).unwrap(),
             CompilerExecutionIssuerMeasurementV1::new([9; 32], 456).unwrap(),
             signing_key.verifying_key().to_bytes(),
+            SigningKey::from_bytes(&[10; 32]).verifying_key().to_bytes(),
         )
         .unwrap();
         let launch = CompilerExecutionServiceLaunchManifestV1::new(

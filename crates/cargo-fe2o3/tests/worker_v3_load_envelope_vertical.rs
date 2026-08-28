@@ -78,6 +78,9 @@ fn carriage_for_subject(
         CompilerExecutionIssuerMeasurementV1::new([seed + 1; 32], 12_345).unwrap(),
         CompilerExecutionIssuerMeasurementV1::new([seed + 2; 32], 67_890).unwrap(),
         signing_key.verifying_key().to_bytes(),
+        SigningKey::from_bytes(&[seed.wrapping_add(1); 32])
+            .verifying_key()
+            .to_bytes(),
     )
     .unwrap();
     let challenge =

@@ -263,6 +263,7 @@ mod tests {
             CompilerExecutionIssuerMeasurementV1::new([1; 32], 123).unwrap(),
             CompilerExecutionIssuerMeasurementV1::new([2; 32], 456).unwrap(),
             signing_key.verifying_key().to_bytes(),
+            SigningKey::from_bytes(&[8; 32]).verifying_key().to_bytes(),
         )
         .unwrap();
         CompilerExecutionServiceLaunchManifestV1::new(

@@ -739,6 +739,9 @@ mod tests {
                 CompilerExecutionIssuerMeasurementV1::new([0x61; 32], 123).unwrap(),
                 CompilerExecutionIssuerMeasurementV1::new([0x62; 32], 456).unwrap(),
                 key.verifying_key().to_bytes(),
+                SigningKey::from_bytes(&[0x52; 32])
+                    .verifying_key()
+                    .to_bytes(),
             )
             .unwrap();
             let challenge = CompilerExecutionAttestationChallengeV1::new(
@@ -963,6 +966,9 @@ mod tests {
             CompilerExecutionIssuerMeasurementV1::new([0x61; 32], 123).unwrap(),
             CompilerExecutionIssuerMeasurementV1::new([0x62; 32], 456).unwrap(),
             key.verifying_key().to_bytes(),
+            SigningKey::from_bytes(&[0x52; 32])
+                .verifying_key()
+                .to_bytes(),
         )
         .unwrap()
     }
@@ -1114,6 +1120,7 @@ mod tests {
             CompilerExecutionIssuerMeasurementV1::new([0x72; 32], 123).unwrap(),
             CompilerExecutionIssuerMeasurementV1::new([0x73; 32], 456).unwrap(),
             wrong_key.verifying_key().to_bytes(),
+            *issuer.policy.external_anchor_verifying_key(),
         )
         .unwrap();
         let request = CompilerExecutionServiceRequestV1::inspect(&wrong_policy);

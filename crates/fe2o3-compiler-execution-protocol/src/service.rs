@@ -1633,6 +1633,9 @@ mod tests {
                 CompilerExecutionIssuerMeasurementV1::new([0x31; 32], 123).unwrap(),
                 CompilerExecutionIssuerMeasurementV1::new([0x32; 32], 456).unwrap(),
                 key.verifying_key().to_bytes(),
+                SigningKey::from_bytes(&[0x42; 32])
+                    .verifying_key()
+                    .to_bytes(),
             )
             .unwrap();
             let challenge = CompilerExecutionAttestationChallengeV1::new(
@@ -1671,13 +1674,13 @@ mod tests {
         assert_eq!(COMPILER_EXECUTION_SERVICE_RECOVER_REQUEST_BYTES_V1, 818);
         assert_eq!(
             COMPILER_EXECUTION_SERVICE_VERIFY_CURRENT_REQUEST_BYTES_V1,
-            2218
+            2250
         );
         assert_eq!(COMPILER_EXECUTION_SERVICE_CONTROL_RESPONSE_BYTES_V1, 160);
         assert_eq!(COMPILER_EXECUTION_SERVICE_PREPARED_RESPONSE_BYTES_V1, 360);
         assert_eq!(COMPILER_EXECUTION_SERVICE_ISSUED_RESPONSE_BYTES_V1, 744);
         assert_eq!(COMPILER_EXECUTION_SERVICE_PUBLISHED_RESPONSE_BYTES_V1, 456);
-        assert_eq!(COMPILER_EXECUTION_SERVICE_RECOVERED_RESPONSE_BYTES_V1, 2218);
+        assert_eq!(COMPILER_EXECUTION_SERVICE_RECOVERED_RESPONSE_BYTES_V1, 2250);
         assert_eq!(
             COMPILER_EXECUTION_SERVICE_VERIFIED_CURRENT_RESPONSE_BYTES_V1,
             696
@@ -1967,6 +1970,9 @@ mod tests {
             CompilerExecutionIssuerMeasurementV1::new([0x31; 32], 123).unwrap(),
             CompilerExecutionIssuerMeasurementV1::new([0x32; 32], 456).unwrap(),
             wrong_key.verifying_key().to_bytes(),
+            SigningKey::from_bytes(&[0x43; 32])
+                .verifying_key()
+                .to_bytes(),
         )
         .unwrap();
         assert!(

@@ -719,6 +719,9 @@ mod tests {
             CompilerExecutionIssuerMeasurementV1::new([1; 32], 1).unwrap(),
             sealed_static_issuer_runtime_measurement_v1(),
             key.verifying_key().to_bytes(),
+            SigningKey::from_bytes(&[0x71; 32])
+                .verifying_key()
+                .to_bytes(),
         )
         .unwrap()
     }
@@ -758,6 +761,7 @@ mod tests {
             SigningKey::from_bytes(&[0x7f; 32])
                 .verifying_key()
                 .to_bytes(),
+            *policy.external_anchor_verifying_key(),
         )
         .unwrap();
         let error =

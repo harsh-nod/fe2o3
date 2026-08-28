@@ -388,6 +388,9 @@ mod tests {
             SigningKey::from_bytes(&[seed; 32])
                 .verifying_key()
                 .to_bytes(),
+            SigningKey::from_bytes(&[seed.wrapping_add(1); 32])
+                .verifying_key()
+                .to_bytes(),
         )
         .unwrap()
     }

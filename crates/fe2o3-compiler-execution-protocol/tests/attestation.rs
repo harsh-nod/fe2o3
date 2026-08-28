@@ -43,6 +43,9 @@ impl Fixture {
             CompilerExecutionIssuerMeasurementV1::new([0x61; 32], 12_345).unwrap(),
             CompilerExecutionIssuerMeasurementV1::new([0x62; 32], 67_890).unwrap(),
             signing_key.verifying_key().to_bytes(),
+            SigningKey::from_bytes(&[0x52; 32])
+                .verifying_key()
+                .to_bytes(),
         )
         .unwrap();
         let subject = subject(0x20);
@@ -66,7 +69,7 @@ impl Fixture {
 
 #[test]
 fn canonical_round_trip_authenticates_only_the_pinned_key() {
-    assert_eq!(COMPILER_EXECUTION_ISSUER_POLICY_BYTES_V1, 184);
+    assert_eq!(COMPILER_EXECUTION_ISSUER_POLICY_BYTES_V1, 216);
     assert_eq!(COMPILER_EXECUTION_ATTESTATION_CHALLENGE_BYTES_V1, 200);
     assert_eq!(COMPILER_EXECUTION_ATTESTATION_REQUEST_BYTES_V1, 946);
     assert_eq!(COMPILER_EXECUTION_ATTESTATION_RECEIPT_BYTES_V1, 400);
@@ -82,6 +85,12 @@ fn canonical_round_trip_authenticates_only_the_pinned_key() {
         CompilerExecutionAttestationReceiptV1::decode(fixture.receipt.canonical_bytes()).unwrap();
 
     assert_eq!(policy, fixture.policy);
+    assert_eq!(
+        policy.external_anchor_verifying_key(),
+        &SigningKey::from_bytes(&[0x52; 32])
+            .verifying_key()
+            .to_bytes()
+    );
     assert_eq!(challenge, fixture.challenge);
     assert_eq!(request, fixture.request);
     assert_eq!(receipt, fixture.receipt);
@@ -191,11 +200,31 @@ fn policy_subject_challenge_and_key_substitution_fail_closed() {
         fixture.policy.executable(),
         fixture.policy.runtime(),
         fixture.signing_key.verifying_key().to_bytes(),
+        *fixture.policy.external_anchor_verifying_key(),
     )
     .unwrap();
     assert!(matches!(
         fixture.receipt.clone().verify(
             &other_policy,
+            &fixture.request,
+            fixture.receipt.prior_rollback_anchor(),
+        ),
+        Err(CompilerExecutionAttestationErrorV1::PolicyMismatch)
+    ));
+    let other_anchor_policy = CompilerExecutionIssuerPolicyV1::new(
+        fixture.policy.generation(),
+        fixture.policy.executable(),
+        fixture.policy.runtime(),
+        fixture.signing_key.verifying_key().to_bytes(),
+        SigningKey::from_bytes(&[0x53; 32])
+            .verifying_key()
+            .to_bytes(),
+    )
+    .unwrap();
+    assert_ne!(other_anchor_policy.identity(), fixture.policy.identity());
+    assert!(matches!(
+        fixture.receipt.clone().verify(
+            &other_anchor_policy,
             &fixture.request,
             fixture.receipt.prior_rollback_anchor(),
         ),
@@ -376,6 +405,7 @@ fn constructors_reject_zero_and_weak_security_inputs() {
             fixture.policy.executable(),
             fixture.policy.runtime(),
             fixture.signing_key.verifying_key().to_bytes(),
+            *fixture.policy.external_anchor_verifying_key(),
         ),
         Err(CompilerExecutionAttestationErrorV1::ZeroValue(
             "issuer policy generation"
@@ -389,8 +419,29 @@ fn constructors_reject_zero_and_weak_security_inputs() {
             fixture.policy.executable(),
             fixture.policy.runtime(),
             weak_key,
+            *fixture.policy.external_anchor_verifying_key(),
         ),
         Err(CompilerExecutionAttestationErrorV1::WeakVerifyingKey)
+    ));
+    assert!(matches!(
+        CompilerExecutionIssuerPolicyV1::new(
+            1,
+            fixture.policy.executable(),
+            fixture.policy.runtime(),
+            fixture.signing_key.verifying_key().to_bytes(),
+            weak_key,
+        ),
+        Err(CompilerExecutionAttestationErrorV1::WeakVerifyingKey)
+    ));
+    assert!(matches!(
+        CompilerExecutionIssuerPolicyV1::new(
+            1,
+            fixture.policy.executable(),
+            fixture.policy.runtime(),
+            fixture.signing_key.verifying_key().to_bytes(),
+            fixture.signing_key.verifying_key().to_bytes(),
+        ),
+        Err(CompilerExecutionAttestationErrorV1::NonDistinctVerifyingKeys)
     ));
     assert!(matches!(
         CompilerExecutionAttestationChallengeV1::new(

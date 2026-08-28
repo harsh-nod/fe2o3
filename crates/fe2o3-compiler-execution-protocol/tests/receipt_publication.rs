@@ -35,6 +35,9 @@ impl Fixture {
             CompilerExecutionIssuerMeasurementV1::new([seed + 1; 32], 12_345).unwrap(),
             CompilerExecutionIssuerMeasurementV1::new([seed + 2; 32], 67_890).unwrap(),
             signing_key.verifying_key().to_bytes(),
+            SigningKey::from_bytes(&[seed.wrapping_add(1); 32])
+                .verifying_key()
+                .to_bytes(),
         )
         .unwrap();
         let subject = subject(seed + 3);
@@ -201,7 +204,7 @@ fn current_record_verification(
 
 #[test]
 fn complete_carriage_round_trips_without_granting_authority() {
-    assert_eq!(COMPILER_EXECUTION_RECEIPT_CARRIAGE_BYTES_V1, 2058);
+    assert_eq!(COMPILER_EXECUTION_RECEIPT_CARRIAGE_BYTES_V1, 2090);
     let fixture = Fixture::new(0x51);
     let carriage = fixture.carriage();
     let decoded = CompilerExecutionReceiptCarriageV1::decode(carriage.canonical_bytes()).unwrap();

@@ -238,6 +238,7 @@ fn policy(issuer: CompilerExecutionIssuerMeasurementV1) -> CompilerExecutionPoli
             issuer,
             sealed_static_issuer_runtime_measurement_v1(),
             key.verifying_key().to_bytes(),
+            SigningKey::from_bytes(&[9; 32]).verifying_key().to_bytes(),
         )
         .unwrap(),
     )
@@ -504,6 +505,7 @@ fn invalid_measurements_and_runtime_policy_reject() {
             fixture.issuer_measurement(),
             wrong_runtime,
             key.verifying_key().to_bytes(),
+            SigningKey::from_bytes(&[9; 32]).verifying_key().to_bytes(),
         )
         .unwrap(),
     )
@@ -701,6 +703,7 @@ fn key_from_another_policy_cannot_bind_to_the_program() {
         fixture.issuer_measurement(),
         sealed_static_issuer_runtime_measurement_v1(),
         other_key.verifying_key().to_bytes(),
+        SigningKey::from_bytes(&[9; 32]).verifying_key().to_bytes(),
     )
     .unwrap();
     let mut other_seed = [8; 32];
@@ -1056,6 +1059,7 @@ fn malformed_wrong_policy_and_extra_descriptors_fail_closed() {
         fixture.issuer_measurement(),
         sealed_static_issuer_runtime_measurement_v1(),
         wrong_key.verifying_key().to_bytes(),
+        SigningKey::from_bytes(&[9; 32]).verifying_key().to_bytes(),
     )
     .unwrap();
     let wrong_manifest =

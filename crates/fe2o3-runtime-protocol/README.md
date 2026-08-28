@@ -12,7 +12,8 @@ compiler pipelines. Legacy Worker V2 codecs remain outside this crate.
 The crate re-exports four fixed, allocation-free records from the lower-layer
 `fe2o3-compiler-execution-protocol` crate for use by its Worker V3 envelopes:
 
-- a 184-byte caller-pinned issuer policy;
+- a 216-byte caller-pinned issuer policy with distinct issuer and
+  external-anchor verifying keys;
 - a 200-byte issuer challenge bound to one canonical compiler-execution
   subject and rollback position;
 - a 946-byte request carrying that challenge and the complete 690-byte
@@ -42,7 +43,7 @@ prove that its named Worker record is durable. Only independent protected-ledger
 reacquisition may construct the move-only result that allows the issuer to
 discard an issued receipt.
 
-The 2,058-byte carriage record preserves the complete policy, request, sidecar,
+The 2,090-byte carriage record preserves the complete policy, request, sidecar,
 and ACK without projection. Construction and decoding verify every nested
 record, the signature against the carried policy and request, and the ACK
 relationship. The carried policy is still inert input: a production verifier
@@ -56,11 +57,11 @@ connected Unix `SOCK_SEQPACKET` boundary. Requests select inspect, prepare,
 issue, publish, cancel, or exact-subject recovery and bind the caller-pinned
 policy plus the operation's complete state. Responses carry ready state, the complete challenge,
 the complete receipt publication, the complete Worker-ledger ACK, a nonterminal
-receipt-absent result, or the exact 2,058-byte receipt carriage reacquired from
+receipt-absent result, or the exact 2,090-byte receipt carriage reacquired from
 the current Worker record. Receipt absence is distinct from a mismatched or
 damaged current record. Every
 packet has an exact operation-specific length and a terminal domain-separated
-identity. The maximum request is 1,658 bytes and the maximum response is 2,218
+identity. The maximum request and maximum response are both 2,250
 bytes.
 
 The codec is allocation-free and authority-free. It does not inspect peer
@@ -71,14 +72,14 @@ service implementation.
 ## Receipt-bearing Worker V3 load envelope V2
 
 The receipt-bearing envelope nests the exact canonical V1 replay and the complete
-2,058-byte compiler-execution carriage under a distinct `F3LDENV2` header and
+2,090-byte compiler-execution carriage under a distinct `F3LDENV2` header and
 checksum. It reconstructs the complete compiler subject from the replay's attempt,
 slot, transaction identity, and outer handoff, then requires exact equality with
 the signed request subject. Strict decode re-encodes and compares the nested V1
-bytes. The full 256 MiB V1 maximum remains representable; V2 adds exactly 2,114
+bytes. The full 256 MiB V1 maximum remains representable; V2 adds exactly 2,146
 bytes and has explicit wire and transient-allocation budgets.
 
 Live construction, opaque durable persistence, and strict V2 restart recovery are
 implemented. They remain authority-free: protected policy comparison, rollback
-currentness, and Worker verifier authority are still required. Cargo and host have
-not yet switched their production decoder from top-level V1 to V2.
+currentness, and Worker verifier authority are still required. Cargo and host
+require the top-level V2 envelope in the sole production path.

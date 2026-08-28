@@ -140,10 +140,12 @@ canonical Worker record exists; a different or damaged current record fails
 closed. VerifyCurrent independently reacquires that record under the protected
 policy, byte-compares the complete expected carriage, and returns canonical
 policy/Worker-ledger verification evidence in one terminal exchange. Its
-2,218-byte request includes a fresh client challenge; its 696-byte response
+2,250-byte request includes a fresh client challenge; its 696-byte response
 contains a 536-byte Ed25519 attestation over that challenge and the complete
 352-byte record. The client requires the signing key to equal the pinned policy
-key and every record coordinate to equal the expected carriage. The result
+key and every record coordinate to equal the expected carriage. That same
+policy now pins a distinct external-anchor Ed25519 key; weak or equal issuer and
+anchor keys fail closed. The result
 remains authority-free until protected key custody, external rollback, and
 refinement evidence are joined. The issuer's direct transition
 methods are private. One shared bounded

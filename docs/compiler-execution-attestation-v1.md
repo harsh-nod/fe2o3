@@ -7,9 +7,10 @@ protected-issuer milestone in
 [issue #218](https://github.com/harsh-nod/fe2o3/issues/218). The authoritative
 codec is in `fe2o3-runtime-protocol`.
 
-The protocol authenticates an Ed25519 signing key selected by a caller-pinned
-policy. The protected issuer now adds a hardened signer, fresh durable state,
-and one exact supervised compiler occurrence. The
+The protocol authenticates an issuer Ed25519 signing key and independently pins
+an external-anchor Ed25519 key selected by a caller-pinned policy. The protected
+issuer now adds a hardened signer, fresh durable state, and one exact supervised
+compiler occurrence. The
 [receipt publication contract](compiler-execution-receipt-publication-v1.md)
 also fixes authority-free sidecar and ACK bytes. The descriptor-relative Worker
 ledger now implements durable publication and rollback verification. Bounded
@@ -29,9 +30,10 @@ perform the independent protected checks required by its unsafe contract.
 
 ### Issuer policy
 
-The 184-byte policy pins one exact issuer executable, its complete runtime
-closure, one Ed25519 verifying key, one policy generation, and the only
-supported compiler-execution subject version.
+The 216-byte policy pins one exact issuer executable, its complete runtime
+closure, distinct issuer and external-anchor Ed25519 verifying keys, one policy
+generation, and the only supported compiler-execution subject version. Equal
+keys fail construction and decode.
 
 | Offset | Bytes | Field |
 |---:|---:|---|
@@ -39,10 +41,11 @@ supported compiler-execution subject version.
 | 24 | 8 | Nonzero policy generation |
 | 32 | 40 | Issuer executable SHA-256 and byte length |
 | 72 | 40 | Issuer runtime-closure SHA-256 and byte length |
-| 112 | 32 | Non-weak Ed25519 verifying key |
-| 144 | 2 | Supported subject version `1` |
-| 146 | 6 | Zero reserved bytes |
-| 152 | 32 | Domain-separated policy identity |
+| 112 | 32 | Non-weak issuer Ed25519 verifying key |
+| 144 | 32 | Non-weak distinct external-anchor Ed25519 verifying key |
+| 176 | 2 | Supported subject version `1` |
+| 178 | 6 | Zero reserved bytes |
+| 184 | 32 | Domain-separated policy identity |
 
 ### Challenge
 

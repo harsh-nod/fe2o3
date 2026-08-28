@@ -754,6 +754,9 @@ mod tests {
             CompilerExecutionIssuerMeasurementV1::new([1; 32], 1).unwrap(),
             CompilerExecutionIssuerMeasurementV1::new([2; 32], 1).unwrap(),
             [3; 32],
+            ed25519_dalek::SigningKey::from_bytes(&[4; 32])
+                .verifying_key()
+                .to_bytes(),
         )
         .unwrap()
     }

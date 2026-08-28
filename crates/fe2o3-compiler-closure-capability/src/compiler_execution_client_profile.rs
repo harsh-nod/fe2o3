@@ -303,6 +303,9 @@ mod tests {
             CompilerExecutionIssuerMeasurementV1::new([seed + 1; 32], 123).unwrap(),
             CompilerExecutionIssuerMeasurementV1::new([seed + 2; 32], 456).unwrap(),
             key.verifying_key().to_bytes(),
+            SigningKey::from_bytes(&[seed.wrapping_add(1); 32])
+                .verifying_key()
+                .to_bytes(),
         )
         .unwrap();
         CompilerExecutionClientProfileV1::new(1_234, 5_678, policy).unwrap()
