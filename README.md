@@ -132,11 +132,17 @@ custody values through every issuer use. The issuer accepts no caller-selected
 occurrence, and its private guard keeps publication currentness locked through
 request comparison, signing, and durable commit. A canonical fixed-width packet
 codec and allocation-free bounded `SOCK_SEQPACKET` loop now expose only Inspect,
-Prepare, Issue, Publish, Cancel, and exact-subject Recover over the already
+Prepare, Issue, Publish, Cancel, exact-subject Recover, and exact-carriage
+VerifyCurrent over the already
 admitted peer. Recover strictly reacquires the current Worker record and returns
 its complete receipt carriage, or reports nonterminal absence only when no
 canonical Worker record exists; a different or damaged current record fails
-closed. The issuer's direct transition methods are private. One shared bounded
+closed. VerifyCurrent independently reacquires that record under the protected
+policy, byte-compares the complete expected carriage, and returns canonical
+policy/Worker-ledger verification evidence in one terminal exchange. The result
+remains authority-free until the service endpoint is authenticated and external
+rollback and refinement evidence are joined. The issuer's direct transition
+methods are private. One shared bounded
 client now recovers first and resumes Ready, Prepared, or Issued under one
 absolute deadline, including exact issued-request reconstruction. Its child
 channel now creates the peer after fork inside rustc, installs fd 195, transfers
@@ -186,9 +192,10 @@ creates the selected rustc's service endpoint at fd 195 after fork, installs
 the exact policy at fd 202, transfers the live endpoint and pidfd only to the
 fixed distinct-UID supervisor socket, and gates fresh Worker V3 publication on
 canonical readiness while retaining exact invocation custody. Backend receipt
-acquisition, lossless V2 carriage, and the receipt-complete Worker V3 promotion
-boundary are implemented. Distinct-UID service deployment, the concrete
-protected verifier, and external monotonic anchor remain absent. A fixed
+acquisition, lossless V2 carriage, exact protected Worker-record verification,
+and the receipt-complete Worker V3 promotion boundary are implemented.
+Distinct-UID service deployment, the concrete protected verifier, and external
+monotonic anchor remain absent. A fixed
 receipt sidecar and publication ACK now
 carry the exact journal, occurrence, receipt, Worker record, sequence, and
 advanced rollback anchor without granting authority from wire bytes. The
@@ -767,9 +774,10 @@ is complete, and the recorded runs grant no current production authority.
   exhaustive substitution checks. Its verifier trait is sealed in production,
   its decision constructor is private, and synthetic construction is available
   only under the explicit integration-test feature. A concrete protected
-  verifier that
-  independently reacquires current policy, Worker-ledger, and external
-  monotonic rollback authority remains open. Recovery and
+  verifier remains open. The protected service can now independently reacquire
+  current policy and exact Worker-ledger state for one complete carriage, but
+  the host verifier must still consume that transaction over an authenticated
+  endpoint and join the external monotonic rollback authority. Recovery and
   verification admission are device-independent; the canonical KFD transition
   binds one checked physical device only when it joins generated host-memory
   packing to the exact current artifact, geometry, effects, and authenticated

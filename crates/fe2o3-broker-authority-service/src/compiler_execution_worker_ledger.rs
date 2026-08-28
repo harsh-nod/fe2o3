@@ -11,7 +11,8 @@ use fe2o3_artifact_transaction::{
 use fe2o3_runtime_protocol::{
     COMPILER_EXECUTION_ATTESTATION_REQUEST_BYTES_V1,
     COMPILER_EXECUTION_RECEIPT_PUBLICATION_BYTES_V1, CompilerExecutionAttestationErrorV1,
-    CompilerExecutionAttestationRequestV1, CompilerExecutionIssuerPolicyV1,
+    CompilerExecutionAttestationRequestV1, CompilerExecutionCurrentRecordVerificationErrorV1,
+    CompilerExecutionCurrentRecordVerificationV1, CompilerExecutionIssuerPolicyV1,
     CompilerExecutionReceiptCarriageV1, CompilerExecutionReceiptPublicationAckV1,
     CompilerExecutionReceiptPublicationErrorV1, CompilerExecutionReceiptPublicationV1,
 };
@@ -33,6 +34,10 @@ pub const COMPILER_EXECUTION_WORKER_LEDGER_RECORD_BYTES_V1: usize =
     RECORD_PREIMAGE_BYTES + SHA256_BYTES;
 
 const RECORD_IDENTITY_DOMAIN: &[u8] = b"FE2O3/COMPILER-EXECUTION-WORKER-LEDGER-RECORD/V1\0";
+const PROTECTED_POLICY_VERIFICATION_DOMAIN: &[u8] =
+    b"FE2O3/PROTECTED-COMPILER-EXECUTION-POLICY-VERIFICATION/V1\0";
+const PROTECTED_WORKER_LEDGER_VERIFICATION_DOMAIN: &[u8] =
+    b"FE2O3/PROTECTED-COMPILER-EXECUTION-WORKER-LEDGER-VERIFICATION/V1\0";
 const CANONICAL_RECORD: &str = "compiler-execution-worker-v1.state";
 const REDO_RECORD: &str = "compiler-execution-worker-v1.redo";
 
@@ -410,6 +415,61 @@ impl WorkerReceiptLedgerV1 {
         expected_subject: &InertCompilerExecutionSubjectV1,
     ) -> Result<CompilerExecutionReceiptCarriageV1, ProtectedCompilerExecutionWorkerLedgerErrorV1>
     {
+        let (_, carriage) = self.reacquire_current(expected_subject)?;
+        Ok(carriage)
+    }
+
+    /// Reacquires and compares the complete exact current carriage under protected policy.
+    pub(crate) fn verify_current_carriage(
+        &self,
+        expected_carriage: &CompilerExecutionReceiptCarriageV1,
+    ) -> Result<
+        CompilerExecutionCurrentRecordVerificationV1,
+        ProtectedCompilerExecutionWorkerLedgerErrorV1,
+    > {
+        if expected_carriage.policy() != &self.policy {
+            return Err(ProtectedCompilerExecutionWorkerLedgerErrorV1::PolicyMismatch);
+        }
+        let expected_subject = expected_carriage.request().subject();
+        let (record, reacquired_carriage) = self.reacquire_current(expected_subject)?;
+        if &reacquired_carriage != expected_carriage
+            || reacquired_carriage.canonical_bytes() != expected_carriage.canonical_bytes()
+        {
+            return Err(ProtectedCompilerExecutionWorkerLedgerErrorV1::CarriageMismatch);
+        }
+        let protected_policy_verification_identity = verification_digest(
+            PROTECTED_POLICY_VERIFICATION_DOMAIN,
+            &[
+                self.policy.canonical_bytes(),
+                expected_subject.canonical_bytes(),
+                expected_carriage.canonical_bytes(),
+                &record.identity,
+            ],
+        );
+        let protected_worker_ledger_verification_identity = verification_digest(
+            PROTECTED_WORKER_LEDGER_VERIFICATION_DOMAIN,
+            &[
+                &record.canonical,
+                expected_carriage.canonical_bytes(),
+                &protected_policy_verification_identity,
+            ],
+        );
+        CompilerExecutionCurrentRecordVerificationV1::new(
+            expected_subject,
+            expected_carriage,
+            protected_policy_verification_identity,
+            protected_worker_ledger_verification_identity,
+        )
+        .map_err(Into::into)
+    }
+
+    fn reacquire_current(
+        &self,
+        expected_subject: &InertCompilerExecutionSubjectV1,
+    ) -> Result<
+        (WorkerReceiptRecordV1, CompilerExecutionReceiptCarriageV1),
+        ProtectedCompilerExecutionWorkerLedgerErrorV1,
+    > {
         if self.poisoned {
             return Err(ProtectedCompilerExecutionWorkerLedgerErrorV1::Poisoned);
         }
@@ -422,13 +482,14 @@ impl WorkerReceiptLedgerV1 {
             return Err(ProtectedCompilerExecutionWorkerLedgerErrorV1::SubjectMismatch);
         }
         let acknowledgment = reacquired.acknowledgment()?;
-        CompilerExecutionReceiptCarriageV1::new(
+        let carriage = CompilerExecutionReceiptCarriageV1::new(
             self.policy.clone(),
-            reacquired.request,
-            reacquired.publication,
+            reacquired.request.clone(),
+            reacquired.publication.clone(),
             acknowledgment,
         )
-        .map_err(Into::into)
+        .map_err(ProtectedCompilerExecutionWorkerLedgerErrorV1::from)?;
+        Ok((reacquired, carriage))
     }
 }
 
@@ -525,6 +586,16 @@ fn record_digest(bytes: &[u8]) -> [u8; SHA256_BYTES] {
     digest.finalize().into()
 }
 
+fn verification_digest(domain: &[u8], parts: &[&[u8]]) -> [u8; SHA256_BYTES] {
+    let mut digest = Sha256::new();
+    digest.update(domain);
+    for part in parts {
+        digest.update((part.len() as u64).to_le_bytes());
+        digest.update(part);
+    }
+    digest.finalize().into()
+}
+
 struct Reader<'a> {
     bytes: &'a [u8],
     offset: usize,
@@ -592,6 +663,8 @@ pub enum ProtectedCompilerExecutionWorkerLedgerErrorV1 {
     SequenceExhausted,
     MissingCanonicalRecord,
     ReacquiredRecordMismatch,
+    CarriageMismatch,
+    Verification(CompilerExecutionCurrentRecordVerificationErrorV1),
     Poisoned,
 }
 
@@ -629,6 +702,15 @@ impl fmt::Display for ProtectedCompilerExecutionWorkerLedgerErrorV1 {
             Self::ReacquiredRecordMismatch => {
                 formatter.write_str("reacquired Worker receipt record changed")
             }
+            Self::CarriageMismatch => {
+                formatter.write_str("reacquired Worker receipt carriage changed")
+            }
+            Self::Verification(error) => {
+                write!(
+                    formatter,
+                    "Worker receipt currentness record failed: {error}"
+                )
+            }
             Self::Poisoned => {
                 formatter.write_str("Worker receipt ledger is poisoned and requires restart")
             }
@@ -642,6 +724,7 @@ impl Error for ProtectedCompilerExecutionWorkerLedgerErrorV1 {
             Self::Durable(error) => Some(error),
             Self::Attestation(error) => Some(error),
             Self::Publication(error) => Some(error),
+            Self::Verification(error) => Some(error),
             _ => None,
         }
     }
@@ -664,6 +747,14 @@ impl From<CompilerExecutionReceiptPublicationErrorV1>
 {
     fn from(error: CompilerExecutionReceiptPublicationErrorV1) -> Self {
         Self::Publication(error)
+    }
+}
+
+impl From<CompilerExecutionCurrentRecordVerificationErrorV1>
+    for ProtectedCompilerExecutionWorkerLedgerErrorV1
+{
+    fn from(error: CompilerExecutionCurrentRecordVerificationErrorV1) -> Self {
+        Self::Verification(error)
     }
 }
 
@@ -830,6 +921,47 @@ mod tests {
         assert_eq!(carriage.request(), &request);
         assert_eq!(carriage.publication(), &publication);
         assert_eq!(carriage.acknowledgment(), &ack);
+        let verification = ledger.verify_current_carriage(&carriage).unwrap();
+        assert_eq!(
+            verification.policy_identity(),
+            *fixture.policy.identity().as_bytes()
+        );
+        assert_eq!(
+            verification.subject_identity(),
+            *fixture.subject.identity().sha256()
+        );
+        assert_eq!(
+            verification.carriage_identity(),
+            *carriage.identity().as_bytes()
+        );
+        assert_eq!(
+            verification.worker_ledger_record_identity(),
+            record.identity
+        );
+        assert_eq!(verification.sequence(), 1);
+        assert_eq!(verification.prior_rollback_anchor(), [0; SHA256_BYTES]);
+        assert_eq!(
+            verification.current_rollback_anchor(),
+            record.current_rollback_anchor
+        );
+        assert_ne!(
+            verification.protected_policy_verification_identity(),
+            [0; 32]
+        );
+        assert_ne!(
+            verification.protected_worker_ledger_verification_identity(),
+            [0; 32]
+        );
+        assert_ne!(
+            verification.protected_policy_verification_identity(),
+            verification.protected_worker_ledger_verification_identity()
+        );
+        assert!(!verification.grants_authority());
+        assert_eq!(
+            CompilerExecutionCurrentRecordVerificationV1::decode(verification.canonical_bytes())
+                .unwrap(),
+            verification
+        );
         assert!(matches!(
             ledger.recover_current_carriage(&subject(0x21)),
             Err(ProtectedCompilerExecutionWorkerLedgerErrorV1::SubjectMismatch)
@@ -881,6 +1013,7 @@ mod tests {
         ledger
             .commit_publication(first_request.clone(), first_publication.clone())
             .unwrap();
+        let stale_carriage = ledger.recover_current_carriage(&fixture.subject).unwrap();
         ledger
             .commit_publication(second_request.clone(), second_publication.clone())
             .unwrap();
@@ -904,6 +1037,10 @@ mod tests {
             ledger.last_record().unwrap().publication,
             second_publication
         );
+        assert!(matches!(
+            ledger.verify_current_carriage(&stale_carriage),
+            Err(ProtectedCompilerExecutionWorkerLedgerErrorV1::CarriageMismatch)
+        ));
     }
 
     #[test]

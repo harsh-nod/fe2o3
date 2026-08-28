@@ -46,7 +46,9 @@ use fe2o3_host::{
     ProductionWorkerV3ApplicationLoadErrorV1, RecoveredWorkerV3AdmissionErrorV1,
     ReviewedHsaExecutableLifecycleAdapterV1, ReviewedHsaImplicitKernargAdapterV1,
     WorkerV3AuditorV1, WorkerV3CompilerExecutionVerificationV1, WorkerV3GeneratedDispatchErrorV1,
-    WorkerV3HsaLoadAuthorizationErrorV1, WorkerV3SafetyPropertiesV1, WorkerV3SyntheticVerifierV1,
+    WorkerV3HsaLoadAuthorizationErrorV1, WorkerV3ProtectedVerificationEvidenceV1,
+    WorkerV3ProtectedVerifierAdapterV1, WorkerV3ProtectedVerifierBackendV1,
+    WorkerV3SafetyPropertiesV1, WorkerV3SyntheticVerifierAdapterV1, WorkerV3SyntheticVerifierV1,
     WorkerV3VerificationAuthenticationErrorV1, WorkerV3VerificationDecisionErrorV1,
     WorkerV3VerificationDecisionV1, WorkerV3VerificationRequestV1,
     admit_recovered_worker_v3_descriptor_v1, audit_recovered_worker_v3_verification_v1,
@@ -452,6 +454,72 @@ where
             [0xc5; 32],
             WorkerV3SafetyPropertiesV1::required(),
         ))
+    }
+}
+
+#[derive(Clone, Copy)]
+enum ReviewedTestProtectedVerifierFault {
+    None,
+    CompilerSubject,
+    ZeroVerificationTranscript,
+}
+
+struct ReviewedTestProtectedVerifier {
+    fault: ReviewedTestProtectedVerifierFault,
+}
+
+// SAFETY: this request-echoing backend exists only in the receipt-bearing integration-test
+// binary. It deliberately exercises the production adapter's field mapping and rejection paths
+// and must never be represented as protected compiler, ledger, rollback, or proof authority.
+unsafe impl<K> WorkerV3ProtectedVerifierBackendV1<K> for ReviewedTestProtectedVerifier
+where
+    K: CompilerGeneratedKernelExpectationV1,
+{
+    type Error = Infallible;
+
+    unsafe fn verify_protected(
+        &mut self,
+        request: &WorkerV3VerificationRequestV1<'_, K>,
+    ) -> Result<WorkerV3ProtectedVerificationEvidenceV1, Self::Error> {
+        let mut subject = request.compiler_execution_subject_sha256();
+        let mut verification_transcript = [0xc2; 32];
+        match self.fault {
+            ReviewedTestProtectedVerifierFault::None => {}
+            ReviewedTestProtectedVerifierFault::CompilerSubject => subject[0] ^= 0xff,
+            ReviewedTestProtectedVerifierFault::ZeroVerificationTranscript => {
+                verification_transcript = [0; 32];
+            }
+        }
+        let compiler_execution = WorkerV3CompilerExecutionVerificationV1::new(
+            subject,
+            request.compiler_execution_carriage_sha256(),
+            request.compiler_execution_policy_sha256(),
+            request.compiler_execution_issuer_journal_sha256(),
+            request.compiler_occurrence_sha256(),
+            request.compiler_execution_receipt_sha256(),
+            request.compiler_execution_publication_sha256(),
+            request.compiler_execution_acknowledgment_sha256(),
+            request.compiler_execution_worker_ledger_record_sha256(),
+            request.compiler_execution_sequence(),
+            request.compiler_execution_prior_rollback_anchor(),
+            request.compiler_execution_current_rollback_anchor(),
+            [0xd1; 32],
+            [0xd2; 32],
+            [0xd3; 32],
+        );
+        // SAFETY: this test-only backend deliberately supplies complete synthetic identities so
+        // the sealed adapter's exact mapping and fail-closed validation can be exercised.
+        Ok(unsafe {
+            WorkerV3ProtectedVerificationEvidenceV1::new(
+                compiler_execution,
+                [0xc1; 32],
+                verification_transcript,
+                [0xc3; 32],
+                [0xc4; 32],
+                [0xc5; 32],
+                WorkerV3SafetyPropertiesV1::required(),
+            )
+        })
     }
 }
 
@@ -1344,9 +1412,9 @@ fn completed_v3_publication_becomes_restartable_inert_envelope_custody() {
     let mut loaded = load_admitted_worker_v3_application_v1::<WorkerV3VecAddMarker, _, _>(
         admitted,
         &observed,
-        &mut ReviewedTestWorkerV3Verifier {
+        &mut WorkerV3SyntheticVerifierAdapterV1::new(ReviewedTestWorkerV3Verifier {
             fault: ReviewedTestWorkerV3VerifierFault::None,
-        },
+        }),
         adapter,
     )
     .unwrap();
@@ -1501,9 +1569,9 @@ fn v3_host_load_rejects_incompatible_observed_target_features() {
         load_admitted_worker_v3_application_v1::<WorkerV3VecAddMarker, _, _>(
             admitted,
             &observed,
-            &mut ReviewedTestWorkerV3Verifier {
+            &mut WorkerV3SyntheticVerifierAdapterV1::new(ReviewedTestWorkerV3Verifier {
                 fault: ReviewedTestWorkerV3VerifierFault::None,
-            },
+            }),
             ReviewedTestHsaAdapter::new().0,
         ),
         Err(ProductionWorkerV3ApplicationLoadErrorV1::LoadAuthorization(
@@ -1534,6 +1602,61 @@ fn borrowed_v3_audit_preserves_exact_admission_custody_without_authority() {
 }
 
 #[test]
+fn protected_verifier_adapter_maps_independent_evidence_into_authentication() {
+    let (_directory, recovered) = recovered_host_fixture();
+    let admitted = admit_recovered_worker_v3_descriptor_v1(
+        recovered,
+        KernelId::from_bytes(TEST_MARKER_BINDING),
+    )
+    .unwrap();
+    let mut verifier = WorkerV3ProtectedVerifierAdapterV1::new(ReviewedTestProtectedVerifier {
+        fault: ReviewedTestProtectedVerifierFault::None,
+    });
+    let authenticated = AuthenticatedWorkerV3ExecutableV1::<WorkerV3VecAddMarker>::authenticate(
+        admitted,
+        &mut verifier,
+    )
+    .unwrap();
+    assert!(authenticated.authenticates_verification_authority());
+    assert!(!authenticated.grants_load_authority());
+    assert!(!authenticated.grants_launch_authority());
+}
+
+#[test]
+fn protected_verifier_adapter_rejects_substituted_and_zero_evidence() {
+    for (fault, expected) in [
+        (
+            ReviewedTestProtectedVerifierFault::CompilerSubject,
+            WorkerV3VerificationDecisionErrorV1::IdentityMismatch("compiler-execution subject"),
+        ),
+        (
+            ReviewedTestProtectedVerifierFault::ZeroVerificationTranscript,
+            WorkerV3VerificationDecisionErrorV1::ZeroAuthenticatedIdentity(
+                "verification transcript",
+            ),
+        ),
+    ] {
+        let (_directory, recovered) = recovered_host_fixture();
+        let admitted = admit_recovered_worker_v3_descriptor_v1(
+            recovered,
+            KernelId::from_bytes(TEST_MARKER_BINDING),
+        )
+        .unwrap();
+        let mut verifier =
+            WorkerV3ProtectedVerifierAdapterV1::new(ReviewedTestProtectedVerifier { fault });
+        let error = AuthenticatedWorkerV3ExecutableV1::<WorkerV3VecAddMarker>::authenticate(
+            admitted,
+            &mut verifier,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            WorkerV3VerificationAuthenticationErrorV1::Decision(actual) if actual == expected
+        ));
+    }
+}
+
+#[test]
 fn v3_verification_rejects_a_substituted_finalized_hsaco_identity() {
     let (_directory, recovered) = recovered_host_fixture();
     let observed = application_handoff_observed_context_fixture_v1("gfx942:xnack-");
@@ -1544,9 +1667,9 @@ fn v3_verification_rejects_a_substituted_finalized_hsaco_identity() {
         load_admitted_worker_v3_application_v1::<WorkerV3VecAddMarker, _, _>(
             admitted,
             &observed,
-            &mut ReviewedTestWorkerV3Verifier {
+            &mut WorkerV3SyntheticVerifierAdapterV1::new(ReviewedTestWorkerV3Verifier {
                 fault: ReviewedTestWorkerV3VerifierFault::FinalizedHsaco,
-            },
+            }),
             ReviewedTestHsaAdapter::new().0,
         ),
         Err(ProductionWorkerV3ApplicationLoadErrorV1::Verification(
@@ -1649,7 +1772,7 @@ fn v3_verification_rejects_every_compiler_execution_substitution_and_missing_aut
         .unwrap();
         let error = AuthenticatedWorkerV3ExecutableV1::<WorkerV3VecAddMarker>::authenticate(
             admitted,
-            &mut ReviewedTestWorkerV3Verifier { fault },
+            &mut WorkerV3SyntheticVerifierAdapterV1::new(ReviewedTestWorkerV3Verifier { fault }),
         )
         .unwrap_err();
         match error {
@@ -1673,9 +1796,9 @@ fn v3_hsa_load_rejects_and_cleans_up_a_substituted_adapter_digest() {
         load_admitted_worker_v3_application_v1::<WorkerV3VecAddMarker, _, _>(
             admitted,
             &observed,
-            &mut ReviewedTestWorkerV3Verifier {
+            &mut WorkerV3SyntheticVerifierAdapterV1::new(ReviewedTestWorkerV3Verifier {
                 fault: ReviewedTestWorkerV3VerifierFault::None,
-            },
+            }),
             adapter,
         ),
         Err(ProductionWorkerV3ApplicationLoadErrorV1::ExecutableLoad(

@@ -337,6 +337,145 @@ pub unsafe trait WorkerV3VerifierV1<K: CompilerGeneratedKernelExpectationV1>:
     ) -> Result<WorkerV3VerificationDecisionV1, Self::Error>;
 }
 
+/// Independently authenticated result returned by a protected verifier backend.
+///
+/// This value is consumed only by [`WorkerV3ProtectedVerifierAdapterV1`]. It carries the
+/// identities and universally quantified safety properties that cannot be derived by host
+/// admission. The sealed adapter supplies every request-coordinate field directly from the exact
+/// pinned host request and the existing promotion boundary compares the complete decision again.
+pub struct WorkerV3ProtectedVerificationEvidenceV1 {
+    compiler_execution: WorkerV3CompilerExecutionVerificationV1,
+    verifier_measurement_sha256: [u8; 32],
+    verification_transcript_sha256: [u8; 32],
+    proof_executable_binding_sha256: [u8; 32],
+    rust_type_layout_contract_sha256: [u8; 32],
+    rust_effect_contract_sha256: [u8; 32],
+    safety_properties: WorkerV3SafetyPropertiesV1,
+}
+
+impl WorkerV3ProtectedVerificationEvidenceV1 {
+    /// Constructs evidence produced by one reviewed protected backend execution.
+    ///
+    /// # Safety
+    ///
+    /// Every identity must be derived from independently authenticated protected state and bind
+    /// the exact request passed to [`WorkerV3ProtectedVerifierBackendV1::verify_protected`]. The
+    /// caller must satisfy the complete backend trait contract; nonzero or request-echoed values
+    /// alone do not satisfy it.
+    #[allow(clippy::too_many_arguments)]
+    pub const unsafe fn new(
+        compiler_execution: WorkerV3CompilerExecutionVerificationV1,
+        verifier_measurement_sha256: [u8; 32],
+        verification_transcript_sha256: [u8; 32],
+        proof_executable_binding_sha256: [u8; 32],
+        rust_type_layout_contract_sha256: [u8; 32],
+        rust_effect_contract_sha256: [u8; 32],
+        safety_properties: WorkerV3SafetyPropertiesV1,
+    ) -> Self {
+        Self {
+            compiler_execution,
+            verifier_measurement_sha256,
+            verification_transcript_sha256,
+            proof_executable_binding_sha256,
+            rust_type_layout_contract_sha256,
+            rust_effect_contract_sha256,
+            safety_properties,
+        }
+    }
+}
+
+/// External authority boundary used only through fe2o3's sealed production adapter.
+///
+/// # Safety
+///
+/// Implementations must run as a reviewed protected verifier and satisfy every obligation of
+/// [`WorkerV3VerifierV1`]. In particular, they must compare independently retained compiler policy,
+/// reacquire the exact protected Worker ledger record, enforce external rollback currentness, and
+/// authenticate the proof-to-executable, Rust layout, Rust effect, and universal safety results.
+/// Returned evidence must bind the exact borrowed request and may not be synthesized from request
+/// fields. An invalid implementation can authorize native code loading from safe generated code.
+pub unsafe trait WorkerV3ProtectedVerifierBackendV1<K: CompilerGeneratedKernelExpectationV1> {
+    type Error;
+
+    /// Authenticates one pinned host request using independent protected state.
+    ///
+    /// # Safety
+    ///
+    /// The implementation obligations are those of the unsafe trait.
+    unsafe fn verify_protected(
+        &mut self,
+        request: &WorkerV3VerificationRequestV1<'_, K>,
+    ) -> Result<WorkerV3ProtectedVerificationEvidenceV1, Self::Error>;
+}
+
+/// Crate-owned sealed verifier that delegates only independent protected checks.
+///
+/// Construction is safe because it grants no authority by itself. Authentication remains gated by
+/// the unsafe backend contract, exact request-coordinate construction below, decision validation,
+/// and post-verifier current-publication revalidation.
+pub struct WorkerV3ProtectedVerifierAdapterV1<B> {
+    backend: B,
+}
+
+impl<B> WorkerV3ProtectedVerifierAdapterV1<B> {
+    /// Wraps one reviewed protected backend without invoking it.
+    pub const fn new(backend: B) -> Self {
+        Self { backend }
+    }
+
+    /// Returns the retained backend after the adapter is no longer needed.
+    pub fn into_inner(self) -> B {
+        self.backend
+    }
+}
+
+impl<K, B> verifier_seal::Sealed<K> for WorkerV3ProtectedVerifierAdapterV1<B>
+where
+    K: CompilerGeneratedKernelExpectationV1,
+    B: WorkerV3ProtectedVerifierBackendV1<K>,
+{
+}
+
+// SAFETY: the adapter is crate-owned and sealed. Its only external authority boundary is the
+// explicit unsafe protected-backend trait. It fills all request coordinates from the exact pinned
+// host request and the caller validates the complete decision plus publication currentness.
+unsafe impl<K, B> WorkerV3VerifierV1<K> for WorkerV3ProtectedVerifierAdapterV1<B>
+where
+    K: CompilerGeneratedKernelExpectationV1,
+    B: WorkerV3ProtectedVerifierBackendV1<K>,
+{
+    type Error = B::Error;
+
+    unsafe fn verify(
+        &mut self,
+        request: &WorkerV3VerificationRequestV1<'_, K>,
+    ) -> Result<WorkerV3VerificationDecisionV1, Self::Error> {
+        // SAFETY: `B` owns the independent protected checks required by its unsafe trait.
+        let evidence = unsafe { self.backend.verify_protected(request)? };
+        Ok(WorkerV3VerificationDecisionV1::new(
+            request.challenge_identity(),
+            request.lineage_identity(),
+            request.descriptor().kernel_id(),
+            request.marker_binding_identity(),
+            request.generated_host_contract_identity(),
+            request.capsule_sha256(),
+            request.formal_memory_receipt_sha256(),
+            request.proof_binding_receipt_sha256(),
+            request.finalized_hsaco_sha256(),
+            request.finalized_hsaco_length(),
+            request.target(),
+            request.code_object_version(),
+            evidence.compiler_execution,
+            evidence.verifier_measurement_sha256,
+            evidence.verification_transcript_sha256,
+            evidence.proof_executable_binding_sha256,
+            evidence.rust_type_layout_contract_sha256,
+            evidence.rust_effect_contract_sha256,
+            evidence.safety_properties,
+        ))
+    }
+}
+
 /// Explicit synthetic-verifier hook for the receipt-bearing integration harness.
 ///
 /// This trait is absent from default and production builds. Enabling it permits downstream test
@@ -359,8 +498,28 @@ pub unsafe trait WorkerV3SyntheticVerifierV1<K: CompilerGeneratedKernelExpectati
     ) -> Result<WorkerV3VerificationDecisionV1, Self::Error>;
 }
 
+/// Explicit test-only adapter for a synthetic verifier implementation.
 #[cfg(feature = "worker-v3-verifier-test-support")]
-impl<K, V> verifier_seal::Sealed<K> for V
+#[doc(hidden)]
+pub struct WorkerV3SyntheticVerifierAdapterV1<V> {
+    verifier: V,
+}
+
+#[cfg(feature = "worker-v3-verifier-test-support")]
+impl<V> WorkerV3SyntheticVerifierAdapterV1<V> {
+    /// Wraps one synthetic verifier for test-only authentication.
+    pub const fn new(verifier: V) -> Self {
+        Self { verifier }
+    }
+
+    /// Returns the retained synthetic verifier.
+    pub fn into_inner(self) -> V {
+        self.verifier
+    }
+}
+
+#[cfg(feature = "worker-v3-verifier-test-support")]
+impl<K, V> verifier_seal::Sealed<K> for WorkerV3SyntheticVerifierAdapterV1<V>
 where
     K: CompilerGeneratedKernelExpectationV1,
     V: WorkerV3SyntheticVerifierV1<K>,
@@ -368,9 +527,9 @@ where
 }
 
 #[cfg(feature = "worker-v3-verifier-test-support")]
-// SAFETY: this blanket exists only under the explicit test-support feature. Implementors must
-// satisfy the unsafe synthetic trait contract; default and production builds contain no such seam.
-unsafe impl<K, V> WorkerV3VerifierV1<K> for V
+// SAFETY: this explicit wrapper exists only under the test-support feature and is disjoint from
+// the production adapter. The wrapped verifier must satisfy the unsafe synthetic trait contract.
+unsafe impl<K, V> WorkerV3VerifierV1<K> for WorkerV3SyntheticVerifierAdapterV1<V>
 where
     K: CompilerGeneratedKernelExpectationV1,
     V: WorkerV3SyntheticVerifierV1<K>,
@@ -383,7 +542,7 @@ where
     ) -> Result<WorkerV3VerificationDecisionV1, Self::Error> {
         // SAFETY: the caller is inside the unsafe production verifier transition and the explicit
         // test-support implementation owns the synthetic invariants for this test-only build.
-        unsafe { self.verify_synthetic(request) }
+        unsafe { self.verifier.verify_synthetic(request) }
     }
 }
 
