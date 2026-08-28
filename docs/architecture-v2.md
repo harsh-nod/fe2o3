@@ -109,9 +109,11 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   profile and every unchanged namespace in the parent, repeats authority
   continuity before release, installs FDs 198 through 209, admits exact
   readiness, and owns pidfd cancellation and exactly-once reaping. The
-  distinct-UID service entrypoint that establishes that profile, backend acquisition,
-  load-envelope receipt carriage, external monotonic rollback anchoring, and
-  Worker V3 verifier authority join remain open.
+  backend consumes the inherited service and policy descriptors, acquires the
+  exact receipt after V3 handoff publication, and carries it through the sole
+  top-level V2 load envelope into host admission. The distinct-UID deployment
+  entrypoint, external monotonic rollback anchoring, and Worker V3 verifier
+  authority join remain open.
 - Production has one unselected compilation transaction. Cargo owns it as
   `ManagedProductionBuild`, whose `Fresh`, `Recovered`, and `Ready` values are
   restart states rather than pipeline variants. The backend configuration and

@@ -3,15 +3,18 @@
 ## Status
 
 The canonical codec, live publication owner, schema-neutral durable persistence,
-and strict restart recovery are implemented in `fe2o3-runtime-protocol`.
+strict restart recovery, and backend-to-host production route are implemented.
 Construction consumes the existing complete Worker V3 replay plus one
 `CompilerExecutionReceiptCarriageV1` and rejects any compiler subject mismatch.
 
-This is a production-format foundation, not yet the active production route.
-`cargo-fe2o3`, application descriptor transfer, host admission, and the protected
-Worker verifier still consume the frozen V1 replay envelope. Their migration must
-land together and reject top-level V1 in production so the wire version does not
-become a selectable compiler pipeline.
+The Rustc backend derives the exact subject only after durable V3 handoff
+publication, obtains the carriage from the protected issuer, and atomically
+publishes the exact bytes in the same attempt slot. Cargo reads the handoff and
+sidecar under one currentness token, validates the carriage against the sealed
+client profile, and retains it across fresh execution and finalized-HSACO
+restart recovery. Cargo durable readiness, application descriptor transfer,
+and `fe2o3-host` admission accept only top-level V2. Top-level V1 is therefore
+not a production route; its codec remains the complete nested replay format.
 
 ## Wire
 
@@ -60,13 +63,12 @@ receipt must be joined to current external rollback state, and its Worker-ledger
 ACK must be independently reacquired. Only that protected verifier decision may
 grant compiler authority; load and launch remain separate move-only transitions.
 
-## Remaining Production Migration
+## Remaining Authority Promotion
 
-- obtain and durably recover the complete carriage before current HSACO
-  publication;
-- make Cargo persist and recover only `WorkerV3LoadEnvelopeV2`;
-- make application and host descriptor handoff decode only V2;
-- retain the carriage through recovered descriptor custody;
-- bind its identity into the Worker verification request and decision;
-- compare protected policy and monotonic rollback state; and
-- remove root-exported live V1 construction and recovery after all callers move.
+- bind the carriage identity and protected-policy decision into the Worker
+  verification request and decision;
+- compare the carried policy with independently retained verifier configuration;
+- atomically enforce the external monotonic rollback anchor and Worker-ledger
+  record before compiler authority exists; and
+- qualify that authority through the final KFD/HSA load and gfx942 execution
+  route under the deployed root-owned supervisor.

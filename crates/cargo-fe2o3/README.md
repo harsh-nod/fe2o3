@@ -103,12 +103,17 @@ rustc fd 195 after fork. The parent binds that endpoint to the spawned rustc's
 credentials and live pidfd, transfers both to the sole fixed
 `/run/fe2o3/compiler-execution-supervisor.sock` endpoint after authenticating
 the profile's distinct supervisor UID/GID, and requires one canonical
-issuer-readiness record plus EOF. Fresh Worker V3 publication retains and
-revalidates both invocation and readiness custody. Any post-spawn handoff or
+issuer-readiness record plus EOF. The backend publishes the exact V3 handoff,
+derives its complete compiler-execution subject, acquires and independently
+decodes the signed carriage, and durably stores its exact bytes in the same
+attempt slot. Cargo admits that sidecar against retained readiness and the
+sealed profile under the handoff currentness lock, then carries it through
+fresh execution, finalized-HSACO recovery, V2 readiness persistence,
+application descriptor transfer, and `fe2o3-host` admission. Top-level V1 load
+envelopes are rejected on this production route. Any post-spawn handoff or
 readiness failure kills and reaps rustc before invalidating the build attempt.
-Host dependency units receive none of these descriptors. Backend receipt
-acquisition and receipt-bearing Worker V3 publication are the next boundary;
-readiness alone grants no compiler or artifact authority.
+Host dependency units receive none of these descriptors. The carriage remains
+authority-free until protected verifier policy and rollback admission.
 
 ## External Cargo projects
 
