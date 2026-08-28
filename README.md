@@ -141,11 +141,17 @@ channel now creates the peer after fork inside rustc, installs fd 195, transfers
 only the service endpoint to the direct parent, and binds it to exact child
 credentials and a live pidfd. A canonical sealed launch manifest now binds that
 exact PID/UID/GID to the pinned policy, and a descriptor-only musl-static issuer
-entrypoint hardens itself before consuming fixed FDs 3 through 9. After complete
+enters through a syscall-only shim that restores nondumpability before musl or
+Rust startup and then consumes fixed FDs 3 through 9. After complete
 admission and durable recovery it emits one canonical PID/manifest/policy-bound
 readiness record through an atomic nonblocking pipe. Its build gate rejects
-dynamic-loader edges, undefined symbols, and non-fail-closed startup.
-Binding-wrapper/supervisor integration still remains; the pinned policy has an
+dynamic-loader edges, undefined symbols, a displaced secure entry point, and
+non-fail-closed startup. A dedicated supervisor crate now authenticates the
+provisioned launcher against a service release measurement and the issuer
+against that sealed policy before copying both into distinct read-only
+mode-0555 memfds with complete content and executable seals. The resulting
+move-only program has no key or root authority. Protected root/key binding,
+`clone3` launch, and readiness consumption still remain; the pinned policy has an
 immutable sealed memfd capability reserved at rustc fd 202. Distinct-UID
 supervisor launch and inspection policy and the Worker V3 authority join remain
 absent. A fixed

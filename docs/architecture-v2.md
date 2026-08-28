@@ -90,13 +90,19 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   codec and allocation-free bounded `SOCK_SEQPACKET` service now consume that
   admitted issuer; all direct transition methods are private and exact replay
   resolves lost responses. A descriptor-only musl-static issuer entrypoint now
-  hardens itself and admits fixed FDs 3 through 9. A sealed launch manifest
+  enters through a syscall-only shim that restores nondumpability before musl
+  or Rust startup and admits fixed FDs 3 through 9. A sealed launch manifest
   binds exact rustc PID/UID/GID to the exact pinned policy, and the static build
-  gate rejects every dynamic-loader edge and undefined symbol. After complete
+  gate pins that shim as the ELF entry and rejects every dynamic-loader edge and undefined symbol. After complete
   admission and durable recovery, the issuer emits one canonical readiness
   record binding its PID, manifest, and policy through an atomic nonblocking
-  pipe. Production
-  distinct-UID supervisor launch and inspection policy, backend acquisition,
+  pipe. The protected supervisor now has an authority-free program-admission
+  stage that validates both source images, binds the issuer to the sealed
+  policy, copies each into a distinct anonymous mode-0555 memfd, requires
+  `F_SEAL_EXEC` and complete content seals, reopens it read-only, and repeats
+  measurement and static-profile validation. It accepts no root or key.
+  Production credential/root/key binding, `clone3` launch and readiness
+  lifecycle, distinct-UID inspection policy, backend acquisition,
   load-envelope receipt carriage, external monotonic rollback anchoring, and
   Worker V3 verifier authority join remain open.
 - Production has one unselected compilation transaction. Cargo owns it as

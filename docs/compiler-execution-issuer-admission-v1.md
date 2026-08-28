@@ -49,6 +49,21 @@ identity. Every later continuity check revalidates `FD_CLOEXEC`, object
 metadata, complete bytes, static profile, raw measurement, and sealed-static
 identity through the retained file description.
 
+The production image enters through `fe2o3_secure_start_v1`, a freestanding
+x86-64 shim that performs no allocation or runtime call. It restores
+nondumpability after the kernel's `exec` transition, reasserts `no_new_privs`
+and a zero `RLIMIT_CORE`, verifies the two process controls, and then jumps to
+the static runtime entry while preserving its initial stack state. The static
+build gate requires the ELF entry address to equal that symbol. Supervisor-side
+authorization of the same sealed image remains required before key transfer;
+self-measurement after entry cannot authorize a substituted executable. The
+dedicated supervisor now implements the preceding authority-free program
+stage: trusted provisioning supplies the launcher measurement, the sealed
+caller policy supplies the issuer measurement, and both exact images are
+copied to distinct read-only anonymous executable memfds with complete content,
+exec, and seal seals. The program value cannot accept a root or key; that
+authority-binding transition and the actual launch remain pending.
+
 A sealed-static issuer has no user-space DSO inventory. Its runtime policy
 therefore uses SHA-256 and length of the fixed canonical
 `SEALED_STATIC_ISSUER_RUNTIME_CLOSURE_V1` record. Any other runtime measurement

@@ -36,6 +36,7 @@
         "fe2o3-runtime-model",
         "fe2o3-semantic-trace",
         "fe2o3-service-model",
+        "fe2o3-static-preexec-manifest",
         "reserved-fe2o3-symbols"
       ]
     },
@@ -87,6 +88,7 @@
         "fe2o3-broker-authority-service",
         "fe2o3-compiler-execution-client",
         "fe2o3-compiler-execution-issuer",
+        "fe2o3-compiler-execution-supervisor",
         "fe2o3-core",
         "fe2o3-hip-sys",
         "fe2o3-host",

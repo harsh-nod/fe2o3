@@ -63,6 +63,7 @@ fe2o3-amdhsa-loader = { path = "crates/fe2o3-amdhsa-loader" }
 fe2o3-aql = { path = "crates/fe2o3-aql" }
 fe2o3-amd-target = { path = "crates/fe2o3-amd-target" }
 fe2o3-artifact-transaction = { path = "crates/fe2o3-artifact-transaction" }
+fe2o3-broker-authority-service = { path = "crates/fe2o3-broker-authority-service" }
 fe2o3-build-authority = { path = "crates/fe2o3-build-authority" }
 fe2o3-completion = { path = "crates/fe2o3-completion" }
 fe2o3-compiler-api = { path = "crates/fe2o3-compiler-api" }
@@ -70,6 +71,7 @@ fe2o3-compiler-closure-capability = { path = "crates/fe2o3-compiler-closure-capa
 fe2o3-compiler-execution-client = { path = "crates/fe2o3-compiler-execution-client" }
 fe2o3-compiler-execution-issuer = { path = "crates/fe2o3-compiler-execution-issuer" }
 fe2o3-compiler-execution-protocol = { path = "crates/fe2o3-compiler-execution-protocol" }
+fe2o3-compiler-execution-supervisor = { path = "crates/fe2o3-compiler-execution-supervisor" }
 fe2o3-compiler-ffi = { path = "crates/fe2o3-compiler-ffi" }
 fe2o3-compiler-lineage = { path = "crates/fe2o3-compiler-lineage" }
 fe2o3-artifacts = { path = "crates/fe2o3-artifacts" }
@@ -115,6 +117,7 @@ fe2o3-runtime-protocol = { path = "crates/fe2o3-runtime-protocol" }
 fe2o3-runtime = { path = "crates/fe2o3-runtime" }
 fe2o3-service-host = { path = "crates/fe2o3-service-host" }
 fe2o3-service-model = { path = "crates/fe2o3-service-model" }
+fe2o3-static-preexec-manifest = { path = "crates/fe2o3-static-preexec-manifest" }
 fe2o3-verifier = { path = "crates/fe2o3-verifier" }
 reserved-fe2o3-symbols = { path = "crates/reserved-fe2o3-symbols" }
 rustc-codegen-fe2o3 = { path = "crates/rustc-codegen-fe2o3" }
