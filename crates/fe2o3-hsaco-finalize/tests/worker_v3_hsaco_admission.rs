@@ -541,6 +541,18 @@ fn native_v3_publication_persists_and_reconstructs_exact_lineage_after_restart()
         .unwrap(),
         exact_raw
     );
+    let compiler_subject = published.compiler_execution_subject_v1().unwrap();
+    let finalized = published.recovered_evidence().finalized_evidence();
+    assert_eq!(compiler_subject.attempt(), finalized.attempt());
+    assert_eq!(compiler_subject.slot(), finalized.handoff_slot());
+    assert_eq!(
+        compiler_subject.transaction_identity(),
+        finalized.transaction_identity()
+    );
+    assert_eq!(
+        compiler_subject.outer_handoff().sha256(),
+        finalized.outer_handoff().identity().sha256()
+    );
     let expected_intent = published.recovered_evidence().publication_intent();
     drop(published);
     finish_build_attempt(&directory.0, &producer(), attempt).unwrap();
@@ -554,6 +566,10 @@ fn native_v3_publication_persists_and_reconstructs_exact_lineage_after_restart()
     );
     assert_eq!(recovered.exact_finalized_hsaco(), exact_finalized);
     assert_eq!(recovered.publication_intent(), expected_intent);
+    assert_eq!(
+        recovered.compiler_execution_subject_v1().unwrap(),
+        compiler_subject
+    );
     assert!(!recovered.grants_publication_authority());
     assert!(!recovered.grants_load_authority());
     assert!(!recovered.grants_launch_authority());
@@ -572,6 +588,10 @@ fn native_v3_publication_persists_and_reconstructs_exact_lineage_after_restart()
     assert_eq!(
         reconstructed.recovered_evidence().exact_finalized_hsaco(),
         exact_finalized
+    );
+    assert_eq!(
+        reconstructed.compiler_execution_subject_v1().unwrap(),
+        compiler_subject
     );
     let binding = reconstructed.publication_result().publication_binding();
     let (replay, record, claim, lease) = reconstructed

@@ -163,6 +163,27 @@ impl InertCompilerExecutionSubjectV1 {
         )
     }
 
+    /// Reconstructs the canonical subject from complete authority-free replay evidence.
+    ///
+    /// The caller supplies the durable occurrence axes that are not encoded inside the outer
+    /// handoff. This operation validates and binds those axes but does not prove that the compiler
+    /// occurrence happened or grant compiler, publication, load, or launch authority.
+    pub fn from_replay_evidence(
+        attempt: BuildAttempt,
+        slot: CompilerModuleHandoffSlotV3,
+        transaction_identity: CompilerModuleHandoffTransactionIdentityV3,
+        handoff: &InertSemanticCompilerModuleHandoffV3,
+    ) -> Result<Self, CompilerExecutionSubjectErrorV1> {
+        Self::from_exact_binding(
+            attempt,
+            slot,
+            transaction_identity,
+            handoff.identity(),
+            handoff.canonical_bytes().len(),
+            handoff,
+        )
+    }
+
     fn from_exact_binding(
         attempt: BuildAttempt,
         slot: CompilerModuleHandoffSlotV3,

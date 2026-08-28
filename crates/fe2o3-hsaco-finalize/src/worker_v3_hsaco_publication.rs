@@ -5,11 +5,12 @@ use std::{error::Error, fmt, path::Path, sync::Arc};
 use fe2o3_artifact_transaction::{
     AtomicPublicationIdentityV1, AttemptScopedHsacoPublicationErrorV3,
     AttemptScopedHsacoPublicationResultV3, BuildAttempt, CanonicalLinkRequestIdentityV1,
-    DurableCurrentLinkPublicationLeaseV1, DurableLinkPublicationPlanV1,
-    DurablePublishedHsacoClaimV3, FinalizationIdentityV1, FinalizedOutputIdentityV1,
-    KernelSetIdentityV1, LinkPublicationScopeV1, LinkedOutputIdentityV1, PackageIdentityV1,
-    PinnedWorkerIdentityV1, ProducerIdentity, RecoveredWorkerV3PublicationIntentV1,
-    TargetIdentityV1, UpstreamCodeObjectEvidenceIdentityV1, ValidatedResponseIdentityV1,
+    CompilerExecutionSubjectErrorV1, DurableCurrentLinkPublicationLeaseV1,
+    DurableLinkPublicationPlanV1, DurablePublishedHsacoClaimV3, FinalizationIdentityV1,
+    FinalizedOutputIdentityV1, InertCompilerExecutionSubjectV1, KernelSetIdentityV1,
+    LinkPublicationScopeV1, LinkedOutputIdentityV1, PackageIdentityV1, PinnedWorkerIdentityV1,
+    ProducerIdentity, RecoveredWorkerV3PublicationIntentV1, TargetIdentityV1,
+    UpstreamCodeObjectEvidenceIdentityV1, ValidatedResponseIdentityV1,
     VerifiedWorkerV3PublicationAuthorityV1, WorkerV3FinalizerReplayAttachmentsV1,
     WorkerV3PublicationBindingErrorV1, WorkerV3PublicationBindingV1,
     WorkerV3PublicationIntentErrorV1, WorkerV3PublicationIntentOutcomeV1,
@@ -204,6 +205,13 @@ impl PublishedProtectedWorkerV3HsacoV1 {
         self.publication.published_claim()
     }
 
+    /// Reconstructs the exact authority-free compiler occurrence subject retained by this result.
+    pub fn compiler_execution_subject_v1(
+        &self,
+    ) -> Result<InertCompilerExecutionSubjectV1, CompilerExecutionSubjectErrorV1> {
+        self.recovered.compiler_execution_subject_v1()
+    }
+
     pub const fn grants_compiler_authority(&self) -> bool {
         false
     }
@@ -326,6 +334,18 @@ impl RecoveredProtectedWorkerV3HsacoPublicationV1 {
 
     pub const fn finalized_evidence(&self) -> &PreparedFinalizedProtectedWorkerV3HsacoV1 {
         &self.finalized
+    }
+
+    /// Reconstructs the exact authority-free compiler occurrence before HSACO publication.
+    pub fn compiler_execution_subject_v1(
+        &self,
+    ) -> Result<InertCompilerExecutionSubjectV1, CompilerExecutionSubjectErrorV1> {
+        InertCompilerExecutionSubjectV1::from_replay_evidence(
+            self.finalized.attempt(),
+            self.finalized.handoff_slot(),
+            self.finalized.transaction_identity(),
+            self.finalized.outer_handoff(),
+        )
     }
 
     /// Derives the exact transaction-owned binding required to complete V3 publication.
