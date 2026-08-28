@@ -152,8 +152,11 @@ non-fail-closed startup. A dedicated supervisor crate now authenticates the
 provisioned launcher against a service release measurement and the issuer
 against that sealed policy before copying both into distinct read-only
 mode-0555 memfds with complete content and executable seals. The resulting
-move-only program has no key or root authority. Protected root/key binding,
-`clone3` launch, and readiness consumption still remain; the pinned policy has an
+move-only program is now consumed into one prepared supervisor together with
+the canonical signing-key capability, dedicated non-root UID/GID profile, and
+an exact service-owned mode-0700 root. It still exposes no descriptor, key,
+signing operation, or launch API. Complete child credential/capability/namespace
+enforcement, `clone3` launch, and readiness consumption remain; the pinned policy has an
 immutable sealed memfd capability reserved at rustc fd 202. Distinct-UID
 supervisor launch and inspection policy and the Worker V3 authority join remain
 absent. A fixed
