@@ -19,7 +19,14 @@ acknowledgment. Its frozen identity derives the transaction digest consumed by
 `fe2o3-external-anchor-protocol`. The transaction is inert: it does not contact,
 advance, or authenticate an external monotonic service. The policy itself pins
 distinct issuer-signing and external-anchor Ed25519 keys; equal or weak keys
-fail closed. The 272-byte client
+fail closed. A fixed 2,682-byte Worker anchor-journal record preserves that
+complete transaction and one exact advance challenge across
+`PreparedAnchor`, `AnchorCommitted`, `Published`, and `Aborted`. Committed and
+terminal records verify the complete signed external receipt under the
+policy-pinned anchor key; only `Published` binds a nonzero final Worker-record
+identity. The codec enforces legal same-transaction and next-transaction
+transitions but does not persist them, contact the anchor, or grant authority.
+The 272-byte client
 profile binds the exact dedicated supervisor UID/GID to one complete
 caller-pinned issuer policy; it
 contains no endpoint, path, secret, timeout, or authority. The launch manifest

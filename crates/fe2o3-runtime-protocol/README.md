@@ -43,6 +43,13 @@ prove that its named Worker record is durable. Only independent protected-ledger
 reacquisition may construct the move-only result that allows the issuer to
 discard an issued receipt.
 
+The runtime facade also re-exports the 1,874-byte external-anchor transaction
+and 2,682-byte Worker anchor-journal record. The latter fixes the exact
+`PreparedAnchor`, `AnchorCommitted`, `Published`, and `Aborted` states and
+verifies their challenge, signed receipt, transition, and final Worker-record
+bindings. It is an authority-free codec, not a durable journal implementation
+or external-anchor client.
+
 The 2,090-byte carriage record preserves the complete policy, request, sidecar,
 and ACK without projection. Construction and decoding verify every nested
 record, the signature against the carried policy and request, and the ACK

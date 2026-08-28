@@ -10,6 +10,7 @@ mod receipt_publication;
 mod service;
 mod service_ready;
 mod supervisor_handoff;
+mod worker_anchor_journal;
 
 /// Sole production Unix socket pathname for the protected compiler-execution supervisor.
 pub const COMPILER_EXECUTION_SUPERVISOR_SOCKET_PATH_V1: &str =
@@ -88,4 +89,9 @@ pub use service_ready::{
 pub use supervisor_handoff::{
     COMPILER_EXECUTION_SUPERVISOR_HANDOFF_BYTES_V1, CompilerExecutionSupervisorHandoffErrorV1,
     CompilerExecutionSupervisorHandoffIdentityV1, CompilerExecutionSupervisorHandoffV1,
+};
+pub use worker_anchor_journal::{
+    COMPILER_EXECUTION_WORKER_ANCHOR_JOURNAL_BYTES_V1, CompilerExecutionWorkerAnchorJournalErrorV1,
+    CompilerExecutionWorkerAnchorJournalIdentityV1, CompilerExecutionWorkerAnchorJournalStageV1,
+    CompilerExecutionWorkerAnchorJournalV1,
 };
