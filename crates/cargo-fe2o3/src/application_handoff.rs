@@ -20,6 +20,7 @@ use std::time::{Duration, Instant};
 use fe2o3_artifact_transaction::{
     DurableCurrentLinkPublicationLeaseV1, reacquire_current_hsaco_publication_lease_v3,
 };
+use fe2o3_compiler_execution_client::COMPILER_EXECUTION_SERVICE_CHILD_FD_V1;
 use fe2o3_runtime_protocol::{
     MAX_WORKER_V3_LOAD_ENVELOPE_BYTES_V2, WORKER_V3_APPLICATION_ARTIFACT_DIR_FD_ENV_V1,
     WORKER_V3_APPLICATION_ENVELOPE_FD_ENV_V1, WORKER_V3_APPLICATION_HANDOFF_ACK_BYTES_V1,
@@ -46,6 +47,8 @@ pub(crate) const RUNNER_SHORT_TIMEOUT_TEST_CONTEXT_VERSION: &str = "3-test-short
 pub(crate) const RUNNER_SCHEDULER_TOLERANT_TEST_CONTEXT_VERSION: &str = "3-test-scheduler-tolerant";
 #[cfg(feature = "application-handoff-adversarial-fixture")]
 pub(crate) const RUNNER_FAST_FAILURE_TEST_CONTEXT_VERSION: &str = "3-test-fast-failures";
+#[cfg(feature = "worker-v3-envelope-integration-test-only")]
+pub(crate) const RUNNER_ENVELOPE_ONLY_TEST_CONTEXT_VERSION: &str = "3-test-envelope-only";
 pub(crate) const RUNNER_EXPECTS_ENVELOPE: &str = "required";
 const MAX_APPLICATION_ARTIFACT_DIRECTORY_ENTRIES_V1: usize = 4_096;
 const RETIRED_WORKER_V2_ENVELOPE_PREFIX_V1: &[u8] = b".fe2o3-worker-v2-load-envelope-v1-";
@@ -67,6 +70,35 @@ const WORKER_V3_PRODUCTION_ACK_TIMEOUT: Duration = Duration::from_secs(30);
 const TEST_ACK_READY_FD_ENV: &str = "FE2O3_INTERNAL_TEST_ACK_READY_FD";
 #[cfg(any(test, feature = "application-handoff-fault-injection-test-only"))]
 const TEST_ACK_STARTUP_TIMEOUT: Duration = Duration::from_secs(60);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ApplicationCompilerServiceExposureV1 {
+    Required,
+    #[cfg(any(
+        test,
+        feature = "application-handoff-adversarial-fixture",
+        feature = "application-handoff-fault-injection-test-only"
+    ))]
+    TestDisabled,
+}
+
+impl ApplicationCompilerServiceExposureV1 {
+    pub(crate) const fn is_required(self) -> bool {
+        matches!(self, Self::Required)
+    }
+
+    const fn descriptor(self) -> Option<RawFd> {
+        match self {
+            Self::Required => Some(COMPILER_EXECUTION_SERVICE_CHILD_FD_V1),
+            #[cfg(any(
+                test,
+                feature = "application-handoff-adversarial-fixture",
+                feature = "application-handoff-fault-injection-test-only"
+            ))]
+            Self::TestDisabled => None,
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct ApplicationTimeouts {
@@ -743,6 +775,7 @@ impl<'directory> PinnedApplicationEnvelope<'directory> {
         command: &mut Command,
         application_v3: WorkerV3ApplicationIdentityV1,
         timeouts: ApplicationTimeouts,
+        compiler_service: ApplicationCompilerServiceExposureV1,
     ) -> Result<PendingApplicationAck, String> {
         self.revalidate()?;
         let reaper = application_reaper().reserve()?;
@@ -760,6 +793,7 @@ impl<'directory> PinnedApplicationEnvelope<'directory> {
         let envelope_fd = self.file.as_raw_fd();
         let artifact_directory_fd = self.artifact_directory_file.as_raw_fd();
         let ack_fd = ack_write.as_raw_fd();
+        let compiler_service_fd = compiler_service.descriptor();
         #[cfg(any(test, feature = "application-handoff-fault-injection-test-only"))]
         let test_ready_fd = test_ready_write.as_ref().map(AsRawFd::as_raw_fd);
         let expected = self.snapshot;
@@ -828,8 +862,9 @@ impl<'directory> PinnedApplicationEnvelope<'directory> {
         let seccomp_filter = no_fork_application_filter();
         let sandbox = PendingApplicationSandbox::start()?;
         let supervisor_socket = sandbox.child_socket_fd();
-        // SAFETY: all three owning `File`s remain alive through spawn. The callback validates the
-        // exact evidence and ACK descriptors before clearing only their child-side CLOEXEC flags.
+        // SAFETY: all three parent-owned `File`s remain alive through spawn. The callback validates
+        // them and, in production, the earlier child-created service endpoint before clearing only
+        // those child-side CLOEXEC flags.
         unsafe {
             command.pre_exec(move || {
                 establish_fresh_application_session()?;
@@ -865,6 +900,11 @@ impl<'directory> PinnedApplicationEnvelope<'directory> {
                     || ack_status & OFlags::ACCMODE != OFlags::WRONLY
                 {
                     return Err(io::Error::from_raw_os_error(libc::ESTALE));
+                }
+                if let Some(compiler_service_fd) = compiler_service_fd {
+                    crate::application_exec::validate_and_expose_connected_seqpacket_descriptor(
+                        compiler_service_fd,
+                    )?;
                 }
                 #[cfg(any(test, feature = "application-handoff-fault-injection-test-only"))]
                 if let Some(test_ready_fd) = test_ready_fd {
@@ -1045,25 +1085,20 @@ impl ApplicationHandoffExpectationV1 {
 }
 
 impl PendingApplicationAck {
+    /// Converts a spawned, pre-ACK launch into complete containment custody.
+    pub(crate) fn into_cleanup_after_spawn(
+        mut self,
+        child: &Child,
+    ) -> Result<ApplicationCleanup, ApplicationHandoffFailure> {
+        let sandbox = self.complete_sandbox_after_spawn(child)?;
+        Ok(self.cleanup(Some(sandbox)))
+    }
+
     pub(crate) fn await_after_spawn(
         mut self,
         child: &mut Child,
     ) -> Result<ApplicationHandoffGuard, ApplicationHandoffFailure> {
-        drop(self.parent_write.take());
-        #[cfg(any(test, feature = "application-handoff-fault-injection-test-only"))]
-        drop(self.test_ready_parent_write.take());
-        let sandbox = match self
-            .sandbox
-            .take()
-            .expect("pending acknowledgment owns its sandbox")
-            .complete(child.id())
-        {
-            Ok(sandbox) => sandbox,
-            Err(failure) => {
-                let (message, sandbox) = failure.into_parts();
-                return Err(self.failure(message, Some(sandbox)));
-            }
-        };
+        let sandbox = self.complete_sandbox_after_spawn(child)?;
         #[cfg(any(test, feature = "application-handoff-fault-injection-test-only"))]
         if let Some(mut ready) = self.test_ready_read.take()
             && let Err(message) = read_test_ack_ready(&mut ready)
@@ -1082,6 +1117,27 @@ impl PendingApplicationAck {
                 cleanup: Some(self.cleanup(Some(sandbox))),
             }),
             Err(message) => Err(self.failure(message, Some(sandbox))),
+        }
+    }
+
+    fn complete_sandbox_after_spawn(
+        &mut self,
+        child: &Child,
+    ) -> Result<ApplicationSandboxGuard, ApplicationHandoffFailure> {
+        drop(self.parent_write.take());
+        #[cfg(any(test, feature = "application-handoff-fault-injection-test-only"))]
+        drop(self.test_ready_parent_write.take());
+        match self
+            .sandbox
+            .take()
+            .expect("pending acknowledgment owns its sandbox")
+            .complete(child.id())
+        {
+            Ok(sandbox) => Ok(sandbox),
+            Err(failure) => {
+                let (message, sandbox) = failure.into_parts();
+                Err(self.failure(message, Some(sandbox)))
+            }
         }
     }
 
@@ -1753,6 +1809,20 @@ mod tests {
             command.pre_exec(establish_fresh_application_session);
         }
         command
+    }
+
+    #[test]
+    fn compiler_service_exposure_is_mandatory_outside_explicit_test_mode() {
+        assert!(ApplicationCompilerServiceExposureV1::Required.is_required());
+        assert_eq!(
+            ApplicationCompilerServiceExposureV1::Required.descriptor(),
+            Some(COMPILER_EXECUTION_SERVICE_CHILD_FD_V1)
+        );
+        assert!(!ApplicationCompilerServiceExposureV1::TestDisabled.is_required());
+        assert_eq!(
+            ApplicationCompilerServiceExposureV1::TestDisabled.descriptor(),
+            None
+        );
     }
 
     fn test_cleanup() -> ApplicationCleanup {

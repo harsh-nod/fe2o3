@@ -32,6 +32,49 @@ pub(crate) fn expose_descriptor(fd: RawFd) -> io::Result<()> {
     Ok(())
 }
 
+/// Validates one protected connected Unix `SOCK_SEQPACKET` endpoint before exposing it.
+pub(crate) fn validate_and_expose_connected_seqpacket_descriptor(fd: RawFd) -> io::Result<()> {
+    if get_descriptor_flags(fd)? & libc::FD_CLOEXEC == 0 {
+        return Err(io::Error::from_raw_os_error(libc::ESTALE));
+    }
+    let mut socket_type = 0_i32;
+    let mut socket_type_length = std::mem::size_of_val(&socket_type) as libc::socklen_t;
+    // SAFETY: both output pointers name initialized stack storage for the complete syscall.
+    if unsafe {
+        libc::getsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_TYPE,
+            std::ptr::addr_of_mut!(socket_type).cast(),
+            std::ptr::addr_of_mut!(socket_type_length),
+        )
+    } != 0
+        || socket_type_length as usize != std::mem::size_of_val(&socket_type)
+        || socket_type != libc::SOCK_SEQPACKET
+    {
+        return Err(io::Error::from_raw_os_error(libc::ESTALE));
+    }
+
+    // Socketpair endpoints are connected unnamed AF_UNIX sockets. Requiring a peer rejects an
+    // unconnected descriptor substitution even when its socket type matches.
+    let mut peer = unsafe { std::mem::zeroed::<libc::sockaddr_storage>() };
+    let mut peer_length = std::mem::size_of_val(&peer) as libc::socklen_t;
+    // SAFETY: the peer buffer and length remain writable for the complete syscall.
+    if unsafe {
+        libc::getpeername(
+            fd,
+            std::ptr::addr_of_mut!(peer).cast(),
+            std::ptr::addr_of_mut!(peer_length),
+        )
+    } != 0
+        || peer_length < std::mem::size_of::<libc::sa_family_t>() as libc::socklen_t
+        || i32::from(peer.ss_family) != libc::AF_UNIX
+    {
+        return Err(io::Error::from_raw_os_error(libc::ESTALE));
+    }
+    expose_descriptor(fd)
+}
+
 fn get_descriptor_flags(fd: RawFd) -> io::Result<i32> {
     loop {
         // SAFETY: F_GETFD reads flags for only the supplied raw descriptor.
@@ -56,5 +99,54 @@ fn set_descriptor_flags(fd: RawFd, flags: i32) -> io::Result<()> {
         if error.kind() != io::ErrorKind::Interrupted {
             return Err(error);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+
+    use super::*;
+
+    fn socket_pair(kind: i32) -> (OwnedFd, OwnedFd) {
+        let mut descriptors = [-1_i32; 2];
+        assert_eq!(
+            unsafe {
+                libc::socketpair(
+                    libc::AF_UNIX,
+                    kind | libc::SOCK_CLOEXEC,
+                    0,
+                    descriptors.as_mut_ptr(),
+                )
+            },
+            0
+        );
+        unsafe {
+            (
+                OwnedFd::from_raw_fd(descriptors[0]),
+                OwnedFd::from_raw_fd(descriptors[1]),
+            )
+        }
+    }
+
+    #[test]
+    fn only_connected_cloexec_seqpacket_descriptors_are_exposed() {
+        let (seqpacket, _peer) = socket_pair(libc::SOCK_SEQPACKET);
+        validate_and_expose_connected_seqpacket_descriptor(seqpacket.as_raw_fd()).unwrap();
+        assert_eq!(
+            get_descriptor_flags(seqpacket.as_raw_fd()).unwrap() & libc::FD_CLOEXEC,
+            0
+        );
+
+        let (stream, _peer) = socket_pair(libc::SOCK_STREAM);
+        assert!(validate_and_expose_connected_seqpacket_descriptor(stream.as_raw_fd()).is_err());
+
+        let unconnected =
+            unsafe { libc::socket(libc::AF_UNIX, libc::SOCK_SEQPACKET | libc::SOCK_CLOEXEC, 0) };
+        assert!(unconnected >= 0);
+        let unconnected = unsafe { OwnedFd::from_raw_fd(unconnected) };
+        assert!(
+            validate_and_expose_connected_seqpacket_descriptor(unconnected.as_raw_fd()).is_err()
+        );
     }
 }

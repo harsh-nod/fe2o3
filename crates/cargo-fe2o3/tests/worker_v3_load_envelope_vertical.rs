@@ -773,7 +773,7 @@ fn v3_application_runner_command_for(
     fixture: &PreparedV3ApplicationFixture,
     application: &Path,
 ) -> Command {
-    v3_application_runner_command_for_context(fixture, application, "3")
+    v3_application_runner_command_for_context(fixture, application, "3-test-envelope-only")
 }
 
 fn v3_application_runner_command_for_context(

@@ -368,6 +368,8 @@ impl Error for CompilerExecutionBoundaryErrorV1 {
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::process::CommandExt;
+
     use ed25519_dalek::SigningKey;
     use fe2o3_compiler_closure_capability::COMPILER_EXECUTION_POLICY_CHILD_FD_V1;
     use fe2o3_compiler_execution_client::COMPILER_EXECUTION_SERVICE_CHILD_FD_V1;
@@ -483,6 +485,15 @@ mod tests {
             &mut command,
         )
         .unwrap();
+        // SAFETY: this models the production callback registered after child-channel creation.
+        unsafe {
+            command.pre_exec(|| {
+                crate::application_exec::protect_all_nonstdio_descriptors()?;
+                crate::application_exec::validate_and_expose_connected_seqpacket_descriptor(
+                    COMPILER_EXECUTION_SERVICE_CHILD_FD_V1,
+                )
+            });
+        }
         let PreparedCompilerExecutionBoundaryV1 {
             profile,
             policy,
