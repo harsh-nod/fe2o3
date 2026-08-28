@@ -13,12 +13,12 @@ use fe2o3_compiler_execution_client::{
 };
 use fe2o3_compiler_execution_protocol::{
     CompilerExecutionAttestationChallengeV1, CompilerExecutionAttestationReceiptV1,
-    CompilerExecutionAttestationRequestV1, CompilerExecutionIssuerMeasurementV1,
-    CompilerExecutionIssuerPolicyV1, CompilerExecutionReceiptCarriageV1,
-    CompilerExecutionReceiptPublicationAckV1, CompilerExecutionReceiptPublicationV1,
-    CompilerExecutionServicePublishDispositionV1, CompilerExecutionServiceRequestKindV1,
-    CompilerExecutionServiceRequestV1, CompilerExecutionServiceResponseV1,
-    MAX_COMPILER_EXECUTION_SERVICE_REQUEST_BYTES_V1,
+    CompilerExecutionAttestationRequestV1, CompilerExecutionCurrentRecordVerificationV1,
+    CompilerExecutionIssuerMeasurementV1, CompilerExecutionIssuerPolicyV1,
+    CompilerExecutionReceiptCarriageV1, CompilerExecutionReceiptPublicationAckV1,
+    CompilerExecutionReceiptPublicationV1, CompilerExecutionServicePublishDispositionV1,
+    CompilerExecutionServiceRequestKindV1, CompilerExecutionServiceRequestV1,
+    CompilerExecutionServiceResponseV1, MAX_COMPILER_EXECUTION_SERVICE_REQUEST_BYTES_V1,
     MAX_COMPILER_EXECUTION_SERVICE_RESPONSE_BYTES_V1,
 };
 use sha2::{Digest, Sha256};
@@ -166,6 +166,66 @@ fn recovery_only_returns_the_complete_current_carriage() {
         .unwrap();
     assert_eq!(result.into_carriage().unwrap(), fixture.carriage);
     assert_eq!(handle.join().unwrap(), 1);
+}
+
+#[test]
+fn exact_current_verification_is_one_terminal_packet() {
+    let fixture = Fixture::new();
+    let (client, service) = socket_pair(libc::SOCK_SEQPACKET);
+    let handle = spawn_service(service, fixture.clone(), DurableStage::Published);
+    let verification = CompilerExecutionClientV1::admit(client, Duration::from_secs(1))
+        .unwrap()
+        .verify_current_only(&fixture.policy, fixture.carriage.clone())
+        .unwrap();
+    assert_eq!(
+        verification.carriage_identity(),
+        *fixture.carriage.identity().as_bytes()
+    );
+    assert_eq!(
+        verification.protected_policy_verification_identity(),
+        [0x91; 32]
+    );
+    assert_eq!(
+        verification.protected_worker_ledger_verification_identity(),
+        [0x92; 32]
+    );
+    assert!(!verification.grants_authority());
+    assert_eq!(handle.join().unwrap(), 1);
+}
+
+#[test]
+fn current_verification_carriage_substitution_fails_closed() {
+    let fixture = Fixture::new();
+    let substituted = Fixture::with_subject(0x21);
+    let (client, service) = socket_pair(libc::SOCK_SEQPACKET);
+    let policy = fixture.policy.clone();
+    let handle = thread::spawn(move || {
+        let request = receive_request(&service);
+        assert_eq!(
+            request.kind(),
+            CompilerExecutionServiceRequestKindV1::VerifyCurrent
+        );
+        let verification = CompilerExecutionCurrentRecordVerificationV1::new(
+            &substituted.subject,
+            &substituted.carriage,
+            [0x91; 32],
+            [0x92; 32],
+        )
+        .unwrap();
+        let response =
+            CompilerExecutionServiceResponseV1::verified_current(request.identity(), verification)
+                .unwrap();
+        send_raw(&service, response.canonical_bytes());
+    });
+    let error = CompilerExecutionClientV1::admit(client, Duration::from_secs(1))
+        .unwrap()
+        .verify_current_only(&policy, fixture.carriage)
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        CompilerExecutionClientErrorV1::DurableStateChanged
+    ));
+    handle.join().unwrap();
 }
 
 #[test]
@@ -459,6 +519,25 @@ fn spawn_service(
                             &fixture.policy,
                             sequence,
                             anchor,
+                        )
+                        .unwrap(),
+                        true,
+                    )
+                }
+                CompilerExecutionServiceRequestKindV1::VerifyCurrent => {
+                    assert!(matches!(stage, DurableStage::Published));
+                    assert_eq!(request.carriage(), Some(&fixture.carriage));
+                    let verification = CompilerExecutionCurrentRecordVerificationV1::new(
+                        &fixture.subject,
+                        &fixture.carriage,
+                        [0x91; 32],
+                        [0x92; 32],
+                    )
+                    .unwrap();
+                    (
+                        CompilerExecutionServiceResponseV1::verified_current(
+                            request.identity(),
+                            verification,
                         )
                         .unwrap(),
                         true,

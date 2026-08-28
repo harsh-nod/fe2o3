@@ -6,6 +6,14 @@ subject recovery and, only after a canonical `ReceiptAbsent` response, resumes
 the issuer journal from `Ready`, `Prepared`, or `Issued`. It then publishes the
 exact signed receipt and returns the complete inert receipt carriage.
 
+The terminal `verify_current_only` operation sends one complete expected
+carriage to the protected service. It accepts only a canonical
+`VerifiedCurrent` response bound to the exact request, policy, subject,
+carriage, issuer journal, Worker record, sequence, and rollback anchors. The
+returned record remains descriptive until the endpoint is provisioned through
+the authenticated supervisor handoff and the caller joins external rollback
+and compiler-refinement evidence.
+
 The client uses one absolute monotonic deadline, fixed stack packet storage,
 strict request/response identity correlation, pinned-policy validation, and no
 ancillary descriptors. It grants no compiler, artifact, load, or launch

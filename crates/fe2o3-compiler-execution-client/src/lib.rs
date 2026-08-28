@@ -13,11 +13,12 @@ use std::time::{Duration, Instant};
 use fe2o3_artifact_transaction::InertCompilerExecutionSubjectV1;
 use fe2o3_compiler_execution_protocol::{
     CompilerExecutionAttestationChallengeV1, CompilerExecutionAttestationErrorV1,
-    CompilerExecutionAttestationRequestV1, CompilerExecutionIssuerPolicyV1,
-    CompilerExecutionReceiptCarriageV1, CompilerExecutionReceiptPublicationErrorV1,
-    CompilerExecutionReceiptPublicationV1, CompilerExecutionServiceProtocolErrorV1,
-    CompilerExecutionServiceRequestV1, CompilerExecutionServiceResponseKindV1,
-    CompilerExecutionServiceResponseV1, MAX_COMPILER_EXECUTION_SERVICE_RESPONSE_BYTES_V1,
+    CompilerExecutionAttestationRequestV1, CompilerExecutionCurrentRecordVerificationV1,
+    CompilerExecutionIssuerPolicyV1, CompilerExecutionReceiptCarriageV1,
+    CompilerExecutionReceiptPublicationErrorV1, CompilerExecutionReceiptPublicationV1,
+    CompilerExecutionServiceProtocolErrorV1, CompilerExecutionServiceRequestV1,
+    CompilerExecutionServiceResponseKindV1, CompilerExecutionServiceResponseV1,
+    MAX_COMPILER_EXECUTION_SERVICE_RESPONSE_BYTES_V1,
 };
 
 mod child_channel;
@@ -180,6 +181,55 @@ impl CompilerExecutionClientV1 {
                 })
             }
         }
+    }
+
+    /// Verifies one exact carriage against the protected service's current Worker record.
+    ///
+    /// This operation is terminal for the connection. The returned canonical record remains
+    /// authority-free until a caller authenticates how this client endpoint was provisioned and
+    /// joins external rollback and refinement evidence.
+    pub fn verify_current_only(
+        self,
+        policy: &CompilerExecutionIssuerPolicyV1,
+        expected_carriage: CompilerExecutionReceiptCarriageV1,
+    ) -> Result<CompilerExecutionCurrentRecordVerificationV1, CompilerExecutionClientErrorV1> {
+        if expected_carriage.policy() != policy {
+            return Err(CompilerExecutionClientErrorV1::SubjectOrPolicyMismatch);
+        }
+        let expected_policy = *policy.identity().as_bytes();
+        let expected_subject = *expected_carriage.request().subject().identity().sha256();
+        let expected_carriage_identity = *expected_carriage.identity().as_bytes();
+        let expected_issuer_journal = expected_carriage.acknowledgment().issuer_journal_identity();
+        let expected_worker_record = expected_carriage
+            .acknowledgment()
+            .worker_ledger_record_identity();
+        let expected_sequence = expected_carriage.acknowledgment().sequence();
+        let expected_prior = expected_carriage
+            .publication()
+            .receipt()
+            .prior_rollback_anchor();
+        let expected_current = expected_carriage.acknowledgment().current_rollback_anchor();
+        let request = CompilerExecutionServiceRequestV1::verify_current(policy, expected_carriage)?;
+        let response = self.exchange(policy, &request)?;
+        require_kind(
+            &response,
+            CompilerExecutionServiceResponseKindV1::VerifiedCurrent,
+        )?;
+        let verification = response.current_record_verification().cloned().ok_or(
+            CompilerExecutionClientErrorV1::MissingPayload("current-record verification"),
+        )?;
+        if verification.policy_identity() != expected_policy
+            || verification.subject_identity() != expected_subject
+            || verification.carriage_identity() != expected_carriage_identity
+            || verification.issuer_journal_identity() != expected_issuer_journal
+            || verification.worker_ledger_record_identity() != expected_worker_record
+            || verification.sequence() != expected_sequence
+            || verification.prior_rollback_anchor() != expected_prior
+            || verification.current_rollback_anchor() != expected_current
+        {
+            return Err(CompilerExecutionClientErrorV1::DurableStateChanged);
+        }
+        Ok(verification)
     }
 
     /// Recovers or completes one exact compiler receipt and returns its full carriage.
@@ -417,6 +467,7 @@ fn require_kind(
                 CompilerExecutionServiceResponseKindV1::Cancelled => "Cancelled",
                 CompilerExecutionServiceResponseKindV1::Recovered => "Recovered",
                 CompilerExecutionServiceResponseKindV1::ReceiptAbsent => "ReceiptAbsent",
+                CompilerExecutionServiceResponseKindV1::VerifiedCurrent => "VerifiedCurrent",
             },
             actual: response.kind(),
         });

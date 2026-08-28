@@ -3,6 +3,7 @@
 
 mod attestation;
 mod client_profile;
+mod current_record_verification;
 mod launch_manifest;
 mod receipt_publication;
 mod service;
@@ -32,6 +33,12 @@ pub use client_profile::{
     COMPILER_EXECUTION_CLIENT_PROFILE_BYTES_V1, CompilerExecutionClientProfileErrorV1,
     CompilerExecutionClientProfileIdentityV1, CompilerExecutionClientProfileV1,
 };
+pub use current_record_verification::{
+    COMPILER_EXECUTION_CURRENT_RECORD_VERIFICATION_BYTES_V1,
+    CompilerExecutionCurrentRecordVerificationErrorV1,
+    CompilerExecutionCurrentRecordVerificationIdentityV1,
+    CompilerExecutionCurrentRecordVerificationV1,
+};
 pub use launch_manifest::{
     COMPILER_EXECUTION_SERVICE_LAUNCH_MANIFEST_BYTES_V1, CompilerExecutionClientProcessIdentityV1,
     CompilerExecutionServiceLaunchManifestErrorV1,
@@ -56,6 +63,8 @@ pub use service::{
     COMPILER_EXECUTION_SERVICE_PUBLISHED_RESPONSE_BYTES_V1,
     COMPILER_EXECUTION_SERVICE_RECOVER_REQUEST_BYTES_V1,
     COMPILER_EXECUTION_SERVICE_RECOVERED_RESPONSE_BYTES_V1,
+    COMPILER_EXECUTION_SERVICE_VERIFIED_CURRENT_RESPONSE_BYTES_V1,
+    COMPILER_EXECUTION_SERVICE_VERIFY_CURRENT_REQUEST_BYTES_V1,
     CompilerExecutionServiceProtocolErrorV1, CompilerExecutionServicePublishDispositionV1,
     CompilerExecutionServiceRequestIdentityV1, CompilerExecutionServiceRequestKindV1,
     CompilerExecutionServiceRequestV1, CompilerExecutionServiceResponseIdentityV1,

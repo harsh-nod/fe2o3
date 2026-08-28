@@ -2,7 +2,13 @@
 
 This crate owns the canonical, inert compiler-execution issuer policy, public
 client profile, expected-client launch manifest, attestation, receipt-carriage,
-and bounded service packet records. The 240-byte client profile binds the exact
+current-record verification, and bounded service packet records. The 352-byte
+current-record verification binds one exact carriage to the policy, subject,
+issuer journal, Worker record, sequence, both rollback anchors, and the
+protected policy and Worker-ledger verification identities. Decoding that
+record proves canonical structure only. It grants no authority unless a caller
+received it over an authenticated protected-service session and independently
+matches every field to the request. The 240-byte client profile binds the exact
 dedicated supervisor UID/GID to one complete caller-pinned issuer policy; it
 contains no endpoint, path, secret, timeout, or authority. The launch manifest
 binds an exact PID/UID/GID tuple to an exact policy identity. A canonical
