@@ -115,6 +115,24 @@ fn malformed_catalogs_and_collections_are_rejected() {
 #[test]
 fn stale_identities_origins_ordinals_and_noncanonical_bytes_are_rejected() {
     let capture = imported_capture();
+    for mutate in [
+        |hostile: &mut SemanticCounterCaptureV2| {
+            hostile.runs[0].source.scheme = ContentSchemeV1::RawCanonicalSha256;
+        },
+        |hostile: &mut SemanticCounterCaptureV2| {
+            hostile.runs[0].source.format_version = 2;
+        },
+        |hostile: &mut SemanticCounterCaptureV2| {
+            hostile.runs[0].source.canonical_len = 0;
+        },
+    ] {
+        let mut hostile = capture.clone();
+        mutate(&mut hostile);
+        assert!(matches!(
+            decode_counter_capture_v2(&serde_json::to_vec(&hostile).unwrap()),
+            Err(CounterCaptureErrorV2::InvalidSourceIdentity)
+        ));
+    }
     let mut hostile = capture.clone();
     hostile.devices[0].identity = CaptureIdentityV1::new([0xdd; 32]).unwrap();
     for definition in &mut hostile.counter_definitions {

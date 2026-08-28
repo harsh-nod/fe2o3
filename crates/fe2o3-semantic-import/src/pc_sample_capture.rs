@@ -248,6 +248,12 @@ impl SemanticPcSampleCaptureV3 {
         }
 
         let run = &self.runs[0];
+        if run.source.scheme != crate::ContentSchemeV1::DomainSeparatedSha256
+            || run.source.format_version != 1
+            || run.source.canonical_len == 0
+        {
+            return Err(PcSampleCaptureErrorV3::InvalidSourceIdentity);
+        }
         if run.identity_origin != TruthOriginV1::Observed
             || run.identity
                 != crate::capture::derive_identity(
@@ -657,6 +663,7 @@ pub fn pc_sample_capture_content_identity_v3(
 pub enum PcSampleCaptureErrorV3 {
     UnsupportedVersion(u16),
     InvalidRunCount,
+    InvalidSourceIdentity,
     InvalidDeviceCatalog,
     InvalidCodeObjectCatalog,
     InvalidDispatchCount,

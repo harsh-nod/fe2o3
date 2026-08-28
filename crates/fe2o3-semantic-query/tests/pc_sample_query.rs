@@ -66,6 +66,7 @@ fn raw_samples_are_observed_and_hotspots_are_bounded_inferences() {
     else {
         panic!("expected page")
     };
+    assert_eq!(page.context.relative_pc_unavailable_count, 1);
     assert_eq!(page.items.len(), 5);
     assert!(page.items.iter().all(|item| matches!(
         item,

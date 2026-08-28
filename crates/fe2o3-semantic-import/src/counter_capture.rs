@@ -157,6 +157,12 @@ impl SemanticCounterCaptureV2 {
             return Err(CounterCaptureErrorV2::InvalidDispatchCount);
         }
         let run = &self.runs[0];
+        if run.source.scheme != crate::ContentSchemeV1::DomainSeparatedSha256
+            || run.source.format_version != 1
+            || run.source.canonical_len == 0
+        {
+            return Err(CounterCaptureErrorV2::InvalidSourceIdentity);
+        }
         if run.identity_origin != TruthOriginV1::Observed
             || run.identity
                 != crate::capture::derive_identity(
@@ -422,6 +428,7 @@ pub fn counter_capture_content_identity_v2(
 pub enum CounterCaptureErrorV2 {
     UnsupportedVersion(u16),
     InvalidRunCount,
+    InvalidSourceIdentity,
     InvalidDeviceCatalog,
     InvalidCounterCatalog,
     InvalidDispatchCount,

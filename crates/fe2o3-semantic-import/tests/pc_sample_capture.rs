@@ -158,6 +158,24 @@ fn process_local_handle_collisions_remain_distinct() {
 #[test]
 fn hostile_substitution_origins_counts_and_noncanonical_bytes_are_rejected() {
     let capture = imported_capture();
+    for mutate in [
+        |hostile: &mut SemanticPcSampleCaptureV3| {
+            hostile.runs[0].source.scheme = ContentSchemeV1::RawCanonicalSha256;
+        },
+        |hostile: &mut SemanticPcSampleCaptureV3| {
+            hostile.runs[0].source.format_version = 2;
+        },
+        |hostile: &mut SemanticPcSampleCaptureV3| {
+            hostile.runs[0].source.canonical_len = 0;
+        },
+    ] {
+        let mut hostile = capture.clone();
+        mutate(&mut hostile);
+        assert!(matches!(
+            decode_pc_sample_capture_v3(&serde_json::to_vec(&hostile).unwrap()),
+            Err(PcSampleCaptureErrorV3::InvalidSourceIdentity)
+        ));
+    }
     let mut hostile = capture.clone();
     hostile.samples[0].exec_mask ^= 1;
     assert!(matches!(

@@ -124,7 +124,7 @@ pub struct PcSampleQueryContextV3 {
     pub schema_version: u16,
     pub dispatch_count: u64,
     pub raw_sample_count: u64,
-    pub unavailable_native_pc_count: u64,
+    pub relative_pc_unavailable_count: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -217,7 +217,7 @@ impl PcSampleQuerySessionV3 {
             return Err(PcSampleQueryErrorV3::InputTooLarge);
         }
         let capture = decode_pc_sample_capture_v3(bytes).map_err(PcSampleQueryErrorV3::Capture)?;
-        let unavailable_native_pc_count = capture
+        let relative_pc_unavailable_count = capture
             .samples
             .iter()
             .try_fold(0_u64, |count, sample| {
@@ -232,7 +232,7 @@ impl PcSampleQuerySessionV3 {
                 .map_err(|_| PcSampleQueryErrorV3::SizeOverflow)?,
             raw_sample_count: u64::try_from(capture.samples.len())
                 .map_err(|_| PcSampleQueryErrorV3::SizeOverflow)?,
-            unavailable_native_pc_count,
+            relative_pc_unavailable_count,
         };
         Ok(Self {
             capture,
