@@ -1072,8 +1072,10 @@ fn descriptor_capabilities(
             TargetCapability::Atomic { .. } => {
                 result.insert(CapabilityV1::Atomics);
             }
-            TargetCapability::BFloat16 if allow_exact_tiled_matrix => {
-                result.insert(CapabilityV1::MatrixMultiply);
+            TargetCapability::BFloat16 => {
+                // Descriptor construction has already admitted an exact gfx942
+                // or gfx950 target. BF16 remains bound in retained Kernel IR and
+                // executable evidence; descriptor V1 has no scalar-format tag.
             }
             TargetCapability::Extension { namespace, name }
                 if allow_exact_tiled_matrix
@@ -2146,6 +2148,25 @@ mod tests {
             descriptor_capabilities(&module, false, false),
             Err(CompilerDescriptorError::UnsupportedCapability(_))
         ));
+    }
+
+    #[test]
+    fn exact_target_implies_bfloat16_without_matrix_authority() {
+        let mut module = Module::new("bfloat16_descriptor_capability_test");
+        module
+            .required_capabilities
+            .insert(TargetCapability::BFloat16);
+
+        assert!(
+            descriptor_capabilities(&module, false, false)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            descriptor_capabilities(&module, true, false)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
