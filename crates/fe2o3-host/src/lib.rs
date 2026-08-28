@@ -2,6 +2,8 @@
 mod application_descriptor_handoff;
 mod argument_alias;
 mod artifact_binding;
+#[cfg(target_os = "linux")]
+mod compiler_execution_current_record_audit;
 mod generated_argument_plan;
 mod generated_kfd_arguments;
 mod generated_kfd_invocation;
@@ -102,6 +104,12 @@ pub use artifact_binding::{
     CompilerGeneratedKernelExpectationV1, CompilerGeneratedKernelProfileV1,
     CompilerGeneratedSemanticWitnessErrorV1, ValidatedCompilerGeneratedSemanticWitnessV1,
     semantic_witness_from_backend_v1, validate_compiler_generated_semantic_witness_v1,
+};
+#[cfg(target_os = "linux")]
+pub use compiler_execution_current_record_audit::{
+    InheritedWorkerV3CompilerCurrentRecordAuditorV1,
+    WORKER_V3_COMPILER_CURRENT_RECORD_AUDIT_TIMEOUT_V1, WorkerV3CompilerCurrentRecordAuditErrorV1,
+    WorkerV3CompilerCurrentRecordAuditV1,
 };
 pub use fe2o3_aql::{AqlDispatchGeometryV1, AqlGeometryError};
 pub use fe2o3_kernel_descriptor::{BlockSizeV1, DimensionsV1, KernelId, LaunchConstraintsV1};

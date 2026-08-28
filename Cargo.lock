@@ -987,10 +987,12 @@ dependencies = [
 name = "fe2o3-host"
 version = "0.1.0"
 dependencies = [
+ "ed25519-dalek",
  "fe2o3-amd-target",
  "fe2o3-aql",
  "fe2o3-artifact-transaction",
  "fe2o3-artifacts",
+ "fe2o3-compiler-execution-client",
  "fe2o3-compiler-ffi",
  "fe2o3-core",
  "fe2o3-device",
