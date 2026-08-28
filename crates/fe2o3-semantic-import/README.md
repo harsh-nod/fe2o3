@@ -3,6 +3,9 @@
 `fe2o3-semantic-import` converts bounded profiler evidence into
 canonical Semantic Trace V1 without loading a GPU runtime or opening a device.
 It is an inert adapter library plus the stdin-only `fe2o3-trace-import` CLI.
+It also owns Semantic Capture V1, a strict canonical JSON container for a
+bounded set of profiler dispatch envelopes. The container complements rather
+than replaces per-dispatch Trace V1.
 
 ## Accepted evidence
 
@@ -13,6 +16,11 @@ It is an inert adapter library plus the stdin-only `fe2o3-trace-import` CLI.
   identity are evidence references. Process, thread, queue, agent, kernel, and
   dispatch IDs are never copied into the trace. Raw identifiers affect only the
   exact source identity and identities derived opaquely from that source.
+- `rocprofv3-capture` parses that same structured JSON once and imports every
+  bounded kernel-dispatch record. It assigns a source-derived run identity,
+  domain-separated redacted device identities from recorded agent handles, and
+  source-and-ordinal-derived dispatch identities. Raw process, device, queue,
+  kernel, and dispatch handles never enter the capture.
 - `rocprofv3-att-manifest` accepts the `filenames.json` file emitted for the
   rocprofv3 compute-viewer UI format. It recognizes the installed
   rocprofiler-sdk 1.1 shape (`wave_filenames`, `se_filenames`,
@@ -41,10 +49,34 @@ narrow lifecycle meaning that rocprof recorded an `end_timestamp`; it does not
 claim correct kernel output, successful harness completion, or absence of a
 diagnostic/fault. Diagnostic and fault history is explicitly unavailable.
 
+## Semantic Capture V1
+
+`encode_capture_v1` produces one compact canonical JSON representation;
+`decode_capture_v1` rejects whitespace variants, unknown or duplicate fields,
+unknown schema versions, stale run/dispatch/reference identities, noncanonical
+ordering, invalid timing, and documents over 8 MiB. The capture content address
+is SHA-256 over a versioned domain and the complete canonical bytes. A capture
+contains ordered run, device, and dispatch catalogs and is independent of
+kernel shape.
+
+Every recorded fact carries an origin from the closed vocabulary `declared`,
+`proved`, `observed`, `inferred`, or `unavailable`. Current rocprof dispatch
+captures use `observed` only for the structured device reference, launch, and
+timestamp envelope. KIR, artifact, and source-map identities are caller
+declarations, not authenticated correlations. Missing artifact or source-map
+identities are explicit `unavailable` facts.
+
+Kernel-dispatch buffer records are not sampled, but the format does not prove
+that the collector lost no records. Capture V1 records `not_sampled` and,
+separately, loss as `unknown`/`unavailable`. Completeness is
+`partial_semantic_execution_history` even when every structured dispatch record
+in the input was imported. Counter records, PC samples, ATT wave events, KIR
+site history, and register/value state remain unavailable.
+
 ## CLI
 
-The CLI accepts evidence only on stdin and writes only canonical binary Trace
-V1 on stdout. It does not accept paths, directories, devices, FIFOs, raw ATT
+The CLI accepts evidence only on stdin and writes canonical binary Trace V1 or
+canonical JSON Capture V1 on stdout. It does not accept paths, directories, devices, FIFOs, raw ATT
 files, or handles. Input is capped at 8 MiB before parsing and output at 64 KiB;
 arguments, JSON recursion, process/record counts, trace events, evidence sets,
 and all integer conversions are independently checked.
@@ -55,6 +87,14 @@ fe2o3-trace-import rocprofv3-json \
   --process-index 0 --dispatch-index 0 \
   < results.json > dispatch.fe2o3tr1
 
+fe2o3-trace-import rocprofv3-capture \
+  --kir-sha256 KIR_SHA256 --kir-len KIR_BYTES --wave-width 64 \
+  --artifact-sha256 ARTIFACT_SHA256 --artifact-len ARTIFACT_BYTES \
+  --artifact-format 1 \
+  --source-map-sha256 MAP_SHA256 --source-map-len MAP_BYTES \
+  --source-map-format 1 \
+  < results.json > run.fe2o3cap1
+
 fe2o3-trace-import rocprofv3-att-manifest \
   --kir-sha256 KIR_SHA256 --kir-len KIR_BYTES --wave-width 64 \
   --grid 1024,1,1 --grid-workgroups 4,1,1 --workgroup 256,1,1 \
@@ -63,8 +103,9 @@ fe2o3-trace-import rocprofv3-att-manifest \
 
 `--artifact-sha256`, `--artifact-len`, and `--artifact-format` must appear
 together. They are optional metadata for profiler inputs. Duplicate flags are
-rejected. Use `fe2o3-trace-query` against the output for capability discovery,
-dispatch summaries, and bounded agent-facing queries.
+rejected. The three `--source-map-*` flags are likewise atomic and apply only
+to `rocprofv3-capture`. Use `fe2o3-trace-query` for Trace V1 and
+`fe2o3-capture-query` for Capture V1.
 
 Raw `.att`/`.out`, compute-viewer wave JSON, PCs, register values, source-line
 text, and inferred performance are outside this adapter. They need a future

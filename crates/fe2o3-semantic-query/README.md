@@ -71,3 +71,34 @@ successful diagnosis or performance prediction.
 Site ordinals and Kernel-IR content identities remain producer claims. The query
 surface does not resolve them to names or source locations without a future
 authenticated catalog adapter.
+
+## Profiler capture queries
+
+The same crate provides the read-only `CaptureQuerySessionV1` protocol and
+`fe2o3-capture-query` CLI for canonical Semantic Capture V1 documents:
+
+```text
+fe2o3-capture-query capabilities < run.fe2o3cap1
+fe2o3-capture-query open < run.fe2o3cap1
+fe2o3-capture-query list-runs < run.fe2o3cap1
+fe2o3-capture-query list-devices --limit 32 < run.fe2o3cap1
+fe2o3-capture-query list-dispatches --limit 128 < run.fe2o3cap1
+fe2o3-capture-query inspect-dispatch --dispatch DISPATCH_HEX < run.fe2o3cap1
+fe2o3-capture-query hotspots --limit 32 < run.fe2o3cap1
+```
+
+These operations expose exact capture/run/device/dispatch/source/KIR/artifact/
+source-map identities together with each fact's origin, sampling status, loss
+status, and completeness scope. Pagination cursors bind both the complete
+capture content address and operation; they cannot be replayed against another
+capture or list. Hotspots sort observed dispatch-envelope duration in ticks,
+with opaque dispatch identity as the deterministic tie-breaker. They do not
+normalize clocks, infer kernel causality, predict performance, or claim that
+unrecorded dispatches did not exist.
+
+Input, page item count, conservative page construction, encoded response bytes,
+CLI arguments, and cursor positions have independent hard bounds. Capability
+discovery reports counter records, PC samples, ATT wave events, semantic
+execution history, and execution control as typed unavailable capabilities.
+The query surface never invokes rocprofv3, opens a device, reads a path, or
+grants execution authority.

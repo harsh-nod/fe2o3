@@ -1502,6 +1502,7 @@ dependencies = [
 name = "fe2o3-semantic-query"
 version = "0.1.0"
 dependencies = [
+ "fe2o3-semantic-import",
  "fe2o3-semantic-trace",
  "serde",
  "serde_json",

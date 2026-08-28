@@ -7,6 +7,9 @@
 //! cost; they neither execute tools nor claim a diagnosis or performance
 //! prediction.
 
+mod capture_query;
+pub use capture_query::*;
+
 use std::error::Error;
 use std::fmt;
 use std::io::{self, Write};

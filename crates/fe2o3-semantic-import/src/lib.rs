@@ -13,6 +13,9 @@ use serde::de::{IgnoredAny, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 use sha2::{Digest, Sha256};
 
+mod capture;
+pub use capture::*;
+
 pub const MAX_IMPORT_SOURCE_BYTES_V1: u64 = 8 * 1024 * 1024;
 pub const MAX_IMPORT_OUTPUT_BYTES_V1: u64 = 64 * 1024;
 pub const MAX_ROCPROF_PROCESSES_V1: usize = 4_096;
@@ -20,6 +23,7 @@ pub const MAX_ROCPROF_DISPATCHES_PER_PROCESS_V1: usize = 65_536;
 pub const ROCPROF_JSON_SOURCE_IDENTITY_DOMAIN_V1: &[u8] = b"fe2o3.rocprofv3-json.source.v1\0";
 pub const ROCPROF_ATT_SOURCE_IDENTITY_DOMAIN_V1: &[u8] =
     b"fe2o3.rocprofv3-att-manifest.source.v1\0";
+pub(crate) const ROCPROF_DISPATCH_IDENTITY_DOMAIN_V1: &[u8] = b"fe2o3.rocprofv3-json.dispatch.v1\0";
 
 const SOURCE_FORMAT_VERSION_V1: u16 = 1;
 const IMPORT_EVENT_LIMIT_V1: u64 = 2;
@@ -89,6 +93,15 @@ pub struct RocprofBindingV1 {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RocprofCaptureBindingV1 {
+    pub kernel_ir_claim: KernelIrIdentityClaimV1,
+    pub artifact: Option<ArtifactClaimV1>,
+    /// Caller-supplied content claim. Import does not authenticate correlation.
+    pub source_map: Option<ContentIdentityV1>,
+    pub wave_width: WaveWidthV1,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SparseImportBindingV1 {
     pub kernel_ir_claim: KernelIrIdentityClaimV1,
     pub artifact: Option<ArtifactClaimV1>,
@@ -151,6 +164,31 @@ pub struct ImportedTraceV1 {
     imported_facts: &'static [ImportedFactV1],
     unavailable_facts: &'static [UnavailableImportFactV1],
     selected_record_ordinal: Option<u64>,
+    rocprof_dispatch: Option<RocprofDispatchEnvelopeV1>,
+}
+
+/// Bounded facts copied from one selected rocprofv3 kernel-dispatch record.
+///
+/// Collector handles are never exposed. `device_identity`, when present, is a
+/// domain-separated digest of the recorded agent handle and remains an
+/// unauthenticated observation rather than a physical-device credential.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RocprofDispatchEnvelopeV1 {
+    pub process_index: u32,
+    pub dispatch_index: u32,
+    pub selected_record_ordinal: u64,
+    pub process_count: u32,
+    pub process_dispatch_count: u32,
+    pub total_dispatch_count: u64,
+    pub device_identity: Option<OpaqueIdentityV1>,
+    pub start_timestamp: u64,
+    pub end_timestamp: u64,
+}
+
+impl RocprofDispatchEnvelopeV1 {
+    pub const fn duration_ticks(self) -> u64 {
+        self.end_timestamp - self.start_timestamp
+    }
 }
 
 impl ImportedTraceV1 {
@@ -180,6 +218,10 @@ impl ImportedTraceV1 {
 
     pub const fn selected_record_ordinal(&self) -> Option<u64> {
         self.selected_record_ordinal
+    }
+
+    pub const fn rocprof_dispatch(&self) -> Option<RocprofDispatchEnvelopeV1> {
+        self.rocprof_dispatch
     }
 }
 
@@ -213,9 +255,31 @@ pub fn import_rocprofv3_json_v1(
         binding.selection.process_index,
         binding.selection.dispatch_index,
     )?;
+    let process_count =
+        u32::try_from(document.processes.len()).map_err(|_| ImportErrorV1::SizeOverflow)?;
+    let process_dispatch_count = u32::try_from(process.buffer_records.kernel_dispatch.len())
+        .map_err(|_| ImportErrorV1::SizeOverflow)?;
+    let total_dispatch_count = document
+        .processes
+        .iter()
+        .try_fold(0_u64, |total, process| {
+            total.checked_add(u64::try_from(process.buffer_records.kernel_dispatch.len()).ok()?)
+        })
+        .ok_or(ImportErrorV1::SizeOverflow)?;
     let source_digest = source_identity.digest();
+    let device_identity = record
+        .dispatch_info
+        .agent_id
+        .map(|agent| {
+            derived_handle_identity(
+                b"fe2o3.rocprofv3-json.device.v1\0",
+                source_digest,
+                agent.handle,
+            )
+        })
+        .transpose()?;
     let dispatch = imported_dispatch_identity(
-        b"fe2o3.rocprofv3-json.dispatch.v1\0",
+        ROCPROF_DISPATCH_IDENTITY_DOMAIN_V1,
         source_digest,
         selected_record_ordinal,
     )?;
@@ -274,7 +338,153 @@ pub fn import_rocprofv3_json_v1(
         imported_facts: &[ImportedFactV1::DispatchEnvelope],
         unavailable_facts: &ROCPROF_UNAVAILABLE,
         selected_record_ordinal: Some(selected_record_ordinal),
+        rocprof_dispatch: Some(RocprofDispatchEnvelopeV1 {
+            process_index: u32::try_from(binding.selection.process_index)
+                .map_err(|_| ImportErrorV1::SizeOverflow)?,
+            dispatch_index: u32::try_from(binding.selection.dispatch_index)
+                .map_err(|_| ImportErrorV1::SizeOverflow)?,
+            selected_record_ordinal,
+            process_count,
+            process_dispatch_count,
+            total_dispatch_count,
+            device_identity,
+            start_timestamp: record.start_timestamp,
+            end_timestamp: record.end_timestamp,
+        }),
     })
+}
+
+/// Imports every kernel-dispatch record in one bounded rocprofv3 JSON document
+/// into a canonical, content-addressable profiler capture.
+///
+/// The structured source is parsed exactly once. This does not import counter,
+/// PC-sampling, ATT, or semantic execution-history records.
+pub fn import_rocprofv3_capture_v1(
+    source: &[u8],
+    binding: RocprofCaptureBindingV1,
+    limits: ImportLimitsV1,
+) -> Result<SemanticCaptureV1, ImportErrorV1> {
+    validate_source_size(source, limits)?;
+    let source_identity = source_identity(ROCPROF_JSON_SOURCE_IDENTITY_DOMAIN_V1, source)?;
+    let document: RocprofDocument =
+        serde_json::from_slice(source).map_err(|_| ImportErrorV1::InvalidRocprofJson)?;
+    let total_dispatch_count = document
+        .processes
+        .iter()
+        .try_fold(0_usize, |total, process| {
+            total.checked_add(process.buffer_records.kernel_dispatch.len())
+        })
+        .ok_or(ImportErrorV1::SizeOverflow)?;
+    if total_dispatch_count == 0 || total_dispatch_count > MAX_CAPTURE_DISPATCHES_V1 {
+        return Err(ImportErrorV1::CaptureDispatchCountOutOfRange {
+            actual: total_dispatch_count,
+            max: MAX_CAPTURE_DISPATCHES_V1,
+        });
+    }
+
+    let source_record = ContentIdentityRecordV1::from(source_identity);
+    let run_identity =
+        capture::derive_identity(capture::RUN_IDENTITY_DOMAIN_V1, source_record.digest, 0)
+            .map_err(ImportErrorV1::Capture)?;
+    let artifact = match binding.artifact {
+        Some(artifact) => {
+            IdentityFactV1::declared(ContentIdentityRecordV1::from(artifact.content_identity()?))
+        }
+        None => IdentityFactV1::unavailable(CaptureUnavailableReasonV1::NotProvided),
+    };
+    let source_map = binding
+        .source_map
+        .map(|identity| IdentityFactV1::declared(identity.into()))
+        .unwrap_or_else(|| IdentityFactV1::unavailable(CaptureUnavailableReasonV1::NotProvided));
+    let mut device_ids = std::collections::BTreeSet::new();
+    let mut dispatches = Vec::new();
+    dispatches
+        .try_reserve_exact(total_dispatch_count)
+        .map_err(|_| ImportErrorV1::SizeOverflow)?;
+    let mut ordinal = 0_u64;
+    for (process_index, process) in document.processes.iter().enumerate() {
+        for (dispatch_index, record) in process.buffer_records.kernel_dispatch.iter().enumerate() {
+            if record.start_timestamp > record.end_timestamp {
+                return Err(ImportErrorV1::TimestampOrder);
+            }
+            let launch = launch_from_dispatch(record.dispatch_info, binding.wave_width)?;
+            let agent = record
+                .dispatch_info
+                .agent_id
+                .ok_or(ImportErrorV1::MissingCaptureDeviceIdentity)?;
+            let device_identity: CaptureIdentityV1 = derived_handle_identity(
+                b"fe2o3.rocprofv3-json.device.v1\0",
+                source_identity.digest(),
+                agent.handle,
+            )?
+            .into();
+            device_ids.insert(device_identity);
+            let dispatch_identity = capture::derive_identity(
+                ROCPROF_DISPATCH_IDENTITY_DOMAIN_V1,
+                source_record.digest,
+                ordinal,
+            )
+            .map_err(ImportErrorV1::Capture)?;
+            dispatches.push(CaptureDispatchV1 {
+                identity: dispatch_identity,
+                identity_origin: TruthOriginV1::Observed,
+                run_identity,
+                device_identity,
+                process_index: u32::try_from(process_index)
+                    .map_err(|_| ImportErrorV1::SizeOverflow)?,
+                dispatch_index: u32::try_from(dispatch_index)
+                    .map_err(|_| ImportErrorV1::SizeOverflow)?,
+                source_record_ordinal: ordinal,
+                kernel_ir: binding.kernel_ir_claim.into(),
+                artifact,
+                source_map,
+                launch_origin: TruthOriginV1::Observed,
+                launch: launch.into(),
+                timing_origin: TruthOriginV1::Observed,
+                start_timestamp: record.start_timestamp,
+                end_timestamp: record.end_timestamp,
+                duration_ticks: record.end_timestamp - record.start_timestamp,
+            });
+            ordinal = ordinal.checked_add(1).ok_or(ImportErrorV1::SizeOverflow)?;
+        }
+    }
+    let devices = device_ids
+        .into_iter()
+        .map(|identity| CaptureDeviceV1 {
+            identity,
+            identity_origin: TruthOriginV1::Observed,
+        })
+        .collect();
+    let count = u64::try_from(total_dispatch_count).map_err(|_| ImportErrorV1::SizeOverflow)?;
+    let capture = SemanticCaptureV1 {
+        schema_version: CAPTURE_SCHEMA_VERSION_V1,
+        source_kind: CaptureSourceKindV1::Rocprofv3KernelDispatchJson,
+        runs: vec![CaptureRunV1 {
+            identity: run_identity,
+            identity_origin: TruthOriginV1::Observed,
+            source: source_record,
+        }],
+        devices,
+        dispatches,
+        coverage: CaptureCoverageV1 {
+            origin: TruthOriginV1::Declared,
+            scope: CompletenessScopeV1::PartialSemanticExecutionHistory,
+            source_dispatch_records: count,
+            captured_dispatch_records: count,
+            sampling: SamplingStatusV1 {
+                origin: TruthOriginV1::Declared,
+                mode: SamplingModeV1::NotSampled,
+            },
+            loss: LossStatusV1 {
+                origin: TruthOriginV1::Unavailable,
+                state: LossStateV1::Unknown,
+                lost_records: None,
+                unavailable_reason: Some(CaptureUnavailableReasonV1::CollectorLossUnknown),
+            },
+        },
+    };
+    capture.validate().map_err(ImportErrorV1::Capture)?;
+    Ok(capture)
 }
 
 /// Imports the installed rocprofv3 ATT `filenames.json` manifest as sparse
@@ -325,6 +535,7 @@ pub fn import_rocprofv3_att_manifest_v1(
         imported_facts: &[ImportedFactV1::AttCaptureManifest],
         unavailable_facts: &SPARSE_UNAVAILABLE,
         selected_record_ordinal: None,
+        rocprof_dispatch: None,
     })
 }
 
@@ -490,6 +701,18 @@ fn derived_identity(
     OpaqueIdentityV1::new(digest.finalize().into()).map_err(ImportErrorV1::Trace)
 }
 
+fn derived_handle_identity(
+    domain: &[u8],
+    source: OpaqueIdentityV1,
+    handle: u64,
+) -> Result<OpaqueIdentityV1, ImportErrorV1> {
+    let mut digest = Sha256::new();
+    digest.update(domain);
+    digest.update(source.as_bytes());
+    digest.update(handle.to_le_bytes());
+    OpaqueIdentityV1::new(digest.finalize().into()).map_err(ImportErrorV1::Trace)
+}
+
 fn valid_tool_text(value: &str) -> bool {
     !value.is_empty() && value.len() <= MAX_TOOL_VERSION_BYTES_V1 && !value.contains('\0')
 }
@@ -520,8 +743,15 @@ struct RocprofDispatchRecord {
 
 #[derive(Clone, Copy, Deserialize)]
 struct RocprofDispatchInfo {
+    #[serde(default)]
+    agent_id: Option<RocprofHandle>,
     workgroup_size: JsonDimensions,
     grid_size: JsonDimensions,
+}
+
+#[derive(Clone, Copy, Deserialize)]
+struct RocprofHandle {
+    handle: u64,
 }
 
 #[derive(Clone, Copy, Deserialize)]
@@ -738,10 +968,13 @@ pub enum ImportErrorV1 {
     InvalidRocprofJson,
     ProcessNotFound,
     DispatchNotFound,
+    CaptureDispatchCountOutOfRange { actual: usize, max: usize },
+    MissingCaptureDeviceIdentity,
     TimestampOrder,
     InvalidLaunchGeometry,
     InvalidAttManifest,
     Trace(TraceValidationErrorV1),
+    Capture(CaptureErrorV1),
 }
 
 impl fmt::Display for ImportErrorV1 {
@@ -761,6 +994,12 @@ impl fmt::Display for ImportErrorV1 {
             Self::InvalidRocprofJson => formatter.write_str("invalid rocprofv3 JSON evidence"),
             Self::ProcessNotFound => formatter.write_str("selected rocprofv3 process is absent"),
             Self::DispatchNotFound => formatter.write_str("selected rocprofv3 dispatch is absent"),
+            Self::CaptureDispatchCountOutOfRange { actual, max } => write!(
+                formatter,
+                "rocprofv3 capture has {actual} dispatch records; allowed range is 1..={max}"
+            ),
+            Self::MissingCaptureDeviceIdentity => formatter
+                .write_str("rocprofv3 capture dispatch is missing dispatch_info.agent_id.handle"),
             Self::TimestampOrder => formatter.write_str("dispatch timestamps are reversed"),
             Self::InvalidLaunchGeometry => {
                 formatter.write_str("dispatch launch geometry is invalid")
@@ -771,6 +1010,10 @@ impl fmt::Display for ImportErrorV1 {
             Self::Trace(error) => {
                 write!(formatter, "Semantic Trace V1 rejected the import: {error}")
             }
+            Self::Capture(error) => write!(
+                formatter,
+                "Semantic Capture V1 rejected the import: {error}"
+            ),
         }
     }
 }
@@ -779,6 +1022,7 @@ impl Error for ImportErrorV1 {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Trace(error) => Some(error),
+            Self::Capture(error) => Some(error),
             _ => None,
         }
     }
