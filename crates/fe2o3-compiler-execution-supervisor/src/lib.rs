@@ -24,6 +24,7 @@ use sha2::{Digest, Sha256};
 
 mod authority;
 mod handoff;
+mod launch;
 
 pub use authority::{
     ISSUER_SERVICE_SECUREBITS_V1, IssuerServiceCredentialProfileErrorV1,
@@ -31,6 +32,7 @@ pub use authority::{
     ProtectedIssuerSupervisorV1,
 };
 pub use handoff::{AcceptedCompilerExecutionHandoffV1, ProtectedIssuerHandoffErrorV1};
+pub use launch::{PreparedProtectedIssuerLaunchV1, ProtectedIssuerLaunchPreparationErrorV1};
 
 const MAX_PROVISIONED_EXECUTABLE_BYTES_V1: u64 = 128 * 1024 * 1024;
 const REQUIRED_EXECUTABLE_SEALS_V1: SealFlags = SealFlags::WRITE
@@ -283,6 +285,59 @@ impl AdmittedIssuerProgramV1 {
     pub fn issuer_object_identity(&self) -> StaticPreexecObjectIdentityV1 {
         self.issuer.object_identity()
     }
+
+    pub(crate) fn try_clone_launcher_for_launch(
+        &self,
+    ) -> Result<File, IssuerProgramAdmissionErrorV1> {
+        self.launcher.try_clone_for_launch()
+    }
+
+    pub(crate) fn try_clone_issuer_for_launch(
+        &self,
+    ) -> Result<File, IssuerProgramAdmissionErrorV1> {
+        self.issuer.try_clone_for_launch()
+    }
+
+    pub(crate) fn try_clone_policy_for_launch(
+        &self,
+    ) -> Result<File, IssuerProgramAdmissionErrorV1> {
+        self.policy
+            .try_clone_for_transfer()
+            .map_err(IssuerProgramAdmissionErrorV1::Policy)
+    }
+
+    pub(crate) fn revalidate_launcher_clone(
+        &self,
+        image: &File,
+    ) -> Result<(), IssuerProgramAdmissionErrorV1> {
+        self.launcher.revalidate_clone(image)
+    }
+
+    pub(crate) fn revalidate_issuer_clone(
+        &self,
+        image: &File,
+    ) -> Result<(), IssuerProgramAdmissionErrorV1> {
+        self.issuer.revalidate_clone(image)
+    }
+
+    pub(crate) fn revalidate_policy_clone(
+        &self,
+        image: &File,
+    ) -> Result<(), IssuerProgramAdmissionErrorV1> {
+        let transferred =
+            image
+                .try_clone()
+                .map_err(|source| IssuerProgramAdmissionErrorV1::Io {
+                    operation: "clone protected issuer policy for revalidation",
+                    source,
+                })?;
+        let observed = CompilerExecutionPolicyCapabilityV1::from_file(transferred)
+            .map_err(IssuerProgramAdmissionErrorV1::Policy)?;
+        if observed.policy() != self.policy.policy() {
+            return Err(IssuerProgramAdmissionErrorV1::PolicyImageMismatch);
+        }
+        Ok(())
+    }
 }
 
 struct PinnedSealedStaticExecutableV1 {
@@ -350,6 +405,33 @@ impl PinnedSealedStaticExecutableV1 {
             self.snapshot.size,
             self.snapshot.mode,
         )
+    }
+
+    fn try_clone_for_launch(&self) -> Result<File, IssuerProgramAdmissionErrorV1> {
+        self.revalidate()?;
+        let image = self
+            .image
+            .try_clone()
+            .map_err(|source| IssuerProgramAdmissionErrorV1::Io {
+                operation: "clone sealed executable for protected launch",
+                source,
+            })?;
+        rustix::io::fcntl_setfd(&image, rustix::io::FdFlags::CLOEXEC).map_err(|source| {
+            IssuerProgramAdmissionErrorV1::Io {
+                operation: "protect cloned executable launch descriptor",
+                source: source.into(),
+            }
+        })?;
+        self.revalidate_clone(&image)?;
+        Ok(image)
+    }
+
+    fn revalidate_clone(&self, image: &File) -> Result<(), IssuerProgramAdmissionErrorV1> {
+        let current = validate_sealed_executable(image, self.measurement, self.role)?;
+        if current != self.snapshot {
+            return Err(IssuerProgramAdmissionErrorV1::InvalidSealedImage(self.role));
+        }
+        Ok(())
     }
 }
 

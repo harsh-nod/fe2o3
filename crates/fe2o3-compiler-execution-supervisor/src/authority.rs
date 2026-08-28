@@ -242,6 +242,82 @@ impl ProtectedIssuerSupervisorV1 {
     ) -> &fe2o3_compiler_execution_protocol::CompilerExecutionIssuerPolicyV1 {
         self.program.policy()
     }
+
+    pub(super) fn clone_launcher_for_launch(
+        &self,
+    ) -> Result<File, ProtectedIssuerSupervisorErrorV1> {
+        self.revalidate()?;
+        self.program
+            .try_clone_launcher_for_launch()
+            .map_err(ProtectedIssuerSupervisorErrorV1::Program)
+    }
+
+    pub(super) fn clone_issuer_for_launch(&self) -> Result<File, ProtectedIssuerSupervisorErrorV1> {
+        self.revalidate()?;
+        self.program
+            .try_clone_issuer_for_launch()
+            .map_err(ProtectedIssuerSupervisorErrorV1::Program)
+    }
+
+    pub(super) fn clone_root_for_launch(&self) -> Result<File, ProtectedIssuerSupervisorErrorV1> {
+        self.revalidate()?;
+        self.root.try_clone_for_launch(self.credentials)
+    }
+
+    pub(super) fn clone_policy_for_launch(&self) -> Result<File, ProtectedIssuerSupervisorErrorV1> {
+        self.revalidate()?;
+        self.program
+            .try_clone_policy_for_launch()
+            .map_err(ProtectedIssuerSupervisorErrorV1::Program)
+    }
+
+    pub(super) fn clone_signing_key_for_launch(
+        &self,
+    ) -> Result<File, ProtectedIssuerSupervisorErrorV1> {
+        self.revalidate()?;
+        self.signing_key
+            .try_clone_for_transfer()
+            .map_err(ProtectedIssuerSupervisorErrorV1::SigningKey)
+    }
+
+    pub(super) fn revalidate_launch_clones(
+        &self,
+        launcher: &File,
+        issuer: &File,
+        root: &File,
+        policy: &File,
+        signing_key: &File,
+    ) -> Result<(), ProtectedIssuerSupervisorErrorV1> {
+        self.revalidate()?;
+        self.program
+            .revalidate_launcher_clone(launcher)
+            .map_err(ProtectedIssuerSupervisorErrorV1::Program)?;
+        self.program
+            .revalidate_issuer_clone(issuer)
+            .map_err(ProtectedIssuerSupervisorErrorV1::Program)?;
+        if validate_root(root, self.credentials)? != self.root.snapshot {
+            return Err(ProtectedIssuerSupervisorErrorV1::RootChanged);
+        }
+        self.program
+            .revalidate_policy_clone(policy)
+            .map_err(ProtectedIssuerSupervisorErrorV1::Program)?;
+        let transferred =
+            signing_key
+                .try_clone()
+                .map_err(|source| ProtectedIssuerSupervisorErrorV1::Io {
+                    operation: "clone protected issuer signing key for revalidation",
+                    source,
+                })?;
+        let observed =
+            CompilerExecutionSigningKeyCapabilityV1::from_file(transferred, self.program.policy())
+                .map_err(ProtectedIssuerSupervisorErrorV1::SigningKey)?;
+        if observed.verifying_key() != self.signing_key.verifying_key() {
+            return Err(ProtectedIssuerSupervisorErrorV1::SigningKey(
+                "protected issuer signing-key identity changed".to_owned(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 fn require_current_service_identity(
@@ -279,6 +355,30 @@ impl ProtectedIssuerRootV1 {
             return Err(ProtectedIssuerSupervisorErrorV1::RootChanged);
         }
         Ok(())
+    }
+
+    fn try_clone_for_launch(
+        &self,
+        credentials: IssuerServiceCredentialProfileV1,
+    ) -> Result<File, ProtectedIssuerSupervisorErrorV1> {
+        self.revalidate(credentials)?;
+        let root =
+            self.root
+                .try_clone()
+                .map_err(|source| ProtectedIssuerSupervisorErrorV1::Io {
+                    operation: "clone protected issuer root for launch",
+                    source,
+                })?;
+        rustix::io::fcntl_setfd(&root, rustix::io::FdFlags::CLOEXEC).map_err(|source| {
+            ProtectedIssuerSupervisorErrorV1::Io {
+                operation: "protect cloned issuer root descriptor",
+                source: source.into(),
+            }
+        })?;
+        if validate_root(&root, credentials)? != self.snapshot {
+            return Err(ProtectedIssuerSupervisorErrorV1::RootChanged);
+        }
+        Ok(root)
     }
 }
 

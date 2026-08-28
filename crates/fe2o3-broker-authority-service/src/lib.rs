@@ -181,6 +181,7 @@ pub use durable_session_consume::{
 pub use linux::{
     AdmissionErrorKindV1, ExpectedClientProcessIdentityV1, LiveClientPidfdIdentityV1,
     ProtectedServiceAdmissionErrorV1, ProtectedServiceAdmissionV1,
+    current_process_start_time_ticks_v1,
 };
 #[cfg(target_os = "linux")]
 pub use session::{

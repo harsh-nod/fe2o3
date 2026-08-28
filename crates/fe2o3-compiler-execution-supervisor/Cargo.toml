@@ -11,11 +11,12 @@ publish = false
 [dependencies]
 fe2o3-broker-authority-service.workspace = true
 fe2o3-compiler-closure-capability.workspace = true
+fe2o3-compiler-execution-issuer.workspace = true
 fe2o3-compiler-execution-protocol.workspace = true
 fe2o3-runtime-protocol.workspace = true
 fe2o3-static-preexec-manifest.workspace = true
 libc.workspace = true
-rustix = { workspace = true, features = ["event", "process"] }
+rustix = { workspace = true, features = ["event", "pipe", "process"] }
 sha2.workspace = true
 
 [dev-dependencies]
