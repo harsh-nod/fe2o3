@@ -21,6 +21,8 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
 
 function(fe2o3_configure_static_launcher target)
+  set(FE2O3_STATIC_LAUNCHER_LINKER_SCRIPT
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/layout.ld")
   target_include_directories(${target} PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/include")
   target_compile_options(${target} PRIVATE
@@ -32,8 +34,11 @@ function(fe2o3_configure_static_launcher target)
     "-fdebug-prefix-map=${CMAKE_CURRENT_BINARY_DIR}=fe2o3-static-preexec-build")
   target_link_options(${target} PRIVATE
     -nostdlib -nostartfiles -nodefaultlibs -static -no-pie
+    "LINKER:-T,${FE2O3_STATIC_LAUNCHER_LINKER_SCRIPT}"
     LINKER:--entry=_start LINKER:--no-undefined LINKER:--build-id=none
     LINKER:--no-dynamic-linker LINKER:-z,noexecstack LINKER:-z,separate-code)
+  set_property(TARGET ${target} APPEND PROPERTY LINK_DEPENDS
+    "${FE2O3_STATIC_LAUNCHER_LINKER_SCRIPT}")
 endfunction()
 
 add_executable(fe2o3-static-preexec-launcher src/start.S src/main.c)
