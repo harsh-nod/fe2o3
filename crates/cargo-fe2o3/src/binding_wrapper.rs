@@ -10,9 +10,11 @@ use std::process::{Child, Command, ExitStatus};
 use fe2o3_artifact_transaction::{
     BuildAttempt, BuildInvocation, BuildSession, EmitError, ProducerIdentity,
     WorkerV3PublicationIntentErrorV1, begin_build_attempt, fail_build_attempt,
-    finish_build_attempt, retire_worker_v3_publication_intent_after_load_readiness_v1,
+    finish_build_attempt, recover_compiler_execution_receipt_transport_v1,
+    retire_worker_v3_publication_intent_after_load_readiness_v1,
 };
 use fe2o3_build_authority::CompilerClosureV2;
+use fe2o3_compiler_execution_protocol::CompilerExecutionReceiptCarriageV1;
 use fe2o3_hsaco_finalize::{
     PublishedProtectedWorkerV3HsacoV1, RecoveredProtectedWorkerV3HsacoPublicationV1,
     WorkerV3HsacoPublicationErrorV1, finalize_protected_worker_v3_hsaco_v1,
@@ -24,8 +26,8 @@ use fe2o3_hsaco_finalize::{
 };
 use fe2o3_process_identity::PinnedWorkingDirectoryV3;
 use fe2o3_runtime_protocol::{
-    RecoveredWorkerV3LoadEnvelopeV1, WorkerV3LoadEnvelopeErrorV1, WorkerV3LoadEnvelopeV1,
-    recover_worker_v3_load_envelope_v1,
+    RecoveredWorkerV3LoadEnvelopeV2, WorkerV3LoadEnvelopeErrorV2, WorkerV3LoadEnvelopeV2,
+    recover_worker_v3_load_envelope_v2,
 };
 use fe2o3_rustc_invocation::{
     CARGO_METADATA_BUILD_OBSERVATION_ENV_V2, CargoMetadataBuildObservationV2, RustcArgsErrorV2,
@@ -47,6 +49,7 @@ use crate::build_config::{
 use crate::capability_broker;
 use crate::compiler_execution_boundary::{
     ParentCompilerExecutionReadinessCustodyV1, PreparedCompilerExecutionBoundaryV1,
+    admit_compiler_execution_receipt_transport, validate_compiler_execution_receipt_carriage,
 };
 use crate::inert_rustc_invocation_capture::{
     InertPreparedRustcInvocationCapture, InertRustcInvocationCaptureV2,
@@ -1590,10 +1593,10 @@ fn pre_spawn_failure(
     }
 }
 
-fn worker_v3_readiness_is_absent(error: &WorkerV3LoadEnvelopeErrorV1) -> bool {
+fn worker_v3_readiness_is_absent(error: &WorkerV3LoadEnvelopeErrorV2) -> bool {
     matches!(
         error,
-        WorkerV3LoadEnvelopeErrorV1::LoadReadiness(
+        WorkerV3LoadEnvelopeErrorV2::LoadReadiness(
             fe2o3_artifact_transaction::WorkerV3LoadReadinessErrorV1::AttemptState
                 | fe2o3_artifact_transaction::WorkerV3LoadReadinessErrorV1::MissingEnvelope
                 | fe2o3_artifact_transaction::WorkerV3LoadReadinessErrorV1::MissingClaim
@@ -1610,9 +1613,10 @@ enum ManagedProductionBuild {
     Recovered {
         recovered: Box<RecoveredProtectedWorkerV3HsacoPublicationV1>,
         compiler_closure: CompilerClosureV2,
+        compiler_execution: Box<CompilerExecutionReceiptCarriageV1>,
     },
     Ready {
-        envelope: Box<RecoveredWorkerV3LoadEnvelopeV1>,
+        envelope: Box<RecoveredWorkerV3LoadEnvelopeV2>,
     },
 }
 
@@ -1644,10 +1648,11 @@ fn prepare_managed_production_build(
     producer: &ProducerIdentity,
     invocation: BuildInvocation,
     session: BuildSession,
+    compiler_execution_profile: &fe2o3_compiler_closure_capability::CompilerExecutionClientProfileCapabilityV1,
 ) -> Result<(BuildAttempt, ManagedProductionBuild, bool), BindingWrapperError> {
     let attempt = begin_build_attempt(output_dir, producer, invocation, session)
         .map_err(BindingWrapperError::Artifact)?;
-    let recovered_envelope = match recover_worker_v3_load_envelope_v1(output_dir, attempt) {
+    let recovered_envelope = match recover_worker_v3_load_envelope_v2(output_dir, attempt) {
         Ok(envelope) => Some(envelope),
         Err(error) if worker_v3_readiness_is_absent(&error) => None,
         Err(error) => {
@@ -1657,6 +1662,24 @@ fn prepare_managed_production_build(
         }
     };
     if let Some(envelope) = recovered_envelope {
+        let subject = envelope
+            .wire()
+            .reconstructed_compiler_execution_subject_v1()
+            .map_err(|error| {
+                BindingWrapperError::BuildObservation(format!(
+                    "receipt-bearing production load readiness has no exact compiler subject: {error}"
+                ))
+            })?;
+        validate_compiler_execution_receipt_carriage(
+            compiler_execution_profile,
+            &subject,
+            envelope.wire().compiler_execution_receipt(),
+        )
+        .map_err(|error| {
+            BindingWrapperError::BuildObservation(format!(
+                "receipt-bearing production load readiness differs from the protected compiler profile: {error}"
+            ))
+        })?;
         return Ok((
             attempt,
             ManagedProductionBuild::Ready {
@@ -1666,14 +1689,40 @@ fn prepare_managed_production_build(
         ));
     }
     match recover_protected_worker_v3_hsaco_publication_v1(output_dir, producer, attempt) {
-        Ok(recovered) => Ok((
-            attempt,
-            ManagedProductionBuild::Recovered {
-                recovered: Box::new(recovered),
-                compiler_closure,
-            },
-            false,
-        )),
+        Ok(recovered) => {
+            let subject = recovered.compiler_execution_subject_v1().map_err(|error| {
+                BindingWrapperError::BuildObservation(format!(
+                    "recovered production HSACO has no exact compiler-execution subject: {error}"
+                ))
+            })?;
+            let receipt_transport = recover_compiler_execution_receipt_transport_v1(
+                output_dir, producer, &subject,
+            )
+            .map_err(|error| {
+                BindingWrapperError::BuildObservation(format!(
+                    "recovered production HSACO has no subject-bound compiler receipt: {error}"
+                ))
+            })?;
+            let compiler_execution = admit_compiler_execution_receipt_transport(
+                compiler_execution_profile,
+                &subject,
+                receipt_transport,
+            )
+            .map_err(|error| {
+                BindingWrapperError::BuildObservation(format!(
+                    "recovered production compiler receipt differs from the protected profile: {error}"
+                ))
+            })?;
+            Ok((
+                attempt,
+                ManagedProductionBuild::Recovered {
+                    recovered: Box::new(recovered),
+                    compiler_closure,
+                    compiler_execution: Box::new(compiler_execution),
+                },
+                false,
+            ))
+        }
         Err(WorkerV3HsacoPublicationErrorV1::Storage(
             WorkerV3PublicationIntentErrorV1::NotFound,
         )) => Ok((
@@ -1719,6 +1768,8 @@ fn prepare_production_managed_attempt(
                     .to_owned(),
             )
         })?;
+    let compiler_execution_profile =
+        compiler_capabilities.protected_compiler_execution_profile()?;
     let (attempt, production_build, began_attempt) = prepare_managed_production_build(
         build_config,
         compiler_closure,
@@ -1726,6 +1777,7 @@ fn prepare_production_managed_attempt(
         &producer,
         invocation,
         session,
+        compiler_execution_profile,
     )?;
     let mut begin_attempt_guard = began_attempt.then(|| ManagedAttemptRevocationGuard {
         output_dir: output_dir.to_path_buf(),
@@ -1861,8 +1913,14 @@ fn complete_managed_production_build(
         ManagedProductionBuild::Recovered {
             recovered,
             compiler_closure,
+            compiler_execution,
         } if parent_invocation.is_none() && execution_readiness.is_none() => {
-            complete_recovered_production_artifact(managed, *recovered, compiler_closure)
+            complete_recovered_production_artifact(
+                managed,
+                *recovered,
+                compiler_closure,
+                *compiler_execution,
+            )
         }
         ManagedProductionBuild::Ready { envelope }
             if parent_invocation.is_none() && execution_readiness.is_none() =>
@@ -1903,6 +1961,7 @@ fn complete_fresh_production_artifact(
             &managed.producer,
             managed.attempt,
             parent_invocation,
+            execution_readiness,
             |handoff, receipt, observed_closure| {
                 if observed_closure != compiler_closure {
                     return Err(
@@ -1919,7 +1978,7 @@ fn complete_fresh_production_artifact(
                 "strict V3 compiler-module preflight/consumption failed: {error}"
             ))
         })?;
-    let evidence = worker
+    let (evidence, compiler_execution) = worker
         .execute_preflighted_production(consumed, preflight)
         .map_err(|error| {
             CompletionFailure::Uncommitted(format!(
@@ -1952,13 +2011,14 @@ fn complete_fresh_production_artifact(
             "strict V3 durable publication persistence failed: {error}"
         ))
     })?;
-    complete_recovered_production_artifact(managed, recovered, compiler_closure)
+    complete_recovered_production_artifact(managed, recovered, compiler_closure, compiler_execution)
 }
 
 fn complete_recovered_production_artifact(
     managed: &ManagedProductionAttempt,
     recovered: RecoveredProtectedWorkerV3HsacoPublicationV1,
     compiler_closure: CompilerClosureV2,
+    compiler_execution: CompilerExecutionReceiptCarriageV1,
 ) -> Result<(), CompletionFailure> {
     let published = publish_recovered_protected_worker_v3_hsaco_v1(
         &managed.output_dir,
@@ -1971,24 +2031,26 @@ fn complete_recovered_production_artifact(
             "strict V3 finalized-HSACO publication failed: {error}"
         ))
     })?;
-    complete_published_production_artifact(managed, published)
+    complete_published_production_artifact(managed, published, compiler_execution)
 }
 
 fn complete_published_production_artifact(
     managed: &ManagedProductionAttempt,
     published: PublishedProtectedWorkerV3HsacoV1,
+    compiler_execution: CompilerExecutionReceiptCarriageV1,
 ) -> Result<(), CompletionFailure> {
     let intent_identity = published.recovered_evidence().storage_record().identity();
-    let envelope = WorkerV3LoadEnvelopeV1::from_published_hsaco_v1(published).map_err(|error| {
+    let envelope = WorkerV3LoadEnvelopeV2::from_published_hsaco_v1(published, compiler_execution)
+        .map_err(|error| {
         CompletionFailure::PreserveAttempt(format!(
-            "strict V3 load-envelope custody construction failed: {error}"
+            "receipt-bearing strict V3 load-envelope custody construction failed: {error}"
         ))
     })?;
     let readiness = envelope
-        .persist_durable_replay_custody_v1(&managed.output_dir)
+        .persist_durable_replay_custody_v2(&managed.output_dir)
         .map_err(|error| {
             CompletionFailure::PreserveAttempt(format!(
-                "strict V3 load-envelope custody persistence failed: {error}"
+                "receipt-bearing strict V3 load-envelope custody persistence failed: {error}"
             ))
         })?;
     retire_worker_v3_publication_intent_after_load_readiness_v1(
@@ -2013,9 +2075,13 @@ fn complete_published_production_artifact(
 
 fn complete_ready_production_artifact(
     managed: &ManagedProductionAttempt,
-    envelope: RecoveredWorkerV3LoadEnvelopeV1,
+    envelope: RecoveredWorkerV3LoadEnvelopeV2,
 ) -> Result<(), CompletionFailure> {
-    let intent_identity = envelope.wire().publication_intent_record().identity();
+    let intent_identity = envelope
+        .wire()
+        .replay()
+        .publication_intent_record()
+        .identity();
     match retire_worker_v3_publication_intent_after_load_readiness_v1(
         &managed.output_dir,
         &managed.producer,

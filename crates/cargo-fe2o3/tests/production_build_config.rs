@@ -209,6 +209,53 @@ fn production_run_has_one_worker_v3_application_path() {
 }
 
 #[test]
+fn production_receipt_is_carried_by_one_v2_envelope_through_host_admission() {
+    let binding = include_str!("../src/binding_wrapper.rs");
+    let intake = include_str!("../src/protected_compiler_handoff_v3.rs");
+    let application = include_str!("../src/application_handoff.rs");
+    let host_handoff = include_str!("../../fe2o3-host/src/application_descriptor_handoff.rs");
+    let host_admission = include_str!("../../fe2o3-host/src/recovered_worker_v3_admission.rs");
+
+    assert!(intake.contains("recover_compiler_execution_receipt_transport_with_currentness_v1"));
+    assert!(intake.contains("admit_receipt_transport(&subject, receipt_transport)"));
+    let intake_body = intake
+        .split("pub(crate) fn consume_after_preflight<T>(")
+        .nth(1)
+        .expect("fresh protected handoff intake exists");
+    let receipt_recovery = intake_body
+        .find("recover_compiler_execution_receipt_transport_with_currentness_v1")
+        .expect("fresh intake recovers the subject-bound compiler receipt");
+    let consumption = intake_body
+        .find("consume_compiler_module_handoff_with_currentness_v3")
+        .expect("fresh intake consumes the exact handoff");
+    assert!(receipt_recovery < consumption);
+
+    assert!(binding.contains("WorkerV3LoadEnvelopeV2::from_published_hsaco_v1"));
+    assert!(binding.contains("persist_durable_replay_custody_v2"));
+    assert!(binding.contains("recover_worker_v3_load_envelope_v2"));
+    assert!(binding.contains("validate_compiler_execution_receipt_carriage"));
+    assert!(application.contains("WorkerV3LoadEnvelopeWireV2::decode_canonical"));
+    assert!(host_handoff.contains("recover_worker_v3_load_envelope_v2"));
+    assert!(host_handoff.contains("WorkerV3LoadEnvelopeWireV2::decode_canonical"));
+    assert!(host_admission.contains("RecoveredWorkerV3LoadEnvelopeV2"));
+
+    for production_source in [binding, application, host_handoff, host_admission] {
+        for retired in [
+            "WorkerV3LoadEnvelopeV1::from_published_hsaco_v1",
+            "persist_durable_replay_custody_v1",
+            "recover_worker_v3_load_envelope_v1",
+            "WorkerV3LoadEnvelopeWireV1::decode_canonical",
+            "RecoveredWorkerV3LoadEnvelopeV1",
+        ] {
+            assert!(
+                !production_source.contains(retired),
+                "production source retained receipt-free envelope path {retired}"
+            );
+        }
+    }
+}
+
+#[test]
 fn production_build_has_one_fixed_device_then_host_plan() {
     let source = include_str!("../src/main.rs");
     let plan = include_str!("../src/production_cargo_plan.rs");

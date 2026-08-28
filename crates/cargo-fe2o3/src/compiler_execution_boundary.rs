@@ -12,7 +12,8 @@ use fe2o3_compiler_execution_client::{
     PendingCompilerExecutionChildChannelV1,
 };
 use fe2o3_compiler_execution_protocol::{
-    CompilerExecutionClientProfileIdentityV1, CompilerExecutionServiceLaunchManifestV1,
+    CompilerExecutionClientProfileIdentityV1, CompilerExecutionReceiptCarriageV1,
+    CompilerExecutionReceiptPublicationErrorV1, CompilerExecutionServiceLaunchManifestV1,
     CompilerExecutionServiceReadyV1,
 };
 
@@ -208,6 +209,77 @@ impl ParentCompilerExecutionReadinessCustodyV1 {
     pub(crate) const fn grants_compiler_authority(&self) -> bool {
         false
     }
+
+    pub(crate) fn admit_receipt_transport(
+        &self,
+        subject: &fe2o3_artifact_transaction::InertCompilerExecutionSubjectV1,
+        transport: fe2o3_artifact_transaction::RecoveredCompilerExecutionReceiptTransportV1,
+    ) -> Result<CompilerExecutionReceiptCarriageV1, CompilerExecutionBoundaryErrorV1> {
+        self.revalidate()?;
+        let carriage =
+            admit_compiler_execution_receipt_transport(&self.profile, subject, transport)?;
+        self.revalidate()?;
+        Ok(carriage)
+    }
+}
+
+pub(crate) fn admit_compiler_execution_receipt_transport(
+    profile: &CompilerExecutionClientProfileCapabilityV1,
+    subject: &fe2o3_artifact_transaction::InertCompilerExecutionSubjectV1,
+    transport: fe2o3_artifact_transaction::RecoveredCompilerExecutionReceiptTransportV1,
+) -> Result<CompilerExecutionReceiptCarriageV1, CompilerExecutionBoundaryErrorV1> {
+    profile
+        .revalidate()
+        .map_err(CompilerExecutionBoundaryErrorV1::Profile)?;
+    let receipt = transport.receipt();
+    if receipt.subject() != subject.identity()
+        || receipt.length() != transport.exact_bytes().len()
+        || receipt.grants_compiler_authority()
+        || receipt.grants_publication_authority()
+        || receipt.grants_load_authority()
+        || receipt.grants_launch_authority()
+    {
+        return Err(CompilerExecutionBoundaryErrorV1::Evidence(
+            "compiler-execution receipt transport changed its exact subject or byte length"
+                .to_owned(),
+        ));
+    }
+    let carriage = CompilerExecutionReceiptCarriageV1::decode(transport.exact_bytes())
+        .map_err(CompilerExecutionBoundaryErrorV1::Receipt)?;
+    validate_compiler_execution_receipt_carriage(profile, subject, &carriage)?;
+    Ok(carriage)
+}
+
+pub(crate) fn validate_compiler_execution_receipt_carriage(
+    profile: &CompilerExecutionClientProfileCapabilityV1,
+    subject: &fe2o3_artifact_transaction::InertCompilerExecutionSubjectV1,
+    carriage: &CompilerExecutionReceiptCarriageV1,
+) -> Result<(), CompilerExecutionBoundaryErrorV1> {
+    profile
+        .revalidate()
+        .map_err(CompilerExecutionBoundaryErrorV1::Profile)?;
+    if carriage.policy() != profile.profile().policy()
+        || carriage.request().subject() != subject
+        || carriage.canonical_bytes().is_empty()
+        || carriage.grants_compiler_authority()
+        || carriage.grants_load_authority()
+        || carriage.grants_launch_authority()
+    {
+        return Err(CompilerExecutionBoundaryErrorV1::Evidence(
+            "compiler-execution receipt differs from the exact subject or sealed client profile"
+                .to_owned(),
+        ));
+    }
+    let canonical = CompilerExecutionReceiptCarriageV1::decode(carriage.canonical_bytes())
+        .map_err(CompilerExecutionBoundaryErrorV1::Receipt)?;
+    if &canonical != carriage {
+        return Err(CompilerExecutionBoundaryErrorV1::Evidence(
+            "compiler-execution receipt carriage is not canonical".to_owned(),
+        ));
+    }
+    profile
+        .revalidate()
+        .map_err(CompilerExecutionBoundaryErrorV1::Profile)
 }
 
 #[derive(Debug)]
@@ -218,6 +290,7 @@ pub(crate) enum CompilerExecutionBoundaryErrorV1 {
     SupervisorCredentials(CompilerExecutionHandoffErrorV1),
     SupervisorTransfer(CompilerExecutionHandoffErrorV1),
     SupervisorReadiness(CompilerExecutionHandoffErrorV1),
+    Receipt(CompilerExecutionReceiptPublicationErrorV1),
     Evidence(String),
 }
 
@@ -230,6 +303,7 @@ impl CompilerExecutionBoundaryErrorV1 {
             Self::SupervisorCredentials(_) => "supervisor credential admission",
             Self::SupervisorTransfer(_) => "fixed supervisor transfer",
             Self::SupervisorReadiness(_) => "supervisor readiness",
+            Self::Receipt(_) => "compiler receipt admission",
             Self::Evidence(_) => "readiness evidence admission",
         }
     }
@@ -246,6 +320,7 @@ impl fmt::Display for CompilerExecutionBoundaryErrorV1 {
             Self::SupervisorCredentials(error)
             | Self::SupervisorTransfer(error)
             | Self::SupervisorReadiness(error) => error.fmt(formatter),
+            Self::Receipt(error) => error.fmt(formatter),
         }
     }
 }
@@ -257,6 +332,7 @@ impl Error for CompilerExecutionBoundaryErrorV1 {
             Self::SupervisorCredentials(error)
             | Self::SupervisorTransfer(error)
             | Self::SupervisorReadiness(error) => Some(error),
+            Self::Receipt(error) => Some(error),
             Self::Profile(_) | Self::Policy(_) | Self::Evidence(_) => None,
         }
     }

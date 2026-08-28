@@ -11,7 +11,7 @@ use crate::{
 };
 use fe2o3_artifact_transaction::WorkerV3LoadReadinessReceiptV1;
 use fe2o3_runtime_protocol::{
-    MAX_WORKER_V3_APPLICATION_OCCURRENCE_BYTES_V1, MAX_WORKER_V3_LOAD_ENVELOPE_BYTES_V1,
+    MAX_WORKER_V3_APPLICATION_OCCURRENCE_BYTES_V1, MAX_WORKER_V3_LOAD_ENVELOPE_BYTES_V2,
     WORKER_V3_APPLICATION_ARTIFACT_DIR_FD_ENV_V1, WORKER_V3_APPLICATION_ENVELOPE_FD_ENV_V1,
     WORKER_V3_APPLICATION_HANDOFF_ACK_FD_ENV_V1, WORKER_V3_APPLICATION_HANDOFF_CHALLENGE_BYTES_V1,
     WORKER_V3_APPLICATION_HANDOFF_CHALLENGE_ENV_V1,
@@ -20,8 +20,8 @@ use fe2o3_runtime_protocol::{
     WorkerV3ApplicationHandoffChallengeV1, WorkerV3ApplicationHandoffCommitmentV1,
     WorkerV3ApplicationHandoffExpectationV1, WorkerV3ApplicationHandoffProtocolErrorV1,
     WorkerV3ApplicationIdentityV1, WorkerV3ApplicationInputOccurrenceV1,
-    WorkerV3ApplicationOccurrenceV1, WorkerV3LoadEnvelopeErrorV1, WorkerV3LoadEnvelopeIdentityV1,
-    WorkerV3LoadEnvelopeWireV1, recover_worker_v3_load_envelope_v1,
+    WorkerV3ApplicationOccurrenceV1, WorkerV3LoadEnvelopeErrorV2, WorkerV3LoadEnvelopeIdentityV1,
+    WorkerV3LoadEnvelopeWireV2, recover_worker_v3_load_envelope_v2,
 };
 use rustix::fs::{FileType, OFlags, fcntl_getfl, fcntl_setfl, fstat};
 use std::error::Error;
@@ -121,7 +121,7 @@ impl EnvelopeSnapshotV1 {
 struct InspectedWorkerV3EnvelopeV1 {
     snapshot: EnvelopeSnapshotV1,
     exact_bytes: Box<[u8]>,
-    decoded: WorkerV3LoadEnvelopeWireV1,
+    decoded: WorkerV3LoadEnvelopeWireV2,
     canonical_name: String,
 }
 
@@ -339,9 +339,11 @@ pub(crate) fn consume_worker_v3_application_handoff_descriptors_v1(
     };
     retained.revalidate()?;
     let output = descriptor_directory_path(&retained.directory);
-    let recovered =
-        recover_worker_v3_load_envelope_v1(&output, decoded.publication_intent_record().attempt())
-            .map_err(WorkerV3ApplicationDescriptorHandoffErrorV1::Envelope)?;
+    let recovered = recover_worker_v3_load_envelope_v2(
+        &output,
+        decoded.replay().publication_intent_record().attempt(),
+    )
+    .map_err(WorkerV3ApplicationDescriptorHandoffErrorV1::Envelope)?;
     validate_worker_v3_recovered_occurrence(
         recovered.receipt(),
         retained.directory_snapshot,
@@ -766,7 +768,7 @@ fn inspect_worker_v3_envelope(
     }
     let size = usize::try_from(initial.st_size)
         .ok()
-        .filter(|size| (1..=MAX_WORKER_V3_LOAD_ENVELOPE_BYTES_V1).contains(size))
+        .filter(|size| (1..=MAX_WORKER_V3_LOAD_ENVELOPE_BYTES_V2).contains(size))
         .ok_or(WorkerV3ApplicationDescriptorHandoffErrorV1::EnvelopeSize {
             actual: initial.st_size,
         })?;
@@ -780,7 +782,7 @@ fn inspect_worker_v3_envelope(
     if EnvelopeSnapshotV1::from_stat(&final_stat) != snapshot {
         return Err(WorkerV3ApplicationDescriptorHandoffErrorV1::EnvelopeChanged);
     }
-    let decoded = WorkerV3LoadEnvelopeWireV1::decode_canonical(&bytes)
+    let decoded = WorkerV3LoadEnvelopeWireV2::decode_canonical(&bytes)
         .map_err(WorkerV3ApplicationDescriptorHandoffErrorV1::Envelope)?;
     if decoded
         .encode_canonical()
@@ -1335,7 +1337,7 @@ pub enum WorkerV3ApplicationDescriptorHandoffErrorV1 {
     AliasedDescriptors,
     Descriptor(ApplicationDescriptorHandoffErrorV1),
     Protocol(WorkerV3ApplicationHandoffProtocolErrorV1),
-    Envelope(WorkerV3LoadEnvelopeErrorV1),
+    Envelope(WorkerV3LoadEnvelopeErrorV2),
     EnvelopeSize { actual: i64 },
     UnsafeEnvelope,
     EnvelopeNotLinked,
