@@ -273,6 +273,42 @@ fn production_receipt_is_carried_by_one_v2_envelope_through_host_admission() {
 }
 
 #[test]
+fn production_worker_v3_verifier_is_sealed_and_synthetic_authority_is_test_only() {
+    let host = include_str!("../../fe2o3-host/src/worker_v3_verification_admission.rs");
+    let host_exports = include_str!("../../fe2o3-host/src/lib.rs");
+    let host_manifest = include_str!("../../fe2o3-host/Cargo.toml");
+    let cargo_manifest = include_str!("../Cargo.toml");
+
+    assert!(host.contains("verifier_seal::Sealed<K>"));
+    assert!(host.contains("pub(crate) const fn new("));
+    assert!(host.contains("feature = \"worker-v3-verifier-test-support\""));
+    assert!(host.contains("pub unsafe trait WorkerV3SyntheticVerifierV1"));
+    assert!(
+        host_exports
+            .contains("pub use worker_v3_verification_admission::WorkerV3SyntheticVerifierV1")
+    );
+    assert!(host_manifest.contains("worker-v3-verifier-test-support = []"));
+
+    let test_feature = cargo_manifest
+        .split("worker-v3-envelope-integration-test-only = [")
+        .nth(1)
+        .expect("receipt-bearing integration feature exists")
+        .split(']')
+        .next()
+        .expect("receipt-bearing integration feature is bounded");
+    assert!(test_feature.contains("fe2o3-host/worker-v3-verifier-test-support"));
+
+    let default_dependencies = cargo_manifest
+        .split("[dependencies]")
+        .nth(1)
+        .expect("Cargo dependencies exist")
+        .split("[dev-dependencies]")
+        .next()
+        .expect("Cargo dependencies are bounded");
+    assert!(!default_dependencies.contains("fe2o3-host/worker-v3-verifier-test-support"));
+}
+
+#[test]
 fn production_build_has_one_fixed_device_then_host_plan() {
     let source = include_str!("../src/main.rs");
     let plan = include_str!("../src/production_cargo_plan.rs");

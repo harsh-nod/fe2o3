@@ -46,9 +46,9 @@ use fe2o3_host::{
     ProductionWorkerV3ApplicationLoadErrorV1, RecoveredWorkerV3AdmissionErrorV1,
     ReviewedHsaExecutableLifecycleAdapterV1, ReviewedHsaImplicitKernargAdapterV1,
     WorkerV3AuditorV1, WorkerV3CompilerExecutionVerificationV1, WorkerV3GeneratedDispatchErrorV1,
-    WorkerV3HsaLoadAuthorizationErrorV1, WorkerV3SafetyPropertiesV1,
+    WorkerV3HsaLoadAuthorizationErrorV1, WorkerV3SafetyPropertiesV1, WorkerV3SyntheticVerifierV1,
     WorkerV3VerificationAuthenticationErrorV1, WorkerV3VerificationDecisionErrorV1,
-    WorkerV3VerificationDecisionV1, WorkerV3VerificationRequestV1, WorkerV3VerifierV1,
+    WorkerV3VerificationDecisionV1, WorkerV3VerificationRequestV1,
     admit_recovered_worker_v3_descriptor_v1, audit_recovered_worker_v3_verification_v1,
 };
 use fe2o3_kernel_descriptor::KernelId;
@@ -315,13 +315,13 @@ where
 
 // SAFETY: this synthetic verifier is confined to test-only fixtures. It mirrors every requested
 // identity and must never be used as production proof authority.
-unsafe impl<K> WorkerV3VerifierV1<K> for ReviewedTestWorkerV3Verifier
+unsafe impl<K> WorkerV3SyntheticVerifierV1<K> for ReviewedTestWorkerV3Verifier
 where
     K: CompilerGeneratedKernelExpectationV1,
 {
     type Error = Infallible;
 
-    unsafe fn verify(
+    unsafe fn verify_synthetic(
         &mut self,
         request: &WorkerV3VerificationRequestV1<'_, K>,
     ) -> Result<WorkerV3VerificationDecisionV1, Self::Error> {
@@ -431,7 +431,7 @@ where
             protected_worker_ledger_verification,
             external_rollback_verification,
         );
-        Ok(WorkerV3VerificationDecisionV1::new(
+        Ok(WorkerV3VerificationDecisionV1::synthetic_for_test_only(
             request.challenge_identity(),
             request.lineage_identity(),
             request.descriptor().kernel_id(),

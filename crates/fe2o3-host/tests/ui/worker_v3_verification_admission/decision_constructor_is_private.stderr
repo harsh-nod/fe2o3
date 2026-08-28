@@ -1,0 +1,16 @@
+error[E0624]: associated function `new` is private
+ --> tests/ui/worker_v3_verification_admission/decision_constructor_is_private.rs:4:45
+  |
+4 |       let _ = WorkerV3VerificationDecisionV1::new;
+  |                                               ^^^ private associated function
+  |
+ ::: src/worker_v3_verification_admission.rs
+  |
+  | /     pub(crate) const fn new(
+  | |         challenge: WorkerV3VerificationChallengeIdentityV1,
+  | |         lineage: WorkerV3HostLineageIdentityV1,
+  | |         kernel_id: KernelId,
+... |
+  | |         safety_properties: WorkerV3SafetyPropertiesV1,
+  | |     ) -> Self {
+  | |_____________- private associated function defined here

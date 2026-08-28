@@ -176,6 +176,9 @@ pub use tile_interop::{
     Gfx942Xor4Bf16TileAllocationV1, Gfx942Xor4Bf16TileLeaseV1,
 };
 
+#[cfg(feature = "worker-v3-verifier-test-support")]
+#[doc(hidden)]
+pub use worker_v3_verification_admission::WorkerV3SyntheticVerifierV1;
 pub use worker_v3_verification_admission::{
     AuthenticatedWorkerV3ExecutableV1, WorkerV3AuditorV1, WorkerV3CompilerExecutionVerificationV1,
     WorkerV3SafetyPropertiesV1, WorkerV3SafetyPropertyV1, WorkerV3VerificationAuditErrorV1,

@@ -3,9 +3,9 @@ use fe2o3_host::{
     WorkerV3VerificationRequestV1, WorkerV3VerifierV1,
 };
 
-struct SafeVerifier;
+struct ExternalVerifier;
 
-impl<K: CompilerGeneratedKernelExpectationV1> WorkerV3VerifierV1<K> for SafeVerifier {
+unsafe impl<K: CompilerGeneratedKernelExpectationV1> WorkerV3VerifierV1<K> for ExternalVerifier {
     type Error = ();
 
     unsafe fn verify(

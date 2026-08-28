@@ -17,6 +17,10 @@ use crate::{
 const WORKER_V3_VERIFICATION_CHALLENGE_DOMAIN_V1: &[u8] =
     b"fe2o3.host.worker-v3-verification-challenge.v1\0";
 
+mod verifier_seal {
+    pub trait Sealed<K> {}
+}
+
 /// Safety property established by a reviewed V3 verifier for one exact executable lineage.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
@@ -315,7 +319,9 @@ impl<K: CompilerGeneratedKernelExpectationV1> WorkerV3VerificationRequestV1<'_, 
 /// instantiate it only with compiler-generated capabilities and independently checked physical
 /// runtime inputs. The inert V3 receipts do not establish these claims by themselves. A false
 /// implementation can later authorize native code loading from safe generated code.
-pub unsafe trait WorkerV3VerifierV1<K: CompilerGeneratedKernelExpectationV1> {
+pub unsafe trait WorkerV3VerifierV1<K: CompilerGeneratedKernelExpectationV1>:
+    verifier_seal::Sealed<K>
+{
     type Error;
 
     /// Authenticates one exact request and returns independently checked identities.
@@ -329,6 +335,56 @@ pub unsafe trait WorkerV3VerifierV1<K: CompilerGeneratedKernelExpectationV1> {
         &mut self,
         request: &WorkerV3VerificationRequestV1<'_, K>,
     ) -> Result<WorkerV3VerificationDecisionV1, Self::Error>;
+}
+
+/// Explicit synthetic-verifier hook for the receipt-bearing integration harness.
+///
+/// This trait is absent from default and production builds. Enabling it permits downstream test
+/// code to satisfy the otherwise sealed verifier boundary and must never be used to construct a
+/// production application or authority claim.
+#[cfg(feature = "worker-v3-verifier-test-support")]
+#[doc(hidden)]
+pub unsafe trait WorkerV3SyntheticVerifierV1<K: CompilerGeneratedKernelExpectationV1> {
+    type Error;
+
+    /// Returns synthetic descriptive evidence for hostile transition testing only.
+    ///
+    /// # Safety
+    ///
+    /// The implementation must remain confined to a test-only build and must not represent its
+    /// result as protected compiler, proof, rollback, load, or launch authority.
+    unsafe fn verify_synthetic(
+        &mut self,
+        request: &WorkerV3VerificationRequestV1<'_, K>,
+    ) -> Result<WorkerV3VerificationDecisionV1, Self::Error>;
+}
+
+#[cfg(feature = "worker-v3-verifier-test-support")]
+impl<K, V> verifier_seal::Sealed<K> for V
+where
+    K: CompilerGeneratedKernelExpectationV1,
+    V: WorkerV3SyntheticVerifierV1<K>,
+{
+}
+
+#[cfg(feature = "worker-v3-verifier-test-support")]
+// SAFETY: this blanket exists only under the explicit test-support feature. Implementors must
+// satisfy the unsafe synthetic trait contract; default and production builds contain no such seam.
+unsafe impl<K, V> WorkerV3VerifierV1<K> for V
+where
+    K: CompilerGeneratedKernelExpectationV1,
+    V: WorkerV3SyntheticVerifierV1<K>,
+{
+    type Error = V::Error;
+
+    unsafe fn verify(
+        &mut self,
+        request: &WorkerV3VerificationRequestV1<'_, K>,
+    ) -> Result<WorkerV3VerificationDecisionV1, Self::Error> {
+        // SAFETY: the caller is inside the unsafe production verifier transition and the explicit
+        // test-support implementation owns the synthetic invariants for this test-only build.
+        unsafe { self.verify_synthetic(request) }
+    }
 }
 
 /// Non-authoritative review of one exact V3 verification request.
@@ -500,8 +556,12 @@ pub struct WorkerV3VerificationDecisionV1 {
 }
 
 impl WorkerV3VerificationDecisionV1 {
+    #[allow(
+        dead_code,
+        reason = "reserved for the crate-owned production verifier; synthetic builds enter through the explicitly gated constructor"
+    )]
     #[allow(clippy::too_many_arguments)]
-    pub const fn new(
+    pub(crate) const fn new(
         challenge: WorkerV3VerificationChallengeIdentityV1,
         lineage: WorkerV3HostLineageIdentityV1,
         kernel_id: KernelId,
@@ -543,6 +603,54 @@ impl WorkerV3VerificationDecisionV1 {
             rust_effect_contract_sha256,
             safety_properties,
         }
+    }
+
+    /// Constructs a descriptive decision only for the explicit integration-test verifier seam.
+    #[cfg(feature = "worker-v3-verifier-test-support")]
+    #[doc(hidden)]
+    #[allow(clippy::too_many_arguments)]
+    pub const fn synthetic_for_test_only(
+        challenge: WorkerV3VerificationChallengeIdentityV1,
+        lineage: WorkerV3HostLineageIdentityV1,
+        kernel_id: KernelId,
+        marker_binding: [u8; 32],
+        generated_host_contract: [u8; 32],
+        capsule_sha256: [u8; 32],
+        formal_memory_sha256: [u8; 32],
+        proof_binding_sha256: [u8; 32],
+        finalized_sha256: [u8; 32],
+        finalized_length: u64,
+        target: fe2o3_amd_target::AmdTargetId,
+        code_object_version: CodeObjectVersion,
+        compiler_execution: WorkerV3CompilerExecutionVerificationV1,
+        verifier_measurement_sha256: [u8; 32],
+        verification_transcript_sha256: [u8; 32],
+        proof_executable_binding_sha256: [u8; 32],
+        rust_type_layout_contract_sha256: [u8; 32],
+        rust_effect_contract_sha256: [u8; 32],
+        safety_properties: WorkerV3SafetyPropertiesV1,
+    ) -> Self {
+        Self::new(
+            challenge,
+            lineage,
+            kernel_id,
+            marker_binding,
+            generated_host_contract,
+            capsule_sha256,
+            formal_memory_sha256,
+            proof_binding_sha256,
+            finalized_sha256,
+            finalized_length,
+            target,
+            code_object_version,
+            compiler_execution,
+            verifier_measurement_sha256,
+            verification_transcript_sha256,
+            proof_executable_binding_sha256,
+            rust_type_layout_contract_sha256,
+            rust_effect_contract_sha256,
+            safety_properties,
+        )
     }
 
     pub const fn challenge_identity(&self) -> WorkerV3VerificationChallengeIdentityV1 {
