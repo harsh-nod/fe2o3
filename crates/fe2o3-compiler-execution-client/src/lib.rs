@@ -21,18 +21,12 @@ use fe2o3_compiler_execution_protocol::{
 };
 
 mod child_channel;
-mod child_session;
 mod receipt_return;
 mod supervisor_handoff;
 
 pub use child_channel::{
     CompilerExecutionChildChannelErrorV1, CompilerExecutionServiceLaunchV1,
     PendingCompilerExecutionChildChannelV1,
-};
-pub use child_session::{
-    CompilerExecutionChildSessionErrorV1, CompilerExecutionChildSessionV1,
-    CompletedCompilerExecutionChildSessionV1, PendingCompilerExecutionChildSessionV1,
-    PendingCompilerExecutionChildSupervisorV1, ReadyCompilerExecutionChildSessionV1,
 };
 pub use fe2o3_compiler_execution_protocol::CompilerExecutionClientProcessIdentityV1;
 pub use receipt_return::{

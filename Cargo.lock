@@ -789,7 +789,6 @@ version = "0.1.0"
 dependencies = [
  "ed25519-dalek",
  "fe2o3-artifact-transaction",
- "fe2o3-compiler-closure-capability",
  "fe2o3-compiler-execution-protocol",
  "libc",
  "rustix",
