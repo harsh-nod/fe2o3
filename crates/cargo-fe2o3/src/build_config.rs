@@ -252,13 +252,20 @@ impl PreparedProductionBuildConfig {
         &self,
         parent_consumed: ParentConsumedProductionHandoff,
         preflight: PreparedProtectedFirstBuildWorkerV3PreflightV1,
-    ) -> Result<InertProtectedFirstBuildWorkerV3EvidenceV1, ProtectedFirstBuildWorkerV3Error> {
-        let (_, consumed, _) = parent_consumed.into_parts();
-        execute_preflighted_protected_reproducible_first_build_worker_v3(
+    ) -> Result<
+        (
+            InertProtectedFirstBuildWorkerV3EvidenceV1,
+            fe2o3_compiler_execution_protocol::CompilerExecutionReceiptCarriageV1,
+        ),
+        ProtectedFirstBuildWorkerV3Error,
+    > {
+        let (_, consumed, _, compiler_execution) = parent_consumed.into_parts();
+        let evidence = execute_preflighted_protected_reproducible_first_build_worker_v3(
             consumed,
             preflight,
             &self.link.worker,
-        )
+        )?;
+        Ok((evidence, compiler_execution))
     }
 }
 

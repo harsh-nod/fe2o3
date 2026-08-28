@@ -3,18 +3,24 @@ use std::fmt;
 use std::path::Path;
 
 use fe2o3_artifact_transaction::{
-    BuildAttempt, CompilerModuleHandoffErrorV3, CompilerModuleHandoffReceiptV3,
-    ConsumedCompilerModuleHandoffV3, ProducerIdentity,
+    BuildAttempt, CompilerExecutionReceiptTransportErrorV1, CompilerExecutionSubjectErrorV1,
+    CompilerModuleHandoffErrorV3, CompilerModuleHandoffReceiptV3, ConsumedCompilerModuleHandoffV3,
+    InertCompilerExecutionSubjectV1, ProducerIdentity,
     acquire_compiler_module_handoff_currentness_lease_v3,
     consume_compiler_module_handoff_with_currentness_v3,
+    recover_compiler_execution_receipt_transport_with_currentness_v1,
     recover_compiler_module_handoff_receipt_v3,
 };
 use fe2o3_build_authority::CompilerClosureV2;
 use fe2o3_compiler_closure_capability::RustcInvocationCapabilityV1;
+use fe2o3_compiler_execution_protocol::CompilerExecutionReceiptCarriageV1;
 use fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffV3;
 use fe2o3_hsaco_finalize::ProtectedFirstBuildWorkerV3Error;
 use fe2o3_rustc_invocation::RustcInvocationDescriptorV3;
 
+use crate::compiler_execution_boundary::{
+    CompilerExecutionBoundaryErrorV1, ParentCompilerExecutionReadinessCustodyV1,
+};
 use crate::inert_rustc_invocation_capture::{
     InertPreparedRustcInvocationCapture, InertRustcInvocationCaptureV3,
 };
@@ -120,6 +126,7 @@ pub(crate) struct ParentConsumedProductionHandoff {
     receipt: CompilerModuleHandoffReceiptV3,
     consumed: ConsumedCompilerModuleHandoffV3,
     compiler_closure: CompilerClosureV2,
+    compiler_execution: CompilerExecutionReceiptCarriageV1,
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -130,8 +137,14 @@ impl ParentConsumedProductionHandoff {
         CompilerModuleHandoffReceiptV3,
         ConsumedCompilerModuleHandoffV3,
         CompilerClosureV2,
+        CompilerExecutionReceiptCarriageV1,
     ) {
-        (self.receipt, self.consumed, self.compiler_closure)
+        (
+            self.receipt,
+            self.consumed,
+            self.compiler_closure,
+            self.compiler_execution,
+        )
     }
 }
 
@@ -154,6 +167,7 @@ impl ProductionCompilerModuleHandoffIntake {
         producer: &ProducerIdentity,
         attempt: BuildAttempt,
         parent_custody: &ParentRustcInvocationCustody,
+        compiler_execution_readiness: &ParentCompilerExecutionReadinessCustodyV1,
         preflight: impl FnOnce(
             &InertSemanticCompilerModuleHandoffV3,
             CompilerModuleHandoffReceiptV3,
@@ -184,12 +198,25 @@ impl ProductionCompilerModuleHandoffIntake {
         if token.handoff().capsule().invocation() != parent_custody.descriptor() {
             return Err(ProductionCompilerModuleHandoffIntakeError::InvocationMismatch);
         }
+        let subject =
+            InertCompilerExecutionSubjectV1::from_publication(receipt, token.handoff())
+                .map_err(ProductionCompilerModuleHandoffIntakeError::CompilerExecutionSubject)?;
+        let receipt_transport = recover_compiler_execution_receipt_transport_with_currentness_v1(
+            &lease, &token, &subject,
+        )
+        .map_err(ProductionCompilerModuleHandoffIntakeError::CompilerExecutionTransport)?;
+        let compiler_execution = compiler_execution_readiness
+            .admit_receipt_transport(&subject, receipt_transport)
+            .map_err(ProductionCompilerModuleHandoffIntakeError::CompilerExecutionReadiness)?;
         let compiler_closure = *parent_custody.descriptor().compiler_closure();
         let prepared = preflight(token.handoff(), receipt, compiler_closure)
             .map_err(ProductionCompilerModuleHandoffIntakeError::WorkerPreflight)?;
         parent_custody
             .revalidate()
             .map_err(ProductionCompilerModuleHandoffIntakeError::ParentCustody)?;
+        compiler_execution_readiness
+            .revalidate()
+            .map_err(ProductionCompilerModuleHandoffIntakeError::CompilerExecutionReadiness)?;
         let consumed = consume_compiler_module_handoff_with_currentness_v3(&lease, token)
             .map_err(ProductionCompilerModuleHandoffIntakeError::Transport)?;
         if consumed.attempt() != receipt.attempt()
@@ -199,11 +226,21 @@ impl ProductionCompilerModuleHandoffIntake {
         {
             return Err(ProductionCompilerModuleHandoffIntakeError::TransportBindingMismatch);
         }
+        if InertCompilerExecutionSubjectV1::from_consumed(&consumed)
+            .map_err(ProductionCompilerModuleHandoffIntakeError::CompilerExecutionSubject)?
+            != subject
+            || compiler_execution.request().subject() != &subject
+        {
+            return Err(
+                ProductionCompilerModuleHandoffIntakeError::CompilerExecutionBindingMismatch,
+            );
+        }
         debug_assert!(!consumed.grants_compiler_authority());
         let consumed = ParentConsumedProductionHandoff {
             receipt,
             consumed,
             compiler_closure,
+            compiler_execution,
         };
         Ok((consumed, prepared))
     }
@@ -212,9 +249,13 @@ impl ProductionCompilerModuleHandoffIntake {
 #[derive(Debug)]
 pub(crate) enum ProductionCompilerModuleHandoffIntakeError {
     ParentCustody(ParentRustcInvocationCustodyError),
+    CompilerExecutionReadiness(CompilerExecutionBoundaryErrorV1),
     Transport(CompilerModuleHandoffErrorV3),
+    CompilerExecutionTransport(CompilerExecutionReceiptTransportErrorV1),
+    CompilerExecutionSubject(CompilerExecutionSubjectErrorV1),
     WorkerPreflight(ProtectedFirstBuildWorkerV3Error),
     TransportBindingMismatch,
+    CompilerExecutionBindingMismatch,
     InvocationMismatch,
 }
 
@@ -222,10 +263,16 @@ impl fmt::Display for ProductionCompilerModuleHandoffIntakeError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::ParentCustody(error) => error.fmt(formatter),
+            Self::CompilerExecutionReadiness(error) => error.fmt(formatter),
             Self::Transport(error) => error.fmt(formatter),
+            Self::CompilerExecutionTransport(error) => error.fmt(formatter),
+            Self::CompilerExecutionSubject(error) => error.fmt(formatter),
             Self::WorkerPreflight(error) => write!(formatter, "protected V3 worker preflight failed before handoff consumption: {error}"),
             Self::TransportBindingMismatch => formatter.write_str(
                 "consumed V3 compiler-module handoff changed its exact transaction binding",
+            ),
+            Self::CompilerExecutionBindingMismatch => formatter.write_str(
+                "consumed V3 compiler-module handoff changed its exact compiler-execution receipt binding",
             ),
             Self::InvocationMismatch => formatter.write_str(
                 "consumed V3 compiler-module handoff does not retain the exact parent-prepared rustc invocation",
@@ -238,9 +285,14 @@ impl Error for ProductionCompilerModuleHandoffIntakeError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::ParentCustody(error) => Some(error),
+            Self::CompilerExecutionReadiness(error) => Some(error),
             Self::Transport(error) => Some(error),
+            Self::CompilerExecutionTransport(error) => Some(error),
+            Self::CompilerExecutionSubject(error) => Some(error),
             Self::WorkerPreflight(error) => Some(error),
-            Self::TransportBindingMismatch | Self::InvocationMismatch => None,
+            Self::TransportBindingMismatch
+            | Self::CompilerExecutionBindingMismatch
+            | Self::InvocationMismatch => None,
         }
     }
 }

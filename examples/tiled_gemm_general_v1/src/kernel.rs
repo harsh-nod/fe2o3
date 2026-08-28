@@ -72,12 +72,18 @@ pub fn tiled_gemm_general_v1(
     let matrix = Matrix::current();
     let mut accumulator = F32AccumulatorFragment::zero(&wave_lane);
     let phase_count = (k as usize + 15) / 16;
+    // Keep the current and next operand epochs live at the same time. The
+    // zero-filled matrix loads make the speculative final prefetch harmless.
+    let mut lhs = a_matrix.load_m16k16(&wave_lane, tile_row * 16, 0);
+    let mut rhs = b_matrix.load_k16n16(&wave_lane, 0, tile_column * 16);
     let mut phase_index = 0_usize;
     while phase_index < phase_count {
-        let phase = phase_index * 16;
-        let lhs = a_matrix.load_m16k16(&wave_lane, tile_row * 16, phase);
-        let rhs = b_matrix.load_k16n16(&wave_lane, phase, tile_column * 16);
+        let next_phase = (phase_index + 1) * 16;
+        let next_lhs = a_matrix.load_m16k16(&wave_lane, tile_row * 16, next_phase);
+        let next_rhs = b_matrix.load_k16n16(&wave_lane, next_phase, tile_column * 16);
         accumulator = matrix.multiply_accumulate(lhs, rhs, accumulator);
+        lhs = next_lhs;
+        rhs = next_rhs;
         phase_index += 1;
     }
 

@@ -16,13 +16,13 @@ use dialect_kernel::{
     CheckedRowStripedIndex2DOp, CheckedTiledIndex2DOp, DeterministicJoinOp, DimensionOp,
     IndexBinaryOp, IndexConstantOp, IndexEqualBranchArgsOp, IndexEqualBranchOp,
     IndexLessThanBranchArgsOp, IndexLessThanBranchOp, IndexUnknownOp, IndexUnsignedCastOp,
-    InvocationIndexOp, MAX_RANKED_MEMORY_RANK, OwnershipContractOp, RankedAccessOp, RankedViewOp,
-    RankedViewType, RequireEquivalentOp, RequireFiniteFoldOp, RequireFiniteRecurrenceOp,
-    RequirePermutationGatherOp, ReturnOp, SemanticBinaryOp, SemanticConstantOp,
-    SemanticExpressionCommitmentOp, SemanticSymbolOp, SemanticTypedBinaryOp, SemanticTypedCastOp,
-    SemanticTypedCompareOp, SemanticTypedConstantOp, SemanticTypedExpressionRootOp,
-    SemanticTypedSelectOp, SemanticTypedSymbolOp, SemanticTypedUnaryOp, TensorLayoutOp,
-    TensorResultComponentOp, TrapOp, ranked_view_type,
+    InvocationIndexOp, MAX_RANKED_MEMORY_RANK, OwnershipContractOp, PipelineCreateOp,
+    PipelineEventOp, RankedAccessOp, RankedViewOp, RankedViewType, RequireEquivalentOp,
+    RequireFiniteFoldOp, RequireFiniteRecurrenceOp, RequirePermutationGatherOp, ReturnOp,
+    SemanticBinaryOp, SemanticConstantOp, SemanticExpressionCommitmentOp, SemanticSymbolOp,
+    SemanticTypedBinaryOp, SemanticTypedCastOp, SemanticTypedCompareOp, SemanticTypedConstantOp,
+    SemanticTypedExpressionRootOp, SemanticTypedSelectOp, SemanticTypedSymbolOp,
+    SemanticTypedUnaryOp, TensorLayoutOp, TensorResultComponentOp, TrapOp, ranked_view_type,
 };
 use dialect_proof::{
     EvidenceRefOp, ObligationOp, RequireEffectRefinementOp, RequireNumericalRefinementOp,
@@ -357,6 +357,8 @@ enum RankedOperationKind {
     RankedAccess,
     OwnershipContract,
     AllocationEffect,
+    PipelineCreate,
+    PipelineEvent,
     IndexLessThanBranch,
     IndexLessThanBranchArgs,
     IndexEqualBranch,
@@ -405,6 +407,10 @@ impl RankedOperationKind {
 fn ranked_operation_kind(operation: &dyn Op) -> Option<RankedOperationKind> {
     if operation.downcast_ref::<RankedViewOp>().is_some() {
         Some(RankedOperationKind::RankedView)
+    } else if operation.downcast_ref::<PipelineCreateOp>().is_some() {
+        Some(RankedOperationKind::PipelineCreate)
+    } else if operation.downcast_ref::<PipelineEventOp>().is_some() {
+        Some(RankedOperationKind::PipelineEvent)
     } else if operation.downcast_ref::<IndexConstantOp>().is_some() {
         Some(RankedOperationKind::IndexConstant)
     } else if operation.downcast_ref::<IndexUnsignedCastOp>().is_some() {

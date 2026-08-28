@@ -389,7 +389,10 @@ fn static_non_gemm_kernel_reaches_safety_verified_lowering_input() {
         KernelCheckStatusV1::Clean
     );
     assert!(input.pass_preservation_report().is_exact_identity());
-    assert_eq!(input.pass_preservation_report().certificates().len(), 8);
+    assert_eq!(
+        input.pass_preservation_report().certificates().len(),
+        PRODUCTION_PLIRON_PRELOWERING_PASS_ORDER_V2.len()
+    );
     assert!(
         !input
             .production_pipeline_report()
@@ -3005,7 +3008,7 @@ fn same_session_stage_root_substitution_is_rejected_before_analysis() {
 }
 
 #[test]
-fn recipe_rejects_undefined_duplicate_and_non_entry_values() {
+fn recipe_rejects_undefined_duplicate_and_cross_block_values() {
     let undefined = ProductionRankedKernelV1::new(
         "undefined",
         0,
@@ -3048,7 +3051,7 @@ fn recipe_rejects_undefined_duplicate_and_non_entry_values() {
         })
     );
 
-    let non_entry = ProductionRankedKernelV1::new(
+    let non_entry_local = ProductionRankedKernelV1::new(
         "non_entry",
         0,
         vec![
@@ -3058,16 +3061,48 @@ fn recipe_rejects_undefined_duplicate_and_non_entry_values() {
             ),
             ProductionRankedBlockV1::new(
                 vec![ProductionRankedOperationV1::IndexConstant {
-                    result: INDEX,
+                    result: VIEW,
                     value: 0,
                 }],
                 ProductionRankedTerminatorV1::Return,
             ),
         ],
     );
+    assert!(non_entry_local.is_ok());
+
+    let cross_block = ProductionRankedKernelV1::new(
+        "cross_block",
+        0,
+        vec![
+            ProductionRankedBlockV1::new(
+                vec![],
+                ProductionRankedTerminatorV1::Branch { target: 1 },
+            ),
+            ProductionRankedBlockV1::new(
+                vec![ProductionRankedOperationV1::IndexConstant {
+                    result: VIEW,
+                    value: 0,
+                }],
+                ProductionRankedTerminatorV1::Branch { target: 2 },
+            ),
+            ProductionRankedBlockV1::new(
+                vec![ProductionRankedOperationV1::IndexUnsignedCast {
+                    result: INDEX,
+                    source: local(VIEW),
+                    bit_width: 32,
+                }],
+                ProductionRankedTerminatorV1::Return,
+            ),
+        ],
+    );
     assert_eq!(
-        non_entry,
-        Err(ProductionRankedKernelErrorV1::NonEntryDefinition { block: 1 })
+        cross_block,
+        Err(
+            ProductionRankedKernelErrorV1::CrossBlockDefinitionRequiresArgument {
+                definition_block: 1,
+                use_block: 2,
+            }
+        )
     );
 }
 

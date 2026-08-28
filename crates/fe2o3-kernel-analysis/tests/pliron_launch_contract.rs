@@ -119,7 +119,7 @@ fn static_launch_lds_and_host_abi_are_checked_in_the_production_pipeline() {
         context, &function, &contract,
     )
     .unwrap();
-    assert_eq!(report.pass_order().len(), 8);
+    assert_eq!(report.pass_order().len(), 9);
     let target = report.target_contract().unwrap();
     assert_eq!(target.workgroup_memory_bytes(), Some(4_096));
     assert_eq!(target.checked_global_allocation_count(), 1);

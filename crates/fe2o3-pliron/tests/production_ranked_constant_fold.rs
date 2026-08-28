@@ -89,7 +89,7 @@ fn public_constructor_normalizes_all_checked_index_binary_kinds() {
 }
 
 #[test]
-fn fixed_eight_stage_pipeline_observes_only_the_normalized_recipe() {
+fn fixed_nine_stage_pipeline_observes_only_the_normalized_recipe() {
     let kernel = folded_access_kernel(
         "normalized_pipeline",
         IndexBinaryKindAttr::Multiply,

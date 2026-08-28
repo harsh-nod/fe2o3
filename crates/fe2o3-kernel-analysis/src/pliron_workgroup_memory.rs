@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-use dialect_kernel::{AccessKindAttr, MemorySpaceAttr, RankedViewOp};
+use dialect_kernel::{AccessKindAttr, MemorySpaceAttr, RankedAccessOp, RankedViewOp};
 use pliron::{builtin::ops::FuncOp, context::Context, operation::Operation};
 
 use crate::pliron_analysis_manager::{PlironAnalysisManagerV1, PlironMemoryOrderAnalysisFailureV1};
@@ -190,7 +190,13 @@ pub(crate) fn run_pliron_workgroup_memory_check_with_analyses_v1(
     };
     if !inventory.operations().iter().any(|site| {
         let operation = Operation::get_op_dyn(site.pointer(), context);
-        operation
+        let Some(access) = operation.downcast_ref::<RankedAccessOp>() else {
+            return false;
+        };
+        let Some(definition) = access.view(context).defining_op() else {
+            return false;
+        };
+        Operation::get_op_dyn(definition, context)
             .downcast_ref::<RankedViewOp>()
             .is_some_and(|view| view.memory_space(context) == Some(MemorySpaceAttr::Workgroup))
     }) {

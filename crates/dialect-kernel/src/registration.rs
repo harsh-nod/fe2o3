@@ -12,19 +12,19 @@ use crate::{
     IndexLessThanBranchOp, IndexType, IndexUnknownOp, IndexUnsignedCastOp, IndexValueAttr,
     InvocationDimensionAttr, InvocationIndexOp, IterationDomainAttr, LaunchExtentAttr,
     MemorySpaceAttr, NoAliasClassAttr, OwnershipContractOp, OwnershipCoverageAttr,
-    OwnershipPartitionAttr, RankedAccessOp, RankedViewOp, RankedViewType, RequireEquivalentOp,
-    RequireFiniteFoldOp, RequireFiniteRecurrenceOp, RequirePermutationGatherOp, ReturnOp,
-    SemanticBinaryKindAttr, SemanticBinaryOp, SemanticConstantAttr, SemanticConstantOp,
-    SemanticCoverageBindingAttr, SemanticDomainBoundAttr, SemanticEvaluationOrderAttr,
-    SemanticExceptionalValueAttr, SemanticExpressionCommitmentAttr, SemanticExpressionCommitmentOp,
-    SemanticIeeeRoundingAttr, SemanticNumericalPolicyAttr, SemanticOverflowAttr,
-    SemanticScalarKindAttr, SemanticScalarType, SemanticStepBoundAttr, SemanticSymbolAttr,
-    SemanticSymbolOp, SemanticTypedBinaryKindAttr, SemanticTypedBinaryOp,
-    SemanticTypedCastKindAttr, SemanticTypedCastOp, SemanticTypedCompareKindAttr,
-    SemanticTypedCompareOp, SemanticTypedConstantOp, SemanticTypedExpressionRootOp,
-    SemanticTypedSelectOp, SemanticTypedSymbolOp, SemanticTypedUnaryKindAttr, SemanticTypedUnaryOp,
-    TensorConvergenceAttr, TensorFragmentAttr, TensorInstructionAttr, TensorLayoutOp,
-    TensorResultComponentOp, TensorValueRootAttr, TrapOp,
+    OwnershipPartitionAttr, PipelineCreateOp, PipelineEventKindAttr, PipelineEventOp, PipelineType,
+    RankedAccessOp, RankedViewOp, RankedViewType, RequireEquivalentOp, RequireFiniteFoldOp,
+    RequireFiniteRecurrenceOp, RequirePermutationGatherOp, ReturnOp, SemanticBinaryKindAttr,
+    SemanticBinaryOp, SemanticConstantAttr, SemanticConstantOp, SemanticCoverageBindingAttr,
+    SemanticDomainBoundAttr, SemanticEvaluationOrderAttr, SemanticExceptionalValueAttr,
+    SemanticExpressionCommitmentAttr, SemanticExpressionCommitmentOp, SemanticIeeeRoundingAttr,
+    SemanticNumericalPolicyAttr, SemanticOverflowAttr, SemanticScalarKindAttr, SemanticScalarType,
+    SemanticStepBoundAttr, SemanticSymbolAttr, SemanticSymbolOp, SemanticTypedBinaryKindAttr,
+    SemanticTypedBinaryOp, SemanticTypedCastKindAttr, SemanticTypedCastOp,
+    SemanticTypedCompareKindAttr, SemanticTypedCompareOp, SemanticTypedConstantOp,
+    SemanticTypedExpressionRootOp, SemanticTypedSelectOp, SemanticTypedSymbolOp,
+    SemanticTypedUnaryKindAttr, SemanticTypedUnaryOp, TensorConvergenceAttr, TensorFragmentAttr,
+    TensorInstructionAttr, TensorLayoutOp, TensorResultComponentOp, TensorValueRootAttr, TrapOp,
 };
 
 fn registration_hook(
@@ -36,6 +36,7 @@ fn registration_hook(
     service.register_type::<RankedViewType>()?;
     service.register_type::<IndexType>()?;
     service.register_type::<CheckedAccessCapabilityType>()?;
+    service.register_type::<PipelineType>()?;
     service.register_type::<SemanticScalarType>()?;
     service.register_attribute::<SemanticScalarKindAttr>()?;
     service.register_attribute::<SemanticTypedUnaryKindAttr>()?;
@@ -72,8 +73,11 @@ fn registration_hook(
     service.register_attribute::<TensorInstructionAttr>()?;
     service.register_attribute::<TensorFragmentAttr>()?;
     service.register_attribute::<TensorValueRootAttr>()?;
+    service.register_attribute::<PipelineEventKindAttr>()?;
     service.register_operation::<AlgorithmOp>()?;
     service.register_operation::<RankedViewOp>()?;
+    service.register_operation::<PipelineCreateOp>()?;
+    service.register_operation::<PipelineEventOp>()?;
     service.register_operation::<IndexConstantOp>()?;
     service.register_operation::<IndexUnknownOp>()?;
     service.register_operation::<InvocationIndexOp>()?;

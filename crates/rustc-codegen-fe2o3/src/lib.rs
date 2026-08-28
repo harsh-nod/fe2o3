@@ -42,6 +42,7 @@ mod production_semantic_types_v1;
 mod production_target_lineage_v3;
 mod production_target_v1;
 mod production_worker_handoff;
+mod protected_compiler_execution;
 mod protected_rustc_invocation;
 mod reference_effect_bijection_v1;
 mod reference_effect_v1;
@@ -139,6 +140,7 @@ impl BuildAttemptSelection {
 
 struct RetainedProductionDeviceAdmission {
     target: production_target_v1::RetainedProductionTargetV1,
+    compiler_execution: protected_compiler_execution::AdmittedProtectedCompilerExecutionV1,
     build_attempt: artifact_transaction::BuildAttempt,
 }
 
@@ -235,8 +237,14 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                     .unwrap_or_else(|error| {
                         tcx.dcx().fatal(format!(
                             "[rustc-codegen-fe2o3] production target authentication failed before monomorphization without fallback: {error}"
-                        ))
-                    }),
+                            ))
+                        }),
+                    compiler_execution: protected_compiler_execution::admit_for_production_codegen()
+                        .unwrap_or_else(|error| {
+                            tcx.dcx().fatal(format!(
+                                "[rustc-codegen-fe2o3] protected compiler-execution admission failed without fallback: {error}"
+                            ))
+                        }),
                     build_attempt,
                 })
             } else {
@@ -275,6 +283,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                 production_pipeline::ProductionDisposition::DeviceTransaction => {
                     let RetainedProductionDeviceAdmission {
                         target,
+                        compiler_execution,
                         build_attempt,
                     } = production_device_admission
                         .take()
@@ -320,6 +329,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             output_dir,
                             build_attempt,
                             invocation,
+                            compiler_execution,
                         )
                         .and_then(|transaction| transaction.publish_worker_handoff())
                         .map(|subject| subject.outer_handoff().byte_len());
@@ -448,6 +458,7 @@ mod tests {
             .next()
             .expect("bounded production transaction");
         assert!(production.contains("protected_rustc_invocation.take()"));
+        assert!(backend.contains("protected_compiler_execution::admit_for_production_codegen()"));
         assert!(production.contains("from_rustc_invocation_descriptor_v3"));
         assert!(production.contains("invocation.descriptor()"));
         assert!(!production.contains("local_crate_source_file"));
@@ -464,6 +475,7 @@ mod tests {
         assert!(!production.contains("qualification_selection"));
         assert!(!production_pipeline.contains("Option<BuildAttempt>"));
         assert!(production_pipeline.contains("publish_compiler_module_handoff_v3"));
+        assert!(production_pipeline.contains("publish_compiler_execution_receipt_transport_v1"));
         let admission = backend
             .find("let mut production_device_admission")
             .expect("production device admission");

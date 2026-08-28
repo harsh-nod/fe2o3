@@ -544,6 +544,7 @@ trait HandoffSchema: Sized {
     const DECODE_WORKING_SET_FIXED_BYTES: usize;
     const MAX_DECODE_WORKING_SET_BYTES: usize;
     const VALIDATE_RECORD_DURING_RECOVERY: bool;
+    const COMMITTED_SIDECAR_ENTRY: Option<&'static str>;
     const ALL_SLOTS: &'static [Self::Slot];
     const ATTEMPT_CUSTODY: HandoffAttemptCustodyV1 = HandoffAttemptCustodyV1::FrontendBuilding;
 
@@ -592,6 +593,7 @@ impl HandoffSchema for HandoffV1Schema {
     const DECODE_WORKING_SET_FIXED_BYTES: usize = 0;
     const MAX_DECODE_WORKING_SET_BYTES: usize = MAX_COMPILER_MODULE_HANDOFF_BYTES;
     const VALIDATE_RECORD_DURING_RECOVERY: bool = false;
+    const COMMITTED_SIDECAR_ENTRY: Option<&'static str> = None;
     const ALL_SLOTS: &'static [Self::Slot] = &[CompilerModuleHandoffSlotV1::Production];
 
     fn default_slot() -> Self::Slot {
@@ -651,6 +653,7 @@ impl HandoffSchema for SimulationKernelIrHandoffSchemaV1 {
     const DECODE_WORKING_SET_FIXED_BYTES: usize = 0;
     const MAX_DECODE_WORKING_SET_BYTES: usize = MAX_COMPILER_MODULE_HANDOFF_BYTES;
     const VALIDATE_RECORD_DURING_RECOVERY: bool = false;
+    const COMMITTED_SIDECAR_ENTRY: Option<&'static str> = None;
     const ALL_SLOTS: &'static [Self::Slot] = &[SimulationKernelIrHandoffSlotV1::CanonicalKirV6];
     const ATTEMPT_CUSTODY: HandoffAttemptCustodyV1 =
         HandoffAttemptCustodyV1::SimulationBackendClaimed;
@@ -1556,7 +1559,10 @@ fn recover_slot<S: HandoffSchema>(slot: &PinnedDirectory) -> Result<(), HandoffE
     let names = slot_entries(slot)?;
     for name in &names {
         let name_bytes = name.as_os_str().as_bytes();
+        let is_committed_sidecar =
+            S::COMMITTED_SIDECAR_ENTRY.is_some_and(|entry| name_bytes == entry.as_bytes());
         if !matches!(name_bytes, b"module" | b"ready" | b"consumed")
+            && !is_committed_sidecar
             && !name_bytes.starts_with(TEMP_PREFIX.as_bytes())
         {
             return Err(invalid_slot(&slot.path.join(name), "unexpected slot entry").into());
@@ -1577,6 +1583,18 @@ fn recover_slot<S: HandoffSchema>(slot: &PinnedDirectory) -> Result<(), HandoffE
             None
         }
     });
+    if committed_entry.is_none()
+        && names.iter().any(|name| {
+            S::COMMITTED_SIDECAR_ENTRY
+                .is_some_and(|entry| name.as_os_str().as_bytes() == entry.as_bytes())
+        })
+    {
+        return Err(invalid_slot(
+            &slot.path,
+            "committed sidecar exists without a ready or consumed record",
+        )
+        .into());
+    }
     let residue = names
         .into_iter()
         .filter(|name| {
@@ -2345,6 +2363,7 @@ mod protected_v2 {
         const DECODE_WORKING_SET_FIXED_BYTES: usize = 0;
         const MAX_DECODE_WORKING_SET_BYTES: usize = MAX_COMPILER_MODULE_HANDOFF_BYTES;
         const VALIDATE_RECORD_DURING_RECOVERY: bool = true;
+        const COMMITTED_SIDECAR_ENTRY: Option<&'static str> = None;
         const ALL_SLOTS: &'static [Self::Slot] = &[CompilerModuleHandoffSlotV2::Production];
 
         fn default_slot() -> Self::Slot {
@@ -3245,6 +3264,9 @@ mod semantic_v3 {
     const TRANSACTION_IDENTITY_DOMAIN_V3: &[u8] =
         b"fe2o3.compiler-module-handoff.transaction-identity.v3\0";
     const RECORD_DOMAIN_V3: &[u8] = b"fe2o3.compiler-module-handoff.record.v3\0";
+    const COMPILER_EXECUTION_RECEIPT_ENTRY_V1: &str = "compiler-execution-receipt-v1";
+    const COMPILER_EXECUTION_RECEIPT_IDENTITY_DOMAIN_V1: &[u8] =
+        b"fe2o3.compiler-execution-receipt-transport.identity.v1\0";
     const HANDOFF_BINDING_BYTES_V3: usize = 32 + 8;
     const RECORD_BYTES_V3: usize = RECORD_MAGIC_V3.len()
         + 2
@@ -3265,6 +3287,12 @@ mod semantic_v3 {
     /// [`MAX_COMPILER_MODULE_HANDOFF_BYTES`] unchanged.
     pub const MAX_COMPILER_MODULE_HANDOFF_BYTES_V3: usize =
         fe2o3_compiler_ffi::MAX_INERT_SEMANTIC_COMPILER_MODULE_HANDOFF_BYTES_V3;
+
+    /// Maximum opaque compiler-execution receipt bytes transported beside one V3 handoff.
+    ///
+    /// The artifact layer deliberately does not decode the higher-level receipt protocol. The
+    /// protocol crate must prove that its one canonical carriage fits this fixed transport bound.
+    pub const MAX_COMPILER_EXECUTION_RECEIPT_TRANSPORT_BYTES_V1: usize = 64 * 1024;
 
     // The admitted payload is the one shared canonical backing. This fixed allowance covers three
     // bounded representations of the envelope and symbol manifest plus 8 MiB for the bounded
@@ -3354,6 +3382,87 @@ mod semantic_v3 {
 
         /// Attempt possession and content identity do not authenticate compiler authorship.
         pub const fn grants_compiler_authority(self) -> bool {
+            false
+        }
+    }
+
+    /// Domain-separated identity of one subject-bound receipt sidecar transport.
+    #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+    pub struct CompilerExecutionReceiptTransportIdentityV1([u8; 32]);
+
+    impl CompilerExecutionReceiptTransportIdentityV1 {
+        pub const fn as_bytes(&self) -> &[u8; 32] {
+            &self.0
+        }
+    }
+
+    /// Inert durable receipt for one exact compiler-execution sidecar transport.
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub struct CompilerExecutionReceiptTransportReceiptV1 {
+        subject: crate::InertCompilerExecutionSubjectIdentityV1,
+        identity: CompilerExecutionReceiptTransportIdentityV1,
+        length: usize,
+    }
+
+    impl CompilerExecutionReceiptTransportReceiptV1 {
+        pub const fn subject(&self) -> crate::InertCompilerExecutionSubjectIdentityV1 {
+            self.subject
+        }
+
+        pub const fn identity(&self) -> CompilerExecutionReceiptTransportIdentityV1 {
+            self.identity
+        }
+
+        pub const fn length(&self) -> usize {
+            self.length
+        }
+
+        pub const fn grants_compiler_authority(&self) -> bool {
+            false
+        }
+
+        pub const fn grants_publication_authority(&self) -> bool {
+            false
+        }
+
+        pub const fn grants_load_authority(&self) -> bool {
+            false
+        }
+
+        pub const fn grants_launch_authority(&self) -> bool {
+            false
+        }
+    }
+
+    /// Exact recovered sidecar bytes paired with their subject-bound transport receipt.
+    #[derive(Debug)]
+    pub struct RecoveredCompilerExecutionReceiptTransportV1 {
+        receipt: CompilerExecutionReceiptTransportReceiptV1,
+        exact_bytes: Arc<[u8]>,
+    }
+
+    impl RecoveredCompilerExecutionReceiptTransportV1 {
+        pub const fn receipt(&self) -> CompilerExecutionReceiptTransportReceiptV1 {
+            self.receipt
+        }
+
+        pub fn exact_bytes(&self) -> &[u8] {
+            &self.exact_bytes
+        }
+
+        pub const fn grants_compiler_authority(&self) -> bool {
+            false
+        }
+
+        pub const fn grants_publication_authority(&self) -> bool {
+            false
+        }
+
+        pub const fn grants_load_authority(&self) -> bool {
+            false
+        }
+
+        pub const fn grants_launch_authority(&self) -> bool {
             false
         }
     }
@@ -3804,6 +3913,69 @@ mod semantic_v3 {
         }
     }
 
+    /// Failure to publish or recover one subject-bound compiler-execution receipt sidecar.
+    #[derive(Debug)]
+    pub enum CompilerExecutionReceiptTransportErrorV1 {
+        Handoff(CompilerModuleHandoffErrorV3),
+        InvalidReceiptSize { actual: usize, maximum: usize },
+        NotPublished,
+        ConflictingPublication,
+        SubjectBindingMismatch,
+    }
+
+    impl fmt::Display for CompilerExecutionReceiptTransportErrorV1 {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            match self {
+                Self::Handoff(error) => write!(formatter, "compiler handoff is not current: {error}"),
+                Self::InvalidReceiptSize { actual, maximum } => write!(
+                    formatter,
+                    "compiler-execution receipt sidecar size {actual} is outside 1..={maximum} bytes"
+                ),
+                Self::NotPublished => formatter
+                    .write_str("compiler-execution receipt sidecar is not published"),
+                Self::ConflictingPublication => formatter.write_str(
+                    "compiler-execution receipt sidecar conflicts with the exact subject-bound publication",
+                ),
+                Self::SubjectBindingMismatch => formatter.write_str(
+                    "compiler-execution receipt sidecar names a different V3 handoff subject",
+                ),
+            }
+        }
+    }
+
+    impl std::error::Error for CompilerExecutionReceiptTransportErrorV1 {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Self::Handoff(error) => Some(error),
+                _ => None,
+            }
+        }
+    }
+
+    impl From<CompilerModuleHandoffErrorV3> for CompilerExecutionReceiptTransportErrorV1 {
+        fn from(error: CompilerModuleHandoffErrorV3) -> Self {
+            Self::Handoff(error)
+        }
+    }
+
+    impl From<CompilerModuleHandoffErrorV1> for CompilerExecutionReceiptTransportErrorV1 {
+        fn from(error: CompilerModuleHandoffErrorV1) -> Self {
+            Self::Handoff(error.into())
+        }
+    }
+
+    impl From<std::io::Error> for CompilerExecutionReceiptTransportErrorV1 {
+        fn from(error: std::io::Error) -> Self {
+            Self::Handoff(CompilerModuleHandoffErrorV3::Io(error))
+        }
+    }
+
+    impl From<EmitError> for CompilerExecutionReceiptTransportErrorV1 {
+        fn from(error: EmitError) -> Self {
+            Self::Handoff(error.into())
+        }
+    }
+
     /// Atomically publishes one exact strict compiler-FFI V3 handoff.
     ///
     /// The public API accepts the strict typed owner, never unclassified bytes,
@@ -3868,6 +4040,74 @@ mod semantic_v3 {
         slot: CompilerModuleHandoffSlotV3,
     ) -> Result<CompilerModuleHandoffReceiptV3, CompilerModuleHandoffErrorV3> {
         recover_receipt_in_slot_v3(output_dir, producer, attempt, slot)
+    }
+
+    /// Atomically publishes opaque receipt bytes beside the exact current V3 handoff subject.
+    ///
+    /// This lower transport validates the complete subject-to-transaction binding but does not
+    /// decode or authenticate the receipt bytes. A higher protocol layer must strictly decode the
+    /// recovered bytes and require that its embedded subject equals `subject`.
+    pub fn publish_compiler_execution_receipt_transport_v1(
+        output_dir: &Path,
+        producer: &ProducerIdentity,
+        subject: &crate::InertCompilerExecutionSubjectV1,
+        exact_receipt_bytes: &[u8],
+    ) -> Result<CompilerExecutionReceiptTransportReceiptV1, CompilerExecutionReceiptTransportErrorV1>
+    {
+        publish_compiler_execution_receipt_transport_inner_v1(
+            output_dir,
+            producer,
+            subject,
+            exact_receipt_bytes,
+        )
+    }
+
+    /// Recovers the exact opaque receipt bytes for one ready or consumed V3 handoff subject.
+    ///
+    /// Consumed-state recovery lets a crash-restarted Cargo process complete the already-persisted
+    /// Worker V3 publication. The returned bytes remain inert and require higher-level decoding.
+    pub fn recover_compiler_execution_receipt_transport_v1(
+        output_dir: &Path,
+        producer: &ProducerIdentity,
+        subject: &crate::InertCompilerExecutionSubjectV1,
+    ) -> Result<
+        RecoveredCompilerExecutionReceiptTransportV1,
+        CompilerExecutionReceiptTransportErrorV1,
+    > {
+        recover_compiler_execution_receipt_transport_inner_v1(output_dir, producer, subject)
+    }
+
+    /// Recovers the exact sidecar while one matching V3 consumption token holds currentness.
+    ///
+    /// This is the intake path for a live compiler handoff. It observes the strictly decoded
+    /// handoff, its subject-bound receipt bytes, and the eventual one-shot consumption under the
+    /// same cooperative lock instead of dropping currentness to use path-based recovery.
+    pub fn recover_compiler_execution_receipt_transport_with_currentness_v1(
+        lease: &CompilerModuleHandoffCurrentnessLeaseV3,
+        token: &CompilerModuleHandoffConsumptionTokenV3,
+        subject: &crate::InertCompilerExecutionSubjectV1,
+    ) -> Result<
+        RecoveredCompilerExecutionReceiptTransportV1,
+        CompilerExecutionReceiptTransportErrorV1,
+    > {
+        lease.validate_current_token(token)?;
+        token.revalidate_locked_currentness()?;
+        let reconstructed = crate::InertCompilerExecutionSubjectV1::from_publication(
+            lease.receipt(),
+            token.handoff(),
+        )
+        .map_err(|_| CompilerExecutionReceiptTransportErrorV1::SubjectBindingMismatch)?;
+        if &reconstructed != subject {
+            return Err(CompilerExecutionReceiptTransportErrorV1::SubjectBindingMismatch);
+        }
+        let exact_bytes = read_compiler_execution_receipt_bytes_v1(&token.binding.slot_directory)?
+            .ok_or(CompilerExecutionReceiptTransportErrorV1::NotPublished)?;
+        token.revalidate_locked_currentness()?;
+        let receipt = compiler_execution_receipt_transport_receipt_v1(subject, &exact_bytes);
+        Ok(RecoveredCompilerExecutionReceiptTransportV1 {
+            receipt,
+            exact_bytes: Arc::from(exact_bytes),
+        })
     }
 
     /// Publishes the default V3 slot and returns a move-only currentness lease.
@@ -4067,6 +4307,8 @@ mod semantic_v3 {
         const DECODE_WORKING_SET_FIXED_BYTES: usize = V3_DECODE_FIXED_BYTES;
         const MAX_DECODE_WORKING_SET_BYTES: usize = MAX_V3_DECODE_WORKING_SET_BYTES;
         const VALIDATE_RECORD_DURING_RECOVERY: bool = true;
+        const COMMITTED_SIDECAR_ENTRY: Option<&'static str> =
+            Some(COMPILER_EXECUTION_RECEIPT_ENTRY_V1);
         const ALL_SLOTS: &'static [Self::Slot] = &[CompilerModuleHandoffSlotV3::Production];
 
         fn default_slot() -> Self::Slot {
@@ -4148,6 +4390,318 @@ mod semantic_v3 {
         digest.update(attempt.invocation().as_bytes());
         digest.update((payload_length as u64).to_le_bytes());
         digest
+    }
+
+    fn publish_compiler_execution_receipt_transport_inner_v1(
+        output_dir: &Path,
+        producer: &ProducerIdentity,
+        subject: &crate::InertCompilerExecutionSubjectV1,
+        exact_receipt_bytes: &[u8],
+    ) -> Result<CompilerExecutionReceiptTransportReceiptV1, CompilerExecutionReceiptTransportErrorV1>
+    {
+        validate_compiler_execution_receipt_transport_size_v1(exact_receipt_bytes.len())?;
+        let output = PinnedOutput::open_existing(output_dir)?;
+        let _lock = output.lock()?;
+        let slot = open_subject_bound_slot_v1(&output, producer, subject, false, true)?;
+
+        if let Some(existing) = read_compiler_execution_receipt_bytes_v1(&slot)? {
+            if existing != exact_receipt_bytes {
+                return Err(CompilerExecutionReceiptTransportErrorV1::ConflictingPublication);
+            }
+            fsync(&slot.fd).map_err(std::io::Error::from)?;
+            validate_subject_bound_slot_v1(&output, producer, subject, &slot, false, false)?;
+            return Ok(compiler_execution_receipt_transport_receipt_v1(
+                subject, &existing,
+            ));
+        }
+
+        let (temporary_name, mut temporary) =
+            create_temp(&slot, COMPILER_EXECUTION_RECEIPT_ENTRY_V1)?;
+        temporary.write_all(exact_receipt_bytes)?;
+        temporary.sync_all()?;
+        let temporary_stat = fstat(&temporary).map_err(std::io::Error::from)?;
+        if !is_private_file(&temporary_stat)
+            || usize::try_from(temporary_stat.st_size).ok() != Some(exact_receipt_bytes.len())
+        {
+            return Err(CompilerExecutionReceiptTransportErrorV1::SubjectBindingMismatch);
+        }
+        validate_subject_bound_slot_v1(&output, producer, subject, &slot, false, false)?;
+        match renameat_with(
+            &slot.fd,
+            &temporary_name,
+            &slot.fd,
+            COMPILER_EXECUTION_RECEIPT_ENTRY_V1,
+            RenameFlags::NOREPLACE,
+        ) {
+            Ok(()) => {}
+            Err(error) if error == rustix::io::Errno::EXIST => {
+                return Err(CompilerExecutionReceiptTransportErrorV1::ConflictingPublication);
+            }
+            Err(error) => return Err(std::io::Error::from(error).into()),
+        }
+        fsync(&slot.fd).map_err(std::io::Error::from)?;
+        slot.verify()?;
+        let committed = read_compiler_execution_receipt_bytes_v1(&slot)?
+            .ok_or(CompilerExecutionReceiptTransportErrorV1::NotPublished)?;
+        if committed != exact_receipt_bytes {
+            return Err(CompilerExecutionReceiptTransportErrorV1::ConflictingPublication);
+        }
+        validate_subject_bound_slot_v1(&output, producer, subject, &slot, false, false)?;
+        Ok(compiler_execution_receipt_transport_receipt_v1(
+            subject, &committed,
+        ))
+    }
+
+    fn recover_compiler_execution_receipt_transport_inner_v1(
+        output_dir: &Path,
+        producer: &ProducerIdentity,
+        subject: &crate::InertCompilerExecutionSubjectV1,
+    ) -> Result<
+        RecoveredCompilerExecutionReceiptTransportV1,
+        CompilerExecutionReceiptTransportErrorV1,
+    > {
+        let output = PinnedOutput::open_existing(output_dir)?;
+        let _lock = output.lock()?;
+        let slot = open_subject_bound_slot_v1(&output, producer, subject, true, true)?;
+        let exact_bytes = read_compiler_execution_receipt_bytes_v1(&slot)?
+            .ok_or(CompilerExecutionReceiptTransportErrorV1::NotPublished)?;
+        validate_subject_bound_slot_v1(&output, producer, subject, &slot, true, false)?;
+        let receipt = compiler_execution_receipt_transport_receipt_v1(subject, &exact_bytes);
+        Ok(RecoveredCompilerExecutionReceiptTransportV1 {
+            receipt,
+            exact_bytes: Arc::from(exact_bytes),
+        })
+    }
+
+    fn open_subject_bound_slot_v1(
+        output: &PinnedOutput,
+        producer: &ProducerIdentity,
+        subject: &crate::InertCompilerExecutionSubjectV1,
+        allow_consumed: bool,
+        validate_payload: bool,
+    ) -> Result<PinnedDirectory, CompilerExecutionReceiptTransportErrorV1> {
+        output.verify_path_identity()?;
+        authorize_compiler_execution_receipt_transport_v1(
+            output,
+            producer,
+            subject.attempt(),
+            allow_consumed,
+        )?;
+        let producer_identity = producer_identity_for::<HandoffV3Schema>(producer);
+        let slot_identity = slot_identity_for::<HandoffV3Schema>(
+            producer_identity,
+            subject.attempt(),
+            subject.slot(),
+        );
+        let parent = open_private_directory(
+            &output.fd,
+            &output.display_path,
+            format!("{PARENT_PREFIX_V3}{}", hex(&producer_identity)),
+        )?
+        .ok_or(CompilerModuleHandoffErrorV3::NotPublished)?;
+        cleanup_stale_slots::<HandoffV3Schema>(&parent, producer_identity, subject.attempt())
+            .map_err(engine_error_v3)?;
+        let slot = open_private_directory(
+            &parent.fd,
+            &parent.path,
+            format!("{SLOT_PREFIX_V3}{}", hex(&slot_identity)),
+        )?
+        .ok_or(CompilerModuleHandoffErrorV3::NotPublished)?;
+        recover_slot::<HandoffV3Schema>(&slot).map_err(engine_error_v3)?;
+        validate_subject_bound_slot_v1(
+            output,
+            producer,
+            subject,
+            &slot,
+            allow_consumed,
+            validate_payload,
+        )?;
+        parent.verify()?;
+        Ok(slot)
+    }
+
+    fn validate_subject_bound_slot_v1(
+        output: &PinnedOutput,
+        producer: &ProducerIdentity,
+        subject: &crate::InertCompilerExecutionSubjectV1,
+        slot: &PinnedDirectory,
+        allow_consumed: bool,
+        validate_payload: bool,
+    ) -> Result<(), CompilerExecutionReceiptTransportErrorV1> {
+        output.verify_path_identity()?;
+        authorize_compiler_execution_receipt_transport_v1(
+            output,
+            producer,
+            subject.attempt(),
+            allow_consumed,
+        )?;
+        slot.verify()?;
+        let entries = slot_entries(slot)?;
+        let has_ready = entries.iter().any(|entry| entry == READY_ENTRY);
+        let has_consumed = entries.iter().any(|entry| entry == CONSUMED_ENTRY);
+        let record_entry = match (has_ready, has_consumed) {
+            (true, false) => READY_ENTRY,
+            (false, true) if allow_consumed => CONSUMED_ENTRY,
+            (false, true) => {
+                return Err(CompilerExecutionReceiptTransportErrorV1::Handoff(
+                    CompilerModuleHandoffErrorV3::AlreadyConsumed,
+                ));
+            }
+            (false, false) => {
+                return Err(CompilerExecutionReceiptTransportErrorV1::Handoff(
+                    CompilerModuleHandoffErrorV3::NotPublished,
+                ));
+            }
+            (true, true) => {
+                return Err(CompilerExecutionReceiptTransportErrorV1::SubjectBindingMismatch);
+            }
+        };
+        let record_bytes = read_private_file(slot, record_entry, HandoffV3Schema::RECORD_BYTES)?
+            .ok_or(CompilerExecutionReceiptTransportErrorV1::SubjectBindingMismatch)?;
+        let record = HandoffRecord::<HandoffV3Schema>::decode(&record_bytes)
+            .map_err(|_| CompilerExecutionReceiptTransportErrorV1::SubjectBindingMismatch)?;
+        let producer_identity = producer_identity_for::<HandoffV3Schema>(producer);
+        let slot_identity = slot_identity_for::<HandoffV3Schema>(
+            producer_identity,
+            subject.attempt(),
+            subject.slot(),
+        );
+        let outer = subject.outer_handoff();
+        if record.producer != producer_identity
+            || record.slot != slot_identity
+            || record.attempt != subject.attempt()
+            || record.binding.sha256 != *outer.sha256()
+            || record.binding.byte_len != outer.byte_len()
+            || record.identity != *subject.transaction_identity().as_bytes()
+            || u64::try_from(record.length).ok() != Some(outer.byte_len())
+        {
+            return Err(CompilerExecutionReceiptTransportErrorV1::SubjectBindingMismatch);
+        }
+        if validate_payload && record_entry == READY_ENTRY {
+            let payload =
+                read_payload::<HandoffV3Schema>(slot, &record, MAX_V3_DECODE_WORKING_SET_BYTES)
+                    .map_err(engine_error_v3)?;
+            drop(payload);
+        }
+        output.verify_path_identity()?;
+        authorize_compiler_execution_receipt_transport_v1(
+            output,
+            producer,
+            subject.attempt(),
+            allow_consumed,
+        )?;
+        slot.verify()?;
+        Ok(())
+    }
+
+    fn authorize_compiler_execution_receipt_transport_v1(
+        output: &PinnedOutput,
+        producer: &ProducerIdentity,
+        attempt: BuildAttempt,
+        allow_consumed: bool,
+    ) -> Result<(), CompilerExecutionReceiptTransportErrorV1> {
+        if !allow_consumed {
+            return authorize(output, producer, attempt).map_err(Into::into);
+        }
+        if attempt.session() == BuildSession::DIRECT {
+            return Err(CompilerExecutionReceiptTransportErrorV1::Handoff(
+                CompilerModuleHandoffErrorV3::Attempt {
+                    reason:
+                        "direct compiler attempts cannot own a compiler-execution receipt sidecar"
+                            .to_owned(),
+                },
+            ));
+        }
+        let attempts = read_attempt_registry(output)?;
+        let record = attempts
+            .record_exact(&producer.stable_source, attempt)
+            .map_err(|error| CompilerModuleHandoffErrorV3::Attempt {
+                reason: error.to_string(),
+            })?;
+        if record.crate_name != producer.crate_name {
+            return Err(CompilerExecutionReceiptTransportErrorV1::Handoff(
+                CompilerModuleHandoffErrorV3::Attempt {
+                    reason: "build attempt crate name does not match the receipt producer"
+                        .to_owned(),
+                },
+            ));
+        }
+        let recoverable = matches!(
+            (record.phase, record.backend_receipt),
+            (AttemptPhase::Building, None)
+                | (
+                    AttemptPhase::BackendClaimed | AttemptPhase::Completed,
+                    Some(_)
+                )
+        );
+        if !recoverable {
+            return Err(CompilerExecutionReceiptTransportErrorV1::Handoff(
+                CompilerModuleHandoffErrorV3::Attempt {
+                    reason: "build attempt is not in a receipt-sidecar recovery phase".to_owned(),
+                },
+            ));
+        }
+        Ok(())
+    }
+
+    fn read_compiler_execution_receipt_bytes_v1(
+        slot: &PinnedDirectory,
+    ) -> Result<Option<Vec<u8>>, CompilerExecutionReceiptTransportErrorV1> {
+        let stat = match statat(
+            &slot.fd,
+            COMPILER_EXECUTION_RECEIPT_ENTRY_V1,
+            AtFlags::SYMLINK_NOFOLLOW,
+        ) {
+            Ok(stat) => stat,
+            Err(error) if error == rustix::io::Errno::NOENT => return Ok(None),
+            Err(error) => return Err(std::io::Error::from(error).into()),
+        };
+        if !is_private_file(&stat) {
+            return Err(CompilerExecutionReceiptTransportErrorV1::SubjectBindingMismatch);
+        }
+        let length = usize::try_from(stat.st_size).map_err(|_| {
+            CompilerExecutionReceiptTransportErrorV1::InvalidReceiptSize {
+                actual: usize::MAX,
+                maximum: MAX_COMPILER_EXECUTION_RECEIPT_TRANSPORT_BYTES_V1,
+            }
+        })?;
+        validate_compiler_execution_receipt_transport_size_v1(length)?;
+        let exact = read_private_file(slot, COMPILER_EXECUTION_RECEIPT_ENTRY_V1, length)?
+            .ok_or(CompilerExecutionReceiptTransportErrorV1::NotPublished)?;
+        Ok(Some(exact))
+    }
+
+    fn validate_compiler_execution_receipt_transport_size_v1(
+        length: usize,
+    ) -> Result<(), CompilerExecutionReceiptTransportErrorV1> {
+        if length == 0 || length > MAX_COMPILER_EXECUTION_RECEIPT_TRANSPORT_BYTES_V1 {
+            return Err(
+                CompilerExecutionReceiptTransportErrorV1::InvalidReceiptSize {
+                    actual: length,
+                    maximum: MAX_COMPILER_EXECUTION_RECEIPT_TRANSPORT_BYTES_V1,
+                },
+            );
+        }
+        Ok(())
+    }
+
+    fn compiler_execution_receipt_transport_receipt_v1(
+        subject: &crate::InertCompilerExecutionSubjectV1,
+        exact_receipt_bytes: &[u8],
+    ) -> CompilerExecutionReceiptTransportReceiptV1 {
+        let length = exact_receipt_bytes.len();
+        let length_bytes = (length as u64).to_le_bytes();
+        let identity = sha256_parts(&[
+            COMPILER_EXECUTION_RECEIPT_IDENTITY_DOMAIN_V1,
+            subject.canonical_bytes(),
+            &length_bytes,
+            exact_receipt_bytes,
+        ]);
+        CompilerExecutionReceiptTransportReceiptV1 {
+            subject: subject.identity(),
+            identity: CompilerExecutionReceiptTransportIdentityV1(identity),
+            length,
+        }
     }
 
     fn recover_receipt_in_slot_v3(
@@ -4344,18 +4898,23 @@ mod semantic_v3 {
         if entries.iter().any(|entry| entry == CONSUMED_ENTRY) {
             return Err(CompilerModuleHandoffErrorV3::AlreadyConsumed);
         }
-        if entries.len() == 2
-            && entries.iter().any(|entry| entry == READY_ENTRY)
-            && entries.iter().any(|entry| entry == PAYLOAD_ENTRY)
+        let has_ready = entries.iter().any(|entry| entry == READY_ENTRY);
+        let has_payload = entries.iter().any(|entry| entry == PAYLOAD_ENTRY);
+        let has_receipt = entries
+            .iter()
+            .any(|entry| entry == COMPILER_EXECUTION_RECEIPT_ENTRY_V1);
+        if has_ready
+            && has_payload
+            && ((!has_receipt && entries.len() == 2) || (has_receipt && entries.len() == 3))
         {
             return Ok(());
         }
-        if !entries.iter().any(|entry| entry == READY_ENTRY) {
+        if !has_ready {
             return Err(CompilerModuleHandoffErrorV3::NotPublished);
         }
         Err(CompilerModuleHandoffErrorV3::InvalidSlot {
             path: slot.path.clone(),
-            reason: "current V3 slot must contain exactly the ready record and payload".to_string(),
+            reason: "current V3 slot must contain the ready record, payload, and optional exact compiler-execution receipt sidecar".to_string(),
         })
     }
 
@@ -5186,6 +5745,229 @@ mod semantic_v3 {
                 crate::InertCompilerExecutionSubjectV1::from_publication(receipt, &substituted),
                 Err(crate::CompilerExecutionSubjectErrorV1::HandoffIdentityMismatch)
             ));
+        }
+
+        #[test]
+        fn compiler_execution_receipt_transport_is_subject_bound_and_restart_recoverable() {
+            let temp = TestDirectory::new();
+            let producer = producer("compiler_execution_receipt_transport_v1");
+            let attempt = begin(&temp.0, &producer, 36);
+            let handoff = outer(37);
+            let handoff_receipt =
+                publish_compiler_module_handoff_v3(&temp.0, &producer, attempt, &handoff).unwrap();
+            let subject =
+                crate::InertCompilerExecutionSubjectV1::from_publication(handoff_receipt, &handoff)
+                    .unwrap();
+            let exact_receipt = b"canonical compiler-execution receipt carriage";
+
+            let published = publish_compiler_execution_receipt_transport_v1(
+                &temp.0,
+                &producer,
+                &subject,
+                exact_receipt,
+            )
+            .unwrap();
+            assert_eq!(published.subject(), subject.identity());
+            assert_eq!(published.length(), exact_receipt.len());
+            assert!(!published.grants_compiler_authority());
+            assert!(!published.grants_publication_authority());
+            assert!(!published.grants_load_authority());
+            assert!(!published.grants_launch_authority());
+            let length = (exact_receipt.len() as u64).to_le_bytes();
+            assert_eq!(
+                published.identity().as_bytes(),
+                &sha256_parts(&[
+                    COMPILER_EXECUTION_RECEIPT_IDENTITY_DOMAIN_V1,
+                    subject.canonical_bytes(),
+                    &length,
+                    exact_receipt,
+                ])
+            );
+            assert_eq!(
+                publish_compiler_execution_receipt_transport_v1(
+                    &temp.0,
+                    &producer,
+                    &subject,
+                    exact_receipt,
+                )
+                .unwrap(),
+                published
+            );
+
+            let recovered =
+                recover_compiler_execution_receipt_transport_v1(&temp.0, &producer, &subject)
+                    .unwrap();
+            assert_eq!(recovered.receipt(), published);
+            assert_eq!(recovered.exact_bytes(), exact_receipt);
+            assert!(!recovered.grants_compiler_authority());
+            assert!(!recovered.grants_publication_authority());
+            assert!(!recovered.grants_load_authority());
+            assert!(!recovered.grants_launch_authority());
+
+            let lease = acquire_currentness(&temp.0, &producer, handoff_receipt);
+            let consumed =
+                consume_compiler_module_handoff_with_currentness_v3(&lease, acquire_token(&lease))
+                    .unwrap();
+            assert_eq!(
+                crate::InertCompilerExecutionSubjectV1::from_consumed(&consumed).unwrap(),
+                subject
+            );
+            drop(lease);
+            let restarted =
+                recover_compiler_execution_receipt_transport_v1(&temp.0, &producer, &subject)
+                    .unwrap();
+            assert_eq!(restarted.receipt(), published);
+            assert_eq!(restarted.exact_bytes(), exact_receipt);
+        }
+
+        #[test]
+        fn compiler_execution_receipt_transport_is_read_under_the_exact_currentness_token() {
+            let temp = TestDirectory::new();
+            let producer = producer("compiler_execution_receipt_currentness_v1");
+            let attempt = begin(&temp.0, &producer, 42);
+            let handoff = outer(43);
+            let handoff_receipt =
+                publish_compiler_module_handoff_v3(&temp.0, &producer, attempt, &handoff).unwrap();
+            let subject =
+                crate::InertCompilerExecutionSubjectV1::from_publication(handoff_receipt, &handoff)
+                    .unwrap();
+            let exact_receipt = b"receipt observed under the handoff lock";
+            let published = publish_compiler_execution_receipt_transport_v1(
+                &temp.0,
+                &producer,
+                &subject,
+                exact_receipt,
+            )
+            .unwrap();
+            let lease = acquire_currentness(&temp.0, &producer, handoff_receipt);
+            let unrelated_lease = acquire_currentness(&temp.0, &producer, handoff_receipt);
+            let token = acquire_token(&lease);
+
+            let recovered = recover_compiler_execution_receipt_transport_with_currentness_v1(
+                &lease, &token, &subject,
+            )
+            .unwrap();
+            assert_eq!(recovered.receipt(), published);
+            assert_eq!(recovered.exact_bytes(), exact_receipt);
+            assert!(matches!(
+                recover_compiler_execution_receipt_transport_with_currentness_v1(
+                    &unrelated_lease,
+                    &token,
+                    &subject,
+                ),
+                Err(CompilerExecutionReceiptTransportErrorV1::Handoff(
+                    CompilerModuleHandoffErrorV3::MismatchedCurrentnessToken
+                ))
+            ));
+            let substituted = crate::InertCompilerExecutionSubjectV1::from_replay_evidence(
+                attempt,
+                CompilerModuleHandoffSlotV3::Production,
+                CompilerModuleHandoffTransactionIdentityV3::from_bytes([0xb6; 32]),
+                &handoff,
+            )
+            .unwrap();
+            assert!(matches!(
+                recover_compiler_execution_receipt_transport_with_currentness_v1(
+                    &lease,
+                    &token,
+                    &substituted,
+                ),
+                Err(CompilerExecutionReceiptTransportErrorV1::SubjectBindingMismatch)
+            ));
+
+            let consumed =
+                consume_compiler_module_handoff_with_currentness_v3(&lease, token).unwrap();
+            assert_eq!(
+                crate::InertCompilerExecutionSubjectV1::from_consumed(&consumed).unwrap(),
+                subject
+            );
+        }
+
+        #[test]
+        fn compiler_execution_receipt_transport_rejects_absence_conflict_and_substitution() {
+            let temp = TestDirectory::new();
+            let producer = producer("compiler_execution_receipt_rejection_v1");
+            let attempt = begin(&temp.0, &producer, 38);
+            let handoff = outer(39);
+            let handoff_receipt =
+                publish_compiler_module_handoff_v3(&temp.0, &producer, attempt, &handoff).unwrap();
+            let subject =
+                crate::InertCompilerExecutionSubjectV1::from_publication(handoff_receipt, &handoff)
+                    .unwrap();
+
+            assert!(matches!(
+                recover_compiler_execution_receipt_transport_v1(&temp.0, &producer, &subject),
+                Err(CompilerExecutionReceiptTransportErrorV1::NotPublished)
+            ));
+            for invalid in [
+                Vec::new(),
+                vec![0; MAX_COMPILER_EXECUTION_RECEIPT_TRANSPORT_BYTES_V1 + 1],
+            ] {
+                assert!(matches!(
+                    publish_compiler_execution_receipt_transport_v1(
+                        &temp.0, &producer, &subject, &invalid,
+                    ),
+                    Err(CompilerExecutionReceiptTransportErrorV1::InvalidReceiptSize { .. })
+                ));
+            }
+
+            publish_compiler_execution_receipt_transport_v1(&temp.0, &producer, &subject, b"first")
+                .unwrap();
+            assert!(matches!(
+                publish_compiler_execution_receipt_transport_v1(
+                    &temp.0, &producer, &subject, b"second",
+                ),
+                Err(CompilerExecutionReceiptTransportErrorV1::ConflictingPublication)
+            ));
+
+            let substituted = crate::InertCompilerExecutionSubjectV1::from_replay_evidence(
+                attempt,
+                CompilerModuleHandoffSlotV3::Production,
+                CompilerModuleHandoffTransactionIdentityV3::from_bytes([0xa5; 32]),
+                &handoff,
+            )
+            .unwrap();
+            assert!(matches!(
+                recover_compiler_execution_receipt_transport_v1(&temp.0, &producer, &substituted,),
+                Err(CompilerExecutionReceiptTransportErrorV1::SubjectBindingMismatch)
+            ));
+        }
+
+        #[test]
+        fn compiler_execution_receipt_transport_rejects_path_substitution() {
+            let temp = TestDirectory::new();
+            let producer = producer("compiler_execution_receipt_path_substitution_v1");
+            let attempt = begin(&temp.0, &producer, 40);
+            let handoff = outer(41);
+            let handoff_receipt =
+                publish_compiler_module_handoff_v3(&temp.0, &producer, attempt, &handoff).unwrap();
+            let subject =
+                crate::InertCompilerExecutionSubjectV1::from_publication(handoff_receipt, &handoff)
+                    .unwrap();
+            publish_compiler_execution_receipt_transport_v1(
+                &temp.0, &producer, &subject, b"receipt",
+            )
+            .unwrap();
+
+            let outside = temp.0.join("outside-receipt");
+            fs::write(&outside, b"receipt").unwrap();
+            let sidecar = slot_path(
+                &temp.0,
+                &producer,
+                attempt,
+                CompilerModuleHandoffSlotV3::Production,
+            )
+            .join(COMPILER_EXECUTION_RECEIPT_ENTRY_V1);
+            fs::remove_file(&sidecar).unwrap();
+            symlink(&outside, &sidecar).unwrap();
+            assert!(matches!(
+                recover_compiler_execution_receipt_transport_v1(&temp.0, &producer, &subject),
+                Err(CompilerExecutionReceiptTransportErrorV1::SubjectBindingMismatch)
+                    | Err(CompilerExecutionReceiptTransportErrorV1::Handoff(
+                        CompilerModuleHandoffErrorV3::InvalidSlot { .. }
+                    ))
+            ));
+            assert_eq!(fs::read(outside).unwrap(), b"receipt");
         }
 
         #[test]
@@ -6171,16 +6953,21 @@ mod semantic_v3 {
 }
 
 pub use semantic_v3::{
-    CompilerModuleHandoffConsumptionTokenV3, CompilerModuleHandoffCurrentnessLeaseV3,
-    CompilerModuleHandoffErrorV3, CompilerModuleHandoffPublicationV3,
-    CompilerModuleHandoffReceiptV3, CompilerModuleHandoffSlotV3,
-    CompilerModuleHandoffTransactionIdentityV3, ConsumedCompilerModuleHandoffV3,
-    MAX_COMPILER_MODULE_HANDOFF_BYTES_V3, acquire_compiler_module_handoff_currentness_lease_v3,
+    CompilerExecutionReceiptTransportErrorV1, CompilerExecutionReceiptTransportIdentityV1,
+    CompilerExecutionReceiptTransportReceiptV1, CompilerModuleHandoffConsumptionTokenV3,
+    CompilerModuleHandoffCurrentnessLeaseV3, CompilerModuleHandoffErrorV3,
+    CompilerModuleHandoffPublicationV3, CompilerModuleHandoffReceiptV3,
+    CompilerModuleHandoffSlotV3, CompilerModuleHandoffTransactionIdentityV3,
+    ConsumedCompilerModuleHandoffV3, MAX_COMPILER_EXECUTION_RECEIPT_TRANSPORT_BYTES_V1,
+    MAX_COMPILER_MODULE_HANDOFF_BYTES_V3, RecoveredCompilerExecutionReceiptTransportV1,
+    acquire_compiler_module_handoff_currentness_lease_v3,
     consume_compiler_module_handoff_in_slot_v3, consume_compiler_module_handoff_v3,
     consume_compiler_module_handoff_with_currentness_v3,
-    publish_compiler_module_handoff_in_slot_v3,
+    publish_compiler_execution_receipt_transport_v1, publish_compiler_module_handoff_in_slot_v3,
     publish_compiler_module_handoff_in_slot_with_currentness_v3,
     publish_compiler_module_handoff_v3, publish_compiler_module_handoff_with_currentness_v3,
+    recover_compiler_execution_receipt_transport_v1,
+    recover_compiler_execution_receipt_transport_with_currentness_v1,
     recover_compiler_module_handoff_receipt_in_slot_v3, recover_compiler_module_handoff_receipt_v3,
 };
 

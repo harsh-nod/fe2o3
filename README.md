@@ -717,22 +717,23 @@ is complete, and the recorded runs grant no current production authority.
   lock, commits version-separated pending/final V3 receipts, returns a bounded
   canonical V3 claim and currentness lease, and reconstructs the same move-only
   production result after either backend-claimed or completed process restart.
-  That result can now transfer into a move-only `WorkerV3LoadEnvelopeV1`. A
-  claim-bound audited bridge publishes the exact canonical envelope, claim,
-  and terminal custody receipt; restart can discover and revalidate that
-  custody from the attempt registry before reconstructing the same inert live
-  envelope. Exact terminal custody authorizes retirement of the duplicate
-  current-generation replay intent, while registry-rooted scavenging removes
-  only superseded custody. The envelope still grants no descriptor
-  authentication, semantic admission, HSA readiness, load, or launch
-  authority. A receipt-bearing `WorkerV3LoadEnvelopeV2` codec now losslessly
-  nests the full V1 replay limit and complete compiler receipt carriage, strictly
-  reconstructs and compares the signed compiler subject, and uses the same
-  schema-neutral durable custody and restart mechanism. Cargo and host still
-  route top-level V1; switching all production consumers to V2 and rejecting V1
-  remains a coordinated migration, so V2 does not yet establish compiler
-  origin. Production now transfers only the canonical V3 envelope and
-  artifact-directory descriptors to an identity-pinned sealed application. A
+  That result now transfers into the receipt-bearing, move-only
+  `WorkerV3LoadEnvelopeV2`. V2 losslessly nests the complete V1 replay codec and
+  the complete compiler receipt carriage, strictly reconstructs and compares
+  the signed compiler subject, and uses the same schema-neutral durable custody
+  and restart mechanism. The backend acquires the carriage from the protected
+  issuer after durable V3 handoff publication and stores it in an exact
+  subject-bound sidecar. Cargo observes the handoff and sidecar under one
+  currentness lock, verifies the carriage against the sealed client profile,
+  and carries it through fresh execution, finalized-HSACO recovery, V2
+  persistence, and ready-state recovery. Cargo application transfer and
+  `fe2o3-host` decode and recover only top-level V2; V1 remains only the nested
+  replay codec and is not a production route. Exact terminal custody authorizes
+  retirement of the duplicate current-generation replay intent, while
+  registry-rooted scavenging removes only superseded custody. The envelope
+  still grants no compiler, semantic, HSA readiness, load, or launch authority.
+  Production transfers only the canonical V3 envelope and artifact-directory
+  descriptors to an identity-pinned sealed application. A
   fresh occurrence binds those descriptors and the ACK channel; Cargo checks
   the challenge-bound ACK and retains the current-publication lease through
   application exit. Cargo has no Worker V2 application transfer branch in
@@ -749,7 +750,8 @@ is complete, and the recorded runs grant no current production authority.
   emits only the generic Worker V3 adapter. The old
   `qualification_worker_v2` macro option, embedded vecadd artifact contract,
   generated `Kernel`/`Prepared` API, and example feature have been deleted.
-  Production Worker V3 verification authority remains open. Recovery and
+  Protected compiler-policy and monotonic rollback promotion in the Worker V3
+  verifier remains open. Recovery and
   verification admission are device-independent; the canonical KFD transition
   binds one checked physical device only when it joins generated host-memory
   packing to the exact current artifact, geometry, effects, and authenticated

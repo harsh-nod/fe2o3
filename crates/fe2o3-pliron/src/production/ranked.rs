@@ -27,16 +27,17 @@ use dialect_kernel::{
     IndexType, IndexUnknownOp, IndexUnsignedCastOp, InvocationIndexOp,
     MAX_COLLECTIVE_SEMANTIC_STEPS_V1, MAX_DETERMINISTIC_JOIN_INPUTS_V1, MAX_RANKED_MEMORY_RANK,
     MemorySpaceAttr, OwnershipContractOp, OwnershipCoverageAttr, OwnershipPartitionAttr,
-    RankedAccessOp, RankedViewOp, RankedViewType, RequireEquivalentOp, RequireFiniteFoldOp,
-    RequireFiniteRecurrenceOp, RequirePermutationGatherOp, ReturnOp, SUPPORTED_ELEMENT_WIDTHS,
-    SemanticBinaryKindAttr, SemanticBinaryOp, SemanticConstantOp, SemanticCoverageBindingAttr,
-    SemanticEvaluationOrderAttr, SemanticExceptionalValueAttr, SemanticIeeeRoundingAttr,
-    SemanticNumericalPolicyAttr, SemanticOverflowAttr, SemanticScalarKindAttr, SemanticSymbolOp,
-    SemanticTypedBinaryKindAttr, SemanticTypedBinaryOp, SemanticTypedCastKindAttr,
-    SemanticTypedCastOp, SemanticTypedCompareKindAttr, SemanticTypedCompareOp,
-    SemanticTypedConstantOp, SemanticTypedExpressionRootOp, SemanticTypedScalarV1,
-    SemanticTypedSelectOp, SemanticTypedSymbolOp, SemanticTypedUnaryKindAttr, SemanticTypedUnaryOp,
-    TensorConvergenceAttr, TensorLayoutOp, TensorResultComponentOp, TrapOp,
+    PipelineCreateOp, PipelineEventKindAttr, PipelineEventOp, RankedAccessOp, RankedViewOp,
+    RankedViewType, RequireEquivalentOp, RequireFiniteFoldOp, RequireFiniteRecurrenceOp,
+    RequirePermutationGatherOp, ReturnOp, SUPPORTED_ELEMENT_WIDTHS, SemanticBinaryKindAttr,
+    SemanticBinaryOp, SemanticConstantOp, SemanticCoverageBindingAttr, SemanticEvaluationOrderAttr,
+    SemanticExceptionalValueAttr, SemanticIeeeRoundingAttr, SemanticNumericalPolicyAttr,
+    SemanticOverflowAttr, SemanticScalarKindAttr, SemanticSymbolOp, SemanticTypedBinaryKindAttr,
+    SemanticTypedBinaryOp, SemanticTypedCastKindAttr, SemanticTypedCastOp,
+    SemanticTypedCompareKindAttr, SemanticTypedCompareOp, SemanticTypedConstantOp,
+    SemanticTypedExpressionRootOp, SemanticTypedScalarV1, SemanticTypedSelectOp,
+    SemanticTypedSymbolOp, SemanticTypedUnaryKindAttr, SemanticTypedUnaryOp, TensorConvergenceAttr,
+    TensorLayoutOp, TensorResultComponentOp, TrapOp,
 };
 use dialect_proof::{
     AbsoluteErrorF64BitsAttr, CoveredBoundaryAttr, EvidenceRefOp, EvidenceStatusAttr, ObligationOp,
@@ -46,10 +47,10 @@ use dialect_proof::{
 use fe2o3_kernel_analysis::{
     HierarchicalOwnershipReportV1, MAX_RANKED_BOUNDS_BLOCKS, MAX_RANKED_BOUNDS_OPERATIONS,
     PlironAtomicLegalityReportV1, PlironAtomicTargetCapabilityV1, PlironAtomicTargetContextErrorV1,
-    PlironAtomicTargetContextV1, PlironBarrierReportV1, PlironSemanticRefinementReportV1,
-    PlironTensorLayoutReportV1, PlironWorkgroupMemoryReportV1, ProductionPlironPreloweringErrorV2,
-    ProductionPlironPreloweringReportV2, RankedBoundsReportV1, RankedRaceReportV1,
-    require_production_pliron_checks_before_lowering_v2,
+    PlironAtomicTargetContextV1, PlironBarrierReportV1, PlironPipelineProtocolReportV1,
+    PlironSemanticRefinementReportV1, PlironTensorLayoutReportV1, PlironWorkgroupMemoryReportV1,
+    ProductionPlironPreloweringErrorV2, ProductionPlironPreloweringReportV2, RankedBoundsReportV1,
+    RankedRaceReportV1, require_production_pliron_checks_before_lowering_v2,
     require_production_pliron_checks_with_atomic_target_before_lowering_v2,
 };
 use fe2o3_kernel_ir::{MatrixElement, TensorLayoutContractV1};
@@ -1501,6 +1502,20 @@ pub enum ProductionRankedOperationV1 {
         allocation_origin: u64,
         noalias_class: u64,
     },
+    /// Creates a workload-neutral staged-storage lifecycle over one workgroup view.
+    PipelineCreate {
+        result: ProductionRankedValueIdV1,
+        view: ProductionRankedValueV1,
+        buffers: u32,
+        prefetch_distance: u32,
+    },
+    /// One exact epoch transition in a staged-storage lifecycle.
+    PipelineEvent {
+        pipeline: ProductionRankedValueV1,
+        epoch: ProductionRankedValueV1,
+        slot: ProductionRankedValueV1,
+        kind: PipelineEventKindAttr,
+    },
     IndexConstant {
         result: ProductionRankedValueIdV1,
         value: u64,
@@ -2087,6 +2102,7 @@ impl ProductionRankedKernelV1 {
         }
 
         let mut locals = Vec::new();
+        let mut local_definition_blocks = Vec::new();
         let mut saw_execution_layout = false;
         let mut allocation_classes = HashMap::new();
         let mut predicated_success_uses: BTreeMap<ProductionRankedValueIdV1, usize> =
@@ -2118,7 +2134,12 @@ impl ProductionRankedKernelV1 {
                 });
             }
             for (operation_index, operation) in block.operations.iter().enumerate() {
-                validate_block_argument_values_v1(operation, block_index, &self.blocks)?;
+                validate_scoped_operation_values_v1(
+                    operation,
+                    block_index,
+                    &self.blocks,
+                    &local_definition_blocks,
+                )?;
                 if let ProductionRankedOperationV1::ExecutionLayout {
                     global_extents,
                     workgroup_extents,
@@ -2212,11 +2233,6 @@ impl ProductionRankedKernelV1 {
                     )?;
                 }
                 if let Some((identity, kind)) = result {
-                    if block_index != 0 {
-                        return Err(ProductionRankedKernelErrorV1::NonEntryDefinition {
-                            block: block_index,
-                        });
-                    }
                     let expected = u32::try_from(locals.len()).map_err(|_| {
                         ProductionRankedKernelErrorV1::ResourceLimit {
                             resource: "local value",
@@ -2231,6 +2247,7 @@ impl ProductionRankedKernelV1 {
                         });
                     }
                     locals.push(kind);
+                    local_definition_blocks.push(block_index);
                     let paired = match operation {
                         ProductionRankedOperationV1::PredicatedCheckedTiledIndex2D {
                             result,
@@ -2264,6 +2281,7 @@ impl ProductionRankedKernelV1 {
                             index: ProductionRankedValueV1::Local(index),
                             physical_extent,
                         });
+                        local_definition_blocks.push(block_index);
                         predicated_success_uses.insert(success, 0);
                         predicated_indices.insert(index, success);
                     }
@@ -2275,6 +2293,7 @@ impl ProductionRankedKernelV1 {
                 &locals,
                 &self.blocks,
                 block_index,
+                &local_definition_blocks,
             )?;
         }
         if let Some((success, uses)) = predicated_success_uses
@@ -2389,9 +2408,9 @@ mod unsigned_cast_recipe_tests {
             Err(ProductionRankedKernelErrorV1::InvalidUnsignedCast),
         );
 
-        assert_eq!(
+        assert!(
             ProductionRankedKernelV1::new(
-                "nonentry_unsigned_cast",
+                "block_local_unsigned_cast",
                 1,
                 vec![
                     ProductionRankedBlockV1::new(
@@ -2403,8 +2422,8 @@ mod unsigned_cast_recipe_tests {
                         ProductionRankedTerminatorV1::Return,
                     ),
                 ],
-            ),
-            Err(ProductionRankedKernelErrorV1::NonEntryDefinition { block: 1 }),
+            )
+            .is_ok(),
         );
 
         for source in [
@@ -2553,6 +2572,7 @@ pub enum ProductionRankedKernelErrorV1 {
     InvalidExecutionLayout,
     InvalidUnsignedCast,
     InvalidAllocationContract,
+    InvalidPipelineContract,
     InvalidReferenceContract,
     InvalidSemanticExpression(ProductionSemanticExpressionErrorV2),
     InvalidCollectiveSemanticContract,
@@ -2582,8 +2602,9 @@ pub enum ProductionRankedKernelErrorV1 {
     AtomicContractRequired,
     NonAtomicKindForAtomicAccess,
     InvalidBlockTarget(u32),
-    NonEntryDefinition {
-        block: usize,
+    CrossBlockDefinitionRequiresArgument {
+        definition_block: usize,
+        use_block: usize,
     },
     MissingKernelDialect,
     MissingGpuDialect,
@@ -2828,6 +2849,9 @@ impl fmt::Display for ProductionRankedKernelErrorV1 {
             Self::InvalidAllocationContract => formatter.write_str(
                 "ranked views/effects require supported memory semantics and consistent allocation origins/no-alias classes",
             ),
+            Self::InvalidPipelineContract => formatter.write_str(
+                "staged pipeline requires writable workgroup storage, 2..=8 buffers, a smaller positive prefetch distance, and index epoch/slot operands",
+            ),
             Self::InvalidReferenceContract => formatter.write_str(
                 "functional-reference proof identities must be nonzero and pairwise distinct",
             ),
@@ -2886,9 +2910,12 @@ impl fmt::Display for ProductionRankedKernelErrorV1 {
             Self::InvalidBlockTarget(target) => {
                 write!(formatter, "ranked terminator targets absent block {target}")
             }
-            Self::NonEntryDefinition { block } => write!(
+            Self::CrossBlockDefinitionRequiresArgument {
+                definition_block,
+                use_block,
+            } => write!(
                 formatter,
-                "ranked recipe block {block} defines a value; closed production SSA definitions must be in entry block"
+                "ranked recipe value defined in block {definition_block} is used directly by block {use_block}; pass it through explicit block arguments"
             ),
             Self::MissingKernelDialect => formatter.write_str(
                 "production ranked construction requires the kernel dialect registration",
@@ -2913,6 +2940,10 @@ impl Error for ProductionRankedKernelErrorV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RecipeValueKindV1 {
     Index,
+    Pipeline {
+        buffers: u32,
+        prefetch_distance: u32,
+    },
     CheckedAccessSuccess {
         index: ProductionRankedValueV1,
         physical_extent: ProductionRankedValueV1,
@@ -2926,6 +2957,8 @@ enum RecipeValueKindV1 {
         rank: usize,
         writable: bool,
         dynamic_extent: Option<ProductionRankedValueV1>,
+        memory_space: MemorySpaceAttr,
+        leading_extent: u64,
     },
 }
 
@@ -2976,6 +3009,7 @@ fn require_view(
     match require_value(value, argument_count, locals)? {
         RecipeValueKindV1::View { rank, writable, .. } => Ok((rank, writable)),
         RecipeValueKindV1::Index
+        | RecipeValueKindV1::Pipeline { .. }
         | RecipeValueKindV1::CheckedAccessSuccess { .. }
         | RecipeValueKindV1::Semantic
         | RecipeValueKindV1::TypedSemantic { .. } => {
@@ -3070,8 +3104,67 @@ fn validate_operation(
                     writable: *writable,
                     dynamic_extent: (shape.as_slice() == [DYNAMIC_EXTENT])
                         .then(|| dynamic_extents[0]),
+                    memory_space: match operation {
+                        ProductionRankedOperationV1::View { .. } => MemorySpaceAttr::Global,
+                        ProductionRankedOperationV1::ViewInSpace { memory_space, .. } => {
+                            *memory_space
+                        }
+                        _ => unreachable!("matched ranked view recipe"),
+                    },
+                    leading_extent: shape[0],
                 },
             )))
+        }
+        ProductionRankedOperationV1::PipelineCreate {
+            result,
+            view,
+            buffers,
+            prefetch_distance,
+        } => {
+            let RecipeValueKindV1::View {
+                rank: _,
+                writable: true,
+                memory_space: MemorySpaceAttr::Workgroup,
+                leading_extent,
+                ..
+            } = require_value(*view, argument_count, locals)?
+            else {
+                return Err(ProductionRankedKernelErrorV1::InvalidPipelineContract);
+            };
+            if leading_extent != u64::from(*buffers)
+                || !(2..=dialect_kernel::MAX_PIPELINE_BUFFERS_V1).contains(buffers)
+                || *prefetch_distance == 0
+                || *prefetch_distance >= *buffers
+            {
+                return Err(ProductionRankedKernelErrorV1::InvalidPipelineContract);
+            }
+            Ok(Some((
+                *result,
+                RecipeValueKindV1::Pipeline {
+                    buffers: *buffers,
+                    prefetch_distance: *prefetch_distance,
+                },
+            )))
+        }
+        ProductionRankedOperationV1::PipelineEvent {
+            pipeline,
+            epoch,
+            slot,
+            ..
+        } => {
+            let RecipeValueKindV1::Pipeline {
+                buffers,
+                prefetch_distance,
+            } = require_value(*pipeline, argument_count, locals)?
+            else {
+                return Err(ProductionRankedKernelErrorV1::InvalidPipelineContract);
+            };
+            if prefetch_distance == 0 || prefetch_distance >= buffers {
+                return Err(ProductionRankedKernelErrorV1::InvalidPipelineContract);
+            }
+            require_index(*epoch, argument_count, locals)?;
+            require_index(*slot, argument_count, locals)?;
+            Ok(None)
         }
         ProductionRankedOperationV1::IndexConstant { result, .. } => {
             Ok(Some((*result, RecipeValueKindV1::Index)))
@@ -3289,6 +3382,7 @@ fn validate_operation(
                 rank: 1,
                 writable: true,
                 dynamic_extent: Some(view_extent),
+                ..
             } = kind
             else {
                 return Err(ProductionRankedKernelErrorV1::InvalidShape);
@@ -3578,30 +3672,49 @@ fn validate_access(
     Ok(())
 }
 
-fn validate_block_argument_value_v1(
+fn validate_scoped_value_v1(
     value: ProductionRankedValueV1,
     current_block: usize,
     blocks: &[ProductionRankedBlockV1],
+    local_definition_blocks: &[usize],
 ) -> Result<(), ProductionRankedKernelErrorV1> {
-    let ProductionRankedValueV1::BlockArgument { block, argument } = value else {
-        return Ok(());
-    };
-    if block as usize != current_block
-        || blocks
-            .get(block as usize)
-            .is_none_or(|recipe| argument >= recipe.index_argument_count)
-    {
-        return Err(ProductionRankedKernelErrorV1::UndefinedValue(value));
+    match value {
+        ProductionRankedValueV1::BlockArgument { block, argument } => {
+            if block as usize != current_block
+                || blocks
+                    .get(block as usize)
+                    .is_none_or(|recipe| argument >= recipe.index_argument_count)
+            {
+                return Err(ProductionRankedKernelErrorV1::UndefinedValue(value));
+            }
+        }
+        ProductionRankedValueV1::Local(identity) => {
+            let definition = local_definition_blocks
+                .get(identity.get() as usize)
+                .copied()
+                .ok_or(ProductionRankedKernelErrorV1::UndefinedValue(value))?;
+            if definition != 0 && definition != current_block {
+                return Err(
+                    ProductionRankedKernelErrorV1::CrossBlockDefinitionRequiresArgument {
+                        definition_block: definition,
+                        use_block: current_block,
+                    },
+                );
+            }
+        }
+        ProductionRankedValueV1::Argument(_) => {}
     }
     Ok(())
 }
 
-fn validate_block_argument_values_v1(
+fn validate_scoped_operation_values_v1(
     operation: &ProductionRankedOperationV1,
     current_block: usize,
     blocks: &[ProductionRankedBlockV1],
+    local_definition_blocks: &[usize],
 ) -> Result<(), ProductionRankedKernelErrorV1> {
-    let validate = |value| validate_block_argument_value_v1(value, current_block, blocks);
+    let validate =
+        |value| validate_scoped_value_v1(value, current_block, blocks, local_definition_blocks);
     match operation {
         ProductionRankedOperationV1::View {
             dynamic_extents, ..
@@ -3612,6 +3725,17 @@ fn validate_block_argument_values_v1(
             for value in dynamic_extents {
                 validate(*value)?;
             }
+        }
+        ProductionRankedOperationV1::PipelineCreate { view, .. } => validate(*view)?,
+        ProductionRankedOperationV1::PipelineEvent {
+            pipeline,
+            epoch,
+            slot,
+            ..
+        } => {
+            validate(*pipeline)?;
+            validate(*epoch)?;
+            validate(*slot)?;
         }
         ProductionRankedOperationV1::IndexBinary { lhs, rhs, .. }
         | ProductionRankedOperationV1::SemanticBinary { lhs, rhs, .. } => {
@@ -3811,12 +3935,14 @@ fn validate_block_argument_values_v1(
     Ok(())
 }
 
-fn validate_terminator_block_argument_values_v1(
+fn validate_scoped_terminator_values_v1(
     terminator: &ProductionRankedTerminatorV1,
     current_block: usize,
     blocks: &[ProductionRankedBlockV1],
+    local_definition_blocks: &[usize],
 ) -> Result<(), ProductionRankedKernelErrorV1> {
-    let validate = |value| validate_block_argument_value_v1(value, current_block, blocks);
+    let validate =
+        |value| validate_scoped_value_v1(value, current_block, blocks, local_definition_blocks);
     match terminator {
         ProductionRankedTerminatorV1::IndexLessThan { lhs, rhs, .. }
         | ProductionRankedTerminatorV1::IndexEqual { lhs, rhs, .. }
@@ -3899,6 +4025,7 @@ fn validate_terminator(
     locals: &[RecipeValueKindV1],
     blocks: &[ProductionRankedBlockV1],
     current_block: usize,
+    local_definition_blocks: &[usize],
 ) -> Result<(), ProductionRankedKernelErrorV1> {
     let target = |target: u32| {
         usize::try_from(target)
@@ -3907,7 +4034,12 @@ fn validate_terminator(
             .map(|_| ())
             .ok_or(ProductionRankedKernelErrorV1::InvalidBlockTarget(target))
     };
-    validate_terminator_block_argument_values_v1(terminator, current_block, blocks)?;
+    validate_scoped_terminator_values_v1(
+        terminator,
+        current_block,
+        blocks,
+        local_definition_blocks,
+    )?;
     let target_without_arguments = |destination: u32| {
         target(destination)?;
         if blocks[destination as usize].index_argument_count != 0 {
@@ -4545,6 +4677,9 @@ fn production_pipeline_check_error(
         ProductionPlironPreloweringErrorV2::Barrier(error) => {
             ProductionSessionErrorV1::RankedBarrier(error)
         }
+        ProductionPlironPreloweringErrorV2::PipelineProtocol(error) => {
+            ProductionSessionErrorV1::RankedPipeline(error)
+        }
         ProductionPlironPreloweringErrorV2::Workgroup(error) => {
             ProductionSessionErrorV1::RankedWorkgroup(error)
         }
@@ -4685,6 +4820,45 @@ fn materialize_operation(
                 )
             })?;
             (op.get_operation(), Some((*result, op.result(context))))
+        }
+        ProductionRankedOperationV1::PipelineCreate {
+            result,
+            view,
+            buffers,
+            prefetch_distance,
+        } => {
+            let op = PipelineCreateOp::new(
+                context,
+                resolve_value(*view, arguments, locals, block_arguments)?,
+                *buffers,
+                *prefetch_distance,
+            )
+            .map_err(|_| {
+                ProductionRankedKernelErrorV1::Materialization(
+                    "validated staged pipeline failed materialization",
+                )
+            })?;
+            (op.get_operation(), Some((*result, op.pipeline(context))))
+        }
+        ProductionRankedOperationV1::PipelineEvent {
+            pipeline,
+            epoch,
+            slot,
+            kind,
+        } => {
+            let op = PipelineEventOp::new(
+                context,
+                resolve_value(*pipeline, arguments, locals, block_arguments)?,
+                resolve_value(*epoch, arguments, locals, block_arguments)?,
+                resolve_value(*slot, arguments, locals, block_arguments)?,
+                *kind,
+            )
+            .map_err(|_| {
+                ProductionRankedKernelErrorV1::Materialization(
+                    "validated staged pipeline event failed materialization",
+                )
+            })?;
+            (op.get_operation(), None)
         }
         ProductionRankedOperationV1::PredicatedCheckedTiledIndex2D {
             result,
@@ -5942,7 +6116,7 @@ impl ProductionRankedKernelLoweringInputV1 {
         self.ranked_view_names.get(&view).map(String::as_str)
     }
 
-    /// Indivisible lineage from the mandatory eight-pass production pipeline.
+    /// Indivisible lineage from the mandatory nine-pass production pipeline.
     pub const fn production_pipeline_report(&self) -> &ProductionPlironPreloweringReportV2 {
         &self.production_pipeline_report
     }
@@ -5979,6 +6153,10 @@ impl ProductionRankedKernelLoweringInputV1 {
 
     pub const fn barrier_report(&self) -> &PlironBarrierReportV1 {
         self.production_pipeline_report.barriers()
+    }
+
+    pub const fn pipeline_protocol_report(&self) -> &PlironPipelineProtocolReportV1 {
+        self.production_pipeline_report.pipeline_protocol()
     }
 
     pub const fn workgroup_report(&self) -> &PlironWorkgroupMemoryReportV1 {

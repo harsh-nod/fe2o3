@@ -1,6 +1,6 @@
 //! One fixed production-oriented verifier sequence for ranked PLIRON kernels.
 //!
-//! The production API has one eight-stage route. Historical V1 report and
+//! The production API has one nine-stage route. Historical V1 report and
 //! entry-point names are intentionally unavailable:
 //!
 //! ```compile_fail
@@ -25,6 +25,7 @@ use crate::pliron_pass_contract::{
     PlironPassContractSessionV1, PlironPassPreservationErrorV1, PlironPassPreservationReportV1,
     begin_production_pliron_pass_contract_session_v1,
 };
+use crate::pliron_pipeline_protocol::require_pliron_pipeline_protocol_with_analyses_v1;
 use crate::pliron_race::require_pliron_ranked_race_freedom_with_analyses_v1;
 use crate::pliron_ranked_bounds::require_pliron_ranked_bounds_with_analyses_v1;
 use crate::pliron_report_validation::{
@@ -40,6 +41,7 @@ use crate::{
     KernelCheckStatusV1, PlironAtomicLegalityCheckErrorV1, PlironAtomicLegalityReportV1,
     PlironAtomicTargetContextV1, PlironBarrierCheckErrorV1, PlironBarrierReportV1,
     PlironLaunchContractCheckErrorV1, PlironLaunchContractReportV1, PlironLaunchContractV1,
+    PlironPipelineProtocolCheckErrorV1, PlironPipelineProtocolReportV1,
     PlironSemanticRefinementCheckErrorV1, PlironSemanticRefinementReportV1,
     PlironTensorLayoutCheckErrorV1, PlironTensorLayoutDataflowIssueV1, PlironTensorLayoutFindingV1,
     PlironTensorLayoutReportV1, PlironWorkgroupMemoryCheckErrorV1, PlironWorkgroupMemoryReportV1,
@@ -65,6 +67,7 @@ pub enum KernelCheckRepairActionV1 {
     PartitionOrSynchronizeAccess,
     CorrectHierarchyOwnership,
     MakeBarrierControlUniform,
+    RepairPipelineProtocol,
     InitializeAndPublishWorkgroupMemory,
     MatchReferenceSemantics,
     SatisfyTargetContract,
@@ -82,6 +85,7 @@ impl KernelCheckRepairActionV1 {
             Self::PartitionOrSynchronizeAccess => "FE2O3-FIX-RACE",
             Self::CorrectHierarchyOwnership => "FE2O3-FIX-OWNERSHIP",
             Self::MakeBarrierControlUniform => "FE2O3-FIX-BARRIER",
+            Self::RepairPipelineProtocol => "FE2O3-FIX-PIPELINE",
             Self::InitializeAndPublishWorkgroupMemory => "FE2O3-FIX-WORKGROUP",
             Self::MatchReferenceSemantics => "FE2O3-FIX-SEMANTIC",
             Self::SatisfyTargetContract => "FE2O3-FIX-TARGET",
@@ -168,6 +172,10 @@ pub fn kernel_check_repair_for_pass_v1(pass: KernelCheckPassKindV1) -> KernelChe
         KernelCheckPassKindV1::BarrierConvergence => (
             KernelCheckRepairActionV1::MakeBarrierControlUniform,
             "move the barrier to control flow uniform at its execution scope, or restructure the branch so every required participant reaches the same barrier",
+        ),
+        KernelCheckPassKindV1::PipelineProtocol => (
+            KernelCheckRepairActionV1::RepairPipelineProtocol,
+            "use slot = epoch % buffer_count; stage then commit each future epoch, wait then consume or discard it, and release every slot before reuse; prime and drain the full prefetch window",
         ),
         KernelCheckPassKindV1::WorkgroupMemory => (
             KernelCheckRepairActionV1::InitializeAndPublishWorkgroupMemory,
@@ -344,8 +352,8 @@ fn write_repairs(
 }
 
 /// Complete mandatory production sequence. This is one indivisible production
-/// pipeline: no lowering may occur between its eight analysis stages.
-pub const PRODUCTION_PLIRON_PRELOWERING_PASS_ORDER_V2: [KernelCheckPassKindV1; 8] = [
+/// pipeline: no lowering may occur between its nine analysis stages.
+pub const PRODUCTION_PLIRON_PRELOWERING_PASS_ORDER_V2: [KernelCheckPassKindV1; 9] = [
     crate::PRODUCTION_PLIRON_PASS_CONTRACTS_V1[0].pass(),
     crate::PRODUCTION_PLIRON_PASS_CONTRACTS_V1[1].pass(),
     crate::PRODUCTION_PLIRON_PASS_CONTRACTS_V1[2].pass(),
@@ -354,6 +362,7 @@ pub const PRODUCTION_PLIRON_PRELOWERING_PASS_ORDER_V2: [KernelCheckPassKindV1; 8
     crate::PRODUCTION_PLIRON_PASS_CONTRACTS_V1[5].pass(),
     crate::PRODUCTION_PLIRON_PASS_CONTRACTS_V1[6].pass(),
     crate::PRODUCTION_PLIRON_PASS_CONTRACTS_V1[7].pass(),
+    crate::PRODUCTION_PLIRON_PASS_CONTRACTS_V1[8].pass(),
 ];
 
 /// Exact reports from one uninterrupted V2 production validation.
@@ -366,6 +375,7 @@ pub struct ProductionPlironPreloweringReportV2 {
     race: RankedRaceReportV1,
     ownership: HierarchicalOwnershipReportV1,
     barriers: PlironBarrierReportV1,
+    pipeline_protocol: PlironPipelineProtocolReportV1,
     workgroup: PlironWorkgroupMemoryReportV1,
     semantics: PlironSemanticRefinementReportV1,
     preservation: PlironPassPreservationReportV1,
@@ -373,7 +383,7 @@ pub struct ProductionPlironPreloweringReportV2 {
 }
 
 impl ProductionPlironPreloweringReportV2 {
-    pub const fn pass_order(&self) -> &[KernelCheckPassKindV1; 8] {
+    pub const fn pass_order(&self) -> &[KernelCheckPassKindV1; 9] {
         &PRODUCTION_PLIRON_PRELOWERING_PASS_ORDER_V2
     }
 
@@ -408,6 +418,10 @@ impl ProductionPlironPreloweringReportV2 {
         &self.barriers
     }
 
+    pub const fn pipeline_protocol(&self) -> &PlironPipelineProtocolReportV1 {
+        &self.pipeline_protocol
+    }
+
     pub const fn workgroup(&self) -> &PlironWorkgroupMemoryReportV1 {
         &self.workgroup
     }
@@ -422,7 +436,7 @@ impl ProductionPlironPreloweringReportV2 {
     }
 
     /// Provenance/integrity result and the explicit independent-witness gaps
-    /// for the eight reports. This is separate from [`Self::status`]: a clean
+    /// for the nine reports. This is separate from [`Self::status`]: a clean
     /// policy result is useful diagnostics but is not proof authority.
     pub const fn report_validation(&self) -> &ProductionAnalysisReportValidationV1 {
         &self.report_validation
@@ -443,6 +457,7 @@ impl ProductionPlironPreloweringReportV2 {
                     .join(self.race.status())
                     .join(self.ownership.status())
                     .join(self.barriers.status())
+                    .join(self.pipeline_protocol.status())
                     .join(self.workgroup.status())
                     .join(self.semantics.status()),
             )
@@ -470,6 +485,7 @@ pub enum ProductionPlironPreloweringErrorV2 {
     Race(RankedRaceCheckErrorV1),
     Ownership(HierarchicalOwnershipCheckErrorV1),
     Barrier(PlironBarrierCheckErrorV1),
+    PipelineProtocol(PlironPipelineProtocolCheckErrorV1),
     Workgroup(PlironWorkgroupMemoryCheckErrorV1),
     Semantic(PlironSemanticRefinementCheckErrorV1),
     Preservation(PlironPassPreservationErrorV1),
@@ -489,6 +505,7 @@ impl ProductionPlironPreloweringErrorV2 {
             Self::Race(_) => KernelCheckPassKindV1::RaceFreedom,
             Self::Ownership(_) => KernelCheckPassKindV1::HierarchicalOwnership,
             Self::Barrier(_) => KernelCheckPassKindV1::BarrierConvergence,
+            Self::PipelineProtocol(_) => KernelCheckPassKindV1::PipelineProtocol,
             Self::Workgroup(_) => KernelCheckPassKindV1::WorkgroupMemory,
             Self::Semantic(_) => KernelCheckPassKindV1::SemanticRefinement,
             Self::Preservation(error) => {
@@ -512,6 +529,7 @@ impl fmt::Display for ProductionPlironPreloweringErrorV2 {
             Self::Race(error) => error.fmt(formatter),
             Self::Ownership(error) => error.fmt(formatter),
             Self::Barrier(error) => error.fmt(formatter),
+            Self::PipelineProtocol(error) => error.fmt(formatter),
             Self::Workgroup(error) => error.fmt(formatter),
             Self::Semantic(error) => error.fmt(formatter),
             Self::Preservation(error) => error.fmt(formatter),
@@ -531,6 +549,7 @@ impl Error for ProductionPlironPreloweringErrorV2 {
             Self::Race(error) => Some(error),
             Self::Ownership(error) => Some(error),
             Self::Barrier(error) => Some(error),
+            Self::PipelineProtocol(error) => Some(error),
             Self::Workgroup(error) => Some(error),
             Self::Semantic(error) => Some(error),
             Self::Preservation(error) => Some(error),
@@ -554,7 +573,7 @@ pub fn require_production_pliron_checks_with_atomic_target_before_lowering_v2(
     require_production_pliron_checks_v2(context, function, Some(atomic_target), None)
 }
 
-/// Runs the same fixed eight-stage policy pipeline with compiler-supplied
+/// Runs the same fixed nine-stage policy pipeline with compiler-supplied
 /// target and host-allocation preconditions checked before those stages.
 pub fn require_production_pliron_checks_with_target_before_lowering_v2(
     context: &Context,
@@ -691,6 +710,15 @@ fn require_production_pliron_checks_v2(
         || require_pliron_barrier_convergence_with_analyses_v1(context, function, &mut analyses),
     )?
     .map_err(ProductionPlironPreloweringErrorV2::Barrier)?;
+    let pipeline_protocol = run_and_record_production_analysis_stage_v1(
+        context,
+        function,
+        &mut preservation,
+        &mut report_validation,
+        KernelCheckPassKindV1::PipelineProtocol,
+        || require_pliron_pipeline_protocol_with_analyses_v1(context, function, &mut analyses),
+    )?
+    .map_err(ProductionPlironPreloweringErrorV2::PipelineProtocol)?;
     let workgroup = run_and_record_production_analysis_stage_v1(
         context,
         function,
@@ -726,6 +754,7 @@ fn require_production_pliron_checks_v2(
         race,
         ownership,
         barriers,
+        pipeline_protocol,
         workgroup,
         semantics,
         preservation,
@@ -809,7 +838,7 @@ mod tests {
 
         assert!(report.is_clean());
         assert!(report.preservation().is_exact_identity());
-        assert_eq!(report.preservation().certificates().len(), 8);
+        assert_eq!(report.preservation().certificates().len(), 9);
         assert_eq!(
             report
                 .preservation()
@@ -822,12 +851,12 @@ mod tests {
     }
 
     #[test]
-    fn production_has_one_fixed_eight_stage_manifest_and_no_v1_route() {
+    fn production_has_one_fixed_nine_stage_manifest_and_no_v1_route() {
         assert_eq!(
             PRODUCTION_PLIRON_PRELOWERING_PASS_ORDER_V2,
             crate::PRODUCTION_PLIRON_PASS_CONTRACTS_V1.map(|contract| contract.pass()),
         );
-        assert_eq!(PRODUCTION_PLIRON_PRELOWERING_PASS_ORDER_V2.len(), 8);
+        assert_eq!(PRODUCTION_PLIRON_PRELOWERING_PASS_ORDER_V2.len(), 9);
         assert_eq!(
             PRODUCTION_PLIRON_PRELOWERING_PASS_ORDER_V2[4],
             KernelCheckPassKindV1::HierarchicalOwnership,

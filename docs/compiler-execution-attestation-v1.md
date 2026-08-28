@@ -15,10 +15,11 @@ also fixes authority-free sidecar and ACK bytes. The descriptor-relative Worker
 ledger now implements durable publication and rollback verification. Bounded
 service packets and the allocation-free service loop are implemented over one
 already admitted issuer. The production distinct-UID launcher and inspection
-policy and the Worker V3 authority join remain open. Complete receipt carriage
-and the lossless receipt-bearing V2 load-envelope codec are implemented, but the
-Cargo and host production route has not migrated to V2. The codec alone does not
-authenticate protected compiler execution.
+policy and the Worker V3 authority join remain open. Complete receipt carriage,
+backend acquisition, subject-bound sidecar transport, and the lossless
+receipt-bearing V2 route through Cargo, application transfer, and host
+admission are implemented. That association alone does not authenticate
+protected compiler execution.
 
 ## Records
 
@@ -160,5 +161,5 @@ local protected signer and supervised occurrence foundation. The receipt
 sidecar codec and [Worker ledger](compiler-execution-worker-ledger-v1.md) are
 frozen separately. The [bounded service](compiler-execution-service-v1.md) is
 implemented over an admitted connection. Production distinct-UID deployment,
-Cargo/host V2-only carriage routing and authority verification, external
-anti-rollback, and MI300X end-to-end tests remain required.
+protected authority verification, external anti-rollback, and MI300X
+end-to-end tests remain required.

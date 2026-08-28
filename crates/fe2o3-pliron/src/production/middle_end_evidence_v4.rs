@@ -874,6 +874,8 @@ fn functional_refinement_graph_operation_tag(operation: &ProductionRankedOperati
         ProductionRankedOperationV1::ExecutionLayout { .. } => 1,
         ProductionRankedOperationV1::View { .. } => 2,
         ProductionRankedOperationV1::ViewInSpace { .. } => 3,
+        ProductionRankedOperationV1::PipelineCreate { .. } => 38,
+        ProductionRankedOperationV1::PipelineEvent { .. } => 39,
         ProductionRankedOperationV1::IndexConstant { .. } => 4,
         ProductionRankedOperationV1::IndexUnsignedCast { .. } => 34,
         ProductionRankedOperationV1::IndexUnknown { .. } => 5,
@@ -1064,6 +1066,37 @@ fn hash_ranked_operation(digest: &mut Sha256, operation: &ProductionRankedOperat
             digest.update([memory_space_tag(*memory_space)]);
             digest.update(allocation_origin.to_le_bytes());
             digest.update(noalias_class.to_le_bytes());
+        }
+        ProductionRankedOperationV1::PipelineCreate {
+            result,
+            view,
+            buffers,
+            prefetch_distance,
+        } => {
+            digest.update([38]);
+            digest.update(result.get().to_le_bytes());
+            hash_value(digest, *view);
+            digest.update(buffers.to_le_bytes());
+            digest.update(prefetch_distance.to_le_bytes());
+        }
+        ProductionRankedOperationV1::PipelineEvent {
+            pipeline,
+            epoch,
+            slot,
+            kind,
+        } => {
+            digest.update([39]);
+            hash_value(digest, *pipeline);
+            hash_value(digest, *epoch);
+            hash_value(digest, *slot);
+            digest.update([match kind {
+                dialect_kernel::PipelineEventKindAttr::Stage => 1,
+                dialect_kernel::PipelineEventKindAttr::Commit => 2,
+                dialect_kernel::PipelineEventKindAttr::Wait => 3,
+                dialect_kernel::PipelineEventKindAttr::Consume => 4,
+                dialect_kernel::PipelineEventKindAttr::Discard => 5,
+                dialect_kernel::PipelineEventKindAttr::Release => 6,
+            }]);
         }
         ProductionRankedOperationV1::IndexConstant { result, value } => {
             digest.update([3]);

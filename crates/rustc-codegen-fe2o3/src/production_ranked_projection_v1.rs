@@ -10672,6 +10672,30 @@ fn format_ranked_operation(operation: &ProductionRankedOperationV1) -> String {
             noalias_class,
             format_ranked_values(dynamic_extents),
         ),
+        ProductionRankedOperationV1::PipelineCreate {
+            result,
+            view,
+            buffers,
+            prefetch_distance,
+        } => format!(
+            "  %{} = kernel.pipeline_create {} <buffers={}, prefetch_distance={}>\n",
+            result.get(),
+            ranked_value_text_v1(*view),
+            buffers,
+            prefetch_distance,
+        ),
+        ProductionRankedOperationV1::PipelineEvent {
+            pipeline,
+            epoch,
+            slot,
+            kind,
+        } => format!(
+            "  kernel.pipeline_event {}, {}, {} <{:?}>\n",
+            ranked_value_text_v1(*pipeline),
+            ranked_value_text_v1(*epoch),
+            ranked_value_text_v1(*slot),
+            kind,
+        ),
         ProductionRankedOperationV1::IndexConstant { result, value } => {
             format!("  %{} = kernel.index_constant {}\n", result.get(), value)
         }
@@ -14162,6 +14186,8 @@ mod tests {
                 ProductionRankedOperationV1::View { .. }
                 | ProductionRankedOperationV1::ExecutionLayout { .. }
                 | ProductionRankedOperationV1::ViewInSpace { .. }
+                | ProductionRankedOperationV1::PipelineCreate { .. }
+                | ProductionRankedOperationV1::PipelineEvent { .. }
                 | ProductionRankedOperationV1::IndexConstant { .. }
                 | ProductionRankedOperationV1::IndexUnsignedCast { .. }
                 | ProductionRankedOperationV1::IndexUnknown { .. }

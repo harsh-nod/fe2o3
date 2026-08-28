@@ -1,6 +1,6 @@
 # Dynamic strided GEMM
 
-This example is an end-to-end safe Rust GPU kernel for
+This example is an attributed safe Rust GPU kernel candidate for
 
 ```text
 C = alpha * A * B + beta * C
@@ -12,6 +12,12 @@ Each wave64 workgroup owns one 16x16 output tile and executes
 contribute BF16 zero; checked tiled output witnesses suppress stores outside
 logical M and N. Every active output applies the dynamic alpha/beta epilogue
 once.
+
+The K loop keeps current and next MFMA operand fragments live as a two-buffer
+register pipeline and performs one speculative, zero-filled prefetch. This is
+distinct from the target-neutral `kernel.pipeline` PLIRON protocol, which
+verifies shared workgroup-storage ring lifecycles. The source frontend does not
+yet synthesize that workgroup protocol from this Rust loop.
 
 The matrix instruction is exposed through the target-neutral `DeviceMatrix`
 capability. Bounds, uniformity, convergence, ranked indexing, and disjoint
@@ -26,7 +32,7 @@ From this directory:
 ./run-gfx942.sh
 ```
 
-The script performs the complete qualification flow:
+The script requests the complete qualification flow:
 
 ```text
 safe Rust
@@ -39,14 +45,15 @@ safe Rust
   -> fe2o3-host launch
 ```
 
-It runs packed, fully strided/edge, multi-workgroup dynamic-K, and zero-K epilogue
-cases against an independent CPU reference. Temporary AMD Cargo output, LLVM,
-and object files are deleted on exit. The final HSACO is retained under
-`target/fe2o3-gfx942/`.
+The current compiler stops before code generation with `FE2O3-RACE-002`
+because the generic checked-tiled source capability is not yet joined to the
+dynamic-launch race proof. This is a fail-closed source-to-PLIRON handoff gap,
+not pipeline-protocol authority. The ordinary Rust, UI, and independent CPU
+reference suites remain runnable with `cargo test`.
 
-The generated gfx942 disassembly contains
-`v_mfma_f32_16x16x16_bf16`. Run `./run-benchmark.sh` for an event-timed
-comparison with the directly equivalent HIP kernel.
+Once that handoff is implemented, qualification must also confirm that gfx942
+disassembly contains `v_mfma_f32_16x16x16_bf16` before performance claims are
+made.
 
 ## Safety boundary
 
@@ -56,5 +63,5 @@ generic bounds and ownership analysis can verify them. The host binary contains
 the two required documented unsafe operations: loading external machine code
 and launching it with an exact physical ABI.
 
-The resulting HSACO is qualification output. Protected release publication and
-artifact-currentness admission remain a separate, fail-closed pipeline.
+Any resulting HSACO is qualification output. Protected release publication
+and artifact-currentness admission remain a separate, fail-closed pipeline.

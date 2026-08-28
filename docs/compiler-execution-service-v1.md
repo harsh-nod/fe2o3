@@ -36,10 +36,10 @@ still establish that exact profile in a deployed distinct-UID service
 entrypoint. Cargo now admits the fixed root-owned client profile and connects
 only to the fixed authenticated listener path.
 The complete receipt carriage, subject-bound current-record recovery operation,
-lossless Worker V3 V2 load-envelope codec, and bounded restart-safe client state
-machine exist, but backend acquisition, receipt-bearing Cargo/host routing,
-external monotonic rollback anchoring, verifier
-authority, and the exact Cargo-to-KFD run remain open.
+bounded restart-safe client state machine, backend acquisition, attempt-scoped
+sidecar transport, and receipt-bearing Cargo/host V2 route are implemented.
+External monotonic rollback anchoring, verifier authority, the deployed
+distinct-UID service entrypoint, and the exact Cargo-to-KFD run remain open.
 
 The caller-pinned policy, service launch manifest, and service-owned Ed25519 key
 have reusable immutable memfd capabilities in
@@ -52,8 +52,12 @@ key to the policy, and exposes neither bytes nor a signing operation. Policy FD
 reserved for the protected issuer. The prepared supervisor now materializes
 both issuer descriptors. Cargo now installs the policy and child-created
 service channel for the selected rustc, performs the authenticated supervisor
-handoff, and retains readiness through fresh publication. The backend still
-needs to consume the service and carry its receipt into Worker V3.
+handoff, and retains readiness through fresh publication. The backend consumes
+both inherited descriptors, publishes its exact V3 handoff, acquires and
+independently decodes the signed receipt carriage for that subject, and
+durably publishes the exact carriage bytes beside the handoff. Cargo admits
+the sidecar against the same sealed profile before consuming the handoff. The
+carriage remains inert until protected verifier and rollback admission.
 
 ## Transport And Ownership
 

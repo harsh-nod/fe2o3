@@ -11,6 +11,7 @@ pub enum KernelCheckPassKindV1 {
     RaceFreedom,
     HierarchicalOwnership,
     BarrierConvergence,
+    PipelineProtocol,
     WorkgroupMemory,
     SemanticRefinement,
 }
@@ -26,6 +27,7 @@ impl KernelCheckPassKindV1 {
             Self::RaceFreedom => "kernel-race-freedom-v1",
             Self::HierarchicalOwnership => "kernel-hierarchical-ownership-v1",
             Self::BarrierConvergence => "kernel-barrier-convergence-v1",
+            Self::PipelineProtocol => "kernel-pipeline-protocol-v1",
             Self::WorkgroupMemory => "kernel-workgroup-memory-v1",
             Self::SemanticRefinement => "kernel-semantic-refinement-v1",
         }

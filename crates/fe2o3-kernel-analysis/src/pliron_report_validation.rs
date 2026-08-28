@@ -23,14 +23,14 @@ use crate::{
     PRODUCTION_PLIRON_PASS_CONTRACTS_V1, PlironAtomicLegalityReportV1,
     PlironAtomicTargetCapabilityV1, PlironAtomicTargetContextV1, PlironBarrierReportV1,
     PlironPassCheckpointTokenV1, PlironPassPreservationReportV1, PlironPassValidationHandleV1,
-    PlironSemanticRefinementReportV1, PlironStructuralIdentityLabelV1, PlironTensorLayoutReportV1,
-    PlironWorkgroupMemoryReportV1, ProductionAnalysisWitnessEnvelopeV1,
-    ProductionAnalysisWitnessValidationErrorV1, RankedBoundsReportV1, RankedRaceReportV1,
-    issue_and_validate_production_analysis_witness_v1,
+    PlironPipelineProtocolReportV1, PlironSemanticRefinementReportV1,
+    PlironStructuralIdentityLabelV1, PlironTensorLayoutReportV1, PlironWorkgroupMemoryReportV1,
+    ProductionAnalysisWitnessEnvelopeV1, ProductionAnalysisWitnessValidationErrorV1,
+    RankedBoundsReportV1, RankedRaceReportV1, issue_and_validate_production_analysis_witness_v1,
 };
 
 /// Number of reports in the fixed production analysis sequence.
-pub const PRODUCTION_ANALYSIS_REPORT_COUNT_V1: usize = 8;
+pub const PRODUCTION_ANALYSIS_REPORT_COUNT_V1: usize = 9;
 
 /// Exact implementation identity bound into a sealed stage result.
 ///
@@ -45,6 +45,7 @@ pub enum ProductionAnalysisImplementationV1 {
     PlironRankedRaceV1,
     PlironHierarchicalOwnershipV1,
     PlironBarrierConvergenceV1,
+    PlironPipelineProtocolV1,
     PlironWorkgroupMemoryV1,
     PlironSemanticRefinementV1,
 }
@@ -58,6 +59,7 @@ impl ProductionAnalysisImplementationV1 {
             Self::PlironRankedRaceV1 => KernelCheckPassKindV1::RaceFreedom,
             Self::PlironHierarchicalOwnershipV1 => KernelCheckPassKindV1::HierarchicalOwnership,
             Self::PlironBarrierConvergenceV1 => KernelCheckPassKindV1::BarrierConvergence,
+            Self::PlironPipelineProtocolV1 => KernelCheckPassKindV1::PipelineProtocol,
             Self::PlironWorkgroupMemoryV1 => KernelCheckPassKindV1::WorkgroupMemory,
             Self::PlironSemanticRefinementV1 => KernelCheckPassKindV1::SemanticRefinement,
         }
@@ -73,6 +75,7 @@ impl ProductionAnalysisImplementationV1 {
                 "fe2o3.pliron.hierarchical-ownership.analysis.v1"
             }
             Self::PlironBarrierConvergenceV1 => "fe2o3.pliron.barrier-convergence.analysis.v1",
+            Self::PlironPipelineProtocolV1 => "fe2o3.pliron.pipeline-protocol.analysis.v1",
             Self::PlironWorkgroupMemoryV1 => "fe2o3.pliron.workgroup-memory.analysis.v1",
             Self::PlironSemanticRefinementV1 => "fe2o3.pliron.semantic-refinement.analysis.v1",
         }
@@ -98,6 +101,9 @@ fn implementation_for(pass: KernelCheckPassKindV1) -> ProductionAnalysisImplemen
         }
         KernelCheckPassKindV1::BarrierConvergence => {
             ProductionAnalysisImplementationV1::PlironBarrierConvergenceV1
+        }
+        KernelCheckPassKindV1::PipelineProtocol => {
+            ProductionAnalysisImplementationV1::PlironPipelineProtocolV1
         }
         KernelCheckPassKindV1::WorkgroupMemory => {
             ProductionAnalysisImplementationV1::PlironWorkgroupMemoryV1
@@ -162,6 +168,7 @@ pub enum ProductionAnalysisWitnessGapV1 {
     RaceEffectsAliasAndHappensBefore,
     OwnershipDomainDisjointnessAndCoverage,
     BarrierReachabilityUniformityAndPostdominance,
+    PipelineEpochLifecycleAndSlotReuse,
     WorkgroupAllocationLifetimeAndConflict,
     SemanticRootsControlEffectsAndNumerics,
 }
@@ -179,6 +186,7 @@ impl ProductionAnalysisWitnessGapV1 {
             Self::BarrierReachabilityUniformityAndPostdominance => {
                 KernelCheckPassKindV1::BarrierConvergence
             }
+            Self::PipelineEpochLifecycleAndSlotReuse => KernelCheckPassKindV1::PipelineProtocol,
             Self::WorkgroupAllocationLifetimeAndConflict => KernelCheckPassKindV1::WorkgroupMemory,
             Self::SemanticRootsControlEffectsAndNumerics => {
                 KernelCheckPassKindV1::SemanticRefinement
@@ -205,6 +213,9 @@ impl ProductionAnalysisWitnessGapV1 {
             }
             Self::BarrierReachabilityUniformityAndPostdominance => {
                 "every barrier and participant domain plus reachability, uniform-control, phase, and postdominance certificates"
+            }
+            Self::PipelineEpochLifecycleAndSlotReuse => {
+                "every staged epoch transition, ring-slot identity, loop invariant, prime/drain obligation, and release-before-reuse witness"
             }
             Self::WorkgroupAllocationLifetimeAndConflict => {
                 "every workgroup allocation/effect with byte layout, lifetime, epoch, alias, and conflict-freedom witnesses"
@@ -235,6 +246,9 @@ pub(crate) fn witness_gap(pass: KernelCheckPassKindV1) -> ProductionAnalysisWitn
         }
         KernelCheckPassKindV1::BarrierConvergence => {
             ProductionAnalysisWitnessGapV1::BarrierReachabilityUniformityAndPostdominance
+        }
+        KernelCheckPassKindV1::PipelineProtocol => {
+            ProductionAnalysisWitnessGapV1::PipelineEpochLifecycleAndSlotReuse
         }
         KernelCheckPassKindV1::WorkgroupMemory => {
             ProductionAnalysisWitnessGapV1::WorkgroupAllocationLifetimeAndConflict
@@ -288,7 +302,7 @@ impl ProductionAnalysisStageValidationV1 {
     }
 }
 
-/// Diagnostic summary for the fixed eight sealed results.
+/// Diagnostic summary for the fixed nine sealed results.
 ///
 /// This type deliberately carries no private seal or canonical bytes and
 /// cannot be converted into proof authority. Complete supported-fragment
@@ -337,6 +351,7 @@ pub(crate) enum CapturedProductionAnalysisReportV1 {
     Race(RankedRaceReportV1),
     Ownership(HierarchicalOwnershipReportV1),
     Barrier(PlironBarrierReportV1),
+    Pipeline(PlironPipelineProtocolReportV1),
     Workgroup(PlironWorkgroupMemoryReportV1),
     Semantic(PlironSemanticRefinementReportV1),
 }
@@ -350,6 +365,7 @@ impl CapturedProductionAnalysisReportV1 {
             Self::Race(report) => report.pass(),
             Self::Ownership(report) => report.pass(),
             Self::Barrier(report) => report.pass(),
+            Self::Pipeline(report) => report.pass(),
             Self::Workgroup(report) => report.pass(),
             Self::Semantic(report) => report.pass(),
         }
@@ -363,6 +379,7 @@ impl CapturedProductionAnalysisReportV1 {
             Self::Race(report) => report.status(),
             Self::Ownership(report) => report.status(),
             Self::Barrier(report) => report.status(),
+            Self::Pipeline(report) => report.status(),
             Self::Workgroup(report) => report.status(),
             Self::Semantic(report) => report.status(),
         }
@@ -500,7 +517,7 @@ impl fmt::Display for ProductionAnalysisReportValidationErrorV1 {
                 "analysis status is inconsistent with the sealed report at position {position}"
             ),
             Self::PreservationManifestInconsistent => formatter.write_str(
-                "the custody-bound exact-preservation manifest does not contain the same fixed eight checkpoints",
+                "the custody-bound exact-preservation manifest does not contain the same fixed nine checkpoints",
             ),
             Self::OmittedReport { position, pass } => write!(
                 formatter,
@@ -804,6 +821,7 @@ impl_sealed_report!(PlironAtomicLegalityReportV1, Atomic);
 impl_sealed_report!(RankedRaceReportV1, Race);
 impl_sealed_report!(HierarchicalOwnershipReportV1, Ownership);
 impl_sealed_report!(PlironBarrierReportV1, Barrier);
+impl_sealed_report!(PlironPipelineProtocolReportV1, Pipeline);
 impl_sealed_report!(PlironWorkgroupMemoryReportV1, Workgroup);
 impl_sealed_report!(PlironSemanticRefinementReportV1, Semantic);
 
@@ -966,7 +984,7 @@ mod tests {
             .expect("ordinary policy pipeline remains usable");
         let validation = report.report_validation();
 
-        assert_eq!(validation.stages().len(), 8);
+        assert_eq!(validation.stages().len(), 9);
         assert_eq!(validation.status(), KernelCheckStatusV1::Incomplete);
         assert!(!validation.all_reports_independently_validated());
         assert!(!validation.grants_compiler_refinement_authority());
@@ -1353,6 +1371,10 @@ mod tests {
         checkpoint_report!(
             KernelCheckPassKindV1::BarrierConvergence,
             reports.barriers()
+        );
+        checkpoint_report!(
+            KernelCheckPassKindV1::PipelineProtocol,
+            reports.pipeline_protocol()
         );
         checkpoint_report!(KernelCheckPassKindV1::WorkgroupMemory, reports.workgroup());
         checkpoint_report!(
