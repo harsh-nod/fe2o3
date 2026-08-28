@@ -1119,6 +1119,7 @@ fn production_pipeline_runs_ownership_after_race_and_fails_closed_on_holes() {
             KernelCheckPassKindV1::RaceFreedom,
             KernelCheckPassKindV1::HierarchicalOwnership,
             KernelCheckPassKindV1::BarrierConvergence,
+            KernelCheckPassKindV1::PipelineProtocol,
             KernelCheckPassKindV1::WorkgroupMemory,
             KernelCheckPassKindV1::SemanticRefinement,
         ]

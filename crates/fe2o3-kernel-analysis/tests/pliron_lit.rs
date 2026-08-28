@@ -279,6 +279,7 @@ fn lit_pipeline_uses_the_fixed_workload_neutral_pass_order() {
             KernelCheckPassKindV1::RaceFreedom,
             KernelCheckPassKindV1::HierarchicalOwnership,
             KernelCheckPassKindV1::BarrierConvergence,
+            KernelCheckPassKindV1::PipelineProtocol,
             KernelCheckPassKindV1::WorkgroupMemory,
             KernelCheckPassKindV1::SemanticRefinement,
         ]

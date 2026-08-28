@@ -34,8 +34,8 @@ both closed and do not accept caller-registered executable passes.
 
 The ranked PLIRON path has one fixed workload-neutral V2 sequence:
 `tensor-layout -> memory-bounds -> atomic-legality -> race-freedom ->
-hierarchical-ownership -> barrier-convergence -> workgroup-memory ->
-semantic-refinement`. Tensor layout runs first because later reference
+hierarchical-ownership -> barrier-convergence -> pipeline-protocol ->
+workgroup-memory -> semantic-refinement`. Tensor layout runs first because later reference
 refinement consumes its exact propagated result-layout facts. Atomic legality
 runs before race analysis because race analysis may classify two atomic effects as compatible
 only after explicit ordering, scope, memory-space, and target-capability
@@ -83,8 +83,14 @@ order:
 
 The ranked V2 sequence uses the same tensor, bounds, race, barrier, and
 workgroup stages. It additionally places `kernel-atomic-legality-v1` before
-race analysis, `kernel-hierarchical-ownership-v1` after race analysis, and
-`kernel-semantic-refinement-v1` last. Semantic refinement compares GPU output
+race analysis, `kernel-hierarchical-ownership-v1` after race analysis,
+`kernel-pipeline-protocol-v1` after barrier convergence, and
+`kernel-semantic-refinement-v1` last. The pipeline stage checks the exact
+stage/commit/wait/consume-or-discard/release lifecycle for every ring slot.
+For canonical runtime-bounded loops it proves a finite epoch-window invariant
+without unrolling: a zero-based unit induction, workgroup-uniform bound,
+prefetch distance, modulo slot selection, and complete speculative drain.
+Semantic refinement compares GPU output
 coordinates, guards, values, effects, and numerical policy with the safe Rust
 reference contract. For tensor results it also requires the reference
 obligation to name the exact result root produced by layout dataflow, with the
@@ -93,7 +99,7 @@ same component count and scalar contract.
 ## Shared Presburger Analysis
 
 `pliron-presburger-v1` is an immutable analysis service cached once per
-function by `PlironAnalysisManagerV1`; it is not a ninth policy pass. Bounds,
+function by `PlironAnalysisManagerV1`; it is not a tenth policy pass. Bounds,
 race, and hierarchy ownership query it from their existing fixed positions.
 This keeps pass order and diagnostic ownership stable while avoiding three
 independent implementations of integer-set reasoning.
@@ -135,7 +141,7 @@ Every pass returns one of three typed states:
 A clean report is still not proof of source correspondence or runtime safety.
 Those require the same retained frontend owner and authenticated runtime facts.
 
-Every error returned by the unified eight-pass production PLIRON pipeline also
+Every error returned by the unified nine-pass production PLIRON pipeline also
 contains at least one `KernelCheckRepairV1`. A repair has a stable action code,
 the owning pass, an applicability classification, and an actionable message.
 The compiler prints the repair as `help[FE2O3-FIX-*]` at both the raw
@@ -158,6 +164,7 @@ what GEMM, softmax, attention, or convolution means:
 | duplicate lane/workgroup writes and LDS write conflicts | race-freedom pass |
 | missing publish, read-before-wait, or stale/reused LDS data | workgroup-memory pass |
 | divergent barriers | barrier-convergence pass |
+| wrong ring slot, overwrite-before-release, wait-before-commit, missing drain, nonuniform dynamic epoch bound, or potentially aliased pipeline storage | epoch-aware pipeline-protocol pass |
 | GPU output coordinates, values, effects, or numerical policy differ from a safe Rust/Verus reference | semantic-refinement pass joined to bounds, ownership, tensor-layout, and exact proof-boundary evidence |
 
 Algorithmic equations are intentionally not generalized by name. Accumulator
@@ -203,6 +210,12 @@ The shared Presburger engine caps a relation at 16 variables, 256 constraints,
 finite domain; cross-map race queries retain at most two owners for each first
 map image; total coverage retains one deduplicated image set. The old exact
 invocation trace remains the bounded fallback for non-affine guards and loops.
+
+The pipeline-protocol pass performs one bounded operation traversal and uses
+constant-time indexes for view, allocation-origin, and no-alias-class
+conflicts. Concrete schedules are interpreted once. Dynamic schedules are
+matched against a finite canonical loop summary and checked symbolically, so
+analysis cost does not depend on the runtime trip count.
 
 Structural verification and formal-memory extraction each traverse the relevant
 IR once. Control-flow and barrier algorithms have explicit storage/work limits.

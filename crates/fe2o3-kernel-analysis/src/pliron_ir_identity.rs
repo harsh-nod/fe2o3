@@ -36,7 +36,7 @@ use pliron::{
 use sha2::{Digest, Sha256};
 
 use dialect_kernel::{
-    IndexType, RankedViewType, SemanticScalarType, is_checked_access_capability_type,
+    IndexType, PipelineType, RankedViewType, SemanticScalarType, is_checked_access_capability_type,
 };
 use dialect_proof::{EvidenceRefType, ObligationRefType};
 
@@ -1061,6 +1061,7 @@ fn is_production_type(ty: &dyn Type) -> bool {
         || ty.downcast_ref::<FP32Type>().is_some()
         || ty.downcast_ref::<FP64Type>().is_some()
         || ty.downcast_ref::<IndexType>().is_some()
+        || ty.downcast_ref::<PipelineType>().is_some()
         || ty.downcast_ref::<RankedViewType>().is_some()
         || ty.downcast_ref::<SemanticScalarType>().is_some()
         || is_checked_access_capability_type(ty)
@@ -1101,6 +1102,7 @@ fn is_production_attribute_id(attribute: &str) -> bool {
             | "kernel.noalias_class"
             | "kernel.ownership_coverage"
             | "kernel.ownership_partition"
+            | "kernel.pipeline_event_kind"
             | "kernel.semantic_binary_kind"
             | "kernel.semantic_cast_kind"
             | "kernel.semantic_compare_kind"

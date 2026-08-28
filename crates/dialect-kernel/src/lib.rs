@@ -33,12 +33,17 @@ pub use collective_semantics::{
     SemanticDomainBoundAttr, SemanticEvaluationOrderAttr, SemanticNumericalPolicyAttr,
     SemanticStepBoundAttr,
 };
+mod pipeline_protocol;
 mod ranked_memory;
 mod semantic_contract;
 mod semantic_typed_contract;
 mod semantic_typed_expression;
 mod tensor_layout;
 
+pub use pipeline_protocol::{
+    MAX_PIPELINE_BUFFERS_V1, PipelineCreateOp, PipelineEventKindAttr, PipelineEventOp,
+    PipelineProtocolError, PipelineType, pipeline_type,
+};
 pub use ranked_memory::{
     AccessKindAttr, AllocationEffectOp, AllocationOriginAttr, AnalysisSplitControlCountAttr,
     AnalysisSplitOp, AtomicOrderingAttr, AtomicScopeAttr, BranchArgsOp, BranchOp,

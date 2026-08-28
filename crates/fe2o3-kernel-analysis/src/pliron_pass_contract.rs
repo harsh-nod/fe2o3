@@ -5,7 +5,7 @@
 //! actual pass can certify that the declaration held. The epoch detects
 //! transient mutate-then-restore attempts while snapshots retain precise diffs.
 //!
-//! The production session is crate-private, admits only the fixed eight stages,
+//! The production session is crate-private, admits only the fixed nine stages,
 //! and operates on the identity module's closed operation/type/attribute set.
 //! Unsafe code is denied in this crate; safe PLIRON mutation routes are owned by
 //! the pinned fork and epoch-instrumented before mutable access or insertion.
@@ -19,7 +19,7 @@ use std::{
 
 use crate::KernelCheckPassKindV1;
 
-pub const MAX_PLIRON_PASS_CONTRACTS_V1: usize = 8;
+pub const MAX_PLIRON_PASS_CONTRACTS_V1: usize = 9;
 
 /// The only effect admitted for the existing analysis-only verifier stages.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -62,6 +62,7 @@ pub const PRODUCTION_PLIRON_PASS_CONTRACTS_V1: [PlironPassContractV1;
     PlironPassContractV1::identity(KernelCheckPassKindV1::RaceFreedom),
     PlironPassContractV1::identity(KernelCheckPassKindV1::HierarchicalOwnership),
     PlironPassContractV1::identity(KernelCheckPassKindV1::BarrierConvergence),
+    PlironPassContractV1::identity(KernelCheckPassKindV1::PipelineProtocol),
     PlironPassContractV1::identity(KernelCheckPassKindV1::WorkgroupMemory),
     PlironPassContractV1::identity(KernelCheckPassKindV1::SemanticRefinement),
 ];
@@ -858,7 +859,7 @@ mod tests {
 
     #[test]
     fn fixed_contract_order_is_exact_and_identity_only() {
-        assert_eq!(PRODUCTION_PLIRON_PASS_CONTRACTS_V1.len(), 8);
+        assert_eq!(PRODUCTION_PLIRON_PASS_CONTRACTS_V1.len(), 9);
         assert_eq!(
             PRODUCTION_PLIRON_PASS_CONTRACTS_V1.map(|contract| contract.pass()),
             crate::PRODUCTION_PLIRON_PRELOWERING_PASS_ORDER_V2,
@@ -916,7 +917,7 @@ mod tests {
         assert!(report.enforces_analysis_only_ir_immutability());
         assert!(!report.grants_analysis_result_soundness_authority());
         assert!(!report.grants_read_only_or_analysis_soundness_authority());
-        assert_eq!(report.certificates().len(), 8);
+        assert_eq!(report.certificates().len(), 9);
         assert_eq!(report.input_identity().canonical_len(), 4);
         assert!(report.exactly_matches_retained_output(&report.clone()));
         let mut stale_certificate = report.clone();

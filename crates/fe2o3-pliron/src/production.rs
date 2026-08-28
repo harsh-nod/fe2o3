@@ -245,6 +245,7 @@ pub enum ProductionSessionErrorV1 {
     RankedRace(fe2o3_kernel_analysis::RankedRaceCheckErrorV1),
     RankedOwnership(fe2o3_kernel_analysis::HierarchicalOwnershipCheckErrorV1),
     RankedBarrier(fe2o3_kernel_analysis::PlironBarrierCheckErrorV1),
+    RankedPipeline(fe2o3_kernel_analysis::PlironPipelineProtocolCheckErrorV1),
     RankedWorkgroup(fe2o3_kernel_analysis::PlironWorkgroupMemoryCheckErrorV1),
     RankedSemantic(fe2o3_kernel_analysis::PlironSemanticRefinementCheckErrorV1),
     RankedPassPreservation(fe2o3_kernel_analysis::PlironPassPreservationErrorV1),
@@ -281,6 +282,11 @@ impl ProductionSessionErrorV1 {
             Self::RankedBarrier(_) => vec![fe2o3_kernel_analysis::kernel_check_repair_for_pass_v1(
                 Pass::BarrierConvergence,
             )],
+            Self::RankedPipeline(_) => {
+                vec![fe2o3_kernel_analysis::kernel_check_repair_for_pass_v1(
+                    Pass::PipelineProtocol,
+                )]
+            }
             Self::RankedWorkgroup(_) => {
                 vec![fe2o3_kernel_analysis::kernel_check_repair_for_pass_v1(
                     Pass::WorkgroupMemory,
@@ -340,6 +346,7 @@ impl fmt::Display for ProductionSessionErrorV1 {
             Self::RankedRace(error) => error.fmt(formatter),
             Self::RankedOwnership(error) => error.fmt(formatter),
             Self::RankedBarrier(error) => error.fmt(formatter),
+            Self::RankedPipeline(error) => error.fmt(formatter),
             Self::RankedWorkgroup(error) => error.fmt(formatter),
             Self::RankedSemantic(error) => error.fmt(formatter),
             Self::RankedPassPreservation(error) => error.fmt(formatter),
@@ -364,6 +371,7 @@ impl Error for ProductionSessionErrorV1 {
             Self::RankedRace(error) => Some(error),
             Self::RankedOwnership(error) => Some(error),
             Self::RankedBarrier(error) => Some(error),
+            Self::RankedPipeline(error) => Some(error),
             Self::RankedWorkgroup(error) => Some(error),
             Self::RankedSemantic(error) => Some(error),
             Self::RankedPassPreservation(error) => Some(error),
