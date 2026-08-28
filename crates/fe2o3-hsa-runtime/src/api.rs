@@ -616,7 +616,7 @@ impl DispatchApi for DirectRuntimeApi {
         ApiError::status("hsa_system_get_info(timestamp frequency)", unsafe {
             sys::fe2o3_hsa_system_timestamp_frequency(&mut frequency)
         })?;
-        if !(1..=400_000_000).contains(&frequency) {
+        if !(1..=10_000_000_000).contains(&frequency) {
             return Err(ApiError {
                 operation: "validate HSA timestamp frequency",
                 status: -1,
