@@ -620,6 +620,12 @@ pub enum FunctionAttributeV2 {
     ApproxFuncFpMathDisabled,
     FpContractOff,
     RequiredWorkgroupSize([u16; 3]),
+    NoCompletionAction,
+    NoDefaultQueue,
+    NoHeapPointer,
+    NoHostcallPointer,
+    NoMultigridSyncArgument,
+    NoQueuePointer,
 }
 
 impl FunctionAttributeV2 {
@@ -640,6 +646,38 @@ impl FunctionAttributeV2 {
             Self::ApproxFuncFpMathDisabled => 13,
             Self::FpContractOff => 14,
             Self::RequiredWorkgroupSize(_) => 15,
+            Self::NoCompletionAction => 16,
+            Self::NoDefaultQueue => 17,
+            Self::NoHeapPointer => 18,
+            Self::NoHostcallPointer => 19,
+            Self::NoMultigridSyncArgument => 20,
+            Self::NoQueuePointer => 21,
+        }
+    }
+
+    pub const fn canonical_name(self) -> &'static str {
+        match self {
+            Self::NoUnwind => "nounwind",
+            Self::AlwaysInline => "alwaysinline",
+            Self::NoInline => "noinline",
+            Self::ReadNone => "memory(none)",
+            Self::WillReturn => "willreturn",
+            Self::FlatWorkgroupSize(_) => "amdgpu-flat-work-group-size",
+            Self::WavesPerEu(_) => "amdgpu-waves-per-eu",
+            Self::DenormalFpMathF32Ieee => "denormal-fp-math-f32=ieee,ieee",
+            Self::UnsafeFpMathDisabled => "unsafe-fp-math=false",
+            Self::NoInfsFpMathDisabled => "no-infs-fp-math=false",
+            Self::NoNansFpMathDisabled => "no-nans-fp-math=false",
+            Self::NoSignedZerosFpMathDisabled => "no-signed-zeros-fp-math=false",
+            Self::ApproxFuncFpMathDisabled => "approx-func-fp-math=false",
+            Self::FpContractOff => "fp-contract=off",
+            Self::RequiredWorkgroupSize(_) => "reqd_work_group_size",
+            Self::NoCompletionAction => "amdgpu-no-completion-action",
+            Self::NoDefaultQueue => "amdgpu-no-default-queue",
+            Self::NoHeapPointer => "amdgpu-no-heap-ptr",
+            Self::NoHostcallPointer => "amdgpu-no-hostcall-ptr",
+            Self::NoMultigridSyncArgument => "amdgpu-no-multigrid-sync-arg",
+            Self::NoQueuePointer => "amdgpu-no-queue-ptr",
         }
     }
 }
@@ -657,6 +695,12 @@ impl From<FunctionAttributeV1> for FunctionAttributeV2 {
             FunctionAttributeV1::NoSignedZerosFpMathDisabled => Self::NoSignedZerosFpMathDisabled,
             FunctionAttributeV1::ApproxFuncFpMathDisabled => Self::ApproxFuncFpMathDisabled,
             FunctionAttributeV1::FpContractOff => Self::FpContractOff,
+            FunctionAttributeV1::NoCompletionAction => Self::NoCompletionAction,
+            FunctionAttributeV1::NoDefaultQueue => Self::NoDefaultQueue,
+            FunctionAttributeV1::NoHeapPointer => Self::NoHeapPointer,
+            FunctionAttributeV1::NoHostcallPointer => Self::NoHostcallPointer,
+            FunctionAttributeV1::NoMultigridSyncArgument => Self::NoMultigridSyncArgument,
+            FunctionAttributeV1::NoQueuePointer => Self::NoQueuePointer,
         }
     }
 }

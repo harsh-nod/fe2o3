@@ -61,9 +61,9 @@ fn run_child(unique_id: u64) -> Result<(), Box<dyn std::error::Error>> {
     queue.verify_exception_shadows_dontfork()?;
     let destroyed = queue.destroy()?;
     assert_eq!(destroyed.queue_id(), 0);
-    assert_eq!(destroyed.released_resources(), 4);
+    assert_eq!(destroyed.released_resources(), 5);
     println!(
-        "profile_sha256={} unique_id={unique_id:016x} queue_id={} event_id={} cwsr_shadow_pages={} runtime=enabled-before-create-then-disabled ring=4096 roles=ring,control,eop,cwsr gtt_policy=accepted doorbell_slice={} doorbell_byte_offset={} dontfork=confirmed mmio_stores=0 packets=0 destroy=queue-then-event-then-runtime-confirmed resources_returned={}",
+        "profile_sha256={} unique_id={unique_id:016x} queue_id={} event_id={} cwsr_shadow_pages={} runtime=enabled-before-create-then-disabled ring=4096 roles=ring,control,eop,cwsr,completion-signals gtt_policy=accepted doorbell_slice={} doorbell_byte_offset={} dontfork=confirmed mmio_stores=0 packets=0 destroy=queue-then-event-then-runtime-confirmed resources_returned={}",
         GFX942_COMPUTE_AQL_SESSION_MANIFEST_SHA256_V1,
         observation.queue_id(),
         observation.event_id(),

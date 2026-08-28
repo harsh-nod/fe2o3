@@ -501,6 +501,12 @@ pub enum FunctionAttributeV1 {
     NoSignedZerosFpMathDisabled,
     ApproxFuncFpMathDisabled,
     FpContractOff,
+    NoCompletionAction,
+    NoDefaultQueue,
+    NoHeapPointer,
+    NoHostcallPointer,
+    NoMultigridSyncArgument,
+    NoQueuePointer,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -548,6 +554,12 @@ impl FunctionAttributeV1 {
             Self::NoSignedZerosFpMathDisabled => 8,
             Self::ApproxFuncFpMathDisabled => 9,
             Self::FpContractOff => 10,
+            Self::NoCompletionAction => 11,
+            Self::NoDefaultQueue => 12,
+            Self::NoHeapPointer => 13,
+            Self::NoHostcallPointer => 14,
+            Self::NoMultigridSyncArgument => 15,
+            Self::NoQueuePointer => 16,
         }
     }
 
@@ -563,6 +575,12 @@ impl FunctionAttributeV1 {
             Self::NoSignedZerosFpMathDisabled => "no-signed-zeros-fp-math=false",
             Self::ApproxFuncFpMathDisabled => "approx-func-fp-math=false",
             Self::FpContractOff => "fp-contract=off",
+            Self::NoCompletionAction => "amdgpu-no-completion-action",
+            Self::NoDefaultQueue => "amdgpu-no-default-queue",
+            Self::NoHeapPointer => "amdgpu-no-heap-ptr",
+            Self::NoHostcallPointer => "amdgpu-no-hostcall-ptr",
+            Self::NoMultigridSyncArgument => "amdgpu-no-multigrid-sync-arg",
+            Self::NoQueuePointer => "amdgpu-no-queue-ptr",
         }
     }
 }
@@ -1299,6 +1317,12 @@ fn function_attribute_name(kind: u8) -> &'static str {
         8 => "no-signed-zeros-fp-math=false",
         9 => "approx-func-fp-math=false",
         10 => "fp-contract=off",
+        11 => "amdgpu-no-completion-action",
+        12 => "amdgpu-no-default-queue",
+        13 => "amdgpu-no-heap-ptr",
+        14 => "amdgpu-no-hostcall-ptr",
+        15 => "amdgpu-no-multigrid-sync-arg",
+        16 => "amdgpu-no-queue-ptr",
         _ => "unknown",
     }
 }

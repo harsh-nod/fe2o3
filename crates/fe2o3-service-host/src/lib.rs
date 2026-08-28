@@ -5,13 +5,17 @@
 // allocation and returning only an error would discharge storage borrows.
 #![allow(clippy::result_large_err)]
 
-//! Authority-free host typestate and model adapters for persistent services.
+//! Host typestate, model adapters, and typed allocation ownership for
+//! persistent services.
 //!
 //! This crate retains caller-owned storage borrows while it checks inert
 //! lifecycle, persistent-task dispatch, ticket, wait, epoch, and generation
 //! descriptions. It consumes the canonical [`fe2o3_service_model`] and
-//! [`fe2o3_host_api`] contracts; it does not allocate, load, launch, execute,
-//! wait, persist, authenticate, prove, or grant storage-release authority.
+//! [`fe2o3_host_api`] contracts. On Linux x86_64 its allocation module can own
+//! real KFD-backed device-local and host-visible coherent allocations. Its
+//! addressless fixed-batch layer composes inspected executables, exact kernarg
+//! images, and checked device ranges into a long-lived KFD queue with linear
+//! publish, completion, recycle, detach, rebind, and release custody.
 //!
 //! The ownership shape rejects early use of retained storage while a service
 //! value remains live:
@@ -79,10 +83,48 @@
 //! }
 //! ```
 
+extern crate alloc;
+
 mod binding;
 mod error;
 mod lifecycle;
 mod task;
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+mod allocation;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+mod batch;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+mod queue;
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub use allocation::{
+    DEVICE_LOCAL_ALLOCATION_ROLES_V1, DeviceAllocationRoleMarkerV1, DeviceInputRoleV1,
+    DeviceLocalAllocationV1, DeviceOutputRoleV1, DeviceStateRoleV1, DeviceWorkspaceRoleV1,
+    HOST_VISIBLE_ALLOCATION_ROLES_V1, HostAllocationRoleMarkerV1, HostDownloadRoleV1,
+    HostUploadRoleV1, HostVisibleAllocationV1, NeverPublishedV1, QuarantinedServiceAllocationsV1,
+    SERVICE_ALLOCATION_OWNERSHIP_MANIFEST_SHA256_V1, SERVICE_ALLOCATION_OWNERSHIP_MANIFEST_V1,
+    ServiceAllocationAcquireErrorV1, ServiceAllocationErrorV1, ServiceAllocationKeyV1,
+    ServiceAllocationKindMarkerV1, ServiceAllocationPhaseV1, ServiceAllocationRangePairV1,
+    ServiceAllocationRangeV1, ServiceAllocationReleaseFailureV1,
+    ServiceAllocationReleaseObservationV1, ServiceAllocationRoleMarkerV1,
+    ServiceAllocationSessionV1, ServiceAllocationSubleaseSetV1, ServiceDeviceDispatchRangeV1,
+    ServiceDispatchRangeV1, ServiceHostDispatchRangeV1, ServiceHostDispatchSnapshotRangeV1,
+};
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub use batch::{ServiceFixedBatchV1, ServiceFixedDispatchBufferV1, ServiceFixedDispatchPacketV1};
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub use queue::{
+    QuarantinedServiceQueueResourcesV1, QuarantinedServiceQueueV1,
+    SERVICE_QUEUE_OWNERSHIP_MANIFEST_SHA256_V1, SERVICE_QUEUE_OWNERSHIP_MANIFEST_V1,
+    ServiceCompletedQueueSessionV1, ServiceCompletedReadRequestV1, ServiceCompletedReadbackV1,
+    ServiceCompletedSnapshotRequestV1, ServicePublishedQueueSessionV1, ServiceQueueBindFailureV1,
+    ServiceQueueCreateFailureV1, ServiceQueueDataUpdateFailureV1, ServiceQueueErrorV1,
+    ServiceQueueOperationFailureV1, ServiceQueuePartitionedDataUpdateV1, ServiceQueuePollV1,
+    ServiceQueuePollWithProgressV1, ServiceQueueProgressV1, ServiceQueueReleaseFailureV1,
+    ServiceQueueReleaseObservationV1, ServiceQueueSessionV1, ServiceQueueUnboundSessionV1,
+    ServiceRecycledQueueSessionV1,
+};
 
 pub use binding::{QueueSlotBindingV1, ServiceContractV1, ServiceKeyV1};
 pub use error::{BindingFieldV1, ServiceHostErrorV1};

@@ -1101,6 +1101,12 @@ fn decode_function_attribute(
             reader.u16()?,
             reader.u16()?,
         ]),
+        16 => FunctionAttributeV2::NoCompletionAction,
+        17 => FunctionAttributeV2::NoDefaultQueue,
+        18 => FunctionAttributeV2::NoHeapPointer,
+        19 => FunctionAttributeV2::NoHostcallPointer,
+        20 => FunctionAttributeV2::NoMultigridSyncArgument,
+        21 => FunctionAttributeV2::NoQueuePointer,
         tag => {
             return Err(DecodeHandoffErrorV2::UnknownTag {
                 section: WireSectionV2::FunctionAttribute,
@@ -1597,3 +1603,39 @@ fn put_string(bytes: &mut Vec<u8>, value: &str) {
 }
 
 const _: () = assert!(HEADER_BYTES_V2 == MAGIC_V2.len() + 2 + 2 + 4);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const ABI_ATTRIBUTES: [FunctionAttributeV2; 6] = [
+        FunctionAttributeV2::NoCompletionAction,
+        FunctionAttributeV2::NoDefaultQueue,
+        FunctionAttributeV2::NoHeapPointer,
+        FunctionAttributeV2::NoHostcallPointer,
+        FunctionAttributeV2::NoMultigridSyncArgument,
+        FunctionAttributeV2::NoQueuePointer,
+    ];
+
+    #[test]
+    fn abi_function_attribute_tags_are_stable_and_closed() {
+        for (index, attribute) in ABI_ATTRIBUTES.into_iter().enumerate() {
+            let tag = 16 + u8::try_from(index).unwrap();
+            let mut bytes = Vec::new();
+            encode_function_attribute(&mut bytes, attribute);
+            assert_eq!(bytes, [tag]);
+            assert_eq!(
+                decode_function_attribute(&mut Reader::new(&bytes)).unwrap(),
+                attribute
+            );
+        }
+
+        assert_eq!(
+            decode_function_attribute(&mut Reader::new(&[22])),
+            Err(DecodeHandoffErrorV2::UnknownTag {
+                section: WireSectionV2::FunctionAttribute,
+                tag: 22,
+            })
+        );
+    }
+}

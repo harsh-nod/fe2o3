@@ -2,13 +2,15 @@
 #![forbid(unsafe_code)]
 #![doc = include_str!("../README.md")]
 
+extern crate alloc;
+
 mod kernel_closure;
 mod vecadd_cov6;
 
 pub use kernel_closure::{
     CLOSED_RELOCATION_POLICY_ID, ClosedRelocationEvidenceV1, KernelClosureError,
-    KernelIdentityInputsV1, SelectedKernelResourceBindingV1, UnsupportedKernelSemantic,
-    ValidatedKernelEnvelope,
+    KernelDispatchAbiErrorV1, KernelGlobalBufferAbiV1, KernelIdentityInputsV1,
+    SelectedKernelResourceBindingV1, UnsupportedKernelSemantic, ValidatedKernelEnvelope,
 };
 pub use vecadd_cov6::{
     LoadedImageAddressPlanV1, UnboundGpuF32SliceV1, VECADD_COV6_ARTIFACT_SHA256,

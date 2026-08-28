@@ -126,8 +126,10 @@ invariants, or proves that its mapping starts and sizes use 4096-byte rounding.
 The 4 KiB and page-rounded properties listed above remain claims of the separate
 `load_plan_v1.rs` proof only.
 
-`aql_publication_v1.rs` proves the initial R4 abstract packet-publication,
-single-producer reservation, and completion-signal relations:
+`aql_publication_v1.rs` proves the initial R4 abstract independent-header
+packet-publication, single-producer reservation, and completion-signal
+relations. Its release-word theorem is scoped to `0x1402`; it does not cover
+the separately admitted wait-for-prior `0x1502` executable header:
 
 1. copying one canonical 64-byte INVALID packet body into a checked bounded ring
    slot writes every exact source byte to the corresponding destination and

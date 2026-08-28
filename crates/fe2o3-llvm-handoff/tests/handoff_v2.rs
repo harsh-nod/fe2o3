@@ -418,6 +418,74 @@ fn fixture(permuted: bool) -> Gfx942HandoffV2 {
     Gfx942HandoffV2::new(base, module).unwrap()
 }
 
+const ABI_ATTRIBUTES_V1: [FunctionAttributeV1; 6] = [
+    FunctionAttributeV1::NoCompletionAction,
+    FunctionAttributeV1::NoDefaultQueue,
+    FunctionAttributeV1::NoHeapPointer,
+    FunctionAttributeV1::NoHostcallPointer,
+    FunctionAttributeV1::NoMultigridSyncArgument,
+    FunctionAttributeV1::NoQueuePointer,
+];
+
+const ABI_ATTRIBUTES_V2: [FunctionAttributeV2; 6] = [
+    FunctionAttributeV2::NoCompletionAction,
+    FunctionAttributeV2::NoDefaultQueue,
+    FunctionAttributeV2::NoHeapPointer,
+    FunctionAttributeV2::NoHostcallPointer,
+    FunctionAttributeV2::NoMultigridSyncArgument,
+    FunctionAttributeV2::NoQueuePointer,
+];
+
+const ABI_ATTRIBUTE_NAMES: [&str; 6] = [
+    "amdgpu-no-completion-action",
+    "amdgpu-no-default-queue",
+    "amdgpu-no-heap-ptr",
+    "amdgpu-no-hostcall-ptr",
+    "amdgpu-no-multigrid-sync-arg",
+    "amdgpu-no-queue-ptr",
+];
+
+#[test]
+fn abi_function_attributes_convert_name_and_round_trip() {
+    assert_eq!(
+        ABI_ATTRIBUTES_V1.map(FunctionAttributeV2::from),
+        ABI_ATTRIBUTES_V2
+    );
+    assert_eq!(
+        ABI_ATTRIBUTES_V2.map(FunctionAttributeV2::canonical_name),
+        ABI_ATTRIBUTE_NAMES
+    );
+
+    let original_base = base_fixture();
+    let mut kernels = original_base.kernels().to_vec();
+    let original = kernels[0].clone();
+    let mut attributes = original.function_attributes().to_vec();
+    attributes.extend(ABI_ATTRIBUTES_V1);
+    kernels[0] = KernelEntryV1::new(
+        original.symbol(),
+        original.parameters().to_vec(),
+        attributes,
+        original.origin(),
+    )
+    .unwrap();
+    let base = Gfx942HandoffV1::new(Gfx942HandoffInputV1 {
+        stage_identities: *original_base.stage_identities(),
+        target: original_base.target().clone(),
+        kernels,
+        module: original_base.module().clone(),
+        origins: original_base.origins().to_vec(),
+        obligations: original_base.obligations().to_vec(),
+    })
+    .unwrap();
+    let module = module_fixture(&base, false);
+    let handoff = Gfx942HandoffV2::new(base, module).unwrap();
+    let encoded = handoff.encode_canonical();
+    assert_eq!(
+        Gfx942HandoffV2::decode_canonical(encoded.as_bytes()).unwrap(),
+        handoff
+    );
+}
+
 #[test]
 fn positive_gfx942_executable_module_round_trips_and_embeds_exact_v1() {
     let handoff = fixture(false);

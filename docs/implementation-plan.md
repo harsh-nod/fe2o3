@@ -194,8 +194,11 @@ authority. The backend fixture is not Rust user source.
 - `fe2o3-proof-contracts`: solver-neutral proof statement/evidence contracts.
 - `fe2o3-host-api`: inert target-neutral host-operation contracts.
 - `fe2o3-service-model`: executable-free persistent-service semantics.
-- `fe2o3-service-host`: authority-free service lifecycle typestates; no service
-  execution.
+- `fe2o3-service-host`: service lifecycle typestates plus a Linux x86_64
+  addressless allocation and fixed-batch KFD queue composition layer. The
+  runtime path retains linear publish, completion, recycle, detach, rebind, and
+  explicit release custody without claiming executable effects or output
+  content.
 
 ## Device ABI
 
