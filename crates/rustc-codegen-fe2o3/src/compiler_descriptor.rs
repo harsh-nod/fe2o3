@@ -2170,6 +2170,29 @@ mod tests {
     }
 
     #[test]
+    fn bfloat16_does_not_bypass_exact_matrix_extension_admission() {
+        let mut module = Module::new("bfloat16_matrix_descriptor_capability_test");
+        module
+            .required_capabilities
+            .insert(TargetCapability::BFloat16);
+        module
+            .required_capabilities
+            .insert(TargetCapability::Extension {
+                namespace: MATRIX_CAPABILITY_NAMESPACE.to_owned(),
+                name: BF16_F32_M16N16K16_CAPABILITY.to_owned(),
+            });
+
+        assert!(matches!(
+            descriptor_capabilities(&module, false, false),
+            Err(CompilerDescriptorError::UnsupportedCapability(_))
+        ));
+        assert_eq!(
+            descriptor_capabilities(&module, true, false).unwrap(),
+            vec![CapabilityV1::MatrixMultiply, CapabilityV1::AmdMfma]
+        );
+    }
+
+    #[test]
     fn descriptor_capabilities_admit_only_the_exact_gfx942_diagnostic_contract() {
         let exact = TargetCapability::Extension {
             namespace: fe2o3_kernel_ir::AMDGPU_GFX942_DIAGNOSTICS_CAPABILITY_NAMESPACE.to_owned(),
