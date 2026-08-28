@@ -2,7 +2,6 @@ use std::{error::Error, fmt};
 
 use fe2o3_amd_target::{AmdTargetId, PRODUCTION_GFX942_DEVICE_TARGET_V1};
 use fe2o3_aql::AqlDispatchGeometryV1;
-use fe2o3_artifact_transaction::DurableCurrentLinkPublicationTokenV1;
 use fe2o3_kfd::{CheckedGfx942XnackMinusDevice, DeviceBindingError};
 use fe2o3_runtime::{
     Gfx942AuthorizedRuntimeDispatchResultV1, Gfx942AuthorizedRuntimeExecutionErrorV1,
@@ -79,7 +78,6 @@ impl<K: CompilerGeneratedKernelExpectationV1> GeneratedWorkerV3KfdInvocation<'_,
 
 struct GeneratedWorkerV3KfdExecutionAuthority<K> {
     authenticated: AuthenticatedWorkerV3ExecutableV1<K>,
-    current: DurableCurrentLinkPublicationTokenV1,
     finalized_hsaco_sha256: [u8; 32],
     finalized_hsaco_length: u64,
     kernel_name: &'static str,
@@ -89,7 +87,7 @@ struct GeneratedWorkerV3KfdExecutionAuthority<K> {
 
 // SAFETY: this private implementation is constructed only by
 // `prepare_generated_kfd_invocation`. That transition retains the exact authenticated Worker V3
-// decision and current-publication token, admits only compiler-generated argument capabilities,
+// decision and its current-publication token, admits only compiler-generated argument capabilities,
 // prepares the runtime request from the token's exact HSACO bytes, validates the selected kernel
 // and artifact identities, and retains the same checked KFD device whose identity is named here.
 unsafe impl<K: CompilerGeneratedKernelExpectationV1> WorkerV3Gfx942ExecutionAuthorityV1
@@ -118,9 +116,7 @@ unsafe impl<K: CompilerGeneratedKernelExpectationV1> WorkerV3Gfx942ExecutionAuth
     }
 
     fn revalidate_currentness(&self) -> Result<(), Self::CurrentnessError> {
-        self.authenticated
-            .admission()
-            .revalidate_retained_currentness_token(&self.current)
+        self.authenticated.revalidate_currentness()
     }
 }
 
@@ -138,9 +134,7 @@ impl<K: CompilerGeneratedKernelExpectationV1> AuthenticatedWorkerV3ExecutableV1<
     where
         Arguments: CompilerGeneratedKfdArguments<'allocation, K>,
     {
-        let current = self
-            .admission()
-            .acquire_retained_currentness_token()
+        self.revalidate_currentness()
             .map_err(GeneratedWorkerV3KfdInvocationError::CurrentPublication)?;
         device
             .check_observable_currentness()
@@ -148,12 +142,15 @@ impl<K: CompilerGeneratedKernelExpectationV1> AuthenticatedWorkerV3ExecutableV1<
         validate_gfx942_target(&self)?;
 
         let packed = self
-            .prepare_generated_kfd_arguments_with_current(&current, arguments)
+            .prepare_generated_kfd_arguments_with_current(
+                self.current_publication_token(),
+                arguments,
+            )
             .map_err(GeneratedWorkerV3KfdInvocationError::Arguments)?;
         let (inputs, completion) =
             packed.into_runtime_inputs(geometry, dynamic_group_segment_bytes, timeout_milliseconds);
         let prepared = prepare_gfx942_runtime_dispatch_v1(
-            current.exact_artifact_bytes(),
+            self.current_publication_token().exact_artifact_bytes(),
             K::EXPORT_NAME,
             inputs,
         )
@@ -164,7 +161,7 @@ impl<K: CompilerGeneratedKernelExpectationV1> AuthenticatedWorkerV3ExecutableV1<
             .check_observable_currentness()
             .map_err(GeneratedWorkerV3KfdInvocationError::DeviceCurrentness)?;
         self.admission()
-            .revalidate_retained_currentness_token(&current)
+            .revalidate_retained_currentness_token(self.current_publication_token())
             .map_err(GeneratedWorkerV3KfdInvocationError::CurrentPublication)?;
 
         let verification = self.verification();
@@ -175,7 +172,6 @@ impl<K: CompilerGeneratedKernelExpectationV1> AuthenticatedWorkerV3ExecutableV1<
             dispatch_contract_sha256: prepared.dispatch_contract_sha256(),
             device_unique_id: device.observation().unique_id(),
             authenticated: self,
-            current,
         };
         Ok(GeneratedWorkerV3KfdInvocation {
             authority,

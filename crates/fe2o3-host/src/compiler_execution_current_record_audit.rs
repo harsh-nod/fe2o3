@@ -13,7 +13,9 @@ use fe2o3_runtime_protocol::{
 };
 
 use crate::{
-    CompilerGeneratedKernelExpectationV1, WorkerV3AuditorV1, WorkerV3VerificationRequestV1,
+    CompilerGeneratedKernelExpectationV1, WorkerV3AuditorV1,
+    WorkerV3CompilerExecutionEvidenceErrorV1, WorkerV3CompilerExecutionVerificationV1,
+    WorkerV3VerificationRequestV1,
 };
 
 /// Complete deadline for one application-side current-record verification transaction.
@@ -89,6 +91,21 @@ impl WorkerV3CompilerCurrentRecordAuditV1 {
 
     pub const fn grants_launch_authority(&self) -> bool {
         false
+    }
+
+    /// Consumes this one-use audit into an exact compiler-execution evidence lane.
+    ///
+    /// Every V3 current-record coordinate is compared with the supplied subject and complete
+    /// carriage before the signed attestation is retained. This transition still grants no final
+    /// verification, load, or launch authority; protected deployment trust and the remaining
+    /// refinement receipts must be joined by the crate-owned production verifier.
+    pub fn bind_exact_compiler_execution_v1(
+        self,
+        subject: &InertCompilerExecutionSubjectV1,
+        carriage: &CompilerExecutionReceiptCarriageV1,
+    ) -> Result<WorkerV3CompilerExecutionVerificationV1, WorkerV3CompilerExecutionEvidenceErrorV1>
+    {
+        WorkerV3CompilerExecutionVerificationV1::from_current_record_audit(subject, carriage, self)
     }
 }
 
@@ -312,6 +329,87 @@ mod tests {
         }
     }
 
+    fn direct_current_record_audit(
+        fixture: &Fixture,
+        verification_challenge: [u8; 32],
+    ) -> WorkerV3CompilerCurrentRecordAuditV1 {
+        let commit_receipt = fixture.anchor_receipt();
+        let currentness_challenge =
+            CompilerExecutionCurrentRecordVerificationV3::external_anchor_currentness_challenge(
+                &fixture.carriage,
+                &commit_receipt,
+                verification_challenge,
+            )
+            .unwrap();
+        let anchor_key =
+            PinnedAnchorKeyV1::from_bytes(fixture.anchor_signing_key.verifying_key().to_bytes())
+                .unwrap();
+        let unsigned = UnsignedAnchorObservationV1::from_challenge(
+            &currentness_challenge,
+            AnchorPositionV1::Proposed,
+        );
+        let signature = fixture.anchor_signing_key.sign(&unsigned.signing_bytes());
+        let currentness_receipt = AnchorTransitionReceiptV1::new(
+            currentness_challenge,
+            &unsigned.attach_signature(signature.to_bytes()),
+            &anchor_key,
+        )
+        .unwrap();
+        let verification = CompilerExecutionCurrentRecordVerificationV3::new(
+            &fixture.carriage,
+            commit_receipt,
+            currentness_receipt,
+            verification_challenge,
+            [0x91; 32],
+            [0x92; 32],
+        )
+        .unwrap();
+        let attestation = CompilerExecutionCurrentRecordAttestationV3::issue(
+            &fixture.policy,
+            &fixture.carriage,
+            verification,
+            verification_challenge,
+            &fixture.signing_key,
+        )
+        .unwrap();
+        let verified = attestation
+            .verify(&fixture.policy, &fixture.carriage, verification_challenge)
+            .unwrap();
+        WorkerV3CompilerCurrentRecordAuditV1 { verified }
+    }
+
+    fn alternate_carriage_for_same_subject(
+        fixture: &Fixture,
+    ) -> CompilerExecutionReceiptCarriageV1 {
+        let challenge = CompilerExecutionAttestationChallengeV1::new(
+            &fixture.policy,
+            &fixture.subject,
+            [0xa1; 32],
+            2,
+            fixture.carriage.acknowledgment().current_rollback_anchor(),
+        )
+        .unwrap();
+        let request =
+            CompilerExecutionAttestationRequestV1::new(challenge, fixture.subject.clone()).unwrap();
+        let receipt = CompilerExecutionAttestationReceiptV1::issue(
+            &fixture.policy,
+            &request,
+            &fixture.signing_key,
+        )
+        .unwrap();
+        let publication =
+            CompilerExecutionReceiptPublicationV1::new([0xa2; 32], [0xa3; 32], receipt).unwrap();
+        let acknowledgment =
+            CompilerExecutionReceiptPublicationAckV1::new(&publication, [0xa4; 32]).unwrap();
+        CompilerExecutionReceiptCarriageV1::new(
+            fixture.policy.clone(),
+            request,
+            publication,
+            acknowledgment,
+        )
+        .unwrap()
+    }
+
     #[test]
     fn signed_current_record_is_owned_once_without_authority() {
         let fixture = Fixture::new(0x20);
@@ -406,6 +504,18 @@ mod tests {
             auditor.audit_exact(&fixture.subject, &fixture.carriage),
             Err(WorkerV3CompilerCurrentRecordAuditErrorV1::AlreadyConsumed)
         ));
+        let bound = evidence
+            .bind_exact_compiler_execution_v1(&fixture.subject, &fixture.carriage)
+            .unwrap();
+        assert_eq!(bound.subject_sha256(), *fixture.subject.identity().sha256());
+        assert_eq!(
+            bound.carriage_sha256(),
+            *fixture.carriage.identity().as_bytes()
+        );
+        assert_ne!(bound.current_record_verification_sha256(), [0; 32]);
+        assert_ne!(bound.current_record_attestation_sha256(), [0; 32]);
+        assert!(bound.authenticates_signed_currentness_evidence());
+        assert!(!bound.grants_verification_authority());
         service.join().unwrap();
     }
 
@@ -432,6 +542,26 @@ mod tests {
         assert!(matches!(
             auditor.audit_exact(&fixture.subject, &fixture.carriage),
             Err(WorkerV3CompilerCurrentRecordAuditErrorV1::Client(_))
+        ));
+    }
+
+    #[test]
+    fn move_only_current_record_join_rejects_subject_and_carriage_substitution() {
+        let fixture = Fixture::new(0x20);
+        let substituted_subject = subject(0x21);
+        assert!(matches!(
+            direct_current_record_audit(&fixture, [0xb1; 32])
+                .bind_exact_compiler_execution_v1(&substituted_subject, &fixture.carriage),
+            Err(WorkerV3CompilerExecutionEvidenceErrorV1::RequestMismatch)
+        ));
+
+        let substituted_carriage = alternate_carriage_for_same_subject(&fixture);
+        assert!(matches!(
+            direct_current_record_audit(&fixture, [0xb2; 32])
+                .bind_exact_compiler_execution_v1(&fixture.subject, &substituted_carriage),
+            Err(WorkerV3CompilerExecutionEvidenceErrorV1::IdentityMismatch(
+                "compiler-execution carriage"
+            ))
         ));
     }
 

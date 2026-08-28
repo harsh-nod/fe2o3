@@ -32,8 +32,8 @@ const WORKGROUP_SYNC_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1: &[u8] =
 const WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1: &[u8] =
     b"FE2O3/WORKGROUP-SYNC-PROVIDER-SOURCE-CLOSURE/V1\0";
 const REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1: [u8; 32] = [
-    0x49, 0xdc, 0xd0, 0xd1, 0x18, 0x63, 0x09, 0x43, 0x73, 0x9e, 0x17, 0x78, 0x1a, 0xe5, 0x00, 0xef,
-    0xf8, 0x65, 0x34, 0x7d, 0xc8, 0xd9, 0x42, 0xa4, 0x61, 0x78, 0x13, 0x1a, 0xdf, 0x16, 0x5e, 0xa2,
+    0x58, 0xc0, 0x89, 0x1b, 0xdd, 0x97, 0xd5, 0xa4, 0x61, 0x7a, 0xab, 0x51, 0x6f, 0x11, 0xb1, 0x0c,
+    0x1d, 0xea, 0xca, 0x42, 0x47, 0xbc, 0x43, 0x77, 0xfa, 0x22, 0x20, 0xf3, 0x27, 0x93, 0x8b, 0x3d,
 ];
 
 const PROVIDER_SEMANTIC_DEFINITION_TRANSCRIPT_DOMAIN_V1: &[u8] =
@@ -1998,16 +1998,23 @@ fn reviewed_provider_source_closure_identity(
     let source_root = package_root.join("src");
     require_directory_without_symlink(&source_root, "source directory")?;
     collect_reviewed_source_files(&source_root, &mut files)?;
-    files.sort();
+    let mut reviewed_files = files
+        .into_iter()
+        .map(|file| reviewed_source_file(&package_root, &file))
+        .collect::<Result<Vec<_>, _>>()?;
+    sort_reviewed_source_files_by_relative_path(&mut reviewed_files);
 
     let mut hasher = Sha256::new();
     hasher.update(domain);
-    for file in files {
-        let (relative, bytes) = reviewed_source_file(&package_root, &file)?;
+    for (relative, bytes) in reviewed_files {
         hash_source_identity_field(&mut hasher, relative.as_bytes());
         hash_source_identity_field(&mut hasher, &bytes);
     }
     Ok(hasher.finalize().into())
+}
+
+fn sort_reviewed_source_files_by_relative_path(files: &mut [(String, Vec<u8>)]) {
+    files.sort_by(|left, right| left.0.cmp(&right.0));
 }
 
 fn reviewed_provider_source_closure_from_definition(
@@ -2426,7 +2433,8 @@ mod tests {
         reviewed_provider_source_closure_from_definition,
         reviewed_provider_source_closure_identity, reviewed_provider_source_identity_from_path,
         safe_execution_compiler_definition_path, safe_execution_provider_bound_item,
-        structural_local_definition_component_v1, validate_compiled_provider_source_hash_v1,
+        sort_reviewed_source_files_by_relative_path, structural_local_definition_component_v1,
+        validate_compiled_provider_source_hash_v1,
         validate_reviewed_fe2o3_device_provider_definition_v1,
     };
     use dialect_amdgcn::{DeviceMathDiagnosticItem, DeviceValueDiagnosticItem};
@@ -2718,6 +2726,45 @@ mod tests {
                 .unwrap(),
             digest("36349edbdabe77499ba36d983bf758f7c00e982d7fbd930397042192af1e7416")
         );
+    }
+
+    #[test]
+    fn source_closure_uses_canonical_relative_order_for_component_prefixes() {
+        let mut forward = vec![
+            ("src/group/tests.rs".to_owned(), vec![4]),
+            ("src/collective.rs".to_owned(), vec![1]),
+            ("src/group.rs".to_owned(), vec![3]),
+            ("src/collective/tests.rs".to_owned(), vec![2]),
+        ];
+        let mut reversed = forward.clone();
+        reversed.reverse();
+
+        sort_reviewed_source_files_by_relative_path(&mut forward);
+        sort_reviewed_source_files_by_relative_path(&mut reversed);
+        assert_eq!(forward, reversed);
+        assert_eq!(
+            forward
+                .iter()
+                .map(|(relative, _)| relative.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "src/collective.rs",
+                "src/collective/tests.rs",
+                "src/group.rs",
+                "src/group/tests.rs",
+            ]
+        );
+
+        let closure = reviewed_provider_source_closure_identity(
+            Path::new(super::REVIEWED_FE2O3_DEVICE_PACKAGE_ROOT),
+            WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1,
+        )
+        .unwrap();
+        assert_eq!(
+            closure,
+            digest("58c0891bdd97d5a4617aab516f11b10c1deaca4247bc4377fa2220f327938b3d")
+        );
+        assert_eq!(closure, super::REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1);
     }
 
     #[test]

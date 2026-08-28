@@ -315,6 +315,10 @@ dependencies = [
  "fe2o3-hsaco",
  "fe2o3-hsaco-finalize",
  "fe2o3-kernel-descriptor",
+ "fe2o3-kernel-ir",
+ "fe2o3-lower-mir-kernel",
+ "fe2o3-mir-model",
+ "fe2o3-pliron",
  "fe2o3-process-identity",
  "fe2o3-runtime-protocol",
  "fe2o3-rustc-invocation",
@@ -358,7 +362,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "65c35e4b699c7e15ccbe7ee35c005e4fc0a278d22238a2857e6ce2dadeda1b06"
 dependencies = [
  "cfg-if",
- "cpufeatures 0.3.1",
+ "cpufeatures 0.3.0",
  "rand_core 0.10.1",
 ]
 
@@ -413,9 +417,9 @@ dependencies = [
 
 [[package]]
 name = "cpufeatures"
-version = "0.3.1"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5ca28b0ae3115b884660db4118d803791fd6756b6e88f39c0f3f7859060d7566"
+checksum = "8b2a41393f66f16b0823bb79094d54ac5fbd34ab292ddafb9a0456ac9f87d201"
 dependencies = [
  "libc",
 ]
@@ -1007,6 +1011,7 @@ dependencies = [
  "fe2o3-runtime",
  "fe2o3-runtime-protocol",
  "fe2o3-rustc-invocation",
+ "fe2o3-verifier",
  "libc",
  "reserved-fe2o3-symbols",
  "rmpv",
@@ -1080,6 +1085,9 @@ dependencies = [
  "fe2o3-kernel-ir",
  "fe2o3-llvm-handoff",
  "fe2o3-llvm-text",
+ "fe2o3-lower-mir-kernel",
+ "fe2o3-mir-model",
+ "fe2o3-pliron",
  "object 0.39.1",
  "reserved-fe2o3-symbols",
  "rmpv",
@@ -1639,6 +1647,9 @@ dependencies = [
  "fe2o3-compiler-lineage",
  "fe2o3-contracts",
  "fe2o3-functional-proof",
+ "fe2o3-kernel-ir",
+ "fe2o3-lower-mir-kernel",
+ "fe2o3-mir-model",
  "fe2o3-pliron",
  "fe2o3-proof-contracts",
  "fe2o3-rustc-front",
@@ -2910,7 +2921,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "446ba717509524cb3f22f17ecc096f10f4822d76ab5c0b9822c5f9c284e825f4"
 dependencies = [
  "cfg-if",
- "cpufeatures 0.3.1",
+ "cpufeatures 0.3.0",
  "digest 0.11.3",
 ]
 

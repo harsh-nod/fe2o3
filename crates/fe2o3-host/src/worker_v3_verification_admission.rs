@@ -6,8 +6,14 @@ use fe2o3_artifact_transaction::{
 use fe2o3_hsaco::CodeObjectVersion;
 use fe2o3_kernel_descriptor::{KernelDescriptorV1, KernelId};
 use fe2o3_runtime_protocol::CompilerExecutionReceiptCarriageV1;
+use fe2o3_verifier::{
+    CompilerProofInputValidationErrorV3, ValidatedCompilerProofInputsV3,
+    validate_compiler_proof_inputs_v3,
+};
 use sha2::{Digest, Sha256};
 
+#[cfg(target_os = "linux")]
+use crate::compiler_execution_current_record_audit::WorkerV3CompilerCurrentRecordAuditV1;
 use crate::recovered_worker_v3_admission::WorkerV3HostLineageEvidenceV1;
 use crate::{
     CompilerGeneratedKernelExpectationV1, RecoveredWorkerV3AdmissionErrorV1,
@@ -246,6 +252,26 @@ impl<K: CompilerGeneratedKernelExpectationV1> WorkerV3VerificationRequestV1<'_, 
             .canonical_preimage()
     }
 
+    /// Independently decodes and cross-checks every exact compiler proof input retained by the
+    /// recovered capsule.
+    ///
+    /// The move-only result establishes canonical input ownership and structural MIR-to-KIR
+    /// association only. It does not authenticate Verus execution, establish compiler refinement,
+    /// or grant publication, load, or launch authority.
+    pub fn validate_compiler_proof_inputs_v3(
+        &self,
+    ) -> Result<ValidatedCompilerProofInputsV3, CompilerProofInputValidationErrorV3> {
+        let receipts = self.handoff.capsule().receipts();
+        validate_compiler_proof_inputs_v3(
+            receipts.proof_binding(),
+            receipts.semantic_mir(),
+            receipts.middle_end(),
+            receipts.kernel_ir(),
+            receipts.mir_to_kir_correspondence(),
+            receipts.formal_memory(),
+        )
+    }
+
     /// Returns the exact finalized HSACO bytes retained by the current-publication token.
     ///
     /// The host keeps that token alive for the complete verifier call and revalidates it before
@@ -345,6 +371,7 @@ pub unsafe trait WorkerV3VerifierV1<K: CompilerGeneratedKernelExpectationV1>:
 /// pinned host request and the existing promotion boundary compares the complete decision again.
 pub struct WorkerV3ProtectedVerificationEvidenceV1 {
     compiler_execution: WorkerV3CompilerExecutionVerificationV1,
+    proof_inputs: ValidatedCompilerProofInputsV3,
     verifier_measurement_sha256: [u8; 32],
     verification_transcript_sha256: [u8; 32],
     proof_executable_binding_sha256: [u8; 32],
@@ -365,6 +392,7 @@ impl WorkerV3ProtectedVerificationEvidenceV1 {
     #[allow(clippy::too_many_arguments)]
     pub const unsafe fn new(
         compiler_execution: WorkerV3CompilerExecutionVerificationV1,
+        proof_inputs: ValidatedCompilerProofInputsV3,
         verifier_measurement_sha256: [u8; 32],
         verification_transcript_sha256: [u8; 32],
         proof_executable_binding_sha256: [u8; 32],
@@ -374,6 +402,7 @@ impl WorkerV3ProtectedVerificationEvidenceV1 {
     ) -> Self {
         Self {
             compiler_execution,
+            proof_inputs,
             verifier_measurement_sha256,
             verification_transcript_sha256,
             proof_executable_binding_sha256,
@@ -466,6 +495,7 @@ where
             request.target(),
             request.code_object_version(),
             evidence.compiler_execution,
+            evidence.proof_inputs,
             evidence.verifier_measurement_sha256,
             evidence.verification_transcript_sha256,
             evidence.proof_executable_binding_sha256,
@@ -562,14 +592,16 @@ pub trait WorkerV3AuditorV1<K: CompilerGeneratedKernelExpectationV1> {
     ) -> Result<Self::Evidence, Self::Error>;
 }
 
-/// Compiler-execution result returned by a reviewed protected verifier.
+/// Move-only compiler-execution result returned by a reviewed protected verifier.
 ///
 /// The exact coordinates must come from independently authenticated protected state, not merely
 /// from copying an inert request. The final three identities bind the verifier's protected-policy
 /// comparison, exact Worker-ledger reacquisition, and external rollback-currentness decision.
-/// Public construction is descriptive and grants no authority; promotion compares every carried
-/// coordinate with the exact receipt-bearing host request and rejects zero verification identities.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// Production construction consumes the one-use signed current-record evidence after comparing
+/// every coordinate with the exact subject and carriage. The retained evidence is still
+/// authority-free until the final verifier joins protected deployment trust and all refinement
+/// receipts.
+#[derive(Debug)]
 pub struct WorkerV3CompilerExecutionVerificationV1 {
     subject_sha256: [u8; 32],
     carriage_sha256: [u8; 32],
@@ -583,14 +615,152 @@ pub struct WorkerV3CompilerExecutionVerificationV1 {
     sequence: u64,
     prior_rollback_anchor: [u8; 32],
     current_rollback_anchor: [u8; 32],
+    current_record_verification_sha256: [u8; 32],
+    current_record_attestation_sha256: [u8; 32],
     protected_policy_verification_sha256: [u8; 32],
     protected_worker_ledger_verification_sha256: [u8; 32],
     external_rollback_verification_sha256: [u8; 32],
+    _evidence: WorkerV3CompilerExecutionEvidenceV1,
+}
+
+#[derive(Debug)]
+enum WorkerV3CompilerExecutionEvidenceV1 {
+    #[cfg(target_os = "linux")]
+    CurrentRecord(WorkerV3CompilerCurrentRecordAuditV1),
+    #[cfg(feature = "worker-v3-verifier-test-support")]
+    Synthetic,
 }
 
 impl WorkerV3CompilerExecutionVerificationV1 {
+    #[cfg(target_os = "linux")]
+    pub(crate) fn from_current_record_audit(
+        subject: &InertCompilerExecutionSubjectV1,
+        carriage: &CompilerExecutionReceiptCarriageV1,
+        evidence: WorkerV3CompilerCurrentRecordAuditV1,
+    ) -> Result<Self, WorkerV3CompilerExecutionEvidenceErrorV1> {
+        if carriage.request().subject() != subject {
+            return Err(WorkerV3CompilerExecutionEvidenceErrorV1::RequestMismatch);
+        }
+        let verification = evidence.verification();
+        for (matches, field) in [
+            (
+                verification.subject_identity() == *subject.identity().sha256(),
+                "compiler-execution subject",
+            ),
+            (
+                verification.carriage_identity() == *carriage.identity().as_bytes(),
+                "compiler-execution carriage",
+            ),
+            (
+                verification.policy_identity() == *carriage.policy().identity().as_bytes(),
+                "compiler-execution policy",
+            ),
+            (
+                verification.issuer_journal_identity()
+                    == carriage.acknowledgment().issuer_journal_identity(),
+                "compiler-execution issuer journal",
+            ),
+            (
+                verification.worker_ledger_record_identity()
+                    == carriage.acknowledgment().worker_ledger_record_identity(),
+                "compiler-execution Worker ledger record",
+            ),
+            (
+                verification.sequence() == carriage.acknowledgment().sequence(),
+                "compiler-execution rollback sequence",
+            ),
+            (
+                verification.prior_rollback_anchor()
+                    == carriage.publication().receipt().prior_rollback_anchor(),
+                "compiler-execution prior rollback anchor",
+            ),
+            (
+                verification.current_rollback_anchor()
+                    == carriage.acknowledgment().current_rollback_anchor(),
+                "compiler-execution current rollback anchor",
+            ),
+        ] {
+            if !matches {
+                return Err(WorkerV3CompilerExecutionEvidenceErrorV1::IdentityMismatch(
+                    field,
+                ));
+            }
+        }
+        for (authenticated, field) in [
+            (
+                evidence.authenticates_pinned_signing_key(),
+                "pinned compiler current-record signing key",
+            ),
+            (
+                evidence.authenticates_expected_fresh_challenge(),
+                "fresh compiler current-record challenge",
+            ),
+            (
+                evidence.authenticates_external_anchor_commit(),
+                "external rollback commit",
+            ),
+            (
+                evidence.authenticates_external_rollback_currentness(),
+                "external rollback currentness",
+            ),
+        ] {
+            if !authenticated {
+                return Err(
+                    WorkerV3CompilerExecutionEvidenceErrorV1::MissingAuthenticatedEvidence(field),
+                );
+            }
+        }
+        for (identity, field) in [
+            (
+                verification.protected_policy_verification_identity(),
+                "protected compiler policy verification",
+            ),
+            (
+                verification.protected_worker_ledger_verification_identity(),
+                "protected Worker ledger verification",
+            ),
+            (
+                evidence.external_rollback_verification_identity(),
+                "external rollback verification",
+            ),
+        ] {
+            if identity == [0; 32] {
+                return Err(
+                    WorkerV3CompilerExecutionEvidenceErrorV1::MissingAuthenticatedEvidence(field),
+                );
+            }
+        }
+
+        Ok(Self {
+            subject_sha256: *subject.identity().sha256(),
+            carriage_sha256: *carriage.identity().as_bytes(),
+            policy_sha256: *carriage.policy().identity().as_bytes(),
+            issuer_journal_sha256: carriage.acknowledgment().issuer_journal_identity(),
+            compiler_occurrence_sha256: carriage.acknowledgment().compiler_occurrence_identity(),
+            receipt_sha256: *carriage.acknowledgment().receipt_identity().as_bytes(),
+            publication_sha256: *carriage.acknowledgment().publication_identity().as_bytes(),
+            acknowledgment_sha256: *carriage.acknowledgment().identity().as_bytes(),
+            worker_ledger_record_sha256: carriage.acknowledgment().worker_ledger_record_identity(),
+            sequence: carriage.acknowledgment().sequence(),
+            prior_rollback_anchor: carriage.publication().receipt().prior_rollback_anchor(),
+            current_rollback_anchor: carriage.acknowledgment().current_rollback_anchor(),
+            current_record_verification_sha256: *verification.identity().as_bytes(),
+            current_record_attestation_sha256: *evidence.attestation_identity().as_bytes(),
+            protected_policy_verification_sha256: verification
+                .protected_policy_verification_identity(),
+            protected_worker_ledger_verification_sha256: verification
+                .protected_worker_ledger_verification_identity(),
+            external_rollback_verification_sha256: evidence
+                .external_rollback_verification_identity(),
+            _evidence: WorkerV3CompilerExecutionEvidenceV1::CurrentRecord(evidence),
+        })
+    }
+
+    /// Constructs synthetic coordinates only for the explicit integration-test verifier seam.
+    #[cfg(feature = "worker-v3-verifier-test-support")]
+    #[doc(hidden)]
     #[allow(clippy::too_many_arguments)]
-    pub const fn new(
+    pub const fn synthetic_for_test_only(
         subject_sha256: [u8; 32],
         carriage_sha256: [u8; 32],
         policy_sha256: [u8; 32],
@@ -603,6 +773,8 @@ impl WorkerV3CompilerExecutionVerificationV1 {
         sequence: u64,
         prior_rollback_anchor: [u8; 32],
         current_rollback_anchor: [u8; 32],
+        current_record_verification_sha256: [u8; 32],
+        current_record_attestation_sha256: [u8; 32],
         protected_policy_verification_sha256: [u8; 32],
         protected_worker_ledger_verification_sha256: [u8; 32],
         external_rollback_verification_sha256: [u8; 32],
@@ -620,78 +792,125 @@ impl WorkerV3CompilerExecutionVerificationV1 {
             sequence,
             prior_rollback_anchor,
             current_rollback_anchor,
+            current_record_verification_sha256,
+            current_record_attestation_sha256,
             protected_policy_verification_sha256,
             protected_worker_ledger_verification_sha256,
             external_rollback_verification_sha256,
+            _evidence: WorkerV3CompilerExecutionEvidenceV1::Synthetic,
         }
     }
 
-    pub const fn subject_sha256(self) -> [u8; 32] {
+    pub const fn subject_sha256(&self) -> [u8; 32] {
         self.subject_sha256
     }
 
-    pub const fn carriage_sha256(self) -> [u8; 32] {
+    pub const fn carriage_sha256(&self) -> [u8; 32] {
         self.carriage_sha256
     }
 
-    pub const fn policy_sha256(self) -> [u8; 32] {
+    pub const fn policy_sha256(&self) -> [u8; 32] {
         self.policy_sha256
     }
 
-    pub const fn issuer_journal_sha256(self) -> [u8; 32] {
+    pub const fn issuer_journal_sha256(&self) -> [u8; 32] {
         self.issuer_journal_sha256
     }
 
-    pub const fn compiler_occurrence_sha256(self) -> [u8; 32] {
+    pub const fn compiler_occurrence_sha256(&self) -> [u8; 32] {
         self.compiler_occurrence_sha256
     }
 
-    pub const fn receipt_sha256(self) -> [u8; 32] {
+    pub const fn receipt_sha256(&self) -> [u8; 32] {
         self.receipt_sha256
     }
 
-    pub const fn publication_sha256(self) -> [u8; 32] {
+    pub const fn publication_sha256(&self) -> [u8; 32] {
         self.publication_sha256
     }
 
-    pub const fn acknowledgment_sha256(self) -> [u8; 32] {
+    pub const fn acknowledgment_sha256(&self) -> [u8; 32] {
         self.acknowledgment_sha256
     }
 
-    pub const fn worker_ledger_record_sha256(self) -> [u8; 32] {
+    pub const fn worker_ledger_record_sha256(&self) -> [u8; 32] {
         self.worker_ledger_record_sha256
     }
 
-    pub const fn sequence(self) -> u64 {
+    pub const fn sequence(&self) -> u64 {
         self.sequence
     }
 
-    pub const fn prior_rollback_anchor(self) -> [u8; 32] {
+    pub const fn prior_rollback_anchor(&self) -> [u8; 32] {
         self.prior_rollback_anchor
     }
 
-    pub const fn current_rollback_anchor(self) -> [u8; 32] {
+    pub const fn current_rollback_anchor(&self) -> [u8; 32] {
         self.current_rollback_anchor
     }
 
-    pub const fn protected_policy_verification_sha256(self) -> [u8; 32] {
+    pub const fn current_record_verification_sha256(&self) -> [u8; 32] {
+        self.current_record_verification_sha256
+    }
+
+    pub const fn current_record_attestation_sha256(&self) -> [u8; 32] {
+        self.current_record_attestation_sha256
+    }
+
+    pub const fn protected_policy_verification_sha256(&self) -> [u8; 32] {
         self.protected_policy_verification_sha256
     }
 
-    pub const fn protected_worker_ledger_verification_sha256(self) -> [u8; 32] {
+    pub const fn protected_worker_ledger_verification_sha256(&self) -> [u8; 32] {
         self.protected_worker_ledger_verification_sha256
     }
 
-    pub const fn external_rollback_verification_sha256(self) -> [u8; 32] {
+    pub const fn external_rollback_verification_sha256(&self) -> [u8; 32] {
         self.external_rollback_verification_sha256
     }
+
+    /// Reports only whether this lane owns the signed fresh-currentness evidence.
+    ///
+    /// This does not establish protected service deployment, semantic refinement, or final verifier
+    /// authority.
+    pub const fn authenticates_signed_currentness_evidence(&self) -> bool {
+        #[cfg(target_os = "linux")]
+        {
+            match &self._evidence {
+                WorkerV3CompilerExecutionEvidenceV1::CurrentRecord(evidence) => {
+                    evidence.authenticates_pinned_signing_key()
+                        && evidence.authenticates_expected_fresh_challenge()
+                        && evidence.authenticates_external_anchor_commit()
+                        && evidence.authenticates_external_rollback_currentness()
+                }
+                #[cfg(feature = "worker-v3-verifier-test-support")]
+                WorkerV3CompilerExecutionEvidenceV1::Synthetic => false,
+            }
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            false
+        }
+    }
+
+    pub const fn grants_verification_authority(&self) -> bool {
+        false
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum WorkerV3CompilerExecutionEvidenceErrorV1 {
+    RequestMismatch,
+    IdentityMismatch(&'static str),
+    MissingAuthenticatedEvidence(&'static str),
 }
 
 /// Descriptive result returned by a reviewed V3 verifier.
 ///
 /// Public construction grants no authority. Only the private promotion transition can compare
 /// every field to an admitted request and retain it as authenticated state.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Debug)]
 pub struct WorkerV3VerificationDecisionV1 {
     challenge: WorkerV3VerificationChallengeIdentityV1,
     lineage: WorkerV3HostLineageIdentityV1,
@@ -706,6 +925,7 @@ pub struct WorkerV3VerificationDecisionV1 {
     target: fe2o3_amd_target::AmdTargetId,
     code_object_version: CodeObjectVersion,
     compiler_execution: WorkerV3CompilerExecutionVerificationV1,
+    proof_inputs: WorkerV3ProofInputEvidenceV1,
     verifier_measurement_sha256: [u8; 32],
     verification_transcript_sha256: [u8; 32],
     proof_executable_binding_sha256: [u8; 32],
@@ -714,13 +934,20 @@ pub struct WorkerV3VerificationDecisionV1 {
     safety_properties: WorkerV3SafetyPropertiesV1,
 }
 
+#[derive(Debug)]
+enum WorkerV3ProofInputEvidenceV1 {
+    Validated(ValidatedCompilerProofInputsV3),
+    #[cfg(feature = "worker-v3-verifier-test-support")]
+    Synthetic,
+}
+
 impl WorkerV3VerificationDecisionV1 {
     #[allow(
         dead_code,
         reason = "reserved for the crate-owned production verifier; synthetic builds enter through the explicitly gated constructor"
     )]
     #[allow(clippy::too_many_arguments)]
-    pub(crate) const fn new(
+    pub(crate) fn new(
         challenge: WorkerV3VerificationChallengeIdentityV1,
         lineage: WorkerV3HostLineageIdentityV1,
         kernel_id: KernelId,
@@ -734,6 +961,54 @@ impl WorkerV3VerificationDecisionV1 {
         target: fe2o3_amd_target::AmdTargetId,
         code_object_version: CodeObjectVersion,
         compiler_execution: WorkerV3CompilerExecutionVerificationV1,
+        proof_inputs: ValidatedCompilerProofInputsV3,
+        verifier_measurement_sha256: [u8; 32],
+        verification_transcript_sha256: [u8; 32],
+        proof_executable_binding_sha256: [u8; 32],
+        rust_type_layout_contract_sha256: [u8; 32],
+        rust_effect_contract_sha256: [u8; 32],
+        safety_properties: WorkerV3SafetyPropertiesV1,
+    ) -> Self {
+        Self::new_with_evidence(
+            challenge,
+            lineage,
+            kernel_id,
+            marker_binding,
+            generated_host_contract,
+            capsule_sha256,
+            formal_memory_sha256,
+            proof_binding_sha256,
+            finalized_sha256,
+            finalized_length,
+            target,
+            code_object_version,
+            compiler_execution,
+            WorkerV3ProofInputEvidenceV1::Validated(proof_inputs),
+            verifier_measurement_sha256,
+            verification_transcript_sha256,
+            proof_executable_binding_sha256,
+            rust_type_layout_contract_sha256,
+            rust_effect_contract_sha256,
+            safety_properties,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn new_with_evidence(
+        challenge: WorkerV3VerificationChallengeIdentityV1,
+        lineage: WorkerV3HostLineageIdentityV1,
+        kernel_id: KernelId,
+        marker_binding: [u8; 32],
+        generated_host_contract: [u8; 32],
+        capsule_sha256: [u8; 32],
+        formal_memory_sha256: [u8; 32],
+        proof_binding_sha256: [u8; 32],
+        finalized_sha256: [u8; 32],
+        finalized_length: u64,
+        target: fe2o3_amd_target::AmdTargetId,
+        code_object_version: CodeObjectVersion,
+        compiler_execution: WorkerV3CompilerExecutionVerificationV1,
+        proof_inputs: WorkerV3ProofInputEvidenceV1,
         verifier_measurement_sha256: [u8; 32],
         verification_transcript_sha256: [u8; 32],
         proof_executable_binding_sha256: [u8; 32],
@@ -755,6 +1030,7 @@ impl WorkerV3VerificationDecisionV1 {
             target,
             code_object_version,
             compiler_execution,
+            proof_inputs,
             verifier_measurement_sha256,
             verification_transcript_sha256,
             proof_executable_binding_sha256,
@@ -768,7 +1044,7 @@ impl WorkerV3VerificationDecisionV1 {
     #[cfg(feature = "worker-v3-verifier-test-support")]
     #[doc(hidden)]
     #[allow(clippy::too_many_arguments)]
-    pub const fn synthetic_for_test_only(
+    pub fn synthetic_for_test_only(
         challenge: WorkerV3VerificationChallengeIdentityV1,
         lineage: WorkerV3HostLineageIdentityV1,
         kernel_id: KernelId,
@@ -789,7 +1065,7 @@ impl WorkerV3VerificationDecisionV1 {
         rust_effect_contract_sha256: [u8; 32],
         safety_properties: WorkerV3SafetyPropertiesV1,
     ) -> Self {
-        Self::new(
+        Self::new_with_evidence(
             challenge,
             lineage,
             kernel_id,
@@ -803,6 +1079,7 @@ impl WorkerV3VerificationDecisionV1 {
             target,
             code_object_version,
             compiler_execution,
+            WorkerV3ProofInputEvidenceV1::Synthetic,
             verifier_measurement_sha256,
             verification_transcript_sha256,
             proof_executable_binding_sha256,
@@ -832,17 +1109,31 @@ impl WorkerV3VerificationDecisionV1 {
         self.finalized_length
     }
 
-    pub const fn compiler_execution(&self) -> WorkerV3CompilerExecutionVerificationV1 {
-        self.compiler_execution
+    pub const fn compiler_execution(&self) -> &WorkerV3CompilerExecutionVerificationV1 {
+        &self.compiler_execution
+    }
+
+    /// Returns exact decoded compiler proof inputs for a default-build production decision.
+    ///
+    /// The explicit synthetic test feature returns `None`; that lane never represents decoded
+    /// proof-input authority.
+    pub const fn validated_compiler_proof_inputs(&self) -> Option<&ValidatedCompilerProofInputsV3> {
+        match &self.proof_inputs {
+            WorkerV3ProofInputEvidenceV1::Validated(inputs) => Some(inputs),
+            #[cfg(feature = "worker-v3-verifier-test-support")]
+            WorkerV3ProofInputEvidenceV1::Synthetic => None,
+        }
     }
 }
 
 /// Authenticated compiler/Verus state for one exact V3 executable.
 ///
 /// This value is linear and still grants no load or launch authority. A later runtime-specific
-/// transition must bind it to a checked live device and a retained current-publication token.
+/// transition must bind it to a checked live device. The exact current-publication token acquired
+/// before verifier entry remains owned here until the complete runtime authority is consumed.
 pub struct AuthenticatedWorkerV3ExecutableV1<K> {
     admission: RecoveredWorkerV3PinnedDescriptorV1,
+    current: DurableCurrentLinkPublicationTokenV1,
     verification: WorkerV3VerificationDecisionV1,
     _marker: PhantomData<fn() -> K>,
 }
@@ -883,9 +1174,9 @@ impl<K: CompilerGeneratedKernelExpectationV1> AuthenticatedWorkerV3ExecutableV1<
             verification.map_err(WorkerV3VerificationAuthenticationErrorV1::Verifier)?;
         validate_decision::<K>(&request, &verification)
             .map_err(WorkerV3VerificationAuthenticationErrorV1::Decision)?;
-        drop(current);
         Ok(Self {
             admission,
+            current,
             verification,
             _marker: PhantomData,
         })
@@ -904,7 +1195,8 @@ impl<K: CompilerGeneratedKernelExpectationV1> AuthenticatedWorkerV3ExecutableV1<
     }
 
     pub fn revalidate_currentness(&self) -> Result<(), RecoveredWorkerV3AdmissionErrorV1> {
-        self.admission.revalidate_currentness()
+        self.admission
+            .revalidate_retained_currentness_token(&self.current)
     }
 
     pub fn authorize_hsa_load<A: crate::ReviewedHsaExecutableLifecycleAdapterV1>(
@@ -932,6 +1224,10 @@ impl<K: CompilerGeneratedKernelExpectationV1> AuthenticatedWorkerV3ExecutableV1<
 
     pub(crate) const fn admission(&self) -> &RecoveredWorkerV3PinnedDescriptorV1 {
         &self.admission
+    }
+
+    pub(crate) const fn current_publication_token(&self) -> &DurableCurrentLinkPublicationTokenV1 {
+        &self.current
     }
 }
 
@@ -1170,6 +1466,18 @@ fn validate_decision<K: CompilerGeneratedKernelExpectationV1>(
         (
             decision
                 .compiler_execution
+                .current_record_verification_sha256,
+            "compiler current-record verification",
+        ),
+        (
+            decision
+                .compiler_execution
+                .current_record_attestation_sha256,
+            "compiler current-record attestation",
+        ),
+        (
+            decision
+                .compiler_execution
                 .protected_policy_verification_sha256,
             "protected compiler policy verification",
         ),
@@ -1211,6 +1519,62 @@ fn validate_decision<K: CompilerGeneratedKernelExpectationV1>(
             ));
         }
     }
+    validate_decision_proof_inputs(request, decision)?;
+    Ok(())
+}
+
+fn validate_decision_proof_inputs<K: CompilerGeneratedKernelExpectationV1>(
+    request: &WorkerV3VerificationRequestV1<'_, K>,
+    decision: &WorkerV3VerificationDecisionV1,
+) -> Result<(), WorkerV3VerificationDecisionErrorV1> {
+    #[cfg(not(feature = "worker-v3-verifier-test-support"))]
+    let WorkerV3ProofInputEvidenceV1::Validated(inputs) = &decision.proof_inputs;
+    #[cfg(feature = "worker-v3-verifier-test-support")]
+    let inputs = match &decision.proof_inputs {
+        WorkerV3ProofInputEvidenceV1::Validated(inputs) => inputs,
+        WorkerV3ProofInputEvidenceV1::Synthetic => return Ok(()),
+    };
+    let receipts = request.handoff.capsule().receipts();
+    for (matches, field) in [
+        (
+            inputs.association().canonical_bytes() == receipts.proof_binding().canonical_preimage(),
+            "proof-binding association",
+        ),
+        (
+            inputs.semantic_mir().canonical_encoding()
+                == receipts.semantic_mir().canonical_preimage(),
+            "semantic MIR",
+        ),
+        (
+            inputs.middle_end().canonical_bytes() == receipts.middle_end().canonical_preimage(),
+            "middle-end evidence",
+        ),
+        (
+            inputs.kernel_ir().canonical_bytes() == receipts.kernel_ir().canonical_preimage(),
+            "Kernel IR",
+        ),
+        (
+            inputs.correspondence().canonical_bytes()
+                == receipts.mir_to_kir_correspondence().canonical_preimage(),
+            "MIR-to-KIR correspondence",
+        ),
+        (
+            inputs.formal_memory().canonical_bytes()
+                == receipts.formal_memory().canonical_preimage(),
+            "formal-memory admission",
+        ),
+    ] {
+        if !matches {
+            return Err(WorkerV3VerificationDecisionErrorV1::ProofInputMismatch(
+                field,
+            ));
+        }
+    }
+    if inputs.receipt_identity() != receipts.proof_binding().identity() {
+        return Err(WorkerV3VerificationDecisionErrorV1::ProofInputMismatch(
+            "proof-binding receipt identity",
+        ));
+    }
     Ok(())
 }
 
@@ -1239,6 +1603,7 @@ pub enum WorkerV3VerificationDecisionErrorV1 {
     IdentityMismatch(&'static str),
     ZeroAuthenticatedIdentity(&'static str),
     MissingSafetyProperty(WorkerV3SafetyPropertyV1),
+    ProofInputMismatch(&'static str),
 }
 
 impl<E: fmt::Display> fmt::Display for WorkerV3VerificationAuthenticationErrorV1<E> {
@@ -1268,6 +1633,34 @@ impl fmt::Display for WorkerV3VerificationDecisionErrorV1 {
             }
             Self::MissingSafetyProperty(property) => {
                 write!(formatter, "missing safety property {property:?}")
+            }
+            Self::ProofInputMismatch(field) => {
+                write!(
+                    formatter,
+                    "validated compiler {field} differs from the exact request"
+                )
+            }
+        }
+    }
+}
+
+impl fmt::Display for WorkerV3CompilerExecutionEvidenceErrorV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::RequestMismatch => formatter.write_str(
+                "compiler current-record evidence subject differs from its receipt carriage",
+            ),
+            Self::IdentityMismatch(field) => {
+                write!(
+                    formatter,
+                    "compiler current-record {field} identity mismatch"
+                )
+            }
+            Self::MissingAuthenticatedEvidence(field) => {
+                write!(
+                    formatter,
+                    "compiler current-record {field} evidence is missing"
+                )
             }
         }
     }
@@ -1306,6 +1699,8 @@ where
 }
 
 impl Error for WorkerV3VerificationDecisionErrorV1 {}
+
+impl Error for WorkerV3CompilerExecutionEvidenceErrorV1 {}
 
 impl<E> Error for WorkerV3VerificationAuditErrorV1<E>
 where

@@ -58,6 +58,18 @@ use crate::rustc_semantic_plan_v1::{
 use crate::trusted_device_items::{self, TrustedDeviceItem};
 
 const IDENTITY_INVENTORY_DOMAIN_V1: &[u8] = b"fe2o3/semantic-mir/rustc-identity-inventory/v1";
+#[cfg(test)]
+const PRODUCTION_COMPILER_INTRINSIC_DOMAIN_V1: &[u8] =
+    b"fe2o3/semantic-mir/production-compiler-intrinsic/v1";
+const PRODUCTION_COMPILER_INTRINSIC_DOMAIN_V2: &[u8] =
+    b"fe2o3/semantic-mir/production-compiler-intrinsic/v2";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TerminalIdentitySchemaV1 {
+    #[cfg(test)]
+    IndependentV1,
+    CombinedV2,
+}
 
 #[derive(Debug)]
 pub(crate) enum ProductionSemanticImportErrorV1 {
@@ -444,11 +456,13 @@ fn construct_complete_request_v1<'tcx>(
     {
         let operation =
             terminal_operation_v1(tcx, terminal.instance, terminal.expansion, abi, &types)?;
-        let mut digest =
-            SemanticIdentityDigestV1::new(b"fe2o3/semantic-mir/production-compiler-intrinsic/v1");
+        let mut digest = SemanticIdentityDigestV1::new(PRODUCTION_COMPILER_INTRINSIC_DOMAIN_V2);
         digest.field(terminal.identities.function().as_bytes());
         digest.field(abi.identity().as_bytes());
-        digest.field(&[terminal_operation_tag_v1(terminal.expansion)]);
+        digest.field(&[terminal_operation_tag_for_schema_v1(
+            terminal.expansion,
+            TerminalIdentitySchemaV1::CombinedV2,
+        )]);
         digest.field(
             &u32::try_from(index)
                 .map_err(|_| ProductionSemanticImportErrorV1::RootIdentityMismatch)?
@@ -3368,8 +3382,17 @@ fn pointer_pointee_v1(
     Ok(pointer.pointee())
 }
 
+#[cfg(test)]
+// Frozen calculator for the independently published BF16 and pipeline V1 histories.
 const fn terminal_operation_tag_v1(
     expansion: crate::production_semantic_terminal_v1::ProductionTerminalExpansionV1,
+) -> u8 {
+    terminal_operation_tag_for_schema_v1(expansion, TerminalIdentitySchemaV1::IndependentV1)
+}
+
+const fn terminal_operation_tag_for_schema_v1(
+    expansion: crate::production_semantic_terminal_v1::ProductionTerminalExpansionV1,
+    schema: TerminalIdentitySchemaV1,
 ) -> u8 {
     use crate::production_semantic_terminal_v1::ProductionTerminalExpansionV1;
     match expansion {
@@ -3484,7 +3507,12 @@ const fn terminal_operation_tag_v1(
         ProductionTerminalExpansionV1::WorkgroupPipelineDiscard => 98,
         ProductionTerminalExpansionV1::WorkgroupPipelineRelease => 99,
         ProductionTerminalExpansionV1::Bf16Conversion(conversion) => {
-            100 + match conversion {
+            let base = match schema {
+                #[cfg(test)]
+                TerminalIdentitySchemaV1::IndependentV1 => 91,
+                TerminalIdentitySchemaV1::CombinedV2 => 100,
+            };
+            base + match conversion {
                 crate::production_semantic_terminal_v1::ProductionBf16ConversionV1::FromBits => 0,
                 crate::production_semantic_terminal_v1::ProductionBf16ConversionV1::ToBits => 1,
                 crate::production_semantic_terminal_v1::ProductionBf16ConversionV1::FromF32RoundTiesEven => 2,
@@ -3693,5 +3721,60 @@ mod tests {
                 maximum: 4,
             })
         ));
+    }
+
+    #[test]
+    fn terminal_operation_identity_preserves_independent_histories_and_versions_combined_use() {
+        use crate::production_semantic_terminal_v1::{
+            ProductionBf16ConversionV1, ProductionTerminalExpansionV1,
+        };
+
+        let pipeline = [
+            ProductionTerminalExpansionV1::WorkgroupPipelineCurrent,
+            ProductionTerminalExpansionV1::WorkgroupPipelineStage,
+            ProductionTerminalExpansionV1::WorkgroupPipelineWrite,
+            ProductionTerminalExpansionV1::WorkgroupPipelineCommit,
+            ProductionTerminalExpansionV1::WorkgroupPipelineWait,
+            ProductionTerminalExpansionV1::WorkgroupPipelineConsume,
+            ProductionTerminalExpansionV1::WorkgroupPipelineRead,
+            ProductionTerminalExpansionV1::WorkgroupPipelineDiscard,
+            ProductionTerminalExpansionV1::WorkgroupPipelineRelease,
+        ];
+        assert_eq!(
+            pipeline.map(terminal_operation_tag_v1),
+            [91, 92, 93, 94, 95, 96, 97, 98, 99]
+        );
+        let bf16 = [
+            ProductionBf16ConversionV1::FromBits,
+            ProductionBf16ConversionV1::ToBits,
+            ProductionBf16ConversionV1::FromF32RoundTiesEven,
+            ProductionBf16ConversionV1::ToF32,
+        ];
+        assert_eq!(
+            bf16.map(|conversion| terminal_operation_tag_v1(
+                ProductionTerminalExpansionV1::Bf16Conversion(conversion),
+            )),
+            [91, 92, 93, 94]
+        );
+
+        let combined_schema = TerminalIdentitySchemaV1::CombinedV2;
+        assert_eq!(combined_schema, TerminalIdentitySchemaV1::CombinedV2);
+        assert_ne!(
+            PRODUCTION_COMPILER_INTRINSIC_DOMAIN_V1,
+            PRODUCTION_COMPILER_INTRINSIC_DOMAIN_V2
+        );
+        assert_eq!(
+            pipeline.map(|expansion| {
+                terminal_operation_tag_for_schema_v1(expansion, combined_schema)
+            }),
+            [91, 92, 93, 94, 95, 96, 97, 98, 99]
+        );
+        assert_eq!(
+            bf16.map(|conversion| terminal_operation_tag_for_schema_v1(
+                ProductionTerminalExpansionV1::Bf16Conversion(conversion),
+                combined_schema,
+            )),
+            [100, 101, 102, 103]
+        );
     }
 }

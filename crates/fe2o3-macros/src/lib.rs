@@ -5453,10 +5453,10 @@ mod tests {
     fn mapped_worker_v3_dispatch_generates_only_the_exact_kfd_adapter() {
         let options = parse_kernel_options(quote!(typed)).unwrap();
         let input: ItemFn = parse_quote! {
-            pub fn swiglu(
-                gate: &[u16],
-                up: &[u16],
-                output: DisjointSlice<u16, Blocked<Index1D, 1, 8>>,
+            pub fn mapped_blocked_transform(
+                left: &[u16],
+                right: &[u16],
+                destination: DisjointSlice<u16, Blocked<Index1D, 1, 8>>,
             ) {}
         };
         let model = model_general_typed_signature_v1(&input, &options, [0x36; 32]).unwrap();

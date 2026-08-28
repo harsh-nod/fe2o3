@@ -57,9 +57,20 @@ impl VerifiedCanonicalKernelIrV5 {
     pub fn from_canonical_bytes(
         canonical_bytes: Vec<u8>,
     ) -> Result<Self, VerifiedCanonicalKernelIrErrorV5> {
+        Self::from_canonical_bytes_with_module(canonical_bytes).map(|(owner, _)| owner)
+    }
+
+    /// Validates exact canonical V5 bytes once and returns both their move-only
+    /// owner and the same semantically verified decoded module.
+    ///
+    /// This avoids a second full decode for consumers that must inspect the
+    /// verified module while retaining custody of its exact canonical bytes.
+    pub fn from_canonical_bytes_with_module(
+        canonical_bytes: Vec<u8>,
+    ) -> Result<(Self, Module), VerifiedCanonicalKernelIrErrorV5> {
         let decoded = decode_exact_v5(&canonical_bytes)?;
         verify_module(&decoded).map_err(VerifiedCanonicalKernelIrErrorV5::Verification)?;
-        Ok(Self::from_validated_bytes(canonical_bytes))
+        Ok((Self::from_validated_bytes(canonical_bytes), decoded))
     }
 
     pub fn canonical_bytes(&self) -> &[u8] {
@@ -199,6 +210,14 @@ mod tests {
         let recovered =
             VerifiedCanonicalKernelIrV5::from_canonical_bytes(first.canonical_bytes().to_vec())
                 .unwrap();
+        assert_eq!(recovered.canonical_bytes(), first.canonical_bytes());
+        assert_eq!(recovered.identity(), first.identity());
+
+        let (recovered, module) = VerifiedCanonicalKernelIrV5::from_canonical_bytes_with_module(
+            first.canonical_bytes().to_vec(),
+        )
+        .unwrap();
+        assert_eq!(module, fixture("module"));
         assert_eq!(recovered.canonical_bytes(), first.canonical_bytes());
         assert_eq!(recovered.identity(), first.identity());
     }

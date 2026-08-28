@@ -1,0 +1,5 @@
+error[E0599]: no method named `current_publication_token` found for reference `&AuthenticatedWorkerV3ExecutableV1<K>` in the current scope
+ --> tests/ui/worker_v3_verification_admission/currentness_token_is_unavailable.rs:4:19
+  |
+4 |     let _ = value.current_publication_token();
+  |                   ^^^^^^^^^^^^^^^^^^^^^^^^^ method not found in `&AuthenticatedWorkerV3ExecutableV1<K>`

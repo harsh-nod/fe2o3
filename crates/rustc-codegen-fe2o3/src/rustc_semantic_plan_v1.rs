@@ -45,11 +45,20 @@ use crate::rustc_semantic_adapter_v1::{
     rustc_semantic_layout_identity_v1, rustc_type_identity_v1, rustc_type_layout_sha256_v1,
 };
 
+#[cfg(test)]
 const PREFLIGHT_PLAN_DOMAIN_V1: &[u8] = b"fe2o3/semantic-mir/rustc-preflight-plan/v1";
+const PREFLIGHT_PLAN_DOMAIN_V2: &[u8] = b"fe2o3/semantic-mir/rustc-preflight-plan/v2";
 const COMPILER_INTRINSIC_DEFINITION_DOMAIN_V1: &[u8] =
     b"fe2o3/semantic-mir/compiler-intrinsic-definition/v1";
 const MAX_DIAGNOSTIC_COMPONENT_CHARS_V1: usize = 512;
 const MAX_MACRO_EXPANSION_DEPTH_V1: usize = 256;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TerminalIdentitySchemaV1 {
+    #[cfg(test)]
+    IndependentV1,
+    CombinedV2,
+}
 
 #[derive(Clone, Debug)]
 pub(crate) struct RetainedSemanticFunctionProducerV1<'tcx> {
@@ -2636,7 +2645,7 @@ fn preflight_plan_identity_and_transcript_v1<'tcx>(
     tcx: TyCtxt<'tcx>,
 ) -> ([u8; 32], Box<[u8]>) {
     let mut digest =
-        SemanticIdentityDigestV1::new_with_canonical_transcript(PREFLIGHT_PLAN_DOMAIN_V1);
+        SemanticIdentityDigestV1::new_with_canonical_transcript(PREFLIGHT_PLAN_DOMAIN_V2);
     digest.field(target.identity().as_bytes());
     digest.field(&identity_inventory_sha256);
     for cardinality in [
@@ -2695,7 +2704,10 @@ fn preflight_plan_identity_and_transcript_v1<'tcx>(
         digest.field(terminal.identities.monomorphization().as_bytes());
         digest.field(terminal.identities.generic_type_arguments().as_bytes());
         digest.field(terminal.identities.const_generic_arguments().as_bytes());
-        digest.field(&[terminal_expansion_tag_v1(terminal.expansion)]);
+        digest.field(&[terminal_expansion_tag_for_schema_v1(
+            terminal.expansion,
+            TerminalIdentitySchemaV1::CombinedV2,
+        )]);
         digest.field(&terminal.abi.rustc_source_signature_sha256);
         digest.field(&terminal.abi.rustc_fn_abi_sha256);
         digest_source_producer_v1(&mut digest, terminal.source);
@@ -2741,7 +2753,10 @@ fn preflight_plan_identity_and_transcript_v1<'tcx>(
     for recipe in terminal_expansions {
         digest.field(&recipe.caller.index().to_le_bytes());
         digest.field(&recipe.block.to_le_bytes());
-        digest.field(&[terminal_expansion_tag_v1(recipe.expansion)]);
+        digest.field(&[terminal_expansion_tag_for_schema_v1(
+            recipe.expansion,
+            TerminalIdentitySchemaV1::CombinedV2,
+        )]);
         digest.field(&recipe.arguments.to_le_bytes());
         digest.field(recipe.identities.function().as_bytes());
         digest.field(recipe.identities.item_definition().as_bytes());
@@ -2875,7 +2890,16 @@ const fn function_role_tag_v1(role: CollectedFunctionRole) -> u8 {
     }
 }
 
+#[cfg(test)]
+// Frozen calculator for the independently published BF16 and pipeline V1 histories.
 const fn terminal_expansion_tag_v1(expansion: ProductionTerminalExpansionV1) -> u8 {
+    terminal_expansion_tag_for_schema_v1(expansion, TerminalIdentitySchemaV1::IndependentV1)
+}
+
+const fn terminal_expansion_tag_for_schema_v1(
+    expansion: ProductionTerminalExpansionV1,
+    schema: TerminalIdentitySchemaV1,
+) -> u8 {
     match expansion {
         ProductionTerminalExpansionV1::ThreadIndex(SemanticAxisV1::X) => 13,
         ProductionTerminalExpansionV1::ThreadIndex(SemanticAxisV1::Y) => 14,
@@ -2964,7 +2988,12 @@ const fn terminal_expansion_tag_v1(expansion: ProductionTerminalExpansionV1) -> 
         ProductionTerminalExpansionV1::WorkgroupPipelineDiscard => 98,
         ProductionTerminalExpansionV1::WorkgroupPipelineRelease => 99,
         ProductionTerminalExpansionV1::Bf16Conversion(conversion) => {
-            100 + match conversion {
+            let base = match schema {
+                #[cfg(test)]
+                TerminalIdentitySchemaV1::IndependentV1 => 91,
+                TerminalIdentitySchemaV1::CombinedV2 => 100,
+            };
+            base + match conversion {
                 crate::production_semantic_terminal_v1::ProductionBf16ConversionV1::FromBits => 0,
                 crate::production_semantic_terminal_v1::ProductionBf16ConversionV1::ToBits => 1,
                 crate::production_semantic_terminal_v1::ProductionBf16ConversionV1::FromF32RoundTiesEven => 2,
@@ -3151,6 +3180,44 @@ mod tests {
                     crate::production_semantic_terminal_v1::ProductionBf16ConversionV1::ToF32,
                 )),
             ],
+            [91, 92, 93, 94]
+        );
+        let pipeline = [
+            ProductionTerminalExpansionV1::WorkgroupPipelineCurrent,
+            ProductionTerminalExpansionV1::WorkgroupPipelineStage,
+            ProductionTerminalExpansionV1::WorkgroupPipelineWrite,
+            ProductionTerminalExpansionV1::WorkgroupPipelineCommit,
+            ProductionTerminalExpansionV1::WorkgroupPipelineWait,
+            ProductionTerminalExpansionV1::WorkgroupPipelineConsume,
+            ProductionTerminalExpansionV1::WorkgroupPipelineRead,
+            ProductionTerminalExpansionV1::WorkgroupPipelineDiscard,
+            ProductionTerminalExpansionV1::WorkgroupPipelineRelease,
+        ];
+        assert_eq!(
+            pipeline.map(terminal_expansion_tag_v1),
+            [91, 92, 93, 94, 95, 96, 97, 98, 99]
+        );
+
+        let combined_schema = TerminalIdentitySchemaV1::CombinedV2;
+        assert_eq!(combined_schema, TerminalIdentitySchemaV1::CombinedV2);
+        assert_ne!(PREFLIGHT_PLAN_DOMAIN_V1, PREFLIGHT_PLAN_DOMAIN_V2);
+        assert_eq!(
+            pipeline.map(|expansion| {
+                terminal_expansion_tag_for_schema_v1(expansion, combined_schema)
+            }),
+            [91, 92, 93, 94, 95, 96, 97, 98, 99]
+        );
+        assert_eq!(
+            [
+                crate::production_semantic_terminal_v1::ProductionBf16ConversionV1::FromBits,
+                crate::production_semantic_terminal_v1::ProductionBf16ConversionV1::ToBits,
+                crate::production_semantic_terminal_v1::ProductionBf16ConversionV1::FromF32RoundTiesEven,
+                crate::production_semantic_terminal_v1::ProductionBf16ConversionV1::ToF32,
+            ]
+            .map(|conversion| terminal_expansion_tag_for_schema_v1(
+                ProductionTerminalExpansionV1::Bf16Conversion(conversion),
+                combined_schema,
+            )),
             [100, 101, 102, 103]
         );
     }

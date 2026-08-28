@@ -20,7 +20,9 @@ use std::{
 use ed25519_dalek::SigningKey;
 use fe2o3_amd_target::AmdTargetId;
 use fe2o3_artifact_transaction::{
-    BuildAttempt, InertCompilerExecutionSubjectV1, WorkerV3LoadReadinessReceiptV1,
+    BuildAttempt, DurablePublishedClaimReacquisitionErrorV3, DurablePublishedHsacoClaimV3,
+    InertCompilerExecutionSubjectV1, WorkerV3LoadReadinessReceiptV1,
+    reacquire_current_hsaco_publication_lease_v3,
     retire_worker_v3_publication_intent_after_load_readiness_v1,
 };
 use fe2o3_artifacts::{
@@ -286,6 +288,8 @@ enum ReviewedTestWorkerV3VerifierFault {
     Sequence,
     PriorRollbackAnchor,
     CurrentRollbackAnchor,
+    ZeroCurrentRecordVerification,
+    ZeroCurrentRecordAttestation,
     ZeroProtectedPolicyVerification,
     ZeroProtectedWorkerLedgerVerification,
     ZeroExternalRollbackVerification,
@@ -293,6 +297,12 @@ enum ReviewedTestWorkerV3VerifierFault {
 
 struct ReviewedTestWorkerV3Verifier {
     fault: ReviewedTestWorkerV3VerifierFault,
+}
+
+struct CurrentnessProbingWorkerV3Verifier {
+    output_dir: PathBuf,
+    claim: DurablePublishedHsacoClaimV3,
+    observed_busy: bool,
 }
 
 struct ReviewedTestWorkerV3Auditor;
@@ -355,6 +365,12 @@ where
             capsule.receipts().proof_binding().canonical_preimage(),
             request.proof_binding_receipt_bytes()
         );
+        let proof_inputs = request.validate_compiler_proof_inputs_v3().unwrap();
+        assert!(proof_inputs.has_exact_decoded_input_association());
+        assert!(proof_inputs.has_structural_mir_to_kir_correspondence());
+        assert!(!proof_inputs.authenticates_verus_execution());
+        assert!(!proof_inputs.establishes_compiler_refinement());
+        assert!(!proof_inputs.grants_runtime_authority());
         assert_eq!(
             request
                 .compiler_execution_receipt_carriage()
@@ -385,6 +401,8 @@ where
         let mut sequence = request.compiler_execution_sequence();
         let mut prior_rollback = request.compiler_execution_prior_rollback_anchor();
         let mut current_rollback = request.compiler_execution_current_rollback_anchor();
+        let mut current_record_verification = [0xd4; 32];
+        let mut current_record_attestation = [0xd5; 32];
         let mut protected_policy_verification = [0xd1; 32];
         let mut protected_worker_ledger_verification = [0xd2; 32];
         let mut external_rollback_verification = [0xd3; 32];
@@ -409,6 +427,12 @@ where
             ReviewedTestWorkerV3VerifierFault::CurrentRollbackAnchor => {
                 current_rollback[0] ^= 0xff;
             }
+            ReviewedTestWorkerV3VerifierFault::ZeroCurrentRecordVerification => {
+                current_record_verification = [0; 32];
+            }
+            ReviewedTestWorkerV3VerifierFault::ZeroCurrentRecordAttestation => {
+                current_record_attestation = [0; 32];
+            }
             ReviewedTestWorkerV3VerifierFault::ZeroProtectedPolicyVerification => {
                 protected_policy_verification = [0; 32];
             }
@@ -419,7 +443,7 @@ where
                 external_rollback_verification = [0; 32];
             }
         }
-        let compiler_execution = WorkerV3CompilerExecutionVerificationV1::new(
+        let compiler_execution = WorkerV3CompilerExecutionVerificationV1::synthetic_for_test_only(
             subject,
             carriage,
             policy,
@@ -432,6 +456,8 @@ where
             sequence,
             prior_rollback,
             current_rollback,
+            current_record_verification,
+            current_record_attestation,
             protected_policy_verification,
             protected_worker_ledger_verification,
             external_rollback_verification,
@@ -493,7 +519,7 @@ where
                 verification_transcript = [0; 32];
             }
         }
-        let compiler_execution = WorkerV3CompilerExecutionVerificationV1::new(
+        let compiler_execution = WorkerV3CompilerExecutionVerificationV1::synthetic_for_test_only(
             subject,
             request.compiler_execution_carriage_sha256(),
             request.compiler_execution_policy_sha256(),
@@ -509,12 +535,19 @@ where
             [0xd1; 32],
             [0xd2; 32],
             [0xd3; 32],
+            [0xd4; 32],
+            [0xd5; 32],
         );
+        let proof_inputs = request
+            .validate_compiler_proof_inputs_v3()
+            .expect("the integration fixture carries canonical compiler proof inputs");
         // SAFETY: this test-only backend deliberately supplies complete synthetic identities so
-        // the sealed adapter's exact mapping and fail-closed validation can be exercised.
+        // the sealed adapter's exact mapping and fail-closed validation can be exercised. The
+        // proof-input owner was decoded from the exact borrowed request above.
         Ok(unsafe {
             WorkerV3ProtectedVerificationEvidenceV1::new(
                 compiler_execution,
+                proof_inputs,
                 [0xc1; 32],
                 verification_transcript,
                 [0xc3; 32],
@@ -523,6 +556,33 @@ where
                 WorkerV3SafetyPropertiesV1::required(),
             )
         })
+    }
+}
+
+// SAFETY: this test-only protected backend probes the cooperative publication lock before
+// delegating to the complete protected-evidence fixture above.
+unsafe impl<K> WorkerV3ProtectedVerifierBackendV1<K> for CurrentnessProbingWorkerV3Verifier
+where
+    K: CompilerGeneratedKernelExpectationV1,
+{
+    type Error = Infallible;
+
+    unsafe fn verify_protected(
+        &mut self,
+        request: &WorkerV3VerificationRequestV1<'_, K>,
+    ) -> Result<WorkerV3ProtectedVerificationEvidenceV1, Self::Error> {
+        self.observed_busy = matches!(
+            reacquire_current_hsaco_publication_lease_v3(&self.output_dir, &self.claim),
+            Err(DurablePublishedClaimReacquisitionErrorV3::Busy)
+        );
+        assert!(self.observed_busy);
+        // SAFETY: both implementations satisfy the same test-only protected-backend contract.
+        unsafe {
+            ReviewedTestProtectedVerifier {
+                fault: ReviewedTestProtectedVerifierFault::None,
+            }
+            .verify_protected(request)
+        }
     }
 }
 
@@ -1660,6 +1720,37 @@ fn protected_verifier_adapter_rejects_substituted_and_zero_evidence() {
 }
 
 #[test]
+fn authenticated_v3_executable_retains_verifier_entry_currentness_until_drop() {
+    let (directory, recovered) = recovered_host_fixture();
+    let claim = recovered.wire().published_claim().clone();
+    let admitted =
+        admit_recovered_worker_v3_descriptor_v1(recovered, KernelId::from_bytes([0xa1; 32]))
+            .unwrap();
+    let mut verifier =
+        WorkerV3ProtectedVerifierAdapterV1::new(CurrentnessProbingWorkerV3Verifier {
+            output_dir: directory.0.clone(),
+            claim: claim.clone(),
+            observed_busy: false,
+        });
+    let authenticated = AuthenticatedWorkerV3ExecutableV1::<WorkerV3VecAddMarker>::authenticate(
+        admitted,
+        &mut verifier,
+    )
+    .unwrap();
+    let verifier = verifier.into_inner();
+    assert!(verifier.observed_busy);
+    authenticated.revalidate_currentness().unwrap();
+
+    assert!(matches!(
+        reacquire_current_hsaco_publication_lease_v3(&directory.0, &claim),
+        Err(DurablePublishedClaimReacquisitionErrorV3::Busy)
+    ));
+
+    drop(authenticated);
+    reacquire_current_hsaco_publication_lease_v3(&directory.0, &claim).unwrap();
+}
+
+#[test]
 fn v3_verification_rejects_a_substituted_finalized_hsaco_identity() {
     let (_directory, recovered) = recovered_host_fixture();
     let observed = application_handoff_observed_context_fixture_v1("gfx942:xnack-");
@@ -1746,6 +1837,18 @@ fn v3_verification_rejects_every_compiler_execution_substitution_and_missing_aut
             ReviewedTestWorkerV3VerifierFault::CurrentRollbackAnchor,
             WorkerV3VerificationDecisionErrorV1::IdentityMismatch(
                 "compiler-execution current rollback anchor",
+            ),
+        ),
+        (
+            ReviewedTestWorkerV3VerifierFault::ZeroCurrentRecordVerification,
+            WorkerV3VerificationDecisionErrorV1::ZeroAuthenticatedIdentity(
+                "compiler current-record verification",
+            ),
+        ),
+        (
+            ReviewedTestWorkerV3VerifierFault::ZeroCurrentRecordAttestation,
+            WorkerV3VerificationDecisionErrorV1::ZeroAuthenticatedIdentity(
+                "compiler current-record attestation",
             ),
         ),
         (

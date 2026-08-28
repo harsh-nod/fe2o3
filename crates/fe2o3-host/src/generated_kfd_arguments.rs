@@ -46,9 +46,9 @@ pub unsafe trait CompilerGeneratedKfdArguments<'allocation, K: CompilerGenerated
 impl<K: CompilerGeneratedKernelExpectationV1> AuthenticatedWorkerV3ExecutableV1<K> {
     /// Packs one generated address-free invocation against the exact authenticated descriptor.
     ///
-    /// This transition retains publication currentness around generated layout validation, value
-    /// binding, and packing. It grants no execution authority; a later Worker V3 join must still
-    /// authenticate the complete invocation digest and checked KFD device.
+    /// This transition uses the verifier-entry publication token around generated layout validation,
+    /// value binding, and packing. It grants no execution authority; a later Worker V3 join must
+    /// still authenticate the complete invocation digest and checked KFD device.
     pub fn prepare_generated_kfd_arguments<'allocation, Arguments>(
         &self,
         arguments: Arguments,
@@ -56,13 +56,10 @@ impl<K: CompilerGeneratedKernelExpectationV1> AuthenticatedWorkerV3ExecutableV1<
     where
         Arguments: CompilerGeneratedKfdArguments<'allocation, K>,
     {
-        let admission = self.admission();
-        let current = admission
-            .acquire_retained_currentness_token()
-            .map_err(GeneratedKfdPrepareError::CurrentPublication)?;
-        let prepared = self.prepare_generated_kfd_arguments_with_current(&current, arguments);
-        admission
-            .revalidate_retained_currentness_token(&current)
+        let current = self.current_publication_token();
+        let prepared = self.prepare_generated_kfd_arguments_with_current(current, arguments);
+        self.admission()
+            .revalidate_retained_currentness_token(current)
             .map_err(GeneratedKfdPrepareError::CurrentPublication)?;
         prepared
     }

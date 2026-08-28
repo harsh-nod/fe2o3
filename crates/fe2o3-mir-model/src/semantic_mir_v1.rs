@@ -28,6 +28,7 @@ pub const INERT_SEMANTIC_MIR_VERSION_V5: u16 = 5;
 pub const INERT_SEMANTIC_MIR_VERSION_V6: u16 = 6;
 pub const INERT_SEMANTIC_MIR_VERSION_V7: u16 = 7;
 pub const INERT_SEMANTIC_MIR_VERSION_V8: u16 = 8;
+pub const INERT_SEMANTIC_MIR_VERSION_V9: u16 = 9;
 
 /// Closed wire schema selected for one admitted semantic MIR value.
 ///
@@ -43,6 +44,7 @@ pub enum SemanticMirWireVersionV1 {
     V6,
     V7,
     V8,
+    V9,
 }
 
 impl SemanticMirWireVersionV1 {
@@ -55,6 +57,7 @@ impl SemanticMirWireVersionV1 {
             Self::V6 => INERT_SEMANTIC_MIR_VERSION_V6,
             Self::V7 => INERT_SEMANTIC_MIR_VERSION_V7,
             Self::V8 => INERT_SEMANTIC_MIR_VERSION_V8,
+            Self::V9 => INERT_SEMANTIC_MIR_VERSION_V9,
         }
     }
 
@@ -67,6 +70,7 @@ impl SemanticMirWireVersionV1 {
             INERT_SEMANTIC_MIR_VERSION_V6 => Some(Self::V6),
             INERT_SEMANTIC_MIR_VERSION_V7 => Some(Self::V7),
             INERT_SEMANTIC_MIR_VERSION_V8 => Some(Self::V8),
+            INERT_SEMANTIC_MIR_VERSION_V9 => Some(Self::V9),
             _ => None,
         }
     }
@@ -5895,8 +5899,19 @@ impl InertSemanticMirRequestV1 {
         self.admit_for_wire_version(SemanticMirWireVersionV1::V8, limits)
     }
 
+    /// Admits under the exact closed V9 schema that combines authenticated
+    /// BF16 conversions with workgroup-pipeline operations without changing
+    /// either feature's prior V6/V7 or V8 encoding.
+    pub fn admit_exact_v9(
+        self,
+        limits: SemanticMirLimitsV1,
+    ) -> Result<AdmittedInertSemanticMirV1, SemanticMirErrorV1> {
+        self.admit_for_wire_version(SemanticMirWireVersionV1::V9, limits)
+    }
+
     /// Selects V5 for the baseline production surface, V6/V7 for their typed
-    /// extensions, and V8 when authenticated BF16 conversions are present.
+    /// extensions, V8 when authenticated BF16 conversions are present, and V9
+    /// when BF16 conversions and workgroup pipelines occur together.
     pub fn admit_current_production(
         self,
         limits: SemanticMirLimitsV1,
@@ -5911,7 +5926,10 @@ impl InertSemanticMirRequestV1 {
         limits: SemanticMirLimitsV1,
     ) -> Result<AdmittedInertSemanticMirV1, SemanticMirErrorV1> {
         validate_request(&self, limits)?;
-        let required = minimum_wire_version(&self);
+        let mut required = minimum_wire_version(&self);
+        if wire_version == SemanticMirWireVersionV1::V8 && uses_workgroup_pipeline(&self) {
+            required = SemanticMirWireVersionV1::V9;
+        }
         if wire_version < required {
             return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
                 requested: wire_version,
@@ -15224,8 +15242,23 @@ fn encode_request(
     Ok(writer.finish())
 }
 
-fn minimum_wire_version(request: &InertSemanticMirRequestV1) -> SemanticMirWireVersionV1 {
-    if request.callables.iter().any(|callable| {
+fn uses_workgroup_pipeline(request: &InertSemanticMirRequestV1) -> bool {
+    request.callables.iter().any(|callable| {
+        matches!(
+            callable,
+            SemanticCallableDeclV1::CompilerIntrinsic {
+                operation: SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineCreate { .. }
+                    | SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineEvent { .. }
+                    | SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineWrite { .. }
+                    | SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineRead { .. },
+                ..
+            }
+        )
+    })
+}
+
+fn uses_bf16_conversion(request: &InertSemanticMirRequestV1) -> bool {
+    request.callables.iter().any(|callable| {
         matches!(
             callable,
             SemanticCallableDeclV1::CompilerIntrinsic {
@@ -15233,9 +15266,14 @@ fn minimum_wire_version(request: &InertSemanticMirRequestV1) -> SemanticMirWireV
                 ..
             }
         )
-    }) {
-        return SemanticMirWireVersionV1::V8;
-    }
+    })
+}
+
+fn minimum_wire_version(request: &InertSemanticMirRequestV1) -> SemanticMirWireVersionV1 {
+    let uses_pipeline = uses_workgroup_pipeline(request);
+    let uses_bf16 = uses_bf16_conversion(request);
+    let mut required = SemanticMirWireVersionV1::V2;
+
     if request.functions.iter().any(|function| {
         matches!(
             &function.export,
@@ -15243,7 +15281,7 @@ fn minimum_wire_version(request: &InertSemanticMirRequestV1) -> SemanticMirWireV
                 if entry.source_contract.resources().is_some()
         )
     }) {
-        return SemanticMirWireVersionV1::V7;
+        required = required.max(SemanticMirWireVersionV1::V7);
     }
     let uses_gfx950_collective_or_lds_transpose = request.callables.iter().any(|callable| {
         matches!(
@@ -15260,8 +15298,8 @@ fn minimum_wire_version(request: &InertSemanticMirRequestV1) -> SemanticMirWireV
             }
         )
     });
-    if uses_gfx950_collective_or_lds_transpose {
-        return SemanticMirWireVersionV1::V6;
+    if uses_gfx950_collective_or_lds_transpose || uses_pipeline {
+        required = required.max(SemanticMirWireVersionV1::V6);
     }
     let uses_checked_read_view = request.callables.iter().any(|callable| {
         matches!(
@@ -15275,7 +15313,7 @@ fn minimum_wire_version(request: &InertSemanticMirRequestV1) -> SemanticMirWireV
         )
     });
     if uses_checked_read_view {
-        return SemanticMirWireVersionV1::V5;
+        required = required.max(SemanticMirWireVersionV1::V5);
     }
     let uses_source_ownership = request.functions.iter().any(|function| {
         function
@@ -15296,7 +15334,7 @@ fn minimum_wire_version(request: &InertSemanticMirRequestV1) -> SemanticMirWireV
             .any(|ownership| *ownership != SemanticSourceArgumentOwnershipV1::Unspecified)
     });
     if uses_source_ownership {
-        return SemanticMirWireVersionV1::V4;
+        required = required.max(SemanticMirWireVersionV1::V4);
     }
     let uses_checked_arithmetic = request.functions.iter().any(|function| {
         function.blocks.iter().any(|block| {
@@ -15316,10 +15354,16 @@ fn minimum_wire_version(request: &InertSemanticMirRequestV1) -> SemanticMirWireV
         })
     });
     if uses_checked_arithmetic {
-        SemanticMirWireVersionV1::V3
-    } else {
-        SemanticMirWireVersionV1::V2
+        required = required.max(SemanticMirWireVersionV1::V3);
     }
+
+    if uses_bf16 {
+        required = required.max(SemanticMirWireVersionV1::V8);
+    }
+    if uses_pipeline && uses_bf16 {
+        required = SemanticMirWireVersionV1::V9;
+    }
+    required
 }
 
 struct CanonicalWriterV1 {
@@ -16119,7 +16163,7 @@ fn encode_callable(
         } => {
             writer.u8(2)?;
             encode_non_body_callable_binding(writer, binding, wire_version)?;
-            encode_compiler_intrinsic_operation(writer, *operation)?;
+            encode_compiler_intrinsic_operation(writer, *operation, wire_version)?;
             writer.identity(operation_identity.0)
         }
     }
@@ -16142,6 +16186,7 @@ fn encode_non_body_callable_binding(
 fn encode_compiler_intrinsic_operation(
     writer: &mut CanonicalWriterV1,
     operation: SemanticCompilerIntrinsicOperationV1,
+    wire_version: SemanticMirWireVersionV1,
 ) -> Result<(), SemanticMirErrorV1> {
     match operation {
         SemanticCompilerIntrinsicOperationV1::ThreadIndex(axis) => {
@@ -16192,6 +16237,7 @@ fn encode_compiler_intrinsic_operation(
             elements,
             prefetch_distance,
         } => {
+            require_workgroup_pipeline_wire_version(wire_version)?;
             writer.u8(55)?;
             writer.u32(scope.0)?;
             writer.u32(pipeline.0)?;
@@ -16200,6 +16246,7 @@ fn encode_compiler_intrinsic_operation(
             writer.u32(prefetch_distance)
         }
         SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineEvent { pipeline, event } => {
+            require_workgroup_pipeline_wire_version(wire_version)?;
             writer.u8(56)?;
             writer.u32(pipeline.0)?;
             writer.u8(match event {
@@ -16212,11 +16259,13 @@ fn encode_compiler_intrinsic_operation(
             })
         }
         SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineWrite { pipeline, element } => {
+            require_workgroup_pipeline_wire_version(wire_version)?;
             writer.u8(57)?;
             writer.u32(pipeline.0)?;
             writer.u32(element.0)
         }
         SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineRead { pipeline, element } => {
+            require_workgroup_pipeline_wire_version(wire_version)?;
             writer.u8(58)?;
             writer.u32(pipeline.0)?;
             writer.u32(element.0)
@@ -16513,7 +16562,17 @@ fn encode_compiler_intrinsic_operation(
             input,
             output,
         } => {
-            writer.u8(59)?;
+            if wire_version < SemanticMirWireVersionV1::V8 {
+                return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
+                    requested: wire_version,
+                    required: SemanticMirWireVersionV1::V8,
+                });
+            }
+            writer.u8(if wire_version == SemanticMirWireVersionV1::V8 {
+                55
+            } else {
+                59
+            })?;
             writer.u8(match kind {
                 SemanticBf16ConversionKindV1::FromBits => 0,
                 SemanticBf16ConversionKindV1::ToBits => 1,
@@ -16756,6 +16815,24 @@ fn encode_compiler_intrinsic_operation(
             writer.u32(raw_index.0)?;
             encode_disjoint_index_space(writer, index_space)
         }
+    }
+}
+
+fn require_workgroup_pipeline_wire_version(
+    wire_version: SemanticMirWireVersionV1,
+) -> Result<(), SemanticMirErrorV1> {
+    let required = if wire_version == SemanticMirWireVersionV1::V8 {
+        SemanticMirWireVersionV1::V9
+    } else {
+        SemanticMirWireVersionV1::V6
+    };
+    if wire_version < required {
+        Err(SemanticMirErrorV1::WireVersionCannotRepresent {
+            requested: wire_version,
+            required,
+        })
+    } else {
+        Ok(())
     }
 }
 
@@ -17825,6 +17902,203 @@ mod private_tests {
             value(output),
         )
         .unwrap()
+    }
+
+    fn pipeline_current_production_request() -> InertSemanticMirRequestV1 {
+        let scope = SemanticTypeIdV1::from_index(0);
+        let scope_reference = SemanticTypeIdV1::from_index(1);
+        let pipeline = SemanticTypeIdV1::from_index(2);
+        let pointer = SemanticBackendPrimitiveV1::pointer(0, 8, 8);
+        let types = vec![
+            test_type(
+                100,
+                SemanticTypeLayoutV1::new(Some(0), 1).unwrap(),
+                SemanticTypeShapeV1::Opaque,
+            ),
+            test_type(
+                101,
+                SemanticTypeLayoutV1::new_with_backend_repr(
+                    Some(8),
+                    8,
+                    SemanticBackendReprV1::scalar(SemanticBackendScalarV1::initialized(
+                        pointer,
+                        SemanticScalarValidityRangeV1::new(1, u128::from(u64::MAX)),
+                    )),
+                    false,
+                )
+                .unwrap(),
+                SemanticTypeShapeV1::Pointer(
+                    SemanticPointerTypeV1::new_with_kind(
+                        scope,
+                        SemanticPointerKindV1::Reference,
+                        SemanticMutabilityV1::Mutable,
+                        0,
+                        64,
+                        SemanticPointerMetadataV1::None,
+                    )
+                    .unwrap(),
+                ),
+            )
+            .with_rustc_abi_properties(
+                SemanticTypeAbiPropertiesV1::new(false, false).with_scalar_pointee_info(
+                    Some(
+                        SemanticAbiPointeeInfoV1::new(
+                            SemanticAbiPointeeKindV1::MutableReference { unpin: false },
+                            0,
+                            1,
+                        )
+                        .unwrap(),
+                    ),
+                    None,
+                ),
+            ),
+            test_type(
+                102,
+                SemanticTypeLayoutV1::new(Some(0), 1).unwrap(),
+                SemanticTypeShapeV1::Opaque,
+            ),
+        ];
+        let direct = SemanticAbiPassModeV1::Direct(
+            SemanticAbiValueAttributesV1::new(
+                SemanticAbiRegularAttributesV1::new(false, None, true, false, false, true),
+                SemanticAbiExtensionV1::None,
+                0,
+                None,
+            )
+            .unwrap(),
+        );
+        let abi = SemanticFunctionAbiV1::new(
+            SemanticAbiIdentityV1::from_sha256([103; 32]),
+            SemanticLayoutIdentityV1::from_sha256([104; 32]),
+            SemanticCanonAbiV1::Rust,
+            false,
+            false,
+            vec![SemanticAbiValueV1::new(scope_reference, direct.clone())],
+            SemanticAbiValueV1::new(pipeline, SemanticAbiPassModeV1::Ignore),
+        )
+        .unwrap();
+        let locals = vec![
+            SemanticLocalDeclV1::new(
+                SemanticLocalIdentityV1::from_sha256([112; 32]),
+                pipeline,
+                SemanticLocalRoleV1::Return,
+                SemanticSourceProvenanceV1::unavailable(),
+            ),
+            SemanticLocalDeclV1::new(
+                SemanticLocalIdentityV1::from_sha256([113; 32]),
+                scope_reference,
+                SemanticLocalRoleV1::Argument(0),
+                SemanticSourceProvenanceV1::unavailable(),
+            ),
+        ];
+        let call = SemanticDirectCallV1::new_callable(
+            SemanticCallableIdV1::from_index(1),
+            vec![SemanticOperandV1::Copy(
+                SemanticPlaceV1::new(SemanticLocalIdV1::from_index(1), vec![], scope_reference)
+                    .unwrap(),
+            )],
+            Some(SemanticCallDestinationV1::new(
+                SemanticPlaceV1::new(SemanticLocalIdV1::from_index(0), vec![], pipeline).unwrap(),
+                SemanticControlFlowEdgeV1::new(
+                    SemanticEdgeRoleV1::CallReturn,
+                    SemanticBlockIdV1::from_index(1),
+                ),
+            )),
+            SemanticUnwindActionV1::Unreachable,
+        )
+        .unwrap();
+        let call_block = SemanticBasicBlockV1::new(
+            SemanticBlockIdentityV1::from_sha256([114; 32]),
+            SemanticSourceProvenanceV1::unavailable(),
+            vec![],
+            SemanticTerminatorV1::new(
+                SemanticSourceProvenanceV1::unavailable(),
+                SemanticTerminatorKindV1::Call(call),
+            ),
+        )
+        .unwrap();
+        let return_block = SemanticBasicBlockV1::new(
+            SemanticBlockIdentityV1::from_sha256([115; 32]),
+            SemanticSourceProvenanceV1::unavailable(),
+            vec![],
+            SemanticTerminatorV1::new(
+                SemanticSourceProvenanceV1::unavailable(),
+                SemanticTerminatorKindV1::Return,
+            ),
+        )
+        .unwrap();
+        let function = SemanticFunctionDeclV1::new(
+            SemanticFunctionIdentityV1::from_sha256([115; 32]),
+            SemanticFunctionRoleV1::KernelRoot,
+            SemanticItemDefinitionIdentityV1::from_sha256([116; 32]),
+            SemanticMonomorphizationIdentityV1::from_sha256([117; 32]),
+            SemanticGenericTypeArgumentsIdentityV1::from_sha256([118; 32]),
+            SemanticConstGenericArgumentsIdentityV1::from_sha256([119; 32]),
+            SemanticSourceProvenanceV1::unavailable(),
+            abi.clone(),
+            locals,
+            SemanticBlockIdV1::from_index(0),
+            vec![call_block, return_block],
+        )
+        .unwrap();
+        InertSemanticMirRequestV1::new_with_callables(
+            SemanticTargetDataLayoutV1::gfx942(SemanticLayoutIdentityV1::from_sha256([105; 32])),
+            types,
+            vec![],
+            vec![],
+            vec![],
+            vec![function],
+            vec![
+                SemanticCallableDeclV1::defined(SemanticFunctionIdV1::from_index(0)),
+                SemanticCallableDeclV1::CompilerIntrinsic {
+                    binding: SemanticNonBodyCallableBindingV1::new(
+                        SemanticFunctionIdentityV1::from_sha256([106; 32]),
+                        SemanticItemDefinitionIdentityV1::from_sha256([107; 32]),
+                        SemanticMonomorphizationIdentityV1::from_sha256([108; 32]),
+                        SemanticGenericTypeArgumentsIdentityV1::from_sha256([109; 32]),
+                        SemanticConstGenericArgumentsIdentityV1::from_sha256([110; 32]),
+                        SemanticSourceProvenanceV1::unavailable(),
+                        abi,
+                    ),
+                    operation: SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineCreate {
+                        scope,
+                        pipeline,
+                        buffers: 3,
+                        elements: 64,
+                        prefetch_distance: 2,
+                    },
+                    operation_identity: SemanticCompilerIntrinsicIdentityV1::from_sha256([111; 32]),
+                },
+            ],
+            vec![SemanticFunctionIdV1::from_index(0)],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn current_production_pipeline_selects_v6_and_round_trips_canonically() {
+        let request = pipeline_current_production_request();
+        assert_eq!(
+            request
+                .clone()
+                .admit_exact_v8(SemanticMirLimitsV1::default())
+                .err(),
+            Some(SemanticMirErrorV1::WireVersionCannotRepresent {
+                requested: SemanticMirWireVersionV1::V8,
+                required: SemanticMirWireVersionV1::V9,
+            })
+        );
+        let admitted = request
+            .admit_current_production(SemanticMirLimitsV1::default())
+            .unwrap();
+        assert_eq!(admitted.wire_version(), SemanticMirWireVersionV1::V6);
+        let decoded = AdmittedInertSemanticMirV1::decode_minimal_compatible_canonical(
+            admitted.canonical_encoding(),
+            SemanticMirLimitsV1::default(),
+        )
+        .unwrap();
+        assert_eq!(decoded.canonical_encoding(), admitted.canonical_encoding());
+        assert_eq!(decoded.semantic_sha256(), admitted.semantic_sha256());
     }
 
     #[test]
