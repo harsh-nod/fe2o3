@@ -21,7 +21,7 @@ const CHILD_CHANNEL_TIMEOUT: Duration = Duration::from_secs(30);
 const SUPERVISOR_HANDOFF_TIMEOUT: Duration = MAX_COMPILER_EXECUTION_SUPERVISOR_HANDOFF_TIMEOUT_V1;
 const SUPERVISOR_READINESS_TIMEOUT: Duration = MAX_COMPILER_EXECUTION_SUPERVISOR_HANDOFF_TIMEOUT_V1;
 
-/// One prepared, single-use path from the selected rustc child to the fixed supervisor.
+/// One prepared, single-use path from the selected child to the fixed supervisor.
 pub(crate) struct PreparedCompilerExecutionBoundaryV1 {
     profile: CompilerExecutionClientProfileCapabilityV1,
     policy: CompilerExecutionPolicyCapabilityV1,
@@ -29,9 +29,30 @@ pub(crate) struct PreparedCompilerExecutionBoundaryV1 {
 }
 
 impl PreparedCompilerExecutionBoundaryV1 {
+    /// Prepares a compiler child that must inherit the exact issuer policy at FD 202.
     pub(crate) fn prepare(
         source_profile: &CompilerExecutionClientProfileCapabilityV1,
         command: &mut Command,
+    ) -> Result<Self, CompilerExecutionBoundaryErrorV1> {
+        Self::prepare_inner(source_profile, command, ChildPolicyExposureV1::Inherit)
+    }
+
+    /// Prepares an application verifier without exposing the issuer-policy capability.
+    pub(crate) fn prepare_application_verifier(
+        source_profile: &CompilerExecutionClientProfileCapabilityV1,
+        command: &mut Command,
+    ) -> Result<Self, CompilerExecutionBoundaryErrorV1> {
+        Self::prepare_inner(
+            source_profile,
+            command,
+            ChildPolicyExposureV1::RetainInParent,
+        )
+    }
+
+    fn prepare_inner(
+        source_profile: &CompilerExecutionClientProfileCapabilityV1,
+        command: &mut Command,
+        policy_exposure: ChildPolicyExposureV1,
     ) -> Result<Self, CompilerExecutionBoundaryErrorV1> {
         source_profile
             .revalidate()
@@ -51,9 +72,11 @@ impl PreparedCompilerExecutionBoundaryV1 {
         let policy =
             CompilerExecutionPolicyCapabilityV1::create(profile.profile().policy().clone())
                 .map_err(CompilerExecutionBoundaryErrorV1::Policy)?;
-        policy
-            .inherit_for_child(command)
-            .map_err(CompilerExecutionBoundaryErrorV1::Policy)?;
+        if policy_exposure == ChildPolicyExposureV1::Inherit {
+            policy
+                .inherit_for_child(command)
+                .map_err(CompilerExecutionBoundaryErrorV1::Policy)?;
+        }
         let child_channel = PendingCompilerExecutionChildChannelV1::prepare(command)
             .map_err(CompilerExecutionBoundaryErrorV1::ChildChannel)?;
 
@@ -95,7 +118,13 @@ impl PreparedCompilerExecutionBoundaryV1 {
     }
 }
 
-/// Move-only parent custody proving that one exact selected rustc reached a ready issuer.
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum ChildPolicyExposureV1 {
+    Inherit,
+    RetainInParent,
+}
+
+/// Move-only parent custody proving that one exact selected child reached a ready issuer.
 ///
 /// The value contains public, inert evidence and sealed public trust configuration only. It grants
 /// no compiler, signing, linking, publication, loading, launch, or execution authority.
@@ -165,13 +194,12 @@ impl ParentCompilerExecutionReadinessCustodyV1 {
             || !self.manifest.matches_policy(self.policy.policy())
         {
             return Err(CompilerExecutionBoundaryErrorV1::Evidence(
-                "retained launch manifest differs from the selected rustc child or policy"
-                    .to_owned(),
+                "retained launch manifest differs from the selected child or policy".to_owned(),
             ));
         }
         if self.manifest.client().uid() == self.supervisor.uid() {
             return Err(CompilerExecutionBoundaryErrorV1::Evidence(
-                "selected rustc and protected supervisor do not have distinct UIDs".to_owned(),
+                "selected child and protected supervisor do not have distinct UIDs".to_owned(),
             ));
         }
 
@@ -299,7 +327,7 @@ impl CompilerExecutionBoundaryErrorV1 {
         match self {
             Self::Profile(_) => "client-profile retention",
             Self::Policy(_) => "issuer-policy installation",
-            Self::ChildChannel(_) => "rustc child-channel admission",
+            Self::ChildChannel(_) => "selected child-channel admission",
             Self::SupervisorCredentials(_) => "supervisor credential admission",
             Self::SupervisorTransfer(_) => "fixed supervisor transfer",
             Self::SupervisorReadiness(_) => "supervisor readiness",
@@ -437,6 +465,35 @@ mod tests {
             .unwrap();
         assert_eq!(launch.client().pid(), child_pid);
         assert_eq!(launch.submitter().pid(), std::process::id());
+        drop(launch);
+        assert!(child.wait().unwrap().success());
+        profile.revalidate().unwrap();
+        policy.revalidate().unwrap();
+    }
+
+    #[test]
+    fn application_verifier_gets_service_channel_without_policy_capability() {
+        let source_profile = client_profile(8, 1_234);
+        let mut command = Command::new("/bin/sh");
+        command.arg("-c").arg(format!(
+            "test ! -e /proc/self/fd/{COMPILER_EXECUTION_POLICY_CHILD_FD_V1} && test \"$(stat -Lc %F /proc/self/fd/{COMPILER_EXECUTION_SERVICE_CHILD_FD_V1})\" = socket && sleep 2"
+        ));
+        let prepared = PreparedCompilerExecutionBoundaryV1::prepare_application_verifier(
+            &source_profile,
+            &mut command,
+        )
+        .unwrap();
+        let PreparedCompilerExecutionBoundaryV1 {
+            profile,
+            policy,
+            child_channel,
+        } = prepared;
+        let mut child = command.spawn().unwrap();
+        let child_pid = child.id();
+        let launch = child_channel
+            .finish(child_pid, Duration::from_secs(5))
+            .unwrap();
+        assert_eq!(launch.client().pid(), child_pid);
         drop(launch);
         assert!(child.wait().unwrap().success());
         profile.revalidate().unwrap();
