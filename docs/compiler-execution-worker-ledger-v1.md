@@ -6,9 +6,11 @@ This document fixes the implemented descriptor-relative Worker rollback ledger
 for protected compiler-execution receipts. It is one component of the existing
 Worker V3 pipeline, not an alternate compiler or runtime route. Bounded service
 transport and an exact-current carriage verification operation over an admitted
-connection are implemented. Production distinct-UID deployment, the external
-monotonic anchor, production verifier authority, and the Cargo-to-KFD run remain
-open.
+connection are implemented. The ledger also implements the local crash-safe
+journal for one externally anchored publication, but no external-anchor endpoint
+is admitted or queried yet. Production distinct-UID deployment, independently
+operated monotonic service integration, externally anchored VerifyCurrent
+evidence, production verifier authority, and the Cargo-to-KFD run remain open.
 
 The ledger consumes the canonical
 [receipt publication V1](compiler-execution-receipt-publication-v1.md) sidecar.
@@ -64,6 +66,41 @@ reacquires the same canonical record and reproduces the same ACK. A stale
 receipt, sequence gap, wrong prior anchor, request substitution, same-receipt
 sidecar substitution, policy change, or non-successor redo fails closed.
 
+## External-Anchor Journal
+
+The same retained directory owns
+`compiler-execution-worker-anchor-v1.state` and its private redo name. Each is
+the canonical 2,682-byte journal record defined by the compiler-execution
+protocol. The ledger permits exactly these durable transitions:
+
+1. no journal to a genesis `PreparedAnchor`;
+2. `PreparedAnchor` to either `AnchorCommitted` for an exact signed proposed
+   observation or `Aborted` for an exact signed prior observation;
+3. `AnchorCommitted` to `Published` only after the complete matching Worker
+   record has been committed and reacquired; and
+4. `Published` to the next transaction's `PreparedAnchor`, or `Aborted` to a
+   distinct replacement transaction at the same position.
+
+The ledger generates a nonzero nonce with the kernel RNG and durably commits the
+complete transaction and exact Advance challenge before returning the challenge.
+An exact preparation retry reacquires and returns those same bytes without a
+write. It verifies an observation under the distinct anchor key pinned in the
+issuer policy and durably commits the resulting full transition receipt before
+the Worker record can advance. Exact observation and publication retries are
+idempotent; a changed observation, policy, transaction, stage, challenge, key,
+or Worker-record identity fails closed.
+
+Worker-record commit and journal publication are intentionally separate durable
+writes. Recovery accepts `AnchorCommitted` with either no matching Worker record
+or the exact matching record, representing the only crash window between those
+writes. `Published` requires that exact record and identity. An ACK is formed
+only after the `Published` journal has itself been committed and reacquired.
+
+These operations remain internal and are not called by the application-facing
+service in this checkpoint. Until the supervisor provides an authenticated
+external-anchor endpoint and the protected issuer drives this state machine,
+the existing service route has no external rollback authority.
+
 ## Exact-Current Verification
 
 The protected service may supply one complete expected receipt carriage to the
@@ -95,6 +132,13 @@ Recovery accepts only:
 No implicit migration, truncation repair, reset, or selection of a later
 sequence occurs.
 
+Anchor-journal recovery follows the same synced-temp, durable-redo,
+rename-to-canonical, directory-sync, strict-decode, and exact-reacquisition
+protocol. It promotes only one legal adjacent journal successor and then joins
+the recovered journal to the configured policy and recovered Worker record.
+An anchor journal under a substituted policy is rejected even when the Worker
+ledger is still empty.
+
 ## Cross-Journal Invariant
 
 Issuer admission recovers both journals under the issuer's singleton root lock.
@@ -122,7 +166,8 @@ state without a second Worker transition.
 
 The retained root is owner-only, descriptor-relative, identity-checked, and
 held by the dedicated protected service. The Worker record identity is not a
-second signature and same-host storage is not an external monotonic anchor. An
+second signature and same-host storage, including the local anchor journal, is
+not an external monotonic anchor. An
 actor able to replace the complete service-owned directory with an older
 mutually consistent issuer/Worker snapshot can roll both journals back. A
 production deployment must bind the combined position to the reviewed external
@@ -153,3 +198,11 @@ all three legal crash positions and reject gaps, substituted publications, and
 unrelated ACK records. Exact-current tests cover successful complete carriage
 reacquisition, canonical result round trip, distinct nonzero policy/ledger
 verification identities, and stale-carriage rejection after a successor commit.
+Anchor-journal integration tests cover exact challenge re-emission, signed
+commit and abort, observation substitution, replacement after abort, policy
+substitution before a Worker record exists, restart replay, and ACK gating.
+Deterministic injection covers both sides of all seven retained-record
+boundaries for preparation, commit and abort observation persistence, the
+post-anchor Worker-record write, and final Published-journal write. Recovery is
+required to produce only the exact prior or exact legal successor at every one
+of those 98 injected failures, after which retry completes exactly once.

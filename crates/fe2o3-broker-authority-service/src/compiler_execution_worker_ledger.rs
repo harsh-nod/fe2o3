@@ -8,13 +8,22 @@ use fe2o3_artifact_transaction::{
     InertCompilerExecutionSubjectV1, NoRetainedDurableDirectoryHooksV1,
     RetainedDurableDirectoryErrorV1, RetainedDurableDirectoryHooksV1, RetainedDurableDirectoryV1,
 };
+use fe2o3_external_anchor_protocol::{
+    AnchorChallengeV1, AnchorProtocolErrorV1, AnchorTransitionReceiptV1, AnchoredStateV1,
+    CallerNonceV1, HashChainHeadV1, PinnedAnchorKeyV1,
+};
 use fe2o3_runtime_protocol::{
     COMPILER_EXECUTION_ATTESTATION_REQUEST_BYTES_V1,
-    COMPILER_EXECUTION_RECEIPT_PUBLICATION_BYTES_V1, CompilerExecutionAttestationErrorV1,
+    COMPILER_EXECUTION_RECEIPT_PUBLICATION_BYTES_V1,
+    COMPILER_EXECUTION_WORKER_ANCHOR_JOURNAL_BYTES_V1, CompilerExecutionAttestationErrorV1,
     CompilerExecutionAttestationRequestV1, CompilerExecutionCurrentRecordVerificationErrorV1,
-    CompilerExecutionCurrentRecordVerificationV1, CompilerExecutionIssuerPolicyV1,
+    CompilerExecutionCurrentRecordVerificationV1,
+    CompilerExecutionExternalAnchorTransactionErrorV1,
+    CompilerExecutionExternalAnchorTransactionV1, CompilerExecutionIssuerPolicyV1,
     CompilerExecutionReceiptCarriageV1, CompilerExecutionReceiptPublicationAckV1,
     CompilerExecutionReceiptPublicationErrorV1, CompilerExecutionReceiptPublicationV1,
+    CompilerExecutionWorkerAnchorJournalErrorV1, CompilerExecutionWorkerAnchorJournalStageV1,
+    CompilerExecutionWorkerAnchorJournalV1,
 };
 use sha2::{Digest, Sha256};
 
@@ -40,6 +49,8 @@ const PROTECTED_WORKER_LEDGER_VERIFICATION_DOMAIN: &[u8] =
     b"FE2O3/PROTECTED-COMPILER-EXECUTION-WORKER-LEDGER-VERIFICATION/V1\0";
 const CANONICAL_RECORD: &str = "compiler-execution-worker-v1.state";
 const REDO_RECORD: &str = "compiler-execution-worker-v1.redo";
+const ANCHOR_CANONICAL_RECORD: &str = "compiler-execution-worker-anchor-v1.state";
+const ANCHOR_REDO_RECORD: &str = "compiler-execution-worker-anchor-v1.redo";
 
 #[derive(Clone)]
 pub(crate) struct WorkerReceiptRecordV1 {
@@ -249,9 +260,17 @@ pub(crate) struct WorkerReceiptLedgerV1 {
     store: RetainedDurableDirectoryV1,
     policy: CompilerExecutionIssuerPolicyV1,
     record: Option<WorkerReceiptRecordV1>,
+    anchor_journal: Option<CompilerExecutionWorkerAnchorJournalV1>,
     poisoned: bool,
 }
 
+#[cfg_attr(
+    not(test),
+    allow(
+        dead_code,
+        reason = "the next protected-service increment consumes the staged anchor operations"
+    )
+)]
 impl WorkerReceiptLedgerV1 {
     pub(crate) fn recover(
         service_root: OwnedFd,
@@ -317,10 +336,12 @@ impl WorkerReceiptLedgerV1 {
                 Some(reacquire_exact(&store, policy, &record)?)
             }
         };
+        let anchor_journal = recover_anchor_journal(&store, policy, record.as_ref(), hooks)?;
         Ok(Self {
             store,
             policy: policy.clone(),
             record,
+            anchor_journal,
             poisoned: false,
         })
     }
@@ -336,6 +357,19 @@ impl WorkerReceiptLedgerV1 {
     }
 
     fn commit_publication_with_hooks(
+        &mut self,
+        request: CompilerExecutionAttestationRequestV1,
+        publication: CompilerExecutionReceiptPublicationV1,
+        hooks: &mut impl RetainedDurableDirectoryHooksV1,
+    ) -> Result<ReacquiredWorkerReceiptRecordV1, ProtectedCompilerExecutionWorkerLedgerErrorV1>
+    {
+        if self.anchor_journal.is_some() {
+            return Err(ProtectedCompilerExecutionWorkerLedgerErrorV1::ExternalAnchorJournalActive);
+        }
+        self.commit_publication_record_with_hooks(request, publication, hooks)
+    }
+
+    fn commit_publication_record_with_hooks(
         &mut self,
         request: CompilerExecutionAttestationRequestV1,
         publication: CompilerExecutionReceiptPublicationV1,
@@ -396,6 +430,227 @@ impl WorkerReceiptLedgerV1 {
         let result = witness(&reacquired)?;
         self.record = Some(reacquired);
         Ok(result)
+    }
+
+    /// Durably prepares one exact externally anchored publication before returning its challenge.
+    pub(crate) fn prepare_external_anchor(
+        &mut self,
+        request: CompilerExecutionAttestationRequestV1,
+        publication: CompilerExecutionReceiptPublicationV1,
+    ) -> Result<AnchorChallengeV1, ProtectedCompilerExecutionWorkerLedgerErrorV1> {
+        let mut hooks = NoRetainedDurableDirectoryHooksV1;
+        self.prepare_external_anchor_with_hooks(request, publication, &mut hooks)
+    }
+
+    fn prepare_external_anchor_with_hooks(
+        &mut self,
+        request: CompilerExecutionAttestationRequestV1,
+        publication: CompilerExecutionReceiptPublicationV1,
+        hooks: &mut impl RetainedDurableDirectoryHooksV1,
+    ) -> Result<AnchorChallengeV1, ProtectedCompilerExecutionWorkerLedgerErrorV1> {
+        if self.poisoned {
+            return Err(ProtectedCompilerExecutionWorkerLedgerErrorV1::Poisoned);
+        }
+        let transaction = CompilerExecutionExternalAnchorTransactionV1::new(
+            self.policy.clone(),
+            request,
+            publication,
+        )?;
+        if let Some(journal) = self.anchor_journal.as_ref()
+            && journal.stage() == CompilerExecutionWorkerAnchorJournalStageV1::PreparedAnchor
+            && journal.transaction() == &transaction
+        {
+            let reacquired = self.reacquire_anchor_journal(journal)?;
+            return Ok(reacquired.challenge().clone());
+        }
+
+        let stable = match self.anchor_journal.as_ref() {
+            None if self.record.is_none() => {
+                AnchoredStateV1::from_local_state(0, HashChainHeadV1::from_bytes([0; SHA256_BYTES]))
+            }
+            Some(journal)
+                if journal.stage() == CompilerExecutionWorkerAnchorJournalStageV1::Published =>
+            {
+                AnchoredStateV1::from_local_state(
+                    journal.transaction().sequence(),
+                    journal.challenge().proposed_head(),
+                )
+            }
+            Some(journal)
+                if journal.stage() == CompilerExecutionWorkerAnchorJournalStageV1::Aborted =>
+            {
+                AnchoredStateV1::from_local_state(
+                    journal.transaction().sequence() - 1,
+                    journal.challenge().prior_head(),
+                )
+            }
+            _ => {
+                return Err(
+                    ProtectedCompilerExecutionWorkerLedgerErrorV1::ExternalAnchorJournalActive,
+                );
+            }
+        };
+        let key = pinned_anchor_key(&self.policy)?;
+        let nonce = generate_anchor_nonce()?;
+        let prepared = stable.prepare(transaction.external_anchor_digest(), &key)?;
+        let pending = prepared.begin_advance(CallerNonceV1::from_bytes(nonce), &key)?;
+        let next = CompilerExecutionWorkerAnchorJournalV1::prepared(
+            transaction,
+            pending.challenge().clone(),
+        )?;
+        self.commit_anchor_journal_with_hooks(next, hooks)?;
+        Ok(self
+            .anchor_journal
+            .as_ref()
+            .expect("committed anchor journal is retained")
+            .challenge()
+            .clone())
+    }
+
+    /// Verifies and durably records one observation for the exact persisted challenge.
+    pub(crate) fn record_external_anchor_observation(
+        &mut self,
+        observation: &[u8],
+    ) -> Result<
+        CompilerExecutionWorkerAnchorJournalStageV1,
+        ProtectedCompilerExecutionWorkerLedgerErrorV1,
+    > {
+        let mut hooks = NoRetainedDurableDirectoryHooksV1;
+        self.record_external_anchor_observation_with_hooks(observation, &mut hooks)
+    }
+
+    fn record_external_anchor_observation_with_hooks(
+        &mut self,
+        observation: &[u8],
+        hooks: &mut impl RetainedDurableDirectoryHooksV1,
+    ) -> Result<
+        CompilerExecutionWorkerAnchorJournalStageV1,
+        ProtectedCompilerExecutionWorkerLedgerErrorV1,
+    > {
+        if self.poisoned {
+            return Err(ProtectedCompilerExecutionWorkerLedgerErrorV1::Poisoned);
+        }
+        let retained = self
+            .anchor_journal
+            .as_ref()
+            .ok_or(ProtectedCompilerExecutionWorkerLedgerErrorV1::MissingAnchorJournal)?
+            .clone();
+        let key = pinned_anchor_key(&self.policy)?;
+        let receipt =
+            AnchorTransitionReceiptV1::new(retained.challenge().clone(), observation, &key)?;
+        if retained.stage() != CompilerExecutionWorkerAnchorJournalStageV1::PreparedAnchor {
+            if retained.receipt() != Some(&receipt) {
+                return Err(
+                    ProtectedCompilerExecutionWorkerLedgerErrorV1::ExternalAnchorObservationMismatch,
+                );
+            }
+            let reacquired = self.reacquire_anchor_journal(&retained)?;
+            return Ok(reacquired.stage());
+        }
+        let next = retained.record_anchor_receipt(receipt)?;
+        let stage = next.stage();
+        self.commit_anchor_journal_with_hooks(next, hooks)?;
+        Ok(stage)
+    }
+
+    /// Commits the exact anchor-approved transaction and only then publishes its Worker ACK.
+    pub(crate) fn commit_anchored_publication(
+        &mut self,
+    ) -> Result<ReacquiredWorkerReceiptRecordV1, ProtectedCompilerExecutionWorkerLedgerErrorV1>
+    {
+        let mut hooks = NoRetainedDurableDirectoryHooksV1;
+        self.commit_anchored_publication_with_hooks(&mut hooks)
+    }
+
+    fn commit_anchored_publication_with_hooks(
+        &mut self,
+        hooks: &mut impl RetainedDurableDirectoryHooksV1,
+    ) -> Result<ReacquiredWorkerReceiptRecordV1, ProtectedCompilerExecutionWorkerLedgerErrorV1>
+    {
+        if self.poisoned {
+            return Err(ProtectedCompilerExecutionWorkerLedgerErrorV1::Poisoned);
+        }
+        let committed = self
+            .anchor_journal
+            .as_ref()
+            .ok_or(ProtectedCompilerExecutionWorkerLedgerErrorV1::MissingAnchorJournal)?
+            .clone();
+        if committed.stage() == CompilerExecutionWorkerAnchorJournalStageV1::Published {
+            validate_anchor_journal_join(&self.policy, self.record.as_ref(), Some(&committed))?;
+            let record = self
+                .record
+                .as_ref()
+                .ok_or(ProtectedCompilerExecutionWorkerLedgerErrorV1::MissingCanonicalRecord)?;
+            return witness(&self.reacquire(record)?);
+        }
+        if committed.stage() != CompilerExecutionWorkerAnchorJournalStageV1::AnchorCommitted {
+            return Err(ProtectedCompilerExecutionWorkerLedgerErrorV1::ExternalAnchorNotCommitted);
+        }
+        let transaction = committed.transaction();
+        let result = self.commit_publication_record_with_hooks(
+            transaction.request().clone(),
+            transaction.publication().clone(),
+            hooks,
+        )?;
+        let worker_record_identity = self
+            .record
+            .as_ref()
+            .ok_or(ProtectedCompilerExecutionWorkerLedgerErrorV1::MissingCanonicalRecord)?
+            .identity;
+        let published = committed.mark_published(worker_record_identity)?;
+        self.commit_anchor_journal_with_hooks(published, hooks)?;
+        validate_anchor_journal_join(
+            &self.policy,
+            self.record.as_ref(),
+            self.anchor_journal.as_ref(),
+        )?;
+        Ok(result)
+    }
+
+    fn commit_anchor_journal_with_hooks(
+        &mut self,
+        next: CompilerExecutionWorkerAnchorJournalV1,
+        hooks: &mut impl RetainedDurableDirectoryHooksV1,
+    ) -> Result<(), ProtectedCompilerExecutionWorkerLedgerErrorV1> {
+        let legal = self.anchor_journal.as_ref().map_or_else(
+            || self.record.is_none() && next.is_genesis_prepared(),
+            |prior| next.is_legal_successor_of(prior),
+        );
+        if !legal {
+            return Err(ProtectedCompilerExecutionWorkerLedgerErrorV1::IllegalAnchorSuccessor);
+        }
+        validate_anchor_journal_join(&self.policy, self.record.as_ref(), Some(&next))?;
+        if let Err(error) = self.store.commit_record(
+            ANCHOR_CANONICAL_RECORD,
+            ANCHOR_REDO_RECORD,
+            next.canonical_bytes(),
+            COMPILER_EXECUTION_WORKER_ANCHOR_JOURNAL_BYTES_V1,
+            hooks,
+        ) {
+            self.poisoned = true;
+            return Err(error.into());
+        }
+        let reacquired = match self.reacquire_anchor_journal(&next) {
+            Ok(record) => record,
+            Err(error) => {
+                self.poisoned = true;
+                return Err(error);
+            }
+        };
+        self.anchor_journal = Some(reacquired);
+        Ok(())
+    }
+
+    fn reacquire_anchor_journal(
+        &self,
+        expected: &CompilerExecutionWorkerAnchorJournalV1,
+    ) -> Result<CompilerExecutionWorkerAnchorJournalV1, ProtectedCompilerExecutionWorkerLedgerErrorV1>
+    {
+        reacquire_anchor_journal_exact(&self.store, expected)
+    }
+
+    pub(crate) const fn anchor_journal(&self) -> Option<&CompilerExecutionWorkerAnchorJournalV1> {
+        self.anchor_journal.as_ref()
     }
 
     fn reacquire(
@@ -491,6 +746,204 @@ impl WorkerReceiptLedgerV1 {
         .map_err(ProtectedCompilerExecutionWorkerLedgerErrorV1::from)?;
         Ok((reacquired, carriage))
     }
+}
+
+fn recover_anchor_journal(
+    store: &RetainedDurableDirectoryV1,
+    policy: &CompilerExecutionIssuerPolicyV1,
+    current: Option<&WorkerReceiptRecordV1>,
+    hooks: &mut impl RetainedDurableDirectoryHooksV1,
+) -> Result<
+    Option<CompilerExecutionWorkerAnchorJournalV1>,
+    ProtectedCompilerExecutionWorkerLedgerErrorV1,
+> {
+    let canonical_bytes = store.read_private(
+        ANCHOR_CANONICAL_RECORD,
+        COMPILER_EXECUTION_WORKER_ANCHOR_JOURNAL_BYTES_V1,
+    )?;
+    let redo_bytes = store.read_private(
+        ANCHOR_REDO_RECORD,
+        COMPILER_EXECUTION_WORKER_ANCHOR_JOURNAL_BYTES_V1,
+    )?;
+    let journal = match (canonical_bytes, redo_bytes) {
+        (None, None) => None,
+        (canonical, Some(redo_bytes)) => {
+            let redo = CompilerExecutionWorkerAnchorJournalV1::decode(&redo_bytes)?;
+            let canonical_record = canonical
+                .as_deref()
+                .map(CompilerExecutionWorkerAnchorJournalV1::decode)
+                .transpose()?;
+            let legal = canonical_record.as_ref().map_or_else(
+                || current.is_none() && redo.is_genesis_prepared(),
+                |prior| redo.is_legal_successor_of(prior),
+            );
+            if !legal {
+                return Err(ProtectedCompilerExecutionWorkerLedgerErrorV1::IllegalAnchorSuccessor);
+            }
+            store.promote_validated_redo(
+                ANCHOR_CANONICAL_RECORD,
+                ANCHOR_REDO_RECORD,
+                canonical.as_deref(),
+                &redo_bytes,
+                COMPILER_EXECUTION_WORKER_ANCHOR_JOURNAL_BYTES_V1,
+                hooks,
+            )?;
+            Some(reacquire_anchor_journal_exact(store, &redo)?)
+        }
+        (Some(canonical_bytes), None) => {
+            let record = CompilerExecutionWorkerAnchorJournalV1::decode(&canonical_bytes)?;
+            let established = store.establish_recovered_record_durability(
+                ANCHOR_CANONICAL_RECORD,
+                ANCHOR_REDO_RECORD,
+                &canonical_bytes,
+                COMPILER_EXECUTION_WORKER_ANCHOR_JOURNAL_BYTES_V1,
+                hooks,
+            )?;
+            if established != canonical_bytes {
+                return Err(
+                    ProtectedCompilerExecutionWorkerLedgerErrorV1::ReacquiredAnchorJournalMismatch,
+                );
+            }
+            Some(reacquire_anchor_journal_exact(store, &record)?)
+        }
+    };
+    validate_anchor_journal_join(policy, current, journal.as_ref())?;
+    Ok(journal)
+}
+
+fn reacquire_anchor_journal_exact(
+    store: &RetainedDurableDirectoryV1,
+    expected: &CompilerExecutionWorkerAnchorJournalV1,
+) -> Result<CompilerExecutionWorkerAnchorJournalV1, ProtectedCompilerExecutionWorkerLedgerErrorV1> {
+    let bytes = store
+        .read_private(
+            ANCHOR_CANONICAL_RECORD,
+            COMPILER_EXECUTION_WORKER_ANCHOR_JOURNAL_BYTES_V1,
+        )?
+        .ok_or(ProtectedCompilerExecutionWorkerLedgerErrorV1::MissingAnchorJournal)?;
+    if bytes.as_slice() != expected.canonical_bytes() {
+        return Err(ProtectedCompilerExecutionWorkerLedgerErrorV1::ReacquiredAnchorJournalMismatch);
+    }
+    let reacquired = CompilerExecutionWorkerAnchorJournalV1::decode(&bytes)?;
+    if reacquired.identity() != expected.identity()
+        || reacquired.canonical_bytes() != expected.canonical_bytes()
+    {
+        return Err(ProtectedCompilerExecutionWorkerLedgerErrorV1::ReacquiredAnchorJournalMismatch);
+    }
+    Ok(reacquired)
+}
+
+fn validate_anchor_journal_join(
+    policy: &CompilerExecutionIssuerPolicyV1,
+    current: Option<&WorkerReceiptRecordV1>,
+    journal: Option<&CompilerExecutionWorkerAnchorJournalV1>,
+) -> Result<(), ProtectedCompilerExecutionWorkerLedgerErrorV1> {
+    let Some(journal) = journal else {
+        return Ok(());
+    };
+    let transaction = journal.transaction();
+    if transaction.policy() != policy {
+        return Err(ProtectedCompilerExecutionWorkerLedgerErrorV1::PolicyMismatch);
+    }
+    if journal.stage() == CompilerExecutionWorkerAnchorJournalStageV1::Published {
+        let current = current
+            .ok_or(ProtectedCompilerExecutionWorkerLedgerErrorV1::AnchorJournalRecordMismatch)?;
+        if journal.worker_record_identity() != current.identity
+            || !worker_record_matches_transaction(current, transaction)
+        {
+            return Err(ProtectedCompilerExecutionWorkerLedgerErrorV1::AnchorJournalRecordMismatch);
+        }
+        return Ok(());
+    }
+
+    if journal.stage() == CompilerExecutionWorkerAnchorJournalStageV1::AnchorCommitted
+        && current.is_some_and(|record| worker_record_matches_transaction(record, transaction))
+    {
+        return Ok(());
+    }
+
+    let pending_matches = current.map_or_else(
+        || {
+            transaction.sequence() == 1
+                && transaction.prior_rollback_anchor() == [0; SHA256_BYTES]
+                && journal.challenge().prior_head()
+                    == HashChainHeadV1::from_bytes([0; SHA256_BYTES])
+        },
+        |record| {
+            record.sequence.checked_add(1) == Some(transaction.sequence())
+                && transaction.prior_rollback_anchor() == record.current_rollback_anchor
+        },
+    );
+    if !pending_matches {
+        return Err(ProtectedCompilerExecutionWorkerLedgerErrorV1::AnchorJournalRecordMismatch);
+    }
+    Ok(())
+}
+
+fn worker_record_matches_transaction(
+    record: &WorkerReceiptRecordV1,
+    transaction: &CompilerExecutionExternalAnchorTransactionV1,
+) -> bool {
+    record.sequence == transaction.sequence()
+        && record.prior_rollback_anchor == transaction.prior_rollback_anchor()
+        && record.current_rollback_anchor == transaction.current_rollback_anchor()
+        && &record.request == transaction.request()
+        && &record.publication == transaction.publication()
+}
+
+#[cfg_attr(
+    not(test),
+    allow(
+        dead_code,
+        reason = "the next protected-service increment consumes the staged anchor operations"
+    )
+)]
+fn pinned_anchor_key(
+    policy: &CompilerExecutionIssuerPolicyV1,
+) -> Result<PinnedAnchorKeyV1, ProtectedCompilerExecutionWorkerLedgerErrorV1> {
+    PinnedAnchorKeyV1::from_bytes(*policy.external_anchor_verifying_key()).map_err(Into::into)
+}
+
+#[cfg_attr(
+    not(test),
+    allow(
+        dead_code,
+        reason = "the next protected-service increment consumes the staged anchor operations"
+    )
+)]
+fn generate_anchor_nonce()
+-> Result<[u8; SHA256_BYTES], ProtectedCompilerExecutionWorkerLedgerErrorV1> {
+    const MAX_ATTEMPTS: usize = 4;
+    for _ in 0..MAX_ATTEMPTS {
+        let mut nonce = [0_u8; SHA256_BYTES];
+        let mut filled = 0;
+        while filled < nonce.len() {
+            let count = rustix::rand::getrandom(
+                &mut nonce[filled..],
+                rustix::rand::GetRandomFlags::empty(),
+            )
+            .map_err(|error| {
+                ProtectedCompilerExecutionWorkerLedgerErrorV1::Entropy(
+                    std::io::Error::from_raw_os_error(error.raw_os_error()),
+                )
+            })?;
+            if count == 0 {
+                return Err(ProtectedCompilerExecutionWorkerLedgerErrorV1::Entropy(
+                    std::io::Error::new(
+                        std::io::ErrorKind::UnexpectedEof,
+                        "getrandom returned no compiler anchor nonce bytes",
+                    ),
+                ));
+            }
+            filled += count;
+        }
+        if nonce != [0; SHA256_BYTES] {
+            return Ok(nonce);
+        }
+    }
+    Err(ProtectedCompilerExecutionWorkerLedgerErrorV1::Entropy(
+        std::io::Error::other("getrandom repeatedly returned a zero compiler anchor nonce"),
+    ))
 }
 
 fn reacquire_exact(
@@ -653,6 +1106,10 @@ pub enum ProtectedCompilerExecutionWorkerLedgerErrorV1 {
     Durable(RetainedDurableDirectoryErrorV1),
     Attestation(CompilerExecutionAttestationErrorV1),
     Publication(CompilerExecutionReceiptPublicationErrorV1),
+    AnchorProtocol(AnchorProtocolErrorV1),
+    AnchorTransaction(CompilerExecutionExternalAnchorTransactionErrorV1),
+    AnchorJournal(CompilerExecutionWorkerAnchorJournalErrorV1),
+    Entropy(std::io::Error),
     InvalidRecord(&'static str),
     PolicyMismatch,
     SequenceMismatch,
@@ -663,6 +1120,13 @@ pub enum ProtectedCompilerExecutionWorkerLedgerErrorV1 {
     SequenceExhausted,
     MissingCanonicalRecord,
     ReacquiredRecordMismatch,
+    MissingAnchorJournal,
+    ReacquiredAnchorJournalMismatch,
+    AnchorJournalRecordMismatch,
+    IllegalAnchorSuccessor,
+    ExternalAnchorJournalActive,
+    ExternalAnchorObservationMismatch,
+    ExternalAnchorNotCommitted,
     CarriageMismatch,
     Verification(CompilerExecutionCurrentRecordVerificationErrorV1),
     Poisoned,
@@ -677,6 +1141,24 @@ impl fmt::Display for ProtectedCompilerExecutionWorkerLedgerErrorV1 {
             }
             Self::Publication(error) => {
                 write!(formatter, "Worker receipt publication failed: {error}")
+            }
+            Self::AnchorProtocol(error) => {
+                write!(formatter, "Worker external-anchor protocol failed: {error}")
+            }
+            Self::AnchorTransaction(error) => {
+                write!(
+                    formatter,
+                    "Worker external-anchor transaction failed: {error}"
+                )
+            }
+            Self::AnchorJournal(error) => {
+                write!(formatter, "Worker external-anchor journal failed: {error}")
+            }
+            Self::Entropy(error) => {
+                write!(
+                    formatter,
+                    "Worker external-anchor nonce generation failed: {error}"
+                )
             }
             Self::InvalidRecord(reason) => {
                 write!(formatter, "invalid Worker receipt ledger record: {reason}")
@@ -702,6 +1184,27 @@ impl fmt::Display for ProtectedCompilerExecutionWorkerLedgerErrorV1 {
             Self::ReacquiredRecordMismatch => {
                 formatter.write_str("reacquired Worker receipt record changed")
             }
+            Self::MissingAnchorJournal => {
+                formatter.write_str("Worker external-anchor journal is missing")
+            }
+            Self::ReacquiredAnchorJournalMismatch => {
+                formatter.write_str("reacquired Worker external-anchor journal changed")
+            }
+            Self::AnchorJournalRecordMismatch => formatter.write_str(
+                "Worker external-anchor journal disagrees with the receipt ledger record",
+            ),
+            Self::IllegalAnchorSuccessor => {
+                formatter.write_str("Worker external-anchor journal has an illegal successor")
+            }
+            Self::ExternalAnchorJournalActive => {
+                formatter.write_str("Worker external-anchor journal has an active transaction")
+            }
+            Self::ExternalAnchorObservationMismatch => {
+                formatter.write_str("Worker external-anchor observation changed across retry")
+            }
+            Self::ExternalAnchorNotCommitted => {
+                formatter.write_str("Worker external-anchor transaction has not been committed")
+            }
             Self::CarriageMismatch => {
                 formatter.write_str("reacquired Worker receipt carriage changed")
             }
@@ -724,6 +1227,10 @@ impl Error for ProtectedCompilerExecutionWorkerLedgerErrorV1 {
             Self::Durable(error) => Some(error),
             Self::Attestation(error) => Some(error),
             Self::Publication(error) => Some(error),
+            Self::AnchorProtocol(error) => Some(error),
+            Self::AnchorTransaction(error) => Some(error),
+            Self::AnchorJournal(error) => Some(error),
+            Self::Entropy(error) => Some(error),
             Self::Verification(error) => Some(error),
             _ => None,
         }
@@ -750,6 +1257,28 @@ impl From<CompilerExecutionReceiptPublicationErrorV1>
     }
 }
 
+impl From<AnchorProtocolErrorV1> for ProtectedCompilerExecutionWorkerLedgerErrorV1 {
+    fn from(error: AnchorProtocolErrorV1) -> Self {
+        Self::AnchorProtocol(error)
+    }
+}
+
+impl From<CompilerExecutionExternalAnchorTransactionErrorV1>
+    for ProtectedCompilerExecutionWorkerLedgerErrorV1
+{
+    fn from(error: CompilerExecutionExternalAnchorTransactionErrorV1) -> Self {
+        Self::AnchorTransaction(error)
+    }
+}
+
+impl From<CompilerExecutionWorkerAnchorJournalErrorV1>
+    for ProtectedCompilerExecutionWorkerLedgerErrorV1
+{
+    fn from(error: CompilerExecutionWorkerAnchorJournalErrorV1) -> Self {
+        Self::AnchorJournal(error)
+    }
+}
+
 impl From<CompilerExecutionCurrentRecordVerificationErrorV1>
     for ProtectedCompilerExecutionWorkerLedgerErrorV1
 {
@@ -764,11 +1293,14 @@ mod tests {
     use std::io;
     use std::os::unix::fs::PermissionsExt;
 
-    use ed25519_dalek::{SigningKey, VerifyingKey};
+    use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
     use fe2o3_artifact_transaction::{
         INERT_COMPILER_EXECUTION_SUBJECT_BYTES_V1, INERT_COMPILER_EXECUTION_SUBJECT_MAGIC_V1,
         INERT_COMPILER_EXECUTION_SUBJECT_VERSION_V1, InertCompilerExecutionSubjectV1,
         RetainedDurableFaultTimingV1, RetainedDurableRecordBoundaryV1,
+    };
+    use fe2o3_external_anchor_protocol::{
+        ANCHOR_OBSERVATION_WIRE_LEN_V1, AnchorPositionV1, UnsignedAnchorObservationV1,
     };
     use fe2o3_runtime_protocol::{
         CompilerExecutionAttestationChallengeV1, CompilerExecutionAttestationReceiptV1,
@@ -797,6 +1329,7 @@ mod tests {
     struct Fixture {
         directory: TempDir,
         signing_key: SigningKey,
+        anchor_signing_key: SigningKey,
         policy: CompilerExecutionIssuerPolicyV1,
         subject: InertCompilerExecutionSubjectV1,
     }
@@ -806,10 +1339,16 @@ mod tests {
             let directory = TempDir::new().unwrap();
             fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700)).unwrap();
             let signing_key = SigningKey::from_bytes(&[0x51; 32]);
-            let policy = policy(&signing_key.verifying_key(), 7);
+            let anchor_signing_key = SigningKey::from_bytes(&[0xa1; 32]);
+            let policy = policy(
+                &signing_key.verifying_key(),
+                &anchor_signing_key.verifying_key(),
+                7,
+            );
             Self {
                 directory,
                 signing_key,
+                anchor_signing_key,
                 policy,
                 subject: subject(0x20),
             }
@@ -852,6 +1391,19 @@ mod tests {
             )
             .unwrap();
             (request, publication)
+        }
+
+        fn anchor_observation(
+            &self,
+            challenge: &AnchorChallengeV1,
+            position: AnchorPositionV1,
+        ) -> [u8; ANCHOR_OBSERVATION_WIRE_LEN_V1] {
+            let unsigned = UnsignedAnchorObservationV1::from_challenge(challenge, position);
+            let signature = self
+                .anchor_signing_key
+                .sign(&unsigned.signing_bytes())
+                .to_bytes();
+            unsigned.attach_signature(signature)
         }
     }
 
@@ -1080,7 +1632,11 @@ mod tests {
             .unwrap();
 
         let wrong_key = SigningKey::from_bytes(&[0x52; SHA256_BYTES]);
-        let wrong_policy = policy(&wrong_key.verifying_key(), 8);
+        let wrong_policy = policy(
+            &wrong_key.verifying_key(),
+            &fixture.anchor_signing_key.verifying_key(),
+            8,
+        );
         assert!(matches!(
             WorkerReceiptLedgerV1::recover(fixture.root(), &wrong_policy),
             Err(ProtectedCompilerExecutionWorkerLedgerErrorV1::PolicyMismatch)
@@ -1197,15 +1753,391 @@ mod tests {
         }
     }
 
-    fn policy(verifying_key: &VerifyingKey, generation: u64) -> CompilerExecutionIssuerPolicyV1 {
+    #[test]
+    fn anchored_publication_restarts_and_replays_exactly_before_ack() {
+        let fixture = Fixture::new();
+        let (request, publication) = fixture.entry(1, [0; 32], 0x81);
+        let mut ledger = WorkerReceiptLedgerV1::recover(fixture.root(), &fixture.policy).unwrap();
+        let challenge = ledger
+            .prepare_external_anchor(request.clone(), publication.clone())
+            .unwrap();
+        let prepared = ledger.anchor_journal().unwrap().clone();
+        assert_eq!(
+            prepared.stage(),
+            CompilerExecutionWorkerAnchorJournalStageV1::PreparedAnchor
+        );
+        assert_eq!(prepared.transaction().request(), &request);
+        assert_eq!(prepared.transaction().publication(), &publication);
+        assert_eq!(prepared.challenge(), &challenge);
+        assert!(ledger.last_record().is_none());
+
+        drop(ledger);
+        let mut recovered =
+            WorkerReceiptLedgerV1::recover(fixture.root(), &fixture.policy).unwrap();
+        assert_eq!(recovered.anchor_journal().unwrap(), &prepared);
+        let mut no_write = RecordFault::new(
+            RetainedDurableRecordBoundaryV1::CreateTemp,
+            RetainedDurableFaultTimingV1::Before,
+        );
+        let replayed_challenge = recovered
+            .prepare_external_anchor_with_hooks(request.clone(), publication.clone(), &mut no_write)
+            .unwrap();
+        assert_eq!(replayed_challenge, challenge);
+        assert!(!no_write.fired);
+
+        let observation = fixture.anchor_observation(&challenge, AnchorPositionV1::Proposed);
+        assert_eq!(
+            recovered
+                .record_external_anchor_observation(&observation)
+                .unwrap(),
+            CompilerExecutionWorkerAnchorJournalStageV1::AnchorCommitted
+        );
+        assert!(matches!(
+            recovered.commit_publication(request.clone(), publication.clone()),
+            Err(ProtectedCompilerExecutionWorkerLedgerErrorV1::ExternalAnchorJournalActive)
+        ));
+        let conflicting = fixture.anchor_observation(&challenge, AnchorPositionV1::Prior);
+        assert!(matches!(
+            recovered.record_external_anchor_observation(&conflicting),
+            Err(ProtectedCompilerExecutionWorkerLedgerErrorV1::ExternalAnchorObservationMismatch)
+        ));
+
+        let acknowledgment = recovered
+            .commit_anchored_publication()
+            .unwrap()
+            .into_acknowledgment();
+        let worker_identity = recovered.last_record().unwrap().identity;
+        let published = recovered.anchor_journal().unwrap().clone();
+        assert_eq!(
+            published.stage(),
+            CompilerExecutionWorkerAnchorJournalStageV1::Published
+        );
+        assert_eq!(published.worker_record_identity(), worker_identity);
+        assert_eq!(
+            acknowledgment.worker_ledger_record_identity(),
+            worker_identity
+        );
+        assert_eq!(
+            published.receipt().unwrap().position(),
+            AnchorPositionV1::Proposed
+        );
+
+        drop(recovered);
+        let mut restarted =
+            WorkerReceiptLedgerV1::recover(fixture.root(), &fixture.policy).unwrap();
+        assert_eq!(restarted.anchor_journal().unwrap(), &published);
+        assert_eq!(
+            restarted
+                .record_external_anchor_observation(&observation)
+                .unwrap(),
+            CompilerExecutionWorkerAnchorJournalStageV1::Published
+        );
+        let replayed_acknowledgment = restarted
+            .commit_anchored_publication()
+            .unwrap()
+            .into_acknowledgment();
+        assert_eq!(replayed_acknowledgment, acknowledgment);
+    }
+
+    #[test]
+    fn external_anchor_abort_restarts_and_permits_only_a_replacement() {
+        let fixture = Fixture::new();
+        let (request, publication) = fixture.entry(1, [0; 32], 0x82);
+        let mut ledger = WorkerReceiptLedgerV1::recover(fixture.root(), &fixture.policy).unwrap();
+        let challenge = ledger
+            .prepare_external_anchor(request, publication)
+            .unwrap();
+        let observation = fixture.anchor_observation(&challenge, AnchorPositionV1::Prior);
+        assert_eq!(
+            ledger
+                .record_external_anchor_observation(&observation)
+                .unwrap(),
+            CompilerExecutionWorkerAnchorJournalStageV1::Aborted
+        );
+        assert!(matches!(
+            ledger.commit_anchored_publication(),
+            Err(ProtectedCompilerExecutionWorkerLedgerErrorV1::ExternalAnchorNotCommitted)
+        ));
+        assert!(ledger.last_record().is_none());
+        let aborted = ledger.anchor_journal().unwrap().clone();
+
+        drop(ledger);
+        let mut recovered =
+            WorkerReceiptLedgerV1::recover(fixture.root(), &fixture.policy).unwrap();
+        assert_eq!(recovered.anchor_journal().unwrap(), &aborted);
+        assert_eq!(
+            recovered
+                .record_external_anchor_observation(&observation)
+                .unwrap(),
+            CompilerExecutionWorkerAnchorJournalStageV1::Aborted
+        );
+        let (replacement_request, replacement_publication) = fixture.entry(1, [0; 32], 0x83);
+        let replacement_challenge = recovered
+            .prepare_external_anchor(replacement_request.clone(), replacement_publication.clone())
+            .unwrap();
+        assert_ne!(replacement_challenge, challenge);
+        let replacement = recovered.anchor_journal().unwrap();
+        assert_eq!(
+            replacement.stage(),
+            CompilerExecutionWorkerAnchorJournalStageV1::PreparedAnchor
+        );
+        assert_eq!(replacement.transaction().request(), &replacement_request);
+        assert_eq!(
+            replacement.transaction().publication(),
+            &replacement_publication
+        );
+        assert_eq!(replacement.challenge().prior_head(), challenge.prior_head());
+    }
+
+    #[test]
+    fn anchor_only_recovery_rejects_policy_substitution() {
+        let fixture = Fixture::new();
+        let (request, publication) = fixture.entry(1, [0; 32], 0x84);
+        let mut ledger = WorkerReceiptLedgerV1::recover(fixture.root(), &fixture.policy).unwrap();
+        ledger
+            .prepare_external_anchor(request, publication)
+            .unwrap();
+        drop(ledger);
+
+        let other_anchor = SigningKey::from_bytes(&[0xa2; 32]);
+        let substituted_policy = policy(
+            &fixture.signing_key.verifying_key(),
+            &other_anchor.verifying_key(),
+            7,
+        );
+        assert!(matches!(
+            WorkerReceiptLedgerV1::recover(fixture.root(), &substituted_policy),
+            Err(ProtectedCompilerExecutionWorkerLedgerErrorV1::PolicyMismatch)
+        ));
+    }
+
+    #[test]
+    fn every_anchor_prepare_crash_recovers_empty_or_the_exact_preparation() {
+        for boundary in RECORD_BOUNDARIES {
+            for timing in FAULT_TIMINGS {
+                let fixture = Fixture::new();
+                let (request, publication) = fixture.entry(1, [0; 32], 0x85);
+                let mut ledger =
+                    WorkerReceiptLedgerV1::recover(fixture.root(), &fixture.policy).unwrap();
+                let mut fault = RecordFault::new(boundary, timing);
+                assert!(
+                    ledger
+                        .prepare_external_anchor_with_hooks(
+                            request.clone(),
+                            publication.clone(),
+                            &mut fault,
+                        )
+                        .is_err(),
+                    "anchor preparation unexpectedly succeeded at {boundary:?}/{timing:?}"
+                );
+                assert!(fault.fired, "fault did not fire at {boundary:?}/{timing:?}");
+                assert!(ledger.poisoned);
+                drop(ledger);
+
+                let mut recovered =
+                    WorkerReceiptLedgerV1::recover(fixture.root(), &fixture.policy).unwrap();
+                assert!(recovered.last_record().is_none());
+                if let Some(prepared) = recovered.anchor_journal().cloned() {
+                    assert_eq!(
+                        prepared.stage(),
+                        CompilerExecutionWorkerAnchorJournalStageV1::PreparedAnchor
+                    );
+                    assert_eq!(prepared.transaction().request(), &request);
+                    assert_eq!(prepared.transaction().publication(), &publication);
+                    let challenge = prepared.challenge().clone();
+                    let mut no_write = RecordFault::new(
+                        RetainedDurableRecordBoundaryV1::CreateTemp,
+                        RetainedDurableFaultTimingV1::Before,
+                    );
+                    assert_eq!(
+                        recovered
+                            .prepare_external_anchor_with_hooks(
+                                request.clone(),
+                                publication.clone(),
+                                &mut no_write,
+                            )
+                            .unwrap(),
+                        challenge
+                    );
+                    assert!(!no_write.fired);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn every_anchor_observation_crash_recovers_only_adjacent_stages() {
+        for (position, expected_stage) in [
+            (
+                AnchorPositionV1::Proposed,
+                CompilerExecutionWorkerAnchorJournalStageV1::AnchorCommitted,
+            ),
+            (
+                AnchorPositionV1::Prior,
+                CompilerExecutionWorkerAnchorJournalStageV1::Aborted,
+            ),
+        ] {
+            for boundary in RECORD_BOUNDARIES {
+                for timing in FAULT_TIMINGS {
+                    let fixture = Fixture::new();
+                    let (request, publication) = fixture.entry(1, [0; 32], 0x86);
+                    let mut ledger =
+                        WorkerReceiptLedgerV1::recover(fixture.root(), &fixture.policy).unwrap();
+                    let challenge = ledger
+                        .prepare_external_anchor(request, publication)
+                        .unwrap();
+                    let observation = fixture.anchor_observation(&challenge, position);
+                    let mut fault = RecordFault::new(boundary, timing);
+                    assert!(
+                        ledger
+                            .record_external_anchor_observation_with_hooks(
+                                &observation,
+                                &mut fault,
+                            )
+                            .is_err(),
+                        "anchor observation unexpectedly succeeded at {position:?}/{boundary:?}/{timing:?}"
+                    );
+                    assert!(fault.fired, "fault did not fire at {boundary:?}/{timing:?}");
+                    drop(ledger);
+
+                    let mut recovered =
+                        WorkerReceiptLedgerV1::recover(fixture.root(), &fixture.policy).unwrap();
+                    let recovered_stage = recovered.anchor_journal().unwrap().stage();
+                    assert!(
+                        recovered_stage
+                            == CompilerExecutionWorkerAnchorJournalStageV1::PreparedAnchor
+                            || recovered_stage == expected_stage,
+                        "anchor observation recovered a third stage at {position:?}/{boundary:?}/{timing:?}"
+                    );
+                    assert_eq!(
+                        recovered
+                            .record_external_anchor_observation(&observation)
+                            .unwrap(),
+                        expected_stage
+                    );
+                    assert!(recovered.last_record().is_none());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn every_worker_record_crash_after_anchor_commit_finishes_exactly_once() {
+        for boundary in RECORD_BOUNDARIES {
+            for timing in FAULT_TIMINGS {
+                let fixture = Fixture::new();
+                let (request, publication) = fixture.entry(1, [0; 32], 0x87);
+                let mut ledger =
+                    WorkerReceiptLedgerV1::recover(fixture.root(), &fixture.policy).unwrap();
+                let challenge = ledger
+                    .prepare_external_anchor(request, publication)
+                    .unwrap();
+                let observation =
+                    fixture.anchor_observation(&challenge, AnchorPositionV1::Proposed);
+                ledger
+                    .record_external_anchor_observation(&observation)
+                    .unwrap();
+                let committed = ledger.anchor_journal().unwrap().clone();
+                let mut fault = RecordFault::new(boundary, timing);
+                assert!(
+                    ledger
+                        .commit_anchored_publication_with_hooks(&mut fault)
+                        .is_err(),
+                    "Worker publication unexpectedly succeeded at {boundary:?}/{timing:?}"
+                );
+                assert!(fault.fired, "fault did not fire at {boundary:?}/{timing:?}");
+                drop(ledger);
+
+                let mut recovered =
+                    WorkerReceiptLedgerV1::recover(fixture.root(), &fixture.policy).unwrap();
+                assert_eq!(recovered.anchor_journal().unwrap(), &committed);
+                let acknowledgment = recovered
+                    .commit_anchored_publication()
+                    .unwrap()
+                    .into_acknowledgment();
+                let record = recovered.last_record().unwrap();
+                assert_eq!(
+                    acknowledgment.worker_ledger_record_identity(),
+                    record.identity
+                );
+                assert_eq!(
+                    recovered.anchor_journal().unwrap().stage(),
+                    CompilerExecutionWorkerAnchorJournalStageV1::Published
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn every_published_journal_crash_finishes_exactly_once() {
+        for boundary in RECORD_BOUNDARIES {
+            for timing in FAULT_TIMINGS {
+                let fixture = Fixture::new();
+                let (request, publication) = fixture.entry(1, [0; 32], 0x88);
+                let mut ledger =
+                    WorkerReceiptLedgerV1::recover(fixture.root(), &fixture.policy).unwrap();
+                let challenge = ledger
+                    .prepare_external_anchor(request.clone(), publication.clone())
+                    .unwrap();
+                let observation =
+                    fixture.anchor_observation(&challenge, AnchorPositionV1::Proposed);
+                ledger
+                    .record_external_anchor_observation(&observation)
+                    .unwrap();
+                let committed = ledger.anchor_journal().unwrap().clone();
+                ledger
+                    .commit_publication_record_with_hooks(
+                        request,
+                        publication,
+                        &mut NoRetainedDurableDirectoryHooksV1,
+                    )
+                    .unwrap();
+                let published = committed
+                    .clone()
+                    .mark_published(ledger.last_record().unwrap().identity)
+                    .unwrap();
+                let mut fault = RecordFault::new(boundary, timing);
+                assert!(
+                    ledger
+                        .commit_anchor_journal_with_hooks(published.clone(), &mut fault)
+                        .is_err(),
+                    "published journal unexpectedly succeeded at {boundary:?}/{timing:?}"
+                );
+                assert!(fault.fired, "fault did not fire at {boundary:?}/{timing:?}");
+                drop(ledger);
+
+                let mut recovered =
+                    WorkerReceiptLedgerV1::recover(fixture.root(), &fixture.policy).unwrap();
+                let recovered_journal = recovered.anchor_journal().unwrap();
+                assert!(
+                    recovered_journal == &committed || recovered_journal == &published,
+                    "published journal recovered a third state at {boundary:?}/{timing:?}"
+                );
+                let acknowledgment = recovered
+                    .commit_anchored_publication()
+                    .unwrap()
+                    .into_acknowledgment();
+                let record = recovered.last_record().unwrap();
+                assert_eq!(
+                    acknowledgment.worker_ledger_record_identity(),
+                    record.identity
+                );
+                assert_eq!(recovered.anchor_journal().unwrap(), &published);
+            }
+        }
+    }
+
+    fn policy(
+        verifying_key: &VerifyingKey,
+        anchor_verifying_key: &VerifyingKey,
+        generation: u64,
+    ) -> CompilerExecutionIssuerPolicyV1 {
         CompilerExecutionIssuerPolicyV1::new(
             generation,
             CompilerExecutionIssuerMeasurementV1::new([0x61; SHA256_BYTES], 12_345).unwrap(),
             CompilerExecutionIssuerMeasurementV1::new([0x62; SHA256_BYTES], 67_890).unwrap(),
             verifying_key.to_bytes(),
-            SigningKey::from_bytes(&[0xa1; 32])
-                .verifying_key()
-                .to_bytes(),
+            anchor_verifying_key.to_bytes(),
         )
         .unwrap()
     }
