@@ -1,10 +1,12 @@
 //! Semantic identities recognized by device lowering.
 //!
 //! Recognition starts from a rustc [`DefId`]. Diagnostic-item equality is only
-//! accepted after the provider definition is anchored to the reviewed sibling
-//! `fe2o3-device` source tree used to build this backend. Rustc's stable crate
-//! ID and crate hash are retained as same-session provenance observations, but
-//! portable semantic identities bind only canonical source-derived fields.
+//! accepted after the provider definition is anchored to a complete source
+//! closure that exactly matches the reviewed sibling `fe2o3-device` tree used
+//! to build this backend. The source location is not trusted. Rustc's stable
+//! crate ID and crate hash are retained as same-session provenance
+//! observations, but portable semantic identities bind only canonical
+//! source-derived fields.
 //!
 //! This remains a compiler build-observation boundary, not cryptographic
 //! package authentication. A publisher signature or transparency-log identity
@@ -41,11 +43,22 @@ const PINNED_CORE_SEMANTIC_TERMINAL_TRANSCRIPT_DOMAIN_V1: &[u8] =
     b"FE2O3/PINNED-CORE-SEMANTIC-TERMINAL-TRANSCRIPT/V1\0";
 const STRUCTURAL_LOCAL_DEFINITION_COMPONENT_DOMAIN_V1: &[u8] =
     b"FE2O3/STRUCTURAL-LOCAL-DEFINITION-COMPONENT/V1\0";
+#[cfg(test)]
 const REVIEWED_FE2O3_DEVICE_PACKAGE_ROOT: &str =
     concat!(env!("CARGO_MANIFEST_DIR"), "/../fe2o3-device");
+#[cfg(test)]
 const REVIEWED_FE2O3_DEVICE_SOURCE_ROOT: &str =
     concat!(env!("CARGO_MANIFEST_DIR"), "/../fe2o3-device/src");
-static WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE: OnceLock<Result<[u8; 32], String>> = OnceLock::new();
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ReviewedProviderSourceClosureV1 {
+    source_root: PathBuf,
+    identity: [u8; 32],
+}
+
+static WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE: OnceLock<
+    Result<ReviewedProviderSourceClosureV1, String>,
+> = OnceLock::new();
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CompilerProviderObservationV1 {
@@ -1749,6 +1762,7 @@ pub(crate) fn reviewed_provider_semantic_definition_v1(
         provider_definition,
         WORKGROUP_SYNC_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1,
         WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1,
+        REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1,
         &WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE,
     )
 }
@@ -1774,25 +1788,28 @@ fn reviewed_provider_semantic_definition_from_source_v1(
     provider_definition: DefId,
     definition_source_domain: &[u8],
     source_closure_domain: &[u8],
-    source_closure_cache: &OnceLock<Result<[u8; 32], String>>,
+    expected_source_closure: [u8; 32],
+    source_closure_cache: &OnceLock<Result<ReviewedProviderSourceClosureV1, String>>,
 ) -> Result<ReviewedProviderSemanticDefinitionV1, String> {
     let crate_num = provider_definition.krate;
     let crate_name = named_external_provider(tcx, crate_num)?;
     let provider = compiler_provider_observation_v1(tcx, crate_num);
-    let definition_source_identity = reviewed_compiled_provider_source_identity_at_root(
-        tcx,
-        provider_definition,
-        Path::new(REVIEWED_FE2O3_DEVICE_SOURCE_ROOT),
-        definition_source_domain,
-    )?;
-    let source_closure_identity = source_closure_cache
+    let source_closure = source_closure_cache
         .get_or_init(|| {
-            reviewed_provider_source_closure_identity(
-                Path::new(REVIEWED_FE2O3_DEVICE_PACKAGE_ROOT),
+            let source = compiled_provider_source_path_v1(tcx, provider_definition)?;
+            reviewed_provider_source_closure_from_definition(
+                &source,
                 source_closure_domain,
+                expected_source_closure,
             )
         })
         .clone()?;
+    let definition_source_identity = reviewed_compiled_provider_source_identity_at_root(
+        tcx,
+        provider_definition,
+        &source_closure.source_root,
+        definition_source_domain,
+    )?;
     if provider.crate_name != crate_name {
         return Err("reviewed provider crate-name observation changed within the session".into());
     }
@@ -1810,7 +1827,7 @@ fn reviewed_provider_semantic_definition_from_source_v1(
         cargo_metadata_build_observation: decode_sha256_environment(
             CARGO_METADATA_BUILD_OBSERVATION_ENV_V2,
         )?,
-        source_closure_identity,
+        source_closure_identity: source_closure.identity,
         definition_source_identity,
     })
 }
@@ -1911,6 +1928,50 @@ fn reviewed_provider_source_closure_identity(
         hash_source_identity_field(&mut hasher, &bytes);
     }
     Ok(hasher.finalize().into())
+}
+
+fn reviewed_provider_source_closure_from_definition(
+    definition_source: &Path,
+    domain: &[u8],
+    expected_identity: [u8; 32],
+) -> Result<ReviewedProviderSourceClosureV1, String> {
+    if domain.is_empty() || expected_identity == [0; 32] {
+        return Err("reviewed provider source closure policy is incomplete".to_owned());
+    }
+    require_regular_file_without_symlink(definition_source)?;
+    let definition_source = std::fs::canonicalize(definition_source).map_err(|error| {
+        format!(
+            "provider source file `{}` is unavailable to the managed build: {error}",
+            definition_source.display()
+        )
+    })?;
+    let source_root = definition_source
+        .ancestors()
+        .skip(1)
+        .find(|ancestor| ancestor.file_name() == Some(std::ffi::OsStr::new("src")))
+        .ok_or_else(|| {
+            format!(
+                "provider source file `{}` has no Cargo source root",
+                definition_source.display()
+            )
+        })?;
+    let package_root = source_root.parent().ok_or_else(|| {
+        format!(
+            "provider source file `{}` has no Cargo package root",
+            definition_source.display()
+        )
+    })?;
+    let identity = reviewed_provider_source_closure_identity(package_root, domain)?;
+    if identity != expected_identity {
+        return Err(format!(
+            "provider source file `{}` is not contained by the exact reviewed fe2o3-device source closure",
+            definition_source.display()
+        ));
+    }
+    Ok(ReviewedProviderSourceClosureV1 {
+        source_root: source_root.to_path_buf(),
+        identity,
+    })
 }
 
 fn require_directory_without_symlink(path: &Path, description: &str) -> Result<(), String> {
@@ -2019,6 +2080,11 @@ fn reviewed_compiled_provider_source_identity_at_root(
     reviewed_root: &Path,
     domain: &[u8],
 ) -> Result<[u8; 32], String> {
+    let source_path = compiled_provider_source_path_v1(tcx, def_id)?;
+    reviewed_provider_source_identity_from_path(reviewed_root, &source_path, domain)
+}
+
+fn compiled_provider_source_path_v1(tcx: TyCtxt<'_>, def_id: DefId) -> Result<PathBuf, String> {
     let span = tcx.def_span(def_id);
     let source_file = tcx.sess.source_map().lookup_source_file(span.lo());
     if source_file.cnum != def_id.krate {
@@ -2030,6 +2096,7 @@ fn reviewed_compiled_provider_source_identity_at_root(
         .to_string_lossy()
         .into_owned();
     let source_path = Path::new(&file_name);
+    require_regular_file_without_symlink(source_path)?;
     let source_bytes = std::fs::read(source_path).map_err(|error| {
         format!(
             "provider source file `{}` cannot be observed by the managed build: {error}",
@@ -2043,7 +2110,12 @@ fn reviewed_compiled_provider_source_identity_at_root(
         )
     })?;
     validate_compiled_provider_source_hash_v1(&source_file.src_hash, source, source_path)?;
-    reviewed_provider_source_identity_from_path(reviewed_root, source_path, domain)
+    std::fs::canonicalize(source_path).map_err(|error| {
+        format!(
+            "provider source file `{}` is unavailable to the managed build: {error}",
+            source_path.display()
+        )
+    })
 }
 
 fn validate_compiled_provider_source_hash_v1(
@@ -2271,6 +2343,7 @@ mod tests {
         WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1,
         WORKGROUP_SYNC_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1, canonical_compiler_definition_path,
         exact_provider_compiler_definition_path_v1, pinned_core_semantic_terminal_identity_v1,
+        reviewed_provider_source_closure_from_definition,
         reviewed_provider_source_closure_identity, reviewed_provider_source_identity_from_path,
         safe_execution_compiler_definition_path, safe_execution_provider_bound_item,
         structural_local_definition_component_v1, validate_compiled_provider_source_hash_v1,
@@ -2664,6 +2737,46 @@ mod tests {
         )
         .unwrap();
         assert_ne!(identity(), changed_nested_source);
+    }
+
+    #[test]
+    fn exact_source_closure_authentication_is_location_independent() {
+        let reviewed = ProviderPackageFixture::new();
+        let identity = reviewed_provider_source_closure_identity(
+            &reviewed.root,
+            WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1,
+        )
+        .unwrap();
+        let located = reviewed_provider_source_closure_from_definition(
+            &reviewed.definition(),
+            WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1,
+            identity,
+        )
+        .unwrap();
+        assert_eq!(
+            located.source_root,
+            fs::canonicalize(reviewed.source_root()).unwrap()
+        );
+        assert_eq!(located.identity, identity);
+
+        let mut substituted_identity = identity;
+        substituted_identity[0] ^= 1;
+        assert!(
+            reviewed_provider_source_closure_from_definition(
+                &reviewed.definition(),
+                WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1,
+                substituted_identity,
+            )
+            .is_err()
+        );
+        assert!(
+            reviewed_provider_source_closure_from_definition(
+                &reviewed.definition(),
+                b"",
+                identity,
+            )
+            .is_err()
+        );
     }
 
     #[test]
