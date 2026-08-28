@@ -18,12 +18,14 @@ those images. Program, credential profile, root, and key now have one move-only
 prepared-supervisor owner. A canonical outer handoff binds the child-reported
 direct Cargo parent PID/UID/GID to the complete launch manifest. The client
 transfers that record plus exactly the rustc service peer and pidfd over an
-authenticated control connection; the supervisor independently admits and
-retains all three process identities and descriptors. It now consumes that
-handoff into a sealed 704-byte static pre-exec manifest and an exact ten-source
-table for destinations `0..=9`, retaining distinct stdout, stderr, and
-readiness readers. The supervisor now installs the manifest, issuer, and
-sources at FDs 198, 199, and `200..209` through a gated
+authenticated control connection; the supervisor independently admits those
+process identities and descriptors. It separately owns an admitted external-
+anchor endpoint and exact service pidfd, requires their service identity to
+equal the launch manifest, and transfers both to the issuer. It now consumes
+that handoff into a sealed 704-byte static pre-exec manifest and an exact
+twelve-source table for destinations `0..=11`, retaining distinct stdout,
+stderr, and readiness readers. The supervisor now installs the manifest and
+issuer at FDs 198 and 199 and sources at FDs `200..211` through a gated
 `clone3(CLONE_PIDFD | CLONE_CLEAR_SIGHAND)` child. The child self-checks its
 inherited process profile and parent-death signal; the parent independently
 checks procfs credentials, all capability sets, tracing, umask, and unchanged
@@ -31,7 +33,10 @@ user/mount/PID/network/IPC/UTS/cgroup/time namespaces before release. Exact
 readiness transitions move-only launch custody to live ready custody, while
 one exact descriptor-free readiness packet and EOF transition ready custody to
 serving custody without surrendering the pidfd. Pidfd cancellation and
-fixed-capacity deferred cleanup provide exactly-once reaping. Production must
+fixed-capacity deferred cleanup provide exactly-once reaping. The issuer
+re-admits the anchor endpoint and pidfd against both the manifest service
+identity and policy-pinned anchor key. Receipt publication does not yet invoke
+that transport. Production must
 still establish that exact profile in a deployed distinct-UID service
 entrypoint. Cargo now admits the fixed root-owned client profile and connects
 only to the fixed authenticated listener path.
@@ -105,6 +110,8 @@ supervisor-to-issuer descriptor contract is fixed:
 | 7 | Service-owned sealed Ed25519 signing-key image |
 | 8 | Sealed expected-client and policy launch manifest |
 | 9 | Nonblocking atomic readiness-pipe writer |
+| 10 | Connected external-anchor service endpoint |
+| 11 | Live process pidfd for that external-anchor service |
 
 The production ELF enters through a syscall-only x86-64 shim that restores
 nondumpability after `exec`, reasserts `no_new_privs` and the zero core limit,
@@ -277,14 +284,14 @@ transition methods.
 target and rejects an interpreter, dynamic section, runtime dependency, RPATH,
 RUNPATH, executable stack, undefined symbol, or an ELF entry address other than
 the syscall-only secure-start symbol. It also starts the issuer with
-FDs 3 through 9 closed and requires silent fail-closed exit status 1. This
+FDs 3 through 11 closed and requires silent fail-closed exit status 1. This
 qualifies the executable image shape and pre-runtime hardening edge. The
 supervisor image-admission suite independently qualifies exact source
 measurements, static-profile validation, anonymous read-only executable memfd
 custody, complete content/exec seals, caller-policy agreement, mutation and
 substitution rejection, and move-only descriptor hiding on Linux and MI300X.
 The suite also qualifies authority binding, same-process hostile handoff cases,
-the exact ten-entry prepared table, manifest seals and canonical bytes, parent
+the exact twelve-entry prepared table, manifest seals and canonical bytes, parent
 continuity, source and manifest substitution, and post-preparation rustc death.
 The lifecycle suite additionally covers atomic clone3 pidfd launch, isolated
 stdio, profile parsing, namespace continuity, readiness success, PID

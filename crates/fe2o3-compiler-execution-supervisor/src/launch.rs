@@ -14,10 +14,12 @@ use fe2o3_broker_authority_service::{
 };
 use fe2o3_compiler_closure_capability::CompilerExecutionServiceLaunchCapabilityV1;
 use fe2o3_compiler_execution_issuer::{
-    COMPILER_EXECUTION_ISSUER_CLIENT_PIDFD_V1, COMPILER_EXECUTION_ISSUER_LAUNCH_MANIFEST_FD_V1,
-    COMPILER_EXECUTION_ISSUER_PEER_FD_V1, COMPILER_EXECUTION_ISSUER_POLICY_FD_V1,
-    COMPILER_EXECUTION_ISSUER_READY_FD_V1, COMPILER_EXECUTION_ISSUER_ROOT_FD_V1,
-    COMPILER_EXECUTION_ISSUER_SIGNING_KEY_FD_V1,
+    COMPILER_EXECUTION_ISSUER_CLIENT_PIDFD_V1,
+    COMPILER_EXECUTION_ISSUER_EXTERNAL_ANCHOR_PEER_FD_V1,
+    COMPILER_EXECUTION_ISSUER_EXTERNAL_ANCHOR_PIDFD_V1,
+    COMPILER_EXECUTION_ISSUER_LAUNCH_MANIFEST_FD_V1, COMPILER_EXECUTION_ISSUER_PEER_FD_V1,
+    COMPILER_EXECUTION_ISSUER_POLICY_FD_V1, COMPILER_EXECUTION_ISSUER_READY_FD_V1,
+    COMPILER_EXECUTION_ISSUER_ROOT_FD_V1, COMPILER_EXECUTION_ISSUER_SIGNING_KEY_FD_V1,
 };
 use fe2o3_compiler_execution_protocol::CompilerExecutionServiceLaunchManifestV1;
 use fe2o3_static_preexec_manifest::{
@@ -27,13 +29,14 @@ use fe2o3_static_preexec_manifest::{
 use rustix::fs::{FileType, MemfdFlags, Mode, OFlags, SealFlags};
 use rustix::pipe::{PipeFlags, pipe_with};
 
+use crate::authority::ExternalAnchorLaunchClonesV1;
 use crate::handoff::validate_service_peer;
 use crate::{
     AcceptedCompilerExecutionHandoffV1, ProtectedIssuerHandoffErrorV1,
     ProtectedIssuerSupervisorErrorV1, ProtectedIssuerSupervisorV1,
 };
 
-const SOURCE_COUNT_V1: usize = 10;
+const SOURCE_COUNT_V1: usize = 12;
 const STDIN_SOURCE_INDEX: usize = 0;
 const STDOUT_SOURCE_INDEX: usize = 1;
 const STDERR_SOURCE_INDEX: usize = 2;
@@ -44,6 +47,8 @@ const POLICY_SOURCE_INDEX: usize = 6;
 const SIGNING_KEY_SOURCE_INDEX: usize = 7;
 const LAUNCH_MANIFEST_SOURCE_INDEX: usize = 8;
 const READINESS_SOURCE_INDEX: usize = 9;
+const EXTERNAL_ANCHOR_PEER_SOURCE_INDEX: usize = 10;
+const EXTERNAL_ANCHOR_PIDFD_SOURCE_INDEX: usize = 11;
 const MANIFEST_MODE_V1: u32 = 0o400;
 const REQUIRED_MANIFEST_SEALS_V1: SealFlags = SealFlags::WRITE
     .union(SealFlags::GROW)
@@ -61,6 +66,8 @@ const DESTINATION_FDS_V1: [i32; SOURCE_COUNT_V1] = [
     COMPILER_EXECUTION_ISSUER_SIGNING_KEY_FD_V1,
     COMPILER_EXECUTION_ISSUER_LAUNCH_MANIFEST_FD_V1,
     COMPILER_EXECUTION_ISSUER_READY_FD_V1,
+    COMPILER_EXECUTION_ISSUER_EXTERNAL_ANCHOR_PEER_FD_V1,
+    COMPILER_EXECUTION_ISSUER_EXTERNAL_ANCHOR_PIDFD_V1,
 ];
 
 const _: () = assert!(DESTINATION_FDS_V1[0] == 0);
@@ -73,11 +80,13 @@ const _: () = assert!(DESTINATION_FDS_V1[6] == 6);
 const _: () = assert!(DESTINATION_FDS_V1[7] == 7);
 const _: () = assert!(DESTINATION_FDS_V1[8] == 8);
 const _: () = assert!(DESTINATION_FDS_V1[9] == 9);
+const _: () = assert!(DESTINATION_FDS_V1[10] == 10);
+const _: () = assert!(DESTINATION_FDS_V1[11] == 11);
 
 /// Move-only, fully materialized input to the static protected-issuer launcher.
 ///
 /// This value retains the authenticated handoff, exact launcher and issuer
-/// images, sealed 704-byte pre-exec manifest, all ten ordered source objects,
+/// images, sealed 704-byte pre-exec manifest, all twelve ordered source objects,
 /// and the supervisor sides of output and readiness pipes. It exposes only
 /// inert canonical manifests. Process creation consumes this value in the next
 /// supervisor checkpoint.
@@ -160,6 +169,10 @@ impl PreparedProtectedIssuerLaunchV1 {
                 &self.sources[ROOT_SOURCE_INDEX],
                 &self.sources[POLICY_SOURCE_INDEX],
                 &self.sources[SIGNING_KEY_SOURCE_INDEX],
+                ExternalAnchorLaunchClonesV1 {
+                    peer: &self.sources[EXTERNAL_ANCHOR_PEER_SOURCE_INDEX],
+                    pidfd: &self.sources[EXTERNAL_ANCHOR_PIDFD_SOURCE_INDEX],
+                },
             )
             .map_err(ProtectedIssuerLaunchPreparationErrorV1::Supervisor)?;
         validate_service_peer(
@@ -237,10 +250,11 @@ impl PreparedProtectedIssuerLaunchV1 {
 impl ProtectedIssuerSupervisorV1 {
     /// Materializes one admitted rustc handoff into the exact static-launcher input set.
     ///
-    /// The ordered source table is fixed to destinations `0..=9`: isolated
+    /// The ordered source table is fixed to destinations `0..=11`: isolated
     /// standard streams, root, service peer, rustc pidfd, policy, signing key,
-    /// service launch manifest, and readiness writer. Every source descriptor is
-    /// close-on-exec until the static launcher installs its destination table.
+    /// service launch manifest, readiness writer, external-anchor endpoint, and
+    /// external-anchor pidfd. Every source descriptor is close-on-exec until the
+    /// static launcher installs its destination table.
     pub fn prepare_launch(
         &self,
         accepted: AcceptedCompilerExecutionHandoffV1,
@@ -265,6 +279,9 @@ impl ProtectedIssuerSupervisorV1 {
             .map_err(ProtectedIssuerLaunchPreparationErrorV1::Supervisor)?;
         let signing_key = self
             .clone_signing_key_for_launch()
+            .map_err(ProtectedIssuerLaunchPreparationErrorV1::Supervisor)?;
+        let (external_anchor_peer, external_anchor_pidfd) = self
+            .clone_external_anchor_for_launch()
             .map_err(ProtectedIssuerLaunchPreparationErrorV1::Supervisor)?;
         let service_peer = clone_owned_descriptor(
             &accepted.service_peer,
@@ -299,6 +316,8 @@ impl ProtectedIssuerSupervisorV1 {
             signing_key,
             launch_manifest,
             File::from(readiness_writer),
+            external_anchor_peer,
+            external_anchor_pidfd,
         ];
         let source_objects = source_identities(&sources)?;
         let descriptors = DESTINATION_FDS_V1
@@ -367,7 +386,7 @@ fn source_identities(
     let identities = sources
         .iter()
         .enumerate()
-        .map(|(index, source)| object_identity(source, source_role(index)))
+        .map(|(index, source)| source_object_identity(index, source))
         .collect::<Result<Vec<_>, _>>()?;
     identities.try_into().map_err(
         |_| ProtectedIssuerLaunchPreparationErrorV1::InvalidDescriptor {
@@ -375,6 +394,25 @@ fn source_identities(
             reason: "source descriptor cardinality changed",
         },
     )
+}
+
+fn source_object_identity(
+    index: usize,
+    source: &File,
+) -> Result<StaticPreexecObjectIdentityV1, ProtectedIssuerLaunchPreparationErrorV1> {
+    let identity = object_identity(source, source_role(index))?;
+    if matches!(
+        index,
+        CLIENT_PIDFD_SOURCE_INDEX | EXTERNAL_ANCHOR_PIDFD_SOURCE_INDEX
+    ) {
+        return Ok(StaticPreexecObjectIdentityV1::new_process_pidfd(
+            identity.device(),
+            identity.inode(),
+            identity.size(),
+            identity.mode(),
+        ));
+    }
+    Ok(identity)
 }
 
 fn source_role(index: usize) -> &'static str {
@@ -389,6 +427,8 @@ fn source_role(index: usize) -> &'static str {
         "issuer signing key",
         "service launch manifest",
         "readiness writer",
+        "external-anchor peer",
+        "external-anchor pidfd",
     ];
     ROLES[index]
 }

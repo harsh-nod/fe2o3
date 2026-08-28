@@ -91,7 +91,8 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   admitted issuer; all direct transition methods are private and exact replay
   resolves lost responses. A descriptor-only musl-static issuer entrypoint now
   enters through a syscall-only shim that restores nondumpability before musl
-  or Rust startup and admits fixed FDs 3 through 9. A sealed launch manifest
+  or Rust startup and admits fixed FDs 3 through 11. FDs 10 and 11 carry the
+  supervisor-admitted external-anchor endpoint and exact service pidfd. A sealed launch manifest
   binds exact rustc PID/UID/GID to the exact pinned policy, and the static build
   gate pins that shim as the ELF entry and rejects every dynamic-loader edge and undefined symbol. After complete
   admission and durable recovery, the issuer emits one canonical readiness
@@ -107,7 +108,8 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   `clone3(CLONE_PIDFD | CLONE_CLEAR_SIGHAND)` lifecycle now inherits and
   self-checks the exact locked child profile, independently observes that
   profile and every unchanged namespace in the parent, repeats authority
-  continuity before release, installs FDs 198 through 209, admits exact
+  continuity before release, installs the manifest and issuer at FDs 198 and
+  199 and the twelve sources at FDs 200 through 211, admits exact
   readiness, and owns pidfd cancellation and exactly-once reaping. The
   backend consumes the inherited service and policy descriptors, acquires the
   exact receipt after V3 handoff publication, and carries it through the sole
@@ -170,7 +172,8 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   pipeline. Its direct-parent handoff creates that socketpair in the post-fork
   selected child, transfers only the service endpoint, and binds it to exact
   child credentials and a live pidfd. The protected supervisor authenticates
-  that handoff and now materializes the exact sealed ten-source static-launcher input
+  that handoff and now materializes the exact sealed twelve-source static-launcher input,
+  including the separately admitted external-anchor endpoint and pidfd,
   while retaining private output/readiness endpoints. It now consumes that
   state through gated clone3/pidfd launch, exact readiness typestate, and a
   descriptor-free one-record readiness publication back over the authenticated

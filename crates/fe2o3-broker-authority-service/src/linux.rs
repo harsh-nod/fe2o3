@@ -408,15 +408,16 @@ impl ExpectedClientProcessIdentityV1 {
 ///
 /// Admission requires an unnamed connected nonblocking Unix `SOCK_SEQPACKET`, exact
 /// `SO_PEERCRED` agreement with the pinned external-anchor UID and GID, and a process pidfd whose
-/// target is the same live peer PID. The endpoint and pidfd remain private and move-only. This
-/// proves endpoint continuity, not key custody, monotonic persistence, or independent operation.
+/// target is the same live peer PID. The endpoint and pidfd remain move-only and can be duplicated
+/// only as one jointly revalidated supervisor-to-issuer transfer pair. This proves endpoint
+/// continuity, not key custody, monotonic persistence, or independent operation.
 pub struct ProtectedExternalAnchorServiceAdmissionV1 {
     peer: OwnedFd,
     live_service: LiveClientPidfdIdentityV1,
     expected_service: CompilerExecutionExternalAnchorServiceIdentityV1,
     issuer_uid: u32,
     peer_identity: ObjectIdentityV1,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     non_authoritative_same_uid_test: bool,
 }
 
@@ -480,7 +481,7 @@ impl ProtectedExternalAnchorServiceAdmissionV1 {
             expected_service,
             issuer_uid,
             peer_identity,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             non_authoritative_same_uid_test: !REQUIRE_DISTINCT_UID,
         };
         admitted.validate_continuity_inner::<REQUIRE_DISTINCT_UID>()?;
@@ -489,7 +490,7 @@ impl ProtectedExternalAnchorServiceAdmissionV1 {
 
     /// Revalidates the exact endpoint, pidfd target, liveness, credentials, and issuer UID.
     pub fn validate_continuity(&self) -> Result<(), ProtectedServiceAdmissionErrorV1> {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         if self.non_authoritative_same_uid_test {
             return self.validate_continuity_inner::<false>();
         }
@@ -545,6 +546,114 @@ impl ProtectedExternalAnchorServiceAdmissionV1 {
         self.expected_service
     }
 
+    /// Returns the exact live process identity bound by the service peer and pidfd.
+    pub const fn service_process_identity(&self) -> ExpectedClientProcessIdentityV1 {
+        self.live_service.expected_client
+    }
+
+    /// Clones the exact admitted endpoint and pidfd for one supervised issuer transfer.
+    ///
+    /// Both returned descriptors are close-on-exec and remain bound to the same socket object,
+    /// service process, process start time, credentials, and liveness observation as this
+    /// admission. Continuity is checked before and after duplication.
+    pub fn try_clone_for_transfer(
+        &self,
+    ) -> Result<(OwnedFd, OwnedFd), ProtectedServiceAdmissionErrorV1> {
+        self.validate_continuity()?;
+        let peer = rustix::io::fcntl_dupfd_cloexec(&self.peer, 0).map_err(|error| {
+            ProtectedServiceAdmissionErrorV1::io(
+                AdmissionErrorKindV1::InspectPeer,
+                "cannot clone external-anchor peer for issuer transfer",
+                io::Error::from(error),
+            )
+        })?;
+        let service_pidfd =
+            rustix::io::fcntl_dupfd_cloexec(&self.live_service.pidfd, 0).map_err(|error| {
+                ProtectedServiceAdmissionErrorV1::io(
+                    AdmissionErrorKindV1::InspectClientPidfd,
+                    "cannot clone external-anchor pidfd for issuer transfer",
+                    io::Error::from(error),
+                )
+            })?;
+        self.validate_transfer(&peer, &service_pidfd)?;
+        self.validate_continuity()?;
+        Ok((peer, service_pidfd))
+    }
+
+    /// Revalidates a transferred endpoint pair against this exact retained admission.
+    pub fn validate_transfer(
+        &self,
+        peer: &impl AsFd,
+        service_pidfd: &impl AsFd,
+    ) -> Result<(), ProtectedServiceAdmissionErrorV1> {
+        self.validate_continuity()?;
+        for (descriptor, kind, label) in [
+            (
+                peer.as_fd(),
+                AdmissionErrorKindV1::PeerCloseOnExec,
+                "transferred external-anchor peer",
+            ),
+            (
+                service_pidfd.as_fd(),
+                AdmissionErrorKindV1::ClientPidfdCloseOnExec,
+                "transferred external-anchor pidfd",
+            ),
+        ] {
+            let flags = rustix::io::fcntl_getfd(descriptor).map_err(|error| {
+                ProtectedServiceAdmissionErrorV1::io(
+                    kind,
+                    format!("cannot inspect {label} descriptor flags"),
+                    io::Error::from(error),
+                )
+            })?;
+            if !flags.contains(rustix::io::FdFlags::CLOEXEC) {
+                return Err(ProtectedServiceAdmissionErrorV1::new(
+                    kind,
+                    format!("{label} descriptor does not have FD_CLOEXEC"),
+                ));
+            }
+        }
+        let peer = rustix::io::fcntl_dupfd_cloexec(peer, 0).map_err(|error| {
+            ProtectedServiceAdmissionErrorV1::io(
+                AdmissionErrorKindV1::InspectPeer,
+                "cannot retain transferred external-anchor peer for revalidation",
+                io::Error::from(error),
+            )
+        })?;
+        let service_pidfd = rustix::io::fcntl_dupfd_cloexec(service_pidfd, 0).map_err(|error| {
+            ProtectedServiceAdmissionErrorV1::io(
+                AdmissionErrorKindV1::InspectClientPidfd,
+                "cannot retain transferred external-anchor pidfd for revalidation",
+                io::Error::from(error),
+            )
+        })?;
+        #[cfg(any(test, feature = "test-support"))]
+        let transferred = if self.non_authoritative_same_uid_test {
+            Self::admit_inner::<false>(peer, service_pidfd, self.expected_service)?
+        } else {
+            Self::admit_inner::<true>(peer, service_pidfd, self.expected_service)?
+        };
+        #[cfg(not(any(test, feature = "test-support")))]
+        let transferred = Self::admit_inner::<true>(peer, service_pidfd, self.expected_service)?;
+        if transferred.peer_identity != self.peer_identity {
+            return Err(ProtectedServiceAdmissionErrorV1::new(
+                AdmissionErrorKindV1::PeerIdentityChanged,
+                "transferred external-anchor endpoint is not the admitted socket object",
+            ));
+        }
+        if transferred.live_service.descriptor_identity != self.live_service.descriptor_identity
+            || transferred.live_service.expected_client != self.live_service.expected_client
+            || transferred.live_service.start_time_ticks != self.live_service.start_time_ticks
+        {
+            return Err(ProtectedServiceAdmissionErrorV1::new(
+                AdmissionErrorKindV1::ClientPidfdIdentityChanged,
+                "transferred external-anchor pidfd is not the admitted live service process",
+            ));
+        }
+        transferred.validate_continuity()?;
+        self.validate_continuity()
+    }
+
     pub(crate) fn service_peer(&self) -> std::os::fd::BorrowedFd<'_> {
         self.peer.as_fd()
     }
@@ -553,8 +662,9 @@ impl ProtectedExternalAnchorServiceAdmissionV1 {
         self.live_service.pidfd.as_fd()
     }
 
-    #[cfg(test)]
-    pub(crate) fn admit_non_authoritative_same_uid_test(
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn admit_non_authoritative_same_uid_test(
         retained_peer: OwnedFd,
         service_pidfd: OwnedFd,
         expected_service: CompilerExecutionExternalAnchorServiceIdentityV1,
@@ -1928,6 +2038,50 @@ mod tests {
         let debug = format!("{admission:?}");
         assert!(debug.contains("authority: \"none\""));
         assert!(!debug.contains("raw_fd"));
+    }
+
+    #[test]
+    fn external_anchor_transfer_clones_preserve_exact_endpoint_and_pidfd() {
+        let (peer, _service) = nonblocking_seqpacket();
+        let admission =
+            ProtectedExternalAnchorServiceAdmissionV1::admit_non_authoritative_same_uid_test(
+                peer,
+                pidfd_for(std::process::id()),
+                external_anchor_service_identity(),
+            )
+            .unwrap();
+        let (transferred_peer, transferred_pidfd) = admission.try_clone_for_transfer().unwrap();
+        admission
+            .validate_transfer(&transferred_peer, &transferred_pidfd)
+            .unwrap();
+        assert!(
+            rustix::io::fcntl_getfd(&transferred_peer)
+                .unwrap()
+                .contains(rustix::io::FdFlags::CLOEXEC)
+        );
+        assert!(
+            rustix::io::fcntl_getfd(&transferred_pidfd)
+                .unwrap()
+                .contains(rustix::io::FdFlags::CLOEXEC)
+        );
+
+        let (substituted_peer, _substituted_service) = nonblocking_seqpacket();
+        assert_eq!(
+            admission
+                .validate_transfer(&substituted_peer, &transferred_pidfd)
+                .unwrap_err()
+                .kind(),
+            AdmissionErrorKindV1::PeerIdentityChanged
+        );
+
+        rustix::io::fcntl_setfd(&transferred_peer, rustix::io::FdFlags::empty()).unwrap();
+        assert_eq!(
+            admission
+                .validate_transfer(&transferred_peer, &transferred_pidfd)
+                .unwrap_err()
+                .kind(),
+            AdmissionErrorKindV1::PeerCloseOnExec
+        );
     }
 
     #[test]

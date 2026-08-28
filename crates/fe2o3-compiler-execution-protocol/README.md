@@ -35,7 +35,12 @@ external-anchor service identity to an exact policy identity. A canonical
 binds the direct Cargo parent PID/UID/GID to that complete manifest; parent and
 rustc must be distinct processes with equal credentials. A separate readiness
 record binds the admitted issuer PID to the exact manifest and policy after
-durable recovery. None of these records grants process or signing authority.
+durable recovery. The supervisor separately admits the manifest-named anchor
+service endpoint and pidfd and transfers them at issuer FDs 10 and 11; the
+issuer revalidates their continuity and binds the transport to the policy-pinned
+anchor key. No descriptor is serialized in these records, and receipt
+publication does not yet invoke the transferred transport. None of these
+records grants process or signing authority.
 The sole production supervisor endpoint is the named Unix `SOCK_SEQPACKET`
 socket `/run/fe2o3/compiler-execution-supervisor.sock`; alternate paths are not
 part of the production protocol.

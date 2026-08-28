@@ -812,6 +812,7 @@ version = "0.1.0"
 dependencies = [
  "ed25519-dalek",
  "fe2o3-artifact-transaction",
+ "fe2o3-external-anchor-protocol",
  "sha2 0.11.0",
 ]
 

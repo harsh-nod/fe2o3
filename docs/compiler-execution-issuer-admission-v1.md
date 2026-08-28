@@ -64,8 +64,9 @@ copied to distinct read-only anonymous executable memfds with complete content,
 exec, and seal seals. The program value cannot accept a root or key; that
 authority-binding transition is now complete, as is authenticated receipt of
 the direct-parent rustc handoff. The supervisor also materializes the exact
-ten-source table, distinct standard-stream and readiness pipes, cloned
-authority descriptors, and a sealed canonical static pre-exec manifest bound
+  twelve-source table, distinct standard-stream and readiness pipes, cloned
+  authority descriptors, an admitted external-anchor endpoint and pidfd, and a
+  sealed canonical static pre-exec manifest bound
 to its PID and process start time. That state is now consumed by an exact
 `clone3(CLONE_PIDFD | CLONE_CLEAR_SIGHAND)` launch. A direct-syscall gate
 self-checks the inherited profile and parent-death containment while the

@@ -150,8 +150,10 @@ supervisor-provisioned nonblocking unnamed seqpacket and exact live service
 pidfd under a separately pinned non-root UID/GID. Its fixed-deadline transport
 sends only the canonical anchor challenge and accepts only one exact,
 ancillary-free signed observation verified under the policy key. The production
-supervisor and issuer do not yet carry or invoke that endpoint, so this is not
-external rollback authority. The result
+supervisor now retains that exact endpoint and pidfd, binds their admitted
+service identity to the launch manifest, and transfers both through the static
+launcher for independent issuer admission at FDs 10 and 11. Receipt publication
+does not yet invoke the endpoint, so this is not external rollback authority. The result
 remains authority-free until protected key custody, external rollback, and
 refinement evidence are joined. The issuer's direct transition
 methods are private. One shared bounded
@@ -165,23 +167,27 @@ canonical outer handoff binds that exact direct parent to the sealed launch
 manifest, and the client can transfer its service peer and pidfd over one
 authenticated `SOCK_SEQPACKET` connection to the distinct-UID supervisor. The
 supervisor repeats direct-parent `SO_PEERCRED`, policy, rustc peer credentials,
-pidfd target/liveness, descriptor identity, and alias checks. It now consumes
-one accepted handoff into an exact ten-source prepared launch for destination
-FDs `0..=9`, with distinct isolated stdio/readiness pipes, cloned authority
-descriptors, and a canonical 704-byte manifest bound to the supervisor PID and
-procfs start time. That manifest is an anonymous read-only mode-`0400` memfd
+pidfd target/liveness, descriptor identity, and alias checks. It also retains a
+separately admitted external-anchor endpoint and exact service pidfd. It now
+consumes one accepted handoff into an exact twelve-source prepared launch for
+destination FDs `0..=11`, with distinct isolated stdio/readiness pipes, cloned
+authority and anchor descriptors, and a canonical 704-byte manifest bound to
+the supervisor PID and procfs start time. That manifest is an anonymous read-only mode-`0400` memfd
 with complete content seals; every object, byte, access mode, capability, live
 client, and non-aliasing relation is revalidated without exposing descriptor
-custody. A gated `clone3(CLONE_PIDFD | CLONE_CLEAR_SIGHAND)` child now
+custody. The two process-pidfd entries use a dedicated manifest object class
+because Linux pidfds may share one anonymous-inode `fstat` key; the launcher
+validates the class while the receiving services bind each pidfd to its exact
+process target. A gated `clone3(CLONE_PIDFD | CLONE_CLEAR_SIGHAND)` child now
 self-checks the inherited locked service profile and parent-death containment.
 Before release, the parent independently rechecks procfs profile fields, every
 unchanged namespace, live rustc, and all authority objects. The bootstrap
-isolates stdio, installs the manifest, issuer, and ten sources at FDs 198
-through 209, and executes only the authenticated static launcher. The launch
+isolates stdio, installs the manifest and issuer at FDs 198 and 199 and the
+twelve sources at FDs 200 through 211, and executes only the authenticated static launcher. The launch
 manifest binds the exact rustc PID/UID/GID to the pinned policy, and the
 descriptor-only musl-static issuer enters through a syscall-only shim that
 restores nondumpability before musl or Rust startup and then consumes fixed FDs
-3 through 9. After complete
+3 through 11. After complete
 admission and durable recovery it emits one canonical PID/manifest/policy-bound
 readiness record through an atomic nonblocking pipe. Its build gate rejects
 dynamic-loader edges, undefined symbols, a displaced secure entry point, and

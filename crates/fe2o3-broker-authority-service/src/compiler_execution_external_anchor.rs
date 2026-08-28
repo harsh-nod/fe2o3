@@ -9,6 +9,7 @@ use fe2o3_external_anchor_protocol::{
     ANCHOR_OBSERVATION_WIRE_LEN_V1, AnchorChallengeV1, AnchorProtocolErrorV1,
     AnchorTransitionReceiptV1, PinnedAnchorKeyV1,
 };
+use fe2o3_runtime_protocol::CompilerExecutionIssuerPolicyV1;
 
 use crate::{ProtectedExternalAnchorServiceAdmissionV1, ProtectedServiceAdmissionErrorV1};
 
@@ -55,6 +56,15 @@ impl ProtectedCompilerExecutionExternalAnchorV1 {
         )
     }
 
+    /// Binds a retained service admission directly to the external key in one issuer policy.
+    pub fn from_issuer_policy(
+        admission: ProtectedExternalAnchorServiceAdmissionV1,
+        policy: &CompilerExecutionIssuerPolicyV1,
+    ) -> Result<Self, ProtectedCompilerExecutionExternalAnchorErrorV1> {
+        let key = PinnedAnchorKeyV1::from_bytes(*policy.external_anchor_verifying_key())?;
+        Self::new(admission, key)
+    }
+
     fn new_with_timeout(
         admission: ProtectedExternalAnchorServiceAdmissionV1,
         key: PinnedAnchorKeyV1,
@@ -85,6 +95,14 @@ impl ProtectedCompilerExecutionExternalAnchorV1 {
             self.poisoned = true;
         }
         result
+    }
+
+    pub(crate) fn validate_continuity(&self) -> Result<(), ProtectedServiceAdmissionErrorV1> {
+        self.admission.validate_continuity()
+    }
+
+    pub(crate) fn matches_policy(&self, policy: &CompilerExecutionIssuerPolicyV1) -> bool {
+        self.key.to_bytes() == *policy.external_anchor_verifying_key()
     }
 
     fn exchange_once(
