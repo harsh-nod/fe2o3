@@ -112,3 +112,25 @@ bind the capture, operation, and both filters. Capabilities explicitly report
 hardware-instance, source, ISA, PC-sample, ATT, execution-history, and
 execution-control data as unavailable. `query_json` enforces the configured
 response ceiling and emits deterministic JSON for agent callers.
+
+## Capture comparison
+
+`compare_dispatch_captures_v1` and `compare_counter_captures_v2` perform a
+strict compatibility audit without changing capture bytes. Current device and
+counter identities are deliberately bound to one complete profiler source, and
+captures contain no authenticated stable environment identity. Consequently,
+two distinct captures return `unavailable_source_bound_identity`, no deltas,
+the supporting or comparison-blocking capture content identities, and a minimal next
+capture requirement using the existing capture-plan tool/fact vocabulary.
+Identical canonical bytes report only exact byte equality; they do not establish
+a cross-run regression and still request stable authenticated identities for a
+future comparable capture. Equality of KIR, artifact, and source-map fields is
+reported as equality of `declared` claims, not as authenticated correlation. No
+raw clock ticks or counter names are compared.
+
+The stdin-only `fe2o3-capture-compare {dispatch-v1|counter-v2}` CLI accepts one
+bounded binary frame: an eight-byte little-endian baseline length, the baseline
+capture, then the candidate capture. It emits bounded deterministic JSON and
+never opens paths or invokes a runtime. A future useful cross-run comparison
+requires an authenticated stable environment/device/counter identity evidence
+contract; caller declarations are intentionally not accepted as a substitute.

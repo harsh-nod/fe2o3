@@ -9,6 +9,8 @@
 
 mod capture_query;
 pub use capture_query::*;
+mod capture_compare;
+pub use capture_compare::*;
 mod counter_query;
 pub use counter_query::*;
 

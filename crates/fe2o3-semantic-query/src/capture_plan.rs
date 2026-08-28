@@ -60,6 +60,9 @@ pub enum CaptureToolStatusV1 {
 #[serde(rename_all = "snake_case")]
 pub enum CaptureFactV1 {
     TraceContainerIdentity,
+    StableEnvironmentIdentity,
+    StableDeviceIdentity,
+    StableCounterIdentity,
     KernelIrClaim,
     ArtifactBindingClaim,
     DispatchEnvelope,
