@@ -8860,12 +8860,15 @@ fn local_provenance_v1(
     let definitions = local_definition_counts(function);
     let local_count = function.locals().len();
     let mut stable_argument_origins = vec![None; local_count];
+    let mut allocation_origins = vec![None; local_count];
     let mut allocation_provenance = vec![None; local_count];
     let mut stable_edges = vec![Vec::new(); local_count];
     let mut allocation_edges = vec![Vec::new(); local_count];
+    let mut allocation_contract_edges = vec![Vec::new(); local_count];
     for (local_index, local) in function.locals().iter().enumerate() {
         if let SemanticLocalRoleV1::Argument(argument) = local.role() {
             stable_argument_origins[local_index] = Some(argument);
+            allocation_origins[local_index] = Some(argument);
             allocation_provenance[local_index] =
                 Some(LocalAllocationProvenanceV1::Argument(argument));
         }
@@ -8924,6 +8927,12 @@ fn local_provenance_v1(
                     destination,
                     &mut edge_count,
                 )?;
+                push_local_provenance_edge_v1(
+                    &mut allocation_contract_edges,
+                    source.index() as usize,
+                    destination,
+                    &mut edge_count,
+                )?;
             } else if let SemanticRvalueKindV1::Borrow { place, .. }
             | SemanticRvalueKindV1::AddressOf { place, .. } = assignment.value().kind()
                 && place.projections().is_empty()
@@ -8948,6 +8957,24 @@ fn local_provenance_v1(
                     }
                 }
             }
+
+            if let SemanticRvalueKindV1::Binary {
+                operation: SemanticBinaryOpV1::Offset,
+                left,
+                ..
+            } = assignment.value().kind()
+                && let Some(source) = allocation_operand_local_v1(types, function, left)
+            {
+                // Pointer offsets retain only an authenticated external allocation
+                // contract. Private roots have no size/range contract and must not
+                // gain address-formation authority through raw pointer arithmetic.
+                push_local_provenance_edge_v1(
+                    &mut allocation_contract_edges,
+                    source.index() as usize,
+                    destination,
+                    &mut edge_count,
+                )?;
+            }
         }
     }
 
@@ -8961,13 +8988,11 @@ fn local_provenance_v1(
         &allocation_edges,
         "a local may alias multiple kernel allocation origins",
     )?;
-    let allocation_origins = allocation_provenance
-        .iter()
-        .map(|origin| match origin {
-            Some(LocalAllocationProvenanceV1::Argument(argument)) => Some(*argument),
-            Some(LocalAllocationProvenanceV1::Private(_)) | None => None,
-        })
-        .collect();
+    propagate_exact_local_origins_v1(
+        &mut allocation_origins,
+        &allocation_contract_edges,
+        "a local may alias multiple kernel allocation origins",
+    )?;
     Ok(LocalProvenanceV1 {
         stable_argument_origins,
         allocation_origins,
@@ -17991,6 +18016,210 @@ mod tests {
         );
     }
 
+    fn pointer_offset(destination: u32, source: u32) -> SemanticStatementV1 {
+        let pointer_place = |local| {
+            SemanticPlaceV1::new(SemanticLocalIdV1::from_index(local), vec![], POINTER_TYPE)
+                .unwrap()
+        };
+        statement(SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+            pointer_place(destination),
+            SemanticRvalueV1::new(
+                POINTER_TYPE,
+                SemanticRvalueKindV1::Binary {
+                    operation: SemanticBinaryOpV1::Offset,
+                    left: SemanticOperandV1::Copy(pointer_place(source)),
+                    right: constant(1),
+                },
+            ),
+        )))
+    }
+
+    fn projected_pointer_borrow(destination: u32, source: u32) -> SemanticStatementV1 {
+        let dereference =
+            SemanticProjectionV1::new(SemanticProjectionKindV1::Dereference, SCALAR_TYPE).unwrap();
+        statement(SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+            SemanticPlaceV1::new(
+                SemanticLocalIdV1::from_index(destination),
+                vec![],
+                POINTER_TYPE,
+            )
+            .unwrap(),
+            SemanticRvalueV1::new(
+                POINTER_TYPE,
+                SemanticRvalueKindV1::Borrow {
+                    kind: SemanticBorrowKindV1::Shared,
+                    place: SemanticPlaceV1::new(
+                        SemanticLocalIdV1::from_index(source),
+                        vec![dereference],
+                        SCALAR_TYPE,
+                    )
+                    .unwrap(),
+                },
+            ),
+        )))
+    }
+
+    #[test]
+    fn pointer_offset_retains_only_an_external_allocation_contract() {
+        let function = projection_function_with_owned_argument(
+            vec![block(
+                133,
+                vec![pointer_offset(2, 1), projected_pointer_borrow(3, 2)],
+                SemanticTerminatorKindV1::Return,
+            )],
+            vec![
+                local(133, SCALAR_TYPE, SemanticLocalRoleV1::Return),
+                local(134, POINTER_TYPE, SemanticLocalRoleV1::Argument(0)),
+                local(135, POINTER_TYPE, SemanticLocalRoleV1::Temporary),
+                local(136, POINTER_TYPE, SemanticLocalRoleV1::Temporary),
+            ],
+            SemanticSourceArgumentOwnershipV1::RawPointer,
+        );
+        let types = projection_types();
+        let provenance = local_provenance_v1(&types, &function).unwrap();
+        assert_eq!(
+            provenance.allocation_origins,
+            vec![None, Some(0), Some(0), Some(0)]
+        );
+        assert_eq!(
+            provenance.allocation_provenance,
+            vec![
+                None,
+                Some(LocalAllocationProvenanceV1::Argument(0)),
+                None,
+                None,
+            ]
+        );
+
+        let mut contracts = synthetic_local_contracts(&function);
+        let external_contract = contracts.allocations[1].unwrap();
+        contracts.allocations = vec![None; function.locals().len()];
+        contracts.allocations[2] = Some(external_contract);
+        contracts.allocation_provenance = provenance.allocation_provenance;
+        let dereferenced_offset = SemanticPlaceV1::new(
+            SemanticLocalIdV1::from_index(2),
+            vec![
+                SemanticProjectionV1::new(SemanticProjectionKindV1::Dereference, SCALAR_TYPE)
+                    .unwrap(),
+            ],
+            SCALAR_TYPE,
+        )
+        .unwrap();
+        project_address_formation(&types, &function, &dereferenced_offset, &contracts).unwrap();
+    }
+
+    #[test]
+    fn private_pointer_offset_cannot_mint_address_formation_authority() {
+        let private = SemanticLocalIdV1::from_index(1);
+        let direct_borrow = statement(SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+            SemanticPlaceV1::new(SemanticLocalIdV1::from_index(2), vec![], POINTER_TYPE).unwrap(),
+            SemanticRvalueV1::new(
+                POINTER_TYPE,
+                SemanticRvalueKindV1::Borrow {
+                    kind: SemanticBorrowKindV1::Shared,
+                    place: SemanticPlaceV1::new(private, vec![], SCALAR_TYPE).unwrap(),
+                },
+            ),
+        )));
+        let function = projection_function_with_locals(
+            vec![block(
+                137,
+                vec![
+                    direct_borrow,
+                    pointer_offset(3, 2),
+                    projected_pointer_borrow(4, 3),
+                ],
+                SemanticTerminatorKindV1::Return,
+            )],
+            vec![
+                local(137, SCALAR_TYPE, SemanticLocalRoleV1::Return),
+                local(138, SCALAR_TYPE, SemanticLocalRoleV1::Temporary),
+                local(139, POINTER_TYPE, SemanticLocalRoleV1::Temporary),
+                local(140, POINTER_TYPE, SemanticLocalRoleV1::Temporary),
+                local(141, POINTER_TYPE, SemanticLocalRoleV1::Temporary),
+            ],
+        );
+        let provenance = local_provenance_v1(&projection_types(), &function).unwrap();
+        assert_eq!(
+            provenance.allocation_provenance,
+            vec![
+                None,
+                None,
+                Some(LocalAllocationProvenanceV1::Private(private)),
+                None,
+                None,
+            ]
+        );
+        assert_eq!(
+            provenance.allocation_origins,
+            vec![None, None, None, None, None]
+        );
+
+        let mut contracts = synthetic_local_contracts(&function);
+        contracts.allocations = vec![None; function.locals().len()];
+        contracts.allocation_provenance = provenance.allocation_provenance;
+        assert!(matches!(
+            audit_function_with_local_contracts(&function, &contracts),
+            Err(
+                ProductionRankedProjectionErrorV1::MissingAllocationProvenance {
+                    local: 3,
+                    projections: 1,
+                    ty: 2,
+                }
+            )
+        ));
+    }
+
+    #[test]
+    fn unknown_or_multiply_defined_pointer_offsets_remain_unauthenticated() {
+        let unknown = projection_function_with_locals(
+            vec![block(
+                142,
+                vec![pointer_offset(2, 1), projected_pointer_borrow(3, 2)],
+                SemanticTerminatorKindV1::Return,
+            )],
+            vec![
+                local(142, SCALAR_TYPE, SemanticLocalRoleV1::Return),
+                local(143, POINTER_TYPE, SemanticLocalRoleV1::Temporary),
+                local(144, POINTER_TYPE, SemanticLocalRoleV1::Temporary),
+                local(145, POINTER_TYPE, SemanticLocalRoleV1::Temporary),
+            ],
+        );
+        let unknown_provenance = local_provenance_v1(&projection_types(), &unknown).unwrap();
+        assert_eq!(
+            unknown_provenance.allocation_origins,
+            vec![None, None, None, None]
+        );
+        assert_eq!(
+            unknown_provenance.allocation_provenance,
+            vec![None, None, None, None]
+        );
+
+        let multiply_defined = projection_function_with_owned_argument(
+            vec![block(
+                146,
+                vec![pointer_offset(2, 1), pointer_offset(2, 1)],
+                SemanticTerminatorKindV1::Return,
+            )],
+            vec![
+                local(146, SCALAR_TYPE, SemanticLocalRoleV1::Return),
+                local(147, POINTER_TYPE, SemanticLocalRoleV1::Argument(0)),
+                local(148, POINTER_TYPE, SemanticLocalRoleV1::Temporary),
+            ],
+            SemanticSourceArgumentOwnershipV1::RawPointer,
+        );
+        let multiply_defined_provenance =
+            local_provenance_v1(&projection_types(), &multiply_defined).unwrap();
+        assert_eq!(
+            multiply_defined_provenance.allocation_origins,
+            vec![None, Some(0), None]
+        );
+        assert_eq!(
+            multiply_defined_provenance.allocation_provenance,
+            vec![None, Some(LocalAllocationProvenanceV1::Argument(0)), None,]
+        );
+    }
+
     #[test]
     fn scalar_pair_field_zero_preserves_authenticated_first_pointer_provenance() {
         let pointer_primitive = SemanticBackendPrimitiveV1::pointer(1, 8, 8);
@@ -18090,6 +18319,39 @@ mod tests {
         assert_eq!(
             allocation_operand_local_v1(&types, &function, &field(1)),
             None
+        );
+
+        let pointer_place = |local| {
+            SemanticPlaceV1::new(SemanticLocalIdV1::from_index(local), vec![], POINTER_TYPE)
+                .unwrap()
+        };
+        let field_zero_copy =
+            statement(SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+                pointer_place(2),
+                SemanticRvalueV1::new(POINTER_TYPE, SemanticRvalueKindV1::Use(field(0))),
+            )));
+        let exact_chain = projection_function_with_locals(
+            vec![block(
+                149,
+                vec![
+                    field_zero_copy,
+                    pointer_offset(3, 2),
+                    projected_pointer_borrow(4, 3),
+                ],
+                SemanticTerminatorKindV1::Return,
+            )],
+            vec![
+                local(149, SCALAR_TYPE, SemanticLocalRoleV1::Return),
+                local(150, scalar_pair, SemanticLocalRoleV1::Argument(0)),
+                local(151, POINTER_TYPE, SemanticLocalRoleV1::Temporary),
+                local(152, POINTER_TYPE, SemanticLocalRoleV1::Temporary),
+                local(153, POINTER_TYPE, SemanticLocalRoleV1::Temporary),
+            ],
+        );
+        let provenance = local_provenance_v1(&types, &exact_chain).unwrap();
+        assert_eq!(
+            provenance.allocation_origins,
+            vec![None, Some(0), Some(0), Some(0), Some(0)]
         );
     }
 
