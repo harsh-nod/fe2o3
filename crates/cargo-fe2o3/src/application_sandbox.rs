@@ -659,7 +659,12 @@ fn allowed_application_syscalls() -> &'static [libc::c_long] {
         libc::SYS_write,
         libc::SYS_readv,
         libc::SYS_writev,
+        libc::SYS_sendto,
         libc::SYS_sendmsg,
+        libc::SYS_recvmsg,
+        libc::SYS_getsockopt,
+        libc::SYS_getsockname,
+        libc::SYS_getpeername,
         libc::SYS_pread64,
         libc::SYS_pwrite64,
         libc::SYS_close,
@@ -769,6 +774,34 @@ mod tests {
             libc::SYS_io_uring_register,
             libc::SYS_execve,
             libc::SYS_execveat,
+        ] {
+            assert!(!allowed.contains(&forbidden), "syscall {forbidden} escaped");
+        }
+    }
+
+    #[test]
+    fn inherited_connected_service_operations_are_narrowly_allowlisted() {
+        let allowed = allowed_application_syscalls();
+        for required in [
+            libc::SYS_sendto,
+            libc::SYS_recvmsg,
+            libc::SYS_getsockopt,
+            libc::SYS_getsockname,
+            libc::SYS_getpeername,
+        ] {
+            assert!(
+                allowed.contains(&required),
+                "syscall {required} is required"
+            );
+        }
+        for forbidden in [
+            libc::SYS_socket,
+            libc::SYS_socketpair,
+            libc::SYS_connect,
+            libc::SYS_bind,
+            libc::SYS_listen,
+            libc::SYS_accept,
+            libc::SYS_accept4,
         ] {
             assert!(!allowed.contains(&forbidden), "syscall {forbidden} escaped");
         }
