@@ -4,6 +4,7 @@
 mod application_handoff_v3;
 mod compiler_execution_attestation;
 mod compiler_execution_receipt_publication;
+mod compiler_execution_service;
 mod static_application;
 mod worker_v3_load_envelope;
 
@@ -40,6 +41,22 @@ pub use compiler_execution_receipt_publication::{
     CompilerExecutionReceiptPublicationAckIdentityV1, CompilerExecutionReceiptPublicationAckV1,
     CompilerExecutionReceiptPublicationErrorV1, CompilerExecutionReceiptPublicationIdentityV1,
     CompilerExecutionReceiptPublicationV1,
+};
+pub use compiler_execution_service::{
+    COMPILER_EXECUTION_SERVICE_CONTROL_REQUEST_BYTES_V1,
+    COMPILER_EXECUTION_SERVICE_CONTROL_RESPONSE_BYTES_V1,
+    COMPILER_EXECUTION_SERVICE_ISSUE_REQUEST_BYTES_V1,
+    COMPILER_EXECUTION_SERVICE_ISSUED_RESPONSE_BYTES_V1,
+    COMPILER_EXECUTION_SERVICE_PREPARE_REQUEST_BYTES_V1,
+    COMPILER_EXECUTION_SERVICE_PREPARED_RESPONSE_BYTES_V1,
+    COMPILER_EXECUTION_SERVICE_PUBLISH_REQUEST_BYTES_V1,
+    COMPILER_EXECUTION_SERVICE_PUBLISHED_RESPONSE_BYTES_V1,
+    CompilerExecutionServiceProtocolErrorV1, CompilerExecutionServicePublishDispositionV1,
+    CompilerExecutionServiceRequestIdentityV1, CompilerExecutionServiceRequestKindV1,
+    CompilerExecutionServiceRequestV1, CompilerExecutionServiceResponseIdentityV1,
+    CompilerExecutionServiceResponseKindV1, CompilerExecutionServiceResponseV1,
+    MAX_COMPILER_EXECUTION_SERVICE_REQUEST_BYTES_V1,
+    MAX_COMPILER_EXECUTION_SERVICE_RESPONSE_BYTES_V1,
 };
 pub use static_application::{
     SealedStaticApplicationErrorV1, sealed_static_application_identity_v1,

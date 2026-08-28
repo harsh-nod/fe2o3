@@ -40,3 +40,19 @@ These records are inert transport data. In particular, the ACK digest does not
 prove that its named Worker record is durable. Only independent protected-ledger
 reacquisition may construct the move-only result that allows the issuer to
 discard an issued receipt.
+
+## Compiler-execution service V1
+
+The packet codec carries the attestation lifecycle over one connected Unix
+`SOCK_SEQPACKET` boundary. Requests select inspect, prepare, issue, publish, or
+cancel and bind the caller-pinned policy plus the exact expected sequence and
+rollback anchor. Responses carry ready state, the complete challenge, the
+complete receipt publication, or the complete Worker-ledger ACK. Every packet
+has an exact operation-specific length and a terminal domain-separated
+identity. The maximum request is 1,658 bytes and the maximum response is 744
+bytes.
+
+The codec is allocation-free and authority-free. It does not inspect peer
+credentials, retain a pidfd, impose a deadline, mutate either journal, or turn
+wire bytes into a capability. Those operations belong only to the protected
+service implementation.
