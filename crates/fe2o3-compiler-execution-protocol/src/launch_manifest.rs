@@ -59,6 +59,10 @@ impl CompilerExecutionClientProcessIdentityV1 {
 pub struct CompilerExecutionServiceLaunchManifestIdentityV1([u8; SHA256_BYTES]);
 
 impl CompilerExecutionServiceLaunchManifestIdentityV1 {
+    pub(crate) const fn from_bytes_for_protocol(bytes: [u8; SHA256_BYTES]) -> Self {
+        Self(bytes)
+    }
+
     /// Returns the exact identity bytes.
     pub const fn as_bytes(&self) -> &[u8; SHA256_BYTES] {
         &self.0

@@ -5,6 +5,7 @@ mod attestation;
 mod launch_manifest;
 mod receipt_publication;
 mod service;
+mod service_ready;
 
 pub use attestation::{
     COMPILER_EXECUTION_ATTESTATION_CHALLENGE_BYTES_V1,
@@ -47,4 +48,8 @@ pub use service::{
     CompilerExecutionServiceResponseKindV1, CompilerExecutionServiceResponseV1,
     MAX_COMPILER_EXECUTION_SERVICE_REQUEST_BYTES_V1,
     MAX_COMPILER_EXECUTION_SERVICE_RESPONSE_BYTES_V1,
+};
+pub use service_ready::{
+    COMPILER_EXECUTION_SERVICE_READY_BYTES_V1, CompilerExecutionServiceReadyErrorV1,
+    CompilerExecutionServiceReadyIdentityV1, CompilerExecutionServiceReadyV1,
 };

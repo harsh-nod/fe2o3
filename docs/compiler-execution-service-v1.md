@@ -13,7 +13,7 @@ has a descriptor-only `x86_64-unknown-linux-musl` issuer executable, a strict
 static-ELF build gate, and a sealed launch manifest binding the exact expected
 client PID/UID/GID to the exact caller-pinned policy. A supervisor still needs
 to establish the real distinct-UID launch and ptrace inspection policy and map
-the six admitted descriptors through the existing static pre-exec launcher.
+the seven admitted descriptors through the existing static pre-exec launcher.
 The complete receipt carriage, subject-bound current-record recovery operation,
 lossless Worker V3 V2 load-envelope codec, and bounded restart-safe client state
 machine exist, but protected-supervisor integration, backend acquisition,
@@ -59,12 +59,17 @@ supervisor-to-issuer descriptor contract is fixed:
 | 6 | Sealed caller-pinned issuer policy |
 | 7 | Service-owned sealed Ed25519 signing-key image |
 | 8 | Sealed expected-client and policy launch manifest |
+| 9 | Nonblocking atomic readiness-pipe writer |
 
 The entrypoint hardens itself before admitting these objects, requires policy,
 manifest, peer credentials, and pidfd identity to agree, remeasures its running
 static image, admits key material only after those checks, recovers both durable
-ledgers, and then consumes the bounded service loop. Its launch inputs are not
-compiler or publication authority.
+ledgers, emits one canonical readiness record binding its PID, launch manifest,
+and policy, and then consumes the bounded service loop. The writer must be a
+close-on-exec `O_WRONLY | O_NONBLOCK` pipe with an atomic-write bound covering
+the complete record; packet-mode, async, append, blocking, readable, ordinary
+file, socket, and undersized substitutions reject. Its launch inputs and
+readiness bytes are not compiler or publication authority.
 
 Continuity is checked before receive, after receive, after the durable
 operation, and after response delivery. The same absolute monotonic deadline,
@@ -186,6 +191,6 @@ transition methods.
 `scripts/build-static-compiler-execution-issuer.sh` builds the pinned musl
 target and rejects an interpreter, dynamic section, runtime dependency, RPATH,
 RUNPATH, executable stack, or undefined symbol. It also starts the issuer with
-FDs 3 through 8 closed and requires silent fail-closed exit status 1. This
+FDs 3 through 9 closed and requires silent fail-closed exit status 1. This
 qualifies the executable image shape, not the still-pending distinct-UID
 supervisor deployment.

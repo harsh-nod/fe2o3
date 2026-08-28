@@ -796,8 +796,10 @@ dependencies = [
 name = "fe2o3-compiler-execution-issuer"
 version = "0.1.0"
 dependencies = [
+ "ed25519-dalek",
  "fe2o3-broker-authority-service",
  "fe2o3-compiler-closure-capability",
+ "fe2o3-compiler-execution-protocol",
  "libc",
 ]
 
