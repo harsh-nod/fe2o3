@@ -32,8 +32,8 @@ const WORKGROUP_SYNC_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1: &[u8] =
 const WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1: &[u8] =
     b"FE2O3/WORKGROUP-SYNC-PROVIDER-SOURCE-CLOSURE/V1\0";
 const REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1: [u8; 32] = [
-    0x32, 0xf4, 0x08, 0x39, 0xff, 0x96, 0xbb, 0xca, 0xbe, 0xb8, 0xeb, 0xb7, 0x2d, 0xb9, 0x38, 0x22,
-    0xca, 0x05, 0x96, 0x30, 0x97, 0x30, 0xd2, 0xc7, 0x1a, 0xd8, 0x78, 0x98, 0x49, 0xec, 0x57, 0x74,
+    0x33, 0x19, 0xbf, 0xf2, 0x01, 0xd5, 0x86, 0xa4, 0x6f, 0xd1, 0xde, 0xe4, 0xe2, 0x8d, 0x8d, 0x9c,
+    0x6f, 0x24, 0x13, 0x7c, 0x21, 0x93, 0xa6, 0x7b, 0xb9, 0x3a, 0x44, 0x5d, 0x98, 0xbe, 0x0b, 0xb2,
 ];
 
 const PROVIDER_SEMANTIC_DEFINITION_TRANSCRIPT_DOMAIN_V1: &[u8] =
@@ -2664,6 +2664,41 @@ mod tests {
                 "reviewed BF16 terminal `{signature}` may inline into optimized external MIR"
             );
         }
+    }
+
+    #[test]
+    fn reviewed_blocked_access_terminals_remain_out_of_line() {
+        let slice_source =
+            fs::read_to_string(Path::new(super::REVIEWED_FE2O3_DEVICE_SOURCE_ROOT).join("lib.rs"))
+                .unwrap();
+        let thread_source = fs::read_to_string(
+            Path::new(super::REVIEWED_FE2O3_DEVICE_SOURCE_ROOT).join("thread.rs"),
+        )
+        .unwrap();
+        assert!(
+            thread_source.contains(
+                "#[inline(never)]\n    #[rustc_diagnostic_item = \"fe2o3_device_thread_index_get\"]\n    pub fn get(&self) -> usize"
+            ),
+            "reviewed thread-index access terminal may inline into optimized external MIR"
+        );
+        assert!(
+            thread_source.contains(
+                "#[inline(never)]\n    #[rustc_diagnostic_item = \"fe2o3_device_thread_index_checked_block\"]\n    pub fn checked_block<"
+            ),
+            "reviewed blocked index terminal may inline into optimized external MIR"
+        );
+        assert!(
+            thread_source.contains(
+                "#[inline(never)]\n#[rustc_diagnostic_item = \"fe2o3_device_thread_index_1d\"]\npub fn index_1d() -> ThreadIndex"
+            ),
+            "reviewed thread-index producer may inline into optimized external MIR"
+        );
+        assert!(
+            slice_source.contains(
+                "#[inline(never)]\n    #[rustc_diagnostic_item = \"fe2o3_device_disjoint_slice_get_block_mut\"]\n    pub fn get_block_mut("
+            ),
+            "reviewed blocked access terminal may inline into optimized external MIR"
+        );
     }
 
     #[test]

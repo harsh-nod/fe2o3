@@ -591,6 +591,7 @@ impl<IndexSpace> ThreadIndex<IndexSpace> {
     /// Zero dimensions and every arithmetic overflow return `None`. The
     /// returned witness can address exactly `ELEMENTS_PER_LANE` components in
     /// a matching [`crate::DisjointSlice`] mapping.
+    #[inline(never)]
     #[rustc_diagnostic_item = "fe2o3_device_thread_index_checked_block"]
     pub fn checked_block<const LANES_PER_BLOCK: usize, const ELEMENTS_PER_LANE: usize>(
         self,
