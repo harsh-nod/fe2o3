@@ -14,6 +14,9 @@ use rustc_middle::ty::TyCtxt;
 
 use crate::artifact_transaction::{BuildAttempt, ProducerIdentity};
 use crate::collector::AuthenticatedCollectedKernelClosureV1;
+use crate::protected_compiler_execution::{
+    AdmittedProtectedCompilerExecutionV1, ProtectedCompilerExecutionErrorV1,
+};
 use crate::protected_rustc_invocation::{
     AdmittedProtectedRustcInvocationV1, ProtectedRustcInvocationErrorV1,
 };
@@ -59,11 +62,16 @@ pub(crate) enum ProductionPipelineError {
     SemanticLineage(crate::production_semantic_lineage_v3::ProductionSemanticLineageErrorV3),
     RustcLineageMismatch,
     ProtectedRustcInvocation(ProtectedRustcInvocationErrorV1),
+    ProtectedCompilerExecution(ProtectedCompilerExecutionErrorV1),
     ExtractionCannotPublish,
     WorkerHandoffExtractionRequiresExtractionCustody,
     WorkerHandoff(crate::production_worker_handoff::ProductionWorkerHandoffError),
     StrictV3Publication(fe2o3_artifact_transaction::CompilerModuleHandoffErrorV3),
     CompilerExecutionSubject(fe2o3_artifact_transaction::CompilerExecutionSubjectErrorV1),
+    CompilerExecutionReceiptTransport(
+        fe2o3_artifact_transaction::CompilerExecutionReceiptTransportErrorV1,
+    ),
+    CompilerExecutionReceiptTransportBindingMismatch,
 }
 
 impl fmt::Display for ProductionPipelineError {
@@ -147,6 +155,10 @@ impl fmt::Display for ProductionPipelineError {
                 formatter,
                 "production compilation final protected rustc invocation validation failed: {error}"
             ),
+            Self::ProtectedCompilerExecution(error) => write!(
+                formatter,
+                "production compilation protected compiler execution failed: {error}"
+            ),
             Self::ExtractionCannotPublish => formatter.write_str(
                 "production extraction custody cannot publish a compiler-module handoff",
             ),
@@ -162,6 +174,13 @@ impl fmt::Display for ProductionPipelineError {
             Self::CompilerExecutionSubject(error) => write!(
                 formatter,
                 "production compilation compiler-execution subject failed: {error}"
+            ),
+            Self::CompilerExecutionReceiptTransport(error) => write!(
+                formatter,
+                "production compilation compiler-execution receipt transport failed: {error}"
+            ),
+            Self::CompilerExecutionReceiptTransportBindingMismatch => formatter.write_str(
+                "production compilation compiler-execution receipt transport changed its exact subject or byte length",
             ),
         }
     }
@@ -188,9 +207,11 @@ impl std::error::Error for ProductionPipelineError {
             Self::DescriptorEvidence(error) => Some(error),
             Self::SemanticLineage(error) => Some(error),
             Self::ProtectedRustcInvocation(error) => Some(error),
+            Self::ProtectedCompilerExecution(error) => Some(error),
             Self::WorkerHandoff(error) => Some(error),
             Self::StrictV3Publication(error) => Some(error),
             Self::CompilerExecutionSubject(error) => Some(error),
+            Self::CompilerExecutionReceiptTransport(error) => Some(error),
             Self::CustomLlvmConfiguration
             | Self::EmptyCollectedDeviceClosure
             | Self::MissingMirPlironTranslationValidation
@@ -199,6 +220,7 @@ impl std::error::Error for ProductionPipelineError {
             | Self::SimulationDebugMapCorrespondence(_)
             | Self::UpstreamLlvmLayoutBinding(_)
             | Self::ExtractionCannotPublish
+            | Self::CompilerExecutionReceiptTransportBindingMismatch
             | Self::WorkerHandoffExtractionRequiresExtractionCustody => None,
         }
     }
@@ -232,15 +254,21 @@ struct ProductionTransactionBindings {
 enum ProductionCompilerCustody {
     ProtectedV3 {
         invocation: Box<AdmittedProtectedRustcInvocationV1>,
+        compiler_execution: Box<AdmittedProtectedCompilerExecutionV1>,
         attempt: BuildAttempt,
     },
     ExtractionOnly,
 }
 
 impl ProductionCompilerCustody {
-    fn protected(invocation: AdmittedProtectedRustcInvocationV1, attempt: BuildAttempt) -> Self {
+    fn protected(
+        invocation: AdmittedProtectedRustcInvocationV1,
+        compiler_execution: AdmittedProtectedCompilerExecutionV1,
+        attempt: BuildAttempt,
+    ) -> Self {
         Self::ProtectedV3 {
             invocation: Box::new(invocation),
+            compiler_execution: Box::new(compiler_execution),
             attempt,
         }
     }
@@ -249,8 +277,11 @@ impl ProductionCompilerCustody {
         Self::ExtractionOnly
     }
 
-    fn has_publication_attempt(&self) -> bool {
-        matches!(self, Self::ProtectedV3 { .. })
+    fn retained_protected_binding_count(&self) -> usize {
+        match self {
+            Self::ProtectedV3 { .. } => 2,
+            Self::ExtractionOnly => 0,
+        }
     }
 
     fn is_extraction_only(&self) -> bool {
@@ -259,16 +290,26 @@ impl ProductionCompilerCustody {
 
     fn into_publication_custody(
         self,
-    ) -> Result<(BuildAttempt, Box<AdmittedProtectedRustcInvocationV1>), ProductionPipelineError>
-    {
+    ) -> Result<ProtectedProductionPublicationCustody, ProductionPipelineError> {
         match self {
             Self::ProtectedV3 {
                 invocation,
+                compiler_execution,
                 attempt,
-            } => Ok((attempt, invocation)),
+            } => Ok(ProtectedProductionPublicationCustody {
+                attempt,
+                invocation,
+                compiler_execution,
+            }),
             Self::ExtractionOnly => Err(ProductionPipelineError::ExtractionCannotPublish),
         }
     }
+}
+
+struct ProtectedProductionPublicationCustody {
+    attempt: BuildAttempt,
+    invocation: Box<AdmittedProtectedRustcInvocationV1>,
+    compiler_execution: Box<AdmittedProtectedCompilerExecutionV1>,
 }
 
 struct AuthenticatedProductionBindings {
@@ -352,6 +393,7 @@ struct PreparedProductionWorkerPublication {
     output_dir: PathBuf,
     attempt: BuildAttempt,
     invocation: Box<AdmittedProtectedRustcInvocationV1>,
+    compiler_execution: Box<AdmittedProtectedCompilerExecutionV1>,
     semantic_lineage: crate::production_semantic_lineage_v3::PreparedProductionSemanticLineageV3,
     rustc_target: crate::production_target_v1::AuthenticatedProductionTargetV1,
     prepared: crate::production_worker_handoff::PreparedProductionWorkerHandoff,
@@ -706,12 +748,11 @@ impl TargetLoweredProductionCompilation {
             &self.bindings.transaction.output_dir,
             &self.bindings.transaction.compiler_ffi_envelope,
         );
-        6 + usize::from(
-            self.bindings
-                .transaction
-                .compiler_custody
-                .has_publication_attempt(),
-        )
+        6 + self
+            .bindings
+            .transaction
+            .compiler_custody
+            .retained_protected_binding_count()
     }
 
     pub(crate) fn grants_artifact_or_launch_authority(&self) -> bool {
@@ -815,7 +856,11 @@ impl TargetLoweredProductionCompilation {
             return Err(ProductionPipelineError::RustcLineageMismatch);
         }
         drop(reference_effect_bindings);
-        let (attempt, invocation) = compiler_custody.into_publication_custody()?;
+        let ProtectedProductionPublicationCustody {
+            attempt,
+            invocation,
+            compiler_execution,
+        } = compiler_custody.into_publication_custody()?;
         let semantic_lineage = crate::production_semantic_lineage_v3::PreparedProductionSemanticLineageV3::try_prepare(
             &rustc_identity_inventory,
             &rustc_preflight_plan,
@@ -842,6 +887,7 @@ impl TargetLoweredProductionCompilation {
             output_dir,
             attempt,
             invocation,
+            compiler_execution,
             semantic_lineage,
             rustc_target,
             prepared,
@@ -879,11 +925,29 @@ impl TargetLoweredProductionCompilation {
             &strict_handoff,
         )
         .map_err(ProductionPipelineError::StrictV3Publication)?;
-        fe2o3_artifact_transaction::InertCompilerExecutionSubjectV1::from_publication(
-            receipt,
-            &strict_handoff,
-        )
-        .map_err(ProductionPipelineError::CompilerExecutionSubject)
+        let subject =
+            fe2o3_artifact_transaction::InertCompilerExecutionSubjectV1::from_publication(
+                receipt,
+                &strict_handoff,
+            )
+            .map_err(ProductionPipelineError::CompilerExecutionSubject)?;
+        let carriage = (*publication.compiler_execution)
+            .acquire(subject.clone())
+            .map_err(ProductionPipelineError::ProtectedCompilerExecution)?;
+        let transport =
+            fe2o3_artifact_transaction::publish_compiler_execution_receipt_transport_v1(
+                &publication.output_dir,
+                &publication.producer,
+                &subject,
+                carriage.canonical_bytes(),
+            )
+            .map_err(ProductionPipelineError::CompilerExecutionReceiptTransport)?;
+        if transport.subject() != subject.identity()
+            || transport.length() != carriage.canonical_bytes().len()
+        {
+            return Err(ProductionPipelineError::CompilerExecutionReceiptTransportBindingMismatch);
+        }
+        Ok(subject)
     }
 }
 
@@ -1446,12 +1510,11 @@ impl RankedVerifiedProductionCompilation {
             &self.bindings.transaction.output_dir,
             &self.bindings.transaction.compiler_ffi_envelope,
         );
-        6 + usize::from(
-            self.bindings
-                .transaction
-                .compiler_custody
-                .has_publication_attempt(),
-        )
+        6 + self
+            .bindings
+            .transaction
+            .compiler_custody
+            .retained_protected_binding_count()
     }
 
     pub(crate) fn grants_artifact_or_launch_authority(&self) -> bool {
@@ -1469,13 +1532,14 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
         output_dir: PathBuf,
         build_attempt: BuildAttempt,
         invocation: AdmittedProtectedRustcInvocationV1,
+        compiler_execution: AdmittedProtectedCompilerExecutionV1,
     ) -> Result<Self, ProductionPipelineError> {
         Self::from_collected_device_closure_with_custody(
             tcx,
             closure,
             producer,
             output_dir,
-            ProductionCompilerCustody::protected(invocation, build_attempt),
+            ProductionCompilerCustody::protected(invocation, compiler_execution, build_attempt),
             crate::rustc_semantic_plan_v1::DebugSourceCaptureRequestV2::Disabled,
         )
     }
@@ -1963,11 +2027,13 @@ mod tests {
                 "obsolete production publication variant remains: {removed}",
             );
         }
-        assert!(pipeline.contains(concat!(
-            "ProductionCompilerCustody::protected(",
-            "invocation, build_attempt)"
-        )));
+        assert!(pipeline.contains("ProductionCompilerCustody::protected("));
+        assert!(pipeline.contains("compiler_execution"));
         assert!(pipeline.contains(concat!("publish_compiler_module_handoff", "_v3")));
+        assert!(pipeline.contains(concat!(
+            "publish_compiler_execution_receipt_transport",
+            "_v1"
+        )));
         assert!(!pipeline.contains(concat!(
             "let invocation_",
             "descriptor = invocation.descriptor().clone()"
@@ -1992,6 +2058,18 @@ mod tests {
             .expect("strict publication derives one canonical compiler-execution subject");
         assert!(lineage_finish < final_revalidation && final_revalidation < durable_publication);
         assert!(durable_publication < execution_subject);
+        let receipt_acquisition = pipeline[execution_subject..]
+            .find(".acquire(subject.clone())")
+            .map(|offset| execution_subject + offset)
+            .expect("exact execution subject is sent to the protected issuer");
+        let receipt_transport = pipeline[receipt_acquisition..]
+            .find(concat!(
+                "publish_compiler_execution_receipt_transport",
+                "_v1"
+            ))
+            .map(|offset| receipt_acquisition + offset)
+            .expect("issuer receipt is published beside the exact V3 handoff");
+        assert!(execution_subject < receipt_acquisition && receipt_acquisition < receipt_transport);
     }
 
     #[test]
