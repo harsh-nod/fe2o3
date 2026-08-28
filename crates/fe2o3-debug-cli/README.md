@@ -19,6 +19,28 @@ and semantic-KIR transaction. V1 exposes resolved call-site spans only;
 synthetic KIR operations, source variables, and macro expansion stacks remain
 typed unavailable rather than being inferred.
 
+`fe2o3-debug sim --bundle-v2 KERNEL.fe2sim --request REQUEST.json` is a
+separate, strict route for `VerifiedSimulationBundleV2`. The V2 envelope
+contains one exact authority-free V1 execution bundle with no nested V1 map,
+plus one canonical `fe2o3-debug-source-map-v2` payload. V1 decoders continue
+to reject these bytes. V2 map records can name bounded lexical scopes, stable
+variable identities, storage generations, and exact KIR SSA values at exact
+block checkpoints. The current production compiler exporter still emits V1;
+the checked-in V2 tests use explicitly test-authored, compiler-shaped maps and
+do not claim compiler emission or protected compiler execution.
+
+Source-variable inspection uses the separate
+`fe2o3-debug-source-variable-request-v2` schema. Callers select all variables,
+one exact stable identity, or a bounded inert name. Name lookup chooses the
+deepest active lexical scope and returns typed ambiguity when exact records do
+not distinguish one binding. Values are existing typed simulator observations,
+including allocation-relative pointers; native addresses and reconstructed
+registers are never emitted. Missing V2 data, an empty V2 variable section,
+out-of-scope names, unavailable frames/checkpoints, uninitialized generations,
+lifetime kills, optimized-out values, unrepresented values, and truncated
+captures remain distinct typed states. `all` queries use admitted per-function
+indices and apply page bounds before value materialization.
+
 `--replay-schedule SCHEDULE.json` securely admits the canonical persisted
 semantic schedule and requires its exact raw-KIR/bundle route, KIR, complete
 bundle identity and subject, request bytes, target, and limits to match this
@@ -77,10 +99,12 @@ implements the bundle's exact map-identity algorithm.
 
 `inspect_stack` pages captured simulator call frames, including function/block
 ordinals, the next operation, and typed captured/unavailable value state.
-Frames are not reconstructed from names or UI fixtures. Source variables,
-hardware registers, hardware wave state, and KFD dispatch control remain typed
-`unavailable`; no value is fabricated. KIR, request, and sidecar files use the
-hardened regular-file capture boundary shared with `fe2o3-kir-sim`.
+Frames are not reconstructed from names or UI fixtures. Source variables are
+available only through the exact V2 bundle route above; V1 and hardware V2
+sessions keep them typed unavailable. Hardware registers, hardware wave state,
+and KFD dispatch control remain typed `unavailable`; no value is fabricated.
+KIR, request, and sidecar files use the hardened regular-file capture boundary
+shared with `fe2o3-kir-sim`.
 
 ## KFD hardware protocol V2
 

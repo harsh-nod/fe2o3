@@ -7,7 +7,7 @@ mod schema;
 use std::path::Path;
 use std::process::ExitCode;
 
-use fe2o3_kernel_ir::VerifiedSimulationBundleV1;
+use fe2o3_kernel_ir::{VerifiedSimulationBundleV1, VerifiedSimulationBundleV2};
 use fe2o3_kir_sim::{
     AdmittedSimulationModuleV1, PersistedSimulationScheduleArtifactV1,
     PersistedSimulationScheduleBindingV1, PersistedSimulationScheduleDocumentV1,
@@ -127,6 +127,46 @@ impl AdmittedSimulationBundleInputV1 {
 
     pub const fn authenticates_compiler_execution(&self) -> bool {
         self.bundle.authenticates_compiler_execution()
+    }
+}
+
+/// Strict V2 envelope custody plus the exact admitted simulation input.
+#[derive(Debug)]
+pub struct AdmittedSimulationBundleInputV2 {
+    input: AdmittedSimulationInputV1,
+    bundle: VerifiedSimulationBundleV2,
+}
+
+impl AdmittedSimulationBundleInputV2 {
+    pub fn input(&self) -> &AdmittedSimulationInputV1 {
+        &self.input
+    }
+    pub fn bundle(&self) -> &VerifiedSimulationBundleV2 {
+        &self.bundle
+    }
+    pub fn into_parts(self) -> (AdmittedSimulationInputV1, VerifiedSimulationBundleV2) {
+        (self.input, self.bundle)
+    }
+    pub const fn grants_proof_authority(&self) -> bool {
+        self.bundle.grants_proof_authority()
+    }
+    pub const fn grants_artifact_authority(&self) -> bool {
+        self.bundle.grants_artifact_authority()
+    }
+    pub const fn grants_compiler_authority(&self) -> bool {
+        self.bundle.grants_compiler_authority()
+    }
+    pub const fn authenticates_compiler_execution(&self) -> bool {
+        self.bundle.authenticates_compiler_execution()
+    }
+    pub const fn grants_hardware_authority(&self) -> bool {
+        self.bundle.grants_hardware_authority()
+    }
+    pub const fn grants_load_authority(&self) -> bool {
+        self.bundle.grants_load_authority()
+    }
+    pub const fn grants_launch_authority(&self) -> bool {
+        self.bundle.grants_launch_authority()
     }
 }
 
@@ -315,6 +355,29 @@ pub fn load_debug_simulation_bundle_v1(
             stage: "platform".to_owned(),
             code: "unsupported_platform".to_owned(),
             message: "fe2o3 debugger simulation bundle admission requires Linux".to_owned(),
+        })
+    }
+}
+
+/// Securely captures and strictly admits the separate simulation bundle V2 envelope.
+pub fn load_debug_simulation_bundle_v2(
+    bundle: &Path,
+    request: &Path,
+) -> Result<AdmittedSimulationBundleInputV2, SimulationInputErrorV1> {
+    #[cfg(target_os = "linux")]
+    {
+        linux::load_debug_simulation_bundle_v2(
+            bundle.as_os_str().to_owned(),
+            request.as_os_str().to_owned(),
+        )
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (bundle, request);
+        Err(SimulationInputErrorV1 {
+            stage: "platform".to_owned(),
+            code: "unsupported_platform".to_owned(),
+            message: "fe2o3 debugger simulation bundle V2 admission requires Linux".to_owned(),
         })
     }
 }

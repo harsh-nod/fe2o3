@@ -54,6 +54,21 @@ Absent, optimized-out, and many-to-one mappings remain typed unavailable
 states. Stack frames are captured backend facts with one-based identities and
 typed value availability, never name-derived or UI-synthesized frames.
 
+Source-variable inspection is an additive, separately versioned
+`fe2o3-debug-source-variable-request-v2`/response exchange. It does not add a
+variant to the closed V1 request, response, operation, or value-availability
+enums. Exact identity selection is stable across shadowing; bounded name
+selection uses retained lexical scope depth and reports ambiguity instead of
+guessing. `all` results are page bounded. The response reuses V1 typed scalar,
+bit-vector, redaction, unavailable, and allocation-relative pointer values and
+adds ambiguity only inside its V2 availability enum.
+
+The CPU backend admits this query only with an exact Source Map V2 envelope.
+A V1 map returns `source_map_v2_required`; a valid V2 map with no variable
+records returns `variables_not_captured`. Map and bundle identities establish
+exact content association, not compiler-execution authentication. Hardware V2
+does not admit this simulator query.
+
 Breakpoint predicates are a closed, bounded AST of typed value operands,
 constant bits, comparisons, and boolean composition. Arbitrary expression
 strings are not accepted. Watchpoints name a generation-aware allocation plus

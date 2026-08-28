@@ -6,7 +6,7 @@
 mod hardware_linux_v2;
 mod hardware_v2;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::ffi::{OsStr, OsString};
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
@@ -15,8 +15,10 @@ use std::process::ExitCode;
 
 use fe2o3_debug_protocol::*;
 use fe2o3_kernel_ir::{
-    AddressSpace, DebugSourceMapDocumentV1, DebugSourceMapKirSiteV1, DebugSourceMapSpanV1,
-    ScalarType, ValueId, simulation_debug_map_identity_v1,
+    AddressSpace, DebugSourceMapDocumentV1, DebugSourceMapDocumentV2, DebugSourceMapKirSiteV1,
+    DebugSourceMapSpanV1, DebugSourceVariableBindingV2, DebugSourceVariableFallbackV2,
+    IndexedControlFlow, ScalarType, ValueId, analyze_control_flow,
+    simulation_debug_map_identity_v1, simulation_debug_map_identity_v2,
 };
 use fe2o3_kir_debugger::{
     DebugBreakpointV1, DebugHitConditionV1, DebugInspectionUnavailableV1, DebugInspectionV1,
@@ -36,13 +38,13 @@ use fe2o3_kir_sim::{
 };
 use fe2o3_kir_sim_cli::{
     AdmittedSimulationInputV1, SimulationInputErrorV1, load_debug_sidecar_v1,
-    load_debug_simulation_bundle_v1, load_debug_simulation_input_v1,
-    load_debug_simulation_schedule_v1,
+    load_debug_simulation_bundle_v1, load_debug_simulation_bundle_v2,
+    load_debug_simulation_input_v1, load_debug_simulation_schedule_v1,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-const USAGE: &str = "usage: fe2o3-debug sim (--kir-v7 PATH | --bundle PATH) --request PATH [--replay-schedule PATH] [--source-map PATH --source-bundle-subject ID] [--protocol jsonl] [--wave-width 32|64]\n       fe2o3-debug hardware -- PROGRAM [ARG...]";
+const USAGE: &str = "usage: fe2o3-debug sim (--kir-v7 PATH | --bundle PATH | --bundle-v2 PATH) --request PATH [--replay-schedule PATH] [--source-map PATH --source-bundle-subject ID] [--protocol jsonl] [--wave-width 32|64]\n       fe2o3-debug hardware -- PROGRAM [ARG...]";
 const MAX_SESSION_COMMANDS_V1: u64 = 1_000_000;
 const TRACE_HEADER_SCHEMA_V1: &str = "fe2o3-debug-trace-v1";
 pub const SOURCE_MAP_SCHEMA_V1: &str = fe2o3_kernel_ir::DEBUG_SOURCE_MAP_SCHEMA_V1;
@@ -62,6 +64,7 @@ struct OptionsV1 {
 enum ProgramInputV1 {
     KirV7(PathBuf),
     Bundle(PathBuf),
+    BundleV2(PathBuf),
 }
 
 #[derive(Debug)]
@@ -74,6 +77,58 @@ struct AdmittedSourceMapV1 {
 }
 
 #[derive(Clone, Copy, Debug)]
+enum AdmittedKirValueDefinitionV2 {
+    FunctionParameter,
+    BlockParameter(fe2o3_kernel_ir::BlockId),
+    OperationResult {
+        block: fe2o3_kernel_ir::BlockId,
+        operation: u32,
+    },
+}
+
+#[derive(Debug)]
+struct AdmittedFunctionIndexV2 {
+    control_flow: IndexedControlFlow,
+    definitions: BTreeMap<ValueId, AdmittedKirValueDefinitionV2>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct AdmittedSourceVariableLocationV2 {
+    block: fe2o3_kernel_ir::BlockId,
+    next_operation: u32,
+    generation: u64,
+    binding: DebugSourceVariableBindingV2,
+}
+
+#[derive(Debug)]
+struct AdmittedSourceVariableV2 {
+    identity: OpaqueIdentityV1,
+    name: String,
+    function_ordinal: usize,
+    scope_identity: OpaqueIdentityV1,
+    scope_depth: u32,
+    fallback: DebugSourceVariableFallbackV2,
+    locations: Vec<AdmittedSourceVariableLocationV2>,
+}
+
+#[derive(Debug, Default)]
+struct AdmittedSourceVariablesV2 {
+    variables: Vec<AdmittedSourceVariableV2>,
+    by_identity: BTreeMap<OpaqueIdentityV1, usize>,
+    by_name: BTreeMap<(usize, String), Vec<usize>>,
+    by_function: BTreeMap<usize, Vec<usize>>,
+}
+
+#[derive(Debug)]
+struct AdmittedSourceMapV2 {
+    identity: OpaqueIdentityV1,
+    bundle_subject_identity: OpaqueIdentityV1,
+    configuration_identity: OpaqueIdentityV1,
+    catalog: DebugSourceCatalogV1,
+    variables: AdmittedSourceVariablesV2,
+}
+
+#[derive(Clone, Copy, Debug)]
 enum ConvertErrorV1 {
     Unavailable(
         DebugCapabilityNameV1,
@@ -83,10 +138,14 @@ enum ConvertErrorV1 {
     Invalid(&'static str),
 }
 
-fn simulator_capabilities(source_map_bound: bool) -> Vec<CapabilityViewV1> {
+fn simulator_capabilities(
+    source_map_bound: bool,
+    source_variables_v2: Option<bool>,
+) -> Vec<CapabilityViewV1> {
     use CapabilityAvailabilityV1::{Available, Unavailable};
     use CapabilityUnavailableReasonV1::{
-        LogicalVisualizationOnly, NotExposedByBackend, NotRepresented, RequiresAuthenticatedMap,
+        LogicalVisualizationOnly, NotCaptured, NotExposedByBackend, NotRepresented,
+        RequiresAuthenticatedMap,
     };
     use DebugCapabilityNameV1::*;
     vec![
@@ -113,11 +172,15 @@ fn simulator_capabilities(source_map_bound: bool) -> Vec<CapabilityViewV1> {
         capability(Pause, Unavailable, Some(NotExposedByBackend)),
         capability(DeterministicReplay, Available, None),
         capability(KirSsaValues, Available, None),
-        capability(
-            SourceVariableValues,
-            Unavailable,
-            Some(RequiresAuthenticatedMap),
-        ),
+        match source_variables_v2 {
+            Some(true) => capability(SourceVariableValues, Available, None),
+            Some(false) => capability(SourceVariableValues, Unavailable, Some(NotCaptured)),
+            None => capability(
+                SourceVariableValues,
+                Unavailable,
+                Some(RequiresAuthenticatedMap),
+            ),
+        },
         capability(RegisterValues, Unavailable, Some(NotRepresented)),
         capability(AllocationRelativeMemory, Available, None),
         capability(SemanticTrace, Available, None),
@@ -232,6 +295,278 @@ fn admit_source_map_with_provenance_v1(
         configuration_identity,
         provenance,
         catalog,
+    })
+}
+
+fn admit_source_map_v2(
+    bytes: &[u8],
+    input: &AdmittedSimulationInputV1,
+    configuration_identity: OpaqueIdentityV1,
+    expected_bundle_subject: OpaqueIdentityV1,
+    expected_map_identity: OpaqueIdentityV1,
+) -> Result<AdmittedSourceMapV2, String> {
+    if bytes.is_empty() || bytes.len() > MAX_SOURCE_MAP_BYTES_V1 {
+        return Err(format!(
+            "source map V2 must contain 1 to {MAX_SOURCE_MAP_BYTES_V1} bytes"
+        ));
+    }
+    let identity = nonzero_identity(simulation_debug_map_identity_v2(bytes));
+    if identity != expected_map_identity {
+        return Err("source map V2 identity does not match its bundle commitment".to_owned());
+    }
+    let document = DebugSourceMapDocumentV2::from_canonical_json_bytes(bytes)
+        .map_err(|error| error.to_string())?;
+    let binding = document.binding();
+    if binding.bundle_subject_identity() != expected_bundle_subject.as_bytes() {
+        return Err("source map V2 bundle subject identity does not match the bundle".to_owned());
+    }
+    let canonical_len = input.module.identity().canonical_length();
+    if binding.canonical_kir().digest() != input.kir_sha256
+        || binding.canonical_kir().canonical_bytes() != canonical_len
+    {
+        return Err(
+            "source map V2 canonical KIR binding does not match the admitted input".to_owned(),
+        );
+    }
+    let files = document
+        .files()
+        .iter()
+        .map(|file| DebugSourceFileV1 {
+            identity: file.identity(),
+            byte_len: file.byte_len(),
+            display_path: file.display_path().to_owned(),
+        })
+        .collect();
+    let mut sites = Vec::new();
+    sites
+        .try_reserve_exact(document.sites().len())
+        .map_err(|_| "source map V2 site allocation failed".to_owned())?;
+    for site in document.sites() {
+        sites.push(DebugSourceSiteV1 {
+            site: source_map_wire_site(&input.module, site.site())?,
+            spans: site.spans().iter().copied().map(source_map_span).collect(),
+        });
+    }
+    let catalog = DebugSourceCatalogV1::new_with_eliminated(
+        DebugKirIdentityV1 {
+            digest: input.kir_sha256,
+            canonical_len,
+        },
+        files,
+        sites,
+        document
+            .eliminated()
+            .iter()
+            .copied()
+            .map(source_map_span)
+            .collect(),
+    )
+    .map_err(|error| format!("source map V2 source catalog is invalid: {error}"))?;
+
+    let mut referenced_functions = BTreeSet::new();
+    for variable in document.variables() {
+        referenced_functions.insert(variable.function_ordinal());
+    }
+    let mut function_indices = BTreeMap::new();
+    for function_ordinal in referenced_functions {
+        let ordinal = usize::try_from(function_ordinal)
+            .map_err(|_| "source variable function ordinal does not fit this host".to_owned())?;
+        let function = input
+            .module
+            .module()
+            .functions
+            .get(ordinal)
+            .ok_or_else(|| "source variable function ordinal is unknown".to_owned())?;
+        function_indices.insert(ordinal, admit_function_index_v2(function)?);
+    }
+    for scope in document.scopes() {
+        let function_ordinal = usize::try_from(scope.function_ordinal())
+            .map_err(|_| "source scope function ordinal does not fit this host".to_owned())?;
+        input
+            .module
+            .module()
+            .functions
+            .get(function_ordinal)
+            .and_then(|function| function.body.as_ref())
+            .ok_or_else(|| "source scope function has no admitted KIR body".to_owned())?;
+    }
+    let mut variables = Vec::new();
+    variables
+        .try_reserve_exact(document.variables().len())
+        .map_err(|_| "source variable index allocation failed".to_owned())?;
+    for variable in document.variables() {
+        let function_ordinal = usize::try_from(variable.function_ordinal())
+            .map_err(|_| "source variable function ordinal does not fit this host".to_owned())?;
+        let function = input
+            .module
+            .module()
+            .functions
+            .get(function_ordinal)
+            .ok_or_else(|| "source variable function ordinal is unknown".to_owned())?;
+        let body = function
+            .body
+            .as_ref()
+            .ok_or_else(|| "source variable function has no KIR body".to_owned())?;
+        let index = function_indices
+            .get(&function_ordinal)
+            .ok_or_else(|| "source variable function index is missing".to_owned())?;
+        let scope = document
+            .scopes()
+            .binary_search_by_key(&variable.scope_identity(), |scope| scope.identity())
+            .ok()
+            .map(|scope| document.scopes()[scope])
+            .ok_or_else(|| "source variable scope is missing after validation".to_owned())?;
+        let mut locations = Vec::new();
+        locations
+            .try_reserve_exact(variable.locations().len())
+            .map_err(|_| "source variable location allocation failed".to_owned())?;
+        for location in variable.locations() {
+            let block_ordinal = usize::try_from(location.block_ordinal())
+                .map_err(|_| "source variable block ordinal does not fit this host".to_owned())?;
+            let block = body
+                .blocks
+                .get(block_ordinal)
+                .ok_or_else(|| "source variable block ordinal is unknown".to_owned())?;
+            let next_operation = u32::try_from(location.next_operation())
+                .map_err(|_| "source variable checkpoint does not fit KIR V7".to_owned())?;
+            if next_operation as usize > block.operations.len() {
+                return Err("source variable checkpoint is outside its KIR block".to_owned());
+            }
+            if let DebugSourceVariableBindingV2::Captured { value_ordinal } = location.binding() {
+                let value = ValueId(
+                    u32::try_from(value_ordinal)
+                        .map_err(|_| "source variable value does not fit KIR V7".to_owned())?,
+                );
+                let available = match index.definitions.get(&value).copied() {
+                    Some(AdmittedKirValueDefinitionV2::FunctionParameter) => true,
+                    Some(AdmittedKirValueDefinitionV2::BlockParameter(definition)) => {
+                        index.control_flow.dominates(definition, block.id)
+                    }
+                    Some(AdmittedKirValueDefinitionV2::OperationResult {
+                        block: definition,
+                        operation,
+                    }) if definition == block.id => operation < next_operation,
+                    Some(AdmittedKirValueDefinitionV2::OperationResult {
+                        block: definition,
+                        ..
+                    }) => index.control_flow.dominates(definition, block.id),
+                    None => false,
+                };
+                if !available {
+                    return Err(
+                        "source variable references a KIR value unavailable at its checkpoint"
+                            .to_owned(),
+                    );
+                }
+            }
+            locations.push(AdmittedSourceVariableLocationV2 {
+                block: block.id,
+                next_operation,
+                generation: location.generation(),
+                binding: location.binding(),
+            });
+        }
+        locations.sort_unstable_by_key(|location| (location.block, location.next_operation));
+        variables.push(AdmittedSourceVariableV2 {
+            identity: nonzero_identity(variable.identity()),
+            name: variable.name().to_owned(),
+            function_ordinal,
+            scope_identity: nonzero_identity(variable.scope_identity()),
+            scope_depth: scope.depth(),
+            fallback: variable.fallback(),
+            locations,
+        });
+    }
+    let variables = index_source_variables_v2(variables)?;
+    Ok(AdmittedSourceMapV2 {
+        identity,
+        bundle_subject_identity: expected_bundle_subject,
+        configuration_identity,
+        catalog,
+        variables,
+    })
+}
+
+fn admit_function_index_v2(
+    function: &fe2o3_kernel_ir::Function,
+) -> Result<AdmittedFunctionIndexV2, String> {
+    let body = function
+        .body
+        .as_ref()
+        .ok_or_else(|| "source variable function has no KIR body".to_owned())?;
+    let control_flow = analyze_control_flow(function)
+        .map_err(|_| "source variable function control flow is invalid".to_owned())?;
+    let mut definitions = BTreeMap::new();
+    for value in &body.parameters {
+        if definitions
+            .insert(*value, AdmittedKirValueDefinitionV2::FunctionParameter)
+            .is_some()
+        {
+            return Err("source variable function has duplicate KIR values".to_owned());
+        }
+    }
+    for block in &body.blocks {
+        for parameter in &block.parameters {
+            if definitions
+                .insert(
+                    parameter.id,
+                    AdmittedKirValueDefinitionV2::BlockParameter(block.id),
+                )
+                .is_some()
+            {
+                return Err("source variable function has duplicate KIR values".to_owned());
+            }
+        }
+        for (operation, definition) in block.operations.iter().enumerate() {
+            let operation = u32::try_from(operation)
+                .map_err(|_| "source variable operation ordinal is too large".to_owned())?;
+            for result in &definition.results {
+                if definitions
+                    .insert(
+                        result.id,
+                        AdmittedKirValueDefinitionV2::OperationResult {
+                            block: block.id,
+                            operation,
+                        },
+                    )
+                    .is_some()
+                {
+                    return Err("source variable function has duplicate KIR values".to_owned());
+                }
+            }
+        }
+    }
+    Ok(AdmittedFunctionIndexV2 {
+        control_flow,
+        definitions,
+    })
+}
+
+fn index_source_variables_v2(
+    mut variables: Vec<AdmittedSourceVariableV2>,
+) -> Result<AdmittedSourceVariablesV2, String> {
+    variables.sort_unstable_by_key(|variable| variable.identity);
+    let mut by_identity = BTreeMap::new();
+    let mut by_name = BTreeMap::new();
+    let mut by_function = BTreeMap::new();
+    for (index, variable) in variables.iter().enumerate() {
+        if by_identity.insert(variable.identity, index).is_some() {
+            return Err("source variable identity is duplicated".to_owned());
+        }
+        by_name
+            .entry((variable.function_ordinal, variable.name.clone()))
+            .or_insert_with(Vec::new)
+            .push(index);
+        by_function
+            .entry(variable.function_ordinal)
+            .or_insert_with(Vec::new)
+            .push(index);
+    }
+    Ok(AdmittedSourceVariablesV2 {
+        variables,
+        by_identity,
+        by_name,
+        by_function,
     })
 }
 
@@ -1086,6 +1421,105 @@ fn availability_for_observed(observed: &SimulationDebugValueV1) -> ValueAvailabi
     }
 }
 
+fn source_variable_binding_at_v2(
+    variable: &AdmittedSourceVariableV2,
+    block: fe2o3_kernel_ir::BlockId,
+    next_operation: u32,
+) -> Option<(u64, DebugSourceVariableBindingV2)> {
+    let end = variable
+        .locations
+        .partition_point(|location| location.block <= block);
+    let start = variable.locations[..end].partition_point(|location| location.block < block);
+    variable.locations[start..end]
+        .iter()
+        .rev()
+        .find(|location| location.next_operation <= next_operation)
+        .map(|location| (location.generation, location.binding))
+}
+
+fn source_variable_effective_binding_at_v2(
+    variable: &AdmittedSourceVariableV2,
+    block: fe2o3_kernel_ir::BlockId,
+    next_operation: u32,
+) -> (u64, DebugSourceVariableBindingV2) {
+    source_variable_binding_at_v2(variable, block, next_operation).unwrap_or((
+        0,
+        match variable.fallback {
+            DebugSourceVariableFallbackV2::NotInScope => DebugSourceVariableBindingV2::NotInScope,
+            DebugSourceVariableFallbackV2::OptimizedOut => {
+                DebugSourceVariableBindingV2::OptimizedOut
+            }
+            DebugSourceVariableFallbackV2::Unrepresented => {
+                DebugSourceVariableBindingV2::Unrepresented
+            }
+            DebugSourceVariableFallbackV2::NotCaptured => DebugSourceVariableBindingV2::NotCaptured,
+        },
+    ))
+}
+
+fn source_variable_value_v2(
+    variable: &AdmittedSourceVariableV2,
+    frame: &SimulationDebugFrameV1,
+    next_operation: u32,
+    force_ambiguous: bool,
+) -> SourceVariableValueV2 {
+    let (generation, binding) =
+        source_variable_effective_binding_at_v2(variable, frame.block, next_operation);
+    let availability =
+        if force_ambiguous || matches!(binding, DebugSourceVariableBindingV2::Ambiguous) {
+            SourceVariableValueAvailabilityV2::Ambiguous
+        } else {
+            let value = match binding {
+                DebugSourceVariableBindingV2::NotInScope => ValueAvailabilityV1::Unavailable {
+                    reason: ValueUnavailableReasonV1::NotInScope,
+                },
+                DebugSourceVariableBindingV2::Uninitialized => ValueAvailabilityV1::Unavailable {
+                    reason: ValueUnavailableReasonV1::Uninitialized,
+                },
+                DebugSourceVariableBindingV2::NotCaptured => ValueAvailabilityV1::Unavailable {
+                    reason: ValueUnavailableReasonV1::NotCaptured,
+                },
+                DebugSourceVariableBindingV2::OptimizedOut => ValueAvailabilityV1::Unavailable {
+                    reason: ValueUnavailableReasonV1::OptimizedOut,
+                },
+                DebugSourceVariableBindingV2::Unrepresented => ValueAvailabilityV1::Unavailable {
+                    reason: ValueUnavailableReasonV1::NotRepresented,
+                },
+                DebugSourceVariableBindingV2::Captured { value_ordinal } => {
+                    let value = u32::try_from(value_ordinal).ok().map(ValueId);
+                    match (&frame.values, value) {
+                        (SimulationDebugCollectionV1::Captured(bindings), Some(value)) => bindings
+                            .iter()
+                            .find(|binding| binding.value == value)
+                            .map(|binding| availability_for_observed(&binding.observed))
+                            .unwrap_or(ValueAvailabilityV1::Unavailable {
+                                reason: ValueUnavailableReasonV1::NotLive,
+                            }),
+                        (SimulationDebugCollectionV1::Unavailable { .. }, _) => {
+                            ValueAvailabilityV1::Unavailable {
+                                reason: ValueUnavailableReasonV1::Truncated,
+                            }
+                        }
+                        (_, None) => ValueAvailabilityV1::Unavailable {
+                            reason: ValueUnavailableReasonV1::NotRepresented,
+                        },
+                    }
+                }
+                DebugSourceVariableBindingV2::Ambiguous => unreachable!("handled above"),
+            };
+            SourceVariableValueAvailabilityV2::Value { value }
+        };
+    SourceVariableValueV2 {
+        variable_identity: variable.identity,
+        name: variable.name.clone(),
+        function_ordinal: variable.function_ordinal as u64,
+        scope_identity: variable.scope_identity,
+        scope_depth: variable.scope_depth,
+        generation,
+        availability,
+    }
+}
+
 fn protocol_scalar_type(value: ScalarBitsV1) -> (DebugValueTypeV1, u16) {
     match value.ty() {
         ScalarType::Bool => (DebugValueTypeV1::Bool, 1),
@@ -1250,10 +1684,10 @@ pub fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let (admitted, bundle) = match &options.program {
+    let (admitted, bundle, bundle_v2) = match &options.program {
         ProgramInputV1::KirV7(path) => {
             match load_debug_simulation_input_v1(path, &options.request) {
-                Ok(input) => (input, None),
+                Ok(input) => (input, None, None),
                 Err(error) => {
                     write_input_error(&error);
                     return ExitCode::FAILURE;
@@ -1264,7 +1698,19 @@ pub fn main() -> ExitCode {
             match load_debug_simulation_bundle_v1(path, &options.request) {
                 Ok(admitted) => {
                     let (input, bundle) = admitted.into_parts();
-                    (input, Some(bundle))
+                    (input, Some(bundle), None)
+                }
+                Err(error) => {
+                    write_input_error(&error);
+                    return ExitCode::FAILURE;
+                }
+            }
+        }
+        ProgramInputV1::BundleV2(path) => {
+            match load_debug_simulation_bundle_v2(path, &options.request) {
+                Ok(admitted) => {
+                    let (input, bundle) = admitted.into_parts();
+                    (input, None, Some(bundle))
                 }
                 Err(error) => {
                     write_input_error(&error);
@@ -1304,6 +1750,38 @@ pub fn main() -> ExitCode {
         },
         None => None,
     };
+    if let Some(bundle) = bundle_v2.as_ref() {
+        let subject = nonzero_identity(*bundle.subject_identity());
+        let map_identity = nonzero_identity(*bundle.debug_map_identity());
+        let stdin = io::stdin();
+        let stdout = io::stdout();
+        let mut reader = BufReader::new(stdin.lock());
+        let mut writer = BufWriter::new(stdout.lock());
+        return match run_admitted_jsonl_with_bundle_source_map_v2(
+            admitted,
+            options.wave_width,
+            bundle.debug_map(),
+            subject,
+            map_identity,
+            replay_schedule.as_ref().map(|schedule| schedule.record()),
+            &mut reader,
+            &mut writer,
+        ) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(CompilerBundleDebugRunErrorV1::SourceMap(message)) => {
+                write_bootstrap_error("source_map", "bundle_source_map_v2_rejected", &message);
+                ExitCode::FAILURE
+            }
+            Err(CompilerBundleDebugRunErrorV1::Backend(message)) => {
+                write_bootstrap_error("backend", "simulation_capture_failed", &message);
+                ExitCode::FAILURE
+            }
+            Err(CompilerBundleDebugRunErrorV1::ProtocolStream(message)) => {
+                write_bootstrap_error("output", "protocol_stream_failed", &message);
+                ExitCode::FAILURE
+            }
+        };
+    }
     if let Some(bundle) = bundle.as_ref()
         && let Some(map) = bundle.debug_map()
     {
@@ -1376,6 +1854,7 @@ fn parse_options(arguments: impl Iterator<Item = OsString>) -> Result<OptionsV1,
     }
     let mut kir_v7 = None;
     let mut bundle = None;
+    let mut bundle_v2 = None;
     let mut request = None;
     let mut source_map = None;
     let mut source_bundle_subject = None;
@@ -1390,6 +1869,8 @@ fn parse_options(arguments: impl Iterator<Item = OsString>) -> Result<OptionsV1,
             set_once(&mut kir_v7, PathBuf::from(value), "--kir-v7")?;
         } else if option == OsStr::new("--bundle") {
             set_once(&mut bundle, PathBuf::from(value), "--bundle")?;
+        } else if option == OsStr::new("--bundle-v2") {
+            set_once(&mut bundle_v2, PathBuf::from(value), "--bundle-v2")?;
         } else if option == OsStr::new("--request") {
             set_once(&mut request, PathBuf::from(value), "--request")?;
         } else if option == OsStr::new("--source-map") {
@@ -1436,21 +1917,22 @@ fn parse_options(arguments: impl Iterator<Item = OsString>) -> Result<OptionsV1,
             "--source-map and --source-bundle-subject must be supplied together; {USAGE}"
         ));
     }
-    let program = match (kir_v7, bundle) {
-        (Some(path), None) => ProgramInputV1::KirV7(path),
-        (None, Some(path)) => ProgramInputV1::Bundle(path),
-        (None, None) => {
-            return Err(format!(
-                "exactly one of --kir-v7 or --bundle is required; {USAGE}"
-            ));
+    let program = match (kir_v7, bundle, bundle_v2) {
+        (Some(path), None, None) => ProgramInputV1::KirV7(path),
+        (None, Some(path), None) => ProgramInputV1::Bundle(path),
+        (None, None, Some(path)) => ProgramInputV1::BundleV2(path),
+        (None, None, None) => {
+            return Err(format!("exactly one program input is required; {USAGE}"));
         }
-        (Some(_), Some(_)) => {
-            return Err(format!(
-                "--kir-v7 and --bundle are mutually exclusive; {USAGE}"
-            ));
+        _ => {
+            return Err(format!("program inputs are mutually exclusive; {USAGE}"));
         }
     };
-    if matches!(program, ProgramInputV1::Bundle(_)) && source_map.is_some() {
+    if matches!(
+        program,
+        ProgramInputV1::Bundle(_) | ProgramInputV1::BundleV2(_)
+    ) && source_map.is_some()
+    {
         return Err(format!(
             "--source-map and --source-bundle-subject cannot override an admitted bundle; {USAGE}"
         ));
@@ -1604,6 +2086,42 @@ fn run_admitted_jsonl_with_compiler_source_map_and_schedule_v1<R: BufRead, W: Wr
     run_jsonl_v1(backend, reader, writer).map_err(CompilerBundleDebugRunErrorV1::ProtocolStream)
 }
 
+#[allow(clippy::too_many_arguments)]
+fn run_admitted_jsonl_with_bundle_source_map_v2<R: BufRead, W: Write>(
+    input: AdmittedSimulationInputV1,
+    wave_width: DebugWaveWidthV1,
+    source_map_bytes: &[u8],
+    verified_bundle_subject: OpaqueIdentityV1,
+    committed_map_identity: OpaqueIdentityV1,
+    replay_schedule: Option<&SimulationScheduleRecordV1>,
+    reader: &mut R,
+    writer: &mut W,
+) -> Result<(), CompilerBundleDebugRunErrorV1> {
+    if input.simulation_bundle_subject() != Some(verified_bundle_subject.as_bytes()) {
+        return Err(CompilerBundleDebugRunErrorV1::SourceMap(
+            "compiler-bundle V2 source map subject is not retained by the admitted input"
+                .to_owned(),
+        ));
+    }
+    let configuration = configuration_identity_for_input(&input, wave_width);
+    let source_map = admit_source_map_v2(
+        source_map_bytes,
+        &input,
+        configuration,
+        verified_bundle_subject,
+        committed_map_identity,
+    )
+    .map_err(CompilerBundleDebugRunErrorV1::SourceMap)?;
+    let backend = SimulatorBackendV1::new_with_source_map_v2_and_schedule(
+        input,
+        wave_width,
+        source_map,
+        replay_schedule,
+    )
+    .map_err(CompilerBundleDebugRunErrorV1::Backend)?;
+    run_jsonl_v1(backend, reader, writer).map_err(CompilerBundleDebugRunErrorV1::ProtocolStream)
+}
+
 fn run_jsonl_v1<R: BufRead, W: Write>(
     mut backend: SimulatorBackendV1,
     reader: &mut R,
@@ -1611,7 +2129,7 @@ fn run_jsonl_v1<R: BufRead, W: Write>(
 ) -> Result<(), String> {
     let limits = backend.protocol_limits;
     loop {
-        let request = match read_request_line_v1(reader, limits) {
+        let request = match read_request_line_any_v2(reader, limits) {
             Ok(Some(request)) => request,
             Ok(None) => break,
             Err(error) => {
@@ -1620,16 +2138,39 @@ fn run_jsonl_v1<R: BufRead, W: Write>(
                 break;
             }
         };
-        let terminate = matches!(request, DebugRequestV1::Terminate { .. });
-        let response = backend.handle(request);
-        write_response(writer, &response, limits)?;
-        if terminate && matches!(response, DebugResponseV1::Ok { .. }) {
-            break;
+        match request {
+            DebugRequestAnyV2::V1(request) => {
+                let terminate = matches!(request, DebugRequestV1::Terminate { .. });
+                let response = backend.handle(request);
+                write_response(writer, &response, limits)?;
+                if terminate && matches!(response, DebugResponseV1::Ok { .. }) {
+                    break;
+                }
+            }
+            DebugRequestAnyV2::SourceVariablesV2(request) => {
+                let response = backend.handle_source_variables_v2(request);
+                write_source_variable_response_v2(writer, &response, limits)?;
+            }
         }
     }
     writer
         .flush()
         .map_err(|_| "failed to flush debugger responses".to_owned())
+}
+
+fn write_source_variable_response_v2<W: Write>(
+    writer: &mut W,
+    response: &SourceVariableResponseV2,
+    limits: ProtocolLimitsV1,
+) -> Result<(), String> {
+    let bytes = encode_source_variable_response_line_v2(response, limits)
+        .map_err(|error| format!("failed to encode source-variable V2 response: {error}"))?;
+    writer
+        .write_all(&bytes)
+        .map_err(|_| "failed to write source-variable V2 response".to_owned())?;
+    writer
+        .flush()
+        .map_err(|_| "failed to flush source-variable V2 response".to_owned())
 }
 
 fn write_response<W: Write>(
@@ -1700,6 +2241,7 @@ struct SimulatorBackendV1 {
     configuration_identity: OpaqueIdentityV1,
     source_map_identity: Option<OpaqueIdentityV1>,
     source_map_provenance: Option<SourceMapProvenanceV1>,
+    source_variables_v2: Option<AdmittedSourceVariablesV2>,
     revision: u64,
     command_count: u64,
     terminated: bool,
@@ -1729,6 +2271,25 @@ impl SimulatorBackendV1 {
         input: AdmittedSimulationInputV1,
         wave_width: DebugWaveWidthV1,
         source_map: Option<AdmittedSourceMapV1>,
+        replay_schedule: Option<&SimulationScheduleRecordV1>,
+    ) -> Result<Self, String> {
+        Self::new_with_maps_and_schedule(input, wave_width, source_map, None, replay_schedule)
+    }
+
+    fn new_with_source_map_v2_and_schedule(
+        input: AdmittedSimulationInputV1,
+        wave_width: DebugWaveWidthV1,
+        source_map: AdmittedSourceMapV2,
+        replay_schedule: Option<&SimulationScheduleRecordV1>,
+    ) -> Result<Self, String> {
+        Self::new_with_maps_and_schedule(input, wave_width, None, Some(source_map), replay_schedule)
+    }
+
+    fn new_with_maps_and_schedule(
+        input: AdmittedSimulationInputV1,
+        wave_width: DebugWaveWidthV1,
+        source_map: Option<AdmittedSourceMapV1>,
+        source_map_v2: Option<AdmittedSourceMapV2>,
         replay_schedule: Option<&SimulationScheduleRecordV1>,
     ) -> Result<Self, String> {
         let capture_limits =
@@ -1779,6 +2340,16 @@ impl SimulatorBackendV1 {
             .map_or(base_configuration_identity, |schedule| {
                 configuration_identity_for_replay(base_configuration_identity, schedule)
             });
+        let configuration_identity =
+            source_map_v2
+                .as_ref()
+                .map_or(configuration_identity, |source_map| {
+                    configuration_identity_for_source_map_v2(
+                        configuration_identity,
+                        source_map.identity,
+                        source_map.bundle_subject_identity,
+                    )
+                });
         let mut session = DebugSessionV1::new(run.transcript);
         let mut source_map_provenance = None;
         let source_map_identity = if let Some(source_map) = source_map {
@@ -1793,6 +2364,21 @@ impl SimulatorBackendV1 {
                 .map_err(|error| format!("source map binding failed: {error}"))?;
             Some(identity)
         } else {
+            source_map_v2.as_ref().map(|source_map| source_map.identity)
+        };
+        let source_variables_v2 = if let Some(source_map) = source_map_v2 {
+            if source_map.configuration_identity != base_configuration_identity {
+                return Err(
+                    "source map V2 configuration identity changed before binding".to_owned(),
+                );
+            }
+            let _bundle_subject = source_map.bundle_subject_identity;
+            source_map_provenance = Some(SourceMapProvenanceV1::CompilerBundleBound);
+            session
+                .bind_source_catalog(&input.module, source_map.catalog)
+                .map_err(|error| format!("source map V2 binding failed: {error}"))?;
+            Some(source_map.variables)
+        } else {
             None
         };
         Ok(Self {
@@ -1802,6 +2388,7 @@ impl SimulatorBackendV1 {
             configuration_identity,
             source_map_identity,
             source_map_provenance,
+            source_variables_v2,
             revision: 0,
             command_count: 0,
             terminated: false,
@@ -1898,6 +2485,259 @@ impl SimulatorBackendV1 {
         self.handle_admitted(request)
     }
 
+    fn handle_source_variables_v2(
+        &mut self,
+        request: SourceVariableRequestV2,
+    ) -> SourceVariableResponseV2 {
+        let request_id = request.request_id();
+        if request.expected_revision() != self.revision {
+            return self.source_variable_error_v2(
+                Some(request_id),
+                DebugErrorCodeV1::StaleRevision,
+                "expected_revision does not match the current session revision",
+            );
+        }
+        if self.terminated {
+            return self.source_variable_error_v2(
+                Some(request_id),
+                DebugErrorCodeV1::InvalidState,
+                "debug session is terminated",
+            );
+        }
+        if self.command_count == MAX_SESSION_COMMANDS_V1 {
+            return self.source_variable_error_v2(
+                Some(request_id),
+                DebugErrorCodeV1::ResourceLimit,
+                "debug session command budget is exhausted",
+            );
+        }
+        self.command_count += 1;
+        let SourceVariableRequestV2::InspectSourceVariables {
+            scope,
+            frame,
+            selector,
+            page,
+            ..
+        } = request;
+        let Some(index) = self.source_variables_v2.as_ref() else {
+            return self.source_variable_unavailable_v2(
+                request_id,
+                SourceVariableQueryUnavailableReasonV2::SourceMapV2Required,
+            );
+        };
+        if index.variables.is_empty() {
+            return self.source_variable_unavailable_v2(
+                request_id,
+                SourceVariableQueryUnavailableReasonV2::VariablesNotCaptured,
+            );
+        }
+        let Some(record) = self.session.current() else {
+            return self.source_variable_unavailable_v2(
+                request_id,
+                SourceVariableQueryUnavailableReasonV2::CheckpointNotCaptured,
+            );
+        };
+        if !convert_scope_selector(scope).matches(record.invocation, self.wave_width) {
+            return self.source_variable_unavailable_v2(
+                request_id,
+                SourceVariableQueryUnavailableReasonV2::OutsideCaptureScope,
+            );
+        }
+        let SimulationDebugRecordKindV1::Checkpoint { stack, .. } = &record.kind else {
+            return self.source_variable_unavailable_v2(
+                request_id,
+                SourceVariableQueryUnavailableReasonV2::CheckpointNotCaptured,
+            );
+        };
+        let SimulationDebugCollectionV1::Captured(frames) = stack else {
+            return self.source_variable_unavailable_v2(
+                request_id,
+                SourceVariableQueryUnavailableReasonV2::CheckpointNotCaptured,
+            );
+        };
+        let frame_identity = frame.unwrap_or(1);
+        let Ok(depth) = u32::try_from(frame_identity - 1) else {
+            return self.source_variable_error_v2(
+                Some(request_id),
+                DebugErrorCodeV1::InvalidRequest,
+                "frame identity exceeds the simulator frame range",
+            );
+        };
+        let Some(selected_frame) = frames.iter().find(|candidate| candidate.depth == depth) else {
+            return self.source_variable_unavailable_v2(
+                request_id,
+                SourceVariableQueryUnavailableReasonV2::FrameUnavailable,
+            );
+        };
+        let Some(next_operation) = selected_frame.next_operation else {
+            return self.source_variable_unavailable_v2(
+                request_id,
+                SourceVariableQueryUnavailableReasonV2::CheckpointNotCaptured,
+            );
+        };
+
+        let mut ambiguous_name = false;
+        let mut retained_name_candidates = Vec::new();
+        let candidates: &[usize] = match &selector {
+            SourceVariableSelectorV2::All => index
+                .by_function
+                .get(&selected_frame.function_ordinal)
+                .map_or(&[][..], Vec::as_slice),
+            SourceVariableSelectorV2::Identity { variable_identity } => {
+                let Some(candidate) = index.by_identity.get(variable_identity) else {
+                    return self.source_variable_unavailable_v2(
+                        request_id,
+                        SourceVariableQueryUnavailableReasonV2::OutsideCaptureScope,
+                    );
+                };
+                if index.variables[*candidate].function_ordinal != selected_frame.function_ordinal {
+                    return self.source_variable_unavailable_v2(
+                        request_id,
+                        SourceVariableQueryUnavailableReasonV2::OutsideCaptureScope,
+                    );
+                }
+                std::slice::from_ref(candidate)
+            }
+            SourceVariableSelectorV2::Name { name } => {
+                let named = index
+                    .by_name
+                    .get(&(selected_frame.function_ordinal, name.clone()))
+                    .map_or(&[][..], Vec::as_slice);
+                let maximum_depth = named
+                    .iter()
+                    .filter_map(|candidate| {
+                        let variable = &index.variables[*candidate];
+                        let (_, binding) = source_variable_effective_binding_at_v2(
+                            variable,
+                            selected_frame.block,
+                            next_operation,
+                        );
+                        (!matches!(binding, DebugSourceVariableBindingV2::NotInScope))
+                            .then_some(variable.scope_depth)
+                    })
+                    .max();
+                let Some(maximum_depth) = maximum_depth else {
+                    return self.source_variable_unavailable_v2(
+                        request_id,
+                        SourceVariableQueryUnavailableReasonV2::NameNotInScope,
+                    );
+                };
+                if retained_name_candidates
+                    .try_reserve_exact(named.len())
+                    .is_err()
+                {
+                    return self.source_variable_error_v2(
+                        Some(request_id),
+                        DebugErrorCodeV1::ResourceLimit,
+                        "source variable name resolution allocation failed",
+                    );
+                }
+                retained_name_candidates.extend(named.iter().copied().filter(|candidate| {
+                    let variable = &index.variables[*candidate];
+                    variable.scope_depth == maximum_depth
+                        && !matches!(
+                            source_variable_effective_binding_at_v2(
+                                variable,
+                                selected_frame.block,
+                                next_operation,
+                            )
+                            .1,
+                            DebugSourceVariableBindingV2::NotInScope
+                        )
+                }));
+                ambiguous_name = retained_name_candidates.len() > 1;
+                &retained_name_candidates
+            }
+        };
+        let query_bytes =
+            match serde_json::to_vec(&(scope, frame_identity, &selector, self.cursor_sequence())) {
+                Ok(bytes) => bytes,
+                Err(_) => {
+                    return self.source_variable_error_v2(
+                        Some(request_id),
+                        DebugErrorCodeV1::ResourceLimit,
+                        "source variable query binding allocation failed",
+                    );
+                }
+            };
+        let query = self.query_identity(b"inspect-source-variables-v2", &query_bytes);
+        let (start, end, next_cursor) = match page_bounds(page, query, candidates.len()) {
+            Ok(bounds) => bounds,
+            Err(message) => {
+                return self.source_variable_error_v2(
+                    Some(request_id),
+                    DebugErrorCodeV1::InvalidCursor,
+                    message,
+                );
+            }
+        };
+        let mut values = Vec::new();
+        if values.try_reserve_exact(end - start).is_err() {
+            return self.source_variable_error_v2(
+                Some(request_id),
+                DebugErrorCodeV1::ResourceLimit,
+                "source variable response allocation failed",
+            );
+        }
+        for candidate in &candidates[start..end] {
+            values.push(source_variable_value_v2(
+                &index.variables[*candidate],
+                selected_frame,
+                next_operation,
+                ambiguous_name,
+            ));
+        }
+        let Some(snapshot) = self.current_anchor(Some(frame_identity)) else {
+            return self.source_variable_unavailable_v2(
+                request_id,
+                SourceVariableQueryUnavailableReasonV2::CheckpointNotCaptured,
+            );
+        };
+        SourceVariableResponseV2::Ok {
+            schema: SourceVariableResponseSchemaV2::V2,
+            request_id,
+            operation: SourceVariableOperationV2::InspectSourceVariables,
+            session: self.session_view(),
+            snapshot: Box::new(snapshot),
+            values,
+            next_cursor,
+        }
+    }
+
+    fn source_variable_unavailable_v2(
+        &self,
+        request_id: u64,
+        reason: SourceVariableQueryUnavailableReasonV2,
+    ) -> SourceVariableResponseV2 {
+        SourceVariableResponseV2::Unavailable {
+            schema: SourceVariableResponseSchemaV2::V2,
+            request_id,
+            operation: SourceVariableOperationV2::InspectSourceVariables,
+            session: self.session_view(),
+            reason,
+        }
+    }
+
+    fn source_variable_error_v2(
+        &self,
+        request_id: Option<u64>,
+        code: DebugErrorCodeV1,
+        message: &str,
+    ) -> SourceVariableResponseV2 {
+        SourceVariableResponseV2::Error {
+            schema: SourceVariableResponseSchemaV2::V2,
+            request_id,
+            operation: SourceVariableOperationV2::InspectSourceVariables,
+            session: self.session_view(),
+            error: DebugErrorV1 {
+                stage: DebugErrorStageV1::Session,
+                code,
+                message: bounded_message(message),
+                state_changed: false,
+            },
+        }
+    }
+
     fn ok(
         &self,
         request_id: u64,
@@ -1968,7 +2808,12 @@ impl SimulatorBackendV1 {
                 request_id,
                 DebugOperationNameV1::DiscoverCapabilities,
                 DebugResultV1::Capabilities {
-                    capabilities: simulator_capabilities(self.source_map_identity.is_some()),
+                    capabilities: simulator_capabilities(
+                        self.source_map_identity.is_some(),
+                        self.source_variables_v2
+                            .as_ref()
+                            .map(|variables| !variables.variables.is_empty()),
+                    ),
                 },
             ),
             DebugRequestV1::GetState { request_id, .. } => self.ok(
@@ -3847,6 +4692,19 @@ fn configuration_identity_for_replay(
     nonzero_identity(digest.finalize().into())
 }
 
+fn configuration_identity_for_source_map_v2(
+    base: OpaqueIdentityV1,
+    source_map: OpaqueIdentityV1,
+    bundle_subject: OpaqueIdentityV1,
+) -> OpaqueIdentityV1 {
+    let mut digest = Sha256::new();
+    digest.update(b"fe2o3-debug-sim-source-map-v2-config-v1\0");
+    digest.update(base.as_bytes());
+    digest.update(source_map.as_bytes());
+    digest.update(bundle_subject.as_bytes());
+    nonzero_identity(digest.finalize().into())
+}
+
 fn source_span_for_step(
     inspection: DebugInspectionV1<DebugSourceResolutionV1>,
     absent_is_error: bool,
@@ -3956,6 +4814,140 @@ mod tests {
             0x3c, 0xd8, 0xed, 0xf2, 0xce, 0x9d, 0xfb, 0x45, 0xdf, 0xda, 0x1c, 0xc6, 0x2c, 0x85,
             0x29, 0x11, 0x99, 0x50,
         ])
+    }
+
+    fn test_source_scope_v2(
+        identity: [u8; 32],
+        parent_identity: Option<[u8; 32]>,
+        depth: u32,
+    ) -> fe2o3_kernel_ir::DebugSourceScopeV2 {
+        let v1 = DebugSourceMapDocumentV1::from_json_bytes(&fill_source_map()).unwrap();
+        fe2o3_kernel_ir::DebugSourceScopeV2::new(
+            identity,
+            0,
+            parent_identity,
+            depth,
+            v1.sites()[0].spans()[0],
+        )
+        .unwrap()
+    }
+
+    fn admitted_test_source_map_v2(
+        input: &AdmittedSimulationInputV1,
+        scopes: Vec<fe2o3_kernel_ir::DebugSourceScopeV2>,
+        variables: Vec<fe2o3_kernel_ir::DebugSourceVariableV2>,
+    ) -> AdmittedSourceMapV2 {
+        // This is a compiler-shaped test document, not compiler-emission evidence.
+        let v1 = DebugSourceMapDocumentV1::from_json_bytes(&fill_source_map()).unwrap();
+        let document = DebugSourceMapDocumentV2::new(
+            v1.binding(),
+            v1.files().to_vec(),
+            v1.sites().to_vec(),
+            v1.eliminated().to_vec(),
+            scopes,
+            variables,
+        )
+        .unwrap();
+        let bytes = document.to_canonical_json_bytes().unwrap();
+        admit_source_map_v2(
+            &bytes,
+            input,
+            configuration_identity(
+                input.kir_sha256,
+                input.request_sha256,
+                DebugWaveWidthV1::Wave64,
+            ),
+            fixture_subject(),
+            nonzero_identity(simulation_debug_map_identity_v2(&bytes)),
+        )
+        .unwrap()
+    }
+
+    fn test_source_variable_v2(
+        identity: [u8; 32],
+        name: &str,
+        scope_identity: [u8; 32],
+        fallback: DebugSourceVariableFallbackV2,
+        locations: Vec<fe2o3_kernel_ir::DebugSourceVariableLocationV2>,
+    ) -> fe2o3_kernel_ir::DebugSourceVariableV2 {
+        fe2o3_kernel_ir::DebugSourceVariableV2::new(
+            identity,
+            name.to_owned(),
+            0,
+            scope_identity,
+            fallback,
+            locations,
+        )
+        .unwrap()
+    }
+
+    fn test_source_location_v2(
+        next_operation: u64,
+        generation: u64,
+        binding: DebugSourceVariableBindingV2,
+    ) -> fe2o3_kernel_ir::DebugSourceVariableLocationV2 {
+        fe2o3_kernel_ir::DebugSourceVariableLocationV2::new(0, next_operation, generation, binding)
+            .unwrap()
+    }
+
+    fn backend_with_test_source_map_v2(
+        scopes: Vec<fe2o3_kernel_ir::DebugSourceScopeV2>,
+        variables: Vec<fe2o3_kernel_ir::DebugSourceVariableV2>,
+    ) -> SimulatorBackendV1 {
+        let input = fill_input();
+        let source_map = admitted_test_source_map_v2(&input, scopes, variables);
+        SimulatorBackendV1::new_with_source_map_v2_and_schedule(
+            input,
+            DebugWaveWidthV1::Wave64,
+            source_map,
+            None,
+        )
+        .unwrap()
+    }
+
+    fn seek_test_checkpoint(backend: &mut SimulatorBackendV1, next_operation: u32) {
+        let record = backend
+            .session
+            .transcript()
+            .records()
+            .iter()
+            .position(|record| {
+                matches!(
+                    &record.kind,
+                    SimulationDebugRecordKindV1::Checkpoint {
+                        stack: SimulationDebugCollectionV1::Captured(frames),
+                        ..
+                    } if frames.iter().any(|frame| {
+                        frame.depth == 0
+                            && frame.function_ordinal == 0
+                            && frame.block == fe2o3_kernel_ir::BlockId(0)
+                            && frame.next_operation == Some(next_operation)
+                    })
+                )
+            })
+            .unwrap_or_else(|| panic!("missing test checkpoint before operation {next_operation}"));
+        assert!(matches!(
+            backend.session.seek_record_index(record),
+            DebugNavigationV1::Stopped(_)
+        ));
+    }
+
+    fn inspect_source_variables_v2(
+        backend: &mut SimulatorBackendV1,
+        request_id: u64,
+        frame: Option<u64>,
+        selector: SourceVariableSelectorV2,
+        page: PageRequestV1,
+    ) -> SourceVariableResponseV2 {
+        backend.handle_source_variables_v2(SourceVariableRequestV2::InspectSourceVariables {
+            schema: SourceVariableRequestSchemaV2::V2,
+            request_id,
+            expected_revision: backend.revision,
+            scope: ExecutionScopeSelectorV1::Dispatch,
+            frame,
+            selector,
+            page,
+        })
     }
 
     fn barrier_record(
@@ -4101,6 +5093,628 @@ mod tests {
                 fixture_subject(),
             )
             .is_err());
+        }
+    }
+
+    #[test]
+    fn v1_and_empty_v2_maps_have_distinct_source_variable_unavailability() {
+        let input = fill_input();
+        let configuration = configuration_identity(
+            input.kir_sha256,
+            input.request_sha256,
+            DebugWaveWidthV1::Wave64,
+        );
+        let source_map =
+            admit_source_map_v1(&fill_source_map(), &input, configuration, fixture_subject())
+                .unwrap();
+        let mut v1_backend = SimulatorBackendV1::new_with_source_map(
+            input,
+            DebugWaveWidthV1::Wave64,
+            Some(source_map),
+        )
+        .unwrap();
+        assert!(matches!(
+            inspect_source_variables_v2(
+                &mut v1_backend,
+                1,
+                Some(1),
+                SourceVariableSelectorV2::All,
+                PageRequestV1 {
+                    cursor: None,
+                    limit: 8
+                },
+            ),
+            SourceVariableResponseV2::Unavailable {
+                reason: SourceVariableQueryUnavailableReasonV2::SourceMapV2Required,
+                ..
+            }
+        ));
+
+        let mut empty_v2_backend = backend_with_test_source_map_v2(Vec::new(), Vec::new());
+        assert!(matches!(
+            inspect_source_variables_v2(
+                &mut empty_v2_backend,
+                2,
+                Some(1),
+                SourceVariableSelectorV2::All,
+                PageRequestV1 {
+                    cursor: None,
+                    limit: 8
+                },
+            ),
+            SourceVariableResponseV2::Unavailable {
+                reason: SourceVariableQueryUnavailableReasonV2::VariablesNotCaptured,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn test_authored_v2_map_tracks_checkpoint_zero_shadowing_and_generations() {
+        let root = [0x11; 32];
+        let inner = [0x12; 32];
+        let buffer = [0x21; 32];
+        let outer_item = [0x22; 32];
+        let inner_item = [0x23; 32];
+        let state = [0x24; 32];
+        let optimized = [0x25; 32];
+        let unrepresented = [0x26; 32];
+        let not_captured = [0x27; 32];
+        let scopes = vec![
+            test_source_scope_v2(root, None, 0),
+            test_source_scope_v2(inner, Some(root), 1),
+        ];
+        let variables = vec![
+            test_source_variable_v2(
+                buffer,
+                "buffer",
+                root,
+                DebugSourceVariableFallbackV2::NotInScope,
+                vec![test_source_location_v2(
+                    0,
+                    1,
+                    DebugSourceVariableBindingV2::Captured { value_ordinal: 0 },
+                )],
+            ),
+            test_source_variable_v2(
+                outer_item,
+                "item",
+                root,
+                DebugSourceVariableFallbackV2::NotInScope,
+                vec![test_source_location_v2(
+                    0,
+                    1,
+                    DebugSourceVariableBindingV2::Captured { value_ordinal: 0 },
+                )],
+            ),
+            test_source_variable_v2(
+                inner_item,
+                "item",
+                inner,
+                DebugSourceVariableFallbackV2::NotInScope,
+                vec![
+                    test_source_location_v2(0, 0, DebugSourceVariableBindingV2::NotInScope),
+                    test_source_location_v2(
+                        1,
+                        1,
+                        DebugSourceVariableBindingV2::Captured { value_ordinal: 1 },
+                    ),
+                    test_source_location_v2(2, 0, DebugSourceVariableBindingV2::NotInScope),
+                ],
+            ),
+            test_source_variable_v2(
+                state,
+                "state",
+                root,
+                DebugSourceVariableFallbackV2::NotInScope,
+                vec![
+                    test_source_location_v2(0, 1, DebugSourceVariableBindingV2::Uninitialized),
+                    test_source_location_v2(
+                        1,
+                        1,
+                        DebugSourceVariableBindingV2::Captured { value_ordinal: 1 },
+                    ),
+                    test_source_location_v2(2, 0, DebugSourceVariableBindingV2::NotInScope),
+                    test_source_location_v2(3, 2, DebugSourceVariableBindingV2::Uninitialized),
+                ],
+            ),
+            test_source_variable_v2(
+                optimized,
+                "optimized",
+                root,
+                DebugSourceVariableFallbackV2::OptimizedOut,
+                Vec::new(),
+            ),
+            test_source_variable_v2(
+                unrepresented,
+                "unrepresented",
+                root,
+                DebugSourceVariableFallbackV2::Unrepresented,
+                Vec::new(),
+            ),
+            test_source_variable_v2(
+                not_captured,
+                "not_captured",
+                root,
+                DebugSourceVariableFallbackV2::NotCaptured,
+                Vec::new(),
+            ),
+            test_source_variable_v2(
+                [0x28; 32],
+                "shadow_optimized",
+                root,
+                DebugSourceVariableFallbackV2::NotInScope,
+                vec![test_source_location_v2(
+                    0,
+                    1,
+                    DebugSourceVariableBindingV2::Captured { value_ordinal: 0 },
+                )],
+            ),
+            test_source_variable_v2(
+                [0x29; 32],
+                "shadow_optimized",
+                inner,
+                DebugSourceVariableFallbackV2::OptimizedOut,
+                Vec::new(),
+            ),
+            test_source_variable_v2(
+                [0x2a; 32],
+                "shadow_unrepresented",
+                root,
+                DebugSourceVariableFallbackV2::NotInScope,
+                vec![test_source_location_v2(
+                    0,
+                    1,
+                    DebugSourceVariableBindingV2::Captured { value_ordinal: 0 },
+                )],
+            ),
+            test_source_variable_v2(
+                [0x2b; 32],
+                "shadow_unrepresented",
+                inner,
+                DebugSourceVariableFallbackV2::Unrepresented,
+                Vec::new(),
+            ),
+            test_source_variable_v2(
+                [0x2c; 32],
+                "shadow_not_captured",
+                root,
+                DebugSourceVariableFallbackV2::NotInScope,
+                vec![test_source_location_v2(
+                    0,
+                    1,
+                    DebugSourceVariableBindingV2::Captured { value_ordinal: 0 },
+                )],
+            ),
+            test_source_variable_v2(
+                [0x2d; 32],
+                "shadow_not_captured",
+                inner,
+                DebugSourceVariableFallbackV2::NotCaptured,
+                Vec::new(),
+            ),
+        ];
+        let mut backend = backend_with_test_source_map_v2(scopes, variables);
+
+        seek_test_checkpoint(&mut backend, 0);
+        let SourceVariableResponseV2::Ok { values, .. } = inspect_source_variables_v2(
+            &mut backend,
+            1,
+            Some(1),
+            SourceVariableSelectorV2::Identity {
+                variable_identity: nonzero_identity(buffer),
+            },
+            PageRequestV1 {
+                cursor: None,
+                limit: 1,
+            },
+        ) else {
+            panic!("checkpoint-zero parameter query must succeed")
+        };
+        assert!(matches!(
+            values.as_slice(),
+            [SourceVariableValueV2 {
+                generation: 1,
+                availability: SourceVariableValueAvailabilityV2::Value {
+                    value: ValueAvailabilityV1::Captured {
+                        value_type: DebugValueTypeV1::Pointer { .. },
+                        value: CapturedValueV1::AllocationRelativePointer { .. },
+                        provenance: ValueProvenanceV1::SimulatedObservation,
+                    }
+                },
+                ..
+            }]
+        ));
+        for (request_id, variable_identity, reason) in [
+            (10, optimized, ValueUnavailableReasonV1::OptimizedOut),
+            (11, unrepresented, ValueUnavailableReasonV1::NotRepresented),
+            (12, not_captured, ValueUnavailableReasonV1::NotCaptured),
+        ] {
+            let SourceVariableResponseV2::Ok { values, .. } = inspect_source_variables_v2(
+                &mut backend,
+                request_id,
+                Some(1),
+                SourceVariableSelectorV2::Identity {
+                    variable_identity: nonzero_identity(variable_identity),
+                },
+                PageRequestV1 {
+                    cursor: None,
+                    limit: 1,
+                },
+            ) else {
+                panic!("typed unavailable source variable query must succeed")
+            };
+            assert_eq!(values[0].generation, 0);
+            assert!(matches!(
+                values[0].availability,
+                SourceVariableValueAvailabilityV2::Value {
+                    value: ValueAvailabilityV1::Unavailable { reason: actual }
+                } if actual == reason
+            ));
+        }
+        assert!(matches!(
+            inspect_source_variables_v2(
+                &mut backend,
+                13,
+                Some(1),
+                SourceVariableSelectorV2::Name {
+                    name: "missing".into(),
+                },
+                PageRequestV1 {
+                    cursor: None,
+                    limit: 1,
+                },
+            ),
+            SourceVariableResponseV2::Unavailable {
+                reason: SourceVariableQueryUnavailableReasonV2::NameNotInScope,
+                ..
+            }
+        ));
+        for (request_id, name, variable_identity, reason) in [
+            (
+                14,
+                "shadow_optimized",
+                [0x29; 32],
+                ValueUnavailableReasonV1::OptimizedOut,
+            ),
+            (
+                15,
+                "shadow_unrepresented",
+                [0x2b; 32],
+                ValueUnavailableReasonV1::NotRepresented,
+            ),
+            (
+                16,
+                "shadow_not_captured",
+                [0x2d; 32],
+                ValueUnavailableReasonV1::NotCaptured,
+            ),
+        ] {
+            let SourceVariableResponseV2::Ok { values, .. } = inspect_source_variables_v2(
+                &mut backend,
+                request_id,
+                Some(1),
+                SourceVariableSelectorV2::Name { name: name.into() },
+                PageRequestV1 {
+                    cursor: None,
+                    limit: 2,
+                },
+            ) else {
+                panic!("inner fallback must shadow an outer captured value")
+            };
+            assert!(matches!(
+                values.as_slice(),
+                [SourceVariableValueV2 {
+                    variable_identity: actual_identity,
+                    scope_depth: 1,
+                    generation: 0,
+                    availability: SourceVariableValueAvailabilityV2::Value {
+                        value: ValueAvailabilityV1::Unavailable { reason: actual_reason }
+                    },
+                    ..
+                }] if *actual_identity == nonzero_identity(variable_identity)
+                    && *actual_reason == reason
+            ));
+        }
+
+        seek_test_checkpoint(&mut backend, 1);
+        let SourceVariableResponseV2::Ok { values, .. } = inspect_source_variables_v2(
+            &mut backend,
+            2,
+            Some(1),
+            SourceVariableSelectorV2::Name {
+                name: "item".into(),
+            },
+            PageRequestV1 {
+                cursor: None,
+                limit: 2,
+            },
+        ) else {
+            panic!("inner shadow query must succeed")
+        };
+        assert!(matches!(
+            values.as_slice(),
+            [SourceVariableValueV2 {
+                variable_identity,
+                scope_depth: 1,
+                generation: 1,
+                availability: SourceVariableValueAvailabilityV2::Value {
+                    value: ValueAvailabilityV1::Captured {
+                        value_type: DebugValueTypeV1::Index { bits: 64 },
+                        ..
+                    }
+                },
+                ..
+            }] if *variable_identity == nonzero_identity(inner_item)
+        ));
+
+        seek_test_checkpoint(&mut backend, 2);
+        let SourceVariableResponseV2::Ok { values, .. } = inspect_source_variables_v2(
+            &mut backend,
+            3,
+            Some(1),
+            SourceVariableSelectorV2::Name {
+                name: "item".into(),
+            },
+            PageRequestV1 {
+                cursor: None,
+                limit: 2,
+            },
+        ) else {
+            panic!("outer shadow query must succeed")
+        };
+        assert!(matches!(
+            values.as_slice(),
+            [SourceVariableValueV2 {
+                variable_identity,
+                scope_depth: 0,
+                ..
+            }] if *variable_identity == nonzero_identity(outer_item)
+        ));
+        let SourceVariableResponseV2::Ok { values, .. } = inspect_source_variables_v2(
+            &mut backend,
+            4,
+            Some(1),
+            SourceVariableSelectorV2::Identity {
+                variable_identity: nonzero_identity(state),
+            },
+            PageRequestV1 {
+                cursor: None,
+                limit: 1,
+            },
+        ) else {
+            panic!("lifetime-reset query must succeed")
+        };
+        assert!(matches!(
+            values[0].availability,
+            SourceVariableValueAvailabilityV2::Value {
+                value: ValueAvailabilityV1::Unavailable {
+                    reason: ValueUnavailableReasonV1::NotInScope,
+                }
+            }
+        ));
+        assert_eq!(values[0].generation, 0);
+
+        seek_test_checkpoint(&mut backend, 3);
+        let SourceVariableResponseV2::Ok { values, .. } = inspect_source_variables_v2(
+            &mut backend,
+            5,
+            Some(1),
+            SourceVariableSelectorV2::Identity {
+                variable_identity: nonzero_identity(state),
+            },
+            PageRequestV1 {
+                cursor: None,
+                limit: 1,
+            },
+        ) else {
+            panic!("second-generation query must succeed")
+        };
+        assert_eq!(values[0].generation, 2);
+        assert!(matches!(
+            values[0].availability,
+            SourceVariableValueAvailabilityV2::Value {
+                value: ValueAvailabilityV1::Unavailable {
+                    reason: ValueUnavailableReasonV1::Uninitialized,
+                }
+            }
+        ));
+
+        seek_test_checkpoint(&mut backend, 1);
+        let SourceVariableResponseV2::Ok { values, .. } = inspect_source_variables_v2(
+            &mut backend,
+            6,
+            Some(1),
+            SourceVariableSelectorV2::Identity {
+                variable_identity: nonzero_identity(state),
+            },
+            PageRequestV1 {
+                cursor: None,
+                limit: 1,
+            },
+        ) else {
+            panic!("reverse replay query must succeed")
+        };
+        assert_eq!(values[0].generation, 1);
+        assert!(matches!(
+            values[0].availability,
+            SourceVariableValueAvailabilityV2::Value {
+                value: ValueAvailabilityV1::Captured { .. }
+            }
+        ));
+    }
+
+    #[test]
+    fn source_variable_admission_and_queries_are_hostile_and_page_bounded() {
+        let root = [0x31; 32];
+        let mut variables = Vec::new();
+        for ordinal in 0_u8..96 {
+            variables.push(test_source_variable_v2(
+                [0x80_u8.wrapping_add(ordinal); 32],
+                &format!("value_{ordinal}"),
+                root,
+                DebugSourceVariableFallbackV2::NotCaptured,
+                Vec::new(),
+            ));
+        }
+        variables.push(test_source_variable_v2(
+            [0x70; 32],
+            "ambiguous",
+            root,
+            DebugSourceVariableFallbackV2::NotInScope,
+            vec![test_source_location_v2(
+                0,
+                1,
+                DebugSourceVariableBindingV2::Captured { value_ordinal: 0 },
+            )],
+        ));
+        variables.push(test_source_variable_v2(
+            [0x71; 32],
+            "ambiguous",
+            root,
+            DebugSourceVariableFallbackV2::NotInScope,
+            vec![test_source_location_v2(
+                0,
+                1,
+                DebugSourceVariableBindingV2::Captured { value_ordinal: 0 },
+            )],
+        ));
+        let mut backend =
+            backend_with_test_source_map_v2(vec![test_source_scope_v2(root, None, 0)], variables);
+        seek_test_checkpoint(&mut backend, 0);
+
+        let SourceVariableResponseV2::Ok {
+            values,
+            next_cursor: Some(next_cursor),
+            ..
+        } = inspect_source_variables_v2(
+            &mut backend,
+            1,
+            Some(1),
+            SourceVariableSelectorV2::All,
+            PageRequestV1 {
+                cursor: None,
+                limit: 3,
+            },
+        )
+        else {
+            panic!("first bounded All page must succeed")
+        };
+        assert_eq!(values.len(), 3);
+        let SourceVariableResponseV2::Ok { values, .. } = inspect_source_variables_v2(
+            &mut backend,
+            2,
+            Some(1),
+            SourceVariableSelectorV2::All,
+            PageRequestV1 {
+                cursor: Some(next_cursor),
+                limit: 3,
+            },
+        ) else {
+            panic!("second bounded All page must succeed")
+        };
+        assert_eq!(values.len(), 3);
+
+        let SourceVariableResponseV2::Ok { values, .. } = inspect_source_variables_v2(
+            &mut backend,
+            3,
+            Some(1),
+            SourceVariableSelectorV2::Name {
+                name: "ambiguous".into(),
+            },
+            PageRequestV1 {
+                cursor: None,
+                limit: 2,
+            },
+        ) else {
+            panic!("ambiguous name query must remain typed")
+        };
+        assert_eq!(values.len(), 2);
+        assert!(values.iter().all(|value| matches!(
+            value.availability,
+            SourceVariableValueAvailabilityV2::Ambiguous
+        )));
+        assert!(matches!(
+            inspect_source_variables_v2(
+                &mut backend,
+                4,
+                Some(99),
+                SourceVariableSelectorV2::All,
+                PageRequestV1 {
+                    cursor: None,
+                    limit: 1
+                },
+            ),
+            SourceVariableResponseV2::Unavailable {
+                reason: SourceVariableQueryUnavailableReasonV2::FrameUnavailable,
+                ..
+            }
+        ));
+
+        let input = fill_input();
+        let v1 = DebugSourceMapDocumentV1::from_json_bytes(&fill_source_map()).unwrap();
+        let future_result = test_source_variable_v2(
+            [0x72; 32],
+            "future_result",
+            root,
+            DebugSourceVariableFallbackV2::NotInScope,
+            vec![test_source_location_v2(
+                0,
+                1,
+                DebugSourceVariableBindingV2::Captured { value_ordinal: 1 },
+            )],
+        );
+        let hostile = DebugSourceMapDocumentV2::new(
+            v1.binding(),
+            v1.files().to_vec(),
+            v1.sites().to_vec(),
+            v1.eliminated().to_vec(),
+            vec![test_source_scope_v2(root, None, 0)],
+            vec![future_result],
+        )
+        .unwrap()
+        .to_canonical_json_bytes()
+        .unwrap();
+        assert!(
+            admit_source_map_v2(
+                &hostile,
+                &input,
+                configuration_identity(
+                    input.kir_sha256,
+                    input.request_sha256,
+                    DebugWaveWidthV1::Wave64,
+                ),
+                fixture_subject(),
+                nonzero_identity(simulation_debug_map_identity_v2(&hostile)),
+            )
+            .unwrap_err()
+            .contains("unavailable at its checkpoint")
+        );
+
+        let indexed = &backend.source_variables_v2.as_ref().unwrap().variables[0];
+        let truncated_frame = SimulationDebugFrameV1 {
+            depth: 0,
+            function_ordinal: 0,
+            block: fe2o3_kernel_ir::BlockId(0),
+            next_operation: Some(0),
+            values: SimulationDebugCollectionV1::Unavailable {
+                reason: fe2o3_kir_sim::SimulationDebugUnavailableReasonV1::ValueLimit,
+                required: 1,
+            },
+        };
+        let value = source_variable_value_v2(indexed, &truncated_frame, 0, false);
+        if matches!(
+            indexed.locations.first().map(|location| location.binding),
+            Some(DebugSourceVariableBindingV2::Captured { .. })
+        ) {
+            assert!(matches!(
+                value.availability,
+                SourceVariableValueAvailabilityV2::Value {
+                    value: ValueAvailabilityV1::Unavailable {
+                        reason: ValueUnavailableReasonV1::Truncated,
+                    }
+                }
+            ));
         }
     }
 

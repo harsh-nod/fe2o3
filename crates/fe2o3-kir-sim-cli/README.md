@@ -24,6 +24,13 @@ never re-lowers source, invokes a compiler, launches hardware, or falls back
 between execution modes. A separately supplied request retains the same strict
 16 MiB boundary and preflight checks as raw KIR.
 
+The library also exposes `load_debug_simulation_bundle_v2` for the debugger's
+explicit V2 envelope route. It strictly verifies the outer V2 bytes, the exact
+embedded V1 bundle, and the independently committed Source Map V2 payload.
+It still executes only the embedded canonical KIR V7 and never authorizes or
+performs source relowering. The standalone `fe2o3-kir-sim` command remains on
+its frozen V1 bundle route.
+
 The versioned `tutorial/fill-v1` known-answer fixture is directly runnable:
 
     cargo run --locked -q -p fe2o3-kir-sim-cli --bin fe2o3-kir-sim -- \

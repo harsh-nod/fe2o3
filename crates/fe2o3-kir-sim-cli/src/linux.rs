@@ -10,8 +10,9 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use fe2o3_kernel_ir::{
-    AccessMode, FunctionId, MAX_SIMULATION_BUNDLE_BYTES_V1, ScalarType,
-    VerifiedCanonicalKernelIrErrorV7, VerifiedCanonicalKernelIrV7, VerifiedSimulationBundleV1,
+    AccessMode, FunctionId, MAX_SIMULATION_BUNDLE_BYTES_V1, MAX_SIMULATION_BUNDLE_BYTES_V2,
+    ScalarType, VerifiedCanonicalKernelIrErrorV7, VerifiedCanonicalKernelIrV7,
+    VerifiedSimulationBundleV1, VerifiedSimulationBundleV2,
 };
 use fe2o3_kir_sim::{
     AdmittedSimulationModuleV1, BufferArgumentV1, BufferBackingIdV1, BufferViewArgumentV1,
@@ -969,6 +970,19 @@ pub(crate) fn load_debug_simulation_bundle_v1(
     })
 }
 
+pub(crate) fn load_debug_simulation_bundle_v2(
+    bundle: OsString,
+    request: OsString,
+) -> Result<crate::AdmittedSimulationBundleInputV2, crate::SimulationInputErrorV1> {
+    load_admitted_bundle_v2(Path::new(&bundle), Path::new(&request)).map_err(|failure: Failure| {
+        crate::SimulationInputErrorV1 {
+            stage: serialized_tag(failure.0.stage),
+            code: serialized_tag(failure.0.kind),
+            message: failure.0.message.clone(),
+        }
+    })
+}
+
 pub(crate) fn load_debug_sidecar_v1(
     path: OsString,
     maximum: usize,
@@ -1229,6 +1243,60 @@ fn load_admitted_bundle(
         ));
     }
     Ok(crate::AdmittedSimulationBundleInputV1 { input, bundle })
+}
+
+fn load_admitted_bundle_v2(
+    bundle_path: &Path,
+    request: &Path,
+) -> Result<crate::AdmittedSimulationBundleInputV2, Failure> {
+    let bytes = secure_read(
+        bundle_path,
+        MAX_SIMULATION_BUNDLE_BYTES_V2,
+        InputCode::SimulationBundle,
+        "simulation bundle V2",
+    )?;
+    let bundle = VerifiedSimulationBundleV2::from_canonical_bytes(bytes).map_err(|error| {
+        Failure::input(
+            InputCode::SimulationBundle,
+            ErrorKind::SimulationBundleRejected,
+            format!(
+                "simulation bundle V2 is invalid: {}",
+                bounded_display(&error)
+            ),
+        )
+    })?;
+    bundle.revalidate().map_err(|error| {
+        Failure::input(
+            InputCode::SimulationBundle,
+            ErrorKind::SimulationBundleRejected,
+            format!(
+                "simulation bundle V2 failed revalidation: {}",
+                bounded_display(&error)
+            ),
+        )
+    })?;
+    let inner = bundle.inner_v1();
+    let target = simulation_target_for_bundle(inner.target())?;
+    // Schedule V1 continues to bind the exact executable V1 payload. The V2
+    // source map is separately committed by the debugger configuration.
+    let input = load_admitted_input(
+        inner.canonical_kir_v7(),
+        request,
+        None,
+        target,
+        Some((*inner.identity().as_bytes(), *inner.subject_identity())),
+    )?;
+    if input.kir_sha256 != *inner.canonical_kir_v7_identity().digest()
+        || u64::try_from(inner.canonical_kir_v7().len()).ok()
+            != Some(inner.canonical_kir_v7_identity().canonical_length())
+    {
+        return Err(Failure::input(
+            InputCode::SimulationBundle,
+            ErrorKind::SimulationBundleRejected,
+            "simulation bundle V2 KIR identity changed during admission",
+        ));
+    }
+    Ok(crate::AdmittedSimulationBundleInputV2 { input, bundle })
 }
 
 fn simulation_target_for_bundle(target: &str) -> Result<SimulationTargetV1, Failure> {

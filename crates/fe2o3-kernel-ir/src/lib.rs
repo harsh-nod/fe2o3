@@ -22,6 +22,11 @@
 //! reject device-FFI exports because the frozen function records cannot
 //! distinguish those definitions from internal helpers.
 //!
+//! [`DebugSourceMapDocumentV2`] and [`VerifiedSimulationBundleV2`] are additive
+//! source-variable/debugger formats. They do not reinterpret the frozen V1 map
+//! or bundle and confer no compiler-execution, proof, load, launch, or hardware
+//! authority.
+//!
 //! SemanticOperation is the versioned extension boundary for typed
 //! target-neutral operation families. Its separate schema and payload-bearing
 //! instance codecs do not alter or extend any frozen module wire format.
@@ -33,6 +38,7 @@ mod canonical_kir_v8;
 mod canonical_kir_v9;
 mod control_flow;
 mod debug_source_map_v1;
+mod debug_source_map_v2;
 mod effect_extraction;
 mod formal_memory_obligations;
 mod integer_semantic_oracle_v1;
@@ -46,6 +52,7 @@ mod region_effects;
 pub mod scalar_ops_v2;
 mod semantic_operations;
 mod simulation_bundle_v1;
+mod simulation_bundle_v2;
 mod standard_atomics;
 mod types;
 mod verify;
@@ -59,6 +66,7 @@ pub use canonical_kir_v8::*;
 pub use canonical_kir_v9::*;
 pub use control_flow::*;
 pub use debug_source_map_v1::*;
+pub use debug_source_map_v2::*;
 pub use effect_extraction::*;
 pub use formal_memory_obligations::*;
 pub use integer_semantic_oracle_v1::*;
@@ -86,6 +94,7 @@ pub use matrix::*;
 pub use region_effects::*;
 pub use semantic_operations::*;
 pub use simulation_bundle_v1::*;
+pub use simulation_bundle_v2::*;
 pub use standard_atomics::*;
 pub use types::*;
 pub use verify::*;
