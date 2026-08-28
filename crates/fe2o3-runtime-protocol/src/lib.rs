@@ -53,6 +53,8 @@ pub use compiler_execution_service::{
     COMPILER_EXECUTION_SERVICE_PREPARED_RESPONSE_BYTES_V1,
     COMPILER_EXECUTION_SERVICE_PUBLISH_REQUEST_BYTES_V1,
     COMPILER_EXECUTION_SERVICE_PUBLISHED_RESPONSE_BYTES_V1,
+    COMPILER_EXECUTION_SERVICE_RECOVER_REQUEST_BYTES_V1,
+    COMPILER_EXECUTION_SERVICE_RECOVERED_RESPONSE_BYTES_V1,
     CompilerExecutionServiceProtocolErrorV1, CompilerExecutionServicePublishDispositionV1,
     CompilerExecutionServiceRequestIdentityV1, CompilerExecutionServiceRequestKindV1,
     CompilerExecutionServiceRequestV1, CompilerExecutionServiceResponseIdentityV1,

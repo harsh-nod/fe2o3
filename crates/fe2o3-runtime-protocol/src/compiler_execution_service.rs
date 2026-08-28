@@ -6,17 +6,21 @@
 
 use std::{error::Error, fmt};
 
+use fe2o3_artifact_transaction::{
+    CompilerExecutionSubjectErrorV1, INERT_COMPILER_EXECUTION_SUBJECT_BYTES_V1,
+    InertCompilerExecutionSubjectV1,
+};
 use sha2::{Digest, Sha256};
 
 use crate::{
     COMPILER_EXECUTION_ATTESTATION_CHALLENGE_BYTES_V1,
-    COMPILER_EXECUTION_ATTESTATION_REQUEST_BYTES_V1,
+    COMPILER_EXECUTION_ATTESTATION_REQUEST_BYTES_V1, COMPILER_EXECUTION_RECEIPT_CARRIAGE_BYTES_V1,
     COMPILER_EXECUTION_RECEIPT_PUBLICATION_ACK_BYTES_V1,
     COMPILER_EXECUTION_RECEIPT_PUBLICATION_BYTES_V1, CompilerExecutionAttestationChallengeV1,
     CompilerExecutionAttestationErrorV1, CompilerExecutionAttestationRequestV1,
     CompilerExecutionIssuerPolicyIdentityV1, CompilerExecutionIssuerPolicyV1,
-    CompilerExecutionReceiptPublicationAckV1, CompilerExecutionReceiptPublicationErrorV1,
-    CompilerExecutionReceiptPublicationV1,
+    CompilerExecutionReceiptCarriageV1, CompilerExecutionReceiptPublicationAckV1,
+    CompilerExecutionReceiptPublicationErrorV1, CompilerExecutionReceiptPublicationV1,
 };
 
 const SHA256_BYTES: usize = 32;
@@ -40,6 +44,9 @@ pub const COMPILER_EXECUTION_SERVICE_ISSUE_REQUEST_BYTES_V1: usize =
 pub const COMPILER_EXECUTION_SERVICE_PUBLISH_REQUEST_BYTES_V1: usize = REQUEST_BASE_BYTES
     + COMPILER_EXECUTION_ATTESTATION_REQUEST_BYTES_V1
     + COMPILER_EXECUTION_RECEIPT_PUBLICATION_BYTES_V1;
+/// Exact byte length of a subject-bound durable receipt recovery request.
+pub const COMPILER_EXECUTION_SERVICE_RECOVER_REQUEST_BYTES_V1: usize =
+    REQUEST_BASE_BYTES + INERT_COMPILER_EXECUTION_SUBJECT_BYTES_V1;
 /// Maximum packet accepted by the protected compiler-execution service.
 pub const MAX_COMPILER_EXECUTION_SERVICE_REQUEST_BYTES_V1: usize =
     COMPILER_EXECUTION_SERVICE_PUBLISH_REQUEST_BYTES_V1;
@@ -60,9 +67,12 @@ pub const COMPILER_EXECUTION_SERVICE_ISSUED_RESPONSE_BYTES_V1: usize =
 pub const COMPILER_EXECUTION_SERVICE_PUBLISHED_RESPONSE_BYTES_V1: usize = RESPONSE_BASE_BYTES
     + PUBLISHED_DISPOSITION_BYTES
     + COMPILER_EXECUTION_RECEIPT_PUBLICATION_ACK_BYTES_V1;
+/// Exact byte length of a complete recovered compiler-receipt carriage response.
+pub const COMPILER_EXECUTION_SERVICE_RECOVERED_RESPONSE_BYTES_V1: usize =
+    RESPONSE_BASE_BYTES + COMPILER_EXECUTION_RECEIPT_CARRIAGE_BYTES_V1;
 /// Maximum packet emitted by the protected compiler-execution service.
 pub const MAX_COMPILER_EXECUTION_SERVICE_RESPONSE_BYTES_V1: usize =
-    COMPILER_EXECUTION_SERVICE_ISSUED_RESPONSE_BYTES_V1;
+    COMPILER_EXECUTION_SERVICE_RECOVERED_RESPONSE_BYTES_V1;
 
 /// Domain-separated identity of one exact canonical service request packet.
 #[derive(Clone, Copy, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -113,6 +123,7 @@ pub enum CompilerExecutionServiceRequestKindV1 {
     Issue = 3,
     Publish = 4,
     Cancel = 5,
+    Recover = 6,
 }
 
 impl CompilerExecutionServiceRequestKindV1 {
@@ -123,6 +134,7 @@ impl CompilerExecutionServiceRequestKindV1 {
             3 => Ok(Self::Issue),
             4 => Ok(Self::Publish),
             5 => Ok(Self::Cancel),
+            6 => Ok(Self::Recover),
             other => Err(CompilerExecutionServiceProtocolErrorV1::UnknownRequestKind(
                 other,
             )),
@@ -135,6 +147,7 @@ impl CompilerExecutionServiceRequestKindV1 {
             Self::Prepare => COMPILER_EXECUTION_SERVICE_PREPARE_REQUEST_BYTES_V1,
             Self::Issue => COMPILER_EXECUTION_SERVICE_ISSUE_REQUEST_BYTES_V1,
             Self::Publish => COMPILER_EXECUTION_SERVICE_PUBLISH_REQUEST_BYTES_V1,
+            Self::Recover => COMPILER_EXECUTION_SERVICE_RECOVER_REQUEST_BYTES_V1,
         }
     }
 }
@@ -146,6 +159,7 @@ pub struct CompilerExecutionServiceRequestV1 {
     policy_identity: CompilerExecutionIssuerPolicyIdentityV1,
     expected_sequence: u64,
     expected_rollback_anchor: [u8; SHA256_BYTES],
+    subject: Option<InertCompilerExecutionSubjectV1>,
     request: Option<CompilerExecutionAttestationRequestV1>,
     publication: Option<CompilerExecutionReceiptPublicationV1>,
     identity: CompilerExecutionServiceRequestIdentityV1,
@@ -163,6 +177,7 @@ impl CompilerExecutionServiceRequestV1 {
             [0; SHA256_BYTES],
             None,
             None,
+            None,
         )
         .expect("fixed inspect request is canonical")
     }
@@ -178,6 +193,7 @@ impl CompilerExecutionServiceRequestV1 {
             policy.identity(),
             expected_sequence,
             expected_rollback_anchor,
+            None,
             None,
             None,
         )
@@ -198,6 +214,7 @@ impl CompilerExecutionServiceRequestV1 {
             policy.identity(),
             sequence,
             anchor,
+            None,
             Some(request),
             None,
         )
@@ -225,8 +242,25 @@ impl CompilerExecutionServiceRequestV1 {
             policy.identity(),
             sequence,
             anchor,
+            None,
             Some(request),
             Some(publication),
+        )
+    }
+
+    /// Constructs a request to recover the exact current durable receipt for one subject.
+    pub fn recover(
+        policy: &CompilerExecutionIssuerPolicyV1,
+        subject: InertCompilerExecutionSubjectV1,
+    ) -> Result<Self, CompilerExecutionServiceProtocolErrorV1> {
+        Self::encode(
+            CompilerExecutionServiceRequestKindV1::Recover,
+            policy.identity(),
+            0,
+            [0; SHA256_BYTES],
+            Some(subject),
+            None,
+            None,
         )
     }
 
@@ -237,6 +271,7 @@ impl CompilerExecutionServiceRequestV1 {
             policy.identity(),
             0,
             [0; SHA256_BYTES],
+            None,
             None,
             None,
         )
@@ -264,23 +299,32 @@ impl CompilerExecutionServiceRequestV1 {
         );
         let expected_sequence = reader.u64()?;
         let expected_rollback_anchor = reader.fixed::<SHA256_BYTES>()?;
-        let (request, publication) = match kind {
+        let (subject, request, publication) = match kind {
             CompilerExecutionServiceRequestKindV1::Inspect
             | CompilerExecutionServiceRequestKindV1::Prepare
-            | CompilerExecutionServiceRequestKindV1::Cancel => (None, None),
+            | CompilerExecutionServiceRequestKindV1::Cancel => (None, None, None),
             CompilerExecutionServiceRequestKindV1::Issue => (
+                None,
                 Some(CompilerExecutionAttestationRequestV1::decode(
                     reader.take(COMPILER_EXECUTION_ATTESTATION_REQUEST_BYTES_V1)?,
                 )?),
                 None,
             ),
             CompilerExecutionServiceRequestKindV1::Publish => (
+                None,
                 Some(CompilerExecutionAttestationRequestV1::decode(
                     reader.take(COMPILER_EXECUTION_ATTESTATION_REQUEST_BYTES_V1)?,
                 )?),
                 Some(CompilerExecutionReceiptPublicationV1::decode(
                     reader.take(COMPILER_EXECUTION_RECEIPT_PUBLICATION_BYTES_V1)?,
                 )?),
+            ),
+            CompilerExecutionServiceRequestKindV1::Recover => (
+                Some(InertCompilerExecutionSubjectV1::decode(
+                    reader.take(INERT_COMPILER_EXECUTION_SUBJECT_BYTES_V1)?,
+                )?),
+                None,
+                None,
             ),
         };
         let declared_identity = reader.fixed::<SHA256_BYTES>()?;
@@ -292,6 +336,7 @@ impl CompilerExecutionServiceRequestV1 {
             policy_identity,
             expected_sequence,
             expected_rollback_anchor,
+            subject,
             request,
             publication,
         )?;
@@ -306,6 +351,7 @@ impl CompilerExecutionServiceRequestV1 {
         policy_identity: CompilerExecutionIssuerPolicyIdentityV1,
         expected_sequence: u64,
         expected_rollback_anchor: [u8; SHA256_BYTES],
+        subject: Option<InertCompilerExecutionSubjectV1>,
         request: Option<CompilerExecutionAttestationRequestV1>,
         publication: Option<CompilerExecutionReceiptPublicationV1>,
     ) -> Result<Self, CompilerExecutionServiceProtocolErrorV1> {
@@ -314,6 +360,7 @@ impl CompilerExecutionServiceRequestV1 {
             policy_identity,
             expected_sequence,
             expected_rollback_anchor,
+            subject.as_ref(),
             request.as_ref(),
             publication.as_ref(),
         )?;
@@ -336,6 +383,9 @@ impl CompilerExecutionServiceRequestV1 {
             &expected_sequence.to_le_bytes(),
         );
         put(&mut canonical_bytes, &mut offset, &expected_rollback_anchor);
+        if let Some(subject) = subject.as_ref() {
+            put(&mut canonical_bytes, &mut offset, subject.canonical_bytes());
+        }
         if let Some(request) = request.as_ref() {
             put(&mut canonical_bytes, &mut offset, request.canonical_bytes());
         }
@@ -358,6 +408,7 @@ impl CompilerExecutionServiceRequestV1 {
             policy_identity,
             expected_sequence,
             expected_rollback_anchor,
+            subject,
             request,
             publication,
             identity,
@@ -380,6 +431,10 @@ impl CompilerExecutionServiceRequestV1 {
 
     pub const fn expected_rollback_anchor(&self) -> [u8; SHA256_BYTES] {
         self.expected_rollback_anchor
+    }
+
+    pub const fn subject(&self) -> Option<&InertCompilerExecutionSubjectV1> {
+        self.subject.as_ref()
     }
 
     pub const fn request(&self) -> Option<&CompilerExecutionAttestationRequestV1> {
@@ -425,6 +480,7 @@ pub enum CompilerExecutionServiceResponseKindV1 {
     Issued = 3,
     Published = 4,
     Cancelled = 5,
+    Recovered = 6,
 }
 
 impl CompilerExecutionServiceResponseKindV1 {
@@ -435,6 +491,7 @@ impl CompilerExecutionServiceResponseKindV1 {
             3 => Ok(Self::Issued),
             4 => Ok(Self::Published),
             5 => Ok(Self::Cancelled),
+            6 => Ok(Self::Recovered),
             other => Err(CompilerExecutionServiceProtocolErrorV1::UnknownResponseKind(other)),
         }
     }
@@ -445,6 +502,7 @@ impl CompilerExecutionServiceResponseKindV1 {
             Self::Prepared => COMPILER_EXECUTION_SERVICE_PREPARED_RESPONSE_BYTES_V1,
             Self::Issued => COMPILER_EXECUTION_SERVICE_ISSUED_RESPONSE_BYTES_V1,
             Self::Published => COMPILER_EXECUTION_SERVICE_PUBLISHED_RESPONSE_BYTES_V1,
+            Self::Recovered => COMPILER_EXECUTION_SERVICE_RECOVERED_RESPONSE_BYTES_V1,
         }
     }
 }
@@ -479,6 +537,7 @@ pub struct CompilerExecutionServiceResponseV1 {
     rollback_anchor: [u8; SHA256_BYTES],
     challenge: Option<CompilerExecutionAttestationChallengeV1>,
     publication: Option<CompilerExecutionReceiptPublicationV1>,
+    carriage: Option<CompilerExecutionReceiptCarriageV1>,
     acknowledgment: Option<CompilerExecutionReceiptPublicationAckV1>,
     disposition: Option<CompilerExecutionServicePublishDispositionV1>,
     identity: CompilerExecutionServiceResponseIdentityV1,
@@ -503,6 +562,7 @@ impl CompilerExecutionServiceResponseV1 {
             None,
             None,
             None,
+            None,
         )
     }
 
@@ -520,6 +580,7 @@ impl CompilerExecutionServiceResponseV1 {
             sequence,
             rollback_anchor,
             Some(challenge),
+            None,
             None,
             None,
             None,
@@ -543,6 +604,7 @@ impl CompilerExecutionServiceResponseV1 {
             Some(publication),
             None,
             None,
+            None,
         )
     }
 
@@ -562,8 +624,30 @@ impl CompilerExecutionServiceResponseV1 {
             rollback_anchor,
             None,
             None,
+            None,
             Some(acknowledgment),
             Some(disposition),
+        )
+    }
+
+    pub fn recovered(
+        request_identity: CompilerExecutionServiceRequestIdentityV1,
+        carriage: CompilerExecutionReceiptCarriageV1,
+    ) -> Result<Self, CompilerExecutionServiceProtocolErrorV1> {
+        let policy_identity = carriage.policy().identity();
+        let sequence = carriage.acknowledgment().sequence();
+        let rollback_anchor = carriage.acknowledgment().current_rollback_anchor();
+        Self::encode(
+            CompilerExecutionServiceResponseKindV1::Recovered,
+            request_identity,
+            policy_identity,
+            sequence,
+            rollback_anchor,
+            None,
+            None,
+            Some(carriage),
+            None,
+            None,
         )
     }
 
@@ -579,6 +663,7 @@ impl CompilerExecutionServiceResponseV1 {
             policy.identity(),
             sequence,
             rollback_anchor,
+            None,
             None,
             None,
             None,
@@ -608,13 +693,14 @@ impl CompilerExecutionServiceResponseV1 {
         );
         let sequence = reader.u64()?;
         let rollback_anchor = reader.fixed::<SHA256_BYTES>()?;
-        let (challenge, publication, acknowledgment, disposition) = match kind {
+        let (challenge, publication, carriage, acknowledgment, disposition) = match kind {
             CompilerExecutionServiceResponseKindV1::Ready
-            | CompilerExecutionServiceResponseKindV1::Cancelled => (None, None, None, None),
+            | CompilerExecutionServiceResponseKindV1::Cancelled => (None, None, None, None, None),
             CompilerExecutionServiceResponseKindV1::Prepared => (
                 Some(CompilerExecutionAttestationChallengeV1::decode(
                     reader.take(COMPILER_EXECUTION_ATTESTATION_CHALLENGE_BYTES_V1)?,
                 )?),
+                None,
                 None,
                 None,
                 None,
@@ -624,6 +710,7 @@ impl CompilerExecutionServiceResponseV1 {
                 Some(CompilerExecutionReceiptPublicationV1::decode(
                     reader.take(COMPILER_EXECUTION_RECEIPT_PUBLICATION_BYTES_V1)?,
                 )?),
+                None,
                 None,
                 None,
             ),
@@ -636,12 +723,22 @@ impl CompilerExecutionServiceResponseV1 {
                 (
                     None,
                     None,
+                    None,
                     Some(CompilerExecutionReceiptPublicationAckV1::decode(
                         reader.take(COMPILER_EXECUTION_RECEIPT_PUBLICATION_ACK_BYTES_V1)?,
                     )?),
                     Some(disposition),
                 )
             }
+            CompilerExecutionServiceResponseKindV1::Recovered => (
+                None,
+                None,
+                Some(CompilerExecutionReceiptCarriageV1::decode(
+                    reader.take(COMPILER_EXECUTION_RECEIPT_CARRIAGE_BYTES_V1)?,
+                )?),
+                None,
+                None,
+            ),
         };
         let declared_identity = reader.fixed::<SHA256_BYTES>()?;
         if !reader.is_empty() {
@@ -655,6 +752,7 @@ impl CompilerExecutionServiceResponseV1 {
             rollback_anchor,
             challenge,
             publication,
+            carriage,
             acknowledgment,
             disposition,
         )?;
@@ -673,6 +771,7 @@ impl CompilerExecutionServiceResponseV1 {
         rollback_anchor: [u8; SHA256_BYTES],
         challenge: Option<CompilerExecutionAttestationChallengeV1>,
         publication: Option<CompilerExecutionReceiptPublicationV1>,
+        carriage: Option<CompilerExecutionReceiptCarriageV1>,
         acknowledgment: Option<CompilerExecutionReceiptPublicationAckV1>,
         disposition: Option<CompilerExecutionServicePublishDispositionV1>,
     ) -> Result<Self, CompilerExecutionServiceProtocolErrorV1> {
@@ -684,6 +783,7 @@ impl CompilerExecutionServiceResponseV1 {
             rollback_anchor,
             challenge.as_ref(),
             publication.as_ref(),
+            carriage.as_ref(),
             acknowledgment.as_ref(),
             disposition,
         )?;
@@ -717,6 +817,13 @@ impl CompilerExecutionServiceResponseV1 {
                 publication.canonical_bytes(),
             );
         }
+        if let Some(carriage) = carriage.as_ref() {
+            put(
+                &mut canonical_bytes,
+                &mut offset,
+                carriage.canonical_bytes(),
+            );
+        }
         if let Some(disposition) = disposition {
             canonical_bytes[offset] = disposition as u8;
             offset += PUBLISHED_DISPOSITION_BYTES;
@@ -743,6 +850,7 @@ impl CompilerExecutionServiceResponseV1 {
             rollback_anchor,
             challenge,
             publication,
+            carriage,
             acknowledgment,
             disposition,
             identity,
@@ -779,6 +887,10 @@ impl CompilerExecutionServiceResponseV1 {
 
     pub const fn publication(&self) -> Option<&CompilerExecutionReceiptPublicationV1> {
         self.publication.as_ref()
+    }
+
+    pub const fn carriage(&self) -> Option<&CompilerExecutionReceiptCarriageV1> {
+        self.carriage.as_ref()
     }
 
     pub const fn acknowledgment(&self) -> Option<&CompilerExecutionReceiptPublicationAckV1> {
@@ -822,6 +934,7 @@ fn validate_request_fields(
     policy_identity: CompilerExecutionIssuerPolicyIdentityV1,
     expected_sequence: u64,
     expected_rollback_anchor: [u8; SHA256_BYTES],
+    subject: Option<&InertCompilerExecutionSubjectV1>,
     request: Option<&CompilerExecutionAttestationRequestV1>,
     publication: Option<&CompilerExecutionReceiptPublicationV1>,
 ) -> Result<(), CompilerExecutionServiceProtocolErrorV1> {
@@ -833,6 +946,7 @@ fn validate_request_fields(
         | CompilerExecutionServiceRequestKindV1::Cancel => {
             if expected_sequence != 0
                 || expected_rollback_anchor != [0; SHA256_BYTES]
+                || subject.is_some()
                 || request.is_some()
                 || publication.is_some()
             {
@@ -841,7 +955,7 @@ fn validate_request_fields(
         }
         CompilerExecutionServiceRequestKindV1::Prepare => {
             validate_prior_position(expected_sequence, expected_rollback_anchor)?;
-            if request.is_some() || publication.is_some() {
+            if subject.is_some() || request.is_some() || publication.is_some() {
                 return Err(CompilerExecutionServiceProtocolErrorV1::PayloadMismatch);
             }
         }
@@ -849,7 +963,8 @@ fn validate_request_fields(
             validate_prior_position(expected_sequence, expected_rollback_anchor)?;
             let request =
                 request.ok_or(CompilerExecutionServiceProtocolErrorV1::PayloadMismatch)?;
-            if publication.is_some()
+            if subject.is_some()
+                || publication.is_some()
                 || request.challenge().policy_identity() != policy_identity
                 || request.challenge().sequence() != expected_sequence
                 || request.challenge().prior_rollback_anchor() != expected_rollback_anchor
@@ -863,7 +978,8 @@ fn validate_request_fields(
                 request.ok_or(CompilerExecutionServiceProtocolErrorV1::PayloadMismatch)?;
             let publication =
                 publication.ok_or(CompilerExecutionServiceProtocolErrorV1::PayloadMismatch)?;
-            if request.challenge().policy_identity() != policy_identity
+            if subject.is_some()
+                || request.challenge().policy_identity() != policy_identity
                 || publication.policy_identity() != policy_identity
                 || request.challenge().sequence() != expected_sequence
                 || publication.receipt().sequence() != expected_sequence
@@ -871,6 +987,16 @@ fn validate_request_fields(
                 || publication.receipt().prior_rollback_anchor() != expected_rollback_anchor
                 || publication.receipt().request_sha256() != request.identity().as_bytes()
                 || publication.receipt().challenge_identity() != request.challenge().identity()
+            {
+                return Err(CompilerExecutionServiceProtocolErrorV1::PayloadMismatch);
+            }
+        }
+        CompilerExecutionServiceRequestKindV1::Recover => {
+            if expected_sequence != 0
+                || expected_rollback_anchor != [0; SHA256_BYTES]
+                || subject.is_none()
+                || request.is_some()
+                || publication.is_some()
             {
                 return Err(CompilerExecutionServiceProtocolErrorV1::PayloadMismatch);
             }
@@ -888,6 +1014,7 @@ fn validate_response_fields(
     rollback_anchor: [u8; SHA256_BYTES],
     challenge: Option<&CompilerExecutionAttestationChallengeV1>,
     publication: Option<&CompilerExecutionReceiptPublicationV1>,
+    carriage: Option<&CompilerExecutionReceiptCarriageV1>,
     acknowledgment: Option<&CompilerExecutionReceiptPublicationAckV1>,
     disposition: Option<CompilerExecutionServicePublishDispositionV1>,
 ) -> Result<(), CompilerExecutionServiceProtocolErrorV1> {
@@ -900,6 +1027,7 @@ fn validate_response_fields(
             validate_prior_position(sequence, rollback_anchor)?;
             if challenge.is_some()
                 || publication.is_some()
+                || carriage.is_some()
                 || acknowledgment.is_some()
                 || disposition.is_some()
             {
@@ -911,6 +1039,7 @@ fn validate_response_fields(
             let challenge =
                 challenge.ok_or(CompilerExecutionServiceProtocolErrorV1::PayloadMismatch)?;
             if publication.is_some()
+                || carriage.is_some()
                 || acknowledgment.is_some()
                 || disposition.is_some()
                 || challenge.policy_identity() != policy_identity
@@ -925,6 +1054,7 @@ fn validate_response_fields(
             let publication =
                 publication.ok_or(CompilerExecutionServiceProtocolErrorV1::PayloadMismatch)?;
             if challenge.is_some()
+                || carriage.is_some()
                 || acknowledgment.is_some()
                 || disposition.is_some()
                 || publication.policy_identity() != policy_identity
@@ -941,10 +1071,27 @@ fn validate_response_fields(
                 || rollback_anchor == [0; SHA256_BYTES]
                 || challenge.is_some()
                 || publication.is_some()
+                || carriage.is_some()
                 || disposition.is_none()
                 || acknowledgment.policy_identity() != policy_identity
                 || acknowledgment.sequence() != sequence
                 || acknowledgment.current_rollback_anchor() != rollback_anchor
+            {
+                return Err(CompilerExecutionServiceProtocolErrorV1::PayloadMismatch);
+            }
+        }
+        CompilerExecutionServiceResponseKindV1::Recovered => {
+            let carriage =
+                carriage.ok_or(CompilerExecutionServiceProtocolErrorV1::PayloadMismatch)?;
+            if sequence == 0
+                || rollback_anchor == [0; SHA256_BYTES]
+                || challenge.is_some()
+                || publication.is_some()
+                || acknowledgment.is_some()
+                || disposition.is_some()
+                || carriage.policy().identity() != policy_identity
+                || carriage.acknowledgment().sequence() != sequence
+                || carriage.acknowledgment().current_rollback_anchor() != rollback_anchor
             {
                 return Err(CompilerExecutionServiceProtocolErrorV1::PayloadMismatch);
             }
@@ -1069,6 +1216,7 @@ pub enum CompilerExecutionServiceProtocolErrorV1 {
     PositionMismatch,
     PayloadMismatch,
     IdentityMismatch,
+    Subject(CompilerExecutionSubjectErrorV1),
     Attestation(CompilerExecutionAttestationErrorV1),
     Publication(CompilerExecutionReceiptPublicationErrorV1),
 }
@@ -1116,6 +1264,12 @@ impl fmt::Display for CompilerExecutionServiceProtocolErrorV1 {
             Self::IdentityMismatch => {
                 formatter.write_str("compiler-execution service packet identity mismatch")
             }
+            Self::Subject(error) => {
+                write!(
+                    formatter,
+                    "compiler-execution service subject failed: {error}"
+                )
+            }
             Self::Attestation(error) => write!(
                 formatter,
                 "compiler-execution attestation packet failed: {error}"
@@ -1131,10 +1285,17 @@ impl fmt::Display for CompilerExecutionServiceProtocolErrorV1 {
 impl Error for CompilerExecutionServiceProtocolErrorV1 {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
+            Self::Subject(error) => Some(error),
             Self::Attestation(error) => Some(error),
             Self::Publication(error) => Some(error),
             _ => None,
         }
+    }
+}
+
+impl From<CompilerExecutionSubjectErrorV1> for CompilerExecutionServiceProtocolErrorV1 {
+    fn from(error: CompilerExecutionSubjectErrorV1) -> Self {
+        Self::Subject(error)
     }
 }
 
@@ -1214,10 +1375,12 @@ mod tests {
         assert_eq!(COMPILER_EXECUTION_SERVICE_PREPARE_REQUEST_BYTES_V1, 128);
         assert_eq!(COMPILER_EXECUTION_SERVICE_ISSUE_REQUEST_BYTES_V1, 1074);
         assert_eq!(COMPILER_EXECUTION_SERVICE_PUBLISH_REQUEST_BYTES_V1, 1658);
+        assert_eq!(COMPILER_EXECUTION_SERVICE_RECOVER_REQUEST_BYTES_V1, 818);
         assert_eq!(COMPILER_EXECUTION_SERVICE_CONTROL_RESPONSE_BYTES_V1, 160);
         assert_eq!(COMPILER_EXECUTION_SERVICE_PREPARED_RESPONSE_BYTES_V1, 360);
         assert_eq!(COMPILER_EXECUTION_SERVICE_ISSUED_RESPONSE_BYTES_V1, 744);
         assert_eq!(COMPILER_EXECUTION_SERVICE_PUBLISHED_RESPONSE_BYTES_V1, 456);
+        assert_eq!(COMPILER_EXECUTION_SERVICE_RECOVERED_RESPONSE_BYTES_V1, 2218);
 
         let fixture = Fixture::new();
         let inspect = CompilerExecutionServiceRequestV1::inspect(&fixture.policy);
@@ -1233,7 +1396,12 @@ mod tests {
         )
         .unwrap();
         let cancel = CompilerExecutionServiceRequestV1::cancel(&fixture.policy);
-        for request in [&inspect, &prepare, &issue, &publish, &cancel] {
+        let recover = CompilerExecutionServiceRequestV1::recover(
+            &fixture.policy,
+            fixture.request.subject().clone(),
+        )
+        .unwrap();
+        for request in [&inspect, &prepare, &issue, &publish, &cancel, &recover] {
             let decoded =
                 CompilerExecutionServiceRequestV1::decode(request.canonical_bytes()).unwrap();
             assert_eq!(&decoded, request);
@@ -1273,7 +1441,18 @@ mod tests {
             [0; 32],
         )
         .unwrap();
-        for response in [&ready, &prepared, &issued, &published, &cancelled] {
+        let carriage = CompilerExecutionReceiptCarriageV1::new(
+            fixture.policy.clone(),
+            fixture.request.clone(),
+            fixture.publication.clone(),
+            fixture.acknowledgment.clone(),
+        )
+        .unwrap();
+        let recovered =
+            CompilerExecutionServiceResponseV1::recovered(recover.identity(), carriage).unwrap();
+        for response in [
+            &ready, &prepared, &issued, &published, &cancelled, &recovered,
+        ] {
             let decoded =
                 CompilerExecutionServiceResponseV1::decode(response.canonical_bytes()).unwrap();
             assert_eq!(&decoded, response);
@@ -1296,6 +1475,11 @@ mod tests {
             )
             .unwrap(),
             CompilerExecutionServiceRequestV1::cancel(&fixture.policy),
+            CompilerExecutionServiceRequestV1::recover(
+                &fixture.policy,
+                fixture.request.subject().clone(),
+            )
+            .unwrap(),
         ];
         for request in &requests {
             assert_every_mutation_rejects(request.canonical_bytes(), |bytes| {
@@ -1337,6 +1521,17 @@ mod tests {
                 [0; 32],
             )
             .unwrap(),
+            CompilerExecutionServiceResponseV1::recovered(
+                requests[5].identity(),
+                CompilerExecutionReceiptCarriageV1::new(
+                    fixture.policy.clone(),
+                    fixture.request.clone(),
+                    fixture.publication.clone(),
+                    fixture.acknowledgment.clone(),
+                )
+                .unwrap(),
+            )
+            .unwrap(),
         ];
         for response in &responses {
             assert_every_mutation_rejects(response.canonical_bytes(), |bytes| {
@@ -1365,6 +1560,14 @@ mod tests {
         assert!(CompilerExecutionServiceRequestV1::decode(&extended).is_err());
         assert!(CompilerExecutionServiceRequestV1::prepare(&fixture.policy, 0, [0; 32]).is_err());
         assert!(CompilerExecutionServiceRequestV1::prepare(&fixture.policy, 2, [0; 32]).is_err());
+        let recover = CompilerExecutionServiceRequestV1::recover(
+            &fixture.policy,
+            fixture.request.subject().clone(),
+        )
+        .unwrap();
+        assert_eq!(recover.subject(), Some(fixture.request.subject()));
+        assert_eq!(recover.expected_sequence(), 0);
+        assert_eq!(recover.expected_rollback_anchor(), [0; 32]);
 
         let wrong_key = SigningKey::from_bytes(&[0x42; 32]);
         let wrong_policy = CompilerExecutionIssuerPolicyV1::new(

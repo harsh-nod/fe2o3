@@ -7,13 +7,15 @@ use std::mem;
 use std::os::fd::{AsRawFd, BorrowedFd};
 use std::time::{Duration, Instant};
 
+use fe2o3_artifact_transaction::InertCompilerExecutionSubjectV1;
 use fe2o3_runtime_protocol::{
     CompilerExecutionAttestationChallengeV1, CompilerExecutionAttestationRequestV1,
-    CompilerExecutionIssuerPolicyV1, CompilerExecutionReceiptPublicationAckV1,
-    CompilerExecutionReceiptPublicationV1, CompilerExecutionServiceProtocolErrorV1,
-    CompilerExecutionServicePublishDispositionV1, CompilerExecutionServiceRequestIdentityV1,
-    CompilerExecutionServiceRequestKindV1, CompilerExecutionServiceRequestV1,
-    CompilerExecutionServiceResponseV1, MAX_COMPILER_EXECUTION_SERVICE_REQUEST_BYTES_V1,
+    CompilerExecutionIssuerPolicyV1, CompilerExecutionReceiptCarriageV1,
+    CompilerExecutionReceiptPublicationAckV1, CompilerExecutionReceiptPublicationV1,
+    CompilerExecutionServiceProtocolErrorV1, CompilerExecutionServicePublishDispositionV1,
+    CompilerExecutionServiceRequestIdentityV1, CompilerExecutionServiceRequestKindV1,
+    CompilerExecutionServiceRequestV1, CompilerExecutionServiceResponseV1,
+    MAX_COMPILER_EXECUTION_SERVICE_REQUEST_BYTES_V1,
 };
 
 use crate::{
@@ -39,6 +41,10 @@ pub enum CompilerExecutionServiceExitV1 {
     },
     Cancelled {
         request_identity: CompilerExecutionServiceRequestIdentityV1,
+    },
+    Recovered {
+        request_identity: CompilerExecutionServiceRequestIdentityV1,
+        carriage: CompilerExecutionReceiptCarriageV1,
     },
 }
 
@@ -86,6 +92,10 @@ trait CompilerExecutionServiceIssuerV1 {
         ),
         CompilerExecutionServiceErrorV1,
     >;
+    fn recover(
+        &self,
+        subject: &InertCompilerExecutionSubjectV1,
+    ) -> Result<CompilerExecutionReceiptCarriageV1, CompilerExecutionServiceErrorV1>;
 }
 
 impl CompilerExecutionServiceIssuerV1 for ProtectedCompilerExecutionIssuerV1 {
@@ -142,6 +152,14 @@ impl CompilerExecutionServiceIssuerV1 for ProtectedCompilerExecutionIssuerV1 {
         CompilerExecutionServiceErrorV1,
     > {
         self.publish_receipt_for_service(request.canonical_bytes(), publication.canonical_bytes())
+            .map_err(Into::into)
+    }
+
+    fn recover(
+        &self,
+        subject: &InertCompilerExecutionSubjectV1,
+    ) -> Result<CompilerExecutionReceiptCarriageV1, CompilerExecutionServiceErrorV1> {
+        self.recover_current_carriage_for_service(subject)
             .map_err(Into::into)
     }
 }
@@ -261,6 +279,22 @@ fn dispatch_request<I: CompilerExecutionServiceIssuerV1>(
                 )?,
                 Some(CompilerExecutionServiceExitV1::Cancelled { request_identity }),
             )
+        }
+        CompilerExecutionServiceRequestKindV1::Recover => {
+            let subject = request
+                .subject()
+                .ok_or(CompilerExecutionServiceErrorV1::PayloadMismatch)?;
+            let carriage = issuer.recover(subject)?;
+            if carriage.request().subject() != subject {
+                return Err(CompilerExecutionServiceErrorV1::PayloadMismatch);
+            }
+            let response =
+                CompilerExecutionServiceResponseV1::recovered(request_identity, carriage.clone())?;
+            let exit = CompilerExecutionServiceExitV1::Recovered {
+                request_identity,
+                carriage,
+            };
+            (response, Some(exit))
         }
     };
     Ok(DispatchV1 { response, exit })
@@ -773,6 +807,22 @@ mod tests {
             };
             Ok((outcome, self.acknowledgment.clone()))
         }
+
+        fn recover(
+            &self,
+            expected_subject: &InertCompilerExecutionSubjectV1,
+        ) -> Result<CompilerExecutionReceiptCarriageV1, CompilerExecutionServiceErrorV1> {
+            if !self.published || self.request.subject() != expected_subject {
+                return Err(CompilerExecutionServiceErrorV1::PayloadMismatch);
+            }
+            CompilerExecutionReceiptCarriageV1::new(
+                self.policy.clone(),
+                self.request.clone(),
+                self.publication.clone(),
+                self.acknowledgment.clone(),
+            )
+            .map_err(Into::into)
+        }
     }
 
     fn socket_pair() -> (OwnedFd, OwnedFd) {
@@ -890,6 +940,37 @@ mod tests {
             replayed.response.acknowledgment(),
             published.response.acknowledgment()
         );
+
+        let recover = CompilerExecutionServiceRequestV1::recover(
+            &issuer.policy,
+            issuer.request.subject().clone(),
+        )
+        .unwrap();
+        let recovered = dispatch_request(&mut issuer, recover).unwrap();
+        assert_eq!(
+            recovered.response.kind(),
+            CompilerExecutionServiceResponseKindV1::Recovered
+        );
+        assert_eq!(
+            recovered
+                .response
+                .carriage()
+                .expect("recovered response carries the receipt")
+                .request()
+                .subject(),
+            issuer.request.subject()
+        );
+        assert!(matches!(
+            recovered.exit,
+            Some(CompilerExecutionServiceExitV1::Recovered { .. })
+        ));
+
+        let wrong =
+            CompilerExecutionServiceRequestV1::recover(&issuer.policy, subject(0x21)).unwrap();
+        assert!(matches!(
+            dispatch_request(&mut issuer, wrong),
+            Err(CompilerExecutionServiceErrorV1::PayloadMismatch)
+        ));
     }
 
     #[test]
@@ -957,6 +1038,41 @@ mod tests {
             handle.join().unwrap(),
             Err(CompilerExecutionServiceErrorV1::PacketLimit)
         ));
+    }
+
+    #[test]
+    fn bounded_service_returns_the_complete_current_carriage() {
+        let (mut issuer, client) = FakeIssuer::new();
+        issuer.published = true;
+        let policy = issuer.policy.clone();
+        let expected_subject = issuer.request.subject().clone();
+        let expected_acknowledgment = issuer.acknowledgment.clone();
+        let handle =
+            thread::spawn(move || serve_with_limits(&mut issuer, Duration::from_secs(1), 1));
+
+        let recover =
+            CompilerExecutionServiceRequestV1::recover(&policy, expected_subject.clone()).unwrap();
+        send_raw(client.as_fd(), recover.canonical_bytes());
+        let response =
+            CompilerExecutionServiceResponseV1::decode(&receive_raw(client.as_fd())).unwrap();
+        assert_eq!(
+            response.kind(),
+            CompilerExecutionServiceResponseKindV1::Recovered
+        );
+        let carriage = response.carriage().unwrap();
+        assert_eq!(carriage.policy(), &policy);
+        assert_eq!(carriage.request().subject(), &expected_subject);
+        assert_eq!(carriage.acknowledgment(), &expected_acknowledgment);
+        match handle.join().unwrap().unwrap() {
+            CompilerExecutionServiceExitV1::Recovered {
+                request_identity,
+                carriage,
+            } => {
+                assert_eq!(request_identity, recover.identity());
+                assert_eq!(carriage, response.carriage().unwrap().clone());
+            }
+            other => panic!("unexpected service exit: {other:?}"),
+        }
     }
 
     #[test]

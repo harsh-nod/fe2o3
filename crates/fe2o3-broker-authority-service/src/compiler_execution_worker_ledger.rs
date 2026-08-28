@@ -5,15 +5,15 @@ use std::fmt;
 use std::os::fd::OwnedFd;
 
 use fe2o3_artifact_transaction::{
-    NoRetainedDurableDirectoryHooksV1, RetainedDurableDirectoryErrorV1,
-    RetainedDurableDirectoryHooksV1, RetainedDurableDirectoryV1,
+    InertCompilerExecutionSubjectV1, NoRetainedDurableDirectoryHooksV1,
+    RetainedDurableDirectoryErrorV1, RetainedDurableDirectoryHooksV1, RetainedDurableDirectoryV1,
 };
 use fe2o3_runtime_protocol::{
     COMPILER_EXECUTION_ATTESTATION_REQUEST_BYTES_V1,
     COMPILER_EXECUTION_RECEIPT_PUBLICATION_BYTES_V1, CompilerExecutionAttestationErrorV1,
     CompilerExecutionAttestationRequestV1, CompilerExecutionIssuerPolicyV1,
-    CompilerExecutionReceiptPublicationAckV1, CompilerExecutionReceiptPublicationErrorV1,
-    CompilerExecutionReceiptPublicationV1,
+    CompilerExecutionReceiptCarriageV1, CompilerExecutionReceiptPublicationAckV1,
+    CompilerExecutionReceiptPublicationErrorV1, CompilerExecutionReceiptPublicationV1,
 };
 use sha2::{Digest, Sha256};
 
@@ -403,6 +403,33 @@ impl WorkerReceiptLedgerV1 {
     pub(crate) const fn last_record(&self) -> Option<&WorkerReceiptRecordV1> {
         self.record.as_ref()
     }
+
+    /// Reacquires the exact current durable record and reconstructs its complete inert carriage.
+    pub(crate) fn recover_current_carriage(
+        &self,
+        expected_subject: &InertCompilerExecutionSubjectV1,
+    ) -> Result<CompilerExecutionReceiptCarriageV1, ProtectedCompilerExecutionWorkerLedgerErrorV1>
+    {
+        if self.poisoned {
+            return Err(ProtectedCompilerExecutionWorkerLedgerErrorV1::Poisoned);
+        }
+        let retained = self
+            .record
+            .as_ref()
+            .ok_or(ProtectedCompilerExecutionWorkerLedgerErrorV1::MissingCanonicalRecord)?;
+        let reacquired = self.reacquire(retained)?;
+        if reacquired.request().subject() != expected_subject {
+            return Err(ProtectedCompilerExecutionWorkerLedgerErrorV1::SubjectMismatch);
+        }
+        let acknowledgment = reacquired.acknowledgment()?;
+        CompilerExecutionReceiptCarriageV1::new(
+            self.policy.clone(),
+            reacquired.request,
+            reacquired.publication,
+            acknowledgment,
+        )
+        .map_err(Into::into)
+    }
 }
 
 fn reacquire_exact(
@@ -559,6 +586,7 @@ pub enum ProtectedCompilerExecutionWorkerLedgerErrorV1 {
     PolicyMismatch,
     SequenceMismatch,
     RecordMismatch,
+    SubjectMismatch,
     IdentityMismatch,
     IllegalSuccessor,
     SequenceExhausted,
@@ -583,6 +611,9 @@ impl fmt::Display for ProtectedCompilerExecutionWorkerLedgerErrorV1 {
             Self::PolicyMismatch => formatter.write_str("Worker receipt policy mismatch"),
             Self::SequenceMismatch => formatter.write_str("Worker receipt sequence mismatch"),
             Self::RecordMismatch => formatter.write_str("Worker receipt record fields disagree"),
+            Self::SubjectMismatch => {
+                formatter.write_str("Worker receipt compiler subject mismatch")
+            }
             Self::IdentityMismatch => {
                 formatter.write_str("Worker receipt record identity mismatch")
             }
@@ -794,6 +825,15 @@ mod tests {
             &record.canonical[RECORD_PREIMAGE_BYTES..],
             record.identity.as_slice()
         );
+        let carriage = ledger.recover_current_carriage(&fixture.subject).unwrap();
+        assert_eq!(carriage.policy(), &fixture.policy);
+        assert_eq!(carriage.request(), &request);
+        assert_eq!(carriage.publication(), &publication);
+        assert_eq!(carriage.acknowledgment(), &ack);
+        assert!(matches!(
+            ledger.recover_current_carriage(&subject(0x21)),
+            Err(ProtectedCompilerExecutionWorkerLedgerErrorV1::SubjectMismatch)
+        ));
 
         let canonical = record.canonical;
         drop(ledger);
@@ -801,10 +841,16 @@ mod tests {
             WorkerReceiptLedgerV1::recover(fixture.root(), &fixture.policy).unwrap();
         assert_eq!(recovered.last_record().unwrap().canonical, canonical);
         let replay = recovered
-            .commit_publication(request, publication)
+            .commit_publication(request.clone(), publication.clone())
             .unwrap()
             .into_acknowledgment();
         assert_eq!(replay, ack);
+        let restarted = recovered
+            .recover_current_carriage(&fixture.subject)
+            .unwrap();
+        assert_eq!(restarted.request(), &request);
+        assert_eq!(restarted.publication(), &publication);
+        assert_eq!(restarted.acknowledgment(), &ack);
     }
 
     #[test]

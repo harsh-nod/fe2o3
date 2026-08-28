@@ -130,8 +130,10 @@ custody values through every issuer use. The issuer accepts no caller-selected
 occurrence, and its private guard keeps publication currentness locked through
 request comparison, signing, and durable commit. A canonical fixed-width packet
 codec and allocation-free bounded `SOCK_SEQPACKET` loop now expose only Inspect,
-Prepare, Issue, Publish, and Cancel over the already admitted peer; the issuer's
-direct transition methods are private. Production distinct-UID launch and
+Prepare, Issue, Publish, Cancel, and exact-subject Recover over the already
+admitted peer. Recover strictly reacquires the current Worker record and returns
+its complete receipt carriage; the issuer's direct transition methods are
+private. Production client integration, distinct-UID launch and
 inspection policy and the Worker V3 authority join remain absent. A fixed
 receipt sidecar and publication ACK now
 carry the exact journal, occurrence, receipt, Worker record, sequence, and

@@ -18,8 +18,8 @@ use fe2o3_runtime_protocol::{
     COMPILER_EXECUTION_RECEIPT_PUBLICATION_ACK_BYTES_V1, CompilerExecutionAttestationChallengeV1,
     CompilerExecutionAttestationErrorV1, CompilerExecutionAttestationReceiptV1,
     CompilerExecutionAttestationRequestV1, CompilerExecutionIssuerPolicyV1,
-    CompilerExecutionReceiptPublicationAckV1, CompilerExecutionReceiptPublicationErrorV1,
-    CompilerExecutionReceiptPublicationV1,
+    CompilerExecutionReceiptCarriageV1, CompilerExecutionReceiptPublicationAckV1,
+    CompilerExecutionReceiptPublicationErrorV1, CompilerExecutionReceiptPublicationV1,
 };
 use rustix::fs::{FlockOperation, Mode, OFlags, flock};
 use sha2::{Digest, Sha256};
@@ -1263,6 +1263,28 @@ impl ProtectedCompilerExecutionIssuerV1 {
             .acknowledgment()?;
         self.admission.validate_continuity()?;
         Ok((outcome, acknowledgment))
+    }
+
+    /// Reacquires the current protected Worker record and returns its exact complete carriage.
+    pub(super) fn recover_current_carriage_for_service(
+        &self,
+        expected_subject: &InertCompilerExecutionSubjectV1,
+    ) -> Result<CompilerExecutionReceiptCarriageV1, ProtectedCompilerExecutionIssuerErrorV1> {
+        self.admission.validate_continuity()?;
+        validate_worker_ledger_join(&self.ledger.record, &self.worker_ledger)?;
+        let carriage = self
+            .worker_ledger
+            .recover_current_carriage(expected_subject)?;
+        if carriage.policy() != self.admission.policy()
+            || carriage.request().subject() != expected_subject
+        {
+            return Err(ProtectedCompilerExecutionIssuerErrorV1::WorkerLedgerJoin(
+                "recovered carriage differs from the current policy or requested subject",
+            ));
+        }
+        self.admission.validate_continuity()?;
+        validate_worker_ledger_join(&self.ledger.record, &self.worker_ledger)?;
+        Ok(carriage)
     }
 
     pub(super) fn validate_service_continuity(

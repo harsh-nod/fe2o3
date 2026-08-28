@@ -51,12 +51,13 @@ before granting compiler authority.
 ## Compiler-execution service V1
 
 The packet codec carries the attestation lifecycle over one connected Unix
-`SOCK_SEQPACKET` boundary. Requests select inspect, prepare, issue, publish, or
-cancel and bind the caller-pinned policy plus the exact expected sequence and
-rollback anchor. Responses carry ready state, the complete challenge, the
-complete receipt publication, or the complete Worker-ledger ACK. Every packet
-has an exact operation-specific length and a terminal domain-separated
-identity. The maximum request is 1,658 bytes and the maximum response is 744
+`SOCK_SEQPACKET` boundary. Requests select inspect, prepare, issue, publish,
+cancel, or exact-subject recovery and bind the caller-pinned policy plus the
+operation's complete state. Responses carry ready state, the complete challenge,
+the complete receipt publication, the complete Worker-ledger ACK, or the exact
+2,058-byte receipt carriage reacquired from the current Worker record. Every
+packet has an exact operation-specific length and a terminal domain-separated
+identity. The maximum request is 1,658 bytes and the maximum response is 2,218
 bytes.
 
 The codec is allocation-free and authority-free. It does not inspect peer
