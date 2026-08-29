@@ -5,6 +5,11 @@ gfx950 kernels. It does not make a fastest or state-of-the-art claim. A claim
 is admissible only after the candidate and a public, unmodified baseline pass
 the same correctness oracle, workload, launch shape, machine, and protocol.
 
+`gfx950-advanced-evidence-v1.json` pins the final 2026-08-29 candidate
+campaign: 48,000 dispatch samples across all 14 wrappers, with current HSACO
+identities, medians, confidence intervals, and retained raw-data hashes. Records
+without an admitted exact comparator remain measurements, not fastest claims.
+
 ## Measurement contract
 
 The hardware test first runs its existing digest-pinned, ABI-checked numerical
