@@ -523,6 +523,8 @@ for core_step in \
   workspace-binding-check \
   workspace-binding-check-boundary \
   workspace-binding-projection-revalidation \
+  standalone-tiled-gemm-general-host-check \
+  standalone-flash-attention-general-host-check \
   backend-build \
   backend-all-features-build \
   ci-local-test-gate \
@@ -538,6 +540,7 @@ for core_step in \
   device-copy-renamed-dependency \
   device-copy-derive-real-trait \
   device-copy-derive-ui \
+  core-production-runtime-surface-ui \
   s09-debug-checker; do
   assert_step_count "${core_step}" 1 \
     "generic core did not run ${core_step} exactly once"
@@ -584,6 +587,18 @@ assert_equals \
   "env ${TIMEOUT_TEST_ROOT}/production-driver/cargo-fe2o3 examples check-wrapper-managed fe2o3-managed-a fe2o3-managed-b" \
   "$(step_command workspace-binding-projection-revalidation)" \
   'managed check did not revalidate the exact structural package projection'
+assert_equals \
+  "env FE2O3_HIP_SYS_DISABLE=1 ${TIMEOUT_TEST_ROOT}/production-driver/cargo-fe2o3 check --locked --all-targets --manifest-path examples/tiled_gemm_general_v1/Cargo.toml" \
+  "$(step_command standalone-tiled-gemm-general-host-check)" \
+  'generic core did not check the complete standalone dynamic GEMM host surface'
+assert_equals \
+  "env FE2O3_HIP_SYS_DISABLE=1 ${TIMEOUT_TEST_ROOT}/production-driver/cargo-fe2o3 check --locked --all-targets --manifest-path examples/flash_attention_general_v1/Cargo.toml" \
+  "$(step_command standalone-flash-attention-general-host-check)" \
+  'generic core did not check the complete standalone dynamic attention host surface'
+assert_equals \
+  'env FE2O3_HIP_SYS_DISABLE=1 cargo test --locked -p fe2o3-core --test production_runtime_surface_ui' \
+  "$(step_command core-production-runtime-surface-ui)" \
+  'generic core did not retain the default-feature raw launch rejection UI'
 assert_equals \
   0 \
   "$(step_count cpu-tests-cargo-fe2o3-bootstrap)" \
@@ -860,6 +875,7 @@ for production_step in \
   rocm-production-extraction-safe-kernel \
   rocm-production-extraction-unsafe-rejection \
   rocm-production-general-matrix \
+  rocm-production-general-attention \
   rocm-production-transaction \
   rocm-production-ranked-bounds \
   rocm-production-barrier-cfg \
@@ -893,6 +909,14 @@ for index in "${!STEP_NAMES[@]}"; do
     exit 1
   fi
 done
+assert_equals \
+  'env cargo test --locked -p rustc-codegen-fe2o3 --test production_general_matrix_driver_v1 dynamic_matrix_kernel_reaches_gfx942_llvm -- --ignored --exact' \
+  "$(step_command rocm-production-general-matrix)" \
+  'ROCm compile did not run the exact successful dynamic matrix compiler test'
+assert_equals \
+  'env cargo test --locked -p rustc-codegen-fe2o3 --test production_general_matrix_driver_v1 dynamic_attention_kernel_reaches_gfx942_llvm -- --ignored --exact' \
+  "$(step_command rocm-production-general-attention)" \
+  'ROCm compile did not run the exact successful dynamic attention compiler test'
 assert_equals \
   "cargo test --locked -p dialect-amdgcn --test lowering rocm_compiles_the_golden_to_an_amdgpu_code_object -- --ignored --exact" \
   "$(step_command rocm-g1-code-object)" \
