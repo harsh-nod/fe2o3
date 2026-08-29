@@ -1754,10 +1754,9 @@ fn v3_host_roster_admission_retains_one_inert_envelope_for_the_exact_table() {
 #[test]
 fn v3_host_roster_admission_uses_canonical_descriptor_order_not_source_or_elf_order() {
     let (_directory, recovered) = recovered_synthetic_two_kernel_host_fixture();
-    let admitted = admit_recovered_worker_v3_roster_v1::<WorkerV3SyntheticTwoTransformRoster>(
-        recovered,
-    )
-    .unwrap();
+    let admitted =
+        admit_recovered_worker_v3_roster_v1::<WorkerV3SyntheticTwoTransformRoster>(recovered)
+            .unwrap();
     assert_eq!(admitted.entrypoints().len(), 2);
     assert_eq!(admitted.entrypoints()[0].ordinal(), 0);
     assert_eq!(admitted.entrypoints()[1].ordinal(), 1);

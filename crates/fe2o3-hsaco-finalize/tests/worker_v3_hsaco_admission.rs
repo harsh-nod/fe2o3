@@ -191,10 +191,7 @@ pub(crate) fn published_synthetic_two_kernel_worker_v3_fixture() -> PublishedWor
     published_worker_v3_fixture_from_raw_hsaco_for_kernels(
         fixture.bytes,
         &[
-            (
-                "synthetic_first_transform",
-                "synthetic_first_transform.kd",
-            ),
+            ("synthetic_first_transform", "synthetic_first_transform.kd"),
             (
                 "synthetic_second_transform",
                 "synthetic_second_transform.kd",
