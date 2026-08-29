@@ -52,7 +52,8 @@ pub use session::{
     ProtectedIssuerSessionTimeoutsV1,
 };
 
-const MAX_PROVISIONED_EXECUTABLE_BYTES_V1: u64 = 128 * 1024 * 1024;
+const MAX_PROVISIONED_EXECUTABLE_BYTES_V1: u64 =
+    fe2o3_compiler_execution_protocol::MAX_COMPILER_EXECUTION_SUPERVISOR_LAUNCHER_BYTES_V1;
 const REQUIRED_EXECUTABLE_SEALS_V1: SealFlags = SealFlags::WRITE
     .union(SealFlags::GROW)
     .union(SealFlags::SHRINK)

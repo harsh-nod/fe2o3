@@ -10,6 +10,7 @@ mod launch_manifest;
 mod receipt_publication;
 mod service;
 mod service_ready;
+mod supervisor_deployment;
 mod supervisor_handoff;
 mod worker_anchor_journal;
 
@@ -90,6 +91,11 @@ pub use service::{
 pub use service_ready::{
     COMPILER_EXECUTION_SERVICE_READY_BYTES_V1, CompilerExecutionServiceReadyErrorV1,
     CompilerExecutionServiceReadyIdentityV1, CompilerExecutionServiceReadyV1,
+};
+pub use supervisor_deployment::{
+    COMPILER_EXECUTION_SUPERVISOR_DEPLOYMENT_BYTES_V1,
+    CompilerExecutionSupervisorDeploymentErrorV1, CompilerExecutionSupervisorDeploymentIdentityV1,
+    CompilerExecutionSupervisorDeploymentV1, MAX_COMPILER_EXECUTION_SUPERVISOR_LAUNCHER_BYTES_V1,
 };
 pub use supervisor_handoff::{
     COMPILER_EXECUTION_SUPERVISOR_HANDOFF_BYTES_V1, CompilerExecutionSupervisorHandoffErrorV1,

@@ -17,6 +17,7 @@ mod compiler_execution_client_profile;
 mod compiler_execution_policy;
 mod compiler_execution_service_launch;
 mod compiler_execution_signing_key;
+mod compiler_execution_supervisor_deployment;
 mod rustc_invocation;
 mod sealed_image;
 
@@ -30,6 +31,10 @@ pub use compiler_execution_service_launch::{
 };
 pub use compiler_execution_signing_key::{
     COMPILER_EXECUTION_SIGNING_KEY_ISSUER_FD_V1, CompilerExecutionSigningKeyCapabilityV1,
+};
+pub use compiler_execution_supervisor_deployment::{
+    COMPILER_EXECUTION_SUPERVISOR_DEPLOYMENT_FD_V1,
+    CompilerExecutionSupervisorDeploymentCapabilityV1,
 };
 pub use rustc_invocation::{RUSTC_INVOCATION_CHILD_FD_V1, RustcInvocationCapabilityV1};
 use sealed_image::{CapabilityRole, ImageLength, SealedCapabilityImage};

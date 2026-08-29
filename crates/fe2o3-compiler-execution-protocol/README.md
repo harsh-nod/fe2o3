@@ -35,6 +35,10 @@ terminal records verify the complete signed external receipt under the
 policy-pinned anchor key; only `Published` binds a nonzero final Worker-record
 identity. The codec enforces legal same-transaction and next-transaction
 transitions but does not persist them, contact the anchor, or grant authority.
+The 144-byte supervisor deployment manifest pins the exact dedicated
+supervisor UID/GID, distinct external-anchor service UID/GID, static pre-exec
+launcher measurement, and issuer-policy identity supplied by trusted service
+provisioning. It carries no path, descriptor, secret, timeout, or authority.
 The 280-byte client profile binds the exact dedicated supervisor UID/GID and
 external-anchor service UID/GID to one complete caller-pinned issuer policy; it
 contains no endpoint, path, descriptor, secret, timeout, or authority. The
