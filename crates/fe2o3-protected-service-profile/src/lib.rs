@@ -238,7 +238,7 @@ impl ProtectedServiceProcessProfileV1 {
         &self,
         pid: rustix::process::Pid,
     ) -> Result<(), ProtectedServiceProfileErrorV1> {
-        read_proc_status(&format!("/proc/{}/status", pid.as_raw_pid()))?.require(self.credentials)
+        validate_protected_service_process_v1(self.credentials, pid)
     }
 }
 
@@ -309,6 +309,19 @@ pub fn validate_current_protected_service_profile_v1(
     ProtectedServiceProcessProfileV1::capture(credentials)?;
     require_owned_sigchld_v1()?;
     ProtectedServiceNamespaceSetV1::capture_self()?.revalidate_self()
+}
+
+/// Validates every proc-visible security field for one gated protected-service child.
+///
+/// This parent-side observation requires exact real, effective, saved, and filesystem IDs, no
+/// supplementary groups, empty capability sets including bounding and ambient sets,
+/// `no_new_privs=1`, no tracer, and umask `077`. The child must separately validate securebits,
+/// dumpability, core limits, signal state, and namespace continuity before protected execution.
+pub fn validate_protected_service_process_v1(
+    credentials: ProtectedServiceCredentialProfileV1,
+    pid: rustix::process::Pid,
+) -> Result<(), ProtectedServiceProfileErrorV1> {
+    read_proc_status(&format!("/proc/{}/status", pid.as_raw_pid()))?.require(credentials)
 }
 
 /// Requires the default `SIGCHLD` disposition used for exclusive pidfd reaping.
