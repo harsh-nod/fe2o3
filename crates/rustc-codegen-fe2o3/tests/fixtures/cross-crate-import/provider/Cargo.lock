@@ -456,6 +456,7 @@ dependencies = [
 name = "fe2o3-compiler-ffi"
 version = "0.1.0"
 dependencies = [
+ "fe2o3-amd-target",
  "fe2o3-compiler-lineage",
  "fe2o3-kernel-descriptor",
  "reserved-fe2o3-symbols",
@@ -641,6 +642,7 @@ version = "0.1.0"
 name = "fe2o3-llvm-handoff"
 version = "0.1.0"
 dependencies = [
+ "fe2o3-amd-target",
  "sha2 0.11.0",
 ]
 
@@ -682,6 +684,7 @@ dependencies = [
 name = "fe2o3-mir-model"
 version = "0.1.0"
 dependencies = [
+ "fe2o3-amd-target",
  "serde",
  "serde_json",
  "sha2 0.11.0",
