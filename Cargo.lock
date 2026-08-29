@@ -983,6 +983,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe2o3-external-anchor-provisioner"
+version = "0.1.0"
+dependencies = [
+ "ed25519-dalek",
+ "fe2o3-compiler-closure-capability",
+ "fe2o3-compiler-execution-protocol",
+ "fe2o3-external-anchor-service",
+ "fe2o3-protected-service-profile",
+ "fe2o3-protected-static-executable",
+ "fe2o3-runtime-protocol",
+ "libc",
+ "rustix",
+ "sha2 0.11.0",
+ "tempfile",
+]
+
+[[package]]
 name = "fe2o3-external-anchor-service"
 version = "0.1.0"
 dependencies = [

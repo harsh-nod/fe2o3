@@ -91,6 +91,7 @@
         "fe2o3-compiler-execution-issuer",
         "fe2o3-compiler-execution-supervisor",
         "fe2o3-core",
+        "fe2o3-external-anchor-provisioner",
         "fe2o3-external-anchor-service",
         "fe2o3-hip-sys",
         "fe2o3-host",
