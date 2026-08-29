@@ -1,9 +1,9 @@
 //! Bounded CFG and register dataflow over authenticated gfx942 trace facts.
 //!
-//! This layer computes ordinary graph reachability, dominators, and reaching
-//! physical-register definitions from exact decoded instruction facts. It does
-//! not interpret AMDGPU opcodes or establish that any branch, trap, address, or
-//! floating-point recurrence refines source semantics.
+//! This layer computes ordinary graph reachability, dominators, post-dominators,
+//! natural loops, and reaching physical-register definitions from exact decoded
+//! instruction facts. It does not interpret AMDGPU opcodes or establish that any
+//! branch, trap, address, or floating-point recurrence refines source semantics.
 
 use crate::{
     Gfx942InstructionRegisterFactsV1, Gfx942RegisterFactsErrorV1, Gfx942RegisterUnitV1,
@@ -44,6 +44,35 @@ struct FunctionDataflowV1 {
     instructions: Vec<InstructionFactsV1>,
     instruction_by_offset: BTreeMap<u64, usize>,
     dominators: Vec<Vec<u64>>,
+    post_dominators: Vec<Vec<u64>>,
+    natural_loops: Vec<Gfx942NaturalLoopV1>,
+}
+
+/// One canonical natural loop induced by a dominance-qualified CFG backedge.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Gfx942NaturalLoopV1 {
+    header: u32,
+    latch: u32,
+    blocks: Vec<u32>,
+    exits: Vec<(u32, u32)>,
+}
+
+impl Gfx942NaturalLoopV1 {
+    pub const fn header(&self) -> u32 {
+        self.header
+    }
+
+    pub const fn latch(&self) -> u32 {
+        self.latch
+    }
+
+    pub fn blocks(&self) -> &[u32] {
+        &self.blocks
+    }
+
+    pub fn exits(&self) -> &[(u32, u32)] {
+        &self.exits
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -108,6 +137,31 @@ impl Gfx942MachineDataflowV1 {
             &function.dominators[use_instruction.block as usize],
             definition.block as usize,
         ))
+    }
+
+    pub fn block_post_dominates(
+        &self,
+        function: &str,
+        post_dominator: u32,
+        block: u32,
+    ) -> Result<bool, Gfx942MachineDataflowErrorV1> {
+        let function = self.function(function)?;
+        let post_dominators = function
+            .post_dominators
+            .get(block as usize)
+            .ok_or(Gfx942MachineDataflowErrorV1::UnknownBlock(block))?;
+        if post_dominator as usize >= function.blocks.len() {
+            return Err(Gfx942MachineDataflowErrorV1::UnknownBlock(post_dominator));
+        }
+        Ok(bit_is_set(post_dominators, post_dominator as usize))
+    }
+
+    /// Returns natural loops in canonical `(header, latch)` order.
+    pub fn natural_loops(
+        &self,
+        function: &str,
+    ) -> Result<&[Gfx942NaturalLoopV1], Gfx942MachineDataflowErrorV1> {
+        Ok(&self.function(function)?.natural_loops)
     }
 
     pub fn reaching_definitions_before(
@@ -277,6 +331,8 @@ fn derive_dataflow(
         }
         validate_reachability(&blocks, &mut work)?;
         let dominators = derive_dominators(&blocks, &mut work)?;
+        let post_dominators = derive_post_dominators(&blocks, &mut work)?;
+        let natural_loops = derive_natural_loops(&blocks, &dominators, &mut work)?;
         functions.insert(
             symbol.to_owned(),
             FunctionDataflowV1 {
@@ -284,6 +340,8 @@ fn derive_dataflow(
                 instructions,
                 instruction_by_offset,
                 dominators,
+                post_dominators,
+                natural_loops,
             },
         );
     }
@@ -355,6 +413,125 @@ fn derive_dominators(
     Ok(dominators)
 }
 
+fn derive_post_dominators(
+    blocks: &[BlockFactsV1],
+    work: &mut usize,
+) -> Result<Vec<Vec<u64>>, Gfx942MachineDataflowErrorV1> {
+    let exits = blocks
+        .iter()
+        .enumerate()
+        .filter_map(|(block, facts)| facts.successors.is_empty().then_some(block))
+        .collect::<Vec<_>>();
+    if exits.is_empty() {
+        return Err(Gfx942MachineDataflowErrorV1::NoExitBlock);
+    }
+    let mut pending = exits.clone();
+    let mut can_reach_exit = BTreeSet::new();
+    while let Some(block) = pending.pop() {
+        consume_work(work)?;
+        if !can_reach_exit.insert(block) {
+            continue;
+        }
+        pending.extend(
+            blocks[block]
+                .predecessors
+                .iter()
+                .map(|predecessor| *predecessor as usize),
+        );
+    }
+    if let Some(block) = (0..blocks.len()).find(|block| !can_reach_exit.contains(block)) {
+        return Err(Gfx942MachineDataflowErrorV1::BlockCannotReachExit(
+            block as u32,
+        ));
+    }
+
+    let word_count = blocks.len().div_ceil(u64::BITS as usize);
+    let mut all = vec![u64::MAX; word_count];
+    let trailing = blocks.len() % u64::BITS as usize;
+    if trailing != 0 {
+        all[word_count - 1] = (1_u64 << trailing) - 1;
+    }
+    let mut post_dominators = vec![all; blocks.len()];
+    for block in exits {
+        post_dominators[block] = vec![0; word_count];
+        set_bit(&mut post_dominators[block], block);
+    }
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for block in (0..blocks.len()).rev() {
+            consume_work(work)?;
+            if blocks[block].successors.is_empty() {
+                continue;
+            }
+            let mut next = vec![u64::MAX; word_count];
+            for successor in &blocks[block].successors {
+                for (word, successor_word) in
+                    next.iter_mut().zip(&post_dominators[*successor as usize])
+                {
+                    consume_work(work)?;
+                    *word &= successor_word;
+                }
+            }
+            set_bit(&mut next, block);
+            if next != post_dominators[block] {
+                post_dominators[block] = next;
+                changed = true;
+            }
+        }
+    }
+    Ok(post_dominators)
+}
+
+fn derive_natural_loops(
+    blocks: &[BlockFactsV1],
+    dominators: &[Vec<u64>],
+    work: &mut usize,
+) -> Result<Vec<Gfx942NaturalLoopV1>, Gfx942MachineDataflowErrorV1> {
+    let mut loops = Vec::new();
+    for (latch, block) in blocks.iter().enumerate() {
+        for header in &block.successors {
+            consume_work(work)?;
+            let header_index = *header as usize;
+            if !bit_is_set(&dominators[latch], header_index) {
+                continue;
+            }
+            let mut members = BTreeSet::from([header_index, latch]);
+            let mut pending = (latch != header_index)
+                .then_some(latch)
+                .into_iter()
+                .collect::<Vec<_>>();
+            while let Some(member) = pending.pop() {
+                consume_work(work)?;
+                for predecessor in &blocks[member].predecessors {
+                    consume_work(work)?;
+                    let predecessor = *predecessor as usize;
+                    if members.insert(predecessor) && predecessor != header_index {
+                        pending.push(predecessor);
+                    }
+                }
+            }
+            let mut exits = BTreeSet::new();
+            for member in &members {
+                for successor in &blocks[*member].successors {
+                    consume_work(work)?;
+                    if !members.contains(&(*successor as usize)) {
+                        exits.insert((*member as u32, *successor));
+                    }
+                }
+            }
+            loops.push(Gfx942NaturalLoopV1 {
+                header: *header,
+                latch: latch as u32,
+                blocks: members.into_iter().map(|block| block as u32).collect(),
+                exits: exits.into_iter().collect(),
+            });
+        }
+    }
+    loops.sort_by_key(|loop_| (loop_.header, loop_.latch));
+    Ok(loops)
+}
+
 fn bit_is_set(words: &[u64], bit: usize) -> bool {
     words[bit / u64::BITS as usize] & (1_u64 << (bit % u64::BITS as usize)) != 0
 }
@@ -384,6 +561,8 @@ pub enum Gfx942MachineDataflowErrorV1 {
     InvalidEntryBlock,
     InvalidBlockRange,
     UnreachableBlock,
+    NoExitBlock,
+    BlockCannotReachExit(u32),
     NoReachingDefinition,
     WorkLimit,
 }
@@ -437,5 +616,87 @@ mod tests {
             derive_dominators(&blocks, &mut exhausted),
             Err(Gfx942MachineDataflowErrorV1::WorkLimit),
         );
+    }
+
+    #[test]
+    fn post_dominators_require_every_block_to_reach_an_exit() {
+        let no_exit = vec![BlockFactsV1 {
+            first_instruction: 0,
+            instruction_end: 0,
+            predecessors: vec![0],
+            successors: vec![0],
+        }];
+        assert_eq!(
+            derive_post_dominators(&no_exit, &mut 0),
+            Err(Gfx942MachineDataflowErrorV1::NoExitBlock),
+        );
+
+        let closed_cycle = vec![
+            BlockFactsV1 {
+                first_instruction: 0,
+                instruction_end: 0,
+                predecessors: Vec::new(),
+                successors: vec![1, 2],
+            },
+            BlockFactsV1 {
+                first_instruction: 0,
+                instruction_end: 0,
+                predecessors: vec![0, 1],
+                successors: vec![1],
+            },
+            BlockFactsV1 {
+                first_instruction: 0,
+                instruction_end: 0,
+                predecessors: vec![0],
+                successors: Vec::new(),
+            },
+        ];
+        assert_eq!(
+            derive_post_dominators(&closed_cycle, &mut 0),
+            Err(Gfx942MachineDataflowErrorV1::BlockCannotReachExit(1)),
+        );
+    }
+
+    #[test]
+    fn post_dominators_intersect_distinct_exit_paths() {
+        let blocks = vec![
+            BlockFactsV1 {
+                first_instruction: 0,
+                instruction_end: 0,
+                predecessors: Vec::new(),
+                successors: vec![1, 2],
+            },
+            BlockFactsV1 {
+                first_instruction: 0,
+                instruction_end: 0,
+                predecessors: vec![0],
+                successors: vec![3],
+            },
+            BlockFactsV1 {
+                first_instruction: 0,
+                instruction_end: 0,
+                predecessors: vec![0],
+                successors: vec![4],
+            },
+            BlockFactsV1 {
+                first_instruction: 0,
+                instruction_end: 0,
+                predecessors: vec![1],
+                successors: Vec::new(),
+            },
+            BlockFactsV1 {
+                first_instruction: 0,
+                instruction_end: 0,
+                predecessors: vec![2],
+                successors: Vec::new(),
+            },
+        ];
+        let post_dominators = derive_post_dominators(&blocks, &mut 0).unwrap();
+
+        assert!(bit_is_set(&post_dominators[0], 0));
+        assert!(!bit_is_set(&post_dominators[0], 1));
+        assert!(!bit_is_set(&post_dominators[0], 2));
+        assert!(bit_is_set(&post_dominators[1], 3));
+        assert!(bit_is_set(&post_dominators[2], 4));
     }
 }

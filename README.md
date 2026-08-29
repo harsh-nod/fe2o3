@@ -947,8 +947,12 @@ is complete, and the recorded runs grant no current production authority.
   closed static effects and a complete byte-exact instruction/CFG trace for up
   to two arbitrary requested entry symbols. All code locations are validated
   HSACO file offsets, the trace binds the exact effect record, and the
-  authenticated receipt binds the complete bundle. This is extractor evidence,
-  not compiler, source, Verus, address-safety, race-freedom, or launch authority.
+  authenticated receipt binds the complete bundle. A bounded inert analysis of
+  that trace additionally derives block dominators, post-dominators, exact
+  reaching definitions, and canonical natural loops with their exit edges; it
+  rejects CFGs whose blocks cannot reach an exit. These are structural extractor
+  facts, not compiler, source, Verus, address-safety, race-freedom, machine
+  semantics, termination, or launch authority.
   The Worker V3 semantic-refinement join remains open.
 - G6/G7 includes canonical multi-input AMDGPU link plans and a standalone
   direct LLVM/LLD worker with bounded Rust/C++ protocols. Device FFI macros and

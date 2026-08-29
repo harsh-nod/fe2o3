@@ -731,7 +731,16 @@ fn gfx942_machine_dataflow_is_loop_aware_bounded_and_inert() {
     assert!(dataflow.block_dominates("loop_entry", 0, 3).unwrap());
     assert!(dataflow.block_dominates("loop_entry", 1, 2).unwrap());
     assert!(!dataflow.block_dominates("loop_entry", 2, 3).unwrap());
+    assert!(dataflow.block_post_dominates("loop_entry", 3, 1).unwrap());
+    assert!(!dataflow.block_post_dominates("loop_entry", 2, 1).unwrap());
+    assert!(dataflow.block_post_dominates("loop_entry", 1, 0).unwrap());
     assert!(dataflow.instruction_dominates("loop_entry", 8, 28).unwrap());
+    let loops = dataflow.natural_loops("loop_entry").unwrap();
+    assert_eq!(loops.len(), 1);
+    assert_eq!(loops[0].header(), 1);
+    assert_eq!(loops[0].latch(), 2);
+    assert_eq!(loops[0].blocks(), [1, 2]);
+    assert_eq!(loops[0].exits(), [(1, 3)]);
     assert_eq!(
         dataflow.block_dominates("missing", 0, 0),
         Err(
@@ -742,6 +751,10 @@ fn gfx942_machine_dataflow_is_loop_aware_bounded_and_inert() {
     );
     assert_eq!(
         dataflow.block_dominates("loop_entry", 0, 4),
+        Err(fe2o3_kernel_analysis::Gfx942MachineDataflowErrorV1::UnknownBlock(4)),
+    );
+    assert_eq!(
+        dataflow.block_post_dominates("loop_entry", 4, 0),
         Err(fe2o3_kernel_analysis::Gfx942MachineDataflowErrorV1::UnknownBlock(4)),
     );
     assert_eq!(

@@ -485,9 +485,13 @@ earlier authority transition.
    The sole supported `gfx942` LLVM Object/MC analysis path runs from a sealed
    worker image under an immutable measured runtime closure. One canonical
    response binds closed effect sites to a complete byte-exact instruction/CFG
-   trace using payload file offsets. Production admission must still establish
-   KIR/LLVM-to-machine semantic refinement and bind its move-only receipt into
-   Worker V3. Hardware success remains an independent evidence class.
+   trace using payload file offsets. The inert trace analysis also derives
+   bounded dominators, post-dominators, exact reaching definitions, and
+   canonical natural loops with exit edges, while rejecting blocks that cannot
+   reach an exit. These structural facts do not establish machine semantics or
+   termination. Production admission must still establish KIR/LLVM-to-machine
+   semantic refinement and bind its move-only receipt into Worker V3. Hardware
+   success remains an independent evidence class.
 9. **Implemented bounded foundation: alpha/zeta source proofs and proof
    records.** Mechanical source-model proofs, negative mutations, freshness,
    and executable-evidence records exist. They do not give Rust source an
