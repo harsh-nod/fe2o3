@@ -217,7 +217,7 @@ fn comparison_requires_exact_environment_and_emits_numeric_duration_delta() {
 }
 
 #[test]
-fn counter_and_relative_pc_comparisons_emit_actual_numeric_deltas() {
+fn counters_emit_deltas_but_capture_local_pc_dimensions_fail_closed() {
     let binding = RocprofCaptureBindingV1 {
         kernel_ir_claim: KernelIrIdentityClaimV1::canonical_v7_claim(opaque(1), 97).unwrap(),
         artifact: Some(ArtifactClaimV1 {
@@ -264,18 +264,13 @@ fn counter_and_relative_pc_comparisons_emit_actual_numeric_deltas() {
     )
     .unwrap();
     let pc_comparison = compare_pc_sample_counts_v3(&pc, &pc).unwrap();
-    assert!(!pc_comparison.deltas.is_empty());
+    assert!(!pc_comparison.numeric_dimensions_comparable);
+    assert!(pc_comparison.deltas.is_empty());
     assert!(
         pc_comparison
-            .deltas
+            .unavailable
             .iter()
-            .all(|delta| f64::from_bits(delta.delta_f64_bits) == 0.0)
-    );
-    assert!(
-        pc_comparison
-            .deltas
-            .iter()
-            .all(|delta| delta.dimension.contains("offset="))
+            .any(|reason| reason.contains("capture-local"))
     );
 }
 

@@ -194,7 +194,8 @@ emits an evidence-linked numeric dispatch-duration delta only when those
 claims match. Equality is explicitly equality of caller-declared content
 identities, not runtime authentication. `counter-delta-v2` emits deterministic
 binary64 sums for counter dimensions with observed records in both captures;
-`pc-delta-v3` emits raw stochastic sample-count deltas only for relative-PC
-dimensions observed in both captures. Missing dimensions are unavailable, not
-zero. V2/V3 stable environment identity, decoded ATT/waits, clock conversion,
+`pc-delta-v3` currently returns typed unavailable because V3 code-object
+identities are capture-local and cannot safely join relative PCs across runs.
+Missing dimensions are unavailable, not zero. V2/V3 stable environment
+identity, stable cross-run PC identity, decoded ATT/waits, clock conversion,
 causal diagnosis, and performance prediction remain unavailable.

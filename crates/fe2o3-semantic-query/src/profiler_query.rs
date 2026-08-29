@@ -1143,6 +1143,10 @@ pub fn compare_pc_sample_counts_v3(
     let candidate_id =
         fe2o3_semantic_import::pc_sample_capture_content_identity_v3(candidate_bytes)
             .map_err(|_| ProfilerQueryErrorV4::Bundle)?;
+    let mut unavailable = vec![
+        "Semantic PC Sample Capture V3 has no stable environment identity",
+        "V3 code-object identities are capture-local and cannot establish a stable relative-PC join across runs",
+    ];
     if baseline.coverage.sampling != candidate.coverage.sampling
         || baseline.dispatches.len() != candidate.dispatches.len()
         || !baseline
@@ -1155,89 +1159,17 @@ pub fn compare_pc_sample_counts_v3(
                     && left.launch == right.launch
             })
     {
-        return Ok(ProfilerNumericComparisonV4 {
-            kind: ProfilerNumericCaptureKindV4::StochasticPcSamplesV3,
-            baseline: baseline_id,
-            candidate: candidate_id,
-            stable_environment: ProfilerCompatibilityStatusV4::Unavailable,
-            numeric_dimensions_comparable: false,
-            deltas: Vec::new(),
-            unavailable: vec![
-                "PC sample deltas require exact sampling configuration and matching dispatch declarations",
-                "Semantic PC Sample Capture V3 has no stable environment identity",
-            ],
-        });
+        unavailable.push(
+            "PC sample deltas also require exact sampling configuration and matching dispatch declarations",
+        );
     }
-    let left_ordinals = baseline
-        .code_objects
-        .iter()
-        .enumerate()
-        .map(|(index, object)| (object.identity, index))
-        .collect::<BTreeMap<_, _>>();
-    let right_ordinals = candidate
-        .code_objects
-        .iter()
-        .enumerate()
-        .map(|(index, object)| (object.identity, index))
-        .collect::<BTreeMap<_, _>>();
-    let left = aggregate_pc_samples(&baseline.samples, &left_ordinals)?;
-    let right = aggregate_pc_samples(&candidate.samples, &right_ordinals)?;
-    let keys = left
-        .keys()
-        .filter(|key| right.contains_key(*key))
-        .copied()
-        .collect::<std::collections::BTreeSet<_>>();
-    let deltas = keys.into_iter().map(|key| {
-        numeric_delta(
-            "pc_raw_sample_count",
-            &format!("code_object_ordinal={};offset={};instruction={:?}", key.0, key.1, key.2),
-            *left.get(&key).unwrap_or(&0) as f64,
-            *right.get(&key).unwrap_or(&0) as f64,
-            baseline.samples.iter().filter_map(|sample| pc_key(sample, &left_ordinals).filter(|value| *value == key).map(|_| sample.identity)).collect(),
-            candidate.samples.iter().filter_map(|sample| pc_key(sample, &right_ordinals).filter(|value| *value == key).map(|_| sample.identity)).collect(),
-            "delta of raw stochastic sample counts at exact relative PCs; not elapsed time, frequency, or complete execution coverage",
-        )
-    }).collect::<Result<Vec<_>, _>>()?;
     Ok(ProfilerNumericComparisonV4 {
         kind: ProfilerNumericCaptureKindV4::StochasticPcSamplesV3,
         baseline: baseline_id,
         candidate: candidate_id,
         stable_environment: ProfilerCompatibilityStatusV4::Unavailable,
-        numeric_dimensions_comparable: true,
-        deltas,
-        unavailable: vec![
-            "samples without a code-object-relative PC are excluded and remain unavailable",
-            "relative-PC dimensions without observed samples in both captures remain unavailable and are not treated as zero",
-            "Semantic PC Sample Capture V3 has no stable environment identity; stochastic sample deltas are not elapsed-time or full-coverage conclusions",
-        ],
+        numeric_dimensions_comparable: false,
+        deltas: Vec::new(),
+        unavailable,
     })
-}
-
-type PcKeyV4 = (usize, u64, fe2o3_semantic_import::PcInstructionTypeV3);
-
-fn pc_key(
-    sample: &fe2o3_semantic_import::PcSampleRecordV3,
-    ordinals: &BTreeMap<CaptureIdentityV1, usize>,
-) -> Option<PcKeyV4> {
-    Some((
-        *ordinals.get(&sample.pc.code_object_identity?)?,
-        sample.pc.code_object_offset?,
-        sample.instruction_type,
-    ))
-}
-
-fn aggregate_pc_samples(
-    samples: &[fe2o3_semantic_import::PcSampleRecordV3],
-    ordinals: &BTreeMap<CaptureIdentityV1, usize>,
-) -> Result<BTreeMap<PcKeyV4, u64>, ProfilerQueryErrorV4> {
-    let mut totals = BTreeMap::new();
-    for sample in samples {
-        if let Some(key) = pc_key(sample, ordinals) {
-            let total = totals.entry(key).or_insert(0_u64);
-            *total = total
-                .checked_add(1)
-                .ok_or(ProfilerQueryErrorV4::SizeOverflow)?;
-        }
-    }
-    Ok(totals)
 }
