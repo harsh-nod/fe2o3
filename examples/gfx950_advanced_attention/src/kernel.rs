@@ -1539,7 +1539,7 @@ pub fn gfx950_four_branch_residual(
 #[cfg(all(target_arch = "amdgpu", feature = "kernel-mhc-sinkhorn-mix"))]
 #[kernel(
     typed,
-    namespace = "0c00c566c0a9487644fd52739a8ffe3a447048d77114666223b99fa8cfd6a9cf",
+    namespace = "f93558928ce6e41a2fe8d78cfb28aa199dae54059fc9b7599a4348f4ad73c966",
     launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1]),
     control_flow(loop_bounds(3))
 )]
@@ -1556,98 +1556,38 @@ pub fn gfx950_mhc_sinkhorn_mix(
     }
     let index = thread::index_1d();
     let linear = index.get();
-    if linear >= MIXING_STREAMS_V1 * CHANNELS_V1 {
-        return Ok(());
-    }
     let math = DeviceMath::current();
+    let subgroup = Gfx950Subgroup::current();
     let Ok(logits) = StridedReadView2D::from_shared_slice(mixing_logits, 0, 1, 16, 16) else {
         return Err(KernelError::InvalidArgument);
     };
     let Ok(streams) = StridedReadView2D::from_shared_slice(streams, 0, 4, 16, 16) else {
         return Err(KernelError::InvalidArgument);
     };
-    let mut m00 = math.exp_f32(logits.load_or(0, 0, 0.0));
-    let mut m01 = math.exp_f32(logits.load_or(0, 1, 0.0));
-    let mut m02 = math.exp_f32(logits.load_or(0, 2, 0.0));
-    let mut m03 = math.exp_f32(logits.load_or(0, 3, 0.0));
-    let mut m10 = math.exp_f32(logits.load_or(0, 4, 0.0));
-    let mut m11 = math.exp_f32(logits.load_or(0, 5, 0.0));
-    let mut m12 = math.exp_f32(logits.load_or(0, 6, 0.0));
-    let mut m13 = math.exp_f32(logits.load_or(0, 7, 0.0));
-    let mut m20 = math.exp_f32(logits.load_or(0, 8, 0.0));
-    let mut m21 = math.exp_f32(logits.load_or(0, 9, 0.0));
-    let mut m22 = math.exp_f32(logits.load_or(0, 10, 0.0));
-    let mut m23 = math.exp_f32(logits.load_or(0, 11, 0.0));
-    let mut m30 = math.exp_f32(logits.load_or(0, 12, 0.0));
-    let mut m31 = math.exp_f32(logits.load_or(0, 13, 0.0));
-    let mut m32 = math.exp_f32(logits.load_or(0, 14, 0.0));
-    let mut m33 = math.exp_f32(logits.load_or(0, 15, 0.0));
-    for _iteration in 0..3 {
-        let row0 = m00 + m01 + m02 + m03;
-        m00 /= row0;
-        m01 /= row0;
-        m02 /= row0;
-        m03 /= row0;
-        let row1 = m10 + m11 + m12 + m13;
-        m10 /= row1;
-        m11 /= row1;
-        m12 /= row1;
-        m13 /= row1;
-        let row2 = m20 + m21 + m22 + m23;
-        m20 /= row2;
-        m21 /= row2;
-        m22 /= row2;
-        m23 /= row2;
-        let row3 = m30 + m31 + m32 + m33;
-        m30 /= row3;
-        m31 /= row3;
-        m32 /= row3;
-        m33 /= row3;
-
-        let column0 = m00 + m10 + m20 + m30;
-        m00 /= column0;
-        m10 /= column0;
-        m20 /= column0;
-        m30 /= column0;
-        let column1 = m01 + m11 + m21 + m31;
-        m01 /= column1;
-        m11 /= column1;
-        m21 /= column1;
-        m31 /= column1;
-        let column2 = m02 + m12 + m22 + m32;
-        m02 /= column2;
-        m12 /= column2;
-        m22 /= column2;
-        m32 /= column2;
-        let column3 = m03 + m13 + m23 + m33;
-        m03 /= column3;
-        m13 /= column3;
-        m23 /= column3;
-        m33 /= column3;
-    }
     let row = linear / CHANNELS_V1;
-    let channel = linear % CHANNELS_V1;
-    let value = if row == 0 {
-        m00 * streams.load_or(0, channel, 0.0)
-            + m01 * streams.load_or(1, channel, 0.0)
-            + m02 * streams.load_or(2, channel, 0.0)
-            + m03 * streams.load_or(3, channel, 0.0)
-    } else if row == 1 {
-        m10 * streams.load_or(0, channel, 0.0)
-            + m11 * streams.load_or(1, channel, 0.0)
-            + m12 * streams.load_or(2, channel, 0.0)
-            + m13 * streams.load_or(3, channel, 0.0)
-    } else if row == 2 {
-        m20 * streams.load_or(0, channel, 0.0)
-            + m21 * streams.load_or(1, channel, 0.0)
-            + m22 * streams.load_or(2, channel, 0.0)
-            + m23 * streams.load_or(3, channel, 0.0)
-    } else {
-        m30 * streams.load_or(0, channel, 0.0)
-            + m31 * streams.load_or(1, channel, 0.0)
-            + m32 * streams.load_or(2, channel, 0.0)
-            + m33 * streams.load_or(3, channel, 0.0)
-    };
+    let local_lane = linear % CHANNELS_V1;
+    let matrix_index =
+        (local_lane + row * MIXING_STREAMS_V1) % (MIXING_STREAMS_V1 * MIXING_STREAMS_V1);
+    let mut matrix = math.exp_f32(logits.load_or(0, matrix_index, 0.0));
+    for _iteration in 0..3 {
+        let row_reciprocal = 1.0 / subgroup.reduce_sum_f32::<4>(matrix);
+        matrix *= row_reciprocal;
+
+        let column = (local_lane as u32) & 3;
+        let column_sum = subgroup.broadcast_f32::<16>(matrix, column)
+            + subgroup.broadcast_f32::<16>(matrix, (column + 4) & 15)
+            + subgroup.broadcast_f32::<16>(matrix, (column + 8) & 15)
+            + subgroup.broadcast_f32::<16>(matrix, (column + 12) & 15);
+        matrix *= 1.0 / column_sum;
+    }
+    let weight0 = subgroup.broadcast_f32::<16>(matrix, 0);
+    let weight1 = subgroup.broadcast_f32::<16>(matrix, 1);
+    let weight2 = subgroup.broadcast_f32::<16>(matrix, 2);
+    let weight3 = subgroup.broadcast_f32::<16>(matrix, 3);
+    let value = weight0 * streams.load_or(0, local_lane, 0.0)
+        + weight1 * streams.load_or(1, local_lane, 0.0)
+        + weight2 * streams.load_or(2, local_lane, 0.0)
+        + weight3 * streams.load_or(3, local_lane, 0.0);
     if let Some(slot) = output.get_mut(index) {
         *slot = value;
     }
