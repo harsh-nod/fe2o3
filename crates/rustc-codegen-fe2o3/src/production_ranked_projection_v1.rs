@@ -18494,7 +18494,7 @@ mod tests {
                 "authenticated LaunchContract workgroup disagrees with semantic source workgroup"
             ))
         ));
-        let substituted_rank = LaunchContract::new(
+        let degenerate_rank_two = LaunchContract::new(
             2,
             BlockSize::Exact(fe2o3_artifacts::Dimensions::new(64, 1, 1).unwrap()),
             fe2o3_artifacts::Dimensions::new(1, 1, 1).unwrap(),
@@ -18506,11 +18506,13 @@ mod tests {
             source_execution_layout_v1(
                 SemanticTargetArchitectureV1::AmdGpuGfx942,
                 &function,
-                &substituted_rank,
+                &degenerate_rank_two,
             ),
-            Err(ProductionRankedProjectionErrorV1::Unsupported(
-                "authenticated launch rank disagrees with source workgroup axes"
-            ))
+            Ok(ProductionRankedOperationV1::ExecutionLayout {
+                global_extents: [64, 1, 1],
+                workgroup_extents: [64, 1, 1],
+                ..
+            })
         ));
         assert!(matches!(
             checked_global_extent_v1(u64::MAX, 2, u64::from(u32::MAX)),
