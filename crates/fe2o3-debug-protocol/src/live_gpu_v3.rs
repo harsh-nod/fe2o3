@@ -1,9 +1,14 @@
-//! Bounded, read-only live-GPU semantic debugger protocol.
+//! Bounded live-GPU semantic debugger protocol.
 //!
 //! V3 reports one stopped observation. It is not a trace and never treats an
 //! unreported workgroup, wave, or lane as absent. Identities intentionally map
 //! by digest bytes to `fe2o3-semantic-trace` identities; adapters perform that
 //! conversion because this wire crate does not depend on the inert trace crate.
+//!
+//! The ROCgdb control payloads are a temporary V3 substrate boundary. ROCgdb
+//! observations do not populate stopped dispatch/workgroup scopes until a
+//! caller supplies separately evidenced semantic hierarchy bindings; thread
+//! metadata alone must never synthesize workgroup coordinates.
 
 use std::collections::BTreeSet;
 use std::fmt;
@@ -127,6 +132,10 @@ pub enum LiveGpuCapabilityNameV3 {
     RegisterValues,
     SemanticValues,
     AllocationRelativeMemory,
+    Breakpoints,
+    Continue,
+    Pause,
+    Step,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -997,6 +1006,11 @@ pub enum LiveGpuOperationV3 {
     InspectValues,
     ReadMemory,
     ResolveProgramSite,
+    InsertBreakpoint,
+    RemoveBreakpoint,
+    Continue,
+    Pause,
+    Step,
     Terminate,
 }
 
@@ -1097,6 +1111,43 @@ pub enum LiveGpuDebugRequestV3 {
         stop_identity: OpaqueIdentityV1,
         scope: LiveGpuScopeSelectorV3,
     },
+    /// Temporary ROCgdb-specific control substrate; semantic scopes remain
+    /// unavailable until separately evidenced hierarchy admission exists.
+    InsertBreakpoint {
+        schema: LiveGpuRequestSchemaV3,
+        request_id: u64,
+        expected_revision: u64,
+        authorization: crate::RocgdbMiControlAuthorizationV3,
+        site: crate::RocgdbMiBreakpointSiteV3,
+    },
+    RemoveBreakpoint {
+        schema: LiveGpuRequestSchemaV3,
+        request_id: u64,
+        expected_revision: u64,
+        authorization: crate::RocgdbMiControlAuthorizationV3,
+        breakpoint: crate::RocgdbMiBreakpointIdentityV3,
+    },
+    Continue {
+        schema: LiveGpuRequestSchemaV3,
+        request_id: u64,
+        expected_revision: u64,
+        authorization: crate::RocgdbMiControlAuthorizationV3,
+        focus: crate::RocgdbMiThreadIdentityV3,
+    },
+    Pause {
+        schema: LiveGpuRequestSchemaV3,
+        request_id: u64,
+        expected_revision: u64,
+        authorization: crate::RocgdbMiControlAuthorizationV3,
+    },
+    Step {
+        schema: LiveGpuRequestSchemaV3,
+        request_id: u64,
+        expected_revision: u64,
+        authorization: crate::RocgdbMiControlAuthorizationV3,
+        focus: crate::RocgdbMiThreadIdentityV3,
+        kind: crate::RocgdbMiStepKindV3,
+    },
     Terminate {
         schema: LiveGpuRequestSchemaV3,
         request_id: u64,
@@ -1120,6 +1171,11 @@ impl LiveGpuDebugRequestV3 {
             | Self::InspectValues { request_id, .. }
             | Self::ReadMemory { request_id, .. }
             | Self::ResolveProgramSite { request_id, .. }
+            | Self::InsertBreakpoint { request_id, .. }
+            | Self::RemoveBreakpoint { request_id, .. }
+            | Self::Continue { request_id, .. }
+            | Self::Pause { request_id, .. }
+            | Self::Step { request_id, .. }
             | Self::Terminate { request_id, .. } => *request_id,
         }
     }
@@ -1165,6 +1221,21 @@ impl LiveGpuDebugRequestV3 {
             | Self::ResolveProgramSite {
                 expected_revision, ..
             }
+            | Self::InsertBreakpoint {
+                expected_revision, ..
+            }
+            | Self::RemoveBreakpoint {
+                expected_revision, ..
+            }
+            | Self::Continue {
+                expected_revision, ..
+            }
+            | Self::Pause {
+                expected_revision, ..
+            }
+            | Self::Step {
+                expected_revision, ..
+            }
             | Self::Terminate {
                 expected_revision, ..
             } => *expected_revision,
@@ -1188,6 +1259,11 @@ impl LiveGpuDebugRequestV3 {
             Self::InspectValues { .. } => LiveGpuOperationV3::InspectValues,
             Self::ReadMemory { .. } => LiveGpuOperationV3::ReadMemory,
             Self::ResolveProgramSite { .. } => LiveGpuOperationV3::ResolveProgramSite,
+            Self::InsertBreakpoint { .. } => LiveGpuOperationV3::InsertBreakpoint,
+            Self::RemoveBreakpoint { .. } => LiveGpuOperationV3::RemoveBreakpoint,
+            Self::Continue { .. } => LiveGpuOperationV3::Continue,
+            Self::Pause { .. } => LiveGpuOperationV3::Pause,
+            Self::Step { .. } => LiveGpuOperationV3::Step,
             Self::Terminate { .. } => LiveGpuOperationV3::Terminate,
         }
     }
@@ -1261,11 +1337,98 @@ impl LiveGpuDebugRequestV3 {
                 Ok(())
             }
             Self::ResolveProgramSite { scope, .. } => scope.validate(),
+            Self::InsertBreakpoint {
+                request_id,
+                expected_revision,
+                authorization,
+                site,
+                ..
+            } => crate::RocgdbMiControlRequestV3::InsertBreakpoint {
+                request_id: *request_id,
+                authorization: *authorization,
+                site: *site,
+            }
+            .validate()
+            .map_err(|_| LiveGpuValidationErrorV3::InvalidAuthorization)
+            .and({
+                if authorization.expected_revision == *expected_revision {
+                    Ok(())
+                } else {
+                    Err(LiveGpuValidationErrorV3::InvalidAuthorization)
+                }
+            }),
+            Self::RemoveBreakpoint {
+                request_id,
+                expected_revision,
+                authorization,
+                breakpoint,
+                ..
+            } => crate::RocgdbMiControlRequestV3::RemoveBreakpoint {
+                request_id: *request_id,
+                authorization: *authorization,
+                breakpoint: *breakpoint,
+            }
+            .validate()
+            .map_err(|_| LiveGpuValidationErrorV3::InvalidAuthorization)
+            .and_then(|()| validate_control_revision(*expected_revision, *authorization)),
+            Self::Continue {
+                request_id,
+                expected_revision,
+                authorization,
+                focus,
+                ..
+            } => crate::RocgdbMiControlRequestV3::Continue {
+                request_id: *request_id,
+                authorization: *authorization,
+                focus: *focus,
+            }
+            .validate()
+            .map_err(|_| LiveGpuValidationErrorV3::InvalidAuthorization)
+            .and_then(|()| validate_control_revision(*expected_revision, *authorization)),
+            Self::Pause {
+                request_id,
+                expected_revision,
+                authorization,
+                ..
+            } => crate::RocgdbMiControlRequestV3::Pause {
+                request_id: *request_id,
+                authorization: *authorization,
+            }
+            .validate()
+            .map_err(|_| LiveGpuValidationErrorV3::InvalidAuthorization)
+            .and_then(|()| validate_control_revision(*expected_revision, *authorization)),
+            Self::Step {
+                request_id,
+                expected_revision,
+                authorization,
+                focus,
+                kind,
+                ..
+            } => crate::RocgdbMiControlRequestV3::Step {
+                request_id: *request_id,
+                authorization: *authorization,
+                focus: *focus,
+                kind: *kind,
+            }
+            .validate()
+            .map_err(|_| LiveGpuValidationErrorV3::InvalidAuthorization)
+            .and_then(|()| validate_control_revision(*expected_revision, *authorization)),
             Self::DiscoverCapabilities { .. }
             | Self::GetSessionBinding { .. }
             | Self::GetState { .. }
             | Self::Terminate { .. } => Ok(()),
         }
+    }
+}
+
+fn validate_control_revision(
+    expected_revision: u64,
+    authorization: crate::RocgdbMiControlAuthorizationV3,
+) -> Result<(), LiveGpuValidationErrorV3> {
+    if authorization.expected_revision == expected_revision {
+        Ok(())
+    } else {
+        Err(LiveGpuValidationErrorV3::InvalidAuthorization)
     }
 }
 
@@ -1391,11 +1554,35 @@ pub enum LiveGpuDebugResultV3 {
         scope: LiveGpuScopeSelectorV3,
         site: LiveGpuProgramSiteV3,
     },
+    Control {
+        control: crate::RocgdbMiControlResultV3,
+    },
     Terminated,
 }
 
 impl LiveGpuDebugResultV3 {
     fn matches_operation(&self, operation: LiveGpuOperationV3) -> bool {
+        if let Self::Control { control } = self {
+            return matches!(
+                (control.operation, operation),
+                (
+                    crate::RocgdbMiControlOperationV3::InsertBreakpoint,
+                    LiveGpuOperationV3::InsertBreakpoint
+                ) | (
+                    crate::RocgdbMiControlOperationV3::RemoveBreakpoint,
+                    LiveGpuOperationV3::RemoveBreakpoint
+                ) | (
+                    crate::RocgdbMiControlOperationV3::Continue,
+                    LiveGpuOperationV3::Continue
+                ) | (
+                    crate::RocgdbMiControlOperationV3::Pause,
+                    LiveGpuOperationV3::Pause
+                ) | (
+                    crate::RocgdbMiControlOperationV3::Step,
+                    LiveGpuOperationV3::Step
+                )
+            );
+        }
         matches!(
             (self, operation),
             (
@@ -1555,6 +1742,14 @@ impl LiveGpuDebugResultV3 {
             } => {
                 validate_scoped(anchor, *scope, session, limits)?;
                 site.validate(&anchor.binding, limits)
+            }
+            Self::Control { control } => {
+                if session.backend != LiveGpuBackendV3::RocgdbMi {
+                    return Err(LiveGpuValidationErrorV3::InvalidSessionState);
+                }
+                control
+                    .validate()
+                    .map_err(|_| LiveGpuValidationErrorV3::InvalidAuthorization)
             }
             Self::Terminated if session.state == LiveGpuSessionStateV3::Terminated => Ok(()),
             Self::Terminated => Err(LiveGpuValidationErrorV3::InvalidSessionState),
@@ -1741,6 +1936,13 @@ impl LiveGpuDebugResponseV3 {
                 if !result.matches_operation(*operation) {
                     return Err(LiveGpuValidationErrorV3::OperationResultMismatch);
                 }
+                if matches!(
+                    result.as_ref(),
+                    LiveGpuDebugResultV3::Control { control }
+                        if control.request_id != *request_id
+                ) {
+                    return Err(LiveGpuValidationErrorV3::OperationResultMismatch);
+                }
                 result.validate(*session, limits)
             }
             Self::Unavailable {
@@ -1794,6 +1996,7 @@ pub enum LiveGpuValidationErrorV3 {
     InvalidSessionState,
     HardwareV2Rejected,
     OperationResultMismatch,
+    InvalidAuthorization,
 }
 
 impl fmt::Display for LiveGpuValidationErrorV3 {

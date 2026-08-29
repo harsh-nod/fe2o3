@@ -244,7 +244,12 @@ fn hardware_request(request: &LiveGpuDebugRequestV3) -> HardwareDebugRequestV2 {
         | LiveGpuDebugRequestV3::InspectRegisters { .. }
         | LiveGpuDebugRequestV3::InspectValues { .. }
         | LiveGpuDebugRequestV3::ReadMemory { .. }
-        | LiveGpuDebugRequestV3::ResolveProgramSite { .. } => HardwareDebugRequestV2::GetState {
+        | LiveGpuDebugRequestV3::ResolveProgramSite { .. }
+        | LiveGpuDebugRequestV3::InsertBreakpoint { .. }
+        | LiveGpuDebugRequestV3::RemoveBreakpoint { .. }
+        | LiveGpuDebugRequestV3::Continue { .. }
+        | LiveGpuDebugRequestV3::Pause { .. }
+        | LiveGpuDebugRequestV3::Step { .. } => HardwareDebugRequestV2::GetState {
             schema: HardwareRequestSchemaV2::V2,
             request_id,
             expected_control_revision,
@@ -308,7 +313,12 @@ fn convert_response(
                 | LiveGpuOperationV3::InspectRegisters
                 | LiveGpuOperationV3::InspectValues
                 | LiveGpuOperationV3::ReadMemory
-                | LiveGpuOperationV3::ResolveProgramSite => {
+                | LiveGpuOperationV3::ResolveProgramSite
+                | LiveGpuOperationV3::InsertBreakpoint
+                | LiveGpuOperationV3::RemoveBreakpoint
+                | LiveGpuOperationV3::Continue
+                | LiveGpuOperationV3::Pause
+                | LiveGpuOperationV3::Step => {
                     return LiveGpuDebugResponseV3::Unavailable {
                         schema: LiveGpuResponseSchemaV3::V3,
                         request_id,
@@ -462,6 +472,10 @@ fn live_capabilities(
         Live::RegisterValues,
         Live::SemanticValues,
         Live::AllocationRelativeMemory,
+        Live::Breakpoints,
+        Live::Continue,
+        Live::Pause,
+        Live::Step,
     ] {
         capabilities.push(live_capability(
             name,
@@ -470,6 +484,72 @@ fn live_capabilities(
         ));
     }
     capabilities
+}
+
+#[cfg(test)]
+mod capability_tests {
+    use super::*;
+
+    #[test]
+    fn direct_kfd_capability_classification_is_exhaustive() {
+        fn is_classified(name: LiveGpuCapabilityNameV3) -> bool {
+            match name {
+                LiveGpuCapabilityNameV3::ExactArtifactBinding
+                | LiveGpuCapabilityNameV3::CooperativeTargetTelemetry
+                | LiveGpuCapabilityNameV3::CpuReferenceEvidence
+                | LiveGpuCapabilityNameV3::HardwareDeviceSnapshot
+                | LiveGpuCapabilityNameV3::HardwareQueueSnapshot
+                | LiveGpuCapabilityNameV3::HardwareExceptionEvents
+                | LiveGpuCapabilityNameV3::QueueSuspend
+                | LiveGpuCapabilityNameV3::QueueResume
+                | LiveGpuCapabilityNameV3::Terminate
+                | LiveGpuCapabilityNameV3::StoppedDispatch
+                | LiveGpuCapabilityNameV3::StoppedWorkgroups
+                | LiveGpuCapabilityNameV3::StoppedWaves
+                | LiveGpuCapabilityNameV3::StoppedLanes
+                | LiveGpuCapabilityNameV3::RelativeProgramCounter
+                | LiveGpuCapabilityNameV3::IsaSite
+                | LiveGpuCapabilityNameV3::KirSite
+                | LiveGpuCapabilityNameV3::SourceSite
+                | LiveGpuCapabilityNameV3::RegisterValues
+                | LiveGpuCapabilityNameV3::SemanticValues
+                | LiveGpuCapabilityNameV3::AllocationRelativeMemory
+                | LiveGpuCapabilityNameV3::Breakpoints
+                | LiveGpuCapabilityNameV3::Continue
+                | LiveGpuCapabilityNameV3::Pause
+                | LiveGpuCapabilityNameV3::Step => true,
+            }
+        }
+
+        for capability in [
+            LiveGpuCapabilityNameV3::ExactArtifactBinding,
+            LiveGpuCapabilityNameV3::CooperativeTargetTelemetry,
+            LiveGpuCapabilityNameV3::CpuReferenceEvidence,
+            LiveGpuCapabilityNameV3::HardwareDeviceSnapshot,
+            LiveGpuCapabilityNameV3::HardwareQueueSnapshot,
+            LiveGpuCapabilityNameV3::HardwareExceptionEvents,
+            LiveGpuCapabilityNameV3::QueueSuspend,
+            LiveGpuCapabilityNameV3::QueueResume,
+            LiveGpuCapabilityNameV3::Terminate,
+            LiveGpuCapabilityNameV3::StoppedDispatch,
+            LiveGpuCapabilityNameV3::StoppedWorkgroups,
+            LiveGpuCapabilityNameV3::StoppedWaves,
+            LiveGpuCapabilityNameV3::StoppedLanes,
+            LiveGpuCapabilityNameV3::RelativeProgramCounter,
+            LiveGpuCapabilityNameV3::IsaSite,
+            LiveGpuCapabilityNameV3::KirSite,
+            LiveGpuCapabilityNameV3::SourceSite,
+            LiveGpuCapabilityNameV3::RegisterValues,
+            LiveGpuCapabilityNameV3::SemanticValues,
+            LiveGpuCapabilityNameV3::AllocationRelativeMemory,
+            LiveGpuCapabilityNameV3::Breakpoints,
+            LiveGpuCapabilityNameV3::Continue,
+            LiveGpuCapabilityNameV3::Pause,
+            LiveGpuCapabilityNameV3::Step,
+        ] {
+            assert!(is_classified(capability));
+        }
+    }
 }
 
 fn live_capability(

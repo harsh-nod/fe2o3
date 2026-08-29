@@ -12,6 +12,10 @@ mod hardware_v2;
 mod live_gpu_backend_v3;
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 pub mod live_kfd_v3;
+#[cfg(target_os = "linux")]
+mod rocgdb_mi_parser_v3;
+#[cfg(target_os = "linux")]
+pub mod rocgdb_mi_v3;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
