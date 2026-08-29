@@ -186,6 +186,11 @@ fn attributed_kernel_is_recollected_inside_a_real_amdgcn_dependency_graph() {
 #[test]
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]
 fn two_kernel_collection_reaches_the_explicit_pre_kir_multi_root_boundary() {
+    // The current general typed frontend authenticates only rank-one 64x1x1
+    // or 256x1x1 source launches. This live vertical therefore proves two
+    // independently derived rank-one contracts; heterogeneous rank remains
+    // covered at the source-layout validation boundary until the frontend can
+    // honestly produce another rank.
     let target = ScratchTarget::new();
     let llvm_output = target.path().join("two-root.ll");
     let output = Command::new(env!("CARGO"))

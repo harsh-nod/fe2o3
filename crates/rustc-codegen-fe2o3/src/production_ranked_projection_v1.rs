@@ -917,6 +917,7 @@ impl ProductionRankedSemanticProgramV1 {
 pub(crate) enum ProductionRankedProjectionErrorV1 {
     SemanticOwner(ProductionSemanticMirErrorV1),
     SemanticU32Induction(fe2o3_mir_model::SemanticU32InductionAnalysisErrorV1),
+    StructuralValidation(fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1),
     Incomplete(&'static str),
     MissingAllocationProvenance {
         local: u32,
@@ -954,6 +955,9 @@ impl fmt::Display for ProductionRankedProjectionErrorV1 {
                     formatter,
                     "bounded semantic induction analysis failed: {error}"
                 )
+            }
+            Self::StructuralValidation(error) => {
+                write!(formatter, "ranked projection structural validation failed: {error}")
             }
             Self::Unsupported(detail) => {
                 write!(formatter, "semantic-to-ranked projection rejected {detail}")
@@ -1042,6 +1046,7 @@ impl std::error::Error for ProductionRankedProjectionErrorV1 {
         match self {
             Self::SemanticOwner(error) => Some(error),
             Self::SemanticU32Induction(error) => Some(error),
+            Self::StructuralValidation(error) => Some(error),
             Self::Recipe(error) => Some(error),
             Self::Compile { error, .. } => Some(error),
             Self::ReferenceEffectJoin(error) => Some(error),
@@ -1054,6 +1059,36 @@ impl std::error::Error for ProductionRankedProjectionErrorV1 {
     }
 }
 
+fn partition_reference_effect_binding_indices_v1(
+    root_logical_names: &[&str],
+    binding_logical_names: &[&str],
+) -> Result<Vec<Vec<usize>>, ProductionRankedProjectionErrorV1> {
+    let mut root_indices = BTreeMap::new();
+    for (root_index, logical_name) in root_logical_names.iter().copied().enumerate() {
+        if root_indices.insert(logical_name, root_index).is_some() {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "duplicate typed logical roots in the ranked roster",
+            ));
+        }
+    }
+
+    let mut partitions = vec![Vec::new(); root_logical_names.len()];
+    for (binding_index, logical_name) in binding_logical_names.iter().copied().enumerate() {
+        let root_index = root_indices.get(logical_name).copied().ok_or(
+            ProductionRankedProjectionErrorV1::Unsupported(
+                "a reference-effect binding outside the exact typed root roster",
+            ),
+        )?;
+        if !partitions[root_index].is_empty() {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "duplicate reference-effect bindings for one ranked root",
+            ));
+        }
+        partitions[root_index].push(binding_index);
+    }
+    Ok(partitions)
+}
+
 pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
     semantic_owner: ProductionSemanticMirOwnerV1,
     root_inputs: &[ProductionRankedRootInputV1],
@@ -1064,33 +1099,39 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
         .map_err(ProductionRankedProjectionErrorV1::SemanticOwner)?;
     let semantic = semantic_owner.semantic();
     let matched_roots = match_ranked_semantic_root_roster_v1(semantic, root_inputs)?;
-    let mut assigned_reference_bindings = 0_usize;
-    let root_reference_bindings = root_inputs
+    let root_logical_names = root_inputs
         .iter()
-        .map(|input| {
-            let bindings = reference_bindings
-                .as_slice()
-                .iter()
-                .filter(|binding| {
-                    binding.logical_kernel_name.as_str() == input.logical_name.as_str()
+        .map(|input| input.logical_name.as_str())
+        .collect::<Vec<_>>();
+    let binding_logical_names = reference_bindings
+        .as_slice()
+        .iter()
+        .map(|binding| binding.logical_kernel_name.as_str())
+        .collect::<Vec<_>>();
+    let root_reference_binding_indices = partition_reference_effect_binding_indices_v1(
+        &root_logical_names,
+        &binding_logical_names,
+    )?;
+    let root_reference_bindings = root_reference_binding_indices
+        .into_iter()
+        .map(|binding_indices| {
+            binding_indices
+                .into_iter()
+                .map(|binding_index| {
+                    reference_bindings
+                        .as_slice()
+                        .get(binding_index)
+                        .cloned()
+                        .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+                            "reference-effect root assignment produced an out-of-range binding",
+                        ))
                 })
-                .cloned()
-                .collect::<Vec<_>>();
-            assigned_reference_bindings = assigned_reference_bindings
-                .checked_add(bindings.len())
-                .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
-                    "reference-effect root assignment count overflow",
-                ))?;
-            Ok(
-                crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1::new(bindings),
-            )
+                .collect::<Result<Vec<_>, ProductionRankedProjectionErrorV1>>()
+                .map(
+                    crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1::new,
+                )
         })
         .collect::<Result<Vec<_>, ProductionRankedProjectionErrorV1>>()?;
-    if assigned_reference_bindings != reference_bindings.as_slice().len() {
-        return Err(ProductionRankedProjectionErrorV1::Unsupported(
-            "a reference-effect binding outside the exact typed root roster",
-        ));
-    }
 
     let mut roots = Vec::with_capacity(root_inputs.len());
     for ((input, semantic_root), root_references) in root_inputs
@@ -1114,6 +1155,14 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
                 "a projected ranked root with a substituted kernel binding",
             ));
         }
+        fe2o3_lower_mir_kernel::validate_borrowed_ranked_semantic_projection_candidate_v1(
+            &semantic_owner,
+            semantic_root,
+            &root.lowering,
+            &root.ranked_ir,
+            &root.access_sources,
+        )
+        .map_err(ProductionRankedProjectionErrorV1::StructuralValidation)?;
         roots.push(root);
     }
     semantic_owner
@@ -15340,6 +15389,55 @@ mod tests {
             match_ranked_root_bindings_v1(&substituted, &semantic_roots),
             Err(ProductionRankedProjectionErrorV1::Unsupported(
                 "a substituted typed/semantic kernel binding in the ranked roster"
+            ))
+        ));
+    }
+
+    #[test]
+    fn reference_effect_partition_assigns_nonempty_two_root_bindings_in_root_order() {
+        assert_eq!(
+            partition_reference_effect_binding_indices_v1(
+                &["alpha", "zeta"],
+                &["zeta", "alpha"],
+            )
+            .unwrap(),
+            vec![vec![1], vec![0]],
+        );
+        assert_eq!(
+            partition_reference_effect_binding_indices_v1(&["alpha", "zeta"], &[]).unwrap(),
+            vec![vec![], vec![]],
+        );
+    }
+
+    #[test]
+    fn reference_effect_partition_rejects_orphan_substitution_and_duplicates() {
+        for bindings in [["alpha", "orphan"], ["alpha", "beta"]] {
+            assert!(matches!(
+                partition_reference_effect_binding_indices_v1(
+                    &["alpha", "zeta"],
+                    &bindings,
+                ),
+                Err(ProductionRankedProjectionErrorV1::Unsupported(
+                    "a reference-effect binding outside the exact typed root roster"
+                ))
+            ));
+        }
+        assert!(matches!(
+            partition_reference_effect_binding_indices_v1(
+                &["alpha", "zeta"],
+                &["alpha", "alpha"],
+            ),
+            Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "duplicate reference-effect bindings for one ranked root"
+            ))
+        ));
+        assert!(matches!(
+            partition_reference_effect_binding_indices_v1(
+                &["alpha", "alpha"],
+                &["alpha"],
+            ),
+            Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "duplicate typed logical roots in the ranked roster"
             ))
         ));
     }
