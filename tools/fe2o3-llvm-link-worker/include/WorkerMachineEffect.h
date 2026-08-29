@@ -16,6 +16,9 @@ inline constexpr size_t MaxPhysicalMachineEffectPayloadBytes = 64 * 1024 * 1024;
 inline constexpr size_t MaxPhysicalMachineEffectEvidenceBytes = 8 * 1024 * 1024;
 inline constexpr size_t MaxPhysicalMachineEffectFunctions = 64;
 inline constexpr size_t MaxPhysicalMachineEffectEffects = 16 * 1024;
+inline constexpr size_t MaxPhysicalMachineTraceBlocks = 4 * 1024;
+inline constexpr size_t MaxPhysicalMachineTraceInstructions = 16 * 1024;
+inline constexpr size_t MaxPhysicalMachineTraceBytes = 16 * 1024 * 1024;
 
 struct PhysicalMachineEffectIdentities {
   std::array<uint8_t, 32> Analyzer{};
@@ -76,6 +79,60 @@ struct PhysicalMachineEffect {
   uint16_t ByteWidth = 0;
 };
 
+enum class PhysicalMachineOperandKind : uint8_t {
+  Register = 1,
+  SignedImmediate = 2,
+  SingleFloatImmediate = 3,
+  DoubleFloatImmediate = 4,
+  AbsoluteExpression = 5,
+};
+
+struct PhysicalMachineOperandTrace {
+  PhysicalMachineOperandKind Kind = PhysicalMachineOperandKind::Register;
+  std::string Register;
+  uint64_t Value = 0;
+  int32_t TiedTo = -1;
+};
+
+enum class PhysicalMachineBranchKind : uint8_t {
+  None = 0,
+  ConditionalDirect = 1,
+  UnconditionalDirect = 2,
+  DirectCall = 3,
+  Return = 4,
+};
+
+enum class PhysicalMachineMemoryAccess : uint8_t {
+  None = 0,
+  Read = 1,
+  Write = 2,
+};
+
+struct PhysicalMachineBasicBlockTrace {
+  std::string FunctionSymbol;
+  uint32_t Ordinal = 0;
+  uint64_t FirstInstructionOffset = 0;
+  uint32_t InstructionCount = 0;
+  std::vector<uint32_t> Successors;
+};
+
+struct PhysicalMachineInstructionTrace {
+  std::string FunctionSymbol;
+  uint64_t InstructionOffset = 0;
+  uint32_t BlockOrdinal = 0;
+  std::string Opcode;
+  std::vector<uint8_t> Encoding;
+  uint16_t ExplicitDefinitionCount = 0;
+  std::vector<PhysicalMachineOperandTrace> Operands;
+  std::vector<std::string> ImplicitDefinitions;
+  std::vector<std::string> ImplicitUses;
+  PhysicalMachineBranchKind BranchKind = PhysicalMachineBranchKind::None;
+  uint64_t BranchTarget = 0;
+  uint16_t Flags = 0;
+  PhysicalMachineMemoryAccess MemoryAccess = PhysicalMachineMemoryAccess::None;
+  uint16_t MemoryWidth = 0;
+};
+
 struct PhysicalMachineEffectEvidence {
   std::array<uint8_t, 32> ExecutionChallenge{};
   std::array<uint8_t, 32> RequestIdentity{};
@@ -87,6 +144,8 @@ struct PhysicalMachineEffectEvidence {
   std::vector<PhysicalMachineEntryEvidence> Entries;
   std::vector<PhysicalMachineFunctionEvidence> Functions;
   std::vector<PhysicalMachineEffect> Effects;
+  std::vector<PhysicalMachineBasicBlockTrace> Blocks;
+  std::vector<PhysicalMachineInstructionTrace> Instructions;
 };
 
 PhysicalMachineEffectIdentities physicalMachineEffectIdentities();
@@ -113,6 +172,10 @@ analyzeGfx942PhysicalMachineEffects(
 
 llvm::Expected<std::vector<uint8_t>> encodePhysicalMachineEffectEvidence(
     const PhysicalMachineEffectEvidence &Evidence);
+
+llvm::Expected<std::vector<uint8_t>> encodePhysicalMachineTraceEvidence(
+    const PhysicalMachineEffectEvidence &Evidence,
+    llvm::ArrayRef<uint8_t> CanonicalEffectEvidence);
 
 } // namespace fe2o3::worker
 
