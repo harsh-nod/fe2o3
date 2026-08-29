@@ -586,6 +586,28 @@ pub(crate) fn slice_fixture_with_descriptor_table(descriptor_table: &[u8]) -> Fi
 }
 
 #[allow(dead_code)]
+/// Builds two hand-authored ELF entries in lexical source order for roster-admission testing only.
+///
+/// The supplied descriptor table deliberately uses a different canonical order.
+/// Neither this ELF nor its descriptor table is compiler-produced evidence.
+pub(crate) fn synthetic_two_kernel_slice_fixture_with_descriptor_table(
+    descriptor_table: &[u8],
+) -> Fixture {
+    let mut first = FixtureOptions::valid();
+    first.target = "gfx942:xnack-";
+    first.entry = "synthetic_first_transform";
+    first.descriptor = "synthetic_first_transform.kd";
+    first.include_export = false;
+    first.required_workgroup_size = [64, 1, 1];
+    first.max_flat_workgroup_size = 64;
+
+    let mut second = first;
+    second.entry = "synthetic_second_transform";
+    second.descriptor = "synthetic_second_transform.kd";
+    legacy_fixture_with_optional_second_kernel(first, Some(second), Some(descriptor_table))
+}
+
+#[allow(dead_code)]
 pub(crate) fn slice_fixture_with_descriptor_table_and_workgroup(
     descriptor_table: &[u8],
     workgroup_size: u32,
@@ -1925,8 +1947,22 @@ fn legacy_fixture_with_descriptor_table(
     options: FixtureOptions<'_>,
     descriptor_table: Option<&[u8]>,
 ) -> Fixture {
+    legacy_fixture_with_optional_second_kernel(options, None, descriptor_table)
+}
+
+fn legacy_fixture_with_optional_second_kernel(
+    options: FixtureOptions<'_>,
+    second: Option<FixtureOptions<'_>>,
+    descriptor_table: Option<&[u8]>,
+) -> Fixture {
     const PROGRAM_COUNT: usize = 2;
-    let metadata = metadata(options);
+    if let Some(second) = second {
+        assert_eq!(second.target, options.target);
+        assert_eq!(second.code_object_version, options.code_object_version);
+        assert!(!options.include_export);
+        assert!(!second.include_export);
+    }
+    let metadata = metadata_with_optional_second_kernel(options, second);
     let note = metadata_note(&metadata);
     let mut bytes = vec![0; ELF_HEADER_BYTES + PROGRAM_COUNT * PROGRAM_HEADER_BYTES];
 
@@ -1937,12 +1973,18 @@ fn legacy_fixture_with_descriptor_table(
     align(&mut bytes, 64);
     let rodata_offset = bytes.len();
     let descriptor_offset = bytes.len();
-    bytes.resize(bytes.len() + 64, 0);
+    bytes.resize(bytes.len() + 64 * (1 + usize::from(second.is_some())), 0);
     let rodata_end = bytes.len();
 
     align(&mut bytes, 256);
     let text_offset = bytes.len();
     bytes.resize(bytes.len() + 64, 0xbf);
+    let second_text_offset = second.map(|_| {
+        align(&mut bytes, 256);
+        let offset = bytes.len();
+        bytes.resize(bytes.len() + 64, 0xbd);
+        offset
+    });
     let export_offset = if options.include_export {
         align(&mut bytes, 256);
         let offset = bytes.len();
@@ -1959,12 +2001,18 @@ fn legacy_fixture_with_descriptor_table(
     let export_name = options
         .include_export
         .then(|| push_name(&mut strtab, "ffi_export"));
+    let second_names = second.map(|second| {
+        (
+            push_name(&mut strtab, second.entry),
+            push_name(&mut strtab, second.descriptor),
+        )
+    });
     let strtab_offset = bytes.len();
     bytes.extend_from_slice(&strtab);
 
     align(&mut bytes, 8);
     let symtab_offset = bytes.len();
-    let symbol_count = 3 + usize::from(options.include_export);
+    let symbol_count = 3 + usize::from(options.include_export) + 2 * usize::from(second.is_some());
     bytes.resize(symtab_offset + symbol_count * 24, 0);
     let entry_symbol = symtab_offset + 24;
     write_u32(&mut bytes, entry_symbol, entry_name);
@@ -1995,48 +2043,49 @@ fn legacy_fixture_with_descriptor_table(
         write_u64(&mut bytes, export_symbol + 16, 64);
     }
 
+    if let (Some((entry_name, descriptor_name)), Some(entry_offset)) =
+        (second_names, second_text_offset)
+    {
+        let symbol_index = 3 + usize::from(options.include_export);
+        let entry_symbol = symtab_offset + symbol_index * 24;
+        write_u32(&mut bytes, entry_symbol, entry_name);
+        bytes[entry_symbol + 4] = 0x12;
+        bytes[entry_symbol + 5] = 3;
+        write_u16(&mut bytes, entry_symbol + 6, TEXT_SECTION_INDEX as u16);
+        write_u64(&mut bytes, entry_symbol + 8, (entry_offset + 0x1000) as u64);
+        write_u64(&mut bytes, entry_symbol + 16, 64);
+
+        let descriptor_symbol = symtab_offset + (symbol_index + 1) * 24;
+        write_u32(&mut bytes, descriptor_symbol, descriptor_name);
+        bytes[descriptor_symbol + 4] = 0x11;
+        write_u16(
+            &mut bytes,
+            descriptor_symbol + 6,
+            RODATA_SECTION_INDEX as u16,
+        );
+        write_u64(
+            &mut bytes,
+            descriptor_symbol + 8,
+            (descriptor_offset + 64) as u64,
+        );
+        write_u64(&mut bytes, descriptor_symbol + 16, 64);
+    }
+
     align(&mut bytes, 8);
     let canonical_descriptor_offset = bytes.len();
     if let Some(table) = descriptor_table {
         bytes.extend_from_slice(table);
     }
 
-    write_u32(
-        &mut bytes,
-        descriptor_offset,
-        u32::try_from(options.group_segment_fixed_size).unwrap(),
-    );
-    write_u32(
-        &mut bytes,
-        descriptor_offset + 8,
-        u32::try_from(kernarg_segment_size(options)).unwrap(),
-    );
-    write_i64(
-        &mut bytes,
-        descriptor_offset + 16,
-        i64::try_from(entry_address - descriptor_offset as u64).unwrap(),
-    );
-    let (compute_pgm_rsrc3, compute_pgm_rsrc1, compute_pgm_rsrc2) =
-        if options.abi == FixtureAbi::RowSoftmaxV1 {
-            (10, 0x00af_014a, 0x0390)
-        } else {
-            (1, 0x00af_0081, 0x1390)
-        };
-    write_u32(&mut bytes, descriptor_offset + 44, compute_pgm_rsrc3);
-    write_u32(&mut bytes, descriptor_offset + 48, compute_pgm_rsrc1);
-    write_u32(
-        &mut bytes,
-        descriptor_offset + 52,
-        compute_pgm_rsrc2 | u32::from(options.uses_dynamic_stack.unwrap_or(false)),
-    );
-    let mut kernel_code_properties = 0x001e;
-    if options.descriptor_wavefront_size == 32 {
-        kernel_code_properties |= 1 << 10;
+    write_legacy_kernel_descriptor(&mut bytes, descriptor_offset, entry_address, options);
+    if let (Some(second), Some(entry_offset)) = (second, second_text_offset) {
+        write_legacy_kernel_descriptor(
+            &mut bytes,
+            descriptor_offset + 64,
+            (entry_offset + 0x1000) as u64,
+            second,
+        );
     }
-    if options.uses_dynamic_stack.unwrap_or(false) {
-        kernel_code_properties |= 1 << 11;
-    }
-    write_u16(&mut bytes, descriptor_offset + 56, kernel_code_properties);
 
     let mut shstr = vec![0];
     let note_name = push_name(&mut shstr, ".note");
@@ -2187,7 +2236,82 @@ fn legacy_fixture_with_descriptor_table(
     }
 }
 
+fn write_legacy_kernel_descriptor(
+    bytes: &mut [u8],
+    descriptor_offset: usize,
+    entry_address: u64,
+    options: FixtureOptions<'_>,
+) {
+    write_u32(
+        bytes,
+        descriptor_offset,
+        u32::try_from(options.group_segment_fixed_size).unwrap(),
+    );
+    write_u32(
+        bytes,
+        descriptor_offset + 8,
+        u32::try_from(kernarg_segment_size(options)).unwrap(),
+    );
+    write_i64(
+        bytes,
+        descriptor_offset + 16,
+        i64::try_from(entry_address - descriptor_offset as u64).unwrap(),
+    );
+    let (compute_pgm_rsrc3, compute_pgm_rsrc1, compute_pgm_rsrc2) =
+        if options.abi == FixtureAbi::RowSoftmaxV1 {
+            (10, 0x00af_014a, 0x0390)
+        } else {
+            (1, 0x00af_0081, 0x1390)
+        };
+    write_u32(bytes, descriptor_offset + 44, compute_pgm_rsrc3);
+    write_u32(bytes, descriptor_offset + 48, compute_pgm_rsrc1);
+    write_u32(
+        bytes,
+        descriptor_offset + 52,
+        compute_pgm_rsrc2 | u32::from(options.uses_dynamic_stack.unwrap_or(false)),
+    );
+    let mut kernel_code_properties = 0x001e;
+    if options.descriptor_wavefront_size == 32 {
+        kernel_code_properties |= 1 << 10;
+    }
+    if options.uses_dynamic_stack.unwrap_or(false) {
+        kernel_code_properties |= 1 << 11;
+    }
+    write_u16(bytes, descriptor_offset + 56, kernel_code_properties);
+}
+
 fn metadata(options: FixtureOptions<'_>) -> Vec<u8> {
+    metadata_with_optional_second_kernel(options, None)
+}
+
+fn metadata_with_optional_second_kernel(
+    options: FixtureOptions<'_>,
+    second: Option<FixtureOptions<'_>>,
+) -> Vec<u8> {
+    let mut kernels = vec![kernel_metadata(options)];
+    if let Some(second) = second {
+        kernels.push(kernel_metadata(second));
+    }
+    let mut root = vec![
+        (
+            Value::from("amdhsa.version"),
+            Value::Array(vec![Value::from(1), Value::from(2)]),
+        ),
+        (
+            Value::from("amdhsa.target"),
+            Value::from(format!("amdgcn-amd-amdhsa--{}", options.target)),
+        ),
+        (Value::from("amdhsa.kernels"), Value::Array(kernels)),
+    ];
+    if options.include_printf_metadata {
+        root.push((Value::from("amdhsa.printf"), Value::Array(Vec::new())));
+    }
+    let mut encoded = Vec::new();
+    write_value(&mut encoded, &Value::Map(root)).unwrap();
+    encoded
+}
+
+fn kernel_metadata(options: FixtureOptions<'_>) -> Value {
     let explicit_bytes = match options.abi {
         FixtureAbi::SliceF32 => 16,
         FixtureAbi::ScalarAddV1 => 24,
@@ -2478,25 +2602,7 @@ fn metadata(options: FixtureOptions<'_>) -> Vec<u8> {
             Value::from("not-an-integer"),
         ));
     }
-    let kernel = Value::Map(kernel);
-    let mut root = vec![
-        (
-            Value::from("amdhsa.version"),
-            Value::Array(vec![Value::from(1), Value::from(2)]),
-        ),
-        (
-            Value::from("amdhsa.target"),
-            Value::from(format!("amdgcn-amd-amdhsa--{}", options.target)),
-        ),
-        (Value::from("amdhsa.kernels"), Value::Array(vec![kernel])),
-    ];
-    if options.include_printf_metadata {
-        root.push((Value::from("amdhsa.printf"), Value::Array(Vec::new())));
-    }
-    let root = Value::Map(root);
-    let mut encoded = Vec::new();
-    write_value(&mut encoded, &root).unwrap();
-    encoded
+    Value::Map(kernel)
 }
 
 fn scalar_gemm_metadata_arguments() -> Vec<Value> {
