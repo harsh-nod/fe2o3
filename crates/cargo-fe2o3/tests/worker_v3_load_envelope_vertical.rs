@@ -700,8 +700,14 @@ enum ReviewedTestProtectedRosterVerifierFault {
     CompilerSubject,
     ZeroVerificationTranscript,
     MissingEntry,
-    SubstitutedEntry,
+    SwappedEntries,
+    SubstitutedMarkerBinding,
+    SubstitutedEntryLineage,
+    SubstitutedGeneratedHostContract,
+    ZeroProofExecutableBinding,
     ZeroEntryLayout,
+    ZeroEntryEffect,
+    MissingEntrySafetyProperty,
 }
 
 struct ReviewedTestProtectedRosterVerifier {
@@ -729,8 +735,14 @@ where
         match self.fault {
             ReviewedTestProtectedRosterVerifierFault::None
             | ReviewedTestProtectedRosterVerifierFault::MissingEntry
-            | ReviewedTestProtectedRosterVerifierFault::SubstitutedEntry
-            | ReviewedTestProtectedRosterVerifierFault::ZeroEntryLayout => {}
+            | ReviewedTestProtectedRosterVerifierFault::SwappedEntries
+            | ReviewedTestProtectedRosterVerifierFault::SubstitutedMarkerBinding
+            | ReviewedTestProtectedRosterVerifierFault::SubstitutedEntryLineage
+            | ReviewedTestProtectedRosterVerifierFault::SubstitutedGeneratedHostContract
+            | ReviewedTestProtectedRosterVerifierFault::ZeroProofExecutableBinding
+            | ReviewedTestProtectedRosterVerifierFault::ZeroEntryLayout
+            | ReviewedTestProtectedRosterVerifierFault::ZeroEntryEffect
+            | ReviewedTestProtectedRosterVerifierFault::MissingEntrySafetyProperty => {}
             ReviewedTestProtectedRosterVerifierFault::CompilerSubject => subject[0] ^= 0xff,
             ReviewedTestProtectedRosterVerifierFault::ZeroVerificationTranscript => {
                 verification_transcript = [0; 32];
@@ -766,14 +778,40 @@ where
                 let seed = 0x20_u8.wrapping_add(
                     u8::try_from(ordinal).expect("synthetic roster ordinal fits u8"),
                 );
+                let lineage_ordinal = if matches!(
+                    self.fault,
+                    ReviewedTestProtectedRosterVerifierFault::SubstitutedEntryLineage
+                ) && ordinal == 1
+                {
+                    0
+                } else {
+                    ordinal
+                };
                 let mut marker_binding = expected.kernel_binding_id();
                 if matches!(
                     self.fault,
-                    ReviewedTestProtectedRosterVerifierFault::SubstitutedEntry
+                    ReviewedTestProtectedRosterVerifierFault::SubstitutedMarkerBinding
                 ) && ordinal == 1
                 {
                     marker_binding[0] ^= 0xff;
                 }
+                let mut generated_host_contract = expected.generated_host_contract_identity();
+                if matches!(
+                    self.fault,
+                    ReviewedTestProtectedRosterVerifierFault::SubstitutedGeneratedHostContract
+                ) && ordinal == 1
+                {
+                    generated_host_contract[0] ^= 0xff;
+                }
+                let proof_executable = if matches!(
+                    self.fault,
+                    ReviewedTestProtectedRosterVerifierFault::ZeroProofExecutableBinding
+                ) && ordinal == 1
+                {
+                    [0; 32]
+                } else {
+                    [seed; 32]
+                };
                 let layout = if matches!(
                     self.fault,
                     ReviewedTestProtectedRosterVerifierFault::ZeroEntryLayout
@@ -783,19 +821,38 @@ where
                 } else {
                     [seed.wrapping_add(1); 32]
                 };
+                let effect = if matches!(
+                    self.fault,
+                    ReviewedTestProtectedRosterVerifierFault::ZeroEntryEffect
+                ) && ordinal == 1
+                {
+                    [0; 32]
+                } else {
+                    [seed.wrapping_add(2); 32]
+                };
+                let safety_properties = if matches!(
+                    self.fault,
+                    ReviewedTestProtectedRosterVerifierFault::MissingEntrySafetyProperty
+                ) && ordinal == 1
+                {
+                    WorkerV3SafetyPropertiesV1::new(u8::MAX - 1)
+                        .expect("the synthetic safety bitset uses only known bits")
+                } else {
+                    WorkerV3SafetyPropertiesV1::required()
+                };
                 // SAFETY: this explicit hostile test seam supplies synthetic nonzero identities;
                 // host promotion still checks all request coordinates and rejection cases.
                 unsafe {
                     WorkerV3ProtectedRosterEntryEvidenceV1::new(
                         request
-                            .entry_lineage_identity(ordinal)
+                            .entry_lineage_identity(lineage_ordinal)
                             .expect("request retains every roster lineage"),
                         marker_binding,
-                        expected.generated_host_contract_identity(),
-                        [seed; 32],
+                        generated_host_contract,
+                        proof_executable,
                         layout,
-                        [seed.wrapping_add(2); 32],
-                        WorkerV3SafetyPropertiesV1::required(),
+                        effect,
+                        safety_properties,
                     )
                 }
             })
@@ -805,6 +862,12 @@ where
             ReviewedTestProtectedRosterVerifierFault::MissingEntry
         ) {
             entries.pop();
+        }
+        if matches!(
+            self.fault,
+            ReviewedTestProtectedRosterVerifierFault::SwappedEntries
+        ) {
+            entries.swap(0, 1);
         }
         // SAFETY: this test-only backend deliberately supplies synthetic evidence so the exact
         // aggregate promotion and fail-closed field validation can be exercised.
@@ -844,6 +907,36 @@ where
                 foreign_finalizer: None,
             }
             .verify_protected(request)
+        }
+    }
+}
+
+// SAFETY: this test-only aggregate backend probes the same cooperative publication lock while the
+// one roster-wide currentness token is retained, then delegates to the complete synthetic
+// aggregate evidence fixture above.
+unsafe impl<R> WorkerV3ProtectedRosterVerifierBackendV1<R>
+    for CurrentnessProbingWorkerV3Verifier
+where
+    R: CompilerGeneratedKernelExpectationRosterV1,
+{
+    type Error = Infallible;
+
+    unsafe fn verify_protected_roster(
+        &mut self,
+        request: &WorkerV3RosterVerificationRequestV1<'_, R>,
+    ) -> Result<WorkerV3ProtectedRosterVerificationEvidenceV1, Self::Error> {
+        self.observed_busy = matches!(
+            reacquire_current_hsaco_publication_lease_v3(&self.output_dir, &self.claim),
+            Err(DurablePublishedClaimReacquisitionErrorV3::Busy)
+        );
+        assert!(self.observed_busy);
+        // SAFETY: both implementations satisfy the same test-only aggregate-backend contract.
+        unsafe {
+            ReviewedTestProtectedRosterVerifier {
+                fault: ReviewedTestProtectedRosterVerifierFault::None,
+                calls: 0,
+            }
+            .verify_protected_roster(request)
         }
     }
 }
@@ -2083,10 +2176,38 @@ fn protected_roster_verifier_rejects_common_and_per_entry_substitution() {
             },
         ),
         (
-            ReviewedTestProtectedRosterVerifierFault::SubstitutedEntry,
+            ReviewedTestProtectedRosterVerifierFault::SwappedEntries,
+            WorkerV3RosterVerificationDecisionErrorV1::EntryIdentityMismatch {
+                ordinal: 0,
+                field: "entry lineage",
+            },
+        ),
+        (
+            ReviewedTestProtectedRosterVerifierFault::SubstitutedMarkerBinding,
             WorkerV3RosterVerificationDecisionErrorV1::EntryIdentityMismatch {
                 ordinal: 1,
                 field: "marker binding",
+            },
+        ),
+        (
+            ReviewedTestProtectedRosterVerifierFault::SubstitutedEntryLineage,
+            WorkerV3RosterVerificationDecisionErrorV1::EntryIdentityMismatch {
+                ordinal: 1,
+                field: "entry lineage",
+            },
+        ),
+        (
+            ReviewedTestProtectedRosterVerifierFault::SubstitutedGeneratedHostContract,
+            WorkerV3RosterVerificationDecisionErrorV1::EntryIdentityMismatch {
+                ordinal: 1,
+                field: "generated host contract",
+            },
+        ),
+        (
+            ReviewedTestProtectedRosterVerifierFault::ZeroProofExecutableBinding,
+            WorkerV3RosterVerificationDecisionErrorV1::ZeroEntryAuthenticatedIdentity {
+                ordinal: 1,
+                field: "proof/executable binding",
             },
         ),
         (
@@ -2094,6 +2215,20 @@ fn protected_roster_verifier_rejects_common_and_per_entry_substitution() {
             WorkerV3RosterVerificationDecisionErrorV1::ZeroEntryAuthenticatedIdentity {
                 ordinal: 1,
                 field: "Rust type/layout contract",
+            },
+        ),
+        (
+            ReviewedTestProtectedRosterVerifierFault::ZeroEntryEffect,
+            WorkerV3RosterVerificationDecisionErrorV1::ZeroEntryAuthenticatedIdentity {
+                ordinal: 1,
+                field: "Rust effect contract",
+            },
+        ),
+        (
+            ReviewedTestProtectedRosterVerifierFault::MissingEntrySafetyProperty,
+            WorkerV3RosterVerificationDecisionErrorV1::MissingEntrySafetyProperty {
+                ordinal: 1,
+                property: fe2o3_host::WorkerV3SafetyPropertyV1::Bounds,
             },
         ),
     ] {
@@ -2117,6 +2252,36 @@ fn protected_roster_verifier_rejects_common_and_per_entry_substitution() {
         ));
         assert_eq!(verifier.into_inner().calls, 1);
     }
+}
+
+#[test]
+fn authenticated_v3_roster_retains_verifier_entry_currentness_until_drop() {
+    let (directory, recovered) = recovered_synthetic_two_kernel_host_fixture();
+    let claim = recovered.wire().published_claim().clone();
+    let admitted =
+        admit_recovered_worker_v3_roster_v1::<WorkerV3SyntheticTwoTransformRoster>(recovered)
+            .unwrap();
+    let mut verifier = WorkerV3ProtectedRosterVerifierAdapterV1::new(
+        CurrentnessProbingWorkerV3Verifier {
+            output_dir: directory.0.clone(),
+            claim: claim.clone(),
+            observed_busy: false,
+        },
+    );
+    let authenticated =
+        AuthenticatedWorkerV3RosterV1::<WorkerV3SyntheticTwoTransformRoster>::authenticate(
+            admitted,
+            &mut verifier,
+        )
+        .unwrap();
+    assert!(verifier.into_inner().observed_busy);
+    authenticated.revalidate_currentness().unwrap();
+    assert!(matches!(
+        reacquire_current_hsaco_publication_lease_v3(&directory.0, &claim),
+        Err(DurablePublishedClaimReacquisitionErrorV3::Busy)
+    ));
+    drop(authenticated);
+    drop(reacquire_current_hsaco_publication_lease_v3(&directory.0, &claim).unwrap());
 }
 
 #[test]
