@@ -37,7 +37,10 @@ pub fn fill(mut output: DisjointSlice<u32>) {
 }
 
 #[cfg(feature = "multi-root-ownership")]
-#[kernel(typed)]
+#[kernel(
+    typed,
+    launch(required = [64, 1, 1], max = [64, 1, 1])
+)]
 pub fn alpha(mut output: DisjointSlice<u32>) {
     let index = thread::index_1d();
     if let Some(element) = output.get_mut(index) {
@@ -46,7 +49,10 @@ pub fn alpha(mut output: DisjointSlice<u32>) {
 }
 
 #[cfg(feature = "multi-root-ownership")]
-#[kernel(typed)]
+#[kernel(
+    typed,
+    launch(required = [64, 1, 1], max = [64, 1, 1])
+)]
 pub fn zeta(mut output: DisjointSlice<u32>) {
     let index = thread::index_1d();
     if let Some(element) = output.get_mut(index) {
