@@ -25,7 +25,7 @@ const ROUTER_FLOOR: f32 = -1.0e30;
     typed,
     namespace = "39eaa839d327564ce8ea4ba0e28cac0be8dfa374a979571b4cc0e53473768e28",
     launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1]),
-    control_flow(loop_bounds(64, 2880, 2880, 16))
+    control_flow(loop_bounds(368640, 16))
 )]
 #[allow(clippy::too_many_arguments, clippy::many_single_char_names)]
 pub fn gfx950_gpt_oss_120b_decode_megakernel_v1(
@@ -84,17 +84,15 @@ pub fn gfx950_gpt_oss_120b_decode_megakernel_v1(
     let mut id1 = u32::MAX;
     let mut id2 = u32::MAX;
     let mut id3 = u32::MAX;
-    let mut source = 0_u32;
-    while source < 64 {
-        {
-            let mut candidate_score = 0.0_f32;
-            let mut serial_depth = 0_usize;
-            while serial_depth < HIDDEN_SIZE {
-                candidate_score += hidden.load_or(0, serial_depth, 0.0)
-                    * router.load_or((source as usize) * 2, serial_depth, 0.0);
-                serial_depth += 1;
-            }
-            let mut candidate_id = source * 2;
+    let mut candidate_score = 0.0_f32;
+    let mut serial_index = 0_usize;
+    while serial_index < EXPERTS * HIDDEN_SIZE {
+        let candidate_id = (serial_index / HIDDEN_SIZE) as u32;
+        let serial_depth = serial_index % HIDDEN_SIZE;
+        candidate_score += hidden.load_or(0, serial_depth, 0.0)
+            * router.load_or(candidate_id as usize, serial_depth, 0.0);
+        if serial_depth + 1 == HIDDEN_SIZE {
+            let mut candidate_id = candidate_id;
             let take = ((candidate_score > best0)
                 | ((candidate_score == best0) & (candidate_id < id0)))
                 as u32;
@@ -137,62 +135,12 @@ pub fn gfx950_gpt_oss_120b_decode_megakernel_v1(
             let old_id = id3;
             best3 = candidate_score * choose + old_score * keep;
             id3 = candidate_id * take + old_id * (1 - take);
+            candidate_score = 0.0;
         }
-        {
-            let mut candidate_score = 0.0_f32;
-            let mut serial_depth = 0_usize;
-            while serial_depth < HIDDEN_SIZE {
-                candidate_score += hidden.load_or(0, serial_depth, 0.0)
-                    * router.load_or((source as usize) * 2 + 1, serial_depth, 0.0);
-                serial_depth += 1;
-            }
-            let mut candidate_id = source * 2 + 1;
-            let take = ((candidate_score > best0)
-                | ((candidate_score == best0) & (candidate_id < id0)))
-                as u32;
-            let choose = take as f32;
-            let keep = 1.0 - choose;
-            let old_score = best0;
-            let old_id = id0;
-            best0 = candidate_score * choose + old_score * keep;
-            id0 = candidate_id * take + old_id * (1 - take);
-            candidate_score = old_score * choose + candidate_score * keep;
-            candidate_id = old_id * take + candidate_id * (1 - take);
-            let take = ((candidate_score > best1)
-                | ((candidate_score == best1) & (candidate_id < id1)))
-                as u32;
-            let choose = take as f32;
-            let keep = 1.0 - choose;
-            let old_score = best1;
-            let old_id = id1;
-            best1 = candidate_score * choose + old_score * keep;
-            id1 = candidate_id * take + old_id * (1 - take);
-            candidate_score = old_score * choose + candidate_score * keep;
-            candidate_id = old_id * take + candidate_id * (1 - take);
-            let take = ((candidate_score > best2)
-                | ((candidate_score == best2) & (candidate_id < id2)))
-                as u32;
-            let choose = take as f32;
-            let keep = 1.0 - choose;
-            let old_score = best2;
-            let old_id = id2;
-            best2 = candidate_score * choose + old_score * keep;
-            id2 = candidate_id * take + old_id * (1 - take);
-            candidate_score = old_score * choose + candidate_score * keep;
-            candidate_id = old_id * take + candidate_id * (1 - take);
-            let take = ((candidate_score > best3)
-                | ((candidate_score == best3) & (candidate_id < id3)))
-                as u32;
-            let choose = take as f32;
-            let keep = 1.0 - choose;
-            let old_score = best3;
-            let old_id = id3;
-            best3 = candidate_score * choose + old_score * keep;
-            id3 = candidate_id * take + old_id * (1 - take);
-        }
-        source += 1;
+        serial_index += 1;
     }
     let selected = (id0 as usize) & (EXPERTS - 1);
+
 
     let Ok(query) = Bf16MfmaAMatrix::row_major(query_bf16, 0, MATRIX_ROWS, HEAD_DIM, HEAD_DIM)
     else {

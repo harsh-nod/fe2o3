@@ -54,7 +54,7 @@ fn ablation_sources_keep_the_production_export_and_exact_stage_shapes() {
     }
 
     let serial = include_str!("../src/kernel_router_serial.rs");
-    assert!(serial.contains("while serial_depth < HIDDEN_SIZE"));
+    assert!(serial.contains("while serial_index < EXPERTS * HIDDEN_SIZE"));
     let held = include_str!("../src/kernel_held_fragments.rs");
     assert_eq!(held.matches("multiply_accumulate_fp4(").count(), 4);
     let scalar = include_str!("../src/kernel_scalar_attention.rs");
