@@ -27,6 +27,13 @@ use rustix::fs::{
 use rustix::process::geteuid;
 use sha2::{Digest, Sha256};
 
+#[allow(unsafe_code)]
+mod service;
+
+pub use service::{
+    ExternalAnchorDaemonErrorV1, ExternalAnchorServiceReportV1, serve_connected_peer_v1,
+};
+
 const STATE_MAGIC: [u8; 8] = *b"F2ARST1\0";
 const STATE_VERSION_V1: u16 = 1;
 const STATE_PREFIX_BYTES: usize = 88;

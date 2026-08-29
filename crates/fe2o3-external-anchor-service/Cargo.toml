@@ -11,10 +11,13 @@ publish = false
 [dependencies]
 ed25519-dalek = { version = "=2.2.0", default-features = false, features = ["fast", "zeroize"] }
 fe2o3-external-anchor-protocol.workspace = true
-rustix = { workspace = true, features = ["process"] }
+libc.workspace = true
+rustix = { workspace = true, features = ["event", "process"] }
 sha2.workspace = true
 
 [dev-dependencies]
+fe2o3-broker-authority-service = { workspace = true, features = ["test-support"] }
+fe2o3-runtime-protocol.workspace = true
 tempfile = "=3.21.0"
 
 [lints.rust]

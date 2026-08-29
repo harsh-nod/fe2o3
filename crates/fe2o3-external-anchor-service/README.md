@@ -13,6 +13,15 @@ position. Stale, future, malformed, and key-substituted challenges fail closed.
 Any uncertain persistence failure poisons the in-memory service so it cannot
 issue another response before restart and state revalidation.
 
+The connected-peer transport accepts only an unnamed, nonblocking Unix
+`SOCK_SEQPACKET` with close-on-exec custody. It receives one exact 184-byte
+challenge per packet, rejects truncation and all ancillary data, applies the
+durable transition, and sends one exact 288-byte signed observation. The anchor
+child is expected to create this unnamed socketpair after adopting its dedicated
+UID, return the supervisor endpoint to the root provisioner, and retain its own
+endpoint across `exec`; this is what makes the supervisor's `SO_PEERCRED`,
+unnamed-address, and distinct-UID checks simultaneously satisfiable.
+
 This increment does not establish deployment authority. A production deployment
 must still provide a distinct locked service account, an independently managed
 signing key, a descriptor-only `SOCK_SEQPACKET` entrypoint, authenticated peer

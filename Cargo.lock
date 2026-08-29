@@ -962,7 +962,10 @@ name = "fe2o3-external-anchor-service"
 version = "0.1.0"
 dependencies = [
  "ed25519-dalek",
+ "fe2o3-broker-authority-service",
  "fe2o3-external-anchor-protocol",
+ "fe2o3-runtime-protocol",
+ "libc",
  "rustix",
  "sha2 0.11.0",
  "tempfile",
