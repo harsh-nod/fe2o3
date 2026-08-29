@@ -27,3 +27,9 @@ fe2o3-compiler-execution-client = { workspace = true, features = ["test-support"
 
 [lints.rust]
 unsafe_code = "deny"
+
+[[bin]]
+name = "fe2o3-compiler-execution-supervisor"
+path = "src/main.rs"
+test = false
+bench = false

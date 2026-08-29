@@ -121,4 +121,10 @@ zero core limits, umask `077`, default owned `SIGCHLD`, and stable namespaces.
 Cargo-wrapper fixed-path service acquisition is implemented. Deployment must
 also provision the supervisor with the already connected external-anchor peer
 and matching live pidfd; neither Cargo nor rustc can select or replace them.
-The real deployed distinct-UID supervisor entrypoint remains pending.
+The descriptor-only deployed entrypoint is implemented and accepts no arguments
+or environment. It consumes the canonical deployment manifest at FD 220 plus
+fixed inherited listener, root, launcher, issuer, policy, signing-key, and
+external-anchor descriptors; validates the complete locked service profile;
+and enters only the existing fixed-worker service loop. System provisioning of
+the distinct service accounts, independently administered external anchor,
+root/socket policy, and reviewed installed image measurements remains pending.

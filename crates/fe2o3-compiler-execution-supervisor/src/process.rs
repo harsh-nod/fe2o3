@@ -1520,6 +1520,18 @@ impl ExactProcessProfileV1 {
     }
 }
 
+/// Validates the complete current locked service profile before listener admission.
+///
+/// This check grants no process, signing, compiler, publication, load, launch, or GPU authority.
+/// Production launch repeats the same profile checks and additionally gates the exact child.
+pub fn validate_current_issuer_service_profile_v1(
+    credentials: IssuerServiceCredentialProfileV1,
+) -> Result<(), ProtectedIssuerLaunchErrorV1> {
+    ExactProcessProfileV1::capture(credentials)?;
+    require_owned_sigchld()?;
+    NamespaceSetV1::capture_self()?.revalidate_self()
+}
+
 fn read_proc_status(path: &str) -> Result<ProcStatusProfileV1, ProtectedIssuerLaunchErrorV1> {
     let file = File::open(path).map_err(|source| io_error("open proc process status", source))?;
     let mut bytes = Vec::new();
