@@ -26,7 +26,7 @@ const ROUTER_FLOOR: f32 = -1.0e30;
     typed,
     namespace = "fdac2bfe29c5e088f817374ab8ebec27e0574d46b1d2601704a4d1108d2524ed",
     launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1]),
-    control_flow(loop_bounds(2880, 64, 16))
+    control_flow(loop_bounds(2880, 64, 4, 16))
 )]
 #[allow(clippy::too_many_arguments, clippy::many_single_char_names)]
 pub fn gfx950_gpt_oss_120b_decode_megakernel_v1(
@@ -221,67 +221,41 @@ pub fn gfx950_gpt_oss_120b_decode_megakernel_v1(
     key_pipeline.stage(0);
     key_pipeline.write(0, pipeline_lane, key.load_k16n16(&lane, 0, 0));
     key_pipeline.commit(0);
-    query_pipeline.stage(1);
-    query_pipeline.write(1, pipeline_lane, query.load_m16k16(&lane, 0, 16));
-    query_pipeline.commit(1);
-    key_pipeline.stage(1);
-    key_pipeline.write(1, pipeline_lane, key.load_k16n16(&lane, 16, 0));
-    key_pipeline.commit(1);
 
-    let scores = F32AccumulatorFragment::zero(&lane);
-    query_pipeline.wait(0);
-    query_pipeline.consume(0);
-    let query_fragment = query_pipeline.read(0, pipeline_lane);
-    key_pipeline.wait(0);
-    key_pipeline.consume(0);
-    let key_fragment = key_pipeline.read(0, pipeline_lane);
-    let scores = matrix.multiply_accumulate(query_fragment, key_fragment, scores);
-    query_pipeline.release(0);
-    key_pipeline.release(0);
+    let mut scores = F32AccumulatorFragment::zero(&lane);
+    let mut phase_index = 0_usize;
+    while phase_index < 4 {
+        let future_epoch = phase_index + 1;
+        let next_phase = future_epoch * 16;
+        let next_query = query.load_m16k16(&lane, 0, next_phase);
+        let next_key = key.load_k16n16(&lane, next_phase, 0);
 
-    query_pipeline.stage(2);
-    query_pipeline.write(2, pipeline_lane, query.load_m16k16(&lane, 0, 32));
-    query_pipeline.commit(2);
-    key_pipeline.stage(2);
-    key_pipeline.write(2, pipeline_lane, key.load_k16n16(&lane, 32, 0));
-    key_pipeline.commit(2);
-    query_pipeline.wait(1);
-    query_pipeline.consume(1);
-    let query_fragment = query_pipeline.read(1, pipeline_lane);
-    key_pipeline.wait(1);
-    key_pipeline.consume(1);
-    let key_fragment = key_pipeline.read(1, pipeline_lane);
-    let scores = matrix.multiply_accumulate(query_fragment, key_fragment, scores);
-    query_pipeline.release(1);
-    key_pipeline.release(1);
+        query_pipeline.stage(future_epoch);
+        query_pipeline.write(future_epoch, pipeline_lane, next_query);
+        query_pipeline.commit(future_epoch);
+        key_pipeline.stage(future_epoch);
+        key_pipeline.write(future_epoch, pipeline_lane, next_key);
+        key_pipeline.commit(future_epoch);
 
-    query_pipeline.stage(3);
-    query_pipeline.write(3, pipeline_lane, query.load_m16k16(&lane, 0, 48));
-    query_pipeline.commit(3);
-    key_pipeline.stage(3);
-    key_pipeline.write(3, pipeline_lane, key.load_k16n16(&lane, 48, 0));
-    key_pipeline.commit(3);
-    query_pipeline.wait(2);
-    query_pipeline.consume(2);
-    let query_fragment = query_pipeline.read(2, pipeline_lane);
-    key_pipeline.wait(2);
-    key_pipeline.consume(2);
-    let key_fragment = key_pipeline.read(2, pipeline_lane);
-    let scores = matrix.multiply_accumulate(query_fragment, key_fragment, scores);
-    query_pipeline.release(2);
-    key_pipeline.release(2);
+        query_pipeline.wait(phase_index);
+        query_pipeline.consume(phase_index);
+        let query_fragment = query_pipeline.read(phase_index, pipeline_lane);
+        key_pipeline.wait(phase_index);
+        key_pipeline.consume(phase_index);
+        let key_fragment = key_pipeline.read(phase_index, pipeline_lane);
+        scores = matrix.multiply_accumulate(query_fragment, key_fragment, scores);
+        query_pipeline.release(phase_index);
+        key_pipeline.release(phase_index);
+        phase_index += 1;
+    }
 
-    query_pipeline.wait(3);
-    query_pipeline.consume(3);
-    let query_fragment = query_pipeline.read(3, pipeline_lane);
-    key_pipeline.wait(3);
-    key_pipeline.consume(3);
-    let key_fragment = key_pipeline.read(3, pipeline_lane);
-    let scores = matrix
-        .multiply_accumulate(query_fragment, key_fragment, scores)
-        .into_values();
-    query_pipeline.release(3);
-    key_pipeline.release(3);
+    query_pipeline.wait(phase_index);
+    query_pipeline.discard(phase_index);
+    query_pipeline.release(phase_index);
+    key_pipeline.wait(phase_index);
+    key_pipeline.discard(phase_index);
+    key_pipeline.release(phase_index);
+    let scores = scores.into_values();
 
     let Ok(values) =
         StridedReadView2D::from_shared_slice(value_f32, 0, CONTEXT_TOKENS, VALUE_TILE, VALUE_TILE)

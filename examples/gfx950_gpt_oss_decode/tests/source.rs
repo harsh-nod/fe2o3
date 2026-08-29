@@ -72,13 +72,15 @@ fn pipelined_attention_source_has_two_real_double_buffered_lds_pipelines() {
     assert!(source.contains("kernel-gpt-oss-decode-pipelined-attention"));
     assert!(source.contains("WorkgroupPipeline::<Bf16MfmaAFragment<'_>, 2, 64, 1>"));
     assert!(source.contains("WorkgroupPipeline::<Bf16MfmaBFragment<'_>, 2, 64, 1>"));
-    assert_eq!(source.matches("_pipeline.stage(").count(), 8);
-    assert_eq!(source.matches("_pipeline.write(").count(), 8);
-    assert_eq!(source.matches("_pipeline.commit(").count(), 8);
-    assert_eq!(source.matches("_pipeline.wait(").count(), 8);
-    assert_eq!(source.matches("_pipeline.consume(").count(), 8);
-    assert_eq!(source.matches("_pipeline.release(").count(), 8);
-    assert_eq!(source.matches("multiply_accumulate(").count(), 4);
+    assert!(source.contains("while phase_index < 4"));
+    assert_eq!(source.matches("_pipeline.stage(").count(), 4);
+    assert_eq!(source.matches("_pipeline.write(").count(), 4);
+    assert_eq!(source.matches("_pipeline.commit(").count(), 4);
+    assert_eq!(source.matches("_pipeline.wait(").count(), 4);
+    assert_eq!(source.matches("_pipeline.consume(").count(), 2);
+    assert_eq!(source.matches("_pipeline.discard(").count(), 2);
+    assert_eq!(source.matches("_pipeline.release(").count(), 4);
+    assert_eq!(source.matches("multiply_accumulate(").count(), 1);
 }
 
 #[test]
