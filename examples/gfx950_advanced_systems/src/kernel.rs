@@ -261,51 +261,102 @@ pub fn gfx950_moe_expert_rank_fp4_fp8_v1(
         .into_values();
     let subgroup = Gfx950Subgroup::current();
     let math = DeviceMath::current();
+    macro_rules! broadcast_component {
+        (
+            $output_component:literal,
+            $first0:ident,
+            $first1:ident,
+            $first2:ident,
+            $first3:ident,
+            $second0:ident,
+            $second1:ident,
+            $second2:ident,
+            $second3:ident,
+            $shared0:ident,
+            $shared1:ident,
+            $shared2:ident,
+            $shared3:ident
+        ) => {
+            let element = lane_index + $output_component * 64;
+            let token = element / OUTPUT;
+            let column = element - token * OUTPUT;
+            let source_lane = (((token / 4) * OUTPUT + column) as u32) & 63;
+            let $first0 = subgroup.broadcast_f32::<64>(first_values[0], source_lane);
+            let $first1 = subgroup.broadcast_f32::<64>(first_values[1], source_lane);
+            let $first2 = subgroup.broadcast_f32::<64>(first_values[2], source_lane);
+            let $first3 = subgroup.broadcast_f32::<64>(first_values[3], source_lane);
+            let $second0 = subgroup.broadcast_f32::<64>(second_values[0], source_lane);
+            let $second1 = subgroup.broadcast_f32::<64>(second_values[1], source_lane);
+            let $second2 = subgroup.broadcast_f32::<64>(second_values[2], source_lane);
+            let $second3 = subgroup.broadcast_f32::<64>(second_values[3], source_lane);
+            let $shared0 = subgroup.broadcast_f32::<64>(shared_values[0], source_lane);
+            let $shared1 = subgroup.broadcast_f32::<64>(shared_values[1], source_lane);
+            let $shared2 = subgroup.broadcast_f32::<64>(shared_values[2], source_lane);
+            let $shared3 = subgroup.broadcast_f32::<64>(shared_values[3], source_lane);
+        };
+    }
+    broadcast_component!(
+        0, first00, first01, first02, first03, second00, second01, second02, second03, shared00,
+        shared01, shared02, shared03
+    );
+    broadcast_component!(
+        1, first10, first11, first12, first13, second10, second11, second12, second13, shared10,
+        shared11, shared12, shared13
+    );
+    broadcast_component!(
+        2, first20, first21, first22, first23, second20, second21, second22, second23, shared20,
+        shared21, shared22, shared23
+    );
+    broadcast_component!(
+        3, first30, first31, first32, first33, second30, second31, second32, second33, shared30,
+        shared31, shared32, shared33
+    );
+
     macro_rules! compute_component {
-        ($output_component:literal) => {{
+        (
+            $output_component:literal,
+            $first0:ident,
+            $first1:ident,
+            $first2:ident,
+            $first3:ident,
+            $second0:ident,
+            $second1:ident,
+            $second2:ident,
+            $second3:ident,
+            $shared0:ident,
+            $shared1:ident,
+            $shared2:ident,
+            $shared3:ident
+        ) => {{
             let element = lane_index + $output_component * 64;
             let token = element / OUTPUT;
             let accumulator_component = token - (token / 4) * 4;
-            let column = element - token * OUTPUT;
-            let source_lane = (((token / 4) * OUTPUT + column) as u32) & 63;
-            let first0 = subgroup.broadcast_f32::<64>(first_values[0], source_lane);
-            let first1 = subgroup.broadcast_f32::<64>(first_values[1], source_lane);
-            let first2 = subgroup.broadcast_f32::<64>(first_values[2], source_lane);
-            let first3 = subgroup.broadcast_f32::<64>(first_values[3], source_lane);
-            let second0 = subgroup.broadcast_f32::<64>(second_values[0], source_lane);
-            let second1 = subgroup.broadcast_f32::<64>(second_values[1], source_lane);
-            let second2 = subgroup.broadcast_f32::<64>(second_values[2], source_lane);
-            let second3 = subgroup.broadcast_f32::<64>(second_values[3], source_lane);
-            let shared0 = subgroup.broadcast_f32::<64>(shared_values[0], source_lane);
-            let shared1 = subgroup.broadcast_f32::<64>(shared_values[1], source_lane);
-            let shared2 = subgroup.broadcast_f32::<64>(shared_values[2], source_lane);
-            let shared3 = subgroup.broadcast_f32::<64>(shared_values[3], source_lane);
             let first = if accumulator_component == 0 {
-                first0
+                $first0
             } else if accumulator_component == 1 {
-                first1
+                $first1
             } else if accumulator_component == 2 {
-                first2
+                $first2
             } else {
-                first3
+                $first3
             };
             let second = if accumulator_component == 0 {
-                second0
+                $second0
             } else if accumulator_component == 1 {
-                second1
+                $second1
             } else if accumulator_component == 2 {
-                second2
+                $second2
             } else {
-                second3
+                $second3
             };
             let shared = if accumulator_component == 0 {
-                shared0
+                $shared0
             } else if accumulator_component == 1 {
-                shared1
+                $shared1
             } else if accumulator_component == 2 {
-                shared2
+                $shared2
             } else {
-                shared3
+                $shared3
             };
             let route_base = token * TOP_K;
             let selected0 = top_experts[route_base];
@@ -329,10 +380,22 @@ pub fn gfx950_moe_expert_rank_fp4_fp8_v1(
             result
         }};
     }
-    let result0 = compute_component!(0);
-    let result1 = compute_component!(1);
-    let result2 = compute_component!(2);
-    let result3 = compute_component!(3);
+    let result0 = compute_component!(
+        0, first00, first01, first02, first03, second00, second01, second02, second03, shared00,
+        shared01, shared02, shared03
+    );
+    let result1 = compute_component!(
+        1, first10, first11, first12, first13, second10, second11, second12, second13, shared10,
+        shared11, shared12, shared13
+    );
+    let result2 = compute_component!(
+        2, first20, first21, first22, first23, second20, second21, second22, second23, shared20,
+        shared21, shared22, shared23
+    );
+    let result3 = compute_component!(
+        3, first30, first31, first32, first33, second30, second31, second32, second33, shared30,
+        shared31, shared32, shared33
+    );
     let Some(output_block) = thread_index.checked_block::<64, 4>() else {
         return;
     };
