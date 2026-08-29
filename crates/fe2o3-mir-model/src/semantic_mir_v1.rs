@@ -6068,6 +6068,15 @@ impl AdmittedInertSemanticMirV1 {
         select_kernel_body_v1(&self.request)
     }
 
+    /// Resolves the direct body or exact transparent `Result` wrapper body for
+    /// one specified member of the admitted root roster.
+    pub fn select_kernel_body_for_root_v1(
+        &self,
+        root: SemanticFunctionIdV1,
+    ) -> Option<SemanticKernelBodySelectionV1> {
+        select_kernel_body_for_root_v1(&self.request, root)
+    }
+
     /// Checks the metadata required before a rustc-owned importer may promote
     /// this inert record into the production transaction. This check grants no
     /// authority and does not authenticate the record's producer.
@@ -6130,6 +6139,16 @@ fn select_kernel_body_v1(
     let [root] = request.roots.as_ref() else {
         return None;
     };
+    select_kernel_body_for_root_v1(request, *root)
+}
+
+fn select_kernel_body_for_root_v1(
+    request: &InertSemanticMirRequestV1,
+    root: SemanticFunctionIdV1,
+) -> Option<SemanticKernelBodySelectionV1> {
+    if request.roots.binary_search(&root).is_err() {
+        return None;
+    }
     let root_function = request.functions.get(root.0 as usize)?;
     if root_function.role != SemanticFunctionRoleV1::KernelRoot {
         return None;
@@ -6143,21 +6162,15 @@ fn select_kernel_body_v1(
 
     let entry = root_function.blocks.get(root_function.entry.0 as usize)?;
     let SemanticTerminatorKindV1::Call(call) = &entry.terminator.kind else {
-        return Some(SemanticKernelBodySelectionV1 {
-            root: *root,
-            body: *root,
-        });
+        return Some(SemanticKernelBodySelectionV1 { root, body: root });
     };
     let SemanticCallableDeclV1::Defined { function: body } =
         request.callables.get(call.callee.0 as usize)?
     else {
-        return Some(SemanticKernelBodySelectionV1 {
-            root: *root,
-            body: *root,
-        });
+        return Some(SemanticKernelBodySelectionV1 { root, body: root });
     };
     let body_function = request.functions.get(body.0 as usize)?;
-    let wrapper_candidate = body != root
+    let wrapper_candidate = *body != root
         && body_function.role == SemanticFunctionRoleV1::InternalHelper
         && result_with_unit_ok(request, body_function.abi.source_output_type())
         && root_function.blocks.len() == 2
@@ -6172,10 +6185,7 @@ fn select_kernel_body_v1(
                 )
             });
     if !wrapper_candidate {
-        return Some(SemanticKernelBodySelectionV1 {
-            root: *root,
-            body: *root,
-        });
+        return Some(SemanticKernelBodySelectionV1 { root, body: root });
     }
 
     let destination = call.destination.as_ref()?;
@@ -6213,10 +6223,7 @@ fn select_kernel_body_v1(
     {
         return None;
     }
-    Some(SemanticKernelBodySelectionV1 {
-        root: *root,
-        body: *body,
-    })
+    Some(SemanticKernelBodySelectionV1 { root, body: *body })
 }
 
 fn wrapper_administrative_statement(statement: &SemanticStatementKindV1) -> bool {
@@ -17825,6 +17832,88 @@ mod private_tests {
             layout,
             shape,
         )
+    }
+
+    fn direct_selection_root(tag: u8, unit: SemanticTypeIdV1) -> SemanticFunctionDeclV1 {
+        let abi = SemanticFunctionAbiV1::new(
+            SemanticAbiIdentityV1::from_sha256([tag; 32]),
+            SemanticLayoutIdentityV1::from_sha256([tag.wrapping_add(1); 32]),
+            SemanticCanonAbiV1::GpuKernel,
+            false,
+            false,
+            vec![],
+            SemanticAbiValueV1::new(unit, SemanticAbiPassModeV1::Ignore),
+        )
+        .unwrap();
+        let block = SemanticBasicBlockV1::new(
+            SemanticBlockIdentityV1::from_sha256([tag.wrapping_add(2); 32]),
+            SemanticSourceProvenanceV1::unavailable(),
+            vec![],
+            SemanticTerminatorV1::new(
+                SemanticSourceProvenanceV1::unavailable(),
+                SemanticTerminatorKindV1::Return,
+            ),
+        )
+        .unwrap();
+        SemanticFunctionDeclV1::new(
+            SemanticFunctionIdentityV1::from_sha256([tag.wrapping_add(3); 32]),
+            SemanticFunctionRoleV1::KernelRoot,
+            SemanticItemDefinitionIdentityV1::from_sha256([tag.wrapping_add(4); 32]),
+            SemanticMonomorphizationIdentityV1::from_sha256([tag.wrapping_add(5); 32]),
+            SemanticGenericTypeArgumentsIdentityV1::from_sha256([tag.wrapping_add(6); 32]),
+            SemanticConstGenericArgumentsIdentityV1::from_sha256([tag.wrapping_add(7); 32]),
+            SemanticSourceProvenanceV1::unavailable(),
+            abi,
+            vec![],
+            SemanticBlockIdV1::from_index(0),
+            vec![block],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn specified_root_selection_preserves_multi_root_membership_and_role() {
+        let unit = SemanticTypeIdV1::from_index(0);
+        let request = InertSemanticMirRequestV1::new(
+            SemanticTargetDataLayoutV1::gfx942(SemanticLayoutIdentityV1::from_sha256([7; 32])),
+            vec![test_type(
+                8,
+                SemanticTypeLayoutV1::new(Some(0), 1).unwrap(),
+                SemanticTypeShapeV1::Unit,
+            )],
+            vec![],
+            vec![],
+            vec![],
+            vec![
+                direct_selection_root(10, unit),
+                direct_selection_root(30, unit),
+            ],
+            vec![
+                SemanticFunctionIdV1::from_index(0),
+                SemanticFunctionIdV1::from_index(1),
+            ],
+        )
+        .unwrap();
+
+        assert!(select_kernel_body_v1(&request).is_none());
+        for root in [
+            SemanticFunctionIdV1::from_index(0),
+            SemanticFunctionIdV1::from_index(1),
+        ] {
+            let selected = select_kernel_body_for_root_v1(&request, root).unwrap();
+            assert_eq!(selected.root(), root);
+            assert_eq!(selected.body(), root);
+        }
+        assert!(
+            select_kernel_body_for_root_v1(&request, SemanticFunctionIdV1::from_index(2)).is_none()
+        );
+
+        let mut hostile_role = request;
+        hostile_role.functions[1].role = SemanticFunctionRoleV1::InternalHelper;
+        assert!(
+            select_kernel_body_for_root_v1(&hostile_role, SemanticFunctionIdV1::from_index(1),)
+                .is_none()
+        );
     }
 
     fn bf16_signature_fixture(

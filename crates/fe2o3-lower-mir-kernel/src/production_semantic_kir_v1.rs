@@ -837,6 +837,82 @@ impl fmt::Debug for ProductionRankedSemanticProjectionReceiptV1 {
     }
 }
 
+/// Borrows one exact semantic root and ranked candidate to validate the
+/// structural conditions required by projection-receipt custody.
+///
+/// Success grants no receipt, translation-validation, Kernel IR, artifact, or
+/// launch authority. The semantic owner and ranked lowering remain with the
+/// caller so a module-wide owner can validate every member of an ordered
+/// ranked roster without cloning or splitting custody.
+pub fn validate_borrowed_ranked_semantic_projection_candidate_v1(
+    semantic: &ProductionSemanticMirOwnerV1,
+    selected_root: SemanticFunctionIdV1,
+    lowering: &ProductionRankedKernelLoweringInputV1,
+    ranked_ir: &str,
+    access_sources: &[ProductionRankedAccessSourceV1],
+) -> Result<(), ProductionSemanticKirErrorV1> {
+    semantic
+        .verify_equivalence()
+        .map_err(ProductionSemanticKirErrorV1::SemanticOwner)?;
+    if !mandatory_generic_checks_are_clean(lowering) {
+        return Err(unsupported(
+            0,
+            None,
+            None,
+            "ranked projection receipt contains a rejected mandatory kernel check",
+        ));
+    }
+    if ranked_ir.is_empty() {
+        return Err(unsupported(
+            0,
+            None,
+            None,
+            "ranked projection receipt has empty diagnostic IR",
+        ));
+    }
+    if !ranked_access_sources_are_well_formed(lowering, access_sources) {
+        return Err(unsupported(
+            0,
+            None,
+            None,
+            "ranked projection receipt has invalid access correspondence",
+        ));
+    }
+    let document = semantic.semantic();
+    let root = document
+        .roots()
+        .binary_search(&selected_root)
+        .ok()
+        .and_then(|index| document.roots().get(index))
+        .and_then(|root| document.functions().get(root.index() as usize))
+        .and_then(SemanticFunctionDeclV1::kernel_entry)
+        .ok_or_else(|| {
+            unsupported(
+                0,
+                None,
+                None,
+                "ranked projection receipt has no exact kernel root",
+            )
+        })?;
+    let function_name = std::str::from_utf8(root.export_symbol().as_bytes()).map_err(|_| {
+        unsupported(
+            0,
+            None,
+            None,
+            "ranked projection receipt has a non-UTF-8 kernel symbol",
+        )
+    })?;
+    if function_name != lowering.kernel().function_name() {
+        return Err(unsupported(
+            0,
+            None,
+            None,
+            "ranked projection receipt function identity changed",
+        ));
+    }
+    Ok(())
+}
+
 impl ProductionRankedSemanticProjectionReceiptV1 {
     /// Packages the result of the compiler's deterministic semantic projector.
     ///
@@ -850,66 +926,27 @@ impl ProductionRankedSemanticProjectionReceiptV1 {
         ranked_ir: String,
         access_sources: Vec<ProductionRankedAccessSourceV1>,
     ) -> Result<Self, ProductionSemanticKirErrorV1> {
-        semantic
-            .verify_equivalence()
-            .map_err(ProductionSemanticKirErrorV1::SemanticOwner)?;
-        if !mandatory_generic_checks_are_clean(&lowering) {
-            return Err(unsupported(
-                0,
-                None,
-                None,
-                "ranked projection receipt contains a rejected mandatory kernel check",
-            ));
-        }
-        if ranked_ir.is_empty() {
-            return Err(unsupported(
-                0,
-                None,
-                None,
-                "ranked projection receipt has empty diagnostic IR",
-            ));
-        }
-        if !ranked_access_sources_are_well_formed(&lowering, &access_sources) {
-            return Err(unsupported(
-                0,
-                None,
-                None,
-                "ranked projection receipt has invalid access correspondence",
-            ));
-        }
         let document = semantic.semantic();
-        let root = document
-            .roots()
-            .first()
-            .and_then(|root| document.functions().get(root.index() as usize))
-            .and_then(SemanticFunctionDeclV1::kernel_entry)
-            .ok_or_else(|| {
-                unsupported(
-                    0,
-                    None,
-                    None,
-                    "ranked projection receipt has no exact kernel root",
-                )
-            })?;
-        let function_name = std::str::from_utf8(root.export_symbol().as_bytes()).map_err(|_| {
-            unsupported(
-                0,
-                None,
-                None,
-                "ranked projection receipt has a non-UTF-8 kernel symbol",
-            )
-        })?;
-        if function_name != lowering.kernel().function_name() {
+        let [selected_root] = document.roots() else {
             return Err(unsupported(
                 0,
                 None,
                 None,
-                "ranked projection receipt function identity changed",
+                "ranked projection receipt has no exact kernel root",
             ));
-        }
+        };
+        validate_borrowed_ranked_semantic_projection_candidate_v1(
+            &semantic,
+            *selected_root,
+            &lowering,
+            &ranked_ir,
+            &access_sources,
+        )?;
+        let semantic_sha256 = *document.semantic_sha256().as_bytes();
+        let function_name = lowering.kernel().function_name().to_owned();
         Ok(Self {
-            semantic_sha256: *document.semantic_sha256().as_bytes(),
-            function_name: function_name.to_owned(),
+            semantic_sha256,
+            function_name,
             semantic,
             lowering,
             ranked_ir,

@@ -43,6 +43,9 @@ pub(crate) enum ProductionPipelineError {
     SemanticMiddleEnd(fe2o3_pliron::ProductionSemanticMirErrorV1),
     RankedProjection(crate::production_ranked_projection_v1::ProductionRankedProjectionErrorV1),
     RankedVerification(crate::production_ranked_projection_v1::ProductionRankedVerificationErrorV1),
+    MultiRootTargetNeutralLowering {
+        roots: usize,
+    },
     TargetNeutralLowering(fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1),
     MissingMirPlironTranslationValidation,
     SimulationKernelIrV7(fe2o3_kernel_ir::VerifiedCanonicalKernelIrErrorV7),
@@ -93,6 +96,10 @@ impl fmt::Display for ProductionPipelineError {
             Self::RankedVerification(error) => {
                 write!(formatter, "production compilation ranked verification failed: {error}")
             }
+            Self::MultiRootTargetNeutralLowering { roots } => write!(
+                formatter,
+                "production compilation retained a verified ranked roster with {roots} kernel roots; target-neutral Kernel IR lowering remains fail-closed until it can consume the complete roster"
+            ),
             Self::TargetNeutralLowering(error) => {
                 write!(formatter, "production compilation target-neutral lowering failed: {error}")
             }
@@ -215,6 +222,7 @@ impl std::error::Error for ProductionPipelineError {
             Self::CustomLlvmConfiguration
             | Self::EmptyCollectedDeviceClosure
             | Self::MissingMirPlironTranslationValidation
+            | Self::MultiRootTargetNeutralLowering { .. }
             | Self::RustcLineageMismatch
             | Self::SimulationProductionKirV9
             | Self::SimulationDebugMapCorrespondence(_)
@@ -1477,6 +1485,16 @@ fn debug_block_ordinal_v1(
 }
 
 impl RankedVerifiedProductionCompilation {
+    pub(crate) fn ranked_roots(
+        &self,
+    ) -> &[crate::production_ranked_projection_v1::ProductionRankedRootProgramV1] {
+        self.ranked.roots()
+    }
+
+    pub(crate) fn ranked_root_count(&self) -> usize {
+        self.ranked.root_count()
+    }
+
     pub(crate) fn ranked_ir(&self) -> &str {
         self.ranked.ranked_ir()
     }
@@ -1787,20 +1805,28 @@ impl<'tcx> ProductionCompilation<'tcx, EquivalentSemanticMirStage> {
             semantic_mir.semantic(),
         )
         .map_err(ProductionPipelineError::DescriptorEvidence)?;
-        let [typed_root] = bindings.typed_descriptor_roots.as_slice() else {
-            return Err(ProductionPipelineError::Geometry(
-                crate::production_geometry_v1::ProductionGeometryErrorV1::KernelClosure,
-            ));
-        };
-        let source_launch = typed_root
-            .source_launch()
-            .ok_or(ProductionPipelineError::Geometry(
-            crate::production_geometry_v1::ProductionGeometryErrorV1::NonExactDescriptorWorkgroup,
-        ))?;
+        let ranked_roots = bindings
+            .typed_descriptor_roots
+            .iter()
+            .map(|typed_root| {
+                let source_launch = typed_root.source_launch().ok_or(
+                    ProductionPipelineError::Geometry(
+                        crate::production_geometry_v1::ProductionGeometryErrorV1::NonExactDescriptorWorkgroup,
+                    ),
+                )?;
+                Ok(
+                    crate::production_ranked_projection_v1::ProductionRankedRootInputV1::new(
+                        typed_root.logical_name(),
+                        typed_root.kernel_binding_bytes(),
+                        source_launch,
+                    ),
+                )
+            })
+            .collect::<Result<Vec<_>, ProductionPipelineError>>()?;
         let ranked =
             crate::production_ranked_projection_v1::project_and_verify_ranked_semantic_mir_v1(
                 semantic_mir,
-                source_launch,
+                &ranked_roots,
                 &bindings.reference_effect_bindings,
             )
             .map_err(ProductionPipelineError::RankedProjection)?;
@@ -1813,8 +1839,30 @@ impl RankedVerifiedProductionCompilation {
         self,
     ) -> Result<TargetNeutralProductionCompilation, ProductionPipelineError> {
         let Self { ranked, bindings } = self;
-        let (receipt, ranked_verification) = ranked
-            .into_verified_receipt()
+        let roster_receipt = ranked
+            .into_verified_roster_receipt()
+            .map_err(ProductionPipelineError::RankedVerification)?;
+        debug_assert!(!roster_receipt.grants_artifact_or_launch_authority());
+        debug_assert!(roster_receipt.verify_equivalence().is_ok());
+        let root_count = roster_receipt.root_count();
+        if root_count != 1 {
+            drop((roster_receipt, bindings));
+            return Err(ProductionPipelineError::MultiRootTargetNeutralLowering {
+                roots: root_count,
+            });
+        }
+        let source_rank = roster_receipt
+            .source_order_roots()
+            .first()
+            .map(|root| root.source_rank())
+            .ok_or(ProductionPipelineError::MultiRootTargetNeutralLowering { roots: 0 })?;
+        debug_assert_eq!(roster_receipt.canonical_kernel_order(), &[0]);
+        debug_assert_ne!(
+            roster_receipt.canonical_roster_identity().as_bytes(),
+            &[0; 32],
+        );
+        let (receipt, ranked_verification) = roster_receipt
+            .into_singleton_verified_receipt()
             .map_err(ProductionPipelineError::RankedVerification)?;
         debug_assert_eq!(
             ranked_verification.has_authenticated_functional_verification(),
@@ -1823,17 +1871,6 @@ impl RankedVerifiedProductionCompilation {
                 .has_retained_policy_checked_refinement_staging()
         );
         debug_assert!(ranked_verification.retained_functional_verification_is_coherent());
-        let [typed_root] = bindings.typed_descriptor_roots.as_slice() else {
-            return Err(ProductionPipelineError::Geometry(
-                crate::production_geometry_v1::ProductionGeometryErrorV1::KernelClosure,
-            ));
-        };
-        let source_rank = typed_root
-            .source_launch()
-            .ok_or(ProductionPipelineError::Geometry(
-                crate::production_geometry_v1::ProductionGeometryErrorV1::NonExactDescriptorWorkgroup,
-            ))?
-            .rank();
         let lowered =
             fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1::try_lower_after_ranked_checks(
                 receipt,
@@ -1995,16 +2032,45 @@ mod tests {
         assert!(semantic < parallel && parallel < aggregate);
 
         let pipeline = include_str!("production_pipeline.rs");
-        let verification = pipeline
-            .find(".into_verified_receipt()")
-            .expect("ranked verification transition");
+        let roster = pipeline
+            .find(".into_verified_roster_receipt()")
+            .expect("ranked roster verification transition");
+        let singleton = pipeline
+            .find(".into_singleton_verified_receipt()")
+            .expect("singleton ranked receipt transition");
         let lowering = pipeline
             .find("ProductionSemanticKirOwnerV1::try_lower_after_ranked_checks")
             .expect("KIR lowering transition");
         assert!(
-            verification < lowering,
+            roster < singleton && singleton < lowering,
             "KIR lowering ran before functional verification"
         );
+    }
+
+    #[test]
+    fn ranked_roster_receipt_stops_before_singleton_kir_authority() {
+        let pipeline = include_str!("production_pipeline.rs");
+        let roster = pipeline
+            .find(".into_verified_roster_receipt()")
+            .expect("ranked roster receipt transition");
+        let root_count = pipeline[roster..]
+            .find("let root_count = roster_receipt.root_count()")
+            .map(|offset| roster + offset)
+            .expect("roster cardinality gate");
+        let multi_root_stop = pipeline[root_count..]
+            .find("ProductionPipelineError::MultiRootTargetNeutralLowering")
+            .map(|offset| root_count + offset)
+            .expect("explicit pre-KIR multi-root stop");
+        let singleton = pipeline[multi_root_stop..]
+            .find(".into_singleton_verified_receipt()")
+            .map(|offset| multi_root_stop + offset)
+            .expect("singleton receipt authority");
+        let kir = pipeline[singleton..]
+            .find("ProductionSemanticKirOwnerV1::try_lower_after_ranked_checks")
+            .map(|offset| singleton + offset)
+            .expect("KIR authority transition");
+        assert!(roster < root_count && root_count < multi_root_stop);
+        assert!(multi_root_stop < singleton && singleton < kir);
     }
 
     #[test]

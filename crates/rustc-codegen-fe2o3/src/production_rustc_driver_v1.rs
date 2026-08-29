@@ -122,17 +122,41 @@ fn extract_ranked_memory_in_active_session_v1(tcx: TyCtxt<'_>) -> Result<(), Str
     )?
     .verify_general_kernel_checks()
     .map_err(|error| error.to_string())?;
-    eprintln!(
-        "fe2o3 production extraction: Rust -> semantic MIR -> ranked PLIRON -> safety-verified lowering input for `{}`; {} semantic function(s), {} callable record(s), {} retained identity/transaction binding(s), artifact/launch authority {}, all mandatory kernel checks clean {}, bounds clean {}\n{}",
-        ranked.function_name(),
-        ranked.semantic_function_count(),
-        ranked.semantic_callable_count(),
-        ranked.retained_identity_and_transaction_binding_count(),
-        ranked.grants_artifact_or_launch_authority(),
-        ranked.all_kernel_checks_are_clean(),
-        ranked.bounds_are_clean(),
-        ranked.ranked_ir(),
-    );
+    if ranked.ranked_root_count() == 1 {
+        eprintln!(
+            "fe2o3 production extraction: Rust -> semantic MIR -> ranked PLIRON -> safety-verified lowering input for `{}`; {} semantic function(s), {} callable record(s), {} retained identity/transaction binding(s), artifact/launch authority {}, all mandatory kernel checks clean {}, bounds clean {}\n{}",
+            ranked.function_name(),
+            ranked.semantic_function_count(),
+            ranked.semantic_callable_count(),
+            ranked.retained_identity_and_transaction_binding_count(),
+            ranked.grants_artifact_or_launch_authority(),
+            ranked.all_kernel_checks_are_clean(),
+            ranked.bounds_are_clean(),
+            ranked.ranked_ir(),
+        );
+    } else {
+        eprintln!(
+            "fe2o3 production extraction: Rust -> semantic MIR -> ordered ranked PLIRON roster; {} kernel root(s), {} semantic function(s), {} callable record(s), {} retained identity/transaction binding(s), artifact/launch authority {}, all mandatory kernel checks clean {}, bounds clean {}",
+            ranked.ranked_root_count(),
+            ranked.semantic_function_count(),
+            ranked.semantic_callable_count(),
+            ranked.retained_identity_and_transaction_binding_count(),
+            ranked.grants_artifact_or_launch_authority(),
+            ranked.all_kernel_checks_are_clean(),
+            ranked.bounds_are_clean(),
+        );
+        for (ordinal, root) in ranked.ranked_roots().iter().enumerate() {
+            eprintln!(
+                "ranked root {ordinal}: `{}`, kernel binding {}, source rank {}, all mandatory kernel checks clean {}, bounds clean {}\n{}",
+                root.function_name(),
+                lower_hex_v1(root.kernel_binding()),
+                root.source_rank(),
+                root.all_kernel_checks_are_clean(),
+                root.bounds_are_clean(),
+                root.ranked_ir(),
+            );
+        }
+    }
     Ok(())
 }
 

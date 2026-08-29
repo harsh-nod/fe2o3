@@ -55,6 +55,14 @@ pub(crate) struct TypedDescriptorRootV1 {
 }
 
 impl TypedDescriptorRootV1 {
+    pub(crate) fn logical_name(&self) -> &str {
+        &self.logical_name
+    }
+
+    pub(crate) const fn kernel_binding_bytes(&self) -> [u8; 32] {
+        self.kernel_binding.as_bytes()
+    }
+
     pub(crate) const fn source_launch(&self) -> Option<&LaunchContract> {
         self.source_launch.as_ref()
     }
@@ -648,27 +656,91 @@ pub(crate) fn validate_production_v1_semantic_ownership_evidence(
     typed_roots: &[TypedDescriptorRootV1],
     semantic: &fe2o3_mir_model::semantic_mir_v1::AdmittedInertSemanticMirV1,
 ) -> Result<(), CompilerDescriptorError> {
+    let semantic_roots = semantic
+        .roots()
+        .iter()
+        .map(|semantic_root| {
+            let function = semantic
+                .functions()
+                .get(semantic_root.index() as usize)
+                .ok_or(CompilerDescriptorError::ProductionDescriptorMismatch(
+                    "semantic root function",
+                ))?;
+            let entry = function.kernel_entry().ok_or(
+                CompilerDescriptorError::ProductionDescriptorMismatch("semantic kernel entry"),
+            )?;
+            Ok((function, *entry.kernel_binding_identity().as_bytes()))
+        })
+        .collect::<Result<Vec<_>, CompilerDescriptorError>>()?;
+    let typed_bindings = typed_roots
+        .iter()
+        .map(|root| root.kernel_binding.as_bytes())
+        .collect::<Vec<_>>();
+    let semantic_bindings = semantic_roots
+        .iter()
+        .map(|(_, binding)| *binding)
+        .collect::<Vec<_>>();
+    let matched_semantic_roots = match_exact_production_root_roster_v1(
+        typed_bindings.as_slice(),
+        semantic_bindings.as_slice(),
+    )?;
+
+    for (root, semantic_index) in typed_roots.iter().zip(matched_semantic_roots) {
+        validate_production_v1_semantic_root_ownership_evidence(
+            root,
+            semantic,
+            semantic_roots[semantic_index].0,
+        )?;
+    }
+    Ok(())
+}
+
+fn match_exact_production_root_roster_v1(
+    typed_bindings: &[[u8; 32]],
+    semantic_bindings: &[[u8; 32]],
+) -> Result<Vec<usize>, CompilerDescriptorError> {
+    if typed_bindings.is_empty() || typed_bindings.len() != semantic_bindings.len() {
+        return Err(CompilerDescriptorError::ProductionDescriptorMismatch(
+            "complete typed/semantic root roster",
+        ));
+    }
+
+    let mut semantic_indices = BTreeMap::new();
+    for (index, binding) in semantic_bindings.iter().copied().enumerate() {
+        if semantic_indices.insert(binding, index).is_some() {
+            return Err(CompilerDescriptorError::ProductionDescriptorMismatch(
+                "unique semantic kernel binding roster",
+            ));
+        }
+    }
+
+    let mut matched = Vec::with_capacity(typed_bindings.len());
+    for binding in typed_bindings {
+        let Some(index) = semantic_indices.remove(binding) else {
+            return Err(CompilerDescriptorError::ProductionDescriptorMismatch(
+                "exact typed/semantic kernel binding roster",
+            ));
+        };
+        matched.push(index);
+    }
+    if !semantic_indices.is_empty() {
+        return Err(CompilerDescriptorError::ProductionDescriptorMismatch(
+            "exact typed/semantic kernel binding roster",
+        ));
+    }
+    Ok(matched)
+}
+
+fn validate_production_v1_semantic_root_ownership_evidence(
+    root: &TypedDescriptorRootV1,
+    semantic: &fe2o3_mir_model::semantic_mir_v1::AdmittedInertSemanticMirV1,
+    function: &fe2o3_mir_model::semantic_mir_v1::SemanticFunctionDeclV1,
+) -> Result<(), CompilerDescriptorError> {
     use fe2o3_artifacts::RustcAbiClassV1;
     use fe2o3_mir_model::semantic_mir_v1::{
         SemanticAbiPassModeV1, SemanticSourceArgumentOwnershipV1,
     };
 
-    let [root] = typed_roots else {
-        return Err(CompilerDescriptorError::ProductionDescriptorMismatch(
-            "one complete typed root",
-        ));
-    };
-    let [semantic_root] = semantic.roots() else {
-        return Err(CompilerDescriptorError::ProductionDescriptorMismatch(
-            "one semantic root",
-        ));
-    };
-    let function = semantic
-        .functions()
-        .get(semantic_root.index() as usize)
-        .ok_or(CompilerDescriptorError::ProductionDescriptorMismatch(
-            "semantic root function",
-        ))?;
     let entry =
         function
             .kernel_entry()
@@ -2252,6 +2324,53 @@ mod tests {
             first.table().kernels()[0].executable_ir_evidence(),
             second.table().kernels()[0].executable_ir_evidence()
         );
+    }
+
+    #[test]
+    fn production_semantic_root_roster_matches_by_binding_not_root_order() {
+        let alpha = [0xa1; 32];
+        let zeta = [0x7a; 32];
+
+        assert_eq!(
+            match_exact_production_root_roster_v1(&[alpha], &[alpha]).unwrap(),
+            vec![0],
+        );
+        assert_eq!(
+            match_exact_production_root_roster_v1(&[alpha, zeta], &[zeta, alpha]).unwrap(),
+            vec![1, 0],
+        );
+    }
+
+    #[test]
+    fn production_semantic_root_roster_rejects_missing_duplicate_and_substituted_bindings() {
+        let alpha = [0xa1; 32];
+        let zeta = [0x7a; 32];
+        let substituted = [0xfe; 32];
+
+        assert!(matches!(
+            match_exact_production_root_roster_v1(&[alpha, zeta], &[alpha]),
+            Err(CompilerDescriptorError::ProductionDescriptorMismatch(
+                "complete typed/semantic root roster"
+            ))
+        ));
+        assert!(matches!(
+            match_exact_production_root_roster_v1(&[alpha, zeta], &[alpha, alpha]),
+            Err(CompilerDescriptorError::ProductionDescriptorMismatch(
+                "unique semantic kernel binding roster"
+            ))
+        ));
+        assert!(matches!(
+            match_exact_production_root_roster_v1(&[alpha, alpha], &[alpha, zeta]),
+            Err(CompilerDescriptorError::ProductionDescriptorMismatch(
+                "exact typed/semantic kernel binding roster"
+            ))
+        ));
+        assert!(matches!(
+            match_exact_production_root_roster_v1(&[alpha, substituted], &[alpha, zeta]),
+            Err(CompilerDescriptorError::ProductionDescriptorMismatch(
+                "exact typed/semantic kernel binding roster"
+            ))
+        ));
     }
 
     #[test]

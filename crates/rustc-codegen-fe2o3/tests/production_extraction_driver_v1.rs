@@ -183,6 +183,84 @@ fn attributed_kernel_is_recollected_inside_a_real_amdgcn_dependency_graph() {
     );
 }
 
+#[test]
+#[ignore = "requires the pinned nightly rust-src component and AMD target"]
+fn two_kernel_collection_reaches_the_explicit_pre_kir_multi_root_boundary() {
+    // The current general typed frontend authenticates only rank-one 64x1x1
+    // or 256x1x1 source launches. This live vertical therefore proves two
+    // independently derived rank-one contracts; heterogeneous rank remains
+    // covered at the source-layout validation boundary until the frontend can
+    // honestly produce another rank.
+    let target = ScratchTarget::new();
+    let llvm_output = target.path().join("two-root.ll");
+    let output = Command::new(env!("CARGO"))
+        .current_dir(workspace())
+        .env(
+            "RUSTC_WORKSPACE_WRAPPER",
+            env!("CARGO_BIN_EXE_fe2o3-rustc-extract"),
+        )
+        .env(
+            "FE2O3_EXTRACT_CRATE_V1",
+            "fe2o3_production_extraction_fixture",
+        )
+        .env("FE2O3_EXTRACT_AMDGPU_LLVM_PATH_V1", &llvm_output)
+        .env(
+            "FE2O3_CARGO_METADATA_BUILD_OBSERVATION_V2",
+            "55".repeat(32),
+        )
+        .env("FE2O3_CRATE_BINDING_ID_V1", "77".repeat(32))
+        .env_remove("RUSTFLAGS")
+        .env_remove("CARGO_ENCODED_RUSTFLAGS")
+        .env(
+            "CARGO_TARGET_AMDGCN_AMD_AMDHSA_RUSTFLAGS",
+            "-Zalways-encode-mir -Ctarget-cpu=gfx942 -Ctarget-feature=-xnack,+wavefrontsize64,-wavefrontsize32",
+        )
+        .args([
+            "check",
+            "--locked",
+            "-Zbuild-std=core",
+            "-p",
+            "fe2o3-production-extraction-fixture",
+            "--features",
+            "multi-root-ownership",
+            "--target",
+            "amdgcn-amd-amdhsa",
+            "--target-dir",
+        ])
+        .arg(&target.path)
+        .output()
+        .expect("run two-kernel AMD extraction fixture");
+    let stderr = String::from_utf8(output.stderr).expect("rustc diagnostic is UTF-8");
+
+    assert!(
+        !output.status.success(),
+        "two-kernel production extraction unexpectedly cleared the pre-Kernel-IR roster boundary",
+    );
+    let expected = "production compilation retained a verified ranked roster with 2 kernel roots; target-neutral Kernel IR lowering remains fail-closed until it can consume the complete roster";
+    assert_eq!(
+        stderr.matches(expected).count(),
+        1,
+        "two-kernel production extraction did not stop at the exact pre-Kernel-IR roster boundary:\n{stderr}",
+    );
+    assert!(
+        !llvm_output.exists(),
+        "two-kernel production extraction wrote target LLVM past the pre-Kernel-IR roster boundary",
+    );
+    for forbidden in [
+        "production descriptor evidence has an internal",
+        "production compilation geometry validation failed",
+        "semantic-to-ranked projection rejected a semantic closure that is neither one kernel root",
+        "production extraction found no registered kernel",
+        "one complete typed root",
+        "one semantic root",
+    ] {
+        assert!(
+            !stderr.contains(forbidden),
+            "two-kernel production extraction entered an earlier forbidden path {forbidden:?}:\n{stderr}",
+        );
+    }
+}
+
 fn run_extraction(target: &ScratchTarget) -> String {
     let output = Command::new(env!("CARGO"))
         .current_dir(workspace())

@@ -56,6 +56,32 @@ mod static_registration;
 mod test_temp_dir;
 mod trusted_device_items;
 
+/// Opaque move-only custody for an exact compiler-ranked root roster.
+///
+/// The compiler alone constructs and consumes this stage. It is named here so
+/// compile-fail coverage can enforce that safe callers cannot clone it or
+/// dismantle its private semantic and per-root custody.
+///
+/// ```compile_fail
+/// use rustc_codegen_fe2o3::ProductionRankedSemanticProjectionRosterReceiptV1;
+/// fn requires_clone<T: Clone>() {}
+/// requires_clone::<ProductionRankedSemanticProjectionRosterReceiptV1>();
+/// ```
+///
+/// ```compile_fail
+/// use rustc_codegen_fe2o3::ProductionRankedSemanticProjectionRosterReceiptV1;
+/// fn dismantle(receipt: ProductionRankedSemanticProjectionRosterReceiptV1) {
+///     let ProductionRankedSemanticProjectionRosterReceiptV1 {
+///         semantic_owner: _,
+///         source_order_roots: _,
+///         canonical_kernel_order: _,
+///         canonical_roster_identity: _,
+///     } = receipt;
+/// }
+/// ```
+#[doc(hidden)]
+pub use production_ranked_projection_v1::ProductionRankedSemanticProjectionRosterReceiptV1;
+
 #[doc(hidden)]
 pub use production_rustc_driver_v1::{
     run_production_amdgpu_llvm_extraction_driver_v1, run_production_extraction_driver_v1,

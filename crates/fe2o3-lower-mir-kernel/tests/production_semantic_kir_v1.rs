@@ -8,9 +8,10 @@ use fe2o3_kernel_ir::{
 };
 use fe2o3_lower_mir_kernel::{
     InertCanonicalFormalMemoryAdmissionEvidenceV3, PRODUCTION_FORMAL_MEMORY_WITNESS_EXTENT_V1,
-    ProductionFormalMemoryOwnerV1, ProductionRankedSemanticProjectionReceiptV1,
-    ProductionSemanticKirErrorV1, ProductionSemanticKirLimitsV1, ProductionSemanticKirOwnerV1,
-    ProductionSemanticKirResourceV1, SemanticKirSyntheticOperationRuleV1,
+    ProductionFormalMemoryOwnerV1, ProductionRankedAccessSourceV1,
+    ProductionRankedSemanticProjectionReceiptV1, ProductionSemanticKirErrorV1,
+    ProductionSemanticKirLimitsV1, ProductionSemanticKirOwnerV1, ProductionSemanticKirResourceV1,
+    SemanticKirSyntheticOperationRuleV1, validate_borrowed_ranked_semantic_projection_candidate_v1,
 };
 use fe2o3_mir_model::semantic_mir_v1::*;
 use fe2o3_pliron::{
@@ -1483,6 +1484,121 @@ fn semantic_owner(
         ProductionSemanticMirLimitsV1::default(),
     )
     .unwrap()
+}
+
+fn checked_noop_ranked_input(
+    function_name: &str,
+) -> fe2o3_pliron::ProductionRankedKernelLoweringInputV1 {
+    let kernel = ProductionRankedKernelV1::new(
+        function_name,
+        0,
+        vec![ProductionRankedBlockV1::new(
+            vec![],
+            ProductionRankedTerminatorV1::Return,
+        )],
+    )
+    .unwrap();
+    let construction =
+        ProductionConstructionV1::ranked_kernel("borrowed_projection_validation", kernel).unwrap();
+    compile_ranked_kernel_for_lowering_v1(construction, ProductionSessionLimitsV1::default())
+        .unwrap()
+}
+
+#[test]
+fn borrowed_projection_validation_rejects_root_ir_identity_and_access_hostility() {
+    let owner = semantic_owner(false, false);
+    let exact = checked_noop_ranked_input("semantic_kir_test");
+    validate_borrowed_ranked_semantic_projection_candidate_v1(
+        &owner,
+        SemanticFunctionIdV1::from_index(0),
+        &exact,
+        "func @semantic_kir_test { kernel.return }",
+        &[],
+    )
+    .unwrap();
+
+    let missing_root = validate_borrowed_ranked_semantic_projection_candidate_v1(
+        &owner,
+        SemanticFunctionIdV1::from_index(1),
+        &exact,
+        "func @semantic_kir_test { kernel.return }",
+        &[],
+    )
+    .unwrap_err();
+    assert!(
+        missing_root
+            .to_string()
+            .contains("ranked projection receipt has no exact kernel root")
+    );
+
+    let empty_ir = validate_borrowed_ranked_semantic_projection_candidate_v1(
+        &owner,
+        SemanticFunctionIdV1::from_index(0),
+        &exact,
+        "",
+        &[],
+    )
+    .unwrap_err();
+    assert!(
+        empty_ir
+            .to_string()
+            .contains("ranked projection receipt has empty diagnostic IR")
+    );
+
+    let invalid_access = [ProductionRankedAccessSourceV1::new(0, None, 0, 0, 0)];
+    let access_error = validate_borrowed_ranked_semantic_projection_candidate_v1(
+        &owner,
+        SemanticFunctionIdV1::from_index(0),
+        &exact,
+        "func @semantic_kir_test { kernel.return }",
+        &invalid_access,
+    )
+    .unwrap_err();
+    assert!(
+        access_error
+            .to_string()
+            .contains("ranked projection receipt has invalid access correspondence")
+    );
+
+    let substituted = checked_noop_ranked_input("substituted_kernel");
+    let identity_error = validate_borrowed_ranked_semantic_projection_candidate_v1(
+        &owner,
+        SemanticFunctionIdV1::from_index(0),
+        &substituted,
+        "func @substituted_kernel { kernel.return }",
+        &[],
+    )
+    .unwrap_err();
+    assert!(
+        identity_error
+            .to_string()
+            .contains("ranked projection receipt function identity changed")
+    );
+}
+
+#[test]
+fn consuming_projection_receipt_uses_the_borrowed_structural_validation() {
+    let borrowed_error = validate_borrowed_ranked_semantic_projection_candidate_v1(
+        &semantic_owner(false, false),
+        SemanticFunctionIdV1::from_index(0),
+        &checked_noop_ranked_input("substituted_kernel"),
+        "func @substituted_kernel { kernel.return }",
+        &[],
+    )
+    .unwrap_err()
+    .to_string();
+    let consuming_error =
+        ProductionRankedSemanticProjectionReceiptV1::from_unvalidated_projection_candidate(
+            semantic_owner(false, false),
+            checked_noop_ranked_input("substituted_kernel"),
+            "func @substituted_kernel { kernel.return }".to_owned(),
+            vec![],
+        )
+        .unwrap_err()
+        .to_string();
+
+    assert_eq!(borrowed_error, consuming_error);
+    assert!(consuming_error.contains("ranked projection receipt function identity changed"));
 }
 
 #[test]
