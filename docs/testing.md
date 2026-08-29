@@ -320,6 +320,15 @@ cargo test --locked -p cargo-fe2o3 \
   --test worker_v3_load_envelope_vertical -- --test-threads=1
 ```
 
+The suite constructs a typed V4 proof association inside the frozen V3
+capsule, independently decodes all five compiler-stage preimages, reimports the
+exact signed aggregate MIR-to-live-PLIRON receipt, and checks its middle-end V5
+binding. It also asserts that the explicit synthetic verifier retains no
+production proof-input owner and cannot report protected compiler/signature
+custody. On the 2026-08-28 MI300X qualification tree, all 29 serialized cases
+passed, including publication-turnover, compiler-evidence substitution,
+seccomp, restart, load-cleanup, and descriptor-lineage failures.
+
 ## Guard tests
 
 The native-Linux and WSL device-node selection logic has a host-only test:
