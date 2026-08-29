@@ -12,8 +12,8 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     ProfilerBundleComparisonV4, ProfilerCapabilityV4, ProfilerCaptureGoalV4, ProfilerListKindV4,
-    ProfilerNextCapturePlanV4, ProfilerPageRequestV4, ProfilerPageV4, ProfilerQueryContextV4,
-    ProfilerQueryErrorV4, ProfilerQueryLimitsV4, ProfilerQueryRequestV4, ProfilerQueryResponseV4,
+    ProfilerPageRequestV4, ProfilerPageV4, ProfilerQueryContextV4, ProfilerQueryErrorV4,
+    ProfilerQueryItemV4, ProfilerQueryLimitsV4, ProfilerQueryRequestV4, ProfilerQueryResponseV4,
     ProfilerQuerySessionV4, compare_profiler_bundles_v4, encode_profiler_bundle_comparison_v4,
 };
 
@@ -28,6 +28,8 @@ pub const DEFAULT_AGENT_PROFILER_OPEN_CAPTURES_V1: u8 = 4;
 const AGENT_PROFILER_CONTRACT_DOMAIN_V1: &[u8] = b"fe2o3.agent-profiler.contract.v1\0";
 const AGENT_PROFILER_CONTRACT_BYTES_V1: &[u8] =
     b"read-only;bundle-v4;bounded-jsonl;no-execution-authority";
+const AGENT_PROFILER_RESPONSE_BINDING_DOMAIN_V1: &[u8] =
+    b"fe2o3.agent-profiler.response-binding.v1\0";
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -101,6 +103,7 @@ pub enum AgentProfilerUnavailableReasonV1 {
     AuthenticatedSourceCorrelationNotCaptured,
     WorkgroupWaveLaneHierarchyNotCaptured,
     CausalExplanationNotEstablished,
+    CapturePlanRequirementsNotRepresented,
     ReproducerInputsNotCaptured,
 }
 
@@ -419,8 +422,16 @@ pub struct AgentProfilerOpenAuditV1 {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(tag = "classification", rename_all = "snake_case")]
+pub enum AgentProfilerAggregateOriginV1 {
+    Homogeneous { origin: TruthOriginV1 },
+    Mixed { origins: Vec<TruthOriginV1> },
+    Empty,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct AgentProfilerEvidenceV1 {
-    pub origin: TruthOriginV1,
+    pub origin: AgentProfilerAggregateOriginV1,
     pub service_contract: ContentIdentityRecordV1,
     pub captures: Vec<ContentIdentityRecordV1>,
     pub records: Vec<CaptureIdentityV1>,
@@ -474,11 +485,6 @@ pub enum AgentProfilerResultV1 {
         comparison: ProfilerBundleComparisonV4,
         evidence: AgentProfilerEvidenceV1,
     },
-    Plan {
-        context: ProfilerQueryContextV4,
-        plan: ProfilerNextCapturePlanV4,
-        evidence: AgentProfilerEvidenceV1,
-    },
     Unavailable {
         operation: AgentProfilerOperationV1,
         reason: AgentProfilerUnavailableReasonV1,
@@ -496,6 +502,7 @@ pub enum AgentProfilerErrorCodeV1 {
     RequestBudgetExhausted,
     RequestTooLarge,
     InvalidBundleEncoding,
+    BundleTooLarge,
     InvalidBundle,
     CaptureLimitReached,
     CaptureNotOpen,
@@ -506,21 +513,28 @@ pub enum AgentProfilerErrorCodeV1 {
     InternalEvidenceMismatch,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AgentProfilerResponseBindingV1([u8; 32]);
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum AgentProfilerResponseV1 {
     Ok {
         schema: &'static str,
         request_id: u64,
-        response_revision: u32,
+        response_revision: u64,
         value: Box<AgentProfilerResultV1>,
+        #[serde(skip)]
+        state_binding: AgentProfilerResponseBindingV1,
     },
     Error {
         schema: &'static str,
         request_id: Option<u64>,
-        response_revision: u32,
+        response_revision: u64,
         code: AgentProfilerErrorCodeV1,
         terminal: bool,
+        #[serde(skip)]
+        state_binding: AgentProfilerResponseBindingV1,
     },
 }
 
@@ -543,7 +557,10 @@ pub struct AgentProfilerServiceV1 {
     contract: ContentIdentityRecordV1,
     captures: BTreeMap<CaptureIdentityV1, OpenCaptureV1>,
     request_ids: BTreeSet<u64>,
-    response_revision: u32,
+    request_count: u32,
+    response_revision: u64,
+    response_bindings: BTreeMap<u64, AgentProfilerResponseBindingV1>,
+    terminal_response: Option<AgentProfilerResponseV1>,
 }
 
 impl AgentProfilerServiceV1 {
@@ -558,21 +575,31 @@ impl AgentProfilerServiceV1 {
             contract: service_contract_identity()?,
             captures: BTreeMap::new(),
             request_ids: BTreeSet::new(),
+            request_count: 0,
             response_revision: 0,
+            response_bindings: BTreeMap::new(),
+            terminal_response: None,
         })
     }
 
     pub fn handle(&mut self, request: AgentProfilerRequestV1) -> AgentProfilerResponseV1 {
-        let request_id = request.request_id();
-        if request_id == 0 {
-            return self.error(None, AgentProfilerErrorCodeV1::InvalidRequestId, false);
+        if let Some(response) = &self.terminal_response {
+            return response.clone();
         }
-        if self.request_ids.len() >= self.limits.max_requests as usize {
+        let request_id = request.request_id();
+        if self.request_count >= self.limits.max_requests {
             return self.error(
                 Some(request_id),
                 AgentProfilerErrorCodeV1::RequestBudgetExhausted,
                 true,
             );
+        }
+        self.request_count = self
+            .request_count
+            .checked_add(1)
+            .expect("the configured request bound fits u32");
+        if request_id == 0 {
+            return self.error(None, AgentProfilerErrorCodeV1::InvalidRequestId, false);
         }
         if !self.request_ids.insert(request_id) {
             return self.error(
@@ -616,8 +643,11 @@ impl AgentProfilerServiceV1 {
 
     pub fn terminal_protocol_error(
         &mut self,
-        code: AgentProfilerErrorCodeV1,
+        mut code: AgentProfilerErrorCodeV1,
     ) -> Result<AgentProfilerResponseV1, AgentProfilerServiceErrorV1> {
+        if let Some(response) = &self.terminal_response {
+            return Ok(response.clone());
+        }
         if !matches!(
             code,
             AgentProfilerErrorCodeV1::InvalidRequest
@@ -626,6 +656,19 @@ impl AgentProfilerServiceV1 {
                 | AgentProfilerErrorCodeV1::InternalEvidenceMismatch
         ) {
             return Err(AgentProfilerServiceErrorV1::InvalidResponse);
+        }
+        if matches!(
+            code,
+            AgentProfilerErrorCodeV1::InvalidRequest | AgentProfilerErrorCodeV1::RequestTooLarge
+        ) {
+            if self.request_count >= self.limits.max_requests {
+                code = AgentProfilerErrorCodeV1::RequestBudgetExhausted;
+            } else {
+                self.request_count = self
+                    .request_count
+                    .checked_add(1)
+                    .ok_or(AgentProfilerServiceErrorV1::RevisionOverflow)?;
+            }
         }
         Ok(self.error(None, code, true))
     }
@@ -675,9 +718,14 @@ impl AgentProfilerServiceV1 {
                 candidate,
                 ..
             } => self.compare(baseline, candidate),
-            AgentProfilerRequestV1::PlanNextCapture { capture, goal, .. } => {
-                self.plan(capture, goal)
-            }
+            AgentProfilerRequestV1::PlanNextCapture {
+                capture, goal: _, ..
+            } => self.unsupported_capture(
+                capture,
+                AgentProfilerOperationV1::PlanNextCapture,
+                AgentProfilerUnavailableReasonV1::CapturePlanRequirementsNotRepresented,
+                &[],
+            ),
             AgentProfilerRequestV1::ExplainRegression {
                 baseline,
                 candidate,
@@ -761,7 +809,7 @@ impl AgentProfilerServiceV1 {
         &mut self,
         bundle_hex: &str,
     ) -> Result<AgentProfilerResultV1, AgentProfilerErrorCodeV1> {
-        let bytes = decode_lower_hex_bounded(bundle_hex)?;
+        let bytes = decode_lower_hex_bounded(bundle_hex, self.limits.query.max_input_bytes)?;
         let session = ProfilerQuerySessionV4::open(&bytes, self.limits.query)
             .map_err(|_| AgentProfilerErrorCodeV1::InvalidBundle)?;
         let (context, coverage) = match session
@@ -837,17 +885,8 @@ impl AgentProfilerServiceV1 {
             ProfilerQueryResponseV4::Page { page } => page,
             _ => return Err(AgentProfilerErrorCodeV1::InternalEvidenceMismatch),
         };
-        let origin = if matches!(kind, ProfilerListKindV4::DurationHotspots) {
-            TruthOriginV1::Inferred
-        } else if matches!(kind, ProfilerListKindV4::Waits) {
-            TruthOriginV1::Unavailable
-        } else {
-            TruthOriginV1::Observed
-        };
-        Ok(AgentProfilerResultV1::Page {
-            page,
-            evidence: self.evidence(origin, &[capture], &[]),
-        })
+        let evidence = self.page_evidence(capture, &page);
+        Ok(AgentProfilerResultV1::Page { page, evidence })
     }
 
     fn inspect_dispatch(
@@ -904,27 +943,6 @@ impl AgentProfilerServiceV1 {
         })
     }
 
-    fn plan(
-        &self,
-        capture: ContentIdentityRecordV1,
-        goal: ProfilerCaptureGoalV4,
-    ) -> Result<AgentProfilerResultV1, AgentProfilerErrorCodeV1> {
-        let open = self.capture(capture)?;
-        let (context, plan) = match open
-            .session
-            .query(ProfilerQueryRequestV4::PlanNextCapture { goal })
-            .map_err(map_query_error)?
-        {
-            ProfilerQueryResponseV4::PlanNextCapture { context, plan } => (context, plan),
-            _ => return Err(AgentProfilerErrorCodeV1::InternalEvidenceMismatch),
-        };
-        Ok(AgentProfilerResultV1::Plan {
-            context,
-            plan,
-            evidence: self.evidence(TruthOriginV1::Inferred, &[capture], &[]),
-        })
-    }
-
     fn unsupported_capture(
         &self,
         capture: ContentIdentityRecordV1,
@@ -957,10 +975,35 @@ impl AgentProfilerServiceV1 {
         records: &[CaptureIdentityV1],
     ) -> AgentProfilerEvidenceV1 {
         AgentProfilerEvidenceV1 {
-            origin,
+            origin: AgentProfilerAggregateOriginV1::Homogeneous { origin },
             service_contract: self.contract,
             captures: captures.to_vec(),
             records: records.to_vec(),
+        }
+    }
+
+    fn page_evidence(
+        &self,
+        capture: ContentIdentityRecordV1,
+        page: &ProfilerPageV4,
+    ) -> AgentProfilerEvidenceV1 {
+        let mut origins = page
+            .items
+            .iter()
+            .map(profiler_item_origin)
+            .collect::<Vec<_>>();
+        origins.sort_unstable_by_key(|origin| truth_origin_rank(*origin));
+        origins.dedup();
+        let origin = match origins.as_slice() {
+            [] => AgentProfilerAggregateOriginV1::Empty,
+            [origin] => AgentProfilerAggregateOriginV1::Homogeneous { origin: *origin },
+            _ => AgentProfilerAggregateOriginV1::Mixed { origins },
+        };
+        AgentProfilerEvidenceV1 {
+            origin,
+            service_contract: self.contract,
+            captures: vec![capture],
+            records: Vec::new(),
         }
     }
 
@@ -987,13 +1030,16 @@ impl AgentProfilerServiceV1 {
     }
 
     fn ok(&mut self, request_id: u64, value: AgentProfilerResultV1) -> AgentProfilerResponseV1 {
-        self.response_revision = self.response_revision.saturating_add(1);
-        AgentProfilerResponseV1::Ok {
+        let response_revision = self.next_response_revision();
+        let mut response = AgentProfilerResponseV1::Ok {
             schema: AGENT_PROFILER_RESPONSE_SCHEMA_V1,
             request_id,
-            response_revision: self.response_revision,
+            response_revision,
             value: Box::new(value),
-        }
+            state_binding: AgentProfilerResponseBindingV1([0; 32]),
+        };
+        self.bind_response(&mut response);
+        response
     }
 
     fn error(
@@ -1002,20 +1048,84 @@ impl AgentProfilerServiceV1 {
         code: AgentProfilerErrorCodeV1,
         terminal: bool,
     ) -> AgentProfilerResponseV1 {
-        self.response_revision = self.response_revision.saturating_add(1);
-        AgentProfilerResponseV1::Error {
+        let response_revision = self.next_response_revision();
+        let mut response = AgentProfilerResponseV1::Error {
             schema: AGENT_PROFILER_RESPONSE_SCHEMA_V1,
             request_id,
-            response_revision: self.response_revision,
+            response_revision,
             code,
             terminal,
+            state_binding: AgentProfilerResponseBindingV1([0; 32]),
+        };
+        self.bind_response(&mut response);
+        if terminal {
+            self.terminal_response = Some(response.clone());
         }
+        response
+    }
+
+    fn next_response_revision(&mut self) -> u64 {
+        self.response_revision = self
+            .response_revision
+            .checked_add(1)
+            .expect("bounded service requests keep response revisions representable");
+        self.response_revision
+    }
+
+    fn bind_response(&mut self, response: &mut AgentProfilerResponseV1) {
+        let binding = self.calculate_response_binding(response);
+        let revision = match response {
+            AgentProfilerResponseV1::Ok {
+                response_revision,
+                state_binding,
+                ..
+            }
+            | AgentProfilerResponseV1::Error {
+                response_revision,
+                state_binding,
+                ..
+            } => {
+                *state_binding = binding;
+                *response_revision
+            }
+        };
+        let previous = self.response_bindings.insert(revision, binding);
+        debug_assert!(previous.is_none());
+    }
+
+    fn calculate_response_binding(
+        &self,
+        response: &AgentProfilerResponseV1,
+    ) -> AgentProfilerResponseBindingV1 {
+        let mut digest = Sha256::new();
+        digest.update(AGENT_PROFILER_RESPONSE_BINDING_DOMAIN_V1);
+        digest.update(self.contract.digest.as_bytes());
+        serde_json::to_writer(AgentDigestWriterV1(&mut digest), response)
+            .expect("hash-backed response writer cannot fail");
+        AgentProfilerResponseBindingV1(digest.finalize().into())
     }
 
     fn validate_response(
         &self,
         response: &AgentProfilerResponseV1,
     ) -> Result<(), AgentProfilerServiceErrorV1> {
+        let (response_revision, state_binding) = match response {
+            AgentProfilerResponseV1::Ok {
+                response_revision,
+                state_binding,
+                ..
+            }
+            | AgentProfilerResponseV1::Error {
+                response_revision,
+                state_binding,
+                ..
+            } => (*response_revision, *state_binding),
+        };
+        if self.response_bindings.get(&response_revision) != Some(&state_binding)
+            || self.calculate_response_binding(response) != state_binding
+        {
+            return Err(AgentProfilerServiceErrorV1::InvalidResponse);
+        }
         match response {
             AgentProfilerResponseV1::Error {
                 schema,
@@ -1023,6 +1133,7 @@ impl AgentProfilerServiceV1 {
                 response_revision,
                 code,
                 terminal,
+                ..
             } => {
                 let terminal_valid = !*terminal
                     || matches!(
@@ -1046,6 +1157,7 @@ impl AgentProfilerServiceV1 {
                 request_id,
                 response_revision,
                 value,
+                ..
             } => {
                 if *schema != AGENT_PROFILER_RESPONSE_SCHEMA_V1
                     || *request_id == 0
@@ -1071,7 +1183,7 @@ impl AgentProfilerServiceV1 {
             } => {
                 if *capabilities != agent_capabilities()
                     || *limits != self.limits.view()
-                    || evidence.origin != TruthOriginV1::Declared
+                    || !evidence_has_origin(evidence, TruthOriginV1::Declared)
                     || !evidence.captures.is_empty()
                     || !evidence.records.is_empty()
                 {
@@ -1103,7 +1215,7 @@ impl AgentProfilerServiceV1 {
                     || !audit_valid
                     || audit.after_open_captures as usize > self.captures.len()
                     || evidence.captures.as_slice() != [context.bundle_identity]
-                    || evidence.origin != TruthOriginV1::Observed
+                    || !evidence_has_origin(evidence, TruthOriginV1::Observed)
                     || !evidence.records.is_empty()
                 {
                     return Err(AgentProfilerServiceErrorV1::InvalidResponse);
@@ -1118,12 +1230,7 @@ impl AgentProfilerServiceV1 {
                 open.session
                     .encode_response(&ProfilerQueryResponseV4::Page { page: page.clone() })
                     .map_err(|_| AgentProfilerServiceErrorV1::InvalidResponse)?;
-                let expected_origin = match page.kind {
-                    ProfilerListKindV4::DurationHotspots => TruthOriginV1::Inferred,
-                    ProfilerListKindV4::Waits => TruthOriginV1::Unavailable,
-                    _ => TruthOriginV1::Observed,
-                };
-                if evidence.origin != expected_origin || !evidence.records.is_empty() {
+                if *evidence != self.page_evidence(capture, page) {
                     return Err(AgentProfilerServiceErrorV1::InvalidResponse);
                 }
                 evidence
@@ -1149,7 +1256,7 @@ impl AgentProfilerServiceV1 {
                     })
                     .map_err(|_| AgentProfilerServiceErrorV1::InvalidResponse)?;
                 if evidence.records.as_slice() != [dispatch.identity]
-                    || evidence.origin != TruthOriginV1::Observed
+                    || !evidence_has_origin(evidence, TruthOriginV1::Observed)
                 {
                     return Err(AgentProfilerServiceErrorV1::InvalidResponse);
                 }
@@ -1180,7 +1287,7 @@ impl AgentProfilerServiceV1 {
                     || inspection.artifact != dispatch.artifact
                     || inspection.source_map != dispatch.source_map
                     || evidence.records.as_slice() != [dispatch.identity]
-                    || evidence.origin != TruthOriginV1::Declared
+                    || !evidence_has_origin(evidence, TruthOriginV1::Declared)
                 {
                     return Err(AgentProfilerServiceErrorV1::InvalidResponse);
                 }
@@ -1204,27 +1311,9 @@ impl AgentProfilerServiceV1 {
                 if *comparison != expected {
                     return Err(AgentProfilerServiceErrorV1::InvalidResponse);
                 }
-                if evidence.origin != TruthOriginV1::Inferred || !evidence.records.is_empty() {
-                    return Err(AgentProfilerServiceErrorV1::InvalidResponse);
-                }
-                evidence
-            }
-            AgentProfilerResultV1::Plan {
-                context,
-                plan,
-                evidence,
-            } => {
-                let capture = exactly_one_capture(evidence)?;
-                let open = self
-                    .capture(capture)
-                    .map_err(|_| AgentProfilerServiceErrorV1::InvalidResponse)?;
-                open.session
-                    .encode_response(&ProfilerQueryResponseV4::PlanNextCapture {
-                        context: *context,
-                        plan: plan.clone(),
-                    })
-                    .map_err(|_| AgentProfilerServiceErrorV1::InvalidResponse)?;
-                if evidence.origin != TruthOriginV1::Inferred || !evidence.records.is_empty() {
+                if !evidence_has_origin(evidence, TruthOriginV1::Inferred)
+                    || !evidence.records.is_empty()
+                {
                     return Err(AgentProfilerServiceErrorV1::InvalidResponse);
                 }
                 evidence
@@ -1238,7 +1327,7 @@ impl AgentProfilerServiceV1 {
                     self.capture(*capture)
                         .map_err(|_| AgentProfilerServiceErrorV1::InvalidResponse)?;
                 }
-                if evidence.origin != TruthOriginV1::Unavailable
+                if !evidence_has_origin(evidence, TruthOriginV1::Unavailable)
                     || evidence.captures.is_empty()
                     || unavailable_reason(*operation) != Some(*reason)
                 {
@@ -1284,6 +1373,31 @@ fn exactly_one_capture(
     }
 }
 
+fn evidence_has_origin(evidence: &AgentProfilerEvidenceV1, expected: TruthOriginV1) -> bool {
+    evidence.origin == AgentProfilerAggregateOriginV1::Homogeneous { origin: expected }
+}
+
+fn profiler_item_origin(item: &ProfilerQueryItemV4) -> TruthOriginV1 {
+    match item {
+        ProfilerQueryItemV4::Run { evidence, .. }
+        | ProfilerQueryItemV4::Device { evidence, .. }
+        | ProfilerQueryItemV4::AttReference { evidence, .. }
+        | ProfilerQueryItemV4::Unavailable { evidence, .. } => evidence.origin,
+        ProfilerQueryItemV4::Dispatch { dispatch } => dispatch.evidence.origin,
+        ProfilerQueryItemV4::DurationHotspot { hotspot } => hotspot.origin,
+    }
+}
+
+const fn truth_origin_rank(origin: TruthOriginV1) -> u8 {
+    match origin {
+        TruthOriginV1::Declared => 0,
+        TruthOriginV1::Proved => 1,
+        TruthOriginV1::Observed => 2,
+        TruthOriginV1::Inferred => 3,
+        TruthOriginV1::Unavailable => 4,
+    }
+}
+
 fn agent_capabilities() -> Vec<AgentProfilerCapabilityV1> {
     AgentProfilerOperationV1::ALL
         .into_iter()
@@ -1300,8 +1414,7 @@ fn agent_capabilities() -> Vec<AgentProfilerCapabilityV1> {
                 | AgentProfilerOperationV1::ListHotspots
                 | AgentProfilerOperationV1::InspectDispatch
                 | AgentProfilerOperationV1::InspectKernel
-                | AgentProfilerOperationV1::CompareCaptures
-                | AgentProfilerOperationV1::PlanNextCapture => {
+                | AgentProfilerOperationV1::CompareCaptures => {
                     (AgentProfilerCapabilityStateV1::CaptureDependent, None)
                 }
                 AgentProfilerOperationV1::ListWaits
@@ -1326,6 +1439,10 @@ fn agent_capabilities() -> Vec<AgentProfilerCapabilityV1> {
                 AgentProfilerOperationV1::ExplainRegression => (
                     AgentProfilerCapabilityStateV1::Unavailable,
                     Some(AgentProfilerUnavailableReasonV1::CausalExplanationNotEstablished),
+                ),
+                AgentProfilerOperationV1::PlanNextCapture => (
+                    AgentProfilerCapabilityStateV1::Unavailable,
+                    Some(AgentProfilerUnavailableReasonV1::CapturePlanRequirementsNotRepresented),
                 ),
                 AgentProfilerOperationV1::ExportReproducer => (
                     AgentProfilerCapabilityStateV1::Unavailable,
@@ -1367,6 +1484,9 @@ fn unavailable_reason(
         AgentProfilerOperationV1::ExplainRegression => {
             Some(AgentProfilerUnavailableReasonV1::CausalExplanationNotEstablished)
         }
+        AgentProfilerOperationV1::PlanNextCapture => {
+            Some(AgentProfilerUnavailableReasonV1::CapturePlanRequirementsNotRepresented)
+        }
         AgentProfilerOperationV1::ExportReproducer => {
             Some(AgentProfilerUnavailableReasonV1::ReproducerInputsNotCaptured)
         }
@@ -1391,14 +1511,23 @@ fn service_contract_identity() -> Result<ContentIdentityRecordV1, AgentProfilerS
     })
 }
 
-fn decode_lower_hex_bounded(value: &str) -> Result<Vec<u8>, AgentProfilerErrorCodeV1> {
-    if value.is_empty()
-        || !value.len().is_multiple_of(2)
-        || value.len() > (MAX_PROFILER_BUNDLE_BYTES_V4 as usize).saturating_mul(2)
-    {
+fn decode_lower_hex_bounded(
+    value: &str,
+    max_bundle_bytes: u64,
+) -> Result<Vec<u8>, AgentProfilerErrorCodeV1> {
+    if value.is_empty() || !value.len().is_multiple_of(2) {
         return Err(AgentProfilerErrorCodeV1::InvalidBundleEncoding);
     }
-    let mut output = Vec::with_capacity(value.len() / 2);
+    let decoded_len = value.len() / 2;
+    if u64::try_from(decoded_len).map_or(true, |length| {
+        length > max_bundle_bytes || length > MAX_PROFILER_BUNDLE_BYTES_V4
+    }) {
+        return Err(AgentProfilerErrorCodeV1::BundleTooLarge);
+    }
+    let mut output = Vec::new();
+    output
+        .try_reserve_exact(decoded_len)
+        .map_err(|_| AgentProfilerErrorCodeV1::BundleTooLarge)?;
     for pair in value.as_bytes().chunks_exact(2) {
         let high =
             lower_hex_nibble(pair[0]).ok_or(AgentProfilerErrorCodeV1::InvalidBundleEncoding)?;
@@ -1424,9 +1553,8 @@ fn map_query_error(error: ProfilerQueryErrorV4) -> AgentProfilerErrorCodeV1 {
         | ProfilerQueryErrorV4::CursorOutOfRange => AgentProfilerErrorCodeV1::InvalidPage,
         ProfilerQueryErrorV4::DispatchNotFound => AgentProfilerErrorCodeV1::RecordNotFound,
         ProfilerQueryErrorV4::ResponseTooLarge => AgentProfilerErrorCodeV1::ResponseTooLarge,
-        ProfilerQueryErrorV4::Bundle | ProfilerQueryErrorV4::InputTooLarge => {
-            AgentProfilerErrorCodeV1::InvalidBundle
-        }
+        ProfilerQueryErrorV4::Bundle => AgentProfilerErrorCodeV1::InvalidBundle,
+        ProfilerQueryErrorV4::InputTooLarge => AgentProfilerErrorCodeV1::BundleTooLarge,
         _ => AgentProfilerErrorCodeV1::InternalEvidenceMismatch,
     }
 }
@@ -1507,6 +1635,19 @@ struct AgentBoundedWriterV1<'a> {
     exceeded: bool,
 }
 
+struct AgentDigestWriterV1<'a>(&'a mut Sha256);
+
+impl Write for AgentDigestWriterV1<'_> {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.0.update(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
 impl Write for AgentBoundedWriterV1<'_> {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
         self.write_all(bytes)?;
@@ -1542,6 +1683,7 @@ pub enum AgentProfilerServiceErrorV1 {
     ResponseTooLarge,
     JsonEncode,
     Identity,
+    RevisionOverflow,
     SizeOverflow,
     Io,
 }

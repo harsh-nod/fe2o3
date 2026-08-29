@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 
 const CSV: &[u8] =
     include_bytes!("../../fe2o3-semantic-import/tests/fixtures/rocprofv3-1.1-kernel-dispatch.csv");
+const ATT: &[u8] = br#"{"counter_names":[],"gfxip":9,"gfxv":"vega","global_begin_time":0,"is_pcs_stochastic":false,"pc_sampling":false,"thread_trace":true,"version":"3.0.0","wave_filenames":{"0":{"0":{"0":{"0":["waves/se0.json",10,20]}}}},"se_filenames":["se0.json"]}"#;
 
 fn opaque(byte: u8) -> OpaqueIdentityV1 {
     OpaqueIdentityV1::new([byte; 32]).unwrap()
@@ -56,6 +57,36 @@ fn bundle(environment: u8) -> Vec<u8> {
         &import_rocprofv3_csv_profiler_bundle_v4(CSV, binding(environment)).unwrap(),
     )
     .unwrap()
+}
+
+fn att_bundle() -> Vec<u8> {
+    encode_profiler_bundle_v4(
+        &import_rocprofv3_att_profiler_bundle_v4(
+            ATT,
+            ProfilerAttBindingV4 {
+                environment: ProfilerEnvironmentBindingV4 {
+                    environment: content(10, 200),
+                    collector_tool: content(11, 50),
+                    collector_configuration: content(12, 80),
+                    stable_device_bindings: vec![ProfilerDeviceBindingV4 {
+                        source_agent_id: 17,
+                        stable_identity: content(20, 64),
+                    }],
+                },
+                source_agent_id: 17,
+                referenced_artifacts: vec![ProfilerAttArtifactBindingV4 {
+                    reference: "se0.json".to_owned(),
+                    content: content(30, 400),
+                }],
+            },
+        )
+        .unwrap(),
+    )
+    .unwrap()
+}
+
+fn homogeneous(origin: TruthOriginV1) -> AgentProfilerAggregateOriginV1 {
+    AgentProfilerAggregateOriginV1::Homogeneous { origin }
 }
 
 fn lower_hex(bytes: &[u8]) -> String {
@@ -136,10 +167,16 @@ fn capability_inventory_is_complete_read_only_and_evidence_bound() {
         capability.operation == AgentProfilerOperationV1::InspectLane
             && capability.state == AgentProfilerCapabilityStateV1::Unavailable
     }));
+    assert!(capabilities.iter().any(|capability| {
+        capability.operation == AgentProfilerOperationV1::PlanNextCapture
+            && capability.state == AgentProfilerCapabilityStateV1::Unavailable
+            && capability.unavailable_reason
+                == Some(AgentProfilerUnavailableReasonV1::CapturePlanRequirementsNotRepresented)
+    }));
     assert_eq!(limits.max_requests, MAX_AGENT_PROFILER_REQUESTS_V1);
     assert!(evidence.captures.is_empty());
     assert!(evidence.records.is_empty());
-    assert_eq!(evidence.origin, TruthOriginV1::Declared);
+    assert_eq!(evidence.origin, homogeneous(TruthOriginV1::Declared));
 
     let first = service.encode_response(&response).unwrap();
     assert_eq!(first, service.encode_response(&response).unwrap());
@@ -180,7 +217,7 @@ fn open_page_inspect_compare_plan_and_unavailable_are_state_validated() {
         panic!("expected page value")
     };
     assert_eq!(page.returned, 1);
-    assert_eq!(evidence.origin, TruthOriginV1::Observed);
+    assert_eq!(evidence.origin, homogeneous(TruthOriginV1::Observed));
     let ProfilerQueryItemV4::Dispatch { dispatch } = &page.items[0] else {
         panic!("expected dispatch")
     };
@@ -201,7 +238,7 @@ fn open_page_inspect_compare_plan_and_unavailable_are_state_validated() {
         AgentProfilerResultV1::Kernel { inspection, evidence }
             if inspection.dispatch_identity == dispatch_identity
                 && inspection.scope == AgentProfilerKernelScopeV1::DispatchBindingOnly
-                && evidence.origin == TruthOriginV1::Declared
+                && evidence.origin == homogeneous(TruthOriginV1::Declared)
     ));
     assert!(service.encode_response(&kernel).is_ok());
 
@@ -222,7 +259,7 @@ fn open_page_inspect_compare_plan_and_unavailable_are_state_validated() {
                 operation: AgentProfilerOperationV1::InspectWave,
                 reason: AgentProfilerUnavailableReasonV1::WorkgroupWaveLaneHierarchyNotCaptured,
                 evidence,
-            } if evidence.origin == TruthOriginV1::Unavailable
+            } if evidence.origin == homogeneous(TruthOriginV1::Unavailable)
     ));
     assert!(service.encode_response(&unavailable).is_ok());
 
@@ -252,16 +289,90 @@ fn open_page_inspect_compare_plan_and_unavailable_are_state_validated() {
         goal: ProfilerCaptureGoalV4::ExplainWaits,
     });
     let AgentProfilerResponseV1::Ok { value, .. } = &plan else {
-        panic!("expected plan response")
+        panic!("expected typed unavailable plan response")
     };
     assert!(matches!(
         value.as_ref(),
-        AgentProfilerResultV1::Plan { plan, evidence, .. }
-        if plan.goal == ProfilerCaptureGoalV4::ExplainWaits
-            && !plan.steps.is_empty()
-            && evidence.origin == TruthOriginV1::Inferred
+        AgentProfilerResultV1::Unavailable {
+            operation: AgentProfilerOperationV1::PlanNextCapture,
+            reason: AgentProfilerUnavailableReasonV1::CapturePlanRequirementsNotRepresented,
+            evidence,
+        } if evidence.origin == homogeneous(TruthOriginV1::Unavailable)
     ));
     assert!(service.encode_response(&plan).is_ok());
+}
+
+#[test]
+fn page_evidence_aggregates_homogeneous_mixed_and_unavailable_item_origins() {
+    let mut service = AgentProfilerServiceV1::new(AgentProfilerServiceLimitsV1::default()).unwrap();
+    let (_, dispatch_capture) = open(&mut service, 1, &bundle(10));
+    let (_, att_capture) = open(&mut service, 2, &att_bundle());
+
+    let runs = service.handle(AgentProfilerRequestV1::ListRuns {
+        schema: AGENT_PROFILER_REQUEST_SCHEMA_V1.into(),
+        request_id: 3,
+        capture: dispatch_capture,
+        page: ProfilerPageRequestV4::default(),
+    });
+    let AgentProfilerResponseV1::Ok { value, .. } = &runs else {
+        panic!("expected run page")
+    };
+    assert!(matches!(
+        value.as_ref(),
+        AgentProfilerResultV1::Page { evidence, .. }
+            if evidence.origin == homogeneous(TruthOriginV1::Inferred)
+    ));
+    assert!(service.encode_response(&runs).is_ok());
+
+    let devices = service.handle(AgentProfilerRequestV1::ListDevices {
+        schema: AGENT_PROFILER_REQUEST_SCHEMA_V1.into(),
+        request_id: 4,
+        capture: dispatch_capture,
+        page: ProfilerPageRequestV4::default(),
+    });
+    let AgentProfilerResponseV1::Ok { value, .. } = &devices else {
+        panic!("expected device page")
+    };
+    assert!(matches!(
+        value.as_ref(),
+        AgentProfilerResultV1::Page { evidence, .. }
+            if evidence.origin == homogeneous(TruthOriginV1::Declared)
+    ));
+    assert!(service.encode_response(&devices).is_ok());
+
+    let references = service.handle(AgentProfilerRequestV1::ListAttReferences {
+        schema: AGENT_PROFILER_REQUEST_SCHEMA_V1.into(),
+        request_id: 5,
+        capture: att_capture,
+        page: ProfilerPageRequestV4::default(),
+    });
+    let AgentProfilerResponseV1::Ok { value, .. } = &references else {
+        panic!("expected ATT reference page")
+    };
+    assert!(matches!(
+        value.as_ref(),
+        AgentProfilerResultV1::Page { evidence, .. }
+            if evidence.origin == AgentProfilerAggregateOriginV1::Mixed {
+                origins: vec![TruthOriginV1::Declared, TruthOriginV1::Unavailable],
+            }
+    ));
+    assert!(service.encode_response(&references).is_ok());
+
+    let unavailable_dispatches = service.handle(AgentProfilerRequestV1::ListDispatches {
+        schema: AGENT_PROFILER_REQUEST_SCHEMA_V1.into(),
+        request_id: 6,
+        capture: att_capture,
+        page: ProfilerPageRequestV4::default(),
+    });
+    let AgentProfilerResponseV1::Ok { value, .. } = &unavailable_dispatches else {
+        panic!("expected typed unavailable dispatch page")
+    };
+    assert!(matches!(
+        value.as_ref(),
+        AgentProfilerResultV1::Page { evidence, .. }
+            if evidence.origin == homogeneous(TruthOriginV1::Unavailable)
+    ));
+    assert!(service.encode_response(&unavailable_dispatches).is_ok());
 }
 
 #[test]
@@ -411,6 +522,89 @@ fn request_and_capture_budgets_end_or_reject_without_eviction() {
 }
 
 #[test]
+fn zero_and_duplicate_ids_consume_budget_and_terminal_revision_is_stable() {
+    let limits = AgentProfilerServiceLimitsV1::new(3, 1, ProfilerQueryLimitsV4::default()).unwrap();
+    let mut service = AgentProfilerServiceV1::new(limits).unwrap();
+    let first = service.handle(AgentProfilerRequestV1::DiscoverCapabilities {
+        schema: AGENT_PROFILER_REQUEST_SCHEMA_V1.into(),
+        request_id: 1,
+    });
+    assert!(matches!(
+        first,
+        AgentProfilerResponseV1::Ok {
+            response_revision: 1,
+            ..
+        }
+    ));
+    let duplicate = service.handle(AgentProfilerRequestV1::DiscoverCapabilities {
+        schema: AGENT_PROFILER_REQUEST_SCHEMA_V1.into(),
+        request_id: 1,
+    });
+    assert!(matches!(
+        duplicate,
+        AgentProfilerResponseV1::Error {
+            response_revision: 2,
+            code: AgentProfilerErrorCodeV1::DuplicateRequestId,
+            terminal: false,
+            ..
+        }
+    ));
+    let zero = service.handle(AgentProfilerRequestV1::DiscoverCapabilities {
+        schema: AGENT_PROFILER_REQUEST_SCHEMA_V1.into(),
+        request_id: 0,
+    });
+    assert!(matches!(
+        zero,
+        AgentProfilerResponseV1::Error {
+            response_revision: 3,
+            code: AgentProfilerErrorCodeV1::InvalidRequestId,
+            terminal: false,
+            ..
+        }
+    ));
+    let terminal = service.handle(AgentProfilerRequestV1::DiscoverCapabilities {
+        schema: AGENT_PROFILER_REQUEST_SCHEMA_V1.into(),
+        request_id: 2,
+    });
+    assert!(matches!(
+        terminal,
+        AgentProfilerResponseV1::Error {
+            response_revision: 4,
+            code: AgentProfilerErrorCodeV1::RequestBudgetExhausted,
+            terminal: true,
+            ..
+        }
+    ));
+    let after_terminal = service.handle(AgentProfilerRequestV1::DiscoverCapabilities {
+        schema: AGENT_PROFILER_REQUEST_SCHEMA_V1.into(),
+        request_id: 3,
+    });
+    assert_eq!(after_terminal, terminal);
+    assert!(service.encode_response(&terminal).is_ok());
+}
+
+#[test]
+fn configured_bundle_limit_rejects_before_capture_admission() {
+    let bytes = bundle(10);
+    let query = ProfilerQueryLimitsV4::new(
+        u64::try_from(bytes.len() - 1).unwrap(),
+        MAX_PROFILER_QUERY_RESPONSE_BYTES_V4,
+        128,
+    )
+    .unwrap();
+    let limits = AgentProfilerServiceLimitsV1::new(2, 1, query).unwrap();
+    let mut service = AgentProfilerServiceV1::new(limits).unwrap();
+    assert_error(
+        service.handle(AgentProfilerRequestV1::OpenCapture {
+            schema: AGENT_PROFILER_REQUEST_SCHEMA_V1.into(),
+            request_id: 1,
+            bundle_hex: lower_hex(&bytes),
+        }),
+        AgentProfilerErrorCodeV1::BundleTooLarge,
+    );
+}
+
+#[test]
 fn jsonl_reader_rejects_oversize_and_unterminated_frames() {
     let mut oversized = Cursor::new(vec![b'x'; MAX_AGENT_PROFILER_REQUEST_BYTES_V1 as usize + 1]);
     assert!(matches!(
@@ -426,12 +620,52 @@ fn jsonl_reader_rejects_oversize_and_unterminated_frames() {
 }
 
 #[test]
-fn state_encoder_rejects_forged_evidence() {
+fn state_encoder_rejects_forged_ids_revisions_audits_and_evidence() {
     let mut service = AgentProfilerServiceV1::new(AgentProfilerServiceLimitsV1::default()).unwrap();
-    let (_, capture) = open(&mut service, 1, &bundle(10));
+    let (opened, capture) = open(&mut service, 1, &bundle(10));
+    open(&mut service, 2, &bundle(30));
+    assert!(service.encode_response(&opened).is_ok());
+
+    let mut forged_request = opened.clone();
+    let AgentProfilerResponseV1::Ok { request_id, .. } = &mut forged_request else {
+        unreachable!()
+    };
+    *request_id = 99;
+    assert!(matches!(
+        service.encode_response(&forged_request),
+        Err(AgentProfilerServiceErrorV1::InvalidResponse)
+    ));
+
+    let mut forged_revision = opened.clone();
+    let AgentProfilerResponseV1::Ok {
+        response_revision, ..
+    } = &mut forged_revision
+    else {
+        unreachable!()
+    };
+    *response_revision = 99;
+    assert!(matches!(
+        service.encode_response(&forged_revision),
+        Err(AgentProfilerServiceErrorV1::InvalidResponse)
+    ));
+
+    let mut forged_audit = opened;
+    let AgentProfilerResponseV1::Ok { value, .. } = &mut forged_audit else {
+        unreachable!()
+    };
+    let AgentProfilerResultV1::CaptureOpened { audit, .. } = value.as_mut() else {
+        unreachable!()
+    };
+    audit.before_open_captures = 1;
+    audit.after_open_captures = 2;
+    assert!(matches!(
+        service.encode_response(&forged_audit),
+        Err(AgentProfilerServiceErrorV1::InvalidResponse)
+    ));
+
     let mut response = service.handle(AgentProfilerRequestV1::ListRuns {
         schema: AGENT_PROFILER_REQUEST_SCHEMA_V1.into(),
-        request_id: 2,
+        request_id: 3,
         capture,
         page: ProfilerPageRequestV4::default(),
     });

@@ -218,12 +218,18 @@ by default.
 The V1 operation inventory includes capability discovery, capture open, bounded
 pages for runs/devices/dispatches/ATT references/duration hotspots/waits,
 dispatch inspection, dispatch-scoped kernel identity inspection, Bundle V4
-comparison, and next-capture planning. Pages reuse Bundle V4 content-bound
-cursors. Every successful value carries the service-contract identity, exact
-capture identities, relevant record identities, and a truth origin. Requests
-have unique nonzero IDs, responses have monotonic revisions, and request count,
-resident captures, input bytes, page items, and encoded response bytes have
-independent hard ceilings.
+comparison, and a typed-unavailable next-capture-planning request. The current
+Bundle V4 planner cannot state required overhead, privilege, storage, target,
+counter, and mutual-exclusion constraints, so it is not exposed as a complete
+agent capture plan. Pages reuse Bundle V4 content-bound cursors. Every
+successful value carries the service-contract identity, exact capture
+identities, relevant record identities, and a homogeneous, mixed, or empty
+aggregate of the item-level truth origins. Every handled request attempt,
+including zero and duplicate IDs, consumes the request budget. Responses have
+checked monotonic revisions and a service-retained state binding; request ID,
+revision, audit, or evidence substitution is rejected before encoding.
+Resident captures, configured input bytes, page items, and encoded response
+bytes have independent hard ceilings.
 
 The closed inventory also admits workgroup/wave/lane inspection, source/IR/ISA
 correlation, fault, decoded wait/memory/barrier, property, causal regression
