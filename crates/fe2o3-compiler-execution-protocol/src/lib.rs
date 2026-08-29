@@ -5,6 +5,7 @@ mod attestation;
 mod client_profile;
 mod current_record_verification;
 mod external_anchor_deployment;
+mod external_anchor_provisioning;
 mod external_anchor_service;
 mod external_anchor_transaction;
 mod launch_manifest;
@@ -52,6 +53,12 @@ pub use external_anchor_deployment::{
     CompilerExecutionExternalAnchorDeploymentIdentityV1,
     CompilerExecutionExternalAnchorDeploymentV1,
     MAX_COMPILER_EXECUTION_EXTERNAL_ANCHOR_EXECUTABLE_BYTES_V1,
+};
+pub use external_anchor_provisioning::{
+    COMPILER_EXECUTION_EXTERNAL_ANCHOR_PROVISIONING_BYTES_V1,
+    CompilerExecutionExternalAnchorProvisioningErrorV1,
+    CompilerExecutionExternalAnchorProvisioningIdentityV1,
+    CompilerExecutionExternalAnchorProvisioningV1,
 };
 pub use external_anchor_service::{
     CompilerExecutionExternalAnchorServiceIdentityErrorV1,

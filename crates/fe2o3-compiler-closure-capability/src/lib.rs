@@ -17,6 +17,7 @@ use sha2::{Digest, Sha256};
 
 mod compiler_execution_client_profile;
 mod compiler_execution_external_anchor_deployment;
+mod compiler_execution_external_anchor_provisioning;
 mod compiler_execution_external_anchor_signing_key;
 mod compiler_execution_policy;
 mod compiler_execution_service_launch;
@@ -29,6 +30,10 @@ pub use compiler_execution_client_profile::CompilerExecutionClientProfileCapabil
 pub use compiler_execution_external_anchor_deployment::{
     COMPILER_EXECUTION_EXTERNAL_ANCHOR_DEPLOYMENT_FD_V1,
     CompilerExecutionExternalAnchorDeploymentCapabilityV1,
+};
+pub use compiler_execution_external_anchor_provisioning::{
+    COMPILER_EXECUTION_EXTERNAL_ANCHOR_PROVISIONING_FD_V1,
+    CompilerExecutionExternalAnchorProvisioningCapabilityV1,
 };
 pub use compiler_execution_external_anchor_signing_key::{
     COMPILER_EXECUTION_EXTERNAL_ANCHOR_SIGNING_KEY_FD_V1,

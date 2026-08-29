@@ -45,6 +45,11 @@ exact supervisor deployment identity, and bounded SHA-256 executable
 measurement. Trusted provisioning must retain both sealed manifests and the
 policy and recheck their complete relationship; the anchor manifest contains no
 secret key, endpoint, state, path, descriptor, or execution authority.
+The separate 128-byte external-anchor provisioning manifest binds that complete
+deployment identity to one bounded exact provisioning-helper executable
+measurement. It is inert configuration transported at helper FD 223; it carries
+no seed, state, endpoint, process, or launch authority and is never inherited by
+the final anchor daemon.
 The 280-byte client profile binds the exact dedicated supervisor UID/GID and
 external-anchor service UID/GID to one complete caller-pinned issuer policy; it
 contains no endpoint, path, descriptor, secret, timeout, or authority. The

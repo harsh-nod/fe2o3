@@ -41,6 +41,14 @@ impl CompilerExecutionExternalAnchorDeploymentIdentityV1 {
             && bytes[PREIMAGE_BYTES..] == self.0
             && derive_identity(&bytes[..PREIMAGE_BYTES]) == self.0
     }
+
+    pub(crate) fn from_bytes_for_protocol(bytes: [u8; SHA256_BYTES]) -> Option<Self> {
+        if bytes == [0; SHA256_BYTES] {
+            None
+        } else {
+            Some(Self(bytes))
+        }
+    }
 }
 
 impl fmt::Debug for CompilerExecutionExternalAnchorDeploymentIdentityV1 {
