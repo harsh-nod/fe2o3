@@ -220,7 +220,7 @@ fn kda_update_v1(
 ))]
 #[kernel(
     typed,
-    namespace = "e889654ad32a788ce48bde79cfdaea178a36ea3a152838739f4cb3b68fa0ac74",
+    namespace = "32d98826b8e7144ccd84186aef763064c4d6f7fca5631c29314047ad462fd257",
     launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
 )]
 pub fn gfx950_kda_gdn_decode(
@@ -626,7 +626,7 @@ fn attention_score_v1(q: &[u8], k: &[u8], token: usize) -> Option<f32> {
     not(feature = "kernel-content-sparse-attention-reciprocal-reuse-v1"),
     kernel(
         typed,
-        namespace = "1ad77b6d88884cb5768cc3b9f3527c5b83fe5f1c04e3fc2823f2f8c0167e058a",
+        namespace = "9173ef11ab9a528cd764e5d7c8aea5347f72eb3b8d84aec7e9cbca5510ed8b49",
         launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
     )
 )]
@@ -1181,7 +1181,7 @@ pub fn gfx950_content_sparse_attention(
     not(feature = "kernel-compressed-hybrid-attention-reciprocal-reuse-v1"),
     kernel(
         typed,
-        namespace = "8fa973d4231e28e54ecbd607f539aaba65a895db610f15d56a698336b119f65a",
+        namespace = "dce6cc065e6f9153ced26939d04b8c49ecd89520f092d212bd44053209c9a734",
         launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
     )
 )]
@@ -1438,7 +1438,7 @@ pub fn gfx950_compressed_hybrid_attention(
 ))]
 #[kernel(
     typed,
-    namespace = "e71b4250d8eb3fd5371802ed2141e5a0fb880b6a79c48d7b928a8cde0ae0e0de",
+    namespace = "8ce6f447416acb25d3708e21b8f1b1ac79e9d3a40350d54c07492e082df0230c",
     launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1]),
     control_flow(loop_bounds(4, 4))
 )]
@@ -1537,7 +1537,7 @@ pub fn gfx950_attnres_aggregate(
 ))]
 #[kernel(
     typed,
-    namespace = "a6d721410f3856c46249fb8b78604d6a1f0caf5b050dd6f3a160ab8c40e51583",
+    namespace = "d6335f62afe3df03ec2466b441ea5dd82b55a87b6899f9c95722fb86b5907cd8",
     launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1]),
     control_flow(loop_bounds(4))
 )]
@@ -1615,7 +1615,7 @@ pub fn gfx950_four_branch_residual(
 ))]
 #[kernel(
     typed,
-    namespace = "f93558928ce6e41a2fe8d78cfb28aa199dae54059fc9b7599a4348f4ad73c966",
+    namespace = "febc97fab4675a82add36de7ba400c3aef06fe5c788fc6083712033260b9c10c",
     launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1]),
     control_flow(loop_bounds(3))
 )]
