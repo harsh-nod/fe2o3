@@ -3,10 +3,10 @@
 use fe2o3_kernel_analysis::{
     AuthenticatedPhysicalMachineEffectErrorKindV1, AuthenticatedPhysicalMachineEffectLimitsV1,
     AuthenticatedPhysicalMachineEffectWorkerV1, DEFAULT_PHYSICAL_MACHINE_EFFECT_TIMEOUT_V1,
-    PhysicalMachineAnalyzerIdentityV1, PhysicalMachineEffectBudgetV1,
-    PhysicalMachineEffectEntryRequestV1, PhysicalMachineEffectEvidenceErrorV1,
-    PhysicalMachineEffectWorkerPolicyV1, PhysicalMachineToolchainIdentityV1,
-    inspect_physical_machine_effect_worker_candidate_v1,
+    PhysicalMachineAnalysisEvidenceErrorV1, PhysicalMachineAnalyzerIdentityV1,
+    PhysicalMachineEffectBudgetV1, PhysicalMachineEffectEntryRequestV1,
+    PhysicalMachineEffectEvidenceErrorV1, PhysicalMachineEffectWorkerPolicyV1,
+    PhysicalMachineToolchainIdentityV1, inspect_physical_machine_effect_worker_candidate_v1,
 };
 use rustix::fs::{OFlags, SealFlags};
 use std::{
@@ -91,6 +91,29 @@ fn configured_native_worker_uses_authenticated_identity_probe() {
     assert_eq!(worker.policy(), candidate.policy());
     assert_eq!(worker.analyzer_identity(), candidate.analyzer_identity());
     assert_eq!(worker.toolchain_identity(), candidate.toolchain_identity());
+
+    let Some(payload_path) = std::env::var_os("FE2O3_MACHINE_ANALYSIS_NATIVE_HSACO") else {
+        return;
+    };
+    let generous = PhysicalMachineEffectBudgetV1::new(64, 32, 16, 16, 8);
+    let execution = worker
+        .analyze(
+            fs::read(payload_path).unwrap(),
+            vec![
+                PhysicalMachineEffectEntryRequestV1::new("alpha", generous).unwrap(),
+                PhysicalMachineEffectEntryRequestV1::new("zeta", generous).unwrap(),
+            ],
+            native_limits,
+        )
+        .unwrap();
+    assert_eq!(execution.analysis().effects().entry_points().len(), 2);
+    assert!(execution.analysis().trace().instructions().len() > 2);
+    assert!(execution.analysis().trace().blocks().iter().any(|block| {
+        block
+            .successors()
+            .iter()
+            .any(|successor| *successor <= block.ordinal())
+    }));
 }
 
 #[test]
@@ -147,9 +170,11 @@ fn production_execution_returns_fresh_non_authoritative_durable_receipts() {
     let second = worker.analyze(vec![1], vec![entry()], limits()).unwrap();
     assert_ne!(first.execution_challenge(), second.execution_challenge());
     assert_ne!(
-        first.evidence().request_identity(),
-        second.evidence().request_identity()
+        first.analysis().effects().request_identity(),
+        second.analysis().effects().request_identity()
     );
+    assert!(first.analysis().binds_exact_payload_instruction_bytes());
+    assert!(!first.analysis().establishes_machine_semantics());
     assert!(first.authenticates_analyzer_execution());
     assert!(!first.grants_publication_authority());
     assert!(!first.grants_load_authority());
@@ -204,7 +229,8 @@ fn pathname_replacement_keeps_pinned_image_and_worker_substitution_is_rejected()
         worker
             .analyze(vec![1], vec![entry()], limits())
             .unwrap()
-            .evidence()
+            .analysis()
+            .effects()
             .analyzer_identity()
             .as_bytes(),
         [0xa1; 32]
@@ -227,25 +253,31 @@ fn stale_replay_stdout_substitution_and_identity_mismatch_fail_closed() {
     let worker = worker();
     let first = worker.analyze(vec![1], vec![entry()], limits()).unwrap();
     let mut replay = vec![4];
-    replay.extend_from_slice(first.evidence().canonical_bytes());
+    replay.extend_from_slice(first.analysis().canonical_bytes());
     let stale = worker.analyze(replay, vec![entry()], limits()).unwrap_err();
     assert!(matches!(
         stale.kind(),
-        AuthenticatedPhysicalMachineEffectErrorKindV1::Evidence(
-            PhysicalMachineEffectEvidenceErrorV1::ExecutionChallengeMismatch
-                | PhysicalMachineEffectEvidenceErrorV1::RequestIdentityMismatch
+        AuthenticatedPhysicalMachineEffectErrorKindV1::Analysis(
+            PhysicalMachineAnalysisEvidenceErrorV1::Effects(
+                PhysicalMachineEffectEvidenceErrorV1::ExecutionChallengeMismatch
+                    | PhysicalMachineEffectEvidenceErrorV1::RequestIdentityMismatch
+            )
         )
     ));
 
     for (mode, expected) in [
         (
             5,
-            PhysicalMachineEffectEvidenceErrorV1::AnalyzerIdentityMismatch,
+            PhysicalMachineAnalysisEvidenceErrorV1::Effects(
+                PhysicalMachineEffectEvidenceErrorV1::AnalyzerIdentityMismatch,
+            ),
         ),
-        (6, PhysicalMachineEffectEvidenceErrorV1::LengthMismatch),
+        (6, PhysicalMachineAnalysisEvidenceErrorV1::LengthMismatch),
         (
             7,
-            PhysicalMachineEffectEvidenceErrorV1::ExecutionChallengeMismatch,
+            PhysicalMachineAnalysisEvidenceErrorV1::Effects(
+                PhysicalMachineEffectEvidenceErrorV1::ExecutionChallengeMismatch,
+            ),
         ),
     ] {
         let error = worker
@@ -253,7 +285,7 @@ fn stale_replay_stdout_substitution_and_identity_mismatch_fail_closed() {
             .unwrap_err();
         assert!(matches!(
             error.kind(),
-            AuthenticatedPhysicalMachineEffectErrorKindV1::Evidence(actual)
+            AuthenticatedPhysicalMachineEffectErrorKindV1::Analysis(actual)
                 if actual == &expected
         ));
     }

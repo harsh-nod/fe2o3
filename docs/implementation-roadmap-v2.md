@@ -481,11 +481,13 @@ earlier authority transition.
    MIR-to-live-PLIRON receipt. Protected compiler-currentness evidence is
    retained alongside it through load and dispatch, while LLVM/machine and
    dynamic-launch refinement remain separate open joins.
-8. **Implemented bounded foundation: physical machine effects.** Canonical
-   records and an exact `gfx942` alpha/zeta LLVM Object/MC analysis path model a
-   closed call graph and physical memory sites. Production admission must still
-   authenticate extraction from each final payload and bind it to compiler ABI
-   and effect evidence. Hardware success remains an independent evidence class.
+8. **Implemented bounded foundation: authenticated physical-machine bundle.**
+   The sole supported `gfx942` LLVM Object/MC analysis path runs from a sealed
+   worker image under an immutable measured runtime closure. One canonical
+   response binds closed effect sites to a complete byte-exact instruction/CFG
+   trace using payload file offsets. Production admission must still establish
+   KIR/LLVM-to-machine semantic refinement and bind its move-only receipt into
+   Worker V3. Hardware success remains an independent evidence class.
 9. **Implemented bounded foundation: alpha/zeta source proofs and proof
    records.** Mechanical source-model proofs, negative mutations, freshness,
    and executable-evidence records exist. They do not give Rust source an
@@ -528,8 +530,8 @@ digests. Its independent evidence lanes are:
   that derives properties from actual sealed execution;
 - an authenticated compiler transaction binding source closure, rustc/backend
   invocation, semantic witnesses, Kernel IR, Worker response, and final HSACO;
-- a finalized `gfx942` LLVM Object/MC machine-effect analyzer for the closed
-  alpha/zeta call graphs; and
+- a finalized workload-neutral `gfx942` LLVM Object/MC analyzer whose
+  authenticated bundle joins exact static effects and instruction/CFG facts;
 - an evidence join plus rollback anchor that grants no authority until every
   identity, currentness, proof, compiler, ABI, and machine-effect edge agrees.
 

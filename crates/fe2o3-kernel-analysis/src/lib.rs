@@ -12,6 +12,8 @@ mod kernel_check_model;
 #[cfg(feature = "authenticated-machine-effect")]
 mod machine_effect;
 #[cfg(feature = "authenticated-machine-effect")]
+mod physical_machine_analysis;
+#[cfg(feature = "authenticated-machine-effect")]
 mod physical_machine_effect;
 #[cfg(feature = "authenticated-machine-effect")]
 mod physical_machine_trace;
@@ -83,6 +85,8 @@ pub use control_flow::{
 pub use kernel_check_model::*;
 #[cfg(feature = "authenticated-machine-effect")]
 pub use machine_effect::*;
+#[cfg(feature = "authenticated-machine-effect")]
+pub use physical_machine_analysis::*;
 #[cfg(feature = "authenticated-machine-effect")]
 pub use physical_machine_effect::*;
 #[cfg(feature = "authenticated-machine-effect")]

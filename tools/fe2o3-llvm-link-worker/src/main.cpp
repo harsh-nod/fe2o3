@@ -237,8 +237,8 @@ int writeResponse(Response ResponseValue) {
   return 0;
 }
 
-int runPhysicalMachineEffect(llvm::ArrayRef<uint8_t> Bytes,
-                             const std::array<uint8_t, 32> &Challenge) {
+int runPhysicalMachineAnalysis(llvm::ArrayRef<uint8_t> Bytes,
+                               const std::array<uint8_t, 32> &Challenge) {
   auto RequestValue = decodePhysicalMachineEffectRequest(Bytes);
   if (!RequestValue) {
     std::string Diagnostic = llvm::toString(RequestValue.takeError());
@@ -255,7 +255,7 @@ int runPhysicalMachineEffect(llvm::ArrayRef<uint8_t> Bytes,
     std::fprintf(stderr, "%s\n", Diagnostic.c_str());
     return 65;
   }
-  auto Encoded = encodePhysicalMachineEffectEvidence(*Evidence);
+  auto Encoded = encodePhysicalMachineAnalysisBundle(*Evidence);
   if (!Encoded) {
     std::string Diagnostic = llvm::toString(Encoded.takeError());
     std::fprintf(stderr, "%s\n", Diagnostic.c_str());
@@ -301,9 +301,9 @@ int v1DecodeFailure(const char *Diagnostic) {
 } // namespace
 
 int main(int ArgumentCount, char **ArgumentValues) {
-  bool PhysicalMachineEffect =
+  bool PhysicalMachineAnalysis =
       ArgumentCount == 4 &&
-      std::strcmp(ArgumentValues[1], "--machine-effects-gfx942-v1") == 0;
+      std::strcmp(ArgumentValues[1], "--machine-analysis-gfx942-v1") == 0;
   bool PhysicalMachineEffectIdentity =
       ArgumentCount == 4 &&
       std::strcmp(ArgumentValues[1],
@@ -312,10 +312,10 @@ int main(int ArgumentCount, char **ArgumentValues) {
       ArgumentCount == 4 &&
       std::strcmp(ArgumentValues[1],
                   "--machine-effects-containment-probe-v1") == 0;
-  if (ArgumentCount != 1 && !PhysicalMachineEffect &&
+  if (ArgumentCount != 1 && !PhysicalMachineAnalysis &&
       !PhysicalMachineEffectContainment && !PhysicalMachineEffectIdentity)
     return 64;
-  bool AuthenticatedMachineEffect = PhysicalMachineEffect ||
+  bool AuthenticatedMachineEffect = PhysicalMachineAnalysis ||
                                     PhysicalMachineEffectIdentity ||
                                     PhysicalMachineEffectContainment;
   if (AuthenticatedMachineEffect && (!installMachineEffectResourceLimits() ||
@@ -353,8 +353,8 @@ int main(int ArgumentCount, char **ArgumentValues) {
   }
   if (AuthenticatedMachineEffect) {
     int Result = 0;
-    if (PhysicalMachineEffect)
-      Result = runPhysicalMachineEffect(Bytes, *ControlChallenge);
+    if (PhysicalMachineAnalysis)
+      Result = runPhysicalMachineAnalysis(Bytes, *ControlChallenge);
     else if (PhysicalMachineEffectIdentity)
       Result = runPhysicalMachineEffectIdentity(Bytes, *ControlChallenge);
     else if (Bytes != std::vector<uint8_t>{0} ||

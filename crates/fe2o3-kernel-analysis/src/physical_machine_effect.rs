@@ -8,9 +8,6 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
-use std::io::Write;
-use std::path::Path;
-use std::process::{Command, Stdio};
 
 pub const PHYSICAL_MACHINE_EFFECT_REQUEST_DOMAIN_V1: &[u8] =
     b"FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-REQUEST/V1\0";
@@ -495,47 +492,6 @@ impl PhysicalMachineEffectEvidenceV1 {
     pub const fn grants_launch_authority(&self) -> bool {
         false
     }
-}
-
-/// Runs the legacy descriptive worker protocol without authenticating execution.
-///
-/// The pathname and request identities are caller supplied, and this helper does
-/// not pin the executable, measure its runtime closure, or bound its lifetime.
-/// Use the authenticated machine-effect API for production evidence.
-pub fn analyze_gfx942_hsaco_with_worker_v1(
-    worker: &Path,
-    request: &PhysicalMachineEffectRequestV1,
-) -> Result<PhysicalMachineEffectEvidenceV1, PhysicalMachineEffectWorkerErrorV1> {
-    let mut command = Command::new(worker);
-    command
-        .arg("--machine-effects-gfx942-v1")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let mut child = crate::process_execution::spawn(&mut command)
-        .map_err(PhysicalMachineEffectWorkerErrorV1::Spawn)?;
-    child
-        .stdin
-        .take()
-        .expect("piped worker stdin is available")
-        .write_all(request.canonical_bytes())
-        .map_err(PhysicalMachineEffectWorkerErrorV1::Write)?;
-    let output = child
-        .wait_with_output()
-        .map_err(PhysicalMachineEffectWorkerErrorV1::Wait)?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr)
-            .chars()
-            .filter(|character| !character.is_control() || *character == '\n')
-            .take(4_096)
-            .collect::<String>();
-        return Err(PhysicalMachineEffectWorkerErrorV1::Rejected {
-            code: output.status.code(),
-            stderr: stderr.trim().to_string(),
-        });
-    }
-    PhysicalMachineEffectEvidenceV1::decode_canonical_for(request, &output.stdout)
-        .map_err(PhysicalMachineEffectWorkerErrorV1::Evidence)
 }
 
 fn encode_request(
@@ -1033,31 +989,3 @@ impl fmt::Display for PhysicalMachineEffectEvidenceErrorV1 {
 }
 
 impl Error for PhysicalMachineEffectEvidenceErrorV1 {}
-
-#[derive(Debug)]
-pub enum PhysicalMachineEffectWorkerErrorV1 {
-    Spawn(std::io::Error),
-    Write(std::io::Error),
-    Wait(std::io::Error),
-    Rejected { code: Option<i32>, stderr: String },
-    Evidence(PhysicalMachineEffectEvidenceErrorV1),
-}
-
-impl fmt::Display for PhysicalMachineEffectWorkerErrorV1 {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "gfx942 physical machine-effect worker failed: {self:?}"
-        )
-    }
-}
-
-impl Error for PhysicalMachineEffectWorkerErrorV1 {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Spawn(error) | Self::Write(error) | Self::Wait(error) => Some(error),
-            Self::Evidence(error) => Some(error),
-            Self::Rejected { .. } => None,
-        }
-    }
-}

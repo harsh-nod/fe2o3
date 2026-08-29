@@ -383,10 +383,41 @@ void physicalAnalysisDerivesDeterministicClosedEffects() {
   if (!SecondTrace)
     fail(takeError(SecondTrace.takeError()));
   require(*FirstTrace == *SecondTrace, "machine trace is not deterministic");
+  auto FirstBundle = encodePhysicalMachineAnalysisBundle(*First);
+  if (!FirstBundle)
+    fail(takeError(FirstBundle.takeError()));
+  auto SecondBundle = encodePhysicalMachineAnalysisBundle(*Second);
+  if (!SecondBundle)
+    fail(takeError(SecondBundle.takeError()));
+  require(*FirstBundle == *SecondBundle,
+          "machine analysis bundle is not deterministic");
   require(First->Entries.size() == 2, "entry evidence count changed");
   require(First->Functions.size() == 2, "closed graph has wrong cardinality");
   require(!First->Blocks.empty() && !First->Instructions.empty(),
           "closed instruction trace is empty");
+  auto IsPayloadRange = [&](uint64_t Offset, uint64_t Size) {
+    return Offset <= Payload.size() && Size <= Payload.size() - Offset;
+  };
+  require(llvm::all_of(First->Entries, [&](const auto &Entry) {
+            return IsPayloadRange(Entry.CodeOffset, Entry.CodeSize);
+          }),
+          "entry evidence uses a non-file address");
+  require(llvm::all_of(First->Functions, [&](const auto &Function) {
+            return IsPayloadRange(Function.CodeOffset, Function.CodeSize);
+          }),
+          "function evidence uses a non-file address");
+  require(llvm::all_of(First->Instructions, [&](const auto &Instruction) {
+            return IsPayloadRange(Instruction.InstructionOffset,
+                                  Instruction.Encoding.size()) &&
+                   std::equal(Instruction.Encoding.begin(),
+                              Instruction.Encoding.end(),
+                              Payload.begin() + Instruction.InstructionOffset);
+          }),
+          "instruction trace does not index exact payload bytes");
+  require(llvm::all_of(First->Effects, [&](const auto &Effect) {
+            return Effect.InstructionOffset < Payload.size();
+          }),
+          "effect evidence uses a non-file address");
   require(llvm::all_of(First->Functions,
                        [](const auto &Function) {
                          return Function.DirectCallees.empty();
@@ -1498,7 +1529,7 @@ void scalarLoadWidthsUseExactMcEncodings() {
     auto Effect = llvm::find_if(Result->Effects, [&](const auto &Candidate) {
       return Candidate.EntrySymbol == "alpha" &&
              Candidate.FunctionSymbol == "alpha" &&
-             Candidate.InstructionOffset == ScalarLoad->Address &&
+             Candidate.InstructionOffset == ScalarLoad->FileOffset &&
              Candidate.Kind == PhysicalMachineEffectKind::GlobalRead;
     });
     require(Effect != Result->Effects.end() && Effect->ByteWidth == Case.Bytes,
@@ -1508,7 +1539,9 @@ void scalarLoadWidthsUseExactMcEncodings() {
 
 } // namespace
 
-int main() {
+int main(int ArgumentCount, char **ArgumentValues) {
+  require(ArgumentCount == 1 || ArgumentCount == 2,
+          "expected at most one HSACO output path");
   identityProbeBindsFreshChallenge();
   targetEnvelopeRejectsAlternatives();
   exactDynamicSymbolicDeclarationIsAccepted();
@@ -1521,5 +1554,14 @@ int main() {
   directCallEdgesAreResolvedExactly();
   everyCallEncodingUsesTheAbiReturnPair();
   scalarLoadWidthsUseExactMcEncodings();
+  if (ArgumentCount == 2) {
+    std::vector<uint8_t> Payload = finalize(makeLoopKernelBitcode());
+    std::ofstream Output(ArgumentValues[1],
+                         std::ios::binary | std::ios::out | std::ios::trunc);
+    require(Output.is_open(), "could not open native HSACO output");
+    Output.write(reinterpret_cast<const char *>(Payload.data()),
+                 static_cast<std::streamsize>(Payload.size()));
+    require(Output.good(), "could not write native HSACO output");
+  }
   return 0;
 }
