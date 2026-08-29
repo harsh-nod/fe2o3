@@ -96,6 +96,7 @@ constexpr uint16_t InstructionMayStore = 1 << 1;
 constexpr uint16_t InstructionTerminator = 1 << 2;
 constexpr uint16_t InstructionBarrier = 1 << 3;
 constexpr uint16_t InstructionPredicable = 1 << 4;
+constexpr uint16_t InstructionMayTrap = 1 << 5;
 
 Error analysisError(const Twine &Message) {
   return createStringError(inconvertibleErrorCode(),
@@ -1181,10 +1182,9 @@ bool forbiddenOpcodeFamily(StringRef Name) {
          Name.starts_with("FLAT_") || Name.starts_with("BUFFER_") ||
          Name.starts_with("TBUFFER_") || Name.starts_with("IMAGE_") ||
          Name.starts_with("SCRATCH_") || Name.starts_with("S_SENDMSG") ||
-         Name.starts_with("S_SLEEP") || Name.starts_with("S_TRAP") ||
-         Name.starts_with("S_DEBUG") || Name.starts_with("S_SETREG") ||
-         Name.starts_with("S_SETPRIO") || Name.starts_with("S_ICACHE") ||
-         Name.starts_with("S_MEMTIME") ||
+         Name.starts_with("S_SLEEP") || Name.starts_with("S_DEBUG") ||
+         Name.starts_with("S_SETREG") || Name.starts_with("S_SETPRIO") ||
+         Name.starts_with("S_ICACHE") || Name.starts_with("S_MEMTIME") ||
          Name.starts_with("S_MEMREALTIME") ||
          Name.starts_with("S_TTRACEDATA") || Name.starts_with("S_WAKEUP") ||
          Name.starts_with("S_HALT") || Name.starts_with("S_RFE") ||
@@ -1283,6 +1283,20 @@ u32Sop2Source1Literal(const DecodedInstruction &Instruction) {
 
 bool isEndProgram(const DecodedInstruction &Instruction) {
   return StringRef(Instruction.Name).starts_with("S_ENDPGM");
+}
+
+bool isSupportedTrap(const DecodedInstruction &Instruction) {
+  if (Instruction.Name != "S_TRAP_vi" || Instruction.Size != 4 ||
+      Instruction.Encoding.size() != 4 || Instruction.Inst.size() != 1 ||
+      !Instruction.Inst.getOperand(0).isImm())
+    return false;
+  int64_t TrapId = Instruction.Inst.getOperand(0).getImm();
+  if (TrapId < 0 ||
+      TrapId > static_cast<int64_t>(std::numeric_limits<uint16_t>::max()))
+    return false;
+  uint32_t Encoding = support::endian::read32le(Instruction.Encoding.data());
+  return (Encoding & 0xffff0000) == 0xbf920000 &&
+         (Encoding & 0xffff) == static_cast<uint16_t>(TrapId);
 }
 
 bool isSetPc(const DecodedInstruction &Instruction) {
@@ -1411,7 +1425,10 @@ buildFunctionCfg(ArrayRef<DecodedInstruction> Instructions, McState &Mc,
     if (!Block.Reachable || !Block.Successors.empty())
       continue;
     const DecodedInstruction &Last = Instructions[Block.End - 1];
-    if (!isEndProgram(Last) && !isSetPc(Last))
+    const MCInstrDesc &Descriptor =
+        Mc.Instructions->get(Last.Inst.getOpcode());
+    if (!isEndProgram(Last) && !isSetPc(Last) &&
+        !isSupportedTrap(Last) && !Descriptor.isTrap())
       return analysisError(Twine("reachable fallthrough exits symbol ") +
                            FunctionName);
   }
@@ -1696,7 +1713,8 @@ makeInstructionTrace(StringRef FunctionName,
                  (Descriptor.mayStore() ? InstructionMayStore : 0) |
                  (Descriptor.isTerminator() ? InstructionTerminator : 0) |
                  (Descriptor.isBarrier() ? InstructionBarrier : 0) |
-                 (Descriptor.isPredicable() ? InstructionPredicable : 0);
+                 (Descriptor.isPredicable() ? InstructionPredicable : 0) |
+                 (isSupportedTrap(Instruction) ? InstructionMayTrap : 0);
 
   Result.Operands.reserve(Instruction.Inst.size());
   for (size_t Index = 0; Index < Instruction.Inst.size(); ++Index) {
@@ -1820,6 +1838,10 @@ analyzeFunction(const SymbolRecord &Function, ArrayRef<SymbolRecord> Symbols,
     if (forbiddenOpcodeFamily(Name))
       return analysisError(Twine("unsupported opcode family ") + Name + " in " +
                            Function.Name);
+    bool SupportedTrap = isSupportedTrap(Instruction);
+    if (Name.starts_with("S_TRAP") && !SupportedTrap)
+      return analysisError(Twine("unclassified trap opcode ") + Name + " in " +
+                           Function.Name);
     auto PhysicalReturn =
         validatePhysicalReturn(*Decoded, Index, *Cfg, ReturnPairIsLiveIn, Mc);
     if (!PhysicalReturn)
@@ -1911,6 +1933,15 @@ analyzeFunction(const SymbolRecord &Function, ArrayRef<SymbolRecord> Symbols,
           Read ? PhysicalMachineMemoryAccess::Read
                : PhysicalMachineMemoryAccess::Write;
       InstructionTrace->MemoryWidth = *Width;
+      Result.Instructions.push_back(std::move(*InstructionTrace));
+      continue;
+    }
+    if (SupportedTrap) {
+      if (Descriptor.mayLoad() || Descriptor.mayStore() ||
+          Descriptor.isBranch() || Descriptor.isCall() ||
+          Descriptor.isIndirectBranch())
+        return analysisError(Twine("unsupported trap instruction ") + Name +
+                             " in " + Function.Name);
       Result.Instructions.push_back(std::move(*InstructionTrace));
       continue;
     }

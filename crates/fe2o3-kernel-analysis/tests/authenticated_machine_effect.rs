@@ -144,13 +144,41 @@ fn configured_native_worker_uses_authenticated_identity_probe() {
     for instruction in execution.analysis().trace().instructions() {
         *opcodes.entry(instruction.opcode()).or_default() += 1;
     }
+    let request_identity = execution.request().identity();
+    let bundle_identity = execution.analysis().identity();
+    let receipt_identity = execution.identity();
     eprintln!(
-        "native gfx942 analysis: request={:?} bundle={:?} receipt={:?} blocks={} instructions={} opcodes={opcodes:?}",
-        execution.request().identity(),
-        execution.analysis().identity(),
-        execution.identity(),
+        "native gfx942 analysis: request_sha256={} request_bytes={} bundle_sha256={} bundle_bytes={} receipt_sha256={} receipt_bytes={} blocks={} instructions={} opcodes={opcodes:?}",
+        hex_sha256(request_identity.sha256()),
+        request_identity.byte_len(),
+        hex_sha256(bundle_identity.sha256()),
+        bundle_identity.byte_len(),
+        hex_sha256(receipt_identity.sha256()),
+        receipt_identity.byte_len(),
         execution.analysis().trace().blocks().len(),
         execution.analysis().trace().instructions().len(),
+    );
+}
+
+fn hex_sha256(bytes: [u8; 32]) -> String {
+    use std::fmt::Write as _;
+
+    let mut output = String::with_capacity(64);
+    for byte in bytes {
+        write!(&mut output, "{byte:02x}").unwrap();
+    }
+    output
+}
+
+#[test]
+fn qualification_identity_hex_is_fixed_width_and_lowercase() {
+    let mut bytes = [0_u8; 32];
+    bytes[0] = 0x01;
+    bytes[15] = 0xab;
+    bytes[31] = 0xff;
+    assert_eq!(
+        hex_sha256(bytes),
+        "010000000000000000000000000000ab000000000000000000000000000000ff"
     );
 }
 

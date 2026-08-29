@@ -7,6 +7,7 @@
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
@@ -250,6 +251,54 @@ std::vector<uint8_t> makeLoopKernelBitcode() {
   return std::vector<uint8_t>(Bytes.begin(), Bytes.end());
 }
 
+std::vector<uint8_t> makeTrapKernelBitcode() {
+  LLVMContext Context;
+  Module ModuleValue("physical-machine-trap-fixture", Context);
+  auto Machine = createMachine();
+  ModuleValue.setTargetTriple(Triple(TripleName));
+  ModuleValue.setDataLayout(Machine->createDataLayout());
+  ModuleValue.addModuleFlag(Module::Error, "amdhsa_code_object_version", 600);
+
+  Type *F32 = Type::getFloatTy(Context);
+  Type *I32 = Type::getInt32Ty(Context);
+  PointerType *GlobalPointer = PointerType::get(Context, 1);
+  FunctionType *AlphaType =
+      FunctionType::get(Type::getVoidTy(Context), {GlobalPointer, I32}, false);
+  Function *Alpha = Function::Create(AlphaType, GlobalValue::ExternalLinkage,
+                                     "alpha", ModuleValue);
+  configureKernel(*Alpha, Context);
+  BasicBlock *Entry = BasicBlock::Create(Context, "entry", Alpha);
+  BasicBlock *TrapBlock = BasicBlock::Create(Context, "trap", Alpha);
+  BasicBlock *Exit = BasicBlock::Create(Context, "exit", Alpha);
+  IRBuilder<> Builder(Entry);
+  Builder.CreateCondBr(
+      Builder.CreateICmpEQ(Alpha->getArg(1), ConstantInt::get(I32, 0)),
+      TrapBlock, Exit);
+  Builder.SetInsertPoint(TrapBlock);
+  FunctionType *TrapType = FunctionType::get(Type::getVoidTy(Context), false);
+  Builder.CreateCall(TrapType,
+                     InlineAsm::get(TrapType, "s_trap 2", "", true), {});
+  Builder.CreateBr(Exit);
+  Builder.SetInsertPoint(Exit);
+  Builder.CreateStore(ConstantFP::get(F32, 1.0), Alpha->getArg(0));
+  Builder.CreateRetVoid();
+
+  FunctionType *ZetaType =
+      FunctionType::get(Type::getVoidTy(Context), {GlobalPointer}, false);
+  Function *Zeta = Function::Create(ZetaType, GlobalValue::ExternalLinkage,
+                                    "zeta", ModuleValue);
+  configureKernel(*Zeta, Context);
+  BasicBlock *ZetaEntry = BasicBlock::Create(Context, "entry", Zeta);
+  IRBuilder<> ZetaBuilder(ZetaEntry);
+  ZetaBuilder.CreateStore(ConstantFP::get(F32, 2.0), Zeta->getArg(0));
+  ZetaBuilder.CreateRetVoid();
+
+  SmallVector<char, 0> Bytes;
+  raw_svector_ostream Stream(Bytes);
+  WriteBitcodeToFile(ModuleValue, Stream);
+  return std::vector<uint8_t>(Bytes.begin(), Bytes.end());
+}
+
 Input input(std::vector<uint8_t> Bytes) {
   return {InputKind::LlvmBitcode, SHA256::hash(Bytes), std::move(Bytes)};
 }
@@ -483,6 +532,30 @@ void backwardLoopCfgIsAcceptedGenerically() {
     fail(takeError(TraceBytes.takeError()));
   require(TraceBytes->size() > EffectBytes->size(),
           "loop instruction trace unexpectedly lost detail");
+}
+
+void trapSitesAreRetainedForSemanticDischarge() {
+  auto Payload = finalize(makeTrapKernelBitcode());
+  auto Result = analyzeGfx942PhysicalMachineEffects(directRequest(Payload));
+  if (!Result)
+    fail(takeError(Result.takeError()));
+  auto Trap = llvm::find_if(Result->Instructions, [](const auto &Instruction) {
+    return Instruction.Opcode == "S_TRAP_vi";
+  });
+  require(Trap != Result->Instructions.end(),
+          "trap fixture has no retained S_TRAP instruction");
+  require((Trap->Flags & (1 << 5)) != 0 &&
+              Trap->BranchKind == PhysicalMachineBranchKind::None &&
+              Trap->MemoryAccess == PhysicalMachineMemoryAccess::None &&
+              Trap->Operands.size() == 1 &&
+              Trap->Operands[0].Kind ==
+                  PhysicalMachineOperandKind::SignedImmediate &&
+              Trap->Operands[0].Value == 2,
+          "trap trace lost its exact MC classification or operand");
+  auto Bundle = encodePhysicalMachineAnalysisBundle(*Result);
+  if (!Bundle)
+    fail(takeError(Bundle.takeError()));
+  require(!Bundle->empty(), "trap analysis bundle is empty");
 }
 
 void identityProbeBindsFreshChallenge() {
@@ -1547,6 +1620,7 @@ int main(int ArgumentCount, char **ArgumentValues) {
   exactDynamicSymbolicDeclarationIsAccepted();
   physicalAnalysisDerivesDeterministicClosedEffects();
   backwardLoopCfgIsAcceptedGenerically();
+  trapSitesAreRetainedForSemanticDischarge();
   decoderBindsBytesSymbolsAndIdentities();
   targetDescriptorAndEffectExpansionFailClosed();
   loaderViewMutationsFailClosed();

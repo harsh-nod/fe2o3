@@ -228,6 +228,7 @@ struct TraceMutationOffsets {
     first_encoding: usize,
     conditional_target: usize,
     conditional_successor: usize,
+    trap_flags: usize,
 }
 
 fn loop_trace_fixture() -> (
@@ -384,19 +385,15 @@ fn loop_trace_fixture() -> (
         TraceInstruction {
             offset: 20,
             block: 2,
-            opcode: "V_ADD_F32_e64_vi",
+            opcode: "S_TRAP_vi",
             encoding: encodings[3],
-            definitions: 1,
-            operands: vec![
-                TraceOperand::Register("VGPR4", Some(1)),
-                TraceOperand::Register("VGPR4", None),
-                TraceOperand::Register("VGPR0", None),
-            ],
+            definitions: 0,
+            operands: vec![TraceOperand::Signed(2)],
             implicit_definitions: Vec::new(),
-            implicit_uses: vec!["EXEC"],
+            implicit_uses: Vec::new(),
             branch: 0,
             target: 0,
-            flags: 16,
+            flags: 32,
             memory: 0,
             width: 0,
         },
@@ -494,6 +491,7 @@ fn encode_trace(
     push_u32(&mut output, instructions.len() as u32);
     let mut first_encoding = 0;
     let mut conditional_target = 0;
+    let mut trap_flags = 0;
     for (index, instruction) in instructions.iter().enumerate() {
         push_text(&mut output, "loop_entry");
         push_u64(&mut output, instruction.offset);
@@ -533,6 +531,9 @@ fn encode_trace(
             conditional_target = output.len();
         }
         push_u64(&mut output, instruction.target);
+        if instruction.opcode == "S_TRAP_vi" {
+            trap_flags = output.len();
+        }
         push_u16(&mut output, instruction.flags);
         output.push(instruction.memory);
         push_u16(&mut output, instruction.width);
@@ -546,6 +547,7 @@ fn encode_trace(
             first_encoding,
             conditional_target,
             conditional_successor,
+            trap_flags,
         },
     )
 }
@@ -914,7 +916,7 @@ fn machine_trace_binds_exact_bytes_def_use_effects_and_loop_cfg() {
     assert_eq!(trace.instructions()[1].explicit_definition_count(), 1);
     assert_eq!(trace.instructions()[1].implicit_uses(), &["EXEC"]);
     assert!(trace.instructions()[1].flags().may_load());
-    assert!(trace.instructions()[3].flags().is_predicable());
+    assert!(trace.instructions()[3].flags().may_trap());
     assert_eq!(trace.identity().byte_len(), bytes.len() as u64);
     assert!(trace.binds_exact_payload_instruction_bytes());
     assert!(!trace.establishes_machine_semantics());
@@ -930,6 +932,16 @@ fn machine_trace_rejects_instruction_byte_substitution() {
     assert_eq!(
         PhysicalMachineTraceEvidenceV1::decode_canonical_for(&request, &effects, &bytes),
         Err(PhysicalMachineTraceEvidenceErrorV1::InstructionBytesMismatch)
+    );
+}
+
+#[test]
+fn machine_trace_rejects_trap_with_memory_flags() {
+    let (request, effects, mut bytes, offsets) = loop_trace_fixture();
+    bytes[offsets.trap_flags..offsets.trap_flags + 2].copy_from_slice(&(32_u16 | 1).to_le_bytes());
+    assert_eq!(
+        PhysicalMachineTraceEvidenceV1::decode_canonical_for(&request, &effects, &bytes),
+        Err(PhysicalMachineTraceEvidenceErrorV1::InvalidMemoryAccess)
     );
 }
 

@@ -29,7 +29,8 @@ HSACO, validates its loader-visible ELF and metadata views, resolves a bounded
 direct-call graph, and emits one canonical analysis bundle. The bundle contains
 both static global-address, global-read, global-write, and return sites and the
 complete decoded instruction/CFG trace: exact encodings, operands, explicit and
-implicit register facts, branches, and memory widths. Every serialized code
+implicit register facts, branches, memory widths, and exact decoded trap
+classification. Every serialized code
 range and instruction location is a payload file offset whose bytes must match
 the exact HSACO. The trace hash-binds the effect record, and the outer bundle
 keeps both records indivisible at the worker boundary.
@@ -37,7 +38,10 @@ keeps both records indivisible at the worker boundary.
 The analyzer accepts arbitrary canonical entry symbols and uses LLVM MC
 instruction properties rather than a workload-specific opcode or CFG profile.
 Unsupported memory spaces, atomics, indirect control flow, self-targeting
-instructions, recursion, and unmodeled side effects fail closed. Direct branch
+instructions, recursion, and unmodeled side effects fail closed. The exact
+gfx942 `S_TRAP_vi` form is retained as a `may_trap` trace fact so a downstream
+machine-semantics checker can prove the site unreachable; analyzer acceptance
+alone does not discharge or authorize a trap. Direct branch
 backedges, including basic-block self loops, are retained in the finite CFG so
 ordinary bounded-loop machine shapes can be analyzed without a
 workload-specific route.

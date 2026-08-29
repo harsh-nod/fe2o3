@@ -3,8 +3,9 @@
 //! The trace is decoded independently from the native analyzer output and is
 //! checked against the exact payload bytes and the closed physical-effect
 //! evidence. It preserves instruction encodings, operands, explicit and
-//! implicit register def/use facts, basic blocks, and direct control-flow
-//! targets. These are extractor facts, not an executable semantics: this type
+//! implicit register def/use facts, basic blocks, direct control-flow targets,
+//! and native exact trap classification. These are extractor facts, not an
+//! executable semantics: this type
 //! does not prove source/compiler refinement, address safety, race freedom,
 //! floating-point behavior, termination, or launch safety.
 
@@ -35,11 +36,13 @@ const FLAG_MAY_STORE_V1: u16 = 1 << 1;
 const FLAG_TERMINATOR_V1: u16 = 1 << 2;
 const FLAG_BARRIER_V1: u16 = 1 << 3;
 const FLAG_PREDICABLE_V1: u16 = 1 << 4;
+const FLAG_MAY_TRAP_V1: u16 = 1 << 5;
 const KNOWN_INSTRUCTION_FLAGS_V1: u16 = FLAG_MAY_LOAD_V1
     | FLAG_MAY_STORE_V1
     | FLAG_TERMINATOR_V1
     | FLAG_BARRIER_V1
-    | FLAG_PREDICABLE_V1;
+    | FLAG_PREDICABLE_V1
+    | FLAG_MAY_TRAP_V1;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct PhysicalMachineTraceEvidenceIdentityV1 {
@@ -79,6 +82,13 @@ impl PhysicalMachineInstructionFlagsV1 {
 
     pub const fn is_predicable(self) -> bool {
         self.0 & FLAG_PREDICABLE_V1 != 0
+    }
+
+    /// The native analyzer classifies this exact instruction encoding as a trap.
+    ///
+    /// This is an extractor fact, not evidence that the trap is unreachable.
+    pub const fn may_trap(self) -> bool {
+        self.0 & FLAG_MAY_TRAP_V1 != 0
     }
 
     pub const fn bits(self) -> u16 {
@@ -539,6 +549,12 @@ fn validate_instruction_shape(
     // commonly set on branches. Workgroup synchronization opcodes are rejected
     // separately by the native analyzer's closed side-effect policy.
     if flags.may_load() && flags.may_store() {
+        return Err(PhysicalMachineTraceEvidenceErrorV1::InvalidInstructionFlags);
+    }
+    if flags.may_trap()
+        && (branch_kind != PhysicalMachineBranchKindV1::None
+            || memory_access != PhysicalMachineMemoryAccessV1::None)
+    {
         return Err(PhysicalMachineTraceEvidenceErrorV1::InvalidInstructionFlags);
     }
     match memory_access {
