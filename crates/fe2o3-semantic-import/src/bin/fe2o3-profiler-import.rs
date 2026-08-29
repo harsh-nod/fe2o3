@@ -6,7 +6,7 @@ use std::process::ExitCode;
 use fe2o3_semantic_import::*;
 use fe2o3_semantic_trace::*;
 
-const MAX_ARGUMENTS: usize = 128;
+const MAX_ARGUMENTS: usize = 1_600;
 const MAX_ARGUMENT_BYTES: usize = 512;
 
 fn main() -> ExitCode {
@@ -25,13 +25,14 @@ fn run() -> Result<Vec<u8>, &'static str> {
         environment: request.environment.ok_or("environment")?,
         collector_tool: request.tool.ok_or("tool")?,
         collector_configuration: request.configuration.ok_or("configuration")?,
-        stable_devices: request.devices,
+        stable_device_bindings: request.device_bindings,
     };
     let bundle = match request.command {
         CommandV4::Att => import_rocprofv3_att_profiler_bundle_v4(
             &source,
             ProfilerAttBindingV4 {
                 environment,
+                source_agent_id: request.att_agent_id.ok_or("att_agent_id")?,
                 referenced_artifacts: request.att_artifacts,
             },
         ),
@@ -76,7 +77,8 @@ struct RequestV4 {
     environment: Option<ContentIdentityRecordV1>,
     tool: Option<ContentIdentityRecordV1>,
     configuration: Option<ContentIdentityRecordV1>,
-    devices: Vec<ContentIdentityRecordV1>,
+    device_bindings: Vec<ProfilerDeviceBindingV4>,
+    att_agent_id: Option<u64>,
     kir_digest: Option<OpaqueIdentityV1>,
     kir_len: Option<u64>,
     wave_width: Option<WaveWidthV1>,
@@ -98,7 +100,8 @@ impl RequestV4 {
             environment: None,
             tool: None,
             configuration: None,
-            devices: Vec::new(),
+            device_bindings: Vec::new(),
+            att_agent_id: None,
             kir_digest: None,
             kir_len: None,
             wave_width: None,
@@ -115,11 +118,19 @@ impl RequestV4 {
                 "--environment" => set_once(&mut request.environment, parse_content(value)?)?,
                 "--tool" => set_once(&mut request.tool, parse_content(value)?)?,
                 "--config" => set_once(&mut request.configuration, parse_content(value)?)?,
-                "--device" => {
-                    if request.devices.len() == MAX_PROFILER_DISPATCHES_V4 {
+                "--device-binding" => {
+                    if request.device_bindings.len() == MAX_PROFILER_DEVICE_BINDINGS_V4 {
                         return Err("arguments");
                     }
-                    request.devices.push(parse_content(value)?);
+                    let (source_agent_id, identity) =
+                        value.split_once('=').ok_or("device_binding")?;
+                    request.device_bindings.push(ProfilerDeviceBindingV4 {
+                        source_agent_id: parse_canonical_u64(source_agent_id)?,
+                        stable_identity: parse_content(identity)?,
+                    });
+                }
+                "--att-agent-id" => {
+                    set_once(&mut request.att_agent_id, parse_canonical_u64(value)?)?
                 }
                 "--kir-sha256" => set_once(&mut request.kir_digest, parse_opaque(value)?)?,
                 "--kir-len" => set_once(&mut request.kir_len, parse_nonzero(value)?)?,
@@ -149,7 +160,7 @@ impl RequestV4 {
                 _ => return Err("arguments"),
             }
         }
-        if request.devices.is_empty() {
+        if request.device_bindings.is_empty() {
             return Err("device");
         }
         match command {
@@ -158,14 +169,16 @@ impl RequestV4 {
                     || request.kir_len.is_some()
                     || request.wave_width.is_some()
                     || request.artifact.is_some()
-                    || request.source_map.is_some() =>
+                    || request.source_map.is_some()
+                    || request.att_agent_id.is_none() =>
             {
                 Err("arguments")
             }
             CommandV4::DispatchJson | CommandV4::DispatchCsv
                 if request.kir_digest.is_none()
                     || request.kir_len.is_none()
-                    || request.wave_width.is_none() =>
+                    || request.wave_width.is_none()
+                    || request.att_agent_id.is_some() =>
             {
                 Err("arguments")
             }
@@ -270,6 +283,16 @@ where
         return Err("number");
     }
     Ok(value)
+}
+
+fn parse_canonical_u64(value: &str) -> Result<u64, &'static str> {
+    if value.is_empty()
+        || !value.bytes().all(|byte| byte.is_ascii_digit())
+        || (value.len() > 1 && value.starts_with('0'))
+    {
+        return Err("number");
+    }
+    value.parse().map_err(|_| "number")
 }
 
 fn arguments() -> Result<Vec<String>, &'static str> {

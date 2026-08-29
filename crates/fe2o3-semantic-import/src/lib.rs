@@ -939,6 +939,19 @@ pub fn import_rocprofv3_capture_v1(
     binding: RocprofCaptureBindingV1,
     limits: ImportLimitsV1,
 ) -> Result<SemanticCaptureV1, ImportErrorV1> {
+    import_rocprofv3_capture_with_agents_v1(source, binding, limits).map(|value| value.capture)
+}
+
+pub(crate) struct RocprofCaptureWithAgentsV1 {
+    pub capture: SemanticCaptureV1,
+    pub source_agent_ids: Vec<u64>,
+}
+
+pub(crate) fn import_rocprofv3_capture_with_agents_v1(
+    source: &[u8],
+    binding: RocprofCaptureBindingV1,
+    limits: ImportLimitsV1,
+) -> Result<RocprofCaptureWithAgentsV1, ImportErrorV1> {
     validate_source_size(source, limits)?;
     let source_identity = source_identity(ROCPROF_JSON_SOURCE_IDENTITY_DOMAIN_V1, source)?;
     let document: RocprofDocument =
@@ -973,6 +986,7 @@ pub fn import_rocprofv3_capture_v1(
         .unwrap_or_else(|| IdentityFactV1::unavailable(CaptureUnavailableReasonV1::NotProvided));
     let mut device_catalog = std::collections::BTreeMap::new();
     let mut devices = Vec::new();
+    let mut source_agent_ids = Vec::new();
     let mut dispatches = Vec::new();
     dispatches
         .try_reserve_exact(total_dispatch_count)
@@ -1000,6 +1014,7 @@ pub fn import_rocprofv3_capture_v1(
                     )
                     .map_err(ImportErrorV1::Capture)?;
                     device_catalog.insert(agent.handle, identity);
+                    source_agent_ids.push(agent.handle);
                     devices.push(CaptureDeviceV1 {
                         identity,
                         identity_origin: TruthOriginV1::Observed,
@@ -1066,7 +1081,10 @@ pub fn import_rocprofv3_capture_v1(
         },
     };
     capture.validate().map_err(ImportErrorV1::Capture)?;
-    Ok(capture)
+    Ok(RocprofCaptureWithAgentsV1 {
+        capture,
+        source_agent_ids,
+    })
 }
 
 /// Imports the installed rocprofv3 ATT `filenames.json` manifest as sparse

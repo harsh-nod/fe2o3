@@ -5,8 +5,8 @@ use std::io::{self, Write};
 
 use fe2o3_semantic_import::{
     AttArtifactReferenceV4, CaptureDispatchV1, CaptureIdentityV1, ContentIdentityRecordV1,
-    MAX_PROFILER_BUNDLE_BYTES_V4, ProfilerCoverageV4, ProfilerDeviceV4, ProfilerSourceKindV4,
-    SemanticProfilerBundleV4, TruthOriginV1, decode_profiler_bundle_v4,
+    IdentityFactV1, MAX_PROFILER_BUNDLE_BYTES_V4, ProfilerCoverageV4, ProfilerDeviceV4,
+    ProfilerSourceKindV4, SemanticProfilerBundleV4, TruthOriginV1, decode_profiler_bundle_v4,
     profiler_bundle_content_identity_v4,
 };
 use serde::Serialize;
@@ -337,6 +337,7 @@ impl ProfilerQuerySessionV4 {
         &self,
         response: &ProfilerQueryResponseV4,
     ) -> Result<Vec<u8>, ProfilerQueryErrorV4> {
+        self.validate_response(response)?;
         let mut output = Vec::new();
         let mut writer = BoundedWriterV4 {
             output: &mut output,
@@ -352,6 +353,78 @@ impl ProfilerQuerySessionV4 {
         })?;
         output.push(b'\n');
         Ok(output)
+    }
+
+    fn validate_response(
+        &self,
+        response: &ProfilerQueryResponseV4,
+    ) -> Result<(), ProfilerQueryErrorV4> {
+        let valid = match response {
+            ProfilerQueryResponseV4::Capabilities {
+                context,
+                capabilities,
+            } => *context == self.context && *capabilities == self.capabilities(),
+            ProfilerQueryResponseV4::Open { context, coverage } => {
+                *context == self.context && *coverage == self.bundle.coverage
+            }
+            ProfilerQueryResponseV4::Page { page } => self.validate_page(page)?,
+            ProfilerQueryResponseV4::InspectDispatch {
+                context,
+                dispatch,
+                evidence,
+            } => {
+                *context == self.context
+                    && self
+                        .bundle
+                        .dispatch_capture
+                        .as_ref()
+                        .and_then(|capture| {
+                            capture
+                                .dispatches
+                                .iter()
+                                .find(|candidate| candidate.identity == dispatch.identity)
+                        })
+                        .is_some_and(|candidate| candidate == dispatch.as_ref())
+                    && *evidence == self.evidence(TruthOriginV1::Observed, Some(dispatch.identity))
+            }
+            ProfilerQueryResponseV4::PlanNextCapture { context, plan } => {
+                *context == self.context && *plan == self.plan(plan.goal)
+            }
+        };
+        if valid {
+            Ok(())
+        } else {
+            Err(ProfilerQueryErrorV4::InvalidResponse)
+        }
+    }
+
+    fn validate_page(&self, page: &ProfilerPageV4) -> Result<bool, ProfilerQueryErrorV4> {
+        if page.context != self.context
+            || usize::from(page.returned) != page.items.len()
+            || page.returned > self.limits.max_page_items
+        {
+            return Ok(false);
+        }
+        let all = self.items(page.kind)?;
+        let end = match page.next_cursor {
+            Some(cursor)
+                if cursor.query_binding
+                    == cursor_binding(self.context.bundle_identity.digest, page.kind)? =>
+            {
+                let end = usize::try_from(cursor.position)
+                    .map_err(|_| ProfilerQueryErrorV4::InvalidResponse)?;
+                if end >= all.len() {
+                    return Ok(false);
+                }
+                end
+            }
+            Some(_) => return Ok(false),
+            None => all.len(),
+        };
+        let Some(start) = end.checked_sub(page.items.len()) else {
+            return Ok(false);
+        };
+        Ok(all.get(start..end) == Some(page.items.as_slice()))
     }
 
     fn evidence(
@@ -676,6 +749,8 @@ pub enum ProfilerQueryErrorV4 {
     CursorMismatch,
     CursorOutOfRange,
     DispatchNotFound,
+    InvalidResponse,
+    InvalidComparison,
     ResponseTooLarge,
     JsonEncode,
     Identity,
@@ -805,11 +880,11 @@ pub fn compare_profiler_bundles_v4(
             &candidate,
             |left, right| left.kernel_ir == right.kernel_ir,
         ),
-        dispatch_comparison_fact(
+        dispatch_identity_comparison_fact(
             ProfilerCompatibilityRequirementV4::Artifact,
             &baseline,
             &candidate,
-            |left, right| left.artifact == right.artifact,
+            |dispatch| dispatch.artifact,
         ),
     ];
     let comparable = facts
@@ -883,13 +958,112 @@ pub fn compare_profiler_bundles_v4(
 pub fn encode_profiler_bundle_comparison_v4(
     comparison: &ProfilerBundleComparisonV4,
 ) -> Result<Vec<u8>, ProfilerQueryErrorV4> {
+    validate_bundle_comparison_v4(comparison)?;
     encode_bounded_profiler_value_v4(comparison)
 }
 
 pub fn encode_profiler_numeric_comparison_v4(
     comparison: &ProfilerNumericComparisonV4,
 ) -> Result<Vec<u8>, ProfilerQueryErrorV4> {
+    validate_numeric_comparison_v4(comparison)?;
     encode_bounded_profiler_value_v4(comparison)
+}
+
+fn validate_bundle_comparison_v4(
+    comparison: &ProfilerBundleComparisonV4,
+) -> Result<(), ProfilerQueryErrorV4> {
+    let requirements = [
+        ProfilerCompatibilityRequirementV4::Environment,
+        ProfilerCompatibilityRequirementV4::CollectorTool,
+        ProfilerCompatibilityRequirementV4::CollectorConfiguration,
+        ProfilerCompatibilityRequirementV4::StableDevices,
+        ProfilerCompatibilityRequirementV4::DispatchWorkload,
+        ProfilerCompatibilityRequirementV4::KernelIr,
+        ProfilerCompatibilityRequirementV4::Artifact,
+    ];
+    let facts_are_valid = comparison.compatibility.len() == requirements.len()
+        && comparison
+            .compatibility
+            .iter()
+            .zip(requirements)
+            .all(|(fact, requirement)| {
+                fact.requirement == requirement
+                    && match fact.status {
+                        ProfilerCompatibilityStatusV4::Exact
+                        | ProfilerCompatibilityStatusV4::Mismatch => {
+                            fact.origin == TruthOriginV1::Declared
+                        }
+                        ProfilerCompatibilityStatusV4::Unavailable => {
+                            fact.origin == TruthOriginV1::Unavailable
+                        }
+                    }
+            });
+    let derived_comparable = comparison
+        .compatibility
+        .iter()
+        .all(|fact| fact.status == ProfilerCompatibilityStatusV4::Exact);
+    if !facts_are_valid
+        || comparison.comparable != derived_comparable
+        || (!comparison.comparable && !comparison.deltas.is_empty())
+        || comparison.unavailable.is_empty()
+        || !comparison
+            .unavailable
+            .iter()
+            .all(|value| valid_comparison_text(value))
+        || !comparison.deltas.iter().all(valid_numeric_delta_v4)
+    {
+        return Err(ProfilerQueryErrorV4::InvalidComparison);
+    }
+    Ok(())
+}
+
+fn validate_numeric_comparison_v4(
+    comparison: &ProfilerNumericComparisonV4,
+) -> Result<(), ProfilerQueryErrorV4> {
+    let kind_is_valid = match comparison.kind {
+        ProfilerNumericCaptureKindV4::DispatchCountersV2 => {
+            comparison.stable_environment == ProfilerCompatibilityStatusV4::Unavailable
+                && (comparison.numeric_dimensions_comparable || comparison.deltas.is_empty())
+        }
+        ProfilerNumericCaptureKindV4::StochasticPcSamplesV3 => {
+            comparison.stable_environment == ProfilerCompatibilityStatusV4::Unavailable
+                && !comparison.numeric_dimensions_comparable
+                && comparison.deltas.is_empty()
+        }
+    };
+    if !kind_is_valid
+        || comparison.unavailable.is_empty()
+        || !comparison
+            .unavailable
+            .iter()
+            .all(|value| valid_comparison_text(value))
+        || !comparison.deltas.iter().all(valid_numeric_delta_v4)
+    {
+        return Err(ProfilerQueryErrorV4::InvalidComparison);
+    }
+    Ok(())
+}
+
+fn valid_numeric_delta_v4(delta: &ProfilerNumericDeltaV4) -> bool {
+    let baseline = f64::from_bits(delta.baseline_f64_bits);
+    let candidate = f64::from_bits(delta.candidate_f64_bits);
+    let difference = f64::from_bits(delta.delta_f64_bits);
+    !delta.metric.is_empty()
+        && valid_comparison_text(&delta.metric)
+        && !delta.dimension.is_empty()
+        && valid_comparison_text(&delta.dimension)
+        && valid_comparison_text(delta.limitation)
+        && delta.origin == TruthOriginV1::Inferred
+        && !delta.baseline_evidence.is_empty()
+        && !delta.candidate_evidence.is_empty()
+        && baseline.is_finite()
+        && candidate.is_finite()
+        && difference.is_finite()
+        && (candidate - baseline).to_bits() == delta.delta_f64_bits
+}
+
+fn valid_comparison_text(value: &str) -> bool {
+    !value.is_empty() && value.len() <= 4_096 && !value.contains('\0')
 }
 
 fn encode_bounded_profiler_value_v4(
@@ -944,6 +1118,46 @@ fn dispatch_comparison_fact(
     comparison_fact(
         requirement,
         dispatch_pairs_match(left, right, predicate),
+        TruthOriginV1::Declared,
+    )
+}
+
+fn dispatch_identity_comparison_fact(
+    requirement: ProfilerCompatibilityRequirementV4,
+    left: &SemanticProfilerBundleV4,
+    right: &SemanticProfilerBundleV4,
+    identity: impl Fn(&CaptureDispatchV1) -> IdentityFactV1,
+) -> ProfilerCompatibilityFactV4 {
+    let (Some(left), Some(right)) = (&left.dispatch_capture, &right.dispatch_capture) else {
+        return ProfilerCompatibilityFactV4 {
+            requirement,
+            status: ProfilerCompatibilityStatusV4::Unavailable,
+            origin: TruthOriginV1::Unavailable,
+        };
+    };
+    let available = left
+        .dispatches
+        .iter()
+        .chain(&right.dispatches)
+        .all(|dispatch| {
+            let fact = identity(dispatch);
+            fact.origin != TruthOriginV1::Unavailable && fact.value.is_some()
+        });
+    if !available {
+        return ProfilerCompatibilityFactV4 {
+            requirement,
+            status: ProfilerCompatibilityStatusV4::Unavailable,
+            origin: TruthOriginV1::Unavailable,
+        };
+    }
+    comparison_fact(
+        requirement,
+        left.dispatches.len() == right.dispatches.len()
+            && left
+                .dispatches
+                .iter()
+                .zip(&right.dispatches)
+                .all(|(left, right)| identity(left) == identity(right)),
         TruthOriginV1::Declared,
     )
 }

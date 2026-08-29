@@ -15,14 +15,15 @@ use sha2::{Digest, Sha256};
 use crate::{
     ArtifactClaimV1, CaptureIdentityV1, CaptureUnavailableReasonV1, ContentIdentityRecordV1,
     ContentSchemeV1, ImportLimitsV1, LossStateV1, LossStatusV1, RocprofCaptureBindingV1,
-    SemanticCaptureV1, TruthOriginV1, import_rocprofv3_capture_v1,
+    SemanticCaptureV1, TruthOriginV1, import_rocprofv3_capture_with_agents_v1,
 };
 
 pub const PROFILER_BUNDLE_SCHEMA_VERSION_V4: u16 = 4;
 pub const MAX_PROFILER_BUNDLE_BYTES_V4: u64 = 16 * 1024 * 1024;
 pub const MAX_PROFILER_SOURCE_BYTES_V4: u64 = 8 * 1024 * 1024;
 pub const MAX_PROFILER_DISPATCHES_V4: usize = 16_384;
-pub const MAX_PROFILER_ATT_REFERENCES_V4: usize = 16_384;
+pub const MAX_PROFILER_DEVICE_BINDINGS_V4: usize = 256;
+pub const MAX_PROFILER_ATT_REFERENCES_V4: usize = 512;
 pub const MAX_PROFILER_REFERENCE_BYTES_V4: usize = 256;
 pub const MAX_PROFILER_CSV_COLUMNS_V4: usize = 32;
 pub const MAX_PROFILER_CSV_FIELD_BYTES_V4: usize = 256;
@@ -112,7 +113,13 @@ pub struct ProfilerEnvironmentBindingV4 {
     pub environment: ContentIdentityRecordV1,
     pub collector_tool: ContentIdentityRecordV1,
     pub collector_configuration: ContentIdentityRecordV1,
-    pub stable_devices: Vec<ContentIdentityRecordV1>,
+    pub stable_device_bindings: Vec<ProfilerDeviceBindingV4>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProfilerDeviceBindingV4 {
+    pub source_agent_id: u64,
+    pub stable_identity: ContentIdentityRecordV1,
 }
 
 #[derive(Clone, Debug)]
@@ -133,6 +140,7 @@ pub struct ProfilerAttArtifactBindingV4 {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProfilerAttBindingV4 {
     pub environment: ProfilerEnvironmentBindingV4,
+    pub source_agent_id: u64,
     pub referenced_artifacts: Vec<ProfilerAttArtifactBindingV4>,
 }
 
@@ -380,7 +388,7 @@ pub fn import_rocprofv3_json_profiler_bundle_v4(
 ) -> Result<SemanticProfilerBundleV4, ProfilerBundleErrorV4> {
     validate_source(source)?;
     validate_environment(&binding.environment)?;
-    let capture = import_rocprofv3_capture_v1(
+    let imported = import_rocprofv3_capture_with_agents_v1(
         source,
         RocprofCaptureBindingV1 {
             kernel_ir_claim: binding.kernel_ir_claim,
@@ -391,12 +399,13 @@ pub fn import_rocprofv3_json_profiler_bundle_v4(
         ImportLimitsV1::default(),
     )
     .map_err(|_| ProfilerBundleErrorV4::InvalidRocprofJson)?;
-    let source = capture.runs[0].source;
+    let source = imported.capture.runs[0].source;
     finish_dispatch_bundle(
         ProfilerSourceKindV4::Rocprofv3KernelDispatchJson,
         source,
         source,
-        capture,
+        imported.capture,
+        imported.source_agent_ids,
         binding.environment,
     )
 }
@@ -408,7 +417,7 @@ pub fn import_rocprofv3_csv_profiler_bundle_v4(
     validate_source(source)?;
     validate_environment(&binding.environment)?;
     let projection = csv_to_rocprof_json(source)?;
-    let capture = import_rocprofv3_capture_v1(
+    let imported = import_rocprofv3_capture_with_agents_v1(
         &projection,
         RocprofCaptureBindingV1 {
             kernel_ir_claim: binding.kernel_ir_claim,
@@ -419,12 +428,13 @@ pub fn import_rocprofv3_csv_profiler_bundle_v4(
         ImportLimitsV1::default(),
     )
     .map_err(|_| ProfilerBundleErrorV4::InvalidRocprofCsv)?;
-    let projection = capture.runs[0].source;
+    let projection = imported.capture.runs[0].source;
     finish_dispatch_bundle(
         ProfilerSourceKindV4::Rocprofv3KernelDispatchCsv,
         content_identity(PROFILER_SOURCE_CSV_DOMAIN_V4, 1, source)?,
         projection,
-        capture,
+        imported.capture,
+        imported.source_agent_ids,
         binding.environment,
     )
 }
@@ -435,9 +445,13 @@ pub fn import_rocprofv3_att_profiler_bundle_v4(
 ) -> Result<SemanticProfilerBundleV4, ProfilerBundleErrorV4> {
     validate_source(source)?;
     validate_environment(&binding.environment)?;
-    if binding.environment.stable_devices.len() != 1 {
-        return Err(ProfilerBundleErrorV4::DeviceCountMismatch);
-    }
+    let stable_device = binding
+        .environment
+        .stable_device_bindings
+        .iter()
+        .find(|device| device.source_agent_id == binding.source_agent_id)
+        .ok_or(ProfilerBundleErrorV4::MissingDeviceBinding)?
+        .stable_identity;
     let references = parse_att_references(source)?;
     let mut supplied = BTreeMap::new();
     for item in binding.referenced_artifacts {
@@ -515,7 +529,7 @@ pub fn import_rocprofv3_att_profiler_bundle_v4(
             ordinal: 0,
             stable_identity: ProfilerIdentityFactV4::declared(
                 ProfilerIdentityRoleV4::StableDevice,
-                binding.environment.stable_devices[0],
+                stable_device,
             ),
             source_bound_identity: None,
             source_bound_origin: TruthOriginV1::Unavailable,
@@ -547,11 +561,17 @@ fn finish_dispatch_bundle(
     source: ContentIdentityRecordV1,
     projection: ContentIdentityRecordV1,
     capture: SemanticCaptureV1,
+    source_agent_ids: Vec<u64>,
     environment: ProfilerEnvironmentBindingV4,
 ) -> Result<SemanticProfilerBundleV4, ProfilerBundleErrorV4> {
-    if environment.stable_devices.len() != capture.devices.len() {
+    if source_agent_ids.len() != capture.devices.len() {
         return Err(ProfilerBundleErrorV4::DeviceCountMismatch);
     }
+    let stable_devices = environment
+        .stable_device_bindings
+        .iter()
+        .map(|binding| (binding.source_agent_id, binding.stable_identity))
+        .collect::<BTreeMap<_, _>>();
     let run_identity = derive_run_identity(
         source,
         environment.environment,
@@ -561,9 +581,13 @@ fn finish_dispatch_bundle(
     let devices = capture
         .devices
         .iter()
-        .zip(environment.stable_devices)
+        .zip(source_agent_ids)
         .enumerate()
-        .map(|(ordinal, (source, stable))| {
+        .map(|(ordinal, (source, source_agent_id))| {
+            let stable = stable_devices
+                .get(&source_agent_id)
+                .copied()
+                .ok_or(ProfilerBundleErrorV4::MissingDeviceBinding)?;
             Ok(ProfilerDeviceV4 {
                 ordinal: u32::try_from(ordinal).map_err(|_| ProfilerBundleErrorV4::SizeOverflow)?,
                 stable_identity: ProfilerIdentityFactV4::declared(
@@ -949,15 +973,19 @@ fn validate_environment(
     validate_content_identity(environment.environment)?;
     validate_content_identity(environment.collector_tool)?;
     validate_content_identity(environment.collector_configuration)?;
-    if environment.stable_devices.is_empty()
-        || environment.stable_devices.len() > MAX_PROFILER_DISPATCHES_V4
+    if environment.stable_device_bindings.is_empty()
+        || environment.stable_device_bindings.len() > MAX_PROFILER_DEVICE_BINDINGS_V4
     {
         return Err(ProfilerBundleErrorV4::DeviceCountOutOfRange);
     }
-    let mut unique = BTreeSet::new();
-    for device in &environment.stable_devices {
-        validate_content_identity(*device)?;
-        if !unique.insert(device.digest) {
+    let mut unique_agents = BTreeSet::new();
+    let mut unique_devices = BTreeSet::new();
+    for binding in &environment.stable_device_bindings {
+        validate_content_identity(binding.stable_identity)?;
+        if !unique_agents.insert(binding.source_agent_id) {
+            return Err(ProfilerBundleErrorV4::DuplicateSourceAgentBinding);
+        }
+        if !unique_devices.insert(binding.stable_identity.digest) {
             return Err(ProfilerBundleErrorV4::DuplicateStableDevice);
         }
     }
@@ -1056,8 +1084,10 @@ pub enum ProfilerBundleErrorV4 {
     IdentityRoleMismatch,
     EnvironmentMustBeDeclared,
     DuplicateStableDevice,
+    DuplicateSourceAgentBinding,
     DeviceCountOutOfRange,
     DeviceCountMismatch,
+    MissingDeviceBinding,
     InvalidDevice,
     StaleRunIdentity,
     StaleReference,

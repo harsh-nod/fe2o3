@@ -147,9 +147,14 @@ and all integer conversions are independently checked.
 The stdin-only `fe2o3-profiler-import` additionally emits Bundle V4 from
 rocprofv3 kernel-dispatch JSON, kernel-dispatch CSV, or an ATT Compute Viewer
 manifest. Content claims use `SCHEME:FORMAT:SHA256:BYTES`, where `SCHEME` is
-`raw` or `domain`; repeated `--device` claims describe the normalized device
-order. ATT artifact claims use `REFERENCE=SCHEME:FORMAT:SHA256:BYTES`. The CLI
-accepts no paths and never opens referenced ATT files.
+`raw` or `domain`. Repeated `--device-binding`
+`ABSOLUTE_AGENT_ID=SCHEME:FORMAT:SHA256:BYTES` claims join rocprof's absolute
+agent index to a stable direct-KFD device identity; bindings are matched by ID,
+not position, and unused visible-device bindings are omitted from the bundle.
+ATT additionally requires an explicit `--att-agent-id` because the manifest
+does not authenticate its collection agent. ATT artifact claims use
+`REFERENCE=SCHEME:FORMAT:SHA256:BYTES`. The CLI accepts no paths and never
+opens referenced ATT files.
 
 ```text
 fe2o3-trace-import rocprofv3-json \
@@ -183,7 +188,7 @@ fe2o3-profiler-import dispatch-csv-v4 \
   --environment domain:1:ENV_SHA256:ENV_BYTES \
   --tool domain:1:TOOL_SHA256:TOOL_BYTES \
   --config domain:1:CONFIG_SHA256:CONFIG_BYTES \
-  --device domain:1:DEVICE_SHA256:DEVICE_BYTES \
+  --device-binding ABSOLUTE_AGENT_ID=domain:1:DEVICE_SHA256:DEVICE_BYTES \
   --kir-sha256 KIR_SHA256 --kir-len KIR_BYTES --wave-width 64 \
   < kernel_trace.csv > run.fe2o3prof4
 ```

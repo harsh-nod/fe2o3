@@ -215,9 +215,18 @@ artifact-validation failure. Successful collection retains
 `fe2o3-profile-manifest-v1.txt` plus the bounded collector artifacts.
 
 `--kir-sha256`, `--kir-len`, and `--wave-width` make the dry run print the
-exact `fe2o3-profiler-import` Bundle V4 argument vector. ATT import is deferred
-until every manifest-relative artifact has been content-bound. The resulting
-Bundle V4 is queried with `fe2o3-profiler-query`.
+exact `fe2o3-profiler-import` Bundle V4 argument vector. With rocprof's
+`--agent-index absolute` configuration, each device argument binds the emitted
+agent ID to the stable direct-KFD identity for that same KFD node; import joins
+by that ID and does not depend on topology or first-dispatch order. ATT import
+is deferred until the output directory identifies the selected absolute agent
+and every manifest-relative artifact has been content-bound. The source
+manifest or dispatch file must also fit the importer's 8 MiB source limit;
+larger collected artifacts are retained but labeled non-importable. The
+profile target is not treated as proof of an executed kernel code object, so
+cross-run duration deltas remain unavailable until a separate kernel artifact
+identity is supplied. The resulting Bundle V4 is queried with
+`fe2o3-profiler-query`.
 
 The orchestrator itself has no HIP or HSA runtime dependency. `rocprofv3`
 injects ROCProfiler SDK into the target, however, and its installed option

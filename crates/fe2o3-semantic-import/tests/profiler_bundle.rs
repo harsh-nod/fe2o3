@@ -17,11 +17,19 @@ fn content(byte: u8, len: u64) -> ContentIdentityRecordV1 {
 }
 
 fn environment(devices: &[u8]) -> ProfilerEnvironmentBindingV4 {
+    let source_agents = [17_u64, 19_u64];
     ProfilerEnvironmentBindingV4 {
         environment: content(10, 200),
         collector_tool: content(11, 50),
         collector_configuration: content(12, 80),
-        stable_devices: devices.iter().map(|byte| content(*byte, 64)).collect(),
+        stable_device_bindings: devices
+            .iter()
+            .enumerate()
+            .map(|(index, byte)| ProfilerDeviceBindingV4 {
+                source_agent_id: source_agents[index],
+                stable_identity: content(*byte, 64),
+            })
+            .collect(),
     }
 }
 
@@ -93,6 +101,45 @@ fn json_and_csv_bundles_are_canonical_bounded_and_identity_bound() {
 }
 
 #[test]
+fn device_bindings_join_by_absolute_agent_id_not_position() {
+    let mut binding = dispatch_binding(&[20, 21]);
+    binding.environment.stable_device_bindings.reverse();
+    binding
+        .environment
+        .stable_device_bindings
+        .push(ProfilerDeviceBindingV4 {
+            source_agent_id: 99,
+            stable_identity: content(22, 64),
+        });
+    let bundle = import_rocprofv3_json_profiler_bundle_v4(json_source(), binding).unwrap();
+    assert_eq!(
+        bundle.devices[0].stable_identity.value,
+        Some(content(20, 64))
+    );
+    assert_eq!(
+        bundle.devices[1].stable_identity.value,
+        Some(content(21, 64))
+    );
+    assert_eq!(bundle.devices.len(), 2);
+
+    let missing = ProfilerDispatchBindingV4 {
+        environment: environment(&[20]),
+        ..dispatch_binding(&[20, 21])
+    };
+    assert!(matches!(
+        import_rocprofv3_json_profiler_bundle_v4(json_source(), missing),
+        Err(ProfilerBundleErrorV4::MissingDeviceBinding)
+    ));
+
+    let mut duplicate = dispatch_binding(&[20, 21]);
+    duplicate.environment.stable_device_bindings[1].source_agent_id = 17;
+    assert!(matches!(
+        import_rocprofv3_json_profiler_bundle_v4(json_source(), duplicate),
+        Err(ProfilerBundleErrorV4::DuplicateSourceAgentBinding)
+    ));
+}
+
+#[test]
 fn csv_import_is_strict_about_schema_values_and_resource_bounds() {
     let unknown = String::from_utf8(csv_source().to_vec())
         .unwrap()
@@ -134,6 +181,7 @@ fn att_import_retains_only_safe_references_and_never_claims_decoding() {
         source,
         ProfilerAttBindingV4 {
             environment: environment(&[20]),
+            source_agent_id: 17,
             referenced_artifacts: vec![ProfilerAttArtifactBindingV4 {
                 reference: "se0.json".to_owned(),
                 content: content(30, 400),
@@ -163,6 +211,7 @@ fn att_import_retains_only_safe_references_and_never_claims_decoding() {
             installed,
             ProfilerAttBindingV4 {
                 environment: environment(&[20]),
+                source_agent_id: 17,
                 referenced_artifacts: Vec::new(),
             }
         )
@@ -189,6 +238,7 @@ fn att_import_rejects_unsafe_duplicate_and_unrecognized_evidence() {
                 &source,
                 ProfilerAttBindingV4 {
                     environment: environment(&[20]),
+                    source_agent_id: 17,
                     referenced_artifacts: Vec::new(),
                 }
             ),
@@ -202,6 +252,7 @@ fn att_import_rejects_unsafe_duplicate_and_unrecognized_evidence() {
             unknown,
             ProfilerAttBindingV4 {
                 environment: environment(&[20]),
+                source_agent_id: 17,
                 referenced_artifacts: Vec::new(),
             }
         ),
@@ -241,10 +292,10 @@ fn profiler_import_cli_emits_canonical_v4_without_paths_or_native_handles() {
             &id(11, 50),
             "--config",
             &id(12, 80),
-            "--device",
-            &id(20, 64),
-            "--device",
-            &id(21, 64),
+            "--device-binding",
+            &format!("17={}", id(20, 64)),
+            "--device-binding",
+            &format!("19={}", id(21, 64)),
             "--kir-sha256",
             &"01".repeat(32),
             "--kir-len",
@@ -264,4 +315,52 @@ fn profiler_import_cli_emits_canonical_v4_without_paths_or_native_handles() {
     let encoded = String::from_utf8(output.stdout).unwrap();
     assert!(!encoded.contains("generic,kernel"));
     assert!(!encoded.contains("Queue_Id"));
+}
+
+#[test]
+fn att_cli_argument_bound_covers_more_than_the_legacy_128_arguments() {
+    let id = |byte: u8, len: u64| format!("domain:1:{}:{len}", format!("{byte:02x}").repeat(32));
+    let references = (0..64)
+        .map(|index| format!("se-{index}.json"))
+        .collect::<Vec<_>>();
+    let source = serde_json::to_vec(&serde_json::json!({
+        "thread_trace": true,
+        "version": "3.0.0",
+        "wave_filenames": {"0":{"0":{"0":{"0":["wave.json", 1, 2]}}}},
+        "se_filenames": references,
+    }))
+    .unwrap();
+    let mut arguments = vec![
+        "att-v4".to_owned(),
+        "--environment".to_owned(),
+        id(10, 200),
+        "--tool".to_owned(),
+        id(11, 50),
+        "--config".to_owned(),
+        id(12, 80),
+        "--device-binding".to_owned(),
+        format!("17={}", id(20, 64)),
+        "--att-agent-id".to_owned(),
+        "17".to_owned(),
+    ];
+    for reference in &references {
+        arguments.push("--att-artifact".to_owned());
+        arguments.push(format!("{reference}={}", id(30, 400)));
+    }
+    assert!(arguments.len() > 128);
+    let mut child = Command::new(env!("CARGO_BIN_EXE_fe2o3-profiler-import"))
+        .args(arguments)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(&source).unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let bundle = decode_profiler_bundle_v4(&output.stdout).unwrap();
+    assert_eq!(bundle.coverage.att_references, 65);
 }

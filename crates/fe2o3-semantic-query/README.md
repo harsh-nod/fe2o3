@@ -191,8 +191,10 @@ that selected-wave ATT evidence does not prove full-grid coverage.
 frame as the older comparator. It checks exact environment, collector tool,
 collector configuration, stable-device, dispatch sequence/device/launch, KIR,
 and artifact content claims and emits an evidence-linked numeric
-dispatch-duration delta only when those claims match. Argument and input
-content identities are not represented, so this is not a regression diagnosis.
+dispatch-duration delta only when those claims are present and match. An
+artifact identity missing from both runs is `unavailable`, never an exact
+match. Argument and input content identities are not represented, so this is
+not a regression diagnosis.
 Content equality is explicitly equality of caller-declared identities, not
 runtime authentication. `counter-delta-v2` emits deterministic
 binary64 sums for counter dimensions with observed records in both captures;

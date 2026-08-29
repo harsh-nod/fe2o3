@@ -183,6 +183,7 @@ fn exact_authorization_collects_without_a_shell_and_writes_a_bounded_manifest() 
         fs::read_to_string(output_directory.join("fe2o3-profile-manifest-v1.txt")).unwrap();
     assert!(manifest.contains("schema: fe2o3-profile-artifact-manifest-v1"));
     assert!(manifest.contains("capture_results.json"));
+    assert!(manifest.contains("status=size-eligible-requires-schema-validation"));
     assert_eq!(
         fs::metadata(&output_directory)
             .unwrap()
@@ -191,6 +192,35 @@ fn exact_authorization_collects_without_a_shell_and_writes_a_bounded_manifest() 
             & 0o777,
         0o700
     );
+}
+
+#[test]
+fn import_recipe_binds_absolute_agent_ids_instead_of_device_order() {
+    let fixture = Fixture::new(false);
+    let output = fixture.plan_with_options(
+        &fixture.output("capture"),
+        &[
+            "--kir-sha256",
+            &"11".repeat(32),
+            "--kir-len",
+            "1",
+            "--wave-width",
+            "64",
+        ],
+        &[],
+    );
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    if stdout.contains("device[0]:") {
+        assert!(stdout.contains("\"--device-binding\""));
+        assert!(
+            stdout
+                .lines()
+                .any(|line| { line.starts_with("next-import-arg[") && line.contains("=raw:1:") })
+        );
+    } else {
+        assert!(stdout.contains("unavailable-no-stable-direct-kfd-device-identity"));
+    }
 }
 
 #[test]

@@ -33,7 +33,16 @@ fn environment(environment: u8) -> ProfilerEnvironmentBindingV4 {
         environment: content(environment, 200),
         collector_tool: content(11, 50),
         collector_configuration: content(12, 80),
-        stable_devices: vec![content(20, 64), content(21, 64)],
+        stable_device_bindings: vec![
+            ProfilerDeviceBindingV4 {
+                source_agent_id: 17,
+                stable_identity: content(20, 64),
+            },
+            ProfilerDeviceBindingV4 {
+                source_agent_id: 19,
+                stable_identity: content(21, 64),
+            },
+        ],
     }
 }
 
@@ -134,9 +143,13 @@ fn waits_are_typed_unavailable_and_plan_is_bounded() {
         ATT,
         ProfilerAttBindingV4 {
             environment: ProfilerEnvironmentBindingV4 {
-                stable_devices: vec![content(20, 64)],
+                stable_device_bindings: vec![ProfilerDeviceBindingV4 {
+                    source_agent_id: 17,
+                    stable_identity: content(20, 64),
+                }],
                 ..environment(10)
             },
+            source_agent_id: 17,
             referenced_artifacts: Vec::new(),
         },
     )
@@ -206,6 +219,13 @@ fn comparison_requires_exact_environment_and_emits_numeric_duration_delta() {
     );
     assert_eq!(f64::from_bits(comparison.deltas[0].delta_f64_bits), 40.0);
     assert!(!comparison.deltas[0].baseline_evidence.is_empty());
+    assert!(encode_profiler_bundle_comparison_v4(&comparison).is_ok());
+    let mut contradictory = comparison.clone();
+    contradictory.comparable = false;
+    assert!(matches!(
+        encode_profiler_bundle_comparison_v4(&contradictory),
+        Err(ProfilerQueryErrorV4::InvalidComparison)
+    ));
 
     let launch_mismatch_source = String::from_utf8(CSV.to_vec())
         .unwrap()
@@ -233,6 +253,23 @@ fn comparison_requires_exact_environment_and_emits_numeric_duration_delta() {
         mismatch.compatibility[0].status,
         ProfilerCompatibilityStatusV4::Mismatch
     );
+}
+
+#[test]
+fn comparison_treats_absent_artifact_identity_as_unavailable() {
+    let mut binding = capture_binding(10);
+    binding.artifact = None;
+    let bundle =
+        encode_profiler_bundle_v4(&import_rocprofv3_csv_profiler_bundle_v4(CSV, binding).unwrap())
+            .unwrap();
+    let comparison = compare_profiler_bundles_v4(&bundle, &bundle).unwrap();
+    assert!(!comparison.comparable);
+    assert!(comparison.deltas.is_empty());
+    assert!(comparison.compatibility.iter().any(|fact| {
+        fact.requirement == ProfilerCompatibilityRequirementV4::Artifact
+            && fact.status == ProfilerCompatibilityStatusV4::Unavailable
+            && fact.origin == TruthOriginV1::Unavailable
+    }));
 }
 
 #[test]
@@ -300,6 +337,15 @@ fn response_and_input_bounds_fail_closed() {
     let session = ProfilerQuerySessionV4::open(&bytes, limits).unwrap();
     let response = session.query(ProfilerQueryRequestV4::Capabilities).unwrap();
     assert!(session.encode_response(&response).is_ok());
+    let mut stale = response;
+    let ProfilerQueryResponseV4::Capabilities { context, .. } = &mut stale else {
+        unreachable!()
+    };
+    context.device_count += 1;
+    assert!(matches!(
+        session.encode_response(&stale),
+        Err(ProfilerQueryErrorV4::InvalidResponse)
+    ));
     assert!(matches!(
         ProfilerQuerySessionV4::open(
             &vec![b' '; MAX_PROFILER_BUNDLE_BYTES_V4 as usize + 1],

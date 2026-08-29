@@ -39,6 +39,7 @@ const MAX_TOPOLOGY_BYTES: u64 = 64 * 1024;
 const MAX_DEVICES: usize = 64;
 const MAX_ARTIFACTS: usize = 4096;
 const MAX_ARTIFACT_DEPTH: usize = 8;
+const MAX_PROFILER_IMPORT_SOURCE_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_ARGUMENTS: usize = 256;
 const MAX_ARGUMENT_BYTES: usize = 4096;
 const POLL_INTERVAL: Duration = Duration::from_millis(5);
@@ -1474,7 +1475,12 @@ fn render_import_plan(output: &mut String, plan: &Plan) {
             line(
                 output,
                 "next-import-status",
-                "ready-after-collector-artifact-validation",
+                "ready-after-collector-artifact-and-source-size-validation",
+            );
+            line(
+                output,
+                "next-import-source-byte-limit",
+                MAX_PROFILER_IMPORT_SOURCE_BYTES,
             );
             let command = if plan.options.kind == ProfileKind::DispatchJson {
                 "dispatch-json-v4"
@@ -1497,11 +1503,12 @@ fn render_import_plan(output: &mut String, plan: &Plan) {
                 kir.wave_width.to_string(),
             ]
             .into_iter()
-            .chain(
-                plan.devices
-                    .iter()
-                    .flat_map(|device| ["--device".to_owned(), device.content_identity()]),
-            )
+            .chain(plan.devices.iter().flat_map(|device| {
+                [
+                    "--device-binding".to_owned(),
+                    format!("{}={}", device.node, device.content_identity()),
+                ]
+            }))
             .enumerate()
             {
                 line_debug(output, &format!("next-import-arg[{index}]"), &argument);
@@ -1510,6 +1517,21 @@ fn render_import_plan(output: &mut String, plan: &Plan) {
                 output,
                 "next-import-stdin",
                 "validated-collected-json-or-csv-artifact",
+            );
+            line(
+                output,
+                "next-import-artifact-identity-origin",
+                "unavailable",
+            );
+            line(
+                output,
+                "next-import-artifact-identity-reason",
+                "profile-target-is-not-proof-of-executed-kernel-code-object",
+            );
+            line(
+                output,
+                "next-comparison-limitation",
+                "duration-deltas-require-a-separately-content-bound-kernel-artifact",
             );
         }
         ProfileKind::Att => {
@@ -1528,11 +1550,6 @@ fn render_import_plan(output: &mut String, plan: &Plan) {
                 configuration,
             ]
             .into_iter()
-            .chain(
-                plan.devices
-                    .iter()
-                    .flat_map(|device| ["--device".to_owned(), device.content_identity()]),
-            )
             .enumerate()
             {
                 line_debug(output, &format!("next-import-arg[{index}]"), &argument);
@@ -1543,6 +1560,25 @@ fn render_import_plan(output: &mut String, plan: &Plan) {
                 "next-import-deferred-value-format",
                 "manifest-relative-reference=raw:1:sha256:length",
             );
+            line(output, "next-import-deferred-flag", "--att-agent-id");
+            line(
+                output,
+                "next-import-deferred-value-format",
+                "absolute-kfd-node-id-from-validated-att-output-directory",
+            );
+            line(output, "next-import-deferred-flag", "--device-binding");
+            line(
+                output,
+                "next-import-deferred-value-format",
+                "absolute-kfd-node-id=domain:1:stable-device-sha256:length",
+            );
+            for (index, device) in plan.devices.iter().enumerate() {
+                line(
+                    output,
+                    &format!("next-import-att-device-candidate[{index}]"),
+                    format!("{}={}", device.node, device.content_identity()),
+                );
+            }
         }
     }
     line(output, "next-query-program", "fe2o3-profiler-query");
@@ -2047,7 +2083,16 @@ fn render_manifest(plan: &Plan, artifacts: &[Artifact]) -> String {
         line(
             &mut output,
             &format!("import-source-candidate[{index}]"),
-            &artifact.relative,
+            format!(
+                "path={:?};bytes={};status={}",
+                artifact.relative,
+                artifact.length,
+                if artifact.length <= MAX_PROFILER_IMPORT_SOURCE_BYTES {
+                    "size-eligible-requires-schema-validation"
+                } else {
+                    "unavailable-exceeds-import-source-byte-limit"
+                }
+            ),
         );
     }
     render_import_plan(&mut output, plan);
