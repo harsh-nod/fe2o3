@@ -11,8 +11,7 @@ use fe2o3_lower_mir_kernel::{
     ProductionFormalMemoryOwnerV1, ProductionRankedAccessSourceV1,
     ProductionRankedSemanticProjectionReceiptV1, ProductionSemanticKirErrorV1,
     ProductionSemanticKirLimitsV1, ProductionSemanticKirOwnerV1, ProductionSemanticKirResourceV1,
-    SemanticKirSyntheticOperationRuleV1,
-    validate_borrowed_ranked_semantic_projection_candidate_v1,
+    SemanticKirSyntheticOperationRuleV1, validate_borrowed_ranked_semantic_projection_candidate_v1,
 };
 use fe2o3_mir_model::semantic_mir_v1::*;
 use fe2o3_pliron::{
@@ -1526,9 +1525,11 @@ fn borrowed_projection_validation_rejects_root_ir_identity_and_access_hostility(
         &[],
     )
     .unwrap_err();
-    assert!(missing_root
-        .to_string()
-        .contains("ranked projection receipt has no exact kernel root"));
+    assert!(
+        missing_root
+            .to_string()
+            .contains("ranked projection receipt has no exact kernel root")
+    );
 
     let empty_ir = validate_borrowed_ranked_semantic_projection_candidate_v1(
         &owner,
@@ -1538,9 +1539,11 @@ fn borrowed_projection_validation_rejects_root_ir_identity_and_access_hostility(
         &[],
     )
     .unwrap_err();
-    assert!(empty_ir
-        .to_string()
-        .contains("ranked projection receipt has empty diagnostic IR"));
+    assert!(
+        empty_ir
+            .to_string()
+            .contains("ranked projection receipt has empty diagnostic IR")
+    );
 
     let invalid_access = [ProductionRankedAccessSourceV1::new(0, None, 0, 0, 0)];
     let access_error = validate_borrowed_ranked_semantic_projection_candidate_v1(
@@ -1551,9 +1554,11 @@ fn borrowed_projection_validation_rejects_root_ir_identity_and_access_hostility(
         &invalid_access,
     )
     .unwrap_err();
-    assert!(access_error
-        .to_string()
-        .contains("ranked projection receipt has invalid access correspondence"));
+    assert!(
+        access_error
+            .to_string()
+            .contains("ranked projection receipt has invalid access correspondence")
+    );
 
     let substituted = checked_noop_ranked_input("substituted_kernel");
     let identity_error = validate_borrowed_ranked_semantic_projection_candidate_v1(
@@ -1564,9 +1569,11 @@ fn borrowed_projection_validation_rejects_root_ir_identity_and_access_hostility(
         &[],
     )
     .unwrap_err();
-    assert!(identity_error
-        .to_string()
-        .contains("ranked projection receipt function identity changed"));
+    assert!(
+        identity_error
+            .to_string()
+            .contains("ranked projection receipt function identity changed")
+    );
 }
 
 #[test]

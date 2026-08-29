@@ -6162,18 +6162,12 @@ fn select_kernel_body_for_root_v1(
 
     let entry = root_function.blocks.get(root_function.entry.0 as usize)?;
     let SemanticTerminatorKindV1::Call(call) = &entry.terminator.kind else {
-        return Some(SemanticKernelBodySelectionV1 {
-            root,
-            body: root,
-        });
+        return Some(SemanticKernelBodySelectionV1 { root, body: root });
     };
     let SemanticCallableDeclV1::Defined { function: body } =
         request.callables.get(call.callee.0 as usize)?
     else {
-        return Some(SemanticKernelBodySelectionV1 {
-            root,
-            body: root,
-        });
+        return Some(SemanticKernelBodySelectionV1 { root, body: root });
     };
     let body_function = request.functions.get(body.0 as usize)?;
     let wrapper_candidate = *body != root
@@ -6191,10 +6185,7 @@ fn select_kernel_body_for_root_v1(
                 )
             });
     if !wrapper_candidate {
-        return Some(SemanticKernelBodySelectionV1 {
-            root,
-            body: root,
-        });
+        return Some(SemanticKernelBodySelectionV1 { root, body: root });
     }
 
     let destination = call.destination.as_ref()?;
@@ -6232,10 +6223,7 @@ fn select_kernel_body_for_root_v1(
     {
         return None;
     }
-    Some(SemanticKernelBodySelectionV1 {
-        root,
-        body: *body,
-    })
+    Some(SemanticKernelBodySelectionV1 { root, body: *body })
 }
 
 fn wrapper_administrative_statement(statement: &SemanticStatementKindV1) -> bool {
@@ -17923,11 +17911,8 @@ mod private_tests {
         let mut hostile_role = request;
         hostile_role.functions[1].role = SemanticFunctionRoleV1::InternalHelper;
         assert!(
-            select_kernel_body_for_root_v1(
-                &hostile_role,
-                SemanticFunctionIdV1::from_index(1),
-            )
-            .is_none()
+            select_kernel_body_for_root_v1(&hostile_role, SemanticFunctionIdV1::from_index(1),)
+                .is_none()
         );
     }
 

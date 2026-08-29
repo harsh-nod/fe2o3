@@ -23,25 +23,24 @@ use fe2o3_lower_mir_kernel::{
     ProductionRankedAccessSourceV1, ProductionRankedSemanticProjectionReceiptV1,
 };
 use fe2o3_mir_model::semantic_mir_v1::{
-    AdmittedInertSemanticMirV1,
-    SemanticAbiPassModeV1, SemanticAbiPointeeKindV1, SemanticAggregateKindV1,
-    SemanticAssertMessageV1, SemanticAtomicAccessV1, SemanticAtomicOrderingV1,
-    SemanticAtomicScopeV1, SemanticBackendPrimitiveV1, SemanticBackendReprV1, SemanticBinaryOpV1,
-    SemanticBlockIdV1, SemanticBorrowKindV1, SemanticCallableDeclV1, SemanticCallableIdV1,
-    SemanticCastKindV1, SemanticCheckedBinaryOpV1, SemanticCompilerIntrinsicOperationV1,
-    SemanticConstantValueV1, SemanticDirectCallV1, SemanticDirectTailCallV1,
-    SemanticDisjointIndexSpaceV1, SemanticEdgeRoleV1, SemanticFunctionDeclV1,
-    SemanticFunctionIdV1, SemanticFunctionIdentityV1, SemanticFunctionRoleV1,
-    SemanticGfx950LdsTransposeFormatV1,
-    SemanticKernelBodySelectionV1, SemanticLocalIdV1, SemanticLocalRoleV1,
-    SemanticMfmaAccumulatorContractV1, SemanticMfmaAccumulatorDistributionV1,
-    SemanticMfmaOperandContractV1, SemanticMfmaOperandRoleV1, SemanticMfmaProfileV1,
-    SemanticMfmaRegisterDistributionV1, SemanticMfmaStorageLayoutV1, SemanticOperandV1,
-    SemanticPlaceV1, SemanticProjectionKindV1, SemanticRvalueKindV1, SemanticRvalueV1,
-    SemanticScalarTypeV1, SemanticSourceArgumentOwnershipV1, SemanticSourceProvenanceV1,
-    SemanticStatementKindV1, SemanticTargetArchitectureV1, SemanticTerminatorKindV1,
-    SemanticTypeDeclV1, SemanticTypeIdV1, SemanticTypeShapeV1, SemanticUnaryOpV1,
-    SemanticUncheckedBinaryOpV1, SemanticUnwindActionV1, SemanticWorkgroupPipelineEventV1,
+    AdmittedInertSemanticMirV1, SemanticAbiPassModeV1, SemanticAbiPointeeKindV1,
+    SemanticAggregateKindV1, SemanticAssertMessageV1, SemanticAtomicAccessV1,
+    SemanticAtomicOrderingV1, SemanticAtomicScopeV1, SemanticBackendPrimitiveV1,
+    SemanticBackendReprV1, SemanticBinaryOpV1, SemanticBlockIdV1, SemanticBorrowKindV1,
+    SemanticCallableDeclV1, SemanticCallableIdV1, SemanticCastKindV1, SemanticCheckedBinaryOpV1,
+    SemanticCompilerIntrinsicOperationV1, SemanticConstantValueV1, SemanticDirectCallV1,
+    SemanticDirectTailCallV1, SemanticDisjointIndexSpaceV1, SemanticEdgeRoleV1,
+    SemanticFunctionDeclV1, SemanticFunctionIdV1, SemanticFunctionIdentityV1,
+    SemanticFunctionRoleV1, SemanticGfx950LdsTransposeFormatV1, SemanticKernelBodySelectionV1,
+    SemanticLocalIdV1, SemanticLocalRoleV1, SemanticMfmaAccumulatorContractV1,
+    SemanticMfmaAccumulatorDistributionV1, SemanticMfmaOperandContractV1,
+    SemanticMfmaOperandRoleV1, SemanticMfmaProfileV1, SemanticMfmaRegisterDistributionV1,
+    SemanticMfmaStorageLayoutV1, SemanticOperandV1, SemanticPlaceV1, SemanticProjectionKindV1,
+    SemanticRvalueKindV1, SemanticRvalueV1, SemanticScalarTypeV1,
+    SemanticSourceArgumentOwnershipV1, SemanticSourceProvenanceV1, SemanticStatementKindV1,
+    SemanticTargetArchitectureV1, SemanticTerminatorKindV1, SemanticTypeDeclV1, SemanticTypeIdV1,
+    SemanticTypeShapeV1, SemanticUnaryOpV1, SemanticUncheckedBinaryOpV1, SemanticUnwindActionV1,
+    SemanticWorkgroupPipelineEventV1,
 };
 use fe2o3_mir_model::{
     SemanticEnumPayloadAvailabilityV1, SemanticEnumPayloadDominanceV1,
@@ -56,12 +55,12 @@ use fe2o3_pliron::{
     ProductionConstructionV1, ProductionCooperativeTensorBindingV1, ProductionOverflowContractV2,
     ProductionRankedBlockV1, ProductionRankedCompileErrorV1, ProductionRankedKernelErrorV1,
     ProductionRankedKernelLoweringInputV1, ProductionRankedKernelV1, ProductionRankedOperationV1,
-    ProductionRankedTerminatorV1,
-    ProductionRankedValueIdV1, ProductionRankedValueV1, ProductionSemanticBinaryOpV2,
-    ProductionSemanticCastV2, ProductionSemanticComparisonV2, ProductionSemanticExpressionV2,
-    ProductionSemanticLoadV2, ProductionSemanticMirErrorV1, ProductionSemanticMirOwnerV1,
-    ProductionSemanticScalarTypeV2, ProductionSemanticUnaryOpV2, ProductionSessionErrorV1,
-    ProductionSessionLimitsV1, compile_ranked_kernel_for_gfx942_lowering_v1,
+    ProductionRankedTerminatorV1, ProductionRankedValueIdV1, ProductionRankedValueV1,
+    ProductionSemanticBinaryOpV2, ProductionSemanticCastV2, ProductionSemanticComparisonV2,
+    ProductionSemanticExpressionV2, ProductionSemanticLoadV2, ProductionSemanticMirErrorV1,
+    ProductionSemanticMirOwnerV1, ProductionSemanticScalarTypeV2, ProductionSemanticUnaryOpV2,
+    ProductionSessionErrorV1, ProductionSessionLimitsV1,
+    compile_ranked_kernel_for_gfx942_lowering_v1,
 };
 
 const ROOT_NAME_V1: &str = "semantic_safety_module";
@@ -849,9 +848,7 @@ impl fmt::Display for ProductionRankedVerificationErrorV1 {
             Self::RosterMetadata(detail) => {
                 write!(formatter, "ranked roster custody rejected {detail}")
             }
-            Self::RosterIdentity => {
-                formatter.write_str("ranked roster canonical identity changed")
-            }
+            Self::RosterIdentity => formatter.write_str("ranked roster canonical identity changed"),
             Self::SemanticOwner(error) => {
                 write!(formatter, "ranked roster semantic custody failed: {error}")
             }
@@ -913,11 +910,7 @@ struct RankedRosterIdentityRecordV1<'a> {
 }
 
 fn update_roster_identity_frame_v1(hasher: &mut Sha256, frame: &[u8]) {
-    hasher.update(
-        u64::try_from(frame.len())
-            .unwrap_or(u64::MAX)
-            .to_le_bytes(),
-    );
+    hasher.update(u64::try_from(frame.len()).unwrap_or(u64::MAX).to_le_bytes());
     hasher.update(frame);
 }
 
@@ -970,14 +963,8 @@ fn derive_ranked_kernel_roster_identity_v1(
         update_roster_identity_frame_v1(&mut hasher, &record.kernel_binding);
         update_roster_identity_frame_v1(&mut hasher, record.logical_name.as_bytes());
         update_roster_identity_frame_v1(&mut hasher, record.export_symbol);
-        update_roster_identity_frame_v1(
-            &mut hasher,
-            &record.semantic_root.index().to_le_bytes(),
-        );
-        update_roster_identity_frame_v1(
-            &mut hasher,
-            record.semantic_root_identity.as_bytes(),
-        );
+        update_roster_identity_frame_v1(&mut hasher, &record.semantic_root.index().to_le_bytes());
+        update_roster_identity_frame_v1(&mut hasher, record.semantic_root_identity.as_bytes());
         update_roster_identity_frame_v1(&mut hasher, &[record.source_rank]);
         update_roster_identity_frame_v1(&mut hasher, &record.middle_end_identity_sha256);
         update_roster_identity_frame_v1(
@@ -989,10 +976,7 @@ fn derive_ranked_kernel_roster_identity_v1(
             &mut hasher,
             &record.induction_function.index().to_le_bytes(),
         );
-        update_roster_identity_frame_v1(
-            &mut hasher,
-            record.induction_function_identity.as_bytes(),
-        );
+        update_roster_identity_frame_v1(&mut hasher, record.induction_function_identity.as_bytes());
         update_roster_identity_frame_v1(
             &mut hasher,
             &record.induction_checked_additions_examined.to_le_bytes(),
@@ -1001,10 +985,7 @@ fn derive_ranked_kernel_roster_identity_v1(
             &mut hasher,
             &record.induction_certificate_count.to_le_bytes(),
         );
-        update_roster_identity_frame_v1(
-            &mut hasher,
-            &record.induction_work_units.to_le_bytes(),
-        );
+        update_roster_identity_frame_v1(&mut hasher, &record.induction_work_units.to_le_bytes());
     }
     Ok((
         ProductionRankedKernelRosterIdentityV1(hasher.finalize().into()),
@@ -1017,8 +998,7 @@ fn require_exact_ranked_kernel_roster_identity_v1(
     expected_identity: ProductionRankedKernelRosterIdentityV1,
     expected_canonical_kernel_order: &[usize],
 ) -> Result<(), ProductionRankedVerificationErrorV1> {
-    let (identity, canonical_kernel_order) =
-        derive_ranked_kernel_roster_identity_v1(records)?;
+    let (identity, canonical_kernel_order) = derive_ranked_kernel_roster_identity_v1(records)?;
     if identity != expected_identity
         || canonical_kernel_order.as_ref() != expected_canonical_kernel_order
     {
@@ -1086,11 +1066,12 @@ fn validate_ranked_roster_semantic_bindings_v1(
             .ok_or(ProductionRankedVerificationErrorV1::RosterMetadata(
                 "an out-of-range semantic root",
             ))?;
-        let entry = function.kernel_entry().ok_or(
-            ProductionRankedVerificationErrorV1::RosterMetadata(
-                "a semantic root without an exact kernel export",
-            ),
-        )?;
+        let entry =
+            function
+                .kernel_entry()
+                .ok_or(ProductionRankedVerificationErrorV1::RosterMetadata(
+                    "a semantic root without an exact kernel export",
+                ))?;
         if function.role() != SemanticFunctionRoleV1::KernelRoot
             || function.identity() != root.semantic_root_identity
             || entry.export_symbol().as_bytes() != root.export_symbol
@@ -1116,12 +1097,9 @@ fn authenticate_ranked_root_v5(
     ranked_ir: &str,
     semantic_u32_induction: fe2o3_mir_model::SemanticU32InductionNoOverflowReportV1,
 ) -> Result<AuthenticatedRankedVerificationV5, ProductionRankedVerificationErrorV1> {
-    let middle_end_evidence = fe2o3_pliron::ProductionMiddleEndEvidenceV5::try_new(
-        semantic_owner,
-        lowering,
-        ranked_ir,
-    )
-    .map_err(ProductionRankedVerificationErrorV1::MiddleEndEvidence)?;
+    let middle_end_evidence =
+        fe2o3_pliron::ProductionMiddleEndEvidenceV5::try_new(semantic_owner, lowering, ranked_ir)
+            .map_err(ProductionRankedVerificationErrorV1::MiddleEndEvidence)?;
     let functional = if lowering.has_retained_policy_checked_refinement_staging() {
         let semantics = fe2o3_pliron::derive_and_reconcile_mir_pliron_semantic_contract_v1(
             lowering,
@@ -1192,8 +1170,7 @@ fn ranked_roster_identity_records_v1(
                 .unwrap_or(u64::MAX),
                 induction_certificate_count: u64::try_from(induction.certificates().len())
                     .unwrap_or(u64::MAX),
-                induction_work_units: u64::try_from(induction.work_units())
-                    .unwrap_or(u64::MAX),
+                induction_work_units: u64::try_from(induction.work_units()).unwrap_or(u64::MAX),
             }
         })
         .collect()
@@ -1209,11 +1186,9 @@ fn validate_ranked_root_induction_custody_v1(
         .ok_or(ProductionRankedVerificationErrorV1::RosterMetadata(
             "a ranked root without one exact semantic body",
         ))?;
-    let expected = fe2o3_mir_model::analyze_semantic_u32_induction_no_overflow_v1(
-        semantic,
-        selection.body(),
-    )
-    .map_err(ProductionRankedVerificationErrorV1::SemanticU32Induction)?;
+    let expected =
+        fe2o3_mir_model::analyze_semantic_u32_induction_no_overflow_v1(semantic, selection.body())
+            .map_err(ProductionRankedVerificationErrorV1::SemanticU32Induction)?;
     let retained = root.verification().semantic_u32_induction();
     if retained != &expected
         || retained.grants_authority()
@@ -1239,9 +1214,7 @@ impl ProductionRankedSemanticProjectionRosterReceiptV1 {
         &self.canonical_kernel_order
     }
 
-    pub(crate) const fn canonical_roster_identity(
-        &self,
-    ) -> ProductionRankedKernelRosterIdentityV1 {
+    pub(crate) const fn canonical_roster_identity(&self) -> ProductionRankedKernelRosterIdentityV1 {
         self.canonical_roster_identity
     }
 
@@ -1249,9 +1222,7 @@ impl ProductionRankedSemanticProjectionRosterReceiptV1 {
         false
     }
 
-    pub(crate) fn verify_equivalence(
-        &self,
-    ) -> Result<(), ProductionRankedVerificationErrorV1> {
+    pub(crate) fn verify_equivalence(&self) -> Result<(), ProductionRankedVerificationErrorV1> {
         let semantic_bindings = self
             .source_order_roots
             .iter()
@@ -1274,10 +1245,20 @@ impl ProductionRankedSemanticProjectionRosterReceiptV1 {
             )
             .map_err(ProductionRankedVerificationErrorV1::MiddleEndEvidence)?;
             if revalidated.as_inert().canonical_bytes()
-                != root.verification.middle_end_evidence.as_inert().canonical_bytes()
-                || root.verification.has_authenticated_functional_verification()
-                    != root.lowering.has_retained_policy_checked_refinement_staging()
-                || !root.verification.retained_functional_verification_is_coherent()
+                != root
+                    .verification
+                    .middle_end_evidence
+                    .as_inert()
+                    .canonical_bytes()
+                || root
+                    .verification
+                    .has_authenticated_functional_verification()
+                    != root
+                        .lowering
+                        .has_retained_policy_checked_refinement_staging()
+                || !root
+                    .verification
+                    .retained_functional_verification_is_coherent()
             {
                 return Err(ProductionRankedVerificationErrorV1::RosterMetadata(
                     "changed per-root ranked verification custody",
@@ -1304,9 +1285,7 @@ impl ProductionRankedSemanticProjectionRosterReceiptV1 {
     > {
         let root_count = self.source_order_roots.len();
         if root_count != 1 {
-            return Err(ProductionRankedVerificationErrorV1::RootRoster(
-                root_count,
-            ));
+            return Err(ProductionRankedVerificationErrorV1::RootRoster(root_count));
         }
         let Self {
             semantic_owner,
@@ -1678,10 +1657,8 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
         .iter()
         .map(|binding| binding.logical_kernel_name.as_str())
         .collect::<Vec<_>>();
-    let root_reference_binding_indices = partition_reference_effect_binding_indices_v1(
-        &root_logical_names,
-        &binding_logical_names,
-    )?;
+    let root_reference_binding_indices =
+        partition_reference_effect_binding_indices_v1(&root_logical_names, &binding_logical_names)?;
     let root_reference_bindings = root_reference_binding_indices
         .into_iter()
         .map(|binding_indices| {
@@ -1697,9 +1674,7 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
                         ))
                 })
                 .collect::<Result<Vec<_>, ProductionRankedProjectionErrorV1>>()
-                .map(
-                    crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1::new,
-                )
+                .map(crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1::new)
         })
         .collect::<Result<Vec<_>, ProductionRankedProjectionErrorV1>>()?;
 
@@ -1752,20 +1727,19 @@ fn match_ranked_semantic_root_roster_v1(
     let mut semantic_roots = Vec::with_capacity(semantic.roots().len());
     for root in semantic.roots() {
         let function = semantic.functions().get(root.index() as usize).ok_or(
-            ProductionRankedProjectionErrorV1::Unsupported(
-                "an out-of-range semantic kernel root",
-            ),
+            ProductionRankedProjectionErrorV1::Unsupported("an out-of-range semantic kernel root"),
         )?;
         if function.role() != SemanticFunctionRoleV1::KernelRoot {
             return Err(ProductionRankedProjectionErrorV1::Unsupported(
                 "a rooted semantic function without the KernelRoot role",
             ));
         }
-        let entry = function.kernel_entry().ok_or(
-            ProductionRankedProjectionErrorV1::Unsupported(
-                "a semantic KernelRoot without an authenticated kernel entry",
-            ),
-        )?;
+        let entry =
+            function
+                .kernel_entry()
+                .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+                    "a semantic KernelRoot without an authenticated kernel entry",
+                ))?;
         semantic_roots.push((*entry.kernel_binding_identity().as_bytes(), *root));
     }
 
@@ -1791,19 +1765,17 @@ fn match_ranked_root_bindings_v1(
         ));
     }
 
-    let mut semantic_roots = semantic_roots
-        .iter()
-        .try_fold(
-            BTreeMap::<[u8; 32], SemanticFunctionIdV1>::new(),
-            |mut roots, (binding, root)| {
-                if roots.insert(*binding, *root).is_some() {
-                    return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                        "duplicate semantic kernel bindings in the ranked roster",
-                    ));
-                }
-                Ok(roots)
-            },
-        )?;
+    let mut semantic_roots = semantic_roots.iter().try_fold(
+        BTreeMap::<[u8; 32], SemanticFunctionIdV1>::new(),
+        |mut roots, (binding, root)| {
+            if roots.insert(*binding, *root).is_some() {
+                return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                    "duplicate semantic kernel bindings in the ranked roster",
+                ));
+            }
+            Ok(roots)
+        },
+    )?;
 
     let mut matched = Vec::with_capacity(root_inputs.len());
     for input in root_inputs {
@@ -15896,7 +15868,10 @@ mod tests {
             "canonical_kernel_order: Box<[usize]>",
             "canonical_roster_identity: ProductionRankedKernelRosterIdentityV1",
         ] {
-            assert!(receipt.contains(retained), "missing custody field: {retained}");
+            assert!(
+                receipt.contains(retained),
+                "missing custody field: {retained}"
+            );
         }
         assert!(!receipt.contains("pub ") && !receipt.contains("pub(crate)"));
 
@@ -15964,8 +15939,7 @@ mod tests {
         let launch = LaunchContract::new(
             rank,
             BlockSize::Exact(
-                fe2o3_artifacts::Dimensions::new(workgroup[0], workgroup[1], workgroup[2])
-                    .unwrap(),
+                fe2o3_artifacts::Dimensions::new(workgroup[0], workgroup[1], workgroup[2]).unwrap(),
             ),
             fe2o3_artifacts::Dimensions::new(1, 1, 1).unwrap(),
             0,
@@ -16038,8 +16012,7 @@ mod tests {
             ranked_roster_identity_record("alpha", b"kernel_alpha", 0xa1, 4, 0x14, 1, 0x31),
             ranked_roster_identity_record("zeta", b"kernel_zeta", 0x7a, 9, 0x19, 3, 0x32),
         ];
-        let (identity, canonical_order) =
-            derive_ranked_kernel_roster_identity_v1(&exact).unwrap();
+        let (identity, canonical_order) = derive_ranked_kernel_roster_identity_v1(&exact).unwrap();
         let extra = [
             exact[0],
             exact[1],
@@ -16047,11 +16020,7 @@ mod tests {
         ];
         for hostile in [&exact[..1], &extra[..]] {
             assert!(matches!(
-                require_exact_ranked_kernel_roster_identity_v1(
-                    hostile,
-                    identity,
-                    &canonical_order,
-                ),
+                require_exact_ranked_kernel_roster_identity_v1(hostile, identity, &canonical_order,),
                 Err(ProductionRankedVerificationErrorV1::RosterIdentity)
             ));
         }
@@ -16248,11 +16217,8 @@ mod tests {
     #[test]
     fn reference_effect_partition_assigns_nonempty_two_root_bindings_in_root_order() {
         assert_eq!(
-            partition_reference_effect_binding_indices_v1(
-                &["alpha", "zeta"],
-                &["zeta", "alpha"],
-            )
-            .unwrap(),
+            partition_reference_effect_binding_indices_v1(&["alpha", "zeta"], &["zeta", "alpha"],)
+                .unwrap(),
             vec![vec![1], vec![0]],
         );
         assert_eq!(
@@ -16265,29 +16231,20 @@ mod tests {
     fn reference_effect_partition_rejects_orphan_substitution_and_duplicates() {
         for bindings in [["alpha", "orphan"], ["alpha", "beta"]] {
             assert!(matches!(
-                partition_reference_effect_binding_indices_v1(
-                    &["alpha", "zeta"],
-                    &bindings,
-                ),
+                partition_reference_effect_binding_indices_v1(&["alpha", "zeta"], &bindings,),
                 Err(ProductionRankedProjectionErrorV1::Unsupported(
                     "a reference-effect binding outside the exact typed root roster"
                 ))
             ));
         }
         assert!(matches!(
-            partition_reference_effect_binding_indices_v1(
-                &["alpha", "zeta"],
-                &["alpha", "alpha"],
-            ),
+            partition_reference_effect_binding_indices_v1(&["alpha", "zeta"], &["alpha", "alpha"],),
             Err(ProductionRankedProjectionErrorV1::Unsupported(
                 "duplicate reference-effect bindings for one ranked root"
             ))
         ));
         assert!(matches!(
-            partition_reference_effect_binding_indices_v1(
-                &["alpha", "alpha"],
-                &["alpha"],
-            ),
+            partition_reference_effect_binding_indices_v1(&["alpha", "alpha"], &["alpha"],),
             Err(ProductionRankedProjectionErrorV1::Unsupported(
                 "duplicate typed logical roots in the ranked roster"
             ))
