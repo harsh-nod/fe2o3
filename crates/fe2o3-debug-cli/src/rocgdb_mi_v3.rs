@@ -225,6 +225,10 @@ impl RocgdbMiObservationAdapterV3 {
         self.revision
     }
 
+    pub const fn session_identity(&self) -> OpaqueIdentityV1 {
+        self.session_identity
+    }
+
     pub fn bind_code_object(
         &mut self,
         content: LiveGpuContentIdentityV3,

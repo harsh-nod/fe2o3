@@ -44,6 +44,15 @@ suspend/resume. Hardware wave/lane state, PC, registers, target memory,
 stepping, and breakpoints remain explicitly unavailable. See the
 [`fe2o3-debug` contract](crates/fe2o3-debug-cli/README.md#exact-bound-live-kfd-protocol-v3).
 
+`fe2o3-debug live-rocgdb` adds a bounded, agent-facing GDB/MI3 JSONL route for
+authorized launch or attach, structured stopped-thread admission, relative
+PC/memory inspection and audited execution control. Native process, path,
+descriptor and address authorities are never returned. Generic
+dispatch/workgroup hierarchy remains explicitly unsupported, and the current
+validation covers deterministic end-to-end MI plus installed ROCgdb capability
+discovery rather than a live pure-KFD GPU-wave stop. See the
+[`live ROCgdb contract`](crates/fe2o3-debug-cli/README.md#structured-live-rocgdb-protocol-v3).
+
 Feature-free production has one compiler transaction and no pipeline selector.
 `cargo fe2o3 build` and `cargo fe2o3 run` first build the selected crate graph
 for the fixed AMDGPU target through fe2o3, commit the exact device artifact

@@ -5,6 +5,7 @@ mod codec;
 mod hardware_v2;
 mod live_gpu_v3;
 mod model;
+mod rocgdb_mi_cli_v3;
 mod rocgdb_mi_v3;
 mod source_variables_v2;
 
@@ -15,5 +16,6 @@ pub use codec::{
 pub use hardware_v2::*;
 pub use live_gpu_v3::*;
 pub use model::*;
+pub use rocgdb_mi_cli_v3::*;
 pub use rocgdb_mi_v3::*;
 pub use source_variables_v2::*;

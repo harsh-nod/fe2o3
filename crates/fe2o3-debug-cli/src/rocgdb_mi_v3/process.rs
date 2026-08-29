@@ -3,6 +3,7 @@ use super::*;
 use std::collections::{BTreeSet, VecDeque};
 use std::ffi::OsString;
 use std::io::{BufRead, BufReader, BufWriter, Read, Write};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::path::Path;
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
@@ -20,6 +21,13 @@ enum ReaderItemV3 {
     Eof,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum InferiorOwnershipV3 {
+    Unknown,
+    LaunchOwned,
+    AttachBorrowed,
+}
+
 /// Exact-argv ROCgdb subprocess with one outstanding bounded MI command.
 pub struct RocgdbMiProcessV3 {
     child: Child,
@@ -32,6 +40,8 @@ pub struct RocgdbMiProcessV3 {
     deferred_records: VecDeque<(MiRecordV3, Vec<u8>)>,
     adapter: RocgdbMiObservationAdapterV3,
     pending_events: VecDeque<RocgdbMiExecutionEventV3>,
+    inferior_process: Option<OwnedFd>,
+    inferior_ownership: InferiorOwnershipV3,
 }
 
 impl fmt::Debug for RocgdbMiProcessV3 {
@@ -45,6 +55,8 @@ impl fmt::Debug for RocgdbMiProcessV3 {
             .field("deferred_records", &self.deferred_records.len())
             .field("process_authority", &"REDACTED")
             .field("descriptor_authority", &"REDACTED")
+            .field("inferior_process_authority", &"REDACTED")
+            .field("inferior_ownership", &self.inferior_ownership)
             .finish()
     }
 }
@@ -100,6 +112,8 @@ impl RocgdbMiProcessV3 {
                 limits,
             )?,
             pending_events: VecDeque::new(),
+            inferior_process: None,
+            inferior_ownership: InferiorOwnershipV3::Unknown,
         })
     }
 
@@ -307,6 +321,10 @@ impl RocgdbMiProcessV3 {
         timeout: Duration,
     ) -> Result<(), RocgdbMiAdapterErrorV3> {
         let deadline = deadline(timeout)?;
+        expect_class(
+            self.send_command(b"-gdb-set mi-async on", deadline)?,
+            "done",
+        )?;
         let mut executable = b"-file-exec-and-symbols ".to_vec();
         append_quoted(&mut executable, target.as_os_str().as_bytes())?;
         expect_class(self.send_command(&executable, deadline)?, "done")?;
@@ -332,6 +350,10 @@ impl RocgdbMiProcessV3 {
             return Err(RocgdbMiAdapterErrorV3::InvalidField("process"));
         }
         let deadline = deadline(timeout)?;
+        expect_class(
+            self.send_command(b"-gdb-set mi-async on", deadline)?,
+            "done",
+        )?;
         let command = format!("-target-attach {process}");
         expect_class(
             self.send_control_command(command.as_bytes(), deadline)?,
@@ -385,6 +407,7 @@ impl RocgdbMiProcessV3 {
                 error,
             );
         }
+        self.inferior_ownership = InferiorOwnershipV3::LaunchOwned;
         if let Err(error) = self.launch(timeout) {
             return self.launch_attach_failure(
                 request,
@@ -444,6 +467,7 @@ impl RocgdbMiProcessV3 {
                 RocgdbMiControlUnavailableReasonV3::BackendRejected,
             );
         }
+        self.inferior_ownership = InferiorOwnershipV3::AttachBorrowed;
         if let Err(error) = self.attach(process, timeout) {
             return self.launch_attach_failure(
                 request,
@@ -497,13 +521,17 @@ impl RocgdbMiProcessV3 {
         }
         let deadline = deadline(timeout)?;
         loop {
-            let (record, line) = if let Some(deferred) = self.deferred_records.pop_front() {
-                deferred
-            } else {
-                let line = self.receive_line(deadline)?;
-                let record = parse_mi_record_v3(&line, self.adapter.limits.parser())?;
-                (record, line)
-            };
+            let (record, line, authority_observed) =
+                if let Some((record, line)) = self.deferred_records.pop_front() {
+                    (record, line, true)
+                } else {
+                    let line = self.receive_line(deadline)?;
+                    let record = parse_mi_record_v3(&line, self.adapter.limits.parser())?;
+                    (record, line, false)
+                };
+            if !authority_observed {
+                self.observe_process_authority(&record)?;
+            }
             if let Some(event) = self.adapter.ingest_record(record, &line)? {
                 return Ok(event);
             }
@@ -892,6 +920,22 @@ impl RocgdbMiProcessV3 {
         self.control_result(request, operation, before, after, outcome)
     }
 
+    /// Requests bounded debugger shutdown. `Drop` remains the final cleanup
+    /// authority if ROCgdb disconnects or does not acknowledge `-gdb-exit`.
+    pub fn shutdown(&mut self, timeout: Duration) -> Result<u64, RocgdbMiAdapterErrorV3> {
+        if self.adapter.state == ExecutionStateV3::Exited {
+            return Ok(self.adapter.revision);
+        }
+        let (class, _) = self.send_control_command(b"-gdb-exit", deadline(timeout)?)?;
+        if !matches!(class.as_str(), "exit" | "done") {
+            return Err(RocgdbMiAdapterErrorV3::BackendRejected);
+        }
+        self.adapter.bump_revision()?;
+        self.adapter.state = ExecutionStateV3::Exited;
+        self.adapter.current_stop = None;
+        Ok(self.adapter.revision)
+    }
+
     fn control_command(
         &self,
         request: RocgdbMiControlRequestV3,
@@ -1115,6 +1159,10 @@ impl RocgdbMiProcessV3 {
                     return Err(error.into());
                 }
             };
+            if let Err(error) = self.observe_process_authority(&record) {
+                self.pending_token = None;
+                return Err(error);
+            }
             match record {
                 MiRecordV3::Result {
                     token: Some(actual),
@@ -1187,12 +1235,84 @@ impl RocgdbMiProcessV3 {
             Err(RecvTimeoutError::Disconnected) => Err(RocgdbMiAdapterErrorV3::ProcessExited),
         }
     }
+
+    fn observe_process_authority(
+        &mut self,
+        record: &MiRecordV3,
+    ) -> Result<(), RocgdbMiAdapterErrorV3> {
+        let MiRecordV3::Async {
+            kind: crate::rocgdb_mi_parser_v3::MiAsyncKindV3::Notify,
+            class,
+            results,
+            ..
+        } = record
+        else {
+            return Ok(());
+        };
+        if class == "thread-group-exited" {
+            self.inferior_process = None;
+            return Ok(());
+        }
+        if class != "thread-group-started" {
+            return Ok(());
+        }
+        if self.inferior_process.is_some() {
+            return Err(RocgdbMiAdapterErrorV3::UnexpectedMiRecord);
+        }
+        let raw = required_const(results, "pid")?;
+        let pid = parse_decimal_u64(raw)
+            .and_then(|value| i32::try_from(value).ok())
+            .filter(|value| *value > 0)
+            .ok_or(RocgdbMiAdapterErrorV3::InvalidField("inferior process"))?;
+        // SAFETY: `pidfd_open` returns a new descriptor on success. The
+        // positive pid and zero flags were checked above, and ownership is
+        // transferred exactly once to `OwnedFd`.
+        let descriptor = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0_u32) };
+        if descriptor < 0 {
+            return Err(RocgdbMiAdapterErrorV3::ProcessIo);
+        }
+        // SAFETY: successful `pidfd_open` returned one owned descriptor.
+        self.inferior_process = Some(unsafe { OwnedFd::from_raw_fd(descriptor as i32) });
+        Ok(())
+    }
 }
 
 impl Drop for RocgdbMiProcessV3 {
     fn drop(&mut self) {
+        if let Some(process) = self.inferior_process.take()
+            && self.inferior_ownership == InferiorOwnershipV3::LaunchOwned
+        {
+            // SAFETY: the first argument is an owned pidfd, the signal has no
+            // payload, and flags are required to be zero.
+            let _ = unsafe {
+                libc::syscall(
+                    libc::SYS_pidfd_send_signal,
+                    process.as_raw_fd(),
+                    libc::SIGKILL,
+                    std::ptr::null::<libc::siginfo_t>(),
+                    0_u32,
+                )
+            };
+            let mut descriptor = libc::pollfd {
+                fd: process.as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            // SAFETY: `descriptor` points to one initialized pollfd for the
+            // duration of this bounded call.
+            let _ = unsafe { libc::poll(&mut descriptor, 1, 5_000) };
+        }
         let _ = self.child.kill();
-        let _ = self.child.wait();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            match self.child.try_wait() {
+                Ok(Some(_)) | Err(_) => break,
+                Ok(None) if Instant::now() < deadline => {
+                    thread::sleep(Duration::from_millis(5));
+                }
+                Ok(None) => break,
+            }
+        }
     }
 }
 

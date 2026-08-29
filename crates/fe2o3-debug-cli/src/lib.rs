@@ -13,8 +13,11 @@ mod live_gpu_backend_v3;
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 pub mod live_kfd_v3;
 #[cfg(target_os = "linux")]
+mod live_rocgdb_v3;
+#[cfg(target_os = "linux")]
 mod rocgdb_mi_parser_v3;
 #[cfg(target_os = "linux")]
+#[allow(unsafe_code)]
 pub mod rocgdb_mi_v3;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -55,7 +58,7 @@ use fe2o3_kir_sim_cli::{
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-const USAGE: &str = "usage: fe2o3-debug sim (--kir-v7 PATH | --bundle PATH | --bundle-v2 PATH) --request PATH [--replay-schedule PATH] [--source-map PATH --source-bundle-subject ID] [--protocol jsonl] [--wave-width 32|64]\n       fe2o3-debug live-kfd --bundle-v2 PATH --request PATH --hsaco PATH [--protocol jsonl] [--wave-width 32|64] -- PROGRAM [ARG...]\n       fe2o3-debug hardware -- PROGRAM [ARG...]";
+const USAGE: &str = "usage: fe2o3-debug sim (--kir-v7 PATH | --bundle PATH | --bundle-v2 PATH) --request PATH [--replay-schedule PATH] [--source-map PATH --source-bundle-subject ID] [--protocol jsonl] [--wave-width 32|64]\n       fe2o3-debug live-kfd --bundle-v2 PATH --request PATH --hsaco PATH [--protocol jsonl] [--wave-width 32|64] -- PROGRAM [ARG...]\n       fe2o3-debug live-rocgdb --rocgdb PATH --authorization ID [--protocol jsonl] [--wave-width 32|64] [--timeout-ms N] (--attach PID | -- PROGRAM [ARG...])\n       fe2o3-debug hardware -- PROGRAM [ARG...]";
 const MAX_SESSION_COMMANDS_V1: u64 = 1_000_000;
 const TRACE_HEADER_SCHEMA_V1: &str = "fe2o3-debug-trace-v1";
 pub const SOURCE_MAP_SCHEMA_V1: &str = fe2o3_kernel_ir::DEBUG_SOURCE_MAP_SCHEMA_V1;
@@ -1762,6 +1765,24 @@ struct BootstrapErrorV1<'a> {
 
 pub fn main() -> ExitCode {
     let arguments: Vec<_> = env::args_os().skip(1).collect();
+    if arguments
+        .first()
+        .is_some_and(|value| value == OsStr::new("live-rocgdb"))
+    {
+        #[cfg(target_os = "linux")]
+        {
+            return live_rocgdb_v3::run(arguments);
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            write_bootstrap_error(
+                "arguments",
+                "live_rocgdb_debugger_unavailable",
+                "live ROCgdb debugging requires Linux",
+            );
+            return ExitCode::FAILURE;
+        }
+    }
     if arguments
         .first()
         .is_some_and(|value| value == OsStr::new("live-kfd"))
