@@ -17,3 +17,9 @@ error: type `fe2o3_host::recovered_worker_v3_admission::RecoveredWorkerV3Artifac
   |
 5 |         artifact: _artifact,
   |                   ^^^^^^^^^ private type
+
+error: type `fe2o3_host::recovered_worker_v3_admission::WorkerV3HostLineageEvidenceV1` is private
+ --> tests/ui/recovered_worker_v3_admission/roster_custody_is_private.rs:7:18
+  |
+7 |         lineage: _lineage,
+  |                  ^^^^^^^^ private type
