@@ -284,12 +284,17 @@ binding wrapper now invokes this path for the selected protected kernel root,
 waits for exact issuer readiness, and kills/reaps rustc on any failed handoff.
 Fresh publication fails closed unless the parent still retains both exact
 rustc-invocation and compiler-execution-readiness custody. A deployed service
-entrypoint remains a separate requirement. The production application runner
-uses the same child-created channel and fixed supervisor path without exposing
-policy FD 202, establishes readiness before waiting for its ACK, and retains
-that custody through exit. `fe2o3-host` now exports a move-only one-use auditor
-that consumes the inherited endpoint and verifies the signed current-record
-transaction without constructing verifier, load, or launch authority.
+entrypoint, backend receipt acquisition, external monotonic rollback, and final
+verifier/runtime authority joins remain separate requirements. The production
+application runner uses the same child-created channel and fixed supervisor path
+without exposing policy FD 202, establishes readiness before waiting for its
+ACK, and retains that custody through exit. `fe2o3-host` exports a move-only
+one-use auditor that consumes the inherited endpoint and verifies the signed
+current-record transaction without constructing verifier, load, or launch
+authority.
+
+One absolute monotonic deadline now spans child admission, supervisor transfer,
+and readiness; production does not restart a full timeout at each transition.
 
 ## Authority Limit
 

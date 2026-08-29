@@ -1,6 +1,6 @@
 # Native queue adapter foundation V1
 
-This R4 slice executes the compute-AQL queue lifecycle against a private
+This R7 slice executes the compute-AQL queue lifecycle against a private
 backend and projects every attempted lifecycle operation into the existing
 bounded `QueueLifecycleStateV1`. The production composition consumes the
 checked device and exact shared-GTT capabilities; callers cannot construct a
@@ -99,10 +99,10 @@ MMIO write escapes. The store width/value and CPU ordering sequence are tested,
 but GPU coherence, firmware observation, reset races, and write-combining MMIO
 semantics remain Contracted rather than proved.
 
-## Private packet publication boundary
+## Fixed packet publication boundary
 
 The production composition now depends canonically on `fe2o3-aql` and retains
-one crate-private, non-`Clone` single-producer submission owner. Before CREATE,
+one internal, non-`Clone` single-producer submission owner. Before CREATE,
 every logical 64-byte ring slot contains the exact little-endian `u32` INVALID
 header value `1`; an all-zero slot would encode VENDOR_SPECIFIC and is rejected
 by the initialization contract. Each slot header is explicitly initialized as
@@ -111,7 +111,8 @@ an `AtomicU32`, and both control counters are explicitly initialized as
 
 Submission acquire-loads the actual shared write and read counters, requires
 the write observation to equal the retained model, and applies
-`AqlSingleProducerRingModelV1` to reserve one through 256 packets while
+`AqlSingleProducerRingModelV1` with the additive V2 transition to reserve one
+through 8192 packets while
 rejecting over-capacity, full, insufficient, replayed, regressed, impossible,
 or exhausted observations. After a second PID/device-currentness check it
 performs exactly one acquire-release fetch-add by the complete batch count on
@@ -176,25 +177,58 @@ MMIO stores; it does not inject a fault or prove actual exception delivery.
 Foreign KFD clients in the same process are also outside the crate-global
 runtime ownership claim.
 
-R4 still needs a dispatch authority that binds kernarg, code object, queue,
-dispatch, and completion generations. The existing inert packet carries only
-numeric address observations. A doorbell failure after publication is not
-rollback evidence and remains process-teardown-only poison.
+The public addressless fixed-dispatch layer consumes one through 32 inspected
+code envelopes, zero-pointer kernarg images, and the exact complete set of
+mapped device-data authorities. Access effects come from inspected metadata;
+read access requires sealed full-byte initialization. Exact-set admission
+permits queue-model transfer only when every retained device lease is
+represented once. The queue owns those resources through publication,
+completion, and signal recycle; generation keys are substitution checks rather
+than ownership.
+A doorbell failure after publication is not rollback evidence and remains
+process-teardown-only poison.
 
-## Missing completion-signal boundary
+After one exact dispatch generation reaches completion and signal recycle, a
+detach transition releases code and kernarg while keeping the queue, ring,
+completion arena, event, runtime, and doorbell live. A later fixed batch may use
+a different packet/program cardinality, geometry, scalar kernarg bytes, and
+device-data set. The detached-lease ledger forbids queue destruction until all
+data is rebound or explicitly released. Fully initialized state survives this
+transition, but no pre-publication content digest is restored as current.
 
-The UAPI crate now independently oracles the KFD 1.18 event requests, layouts,
-nested event data, results, and queue context-save header. The owned event in
-this composition is only the queue-exception route. A completion slice must
-still pin the gfx942/ROCr signal-memory layout and atomics that bind an AQL
-completion signal to a specific dispatch and KFD wakeup.
+After DESTROY is confirmed, return is all-or-terminal. Any later
+event/runtime/doorbell/CWSR/queue/code/kernarg/completion release or model
+restoration error produces no partial returned value. The consumed session's
+no-effect drops retain all possibly live native resources until process
+teardown; cleanup and retry are not admitted.
 
-The safe API must own a dedicated generation-bound signal for each admitted
-dispatch, initialize it before packet publication, wait against the exact
-dispatch identity, distinguish timeout from completion, acquire the device's
-result writes before exposing host reads, and destroy/recycle the event only
-after no packet can reference it. Neither a changed signal word nor a returned
-event ID alone is completion authority.
+## Private completion-signal boundary
+
+The owned KFD event remains only the queue-exception route. Dispatch completion
+uses a separate exact 512 KiB host-coherent allocation with 8192 unique 64-byte
+ROCr user signals. Each signal object is initialized to pending before GPU map.
+The arena and its address facts stay crate-private and linearly owned by the
+queue session; no KFD wakeup or public address is introduced.
+
+One fixed batch binding reserves a distinct signal per packet and retains the
+exact queue, signal-allocation, code-mapping, kernarg-mapping, and dispatch
+generations.
+It publishes through the existing one-reservation/one-doorbell primitive.
+Bounded polling acquires every signal value and distinguishes pending, all-zero
+ready, unexpected-value fault, and timeout. Only all-zero evidence permits a
+release reset and slot-generation advance. A live or completed-but-unrecycled
+batch prevents queue resource release; timeout, invalid poll bounds,
+generation exhaustion, currentness loss, observation ambiguity, and partial
+reset poison the session and require process teardown.
+
+The relationship between a firmware signal write, dispatch completion,
+system-scope coherence, visibility of device result writes, and dispatch
+quiescence is **Contracted**. Host mocks exercise the lifecycle and every
+effect boundary, but there is no concrete Verus refinement or hardware run.
+The public layer exposes no packet template, signal, pointer, address, or MMIO
+capability. Implicit-kernarg construction is rejected. Concrete kernel
+alias/effect refinement and hardware quiescence remain unimplemented
+obligations rather than properties inferred from generation keys.
 
 ## Verification boundary
 

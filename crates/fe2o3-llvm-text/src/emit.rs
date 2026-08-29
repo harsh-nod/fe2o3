@@ -732,6 +732,18 @@ fn write_function_attributes(
                 output.push("\"approx-func-fp-math\"=\"false\"")?;
             }
             FunctionAttributeV2::FpContractOff => output.push("\"fp-contract\"=\"off\"")?,
+            FunctionAttributeV2::NoCompletionAction => {
+                output.push("\"amdgpu-no-completion-action\"")?;
+            }
+            FunctionAttributeV2::NoDefaultQueue => output.push("\"amdgpu-no-default-queue\"")?,
+            FunctionAttributeV2::NoHeapPointer => output.push("\"amdgpu-no-heap-ptr\"")?,
+            FunctionAttributeV2::NoHostcallPointer => {
+                output.push("\"amdgpu-no-hostcall-ptr\"")?;
+            }
+            FunctionAttributeV2::NoMultigridSyncArgument => {
+                output.push("\"amdgpu-no-multigrid-sync-arg\"")?;
+            }
+            FunctionAttributeV2::NoQueuePointer => output.push("\"amdgpu-no-queue-ptr\"")?,
             FunctionAttributeV2::RequiredWorkgroupSize(_) => unreachable!("filtered above"),
         }
     }

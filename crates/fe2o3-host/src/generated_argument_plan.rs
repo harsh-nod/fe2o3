@@ -48,12 +48,19 @@ pub trait GeneratedDeviceScalarV1: generated_device_scalar_seal::Sealed + Device
 
     #[doc(hidden)]
     fn disjoint_slice_type_identity_v1(pointer_width: PointerWidth) -> TypeIdentity {
-        canonical_disjoint_slice_layout_v1(
-            Self::RUST_SCALAR_TYPE,
+        Self::disjoint_slice_type_identity_for_index_space_v1(
             pointer_width,
             RustDisjointIndexSpaceV1::Index1D,
         )
-        .type_identity()
+    }
+
+    #[doc(hidden)]
+    fn disjoint_slice_type_identity_for_index_space_v1(
+        pointer_width: PointerWidth,
+        index_space: RustDisjointIndexSpaceV1,
+    ) -> TypeIdentity {
+        canonical_disjoint_slice_layout_v1(Self::RUST_SCALAR_TYPE, pointer_width, index_space)
+            .type_identity()
     }
 
     #[doc(hidden)]
@@ -264,6 +271,7 @@ fn canonical_slice_layout_with_source_v1(
 #[doc(hidden)]
 pub struct CompilerGeneratedArgumentLayoutV1 {
     layout: AbiLayout,
+    disjoint_index_spaces: Box<[Option<RustDisjointIndexSpaceV1>]>,
 }
 
 impl CompilerGeneratedArgumentLayoutV1 {
@@ -274,10 +282,52 @@ impl CompilerGeneratedArgumentLayoutV1 {
         pointer_width: PointerWidth,
         fields: Vec<AbiField>,
     ) -> Result<Self, GeneratedArgumentLayoutError> {
+        let disjoint_index_spaces = vec![None; fields.len()];
+        Self::new_with_disjoint_index_spaces_v1(
+            kernarg_size,
+            kernarg_alignment,
+            pointer_width,
+            fields,
+            disjoint_index_spaces,
+        )
+    }
+
+    /// Validates an exact layout and the compiler-retained source index space of each disjoint
+    /// slice. Descriptor V1 preserves the disjoint ownership class but the authenticated generated
+    /// host contract preserves this more precise source identity.
+    #[doc(hidden)]
+    pub fn new_with_disjoint_index_spaces_v1(
+        kernarg_size: u64,
+        kernarg_alignment: u32,
+        pointer_width: PointerWidth,
+        fields: Vec<AbiField>,
+        disjoint_index_spaces: Vec<Option<RustDisjointIndexSpaceV1>>,
+    ) -> Result<Self, GeneratedArgumentLayoutError> {
+        if fields.len() != disjoint_index_spaces.len() {
+            return Err(GeneratedArgumentLayoutError::IndexSpaceCount {
+                fields: fields.len(),
+                index_spaces: disjoint_index_spaces.len(),
+            });
+        }
+        for (index, (field, index_space)) in fields.iter().zip(&disjoint_index_spaces).enumerate() {
+            if index_space.is_some()
+                && !(matches!(field.kind(), AbiKind::Slice { .. })
+                    && field.mutability() == Mutability::Mutable
+                    && field.access() == Access::ReadWrite
+                    && field.address_space() == AddressSpace::Global
+                    && field.ownership() == ArgumentOwnership::UniqueBorrow
+                    && field.alias_class() == AliasClass::Exclusive)
+            {
+                return Err(GeneratedArgumentLayoutError::IndexSpaceField { index });
+            }
+        }
         validate_field_order(&fields)?;
         let layout = AbiLayout::new(kernarg_size, kernarg_alignment, pointer_width, fields)
             .map_err(GeneratedArgumentLayoutError::InvalidLayout)?;
-        Ok(Self { layout })
+        Ok(Self {
+            layout,
+            disjoint_index_spaces: disjoint_index_spaces.into_boxed_slice(),
+        })
     }
 }
 
@@ -749,6 +799,24 @@ impl GeneratedArgumentPackingPlanV1 {
         )
     }
 
+    pub(crate) fn bind_generated_address_free_mapped_read_write_slice_v1<
+        'allocation,
+        T: GeneratedDeviceScalarV1,
+    >(
+        &self,
+        argument_index: usize,
+        length: usize,
+        index_space: RustDisjointIndexSpaceV1,
+        borrow: GeneratedArgumentBorrowV1<'allocation>,
+    ) -> Result<GeneratedArgumentInputV1<'allocation>, GeneratedArgumentPackError> {
+        self.bind_generated_address_free_slice_v1::<T>(
+            argument_index,
+            length,
+            GeneratedSliceEffectV1::MappedExclusiveReadWrite(index_space),
+            borrow,
+        )
+    }
+
     fn bind_generated_address_free_slice_v1<'allocation, T: GeneratedDeviceScalarV1>(
         &self,
         argument_index: usize,
@@ -767,6 +835,13 @@ impl GeneratedArgumentPackingPlanV1 {
             ),
             GeneratedSliceEffectV1::ExclusiveReadWrite => (
                 T::disjoint_slice_type_identity_v1(self.pointer_width),
+                Mutability::Mutable,
+                Access::ReadWrite,
+                ArgumentOwnership::UniqueBorrow,
+                AliasClass::Exclusive,
+            ),
+            GeneratedSliceEffectV1::MappedExclusiveReadWrite(index_space) => (
+                T::disjoint_slice_type_identity_for_index_space_v1(self.pointer_width, index_space),
                 Mutability::Mutable,
                 Access::ReadWrite,
                 ArgumentOwnership::UniqueBorrow,
@@ -838,6 +913,13 @@ impl GeneratedArgumentPackingPlanV1 {
             ),
             GeneratedSliceEffectV1::ExclusiveReadWrite => (
                 T::disjoint_slice_type_identity_v1(self.pointer_width),
+                Mutability::Mutable,
+                Access::ReadWrite,
+                ArgumentOwnership::UniqueBorrow,
+                AliasClass::Exclusive,
+            ),
+            GeneratedSliceEffectV1::MappedExclusiveReadWrite(index_space) => (
+                T::disjoint_slice_type_identity_for_index_space_v1(self.pointer_width, index_space),
                 Mutability::Mutable,
                 Access::ReadWrite,
                 ArgumentOwnership::UniqueBorrow,
@@ -949,6 +1031,7 @@ impl GeneratedArgumentPackingPlanV1 {
 enum GeneratedSliceEffectV1 {
     SharedRead,
     ExclusiveReadWrite,
+    MappedExclusiveReadWrite(RustDisjointIndexSpaceV1),
 }
 
 #[derive(Clone, Copy)]
@@ -1030,6 +1113,13 @@ fn validate_generated_field_v1(
 #[doc(hidden)]
 #[non_exhaustive]
 pub enum GeneratedArgumentLayoutError {
+    IndexSpaceCount {
+        fields: usize,
+        index_spaces: usize,
+    },
+    IndexSpaceField {
+        index: usize,
+    },
     ReorderedField {
         index: usize,
         previous_offset: u64,
@@ -1046,6 +1136,17 @@ pub enum GeneratedArgumentLayoutError {
 impl fmt::Display for GeneratedArgumentLayoutError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::IndexSpaceCount {
+                fields,
+                index_spaces,
+            } => write!(
+                formatter,
+                "generated argument layout has {fields} fields but {index_spaces} disjoint index-space records"
+            ),
+            Self::IndexSpaceField { index } => write!(
+                formatter,
+                "generated argument {index} attaches a disjoint index space to a non-disjoint field"
+            ),
             Self::ReorderedField {
                 index,
                 previous_offset,
@@ -1071,7 +1172,10 @@ impl std::error::Error for GeneratedArgumentLayoutError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::InvalidLayout(error) => Some(error),
-            Self::ReorderedField { .. } | Self::OverlappingField { .. } => None,
+            Self::IndexSpaceCount { .. }
+            | Self::IndexSpaceField { .. }
+            | Self::ReorderedField { .. }
+            | Self::OverlappingField { .. } => None,
         }
     }
 }
@@ -1968,7 +2072,9 @@ pub(crate) fn validate_argument_packing(
 /// Worker V3 deliberately uses a descriptor schema independent from `AbiLayout`. The V3 verifier
 /// authenticates the exact generated Rust type/layout contract against that descriptor and final
 /// executable. This bridge separately compares every representable physical ABI and effect fact;
-/// it never derives a safe Rust signature from descriptor bytes.
+/// it never derives a safe Rust signature from descriptor bytes. A mapped index space comes from
+/// the unsafe compiler-generated argument implementation and is sound here only because callers
+/// reach this bridge after authenticating the matching generated host-contract identity.
 pub(crate) fn validate_worker_v3_argument_packing(
     table: &DeviceDescriptorTableV1,
     descriptor: &KernelDescriptorV1,
@@ -2009,7 +2115,13 @@ pub(crate) fn validate_worker_v3_argument_packing(
         .zip(descriptor.arguments())
         .enumerate()
     {
-        if let Some(property) = worker_v3_field_mismatch(table, index, field, argument) {
+        if let Some(property) = worker_v3_field_mismatch(
+            table,
+            index,
+            field,
+            generated.disjoint_index_spaces[index],
+            argument,
+        ) {
             return Err(GeneratedArgumentPackingError::FieldMismatch { index, property });
         }
     }
@@ -2036,6 +2148,7 @@ fn worker_v3_field_mismatch(
     table: &DeviceDescriptorTableV1,
     index: usize,
     field: &AbiField,
+    disjoint_index_space: Option<RustDisjointIndexSpaceV1>,
     argument: &LogicalArgumentV1,
 ) -> Option<GeneratedArgumentFieldProperty> {
     let expected_ownership = match argument.ownership() {
@@ -2084,12 +2197,12 @@ fn worker_v3_field_mismatch(
         } else if source.is_shared_slice() {
             canonical_slice_layout_v1(scalar, PointerWidth::Bits64, false).type_identity()
         } else {
-            // V3 descriptor V1 preserves `DisjointSlice` but not a mapped index-space type.
-            // Only canonical Index1D can therefore enter the safe dispatch bridge.
+            // Descriptor V1 preserves the disjoint ownership class. The authenticated generated
+            // host contract supplies the exact source mapping, with Index1D as the legacy default.
             canonical_disjoint_slice_layout_v1(
                 scalar,
                 PointerWidth::Bits64,
-                RustDisjointIndexSpaceV1::Index1D,
+                disjoint_index_space.unwrap_or(RustDisjointIndexSpaceV1::Index1D),
             )
             .type_identity()
         }
@@ -2798,6 +2911,69 @@ mod tests {
                 index: 0,
                 property: GeneratedArgumentFieldProperty::TypeIdentity,
             })
+        );
+    }
+
+    #[test]
+    fn worker_v3_bridge_accepts_only_the_compiler_retained_blocked_index_space() {
+        let table = worker_v3_table(true);
+        let blocked = RustDisjointIndexSpaceV1::blocked_index_1d(1, 8).unwrap();
+        let field = AbiField::new(
+            Name::new("values").unwrap(),
+            0,
+            16,
+            8,
+            AbiKind::Slice {
+                element_size: 4,
+                element_alignment: 4,
+            },
+            Mutability::Mutable,
+            Access::ReadWrite,
+            AddressSpace::Global,
+            f32::disjoint_slice_type_identity_for_index_space_v1(PointerWidth::Bits64, blocked),
+            ArgumentOwnership::UniqueBorrow,
+            AliasClass::Exclusive,
+        )
+        .unwrap();
+        let generated_with = |index_space| {
+            CompilerGeneratedArgumentLayoutV1::new_with_disjoint_index_spaces_v1(
+                16,
+                8,
+                PointerWidth::Bits64,
+                vec![field.clone()],
+                vec![index_space],
+            )
+            .unwrap()
+        };
+
+        assert!(validate_worker_v3(&table, &generated_with(Some(blocked))).is_ok());
+        for substituted in [
+            None,
+            Some(RustDisjointIndexSpaceV1::Index1D),
+            RustDisjointIndexSpaceV1::blocked_index_1d(1, 4),
+        ] {
+            assert_eq!(
+                validate_worker_v3(&table, &generated_with(substituted)),
+                Err(GeneratedArgumentPackingError::FieldMismatch {
+                    index: 0,
+                    property: GeneratedArgumentFieldProperty::TypeIdentity,
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn generated_layout_rejects_disjoint_metadata_on_a_shared_field() {
+        let field = canonical_slice::<f32>("values", false, Access::ReadOnly);
+        assert_eq!(
+            CompilerGeneratedArgumentLayoutV1::new_with_disjoint_index_spaces_v1(
+                16,
+                8,
+                PointerWidth::Bits64,
+                vec![field],
+                vec![Some(RustDisjointIndexSpaceV1::Index1D)],
+            ),
+            Err(GeneratedArgumentLayoutError::IndexSpaceField { index: 0 })
         );
     }
 

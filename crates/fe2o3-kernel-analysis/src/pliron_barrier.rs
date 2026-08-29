@@ -2,10 +2,14 @@
 
 use std::{collections::HashMap, fmt};
 
-use dialect_gpu::{AddressSpaceAttr, BarrierOp, ExecutionDomainAttr, HierarchyAttr};
+use dialect_gpu::{
+    AddressSpaceAttr, BarrierOp, ExecutionDomainAttr, HierarchyAttr, MemoryOrderAttr,
+    MemoryScopeAttr,
+};
 use dialect_kernel::{
     AnalysisSplitOp, BranchArgsOp, BranchOp, IndexEqualBranchArgsOp, IndexEqualBranchOp,
-    IndexLessThanBranchArgsOp, IndexLessThanBranchOp, ReturnOp, TensorLayoutOp, TrapOp,
+    IndexLessThanBranchArgsOp, IndexLessThanBranchOp, PipelineEventKindAttr, PipelineEventOp,
+    ReturnOp, TensorLayoutOp, TrapOp,
 };
 use pliron::{
     basic_block::BasicBlock,
@@ -18,6 +22,7 @@ use crate::pliron_analysis_manager::PlironAnalysisManagerV1;
 use crate::pliron_invocation_trace::{
     PlironInvocationTraceV1, PlironTraceEventV1, PlironTraceFailureV1, PlironTraceLocationV1,
 };
+use crate::pliron_pipeline_protocol::run_pliron_pipeline_protocol_check_with_analyses_v1;
 use crate::pliron_ranked_bounds::run_pliron_ranked_bounds_check_with_analyses_v1;
 use crate::pliron_simt_protocol::{PlironProtocolEventV1, PlironSimtProtocolIssueV1};
 use crate::{KernelCheckPassKindV1, KernelCheckStatusV1};
@@ -260,13 +265,122 @@ pub(crate) fn run_pliron_barrier_convergence_check_with_analyses_v1(
             second_trace,
         }),
         BarrierPathSummaryV1::Incomplete(path_detail) => {
+            let epoch_detail = match pipeline_barriers_have_uniform_epoch_proof(
+                context, function, &inventory, analyses,
+            ) {
+                Ok(()) => return PlironBarrierReportV1 { findings: vec![] },
+                Err(detail) => detail,
+            };
             report(PlironBarrierFindingV1::AnalysisIncomplete {
                 detail: format!(
-                    "{}; all-path convergence proof also failed: {path_detail}",
+                    "{}; all-path convergence proof also failed: {path_detail}; uniform epoch proof also failed: {epoch_detail}",
                     trace_failure_detail(trace_failure),
                 ),
             })
         }
+    }
+}
+
+fn pipeline_barriers_have_uniform_epoch_proof(
+    context: &Context,
+    function: &FuncOp,
+    inventory: &crate::pliron_function_inventory::BoundedPlironFunctionInventoryV1,
+    analyses: &mut PlironAnalysisManagerV1,
+) -> Result<(), String> {
+    let protocol = run_pliron_pipeline_protocol_check_with_analyses_v1(context, function, analyses);
+    if !protocol.is_clean() {
+        return Err(protocol
+            .findings()
+            .first()
+            .map(ToString::to_string)
+            .unwrap_or_else(|| "pipeline protocol rejected without a finding".to_owned()));
+    }
+    if protocol.certificates().is_empty() {
+        return Err("the function has no staged-pipeline certificate".to_owned());
+    }
+    let mut certificates = HashMap::new();
+    for certificate in protocol.certificates() {
+        let Some(site) = inventory.operations().iter().find(|site| {
+            site.block() == certificate.pipeline_block()
+                && site.operation() == certificate.pipeline_operation()
+        }) else {
+            return Err("a pipeline certificate has no exact creation site".to_owned());
+        };
+        if certificate.dynamic_loop().is_none() || !certificate.access_refinement_proven() {
+            return Err(
+                "a pipeline certificate lacks a uniform dynamic-loop/access refinement proof"
+                    .to_owned(),
+            );
+        }
+        if certificates.insert(site.pointer(), certificate).is_some() {
+            return Err("two pipeline certificates name the same creation".to_owned());
+        }
+    }
+    let mut barriers = 0_usize;
+    for site in inventory.operations() {
+        let operation = Operation::get_op_dyn(site.pointer(), context);
+        let Some(barrier) = operation.downcast_ref::<BarrierOp>() else {
+            continue;
+        };
+        barriers = barriers.saturating_add(1);
+        if barrier.execution_scope(context) != Some(HierarchyAttr::Workgroup)
+            || barrier.memory_scope(context) != Some(MemoryScopeAttr::Workgroup)
+            || barrier.address_space(context) != Some(AddressSpaceAttr::Workgroup)
+            || barrier.order(context) != Some(MemoryOrderAttr::AcquireRelease)
+        {
+            return Err("a barrier paired with a pipeline wait changed its exact workgroup acquire-release contract".to_owned());
+        }
+        let block_operations = inventory.block_operations(site.block());
+        if block_operations
+            .iter()
+            .filter(|candidate| {
+                Operation::get_op_dyn(candidate.pointer(), context)
+                    .downcast_ref::<BarrierOp>()
+                    .is_some()
+            })
+            .count()
+            != 1
+        {
+            return Err(format!(
+                "pipeline-wait block {} contains more than one barrier",
+                site.block()
+            ));
+        }
+        let matched_waits = block_operations
+            .iter()
+            .filter(|candidate| {
+                let operation = Operation::get_op_dyn(candidate.pointer(), context);
+                let Some(event) = operation.downcast_ref::<PipelineEventOp>() else {
+                    return false;
+                };
+                if event.kind(context) != Some(PipelineEventKindAttr::Wait) {
+                    return false;
+                }
+                let Some(owner) = event.pipeline(context).defining_op() else {
+                    return false;
+                };
+                let Some(certificate) = certificates.get(&owner) else {
+                    return false;
+                };
+                let Some(summary) = certificate.dynamic_loop() else {
+                    return false;
+                };
+                summary.body().contains(&site.block())
+                    || summary.prologue_blocks().contains(&site.block())
+                    || summary.drain_blocks().contains(&site.block())
+            })
+            .count();
+        if matched_waits != 1 {
+            return Err(format!(
+                "barrier in block {} has {matched_waits} certified pipeline waits",
+                site.block()
+            ));
+        }
+    }
+    if barriers == 0 {
+        Err("the function has no barrier to justify".to_owned())
+    } else {
+        Ok(())
     }
 }
 

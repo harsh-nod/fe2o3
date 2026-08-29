@@ -17,6 +17,9 @@ pub fn half_math_kernel(
 ) {
     let _f16_sum = f16_add(f16_lhs, f16_rhs);
     let _bf16_quotient = bf16_lhs / bf16_rhs;
+    let bf16_from_scalar = Bf16::from_f32(scalar);
+    let _bf16_round_trip = bf16_from_scalar.to_f32();
+    let _bf16_bits_round_trip = Bf16::from_bits(bf16_lhs.to_bits());
     let f16_from_scalar = F16::from_f32(scalar);
     let _scalar_round_trip = f16_from_scalar.to_f32();
 

@@ -1,6 +1,7 @@
 use dialect_kernel::{DIALECT_NAME, register_dialect};
 use fe2o3_kernel_analysis::{
-    KernelCheckStatusV1, PlironPipelineProtocolFindingV1, run_pliron_pipeline_protocol_check_v1,
+    KernelCheckStatusV1, PlironPipelineProtocolFindingV1, run_pliron_barrier_convergence_check_v1,
+    run_pliron_pipeline_protocol_check_v1,
 };
 use pliron::{
     builtin::ops::FuncOp,
@@ -30,6 +31,41 @@ fn parse_fixture(source: &str) -> (Context, FuncOp) {
     verify_operation(operation, &context).expect("fixture verifies locally");
     assert!(Operation::is_op::<FuncOp>(operation, &context));
     (context, FuncOp::from_operation(operation))
+}
+
+fn dynamic_pipeline_with_wait_barriers(extra_barrier: bool) -> String {
+    let source = include_str!("lit/pipeline_dynamic_double_buffer.pliron");
+    let layout = "    gpu.execution_layout () [] [gpu_execution_grid_identity: gpu.grid_identity 7, gpu_execution_global_x: gpu.execution_extent 0, gpu_execution_global_y: gpu.execution_extent 1, gpu_execution_global_z: gpu.execution_extent 1, gpu_execution_workgroup_x: gpu.execution_extent 64, gpu_execution_workgroup_y: gpu.execution_extent 1, gpu_execution_workgroup_z: gpu.execution_extent 1, gpu_execution_subgroup_size: gpu.subgroup_size 64, gpu_execution_domain: gpu.execution_domain FullPhysicalWorkgroups]: <() -> ()>;";
+    let barrier = "    gpu.barrier Workgroup Workgroup Workgroup AcquireRelease;";
+    let mut output = Vec::new();
+    for line in source.lines() {
+        output.push(line.to_owned());
+        if line.contains("^entry_block1v1(bound_v5: kernel.index ):") {
+            output.push(layout.to_owned());
+        }
+        if line.contains("kernel_pipeline_event_kind: kernel.pipeline_event_kind Wait") {
+            let event = output.pop().expect("wait line was just appended");
+            output.push(barrier.to_owned());
+            output.push(event);
+        }
+        if extra_barrier && line.contains("^exit_block4v1():") {
+            output.push(barrier.to_owned());
+        }
+    }
+    output.join("\n")
+}
+
+#[test]
+fn proves_wait_barriers_in_uniform_dynamic_epoch_loops() {
+    let source = dynamic_pipeline_with_wait_barriers(false);
+    let (context, function) = parse_fixture(&source);
+    let report = run_pliron_barrier_convergence_check_v1(&context, &function);
+    assert!(report.is_clean(), "{:?}", report.findings());
+
+    let source = dynamic_pipeline_with_wait_barriers(true);
+    let (context, function) = parse_fixture(&source);
+    let report = run_pliron_barrier_convergence_check_v1(&context, &function);
+    assert!(!report.is_clean());
 }
 
 #[test]
@@ -67,6 +103,34 @@ fn proves_symbolic_double_and_triple_buffer_windows_without_unrolling() {
         assert!(!summary.prologue_blocks().is_empty());
         assert!(!summary.drain_blocks().is_empty());
     }
+}
+
+#[test]
+fn dynamic_epoch_loop_allows_unrelated_carried_block_arguments() {
+    let source = include_str!("lit/pipeline_dynamic_double_buffer.pliron")
+        .replace(
+            "kernel.br_args (zero_v2) [^header_block2v1] []: <(kernel.index ) -> ()>",
+            "kernel.br_args (zero_v2, one_v3) [^header_block2v1] []: <(kernel.index , kernel.index ) -> ()>",
+        )
+        .replace(
+            "^header_block2v1(i_v6: kernel.index ):",
+            "^header_block2v1(i_v6: kernel.index , carried_v12: kernel.index ):",
+        )
+        .replace(
+            "kernel.index_lt_br_args (i_v6, bound_v5, i_v6) [^body_block3v1, ^exit_block4v1] []: <(kernel.index , kernel.index , kernel.index ) -> ()>",
+            "kernel.index_lt_br_args (i_v6, bound_v5, i_v6, carried_v12) [^body_block3v1, ^exit_block4v1] []: <(kernel.index , kernel.index , kernel.index , kernel.index ) -> ()>",
+        )
+        .replace(
+            "^body_block3v1(body_i_v7: kernel.index ):",
+            "^body_block3v1(body_i_v7: kernel.index , body_carried_v13: kernel.index ):",
+        )
+        .replace(
+            "kernel.br_args (future_v8) [^header_block2v1] []: <(kernel.index ) -> ()>",
+            "kernel.br_args (future_v8, body_carried_v13) [^header_block2v1] []: <(kernel.index , kernel.index ) -> ()>",
+        );
+    let (context, function) = parse_fixture(&source);
+    let report = run_pliron_pipeline_protocol_check_v1(&context, &function);
+    assert!(report.is_clean(), "{:?}", report.findings());
 }
 
 #[test]
@@ -109,7 +173,7 @@ fn accepts_interleaved_independent_pipeline_lifecycles() {
 
 #[test]
 fn rejects_order_reuse_slot_epoch_and_drain_failures() {
-    for source in [
+    for (case, source) in [
         include_str!("lit/pipeline_wrong_slot.pliron"),
         include_str!("lit/pipeline_wait_before_commit.pliron"),
         include_str!("lit/pipeline_overwrite_before_release.pliron"),
@@ -125,10 +189,17 @@ fn rejects_order_reuse_slot_epoch_and_drain_failures() {
         include_str!("lit/pipeline_write_after_commit.pliron"),
         include_str!("lit/pipeline_read_before_consume.pliron"),
         include_str!("lit/pipeline_dynamic_wrong_access_slot.pliron"),
-    ] {
+    ]
+    .into_iter()
+    .enumerate()
+    {
         let (context, function) = parse_fixture(source);
         let report = run_pliron_pipeline_protocol_check_v1(&context, &function);
-        assert_eq!(report.status(), KernelCheckStatusV1::Rejected);
+        assert_eq!(
+            report.status(),
+            KernelCheckStatusV1::Rejected,
+            "case {case}"
+        );
         assert!(matches!(
             report.findings().first(),
             Some(PlironPipelineProtocolFindingV1::InvalidSchedule { .. })

@@ -30,7 +30,7 @@ pub const HOST_VISIBLE_MEMORY_PAGE_BYTES_V1: u64 = 4_096;
 pub const HOST_VISIBLE_MEMORY_PROFILE_MANIFEST_V1: &str = concat!(
     "profile=fe2o3-mi300x-single-device-host-visible-memory-r3-v1\n",
     "device_profile_sha256=e12ea33b259666e7928612403109640b03b0d637b893a2c15b87d17a4211c8de\n",
-    "kfd_memory_schema_sha256=e2d6987b7c8e61a405b2f775d5d004f458a096241459e4cfdf90bd4497f4d58a\n",
+    "kfd_memory_schema_sha256=5c210c3d7ada17794b10cde6f48a28f105a6e79dd8dce77c66b14dca6074eea8\n",
     "platform=linux-x86_64,kernel:6.8.0-124-generic,amdgpu:6.16.13,page:4096\n",
     "module_zst_sha256=e5a327a8f46459e07ee3f59cc991d16feee17103e199d39149823879b7fcff0b\n",
     "module_ko_sha256=61317154cee502ea97a74818879dff4b20abf8f074a2f4d19a94288e25d4ac3a\n",
@@ -64,12 +64,12 @@ pub const HOST_VISIBLE_MEMORY_PROFILE_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`HOST_VISIBLE_MEMORY_PROFILE_MANIFEST_V1`].
 pub const HOST_VISIBLE_MEMORY_PROFILE_SHA256_V1: &str =
-    "ff5ea2ba7ba25d539818a2cf262ce29e4eb411bb8cf349a99928d9883b5d58b2";
+    "3ad5b336ea30994c90117e473871bf90300d3f7753333b23bdaf66a1225909bc";
 
 /// Typed digest bytes of [`HOST_VISIBLE_MEMORY_PROFILE_MANIFEST_V1`].
 pub const HOST_VISIBLE_MEMORY_PROFILE_SHA256_BYTES_V1: [u8; 32] = [
-    0xff, 0x5e, 0xa2, 0xba, 0x7b, 0xa2, 0x5d, 0x53, 0x98, 0x18, 0xa2, 0xcf, 0x26, 0x2c, 0xe2, 0x9e,
-    0x4e, 0xb4, 0x11, 0xbb, 0x8c, 0xf3, 0x49, 0xa9, 0x99, 0x28, 0xd9, 0x88, 0x3b, 0x5d, 0x58, 0xb2,
+    0x3a, 0xd5, 0xb3, 0x36, 0xea, 0x30, 0x99, 0x4c, 0x90, 0x11, 0x7e, 0x47, 0x38, 0x71, 0xbf, 0x90,
+    0x30, 0x0d, 0x3f, 0x77, 0x53, 0x33, 0x3b, 0x23, 0xbd, 0xaf, 0x66, 0xa1, 0x22, 0x59, 0x09, 0xbc,
 ];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -150,6 +150,18 @@ pub enum MemorySessionError {
         maximum_bytes: u64,
     },
     InvalidAllocationAuthority,
+    DeviceMemoryAllocationCapacity {
+        maximum: usize,
+    },
+    DeviceMemoryByteCapacity {
+        maximum_bytes: u64,
+    },
+    InvalidDeviceMemorySize,
+    InvalidDeviceMemoryAlignment,
+    DeviceContentMismatch,
+    DeviceInitializationWriteFailed,
+    InvalidDeviceMemoryAuthority,
+    DeviceMemoryQueueBindingRequired,
     InvalidProfileSize(&'static str),
     UnsupportedPageSize(usize),
     AddressOutsideAperture,
@@ -199,6 +211,28 @@ impl fmt::Display for MemorySessionError {
             Self::InvalidAllocationAuthority => {
                 formatter.write_str("the allocation authority token is stale or substituted")
             }
+            Self::DeviceMemoryAllocationCapacity { maximum } => write!(
+                formatter,
+                "device-memory allocation record capacity {maximum} is exhausted"
+            ),
+            Self::DeviceMemoryByteCapacity { maximum_bytes } => write!(
+                formatter,
+                "device-memory capacity {maximum_bytes} bytes would be exceeded"
+            ),
+            Self::InvalidDeviceMemorySize => {
+                formatter.write_str("device-memory size must be nonzero and within profile bounds")
+            }
+            Self::InvalidDeviceMemoryAlignment => formatter
+                .write_str("device-memory alignment must be a power of two no larger than 4096"),
+            Self::DeviceContentMismatch => formatter
+                .write_str("device-memory bytes did not match the exact content descriptor"),
+            Self::DeviceInitializationWriteFailed => {
+                formatter.write_str("the bounded public device-memory initialization write failed")
+            }
+            Self::InvalidDeviceMemoryAuthority => formatter
+                .write_str("the device-memory lease is stale, substituted, or in the wrong state"),
+            Self::DeviceMemoryQueueBindingRequired => formatter
+                .write_str("live device memory requires a future explicit queue/dispatch binding"),
             Self::InvalidProfileSize(profile) => {
                 write!(formatter, "the requested size is invalid for {profile}")
             }
@@ -273,6 +307,35 @@ pub(super) trait MemoryBackend {
         bytes: u64,
         flags: KfdAllocMemoryFlags,
     ) -> KernelOutcome<KfdIoctlAllocMemoryOfGpuArgs>;
+    fn prepare_userptr(
+        &mut self,
+        _reservation: &mut Self::Reservation,
+        _bytes: usize,
+    ) -> Result<Self::Mapping, MemorySessionError> {
+        Err(MemorySessionError::KernelResultMalformed(
+            "USERPTR mapping backend",
+        ))
+    }
+    fn alloc_userptr(
+        &mut self,
+        address: u64,
+        bytes: u64,
+        flags: KfdAllocMemoryFlags,
+    ) -> KernelOutcome<KfdIoctlAllocMemoryOfGpuArgs> {
+        let value = if flags == KfdAllocMemoryFlags::USERPTR_EXECUTABLE {
+            KfdIoctlAllocMemoryOfGpuArgs::new_userptr(address, bytes, self.gpu_id())
+        } else if flags == KfdAllocMemoryFlags::USERPTR_QUEUE_CONTROL {
+            KfdIoctlAllocMemoryOfGpuArgs::new_userptr_queue_control(address, bytes, self.gpu_id())
+        } else {
+            KfdIoctlAllocMemoryOfGpuArgs::new(address, bytes, self.gpu_id(), flags)
+        };
+        KernelOutcome {
+            value,
+            result: Err(MemorySessionError::KernelResultMalformed(
+                "USERPTR allocation backend",
+            )),
+        }
+    }
     fn map_cpu(
         &mut self,
         reservation: &mut Self::Reservation,
@@ -344,6 +407,42 @@ pub(super) trait MemoryBackend {
     ) -> Result<i64, MemorySessionError> {
         Err(MemorySessionError::KernelResultMalformed(
             "mapped acquire observation backend",
+        ))
+    }
+    fn observe_aql_packet_header_acquire(
+        _mapping: &mut Self::Mapping,
+        _requested_bytes: usize,
+        _packet_id: u64,
+    ) -> Result<(u32, u16, u16), MemorySessionError> {
+        Err(MemorySessionError::KernelResultMalformed(
+            "AQL packet observation backend",
+        ))
+    }
+    fn observe_completion_signal_acquire(
+        _mapping: &mut Self::Mapping,
+        _requested_bytes: usize,
+        _slot_index: u32,
+    ) -> Result<fe2o3_aql::AqlCompletionObservationV1, MemorySessionError> {
+        Err(MemorySessionError::KernelResultMalformed(
+            "AQL completion observation backend",
+        ))
+    }
+    fn observe_completion_signal_state_acquire(
+        _mapping: &mut Self::Mapping,
+        _requested_bytes: usize,
+        _slot_index: u32,
+    ) -> Result<(i64, i64), MemorySessionError> {
+        Err(MemorySessionError::KernelResultMalformed(
+            "AQL completion state observation backend",
+        ))
+    }
+    fn reset_completion_signal_release(
+        _mapping: &mut Self::Mapping,
+        _requested_bytes: usize,
+        _slot_index: u32,
+    ) -> Result<(), MemorySessionError> {
+        Err(MemorySessionError::KernelResultMalformed(
+            "AQL completion reset backend",
         ))
     }
     fn unmap_cpu(&mut self, mapping: &mut Self::Mapping) -> Result<(), MemorySessionError>;

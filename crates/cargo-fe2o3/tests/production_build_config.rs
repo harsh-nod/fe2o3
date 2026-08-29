@@ -280,13 +280,11 @@ fn production_worker_v3_verifier_is_sealed_and_synthetic_authority_is_test_only(
     let cargo_manifest = include_str!("../Cargo.toml");
 
     assert!(host.contains("verifier_seal::Sealed<K>"));
-    assert!(host.contains("pub(crate) const fn new("));
+    assert!(host.contains("pub(crate) fn new("));
     assert!(host.contains("feature = \"worker-v3-verifier-test-support\""));
     assert!(host.contains("pub unsafe trait WorkerV3SyntheticVerifierV1"));
-    assert!(
-        host_exports
-            .contains("pub use worker_v3_verification_admission::WorkerV3SyntheticVerifierV1")
-    );
+    assert!(host_exports.contains("WorkerV3SyntheticVerifierAdapterV1"));
+    assert!(host_exports.contains("WorkerV3SyntheticVerifierV1"));
     assert!(host_manifest.contains("worker-v3-verifier-test-support = []"));
 
     let test_feature = cargo_manifest

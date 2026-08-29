@@ -1272,11 +1272,13 @@ fn hash_ranked_operation(digest: &mut Sha256, operation: &ProductionRankedOperat
             hash_values(digest, indices);
         }
         ProductionRankedOperationV1::PredicatedAccess {
+            kind,
             view,
             index,
             success,
         } => {
             digest.update([37]);
+            digest.update([access_kind_tag(*kind)]);
             hash_value(digest, *view);
             hash_value(digest, *index);
             hash_value(digest, *success);
@@ -2096,11 +2098,13 @@ mod tests {
         }
 
         let access = ProductionRankedOperationV1::PredicatedAccess {
+            kind: AccessKindAttr::Write,
             view: ProductionRankedValueV1::Argument(0),
             index: ProductionRankedValueV1::Argument(1),
             success: ProductionRankedValueV1::Argument(2),
         };
         let changed_access = ProductionRankedOperationV1::PredicatedAccess {
+            kind: AccessKindAttr::Write,
             view: ProductionRankedValueV1::Argument(0),
             index: ProductionRankedValueV1::Argument(1),
             success: ProductionRankedValueV1::Argument(4),

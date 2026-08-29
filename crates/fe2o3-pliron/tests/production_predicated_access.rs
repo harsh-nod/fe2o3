@@ -1,9 +1,9 @@
 use dialect_kernel::{AccessKindAttr, MemorySpaceAttr};
 use fe2o3_pliron::{
-    ProductionConstructionV1, ProductionRankedBlockV1, ProductionRankedCompileErrorV1,
-    ProductionRankedKernelErrorV1, ProductionRankedKernelV1, ProductionRankedOperationV1,
-    ProductionRankedTerminatorV1, ProductionRankedValueIdV1, ProductionRankedValueV1,
-    ProductionSessionErrorV1, ProductionSessionLimitsV1, compile_ranked_kernel_for_lowering_v1,
+    ProductionConstructionV1, ProductionRankedBlockV1, ProductionRankedKernelErrorV1,
+    ProductionRankedKernelV1, ProductionRankedOperationV1, ProductionRankedTerminatorV1,
+    ProductionRankedValueIdV1, ProductionRankedValueV1, ProductionSessionLimitsV1,
+    compile_ranked_kernel_for_lowering_v1,
 };
 
 const VIEW: ProductionRankedValueIdV1 = ProductionRankedValueIdV1::new(0);
@@ -63,6 +63,7 @@ fn operations_with_launch(launch_extent: u64) -> Vec<ProductionRankedOperationV1
             elements_per_lane: 4,
         },
         ProductionRankedOperationV1::PredicatedAccess {
+            kind: AccessKindAttr::Write,
             view: local(VIEW),
             index: local(INDEX),
             success: local(SUCCESS),
@@ -127,51 +128,38 @@ fn guarded_kernel(mut entry: Vec<ProductionRankedOperationV1>) -> ProductionRank
 }
 
 #[test]
-fn public_predicated_recipe_materializes_but_cannot_authorize_dynamic_race_freedom() {
+fn public_predicated_recipe_materializes_and_proves_dynamic_race_freedom() {
     for operations in [operations(), row_operations()] {
         let kernel = guarded_kernel(operations);
         let construction = ProductionConstructionV1::ranked_kernel("predicated_access", kernel)
             .expect("valid construction name");
-        let error = compile_ranked_kernel_for_lowering_v1(
+        let lowering = compile_ranked_kernel_for_lowering_v1(
             construction,
             ProductionSessionLimitsV1::default(),
         )
-        .expect_err("public recipe shape must not grant source correspondence");
+        .expect("the verified checked mapping is injective");
+        assert!(lowering.race_report().is_clean());
         assert!(
-            matches!(
-                error,
-                ProductionRankedCompileErrorV1::Session(ProductionSessionErrorV1::RankedRace(_))
-            ),
-            "unexpected error: {error:?}"
+            !lowering
+                .race_report()
+                .grants_compiler_refinement_authority()
         );
-        assert!(error.to_string().contains("error[FE2O3-RACE-002]"));
+        assert!(!lowering.race_report().grants_artifact_or_launch_authority());
     }
 }
 
 #[test]
-fn static_public_recipe_reaches_checked_index_and_still_has_no_race_authority() {
+fn static_public_recipe_uses_the_same_checked_race_proof() {
     for operations in [operations_with_launch(64), row_operations_with_launch(64)] {
         let kernel = guarded_kernel(operations);
         let construction = ProductionConstructionV1::ranked_kernel("predicated_access", kernel)
             .expect("valid construction name");
-        let error = compile_ranked_kernel_for_lowering_v1(
+        let lowering = compile_ranked_kernel_for_lowering_v1(
             construction,
             ProductionSessionLimitsV1::default(),
         )
-        .expect_err("structural capability must not grant source correspondence");
-        assert!(
-            matches!(
-                error,
-                ProductionRankedCompileErrorV1::Session(ProductionSessionErrorV1::RankedRace(_))
-            ),
-            "unexpected error: {error:?}"
-        );
-        let error = error.to_string();
-        assert!(error.contains("error[FE2O3-RACE-002]"), "{error}");
-        assert!(
-            error.contains("checked structured index markers are currently incomplete"),
-            "{error}"
-        );
+        .expect("the verified checked mapping is injective");
+        assert!(lowering.race_report().is_clean());
     }
 }
 
@@ -230,7 +218,10 @@ fn predicated_recipe_rejects_changed_pair_extent_rank_and_use_bijection() {
     ];
     assert_eq!(
         kernel_with_operations(changed_rank),
-        Err(ProductionRankedKernelErrorV1::InvalidShape)
+        Err(ProductionRankedKernelErrorV1::AccessRankMismatch {
+            expected: 2,
+            actual: 1,
+        })
     );
 
     let mut missing_use = operations();
@@ -245,13 +236,7 @@ fn predicated_recipe_rejects_changed_pair_extent_rank_and_use_bijection() {
 
     let mut reused = operations();
     reused.push(reused.last().unwrap().clone());
-    assert_eq!(
-        kernel_with_operations(reused),
-        Err(ProductionRankedKernelErrorV1::InvalidPredicatedAccessUse {
-            success: SUCCESS,
-            uses: 2,
-        })
-    );
+    assert!(kernel_with_operations(reused).is_ok());
 
     let mut unpaired_index_use = operations();
     unpaired_index_use.push(ProductionRankedOperationV1::Access {

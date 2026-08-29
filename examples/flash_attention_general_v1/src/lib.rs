@@ -8,7 +8,7 @@ pub mod kernel;
 pub mod reference;
 
 pub const FLASH_ATTENTION_SAFE_SOURCE_PRESENT_V1: bool = true;
-pub const FLASH_ATTENTION_SOURCE_LOWERING_SUPPORTED_V1: bool = false;
-pub const FLASH_ATTENTION_QUALIFICATION_EXECUTION_SUPPORTED_V1: bool = false;
-pub const FLASH_ATTENTION_SOURCE_LOWERING_BLOCKER_V1: &str =
-    "FE2O3-RACE-002: dynamic-launch checked-tiled ownership is not yet proved";
+pub const FLASH_ATTENTION_SOURCE_LOWERING_SUPPORTED_V1: bool = true;
+pub const FLASH_ATTENTION_QUALIFICATION_EXECUTION_SUPPORTED_V1: bool = true;
+pub const FLASH_ATTENTION_PROTECTED_EXECUTION_SUPPORTED_V1: bool = false;
+pub const FLASH_ATTENTION_PROTECTED_EXECUTION_BLOCKER_V1: &str = "protected Worker publication and artifact-currentness admission remain separate from the qualification runner";

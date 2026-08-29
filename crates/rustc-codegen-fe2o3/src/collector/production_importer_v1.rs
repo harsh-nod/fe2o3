@@ -3,22 +3,24 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
+use dialect_amdgcn::DeviceValueDiagnosticItem;
 use fe2o3_mir_model::semantic_mir_v1::{
     AdmittedInertSemanticMirV1, HARD_MAX_FUNCTIONS_V1, HARD_MAX_ROOTS_V1,
-    InertSemanticMirRequestV1, SemanticCallableDeclV1, SemanticCallableIdV1,
-    SemanticCompilerIntrinsicIdentityV1, SemanticCompilerIntrinsicOperationV1,
-    SemanticDisjointIndexSpaceV1, SemanticF32MathFunctionV1, SemanticFunctionAbiV1,
-    SemanticFunctionIdV1, SemanticFunctionIdentityV1, SemanticFunctionRoleV1,
-    SemanticGfx950LdsTransposeFormatV1, SemanticKernelBindingIdentityV1, SemanticKernelEntryV1,
-    SemanticKernelLaunchBoundsV1, SemanticKernelResourceContractV1, SemanticKernelSourceContractV1,
-    SemanticLinkSymbolV1, SemanticMfmaAccumulatorContractV1, SemanticMfmaAccumulatorDistributionV1,
-    SemanticMfmaOperandContractV1, SemanticMfmaOperandRoleV1, SemanticMfmaProfileV1,
-    SemanticMfmaRegisterDistributionV1, SemanticMfmaStorageLayoutV1, SemanticMirErrorV1,
-    SemanticMirLimitsV1, SemanticMirResourceV1, SemanticNonBodyCallableBindingV1,
-    SemanticReachableAssemblyV1, SemanticSubgroupReductionKindV1, SemanticTargetDataLayoutV1,
-    SemanticTypeDeclV1, SemanticTypeIdV1, SemanticTypeShapeV1, SemanticUnsafeAssemblyDeclarationV1,
-    SemanticUnsafeAssemblyTargetV1, SemanticWorkgroupDimensionsV1,
-    SemanticWorkgroupPipelineEventV1,
+    InertSemanticMirRequestV1, SemanticBf16ConversionKindV1, SemanticCallableDeclV1,
+    SemanticCallableIdV1, SemanticCompilerIntrinsicIdentityV1,
+    SemanticCompilerIntrinsicOperationV1, SemanticDisjointIndexSpaceV1, SemanticF32MathFunctionV1,
+    SemanticFunctionAbiV1, SemanticFunctionIdV1, SemanticFunctionIdentityV1,
+    SemanticFunctionRoleV1, SemanticGfx950LdsTransposeFormatV1, SemanticKernelBindingIdentityV1,
+    SemanticKernelEntryV1, SemanticKernelLaunchBoundsV1, SemanticKernelResourceContractV1,
+    SemanticKernelSourceContractV1, SemanticLinkSymbolV1, SemanticMfmaAccumulatorContractV1,
+    SemanticMfmaAccumulatorDistributionV1, SemanticMfmaOperandContractV1,
+    SemanticMfmaOperandRoleV1, SemanticMfmaProfileV1, SemanticMfmaRegisterDistributionV1,
+    SemanticMfmaStorageLayoutV1, SemanticMirErrorV1, SemanticMirLimitsV1, SemanticMirResourceV1,
+    SemanticNonBodyCallableBindingV1, SemanticReachableAssemblyV1, SemanticScalarTypeV1,
+    SemanticSubgroupReductionKindV1, SemanticTargetDataLayoutV1, SemanticTypeDeclV1,
+    SemanticTypeIdV1, SemanticTypeLayoutDetailsV1, SemanticTypeShapeV1,
+    SemanticUnsafeAssemblyDeclarationV1, SemanticUnsafeAssemblyTargetV1,
+    SemanticWorkgroupDimensionsV1, SemanticWorkgroupPipelineEventV1,
 };
 use rustc_middle::ty::{FloatTy, GenericArgKind, Instance, IntTy, Ty, TyCtxt, TyKind, UintTy};
 use rustc_span::{Symbol, sym};
@@ -40,6 +42,7 @@ use crate::production_semantic_fn_abi_v1::{
     ConstructedSemanticFunctionAbisV1, ProductionSemanticFnAbiErrorV1,
     construct_production_semantic_fn_abis_v1,
 };
+use crate::production_semantic_terminal_v1::ProductionBf16ConversionV1;
 use crate::production_semantic_types_v1::{
     ProductionSemanticTypeErrorV1, construct_production_semantic_types_v1,
 };
@@ -55,6 +58,18 @@ use crate::rustc_semantic_plan_v1::{
 use crate::trusted_device_items::{self, TrustedDeviceItem};
 
 const IDENTITY_INVENTORY_DOMAIN_V1: &[u8] = b"fe2o3/semantic-mir/rustc-identity-inventory/v1";
+#[cfg(test)]
+const PRODUCTION_COMPILER_INTRINSIC_DOMAIN_V1: &[u8] =
+    b"fe2o3/semantic-mir/production-compiler-intrinsic/v1";
+const PRODUCTION_COMPILER_INTRINSIC_DOMAIN_V2: &[u8] =
+    b"fe2o3/semantic-mir/production-compiler-intrinsic/v2";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TerminalIdentitySchemaV1 {
+    #[cfg(test)]
+    IndependentV1,
+    CombinedV2,
+}
 
 #[derive(Debug)]
 pub(crate) enum ProductionSemanticImportErrorV1 {
@@ -441,11 +456,13 @@ fn construct_complete_request_v1<'tcx>(
     {
         let operation =
             terminal_operation_v1(tcx, terminal.instance, terminal.expansion, abi, &types)?;
-        let mut digest =
-            SemanticIdentityDigestV1::new(b"fe2o3/semantic-mir/production-compiler-intrinsic/v1");
+        let mut digest = SemanticIdentityDigestV1::new(PRODUCTION_COMPILER_INTRINSIC_DOMAIN_V2);
         digest.field(terminal.identities.function().as_bytes());
         digest.field(abi.identity().as_bytes());
-        digest.field(&[terminal_operation_tag_v1(terminal.expansion)]);
+        digest.field(&[terminal_operation_tag_for_schema_v1(
+            terminal.expansion,
+            TerminalIdentitySchemaV1::CombinedV2,
+        )]);
         digest.field(
             &u32::try_from(index)
                 .map_err(|_| ProductionSemanticImportErrorV1::RootIdentityMismatch)?
@@ -1080,6 +1097,62 @@ fn terminal_operation_v1<'tcx>(
             Ok(SemanticCompilerIntrinsicOperationV1::MathF32 {
                 context: pointer_pointee_v1(types, inputs[0])?,
                 function: semantic_f32_math_function_v1(function),
+            })
+        }
+        ProductionTerminalExpansionV1::Bf16Conversion(conversion) => {
+            if inputs.len() != 1 || rust_inputs.len() != 1 {
+                return Err(body_owner_table_mismatch_v1("BF16 conversion arity"));
+            }
+            let input = inputs[0];
+            let rust_input = rust_inputs[0];
+            let rust_is_bf16 = |ty| {
+                rust_is_trusted_adt_v1(
+                    tcx,
+                    ty,
+                    TrustedDeviceItem::DeviceValue(DeviceValueDiagnosticItem::Bf16),
+                )
+            };
+            let rust_is_u16 = |ty: Ty<'tcx>| matches!(ty.kind(), TyKind::Uint(UintTy::U16));
+            let rust_is_f32 = |ty: Ty<'tcx>| matches!(ty.kind(), TyKind::Float(FloatTy::F32));
+            let (kind, valid) = match conversion {
+                ProductionBf16ConversionV1::FromBits => (
+                    SemanticBf16ConversionKindV1::FromBits,
+                    rust_is_u16(rust_input)
+                        && rust_is_bf16(rust_output)
+                        && semantic_u16_type_v1(types, input)
+                        && semantic_bf16_storage_type_v1(types, output),
+                ),
+                ProductionBf16ConversionV1::ToBits => (
+                    SemanticBf16ConversionKindV1::ToBits,
+                    rust_is_bf16(rust_input)
+                        && rust_is_u16(rust_output)
+                        && semantic_bf16_storage_type_v1(types, input)
+                        && semantic_u16_type_v1(types, output),
+                ),
+                ProductionBf16ConversionV1::FromF32RoundTiesEven => (
+                    SemanticBf16ConversionKindV1::FromF32RoundTiesEven,
+                    rust_is_f32(rust_input)
+                        && rust_is_bf16(rust_output)
+                        && semantic_f32_type_v1(types, input)
+                        && semantic_bf16_storage_type_v1(types, output),
+                ),
+                ProductionBf16ConversionV1::ToF32 => (
+                    SemanticBf16ConversionKindV1::ToF32,
+                    rust_is_bf16(rust_input)
+                        && rust_is_f32(rust_output)
+                        && semantic_bf16_storage_type_v1(types, input)
+                        && semantic_f32_type_v1(types, output),
+                ),
+            };
+            if !valid {
+                return Err(body_owner_table_mismatch_v1(
+                    "authenticated BF16 conversion ABI",
+                ));
+            }
+            Ok(SemanticCompilerIntrinsicOperationV1::Bf16Conversion {
+                kind,
+                input,
+                output,
             })
         }
         ProductionTerminalExpansionV1::CollectiveContextCurrent
@@ -2437,6 +2510,55 @@ fn single_const_u32_v1(instance: Instance<'_>) -> Option<u32> {
     values.next().is_none().then_some(value)
 }
 
+fn semantic_u16_type_v1(types: &[SemanticTypeDeclV1], ty: SemanticTypeIdV1) -> bool {
+    types.get(ty.index() as usize).is_some_and(|declaration| {
+        matches!(
+            declaration.shape(),
+            SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
+                signed: false,
+                bits: 16,
+            })
+        )
+    })
+}
+
+fn semantic_f32_type_v1(types: &[SemanticTypeDeclV1], ty: SemanticTypeIdV1) -> bool {
+    types.get(ty.index() as usize).is_some_and(|declaration| {
+        matches!(
+            declaration.shape(),
+            SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Float { bits: 32 })
+        )
+    })
+}
+
+fn semantic_bf16_storage_type_v1(types: &[SemanticTypeDeclV1], ty: SemanticTypeIdV1) -> bool {
+    let Some(declaration) = types.get(ty.index() as usize) else {
+        return false;
+    };
+    let SemanticTypeShapeV1::Aggregate(aggregate) = declaration.shape() else {
+        return false;
+    };
+    let [bits] = aggregate.fields() else {
+        return false;
+    };
+    let Some(bits_declaration) = types.get(bits.index() as usize) else {
+        return false;
+    };
+    let SemanticTypeLayoutDetailsV1::Aggregate(layout) = declaration.layout().details() else {
+        return false;
+    };
+    semantic_u16_type_v1(types, *bits)
+        && declaration.layout().size_bytes() == Some(2)
+        && declaration.layout().alignment_bytes() == 2
+        && !declaration.layout().is_uninhabited()
+        && bits_declaration.layout().size_bytes() == Some(2)
+        && bits_declaration.layout().alignment_bytes() == 2
+        && !bits_declaration.layout().is_uninhabited()
+        && declaration.layout().backend_repr() == bits_declaration.layout().backend_repr()
+        && layout.field_offsets() == [0]
+        && layout.padding().is_empty()
+}
+
 fn single_const_u64_v1(instance: Instance<'_>) -> Option<u64> {
     let mut values = instance
         .args
@@ -3260,8 +3382,17 @@ fn pointer_pointee_v1(
     Ok(pointer.pointee())
 }
 
+#[cfg(test)]
+// Frozen calculator for the independently published BF16 and pipeline V1 histories.
 const fn terminal_operation_tag_v1(
     expansion: crate::production_semantic_terminal_v1::ProductionTerminalExpansionV1,
+) -> u8 {
+    terminal_operation_tag_for_schema_v1(expansion, TerminalIdentitySchemaV1::IndependentV1)
+}
+
+const fn terminal_operation_tag_for_schema_v1(
+    expansion: crate::production_semantic_terminal_v1::ProductionTerminalExpansionV1,
+    schema: TerminalIdentitySchemaV1,
 ) -> u8 {
     use crate::production_semantic_terminal_v1::ProductionTerminalExpansionV1;
     match expansion {
@@ -3375,6 +3506,19 @@ const fn terminal_operation_tag_v1(
         ProductionTerminalExpansionV1::WorkgroupPipelineRead => 97,
         ProductionTerminalExpansionV1::WorkgroupPipelineDiscard => 98,
         ProductionTerminalExpansionV1::WorkgroupPipelineRelease => 99,
+        ProductionTerminalExpansionV1::Bf16Conversion(conversion) => {
+            let base = match schema {
+                #[cfg(test)]
+                TerminalIdentitySchemaV1::IndependentV1 => 91,
+                TerminalIdentitySchemaV1::CombinedV2 => 100,
+            };
+            base + match conversion {
+                crate::production_semantic_terminal_v1::ProductionBf16ConversionV1::FromBits => 0,
+                crate::production_semantic_terminal_v1::ProductionBf16ConversionV1::ToBits => 1,
+                crate::production_semantic_terminal_v1::ProductionBf16ConversionV1::FromF32RoundTiesEven => 2,
+                crate::production_semantic_terminal_v1::ProductionBf16ConversionV1::ToF32 => 3,
+            }
+        }
     }
 }
 
@@ -3577,5 +3721,60 @@ mod tests {
                 maximum: 4,
             })
         ));
+    }
+
+    #[test]
+    fn terminal_operation_identity_preserves_independent_histories_and_versions_combined_use() {
+        use crate::production_semantic_terminal_v1::{
+            ProductionBf16ConversionV1, ProductionTerminalExpansionV1,
+        };
+
+        let pipeline = [
+            ProductionTerminalExpansionV1::WorkgroupPipelineCurrent,
+            ProductionTerminalExpansionV1::WorkgroupPipelineStage,
+            ProductionTerminalExpansionV1::WorkgroupPipelineWrite,
+            ProductionTerminalExpansionV1::WorkgroupPipelineCommit,
+            ProductionTerminalExpansionV1::WorkgroupPipelineWait,
+            ProductionTerminalExpansionV1::WorkgroupPipelineConsume,
+            ProductionTerminalExpansionV1::WorkgroupPipelineRead,
+            ProductionTerminalExpansionV1::WorkgroupPipelineDiscard,
+            ProductionTerminalExpansionV1::WorkgroupPipelineRelease,
+        ];
+        assert_eq!(
+            pipeline.map(terminal_operation_tag_v1),
+            [91, 92, 93, 94, 95, 96, 97, 98, 99]
+        );
+        let bf16 = [
+            ProductionBf16ConversionV1::FromBits,
+            ProductionBf16ConversionV1::ToBits,
+            ProductionBf16ConversionV1::FromF32RoundTiesEven,
+            ProductionBf16ConversionV1::ToF32,
+        ];
+        assert_eq!(
+            bf16.map(|conversion| terminal_operation_tag_v1(
+                ProductionTerminalExpansionV1::Bf16Conversion(conversion),
+            )),
+            [91, 92, 93, 94]
+        );
+
+        let combined_schema = TerminalIdentitySchemaV1::CombinedV2;
+        assert_eq!(combined_schema, TerminalIdentitySchemaV1::CombinedV2);
+        assert_ne!(
+            PRODUCTION_COMPILER_INTRINSIC_DOMAIN_V1,
+            PRODUCTION_COMPILER_INTRINSIC_DOMAIN_V2
+        );
+        assert_eq!(
+            pipeline.map(|expansion| {
+                terminal_operation_tag_for_schema_v1(expansion, combined_schema)
+            }),
+            [91, 92, 93, 94, 95, 96, 97, 98, 99]
+        );
+        assert_eq!(
+            bf16.map(|conversion| terminal_operation_tag_for_schema_v1(
+                ProductionTerminalExpansionV1::Bf16Conversion(conversion),
+                combined_schema,
+            )),
+            [100, 101, 102, 103]
+        );
     }
 }

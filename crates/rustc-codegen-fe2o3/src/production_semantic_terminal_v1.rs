@@ -5,10 +5,20 @@ use rustc_middle::ty::TyCtxt;
 use rustc_span::sym;
 
 use dialect_amdgcn::DeviceMathDiagnosticItem;
-use fe2o3_kernel_ir::F32MathFunction;
+use fe2o3_kernel_ir::{F32MathFunction, NarrowFloatFormat};
 use fe2o3_mir_model::semantic_mir_v1::SemanticAxisV1;
 
-use crate::trusted_device_items::{self, TrustedAmdGpuDiagnosticOperation, TrustedDeviceItem};
+use crate::trusted_device_items::{
+    self, TrustedAmdGpuDiagnosticOperation, TrustedDeviceItem, TrustedHalfOperation,
+};
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub(crate) enum ProductionBf16ConversionV1 {
+    FromBits,
+    ToBits,
+    FromF32RoundTiesEven,
+    ToF32,
+}
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) enum ProductionTerminalExpansionV1 {
@@ -49,6 +59,7 @@ pub(crate) enum ProductionTerminalExpansionV1 {
     WorkgroupBarrier,
     MathContextCurrent,
     MathF32(F32MathFunction),
+    Bf16Conversion(ProductionBf16ConversionV1),
     CollectiveContextCurrent,
     WorkgroupReduceSum,
     SubgroupReduceSumF32,
@@ -250,6 +261,26 @@ impl ProductionSemanticTerminalRuleV1 {
             TrustedDeviceItem::DeviceMath(DeviceMathDiagnosticItem::F32(function)) => {
                 Self::Expand(ProductionTerminalExpansionV1::MathF32(function))
             }
+            TrustedDeviceItem::HalfOperation(TrustedHalfOperation::FromBits(
+                NarrowFloatFormat::Bf16,
+            )) => Self::Expand(ProductionTerminalExpansionV1::Bf16Conversion(
+                ProductionBf16ConversionV1::FromBits,
+            )),
+            TrustedDeviceItem::HalfOperation(TrustedHalfOperation::ToBits(
+                NarrowFloatFormat::Bf16,
+            )) => Self::Expand(ProductionTerminalExpansionV1::Bf16Conversion(
+                ProductionBf16ConversionV1::ToBits,
+            )),
+            TrustedDeviceItem::HalfOperation(TrustedHalfOperation::FromF32(
+                NarrowFloatFormat::Bf16,
+            )) => Self::Expand(ProductionTerminalExpansionV1::Bf16Conversion(
+                ProductionBf16ConversionV1::FromF32RoundTiesEven,
+            )),
+            TrustedDeviceItem::HalfOperation(TrustedHalfOperation::ToF32(
+                NarrowFloatFormat::Bf16,
+            )) => Self::Expand(ProductionTerminalExpansionV1::Bf16Conversion(
+                ProductionBf16ConversionV1::ToF32,
+            )),
             TrustedDeviceItem::Gfx942CollectivesCurrent => {
                 Self::Expand(ProductionTerminalExpansionV1::CollectiveContextCurrent)
             }
@@ -512,6 +543,22 @@ impl ProductionSemanticTerminalRuleV1 {
             Self::Expand(ProductionTerminalExpansionV1::MathF32(function)) => {
                 TrustedDeviceItem::DeviceMath(DeviceMathDiagnosticItem::F32(function))
             }
+            Self::Expand(ProductionTerminalExpansionV1::Bf16Conversion(conversion)) => {
+                TrustedDeviceItem::HalfOperation(match conversion {
+                    ProductionBf16ConversionV1::FromBits => {
+                        TrustedHalfOperation::FromBits(NarrowFloatFormat::Bf16)
+                    }
+                    ProductionBf16ConversionV1::ToBits => {
+                        TrustedHalfOperation::ToBits(NarrowFloatFormat::Bf16)
+                    }
+                    ProductionBf16ConversionV1::FromF32RoundTiesEven => {
+                        TrustedHalfOperation::FromF32(NarrowFloatFormat::Bf16)
+                    }
+                    ProductionBf16ConversionV1::ToF32 => {
+                        TrustedHalfOperation::ToF32(NarrowFloatFormat::Bf16)
+                    }
+                })
+            }
             Self::Expand(ProductionTerminalExpansionV1::CollectiveContextCurrent) => {
                 TrustedDeviceItem::Gfx942CollectivesCurrent
             }
@@ -766,6 +813,32 @@ mod tests {
                 ProductionTerminalExpansionV1::MathF32(F32MathFunction::Exp),
             ),
             (
+                TrustedDeviceItem::HalfOperation(TrustedHalfOperation::FromBits(
+                    NarrowFloatFormat::Bf16,
+                )),
+                ProductionTerminalExpansionV1::Bf16Conversion(ProductionBf16ConversionV1::FromBits),
+            ),
+            (
+                TrustedDeviceItem::HalfOperation(TrustedHalfOperation::ToBits(
+                    NarrowFloatFormat::Bf16,
+                )),
+                ProductionTerminalExpansionV1::Bf16Conversion(ProductionBf16ConversionV1::ToBits),
+            ),
+            (
+                TrustedDeviceItem::HalfOperation(TrustedHalfOperation::FromF32(
+                    NarrowFloatFormat::Bf16,
+                )),
+                ProductionTerminalExpansionV1::Bf16Conversion(
+                    ProductionBf16ConversionV1::FromF32RoundTiesEven,
+                ),
+            ),
+            (
+                TrustedDeviceItem::HalfOperation(TrustedHalfOperation::ToF32(
+                    NarrowFloatFormat::Bf16,
+                )),
+                ProductionTerminalExpansionV1::Bf16Conversion(ProductionBf16ConversionV1::ToF32),
+            ),
+            (
                 TrustedDeviceItem::Gfx942CollectivesCurrent,
                 ProductionTerminalExpansionV1::CollectiveContextCurrent,
             ),
@@ -912,6 +985,12 @@ mod tests {
             TrustedDeviceItem::MemoryVolatileStore,
             TrustedDeviceItem::MemoryCopyNonOverlapping,
             TrustedDeviceItem::MemoryCopyOneNonOverlapping,
+            TrustedDeviceItem::HalfOperation(TrustedHalfOperation::FromBits(
+                NarrowFloatFormat::F16,
+            )),
+            TrustedDeviceItem::HalfOperation(TrustedHalfOperation::ToBits(NarrowFloatFormat::F16)),
+            TrustedDeviceItem::HalfOperation(TrustedHalfOperation::FromF32(NarrowFloatFormat::F16)),
+            TrustedDeviceItem::HalfOperation(TrustedHalfOperation::ToF32(NarrowFloatFormat::F16)),
         ] {
             let rule = ProductionSemanticTerminalRuleV1::from_trusted_device_item(item);
             assert_eq!(rule, ProductionSemanticTerminalRuleV1::Reject(item));

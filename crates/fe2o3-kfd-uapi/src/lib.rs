@@ -20,14 +20,26 @@ use core::mem::{align_of, offset_of, size_of};
 pub const KFD_UAPI_SCHEMA_ID: &str = "linux-kfd-uapi-1.18-generic-ioc-v1";
 
 /// Stable name of the reviewed R2 VM and memory-lifecycle UAPI extension.
-pub const KFD_MEMORY_LIFECYCLE_SCHEMA_ID: &str = "linux-kfd-memory-lifecycle-1.18-generic-ioc-v1";
+pub const KFD_MEMORY_LIFECYCLE_SCHEMA_ID: &str = "linux-kfd-memory-lifecycle-1.18-generic-ioc-v2";
+
+/// Additive exact USERPTR registration profile used by an isolated queue probe.
+pub const KFD_USERPTR_MEMORY_SCHEMA_ID: &str =
+    "linux-kfd-userptr-executable-memory-1.18-generic-ioc-v1";
+
+/// Additive exact USERPTR registration profile for AQL queue control.
+pub const KFD_USERPTR_QUEUE_CONTROL_SCHEMA_ID: &str =
+    "linux-kfd-userptr-queue-control-memory-1.18-generic-ioc-v1";
+
+/// Stable name of the reviewed gfx942 device-local memory extension.
+pub const KFD_DEVICE_MEMORY_LIFECYCLE_SCHEMA_ID: &str =
+    "linux-kfd-gfx942-device-memory-lifecycle-1.18-v2";
 
 /// Stable name of the reviewed R4 compute-AQL queue-lifecycle UAPI extension.
 pub const KFD_AQL_QUEUE_LIFECYCLE_SCHEMA_ID: &str =
-    "linux-kfd-aql-queue-lifecycle-1.18-generic-ioc-v1";
+    "linux-kfd-aql-queue-lifecycle-1.18-generic-ioc-v2";
 
 /// Stable name of the reviewed gfx942 CREATE_QUEUE output-observation schema.
-pub const KFD_GFX942_QUEUE_RESOURCE_SCHEMA_ID: &str = "linux-kfd-gfx942-queue-resources-1.18-v1";
+pub const KFD_GFX942_QUEUE_RESOURCE_SCHEMA_ID: &str = "linux-kfd-gfx942-queue-resources-1.18-v2";
 
 /// Path of the Linux UAPI header from which this schema was reviewed.
 pub const KFD_UAPI_SOURCE_HEADER: &str = "include/uapi/linux/kfd_ioctl.h";
@@ -160,7 +172,7 @@ pub const KFD_UAPI_SCHEMA_MANIFEST_SHA256_BYTES: [u8; 32] = [
 /// A future memory authority must bind both manifest digests; successful R1
 /// version or device admission alone does not admit memory syscalls.
 pub const KFD_MEMORY_LIFECYCLE_SCHEMA_MANIFEST: &str = concat!(
-    "schema_id=linux-kfd-memory-lifecycle-1.18-generic-ioc-v1\n",
+    "schema_id=linux-kfd-memory-lifecycle-1.18-generic-ioc-v2\n",
     "base_schema_id=linux-kfd-uapi-1.18-generic-ioc-v1\n",
     "base_schema_manifest_sha256=e4aad5d8e3177ea6d70298adab7741c377cb091373553ce689f3525e7514d9b4\n",
     "target=linux-x86_64-generic-ioc\n",
@@ -172,7 +184,7 @@ pub const KFD_MEMORY_LIFECYCLE_SCHEMA_MANIFEST: &str = concat!(
     "kfd_uapi=1.18\n",
     "acquire_vm=size:8,align:4,drm_fd:0,gpu_id:4,request:40084b15\n",
     "alloc_flags=gtt:00000002,writable:80000000,executable:40000000,aql_queue:08000000,coherent:04000000,uncached:02000000\n",
-    "alloc_profiles=host_visible_coherent:84000002,kernarg:86000002,aql_queue:8e000002,executable:c4000002\n",
+    "alloc_profiles=host_visible_coherent:84000002,kernarg:86000002,aql_queue:ce000002,executable:c4000002\n",
     "alloc_memory=size:40,align:8,va_addr:0,size_field:8,handle:16,mmap_offset:24,gpu_id:32,flags:36,request:c0284b16\n",
     "free_memory=size:8,align:8,handle:0,request:40084b17\n",
     "map_memory=size:24,align:8,handle:0,device_ids_array_ptr:8,n_devices:16,n_success:20,request:c0184b18\n",
@@ -181,12 +193,132 @@ pub const KFD_MEMORY_LIFECYCLE_SCHEMA_MANIFEST: &str = concat!(
 
 /// SHA-256 of KFD_MEMORY_LIFECYCLE_SCHEMA_MANIFEST.
 pub const KFD_MEMORY_LIFECYCLE_SCHEMA_MANIFEST_SHA256: &str =
-    "e2d6987b7c8e61a405b2f775d5d004f458a096241459e4cfdf90bd4497f4d58a";
+    "5c210c3d7ada17794b10cde6f48a28f105a6e79dd8dce77c66b14dca6074eea8";
 
 /// Typed digest bytes of KFD_MEMORY_LIFECYCLE_SCHEMA_MANIFEST.
 pub const KFD_MEMORY_LIFECYCLE_SCHEMA_MANIFEST_SHA256_BYTES: [u8; 32] = [
-    0xe2, 0xd6, 0x98, 0x7b, 0x7c, 0x8e, 0x61, 0xa4, 0x05, 0xb2, 0xf7, 0x75, 0xd5, 0xd0, 0x04, 0xf4,
-    0x58, 0xa0, 0x96, 0x24, 0x14, 0x59, 0xe4, 0xcf, 0xdf, 0x90, 0xbd, 0x44, 0x97, 0xf4, 0xd5, 0x8a,
+    0x5c, 0x21, 0x0c, 0x3d, 0x7a, 0xda, 0x17, 0x79, 0x4b, 0x10, 0xcd, 0xe6, 0xf4, 0x8a, 0x28, 0xf1,
+    0x05, 0xa6, 0xe7, 0x9d, 0xd8, 0xdc, 0xe7, 0x7c, 0x66, 0xb1, 0x4d, 0xca, 0x60, 0x74, 0xee, 0xa8,
+];
+
+/// Additive ABI contract for one executable coherent USERPTR registration.
+///
+/// The frozen R2 GTT admission set remains unchanged. This schema only admits
+/// the exact ROCr 7.2.4 registration flags and the overloaded USERPTR input
+/// meaning of `mmap_offset`; it grants no allocation or queue authority.
+pub const KFD_USERPTR_MEMORY_SCHEMA_MANIFEST: &str = concat!(
+    "schema_id=linux-kfd-userptr-executable-memory-1.18-generic-ioc-v1\n",
+    "memory_schema_id=linux-kfd-memory-lifecycle-1.18-generic-ioc-v2\n",
+    "memory_schema_manifest_sha256=5c210c3d7ada17794b10cde6f48a28f105a6e79dd8dce77c66b14dca6074eea8\n",
+    "target=linux-x86_64-generic-ioc\n",
+    "source_header=include/uapi/linux/kfd_ioctl.h\n",
+    "source_header_sha256=b3721c1a428a32bb9994af579432af48c44fa65abb860049f11a63a5c093235d\n",
+    "gpuvm_source=amd/amdgpu/amdgpu_amdkfd_gpuvm.c\n",
+    "gpuvm_source_sha256=c7cca2ee47a08c99bb73906662d82dd7d0b5738468fbef54848e5e6dd62ba50d\n",
+    "rocr_fmm_source_sha256=a2addccabb82e0ca184eaaf722e976e254a898ccfc945d4d956c4e273e196aef\n",
+    "alloc_flags=userptr:00000004,writable:80000000,executable:40000000,no_substitute:10000000,coherent:04000000,uncached:02000000\n",
+    "alloc_profile=userptr_executable_coherent_uncached_no_substitute:d6000004\n",
+    "alloc_memory=mmap_offset-input-is-page-aligned-live-cpu-address,output-is-opaque-kernel-mmap-offset-and-is-never-used-as-the-cpu-address\n",
+    "authority=wire-profile-only,no-ioctl-vma-pointer-map-free-or-queue-authority\n",
+);
+
+/// SHA-256 of [`KFD_USERPTR_MEMORY_SCHEMA_MANIFEST`].
+pub const KFD_USERPTR_MEMORY_SCHEMA_MANIFEST_SHA256: &str =
+    "c1cee09bdf884d2c14a5dbb89c1f6f7885962c75b1457caf412821490919ee9e";
+
+/// Typed SHA-256 bytes of [`KFD_USERPTR_MEMORY_SCHEMA_MANIFEST`].
+pub const KFD_USERPTR_MEMORY_SCHEMA_MANIFEST_SHA256_BYTES: [u8; 32] = [
+    0xc1, 0xce, 0xe0, 0x9b, 0xdf, 0x88, 0x4d, 0x2c, 0x14, 0xa5, 0xdb, 0xb8, 0x9c, 0x1f, 0x6f, 0x78,
+    0x85, 0x96, 0x2c, 0x75, 0xb1, 0x45, 0x7c, 0xaf, 0x41, 0x28, 0x21, 0x49, 0x09, 0x19, 0xee, 0x9e,
+];
+
+/// Additive ABI contract for one coherent USERPTR queue-control page.
+///
+/// This is separate from the executable ring profile. It admits the exact
+/// writable coherent USERPTR source expression reviewed for ROCr queue control
+/// storage and the overloaded USERPTR input meaning of `mmap_offset`; it grants
+/// no allocation, mapping, queue, or address authority.
+pub const KFD_USERPTR_QUEUE_CONTROL_SCHEMA_MANIFEST: &str = concat!(
+    "schema_id=linux-kfd-userptr-queue-control-memory-1.18-generic-ioc-v1\n",
+    "memory_schema_id=linux-kfd-memory-lifecycle-1.18-generic-ioc-v2\n",
+    "memory_schema_manifest_sha256=5c210c3d7ada17794b10cde6f48a28f105a6e79dd8dce77c66b14dca6074eea8\n",
+    "target=linux-x86_64-generic-ioc\n",
+    "source_header=include/uapi/linux/kfd_ioctl.h\n",
+    "source_header_sha256=b3721c1a428a32bb9994af579432af48c44fa65abb860049f11a63a5c093235d\n",
+    "gpuvm_source=amd/amdgpu/amdgpu_amdkfd_gpuvm.c\n",
+    "gpuvm_source_sha256=c7cca2ee47a08c99bb73906662d82dd7d0b5738468fbef54848e5e6dd62ba50d\n",
+    "rocr_queues_source_sha256=b7ead541340ac996c2305b2e9660cb3176edcd61ee509d4880f02659fbb6f32b\n",
+    "rocr_fmm_source_sha256=a2addccabb82e0ca184eaaf722e976e254a898ccfc945d4d956c4e273e196aef\n",
+    "alloc_flags=userptr:00000004,writable:80000000,coherent:04000000\n",
+    "alloc_profile=userptr_queue_control_writable_coherent:84000004\n",
+    "alloc_memory=va_addr-and-mmap_offset-input-are-the-same-page-aligned-live-cpu-address,output-mmap_offset-is-opaque-and-never-used-as-the-cpu-address\n",
+    "authority=wire-profile-only,no-ioctl-vma-pointer-map-free-queue-counter-or-address-authority\n",
+);
+
+/// SHA-256 of [`KFD_USERPTR_QUEUE_CONTROL_SCHEMA_MANIFEST`].
+pub const KFD_USERPTR_QUEUE_CONTROL_SCHEMA_MANIFEST_SHA256: &str =
+    "f1d75410d6bfacff2ea15ecfff226eb8aed7912ee324a36b8ed8550fa52bce02";
+
+/// Typed SHA-256 bytes of [`KFD_USERPTR_QUEUE_CONTROL_SCHEMA_MANIFEST`].
+pub const KFD_USERPTR_QUEUE_CONTROL_SCHEMA_MANIFEST_SHA256_BYTES: [u8; 32] = [
+    0xf1, 0xd7, 0x54, 0x10, 0xd6, 0xbf, 0xac, 0xff, 0x2e, 0xa1, 0x5e, 0xcf, 0xff, 0x22, 0x6e, 0xb8,
+    0xae, 0xd7, 0x91, 0x2e, 0xe3, 0x24, 0xa3, 0x6b, 0x8e, 0xd8, 0x55, 0x0f, 0xa5, 0x2b, 0xce, 0x02,
+];
+
+/// Canonical manifest for the additive gfx942 device-local allocation profile.
+///
+/// This leaves the R2 host-visible admission set unchanged and binds the new
+/// exact VRAM+writable profile separately. It is ABI evidence only; it grants
+/// no allocation, mapping, address, copy, or dispatch authority.
+pub const KFD_DEVICE_MEMORY_LIFECYCLE_SCHEMA_MANIFEST: &str = concat!(
+    "schema_id=linux-kfd-gfx942-device-memory-lifecycle-1.18-v2\n",
+    "memory_schema_id=linux-kfd-memory-lifecycle-1.18-generic-ioc-v2\n",
+    "memory_schema_manifest_sha256=5c210c3d7ada17794b10cde6f48a28f105a6e79dd8dce77c66b14dca6074eea8\n",
+    "target=gfx942:xnack-,SPX/NPS1,KFD-1.18\n",
+    "source_header=include/uapi/linux/kfd_ioctl.h\n",
+    "source_header_sha256=b3721c1a428a32bb9994af579432af48c44fa65abb860049f11a63a5c093235d\n",
+    "gpuvm_source=amd/amdgpu/amdgpu_amdkfd_gpuvm.c\n",
+    "gpuvm_source_sha256=c7cca2ee47a08c99bb73906662d82dd7d0b5738468fbef54848e5e6dd62ba50d\n",
+    "alloc_flags=vram:00000001,writable:80000000\n",
+    "alloc_profile=device_local_writable:80000001\n",
+    "mapping=one-exact-selected-gpu,no-peer\n",
+    "authority=wire-profile-only,no-ioctl-address-copy-or-dispatch\n",
+);
+
+/// SHA-256 of [`KFD_DEVICE_MEMORY_LIFECYCLE_SCHEMA_MANIFEST`].
+pub const KFD_DEVICE_MEMORY_LIFECYCLE_SCHEMA_MANIFEST_SHA256: &str =
+    "0594e7289aa2527cdc76f94371178f78c08e422dff44c985826d7e2fc7bdb951";
+
+/// Typed digest bytes of [`KFD_DEVICE_MEMORY_LIFECYCLE_SCHEMA_MANIFEST`].
+pub const KFD_DEVICE_MEMORY_LIFECYCLE_SCHEMA_MANIFEST_SHA256_BYTES: [u8; 32] = [
+    0x05, 0x94, 0xe7, 0x28, 0x9a, 0xa2, 0x52, 0x7c, 0xdc, 0x76, 0xf9, 0x43, 0x71, 0x17, 0x8f, 0x78,
+    0xc0, 0x8e, 0x42, 0x2d, 0xff, 0x44, 0xc9, 0x85, 0x82, 0x6d, 0x7e, 0x2f, 0xc7, 0xbd, 0xb9, 0x51,
+];
+
+/// Canonical manifest for CPU-initializable gfx942 device-local storage.
+///
+/// This additive profile retains the ordinary device-local schema unchanged.
+/// It admits one exact additional flag set and remains ABI evidence only.
+pub const KFD_PUBLIC_DEVICE_MEMORY_SCHEMA_MANIFEST: &str = concat!(
+    "schema_id=linux-kfd-gfx942-public-device-memory-1.18-v2\n",
+    "device_memory_schema_id=linux-kfd-gfx942-device-memory-lifecycle-1.18-v2\n",
+    "device_memory_schema_sha256=0594e7289aa2527cdc76f94371178f78c08e422dff44c985826d7e2fc7bdb951\n",
+    "target=gfx942:xnack-,SPX/NPS1,KFD-1.18\n",
+    "source_header=include/uapi/linux/kfd_ioctl.h\n",
+    "source_header_sha256=b3721c1a428a32bb9994af579432af48c44fa65abb860049f11a63a5c093235d\n",
+    "alloc_flags=vram:00000001,public:20000000,writable:80000000\n",
+    "alloc_profile=device_local_public_writable:a0000001\n",
+    "authority=wire-profile-only,no-ioctl-mmap-address-content-or-dispatch\n",
+);
+
+/// SHA-256 of [`KFD_PUBLIC_DEVICE_MEMORY_SCHEMA_MANIFEST`].
+pub const KFD_PUBLIC_DEVICE_MEMORY_SCHEMA_MANIFEST_SHA256: &str =
+    "51a5d64a5d6a6c12a1f65e0734bcdf4bf7a8b67ba02210c5526b5088585f916f";
+
+/// Typed digest bytes of [`KFD_PUBLIC_DEVICE_MEMORY_SCHEMA_MANIFEST`].
+pub const KFD_PUBLIC_DEVICE_MEMORY_SCHEMA_MANIFEST_SHA256_BYTES: [u8; 32] = [
+    0x51, 0xa5, 0xd6, 0x4a, 0x5d, 0x6a, 0x6c, 0x12, 0xa1, 0xf6, 0x5e, 0x07, 0x34, 0xbc, 0xdf, 0x4b,
+    0xf7, 0xa8, 0xb6, 0x7b, 0xa0, 0x22, 0x10, 0xc5, 0x52, 0x6b, 0x50, 0x88, 0x58, 0x5f, 0x91, 0x6f,
 ];
 
 /// Canonical manifest for the reviewed R4 compute-AQL queue UAPI extension.
@@ -200,11 +332,11 @@ pub const KFD_MEMORY_LIFECYCLE_SCHEMA_MANIFEST_SHA256_BYTES: [u8; 32] = [
 /// definitions. It does not claim a complete transitive kernel build closure
 /// or authenticate the code loaded by a running kernel.
 pub const KFD_AQL_QUEUE_LIFECYCLE_SCHEMA_MANIFEST: &str = concat!(
-    "schema_id=linux-kfd-aql-queue-lifecycle-1.18-generic-ioc-v1\n",
+    "schema_id=linux-kfd-aql-queue-lifecycle-1.18-generic-ioc-v2\n",
     "base_schema_id=linux-kfd-uapi-1.18-generic-ioc-v1\n",
     "base_schema_manifest_sha256=e4aad5d8e3177ea6d70298adab7741c377cb091373553ce689f3525e7514d9b4\n",
-    "memory_schema_id=linux-kfd-memory-lifecycle-1.18-generic-ioc-v1\n",
-    "memory_schema_manifest_sha256=e2d6987b7c8e61a405b2f775d5d004f458a096241459e4cfdf90bd4497f4d58a\n",
+    "memory_schema_id=linux-kfd-memory-lifecycle-1.18-generic-ioc-v2\n",
+    "memory_schema_manifest_sha256=5c210c3d7ada17794b10cde6f48a28f105a6e79dd8dce77c66b14dca6074eea8\n",
     "target=linux-x86_64-generic-ioc\n",
     "source_header=include/uapi/linux/kfd_ioctl.h\n",
     "source_header_sha256=b3721c1a428a32bb9994af579432af48c44fa65abb860049f11a63a5c093235d\n",
@@ -255,12 +387,12 @@ pub const KFD_AQL_QUEUE_LIFECYCLE_SCHEMA_MANIFEST: &str = concat!(
 
 /// SHA-256 of [`KFD_AQL_QUEUE_LIFECYCLE_SCHEMA_MANIFEST`].
 pub const KFD_AQL_QUEUE_LIFECYCLE_SCHEMA_MANIFEST_SHA256: &str =
-    "b11f3c8c766dd25394350646e35269e10c8a33acb98f74cba2a82e95fa185c4e";
+    "9e16e0e6b76387d9602dcfdef2ad6614b09202e8553ec21cbbcf5953781f6119";
 
 /// Typed digest bytes of [`KFD_AQL_QUEUE_LIFECYCLE_SCHEMA_MANIFEST`].
 pub const KFD_AQL_QUEUE_LIFECYCLE_SCHEMA_MANIFEST_SHA256_BYTES: [u8; 32] = [
-    0xb1, 0x1f, 0x3c, 0x8c, 0x76, 0x6d, 0xd2, 0x53, 0x94, 0x35, 0x06, 0x46, 0xe3, 0x52, 0x69, 0xe1,
-    0x0c, 0x8a, 0x33, 0xac, 0xb9, 0x8f, 0x74, 0xcb, 0xa2, 0xa8, 0x2e, 0x95, 0xfa, 0x18, 0x5c, 0x4e,
+    0x9e, 0x16, 0xe0, 0xe6, 0xb7, 0x63, 0x87, 0xd9, 0x60, 0x2d, 0xcf, 0xde, 0xf2, 0xad, 0x66, 0x14,
+    0xb0, 0x92, 0x02, 0xe8, 0x55, 0x3e, 0xc2, 0x1c, 0xbb, 0xcf, 0x59, 0x53, 0x78, 0x1f, 0x61, 0x19,
 ];
 
 /// Canonical manifest for reviewed gfx942 CREATE_QUEUE output observations.
@@ -270,9 +402,9 @@ pub const KFD_AQL_QUEUE_LIFECYCLE_SCHEMA_MANIFEST_SHA256_BYTES: [u8; 32] = [
 /// queue ownership, doorbell mapping or MMIO authority, and it does not make a
 /// successful ioctl trustworthy.
 pub const KFD_GFX942_QUEUE_RESOURCE_SCHEMA_MANIFEST: &str = concat!(
-    "schema_id=linux-kfd-gfx942-queue-resources-1.18-v1\n",
-    "queue_schema_id=linux-kfd-aql-queue-lifecycle-1.18-generic-ioc-v1\n",
-    "queue_schema_manifest_sha256=b11f3c8c766dd25394350646e35269e10c8a33acb98f74cba2a82e95fa185c4e\n",
+    "schema_id=linux-kfd-gfx942-queue-resources-1.18-v2\n",
+    "queue_schema_id=linux-kfd-aql-queue-lifecycle-1.18-generic-ioc-v2\n",
+    "queue_schema_manifest_sha256=9e16e0e6b76387d9602dcfdef2ad6614b09202e8553ec21cbbcf5953781f6119\n",
     "target=linux-x86_64,gfx942,kfd:1.18,non-mes\n",
     "pqm_source=amd/amdkfd/kfd_process_queue_manager.c\n",
     "pqm_source_sha256=8526e258824dbe145e4209cf0fed26463729234ba24369f39e3413e7e6e028db\n",
@@ -291,12 +423,12 @@ pub const KFD_GFX942_QUEUE_RESOURCE_SCHEMA_MANIFEST: &str = concat!(
 
 /// SHA-256 of the gfx942 queue-resource schema manifest.
 pub const KFD_GFX942_QUEUE_RESOURCE_SCHEMA_MANIFEST_SHA256: &str =
-    "63753a9c0dcef0f69e0235b95b44fe6ce22cb5b0d1df6f60a971a5ed28f15904";
+    "8ff2ac20f6001d6f5405423d78e8ad6cec109ac3370fe86d7691c5c4782c1803";
 
 /// Typed digest bytes of the gfx942 queue-resource schema manifest.
 pub const KFD_GFX942_QUEUE_RESOURCE_SCHEMA_MANIFEST_SHA256_BYTES: [u8; 32] = [
-    0x63, 0x75, 0x3a, 0x9c, 0x0d, 0xce, 0xf0, 0xf6, 0x9e, 0x02, 0x35, 0xb9, 0x5b, 0x44, 0xfe, 0x6c,
-    0xe2, 0x2c, 0xb5, 0xb0, 0xd1, 0xdf, 0x6f, 0x60, 0xa9, 0x71, 0xa5, 0xed, 0x28, 0xf1, 0x59, 0x04,
+    0x8f, 0xf2, 0xac, 0x20, 0xf6, 0x00, 0x1d, 0x6f, 0x54, 0x05, 0x42, 0x3d, 0x78, 0xe8, 0xad, 0x6c,
+    0xec, 0x10, 0x9a, 0xc3, 0x37, 0x0f, 0xe8, 0x6d, 0x76, 0x91, 0xc5, 0xc4, 0x78, 0x2c, 0x18, 0x03,
 ];
 
 /// Major version declared by the reviewed AMDGPU 6.16.13 KFD UAPI header.
@@ -317,8 +449,20 @@ pub const AMDKFD_IOCTL_BASE: u8 = b'K';
 /// GTT/system-memory allocation type admitted by this schema.
 pub const KFD_IOC_ALLOC_MEM_FLAGS_GTT: u32 = 1 << 1;
 
+/// Register an existing userspace VMA as shared virtual memory.
+pub const KFD_IOC_ALLOC_MEM_FLAGS_USERPTR: u32 = 1 << 2;
+
+/// Device-local VRAM allocation type from the reviewed KFD UAPI.
+pub const KFD_IOC_ALLOC_MEM_FLAGS_VRAM: u32 = 1 << 0;
+
 /// Permit GPU writes to the allocation.
 pub const KFD_IOC_ALLOC_MEM_FLAGS_WRITABLE: u32 = 1 << 31;
+
+/// Permit CPU mappings of a device-local allocation.
+pub const KFD_IOC_ALLOC_MEM_FLAGS_PUBLIC: u32 = 1 << 29;
+
+/// Reject fallback to a substitute memory domain.
+pub const KFD_IOC_ALLOC_MEM_FLAGS_NO_SUBSTITUTE: u32 = 1 << 28;
 
 /// Permit GPU instruction fetches from the allocation.
 pub const KFD_IOC_ALLOC_MEM_FLAGS_EXECUTABLE: u32 = 1 << 30;
@@ -341,13 +485,35 @@ pub const KFD_ALLOC_MEMORY_FLAGS_HOST_VISIBLE_COHERENT: u32 = KFD_IOC_ALLOC_MEM_
 pub const KFD_ALLOC_MEMORY_FLAGS_KERNARG: u32 =
     KFD_ALLOC_MEMORY_FLAGS_HOST_VISIBLE_COHERENT | KFD_IOC_ALLOC_MEM_FLAGS_UNCACHED;
 
-/// Exact admitted profile for an AQL queue ring's double-mapped storage.
-pub const KFD_ALLOC_MEMORY_FLAGS_AQL_QUEUE: u32 =
-    KFD_ALLOC_MEMORY_FLAGS_KERNARG | KFD_IOC_ALLOC_MEM_FLAGS_AQL_QUEUE_MEM;
+/// Exact admitted profile for executable AQL queue ring storage.
+pub const KFD_ALLOC_MEMORY_FLAGS_AQL_QUEUE: u32 = KFD_ALLOC_MEMORY_FLAGS_KERNARG
+    | KFD_IOC_ALLOC_MEM_FLAGS_AQL_QUEUE_MEM
+    | KFD_IOC_ALLOC_MEM_FLAGS_EXECUTABLE;
 
 /// Exact admitted profile for host-visible executable memory.
 pub const KFD_ALLOC_MEMORY_FLAGS_EXECUTABLE: u32 =
     KFD_ALLOC_MEMORY_FLAGS_HOST_VISIBLE_COHERENT | KFD_IOC_ALLOC_MEM_FLAGS_EXECUTABLE;
+
+/// Exact ROCr 7.2.4 USERPTR profile for an executable system-memory ring.
+pub const KFD_ALLOC_MEMORY_FLAGS_USERPTR_EXECUTABLE: u32 = KFD_IOC_ALLOC_MEM_FLAGS_USERPTR
+    | KFD_IOC_ALLOC_MEM_FLAGS_WRITABLE
+    | KFD_IOC_ALLOC_MEM_FLAGS_EXECUTABLE
+    | KFD_IOC_ALLOC_MEM_FLAGS_NO_SUBSTITUTE
+    | KFD_IOC_ALLOC_MEM_FLAGS_COHERENT
+    | KFD_IOC_ALLOC_MEM_FLAGS_UNCACHED;
+
+/// Exact writable coherent USERPTR profile for an AQL queue-control page.
+pub const KFD_ALLOC_MEMORY_FLAGS_USERPTR_QUEUE_CONTROL: u32 = KFD_IOC_ALLOC_MEM_FLAGS_USERPTR
+    | KFD_IOC_ALLOC_MEM_FLAGS_WRITABLE
+    | KFD_IOC_ALLOC_MEM_FLAGS_COHERENT;
+
+/// Exact gfx942 profile for writable device-local VRAM/HBM.
+pub const KFD_ALLOC_MEMORY_FLAGS_DEVICE_LOCAL: u32 =
+    KFD_IOC_ALLOC_MEM_FLAGS_VRAM | KFD_IOC_ALLOC_MEM_FLAGS_WRITABLE;
+
+/// Exact gfx942 profile for CPU-initializable writable device-local VRAM/HBM.
+pub const KFD_ALLOC_MEMORY_FLAGS_DEVICE_LOCAL_PUBLIC: u32 =
+    KFD_ALLOC_MEMORY_FLAGS_DEVICE_LOCAL | KFD_IOC_ALLOC_MEM_FLAGS_PUBLIC;
 
 /// Exact UAPI queue type admitted by the R4 builder.
 pub const KFD_IOC_QUEUE_TYPE_COMPUTE_AQL: u32 = 0x2;
@@ -517,6 +683,10 @@ impl KfdAllocMemoryFlags {
     pub const KERNARG: Self = Self(KFD_ALLOC_MEMORY_FLAGS_KERNARG);
     pub const AQL_QUEUE: Self = Self(KFD_ALLOC_MEMORY_FLAGS_AQL_QUEUE);
     pub const EXECUTABLE: Self = Self(KFD_ALLOC_MEMORY_FLAGS_EXECUTABLE);
+    pub const USERPTR_EXECUTABLE: Self = Self(KFD_ALLOC_MEMORY_FLAGS_USERPTR_EXECUTABLE);
+    pub const USERPTR_QUEUE_CONTROL: Self = Self(KFD_ALLOC_MEMORY_FLAGS_USERPTR_QUEUE_CONTROL);
+    pub const DEVICE_LOCAL: Self = Self(KFD_ALLOC_MEMORY_FLAGS_DEVICE_LOCAL);
+    pub const DEVICE_LOCAL_PUBLIC: Self = Self(KFD_ALLOC_MEMORY_FLAGS_DEVICE_LOCAL_PUBLIC);
 
     /// Returns the exact KFD UAPI bit pattern carried on the wire.
     pub const fn bits(self) -> u32 {
@@ -527,7 +697,7 @@ impl KfdAllocMemoryFlags {
 /// Why an allocation-flag bit pattern was not admitted.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum KfdAllocMemoryFlagsError {
-    /// The pattern is not one of the four exact reviewed profiles.
+    /// The pattern is not admitted by the selected exact profile family.
     Unsupported { flags: u32 },
 }
 
@@ -546,6 +716,54 @@ pub const fn admit_kfd_alloc_memory_flags(
         KFD_ALLOC_MEMORY_FLAGS_KERNARG => Ok(KfdAllocMemoryFlags::KERNARG),
         KFD_ALLOC_MEMORY_FLAGS_AQL_QUEUE => Ok(KfdAllocMemoryFlags::AQL_QUEUE),
         KFD_ALLOC_MEMORY_FLAGS_EXECUTABLE => Ok(KfdAllocMemoryFlags::EXECUTABLE),
+        flags => Err(KfdAllocMemoryFlagsError::Unsupported { flags }),
+    }
+}
+
+/// Admits only the additive gfx942 writable device-local profile.
+///
+/// This function is intentionally separate from
+/// [`admit_kfd_alloc_memory_flags`], whose four R2 GTT profiles remain frozen.
+pub const fn admit_kfd_device_memory_flags(
+    flags: u32,
+) -> Result<KfdAllocMemoryFlags, KfdAllocMemoryFlagsError> {
+    match flags {
+        KFD_ALLOC_MEMORY_FLAGS_DEVICE_LOCAL => Ok(KfdAllocMemoryFlags::DEVICE_LOCAL),
+        flags => Err(KfdAllocMemoryFlagsError::Unsupported { flags }),
+    }
+}
+
+/// Admits only the additive CPU-initializable gfx942 device-local profile.
+///
+/// Keeping this separate from ordinary device-local admission prevents a
+/// caller from silently changing the visibility of an uninitialized lease.
+pub const fn admit_kfd_public_device_memory_flags(
+    flags: u32,
+) -> Result<KfdAllocMemoryFlags, KfdAllocMemoryFlagsError> {
+    match flags {
+        KFD_ALLOC_MEMORY_FLAGS_DEVICE_LOCAL_PUBLIC => Ok(KfdAllocMemoryFlags::DEVICE_LOCAL_PUBLIC),
+        flags => Err(KfdAllocMemoryFlagsError::Unsupported { flags }),
+    }
+}
+
+/// Admits only the additive executable coherent USERPTR profile.
+pub const fn admit_kfd_userptr_executable_memory_flags(
+    flags: u32,
+) -> Result<KfdAllocMemoryFlags, KfdAllocMemoryFlagsError> {
+    match flags {
+        KFD_ALLOC_MEMORY_FLAGS_USERPTR_EXECUTABLE => Ok(KfdAllocMemoryFlags::USERPTR_EXECUTABLE),
+        flags => Err(KfdAllocMemoryFlagsError::Unsupported { flags }),
+    }
+}
+
+/// Admits only the additive writable coherent USERPTR queue-control profile.
+pub const fn admit_kfd_userptr_queue_control_memory_flags(
+    flags: u32,
+) -> Result<KfdAllocMemoryFlags, KfdAllocMemoryFlagsError> {
+    match flags {
+        KFD_ALLOC_MEMORY_FLAGS_USERPTR_QUEUE_CONTROL => {
+            Ok(KfdAllocMemoryFlags::USERPTR_QUEUE_CONTROL)
+        }
         flags => Err(KfdAllocMemoryFlagsError::Unsupported { flags }),
     }
 }
@@ -969,8 +1187,9 @@ impl KfdIoctlAcquireVmArgs {
 ///
 /// `va_addr`, the returned `handle`, and the returned `mmap_offset` are opaque
 /// integer values. This data-only crate neither dereferences them nor assigns
-/// ownership. USERPTR is not admitted, so the input `mmap_offset` is always
-/// initialized to zero by [`Self::new`].
+/// ownership. Ordinary GTT profiles initialize input `mmap_offset` to zero.
+/// [`Self::new_userptr`] instead binds the input field to a live CPU VMA; KFD
+/// may overwrite that field with an unrelated opaque mmap offset on return.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(C)]
 pub struct KfdIoctlAllocMemoryOfGpuArgs {
@@ -995,6 +1214,39 @@ impl KfdIoctlAllocMemoryOfGpuArgs {
             mmap_offset: 0,
             gpu_id,
             flags: flags.bits(),
+        }
+    }
+
+    /// Constructs an exact USERPTR registration request.
+    ///
+    /// The higher layer must retain the page-aligned CPU VMA at `address`
+    /// through GPU unmap and `FREE_MEMORY_OF_GPU`. KFD may overwrite
+    /// `mmap_offset` on return, so the higher layer must retain the original CPU
+    /// address independently. This builder grants no address authority.
+    pub const fn new_userptr(address: u64, size: u64, gpu_id: u32) -> Self {
+        Self {
+            va_addr: address,
+            size,
+            handle: 0,
+            mmap_offset: address,
+            gpu_id,
+            flags: KFD_ALLOC_MEMORY_FLAGS_USERPTR_EXECUTABLE,
+        }
+    }
+
+    /// Constructs an exact writable coherent USERPTR queue-control request.
+    ///
+    /// The higher layer must retain the page-aligned CPU VMA at `address`
+    /// through GPU unmap and `FREE_MEMORY_OF_GPU`. Both input address fields are
+    /// deliberately identical; any returned `mmap_offset` is opaque.
+    pub const fn new_userptr_queue_control(address: u64, size: u64, gpu_id: u32) -> Self {
+        Self {
+            va_addr: address,
+            size,
+            handle: 0,
+            mmap_offset: address,
+            gpu_id,
+            flags: KFD_ALLOC_MEMORY_FLAGS_USERPTR_QUEUE_CONTROL,
         }
     }
 }
@@ -1438,6 +1690,10 @@ const _: () = {
     assert!(offset_of!(KfdIoctlAllocMemoryOfGpuArgs, mmap_offset) == 24);
     assert!(offset_of!(KfdIoctlAllocMemoryOfGpuArgs, gpu_id) == 32);
     assert!(offset_of!(KfdIoctlAllocMemoryOfGpuArgs, flags) == 36);
+    assert!(KFD_IOC_ALLOC_MEM_FLAGS_VRAM == 0x0000_0001);
+    assert!(KFD_IOC_ALLOC_MEM_FLAGS_PUBLIC == 0x2000_0000);
+    assert!(KFD_ALLOC_MEMORY_FLAGS_DEVICE_LOCAL == 0x8000_0001);
+    assert!(KFD_ALLOC_MEMORY_FLAGS_DEVICE_LOCAL_PUBLIC == 0xa000_0001);
 
     assert!(size_of::<KfdIoctlFreeMemoryOfGpuArgs>() == 8);
     assert!(align_of::<KfdIoctlFreeMemoryOfGpuArgs>() == 8);
@@ -1502,7 +1758,7 @@ const _: () = {
     assert!(AMDKFD_IOC_SMI_EVENTS == 0xc008_4b1f);
     assert!(KFD_ALLOC_MEMORY_FLAGS_HOST_VISIBLE_COHERENT == 0x8400_0002);
     assert!(KFD_ALLOC_MEMORY_FLAGS_KERNARG == 0x8600_0002);
-    assert!(KFD_ALLOC_MEMORY_FLAGS_AQL_QUEUE == 0x8e00_0002);
+    assert!(KFD_ALLOC_MEMORY_FLAGS_AQL_QUEUE == 0xce00_0002);
     assert!(KFD_ALLOC_MEMORY_FLAGS_EXECUTABLE == 0xc400_0002);
     assert!(KFD_SMI_EVENT_GPU_RESET_MASK == 0x0c);
 };

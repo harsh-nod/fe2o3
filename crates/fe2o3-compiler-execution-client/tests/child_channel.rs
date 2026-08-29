@@ -5,7 +5,7 @@ use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::process::CommandExt;
 use std::process::Command;
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use fe2o3_compiler_execution_client::{
     COMPILER_EXECUTION_SERVICE_CHILD_FD_V1, CompilerExecutionChildChannelErrorV1,
@@ -135,6 +135,13 @@ fn invalid_finish_inputs_fail_without_waiting() {
     assert!(matches!(
         pending.finish(std::process::id(), Duration::ZERO),
         Err(CompilerExecutionChildChannelErrorV1::InvalidTimeout)
+    ));
+
+    let mut command = Command::new("/bin/true");
+    let pending = PendingCompilerExecutionChildChannelV1::prepare(&mut command).unwrap();
+    assert!(matches!(
+        pending.finish_until(std::process::id(), Instant::now()),
+        Err(CompilerExecutionChildChannelErrorV1::Timeout)
     ));
 }
 

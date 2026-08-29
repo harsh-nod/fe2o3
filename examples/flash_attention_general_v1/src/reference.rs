@@ -75,7 +75,8 @@ pub fn evaluate_reference_v1(
             let mut scores = vec![f32::NEG_INFINITY; layout.keys as usize];
             if row < layout.queries as usize {
                 for key_index in 0..layout.keys as usize {
-                    if !mask[global_row * layout.mask_stride as usize + key_index].is_finite() {
+                    let mask_value = mask[global_row * layout.mask_stride as usize + key_index];
+                    if !mask_value.is_finite() {
                         continue;
                     }
                     let mut score = 0.0_f32;
@@ -92,7 +93,7 @@ pub fn evaluate_reference_v1(
                         .to_f32();
                         score += query_value * key_value;
                     }
-                    scores[key_index] = score * layout.scale;
+                    scores[key_index] = score * layout.scale + mask_value;
                 }
             }
             let maximum = scores.iter().copied().fold(f32::NEG_INFINITY, f32::max);
@@ -158,5 +159,39 @@ mod tests {
         )
         .unwrap();
         assert_eq!(output, [0.0, -7.0]);
+    }
+
+    #[test]
+    fn finite_additive_mask_changes_the_probability_distribution() {
+        let query = [Bf16::from_f32(1.0).to_bits()];
+        let key = [Bf16::from_f32(1.0).to_bits(), Bf16::from_f32(1.0).to_bits()];
+        let value = [2.0, 6.0];
+        let mask = [0.0, (3.0_f32).ln()];
+        let output = evaluate_reference_v1(
+            &query,
+            &key,
+            &value,
+            &mask,
+            &[0.0],
+            ReferenceLayoutV1 {
+                batch_heads: 1,
+                queries: 1,
+                query_rows_padded: 1,
+                keys: 2,
+                keys_padded: 2,
+                depth: 1,
+                value_dimension: 1,
+                query_stride: 1,
+                key_depth_stride: 2,
+                key_head_stride: 2,
+                value_stride: 1,
+                value_head_stride: 2,
+                mask_stride: 2,
+                output_stride: 1,
+                scale: 1.0,
+            },
+        )
+        .unwrap();
+        assert!((output[0] - 5.0).abs() < 1.0e-6);
     }
 }

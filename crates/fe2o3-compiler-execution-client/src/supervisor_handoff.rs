@@ -105,6 +105,19 @@ impl PendingCompilerExecutionSupervisorV1 {
         timeout: Duration,
     ) -> Result<CompilerExecutionServiceReadyV1, CompilerExecutionHandoffErrorV1> {
         validate_boundary_timeout(timeout)?;
+        let deadline = Instant::now()
+            .checked_add(timeout)
+            .ok_or(CompilerExecutionHandoffErrorV1::DeadlineOverflow)?;
+        self.await_readiness_until(profile, deadline)
+    }
+
+    /// Consumes the control connection and admits readiness before an absolute deadline.
+    pub fn await_readiness_until(
+        self,
+        profile: &CompilerExecutionClientProfileV1,
+        deadline: Instant,
+    ) -> Result<CompilerExecutionServiceReadyV1, CompilerExecutionHandoffErrorV1> {
+        validate_boundary_deadline(deadline)?;
         let policy = profile.policy();
         if !self.handoff.launch_manifest().matches_policy(policy)
             || !self
@@ -114,9 +127,6 @@ impl PendingCompilerExecutionSupervisorV1 {
         {
             return Err(CompilerExecutionHandoffErrorV1::ReadinessMismatch);
         }
-        let deadline = Instant::now()
-            .checked_add(timeout)
-            .ok_or(CompilerExecutionHandoffErrorV1::DeadlineOverflow)?;
         let bytes = receive_readiness(&self.control, deadline)?;
         let readiness = CompilerExecutionServiceReadyV1::decode(&bytes)
             .map_err(CompilerExecutionHandoffErrorV1::ReadinessProtocol)?;
@@ -128,6 +138,7 @@ impl PendingCompilerExecutionSupervisorV1 {
             return Err(CompilerExecutionHandoffErrorV1::ReadinessMismatch);
         }
         require_control_eof(&self.control, deadline)?;
+        require_deadline(deadline)?;
         Ok(readiness)
     }
 }
@@ -164,21 +175,35 @@ impl CompilerExecutionServiceLaunchV1 {
         profile: &CompilerExecutionClientProfileV1,
         timeout: Duration,
     ) -> Result<PendingCompilerExecutionSupervisorV1, CompilerExecutionHandoffErrorV1> {
+        validate_boundary_timeout(timeout)?;
+        let deadline = Instant::now()
+            .checked_add(timeout)
+            .ok_or(CompilerExecutionHandoffErrorV1::DeadlineOverflow)?;
+        self.transfer_to_supervisor_until(profile, deadline)
+    }
+
+    /// Transfers this exact client session to the supervisor before an absolute deadline.
+    pub fn transfer_to_supervisor_until(
+        self,
+        profile: &CompilerExecutionClientProfileV1,
+        deadline: Instant,
+    ) -> Result<PendingCompilerExecutionSupervisorV1, CompilerExecutionHandoffErrorV1> {
         let expected_supervisor = CompilerExecutionSupervisorCredentialsV1::new(
             profile.supervisor_uid(),
             profile.supervisor_gid(),
         )?;
-        transfer_to_supervisor_at_inner::<true>(
+        transfer_to_supervisor_at_until_inner::<true>(
             self,
             Path::new(COMPILER_EXECUTION_SUPERVISOR_SOCKET_PATH_V1),
             expected_supervisor,
             profile.external_anchor_service(),
             profile.policy(),
-            timeout,
+            deadline,
         )
     }
 }
 
+#[cfg(test)]
 fn transfer_to_supervisor_at_inner<const REQUIRE_DISTINCT_UID: bool>(
     launch: CompilerExecutionServiceLaunchV1,
     path: &Path,
@@ -191,6 +216,25 @@ fn transfer_to_supervisor_at_inner<const REQUIRE_DISTINCT_UID: bool>(
     let deadline = Instant::now()
         .checked_add(timeout)
         .ok_or(CompilerExecutionHandoffErrorV1::DeadlineOverflow)?;
+    transfer_to_supervisor_at_until_inner::<REQUIRE_DISTINCT_UID>(
+        launch,
+        path,
+        expected_supervisor,
+        external_anchor_service,
+        policy,
+        deadline,
+    )
+}
+
+fn transfer_to_supervisor_at_until_inner<const REQUIRE_DISTINCT_UID: bool>(
+    launch: CompilerExecutionServiceLaunchV1,
+    path: &Path,
+    expected_supervisor: CompilerExecutionSupervisorCredentialsV1,
+    external_anchor_service: CompilerExecutionExternalAnchorServiceIdentityV1,
+    policy: &CompilerExecutionIssuerPolicyV1,
+    deadline: Instant,
+) -> Result<PendingCompilerExecutionSupervisorV1, CompilerExecutionHandoffErrorV1> {
+    validate_boundary_deadline(deadline)?;
     if REQUIRE_DISTINCT_UID && launch.client().uid() == expected_supervisor.uid {
         return Err(CompilerExecutionHandoffErrorV1::ClientAndSupervisorUidMatch);
     }
@@ -228,11 +272,23 @@ fn transfer_to_supervisor_inner<const REQUIRE_DISTINCT_UID: bool>(
     let (service_peer, client_pidfd) = launch.into_descriptors();
     let descriptors = [service_peer.as_fd(), client_pidfd.as_fd()];
     send_handoff(&control, handoff.canonical_bytes(), &descriptors, deadline)?;
+    require_deadline(deadline)?;
     Ok(PendingCompilerExecutionSupervisorV1 { control, handoff })
 }
 
 fn validate_boundary_timeout(timeout: Duration) -> Result<(), CompilerExecutionHandoffErrorV1> {
     if timeout.is_zero() || timeout > MAX_COMPILER_EXECUTION_SUPERVISOR_HANDOFF_TIMEOUT_V1 {
+        return Err(CompilerExecutionHandoffErrorV1::InvalidTimeout);
+    }
+    Ok(())
+}
+
+fn validate_boundary_deadline(deadline: Instant) -> Result<(), CompilerExecutionHandoffErrorV1> {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if remaining.is_zero() {
+        return Err(CompilerExecutionHandoffErrorV1::Timeout);
+    }
+    if remaining > MAX_COMPILER_EXECUTION_SUPERVISOR_HANDOFF_TIMEOUT_V1 {
         return Err(CompilerExecutionHandoffErrorV1::InvalidTimeout);
     }
     Ok(())
@@ -1137,6 +1193,18 @@ mod tests {
         assert!(matches!(
             validate_boundary_timeout(
                 MAX_COMPILER_EXECUTION_SUPERVISOR_HANDOFF_TIMEOUT_V1 + Duration::from_nanos(1)
+            ),
+            Err(CompilerExecutionHandoffErrorV1::InvalidTimeout)
+        ));
+        assert!(matches!(
+            validate_boundary_deadline(Instant::now()),
+            Err(CompilerExecutionHandoffErrorV1::Timeout)
+        ));
+        assert!(matches!(
+            validate_boundary_deadline(
+                Instant::now()
+                    + MAX_COMPILER_EXECUTION_SUPERVISOR_HANDOFF_TIMEOUT_V1
+                    + Duration::from_secs(1)
             ),
             Err(CompilerExecutionHandoffErrorV1::InvalidTimeout)
         ));

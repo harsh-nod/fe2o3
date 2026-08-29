@@ -409,6 +409,7 @@ impl<T, IndexSpace, const LANES_PER_BLOCK: usize, const ELEMENTS_PER_LANE: usize
     /// The blocked formula is injective over `(invocation, component)`, both
     /// layout dimensions are part of this view's type, and the component and
     /// final slice extent are checked before returning a reference.
+    #[inline(never)]
     #[rustc_diagnostic_item = "fe2o3_device_disjoint_slice_get_block_mut"]
     pub fn get_block_mut(
         &mut self,

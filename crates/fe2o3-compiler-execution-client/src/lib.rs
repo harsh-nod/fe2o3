@@ -97,17 +97,37 @@ impl CompilerExecutionClientV1 {
         timeout: Duration,
     ) -> Result<Self, CompilerExecutionClientErrorV1> {
         let child_fd = COMPILER_EXECUTION_SERVICE_CHILD_FD_V1;
+        // SAFETY: F_GETFD inspects only the fixed scalar descriptor.
+        let flags = unsafe { libc::fcntl(child_fd, libc::F_GETFD) };
+        if flags < 0 {
+            let error = io::Error::last_os_error();
+            if error.raw_os_error() == Some(libc::EBADF) {
+                return Err(CompilerExecutionClientErrorV1::MissingInheritedPeer);
+            }
+            // SAFETY: consume the canonical slot if the kernel still considers it present.
+            let _ = unsafe { libc::close(child_fd) };
+            return Err(CompilerExecutionClientErrorV1::Descriptor(error));
+        }
+        if flags & libc::FD_CLOEXEC != 0 {
+            // SAFETY: a present but inadmissible canonical descriptor is consumed exactly once.
+            if unsafe { libc::close(child_fd) } != 0 {
+                return Err(CompilerExecutionClientErrorV1::Descriptor(
+                    io::Error::last_os_error(),
+                ));
+            }
+            return Err(CompilerExecutionClientErrorV1::InheritedPeerCloseOnExec);
+        }
         // SAFETY: F_DUPFD_CLOEXEC consumes one scalar descriptor and returns a distinct owned
         // descriptor on success.
         let retained = unsafe { libc::fcntl(child_fd, libc::F_DUPFD_CLOEXEC, 3) };
-        let duplicate_error = (retained < 0).then(io::Error::last_os_error);
+        if retained < 0 {
+            let error = io::Error::last_os_error();
+            // SAFETY: failure to retain does not release the canonical descriptor.
+            let _ = unsafe { libc::close(child_fd) };
+            return Err(CompilerExecutionClientErrorV1::Descriptor(error));
+        }
         // SAFETY: close consumes only the scalar inherited slot and reports absence through EBADF.
         let close_result = unsafe { libc::close(child_fd) };
-        if retained < 0 {
-            return Err(CompilerExecutionClientErrorV1::Descriptor(
-                duplicate_error.expect("failed duplication retained its descriptor error"),
-            ));
-        }
         if close_result != 0 {
             let error = io::Error::last_os_error();
             // SAFETY: `retained` is the distinct descriptor returned by F_DUPFD_CLOEXEC.
@@ -719,6 +739,8 @@ fn fresh_verification_challenge() -> Result<[u8; 32], CompilerExecutionClientErr
 pub enum CompilerExecutionClientErrorV1 {
     InvalidTimeout,
     DeadlineOverflow,
+    MissingInheritedPeer,
+    InheritedPeerCloseOnExec,
     Randomness(io::Error),
     Descriptor(io::Error),
     NotSeqpacket,
@@ -753,6 +775,11 @@ impl fmt::Display for CompilerExecutionClientErrorV1 {
         match self {
             Self::InvalidTimeout => formatter.write_str("compiler service timeout must be nonzero"),
             Self::DeadlineOverflow => formatter.write_str("compiler service deadline overflowed"),
+            Self::MissingInheritedPeer => formatter
+                .write_str("child has no inherited compiler-service peer at fixed descriptor 195"),
+            Self::InheritedPeerCloseOnExec => {
+                formatter.write_str("inherited compiler-service peer is unexpectedly close-on-exec")
+            }
             Self::Randomness(error) => {
                 write!(
                     formatter,

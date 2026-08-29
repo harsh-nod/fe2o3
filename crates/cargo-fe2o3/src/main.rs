@@ -1564,6 +1564,7 @@ fn run_cargo_with_backend_inner(
             hex_encode(&context.compiler_closure_sha256),
         )
         .env(BUILD_SESSION_ENV, context.build_session.to_hex());
+    configure_production_cargo_tool_environment(cargo.as_command_mut());
     scrub_simulation_build_environment(cargo.as_command_mut());
     configure_production_target_environment(cargo.as_command_mut(), context.target_profile);
     if context.requires_locked_closure {
@@ -1738,6 +1739,7 @@ fn run_production_host_cargo(
         .env_remove(AUTHORITY_BACKEND_SHA256_ENV)
         .env_remove(AUTHORITY_CARGO_BINDING_TRAMPOLINE_PATH_ENV)
         .env_remove(AUTHORITY_CARGO_BINDING_TRAMPOLINE_SHA256_ENV);
+    configure_production_cargo_tool_environment(cargo.as_command_mut());
     if context.requires_locked_closure {
         cargo.as_command_mut().env("FE2O3_HIP_SYS_DISABLE", "1");
     }
@@ -1815,6 +1817,10 @@ fn run_production_host_cargo(
     context.project.validate_paths()?;
     context.target_dir.validate_path("Cargo target directory")?;
     context.generation.reject_if_substituted()
+}
+
+fn configure_production_cargo_tool_environment(command: &mut Command) {
+    command.env("PATH", "/usr/bin");
 }
 
 fn scrub_simulation_build_environment(command: &mut Command) {
@@ -2698,6 +2704,12 @@ fn reject_authority_config_overrides(
             ));
         }
     }
+    reject_authority_configured_environment(project.cargo_config_value(
+        args,
+        "env",
+        pinned_cargo,
+        Some(pinned_rustc),
+    )?)?;
     match project.cargo_config_value(args, "target", pinned_cargo, Some(pinned_rustc))? {
         Some(serde_json::Value::Object(targets)) => {
             for (target, configuration) in targets {
@@ -2723,6 +2735,27 @@ fn reject_authority_config_overrides(
         None => {}
     }
     Ok(())
+}
+
+fn reject_authority_configured_environment(
+    configured: Option<serde_json::Value>,
+) -> Result<(), String> {
+    match configured {
+        Some(serde_json::Value::Object(environment)) if environment.is_empty() => Ok(()),
+        Some(serde_json::Value::Object(environment)) => {
+            let (name, value) = environment
+                .iter()
+                .next()
+                .expect("nonempty configured Cargo environment has a first entry");
+            Err(format!(
+                "cargo fe2o3 authority build rejects configured pre-admission Cargo env.{name}={value}"
+            ))
+        }
+        Some(_) => {
+            Err("cargo fe2o3 authority build cannot inspect configured Cargo env table".to_owned())
+        }
+        None => Ok(()),
+    }
 }
 
 fn authority_rustc_sha256_from_environment() -> Result<[u8; 32], String> {
@@ -3503,9 +3536,10 @@ mod tests {
     use super::{
         BindingHostMode, TARGET_ENV, aggregate_post_spawn_results,
         append_compiler_execution_profile_semantic_configuration, binding_host_target_key,
-        clear_cargo_unit_identity_names, configure_production_target_environment,
-        inject_binding_host_test_custody, is_cargo_target_runner_environment_name,
-        normalize_invocation, parse_rocminfo_target, parse_rustup_tool_path,
+        clear_cargo_unit_identity_names, configure_production_cargo_tool_environment,
+        configure_production_target_environment, inject_binding_host_test_custody,
+        is_cargo_target_runner_environment_name, normalize_invocation, parse_rocminfo_target,
+        parse_rustup_tool_path, reject_authority_configured_environment,
         reject_authority_rustup_proxy, reject_binding_test_invocation_config,
         reject_obsolete_codegen_pipeline, selected_run_target, validate_production_cargo_inputs,
         validate_production_compilation_environment,
@@ -3819,6 +3853,33 @@ mod tests {
                 fe2o3_amd_target::PRODUCTION_GFX950_CARGO_RUSTFLAGS_V1,
             ))
         );
+    }
+
+    #[test]
+    fn production_cargo_tool_environment_replaces_the_caller_path() {
+        let mut command = Command::new("cargo");
+        command.env("PATH", "/attacker/bin");
+
+        configure_production_cargo_tool_environment(&mut command);
+
+        assert_eq!(
+            command_environment(&command, "PATH"),
+            Some(OsStr::new("/usr/bin"))
+        );
+    }
+
+    #[test]
+    fn authority_rejects_configured_cargo_environment_before_child_execution() {
+        let forced_path = serde_json::json!({
+            "PATH": {"force": true, "value": "/attacker/bin"}
+        });
+        let error = reject_authority_configured_environment(Some(forced_path))
+            .expect_err("configured PATH must fail closed");
+        assert!(error.contains("env.PATH"), "{error}");
+        assert!(error.contains("/attacker/bin"), "{error}");
+
+        assert!(reject_authority_configured_environment(Some(serde_json::json!({}))).is_ok());
+        assert!(reject_authority_configured_environment(None).is_ok());
     }
 
     #[test]

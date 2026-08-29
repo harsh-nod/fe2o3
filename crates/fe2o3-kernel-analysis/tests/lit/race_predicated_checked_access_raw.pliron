@@ -1,7 +1,6 @@
 // RUN: fe2o3-pliron-lit --passes=general %s
-// EXPECT: REJECT
-// CHECK: error[FE2O3-RACE-002]
-// CHECK: dynamic launch dimension 0
+// EXPECT: PASS
+// CHECK: PASS
 
 builtin.func @race_predicated_checked_access_raw: builtin.function <(kernel.index , kernel.index , kernel.index , kernel.index ) -> ()>
 {

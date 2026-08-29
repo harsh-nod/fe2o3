@@ -821,6 +821,7 @@ fn predicated_checked_access_binds_index_success_and_physical_extent() {
     verify_op(&tiled, context).unwrap();
     let access = RankedAccessOp::new_predicated(
         context,
+        AccessKindAttr::Write,
         view.result(context),
         tiled.result(context),
         tiled.success(context).unwrap(),
@@ -844,6 +845,7 @@ fn predicated_checked_access_binds_index_success_and_physical_extent() {
     assert!(
         RankedAccessOp::new_predicated(
             context,
+            AccessKindAttr::Write,
             view.result(context),
             tiled.result(context),
             other.success(context).unwrap(),
@@ -862,6 +864,7 @@ fn predicated_checked_access_binds_index_success_and_physical_extent() {
     assert!(
         RankedAccessOp::new_predicated(
             context,
+            AccessKindAttr::Write,
             different_view.result(context),
             tiled.result(context),
             tiled.success(context).unwrap(),
@@ -874,12 +877,22 @@ fn predicated_checked_access_binds_index_success_and_physical_extent() {
     assert!(
         RankedAccessOp::new_predicated(
             context,
+            AccessKindAttr::Write,
             read_only.result(context),
             tiled.result(context),
             tiled.success(context).unwrap(),
         )
         .is_err()
     );
+    let read = RankedAccessOp::new_predicated(
+        context,
+        AccessKindAttr::Read,
+        read_only.result(context),
+        tiled.result(context),
+        tiled.success(context).unwrap(),
+    )
+    .unwrap();
+    verify_op(&read, context).unwrap();
 
     let rank_two_type =
         RankedViewType::new(context, 32, true, vec![DYNAMIC_EXTENT, DYNAMIC_EXTENT]).unwrap();
@@ -887,6 +900,7 @@ fn predicated_checked_access_binds_index_success_and_physical_extent() {
     assert!(
         RankedAccessOp::new_predicated(
             context,
+            AccessKindAttr::Write,
             rank_two.result(context),
             tiled.result(context),
             tiled.success(context).unwrap(),
@@ -896,12 +910,13 @@ fn predicated_checked_access_binds_index_success_and_physical_extent() {
 
     let wrong_kind = RankedAccessOp::new_predicated(
         context,
+        AccessKindAttr::Write,
         view.result(context),
         tiled.result(context),
         tiled.success(context).unwrap(),
     )
     .unwrap();
-    wrong_kind.set_attr_kernel_access_kind(context, AccessKindAttr::Read);
+    wrong_kind.set_attr_kernel_access_kind(context, AccessKindAttr::AtomicRead);
     assert!(verify_op(&wrong_kind, context).is_err());
 
     let malformed_count = CheckedTiledIndex2DOp::new_predicated(
@@ -935,6 +950,7 @@ fn predicated_checked_access_binds_index_success_and_physical_extent() {
     assert!(
         RankedAccessOp::new_predicated(
             context,
+            AccessKindAttr::Write,
             view.result(context),
             wrong_success_type.result(context),
             wrong_success_type.success(context).unwrap(),
@@ -958,6 +974,7 @@ fn predicated_checked_access_binds_index_success_and_physical_extent() {
     verify_op(&unused, context).unwrap();
     let reused_first = RankedAccessOp::new_predicated(
         context,
+        AccessKindAttr::Read,
         view.result(context),
         unused.result(context),
         unused.success(context).unwrap(),
@@ -965,6 +982,7 @@ fn predicated_checked_access_binds_index_success_and_physical_extent() {
     .unwrap();
     let reused_second = RankedAccessOp::new_predicated(
         context,
+        AccessKindAttr::Write,
         view.result(context),
         unused.result(context),
         unused.success(context).unwrap(),

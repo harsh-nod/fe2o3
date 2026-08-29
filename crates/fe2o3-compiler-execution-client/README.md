@@ -58,8 +58,13 @@ the direct parent. After the supervisor admits issuer readiness, it sends that
 same canonical record over the control connection and closes its endpoint. The
 pending client accepts exactly one descriptor-free packet followed by EOF,
 rechecks its launch manifest, pinned anchor-service identity, and pinned policy,
-and rejects truncation,
-extension, substitution, trailing data, or timeout. Compiler and application
-parents both use this channel in the production Cargo path. Deployed
-distinct-UID provisioning, external monotonic rollback, and final verifier and
-runtime authority joins remain outside this transport component.
+and rejects truncation, extension, substitution, trailing data, or timeout.
+Compiler and application parents both use this channel in the production Cargo
+path. Binding-wrapper service acquisition, the deployed distinct-UID entrypoint,
+external monotonic rollback, final verifier authority, HSACO publication, and
+runtime admission remain outside this checkpoint.
+
+Cargo supplies one absolute monotonic deadline across child admission,
+supervisor connection and transfer, and readiness. Individual duration-based
+operations remain available, but production does not reset the timeout between
+those transitions.

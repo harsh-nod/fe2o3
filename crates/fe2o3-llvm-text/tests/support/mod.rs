@@ -4,11 +4,11 @@ use fe2o3_llvm_handoff::{
     ExecutableModuleV2, FloatBinaryOperationV2, FunctionAttributeV1, FunctionAttributeV2,
     FunctionIdV2, FunctionKindV2, FunctionParameterV2, FunctionV2, Gfx942HandoffInputV1,
     Gfx942HandoffV1, Gfx942HandoffV2, Gfx942TargetPolicyV1, GlobalIdV2, GlobalLinkageV2, GlobalV2,
-    IdentityV1, InstructionKindV2, InstructionV2, IntrinsicReferenceV2, IntrinsicV2, KernelEntryV1,
-    KernelParameterV1, KernelValueTypeV1, ModuleFlagV1, ModuleMetadataV1, NamedMetadataV1,
-    ObligationKindV1, ObligationV1, OriginKindV1, OriginV1, ParameterAttributeV1, ReturnTypeV2,
-    ScalarConstantV2, ScalarTypeV1, SourceSpanV1, StageIdentitiesV1, TerminatorV2, TypedValueV2,
-    ValueIdV2, ValueTypeV2, WorkgroupSizeRangeV1,
+    HandoffDiagnosticV2, IdentityV1, InstructionKindV2, InstructionV2, IntrinsicReferenceV2,
+    IntrinsicV2, KernelEntryV1, KernelParameterV1, KernelValueTypeV1, ModuleFlagV1,
+    ModuleMetadataV1, NamedMetadataV1, ObligationKindV1, ObligationV1, OriginKindV1, OriginV1,
+    ParameterAttributeV1, ReturnTypeV2, ScalarConstantV2, ScalarTypeV1, SourceSpanV1,
+    StageIdentitiesV1, TerminatorV2, TypedValueV2, ValueIdV2, ValueTypeV2, WorkgroupSizeRangeV1,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -363,6 +363,14 @@ pub fn module_fixture(
     permuted: bool,
     hostile: Hostile,
 ) -> ExecutableModuleV2 {
+    try_module_fixture(base, permuted, hostile).unwrap()
+}
+
+pub fn try_module_fixture(
+    base: &Gfx942HandoffV1,
+    permuted: bool,
+    hostile: Hostile,
+) -> Result<ExecutableModuleV2, HandoffDiagnosticV2> {
     let global = GlobalV2::new(
         GlobalIdV2::new(1),
         "factor",
@@ -407,7 +415,7 @@ pub fn module_fixture(
         flags.reverse();
         named.reverse();
     }
-    ExecutableModuleV2::new(flags, named, globals, intrinsics, functions).unwrap()
+    ExecutableModuleV2::new(flags, named, globals, intrinsics, functions)
 }
 
 pub fn fixture(permuted: bool, hostile: Hostile) -> Gfx942HandoffV2 {

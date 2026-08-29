@@ -66,6 +66,122 @@ fn index_block(context: &mut Context, function: &FuncOp, name: &str) -> (Ptr<Bas
     (block, argument)
 }
 
+fn index_block_n(
+    context: &mut Context,
+    function: &FuncOp,
+    name: &str,
+    arguments: usize,
+) -> (Ptr<BasicBlock>, Vec<Value>) {
+    let index: TypeHandle = IndexType::get(context).into();
+    let block = BasicBlock::new(
+        context,
+        Some(name.try_into().unwrap()),
+        vec![index; arguments],
+    );
+    let values = (0..arguments)
+        .map(|ordinal| block.deref(context).get_argument(ordinal))
+        .collect();
+    block.insert_at_back(function.get_region(context), context);
+    (block, values)
+}
+
+#[derive(Clone, Copy)]
+enum NestedLoopCase {
+    Canonical,
+    ZeroInnerStep,
+    NonzeroInnerStart,
+    LoopLocalInnerBound,
+}
+
+fn nested_loop(context: &mut Context, case: NestedLoopCase) -> FuncOp {
+    let (function, _) = make_function(context, "nested_loop", 0);
+    let entry = function.get_entry_block(context);
+    let (outer_header, outer) = index_block_n(context, &function, "outer_header", 2);
+    let (inner_header, inner) = index_block_n(context, &function, "inner_header", 3);
+    let (inner_body, body) = index_block_n(context, &function, "inner_body", 3);
+    let (outer_latch, latch) = index_block_n(context, &function, "outer_latch", 2);
+    let exit = block(context, &function, "exit");
+    let zero = IndexConstantOp::new(context, 0);
+    let one = IndexConstantOp::new(context, 1);
+    let carried = IndexConstantOp::new(context, 9);
+    let outer_bound = IndexConstantOp::new(context, 3);
+    let inner_bound = IndexConstantOp::new(context, 4);
+    for operation in [
+        zero.get_operation(),
+        one.get_operation(),
+        carried.get_operation(),
+        outer_bound.get_operation(),
+    ] {
+        operation.insert_at_back(entry, context);
+    }
+    if matches!(case, NestedLoopCase::LoopLocalInnerBound) {
+        append(context, inner_header, &inner_bound);
+    } else {
+        append(context, entry, &inner_bound);
+    }
+    let enter = BranchArgsOp::new(
+        context,
+        vec![zero.result(context), carried.result(context)],
+        outer_header,
+    );
+    append(context, entry, &enter);
+    let inner_start = if matches!(case, NestedLoopCase::NonzeroInnerStart) {
+        one.result(context)
+    } else {
+        zero.result(context)
+    };
+    let outer_condition = IndexLessThanBranchArgsOp::new(
+        context,
+        outer[0],
+        outer_bound.result(context),
+        vec![inner_start, outer[0], outer[1]],
+        vec![],
+        inner_header,
+        exit,
+    );
+    append(context, outer_header, &outer_condition);
+    let inner_condition = IndexLessThanBranchArgsOp::new(
+        context,
+        inner[0],
+        inner_bound.result(context),
+        vec![inner[0], inner[1], inner[2]],
+        vec![inner[1], inner[2]],
+        inner_body,
+        outer_latch,
+    );
+    append(context, inner_header, &inner_condition);
+    let inner_step = if matches!(case, NestedLoopCase::ZeroInnerStep) {
+        zero.result(context)
+    } else {
+        one.result(context)
+    };
+    let inner_next = IndexBinaryOp::new(context, IndexBinaryKindAttr::Add, body[0], inner_step);
+    let inner_repeat = BranchArgsOp::new(
+        context,
+        vec![inner_next.result(context), body[1], body[2]],
+        inner_header,
+    );
+    append(context, inner_body, &inner_next);
+    append(context, inner_body, &inner_repeat);
+    let outer_next = IndexBinaryOp::new(
+        context,
+        IndexBinaryKindAttr::Add,
+        latch[0],
+        one.result(context),
+    );
+    let outer_repeat = BranchArgsOp::new(
+        context,
+        vec![outer_next.result(context), latch[1]],
+        outer_header,
+    );
+    append(context, outer_latch, &outer_next);
+    append(context, outer_latch, &outer_repeat);
+    let ret = ReturnOp::new(context);
+    append(context, exit, &ret);
+    verify_operation(function.get_operation(), context).unwrap();
+    function
+}
+
 fn constant_loop(context: &mut Context, start: u64, bound: u64, step: u64) -> FuncOp {
     let (function, _) = make_function(context, "constant_loop", 0);
     let entry = function.get_entry_block(context);
@@ -116,6 +232,7 @@ enum MultiBlockCase {
     GuardedForwarding,
     GuardedMutatedForwarding,
     GuardedInternalFork,
+    GuardedResetFork,
     ExternalIntermediateEntry,
     MultipleHeaderEntries,
     InvocationLatchUpdate,
@@ -246,6 +363,7 @@ fn multi_block_loop(
         MultiBlockCase::GuardedForwarding
             | MultiBlockCase::GuardedMutatedForwarding
             | MultiBlockCase::GuardedInternalFork
+            | MultiBlockCase::GuardedResetFork
     ) {
         let payload = if matches!(case, MultiBlockCase::GuardedMutatedForwarding) {
             let changed = IndexBinaryOp::new(
@@ -259,14 +377,26 @@ fn multi_block_loop(
         } else {
             first_induction
         };
-        let internal_fork = matches!(case, MultiBlockCase::GuardedInternalFork);
+        let internal_fork = matches!(
+            case,
+            MultiBlockCase::GuardedInternalFork | MultiBlockCase::GuardedResetFork
+        );
+        let reset_fork = matches!(case, MultiBlockCase::GuardedResetFork);
         let guard = IndexLessThanBranchArgsOp::new(
             context,
-            zero.result(context),
+            if reset_fork {
+                first_induction
+            } else {
+                zero.result(context)
+            },
             one.result(context),
             vec![payload],
             internal_fork
-                .then_some(first_induction)
+                .then_some(if reset_fork {
+                    zero.result(context)
+                } else {
+                    first_induction
+                })
                 .into_iter()
                 .collect(),
             second,
@@ -726,6 +856,36 @@ fn canonical_unit_induction_proves_machine_finite_progress() {
 }
 
 #[test]
+fn nested_positive_inductions_with_unrelated_carried_state_are_proved() {
+    let context = &mut setup();
+    let function = nested_loop(context, NestedLoopCase::Canonical);
+    let report = run_pliron_progress_check_v1(context, &function);
+    assert!(report.is_clean(), "{report:?}");
+    assert_eq!(report.certificates().len(), 2);
+    assert!(
+        report
+            .certificates()
+            .iter()
+            .all(|certificate| certificate.step() == 1)
+    );
+}
+
+#[test]
+fn malformed_nested_inductions_fail_closed() {
+    for case in [
+        NestedLoopCase::ZeroInnerStep,
+        NestedLoopCase::NonzeroInnerStart,
+        NestedLoopCase::LoopLocalInnerBound,
+    ] {
+        let context = &mut setup();
+        let function = nested_loop(context, case);
+        let report = run_pliron_progress_check_v1(context, &function);
+        assert_eq!(report.status(), KernelCheckStatusV1::Incomplete);
+        assert!(report.certificates().is_empty());
+    }
+}
+
+#[test]
 fn static_positive_nonunit_step_is_proved_only_when_its_update_cannot_overflow() {
     let context = &mut setup();
     let function = constant_loop(context, 0, 64, 16);
@@ -775,16 +935,31 @@ fn guarded_multiblock_recurrence_forwards_one_induction_value() {
 }
 
 #[test]
-fn guarded_multiblock_recurrence_rejects_mutation_and_internal_forks() {
+fn guarded_multiblock_recurrence_rejects_mutation_and_reset_forks() {
     for case in [
         MultiBlockCase::GuardedMutatedForwarding,
-        MultiBlockCase::GuardedInternalFork,
+        MultiBlockCase::GuardedResetFork,
     ] {
         let context = &mut setup();
         let function = multi_block_loop(context, Some(64), 1, case, RangeCase::None);
         let report = run_pliron_progress_check_v1(context, &function);
         assert_eq!(report.status(), KernelCheckStatusV1::Incomplete);
     }
+}
+
+#[test]
+fn induction_preserving_internal_fork_is_proved_by_the_general_loop_checker() {
+    let context = &mut setup();
+    let function = multi_block_loop(
+        context,
+        Some(64),
+        1,
+        MultiBlockCase::GuardedInternalFork,
+        RangeCase::None,
+    );
+    let report = run_pliron_progress_check_v1(context, &function);
+    assert!(report.is_clean(), "{report:?}");
+    assert_eq!(report.certificates().len(), 1);
 }
 
 #[test]

@@ -2091,6 +2091,7 @@ const fn terminal_argument_count_v1(expansion: ProductionTerminalExpansionV1) ->
         | ProductionTerminalExpansionV1::Gfx950LdsTransposeReadB8
         | ProductionTerminalExpansionV1::DynamicLdsExactCurrent
         | ProductionTerminalExpansionV1::DynamicLdsIntoCollectiveRawParts
+        | ProductionTerminalExpansionV1::Bf16Conversion(_)
         | ProductionTerminalExpansionV1::WorkgroupPipelineCurrent
         | ProductionTerminalExpansionV1::DisjointSliceLen => Some(1),
         ProductionTerminalExpansionV1::SubgroupReduceSumF32

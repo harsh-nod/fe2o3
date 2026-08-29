@@ -616,6 +616,14 @@ run_check() {
     env "${loader_environment_removals[@]}" \
     "${CARGO_FE2O3_BINARY}" examples check-wrapper-managed \
     "${wrapper_managed_packages[@]}"
+  run_step standalone-tiled-gemm-general-host-check \
+    env "${loader_environment_removals[@]}" FE2O3_HIP_SYS_DISABLE=1 \
+    "${CARGO_FE2O3_BINARY}" check --locked --all-targets \
+      --manifest-path examples/tiled_gemm_general_v1/Cargo.toml
+  run_step standalone-flash-attention-general-host-check \
+    env "${loader_environment_removals[@]}" FE2O3_HIP_SYS_DISABLE=1 \
+    "${CARGO_FE2O3_BINARY}" check --locked --all-targets \
+      --manifest-path examples/flash_attention_general_v1/Cargo.toml
 }
 
 run_cpu_tests() {
@@ -693,6 +701,9 @@ run_auxiliary_tests() {
     cargo check --locked -p fe2o3-core --test device_copy_derive_compile
   run_step device-copy-derive-ui \
     cargo test --locked -p fe2o3-core --test device_copy_derive_ui
+  run_step core-production-runtime-surface-ui \
+    env FE2O3_HIP_SYS_DISABLE=1 \
+      cargo test --locked -p fe2o3-core --test production_runtime_surface_ui
   run_step s09-debug-checker bash scripts/tests/s09-debug.sh
 }
 
@@ -997,7 +1008,13 @@ run_rocm_compile() {
     env "${loader_environment_removals[@]}" \
       cargo test --locked -p rustc-codegen-fe2o3 \
         --test production_general_matrix_driver_v1 \
-        dynamic_matrix_kernel_fails_closed_before_lowering_without_race_proof -- \
+        dynamic_matrix_kernel_reaches_gfx942_llvm -- \
+        --ignored --exact
+  run_step rocm-production-general-attention \
+    env "${loader_environment_removals[@]}" \
+      cargo test --locked -p rustc-codegen-fe2o3 \
+        --test production_general_matrix_driver_v1 \
+        dynamic_attention_kernel_reaches_gfx942_llvm -- \
         --ignored --exact
   run_step rocm-production-transaction \
     env "${loader_environment_removals[@]}" \
