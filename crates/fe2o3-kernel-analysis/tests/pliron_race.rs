@@ -7,7 +7,7 @@ use dialect_kernel::{
     register_dialect,
 };
 use fe2o3_kernel_analysis::{
-    KernelCheckPassKindV1, KernelCheckStatusV1, RankedRaceFindingV1,
+    KernelCheckPassKindV1, KernelCheckStatusV1, RankedRaceFindingV1, RankedRaceReportV1,
     require_pliron_ranked_race_freedom_before_lowering_v1, run_pliron_ranked_race_check_v1,
 };
 use pliron::{
@@ -120,6 +120,53 @@ fn access(
         None => RankedAccessOp::new(context, kind, view, vec![index]),
     }
     .unwrap()
+}
+
+fn large_affine_store_family(formulas: &[(u64, u64)]) -> RankedRaceReportV1 {
+    const LAUNCH: u64 = 65_537;
+
+    let context = &mut setup();
+    let function = function(context, "large_affine_store_family");
+    let entry = function.get_entry_block(context);
+    let maximum = formulas
+        .iter()
+        .map(|(stride, offset)| stride * (LAUNCH - 1) + offset)
+        .max()
+        .unwrap_or(0);
+    let memory = view(context, vec![maximum + 1], MemorySpaceAttr::Global);
+    let invocation = InvocationIndexOp::new(context, 0, LAUNCH);
+    append(context, entry, &memory);
+    append(context, entry, &invocation);
+    for &(stride, offset) in formulas {
+        let stride = IndexConstantOp::new(context, stride);
+        let base = IndexBinaryOp::new(
+            context,
+            IndexBinaryKindAttr::Multiply,
+            invocation.result(context),
+            stride.result(context),
+        );
+        let offset = IndexConstantOp::new(context, offset);
+        let index = IndexBinaryOp::new(
+            context,
+            IndexBinaryKindAttr::Add,
+            base.result(context),
+            offset.result(context),
+        );
+        let write = access(
+            context,
+            AccessKindAttr::Write,
+            memory.result(context),
+            index.result(context),
+        );
+        append(context, entry, &stride);
+        append(context, entry, &base);
+        append(context, entry, &offset);
+        append(context, entry, &index);
+        append(context, entry, &write);
+    }
+    let ret = ReturnOp::new(context);
+    append(context, entry, &ret);
+    run_pliron_ranked_race_check_v1(context, &function)
 }
 
 #[test]
@@ -2052,6 +2099,25 @@ fn presburger_relations_prove_disjoint_effects_beyond_the_trace_limit() {
 
     let report = run_pliron_ranked_race_check_v1(context, &function);
     assert!(report.is_clean(), "{:#?}", report.findings());
+}
+
+#[test]
+fn affine_residue_family_proves_eight_blocked_stores_beyond_the_trace_limit() {
+    let formulas = (0..8).map(|offset| (8, offset)).collect::<Vec<_>>();
+    let report = large_affine_store_family(&formulas);
+    assert!(report.is_clean(), "{:#?}", report.findings());
+}
+
+#[test]
+fn affine_residue_family_checks_every_pair_and_rejects_collisions() {
+    for formulas in [
+        vec![(8, 0), (8, 1), (8, 9)],
+        vec![(8, 0), (8, 8)],
+        vec![(8, 0), (4, 0)],
+    ] {
+        let report = large_affine_store_family(&formulas);
+        assert!(!report.is_clean(), "hostile formulas passed: {formulas:?}");
+    }
 }
 
 #[test]

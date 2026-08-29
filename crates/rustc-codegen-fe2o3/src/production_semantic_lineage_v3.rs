@@ -39,12 +39,28 @@ use crate::production_target_lineage_v3::{
     SemanticToLlvmAssociationTranscriptV3, TargetBindingTranscriptInputsV3,
     TargetBindingTranscriptV3, TargetLineageIdentityV3,
 };
+use crate::production_target_v1::PRODUCTION_WORKER_DATA_LAYOUT_V1;
 use crate::protected_rustc_invocation::{
     FinishedProtectedRustcInvocationV3, ProtectedRustcInvocationErrorV1,
 };
 
 const CODE_OBJECT_VERSION_V3: u16 = 6;
 const WAVE_WIDTH_BITS_V3: u16 = 64;
+
+fn validate_final_llvm_layout(llvm: &str) -> Result<(), ProductionSemanticLineageErrorV3> {
+    let expected_header = format!(
+        "target triple = \"amdgcn-amd-amdhsa\"\ntarget datalayout = \"{PRODUCTION_WORKER_DATA_LAYOUT_V1}\"\n"
+    );
+    if !llvm.starts_with(&expected_header)
+        || llvm.matches("target triple =").count() != 1
+        || llvm.matches("target datalayout =").count() != 1
+    {
+        return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
+            "final LLVM does not retain the exact measured worker target layout",
+        ));
+    }
+    Ok(())
+}
 
 /// Move-only canonical evidence prepared while the live semantic and formal
 /// owners still exist. It grants no publication, load, or launch authority.
@@ -174,6 +190,8 @@ impl PreparedProductionSemanticLineageV3 {
         let semantic_layout_identity =
             TargetLineageIdentityV3::new(target_layout_sha256, target_layout.len() as u64)?;
 
+        validate_final_llvm_layout(pre_descriptor_llvm)?;
+
         let expected_exports = exact_source_and_kir_exports(semantic, target_module)?;
         let workgroup = target_module
             .kernels
@@ -228,6 +246,12 @@ impl PreparedProductionSemanticLineageV3 {
             descriptor_source,
             module_handoff.symbol_manifest(),
         )?;
+        let final_llvm = std::str::from_utf8(module_handoff.module_bytes()).map_err(|_| {
+            ProductionSemanticLineageErrorV3::AxisMismatch(
+                "final compiler module is not canonical textual LLVM",
+            )
+        })?;
+        validate_final_llvm_layout(final_llvm)?;
 
         let invocation_bytes = encode_descriptor_v3(&invocation)
             .map_err(|error| ProductionSemanticLineageErrorV3::Invocation(error.to_string()))?;
@@ -329,7 +353,7 @@ impl PreparedProductionSemanticLineageV3 {
             rustc_llvm_target: self.rustc_layout.llvm_target(),
             live_rustc_data_layout: self.rustc_layout.data_layout(),
             final_llvm_target: self.rustc_layout.llvm_target(),
-            final_llvm_data_layout: self.rustc_layout.data_layout(),
+            final_llvm_data_layout: PRODUCTION_WORKER_DATA_LAYOUT_V1,
             default_pointer_width_bits: self.rustc_layout.default_pointer_width_bits(),
         })?;
         let data_layout =
@@ -661,5 +685,35 @@ impl From<FinalCompilerModuleCommitmentErrorV3> for ProductionSemanticLineageErr
 impl From<InertSemanticCompilerModuleHandoffErrorV3> for ProductionSemanticLineageErrorV3 {
     fn from(error: InertSemanticCompilerModuleHandoffErrorV3) -> Self {
         Self::Capsule(error)
+    }
+}
+
+#[cfg(test)]
+mod layout_tests {
+    use super::*;
+
+    fn llvm_with_layout(layout: &str) -> String {
+        format!(
+            "target triple = \"amdgcn-amd-amdhsa\"\ntarget datalayout = \"{layout}\"\n\ndefine void @body() {{ ret void }}\n"
+        )
+    }
+
+    #[test]
+    fn final_llvm_requires_one_exact_measured_worker_layout() {
+        let exact = llvm_with_layout(PRODUCTION_WORKER_DATA_LAYOUT_V1);
+        validate_final_llvm_layout(&exact).unwrap();
+
+        assert!(
+            validate_final_llvm_layout(&llvm_with_layout(
+                crate::production_target_v1::PRODUCTION_RUSTC_DATA_LAYOUT_V1
+            ))
+            .is_err()
+        );
+        assert!(
+            validate_final_llvm_layout(&format!(
+                "{exact}target datalayout = \"{PRODUCTION_WORKER_DATA_LAYOUT_V1}\"\n"
+            ))
+            .is_err()
+        );
     }
 }

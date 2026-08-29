@@ -142,6 +142,23 @@ fn ordinary_rust_bounds_and_production_pliron_pipeline_fail_closed() {
 
 #[test]
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]
+fn optimized_blocked_accessor_retains_its_checked_terminal() {
+    let blocked = run_release_feature_extraction(&ScratchTarget::new(), "blocked");
+    assert!(
+        blocked.status.success()
+            && blocked
+                .stderr
+                .contains("all mandatory kernel checks clean true")
+            && blocked.stderr.contains("kernel.index_binary Multiply")
+            && blocked.stderr.contains("kernel.index_binary Add")
+            && blocked.stderr.contains("kernel.access Write"),
+        "optimized blocked access lost its checked terminal:\n{}",
+        blocked.stderr,
+    );
+}
+
+#[test]
+#[ignore = "requires the pinned nightly rust-src component and AMD target"]
 fn production_barrier_cfg_preserves_order_and_fails_closed() {
     for feature in ["barrier_after_access", "barrier_before_access"] {
         let output = run_feature_extraction(&ScratchTarget::new(), feature);
@@ -862,6 +879,22 @@ fn run_feature_extraction(target: &ScratchTarget, feature: &str) -> ExtractionOu
         )
         .args(["--features", feature]);
     output(command, "run safe mapped AMD extraction fixture")
+}
+
+fn run_release_feature_extraction(target: &ScratchTarget, feature: &str) -> ExtractionOutput {
+    let mut command = base_command("check", target.path());
+    command
+        .env("FE2O3_EXTRACT_RANKED_MEMORY_V1", "1")
+        .env(
+            "RUSTC_WORKSPACE_WRAPPER",
+            env!("CARGO_BIN_EXE_fe2o3-rustc-extract"),
+        )
+        .env(
+            "FE2O3_EXTRACT_CRATE_V1",
+            "fe2o3_production_ranked_bounds_fixture",
+        )
+        .args(["--release", "--features", feature]);
+    output(command, "run optimized safe mapped AMD extraction fixture")
 }
 
 fn simulation_export_command(target: &str, output: &Path, target_dir: &Path) -> Command {

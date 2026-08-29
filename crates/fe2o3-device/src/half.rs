@@ -166,11 +166,13 @@ impl Bf16 {
     pub const MIN_POSITIVE_SUBNORMAL: Self = Self(0x0001);
 
     /// Creates a value from its exact bfloat16 representation.
+    #[inline(never)]
     pub const fn from_bits(bits: u16) -> Self {
         Self(bits)
     }
 
     /// Returns the exact bfloat16 representation.
+    #[inline(never)]
     pub const fn to_bits(self) -> u16 {
         self.0
     }
@@ -179,6 +181,7 @@ impl Bf16 {
     ///
     /// NaNs retain their sign and high payload bits and are quieted. A payload
     /// held only in discarded bits is still represented as a NaN.
+    #[inline(never)]
     pub const fn from_f32(value: f32) -> Self {
         let bits = value.to_bits();
         if (bits & 0x7f80_0000) == 0x7f80_0000 && (bits & 0x007f_ffff) != 0 {
@@ -190,6 +193,7 @@ impl Bf16 {
     }
 
     /// Widens exactly to `f32`.
+    #[inline(never)]
     pub const fn to_f32(self) -> f32 {
         f32::from_bits((self.0 as u32) << 16)
     }

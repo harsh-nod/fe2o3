@@ -938,6 +938,9 @@ fn symbolically_proves_disjoint(
             .push(effect);
     }
     for effects in by_view.values() {
+        if !effect_pair_inventory_fits_budget(effects.len()) {
+            return false;
+        }
         for first_index in 0..effects.len() {
             for second_index in first_index..effects.len() {
                 let first = effects[first_index];
@@ -988,6 +991,13 @@ fn effect_pair_symbolically_disjoint(
             second,
             sparse,
             launch_extents,
+        )
+        || one_dimensional_affine_residues_are_disjoint(
+            first,
+            second,
+            sparse,
+            launch_extents,
+            invocation_bounds,
         )
 }
 
@@ -1108,7 +1118,7 @@ fn presburger_proves_no_conflicts(
     if invocations <= u128::from(MAX_PLIRON_RACE_INVOCATIONS_V1) {
         return false;
     }
-    if !presburger_pair_inventory_fits_budget(effects.len()) {
+    if !effect_pair_inventory_fits_budget(effects.len()) {
         return false;
     }
     let relevant_pairs = (0..effects.len())
@@ -1171,7 +1181,7 @@ fn presburger_proves_no_conflicts(
     true
 }
 
-fn presburger_pair_inventory_fits_budget(effect_count: usize) -> bool {
+fn effect_pair_inventory_fits_budget(effect_count: usize) -> bool {
     let effect_count = effect_count as u128;
     effect_count
         .checked_add(1)
@@ -1234,6 +1244,55 @@ fn same_index_formula(first: &[Value], second: &[Value], sparse: &SparseIndexAna
             .all(|(first, second)| sparse.fact(*first) == sparse.fact(*second))
 }
 
+fn one_dimensional_affine_residues_are_disjoint(
+    first: &EffectV1,
+    second: &EffectV1,
+    sparse: &SparseIndexAnalysisV1,
+    launch_extents: &[u64],
+    invocation_bounds: Option<&[[Option<u64>; MAX_RANKED_MEMORY_RANK]]>,
+) -> bool {
+    let ([first_index], [second_index]) = (first.indices.as_slice(), second.indices.as_slice())
+    else {
+        return false;
+    };
+    let first_fact = sparse.fact(*first_index);
+    let second_fact = sparse.fact(*second_index);
+    let (Some(first_affine), Some(second_affine)) = (first_fact.affine(), second_fact.affine())
+    else {
+        return false;
+    };
+    if first_affine.coefficients() != second_affine.coefficients() {
+        return false;
+    }
+    let mut active = launch_extents
+        .iter()
+        .enumerate()
+        .filter_map(|(dimension, extent)| (*extent != 1).then_some(dimension));
+    let Some(dimension) = active.next() else {
+        return false;
+    };
+    if active.next().is_some() {
+        return false;
+    }
+    let Some(stride) = first_affine.coefficients().get(dimension).copied() else {
+        return false;
+    };
+    if stride == 0
+        || first_affine
+            .coefficients()
+            .iter()
+            .enumerate()
+            .any(|(candidate, coefficient)| candidate != dimension && *coefficient != 0)
+    {
+        return false;
+    }
+    let first_extents = effective_launch_extents(first, launch_extents, invocation_bounds);
+    let second_extents = effective_launch_extents(second, launch_extents, invocation_bounds);
+    affine_is_total_over_launch(first_affine, &first_extents)
+        && affine_is_total_over_launch(second_affine, &second_extents)
+        && first_affine.constant_term() % stride != second_affine.constant_term() % stride
+}
+
 fn affine_map_is_injective(
     indices: &[Value],
     sparse: &SparseIndexAnalysisV1,
@@ -1255,6 +1314,15 @@ fn effect_affine_map_is_injective(
     launch_extents: &[u64],
     invocation_bounds: Option<&[[Option<u64>; MAX_RANKED_MEMORY_RANK]]>,
 ) -> bool {
+    let effective_extents = effective_launch_extents(effect, launch_extents, invocation_bounds);
+    affine_map_is_injective(&effect.indices, sparse, &effective_extents)
+}
+
+fn effective_launch_extents(
+    effect: &EffectV1,
+    launch_extents: &[u64],
+    invocation_bounds: Option<&[[Option<u64>; MAX_RANKED_MEMORY_RANK]]>,
+) -> Vec<u64> {
     let mut effective_extents = launch_extents.to_vec();
     if let Some(bounds) = invocation_bounds.and_then(|bounds| bounds.get(effect.location.block)) {
         for (dimension, extent) in effective_extents.iter_mut().enumerate() {
@@ -1265,7 +1333,7 @@ fn effect_affine_map_is_injective(
             }
         }
     }
-    affine_map_is_injective(&effect.indices, sparse, &effective_extents)
+    effective_extents
 }
 
 fn invocation_upper_bounds_by_block(
@@ -1633,9 +1701,9 @@ mod status_tests {
     }
 
     #[test]
-    fn presburger_pair_inventory_is_charged_before_enumeration() {
-        assert!(presburger_pair_inventory_fits_budget(1_447));
-        assert!(!presburger_pair_inventory_fits_budget(1_448));
-        assert!(!presburger_pair_inventory_fits_budget(usize::MAX));
+    fn effect_pair_inventory_is_charged_before_enumeration() {
+        assert!(effect_pair_inventory_fits_budget(1_447));
+        assert!(!effect_pair_inventory_fits_budget(1_448));
+        assert!(!effect_pair_inventory_fits_budget(usize::MAX));
     }
 }

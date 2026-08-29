@@ -41,19 +41,20 @@ safe Rust
   -> Kernel IR
   -> formal memory admission
   -> gfx942 LLVM
-  -> HSACO
-  -> fe2o3-host launch
+  -> external ROCm clang/LLD HSACO
+  -> fe2o3-core unsafe qualification launch
 ```
 
-The current compiler stops before code generation with `FE2O3-RACE-002`
-because the generic checked-tiled source capability is not yet joined to the
-dynamic-launch race proof. This is a fail-closed source-to-PLIRON handoff gap,
-not pipeline-protocol authority. The ordinary Rust, UI, and independent CPU
-reference suites remain runnable with `cargo test`.
+The compiler now carries the checked-tiled source capability through the
+dynamic-launch race proof and reaches gfx942 LLVM qualification.
+`run-gfx942.sh` passes that LLVM through external ROCm clang/LLD to produce an
+HSACO and runs the numerical gfx942 qualification path. Confirming that the
+disassembly contains `v_mfma_f32_16x16x16_bf16` remains required before making
+performance claims.
 
-Once that handoff is implemented, qualification must also confirm that gfx942
-disassembly contains `v_mfma_f32_16x16x16_bf16` before performance claims are
-made.
+This script deliberately uses the external-HSACO unsafe qualification path. It
+does not exercise protected Worker publication or artifact-currentness
+admission; those remain a separate, fail-closed pipeline.
 
 ## Safety boundary
 

@@ -32,9 +32,10 @@ use fe2o3_hsaco_finalize::{
     InspectedProtectedWorkerV3HsacoV1, LinkOptionV1, PinnedWorkerV1,
     ProtectedWorkerV3CompactFinalizerReplayV2, WorkerExecutionLimitsV1, WorkerInputKindV1,
     WorkerInputV1, WorkerMeasurementV1, WorkerOutputConstraintsV1, WorkerV3HsacoFinalizationError,
-    WorkerV3HsacoPublicationErrorV1, execute_protected_reproducible_first_build_worker_v3,
-    finalize_protected_worker_v3_hsaco_v1, inspect_protected_worker_v3_hsaco_v1,
-    inspect_unfinalized, persist_prepared_protected_worker_v3_hsaco_publication_v1,
+    WorkerV3HsacoInspectionError, WorkerV3HsacoPublicationErrorV1,
+    execute_protected_reproducible_first_build_worker_v3, finalize_protected_worker_v3_hsaco_v1,
+    inspect_protected_worker_v3_hsaco_v1, inspect_unfinalized,
+    persist_prepared_protected_worker_v3_hsaco_publication_v1,
     prepare_protected_worker_v3_hsaco_publication_v1,
     publish_recovered_protected_worker_v3_hsaco_v1,
     recover_protected_worker_v3_hsaco_publication_v1,
@@ -64,7 +65,7 @@ use hsaco_fixture::{
 
 const TARGET: &str = "gfx942:xnack-";
 const WORKER_BUILD_ID: &str = "fixture-worker-v3-hsaco-v1";
-const RAW_HSACO_MARKER: &[u8] = b"FE2O3/TEST-HSACO-PAYLOAD/V1\0";
+const RAW_HSACO_MARKER: &[u8] = b"; FE2O3/TEST-HSACO-PAYLOAD/V2-HEX:";
 const CAPSULE_IDENTITY_DOMAIN_V3: &[u8] = b"FE2O3/INERT-PRODUCTION-SEMANTIC-CAPSULE/V3\0";
 const PAIR_IDENTITY_DOMAIN_V3: &[u8] = b"FE2O3/INERT-COMPILER-MODULE-PAIR-BINDING/V3\0";
 const OUTER_IDENTITY_DOMAIN_V3: &[u8] = b"FE2O3/INERT-SEMANTIC-COMPILER-MODULE-HANDOFF/V3\0";
@@ -242,18 +243,13 @@ fn publish_worker_v3_fixture_in_directory_with_config(
     config: EvidenceConfig,
 ) -> PublishedWorkerV3InDirectory {
     let producer = producer();
-    let provider = WorkerInputV1::new(
-        WorkerInputKindV1::AmdGpuRelocatable,
-        b"worker-v3-load-envelope-provider".to_vec(),
-    )
-    .unwrap();
     let (attempt, source) = evidence_in_directory_for_kernel_and_providers(
         directory,
         raw_hsaco,
         config,
         entry_symbol,
         descriptor_symbol,
-        vec![provider],
+        Vec::new(),
     );
     let inspected = inspect_protected_worker_v3_hsaco_v1(source).unwrap();
     let finalized = finalize_protected_worker_v3_hsaco_v1(inspected).unwrap();
@@ -458,18 +454,13 @@ fn native_v3_publication_persists_and_reconstructs_exact_lineage_after_restart()
     let config = EvidenceConfig::BASE;
     let fixture = slice_fixture_with_descriptor_table(&slice_descriptor_table());
     let exact_raw = fixture.bytes.clone();
-    let provider = WorkerInputV1::new(
-        WorkerInputKindV1::AmdGpuRelocatable,
-        b"worker-v3-publication-provider".to_vec(),
-    )
-    .unwrap();
     let (attempt, source) = evidence_in_directory_for_kernel_and_providers(
         &directory,
         fixture.bytes,
         config,
         "vecadd",
         "vecadd.kd",
-        vec![provider],
+        Vec::new(),
     );
     let inspected = inspect_protected_worker_v3_hsaco_v1(source).unwrap();
     let finalized = finalize_protected_worker_v3_hsaco_v1(inspected).unwrap();
@@ -611,11 +602,7 @@ fn native_v3_publication_persists_and_reconstructs_exact_lineage_after_restart()
     assert_eq!(claim.worker_v3_binding(), binding);
     assert_eq!(replay.finalized_hsaco, exact_finalized);
     assert_eq!(lease.exact_artifact_bytes(), exact_finalized);
-    assert_eq!(replay.external_provider_payloads.len(), 1);
-    assert_eq!(
-        replay.external_provider_payloads[0],
-        b"worker-v3-publication-provider"
-    );
+    assert!(replay.external_provider_payloads.is_empty());
     let providers =
         WorkerV3ExternalProviderPayloadsV1::new(replay.external_provider_payloads.clone()).unwrap();
     assert_eq!(
@@ -664,6 +651,29 @@ fn native_v3_publication_persists_and_reconstructs_exact_lineage_after_restart()
     assert_eq!(
         transcript.source_evidence_identity(),
         &binding.source_evidence_identity()
+    );
+}
+
+#[test]
+fn strict_v3_gfx942_no_ffi_rejects_external_provider_input() {
+    let directory = TestDirectory::new();
+    let fixture = slice_fixture_with_descriptor_table(&slice_descriptor_table());
+    let provider = WorkerInputV1::new(
+        WorkerInputKindV1::AmdGpuRelocatable,
+        b"unadmitted-external-provider".to_vec(),
+    )
+    .unwrap();
+    let (_, source) = evidence_in_directory_for_kernel_and_providers(
+        &directory,
+        fixture.bytes,
+        EvidenceConfig::BASE,
+        "vecadd",
+        "vecadd.kd",
+        vec![provider],
+    );
+    assert_eq!(
+        inspect_protected_worker_v3_hsaco_v1(source).unwrap_err(),
+        WorkerV3HsacoInspectionError::StrictV3Gfx942OcmlProviderClosureMismatch
     );
 }
 
@@ -1030,7 +1040,8 @@ fn module_handoff_for_kernel(
 ) -> CompilerModuleHandoffV2 {
     let mut module = format!("; ModuleID = 'raw-hsaco-v3-{seed:02x}'\n").into_bytes();
     module.extend_from_slice(RAW_HSACO_MARKER);
-    module.extend_from_slice(hsaco);
+    module.extend_from_slice(hex_encode(hsaco).as_bytes());
+    module.push(b'\n');
     let envelope =
         CompilerFfiEnvelopeV1::for_module_without_device_ffi(target(), CodeObjectVersion::V6)
             .unwrap();
@@ -1043,7 +1054,7 @@ fn module_handoff_for_kernel(
     ])
     .unwrap();
     CompilerModuleHandoffV2::new(
-        CompilerModuleKindV1::LlvmBitcode,
+        CompilerModuleKindV1::LlvmTextIr,
         target(),
         CodeObjectVersion::V6,
         envelope,
@@ -1095,8 +1106,13 @@ fn capsule_bytes(
         .module_bytes()
         .windows(RAW_HSACO_MARKER.len())
         .position(|window| window == RAW_HSACO_MARKER)
-        .map(|offset| &handoff.module_bytes()[offset + RAW_HSACO_MARKER.len()..]);
+        .and_then(|offset| {
+            let encoded = &handoff.module_bytes()[offset + RAW_HSACO_MARKER.len()..];
+            let line = encoded.split(|byte| *byte == b'\n').next()?;
+            hex_decode(line)
+        });
     if let Some(descriptor_source) = hsaco
+        .as_deref()
         .and_then(|bytes| inspect_unfinalized(bytes).ok())
         .and_then(|inspection| {
             encode_device_descriptor_table_v1(inspection.descriptor_table()).ok()
@@ -1156,6 +1172,34 @@ fn capsule_bytes(
     capsule.extend_from_slice(&capsule_identity);
     assert_eq!(capsule.len(), total_len);
     capsule
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut encoded = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        encoded.push(char::from(HEX[usize::from(byte >> 4)]));
+        encoded.push(char::from(HEX[usize::from(byte & 0x0f)]));
+    }
+    encoded
+}
+
+fn hex_decode(encoded: &[u8]) -> Option<Vec<u8>> {
+    if encoded.len() % 2 != 0 {
+        return None;
+    }
+    encoded
+        .chunks_exact(2)
+        .map(|pair| Some((decode_hex_nibble(pair[0])? << 4) | decode_hex_nibble(pair[1])?))
+        .collect()
+}
+
+const fn decode_hex_nibble(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        _ => None,
+    }
 }
 
 fn proof_binding_association_payload(

@@ -871,22 +871,28 @@ impl fmt::Display for ProtectedFirstBuildWorkerV3Error {
                     "strict-V3 bootstrap worker execution failed: {error}"
                 )
             }
-            Self::BootstrapDidNotProduceOutput(execution) => write!(
-                formatter,
-                "strict-V3 bootstrap produced no output at {:?}",
-                execution.response().stage()
-            ),
+            Self::BootstrapDidNotProduceOutput(execution) => {
+                write!(
+                    formatter,
+                    "strict-V3 bootstrap produced no output at {:?}",
+                    execution.response().stage()
+                )?;
+                write_worker_diagnostics(formatter, execution.response().diagnostics())
+            }
             Self::ReplayExecution(error) => {
                 write!(
                     formatter,
                     "strict-V3 exact replay worker execution failed: {error}"
                 )
             }
-            Self::ReplayDidNotProduceOutput { replay, .. } => write!(
-                formatter,
-                "strict-V3 exact replay produced no output at {:?}",
-                replay.response().stage()
-            ),
+            Self::ReplayDidNotProduceOutput { replay, .. } => {
+                write!(
+                    formatter,
+                    "strict-V3 exact replay produced no output at {:?}",
+                    replay.response().stage()
+                )?;
+                write_worker_diagnostics(formatter, replay.response().diagnostics())
+            }
             Self::OutputMismatch { .. } => formatter
                 .write_str("strict-V3 bootstrap and exact replay worker output bytes differ"),
             Self::ReplayValidation { field } => {
@@ -894,6 +900,17 @@ impl fmt::Display for ProtectedFirstBuildWorkerV3Error {
             }
         }
     }
+}
+
+fn write_worker_diagnostics(
+    formatter: &mut fmt::Formatter<'_>,
+    diagnostics: &[String],
+) -> fmt::Result {
+    for (index, diagnostic) in diagnostics.iter().enumerate() {
+        formatter.write_str(if index == 0 { ": " } else { "; " })?;
+        formatter.write_str(diagnostic)?;
+    }
+    Ok(())
 }
 
 impl Error for ProtectedFirstBuildWorkerV3Error {
@@ -2272,6 +2289,14 @@ mod working_set_tests {
     use super::*;
     use fe2o3_kernel_descriptor::DeviceTargetV1;
 
+    struct Diagnostics<'a>(&'a [String]);
+
+    impl fmt::Display for Diagnostics<'_> {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write_worker_diagnostics(formatter, self.0)
+        }
+    }
+
     fn dimensions() -> ProtectedV3WorkingSetDimensions {
         ProtectedV3WorkingSetDimensions {
             outer_handoff_bytes: 4096,
@@ -2283,6 +2308,19 @@ mod working_set_tests {
             envelope_bytes: 256,
             manifest_bytes: 256,
         }
+    }
+
+    #[test]
+    fn worker_failure_diagnostics_remain_visible_and_bounded_by_the_codec() {
+        let diagnostics = vec![
+            "first validated diagnostic".to_owned(),
+            "second validated diagnostic".to_owned(),
+        ];
+        assert_eq!(
+            Diagnostics(&diagnostics).to_string(),
+            ": first validated diagnostic; second validated diagnostic"
+        );
+        assert_eq!(Diagnostics(&[]).to_string(), "");
     }
 
     #[test]

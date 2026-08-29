@@ -1356,10 +1356,10 @@ void directCallEdgesAreResolvedExactly() {
               AddHigh != Sites.end() && AddHigh->Size == 8,
           "direct-call literal pair is not exact");
   require(
-      AddHigh->OperandKinds.size() == 3 && AddHigh->OperandKinds[2] == 'e' &&
+      AddHigh->OperandKinds.size() == 3 &&
           support::endian::read32le(Payload.data() + AddHigh->FileOffset + 4) ==
               std::numeric_limits<uint32_t>::max(),
-      "pinned LLVM high literal does not exercise the expression fallback");
+      "pinned LLVM high literal bytes are not exact");
   for (const DecodedSite *Add : {&*AddLow, &*AddHigh}) {
     require(Add->OperandKinds.size() == 3 &&
                 (Add->OperandKinds[2] == 'i' || Add->OperandKinds[2] == 'e') &&

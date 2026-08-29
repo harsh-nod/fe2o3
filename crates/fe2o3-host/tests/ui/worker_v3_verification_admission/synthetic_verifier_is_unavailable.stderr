@@ -9,9 +9,9 @@ note: found an item that was configured out
   |
   | #[cfg(feature = "worker-v3-verifier-test-support")]
   |       ------------------------------------------- the item is gated behind the `worker-v3-verifier-test-support` feature
-  | #[doc(hidden)]
-  | pub use worker_v3_verification_admission::WorkerV3SyntheticVerifierV1;
-  |                                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+  |     WorkerV3SyntheticVerifierAdapterV1, WorkerV3SyntheticVerifierV1,
+  |                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
 help: a similar name exists in the module
   |
 1 - use fe2o3_host::WorkerV3SyntheticVerifierV1;

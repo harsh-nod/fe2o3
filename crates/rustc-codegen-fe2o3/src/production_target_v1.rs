@@ -11,6 +11,13 @@ use crate::semantic_layout_bridge::{
 };
 
 pub(crate) const PRODUCTION_RUSTC_DATA_LAYOUT_V1: &str = "e-m:e-p:64:64-p1:64:64-p2:32:32-p3:32:32-p4:64:64-p5:32:32-p6:32:32-p7:160:256:256:32-p8:128:128:128:48-p9:192:256:256:32-i64:64-v16:16-v24:32-v32:32-v48:64-v96:128-v192:256-v256:256-v512:512-v1024:1024-v2048:2048-n32:64-S32-A5-G1-ni:7:8:9";
+/// Exact data layout measured from the pinned ROCm LLVM gfx942/gfx950 target machines.
+///
+/// Rustc's built-in AMDGPU target adds the ELF mangling component `m:e`; the pinned worker's
+/// target machine omits that non-physical component. All pointer, address-space, integer, vector,
+/// stack, alloca, global, and non-integral-address-space clauses remain identical.
+pub(crate) const PRODUCTION_WORKER_DATA_LAYOUT_V1: &str =
+    dialect_amdgcn::GFX942_XNACK_MINUS_DATA_LAYOUT;
 const PRODUCTION_RUSTC_POINTER_WIDTH_V1: u16 = 64;
 
 /// Move-only proof that the live rustc session was the exact production target
@@ -34,17 +41,17 @@ pub(crate) struct AuthenticatedProductionTargetV1 {
 impl RetainedProductionTargetV1 {
     pub(crate) fn authenticate_before_collection(
         tcx: TyCtxt<'_>,
-        configured_cpu: &AmdGpuTarget,
+        configured_target: &AmdGpuTarget,
     ) -> Result<Self, ProductionTargetErrorV1> {
         let retained = Self::authenticate_live_before_collection(tcx)?;
-        let configured_profile = production_profile_for_configured_cpu_v1(configured_cpu)
-            .ok_or_else(|| ProductionTargetErrorV1::ConfiguredCpu {
-                observed: configured_cpu.as_str().to_owned(),
+        let configured_profile = production_profile_for_configured_target_v1(configured_target)
+            .ok_or_else(|| ProductionTargetErrorV1::ConfiguredTarget {
+                observed: configured_target.as_str().to_owned(),
             })?;
         if configured_profile != retained.profile {
-            return Err(ProductionTargetErrorV1::ConfiguredCpuMismatch {
-                configured: configured_cpu.as_str().to_owned(),
-                observed: retained.profile.cpu().to_owned(),
+            return Err(ProductionTargetErrorV1::ConfiguredTargetMismatch {
+                configured: configured_target.as_str().to_owned(),
+                observed: retained.profile.device_target().to_owned(),
             });
         }
         Ok(retained)
@@ -149,18 +156,18 @@ fn require_exact_target_text(
     }
 }
 
-fn production_profile_for_configured_cpu_v1(
+fn production_profile_for_configured_target_v1(
     target: &AmdGpuTarget,
 ) -> Option<ProductionAmdTargetProfileV1> {
-    ProductionAmdTargetProfileV1::from_cpu(target.as_str())
+    ProductionAmdTargetProfileV1::from_device_target(target.as_str())
 }
 
 #[derive(Debug)]
 pub(crate) enum ProductionTargetErrorV1 {
-    ConfiguredCpu {
+    ConfiguredTarget {
         observed: String,
     },
-    ConfiguredCpuMismatch {
+    ConfiguredTargetMismatch {
         configured: String,
         observed: String,
     },
@@ -179,16 +186,16 @@ pub(crate) enum ProductionTargetErrorV1 {
 impl fmt::Display for ProductionTargetErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::ConfiguredCpu { observed } => write!(
+            Self::ConfiguredTarget { observed } => write!(
                 formatter,
-                "production compilation requires configured target CPU \"gfx942\" or \"gfx950\"; found {observed:?}"
+                "production compilation requires configured device target \"gfx942:xnack-\" or \"gfx950:xnack-\"; found {observed:?}"
             ),
-            Self::ConfiguredCpuMismatch {
+            Self::ConfiguredTargetMismatch {
                 configured,
                 observed,
             } => write!(
                 formatter,
-                "configured production target CPU {configured:?} does not match the live rustc target CPU {observed:?}"
+                "configured production device target {configured:?} does not match the live rustc device target {observed:?}"
             ),
             Self::LiveCpu { observed } => write!(
                 formatter,
@@ -219,8 +226,8 @@ impl std::error::Error for ProductionTargetErrorV1 {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::RustcObservation(error) => Some(error),
-            Self::ConfiguredCpu { .. }
-            | Self::ConfiguredCpuMismatch { .. }
+            Self::ConfiguredTarget { .. }
+            | Self::ConfiguredTargetMismatch { .. }
             | Self::LiveCpu { .. }
             | Self::RustcSessionChanged
             | Self::RustcTargetMismatch { .. } => None,
@@ -242,21 +249,33 @@ mod tests {
     use std::process::Command;
 
     #[test]
-    fn production_device_target_accepts_only_exact_admitted_cpus() {
+    fn production_device_target_accepts_only_exact_admitted_target_ids() {
         assert_eq!(
-            production_profile_for_configured_cpu_v1(&AmdGpuTarget::new("gfx942")),
+            production_profile_for_configured_target_v1(&AmdGpuTarget::new("gfx942:xnack-")),
             Some(ProductionAmdTargetProfileV1::Gfx942)
         );
         assert_eq!(
-            production_profile_for_configured_cpu_v1(&AmdGpuTarget::new("gfx950")),
+            production_profile_for_configured_target_v1(&AmdGpuTarget::new("gfx950:xnack-")),
             Some(ProductionAmdTargetProfileV1::Gfx950)
         );
-        for rejected in ["gfx942:xnack-", "gfx942:xnack+", "gfx950:xnack-", "GFX942"] {
+        for rejected in ["gfx942", "gfx942:xnack+", "gfx950", "GFX942:xnack-"] {
             assert_eq!(
-                production_profile_for_configured_cpu_v1(&AmdGpuTarget::new(rejected)),
+                production_profile_for_configured_target_v1(&AmdGpuTarget::new(rejected)),
                 None
             );
         }
+    }
+
+    #[test]
+    fn rustc_and_worker_layouts_differ_only_by_the_elf_mangling_component() {
+        assert_eq!(
+            PRODUCTION_RUSTC_DATA_LAYOUT_V1.strip_prefix("e-m:e-"),
+            PRODUCTION_WORKER_DATA_LAYOUT_V1.strip_prefix("e-")
+        );
+        assert_eq!(
+            PRODUCTION_WORKER_DATA_LAYOUT_V1,
+            fe2o3_compiler_ffi::EXTERNAL_DEVICE_LIBRARY_GFX942_DATA_LAYOUT_V1
+        );
     }
 
     #[test]

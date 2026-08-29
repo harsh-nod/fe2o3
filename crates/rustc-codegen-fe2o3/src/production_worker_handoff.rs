@@ -18,8 +18,11 @@ use crate::kernel_ir_codegen::{
 use fe2o3_compiler_ffi::{
     CodeObjectVersion, CompilerDescriptorSourceV1, CompilerFfiEnvelopeError, CompilerFfiEnvelopeV1,
     CompilerModuleHandoffErrorV2, CompilerModuleHandoffV2, CompilerModuleKindV1,
-    CompilerModuleSymbolManifestErrorV1, PRODUCTION_GFX950_OCML_EXP_F32_SYMBOL_V1,
-    ProductionGfx950CompilerFfiEnvelopeKindV1, construct_production_gfx950_ocml_exp_envelope_v1,
+    CompilerModuleSymbolManifestErrorV1, PRODUCTION_GFX942_OCML_EXP_F32_SYMBOL_V1,
+    ProductionGfx942CompilerFfiEnvelopeKindV1, ProductionGfx950CompilerFfiEnvelopeKindV1,
+    construct_production_gfx942_ocml_exp_envelope_v1,
+    construct_production_gfx950_ocml_exp_envelope_v1,
+    inspect_production_gfx942_compiler_ffi_envelope_v1,
     inspect_production_gfx950_compiler_ffi_envelope_v1,
 };
 use fe2o3_kernel_ir::{
@@ -119,21 +122,26 @@ fn derive_production_compiler_ffi_envelope(
     observed_source_envelope: Option<CompilerFfiEnvelopeV1>,
     canonical_kernel_ir_identity: [u8; 32],
 ) -> Result<CompilerFfiEnvelopeV1, ProductionWorkerHandoffError> {
-    if target.to_string() != "gfx950:xnack-" {
-        return match observed_source_envelope {
-            Some(envelope) => Ok(envelope),
-            None => {
-                CompilerFfiEnvelopeV1::for_module_without_device_ffi(target, CodeObjectVersion::V6)
-                    .map_err(ProductionWorkerHandoffError::CompilerEnvelope)
-            }
-        };
-    }
+    let profile = match target.to_string().as_str() {
+        "gfx942:xnack-" => ProductionOcmlTargetV1::Gfx942,
+        "gfx950:xnack-" => ProductionOcmlTargetV1::Gfx950,
+        _ => {
+            return match observed_source_envelope {
+                Some(envelope) => Ok(envelope),
+                None => CompilerFfiEnvelopeV1::for_module_without_device_ffi(
+                    target,
+                    CodeObjectVersion::V6,
+                )
+                .map_err(ProductionWorkerHandoffError::CompilerEnvelope),
+            };
+        }
+    };
 
     if observed_source_envelope
         .as_ref()
         .is_some_and(|envelope| envelope.directional_symbols().total_count() != 0)
     {
-        return Err(ProductionWorkerHandoffError::Gfx950SourceFfiNotAdmitted);
+        return Err(profile.source_ffi_not_admitted());
     }
 
     let ocml_imports = typed_ocml_imports(module);
@@ -142,30 +150,90 @@ fn derive_production_compiler_ffi_envelope(
             if !compiler_module.external_declarations().is_empty()
                 || compiler_module.llvm_ir().contains("@__ocml_")
             {
-                return Err(ProductionWorkerHandoffError::Gfx950OcmlImportPolicy);
+                return Err(profile.import_policy_error());
             }
             let envelope =
                 CompilerFfiEnvelopeV1::for_module_without_device_ffi(target, CodeObjectVersion::V6)
                     .map_err(ProductionWorkerHandoffError::CompilerEnvelope)?;
-            debug_assert_eq!(
-                inspect_production_gfx950_compiler_ffi_envelope_v1(&envelope),
-                Some(ProductionGfx950CompilerFfiEnvelopeKindV1::NoDeviceFfi)
-            );
+            debug_assert!(profile.inspects_no_device_ffi(&envelope));
             Ok(envelope)
         }
-        [symbol] if *symbol == PRODUCTION_GFX950_OCML_EXP_F32_SYMBOL_V1 => {
+        [symbol] if *symbol == PRODUCTION_GFX942_OCML_EXP_F32_SYMBOL_V1 => {
             if !reachable_ocml_exp_f32_call(module) {
-                return Err(ProductionWorkerHandoffError::Gfx950OcmlExpNotExecutable);
+                return Err(profile.exp_not_executable_error());
             }
-            if compiler_module.external_declarations() != [PRODUCTION_GFX950_OCML_EXP_F32_SYMBOL_V1]
+            if compiler_module.external_declarations() != [PRODUCTION_GFX942_OCML_EXP_F32_SYMBOL_V1]
                 || !has_exact_ocml_exp_llvm_shape(compiler_module.llvm_ir())
             {
-                return Err(ProductionWorkerHandoffError::Gfx950OcmlLlvmMismatch);
+                return Err(profile.llvm_mismatch_error());
             }
-            construct_production_gfx950_ocml_exp_envelope_v1(canonical_kernel_ir_identity)
-                .map_err(ProductionWorkerHandoffError::CompilerEnvelope)
+            profile.construct_exp_envelope(canonical_kernel_ir_identity)
         }
-        _ => Err(ProductionWorkerHandoffError::Gfx950OcmlImportPolicy),
+        _ => Err(profile.import_policy_error()),
+    }
+}
+
+#[derive(Clone, Copy)]
+enum ProductionOcmlTargetV1 {
+    Gfx942,
+    Gfx950,
+}
+
+impl ProductionOcmlTargetV1 {
+    fn construct_exp_envelope(
+        self,
+        canonical_kernel_ir_identity: [u8; 32],
+    ) -> Result<CompilerFfiEnvelopeV1, ProductionWorkerHandoffError> {
+        match self {
+            Self::Gfx942 => {
+                construct_production_gfx942_ocml_exp_envelope_v1(canonical_kernel_ir_identity)
+            }
+            Self::Gfx950 => {
+                construct_production_gfx950_ocml_exp_envelope_v1(canonical_kernel_ir_identity)
+            }
+        }
+        .map_err(ProductionWorkerHandoffError::CompilerEnvelope)
+    }
+
+    fn inspects_no_device_ffi(self, envelope: &CompilerFfiEnvelopeV1) -> bool {
+        match self {
+            Self::Gfx942 => matches!(
+                inspect_production_gfx942_compiler_ffi_envelope_v1(envelope),
+                Some(ProductionGfx942CompilerFfiEnvelopeKindV1::NoDeviceFfi)
+            ),
+            Self::Gfx950 => matches!(
+                inspect_production_gfx950_compiler_ffi_envelope_v1(envelope),
+                Some(ProductionGfx950CompilerFfiEnvelopeKindV1::NoDeviceFfi)
+            ),
+        }
+    }
+
+    const fn source_ffi_not_admitted(self) -> ProductionWorkerHandoffError {
+        match self {
+            Self::Gfx942 => ProductionWorkerHandoffError::Gfx942SourceFfiNotAdmitted,
+            Self::Gfx950 => ProductionWorkerHandoffError::Gfx950SourceFfiNotAdmitted,
+        }
+    }
+
+    const fn import_policy_error(self) -> ProductionWorkerHandoffError {
+        match self {
+            Self::Gfx942 => ProductionWorkerHandoffError::Gfx942OcmlImportPolicy,
+            Self::Gfx950 => ProductionWorkerHandoffError::Gfx950OcmlImportPolicy,
+        }
+    }
+
+    const fn exp_not_executable_error(self) -> ProductionWorkerHandoffError {
+        match self {
+            Self::Gfx942 => ProductionWorkerHandoffError::Gfx942OcmlExpNotExecutable,
+            Self::Gfx950 => ProductionWorkerHandoffError::Gfx950OcmlExpNotExecutable,
+        }
+    }
+
+    const fn llvm_mismatch_error(self) -> ProductionWorkerHandoffError {
+        match self {
+            Self::Gfx942 => ProductionWorkerHandoffError::Gfx942OcmlLlvmMismatch,
+            Self::Gfx950 => ProductionWorkerHandoffError::Gfx950OcmlLlvmMismatch,
+        }
     }
 }
 
@@ -183,7 +251,7 @@ fn typed_ocml_imports(module: &Module) -> Vec<&'static str> {
                 return None;
             };
             Some(match function {
-                F32MathFunction::Exp => PRODUCTION_GFX950_OCML_EXP_F32_SYMBOL_V1,
+                F32MathFunction::Exp => PRODUCTION_GFX942_OCML_EXP_F32_SYMBOL_V1,
                 F32MathFunction::Sin => "__ocml_sin_f32",
                 F32MathFunction::Cos => "__ocml_cos_f32",
                 F32MathFunction::Exp2 => "__ocml_exp2_f32",
@@ -270,6 +338,10 @@ pub(crate) enum ProductionWorkerHandoffError {
         module: Vec<String>,
         envelope: String,
     },
+    Gfx942SourceFfiNotAdmitted,
+    Gfx942OcmlImportPolicy,
+    Gfx942OcmlExpNotExecutable,
+    Gfx942OcmlLlvmMismatch,
     Gfx950SourceFfiNotAdmitted,
     Gfx950OcmlImportPolicy,
     Gfx950OcmlExpNotExecutable,
@@ -297,6 +369,18 @@ impl fmt::Display for ProductionWorkerHandoffError {
             Self::TargetBindingMismatch { module, envelope } => write!(
                 formatter,
                 "compiler-module exact target bindings {module:?} do not match production envelope target {envelope:?}"
+            ),
+            Self::Gfx942SourceFfiNotAdmitted => formatter.write_str(
+                "production gfx942 admits no caller/source-authored device FFI envelope",
+            ),
+            Self::Gfx942OcmlImportPolicy => formatter.write_str(
+                "production gfx942 admits either no device FFI or only compiler-derived __ocml_exp_f32",
+            ),
+            Self::Gfx942OcmlExpNotExecutable => formatter.write_str(
+                "production gfx942 OCML exp declaration is not called from the executable Kernel IR closure",
+            ),
+            Self::Gfx942OcmlLlvmMismatch => formatter.write_str(
+                "production gfx942 LLVM does not retain the exact Kernel-IR-derived OCML exp declaration/call closure",
             ),
             Self::Gfx950SourceFfiNotAdmitted => formatter.write_str(
                 "production gfx950 admits no caller/source-authored device FFI envelope",
@@ -352,6 +436,10 @@ impl Error for ProductionWorkerHandoffError {
             Self::MissingProductionBindings
             | Self::MissingExternalDeclaration(_)
             | Self::MissingCompilerDefinition(_)
+            | Self::Gfx942SourceFfiNotAdmitted
+            | Self::Gfx942OcmlImportPolicy
+            | Self::Gfx942OcmlExpNotExecutable
+            | Self::Gfx942OcmlLlvmMismatch
             | Self::Gfx950SourceFfiNotAdmitted
             | Self::Gfx950OcmlImportPolicy
             | Self::Gfx950OcmlExpNotExecutable
@@ -385,6 +473,135 @@ impl From<CompilerModuleRoleError> for ProductionWorkerHandoffError {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::kernel_ir_codegen::construct_inert_compiler_module_text_for_target_v1;
+    use fe2o3_compiler_ffi::DeviceTargetV1;
+    use fe2o3_kernel_ir::{
+        BasicBlock, BlockId, Function, Kernel, LaunchDomain, LaunchExtent, Signature, Terminator,
+        Type, ValueId, WorkgroupSize,
+    };
+
+    fn math_module(functions: &[F32MathFunction], called: &[F32MathFunction]) -> Module {
+        let mut block = BasicBlock::new(BlockId(0));
+        for (index, function) in called.iter().copied().enumerate() {
+            block.operations.push(
+                FloatOperation::F32Math {
+                    function,
+                    implementation: F32MathImplementation::OcmlAbiV1,
+                    arguments: vec![ValueId(0)],
+                }
+                .operation(ValueId(u32::try_from(index + 1).unwrap())),
+            );
+        }
+        block.terminator = Some(Terminator::Return { values: vec![] });
+        let entry = Function::kernel_entry(
+            "kernel",
+            Signature::new(vec![Type::F32], vec![]),
+            vec![ValueId(0)],
+            vec![block],
+        );
+        let mut kernel = Kernel::new(
+            "kernel",
+            "kernel",
+            LaunchDomain::D1 {
+                x: LaunchExtent::Dynamic,
+            },
+        );
+        kernel.workgroup_size = Some(WorkgroupSize::new(256, 1, 1));
+        let mut module = Module::new("tests::production_gfx942_ocml");
+        module.functions.push(entry);
+        for function in functions {
+            module.functions.push(
+                FloatOperation::F32Math {
+                    function: *function,
+                    implementation: F32MathImplementation::OcmlAbiV1,
+                    arguments: vec![ValueId(0)],
+                }
+                .declaration(),
+            );
+        }
+        module.kernels.push(kernel);
+        module
+    }
+
+    fn gfx942_compiler_module(
+        module: &Module,
+    ) -> crate::kernel_ir_codegen::InertCompilerModuleTextV1 {
+        construct_inert_compiler_module_text_for_target_v1(
+            module,
+            Some(DeviceTargetV1::parse("gfx942:xnack-").unwrap()),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn reachable_gfx942_exp_derives_compiler_owned_envelope() {
+        let module = math_module(&[F32MathFunction::Exp], &[F32MathFunction::Exp]);
+        let compiler_module = gfx942_compiler_module(&module);
+        let identity = [0x37; 32];
+        let envelope = derive_production_compiler_ffi_envelope(
+            DeviceTargetV1::parse("gfx942:xnack-").unwrap(),
+            &module,
+            &compiler_module,
+            None,
+            identity,
+        )
+        .unwrap();
+        assert_eq!(
+            inspect_production_gfx942_compiler_ffi_envelope_v1(&envelope),
+            Some(ProductionGfx942CompilerFfiEnvelopeKindV1::OcmlExpF32 {
+                canonical_kernel_ir_identity: identity,
+            })
+        );
+    }
+
+    #[test]
+    fn gfx942_exp_rejects_source_ffi_unreachable_and_second_import() {
+        let target = DeviceTargetV1::parse("gfx942:xnack-").unwrap();
+        let reachable = math_module(&[F32MathFunction::Exp], &[F32MathFunction::Exp]);
+        let reachable_compiler = gfx942_compiler_module(&reachable);
+        let source = construct_production_gfx942_ocml_exp_envelope_v1([0x38; 32]).unwrap();
+        assert!(matches!(
+            derive_production_compiler_ffi_envelope(
+                target,
+                &reachable,
+                &reachable_compiler,
+                Some(source),
+                [0x37; 32],
+            ),
+            Err(ProductionWorkerHandoffError::Gfx942SourceFfiNotAdmitted)
+        ));
+
+        let unreachable = math_module(&[F32MathFunction::Exp], &[]);
+        let unreachable_compiler = gfx942_compiler_module(&unreachable);
+        assert!(matches!(
+            derive_production_compiler_ffi_envelope(
+                target,
+                &unreachable,
+                &unreachable_compiler,
+                None,
+                [0x37; 32],
+            ),
+            Err(ProductionWorkerHandoffError::Gfx942OcmlExpNotExecutable)
+        ));
+
+        let second = math_module(
+            &[F32MathFunction::Exp, F32MathFunction::Sin],
+            &[F32MathFunction::Exp, F32MathFunction::Sin],
+        );
+        let second_compiler = gfx942_compiler_module(&second);
+        assert!(matches!(
+            derive_production_compiler_ffi_envelope(
+                target,
+                &second,
+                &second_compiler,
+                None,
+                [0x37; 32],
+            ),
+            Err(ProductionWorkerHandoffError::Gfx942OcmlImportPolicy)
+        ));
+    }
+
     #[test]
     fn production_source_has_no_qualification_or_worker_v2_dependency() {
         for source in [

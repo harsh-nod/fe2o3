@@ -660,7 +660,7 @@ fn bind_production_upstream_llvm_layout_v1(dialect_llvm_ir: String) -> Result<St
         );
     }
 
-    let upstream_layout = crate::production_target_v1::PRODUCTION_RUSTC_DATA_LAYOUT_V1;
+    let upstream_layout = crate::production_target_v1::PRODUCTION_WORKER_DATA_LAYOUT_V1;
     let mut bound = String::with_capacity(
         dialect_llvm_ir.len() + upstream_layout.len().saturating_sub(dialect_layout.len()),
     );
@@ -1926,7 +1926,7 @@ mod tests {
     }
 
     #[test]
-    fn production_layout_binding_uses_the_authenticated_upstream_spelling() {
+    fn production_layout_binding_uses_the_measured_worker_spelling() {
         let legacy = format!(
             "target triple = \"amdgcn-amd-amdhsa\"\ntarget datalayout = \"{}\"\n\ndefine void @body() {{ ret void }}\n",
             dialect_amdgcn::GFX942_XNACK_MINUS_DATA_LAYOUT
@@ -1934,8 +1934,9 @@ mod tests {
         let bound = bind_production_upstream_llvm_layout_v1(legacy).unwrap();
         assert!(bound.starts_with(&format!(
             "target triple = \"amdgcn-amd-amdhsa\"\ntarget datalayout = \"{}\"\n\n",
-            crate::production_target_v1::PRODUCTION_RUSTC_DATA_LAYOUT_V1
+            crate::production_target_v1::PRODUCTION_WORKER_DATA_LAYOUT_V1
         )));
+        assert!(!bound.contains("target datalayout = \"e-m:e-"));
         assert!(bound.ends_with("define void @body() { ret void }\n"));
         assert_eq!(bound.matches("target triple =").count(), 1);
         assert_eq!(bound.matches("target datalayout =").count(), 1);

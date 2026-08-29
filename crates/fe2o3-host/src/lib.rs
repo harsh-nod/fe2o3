@@ -184,16 +184,19 @@ pub use tile_interop::{
     Gfx942Xor4Bf16TileAllocationV1, Gfx942Xor4Bf16TileLeaseV1,
 };
 
-#[cfg(feature = "worker-v3-verifier-test-support")]
-#[doc(hidden)]
-pub use worker_v3_verification_admission::WorkerV3SyntheticVerifierV1;
 pub use worker_v3_verification_admission::{
     AuthenticatedWorkerV3ExecutableV1, WorkerV3AuditorV1, WorkerV3CompilerExecutionEvidenceErrorV1,
-    WorkerV3CompilerExecutionVerificationV1, WorkerV3SafetyPropertiesV1, WorkerV3SafetyPropertyV1,
-    WorkerV3VerificationAuditErrorV1, WorkerV3VerificationAuthenticationErrorV1,
-    WorkerV3VerificationChallengeIdentityV1, WorkerV3VerificationDecisionErrorV1,
-    WorkerV3VerificationDecisionV1, WorkerV3VerificationRequestV1, WorkerV3VerifierV1,
-    audit_recovered_worker_v3_verification_v1,
+    WorkerV3CompilerExecutionVerificationV1, WorkerV3ProtectedVerificationEvidenceV1,
+    WorkerV3ProtectedVerifierAdapterV1, WorkerV3ProtectedVerifierBackendV1,
+    WorkerV3SafetyPropertiesV1, WorkerV3SafetyPropertyV1, WorkerV3VerificationAuditErrorV1,
+    WorkerV3VerificationAuthenticationErrorV1, WorkerV3VerificationChallengeIdentityV1,
+    WorkerV3VerificationDecisionErrorV1, WorkerV3VerificationDecisionV1,
+    WorkerV3VerificationRequestV1, WorkerV3VerifierV1, audit_recovered_worker_v3_verification_v1,
+};
+#[cfg(feature = "worker-v3-verifier-test-support")]
+#[doc(hidden)]
+pub use worker_v3_verification_admission::{
+    WorkerV3SyntheticVerifierAdapterV1, WorkerV3SyntheticVerifierV1,
 };
 
 /// Compiler-generated host bindings. This is an unstable implementation SPI,

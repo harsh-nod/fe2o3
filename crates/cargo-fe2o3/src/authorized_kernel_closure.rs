@@ -25,6 +25,11 @@ const MAX_SOURCE_FILE_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_SOURCE_TREE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_SOURCE_TREE_FILES: usize = 100_000;
 const CRATES_IO_SOURCE: &str = "registry+https://github.com/rust-lang/crates.io-index";
+const TRUSTED_FE2O3_EXTERNAL_SOURCE: &str = concat!(
+    "git+https://github.com/harsh-nod/fe2o3.git?rev=",
+    "06c74c64506f15883d64c5ab2ca476561909181d#",
+    "06c74c64506f15883d64c5ab2ca476561909181d",
+);
 const TRUSTED_REGISTRY_BUILD_SCRIPTS: [(&str, &str, &str); 25] = [
     (
         "cap-primitives",
@@ -201,7 +206,9 @@ const TRUSTED_GIT_PROC_MACROS: [(&str, &str, &str, &str); 1] = [(
     "2a1c62604e290a3a45b923eac5ef8d0dfaf175a834d9931a9d19cd777adab819",
 )];
 const TRUSTED_FE2O3_MACROS_TREE: &str =
-    "b0511a953c64b871ccb267316a48eb815dbf4983c757d8e2244f54b419daac5a";
+    "d93372fa3fba9e66fd8f80f85288419b055908de5f08adf6a5213d99db75ac25";
+const TRUSTED_FE2O3_EXTERNAL_MACROS_TREE: &str =
+    "d93372fa3fba9e66fd8f80f85288419b055908de5f08adf6a5213d99db75ac25";
 const TRUSTED_FE2O3_HIP_SYS_TREE: &str =
     "fc950a51041eeb74fd756624e3c981fe24d52a6e8b4868da613e5b9a8c499429";
 
@@ -768,7 +775,6 @@ fn is_reviewed_fe2o3_hip_sys(package: &Value, tree_digest: &[u8; 32]) -> Result<
         return Ok(false);
     }
     if package.get("version").and_then(Value::as_str) != Some("0.1.0")
-        || package.get("source").is_some_and(|value| !value.is_null())
         || package.get("links").and_then(Value::as_str) != Some("amdhip64")
     {
         return Err(
@@ -779,17 +785,12 @@ fn is_reviewed_fe2o3_hip_sys(package: &Value, tree_digest: &[u8; 32]) -> Result<
         .parent()
         .expect("cargo-fe2o3 has a workspace crates directory")
         .join("fe2o3-hip-sys");
-    let manifest = PathBuf::from(required_string(package, "manifest_path")?);
-    if manifest != expected.join("Cargo.toml") {
-        return Err(format!(
-            "authoritative kernel closure rejects fe2o3-hip-sys from {}",
-            manifest.display()
-        ));
-    }
+    let (observed_root, _) =
+        validate_reviewed_workspace_package_source(package, &expected, "fe2o3-hip-sys")?;
     validate_expected_tree(
         tree_digest,
         TRUSTED_FE2O3_HIP_SYS_TREE,
-        &expected,
+        &observed_root,
         "native build",
     )?;
     Ok(true)
@@ -930,7 +931,6 @@ fn validate_git_proc_macro_against(
 fn validate_reviewed_fe2o3_macros(package: &Value, tree_digest: &[u8; 32]) -> Result<(), String> {
     if package.get("name").and_then(Value::as_str) != Some("fe2o3-macros")
         || package.get("version").and_then(Value::as_str) != Some("0.1.0")
-        || package.get("source").is_some_and(|value| !value.is_null())
     {
         return Err(unreviewed_proc_macro(package));
     }
@@ -938,19 +938,60 @@ fn validate_reviewed_fe2o3_macros(package: &Value, tree_digest: &[u8; 32]) -> Re
         .parent()
         .expect("cargo-fe2o3 has a workspace crates directory")
         .join("fe2o3-macros");
-    let manifest = PathBuf::from(required_string(package, "manifest_path")?);
-    if manifest != expected.join("Cargo.toml") {
-        return Err(format!(
-            "authoritative kernel closure rejects fe2o3-macros from {}",
-            manifest.display()
-        ));
-    }
+    let (observed_root, external) =
+        validate_reviewed_workspace_package_source(package, &expected, "fe2o3-macros")
+            .map_err(|_| unreviewed_proc_macro(package))?;
     validate_expected_tree(
         tree_digest,
-        TRUSTED_FE2O3_MACROS_TREE,
-        &expected,
+        if external {
+            TRUSTED_FE2O3_EXTERNAL_MACROS_TREE
+        } else {
+            TRUSTED_FE2O3_MACROS_TREE
+        },
+        &observed_root,
         "proc-macro",
     )
+}
+
+fn validate_reviewed_workspace_package_source(
+    package: &Value,
+    expected_local_root: &Path,
+    package_name: &str,
+) -> Result<(PathBuf, bool), String> {
+    let manifest = PathBuf::from(required_string(package, "manifest_path")?);
+    match package.get("source") {
+        Some(Value::Null) if manifest == expected_local_root.join("Cargo.toml") => {
+            Ok((expected_local_root.to_path_buf(), false))
+        }
+        Some(Value::String(source))
+            if source == TRUSTED_FE2O3_EXTERNAL_SOURCE
+                && manifest.is_absolute()
+                && manifest.file_name().and_then(|name| name.to_str()) == Some("Cargo.toml")
+                && manifest
+                    .parent()
+                    .and_then(Path::file_name)
+                    .and_then(|name| name.to_str())
+                    == Some(package_name)
+                && manifest
+                    .parent()
+                    .and_then(Path::parent)
+                    .and_then(Path::file_name)
+                    .and_then(|name| name.to_str())
+                    == Some("crates") =>
+        {
+            Ok((
+                manifest
+                    .parent()
+                    .expect("reviewed git manifest has a package parent")
+                    .to_path_buf(),
+                true,
+            ))
+        }
+        _ => Err(format!(
+            "authoritative kernel closure rejects {package_name} from {}",
+            manifest.display()
+        )),
+    }
 }
 
 fn validate_expected_tree(
@@ -1271,6 +1312,15 @@ mod tests {
         })
     }
 
+    fn decode_digest(value: &str) -> [u8; 32] {
+        assert_eq!(value.len(), 64);
+        let mut output = [0_u8; 32];
+        for (index, pair) in value.as_bytes().chunks_exact(2).enumerate() {
+            output[index] = u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap();
+        }
+        output
+    }
+
     #[test]
     fn build_closure_excludes_dev_only_dependencies() {
         let node = serde_json::json!({
@@ -1462,31 +1512,96 @@ mod tests {
     }
 
     #[test]
-    fn reviewed_workspace_proc_macro_requires_exact_local_identity() {
+    fn reviewed_workspace_host_code_requires_exact_local_or_git_revision_identity() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("cargo-fe2o3 has a workspace crates directory")
             .join("fe2o3-macros");
         let digest = canonical_tree_digest(&root, None).unwrap();
-        let package = serde_json::json!({
+        let local = serde_json::json!({
             "name": "fe2o3-macros",
             "version": "0.1.0",
             "source": Value::Null,
             "manifest_path": root.join("Cargo.toml"),
         });
-        validate_reviewed_fe2o3_macros(&package, &digest).unwrap();
+        validate_reviewed_fe2o3_macros(&local, &digest).unwrap();
+
+        let git = serde_json::json!({
+            "name": "fe2o3-macros",
+            "version": "0.1.0",
+            "source": TRUSTED_FE2O3_EXTERNAL_SOURCE,
+            "links": Value::Null,
+            "manifest_path": format!(
+                "/cargo/git/checkouts/fe2o3/revision/crates/fe2o3-macros/Cargo.toml"
+            ),
+            "targets": [{"kind": ["proc-macro"]}],
+        });
+        let external_macro_digest = decode_digest(TRUSTED_FE2O3_EXTERNAL_MACROS_TREE);
+        validate_host_code_package(&git, &external_macro_digest).unwrap();
+
+        let hip_root = root.parent().unwrap().join("fe2o3-hip-sys");
+        let hip_digest = canonical_tree_digest(&hip_root, None).unwrap();
+        let hip = serde_json::json!({
+            "name": "fe2o3-hip-sys",
+            "version": "0.1.0",
+            "source": git["source"].clone(),
+            "links": "amdhip64",
+            "manifest_path":
+                "/cargo/git/checkouts/fe2o3/revision/crates/fe2o3-hip-sys/Cargo.toml",
+            "targets": [{"kind": ["custom-build"]}],
+        });
+        validate_host_code_package(&hip, &hip_digest).unwrap();
 
         for (field, value) in [
             ("version", Value::String("0.1.1".into())),
             ("source", Value::String(CRATES_IO_SOURCE.into())),
         ] {
-            let mut substituted = package.clone();
+            let mut substituted = local.clone();
             substituted[field] = value;
             assert!(
                 validate_reviewed_fe2o3_macros(&substituted, &digest)
                     .unwrap_err()
                     .contains("unreviewed procedural macro")
             );
+        }
+
+        for source in [
+            "git+https://github.com/harsh-nod/fe2o3.git?rev=06c74c64506f15883d64c5ab2ca476561909181d#ffffffffffffffffffffffffffffffffffffffff",
+            "git+https://example.invalid/fe2o3.git?rev=06c74c64506f15883d64c5ab2ca476561909181d#06c74c64506f15883d64c5ab2ca476561909181d",
+            "git+https://github.com/harsh-nod/fe2o3.git?branch=main#06c74c64506f15883d64c5ab2ca476561909181d",
+            "git+https://github.com/harsh-nod/fe2o3.git?rev=0123456789abcdef0123456789abcdef01234567#0123456789abcdef0123456789abcdef01234567",
+        ] {
+            for (package, package_digest) in [(&git, &external_macro_digest), (&hip, &hip_digest)] {
+                let mut substituted = package.clone();
+                substituted["source"] = Value::String(source.into());
+                assert!(validate_host_code_package(&substituted, package_digest).is_err());
+            }
+        }
+
+        for (package, package_digest) in [(&git, &external_macro_digest), (&hip, &hip_digest)] {
+            let mut missing_source = package.clone();
+            missing_source
+                .as_object_mut()
+                .unwrap()
+                .remove("source")
+                .unwrap();
+            assert!(validate_host_code_package(&missing_source, package_digest).is_err());
+
+            let mut relative_manifest = package.clone();
+            relative_manifest["manifest_path"] = Value::String(format!(
+                "crates/{}/Cargo.toml",
+                package["name"].as_str().unwrap()
+            ));
+            assert!(validate_host_code_package(&relative_manifest, package_digest).is_err());
+
+            let mut wrong_layout = package.clone();
+            wrong_layout["manifest_path"] = Value::String(format!(
+                "/cargo/git/checkouts/fe2o3/revision/{}/Cargo.toml",
+                package["name"].as_str().unwrap()
+            ));
+            assert!(validate_host_code_package(&wrong_layout, package_digest).is_err());
+
+            assert!(validate_host_code_package(package, &[0_u8; 32]).is_err());
         }
     }
 
@@ -1523,6 +1638,10 @@ mod tests {
             let root = crates.join(name);
             assert_eq!(hex(&canonical_tree_digest(&root, None).unwrap()), expected);
         }
+        assert_eq!(
+            TRUSTED_FE2O3_EXTERNAL_MACROS_TREE,
+            TRUSTED_FE2O3_MACROS_TREE
+        );
     }
 
     #[test]

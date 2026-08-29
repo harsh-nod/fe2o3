@@ -50,15 +50,19 @@ for the fixed AMDGPU target through fe2o3, commit the exact device artifact
 generation, and then build or run the same selection for the pinned host target
 with ordinary rustc. Callers do not pass `--target`. Remaining V1/V2/V3 names
 identify frozen records and protocols, not implementations. The target
-architecture has exactly one executable compiler, publication, load, and launch
-route. Temporary qualification implementations are deletion backlog: their
+architecture's default/production surface has exactly one executable compiler,
+publication, load, and launch route. Temporary qualification implementations
+are deletion backlog: their
 useful evidence must move to differential fixtures or offline tools, after
 which their features and code are removed rather than retained as alternate
 in-tree pipelines. Default `cargo-fe2o3` tests now compile the same production
 route as the feature-free binary. The backend is feature-invariant in normal
-builds: the remaining qualification feature can compile only inert unit-test
-fixtures, and neither `cfg(test)` nor an environment variable can select an
-alternate rustc route.
+production builds: the remaining backend qualification feature can compile
+only inert unit-test fixtures, and neither `cfg(test)` nor an environment
+variable can select an alternate rustc route. The explicit
+`fe2o3-core/qualification-unsafe-launch` feature is currently enabled only by
+the checked-in standalone external-HSACO numerical examples; it grants no
+Worker V3 publication, protected execution, or artifact-currentness authority.
 
 The feature-independent extraction driver now enters the same production
 typestate transaction under a real `amdgcn-amd-amdhsa` rustc session. Its
@@ -533,10 +537,12 @@ target lowering, and host execution into explicit ownership boundaries:
   by re-exporting that model and is not yet an `amdgcn.*` Pliron dialect.
 - Host and service boundaries: `fe2o3-core`, `fe2o3-host`,
   `fe2o3-hsa-runtime`, and `fe2o3-hip-sys` own the existing executable runtime.
-  In contrast, `fe2o3-service-host` is an authority-free, `no_std` typestate
-  adapter over `fe2o3-service-model` and `fe2o3-host-api`; it retains storage
-  borrows and checks lifecycle descriptions but allocates, loads, launches,
-  waits for, and executes nothing.
+  `fe2o3-service-host` is a `no_std` typestate adapter over
+  `fe2o3-service-model` and `fe2o3-host-api`; it retains storage borrows and
+  checks lifecycle descriptions. On Linux x86_64 it also owns a generic,
+  addressless composition of checked KFD allocations and one long-lived fixed
+  dispatch queue through linear publish, completion, recycle, detach, rebind,
+  destruction, and release transitions.
 - Pure-Rust runtime foundation: `fe2o3-kfd-uapi`, `fe2o3-kfd`, and
   `fe2o3-runtime-model` provide reviewed KFD 1.18 encodings, fail-closed device
   observation, and Verus-backed lifecycle modeling. They do not yet replace
@@ -602,15 +608,18 @@ Safe ownership of resources used by asynchronous copies is documented in
   production coverage permits their deletion.
 - `fe2o3-core` provides HIP-backed contexts, streams, device buffers, pinned
   host buffers, events, synchronous transfers, and event-backed borrowed and
-  owned asynchronous transfers. It exports no raw module, function, parameter
-  pack, launch configuration, or launch function in any downstream build.
+  owned asynchronous transfers. Its default/production surface exports no raw
+  module, function, parameter pack, launch configuration, or launch function.
 - The current generated application route enters the authenticated Worker V3
   transaction, compiler-generated typed arguments, and reviewed HSA adapter.
   That HSA-backed implementation is migration debt, not the permanent runtime:
   production is converging on the invocation-specific pure-KFD gate in
   `fe2o3-runtime`. The former host `launch!` macro and selectable raw-HIP core
-  feature are deleted; raw HIP module/launch mechanics remain private unit-test
-  implementation details.
+  production feature are deleted; raw HIP module/launch mechanics remain
+  private unit-test implementation details on the default surface. The explicit
+  `qualification-unsafe-launch` feature is currently enabled only by the
+  checked-in standalone external-HSACO numerical examples and grants no Worker
+  V3 publication, protected execution, or artifact-currentness authority.
 - `DeviceCopy` and its derive macro restrict safe byte transfers to supported
   layouts and have compile-pass/compile-fail coverage.
 
@@ -759,8 +768,11 @@ is complete, and the recorded runs grant no current production authority.
   HSA handoff, and Scalar GEMM Worker V2 hardware harness are deleted. The
   reviewed HSA adapter and physical observations remain shared mechanics for
   the production Worker V3 lifecycle. Qualification-only compiler publication
-  records remain as isolated evidence inputs, but there is no Worker V2 or raw
-  HIP host execution authority in any feature configuration.
+  records remain as isolated evidence inputs, but the default/production
+  configuration has no Worker V2 or raw HIP host execution authority. The
+  explicit unsafe qualification feature is currently enabled only by the
+  checked-in standalone external-HSACO numerical examples and provides no
+  Worker V3 publication, protected execution, or currentness authority.
 - Compiler artifact publication is transactional and generation-owned. Typed
   generation results contain bounded immutable IR and HSACO snapshots captured
   through exact staged file descriptors and validated after publication while

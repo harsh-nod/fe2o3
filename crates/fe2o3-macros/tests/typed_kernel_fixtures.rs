@@ -175,6 +175,14 @@ fn generated_worker_v3_adapter_rejects_unsafe_escape_hatches() {
             ],
         ),
         (
+            "mapped_hsa_route_rejected",
+            &[
+                "error[E0277]",
+                "CompilerGeneratedWorkerV3ArgumentsV1",
+                "is not implemented",
+            ],
+        ),
+        (
             "multi_double_launch",
             &["error[E0382]", "use of moved value: `prepared`"],
         ),

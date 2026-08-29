@@ -11,9 +11,11 @@ use fe2o3_artifact_transaction::{
 use fe2o3_build_authority::CompilerClosureV2;
 use fe2o3_compiler_ffi::{
     CodeObjectVersion as CompilerCodeObjectVersion, CompilerFfiEnvelopeIdentityV1,
-    CompilerModuleHandoffV2, CompilerModuleSymbolManifestV1, CompilerModuleSymbolRoleV1,
-    InertFinalCompilerModuleCommitmentV3, InertSemanticCompilerModuleHandoffIdentityV3,
-    InertSemanticCompilerModuleHandoffV3, ProductionGfx950CompilerFfiEnvelopeKindV1,
+    CompilerModuleHandoffV2, CompilerModuleKindV1, CompilerModuleSymbolManifestV1,
+    CompilerModuleSymbolRoleV1, InertFinalCompilerModuleCommitmentV3,
+    InertSemanticCompilerModuleHandoffIdentityV3, InertSemanticCompilerModuleHandoffV3,
+    ProductionGfx942CompilerFfiEnvelopeKindV1, ProductionGfx950CompilerFfiEnvelopeKindV1,
+    inspect_production_gfx942_compiler_ffi_envelope_v1,
     inspect_production_gfx950_compiler_ffi_envelope_v1,
 };
 use fe2o3_hsaco::{
@@ -401,6 +403,8 @@ pub enum WorkerV3HsacoInspectionError {
     KernelDescriptorRoleMismatch,
     CompilerEnvelopeImportRoleMismatch,
     CompilerEnvelopeExportRoleMismatch,
+    StrictV3Gfx942DeviceFfiPolicy,
+    StrictV3Gfx942OcmlProviderClosureMismatch,
     StrictV3Gfx950DeviceFfiPolicy,
     StrictV3Gfx950OcmlProviderClosureUnmeasured,
     StrictV3Gfx950OcmlProviderClosureMismatch,
@@ -467,6 +471,12 @@ impl fmt::Display for WorkerV3HsacoInspectionError {
             ),
             Self::CompilerEnvelopeExportRoleMismatch => formatter.write_str(
                 "retained compiler envelope exports differ from retained manifest roles",
+            ),
+            Self::StrictV3Gfx942DeviceFfiPolicy => formatter.write_str(
+                "strict V3 gfx942 compiler handoff has a noncanonical device-FFI or LLVM import closure",
+            ),
+            Self::StrictV3Gfx942OcmlProviderClosureMismatch => formatter.write_str(
+                "strict V3 gfx942 OCML exp finalization observed a missing, substituted, or non-reproducible measured provider closure",
             ),
             Self::StrictV3Gfx950DeviceFfiPolicy => formatter.write_str(
                 "strict V3 gfx950 compiler handoff has a noncanonical device-FFI or LLVM import closure",
@@ -937,6 +947,7 @@ fn validate_protected_v3_lineage(
             "strict V3 compiler envelope target/code-object version",
         ));
     }
+    let gfx942_ffi = validate_strict_v3_gfx942_device_ffi(nested)?;
     let gfx950_ffi = validate_strict_v3_gfx950_device_ffi(nested)?;
     let directional = nested.envelope().directional_symbols();
     if !nested
@@ -957,6 +968,7 @@ fn validate_protected_v3_lineage(
     let expected_envelope = nested.envelope().identity();
     let bootstrap = source.bootstrap();
     let replay = source.exact_replay();
+    validate_strict_v3_gfx942_provider_exchanges(source, gfx942_ffi, bootstrap, replay)?;
     validate_strict_v3_gfx950_provider_exchanges(source, gfx950_ffi, bootstrap, replay)?;
     for execution in [bootstrap, replay] {
         let response = execution.response();
@@ -1002,6 +1014,162 @@ fn validate_protected_v3_lineage(
         return Err(WorkerV3HsacoInspectionError::LineageMismatch(
             "strict V3 reproducible output bytes",
         ));
+    }
+    Ok(())
+}
+
+fn validate_strict_v3_gfx942_device_ffi(
+    nested: &CompilerModuleHandoffV2,
+) -> Result<ProductionGfx942CompilerFfiEnvelopeKindV1, WorkerV3HsacoInspectionError> {
+    if nested.target().to_string() != PRODUCTION_GFX942_TARGET {
+        return Ok(ProductionGfx942CompilerFfiEnvelopeKindV1::NoDeviceFfi);
+    }
+    let kind = inspect_production_gfx942_compiler_ffi_envelope_v1(nested.envelope())
+        .ok_or(WorkerV3HsacoInspectionError::StrictV3Gfx942DeviceFfiPolicy)?;
+    if nested.kind() != CompilerModuleKindV1::LlvmTextIr {
+        return Err(WorkerV3HsacoInspectionError::StrictV3Gfx942DeviceFfiPolicy);
+    }
+    let llvm = std::str::from_utf8(nested.module_bytes())
+        .map_err(|_| WorkerV3HsacoInspectionError::StrictV3Gfx942DeviceFfiPolicy)?;
+    match kind {
+        ProductionGfx942CompilerFfiEnvelopeKindV1::NoDeviceFfi => {
+            if llvm.contains("@__ocml_") {
+                return Err(WorkerV3HsacoInspectionError::StrictV3Gfx942DeviceFfiPolicy);
+            }
+            Ok(kind)
+        }
+        ProductionGfx942CompilerFfiEnvelopeKindV1::OcmlExpF32 { .. } => {
+            let exact_llvm = llvm.matches("declare float @__ocml_exp_f32(float)").count() == 1
+                && llvm.matches("call float @__ocml_exp_f32(float ").count() >= 1
+                && llvm
+                    .split("@__ocml_")
+                    .skip(1)
+                    .all(|suffix| suffix.starts_with("exp_f32"));
+            if !exact_llvm {
+                return Err(WorkerV3HsacoInspectionError::StrictV3Gfx942DeviceFfiPolicy);
+            }
+            Ok(kind)
+        }
+    }
+}
+
+const GFX942_OCML_PROVIDER_IDENTITY_V1: &str = "gfx942-ocml-v1";
+const GFX942_OCML_PROVIDER_DIAGNOSTIC_V1: &str = "device_library.check=identity status=ok provider=gfx942-ocml-v1 roots=[__ocml_exp_f32] files=4";
+// Reviewed ROCm 7.2.4 gfx942 provider closure. Worker configure-time measurements
+// must match these independent policy pins; self-consistent worker evidence is not authority.
+const GFX942_OCML_PROVIDER_FILES_V1: [(&str, &str); 4] = [
+    (
+        "ocml.bc",
+        "cfe97fe9ee29379f522e5f20ae55aae1cdb96eb41d6aa250ea11c4941c54e019",
+    ),
+    (
+        "oclc_isa_version_942.bc",
+        "580d540cc738c0f9554c8710575bbc9b51ebacdcbc29aa0074ed05d3691dea1d",
+    ),
+    (
+        "oclc_unsafe_math_off.bc",
+        "22c799b9154389f050f8f3368762636b9954a2ea25622199c359366bbd84657f",
+    ),
+    (
+        "oclc_finite_only_off.bc",
+        "f3138eeee65c1d83234260728d124f635f021abb37c495f4ed027dfe92bcb1dd",
+    ),
+];
+
+fn validate_strict_v3_gfx942_provider_exchanges(
+    source: &InertProtectedFirstBuildWorkerV3EvidenceV1,
+    kind: ProductionGfx942CompilerFfiEnvelopeKindV1,
+    bootstrap: &crate::InertProtectedCompilerHandoffExecutionV3,
+    replay: &crate::InertProtectedCompilerHandoffExecutionV3,
+) -> Result<(), WorkerV3HsacoInspectionError> {
+    if source.handoff().module_handoff().target().to_string() != PRODUCTION_GFX942_TARGET {
+        return Ok(());
+    }
+    let bootstrap_exchange = InertDecodedWorkerExchangeV2::decode(
+        source.bootstrap_request_bytes(),
+        bootstrap.response().canonical_bytes(),
+    )
+    .map_err(|_| WorkerV3HsacoInspectionError::StrictV3Gfx942OcmlProviderClosureMismatch)?;
+    let replay_exchange = InertDecodedWorkerExchangeV2::decode(
+        source.exact_replay_request_bytes(),
+        replay.response().canonical_bytes(),
+    )
+    .map_err(|_| WorkerV3HsacoInspectionError::StrictV3Gfx942OcmlProviderClosureMismatch)?;
+
+    for exchange in [&bootstrap_exchange, &replay_exchange] {
+        validate_strict_v3_gfx942_provider_exchange(kind, exchange)?;
+    }
+    if matches!(
+        kind,
+        ProductionGfx942CompilerFfiEnvelopeKindV1::OcmlExpF32 { .. }
+    ) && bootstrap_exchange.response().device_library_provider()
+        != replay_exchange.response().device_library_provider()
+    {
+        return Err(WorkerV3HsacoInspectionError::StrictV3Gfx942OcmlProviderClosureMismatch);
+    }
+    Ok(())
+}
+
+fn validate_strict_v3_gfx942_provider_exchange(
+    kind: ProductionGfx942CompilerFfiEnvelopeKindV1,
+    exchange: &InertDecodedWorkerExchangeV2,
+) -> Result<(), WorkerV3HsacoInspectionError> {
+    let request = exchange.request();
+    if !request.external_providers().is_empty()
+        || request.target().to_string() != PRODUCTION_GFX942_TARGET
+        || request.code_object_version() != CodeObjectVersion::V6
+    {
+        return Err(WorkerV3HsacoInspectionError::StrictV3Gfx942OcmlProviderClosureMismatch);
+    }
+    match kind {
+        ProductionGfx942CompilerFfiEnvelopeKindV1::NoDeviceFfi => {
+            if !request.import_symbols().is_empty()
+                || exchange.response().device_library_provider().is_some()
+            {
+                return Err(
+                    WorkerV3HsacoInspectionError::StrictV3Gfx942OcmlProviderClosureMismatch,
+                );
+            }
+        }
+        ProductionGfx942CompilerFfiEnvelopeKindV1::OcmlExpF32 { .. } => {
+            if request.import_symbols() != ["__ocml_exp_f32"]
+                || !exchange
+                    .response()
+                    .diagnostics()
+                    .iter()
+                    .any(|value| value == GFX942_OCML_PROVIDER_DIAGNOSTIC_V1)
+            {
+                return Err(
+                    WorkerV3HsacoInspectionError::StrictV3Gfx942OcmlProviderClosureMismatch,
+                );
+            }
+            validate_gfx942_ocml_provider_evidence(
+                exchange.response().device_library_provider().ok_or(
+                    WorkerV3HsacoInspectionError::StrictV3Gfx942OcmlProviderClosureMismatch,
+                )?,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_gfx942_ocml_provider_evidence(
+    evidence: &crate::WorkerDeviceLibraryProviderEvidenceV1,
+) -> Result<(), WorkerV3HsacoInspectionError> {
+    if evidence.provider_identity() != GFX942_OCML_PROVIDER_IDENTITY_V1
+        || evidence.target().to_string() != PRODUCTION_GFX942_TARGET
+        || evidence.code_object_version() != CodeObjectVersion::V6
+        || evidence.import_symbols() != ["__ocml_exp_f32"]
+        || evidence.files().len() != GFX942_OCML_PROVIDER_FILES_V1.len()
+    {
+        return Err(WorkerV3HsacoInspectionError::StrictV3Gfx942OcmlProviderClosureMismatch);
+    }
+    for (actual, (basename, sha256)) in evidence.files().iter().zip(GFX942_OCML_PROVIDER_FILES_V1) {
+        if actual.basename() != basename
+            || decode_sha256_hex(sha256).as_ref() != Some(actual.sha256())
+        {
+            return Err(WorkerV3HsacoInspectionError::StrictV3Gfx942OcmlProviderClosureMismatch);
+        }
     }
     Ok(())
 }
@@ -1707,6 +1875,7 @@ mod exact_production_target_tests {
     };
     use fe2o3_compiler_ffi::{
         CompilerFfiEnvelopeV1, CompilerModuleKindV1, CompilerModuleSymbolRoleV1,
+        construct_production_gfx942_ocml_exp_envelope_v1,
         construct_production_gfx950_ocml_exp_envelope_v1,
     };
 
@@ -1733,12 +1902,14 @@ mod exact_production_target_tests {
         }
     }
 
-    fn gfx950_handoff(
+    fn production_handoff(
+        target: &str,
+        kind: CompilerModuleKindV1,
         envelope: CompilerFfiEnvelopeV1,
         llvm: &[u8],
         import: bool,
     ) -> CompilerModuleHandoffV2 {
-        let target = DeviceTargetV1::parse(PRODUCTION_GFX950_TARGET).unwrap();
+        let target = DeviceTargetV1::parse(target).unwrap();
         let mut symbols = vec![
             (CompilerModuleSymbolRoleV1::KernelEntry, "kernel"),
             (CompilerModuleSymbolRoleV1::KernelDescriptor, "kernel.kd"),
@@ -1750,7 +1921,7 @@ mod exact_production_target_tests {
             ));
         }
         CompilerModuleHandoffV2::new(
-            CompilerModuleKindV1::LlvmTextIr,
+            kind,
             target,
             CompilerCodeObjectVersion::V6,
             envelope,
@@ -1758,6 +1929,320 @@ mod exact_production_target_tests {
             llvm,
         )
         .unwrap()
+    }
+
+    fn gfx942_handoff(
+        envelope: CompilerFfiEnvelopeV1,
+        llvm: &[u8],
+        import: bool,
+    ) -> CompilerModuleHandoffV2 {
+        production_handoff(
+            PRODUCTION_GFX942_TARGET,
+            CompilerModuleKindV1::LlvmTextIr,
+            envelope,
+            llvm,
+            import,
+        )
+    }
+
+    fn gfx950_handoff(
+        envelope: CompilerFfiEnvelopeV1,
+        llvm: &[u8],
+        import: bool,
+    ) -> CompilerModuleHandoffV2 {
+        production_handoff(
+            PRODUCTION_GFX950_TARGET,
+            CompilerModuleKindV1::LlvmTextIr,
+            envelope,
+            llvm,
+            import,
+        )
+    }
+
+    #[test]
+    fn strict_v3_gfx942_no_ffi_and_ocml_shapes_are_exact() {
+        let target = DeviceTargetV1::parse(PRODUCTION_GFX942_TARGET).unwrap();
+        let no_ffi = CompilerFfiEnvelopeV1::for_module_without_device_ffi(
+            target,
+            CompilerCodeObjectVersion::V6,
+        )
+        .unwrap();
+        let no_ffi_handoff = gfx942_handoff(
+            no_ffi,
+            b"target triple = \"amdgcn-amd-amdhsa\"\ndefine amdgpu_kernel void @kernel() { ret void }\n",
+            false,
+        );
+        assert_eq!(
+            validate_strict_v3_gfx942_device_ffi(&no_ffi_handoff),
+            Ok(ProductionGfx942CompilerFfiEnvelopeKindV1::NoDeviceFfi)
+        );
+
+        let envelope = construct_production_gfx942_ocml_exp_envelope_v1([0x37; 32]).unwrap();
+        let exp_handoff = gfx942_handoff(
+            envelope,
+            b"target triple = \"amdgcn-amd-amdhsa\"\n\
+              declare float @__ocml_exp_f32(float)\n\
+              define amdgpu_kernel void @kernel() {\n\
+                %value = call float @__ocml_exp_f32(float 0.000000e+00)\n\
+                ret void\n\
+              }\n",
+            true,
+        );
+        assert!(matches!(
+            validate_strict_v3_gfx942_device_ffi(&exp_handoff),
+            Ok(ProductionGfx942CompilerFfiEnvelopeKindV1::OcmlExpF32 { .. })
+        ));
+    }
+
+    #[test]
+    fn strict_v3_gfx942_rejects_bitcode_for_every_ffi_shape() {
+        let target = DeviceTargetV1::parse(PRODUCTION_GFX942_TARGET).unwrap();
+        let no_ffi = CompilerFfiEnvelopeV1::for_module_without_device_ffi(
+            target,
+            CompilerCodeObjectVersion::V6,
+        )
+        .unwrap();
+        let no_ffi_bitcode = production_handoff(
+            PRODUCTION_GFX942_TARGET,
+            CompilerModuleKindV1::LlvmBitcode,
+            no_ffi,
+            b"bitcode-no-ffi",
+            false,
+        );
+        assert_eq!(
+            validate_strict_v3_gfx942_device_ffi(&no_ffi_bitcode),
+            Err(WorkerV3HsacoInspectionError::StrictV3Gfx942DeviceFfiPolicy)
+        );
+
+        let exp = construct_production_gfx942_ocml_exp_envelope_v1([0x37; 32]).unwrap();
+        let exp_bitcode = production_handoff(
+            PRODUCTION_GFX942_TARGET,
+            CompilerModuleKindV1::LlvmBitcode,
+            exp,
+            b"bitcode-exp",
+            true,
+        );
+        assert_eq!(
+            validate_strict_v3_gfx942_device_ffi(&exp_bitcode),
+            Err(WorkerV3HsacoInspectionError::StrictV3Gfx942DeviceFfiPolicy)
+        );
+    }
+
+    #[test]
+    fn strict_v3_gfx942_rejects_hidden_or_substituted_ocml_llvm() {
+        let target = DeviceTargetV1::parse(PRODUCTION_GFX942_TARGET).unwrap();
+        let no_ffi = CompilerFfiEnvelopeV1::for_module_without_device_ffi(
+            target,
+            CompilerCodeObjectVersion::V6,
+        )
+        .unwrap();
+        let hidden = gfx942_handoff(
+            no_ffi,
+            b"target triple = \"amdgcn-amd-amdhsa\"\ndeclare float @__ocml_exp_f32(float)\ndefine amdgpu_kernel void @kernel() { ret void }\n",
+            false,
+        );
+        assert_eq!(
+            validate_strict_v3_gfx942_device_ffi(&hidden),
+            Err(WorkerV3HsacoInspectionError::StrictV3Gfx942DeviceFfiPolicy)
+        );
+
+        let envelope = construct_production_gfx942_ocml_exp_envelope_v1([0x37; 32]).unwrap();
+        let missing_call = gfx942_handoff(
+            envelope,
+            b"target triple = \"amdgcn-amd-amdhsa\"\ndeclare float @__ocml_exp_f32(float)\ndefine amdgpu_kernel void @kernel() { ret void }\n",
+            true,
+        );
+        assert_eq!(
+            validate_strict_v3_gfx942_device_ffi(&missing_call),
+            Err(WorkerV3HsacoInspectionError::StrictV3Gfx942DeviceFfiPolicy)
+        );
+    }
+
+    fn push_test_u32(output: &mut Vec<u8>, value: usize) {
+        output.extend_from_slice(&u32::try_from(value).unwrap().to_le_bytes());
+    }
+
+    #[derive(Clone, Copy)]
+    struct Gfx942ProviderFixtureV1 {
+        provider_identity: &'static str,
+        provider_target: &'static str,
+        provider_cov: u8,
+        provider_import: &'static str,
+        diagnostic: &'static str,
+        basenames: [&'static str; 4],
+        file_digests: [[u8; 32]; 4],
+    }
+
+    impl Gfx942ProviderFixtureV1 {
+        fn exact() -> Self {
+            Self {
+                provider_identity: GFX942_OCML_PROVIDER_IDENTITY_V1,
+                provider_target: PRODUCTION_GFX942_TARGET,
+                provider_cov: 6,
+                provider_import: "__ocml_exp_f32",
+                diagnostic: GFX942_OCML_PROVIDER_DIAGNOSTIC_V1,
+                basenames: [
+                    GFX942_OCML_PROVIDER_FILES_V1[0].0,
+                    GFX942_OCML_PROVIDER_FILES_V1[1].0,
+                    GFX942_OCML_PROVIDER_FILES_V1[2].0,
+                    GFX942_OCML_PROVIDER_FILES_V1[3].0,
+                ],
+                file_digests: [
+                    decode_sha256_hex(GFX942_OCML_PROVIDER_FILES_V1[0].1).unwrap(),
+                    decode_sha256_hex(GFX942_OCML_PROVIDER_FILES_V1[1].1).unwrap(),
+                    decode_sha256_hex(GFX942_OCML_PROVIDER_FILES_V1[2].1).unwrap(),
+                    decode_sha256_hex(GFX942_OCML_PROVIDER_FILES_V1[3].1).unwrap(),
+                ],
+            }
+        }
+    }
+
+    fn gfx942_provider_body(fixture: Gfx942ProviderFixtureV1) -> Vec<u8> {
+        let mut provider = Vec::new();
+        for value in [fixture.provider_identity, fixture.provider_target] {
+            push_test_u32(&mut provider, value.len());
+            provider.extend_from_slice(value.as_bytes());
+        }
+        provider.push(fixture.provider_cov);
+        push_test_u32(&mut provider, 1);
+        push_test_u32(&mut provider, fixture.provider_import.len());
+        provider.extend_from_slice(fixture.provider_import.as_bytes());
+        push_test_u32(&mut provider, fixture.basenames.len());
+        for (basename, digest) in fixture.basenames.into_iter().zip(fixture.file_digests) {
+            push_test_u32(&mut provider, basename.len());
+            provider.extend_from_slice(basename.as_bytes());
+            provider.extend_from_slice(&digest);
+        }
+        let mut hasher = Sha256::new();
+        hasher.update(b"FE2O3/DEVICE-LIBRARY-PROVIDER-MANIFEST/V1\0");
+        hasher.update((provider.len() as u64).to_le_bytes());
+        hasher.update(&provider);
+        provider.extend_from_slice(&hasher.finalize());
+        provider
+    }
+
+    fn gfx942_provider_exchange(
+        fixture: Gfx942ProviderFixtureV1,
+    ) -> Result<InertDecodedWorkerExchangeV2, crate::WorkerProtocolError> {
+        let request = WorkerRequestV2::from_sealed_parts(SealedWorkerRequestV2Parts {
+            request_id: [0x41; 32],
+            llvm_build_identity: "llvm-gfx942-test".to_owned(),
+            worker_build_identity: "worker-gfx942-test".to_owned(),
+            worker_executable: ContentIdentityV1::from_parts([0x42; 32], 4096),
+            target: DeviceTargetV1::parse(PRODUCTION_GFX942_TARGET).unwrap(),
+            code_object_version: CodeObjectVersion::V6,
+            options: WorkerOptionsV1::new(WorkerOptimizationLevelV1::O2, true, true),
+            compiler_envelope: WorkerCompilerFfiEnvelopeIdentityV2::from_test_bytes([0x43; 32]),
+            compiler_module: WorkerInputV1::new(
+                WorkerInputKindV1::LlvmTextIr,
+                b"compiler module".to_vec(),
+            )
+            .unwrap(),
+            external_providers: Vec::new(),
+            import_symbols: vec!["__ocml_exp_f32".to_owned()],
+            export_symbols: vec!["kernel".to_owned()],
+            final_symbols: vec!["__ocml_exp_f32".to_owned(), "kernel".to_owned()],
+            output: WorkerOutputConstraintsV1::new(4096).unwrap(),
+        })
+        .unwrap();
+        let mut diagnostics_body = Vec::new();
+        push_test_u32(&mut diagnostics_body, 1);
+        push_test_u32(&mut diagnostics_body, fixture.diagnostic.len());
+        diagnostics_body.extend_from_slice(fixture.diagnostic.as_bytes());
+        let provider_body = gfx942_provider_body(fixture);
+        let response = reconstruct_complete_worker_response_v2(
+            &request,
+            b"inert hsaco",
+            WorkerResponseReplayMetadataV1::from_test_bodies(
+                &diagnostics_body,
+                Some(&provider_body),
+            ),
+        )?;
+        InertDecodedWorkerExchangeV2::decode(request.canonical_bytes(), response.canonical_bytes())
+    }
+
+    #[test]
+    fn strict_v3_gfx942_requires_the_ordered_authorized_provider_files() {
+        let kind = ProductionGfx942CompilerFfiEnvelopeKindV1::OcmlExpF32 {
+            canonical_kernel_ir_identity: [0x37; 32],
+        };
+        let exact = gfx942_provider_exchange(Gfx942ProviderFixtureV1::exact()).unwrap();
+        assert_eq!(
+            validate_strict_v3_gfx942_provider_exchange(kind, &exact),
+            Ok(())
+        );
+
+        let zero_digest = gfx942_provider_exchange(Gfx942ProviderFixtureV1 {
+            file_digests: [[0x51; 32], [0; 32], [0x53; 32], [0x54; 32]],
+            ..Gfx942ProviderFixtureV1::exact()
+        })
+        .unwrap();
+        assert_eq!(
+            validate_strict_v3_gfx942_provider_exchange(kind, &zero_digest),
+            Err(WorkerV3HsacoInspectionError::StrictV3Gfx942OcmlProviderClosureMismatch)
+        );
+
+        let mut substituted_digests = Gfx942ProviderFixtureV1::exact().file_digests;
+        substituted_digests[0] = [0x51; 32];
+        let substituted_digest = gfx942_provider_exchange(Gfx942ProviderFixtureV1 {
+            file_digests: substituted_digests,
+            ..Gfx942ProviderFixtureV1::exact()
+        })
+        .unwrap();
+        assert_eq!(
+            validate_strict_v3_gfx942_provider_exchange(kind, &substituted_digest),
+            Err(WorkerV3HsacoInspectionError::StrictV3Gfx942OcmlProviderClosureMismatch)
+        );
+
+        let reordered = gfx942_provider_exchange(Gfx942ProviderFixtureV1 {
+            basenames: [
+                "ocml.bc",
+                "oclc_unsafe_math_off.bc",
+                "oclc_isa_version_942.bc",
+                "oclc_finite_only_off.bc",
+            ],
+            file_digests: [[0x51; 32], [0x53; 32], [0x52; 32], [0x54; 32]],
+            ..Gfx942ProviderFixtureV1::exact()
+        })
+        .unwrap();
+        assert_eq!(
+            validate_strict_v3_gfx942_provider_exchange(kind, &reordered),
+            Err(WorkerV3HsacoInspectionError::StrictV3Gfx942OcmlProviderClosureMismatch)
+        );
+
+        for substituted in [
+            Gfx942ProviderFixtureV1 {
+                provider_identity: "gfx942-ocml-substituted-v1",
+                ..Gfx942ProviderFixtureV1::exact()
+            },
+            Gfx942ProviderFixtureV1 {
+                diagnostic: "device_library.check=identity status=ok provider=gfx942-ocml-v1 roots=[__ocml_sin_f32] files=4",
+                ..Gfx942ProviderFixtureV1::exact()
+            },
+        ] {
+            let exchange = gfx942_provider_exchange(substituted).unwrap();
+            assert_eq!(
+                validate_strict_v3_gfx942_provider_exchange(kind, &exchange),
+                Err(WorkerV3HsacoInspectionError::StrictV3Gfx942OcmlProviderClosureMismatch)
+            );
+        }
+
+        for protocol_mismatch in [
+            Gfx942ProviderFixtureV1 {
+                provider_target: PRODUCTION_GFX950_TARGET,
+                ..Gfx942ProviderFixtureV1::exact()
+            },
+            Gfx942ProviderFixtureV1 {
+                provider_cov: 5,
+                ..Gfx942ProviderFixtureV1::exact()
+            },
+            Gfx942ProviderFixtureV1 {
+                provider_import: "__ocml_sin_f32",
+                ..Gfx942ProviderFixtureV1::exact()
+            },
+        ] {
+            assert!(gfx942_provider_exchange(protocol_mismatch).is_err());
+        }
     }
 
     #[test]

@@ -1,5 +1,7 @@
 use std::ffi::OsString;
 
+const PRODUCTION_DEVICE_BUILD_STD_V1: &str = "-Zbuild-std=core";
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CargoPhase {
     command: &'static str,
@@ -40,6 +42,7 @@ impl ProductionCargoPlan {
         }
         validate_target(host_target, "host rustc target")?;
         crate::reject_caller_target(args)?;
+        reject_caller_build_std(args)?;
 
         let separator = args.iter().position(|argument| argument == "--");
         if command == "build" && separator.is_some() {
@@ -48,6 +51,7 @@ impl ProductionCargoPlan {
         let cargo_args_end = separator.unwrap_or(args.len());
 
         let mut device_args = args[..cargo_args_end].to_vec();
+        device_args.push(OsString::from(PRODUCTION_DEVICE_BUILD_STD_V1));
         append_target(
             &mut device_args,
             fe2o3_amd_target::PRODUCTION_GFX942_RUSTC_TARGET_V1,
@@ -81,6 +85,38 @@ impl ProductionCargoPlan {
     pub(crate) fn host_mut(&mut self) -> &mut CargoPhase {
         &mut self.host
     }
+}
+
+fn reject_caller_build_std(args: &[OsString]) -> Result<(), String> {
+    let mut index = 0;
+    while index < args.len() {
+        let argument = &args[index];
+        if argument == "--" {
+            return Ok(());
+        }
+        if argument == "-Z" {
+            let value = args
+                .get(index + 1)
+                .ok_or_else(|| "Cargo -Z requires an argument".to_owned())?;
+            if value == "build-std" || crate::os_bytes(value).starts_with(b"build-std=") {
+                return Err(
+                    "cargo fe2o3 owns the production device build-std selection; remove caller -Zbuild-std"
+                        .to_owned(),
+                );
+            }
+            index += 1;
+        } else {
+            let bytes = crate::os_bytes(argument);
+            if bytes == b"-Zbuild-std" || bytes.starts_with(b"-Zbuild-std=") {
+                return Err(
+                    "cargo fe2o3 owns the production device build-std selection; remove caller -Zbuild-std"
+                        .to_owned(),
+                );
+            }
+        }
+        index += 1;
+    }
+    Ok(())
 }
 
 fn validate_target(target: &str, label: &str) -> Result<(), String> {
@@ -153,6 +189,7 @@ mod tests {
                 "--package",
                 "kernel",
                 "--release",
+                "-Zbuild-std=core",
                 "--target",
                 "amdgcn-amd-amdhsa",
             ])
@@ -186,6 +223,7 @@ mod tests {
             strings(&[
                 "--bin",
                 "app",
+                "-Zbuild-std=core",
                 "--target",
                 "amdgcn-amd-amdhsa",
                 "--offline",
@@ -226,6 +264,15 @@ mod tests {
             )
             .is_err()
         );
+        for args in [
+            strings(&["-Zbuild-std=std"]),
+            strings(&["-Z", "build-std=core,alloc"]),
+        ] {
+            assert!(
+                ProductionCargoPlan::new("build", &args, "x86_64-unknown-linux-gnu", false,)
+                    .is_err()
+            );
+        }
     }
 
     #[cfg(unix)]

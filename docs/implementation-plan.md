@@ -171,7 +171,11 @@ authority. The backend fixture is not Rust user source.
 - `reserved-fe2o3-symbols`: shared reserved symbol namespace.
 - `fe2o3-device`: no-std device API and intrinsic stubs.
 - `fe2o3-core`: HIP-backed context, stream, memory, event, and capability
-  runtime; raw module and launch mechanics are private to crate unit tests.
+  runtime; the default/production surface keeps raw module and launch mechanics
+  private. The explicit `qualification-unsafe-launch` feature is currently
+  enabled only by the checked-in standalone external-HSACO numerical examples
+  and grants no Worker V3 publication, protected execution, or
+  artifact-currentness authority.
 - `fe2o3-host`: generated Worker V3 arguments, verification admission, reviewed
   HSA load/dispatch, and no alternate launch graph.
 - `fe2o3-mir-model`: canonical Pliron-independent MIR semantics and
@@ -194,8 +198,11 @@ authority. The backend fixture is not Rust user source.
 - `fe2o3-proof-contracts`: solver-neutral proof statement/evidence contracts.
 - `fe2o3-host-api`: inert target-neutral host-operation contracts.
 - `fe2o3-service-model`: executable-free persistent-service semantics.
-- `fe2o3-service-host`: authority-free service lifecycle typestates; no service
-  execution.
+- `fe2o3-service-host`: service lifecycle typestates plus a Linux x86_64
+  addressless allocation and fixed-batch KFD queue composition layer. The
+  runtime path retains linear publish, completion, recycle, detach, rebind, and
+  explicit release custody without claiming executable effects or output
+  content.
 
 ## Device ABI
 
@@ -472,8 +479,11 @@ Status: the historical direct-HIP application route has been removed.
   one production compiler pipeline.
 - Elementwise example binaries retain their kernel sources but fail closed at
   the unwired Worker V3 application-verifier boundary.
-- No feature can restore raw module loading, ABI packing, or direct HIP launch
-  from an application package.
+- The default/production feature set cannot restore raw module loading, ABI
+  packing, or direct HIP launch from an application package. The explicit
+  `qualification-unsafe-launch` feature is currently enabled only by the
+  checked-in standalone external-HSACO numerical examples and grants no Worker
+  V3 publication, protected execution, or artifact-currentness authority.
 - The old `gfx1201` raw-launch result remains historical evidence only.
 
 Remaining work:

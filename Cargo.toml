@@ -77,7 +77,7 @@ fe2o3-compiler-lineage = { path = "crates/fe2o3-compiler-lineage" }
 fe2o3-artifacts = { path = "crates/fe2o3-artifacts" }
 fe2o3-contracts = { path = "crates/fe2o3-contracts" }
 fe2o3-core = { path = "crates/fe2o3-core" }
-fe2o3-device = { path = "crates/fe2o3-device" }
+fe2o3-device = { path = "crates/fe2o3-device", version = "=0.1.0" }
 fe2o3-debug-protocol = { path = "crates/fe2o3-debug-protocol" }
 fe2o3-differential = { path = "crates/fe2o3-differential" }
 fe2o3-drm-uapi = { path = "crates/fe2o3-drm-uapi" }

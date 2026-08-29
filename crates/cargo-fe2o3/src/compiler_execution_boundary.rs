@@ -1,7 +1,7 @@
 use std::error::Error;
 use std::fmt;
 use std::process::Command;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use fe2o3_compiler_closure_capability::{
     CompilerExecutionClientProfileCapabilityV1, CompilerExecutionPolicyCapabilityV1,
@@ -17,9 +17,8 @@ use fe2o3_compiler_execution_protocol::{
     CompilerExecutionServiceReadyV1,
 };
 
-const CHILD_CHANNEL_TIMEOUT: Duration = Duration::from_secs(30);
-const SUPERVISOR_HANDOFF_TIMEOUT: Duration = MAX_COMPILER_EXECUTION_SUPERVISOR_HANDOFF_TIMEOUT_V1;
-const SUPERVISOR_READINESS_TIMEOUT: Duration = MAX_COMPILER_EXECUTION_SUPERVISOR_HANDOFF_TIMEOUT_V1;
+const COMPILER_EXECUTION_BOUNDARY_TIMEOUT: Duration =
+    MAX_COMPILER_EXECUTION_SUPERVISOR_HANDOFF_TIMEOUT_V1;
 
 /// One prepared, single-use path from the selected child to the fixed supervisor.
 pub(crate) struct PreparedCompilerExecutionBoundaryV1 {
@@ -96,8 +95,11 @@ impl PreparedCompilerExecutionBoundaryV1 {
             policy,
             child_channel,
         } = self;
+        let deadline = Instant::now()
+            .checked_add(COMPILER_EXECUTION_BOUNDARY_TIMEOUT)
+            .ok_or(CompilerExecutionBoundaryErrorV1::DeadlineOverflow)?;
         let launch = child_channel
-            .finish(child_pid, CHILD_CHANNEL_TIMEOUT)
+            .finish_until(child_pid, deadline)
             .map_err(CompilerExecutionBoundaryErrorV1::ChildChannel)?;
         let supervisor = CompilerExecutionSupervisorCredentialsV1::new(
             profile.profile().supervisor_uid(),
@@ -105,11 +107,11 @@ impl PreparedCompilerExecutionBoundaryV1 {
         )
         .map_err(CompilerExecutionBoundaryErrorV1::SupervisorCredentials)?;
         let pending = launch
-            .transfer_to_supervisor(profile.profile(), SUPERVISOR_HANDOFF_TIMEOUT)
+            .transfer_to_supervisor_until(profile.profile(), deadline)
             .map_err(CompilerExecutionBoundaryErrorV1::SupervisorTransfer)?;
         let manifest = pending.manifest().clone();
         let readiness = pending
-            .await_readiness(profile.profile(), SUPERVISOR_READINESS_TIMEOUT)
+            .await_readiness_until(profile.profile(), deadline)
             .map_err(CompilerExecutionBoundaryErrorV1::SupervisorReadiness)?;
 
         ParentCompilerExecutionReadinessCustodyV1::admit(
@@ -316,6 +318,7 @@ pub(crate) fn validate_compiler_execution_receipt_carriage(
 
 #[derive(Debug)]
 pub(crate) enum CompilerExecutionBoundaryErrorV1 {
+    DeadlineOverflow,
     Profile(String),
     Policy(String),
     ChildChannel(CompilerExecutionChildChannelErrorV1),
@@ -329,6 +332,7 @@ pub(crate) enum CompilerExecutionBoundaryErrorV1 {
 impl CompilerExecutionBoundaryErrorV1 {
     pub(crate) const fn stage(&self) -> &'static str {
         match self {
+            Self::DeadlineOverflow => "compiler-execution boundary deadline",
             Self::Profile(_) => "client-profile retention",
             Self::Policy(_) => "issuer-policy installation",
             Self::ChildChannel(_) => "selected child-channel admission",
@@ -345,6 +349,7 @@ impl fmt::Display for CompilerExecutionBoundaryErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(formatter, "{} failed: ", self.stage())?;
         match self {
+            Self::DeadlineOverflow => formatter.write_str("monotonic deadline overflowed"),
             Self::Profile(error) | Self::Policy(error) | Self::Evidence(error) => {
                 formatter.write_str(error)
             }
@@ -360,6 +365,7 @@ impl fmt::Display for CompilerExecutionBoundaryErrorV1 {
 impl Error for CompilerExecutionBoundaryErrorV1 {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
+            Self::DeadlineOverflow => None,
             Self::ChildChannel(error) => Some(error),
             Self::SupervisorCredentials(error)
             | Self::SupervisorTransfer(error)

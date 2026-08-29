@@ -12,7 +12,7 @@ use std::{error::Error, fmt};
 use fe2o3_kernel_ir::{
     AccessMode, AddressSpace, AmdGpuDiagnosticOperation, Atomic, AtomicKind, Axis,
     BarrierSemantics, BasicBlock, BinaryOp, BlockId, CastKind, CheckedBinaryOperator,
-    ComparePredicate, Constant, Convergence, F32MathFunction, FloatOperation,
+    ComparePredicate, Constant, Convergence, F32MathFunction, FloatConversionKind, FloatOperation,
     FormalMemoryIncompleteReason, Function, FunctionBody, FunctionId, FunctionOperationLocation,
     Gfx950LdsTransposeFormatV1, Gfx950LdsTransposeOperationKindV1, Gfx950LdsTransposeOperationV1,
     IndexKind, IntrinsicKind, IntrinsicOperation, Kernel, LaunchDomain, LaunchExtent,
@@ -30,21 +30,21 @@ use fe2o3_mir_model::semantic_mir_v1::{
     SemanticAbiPassModeV1, SemanticAbiPointeeKindV1, SemanticAggregateKindV1,
     SemanticAssertMessageV1, SemanticAtomicOrderingV1, SemanticAtomicRmwOpV1, SemanticAtomicRmwV1,
     SemanticAtomicScopeV1, SemanticAxisV1, SemanticBackendPrimitiveV1, SemanticBackendReprV1,
-    SemanticBinaryOpV1, SemanticBlockIdV1, SemanticCallableDeclV1, SemanticCastKindV1,
-    SemanticCheckedBinaryOpV1, SemanticCompilerIntrinsicOperationV1, SemanticConstantValueV1,
-    SemanticDirectCallV1, SemanticDisjointIndexSpaceV1, SemanticEnumEncodingV1,
-    SemanticEnumVariantV1, SemanticF32MathFunctionV1, SemanticFieldsShapeV1,
-    SemanticFunctionDeclV1, SemanticFunctionIdV1, SemanticGfx950LdsTransposeFormatV1,
-    SemanticLocalIdV1, SemanticLocalRoleV1, SemanticMfmaAccumulatorContractV1,
-    SemanticMfmaOperandContractV1, SemanticMfmaOperandRoleV1, SemanticMfmaProfileV1,
-    SemanticMfmaRegisterDistributionV1, SemanticMfmaStorageLayoutV1, SemanticMutabilityV1,
-    SemanticOperandV1, SemanticPlaceV1, SemanticPointerKindV1, SemanticPointerMetadataV1,
-    SemanticProjectionKindV1, SemanticRustcVariantsV1, SemanticRvalueKindV1, SemanticScalarTypeV1,
-    SemanticScalarValueV1, SemanticSourceArgumentOwnershipV1, SemanticStatementKindV1,
-    SemanticSubgroupReductionKindV1, SemanticTerminatorKindV1, SemanticTypeDeclV1,
-    SemanticTypeIdV1, SemanticTypeLayoutDetailsV1, SemanticTypeShapeV1, SemanticUnaryOpV1,
-    SemanticUncheckedBinaryOpV1, SemanticUnwindActionV1, SemanticVolatilityV1,
-    SemanticWorkgroupPipelineEventV1, semantic_direct_enum_variant_v1,
+    SemanticBf16ConversionKindV1, SemanticBinaryOpV1, SemanticBlockIdV1, SemanticCallableDeclV1,
+    SemanticCastKindV1, SemanticCheckedBinaryOpV1, SemanticCompilerIntrinsicOperationV1,
+    SemanticConstantValueV1, SemanticDirectCallV1, SemanticDisjointIndexSpaceV1,
+    SemanticEnumEncodingV1, SemanticEnumVariantV1, SemanticF32MathFunctionV1,
+    SemanticFieldsShapeV1, SemanticFunctionDeclV1, SemanticFunctionIdV1,
+    SemanticGfx950LdsTransposeFormatV1, SemanticLocalIdV1, SemanticLocalRoleV1,
+    SemanticMfmaAccumulatorContractV1, SemanticMfmaOperandContractV1, SemanticMfmaOperandRoleV1,
+    SemanticMfmaProfileV1, SemanticMfmaRegisterDistributionV1, SemanticMfmaStorageLayoutV1,
+    SemanticMutabilityV1, SemanticOperandV1, SemanticPlaceV1, SemanticPointerKindV1,
+    SemanticPointerMetadataV1, SemanticProjectionKindV1, SemanticRustcVariantsV1,
+    SemanticRvalueKindV1, SemanticScalarTypeV1, SemanticScalarValueV1,
+    SemanticSourceArgumentOwnershipV1, SemanticStatementKindV1, SemanticSubgroupReductionKindV1,
+    SemanticTerminatorKindV1, SemanticTypeDeclV1, SemanticTypeIdV1, SemanticTypeLayoutDetailsV1,
+    SemanticTypeShapeV1, SemanticUnaryOpV1, SemanticUncheckedBinaryOpV1, SemanticUnwindActionV1,
+    SemanticVolatilityV1, SemanticWorkgroupPipelineEventV1, semantic_direct_enum_variant_v1,
     semantic_scalar_enum_variant_v1,
 };
 use fe2o3_mir_model::{
@@ -10741,6 +10741,142 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     },
                 )?
             }
+            SemanticCompilerIntrinsicOperationV1::Bf16Conversion {
+                kind,
+                input,
+                output,
+            } => {
+                self.require_call_argument_count(block, call, 1)?;
+                if semantic_operand_type(&call.arguments()[0]) != *input
+                    || destination.place().ty() != *output
+                {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        None,
+                        "BF16 conversion semantic input or output type changed",
+                    ));
+                }
+                let argument = self.lower_operand(block, None, &call.arguments()[0], operations)?;
+                match kind {
+                    SemanticBf16ConversionKindV1::FromBits => {
+                        let (bits, ty) = argument
+                            .value()
+                            .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
+                        if ty != Type::Scalar(ScalarType::U16) {
+                            return Err(unsupported(
+                                0,
+                                Some(block.index()),
+                                None,
+                                "BF16 from_bits input is not u16",
+                            ));
+                        }
+                        binding_from_value_defs(self.types, *output, &[ValueDef::new(bits, ty)])?
+                    }
+                    SemanticBf16ConversionKindV1::ToBits => {
+                        let values = argument
+                            .values()
+                            .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
+                        let [(bits, ty)] = values.as_slice() else {
+                            return Err(unsupported(
+                                0,
+                                Some(block.index()),
+                                None,
+                                "BF16 to_bits storage is not one scalar",
+                            ));
+                        };
+                        if *ty != Type::Scalar(ScalarType::U16) {
+                            return Err(unsupported(
+                                0,
+                                Some(block.index()),
+                                None,
+                                "BF16 to_bits storage is not u16",
+                            ));
+                        }
+                        binding_from_value_defs(
+                            self.types,
+                            *output,
+                            &[ValueDef::new(*bits, ty.clone())],
+                        )?
+                    }
+                    SemanticBf16ConversionKindV1::FromF32RoundTiesEven => {
+                        let (value, ty) = argument
+                            .value()
+                            .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
+                        if ty != Type::Scalar(ScalarType::F32) {
+                            return Err(unsupported(
+                                0,
+                                Some(block.index()),
+                                None,
+                                "BF16 from_f32 input is not f32",
+                            ));
+                        }
+                        let (narrowed, narrowed_ty) = self
+                            .emit_float_operation(
+                                operations,
+                                FloatOperation::Convert {
+                                    kind: FloatConversionKind::F32ToBf16RoundTiesEven,
+                                    value,
+                                },
+                            )?
+                            .value()
+                            .expect("BF16 conversion emits one value");
+                        let bits_ty = Type::Scalar(ScalarType::U16);
+                        let bits = self.emit_id(
+                            operations,
+                            bits_ty.clone(),
+                            OperationKind::Cast {
+                                kind: CastKind::Bitcast,
+                                value: narrowed,
+                                to: bits_ty.clone(),
+                            },
+                        )?;
+                        debug_assert_eq!(narrowed_ty, Type::Scalar(ScalarType::Bf16));
+                        binding_from_value_defs(
+                            self.types,
+                            *output,
+                            &[ValueDef::new(bits, bits_ty)],
+                        )?
+                    }
+                    SemanticBf16ConversionKindV1::ToF32 => {
+                        let values = argument
+                            .values()
+                            .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
+                        let [(bits, ty)] = values.as_slice() else {
+                            return Err(unsupported(
+                                0,
+                                Some(block.index()),
+                                None,
+                                "BF16 to_f32 storage is not one scalar",
+                            ));
+                        };
+                        if *ty != Type::Scalar(ScalarType::U16) {
+                            return Err(unsupported(
+                                0,
+                                Some(block.index()),
+                                None,
+                                "BF16 to_f32 storage is not u16",
+                            ));
+                        }
+                        let bf16 = self.emit_id(
+                            operations,
+                            Type::Scalar(ScalarType::Bf16),
+                            OperationKind::Cast {
+                                kind: CastKind::Bitcast,
+                                value: *bits,
+                                to: Type::Scalar(ScalarType::Bf16),
+                            },
+                        )?;
+                        self.emit_float_operation(
+                            operations,
+                            FloatOperation::Convert {
+                                kind: FloatConversionKind::Bf16ToF32,
+                                value: bf16,
+                            },
+                        )?
+                    }
+                }
+            }
             SemanticCompilerIntrinsicOperationV1::CollectiveContextCurrent { .. } => {
                 self.require_call_argument_count(block, call, 0)?;
                 SemanticValueBindingV1::CollectiveContext
@@ -17897,7 +18033,8 @@ mod resource_tests {
     use dialect_kernel::AccessKindAttr;
     use fe2o3_mir_model::semantic_mir_v1::{
         SemanticAbiArgumentV1, SemanticAbiIdentityV1, SemanticAbiPassModeV1, SemanticAbiValueV1,
-        SemanticAssignmentV1, SemanticBackendReprV1, SemanticBasicBlockV1, SemanticBlockIdentityV1,
+        SemanticAggregateLayoutV1, SemanticAggregateTypeV1, SemanticAssignmentV1,
+        SemanticBackendReprV1, SemanticBasicBlockV1, SemanticBlockIdentityV1,
         SemanticCallDestinationV1, SemanticCallableIdV1, SemanticCanonAbiV1,
         SemanticCompilerIntrinsicIdentityV1, SemanticConstGenericArgumentsIdentityV1,
         SemanticConstantV1, SemanticControlFlowEdgeV1, SemanticEdgeRoleV1, SemanticExternAbiV1,
@@ -18592,6 +18729,261 @@ mod resource_tests {
             SemanticTypeLayoutV1::new(Some(1), 1).unwrap(),
             SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Bool),
         )
+    }
+
+    fn lower_bf16_conversion_for_test(
+        kind: SemanticBf16ConversionKindV1,
+    ) -> (Vec<Operation>, SemanticValueBindingV1) {
+        let unit = SemanticTypeIdV1::from_index(0);
+        let u16_ty = SemanticTypeIdV1::from_index(1);
+        let bf16_ty = SemanticTypeIdV1::from_index(2);
+        let f32_ty = SemanticTypeIdV1::from_index(3);
+        let types = vec![
+            unit_type(),
+            unsigned_scalar_type(101, 16),
+            SemanticTypeDeclV1::new(
+                SemanticTypeIdentityV1::from_sha256([103; 32]),
+                SemanticLayoutIdentityV1::from_sha256([104; 32]),
+                SemanticTypeLayoutV1::aggregate(
+                    Some(2),
+                    2,
+                    SemanticAggregateLayoutV1::new(vec![0], vec![]).unwrap(),
+                )
+                .unwrap(),
+                SemanticTypeShapeV1::Aggregate(SemanticAggregateTypeV1::new(vec![u16_ty]).unwrap()),
+            ),
+            SemanticTypeDeclV1::new(
+                SemanticTypeIdentityV1::from_sha256([105; 32]),
+                SemanticLayoutIdentityV1::from_sha256([106; 32]),
+                SemanticTypeLayoutV1::new(Some(4), 4).unwrap(),
+                SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Float { bits: 32 }),
+            ),
+        ];
+        let (input, output, input_binding) = match kind {
+            SemanticBf16ConversionKindV1::FromBits => (
+                u16_ty,
+                bf16_ty,
+                SemanticValueBindingV1::Value {
+                    id: ValueId(7),
+                    ty: Type::Scalar(ScalarType::U16),
+                },
+            ),
+            SemanticBf16ConversionKindV1::ToBits => (
+                bf16_ty,
+                u16_ty,
+                SemanticValueBindingV1::Aggregate(vec![SemanticValueBindingV1::Value {
+                    id: ValueId(7),
+                    ty: Type::Scalar(ScalarType::U16),
+                }]),
+            ),
+            SemanticBf16ConversionKindV1::FromF32RoundTiesEven => (
+                f32_ty,
+                bf16_ty,
+                SemanticValueBindingV1::Value {
+                    id: ValueId(7),
+                    ty: Type::Scalar(ScalarType::F32),
+                },
+            ),
+            SemanticBf16ConversionKindV1::ToF32 => (
+                bf16_ty,
+                f32_ty,
+                SemanticValueBindingV1::Aggregate(vec![SemanticValueBindingV1::Value {
+                    id: ValueId(7),
+                    ty: Type::Scalar(ScalarType::U16),
+                }]),
+            ),
+        };
+        let source = SemanticSourceProvenanceV1::unavailable();
+        let value = |ty| {
+            SemanticAbiValueV1::new(
+                ty,
+                SemanticAbiPassModeV1::Direct(
+                    fe2o3_mir_model::semantic_mir_v1::SemanticAbiValueAttributesV1::plain(),
+                ),
+            )
+        };
+        let intrinsic_abi = SemanticFunctionAbiV1::from_rustc(
+            SemanticAbiIdentityV1::from_sha256([107; 32]),
+            SemanticLayoutIdentityV1::from_sha256([108; 32]),
+            SemanticCanonAbiV1::Rust,
+            SemanticExternAbiV1::Rust,
+            false,
+            false,
+            1,
+            vec![SemanticAbiArgumentV1::source(value(input))],
+            value(output),
+        )
+        .unwrap();
+        let callable = SemanticCallableDeclV1::CompilerIntrinsic {
+            binding: SemanticNonBodyCallableBindingV1::new(
+                SemanticFunctionIdentityV1::from_sha256([109; 32]),
+                SemanticItemDefinitionIdentityV1::from_sha256([110; 32]),
+                SemanticMonomorphizationIdentityV1::from_sha256([111; 32]),
+                SemanticGenericTypeArgumentsIdentityV1::from_sha256([112; 32]),
+                SemanticConstGenericArgumentsIdentityV1::from_sha256([113; 32]),
+                source,
+                intrinsic_abi,
+            ),
+            operation: SemanticCompilerIntrinsicOperationV1::Bf16Conversion {
+                kind,
+                input,
+                output,
+            },
+            operation_identity: SemanticCompilerIntrinsicIdentityV1::from_sha256([114; 32]),
+        };
+        let function_abi = SemanticFunctionAbiV1::from_rustc(
+            SemanticAbiIdentityV1::from_sha256([115; 32]),
+            SemanticLayoutIdentityV1::from_sha256([116; 32]),
+            SemanticCanonAbiV1::Rust,
+            SemanticExternAbiV1::Rust,
+            false,
+            false,
+            0,
+            vec![],
+            SemanticAbiValueV1::new(unit, SemanticAbiPassModeV1::Ignore),
+        )
+        .unwrap();
+        let place = |local, ty| {
+            SemanticPlaceV1::new(SemanticLocalIdV1::from_index(local), vec![], ty).unwrap()
+        };
+        let block = SemanticBasicBlockV1::new(
+            SemanticBlockIdentityV1::from_sha256([117; 32]),
+            source,
+            vec![],
+            SemanticTerminatorV1::new(source, SemanticTerminatorKindV1::Return),
+        )
+        .unwrap();
+        let function = SemanticFunctionDeclV1::new(
+            SemanticFunctionIdentityV1::from_sha256([118; 32]),
+            SemanticFunctionRoleV1::InternalHelper,
+            SemanticItemDefinitionIdentityV1::from_sha256([119; 32]),
+            SemanticMonomorphizationIdentityV1::from_sha256([120; 32]),
+            SemanticGenericTypeArgumentsIdentityV1::from_sha256([121; 32]),
+            SemanticConstGenericArgumentsIdentityV1::from_sha256([122; 32]),
+            source,
+            function_abi,
+            vec![
+                SemanticLocalDeclV1::new(
+                    SemanticLocalIdentityV1::from_sha256([123; 32]),
+                    unit,
+                    SemanticLocalRoleV1::Return,
+                    source,
+                ),
+                SemanticLocalDeclV1::new(
+                    SemanticLocalIdentityV1::from_sha256([124; 32]),
+                    input,
+                    SemanticLocalRoleV1::Temporary,
+                    source,
+                ),
+                SemanticLocalDeclV1::new(
+                    SemanticLocalIdentityV1::from_sha256([125; 32]),
+                    output,
+                    SemanticLocalRoleV1::Temporary,
+                    source,
+                ),
+            ],
+            SemanticBlockIdV1::from_index(0),
+            vec![block],
+        )
+        .unwrap();
+        let callables = [callable];
+        let mut lowering = SemanticFunctionLoweringV1::new(
+            &types,
+            &callables,
+            &function,
+            SemanticParameterBindingsV1 {
+                declarations: &[],
+                values: &[],
+                types: &[],
+            },
+            None,
+            None,
+            BTreeSet::new(),
+            1,
+            16,
+        )
+        .unwrap();
+        lowering.locals[1] = Some(input_binding);
+        lowering.next_value = 8;
+        let call = SemanticDirectCallV1::new_callable(
+            SemanticCallableIdV1::from_index(0),
+            vec![SemanticOperandV1::Copy(place(1, input))],
+            Some(SemanticCallDestinationV1::new(
+                place(2, output),
+                SemanticControlFlowEdgeV1::new(
+                    SemanticEdgeRoleV1::CallReturn,
+                    SemanticBlockIdV1::from_index(0),
+                ),
+            )),
+            SemanticUnwindActionV1::Unreachable,
+        )
+        .unwrap();
+        let mut operations = Vec::new();
+        lowering
+            .lower_call(SemanticBlockIdV1::from_index(0), &call, &mut operations)
+            .unwrap();
+        (operations, lowering.locals[2].clone().unwrap())
+    }
+
+    #[test]
+    fn bf16_conversions_lower_to_exact_verified_kernel_ir_sequences() {
+        let (from_bits, from_bits_binding) =
+            lower_bf16_conversion_for_test(SemanticBf16ConversionKindV1::FromBits);
+        assert!(from_bits.is_empty());
+        assert_eq!(
+            from_bits_binding.values().unwrap(),
+            vec![(ValueId(7), Type::Scalar(ScalarType::U16))]
+        );
+
+        let (to_bits, to_bits_binding) =
+            lower_bf16_conversion_for_test(SemanticBf16ConversionKindV1::ToBits);
+        assert!(to_bits.is_empty());
+        assert_eq!(
+            to_bits_binding.value().unwrap(),
+            (ValueId(7), Type::Scalar(ScalarType::U16))
+        );
+
+        let (from_f32, from_f32_binding) =
+            lower_bf16_conversion_for_test(SemanticBf16ConversionKindV1::FromF32RoundTiesEven);
+        assert_eq!(from_f32.len(), 2);
+        assert!(matches!(
+            &from_f32[0].kind,
+            OperationKind::Call { callee, arguments }
+                if *callee == FunctionId::new("__fe2o3_ir_float_v1_f32_to_bf16_rne")
+                    && arguments == &[ValueId(7)]
+        ));
+        assert!(matches!(
+            from_f32[1].kind,
+            OperationKind::Cast {
+                kind: CastKind::Bitcast,
+                ..
+            }
+        ));
+        assert_eq!(
+            from_f32_binding.values().unwrap()[0].1,
+            Type::Scalar(ScalarType::U16)
+        );
+
+        let (to_f32, to_f32_binding) =
+            lower_bf16_conversion_for_test(SemanticBf16ConversionKindV1::ToF32);
+        assert_eq!(to_f32.len(), 2);
+        assert!(matches!(
+            to_f32[0].kind,
+            OperationKind::Cast {
+                kind: CastKind::Bitcast,
+                ..
+            }
+        ));
+        assert!(matches!(
+            &to_f32[1].kind,
+            OperationKind::Call { callee, arguments }
+                if *callee == FunctionId::new("__fe2o3_ir_float_v1_bf16_to_f32")
+                    && arguments.len() == 1
+        ));
+        assert_eq!(
+            to_f32_binding.value().unwrap().1,
+            Type::Scalar(ScalarType::F32)
+        );
     }
 
     #[derive(Clone, Copy)]

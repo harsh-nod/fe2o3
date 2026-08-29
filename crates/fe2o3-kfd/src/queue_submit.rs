@@ -12,8 +12,9 @@ use core::sync::atomic::{AtomicU32, AtomicU64};
 use core::sync::atomic::{Ordering, fence};
 
 use fe2o3_aql::{
-    AQL_INVALID_PACKET_HEADER_V1, AQL_KERNEL_DISPATCH_PACKET_BYTES_V1, AqlKernelDispatchPacketV1,
-    AqlPacketBatchPublicationTargetV1, AqlPreparedKernelDispatchBatchV1, AqlRingBatchReservationV1,
+    AQL_INVALID_PACKET_HEADER_V1, AQL_KERNEL_DISPATCH_PACKET_BYTES_V1, AqlBarrierAndPacketV1,
+    AqlBarrierAndPublicationTargetV1, AqlKernelDispatchPacketV1, AqlPacketBatchPublicationTargetV1,
+    AqlPreparedBarrierAndV1, AqlPreparedKernelDispatchBatchV2, AqlRingBatchReservationV1,
     AqlRingCapacityV1, AqlRingReservationError, AqlSingleProducerRingModelV1,
 };
 use fe2o3_kfd_uapi::{
@@ -21,7 +22,7 @@ use fe2o3_kfd_uapi::{
 };
 
 #[cfg(test)]
-use fe2o3_aql::{AQL_SYSTEM_SCOPED_KERNEL_DISPATCH_HEADER_V1, AqlPreparedKernelDispatchV1};
+use fe2o3_aql::{AqlPreparedKernelDispatchV1, is_reviewed_aql_publication_v1};
 
 pub(crate) const GFX942_CWSR_XCC_COUNT_V1: usize = 8;
 pub(crate) const GFX942_CWSR_CONTEXT_BYTES_PER_XCC_V1: usize = 0x162_1000;
@@ -49,6 +50,13 @@ pub(crate) enum NativeAqlSubmissionErrorV1 {
     PacketBody,
     PacketHeader,
     Doorbell,
+}
+
+/// Side-effect classification for the isolated BARRIER_AND submission.
+#[derive(Debug, Eq, PartialEq)]
+pub(super) enum NativeBarrierAndSubmissionFailureV1 {
+    RetryableBeforeSideEffect(NativeAqlSubmissionErrorV1),
+    Terminal(NativeAqlSubmissionErrorV1),
 }
 
 /// Linear state for one retained single-producer native queue.
@@ -92,12 +100,12 @@ impl NativeAqlSubmissionOwnerV1 {
         packet: AqlPreparedKernelDispatchV1,
         backend: &mut B,
     ) -> Result<u64, NativeAqlSubmissionErrorV1> {
-        self.submit_batch(AqlPreparedKernelDispatchBatchV1::one(packet), backend)
+        self.submit_batch(AqlPreparedKernelDispatchBatchV2::one(packet), backend)
     }
 
     pub(super) fn submit_batch<const N: usize, B: NativeAqlSubmissionBackendV1>(
         &mut self,
-        batch: AqlPreparedKernelDispatchBatchV1<N>,
+        batch: AqlPreparedKernelDispatchBatchV2<N>,
         backend: &mut B,
     ) -> Result<u64, NativeAqlSubmissionErrorV1> {
         if self.phase != SubmissionPhaseV1::Ready {
@@ -130,7 +138,10 @@ impl NativeAqlSubmissionOwnerV1 {
             self.phase = SubmissionPhaseV1::Poisoned;
             return Err(error);
         }
-        let reservation = match self.ring.reserve_batch(observed_read, batch.packet_count()) {
+        let reservation = match self
+            .ring
+            .reserve_fixed_batch_v2(observed_read, batch.packet_count())
+        {
             Ok(reservation) => reservation,
             Err(error) if retryable_occupancy(&error) => {
                 return Err(NativeAqlSubmissionErrorV1::Ring(error));
@@ -164,6 +175,88 @@ impl NativeAqlSubmissionOwnerV1 {
         self.phase = SubmissionPhaseV1::Ready;
         Ok(reservation.last_packet_id())
     }
+
+    /// Publishes exactly one zero-dependency BARRIER_AND packet.
+    pub(super) fn submit_barrier_and<B: NativeAqlSubmissionBackendV1>(
+        &mut self,
+        packet: AqlPreparedBarrierAndV1,
+        backend: &mut B,
+    ) -> Result<u64, NativeBarrierAndSubmissionFailureV1> {
+        if self.phase != SubmissionPhaseV1::Ready {
+            return Err(NativeBarrierAndSubmissionFailureV1::Terminal(
+                NativeAqlSubmissionErrorV1::Poisoned,
+            ));
+        }
+        if let Err(error) = backend.check_currentness() {
+            self.phase = SubmissionPhaseV1::Poisoned;
+            return Err(NativeBarrierAndSubmissionFailureV1::Terminal(error));
+        }
+        let (observed_write, observed_read) = match backend.observe_counters_acquire() {
+            Ok(observation) => observation,
+            Err(error) => {
+                self.phase = SubmissionPhaseV1::Poisoned;
+                return Err(NativeBarrierAndSubmissionFailureV1::Terminal(error));
+            }
+        };
+        let expected_write = self.ring.write();
+        if observed_write != expected_write {
+            self.phase = SubmissionPhaseV1::Poisoned;
+            return Err(NativeBarrierAndSubmissionFailureV1::Terminal(
+                NativeAqlSubmissionErrorV1::WriteCounterReplay {
+                    expected: expected_write,
+                    observed: observed_write,
+                },
+            ));
+        }
+        if let Err(error) = backend.check_currentness() {
+            self.phase = SubmissionPhaseV1::Poisoned;
+            return Err(NativeBarrierAndSubmissionFailureV1::Terminal(error));
+        }
+        let reservation = match self.ring.reserve_one(observed_read) {
+            Ok(reservation) => reservation,
+            Err(error) if retryable_occupancy(&error) => {
+                return Err(
+                    NativeBarrierAndSubmissionFailureV1::RetryableBeforeSideEffect(
+                        NativeAqlSubmissionErrorV1::Ring(error),
+                    ),
+                );
+            }
+            Err(error) => {
+                self.phase = SubmissionPhaseV1::Poisoned;
+                return Err(NativeBarrierAndSubmissionFailureV1::Terminal(
+                    NativeAqlSubmissionErrorV1::Ring(error),
+                ));
+            }
+        };
+
+        self.phase = SubmissionPhaseV1::Poisoned;
+        let old_write = backend
+            .fetch_add_write_acq_rel(1)
+            .map_err(NativeBarrierAndSubmissionFailureV1::Terminal)?;
+        if old_write != reservation.packet_id() {
+            return Err(NativeBarrierAndSubmissionFailureV1::Terminal(
+                NativeAqlSubmissionErrorV1::WriteCounterRace {
+                    expected: reservation.packet_id(),
+                    observed: old_write,
+                },
+            ));
+        }
+        let mut target = NativeBarrierAndTargetV1 {
+            backend,
+            slot: reservation.slot_index(),
+        };
+        packet
+            .publish_with(&mut target)
+            .map_err(NativeBarrierAndSubmissionFailureV1::Terminal)?;
+        backend
+            .check_currentness()
+            .map_err(NativeBarrierAndSubmissionFailureV1::Terminal)?;
+        backend
+            .ring_doorbell_release(reservation.packet_id())
+            .map_err(NativeBarrierAndSubmissionFailureV1::Terminal)?;
+        self.phase = SubmissionPhaseV1::Ready;
+        Ok(reservation.packet_id())
+    }
 }
 
 fn retryable_occupancy(error: &AqlRingReservationError) -> bool {
@@ -183,7 +276,7 @@ pub(super) trait NativeAqlSubmissionBackendV1 {
     fn write_unpublished(
         &mut self,
         slot: u32,
-        packet: &AqlKernelDispatchPacketV1,
+        packet: &[u8; AQL_KERNEL_DISPATCH_PACKET_BYTES_V1],
     ) -> Result<(), NativeAqlSubmissionErrorV1>;
     fn publish_release_header(
         &mut self,
@@ -212,7 +305,8 @@ impl<B: NativeAqlSubmissionBackendV1> AqlPacketBatchPublicationTargetV1
             .reservation
             .entry(batch_index)
             .ok_or(NativeAqlSubmissionErrorV1::InvalidRing("batch body index"))?;
-        self.backend.write_unpublished(entry.slot_index(), packet)
+        self.backend
+            .write_unpublished(entry.slot_index(), &packet.encode_unpublished_le())
     }
 
     fn publish_release_header(&mut self, batch_index: u32, header: u16) -> Result<(), Self::Error> {
@@ -224,6 +318,29 @@ impl<B: NativeAqlSubmissionBackendV1> AqlPacketBatchPublicationTargetV1
                 ))?;
         self.backend
             .publish_release_header(entry.slot_index(), header)
+    }
+}
+
+struct NativeBarrierAndTargetV1<'a, B> {
+    backend: &'a mut B,
+    slot: u32,
+}
+
+impl<B: NativeAqlSubmissionBackendV1> AqlBarrierAndPublicationTargetV1
+    for NativeBarrierAndTargetV1<'_, B>
+{
+    type Error = NativeAqlSubmissionErrorV1;
+
+    fn write_unpublished_barrier(
+        &mut self,
+        packet: &AqlBarrierAndPacketV1,
+    ) -> Result<(), Self::Error> {
+        self.backend
+            .write_unpublished(self.slot, &packet.encode_unpublished_le())
+    }
+
+    fn publish_barrier_release_header(&mut self, header: u16) -> Result<(), Self::Error> {
+        self.backend.publish_release_header(self.slot, header)
     }
 }
 
@@ -326,10 +443,9 @@ pub(crate) fn initialize_gfx942_cwsr_headers(
 pub(super) fn write_unpublished_slot(
     bytes: &mut [u8],
     slot_index: u32,
-    packet: &AqlKernelDispatchPacketV1,
+    encoded: &[u8; AQL_KERNEL_DISPATCH_PACKET_BYTES_V1],
 ) -> Result<(), NativeAqlSubmissionErrorV1> {
     let slot = packet_slot(bytes, slot_index)?;
-    let encoded = packet.encode_unpublished_le();
     if u32::from_le_bytes(encoded[..4].try_into().expect("four header bytes")) & 0xffff
         != u32::from(AQL_INVALID_PACKET_HEADER_V1)
     {
@@ -354,9 +470,6 @@ pub(super) fn publish_slot_header_release(
     slot_index: u32,
     header: u16,
 ) -> Result<(), NativeAqlSubmissionErrorV1> {
-    if header != AQL_SYSTEM_SCOPED_KERNEL_DISPATCH_HEADER_V1 {
-        return Err(NativeAqlSubmissionErrorV1::PacketHeader);
-    }
     let slot = packet_slot(bytes, slot_index)?;
     let pointer = slot.as_mut_ptr().cast::<AtomicU32>();
     if !(pointer as usize).is_multiple_of(core::mem::align_of::<AtomicU32>()) {
@@ -365,11 +478,10 @@ pub(super) fn publish_slot_header_release(
     // SAFETY: fake storage initialized this exact header AtomicU32 before use.
     let atomic = unsafe { &*pointer };
     let unpublished = u32::from_le(atomic.load(Ordering::Relaxed));
-    if unpublished & 0xffff != u32::from(AQL_INVALID_PACKET_HEADER_V1) {
-        return Err(NativeAqlSubmissionErrorV1::PacketHeader);
-    }
     let setup = unpublished >> 16;
-    if !(1..=3).contains(&setup) {
+    if unpublished & 0xffff != u32::from(AQL_INVALID_PACKET_HEADER_V1)
+        || !is_reviewed_aql_publication_v1(header, setup as u16)
+    {
         return Err(NativeAqlSubmissionErrorV1::PacketHeader);
     }
     let final_header = (setup << 16) | u32::from(header);
@@ -409,12 +521,12 @@ fn release_fence_before_mmio() {
 mod tests {
     use super::*;
     use fe2o3_aql::{
-        AqlDispatchGeometryV1, AqlKernelDispatchPacketV1, AqlPreparedKernelDispatchBatchV1,
-        ObservedGpuAddressV1,
+        AqlBarrierAndPacketV1, AqlDispatchGeometryV1, AqlKernelDispatchPacketV1,
+        AqlPreparedKernelDispatchBatchV2, ObservedGpuAddressV1,
     };
 
     #[repr(align(64))]
-    struct AlignedRing([u8; 4_224]);
+    struct AlignedRing([u8; 524_416]);
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     enum FailureAfterV1 {
@@ -425,12 +537,15 @@ mod tests {
     }
 
     struct FakeBackend {
-        ring: AlignedRing,
+        ring: Box<AlignedRing>,
+        logical_bytes: usize,
         write: AtomicU64,
         read: AtomicU64,
         checks: usize,
         fail_check: Option<usize>,
+        fail_check_error: Option<NativeAqlSubmissionErrorV1>,
         fail_after: Option<FailureAfterV1>,
+        fail_error: Option<NativeAqlSubmissionErrorV1>,
         fetch_return_override: Option<u64>,
         body_calls: usize,
         header_calls: usize,
@@ -440,15 +555,30 @@ mod tests {
 
     impl FakeBackend {
         fn new(write: u64, read: u64) -> Self {
-            let mut ring = AlignedRing([0xa5; 4_224]);
-            initialize_invalid_ring(&mut ring.0[64..4_160]).unwrap();
+            Self::with_ring_bytes(4_096, write, read)
+        }
+
+        fn with_ring_bytes(logical_bytes: usize, write: u64, read: u64) -> Self {
+            let mut ring = Box::<AlignedRing>::new_uninit();
+            // SAFETY: every byte pattern is valid for the wrapped byte array.
+            // Initializing the allocation in place avoids a maximum-ring-sized
+            // temporary on the test thread's stack.
+            unsafe {
+                ring.as_mut_ptr().cast::<u8>().write_bytes(0xa5, 524_416);
+            }
+            // SAFETY: the complete allocation was initialized above.
+            let mut ring = unsafe { ring.assume_init() };
+            initialize_invalid_ring(&mut ring.0[64..64 + logical_bytes]).unwrap();
             Self {
                 ring,
+                logical_bytes,
                 write: AtomicU64::new(write),
                 read: AtomicU64::new(read),
                 checks: 0,
                 fail_check: None,
+                fail_check_error: None,
                 fail_after: None,
+                fail_error: None,
                 fetch_return_override: None,
                 body_calls: 0,
                 header_calls: 0,
@@ -458,7 +588,7 @@ mod tests {
         }
 
         fn logical_ring(&mut self) -> &mut [u8] {
-            &mut self.ring.0[64..4_160]
+            &mut self.ring.0[64..64 + self.logical_bytes]
         }
 
         fn slot_word(&mut self, slot: u32, byte_offset: usize) -> u32 {
@@ -472,7 +602,10 @@ mod tests {
             self.checks += 1;
             self.trace.push("check");
             if self.fail_check == Some(self.checks) {
-                Err(NativeAqlSubmissionErrorV1::Currentness)
+                Err(self
+                    .fail_check_error
+                    .take()
+                    .unwrap_or(NativeAqlSubmissionErrorV1::Currentness))
             } else {
                 Ok(())
             }
@@ -493,7 +626,10 @@ mod tests {
             self.trace.push("fetch-add");
             let observed = self.write.fetch_add(increment, Ordering::AcqRel);
             if self.fail_after == Some(FailureAfterV1::FetchAdd) {
-                return Err(NativeAqlSubmissionErrorV1::Currentness);
+                return Err(self
+                    .fail_error
+                    .take()
+                    .unwrap_or(NativeAqlSubmissionErrorV1::Currentness));
             }
             Ok(self.fetch_return_override.unwrap_or(observed))
         }
@@ -501,14 +637,17 @@ mod tests {
         fn write_unpublished(
             &mut self,
             slot: u32,
-            packet: &AqlKernelDispatchPacketV1,
+            packet: &[u8; AQL_KERNEL_DISPATCH_PACKET_BYTES_V1],
         ) -> Result<(), NativeAqlSubmissionErrorV1> {
             self.trace.push("body");
             let call = self.body_calls;
             self.body_calls += 1;
             write_unpublished_slot(self.logical_ring(), slot, packet)?;
             if self.fail_after == Some(FailureAfterV1::Body(call)) {
-                return Err(NativeAqlSubmissionErrorV1::PacketBody);
+                return Err(self
+                    .fail_error
+                    .take()
+                    .unwrap_or(NativeAqlSubmissionErrorV1::PacketBody));
             }
             Ok(())
         }
@@ -523,7 +662,10 @@ mod tests {
             self.header_calls += 1;
             publish_slot_header_release(self.logical_ring(), slot, header)?;
             if self.fail_after == Some(FailureAfterV1::Header(call)) {
-                return Err(NativeAqlSubmissionErrorV1::PacketHeader);
+                return Err(self
+                    .fail_error
+                    .take()
+                    .unwrap_or(NativeAqlSubmissionErrorV1::PacketHeader));
             }
             Ok(())
         }
@@ -536,7 +678,10 @@ mod tests {
             release_fence_before_mmio();
             self.doorbells.push(packet_id);
             if self.fail_after == Some(FailureAfterV1::Doorbell) {
-                return Err(NativeAqlSubmissionErrorV1::Doorbell);
+                return Err(self
+                    .fail_error
+                    .take()
+                    .unwrap_or(NativeAqlSubmissionErrorV1::Doorbell));
             }
             Ok(())
         }
@@ -544,6 +689,11 @@ mod tests {
 
     fn packet() -> AqlPreparedKernelDispatchV1 {
         indexed_packet(0)
+    }
+
+    fn barrier() -> AqlPreparedBarrierAndV1 {
+        AqlBarrierAndPacketV1::new_unpublished(ObservedGpuAddressV1::new(0x30_040).unwrap())
+            .unwrap()
     }
 
     fn indexed_packet(index: u32) -> AqlPreparedKernelDispatchV1 {
@@ -559,11 +709,14 @@ mod tests {
         .unwrap()
     }
 
-    fn batch<const N: usize>() -> AqlPreparedKernelDispatchBatchV1<N> {
-        AqlPreparedKernelDispatchBatchV1::try_from_packets(core::array::from_fn(|index| {
-            indexed_packet(index as u32)
-        }))
-        .unwrap()
+    fn batch<const N: usize>() -> AqlPreparedKernelDispatchBatchV2<N> {
+        let packets = (0..N)
+            .map(|index| indexed_packet(index as u32))
+            .collect::<Vec<_>>()
+            .into_boxed_slice()
+            .try_into()
+            .unwrap();
+        AqlPreparedKernelDispatchBatchV2::try_from_boxed_packets(packets).unwrap()
     }
 
     #[test]
@@ -609,6 +762,147 @@ mod tests {
             &u32::from(AQL_INVALID_PACKET_HEADER_V1).to_le_bytes()
         );
         assert_eq!(&backend.logical_ring()[64..], untouched_slots);
+    }
+
+    #[test]
+    fn zero_dependency_barrier_uses_one_slot_and_exact_release_header() {
+        let mut owner = NativeAqlSubmissionOwnerV1::new(4_096).unwrap();
+        let mut backend = FakeBackend::new(0, 0);
+        let packet =
+            AqlBarrierAndPacketV1::new_unpublished(ObservedGpuAddressV1::new(0x30_040).unwrap())
+                .unwrap();
+
+        assert_eq!(owner.submit_barrier_and(packet, &mut backend), Ok(0));
+        assert_eq!(backend.write.load(Ordering::Relaxed), 1);
+        assert_eq!(backend.doorbells, [0]);
+        assert_eq!(backend.slot_word(0, 0), 0x0000_1403);
+        assert!(backend.logical_ring()[8..48].iter().all(|byte| *byte == 0));
+        assert_eq!(
+            u64::from_le_bytes(backend.logical_ring()[56..64].try_into().unwrap()),
+            0x30_040
+        );
+    }
+
+    #[test]
+    fn barrier_full_is_retryable_but_post_reservation_failure_is_terminal() {
+        let mut full = NativeAqlSubmissionOwnerV1::from_counters(4_096, 64, 0).unwrap();
+        let mut full_backend = FakeBackend::new(64, 0);
+        assert_eq!(
+            full.submit_barrier_and(barrier(), &mut full_backend),
+            Err(
+                NativeBarrierAndSubmissionFailureV1::RetryableBeforeSideEffect(
+                    NativeAqlSubmissionErrorV1::Ring(AqlRingReservationError::Full)
+                )
+            )
+        );
+        assert_eq!(full_backend.trace, ["check", "observe", "check"]);
+        assert_eq!(full_backend.write.load(Ordering::Relaxed), 64);
+        assert!(full_backend.doorbells.is_empty());
+        full_backend.read.store(1, Ordering::Release);
+        assert_eq!(
+            full.submit_barrier_and(barrier(), &mut full_backend),
+            Ok(64)
+        );
+
+        let mut ambiguous = NativeAqlSubmissionOwnerV1::new(4_096).unwrap();
+        let mut ambiguous_backend = FakeBackend::new(0, 0);
+        ambiguous_backend.fail_after = Some(FailureAfterV1::Body(0));
+        assert_eq!(
+            ambiguous.submit_barrier_and(barrier(), &mut ambiguous_backend),
+            Err(NativeBarrierAndSubmissionFailureV1::Terminal(
+                NativeAqlSubmissionErrorV1::PacketBody
+            ))
+        );
+        assert_eq!(ambiguous_backend.write.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            ambiguous.submit_barrier_and(barrier(), &mut ambiguous_backend),
+            Err(NativeBarrierAndSubmissionFailureV1::Terminal(
+                NativeAqlSubmissionErrorV1::Poisoned
+            ))
+        );
+    }
+
+    #[test]
+    fn barrier_backend_occupancy_shaped_errors_are_terminal_after_reservation() {
+        let stages = [
+            FailureAfterV1::FetchAdd,
+            FailureAfterV1::Body(0),
+            FailureAfterV1::Header(0),
+            FailureAfterV1::Doorbell,
+        ];
+        for stage in stages {
+            for insufficient in [false, true] {
+                let mut owner = NativeAqlSubmissionOwnerV1::new(4_096).unwrap();
+                let mut backend = FakeBackend::new(0, 0);
+                backend.fail_after = Some(stage);
+                backend.fail_error = Some(NativeAqlSubmissionErrorV1::Ring(if insufficient {
+                    AqlRingReservationError::InsufficientSpace {
+                        requested: 1,
+                        available: 0,
+                    }
+                } else {
+                    AqlRingReservationError::Full
+                }));
+
+                let result = owner.submit_barrier_and(barrier(), &mut backend);
+                assert!(
+                    matches!(
+                        &result,
+                        Err(NativeBarrierAndSubmissionFailureV1::Terminal(
+                            NativeAqlSubmissionErrorV1::Ring(AqlRingReservationError::Full)
+                                | NativeAqlSubmissionErrorV1::Ring(
+                                    AqlRingReservationError::InsufficientSpace { .. }
+                                )
+                        ))
+                    ),
+                    "{stage:?}: {result:?}"
+                );
+                let trace = backend.trace.clone();
+                assert_eq!(
+                    owner.submit_barrier_and(barrier(), &mut backend),
+                    Err(NativeBarrierAndSubmissionFailureV1::Terminal(
+                        NativeAqlSubmissionErrorV1::Poisoned
+                    )),
+                    "{stage:?}"
+                );
+                assert_eq!(backend.trace, trace, "{stage:?}");
+            }
+        }
+
+        for insufficient in [false, true] {
+            let mut owner = NativeAqlSubmissionOwnerV1::new(4_096).unwrap();
+            let mut backend = FakeBackend::new(0, 0);
+            backend.fail_check = Some(3);
+            backend.fail_check_error = Some(NativeAqlSubmissionErrorV1::Ring(if insufficient {
+                AqlRingReservationError::InsufficientSpace {
+                    requested: 1,
+                    available: 0,
+                }
+            } else {
+                AqlRingReservationError::Full
+            }));
+
+            let result = owner.submit_barrier_and(barrier(), &mut backend);
+            assert!(matches!(
+                &result,
+                Err(NativeBarrierAndSubmissionFailureV1::Terminal(
+                    NativeAqlSubmissionErrorV1::Ring(AqlRingReservationError::Full)
+                        | NativeAqlSubmissionErrorV1::Ring(
+                            AqlRingReservationError::InsufficientSpace { .. }
+                        )
+                ))
+            ));
+            assert_eq!(backend.write.load(Ordering::Relaxed), 1);
+            assert!(backend.doorbells.is_empty());
+            let trace = backend.trace.clone();
+            assert_eq!(
+                owner.submit_barrier_and(barrier(), &mut backend),
+                Err(NativeBarrierAndSubmissionFailureV1::Terminal(
+                    NativeAqlSubmissionErrorV1::Poisoned
+                ))
+            );
+            assert_eq!(backend.trace, trace);
+        }
     }
 
     #[test]
@@ -706,6 +1000,39 @@ mod tests {
         assert_successful_batch::<2>();
         assert_successful_batch::<4>();
         assert_successful_batch::<16>();
+    }
+
+    #[test]
+    fn fixed_batch_of_8192_uses_one_fetch_add_and_one_final_doorbell() {
+        let mut owner = NativeAqlSubmissionOwnerV1::new(524_288).unwrap();
+        let mut backend = FakeBackend::with_ring_bytes(524_288, 0, 0);
+        assert_eq!(owner.submit_batch(batch::<8192>(), &mut backend), Ok(8191));
+        assert_eq!(backend.write.load(Ordering::Relaxed), 8192);
+        assert_eq!(backend.body_calls, 8192);
+        assert_eq!(backend.header_calls, 8192);
+        assert_eq!(backend.doorbells, [8191]);
+        assert_eq!(
+            backend
+                .trace
+                .iter()
+                .filter(|event| **event == "fetch-add")
+                .count(),
+            1
+        );
+        assert_eq!(
+            backend
+                .trace
+                .iter()
+                .filter(|event| **event == "doorbell")
+                .count(),
+            1
+        );
+        assert!(backend.trace[4..8196].iter().all(|event| *event == "body"));
+        assert!(
+            backend.trace[8196..16388]
+                .iter()
+                .all(|event| *event == "header")
+        );
     }
 
     #[test]
