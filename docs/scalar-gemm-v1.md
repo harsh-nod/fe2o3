@@ -31,15 +31,19 @@ pub fn scalar_gemm_v1(
 
 One linear GPU invocation owns at most one output element. For invocation
 index `p`, the kernel returns without a store unless `p < m * n`. An active
-invocation computes `row = p / n` and `col = p % n`, then executes exactly `k`
+invocation computes `row = p / n` and `col = p % n`. The active guard proves
+both coordinates fit `u32`; address arithmetic widens them back to the 64-bit
+`usize` target type before multiplication. It then executes exactly `k`
 iterations in increasing `t` order. The accumulator starts at positive
 `0.0f32`; each iteration performs a separate `f32` multiply followed by a
 separate `f32` add. Reassociation and contraction to FMA are forbidden.
 
-The active guard implies `n != 0`, so integer division and remainder are never
-evaluated with a zero divisor. A zero `m`, `n`, or output extent is a host
-no-dispatch result with no device store. `k == 0` stores positive zero for each
-active output.
+The kernel retains an explicit `n != 0` guard before the active invocation
+guard, so integer division and remainder are never evaluated with a zero
+divisor. This is equivalent to the implication from an exact nonempty
+`m * n` extent while making the dominating fact explicit in semantic MIR. A
+zero `m`, `n`, or output extent is a host no-dispatch result with no device
+store. `k == 0` stores positive zero for each active output.
 
 ## Host Admission
 

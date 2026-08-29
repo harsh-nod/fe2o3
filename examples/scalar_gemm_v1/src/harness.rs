@@ -224,9 +224,11 @@ mod tests {
     fn canonical_source_retains_the_exact_entry_and_ordered_recurrence() {
         for required in [
             "pub fn scalar_gemm_v1(",
+            "let n_index = n as usize",
+            "if n_index != 0",
             "if p < output_extent",
-            "let row = p / (n as usize)",
-            "let col = p % (n as usize)",
+            "let row = (p / n_index) as u32",
+            "let col = (p % n_index) as u32",
             "while t < k",
             "let product = a[a_index] * b[b_index]",
             "accumulator = accumulator + product",
