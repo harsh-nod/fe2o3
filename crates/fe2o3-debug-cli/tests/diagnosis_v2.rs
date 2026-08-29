@@ -155,7 +155,7 @@ fn operation(result: u32, ty: Type, kind: OperationKind) -> Operation {
     Operation::effect_free(ValueDef::new(ValueId(result), ty), kind)
 }
 
-fn divergent_barrier_module() -> Module {
+fn divergent_barrier_module(exit_local: u64) -> Module {
     let barrier = WorkgroupBarrier {
         memory_scope: SynchronizationScope::Workgroup,
         semantics: BarrierSemantics::new(MemoryOrdering::AcquireRelease, [AddressSpace::Workgroup]),
@@ -174,7 +174,11 @@ fn divergent_barrier_module() -> Module {
                 Type::INDEX,
             )),
         ),
-        operation(2, Type::INDEX, OperationKind::Constant(Constant::Index(0))),
+        operation(
+            2,
+            Type::INDEX,
+            OperationKind::Constant(Constant::Index(exit_local)),
+        ),
         operation(
             3,
             Type::BOOL,
@@ -229,7 +233,7 @@ fn seeded_barrier_divergence_names_phase_and_participant_origins() {
     let stem = format!("fe2o3-debug-diagnosis-barrier-{}", std::process::id());
     let kernel_path = std::env::temp_dir().join(format!("{stem}.kir"));
     let request_path = std::env::temp_dir().join(format!("{stem}.json"));
-    let canonical = VerifiedCanonicalKernelIrV7::from_module(divergent_barrier_module()).unwrap();
+    let canonical = VerifiedCanonicalKernelIrV7::from_module(divergent_barrier_module(0)).unwrap();
     fs::write(&kernel_path, canonical.canonical_bytes()).unwrap();
     fs::write(
         &request_path,
@@ -266,6 +270,18 @@ fn seeded_barrier_divergence_names_phase_and_participant_origins() {
         diagnosis.class,
         DiagnosisClassV2::WorkgroupBarrierDivergence
     );
+    assert!(matches!(
+        diagnosis.site,
+        DiagnosisFactV2::Observed {
+            value: KirSiteV1 {
+                function_ordinal: 0,
+                block_ordinal: 2,
+                point: KirSitePointV1::Operation {
+                    operation_ordinal: 0
+                }
+            }
+        }
+    ));
     let DiagnosisFactV2::Observed {
         value:
             DiagnosisBarrierV2::Divergence {
@@ -314,4 +330,49 @@ fn seeded_barrier_divergence_names_phase_and_participant_origins() {
     let text = std::str::from_utf8(lines[1]).unwrap();
     assert!(!text.contains("native_address"));
     assert!(!text.contains("hardware_observation"));
+}
+
+#[test]
+fn divergence_scope_filter_matches_either_retained_participant() {
+    let stem = format!("fe2o3-debug-diagnosis-barrier-scope-{}", std::process::id());
+    let kernel_path = std::env::temp_dir().join(format!("{stem}.kir"));
+    let request_path = std::env::temp_dir().join(format!("{stem}.json"));
+    let canonical = VerifiedCanonicalKernelIrV7::from_module(divergent_barrier_module(64)).unwrap();
+    fs::write(&kernel_path, canonical.canonical_bytes()).unwrap();
+    fs::write(
+        &request_path,
+        br#"{"schema":"fe2o3-simulation-request-v1","kernel":"divergent_barrier","grid":[65,1,1],"workgroup":[65,1,1],"arguments":[]}"#,
+    )
+    .unwrap();
+    let requests = br#"{"operation":"continue","schema":"fe2o3-debug-request-v1","request_id":21,"expected_revision":0,"max_events":1000000}
+{"operation":"diagnose","schema":"fe2o3-debug-diagnosis-request-v2","request_id":22,"expected_revision":1,"filter":{"scope":{"level":"lane","workgroup":[0,0,0],"wave":1,"lane":0}},"page":{"limit":1}}
+{"operation":"diagnose","schema":"fe2o3-debug-diagnosis-request-v2","request_id":23,"expected_revision":1,"filter":{"scope":{"level":"wave","workgroup":[0,0,0],"wave":1}},"page":{"limit":1}}
+{"operation":"diagnose","schema":"fe2o3-debug-diagnosis-request-v2","request_id":24,"expected_revision":1,"filter":{"scope":{"level":"lane","workgroup":[0,0,0],"wave":0,"lane":0}},"page":{"limit":1}}
+{"operation":"diagnose","schema":"fe2o3-debug-diagnosis-request-v2","request_id":25,"expected_revision":1,"filter":{"scope":{"level":"lane","workgroup":[1,0,0],"wave":0,"lane":0}},"page":{"limit":1}}
+"#;
+    let output = run_debugger(&kernel_path, &request_path, requests);
+    let _ = fs::remove_file(kernel_path);
+    let _ = fs::remove_file(request_path);
+    assert!(
+        output.status.success(),
+        "debugger failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stderr.is_empty());
+    let lines = response_lines(&output.stdout);
+    assert_eq!(lines.len(), 5);
+    for line in &lines[1..4] {
+        let response =
+            decode_diagnosis_response_line_v2(line, ProtocolLimitsV1::default()).unwrap();
+        let DiagnosisResponseV2::Ok { diagnoses, .. } = response else {
+            panic!("diagnosis failed")
+        };
+        assert_eq!(diagnoses.len(), 1);
+    }
+    let unrelated =
+        decode_diagnosis_response_line_v2(lines[4], ProtocolLimitsV1::default()).unwrap();
+    let DiagnosisResponseV2::Ok { diagnoses, .. } = unrelated else {
+        panic!("diagnosis failed")
+    };
+    assert!(diagnoses.is_empty());
 }

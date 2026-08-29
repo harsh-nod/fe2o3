@@ -3258,6 +3258,11 @@ fn divergent_early_exit_at_workgroup_barrier_is_typed_and_deterministic() {
     assert!(matches!(
         first,
         SimulationErrorV1::Execution(fe2o3_kir_sim::SimulationExecutionErrorV1 {
+            site: Some(fe2o3_kir_sim::SimulationSiteV1 {
+                block: BlockId(2),
+                operation: Some(0),
+                ..
+            }),
             kind: SimulationExecutionErrorKindV1::DivergentWorkgroupBarrier(_),
             ..
         })

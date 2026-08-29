@@ -567,7 +567,10 @@ pub struct DiagnosisViewV2 {
 }
 
 impl DiagnosisViewV2 {
-    fn validate(&self) -> Result<(), ProtocolValidationErrorV1> {
+    fn validate(
+        &self,
+        completeness: CaptureCompletenessV1,
+    ) -> Result<(), ProtocolValidationErrorV1> {
         if self.sequence == 0 {
             return Err(ProtocolValidationErrorV1::ZeroIdentity);
         }
@@ -614,6 +617,7 @@ impl DiagnosisViewV2 {
                         },
                 },
             ) => self.validate_divergence(
+                completeness,
                 phase,
                 observed_arrivals,
                 expected_participants,
@@ -643,8 +647,13 @@ impl DiagnosisViewV2 {
                         },
                 },
             ) => {
+                let DiagnosisFactV2::Observed {
+                    value: mismatch_kind,
+                } = mismatch
+                else {
+                    return Err(ProtocolValidationErrorV1::InvalidTruthClassification);
+                };
                 if !matches!(phase, DiagnosisFactV2::Observed { .. })
-                    || !matches!(mismatch, DiagnosisFactV2::Observed { .. })
                     || !matches!(
                         expected_site,
                         DiagnosisFactV2::Observed { .. }
@@ -655,6 +664,23 @@ impl DiagnosisViewV2 {
                 {
                     return Err(ProtocolValidationErrorV1::InvalidTruthClassification);
                 }
+                if let (
+                    DiagnosisFactV2::Observed { value: actual },
+                    DiagnosisFactV2::Observed { value: expected },
+                ) = (&self.site, expected_site)
+                {
+                    let sites_match = actual == expected;
+                    let mismatch_matches_sites = match mismatch_kind {
+                        DiagnosisBarrierMismatchV2::Semantics => sites_match,
+                        DiagnosisBarrierMismatchV2::Site
+                        | DiagnosisBarrierMismatchV2::SiteAndSemantics => !sites_match,
+                    };
+                    if !mismatch_matches_sites {
+                        return Err(ProtocolValidationErrorV1::IdentityMismatch(
+                            "diagnosis barrier mismatch site",
+                        ));
+                    }
+                }
                 Ok(())
             }
             _ => Err(ProtocolValidationErrorV1::InvalidTruthClassification),
@@ -663,6 +689,7 @@ impl DiagnosisViewV2 {
 
     fn validate_divergence(
         &self,
+        completeness: CaptureCompletenessV1,
         phase: &DiagnosisFactV2<u64>,
         observed_arrivals: &DiagnosisFactV2<u32>,
         expected_participants: &DiagnosisFactV2<u32>,
@@ -672,13 +699,18 @@ impl DiagnosisViewV2 {
         if !matches!(phase, DiagnosisFactV2::Observed { .. }) {
             return Err(ProtocolValidationErrorV1::InvalidTruthClassification);
         }
-        let arrivals = match observed_arrivals {
-            DiagnosisFactV2::Observed { value } if *value > 0 => Some(*value),
-            DiagnosisFactV2::Unavailable {
-                reason:
-                    DiagnosisUnavailableReasonV2::TranscriptTruncated
-                    | DiagnosisUnavailableReasonV2::NotCaptured,
-            } => None,
+        let arrivals = match (completeness, observed_arrivals) {
+            (CaptureCompletenessV1::Complete, DiagnosisFactV2::Observed { value })
+                if *value > 0 =>
+            {
+                Some(*value)
+            }
+            (
+                CaptureCompletenessV1::Truncated { .. },
+                DiagnosisFactV2::Unavailable {
+                    reason: DiagnosisUnavailableReasonV2::TranscriptTruncated,
+                },
+            ) => None,
             _ => return Err(ProtocolValidationErrorV1::InvalidTruthClassification),
         };
         let DiagnosisFactV2::Inferred {
@@ -708,7 +740,44 @@ impl DiagnosisViewV2 {
             ));
         }
         waiting.validate(*dispatch, *workgroup, wave.width)?;
-        exited.validate(*dispatch, *workgroup, wave.width)
+        exited.validate(*dispatch, *workgroup, wave.width)?;
+
+        let DiagnosisFactV2::Observed {
+            value: waiting_local,
+        } = &waiting.local_workitem
+        else {
+            return Err(ProtocolValidationErrorV1::InvalidTruthClassification);
+        };
+        let DiagnosisFactV2::Inferred {
+            value: waiting_global,
+            basis: DiagnosisInferenceBasisV2::LaunchGeometry,
+        } = &waiting.global_workitem
+        else {
+            return Err(ProtocolValidationErrorV1::InvalidTruthClassification);
+        };
+        let DiagnosisFactV2::Observed {
+            value: exited_local,
+        } = &exited.local_workitem
+        else {
+            return Err(ProtocolValidationErrorV1::InvalidTruthClassification);
+        };
+        if waiting_local == exited_local {
+            return Err(ProtocolValidationErrorV1::IdentityMismatch(
+                "diagnosis barrier participants",
+            ));
+        }
+        let DiagnosisFactV2::Observed {
+            value: context_workitem,
+        } = &self.context.workitem
+        else {
+            return Err(ProtocolValidationErrorV1::InvalidTruthClassification);
+        };
+        if context_workitem.local != *waiting_local || context_workitem.global != *waiting_global {
+            return Err(ProtocolValidationErrorV1::IdentityMismatch(
+                "diagnosis barrier waiting context",
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -757,12 +826,11 @@ impl DiagnosisResponseV2 {
                     ));
                 }
                 for diagnosis in diagnoses {
-                    diagnosis.validate()?;
+                    diagnosis.validate(*completeness)?;
                 }
                 if next_cursor.is_some_and(|cursor| cursor.position == 0) {
                     return Err(ProtocolValidationErrorV1::ZeroIdentity);
                 }
-                let _capture_completeness = completeness;
                 Ok(())
             }
             Self::Error {

@@ -53,6 +53,103 @@ fn context() -> DiagnosisExecutionContextV2 {
     }
 }
 
+fn participant(local: u32) -> DiagnosisBarrierParticipantV2 {
+    DiagnosisBarrierParticipantV2 {
+        local_workitem: DiagnosisFactV2::Observed {
+            value: [local, 0, 0],
+        },
+        global_workitem: DiagnosisFactV2::Inferred {
+            value: [u64::from(local), 0, 0],
+            basis: DiagnosisInferenceBasisV2::LaunchGeometry,
+        },
+        wave: DiagnosisFactV2::Inferred {
+            value: 0,
+            basis: DiagnosisInferenceBasisV2::LogicalWavePartition,
+        },
+        lane: DiagnosisFactV2::Inferred {
+            value: u16::try_from(local).unwrap(),
+            basis: DiagnosisInferenceBasisV2::LogicalWavePartition,
+        },
+    }
+}
+
+fn divergence_response() -> DiagnosisResponseV2 {
+    DiagnosisResponseV2::Ok {
+        schema: DiagnosisResponseSchemaV2::V2,
+        request_id: 9,
+        operation: DiagnosisOperationV2::Diagnose,
+        session: session(),
+        completeness: CaptureCompletenessV1::Complete,
+        diagnoses: vec![DiagnosisViewV2 {
+            sequence: 12,
+            class: DiagnosisClassV2::WorkgroupBarrierDivergence,
+            context: context(),
+            site: DiagnosisFactV2::Unavailable {
+                reason: DiagnosisUnavailableReasonV2::SiteNotRepresented,
+            },
+            memory_region: DiagnosisFactV2::Unavailable {
+                reason: DiagnosisUnavailableReasonV2::NotApplicable,
+            },
+            barrier: DiagnosisFactV2::Observed {
+                value: DiagnosisBarrierV2::Divergence {
+                    phase: DiagnosisFactV2::Observed { value: 0 },
+                    observed_arrivals: DiagnosisFactV2::Observed { value: 1 },
+                    expected_participants: DiagnosisFactV2::Inferred {
+                        value: 4,
+                        basis: DiagnosisInferenceBasisV2::LaunchGeometry,
+                    },
+                    waiting: participant(1),
+                    exited: participant(0),
+                },
+            },
+        }],
+        next_cursor: None,
+    }
+}
+
+fn kir_site(operation_ordinal: u64) -> KirSiteV1 {
+    KirSiteV1 {
+        function_ordinal: 0,
+        block_ordinal: 0,
+        point: KirSitePointV1::Operation { operation_ordinal },
+    }
+}
+
+fn mismatch_response(
+    mismatch: DiagnosisBarrierMismatchV2,
+    actual_operation: u64,
+    expected_operation: u64,
+) -> DiagnosisResponseV2 {
+    DiagnosisResponseV2::Ok {
+        schema: DiagnosisResponseSchemaV2::V2,
+        request_id: 10,
+        operation: DiagnosisOperationV2::Diagnose,
+        session: session(),
+        completeness: CaptureCompletenessV1::Complete,
+        diagnoses: vec![DiagnosisViewV2 {
+            sequence: 13,
+            class: DiagnosisClassV2::WorkgroupBarrierMismatch,
+            context: context(),
+            site: DiagnosisFactV2::Observed {
+                value: kir_site(actual_operation),
+            },
+            memory_region: DiagnosisFactV2::Unavailable {
+                reason: DiagnosisUnavailableReasonV2::NotApplicable,
+            },
+            barrier: DiagnosisFactV2::Observed {
+                value: DiagnosisBarrierV2::Mismatch {
+                    phase: DiagnosisFactV2::Observed { value: 0 },
+                    mismatch: DiagnosisFactV2::Observed { value: mismatch },
+                    expected_site: DiagnosisFactV2::Observed {
+                        value: kir_site(expected_operation),
+                    },
+                },
+            },
+        }],
+        next_cursor: None,
+    }
+}
+
 fn out_of_bounds_response() -> DiagnosisResponseV2 {
     DiagnosisResponseV2::Ok {
         schema: DiagnosisResponseSchemaV2::V2,
@@ -239,54 +336,7 @@ fn response_rejects_truth_range_hierarchy_and_cursor_substitution() {
 
 #[test]
 fn barrier_divergence_requires_observed_phase_and_distinct_origin_domains() {
-    let participant = |local: u32| DiagnosisBarrierParticipantV2 {
-        local_workitem: DiagnosisFactV2::Observed {
-            value: [local, 0, 0],
-        },
-        global_workitem: DiagnosisFactV2::Inferred {
-            value: [u64::from(local), 0, 0],
-            basis: DiagnosisInferenceBasisV2::LaunchGeometry,
-        },
-        wave: DiagnosisFactV2::Inferred {
-            value: 0,
-            basis: DiagnosisInferenceBasisV2::LogicalWavePartition,
-        },
-        lane: DiagnosisFactV2::Inferred {
-            value: u16::try_from(local).unwrap(),
-            basis: DiagnosisInferenceBasisV2::LogicalWavePartition,
-        },
-    };
-    let response = DiagnosisResponseV2::Ok {
-        schema: DiagnosisResponseSchemaV2::V2,
-        request_id: 9,
-        operation: DiagnosisOperationV2::Diagnose,
-        session: session(),
-        completeness: CaptureCompletenessV1::Complete,
-        diagnoses: vec![DiagnosisViewV2 {
-            sequence: 12,
-            class: DiagnosisClassV2::WorkgroupBarrierDivergence,
-            context: context(),
-            site: DiagnosisFactV2::Unavailable {
-                reason: DiagnosisUnavailableReasonV2::SiteNotRepresented,
-            },
-            memory_region: DiagnosisFactV2::Unavailable {
-                reason: DiagnosisUnavailableReasonV2::NotApplicable,
-            },
-            barrier: DiagnosisFactV2::Observed {
-                value: DiagnosisBarrierV2::Divergence {
-                    phase: DiagnosisFactV2::Observed { value: 0 },
-                    observed_arrivals: DiagnosisFactV2::Observed { value: 1 },
-                    expected_participants: DiagnosisFactV2::Inferred {
-                        value: 4,
-                        basis: DiagnosisInferenceBasisV2::LaunchGeometry,
-                    },
-                    waiting: participant(1),
-                    exited: participant(0),
-                },
-            },
-        }],
-        next_cursor: None,
-    };
+    let response = divergence_response();
     let encoded =
         encode_diagnosis_response_line_v2(&response, ProtocolLimitsV1::default()).unwrap();
     assert!(decode_diagnosis_response_line_v2(&encoded, ProtocolLimitsV1::default()).is_ok());
@@ -333,4 +383,166 @@ fn barrier_divergence_requires_observed_phase_and_distinct_origin_domains() {
             ProtocolValidationErrorV1::IdentityMismatch("diagnosis barrier participant count")
         ))
     ));
+}
+
+#[test]
+fn divergence_rejects_participant_context_and_completeness_substitution() {
+    let response = divergence_response();
+
+    let mut same_participant = response.clone();
+    let DiagnosisResponseV2::Ok { diagnoses, .. } = &mut same_participant else {
+        unreachable!()
+    };
+    let DiagnosisFactV2::Observed {
+        value: DiagnosisBarrierV2::Divergence {
+            waiting, exited, ..
+        },
+    } = &mut diagnoses[0].barrier
+    else {
+        unreachable!()
+    };
+    *exited = waiting.clone();
+    assert!(matches!(
+        decode_diagnosis_response_line_v2(
+            &reencode(&same_participant),
+            ProtocolLimitsV1::default()
+        ),
+        Err(ProtocolCodecErrorV1::Validation(
+            ProtocolValidationErrorV1::IdentityMismatch("diagnosis barrier participants")
+        ))
+    ));
+
+    let mut third_lane_context = response.clone();
+    let DiagnosisResponseV2::Ok { diagnoses, .. } = &mut third_lane_context else {
+        unreachable!()
+    };
+    diagnoses[0].context.workitem = DiagnosisFactV2::Observed {
+        value: DiagnosisWorkitemV2 {
+            global: [2, 0, 0],
+            local: [2, 0, 0],
+        },
+    };
+    diagnoses[0].context.wave = DiagnosisFactV2::Inferred {
+        value: DiagnosisLogicalWaveV2 {
+            wave: 0,
+            width: 32,
+            active_mask: 0b1111,
+        },
+        basis: DiagnosisInferenceBasisV2::LogicalWavePartition,
+    };
+    diagnoses[0].context.lane = DiagnosisFactV2::Inferred {
+        value: 2,
+        basis: DiagnosisInferenceBasisV2::LogicalWavePartition,
+    };
+    assert!(matches!(
+        decode_diagnosis_response_line_v2(
+            &reencode(&third_lane_context),
+            ProtocolLimitsV1::default()
+        ),
+        Err(ProtocolCodecErrorV1::Validation(
+            ProtocolValidationErrorV1::IdentityMismatch("diagnosis barrier waiting context")
+        ))
+    ));
+
+    for reason in [
+        DiagnosisUnavailableReasonV2::NotCaptured,
+        DiagnosisUnavailableReasonV2::TranscriptTruncated,
+    ] {
+        let mut complete_unavailable = response.clone();
+        set_arrivals(
+            &mut complete_unavailable,
+            DiagnosisFactV2::Unavailable { reason },
+        );
+        assert!(
+            decode_diagnosis_response_line_v2(
+                &reencode(&complete_unavailable),
+                ProtocolLimitsV1::default()
+            )
+            .is_err()
+        );
+    }
+
+    let truncated = CaptureCompletenessV1::Truncated {
+        reason: CaptureTruncationReasonV1::EventLimit,
+        emitted_events: 1,
+        dropped_events: None,
+    };
+    for arrivals in [
+        DiagnosisFactV2::Observed { value: 1 },
+        DiagnosisFactV2::Unavailable {
+            reason: DiagnosisUnavailableReasonV2::NotCaptured,
+        },
+    ] {
+        let mut truncated_invalid = response.clone();
+        let DiagnosisResponseV2::Ok { completeness, .. } = &mut truncated_invalid else {
+            unreachable!()
+        };
+        *completeness = truncated;
+        set_arrivals(&mut truncated_invalid, arrivals);
+        assert!(
+            decode_diagnosis_response_line_v2(
+                &reencode(&truncated_invalid),
+                ProtocolLimitsV1::default()
+            )
+            .is_err()
+        );
+    }
+
+    let mut truncated_valid = response;
+    let DiagnosisResponseV2::Ok { completeness, .. } = &mut truncated_valid else {
+        unreachable!()
+    };
+    *completeness = truncated;
+    set_arrivals(
+        &mut truncated_valid,
+        DiagnosisFactV2::Unavailable {
+            reason: DiagnosisUnavailableReasonV2::TranscriptTruncated,
+        },
+    );
+    assert!(
+        decode_diagnosis_response_line_v2(&reencode(&truncated_valid), ProtocolLimitsV1::default())
+            .is_ok()
+    );
+}
+
+fn set_arrivals(response: &mut DiagnosisResponseV2, arrivals: DiagnosisFactV2<u32>) {
+    let DiagnosisResponseV2::Ok { diagnoses, .. } = response else {
+        unreachable!()
+    };
+    let DiagnosisFactV2::Observed {
+        value: DiagnosisBarrierV2::Divergence {
+            observed_arrivals, ..
+        },
+    } = &mut diagnoses[0].barrier
+    else {
+        unreachable!()
+    };
+    *observed_arrivals = arrivals;
+}
+
+#[test]
+fn barrier_mismatch_kind_is_joined_to_actual_and_expected_sites() {
+    for response in [
+        mismatch_response(DiagnosisBarrierMismatchV2::Semantics, 2, 2),
+        mismatch_response(DiagnosisBarrierMismatchV2::Site, 2, 3),
+        mismatch_response(DiagnosisBarrierMismatchV2::SiteAndSemantics, 2, 3),
+    ] {
+        assert!(
+            decode_diagnosis_response_line_v2(&reencode(&response), ProtocolLimitsV1::default())
+                .is_ok()
+        );
+    }
+
+    for response in [
+        mismatch_response(DiagnosisBarrierMismatchV2::Semantics, 2, 3),
+        mismatch_response(DiagnosisBarrierMismatchV2::Site, 2, 2),
+        mismatch_response(DiagnosisBarrierMismatchV2::SiteAndSemantics, 2, 2),
+    ] {
+        assert!(matches!(
+            decode_diagnosis_response_line_v2(&reencode(&response), ProtocolLimitsV1::default()),
+            Err(ProtocolCodecErrorV1::Validation(
+                ProtocolValidationErrorV1::IdentityMismatch("diagnosis barrier mismatch site")
+            ))
+        ));
+    }
 }

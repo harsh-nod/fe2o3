@@ -3554,7 +3554,8 @@ fn release_workgroup_barrier<'a>(
             }
             _ => {
                 engine.invocation = Some(representative);
-                return Err(engine.fail(
+                return Err(engine.at(
+                    expected.site,
                     SimulationExecutionErrorKindV1::DivergentWorkgroupBarrier(
                         DivergentWorkgroupBarrierV1 {
                             phase: *phase,

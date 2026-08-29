@@ -3177,9 +3177,8 @@ impl SimulatorBackendV1 {
                         self.session
                             .transcript()
                             .terminal_fault()
-                            .and_then(|fault| fault.invocation)
-                            .is_some_and(|invocation| {
-                                convert_scope_selector(scope).matches(invocation, self.wave_width)
+                            .is_some_and(|fault| {
+                                self.diagnosis_fault_matches_scope_v2(fault, scope)
                             })
                     })
             });
@@ -5193,6 +5192,29 @@ impl SimulatorBackendV1 {
         }
     }
 
+    fn diagnosis_fault_matches_scope_v2(
+        &self,
+        fault: &DebugTerminalFaultV1,
+        scope: ExecutionScopeSelectorV1,
+    ) -> bool {
+        if matches!(scope, ExecutionScopeSelectorV1::Dispatch) {
+            return true;
+        }
+        let Some(invocation) = fault.invocation else {
+            return false;
+        };
+        let selector = convert_scope_selector(scope);
+        let fe2o3_kir_sim::SimulationExecutionErrorKindV1::DivergentWorkgroupBarrier(detail) =
+            &fault.kind
+        else {
+            return selector.matches(invocation, self.wave_width);
+        };
+        [detail.waiting.local, detail.exited.local]
+            .into_iter()
+            .filter_map(|local| invocation_at_local_v2(invocation, local))
+            .any(|participant| selector.matches(participant, self.wave_width))
+    }
+
     fn divergent_barrier_v2(
         &self,
         invocation: SimulationInvocationV1,
@@ -5248,15 +5270,7 @@ impl SimulatorBackendV1 {
         invocation: SimulationInvocationV1,
         local: [u32; 3],
     ) -> Option<DiagnosisBarrierParticipantV2> {
-        let mut global = [0_u64; 3];
-        for (axis, coordinate) in global.iter_mut().enumerate() {
-            *coordinate = invocation.workgroup[axis]
-                .checked_mul(u64::from(invocation.workgroup_size[axis]))?
-                .checked_add(u64::from(local[axis]))?;
-            if *coordinate >= invocation.launch_extent[axis] {
-                return None;
-            }
-        }
+        let participant = invocation_at_local_v2(invocation, local)?;
         let linear = u64::from(local[0]).checked_add(
             u64::from(invocation.workgroup_size[0]).checked_mul(
                 u64::from(local[1]).checked_add(
@@ -5268,7 +5282,7 @@ impl SimulatorBackendV1 {
         Some(DiagnosisBarrierParticipantV2 {
             local_workitem: DiagnosisFactV2::Observed { value: local },
             global_workitem: DiagnosisFactV2::Inferred {
-                value: global,
+                value: participant.global,
                 basis: DiagnosisInferenceBasisV2::LaunchGeometry,
             },
             wave: DiagnosisFactV2::Inferred {
@@ -5500,6 +5514,29 @@ impl SimulatorBackendV1 {
         digest.update(query);
         nonzero_identity(digest.finalize().into())
     }
+}
+
+fn invocation_at_local_v2(
+    invocation: SimulationInvocationV1,
+    local: [u32; 3],
+) -> Option<SimulationInvocationV1> {
+    let mut global = [0_u64; 3];
+    for (axis, coordinate) in global.iter_mut().enumerate() {
+        if local[axis] >= invocation.workgroup_size[axis] {
+            return None;
+        }
+        *coordinate = invocation.workgroup[axis]
+            .checked_mul(u64::from(invocation.workgroup_size[axis]))?
+            .checked_add(u64::from(local[axis]))?;
+        if *coordinate >= invocation.launch_extent[axis] {
+            return None;
+        }
+    }
+    Some(SimulationInvocationV1 {
+        global,
+        local,
+        ..invocation
+    })
 }
 
 fn active_workgroup_participants_v2(invocation: SimulationInvocationV1) -> Option<u32> {
