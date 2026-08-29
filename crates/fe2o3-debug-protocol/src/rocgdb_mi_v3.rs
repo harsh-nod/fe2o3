@@ -121,10 +121,11 @@ pub struct RocgdbMiThreadIdentityV3 {
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct RocgdbMiGpuThreadAdmissionV3 {
+pub struct RocgdbMiThreadAdmissionV3 {
     /// Digest of the exact structured `-thread-info` result record.
     pub thread_info_record_identity: OpaqueIdentityV1,
-    /// Caller-selected tuple ordinal; no `target-id` prose is interpreted.
+    /// Caller-selected tuple ordinal; no GPU classification is inferred from
+    /// `target-id`, `details`, names, or stream prose.
     pub thread_ordinal: u16,
     pub thread: RocgdbMiThreadIdentityV3,
 }

@@ -68,7 +68,7 @@ pub enum RocgdbMiCliRequestV3 {
         request_id: u64,
         wait_milliseconds: u64,
     },
-    AdmitGpuThreads {
+    AdmitThreads {
         schema: RocgdbMiCliRequestSchemaV3,
         request_id: u64,
         thread_ordinals: Vec<u16>,
@@ -137,7 +137,7 @@ impl RocgdbMiCliRequestV3 {
             Self::GetSession { request_id, .. }
             | Self::DiscoverCapabilities { request_id, .. }
             | Self::NextEvent { request_id, .. }
-            | Self::AdmitGpuThreads { request_id, .. }
+            | Self::AdmitThreads { request_id, .. }
             | Self::AdmitCodeObject { request_id, .. }
             | Self::AdmitAllocation { request_id, .. }
             | Self::AdmitSourceLine { request_id, .. }
@@ -162,7 +162,7 @@ impl RocgdbMiCliRequestV3 {
             {
                 Err(RocgdbMiCliValidationErrorV3::InvalidWait)
             }
-            Self::AdmitGpuThreads {
+            Self::AdmitThreads {
                 thread_ordinals, ..
             } => {
                 if thread_ordinals.is_empty()
@@ -300,6 +300,25 @@ impl RocgdbMiCliCapabilitiesV3 {
         self.mi
             .validate()
             .map_err(|_| RocgdbMiCliValidationErrorV3::InvalidResult)?;
+        let unavailable_gpu_semantics = [
+            RocgdbMiCapabilityNameV3::StoppedWave,
+            RocgdbMiCapabilityNameV3::LogicalLanes,
+            RocgdbMiCapabilityNameV3::RelativeProgramCounter,
+            RocgdbMiCapabilityNameV3::SourceSite,
+            RocgdbMiCapabilityNameV3::RegisterValues,
+            RocgdbMiCapabilityNameV3::SemanticValues,
+            RocgdbMiCapabilityNameV3::AllocationRelativeMemory,
+        ];
+        if !unavailable_gpu_semantics.iter().all(|name| {
+            self.mi.capabilities.iter().any(|capability| {
+                capability.name == *name
+                    && capability.availability == LiveGpuCapabilityAvailabilityV3::Unavailable
+                    && capability.unavailable_reason
+                        == Some(LiveGpuUnavailableReasonV3::Unsupported)
+            })
+        }) {
+            return Err(RocgdbMiCliValidationErrorV3::InvalidResult);
+        }
         let expected = [
             LiveGpuCapabilityNameV3::StoppedDispatch,
             LiveGpuCapabilityNameV3::StoppedWorkgroups,
@@ -344,8 +363,8 @@ pub enum RocgdbMiCliResultV3 {
     Event {
         event: RocgdbMiExecutionEventV3,
     },
-    GpuThreadsAdmitted {
-        admissions: Vec<RocgdbMiGpuThreadAdmissionV3>,
+    ThreadsAdmitted {
+        admissions: Vec<RocgdbMiThreadAdmissionV3>,
     },
     BindingAdmitted {
         admission: RocgdbMiCliBindingAdmissionV3,
@@ -386,7 +405,7 @@ impl RocgdbMiCliResultV3 {
             Self::Terminated { revision, .. } => Some(*revision),
             Self::Session { .. }
             | Self::Capabilities { .. }
-            | Self::GpuThreadsAdmitted { .. }
+            | Self::ThreadsAdmitted { .. }
             | Self::BindingAdmitted { .. }
             | Self::Registers { .. }
             | Self::Values { .. }
@@ -412,7 +431,7 @@ impl RocgdbMiCliResultV3 {
             Self::Event { event } => event
                 .validate()
                 .map_err(|_| RocgdbMiCliValidationErrorV3::InvalidResult),
-            Self::GpuThreadsAdmitted { admissions } => {
+            Self::ThreadsAdmitted { admissions } => {
                 if admissions.is_empty()
                     || admissions.len() > MAX_ROCGDB_MI_THREADS_V3
                     || admissions
@@ -482,6 +501,7 @@ pub enum RocgdbMiCliErrorCodeV3 {
     AuthorizationMismatch,
     StaleRevision,
     SessionNotStopped,
+    GpuClassificationUnavailable,
     UnknownLogicalIdentity,
     InvalidBinding,
     BackendRejected,

@@ -14,6 +14,10 @@ const WRONG_AUTHORIZATION: &str =
     "3333333333333333333333333333333333333333333333333333333333333333";
 static PID_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
+fn opaque(byte: u8) -> OpaqueIdentityV1 {
+    OpaqueIdentityV1::new([byte; 32]).expect("nonzero identity")
+}
+
 struct Session {
     child: Child,
     input: BufWriter<ChildStdin>,
@@ -184,7 +188,7 @@ fn live_rocgdb_jsonl_is_bounded_relative_authorized_and_agent_friendly() {
         .expect("stopped wave capability");
     assert_eq!(
         stopped_wave.unavailable_reason,
-        Some(LiveGpuUnavailableReasonV3::NotCaptured)
+        Some(LiveGpuUnavailableReasonV3::Unsupported)
     );
 
     ok(session.request(json!({
@@ -222,16 +226,16 @@ fn live_rocgdb_jsonl_is_bounded_relative_authorized_and_agent_friendly() {
         "line": 7
     })));
     let (_, admitted) = ok(session.request(json!({
-        "operation": "admit_gpu_threads",
+        "operation": "admit_threads",
         "schema": ROCGDB_MI_CLI_REQUEST_SCHEMA_V3,
         "request_id": 6,
         "thread_ordinals": [0]
     })));
-    assert!(matches!(
-        admitted,
-        RocgdbMiCliResultV3::GpuThreadsAdmitted { ref admissions }
-            if admissions.len() == 1
-    ));
+    let RocgdbMiCliResultV3::ThreadsAdmitted { admissions } = admitted else {
+        panic!("expected generic thread admission");
+    };
+    assert_eq!(admissions.len(), 1);
+    let thread = admissions[0].thread;
 
     let (_, running) = ok(session.request(json!({
         "operation": "next_event",
@@ -251,86 +255,39 @@ fn live_rocgdb_jsonl_is_bounded_relative_authorized_and_agent_friendly() {
         "request_id": 8,
         "wait_milliseconds": 1000
     })));
-    let RocgdbMiCliResultV3::Event {
-        event: RocgdbMiExecutionEventV3::Stopped { snapshot },
-    } = stopped
-    else {
-        panic!("expected admitted stop");
-    };
-    assert_eq!(snapshot.revision, 2);
-    let thread = &snapshot.threads[0];
+    assert!(matches!(
+        stopped,
+        RocgdbMiCliResultV3::Event {
+            event: RocgdbMiExecutionEventV3::Unavailable {
+                revision: 2,
+                reason: LiveGpuUnavailableReasonV3::Unsupported
+            }
+        }
+    ));
     let scope = RocgdbMiStoppedScopeV3 {
-        stop_identity: snapshot.stop_identity,
-        thread: thread.thread,
-        wave: thread.wave,
+        stop_identity: opaque(8),
+        thread,
+        wave: RocgdbMiWaveIdentityV3 {
+            identity: opaque(9),
+            thread,
+        },
         lane: None,
     };
     let scope_json = serde_json::to_value(scope).unwrap();
 
-    let (_, registers) = ok(session.request(json!({
+    let registers = session.request(json!({
         "operation": "inspect_registers",
         "schema": ROCGDB_MI_CLI_REQUEST_SCHEMA_V3,
         "request_id": 9,
         "scope": scope_json
-    })));
+    }));
     assert!(matches!(
         registers,
-        RocgdbMiCliResultV3::Registers { ref snapshot }
-            if snapshot.registers.iter().any(|register| register.name == "exec")
-    ));
-    let (_, values) = ok(session.request(json!({
-        "operation": "inspect_values",
-        "schema": ROCGDB_MI_CLI_REQUEST_SCHEMA_V3,
-        "request_id": 10,
-        "scope": serde_json::to_value(scope).unwrap()
-    })));
-    assert!(matches!(
-        values,
-        RocgdbMiCliResultV3::Values { ref snapshot }
-            if matches!(
-                snapshot.values[1].value,
-                LiveGpuAvailabilityV3::Unavailable {
-                    reason: LiveGpuUnavailableReasonV3::OptimizedOut,
-                    ..
-                }
-            )
-    ));
-    ok(session.request(json!({
-        "operation": "evaluate_expression",
-        "schema": ROCGDB_MI_CLI_REQUEST_SCHEMA_V3,
-        "request_id": 11,
-        "scope": serde_json::to_value(scope).unwrap(),
-        "value_identity": "7777777777777777777777777777777777777777777777777777777777777777",
-        "name": "first",
-        "expression": "first"
-    })));
-    let (_, memory) = ok(session.request(json!({
-        "operation": "read_memory",
-        "schema": ROCGDB_MI_CLI_REQUEST_SCHEMA_V3,
-        "request_id": 12,
-        "request": {
-            "request_id": 12,
-            "expected_revision": 2,
-            "scope": serde_json::to_value(scope).unwrap(),
-            "allocation": {"ordinal": 1, "generation": 1},
-            "byte_offset": 4,
-            "byte_len": 2
+        RocgdbMiCliResponseV3::Error {
+            code: RocgdbMiCliErrorCodeV3::GpuClassificationUnavailable,
+            terminal: false,
+            ..
         }
-    })));
-    assert!(matches!(
-        memory,
-        RocgdbMiCliResultV3::Memory {
-            memory: RocgdbMiMemoryReadResultV3 {
-                memory: LiveGpuMemoryReadV3 {
-                    value: LiveGpuAvailabilityV3::Available {
-                        value: LiveGpuMemoryBytesV3 { ref bytes, .. },
-                        ..
-                    },
-                    ..
-                },
-                ..
-            }
-        } if bytes == "a10f"
     ));
 
     let (_, stale) = ok(session.request(json!({
@@ -344,7 +301,7 @@ fn live_rocgdb_jsonl_is_bounded_relative_authorized_and_agent_friendly() {
                 "authorization_identity": AUTHORIZATION,
                 "expected_revision": 1
             },
-            "focus": serde_json::to_value(thread.thread).unwrap()
+            "focus": serde_json::to_value(thread).unwrap()
         }
     })));
     assert!(matches!(
@@ -370,7 +327,7 @@ fn live_rocgdb_jsonl_is_bounded_relative_authorized_and_agent_friendly() {
                 "authorization_identity": WRONG_AUTHORIZATION,
                 "expected_revision": 2
             },
-            "focus": serde_json::to_value(thread.thread).unwrap()
+            "focus": serde_json::to_value(thread).unwrap()
         }
     })));
     assert!(matches!(
@@ -396,7 +353,7 @@ fn live_rocgdb_jsonl_is_bounded_relative_authorized_and_agent_friendly() {
                 "authorization_identity": AUTHORIZATION,
                 "expected_revision": 2
             },
-            "focus": serde_json::to_value(thread.thread).unwrap()
+            "focus": serde_json::to_value(thread).unwrap()
         }
     })));
     assert_eq!(continued_revision, 3);

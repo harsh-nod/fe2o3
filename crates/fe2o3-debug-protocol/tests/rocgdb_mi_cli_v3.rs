@@ -16,6 +16,8 @@ fn strict_request_codec_rejects_duplicates_unknowns_and_native_aliases() {
 "#,
         br#"{"operation":"admit_allocation","schema":"fe2o3-rocgdb-mi-request-v3","request_id":1,"allocation":{"ordinal":1,"generation":1},"base":"0xAB","byte_len":4,"space":"global"}
 "#,
+        br#"{"operation":"admit_gpu_threads","schema":"fe2o3-rocgdb-mi-request-v3","request_id":1,"thread_ordinals":[0]}
+"#,
         b"{}\r\n",
     ] {
         assert!(
@@ -28,6 +30,13 @@ fn strict_request_codec_rejects_duplicates_unknowns_and_native_aliases() {
         decode_rocgdb_mi_cli_request_line_v3(&oversized),
         Err(RocgdbMiCliCodecErrorV3::LineTooLarge)
     );
+
+    let generic = decode_rocgdb_mi_cli_request_line_v3(
+        br#"{"operation":"admit_threads","schema":"fe2o3-rocgdb-mi-request-v3","request_id":2,"thread_ordinals":[0]}
+"#,
+    )
+    .expect("generic thread admission");
+    assert!(matches!(generic, RocgdbMiCliRequestV3::AdmitThreads { .. }));
 }
 
 #[test]
@@ -65,14 +74,33 @@ fn control_request_binds_outer_id_and_forbids_second_bootstrap() {
 
 #[test]
 fn capability_response_keeps_generic_hierarchy_explicitly_unsupported() {
+    let mut mi_capabilities = vec![RocgdbMiCapabilityV3 {
+        name: RocgdbMiCapabilityNameV3::Launch,
+        availability: LiveGpuCapabilityAvailabilityV3::Available,
+        unavailable_reason: None,
+        authorization: RocgdbMiAuthorizationRequirementV3::Required,
+    }];
+    mi_capabilities.extend(
+        [
+            RocgdbMiCapabilityNameV3::StoppedWave,
+            RocgdbMiCapabilityNameV3::LogicalLanes,
+            RocgdbMiCapabilityNameV3::RelativeProgramCounter,
+            RocgdbMiCapabilityNameV3::SourceSite,
+            RocgdbMiCapabilityNameV3::RegisterValues,
+            RocgdbMiCapabilityNameV3::SemanticValues,
+            RocgdbMiCapabilityNameV3::AllocationRelativeMemory,
+        ]
+        .into_iter()
+        .map(|name| RocgdbMiCapabilityV3 {
+            name,
+            availability: LiveGpuCapabilityAvailabilityV3::Unavailable,
+            unavailable_reason: Some(LiveGpuUnavailableReasonV3::Unsupported),
+            authorization: RocgdbMiAuthorizationRequirementV3::NotRequired,
+        }),
+    );
     let capabilities = RocgdbMiCliCapabilitiesV3 {
         mi: RocgdbMiCapabilitiesV3 {
-            capabilities: vec![RocgdbMiCapabilityV3 {
-                name: RocgdbMiCapabilityNameV3::Launch,
-                availability: LiveGpuCapabilityAvailabilityV3::Available,
-                unavailable_reason: None,
-                authorization: RocgdbMiAuthorizationRequirementV3::Required,
-            }],
+            capabilities: mi_capabilities,
         },
         generic_stopped_scopes: [
             LiveGpuCapabilityNameV3::StoppedDispatch,
@@ -91,10 +119,24 @@ fn capability_response_keeps_generic_hierarchy_explicitly_unsupported() {
     };
     capabilities.validate().expect("explicit capability split");
 
-    let mut missing = capabilities;
+    let mut missing = capabilities.clone();
     missing.generic_stopped_scopes.pop();
     assert_eq!(
         missing.validate(),
+        Err(RocgdbMiCliValidationErrorV3::InvalidResult)
+    );
+
+    let mut promoted = capabilities;
+    let stopped_wave = promoted
+        .mi
+        .capabilities
+        .iter_mut()
+        .find(|capability| capability.name == RocgdbMiCapabilityNameV3::StoppedWave)
+        .unwrap();
+    stopped_wave.availability = LiveGpuCapabilityAvailabilityV3::Available;
+    stopped_wave.unavailable_reason = None;
+    assert_eq!(
+        promoted.validate(),
         Err(RocgdbMiCliValidationErrorV3::InvalidResult)
     );
 }

@@ -216,7 +216,7 @@ impl RocgdbMiProcessV3 {
         ]
         .into_iter()
         .all(|name| commands.contains(name));
-        let gpu_admitted = !self.adapter.raw_threads.is_empty();
+        let gpu_admitted = !self.adapter.authenticated_gpu_threads.is_empty();
         let admitted_capability = |name, command_present, bound, reason, authorization| {
             capability(
                 name,
@@ -257,49 +257,49 @@ impl RocgdbMiProcessV3 {
                     RocgdbMiCapabilityNameV3::StoppedWave,
                     thread_info,
                     true,
-                    LiveGpuUnavailableReasonV3::NotCaptured,
+                    LiveGpuUnavailableReasonV3::Unsupported,
                     no_auth,
                 ),
                 admitted_capability(
                     RocgdbMiCapabilityNameV3::LogicalLanes,
                     thread_info,
                     true,
-                    LiveGpuUnavailableReasonV3::NotCaptured,
+                    LiveGpuUnavailableReasonV3::Unsupported,
                     no_auth,
                 ),
                 admitted_capability(
                     RocgdbMiCapabilityNameV3::RelativeProgramCounter,
                     stack,
                     !self.adapter.code_objects.is_empty(),
-                    LiveGpuUnavailableReasonV3::NotCaptured,
+                    LiveGpuUnavailableReasonV3::Unsupported,
                     no_auth,
                 ),
                 admitted_capability(
                     RocgdbMiCapabilityNameV3::SourceSite,
                     stack,
                     !self.adapter.sources.is_empty(),
-                    LiveGpuUnavailableReasonV3::NotCaptured,
+                    LiveGpuUnavailableReasonV3::Unsupported,
                     no_auth,
                 ),
                 admitted_capability(
                     RocgdbMiCapabilityNameV3::RegisterValues,
                     registers,
                     true,
-                    LiveGpuUnavailableReasonV3::NotCaptured,
+                    LiveGpuUnavailableReasonV3::Unsupported,
                     no_auth,
                 ),
                 admitted_capability(
                     RocgdbMiCapabilityNameV3::SemanticValues,
                     values,
                     true,
-                    LiveGpuUnavailableReasonV3::NotCaptured,
+                    LiveGpuUnavailableReasonV3::Unsupported,
                     no_auth,
                 ),
                 admitted_capability(
                     RocgdbMiCapabilityNameV3::AllocationRelativeMemory,
                     memory,
                     !self.adapter.allocations.is_empty(),
-                    LiveGpuUnavailableReasonV3::AllocationUnknown,
+                    LiveGpuUnavailableReasonV3::Unsupported,
                     no_auth,
                 ),
                 command_capability(RocgdbMiCapabilityNameV3::Breakpoints, breakpoints, auth),
@@ -538,18 +538,18 @@ impl RocgdbMiProcessV3 {
         }
     }
 
-    pub fn admit_gpu_threads(
+    pub fn admit_threads(
         &mut self,
         ordinals: &[u16],
         timeout: Duration,
-    ) -> Result<Vec<RocgdbMiGpuThreadAdmissionV3>, RocgdbMiAdapterErrorV3> {
+    ) -> Result<Vec<RocgdbMiThreadAdmissionV3>, RocgdbMiAdapterErrorV3> {
         let (class, results) = self.send_command(b"-thread-info", deadline(timeout)?)?;
         if class != "done" {
             return Err(RocgdbMiAdapterErrorV3::BackendRejected);
         }
         let evidence = self.last_response_evidence.clone();
         self.adapter
-            .admit_gpu_thread_results(&results, ordinals, &evidence)
+            .admit_thread_results(&results, ordinals, &evidence)
     }
 
     pub fn inspect_registers(
@@ -1027,6 +1027,9 @@ impl RocgdbMiProcessV3 {
         scope
             .validate()
             .map_err(|_| RocgdbMiAdapterErrorV3::ProtocolRecordRejected)?;
+        if self.adapter.authenticated_gpu_threads.is_empty() {
+            return Err(RocgdbMiAdapterErrorV3::GpuClassificationUnavailable);
+        }
         if self.adapter.state != ExecutionStateV3::Stopped
             || self.adapter.current_stop != Some(scope.stop_identity)
         {
@@ -1528,7 +1531,7 @@ mod tests {
         )
         .expect("adapter");
         let admitted = adapter
-            .admit_gpu_threads_from_thread_info(b"1^done,threads=[{id=\"9\"}]\n", &[0])
+            .admit_threads_from_thread_info(b"1^done,threads=[{id=\"9\"}]\n", &[0])
             .expect("admission");
         adapter
             .ingest_line(b"*stopped,reason=\"signal-received\",thread-id=\"9\"\n")

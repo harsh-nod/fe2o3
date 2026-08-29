@@ -10,10 +10,10 @@
 //! direct-KFD runtime and queue telemetry remain usable when no second
 //! debug-trap session claims that exclusive authority.
 //!
-//! This low-level substrate binds an explicitly admitted MI thread to a logical
-//! wave only. It does not invent a dispatch or workgroup hierarchy. The generic
-//! live protocol therefore keeps stopped semantic scopes unsupported until a
-//! caller provides independently evidenced hierarchy admission.
+//! This low-level substrate binds structured MI thread identifiers for process
+//! control. It does not classify those threads as GPU waves from human-oriented
+//! thread metadata. Stopped GPU semantics remain unavailable until a separate
+//! trusted correlation source authenticates a GPU thread binding.
 
 mod process;
 
@@ -102,6 +102,7 @@ pub enum RocgdbMiAdapterErrorV3 {
     UnknownSource,
     StaleRevision,
     SessionNotStopped,
+    GpuClassificationUnavailable,
     ProcessSpawn,
     ProcessIo,
     ProcessExited,
@@ -167,6 +168,7 @@ pub struct RocgdbMiObservationAdapterV3 {
     limits: RocgdbMiAdapterLimitsV3,
     raw_threads: BTreeMap<Vec<u8>, RocgdbMiThreadIdentityV3>,
     logical_threads: BTreeMap<RocgdbMiThreadIdentityV3, Vec<u8>>,
+    authenticated_gpu_threads: BTreeMap<RocgdbMiThreadIdentityV3, ()>,
     code_objects: Vec<CodeObjectAuthorityV3>,
     allocations: Vec<(AllocationIdentityV1, AllocationAuthorityV3)>,
     sources: Vec<SourceAuthorityV3>,
@@ -183,6 +185,10 @@ impl fmt::Debug for RocgdbMiObservationAdapterV3 {
             .field("revision", &self.revision)
             .field("state", &self.state)
             .field("thread_bindings", &self.raw_threads.len())
+            .field(
+                "authenticated_gpu_thread_bindings",
+                &self.authenticated_gpu_threads.len(),
+            )
             .field("code_object_bindings", &self.code_objects.len())
             .field("allocation_bindings", &self.allocations.len())
             .field("source_bindings", &self.sources.len())
@@ -213,6 +219,7 @@ impl RocgdbMiObservationAdapterV3 {
             limits,
             raw_threads: BTreeMap::new(),
             logical_threads: BTreeMap::new(),
+            authenticated_gpu_threads: BTreeMap::new(),
             code_objects: Vec::new(),
             allocations: Vec::new(),
             sources: Vec::new(),
@@ -310,16 +317,14 @@ impl RocgdbMiObservationAdapterV3 {
         Ok(())
     }
 
-    /// Admits caller-selected GPU thread ordinals from one structured MI result.
-    ///
-    /// The caller correlates these ordinals with direct-KFD knowledge. This
-    /// method reads only each tuple's structured `id` field and never parses
-    /// ROCgdb's human-oriented `target-id`, `details`, or console stream.
-    pub fn admit_gpu_threads_from_thread_info(
+    /// Admits caller-selected generic thread ordinals from one structured MI
+    /// result. No GPU classification is inferred from ROCgdb's human-oriented
+    /// `target-id`, `details`, names, or console stream.
+    pub fn admit_threads_from_thread_info(
         &mut self,
         line: &[u8],
         ordinals: &[u16],
-    ) -> Result<Vec<RocgdbMiGpuThreadAdmissionV3>, RocgdbMiAdapterErrorV3> {
+    ) -> Result<Vec<RocgdbMiThreadAdmissionV3>, RocgdbMiAdapterErrorV3> {
         let record = parse_mi_record_v3(line, self.limits.parser())?;
         let MiRecordV3::Result { class, results, .. } = record else {
             return Err(RocgdbMiAdapterErrorV3::UnexpectedMiRecord);
@@ -327,15 +332,15 @@ impl RocgdbMiObservationAdapterV3 {
         if class != "done" {
             return Err(RocgdbMiAdapterErrorV3::BackendRejected);
         }
-        self.admit_gpu_thread_results(&results, ordinals, line)
+        self.admit_thread_results(&results, ordinals, line)
     }
 
-    fn admit_gpu_thread_results(
+    fn admit_thread_results(
         &mut self,
         results: &MiResultsV3,
         ordinals: &[u16],
         evidence: &[u8],
-    ) -> Result<Vec<RocgdbMiGpuThreadAdmissionV3>, RocgdbMiAdapterErrorV3> {
+    ) -> Result<Vec<RocgdbMiThreadAdmissionV3>, RocgdbMiAdapterErrorV3> {
         if ordinals.is_empty() || ordinals.len() > MAX_ROCGDB_MI_THREADS_V3 {
             return Err(RocgdbMiAdapterErrorV3::CountOutOfRange("thread admissions"));
         }
@@ -358,7 +363,7 @@ impl RocgdbMiObservationAdapterV3 {
                 .ok_or(RocgdbMiAdapterErrorV3::InvalidField("thread ordinal"))?;
             let raw = required_const(tuple, "id")?;
             let thread = self.admit_thread(raw)?;
-            admitted.push(RocgdbMiGpuThreadAdmissionV3 {
+            admitted.push(RocgdbMiThreadAdmissionV3 {
                 thread_info_record_identity: record_identity,
                 thread_ordinal: *ordinal,
                 thread,
@@ -412,6 +417,7 @@ impl RocgdbMiObservationAdapterV3 {
                     && let Some(logical) = self.raw_threads.remove(raw)
                 {
                     self.logical_threads.remove(&logical);
+                    self.authenticated_gpu_threads.remove(&logical);
                 }
                 Ok(None)
             }
@@ -450,6 +456,15 @@ impl RocgdbMiObservationAdapterV3 {
                 reason: LiveGpuUnavailableReasonV3::OutsideCaptureScope,
             });
         };
+        if !self.authenticated_gpu_threads.contains_key(&thread) {
+            self.bump_revision()?;
+            self.state = ExecutionStateV3::Stopped;
+            self.current_stop = None;
+            return Ok(RocgdbMiExecutionEventV3::Unavailable {
+                revision: self.revision,
+                reason: LiveGpuUnavailableReasonV3::Unsupported,
+            });
+        }
         let wave = RocgdbMiWaveIdentityV3 {
             identity: self.derive_identity(b"wave", raw_thread)?,
             thread,

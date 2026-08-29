@@ -6,12 +6,23 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use fe2o3_debug_cli::rocgdb_mi_v3::{
-    RocgdbMiAdapterLimitsV3, RocgdbMiObservationAdapterV3, RocgdbMiProcessV3,
+    RocgdbMiAdapterErrorV3, RocgdbMiAdapterLimitsV3, RocgdbMiObservationAdapterV3,
+    RocgdbMiProcessV3,
 };
 use fe2o3_debug_protocol::*;
 
 fn identity(byte: u8) -> OpaqueIdentityV1 {
     OpaqueIdentityV1::new([byte; 32]).expect("nonzero identity")
+}
+
+fn unavailable<T>() -> LiveGpuAvailabilityV3<T> {
+    LiveGpuAvailabilityV3::Unavailable {
+        reason: LiveGpuUnavailableReasonV3::NotCaptured,
+        truth: LiveGpuTruthV3 {
+            origin: LiveGpuTruthOriginV3::Unavailable,
+            evidence: Vec::new(),
+        },
+    }
 }
 
 fn adapter() -> RocgdbMiObservationAdapterV3 {
@@ -25,31 +36,34 @@ fn adapter() -> RocgdbMiObservationAdapterV3 {
 }
 
 #[test]
-fn admits_only_caller_selected_structured_thread_tuple() {
-    let mut adapter = adapter();
-    let admissions = adapter
-        .admit_gpu_threads_from_thread_info(
-            b"8^done,threads=[{id=\"7\",target-id=\"AMDGPU fake prose\"},{id=\"9\",target-id=\"Host\"}]\n",
-            &[1],
-        )
-        .expect("structured admission");
-    assert_eq!(admissions.len(), 1);
+fn host_unknown_and_gpu_looking_metadata_remain_generic_threads() {
+    for thread_info in [
+        b"8^done,threads=[{id=\"9\",target-id=\"Host\"}]\n".as_slice(),
+        b"8^done,threads=[{id=\"9\"}]\n".as_slice(),
+        b"8^done,threads=[{id=\"9\",target-id=\"AMDGPU fake prose\"}]\n".as_slice(),
+    ] {
+        let mut adapter = adapter();
+        let admissions = adapter
+            .admit_threads_from_thread_info(thread_info, &[0])
+            .expect("structured generic-thread admission");
+        assert_eq!(admissions.len(), 1);
 
-    let outside = adapter
-        .ingest_line(b"*stopped,reason=\"signal-received\",thread-id=\"7\"\n")
-        .expect("typed host stop")
-        .expect("event");
-    assert!(matches!(
-        outside,
-        RocgdbMiExecutionEventV3::Unavailable {
-            reason: LiveGpuUnavailableReasonV3::OutsideCaptureScope,
-            ..
-        }
-    ));
+        let event = adapter
+            .ingest_line(b"*stopped,reason=\"signal-received\",thread-id=\"9\"\n")
+            .expect("typed unavailable GPU stop")
+            .expect("event");
+        assert!(matches!(
+            event,
+            RocgdbMiExecutionEventV3::Unavailable {
+                reason: LiveGpuUnavailableReasonV3::Unsupported,
+                ..
+            }
+        ));
+    }
 }
 
 #[test]
-fn maps_only_bound_locations_and_never_serializes_native_authority() {
+fn bound_locations_do_not_promote_a_generic_thread_or_leak_authority() {
     let mut adapter = adapter();
     let content = LiveGpuContentIdentityV3 {
         digest: identity(3),
@@ -68,37 +82,21 @@ fn maps_only_bound_locations_and_never_serializes_native_authority() {
         .bind_source_line(OsStr::new("/private/kernel.fe"), 7, source)
         .expect("source binding");
     adapter
-        .admit_gpu_threads_from_thread_info(b"8^done,threads=[{id=\"9\"}]\n", &[0])
+        .admit_threads_from_thread_info(b"8^done,threads=[{id=\"9\"}]\n", &[0])
         .expect("admission");
     let event = adapter
         .ingest_line(b"*stopped,reason=\"signal-received\",thread-id=\"9\",frame={addr=\"0x1028\",fullname=\"/private/kernel.fe\",line=\"7\"}\n")
         .expect("stop")
         .expect("event");
-    let RocgdbMiExecutionEventV3::Stopped { snapshot } = event else {
-        panic!("expected stopped snapshot");
-    };
-    let thread = &snapshot.threads[0];
     assert!(matches!(
-        thread.relative_pc,
-        LiveGpuAvailabilityV3::Available {
-            value: LiveGpuRelativePcV3 {
-                kernel_entry_byte_offset: 8
-            },
+        event,
+        RocgdbMiExecutionEventV3::Unavailable {
+            reason: LiveGpuUnavailableReasonV3::Unsupported,
             ..
         }
     ));
-    assert!(
-        matches!(thread.source, LiveGpuAvailabilityV3::Available { value, .. } if value == source)
-    );
-    assert!(thread.lanes.iter().all(|lane| matches!(
-        lane.active,
-        LiveGpuAvailabilityV3::Unavailable {
-            reason: LiveGpuUnavailableReasonV3::NotCaptured,
-            ..
-        }
-    )));
 
-    let wire = serde_json::to_string(&snapshot).expect("serialize sanitized snapshot");
+    let wire = serde_json::to_string(&event).expect("serialize sanitized event");
     for secret in ["/private/kernel.fe", "0x1028", "thread-id", "target-id"] {
         assert!(!wire.contains(secret), "public record leaked {secret}");
     }
@@ -109,16 +107,37 @@ fn maps_only_bound_locations_and_never_serializes_native_authority() {
 
 #[test]
 fn exec_register_is_the_only_lane_activity_authority() {
-    let mut adapter = adapter();
-    adapter
-        .admit_gpu_threads_from_thread_info(b"8^done,threads=[{id=\"9\"}]\n", &[0])
-        .expect("admission");
-    let event = adapter
-        .ingest_line(b"*stopped,reason=\"signal-received\",thread-id=\"9\"\n")
-        .expect("stop")
-        .expect("event");
-    let RocgdbMiExecutionEventV3::Stopped { mut snapshot } = event else {
-        panic!("expected stop");
+    let adapter = adapter();
+    let thread = RocgdbMiThreadIdentityV3 {
+        identity: identity(8),
+    };
+    let wave = RocgdbMiWaveIdentityV3 {
+        identity: identity(9),
+        thread,
+    };
+    let mut snapshot = RocgdbMiStoppedSnapshotV3 {
+        snapshot_identity: identity(10),
+        stop_identity: identity(11),
+        revision: 1,
+        reason: RocgdbMiStopReasonV3::Signal,
+        breakpoint: None,
+        threads: vec![RocgdbMiStoppedThreadV3 {
+            thread,
+            wave,
+            wave_width: 32,
+            lanes: (0..32)
+                .map(|lane| RocgdbMiLaneObservationV3 {
+                    lane: RocgdbMiLaneIdentityV3 {
+                        identity: identity(u8::try_from(lane + 20).unwrap()),
+                        wave,
+                        lane,
+                    },
+                    active: unavailable(),
+                })
+                .collect(),
+            relative_pc: unavailable(),
+            source: unavailable(),
+        }],
     };
     let stopped = &snapshot.threads[0];
     let scope = RocgdbMiStoppedScopeV3 {
@@ -170,7 +189,7 @@ fn exec_register_is_the_only_lane_activity_authority() {
 }
 
 #[test]
-fn token_correlates_queries_and_authorized_controls() {
+fn structured_generic_threads_support_control_without_gpu_semantic_truth() {
     let fixture =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fake_rocgdb_mi_v3.py");
     let mut process = RocgdbMiProcessV3::spawn(
@@ -197,7 +216,7 @@ fn token_correlates_queries_and_authorized_controls() {
     );
     assert_eq!(
         stopped_wave.unavailable_reason,
-        Some(LiveGpuUnavailableReasonV3::NotCaptured)
+        Some(LiveGpuUnavailableReasonV3::Unsupported)
     );
 
     let content = LiveGpuContentIdentityV3 {
@@ -248,93 +267,45 @@ fn token_correlates_queries_and_authorized_controls() {
         RocgdbMiExecutionEventV3::Running { revision: 1 }
     ));
 
-    let admissions = process.admit_gpu_threads(&[0], timeout).expect("admission");
+    let admissions = process.admit_threads(&[0], timeout).expect("admission");
     let stopped = process.next_event(timeout).expect("stopped");
-    let RocgdbMiExecutionEventV3::Stopped { snapshot } = stopped else {
-        panic!("expected stop");
-    };
-    let thread = &snapshot.threads[0];
-    assert_eq!(thread.thread, admissions[0].thread);
+    assert!(matches!(
+        stopped,
+        RocgdbMiExecutionEventV3::Unavailable {
+            revision: 2,
+            reason: LiveGpuUnavailableReasonV3::Unsupported
+        }
+    ));
     let admitted_capabilities = process
         .discover_capabilities(timeout)
         .expect("admitted capabilities");
-    for available in [
+    for unavailable in [
         RocgdbMiCapabilityNameV3::StoppedWave,
         RocgdbMiCapabilityNameV3::LogicalLanes,
         RocgdbMiCapabilityNameV3::RelativeProgramCounter,
+        RocgdbMiCapabilityNameV3::SourceSite,
         RocgdbMiCapabilityNameV3::RegisterValues,
         RocgdbMiCapabilityNameV3::SemanticValues,
         RocgdbMiCapabilityNameV3::AllocationRelativeMemory,
     ] {
         assert!(admitted_capabilities.capabilities.iter().any(|item| {
-            item.name == available
-                && item.availability == LiveGpuCapabilityAvailabilityV3::Available
+            item.name == unavailable
+                && item.availability == LiveGpuCapabilityAvailabilityV3::Unavailable
+                && item.unavailable_reason == Some(LiveGpuUnavailableReasonV3::Unsupported)
         }));
     }
     let scope = RocgdbMiStoppedScopeV3 {
-        stop_identity: snapshot.stop_identity,
-        thread: thread.thread,
-        wave: thread.wave,
+        stop_identity: identity(8),
+        thread: admissions[0].thread,
+        wave: RocgdbMiWaveIdentityV3 {
+            identity: identity(9),
+            thread: admissions[0].thread,
+        },
         lane: None,
     };
-
-    let registers = process
-        .inspect_registers(scope, timeout)
-        .expect("registers");
-    assert_eq!(registers.registers.len(), 2);
-    assert!(matches!(
-        registers.registers[0].value,
-        LiveGpuAvailabilityV3::Available { .. }
-    ));
-    let values = process.inspect_values(scope, timeout).expect("values");
-    assert!(matches!(
-        values.values[1].value,
-        LiveGpuAvailabilityV3::Unavailable {
-            reason: LiveGpuUnavailableReasonV3::OptimizedOut,
-            ..
-        }
-    ));
-    let first = process
-        .evaluate_expression(scope, identity(8), "first", "first", timeout)
-        .expect("first expression");
-    let second = process
-        .evaluate_expression(scope, identity(9), "second", "second", timeout)
-        .expect("second expression");
-    let (
-        LiveGpuAvailabilityV3::Available {
-            truth: first_truth, ..
-        },
-        LiveGpuAvailabilityV3::Available {
-            truth: second_truth,
-            ..
-        },
-    ) = (&first.value, &second.value)
-    else {
-        panic!("available expressions");
-    };
-    assert_ne!(
-        first_truth.evidence, second_truth.evidence,
-        "response bytes must bind observation truth"
-    );
-
-    let memory = process
-        .read_memory(
-            RocgdbMiMemoryReadRequestV3 {
-                request_id: 2,
-                expected_revision: snapshot.revision,
-                scope,
-                allocation: AllocationIdentityV1 {
-                    ordinal: 1,
-                    generation: 1,
-                },
-                byte_offset: 4,
-                byte_len: 2,
-            },
-            timeout,
-        )
-        .expect("memory");
-    assert!(
-        matches!(memory.memory.value, LiveGpuAvailabilityV3::Available { ref value, .. } if value.bytes == "a10f")
+    assert_eq!(
+        process.inspect_registers(scope, timeout),
+        Err(RocgdbMiAdapterErrorV3::GpuClassificationUnavailable)
     );
 
     let breakpoint = process
@@ -343,7 +314,7 @@ fn token_correlates_queries_and_authorized_controls() {
                 request_id: 3,
                 authorization: RocgdbMiControlAuthorizationV3 {
                     authorization_identity: identity(2),
-                    expected_revision: snapshot.revision,
+                    expected_revision: 2,
                 },
                 site: RocgdbMiBreakpointSiteV3::CodeObjectRelative {
                     code_object: content,
@@ -353,7 +324,7 @@ fn token_correlates_queries_and_authorized_controls() {
             timeout,
         )
         .expect("breakpoint");
-    assert_eq!(breakpoint.audit.after_revision, snapshot.revision + 1);
+    assert_eq!(breakpoint.audit.after_revision, 3);
 
     let continued = process
         .control(
@@ -363,7 +334,7 @@ fn token_correlates_queries_and_authorized_controls() {
                     authorization_identity: identity(2),
                     expected_revision: breakpoint.revision,
                 },
-                focus: thread.thread,
+                focus: admissions[0].thread,
             },
             timeout,
         )
@@ -426,6 +397,6 @@ fn installed_rocgdb_reports_structured_capabilities() {
     );
     assert_eq!(
         stopped_wave.unavailable_reason,
-        Some(LiveGpuUnavailableReasonV3::NotCaptured)
+        Some(LiveGpuUnavailableReasonV3::Unsupported)
     );
 }

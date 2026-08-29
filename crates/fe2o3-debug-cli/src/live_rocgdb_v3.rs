@@ -246,11 +246,11 @@ fn handle_request(
         } => process
             .next_event(Duration::from_millis(wait_milliseconds))
             .map(|event| RocgdbMiCliResultV3::Event { event }),
-        RocgdbMiCliRequestV3::AdmitGpuThreads {
+        RocgdbMiCliRequestV3::AdmitThreads {
             thread_ordinals, ..
         } => process
-            .admit_gpu_threads(&thread_ordinals, timeout)
-            .map(|admissions| RocgdbMiCliResultV3::GpuThreadsAdmitted { admissions }),
+            .admit_threads(&thread_ordinals, timeout)
+            .map(|admissions| RocgdbMiCliResultV3::ThreadsAdmitted { admissions }),
         RocgdbMiCliRequestV3::AdmitCodeObject {
             content,
             load_base,
@@ -414,6 +414,9 @@ fn error_code(error: RocgdbMiAdapterErrorV3) -> RocgdbMiCliErrorCodeV3 {
     match error {
         RocgdbMiAdapterErrorV3::StaleRevision => RocgdbMiCliErrorCodeV3::StaleRevision,
         RocgdbMiAdapterErrorV3::SessionNotStopped => RocgdbMiCliErrorCodeV3::SessionNotStopped,
+        RocgdbMiAdapterErrorV3::GpuClassificationUnavailable => {
+            RocgdbMiCliErrorCodeV3::GpuClassificationUnavailable
+        }
         RocgdbMiAdapterErrorV3::UnknownThread
         | RocgdbMiAdapterErrorV3::UnknownAllocation
         | RocgdbMiAdapterErrorV3::UnknownCodeObject

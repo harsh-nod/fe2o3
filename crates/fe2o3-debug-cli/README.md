@@ -180,26 +180,26 @@ appear in JSONL responses. The coordinator invokes no shell and uses no HIP or
 HSA runtime.
 
 The `fe2o3-rocgdb-mi-request-v3` JSONL protocol exposes structured capability
-discovery, asynchronous events, explicit caller-selected GPU-thread admission
-from `-thread-info` tuple ordinals, relative PC/source views, registers,
-semantic values, expression evaluation, allocation-relative memory, and
-audited breakpoint/continue/pause/step control. Native code-object and
-allocation addresses and source paths occur only in admission requests; their
+discovery, asynchronous events, caller-selected generic thread admission from
+`-thread-info` tuple ordinals, and audited breakpoint/continue/pause/step
+control. Native code-object and allocation addresses and source paths occur
+only in admission requests; their
 responses contain content, allocation, or source-span identities. Request
 lines, response lines, command counts, MI records, nesting, strings and waits
 are bounded. Duplicate request IDs, stale revisions, authorization mismatch,
 unknown fields, aliases and malformed MI are rejected without screen scraping.
 
-An admitted MI thread is a low-level logical wave binding, not evidence of a
-dispatch or workgroup. Generic stopped dispatch/workgroup/wave/lane
-capabilities remain separately typed `unsupported`; no topology coordinate is
-synthesized. Lane activity stays `not_captured` until a token-correlated `exec`
-register value is observed. PC and memory are emitted only relative to private
-code-object and allocation bindings. ROCgdb and direct-KFD debug-trap control
-are mutually selected session backends, although direct-KFD runtime telemetry
-may still be correlated when it does not claim a second debug-trap owner.
+An admitted MI thread remains a generic logical debugger thread. Host, unknown,
+and GPU-looking `target-id` text is not GPU classification evidence. Stopped
+dispatch/workgroup/wave/lane, relative PC/source, register/value/expression,
+and allocation-relative memory capabilities remain typed `unsupported` until a
+separate trusted correlation source can authenticate a GPU thread binding; no
+wave or topology coordinate is synthesized. ROCgdb and direct-KFD debug-trap
+control are mutually selected session backends, although direct-KFD runtime
+telemetry may still be correlated when it does not claim a second debug-trap
+owner.
 
-The deterministic MI fixture validates the complete JSONL workflow in generic
-CI, and installed ROCgdb capability discovery is validated on MI300X. A live
-pure-KFD GPU wave stop with PC, `exec`, registers and resume has not yet been
-validated, so this command does not claim that milestone.
+The deterministic MI fixture validates the currently available JSONL workflow
+in generic CI. Installed ROCgdb capability discovery is validated on MI300X. A
+live pure-KFD GPU wave stop with PC, `exec`, registers and resume has not yet
+been validated, so this command does not claim that milestone.

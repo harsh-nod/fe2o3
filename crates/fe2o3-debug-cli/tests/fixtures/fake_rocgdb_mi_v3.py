@@ -51,7 +51,7 @@ for raw in sys.stdin:
     elif command == "-thread-info":
         emit('~"ROCgdb private console text\\n"')
         emit('@"INFERIOR_NATIVE_SECRET\\n"')
-        emit(prefix + 'done,threads=[{id="9",target-id="structured fields only"}]')
+        emit(prefix + 'done,threads=[{id="9",target-id="Host"}]')
         emit('*stopped,reason="signal-received",thread-id="9",frame={addr="0x1028"}')
     elif command == '-data-list-register-names --thread "9"':
         emit(prefix + 'done,register-names=["exec","pc"]')
