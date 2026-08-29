@@ -348,10 +348,11 @@ pub fn gfx950_gpt_oss_120b_expert_v1(
     let index = thread::index_1d();
     let lane_index = index.get();
     let lane = WaveLane::<Wave64>::current();
-    let Some(packed) = packed_top4.get(0) else {
+    let Ok(packed) = StridedReadView2D::from_shared_slice(packed_top4, 0, 1, 1, 1)
+    else {
         return Err(KernelError::InvalidArgument);
     };
-    let selected = (*packed as usize) & (EXPERTS - 1);
+    let selected = (packed.load_or(0, 0, 0) as usize) & (EXPERTS - 1);
     let column = lane_index % EXPERT_N_TILE;
     let expert_reduction_base = selected * MXFP4_BLOCKS * EXPERT_K_TILE;
     let Ok(weights) = Gfx950Fp4MfmaBMatrix::row_major(
