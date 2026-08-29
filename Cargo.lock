@@ -1451,6 +1451,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe2o3-protected-static-executable"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-runtime-protocol",
+ "libc",
+ "rustix",
+ "sha2 0.11.0",
+ "tempfile",
+]
+
+[[package]]
 name = "fe2o3-raw-add-index"
 version = "0.1.0"
 dependencies = [
