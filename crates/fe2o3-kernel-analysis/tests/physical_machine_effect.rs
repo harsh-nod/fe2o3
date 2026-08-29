@@ -1,16 +1,18 @@
 use fe2o3_kernel_analysis::{
     PHYSICAL_MACHINE_ANALYSIS_BUNDLE_DOMAIN_V1, PHYSICAL_MACHINE_ANALYSIS_BUNDLE_SCHEMA_VERSION_V1,
-    PHYSICAL_MACHINE_EFFECT_EVIDENCE_DOMAIN_V1, PHYSICAL_MACHINE_EFFECT_SCHEMA_VERSION_V1,
-    PHYSICAL_MACHINE_TRACE_EVIDENCE_DOMAIN_V1, PHYSICAL_MACHINE_TRACE_SCHEMA_VERSION_V1,
-    PhysicalMachineAnalysisEvidenceErrorV1, PhysicalMachineAnalysisEvidenceV1,
-    PhysicalMachineAnalyzerIdentityV1, PhysicalMachineEffectAnalysisBasisV1,
-    PhysicalMachineEffectBudgetV1, PhysicalMachineEffectEntryRequestV1,
-    PhysicalMachineEffectEvidenceErrorV1, PhysicalMachineEffectEvidenceV1,
-    PhysicalMachineEffectKindV1, PhysicalMachineEffectRequestErrorV1,
-    PhysicalMachineEffectRequestV1, PhysicalMachineExecutionChallengeV1, PhysicalMachineTargetV1,
+    PHYSICAL_MACHINE_EFFECT_EVIDENCE_DOMAIN_V1, PHYSICAL_MACHINE_EFFECT_REQUEST_DOMAIN_V1,
+    PHYSICAL_MACHINE_EFFECT_SCHEMA_VERSION_V1, PHYSICAL_MACHINE_TRACE_EVIDENCE_DOMAIN_V1,
+    PHYSICAL_MACHINE_TRACE_SCHEMA_VERSION_V1, PhysicalMachineAnalysisEvidenceErrorV1,
+    PhysicalMachineAnalysisEvidenceV1, PhysicalMachineAnalyzerIdentityV1,
+    PhysicalMachineEffectAnalysisBasisV1, PhysicalMachineEffectBudgetV1,
+    PhysicalMachineEffectEntryRequestV1, PhysicalMachineEffectEvidenceErrorV1,
+    PhysicalMachineEffectEvidenceV1, PhysicalMachineEffectKindV1,
+    PhysicalMachineEffectRequestErrorV1, PhysicalMachineEffectRequestV1,
+    PhysicalMachineExecutionChallengeV1, PhysicalMachineOperandValueV1, PhysicalMachineTargetV1,
     PhysicalMachineToolchainIdentityV1, PhysicalMachineTraceEvidenceErrorV1,
     PhysicalMachineTraceEvidenceV1,
 };
+use std::{collections::BTreeSet, fs};
 
 const CODE_OFFSET: u64 = 4;
 const CODE_SIZE: u64 = 16;
@@ -571,6 +573,65 @@ fn encode_analysis_bundle(effects: &[u8], trace: &[u8]) -> Vec<u8> {
 }
 
 #[test]
+fn configured_retained_machine_analysis_reopens_offline() {
+    let Some(request_path) = std::env::var_os("FE2O3_MACHINE_ANALYSIS_RETAINED_REQUEST") else {
+        return;
+    };
+    let Some(bundle_path) = std::env::var_os("FE2O3_MACHINE_ANALYSIS_RETAINED_BUNDLE") else {
+        return;
+    };
+    let request = PhysicalMachineEffectRequestV1::decode_canonical(
+        &fs::read(request_path).expect("read retained machine request"),
+    )
+    .expect("decode retained machine request");
+    let analysis = PhysicalMachineAnalysisEvidenceV1::decode_canonical_for(
+        &request,
+        &fs::read(bundle_path).expect("read retained machine bundle"),
+    )
+    .expect("decode retained machine bundle");
+    if let Ok(expected) = std::env::var("FE2O3_MACHINE_ANALYSIS_RETAINED_ENTRY") {
+        assert_eq!(request.entries().len(), 1);
+        assert_eq!(request.entries()[0].symbol(), expected);
+    }
+    assert!(analysis.binds_exact_payload_instruction_bytes());
+    assert!(!analysis.establishes_machine_semantics());
+    assert!(!analysis.establishes_compiler_refinement());
+    assert!(!analysis.grants_load_authority());
+    assert!(!analysis.grants_launch_authority());
+
+    let mut registers = BTreeSet::new();
+    for instruction in analysis.trace().instructions() {
+        for operand in instruction.operands() {
+            if let PhysicalMachineOperandValueV1::Register(register) = operand.value() {
+                registers.insert(register.as_str());
+            }
+        }
+        registers.extend(
+            instruction
+                .implicit_definitions()
+                .iter()
+                .map(String::as_str),
+        );
+        registers.extend(instruction.implicit_uses().iter().map(String::as_str));
+    }
+    eprintln!(
+        "offline gfx942 analysis: request={:?} bundle={:?} blocks={} instructions={} registers={registers:?}",
+        request.identity(),
+        analysis.identity(),
+        analysis.trace().blocks().len(),
+        analysis.trace().instructions().len(),
+    );
+    if std::env::var_os("FE2O3_MACHINE_ANALYSIS_DUMP_TRACE").is_some() {
+        for block in analysis.trace().blocks() {
+            eprintln!("block {block:?}");
+        }
+        for instruction in analysis.trace().instructions() {
+            eprintln!("instruction {instruction:?}");
+        }
+    }
+}
+
+#[test]
 fn canonical_record_binds_exact_payload_worker_target_graph_and_effects() {
     let request = request();
     let bytes = evidence(&request, &[entry_function()], &effects());
@@ -641,6 +702,60 @@ fn request_and_evidence_are_deterministic_golden_records() {
             0x15, 0x8d, 0xcf, 0x89, 0x3d, 0xe5, 0x6a, 0x12, 0xae, 0xf8, 0x1f, 0x58, 0xb2, 0x68,
             0xc6, 0xe8, 0xd1, 0xc4,
         ]
+    );
+}
+
+#[test]
+fn canonical_request_reopens_offline_and_rejects_substitution() {
+    let request = request_with(
+        b"offline-retained-payload",
+        vec![entry("alpha", budget()), entry("omega", budget())],
+    );
+    let decoded =
+        PhysicalMachineEffectRequestV1::decode_canonical(request.canonical_bytes()).unwrap();
+    assert_eq!(decoded, request);
+    assert_eq!(decoded.canonical_bytes(), request.canonical_bytes());
+
+    let mut wrong_domain = request.canonical_bytes().to_vec();
+    wrong_domain[0] ^= 1;
+    assert_eq!(
+        PhysicalMachineEffectRequestV1::decode_canonical(&wrong_domain),
+        Err(PhysicalMachineEffectRequestErrorV1::InvalidDomain)
+    );
+
+    let mut wrong_version = request.canonical_bytes().to_vec();
+    let version_offset = PHYSICAL_MACHINE_EFFECT_REQUEST_DOMAIN_V1.len() + 4;
+    wrong_version[version_offset..version_offset + 2].copy_from_slice(&2_u16.to_le_bytes());
+    assert_eq!(
+        PhysicalMachineEffectRequestV1::decode_canonical(&wrong_version),
+        Err(PhysicalMachineEffectRequestErrorV1::UnsupportedVersion)
+    );
+
+    let mut wrong_payload_identity = request.canonical_bytes().to_vec();
+    let payload_identity_offset = PHYSICAL_MACHINE_EFFECT_REQUEST_DOMAIN_V1.len() + 4 + 2 + 32 * 3;
+    wrong_payload_identity[payload_identity_offset] ^= 1;
+    assert_eq!(
+        PhysicalMachineEffectRequestV1::decode_canonical(&wrong_payload_identity),
+        Err(PhysicalMachineEffectRequestErrorV1::PayloadIdentityMismatch)
+    );
+
+    let mut reordered = request.canonical_bytes().to_vec();
+    let first_entry = PHYSICAL_MACHINE_EFFECT_REQUEST_DOMAIN_V1.len() + 4 + 2 + 32 * 4 + 8 + 2;
+    let entry_bytes = 2 + 5 + 5 * 4;
+    let entries = reordered[first_entry..first_entry + entry_bytes * 2].to_vec();
+    reordered[first_entry..first_entry + entry_bytes].copy_from_slice(&entries[entry_bytes..]);
+    reordered[first_entry + entry_bytes..first_entry + entry_bytes * 2]
+        .copy_from_slice(&entries[..entry_bytes]);
+    assert_eq!(
+        PhysicalMachineEffectRequestV1::decode_canonical(&reordered),
+        Err(PhysicalMachineEffectRequestErrorV1::NonCanonicalEncoding)
+    );
+
+    let mut truncated = request.canonical_bytes().to_vec();
+    truncated.pop();
+    assert_eq!(
+        PhysicalMachineEffectRequestV1::decode_canonical(&truncated),
+        Err(PhysicalMachineEffectRequestErrorV1::LengthMismatch)
     );
 }
 

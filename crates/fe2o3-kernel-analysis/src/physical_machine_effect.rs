@@ -20,6 +20,8 @@ const EVIDENCE_IDENTITY_DOMAIN: &[u8] =
 
 pub const PHYSICAL_MACHINE_EFFECT_SCHEMA_VERSION_V1: u16 = 1;
 pub const MAX_PHYSICAL_MACHINE_EFFECT_PAYLOAD_BYTES_V1: usize = 64 * 1024 * 1024;
+pub const MAX_PHYSICAL_MACHINE_EFFECT_REQUEST_BYTES_V1: usize =
+    MAX_PHYSICAL_MACHINE_EFFECT_PAYLOAD_BYTES_V1 + 1024;
 pub const MAX_PHYSICAL_MACHINE_EFFECT_EVIDENCE_BYTES_V1: usize = 8 * 1024 * 1024;
 pub const MAX_PHYSICAL_MACHINE_EFFECT_FUNCTIONS_V1: usize = 64;
 pub const MAX_PHYSICAL_MACHINE_EFFECT_EFFECTS_V1: usize = 16_384;
@@ -184,6 +186,11 @@ pub struct PhysicalMachineEffectRequestV1 {
 }
 
 impl PhysicalMachineEffectRequestV1 {
+    /// Reopens one exact canonical request retained at the authenticated worker boundary.
+    pub fn decode_canonical(bytes: &[u8]) -> Result<Self, PhysicalMachineEffectRequestErrorV1> {
+        decode_request(bytes)
+    }
+
     pub fn new(
         execution_challenge: PhysicalMachineExecutionChallengeV1,
         analyzer_identity: PhysicalMachineAnalyzerIdentityV1,
@@ -525,6 +532,74 @@ fn encode_request(
     Ok(output)
 }
 
+fn decode_request(
+    bytes: &[u8],
+) -> Result<PhysicalMachineEffectRequestV1, PhysicalMachineEffectRequestErrorV1> {
+    if bytes.len() > MAX_PHYSICAL_MACHINE_EFFECT_REQUEST_BYTES_V1 {
+        return Err(PhysicalMachineEffectRequestErrorV1::RecordTooLarge);
+    }
+    let mut input = RequestReader::new(bytes);
+    input.expect(PHYSICAL_MACHINE_EFFECT_REQUEST_DOMAIN_V1)?;
+    if input.u32()? as usize != bytes.len() {
+        return Err(PhysicalMachineEffectRequestErrorV1::LengthMismatch);
+    }
+    if input.u16()? != PHYSICAL_MACHINE_EFFECT_SCHEMA_VERSION_V1 {
+        return Err(PhysicalMachineEffectRequestErrorV1::UnsupportedVersion);
+    }
+    let execution_challenge = PhysicalMachineExecutionChallengeV1(input.array()?);
+    let analyzer_identity = PhysicalMachineAnalyzerIdentityV1(input.array()?);
+    let toolchain_identity = PhysicalMachineToolchainIdentityV1(input.array()?);
+    let encoded_payload_identity = PhysicalMachinePayloadIdentityV1 {
+        sha256: input.array()?,
+        byte_len: input.u64()?,
+    };
+    let entry_count = input.u16()? as usize;
+    if entry_count == 0 || entry_count > MAX_ENTRIES {
+        return Err(PhysicalMachineEffectRequestErrorV1::EntryCount(entry_count));
+    }
+    let mut entries = Vec::with_capacity(entry_count);
+    for _ in 0..entry_count {
+        entries.push(PhysicalMachineEffectEntryRequestV1::new(
+            input.symbol()?,
+            PhysicalMachineEffectBudgetV1::new(
+                input.u32()?,
+                input.u32()?,
+                input.u32()?,
+                input.u32()?,
+                input.u32()?,
+            ),
+        )?);
+    }
+    let payload_len = usize::try_from(encoded_payload_identity.byte_len)
+        .map_err(|_| PhysicalMachineEffectRequestErrorV1::RecordTooLarge)?;
+    if payload_len == 0 || payload_len > MAX_PHYSICAL_MACHINE_EFFECT_PAYLOAD_BYTES_V1 {
+        return Err(PhysicalMachineEffectRequestErrorV1::PayloadSize {
+            actual: payload_len,
+            maximum: MAX_PHYSICAL_MACHINE_EFFECT_PAYLOAD_BYTES_V1,
+        });
+    }
+    if input.remaining() != payload_len {
+        return Err(PhysicalMachineEffectRequestErrorV1::LengthMismatch);
+    }
+    let payload = input.take(payload_len)?.to_vec();
+    input.finish()?;
+
+    let request = PhysicalMachineEffectRequestV1::new(
+        execution_challenge,
+        analyzer_identity,
+        toolchain_identity,
+        payload,
+        entries,
+    )?;
+    if request.payload_identity != encoded_payload_identity {
+        return Err(PhysicalMachineEffectRequestErrorV1::PayloadIdentityMismatch);
+    }
+    if request.canonical_bytes != bytes {
+        return Err(PhysicalMachineEffectRequestErrorV1::NonCanonicalEncoding);
+    }
+    Ok(request)
+}
+
 fn decode_evidence_for(
     request: &PhysicalMachineEffectRequestV1,
     bytes: &[u8],
@@ -850,6 +925,85 @@ fn push_text(output: &mut Vec<u8>, value: &str) {
     output.extend_from_slice(value.as_bytes());
 }
 
+struct RequestReader<'a> {
+    bytes: &'a [u8],
+    position: usize,
+}
+
+impl<'a> RequestReader<'a> {
+    const fn new(bytes: &'a [u8]) -> Self {
+        Self { bytes, position: 0 }
+    }
+
+    fn take(&mut self, count: usize) -> Result<&'a [u8], PhysicalMachineEffectRequestErrorV1> {
+        let end = self
+            .position
+            .checked_add(count)
+            .ok_or(PhysicalMachineEffectRequestErrorV1::Truncated)?;
+        let result = self
+            .bytes
+            .get(self.position..end)
+            .ok_or(PhysicalMachineEffectRequestErrorV1::Truncated)?;
+        self.position = end;
+        Ok(result)
+    }
+
+    fn expect(&mut self, expected: &[u8]) -> Result<(), PhysicalMachineEffectRequestErrorV1> {
+        if self.take(expected.len())? != expected {
+            return Err(PhysicalMachineEffectRequestErrorV1::InvalidDomain);
+        }
+        Ok(())
+    }
+
+    fn u16(&mut self) -> Result<u16, PhysicalMachineEffectRequestErrorV1> {
+        Ok(u16::from_le_bytes(self.array()?))
+    }
+
+    fn u32(&mut self) -> Result<u32, PhysicalMachineEffectRequestErrorV1> {
+        Ok(u32::from_le_bytes(self.array()?))
+    }
+
+    fn u64(&mut self) -> Result<u64, PhysicalMachineEffectRequestErrorV1> {
+        Ok(u64::from_le_bytes(self.array()?))
+    }
+
+    fn array<const N: usize>(&mut self) -> Result<[u8; N], PhysicalMachineEffectRequestErrorV1> {
+        self.take(N)?
+            .try_into()
+            .map_err(|_| PhysicalMachineEffectRequestErrorV1::Truncated)
+    }
+
+    fn symbol(&mut self) -> Result<String, PhysicalMachineEffectRequestErrorV1> {
+        let length = self.u16()? as usize;
+        if length == 0 || length > MAX_SYMBOL_BYTES {
+            return Err(PhysicalMachineEffectRequestErrorV1::InvalidEntrySymbol {
+                byte_len: length,
+            });
+        }
+        let bytes = self.take(length)?;
+        let value = std::str::from_utf8(bytes).map_err(|_| {
+            PhysicalMachineEffectRequestErrorV1::InvalidEntrySymbol { byte_len: length }
+        })?;
+        if !valid_symbol(value) {
+            return Err(PhysicalMachineEffectRequestErrorV1::InvalidEntrySymbol {
+                byte_len: length,
+            });
+        }
+        Ok(value.to_owned())
+    }
+
+    const fn remaining(&self) -> usize {
+        self.bytes.len() - self.position
+    }
+
+    fn finish(self) -> Result<(), PhysicalMachineEffectRequestErrorV1> {
+        if self.position != self.bytes.len() {
+            return Err(PhysicalMachineEffectRequestErrorV1::TrailingBytes);
+        }
+        Ok(())
+    }
+}
+
 struct Reader<'a> {
     bytes: &'a [u8],
     position: usize,
@@ -926,6 +1080,13 @@ impl<'a> Reader<'a> {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PhysicalMachineEffectRequestErrorV1 {
+    InvalidDomain,
+    Truncated,
+    TrailingBytes,
+    LengthMismatch,
+    UnsupportedVersion,
+    PayloadIdentityMismatch,
+    NonCanonicalEncoding,
     ZeroIdentity(&'static str),
     PayloadSize { actual: usize, maximum: usize },
     EntryCount(usize),
