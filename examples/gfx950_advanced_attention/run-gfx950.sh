@@ -57,6 +57,9 @@ case "$SUITE:$FEATURE" in
     systems:kernel-muon-update)
         SYMBOL=gfx950_muon_update_4x4_v1; KERNARG=48; WG=64; LDS=0; OCML=0
         TEST=gfx950_muon_update_rust_cov6_matches_cpu_reference; ISA=scalar ;;
+    gpt_oss:kernel-gpt-oss-decode)
+        SYMBOL=gfx950_gpt_oss_120b_decode_megakernel_v1; KERNARG=208; WG=64; LDS=0; OCML=1
+        TEST=gfx950_gpt_oss_layer_tile_rust_cov6_matches_cpu_reference; ISA=gpt_oss ;;
     *)
         printf 'unsupported %s kernel feature: %s\n' "$SUITE" "$FEATURE" >&2
         exit 2 ;;
@@ -64,8 +67,10 @@ esac
 
 if [[ $SUITE == attention ]]; then
     CRATE=fe2o3_gfx950_advanced_attention
-else
+elif [[ $SUITE == systems ]]; then
     CRATE=fe2o3_gfx950_advanced_systems
+else
+    CRATE=fe2o3_gfx950_gpt_oss_decode
 fi
 
 REPO_ROOT=${FE2O3_REPO_ROOT:-$(cd -- "$COMMON_DIR/../.." && pwd -P)}
@@ -189,7 +194,12 @@ require_count "$LLVM_IR" "define amdgpu_kernel void @$SYMBOL(" 1 "$SYMBOL defini
 require_count "$LLVM_IR" '"target-cpu"="gfx950"' 1 'gfx950 function target binding'
 require_count "$LLVM_IR" '"target-features"="-wavefrontsize32,+wavefrontsize64,-xnack"' 1 'Wave64/xnack- target binding'
 require_count "$LLVM_IR" '@llvm.experimental.constrained.sqrt.f32' 0 'gfx950-incompatible constrained sqrt references'
-if [[ $ISA == fp8_attention ]]; then
+if [[ $ISA == gpt_oss ]]; then
+    require_count "$LLVM_IR" 'call <4 x float> @llvm.amdgcn.mfma.f32.16x16x16bf16.1k(' 4 'BF16 MFMA calls'
+    require_count "$LLVM_IR" 'call <4 x float> @llvm.amdgcn.mfma.scale.f32.16x16x128.f8f6f4.v8i32.v8i32(' 4 'FP4 MFMA calls'
+    require_count "$LLVM_IR" 'i32 4, i32 4, i32 0, i32 0, i32 0, i32 0)' 4 'FP4 selectors and disabled scaling controls'
+    require_count "$LLVM_IR" '@llvm.amdgcn.ds.read.tr' 0 'unexpected transpose references with pretransposed KV cache'
+elif [[ $ISA == fp8_attention ]]; then
     require_count "$LLVM_IR" 'call <4 x float> @llvm.amdgcn.mfma.scale.f32.16x16x128.f8f6f4.v8i32.v8i32(' 1 'FP8 MFMA call'
     require_count "$LLVM_IR" 'i32 0, i32 0, i32 0, i32 0, i32 0, i32 0)' 1 'FP8 selectors and disabled scaling controls'
     require_count "$LLVM_IR" 'i32 4, i32 0, i32 0, i32 0, i32 0, i32 0)' 0 'mixed FP4/FP8 selectors in FP8 attention'
@@ -263,7 +273,13 @@ if [[ -z $KERNEL_ISA ]]; then
     printf 'ISA validation failed: %s is absent\n' "$SYMBOL" >&2
     exit 1
 fi
-if [[ $ISA == fp8_attention ]]; then
+if [[ $ISA == gpt_oss ]]; then
+    [[ $(grep -Fc -- 'v_mfma_f32_16x16x16_bf16' <<< "$KERNEL_ISA" || true) -eq 4 ]] || { printf 'ISA validation failed: expected exactly four BF16 MFMAs\n' >&2; exit 1; }
+    [[ $(grep -Fc -- 'v_mfma_f32_16x16x128_f8f6f4' <<< "$KERNEL_ISA" || true) -eq 4 ]] || { printf 'ISA validation failed: expected exactly four FP4 MFMAs\n' >&2; exit 1; }
+    [[ $(grep -c -- 'v_mfma_' <<< "$KERNEL_ISA" || true) -eq 8 ]] || { printf 'ISA validation failed: unexpected additional MFMA\n' >&2; exit 1; }
+    [[ $(grep -Fc -- 'cbsz:4' <<< "$KERNEL_ISA" || true) -eq 4 ]] || { printf 'ISA validation failed: expected cbsz:4 on all FP4 MFMAs\n' >&2; exit 1; }
+    ! grep -Eq -- 'ds_read_b64_tr_b[[:digit:]]+' <<< "$KERNEL_ISA" || { printf 'ISA validation failed: pretransposed KV path emitted a transpose instruction\n' >&2; exit 1; }
+elif [[ $ISA == fp8_attention ]]; then
     [[ $(grep -Fc -- 'ds_read_b64_tr_b8' <<< "$KERNEL_ISA" || true) -eq 4 ]] || { printf 'ISA validation failed: expected exactly four B8 transpose instructions\n' >&2; exit 1; }
     [[ $(grep -Ec -- 'ds_read_b64_tr_b[[:digit:]]+' <<< "$KERNEL_ISA" || true) -eq 4 ]] || { printf 'ISA validation failed: expected exactly four total transpose instructions\n' >&2; exit 1; }
     [[ $(grep -Fc -- 'v_mfma_f32_16x16x128_f8f6f4' <<< "$KERNEL_ISA" || true) -eq 1 ]] || { printf 'ISA validation failed: expected exactly one FP8 scaled MFMA\n' >&2; exit 1; }
