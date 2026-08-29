@@ -15,6 +15,11 @@ use dialect_kernel::{
     MemorySpaceAttr, PipelineCreateOp, RankedAccessOp, RankedViewOp, ReturnOp, TrapOp,
     is_supported_allocation_effect_contract_v1,
 };
+#[cfg(test)]
+use dialect_kernel::{
+    GFX950_TRANSPOSE_FP4_WORKGROUP_ALLOCATION_ORIGIN_V1,
+    GFX950_TRANSPOSE_FP4_WORKGROUP_NOALIAS_CLASS_V1,
+};
 use pliron::{
     basic_block::BasicBlock,
     builtin::ops::FuncOp,
@@ -391,6 +396,8 @@ enum CollectiveTransposePathEventV1 {
     },
 }
 
+const MAX_COLLECTIVE_TRANSPOSE_PATH_EVENTS_V1: usize = 3;
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 struct CollectiveTransposePathSummaryV1 {
     normal: Option<Vec<CollectiveTransposePathEventV1>>,
@@ -400,17 +407,26 @@ struct CollectiveTransposePathSummaryV1 {
 fn prepend_collective_path_v1(
     local: &[CollectiveTransposePathEventV1],
     summary: CollectiveTransposePathSummaryV1,
-) -> CollectiveTransposePathSummaryV1 {
+) -> Result<CollectiveTransposePathSummaryV1, String> {
     let prepend = |mut suffix: Vec<CollectiveTransposePathEventV1>| {
-        let mut trace = Vec::with_capacity(local.len().saturating_add(suffix.len()));
+        let total = local
+            .len()
+            .checked_add(suffix.len())
+            .ok_or_else(|| "collective transpose path length overflowed".to_owned())?;
+        if total > MAX_COLLECTIVE_TRANSPOSE_PATH_EVENTS_V1 {
+            return Err(format!(
+                "collective transpose path has more than {MAX_COLLECTIVE_TRANSPOSE_PATH_EVENTS_V1} events"
+            ));
+        }
+        let mut trace = Vec::with_capacity(total);
         trace.extend_from_slice(local);
         trace.append(&mut suffix);
-        trace
+        Ok(trace)
     };
-    CollectiveTransposePathSummaryV1 {
-        normal: summary.normal.map(&prepend),
-        trapped_prefix: summary.trapped_prefix.map(prepend),
-    }
+    Ok(CollectiveTransposePathSummaryV1 {
+        normal: summary.normal.map(&prepend).transpose()?,
+        trapped_prefix: summary.trapped_prefix.map(prepend).transpose()?,
+    })
 }
 
 fn merge_collective_path_v1(
@@ -426,27 +442,19 @@ fn merge_collective_path_v1(
         complete.normal = Some(candidate_normal);
     }
     if let Some(candidate_trap) = candidate.trapped_prefix {
-        match &complete.trapped_prefix {
-            Some(first_trap) if first_trap.starts_with(&candidate_trap) => {}
-            Some(first_trap) if candidate_trap.starts_with(first_trap) => {
-                complete.trapped_prefix = Some(candidate_trap);
-            }
-            Some(_) => {
-                return Err(
-                    "terminal trap paths have incompatible collective transpose prefixes"
-                        .to_owned(),
-                );
-            }
-            None => complete.trapped_prefix = Some(candidate_trap),
+        if let Some(first_trap) = &complete.trapped_prefix
+            && first_trap != &candidate_trap
+        {
+            return Err(
+                "terminal trap paths have different collective transpose traces".to_owned(),
+            );
         }
+        complete.trapped_prefix = Some(candidate_trap);
     }
-    if let (Some(normal), Some(trapped_prefix)) = (&complete.normal, &complete.trapped_prefix)
-        && !normal.starts_with(trapped_prefix)
+    if let (Some(normal), Some(trapped)) = (&complete.normal, &complete.trapped_prefix)
+        && normal != trapped
     {
-        return Err(
-            "a terminal trap path is not a prefix of the normal collective transpose trace"
-                .to_owned(),
-        );
+        return Err("a terminal trap path has a different collective transpose trace".to_owned());
     }
     Ok(())
 }
@@ -457,7 +465,7 @@ fn collective_block_events_v1(
     block: usize,
     terminator: Ptr<Operation>,
 ) -> Result<Vec<CollectiveTransposePathEventV1>, String> {
-    let mut events = Vec::new();
+    let mut events = Vec::with_capacity(MAX_COLLECTIVE_TRANSPOSE_PATH_EVENTS_V1);
     for site in inventory.block_operations(block) {
         if site.pointer() == terminator {
             continue;
@@ -487,6 +495,11 @@ fn collective_block_events_v1(
                     site.operation()
                 ));
             }
+            if events.len() == MAX_COLLECTIVE_TRANSPOSE_PATH_EVENTS_V1 {
+                return Err(format!(
+                    "block {block} has more than {MAX_COLLECTIVE_TRANSPOSE_PATH_EVENTS_V1} collective transpose events"
+                ));
+            }
             events.push(CollectiveTransposePathEventV1::Allocation {
                 location: PlironTraceLocationV1 {
                     block,
@@ -508,6 +521,11 @@ fn collective_block_events_v1(
                     site.operation()
                 ));
             };
+            if events.len() == MAX_COLLECTIVE_TRANSPOSE_PATH_EVENTS_V1 {
+                return Err(format!(
+                    "block {block} has more than {MAX_COLLECTIVE_TRANSPOSE_PATH_EVENTS_V1} collective transpose events"
+                ));
+            }
             events.push(CollectiveTransposePathEventV1::Barrier {
                 location: PlironTraceLocationV1 {
                     block,
@@ -622,10 +640,8 @@ fn validate_collective_transpose_lifecycle_v1(
                 let suffix = summaries[successor].clone().ok_or_else(|| {
                     format!("block {predecessor} has an unresolved cyclic CFG successor")
                 })?;
-                merge_collective_path_v1(
-                    &mut summary,
-                    prepend_collective_path_v1(&local_events[predecessor], suffix),
-                )?;
+                let candidate = prepend_collective_path_v1(&local_events[predecessor], suffix)?;
+                merge_collective_path_v1(&mut summary, candidate)?;
             }
             summaries[predecessor] = Some(summary);
             ready.push_back(predecessor);
@@ -806,5 +822,69 @@ mod status_tests {
             PlironWorkgroupMemoryReportV1 { findings: vec![] }.status(),
             KernelCheckStatusV1::Clean
         );
+    }
+
+    #[test]
+    fn collective_transpose_path_summaries_are_bounded_to_the_valid_trace_length() {
+        let event = CollectiveTransposePathEventV1::Allocation {
+            location: PlironTraceLocationV1 {
+                block: 0,
+                operation: 0,
+            },
+            access: AccessKindAttr::Write,
+            allocation_origin: GFX950_TRANSPOSE_FP4_WORKGROUP_ALLOCATION_ORIGIN_V1,
+            noalias_class: GFX950_TRANSPOSE_FP4_WORKGROUP_NOALIAS_CLASS_V1,
+        };
+        let summary = CollectiveTransposePathSummaryV1 {
+            normal: Some(Vec::new()),
+            trapped_prefix: None,
+        };
+        let error = prepend_collective_path_v1(&[event; 4], summary).unwrap_err();
+        assert!(error.contains("more than 3 events"));
+    }
+
+    #[test]
+    fn collective_transpose_trap_paths_must_have_the_complete_normal_trace() {
+        let write = CollectiveTransposePathEventV1::Allocation {
+            location: PlironTraceLocationV1 {
+                block: 0,
+                operation: 0,
+            },
+            access: AccessKindAttr::Write,
+            allocation_origin: GFX950_TRANSPOSE_FP4_WORKGROUP_ALLOCATION_ORIGIN_V1,
+            noalias_class: GFX950_TRANSPOSE_FP4_WORKGROUP_NOALIAS_CLASS_V1,
+        };
+        let barrier = CollectiveTransposePathEventV1::Barrier {
+            location: PlironTraceLocationV1 {
+                block: 1,
+                operation: 0,
+            },
+            execution_scope: HierarchyAttr::Workgroup,
+            memory_scope: MemoryScopeAttr::Workgroup,
+            address_space: AddressSpaceAttr::Workgroup,
+            order: MemoryOrderAttr::AcquireRelease,
+        };
+        let read = CollectiveTransposePathEventV1::Allocation {
+            location: PlironTraceLocationV1 {
+                block: 2,
+                operation: 0,
+            },
+            access: AccessKindAttr::Read,
+            allocation_origin: GFX950_TRANSPOSE_FP4_WORKGROUP_ALLOCATION_ORIGIN_V1,
+            noalias_class: GFX950_TRANSPOSE_FP4_WORKGROUP_NOALIAS_CLASS_V1,
+        };
+        let mut merged = CollectiveTransposePathSummaryV1 {
+            normal: Some(vec![write, barrier, read]),
+            trapped_prefix: None,
+        };
+        let error = merge_collective_path_v1(
+            &mut merged,
+            CollectiveTransposePathSummaryV1 {
+                normal: None,
+                trapped_prefix: Some(vec![write, barrier]),
+            },
+        )
+        .unwrap_err();
+        assert!(error.contains("different collective transpose trace"));
     }
 }
