@@ -1,4 +1,4 @@
-error[E0451]: fields `artifact`, `entrypoints` and `_roster` of struct `RecoveredWorkerV3PinnedRosterV1` are private
+error[E0451]: fields `artifact`, `entrypoints`, `lineage` and `_roster` of struct `RecoveredWorkerV3PinnedRosterV1` are private
  --> tests/ui/recovered_worker_v3_admission/roster_custody_is_private.rs:5:9
   |
 4 |     let RecoveredWorkerV3PinnedRosterV1 {
@@ -7,7 +7,9 @@ error[E0451]: fields `artifact`, `entrypoints` and `_roster` of struct `Recovere
   |         ^^^^^^^^ private field
 6 |         entrypoints: _entrypoints,
   |         ^^^^^^^^^^^ private field
-7 |         _roster,
+7 |         lineage: _lineage,
+  |         ^^^^^^^ private field
+8 |         _roster,
   |         ^^^^^^^ private field
 
 error: type `fe2o3_host::recovered_worker_v3_admission::RecoveredWorkerV3ArtifactStateV1` is private
