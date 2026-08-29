@@ -7,6 +7,11 @@ Status: implementation contract. Bounded implementation and evidence paths now
 exist, but this contract does not by itself grant runnable, verified, or
 accepted authority.
 
+The checked-in source has a retained production extraction gate on `gfx942`.
+That gate validates its compiler-derived crate binding and reaches ordered
+scalar LLVM without FMA/MFMA contraction. HSACO publication, protected Worker
+V3 verification, and KFD execution remain separate open gates.
+
 ## Profile
 
 Scalar GEMM V1 computes row-major `f32` matrix multiplication on exact target

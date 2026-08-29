@@ -272,28 +272,26 @@ FE2O3_TEST_SOURCE_AUTH_LDS_GFX942_HSACO=/absolute/path/to/lds.hsaco \
 The smoke suite builds and runs all supported examples. Each example copies its
 result back to the host and checks it against a CPU-computed expected value.
 
-The joined generated scalar-GEMM lane exercises the production-shaped host and
-runtime boundary on one selected `gfx942:xnack-` KFD device:
+The scalar-GEMM compiler lane extracts the real single-source
+`#[kernel(typed)]` example through semantic MIR, ranked PLIRON, Kernel IR, and
+the production gfx942 LLVM lowering:
 
 ```text
 FE2O3_HIP_SYS_DISABLE=1 \
-FE2O3_GFX942_SCALAR_GEMM_V3_RAW_HSACO=/absolute/path/to/scalar-gemm.hsaco \
-FE2O3_KFD_DIAGNOSTIC_UNIQUE_ID=0x6ced1647a296545c \
-cargo test --locked -p cargo-fe2o3 \
-  --features worker-v3-envelope-integration-test-only \
-  --test worker_v3_load_envelope_vertical \
-  synthetic_verifier_executes_real_scalar_gemm_through_joined_kfd_authority \
+cargo test --locked -p rustc-codegen-fe2o3 \
+  --test production_general_matrix_driver_v1 \
+  scalar_gemm_kernel_reaches_gfx942_llvm \
   -- --ignored --exact --nocapture --test-threads=1
 ```
 
-On MI300X this passes the numerical CPU oracle, completion writeback, all three
-buffer lengths, and host canaries. It also holds the exact publication token and
-output borrows through KFD quiescence. The verifier in this test is explicitly
-synthetic and the HSACO path is externally injected, so the result proves the
-joined composition and native mechanics, not production compiler or proof
-authority. The test enters the same private preparation transition used by
-`prepare_inherited_worker_v3_kfd_application_v1`; a full inherited application
-process run remains a separate production gate.
+The test requires the pinned nightly `rust-src` component and AMD target. It
+checks the exact compiler-derived crate binding, the generated scalar entry,
+gfx942 target triple and thread-index intrinsic, separate `fmul` and `fadd`,
+and absence of FMA or MFMA contraction. It does not link an HSACO, invoke the
+protected verifier, or execute the GPU. The earlier externally injected,
+scalar-specific hardware test was deleted with the workload-specific Worker V3
+authority closure. A retained hardware claim now requires the ordinary generic
+Worker V3 inherited application and KFD route.
 
 The host crate enforces the same split. Its feature-free build exposes the
 Worker V3 application, admission, verification, private joined KFD invocation,

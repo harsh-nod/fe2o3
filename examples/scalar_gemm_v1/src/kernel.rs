@@ -8,7 +8,7 @@ use fe2o3_device::{DisjointSlice, kernel, thread};
 )]
 #[kernel(
     typed,
-    namespace = "93597a99b0aab5d18620a5c4983dd3079bf3c02820ea27c62be10d4b8753cf62",
+    namespace = "f53ca896335106ff14069d31ab72e7b8871287096e3ce6b1ff44b2257beda864",
     launch(required = [256, 1, 1], max = [256, 1, 1]),
     control_flow(loop_bounds(4294967295))
 )]
