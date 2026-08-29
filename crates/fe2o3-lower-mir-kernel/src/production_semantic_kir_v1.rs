@@ -1738,6 +1738,8 @@ struct IndexedRankedAccessSourceV1 {
 
 struct RankedCorrelationIndexV1 {
     sources_by_site: BTreeMap<SemanticAccessSiteV1, IndexedRankedAccessSourceV1>,
+    conservative_sources_by_statement:
+        BTreeMap<(u32, Option<u32>), IndexedRankedAccessSourceV1>,
     sites_by_ranked_location: BTreeMap<(u32, u32), SemanticAccessSiteV1>,
     view_definitions: BTreeMap<ProductionRankedValueIdV1, RankedViewDefinitionV1>,
     semantic_expressions: BTreeMap<
@@ -2542,6 +2544,7 @@ fn index_ranked_correlation(
     let mut sites_by_ranked_location = BTreeMap::new();
     let mut source_ordinals = BTreeMap::<(u32, Option<u32>), BTreeSet<u32>>::new();
     let mut sources_by_site = BTreeMap::new();
+    let mut conservative_sources_by_statement = BTreeMap::new();
     for source in sources {
         budget.charge()?;
         let operation = lowering
@@ -2622,20 +2625,22 @@ fn index_ranked_correlation(
         {
             return None;
         }
-        if sources_by_site
-            .insert(
-                site,
-                IndexedRankedAccessSourceV1 {
-                    ranked_block: source.ranked_block,
-                    ranked_operation: source.ranked_operation,
-                    access,
-                    allocation,
-                    value,
-                    atomic,
-                },
-            )
-            .is_some()
+        let indexed = IndexedRankedAccessSourceV1 {
+            ranked_block: source.ranked_block,
+            ranked_operation: source.ranked_operation,
+            access,
+            allocation,
+            value,
+            atomic,
+        };
+        if matches!(allocation, IndexedRankedAllocationV1::Direct(_))
+            && conservative_sources_by_statement
+                .insert((site.block, site.statement), indexed)
+                .is_some()
         {
+            return None;
+        }
+        if sources_by_site.insert(site, indexed).is_some() {
             return None;
         }
     }
@@ -2651,6 +2656,7 @@ fn index_ranked_correlation(
     }
     Some(RankedCorrelationIndexV1 {
         sources_by_site,
+        conservative_sources_by_statement,
         sites_by_ranked_location,
         view_definitions,
         semantic_expressions,
