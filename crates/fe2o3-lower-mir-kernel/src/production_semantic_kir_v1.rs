@@ -5531,6 +5531,511 @@ fn whole_semantic_operand_local_v1(operand: &SemanticOperandV1) -> Option<usize>
     }
 }
 
+fn semantic_unsigned_integer_bits_v1(
+    types: &[SemanticTypeDeclV1],
+    ty: SemanticTypeIdV1,
+) -> Option<u16> {
+    match types.get(ty.index() as usize)?.shape() {
+        SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
+            signed: false,
+            bits,
+        }) if (1..=128).contains(bits) => Some(*bits),
+        _ => None,
+    }
+}
+
+fn exact_unsigned_semantic_constant_v1(
+    types: &[SemanticTypeDeclV1],
+    operand: &SemanticOperandV1,
+    expected_type: SemanticTypeIdV1,
+) -> Option<u128> {
+    let SemanticOperandV1::Constant(constant) = operand else {
+        return None;
+    };
+    let SemanticConstantValueV1::Scalar(value) = constant.value() else {
+        return None;
+    };
+    let bits = semantic_unsigned_integer_bits_v1(types, expected_type)?;
+    if constant.ty() != expected_type || u16::from(value.size_bytes()) * 8 != bits {
+        return None;
+    }
+    let value = value.bits();
+    ((bits == 128) || value < (1_u128 << bits)).then_some(value)
+}
+
+fn semantic_unsigned_type_contains_exclusive_bound_v1(
+    types: &[SemanticTypeDeclV1],
+    ty: SemanticTypeIdV1,
+    exclusive_bound: u128,
+) -> bool {
+    let Some(bits) = semantic_unsigned_integer_bits_v1(types, ty) else {
+        return false;
+    };
+    exclusive_bound == 0 || bits == 128 || exclusive_bound - 1 < (1_u128 << bits)
+}
+
+fn resolve_semantic_header_copy_alias_v1(
+    block: &fe2o3_mir_model::semantic_mir_v1::SemanticBasicBlockV1,
+    before_statement: usize,
+    operand: &SemanticOperandV1,
+) -> Option<u32> {
+    let mut current = u32::try_from(whole_semantic_operand_local_v1(operand)?).ok()?;
+    let mut visited = BTreeSet::new();
+    for _ in 0..=before_statement {
+        if !visited.insert(current) {
+            return None;
+        }
+        let definitions = block.statements()[..before_statement]
+            .iter()
+            .filter_map(|statement| {
+                let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
+                    return None;
+                };
+                (semantic_definition_local_v1(assignment.destination())
+                    == usize::try_from(current).ok())
+                .then_some(assignment)
+            })
+            .collect::<Vec<_>>();
+        if definitions.is_empty() {
+            return Some(current);
+        }
+        if definitions.len() != 1 || !definitions[0].destination().projections().is_empty() {
+            return None;
+        }
+        let SemanticRvalueKindV1::Use(source) = definitions[0].value().kind() else {
+            return None;
+        };
+        if definitions[0].destination().ty() != source.ty() {
+            return None;
+        }
+        current = u32::try_from(whole_semantic_operand_local_v1(source)?).ok()?;
+    }
+    None
+}
+
+fn semantic_cfg_graph_v1(
+    function: &SemanticFunctionDeclV1,
+) -> Result<(Vec<Vec<usize>>, Vec<Vec<usize>>, Vec<bool>), ProductionSemanticKirErrorV1> {
+    let mut successors = vec![Vec::new(); function.blocks().len()];
+    let mut predecessors = vec![Vec::new(); function.blocks().len()];
+    for (source, block) in function.blocks().iter().enumerate() {
+        block
+            .terminator()
+            .kind()
+            .try_for_each_edge::<ProductionSemanticKirErrorV1>(|edge| {
+                let target = edge.target().index() as usize;
+                if target >= function.blocks().len() {
+                    return Err(unsupported(
+                        0,
+                        Some(source as u32),
+                        None,
+                        "authenticated induction proof references a missing CFG successor",
+                    ));
+                }
+                successors[source].push(target);
+                Ok(())
+            })?;
+        successors[source].sort_unstable();
+        successors[source].dedup();
+        for target in successors[source].iter().copied() {
+            predecessors[target].push(source);
+        }
+    }
+    let reachable =
+        semantic_reachable_blocks_v1(&successors, function.entry().index() as usize, None)?;
+    Ok((successors, predecessors, reachable))
+}
+
+fn authenticated_natural_loop_topology_v1(
+    function: &SemanticFunctionDeclV1,
+    successors: &[Vec<usize>],
+    predecessors: &[Vec<usize>],
+    reachable: &[bool],
+    header: usize,
+    body_entry: usize,
+    exit: usize,
+) -> Option<(usize, usize, Vec<usize>)> {
+    if !reachable.get(header).copied().unwrap_or(false)
+        || body_entry >= successors.len()
+        || exit >= successors.len()
+        || body_entry == exit
+    {
+        return None;
+    }
+    let mut reachable_without_header = vec![false; successors.len()];
+    let entry = function.entry().index() as usize;
+    let mut pending = (entry != header)
+        .then_some(entry)
+        .into_iter()
+        .collect::<Vec<_>>();
+    while let Some(block) = pending.pop() {
+        if block == header || reachable_without_header[block] {
+            continue;
+        }
+        reachable_without_header[block] = true;
+        pending.extend(successors[block].iter().copied());
+    }
+    let header_predecessors = predecessors[header]
+        .iter()
+        .copied()
+        .filter(|predecessor| reachable[*predecessor])
+        .collect::<Vec<_>>();
+    let backedges = header_predecessors
+        .iter()
+        .copied()
+        .filter(|predecessor| !reachable_without_header[*predecessor])
+        .collect::<Vec<_>>();
+    let preheaders = header_predecessors
+        .iter()
+        .copied()
+        .filter(|predecessor| reachable_without_header[*predecessor])
+        .collect::<Vec<_>>();
+    if backedges.len() != 1 || preheaders.len() != 1 {
+        return None;
+    }
+    let latch = backedges[0];
+    let preheader = preheaders[0];
+    if !matches!(
+        function.blocks()[preheader].terminator().kind(),
+        SemanticTerminatorKindV1::Goto(edge) if edge.target().index() as usize == header
+    ) || !matches!(
+        function.blocks()[latch].terminator().kind(),
+        SemanticTerminatorKindV1::Goto(edge) if edge.target().index() as usize == header
+    ) {
+        return None;
+    }
+
+    let mut in_loop = vec![false; successors.len()];
+    in_loop[header] = true;
+    in_loop[latch] = true;
+    let mut pending = vec![latch];
+    while let Some(block) = pending.pop() {
+        if block == header {
+            continue;
+        }
+        for predecessor in predecessors[block].iter().copied() {
+            if reachable[predecessor] && !in_loop[predecessor] {
+                in_loop[predecessor] = true;
+                pending.push(predecessor);
+            }
+        }
+    }
+    if !in_loop[body_entry] || in_loop[exit] {
+        return None;
+    }
+    for (block, inside) in in_loop.iter().copied().enumerate() {
+        if !inside || reachable_without_header[block] {
+            if inside && reachable_without_header[block] {
+                return None;
+            }
+            continue;
+        }
+        if predecessors[block].iter().copied().any(|predecessor| {
+            reachable[predecessor]
+                && !in_loop[predecessor]
+                && !(block == header && predecessor == preheader)
+        }) {
+            return None;
+        }
+    }
+    let mut exits = Vec::new();
+    for (source, inside) in in_loop.iter().copied().enumerate() {
+        if !inside {
+            continue;
+        }
+        for target in successors[source].iter().copied() {
+            if !in_loop[target] {
+                exits.push((source, target));
+            }
+        }
+    }
+    if exits.as_slice() != [(header, exit)] {
+        return None;
+    }
+    Some((
+        preheader,
+        latch,
+        in_loop
+            .iter()
+            .copied()
+            .enumerate()
+            .filter_map(|(block, inside)| inside.then_some(block))
+            .collect(),
+    ))
+}
+
+fn authenticated_loop_induction_shape_v1(
+    types: &[SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1,
+    induction: u32,
+    preheader: usize,
+    latch: usize,
+    exclusive_bound: u128,
+) -> Option<()> {
+    let induction_index = induction as usize;
+    let induction_type = function.locals().get(induction_index)?.ty();
+    let bits = semantic_unsigned_integer_bits_v1(types, induction_type)?;
+    let mut initial = None;
+    let mut step = None;
+    let mut definitions = 0_u8;
+    for (block_index, block) in function.blocks().iter().enumerate() {
+        for statement in block.statements() {
+            match statement.kind() {
+                SemanticStatementKindV1::Assign(assignment) => {
+                    if let SemanticRvalueKindV1::Borrow { place, .. }
+                    | SemanticRvalueKindV1::AddressOf { place, .. } = assignment.value().kind()
+                        && semantic_definition_local_v1(place) == Some(induction_index)
+                    {
+                        return None;
+                    }
+                    if semantic_definition_local_v1(assignment.destination())
+                        != Some(induction_index)
+                    {
+                        continue;
+                    }
+                    if !assignment.destination().projections().is_empty() {
+                        return None;
+                    }
+                    definitions = definitions.checked_add(1)?;
+                    if block_index == preheader {
+                        let SemanticRvalueKindV1::Use(value) = assignment.value().kind() else {
+                            return None;
+                        };
+                        initial = Some(exact_unsigned_semantic_constant_v1(
+                            types,
+                            value,
+                            induction_type,
+                        )?);
+                    } else if block_index == latch {
+                        let SemanticRvalueKindV1::Binary {
+                            operation: SemanticBinaryOpV1::Add,
+                            left,
+                            right,
+                        } = assignment.value().kind()
+                        else {
+                            return None;
+                        };
+                        let constant = if whole_semantic_operand_local_v1(left)
+                            == Some(induction_index)
+                        {
+                            right
+                        } else if whole_semantic_operand_local_v1(right) == Some(induction_index) {
+                            left
+                        } else {
+                            return None;
+                        };
+                        step = Some(exact_unsigned_semantic_constant_v1(
+                            types,
+                            constant,
+                            induction_type,
+                        )?);
+                    } else {
+                        return None;
+                    }
+                }
+                SemanticStatementKindV1::Store(store)
+                    if semantic_definition_local_v1(store.destination())
+                        == Some(induction_index) =>
+                {
+                    return None;
+                }
+                SemanticStatementKindV1::AtomicRmw(atomic)
+                    if semantic_definition_local_v1(atomic.destination())
+                        == Some(induction_index)
+                        || semantic_definition_local_v1(atomic.address())
+                            == Some(induction_index) =>
+                {
+                    return None;
+                }
+                SemanticStatementKindV1::AtomicCompareExchange(atomic)
+                    if semantic_definition_local_v1(atomic.destination())
+                        == Some(induction_index)
+                        || semantic_definition_local_v1(atomic.address())
+                            == Some(induction_index) =>
+                {
+                    return None;
+                }
+                SemanticStatementKindV1::SetDiscriminant { place, .. }
+                | SemanticStatementKindV1::Deinitialize(place)
+                    if semantic_definition_local_v1(place) == Some(induction_index) =>
+                {
+                    return None;
+                }
+                _ => {}
+            }
+        }
+        if let SemanticTerminatorKindV1::Call(call) = block.terminator().kind()
+            && call.destination().is_some_and(|destination| {
+                semantic_definition_local_v1(destination.place()) == Some(induction_index)
+            })
+        {
+            return None;
+        }
+    }
+    let step = step?;
+    if definitions != 2 || initial != Some(0) || step == 0 || exclusive_bound == 0 {
+        return None;
+    }
+    let maximum = if bits == 128 {
+        u128::MAX
+    } else {
+        (1_u128 << bits) - 1
+    };
+    (exclusive_bound - 1)
+        .checked_add(step)
+        .filter(|next| *next <= maximum)
+        .map(|_| ())
+}
+
+fn authenticated_loop_induction_bounds_v1(
+    types: &[SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1,
+) -> Result<BTreeMap<(u32, u32), u128>, ProductionSemanticKirErrorV1> {
+    let (successors, predecessors, reachable) = semantic_cfg_graph_v1(function)?;
+    let mut bounds = BTreeMap::new();
+    for (header, block) in function.blocks().iter().enumerate() {
+        let SemanticTerminatorKindV1::SwitchInt {
+            discriminant,
+            targets,
+        } = block.terminator().kind()
+        else {
+            continue;
+        };
+        if targets.values().len() != 1 || targets.values()[0].value() != 0 {
+            continue;
+        }
+        let Some(discriminant_local) = whole_semantic_operand_local_v1(discriminant) else {
+            continue;
+        };
+        let comparisons = block
+            .statements()
+            .iter()
+            .enumerate()
+            .filter_map(|(statement, source)| {
+                let SemanticStatementKindV1::Assign(assignment) = source.kind() else {
+                    return None;
+                };
+                (semantic_definition_local_v1(assignment.destination()) == Some(discriminant_local))
+                    .then_some((statement, assignment))
+            })
+            .collect::<Vec<_>>();
+        let [(comparison_statement, comparison)] = comparisons.as_slice() else {
+            continue;
+        };
+        if !comparison.destination().projections().is_empty() {
+            continue;
+        }
+        let SemanticRvalueKindV1::Binary {
+            operation: SemanticBinaryOpV1::LessThan,
+            left,
+            right,
+        } = comparison.value().kind()
+        else {
+            continue;
+        };
+        let Some(induction) =
+            resolve_semantic_header_copy_alias_v1(block, *comparison_statement, left)
+        else {
+            continue;
+        };
+        let Some(induction_type) = function
+            .locals()
+            .get(induction as usize)
+            .map(|local| local.ty())
+        else {
+            continue;
+        };
+        let Some(exclusive_bound) =
+            exact_unsigned_semantic_constant_v1(types, right, induction_type)
+        else {
+            continue;
+        };
+        let body_entry = targets.otherwise().target().index() as usize;
+        let exit = targets.values()[0].edge().target().index() as usize;
+        let Some((preheader, latch, loop_blocks)) = authenticated_natural_loop_topology_v1(
+            function,
+            &successors,
+            &predecessors,
+            &reachable,
+            header,
+            body_entry,
+            exit,
+        ) else {
+            continue;
+        };
+        if authenticated_loop_induction_shape_v1(
+            types,
+            function,
+            induction,
+            preheader,
+            latch,
+            exclusive_bound,
+        )
+        .is_none()
+        {
+            continue;
+        }
+        for body_block in loop_blocks.into_iter().filter(|body| *body != header) {
+            bounds.insert((body_block as u32, induction), exclusive_bound);
+        }
+    }
+    Ok(bounds)
+}
+
+fn authenticated_unsigned_operand_exclusive_bound_v1(
+    types: &[SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1,
+    bounds: &BTreeMap<(u32, u32), u128>,
+    block: SemanticBlockIdV1,
+    operand: &SemanticOperandV1,
+) -> Option<u128> {
+    let source_block = function.blocks().get(block.index() as usize)?;
+    let mut current = u32::try_from(whole_semantic_operand_local_v1(operand)?).ok()?;
+    let mut traversed_types = vec![operand.ty()];
+    let mut visited = BTreeSet::new();
+    for _ in 0..=source_block.statements().len() {
+        if !visited.insert(current) {
+            return None;
+        }
+        if let Some(bound) = bounds.get(&(block.index(), current)).copied() {
+            return traversed_types
+                .iter()
+                .all(|ty| semantic_unsigned_type_contains_exclusive_bound_v1(types, *ty, bound))
+                .then_some(bound);
+        }
+        let definitions = source_block
+            .statements()
+            .iter()
+            .filter_map(|statement| {
+                let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
+                    return None;
+                };
+                (semantic_definition_local_v1(assignment.destination()) == Some(current as usize))
+                    .then_some(assignment)
+            })
+            .collect::<Vec<_>>();
+        let [definition] = definitions.as_slice() else {
+            return None;
+        };
+        if !definition.destination().projections().is_empty()
+            || definition.destination().ty() != *traversed_types.last()?
+        {
+            return None;
+        }
+        let source = match definition.value().kind() {
+            SemanticRvalueKindV1::Use(source) => source,
+            SemanticRvalueKindV1::Cast {
+                kind: SemanticCastKindV1::Integer,
+                operand: source,
+            } => source,
+            _ => return None,
+        };
+        current = u32::try_from(whole_semantic_operand_local_v1(source)?).ok()?;
+        traversed_types.push(source.ty());
+    }
+    None
+}
+
 fn semantic_reachable_blocks_v1(
     successors: &[Vec<usize>],
     entry: usize,
@@ -5774,6 +6279,7 @@ fn lower_module(
         required_workgroup,
         infallible_asserts,
         launch_rank,
+        authenticated_launch_rank.is_some(),
         limits.max_operations,
     )?;
 
@@ -7580,6 +8086,8 @@ struct SemanticFunctionLoweringV1<'a> {
     emitted_operations: usize,
     emitted_u32_constants: BTreeMap<ValueId, u32>,
     emitted_u32_bitand_masks: BTreeMap<ValueId, u32>,
+    authenticated_loop_induction_bounds: BTreeMap<(u32, u32), u128>,
+    emitted_unsigned_exclusive_bounds: BTreeMap<ValueId, u128>,
 }
 
 struct SemanticParameterBindingsV1<'a> {
@@ -7598,6 +8106,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         required_workgroup: Option<[u32; 3]>,
         infallible_asserts: BTreeSet<u32>,
         launch_rank: u8,
+        authenticated_ranked_control: bool,
         max_operations: usize,
     ) -> Result<Self, ProductionSemanticKirErrorV1> {
         let mut locals = vec![None; function.locals().len()];
@@ -7620,6 +8129,11 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         let mut next_value = u32::try_from(function.locals().len())
             .map_err(|_| unsupported(0, None, None, "local count does not fit Kernel IR"))?;
         let control_flow_ssa = SemanticControlFlowSsaPlanV1::analyze(types, callables, function)?;
+        let authenticated_loop_induction_bounds = if authenticated_ranked_control {
+            authenticated_loop_induction_bounds_v1(types, function)?
+        } else {
+            BTreeMap::new()
+        };
         let promoted_enum_variant_by_block =
             analyze_promoted_enum_variants_v1(types, function, &control_flow_ssa)?;
         let mut block_parameters = BTreeMap::new();
@@ -7677,6 +8191,8 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             emitted_operations: 0,
             emitted_u32_constants: BTreeMap::new(),
             emitted_u32_bitand_masks: BTreeMap::new(),
+            authenticated_loop_induction_bounds,
+            emitted_unsigned_exclusive_bounds: BTreeMap::new(),
         })
     }
 
@@ -10022,10 +10538,50 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     .lower_operand(block, None, &call.arguments()[1], operations)?
                     .value()
                     .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
+                let authenticated_source_bound = authenticated_unsigned_operand_exclusive_bound_v1(
+                    self.types,
+                    self.function,
+                    &self.authenticated_loop_induction_bounds,
+                    block,
+                    &call.arguments()[2],
+                );
                 let (source_lane, source_ty) = self
                     .lower_operand(block, None, &call.arguments()[2], operations)?
                     .value()
                     .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
+                let authenticated_source_bound = authenticated_source_bound.filter(|bound| {
+                    source_ty == Type::Scalar(ScalarType::U32)
+                        && authenticated_subgroup_broadcast_source_is_bounded(*bound, *width)
+                });
+                let source_lane = if authenticated_source_bound.is_some() {
+                    let mask = self
+                        .emit(
+                            operations,
+                            Type::Scalar(ScalarType::U32),
+                            OperationKind::Constant(Constant::U32(*width - 1)),
+                        )?
+                        .value()
+                        .expect("authenticated subgroup mask has one value")
+                        .0;
+                    self.emit(
+                        operations,
+                        Type::Scalar(ScalarType::U32),
+                        OperationKind::Binary {
+                            op: BinaryOp::BitAnd,
+                            lhs: source_lane,
+                            rhs: mask,
+                        },
+                    )?
+                    .value()
+                    .expect("authenticated subgroup source mask has one value")
+                    .0
+                } else {
+                    source_lane
+                };
+                if let Some(bound) = authenticated_source_bound {
+                    self.emitted_unsigned_exclusive_bounds
+                        .insert(source_lane, bound);
+                }
                 let bounded_source = subgroup_broadcast_source_is_statically_bounded(
                     operations,
                     source_lane,
@@ -10037,7 +10593,13 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     || self
                         .emitted_u32_bitand_masks
                         .get(&source_lane)
-                        .is_some_and(|mask| *mask < *width);
+                        .is_some_and(|mask| *mask < *width)
+                    || self
+                        .emitted_unsigned_exclusive_bounds
+                        .get(&source_lane)
+                        .is_some_and(|bound| {
+                            authenticated_subgroup_broadcast_source_is_bounded(*bound, *width)
+                        });
                 if value_ty != Type::Scalar(ScalarType::F32)
                     || source_ty != Type::Scalar(ScalarType::U32)
                     || *width == 0
@@ -16980,6 +17542,10 @@ fn enforce_limit(
     }
 }
 
+fn authenticated_subgroup_broadcast_source_is_bounded(exclusive_bound: u128, width: u32) -> bool {
+    width != 0 && width.is_power_of_two() && width <= 64 && exclusive_bound <= u128::from(width)
+}
+
 fn subgroup_broadcast_source_is_statically_bounded(
     operations: &[Operation],
     source_lane: ValueId,
@@ -17139,6 +17705,265 @@ mod resource_tests {
             masked,
             64,
         ));
+    }
+
+    #[derive(Clone, Copy)]
+    struct AuthenticatedInductionFixtureV1 {
+        bits: u16,
+        bound: u128,
+        step: u128,
+        extra_write: bool,
+        bypass_guard: bool,
+    }
+
+    impl Default for AuthenticatedInductionFixtureV1 {
+        fn default() -> Self {
+            Self {
+                bits: 64,
+                bound: 64,
+                step: 1,
+                extra_write: false,
+                bypass_guard: false,
+            }
+        }
+    }
+
+    fn authenticated_induction_fixture_v1(
+        options: AuthenticatedInductionFixtureV1,
+    ) -> (Vec<SemanticTypeDeclV1>, SemanticFunctionDeclV1) {
+        let unit = SemanticTypeIdV1::from_index(0);
+        let induction_ty = SemanticTypeIdV1::from_index(1);
+        let bool_ty = SemanticTypeIdV1::from_index(2);
+        let u32_ty = SemanticTypeIdV1::from_index(3);
+        let source = SemanticSourceProvenanceV1::unavailable();
+        let size = u8::try_from(options.bits / 8).unwrap();
+        let place = |local, ty| {
+            SemanticPlaceV1::new(SemanticLocalIdV1::from_index(local), vec![], ty).unwrap()
+        };
+        let operand = |local, ty| SemanticOperandV1::Copy(place(local, ty));
+        let constant = |ty, value| {
+            SemanticOperandV1::Constant(SemanticConstantV1::new(
+                ty,
+                SemanticConstantValueV1::Scalar(SemanticScalarValueV1::new(value, size).unwrap()),
+            ))
+        };
+        let assign = |local, ty, value| {
+            SemanticStatementV1::new(
+                source,
+                SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+                    place(local, ty),
+                    SemanticRvalueV1::new(ty, value),
+                )),
+            )
+        };
+        let edge = |role, target| {
+            SemanticControlFlowEdgeV1::new(role, SemanticBlockIdV1::from_index(target))
+        };
+        let block = |tag, statements, terminator| {
+            SemanticBasicBlockV1::new(
+                SemanticBlockIdentityV1::from_sha256([tag; 32]),
+                source,
+                statements,
+                SemanticTerminatorV1::new(source, terminator),
+            )
+            .unwrap()
+        };
+        let entry = block(
+            210,
+            vec![assign(
+                1,
+                induction_ty,
+                SemanticRvalueKindV1::Use(constant(induction_ty, 0)),
+            )],
+            SemanticTerminatorKindV1::Goto(edge(SemanticEdgeRoleV1::Goto, 1)),
+        );
+        let header = block(
+            211,
+            vec![assign(
+                2,
+                bool_ty,
+                SemanticRvalueKindV1::Binary {
+                    operation: SemanticBinaryOpV1::LessThan,
+                    left: operand(1, induction_ty),
+                    right: constant(induction_ty, options.bound),
+                },
+            )],
+            SemanticTerminatorKindV1::SwitchInt {
+                discriminant: operand(2, bool_ty),
+                targets: SemanticSwitchTargetsV1::new(
+                    vec![SemanticSwitchTargetV1::new(
+                        0,
+                        edge(SemanticEdgeRoleV1::SwitchValue, 4),
+                    )],
+                    edge(SemanticEdgeRoleV1::SwitchOtherwise, 2),
+                )
+                .unwrap(),
+            },
+        );
+        let mut body_statements = vec![assign(
+            3,
+            u32_ty,
+            SemanticRvalueKindV1::Cast {
+                kind: SemanticCastKindV1::Integer,
+                operand: operand(1, induction_ty),
+            },
+        )];
+        if options.extra_write {
+            body_statements.push(assign(
+                1,
+                induction_ty,
+                SemanticRvalueKindV1::Use(constant(induction_ty, 0)),
+            ));
+        }
+        let body = block(
+            212,
+            body_statements,
+            SemanticTerminatorKindV1::Goto(edge(SemanticEdgeRoleV1::Goto, 3)),
+        );
+        let latch = block(
+            213,
+            vec![assign(
+                1,
+                induction_ty,
+                SemanticRvalueKindV1::Binary {
+                    operation: SemanticBinaryOpV1::Add,
+                    left: operand(1, induction_ty),
+                    right: constant(induction_ty, options.step),
+                },
+            )],
+            SemanticTerminatorKindV1::Goto(edge(SemanticEdgeRoleV1::Goto, 1)),
+        );
+        let exit = block(
+            214,
+            vec![],
+            if options.bypass_guard {
+                SemanticTerminatorKindV1::Goto(edge(SemanticEdgeRoleV1::Goto, 2))
+            } else {
+                SemanticTerminatorKindV1::Return
+            },
+        );
+        let abi = SemanticFunctionAbiV1::from_rustc(
+            SemanticAbiIdentityV1::from_sha256([215; 32]),
+            SemanticLayoutIdentityV1::from_sha256([216; 32]),
+            SemanticCanonAbiV1::GpuKernel,
+            SemanticExternAbiV1::GpuKernel,
+            false,
+            false,
+            0,
+            vec![],
+            SemanticAbiValueV1::new(unit, SemanticAbiPassModeV1::Ignore),
+        )
+        .unwrap();
+        let locals: Vec<SemanticLocalDeclV1> = [
+            (unit, SemanticLocalRoleV1::Return),
+            (induction_ty, SemanticLocalRoleV1::Temporary),
+            (bool_ty, SemanticLocalRoleV1::Temporary),
+            (u32_ty, SemanticLocalRoleV1::Temporary),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(local, (ty, role))| {
+            SemanticLocalDeclV1::new(
+                SemanticLocalIdentityV1::from_sha256([217 + local as u8; 32]),
+                ty,
+                role,
+                source,
+            )
+        })
+        .collect();
+        let function = SemanticFunctionDeclV1::new(
+            SemanticFunctionIdentityV1::from_sha256([221; 32]),
+            SemanticFunctionRoleV1::InternalHelper,
+            SemanticItemDefinitionIdentityV1::from_sha256([222; 32]),
+            SemanticMonomorphizationIdentityV1::from_sha256([223; 32]),
+            SemanticGenericTypeArgumentsIdentityV1::from_sha256([224; 32]),
+            SemanticConstGenericArgumentsIdentityV1::from_sha256([225; 32]),
+            source,
+            abi,
+            locals,
+            SemanticBlockIdV1::from_index(0),
+            vec![entry, header, body, latch, exit],
+        )
+        .unwrap();
+        (
+            vec![
+                unit_type(),
+                unsigned_scalar_type(226, options.bits),
+                bool_type(),
+                unsigned_scalar_type(228, 32),
+            ],
+            function,
+        )
+    }
+
+    #[test]
+    fn ranked_canonical_induction_bound_survives_exact_u64_to_u32_cast() {
+        let (types, function) =
+            authenticated_induction_fixture_v1(AuthenticatedInductionFixtureV1::default());
+        let bounds = authenticated_loop_induction_bounds_v1(&types, &function).unwrap();
+        assert_eq!(bounds.get(&(2, 1)), Some(&64));
+        let alias = SemanticOperandV1::Copy(
+            SemanticPlaceV1::new(
+                SemanticLocalIdV1::from_index(3),
+                vec![],
+                SemanticTypeIdV1::from_index(3),
+            )
+            .unwrap(),
+        );
+        assert_eq!(
+            authenticated_unsigned_operand_exclusive_bound_v1(
+                &types,
+                &function,
+                &bounds,
+                SemanticBlockIdV1::from_index(2),
+                &alias,
+            ),
+            Some(64),
+        );
+    }
+
+    #[test]
+    fn authenticated_induction_bound_rejects_width_overrun_and_hostile_loops() {
+        let (types, function) =
+            authenticated_induction_fixture_v1(AuthenticatedInductionFixtureV1 {
+                bound: 65,
+                ..AuthenticatedInductionFixtureV1::default()
+            });
+        let bounds = authenticated_loop_induction_bounds_v1(&types, &function).unwrap();
+        assert_eq!(bounds.get(&(2, 1)), Some(&65));
+        assert!(!authenticated_subgroup_broadcast_source_is_bounded(
+            *bounds.get(&(2, 1)).unwrap(),
+            64,
+        ));
+        assert!(!authenticated_subgroup_broadcast_source_is_bounded(0, 0));
+
+        for options in [
+            AuthenticatedInductionFixtureV1 {
+                extra_write: true,
+                ..AuthenticatedInductionFixtureV1::default()
+            },
+            AuthenticatedInductionFixtureV1 {
+                step: 0,
+                ..AuthenticatedInductionFixtureV1::default()
+            },
+            AuthenticatedInductionFixtureV1 {
+                bits: 8,
+                bound: 255,
+                step: 2,
+                ..AuthenticatedInductionFixtureV1::default()
+            },
+            AuthenticatedInductionFixtureV1 {
+                bypass_guard: true,
+                ..AuthenticatedInductionFixtureV1::default()
+            },
+        ] {
+            let (types, function) = authenticated_induction_fixture_v1(options);
+            assert!(
+                authenticated_loop_induction_bounds_v1(&types, &function)
+                    .unwrap()
+                    .is_empty()
+            );
+        }
     }
 
     #[test]
@@ -17396,6 +18221,7 @@ mod resource_tests {
                 None,
                 BTreeSet::new(),
                 1,
+                false,
                 max_operations,
             )
             .unwrap();
@@ -17566,6 +18392,7 @@ mod resource_tests {
             None,
             BTreeSet::new(),
             1,
+            false,
             max_operations,
         )
         .unwrap();
@@ -18969,6 +19796,7 @@ mod resource_tests {
             None,
             BTreeSet::new(),
             1,
+            false,
             16,
         )
         .unwrap();
