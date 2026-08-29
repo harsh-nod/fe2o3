@@ -345,7 +345,7 @@ enum BarrierPathSummaryV1 {
     Incomplete(String),
 }
 
-const MAX_FALLBACK_BARRIER_CFG_BLOCKS_V1: usize = 256;
+const MAX_FALLBACK_BARRIER_CFG_BLOCKS_V1: usize = 512;
 const MAX_FALLBACK_BARRIER_PATH_EVENTS_V1: usize = 256;
 
 fn summarize_all_barrier_paths(

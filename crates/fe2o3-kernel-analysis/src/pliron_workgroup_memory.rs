@@ -397,11 +397,12 @@ enum CollectiveTransposePathEventV1 {
 }
 
 const MAX_COLLECTIVE_TRANSPOSE_PATH_EVENTS_V1: usize = 3;
+const MAX_COLLECTIVE_TRANSPOSE_TRAP_TRACES_V1: usize = 8;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 struct CollectiveTransposePathSummaryV1 {
     normal: Option<Vec<CollectiveTransposePathEventV1>>,
-    trapped_prefix: Option<Vec<CollectiveTransposePathEventV1>>,
+    trapped: Vec<Vec<CollectiveTransposePathEventV1>>,
 }
 
 fn prepend_collective_path_v1(
@@ -423,10 +424,13 @@ fn prepend_collective_path_v1(
         trace.append(&mut suffix);
         Ok(trace)
     };
-    Ok(CollectiveTransposePathSummaryV1 {
-        normal: summary.normal.map(&prepend).transpose()?,
-        trapped_prefix: summary.trapped_prefix.map(prepend).transpose()?,
-    })
+    let normal = summary.normal.map(&prepend).transpose()?;
+    let trapped = summary
+        .trapped
+        .into_iter()
+        .map(prepend)
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(CollectiveTransposePathSummaryV1 { normal, trapped })
 }
 
 fn merge_collective_path_v1(
@@ -441,20 +445,30 @@ fn merge_collective_path_v1(
         }
         complete.normal = Some(candidate_normal);
     }
-    if let Some(candidate_trap) = candidate.trapped_prefix {
-        if let Some(first_trap) = &complete.trapped_prefix
-            && first_trap != &candidate_trap
-        {
-            return Err(
-                "terminal trap paths have different collective transpose traces".to_owned(),
-            );
+    for candidate_trap in candidate.trapped {
+        if !complete.trapped.contains(&candidate_trap) {
+            if complete.trapped.len() == MAX_COLLECTIVE_TRANSPOSE_TRAP_TRACES_V1 {
+                return Err(format!(
+                    "collective transpose CFG has more than {MAX_COLLECTIVE_TRANSPOSE_TRAP_TRACES_V1} distinct terminal trap traces"
+                ));
+            }
+            complete.trapped.push(candidate_trap);
         }
-        complete.trapped_prefix = Some(candidate_trap);
     }
-    if let (Some(normal), Some(trapped)) = (&complete.normal, &complete.trapped_prefix)
-        && normal != trapped
+    Ok(())
+}
+
+fn validate_collective_trap_paths_v1(
+    normal: &[CollectiveTransposePathEventV1],
+    trapped: &[Vec<CollectiveTransposePathEventV1>],
+) -> Result<(), String> {
+    if trapped
+        .iter()
+        .any(|trace| !trace.is_empty() && trace.as_slice() != normal)
     {
-        return Err("a terminal trap path has a different collective transpose trace".to_owned());
+        return Err(
+            "a terminal trap path partially executes the collective transpose lifecycle".to_owned(),
+        );
     }
     Ok(())
 }
@@ -613,14 +627,14 @@ fn validate_collective_transpose_lifecycle_v1(
             1 => {
                 summaries[block] = Some(CollectiveTransposePathSummaryV1 {
                     normal: Some(local_events[block].clone()),
-                    trapped_prefix: None,
+                    trapped: Vec::new(),
                 });
                 ready.push_back(block);
             }
             2 => {
                 summaries[block] = Some(CollectiveTransposePathSummaryV1 {
                     normal: None,
-                    trapped_prefix: Some(local_events[block].clone()),
+                    trapped: vec![local_events[block].clone()],
                 });
                 ready.push_back(block);
             }
@@ -655,6 +669,7 @@ fn validate_collective_transpose_lifecycle_v1(
         .normal
         .as_deref()
         .ok_or_else(|| "the collective transpose CFG has no normal return path".to_owned())?;
+    validate_collective_trap_paths_v1(normal, &summary.trapped)?;
     let [
         CollectiveTransposePathEventV1::Allocation {
             location: write_location,
@@ -837,14 +852,14 @@ mod status_tests {
         };
         let summary = CollectiveTransposePathSummaryV1 {
             normal: Some(Vec::new()),
-            trapped_prefix: None,
+            trapped: Vec::new(),
         };
         let error = prepend_collective_path_v1(&[event; 4], summary).unwrap_err();
         assert!(error.contains("more than 3 events"));
     }
 
     #[test]
-    fn collective_transpose_trap_paths_must_have_the_complete_normal_trace() {
+    fn collective_transpose_trap_paths_may_precede_or_complete_the_normal_trace() {
         let write = CollectiveTransposePathEventV1::Allocation {
             location: PlironTraceLocationV1 {
                 block: 0,
@@ -875,16 +890,24 @@ mod status_tests {
         };
         let mut merged = CollectiveTransposePathSummaryV1 {
             normal: Some(vec![write, barrier, read]),
-            trapped_prefix: None,
+            trapped: Vec::new(),
         };
-        let error = merge_collective_path_v1(
+        merge_collective_path_v1(
             &mut merged,
             CollectiveTransposePathSummaryV1 {
                 normal: None,
-                trapped_prefix: Some(vec![write, barrier]),
+                trapped: vec![Vec::new(), vec![write, barrier, read]],
             },
         )
+        .unwrap();
+        validate_collective_trap_paths_v1(merged.normal.as_deref().unwrap(), &merged.trapped)
+            .unwrap();
+
+        let error = validate_collective_trap_paths_v1(
+            merged.normal.as_deref().unwrap(),
+            &[vec![write, barrier]],
+        )
         .unwrap_err();
-        assert!(error.contains("different collective transpose trace"));
+        assert!(error.contains("partially executes"));
     }
 }
