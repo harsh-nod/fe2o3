@@ -12,7 +12,7 @@ use std::{
 
 use dialect_kernel::{
     BranchArgsOp, BranchOp, IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp,
-    IndexLessThanBranchArgsOp, IndexUnsignedCastOp,
+    IndexEqualBranchArgsOp, IndexLessThanBranchArgsOp, IndexUnsignedCastOp,
 };
 use pliron::{
     basic_block::BasicBlock,
@@ -151,7 +151,7 @@ struct ProgressWorkBudgetV1 {
 
 impl ProgressWorkBudgetV1 {
     fn charge(&mut self, units: usize) -> Result<(), PlironProgressFindingV1> {
-        let actual = self.work_units.checked_add(units).unwrap_or(usize::MAX);
+        let actual = self.work_units.saturating_add(units);
         if actual > MAX_PLIRON_PROGRESS_WORK_UNITS_V1 {
             return Err(PlironProgressFindingV1::ResourceLimitExceeded {
                 resource: "work units",
@@ -269,7 +269,7 @@ fn run_pliron_progress_check_inner_v1(
     let mut certificates = Vec::new();
     for mut component in strongly_connected_components(&graph.edges) {
         component.sort_unstable();
-        let component_work = component.len().checked_mul(4).unwrap_or(usize::MAX);
+        let component_work = component.len().saturating_mul(4);
         if let Err(finding) = work.charge(component_work) {
             return report(finding);
         }
@@ -695,41 +695,101 @@ fn canonical_positive_induction_loop(
                 );
             };
             let terminator = Operation::get_op_dyn(terminator, context);
-            let Some(forward) = terminator.downcast_ref::<BranchArgsOp>() else {
-                return CanonicalLoopResultV1::Incomplete(
-                    "an intermediate loop block does not have one unconditional SSA forwarding edge",
-                );
-            };
-            let successors = forward
-                .get_operation()
-                .deref(context)
-                .successors()
-                .collect::<Vec<_>>();
-            let [successor] = successors.as_slice() else {
-                return CanonicalLoopResultV1::Incomplete(
-                    "an intermediate loop block does not have exactly one successor",
-                );
-            };
-            let Some(successor_index) = block_indices.get(successor).copied() else {
-                return CanonicalLoopResultV1::Incomplete(
-                    "an intermediate loop edge leaves the kernel function",
-                );
-            };
-            let arguments = forward.arguments(context);
-            let [forwarded] = arguments.as_slice() else {
-                return CanonicalLoopResultV1::Incomplete(
-                    "an intermediate loop edge does not carry exactly one induction value",
-                );
+            let (successor_index, forwarded) = if let Some(forward) =
+                terminator.downcast_ref::<BranchArgsOp>()
+            {
+                let successors = forward
+                    .get_operation()
+                    .deref(context)
+                    .successors()
+                    .collect::<Vec<_>>();
+                let [successor] = successors.as_slice() else {
+                    return CanonicalLoopResultV1::Incomplete(
+                        "an unconditional loop forwarding block does not have exactly one successor",
+                    );
+                };
+                let Some(successor_index) = block_indices.get(successor).copied() else {
+                    return CanonicalLoopResultV1::Incomplete(
+                        "an intermediate loop edge leaves the kernel function",
+                    );
+                };
+                let arguments = forward.arguments(context);
+                let [forwarded] = arguments.as_slice() else {
+                    return CanonicalLoopResultV1::Incomplete(
+                        "an intermediate loop edge does not carry exactly one induction value",
+                    );
+                };
+                (successor_index, *forwarded)
+            } else {
+                let guarded = terminator
+                    .downcast_ref::<IndexLessThanBranchArgsOp>()
+                    .map(|branch| {
+                        (
+                            branch.true_arguments(context),
+                            branch.false_arguments(context),
+                        )
+                    })
+                    .or_else(|| {
+                        terminator
+                            .downcast_ref::<IndexEqualBranchArgsOp>()
+                            .map(|branch| {
+                                (
+                                    branch.true_arguments(context),
+                                    branch.false_arguments(context),
+                                )
+                            })
+                    });
+                let Some((true_arguments, false_arguments)) = guarded else {
+                    return CanonicalLoopResultV1::Incomplete(
+                        "an intermediate loop block has no supported SSA forwarding terminator",
+                    );
+                };
+                let successors = terminator
+                    .get_operation()
+                    .deref(context)
+                    .successors()
+                    .collect::<Vec<_>>();
+                let [true_successor, false_successor] = successors.as_slice() else {
+                    return CanonicalLoopResultV1::Incomplete(
+                        "a guarded loop forwarding block does not have exactly two successors",
+                    );
+                };
+                let (Some(true_index), Some(false_index)) = (
+                    block_indices.get(true_successor).copied(),
+                    block_indices.get(false_successor).copied(),
+                ) else {
+                    return CanonicalLoopResultV1::Incomplete(
+                        "a guarded loop forwarding edge leaves the kernel function",
+                    );
+                };
+                let (successor_index, arguments) = match (
+                    component_members.contains(&true_index),
+                    component_members.contains(&false_index),
+                ) {
+                    (true, false) => (true_index, true_arguments),
+                    (false, true) => (false_index, false_arguments),
+                    _ => {
+                        return CanonicalLoopResultV1::Incomplete(
+                            "a guarded loop forwarding block does not have exactly one successor inside the cycle",
+                        );
+                    }
+                };
+                let [forwarded] = arguments.as_slice() else {
+                    return CanonicalLoopResultV1::Incomplete(
+                        "a guarded loop continuation does not carry exactly one induction value",
+                    );
+                };
+                (successor_index, *forwarded)
             };
             if successor_index == *header_index {
-                break (current_index, current_induction, *forwarded);
+                break (current_index, current_induction, forwarded);
             }
             if !component_members.contains(&successor_index) {
                 return CanonicalLoopResultV1::Incomplete(
                     "an intermediate loop block has an exit outside the guarded header",
                 );
             }
-            if *forwarded != current_induction {
+            if forwarded != current_induction {
                 return CanonicalLoopResultV1::Incomplete(
                     "an intermediate loop edge does not forward the induction value unchanged",
                 );

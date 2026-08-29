@@ -113,6 +113,9 @@ fn constant_loop(context: &mut Context, start: u64, bound: u64, step: u64) -> Fu
 enum MultiBlockCase {
     Canonical,
     MutatedForwarding,
+    GuardedForwarding,
+    GuardedMutatedForwarding,
+    GuardedInternalFork,
     ExternalIntermediateEntry,
     MultipleHeaderEntries,
     InvocationLatchUpdate,
@@ -238,6 +241,38 @@ fn multi_block_loop(
         let forward = BranchArgsOp::new(context, vec![changed.result(context)], second);
         append(context, first, &changed);
         append(context, first, &forward);
+    } else if matches!(
+        case,
+        MultiBlockCase::GuardedForwarding
+            | MultiBlockCase::GuardedMutatedForwarding
+            | MultiBlockCase::GuardedInternalFork
+    ) {
+        let payload = if matches!(case, MultiBlockCase::GuardedMutatedForwarding) {
+            let changed = IndexBinaryOp::new(
+                context,
+                IndexBinaryKindAttr::Add,
+                first_induction,
+                one.result(context),
+            );
+            append(context, first, &changed);
+            changed.result(context)
+        } else {
+            first_induction
+        };
+        let internal_fork = matches!(case, MultiBlockCase::GuardedInternalFork);
+        let guard = IndexLessThanBranchArgsOp::new(
+            context,
+            zero.result(context),
+            one.result(context),
+            vec![payload],
+            internal_fork
+                .then_some(first_induction)
+                .into_iter()
+                .collect(),
+            second,
+            if internal_fork { latch } else { exit },
+        );
+        append(context, first, &guard);
     } else {
         if let RangeCase::NonEntry(width) = range_case {
             let cast = IndexUnsignedCastOp::new(context, bound, width);
@@ -722,6 +757,34 @@ fn canonical_multiblock_recurrence_forwards_one_induction_value() {
     assert!(report.is_clean(), "{report:?}");
     assert_eq!(report.certificates().len(), 1);
     assert_eq!(report.certificates()[0].step(), 16);
+}
+
+#[test]
+fn guarded_multiblock_recurrence_forwards_one_induction_value() {
+    let context = &mut setup();
+    let function = multi_block_loop(
+        context,
+        Some(64),
+        1,
+        MultiBlockCase::GuardedForwarding,
+        RangeCase::None,
+    );
+    let report = run_pliron_progress_check_v1(context, &function);
+    assert!(report.is_clean(), "{report:?}");
+    assert_eq!(report.certificates().len(), 1);
+}
+
+#[test]
+fn guarded_multiblock_recurrence_rejects_mutation_and_internal_forks() {
+    for case in [
+        MultiBlockCase::GuardedMutatedForwarding,
+        MultiBlockCase::GuardedInternalFork,
+    ] {
+        let context = &mut setup();
+        let function = multi_block_loop(context, Some(64), 1, case, RangeCase::None);
+        let report = run_pliron_progress_check_v1(context, &function);
+        assert_eq!(report.status(), KernelCheckStatusV1::Incomplete);
+    }
 }
 
 #[test]
