@@ -1470,7 +1470,7 @@ impl<R: CompilerGeneratedKernelExpectationRosterV1> WorkerV3RosterVerificationRe
         )
     }
 
-    pub const fn finalized_hsaco_bytes(&self) -> &[u8] {
+    pub fn finalized_hsaco_bytes(&self) -> &[u8] {
         self.current.exact_artifact_bytes()
     }
 
