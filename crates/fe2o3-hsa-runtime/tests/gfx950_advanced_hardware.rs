@@ -398,7 +398,7 @@ const MOE_EXPERT: AdvancedCase = AdvancedCase {
     label: "gfx950 MoE expert rank",
     export: "gfx950_moe_expert_rank_fp4_fp8_v1",
     descriptor: "gfx950_moe_expert_rank_fp4_fp8_v1.kd",
-    workgroup_x: 256,
+    workgroup_x: 64,
     static_lds_bytes: 0,
     args: EXPERT_RANK_ARGS,
 };

@@ -40,7 +40,7 @@ case "$SUITE:$FEATURE" in
         SYMBOL=gfx950_moe_route_fp4_t16_e4_k2_v1; KERNARG=96; WG=256; LDS=0; OCML=1
         TEST=gfx950_moe_route_rust_cov6_matches_cpu_reference; ISA=scalar ;;
     systems:kernel-moe-expert-rank)
-        SYMBOL=gfx950_moe_expert_rank_fp4_fp8_v1; KERNARG=88; WG=256; LDS=0; OCML=1
+        SYMBOL=gfx950_moe_expert_rank_fp4_fp8_v1; KERNARG=88; WG=64; LDS=0; OCML=1
         TEST=gfx950_moe_expert_rank_rust_cov6_matches_cpu_reference; ISA=mixed_expert ;;
     systems:kernel-combine-expert-ranks)
         SYMBOL=gfx950_combine_expert_ranks_v1; KERNARG=48; WG=256; LDS=0; OCML=0
