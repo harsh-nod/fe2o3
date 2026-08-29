@@ -50,6 +50,12 @@ use fe2o3_kernel_descriptor::{
     LogicalArgumentV1, ProducerIdentityV1, ScalarTypeV1, SourceTypeDescriptorV1,
     SourceTypeRecordV1, Text, ValidName, encode_device_descriptor_table_v1,
 };
+use fe2o3_kernel_ir::{
+    SemanticDebugContentIdentityV1, SemanticDebugLayerV1, SemanticDebugLocationV1,
+    SemanticDebugMapBindingV1, SemanticDebugMapDocumentV1, SemanticDebugMapErrorV1,
+    SemanticDebugMappingOutputV1, SemanticDebugMappingV1, SemanticDebugNodeV1,
+    SemanticDebugTransformationV1,
+};
 use sha2::{Digest, Sha256};
 
 #[path = "../../../tests/support/compiler_proof_inputs_v3.rs"]
@@ -579,6 +585,94 @@ fn native_v3_finalization_rejects_a_different_export_manifest_receipt() {
         finalize_protected_worker_v3_hsaco_v1(raw),
         Err(WorkerV3HsacoFinalizationError::ExportManifestMismatch)
     ));
+}
+
+#[test]
+fn native_v3_finalizer_admits_only_the_exact_artifact_and_bounded_isa_interval() {
+    let directory = TestDirectory::new();
+    let fixture = slice_fixture_with_descriptor_table(&slice_descriptor_table());
+    let (_, source) = evidence_in_directory_for_kernel(
+        &directory,
+        fixture.bytes,
+        EvidenceConfig::BASE,
+        "vecadd",
+        "vecadd.kd",
+    );
+    let inspected = inspect_protected_worker_v3_hsaco_v1(source).unwrap();
+    let finalized = finalize_protected_worker_v3_hsaco_v1(inspected).unwrap();
+    let exact_artifact = finalized.exact_finalized_bytes();
+
+    let map = finalizer_semantic_map(exact_artifact, 4);
+    let admitted = finalized.admit_semantic_debug_map_v1(&map).unwrap();
+    assert_eq!(
+        admitted.artifact_identity(),
+        finalized.finalized_output_identity()
+    );
+    assert!(!admitted.authenticates_compiler_execution());
+    assert!(!admitted.grants_publication_authority());
+
+    let stale = finalizer_semantic_map(b"substituted-hsaco", 4);
+    assert!(matches!(
+        finalized.admit_semantic_debug_map_v1(&stale),
+        Err(
+            fe2o3_hsaco_finalize::FinalizedSemanticDebugMapErrorV1::SemanticMap(
+                SemanticDebugMapErrorV1::ArtifactBindingMismatch
+            )
+        )
+    ));
+    let outside_entry = finalizer_semantic_map(exact_artifact, 1_u64 << 32);
+    assert!(matches!(
+        finalized.admit_semantic_debug_map_v1(&outside_entry),
+        Err(
+            fe2o3_hsaco_finalize::FinalizedSemanticDebugMapErrorV1::SemanticMap(
+                SemanticDebugMapErrorV1::InvalidIsaInterval
+            )
+        )
+    ));
+}
+
+fn finalizer_semantic_map(artifact: &[u8], isa_end: u64) -> Vec<u8> {
+    let content = |bytes: &[u8]| SemanticDebugContentIdentityV1::calculate(bytes).unwrap();
+    let binding = SemanticDebugMapBindingV1::new(
+        content(b"source-map-v2"),
+        content(b"semantic-mir"),
+        content(b"canonical-kir"),
+        content(b"schedule"),
+        content(b"llvm-module"),
+        content(artifact),
+    )
+    .unwrap();
+    let llvm = SemanticDebugNodeV1::new(
+        [0x91; 32],
+        SemanticDebugLocationV1::Llvm {
+            function_ordinal: 0,
+            block_ordinal: 0,
+            instruction_ordinal: 0,
+        },
+    )
+    .unwrap();
+    let isa = SemanticDebugNodeV1::new(
+        [0x92; 32],
+        SemanticDebugLocationV1::Isa {
+            kernel_ordinal: 0,
+            byte_start: 0,
+            byte_end: isa_end,
+        },
+    )
+    .unwrap();
+    let mapping = SemanticDebugMappingV1::new(
+        [0x93; 32],
+        SemanticDebugLayerV1::Llvm,
+        SemanticDebugLayerV1::Isa,
+        SemanticDebugTransformationV1::Preserved,
+        vec![[0x91; 32]],
+        SemanticDebugMappingOutputV1::available(vec![[0x92; 32]]),
+    )
+    .unwrap();
+    SemanticDebugMapDocumentV1::new(binding, vec![llvm, isa], vec![mapping])
+        .unwrap()
+        .to_canonical_json_bytes()
+        .unwrap()
 }
 
 #[test]

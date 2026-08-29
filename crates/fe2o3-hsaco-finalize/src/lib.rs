@@ -24,6 +24,7 @@ mod first_build_worker_engine;
 mod first_build_worker_v3;
 mod link_plan;
 mod request_construction;
+mod semantic_debug_map_v1;
 mod worker_executor;
 mod worker_protocol;
 mod worker_protocol_v2;
@@ -93,6 +94,10 @@ pub use reserved_fe2o3_symbols::{
     GENERAL_TYPED_V3_SEMANTIC_WITNESS_MAGIC_V1, GENERAL_TYPED_V3_SEMANTIC_WITNESS_VERSION_V1,
     MAX_GENERAL_TYPED_V3_SEMANTIC_WITNESS_BYTES_V1, TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3,
     derive_device_ffi_contract_id_v1,
+};
+pub use semantic_debug_map_v1::{
+    AdmittedFinalizedSemanticDebugMapV1, FinalizedSemanticDebugMapErrorV1,
+    FinalizedSemanticDebugMapIdentityV1, admit_finalized_semantic_debug_map_v1,
 };
 pub use worker_executor::{
     DEFAULT_WORKER_STDERR_BYTES, DEFAULT_WORKER_TIMEOUT, MAX_WORKER_EXECUTABLE_BYTES,
