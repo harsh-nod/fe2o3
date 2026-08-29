@@ -147,14 +147,29 @@ impl KfdDebugRuntimeObservationV1 {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Eq, PartialEq)]
 pub struct KfdDebugQueueObservationV1 {
     exception_status: KfdDebugExceptionMaskV1,
     queue_id: u32,
     gpu_id: u32,
     ring_size: u32,
     queue_type: u32,
+    context_save_area_address: u64,
     context_save_area_size: u32,
+}
+
+impl fmt::Debug for KfdDebugQueueObservationV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("KfdDebugQueueObservationV1")
+            .field("exception_status", &self.exception_status)
+            .field("queue_id", &self.queue_id)
+            .field("gpu_id", &self.gpu_id)
+            .field("ring_size", &self.ring_size)
+            .field("queue_type", &self.queue_type)
+            .field("context_save_area_size", &self.context_save_area_size)
+            .finish()
+    }
 }
 
 impl KfdDebugQueueObservationV1 {
@@ -175,6 +190,14 @@ impl KfdDebugQueueObservationV1 {
     }
     pub const fn context_save_area_size(self) -> u32 {
         self.context_save_area_size
+    }
+
+    pub(crate) const fn native_context_save_area(self) -> Option<(u64, u32)> {
+        if self.context_save_area_address == 0 || self.context_save_area_size == 0 {
+            None
+        } else {
+            Some((self.context_save_area_address, self.context_save_area_size))
+        }
     }
 }
 
@@ -1245,6 +1268,10 @@ impl KfdLiveDebugSessionV1 {
         self.engine.exceptions
     }
 
+    pub(crate) fn owns_suspended_queue(&self, queue_id: u32) -> bool {
+        self.engine.suspended.contains(&queue_id)
+    }
+
     fn preflight(&self) -> Result<(), KfdLiveDebugSessionErrorV1> {
         let target_pid = self.target_pid();
         if target_pid == 0 || inspect_pidfd_target(&self.pidfd)? != Some(target_pid) {
@@ -1886,6 +1913,7 @@ fn admit_queue_snapshot(
         gpu_id: raw.gpu_id,
         ring_size: raw.ring_size,
         queue_type: raw.queue_type,
+        context_save_area_address: raw.ctx_save_restore_address,
         context_save_area_size: raw.ctx_save_restore_area_size,
     })
 }

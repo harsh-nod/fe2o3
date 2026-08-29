@@ -5,6 +5,7 @@
 ))]
 #![allow(unsafe_code)]
 
+use std::io::{Read, Write};
 use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -13,8 +14,11 @@ use std::os::unix::process::CommandExt;
 
 use fe2o3_kfd::{
     DEFAULT_KFD_PATH, DeviceSelector, KfdAdapterError, KfdDebugExceptionInfoV1,
-    KfdDebugSessionErrorV1, KfdDebugSessionPlanV1, KfdLiveDebugSessionErrorV1,
-    KfdLiveDebugSessionV1, KfdTargetRuntimeDebugTokenV1, OpenedKfd,
+    KfdDebugQueueOperationStateV1, KfdDebugSessionErrorV1, KfdDebugSessionPlanV1,
+    KfdLiveDebugSessionErrorV1, KfdLiveDebugSessionV1, KfdStoppedAvailabilityV1,
+    KfdStoppedContextSaveObservationV1, KfdStoppedQueueCapturePlanV1,
+    KfdStoppedSnapshotOwnershipV1, KfdStoppedStateScopeV1, KfdStoppedUnavailableReasonV1,
+    KfdTargetRuntimeDebugTokenV1, OpenedKfd,
 };
 use fe2o3_kfd_uapi::{
     KfdDebugExceptionMaskV1, KfdDebugRuntimeStateV1, KfdDebugTrapExceptionCodeV1,
@@ -167,6 +171,23 @@ fn stop_tracee_process_leader() {
     );
 }
 
+fn wait_for_debugger_release() {
+    let mut byte = [0_u8; 1];
+    std::io::stdin()
+        .read_exact(&mut byte)
+        .expect("debugger release pipe closed");
+    assert_eq!(byte, [b'.']);
+}
+
+fn release_helper(child: &mut Child) {
+    child
+        .stdin
+        .as_mut()
+        .expect("helper stdin remains owned")
+        .write_all(b".")
+        .expect("failed to release helper stage");
+}
+
 fn detach_tracee(child: &Child) {
     // SAFETY: the test owns a ptrace-stopped child. SIGCONT is an integer
     // signal operand, encoded in ptrace's untyped data slot, which clears the
@@ -234,6 +255,25 @@ fn acknowledge_runtime_state(
     }
 }
 
+fn wait_for_one_queue(
+    session: &mut KfdLiveDebugSessionV1,
+    exceptions_to_clear: KfdDebugExceptionMaskV1,
+    deadline: Instant,
+) -> fe2o3_kfd::KfdDebugQueueObservationV1 {
+    loop {
+        let queues = session.queue_snapshot(exceptions_to_clear).unwrap();
+        if let [queue] = queues.as_slice() {
+            return *queue;
+        }
+        assert!(queues.is_empty(), "unexpected queue snapshot: {queues:?}");
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for one KFD queue snapshot"
+        );
+        thread::sleep(Duration::from_millis(5));
+    }
+}
+
 #[test]
 fn live_target_helper() {
     if std::env::var_os(HELPER_ENV).is_none() {
@@ -256,12 +296,15 @@ fn live_target_helper() {
     let queue = token.create_compute_aql_queue(device, 4096).unwrap();
     assert_eq!(queue.observation().queue_id(), 0);
     stop_tracee_process_leader();
+    wait_for_debugger_release();
     let teardown = queue.destroy().unwrap();
     stop_tracee_process_leader();
+    wait_for_debugger_release();
     let destroyed = teardown.finish().unwrap();
     assert_eq!(destroyed.queue_id(), 0);
     // Give the debugger a live, stopped target while it disables debug-trap.
     stop_tracee_process_leader();
+    wait_for_debugger_release();
 }
 
 #[test]
@@ -274,7 +317,11 @@ fn mi300x_ptrace_runtime_handshake_and_typed_gate() {
     command
         .args(["--exact", "live_target_helper", "--nocapture"])
         .env(HELPER_ENV, "1")
-        .stdin(Stdio::null())
+        // Queue composition initializes the full gfx942 CWSR geometry. Give
+        // the isolated libtest worker a fixed stack instead of inheriting the
+        // platform's smaller test-thread default.
+        .env("RUST_MIN_STACK", "16777216")
+        .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::inherit());
     // SAFETY: the post-fork hook performs one pointer-free, async-signal-safe
@@ -331,17 +378,71 @@ fn mi300x_ptrace_runtime_handshake_and_typed_gate() {
         ))
     ));
 
+    let queue_new = KfdDebugExceptionMaskV1::from_code(KfdDebugTrapExceptionCodeV1::QueueNew);
+    let subscribed = KfdDebugExceptionMaskV1::new(runtime_mask.bits() | queue_new.bits()).unwrap();
+    session.set_exceptions(subscribed).unwrap();
     continue_tracee(child.child());
     acknowledge_runtime_state(&mut session, KfdDebugRuntimeStateV1::Enabled, deadline);
     wait_for_stop(child.child(), deadline);
-    let queues = session
-        .queue_snapshot(KfdDebugExceptionMaskV1::NONE)
+    let queue = wait_for_one_queue(&mut session, queue_new, deadline);
+    assert_eq!(queue.queue_id(), 0);
+    assert_eq!(queue.ring_size(), 4096);
+    // Depending on whether QueueNew publication raced the snapshot's clear,
+    // the subscribed event can still be pending. Querying it with the same
+    // clear mask is idempotent and closes both admitted KFD orderings.
+    if let Some(event) = session.query_event(queue_new).unwrap() {
+        assert!(
+            event
+                .exceptions()
+                .contains(KfdDebugTrapExceptionCodeV1::QueueNew),
+            "unexpected event while clearing QueueNew: {event:?}"
+        );
+    }
+
+    let suspension = session
+        .suspend_queues(&[queue.queue_id()], KfdDebugExceptionMaskV1::NONE, u32::MAX)
         .unwrap();
-    assert_eq!(queues.len(), 1);
-    assert_eq!(queues[0].queue_id(), 0);
-    assert_eq!(queues[0].ring_size(), 4096);
+    assert_eq!(
+        suspension.len(),
+        1,
+        "unexpected suspend result: {suspension:?}"
+    );
+    assert_eq!(
+        suspension[0].state(),
+        KfdDebugQueueOperationStateV1::Complete,
+        "unexpected suspend result: {suspension:?}"
+    );
+    let stopped = session
+        .capture_stopped_queue_v1(KfdStoppedQueueCapturePlanV1::new(
+            queue.queue_id(),
+            KfdStoppedStateScopeV1::new([0x73; 32]).unwrap(),
+        ))
+        .unwrap();
+    assert_eq!(
+        stopped.ownership(),
+        KfdStoppedSnapshotOwnershipV1::SessionRetainedSuspension
+    );
+    let layout = match stopped.context_save() {
+        KfdStoppedContextSaveObservationV1::Available(layout) => layout,
+        other => panic!("live gfx942 context-save header capture unavailable: {other:?}"),
+    };
+    assert_eq!(layout.context_bytes_per_xcc(), 0x162_1000);
+    assert_eq!(layout.total_allocation_bytes(), 0xb16_7000);
+    assert_eq!(layout.headers().len(), 8);
+    assert_eq!(
+        stopped.waves(),
+        KfdStoppedAvailabilityV1::Unavailable(
+            KfdStoppedUnavailableReasonV1::WaveRecordLayoutNotInKfdUapi
+        )
+    );
+    let resumed = session.resume_queues(&[queue.queue_id()]).unwrap();
+    assert!(matches!(
+        resumed.as_slice(),
+        [observation] if observation.state() == KfdDebugQueueOperationStateV1::Complete
+    ));
 
     continue_group_stopped_tracee(child.child());
+    release_helper(child.child());
     wait_for_stop(child.child(), deadline);
     assert!(
         session
@@ -351,9 +452,11 @@ fn mi300x_ptrace_runtime_handshake_and_typed_gate() {
     );
 
     continue_group_stopped_tracee(child.child());
+    release_helper(child.child());
     acknowledge_runtime_state(&mut session, KfdDebugRuntimeStateV1::Disabled, deadline);
     wait_for_stop(child.child(), deadline);
     session.finish().unwrap();
     detach_tracee(child.child());
+    release_helper(child.child());
     child.finish(Instant::now() + WAIT_BOUND);
 }
