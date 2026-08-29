@@ -89,6 +89,31 @@ fn homogeneous(origin: TruthOriginV1) -> AgentProfilerAggregateOriginV1 {
     AgentProfilerAggregateOriginV1::Homogeneous { origin }
 }
 
+fn planning(
+    goal: AgentProfilerPlanGoalV1,
+    ambiguity: AgentProfilerAmbiguityV1,
+    missing_evidence: Vec<AgentProfilerPlanEvidenceClassV1>,
+    dispatch: Option<CaptureIdentityV1>,
+    kernel_ir: Option<CaptureIdentityV1>,
+) -> AgentProfilerPlanRequestV1 {
+    AgentProfilerPlanRequestV1 {
+        schema: AGENT_PROFILER_PLAN_REQUEST_SCHEMA_V1.into(),
+        goal,
+        ambiguity,
+        missing_evidence,
+        target: AgentProfilerPlanTargetV1 {
+            compute_units: vec![3, 1],
+            kernel_ir,
+            dispatch,
+        },
+        constraints: AgentProfilerPlanConstraintsV1 {
+            maximum_overhead_basis_points: MAX_AGENT_PROFILER_PLAN_OVERHEAD_BASIS_POINTS_V1,
+            maximum_storage_bytes: 16 * 1024 * 1024,
+            maximum_records: 100_000,
+        },
+    }
+}
+
 fn lower_hex(bytes: &[u8]) -> String {
     let mut output = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
@@ -119,6 +144,45 @@ fn open(
     };
     assert_eq!(evidence.captures, [context.bundle_identity]);
     (response.clone(), context.bundle_identity)
+}
+
+fn dispatch_target(
+    service: &mut AgentProfilerServiceV1,
+    request_id: u64,
+    capture: ContentIdentityRecordV1,
+) -> (CaptureIdentityV1, CaptureIdentityV1) {
+    let page = service.handle(AgentProfilerRequestV1::ListDispatches {
+        schema: AGENT_PROFILER_REQUEST_SCHEMA_V1.into(),
+        request_id,
+        capture,
+        page: ProfilerPageRequestV4 {
+            limit: 1,
+            cursor: None,
+        },
+    });
+    let AgentProfilerResponseV1::Ok { value, .. } = page else {
+        panic!("expected dispatch page")
+    };
+    let AgentProfilerResultV1::Page { page, .. } = value.as_ref() else {
+        panic!("expected dispatch page value")
+    };
+    let ProfilerQueryItemV4::Dispatch { dispatch } = &page.items[0] else {
+        panic!("expected dispatch")
+    };
+    let dispatch_identity = dispatch.identity;
+    let kernel = service.handle(AgentProfilerRequestV1::InspectKernel {
+        schema: AGENT_PROFILER_REQUEST_SCHEMA_V1.into(),
+        request_id: request_id + 1,
+        capture,
+        dispatch: dispatch_identity,
+    });
+    let AgentProfilerResponseV1::Ok { value, .. } = kernel else {
+        panic!("expected kernel inspection")
+    };
+    let AgentProfilerResultV1::Kernel { inspection, .. } = value.as_ref() else {
+        panic!("expected kernel inspection value")
+    };
+    (dispatch_identity, inspection.kernel_ir.digest)
 }
 
 fn assert_error(response: AgentProfilerResponseV1, expected: AgentProfilerErrorCodeV1) {
@@ -169,11 +233,24 @@ fn capability_inventory_is_complete_read_only_and_evidence_bound() {
     }));
     assert!(capabilities.iter().any(|capability| {
         capability.operation == AgentProfilerOperationV1::PlanNextCapture
-            && capability.state == AgentProfilerCapabilityStateV1::Unavailable
-            && capability.unavailable_reason
-                == Some(AgentProfilerUnavailableReasonV1::CapturePlanRequirementsNotRepresented)
+            && capability.state == AgentProfilerCapabilityStateV1::CaptureDependent
+            && capability.unavailable_reason.is_none()
+            && capability.request_contract_schema == Some(AGENT_PROFILER_PLAN_REQUEST_SCHEMA_V1)
+            && capability.result_contract_schema == Some(AGENT_PROFILER_PLAN_SCHEMA_V1)
     }));
     assert_eq!(limits.max_requests, MAX_AGENT_PROFILER_REQUESTS_V1);
+    assert_eq!(
+        usize::from(limits.max_plan_missing_facts),
+        MAX_AGENT_PROFILER_PLAN_MISSING_FACTS_V1
+    );
+    assert_eq!(
+        usize::from(limits.max_plan_compute_units),
+        MAX_AGENT_PROFILER_PLAN_COMPUTE_UNITS_V1
+    );
+    assert_eq!(
+        limits.max_plan_storage_bytes,
+        MAX_AGENT_PROFILER_PLAN_STORAGE_BYTES_V1
+    );
     assert!(evidence.captures.is_empty());
     assert!(evidence.records.is_empty());
     assert_eq!(evidence.origin, homogeneous(TruthOriginV1::Declared));
@@ -286,20 +363,496 @@ fn open_page_inspect_compare_plan_and_unavailable_are_state_validated() {
         schema: AGENT_PROFILER_REQUEST_SCHEMA_V1.into(),
         request_id: 7,
         capture: baseline,
-        goal: ProfilerCaptureGoalV4::ExplainWaits,
+        planning: planning(
+            AgentProfilerPlanGoalV1::ExplainWaits,
+            AgentProfilerAmbiguityV1::UnknownWaitCause,
+            vec![
+                AgentProfilerPlanEvidenceClassV1::AttManifest,
+                AgentProfilerPlanEvidenceClassV1::DecodedWaitEvents,
+            ],
+            None,
+            None,
+        ),
     });
     let AgentProfilerResponseV1::Ok { value, .. } = &plan else {
-        panic!("expected typed unavailable plan response")
+        panic!("expected capture plan response")
     };
     assert!(matches!(
         value.as_ref(),
-        AgentProfilerResultV1::Unavailable {
-            operation: AgentProfilerOperationV1::PlanNextCapture,
-            reason: AgentProfilerUnavailableReasonV1::CapturePlanRequirementsNotRepresented,
-            evidence,
-        } if evidence.origin == homogeneous(TruthOriginV1::Unavailable)
+        AgentProfilerResultV1::CapturePlan { plan, evidence }
+        if plan.goal == AgentProfilerPlanGoalV1::ExplainWaits
+            && plan.disposition
+                == AgentProfilerPlanDispositionV1::AdditionalCaptureRequiredWithUnavailableConfigurationOrPostprocessing
+            && plan.minimum_additional_captures == 1
+            && evidence.origin == (AgentProfilerAggregateOriginV1::Mixed {
+                origins: vec![
+                    TruthOriginV1::Declared,
+                    TruthOriginV1::Observed,
+                    TruthOriginV1::Inferred,
+                ],
+            })
     ));
     assert!(service.encode_response(&plan).is_ok());
+
+    let explanation = service.handle(AgentProfilerRequestV1::ExplainRegression {
+        schema: AGENT_PROFILER_REQUEST_SCHEMA_V1.into(),
+        request_id: 8,
+        baseline,
+        candidate,
+    });
+    assert!(matches!(
+        &explanation,
+        AgentProfilerResponseV1::Ok { value, .. }
+        if matches!(
+            value.as_ref(),
+            AgentProfilerResultV1::Unavailable {
+                operation: AgentProfilerOperationV1::ExplainRegression,
+                reason: AgentProfilerUnavailableReasonV1::RankedExplanationRequiresCausalCounterOrDecodedEventEvidence,
+                ..
+            }
+        )
+    ));
+    assert!(service.encode_response(&explanation).is_ok());
+}
+
+#[test]
+fn ambiguous_correctness_plan_selects_one_bounded_targeted_att_capture() {
+    let mut service = AgentProfilerServiceV1::new(AgentProfilerServiceLimitsV1::default()).unwrap();
+    let (_, capture) = open(&mut service, 1, &bundle(10));
+    let (dispatch, kernel_ir) = dispatch_target(&mut service, 2, capture);
+    let request = planning(
+        AgentProfilerPlanGoalV1::AmbiguousCorrectnessDiagnosis,
+        AgentProfilerAmbiguityV1::MemoryFaultVsBarrierDivergence,
+        vec![
+            AgentProfilerPlanEvidenceClassV1::AttManifest,
+            AgentProfilerPlanEvidenceClassV1::DecodedBarrierEvents,
+            AgentProfilerPlanEvidenceClassV1::DecodedMemoryEvents,
+        ],
+        Some(dispatch),
+        Some(kernel_ir),
+    );
+    let response = service.handle(AgentProfilerRequestV1::PlanNextCapture {
+        schema: AGENT_PROFILER_REQUEST_SCHEMA_V1.into(),
+        request_id: 4,
+        capture,
+        planning: request.clone(),
+    });
+    let AgentProfilerResponseV1::Ok { value, .. } = &response else {
+        panic!("expected correctness capture plan: {response:?}")
+    };
+    let AgentProfilerResultV1::CapturePlan { plan, evidence } = value.as_ref() else {
+        panic!("expected correctness capture plan value")
+    };
+    assert_eq!(plan.schema, AGENT_PROFILER_PLAN_SCHEMA_V1);
+    assert_eq!(
+        plan.discrimination_method,
+        AgentProfilerDiscriminationMethodV1::DecodedMemoryVsBarrierEventClassification
+    );
+    assert_eq!(
+        plan.disposition,
+        AgentProfilerPlanDispositionV1::AdditionalCaptureRequiredWithUnavailableConfigurationOrPostprocessing
+    );
+    assert_eq!(plan.minimum_additional_captures, 1);
+    assert_eq!(plan.target.compute_units, [1, 3]);
+    assert_eq!(plan.target.dispatch, Some(dispatch));
+    assert_eq!(plan.target.kernel_ir, Some(kernel_ir));
+    assert_eq!(
+        plan.selected_missing_evidence,
+        [
+            AgentProfilerPlanEvidenceClassV1::AttManifest,
+            AgentProfilerPlanEvidenceClassV1::DecodedMemoryEvents,
+            AgentProfilerPlanEvidenceClassV1::DecodedBarrierEvents,
+        ]
+    );
+    assert!(
+        plan.already_available_evidence
+            .contains(&AgentProfilerPlanEvidenceClassV1::DispatchEnvelope)
+    );
+    let recipe = plan.recipe.as_ref().unwrap();
+    assert_eq!(
+        recipe.requested_data_classes,
+        [
+            AgentProfilerCaptureDataClassV1::AttThreadTrace,
+            AgentProfilerCaptureDataClassV1::DecodedMemoryEvents,
+            AgentProfilerCaptureDataClassV1::DecodedBarrierEvents,
+        ]
+    );
+    assert!(recipe.requested_logical_counters.is_empty());
+    assert_eq!(
+        recipe.target_validation.compute_units,
+        AgentProfilerSelectorValidationV1::CallerDeclaredNotValidatedByBundle
+    );
+    assert_eq!(
+        recipe.target_validation.kernel_ir,
+        AgentProfilerSelectorValidationV1::ValidatedAgainstCapture
+    );
+    assert!(recipe.collector_requirements.iter().any(|requirement| {
+        requirement.tool == AgentProfilerCollectorToolV1::Fe2o3SemanticImporter
+            && requirement.capability
+                == AgentProfilerCollectorCapabilityV1::StrictDecodedEventImport
+            && requirement.status
+                == AgentProfilerCollectorCapabilityStatusV1::RequiredUnavailableInCurrentBuild
+    }));
+    assert_eq!(recipe.expected_overhead.origin, TruthOriginV1::Declared);
+    assert_eq!(
+        recipe
+            .expected_overhead
+            .additional_runtime_basis_points
+            .maximum,
+        MAX_AGENT_PROFILER_PLAN_OVERHEAD_BASIS_POINTS_V1
+    );
+    assert!(
+        recipe
+            .expected_overhead
+            .limitations
+            .contains(&AgentProfilerOverheadLimitationV1::NotMeasured)
+    );
+    assert_eq!(
+        recipe.required_privilege,
+        AgentProfilerPrivilegeRequirementV1::ProfilerAccess
+    );
+    assert_eq!(
+        recipe.authorization,
+        AgentProfilerAuthorizationBoundaryV1 {
+            service_authority: AgentProfilerServiceAuthorityV1::ReadOnlyPlanningOnly,
+            stateful_execution:
+                AgentProfilerExecutionAuthorizationV1::SeparateExplicitAuthorizationRequired,
+            attach_authority: AgentProfilerAttachAuthorityV1::NotAvailableToService,
+        }
+    );
+    assert_eq!(recipe.storage.maximum_bytes, 16 * 1024 * 1024);
+    assert_eq!(recipe.storage.estimate_scale_multiplier, 64);
+    assert!(recipe.storage.estimated_bytes.maximum <= recipe.storage.maximum_bytes);
+    assert_eq!(evidence.captures, [capture]);
+    assert_eq!(evidence.records, [dispatch]);
+    assert!(plan.provenance.iter().any(|entry| {
+        entry.kind == AgentProfilerPlanProvenanceKindV1::PlanningRequest
+            && entry.identity == plan.request_identity
+            && entry.origin == TruthOriginV1::Declared
+    }));
+    assert!(service.encode_response(&response).is_ok());
+
+    let repeated = service.handle(AgentProfilerRequestV1::PlanNextCapture {
+        schema: AGENT_PROFILER_REQUEST_SCHEMA_V1.into(),
+        request_id: 5,
+        capture,
+        planning: request,
+    });
+    let AgentProfilerResponseV1::Ok { value, .. } = repeated else {
+        panic!("expected repeated plan")
+    };
+    let AgentProfilerResultV1::CapturePlan {
+        plan: repeated_plan,
+        ..
+    } = value.as_ref()
+    else {
+        panic!("expected repeated capture plan")
+    };
+    assert_eq!(plan.as_ref(), repeated_plan.as_ref());
+}
+
+#[test]
+fn schedule_resource_plan_uses_logical_counters_without_causal_overclaim() {
+    let mut service = AgentProfilerServiceV1::new(AgentProfilerServiceLimitsV1::default()).unwrap();
+    let (_, capture) = open(&mut service, 1, &bundle(10));
+    let (dispatch, kernel_ir) = dispatch_target(&mut service, 2, capture);
+    let response = service.handle(AgentProfilerRequestV1::PlanNextCapture {
+        schema: AGENT_PROFILER_REQUEST_SCHEMA_V1.into(),
+        request_id: 4,
+        capture,
+        planning: planning(
+            AgentProfilerPlanGoalV1::ScheduleResourceRegression,
+            AgentProfilerAmbiguityV1::SchedulingDelayVsResourcePressure,
+            vec![AgentProfilerPlanEvidenceClassV1::HardwareCounterMeasurements],
+            Some(dispatch),
+            Some(kernel_ir),
+        ),
+    });
+    let AgentProfilerResponseV1::Ok { value, .. } = &response else {
+        panic!("expected schedule/resource capture plan: {response:?}")
+    };
+    let AgentProfilerResultV1::CapturePlan { plan, .. } = value.as_ref() else {
+        panic!("expected schedule/resource capture plan value")
+    };
+    assert!(
+        plan.already_available_evidence
+            .contains(&AgentProfilerPlanEvidenceClassV1::DispatchTiming)
+    );
+    assert_eq!(
+        plan.selected_missing_evidence,
+        [AgentProfilerPlanEvidenceClassV1::HardwareCounterMeasurements]
+    );
+    let recipe = plan.recipe.as_ref().unwrap();
+    assert_eq!(
+        plan.discrimination_method,
+        AgentProfilerDiscriminationMethodV1::AggregateSchedulerVsResourceCounterContrast
+    );
+    assert_eq!(
+        plan.disposition,
+        AgentProfilerPlanDispositionV1::AdditionalCaptureRequiredWithUnavailableConfigurationOrPostprocessing
+    );
+    assert_eq!(
+        recipe.requested_data_classes,
+        [AgentProfilerCaptureDataClassV1::DispatchHardwareCounters]
+    );
+    assert_eq!(recipe.requested_logical_counters.len(), 5);
+    assert!(recipe.collector_requirements.iter().any(|requirement| {
+        requirement.capability == AgentProfilerCollectorCapabilityV1::LogicalCounterResolution
+            && requirement.status
+                == AgentProfilerCollectorCapabilityStatusV1::RequiredUnavailableInCurrentBuild
+    }));
+    assert!(recipe.collector_requirements.iter().any(|requirement| {
+        requirement.capability == AgentProfilerCollectorCapabilityV1::DispatchCounterCollection
+            && requirement.status
+                == AgentProfilerCollectorCapabilityStatusV1::RequiredNotVerifiedByCapture
+    }));
+    assert_eq!(
+        recipe.target_validation.compute_units,
+        AgentProfilerSelectorValidationV1::CallerDeclaredNotValidatedByBundle
+    );
+    assert_eq!(
+        recipe.mutual_exclusions,
+        [AgentProfilerMutualExclusionV1 {
+            excluded_data_class: AgentProfilerCaptureDataClassV1::AttThreadTrace,
+            reason: AgentProfilerMutualExclusionReasonV1::SeparateInstrumentationCaptureRequired,
+        }]
+    );
+    assert!(
+        recipe
+            .sampling_and_completeness
+            .limitations
+            .contains(&AgentProfilerCompletenessLimitV1::AggregateCountersDoNotEstablishCausality)
+    );
+    assert_eq!(
+        recipe.expected_overhead.additional_runtime_basis_points,
+        AgentProfilerBoundedU32RangeV1 {
+            minimum: 0,
+            maximum: 50_000,
+        }
+    );
+    assert!(service.encode_response(&response).is_ok());
+}
+
+#[test]
+fn existing_att_manifest_requires_postprocessing_without_another_capture() {
+    let mut service = AgentProfilerServiceV1::new(AgentProfilerServiceLimitsV1::default()).unwrap();
+    let (_, capture) = open(&mut service, 1, &att_bundle());
+    let response = service.handle(AgentProfilerRequestV1::PlanNextCapture {
+        schema: AGENT_PROFILER_REQUEST_SCHEMA_V1.into(),
+        request_id: 2,
+        capture,
+        planning: planning(
+            AgentProfilerPlanGoalV1::DecodeAttCoverage,
+            AgentProfilerAmbiguityV1::MissingVsUndecodedAttCoverage,
+            vec![
+                AgentProfilerPlanEvidenceClassV1::DecodedMemoryEvents,
+                AgentProfilerPlanEvidenceClassV1::DecodedBarrierEvents,
+                AgentProfilerPlanEvidenceClassV1::DecodedWaitEvents,
+            ],
+            None,
+            None,
+        ),
+    });
+    let AgentProfilerResponseV1::Ok { value, .. } = &response else {
+        panic!("expected ATT postprocessing plan")
+    };
+    let AgentProfilerResultV1::CapturePlan { plan, .. } = value.as_ref() else {
+        panic!("expected ATT postprocessing plan value")
+    };
+    assert_eq!(
+        plan.disposition,
+        AgentProfilerPlanDispositionV1::ExistingCaptureRequiresUnavailablePostprocessing
+    );
+    assert_eq!(plan.minimum_additional_captures, 0);
+    assert!(
+        plan.already_available_evidence
+            .contains(&AgentProfilerPlanEvidenceClassV1::AttManifest)
+    );
+    let recipe = plan.recipe.as_ref().unwrap();
+    assert_eq!(
+        recipe.action,
+        AgentProfilerCaptureActionV1::PostprocessExistingCapture
+    );
+    assert!(
+        !recipe
+            .requested_data_classes
+            .contains(&AgentProfilerCaptureDataClassV1::AttThreadTrace)
+    );
+    assert!(!recipe.collector_requirements.iter().any(|requirement| {
+        requirement.capability == AgentProfilerCollectorCapabilityV1::AttThreadTraceCollection
+    }));
+    assert_eq!(
+        recipe.expected_overhead.additional_runtime_basis_points,
+        AgentProfilerBoundedU32RangeV1 {
+            minimum: 0,
+            maximum: 0,
+        }
+    );
+    assert_eq!(
+        recipe.required_privilege,
+        AgentProfilerPrivilegeRequirementV1::None
+    );
+    assert!(service.encode_response(&response).is_ok());
+}
+
+#[test]
+fn hostile_plan_bounds_stale_facts_and_substitutions_fail_closed() {
+    let mut service = AgentProfilerServiceV1::new(AgentProfilerServiceLimitsV1::default()).unwrap();
+    let (_, capture) = open(&mut service, 1, &bundle(10));
+    let (dispatch, kernel_ir) = dispatch_target(&mut service, 2, capture);
+
+    let stale = service.handle(AgentProfilerRequestV1::PlanNextCapture {
+        schema: AGENT_PROFILER_REQUEST_SCHEMA_V1.into(),
+        request_id: 4,
+        capture,
+        planning: planning(
+            AgentProfilerPlanGoalV1::ScheduleResourceRegression,
+            AgentProfilerAmbiguityV1::SchedulingDelayVsResourcePressure,
+            vec![AgentProfilerPlanEvidenceClassV1::DispatchTiming],
+            Some(dispatch),
+            Some(kernel_ir),
+        ),
+    });
+    assert_error(stale, AgentProfilerErrorCodeV1::InvalidPlanRequest);
+
+    let mut duplicate_selector = planning(
+        AgentProfilerPlanGoalV1::ScheduleResourceRegression,
+        AgentProfilerAmbiguityV1::SchedulingDelayVsResourcePressure,
+        vec![AgentProfilerPlanEvidenceClassV1::HardwareCounterMeasurements],
+        Some(dispatch),
+        Some(kernel_ir),
+    );
+    duplicate_selector.target.compute_units = vec![2, 2];
+    assert_error(
+        service.handle(AgentProfilerRequestV1::PlanNextCapture {
+            schema: AGENT_PROFILER_REQUEST_SCHEMA_V1.into(),
+            request_id: 5,
+            capture,
+            planning: duplicate_selector,
+        }),
+        AgentProfilerErrorCodeV1::InvalidPlanRequest,
+    );
+
+    let mut oversized = planning(
+        AgentProfilerPlanGoalV1::ScheduleResourceRegression,
+        AgentProfilerAmbiguityV1::SchedulingDelayVsResourcePressure,
+        vec![AgentProfilerPlanEvidenceClassV1::HardwareCounterMeasurements],
+        Some(dispatch),
+        Some(kernel_ir),
+    );
+    oversized.constraints.maximum_storage_bytes = MAX_AGENT_PROFILER_PLAN_STORAGE_BYTES_V1 + 1;
+    assert_error(
+        service.handle(AgentProfilerRequestV1::PlanNextCapture {
+            schema: AGENT_PROFILER_REQUEST_SCHEMA_V1.into(),
+            request_id: 6,
+            capture,
+            planning: oversized,
+        }),
+        AgentProfilerErrorCodeV1::InvalidPlanRequest,
+    );
+
+    let mut overhead = planning(
+        AgentProfilerPlanGoalV1::ScheduleResourceRegression,
+        AgentProfilerAmbiguityV1::SchedulingDelayVsResourcePressure,
+        vec![AgentProfilerPlanEvidenceClassV1::HardwareCounterMeasurements],
+        Some(dispatch),
+        Some(kernel_ir),
+    );
+    overhead.constraints.maximum_overhead_basis_points =
+        MAX_AGENT_PROFILER_PLAN_OVERHEAD_BASIS_POINTS_V1 + 1;
+    assert_error(
+        service.handle(AgentProfilerRequestV1::PlanNextCapture {
+            schema: AGENT_PROFILER_REQUEST_SCHEMA_V1.into(),
+            request_id: 7,
+            capture,
+            planning: overhead,
+        }),
+        AgentProfilerErrorCodeV1::InvalidPlanRequest,
+    );
+
+    let mut records = planning(
+        AgentProfilerPlanGoalV1::ScheduleResourceRegression,
+        AgentProfilerAmbiguityV1::SchedulingDelayVsResourcePressure,
+        vec![AgentProfilerPlanEvidenceClassV1::HardwareCounterMeasurements],
+        Some(dispatch),
+        Some(kernel_ir),
+    );
+    records.constraints.maximum_records = MAX_AGENT_PROFILER_PLAN_RECORDS_V1 + 1;
+    assert_error(
+        service.handle(AgentProfilerRequestV1::PlanNextCapture {
+            schema: AGENT_PROFILER_REQUEST_SCHEMA_V1.into(),
+            request_id: 8,
+            capture,
+            planning: records,
+        }),
+        AgentProfilerErrorCodeV1::InvalidPlanRequest,
+    );
+
+    let mut compute_units = planning(
+        AgentProfilerPlanGoalV1::ScheduleResourceRegression,
+        AgentProfilerAmbiguityV1::SchedulingDelayVsResourcePressure,
+        vec![AgentProfilerPlanEvidenceClassV1::HardwareCounterMeasurements],
+        Some(dispatch),
+        Some(kernel_ir),
+    );
+    compute_units.target.compute_units =
+        (0..=u32::try_from(MAX_AGENT_PROFILER_PLAN_COMPUTE_UNITS_V1).unwrap()).collect();
+    assert_error(
+        service.handle(AgentProfilerRequestV1::PlanNextCapture {
+            schema: AGENT_PROFILER_REQUEST_SCHEMA_V1.into(),
+            request_id: 9,
+            capture,
+            planning: compute_units,
+        }),
+        AgentProfilerErrorCodeV1::InvalidPlanRequest,
+    );
+
+    let mut missing_facts = planning(
+        AgentProfilerPlanGoalV1::ScheduleResourceRegression,
+        AgentProfilerAmbiguityV1::SchedulingDelayVsResourcePressure,
+        vec![AgentProfilerPlanEvidenceClassV1::HardwareCounterMeasurements],
+        Some(dispatch),
+        Some(kernel_ir),
+    );
+    missing_facts.missing_evidence = vec![
+        AgentProfilerPlanEvidenceClassV1::HardwareCounterMeasurements;
+        MAX_AGENT_PROFILER_PLAN_MISSING_FACTS_V1 + 1
+    ];
+    assert_error(
+        service.handle(AgentProfilerRequestV1::PlanNextCapture {
+            schema: AGENT_PROFILER_REQUEST_SCHEMA_V1.into(),
+            request_id: 10,
+            capture,
+            planning: missing_facts,
+        }),
+        AgentProfilerErrorCodeV1::InvalidPlanRequest,
+    );
+
+    let valid = service.handle(AgentProfilerRequestV1::PlanNextCapture {
+        schema: AGENT_PROFILER_REQUEST_SCHEMA_V1.into(),
+        request_id: 11,
+        capture,
+        planning: planning(
+            AgentProfilerPlanGoalV1::ScheduleResourceRegression,
+            AgentProfilerAmbiguityV1::SchedulingDelayVsResourcePressure,
+            vec![AgentProfilerPlanEvidenceClassV1::HardwareCounterMeasurements],
+            Some(dispatch),
+            Some(kernel_ir),
+        ),
+    });
+    assert!(service.encode_response(&valid).is_ok());
+    let mut substituted = valid;
+    let AgentProfilerResponseV1::Ok { value, .. } = &mut substituted else {
+        unreachable!()
+    };
+    let AgentProfilerResultV1::CapturePlan { plan, .. } = value.as_mut() else {
+        unreachable!()
+    };
+    plan.declared_constraints.maximum_storage_bytes -= 1;
+    assert!(matches!(
+        service.encode_response(&substituted),
+        Err(AgentProfilerServiceErrorV1::InvalidResponse)
+    ));
 }
 
 #[test]

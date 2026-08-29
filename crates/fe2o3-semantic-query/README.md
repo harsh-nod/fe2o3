@@ -218,25 +218,42 @@ by default.
 The V1 operation inventory includes capability discovery, capture open, bounded
 pages for runs/devices/dispatches/ATT references/duration hotspots/waits,
 dispatch inspection, dispatch-scoped kernel identity inspection, Bundle V4
-comparison, and a typed-unavailable next-capture-planning request. The current
-Bundle V4 planner cannot state required overhead, privilege, storage, target,
-counter, and mutual-exclusion constraints, so it is not exposed as a complete
-agent capture plan. Pages reuse Bundle V4 content-bound cursors. Every
-successful value carries the service-contract identity, exact capture
-identities, relevant record identities, and a homogeneous, mixed, or empty
-aggregate of the item-level truth origins. Every handled request attempt,
-including zero and duplicate IDs, consumes the request budget. Responses have
-checked monotonic revisions and a service-retained state binding; request ID,
-revision, audit, or evidence substitution is rejected before encoding.
-Resident captures, configured input bytes, page items, and encoded response
-bytes have independent hard ceilings.
+comparison, and bounded next-capture planning. The agent Plan V1 request names
+one typed ambiguity, the exact missing-evidence set, CU/kernel/dispatch
+selectors, and hard overhead, storage, and record ceilings. The service checks
+that set against the opened capture and emits at most one minimum
+discriminating recipe. Capability discovery returns both nested Plan V1 schema
+names and all plan-specific limits. A recipe carries logical counters and data
+classes, required-but-unverified rocprofv3/Compute Viewer capabilities, the
+explicitly unavailable logical-counter mapper or strict decoded-event importer
+when it is needed, mutual exclusions, sampling/completeness limits, profiler
+privilege, a contract-declared overhead envelope that is explicitly not a
+measurement or performance prediction, and a bounded storage estimate derived
+from the existing bundle size. The service can only plan: every stateful collection
+requires separate explicit authorization, and the service has no launch or
+attach authority. Dispatch and kernel selectors are checked against the open
+capture. CU selectors are retained as caller declarations and explicitly
+labeled unvalidated because Bundle V4 has no authenticated CU topology.
+
+Pages reuse Bundle V4 content-bound cursors. Every successful value carries the
+service-contract identity, exact capture identities, relevant record
+identities, and a homogeneous, mixed, or empty aggregate of the item-level
+truth origins. Plan results additionally bind the canonical planning-request,
+bundle, and selected-dispatch provenance identities. Every handled request
+attempt, including zero and duplicate IDs, consumes the request budget.
+Responses have checked monotonic revisions and a service-retained state
+binding; request ID, revision, audit, plan, or evidence substitution is
+rejected before encoding. Resident captures, configured input bytes, page
+items, plan inputs, and encoded response bytes have independent hard ceilings.
 
 The closed inventory also admits workgroup/wave/lane inspection, source/IR/ISA
 correlation, fault, decoded wait/memory/barrier, property, causal regression
 explanation, and reproducer export requests so callers do not need to infer
 support from missing methods. Bundle V4 does not carry the evidence needed for
 those operations; capability discovery and operation responses report typed
-`unavailable` reasons. `inspect_kernel` is only the KIR/artifact/source-map
+`unavailable` reasons. Ranked regression explanation specifically remains
+unavailable because duration deltas do not establish causal counter or decoded
+event attribution. `inspect_kernel` is only the KIR/artifact/source-map
 identity binding declared on an observed dispatch. It does not expose source
 text, ISA, arguments, variables, or semantic execution history.
 
