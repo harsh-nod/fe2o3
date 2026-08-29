@@ -10,9 +10,10 @@ use fe2o3_kernel_analysis::{
 };
 use rustix::fs::{OFlags, SealFlags};
 use std::{
+    collections::BTreeMap,
     fs::{self, File, OpenOptions},
     io::{Seek, SeekFrom, Write},
-    os::unix::fs::PermissionsExt,
+    os::unix::fs::{OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
     process::Command,
     sync::{
@@ -75,7 +76,7 @@ fn configured_native_worker_uses_authenticated_identity_probe() {
         return;
     };
     let native_limits = AuthenticatedPhysicalMachineEffectLimitsV1::new(
-        DEFAULT_PHYSICAL_MACHINE_EFFECT_TIMEOUT_V1,
+        DEFAULT_PHYSICAL_MACHINE_EFFECT_TIMEOUT_V1 * 2,
         1024 * 1024,
         16 * 1024,
     )
@@ -96,17 +97,24 @@ fn configured_native_worker_uses_authenticated_identity_probe() {
         return;
     };
     let generous = PhysicalMachineEffectBudgetV1::new(64, 32, 16, 16, 8);
+    let entries = match std::env::var("FE2O3_MACHINE_ANALYSIS_NATIVE_ENTRY") {
+        Ok(symbol) => vec![PhysicalMachineEffectEntryRequestV1::new(symbol, generous).unwrap()],
+        Err(std::env::VarError::NotPresent) => vec![
+            PhysicalMachineEffectEntryRequestV1::new("alpha", generous).unwrap(),
+            PhysicalMachineEffectEntryRequestV1::new("zeta", generous).unwrap(),
+        ],
+        Err(std::env::VarError::NotUnicode(_)) => {
+            panic!("FE2O3_MACHINE_ANALYSIS_NATIVE_ENTRY is not UTF-8")
+        }
+    };
+    let expected_entry_count = entries.len();
     let execution = worker
-        .analyze(
-            fs::read(payload_path).unwrap(),
-            vec![
-                PhysicalMachineEffectEntryRequestV1::new("alpha", generous).unwrap(),
-                PhysicalMachineEffectEntryRequestV1::new("zeta", generous).unwrap(),
-            ],
-            native_limits,
-        )
+        .analyze(fs::read(payload_path).unwrap(), entries, native_limits)
         .unwrap();
-    assert_eq!(execution.analysis().effects().entry_points().len(), 2);
+    assert_eq!(
+        execution.analysis().effects().entry_points().len(),
+        expected_entry_count
+    );
     assert!(execution.analysis().trace().instructions().len() > 2);
     assert!(execution.analysis().trace().blocks().iter().any(|block| {
         block
@@ -114,6 +122,52 @@ fn configured_native_worker_uses_authenticated_identity_probe() {
             .iter()
             .any(|successor| *successor <= block.ordinal())
     }));
+    assert!(execution.authenticates_analyzer_execution());
+    assert!(!execution.grants_publication_authority());
+    assert!(!execution.grants_load_authority());
+    assert!(!execution.grants_launch_authority());
+
+    persist_configured_native_record(
+        "FE2O3_MACHINE_ANALYSIS_NATIVE_REQUEST_PATH",
+        execution.request().canonical_bytes(),
+    );
+    persist_configured_native_record(
+        "FE2O3_MACHINE_ANALYSIS_NATIVE_BUNDLE_PATH",
+        execution.analysis().canonical_bytes(),
+    );
+    if let Some(path) = std::env::var_os("FE2O3_MACHINE_ANALYSIS_NATIVE_RECEIPT_PATH") {
+        execution.persist_create_new(&path).unwrap();
+        assert_eq!(fs::read(path).unwrap(), execution.canonical_receipt_bytes());
+    }
+
+    let mut opcodes = BTreeMap::<&str, usize>::new();
+    for instruction in execution.analysis().trace().instructions() {
+        *opcodes.entry(instruction.opcode()).or_default() += 1;
+    }
+    eprintln!(
+        "native gfx942 analysis: request={:?} bundle={:?} receipt={:?} blocks={} instructions={} opcodes={opcodes:?}",
+        execution.request().identity(),
+        execution.analysis().identity(),
+        execution.identity(),
+        execution.analysis().trace().blocks().len(),
+        execution.analysis().trace().instructions().len(),
+    );
+}
+
+fn persist_configured_native_record(variable: &str, bytes: &[u8]) {
+    let Some(path) = std::env::var_os(variable) else {
+        return;
+    };
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&path)
+        .unwrap();
+    file.write_all(bytes).unwrap();
+    file.sync_all().unwrap();
+    drop(file);
+    assert_eq!(fs::read(path).unwrap(), bytes);
 }
 
 #[test]
