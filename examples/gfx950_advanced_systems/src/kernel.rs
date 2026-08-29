@@ -586,17 +586,16 @@ pub fn gfx950_qwen_ngram_gather_v1(
     macro_rules! probe {
         ($probe:literal) => {{
             let slot = hash.wrapping_add($probe) as usize & (TABLE_SIZE - 1);
-            if table_hashes[slot] == hash {
-                let equal = (table_grams[slot * NGRAM] == queries[base])
-                    & (table_grams[slot * NGRAM + 1] == queries[base + 1])
-                    & (table_grams[slot * NGRAM + 2] == queries[base + 2]);
-                if equal {
-                    let priority = priorities[slot];
-                    if priority > best_priority || (priority == best_priority && slot < best_slot) {
-                        best_slot = slot;
-                        best_priority = priority;
-                        best_value = table_values[slot];
-                    }
+            let equal = (table_hashes[slot] == hash)
+                & (table_grams[slot * NGRAM] == queries[base])
+                & (table_grams[slot * NGRAM + 1] == queries[base + 1])
+                & (table_grams[slot * NGRAM + 2] == queries[base + 2]);
+            if equal {
+                let priority = priorities[slot];
+                if priority > best_priority || (priority == best_priority && slot < best_slot) {
+                    best_slot = slot;
+                    best_priority = priority;
+                    best_value = table_values[slot];
                 }
             }
         }};
@@ -604,15 +603,14 @@ pub fn gfx950_qwen_ngram_gather_v1(
     macro_rules! final_probe {
         ($probe:literal) => {{
             let slot = hash.wrapping_add($probe) as usize & (TABLE_SIZE - 1);
-            if table_hashes[slot] == hash {
-                let equal = (table_grams[slot * NGRAM] == queries[base])
-                    & (table_grams[slot * NGRAM + 1] == queries[base + 1])
-                    & (table_grams[slot * NGRAM + 2] == queries[base + 2]);
-                if equal {
-                    let priority = priorities[slot];
-                    if priority > best_priority || (priority == best_priority && slot < best_slot) {
-                        best_value = table_values[slot];
-                    }
+            let equal = (table_hashes[slot] == hash)
+                & (table_grams[slot * NGRAM] == queries[base])
+                & (table_grams[slot * NGRAM + 1] == queries[base + 1])
+                & (table_grams[slot * NGRAM + 2] == queries[base + 2]);
+            if equal {
+                let priority = priorities[slot];
+                if priority > best_priority || (priority == best_priority && slot < best_slot) {
+                    best_value = table_values[slot];
                 }
             }
         }};
