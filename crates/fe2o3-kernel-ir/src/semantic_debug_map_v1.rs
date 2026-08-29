@@ -5,18 +5,33 @@
 //! outcomes. The record is descriptive evidence only and grants no compiler, proof, artifact,
 //! load, launch, or hardware authority.
 
-use std::{error::Error, fmt};
+use std::{error::Error, fmt, io, io::Write};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::{DebugSourceMapDocumentV2, DebugSourceMapSpanV1};
+use crate::{
+    DebugSourceMapDocumentV2, DebugSourceMapSpanV1, MAX_MODULE_BYTES_V1,
+    VerifiedCanonicalKernelIrV7,
+};
 
 pub const SEMANTIC_DEBUG_MAP_SCHEMA_V1: &str = "fe2o3-semantic-debug-map-v1";
 pub const MAX_SEMANTIC_DEBUG_MAP_BYTES_V1: usize = 64 * 1024 * 1024;
-pub const MAX_SEMANTIC_DEBUG_NODES_V1: usize = 1_000_000;
-pub const MAX_SEMANTIC_DEBUG_MAPPINGS_V1: usize = 2_000_000;
-pub const MAX_SEMANTIC_DEBUG_MAPPING_REFERENCES_V1: usize = 8_000_000;
+// Conservative lower bounds for one compact JSON record/reference. They are deliberately below
+// the shortest currently emitted representation so every derived count is a permissive ceiling,
+// while the encoded byte ceiling remains the final aggregate bound.
+pub const MIN_SEMANTIC_DEBUG_NODE_WIRE_BYTES_V1: usize = 128;
+pub const MIN_SEMANTIC_DEBUG_MAPPING_WIRE_BYTES_V1: usize = 192;
+pub const MIN_SEMANTIC_DEBUG_REFERENCE_WIRE_BYTES_V1: usize = 66;
+pub const MIN_SEMANTIC_DEBUG_BOUNDARY_WIRE_BYTES_V1: usize = 128;
+pub const MAX_SEMANTIC_DEBUG_NODES_V1: usize =
+    MAX_SEMANTIC_DEBUG_MAP_BYTES_V1 / MIN_SEMANTIC_DEBUG_NODE_WIRE_BYTES_V1;
+pub const MAX_SEMANTIC_DEBUG_MAPPINGS_V1: usize =
+    MAX_SEMANTIC_DEBUG_MAP_BYTES_V1 / MIN_SEMANTIC_DEBUG_MAPPING_WIRE_BYTES_V1;
+pub const MAX_SEMANTIC_DEBUG_MAPPING_REFERENCES_V1: usize =
+    MAX_SEMANTIC_DEBUG_MAP_BYTES_V1 / MIN_SEMANTIC_DEBUG_REFERENCE_WIRE_BYTES_V1;
+pub const MAX_SEMANTIC_DEBUG_BOUNDARIES_V1: usize =
+    MAX_SEMANTIC_DEBUG_MAP_BYTES_V1 / MIN_SEMANTIC_DEBUG_BOUNDARY_WIRE_BYTES_V1;
 
 const SEMANTIC_DEBUG_MAP_IDENTITY_DOMAIN_V1: &[u8] = b"FE2O3/SEMANTIC-DEBUG-MAP/V1\0";
 
@@ -139,6 +154,13 @@ pub enum SemanticDebugLayerV1 {
     Isa,
 }
 
+/// Stable meaning of every `kernel_ordinal` used by an ISA location.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SemanticDebugKernelOrdinalBasisV1 {
+    AmdhsaMetadataDeclarationOrder,
+}
+
 impl SemanticDebugLayerV1 {
     const fn successor(self) -> Option<Self> {
         match self {
@@ -179,7 +201,8 @@ pub enum SemanticDebugLocationV1 {
         block_ordinal: u64,
         instruction_ordinal: u64,
     },
-    /// Half-open byte interval relative to the ordinal-selected kernel entry symbol.
+    /// Half-open byte interval relative to the kernel entry symbol selected in AMDHSA metadata
+    /// declaration order, never ELF symbol-table or lexical-name order.
     Isa {
         kernel_ordinal: u64,
         byte_start: u64,
@@ -319,6 +342,69 @@ pub enum SemanticDebugUnavailableReasonV1 {
     Unsupported,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SemanticDebugMapStatusV1 {
+    Complete,
+    Partial,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SemanticDebugBoundaryDirectionV1 {
+    PredecessorUnavailable,
+    SuccessorUnavailable,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SemanticDebugBoundaryReasonV1 {
+    ProducerBoundary,
+    MissingDebugInformation,
+    NotRepresented,
+    UnsupportedLayer,
+}
+
+/// An explicit partial-map endpoint. Interior nodes missing either adjacent transformation must
+/// carry the corresponding boundary; complete maps permit no boundaries.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SemanticDebugBoundaryV1 {
+    #[serde(with = "hex_identity_v1")]
+    node: [u8; 32],
+    direction: SemanticDebugBoundaryDirectionV1,
+    reason: SemanticDebugBoundaryReasonV1,
+}
+
+impl SemanticDebugBoundaryV1 {
+    pub fn new(
+        node: [u8; 32],
+        direction: SemanticDebugBoundaryDirectionV1,
+        reason: SemanticDebugBoundaryReasonV1,
+    ) -> Result<Self, SemanticDebugMapErrorV1> {
+        if node == [0; 32] {
+            return Err(SemanticDebugMapErrorV1::InvalidBoundary);
+        }
+        Ok(Self {
+            node,
+            direction,
+            reason,
+        })
+    }
+
+    pub const fn node(self) -> [u8; 32] {
+        self.node
+    }
+
+    pub const fn direction(self) -> SemanticDebugBoundaryDirectionV1 {
+        self.direction
+    }
+
+    pub const fn reason(self) -> SemanticDebugBoundaryReasonV1 {
+        self.reason
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(tag = "availability", rename_all = "snake_case", deny_unknown_fields)]
 pub enum SemanticDebugMappingOutputV1 {
@@ -408,6 +494,15 @@ impl SemanticDebugMappingV1 {
     }
 
     fn normalize_and_validate_shape(&mut self) -> Result<(), SemanticDebugMapErrorV1> {
+        let output_count = self.output.nodes().len();
+        let reference_count = self
+            .inputs
+            .len()
+            .checked_add(output_count)
+            .ok_or(SemanticDebugMapErrorV1::ResourceLimit)?;
+        if reference_count > MAX_SEMANTIC_DEBUG_MAPPING_REFERENCES_V1 {
+            return Err(SemanticDebugMapErrorV1::ResourceLimit);
+        }
         if self.identity == [0; 32]
             || self.input_layer.successor() != Some(self.output_layer)
             || self.inputs.is_empty()
@@ -428,7 +523,6 @@ impl SemanticDebugMappingV1 {
             }
         }
         let input_count = self.inputs.len();
-        let output_count = self.output.nodes().len();
         let available = self.output.reason().is_none();
         let valid = match self.transformation {
             SemanticDebugTransformationV1::Preserved | SemanticDebugTransformationV1::Moved => {
@@ -462,8 +556,14 @@ impl SemanticDebugMappingV1 {
 pub struct SemanticDebugMapDocumentV1 {
     schema: SemanticDebugMapSchemaV1,
     binding: SemanticDebugMapBindingV1,
+    kernel_ordinal_basis: SemanticDebugKernelOrdinalBasisV1,
+    status: SemanticDebugMapStatusV1,
+    #[serde(deserialize_with = "bounded_nodes_v1::deserialize")]
     nodes: Vec<SemanticDebugNodeV1>,
+    #[serde(deserialize_with = "bounded_mappings_v1::deserialize")]
     mappings: Vec<SemanticDebugMappingV1>,
+    #[serde(deserialize_with = "bounded_boundaries_v1::deserialize")]
+    boundaries: Vec<SemanticDebugBoundaryV1>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -472,6 +572,7 @@ enum SemanticDebugMapSchemaV1 {
     V1,
 }
 
+#[derive(Clone, Copy, Debug)]
 pub struct SemanticDebugMapInputsV1<'a> {
     pub source_map_v2: &'a [u8],
     pub semantic_mir: &'a [u8],
@@ -482,16 +583,53 @@ pub struct SemanticDebugMapInputsV1<'a> {
 }
 
 impl SemanticDebugMapDocumentV1 {
+    /// Constructs a complete map. Every non-source node must have a recorded predecessor outcome
+    /// and every non-ISA node must have a recorded successor outcome.
     pub fn new(
         binding: SemanticDebugMapBindingV1,
         nodes: Vec<SemanticDebugNodeV1>,
         mappings: Vec<SemanticDebugMappingV1>,
     ) -> Result<Self, SemanticDebugMapErrorV1> {
+        Self::new_with_status(
+            binding,
+            SemanticDebugMapStatusV1::Complete,
+            nodes,
+            mappings,
+            Vec::new(),
+        )
+    }
+
+    /// Constructs a partial map whose every missing adjacent transformation is explicit.
+    pub fn new_partial(
+        binding: SemanticDebugMapBindingV1,
+        nodes: Vec<SemanticDebugNodeV1>,
+        mappings: Vec<SemanticDebugMappingV1>,
+        boundaries: Vec<SemanticDebugBoundaryV1>,
+    ) -> Result<Self, SemanticDebugMapErrorV1> {
+        Self::new_with_status(
+            binding,
+            SemanticDebugMapStatusV1::Partial,
+            nodes,
+            mappings,
+            boundaries,
+        )
+    }
+
+    fn new_with_status(
+        binding: SemanticDebugMapBindingV1,
+        status: SemanticDebugMapStatusV1,
+        nodes: Vec<SemanticDebugNodeV1>,
+        mappings: Vec<SemanticDebugMappingV1>,
+        boundaries: Vec<SemanticDebugBoundaryV1>,
+    ) -> Result<Self, SemanticDebugMapErrorV1> {
         let mut document = Self {
             schema: SemanticDebugMapSchemaV1::V1,
             binding,
+            kernel_ordinal_basis: SemanticDebugKernelOrdinalBasisV1::AmdhsaMetadataDeclarationOrder,
+            status,
             nodes,
             mappings,
+            boundaries,
         };
         document.normalize_and_validate()?;
         Ok(document)
@@ -509,16 +647,16 @@ impl SemanticDebugMapDocumentV1 {
 
     pub fn from_canonical_json_bytes(bytes: &[u8]) -> Result<Self, SemanticDebugMapErrorV1> {
         let document = Self::from_json_bytes(bytes)?;
-        if serde_json::to_vec(&document).map_err(|_| SemanticDebugMapErrorV1::Encoding)? != bytes {
+        if document.to_canonical_json_bytes()? != bytes {
             return Err(SemanticDebugMapErrorV1::NonCanonicalEncoding);
         }
         Ok(document)
     }
 
     pub fn to_canonical_json_bytes(&self) -> Result<Vec<u8>, SemanticDebugMapErrorV1> {
-        let mut document = self.clone();
-        document.normalize_and_validate()?;
-        let bytes = serde_json::to_vec(&document).map_err(|_| SemanticDebugMapErrorV1::Encoding)?;
+        let mut writer = BoundedSemanticMapWriterV1::new(MAX_SEMANTIC_DEBUG_MAP_BYTES_V1);
+        serde_json::to_writer(&mut writer, self).map_err(|_| writer.error())?;
+        let bytes = writer.finish()?;
         if bytes.is_empty() || bytes.len() > MAX_SEMANTIC_DEBUG_MAP_BYTES_V1 {
             return Err(SemanticDebugMapErrorV1::InvalidLength);
         }
@@ -528,11 +666,20 @@ impl SemanticDebugMapDocumentV1 {
     pub const fn binding(&self) -> SemanticDebugMapBindingV1 {
         self.binding
     }
+    pub const fn kernel_ordinal_basis(&self) -> SemanticDebugKernelOrdinalBasisV1 {
+        self.kernel_ordinal_basis
+    }
+    pub const fn status(&self) -> SemanticDebugMapStatusV1 {
+        self.status
+    }
     pub fn nodes(&self) -> &[SemanticDebugNodeV1] {
         &self.nodes
     }
     pub fn mappings(&self) -> &[SemanticDebugMappingV1] {
         &self.mappings
+    }
+    pub fn boundaries(&self) -> &[SemanticDebugBoundaryV1] {
+        &self.boundaries
     }
     pub fn node(&self, identity: [u8; 32]) -> Option<&SemanticDebugNodeV1> {
         self.nodes
@@ -586,10 +733,27 @@ impl SemanticDebugMapDocumentV1 {
         }
         let source_map = DebugSourceMapDocumentV2::from_canonical_json_bytes(inputs.source_map_v2)
             .map_err(|_| SemanticDebugMapErrorV1::InvalidBoundSourceMap)?;
+        if inputs.canonical_kir.len() > MAX_MODULE_BYTES_V1 {
+            return Err(SemanticDebugMapErrorV1::InvalidBoundCanonicalKir);
+        }
+        let mut canonical_kir = Vec::new();
+        canonical_kir
+            .try_reserve_exact(inputs.canonical_kir.len())
+            .map_err(|_| SemanticDebugMapErrorV1::AllocationFailure)?;
+        canonical_kir.extend_from_slice(inputs.canonical_kir);
+        let admitted_kir = VerifiedCanonicalKernelIrV7::from_canonical_bytes(canonical_kir)
+            .map_err(|_| SemanticDebugMapErrorV1::InvalidBoundCanonicalKir)?;
+        let source_map_kir = source_map.binding().canonical_kir();
+        if source_map_kir.digest() != *admitted_kir.identity().digest()
+            || source_map_kir.canonical_bytes() != admitted_kir.identity().canonical_length()
+        {
+            return Err(SemanticDebugMapErrorV1::SourceMapKirBindingMismatch);
+        }
         self.validate_source_nodes(&source_map)
     }
 
-    /// Revalidates the artifact binding and every symbol-relative ISA interval.
+    /// Revalidates the artifact binding and every symbol-relative ISA interval. Entry sizes must
+    /// be in AMDHSA metadata declaration order, matching `kernel_ordinal_basis`.
     pub fn validate_finalized_artifact(
         &self,
         artifact: &[u8],
@@ -641,12 +805,27 @@ impl SemanticDebugMapDocumentV1 {
 
     fn normalize_and_validate(&mut self) -> Result<(), SemanticDebugMapErrorV1> {
         self.binding.validate()?;
+        if self.kernel_ordinal_basis
+            != SemanticDebugKernelOrdinalBasisV1::AmdhsaMetadataDeclarationOrder
+        {
+            return Err(SemanticDebugMapErrorV1::InvalidKernelOrdinalBasis);
+        }
         if self.nodes.is_empty()
             || self.mappings.is_empty()
             || self.nodes.len() > MAX_SEMANTIC_DEBUG_NODES_V1
             || self.mappings.len() > MAX_SEMANTIC_DEBUG_MAPPINGS_V1
+            || self.boundaries.len() > MAX_SEMANTIC_DEBUG_BOUNDARIES_V1
         {
             return Err(SemanticDebugMapErrorV1::ResourceLimit);
+        }
+        match self.status {
+            SemanticDebugMapStatusV1::Complete if !self.boundaries.is_empty() => {
+                return Err(SemanticDebugMapErrorV1::InvalidBoundary);
+            }
+            SemanticDebugMapStatusV1::Partial if self.boundaries.is_empty() => {
+                return Err(SemanticDebugMapErrorV1::UntypedBoundary);
+            }
+            _ => {}
         }
         for node in &self.nodes {
             node.validate()?;
@@ -671,6 +850,21 @@ impl SemanticDebugMapDocumentV1 {
             .any(|pair| pair[0].identity == pair[1].identity)
         {
             return Err(SemanticDebugMapErrorV1::DuplicateMapping);
+        }
+        if self
+            .boundaries
+            .iter()
+            .any(|boundary| boundary.node == [0; 32])
+        {
+            return Err(SemanticDebugMapErrorV1::InvalidBoundary);
+        }
+        self.boundaries.sort_unstable();
+        if self
+            .boundaries
+            .windows(2)
+            .any(|pair| pair[0].node == pair[1].node && pair[0].direction == pair[1].direction)
+        {
+            return Err(SemanticDebugMapErrorV1::InvalidBoundary);
         }
         let references = self.mappings.iter().try_fold(0_usize, |count, mapping| {
             count
@@ -719,13 +913,118 @@ impl SemanticDebugMapDocumentV1 {
         {
             return Err(SemanticDebugMapErrorV1::ContradictoryMapping);
         }
+        let expected_capacity = self
+            .nodes
+            .len()
+            .checked_mul(2)
+            .ok_or(SemanticDebugMapErrorV1::ResourceLimit)?;
+        let mut missing = Vec::new();
+        missing
+            .try_reserve_exact(expected_capacity)
+            .map_err(|_| SemanticDebugMapErrorV1::AllocationFailure)?;
         for node in &self.nodes {
-            let appears = consumed.binary_search(&node.identity).is_ok()
-                || produced.binary_search(&node.identity).is_ok();
-            if !appears {
-                return Err(SemanticDebugMapErrorV1::OrphanNode);
+            let is_consumed = consumed.binary_search(&node.identity).is_ok();
+            let is_produced = produced.binary_search(&node.identity).is_ok();
+            if node.layer() != SemanticDebugLayerV1::Source && !is_produced {
+                missing.push((
+                    node.identity,
+                    SemanticDebugBoundaryDirectionV1::PredecessorUnavailable,
+                ));
+            }
+            if node.layer() != SemanticDebugLayerV1::Isa && !is_consumed {
+                missing.push((
+                    node.identity,
+                    SemanticDebugBoundaryDirectionV1::SuccessorUnavailable,
+                ));
             }
         }
+        missing.sort_unstable();
+        match self.status {
+            SemanticDebugMapStatusV1::Complete if !missing.is_empty() => {
+                return Err(SemanticDebugMapErrorV1::UntypedBoundary);
+            }
+            SemanticDebugMapStatusV1::Partial => {
+                let mut declared = Vec::new();
+                declared
+                    .try_reserve_exact(self.boundaries.len())
+                    .map_err(|_| SemanticDebugMapErrorV1::AllocationFailure)?;
+                for boundary in &self.boundaries {
+                    self.node(boundary.node)
+                        .ok_or(SemanticDebugMapErrorV1::InvalidBoundary)?;
+                    declared.push((boundary.node, boundary.direction));
+                }
+                if declared != missing {
+                    return Err(SemanticDebugMapErrorV1::UntypedBoundary);
+                }
+            }
+            SemanticDebugMapStatusV1::Complete => {}
+        }
+        Ok(())
+    }
+}
+
+struct BoundedSemanticMapWriterV1 {
+    bytes: Vec<u8>,
+    max: usize,
+    exceeded: bool,
+    allocation_failed: bool,
+}
+
+impl BoundedSemanticMapWriterV1 {
+    fn new(max: usize) -> Self {
+        Self {
+            bytes: Vec::new(),
+            max,
+            exceeded: false,
+            allocation_failed: false,
+        }
+    }
+
+    fn error(&self) -> SemanticDebugMapErrorV1 {
+        if self.exceeded {
+            SemanticDebugMapErrorV1::InvalidLength
+        } else if self.allocation_failed {
+            SemanticDebugMapErrorV1::AllocationFailure
+        } else {
+            SemanticDebugMapErrorV1::Encoding
+        }
+    }
+
+    fn finish(self) -> Result<Vec<u8>, SemanticDebugMapErrorV1> {
+        if self.exceeded {
+            Err(SemanticDebugMapErrorV1::InvalidLength)
+        } else if self.allocation_failed {
+            Err(SemanticDebugMapErrorV1::AllocationFailure)
+        } else {
+            Ok(self.bytes)
+        }
+    }
+}
+
+impl Write for BoundedSemanticMapWriterV1 {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.write_all(bytes)?;
+        Ok(bytes.len())
+    }
+
+    fn write_all(&mut self, bytes: &[u8]) -> io::Result<()> {
+        let Some(new_len) = self.bytes.len().checked_add(bytes.len()) else {
+            self.exceeded = true;
+            return Err(io::Error::other("semantic debug map length overflow"));
+        };
+        if new_len > self.max {
+            self.exceeded = true;
+            return Err(io::Error::other("semantic debug map exceeds wire limit"));
+        }
+        if self.bytes.try_reserve(bytes.len()).is_err() {
+            self.allocation_failed = true;
+            return Err(io::Error::other("semantic debug map allocation failed"));
+        }
+        self.bytes.extend_from_slice(bytes);
+        Ok(())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
         Ok(())
     }
 }
@@ -745,6 +1044,7 @@ pub enum SemanticDebugMapErrorV1 {
     NonCanonicalEncoding,
     Encoding,
     InvalidBinding,
+    InvalidKernelOrdinalBasis,
     InvalidNode,
     InvalidMapping,
     DuplicateNode,
@@ -754,11 +1054,15 @@ pub enum SemanticDebugMapErrorV1 {
     LayerMismatch,
     ContradictoryMapping,
     OrphanNode,
+    InvalidBoundary,
+    UntypedBoundary,
     ResourceLimit,
     AllocationFailure,
     ContentBindingMismatch,
     ArtifactBindingMismatch,
     InvalidBoundSourceMap,
+    InvalidBoundCanonicalKir,
+    SourceMapKirBindingMismatch,
     InvalidIsaInterval,
 }
 
@@ -823,30 +1127,164 @@ mod hex_identity_v1 {
 }
 
 mod hex_identities_v1 {
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use std::fmt;
 
-    use super::HexIdentityV1;
+    use serde::{
+        Deserializer, Serializer,
+        de::{self, SeqAccess, Visitor},
+        ser::SerializeSeq,
+    };
+
+    use super::{HexIdentityV1, MAX_SEMANTIC_DEBUG_MAPPING_REFERENCES_V1};
 
     pub fn serialize<S>(values: &[[u8; 32]], serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
-        values
-            .iter()
-            .copied()
-            .map(HexIdentityV1)
-            .collect::<Vec<_>>()
-            .serialize(serializer)
+        let mut sequence = serializer.serialize_seq(Some(values.len()))?;
+        for value in values {
+            sequence.serialize_element(&HexIdentityV1(*value))?;
+        }
+        sequence.end()
     }
 
     pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<[u8; 32]>, D::Error>
     where
         D: Deserializer<'de>,
     {
-        Ok(Vec::<HexIdentityV1>::deserialize(deserializer)?
-            .into_iter()
-            .map(|identity| identity.0)
-            .collect())
+        struct IdentityVisitorV1;
+
+        impl<'de> Visitor<'de> for IdentityVisitorV1 {
+            type Value = Vec<[u8; 32]>;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("a bounded sequence of semantic node identities")
+            }
+
+            fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
+            where
+                A: SeqAccess<'de>,
+            {
+                let mut values = Vec::new();
+                while let Some(identity) = sequence.next_element::<HexIdentityV1>()? {
+                    if values.len() == MAX_SEMANTIC_DEBUG_MAPPING_REFERENCES_V1 {
+                        return Err(de::Error::custom(
+                            "semantic mapping reference count exceeds wire-derived limit",
+                        ));
+                    }
+                    if values.len() == values.capacity() {
+                        let remaining = MAX_SEMANTIC_DEBUG_MAPPING_REFERENCES_V1 - values.len();
+                        values.try_reserve_exact(remaining.min(1024)).map_err(|_| {
+                            de::Error::custom("semantic identity allocation failed")
+                        })?;
+                    }
+                    values.push(identity.0);
+                }
+                Ok(values)
+            }
+        }
+
+        deserializer.deserialize_seq(IdentityVisitorV1)
+    }
+}
+
+fn deserialize_bounded_vec_v1<'de, D, T>(
+    deserializer: D,
+    max: usize,
+    description: &'static str,
+) -> Result<Vec<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    use std::{fmt, marker::PhantomData};
+
+    use serde::de::{self, SeqAccess, Visitor};
+
+    struct BoundedVecVisitorV1<T> {
+        max: usize,
+        description: &'static str,
+        marker: PhantomData<T>,
+    }
+
+    impl<'de, T> Visitor<'de> for BoundedVecVisitorV1<T>
+    where
+        T: Deserialize<'de>,
+    {
+        type Value = Vec<T>;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(formatter, "a bounded sequence of {}", self.description)
+        }
+
+        fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
+        where
+            A: SeqAccess<'de>,
+        {
+            let mut values = Vec::new();
+            while let Some(value) = sequence.next_element()? {
+                if values.len() == self.max {
+                    return Err(de::Error::custom(
+                        "semantic map sequence exceeds wire limit",
+                    ));
+                }
+                if values.len() == values.capacity() {
+                    let remaining = self.max - values.len();
+                    values.try_reserve_exact(remaining.min(1024)).map_err(|_| {
+                        de::Error::custom("semantic map sequence allocation failed")
+                    })?;
+                }
+                values.push(value);
+            }
+            Ok(values)
+        }
+    }
+
+    deserializer.deserialize_seq(BoundedVecVisitorV1 {
+        max,
+        description,
+        marker: PhantomData,
+    })
+}
+
+mod bounded_nodes_v1 {
+    use super::*;
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<SemanticDebugNodeV1>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserialize_bounded_vec_v1(deserializer, MAX_SEMANTIC_DEBUG_NODES_V1, "semantic nodes")
+    }
+}
+
+mod bounded_mappings_v1 {
+    use super::*;
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<SemanticDebugMappingV1>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserialize_bounded_vec_v1(
+            deserializer,
+            MAX_SEMANTIC_DEBUG_MAPPINGS_V1,
+            "semantic mappings",
+        )
+    }
+}
+
+mod bounded_boundaries_v1 {
+    use super::*;
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<SemanticDebugBoundaryV1>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserialize_bounded_vec_v1(
+            deserializer,
+            MAX_SEMANTIC_DEBUG_BOUNDARIES_V1,
+            "semantic boundaries",
+        )
     }
 }
 
@@ -857,15 +1295,29 @@ struct HexIdentityV1(#[serde(with = "hex_identity_v1")] [u8; 32]);
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{DebugSourceMapBindingV1, DebugSourceMapFileV1, DebugSourceMapSiteV1};
+    use crate::{
+        DebugSourceMapBindingV1, DebugSourceMapFileV1, DebugSourceMapSiteV1, Module,
+        VerifiedCanonicalKernelIrIdentityV7,
+    };
 
     fn id(byte: u8) -> [u8; 32] {
         [byte; 32]
     }
 
-    fn source_map() -> Vec<u8> {
+    fn canonical_kir(module_id: &str) -> (Vec<u8>, VerifiedCanonicalKernelIrIdentityV7) {
+        let owner = VerifiedCanonicalKernelIrV7::from_module(Module::new(module_id)).unwrap();
+        let identity = *owner.identity();
+        (owner.into_canonical_bytes(), identity)
+    }
+
+    fn source_map(kir_identity: VerifiedCanonicalKernelIrIdentityV7) -> Vec<u8> {
         DebugSourceMapDocumentV2::new(
-            DebugSourceMapBindingV1::new(id(80), id(81), 3).unwrap(),
+            DebugSourceMapBindingV1::new(
+                id(80),
+                *kir_identity.digest(),
+                kir_identity.canonical_length(),
+            )
+            .unwrap(),
             vec![DebugSourceMapFileV1::new(id(1), 128, "/src/kernel.rs".into()).unwrap()],
             Vec::<DebugSourceMapSiteV1>::new(),
             Vec::new(),
@@ -888,10 +1340,11 @@ mod tests {
 
     impl Inputs {
         fn new() -> Self {
+            let (kir, kir_identity) = canonical_kir("semantic-debug-map-test");
             Self {
-                source_map: source_map(),
+                source_map: source_map(kir_identity),
                 mir: b"semantic-mir".to_vec(),
-                kir: b"canonical-kir".to_vec(),
+                kir,
                 schedule: b"schedule".to_vec(),
                 llvm: b"llvm-module".to_vec(),
                 artifact: b"finalized-hsaco".to_vec(),
@@ -1037,10 +1490,63 @@ mod tests {
         SemanticDebugMapDocumentV1::new(inputs.binding(), nodes, mappings).unwrap()
     }
 
+    fn artifact_tail_map(
+        inputs: &Inputs,
+        kernel_ordinal: u64,
+        byte_end: u64,
+    ) -> SemanticDebugMapDocumentV1 {
+        let nodes = vec![
+            node(
+                30,
+                SemanticDebugLocationV1::Llvm {
+                    function_ordinal: 0,
+                    block_ordinal: 0,
+                    instruction_ordinal: 0,
+                },
+            ),
+            node(
+                31,
+                SemanticDebugLocationV1::Isa {
+                    kernel_ordinal,
+                    byte_start: 0,
+                    byte_end,
+                },
+            ),
+        ];
+        let mappings = vec![mapping(
+            32,
+            SemanticDebugLayerV1::Llvm,
+            SemanticDebugLayerV1::Isa,
+            SemanticDebugTransformationV1::Preserved,
+            &[30],
+            &[31],
+        )];
+        SemanticDebugMapDocumentV1::new_partial(
+            inputs.binding(),
+            nodes,
+            mappings,
+            vec![
+                SemanticDebugBoundaryV1::new(
+                    id(30),
+                    SemanticDebugBoundaryDirectionV1::PredecessorUnavailable,
+                    SemanticDebugBoundaryReasonV1::ProducerBoundary,
+                )
+                .unwrap(),
+            ],
+        )
+        .unwrap()
+    }
+
     #[test]
     fn full_cross_layer_map_round_trips_and_queries_both_directions() {
         let inputs = Inputs::new();
         let map = full_map(&inputs);
+        assert_eq!(map.status(), SemanticDebugMapStatusV1::Complete);
+        assert!(map.boundaries().is_empty());
+        assert_eq!(
+            map.kernel_ordinal_basis(),
+            SemanticDebugKernelOrdinalBasisV1::AmdhsaMetadataDeclarationOrder
+        );
         map.validate_exact_inputs(inputs.borrowed()).unwrap();
         map.validate_finalized_artifact(&inputs.artifact, &[64])
             .unwrap();
@@ -1113,6 +1619,89 @@ mod tests {
     }
 
     #[test]
+    fn partial_maps_require_exact_boundaries_for_every_interior_gap() {
+        let inputs = Inputs::new();
+        let partial = artifact_tail_map(&inputs, 0, 8);
+        assert_eq!(partial.status(), SemanticDebugMapStatusV1::Partial);
+        assert_eq!(partial.boundaries().len(), 1);
+        assert_eq!(
+            SemanticDebugMapDocumentV1::new(
+                inputs.binding(),
+                partial.nodes().to_vec(),
+                partial.mappings().to_vec(),
+            ),
+            Err(SemanticDebugMapErrorV1::UntypedBoundary)
+        );
+        assert_eq!(
+            SemanticDebugMapDocumentV1::new_partial(
+                inputs.binding(),
+                partial.nodes().to_vec(),
+                partial.mappings().to_vec(),
+                vec![
+                    SemanticDebugBoundaryV1::new(
+                        id(31),
+                        SemanticDebugBoundaryDirectionV1::SuccessorUnavailable,
+                        SemanticDebugBoundaryReasonV1::NotRepresented,
+                    )
+                    .unwrap()
+                ],
+            ),
+            Err(SemanticDebugMapErrorV1::UntypedBoundary)
+        );
+    }
+
+    #[test]
+    fn isa_kernel_ordinals_use_amdhsa_metadata_declaration_order() {
+        let inputs = Inputs::new();
+        let second_kernel = artifact_tail_map(&inputs, 1, 12);
+        second_kernel
+            .validate_finalized_artifact(&inputs.artifact, &[8, 16])
+            .unwrap();
+        assert_eq!(
+            second_kernel.validate_finalized_artifact(&inputs.artifact, &[16, 8]),
+            Err(SemanticDebugMapErrorV1::InvalidIsaInterval)
+        );
+        assert_eq!(
+            second_kernel.validate_finalized_artifact(&inputs.artifact, &[8, 11]),
+            Err(SemanticDebugMapErrorV1::InvalidIsaInterval)
+        );
+        assert_eq!(
+            second_kernel.validate_finalized_artifact(&inputs.artifact, &[16]),
+            Err(SemanticDebugMapErrorV1::InvalidIsaInterval)
+        );
+    }
+
+    #[test]
+    fn wire_derived_reference_limit_fails_before_sorting_hostile_inputs() {
+        assert_eq!(
+            MAX_SEMANTIC_DEBUG_MAPPING_REFERENCES_V1,
+            MAX_SEMANTIC_DEBUG_MAP_BYTES_V1 / MIN_SEMANTIC_DEBUG_REFERENCE_WIRE_BYTES_V1
+        );
+        let derived_references = std::hint::black_box(MAX_SEMANTIC_DEBUG_MAPPING_REFERENCES_V1);
+        assert!(
+            derived_references * MIN_SEMANTIC_DEBUG_REFERENCE_WIRE_BYTES_V1
+                <= MAX_SEMANTIC_DEBUG_MAP_BYTES_V1
+        );
+        let oversized = vec![id(1); MAX_SEMANTIC_DEBUG_MAPPING_REFERENCES_V1 + 1];
+        assert_eq!(
+            SemanticDebugMappingV1::new(
+                id(90),
+                SemanticDebugLayerV1::Mir,
+                SemanticDebugLayerV1::Kir,
+                SemanticDebugTransformationV1::Preserved,
+                oversized,
+                SemanticDebugMappingOutputV1::available(vec![id(2)]),
+            ),
+            Err(SemanticDebugMapErrorV1::ResourceLimit)
+        );
+
+        let mut writer = BoundedSemanticMapWriterV1::new(8);
+        writer.write_all(&[0; 8]).unwrap();
+        assert!(writer.write_all(&[0]).is_err());
+        assert_eq!(writer.error(), SemanticDebugMapErrorV1::InvalidLength);
+    }
+
+    #[test]
     fn stale_or_substituted_content_and_isa_ranges_fail_closed() {
         let inputs = Inputs::new();
         let map = full_map(&inputs);
@@ -1136,6 +1725,47 @@ mod tests {
         assert_eq!(
             map.validate_finalized_artifact(&inputs.artifact, &[]),
             Err(SemanticDebugMapErrorV1::InvalidIsaInterval)
+        );
+
+        let (_, other_kir_identity) = canonical_kir("substituted-semantic-debug-map-test");
+        let substituted_source_map = source_map(other_kir_identity);
+        let substituted_inputs = Inputs {
+            source_map: substituted_source_map,
+            mir: inputs.mir.clone(),
+            kir: inputs.kir.clone(),
+            schedule: inputs.schedule.clone(),
+            llvm: inputs.llvm.clone(),
+            artifact: inputs.artifact.clone(),
+        };
+        let substituted_map = SemanticDebugMapDocumentV1::new(
+            substituted_inputs.binding(),
+            map.nodes().to_vec(),
+            map.mappings().to_vec(),
+        )
+        .unwrap();
+        assert_eq!(
+            substituted_map.validate_exact_inputs(substituted_inputs.borrowed()),
+            Err(SemanticDebugMapErrorV1::SourceMapKirBindingMismatch)
+        );
+
+        let invalid_kir = b"not-canonical-kir-v7";
+        let invalid_inputs = Inputs {
+            source_map: inputs.source_map.clone(),
+            mir: inputs.mir.clone(),
+            kir: invalid_kir.to_vec(),
+            schedule: inputs.schedule.clone(),
+            llvm: inputs.llvm.clone(),
+            artifact: inputs.artifact.clone(),
+        };
+        let invalid_map = SemanticDebugMapDocumentV1::new(
+            invalid_inputs.binding(),
+            map.nodes().to_vec(),
+            map.mappings().to_vec(),
+        )
+        .unwrap();
+        assert_eq!(
+            invalid_map.validate_exact_inputs(invalid_inputs.borrowed()),
+            Err(SemanticDebugMapErrorV1::InvalidBoundCanonicalKir)
         );
     }
 

@@ -28,11 +28,11 @@ use fe2o3_compiler_lineage::{
     InertProofBindingAssociationV4,
 };
 use fe2o3_hsaco_finalize::{
-    CompilerClosureV2, ContentIdentityV1, InertProtectedFirstBuildWorkerV3EvidenceV1,
-    InspectedProtectedWorkerV3HsacoV1, LinkOptionV1, PinnedWorkerV1,
-    ProtectedWorkerV3CompactFinalizerReplayV2, WorkerExecutionLimitsV1, WorkerInputKindV1,
-    WorkerInputV1, WorkerMeasurementV1, WorkerOutputConstraintsV1, WorkerV3HsacoFinalizationError,
-    WorkerV3HsacoInspectionError, WorkerV3HsacoPublicationErrorV1,
+    CompilerClosureV2, ContentIdentityV1, FinalizedSemanticDebugMapAdmissionStatusV1,
+    InertProtectedFirstBuildWorkerV3EvidenceV1, InspectedProtectedWorkerV3HsacoV1, LinkOptionV1,
+    PinnedWorkerV1, ProtectedWorkerV3CompactFinalizerReplayV2, WorkerExecutionLimitsV1,
+    WorkerInputKindV1, WorkerInputV1, WorkerMeasurementV1, WorkerOutputConstraintsV1,
+    WorkerV3HsacoFinalizationError, WorkerV3HsacoInspectionError, WorkerV3HsacoPublicationErrorV1,
     execute_protected_reproducible_first_build_worker_v3, finalize_protected_worker_v3_hsaco_v1,
     inspect_protected_worker_v3_hsaco_v1, inspect_unfinalized,
     persist_prepared_protected_worker_v3_hsaco_publication_v1,
@@ -51,6 +51,7 @@ use fe2o3_kernel_descriptor::{
     SourceTypeRecordV1, Text, ValidName, encode_device_descriptor_table_v1,
 };
 use fe2o3_kernel_ir::{
+    SemanticDebugBoundaryDirectionV1, SemanticDebugBoundaryReasonV1, SemanticDebugBoundaryV1,
     SemanticDebugContentIdentityV1, SemanticDebugLayerV1, SemanticDebugLocationV1,
     SemanticDebugMapBindingV1, SemanticDebugMapDocumentV1, SemanticDebugMapErrorV1,
     SemanticDebugMappingOutputV1, SemanticDebugMappingV1, SemanticDebugNodeV1,
@@ -608,6 +609,11 @@ fn native_v3_finalizer_admits_only_the_exact_artifact_and_bounded_isa_interval()
         admitted.artifact_identity(),
         finalized.finalized_output_identity()
     );
+    assert_eq!(
+        admitted.admission_status(),
+        FinalizedSemanticDebugMapAdmissionStatusV1::ArtifactOnly
+    );
+    assert!(!admitted.validates_all_input_axes());
     assert!(!admitted.authenticates_compiler_execution());
     assert!(!admitted.grants_publication_authority());
 
@@ -669,10 +675,22 @@ fn finalizer_semantic_map(artifact: &[u8], isa_end: u64) -> Vec<u8> {
         SemanticDebugMappingOutputV1::available(vec![[0x92; 32]]),
     )
     .unwrap();
-    SemanticDebugMapDocumentV1::new(binding, vec![llvm, isa], vec![mapping])
-        .unwrap()
-        .to_canonical_json_bytes()
-        .unwrap()
+    SemanticDebugMapDocumentV1::new_partial(
+        binding,
+        vec![llvm, isa],
+        vec![mapping],
+        vec![
+            SemanticDebugBoundaryV1::new(
+                [0x91; 32],
+                SemanticDebugBoundaryDirectionV1::PredecessorUnavailable,
+                SemanticDebugBoundaryReasonV1::ProducerBoundary,
+            )
+            .unwrap(),
+        ],
+    )
+    .unwrap()
+    .to_canonical_json_bytes()
+    .unwrap()
 }
 
 #[test]
