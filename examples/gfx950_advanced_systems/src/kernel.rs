@@ -5,8 +5,8 @@
 
 use fe2o3_device::{
     Blocked, DeviceMath, DisjointSlice, Gfx950F32AccumulatorFragment, Gfx950Fp4E2M1,
-    Gfx950Fp4MfmaAMatrix, Gfx950Fp8MfmaBMatrix, Gfx950Matrix, Gfx950Subgroup,
-    Index1D, StridedReadView2D, Wave64, WaveLane, kernel, thread,
+    Gfx950Fp4MfmaAMatrix, Gfx950Fp8MfmaBMatrix, Gfx950Matrix, Gfx950Subgroup, Index1D,
+    StridedReadView2D, Wave64, WaveLane, kernel, thread,
 };
 
 use crate::{
@@ -14,7 +14,6 @@ use crate::{
     MUON_ELEMENTS, MUON_LEARNING_RATE, NGRAM, OUTPUT, QUERIES, STATE_WIDTH, TABLE_SIZE, TOKENS,
     TOP_K,
 };
-
 
 /// Stable top-2 routing, weights, expert counts, and compact dispatch metadata.
 #[cfg(any(not(target_arch = "amdgpu"), feature = "kernel-moe-route"))]
@@ -43,7 +42,9 @@ pub fn gfx950_moe_route_fp4_t16_e4_k2_v1(
     {
         return;
     }
-    let Ok(router_weights) = StridedReadView2D::from_shared_slice(router_weights, 0, EXPERTS, HIDDEN, HIDDEN) else {
+    let Ok(router_weights) =
+        StridedReadView2D::from_shared_slice(router_weights, 0, EXPERTS, HIDDEN, HIDDEN)
+    else {
         return;
     };
     let wave_lane = lane & 63;
@@ -75,8 +76,7 @@ pub fn gfx950_moe_route_fp4_t16_e4_k2_v1(
     let rank1 = (route_logit0 >= route_logit1) as u32 + 2 - precedes12 - precedes13;
     let rank2 = (route_logit0 >= route_logit2) as u32 + precedes12 + 1 - precedes23;
     let rank3 = (route_logit0 >= route_logit3) as u32 + precedes13 + precedes23;
-    let first_local =
-        ((rank1 == 0) as u32) + 2 * ((rank2 == 0) as u32) + 3 * ((rank3 == 0) as u32);
+    let first_local = ((rank1 == 0) as u32) + 2 * ((rank2 == 0) as u32) + 3 * ((rank3 == 0) as u32);
     let second_local =
         ((rank1 == 1) as u32) + 2 * ((rank2 == 1) as u32) + 3 * ((rank3 == 1) as u32);
     let first_logit = if first_local == 0 {
@@ -594,72 +594,57 @@ pub fn gfx950_speculative_transaction_v1(
     else {
         return;
     };
-    let Ok(draft_tokens) = StridedReadView2D::from_shared_slice(
-        draft_tokens,
-        0,
-        CANDIDATES,
-        DRAFT_STEPS,
-        DRAFT_STEPS,
-    ) else {
+    let Ok(draft_tokens) =
+        StridedReadView2D::from_shared_slice(draft_tokens, 0, CANDIDATES, DRAFT_STEPS, DRAFT_STEPS)
+    else {
         return;
     };
-    let Ok(draft_scores) = StridedReadView2D::from_shared_slice(
-        draft_scores,
-        0,
-        CANDIDATES,
-        DRAFT_STEPS,
-        DRAFT_STEPS,
-    ) else {
+    let Ok(draft_scores) =
+        StridedReadView2D::from_shared_slice(draft_scores, 0, CANDIDATES, DRAFT_STEPS, DRAFT_STEPS)
+    else {
         return;
     };
+    #[cfg(feature = "ablation-speculative-recompute-prefix")]
     macro_rules! accepted_prefix {
         ($candidate:expr) => {{
             let accepts0 = (draft_tokens.load_or($candidate, 0, 0)
                 == target_tokens.load_or(0, 0, 0))
-                & (draft_scores.load_or($candidate, 0, 0.0)
-                    >= thresholds.load_or(0, 0, 0.0));
+                & (draft_scores.load_or($candidate, 0, 0.0) >= thresholds.load_or(0, 0, 0.0));
             let accepts1 = accepts0
                 & (draft_tokens.load_or($candidate, 1, 0) == target_tokens.load_or(0, 1, 0))
-                & (draft_scores.load_or($candidate, 1, 0.0)
-                    >= thresholds.load_or(0, 1, 0.0));
+                & (draft_scores.load_or($candidate, 1, 0.0) >= thresholds.load_or(0, 1, 0.0));
             let accepts2 = accepts1
                 & (draft_tokens.load_or($candidate, 2, 0) == target_tokens.load_or(0, 2, 0))
-                & (draft_scores.load_or($candidate, 2, 0.0)
-                    >= thresholds.load_or(0, 2, 0.0));
+                & (draft_scores.load_or($candidate, 2, 0.0) >= thresholds.load_or(0, 2, 0.0));
             let accepts3 = accepts2
                 & (draft_tokens.load_or($candidate, 3, 0) == target_tokens.load_or(0, 3, 0))
-                & (draft_scores.load_or($candidate, 3, 0.0)
-                    >= thresholds.load_or(0, 3, 0.0));
+                & (draft_scores.load_or($candidate, 3, 0.0) >= thresholds.load_or(0, 3, 0.0));
             accepts0 as usize + accepts1 as usize + accepts2 as usize + accepts3 as usize
         }};
     }
     let acceptance_candidate = lane & (CANDIDATES - 1);
     let accepts0 = (draft_tokens.load_or(acceptance_candidate, 0, 0)
         == target_tokens.load_or(0, 0, 0))
-        & (draft_scores.load_or(acceptance_candidate, 0, 0.0)
-            >= thresholds.load_or(0, 0, 0.0));
+        & (draft_scores.load_or(acceptance_candidate, 0, 0.0) >= thresholds.load_or(0, 0, 0.0));
     let accepts1 = accepts0
-        & (draft_tokens.load_or(acceptance_candidate, 1, 0)
-            == target_tokens.load_or(0, 1, 0))
-        & (draft_scores.load_or(acceptance_candidate, 1, 0.0)
-            >= thresholds.load_or(0, 1, 0.0));
+        & (draft_tokens.load_or(acceptance_candidate, 1, 0) == target_tokens.load_or(0, 1, 0))
+        & (draft_scores.load_or(acceptance_candidate, 1, 0.0) >= thresholds.load_or(0, 1, 0.0));
     let accepts2 = accepts1
-        & (draft_tokens.load_or(acceptance_candidate, 2, 0)
-            == target_tokens.load_or(0, 2, 0))
-        & (draft_scores.load_or(acceptance_candidate, 2, 0.0)
-            >= thresholds.load_or(0, 2, 0.0));
+        & (draft_tokens.load_or(acceptance_candidate, 2, 0) == target_tokens.load_or(0, 2, 0))
+        & (draft_scores.load_or(acceptance_candidate, 2, 0.0) >= thresholds.load_or(0, 2, 0.0));
     let accepts3 = accepts2
-        & (draft_tokens.load_or(acceptance_candidate, 3, 0)
-            == target_tokens.load_or(0, 3, 0))
-        & (draft_scores.load_or(acceptance_candidate, 3, 0.0)
-            >= thresholds.load_or(0, 3, 0.0));
+        & (draft_tokens.load_or(acceptance_candidate, 3, 0) == target_tokens.load_or(0, 3, 0))
+        & (draft_scores.load_or(acceptance_candidate, 3, 0.0) >= thresholds.load_or(0, 3, 0.0));
     let accepted_local =
         accepts0 as usize + accepts1 as usize + accepts2 as usize + accepts3 as usize;
     let candidate = lane / STATE_WIDTH;
     let state_element = lane - candidate * STATE_WIDTH;
+    #[cfg(not(feature = "ablation-speculative-recompute-prefix"))]
     let accepted = Gfx950Subgroup::current()
         .broadcast_f32::<64>(accepted_local as f32, candidate as u32 & 63)
         as usize;
+    #[cfg(feature = "ablation-speculative-recompute-prefix")]
+    let accepted = accepted_prefix!(candidate);
     if lane < CANDIDATES {
         if let Some(slot) = accepted_steps.get_mut(thread::index_1d()) {
             *slot = accepted_local as u32;
@@ -855,7 +840,15 @@ pub fn gfx950_stage_gradient_shard_v1(input: &[f32], mut output: DisjointSlice<f
         let value1 = subgroup.broadcast_f32::<64>(tile1, source);
         let value2 = subgroup.broadcast_f32::<64>(tile2, source);
         let value3 = subgroup.broadcast_f32::<64>(tile3, source);
-        if element & 3 == 0 { value0 } else if element & 3 == 1 { value1 } else if element & 3 == 2 { value2 } else { value3 }
+        if element & 3 == 0 {
+            value0
+        } else if element & 3 == 1 {
+            value1
+        } else if element & 3 == 2 {
+            value2
+        } else {
+            value3
+        }
     };
     if let Some(slot) = output.get_mut(index) {
         *slot = value;
@@ -903,9 +896,8 @@ pub fn gfx950_muon_update_4x4_v1(
     };
     let matrix_element = lane & (MUON_ELEMENTS - 1);
     let active = (lane < MUON_ELEMENTS) as u32 as f32;
-    let mut matrix_value = active
-        * (shards.load_or(0, matrix_element, 0.0)
-            + shards.load_or(1, matrix_element, 0.0));
+    let mut matrix_value =
+        active * (shards.load_or(0, matrix_element, 0.0) + shards.load_or(1, matrix_element, 0.0));
     let subgroup = Gfx950Subgroup::current();
     #[cfg(not(feature = "ablation-muon-broadcast16"))]
     let squared_norm = subgroup.reduce_sum_f32::<64>(matrix_value * matrix_value);

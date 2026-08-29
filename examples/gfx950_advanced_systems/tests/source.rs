@@ -46,6 +46,7 @@ fn rust_source_is_primary_and_uses_production_lowering() {
         assert!(manifest.contains(feature));
         assert!(source.contains(feature));
     }
+    assert!(source.contains("let accepted = accepted_prefix!(candidate);"));
     let crate_root = include_str!("../src/lib.rs");
     assert!(manifest.contains("ablation-route-owner-only"));
     assert!(crate_root.contains("ablation-route-owner-only is rejected"));

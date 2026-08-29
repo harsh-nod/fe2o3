@@ -81,7 +81,9 @@ compile_error!(
 );
 
 #[cfg(all(target_arch = "amdgpu", feature = "ablation-route-owner-only"))]
-compile_error!("ablation-route-owner-only is rejected because lane-conditional induction does not satisfy production semantic-to-ranked projection");
+compile_error!(
+    "ablation-route-owner-only is rejected because lane-conditional induction does not satisfy production semantic-to-ranked projection"
+);
 #[cfg(all(target_arch = "amdgpu", feature = "ablation-route-unpacked"))]
 compile_error!("ablation-route-unpacked is retained only in the rejected-variant registry");
 #[cfg(all(
