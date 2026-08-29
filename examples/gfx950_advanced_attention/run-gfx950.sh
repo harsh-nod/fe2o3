@@ -19,7 +19,7 @@ case "$SUITE:$FEATURE" in
         SYMBOL=gfx950_kda_gdn_decode; KERNARG=96; WG=64; LDS=0; OCML=1
         TEST=gfx950_kda_gdn_decode_rust_cov6_matches_cpu_reference; ISA=scalar ;;
     attention:kernel-kda-prefill)
-        SYMBOL=gfx950_kda_gdn_prefill; KERNARG=96; WG=64; LDS=0; OCML=1
+        SYMBOL=gfx950_kda_gdn_prefill; KERNARG=112; WG=64; LDS=0; OCML=1
         TEST=gfx950_kda_gdn_prefill_rust_cov6_matches_cpu_reference; ISA=scalar ;;
     attention:kernel-content-sparse-attention)
         SYMBOL=gfx950_content_sparse_attention; KERNARG=96; WG=64; LDS=2048; OCML=1

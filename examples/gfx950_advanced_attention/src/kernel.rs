@@ -6,8 +6,8 @@ use fe2o3_device::{DeviceMath, DisjointSlice, thread};
 #[cfg(target_arch = "amdgpu")]
 use fe2o3_device::{
     Gfx950F32AccumulatorFragment, Gfx950Fp8E4M3, Gfx950Fp8MfmaAMatrix, Gfx950LdsTransposeTile,
-    Gfx950Matrix, Gfx950Subgroup, Gfx950TransposeUninitialized, Index1D, KernelError, KernelResult,
-    RowStriped2D, StridedReadView2D, Wave64, WaveLane, kernel,
+    Gfx950Matrix, Gfx950Subgroup, Gfx950TransposeUninitialized, Index1D,
+    KernelError, KernelResult, StridedReadView2D, Wave64, WaveLane, kernel,
 };
 #[cfg(not(target_arch = "amdgpu"))]
 use fe2o3_device::{GridExclusive, GridLeader};
@@ -216,7 +216,7 @@ fn kda_update_v1(
 #[cfg(all(target_arch = "amdgpu", feature = "kernel-kda-decode"))]
 #[kernel(
     typed,
-    namespace = "e2036047357df97405feba4d64aa7e95868109636c92a6f6853119580fd72fe4",
+    namespace = "e889654ad32a788ce48bde79cfdaea178a36ea3a152838739f4cb3b68fa0ac74",
     launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
 )]
 pub fn gfx950_kda_gdn_decode(
@@ -317,7 +317,7 @@ pub fn gfx950_kda_gdn_decode(
 #[cfg(all(target_arch = "amdgpu", feature = "kernel-kda-prefill"))]
 #[kernel(
     typed,
-    namespace = "5348fe56c1135474870729b49de57ae9150bdd6ecfb682da5c8ed03b73ccb98e",
+    namespace = "cd3e02ed84a8aa33b86dbff7f78b04ca4f454df507d15d78a2ff86de83e72706",
     launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
 )]
 pub fn gfx950_kda_gdn_prefill(
@@ -326,14 +326,16 @@ pub fn gfx950_kda_gdn_prefill(
     initial_state: &[f32],
     convolution_weights: &[f32],
     mut final_state: DisjointSlice<f32, Index1D>,
-    mut normalized_output: DisjointSlice<f32, RowStriped2D<Index1D, 16, 8>>,
+    mut normalized_output_first: DisjointSlice<f32, Index1D>,
+    mut normalized_output_second: DisjointSlice<f32, Index1D>,
 ) {
     if input.len() != PREFILL_TOKENS_V1 * CHANNELS_V1
         || gate_input.len() != PREFILL_TOKENS_V1 * CHANNELS_V1
         || initial_state.len() != CHANNELS_V1
         || convolution_weights.len() != KDA_TAPS_V1
         || final_state.len() != CHANNELS_V1
-        || normalized_output.len() != PREFILL_TOKENS_V1 * CHANNELS_V1
+        || normalized_output_first.len() != 4 * CHANNELS_V1
+        || normalized_output_second.len() != 4 * CHANNELS_V1
     {
         return;
     }
@@ -353,9 +355,6 @@ pub fn gfx950_kda_gdn_prefill(
     let index = thread::index_1d();
     let linear = index.get();
     let channel = linear % CHANNELS_V1;
-    let Some(stripe) = index.checked_row_striped_2d::<16, 8>() else {
-        return;
-    };
     let math = DeviceMath::current();
     let subgroup = Gfx950Subgroup::current();
     let mut state = initial_state.load_or(0, channel, 0.0);
@@ -428,29 +427,29 @@ pub fn gfx950_kda_gdn_prefill(
     let square_sum7 = subgroup.reduce_sum_f32::<16>(state * state);
     let normalized7 = state / math.sqrt_f32(square_sum7 / 16.0 + RMS_EPSILON_V1);
 
-    if let Some(slot) = normalized_output.get_row_striped_2d_mut(&stripe, 0, 1, 128, 128) {
-        *slot = normalized0;
+    let first_normalized = if linear < CHANNELS_V1 {
+        normalized0
+    } else if linear < 2 * CHANNELS_V1 {
+        normalized1
+    } else if linear < 3 * CHANNELS_V1 {
+        normalized2
+    } else {
+        normalized3
+    };
+    let second_normalized = if linear < CHANNELS_V1 {
+        normalized4
+    } else if linear < 2 * CHANNELS_V1 {
+        normalized5
+    } else if linear < 3 * CHANNELS_V1 {
+        normalized6
+    } else {
+        normalized7
+    };
+    if let Some(slot) = normalized_output_first.get_mut(thread::index_1d()) {
+        *slot = first_normalized;
     }
-    if let Some(slot) = normalized_output.get_row_striped_2d_mut(&stripe, 1, 1, 128, 128) {
-        *slot = normalized1;
-    }
-    if let Some(slot) = normalized_output.get_row_striped_2d_mut(&stripe, 2, 1, 128, 128) {
-        *slot = normalized2;
-    }
-    if let Some(slot) = normalized_output.get_row_striped_2d_mut(&stripe, 3, 1, 128, 128) {
-        *slot = normalized3;
-    }
-    if let Some(slot) = normalized_output.get_row_striped_2d_mut(&stripe, 4, 1, 128, 128) {
-        *slot = normalized4;
-    }
-    if let Some(slot) = normalized_output.get_row_striped_2d_mut(&stripe, 5, 1, 128, 128) {
-        *slot = normalized5;
-    }
-    if let Some(slot) = normalized_output.get_row_striped_2d_mut(&stripe, 6, 1, 128, 128) {
-        *slot = normalized6;
-    }
-    if let Some(slot) = normalized_output.get_row_striped_2d_mut(&stripe, 7, 1, 128, 128) {
-        *slot = normalized7;
+    if let Some(slot) = normalized_output_second.get_mut(thread::index_1d()) {
+        *slot = second_normalized;
     }
     if linear < CHANNELS_V1 {
         if let Some(slot) = final_state.get_mut(thread::index_1d()) {
@@ -607,7 +606,7 @@ fn attention_score_v1(q: &[u8], k: &[u8], token: usize) -> Option<f32> {
 #[cfg(all(target_arch = "amdgpu", feature = "kernel-content-sparse-attention"))]
 #[kernel(
     typed,
-    namespace = "4eb73f6d2e84dc00a2f62f794f44dc346ec7f413e975999a7bb1eda506a601e5",
+    namespace = "1ad77b6d88884cb5768cc3b9f3527c5b83fe5f1c04e3fc2823f2f8c0167e058a",
     launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
 )]
 pub fn gfx950_content_sparse_attention(
@@ -618,14 +617,14 @@ pub fn gfx950_content_sparse_attention(
     mut output: DisjointSlice<f32, Index1D>,
     mut selected_output: DisjointSlice<u32, Index1D>,
 ) {
-    if q.len() != ATTENTION_TOKENS_V1 * HEAD_DIMENSION_V1
-        || k.len() != ATTENTION_TOKENS_V1 * HEAD_DIMENSION_V1
-        || v.len() != ATTENTION_TOKENS_V1 * CHANNELS_V1
-        || content_scores.len() != ATTENTION_TOKENS_V1
-        || output.len() != CHANNELS_V1
-        || selected_output.len() != SELECTED_TOKENS_V1
+    if q.len() < ATTENTION_TOKENS_V1 * HEAD_DIMENSION_V1
+        || k.len() < ATTENTION_TOKENS_V1 * HEAD_DIMENSION_V1
+        || v.len() < ATTENTION_TOKENS_V1 * CHANNELS_V1
+        || content_scores.len() < ATTENTION_TOKENS_V1
+        || output.len() < CHANNELS_V1
+        || selected_output.len() < SELECTED_TOKENS_V1
     {
-        return;
+        fe2o3_device::trap();
     }
     let index = thread::index_1d();
     let column = index.get() % ATTENTION_TOKENS_V1;
@@ -637,7 +636,7 @@ pub fn gfx950_content_sparse_attention(
         HEAD_DIMENSION_V1,
         HEAD_DIMENSION_V1,
     ) else {
-        return;
+        fe2o3_device::trap();
     };
     let query = query.load_m16k128(&lane, 0, 0);
     let Ok(key) = Gfx950Fp8MfmaAMatrix::row_major(
@@ -647,7 +646,7 @@ pub fn gfx950_content_sparse_attention(
         HEAD_DIMENSION_V1,
         HEAD_DIMENSION_V1,
     ) else {
-        return;
+        fe2o3_device::trap();
     };
     let key = Gfx950LdsTransposeTile::<Gfx950Fp8E4M3, Gfx950TransposeUninitialized>::current(&lane)
         .stage_k_transposed(&key, 0, 0)
@@ -664,7 +663,7 @@ pub fn gfx950_content_sparse_attention(
         ATTENTION_TOKENS_V1,
         ATTENTION_TOKENS_V1,
     ) else {
-        return;
+        fe2o3_device::trap();
     };
 
     let subgroup = Gfx950Subgroup::current();
@@ -1043,7 +1042,7 @@ pub fn gfx950_content_sparse_attention(
     let Ok(value) =
         StridedReadView2D::from_shared_slice(v, 0, ATTENTION_TOKENS_V1, CHANNELS_V1, CHANNELS_V1)
     else {
-        return;
+        fe2o3_device::trap();
     };
     let mut maximum = selected0_attention;
     if selected1_attention > maximum {
@@ -1142,7 +1141,7 @@ pub fn gfx950_content_sparse_attention(
 #[cfg(all(target_arch = "amdgpu", feature = "kernel-compressed-hybrid-attention"))]
 #[kernel(
     typed,
-    namespace = "385748dbb7bdd90c5273ed179062a78b392e297bbeff9833a4df11b446088b44",
+    namespace = "8fa973d4231e28e54ecbd607f539aaba65a895db610f15d56a698336b119f65a",
     launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
 )]
 pub fn gfx950_compressed_hybrid_attention(
@@ -1158,7 +1157,7 @@ pub fn gfx950_compressed_hybrid_attention(
         || token_bias.len() != ATTENTION_TOKENS_V1
         || output.len() != CHANNELS_V1
     {
-        return;
+        fe2o3_device::trap();
     }
     let index = thread::index_1d();
     let column = index.get() % ATTENTION_TOKENS_V1;
@@ -1170,7 +1169,7 @@ pub fn gfx950_compressed_hybrid_attention(
         HEAD_DIMENSION_V1,
         HEAD_DIMENSION_V1,
     ) else {
-        return;
+        fe2o3_device::trap();
     };
     let query = query.load_m16k128(&lane, 0, 0);
     let Ok(key) = Gfx950Fp8MfmaAMatrix::row_major(
@@ -1180,7 +1179,7 @@ pub fn gfx950_compressed_hybrid_attention(
         HEAD_DIMENSION_V1,
         HEAD_DIMENSION_V1,
     ) else {
-        return;
+        fe2o3_device::trap();
     };
     let key = Gfx950LdsTransposeTile::<Gfx950Fp8E4M3, Gfx950TransposeUninitialized>::current(&lane)
         .stage_k_transposed(&key, 0, 0)
@@ -1193,10 +1192,10 @@ pub fn gfx950_compressed_hybrid_attention(
     let Ok(value) =
         StridedReadView2D::from_shared_slice(v, 0, ATTENTION_TOKENS_V1, CHANNELS_V1, CHANNELS_V1)
     else {
-        return;
+        fe2o3_device::trap();
     };
     let Ok(bias) = StridedReadView2D::from_shared_slice(token_bias, 0, 1, 16, 16) else {
-        return;
+        fe2o3_device::trap();
     };
     let subgroup = Gfx950Subgroup::current();
     let math = DeviceMath::current();
@@ -1370,7 +1369,7 @@ pub fn gfx950_compressed_hybrid_attention(
 #[cfg(all(target_arch = "amdgpu", feature = "kernel-attnres-aggregate"))]
 #[kernel(
     typed,
-    namespace = "a65038e3cb567081a97476ed759abecdcf789e1607626117c929491ce0edffe7",
+    namespace = "e71b4250d8eb3fd5371802ed2141e5a0fb880b6a79c48d7b928a8cde0ae0e0de",
     launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1]),
     control_flow(loop_bounds(4, 4))
 )]
@@ -1465,7 +1464,7 @@ pub fn gfx950_attnres_aggregate(
 #[cfg(all(target_arch = "amdgpu", feature = "kernel-four-branch-residual"))]
 #[kernel(
     typed,
-    namespace = "632e4eb1a578d4a75b833c6bececaa239cb7f754e8999cb3513690a4b0badc12",
+    namespace = "a6d721410f3856c46249fb8b78604d6a1f0caf5b050dd6f3a160ab8c40e51583",
     launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1]),
     control_flow(loop_bounds(4))
 )]

@@ -290,6 +290,8 @@ enum AbiArg {
 #[cfg(feature = "hardware-test-hooks")]
 const SIX_SLICES: &[AbiArg] = &[AbiArg::Slice; 6];
 #[cfg(feature = "hardware-test-hooks")]
+const SEVEN_SLICES: &[AbiArg] = &[AbiArg::Slice; 7];
+#[cfg(feature = "hardware-test-hooks")]
 const FIVE_SLICES: &[AbiArg] = &[AbiArg::Slice; 5];
 #[cfg(feature = "hardware-test-hooks")]
 const FOUR_SLICES: &[AbiArg] = &[AbiArg::Slice; 4];
@@ -337,7 +339,7 @@ const KDA_PREFILL: AdvancedCase = AdvancedCase {
     descriptor: "gfx950_kda_gdn_prefill.kd",
     workgroup_x: 64,
     static_lds_bytes: 0,
-    args: SIX_SLICES,
+    args: SEVEN_SLICES,
 };
 #[cfg(feature = "hardware-test-hooks")]
 const SPARSE_ATTENTION: AdvancedCase = AdvancedCase {
@@ -797,13 +799,16 @@ fn attention_plans(case: AdvancedCase) -> Result<Vec<LaunchPlan>, BoxError> {
                 &values, &gates, &state, &weights,
             )
             .map_err(|error| format!("KDA prefill reference failed: {error:?}"))?;
+            let normalized_first = expected.normalized[..4 * CHANNELS_V1].to_vec();
+            let normalized_second = expected.normalized[4 * CHANNELS_V1..].to_vec();
             let lengths = [
                 values.len(),
                 gates.len(),
                 state.len(),
                 weights.len(),
                 CHANNELS_V1,
-                PREFILL_TOKENS_V1 * CHANNELS_V1,
+                4 * CHANNELS_V1,
+                4 * CHANNELS_V1,
             ];
             LaunchPlan {
                 label: case.label.into(),
@@ -813,9 +818,10 @@ fn attention_plans(case: AdvancedCase) -> Result<Vec<LaunchPlan>, BoxError> {
                     input("initial_state", &state),
                     input("convolution_weights", &weights),
                     f32_output("final_state", expected.final_state, 3.0e-3),
-                    f32_output("normalized_output", expected.normalized, 3.0e-3),
+                    f32_output("normalized_output_first", normalized_first, 3.0e-3),
+                    f32_output("normalized_output_second", normalized_second, 3.0e-3),
                 ],
-                args: (0..6)
+                args: (0..7)
                     .map(|buffer| PlannedArg::Slice {
                         buffer,
                         elements: lengths[buffer],
