@@ -9,7 +9,7 @@ use fe2o3_semantic_import::{
     ProfilerSourceKindV4, SemanticProfilerBundleV4, TruthOriginV1, decode_profiler_bundle_v4,
     profiler_bundle_content_identity_v4,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 pub const MAX_PROFILER_QUERY_PAGE_ITEMS_V4: u16 = 4_096;
@@ -93,7 +93,7 @@ pub struct ProfilerQueryContextV4 {
     pub att_reference_count: u64,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProfilerListKindV4 {
     Runs,
@@ -104,13 +104,15 @@ pub enum ProfilerListKindV4 {
     Waits,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProfilerCursorV4 {
     pub query_binding: CaptureIdentityV1,
     pub position: u64,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProfilerPageRequestV4 {
     pub limit: u16,
     pub cursor: Option<ProfilerCursorV4>,
@@ -192,7 +194,7 @@ pub struct ProfilerPageV4 {
     pub items: Vec<ProfilerQueryItemV4>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProfilerCaptureGoalV4 {
     ExplainWaits,

@@ -203,3 +203,46 @@ identities are capture-local and cannot safely join relative PCs across runs.
 Missing dimensions are unavailable, not zero. V2/V3 stable environment
 identity, stable cross-run PC identity, decoded ATT/waits, clock conversion,
 causal diagnosis, and performance prediction remain unavailable.
+
+## Read-only agent profiler service
+
+`AgentProfilerServiceV1` and `fe2o3-profiler-service jsonl` expose a persistent,
+versioned local protocol over already collected Profiler Bundle V4 evidence.
+This is a library and stdin/stdout JSONL boundary for local agents, not an MCP
+server or a profiler collector. It never invokes rocprofv3, launches or attaches
+to a process, opens a path, or grants execution authority. An `open_capture`
+request carries exact canonical Bundle V4 bytes as bounded lowercase hex; the
+service returns their full content identity and retains at most four captures
+by default.
+
+The V1 operation inventory includes capability discovery, capture open, bounded
+pages for runs/devices/dispatches/ATT references/duration hotspots/waits,
+dispatch inspection, dispatch-scoped kernel identity inspection, Bundle V4
+comparison, and next-capture planning. Pages reuse Bundle V4 content-bound
+cursors. Every successful value carries the service-contract identity, exact
+capture identities, relevant record identities, and a truth origin. Requests
+have unique nonzero IDs, responses have monotonic revisions, and request count,
+resident captures, input bytes, page items, and encoded response bytes have
+independent hard ceilings.
+
+The closed inventory also admits workgroup/wave/lane inspection, source/IR/ISA
+correlation, fault, decoded wait/memory/barrier, property, causal regression
+explanation, and reproducer export requests so callers do not need to infer
+support from missing methods. Bundle V4 does not carry the evidence needed for
+those operations; capability discovery and operation responses report typed
+`unavailable` reasons. `inspect_kernel` is only the KIR/artifact/source-map
+identity binding declared on an observed dispatch. It does not expose source
+text, ISA, arguments, variables, or semantic execution history.
+
+The executable accepts only this mode:
+
+```text
+fe2o3-profiler-service jsonl
+```
+
+Each request must be exactly one LF-terminated JSON object with schema
+`fe2o3-agent-profiler-request-v1`. Each response is one deterministic bounded
+object with schema `fe2o3-agent-profiler-response-v1`. Malformed or oversized
+input emits a typed terminal error and closes the session. The existing
+`generic-core` workspace gate builds and tests all targets in this crate, which
+includes the service binary and its protocol tests.

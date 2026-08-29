@@ -17,6 +17,8 @@ mod pc_sample_query;
 pub use pc_sample_query::*;
 mod profiler_query;
 pub use profiler_query::*;
+mod agent_service_v1;
+pub use agent_service_v1::*;
 
 use std::error::Error;
 use std::fmt;
