@@ -376,8 +376,17 @@ void physicalAnalysisDerivesDeterministicClosedEffects() {
   if (!SecondBytes)
     fail(takeError(SecondBytes.takeError()));
   require(*FirstBytes == *SecondBytes, "evidence is not deterministic");
+  auto FirstTrace = encodePhysicalMachineTraceEvidence(*First, *FirstBytes);
+  if (!FirstTrace)
+    fail(takeError(FirstTrace.takeError()));
+  auto SecondTrace = encodePhysicalMachineTraceEvidence(*Second, *SecondBytes);
+  if (!SecondTrace)
+    fail(takeError(SecondTrace.takeError()));
+  require(*FirstTrace == *SecondTrace, "machine trace is not deterministic");
   require(First->Entries.size() == 2, "entry evidence count changed");
   require(First->Functions.size() == 2, "closed graph has wrong cardinality");
+  require(!First->Blocks.empty() && !First->Instructions.empty(),
+          "closed instruction trace is empty");
   require(llvm::all_of(First->Functions,
                        [](const auto &Function) {
                          return Function.DirectCallees.empty();
@@ -421,6 +430,28 @@ void backwardLoopCfgIsAcceptedGenerically() {
           "loop fixture has no output write");
   require(HasAlphaEffect(PhysicalMachineEffectKind::Return),
           "loop fixture has no terminal return");
+  bool HasBackedge = llvm::any_of(Result->Blocks, [](const auto &Block) {
+    return llvm::any_of(Block.Successors, [&](uint32_t Successor) {
+      return Successor <= Block.Ordinal;
+    });
+  });
+  require(HasBackedge, "loop fixture trace has no backward CFG edge");
+  require(llvm::any_of(Result->Instructions, [](const auto &Instruction) {
+            return (Instruction.BranchKind ==
+                        PhysicalMachineBranchKind::ConditionalDirect ||
+                    Instruction.BranchKind ==
+                        PhysicalMachineBranchKind::UnconditionalDirect) &&
+                   Instruction.BranchTarget < Instruction.InstructionOffset;
+          }),
+          "loop fixture trace has no backward branch target");
+  auto EffectBytes = encodePhysicalMachineEffectEvidence(*Result);
+  if (!EffectBytes)
+    fail(takeError(EffectBytes.takeError()));
+  auto TraceBytes = encodePhysicalMachineTraceEvidence(*Result, *EffectBytes);
+  if (!TraceBytes)
+    fail(takeError(TraceBytes.takeError()));
+  require(TraceBytes->size() > EffectBytes->size(),
+          "loop instruction trace unexpectedly lost detail");
 }
 
 void identityProbeBindsFreshChallenge() {

@@ -56,6 +56,10 @@ constexpr StringLiteral RequestDomain =
     "FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-REQUEST/V1\0";
 constexpr StringLiteral EvidenceDomain =
     "FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-EVIDENCE/V1\0";
+constexpr StringLiteral EvidenceIdentityDomain =
+    "FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-EVIDENCE-IDENTITY/V1\0";
+constexpr StringLiteral TraceEvidenceDomain =
+    "FE2O3/GFX942-PHYSICAL-MACHINE-TRACE-EVIDENCE/V1\0";
 constexpr StringLiteral IdentityChallengeDomain =
     "FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-IDENTITY-CHALLENGE/V1\0";
 constexpr StringLiteral IdentityResponseDomain =
@@ -80,6 +84,16 @@ constexpr size_t MaxProgramHeaders = 32;
 constexpr size_t MaxSymbolsPerTable = 4096;
 constexpr size_t MaxStringTableBytes = 1024 * 1024;
 constexpr size_t MaxMetadataBytes = 1024 * 1024;
+constexpr size_t MaxInstructionBytes = 32;
+constexpr size_t MaxInstructionOperands = 64;
+constexpr size_t MaxInstructionRegisters = 64;
+constexpr uint16_t NoTiedOperand = std::numeric_limits<uint16_t>::max();
+
+constexpr uint16_t InstructionMayLoad = 1 << 0;
+constexpr uint16_t InstructionMayStore = 1 << 1;
+constexpr uint16_t InstructionTerminator = 1 << 2;
+constexpr uint16_t InstructionBarrier = 1 << 3;
+constexpr uint16_t InstructionPredicable = 1 << 4;
 
 Error analysisError(const Twine &Message) {
   return createStringError(inconvertibleErrorCode(),
@@ -1038,6 +1052,8 @@ struct LocalEffect {
 struct AnalyzedFunction {
   PhysicalMachineFunctionEvidence Evidence;
   std::vector<LocalEffect> Effects;
+  std::vector<PhysicalMachineBasicBlockTrace> Blocks;
+  std::vector<PhysicalMachineInstructionTrace> Instructions;
 };
 
 struct McState {
@@ -1618,6 +1634,111 @@ Expected<uint64_t> directCallTargets(ArrayRef<DecodedInstruction> Instructions,
   return Materialize(GetPc->Address + GetPc->Size);
 }
 
+Expected<std::vector<std::string>>
+registerNames(ArrayRef<MCPhysReg> Registers, const McState &Mc) {
+  if (Registers.size() > MaxInstructionRegisters)
+    return analysisError("implicit register count exceeds bound");
+  std::vector<std::string> Result;
+  Result.reserve(Registers.size());
+  for (MCPhysReg Register : Registers) {
+    if (Register == 0)
+      return analysisError("implicit register is zero");
+    StringRef Name = Mc.Registers->getName(Register);
+    if (!Reader::validSymbol(Name))
+      return analysisError("implicit register name is invalid");
+    Result.push_back(Name.str());
+  }
+  llvm::sort(Result);
+  if (std::adjacent_find(Result.begin(), Result.end()) != Result.end())
+    return analysisError("implicit register set contains duplicates");
+  return Result;
+}
+
+Expected<PhysicalMachineInstructionTrace>
+makeInstructionTrace(StringRef FunctionName,
+                     const DecodedInstruction &Instruction,
+                     uint32_t BlockOrdinal, const McState &Mc) {
+  const MCInstrDesc &Descriptor =
+      Mc.Instructions->get(Instruction.Inst.getOpcode());
+  if (!Reader::validSymbol(FunctionName) ||
+      !Reader::validSymbol(Instruction.Name) || Instruction.Size == 0 ||
+      Instruction.Size > MaxInstructionBytes ||
+      Instruction.Encoding.size() != Instruction.Size ||
+      Instruction.Inst.size() > MaxInstructionOperands ||
+      Descriptor.getNumDefs() > Instruction.Inst.size())
+    return analysisError("instruction trace shape exceeds bounds");
+
+  PhysicalMachineInstructionTrace Result;
+  Result.FunctionSymbol = FunctionName.str();
+  Result.InstructionOffset = Instruction.Address;
+  Result.BlockOrdinal = BlockOrdinal;
+  Result.Opcode = Instruction.Name;
+  Result.Encoding = Instruction.Encoding;
+  Result.ExplicitDefinitionCount =
+      static_cast<uint16_t>(Descriptor.getNumDefs());
+  Result.Flags = (Descriptor.mayLoad() ? InstructionMayLoad : 0) |
+                 (Descriptor.mayStore() ? InstructionMayStore : 0) |
+                 (Descriptor.isTerminator() ? InstructionTerminator : 0) |
+                 (Descriptor.isBarrier() ? InstructionBarrier : 0) |
+                 (Descriptor.isPredicable() ? InstructionPredicable : 0);
+
+  Result.Operands.reserve(Instruction.Inst.size());
+  for (size_t Index = 0; Index < Instruction.Inst.size(); ++Index) {
+    const MCOperand &Operand = Instruction.Inst.getOperand(Index);
+    PhysicalMachineOperandTrace Trace;
+    int Tied = Descriptor.getOperandConstraint(Index, MCOI::TIED_TO);
+    if (Tied >= 0) {
+      if (static_cast<size_t>(Tied) >= Instruction.Inst.size())
+        return analysisError("instruction tied operand is outside bounds");
+      Trace.TiedTo = Tied;
+    }
+    if (Operand.isReg()) {
+      if (Operand.getReg() == 0)
+        return analysisError("instruction register operand is zero");
+      StringRef Name = Mc.Registers->getName(Operand.getReg());
+      if (!Reader::validSymbol(Name))
+        return analysisError("instruction register name is invalid");
+      Trace.Kind = PhysicalMachineOperandKind::Register;
+      Trace.Register = Name.str();
+    } else if (Operand.isImm()) {
+      if (Trace.TiedTo >= 0)
+        return analysisError("non-register instruction operand is tied");
+      Trace.Kind = PhysicalMachineOperandKind::SignedImmediate;
+      Trace.Value = static_cast<uint64_t>(Operand.getImm());
+    } else if (Operand.isSFPImm()) {
+      if (Trace.TiedTo >= 0)
+        return analysisError("non-register instruction operand is tied");
+      Trace.Kind = PhysicalMachineOperandKind::SingleFloatImmediate;
+      Trace.Value = Operand.getSFPImm();
+    } else if (Operand.isDFPImm()) {
+      if (Trace.TiedTo >= 0)
+        return analysisError("non-register instruction operand is tied");
+      Trace.Kind = PhysicalMachineOperandKind::DoubleFloatImmediate;
+      Trace.Value = Operand.getDFPImm();
+    } else if (Operand.isExpr()) {
+      if (Trace.TiedTo >= 0)
+        return analysisError("non-register instruction operand is tied");
+      int64_t Absolute = 0;
+      if (!Operand.getExpr()->evaluateAsAbsolute(Absolute))
+        return analysisError("instruction expression is not absolute");
+      Trace.Kind = PhysicalMachineOperandKind::AbsoluteExpression;
+      Trace.Value = static_cast<uint64_t>(Absolute);
+    } else {
+      return analysisError("unsupported instruction operand kind");
+    }
+    Result.Operands.push_back(std::move(Trace));
+  }
+  auto ImplicitDefinitions = registerNames(Descriptor.implicit_defs(), Mc);
+  if (!ImplicitDefinitions)
+    return ImplicitDefinitions.takeError();
+  Result.ImplicitDefinitions = std::move(*ImplicitDefinitions);
+  auto ImplicitUses = registerNames(Descriptor.implicit_uses(), Mc);
+  if (!ImplicitUses)
+    return ImplicitUses.takeError();
+  Result.ImplicitUses = std::move(*ImplicitUses);
+  return Result;
+}
+
 Expected<AnalyzedFunction>
 analyzeFunction(const SymbolRecord &Function, ArrayRef<SymbolRecord> Symbols,
                 bool ReturnPairIsLiveIn, McState &Mc) {
@@ -1627,16 +1748,50 @@ analyzeFunction(const SymbolRecord &Function, ArrayRef<SymbolRecord> Symbols,
   auto Cfg = buildFunctionCfg(*Decoded, Mc, Function.Name);
   if (!Cfg)
     return Cfg.takeError();
+  if (Cfg->Blocks.size() > MaxPhysicalMachineTraceBlocks ||
+      Decoded->size() > MaxPhysicalMachineTraceInstructions ||
+      llvm::any_of(Cfg->Blocks, [](const FunctionCfg::Block &Block) {
+        return !Block.Reachable;
+      }))
+    return analysisError(Twine("function CFG is incomplete or exceeds bounds: ") +
+                         Function.Name);
 
   AnalyzedFunction Result;
   Result.Evidence = {Function.Name, Function.Address, Function.Size, {}};
+  Result.Blocks.reserve(Cfg->Blocks.size());
+  for (size_t Ordinal = 0; Ordinal < Cfg->Blocks.size(); ++Ordinal) {
+    const FunctionCfg::Block &Block = Cfg->Blocks[Ordinal];
+    if (Ordinal > std::numeric_limits<uint32_t>::max() ||
+        Block.End <= Block.Begin ||
+        Block.End - Block.Begin > std::numeric_limits<uint32_t>::max())
+      return analysisError("machine basic block exceeds trace bounds");
+    PhysicalMachineBasicBlockTrace Trace;
+    Trace.FunctionSymbol = Function.Name;
+    Trace.Ordinal = static_cast<uint32_t>(Ordinal);
+    Trace.FirstInstructionOffset = (*Decoded)[Block.Begin].Address;
+    Trace.InstructionCount = static_cast<uint32_t>(Block.End - Block.Begin);
+    for (size_t Successor : Block.Successors) {
+      if (Successor >= Cfg->Blocks.size() ||
+          Successor > std::numeric_limits<uint32_t>::max())
+        return analysisError("machine CFG successor exceeds trace bounds");
+      Trace.Successors.push_back(static_cast<uint32_t>(Successor));
+    }
+    llvm::sort(Trace.Successors);
+    Result.Blocks.push_back(std::move(Trace));
+  }
+  Result.Instructions.reserve(Decoded->size());
   for (size_t Index = 0; Index < Decoded->size(); ++Index) {
-    if (!Cfg->Blocks[Cfg->InstructionBlocks[Index]].Reachable)
-      continue;
     const DecodedInstruction &Instruction = (*Decoded)[Index];
     const MCInstrDesc &Descriptor =
         Mc.Instructions->get(Instruction.Inst.getOpcode());
     StringRef Name = Instruction.Name;
+    size_t BlockOrdinal = Cfg->InstructionBlocks[Index];
+    if (BlockOrdinal > std::numeric_limits<uint32_t>::max())
+      return analysisError("machine instruction block exceeds trace bounds");
+    auto InstructionTrace = makeInstructionTrace(
+        Function.Name, Instruction, static_cast<uint32_t>(BlockOrdinal), Mc);
+    if (!InstructionTrace)
+      return InstructionTrace.takeError();
     if (forbiddenOpcodeFamily(Name))
       return analysisError(Twine("unsupported opcode family ") + Name + " in " +
                            Function.Name);
@@ -1647,6 +1802,8 @@ analyzeFunction(const SymbolRecord &Function, ArrayRef<SymbolRecord> Symbols,
     if (*PhysicalReturn) {
       Result.Effects.push_back(
           {Instruction.Address, PhysicalMachineEffectKind::Return, 0});
+      InstructionTrace->BranchKind = PhysicalMachineBranchKind::Return;
+      Result.Instructions.push_back(std::move(*InstructionTrace));
       continue;
     }
     if (Descriptor.isIndirectBranch())
@@ -1679,9 +1836,28 @@ analyzeFunction(const SymbolRecord &Function, ArrayRef<SymbolRecord> Symbols,
         return analysisError(Detail);
       }
       Result.Evidence.DirectCallees.push_back(Match->Name);
+      InstructionTrace->BranchKind = PhysicalMachineBranchKind::DirectCall;
+      InstructionTrace->BranchTarget = *Target;
+      Result.Instructions.push_back(std::move(*InstructionTrace));
       continue;
     }
     if (Descriptor.isBranch()) {
+      uint64_t Target = 0;
+      if (!Mc.Analysis->evaluateBranch(Instruction.Inst, Instruction.Address,
+                                       Instruction.Size, Target))
+        return analysisError(Twine("unknown branch target in ") +
+                             Function.Name);
+      if (Mc.Analysis->isConditionalBranch(Instruction.Inst))
+        InstructionTrace->BranchKind =
+            PhysicalMachineBranchKind::ConditionalDirect;
+      else if (Mc.Analysis->isUnconditionalBranch(Instruction.Inst))
+        InstructionTrace->BranchKind =
+            PhysicalMachineBranchKind::UnconditionalDirect;
+      else
+        return analysisError(Twine("unsupported branch kind in ") +
+                             Function.Name);
+      InstructionTrace->BranchTarget = Target;
+      Result.Instructions.push_back(std::move(*InstructionTrace));
       continue;
     }
     if (Descriptor.mayLoad() || Descriptor.mayStore()) {
@@ -1703,11 +1879,17 @@ analyzeFunction(const SymbolRecord &Function, ArrayRef<SymbolRecord> Symbols,
                                 Read ? PhysicalMachineEffectKind::GlobalRead
                                      : PhysicalMachineEffectKind::GlobalWrite,
                                 *Width});
+      InstructionTrace->MemoryAccess =
+          Read ? PhysicalMachineMemoryAccess::Read
+               : PhysicalMachineMemoryAccess::Write;
+      InstructionTrace->MemoryWidth = *Width;
+      Result.Instructions.push_back(std::move(*InstructionTrace));
       continue;
     }
     if (Descriptor.isTrap())
       return analysisError(Twine("unsupported side-effecting instruction ") +
                            Name + " in " + Function.Name);
+    Result.Instructions.push_back(std::move(*InstructionTrace));
   }
   llvm::sort(Result.Evidence.DirectCallees);
   if (std::adjacent_find(Result.Evidence.DirectCallees.begin(),
@@ -2085,8 +2267,19 @@ Expected<PhysicalMachineEffectEvidence> analyzeGfx942PhysicalMachineEffects(
   if (!hasAcyclicCallGraph(Functions))
     return analysisError("recursive direct-call graph is unsupported");
 
-  for (const auto &[Name, Function] : Functions)
+  for (const auto &[Name, Function] : Functions) {
     Evidence.Functions.push_back(Function.Evidence);
+    if (Evidence.Blocks.size() >
+            MaxPhysicalMachineTraceBlocks - Function.Blocks.size() ||
+        Evidence.Instructions.size() >
+            MaxPhysicalMachineTraceInstructions - Function.Instructions.size())
+      return analysisError("machine trace count exceeds bound");
+    Evidence.Blocks.insert(Evidence.Blocks.end(), Function.Blocks.begin(),
+                           Function.Blocks.end());
+    Evidence.Instructions.insert(Evidence.Instructions.end(),
+                                 Function.Instructions.begin(),
+                                 Function.Instructions.end());
+  }
 
   for (const auto &Entry : Request.Entries) {
     std::set<std::string> Closure = reachableFrom(Entry.Symbol, Functions);
@@ -2178,6 +2371,122 @@ Expected<std::vector<uint8_t>> encodePhysicalMachineEffectEvidence(
       Output.size() > std::numeric_limits<uint32_t>::max())
     return analysisError("evidence bytes exceed bound");
   support::endian::write32le(Output.data() + EvidenceDomain.size(),
+                             static_cast<uint32_t>(Output.size()));
+  return Output;
+}
+
+Expected<std::vector<uint8_t>> encodePhysicalMachineTraceEvidence(
+    const PhysicalMachineEffectEvidence &Evidence,
+    ArrayRef<uint8_t> CanonicalEffectEvidence) {
+  if (Evidence.Blocks.empty() ||
+      Evidence.Blocks.size() > MaxPhysicalMachineTraceBlocks ||
+      Evidence.Instructions.empty() ||
+      Evidence.Instructions.size() > MaxPhysicalMachineTraceInstructions ||
+      CanonicalEffectEvidence.empty())
+    return analysisError("machine trace count or effect binding is invalid");
+
+  std::vector<uint8_t> Output;
+  Output.insert(Output.end(), TraceEvidenceDomain.bytes_begin(),
+                TraceEvidenceDomain.bytes_end());
+  appendU32(Output, 0);
+  appendU16(Output, SchemaVersion);
+  Output.insert(Output.end(), Evidence.ExecutionChallenge.begin(),
+                Evidence.ExecutionChallenge.end());
+  Output.insert(Output.end(), Evidence.RequestIdentity.begin(),
+                Evidence.RequestIdentity.end());
+  appendU64(Output, Evidence.RequestBytes);
+  auto EffectIdentity =
+      domainHash(EvidenceIdentityDomain, CanonicalEffectEvidence);
+  Output.insert(Output.end(), EffectIdentity.begin(), EffectIdentity.end());
+  appendU64(Output, CanonicalEffectEvidence.size());
+  Output.insert(Output.end(), Evidence.PayloadDigest.begin(),
+                Evidence.PayloadDigest.end());
+  appendU64(Output, Evidence.PayloadBytes);
+  Output.insert(Output.end(), Evidence.AnalyzerIdentity.begin(),
+                Evidence.AnalyzerIdentity.end());
+  Output.insert(Output.end(), Evidence.ToolchainIdentity.begin(),
+                Evidence.ToolchainIdentity.end());
+  appendU16(Output, 1);
+
+  appendU32(Output, static_cast<uint32_t>(Evidence.Blocks.size()));
+  for (const PhysicalMachineBasicBlockTrace &Block : Evidence.Blocks) {
+    if (Error ErrorValue = appendText(Output, Block.FunctionSymbol))
+      return ErrorValue;
+    appendU32(Output, Block.Ordinal);
+    appendU64(Output, Block.FirstInstructionOffset);
+    appendU32(Output, Block.InstructionCount);
+    if (Block.Successors.size() > 2)
+      return analysisError("machine trace block successor count is invalid");
+    appendU16(Output, static_cast<uint16_t>(Block.Successors.size()));
+    for (uint32_t Successor : Block.Successors)
+      appendU32(Output, Successor);
+  }
+
+  appendU32(Output, static_cast<uint32_t>(Evidence.Instructions.size()));
+  for (const PhysicalMachineInstructionTrace &Instruction :
+       Evidence.Instructions) {
+    if (Error ErrorValue = appendText(Output, Instruction.FunctionSymbol))
+      return ErrorValue;
+    appendU64(Output, Instruction.InstructionOffset);
+    appendU32(Output, Instruction.BlockOrdinal);
+    if (Error ErrorValue = appendText(Output, Instruction.Opcode))
+      return ErrorValue;
+    if (Instruction.Encoding.empty() ||
+        Instruction.Encoding.size() > MaxInstructionBytes ||
+        Instruction.Operands.size() > MaxInstructionOperands ||
+        Instruction.ImplicitDefinitions.size() > MaxInstructionRegisters ||
+        Instruction.ImplicitUses.size() > MaxInstructionRegisters)
+      return analysisError("machine instruction trace exceeds bounds");
+    appendU16(Output, static_cast<uint16_t>(Instruction.Encoding.size()));
+    Output.insert(Output.end(), Instruction.Encoding.begin(),
+                  Instruction.Encoding.end());
+    appendU16(Output, Instruction.ExplicitDefinitionCount);
+    appendU16(Output, static_cast<uint16_t>(Instruction.Operands.size()));
+    for (const PhysicalMachineOperandTrace &Operand : Instruction.Operands) {
+      Output.push_back(static_cast<uint8_t>(Operand.Kind));
+      if (Operand.TiedTo < -1 ||
+          Operand.TiedTo > std::numeric_limits<uint16_t>::max())
+        return analysisError("machine tied operand exceeds bounds");
+      appendU16(Output, Operand.TiedTo < 0
+                            ? NoTiedOperand
+                            : static_cast<uint16_t>(Operand.TiedTo));
+      switch (Operand.Kind) {
+      case PhysicalMachineOperandKind::Register:
+        if (Error ErrorValue = appendText(Output, Operand.Register))
+          return ErrorValue;
+        break;
+      case PhysicalMachineOperandKind::SignedImmediate:
+      case PhysicalMachineOperandKind::DoubleFloatImmediate:
+      case PhysicalMachineOperandKind::AbsoluteExpression:
+        appendU64(Output, Operand.Value);
+        break;
+      case PhysicalMachineOperandKind::SingleFloatImmediate:
+        if (Operand.Value > std::numeric_limits<uint32_t>::max())
+          return analysisError("single-float immediate exceeds u32");
+        appendU32(Output, static_cast<uint32_t>(Operand.Value));
+        break;
+      }
+    }
+    appendU16(Output,
+              static_cast<uint16_t>(Instruction.ImplicitDefinitions.size()));
+    for (const std::string &Register : Instruction.ImplicitDefinitions)
+      if (Error ErrorValue = appendText(Output, Register))
+        return ErrorValue;
+    appendU16(Output,
+              static_cast<uint16_t>(Instruction.ImplicitUses.size()));
+    for (const std::string &Register : Instruction.ImplicitUses)
+      if (Error ErrorValue = appendText(Output, Register))
+        return ErrorValue;
+    Output.push_back(static_cast<uint8_t>(Instruction.BranchKind));
+    appendU64(Output, Instruction.BranchTarget);
+    appendU16(Output, Instruction.Flags);
+    Output.push_back(static_cast<uint8_t>(Instruction.MemoryAccess));
+    appendU16(Output, Instruction.MemoryWidth);
+  }
+  if (Output.size() > MaxPhysicalMachineTraceBytes ||
+      Output.size() > std::numeric_limits<uint32_t>::max())
+    return analysisError("machine trace bytes exceed bound");
+  support::endian::write32le(Output.data() + TraceEvidenceDomain.size(),
                              static_cast<uint32_t>(Output.size()));
   return Output;
 }

@@ -535,7 +535,10 @@ fn validate_instruction_shape(
     flags: PhysicalMachineInstructionFlagsV1,
     memory_access: PhysicalMachineMemoryAccessV1,
 ) -> Result<(), PhysicalMachineTraceEvidenceErrorV1> {
-    if flags.is_barrier() || (flags.may_load() && flags.may_store()) {
+    // LLVM's MC `Barrier` flag is a scheduling/control-flow barrier and is
+    // commonly set on branches. Workgroup synchronization opcodes are rejected
+    // separately by the native analyzer's closed side-effect policy.
+    if flags.may_load() && flags.may_store() {
         return Err(PhysicalMachineTraceEvidenceErrorV1::InvalidInstructionFlags);
     }
     match memory_access {
