@@ -8,6 +8,7 @@ pub mod semantic_mir_v1;
 mod semantic_option_dominance;
 mod semantic_type;
 pub mod semantic_type_v2;
+mod semantic_u32_induction;
 
 pub use control_flow::{
     MAX_MIR_CONTROL_FLOW_WORK_UNITS, MIR_CONTROL_FLOW_WORK_UNITS_PER_BLOCK, MirControlFlowAnalysis,
@@ -74,4 +75,12 @@ pub use semantic_type_v2::{
     SemanticTypeGraphBudgetsV2, SemanticTypeGraphBuilderV2, SemanticTypeGraphErrorV2,
     SemanticTypeGraphV2, SemanticTypeKindV2, SemanticTypeLayoutV2, SemanticTypeNodeIdV2,
     SemanticTypeNodeV2, SemanticVariantV2, UntrustedSemanticTypeGraphEncodingV2,
+};
+pub use semantic_u32_induction::{
+    MAX_SEMANTIC_U32_INDUCTION_CERTIFICATES_V1, MAX_SEMANTIC_U32_INDUCTION_WORK_V1,
+    SemanticU32InductionAnalysisErrorV1, SemanticU32InductionAnalysisLimitsV1,
+    SemanticU32InductionBlockSiteV1, SemanticU32InductionNoOverflowCertificateV1,
+    SemanticU32InductionNoOverflowReportV1, SemanticU32InductionPlaceBindingV1,
+    SemanticU32InductionStatementSiteV1, analyze_semantic_u32_induction_no_overflow_v1,
+    analyze_semantic_u32_induction_no_overflow_with_limits_v1,
 };
