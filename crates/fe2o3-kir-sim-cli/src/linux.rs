@@ -1023,6 +1023,7 @@ pub(crate) fn load_debug_simulation_input_v1(
             None,
             SimulationTargetV1::amdgpu_64(),
             None,
+            None,
         )
     })();
     result.map_err(|failure: Failure| crate::SimulationInputErrorV1 {
@@ -1140,7 +1141,14 @@ fn run_with_captured_kir(
     target: SimulationTargetV1,
     bundle_identity: Option<([u8; 32], [u8; 32])>,
 ) -> Result<(), Failure> {
-    let input = load_admitted_input(kir, request, expected_request, target, bundle_identity)?;
+    let input = load_admitted_input(
+        kir,
+        request,
+        expected_request,
+        target,
+        bundle_identity,
+        None,
+    )?;
     run_with_admitted_input(input, policy)
 }
 
@@ -1418,6 +1426,11 @@ fn load_admitted_bundle(
         None,
         target,
         Some((*bundle.identity().as_bytes(), *bundle.subject_identity())),
+        Some(bundle_evidence_v1(
+            &bundle,
+            1,
+            *bundle.identity().as_bytes(),
+        )),
     )?;
     if input.kir_sha256 != *bundle.canonical_kir_v7_identity().digest()
         || u64::try_from(bundle.canonical_kir_v7().len()).ok()
@@ -1472,6 +1485,7 @@ fn load_admitted_bundle_v2(
         None,
         target,
         Some((*inner.identity().as_bytes(), *inner.subject_identity())),
+        Some(bundle_evidence_v1(inner, 2, *bundle.identity().as_bytes())),
     )?;
     if input.kir_sha256 != *inner.canonical_kir_v7_identity().digest()
         || u64::try_from(inner.canonical_kir_v7().len()).ok()
@@ -1503,6 +1517,7 @@ fn load_admitted_input(
     expected_request: Option<crate::SimulationRequestIdentityV1>,
     target: SimulationTargetV1,
     bundle_identity: Option<([u8; 32], [u8; 32])>,
+    bundle_evidence: Option<crate::AdmittedSimulationBundleEvidenceV1>,
 ) -> Result<crate::AdmittedSimulationInputV1, Failure> {
     if kir.len() > MAX_KIR_BYTES {
         return Err(Failure::input(
@@ -1578,7 +1593,30 @@ fn load_admitted_input(
         simulation_target: target,
         simulation_bundle_subject,
         simulation_bundle_identity,
+        simulation_bundle_evidence: bundle_evidence,
     })
+}
+
+fn bundle_evidence_v1(
+    bundle: &VerifiedSimulationBundleV1,
+    envelope_version: u16,
+    envelope_identity: [u8; 32],
+) -> crate::AdmittedSimulationBundleEvidenceV1 {
+    let production = bundle.production_kir_identity();
+    let lineage = bundle.source_lineage();
+    crate::AdmittedSimulationBundleEvidenceV1 {
+        envelope_version,
+        envelope_identity,
+        subject_identity: *bundle.subject_identity(),
+        production_kir_version: production.version(),
+        production_kir_sha256: production.digest(),
+        production_kir_bytes: production.canonical_length(),
+        kernel_abi_identity: *bundle.kernel_abi_identity(),
+        identity_inventory_receipt_sha256: lineage.rustc_identity_inventory_receipt_sha256(),
+        identity_inventory_receipt_bytes: lineage.rustc_identity_inventory_receipt_bytes(),
+        preflight_plan_receipt_sha256: lineage.rustc_preflight_plan_receipt_sha256(),
+        preflight_plan_receipt_bytes: lineage.rustc_preflight_plan_receipt_bytes(),
+    }
 }
 
 const fn cli_simulation_limits() -> SimulationLimitsV1 {

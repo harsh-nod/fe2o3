@@ -29,10 +29,11 @@ use std::process::ExitCode;
 
 use fe2o3_debug_protocol::*;
 use fe2o3_kernel_ir::{
-    AddressSpace, DebugSourceMapDocumentV1, DebugSourceMapDocumentV2, DebugSourceMapKirSiteV1,
-    DebugSourceMapSpanV1, DebugSourceVariableBindingV2, DebugSourceVariableFallbackV2,
-    IndexedControlFlow, ScalarType, ValueId, analyze_control_flow,
-    simulation_debug_map_identity_v1, simulation_debug_map_identity_v2,
+    AccessMode, AddressSpace, DebugSourceMapDocumentV1, DebugSourceMapDocumentV2,
+    DebugSourceMapKirSiteV1, DebugSourceMapSpanV1, DebugSourceVariableBindingV2,
+    DebugSourceVariableFallbackV2, IndexedControlFlow, MemoryOrdering, OperationKind, ScalarType,
+    SynchronizationScope, Type, ValueId, analyze_control_flow, simulation_debug_map_identity_v1,
+    simulation_debug_map_identity_v2,
 };
 use fe2o3_kir_debugger::{
     DebugBreakpointV1, DebugHitConditionV1, DebugInspectionUnavailableV1, DebugInspectionV1,
@@ -44,11 +45,12 @@ use fe2o3_kir_debugger::{
     capture_debugger_run_v1, hierarchy_for_invocation_v1,
 };
 use fe2o3_kir_sim::{
-    AdmittedSimulationModuleV1, ScalarBitsV1, SimulationDebugBarrierActionV1,
-    SimulationDebugBindingV1, SimulationDebugCaptureLimitsV1, SimulationDebugCheckpointPhaseV1,
-    SimulationDebugCollectionV1, SimulationDebugFrameV1, SimulationDebugRecordKindV1,
-    SimulationDebugRecordV1, SimulationDebugValueV1, SimulationErrorV1, SimulationInvocationV1,
-    SimulationScheduleRecordV1, SimulationTargetV1,
+    AdmittedSimulationModuleV1, IndexWidthV1, ScalarBitsV1, SimulationArgumentV1,
+    SimulationDebugBarrierActionV1, SimulationDebugBindingV1, SimulationDebugCaptureLimitsV1,
+    SimulationDebugCheckpointPhaseV1, SimulationDebugCollectionV1, SimulationDebugFrameV1,
+    SimulationDebugRecordKindV1, SimulationDebugRecordV1, SimulationDebugSiteV1,
+    SimulationDebugValueV1, SimulationErrorV1, SimulationInvocationV1, SimulationScheduleRecordV1,
+    SimulationTargetV1,
 };
 use fe2o3_kir_sim_cli::{
     AdmittedSimulationInputV1, SimulationInputErrorV1, load_debug_sidecar_v1,
@@ -151,6 +153,7 @@ struct AdmittedSourceMapV2 {
     identity: OpaqueIdentityV1,
     bundle_subject_identity: OpaqueIdentityV1,
     configuration_identity: OpaqueIdentityV1,
+    provenance: SourceMapProvenanceV1,
     catalog: DebugSourceCatalogV1,
     variables: AdmittedSourceVariablesV2,
 }
@@ -332,13 +335,47 @@ fn admit_source_map_v2(
     expected_bundle_subject: OpaqueIdentityV1,
     expected_map_identity: OpaqueIdentityV1,
 ) -> Result<AdmittedSourceMapV2, String> {
+    admit_source_map_v2_with_provenance(
+        bytes,
+        input,
+        configuration_identity,
+        expected_bundle_subject,
+        Some(expected_map_identity),
+        SourceMapProvenanceV1::CompilerBundleBound,
+    )
+}
+
+fn admit_caller_source_map_v2(
+    bytes: &[u8],
+    input: &AdmittedSimulationInputV1,
+    configuration_identity: OpaqueIdentityV1,
+    expected_bundle_subject: OpaqueIdentityV1,
+) -> Result<AdmittedSourceMapV2, String> {
+    admit_source_map_v2_with_provenance(
+        bytes,
+        input,
+        configuration_identity,
+        expected_bundle_subject,
+        None,
+        SourceMapProvenanceV1::CallerBound,
+    )
+}
+
+fn admit_source_map_v2_with_provenance(
+    bytes: &[u8],
+    input: &AdmittedSimulationInputV1,
+    configuration_identity: OpaqueIdentityV1,
+    expected_bundle_subject: OpaqueIdentityV1,
+    expected_map_identity: Option<OpaqueIdentityV1>,
+    provenance: SourceMapProvenanceV1,
+) -> Result<AdmittedSourceMapV2, String> {
     if bytes.is_empty() || bytes.len() > MAX_SOURCE_MAP_BYTES_V1 {
         return Err(format!(
             "source map V2 must contain 1 to {MAX_SOURCE_MAP_BYTES_V1} bytes"
         ));
     }
     let identity = nonzero_identity(simulation_debug_map_identity_v2(bytes));
-    if identity != expected_map_identity {
+    if expected_map_identity.is_some_and(|expected| identity != expected) {
         return Err("source map V2 identity does not match its bundle commitment".to_owned());
     }
     let document = DebugSourceMapDocumentV2::from_canonical_json_bytes(bytes)
@@ -539,6 +576,7 @@ fn admit_source_map_v2(
         identity,
         bundle_subject_identity: expected_bundle_subject,
         configuration_identity,
+        provenance,
         catalog,
         variables,
     })
@@ -1889,27 +1927,37 @@ pub fn main() -> ExitCode {
             }
         }
     };
-    let source_map = match (&options.source_map, options.source_bundle_subject) {
-        (Some(path), Some(expected_subject)) => {
-            let bytes = match load_debug_sidecar_v1(path, MAX_SOURCE_MAP_BYTES_V1) {
-                Ok(bytes) => bytes,
-                Err(error) => {
-                    write_input_error(&error);
-                    return ExitCode::FAILURE;
-                }
-            };
-            let configuration = configuration_identity_for_input(&admitted, options.wave_width);
-            match admit_source_map_v1(&bytes, &admitted, configuration, expected_subject) {
-                Ok(map) => Some(map),
-                Err(message) => {
-                    write_bootstrap_error("source_map", "source_map_rejected", &message);
-                    return ExitCode::FAILURE;
+    let (source_map, caller_source_map_v2) =
+        match (&options.source_map, options.source_bundle_subject) {
+            (Some(path), Some(expected_subject)) => {
+                let bytes = match load_debug_sidecar_v1(path, MAX_SOURCE_MAP_BYTES_V1) {
+                    Ok(bytes) => bytes,
+                    Err(error) => {
+                        write_input_error(&error);
+                        return ExitCode::FAILURE;
+                    }
+                };
+                let configuration = configuration_identity_for_input(&admitted, options.wave_width);
+                let admitted_map = if DebugSourceMapDocumentV2::from_canonical_json_bytes(&bytes)
+                    .is_ok()
+                {
+                    admit_caller_source_map_v2(&bytes, &admitted, configuration, expected_subject)
+                        .map(|map| (None, Some(map)))
+                } else {
+                    admit_source_map_v1(&bytes, &admitted, configuration, expected_subject)
+                        .map(|map| (Some(map), None))
+                };
+                match admitted_map {
+                    Ok(maps) => maps,
+                    Err(message) => {
+                        write_bootstrap_error("source_map", "source_map_rejected", &message);
+                        return ExitCode::FAILURE;
+                    }
                 }
             }
-        }
-        (None, None) => None,
-        _ => unreachable!("argument parser requires source-map options as a pair"),
-    };
+            (None, None) => (None, None),
+            _ => unreachable!("argument parser requires source-map options as a pair"),
+        };
     let replay_schedule = match options.replay_schedule.as_ref() {
         Some(path) => match load_debug_simulation_schedule_v1(path, &admitted) {
             Ok(schedule) => Some(schedule),
@@ -1992,12 +2040,21 @@ pub fn main() -> ExitCode {
             }
         };
     }
-    let backend = match SimulatorBackendV1::new_with_source_map_and_schedule(
-        admitted,
-        options.wave_width,
-        source_map,
-        replay_schedule.as_ref().map(|schedule| schedule.record()),
-    ) {
+    let backend = match caller_source_map_v2 {
+        Some(source_map_v2) => SimulatorBackendV1::new_with_source_map_v2_and_schedule(
+            admitted,
+            options.wave_width,
+            source_map_v2,
+            replay_schedule.as_ref().map(|schedule| schedule.record()),
+        ),
+        None => SimulatorBackendV1::new_with_source_map_and_schedule(
+            admitted,
+            options.wave_width,
+            source_map,
+            replay_schedule.as_ref().map(|schedule| schedule.record()),
+        ),
+    };
+    let backend = match backend {
         Ok(backend) => backend,
         Err(message) => {
             write_bootstrap_error("backend", "simulation_capture_failed", &message);
@@ -2639,6 +2696,8 @@ struct SimulatorBackendV1 {
     wave_width: DebugWaveWidthV1,
     configuration_identity: OpaqueIdentityV1,
     diagnosis_dispatch: DiagnosisDispatchV2,
+    diagnosis_input: DiagnosisInputEvidenceV2,
+    diagnosis_allocations: BTreeMap<u64, DiagnosisAllocationContractV2>,
     source_map_identity: Option<OpaqueIdentityV1>,
     source_map_provenance: Option<SourceMapProvenanceV1>,
     source_variables_v2: Option<AdmittedSourceVariablesV2>,
@@ -2696,6 +2755,7 @@ impl SimulatorBackendV1 {
             launch_extent: input.request.grid.0,
             workgroup_size: input.request.workgroup.0,
         };
+        let diagnosis_allocations = diagnosis_initial_allocations_v2(&input)?;
         let capture_limits =
             SimulationDebugCaptureLimitsV1::new(64, 4_096, 16_384, 16 * 1024 * 1024)
                 .map_err(|error| error.to_string())?;
@@ -2754,6 +2814,110 @@ impl SimulatorBackendV1 {
                         source_map.bundle_subject_identity,
                     )
                 });
+        let request_reference = DiagnosisContentReferenceV2 {
+            sha256: nonzero_identity(input.request_sha256),
+            canonical_bytes: input.request_bytes(),
+        };
+        let kir_reference = DiagnosisContentReferenceV2 {
+            sha256: nonzero_identity(input.kir_sha256),
+            canonical_bytes: input.module.identity().canonical_length(),
+        };
+        let dispatch_identity =
+            diagnosis_dispatch_input_identity_v2(request_reference, kir_reference)
+                .map_err(|_| "simulated dispatch input identity is zero".to_owned())?;
+        let (simulation_bundle, production_kir, kernel_abi_identity, source_lineage) =
+            input.simulation_bundle_evidence().map_or_else(
+                || {
+                    (
+                        DiagnosisFactV2::Unavailable {
+                            reason: DiagnosisUnavailableReasonV2::InputNotProvided,
+                        },
+                        DiagnosisFactV2::Unavailable {
+                            reason: DiagnosisUnavailableReasonV2::InputNotProvided,
+                        },
+                        DiagnosisFactV2::Unavailable {
+                            reason: DiagnosisUnavailableReasonV2::InputNotProvided,
+                        },
+                        DiagnosisFactV2::Unavailable {
+                            reason: DiagnosisUnavailableReasonV2::InputNotProvided,
+                        },
+                    )
+                },
+                |bundle| {
+                    (
+                        DiagnosisFactV2::Declared {
+                            value: DiagnosisBundleReferenceV2 {
+                                identity: nonzero_identity(bundle.envelope_identity),
+                                subject_identity: nonzero_identity(bundle.subject_identity),
+                            },
+                        },
+                        DiagnosisFactV2::Declared {
+                            value: DiagnosisVersionedContentReferenceV2 {
+                                version: bundle.production_kir_version,
+                                content: DiagnosisContentReferenceV2 {
+                                    sha256: nonzero_identity(bundle.production_kir_sha256),
+                                    canonical_bytes: bundle.production_kir_bytes,
+                                },
+                            },
+                        },
+                        DiagnosisFactV2::Declared {
+                            value: nonzero_identity(bundle.kernel_abi_identity),
+                        },
+                        DiagnosisFactV2::Declared {
+                            value: DiagnosisSourceLineageV2 {
+                                identity_inventory_receipt: DiagnosisContentReferenceV2 {
+                                    sha256: nonzero_identity(
+                                        bundle.identity_inventory_receipt_sha256,
+                                    ),
+                                    canonical_bytes: bundle.identity_inventory_receipt_bytes,
+                                },
+                                preflight_plan_receipt: DiagnosisContentReferenceV2 {
+                                    sha256: nonzero_identity(bundle.preflight_plan_receipt_sha256),
+                                    canonical_bytes: bundle.preflight_plan_receipt_bytes,
+                                },
+                            },
+                        },
+                    )
+                },
+            );
+        let source_map_v2_reference =
+            source_map_v2
+                .as_ref()
+                .map(|source_map| DiagnosisSourceMapReferenceV2 {
+                    identity: source_map.identity,
+                    bundle_subject_identity: source_map.bundle_subject_identity,
+                    provenance: source_map.provenance,
+                });
+        let diagnosis_input = DiagnosisInputEvidenceV2 {
+            configuration_identity,
+            dispatch_identity,
+            dispatch_request: DiagnosisFactV2::Declared {
+                value: request_reference,
+            },
+            canonical_kir_v7: DiagnosisFactV2::Declared {
+                value: kir_reference,
+            },
+            simulation_bundle,
+            production_kir,
+            kernel_abi_identity,
+            source_lineage,
+            source_map_v2: source_map_v2_reference.map_or(
+                DiagnosisFactV2::Unavailable {
+                    reason: if source_map.is_some() {
+                        DiagnosisUnavailableReasonV2::RequiresSourceMapV2
+                    } else {
+                        DiagnosisUnavailableReasonV2::InputNotProvided
+                    },
+                },
+                |value| DiagnosisFactV2::Declared { value },
+            ),
+            finalized_artifact: DiagnosisFactV2::Unavailable {
+                reason: DiagnosisUnavailableReasonV2::NoArtifactAuthority,
+            },
+            property_proof: DiagnosisFactV2::Unavailable {
+                reason: DiagnosisUnavailableReasonV2::NoProofAuthority,
+            },
+        };
         let mut session = DebugSessionV1::new(run.transcript);
         let mut source_map_provenance = None;
         let source_map_identity = if let Some(source_map) = source_map {
@@ -2777,7 +2941,7 @@ impl SimulatorBackendV1 {
                 );
             }
             let _bundle_subject = source_map.bundle_subject_identity;
-            source_map_provenance = Some(SourceMapProvenanceV1::CompilerBundleBound);
+            source_map_provenance = Some(source_map.provenance);
             session
                 .bind_source_catalog(&input.module, source_map.catalog)
                 .map_err(|error| format!("source map V2 binding failed: {error}"))?;
@@ -2791,6 +2955,8 @@ impl SimulatorBackendV1 {
             wave_width,
             configuration_identity,
             diagnosis_dispatch,
+            diagnosis_input,
+            diagnosis_allocations,
             source_map_identity,
             source_map_provenance,
             source_variables_v2,
@@ -5023,16 +5189,17 @@ impl SimulatorBackendV1 {
         use fe2o3_kir_sim::SimulationExecutionErrorKindV1 as ErrorKind;
 
         let context = self.diagnosis_context_v2(fault.invocation);
-        let site = fault
+        let kir_site = fault
             .site
             .as_ref()
-            .and_then(|site| self.protocol_execution_site_v2(site))
-            .map_or(
-                DiagnosisFactV2::Unavailable {
-                    reason: DiagnosisUnavailableReasonV2::SiteNotRepresented,
-                },
-                |value| DiagnosisFactV2::Observed { value },
-            );
+            .and_then(|site| self.protocol_execution_site_v2(site));
+        let site = kir_site.map_or(
+            DiagnosisFactV2::Unavailable {
+                reason: DiagnosisUnavailableReasonV2::SiteNotRepresented,
+            },
+            |value| DiagnosisFactV2::Observed { value },
+        );
+        let source_operation = self.diagnosis_source_operation_v2(fault.site.as_ref(), kir_site);
         let (class, memory_region, barrier) = match &fault.kind {
             ErrorKind::OutOfBounds {
                 allocation,
@@ -5065,6 +5232,8 @@ impl SimulatorBackendV1 {
                                     requested_offset,
                                     requested_bytes,
                                     allocation_bytes,
+                                    allocation_contract: self
+                                        .diagnosis_allocation_contract_v2(*allocation),
                                 },
                             }
                         },
@@ -5080,7 +5249,7 @@ impl SimulatorBackendV1 {
             ErrorKind::DivergentWorkgroupBarrier(detail) => {
                 let barrier = fault
                     .invocation
-                    .and_then(|invocation| self.divergent_barrier_v2(invocation, detail))
+                    .and_then(|invocation| self.divergent_barrier_v2(invocation, detail, kir_site))
                     .map_or(
                         DiagnosisFactV2::Unavailable {
                             reason: DiagnosisUnavailableReasonV2::NotRepresentable,
@@ -5113,6 +5282,31 @@ impl SimulatorBackendV1 {
                     },
                     |value| DiagnosisFactV2::Observed { value },
                 );
+                let actual_semantics =
+                    kir_site.and_then(|site| self.diagnosis_barrier_semantics_v2(site));
+                let expected_semantics = self
+                    .protocol_event_site_v2(&detail.expected)
+                    .and_then(|site| self.diagnosis_barrier_semantics_v2(site));
+                let expected_participants =
+                    fault.invocation.and_then(active_workgroup_participants_v2);
+                let (Some(actual_semantics), Some(expected_semantics), Some(expected_participants)) =
+                    (actual_semantics, expected_semantics, expected_participants)
+                else {
+                    return Some(DiagnosisViewV2 {
+                        sequence: fault.ordinal.saturating_add(1),
+                        class: DiagnosisClassV2::WorkgroupBarrierMismatch,
+                        input: self.diagnosis_input.clone(),
+                        context,
+                        site,
+                        source_operation,
+                        memory_region: DiagnosisFactV2::Unavailable {
+                            reason: DiagnosisUnavailableReasonV2::NotApplicable,
+                        },
+                        barrier: DiagnosisFactV2::Unavailable {
+                            reason: DiagnosisUnavailableReasonV2::NotRepresentable,
+                        },
+                    });
+                };
                 (
                     DiagnosisClassV2::WorkgroupBarrierMismatch,
                     DiagnosisFactV2::Unavailable {
@@ -5122,6 +5316,17 @@ impl SimulatorBackendV1 {
                         value: DiagnosisBarrierV2::Mismatch {
                             phase: DiagnosisFactV2::Observed {
                                 value: detail.phase,
+                            },
+                            semantics: DiagnosisFactV2::Declared {
+                                value: actual_semantics,
+                            },
+                            expected_semantics: DiagnosisFactV2::Declared {
+                                value: expected_semantics,
+                            },
+                            lds_epoch: diagnosis_failed_lds_epoch_v2(detail.phase),
+                            expected_participants: DiagnosisFactV2::Inferred {
+                                value: expected_participants,
+                                basis: DiagnosisInferenceBasisV2::LaunchGeometry,
                             },
                             mismatch: DiagnosisFactV2::Observed { value: mismatch },
                             expected_site,
@@ -5134,8 +5339,10 @@ impl SimulatorBackendV1 {
         Some(DiagnosisViewV2 {
             sequence: fault.ordinal.saturating_add(1),
             class,
+            input: self.diagnosis_input.clone(),
             context,
             site,
+            source_operation,
             memory_region,
             barrier,
         })
@@ -5219,8 +5426,10 @@ impl SimulatorBackendV1 {
         &self,
         invocation: SimulationInvocationV1,
         detail: &fe2o3_kir_sim::DivergentWorkgroupBarrierV1,
+        site: Option<KirSiteV1>,
     ) -> Option<DiagnosisBarrierV2> {
         let expected = active_workgroup_participants_v2(invocation)?;
+        let semantics = self.diagnosis_barrier_semantics_v2(site?)?;
         let observed_arrivals = match self.session.transcript().completeness() {
             DebugTranscriptCompletenessV1::Complete => {
                 let arrivals = self
@@ -5255,6 +5464,8 @@ impl SimulatorBackendV1 {
             phase: DiagnosisFactV2::Observed {
                 value: detail.phase,
             },
+            semantics: DiagnosisFactV2::Declared { value: semantics },
+            lds_epoch: diagnosis_failed_lds_epoch_v2(detail.phase),
             observed_arrivals,
             expected_participants: DiagnosisFactV2::Inferred {
                 value: expected,
@@ -5263,6 +5474,158 @@ impl SimulatorBackendV1 {
             waiting: self.barrier_participant_v2(invocation, detail.waiting.local)?,
             exited: self.barrier_participant_v2(invocation, detail.exited.local)?,
         })
+    }
+
+    fn diagnosis_allocation_contract_v2(
+        &self,
+        allocation: u64,
+    ) -> DiagnosisFactV2<DiagnosisAllocationContractV2> {
+        if let Some(contract) = self.diagnosis_allocations.get(&allocation) {
+            return DiagnosisFactV2::Declared {
+                value: contract.clone(),
+            };
+        }
+        for record in self.session.transcript().records().iter().rev() {
+            let SimulationDebugRecordKindV1::Checkpoint {
+                memory: SimulationDebugCollectionV1::Captured(allocations),
+                ..
+            } = &record.kind
+            else {
+                continue;
+            };
+            if let Some(observed) = allocations
+                .iter()
+                .find(|candidate| candidate.allocation == allocation)
+            {
+                let Ok(allocation_bytes) = u64::try_from(observed.bytes.len()) else {
+                    return DiagnosisFactV2::Unavailable {
+                        reason: DiagnosisUnavailableReasonV2::NotRepresentable,
+                    };
+                };
+                return DiagnosisFactV2::Observed {
+                    value: DiagnosisAllocationContractV2 {
+                        address_space: diagnosis_address_space_v2(observed.address_space),
+                        access: diagnosis_access_v2(observed.access),
+                        alignment: observed.alignment,
+                        allocation_bytes,
+                        abi_argument: DiagnosisFactV2::Unavailable {
+                            reason: DiagnosisUnavailableReasonV2::NotApplicable,
+                        },
+                    },
+                };
+            }
+        }
+        match self.session.transcript().completeness() {
+            DebugTranscriptCompletenessV1::Complete => DiagnosisFactV2::Unavailable {
+                reason: DiagnosisUnavailableReasonV2::NotCaptured,
+            },
+            DebugTranscriptCompletenessV1::Truncated(_) => DiagnosisFactV2::Unavailable {
+                reason: DiagnosisUnavailableReasonV2::TranscriptTruncated,
+            },
+        }
+    }
+
+    fn diagnosis_barrier_semantics_v2(
+        &self,
+        site: KirSiteV1,
+    ) -> Option<DiagnosisBarrierSemanticsV2> {
+        let function = self
+            .module
+            .module()
+            .functions
+            .get(usize::try_from(site.function_ordinal).ok()?)?;
+        let body = function.body.as_ref()?;
+        let block = body.blocks.get(usize::try_from(site.block_ordinal).ok()?)?;
+        let KirSitePointV1::Operation { operation_ordinal } = site.point else {
+            return None;
+        };
+        let operation = block
+            .operations
+            .get(usize::try_from(operation_ordinal).ok()?)?;
+        let OperationKind::WorkgroupBarrier(barrier) = &operation.kind else {
+            return None;
+        };
+        Some(DiagnosisBarrierSemanticsV2 {
+            memory_scope: diagnosis_synchronization_scope_v2(barrier.memory_scope),
+            ordering: diagnosis_memory_ordering_v2(barrier.semantics.ordering),
+            address_spaces: barrier
+                .semantics
+                .address_spaces
+                .iter()
+                .copied()
+                .map(diagnosis_address_space_v2)
+                .collect(),
+        })
+    }
+
+    fn diagnosis_source_operation_v2(
+        &self,
+        execution_site: Option<&fe2o3_kir_sim::SimulationSiteV1>,
+        kir_site: Option<KirSiteV1>,
+    ) -> DiagnosisFactV2<DiagnosisSourceOperationV2> {
+        let map = match &self.diagnosis_input.source_map_v2 {
+            DiagnosisFactV2::Declared { value } => *value,
+            DiagnosisFactV2::Unavailable { reason } => {
+                return DiagnosisFactV2::Unavailable { reason: *reason };
+            }
+            _ => {
+                return DiagnosisFactV2::Unavailable {
+                    reason: DiagnosisUnavailableReasonV2::RequiresSourceMapV2,
+                };
+            }
+        };
+        let (Some(execution_site), Some(kir_site)) = (execution_site, kir_site) else {
+            return DiagnosisFactV2::Unavailable {
+                reason: DiagnosisUnavailableReasonV2::SiteNotRepresented,
+            };
+        };
+        let KirSitePointV1::Operation { operation_ordinal } = kir_site.point else {
+            return DiagnosisFactV2::Unavailable {
+                reason: DiagnosisUnavailableReasonV2::SourceSiteAbsent,
+            };
+        };
+        let Ok(function_ordinal) = usize::try_from(kir_site.function_ordinal) else {
+            return DiagnosisFactV2::Unavailable {
+                reason: DiagnosisUnavailableReasonV2::SiteNotRepresented,
+            };
+        };
+        let Ok(operation) = u32::try_from(operation_ordinal) else {
+            return DiagnosisFactV2::Unavailable {
+                reason: DiagnosisUnavailableReasonV2::SiteNotRepresented,
+            };
+        };
+        match self.session.resolve_source_site(SimulationDebugSiteV1 {
+            function_ordinal,
+            block: execution_site.block,
+            operation,
+        }) {
+            DebugInspectionV1::Available(DebugSourceResolutionV1::Resolved { span, .. }) => {
+                DiagnosisFactV2::Declared {
+                    value: DiagnosisSourceOperationV2 {
+                        bundle_subject_identity: map.bundle_subject_identity,
+                        kir_site,
+                        location: SourceLocationV1 {
+                            map_identity: map.identity,
+                            provenance: map.provenance,
+                            file_identity: nonzero_identity(span.file),
+                            byte_start: span.byte_start,
+                            byte_end: span.byte_end,
+                        },
+                    },
+                }
+            }
+            DebugInspectionV1::Available(DebugSourceResolutionV1::ManyToOne) => {
+                DiagnosisFactV2::Unavailable {
+                    reason: DiagnosisUnavailableReasonV2::SourceSiteAmbiguous,
+                }
+            }
+            DebugInspectionV1::Available(
+                DebugSourceResolutionV1::Absent | DebugSourceResolutionV1::Eliminated,
+            )
+            | DebugInspectionV1::Unavailable(_) => DiagnosisFactV2::Unavailable {
+                reason: DiagnosisUnavailableReasonV2::SourceSiteAbsent,
+            },
+        }
     }
 
     fn barrier_participant_v2(
@@ -5551,6 +5914,255 @@ fn active_workgroup_participants_v2(invocation: SimulationInvocationV1) -> Optio
         participants = participants.checked_mul(active)?;
     }
     u32::try_from(participants).ok()
+}
+
+#[derive(Debug)]
+struct PendingDiagnosisAllocationV2 {
+    address_space: AddressSpaceV1,
+    access: DiagnosisAccessModeV2,
+    alignment: u32,
+    allocation_bytes: u64,
+    abi_arguments: Vec<DiagnosisAbiArgumentV2>,
+}
+
+fn diagnosis_initial_allocations_v2(
+    input: &AdmittedSimulationInputV1,
+) -> Result<BTreeMap<u64, DiagnosisAllocationContractV2>, String> {
+    let module = input.module.module();
+    let kernel = module
+        .kernels
+        .iter()
+        .find(|kernel| kernel.id == input.request.kernel)
+        .ok_or_else(|| "admitted diagnosis kernel is missing".to_owned())?;
+    let entry = module
+        .function(&kernel.entry)
+        .ok_or_else(|| "admitted diagnosis kernel entry is missing".to_owned())?;
+    if entry.signature.parameters.len() != input.request.arguments.len() {
+        return Err("admitted diagnosis ABI argument count changed".to_owned());
+    }
+
+    let mut pending = BTreeMap::new();
+    let mut shared_allocations = BTreeMap::new();
+    let mut next_allocation = 1_u64;
+    for shared in &input.request.shared_buffers {
+        let allocation = next_allocation;
+        next_allocation = next_allocation
+            .checked_add(1)
+            .ok_or_else(|| "diagnosis allocation identity overflow".to_owned())?;
+        if shared_allocations.insert(shared.id, allocation).is_some() {
+            return Err("admitted diagnosis shared allocation is duplicated".to_owned());
+        }
+        pending.insert(
+            allocation,
+            PendingDiagnosisAllocationV2 {
+                address_space: AddressSpaceV1::Global,
+                access: diagnosis_access_v2(shared.buffer.access()),
+                alignment: shared.buffer.alignment(),
+                allocation_bytes: u64::try_from(shared.buffer.bytes().len())
+                    .map_err(|_| "diagnosis allocation length does not fit u64".to_owned())?,
+                abi_arguments: Vec::new(),
+            },
+        );
+    }
+
+    for (ordinal, (argument, ty)) in input
+        .request
+        .arguments
+        .iter()
+        .zip(&entry.signature.parameters)
+        .enumerate()
+    {
+        let (allocation, view_offset, view_bytes, element, argument_access) = match argument {
+            SimulationArgumentV1::Scalar(_) => continue,
+            SimulationArgumentV1::Buffer(buffer) => {
+                let allocation = next_allocation;
+                next_allocation = next_allocation
+                    .checked_add(1)
+                    .ok_or_else(|| "diagnosis allocation identity overflow".to_owned())?;
+                let bytes = u64::try_from(buffer.bytes().len())
+                    .map_err(|_| "diagnosis allocation length does not fit u64".to_owned())?;
+                pending.insert(
+                    allocation,
+                    PendingDiagnosisAllocationV2 {
+                        address_space: AddressSpaceV1::Global,
+                        access: diagnosis_access_v2(buffer.access()),
+                        alignment: buffer.alignment(),
+                        allocation_bytes: bytes,
+                        abi_arguments: Vec::new(),
+                    },
+                );
+                (allocation, 0, bytes, buffer.element(), buffer.access())
+            }
+            SimulationArgumentV1::BufferView(view) => {
+                let allocation = *shared_allocations.get(&view.backing()).ok_or_else(|| {
+                    "admitted diagnosis buffer view backing is missing".to_owned()
+                })?;
+                let element_bytes =
+                    diagnosis_scalar_bytes_v2(view.element(), input.simulation_target())?;
+                let bytes = u64::try_from(view.elements())
+                    .ok()
+                    .and_then(|elements| elements.checked_mul(element_bytes))
+                    .ok_or_else(|| "diagnosis buffer view length overflow".to_owned())?;
+                (
+                    allocation,
+                    u64::try_from(view.byte_offset())
+                        .map_err(|_| "diagnosis buffer view offset does not fit u64".to_owned())?,
+                    bytes,
+                    view.element(),
+                    view.access(),
+                )
+            }
+        };
+        let (kind, abi_element, address_space, abi_access) = match ty {
+            Type::Pointer(pointer) => (
+                DiagnosisAbiArgumentKindV2::Pointer,
+                pointer.pointee.as_scalar(),
+                pointer.address_space,
+                pointer.access,
+            ),
+            Type::Slice(slice) => (
+                DiagnosisAbiArgumentKindV2::Slice,
+                slice.element.as_scalar(),
+                slice.address_space,
+                slice.access,
+            ),
+            _ => return Err("admitted diagnosis buffer ABI type changed".to_owned()),
+        };
+        if abi_element != Some(element) || abi_access != argument_access {
+            return Err("admitted diagnosis buffer ABI contract changed".to_owned());
+        }
+        pending
+            .get_mut(&allocation)
+            .ok_or_else(|| "diagnosis allocation contract is missing".to_owned())?
+            .abi_arguments
+            .push(DiagnosisAbiArgumentV2 {
+                ordinal: u32::try_from(ordinal)
+                    .map_err(|_| "diagnosis ABI ordinal does not fit u32".to_owned())?,
+                kind,
+                element: diagnosis_scalar_type_v2(element, input.simulation_target()),
+                address_space: diagnosis_address_space_v2(address_space),
+                access: diagnosis_access_v2(abi_access),
+                view_offset,
+                view_bytes,
+            });
+    }
+
+    pending
+        .into_iter()
+        .map(|(allocation, pending)| {
+            let abi_argument = match pending.abi_arguments.as_slice() {
+                [argument] => DiagnosisFactV2::Declared { value: *argument },
+                [] => DiagnosisFactV2::Unavailable {
+                    reason: DiagnosisUnavailableReasonV2::NotApplicable,
+                },
+                _ => DiagnosisFactV2::Unavailable {
+                    reason: DiagnosisUnavailableReasonV2::AmbiguousAbiBinding,
+                },
+            };
+            Ok((
+                allocation,
+                DiagnosisAllocationContractV2 {
+                    address_space: pending.address_space,
+                    access: pending.access,
+                    alignment: pending.alignment,
+                    allocation_bytes: pending.allocation_bytes,
+                    abi_argument,
+                },
+            ))
+        })
+        .collect()
+}
+
+fn diagnosis_scalar_bytes_v2(
+    scalar: ScalarType,
+    target: SimulationTargetV1,
+) -> Result<u64, String> {
+    let bits = match scalar {
+        ScalarType::Bool => 1,
+        ScalarType::Index => match target.index_width() {
+            IndexWidthV1::Bits32 => 32,
+            IndexWidthV1::Bits64 => 64,
+        },
+        _ => scalar
+            .bit_width()
+            .ok_or_else(|| "diagnosis scalar width is unavailable".to_owned())?,
+    };
+    Ok(if bits == 1 { 1 } else { u64::from(bits / 8) })
+}
+
+const fn diagnosis_scalar_type_v2(
+    scalar: ScalarType,
+    target: SimulationTargetV1,
+) -> DiagnosisScalarTypeV2 {
+    match scalar {
+        ScalarType::Bool => DiagnosisScalarTypeV2::Bool,
+        ScalarType::I8 => DiagnosisScalarTypeV2::I8,
+        ScalarType::I16 => DiagnosisScalarTypeV2::I16,
+        ScalarType::I32 => DiagnosisScalarTypeV2::I32,
+        ScalarType::I64 => DiagnosisScalarTypeV2::I64,
+        ScalarType::I128 => DiagnosisScalarTypeV2::I128,
+        ScalarType::U8 => DiagnosisScalarTypeV2::U8,
+        ScalarType::U16 => DiagnosisScalarTypeV2::U16,
+        ScalarType::U32 => DiagnosisScalarTypeV2::U32,
+        ScalarType::U64 => DiagnosisScalarTypeV2::U64,
+        ScalarType::U128 => DiagnosisScalarTypeV2::U128,
+        ScalarType::Index => match target.index_width() {
+            IndexWidthV1::Bits32 => DiagnosisScalarTypeV2::Index32,
+            IndexWidthV1::Bits64 => DiagnosisScalarTypeV2::Index64,
+        },
+        ScalarType::F16 => DiagnosisScalarTypeV2::F16,
+        ScalarType::Bf16 => DiagnosisScalarTypeV2::Bf16,
+        ScalarType::F32 => DiagnosisScalarTypeV2::F32,
+        ScalarType::F64 => DiagnosisScalarTypeV2::F64,
+    }
+}
+
+const fn diagnosis_access_v2(access: AccessMode) -> DiagnosisAccessModeV2 {
+    match access {
+        AccessMode::ReadOnly => DiagnosisAccessModeV2::ReadOnly,
+        AccessMode::ReadWrite => DiagnosisAccessModeV2::ReadWrite,
+    }
+}
+
+const fn diagnosis_address_space_v2(address_space: AddressSpace) -> AddressSpaceV1 {
+    match address_space {
+        AddressSpace::Private => AddressSpaceV1::Private,
+        AddressSpace::Workgroup => AddressSpaceV1::Workgroup,
+        AddressSpace::Global => AddressSpaceV1::Global,
+        AddressSpace::Constant => AddressSpaceV1::Constant,
+        AddressSpace::Generic => AddressSpaceV1::Generic,
+    }
+}
+
+const fn diagnosis_synchronization_scope_v2(
+    scope: SynchronizationScope,
+) -> DiagnosisSynchronizationScopeV2 {
+    match scope {
+        SynchronizationScope::Invocation => DiagnosisSynchronizationScopeV2::Invocation,
+        SynchronizationScope::Subgroup => DiagnosisSynchronizationScopeV2::Subgroup,
+        SynchronizationScope::Workgroup => DiagnosisSynchronizationScopeV2::Workgroup,
+        SynchronizationScope::Device => DiagnosisSynchronizationScopeV2::Device,
+        SynchronizationScope::System => DiagnosisSynchronizationScopeV2::System,
+    }
+}
+
+const fn diagnosis_memory_ordering_v2(ordering: MemoryOrdering) -> DiagnosisMemoryOrderingV2 {
+    match ordering {
+        MemoryOrdering::Relaxed => DiagnosisMemoryOrderingV2::Relaxed,
+        MemoryOrdering::Acquire => DiagnosisMemoryOrderingV2::Acquire,
+        MemoryOrdering::Release => DiagnosisMemoryOrderingV2::Release,
+        MemoryOrdering::AcquireRelease => DiagnosisMemoryOrderingV2::AcquireRelease,
+        MemoryOrdering::SequentiallyConsistent => DiagnosisMemoryOrderingV2::SequentiallyConsistent,
+    }
+}
+
+fn diagnosis_failed_lds_epoch_v2(phase: u64) -> DiagnosisLdsEpochV2 {
+    DiagnosisLdsEpochV2 {
+        current: DiagnosisFactV2::Observed { value: phase },
+        after_release: DiagnosisFactV2::Unavailable {
+            reason: DiagnosisUnavailableReasonV2::BarrierNotReleased,
+        },
+    }
 }
 
 fn configuration_identity(

@@ -79,7 +79,19 @@ region, barrier participant, and phase fact is individually labeled
 with a closed reason. In this schema `observed` always means a CPU semantic
 simulation observation. The response validator rejects KFD hardware sessions,
 hardware-observation substitution, invalid hierarchy joins, in-bounds ranges
-claimed as out of bounds, and incompatible finding/detail pairs.
+claimed as out of bounds, and incompatible finding/detail pairs. It also joins
+the session configuration to the diagnosis, re-derives the domain-separated
+request/KIR dispatch-input identity, checks bundle/map/subject and source-site
+bindings, checks allocation/ABI view bounds, and requires barrier phase,
+semantics, LDS epoch, participant, and mismatch fields to agree.
+
+Bundle, KIR, request, ABI, source-map, and source-lineage references are exact
+declared content associations. A source operation retains the source map's
+`caller_bound` or `compiler_bundle_bound` provenance. Source-lineage receipts
+are never property or proof evidence. Finalized artifacts and property proofs
+remain typed unavailable until a separately authenticated authority can supply
+those records. Raw KIR input remains supported and reports every absent bundle,
+map, source, artifact, and proof axis with a closed unavailable reason.
 
 Diagnosis is retrospective over the immutable bounded transcript and terminal
 failure, independent of the interactive cursor. Filters and page cursors are

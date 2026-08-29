@@ -27,9 +27,27 @@ pub struct AdmittedSimulationInputV1 {
     simulation_bundle_subject: Option<[u8; 32]>,
     /// Complete content identity of the exact admitted canonical bundle bytes.
     simulation_bundle_identity: Option<[u8; 32]>,
+    simulation_bundle_evidence: Option<AdmittedSimulationBundleEvidenceV1>,
     pub kir_sha256: [u8; 32],
     pub request_sha256: [u8; 32],
     request_bytes: u64,
+}
+
+/// Bounded exact content references retained from a verified simulation bundle.
+/// These references grant no compiler, proof, artifact, load, launch, or hardware authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AdmittedSimulationBundleEvidenceV1 {
+    pub envelope_version: u16,
+    pub envelope_identity: [u8; 32],
+    pub subject_identity: [u8; 32],
+    pub production_kir_version: u16,
+    pub production_kir_sha256: [u8; 32],
+    pub production_kir_bytes: u64,
+    pub kernel_abi_identity: [u8; 32],
+    pub identity_inventory_receipt_sha256: [u8; 32],
+    pub identity_inventory_receipt_bytes: u64,
+    pub preflight_plan_receipt_sha256: [u8; 32],
+    pub preflight_plan_receipt_bytes: u64,
 }
 
 impl AdmittedSimulationInputV1 {
@@ -44,6 +62,11 @@ impl AdmittedSimulationInputV1 {
     /// Complete canonical bundle identity retained during exact admission.
     pub const fn simulation_bundle_identity(&self) -> Option<[u8; 32]> {
         self.simulation_bundle_identity
+    }
+
+    /// Exact authority-free bundle and source-lineage references retained at admission.
+    pub const fn simulation_bundle_evidence(&self) -> Option<AdmittedSimulationBundleEvidenceV1> {
+        self.simulation_bundle_evidence
     }
 
     /// Exact byte length of the strictly admitted request document.

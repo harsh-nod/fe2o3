@@ -6,10 +6,10 @@ use std::process::{Command, Stdio};
 use fe2o3_debug_protocol::*;
 use fe2o3_kernel_ir::{
     AddressSpace, Axis, BarrierSemantics, BasicBlock, BlockId, ComparePredicate, Constant,
-    Convergence, Function, IndexKind, IntrinsicKind, IntrinsicOperation, Kernel, LaunchDomain,
-    LaunchExtent, MemoryOrdering, Module, Operation, OperationKind, Signature,
-    SynchronizationScope, TargetCapability, Terminator, Type, ValueDef, ValueId,
-    VerifiedCanonicalKernelIrV7, WorkgroupBarrier,
+    Convergence, DebugSourceMapDocumentV1, DebugSourceMapDocumentV2, Function, IndexKind,
+    IntrinsicKind, IntrinsicOperation, Kernel, LaunchDomain, LaunchExtent, MemoryOrdering, Module,
+    Operation, OperationKind, Signature, SynchronizationScope, TargetCapability, Terminator, Type,
+    ValueDef, ValueId, VerifiedCanonicalKernelIrV7, WorkgroupBarrier,
 };
 
 fn workspace_root() -> PathBuf {
@@ -21,11 +21,21 @@ fn workspace_root() -> PathBuf {
 }
 
 fn run_debugger(kernel: &Path, request: &Path, requests: &[u8]) -> std::process::Output {
+    run_debugger_with_args(kernel, request, &[], requests)
+}
+
+fn run_debugger_with_args(
+    kernel: &Path,
+    request: &Path,
+    args: &[&str],
+    requests: &[u8],
+) -> std::process::Output {
     let mut child = Command::new(env!("CARGO_BIN_EXE_fe2o3-debug"))
         .args(["sim", "--kir-v7"])
         .arg(kernel)
         .arg("--request")
         .arg(request)
+        .args(args)
         .args(["--protocol", "jsonl"])
         .current_dir(workspace_root())
         .stdin(Stdio::piped())
@@ -40,6 +50,10 @@ fn run_debugger(kernel: &Path, request: &Path, requests: &[u8]) -> std::process:
         .write_all(requests)
         .expect("write debugger requests");
     child.wait_with_output().expect("wait for debugger")
+}
+
+fn hex_identity(identity: [u8; 32]) -> String {
+    identity.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 fn response_lines(bytes: &[u8]) -> Vec<&[u8]> {
@@ -110,6 +124,48 @@ fn seeded_out_of_bounds_diagnosis_is_structured_and_truth_labeled() {
     assert_eq!(diagnoses.len(), 1);
     let diagnosis = &diagnoses[0];
     assert_eq!(diagnosis.class, DiagnosisClassV2::MemoryOutOfBounds);
+    assert_eq!(
+        diagnosis.input.configuration_identity,
+        session.configuration_identity
+    );
+    assert!(matches!(
+        diagnosis.input.dispatch_request,
+        DiagnosisFactV2::Declared { .. }
+    ));
+    assert!(matches!(
+        diagnosis.input.canonical_kir_v7,
+        DiagnosisFactV2::Declared { .. }
+    ));
+    assert!(matches!(
+        diagnosis.input.simulation_bundle,
+        DiagnosisFactV2::Unavailable {
+            reason: DiagnosisUnavailableReasonV2::InputNotProvided
+        }
+    ));
+    assert!(matches!(
+        diagnosis.input.source_map_v2,
+        DiagnosisFactV2::Unavailable {
+            reason: DiagnosisUnavailableReasonV2::InputNotProvided
+        }
+    ));
+    assert!(matches!(
+        diagnosis.source_operation,
+        DiagnosisFactV2::Unavailable {
+            reason: DiagnosisUnavailableReasonV2::InputNotProvided
+        }
+    ));
+    assert!(matches!(
+        diagnosis.input.finalized_artifact,
+        DiagnosisFactV2::Unavailable {
+            reason: DiagnosisUnavailableReasonV2::NoArtifactAuthority
+        }
+    ));
+    assert!(matches!(
+        diagnosis.input.property_proof,
+        DiagnosisFactV2::Unavailable {
+            reason: DiagnosisUnavailableReasonV2::NoProofAuthority
+        }
+    ));
     assert!(matches!(
         diagnosis.context.dispatch,
         DiagnosisFactV2::Declared { .. }
@@ -143,10 +199,141 @@ fn seeded_out_of_bounds_diagnosis_is_structured_and_truth_labeled() {
             }
         }
     ));
+    let DiagnosisFactV2::Observed { value: region } = &diagnosis.memory_region else {
+        panic!("memory region evidence is missing")
+    };
+    assert!(matches!(
+        region.allocation_contract,
+        DiagnosisFactV2::Declared {
+            value: DiagnosisAllocationContractV2 {
+                address_space: AddressSpaceV1::Global,
+                access: DiagnosisAccessModeV2::ReadWrite,
+                alignment: 4,
+                allocation_bytes: 4,
+                abi_argument: DiagnosisFactV2::Declared {
+                    value: DiagnosisAbiArgumentV2 {
+                        ordinal: 0,
+                        element: DiagnosisScalarTypeV2::U32,
+                        address_space: AddressSpaceV1::Global,
+                        access: DiagnosisAccessModeV2::ReadWrite,
+                        view_offset: 0,
+                        view_bytes: 4,
+                        ..
+                    }
+                }
+            }
+        }
+    ));
     assert!(matches!(
         diagnosis.barrier,
         DiagnosisFactV2::Unavailable {
             reason: DiagnosisUnavailableReasonV2::NotApplicable
+        }
+    ));
+}
+
+#[test]
+fn caller_bound_source_map_v2_resolves_exact_oob_operation_without_authority() {
+    let root = workspace_root();
+    let stem = format!("fe2o3-debug-diagnosis-source-v2-{}", std::process::id());
+    let request_path = std::env::temp_dir().join(format!("{stem}-request.json"));
+    let map_path = std::env::temp_dir().join(format!("{stem}-source-map.json"));
+    fs::write(
+        &request_path,
+        br#"{"schema":"fe2o3-simulation-request-v1","kernel":"fill","grid":[4,1,1],"workgroup":[64,1,1],"arguments":[{"kind":"buffer","element":"u32","access":"read_write","alignment":4,"bytes":"0x00000000"}]}"#,
+    )
+    .unwrap();
+    let source_map_v1 = DebugSourceMapDocumentV1::from_json_bytes(
+        &fs::read(root.join("crates/fe2o3-debug-cli/tutorial/fill-v1/source-map.json")).unwrap(),
+    )
+    .unwrap();
+    let bundle_subject = source_map_v1.binding().bundle_subject_identity();
+    let source_map_v2 = DebugSourceMapDocumentV2::new(
+        source_map_v1.binding(),
+        source_map_v1.files().to_vec(),
+        source_map_v1.sites().to_vec(),
+        source_map_v1.eliminated().to_vec(),
+        vec![],
+        vec![],
+    )
+    .unwrap();
+    fs::write(&map_path, source_map_v2.to_canonical_json_bytes().unwrap()).unwrap();
+    let map_path_text = map_path.to_str().unwrap();
+    let subject_text = hex_identity(bundle_subject);
+    let requests = br#"{"operation":"continue","schema":"fe2o3-debug-request-v1","request_id":31,"expected_revision":0,"max_events":1000000}
+{"operation":"diagnose","schema":"fe2o3-debug-diagnosis-request-v2","request_id":32,"expected_revision":1,"filter":{"class":"memory_out_of_bounds"},"page":{"limit":1}}
+"#;
+    let output = run_debugger_with_args(
+        &root.join("crates/fe2o3-kir-sim-cli/tutorial/fill-v1/kernel.kir"),
+        &request_path,
+        &[
+            "--source-map",
+            map_path_text,
+            "--source-bundle-subject",
+            &subject_text,
+        ],
+        requests,
+    );
+    let _ = fs::remove_file(request_path);
+    let _ = fs::remove_file(map_path);
+    assert!(
+        output.status.success(),
+        "debugger failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stderr.is_empty());
+    let lines = response_lines(&output.stdout);
+    assert_eq!(lines.len(), 2);
+    let response =
+        decode_diagnosis_response_line_v2(lines[1], ProtocolLimitsV1::default()).unwrap();
+    let DiagnosisResponseV2::Ok { diagnoses, .. } = response else {
+        panic!("diagnosis failed")
+    };
+    let [diagnosis] = diagnoses.as_slice() else {
+        panic!("expected one diagnosis")
+    };
+    let DiagnosisFactV2::Declared { value: map } = diagnosis.input.source_map_v2 else {
+        panic!("source map V2 evidence is missing")
+    };
+    assert_eq!(map.bundle_subject_identity.as_bytes(), bundle_subject);
+    assert_eq!(map.provenance, SourceMapProvenanceV1::CallerBound);
+    assert!(matches!(
+        diagnosis.input.simulation_bundle,
+        DiagnosisFactV2::Unavailable {
+            reason: DiagnosisUnavailableReasonV2::InputNotProvided
+        }
+    ));
+    let DiagnosisFactV2::Declared { value: source } = diagnosis.source_operation else {
+        panic!("source operation evidence is missing")
+    };
+    assert_eq!(source.bundle_subject_identity, map.bundle_subject_identity);
+    assert_eq!(
+        source.kir_site,
+        KirSiteV1 {
+            function_ordinal: 0,
+            block_ordinal: 0,
+            point: KirSitePointV1::Operation {
+                operation_ordinal: 3
+            }
+        }
+    );
+    assert_eq!(source.location.map_identity, map.identity);
+    assert_eq!(
+        source.location.provenance,
+        SourceMapProvenanceV1::CallerBound
+    );
+    assert_eq!(source.location.byte_start, 97);
+    assert_eq!(source.location.byte_end, 125);
+    assert!(matches!(
+        diagnosis.input.finalized_artifact,
+        DiagnosisFactV2::Unavailable {
+            reason: DiagnosisUnavailableReasonV2::NoArtifactAuthority
+        }
+    ));
+    assert!(matches!(
+        diagnosis.input.property_proof,
+        DiagnosisFactV2::Unavailable {
+            reason: DiagnosisUnavailableReasonV2::NoProofAuthority
         }
     ));
 }
@@ -286,16 +473,39 @@ fn seeded_barrier_divergence_names_phase_and_participant_origins() {
         value:
             DiagnosisBarrierV2::Divergence {
                 phase,
+                semantics,
+                lds_epoch,
                 observed_arrivals,
                 expected_participants,
                 waiting,
                 exited,
+                ..
             },
     } = &diagnosis.barrier
     else {
         panic!("barrier evidence is missing")
     };
     assert!(matches!(phase, DiagnosisFactV2::Observed { value: 0 }));
+    assert!(matches!(
+        semantics,
+        DiagnosisFactV2::Declared {
+            value: DiagnosisBarrierSemanticsV2 {
+                memory_scope: DiagnosisSynchronizationScopeV2::Workgroup,
+                ordering: DiagnosisMemoryOrderingV2::AcquireRelease,
+                address_spaces,
+            }
+        } if address_spaces == &[AddressSpaceV1::Workgroup]
+    ));
+    assert!(matches!(
+        lds_epoch.current,
+        DiagnosisFactV2::Observed { value: 0 }
+    ));
+    assert!(matches!(
+        lds_epoch.after_release,
+        DiagnosisFactV2::Unavailable {
+            reason: DiagnosisUnavailableReasonV2::BarrierNotReleased
+        }
+    ));
     assert!(matches!(
         observed_arrivals,
         DiagnosisFactV2::Observed { value: 1 }

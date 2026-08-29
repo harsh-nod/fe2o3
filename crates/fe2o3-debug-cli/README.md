@@ -74,10 +74,24 @@ arithmetic.
 `fe2o3-debug-diagnosis-request-v2` adds a read-only, page-bounded diagnosis
 query to the same simulator JSONL stream without changing the closed V1
 operation set. For a retained out-of-bounds failure it returns the exact
-trace-local allocation and requested/available byte range. For retained
-workgroup-barrier divergence it returns the exact phase and waiting/exited
-local participants, the observed arrival count when the transcript is
-complete, and the participant count derived from admitted launch geometry.
+trace-local allocation and requested/available byte range plus the admitted
+allocation and uniquely joined kernel-ABI argument contract. For retained
+workgroup-barrier divergence it returns the exact phase, declared scope,
+ordering and address-space semantics, current LDS epoch, waiting/exited local
+participants, the observed arrival count when the transcript is complete, and
+the expected participant count derived from admitted launch geometry. An LDS
+epoch after a barrier that did not release remains unavailable.
+
+Every diagnosis also binds the stable simulator configuration, a
+domain-separated identity of the exact request and canonical KIR dispatch
+input, and the exact KIR operation when retained. A Source Map V2 can add the
+exact source operation and span with its existing caller- or bundle-bound
+provenance. Verified bundle envelopes add exact envelope, inner subject,
+production-KIR, ABI, and source-lineage receipt references. Those references
+are content association only: the debugger does not relabel lineage receipts
+as property proofs, and finalized artifact/property fields remain typed
+unavailable without independent authority.
+
 Dispatch geometry is `declared`; terminal invocation, KIR site, dynamic range,
 phase, and local participants are CPU-semantic `observed` facts; global
 participant coordinates and logical wave/lane partitions are `inferred` with
@@ -102,8 +116,8 @@ lane is `running` and other released lanes are `runnable` until their next
 record.
 
 `--source-map MAP --source-bundle-subject SUBJECT` admits a strict, bounded
-`fe2o3-debug-source-map-v1` sidecar. Both options are required together. The
-map binds the canonical KIR digest and length plus a non-circular
+canonical `fe2o3-debug-source-map-v1` or `fe2o3-debug-source-map-v2` sidecar.
+Both options are required together. The map binds the canonical KIR digest and length plus a non-circular
 compiler-bundle subject identity. The wire map binds these compile-time facts
 only. Admission derives the complete runtime simulation configuration from the
 admitted request and wave width, then the backend rechecks that internal
@@ -116,7 +130,8 @@ source stepping return distinct absent, eliminated, and many-to-one states.
 
 This command-line pair is a low-level/test consistency boundary. Because the
 caller supplies both documents, it is labeled `caller_bound`, not compiler
-provenance. Production compiler integration must call
+provenance. A loose V2 map can resolve diagnosis source operations and V2
+source-variable records, but its provenance is still caller-bound. Production compiler integration must call
 `run_admitted_jsonl_with_compiler_source_map_v1` with exact map bytes, the
 verified bundle subject, and the bundle-committed map identity obtained from the
 same compiler extraction/bundle decode transaction. Only that path emits

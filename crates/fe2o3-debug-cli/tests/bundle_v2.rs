@@ -123,6 +123,9 @@ fn explicit_v2_bundle_route_queries_a_real_checkpoint_without_authority() {
     let inner = inner_bundle();
     let source_map = test_authored_source_map_v2(&inner);
     let bundle = VerifiedSimulationBundleV2::new(inner, source_map).unwrap();
+    let envelope_identity = *bundle.identity().as_bytes();
+    let inner_subject_identity = *bundle.subject_identity();
+    assert_ne!(envelope_identity, inner_subject_identity);
     assert!(!bundle.authenticates_compiler_execution());
     assert!(!bundle.grants_compiler_authority());
     assert!(!bundle.grants_load_authority());
@@ -140,6 +143,14 @@ fn explicit_v2_bundle_route_queries_a_real_checkpoint_without_authority() {
     assert!(!admitted.grants_hardware_authority());
     assert!(!admitted.grants_load_authority());
     assert!(!admitted.grants_launch_authority());
+    let evidence = admitted
+        .input()
+        .simulation_bundle_evidence()
+        .expect("V2 bundle admission retains exact authority-free evidence");
+    assert_eq!(evidence.envelope_version, 2);
+    assert_eq!(evidence.envelope_identity, envelope_identity);
+    assert_eq!(evidence.subject_identity, inner_subject_identity);
+    assert_ne!(evidence.envelope_identity, evidence.subject_identity);
     assert!(fe2o3_kir_sim_cli::load_debug_simulation_bundle_v1(&bundle_path, &request).is_err());
 
     let requests = concat!(
