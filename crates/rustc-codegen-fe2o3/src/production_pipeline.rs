@@ -1787,16 +1787,14 @@ impl<'tcx> ProductionCompilation<'tcx, EquivalentSemanticMirStage> {
             semantic_mir.semantic(),
         )
         .map_err(ProductionPipelineError::DescriptorEvidence)?;
-        let [typed_root] = bindings.typed_descriptor_roots.as_slice() else {
-            return Err(ProductionPipelineError::Geometry(
-                crate::production_geometry_v1::ProductionGeometryErrorV1::KernelClosure,
-            ));
+        let source_launch = match bindings.typed_descriptor_roots.as_slice() {
+            [typed_root] => Some(typed_root.source_launch().ok_or(
+                ProductionPipelineError::Geometry(
+                    crate::production_geometry_v1::ProductionGeometryErrorV1::NonExactDescriptorWorkgroup,
+                ),
+            )?),
+            _ => None,
         };
-        let source_launch = typed_root
-            .source_launch()
-            .ok_or(ProductionPipelineError::Geometry(
-            crate::production_geometry_v1::ProductionGeometryErrorV1::NonExactDescriptorWorkgroup,
-        ))?;
         let ranked =
             crate::production_ranked_projection_v1::project_and_verify_ranked_semantic_mir_v1(
                 semantic_mir,

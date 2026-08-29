@@ -951,7 +951,7 @@ impl std::error::Error for ProductionRankedProjectionErrorV1 {
 
 pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
     semantic_owner: ProductionSemanticMirOwnerV1,
-    source_launch: &LaunchContract,
+    source_launch: Option<&LaunchContract>,
     reference_bindings: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
 ) -> Result<ProductionRankedSemanticProgramV1, ProductionRankedProjectionErrorV1> {
     semantic_owner
@@ -983,6 +983,9 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
             "a root without the KernelRoot role",
         ));
     }
+    let source_launch = source_launch.ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+        "a selected semantic kernel without one rustc-derived source launch",
+    ))?;
 
     let constants = constant_locals(function);
     let mut entry_operations = vec![source_execution_layout_v1(

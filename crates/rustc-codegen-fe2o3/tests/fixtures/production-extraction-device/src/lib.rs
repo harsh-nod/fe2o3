@@ -3,6 +3,7 @@
 use fe2o3_device::{DisjointSlice, kernel, thread};
 
 #[cfg(not(any(
+    feature = "multi-root-ownership",
     feature = "reference-positive",
     feature = "reference-mutated",
     feature = "reference-unsafe",
@@ -32,6 +33,24 @@ pub fn fill(mut output: DisjointSlice<u32>) {
     let index = thread::index_1d();
     if let Some(element) = output.get_mut(index) {
         *element = 17;
+    }
+}
+
+#[cfg(feature = "multi-root-ownership")]
+#[kernel(typed)]
+pub fn alpha(mut output: DisjointSlice<u32>) {
+    let index = thread::index_1d();
+    if let Some(element) = output.get_mut(index) {
+        *element = 17;
+    }
+}
+
+#[cfg(feature = "multi-root-ownership")]
+#[kernel(typed)]
+pub fn zeta(mut output: DisjointSlice<u32>) {
+    let index = thread::index_1d();
+    if let Some(element) = output.get_mut(index) {
+        *element = 23;
     }
 }
 

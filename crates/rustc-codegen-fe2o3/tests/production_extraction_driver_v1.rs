@@ -183,6 +183,73 @@ fn attributed_kernel_is_recollected_inside_a_real_amdgcn_dependency_graph() {
     );
 }
 
+#[test]
+#[ignore = "requires the pinned nightly rust-src component and AMD target"]
+fn two_kernel_collection_clears_exact_semantic_ownership_before_ranked_projection_rejects_it() {
+    let target = ScratchTarget::new();
+    let output = Command::new(env!("CARGO"))
+        .current_dir(workspace())
+        .env(
+            "RUSTC_WORKSPACE_WRAPPER",
+            env!("CARGO_BIN_EXE_fe2o3-rustc-extract"),
+        )
+        .env(
+            "FE2O3_EXTRACT_CRATE_V1",
+            "fe2o3_production_extraction_fixture",
+        )
+        .env("FE2O3_EXTRACT_RANKED_MEMORY_V1", "1")
+        .env(
+            "FE2O3_CARGO_METADATA_BUILD_OBSERVATION_V2",
+            "55".repeat(32),
+        )
+        .env("FE2O3_CRATE_BINDING_ID_V1", "77".repeat(32))
+        .env_remove("RUSTFLAGS")
+        .env_remove("CARGO_ENCODED_RUSTFLAGS")
+        .env(
+            "CARGO_TARGET_AMDGCN_AMD_AMDHSA_RUSTFLAGS",
+            "-Zalways-encode-mir -Ctarget-cpu=gfx942 -Ctarget-feature=-xnack,+wavefrontsize64,-wavefrontsize32",
+        )
+        .args([
+            "check",
+            "--locked",
+            "-Zbuild-std=core",
+            "-p",
+            "fe2o3-production-extraction-fixture",
+            "--features",
+            "multi-root-ownership",
+            "--target",
+            "amdgcn-amd-amdhsa",
+            "--target-dir",
+        ])
+        .arg(&target.path)
+        .output()
+        .expect("run two-kernel AMD extraction fixture");
+    let stderr = String::from_utf8(output.stderr).expect("rustc diagnostic is UTF-8");
+
+    assert!(
+        !output.status.success(),
+        "two-kernel production extraction unexpectedly cleared the one-root ranked projection boundary",
+    );
+    let expected = "production compilation general kernel verification failed: semantic-to-ranked projection rejected a semantic closure that is neither one kernel root nor one transparent Result wrapper";
+    assert_eq!(
+        stderr.matches(expected).count(),
+        1,
+        "two-kernel production extraction did not stop at the exact ranked-projection boundary:\n{stderr}",
+    );
+    for forbidden in [
+        "production descriptor evidence has an internal",
+        "production compilation geometry validation failed",
+        "production extraction found no registered kernel",
+        "one complete typed root",
+        "one semantic root",
+    ] {
+        assert!(
+            !stderr.contains(forbidden),
+            "two-kernel production extraction entered an earlier forbidden path {forbidden:?}:\n{stderr}",
+        );
+    }
+}
+
 fn run_extraction(target: &ScratchTarget) -> String {
     let output = Command::new(env!("CARGO"))
         .current_dir(workspace())
