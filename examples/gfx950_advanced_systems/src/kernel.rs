@@ -15,20 +15,14 @@ use crate::{
     TOP_K,
 };
 
-#[cfg(any(not(target_arch = "amdgpu"), feature = "kernel-moe-route"))]
-#[inline(never)]
-fn decode_route_fp4(bits: u8) -> f32 {
-    let magnitude = ((0xc864_3210_u32 >> (((bits & 7) as u32) * 4)) & 15) as f32 * 0.5;
-    let sign = 1.0 - 2.0 * ((bits >> 3) & 1) as f32;
-    sign * magnitude
-}
 
 /// Stable top-2 routing, weights, expert counts, and compact dispatch metadata.
 #[cfg(any(not(target_arch = "amdgpu"), feature = "kernel-moe-route"))]
 #[kernel(
     typed,
     namespace = "5f88dd0eb7d763b42a77dce26f06a50c315730e6a77414e64480fd94f7e9e690",
-    launch(required = [256, 1, 1], max = [256, 1, 1], max_grid = [1, 1, 1])
+    launch(required = [256, 1, 1], max = [256, 1, 1], max_grid = [1, 1, 1]),
+    control_flow(loop_bounds(128, 32))
 )]
 #[allow(clippy::too_many_arguments, unused_assignments)]
 pub fn gfx950_moe_route_fp4_t16_e4_k2_v1(
@@ -49,50 +43,32 @@ pub fn gfx950_moe_route_fp4_t16_e4_k2_v1(
     {
         return;
     }
+    let Ok(router_weights) = StridedReadView2D::from_shared_slice(router_weights, 0, EXPERTS, HIDDEN, HIDDEN) else {
+        return;
+    };
     let wave_lane = lane & 63;
     let token = wave_lane & (TOKENS - 1);
-    let activation_base = token * HIDDEN;
+    let Ok(activations) =
+        StridedReadView2D::from_shared_slice(activations, 0, TOKENS, HIDDEN, HIDDEN)
+    else {
+        return;
+    };
     let mut route_logit0 = 0.0_f32;
     let mut route_logit1 = 0.0_f32;
     let mut route_logit2 = 0.0_f32;
     let mut route_logit3 = 0.0_f32;
-    macro_rules! accumulate_depth {
-        ($depth:expr) => {{
-            let activation = decode_route_fp4(activations[activation_base + $depth]);
-            route_logit0 += activation * router_weights[$depth];
-            route_logit1 += activation * router_weights[HIDDEN + $depth];
-            route_logit2 += activation * router_weights[2 * HIDDEN + $depth];
-            route_logit3 += activation * router_weights[3 * HIDDEN + $depth];
-        }};
+    let mut depth = 0_usize;
+    while depth < HIDDEN {
+        let bits = activations.load_or(token, depth, 0);
+        let magnitude = ((0xc864_3210_u32 >> (((bits & 7) as u32) * 4)) & 15) as f32 * 0.5;
+        let sign = 1.0 - 2.0 * ((bits >> 3) & 1) as f32;
+        let activation = sign * magnitude;
+        route_logit0 += activation * router_weights.load_or(0, depth, 0.0);
+        route_logit1 += activation * router_weights.load_or(1, depth, 0.0);
+        route_logit2 += activation * router_weights.load_or(2, depth, 0.0);
+        route_logit3 += activation * router_weights.load_or(3, depth, 0.0);
+        depth += 1;
     }
-    macro_rules! accumulate_eight {
-        ($base:expr) => {{
-            accumulate_depth!($base);
-            accumulate_depth!($base + 1);
-            accumulate_depth!($base + 2);
-            accumulate_depth!($base + 3);
-            accumulate_depth!($base + 4);
-            accumulate_depth!($base + 5);
-            accumulate_depth!($base + 6);
-            accumulate_depth!($base + 7);
-        }};
-    }
-    accumulate_eight!(0);
-    accumulate_eight!(8);
-    accumulate_eight!(16);
-    accumulate_eight!(24);
-    accumulate_eight!(32);
-    accumulate_eight!(40);
-    accumulate_eight!(48);
-    accumulate_eight!(56);
-    accumulate_eight!(64);
-    accumulate_eight!(72);
-    accumulate_eight!(80);
-    accumulate_eight!(88);
-    accumulate_eight!(96);
-    accumulate_eight!(104);
-    accumulate_eight!(112);
-    accumulate_eight!(120);
     let precedes12 = (route_logit1 >= route_logit2) as u32;
     let precedes13 = (route_logit1 >= route_logit3) as u32;
     let precedes23 = (route_logit2 >= route_logit3) as u32;
@@ -171,53 +147,22 @@ pub fn gfx950_moe_route_fp4_t16_e4_k2_v1(
             *slot = weight;
         }
     }
-    let expert = (lane / DISPATCH_CAPACITY) as u32;
-    let wanted = lane - expert as usize * DISPATCH_CAPACITY;
+    let dispatch_expert = (lane / DISPATCH_CAPACITY) as u32;
+    let count_expert = lane as u32;
+    let wanted = lane - dispatch_expert as usize * DISPATCH_CAPACITY;
     let mut seen = 0_usize;
     let mut dispatched = -1_i32;
     let mut count = 0_u32;
-    macro_rules! scan_record {
-        ($record:literal) => {{
-            let selected = ((packed_routes >> (2 * $record)) & 3) as u32;
-            let matches = (selected == expert) as usize;
-            let choose = ((matches != 0) & (seen == wanted)) as i32;
-            dispatched += ($record - dispatched) * choose;
-            count += matches as u32;
-            seen += matches;
-        }};
+    let mut record = 0_usize;
+    while record < TOKENS * TOP_K {
+        let selected = ((packed_routes >> (2 * record)) & 3) as u32;
+        let dispatch_matches = (selected == dispatch_expert) as usize;
+        let choose = ((dispatch_matches != 0) & (seen == wanted)) as i32;
+        dispatched += (record as i32 - dispatched) * choose;
+        count += (selected == count_expert) as u32;
+        seen += dispatch_matches;
+        record += 1;
     }
-    scan_record!(0);
-    scan_record!(1);
-    scan_record!(2);
-    scan_record!(3);
-    scan_record!(4);
-    scan_record!(5);
-    scan_record!(6);
-    scan_record!(7);
-    scan_record!(8);
-    scan_record!(9);
-    scan_record!(10);
-    scan_record!(11);
-    scan_record!(12);
-    scan_record!(13);
-    scan_record!(14);
-    scan_record!(15);
-    scan_record!(16);
-    scan_record!(17);
-    scan_record!(18);
-    scan_record!(19);
-    scan_record!(20);
-    scan_record!(21);
-    scan_record!(22);
-    scan_record!(23);
-    scan_record!(24);
-    scan_record!(25);
-    scan_record!(26);
-    scan_record!(27);
-    scan_record!(28);
-    scan_record!(29);
-    scan_record!(30);
-    scan_record!(31);
     if lane < EXPERTS {
         if let Some(slot) = expert_counts.get_mut(thread::index_1d()) {
             *slot = count;
