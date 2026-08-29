@@ -142,6 +142,15 @@ pub struct DurableExternalAnchorV1 {
     poisoned: bool,
 }
 
+/// Whether atomic durable-state admission opened existing state or created genesis.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DurableExternalAnchorOpenDispositionV1 {
+    /// A canonical state file already existed and was strictly admitted.
+    Existing,
+    /// No state file existed and canonical genesis was durably created.
+    Initialized,
+}
+
 impl fmt::Debug for DurableExternalAnchorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -190,6 +199,39 @@ impl DurableExternalAnchorV1 {
             state,
             poisoned: false,
         })
+    }
+
+    /// Atomically opens existing state or creates genesis only when the state file is absent.
+    ///
+    /// Root admission, exclusive locking, abandoned-next cleanup, the exact absence check, and
+    /// genesis creation occur under one retained directory lock. Malformed, inaccessible,
+    /// key-substituted, or otherwise invalid existing state is never reset.
+    pub fn open_or_initialize(
+        root: OwnedFd,
+        signing_key: SigningKey,
+    ) -> Result<(Self, DurableExternalAnchorOpenDispositionV1), ExternalAnchorServiceErrorV1> {
+        let pinned_key = pinned_key(&signing_key)?;
+        admit_and_lock_root(&root)?;
+        remove_leftover_next(&root)?;
+        let (state, disposition) = match read_state(&root, &pinned_key) {
+            Ok(state) => (state, DurableExternalAnchorOpenDispositionV1::Existing),
+            Err(error) if error.is_missing_state_file() => {
+                let state = DurableAnchorStateV1::genesis();
+                create_initial_state(&root, &state.encode(&pinned_key))?;
+                (state, DurableExternalAnchorOpenDispositionV1::Initialized)
+            }
+            Err(error) => return Err(error),
+        };
+        Ok((
+            Self {
+                root,
+                signing_key,
+                pinned_key,
+                state,
+                poisoned: false,
+            },
+            disposition,
+        ))
     }
 
     pub const fn sequence(&self) -> u64 {
@@ -431,6 +473,16 @@ pub enum ExternalAnchorServiceErrorV1 {
     },
 }
 
+impl ExternalAnchorServiceErrorV1 {
+    fn is_missing_state_file(&self) -> bool {
+        matches!(
+            self,
+            Self::Io { operation: "open anchor state", source }
+                if source.raw_os_error() == Some(libc::ENOENT)
+        )
+    }
+}
+
 impl fmt::Display for ExternalAnchorServiceErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -513,8 +565,9 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{
-        DurableAnchorStateV1, DurableExternalAnchorV1, EXTERNAL_ANCHOR_STATE_BYTES_V1,
-        ExternalAnchorServiceErrorV1, NEXT_STATE_FILE, STATE_FILE,
+        DurableAnchorStateV1, DurableExternalAnchorOpenDispositionV1, DurableExternalAnchorV1,
+        EXTERNAL_ANCHOR_STATE_BYTES_V1, ExternalAnchorServiceErrorV1, NEXT_STATE_FILE,
+        STATE_CHECKSUM_OFFSET, STATE_FILE,
     };
 
     fn root() -> (TempDir, File) {
@@ -580,6 +633,41 @@ mod tests {
         assert!(matches!(
             recovery.verify(&response).unwrap(),
             AnchorDecisionV1::Commit(_)
+        ));
+    }
+
+    #[test]
+    fn atomic_open_or_initialize_creates_once_and_never_resets_invalid_state() {
+        let (directory, root) = root();
+        let (signing, _) = keys(19);
+        let (service, disposition) =
+            DurableExternalAnchorV1::open_or_initialize(root.into(), signing).unwrap();
+        assert_eq!(
+            disposition,
+            DurableExternalAnchorOpenDispositionV1::Initialized
+        );
+        assert_eq!(service.sequence(), 0);
+        drop(service);
+
+        let root = File::open(directory.path()).unwrap();
+        let (signing, _) = keys(19);
+        let (service, disposition) =
+            DurableExternalAnchorV1::open_or_initialize(root.into(), signing).unwrap();
+        assert_eq!(
+            disposition,
+            DurableExternalAnchorOpenDispositionV1::Existing
+        );
+        drop(service);
+
+        let state_path = directory.path().join(STATE_FILE);
+        let mut bytes = fs::read(&state_path).unwrap();
+        bytes[STATE_CHECKSUM_OFFSET] ^= 1;
+        fs::write(&state_path, bytes).unwrap();
+        let root = File::open(directory.path()).unwrap();
+        let (signing, _) = keys(19);
+        assert!(matches!(
+            DurableExternalAnchorV1::open_or_initialize(root.into(), signing),
+            Err(ExternalAnchorServiceErrorV1::StateChecksumMismatch)
         ));
     }
 

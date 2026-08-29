@@ -13,6 +13,11 @@ position. Stale, future, malformed, and key-substituted challenges fail closed.
 Any uncertain persistence failure poisons the in-memory service so it cannot
 issue another response before restart and state revalidation.
 
+Provisioning can atomically open existing state or initialize genesis while
+holding the same exclusive directory lock. Genesis is created only for an
+exactly absent state file; malformed, inaccessible, or key-substituted state
+fails closed and is never reset.
+
 The connected-peer transport accepts only an unnamed, nonblocking Unix
 `SOCK_SEQPACKET` with close-on-exec custody. It receives one exact 184-byte
 challenge per packet, rejects truncation and all ancillary data, applies the
