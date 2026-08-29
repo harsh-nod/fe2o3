@@ -24,7 +24,7 @@ kernel-duration substitute.
 Run the complete default campaign on physical GPU 6:
 
 ```bash
-cd /home/harmenon/fe2o3-perf-bench
+cd /path/to/fe2o3
 ROCR_VISIBLE_DEVICES=6 \
   perf-evidence/run-gfx950-advanced-performance.sh \
   /home/harmenon/perf-runs/advanced-$(date -u +%Y%m%dT%H%M%SZ)
@@ -36,6 +36,23 @@ changed with `FE2O3_GFX950_ADVANCED_PERF_WARMUPS`,
 `FE2O3_GFX950_ADVANCED_PERF_SAMPLES_PER_BLOCK`, and
 `FE2O3_GFX950_ADVANCED_PERF_BLOCK_REWARM`. Published tables must state
 non-default values.
+
+The exact published pre-optimization machine artifacts are retained outside
+the repository in a content-addressed vault. Nine kernels had published HSACO;
+the other five failed historical lowering and therefore have no fabricated
+Rust baseline. Validate and time one retained artifact with:
+
+```bash
+mkdir -p /home/harmenon/perf-runs/published-baseline
+FE2O3_GFX950_ADVANCED_PERF_CAMPAIGN_ID=published-baseline \
+FE2O3_GFX950_ADVANCED_PERF_PROCESS=0 \
+  perf-evidence/run-published-baseline-artifact.sh \
+  gfx950_attnres_aggregate \
+  /home/harmenon/perf-runs/published-baseline/samples.jsonl
+```
+
+`published-baseline-artifacts-v1.json` pins source and artifact identities,
+and the runner verifies every content digest before loading the HSACO.
 
 Analyze and validate the raw records:
 
@@ -63,9 +80,11 @@ assumed by this protocol.
 
 Run candidate and baseline as alternating AB/BA pairs, not all of one followed
 by all of the other. Use at least five fresh processes per variant for a
-publishable comparison; this first implementation records process 0 and is
-intended to be invoked repeatedly into separate campaign files. Preserve every
-raw run, including rejected noisy runs, with an explicit rejection reason.
+publishable comparison, setting
+`FE2O3_GFX950_ADVANCED_PERF_PROCESS=0..4` for both variants. The process
+index is part of every record ID and the hierarchical bootstrap. Preserve
+every raw run, including rejected noisy runs, with an explicit rejection
+reason.
 
 ## rocprofiler cross-check
 

@@ -23,6 +23,7 @@ fi
 if [[ ${ROCR_VISIBLE_DEVICES:-$GPU} != "$GPU" ]]; then
     printf 'ROCR_VISIBLE_DEVICES must select only physical GPU %s\n' "$GPU" >&2
     exit 2
+export HOSTNAME=${HOSTNAME:-$(hostname)}
 fi
 export ROCR_VISIBLE_DEVICES=$GPU
 unset HIP_VISIBLE_DEVICES

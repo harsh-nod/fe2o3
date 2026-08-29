@@ -120,6 +120,8 @@ const PERF_IMPLEMENTATION_ENV: &str = "FE2O3_GFX950_ADVANCED_PERF_IMPLEMENTATION
 #[cfg(feature = "hardware-test-hooks")]
 const PERF_VARIANT_ENV: &str = "FE2O3_GFX950_ADVANCED_PERF_VARIANT_ID";
 #[cfg(feature = "hardware-test-hooks")]
+const PERF_PROCESS_ENV: &str = "FE2O3_GFX950_ADVANCED_PERF_PROCESS";
+#[cfg(feature = "hardware-test-hooks")]
 const PERF_LLVM_SHA256_ENV: &str = "FE2O3_GFX950_ADVANCED_LLVM_SHA256";
 #[cfg(feature = "hardware-test-hooks")]
 const PERF_ISA_SHA256_ENV: &str = "FE2O3_GFX950_ADVANCED_ISA_SHA256";
@@ -162,6 +164,7 @@ struct PerformanceConfig {
     campaign_id: String,
     implementation_id: String,
     variant_id: String,
+    process: usize,
     llvm_sha256: String,
     isa_sha256: String,
     crate_binding: String,
@@ -214,6 +217,7 @@ impl PerformanceConfig {
                 Some("fe2o3-production-rust"),
             )?,
             variant_id: performance_text(PERF_VARIANT_ENV, Some("candidate"))?,
+            process: parse_performance_count(PERF_PROCESS_ENV, 0, true)?,
             llvm_sha256: performance_hex(PERF_LLVM_SHA256_ENV, 64)?,
             isa_sha256: performance_hex(PERF_ISA_SHA256_ENV, 64)?,
             crate_binding: performance_hex(PERF_CRATE_BINDING_ENV, 64)?,
@@ -1832,8 +1836,9 @@ fn profile_plan(
                     "schema": "fe2o3.gfx950.advanced-dispatch-sample.v1",
                     "campaign_id": config.campaign_id,
                     "record_id": format!(
-                        "{}:{}:{}:{}:{}",
-                        config.campaign_id, case.export, plan.label, block, sample
+                        "{}:{}:{}:{}:{}:{}:{}",
+                        config.campaign_id, config.variant_id, config.process,
+                        case.export, plan.label, block, sample
                     ),
                     "implementation": {
                         "id": config.implementation_id,
@@ -1863,7 +1868,7 @@ fn profile_plan(
                         "kernarg_bytes": size,
                     },
                     "trial": {
-                        "process": 0,
+                        "process": config.process,
                         "block": block,
                         "sample": sample,
                         "initial_warmups": config.warmups,
