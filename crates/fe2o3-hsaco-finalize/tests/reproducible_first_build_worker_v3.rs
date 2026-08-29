@@ -2,6 +2,9 @@
 
 use std::{
     env, fs,
+    fs::OpenOptions,
+    io::{self, Write},
+    os::unix::fs::{OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
     time::Duration,
@@ -42,6 +45,7 @@ const NATIVE_WORKER_ENV: &str = "FE2O3_SCALAR_GEMM_V1_WORKER";
 const NATIVE_WORKER_BUILD_ID_ENV: &str = "FE2O3_SCALAR_GEMM_V1_WORKER_BUILD_ID";
 const NATIVE_LLVM_BUILD_ID_ENV: &str = "FE2O3_SCALAR_GEMM_V1_LLVM_BUILD_ID";
 const NATIVE_HANDOFF_ENV: &str = "FE2O3_SCALAR_GEMM_V1_HANDOFF";
+const NATIVE_OUTPUT_ENV: &str = "FE2O3_WORKER_V3_NATIVE_OUTPUT_PATH";
 
 const CAPSULE_IDENTITY_DOMAIN_V3: &[u8] = b"FE2O3/INERT-PRODUCTION-SEMANTIC-CAPSULE/V3\0";
 const PAIR_IDENTITY_DOMAIN_V3: &[u8] = b"FE2O3/INERT-COMPILER-MODULE-PAIR-BINDING/V3\0";
@@ -1061,11 +1065,67 @@ fn configured_upstream_llvm_worker_executes_the_native_v3_path() {
         llvm_build_identity
     );
     assert_eq!(&evidence.output_bytes()[..4], b"\x7fELF");
+    let bootstrap_output = evidence.bootstrap().response().output().unwrap();
+    let replay_output = evidence.exact_replay().response().output().unwrap();
+    assert_eq!(bootstrap_output.bytes(), replay_output.bytes());
+    assert_eq!(bootstrap_output.identity(), replay_output.identity());
     assert_eq!(
-        evidence.bootstrap().response().output(),
-        evidence.exact_replay().response().output()
+        bootstrap_output.compiler_envelope_identity(),
+        replay_output.compiler_envelope_identity()
+    );
+    assert_ne!(
+        bootstrap_output.request_identity(),
+        replay_output.request_identity()
     );
     assert!(evidence.output_identity().matches(evidence.output_bytes()));
+    if let Some(path) = env::var_os(NATIVE_OUTPUT_ENV) {
+        retain_native_output_create_new(Path::new(&path), evidence.output_bytes()).unwrap();
+    }
+}
+
+fn retain_native_output_create_new(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let mut output = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)?;
+    let result = (|| {
+        output.write_all(bytes)?;
+        output.sync_all()?;
+        output.set_permissions(fs::Permissions::from_mode(0o600))?;
+        drop(output);
+
+        let retained = fs::read(path)?;
+        if retained != bytes {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "retained Worker V3 output differs from the replay bytes",
+            ));
+        }
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(path);
+    }
+    result
+}
+
+#[test]
+fn native_output_retention_is_create_new_exact_and_private() {
+    let directory = TestDirectory::new();
+    let output = directory.0.join("qualified.hsaco");
+    let expected = b"exact qualified Worker V3 output";
+
+    retain_native_output_create_new(&output, expected).unwrap();
+    assert_eq!(fs::read(&output).unwrap(), expected);
+    assert_eq!(
+        fs::metadata(&output).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+
+    let error = retain_native_output_create_new(&output, b"substitution").unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+    assert_eq!(fs::read(output).unwrap(), expected);
 }
 
 fn identity(domain: &[u8], preimage: &[u8]) -> [u8; 32] {
