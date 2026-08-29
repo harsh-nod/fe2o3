@@ -417,17 +417,19 @@ fn validate_auxiliary_segments(
         .iter()
         .filter(|program| program.kind == PT_GNU_STACK)
         .collect();
-    if phdrs.len() != 1 || stacks.len() != 1 {
+    if phdrs.len() > 1 || stacks.len() != 1 {
         return Err(SealedStaticApplicationErrorV1::SegmentLayout);
     }
-    let phdr = **phdrs.first().unwrap();
-    if phdr.flags != PF_R
-        || phdr.offset != program_offset as u64
-        || phdr.file_size != table_size as u64
-        || phdr.memory_size != table_size as u64
-        || phdr.alignment != 8
-    {
-        return Err(SealedStaticApplicationErrorV1::SegmentLayout);
+    if let Some(phdr) = phdrs.first() {
+        let phdr = **phdr;
+        if phdr.flags != PF_R
+            || phdr.offset != program_offset as u64
+            || phdr.file_size != table_size as u64
+            || phdr.memory_size != table_size as u64
+            || phdr.alignment != 8
+        {
+            return Err(SealedStaticApplicationErrorV1::SegmentLayout);
+        }
     }
     let stack = **stacks.first().unwrap();
     if stack.flags != PF_R | PF_W || stack.file_size != 0 || stack.memory_size != 0 {
@@ -1101,6 +1103,50 @@ mod tests {
     fn accepts_bounded_static_executable_and_self_relocating_static_pie() {
         assert!(sealed_static_application_identity_v1(&static_elf()).is_ok());
         assert!(sealed_static_application_identity_v1(&static_pie()).is_ok());
+    }
+
+    #[test]
+    fn optional_program_header_segment_is_exact_when_present() {
+        let mut absent = static_elf();
+        absent[HEADER..HEADER + 4].copy_from_slice(&PT_NULL.to_le_bytes());
+        assert!(sealed_static_application_identity_v1(&absent).is_ok());
+
+        let mut malformed = static_elf();
+        malformed[HEADER + 4..HEADER + 8].copy_from_slice(&(PF_R | PF_W).to_le_bytes());
+        assert_eq!(
+            sealed_static_application_identity_v1(&malformed),
+            Err(SealedStaticApplicationErrorV1::SegmentLayout)
+        );
+
+        let mut duplicate = static_elf();
+        let programs = 5_u16;
+        let table_size = PROGRAM as u64 * u64::from(programs);
+        duplicate[56..58].copy_from_slice(&programs.to_le_bytes());
+        duplicate[HEADER + 32..HEADER + 40].copy_from_slice(&table_size.to_le_bytes());
+        duplicate[HEADER + 40..HEADER + 48].copy_from_slice(&table_size.to_le_bytes());
+        let read_only_load = HEADER + PROGRAM;
+        let header_and_table = HEADER as u64 + table_size;
+        duplicate[read_only_load + 32..read_only_load + 40]
+            .copy_from_slice(&header_and_table.to_le_bytes());
+        duplicate[read_only_load + 40..read_only_load + 48]
+            .copy_from_slice(&header_and_table.to_le_bytes());
+        write_program(
+            &mut duplicate,
+            4,
+            program(
+                PT_PHDR,
+                PF_R,
+                HEADER as u64,
+                0x400040,
+                table_size,
+                table_size,
+                8,
+            ),
+        );
+        assert_eq!(
+            sealed_static_application_identity_v1(&duplicate),
+            Err(SealedStaticApplicationErrorV1::SegmentLayout)
+        );
     }
 
     #[test]

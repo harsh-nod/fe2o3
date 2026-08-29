@@ -358,6 +358,11 @@ RUNPATH, executable stack, undefined symbol, or an ELF entry address other than
 the syscall-only secure-start symbol. It also starts the issuer with
 FDs 3 through 11 closed and requires silent fail-closed exit status 1. This
 qualifies the executable image shape and pre-runtime hardening edge. The
+same script now submits the actual release bytes to the production
+static-application parser. `scripts/build-static-external-anchor-service.sh`
+applies the identical secure-entry, static-ELF, dynamic-loader, undefined-symbol,
+parser, and silent fail-closed gates to the anchor daemon. Both executables use
+the one shared secure-start assembly in `fe2o3-protected-service-profile`. The
 supervisor image-admission suite independently qualifies exact source
 measurements, static-profile validation, anonymous read-only executable memfd
 custody, complete content/exec seals, caller-policy agreement, mutation and

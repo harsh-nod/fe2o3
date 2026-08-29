@@ -4,8 +4,8 @@
 .hidden fe2o3_secure_start_v1
 .type fe2o3_secure_start_v1,@function
 fe2o3_secure_start_v1:
-    # The static launcher already applies these controls. Exec can reset
-    # dumpability, so repeat them before musl or Rust can inspect inherited FDs.
+    # The trusted launcher already applies these controls. Exec can reset
+    # dumpability, so repeat them before libc or Rust can inspect inherited FDs.
     pushq %rdx
 
     movl $157, %eax

@@ -209,9 +209,11 @@ then requires `/proc/self/exe` to be the measured service-owned anonymous
 mode-`0555` executable under complete content, execution, and seal locking before
 reading that key. It opens only existing state, retains root and peer at private
 FDs 256 and 257, closes every other descriptor including stdio, and enters the
-bounded packet loop. The root-controlled distinct-UID provisioner, static
-runtime-closure qualification, and refinement evidence join remain open, so the
-result remains authority-free.
+bounded packet loop. Its pinned musl release now shares the issuer's syscall-only
+pre-runtime entrypoint and passes the exact static-ELF, no-loader, no-undefined-
+symbol, and silent fail-closed gates. The root-controlled distinct-UID
+provisioner and refinement evidence join remain open, so the result remains
+authority-free.
 The issuer's direct transition
 methods are private. One shared bounded
 client now recovers first and resumes Ready, Prepared, or Issued under one

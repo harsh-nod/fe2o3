@@ -41,7 +41,10 @@ requires a bounded executable regular file. It reads the complete image,
 checks the object metadata before and after the read, and applies the
 loader-independent x86-64 static executable/static-PIE validator. `PT_INTERP`,
 runtime dependencies, unsupported dynamic tags or relocations, malformed
-segments, and writable/executable mappings reject.
+segments, and writable/executable mappings reject. The program-header table
+must be completely covered by one read-only load segment. `PT_PHDR` is optional
+under ELF; when present, exactly one canonical read-only table descriptor is
+required.
 
 The caller policy executable measurement is raw SHA-256 plus exact byte
 length. Admission also retains the domain-separated sealed-static ELF

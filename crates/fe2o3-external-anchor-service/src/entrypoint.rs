@@ -476,13 +476,29 @@ fn close_inherited(descriptor: RawFd) -> Result<(), ExternalAnchorEntrypointErro
 
 fn close_unrelated_descriptors_v1() -> Result<(), ExternalAnchorEntrypointErrorV1> {
     // SAFETY: close_range closes scalar descriptor ranges and does not dereference user memory.
-    if unsafe { libc::close_range(0, CLOSE_RANGE_CEILING_BEFORE_PRIVATE_V1, 0) } != 0 {
+    if unsafe {
+        libc::syscall(
+            libc::SYS_close_range,
+            0,
+            CLOSE_RANGE_CEILING_BEFORE_PRIVATE_V1,
+            0,
+        )
+    } != 0
+    {
         return Err(descriptor_error(
             "close low unrelated external-anchor descriptors",
         ));
     }
     // SAFETY: the range starts above the two exact private descriptors retained by this process.
-    if unsafe { libc::close_range(CLOSE_RANGE_FLOOR_AFTER_PRIVATE_V1, u32::MAX, 0) } != 0 {
+    if unsafe {
+        libc::syscall(
+            libc::SYS_close_range,
+            CLOSE_RANGE_FLOOR_AFTER_PRIVATE_V1,
+            u32::MAX,
+            0,
+        )
+    } != 0
+    {
         return Err(descriptor_error(
             "close high unrelated external-anchor descriptors",
         ));

@@ -33,3 +33,9 @@ endpoint and pidfd after authenticated child admission, and provision those into
 the compiler execution supervisor. Creating the socketpair after adopting the
 dedicated UID makes the supervisor's `SO_PEERCRED`, unnamed-address, and
 distinct-UID checks simultaneously satisfiable.
+
+`scripts/build-static-external-anchor-service.sh` builds the pinned musl release
+through the shared syscall-only protected-service entrypoint and rejects any
+dynamic loader, runtime dependency, undefined symbol, executable stack, wrong
+entry address, production static-ELF parser failure, output on an empty contract,
+or fail-open exit.

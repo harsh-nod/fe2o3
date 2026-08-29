@@ -35,6 +35,27 @@ pub const PROTECTED_SERVICE_SECUREBITS_V1: u32 = SECBIT_NOROOT
     | SECBIT_NO_CAP_AMBIENT_RAISE
     | SECBIT_NO_CAP_AMBIENT_RAISE_LOCKED;
 
+#[allow(unsafe_code)]
+mod secure_start {
+    core::arch::global_asm!(include_str!("secure_start_x86_64.S"), options(att_syntax));
+
+    unsafe extern "C" {
+        fn fe2o3_secure_start_v1();
+    }
+
+    /// Retains and returns the shared syscall-only protected-service entrypoint.
+    ///
+    /// Static protected binaries reference this function and select the returned symbol as their
+    /// ELF entry address. The assembly repeats nondumpability, `no_new_privs`, and the zero core
+    /// limit before libc or Rust startup can inspect inherited descriptors.
+    #[inline(never)]
+    pub fn protected_service_secure_start_address_v1() -> usize {
+        fe2o3_secure_start_v1 as *const () as usize
+    }
+}
+
+pub use secure_start::protected_service_secure_start_address_v1;
+
 /// Stable failure constructing one protected-service credential profile.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]

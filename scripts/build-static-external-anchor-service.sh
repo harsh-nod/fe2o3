@@ -3,17 +3,17 @@ set -euo pipefail
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 readonly repo_root
-readonly target_dir="${FE2O3_STATIC_ISSUER_TARGET_DIR:-${repo_root}/target/static-issuer}"
+readonly target_dir="${FE2O3_STATIC_ANCHOR_TARGET_DIR:-${repo_root}/target/static-anchor}"
 readonly target="x86_64-unknown-linux-musl"
-readonly executable="${target_dir}/${target}/release/fe2o3-compiler-execution-issuer"
+readonly executable="${target_dir}/${target}/release/fe2o3-external-anchor-service"
 
 cd -- "${repo_root}"
 CARGO_TARGET_DIR="${target_dir}" cargo rustc \
   --locked \
   --release \
   --target "${target}" \
-  -p fe2o3-compiler-execution-issuer \
-  --bin fe2o3-compiler-execution-issuer \
+  -p fe2o3-external-anchor-service \
+  --bin fe2o3-external-anchor-service \
   -- \
   -C target-feature=+crt-static \
   -C relocation-model=static \
@@ -21,7 +21,7 @@ CARGO_TARGET_DIR="${target_dir}" cargo rustc \
   -C link-arg=-no-pie \
   -C link-arg=-Wl,-e,fe2o3_secure_start_v1
 
-readonly report="${target_dir}/fe2o3-compiler-execution-issuer.readelf.txt"
+readonly report="${target_dir}/fe2o3-external-anchor-service.readelf.txt"
 /usr/bin/readelf -hW -lW -dW -sW -- "${executable}" >"${report}"
 /usr/bin/grep -Eq 'Class:[[:space:]]+ELF64' "${report}"
 /usr/bin/grep -Eq 'Type:[[:space:]]+EXEC' "${report}"
@@ -32,33 +32,33 @@ secure_start_address="$(
 )"
 if [[ -z "${entry_address}" || -z "${secure_start_address}" \
   || $((entry_address)) -ne $((secure_start_address)) ]]; then
-  printf 'compiler-execution issuer does not enter through its secure pre-runtime shim\n' >&2
+  printf 'external-anchor service does not enter through its secure pre-runtime shim\n' >&2
   exit 1
 fi
 if /usr/bin/grep -Eq 'INTERP|DYNAMIC|\(NEEDED\)|\(RPATH\)|\(RUNPATH\)' "${report}"; then
-  printf 'compiler-execution issuer contains a dynamic-loader dependency\n' >&2
+  printf 'external-anchor service contains a dynamic-loader dependency\n' >&2
   exit 1
 fi
 /usr/bin/grep -Eq 'GNU_STACK.*RW[[:space:]]' "${report}"
 undefined_symbols="$(/usr/bin/nm -u -- "${executable}")"
 if [[ -n "${undefined_symbols}" ]]; then
-  printf 'compiler-execution issuer contains undefined symbols\n' >&2
+  printf 'external-anchor service contains undefined symbols\n' >&2
   exit 1
 fi
 
-FE2O3_STATIC_COMPILER_EXECUTION_ISSUER="${executable}" \
+FE2O3_STATIC_EXTERNAL_ANCHOR="${executable}" \
   CARGO_TARGET_DIR="${target_dir}/profile-test" \
-  cargo test --locked -p fe2o3-compiler-execution-issuer \
+  cargo test --locked -p fe2o3-external-anchor-service \
     --test static_image \
     release_image_is_loader_independent_static_elf \
     -- --exact --ignored
 
 set +e
-smoke_output="$(/usr/bin/env -i "${executable}" 3<&- 4<&- 5<&- 6<&- 7<&- 8<&- 9<&- 10<&- 11<&- 2>&1)"
+smoke_output="$({ /usr/bin/env -i "${executable}" 3<&- 4<&- 221<&- 222<&-; } 2>&1)"
 smoke_status=$?
 set -e
 if [[ ${smoke_status} -ne 1 || -n "${smoke_output}" ]]; then
-  printf 'compiler-execution issuer did not fail closed silently without its descriptor contract\n' >&2
+  printf 'external-anchor service did not fail closed silently without its descriptor contract\n' >&2
   exit 1
 fi
 printf '%s\n' "${executable}"

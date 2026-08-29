@@ -12,10 +12,12 @@ publish = false
 fe2o3-broker-authority-service = { path = "../fe2o3-broker-authority-service" }
 fe2o3-compiler-closure-capability.workspace = true
 fe2o3-compiler-execution-protocol.workspace = true
+fe2o3-protected-service-profile.workspace = true
 libc.workspace = true
 
 [dev-dependencies]
 ed25519-dalek = { version = "=2.2.0", default-features = false, features = ["fast", "zeroize"] }
+fe2o3-runtime-protocol.workspace = true
 
 [lib]
 name = "fe2o3_compiler_execution_issuer"

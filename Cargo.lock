@@ -812,6 +812,8 @@ dependencies = [
  "fe2o3-broker-authority-service",
  "fe2o3-compiler-closure-capability",
  "fe2o3-compiler-execution-protocol",
+ "fe2o3-protected-service-profile",
+ "fe2o3-runtime-protocol",
  "libc",
 ]
 
