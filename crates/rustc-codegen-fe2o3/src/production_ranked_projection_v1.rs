@@ -16223,7 +16223,7 @@ mod tests {
         );
         assert_eq!(
             partition_reference_effect_binding_indices_v1(&["alpha", "zeta"], &[]).unwrap(),
-            vec![vec![], vec![]],
+            vec![Vec::<usize>::new(), Vec::<usize>::new()],
         );
     }
 
