@@ -18,6 +18,23 @@ and rejects any changed read-only buffer after teardown. Because every
 low-level error after native mutation is terminal, the safe transition aborts
 instead of returning into application code.
 
+`execute_authorized_gfx942_runtime_debug_target_dispatch_v1` is the cooperative
+debug-target form of that same generic prepared-kernel transition. It does not
+create a second verifier or launch implementation. Before native mutation it
+derives bounded code-object, kernel, dispatch, geometry, and allocation
+declarations from the exact prepared request already checked against Worker V3
+authority. Telemetry failure at that point returns without entering queue
+mechanics. Once native work begins, either a KFD failure or telemetry failure
+aborts rather than exposing ambiguous state. Completed buffer cardinality,
+length, access, and read-only contents are rechecked before a safe result is
+returned.
+
+The current KFD dispatch primitive has no lifecycle callback, so successful
+`submitted` and `completed` declarations are emitted retrospectively after the
+native transaction returns. They remain target declarations. Queue and runtime
+lifecycle facts shown by the debugger come independently from KFD observations;
+neither source upgrades the code object to observed execution in V3.
+
 `fe2o3-host` now has one private implementation of the unsafe authority trait.
 It is constructible only by consuming an authenticated Worker V3 executable,
 compiler-generated host-memory arguments, retained current-publication custody,

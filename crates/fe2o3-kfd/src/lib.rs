@@ -39,6 +39,10 @@ mod semantic_observation;
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 mod debug_trap;
 
+#[cfg(target_os = "linux")]
+#[allow(unsafe_code)]
+mod target_debug_telemetry_v1;
+
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[allow(unsafe_code)]
 mod queue_linux;
@@ -76,6 +80,9 @@ pub use semantic_observation::*;
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 pub use debug_trap::*;
+
+#[cfg(target_os = "linux")]
+pub use target_debug_telemetry_v1::*;
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 pub use currentness::ObservableDeviceCurrentnessV1;

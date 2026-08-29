@@ -362,6 +362,23 @@ disable, and completes bounded detach/reap. It does not qualify wave/register
 state, source debugging, target-memory access, kernel execution under the
 debugger, timing, or performance.
 
+The cooperative target-telemetry channel is a separate authority-free
+observation aid for `fe2o3-debug live-kfd`. It uses a private Unix
+`SOCK_SEQPACKET` pair with fixed 256-byte, versioned, checksummed records,
+kernel sender credentials, a per-session nonce, strict sequence/lifecycle
+validation, and a 4,096-record consumer bound. The target endpoint is send-only
+and records contain logical digests, lengths, geometry, access classes, and
+phases only. They contain no native address, pointer, PID, descriptor, handle,
+or path and do not prove load, dispatch, allocation, execution, or faults.
+
+`admit_inherited_kfd_target_debug_telemetry_v1` validates the complete inherited
+environment ABI, duplicates the endpoint with `CLOEXEC`, binds it to the live
+debugger process instance, and protects the original inherited descriptor
+before returning. Partial or noncanonical input fails closed. Child-isolated
+tests cover malformed environments, invalid and wrong-type descriptors, wrong
+peers, the positive handoff, credential binding, hostile ancillary data, and
+record lifecycle substitution.
+
 `kfd-compute-aql-queue-policy` links the default
 production closure for the no-ROCm ELF audit.
 

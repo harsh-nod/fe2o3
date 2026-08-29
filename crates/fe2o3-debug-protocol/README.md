@@ -118,3 +118,26 @@ terminal. The schema has no PID, file descriptor, native KFD identifier,
 target address, or argv field. It explicitly reports wave/lane/register/CWSR,
 stack/source/KIR, stepping/replay/breakpoints/values, target memory, semantic
 trace, address watch, and dispatch submission unavailable.
+
+## Live GPU V3
+
+`fe2o3-live-gpu-debug-request-v3` is an exact-artifact facade over the hardware
+state machine. Its session binding separately retains the declared code
+object, any matching target declaration, any independently observed execution
+identity, canonical KIR V7 and Source Map V2 identities, and deterministic CPU
+reference inputs. Every fact carries a closed `declared`, `proved`, `observed`,
+`inferred`, or `unavailable` origin with bounded evidence. A declaration can
+never satisfy an observed execution field.
+
+V3 reuses Hardware V2 device, queue, event, and control results, including
+committed/partial/indeterminate effects. Semantic scope, register, value,
+memory, and program-site queries are separately versioned and require an exact
+binding and stopped identity. Unsupported or uncaptured state is a typed
+top-level result, not an empty scope. A stopped scope page is always an
+`observed_subset`; omitted workgroups, waves, and lanes are never interpreted
+as absent.
+
+Requests remain bounded to 64 KiB, responses to 2 MiB, pages to 256 items,
+memory reads to 1 MiB, and cooperative target telemetry to 4,096 records.
+Program counters are code-object-relative, memory is allocation-relative, and
+the schema has no native process, descriptor, queue, or address authority.
