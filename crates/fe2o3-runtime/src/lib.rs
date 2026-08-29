@@ -5,8 +5,9 @@
 mod authorized_execution;
 
 pub use authorized_execution::{
-    Gfx942AuthorizedRuntimeCompletedBufferV1, Gfx942AuthorizedRuntimeDispatchResultV1,
-    Gfx942AuthorizedRuntimeExecutionErrorV1, WorkerV3Gfx942ExecutionAuthorityV1,
+    AuthorizedRuntimeDebugTelemetrySessionV1, Gfx942AuthorizedRuntimeCompletedBufferV1,
+    Gfx942AuthorizedRuntimeDispatchResultV1, Gfx942AuthorizedRuntimeExecutionErrorV1,
+    WorkerV3Gfx942ExecutionAuthorityV1, execute_authorized_gfx942_runtime_debug_target_dispatch_v1,
     execute_authorized_gfx942_runtime_dispatch_v1,
 };
 
@@ -80,12 +81,17 @@ pub struct Gfx942RuntimeDispatchBufferV1 {
 
 pub(crate) struct Gfx942RuntimePreparedBufferPolicyV1 {
     access: Gfx942RuntimeBufferAccessV1,
+    byte_length: u64,
     read_only_initial_bytes: Option<Vec<u8>>,
 }
 
 impl Gfx942RuntimePreparedBufferPolicyV1 {
     pub(crate) const fn access(&self) -> Gfx942RuntimeBufferAccessV1 {
         self.access
+    }
+
+    pub(crate) const fn byte_length(&self) -> u64 {
+        self.byte_length
     }
 
     pub(crate) fn read_only_initial_bytes(&self) -> Option<&[u8]> {
@@ -164,6 +170,7 @@ pub struct PreparedGfx942RuntimeDispatchV1 {
     static_group_segment_bytes: u64,
     dynamic_group_segment_bytes: u32,
     packet_group_segment_bytes: u32,
+    geometry: AqlDispatchGeometryV1,
 }
 
 impl fmt::Debug for PreparedGfx942RuntimeDispatchV1 {
@@ -227,6 +234,10 @@ impl PreparedGfx942RuntimeDispatchV1 {
 
     pub const fn packet_group_segment_bytes(&self) -> u32 {
         self.packet_group_segment_bytes
+    }
+
+    pub(crate) const fn geometry(&self) -> AqlDispatchGeometryV1 {
+        self.geometry
     }
 
     /// Returns the mechanics-only request. Calling its KFD execution function
@@ -386,6 +397,8 @@ pub fn prepare_gfx942_runtime_dispatch_v1(
         .iter()
         .map(|buffer| Gfx942RuntimePreparedBufferPolicyV1 {
             access: buffer.access(),
+            byte_length: u64::try_from(buffer.bytes().len())
+                .expect("validated runtime buffer length fits u64"),
             read_only_initial_bytes: (buffer.access() == Gfx942RuntimeBufferAccessV1::ReadOnly)
                 .then(|| buffer.bytes().to_vec()),
         })
@@ -418,6 +431,7 @@ pub fn prepare_gfx942_runtime_dispatch_v1(
         static_group_segment_bytes,
         dynamic_group_segment_bytes: inputs.dynamic_group_segment_bytes,
         packet_group_segment_bytes,
+        geometry: inputs.geometry,
     })
 }
 

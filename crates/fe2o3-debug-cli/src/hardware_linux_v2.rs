@@ -21,8 +21,8 @@ use serde::Serialize;
 
 use crate::hardware_v2::{HardwareBackendV2, LiveKfdTransportV2};
 
-const STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
-const CLEANUP_TIMEOUT: Duration = Duration::from_secs(3);
+pub(crate) const STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
+pub(crate) const CLEANUP_TIMEOUT: Duration = Duration::from_secs(3);
 
 #[derive(Debug, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -249,7 +249,7 @@ fn cleanup_backend_and_child(
     }
 }
 
-fn run_cleanup_actions(
+pub(crate) fn run_cleanup_actions(
     finish_kfd: impl FnOnce() -> Result<(), String>,
     detach_ptrace: impl FnOnce() -> Result<(), String>,
     kill_and_reap_target: impl FnOnce() -> Result<(), String>,
@@ -267,7 +267,7 @@ fn run_cleanup_actions(
     }
 }
 
-fn wait_for_tracee_stop(child: &mut Child, deadline: Instant) -> Result<(), String> {
+pub(crate) fn wait_for_tracee_stop(child: &mut Child, deadline: Instant) -> Result<(), String> {
     loop {
         let mut status = 0;
         // SAFETY: status is live, the PID belongs to Child, and WNOHANG keeps
@@ -296,7 +296,7 @@ fn wait_for_tracee_stop(child: &mut Child, deadline: Instant) -> Result<(), Stri
     }
 }
 
-fn continue_tracee(child: &Child) -> Result<(), String> {
+pub(crate) fn continue_tracee(child: &Child) -> Result<(), String> {
     // SAFETY: the coordinator owns a ptrace-stopped child and supplies no
     // address or data pointer.
     let result = unsafe {
@@ -317,7 +317,7 @@ fn continue_tracee(child: &Child) -> Result<(), String> {
     }
 }
 
-fn set_exit_kill(child: &Child) -> Result<(), String> {
+pub(crate) fn set_exit_kill(child: &Child) -> Result<(), String> {
     // SAFETY: the coordinator owns the ptrace-stopped child. EXITKILL ensures
     // an unexpected debugger death cannot orphan the launched target.
     let result = unsafe {
@@ -338,7 +338,7 @@ fn set_exit_kill(child: &Child) -> Result<(), String> {
     }
 }
 
-fn stop_tracee(child: &mut Child, deadline: Instant) -> Result<bool, String> {
+pub(crate) fn stop_tracee(child: &mut Child, deadline: Instant) -> Result<bool, String> {
     if child
         .try_wait()
         .map_err(|error| error.to_string())?
@@ -358,7 +358,7 @@ fn stop_tracee(child: &mut Child, deadline: Instant) -> Result<bool, String> {
     wait_for_tracee_stop(child, deadline).map(|()| true)
 }
 
-fn detach_tracee(child: &Child) -> Result<(), String> {
+pub(crate) fn detach_tracee(child: &Child) -> Result<(), String> {
     // SAFETY: the coordinator owns a stopped tracee. SIGCONT clears both the
     // ptrace stop and any process-wide group-stop while detaching.
     let result = unsafe {
@@ -384,16 +384,16 @@ fn detach_tracee(child: &Child) -> Result<(), String> {
     }
 }
 
-fn detach_then_kill(child: &mut Child) {
+pub(crate) fn detach_then_kill(child: &mut Child) {
     let _ = detach_tracee(child);
     kill_and_reap(child);
 }
 
-fn kill_and_reap(child: &mut Child) {
+pub(crate) fn kill_and_reap(child: &mut Child) {
     let _ = kill_and_reap_result(child);
 }
 
-fn kill_and_reap_result(child: &mut Child) -> Result<(), String> {
+pub(crate) fn kill_and_reap_result(child: &mut Child) -> Result<(), String> {
     match child.try_wait() {
         Ok(Some(_)) => return Ok(()),
         Ok(None) => {}

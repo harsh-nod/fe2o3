@@ -137,3 +137,35 @@ memory, semantic trace, address watch, or dispatch submission. These
 capabilities are explicitly reported unavailable and are never inferred from
 the CPU simulator. The hardware path observes KFD state only; it does not
 claim timing, performance prediction, race freedom, or GPU scheduling detail.
+
+## Exact-bound live KFD protocol V3
+
+`fe2o3-debug live-kfd --bundle-v2 KERNEL.fe2sim --request REQUEST.json
+--hsaco KERNEL.hsaco -- PROGRAM [ARG...]` composes the deterministic CPU
+reference inputs with the direct-KFD lifecycle without conflating their truth
+classes. Admission captures and revalidates four distinct regular files,
+rejects symlinks, hard links, role aliases, changing inputs, invalid HSACO, and
+an unexecutable host. The coordinator launches through the retained executable
+descriptor and upgrades that content binding only after its owned exec stop.
+It never claims that declared HSACO bytes were loaded or executed.
+
+The target may call
+`admit_inherited_kfd_target_debug_telemetry_v1` and send fixed-size cooperative
+records. The inherited endpoint is private, send-only, credential-bound, and
+contains no KFD authority, native identifier, pointer, address, path, or file
+descriptor. Target artifact, dispatch, allocation, and diagnostic facts remain
+labeled `declared`. Independently observed devices, queues, runtime events, and
+queue-control effects remain KFD observations. A matching target code-object
+declaration does not upgrade `execution_code_object`, which stays typed
+`not_observed` until an independent execution observation exists.
+
+V3 exposes exact bundle/request/KIR/source-map/HSACO correlation, bounded
+target-telemetry summaries, redacted KFD device and queue snapshots, exception
+events, queue suspend/resume, and termination over one agent-friendly JSONL
+stream. It reports the current stopped anchor as `session_not_stopped` while
+this backend is running. Stopped dispatch/workgroup/wave/lane state, PC and
+ISA/source resolution, registers, semantic values, allocation-relative target
+memory, stepping, and breakpoints are explicitly `unsupported` in this
+milestone. The MI300X live-validation test creates a real target KFD queue,
+observes it, suspends and resumes it, and terminates cleanly; it deliberately
+does not load or execute its declared fixture HSACO.

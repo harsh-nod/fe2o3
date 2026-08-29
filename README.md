@@ -34,6 +34,16 @@ The same CPU-only path can publish and replay a strict bounded
 through `fe2o3-kir-sim`, including exact bundle/request custody and debugger
 capture. This is deterministic simulator replay, not GPU scheduling evidence.
 
+On a KFD-capable Linux host, `fe2o3-debug live-kfd` binds that exact V2
+bundle/request reference to separately inspected HSACO bytes and an exact
+launch-owned executable. Its agent-native V3 JSONL protocol combines
+cooperative target declarations with independently observed KFD device, queue,
+event, and control facts without upgrading declarations into execution claims.
+The current milestone validates real MI300X queue observation and
+suspend/resume. Hardware wave/lane state, PC, registers, target memory,
+stepping, and breakpoints remain explicitly unavailable. See the
+[`fe2o3-debug` contract](crates/fe2o3-debug-cli/README.md#exact-bound-live-kfd-protocol-v3).
+
 Feature-free production has one compiler transaction and no pipeline selector.
 `cargo fe2o3 build` and `cargo fe2o3 run` first build the selected crate graph
 for the fixed AMDGPU target through fe2o3, commit the exact device artifact

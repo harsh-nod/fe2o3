@@ -3,6 +3,7 @@
 
 mod codec;
 mod hardware_v2;
+mod live_gpu_v3;
 mod model;
 mod source_variables_v2;
 
@@ -11,5 +12,6 @@ pub use codec::{
     read_request_line_v1,
 };
 pub use hardware_v2::*;
+pub use live_gpu_v3::*;
 pub use model::*;
 pub use source_variables_v2::*;

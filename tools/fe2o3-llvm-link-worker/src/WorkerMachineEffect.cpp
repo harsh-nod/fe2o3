@@ -1300,9 +1300,9 @@ buildFunctionCfg(ArrayRef<DecodedInstruction> Instructions, McState &Mc,
                                        Instruction.Size, Target))
         return analysisError(Twine("unknown branch target in ") + FunctionName);
       auto Boundary = Boundaries.find(Target);
-      if (Boundary == Boundaries.end() || Target <= Instruction.Address)
+      if (Boundary == Boundaries.end() || Target == Instruction.Address)
         return analysisError(
-            Twine("unsupported backward or external branch in ") +
+            Twine("unsupported self or external branch in ") +
             FunctionName);
       BranchTargets.emplace(I, Boundary->second);
       Leaders.insert(Boundary->second);

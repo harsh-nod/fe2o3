@@ -1089,6 +1089,11 @@ run_hardware_smoke() {
   run_step hardware-kfd-debug-protocol-v2 \
     cargo test --locked -p fe2o3-debug-cli --features live-validation \
       --test hardware_v2_live -- --test-threads=1
+  run_step hardware-kfd-live-gpu-debug-v3 \
+    cargo test --locked -p fe2o3-debug-cli --features live-validation \
+      --test live_kfd_v3_live -- \
+      --exact mi300x_live_kfd_v3_binds_observes_controls_and_terminates \
+      --nocapture --test-threads=1
   if [[ -n "${FE2O3_TEST_SOURCE_AUTH_LDS_GFX942_HSACO:-}" || \
         -n "${FE2O3_KFD_DIAGNOSTIC_UNIQUE_ID:-}" ]]; then
     if [[ -z "${FE2O3_TEST_SOURCE_AUTH_LDS_GFX942_HSACO:-}" || \

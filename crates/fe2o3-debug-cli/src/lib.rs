@@ -4,7 +4,14 @@
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[allow(unsafe_code)]
 mod hardware_linux_v2;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[allow(unsafe_code)]
+mod hardware_linux_v3;
 mod hardware_v2;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+mod live_gpu_backend_v3;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub mod live_kfd_v3;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
@@ -44,7 +51,7 @@ use fe2o3_kir_sim_cli::{
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-const USAGE: &str = "usage: fe2o3-debug sim (--kir-v7 PATH | --bundle PATH | --bundle-v2 PATH) --request PATH [--replay-schedule PATH] [--source-map PATH --source-bundle-subject ID] [--protocol jsonl] [--wave-width 32|64]\n       fe2o3-debug hardware -- PROGRAM [ARG...]";
+const USAGE: &str = "usage: fe2o3-debug sim (--kir-v7 PATH | --bundle PATH | --bundle-v2 PATH) --request PATH [--replay-schedule PATH] [--source-map PATH --source-bundle-subject ID] [--protocol jsonl] [--wave-width 32|64]\n       fe2o3-debug live-kfd --bundle-v2 PATH --request PATH --hsaco PATH [--protocol jsonl] [--wave-width 32|64] -- PROGRAM [ARG...]\n       fe2o3-debug hardware -- PROGRAM [ARG...]";
 const MAX_SESSION_COMMANDS_V1: u64 = 1_000_000;
 const TRACE_HEADER_SCHEMA_V1: &str = "fe2o3-debug-trace-v1";
 pub const SOURCE_MAP_SCHEMA_V1: &str = fe2o3_kernel_ir::DEBUG_SOURCE_MAP_SCHEMA_V1;
@@ -58,6 +65,17 @@ struct OptionsV1 {
     source_bundle_subject: Option<OpaqueIdentityV1>,
     replay_schedule: Option<PathBuf>,
     wave_width: DebugWaveWidthV1,
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[derive(Debug)]
+struct LiveKfdOptionsV3 {
+    bundle_v2: PathBuf,
+    request: PathBuf,
+    hsaco: PathBuf,
+    wave_width: DebugWaveWidthV1,
+    program: PathBuf,
+    program_arguments: Vec<OsString>,
 }
 
 #[derive(Debug)]
@@ -1742,6 +1760,52 @@ pub fn main() -> ExitCode {
     let arguments: Vec<_> = env::args_os().skip(1).collect();
     if arguments
         .first()
+        .is_some_and(|value| value == OsStr::new("live-kfd"))
+    {
+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+        {
+            let options = match parse_live_kfd_options_v3(arguments) {
+                Ok(options) => options,
+                Err(message) => {
+                    write_bootstrap_error("arguments", "invalid_command_line", &message);
+                    return ExitCode::FAILURE;
+                }
+            };
+            let plan = match live_kfd_v3::LiveKfdSemanticSessionPlanV3::try_new(
+                options.bundle_v2,
+                options.request,
+                Some(options.hsaco),
+                &options.program,
+                live_kfd_v3::LiveKfdBindingLimitsV3::default(),
+            ) {
+                Ok(plan) => plan,
+                Err(error) => {
+                    write_bootstrap_error("binding", "live_kfd_plan_rejected", error.message());
+                    return ExitCode::FAILURE;
+                }
+            };
+            let admitted = match live_kfd_v3::admit_live_kfd_semantic_session_v3(plan) {
+                Ok(admitted) => admitted,
+                Err(error) => {
+                    write_bootstrap_error("binding", "live_kfd_inputs_rejected", error.message());
+                    return ExitCode::FAILURE;
+                }
+            };
+            let protocol_binding = live_gpu_artifact_binding_v3(&admitted, options.wave_width);
+            return hardware_linux_v3::run(admitted, options.program_arguments, protocol_binding);
+        }
+        #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+        {
+            write_bootstrap_error(
+                "arguments",
+                "live_kfd_debugger_unavailable",
+                "live KFD debugging requires Linux x86_64 and the KFD UAPI",
+            );
+            return ExitCode::FAILURE;
+        }
+    }
+    if arguments
+        .first()
         .is_some_and(|value| value == OsStr::new("hardware"))
     {
         #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
@@ -1926,6 +1990,131 @@ pub fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+fn parse_live_kfd_options_v3(
+    arguments: impl IntoIterator<Item = OsString>,
+) -> Result<LiveKfdOptionsV3, String> {
+    let mut arguments = arguments.into_iter();
+    if arguments.next().as_deref() != Some(OsStr::new("live-kfd")) {
+        return Err(USAGE.to_owned());
+    }
+    let mut bundle_v2 = None;
+    let mut request = None;
+    let mut hsaco = None;
+    let mut protocol_seen = false;
+    let mut wave_width = DebugWaveWidthV1::Wave64;
+    let mut program = None;
+    let mut program_arguments = Vec::new();
+    while let Some(option) = arguments.next() {
+        if option == OsStr::new("--") {
+            program = arguments.next().map(PathBuf::from);
+            program_arguments.extend(arguments);
+            break;
+        }
+        let value = arguments
+            .next()
+            .ok_or_else(|| format!("option {option:?} requires a value; {USAGE}"))?;
+        if option == OsStr::new("--bundle-v2") {
+            set_once(&mut bundle_v2, PathBuf::from(value), "--bundle-v2")?;
+        } else if option == OsStr::new("--request") {
+            set_once(&mut request, PathBuf::from(value), "--request")?;
+        } else if option == OsStr::new("--hsaco") {
+            set_once(&mut hsaco, PathBuf::from(value), "--hsaco")?;
+        } else if option == OsStr::new("--protocol") {
+            if protocol_seen || value != OsStr::new("jsonl") {
+                return Err(format!(
+                    "--protocol must appear at most once and equal jsonl; {USAGE}"
+                ));
+            }
+            protocol_seen = true;
+        } else if option == OsStr::new("--wave-width") {
+            wave_width = match value.to_str() {
+                Some("32") => DebugWaveWidthV1::Wave32,
+                Some("64") => DebugWaveWidthV1::Wave64,
+                _ => return Err(format!("--wave-width must be 32 or 64; {USAGE}")),
+            };
+        } else {
+            return Err(format!("unknown option {option:?}; {USAGE}"));
+        }
+    }
+    Ok(LiveKfdOptionsV3 {
+        bundle_v2: bundle_v2.ok_or_else(|| format!("--bundle-v2 is required; {USAGE}"))?,
+        request: request.ok_or_else(|| format!("--request is required; {USAGE}"))?,
+        hsaco: hsaco.ok_or_else(|| format!("--hsaco is required; {USAGE}"))?,
+        wave_width,
+        program: program.ok_or_else(|| format!("-- PROGRAM is required; {USAGE}"))?,
+        program_arguments,
+    })
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+fn live_gpu_artifact_binding_v3(
+    admitted: &live_kfd_v3::LiveKfdSemanticSessionBindingV3,
+    wave_width: DebugWaveWidthV1,
+) -> LiveGpuArtifactBindingV3 {
+    let declared = admitted
+        .declared_hsaco()
+        .expect("live-kfd command admission requires a declared HSACO");
+    let unavailable_truth = || LiveGpuTruthV3 {
+        origin: LiveGpuTruthOriginV3::Unavailable,
+        evidence: Vec::new(),
+    };
+    let binding_identity = nonzero_identity(admitted.session_identity());
+    let declaration = LiveGpuTruthV3 {
+        origin: LiveGpuTruthOriginV3::Declared,
+        evidence: vec![LiveGpuEvidenceRefV3 {
+            kind: LiveGpuEvidenceKindV3::Declaration,
+            identity: binding_identity,
+        }],
+    };
+    let content = |identity: live_kfd_v3::LiveKfdContentIdentityV3| LiveGpuContentIdentityV3 {
+        digest: nonzero_identity(identity.sha256()),
+        canonical_bytes: identity.length(),
+    };
+    let input = admitted.admitted_input();
+    let bundle = admitted.bundle();
+    let binding = LiveGpuArtifactBindingV3 {
+        binding_identity,
+        code_object_version: u16::from(declared.code_object_version()),
+        declared_code_object: content(declared.content()),
+        declaration,
+        target_declared_code_object: LiveGpuAvailabilityV3::Unavailable {
+            reason: LiveGpuUnavailableReasonV3::NotObserved,
+            truth: unavailable_truth(),
+        },
+        target_telemetry: LiveGpuAvailabilityV3::Unavailable {
+            reason: LiveGpuUnavailableReasonV3::NotObserved,
+            truth: unavailable_truth(),
+        },
+        execution_code_object: LiveGpuAvailabilityV3::Unavailable {
+            reason: LiveGpuUnavailableReasonV3::NotObserved,
+            truth: unavailable_truth(),
+        },
+        kernel_ir_v7: LiveGpuContentIdentityV3 {
+            digest: nonzero_identity(input.kir_sha256),
+            canonical_bytes: input.module.identity().canonical_length(),
+        },
+        source_map_v2: LiveGpuContentIdentityV3 {
+            digest: nonzero_identity(*bundle.debug_map_identity()),
+            canonical_bytes: u64::try_from(bundle.debug_map().len())
+                .expect("bounded source-map length fits u64"),
+        },
+        isa_map_v1: None,
+        cpu_reference: LiveGpuCpuReferenceBindingV3 {
+            bundle_identity: nonzero_identity(admitted.bundle_identity()),
+            request_identity: nonzero_identity(admitted.request_content_identity().sha256()),
+            configuration_identity: configuration_identity_for_input(input, wave_width),
+            deterministic_evidence: LiveGpuCpuReferenceEvidenceV3::Unavailable {
+                reason: LiveGpuUnavailableReasonV3::NotCaptured,
+            },
+        },
+    };
+    binding
+        .validate(LiveGpuProtocolLimitsV3::default())
+        .expect("exactly admitted live KFD inputs form a valid V3 binding");
+    binding
 }
 
 fn parse_options(arguments: impl Iterator<Item = OsString>) -> Result<OptionsV1, String> {
@@ -5182,6 +5371,75 @@ mod tests {
             ],
         ] {
             assert!(parse_options(arguments.into_iter().map(OsString::from)).is_err());
+        }
+    }
+
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    #[test]
+    fn live_kfd_command_line_requires_every_exact_input_and_separator() {
+        let options = parse_live_kfd_options_v3(
+            [
+                "live-kfd",
+                "--bundle-v2",
+                "kernel.fe2sim-v2",
+                "--request",
+                "request.json",
+                "--hsaco",
+                "kernel.hsaco",
+                "--protocol",
+                "jsonl",
+                "--wave-width",
+                "32",
+                "--",
+                "target",
+                "argument",
+            ]
+            .into_iter()
+            .map(OsString::from),
+        )
+        .unwrap();
+        assert_eq!(options.bundle_v2, PathBuf::from("kernel.fe2sim-v2"));
+        assert_eq!(options.request, PathBuf::from("request.json"));
+        assert_eq!(options.hsaco, PathBuf::from("kernel.hsaco"));
+        assert_eq!(options.wave_width, DebugWaveWidthV1::Wave32);
+        assert_eq!(options.program, PathBuf::from("target"));
+        assert_eq!(options.program_arguments, [OsString::from("argument")]);
+
+        for arguments in [
+            vec![
+                "live-kfd",
+                "--request",
+                "request.json",
+                "--hsaco",
+                "kernel.hsaco",
+                "--",
+                "target",
+            ],
+            vec![
+                "live-kfd",
+                "--bundle-v2",
+                "kernel.fe2sim-v2",
+                "--request",
+                "request.json",
+                "--hsaco",
+                "kernel.hsaco",
+                "target",
+            ],
+            vec![
+                "live-kfd",
+                "--bundle-v2",
+                "kernel.fe2sim-v2",
+                "--request",
+                "request.json",
+                "--hsaco",
+                "kernel.hsaco",
+                "--protocol",
+                "stdio",
+                "--",
+                "target",
+            ],
+        ] {
+            assert!(parse_live_kfd_options_v3(arguments.into_iter().map(OsString::from)).is_err());
         }
     }
 

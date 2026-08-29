@@ -941,6 +941,10 @@ assert_equals \
   'cargo test --locked -p fe2o3-debug-cli --features live-validation --test hardware_v2_live -- --test-threads=1' \
   "$(step_command hardware-kfd-debug-protocol-v2)" \
   'hardware smoke did not exercise the KFD hardware debugger V2 protocol'
+assert_equals \
+  'cargo test --locked -p fe2o3-debug-cli --features live-validation --test live_kfd_v3_live -- --exact mi300x_live_kfd_v3_binds_observes_controls_and_terminates --nocapture --test-threads=1' \
+  "$(step_command hardware-kfd-live-gpu-debug-v3)" \
+  'hardware smoke did not exercise the exact-bound live GPU debugger V3 protocol'
 for retired_hardware_step in \
   hardware-cargo-fe2o3-bootstrap \
   hardware-hip-device-properties-build \
