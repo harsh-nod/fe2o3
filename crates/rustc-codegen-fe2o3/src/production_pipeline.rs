@@ -43,6 +43,7 @@ pub(crate) enum ProductionPipelineError {
     SemanticMiddleEnd(fe2o3_pliron::ProductionSemanticMirErrorV1),
     RankedProjection(crate::production_ranked_projection_v1::ProductionRankedProjectionErrorV1),
     RankedVerification(crate::production_ranked_projection_v1::ProductionRankedVerificationErrorV1),
+    MultiRootTargetNeutralLowering { roots: usize },
     TargetNeutralLowering(fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1),
     MissingMirPlironTranslationValidation,
     SimulationKernelIrV7(fe2o3_kernel_ir::VerifiedCanonicalKernelIrErrorV7),
@@ -93,6 +94,10 @@ impl fmt::Display for ProductionPipelineError {
             Self::RankedVerification(error) => {
                 write!(formatter, "production compilation ranked verification failed: {error}")
             }
+            Self::MultiRootTargetNeutralLowering { roots } => write!(
+                formatter,
+                "production compilation retained a verified ranked roster with {roots} kernel roots; target-neutral Kernel IR lowering remains fail-closed until it can consume the complete roster"
+            ),
             Self::TargetNeutralLowering(error) => {
                 write!(formatter, "production compilation target-neutral lowering failed: {error}")
             }
@@ -215,6 +220,7 @@ impl std::error::Error for ProductionPipelineError {
             Self::CustomLlvmConfiguration
             | Self::EmptyCollectedDeviceClosure
             | Self::MissingMirPlironTranslationValidation
+            | Self::MultiRootTargetNeutralLowering { .. }
             | Self::RustcLineageMismatch
             | Self::SimulationProductionKirV9
             | Self::SimulationDebugMapCorrespondence(_)
@@ -1477,6 +1483,16 @@ fn debug_block_ordinal_v1(
 }
 
 impl RankedVerifiedProductionCompilation {
+    pub(crate) fn ranked_roots(
+        &self,
+    ) -> &[crate::production_ranked_projection_v1::ProductionRankedRootProgramV1] {
+        self.ranked.roots()
+    }
+
+    pub(crate) fn ranked_root_count(&self) -> usize {
+        self.ranked.root_count()
+    }
+
     pub(crate) fn ranked_ir(&self) -> &str {
         self.ranked.ranked_ir()
     }
@@ -1787,18 +1803,28 @@ impl<'tcx> ProductionCompilation<'tcx, EquivalentSemanticMirStage> {
             semantic_mir.semantic(),
         )
         .map_err(ProductionPipelineError::DescriptorEvidence)?;
-        let source_launch = match bindings.typed_descriptor_roots.as_slice() {
-            [typed_root] => Some(typed_root.source_launch().ok_or(
-                ProductionPipelineError::Geometry(
-                    crate::production_geometry_v1::ProductionGeometryErrorV1::NonExactDescriptorWorkgroup,
-                ),
-            )?),
-            _ => None,
-        };
+        let ranked_roots = bindings
+            .typed_descriptor_roots
+            .iter()
+            .map(|typed_root| {
+                let source_launch = typed_root.source_launch().ok_or(
+                    ProductionPipelineError::Geometry(
+                        crate::production_geometry_v1::ProductionGeometryErrorV1::NonExactDescriptorWorkgroup,
+                    ),
+                )?;
+                Ok(
+                    crate::production_ranked_projection_v1::ProductionRankedRootInputV1::new(
+                        typed_root.logical_name(),
+                        typed_root.kernel_binding_bytes(),
+                        source_launch,
+                    ),
+                )
+            })
+            .collect::<Result<Vec<_>, ProductionPipelineError>>()?;
         let ranked =
             crate::production_ranked_projection_v1::project_and_verify_ranked_semantic_mir_v1(
                 semantic_mir,
-                source_launch,
+                &ranked_roots,
                 &bindings.reference_effect_bindings,
             )
             .map_err(ProductionPipelineError::RankedProjection)?;
@@ -1811,6 +1837,18 @@ impl RankedVerifiedProductionCompilation {
         self,
     ) -> Result<TargetNeutralProductionCompilation, ProductionPipelineError> {
         let Self { ranked, bindings } = self;
+        let root_count = ranked.root_count();
+        if root_count != 1 {
+            drop((ranked, bindings));
+            return Err(ProductionPipelineError::MultiRootTargetNeutralLowering {
+                roots: root_count,
+            });
+        }
+        let source_rank = ranked
+            .roots()
+            .first()
+            .map(|root| root.source_rank())
+            .ok_or(ProductionPipelineError::MultiRootTargetNeutralLowering { roots: 0 })?;
         let (receipt, ranked_verification) = ranked
             .into_verified_receipt()
             .map_err(ProductionPipelineError::RankedVerification)?;
@@ -1821,17 +1859,6 @@ impl RankedVerifiedProductionCompilation {
                 .has_retained_policy_checked_refinement_staging()
         );
         debug_assert!(ranked_verification.retained_functional_verification_is_coherent());
-        let [typed_root] = bindings.typed_descriptor_roots.as_slice() else {
-            return Err(ProductionPipelineError::Geometry(
-                crate::production_geometry_v1::ProductionGeometryErrorV1::KernelClosure,
-            ));
-        };
-        let source_rank = typed_root
-            .source_launch()
-            .ok_or(ProductionPipelineError::Geometry(
-                crate::production_geometry_v1::ProductionGeometryErrorV1::NonExactDescriptorWorkgroup,
-            ))?
-            .rank();
         let lowered =
             fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1::try_lower_after_ranked_checks(
                 receipt,

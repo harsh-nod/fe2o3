@@ -55,6 +55,14 @@ pub(crate) struct TypedDescriptorRootV1 {
 }
 
 impl TypedDescriptorRootV1 {
+    pub(crate) fn logical_name(&self) -> &str {
+        &self.logical_name
+    }
+
+    pub(crate) const fn kernel_binding_bytes(&self) -> [u8; 32] {
+        self.kernel_binding.as_bytes()
+    }
+
     pub(crate) const fn source_launch(&self) -> Option<&LaunchContract> {
         self.source_launch.as_ref()
     }

@@ -185,8 +185,9 @@ fn attributed_kernel_is_recollected_inside_a_real_amdgcn_dependency_graph() {
 
 #[test]
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]
-fn two_kernel_collection_clears_exact_semantic_ownership_before_ranked_projection_rejects_it() {
+fn two_kernel_collection_reaches_the_explicit_pre_kir_multi_root_boundary() {
     let target = ScratchTarget::new();
+    let llvm_output = target.path().join("two-root.ll");
     let output = Command::new(env!("CARGO"))
         .current_dir(workspace())
         .env(
@@ -197,7 +198,7 @@ fn two_kernel_collection_clears_exact_semantic_ownership_before_ranked_projectio
             "FE2O3_EXTRACT_CRATE_V1",
             "fe2o3_production_extraction_fixture",
         )
-        .env("FE2O3_EXTRACT_RANKED_MEMORY_V1", "1")
+        .env("FE2O3_EXTRACT_AMDGPU_LLVM_PATH_V1", &llvm_output)
         .env(
             "FE2O3_CARGO_METADATA_BUILD_OBSERVATION_V2",
             "55".repeat(32),
@@ -228,17 +229,22 @@ fn two_kernel_collection_clears_exact_semantic_ownership_before_ranked_projectio
 
     assert!(
         !output.status.success(),
-        "two-kernel production extraction unexpectedly cleared the one-root ranked projection boundary",
+        "two-kernel production extraction unexpectedly cleared the pre-Kernel-IR roster boundary",
     );
-    let expected = "production compilation general kernel verification failed: semantic-to-ranked projection rejected a semantic closure that is neither one kernel root nor one transparent Result wrapper";
+    let expected = "production compilation retained a verified ranked roster with 2 kernel roots; target-neutral Kernel IR lowering remains fail-closed until it can consume the complete roster";
     assert_eq!(
         stderr.matches(expected).count(),
         1,
-        "two-kernel production extraction did not stop at the exact ranked-projection boundary:\n{stderr}",
+        "two-kernel production extraction did not stop at the exact pre-Kernel-IR roster boundary:\n{stderr}",
+    );
+    assert!(
+        !llvm_output.exists(),
+        "two-kernel production extraction wrote target LLVM past the pre-Kernel-IR roster boundary",
     );
     for forbidden in [
         "production descriptor evidence has an internal",
         "production compilation geometry validation failed",
+        "semantic-to-ranked projection rejected a semantic closure that is neither one kernel root",
         "production extraction found no registered kernel",
         "one complete typed root",
         "one semantic root",

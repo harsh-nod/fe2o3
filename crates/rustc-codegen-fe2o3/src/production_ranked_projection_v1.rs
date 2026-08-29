@@ -5,7 +5,7 @@
 //! success edge uniquely controls an access to the same slice and index.
 
 use std::{
-    collections::{BTreeMap, HashMap, HashSet, VecDeque},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
     fmt,
 };
 
@@ -21,9 +21,9 @@ use fe2o3_kernel_analysis::{
 };
 use fe2o3_lower_mir_kernel::{
     ProductionRankedAccessSourceV1, ProductionRankedSemanticProjectionReceiptV1,
-    ProductionSemanticKirErrorV1,
 };
 use fe2o3_mir_model::semantic_mir_v1::{
+    AdmittedInertSemanticMirV1,
     SemanticAbiPassModeV1, SemanticAbiPointeeKindV1, SemanticAggregateKindV1,
     SemanticAssertMessageV1, SemanticAtomicAccessV1, SemanticAtomicOrderingV1,
     SemanticAtomicScopeV1, SemanticBackendPrimitiveV1, SemanticBackendReprV1, SemanticBinaryOpV1,
@@ -31,8 +31,9 @@ use fe2o3_mir_model::semantic_mir_v1::{
     SemanticCastKindV1, SemanticCheckedBinaryOpV1, SemanticCompilerIntrinsicOperationV1,
     SemanticConstantValueV1, SemanticDirectCallV1, SemanticDirectTailCallV1,
     SemanticDisjointIndexSpaceV1, SemanticEdgeRoleV1, SemanticFunctionDeclV1,
-    SemanticFunctionRoleV1, SemanticGfx950LdsTransposeFormatV1, SemanticLocalIdV1,
-    SemanticLocalRoleV1, SemanticMfmaAccumulatorContractV1, SemanticMfmaAccumulatorDistributionV1,
+    SemanticFunctionIdV1, SemanticFunctionRoleV1, SemanticGfx950LdsTransposeFormatV1,
+    SemanticKernelBodySelectionV1, SemanticLocalIdV1, SemanticLocalRoleV1,
+    SemanticMfmaAccumulatorContractV1, SemanticMfmaAccumulatorDistributionV1,
     SemanticMfmaOperandContractV1, SemanticMfmaOperandRoleV1, SemanticMfmaProfileV1,
     SemanticMfmaRegisterDistributionV1, SemanticMfmaStorageLayoutV1, SemanticOperandV1,
     SemanticPlaceV1, SemanticProjectionKindV1, SemanticRvalueKindV1, SemanticRvalueV1,
@@ -53,7 +54,8 @@ use fe2o3_pliron::compile_ranked_kernel_for_lowering_v1;
 use fe2o3_pliron::{
     ProductionConstructionV1, ProductionCooperativeTensorBindingV1, ProductionOverflowContractV2,
     ProductionRankedBlockV1, ProductionRankedCompileErrorV1, ProductionRankedKernelErrorV1,
-    ProductionRankedKernelV1, ProductionRankedOperationV1, ProductionRankedTerminatorV1,
+    ProductionRankedKernelLoweringInputV1, ProductionRankedKernelV1, ProductionRankedOperationV1,
+    ProductionRankedTerminatorV1,
     ProductionRankedValueIdV1, ProductionRankedValueV1, ProductionSemanticBinaryOpV2,
     ProductionSemanticCastV2, ProductionSemanticComparisonV2, ProductionSemanticExpressionV2,
     ProductionSemanticLoadV2, ProductionSemanticMirErrorV1, ProductionSemanticMirOwnerV1,
@@ -603,11 +605,70 @@ impl ProjectedSemanticBlockV1 {
     }
 }
 
-/// Move-only result retaining both the exact admitted Rust semantics and the
-/// owner-held PLIRON graph that passed every mandatory generic kernel check.
-pub(crate) struct ProductionRankedSemanticProgramV1 {
-    receipt: ProductionRankedSemanticProjectionReceiptV1,
+/// Exact typed-root input for one ranked projection. Construction remains
+/// crate-private and carries no artifact or launch authority.
+pub(crate) struct ProductionRankedRootInputV1 {
+    logical_name: String,
+    kernel_binding: [u8; 32],
+    source_launch: LaunchContract,
+}
+
+impl ProductionRankedRootInputV1 {
+    pub(crate) fn new(
+        logical_name: &str,
+        kernel_binding: [u8; 32],
+        source_launch: &LaunchContract,
+    ) -> Self {
+        Self {
+            logical_name: logical_name.to_owned(),
+            kernel_binding,
+            source_launch: source_launch.clone(),
+        }
+    }
+}
+
+/// One ordered ranked result. It cannot be cloned and remains nested beneath
+/// the sole module-wide semantic owner.
+pub(crate) struct ProductionRankedRootProgramV1 {
+    kernel_binding: [u8; 32],
+    source_rank: u8,
     semantic_u32_induction: fe2o3_mir_model::SemanticU32InductionNoOverflowReportV1,
+    lowering: ProductionRankedKernelLoweringInputV1,
+    ranked_ir: String,
+    access_sources: Vec<ProductionRankedAccessSourceV1>,
+}
+
+impl ProductionRankedRootProgramV1 {
+    pub(crate) const fn kernel_binding(&self) -> &[u8; 32] {
+        &self.kernel_binding
+    }
+
+    pub(crate) const fn source_rank(&self) -> u8 {
+        self.source_rank
+    }
+
+    pub(crate) fn ranked_ir(&self) -> &str {
+        &self.ranked_ir
+    }
+
+    pub(crate) fn function_name(&self) -> &str {
+        self.lowering.kernel().function_name()
+    }
+
+    pub(crate) fn bounds_are_clean(&self) -> bool {
+        self.lowering.bounds_report().is_clean()
+    }
+
+    pub(crate) fn all_kernel_checks_are_clean(&self) -> bool {
+        self.lowering.all_mandatory_reports_are_clean()
+    }
+}
+
+/// Move-only ordered roster retaining one exact admitted Rust semantic owner
+/// and every root-specific PLIRON graph that passed mandatory generic checks.
+pub(crate) struct ProductionRankedSemanticProgramV1 {
+    semantic_owner: ProductionSemanticMirOwnerV1,
+    roots: Box<[ProductionRankedRootProgramV1]>,
 }
 
 /// Move-only custody of the exact ranked graph and all eight mandatory
@@ -670,6 +731,8 @@ impl AuthenticatedRankedVerificationV5 {
 
 #[derive(Debug)]
 pub(crate) enum ProductionRankedVerificationErrorV1 {
+    RootRoster(usize),
+    Custody(fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1),
     MiddleEndEvidence(fe2o3_pliron::ProductionMiddleEndEvidenceCodecErrorV5),
     SemanticContract(fe2o3_pliron::ProductionMirPlironSemanticContractDerivationErrorV1),
     ParallelContract(fe2o3_pliron::ProductionParallelReferenceContractErrorV1),
@@ -679,6 +742,11 @@ pub(crate) enum ProductionRankedVerificationErrorV1 {
 impl fmt::Display for ProductionRankedVerificationErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::RootRoster(roots) => write!(
+                formatter,
+                "ranked-to-Kernel-IR receipt requires one root, found {roots}"
+            ),
+            Self::Custody(error) => write!(formatter, "ranked proof custody failed: {error}"),
             Self::MiddleEndEvidence(error) => error.fmt(formatter),
             Self::SemanticContract(error) => {
                 write!(
@@ -702,6 +770,8 @@ impl fmt::Display for ProductionRankedVerificationErrorV1 {
 impl std::error::Error for ProductionRankedVerificationErrorV1 {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::RootRoster(_) => None,
+            Self::Custody(error) => Some(error),
             Self::MiddleEndEvidence(error) => Some(error),
             Self::SemanticContract(error) => Some(error),
             Self::ParallelContract(error) => Some(error),
@@ -711,28 +781,46 @@ impl std::error::Error for ProductionRankedVerificationErrorV1 {
 }
 
 impl ProductionRankedSemanticProgramV1 {
+    fn first_root(&self) -> &ProductionRankedRootProgramV1 {
+        self.roots
+            .first()
+            .expect("ranked roster construction rejects an empty root set")
+    }
+
+    pub(crate) fn roots(&self) -> &[ProductionRankedRootProgramV1] {
+        &self.roots
+    }
+
+    pub(crate) fn root_count(&self) -> usize {
+        self.roots.len()
+    }
+
     pub(crate) fn ranked_ir(&self) -> &str {
-        self.receipt.ranked_ir()
+        self.first_root().ranked_ir()
     }
 
     pub(crate) fn function_name(&self) -> &str {
-        self.receipt.lowering().kernel().function_name()
+        self.first_root().function_name()
     }
 
     pub(crate) fn semantic_function_count(&self) -> usize {
-        self.receipt.semantic().semantic().functions().len()
+        self.semantic_owner.semantic().functions().len()
     }
 
     pub(crate) fn semantic_callable_count(&self) -> usize {
-        self.receipt.semantic().semantic().callables().len()
+        self.semantic_owner.semantic().callables().len()
     }
 
     pub(crate) fn bounds_are_clean(&self) -> bool {
-        self.receipt.lowering().bounds_report().is_clean()
+        self.roots
+            .iter()
+            .all(ProductionRankedRootProgramV1::bounds_are_clean)
     }
 
     pub(crate) fn all_kernel_checks_are_clean(&self) -> bool {
-        self.receipt.lowering().all_mandatory_reports_are_clean()
+        self.roots
+            .iter()
+            .all(ProductionRankedRootProgramV1::all_kernel_checks_are_clean)
     }
 
     pub(crate) const fn grants_artifact_or_launch_authority(&self) -> bool {
@@ -749,9 +837,29 @@ impl ProductionRankedSemanticProgramV1 {
         ProductionRankedVerificationErrorV1,
     > {
         let Self {
-            receipt,
-            semantic_u32_induction,
+            semantic_owner,
+            roots,
         } = self;
+        let root_count = roots.len();
+        if root_count != 1 {
+            return Err(ProductionRankedVerificationErrorV1::RootRoster(
+                root_count,
+            ));
+        }
+        let root = roots
+            .into_vec()
+            .into_iter()
+            .next()
+            .ok_or(ProductionRankedVerificationErrorV1::RootRoster(0))?;
+        let receipt =
+            ProductionRankedSemanticProjectionReceiptV1::from_unvalidated_projection_candidate(
+                semantic_owner,
+                root.lowering,
+                root.ranked_ir,
+                root.access_sources,
+            )
+            .map_err(ProductionRankedVerificationErrorV1::Custody)?;
+        let semantic_u32_induction = root.semantic_u32_induction;
         let middle_end_evidence = fe2o3_pliron::ProductionMiddleEndEvidenceV5::try_new(
             receipt.semantic(),
             receipt.lowering(),
@@ -824,7 +932,6 @@ pub(crate) enum ProductionRankedProjectionErrorV1 {
     },
     Unsupported(&'static str),
     Recipe(ProductionRankedKernelErrorV1),
-    Custody(ProductionSemanticKirErrorV1),
     Construction(fe2o3_pliron::NameError),
     Compile {
         error: ProductionRankedCompileErrorV1,
@@ -848,7 +955,6 @@ impl fmt::Display for ProductionRankedProjectionErrorV1 {
                     "bounded semantic induction analysis failed: {error}"
                 )
             }
-            Self::Custody(error) => write!(formatter, "ranked proof custody failed: {error}"),
             Self::Unsupported(detail) => {
                 write!(formatter, "semantic-to-ranked projection rejected {detail}")
             }
@@ -944,25 +1050,164 @@ impl std::error::Error for ProductionRankedProjectionErrorV1 {
             | Self::UnprovenAssert { .. }
             | Self::Unsupported(_)
             | Self::Construction(_) => None,
-            Self::Custody(error) => Some(error),
         }
     }
 }
 
 pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
     semantic_owner: ProductionSemanticMirOwnerV1,
-    source_launch: Option<&LaunchContract>,
+    root_inputs: &[ProductionRankedRootInputV1],
     reference_bindings: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
 ) -> Result<ProductionRankedSemanticProgramV1, ProductionRankedProjectionErrorV1> {
     semantic_owner
         .verify_equivalence()
         .map_err(ProductionRankedProjectionErrorV1::SemanticOwner)?;
     let semantic = semantic_owner.semantic();
-    let selection = semantic.select_kernel_body_v1().ok_or(
-        ProductionRankedProjectionErrorV1::Unsupported(
-            "a semantic closure that is neither one kernel root nor one transparent Result wrapper",
-        ),
-    )?;
+    let matched_roots = match_ranked_semantic_root_roster_v1(semantic, root_inputs)?;
+    let mut assigned_reference_bindings = 0_usize;
+    let root_reference_bindings = root_inputs
+        .iter()
+        .map(|input| {
+            let bindings = reference_bindings
+                .as_slice()
+                .iter()
+                .filter(|binding| {
+                    binding.logical_kernel_name.as_str() == input.logical_name.as_str()
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            assigned_reference_bindings = assigned_reference_bindings
+                .checked_add(bindings.len())
+                .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+                    "reference-effect root assignment count overflow",
+                ))?;
+            Ok(
+                crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1::new(bindings),
+            )
+        })
+        .collect::<Result<Vec<_>, ProductionRankedProjectionErrorV1>>()?;
+    if assigned_reference_bindings != reference_bindings.as_slice().len() {
+        return Err(ProductionRankedProjectionErrorV1::Unsupported(
+            "a reference-effect binding outside the exact typed root roster",
+        ));
+    }
+
+    let mut roots = Vec::with_capacity(root_inputs.len());
+    for ((input, semantic_root), root_references) in root_inputs
+        .iter()
+        .zip(matched_roots)
+        .zip(root_reference_bindings.iter())
+    {
+        let selection = semantic
+            .select_kernel_body_for_root_v1(semantic_root)
+            .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+                "a semantic KernelRoot without one direct body or transparent Result wrapper",
+            ))?;
+        let root = project_and_verify_ranked_root_v1(
+            semantic,
+            selection,
+            &input.source_launch,
+            root_references,
+        )?;
+        if root.kernel_binding != input.kernel_binding {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "a projected ranked root with a substituted kernel binding",
+            ));
+        }
+        roots.push(root);
+    }
+    semantic_owner
+        .verify_equivalence()
+        .map_err(ProductionRankedProjectionErrorV1::SemanticOwner)?;
+    Ok(ProductionRankedSemanticProgramV1 {
+        semantic_owner,
+        roots: roots.into_boxed_slice(),
+    })
+}
+
+fn match_ranked_semantic_root_roster_v1(
+    semantic: &AdmittedInertSemanticMirV1,
+    root_inputs: &[ProductionRankedRootInputV1],
+) -> Result<Vec<SemanticFunctionIdV1>, ProductionRankedProjectionErrorV1> {
+    let mut semantic_roots = Vec::with_capacity(semantic.roots().len());
+    for root in semantic.roots() {
+        let function = semantic.functions().get(root.index() as usize).ok_or(
+            ProductionRankedProjectionErrorV1::Unsupported(
+                "an out-of-range semantic kernel root",
+            ),
+        )?;
+        if function.role() != SemanticFunctionRoleV1::KernelRoot {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "a rooted semantic function without the KernelRoot role",
+            ));
+        }
+        let entry = function.kernel_entry().ok_or(
+            ProductionRankedProjectionErrorV1::Unsupported(
+                "a semantic KernelRoot without an authenticated kernel entry",
+            ),
+        )?;
+        semantic_roots.push((*entry.kernel_binding_identity().as_bytes(), *root));
+    }
+
+    match_ranked_root_bindings_v1(root_inputs, semantic_roots.as_slice())
+}
+
+fn match_ranked_root_bindings_v1(
+    root_inputs: &[ProductionRankedRootInputV1],
+    semantic_roots: &[([u8; 32], SemanticFunctionIdV1)],
+) -> Result<Vec<SemanticFunctionIdV1>, ProductionRankedProjectionErrorV1> {
+    if root_inputs.is_empty() || root_inputs.len() != semantic_roots.len() {
+        return Err(ProductionRankedProjectionErrorV1::Unsupported(
+            "an incomplete typed/semantic ranked root roster",
+        ));
+    }
+    let mut logical_names = BTreeSet::new();
+    if root_inputs
+        .iter()
+        .any(|input| !logical_names.insert(input.logical_name.as_str()))
+    {
+        return Err(ProductionRankedProjectionErrorV1::Unsupported(
+            "duplicate typed logical roots in the ranked roster",
+        ));
+    }
+
+    let mut semantic_roots = semantic_roots
+        .iter()
+        .try_fold(
+            BTreeMap::<[u8; 32], SemanticFunctionIdV1>::new(),
+            |mut roots, (binding, root)| {
+                if roots.insert(*binding, *root).is_some() {
+                    return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                        "duplicate semantic kernel bindings in the ranked roster",
+                    ));
+                }
+                Ok(roots)
+            },
+        )?;
+
+    let mut matched = Vec::with_capacity(root_inputs.len());
+    for input in root_inputs {
+        let root = semantic_roots.remove(&input.kernel_binding).ok_or(
+            ProductionRankedProjectionErrorV1::Unsupported(
+                "a substituted typed/semantic kernel binding in the ranked roster",
+            ),
+        )?;
+        matched.push(root);
+    }
+    if !semantic_roots.is_empty() {
+        return Err(ProductionRankedProjectionErrorV1::Unsupported(
+            "an incomplete typed/semantic kernel binding roster",
+        ));
+    }
+    Ok(matched)
+}
+
+fn project_and_verify_ranked_root_v1(
+    semantic: &AdmittedInertSemanticMirV1,
+    selection: SemanticKernelBodySelectionV1,
+    source_launch: &LaunchContract,
+    reference_bindings: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
+) -> Result<ProductionRankedRootProgramV1, ProductionRankedProjectionErrorV1> {
     let semantic_u32_induction =
         fe2o3_mir_model::analyze_semantic_u32_induction_no_overflow_v1(semantic, selection.body())
             .map_err(ProductionRankedProjectionErrorV1::SemanticU32Induction)?;
@@ -983,9 +1228,13 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
             "a root without the KernelRoot role",
         ));
     }
-    let source_launch = source_launch.ok_or(ProductionRankedProjectionErrorV1::Unsupported(
-        "a selected semantic kernel without one rustc-derived source launch",
-    ))?;
+    let kernel_binding = *root_function
+        .kernel_entry()
+        .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+            "a semantic KernelRoot without an authenticated kernel entry",
+        ))?
+        .kernel_binding_identity()
+        .as_bytes();
 
     let constants = constant_locals(function);
     let mut entry_operations = vec![source_execution_layout_v1(
@@ -1287,17 +1536,13 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
         .map_err(ProductionRankedProjectionErrorV1::ReferenceEffectJoin)?
     };
     let ranked_ir = format_ranked_cfg(function_name(root_function)?, lowering.kernel().blocks())?;
-    let receipt =
-        ProductionRankedSemanticProjectionReceiptV1::from_unvalidated_projection_candidate(
-            semantic_owner,
-            lowering,
-            ranked_ir,
-            access_sources,
-        )
-        .map_err(ProductionRankedProjectionErrorV1::Custody)?;
-    Ok(ProductionRankedSemanticProgramV1 {
-        receipt,
+    Ok(ProductionRankedRootProgramV1 {
+        kernel_binding,
+        source_rank: source_launch.rank(),
         semantic_u32_induction,
+        lowering,
+        ranked_ir,
+        access_sources,
     })
 }
 
@@ -15005,6 +15250,100 @@ mod tests {
         [tag; 32]
     }
 
+    fn ranked_root_input(name: &str, binding: u8, rank: u8) -> ProductionRankedRootInputV1 {
+        let workgroup = match rank {
+            1 => [64, 1, 1],
+            2 => [8, 8, 1],
+            3 => [4, 4, 4],
+            _ => unreachable!(),
+        };
+        let launch = LaunchContract::new(
+            rank,
+            BlockSize::Exact(
+                fe2o3_artifacts::Dimensions::new(workgroup[0], workgroup[1], workgroup[2])
+                    .unwrap(),
+            ),
+            fe2o3_artifacts::Dimensions::new(1, 1, 1).unwrap(),
+            0,
+            0,
+        )
+        .unwrap();
+        ProductionRankedRootInputV1::new(name, bytes(binding), &launch)
+    }
+
+    #[test]
+    fn ranked_root_roster_matches_binding_identity_in_typed_order_with_per_root_rank() {
+        let inputs = [
+            ranked_root_input("alpha", 0xa1, 1),
+            ranked_root_input("zeta", 0x7a, 3),
+        ];
+        let semantic_roots = [
+            (bytes(0x7a), SemanticFunctionIdV1::from_index(9)),
+            (bytes(0xa1), SemanticFunctionIdV1::from_index(4)),
+        ];
+
+        assert_eq!(
+            match_ranked_root_bindings_v1(&inputs, &semantic_roots).unwrap(),
+            vec![
+                SemanticFunctionIdV1::from_index(4),
+                SemanticFunctionIdV1::from_index(9),
+            ],
+        );
+        assert_eq!(inputs[0].source_launch.rank(), 1);
+        assert_eq!(inputs[1].source_launch.rank(), 3);
+    }
+
+    #[test]
+    fn ranked_root_roster_rejects_count_duplicate_and_substituted_hostility() {
+        let exact = [
+            ranked_root_input("alpha", 0xa1, 1),
+            ranked_root_input("zeta", 0x7a, 2),
+        ];
+        let semantic_roots = [
+            (bytes(0xa1), SemanticFunctionIdV1::from_index(0)),
+            (bytes(0x7a), SemanticFunctionIdV1::from_index(1)),
+        ];
+        assert!(matches!(
+            match_ranked_root_bindings_v1(&exact, &semantic_roots[..1]),
+            Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "an incomplete typed/semantic ranked root roster"
+            ))
+        ));
+
+        let duplicate_logical = [
+            ranked_root_input("alpha", 0xa1, 1),
+            ranked_root_input("alpha", 0x7a, 2),
+        ];
+        assert!(matches!(
+            match_ranked_root_bindings_v1(&duplicate_logical, &semantic_roots),
+            Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "duplicate typed logical roots in the ranked roster"
+            ))
+        ));
+
+        let duplicate_semantic = [
+            (bytes(0xa1), SemanticFunctionIdV1::from_index(0)),
+            (bytes(0xa1), SemanticFunctionIdV1::from_index(1)),
+        ];
+        assert!(matches!(
+            match_ranked_root_bindings_v1(&exact, &duplicate_semantic),
+            Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "duplicate semantic kernel bindings in the ranked roster"
+            ))
+        ));
+
+        let substituted = [
+            ranked_root_input("alpha", 0xa1, 1),
+            ranked_root_input("zeta", 0xfe, 2),
+        ];
+        assert!(matches!(
+            match_ranked_root_bindings_v1(&substituted, &semantic_roots),
+            Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "a substituted typed/semantic kernel binding in the ranked roster"
+            ))
+        ));
+    }
+
     fn projection_types() -> Vec<SemanticTypeDeclV1> {
         vec![
             SemanticTypeDeclV1::new(
@@ -17246,6 +17585,24 @@ mod tests {
             ),
             Err(ProductionRankedProjectionErrorV1::Unsupported(
                 "authenticated LaunchContract workgroup disagrees with semantic source workgroup"
+            ))
+        ));
+        let substituted_rank = LaunchContract::new(
+            2,
+            BlockSize::Exact(fe2o3_artifacts::Dimensions::new(64, 1, 1).unwrap()),
+            fe2o3_artifacts::Dimensions::new(1, 1, 1).unwrap(),
+            0,
+            0,
+        )
+        .unwrap();
+        assert!(matches!(
+            source_execution_layout_v1(
+                SemanticTargetArchitectureV1::AmdGpuGfx942,
+                &function,
+                &substituted_rank,
+            ),
+            Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "authenticated launch rank disagrees with source workgroup axes"
             ))
         ));
         assert!(matches!(
