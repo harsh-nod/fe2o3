@@ -59,7 +59,8 @@ fn ablation_sources_keep_the_production_export_and_exact_stage_shapes() {
     assert_eq!(held.matches("multiply_accumulate_fp4(").count(), 4);
     let scalar = include_str!("../src/kernel_scalar_attention.rs");
     assert!(!scalar.contains("Bf16MfmaAMatrix"));
-    assert!(scalar.contains("Bf16::from_bits"));
+    assert!(scalar.contains("fn widen_bf16"));
+    assert!(!scalar.contains("f32::from_bits"));
     let interleaved = include_str!("../src/kernel_interleaved_stores.rs");
     assert!(interleaved.contains("attention_output.get_block_mut(&output_block, 0)"));
     assert!(interleaved.contains("expert_output.get_block_mut(&output_block, 0)"));

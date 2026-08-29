@@ -3,7 +3,7 @@
 #![allow(missing_docs)]
 
 use fe2o3_device::{
-    Bf16, Blocked, DisjointSlice, Gfx950F32AccumulatorFragment, Gfx950Fp4E2M1,
+    Blocked, DisjointSlice, Gfx950F32AccumulatorFragment, Gfx950Fp4E2M1,
     Gfx950Fp4MfmaAMatrix, Gfx950Fp4MfmaBMatrix, Gfx950Matrix, Gfx950Subgroup, Index1D, KernelError,
     KernelResult, Math, StridedReadView2D, Wave64, WaveLane, kernel, thread,
 };
@@ -15,6 +15,68 @@ use crate::{
 
 const ATTENTION_SCALE: f32 = 0.125;
 const ROUTER_FLOOR: f32 = -1.0e30;
+
+#[inline(always)]
+fn widen_bf16(bits: u16) -> f32 {
+    let sign = if (bits & 0x8000) == 0 { 1.0 } else { -1.0 };
+    let exponent = ((bits >> 7) & 0xff) as u32;
+    let fraction = (bits & 0x7f) as u32;
+    if exponent == 0xff {
+        return if fraction == 0 {
+            sign * f32::INFINITY
+        } else {
+            f32::NAN
+        };
+    }
+    if exponent == 0 {
+        return sign * (fraction as f32) * 9.183549615799121e-41_f32;
+    }
+
+    let mut value = (128 + fraction) as f32 * 0.0078125;
+    let outward = exponent >= 127;
+    let distance = if outward {
+        exponent - 127
+    } else {
+        127 - exponent
+    };
+    let factor0 = if outward { 2.0 } else { 0.5 };
+    let factor1 = if outward { 4.0 } else { 0.25 };
+    let factor2 = if outward { 16.0 } else { 0.0625 };
+    let factor3 = if outward { 256.0 } else { 0.00390625 };
+    let factor4 = if outward { 65536.0 } else { 0.0000152587890625 };
+    let factor5 = if outward {
+        4294967296.0
+    } else {
+        2.3283064365386963e-10
+    };
+    let factor6 = if outward {
+        18446744073709551616.0
+    } else {
+        5.421010862427522e-20
+    };
+    if (distance & 1) != 0 {
+        value *= factor0;
+    }
+    if (distance & 2) != 0 {
+        value *= factor1;
+    }
+    if (distance & 4) != 0 {
+        value *= factor2;
+    }
+    if (distance & 8) != 0 {
+        value *= factor3;
+    }
+    if (distance & 16) != 0 {
+        value *= factor4;
+    }
+    if (distance & 32) != 0 {
+        value *= factor5;
+    }
+    if (distance & 64) != 0 {
+        value *= factor6;
+    }
+    sign * value
+}
 
 #[cfg(any(
     not(target_arch = "amdgpu"),
@@ -215,11 +277,11 @@ pub fn gfx950_gpt_oss_120b_decode_megakernel_v1(
     let mut scores = [0.0_f32; 4];
     let mut attention_depth = 0_usize;
     while attention_depth < HEAD_DIM {
-        let key_value = Bf16::from_bits(key.load_or(attention_depth, token_index, 0)).to_f32();
-        scores[0] += Bf16::from_bits(query.load_or(row0, attention_depth, 0)).to_f32() * key_value;
-        scores[1] += Bf16::from_bits(query.load_or(row1, attention_depth, 0)).to_f32() * key_value;
-        scores[2] += Bf16::from_bits(query.load_or(row2, attention_depth, 0)).to_f32() * key_value;
-        scores[3] += Bf16::from_bits(query.load_or(row3, attention_depth, 0)).to_f32() * key_value;
+        let key_value = widen_bf16(key.load_or(attention_depth, token_index, 0));
+        scores[0] += widen_bf16(query.load_or(row0, attention_depth, 0)) * key_value;
+        scores[1] += widen_bf16(query.load_or(row1, attention_depth, 0)) * key_value;
+        scores[2] += widen_bf16(query.load_or(row2, attention_depth, 0)) * key_value;
+        scores[3] += widen_bf16(query.load_or(row3, attention_depth, 0)) * key_value;
         attention_depth += 1;
     }
 
