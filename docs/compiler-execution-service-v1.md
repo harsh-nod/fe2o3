@@ -38,10 +38,12 @@ re-admits the anchor endpoint and pidfd against both the manifest service
 identity and policy-pinned anchor key. Receipt publication now drives that
 transport and requires a durably recorded exact proposed-position observation
 before the Worker record or ACK can advance. The external-anchor entrypoint now
-admits that exact profile and its fixed descriptor set before serving, but a
-root-controlled provisioner must still establish the distinct UID and launch an
-independently operated occurrence. Cargo now admits the fixed root-owned
-client profile and connects only to the fixed authenticated listener path.
+admits that exact profile and its fixed descriptor set before serving, and the
+measured helper now performs the service-owned key, state, socket, and daemon
+exec transition. A root-controlled coordinator must still establish the
+distinct UID and supervise an independently operated occurrence. Cargo now
+admits the fixed root-owned client profile and connects only to the fixed
+authenticated listener path.
 The complete receipt carriage, subject-bound current-record recovery operation,
 exact-carriage protected verification operation, bounded restart-safe client
 state machine, backend acquisition, attempt-scoped sidecar transport, and
@@ -62,7 +64,7 @@ subject, carriage, policy, occurrence, Worker-ledger record, sequence, and
 rollback anchors, and fail closed without independent protected-policy, ledger,
 and external rollback verification identities. The concrete protected verifier,
 independently deployed monotonic rollback process, hardened key use,
-distinct-UID provisioner, and exact Cargo-to-KFD run remain open.
+distinct-UID root coordinator, and exact Cargo-to-KFD run remain open.
 
 The caller-pinned policy, service launch manifest, external-anchor deployment,
 and service-owned Ed25519 keys have reusable immutable memfd capabilities in
@@ -109,11 +111,16 @@ retains that exact object for constant-time revalidation. Only then does it
 inspect and consume FD 222. It privately retains root and peer at FDs 256 and
 257, closes every other descriptor including stdio, revalidates the profile,
 and strictly opens existing state. Initialization is unavailable from the
-daemon entrypoint. The remaining provisioner must create the executable, state,
-and key image under the dedicated anchor UID, create the unnamed socketpair
-after the UID transition so `SO_PEERCRED` records that identity, return only the
-supervisor endpoint to the trusted root process, and execute the measured daemon
-with this exact descriptor set.
+daemon entrypoint. The measured unprivileged helper now admits the provisioning
+manifest and its own exact static image, reissues the root-owned key template as
+service-owned custody, atomically opens or initializes state under one retained
+lock, creates the unnamed socketpair after the UID transition, transfers only
+the supervisor endpoint, and executes the measured daemon with this exact
+descriptor set and an empty environment. The remaining privileged coordinator
+must prepare those exact inputs, launch the helper under the dedicated UID/GID,
+retain pidfd and reaping custody, require both the canonical ready transfer and
+bootstrap close-on-exec EOF, admit the endpoint against the same live process,
+and provision that admitted pair into the supervisor.
 
 ## Transport And Ownership
 
