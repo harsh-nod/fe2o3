@@ -1,17 +1,18 @@
 use fe2o3_kernel_analysis::{
-    Gfx942InstructionRegisterFactsV1, Gfx942RegisterAliasV1, Gfx942RegisterFactsErrorV1,
-    Gfx942RegisterUnitV1, PHYSICAL_MACHINE_ANALYSIS_BUNDLE_DOMAIN_V1,
-    PHYSICAL_MACHINE_ANALYSIS_BUNDLE_SCHEMA_VERSION_V1, PHYSICAL_MACHINE_EFFECT_EVIDENCE_DOMAIN_V1,
-    PHYSICAL_MACHINE_EFFECT_REQUEST_DOMAIN_V1, PHYSICAL_MACHINE_EFFECT_SCHEMA_VERSION_V1,
-    PHYSICAL_MACHINE_TRACE_EVIDENCE_DOMAIN_V1, PHYSICAL_MACHINE_TRACE_SCHEMA_VERSION_V1,
-    PhysicalMachineAnalysisEvidenceErrorV1, PhysicalMachineAnalysisEvidenceV1,
-    PhysicalMachineAnalyzerIdentityV1, PhysicalMachineEffectAnalysisBasisV1,
-    PhysicalMachineEffectBudgetV1, PhysicalMachineEffectEntryRequestV1,
-    PhysicalMachineEffectEvidenceErrorV1, PhysicalMachineEffectEvidenceV1,
-    PhysicalMachineEffectKindV1, PhysicalMachineEffectRequestErrorV1,
-    PhysicalMachineEffectRequestV1, PhysicalMachineExecutionChallengeV1,
-    PhysicalMachineOperandValueV1, PhysicalMachineTargetV1, PhysicalMachineToolchainIdentityV1,
-    PhysicalMachineTraceEvidenceErrorV1, PhysicalMachineTraceEvidenceV1,
+    Gfx942InstructionRegisterFactsV1, Gfx942MachineDataflowV1, Gfx942ReachingDefinitionV1,
+    Gfx942RegisterAliasV1, Gfx942RegisterFactsErrorV1, Gfx942RegisterUnitV1,
+    PHYSICAL_MACHINE_ANALYSIS_BUNDLE_DOMAIN_V1, PHYSICAL_MACHINE_ANALYSIS_BUNDLE_SCHEMA_VERSION_V1,
+    PHYSICAL_MACHINE_EFFECT_EVIDENCE_DOMAIN_V1, PHYSICAL_MACHINE_EFFECT_REQUEST_DOMAIN_V1,
+    PHYSICAL_MACHINE_EFFECT_SCHEMA_VERSION_V1, PHYSICAL_MACHINE_TRACE_EVIDENCE_DOMAIN_V1,
+    PHYSICAL_MACHINE_TRACE_SCHEMA_VERSION_V1, PhysicalMachineAnalysisEvidenceErrorV1,
+    PhysicalMachineAnalysisEvidenceV1, PhysicalMachineAnalyzerIdentityV1,
+    PhysicalMachineEffectAnalysisBasisV1, PhysicalMachineEffectBudgetV1,
+    PhysicalMachineEffectEntryRequestV1, PhysicalMachineEffectEvidenceErrorV1,
+    PhysicalMachineEffectEvidenceV1, PhysicalMachineEffectKindV1,
+    PhysicalMachineEffectRequestErrorV1, PhysicalMachineEffectRequestV1,
+    PhysicalMachineExecutionChallengeV1, PhysicalMachineOperandValueV1, PhysicalMachineTargetV1,
+    PhysicalMachineToolchainIdentityV1, PhysicalMachineTraceEvidenceErrorV1,
+    PhysicalMachineTraceEvidenceV1,
 };
 use std::{collections::BTreeSet, fs};
 
@@ -600,6 +601,86 @@ fn configured_retained_machine_analysis_reopens_offline() {
     assert!(!analysis.grants_load_authority());
     assert!(!analysis.grants_launch_authority());
 
+    let dataflow = Gfx942MachineDataflowV1::derive(analysis.trace())
+        .expect("derive bounded gfx942 machine dataflow");
+    assert_eq!(dataflow.trace_identity(), analysis.trace().identity());
+    assert!(!dataflow.establishes_machine_semantics());
+    assert!(!dataflow.establishes_compiler_refinement());
+    assert!(!dataflow.grants_launch_authority());
+
+    let functions = dataflow.function_symbols().collect::<Vec<_>>();
+    assert_eq!(functions.len(), 1, "retained scalar slice has one function");
+    let function = functions[0];
+    let trap = analysis
+        .trace()
+        .instructions()
+        .iter()
+        .filter(|instruction| instruction.opcode() == "S_TRAP_vi")
+        .collect::<Vec<_>>();
+    assert_eq!(trap.len(), 1, "retained scalar slice has one trap site");
+    let trap = trap[0];
+    let predecessor = analysis
+        .trace()
+        .blocks()
+        .iter()
+        .filter(|block| block.successors().contains(&trap.block_ordinal()))
+        .collect::<Vec<_>>();
+    assert_eq!(predecessor.len(), 1, "trap block has one predecessor");
+    let predecessor = predecessor[0];
+    let branch = analysis
+        .trace()
+        .instructions()
+        .iter()
+        .find(|instruction| {
+            instruction.block_ordinal() == predecessor.ordinal()
+                && instruction.opcode() == "S_CBRANCH_EXECNZ_vi"
+        })
+        .expect("trap predecessor branches on EXEC");
+    assert!(
+        dataflow
+            .block_dominates(function, predecessor.ordinal(), trap.block_ordinal(),)
+            .unwrap()
+    );
+
+    let expected = dataflow
+        .reaching_definitions_before(
+            function,
+            branch.instruction_offset(),
+            Gfx942RegisterUnitV1::ExecLow,
+        )
+        .unwrap();
+    assert_eq!(
+        expected.len(),
+        1,
+        "trap EXEC mask has one reaching definition"
+    );
+    assert_eq!(
+        dataflow
+            .reaching_definitions_before(
+                function,
+                branch.instruction_offset(),
+                Gfx942RegisterUnitV1::ExecHigh,
+            )
+            .unwrap(),
+        expected,
+        "both EXEC halves share the exact reaching definition",
+    );
+    let Gfx942ReachingDefinitionV1::Instruction { offset: definition } = expected[0] else {
+        panic!("trap EXEC mask must not be live-in");
+    };
+    let definition_instruction = analysis
+        .trace()
+        .instructions()
+        .iter()
+        .find(|instruction| instruction.instruction_offset() == definition)
+        .expect("reaching definition instruction exists");
+    assert_eq!(definition_instruction.opcode(), "S_AND_SAVEEXEC_B64_vi");
+    assert!(
+        dataflow
+            .instruction_dominates(function, definition, branch.instruction_offset())
+            .unwrap()
+    );
+
     let mut registers = BTreeSet::new();
     for instruction in analysis.trace().instructions() {
         Gfx942InstructionRegisterFactsV1::derive(instruction)
@@ -632,6 +713,67 @@ fn configured_retained_machine_analysis_reopens_offline() {
             eprintln!("instruction {instruction:?}");
         }
     }
+}
+
+#[test]
+fn gfx942_machine_dataflow_is_loop_aware_bounded_and_inert() {
+    let (request, effects, trace_bytes, _) = loop_trace_fixture();
+    let trace =
+        PhysicalMachineTraceEvidenceV1::decode_canonical_for(&request, &effects, &trace_bytes)
+            .unwrap();
+    let dataflow = Gfx942MachineDataflowV1::derive(&trace).unwrap();
+
+    assert_eq!(dataflow.trace_identity(), trace.identity());
+    assert_eq!(
+        dataflow.function_symbols().collect::<Vec<_>>(),
+        ["loop_entry"]
+    );
+    assert!(dataflow.block_dominates("loop_entry", 0, 3).unwrap());
+    assert!(dataflow.block_dominates("loop_entry", 1, 2).unwrap());
+    assert!(!dataflow.block_dominates("loop_entry", 2, 3).unwrap());
+    assert!(dataflow.instruction_dominates("loop_entry", 8, 28).unwrap());
+    assert_eq!(
+        dataflow.block_dominates("missing", 0, 0),
+        Err(
+            fe2o3_kernel_analysis::Gfx942MachineDataflowErrorV1::UnknownFunction(
+                "missing".to_owned(),
+            )
+        ),
+    );
+    assert_eq!(
+        dataflow.block_dominates("loop_entry", 0, 4),
+        Err(fe2o3_kernel_analysis::Gfx942MachineDataflowErrorV1::UnknownBlock(4)),
+    );
+    assert_eq!(
+        dataflow.instruction_dominates("loop_entry", 8, 36),
+        Err(fe2o3_kernel_analysis::Gfx942MachineDataflowErrorV1::UnknownInstruction(36)),
+    );
+
+    assert_eq!(
+        dataflow
+            .reaching_definitions_before("loop_entry", 12, Gfx942RegisterUnitV1::Sgpr(4))
+            .unwrap(),
+        [Gfx942ReachingDefinitionV1::Instruction { offset: 8 }],
+    );
+    assert_eq!(
+        dataflow
+            .reaching_definitions_before("loop_entry", 12, Gfx942RegisterUnitV1::Vgpr(2))
+            .unwrap(),
+        [Gfx942ReachingDefinitionV1::LiveIn],
+    );
+    assert_eq!(
+        dataflow
+            .reaching_definitions_before("loop_entry", 12, Gfx942RegisterUnitV1::Vgpr(0))
+            .unwrap(),
+        [
+            Gfx942ReachingDefinitionV1::LiveIn,
+            Gfx942ReachingDefinitionV1::Instruction { offset: 12 },
+        ],
+        "the loop-header use sees both the live-in and prior-iteration definition",
+    );
+    assert!(!dataflow.establishes_machine_semantics());
+    assert!(!dataflow.establishes_compiler_refinement());
+    assert!(!dataflow.grants_launch_authority());
 }
 
 #[test]

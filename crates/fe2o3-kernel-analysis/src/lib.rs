@@ -9,6 +9,8 @@
 mod authenticated_machine_effect;
 mod control_flow;
 #[cfg(feature = "authenticated-machine-effect")]
+mod gfx942_machine_dataflow;
+#[cfg(feature = "authenticated-machine-effect")]
 mod gfx942_machine_register;
 mod kernel_check_model;
 #[cfg(feature = "authenticated-machine-effect")]
@@ -82,6 +84,8 @@ pub use control_flow::{
     MAX_CONTROL_FLOW_NATURAL_LOOPS, MAX_CONTROL_FLOW_STORAGE_ITEMS, MAX_CONTROL_FLOW_WORK_UNITS,
     MAX_SSA_PLACEMENT_OUTPUT_ITEMS, analyze_control_flow,
 };
+#[cfg(feature = "authenticated-machine-effect")]
+pub use gfx942_machine_dataflow::*;
 #[cfg(feature = "authenticated-machine-effect")]
 pub use gfx942_machine_register::*;
 pub use kernel_check_model::*;
