@@ -73,6 +73,7 @@ pub(crate) struct PreparedProductionSemanticLineageV3 {
     mir_to_kir_correspondence: InertMirToKirCorrespondenceReceiptV3,
     formal_memory: InertFormalMemoryReceiptV3,
     verus_execution: CanonicalProductionMirPlironVerusExecutionEvidenceV1,
+    semantic_u32_induction: fe2o3_mir_model::SemanticU32InductionNoOverflowReportV1,
     neutral_kir_identity: TargetLineageIdentityV3,
     bound_kir_identity: TargetLineageIdentityV3,
     semantic_layout_identity: TargetLineageIdentityV3,
@@ -88,7 +89,7 @@ impl PreparedProductionSemanticLineageV3 {
         rustc_identity_inventory: &crate::collector::AuthenticatedRustcIdentityInventoryV3,
         rustc_preflight_plan: &crate::collector::AuthenticatedRustcPreflightPlanV3,
         rustc_target: &crate::production_target_v1::AuthenticatedProductionTargetV1,
-        ranked_verification: &AuthenticatedRankedVerificationV5,
+        ranked_verification: AuthenticatedRankedVerificationV5,
         admitted: &ProductionFormalMemoryOwnerV1,
         target_module: &Module,
         pre_descriptor_llvm: &str,
@@ -98,6 +99,22 @@ impl PreparedProductionSemanticLineageV3 {
             .map_err(|error| ProductionSemanticLineageErrorV3::LiveOwner(error.to_string()))?;
 
         let semantic = admitted.semantic_kir().semantic().semantic();
+        let semantic_u32_induction = ranked_verification.semantic_u32_induction();
+        let induction_function = semantic
+            .functions()
+            .get(semantic_u32_induction.function().index() as usize)
+            .ok_or(ProductionSemanticLineageErrorV3::AxisMismatch(
+                "semantic induction report names a function outside canonical semantic MIR",
+            ))?;
+        if semantic_u32_induction.semantic_mir_sha256() != semantic.semantic_sha256()
+            || semantic_u32_induction.function_identity() != induction_function.identity()
+            || semantic_u32_induction.grants_authority()
+            || semantic_u32_induction.authorizes_compiler_transform()
+        {
+            return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
+                "semantic induction report is not an inert exact-custody fact",
+            ));
+        }
         let rustc_identity_inventory =
             InertRustcIdentityInventoryReceiptV3::from_canonical_preimage(
                 rustc_identity_inventory.canonical_transcript(),
@@ -201,6 +218,7 @@ impl PreparedProductionSemanticLineageV3 {
                 "target-bound KIR has no exact workgroup size",
             ))?;
 
+        let semantic_u32_induction = ranked_verification.into_semantic_u32_induction();
         Ok(Self {
             rustc_identity_inventory,
             rustc_preflight_plan,
@@ -210,6 +228,7 @@ impl PreparedProductionSemanticLineageV3 {
             mir_to_kir_correspondence,
             formal_memory,
             verus_execution,
+            semantic_u32_induction,
             neutral_kir_identity,
             bound_kir_identity,
             semantic_layout_identity,
@@ -252,6 +271,15 @@ impl PreparedProductionSemanticLineageV3 {
             )
         })?;
         validate_final_llvm_layout(final_llvm)?;
+        if self.semantic_u32_induction.semantic_mir_sha256().as_bytes()
+            != self.semantic_mir.identity().sha256()
+            || self.semantic_u32_induction.grants_authority()
+            || self.semantic_u32_induction.authorizes_compiler_transform()
+        {
+            return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
+                "semantic induction custody changed before final handoff",
+            ));
+        }
 
         let invocation_bytes = encode_descriptor_v3(&invocation)
             .map_err(|error| ProductionSemanticLineageErrorV3::Invocation(error.to_string()))?;

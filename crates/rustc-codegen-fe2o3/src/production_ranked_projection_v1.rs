@@ -607,6 +607,7 @@ impl ProjectedSemanticBlockV1 {
 /// owner-held PLIRON graph that passed every mandatory generic kernel check.
 pub(crate) struct ProductionRankedSemanticProgramV1 {
     receipt: ProductionRankedSemanticProjectionReceiptV1,
+    semantic_u32_induction: fe2o3_mir_model::SemanticU32InductionNoOverflowReportV1,
 }
 
 /// Move-only custody of the exact ranked graph and all eight mandatory
@@ -615,6 +616,7 @@ pub(crate) struct ProductionRankedSemanticProgramV1 {
 pub(crate) struct AuthenticatedRankedVerificationV5 {
     middle_end_evidence: fe2o3_pliron::ProductionMiddleEndEvidenceV5,
     functional: Option<AuthenticatedFunctionalVerificationV1>,
+    semantic_u32_induction: fe2o3_mir_model::SemanticU32InductionNoOverflowReportV1,
 }
 
 struct AuthenticatedFunctionalVerificationV1 {
@@ -651,6 +653,18 @@ impl AuthenticatedRankedVerificationV5 {
         self.functional
             .as_ref()
             .map(|functional| functional.aggregate.execution())
+    }
+
+    pub(crate) const fn semantic_u32_induction(
+        &self,
+    ) -> &fe2o3_mir_model::SemanticU32InductionNoOverflowReportV1 {
+        &self.semantic_u32_induction
+    }
+
+    pub(crate) fn into_semantic_u32_induction(
+        self,
+    ) -> fe2o3_mir_model::SemanticU32InductionNoOverflowReportV1 {
+        self.semantic_u32_induction
     }
 }
 
@@ -734,25 +748,28 @@ impl ProductionRankedSemanticProgramV1 {
         ),
         ProductionRankedVerificationErrorV1,
     > {
+        let Self {
+            receipt,
+            semantic_u32_induction,
+        } = self;
         let middle_end_evidence = fe2o3_pliron::ProductionMiddleEndEvidenceV5::try_new(
-            self.receipt.semantic(),
-            self.receipt.lowering(),
-            self.receipt.ranked_ir(),
+            receipt.semantic(),
+            receipt.lowering(),
+            receipt.ranked_ir(),
         )
         .map_err(ProductionRankedVerificationErrorV1::MiddleEndEvidence)?;
-        let functional = if self
-            .receipt
+        let functional = if receipt
             .lowering()
             .has_retained_policy_checked_refinement_staging()
         {
             let semantics = fe2o3_pliron::derive_and_reconcile_mir_pliron_semantic_contract_v1(
-                self.receipt.lowering(),
+                receipt.lowering(),
                 &middle_end_evidence,
             )
             .map_err(ProductionRankedVerificationErrorV1::SemanticContract)?;
             let (parallel_contract, parallel_report) =
                 fe2o3_pliron::derive_and_require_parallel_reference_contract_v1(
-                    self.receipt.lowering(),
+                    receipt.lowering(),
                     &middle_end_evidence,
                     semantics.semantic_contract_report(),
                     semantics.contract(),
@@ -760,7 +777,7 @@ impl ProductionRankedSemanticProgramV1 {
                 .map_err(ProductionRankedVerificationErrorV1::ParallelContract)?;
             let aggregate =
                 crate::production_mir_pliron_verus_join_v1::authenticate_mir_pliron_contract_per_compilation_v1(
-                    self.receipt.lowering(),
+                    receipt.lowering(),
                     &middle_end_evidence,
                     semantics.contract(),
                     semantics.semantic_contract_report(),
@@ -778,10 +795,11 @@ impl ProductionRankedSemanticProgramV1 {
             None
         };
         Ok((
-            self.receipt,
+            receipt,
             AuthenticatedRankedVerificationV5 {
                 middle_end_evidence,
                 functional,
+                semantic_u32_induction,
             },
         ))
     }
@@ -790,6 +808,7 @@ impl ProductionRankedSemanticProgramV1 {
 #[derive(Debug)]
 pub(crate) enum ProductionRankedProjectionErrorV1 {
     SemanticOwner(ProductionSemanticMirErrorV1),
+    SemanticU32Induction(fe2o3_mir_model::SemanticU32InductionAnalysisErrorV1),
     Incomplete(&'static str),
     MissingAllocationProvenance {
         local: u32,
@@ -822,6 +841,12 @@ impl fmt::Display for ProductionRankedProjectionErrorV1 {
         match self {
             Self::SemanticOwner(error) => {
                 write!(formatter, "exact semantic middle end failed: {error}")
+            }
+            Self::SemanticU32Induction(error) => {
+                write!(
+                    formatter,
+                    "bounded semantic induction analysis failed: {error}"
+                )
             }
             Self::Custody(error) => write!(formatter, "ranked proof custody failed: {error}"),
             Self::Unsupported(detail) => {
@@ -910,6 +935,7 @@ impl std::error::Error for ProductionRankedProjectionErrorV1 {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::SemanticOwner(error) => Some(error),
+            Self::SemanticU32Induction(error) => Some(error),
             Self::Recipe(error) => Some(error),
             Self::Compile { error, .. } => Some(error),
             Self::ReferenceEffectJoin(error) => Some(error),
@@ -937,6 +963,9 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
             "a semantic closure that is neither one kernel root nor one transparent Result wrapper",
         ),
     )?;
+    let semantic_u32_induction =
+        fe2o3_mir_model::analyze_semantic_u32_induction_no_overflow_v1(semantic, selection.body())
+            .map_err(ProductionRankedProjectionErrorV1::SemanticU32Induction)?;
     let root_function = semantic
         .functions()
         .get(selection.root().index() as usize)
@@ -1263,7 +1292,10 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
             access_sources,
         )
         .map_err(ProductionRankedProjectionErrorV1::Custody)?;
-    Ok(ProductionRankedSemanticProgramV1 { receipt })
+    Ok(ProductionRankedSemanticProgramV1 {
+        receipt,
+        semantic_u32_induction,
+    })
 }
 
 fn projected_reference_gpu_writes_v2(
@@ -14953,12 +14985,17 @@ mod tests {
     const CHECKED_U64_TYPE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(9);
 
     #[test]
-    fn authenticated_ranked_projection_exposes_only_the_v5_evidence_wire() {
-        let accessor: for<'a> fn(
+    fn authenticated_ranked_projection_exposes_v5_and_inert_induction_evidence() {
+        let middle_end_accessor: for<'a> fn(
             &'a AuthenticatedRankedVerificationV5,
-        ) -> &'a fe2o3_pliron::ProductionMiddleEndEvidenceV5 =
+        )
+            -> &'a fe2o3_pliron::ProductionMiddleEndEvidenceV5 =
             AuthenticatedRankedVerificationV5::middle_end_evidence;
-        let _ = accessor;
+        let induction_accessor: for<'a> fn(
+            &'a AuthenticatedRankedVerificationV5,
+        ) -> &'a fe2o3_mir_model::SemanticU32InductionNoOverflowReportV1 =
+            AuthenticatedRankedVerificationV5::semantic_u32_induction;
+        let _ = (middle_end_accessor, induction_accessor);
     }
 
     fn bytes(tag: u8) -> [u8; 32] {

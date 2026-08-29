@@ -865,7 +865,7 @@ impl TargetLoweredProductionCompilation {
             &rustc_identity_inventory,
             &rustc_preflight_plan,
             &rustc_target,
-            &ranked_verification,
+            ranked_verification,
             &admitted,
             &target_module,
             &llvm_ir,
