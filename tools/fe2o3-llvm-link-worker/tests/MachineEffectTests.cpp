@@ -188,6 +188,68 @@ std::vector<uint8_t> makeKernelBitcode(bool WithHelper,
   return std::vector<uint8_t>(Bytes.begin(), Bytes.end());
 }
 
+std::vector<uint8_t> makeLoopKernelBitcode() {
+  LLVMContext Context;
+  Module ModuleValue("physical-machine-loop-fixture", Context);
+  auto Machine = createMachine();
+  ModuleValue.setTargetTriple(Triple(TripleName));
+  ModuleValue.setDataLayout(Machine->createDataLayout());
+  ModuleValue.addModuleFlag(Module::Error, "amdhsa_code_object_version", 600);
+
+  Type *F32 = Type::getFloatTy(Context);
+  Type *I32 = Type::getInt32Ty(Context);
+  PointerType *GlobalPointer = PointerType::get(Context, 1);
+  FunctionType *LoopType = FunctionType::get(
+      Type::getVoidTy(Context), {GlobalPointer, GlobalPointer, I32}, false);
+  Function *Loop = Function::Create(LoopType, GlobalValue::ExternalLinkage,
+                                    "alpha", ModuleValue);
+  configureKernel(*Loop, Context);
+
+  BasicBlock *Entry = BasicBlock::Create(Context, "entry", Loop);
+  BasicBlock *Header = BasicBlock::Create(Context, "loop.header", Loop);
+  BasicBlock *Body = BasicBlock::Create(Context, "loop.body", Loop);
+  BasicBlock *Exit = BasicBlock::Create(Context, "exit", Loop);
+  IRBuilder<> Builder(Entry);
+  Builder.CreateBr(Header);
+
+  Builder.SetInsertPoint(Header);
+  PHINode *Index = Builder.CreatePHI(I32, 2, "index");
+  PHINode *Sum = Builder.CreatePHI(F32, 2, "sum");
+  Index->addIncoming(ConstantInt::get(I32, 0), Entry);
+  Sum->addIncoming(ConstantFP::get(F32, 0.0), Entry);
+  Value *Continue = Builder.CreateICmpULT(Index, Loop->getArg(2));
+  Builder.CreateCondBr(Continue, Body, Exit);
+
+  Builder.SetInsertPoint(Body);
+  Value *Address = Builder.CreateGEP(F32, Loop->getArg(0), Index);
+  Value *Element = Builder.CreateLoad(F32, Address);
+  Value *NextSum = Builder.CreateFAdd(Sum, Element);
+  Value *NextIndex = Builder.CreateAdd(Index, ConstantInt::get(I32, 1));
+  Builder.CreateBr(Header);
+  Index->addIncoming(NextIndex, Body);
+  Sum->addIncoming(NextSum, Body);
+
+  Builder.SetInsertPoint(Exit);
+  Builder.CreateStore(Sum, Loop->getArg(1));
+  Builder.CreateRetVoid();
+
+  FunctionType *CopyType = FunctionType::get(
+      Type::getVoidTy(Context), {GlobalPointer, GlobalPointer}, false);
+  Function *Copy = Function::Create(CopyType, GlobalValue::ExternalLinkage,
+                                    "zeta", ModuleValue);
+  configureKernel(*Copy, Context);
+  BasicBlock *CopyEntry = BasicBlock::Create(Context, "entry", Copy);
+  IRBuilder<> CopyBuilder(CopyEntry);
+  Value *Value = CopyBuilder.CreateLoad(F32, Copy->getArg(0));
+  CopyBuilder.CreateStore(Value, Copy->getArg(1));
+  CopyBuilder.CreateRetVoid();
+
+  SmallVector<char, 0> Bytes;
+  raw_svector_ostream Stream(Bytes);
+  WriteBitcodeToFile(ModuleValue, Stream);
+  return std::vector<uint8_t>(Bytes.begin(), Bytes.end());
+}
+
 Input input(std::vector<uint8_t> Bytes) {
   return {InputKind::LlvmBitcode, SHA256::hash(Bytes), std::move(Bytes)};
 }
@@ -339,6 +401,26 @@ void physicalAnalysisDerivesDeterministicClosedEffects() {
                                 PhysicalMachineEffectKind::Return;
                        }),
           "return was not derived");
+}
+
+void backwardLoopCfgIsAcceptedGenerically() {
+  auto Payload = finalize(makeLoopKernelBitcode());
+  auto Result = analyzeGfx942PhysicalMachineEffects(directRequest(Payload));
+  if (!Result)
+    fail(takeError(Result.takeError()));
+
+  auto HasAlphaEffect = [&](PhysicalMachineEffectKind Kind) {
+    return llvm::any_of(Result->Effects, [&](const auto &Effect) {
+      return Effect.EntrySymbol == "alpha" &&
+             Effect.FunctionSymbol == "alpha" && Effect.Kind == Kind;
+    });
+  };
+  require(HasAlphaEffect(PhysicalMachineEffectKind::GlobalRead),
+          "loop fixture has no input read");
+  require(HasAlphaEffect(PhysicalMachineEffectKind::GlobalWrite),
+          "loop fixture has no output write");
+  require(HasAlphaEffect(PhysicalMachineEffectKind::Return),
+          "loop fixture has no terminal return");
 }
 
 void identityProbeBindsFreshChallenge() {
@@ -1400,6 +1482,7 @@ int main() {
   targetEnvelopeRejectsAlternatives();
   exactDynamicSymbolicDeclarationIsAccepted();
   physicalAnalysisDerivesDeterministicClosedEffects();
+  backwardLoopCfgIsAcceptedGenerically();
   decoderBindsBytesSymbolsAndIdentities();
   targetDescriptorAndEffectExpansionFailClosed();
   loaderViewMutationsFailClosed();

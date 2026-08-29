@@ -30,12 +30,15 @@ direct-call graph, and emits deterministic static evidence for global-address,
 global-read, global-write, and return sites. It accepts arbitrary canonical
 entry symbols and uses LLVM MC instruction properties rather than a
 workload-specific opcode or CFG profile. Unsupported memory spaces, atomics,
-indirect control flow, backward branches, recursion, and unmodeled side effects
-fail closed.
+indirect control flow, self branches, recursion, and unmodeled side effects fail
+closed. Direct branch backedges are retained in the finite CFG so ordinary
+bounded-loop machine shapes can be analyzed without a workload-specific route.
 
 The evidence enumerates reachable static instruction sites in the exact input
-bytes. It does not prove dynamic execution counts, concrete addresses, bounds,
-race freedom, compiler refinement, source properties, or launch safety.
+bytes. Accepting a backedge does not prove termination, a trip count, loop-carried
+dataflow, or recurrence semantics. The evidence also does not prove dynamic
+execution counts, concrete addresses, bounds, race freedom, compiler refinement,
+source properties, or launch safety.
 
 The Rust authenticated execution API copies the exact worker into a sealed
 memfd, clears the environment to `LANG=C`, `LC_ALL=C`, and `TZ=UTC`, retains
