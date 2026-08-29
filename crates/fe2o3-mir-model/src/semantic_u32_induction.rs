@@ -185,6 +185,7 @@ pub struct SemanticU32InductionNoOverflowCertificateV1 {
     function: SemanticFunctionIdV1,
     function_identity: SemanticFunctionIdentityV1,
     induction: SemanticU32InductionPlaceBindingV1,
+    guard_induction: SemanticU32InductionPlaceBindingV1,
     bound: SemanticU32InductionPlaceBindingV1,
     predicate: SemanticU32InductionPlaceBindingV1,
     checked_result: SemanticU32InductionPlaceBindingV1,
@@ -193,6 +194,7 @@ pub struct SemanticU32InductionNoOverflowCertificateV1 {
     body_entry: SemanticU32InductionBlockSiteV1,
     exit: SemanticU32InductionBlockSiteV1,
     initialization: SemanticU32InductionStatementSiteV1,
+    guard_induction_snapshot: Option<SemanticU32InductionStatementSiteV1>,
     guard: SemanticU32InductionStatementSiteV1,
     checked_addition: SemanticU32InductionStatementSiteV1,
     update: SemanticU32InductionStatementSiteV1,
@@ -213,6 +215,12 @@ impl SemanticU32InductionNoOverflowCertificateV1 {
 
     pub const fn induction(self) -> SemanticU32InductionPlaceBindingV1 {
         self.induction
+    }
+
+    /// Exact value compared against the bound. This is either the induction
+    /// local itself or a uniquely defined, single-use snapshot in the header.
+    pub const fn guard_induction(self) -> SemanticU32InductionPlaceBindingV1 {
+        self.guard_induction
     }
 
     pub const fn bound(self) -> SemanticU32InductionPlaceBindingV1 {
@@ -245,6 +253,10 @@ impl SemanticU32InductionNoOverflowCertificateV1 {
 
     pub const fn initialization(self) -> SemanticU32InductionStatementSiteV1 {
         self.initialization
+    }
+
+    pub const fn guard_induction_snapshot(self) -> Option<SemanticU32InductionStatementSiteV1> {
+        self.guard_induction_snapshot
     }
 
     pub const fn guard(self) -> SemanticU32InductionStatementSiteV1 {
@@ -706,7 +718,6 @@ fn prove_candidate_v1(
     if !definition(inventory, result_local)?.is_unique_at(candidate_definition)
         || use_count(inventory, result_local)? != 2
         || local(inventory.address_or_projection_hazard.as_slice(), induction)?
-        || local(inventory.direct_copy_alias.as_slice(), induction)?
     {
         return Ok(None);
     }
@@ -829,16 +840,47 @@ fn prove_candidate_v1(
         else {
             continue;
         };
-        if exact_operand_place(left)
-            .is_some_and(|place| place.local() == induction && place.ty() == induction_ty)
+        let Some(left_place) = exact_operand_place(left) else {
+            continue;
+        };
+        let guard_induction = if left_place.local() == induction && left_place.ty() == induction_ty
+        {
+            Some((induction, None))
+        } else {
+            match_guard_induction_snapshot_v1(
+                types,
+                function,
+                header,
+                header_index,
+                statement_index,
+                induction,
+                induction_ty,
+                left_place,
+                inventory,
+            )?
+        };
+        if let Some((guard_induction, guard_snapshot)) = guard_induction
             && guard_match
-                .replace((statement_index, assignment, right))
+                .replace((
+                    statement_index,
+                    assignment,
+                    right,
+                    guard_induction,
+                    guard_snapshot,
+                ))
                 .is_some()
         {
             return Ok(None);
         }
     }
-    let Some((guard_statement, guard_assignment, bound_operand)) = guard_match else {
+    let Some((
+        guard_statement,
+        guard_assignment,
+        bound_operand,
+        guard_induction,
+        guard_induction_snapshot,
+    )) = guard_match
+    else {
         return Ok(None);
     };
     let Some(bound_place) = exact_operand_place(bound_operand) else {
@@ -994,6 +1036,7 @@ fn prove_candidate_v1(
         function: function_id,
         function_identity: function.identity(),
         induction: place_binding(types, function, induction)?,
+        guard_induction: place_binding(types, function, guard_induction)?,
         bound: place_binding(types, function, bound)?,
         predicate: place_binding(types, function, predicate)?,
         checked_result: place_binding(types, function, result_local)?,
@@ -1002,10 +1045,83 @@ fn prove_candidate_v1(
         body_entry: block_site(body_entry_index, body_entry)?,
         exit: block_site(exit_index, exit)?,
         initialization: statement_site(preheader_index, preheader, initialization_site)?,
+        guard_induction_snapshot: guard_induction_snapshot
+            .map(|site| statement_site(header_index, header, site))
+            .transpose()?,
         guard: statement_site(header_index, header, guard_definition)?,
         checked_addition: statement_site(candidate.block, candidate_block, candidate_definition)?,
         update: statement_site(update_block_index, update_block, update_site)?,
     }))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn match_guard_induction_snapshot_v1(
+    types: &[SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1,
+    header: &SemanticBasicBlockV1,
+    header_index: usize,
+    guard_statement: usize,
+    induction: SemanticLocalIdV1,
+    induction_ty: SemanticTypeIdV1,
+    snapshot_place: &SemanticPlaceV1,
+    inventory: &SemanticInventoryV1,
+) -> Result<
+    Option<(SemanticLocalIdV1, Option<DefinitionSiteV1>)>,
+    SemanticU32InductionAnalysisErrorV1,
+> {
+    let snapshot = snapshot_place.local();
+    let snapshot_ty = snapshot_place.ty();
+    if snapshot == induction || snapshot_ty != induction_ty || !is_exact_u32(types, snapshot_ty) {
+        return Ok(None);
+    }
+    let Some(snapshot_decl) = function.locals().get(snapshot.index() as usize) else {
+        return Err(SemanticU32InductionAnalysisErrorV1::InvalidModel(
+            "a guard induction snapshot is outside the local table",
+        ));
+    };
+    let Some(snapshot_definition) = definition(inventory, snapshot)?.first else {
+        return Ok(None);
+    };
+    let expected_definition = DefinitionSiteV1 {
+        block: header_index,
+        position: DefinitionPositionV1::Statement(match snapshot_definition.position {
+            DefinitionPositionV1::Statement(statement) => statement,
+            DefinitionPositionV1::Terminator => return Ok(None),
+        }),
+    };
+    let DefinitionPositionV1::Statement(snapshot_statement) = snapshot_definition.position else {
+        return Ok(None);
+    };
+    if snapshot_statement >= guard_statement
+        || snapshot_decl.ty() != snapshot_ty
+        || snapshot_decl.role() != SemanticLocalRoleV1::Temporary
+        || !definition(inventory, snapshot)?.is_unique_at(expected_definition)
+        || use_count(inventory, snapshot)? != 1
+        || local(inventory.address_or_projection_hazard.as_slice(), snapshot)?
+    {
+        return Ok(None);
+    }
+    let Some(statement) = header.statements().get(snapshot_statement) else {
+        return Err(SemanticU32InductionAnalysisErrorV1::InvalidModel(
+            "a guard induction snapshot definition is outside the header statement table",
+        ));
+    };
+    let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
+        return Ok(None);
+    };
+    if !is_exact_destination(assignment.destination(), snapshot, snapshot_ty)
+        || assignment.value().result_type() != snapshot_ty
+        || !matches!(
+            assignment.value().kind(),
+            SemanticRvalueKindV1::Use(operand)
+                if exact_operand_place(operand).is_some_and(|place| {
+                    place.local() == induction && place.ty() == induction_ty
+                })
+        )
+    {
+        return Ok(None);
+    }
+    Ok(Some((snapshot, Some(snapshot_definition))))
 }
 
 struct SemanticCfgV1 {
@@ -1637,6 +1753,8 @@ mod tests {
         bound_is_argument: bool,
         extra_induction_definition: bool,
         alias_induction: bool,
+        guard_snapshot: bool,
+        guard_snapshot_extra_use: bool,
         mutate_assert_operands: bool,
         identity_seed: u8,
     }
@@ -1649,6 +1767,8 @@ mod tests {
                 bound_is_argument: true,
                 extra_induction_definition: false,
                 alias_induction: false,
+                guard_snapshot: false,
+                guard_snapshot_extra_use: false,
                 mutate_assert_operands: false,
                 identity_seed: 0,
             }
@@ -1823,10 +1943,18 @@ mod tests {
             local(23, BOOL, SemanticLocalRoleV1::Temporary),
             local(24, CHECKED_U32, SemanticLocalRoleV1::Temporary),
         ];
-        let alias = if shape.alias_induction {
-            let alias = SemanticLocalIdV1::from_index(locals.len() as u32);
-            locals.push(local(25, U32, SemanticLocalRoleV1::Temporary));
-            Some(alias)
+        let alias =
+            if shape.alias_induction || shape.guard_snapshot || shape.guard_snapshot_extra_use {
+                let alias = SemanticLocalIdV1::from_index(locals.len() as u32);
+                locals.push(local(25, U32, SemanticLocalRoleV1::Temporary));
+                Some(alias)
+            } else {
+                None
+            };
+        let snapshot_sink = if shape.guard_snapshot_extra_use {
+            let sink = SemanticLocalIdV1::from_index(locals.len() as u32);
+            locals.push(local(26, U32, SemanticLocalRoleV1::Temporary));
+            Some(sink)
         } else {
             None
         };
@@ -1843,22 +1971,43 @@ mod tests {
                 SemanticRvalueKindV1::Use(constant(0)),
             ));
         }
-        if let Some(alias) = alias {
+        if shape.alias_induction {
+            let alias = alias.expect("stale alias local");
             preheader.push(assignment(
                 place(alias, U32),
                 U32,
                 SemanticRvalueKindV1::Use(copy(INDUCTION, U32)),
             ));
         }
+        let mut header = Vec::new();
+        if shape.guard_snapshot || shape.guard_snapshot_extra_use {
+            let alias = alias.expect("header snapshot local");
+            header.push(assignment(
+                place(alias, U32),
+                U32,
+                SemanticRvalueKindV1::Use(copy(INDUCTION, U32)),
+            ));
+            if let Some(sink) = snapshot_sink {
+                header.push(assignment(
+                    place(sink, U32),
+                    U32,
+                    SemanticRvalueKindV1::Use(copy(alias, U32)),
+                ));
+            }
+        }
+        let guard_induction = alias.filter(|_| {
+            shape.alias_induction || shape.guard_snapshot || shape.guard_snapshot_extra_use
+        });
         let guard = assignment(
             place(PREDICATE, BOOL),
             BOOL,
             SemanticRvalueKindV1::Binary {
                 operation: SemanticBinaryOpV1::LessThan,
-                left: copy(INDUCTION, U32),
+                left: copy(guard_induction.unwrap_or(INDUCTION), U32),
                 right: copy(BOUND, U32),
             },
         );
+        header.push(guard);
         let checked = assignment(
             place(CHECKED_RESULT, CHECKED_U32),
             CHECKED_U32,
@@ -1885,7 +2034,7 @@ mod tests {
             block(
                 seed,
                 31,
-                vec![guard],
+                header,
                 SemanticTerminatorKindV1::SwitchInt {
                     discriminant: copy(PREDICATE, BOOL),
                     targets: SemanticSwitchTargetsV1::new(
@@ -1991,6 +2140,8 @@ mod tests {
         );
         assert_eq!(certificate.function(), SemanticFunctionIdV1::from_index(0));
         assert_eq!(certificate.induction().local(), INDUCTION);
+        assert_eq!(certificate.guard_induction().local(), INDUCTION);
+        assert_eq!(certificate.guard_induction_snapshot(), None);
         assert_eq!(certificate.bound().local(), BOUND);
         assert_eq!(certificate.predicate().local(), PREDICATE);
         assert_eq!(certificate.checked_result().local(), CHECKED_RESULT);
@@ -2010,6 +2161,28 @@ mod tests {
     }
 
     #[test]
+    fn exact_single_use_header_snapshot_preserves_the_induction_fact() {
+        let admitted = admitted(Shape {
+            guard_snapshot: true,
+            ..Shape::default()
+        });
+        let report = report(&admitted);
+        let [certificate] = report.certificates() else {
+            panic!("expected one header-snapshot no-overflow certificate");
+        };
+        assert_eq!(certificate.induction().local(), INDUCTION);
+        assert_ne!(certificate.guard_induction().local(), INDUCTION);
+        assert_eq!(
+            certificate
+                .guard_induction_snapshot()
+                .expect("exact header snapshot site")
+                .statement(),
+            0
+        );
+        assert_eq!(certificate.guard().statement(), 1);
+    }
+
+    #[test]
     fn unsupported_or_hostile_shapes_never_produce_a_certificate() {
         for shape in [
             Shape {
@@ -2026,6 +2199,10 @@ mod tests {
             },
             Shape {
                 alias_induction: true,
+                ..Shape::default()
+            },
+            Shape {
+                guard_snapshot_extra_use: true,
                 ..Shape::default()
             },
             Shape {

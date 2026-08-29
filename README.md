@@ -640,9 +640,12 @@ Safe ownership of resources used by asynchronous copies is documented in
   exactly one `-Coverflow-checks=on`; explicit disabled or conflicting settings
   fail before the in-process driver starts. This fixed compiler policy is not a
   crate-namespace axis, while the exact protected rustc invocation still
-  retains the canonical flag. Semantic induction certificates remain inert:
-  they do not authorize removing the corresponding LLVM overflow guard until
-  source-to-KIR-to-LLVM refinement is independently authenticated.
+  retains the canonical flag. The scalar gfx942 vertical slice derives one
+  identity-bound semantic induction certificate for its checked `u32` loop
+  increment while preserving the LLVM overflow guard. That certificate remains
+  inert: it does not authorize removing the guard until its exact report and
+  source-to-KIR-to-LLVM refinement are durably retained and independently
+  authenticated.
 - `fe2o3-core` provides HIP-backed contexts, streams, device buffers, pinned
   host buffers, events, synchronous transfers, and event-backed borrowed and
   owned asynchronous transfers. Its default/production surface exports no raw
