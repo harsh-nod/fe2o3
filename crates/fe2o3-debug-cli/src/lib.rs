@@ -2446,11 +2446,65 @@ fn run_jsonl_v1<R: BufRead, W: Write>(
                 let response = backend.handle_source_variables_v2(request);
                 write_source_variable_response_v2(writer, &response, limits)?;
             }
+            DebugRequestAnyV2::DiagnosisV2(request) => {
+                let response = backend.handle_diagnosis_v2(request);
+                write_diagnosis_response_v2(writer, &response, limits)?;
+            }
         }
     }
     writer
         .flush()
         .map_err(|_| "failed to flush debugger responses".to_owned())
+}
+
+fn write_diagnosis_response_v2<W: Write>(
+    writer: &mut W,
+    response: &DiagnosisResponseV2,
+    limits: ProtocolLimitsV1,
+) -> Result<(), String> {
+    match encode_diagnosis_response_line_v2(response, limits) {
+        Ok(bytes) => writer
+            .write_all(&bytes)
+            .map_err(|_| "failed to write diagnosis V2 response".to_owned()),
+        Err(ProtocolCodecErrorV1::ResponseTooLarge) => {
+            let (request_id, operation, session) = match response {
+                DiagnosisResponseV2::Ok {
+                    request_id,
+                    operation,
+                    session,
+                    ..
+                } => (Some(*request_id), *operation, *session),
+                DiagnosisResponseV2::Error {
+                    request_id,
+                    operation,
+                    session,
+                    ..
+                } => (*request_id, *operation, *session),
+            };
+            let fallback = DiagnosisResponseV2::Error {
+                schema: DiagnosisResponseSchemaV2::V2,
+                request_id,
+                operation,
+                session,
+                error: DebugErrorV1 {
+                    stage: DebugErrorStageV1::Output,
+                    code: DebugErrorCodeV1::ResponseTooLarge,
+                    message: "response exceeds the configured JSONL bound".to_owned(),
+                    state_changed: false,
+                },
+            };
+            let bytes = encode_diagnosis_response_line_v2(&fallback, limits).map_err(|error| {
+                format!("failed to encode bounded diagnosis V2 fallback: {error}")
+            })?;
+            writer
+                .write_all(&bytes)
+                .map_err(|_| "failed to write bounded diagnosis V2 fallback response".to_owned())
+        }
+        Err(error) => Err(format!("failed to encode diagnosis V2 response: {error}")),
+    }?;
+    writer
+        .flush()
+        .map_err(|_| "failed to flush diagnosis V2 response".to_owned())
 }
 
 fn write_source_variable_response_v2<W: Write>(
@@ -2584,6 +2638,7 @@ struct SimulatorBackendV1 {
     session: DebugSessionV1,
     wave_width: DebugWaveWidthV1,
     configuration_identity: OpaqueIdentityV1,
+    diagnosis_dispatch: DiagnosisDispatchV2,
     source_map_identity: Option<OpaqueIdentityV1>,
     source_map_provenance: Option<SourceMapProvenanceV1>,
     source_variables_v2: Option<AdmittedSourceVariablesV2>,
@@ -2637,6 +2692,10 @@ impl SimulatorBackendV1 {
         source_map_v2: Option<AdmittedSourceMapV2>,
         replay_schedule: Option<&SimulationScheduleRecordV1>,
     ) -> Result<Self, String> {
+        let diagnosis_dispatch = DiagnosisDispatchV2 {
+            launch_extent: input.request.grid.0,
+            workgroup_size: input.request.workgroup.0,
+        };
         let capture_limits =
             SimulationDebugCaptureLimitsV1::new(64, 4_096, 16_384, 16 * 1024 * 1024)
                 .map_err(|error| error.to_string())?;
@@ -2731,6 +2790,7 @@ impl SimulatorBackendV1 {
             session,
             wave_width,
             configuration_identity,
+            diagnosis_dispatch,
             source_map_identity,
             source_map_provenance,
             source_variables_v2,
@@ -3058,6 +3118,125 @@ impl SimulatorBackendV1 {
             snapshot: Box::new(snapshot),
             values,
             next_cursor,
+        }
+    }
+
+    fn handle_diagnosis_v2(&mut self, request: DiagnosisRequestV2) -> DiagnosisResponseV2 {
+        let request_id = request.request_id();
+        if request.expected_revision() != self.revision {
+            return self.diagnosis_error_v2(
+                Some(request_id),
+                DebugErrorCodeV1::StaleRevision,
+                "expected_revision does not match the current session revision",
+            );
+        }
+        if self.terminated {
+            return self.diagnosis_error_v2(
+                Some(request_id),
+                DebugErrorCodeV1::InvalidState,
+                "debug session is terminated",
+            );
+        }
+        if self.command_count == MAX_SESSION_COMMANDS_V1 {
+            return self.diagnosis_error_v2(
+                Some(request_id),
+                DebugErrorCodeV1::ResourceLimit,
+                "debug session command budget is exhausted",
+            );
+        }
+        self.command_count += 1;
+        let DiagnosisRequestV2::Diagnose { filter, page, .. } = request;
+        self.diagnose_v2(request_id, filter, page)
+    }
+
+    fn diagnose_v2(
+        &self,
+        request_id: u64,
+        filter: DiagnosisFilterV2,
+        page: PageRequestV1,
+    ) -> DiagnosisResponseV2 {
+        let query_bytes = match serde_json::to_vec(&filter) {
+            Ok(bytes) => bytes,
+            Err(_) => {
+                return self.diagnosis_error_v2(
+                    Some(request_id),
+                    DebugErrorCodeV1::ResourceLimit,
+                    "diagnosis query binding allocation failed",
+                );
+            }
+        };
+        let query = self.query_identity(b"diagnose-v2", &query_bytes);
+        let candidate = self
+            .session
+            .transcript()
+            .terminal_fault()
+            .and_then(|fault| self.diagnosis_view_v2(fault))
+            .filter(|diagnosis| {
+                filter.class.is_none_or(|class| diagnosis.class == class)
+                    && filter.scope.is_none_or(|scope| {
+                        self.session
+                            .transcript()
+                            .terminal_fault()
+                            .and_then(|fault| fault.invocation)
+                            .is_some_and(|invocation| {
+                                convert_scope_selector(scope).matches(invocation, self.wave_width)
+                            })
+                    })
+            });
+        let total = usize::from(candidate.is_some());
+        let (start, end, next_cursor) = match page_bounds(page, query, total) {
+            Ok(bounds) => bounds,
+            Err(message) => {
+                return self.diagnosis_error_v2(
+                    Some(request_id),
+                    DebugErrorCodeV1::InvalidCursor,
+                    message,
+                );
+            }
+        };
+        let diagnoses = if start < end {
+            candidate.into_iter().collect()
+        } else {
+            Vec::new()
+        };
+        let emitted_events =
+            u64::try_from(self.session.transcript().records().len()).unwrap_or(u64::MAX);
+        let completeness = match self.session.transcript().completeness() {
+            DebugTranscriptCompletenessV1::Complete => CaptureCompletenessV1::Complete,
+            DebugTranscriptCompletenessV1::Truncated(reason) => CaptureCompletenessV1::Truncated {
+                reason: transcript_truncation_reason(reason),
+                emitted_events,
+                dropped_events: None,
+            },
+        };
+        DiagnosisResponseV2::Ok {
+            schema: DiagnosisResponseSchemaV2::V2,
+            request_id,
+            operation: DiagnosisOperationV2::Diagnose,
+            session: self.session_view(),
+            completeness,
+            diagnoses,
+            next_cursor,
+        }
+    }
+
+    fn diagnosis_error_v2(
+        &self,
+        request_id: Option<u64>,
+        code: DebugErrorCodeV1,
+        message: &str,
+    ) -> DiagnosisResponseV2 {
+        DiagnosisResponseV2::Error {
+            schema: DiagnosisResponseSchemaV2::V2,
+            request_id,
+            operation: DiagnosisOperationV2::Diagnose,
+            session: self.session_view(),
+            error: DebugErrorV1 {
+                stage: DebugErrorStageV1::Session,
+                code,
+                message: bounded_message(message),
+                state_changed: false,
+            },
         }
     }
 
@@ -4841,6 +5020,321 @@ impl SimulatorBackendV1 {
         })
     }
 
+    fn diagnosis_view_v2(&self, fault: &DebugTerminalFaultV1) -> Option<DiagnosisViewV2> {
+        use fe2o3_kir_sim::SimulationExecutionErrorKindV1 as ErrorKind;
+
+        let context = self.diagnosis_context_v2(fault.invocation);
+        let site = fault
+            .site
+            .as_ref()
+            .and_then(|site| self.protocol_execution_site_v2(site))
+            .map_or(
+                DiagnosisFactV2::Unavailable {
+                    reason: DiagnosisUnavailableReasonV2::SiteNotRepresented,
+                },
+                |value| DiagnosisFactV2::Observed { value },
+            );
+        let (class, memory_region, barrier) = match &fault.kind {
+            ErrorKind::OutOfBounds {
+                allocation,
+                offset,
+                bytes,
+                allocation_bytes,
+            } => {
+                let memory_region = u64::try_from(*offset)
+                    .ok()
+                    .zip(u64::try_from(*bytes).ok())
+                    .zip(u64::try_from(*allocation_bytes).ok())
+                    .filter(|((offset, bytes), allocation_bytes)| {
+                        *allocation != 0
+                            && *bytes != 0
+                            && offset
+                                .checked_add(*bytes)
+                                .is_some_and(|end| end > *allocation_bytes)
+                    })
+                    .map_or(
+                        DiagnosisFactV2::Unavailable {
+                            reason: DiagnosisUnavailableReasonV2::NotRepresentable,
+                        },
+                        |((requested_offset, requested_bytes), allocation_bytes)| {
+                            DiagnosisFactV2::Observed {
+                                value: DiagnosisMemoryRegionV2 {
+                                    allocation: AllocationIdentityV1 {
+                                        ordinal: *allocation,
+                                        generation: 0,
+                                    },
+                                    requested_offset,
+                                    requested_bytes,
+                                    allocation_bytes,
+                                },
+                            }
+                        },
+                    );
+                (
+                    DiagnosisClassV2::MemoryOutOfBounds,
+                    memory_region,
+                    DiagnosisFactV2::Unavailable {
+                        reason: DiagnosisUnavailableReasonV2::NotApplicable,
+                    },
+                )
+            }
+            ErrorKind::DivergentWorkgroupBarrier(detail) => {
+                let barrier = fault
+                    .invocation
+                    .and_then(|invocation| self.divergent_barrier_v2(invocation, detail))
+                    .map_or(
+                        DiagnosisFactV2::Unavailable {
+                            reason: DiagnosisUnavailableReasonV2::NotRepresentable,
+                        },
+                        |value| DiagnosisFactV2::Observed { value },
+                    );
+                (
+                    DiagnosisClassV2::WorkgroupBarrierDivergence,
+                    DiagnosisFactV2::Unavailable {
+                        reason: DiagnosisUnavailableReasonV2::NotApplicable,
+                    },
+                    barrier,
+                )
+            }
+            ErrorKind::MismatchedWorkgroupBarrier(detail) => {
+                let mismatch = match detail.mismatch {
+                    fe2o3_kir_sim::WorkgroupBarrierMismatchV1::Site => {
+                        DiagnosisBarrierMismatchV2::Site
+                    }
+                    fe2o3_kir_sim::WorkgroupBarrierMismatchV1::Semantics => {
+                        DiagnosisBarrierMismatchV2::Semantics
+                    }
+                    fe2o3_kir_sim::WorkgroupBarrierMismatchV1::SiteAndSemantics => {
+                        DiagnosisBarrierMismatchV2::SiteAndSemantics
+                    }
+                };
+                let expected_site = self.protocol_event_site_v2(&detail.expected).map_or(
+                    DiagnosisFactV2::Unavailable {
+                        reason: DiagnosisUnavailableReasonV2::SiteNotRepresented,
+                    },
+                    |value| DiagnosisFactV2::Observed { value },
+                );
+                (
+                    DiagnosisClassV2::WorkgroupBarrierMismatch,
+                    DiagnosisFactV2::Unavailable {
+                        reason: DiagnosisUnavailableReasonV2::NotApplicable,
+                    },
+                    DiagnosisFactV2::Observed {
+                        value: DiagnosisBarrierV2::Mismatch {
+                            phase: DiagnosisFactV2::Observed {
+                                value: detail.phase,
+                            },
+                            mismatch: DiagnosisFactV2::Observed { value: mismatch },
+                            expected_site,
+                        },
+                    },
+                )
+            }
+            _ => return None,
+        };
+        Some(DiagnosisViewV2 {
+            sequence: fault.ordinal.saturating_add(1),
+            class,
+            context,
+            site,
+            memory_region,
+            barrier,
+        })
+    }
+
+    fn diagnosis_context_v2(
+        &self,
+        invocation: Option<SimulationInvocationV1>,
+    ) -> DiagnosisExecutionContextV2 {
+        let dispatch = DiagnosisFactV2::Declared {
+            value: self.diagnosis_dispatch,
+        };
+        let Some(invocation) = invocation else {
+            return DiagnosisExecutionContextV2 {
+                dispatch,
+                workgroup: DiagnosisFactV2::Unavailable {
+                    reason: DiagnosisUnavailableReasonV2::MissingInvocation,
+                },
+                workitem: DiagnosisFactV2::Unavailable {
+                    reason: DiagnosisUnavailableReasonV2::MissingInvocation,
+                },
+                wave: DiagnosisFactV2::Unavailable {
+                    reason: DiagnosisUnavailableReasonV2::MissingInvocation,
+                },
+                lane: DiagnosisFactV2::Unavailable {
+                    reason: DiagnosisUnavailableReasonV2::MissingInvocation,
+                },
+            };
+        };
+        let hierarchy = hierarchy_for_invocation_v1(invocation, self.wave_width);
+        DiagnosisExecutionContextV2 {
+            dispatch,
+            workgroup: DiagnosisFactV2::Observed {
+                value: invocation.workgroup,
+            },
+            workitem: DiagnosisFactV2::Observed {
+                value: DiagnosisWorkitemV2 {
+                    global: invocation.global,
+                    local: invocation.local,
+                },
+            },
+            wave: DiagnosisFactV2::Inferred {
+                value: DiagnosisLogicalWaveV2 {
+                    wave: hierarchy.wave,
+                    width: self.wave_width.lanes(),
+                    active_mask: hierarchy.active_mask,
+                },
+                basis: DiagnosisInferenceBasisV2::LogicalWavePartition,
+            },
+            lane: DiagnosisFactV2::Inferred {
+                value: hierarchy.lane,
+                basis: DiagnosisInferenceBasisV2::LogicalWavePartition,
+            },
+        }
+    }
+
+    fn divergent_barrier_v2(
+        &self,
+        invocation: SimulationInvocationV1,
+        detail: &fe2o3_kir_sim::DivergentWorkgroupBarrierV1,
+    ) -> Option<DiagnosisBarrierV2> {
+        let expected = active_workgroup_participants_v2(invocation)?;
+        let observed_arrivals = match self.session.transcript().completeness() {
+            DebugTranscriptCompletenessV1::Complete => {
+                let arrivals = self
+                    .session
+                    .transcript()
+                    .records()
+                    .iter()
+                    .filter(|record| {
+                        record.invocation.workgroup == invocation.workgroup
+                            && matches!(
+                                record.kind,
+                                SimulationDebugRecordKindV1::WorkgroupBarrier {
+                                    action: SimulationDebugBarrierActionV1::Arrive,
+                                    phase,
+                                    ..
+                                } if phase == detail.phase
+                            )
+                    })
+                    .count();
+                match u32::try_from(arrivals) {
+                    Ok(arrivals) if arrivals != 0 => DiagnosisFactV2::Observed { value: arrivals },
+                    _ => DiagnosisFactV2::Unavailable {
+                        reason: DiagnosisUnavailableReasonV2::NotCaptured,
+                    },
+                }
+            }
+            DebugTranscriptCompletenessV1::Truncated(_) => DiagnosisFactV2::Unavailable {
+                reason: DiagnosisUnavailableReasonV2::TranscriptTruncated,
+            },
+        };
+        Some(DiagnosisBarrierV2::Divergence {
+            phase: DiagnosisFactV2::Observed {
+                value: detail.phase,
+            },
+            observed_arrivals,
+            expected_participants: DiagnosisFactV2::Inferred {
+                value: expected,
+                basis: DiagnosisInferenceBasisV2::LaunchGeometry,
+            },
+            waiting: self.barrier_participant_v2(invocation, detail.waiting.local)?,
+            exited: self.barrier_participant_v2(invocation, detail.exited.local)?,
+        })
+    }
+
+    fn barrier_participant_v2(
+        &self,
+        invocation: SimulationInvocationV1,
+        local: [u32; 3],
+    ) -> Option<DiagnosisBarrierParticipantV2> {
+        let mut global = [0_u64; 3];
+        for (axis, coordinate) in global.iter_mut().enumerate() {
+            *coordinate = invocation.workgroup[axis]
+                .checked_mul(u64::from(invocation.workgroup_size[axis]))?
+                .checked_add(u64::from(local[axis]))?;
+            if *coordinate >= invocation.launch_extent[axis] {
+                return None;
+            }
+        }
+        let linear = u64::from(local[0]).checked_add(
+            u64::from(invocation.workgroup_size[0]).checked_mul(
+                u64::from(local[1]).checked_add(
+                    u64::from(invocation.workgroup_size[1]).checked_mul(u64::from(local[2]))?,
+                )?,
+            )?,
+        )?;
+        let width = u64::from(self.wave_width.lanes());
+        Some(DiagnosisBarrierParticipantV2 {
+            local_workitem: DiagnosisFactV2::Observed { value: local },
+            global_workitem: DiagnosisFactV2::Inferred {
+                value: global,
+                basis: DiagnosisInferenceBasisV2::LaunchGeometry,
+            },
+            wave: DiagnosisFactV2::Inferred {
+                value: u32::try_from(linear / width).ok()?,
+                basis: DiagnosisInferenceBasisV2::LogicalWavePartition,
+            },
+            lane: DiagnosisFactV2::Inferred {
+                value: u16::try_from(linear % width).ok()?,
+                basis: DiagnosisInferenceBasisV2::LogicalWavePartition,
+            },
+        })
+    }
+
+    fn protocol_execution_site_v2(
+        &self,
+        site: &fe2o3_kir_sim::SimulationSiteV1,
+    ) -> Option<KirSiteV1> {
+        let function_ordinal = self
+            .module
+            .module()
+            .functions
+            .iter()
+            .position(|function| function.id == site.function)?;
+        let body = self.module.module().functions[function_ordinal]
+            .body
+            .as_ref()?;
+        let block_ordinal = body
+            .blocks
+            .iter()
+            .position(|block| block.id == site.block)?;
+        Some(KirSiteV1 {
+            function_ordinal: u64::try_from(function_ordinal).ok()?,
+            block_ordinal: u64::try_from(block_ordinal).ok()?,
+            point: site
+                .operation
+                .map_or(KirSitePointV1::Terminator, |operation| {
+                    KirSitePointV1::Operation {
+                        operation_ordinal: u64::from(operation),
+                    }
+                }),
+        })
+    }
+
+    fn protocol_event_site_v2(
+        &self,
+        site: &fe2o3_kir_sim::SimulationEventSiteV1,
+    ) -> Option<KirSiteV1> {
+        let function = self.module.module().functions.get(site.function_ordinal)?;
+        let body = function.body.as_ref()?;
+        let block_ordinal = body
+            .blocks
+            .iter()
+            .position(|block| block.id == site.block)?;
+        Some(KirSiteV1 {
+            function_ordinal: u64::try_from(site.function_ordinal).ok()?,
+            block_ordinal: u64::try_from(block_ordinal).ok()?,
+            point: site
+                .operation
+                .map_or(KirSitePointV1::Terminator, |operation| {
+                    KirSitePointV1::Operation {
+                        operation_ordinal: u64::from(operation),
+                    }
+                }),
+        })
+    }
+
     fn record_matches_event_filter(
         &self,
         record: &SimulationDebugRecordV1,
@@ -5006,6 +5500,20 @@ impl SimulatorBackendV1 {
         digest.update(query);
         nonzero_identity(digest.finalize().into())
     }
+}
+
+fn active_workgroup_participants_v2(invocation: SimulationInvocationV1) -> Option<u32> {
+    let mut participants = 1_u64;
+    for (axis, coordinate) in invocation.workgroup.into_iter().enumerate() {
+        let start = coordinate.checked_mul(u64::from(invocation.workgroup_size[axis]))?;
+        let remaining = invocation.launch_extent[axis].checked_sub(start)?;
+        let active = remaining.min(u64::from(invocation.workgroup_size[axis]));
+        if active == 0 {
+            return None;
+        }
+        participants = participants.checked_mul(active)?;
+    }
+    u32::try_from(participants).ok()
 }
 
 fn configuration_identity(

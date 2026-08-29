@@ -69,6 +69,25 @@ records returns `variables_not_captured`. Map and bundle identities establish
 exact content association, not compiler-execution authentication. Hardware V2
 does not admit this simulator query.
 
+Semantic diagnosis is another additive, read-only exchange under
+`fe2o3-debug-diagnosis-request-v2` and its matching response schema. It pages
+only typed dynamic findings retained by the deterministic CPU simulator:
+out-of-bounds memory regions and workgroup-barrier divergence or mismatch.
+Every dispatch, workgroup, work-item, logical wave, lane, KIR site, memory
+region, barrier participant, and phase fact is individually labeled
+`declared`, `observed`, `inferred` with a closed derivation, or `unavailable`
+with a closed reason. In this schema `observed` always means a CPU semantic
+simulation observation. The response validator rejects KFD hardware sessions,
+hardware-observation substitution, invalid hierarchy joins, in-bounds ranges
+claimed as out of bounds, and incompatible finding/detail pairs.
+
+Diagnosis is retrospective over the immutable bounded transcript and terminal
+failure, independent of the interactive cursor. Filters and page cursors are
+bound to the exact simulator configuration and session revision. A complete
+transcript can report the observed barrier-arrival count; a truncated
+transcript keeps that count typed unavailable. Logical waves and lanes are
+explicitly inferred visualization partitions, never physical GPU state.
+
 Breakpoint predicates are a closed, bounded AST of typed value operands,
 constant bits, comparisons, and boolean composition. Arbitrary expression
 strings are not accepted. Watchpoints name a generation-aware allocation plus

@@ -5,10 +5,11 @@ use std::io::{self, BufRead, Write};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    DebugBackendV1, DebugErrorV1, DebugRequestV1, DebugSnapshotAnchorV1, ExecutionKindV1,
-    ExecutionScopeSelectorV1, OpaqueIdentityV1, PageCursorV1, PageRequestV1, ProtocolCodecErrorV1,
-    ProtocolLimitsV1, ProtocolValidationErrorV1, SessionViewV1, ValueAvailabilityV1,
-    ValueProvenanceV1, ValueUnavailableReasonV1,
+    DIAGNOSIS_REQUEST_SCHEMA_V2, DebugBackendV1, DebugErrorV1, DebugRequestV1,
+    DebugSnapshotAnchorV1, DiagnosisRequestV2, ExecutionKindV1, ExecutionScopeSelectorV1,
+    OpaqueIdentityV1, PageCursorV1, PageRequestV1, ProtocolCodecErrorV1, ProtocolLimitsV1,
+    ProtocolValidationErrorV1, SessionViewV1, ValueAvailabilityV1, ValueProvenanceV1,
+    ValueUnavailableReasonV1, decode_diagnosis_request_line_v2,
 };
 
 pub const SOURCE_VARIABLE_REQUEST_SCHEMA_V2: &str = "fe2o3-debug-source-variable-request-v2";
@@ -299,6 +300,7 @@ fn validate_source_variable_session_v2(
 pub enum DebugRequestAnyV2 {
     V1(DebugRequestV1),
     SourceVariablesV2(SourceVariableRequestV2),
+    DiagnosisV2(DiagnosisRequestV2),
 }
 
 pub fn decode_source_variable_request_line_v2(
@@ -381,6 +383,9 @@ pub fn read_request_line_any_v2<R: BufRead>(
             .map(Some),
         SOURCE_VARIABLE_REQUEST_SCHEMA_V2 => decode_source_variable_request_line_v2(&line, limits)
             .map(DebugRequestAnyV2::SourceVariablesV2)
+            .map(Some),
+        DIAGNOSIS_REQUEST_SCHEMA_V2 => decode_diagnosis_request_line_v2(&line, limits)
+            .map(DebugRequestAnyV2::DiagnosisV2)
             .map(Some),
         _ => Err(ProtocolCodecErrorV1::InvalidJson),
     }

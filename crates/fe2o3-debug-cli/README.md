@@ -71,6 +71,27 @@ Captured F16/BF16/F32/F64 scalar values retain their exact software-IEEE bits;
 the debugger does not render or recompute them with host floating-point
 arithmetic.
 
+`fe2o3-debug-diagnosis-request-v2` adds a read-only, page-bounded diagnosis
+query to the same simulator JSONL stream without changing the closed V1
+operation set. For a retained out-of-bounds failure it returns the exact
+trace-local allocation and requested/available byte range. For retained
+workgroup-barrier divergence it returns the exact phase and waiting/exited
+local participants, the observed arrival count when the transcript is
+complete, and the participant count derived from admitted launch geometry.
+Dispatch geometry is `declared`; terminal invocation, KIR site, dynamic range,
+phase, and local participants are CPU-semantic `observed` facts; global
+participant coordinates and logical wave/lane partitions are `inferred` with
+their derivation; absent facts remain typed `unavailable`. This diagnoses any
+admitted KIR kernel that reaches those simulator error classes and contains no
+kernel-name or fixture-specific rule.
+
+The diagnosis schema validates only CPU-simulator sessions. Live KFD and
+ROCgdb keep their own separately versioned capability contracts: stopped wave,
+lane, register, PC, source, and target-memory facts remain unsupported or not
+captured there. A simulator diagnosis may be correlated by an agent as
+reference evidence, but it is never upgraded to native hardware state or used
+as evidence that the GPU executed the same path.
+
 Barrier residency is replayed from semantic records. A lane is
 `barrier_blocked` from its arrival through the record before the matching
 workgroup release. A wave or workgroup is `barrier_blocked` only when every

@@ -27,7 +27,8 @@ fn exact_identity_name_and_all_selectors_are_separately_versioned() {
 fn mixed_reader_preserves_exact_v1_and_v2_decoding() {
     let input = concat!(
         "{\"operation\":\"get_state\",\"schema\":\"fe2o3-debug-request-v1\",\"request_id\":1,\"expected_revision\":0}\n",
-        "{\"operation\":\"inspect_source_variables\",\"schema\":\"fe2o3-debug-source-variable-request-v2\",\"request_id\":2,\"expected_revision\":0,\"scope\":{\"level\":\"dispatch\"},\"selector\":{\"selector\":\"all\"},\"page\":{\"limit\":1}}\n"
+        "{\"operation\":\"inspect_source_variables\",\"schema\":\"fe2o3-debug-source-variable-request-v2\",\"request_id\":2,\"expected_revision\":0,\"scope\":{\"level\":\"dispatch\"},\"selector\":{\"selector\":\"all\"},\"page\":{\"limit\":1}}\n",
+        "{\"operation\":\"diagnose\",\"schema\":\"fe2o3-debug-diagnosis-request-v2\",\"request_id\":3,\"expected_revision\":0,\"page\":{\"limit\":1}}\n"
     );
     let mut reader = BufReader::new(input.as_bytes());
     assert!(matches!(
@@ -37,6 +38,10 @@ fn mixed_reader_preserves_exact_v1_and_v2_decoding() {
     assert!(matches!(
         read_request_line_any_v2(&mut reader, ProtocolLimitsV1::default()).unwrap(),
         Some(DebugRequestAnyV2::SourceVariablesV2(_))
+    ));
+    assert!(matches!(
+        read_request_line_any_v2(&mut reader, ProtocolLimitsV1::default()).unwrap(),
+        Some(DebugRequestAnyV2::DiagnosisV2(_))
     ));
     assert_eq!(
         read_request_line_any_v2(&mut reader, ProtocolLimitsV1::default()).unwrap(),
