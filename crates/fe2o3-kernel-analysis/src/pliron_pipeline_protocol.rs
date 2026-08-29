@@ -10,9 +10,10 @@ use std::{
 };
 
 use dialect_kernel::{
-    AccessKindAttr, BranchArgsOp, DeterministicJoinOp, IndexBinaryKindAttr, IndexBinaryOp,
-    IndexConstantOp, IndexLessThanBranchArgsOp, IndexUnsignedCastOp, PipelineCreateOp,
-    PipelineEventKindAttr, PipelineEventOp, RankedAccessOp, RankedViewOp,
+    AccessKindAttr, AnalysisSplitOp, BranchArgsOp, DeterministicJoinOp, IndexBinaryKindAttr,
+    IndexBinaryOp, IndexConstantOp, IndexEqualBranchArgsOp, IndexLessThanBranchArgsOp,
+    IndexUnsignedCastOp, PipelineCreateOp, PipelineEventKindAttr, PipelineEventOp, RankedAccessOp,
+    RankedViewOp,
 };
 use pliron::{
     basic_block::BasicBlock,
@@ -316,7 +317,7 @@ pub(crate) fn run_pliron_pipeline_protocol_check_with_analyses_v1(
             });
         }
     };
-    let loops = discover_epoch_loops(context, &inventory);
+    let loop_discovery = discover_epoch_loops(context, &inventory);
     let uniform_roots = function
         .get_entry_block(context)
         .deref(context)
@@ -341,7 +342,7 @@ pub(crate) fn run_pliron_pipeline_protocol_check_with_analyses_v1(
             .get(&view)
             .or_else(|| origin.and_then(|origin| origin_owners.get(&origin)))
             .or_else(|| noalias_class.and_then(|class| class_owners.get(&class)))
-            .or_else(|| match noalias_class {
+            .or(match noalias_class {
                 Some(_) => unknown_class_owner.as_ref(),
                 None => first_storage_owner.as_ref(),
             })
@@ -446,12 +447,13 @@ pub(crate) fn run_pliron_pipeline_protocol_check_with_analyses_v1(
         }
         match verify_one_pipeline(
             context,
+            &loop_discovery.dominators,
             site,
             pipeline_type.buffers(),
             pipeline_type.prefetch_distance(),
             &schedule,
             accesses.get(&view).map_or(&[], Vec::as_slice),
-            &loops,
+            &loop_discovery.loops,
             &uniform_roots,
         ) {
             Ok(certificate) => certificates.push(certificate),
@@ -506,8 +508,15 @@ struct CanonicalEpochLoopV1 {
     bound: Value,
 }
 
+struct EpochLoopDiscoveryV1 {
+    loops: Vec<CanonicalEpochLoopV1>,
+    dominators: Vec<HashSet<usize>>,
+}
+
+#[allow(clippy::too_many_arguments)]
 fn verify_one_pipeline(
     context: &Context,
+    dominators: &[HashSet<usize>],
     pipeline: PlironOperationSiteV1,
     buffers: u32,
     distance: u32,
@@ -555,18 +564,25 @@ fn verify_one_pipeline(
             "one pipeline lifecycle crosses non-nested dynamic loops",
         ));
     }
-    let Some(prologue_start) = summary
-        .prologue
-        .iter()
-        .position(|block| *block == pipeline.block())
-    else {
+    if summary.body_members.contains(&pipeline.block())
+        || summary.header == pipeline.block()
+        || !pipeline_creation_dominates_schedule(dominators, pipeline, schedule, accesses)
+    {
         return Err(invalid(
             pipeline,
             None,
-            "the dynamic pipeline is not created on the canonical linear prologue, so per-entry lifecycle ownership is unproved",
+            "the dynamic pipeline creation does not execute once and dominate its complete lifecycle",
         ));
-    };
-    let prologue_blocks = summary.prologue[prologue_start..].to_vec();
+    }
+    let mut prologue_blocks = Vec::with_capacity(summary.prologue.len() + 1);
+    prologue_blocks.push(pipeline.block());
+    prologue_blocks.extend(
+        summary
+            .prologue
+            .iter()
+            .copied()
+            .filter(|block| *block != pipeline.block()),
+    );
     if !is_uniform_value(context, summary.bound, uniform_roots, &mut HashSet::new()) {
         return Err(invalid(
             pipeline,
@@ -601,6 +617,26 @@ fn verify_one_pipeline(
         consuming_reads,
         access_refinement_proven,
     })
+}
+
+fn pipeline_creation_dominates_schedule(
+    dominators: &[HashSet<usize>],
+    pipeline: PlironOperationSiteV1,
+    schedule: &[EventSiteV1],
+    accesses: &[AccessSiteV1],
+) -> bool {
+    schedule
+        .iter()
+        .map(|event| event.site)
+        .chain(accesses.iter().map(|access| access.site))
+        .all(|site| {
+            if site.block() == pipeline.block() {
+                return site.operation() > pipeline.operation();
+            }
+            dominators
+                .get(site.block())
+                .is_some_and(|target| target.contains(&pipeline.block()))
+        })
 }
 
 fn is_uniform_value(
@@ -654,7 +690,7 @@ fn verify_dynamic_schedule(
         .prologue
         .iter()
         .position(|block| *block == pipeline.block())
-        .expect("pipeline creation was checked against the canonical prologue");
+        .unwrap_or(0);
     let prologue_positions = summary.prologue[prologue_start..]
         .iter()
         .enumerate()
@@ -874,7 +910,7 @@ fn verify_dynamic_accesses(
         .prologue
         .iter()
         .position(|block| *block == pipeline.block())
-        .expect("pipeline creation was checked against the canonical prologue");
+        .unwrap_or(0);
     let mut ordered_blocks = summary.prologue[prologue_start..].to_vec();
     ordered_blocks.extend(summary.body.iter().copied());
     ordered_blocks.extend(summary.drain.iter().copied());
@@ -907,8 +943,8 @@ fn verify_dynamic_accesses(
         order_key(action.site()).unwrap_or((usize::MAX, action.site().operation()))
     });
 
-    let mut staging = None::<Value>;
-    let mut consuming = None::<Value>;
+    let mut staging = None::<(Value, usize)>;
+    let mut consuming = None::<(Value, usize)>;
     let mut staging_coordinates = HashSet::<Vec<Value>>::new();
     let mut consuming_coordinates = HashSet::<Vec<Value>>::new();
     let mut canonical_coordinates = None::<HashSet<Vec<Value>>>;
@@ -920,7 +956,7 @@ fn verify_dynamic_accesses(
         match action {
             DynamicPipelineActionV1::Event(event) => match event.kind {
                 Some(PipelineEventKindAttr::Stage) => {
-                    staging = Some(event.epoch);
+                    staging = Some((event.epoch, event.site.block()));
                     staging_coordinates.clear();
                 }
                 Some(PipelineEventKindAttr::Commit) => {
@@ -928,6 +964,7 @@ fn verify_dynamic_accesses(
                         empty_staging_windows += 1;
                     } else {
                         require_matching_pipeline_coordinates_v1(
+                            context,
                             pipeline,
                             event.site,
                             "staging",
@@ -938,7 +975,7 @@ fn verify_dynamic_accesses(
                     staging = None;
                 }
                 Some(PipelineEventKindAttr::Consume) => {
-                    consuming = Some(event.epoch);
+                    consuming = Some((event.epoch, event.site.block()));
                     consuming_coordinates.clear();
                 }
                 Some(PipelineEventKindAttr::Release) => {
@@ -947,6 +984,7 @@ fn verify_dynamic_accesses(
                             empty_consuming_windows += 1;
                         } else {
                             require_matching_pipeline_coordinates_v1(
+                                context,
                                 pipeline,
                                 event.site,
                                 "consuming",
@@ -962,11 +1000,11 @@ fn verify_dynamic_accesses(
             },
             DynamicPipelineActionV1::Access(access) => {
                 let expected = match access.kind {
-                    AccessKindAttr::Write => staging.map(|epoch| (epoch, true)),
-                    AccessKindAttr::Read => consuming.map(|epoch| (epoch, false)),
+                    AccessKindAttr::Write => staging.map(|(epoch, block)| (epoch, block, true)),
+                    AccessKindAttr::Read => consuming.map(|(epoch, block)| (epoch, block, false)),
                     _ => None,
                 };
-                let Some((epoch, is_write)) = expected else {
+                let Some((epoch, epoch_block, is_write)) = expected else {
                     return Err(invalid(
                         pipeline,
                         Some(access.site),
@@ -976,7 +1014,15 @@ fn verify_dynamic_accesses(
                         ),
                     ));
                 };
-                if !slot_is_epoch_modulo(context, access.slot, epoch, buffers) {
+                if !slot_is_epoch_modulo_across_loop_blocks(
+                    context,
+                    access.slot,
+                    access.site.block(),
+                    epoch,
+                    epoch_block,
+                    buffers,
+                    summary,
+                ) {
                     return Err(invalid(
                         pipeline,
                         Some(access.site),
@@ -1007,6 +1053,7 @@ fn verify_dynamic_accesses(
 }
 
 fn require_matching_pipeline_coordinates_v1(
+    context: &Context,
     pipeline: PlironOperationSiteV1,
     event: PlironOperationSiteV1,
     phase: &str,
@@ -1016,7 +1063,7 @@ fn require_matching_pipeline_coordinates_v1(
     debug_assert!(!coordinates.is_empty());
     match canonical {
         None => *canonical = Some(coordinates.clone()),
-        Some(expected) if expected == coordinates => {}
+        Some(expected) if coordinate_sets_equivalent_v1(context, expected, coordinates) => {}
         Some(_) => {
             return Err(invalid(
                 pipeline,
@@ -1028,6 +1075,28 @@ fn require_matching_pipeline_coordinates_v1(
         }
     }
     Ok(())
+}
+
+fn coordinate_sets_equivalent_v1(
+    context: &Context,
+    left: &HashSet<Vec<Value>>,
+    right: &HashSet<Vec<Value>>,
+) -> bool {
+    let contains_equivalent = |haystack: &HashSet<Vec<Value>>, needle: &[Value]| {
+        haystack.iter().any(|candidate| {
+            candidate.len() == needle.len()
+                && candidate
+                    .iter()
+                    .copied()
+                    .zip(needle.iter().copied())
+                    .all(|(left, right)| index_values_equivalent(context, left, right))
+        })
+    };
+    left.iter()
+        .all(|coordinate| contains_equivalent(right, coordinate))
+        && right
+            .iter()
+            .all(|coordinate| contains_equivalent(left, coordinate))
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1228,7 +1297,7 @@ fn verify_concrete_schedule(
 fn discover_epoch_loops(
     context: &Context,
     inventory: &BoundedPlironFunctionInventoryV1,
-) -> Vec<CanonicalEpochLoopV1> {
+) -> EpochLoopDiscoveryV1 {
     let block_indices = inventory
         .blocks()
         .iter()
@@ -1248,12 +1317,10 @@ fn discover_epoch_loops(
             }
         }
     }
+    let dominators = pipeline_dominators_v1(&cfg_successors, &predecessors);
     let mut loops = Vec::new();
-    for (header_index, header) in inventory.blocks().iter().copied().enumerate() {
+    'headers: for (header_index, header) in inventory.blocks().iter().copied().enumerate() {
         let header_ref = header.deref(context);
-        if header_ref.get_num_arguments() != 1 {
-            continue;
-        }
         let Some(terminator) = header_ref.get_terminator(context) else {
             continue;
         };
@@ -1261,12 +1328,12 @@ fn discover_epoch_loops(
         let Some(branch) = operation.downcast_ref::<IndexLessThanBranchArgsOp>() else {
             continue;
         };
-        let induction = header_ref.get_argument(0);
-        if branch.lhs(context) != induction
-            || branch.true_arguments(context).as_slice() != [induction]
-        {
+        let induction = branch.lhs(context);
+        let Some(induction_argument) = (0..header_ref.get_num_arguments())
+            .find(|argument| header_ref.get_argument(*argument) == induction)
+        else {
             continue;
-        }
+        };
         let successors = operation
             .get_operation()
             .deref(context)
@@ -1281,80 +1348,134 @@ fn discover_epoch_loops(
         ) else {
             continue;
         };
-        let mut body = Vec::new();
-        let mut body_members = HashSet::new();
-        let mut inductions = HashMap::new();
-        let mut current = body_start;
-        let mut previous = header_index;
-        let mut latch = None;
-        loop {
-            if current == header_index || !body_members.insert(current) {
-                break;
-            }
-            if predecessors[current].as_slice() != [previous] {
-                break;
-            }
-            let block = inventory.blocks()[current];
-            let block_ref = block.deref(context);
-            if block_ref.get_num_arguments() != 1 {
-                break;
-            }
-            let body_induction = block_ref.get_argument(0);
-            inductions.insert(current, body_induction);
-            body.push(current);
-            let Some(terminator) = block_ref.get_terminator(context) else {
-                break;
-            };
-            let operation = Operation::get_op_dyn(terminator, context);
-            let Some(forward) = operation.downcast_ref::<BranchArgsOp>() else {
-                break;
-            };
-            let successors = operation
-                .get_operation()
-                .deref(context)
-                .successors()
-                .collect::<Vec<_>>();
-            let [successor] = successors.as_slice() else {
-                break;
-            };
-            let Some(next_block) = block_indices.get(successor).copied() else {
-                break;
-            };
-            let arguments = forward.arguments(context);
-            let [next] = arguments.as_slice() else {
-                break;
-            };
-            if next_block == header_index {
-                if index_offset(context, *next, body_induction) == Some(1) {
-                    latch = Some(current);
-                }
-                break;
-            }
-            if *next != body_induction {
-                break;
-            }
-            previous = current;
-            current = next_block;
-        }
-        let Some(latch) = latch else {
+        let latches = predecessors[header_index]
+            .iter()
+            .copied()
+            .filter(|predecessor| {
+                *predecessor != header_index && dominators[*predecessor].contains(&header_index)
+            })
+            .collect::<Vec<_>>();
+        let [latch] = latches.as_slice() else {
             continue;
         };
+        let mut natural_loop = HashSet::from([header_index, *latch]);
+        let mut pending = vec![*latch];
+        while let Some(block) = pending.pop() {
+            for predecessor in predecessors[block].iter().copied() {
+                if predecessor != header_index
+                    && dominators[predecessor].contains(&header_index)
+                    && natural_loop.insert(predecessor)
+                {
+                    pending.push(predecessor);
+                }
+            }
+        }
+        if !natural_loop.contains(&body_start) || natural_loop.contains(&exit) {
+            continue;
+        }
+        if predecessors[exit].as_slice() != [header_index] {
+            continue;
+        }
         let external = predecessors[header_index]
             .iter()
             .copied()
-            .filter(|predecessor| *predecessor != latch)
+            .filter(|predecessor| !natural_loop.contains(predecessor))
             .collect::<Vec<_>>();
         let [entry] = external.as_slice() else {
             continue;
         };
-        if predecessors[header_index].len() != 2
-            || predecessors[exit].as_slice() != [header_index]
-            || !entry_initializes_zero(context, inventory.blocks()[*entry], header)
-            || body.is_empty()
-            || exit == header_index
+        let Some(entry_arguments) = edge_arguments_v1(context, inventory.blocks()[*entry], header)
+        else {
+            continue;
+        };
+        if entry_arguments
+            .get(induction_argument)
+            .and_then(|value| index_constant(context, *value))
+            != Some(0)
         {
             continue;
         }
+
+        let mut inductions = HashMap::from([(header_index, induction)]);
+        for _ in 0..natural_loop.len() {
+            let mut changed = false;
+            for source in natural_loop.iter().copied().collect::<Vec<_>>() {
+                let Some(source_induction) = inductions.get(&source).copied() else {
+                    continue;
+                };
+                let Some(terminator) = inventory.blocks()[source]
+                    .deref(context)
+                    .get_terminator(context)
+                else {
+                    continue;
+                };
+                for successor in terminator.deref(context).successors() {
+                    let Some(target) = block_indices.get(&successor).copied() else {
+                        continue;
+                    };
+                    if target == header_index || !natural_loop.contains(&target) {
+                        continue;
+                    }
+                    let Some(arguments) =
+                        edge_arguments_v1(context, inventory.blocks()[source], successor)
+                    else {
+                        continue;
+                    };
+                    let matching = arguments
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, argument)| {
+                            index_values_equivalent(context, **argument, source_induction)
+                        })
+                        .map(|(argument, _)| argument)
+                        .collect::<Vec<_>>();
+                    let [argument] = matching.as_slice() else {
+                        continue;
+                    };
+                    let target_ref = successor.deref(context);
+                    if *argument >= target_ref.get_num_arguments() {
+                        continue;
+                    }
+                    let target_induction = target_ref.get_argument(*argument);
+                    match inductions.get(&target).copied() {
+                        Some(existing) if existing != target_induction => {
+                            continue 'headers;
+                        }
+                        Some(_) => {}
+                        None => {
+                            inductions.insert(target, target_induction);
+                            changed = true;
+                        }
+                    }
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        let Some(latch_induction) = inductions.get(latch).copied() else {
+            continue;
+        };
+        let Some(latch_arguments) = edge_arguments_v1(context, inventory.blocks()[*latch], header)
+        else {
+            continue;
+        };
+        if latch_arguments
+            .get(induction_argument)
+            .and_then(|value| index_offset(context, *value, latch_induction))
+            != Some(1)
+        {
+            continue;
+        }
+
+        let body_members = natural_loop
+            .iter()
+            .copied()
+            .filter(|block| *block != header_index)
+            .collect::<HashSet<_>>();
+        let Some(body) = acyclic_loop_body_order_v1(&body_members, &cfg_successors) else {
+            continue;
+        };
         let mut prologue = vec![*entry];
         let mut current = *entry;
         while let [predecessor] = predecessors[current].as_slice() {
@@ -1388,6 +1509,7 @@ fn discover_epoch_loops(
             }
             current = *successor;
         }
+        inductions.remove(&header_index);
         loops.push(CanonicalEpochLoopV1 {
             prologue,
             header: header_index,
@@ -1399,24 +1521,138 @@ fn discover_epoch_loops(
             bound: branch.rhs(context),
         });
     }
-    loops
+    EpochLoopDiscoveryV1 { loops, dominators }
 }
 
-fn entry_initializes_zero(
+fn pipeline_dominators_v1(
+    successors: &[Vec<usize>],
+    predecessors: &[Vec<usize>],
+) -> Vec<HashSet<usize>> {
+    let mut reachable = vec![false; successors.len()];
+    let mut pending = (!successors.is_empty())
+        .then_some(0)
+        .into_iter()
+        .collect::<Vec<_>>();
+    while let Some(block) = pending.pop() {
+        if reachable[block] {
+            continue;
+        }
+        reachable[block] = true;
+        pending.extend(successors[block].iter().copied());
+    }
+    let all = reachable
+        .iter()
+        .enumerate()
+        .filter_map(|(block, reachable)| (*reachable).then_some(block))
+        .collect::<HashSet<_>>();
+    let mut dominators = vec![HashSet::new(); successors.len()];
+    for block in all.iter().copied() {
+        dominators[block] = all.clone();
+    }
+    if !successors.is_empty() {
+        dominators[0] = HashSet::from([0]);
+    }
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for block in all.iter().copied().filter(|block| *block != 0) {
+            let mut incoming = predecessors[block]
+                .iter()
+                .copied()
+                .filter(|predecessor| reachable[*predecessor]);
+            let Some(first) = incoming.next() else {
+                continue;
+            };
+            let mut next = dominators[first].clone();
+            for predecessor in incoming {
+                next.retain(|dominator| dominators[predecessor].contains(dominator));
+            }
+            next.insert(block);
+            if next != dominators[block] {
+                dominators[block] = next;
+                changed = true;
+            }
+        }
+    }
+    dominators
+}
+
+fn edge_arguments_v1(
     context: &Context,
-    entry: Ptr<BasicBlock>,
-    header: Ptr<BasicBlock>,
-) -> bool {
-    let Some(terminator) = entry.deref(context).get_terminator(context) else {
-        return false;
-    };
+    source: Ptr<BasicBlock>,
+    target: Ptr<BasicBlock>,
+) -> Option<Vec<Value>> {
+    let terminator = source.deref(context).get_terminator(context)?;
     let operation = Operation::get_op_dyn(terminator, context);
-    let Some(branch) = operation.downcast_ref::<BranchArgsOp>() else {
-        return false;
+    let successor = operation
+        .get_operation()
+        .deref(context)
+        .successors()
+        .position(|successor| successor == target)?;
+    if let Some(branch) = operation.downcast_ref::<BranchArgsOp>() {
+        return (successor == 0).then(|| branch.arguments(context));
     };
-    operation.get_operation().deref(context).get_successor(0) == header
-        && branch.arguments(context).len() == 1
-        && index_constant(context, branch.arguments(context)[0]) == Some(0)
+    if let Some(branch) = operation.downcast_ref::<IndexLessThanBranchArgsOp>() {
+        return match successor {
+            0 => Some(branch.true_arguments(context)),
+            1 => Some(branch.false_arguments(context)),
+            _ => None,
+        };
+    }
+    if let Some(branch) = operation.downcast_ref::<IndexEqualBranchArgsOp>() {
+        return match successor {
+            0 => Some(branch.true_arguments(context)),
+            1 => Some(branch.false_arguments(context)),
+            _ => None,
+        };
+    }
+    if let Some(split) = operation.downcast_ref::<AnalysisSplitOp>() {
+        return match successor {
+            0 => Some(split.first_arguments(context)),
+            1 => Some(split.second_arguments(context)),
+            _ => None,
+        };
+    }
+    (target.deref(context).get_num_arguments() == 0).then(Vec::new)
+}
+
+fn acyclic_loop_body_order_v1(
+    members: &HashSet<usize>,
+    successors: &[Vec<usize>],
+) -> Option<Vec<usize>> {
+    let mut incoming = members
+        .iter()
+        .copied()
+        .map(|block| (block, 0_usize))
+        .collect::<HashMap<_, _>>();
+    for source in members.iter().copied() {
+        for target in &successors[source] {
+            if members.contains(target) {
+                *incoming.get_mut(target)? += 1;
+            }
+        }
+    }
+    let mut ready = incoming
+        .iter()
+        .filter_map(|(block, incoming)| (*incoming == 0).then_some(*block))
+        .collect::<Vec<_>>();
+    ready.sort_unstable_by(|left, right| right.cmp(left));
+    let mut ordered = Vec::with_capacity(members.len());
+    while let Some(source) = ready.pop() {
+        ordered.push(source);
+        for target in successors[source].iter().copied() {
+            if !members.contains(&target) {
+                continue;
+            }
+            let count = incoming.get_mut(&target)?;
+            *count = count.checked_sub(1)?;
+            if *count == 0 {
+                ready.push(target);
+                ready.sort_unstable_by(|left, right| right.cmp(left));
+            }
+        }
+    }
+    (ordered.len() == members.len()).then_some(ordered)
 }
 
 fn slot_is_epoch_modulo(context: &Context, slot: Value, epoch: Value, buffers: u32) -> bool {
@@ -1434,12 +1670,72 @@ fn slot_is_epoch_modulo(context: &Context, slot: Value, epoch: Value, buffers: u
         return false;
     };
     remainder.kind(context) == Some(IndexBinaryKindAttr::Remainder)
-        && remainder.lhs(context) == epoch
+        && index_values_equivalent(context, remainder.lhs(context), epoch)
         && index_constant(context, remainder.rhs(context)) == Some(u64::from(buffers))
 }
 
+fn slot_is_epoch_modulo_across_loop_blocks(
+    context: &Context,
+    slot: Value,
+    slot_block: usize,
+    epoch: Value,
+    epoch_block: usize,
+    buffers: u32,
+    summary: &CanonicalEpochLoopV1,
+) -> bool {
+    if let (Some(slot), Some(epoch)) = (
+        index_constant(context, slot),
+        index_constant(context, epoch),
+    ) {
+        return slot == epoch % u64::from(buffers);
+    }
+    let Some(definition) = slot.defining_op() else {
+        return false;
+    };
+    let operation = Operation::get_op_dyn(definition, context);
+    let Some(remainder) = operation.downcast_ref::<IndexBinaryOp>() else {
+        return false;
+    };
+    remainder.kind(context) == Some(IndexBinaryKindAttr::Remainder)
+        && index_values_equivalent_across_loop_blocks(
+            context,
+            remainder.lhs(context),
+            slot_block,
+            epoch,
+            epoch_block,
+            summary,
+        )
+        && index_constant(context, remainder.rhs(context)) == Some(u64::from(buffers))
+}
+
+fn index_values_equivalent_across_loop_blocks(
+    context: &Context,
+    left: Value,
+    left_block: usize,
+    right: Value,
+    right_block: usize,
+    summary: &CanonicalEpochLoopV1,
+) -> bool {
+    if index_values_equivalent(context, left, right) {
+        return true;
+    }
+    let Some(left_induction) = summary.inductions.get(&left_block).copied() else {
+        return false;
+    };
+    let Some(right_induction) = summary.inductions.get(&right_block).copied() else {
+        return false;
+    };
+    match (
+        index_offset(context, left, left_induction),
+        index_offset(context, right, right_induction),
+    ) {
+        (Some(left_offset), Some(right_offset)) => left_offset == right_offset,
+        _ => false,
+    }
+}
+
 fn index_offset(context: &Context, value: Value, base: Value) -> Option<u64> {
-    if value == base {
+    if index_values_equivalent(context, value, base) {
         return Some(0);
     }
     let definition = value.defining_op()?;
@@ -1448,13 +1744,117 @@ fn index_offset(context: &Context, value: Value, base: Value) -> Option<u64> {
     if add.kind(context) != Some(IndexBinaryKindAttr::Add) {
         return None;
     }
-    if add.lhs(context) == base {
+    if index_values_equivalent(context, add.lhs(context), base) {
         index_constant(context, add.rhs(context))
-    } else if add.rhs(context) == base {
+    } else if index_values_equivalent(context, add.rhs(context), base) {
         index_constant(context, add.lhs(context))
     } else {
         None
     }
+}
+
+fn index_values_equivalent(context: &Context, left: Value, right: Value) -> bool {
+    const MAX_EQUIVALENCE_WORK_V1: usize = 256;
+
+    fn equivalent(
+        context: &Context,
+        left: Value,
+        right: Value,
+        remaining: &mut usize,
+        visiting: &mut HashSet<(Value, Value)>,
+    ) -> bool {
+        if left == right {
+            return true;
+        }
+        if *remaining == 0 || !visiting.insert((left, right)) {
+            return false;
+        }
+        *remaining -= 1;
+
+        let transparent_source = |value: Value| {
+            let definition = value.defining_op()?;
+            let operation = Operation::get_op_dyn(definition, context);
+            let join = operation.downcast_ref::<DeterministicJoinOp>()?;
+            let dependencies = join.dependencies(context);
+            (dependencies.len() == 1).then(|| dependencies[0])
+        };
+        let result = if let Some(source) = transparent_source(left) {
+            equivalent(context, source, right, remaining, visiting)
+        } else if let Some(source) = transparent_source(right) {
+            equivalent(context, left, source, remaining, visiting)
+        } else {
+            let Some(left_definition) = left.defining_op() else {
+                visiting.remove(&(left, right));
+                return false;
+            };
+            let Some(right_definition) = right.defining_op() else {
+                visiting.remove(&(left, right));
+                return false;
+            };
+            let left_operation = Operation::get_op_dyn(left_definition, context);
+            let right_operation = Operation::get_op_dyn(right_definition, context);
+            if let (Some(left), Some(right)) = (
+                left_operation.downcast_ref::<IndexConstantOp>(),
+                right_operation.downcast_ref::<IndexConstantOp>(),
+            ) {
+                left.value(context) == right.value(context)
+            } else if let (Some(left), Some(right)) = (
+                left_operation.downcast_ref::<IndexUnsignedCastOp>(),
+                right_operation.downcast_ref::<IndexUnsignedCastOp>(),
+            ) {
+                left.bit_width(context) == right.bit_width(context)
+                    && equivalent(
+                        context,
+                        left.source(context),
+                        right.source(context),
+                        remaining,
+                        visiting,
+                    )
+            } else if let (Some(left), Some(right)) = (
+                left_operation.downcast_ref::<IndexBinaryOp>(),
+                right_operation.downcast_ref::<IndexBinaryOp>(),
+            ) {
+                let same_kind = left.kind(context) == right.kind(context);
+                let direct = equivalent(
+                    context,
+                    left.lhs(context),
+                    right.lhs(context),
+                    remaining,
+                    visiting,
+                ) && equivalent(
+                    context,
+                    left.rhs(context),
+                    right.rhs(context),
+                    remaining,
+                    visiting,
+                );
+                let commutative = matches!(
+                    left.kind(context),
+                    Some(IndexBinaryKindAttr::Add | IndexBinaryKindAttr::Multiply)
+                ) && equivalent(
+                    context,
+                    left.lhs(context),
+                    right.rhs(context),
+                    remaining,
+                    visiting,
+                ) && equivalent(
+                    context,
+                    left.rhs(context),
+                    right.lhs(context),
+                    remaining,
+                    visiting,
+                );
+                same_kind && (direct || commutative)
+            } else {
+                false
+            }
+        };
+        visiting.remove(&(left, right));
+        result
+    }
+
+    let mut remaining = MAX_EQUIVALENCE_WORK_V1;
+    equivalent(context, left, right, &mut remaining, &mut HashSet::new())
 }
 
 fn index_constant(context: &Context, value: Value) -> Option<u64> {

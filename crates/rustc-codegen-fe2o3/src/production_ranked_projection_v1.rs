@@ -95,6 +95,7 @@ struct ProjectedSemanticAccessSiteV1 {
 struct GuardedRankedAccessV1 {
     view: ProductionRankedValueIdV1,
     indices: Vec<ProductionRankedValueV1>,
+    checked_success: Option<ProductionRankedValueV1>,
     comparisons: Vec<(ProductionRankedValueV1, ProductionRankedValueV1)>,
     access: AccessKindAttr,
     memory_space: MemorySpaceAttr,
@@ -1273,10 +1274,7 @@ fn projected_reference_gpu_writes_v2(
         .iter()
         .filter(|source| source.access.writes_memory())
     {
-        let Some(
-            ProductionRankedOperationV1::Access { view, indices, .. }
-            | ProductionRankedOperationV1::AtomicAccess { view, indices, .. },
-        ) = blocks
+        let Some(operation) = blocks
             .get(source.block)
             .and_then(|block| block.operations().get(source.operation))
         else {
@@ -1284,7 +1282,21 @@ fn projected_reference_gpu_writes_v2(
                 "a projected write correspondence does not identify one ranked write",
             ));
         };
-        let allocation_origin = allocation_origins.get(view).copied().ok_or(
+        let (view, indices) = match operation {
+            ProductionRankedOperationV1::Access { view, indices, .. }
+            | ProductionRankedOperationV1::AtomicAccess { view, indices, .. } => {
+                (*view, indices.clone())
+            }
+            ProductionRankedOperationV1::PredicatedAccess { view, index, .. } => {
+                (*view, vec![*index])
+            }
+            _ => {
+                return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                    "a projected write correspondence does not identify one ranked write",
+                ));
+            }
+        };
+        let allocation_origin = allocation_origins.get(&view).copied().ok_or(
             ProductionRankedProjectionErrorV1::Unsupported(
                 "a projected write view has no exact allocation origin",
             ),
@@ -1307,8 +1319,8 @@ fn projected_reference_gpu_writes_v2(
                 block: source.block,
                 operation: source.operation,
                 allocation_origin,
-                view: *view,
-                indices: indices.clone(),
+                view,
+                indices,
                 value,
             },
         );
@@ -1474,11 +1486,7 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
             let Some(read_place) = read_places.get(ordinal).copied() else {
                 continue;
             };
-            let Some(ProductionRankedOperationV1::Access {
-                kind,
-                view,
-                indices,
-            }) = blocks
+            let Some(operation) = blocks
                 .get(source.block)
                 .and_then(|block| block.operations().get(source.operation))
             else {
@@ -1486,12 +1494,27 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
                     "a projected load correspondence does not identify one ranked read",
                 ));
             };
-            if *kind != AccessKindAttr::Read {
+            let (kind, view, indices) = match operation {
+                ProductionRankedOperationV1::Access {
+                    kind,
+                    view,
+                    indices,
+                } => (*kind, *view, indices.clone()),
+                ProductionRankedOperationV1::PredicatedAccess {
+                    kind, view, index, ..
+                } => (*kind, *view, vec![*index]),
+                _ => {
+                    return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                        "a projected load correspondence does not identify one ranked read",
+                    ));
+                }
+            };
+            if kind != AccessKindAttr::Read {
                 return Err(ProductionRankedProjectionErrorV1::Unsupported(
                     "a projected scalar load changed ranked access kind",
                 ));
             }
-            let allocation_origin = allocation_origins.get(view).copied().ok_or(
+            let allocation_origin = allocation_origins.get(&view).copied().ok_or(
                 ProductionRankedProjectionErrorV1::Unsupported(
                     "a projected load view has no exact allocation origin",
                 ),
@@ -1512,8 +1535,8 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
                 })?,
                 scalar,
                 allocation_origin,
-                view: *view,
-                indices: indices.clone().into_boxed_slice(),
+                view,
+                indices: indices.into_boxed_slice(),
             };
             if resolver
                 .place_loads
@@ -1904,10 +1927,24 @@ fn production_access_sources(
             .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
                 "ranked access correspondence is outside the projected graph",
             ))?;
+        // Ordinary private-local accesses remain in the ranked graph so that
+        // bounds and initialization checks see them. They are not observable
+        // memory effects and the executable KIR may promote them to SSA.
+        if source.memory_space == MemorySpaceAttr::Private
+            && matches!(
+                operation,
+                ProductionRankedOperationV1::Access { .. }
+                    | ProductionRankedOperationV1::PredicatedAccess { .. }
+            )
+        {
+            continue;
+        }
         if !matches!(
             operation,
             ProductionRankedOperationV1::Access { .. }
+                | ProductionRankedOperationV1::PredicatedAccess { .. }
                 | ProductionRankedOperationV1::AtomicAccess { .. }
+                | ProductionRankedOperationV1::AllocationEffect { .. }
         ) {
             continue;
         }
@@ -2769,6 +2806,7 @@ fn project_strided_read_effects_v1(
         projected.push(Some(GuardedRankedAccessV1 {
             view,
             indices: vec![row, column],
+            checked_success: None,
             comparisons: vec![(row, rows), (column, columns)],
             access: AccessKindAttr::Read,
             memory_space: MemorySpaceAttr::Global,
@@ -4955,7 +4993,7 @@ fn project_intrinsic_contracts(
         else {
             continue;
         };
-        let (element, index, precondition) = match operation {
+        let (element, index, precondition, checked_success) = match operation {
             SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMut { element, .. } => {
                 let projected = projected_disjoint_operand_v1(
                     call,
@@ -4970,7 +5008,7 @@ fn project_intrinsic_contracts(
                         "identity accessor received a non-identity mapping",
                     ));
                 }
-                (*element, projected.value, projected.precondition)
+                (*element, projected.value, projected.precondition, None)
             }
             SemanticCompilerIntrinsicOperationV1::DisjointSliceGetDisjointMut {
                 element,
@@ -4990,7 +5028,7 @@ fn project_intrinsic_contracts(
                         "disjoint accessor mapping identity changed",
                     ));
                 }
-                (*element, projected.value, projected.precondition)
+                (*element, projected.value, projected.precondition, None)
             }
             SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMutExclusive {
                 element,
@@ -5067,6 +5105,7 @@ fn project_intrinsic_contracts(
                     *element,
                     ProductionRankedValueV1::Local(index),
                     Some(leader.precondition),
+                    None,
                 )
             }
             SemanticCompilerIntrinsicOperationV1::DisjointSliceGetBlockMut {
@@ -5158,6 +5197,7 @@ fn project_intrinsic_contracts(
                     *element,
                     ProductionRankedValueV1::Local(index),
                     projected.precondition,
+                    None,
                 )
             }
             SemanticCompilerIntrinsicOperationV1::DisjointSliceGetTiled2dMut {
@@ -5234,13 +5274,16 @@ fn project_intrinsic_contracts(
                 )?;
                 reserve_operation(operations)?;
                 let index = next_value_id(next_value)?;
-                operations.push(ProductionRankedOperationV1::CheckedTiledIndex2D {
+                let success = next_value_id(next_value)?;
+                operations.push(ProductionRankedOperationV1::PredicatedCheckedTiledIndex2D {
                     result: index,
+                    success,
                     invocation: projected.value,
                     component,
                     rows,
                     columns,
                     row_stride,
+                    physical_extent: ProductionRankedValueV1::Argument(0),
                     lanes_per_tile: *lanes_per_tile,
                     tile_rows: *tile_rows,
                     tile_columns: *tile_columns,
@@ -5250,6 +5293,7 @@ fn project_intrinsic_contracts(
                     *element,
                     ProductionRankedValueV1::Local(index),
                     projected.precondition,
+                    Some(ProductionRankedValueV1::Local(success)),
                 )
             }
             SemanticCompilerIntrinsicOperationV1::DisjointSliceGetRowStriped2dMut {
@@ -5317,20 +5361,26 @@ fn project_intrinsic_contracts(
                 )?;
                 reserve_operation(operations)?;
                 let index = next_value_id(next_value)?;
-                operations.push(ProductionRankedOperationV1::CheckedRowStripedIndex2D {
-                    result: index,
-                    invocation: projected.value,
-                    component,
-                    rows,
-                    columns,
-                    row_stride,
-                    lanes_per_row: *lanes_per_row,
-                    elements_per_lane: *elements_per_lane,
-                });
+                let success = next_value_id(next_value)?;
+                operations.push(
+                    ProductionRankedOperationV1::PredicatedCheckedRowStripedIndex2D {
+                        result: index,
+                        success,
+                        invocation: projected.value,
+                        component,
+                        rows,
+                        columns,
+                        row_stride,
+                        physical_extent: ProductionRankedValueV1::Argument(0),
+                        lanes_per_row: *lanes_per_row,
+                        elements_per_lane: *elements_per_lane,
+                    },
+                );
                 (
                     *element,
                     ProductionRankedValueV1::Local(index),
                     projected.precondition,
+                    Some(ProductionRankedValueV1::Local(success)),
                 )
             }
             _ => continue,
@@ -5423,6 +5473,7 @@ fn project_intrinsic_contracts(
         let access = GuardedRankedAccessV1 {
             view,
             indices: vec![index],
+            checked_success,
             comparisons,
             access: AccessKindAttr::Write,
             memory_space: MemorySpaceAttr::Global,
@@ -5519,7 +5570,7 @@ fn project_intrinsic_contracts(
         constants,
         &stable_argument_origins,
         &local_definitions,
-        &runtime_index_arguments,
+        &mut runtime_index_arguments,
         &mut uniform_inductions,
         operations,
         next_value,
@@ -5544,8 +5595,10 @@ fn project_intrinsic_contracts(
         types,
         function,
         constants,
+        &stable_argument_origins,
         &index_values,
-        &runtime_index_arguments,
+        &mut runtime_index_arguments,
+        &mut next_runtime_argument,
         &uniform_inductions,
         operations,
         next_value,
@@ -5606,8 +5659,10 @@ fn project_workgroup_pipeline_effects_v1(
     types: &[SemanticTypeDeclV1],
     function: &SemanticFunctionDeclV1,
     constants: &[Option<u64>],
+    stable_argument_origins: &[Option<u32>],
     index_values: &[Option<ProjectedDisjointIndexV1>],
-    runtime_index_arguments: &[Option<u32>],
+    runtime_index_arguments: &mut [Option<u32>],
+    next_runtime_argument: &mut usize,
     uniform_inductions: &[ProjectedUniformInductionV1],
     entry_operations: &mut Vec<ProductionRankedOperationV1>,
     next_value: &mut u32,
@@ -5826,8 +5881,10 @@ fn project_workgroup_pipeline_effects_v1(
                     block_index,
                     &call.arguments()[1],
                     constants,
+                    stable_argument_origins,
                     index_values,
                     runtime_index_arguments,
+                    next_runtime_argument,
                     uniform_inductions,
                     entry_operations,
                     next_value,
@@ -5850,8 +5907,10 @@ fn project_workgroup_pipeline_effects_v1(
                     block_index,
                     &call.arguments()[1],
                     constants,
+                    stable_argument_origins,
                     index_values,
                     runtime_index_arguments,
+                    next_runtime_argument,
                     uniform_inductions,
                     entry_operations,
                     next_value,
@@ -5862,8 +5921,10 @@ fn project_workgroup_pipeline_effects_v1(
                     block_index,
                     &call.arguments()[2],
                     constants,
+                    stable_argument_origins,
                     index_values,
                     runtime_index_arguments,
+                    next_runtime_argument,
                     uniform_inductions,
                     entry_operations,
                     next_value,
@@ -5934,8 +5995,10 @@ fn project_pipeline_scalar_v1(
     block_index: usize,
     operand: &SemanticOperandV1,
     constants: &[Option<u64>],
+    stable_argument_origins: &[Option<u32>],
     index_values: &[Option<ProjectedDisjointIndexV1>],
-    runtime_index_arguments: &[Option<u32>],
+    runtime_index_arguments: &mut [Option<u32>],
+    next_runtime_argument: &mut usize,
     uniform_inductions: &[ProjectedUniformInductionV1],
     entry_operations: &mut Vec<ProductionRankedOperationV1>,
     next_value: &mut u32,
@@ -5971,7 +6034,30 @@ fn project_pipeline_scalar_v1(
     if let Some(index) = index_values.get(local).copied().flatten() {
         return Ok(ProjectedPipelineScalarV1::Value(index.value));
     }
-    if let Some(argument) = runtime_index_arguments.get(local).copied().flatten() {
+    if let Some(origin) = stable_argument_origins.get(local).copied().flatten() {
+        let origin = origin as usize;
+        let slot = runtime_index_arguments.get_mut(origin).ok_or(
+            ProductionRankedProjectionErrorV1::Unsupported(
+                "a pipeline scalar argument is outside the semantic local table",
+            ),
+        )?;
+        let argument = match *slot {
+            Some(argument) => argument,
+            None => {
+                let argument = u32::try_from(*next_runtime_argument).map_err(|_| {
+                    ProductionRankedProjectionErrorV1::Unsupported(
+                        "too many pipeline scalar ranked arguments",
+                    )
+                })?;
+                *next_runtime_argument = next_runtime_argument.checked_add(1).ok_or(
+                    ProductionRankedProjectionErrorV1::Unsupported(
+                        "pipeline scalar ranked argument count overflow",
+                    ),
+                )?;
+                *slot = Some(argument);
+                argument
+            }
+        };
         return Ok(ProjectedPipelineScalarV1::Value(
             ProductionRankedValueV1::Argument(argument),
         ));
@@ -6011,8 +6097,10 @@ fn project_pipeline_scalar_v1(
             block_index,
             source,
             constants,
+            stable_argument_origins,
             index_values,
             runtime_index_arguments,
+            next_runtime_argument,
             uniform_inductions,
             entry_operations,
             next_value,
@@ -6040,8 +6128,10 @@ fn project_pipeline_scalar_v1(
                 block_index,
                 left,
                 constants,
+                stable_argument_origins,
                 index_values,
                 runtime_index_arguments,
+                next_runtime_argument,
                 uniform_inductions,
                 entry_operations,
                 next_value,
@@ -6052,8 +6142,10 @@ fn project_pipeline_scalar_v1(
                 block_index,
                 right,
                 constants,
+                stable_argument_origins,
                 index_values,
                 runtime_index_arguments,
+                next_runtime_argument,
                 uniform_inductions,
                 entry_operations,
                 next_value,
@@ -10537,11 +10629,30 @@ fn build_ranked_cfg(
                             failure_block,
                         )?;
                     }
-                    let access_operations = vec![ProductionRankedOperationV1::Access {
-                        kind: access.access,
-                        view: ProductionRankedValueV1::Local(access.view),
-                        indices: access.indices,
-                    }];
+                    let access_operations = if let Some(success) = access.checked_success {
+                        let [index] = access.indices.as_slice() else {
+                            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                                "a predicated checked access is not one-dimensional",
+                            ));
+                        };
+                        if access.access.is_atomic() {
+                            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                                "a predicated checked access is not one non-atomic read or write",
+                            ));
+                        }
+                        vec![ProductionRankedOperationV1::PredicatedAccess {
+                            kind: access.access,
+                            view: ProductionRankedValueV1::Local(access.view),
+                            index: *index,
+                            success,
+                        }]
+                    } else {
+                        vec![ProductionRankedOperationV1::Access {
+                            kind: access.access,
+                            view: ProductionRankedValueV1::Local(access.view),
+                            indices: access.indices,
+                        }]
+                    };
                     if !live.is_empty() {
                         let block = ranked_block_id(access_block)?;
                         push_block_at_with_index_arguments(
@@ -10586,6 +10697,12 @@ fn build_ranked_cfg(
                     operations = Vec::new();
                 }
                 ProjectedBlockItemV1::Pipeline(effect) => {
+                    let access = match &effect {
+                        ProjectedPipelineEffectV1::Access { kind, .. } => Some(*kind),
+                        ProjectedPipelineEffectV1::Create { .. }
+                        | ProjectedPipelineEffectV1::Event { .. } => None,
+                    };
+                    let first_operation = operations.len();
                     materialize_pipeline_effect_v1(
                         effect,
                         ranked_block_id(current)?,
@@ -10593,6 +10710,28 @@ fn build_ranked_cfg(
                         &mut operations,
                         &pipeline_values,
                     )?;
+                    if let Some(access) = access {
+                        let operation = operations[first_operation..]
+                            .iter()
+                            .rposition(|operation| {
+                                matches!(operation, ProductionRankedOperationV1::Access { .. })
+                            })
+                            .and_then(|operation| first_operation.checked_add(operation))
+                            .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                                "a pipeline access did not materialize one ranked memory effect",
+                            ))?;
+                        sources.push(ProjectedAccessSourceV1 {
+                            block: current,
+                            operation,
+                            access,
+                            memory_space: MemorySpaceAttr::Workgroup,
+                            source: function.blocks()[semantic_index].terminator().source(),
+                            semantic_site: Some(ProjectedSemanticAccessSiteV1 {
+                                block: semantic_index,
+                                statement: None,
+                            }),
+                        });
+                    }
                 }
             }
         }
@@ -11723,11 +11862,13 @@ fn format_ranked_operation(operation: &ProductionRankedOperationV1) -> String {
             format_ranked_values(indices),
         ),
         ProductionRankedOperationV1::PredicatedAccess {
+            kind,
             view,
             index,
             success,
         } => format!(
-            "  kernel.predicated_access Write {}[{}] if {}\n",
+            "  kernel.predicated_access {:?} {}[{}] if {}\n",
+            kind,
             ranked_value_text_v1(*view),
             ranked_value_text_v1(*index),
             ranked_value_text_v1(*success),
@@ -12936,6 +13077,10 @@ const fn requires_ranked_workgroup_barrier_v1(
         operation,
         SemanticCompilerIntrinsicOperationV1::WorkgroupBarrier
             | SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposePublish { .. }
+            | SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineEvent {
+                event: SemanticWorkgroupPipelineEventV1::Wait,
+                ..
+            }
     )
 }
 
@@ -14016,6 +14161,7 @@ fn project_place_access_with_atomic(
             access: GuardedRankedAccessV1 {
                 view: view_id,
                 indices: ranked_indices,
+                checked_success: None,
                 comparisons,
                 access,
                 memory_space,
@@ -15235,6 +15381,7 @@ mod tests {
         let guarded = GuardedRankedAccessV1 {
             view,
             indices: vec![ProductionRankedValueV1::Local(invocation)],
+            checked_success: None,
             comparisons: vec![(
                 ProductionRankedValueV1::Local(invocation),
                 ProductionRankedValueV1::Argument(0),
@@ -15557,6 +15704,12 @@ mod tests {
                 format: SemanticGfx950LdsTransposeFormatV1::Fp8E4M3,
             },
         ));
+        assert!(requires_ranked_workgroup_barrier_v1(
+            &SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineEvent {
+                pipeline: SCALAR_TYPE,
+                event: SemanticWorkgroupPipelineEventV1::Wait,
+            },
+        ));
     }
 
     #[test]
@@ -15565,6 +15718,7 @@ mod tests {
             ProjectedBlockItemV1::Guarded(GuardedRankedAccessV1 {
                 view: ProductionRankedValueIdV1::new(0),
                 indices: vec![ProductionRankedValueV1::Argument(0)],
+                checked_success: None,
                 comparisons: vec![(
                     ProductionRankedValueV1::Argument(0),
                     ProductionRankedValueV1::Argument(1),
@@ -15681,6 +15835,7 @@ mod tests {
         let guarded = GuardedRankedAccessV1 {
             view,
             indices: vec![ProductionRankedValueV1::Local(shifted)],
+            checked_success: None,
             comparisons: vec![
                 (
                     ProductionRankedValueV1::Local(invocation),
@@ -22458,6 +22613,7 @@ mod tests {
             .push(ProjectedBlockItemV1::Guarded(GuardedRankedAccessV1 {
                 view: ProductionRankedValueIdV1::new(0),
                 indices: vec![ProductionRankedValueV1::Argument(0)],
+                checked_success: None,
                 comparisons: vec![(
                     ProductionRankedValueV1::Argument(0),
                     ProductionRankedValueV1::Argument(1),

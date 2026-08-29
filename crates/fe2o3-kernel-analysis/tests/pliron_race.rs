@@ -1113,7 +1113,7 @@ fn checked_tiled_dynamic_layout_never_authorizes_a_raw_marker() {
 }
 
 #[test]
-fn raw_predicated_checked_access_never_grants_race_authority() {
+fn predicated_checked_access_proves_only_race_freedom() {
     for launch_extent in [0, 64] {
         for access_uses in [1, 2] {
             let context = &mut setup();
@@ -1157,6 +1157,7 @@ fn raw_predicated_checked_access_never_grants_race_authority() {
             for _ in 0..access_uses {
                 let write = RankedAccessOp::new_predicated(
                     context,
+                    AccessKindAttr::Write,
                     output.result(context),
                     checked.result(context),
                     checked.success(context).unwrap(),
@@ -1170,21 +1171,77 @@ fn raw_predicated_checked_access_never_grants_race_authority() {
             append(context, exit, &ret);
 
             let report = run_pliron_ranked_race_check_v1(context, &function);
-            assert_eq!(report.status(), KernelCheckStatusV1::Incomplete);
+            assert_eq!(report.status(), KernelCheckStatusV1::Clean);
             assert!(!report.grants_compiler_refinement_authority());
             assert!(!report.grants_artifact_or_launch_authority());
-            let error = require_pliron_ranked_race_freedom_before_lowering_v1(context, &function)
-                .expect_err("raw capability shape must not grant source correspondence")
-                .to_string();
-            assert!(error.contains("error[FE2O3-RACE-002]"), "{error}");
-            if launch_extent == 64 {
-                assert!(
-                    error.contains("checked structured index markers are currently incomplete"),
-                    "{error}"
-                );
-            }
+            let admitted =
+                require_pliron_ranked_race_freedom_before_lowering_v1(context, &function)
+                    .expect("the exact successful checked mapping is injective");
+            assert!(!admitted.grants_compiler_refinement_authority());
+            assert!(!admitted.grants_artifact_or_launch_authority());
         }
     }
+}
+
+#[test]
+fn predicated_checked_access_rejects_invocation_varying_runtime_layout() {
+    let context = &mut setup();
+    let (function, arguments) =
+        function_with_index_arguments(context, "varying_predicated_layout", 4);
+    let entry = function.get_entry_block(context);
+    let access_block = block(context, &function, "access");
+    let exit = block(context, &function, "exit");
+    let view_type =
+        RankedViewType::new(context, 32, true, vec![dialect_kernel::DYNAMIC_EXTENT]).unwrap();
+    let output = RankedViewOp::new(context, view_type, vec![arguments[0]]).unwrap();
+    let invocation = InvocationIndexOp::new(context, 0, 0);
+    let component = IndexConstantOp::new(context, 0);
+    let checked = CheckedTiledIndex2DOp::new_predicated(
+        context,
+        invocation.result(context),
+        component.result(context),
+        invocation.result(context),
+        arguments[2],
+        arguments[3],
+        arguments[0],
+        [64, 16, 16, 4],
+    );
+    let guard = IndexLessThanBranchOp::new(
+        context,
+        checked.result(context),
+        arguments[0],
+        access_block,
+        exit,
+    );
+    for operation in [
+        output.get_operation(),
+        invocation.get_operation(),
+        component.get_operation(),
+        checked.get_operation(),
+        guard.get_operation(),
+    ] {
+        operation.insert_at_back(entry, context);
+    }
+    let write = RankedAccessOp::new_predicated(
+        context,
+        AccessKindAttr::Write,
+        output.result(context),
+        checked.result(context),
+        checked.success(context).unwrap(),
+    )
+    .unwrap();
+    let to_exit = BranchOp::new(context, exit);
+    let ret = ReturnOp::new(context);
+    append(context, access_block, &write);
+    append(context, access_block, &to_exit);
+    append(context, exit, &ret);
+
+    let report = run_pliron_ranked_race_check_v1(context, &function);
+    assert_eq!(report.status(), KernelCheckStatusV1::Incomplete);
+    assert!(matches!(
+        report.findings(),
+        [RankedRaceFindingV1::DynamicLaunchExtent { dimension: 0 }]
+    ));
 }
 
 #[test]

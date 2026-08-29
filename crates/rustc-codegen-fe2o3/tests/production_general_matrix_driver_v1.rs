@@ -36,28 +36,31 @@ fn workspace() -> PathBuf {
 
 #[test]
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]
-fn dynamic_matrix_kernel_fails_closed_before_lowering_without_race_proof() {
-    assert_workgroup_pipeline_reaches_race_boundary(
+fn dynamic_matrix_kernel_reaches_gfx942_llvm() {
+    assert_workgroup_pipeline_reaches_gfx942_llvm(
         "general-matrix",
         "examples/tiled_gemm_general_v1",
         "fe2o3_tiled_gemm_general_v1",
+        "tiled_gemm_general_v1",
     );
 }
 
 #[test]
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]
-fn dynamic_attention_kernel_fails_closed_after_pipeline_verification() {
-    assert_workgroup_pipeline_reaches_race_boundary(
+fn dynamic_attention_kernel_reaches_gfx942_llvm() {
+    assert_workgroup_pipeline_reaches_gfx942_llvm(
         "general-attention",
         "examples/flash_attention_general_v1",
         "fe2o3_flash_attention_general_v1",
+        "flash_attention_general_v1",
     );
 }
 
-fn assert_workgroup_pipeline_reaches_race_boundary(
+fn assert_workgroup_pipeline_reaches_gfx942_llvm(
     label: &str,
     example_path: &str,
     crate_name: &str,
+    kernel_symbol: &str,
 ) {
     let scratch = ScratchDirectory::new(label);
     let example = workspace().join(example_path);
@@ -93,35 +96,30 @@ fn assert_workgroup_pipeline_reaches_race_boundary(
         .expect("run production gfx942 extraction");
     let stderr = String::from_utf8(output.stderr).expect("rustc diagnostic is UTF-8");
     assert!(
-        !output.status.success(),
-        "{crate_name} unexpectedly bypassed the production race proof boundary"
+        output.status.success(),
+        "{crate_name} did not complete production extraction:\n{stderr}"
     );
     assert!(
-        stderr.contains(
-            "error[FE2O3-RACE-002]: cannot prove race freedom for dynamic launch dimension 0"
-        ) && stderr.contains(
-            "help: retain a bounded launch contract or supply a symbolic disjointness proof"
-        ) && stderr.contains("ranked PLIRON before rejected lowering:")
-            && stderr.contains("lowering stopped before target IR or artifact emission")
-            && stderr.contains("kernel.pipeline_create")
-            && stderr.contains("kernel.pipeline_event")
-            && stderr.contains("Workgroup"),
-        "production extraction omitted the exact fail-closed race diagnostic:\n{stderr}"
+        stderr.contains("Rust -> semantic MIR -> ranked PLIRON -> Kernel IR")
+            && stderr.contains("composed formal/ranked memory -> gfx942:xnack- LLVM")
+            && stderr.contains("artifact/launch authority false"),
+        "production extraction omitted its successful lowering receipt:\n{stderr}"
     );
-    for forbidden in [
-        "kernel-ir-v1",
-        "kernel-ir-worker-v2",
-        "collected-general-gemm-v1",
-        "reached verified symbolic semantic template",
-    ] {
+    for forbidden in ["error[FE2O3-RACE", "lowering stopped", "panic"] {
         assert!(
             !stderr.contains(forbidden),
-            "production extraction entered forbidden route {forbidden:?}:\n{stderr}"
+            "production extraction emitted forbidden diagnostic {forbidden:?}:\n{stderr}"
         );
     }
 
+    let llvm = std::fs::read_to_string(&llvm_path).expect("production extraction emitted LLVM");
     assert!(
-        !llvm_path.exists(),
-        "rejected production analysis emitted target LLVM"
+        llvm.contains(&format!("@{kernel_symbol}"))
+            && llvm.contains("llvm.amdgcn.mfma")
+            && llvm.contains("addrspace(3)"),
+        "production LLVM omitted the kernel, MFMA, or workgroup storage:\n{llvm}"
     );
+    let binding = std::fs::read_to_string(&binding_path).expect("crate binding handoff");
+    assert_eq!(binding.trim().len(), 64);
+    assert!(binding.trim().bytes().all(|byte| byte.is_ascii_hexdigit()));
 }

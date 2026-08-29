@@ -977,6 +977,7 @@ impl CheckedTiledIndex2DOp {
     /// physical extent of the one-dimensional destination view and result 1
     /// carries the obligation consumed by the corresponding access. This
     /// shape grants no source or refinement authority.
+    #[allow(clippy::too_many_arguments)]
     pub fn new_predicated(
         context: &mut Context,
         invocation: Value,
@@ -1123,6 +1124,7 @@ impl CheckedRowStripedIndex2DOp {
         op
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn new_predicated(
         context: &mut Context,
         invocation: Value,
@@ -1361,25 +1363,21 @@ impl RankedAccessOp {
         )
     }
 
-    /// Builds a structurally predicated one-dimensional write. The opaque
+    /// Builds a structurally predicated one-dimensional non-atomic access. The opaque
     /// success value is paired with the checked index and physical extent.
     /// This constructor grants no source or refinement authority.
     pub fn new_predicated(
         context: &mut Context,
+        kind: AccessKindAttr,
         view: Value,
         index: Value,
         success: Value,
     ) -> Result<Self, RankedMemoryError> {
+        if kind.is_atomic() {
+            return Err(RankedMemoryError::MissingAtomicContract);
+        }
         validate_predicated_access(context, view, index, success)?;
-        Self::build(
-            context,
-            AccessKindAttr::Write,
-            None,
-            None,
-            view,
-            vec![index],
-            Some(success),
-        )
+        Self::build(context, kind, None, None, view, vec![index], Some(success))
     }
 
     fn build(
@@ -1509,11 +1507,11 @@ impl Verify for RankedAccessOp {
             require_index_operand(self, context, operand)?;
         }
         if let Some(success) = success {
-            if self.kind(context) != Some(AccessKindAttr::Write) || actual != 1 {
+            if self.kind(context).is_none_or(AccessKindAttr::is_atomic) || actual != 1 {
                 return verify_err!(
                     self.loc(context),
                     RankedMemoryError::MalformedPayload(
-                        "predicated kernel.access must be one non-atomic write"
+                        "predicated kernel.access must be one non-atomic read or write"
                     )
                 );
             }

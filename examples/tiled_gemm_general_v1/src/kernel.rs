@@ -25,7 +25,11 @@ fn accessed_extent(rows: u32, columns: u32, stride: u32) -> u64 {
 /// checked tiled output witness suppresses stores outside logical M and N.
 #[kernel(
     typed,
-    launch(required = [64, 1, 1], max = [64, 1, 1]),
+    launch(
+        required = [64, 1, 1],
+        max = [64, 1, 1],
+        static_shared_memory_bytes = 2048
+    ),
     control_flow(loop_bounds(4294967295))
 )]
 #[allow(clippy::too_many_arguments)]

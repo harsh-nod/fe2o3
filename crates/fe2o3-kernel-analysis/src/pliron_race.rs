@@ -310,6 +310,7 @@ struct EffectV1 {
     kind: AccessKindAttr,
     location: RankedRaceLocationV1,
     indices: Vec<Value>,
+    checked_success: Option<Value>,
     atomic_scope: Option<AtomicScopeAttr>,
     atomic_ordering: Option<AtomicOrderingAttr>,
     noalias_class: u64,
@@ -481,6 +482,7 @@ pub(crate) fn run_pliron_ranked_race_check_with_analyses_v1(
                 kind,
                 location,
                 indices: vec![],
+                checked_success: None,
                 atomic_scope: None,
                 atomic_ordering: None,
                 noalias_class: effect.noalias_class(context).unwrap_or(0),
@@ -541,6 +543,7 @@ pub(crate) fn run_pliron_ranked_race_check_with_analyses_v1(
                 operation: operation_index,
             },
             indices: access.indices(context),
+            checked_success: access.checked_success(context),
             atomic_scope: access.atomic_scope(context),
             atomic_ordering: access.atomic_ordering(context),
             noalias_class: view_op.noalias_class(context).unwrap_or(0),
@@ -601,6 +604,8 @@ pub(crate) fn run_pliron_ranked_race_check_with_analyses_v1(
 
     let invocation_bounds = invocation_upper_bounds_by_block(context, function, &inventory);
     if symbolically_proves_disjoint(
+        context,
+        function,
         &effects,
         sparse,
         &launch_extents,
@@ -918,6 +923,8 @@ fn insert_witness(state: &mut AddressStateV1, witness: RankedRaceWitnessV1) {
 }
 
 fn symbolically_proves_disjoint(
+    context: &Context,
+    function: &FuncOp,
     effects: &[EffectV1],
     sparse: &SparseIndexAnalysisV1,
     launch_extents: &[u64],
@@ -931,95 +938,152 @@ fn symbolically_proves_disjoint(
             .push(effect);
     }
     for effects in by_view.values() {
-        let has_plain_write = effects
-            .iter()
-            .any(|effect| effect.kind == AccessKindAttr::Write);
-        let has_plain_read = effects
-            .iter()
-            .any(|effect| effect.kind == AccessKindAttr::Read);
-        let has_atomic_write = effects.iter().any(|effect| {
-            matches!(
-                effect.kind,
-                AccessKindAttr::AtomicWrite | AccessKindAttr::AtomicReadModifyWrite
-            )
-        });
-        if !has_plain_write && !has_plain_read && has_atomic_write {
-            if effects.iter().all(|effect| {
-                matches!(
-                    effect.atomic_scope,
-                    Some(
-                        AtomicScopeAttr::Agent | AtomicScopeAttr::Device | AtomicScopeAttr::System
-                    )
-                )
-            }) {
-                continue;
-            }
-            let mut representative = None;
-            for effect in effects {
-                let Some(first) = representative else {
-                    if !effect_affine_map_is_injective(
-                        effect,
-                        sparse,
-                        launch_extents,
-                        invocation_bounds,
-                    ) {
-                        return false;
-                    }
-                    representative = Some(&effect.indices);
+        for first_index in 0..effects.len() {
+            for second_index in first_index..effects.len() {
+                let first = effects[first_index];
+                let second = effects[second_index];
+                if !access_kinds_need_disjoint_coordinates(first.kind, second.kind)
+                    || atomics_are_device_compatible(first, second)
+                {
                     continue;
-                };
-                if !effect_affine_map_is_injective(
-                    effect,
+                }
+                if !effect_pair_symbolically_disjoint(
+                    context,
+                    function,
+                    first,
+                    second,
                     sparse,
                     launch_extents,
                     invocation_bounds,
                 ) {
                     return false;
                 }
-                if !same_index_formula(first, &effect.indices, sparse) {
-                    return false;
-                }
-            }
-            continue;
-        }
-        if !(has_plain_write || has_plain_read && has_atomic_write) {
-            continue;
-        }
-        let relevant = effects
-            .iter()
-            .copied()
-            .filter(|effect| {
-                has_plain_write
-                    || effect.kind == AccessKindAttr::Read
-                    || matches!(
-                        effect.kind,
-                        AccessKindAttr::AtomicWrite | AccessKindAttr::AtomicReadModifyWrite
-                    )
-            })
-            .collect::<Vec<_>>();
-        let mut representative = None;
-        for effect in relevant {
-            let Some(first) = representative else {
-                if !effect_affine_map_is_injective(
-                    effect,
-                    sparse,
-                    launch_extents,
-                    invocation_bounds,
-                ) {
-                    return false;
-                }
-                representative = Some(&effect.indices);
-                continue;
-            };
-            if !effect_affine_map_is_injective(effect, sparse, launch_extents, invocation_bounds) {
-                return false;
-            }
-            if !same_index_formula(first, &effect.indices, sparse) {
-                return false;
             }
         }
     }
     true
+}
+
+#[allow(clippy::too_many_arguments)]
+fn effect_pair_symbolically_disjoint(
+    context: &Context,
+    function: &FuncOp,
+    first: &EffectV1,
+    second: &EffectV1,
+    sparse: &SparseIndexAnalysisV1,
+    launch_extents: &[u64],
+    invocation_bounds: Option<&[[Option<u64>; MAX_RANKED_MEMORY_RANK]]>,
+) -> bool {
+    if effect_affine_map_is_injective(first, sparse, launch_extents, invocation_bounds)
+        && effect_affine_map_is_injective(second, sparse, launch_extents, invocation_bounds)
+        && same_index_formula(&first.indices, &second.indices, sparse)
+    {
+        return true;
+    }
+    checked_tiled_pair_is_disjoint(context, function, first, second, sparse, launch_extents)
+        || checked_row_striped_pair_is_disjoint(
+            context,
+            function,
+            first,
+            second,
+            sparse,
+            launch_extents,
+        )
+}
+
+fn checked_tiled_pair_is_disjoint(
+    context: &Context,
+    function: &FuncOp,
+    first: &EffectV1,
+    second: &EffectV1,
+    sparse: &SparseIndexAnalysisV1,
+    launch_extents: &[u64],
+) -> bool {
+    let ([first_index], [second_index]) = (first.indices.as_slice(), second.indices.as_slice())
+    else {
+        return false;
+    };
+    if first.checked_success.is_none() || second.checked_success.is_none() {
+        return false;
+    }
+    let first_fact = sparse.fact(*first_index);
+    let second_fact = sparse.fact(*second_index);
+    let (Some(first), Some(second)) = (
+        first_fact.checked_tiled_2d(),
+        second_fact.checked_tiled_2d(),
+    ) else {
+        return false;
+    };
+    let first_component = sparse.fact(first.component()).constant_value();
+    let second_component = sparse.fact(second.component()).constant_value();
+    first.geometry() == second.geometry()
+        && first.runtime_layout() == second.runtime_layout()
+        && checked_runtime_layout_is_uniform(context, function, &first.runtime_layout(), sparse)
+        && first.invocation() == second.invocation()
+        && first_component.is_some_and(|component| component < first.geometry()[3])
+        && second_component.is_some_and(|component| component < second.geometry()[3])
+        && checked_invocation_is_injective(first.invocation(), launch_extents)
+}
+
+fn checked_row_striped_pair_is_disjoint(
+    context: &Context,
+    function: &FuncOp,
+    first: &EffectV1,
+    second: &EffectV1,
+    sparse: &SparseIndexAnalysisV1,
+    launch_extents: &[u64],
+) -> bool {
+    let ([first_index], [second_index]) = (first.indices.as_slice(), second.indices.as_slice())
+    else {
+        return false;
+    };
+    if first.checked_success.is_none() || second.checked_success.is_none() {
+        return false;
+    }
+    let first_fact = sparse.fact(*first_index);
+    let second_fact = sparse.fact(*second_index);
+    let (Some(first), Some(second)) = (
+        first_fact.checked_row_striped_2d(),
+        second_fact.checked_row_striped_2d(),
+    ) else {
+        return false;
+    };
+    let first_component = sparse.fact(first.component()).constant_value();
+    let second_component = sparse.fact(second.component()).constant_value();
+    first.geometry() == second.geometry()
+        && first.runtime_layout() == second.runtime_layout()
+        && checked_runtime_layout_is_uniform(context, function, &first.runtime_layout(), sparse)
+        && first.invocation() == second.invocation()
+        && first_component.is_some_and(|component| component < first.geometry()[1])
+        && second_component.is_some_and(|component| component < second.geometry()[1])
+        && checked_invocation_is_injective(first.invocation(), launch_extents)
+}
+
+fn checked_runtime_layout_is_uniform(
+    context: &Context,
+    function: &FuncOp,
+    layout: &[Value; 3],
+    sparse: &SparseIndexAnalysisV1,
+) -> bool {
+    let entry = function.get_entry_block(context);
+    layout.iter().all(|value| {
+        (value.defining_op().is_none() && value.defining_block() == Some(entry))
+            || sparse.fact(*value).affine().is_some_and(|affine| {
+                affine
+                    .coefficients()
+                    .iter()
+                    .all(|coefficient| *coefficient == 0)
+            })
+    })
+}
+
+fn checked_invocation_is_injective(
+    invocation: &SparseAffineIndexV1,
+    launch_extents: &[u64],
+) -> bool {
+    let facts = [invocation.clone()];
+    affine_facts_are_injective(&facts, launch_extents)
+        || affine_facts_contain_unit_coordinate_embedding(&facts, launch_extents)
 }
 
 /// Uses exact bounded relation images to discharge affine/remainder effect

@@ -14,29 +14,29 @@ error[E0432]: unresolved imports `fe2o3_core::GpuFunction`, `fe2o3_core::GpuModu
 note: found an item that was configured out
  --> src/lib.rs
   |
-  | #[cfg(test)]
-  |       ---- the item is gated here
+  | #[cfg(any(test, feature = "qualification-unsafe-launch"))]
+  |          ----------------------------------------------- the item is gated here
   | pub use module::{GpuFunction, GpuModule};
   |                  ^^^^^^^^^^^
 note: found an item that was configured out
  --> src/lib.rs
   |
-  | #[cfg(test)]
-  |       ---- the item is gated here
+  | #[cfg(any(test, feature = "qualification-unsafe-launch"))]
+  |          ----------------------------------------------- the item is gated here
   | pub use module::{GpuFunction, GpuModule};
   |                               ^^^^^^^^^
 note: found an item that was configured out
  --> src/lib.rs
   |
-  | #[cfg(test)]
-  |       ---- the item is gated here
+  | #[cfg(any(test, feature = "qualification-unsafe-launch"))]
+  |          ----------------------------------------------- the item is gated here
   | pub use launch::{KernelParams, LaunchConfig, launch_kernel_on_stream};
   |                  ^^^^^^^^^^^^
 note: found an item that was configured out
  --> src/lib.rs
   |
-  | #[cfg(test)]
-  |       ---- the item is gated here
+  | #[cfg(any(test, feature = "qualification-unsafe-launch"))]
+  |          ----------------------------------------------- the item is gated here
   | pub use launch::{KernelParams, LaunchConfig, launch_kernel_on_stream};
   |                                ^^^^^^^^^^^^
 note: found an item that was configured out
@@ -49,7 +49,7 @@ note: found an item that was configured out
 note: found an item that was configured out
  --> src/lib.rs
   |
-  | #[cfg(test)]
-  |       ---- the item is gated here
+  | #[cfg(any(test, feature = "qualification-unsafe-launch"))]
+  |          ----------------------------------------------- the item is gated here
   | pub use launch::{KernelParams, LaunchConfig, launch_kernel_on_stream};
   |                                              ^^^^^^^^^^^^^^^^^^^^^^^
