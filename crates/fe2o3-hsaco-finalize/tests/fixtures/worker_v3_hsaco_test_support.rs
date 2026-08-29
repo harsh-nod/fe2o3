@@ -586,8 +586,9 @@ pub(crate) fn slice_fixture_with_descriptor_table(descriptor_table: &[u8]) -> Fi
 }
 
 #[allow(dead_code)]
-/// Builds two hand-authored ELF entries for roster-admission testing only.
+/// Builds two hand-authored ELF entries in lexical source order for roster-admission testing only.
 ///
+/// The supplied descriptor table deliberately uses a different canonical order.
 /// Neither this ELF nor its descriptor table is compiler-produced evidence.
 pub(crate) fn synthetic_two_kernel_slice_fixture_with_descriptor_table(
     descriptor_table: &[u8],

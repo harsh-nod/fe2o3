@@ -1027,7 +1027,7 @@ fn synthetic_two_kernel_slice_descriptor_table() -> Vec<u8> {
         DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::shared_slice(ScalarTypeV1::F32));
     let kernels = vec![
         slice_kernel_descriptor(
-            0xb1,
+            0xc1,
             "synthetic_first_transform",
             "synthetic_first_transform",
             "synthetic_first_transform.kd",
@@ -1036,7 +1036,7 @@ fn synthetic_two_kernel_slice_descriptor_table() -> Vec<u8> {
             64,
         ),
         slice_kernel_descriptor(
-            0xc1,
+            0xb1,
             "synthetic_second_transform",
             "synthetic_second_transform",
             "synthetic_second_transform.kd",

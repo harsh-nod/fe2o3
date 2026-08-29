@@ -194,6 +194,7 @@ pub struct RecoveredWorkerV3EntrypointV1 {
 }
 
 impl RecoveredWorkerV3EntrypointV1 {
+    /// Position in the canonical descriptor table, independent of physical ELF order.
     pub const fn ordinal(&self) -> usize {
         self.ordinal
     }
@@ -213,7 +214,8 @@ impl fmt::Debug for RecoveredWorkerV3EntrypointV1 {
     }
 }
 
-/// Read-only admission of one exact ordered compiler-generated kernel roster.
+/// Read-only admission of one exact compiler-generated kernel roster in
+/// canonical descriptor-table order.
 ///
 /// The value owns one recovered envelope for the complete descriptor table. Its
 /// entrypoints are inert and grant no verification, load, or launch authority.
@@ -445,10 +447,13 @@ pub fn admit_recovered_worker_v3_descriptor_v1(
     })
 }
 
-/// Consumes one recovered envelope into an exact, ordered, inert marker roster.
+/// Consumes one recovered envelope into an exact, inert marker roster in
+/// canonical descriptor-table order.
 ///
 /// This transition matches every marker's logical name, export name, and
 /// binding identity to the complete receipt-bound compiler descriptor table.
+/// V1 descriptor tables are currently ordered by `KernelId`; source registration
+/// and physical ELF kernel order are separate axes.
 /// Generated host-contract identities remain inert until a later sealed
 /// verification transition.
 pub fn admit_recovered_worker_v3_roster_v1<R>(
@@ -1104,7 +1109,7 @@ impl fmt::Display for RecoveredWorkerV3AdmissionErrorV1 {
                 formatter.write_str("Worker V3 descriptor matches more than one physical kernel")
             }
             Self::DescriptorBindingMismatch => {
-                formatter.write_str("Worker V3 descriptor and physical ELF binding order differ")
+                formatter.write_str("Worker V3 physical ELF kernel and binding indices differ")
             }
             Self::SelectedExportMismatch => formatter
                 .write_str("selected Worker V3 kernel is absent from the compiler export roles"),

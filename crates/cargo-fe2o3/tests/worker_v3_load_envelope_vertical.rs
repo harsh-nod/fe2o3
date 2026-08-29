@@ -72,8 +72,8 @@ mod worker_v3_fixture;
 
 const TEST_MARKER_BINDING: [u8; 32] = [0xa1; 32];
 const TEST_HOST_CONTRACT: [u8; 32] = [0xb2; 32];
-const SYNTHETIC_FIRST_TRANSFORM_BINDING: [u8; 32] = [0xb1; 32];
-const SYNTHETIC_SECOND_TRANSFORM_BINDING: [u8; 32] = [0xc1; 32];
+const SYNTHETIC_FIRST_TRANSFORM_BINDING: [u8; 32] = [0xc1; 32];
+const SYNTHETIC_SECOND_TRANSFORM_BINDING: [u8; 32] = [0xb1; 32];
 
 fn carriage_for_subject(
     subject: &InertCompilerExecutionSubjectV1,
@@ -284,21 +284,21 @@ unsafe impl CompilerGeneratedKernelExpectationV1 for WorkerV3SyntheticSubstitute
 
 fe2o3_host::compiler_generated_kernel_expectation_roster_v1! {
     struct WorkerV3SyntheticTwoTransformRoster = [
-        WorkerV3SyntheticFirstTransformMarker,
         WorkerV3SyntheticSecondTransformMarker,
+        WorkerV3SyntheticFirstTransformMarker,
     ];
 }
 
 fe2o3_host::compiler_generated_kernel_expectation_roster_v1! {
     struct WorkerV3SyntheticReorderedTransformRoster = [
-        WorkerV3SyntheticSecondTransformMarker,
         WorkerV3SyntheticFirstTransformMarker,
+        WorkerV3SyntheticSecondTransformMarker,
     ];
 }
 
 fe2o3_host::compiler_generated_kernel_expectation_roster_v1! {
     struct WorkerV3SyntheticSubstitutedTransformRoster = [
-        WorkerV3SyntheticFirstTransformMarker,
+        WorkerV3SyntheticSecondTransformMarker,
         WorkerV3SyntheticSubstitutedTransformMarker,
     ];
 }
@@ -1752,7 +1752,7 @@ fn v3_host_roster_admission_retains_one_inert_envelope_for_the_exact_table() {
 }
 
 #[test]
-fn v3_host_roster_admission_matches_a_synthetic_two_kernel_descriptor_exactly() {
+fn v3_host_roster_admission_uses_canonical_descriptor_order_not_source_or_elf_order() {
     let (_directory, recovered) = recovered_synthetic_two_kernel_host_fixture();
     let admitted = admit_recovered_worker_v3_roster_v1::<WorkerV3SyntheticTwoTransformRoster>(
         recovered,
@@ -1767,32 +1767,32 @@ fn v3_host_roster_admission_matches_a_synthetic_two_kernel_descriptor_exactly() 
     );
     assert_eq!(
         admitted.descriptor(0).unwrap().kernel_id().as_bytes(),
-        &SYNTHETIC_FIRST_TRANSFORM_BINDING
-    );
-    assert_eq!(
-        admitted.descriptor(1).unwrap().kernel_id().as_bytes(),
         &SYNTHETIC_SECOND_TRANSFORM_BINDING
     );
     assert_eq!(
-        admitted.descriptor(0).unwrap().logical_name().as_str(),
-        "synthetic_first_transform"
+        admitted.descriptor(1).unwrap().kernel_id().as_bytes(),
+        &SYNTHETIC_FIRST_TRANSFORM_BINDING
     );
     assert_eq!(
-        admitted.descriptor(1).unwrap().logical_name().as_str(),
+        admitted.descriptor(0).unwrap().logical_name().as_str(),
         "synthetic_second_transform"
     );
     assert_eq!(
+        admitted.descriptor(1).unwrap().logical_name().as_str(),
+        "synthetic_first_transform"
+    );
+    assert_eq!(
         admitted.physical_kernel(0).unwrap().symbol(),
-        "synthetic_first_transform.kd"
+        "synthetic_second_transform.kd"
     );
     assert_eq!(
         admitted.physical_kernel(1).unwrap().symbol(),
-        "synthetic_second_transform.kd"
+        "synthetic_first_transform.kd"
     );
-    // This hand-authored ELF intentionally places its physical symbols in descriptor order. Roster
-    // admission itself does not equate descriptor ordinals with physical-kernel indices.
-    assert_eq!(admitted.descriptor_binding(0).unwrap().kernel_index(), 0);
-    assert_eq!(admitted.descriptor_binding(1).unwrap().kernel_index(), 1);
+    // The fixture registers and emits first then second, while the descriptor table canonicalizes
+    // the lower second binding before the first. Exact name/symbol selection must cross the axes.
+    assert_eq!(admitted.descriptor_binding(0).unwrap().kernel_index(), 1);
+    assert_eq!(admitted.descriptor_binding(1).unwrap().kernel_index(), 0);
     assert!(admitted.authenticates_descriptor_source());
     assert!(!admitted.authenticates_compiler_origin());
     assert!(!admitted.authenticates_verification_authority());

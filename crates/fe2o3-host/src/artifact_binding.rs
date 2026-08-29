@@ -300,8 +300,10 @@ pub unsafe trait CompilerGeneratedKernelExpectationV1: KernelMarkerV1 {
 /// Metadata for one marker in an exact compiler-generated kernel roster.
 ///
 /// This value carries no artifact bytes and grants no verification, load, or
-/// launch authority. Host admission compares the complete ordered roster with
-/// the independently recovered compiler descriptor table.
+/// launch authority. Host admission compares the complete roster, in canonical
+/// descriptor-table order, with the independently recovered compiler descriptor
+/// table. V1 descriptor tables currently canonicalize kernels by `KernelId`;
+/// source registration and physical ELF order do not define roster order.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[doc(hidden)]
 pub struct CompilerGeneratedKernelExpectationRosterEntryV1 {
@@ -353,21 +355,26 @@ impl CompilerGeneratedKernelExpectationRosterEntryV1 {
     }
 }
 
-/// Exact ordered set of compiler-generated kernel expectations for one artifact.
+/// Exact canonical descriptor-table-ordered set of compiler-generated kernel
+/// expectations for one artifact.
 ///
 /// Implementations are metadata only. They grant no authority and are checked
 /// against the complete receipt-bound compiler descriptor table during host
-/// admission. The generated host-contract identity is retained for the later
-/// sealed verification transition; descriptor admission itself matches only
-/// the ordered logical name, export name, and kernel binding carried on both
-/// boundaries. Prefer [`compiler_generated_kernel_expectation_roster_v1!`] so
-/// every entry is derived directly from its generated marker.
+/// admission. Entries must follow the descriptor table's canonical order, which
+/// V1 currently defines as strictly ascending `KernelId`, rather than source
+/// registration or physical ELF order. The generated host-contract identity is
+/// retained for the later sealed verification transition; descriptor admission
+/// itself matches only the ordered logical name, export name, and kernel binding
+/// carried on both boundaries. Prefer
+/// [`compiler_generated_kernel_expectation_roster_v1!`] so every entry is derived
+/// directly from its generated marker.
 #[doc(hidden)]
 pub trait CompilerGeneratedKernelExpectationRosterV1: Send + Sync + 'static {
     const ENTRIES: &'static [CompilerGeneratedKernelExpectationRosterEntryV1];
 }
 
-/// Declares an exact ordered roster from compiler-generated kernel markers.
+/// Declares an exact roster in canonical descriptor-table order from
+/// compiler-generated kernel markers.
 #[macro_export]
 #[doc(hidden)]
 macro_rules! compiler_generated_kernel_expectation_roster_v1 {
