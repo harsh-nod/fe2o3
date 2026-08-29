@@ -23,8 +23,10 @@ the deployment-bound signing-key capability, opens only existing durable state,
 retains only its private root and peer, and closes every other descriptor. The
 deployment also pins the exact daemon SHA-256 measurement. `/proc/self/exe` must
 be the same anonymous service-owned mode-`0555` executable under complete
-content, execution-mode, and further-seal prevention; its bytes are hashed once
-and the retained immutable object is revalidated before key use.
+content, execution-mode, and further-seal prevention. The shared protected
+static-executable contract checks its complete loader-independent ELF form,
+measurement, owner, seals, object identity, bytes, and static identity at
+admission and revalidates the retained immutable object before key use.
 
 This crate does not establish deployment authority by itself. The remaining
 root provisioner must create state, key, executable image, and the unnamed

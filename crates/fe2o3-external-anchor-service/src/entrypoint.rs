@@ -2,10 +2,8 @@
 
 use std::error::Error;
 use std::fmt;
-use std::fs::{File, Metadata};
 use std::io;
 use std::os::fd::{FromRawFd, OwnedFd, RawFd};
-use std::os::unix::fs::{FileExt, MetadataExt};
 
 use fe2o3_compiler_closure_capability::{
     COMPILER_EXECUTION_EXTERNAL_ANCHOR_DEPLOYMENT_FD_V1,
@@ -22,8 +20,11 @@ use fe2o3_protected_service_profile::{
     ProtectedServiceNamespaceSetV1, ProtectedServiceProcessProfileV1,
     ProtectedServiceProfileErrorV1, require_owned_sigchld_v1,
 };
-use rustix::fs::{OFlags, SealFlags};
-use sha2::{Digest, Sha256};
+pub use fe2o3_protected_static_executable::ProtectedStaticExecutableErrorV1 as ExternalAnchorExecutableErrorV1;
+use fe2o3_protected_static_executable::{
+    ProtectedStaticExecutableMeasurementV1, ProtectedStaticExecutableOwnerV1,
+    ProtectedStaticExecutableV1,
+};
 
 use crate::{
     DurableExternalAnchorV1, ExternalAnchorDaemonErrorV1, ExternalAnchorServiceErrorV1,
@@ -37,13 +38,6 @@ pub const EXTERNAL_ANCHOR_SERVICE_ROOT_FD_V1: RawFd = 4;
 
 const PRIVATE_ROOT_FD_V1: RawFd = 256;
 const PRIVATE_PEER_FD_V1: RawFd = 257;
-const EXECUTABLE_MODE_V1: u32 = 0o555;
-const EXECUTABLE_HASH_CHUNK_BYTES_V1: usize = 64 * 1024;
-const REQUIRED_EXECUTABLE_SEALS_V1: SealFlags = SealFlags::WRITE
-    .union(SealFlags::GROW)
-    .union(SealFlags::SHRINK)
-    .union(SealFlags::EXEC)
-    .union(SealFlags::SEAL);
 const CLOSE_RANGE_CEILING_BEFORE_PRIVATE_V1: u32 = PRIVATE_ROOT_FD_V1 as u32 - 1;
 const CLOSE_RANGE_FLOOR_AFTER_PRIVATE_V1: u32 = PRIVATE_PEER_FD_V1 as u32 + 1;
 
@@ -57,216 +51,53 @@ struct AdmittedExternalAnchorProfileV1 {
     namespaces: Option<ProtectedServiceNamespaceSetV1>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct ExecutableSnapshotV1 {
-    device: u64,
-    inode: u64,
-    mode: u32,
-    uid: u32,
-    gid: u32,
-    links: u64,
-    length: u64,
-    modified_seconds: i64,
-    modified_nanoseconds: i64,
-    changed_seconds: i64,
-    changed_nanoseconds: i64,
-}
-
-impl ExecutableSnapshotV1 {
-    fn from_metadata(metadata: &Metadata) -> Self {
-        Self {
-            device: metadata.dev(),
-            inode: metadata.ino(),
-            mode: metadata.mode(),
-            uid: metadata.uid(),
-            gid: metadata.gid(),
-            links: metadata.nlink(),
-            length: metadata.len(),
-            modified_seconds: metadata.mtime(),
-            modified_nanoseconds: metadata.mtime_nsec(),
-            changed_seconds: metadata.ctime(),
-            changed_nanoseconds: metadata.ctime_nsec(),
-        }
-    }
-}
-
 struct RetainedExternalAnchorExecutableV1 {
-    image: File,
-    snapshot: ExecutableSnapshotV1,
-    measurement: fe2o3_compiler_execution_protocol::CompilerExecutionIssuerMeasurementV1,
+    executable: Option<ProtectedStaticExecutableV1>,
 }
 
 impl RetainedExternalAnchorExecutableV1 {
     fn admit(
         deployment: &CompilerExecutionExternalAnchorDeploymentV1,
     ) -> Result<Self, ExternalAnchorExecutableErrorV1> {
-        let image =
-            File::open("/proc/self/exe").map_err(|source| ExternalAnchorExecutableErrorV1::Io {
-                operation: "open running external-anchor executable",
-                source,
-            })?;
-        let snapshot = validate_executable_image(&image, deployment)?;
-        let admitted = Self {
-            image,
-            snapshot,
-            measurement: deployment.executable(),
-        };
-        admitted.revalidate(deployment)?;
-        Ok(admitted)
+        let (measurement, owner) = executable_contract(deployment)?;
+        ProtectedStaticExecutableV1::admit_running(measurement, owner, "external-anchor service")
+            .map(|executable| Self {
+                executable: Some(executable),
+            })
     }
 
-    fn revalidate(
-        &self,
-        deployment: &CompilerExecutionExternalAnchorDeploymentV1,
-    ) -> Result<(), ExternalAnchorExecutableErrorV1> {
-        if deployment.executable() != self.measurement
-            || inspect_executable_image(&self.image, deployment)? != self.snapshot
-        {
-            return Err(ExternalAnchorExecutableErrorV1::Changed);
+    fn revalidate(&self) -> Result<(), ExternalAnchorExecutableErrorV1> {
+        if let Some(executable) = &self.executable {
+            executable.revalidate()?;
         }
         Ok(())
     }
+
+    #[cfg(test)]
+    const fn for_test() -> Self {
+        Self { executable: None }
+    }
 }
 
-fn validate_executable_image(
-    image: &File,
+fn executable_contract(
     deployment: &CompilerExecutionExternalAnchorDeploymentV1,
-) -> Result<ExecutableSnapshotV1, ExternalAnchorExecutableErrorV1> {
-    let before = inspect_executable_image(image, deployment)?;
-    let digest = hash_exact_executable(image, before.length)?;
-    let after = inspect_executable_image(image, deployment)?;
-    if before != after {
-        return Err(ExternalAnchorExecutableErrorV1::Changed);
-    }
-    if digest != deployment.executable().sha256() {
-        return Err(ExternalAnchorExecutableErrorV1::MeasurementMismatch);
-    }
-    Ok(before)
-}
-
-fn inspect_executable_image(
-    image: &File,
-    deployment: &CompilerExecutionExternalAnchorDeploymentV1,
-) -> Result<ExecutableSnapshotV1, ExternalAnchorExecutableErrorV1> {
-    let descriptor_flags = rustix::io::fcntl_getfd(image).map_err(|source| {
-        executable_io_error(
-            "inspect external-anchor executable descriptor flags",
-            source.into(),
-        )
-    })?;
-    let status = rustix::fs::fcntl_getfl(image).map_err(|source| {
-        executable_io_error(
-            "inspect external-anchor executable status flags",
-            source.into(),
-        )
-    })?;
-    let seals = rustix::fs::fcntl_get_seals(image).map_err(|source| {
-        executable_io_error("inspect external-anchor executable seals", source.into())
-    })?;
-    let snapshot = image
-        .metadata()
-        .map(|metadata| ExecutableSnapshotV1::from_metadata(&metadata))
-        .map_err(|source| executable_io_error("inspect external-anchor executable", source))?;
+) -> Result<
+    (
+        ProtectedStaticExecutableMeasurementV1,
+        ProtectedStaticExecutableOwnerV1,
+    ),
+    ExternalAnchorExecutableErrorV1,
+> {
+    let executable = deployment.executable();
     let service = deployment.service();
-    if !descriptor_flags.contains(rustix::io::FdFlags::CLOEXEC) {
-        return Err(ExternalAnchorExecutableErrorV1::InvalidImage(
-            "running-image descriptor is inheritable",
-        ));
-    }
-    if status & OFlags::ACCMODE != OFlags::RDONLY || status.contains(OFlags::PATH) {
-        return Err(ExternalAnchorExecutableErrorV1::InvalidImage(
-            "running-image descriptor is not read-only",
-        ));
-    }
-    if seals != REQUIRED_EXECUTABLE_SEALS_V1
-        && seals != REQUIRED_EXECUTABLE_SEALS_V1 | SealFlags::FUTURE_WRITE
-    {
-        return Err(ExternalAnchorExecutableErrorV1::InvalidImage(
-            "running image has unexpected seals",
-        ));
-    }
-    if snapshot.mode & libc::S_IFMT != libc::S_IFREG || snapshot.mode & 0o7777 != EXECUTABLE_MODE_V1
-    {
-        return Err(ExternalAnchorExecutableErrorV1::InvalidImage(
-            "running image is not a regular mode-0555 file",
-        ));
-    }
-    if snapshot.uid != service.uid() || snapshot.gid != service.gid() {
-        return Err(ExternalAnchorExecutableErrorV1::InvalidImage(
-            "running image has unexpected ownership",
-        ));
-    }
-    if snapshot.links != 0 {
-        return Err(ExternalAnchorExecutableErrorV1::InvalidImage(
-            "running image is linked into a filesystem",
-        ));
-    }
-    if snapshot.length != deployment.executable().byte_len()
-        || snapshot.length == 0
-        || snapshot.length > MAX_COMPILER_EXECUTION_EXTERNAL_ANCHOR_EXECUTABLE_BYTES_V1
-    {
-        return Err(ExternalAnchorExecutableErrorV1::InvalidImage(
-            "running image has unexpected length",
-        ));
-    }
-    require_no_file_capability(image)?;
-    Ok(snapshot)
-}
-
-fn require_no_file_capability(image: &File) -> Result<(), ExternalAnchorExecutableErrorV1> {
-    let mut byte = 0_u8;
-    match rustix::fs::fgetxattr(
-        image,
-        "security.capability",
-        std::slice::from_mut(&mut byte),
-    ) {
-        Ok(_) | Err(rustix::io::Errno::RANGE) => {
-            Err(ExternalAnchorExecutableErrorV1::FileCapability)
-        }
-        Err(rustix::io::Errno::NODATA | rustix::io::Errno::OPNOTSUPP) => Ok(()),
-        Err(source) => Err(executable_io_error(
-            "inspect external-anchor executable file capability",
-            source.into(),
-        )),
-    }
-}
-
-fn hash_exact_executable(
-    image: &File,
-    length: u64,
-) -> Result<[u8; 32], ExternalAnchorExecutableErrorV1> {
-    let mut digest = Sha256::new();
-    let mut buffer = [0_u8; EXECUTABLE_HASH_CHUNK_BYTES_V1];
-    let mut offset = 0_u64;
-    while offset < length {
-        let remaining = usize::try_from((length - offset).min(buffer.len() as u64))
-            .expect("bounded executable hash chunk fits usize");
-        let count = image
-            .read_at(&mut buffer[..remaining], offset)
-            .map_err(|source| executable_io_error("read external-anchor executable", source))?;
-        if count == 0 {
-            return Err(ExternalAnchorExecutableErrorV1::Changed);
-        }
-        digest.update(&buffer[..count]);
-        offset = offset
-            .checked_add(count as u64)
-            .ok_or(ExternalAnchorExecutableErrorV1::Changed)?;
-    }
-    let mut trailing = [0_u8; 1];
-    if image.read_at(&mut trailing, length).map_err(|source| {
-        executable_io_error("check external-anchor executable boundary", source)
-    })? != 0
-    {
-        return Err(ExternalAnchorExecutableErrorV1::Changed);
-    }
-    Ok(digest.finalize().into())
-}
-
-fn executable_io_error(
-    operation: &'static str,
-    source: io::Error,
-) -> ExternalAnchorExecutableErrorV1 {
-    ExternalAnchorExecutableErrorV1::Io { operation, source }
+    Ok((
+        ProtectedStaticExecutableMeasurementV1::new(
+            executable.sha256(),
+            executable.byte_len(),
+            MAX_COMPILER_EXECUTION_EXTERNAL_ANCHOR_EXECUTABLE_BYTES_V1,
+        )?,
+        ProtectedStaticExecutableOwnerV1::new(service.uid(), service.gid())?,
+    ))
 }
 
 impl AdmittedExternalAnchorProfileV1 {
@@ -326,6 +157,23 @@ fn run_inherited_with_profile_v1(
         ProtectedServiceProfileErrorV1,
     >,
 ) -> Result<ExternalAnchorServiceReportV1, ExternalAnchorEntrypointErrorV1> {
+    run_inherited_with_admission_v1(admit_profile, RetainedExternalAnchorExecutableV1::admit)
+}
+
+fn run_inherited_with_admission_v1(
+    admit_profile: impl FnOnce(
+        ProtectedServiceCredentialProfileV1,
+    ) -> Result<
+        AdmittedExternalAnchorProfileV1,
+        ProtectedServiceProfileErrorV1,
+    >,
+    admit_executable: impl FnOnce(
+        &CompilerExecutionExternalAnchorDeploymentV1,
+    ) -> Result<
+        RetainedExternalAnchorExecutableV1,
+        ExternalAnchorExecutableErrorV1,
+    >,
+) -> Result<ExternalAnchorServiceReportV1, ExternalAnchorEntrypointErrorV1> {
     let deployment = CompilerExecutionExternalAnchorDeploymentCapabilityV1::from_inherited()
         .map_err(ExternalAnchorEntrypointErrorV1::DeploymentCapability)?;
     close_inherited(COMPILER_EXECUTION_EXTERNAL_ANCHOR_DEPLOYMENT_FD_V1)?;
@@ -340,10 +188,10 @@ fn run_inherited_with_profile_v1(
     deployment
         .revalidate()
         .map_err(ExternalAnchorEntrypointErrorV1::DeploymentCapability)?;
-    let executable = RetainedExternalAnchorExecutableV1::admit(&manifest)
-        .map_err(ExternalAnchorEntrypointErrorV1::Executable)?;
+    let executable =
+        admit_executable(&manifest).map_err(ExternalAnchorEntrypointErrorV1::Executable)?;
     executable
-        .revalidate(&manifest)
+        .revalidate()
         .map_err(ExternalAnchorEntrypointErrorV1::Executable)?;
 
     let key = CompilerExecutionExternalAnchorSigningKeyCapabilityV1::from_inherited(&manifest)
@@ -369,7 +217,7 @@ fn run_inherited_with_profile_v1(
         .revalidate()
         .map_err(ExternalAnchorEntrypointErrorV1::DeploymentCapability)?;
     executable
-        .revalidate(&manifest)
+        .revalidate()
         .map_err(ExternalAnchorEntrypointErrorV1::Executable)?;
     let signing_key = key
         .into_signing_key(&manifest)
@@ -595,48 +443,6 @@ impl Error for ExternalAnchorEntrypointErrorV1 {
     }
 }
 
-/// Stable failure admitting or revalidating the exact running anchor executable.
-#[derive(Debug)]
-#[non_exhaustive]
-pub enum ExternalAnchorExecutableErrorV1 {
-    InvalidImage(&'static str),
-    FileCapability,
-    MeasurementMismatch,
-    Changed,
-    Io {
-        operation: &'static str,
-        source: io::Error,
-    },
-}
-
-impl fmt::Display for ExternalAnchorExecutableErrorV1 {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::InvalidImage(reason) => write!(
-                formatter,
-                "running anchor is not the exact service-owned sealed mode-0555 image: {reason}"
-            ),
-            Self::FileCapability => {
-                formatter.write_str("running anchor executable carries a file capability")
-            }
-            Self::MeasurementMismatch => {
-                formatter.write_str("running anchor executable measurement differs")
-            }
-            Self::Changed => formatter.write_str("running anchor executable changed"),
-            Self::Io { operation, source } => write!(formatter, "{operation}: {source}"),
-        }
-    }
-}
-
-impl Error for ExternalAnchorExecutableErrorV1 {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Io { source, .. } => Some(source),
-            _ => None,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::fs::{self, File};
@@ -651,7 +457,9 @@ mod tests {
         CompilerExecutionExternalAnchorServiceIdentityV1, CompilerExecutionIssuerMeasurementV1,
         CompilerExecutionIssuerPolicyV1, CompilerExecutionSupervisorDeploymentV1,
     };
+    use rustix::fs::{OFlags, SealFlags};
     use rustix::net::{AddressFamily, SocketFlags, SocketType, socketpair};
+    use sha2::{Digest, Sha256};
 
     use super::*;
 
@@ -699,9 +507,18 @@ mod tests {
             CompilerExecutionIssuerMeasurementV1::new(substituted_digest, measurement.byte_len())
                 .unwrap();
 
+        let deployment = manifest(17, substituted);
+        let (measurement, owner) = executable_contract(&deployment).unwrap();
         assert!(matches!(
-            validate_executable_image(&image, &manifest(17, substituted)),
-            Err(ExternalAnchorExecutableErrorV1::MeasurementMismatch)
+            ProtectedStaticExecutableV1::admit_sealed(
+                image,
+                measurement,
+                owner,
+                "external-anchor service",
+            ),
+            Err(ExternalAnchorExecutableErrorV1::MeasurementMismatch(
+                "external-anchor service"
+            ))
         ));
     }
 
@@ -931,8 +748,8 @@ mod tests {
     }
 
     fn sealed_test_executable() -> (File, CompilerExecutionIssuerMeasurementV1) {
-        let mut source = File::open(std::env::current_exe().unwrap()).unwrap();
-        let length = source.metadata().unwrap().len();
+        let bytes = fs::read(std::env::current_exe().unwrap()).unwrap();
+        let length = bytes.len() as u64;
         let image = rustix::fs::memfd_create(
             c"fe2o3-external-anchor-test-executable",
             rustix::fs::MemfdFlags::CLOEXEC
@@ -942,7 +759,7 @@ mod tests {
         .map(File::from)
         .unwrap();
         let mut writer = image.try_clone().unwrap();
-        std::io::copy(&mut source, &mut writer).unwrap();
+        writer.write_all(&bytes).unwrap();
         writer.flush().unwrap();
         drop(writer);
         rustix::fs::fchmod(
@@ -970,10 +787,10 @@ mod tests {
         .map(File::from)
         .unwrap();
         drop(image);
-        let digest = hash_exact_executable(&read_only, length).unwrap();
         (
             read_only,
-            CompilerExecutionIssuerMeasurementV1::new(digest, length).unwrap(),
+            CompilerExecutionIssuerMeasurementV1::new(Sha256::digest(&bytes).into(), length)
+                .unwrap(),
         )
     }
 
@@ -982,8 +799,10 @@ mod tests {
         if std::env::var_os("FE2O3_ANCHOR_ENTRYPOINT_TEST_HELPER").is_none() {
             return;
         }
-        let result =
-            run_inherited_with_profile_v1(|_| Ok(AdmittedExternalAnchorProfileV1::for_test()));
+        let result = run_inherited_with_admission_v1(
+            |_| Ok(AdmittedExternalAnchorProfileV1::for_test()),
+            |_| Ok(RetainedExternalAnchorExecutableV1::for_test()),
+        );
         std::process::exit(match result {
             Ok(report) if report.exchanges() == 1 => 0,
             Ok(report) => {
