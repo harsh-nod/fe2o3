@@ -137,8 +137,8 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   compares every receipt, occurrence, Worker-ledger, sequence, and rollback
   coordinate and requires nonzero independent protected-policy, ledger, and
   external rollback verification identities. The concrete protected verifier,
-  distinct-UID deployment entrypoint, external monotonic rollback anchor, and
-  real Cargo-to-KFD qualification remain open.
+  privileged distinct-UID deployment, executable-identity binding, and real
+  Cargo-to-KFD qualification remain open.
 - Production has one unselected compilation transaction. Cargo owns it as
   `ManagedProductionBuild`, whose `Fresh`, `Recovered`, and `Ready` values are
   restart states rather than pipeline variants. The backend configuration and
@@ -201,9 +201,12 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   challenge-bound receipt-bearing current-record response as move-only audit
   evidence. The external anchor now has a durable single-writer transition
   engine, exact connected-packet service loop, sealed deployment manifest, and a
-  role-separated signing-key capability bound to that manifest. Its hardened
-  fixed-descriptor process entrypoint, distinct-UID root provisioner, deployed
-  supervisor provisioning, and final verifier authority remain pending.
+  role-separated signing-key capability bound to that manifest. Its
+  descriptor-only process entrypoint admits the shared locked profile before
+  reading the key, opens only existing state, closes all unrelated descriptors,
+  and serves the sole exact peer. The distinct-UID root provisioner,
+  executable-identity binding, deployed supervisor provisioning, and final
+  verifier authority remain pending.
 - Versioned artifact, descriptor, durable-publication, and HSA records exist.
   Host execution has one workload-neutral Worker V3 graph. An arbitrary
   manifest cannot manufacture a Rust signature, verifier decision, load

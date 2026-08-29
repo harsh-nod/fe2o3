@@ -5,9 +5,9 @@
 //! state file and its atomic directory rename have both been synced. Recovery challenges never
 //! mutate state. Exact retries of an already committed advance are idempotent.
 //!
-//! This crate does not provision the service account, authenticate a client process, receive
-//! packets, or establish key provenance. Those deployment edges must be closed by the protected
-//! descriptor-only service entrypoint and root-owned provisioner.
+//! The descriptor-only entrypoint admits the exact locked process profile, sealed deployment and
+//! key capabilities, existing durable root, and connected peer before entering this engine. Root
+//! provisioning and distinct-UID supervisor handoff remain separate deployment responsibilities.
 
 use std::error::Error;
 use std::fmt;
@@ -28,11 +28,20 @@ use rustix::process::geteuid;
 use sha2::{Digest, Sha256};
 
 #[allow(unsafe_code)]
+mod entrypoint;
+#[allow(unsafe_code)]
 mod service;
 
+pub use entrypoint::{
+    EXTERNAL_ANCHOR_SERVICE_PEER_FD_V1, EXTERNAL_ANCHOR_SERVICE_ROOT_FD_V1,
+    ExternalAnchorEntrypointErrorV1, run_inherited_external_anchor_service_v1,
+};
 pub use service::{
     ExternalAnchorDaemonErrorV1, ExternalAnchorServiceReportV1, serve_connected_peer_v1,
 };
+
+#[cfg(test)]
+static ENTRYPOINT_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 const STATE_MAGIC: [u8; 8] = *b"F2ARST1\0";
 const STATE_VERSION_V1: u16 = 1;

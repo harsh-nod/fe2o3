@@ -10,15 +10,24 @@ publish = false
 
 [dependencies]
 ed25519-dalek = { version = "=2.2.0", default-features = false, features = ["fast", "zeroize"] }
+fe2o3-compiler-closure-capability.workspace = true
 fe2o3-external-anchor-protocol.workspace = true
+fe2o3-protected-service-profile.workspace = true
 libc.workspace = true
-rustix = { workspace = true, features = ["event", "process"] }
+rustix = { workspace = true, features = ["event", "process", "thread"] }
 sha2.workspace = true
 
 [dev-dependencies]
 fe2o3-broker-authority-service = { workspace = true, features = ["test-support"] }
+fe2o3-compiler-execution-protocol.workspace = true
 fe2o3-runtime-protocol.workspace = true
 tempfile = "=3.21.0"
 
 [lints.rust]
 unsafe_code = "deny"
+
+[[bin]]
+name = "fe2o3-external-anchor-service"
+path = "src/main.rs"
+test = false
+bench = false

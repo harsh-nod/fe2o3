@@ -37,9 +37,10 @@ fixed-capacity deferred cleanup provide exactly-once reaping. The issuer
 re-admits the anchor endpoint and pidfd against both the manifest service
 identity and policy-pinned anchor key. Receipt publication now drives that
 transport and requires a durably recorded exact proposed-position observation
-before the Worker record or ACK can advance. Production must still establish
-that exact profile in a deployed distinct-UID service entrypoint and supply an
-independently operated monotonic backend. Cargo now admits the fixed root-owned
+before the Worker record or ACK can advance. The external-anchor entrypoint now
+admits that exact profile and its fixed descriptor set before serving, but a
+root-controlled provisioner must still establish the distinct UID and launch an
+independently operated occurrence. Cargo now admits the fixed root-owned
 client profile and connects only to the fixed authenticated listener path.
 The complete receipt carriage, subject-bound current-record recovery operation,
 exact-carriage protected verification operation, bounded restart-safe client
@@ -87,6 +88,26 @@ durably publishes the exact carriage bytes beside the handoff. Cargo admits
 the sidecar against the same sealed profile before consuming the handoff. The
 carriage remains inert until the implemented verifier boundary is backed by a
 real protected verifier and external rollback admission.
+
+The external-anchor executable accepts no arguments or environment and consumes
+exactly these inherited descriptors:
+
+| FD | Content |
+|---:|---|
+| 3 | Connected unnamed nonblocking Unix `SOCK_SEQPACKET` peer |
+| 4 | Existing service-owned mode-`0700` durable state root |
+| 221 | Sealed external-anchor deployment manifest |
+| 222 | Role-separated deployment-bound anchor signing key |
+
+It admits FD 221 and the complete locked service profile before inspecting FD
+222. It then privately retains root and peer at FDs 256 and 257, consumes the
+key capability, closes every other descriptor including stdio, revalidates the
+profile, and strictly opens existing state. Initialization is unavailable from
+the daemon entrypoint. The remaining provisioner must create the state and key
+image under the dedicated anchor UID, create the unnamed socketpair after the
+UID transition so `SO_PEERCRED` records that identity, return only the
+supervisor endpoint to the trusted root process, and execute the measured daemon
+with this exact descriptor set.
 
 ## Transport And Ownership
 
@@ -289,11 +310,11 @@ all source-object, capability, parent, pipe, and canonical-manifest checks. The
 binding wrapper now invokes this path for the selected protected kernel root,
 waits for exact issuer readiness, and kills/reaps rustc on any failed handoff.
 Fresh publication fails closed unless the parent still retains both exact
-rustc-invocation and compiler-execution-readiness custody. A deployed service
-entrypoint, backend receipt acquisition, external monotonic rollback, and final
-verifier/runtime authority joins remain separate requirements. The production
-application runner uses the same child-created channel and fixed supervisor path
-without exposing policy FD 202, establishes readiness before waiting for its
+rustc-invocation and compiler-execution-readiness custody. Privileged service
+provisioning, backend receipt acquisition, deployed external monotonic rollback,
+and final verifier/runtime authority joins remain separate requirements. The
+production application runner uses the same child-created channel and fixed
+supervisor path without exposing policy FD 202, establishes readiness before waiting for its
 ACK, and retains that custody through exit. `fe2o3-host` exports a move-only
 one-use auditor that consumes the inherited endpoint and verifies the signed
 current-record transaction without constructing verifier, load, or launch
