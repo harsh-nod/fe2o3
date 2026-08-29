@@ -189,10 +189,12 @@ that selected-wave ATT evidence does not prove full-grid coverage.
 
 `fe2o3-profiler-compare bundle-v4` accepts the same two-capture length-prefixed
 frame as the older comparator. It checks exact environment, collector tool,
-collector configuration, stable-device, KIR, and artifact content claims and
-emits an evidence-linked numeric dispatch-duration delta only when those
-claims match. Equality is explicitly equality of caller-declared content
-identities, not runtime authentication. `counter-delta-v2` emits deterministic
+collector configuration, stable-device, dispatch sequence/device/launch, KIR,
+and artifact content claims and emits an evidence-linked numeric
+dispatch-duration delta only when those claims match. Argument and input
+content identities are not represented, so this is not a regression diagnosis.
+Content equality is explicitly equality of caller-declared identities, not
+runtime authentication. `counter-delta-v2` emits deterministic
 binary64 sums for counter dimensions with observed records in both captures;
 `pc-delta-v3` currently returns typed unavailable because V3 code-object
 identities are capture-local and cannot safely join relative PCs across runs.

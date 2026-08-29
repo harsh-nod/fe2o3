@@ -697,6 +697,7 @@ pub enum ProfilerCompatibilityRequirementV4 {
     CollectorTool,
     CollectorConfiguration,
     StableDevices,
+    DispatchWorkload,
     KernelIr,
     Artifact,
 }
@@ -797,6 +798,7 @@ pub fn compare_profiler_bundles_v4(
                     .map(|device| device.stable_identity.value)),
             TruthOriginV1::Declared,
         ),
+        dispatch_workload_comparison_fact(&baseline, &candidate),
         dispatch_comparison_fact(
             ProfilerCompatibilityRequirementV4::KernelIr,
             &baseline,
@@ -857,13 +859,16 @@ pub fn compare_profiler_bundles_v4(
             );
         }
     } else {
-        unavailable.push("numeric dispatch deltas require exact environment, tool, configuration, stable device, kernel IR, and artifact comparability");
+        unavailable.push("numeric dispatch deltas require exact environment, tool, configuration, stable device, dispatch workload, kernel IR, and artifact comparability");
     }
     unavailable.push(
         "decoded ATT and wait-event deltas are unavailable without supported decoded ATT evidence",
     );
     unavailable.push(
         "environment, tool, configuration, and stable-device comparability is exact equality of caller-declared content identities, not runtime authentication",
+    );
+    unavailable.push(
+        "dispatch workload comparison covers sequence, device assignment, and launch geometry; argument and input-content identities are not represented",
     );
     Ok(ProfilerBundleComparisonV4 {
         baseline: baseline_id,
@@ -941,6 +946,62 @@ fn dispatch_comparison_fact(
         dispatch_pairs_match(left, right, predicate),
         TruthOriginV1::Declared,
     )
+}
+
+fn dispatch_workload_comparison_fact(
+    left: &SemanticProfilerBundleV4,
+    right: &SemanticProfilerBundleV4,
+) -> ProfilerCompatibilityFactV4 {
+    if left.dispatch_capture.is_none() || right.dispatch_capture.is_none() {
+        return ProfilerCompatibilityFactV4 {
+            requirement: ProfilerCompatibilityRequirementV4::DispatchWorkload,
+            status: ProfilerCompatibilityStatusV4::Unavailable,
+            origin: TruthOriginV1::Unavailable,
+        };
+    }
+    comparison_fact(
+        ProfilerCompatibilityRequirementV4::DispatchWorkload,
+        dispatch_workloads_match(left, right),
+        TruthOriginV1::Declared,
+    )
+}
+
+fn dispatch_workloads_match(
+    left: &SemanticProfilerBundleV4,
+    right: &SemanticProfilerBundleV4,
+) -> bool {
+    let (Some(left_capture), Some(right_capture)) =
+        (&left.dispatch_capture, &right.dispatch_capture)
+    else {
+        return false;
+    };
+    left_capture.dispatches.len() == right_capture.dispatches.len()
+        && left_capture
+            .dispatches
+            .iter()
+            .zip(&right_capture.dispatches)
+            .all(|(left_dispatch, right_dispatch)| {
+                let left_device = stable_dispatch_device(left, left_dispatch);
+                let right_device = stable_dispatch_device(right, right_dispatch);
+                left_dispatch.process_index == right_dispatch.process_index
+                    && left_dispatch.dispatch_index == right_dispatch.dispatch_index
+                    && left_dispatch.source_record_ordinal == right_dispatch.source_record_ordinal
+                    && left_dispatch.launch == right_dispatch.launch
+                    && left_device.is_some()
+                    && left_device == right_device
+            })
+}
+
+fn stable_dispatch_device(
+    bundle: &SemanticProfilerBundleV4,
+    dispatch: &CaptureDispatchV1,
+) -> Option<ContentIdentityRecordV1> {
+    let capture = bundle.dispatch_capture.as_ref()?;
+    let ordinal = capture
+        .devices
+        .iter()
+        .position(|device| device.identity == dispatch.device_identity)?;
+    bundle.devices.get(ordinal)?.stable_identity.value
 }
 
 fn dispatch_pairs_match(

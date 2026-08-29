@@ -207,6 +207,25 @@ fn comparison_requires_exact_environment_and_emits_numeric_duration_delta() {
     assert_eq!(f64::from_bits(comparison.deltas[0].delta_f64_bits), 40.0);
     assert!(!comparison.deltas[0].baseline_evidence.is_empty());
 
+    let launch_mismatch_source = String::from_utf8(CSV.to_vec())
+        .unwrap()
+        .replace(",32,2,1,128,2,1,", ",64,1,1,128,1,1,");
+    let launch_mismatch = encode_profiler_bundle_v4(
+        &import_rocprofv3_csv_profiler_bundle_v4(
+            launch_mismatch_source.as_bytes(),
+            capture_binding(10),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let launch_mismatch = compare_profiler_bundles_v4(&baseline, &launch_mismatch).unwrap();
+    assert!(!launch_mismatch.comparable);
+    assert!(launch_mismatch.deltas.is_empty());
+    assert!(launch_mismatch.compatibility.iter().any(|fact| {
+        fact.requirement == ProfilerCompatibilityRequirementV4::DispatchWorkload
+            && fact.status == ProfilerCompatibilityStatusV4::Mismatch
+    }));
+
     let mismatch = compare_profiler_bundles_v4(&baseline, &bundle(30)).unwrap();
     assert!(!mismatch.comparable);
     assert!(mismatch.deltas.is_empty());
