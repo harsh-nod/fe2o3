@@ -14,6 +14,31 @@ SUITE=${FE2O3_ADVANCED_SUITE:-attention}
 COMMON_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 SCRIPT_DIR=${FE2O3_ADVANCED_SCRIPT_DIR:-$COMMON_DIR}
 
+SYSTEMS_ABLATION=${FE2O3_GFX950_SYSTEMS_ABLATION_VARIANT:-canonical}
+EXTRA_FEATURE=
+if [[ $SUITE == systems ]]; then
+    case "$FEATURE:$SYSTEMS_ABLATION" in
+        kernel-moe-route:canonical|kernel-moe-expert-rank:canonical|\
+        kernel-combine-expert-ranks:canonical|kernel-speculative-transaction:canonical|\
+        kernel-qwen-ngram-gather:canonical|kernel-stage-gradient-shard:canonical|\
+        kernel-muon-update:canonical) ;;
+        kernel-moe-expert-rank:expert-serial) EXTRA_FEATURE=ablation-expert-serial ;;
+        kernel-combine-expert-ranks:combine-transposed)
+            EXTRA_FEATURE=ablation-combine-transposed ;;
+        kernel-speculative-transaction:speculative-recompute-prefix)
+            EXTRA_FEATURE=ablation-speculative-recompute-prefix ;;
+        kernel-qwen-ngram-gather:ngram-reverse-probe)
+            EXTRA_FEATURE=ablation-ngram-reverse-probe ;;
+        kernel-stage-gradient-shard:stage-tile4) EXTRA_FEATURE=ablation-stage-tile4 ;;
+        kernel-muon-update:muon-broadcast16) EXTRA_FEATURE=ablation-muon-broadcast16 ;;
+        *)
+            printf 'unsupported systems ablation pairing: %s:%s\n' \
+                "$FEATURE" "$SYSTEMS_ABLATION" >&2
+            exit 2 ;;
+    esac
+fi
+BUILD_FEATURES=$FEATURE${EXTRA_FEATURE:+,$EXTRA_FEATURE}
+
 case "$SUITE:$FEATURE" in
     attention:kernel-kda-decode)
         SYMBOL=gfx950_kda_gdn_decode; KERNARG=96; WG=64; LDS=0; OCML=1
@@ -112,7 +137,11 @@ fi
 REPO_ROOT=${FE2O3_REPO_ROOT:-$(cd -- "$COMMON_DIR/../.." && pwd -P)}
 TOOLCHAIN=${FE2O3_RUST_TOOLCHAIN:-nightly-2026-04-03}
 ROOT_TARGET_DIR=${FE2O3_ROOT_TARGET_DIR:-$REPO_ROOT/target}
-OUTPUT_ROOT=${FE2O3_GFX950_ADVANCED_OUTPUT_DIR:-$SCRIPT_DIR/target/fe2o3-$FEATURE}
+OUTPUT_SUFFIX=$FEATURE
+if [[ $SUITE == systems && $SYSTEMS_ABLATION != canonical ]]; then
+    OUTPUT_SUFFIX=$FEATURE-$SYSTEMS_ABLATION
+fi
+OUTPUT_ROOT=${FE2O3_GFX950_ADVANCED_OUTPUT_DIR:-$SCRIPT_DIR/target/fe2o3-$OUTPUT_SUFFIX}
 ROCM_PATH=${ROCM_PATH:-/opt/rocm}
 RUSTUP=${RUSTUP:-rustup}
 CARGO_BIN=${CARGO:-cargo}
@@ -192,7 +221,7 @@ SYSROOT=$("$RUSTUP" run "$TOOLCHAIN" rustc --print sysroot)
     LD_LIBRARY_PATH="$EXTRACTOR_RUNTIME_DIR:$EXTRACTOR_DEPS_DIR:$SYSROOT/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
         "$RUSTUP" run "$TOOLCHAIN" "$CARGO_BIN" check --release --locked \
         -Zbuild-std=core --target amdgcn-amd-amdhsa --target-dir "$AMD_TARGET_DIR" \
-        --no-default-features --features "$FEATURE" --lib
+        --no-default-features --features "$BUILD_FEATURES" --lib
 )
 
 if [[ ! -f $BINDING_PATH || -L $BINDING_PATH ]] ||
@@ -393,6 +422,9 @@ SOURCE_TREE=$("$GIT" -C "$REPO_ROOT" rev-parse --verify 'HEAD^{tree}')
         --test gfx950_advanced_hardware "$TEST" -- --ignored --exact --nocapture
 )
 
+if [[ ${FE2O3_GFX950_PRUNE_AMDGPU_TARGET:-0} == 1 ]]; then
+    rm -rf -- "$AMD_TARGET_DIR"
+fi
 printf 'PASS %s production Rust gfx950 build and numerical run\n' "$SYMBOL"
 printf 'Binding: %s\nLLVM:   %s\nHSACO:  %s\nSHA256: %s\nISA:    %s\n' \
     "$CRATE_BINDING" "$LLVM_IR" "$HSACO" "$HSACO_SHA256" "$DISASSEMBLY"

@@ -20,7 +20,7 @@ use crate::{
 #[cfg(any(not(target_arch = "amdgpu"), feature = "kernel-moe-route"))]
 #[kernel(
     typed,
-    namespace = "5f88dd0eb7d763b42a77dce26f06a50c315730e6a77414e64480fd94f7e9e690",
+    namespace = "bb933fcd1e3f8124227991b6743de97b6fa108551cc44c617d9450933ad98170",
     launch(required = [256, 1, 1], max = [256, 1, 1], max_grid = [1, 1, 1]),
     control_flow(loop_bounds(128, 32))
 )]
@@ -175,10 +175,21 @@ pub fn gfx950_moe_route_fp4_t16_e4_k2_v1(
 
 /// Computes a routed expert partition and optional shared-expert contribution.
 #[cfg(any(not(target_arch = "amdgpu"), feature = "kernel-moe-expert-rank"))]
-#[kernel(
-    typed,
-    namespace = "95964e6517ecad06b1b825cf64c29fb20fe9ec054dd551dfdc55f2e73c261dfc",
-    launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
+#[cfg_attr(
+    not(feature = "ablation-expert-serial"),
+    kernel(
+        typed,
+        namespace = "dad4ffb4c5c270c853b36fbb21ecc1095dcf33cf74d9585029fdce96e90d38e2",
+        launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
+    )
+)]
+#[cfg_attr(
+    feature = "ablation-expert-serial",
+    kernel(
+        typed,
+        namespace = "6de3151d7e205de375cd16a46b09c84211346b063664d0da16cd9f9b698efe2f",
+        launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
+    )
 )]
 #[allow(clippy::too_many_arguments)]
 pub fn gfx950_moe_expert_rank_fp4_fp8_v1(
@@ -202,63 +213,128 @@ pub fn gfx950_moe_expert_rank_fp4_fp8_v1(
         return;
     }
     let lane = WaveLane::<Wave64>::current();
-    let Ok(activations_first_view) =
-        Gfx950Fp4MfmaAMatrix::row_major(activations, 0, TOKENS, HIDDEN, HIDDEN)
-    else {
-        return;
-    };
-    let activations_first = activations_first_view.load_m16k128(&lane, 0, 0);
-    let activations_second = activations_first_view.load_m16k128(&lane, 0, 0);
-    let activations_shared = activations_first_view.load_m16k128(&lane, 0, 0);
     let first_offset = first_expert as usize * HIDDEN * OUTPUT;
-    let Ok(first_weights_view) =
-        Gfx950Fp8MfmaBMatrix::row_major(expert_weights, first_offset, HIDDEN, OUTPUT, OUTPUT)
-    else {
-        return;
-    };
-    let first_weights = first_weights_view.load_k128n16(&lane, 0, 0);
-    let Ok(second_weights_view) = Gfx950Fp8MfmaBMatrix::row_major(
-        expert_weights,
-        first_offset + HIDDEN * OUTPUT,
-        HIDDEN,
-        OUTPUT,
-        OUTPUT,
-    ) else {
-        return;
-    };
-    let second_weights = second_weights_view.load_k128n16(&lane, 0, 0);
-    let Ok(shared_weights_view) = Gfx950Fp8MfmaBMatrix::row_major(
-        expert_weights,
-        (ALL_EXPERTS - 1) * HIDDEN * OUTPUT,
-        HIDDEN,
-        OUTPUT,
-        OUTPUT,
-    ) else {
-        return;
-    };
-    let shared_weights = shared_weights_view.load_k128n16(&lane, 0, 0);
-    let matrix = Gfx950Matrix::current();
-    let first_values = matrix
-        .multiply_accumulate_fp4_fp8(
-            activations_first,
-            first_weights,
-            Gfx950F32AccumulatorFragment::<Gfx950Fp4E2M1>::zero(&lane),
+    #[cfg(not(feature = "ablation-expert-serial"))]
+    let (first_values, second_values, shared_values) = {
+        let Ok(activations_view) =
+            Gfx950Fp4MfmaAMatrix::row_major(activations, 0, TOKENS, HIDDEN, HIDDEN)
+        else {
+            return;
+        };
+        let activations_first = activations_view.load_m16k128(&lane, 0, 0);
+        let activations_second = activations_view.load_m16k128(&lane, 0, 0);
+        let activations_shared = activations_view.load_m16k128(&lane, 0, 0);
+        let Ok(first_weights_view) =
+            Gfx950Fp8MfmaBMatrix::row_major(expert_weights, first_offset, HIDDEN, OUTPUT, OUTPUT)
+        else {
+            return;
+        };
+        let first_weights = first_weights_view.load_k128n16(&lane, 0, 0);
+        let Ok(second_weights_view) = Gfx950Fp8MfmaBMatrix::row_major(
+            expert_weights,
+            first_offset + HIDDEN * OUTPUT,
+            HIDDEN,
+            OUTPUT,
+            OUTPUT,
+        ) else {
+            return;
+        };
+        let second_weights = second_weights_view.load_k128n16(&lane, 0, 0);
+        let Ok(shared_weights_view) = Gfx950Fp8MfmaBMatrix::row_major(
+            expert_weights,
+            (ALL_EXPERTS - 1) * HIDDEN * OUTPUT,
+            HIDDEN,
+            OUTPUT,
+            OUTPUT,
+        ) else {
+            return;
+        };
+        let shared_weights = shared_weights_view.load_k128n16(&lane, 0, 0);
+        let matrix = Gfx950Matrix::current();
+        (
+            matrix
+                .multiply_accumulate_fp4_fp8(
+                    activations_first,
+                    first_weights,
+                    Gfx950F32AccumulatorFragment::<Gfx950Fp4E2M1>::zero(&lane),
+                )
+                .into_values(),
+            matrix
+                .multiply_accumulate_fp4_fp8(
+                    activations_second,
+                    second_weights,
+                    Gfx950F32AccumulatorFragment::<Gfx950Fp4E2M1>::zero(&lane),
+                )
+                .into_values(),
+            matrix
+                .multiply_accumulate_fp4_fp8(
+                    activations_shared,
+                    shared_weights,
+                    Gfx950F32AccumulatorFragment::<Gfx950Fp4E2M1>::zero(&lane),
+                )
+                .into_values(),
         )
-        .into_values();
-    let second_values = matrix
-        .multiply_accumulate_fp4_fp8(
-            activations_second,
-            second_weights,
-            Gfx950F32AccumulatorFragment::<Gfx950Fp4E2M1>::zero(&lane),
-        )
-        .into_values();
-    let shared_values = matrix
-        .multiply_accumulate_fp4_fp8(
-            activations_shared,
-            shared_weights,
-            Gfx950F32AccumulatorFragment::<Gfx950Fp4E2M1>::zero(&lane),
-        )
-        .into_values();
+    };
+    #[cfg(feature = "ablation-expert-serial")]
+    let (first_values, second_values, shared_values) = {
+        let Ok(activations_view) =
+            Gfx950Fp4MfmaAMatrix::row_major(activations, 0, TOKENS, HIDDEN, HIDDEN)
+        else {
+            return;
+        };
+        let matrix = Gfx950Matrix::current();
+        let activations_first = activations_view.load_m16k128(&lane, 0, 0);
+        let Ok(first_weights_view) =
+            Gfx950Fp8MfmaBMatrix::row_major(expert_weights, first_offset, HIDDEN, OUTPUT, OUTPUT)
+        else {
+            return;
+        };
+        let first_weights = first_weights_view.load_k128n16(&lane, 0, 0);
+        let first_values = matrix
+            .multiply_accumulate_fp4_fp8(
+                activations_first,
+                first_weights,
+                Gfx950F32AccumulatorFragment::<Gfx950Fp4E2M1>::zero(&lane),
+            )
+            .into_values();
+        let activations_second = activations_view.load_m16k128(&lane, 0, 0);
+        let Ok(second_weights_view) = Gfx950Fp8MfmaBMatrix::row_major(
+            expert_weights,
+            first_offset + HIDDEN * OUTPUT,
+            HIDDEN,
+            OUTPUT,
+            OUTPUT,
+        ) else {
+            return;
+        };
+        let second_weights = second_weights_view.load_k128n16(&lane, 0, 0);
+        let second_values = matrix
+            .multiply_accumulate_fp4_fp8(
+                activations_second,
+                second_weights,
+                Gfx950F32AccumulatorFragment::<Gfx950Fp4E2M1>::zero(&lane),
+            )
+            .into_values();
+        let activations_shared = activations_view.load_m16k128(&lane, 0, 0);
+        let Ok(shared_weights_view) = Gfx950Fp8MfmaBMatrix::row_major(
+            expert_weights,
+            (ALL_EXPERTS - 1) * HIDDEN * OUTPUT,
+            HIDDEN,
+            OUTPUT,
+            OUTPUT,
+        ) else {
+            return;
+        };
+        let shared_weights = shared_weights_view.load_k128n16(&lane, 0, 0);
+        let shared_values = matrix
+            .multiply_accumulate_fp4_fp8(
+                activations_shared,
+                shared_weights,
+                Gfx950F32AccumulatorFragment::<Gfx950Fp4E2M1>::zero(&lane),
+            )
+            .into_values();
+        (first_values, second_values, shared_values)
+    };
     let subgroup = Gfx950Subgroup::current();
     let math = DeviceMath::current();
     macro_rules! broadcast_component {
@@ -415,10 +491,21 @@ pub fn gfx950_moe_expert_rank_fp4_fp8_v1(
 
 /// Adds two expert-rank partials in fixed rank order.
 #[cfg(any(not(target_arch = "amdgpu"), feature = "kernel-combine-expert-ranks"))]
-#[kernel(
-    typed,
-    namespace = "a27beaf1c7c14d2129a2efc9bd9802fba895073515686b9a81495afe4b65047b",
-    launch(required = [256, 1, 1], max = [256, 1, 1])
+#[cfg_attr(
+    not(feature = "ablation-combine-transposed"),
+    kernel(
+        typed,
+        namespace = "75b93b89a635855d620e2974e64c7ad6299d75329410616cdceaaabe02db89ae",
+        launch(required = [256, 1, 1], max = [256, 1, 1])
+    )
+)]
+#[cfg_attr(
+    feature = "ablation-combine-transposed",
+    kernel(
+        typed,
+        namespace = "8f3e0270da0acba280e5bf515bd6a4b11b5c0f615947fcf5569bc1feab92f923",
+        launch(required = [256, 1, 1], max = [256, 1, 1])
+    )
 )]
 pub fn gfx950_combine_expert_ranks_v1(
     rank0: &[f32],
@@ -436,8 +523,18 @@ pub fn gfx950_combine_expert_ranks_v1(
     if element >= TOKENS * OUTPUT {
         return;
     }
+    #[cfg(not(feature = "ablation-combine-transposed"))]
+    let result = rank0[element] + rank1[element];
+    #[cfg(feature = "ablation-combine-transposed")]
+    let result = {
+        let wave_lane = element & 63;
+        let source_lane = 63 - wave_lane;
+        let source_element = (element & !63) + source_lane;
+        let source_result = rank0[source_element] + rank1[source_element];
+        Gfx950Subgroup::current().broadcast_f32::<64>(source_result, source_lane as u32)
+    };
     if let Some(slot) = output.get_mut(index) {
-        *slot = rank0[element] + rank1[element];
+        *slot = result;
     }
 }
 
@@ -446,10 +543,21 @@ pub fn gfx950_combine_expert_ranks_v1(
     not(target_arch = "amdgpu"),
     feature = "kernel-speculative-transaction"
 ))]
-#[kernel(
-    typed,
-    namespace = "56cb0ca1edf995cb22811650289af395e5932a3dcb3eaeadd64139781ad8e1fa",
-    launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
+#[cfg_attr(
+    not(feature = "ablation-speculative-recompute-prefix"),
+    kernel(
+        typed,
+        namespace = "712bf821d681a74855c892c7f02fb02b2c64fe36617092999f673a1531777f8b",
+        launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
+    )
+)]
+#[cfg_attr(
+    feature = "ablation-speculative-recompute-prefix",
+    kernel(
+        typed,
+        namespace = "bdec264337e1f6c31dec20bfe6cabbebb62ad36d413a66e8876279753c46ee26",
+        launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
+    )
 )]
 #[allow(clippy::too_many_arguments)]
 pub fn gfx950_speculative_transaction_v1(
@@ -504,6 +612,27 @@ pub fn gfx950_speculative_transaction_v1(
     ) else {
         return;
     };
+    macro_rules! accepted_prefix {
+        ($candidate:expr) => {{
+            let accepts0 = (draft_tokens.load_or($candidate, 0, 0)
+                == target_tokens.load_or(0, 0, 0))
+                & (draft_scores.load_or($candidate, 0, 0.0)
+                    >= thresholds.load_or(0, 0, 0.0));
+            let accepts1 = accepts0
+                & (draft_tokens.load_or($candidate, 1, 0) == target_tokens.load_or(0, 1, 0))
+                & (draft_scores.load_or($candidate, 1, 0.0)
+                    >= thresholds.load_or(0, 1, 0.0));
+            let accepts2 = accepts1
+                & (draft_tokens.load_or($candidate, 2, 0) == target_tokens.load_or(0, 2, 0))
+                & (draft_scores.load_or($candidate, 2, 0.0)
+                    >= thresholds.load_or(0, 2, 0.0));
+            let accepts3 = accepts2
+                & (draft_tokens.load_or($candidate, 3, 0) == target_tokens.load_or(0, 3, 0))
+                & (draft_scores.load_or($candidate, 3, 0.0)
+                    >= thresholds.load_or(0, 3, 0.0));
+            accepts0 as usize + accepts1 as usize + accepts2 as usize + accepts3 as usize
+        }};
+    }
     let acceptance_candidate = lane & (CANDIDATES - 1);
     let accepts0 = (draft_tokens.load_or(acceptance_candidate, 0, 0)
         == target_tokens.load_or(0, 0, 0))
@@ -553,10 +682,21 @@ pub fn gfx950_speculative_transaction_v1(
 
 /// Probes every slot, verifies the full 3-gram, and resolves duplicate keys.
 #[cfg(any(not(target_arch = "amdgpu"), feature = "kernel-qwen-ngram-gather"))]
-#[kernel(
-    typed,
-    namespace = "759fc11ede4636245a173107a33f25014d4f8f0f29f1710bf9b9396aeda69ee9",
-    launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
+#[cfg_attr(
+    not(feature = "ablation-ngram-reverse-probe"),
+    kernel(
+        typed,
+        namespace = "a9bf254981d5af7855538f611e59b2a273ed274201689cd16443b7279c327175",
+        launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
+    )
+)]
+#[cfg_attr(
+    feature = "ablation-ngram-reverse-probe",
+    kernel(
+        typed,
+        namespace = "a62bfd564c731058a0a6b9f3b1b710180c36b311241a8db5e3e4be664e5cf449",
+        launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
+    )
 )]
 pub fn gfx950_qwen_ngram_gather_v1(
     queries: &[i32],
@@ -608,6 +748,7 @@ pub fn gfx950_qwen_ngram_gather_v1(
             }
         }};
     }
+    #[cfg(not(feature = "ablation-ngram-reverse-probe"))]
     macro_rules! final_probe {
         ($probe:literal) => {{
             let slot = hash.wrapping_add($probe) as usize & (TABLE_SIZE - 1);
@@ -623,22 +764,44 @@ pub fn gfx950_qwen_ngram_gather_v1(
             }
         }};
     }
-    probe!(0);
-    probe!(1);
-    probe!(2);
-    probe!(3);
-    probe!(4);
-    probe!(5);
-    probe!(6);
-    probe!(7);
-    probe!(8);
-    probe!(9);
-    probe!(10);
-    probe!(11);
-    probe!(12);
-    probe!(13);
-    probe!(14);
-    final_probe!(15);
+    #[cfg(not(feature = "ablation-ngram-reverse-probe"))]
+    {
+        probe!(0);
+        probe!(1);
+        probe!(2);
+        probe!(3);
+        probe!(4);
+        probe!(5);
+        probe!(6);
+        probe!(7);
+        probe!(8);
+        probe!(9);
+        probe!(10);
+        probe!(11);
+        probe!(12);
+        probe!(13);
+        probe!(14);
+        final_probe!(15);
+    }
+    #[cfg(feature = "ablation-ngram-reverse-probe")]
+    {
+        probe!(15);
+        probe!(14);
+        probe!(13);
+        probe!(12);
+        probe!(11);
+        probe!(10);
+        probe!(9);
+        probe!(8);
+        probe!(7);
+        probe!(6);
+        probe!(5);
+        probe!(4);
+        probe!(3);
+        probe!(2);
+        probe!(1);
+        probe!(0);
+    }
     if let Some(slot) = output.get_mut(index) {
         *slot = best_value;
     }
@@ -646,10 +809,21 @@ pub fn gfx950_qwen_ngram_gather_v1(
 
 /// Copies one gradient shard into deterministic transport staging.
 #[cfg(any(not(target_arch = "amdgpu"), feature = "kernel-stage-gradient-shard"))]
-#[kernel(
-    typed,
-    namespace = "eecf6b35ad78d15ed59c50e42bb156b24bc9977508e57b67c71c449c6486a336",
-    launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
+#[cfg_attr(
+    not(feature = "ablation-stage-tile4"),
+    kernel(
+        typed,
+        namespace = "487472b4b767bb11afc7a2d5bb85795b2b538c040432da4c0d5755900dd4867e",
+        launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
+    )
+)]
+#[cfg_attr(
+    feature = "ablation-stage-tile4",
+    kernel(
+        typed,
+        namespace = "3acc801a14754fb8c218f9aba13cbeb53c41427b68ab12bc651da79d5574f410",
+        launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
+    )
 )]
 pub fn gfx950_stage_gradient_shard_v1(input: &[f32], mut output: DisjointSlice<f32>) {
     let index = thread::index_1d();
@@ -660,17 +834,51 @@ pub fn gfx950_stage_gradient_shard_v1(input: &[f32], mut output: DisjointSlice<f
     if element >= MUON_ELEMENTS {
         return;
     }
+    #[cfg(not(feature = "ablation-stage-tile4"))]
+    let value = input[element];
+    #[cfg(feature = "ablation-stage-tile4")]
+    let value = {
+        let mut tile0 = 0.0_f32;
+        let mut tile1 = 0.0_f32;
+        let mut tile2 = 0.0_f32;
+        let mut tile3 = 0.0_f32;
+        if element < 4 {
+            let tile_base = element * 4;
+            tile0 = input[tile_base];
+            tile1 = input[tile_base + 1];
+            tile2 = input[tile_base + 2];
+            tile3 = input[tile_base + 3];
+        }
+        let source = (element / 4) as u32;
+        let subgroup = Gfx950Subgroup::current();
+        let value0 = subgroup.broadcast_f32::<64>(tile0, source);
+        let value1 = subgroup.broadcast_f32::<64>(tile1, source);
+        let value2 = subgroup.broadcast_f32::<64>(tile2, source);
+        let value3 = subgroup.broadcast_f32::<64>(tile3, source);
+        if element & 3 == 0 { value0 } else if element & 3 == 1 { value1 } else if element & 3 == 2 { value2 } else { value3 }
+    };
     if let Some(slot) = output.get_mut(index) {
-        *slot = input[element];
+        *slot = value;
     }
 }
 
 /// Reduces two shards and computes five Newton-Schulz Muon iterations.
 #[cfg(any(not(target_arch = "amdgpu"), feature = "kernel-muon-update"))]
-#[kernel(
-    typed,
-    namespace = "62b82262b6a906c5c4bc76bdf41008abdb45f2c4d9830734cd05ae65520150e2",
-    launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
+#[cfg_attr(
+    not(feature = "ablation-muon-broadcast16"),
+    kernel(
+        typed,
+        namespace = "9640ccf630920dc28c840f4d796dab11ddd9cebf804b0315b877e0c048eb7829",
+        launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
+    )
+)]
+#[cfg_attr(
+    feature = "ablation-muon-broadcast16",
+    kernel(
+        typed,
+        namespace = "6de7921154ed6a9f640c8cb2ca93cfc312b36de60ead0f02bf1157c1765ee2a9",
+        launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
+    )
 )]
 pub fn gfx950_muon_update_4x4_v1(
     shards: &[f32],
@@ -699,7 +907,29 @@ pub fn gfx950_muon_update_4x4_v1(
         * (shards.load_or(0, matrix_element, 0.0)
             + shards.load_or(1, matrix_element, 0.0));
     let subgroup = Gfx950Subgroup::current();
+    #[cfg(not(feature = "ablation-muon-broadcast16"))]
     let squared_norm = subgroup.reduce_sum_f32::<64>(matrix_value * matrix_value);
+    #[cfg(feature = "ablation-muon-broadcast16")]
+    let squared_norm = {
+        let local_square = matrix_value * matrix_value;
+        let mut sum = subgroup.broadcast_f32::<64>(local_square, 0);
+        sum += subgroup.broadcast_f32::<64>(local_square, 1);
+        sum += subgroup.broadcast_f32::<64>(local_square, 2);
+        sum += subgroup.broadcast_f32::<64>(local_square, 3);
+        sum += subgroup.broadcast_f32::<64>(local_square, 4);
+        sum += subgroup.broadcast_f32::<64>(local_square, 5);
+        sum += subgroup.broadcast_f32::<64>(local_square, 6);
+        sum += subgroup.broadcast_f32::<64>(local_square, 7);
+        sum += subgroup.broadcast_f32::<64>(local_square, 8);
+        sum += subgroup.broadcast_f32::<64>(local_square, 9);
+        sum += subgroup.broadcast_f32::<64>(local_square, 10);
+        sum += subgroup.broadcast_f32::<64>(local_square, 11);
+        sum += subgroup.broadcast_f32::<64>(local_square, 12);
+        sum += subgroup.broadcast_f32::<64>(local_square, 13);
+        sum += subgroup.broadcast_f32::<64>(local_square, 14);
+        sum += subgroup.broadcast_f32::<64>(local_square, 15);
+        sum
+    };
     let norm = DeviceMath::current().sqrt_f32(squared_norm);
     let inverse_norm = 1.0 / (norm + 1.0e-6);
     matrix_value *= inverse_norm;
