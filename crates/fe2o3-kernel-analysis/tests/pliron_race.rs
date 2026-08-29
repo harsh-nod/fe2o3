@@ -1,10 +1,12 @@
 use dialect_gpu::{AddressSpaceAttr, ExecutionLayoutOp, FenceOp, MemoryOrderAttr, MemoryScopeAttr};
 use dialect_kernel::{
     AccessKindAttr, AllocationEffectOp, AtomicOrderingAttr, AtomicScopeAttr, BranchOp,
-    CheckedRowStripedIndex2DOp, CheckedTiledIndex2DOp, DIALECT_NAME, IndexBinaryKindAttr,
-    IndexBinaryOp, IndexConstantOp, IndexEqualBranchOp, IndexLessThanBranchOp, IndexType,
-    IndexUnknownOp, InvocationIndexOp, MemorySpaceAttr, RankedAccessOp, RankedViewOp,
-    RankedViewType, ReturnOp, register_dialect,
+    CheckedRowStripedIndex2DOp, CheckedTiledIndex2DOp, DIALECT_NAME,
+    GFX950_TRANSPOSE_FP8_WORKGROUP_ALLOCATION_ORIGIN_V1,
+    GFX950_TRANSPOSE_FP8_WORKGROUP_NOALIAS_CLASS_V1, IndexBinaryKindAttr, IndexBinaryOp,
+    IndexConstantOp, IndexEqualBranchOp, IndexLessThanBranchOp, IndexType, IndexUnknownOp,
+    InvocationIndexOp, MemorySpaceAttr, RankedAccessOp, RankedViewOp, RankedViewType, ReturnOp,
+    register_dialect,
 };
 use fe2o3_kernel_analysis::{
     KernelCheckPassKindV1, KernelCheckStatusV1, RankedRaceFindingV1,
@@ -2280,6 +2282,40 @@ fn whole_allocation_unknown_alias_read_fails_closed_against_an_output() {
         [RankedRaceFindingV1::AllocationContractUnavailable { detail }]
             if detail.contains("unknown-alias")
     ));
+}
+
+#[test]
+fn reserved_gfx950_transpose_effect_is_not_a_global_race() {
+    let context = &mut setup();
+    let function = function(context, "reserved_gfx950_transpose_effect");
+    let entry = function.get_entry_block(context);
+    let layout = ExecutionLayoutOp::new(context, 59, [64, 1, 1], [64, 1, 1], 64);
+    let write = AllocationEffectOp::new(
+        context,
+        AccessKindAttr::Write,
+        MemorySpaceAttr::Workgroup,
+        GFX950_TRANSPOSE_FP8_WORKGROUP_ALLOCATION_ORIGIN_V1,
+        GFX950_TRANSPOSE_FP8_WORKGROUP_NOALIAS_CLASS_V1,
+    )
+    .expect("reserved transpose write");
+    let read = AllocationEffectOp::new(
+        context,
+        AccessKindAttr::Read,
+        MemorySpaceAttr::Workgroup,
+        GFX950_TRANSPOSE_FP8_WORKGROUP_ALLOCATION_ORIGIN_V1,
+        GFX950_TRANSPOSE_FP8_WORKGROUP_NOALIAS_CLASS_V1,
+    )
+    .expect("reserved transpose read");
+    let ret = ReturnOp::new(context);
+    append(context, entry, &layout);
+    append(context, entry, &write);
+    append(context, entry, &read);
+    append(context, entry, &ret);
+
+    assert_eq!(
+        run_pliron_ranked_race_check_v1(context, &function).status(),
+        KernelCheckStatusV1::Clean
+    );
 }
 
 #[test]

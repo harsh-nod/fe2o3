@@ -2,7 +2,9 @@
 
 use dialect_gpu::{AddressSpaceAttr, HierarchyAttr, MemoryOrderAttr, MemoryScopeAttr};
 use dialect_kernel::{
-    AccessKindAttr, AtomicOrderingAttr, AtomicScopeAttr, IndexBinaryKindAttr, MemorySpaceAttr,
+    AccessKindAttr, AtomicOrderingAttr, AtomicScopeAttr,
+    GFX950_TRANSPOSE_FP8_WORKGROUP_ALLOCATION_ORIGIN_V1,
+    GFX950_TRANSPOSE_FP8_WORKGROUP_NOALIAS_CLASS_V1, IndexBinaryKindAttr, MemorySpaceAttr,
     OwnershipCoverageAttr, OwnershipPartitionAttr, SemanticBinaryKindAttr, TensorConvergenceAttr,
 };
 use ed25519_dalek::{Signer, SigningKey};
@@ -517,6 +519,50 @@ fn production_allocation_read_effect_reaches_the_full_pipeline() {
         ProductionSessionLimitsV1::default(),
     )
     .expect("allocation read effect reaches production lowering");
+}
+
+#[test]
+fn production_gfx950_transpose_allocation_effect_reaches_the_full_pipeline() {
+    let kernel = ProductionRankedKernelV1::new(
+        "gfx950_transpose_allocation",
+        0,
+        vec![ProductionRankedBlockV1::new(
+            vec![
+                ProductionRankedOperationV1::ExecutionLayout {
+                    grid_identity: 92,
+                    global_extents: [64, 1, 1],
+                    workgroup_extents: [64, 1, 1],
+                    subgroup_size: 64,
+                    full_physical_workgroups: true,
+                },
+                ProductionRankedOperationV1::AllocationEffect {
+                    kind: AccessKindAttr::Write,
+                    memory_space: MemorySpaceAttr::Workgroup,
+                    allocation_origin: GFX950_TRANSPOSE_FP8_WORKGROUP_ALLOCATION_ORIGIN_V1,
+                    noalias_class: GFX950_TRANSPOSE_FP8_WORKGROUP_NOALIAS_CLASS_V1,
+                },
+                ProductionRankedOperationV1::Barrier {
+                    execution_scope: HierarchyAttr::Workgroup,
+                    memory_scope: MemoryScopeAttr::Workgroup,
+                    address_space: AddressSpaceAttr::Workgroup,
+                    order: MemoryOrderAttr::AcquireRelease,
+                },
+                ProductionRankedOperationV1::AllocationEffect {
+                    kind: AccessKindAttr::Read,
+                    memory_space: MemorySpaceAttr::Workgroup,
+                    allocation_origin: GFX950_TRANSPOSE_FP8_WORKGROUP_ALLOCATION_ORIGIN_V1,
+                    noalias_class: GFX950_TRANSPOSE_FP8_WORKGROUP_NOALIAS_CLASS_V1,
+                },
+            ],
+            ProductionRankedTerminatorV1::Return,
+        )],
+    )
+    .expect("reserved gfx950 transpose allocation effects");
+    let _ = compile_ranked_kernel_for_lowering_v1(
+        construction(kernel),
+        ProductionSessionLimitsV1::default(),
+    )
+    .expect("reserved gfx950 transpose effects reach production lowering");
 }
 
 #[test]

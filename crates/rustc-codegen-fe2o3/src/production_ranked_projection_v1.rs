@@ -11,7 +11,11 @@ use std::{
 
 use dialect_gpu::{AddressSpaceAttr, HierarchyAttr, MemoryOrderAttr, MemoryScopeAttr};
 use dialect_kernel::{
-    AccessKindAttr, AtomicOrderingAttr, AtomicScopeAttr, DYNAMIC_EXTENT, IndexBinaryKindAttr,
+    AccessKindAttr, AtomicOrderingAttr, AtomicScopeAttr, DYNAMIC_EXTENT,
+    GFX950_TRANSPOSE_FP4_WORKGROUP_ALLOCATION_ORIGIN_V1,
+    GFX950_TRANSPOSE_FP4_WORKGROUP_NOALIAS_CLASS_V1,
+    GFX950_TRANSPOSE_FP8_WORKGROUP_ALLOCATION_ORIGIN_V1,
+    GFX950_TRANSPOSE_FP8_WORKGROUP_NOALIAS_CLASS_V1, IndexBinaryKindAttr,
     MAX_DETERMINISTIC_JOIN_INPUTS_V1, MAX_RANKED_MEMORY_RANK, MemorySpaceAttr,
     PipelineEventKindAttr, SUPPORTED_ELEMENT_WIDTHS, TensorConvergenceAttr,
 };
@@ -37,9 +41,10 @@ use fe2o3_mir_model::semantic_mir_v1::{
     SemanticMfmaRegisterDistributionV1, SemanticMfmaStorageLayoutV1, SemanticOperandV1,
     SemanticPlaceV1, SemanticProjectionKindV1, SemanticRvalueKindV1, SemanticRvalueV1,
     SemanticScalarTypeV1, SemanticSourceArgumentOwnershipV1, SemanticSourceProvenanceV1,
-    SemanticStatementKindV1, SemanticTargetArchitectureV1, SemanticTerminatorKindV1,
-    SemanticTypeDeclV1, SemanticTypeIdV1, SemanticTypeShapeV1, SemanticUnaryOpV1,
-    SemanticUncheckedBinaryOpV1, SemanticUnwindActionV1, SemanticWorkgroupPipelineEventV1,
+    SemanticStatementKindV1, SemanticSwitchTargetsV1, SemanticTargetArchitectureV1,
+    SemanticTerminatorKindV1, SemanticTypeDeclV1, SemanticTypeIdV1, SemanticTypeShapeV1,
+    SemanticUnaryOpV1, SemanticUncheckedBinaryOpV1, SemanticUnwindActionV1,
+    SemanticWorkgroupPipelineEventV1,
 };
 use fe2o3_mir_model::{
     SemanticEnumPayloadAvailabilityV1, SemanticEnumPayloadDominanceV1,
@@ -235,6 +240,7 @@ struct IntrinsicProjectionV1 {
     uniform_inductions: Vec<ProjectedUniformInductionV1>,
     tensor_layouts: Vec<Option<ProductionRankedOperationV1>>,
     capability_read_effects: Vec<Option<ProjectedCapabilityReadEffectV1>>,
+    transpose_workgroup_effects: Vec<Option<ProjectedTransposeWorkgroupEffectV1>>,
     read_view_effects: Vec<Option<GuardedRankedAccessV1>>,
     pipeline_effects: Vec<Option<ProjectedPipelineEffectV1>>,
     extent_argument_count: usize,
@@ -386,16 +392,24 @@ struct ProjectedCapabilityReadEffectV1 {
     source: SemanticSourceProvenanceV1,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ProjectedTransposeWorkgroupEffectV1 {
+    access: AccessKindAttr,
+    format: SemanticGfx950LdsTransposeFormatV1,
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 struct ProjectedCapabilityTerminatorEffectsV1 {
     layout: Option<ProductionRankedOperationV1>,
     global_read: Option<AllocationContractV1>,
+    transpose_workgroup: Option<ProjectedTransposeWorkgroupEffectV1>,
     read_view: Option<ProjectedReadViewAccessV1>,
 }
 
 struct ProjectedCapabilityEffectsV1 {
     layouts: Vec<Option<ProductionRankedOperationV1>>,
     global_reads: Vec<Option<AllocationContractV1>>,
+    transpose_workgroups: Vec<Option<ProjectedTransposeWorkgroupEffectV1>>,
     read_views: Vec<Option<ProjectedReadViewAccessV1>>,
 }
 
@@ -1073,6 +1087,31 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
                 semantic_site: None,
             });
         }
+        if let Some(effect) = intrinsic
+            .transpose_workgroup_effects
+            .get(block_index)
+            .copied()
+            .flatten()
+        {
+            let (allocation_origin, noalias_class) =
+                gfx950_transpose_workgroup_identity_v1(effect.format);
+            let operation = operations.len();
+            reserve_operation(&mut operations)?;
+            operations.push(ProductionRankedOperationV1::AllocationEffect {
+                kind: effect.access,
+                memory_space: MemorySpaceAttr::Workgroup,
+                allocation_origin,
+                noalias_class,
+            });
+            local_sources.push(ProjectedAccessSourceV1 {
+                block: block_index,
+                operation,
+                access: effect.access,
+                memory_space: MemorySpaceAttr::Workgroup,
+                source: block.terminator().source(),
+                semantic_site: None,
+            });
+        }
         if let Some(access) = intrinsic
             .read_view_effects
             .get(block_index)
@@ -1164,6 +1203,7 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
     let (blocks, sources) = build_ranked_cfg(
         semantic.types(),
         function,
+        semantic.callables(),
         &switch_predicates,
         &intrinsic.deterministic_switches,
         &intrinsic.uniform_inductions,
@@ -1267,12 +1307,23 @@ fn projected_reference_gpu_writes_v2(
         .iter()
         .filter(|source| source.access.writes_memory())
     {
-        let Some(
-            ProductionRankedOperationV1::Access { view, indices, .. }
-            | ProductionRankedOperationV1::AtomicAccess { view, indices, .. },
-        ) = blocks
+        let operation = blocks
             .get(source.block)
             .and_then(|block| block.operations().get(source.operation))
+            .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+                "a projected write correspondence does not identify one ranked write",
+            ))?;
+        if matches!(
+            operation,
+            ProductionRankedOperationV1::AllocationEffect {
+                memory_space: MemorySpaceAttr::Workgroup,
+                ..
+            }
+        ) {
+            continue;
+        }
+        let (ProductionRankedOperationV1::Access { view, indices, .. }
+        | ProductionRankedOperationV1::AtomicAccess { view, indices, .. }) = operation
         else {
             return Err(ProductionRankedProjectionErrorV1::Unsupported(
                 "a projected write correspondence does not identify one ranked write",
@@ -2289,6 +2340,7 @@ fn project_authenticated_capabilities_v1(
 
     let mut layouts = vec![None; block_count];
     let mut global_reads = vec![None; block_count];
+    let mut transpose_workgroups = vec![None; block_count];
     let mut read_views = vec![None; block_count];
     for (block_index, entry_state) in entries.into_iter().enumerate() {
         let Some(mut state) = entry_state else {
@@ -2323,11 +2375,13 @@ fn project_authenticated_capabilities_v1(
         )?;
         layouts[block_index] = effects.layout;
         global_reads[block_index] = effects.global_read;
+        transpose_workgroups[block_index] = effects.transpose_workgroup;
         read_views[block_index] = effects.read_view;
     }
     Ok(ProjectedCapabilityEffectsV1 {
         layouts,
         global_reads,
+        transpose_workgroups,
         read_views,
     })
 }
@@ -3112,6 +3166,20 @@ fn authenticate_strided_read_v1(
     })
 }
 
+const fn gfx950_transpose_workgroup_identity_v1(
+    format: SemanticGfx950LdsTransposeFormatV1,
+) -> (u64, u64) {
+    match format {
+        SemanticGfx950LdsTransposeFormatV1::Fp4E2M1 => (
+            GFX950_TRANSPOSE_FP4_WORKGROUP_ALLOCATION_ORIGIN_V1,
+            GFX950_TRANSPOSE_FP4_WORKGROUP_NOALIAS_CLASS_V1,
+        ),
+        SemanticGfx950LdsTransposeFormatV1::Fp8E4M3 => (
+            GFX950_TRANSPOSE_FP8_WORKGROUP_ALLOCATION_ORIGIN_V1,
+            GFX950_TRANSPOSE_FP8_WORKGROUP_NOALIAS_CLASS_V1,
+        ),
+    }
+}
 fn gfx950_transpose_profile_v1(
     format: SemanticGfx950LdsTransposeFormatV1,
 ) -> SemanticMfmaProfileV1 {
@@ -3846,9 +3914,25 @@ fn transfer_capability_terminator_v1(
         (false, false, _) => None,
         (true, true, _) => unreachable!("transpose stage is not a direct fragment load"),
     };
+    let transpose_workgroup = match operation {
+        SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposeStage { format, .. } => {
+            Some(ProjectedTransposeWorkgroupEffectV1 {
+                access: AccessKindAttr::Write,
+                format: *format,
+            })
+        }
+        SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposeRead { format, .. } => {
+            Some(ProjectedTransposeWorkgroupEffectV1 {
+                access: AccessKindAttr::Read,
+                format: *format,
+            })
+        }
+        _ => None,
+    };
     Ok(ProjectedCapabilityTerminatorEffectsV1 {
         layout,
         global_read,
+        transpose_workgroup,
         read_view: None,
     })
 }
@@ -4244,6 +4328,7 @@ fn project_intrinsic_contracts(
     let capability_read_effects =
         bind_capability_read_effects_to_call_blocks_v1(function, &capability_effects.global_reads)?;
     let tensor_layouts = capability_effects.layouts;
+    let transpose_workgroup_effects = capability_effects.transpose_workgroups;
     let read_view_sources = capability_effects.read_views;
     let mut edge_count = 0_usize;
     let mut borrowed_locals = Vec::new();
@@ -5570,6 +5655,7 @@ fn project_intrinsic_contracts(
     let projected_switch_predicates =
         switch_predicates(function, &option_predicates, &direct_switch_predicates)?;
     let deterministic_switches = project_deterministic_scalar_switches_v1(
+        types,
         callables,
         function,
         constants,
@@ -5625,6 +5711,7 @@ fn project_intrinsic_contracts(
         uniform_inductions,
         tensor_layouts,
         capability_read_effects,
+        transpose_workgroup_effects,
         read_view_effects,
         pipeline_effects,
     })
@@ -7001,8 +7088,84 @@ const fn deterministic_index_binary_kind_v1(
     }
 }
 
+fn authenticated_switch_targets_exhaust_domain_v1(
+    types: &[SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1,
+    discriminant: &SemanticOperandV1,
+    targets: &SemanticSwitchTargetsV1,
+    local_definitions: &[u8],
+) -> bool {
+    let explicit_values = targets
+        .values()
+        .iter()
+        .map(|target| target.value())
+        .collect::<Vec<_>>();
+    let Some(discriminant_type) = types.get(discriminant.ty().index() as usize) else {
+        return false;
+    };
+    if matches!(
+        discriminant_type.shape(),
+        SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Bool)
+    ) {
+        return explicit_values.len() == 2
+            && explicit_values.contains(&0)
+            && explicit_values.contains(&1);
+    }
+
+    let Some(discriminant_local) = simple_operand_local(discriminant) else {
+        return false;
+    };
+    if local_definitions
+        .get(discriminant_local.index() as usize)
+        .copied()
+        != Some(1)
+    {
+        return false;
+    }
+    let mut source_type = None;
+    for block in function.blocks() {
+        for statement in block.statements() {
+            let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
+                continue;
+            };
+            if !assignment.destination().projections().is_empty()
+                || assignment.destination().local() != discriminant_local
+                || assignment.destination().ty() != discriminant.ty()
+            {
+                continue;
+            }
+            let SemanticRvalueKindV1::Discriminant(source) = assignment.value().kind() else {
+                return false;
+            };
+            if !source.projections().is_empty() {
+                return false;
+            }
+            source_type = Some(source.ty());
+        }
+    }
+    let Some(source_type) = source_type.and_then(|source| types.get(source.index() as usize))
+    else {
+        return false;
+    };
+    let SemanticTypeShapeV1::Enum { variants, .. } = source_type.shape() else {
+        return false;
+    };
+    let inhabited = variants
+        .iter()
+        .filter(|variant| !variant.is_uninhabited())
+        .collect::<Vec<_>>();
+    inhabited.len() == explicit_values.len()
+        && !inhabited.is_empty()
+        && inhabited.iter().all(|variant| {
+            explicit_values
+                .iter()
+                .any(|value| *value == variant.discriminant())
+        })
+}
+
 #[allow(clippy::too_many_arguments)]
 fn project_deterministic_scalar_switches_v1(
+    types: &[SemanticTypeDeclV1],
     callables: &[SemanticCallableDeclV1],
     function: &SemanticFunctionDeclV1,
     constants: &[Option<u64>],
@@ -7052,6 +7215,13 @@ fn project_deterministic_scalar_switches_v1(
         let Some(summary) = projector.resolve_operand(discriminant)? else {
             continue;
         };
+        let exhausts_valid_domain = authenticated_switch_targets_exhaust_domain_v1(
+            types,
+            function,
+            discriminant,
+            targets,
+            local_definitions,
+        );
         let discriminant = projector.materialize(summary)?;
         let mut projected_targets = Vec::new();
         projected_targets
@@ -7075,11 +7245,17 @@ fn project_deterministic_scalar_switches_v1(
             }
             projected_targets.push((projector.ranked_constant(value)?, target_block));
         }
-        let otherwise = targets.otherwise().target().index() as usize;
+        let mut otherwise = targets.otherwise().target().index() as usize;
         if otherwise >= function.blocks().len() {
             return Err(ProductionRankedProjectionErrorV1::Unsupported(
                 "a deterministic scalar switch fallback is outside the semantic CFG",
             ));
+        }
+        if switch_fallback_is_empty_unreachable_v1(function, otherwise) && exhausts_valid_domain {
+            let (_, exhaustive_target) = projected_targets
+                .pop()
+                .expect("an authenticated valid-value domain is nonempty");
+            otherwise = exhaustive_target;
         }
         switches[block_index] = Some(ProjectedDeterministicSwitchV1 {
             discriminant,
@@ -10195,11 +10371,13 @@ enum ProjectedCfgTerminatorV1 {
     },
     ExactSwitch(ProjectedDeterministicSwitchV1),
     Return,
+    Trap,
 }
 
 fn projected_cfg_terminator(
     function: &SemanticFunctionDeclV1,
     block_index: usize,
+    callables: &[SemanticCallableDeclV1],
     non_bounds_assert_proved: bool,
     constants: &[Option<u64>],
     switch_predicates: &[Option<GuardPredicateV1>],
@@ -10308,6 +10486,16 @@ fn projected_cfg_terminator(
                 Some(destination) => Ok(ProjectedCfgTerminatorV1::Branch(target(
                     destination.edge().target(),
                 )?)),
+                None if matches!(
+                    callables.get(call.callee().index() as usize),
+                    Some(SemanticCallableDeclV1::CompilerIntrinsic {
+                        operation: SemanticCompilerIntrinsicOperationV1::Trap,
+                        ..
+                    })
+                ) =>
+                {
+                    Ok(ProjectedCfgTerminatorV1::Trap)
+                }
                 None => Ok(ProjectedCfgTerminatorV1::Return),
             }
         }
@@ -10456,6 +10644,7 @@ fn forward_live_inductions(
 fn build_ranked_cfg(
     types: &[SemanticTypeDeclV1],
     function: &SemanticFunctionDeclV1,
+    callables: &[SemanticCallableDeclV1],
     switch_predicates: &[Option<GuardPredicateV1>],
     deterministic_switches: &[Option<ProjectedDeterministicSwitchV1>],
     uniform_inductions: &[ProjectedUniformInductionV1],
@@ -10477,6 +10666,7 @@ fn build_ranked_cfg(
             projected_cfg_terminator(
                 function,
                 index,
+                callables,
                 proved_assertions[index],
                 &constants,
                 switch_predicates,
@@ -10851,7 +11041,7 @@ fn build_ranked_cfg(
                         "a uniform induction deterministic switch requires unrepresentable control expansion",
                     ));
                 }
-                ProjectedCfgTerminatorV1::Return => {
+                ProjectedCfgTerminatorV1::Return | ProjectedCfgTerminatorV1::Trap => {
                     return Err(ProductionRankedProjectionErrorV1::Incomplete(
                         "a uniform induction body returns before its unique latch",
                     ));
@@ -10930,6 +11120,12 @@ fn build_ranked_cfg(
                 current,
                 operations,
                 ProductionRankedTerminatorV1::Return,
+            )?,
+            ProjectedCfgTerminatorV1::Trap => push_block_at(
+                &mut blocks,
+                current,
+                operations,
+                ProductionRankedTerminatorV1::Trap,
             )?,
         }
     }
@@ -11196,7 +11392,7 @@ fn reachable_projected_blocks(
                 pending.extend(switch.targets.iter().map(|(_, target)| *target));
                 pending.push(switch.otherwise);
             }
-            ProjectedCfgTerminatorV1::Return => {}
+            ProjectedCfgTerminatorV1::Return | ProjectedCfgTerminatorV1::Trap => {}
         }
     }
     Ok(reachable)
@@ -15257,6 +15453,7 @@ mod tests {
         let (blocks, sources) = build_ranked_cfg(
             &projection_types(),
             &function,
+            &[],
             &vec![None; function.locals().len()],
             &vec![None; function.blocks().len()],
             &[],
@@ -15754,6 +15951,7 @@ mod tests {
         let (after_blocks, _) = build_ranked_cfg(
             &projection_types(),
             &function,
+            &[],
             &vec![None; function.locals().len()],
             &vec![None; function.blocks().len()],
             &[],
@@ -15778,6 +15976,7 @@ mod tests {
         let (before_blocks, _) = build_ranked_cfg(
             &projection_types(),
             &function,
+            &[],
             &vec![None; function.locals().len()],
             &vec![None; function.blocks().len()],
             &[],
@@ -19212,12 +19411,96 @@ mod tests {
             SemanticTerminatorKindV1::Unreachable,
         );
         assert_eq!(
-            projected_cfg_terminator(&function, 0, false, &[], &[const { None }; 2], &[]).unwrap(),
+            projected_cfg_terminator(&function, 0, &[], false, &[], &[const { None }; 2], &[])
+                .unwrap(),
             ProjectedCfgTerminatorV1::AnalysisSplit {
                 first_block: 1,
                 second_block: 2,
             }
         );
+    }
+
+    fn boolean_domain_switch(values: &[u128]) -> SemanticFunctionDeclV1 {
+        let discriminant = SemanticOperandV1::Copy(
+            SemanticPlaceV1::new(SemanticLocalIdV1::from_index(1), vec![], BOOL_TYPE).unwrap(),
+        );
+        let explicit = values
+            .iter()
+            .enumerate()
+            .map(|(index, value)| {
+                SemanticSwitchTargetV1::new(
+                    *value,
+                    cfg_edge(SemanticEdgeRoleV1::SwitchValue, index as u32 + 1),
+                )
+            })
+            .collect();
+        projection_function_with_locals(
+            vec![
+                block(
+                    201,
+                    vec![],
+                    SemanticTerminatorKindV1::SwitchInt {
+                        discriminant,
+                        targets: SemanticSwitchTargetsV1::new(
+                            explicit,
+                            cfg_edge(SemanticEdgeRoleV1::SwitchOtherwise, 3),
+                        )
+                        .unwrap(),
+                    },
+                ),
+                block(202, vec![], SemanticTerminatorKindV1::Return),
+                block(203, vec![], SemanticTerminatorKindV1::Return),
+                block(204, vec![], SemanticTerminatorKindV1::Unreachable),
+            ],
+            vec![
+                local(201, SCALAR_TYPE, SemanticLocalRoleV1::Return),
+                local(202, BOOL_TYPE, SemanticLocalRoleV1::Argument(0)),
+            ],
+        )
+    }
+
+    #[test]
+    fn only_exact_boolean_domains_exhaust_an_empty_switch_fallback() {
+        for (values, expected) in [(&[0_u128, 1][..], true), (&[0_u128, 2][..], false)] {
+            let function = boolean_domain_switch(values);
+            let SemanticTerminatorKindV1::SwitchInt {
+                discriminant,
+                targets,
+            } = function.blocks()[0].terminator().kind()
+            else {
+                panic!("boolean fixture lost its switch");
+            };
+            assert_eq!(
+                authenticated_switch_targets_exhaust_domain_v1(
+                    &assertion_proof_types(),
+                    &function,
+                    discriminant,
+                    targets,
+                    &local_definition_counts(&function),
+                ),
+                expected,
+            );
+        }
+
+        let scalar = explicit_binary_switch_with_fallback(
+            [0, 1],
+            vec![],
+            SemanticTerminatorKindV1::Unreachable,
+        );
+        let SemanticTerminatorKindV1::SwitchInt {
+            discriminant,
+            targets,
+        } = scalar.blocks()[0].terminator().kind()
+        else {
+            panic!("scalar fixture lost its switch");
+        };
+        assert!(!authenticated_switch_targets_exhaust_domain_v1(
+            &projection_types(),
+            &scalar,
+            discriminant,
+            targets,
+            &local_definition_counts(&scalar),
+        ));
     }
 
     fn non_bounds_assert_function(condition: SemanticOperandV1) -> SemanticFunctionDeclV1 {
@@ -19248,7 +19531,7 @@ mod tests {
     fn non_bounds_asserts_are_elided_only_after_exact_constant_success() {
         let unresolved = non_bounds_assert_function(tensor_operand(1));
         assert!(matches!(
-            projected_cfg_terminator(&unresolved, 0, false, &[], &[const { None }; 3], &[]),
+            projected_cfg_terminator(&unresolved, 0, &[], false, &[], &[const { None }; 3], &[]),
             Err(ProductionRankedProjectionErrorV1::UnprovenAssert {
                 block: 0,
                 kind: "division-by-zero",
@@ -19258,7 +19541,8 @@ mod tests {
 
         let proven = non_bounds_assert_function(constant(1));
         assert_eq!(
-            projected_cfg_terminator(&proven, 0, false, &[], &[const { None }; 3], &[]).unwrap(),
+            projected_cfg_terminator(&proven, 0, &[], false, &[], &[const { None }; 3], &[])
+                .unwrap(),
             ProjectedCfgTerminatorV1::Branch(1)
         );
     }
@@ -20319,7 +20603,7 @@ mod tests {
             ),
         ] {
             assert!(matches!(
-                projected_cfg_terminator(&function, 0, false, &[], &[const { None }; 2], &[]),
+                projected_cfg_terminator(&function, 0, &[], false, &[], &[const { None }; 2], &[]),
                 Err(ProductionRankedProjectionErrorV1::Incomplete(
                     "a general switch whose only extra successor is not one empty unreachable fallback"
                 ))
@@ -20345,6 +20629,7 @@ mod tests {
             projected_cfg_terminator(
                 &function,
                 0,
+                &[],
                 false,
                 &[],
                 &[None, Some(predicate.clone())],
@@ -20435,6 +20720,7 @@ mod tests {
         let mut arguments = vec![None; function.locals().len()];
         let mut next_argument = 1;
         let switches = project_deterministic_scalar_switches_v1(
+            &projection_types(),
             callables,
             function,
             &constants,
@@ -20590,6 +20876,7 @@ mod tests {
         let (blocks, _) = build_ranked_cfg(
             &projection_types(),
             &function,
+            &[],
             &vec![None; function.locals().len()],
             &switches,
             &[],
@@ -20896,6 +21183,40 @@ mod tests {
         }
     }
 
+    fn destinationless_call(callee: u32) -> SemanticFunctionDeclV1 {
+        let call = SemanticDirectCallV1::new_callable(
+            SemanticCallableIdV1::from_index(callee),
+            vec![],
+            None,
+            SemanticUnwindActionV1::Unreachable,
+        )
+        .unwrap();
+        projection_function_with_locals(
+            vec![block(122, vec![], SemanticTerminatorKindV1::Call(call))],
+            vec![local(122, SCALAR_TYPE, SemanticLocalRoleV1::Return)],
+        )
+    }
+
+    #[test]
+    fn only_an_authenticated_destinationless_trap_projects_as_trap() {
+        let function = destinationless_call(0);
+        let trap = compiler_intrinsic_callable(SemanticCompilerIntrinsicOperationV1::Trap);
+        assert_eq!(
+            projected_cfg_terminator(&function, 0, &[trap], false, &[], &[None], &[]).unwrap(),
+            ProjectedCfgTerminatorV1::Trap,
+        );
+
+        let barrier =
+            compiler_intrinsic_callable(SemanticCompilerIntrinsicOperationV1::WorkgroupBarrier);
+        assert_eq!(
+            projected_cfg_terminator(&function, 0, &[barrier], false, &[], &[None], &[]).unwrap(),
+            ProjectedCfgTerminatorV1::Return,
+        );
+        assert_eq!(
+            projected_cfg_terminator(&function, 0, &[], false, &[], &[None], &[]).unwrap(),
+            ProjectedCfgTerminatorV1::Return,
+        );
+    }
     fn call_discriminant_switch(
         callee: u32,
         arguments: Vec<SemanticOperandV1>,
@@ -21191,6 +21512,7 @@ mod tests {
                 projected_cfg_terminator(
                     &function,
                     0,
+                    &[],
                     false,
                     &[],
                     &[None, Some(predicate.clone())],
@@ -21208,6 +21530,7 @@ mod tests {
             projected_cfg_terminator(
                 &single_explicit_boolean_switch(2, 1, 2),
                 0,
+                &[],
                 false,
                 &[],
                 &[None, Some(predicate)],
@@ -21982,6 +22305,7 @@ mod tests {
         let (blocks, _) = build_ranked_cfg(
             &projection_types(),
             &function,
+            &[],
             &vec![None; function.locals().len()],
             &vec![None; function.blocks().len()],
             &inductions,
@@ -22288,6 +22612,7 @@ mod tests {
         let (blocks, _) = build_ranked_cfg(
             &projection_types(),
             &function,
+            &[],
             &vec![None; function.locals().len()],
             &vec![None; function.blocks().len()],
             &inductions,
@@ -22331,6 +22656,7 @@ mod tests {
         let (blocks, _) = build_ranked_cfg(
             &projection_types(),
             &function,
+            &[],
             &vec![None; function.locals().len()],
             &vec![None; function.blocks().len()],
             &inductions,
@@ -22363,6 +22689,7 @@ mod tests {
         let (blocks, _) = build_ranked_cfg(
             &projection_types(),
             &function,
+            &[],
             &predicates,
             &vec![None; function.blocks().len()],
             &inductions,
@@ -22410,6 +22737,7 @@ mod tests {
         let (blocks, _) = build_ranked_cfg(
             &projection_types(),
             &function,
+            &[],
             &vec![None; function.locals().len()],
             &deterministic_switches,
             &inductions,
@@ -22585,6 +22913,7 @@ mod tests {
         let (blocks, _) = build_ranked_cfg(
             &projection_types(),
             &function,
+            &[],
             &vec![None; function.locals().len()],
             &vec![None; function.blocks().len()],
             &inductions,
@@ -22632,6 +22961,7 @@ mod tests {
         let (blocks, _) = build_ranked_cfg(
             &projection_types(),
             &function,
+            &[],
             &vec![None; function.locals().len()],
             &vec![None; function.blocks().len()],
             &inductions,

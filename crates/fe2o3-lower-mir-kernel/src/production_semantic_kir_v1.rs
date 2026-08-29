@@ -2544,6 +2544,7 @@ fn index_ranked_correlation(
     let mut source_ordinals = BTreeMap::<(u32, Option<u32>), BTreeSet<u32>>::new();
     let mut sources_by_site = BTreeMap::new();
     let mut conservative_sources_by_statement = BTreeMap::new();
+    let mut ambiguous_conservative_statements = BTreeSet::new();
     for source in sources {
         budget.charge()?;
         let operation = lowering
@@ -2632,12 +2633,16 @@ fn index_ranked_correlation(
             value,
             atomic,
         };
-        if matches!(allocation, IndexedRankedAllocationV1::Direct(_))
-            && conservative_sources_by_statement
-                .insert((site.block, site.statement), indexed)
-                .is_some()
-        {
-            return None;
+        if matches!(allocation, IndexedRankedAllocationV1::Direct(_)) {
+            let key = (site.block, site.statement);
+            if !ambiguous_conservative_statements.contains(&key)
+                && conservative_sources_by_statement
+                    .insert(key, indexed)
+                    .is_some()
+            {
+                conservative_sources_by_statement.remove(&key);
+                ambiguous_conservative_statements.insert(key);
+            }
         }
         if sources_by_site.insert(site, indexed).is_some() {
             return None;

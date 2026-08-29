@@ -16,6 +16,7 @@ use dialect_kernel::{
     AccessKindAttr, AllocationEffectOp, AtomicOrderingAttr, AtomicScopeAttr, IndexConstantOp,
     IndexEqualBranchArgsOp, IndexEqualBranchOp, IndexLessThanBranchArgsOp, IndexLessThanBranchOp,
     InvocationIndexOp, MAX_RANKED_MEMORY_RANK, MemorySpaceAttr, RankedAccessOp, RankedViewOp,
+    is_supported_allocation_effect_contract_v1,
 };
 use pliron::{
     builtin::ops::FuncOp, common_traits::Named, context::Context, operation::Operation,
@@ -446,31 +447,44 @@ pub(crate) fn run_pliron_ranked_race_check_with_analyses_v1(
             has_global_fence = true;
         }
         if let Some(effect) = operation.downcast_ref::<AllocationEffectOp>() {
-            match effect.memory_space(context) {
-                Some(MemorySpaceAttr::Global) => {}
-                Some(MemorySpaceAttr::Private | MemorySpaceAttr::Workgroup) => {
+            let Some(kind) = effect.kind(context) else {
+                return one(RankedRaceFindingV1::AllocationContractUnavailable {
+                    detail: "a whole-allocation effect has no access kind".to_owned(),
+                });
+            };
+            let Some(memory_space) = effect.memory_space(context) else {
+                return one(RankedRaceFindingV1::AllocationContractUnavailable {
+                    detail: "a whole-allocation effect has no memory space".to_owned(),
+                });
+            };
+            let allocation_origin = effect.allocation_origin(context).unwrap_or(0);
+            let noalias_class = effect.noalias_class(context).unwrap_or(0);
+            match memory_space {
+                MemorySpaceAttr::Global => {}
+                MemorySpaceAttr::Workgroup
+                    if is_supported_allocation_effect_contract_v1(
+                        kind,
+                        memory_space,
+                        allocation_origin,
+                        noalias_class,
+                    ) =>
+                {
+                    // The production source join authenticates the typed
+                    // transpose lifecycle; no global race is represented.
+                    continue;
+                }
+                MemorySpaceAttr::Private | MemorySpaceAttr::Workgroup => {
                     return one(RankedRaceFindingV1::AllocationContractUnavailable {
                         detail:
                             "a whole-allocation effect uses an unsupported non-global memory space"
                                 .to_owned(),
                     });
                 }
-                None => {
-                    return one(RankedRaceFindingV1::AllocationContractUnavailable {
-                        detail: "a whole-allocation effect has no memory space".to_owned(),
-                    });
-                }
             }
-            let Some(kind) = effect.kind(context) else {
-                return one(RankedRaceFindingV1::AllocationContractUnavailable {
-                    detail: "a whole-allocation effect has no access kind".to_owned(),
-                });
-            };
             let location = RankedRaceLocationV1 {
                 block: block_index,
                 operation: operation_index,
             };
-            let allocation_origin = effect.allocation_origin(context).unwrap_or(0);
             effects.push(EffectV1 {
                 identity: if allocation_origin == 0 {
                     EffectIdentityV1::AllocationSite(location)
@@ -483,7 +497,7 @@ pub(crate) fn run_pliron_ranked_race_check_with_analyses_v1(
                 indices: vec![],
                 atomic_scope: None,
                 atomic_ordering: None,
-                noalias_class: effect.noalias_class(context).unwrap_or(0),
+                noalias_class,
                 conservative: true,
             });
             continue;
