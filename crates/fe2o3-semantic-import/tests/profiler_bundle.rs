@@ -141,6 +141,29 @@ fn device_bindings_join_by_absolute_agent_id_not_position() {
 
 #[test]
 fn csv_import_is_strict_about_schema_values_and_resource_bounds() {
+    let legacy_agent_ids = String::from_utf8(csv_source().to_vec())
+        .unwrap()
+        .replace("Agent 17", "17")
+        .replace("Agent 19", "19");
+    assert!(
+        import_rocprofv3_csv_profiler_bundle_v4(
+            legacy_agent_ids.as_bytes(),
+            dispatch_binding(&[20, 21])
+        )
+        .is_ok()
+    );
+
+    for noncanonical in ["Agent 017", "Agent 0x11", "Agent 17 "] {
+        let source =
+            String::from_utf8(csv_source().to_vec())
+                .unwrap()
+                .replacen("Agent 17", noncanonical, 1);
+        assert!(matches!(
+            import_rocprofv3_csv_profiler_bundle_v4(source.as_bytes(), dispatch_binding(&[20, 21])),
+            Err(ProfilerBundleErrorV4::InvalidRocprofCsv)
+        ));
+    }
+
     let unknown = String::from_utf8(csv_source().to_vec())
         .unwrap()
         .replacen("Kind,", "Unknown,Kind,", 1)

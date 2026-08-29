@@ -721,7 +721,7 @@ fn csv_to_rocprof_json(source: &[u8]) -> Result<Vec<u8>, ProfilerBundleErrorV4> 
             return Err(ProfilerBundleErrorV4::InvalidRocprofCsv);
         }
         let process = parse_integer(field(&row, &positions, "Process_Id")?)?;
-        let agent = parse_integer(field(&row, &positions, "Agent_Id")?)?;
+        let agent = parse_agent_id(field(&row, &positions, "Agent_Id")?)?;
         let start = parse_integer(field(&row, &positions, "Start_Timestamp")?)?;
         let end = parse_integer(field(&row, &positions, "End_Timestamp")?)?;
         let dimension = |prefix: &str, axis: &str| {
@@ -780,6 +780,19 @@ fn parse_integer(value: &str) -> Result<u64, ProfilerBundleErrorV4> {
         .map(|value| u64::from_str_radix(value, 16))
         .unwrap_or_else(|| value.parse());
     parsed.map_err(|_| ProfilerBundleErrorV4::InvalidRocprofCsv)
+}
+
+fn parse_agent_id(value: &str) -> Result<u64, ProfilerBundleErrorV4> {
+    let Some(agent) = value.strip_prefix("Agent ") else {
+        return parse_integer(value);
+    };
+    let parsed = agent
+        .parse::<u64>()
+        .map_err(|_| ProfilerBundleErrorV4::InvalidRocprofCsv)?;
+    if parsed.to_string() != agent {
+        return Err(ProfilerBundleErrorV4::InvalidRocprofCsv);
+    }
+    Ok(parsed)
 }
 
 const CSV_REQUIRED_HEADERS: &[&str] = &[

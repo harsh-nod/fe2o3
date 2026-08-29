@@ -218,7 +218,11 @@ artifact-validation failure. Successful collection retains
 exact `fe2o3-profiler-import` Bundle V4 argument vector. With rocprof's
 `--agent-index absolute` configuration, each device argument binds the emitted
 agent ID to the stable direct-KFD identity for that same KFD node; import joins
-by that ID and does not depend on topology or first-dispatch order. ATT import
+by that ID and does not depend on device-vector or first-dispatch order. The
+collection authorization covers both the node number and stable identity, and
+the complete mapping is re-observed immediately before and after collection.
+Any remap observed by either check fails closed and the owned output is
+cleaned. ATT import
 is deferred until the output directory identifies the selected absolute agent
 and every manifest-relative artifact has been content-bound. The source
 manifest or dispatch file must also fit the importer's 8 MiB source limit;

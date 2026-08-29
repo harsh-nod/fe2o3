@@ -1,3 +1,3 @@
 Kind,Agent_Id,Queue_Id,Process_Id,Kernel_Name,Workgroup_Size_X,Workgroup_Size_Y,Workgroup_Size_Z,Grid_Size_X,Grid_Size_Y,Grid_Size_Z,Start_Timestamp,End_Timestamp
-KERNEL_DISPATCH,17,4,7,"generic,kernel",64,1,1,256,1,1,100,180
-KERNEL_DISPATCH,19,5,9,other,32,2,1,128,2,1,200,260
+KERNEL_DISPATCH,Agent 17,4,7,"generic,kernel",64,1,1,256,1,1,100,180
+KERNEL_DISPATCH,Agent 19,5,9,other,32,2,1,128,2,1,200,260

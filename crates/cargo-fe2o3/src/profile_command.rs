@@ -45,6 +45,7 @@ const MAX_ARGUMENT_BYTES: usize = 4096;
 const POLL_INTERVAL: Duration = Duration::from_millis(5);
 const OWNERSHIP_FILE: &str = ".fe2o3-profile-owned-v1";
 const MANIFEST_FILE: &str = "fe2o3-profile-manifest-v1.txt";
+const KFD_TOPOLOGY_ROOT: &str = "/sys/class/kfd/kfd/topology/nodes";
 
 const ALLOWED_ENVIRONMENT: &[&str] = &[
     "GPU_DEVICE_ORDINAL",
@@ -729,11 +730,7 @@ fn prepare_plan(options: Options) -> Result<Plan, String> {
     let environment = capture_environment();
     let environment_bytes = canonical_environment(&environment);
     let environment_digest = Sha256::digest(&environment_bytes).into();
-    let devices = match discover_devices(Path::new("/sys/class/kfd/kfd/topology/nodes")) {
-        Ok(devices) => devices,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Vec::new(),
-        Err(error) => return Err(error.to_string()),
-    };
+    let devices = discover_visible_devices()?;
     let collector_arguments =
         collector_arguments(options.kind, &output_directory, &target, &options)?;
     let configuration = canonical_configuration(options.kind);
@@ -1027,6 +1024,27 @@ fn discover_devices(root: &Path) -> io::Result<Vec<DeviceIdentity>> {
     Ok(devices)
 }
 
+fn discover_visible_devices() -> Result<Vec<DeviceIdentity>, String> {
+    match discover_devices(Path::new(KFD_TOPOLOGY_ROOT)) {
+        Ok(devices) => Ok(devices),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+fn validate_device_bindings(expected: &[DeviceIdentity]) -> Result<(), String> {
+    let observed = discover_visible_devices()?;
+    if device_bindings_match(expected, &observed) {
+        Ok(())
+    } else {
+        Err("direct-KFD node-to-device identity mapping changed after planning".to_owned())
+    }
+}
+
+fn device_bindings_match(expected: &[DeviceIdentity], observed: &[DeviceIdentity]) -> bool {
+    expected == observed
+}
+
 fn invalid_data(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.into())
 }
@@ -1176,16 +1194,21 @@ fn authorization_digest(input: AuthorizationInputs<'_>) -> [u8; 32] {
     for argument in &options.program_arguments {
         hash_field(&mut hasher, argument.as_bytes());
     }
-    for device in devices {
-        hash_field(&mut hasher, &device.digest);
-        hash_field(&mut hasher, &(device.bytes.len() as u64).to_le_bytes());
-    }
+    hash_device_bindings(&mut hasher, devices);
     if let Some(kir) = &options.kir_binding {
         hash_field(&mut hasher, &kir.digest);
         hash_field(&mut hasher, &kir.length.to_le_bytes());
         hash_field(&mut hasher, &[kir.wave_width]);
     }
     hasher.finalize().into()
+}
+
+fn hash_device_bindings(hasher: &mut Sha256, devices: &[DeviceIdentity]) {
+    for device in devices {
+        hash_field(hasher, &device.node.to_le_bytes());
+        hash_field(hasher, &device.digest);
+        hash_field(hasher, &(device.bytes.len() as u64).to_le_bytes());
+    }
 }
 
 fn render_plan(plan: &Plan) -> String {
@@ -1593,6 +1616,7 @@ fn collect(plan: Plan) -> Result<CommandReport, String> {
         libraries.validate()?;
     }
     plan.target.validate("profile target")?;
+    validate_device_bindings(&plan.devices)?;
     let custody = OutputCustody::create(&plan.output_directory, &plan.authorization)?;
     let result = run_collector(&plan);
     let supervised = match result {
@@ -1611,6 +1635,7 @@ fn collect(plan: Plan) -> Result<CommandReport, String> {
             None => Ok(()),
         })
         .and_then(|()| plan.target.validate("profile target"))
+        .and_then(|()| validate_device_bindings(&plan.devices))
         .err();
     if supervised.reason != StopReason::Exited
         || !supervised.status.is_some_and(|status| status.success())
@@ -2352,6 +2377,26 @@ mod tests {
         ] {
             assert!(parse_properties(hostile).is_err());
         }
+    }
+
+    #[test]
+    fn absolute_node_mapping_is_authorized_and_revalidated() {
+        let device = |node| DeviceIdentity {
+            node,
+            bytes: b"stable-device".to_vec(),
+            digest: [7; 32],
+        };
+        let planned = vec![device(2)];
+        let remapped = vec![device(7)];
+        assert!(device_bindings_match(&planned, &planned));
+        assert!(!device_bindings_match(&planned, &remapped));
+
+        let digest = |devices: &[DeviceIdentity]| {
+            let mut hasher = Sha256::new();
+            hash_device_bindings(&mut hasher, devices);
+            <[u8; 32]>::from(hasher.finalize())
+        };
+        assert_ne!(digest(&planned), digest(&remapped));
     }
 
     #[test]
