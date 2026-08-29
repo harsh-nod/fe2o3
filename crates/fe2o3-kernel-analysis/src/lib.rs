@@ -10,8 +10,6 @@ mod authenticated_machine_effect;
 mod control_flow;
 mod kernel_check_model;
 #[cfg(feature = "authenticated-machine-effect")]
-mod machine_effect;
-#[cfg(feature = "authenticated-machine-effect")]
 mod physical_machine_analysis;
 #[cfg(feature = "authenticated-machine-effect")]
 mod physical_machine_effect;
@@ -83,8 +81,6 @@ pub use control_flow::{
     MAX_SSA_PLACEMENT_OUTPUT_ITEMS, analyze_control_flow,
 };
 pub use kernel_check_model::*;
-#[cfg(feature = "authenticated-machine-effect")]
-pub use machine_effect::*;
 #[cfg(feature = "authenticated-machine-effect")]
 pub use physical_machine_analysis::*;
 #[cfg(feature = "authenticated-machine-effect")]
