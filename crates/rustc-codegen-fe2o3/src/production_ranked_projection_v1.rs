@@ -14395,6 +14395,44 @@ mod tests {
         );
     }
 
+    #[test]
+    fn conservative_allocation_effect_retains_exact_semantic_correspondence() {
+        let blocks = [ProductionRankedBlockV1::new(
+            vec![ProductionRankedOperationV1::AllocationEffect {
+                kind: AccessKindAttr::Read,
+                memory_space: MemorySpaceAttr::Global,
+                allocation_origin: 1,
+                noalias_class: 1,
+            }],
+            ProductionRankedTerminatorV1::Return,
+        )];
+        let sites = [ProjectedAccessSourceV1 {
+            block: 0,
+            operation: 0,
+            access: AccessKindAttr::Read,
+            memory_space: MemorySpaceAttr::Global,
+            source: SemanticSourceProvenanceV1::unavailable(),
+            semantic_site: Some(ProjectedSemanticAccessSiteV1 {
+                block: 9,
+                statement: None,
+            }),
+        }];
+
+        let retained = production_access_sources(&blocks, &sites).unwrap();
+
+        assert_eq!(retained.len(), 1);
+        assert_eq!(
+            (
+                retained[0].semantic_block(),
+                retained[0].semantic_statement(),
+                retained[0].semantic_access_ordinal(),
+                retained[0].ranked_block(),
+                retained[0].ranked_operation(),
+            ),
+            (9, None, 0, 0, 0),
+        );
+    }
+
     fn bytes(tag: u8) -> [u8; 32] {
         [tag; 32]
     }

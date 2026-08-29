@@ -1738,8 +1738,7 @@ struct IndexedRankedAccessSourceV1 {
 
 struct RankedCorrelationIndexV1 {
     sources_by_site: BTreeMap<SemanticAccessSiteV1, IndexedRankedAccessSourceV1>,
-    conservative_sources_by_statement:
-        BTreeMap<(u32, Option<u32>), IndexedRankedAccessSourceV1>,
+    conservative_sources_by_statement: BTreeMap<(u32, Option<u32>), IndexedRankedAccessSourceV1>,
     sites_by_ranked_location: BTreeMap<(u32, u32), SemanticAccessSiteV1>,
     view_definitions: BTreeMap<ProductionRankedValueIdV1, RankedViewDefinitionV1>,
     semantic_expressions: BTreeMap<
@@ -3263,13 +3262,19 @@ fn validate_mir_pliron_translation_v1(
                 },
             );
         };
-        let source = ranked.sources_by_site.get(&site).ok_or(
-            ProductionMirPlironTranslationErrorV1::MissingRankedEffect {
+        let source = ranked
+            .sources_by_site
+            .get(&site)
+            .or_else(|| {
+                ranked
+                    .conservative_sources_by_statement
+                    .get(&(site.block, site.statement))
+            })
+            .ok_or(ProductionMirPlironTranslationErrorV1::MissingRankedEffect {
                 semantic_block: site.block,
                 semantic_statement: site.statement,
                 semantic_access_ordinal: site.ordinal,
-            },
-        )?;
+            })?;
         if source.access != consumer.access {
             return Err(ProductionMirPlironTranslationErrorV1::AccessKindMismatch {
                 location: consumer.location,
@@ -3325,7 +3330,9 @@ fn validate_mir_pliron_translation_v1(
                 );
             }
         }
-        if !used_ranked_locations.insert((source.ranked_block, source.ranked_operation)) {
+        if !used_ranked_locations.insert((source.ranked_block, source.ranked_operation))
+            && !matches!(source.allocation, IndexedRankedAllocationV1::Direct(_))
+        {
             return Err(ProductionMirPlironTranslationErrorV1::ExtraRankedEffect {
                 ranked_block: source.ranked_block,
                 ranked_operation: source.ranked_operation,
@@ -3415,7 +3422,21 @@ fn validate_mir_pliron_translation_v1(
         budget
             .charge()
             .ok_or(ProductionMirPlironTranslationErrorV1::ResourceLimit)?;
-        if !used_ranked_locations.contains(&(source.ranked_block, source.ranked_operation)) {
+        let is_private = match source.allocation {
+            IndexedRankedAllocationV1::View(ProductionRankedValueV1::Local(view)) => ranked
+                .view_definitions
+                .get(&view)
+                .is_some_and(|definition| {
+                    definition.memory_space == dialect_kernel::MemorySpaceAttr::Private
+                }),
+            IndexedRankedAllocationV1::View(_) => false,
+            IndexedRankedAllocationV1::Direct(definition) => {
+                definition.memory_space == dialect_kernel::MemorySpaceAttr::Private
+            }
+        };
+        if !used_ranked_locations.contains(&(source.ranked_block, source.ranked_operation))
+            && !is_private
+        {
             return Err(ProductionMirPlironTranslationErrorV1::ExtraRankedEffect {
                 ranked_block: source.ranked_block,
                 ranked_operation: source.ranked_operation,
@@ -3487,10 +3508,23 @@ fn validate_effect_control_flow_v1(
 ) -> Result<(), ProductionMirPlironTranslationErrorV1> {
     let mut kir_events = BTreeMap::<u32, Vec<(u64, SemanticAccessSiteV1)>>::new();
     let mut ranked_events = BTreeMap::<u32, Vec<(u64, SemanticAccessSiteV1)>>::new();
+    let mut seen_ranked_effects = BTreeMap::<(u32, u32), SemanticAccessSiteV1>::new();
     for (site, kir, operation_access_ordinal, ranked) in locations {
         budget
             .charge()
             .ok_or(ProductionMirPlironTranslationErrorV1::ResourceLimit)?;
+        if let Some(first) = seen_ranked_effects.get(ranked) {
+            if (first.block, first.statement) != (site.block, site.statement) {
+                return Err(ProductionMirPlironTranslationErrorV1::ControlFlowMismatch {
+                    first_semantic_block: first.block,
+                    first_semantic_statement: first.statement,
+                    second_semantic_block: site.block,
+                    second_semantic_statement: site.statement,
+                });
+            }
+            continue;
+        }
+        seen_ranked_effects.insert(*ranked, *site);
         kir_events.entry(kir.block.0).or_default().push((
             (u64::try_from(kir.operation_index)
                 .map_err(|_| ProductionMirPlironTranslationErrorV1::ResourceLimit)?
@@ -19811,7 +19845,19 @@ mod resource_tests {
 
     #[test]
     fn mir_pliron_translation_validation_accepts_exact_conservative_allocation_effect() {
-        let fixture = unsupported_index_correlation_fixture();
+        let mut fixture = unsupported_index_correlation_fixture();
+        fixture.module.functions[0].body.as_mut().unwrap().blocks[0]
+            .operations
+            .push(Operation::effect_free(
+                ValueDef::new(ValueId(6), Type::Scalar(ScalarType::F32)),
+                OperationKind::Load {
+                    pointer: ValueId(4),
+                    access: MemoryAccess::new(AddressSpace::Global, 4),
+                },
+            ));
+        verify_module(&fixture.module).expect("multi-load summary fixture remains valid");
+        fixture.correspondence.statement_operation_spans[0].operation_count = 6;
+        fixture.correspondence.terminator_operation_spans[0].first_operation_ordinal = 6;
         let lowering = ranked_correlation_input_for_effects(
             vec![ProductionRankedOperationV1::AllocationEffect {
                 kind: AccessKindAttr::Read,
@@ -19824,7 +19870,7 @@ mod resource_tests {
         let report = validate_translation_fixture(&fixture, &lowering, &[fixture.source], 16)
             .expect("the exact conservative allocation effect must reconcile");
 
-        assert_eq!(report.memory_effects(), 1);
+        assert_eq!(report.memory_effects(), 2);
         assert_eq!(report.conservative_ranked_effects(), 1);
 
         let wrong_allocation = ranked_correlation_input_for_effects(
