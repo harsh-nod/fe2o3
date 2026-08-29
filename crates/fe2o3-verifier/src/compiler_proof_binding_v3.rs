@@ -1,15 +1,17 @@
-//! Independent validation of the compiler's frozen V3 proof inputs.
+//! Independent validation of compiler proof inputs carried by the frozen V3 capsule envelope.
 //!
-//! This validates exact canonical content and structural relationships only. It does not execute
-//! Verus, prove a property, authenticate compiler origin, establish compiler refinement, or grant
-//! runtime authority.
+//! The legacy V3 association validates exact canonical content and structural relationships only.
+//! The current V4 association additionally imports the exact signed aggregate
+//! MIR-to-live-PLIRON Verus receipt under its embedded key. Neither path authenticates compiler
+//! origin, establishes LLVM or machine refinement, or grants runtime authority.
 
 use std::{error::Error, fmt};
 
 use fe2o3_compiler_lineage::{
     InertCanonicalSemanticMirReceiptV3, InertFormalMemoryReceiptV3, InertKernelIrReceiptV3,
     InertLineageContentIdentityV3, InertMiddleEndReceiptV3, InertMirToKirCorrespondenceReceiptV3,
-    InertProofBindingAssociationErrorV3, InertProofBindingAssociationV3,
+    InertProofBindingAssociationErrorV3, InertProofBindingAssociationErrorV4,
+    InertProofBindingAssociationV3, InertProofBindingAssociationV4,
     InertProofBindingReceiptIdentityV3, InertProofBindingReceiptV3,
 };
 use fe2o3_kernel_ir::{Module, VerifiedCanonicalKernelIrErrorV5, VerifiedCanonicalKernelIrV5};
@@ -21,6 +23,11 @@ use fe2o3_mir_model::semantic_mir_v1::{
     AdmittedInertSemanticMirV1, SemanticMirDecodeErrorV1, SemanticMirLimitsV1,
 };
 use fe2o3_pliron::{InertProductionMiddleEndEvidenceV5, ProductionMiddleEndEvidenceCodecErrorV5};
+
+use crate::{
+    CanonicalProductionMirPlironVerusExecutionEvidenceV1,
+    ProductionMirPlironVerusExecutionEvidenceErrorV1,
+};
 
 /// Independently decoded and cross-checked V3 compiler proof inputs.
 ///
@@ -44,6 +51,30 @@ pub struct ValidatedCompilerProofInputsV3 {
     kernel_ir: VerifiedCanonicalKernelIrV5,
     correspondence: InertCanonicalMirToKirCorrespondenceEvidenceV3,
     formal_memory: InertCanonicalFormalMemoryAdmissionEvidenceV3,
+}
+
+/// Independently decoded current compiler proof inputs, including the exact signed aggregate
+/// MIR-to-live-PLIRON Verus receipt.
+///
+/// This value remains non-authoritative until a private host join consumes protected compiler
+/// origin. It deliberately establishes no LLVM, ISA, machine, load, or launch claim.
+///
+/// ```compile_fail
+/// use fe2o3_verifier::ValidatedCompilerProofInputsV4;
+/// fn requires_clone<T: Clone>() {}
+/// requires_clone::<ValidatedCompilerProofInputsV4>();
+/// ```
+#[derive(Debug)]
+#[must_use = "dropping validated V4 proof inputs abandons the exact signed compiler evidence"]
+pub struct ValidatedCompilerProofInputsV4 {
+    association: InertProofBindingAssociationV4,
+    receipt_identity: InertProofBindingReceiptIdentityV3,
+    semantic_mir: AdmittedInertSemanticMirV1,
+    middle_end: InertProductionMiddleEndEvidenceV5,
+    kernel_ir: VerifiedCanonicalKernelIrV5,
+    correspondence: InertCanonicalMirToKirCorrespondenceEvidenceV3,
+    formal_memory: InertCanonicalFormalMemoryAdmissionEvidenceV3,
+    verus_execution: CanonicalProductionMirPlironVerusExecutionEvidenceV1,
 }
 
 impl ValidatedCompilerProofInputsV3 {
@@ -103,6 +134,79 @@ impl ValidatedCompilerProofInputsV3 {
     }
 
     /// Reports that content association alone grants no load or launch authority.
+    pub const fn grants_runtime_authority(&self) -> bool {
+        false
+    }
+}
+
+impl ValidatedCompilerProofInputsV4 {
+    /// Returns the independently decoded current association.
+    pub const fn association(&self) -> &InertProofBindingAssociationV4 {
+        &self.association
+    }
+
+    /// Returns the exact outer lineage-receipt identity whose preimage was decoded.
+    pub const fn receipt_identity(&self) -> InertProofBindingReceiptIdentityV3 {
+        self.receipt_identity
+    }
+
+    /// Returns the independently decoded exact production semantic MIR.
+    pub const fn semantic_mir(&self) -> &AdmittedInertSemanticMirV1 {
+        &self.semantic_mir
+    }
+
+    /// Returns the independently decoded exact V5 middle-end evidence.
+    pub const fn middle_end(&self) -> &InertProductionMiddleEndEvidenceV5 {
+        &self.middle_end
+    }
+
+    /// Returns the independently decoded and semantically verified exact Kernel IR V5.
+    pub const fn kernel_ir(&self) -> &VerifiedCanonicalKernelIrV5 {
+        &self.kernel_ir
+    }
+
+    /// Returns the independently decoded exact MIR-to-KIR correspondence.
+    pub const fn correspondence(&self) -> &InertCanonicalMirToKirCorrespondenceEvidenceV3 {
+        &self.correspondence
+    }
+
+    /// Returns the independently decoded exact formal-memory admission.
+    pub const fn formal_memory(&self) -> &InertCanonicalFormalMemoryAdmissionEvidenceV3 {
+        &self.formal_memory
+    }
+
+    /// Returns the exact canonical aggregate evidence and its imported signed receipt.
+    pub const fn verus_execution(&self) -> &CanonicalProductionMirPlironVerusExecutionEvidenceV1 {
+        &self.verus_execution
+    }
+
+    /// Reports that all exact stage bytes and the nested Verus evidence were associated.
+    pub const fn has_exact_decoded_input_association(&self) -> bool {
+        true
+    }
+
+    /// Reports that retained block locators and source statement counts match decoded MIR and KIR.
+    pub const fn has_structural_mir_to_kir_correspondence(&self) -> bool {
+        true
+    }
+
+    /// Reports that the exact signed receipt was independently imported under its embedded key.
+    pub const fn authenticates_signed_verus_receipt_under_embedded_key(&self) -> bool {
+        self.verus_execution
+            .authenticates_signed_receipt_under_embedded_key()
+    }
+
+    /// Reports that protected compiler origin remains a separate required join.
+    pub const fn authenticates_compiler_origin(&self) -> bool {
+        false
+    }
+
+    /// Reports that source-side proof evidence establishes no LLVM or machine refinement.
+    pub const fn establishes_llvm_or_machine_refinement(&self) -> bool {
+        false
+    }
+
+    /// Reports that decoded proof inputs alone grant no load or launch authority.
     pub const fn grants_runtime_authority(&self) -> bool {
         false
     }
@@ -169,6 +273,139 @@ pub fn validate_compiler_proof_inputs_v3(
         }
     }
 
+    let decoded = decode_and_cross_check_stages(
+        semantic_mir,
+        middle_end,
+        kernel_ir,
+        mir_to_kir_correspondence,
+        formal_memory,
+    )?;
+
+    Ok(ValidatedCompilerProofInputsV3 {
+        association,
+        receipt_identity: proof_binding.identity(),
+        semantic_mir: decoded.semantic_mir,
+        middle_end: decoded.middle_end,
+        kernel_ir: decoded.kernel_ir,
+        correspondence: decoded.correspondence,
+        formal_memory: decoded.formal_memory,
+    })
+}
+
+/// Strictly decodes the current proof association, all five stage receipts, and the exact signed
+/// aggregate MIR-to-live-PLIRON Verus execution.
+pub fn validate_compiler_proof_inputs_v4(
+    proof_binding: &InertProofBindingReceiptV3,
+    semantic_mir: &InertCanonicalSemanticMirReceiptV3,
+    middle_end: &InertMiddleEndReceiptV3,
+    kernel_ir: &InertKernelIrReceiptV3,
+    mir_to_kir_correspondence: &InertMirToKirCorrespondenceReceiptV3,
+    formal_memory: &InertFormalMemoryReceiptV3,
+) -> Result<ValidatedCompilerProofInputsV4, CompilerProofInputValidationErrorV4> {
+    let association = InertProofBindingAssociationV4::decode(proof_binding.canonical_preimage())
+        .map_err(CompilerProofInputValidationErrorV4::ProofBindingDecode)?;
+    let inputs = association.inputs();
+    for (actual, expected, field) in [
+        (
+            inputs.semantic_mir(),
+            content_identity(
+                semantic_mir.identity().sha256(),
+                semantic_mir.identity().byte_len(),
+            )
+            .map_err(CompilerProofInputValidationErrorV4::Stage)?,
+            "semantic MIR",
+        ),
+        (
+            inputs.middle_end(),
+            content_identity(
+                middle_end.identity().sha256(),
+                middle_end.identity().byte_len(),
+            )
+            .map_err(CompilerProofInputValidationErrorV4::Stage)?,
+            "middle end",
+        ),
+        (
+            inputs.kernel_ir(),
+            content_identity(
+                kernel_ir.identity().sha256(),
+                kernel_ir.identity().byte_len(),
+            )
+            .map_err(CompilerProofInputValidationErrorV4::Stage)?,
+            "Kernel IR",
+        ),
+        (
+            inputs.mir_to_kir_correspondence(),
+            content_identity(
+                mir_to_kir_correspondence.identity().sha256(),
+                mir_to_kir_correspondence.identity().byte_len(),
+            )
+            .map_err(CompilerProofInputValidationErrorV4::Stage)?,
+            "MIR-to-KIR correspondence",
+        ),
+        (
+            inputs.formal_memory(),
+            content_identity(
+                formal_memory.identity().sha256(),
+                formal_memory.identity().byte_len(),
+            )
+            .map_err(CompilerProofInputValidationErrorV4::Stage)?,
+            "formal memory",
+        ),
+    ] {
+        if actual != expected {
+            return Err(
+                CompilerProofInputValidationErrorV4::ProofBindingIdentityMismatch { field },
+            );
+        }
+    }
+    let decoded = decode_and_cross_check_stages(
+        semantic_mir,
+        middle_end,
+        kernel_ir,
+        mir_to_kir_correspondence,
+        formal_memory,
+    )
+    .map_err(CompilerProofInputValidationErrorV4::Stage)?;
+    let verus_execution = CanonicalProductionMirPlironVerusExecutionEvidenceV1::decode(
+        association.verus_execution_evidence(),
+    )
+    .map_err(CompilerProofInputValidationErrorV4::VerusEvidence)?;
+    if verus_execution
+        .claims()
+        .pliron_evidence_identity()
+        .as_bytes()
+        != decoded.middle_end.identity().sha256()
+    {
+        return Err(CompilerProofInputValidationErrorV4::VerusMiddleEndMismatch);
+    }
+
+    Ok(ValidatedCompilerProofInputsV4 {
+        association,
+        receipt_identity: proof_binding.identity(),
+        semantic_mir: decoded.semantic_mir,
+        middle_end: decoded.middle_end,
+        kernel_ir: decoded.kernel_ir,
+        correspondence: decoded.correspondence,
+        formal_memory: decoded.formal_memory,
+        verus_execution,
+    })
+}
+
+struct DecodedCompilerProofStagesV3 {
+    semantic_mir: AdmittedInertSemanticMirV1,
+    middle_end: InertProductionMiddleEndEvidenceV5,
+    kernel_ir: VerifiedCanonicalKernelIrV5,
+    correspondence: InertCanonicalMirToKirCorrespondenceEvidenceV3,
+    formal_memory: InertCanonicalFormalMemoryAdmissionEvidenceV3,
+}
+
+fn decode_and_cross_check_stages(
+    semantic_mir: &InertCanonicalSemanticMirReceiptV3,
+    middle_end: &InertMiddleEndReceiptV3,
+    kernel_ir: &InertKernelIrReceiptV3,
+    mir_to_kir_correspondence: &InertMirToKirCorrespondenceReceiptV3,
+    formal_memory: &InertFormalMemoryReceiptV3,
+) -> Result<DecodedCompilerProofStagesV3, CompilerProofInputValidationErrorV3> {
     let decoded_semantic_mir = AdmittedInertSemanticMirV1::decode_current_production_canonical(
         semantic_mir.canonical_preimage(),
         SemanticMirLimitsV1::default(),
@@ -224,10 +461,7 @@ pub fn validate_compiler_proof_inputs_v3(
         &kernel_module,
         &decoded_correspondence,
     )?;
-
-    Ok(ValidatedCompilerProofInputsV3 {
-        association,
-        receipt_identity: proof_binding.identity(),
+    Ok(DecodedCompilerProofStagesV3 {
         semantic_mir: decoded_semantic_mir,
         middle_end: decoded_middle_end,
         kernel_ir: decoded_kernel_ir,
@@ -444,6 +678,61 @@ impl Error for CompilerProofInputValidationErrorV3 {
             Self::ProofBindingIdentityMismatch { .. }
             | Self::NestedIdentityMismatch { .. }
             | Self::StructuralCorrespondence { .. } => None,
+        }
+    }
+}
+
+/// Failure to decode or exactly match the current signed compiler proof inputs.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum CompilerProofInputValidationErrorV4 {
+    /// The proof-binding preimage is not the exact canonical V4 format.
+    ProofBindingDecode(InertProofBindingAssociationErrorV4),
+    /// A named V4 association input differs from its independently retained receipt.
+    ProofBindingIdentityMismatch {
+        /// The mismatched semantic stage.
+        field: &'static str,
+    },
+    /// One of the five shared compiler stages failed strict decoding or cross-checking.
+    Stage(CompilerProofInputValidationErrorV3),
+    /// The nested aggregate Verus execution failed canonical decode or signed receipt import.
+    VerusEvidence(ProductionMirPlironVerusExecutionEvidenceErrorV1),
+    /// The signed aggregate receipt names a different live PLIRON middle-end record.
+    VerusMiddleEndMismatch,
+}
+
+impl fmt::Display for CompilerProofInputValidationErrorV4 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ProofBindingDecode(error) => {
+                write!(
+                    formatter,
+                    "cannot decode current compiler proof binding: {error}"
+                )
+            }
+            Self::ProofBindingIdentityMismatch { field } => write!(
+                formatter,
+                "current compiler proof binding has substituted {field} identity"
+            ),
+            Self::Stage(error) => write!(formatter, "current compiler proof stage failed: {error}"),
+            Self::VerusEvidence(error) => write!(
+                formatter,
+                "cannot validate current aggregate Verus execution: {error}"
+            ),
+            Self::VerusMiddleEndMismatch => formatter.write_str(
+                "current aggregate Verus execution names a different middle-end PLIRON record",
+            ),
+        }
+    }
+}
+
+impl Error for CompilerProofInputValidationErrorV4 {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::ProofBindingDecode(error) => Some(error),
+            Self::Stage(error) => Some(error),
+            Self::VerusEvidence(error) => Some(error),
+            Self::ProofBindingIdentityMismatch { .. } | Self::VerusMiddleEndMismatch => None,
         }
     }
 }

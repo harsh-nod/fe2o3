@@ -5,6 +5,7 @@
 mod capsule;
 mod error;
 mod proof_binding;
+mod proof_binding_v4;
 mod receipt;
 
 pub use capsule::{
@@ -20,6 +21,12 @@ pub use proof_binding::{
     InertLineageContentIdentityV3, InertProofBindingAssociationErrorV3,
     InertProofBindingAssociationInputsV3, InertProofBindingAssociationV3,
     MAX_INERT_PROOF_BINDING_ASSOCIATION_BYTES_V3,
+};
+pub use proof_binding_v4::{
+    INERT_PROOF_BINDING_ASSOCIATION_MAGIC_V4, INERT_PROOF_BINDING_ASSOCIATION_VERSION_V4,
+    InertProofBindingAssociationErrorV4, InertProofBindingAssociationInputsV4,
+    InertProofBindingAssociationV4, MAX_INERT_PROOF_BINDING_ASSOCIATION_BYTES_V4,
+    MAX_INERT_PROOF_BINDING_VERUS_EVIDENCE_BYTES_V4,
 };
 pub use receipt::{
     InertAbiReceiptIdentityV3, InertAbiReceiptV3, InertAmdgpuLoweringReceiptIdentityV3,

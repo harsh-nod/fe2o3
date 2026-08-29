@@ -41,7 +41,13 @@ production verifier. A second MI300X lane authenticates the exact scalar-GEMM
 Worker V3 artifact with an explicitly synthetic test verifier, joins it to
 macro-generated host-memory arguments and one checked KFD device, executes the
 move-only invocation, and validates numerical output, completion writeback, and
-canaries. Compiler-execution authority now has signed request and receipt
+canaries. The production compiler and host now also preserve the exact signed
+aggregate MIR-to-live-PLIRON execution: a V4 association inside the frozen V3
+capsule binds all five compiler stages, and Worker V3 independently reimports
+the receipt, cross-checks middle-end V5, and retains it beside signed compiler
+currentness through the HSA lifecycle. This proves custody and signature
+consistency, not LLVM/final-machine refinement or runtime authority.
+Compiler-execution authority now has signed request and receipt
 records plus separate crash-safe issuer and Worker journals. The Worker journal
 verifies and durably reacquires the exact request and receipt before the issuer
 can acknowledge publication, and recovery accepts only the three legal
@@ -469,7 +475,12 @@ earlier authority transition.
    derives the kernel from its generated type and consumes the Cargo handoff,
    verifier, generated arguments, current publication, and checked device into
    that invocation. A production verifier, generated-application adoption, and
-   replay without external HSACO injection remain open.
+   replay without external HSACO injection remain open. The default decision
+   already requires and owns the exact V4 compiler proof inputs: five decoded
+   stage preimages plus an independently imported signed aggregate
+   MIR-to-live-PLIRON receipt. Protected compiler-currentness evidence is
+   retained alongside it through load and dispatch, while LLVM/machine and
+   dynamic-launch refinement remain separate open joins.
 8. **Implemented bounded foundation: physical machine effects.** Canonical
    records and an exact `gfx942` alpha/zeta LLVM Object/MC analysis path model a
    closed call graph and physical memory sites. Production admission must still

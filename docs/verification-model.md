@@ -38,6 +38,35 @@ The levels are not optimization grades. A kernel cannot become `Verified`
 because tests or a sanitizer passed, and cannot remain `Verified` after a proof
 identity mismatch.
 
+## Current Production Evidence Boundary
+
+The production compiler retains one exact aggregate Verus execution for the
+safe-reference MIR-to-live-PLIRON boundary. A canonical V4 association, carried
+inside the frozen V3 capsule envelope, binds the exact semantic MIR,
+middle-end V5, verified Kernel IR, MIR-to-KIR correspondence, formal-memory
+evidence, signed receipt, embedded verifying key, proof binding, toolchain, and
+execution identities. Worker V3 independently decodes those preimages,
+reimports the signature, and checks that the signed PLIRON identity is the
+identity of the carried middle-end evidence.
+
+This has three deliberately separate meanings:
+
+1. The embedded key and signature establish internal receipt consistency; they
+   do not by themselves establish that a trusted production compiler emitted
+   the receipt.
+2. Signed compiler-currentness evidence supplies a separate protected-origin
+   join. The move-only compiler and proof owners are retained together through
+   the host HSA lifecycle but still grant no load or launch authority alone.
+3. The receipt covers safe-reference MIR to live PLIRON formulas. It does not
+   prove rustc/MIR extraction soundness, PLIRON-to-LLVM lowering, LLVM/ISA or
+   final-machine refinement, dynamic launch preconditions, runtime behavior, or
+   hardware correctness.
+
+Until a crate-owned production verifier consumes those owners together with
+the missing machine and launch evidence, ordinary generated applications fail
+closed. Synthetic integration tests demonstrate composition and hostile
+rejection only and never upgrade this assurance boundary.
+
 ## Abstract Execution Model
 
 ### Launch domain

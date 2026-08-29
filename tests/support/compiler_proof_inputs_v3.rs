@@ -1,3 +1,10 @@
+use ed25519_dalek::{Signer as _, SigningKey};
+use fe2o3_functional_proof::{
+    FunctionalRefinementBindingV2, FunctionalRefinementBoundaryV2,
+    FunctionalRefinementImportExpectationV2, FunctionalRefinementImportPolicyV2,
+    FunctionalRefinementReceiptImporterV2, FunctionalRefinementResultV2, SafeReferenceKindV2,
+    UnsignedFunctionalRefinementReceiptV2, VerusToolchainIdentityV2,
+};
 use fe2o3_kernel_ir::VerifiedCanonicalKernelIrV5;
 use fe2o3_lower_mir_kernel::{
     InertCanonicalFormalMemoryAdmissionEvidenceV3, InertCanonicalMirToKirCorrespondenceEvidenceV3,
@@ -5,8 +12,13 @@ use fe2o3_lower_mir_kernel::{
 };
 use fe2o3_mir_model::semantic_mir_v1::*;
 use fe2o3_pliron::{
-    PRODUCTION_MIDDLE_END_EVIDENCE_DOMAIN_V5, PRODUCTION_MIDDLE_END_EVIDENCE_POLICY_V5,
-    ProductionSemanticMirLimitsV1, ProductionSemanticMirOwnerV1,
+    InertProductionMiddleEndEvidenceV5, PRODUCTION_MIDDLE_END_EVIDENCE_DOMAIN_V5,
+    PRODUCTION_MIDDLE_END_EVIDENCE_POLICY_V5, ProductionSemanticMirLimitsV1,
+    ProductionSemanticMirOwnerV1,
+};
+use fe2o3_proof_contracts::DigestV1;
+use fe2o3_verifier::{
+    CanonicalProductionMirPlironVerusExecutionEvidenceV1, ProductionMirPlironVerusExecutionClaimsV1,
 };
 use sha2::{Digest, Sha256};
 
@@ -64,6 +76,85 @@ pub(crate) fn canonical_compiler_proof_inputs_v3(seed: u8) -> CanonicalCompilerP
         correspondence: correspondence.into_canonical_bytes(),
         formal_memory: formal_memory.into_canonical_bytes(),
     }
+}
+
+/// Builds internally valid signed aggregate evidence for cross-crate transport tests.
+///
+/// The fixture key is public test data and grants no compiler or runtime authority.
+#[allow(
+    dead_code,
+    reason = "shared support is compiled by proof-input tests that do not all construct V4 evidence"
+)]
+pub(crate) fn canonical_verus_execution_evidence_v1(middle_end: &[u8], seed: u8) -> Vec<u8> {
+    let middle_end = InertProductionMiddleEndEvidenceV5::decode(middle_end).unwrap();
+    let binding = FunctionalRefinementBindingV2::new(
+        SafeReferenceKindV2::SourceAndMir,
+        proof_digest(10, seed),
+        proof_digest(11, seed),
+        proof_digest(12, seed),
+        proof_digest(13, seed),
+        proof_digest(14, seed),
+        proof_digest(15, seed),
+    )
+    .unwrap();
+    let toolchain = VerusToolchainIdentityV2::new(
+        proof_digest(20, seed),
+        proof_digest(21, seed),
+        proof_digest(22, seed),
+        proof_digest(23, seed),
+        proof_digest(24, seed),
+    )
+    .unwrap();
+    let signing = SigningKey::from_bytes(&[42_u8.wrapping_add(seed); 32]);
+    let verifying_key = signing.verifying_key().to_bytes();
+    let policy = FunctionalRefinementImportPolicyV2::new(
+        verifying_key,
+        toolchain,
+        FunctionalRefinementBoundaryV2::SafeReferenceMirToLivePliron,
+    )
+    .unwrap();
+    let unsigned = UnsignedFunctionalRefinementReceiptV2::from_verified_execution_join(
+        policy.signer_identity(),
+        binding,
+        toolchain,
+        proof_digest(30, seed),
+        FunctionalRefinementResultV2::Proved,
+        FunctionalRefinementBoundaryV2::SafeReferenceMirToLivePliron,
+    )
+    .unwrap();
+    let signature = signing.sign(unsigned.signing_bytes()).to_bytes();
+    let wire = unsigned.attach_signature(signature);
+    let mut importer = FunctionalRefinementReceiptImporterV2::new(policy, 1).unwrap();
+    let imported = importer
+        .import(FunctionalRefinementImportExpectationV2::new(binding), &wire)
+        .unwrap();
+    let claims = ProductionMirPlironVerusExecutionClaimsV1::new(
+        proof_digest(1, seed),
+        proof_digest(2, seed),
+        DigestV1::from_untrusted_bytes(*middle_end.identity().sha256()),
+        proof_digest(4, seed),
+        proof_digest(5, seed),
+        binding,
+        imported.signer_identity(),
+        toolchain,
+        imported.execution_identity(),
+        imported.receipt_identity().digest(),
+        1,
+    )
+    .unwrap();
+    CanonicalProductionMirPlironVerusExecutionEvidenceV1::new(claims, verifying_key, wire)
+        .unwrap()
+        .canonical_bytes()
+        .to_vec()
+}
+
+#[allow(
+    dead_code,
+    reason = "used only by the optional shared V4 evidence constructor"
+)]
+fn proof_digest(tag: u8, seed: u8) -> DigestV1 {
+    let value = tag.wrapping_add(seed);
+    DigestV1::from_untrusted_bytes([if value == 0 { 1 } else { value }; 32])
 }
 
 fn bytes(tag: u8, seed: u8) -> [u8; 32] {

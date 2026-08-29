@@ -216,11 +216,18 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   authenticated Worker V3 executable, macro-generated arguments, retained
   current publication, runtime preparation, and the same checked device. A
   scalar-GEMM test passes this path only with the explicit synthetic-verifier
-  test feature. In default builds the verifier trait is sealed against external
-  implementations and the decision constructor is crate-private. No reviewed
-  concrete production verifier exists yet, so ordinary generated application
-  execution remains fail-closed rather than accepting caller-asserted hashes or
-  safety bits.
+  test feature. The production compiler now places a V4 proof association in
+  the frozen V3 capsule envelope. Worker V3 independently decodes the five
+  exact compiler stages, reimports the nested signed aggregate
+  MIR-to-live-PLIRON receipt under its embedded key, checks its PLIRON identity
+  against middle-end V5, and retains that move-only owner beside signed
+  compiler-currentness evidence throughout the HSA lifecycle. The signature
+  does not authenticate compiler origin by itself and grants no LLVM, machine,
+  load, or launch authority. In default builds the verifier trait is sealed
+  against external implementations and the decision constructor is
+  crate-private. No reviewed concrete production verifier exists yet, so
+  ordinary generated application execution remains fail-closed rather than
+  accepting caller-asserted hashes or safety bits.
 - Verus models and proof-carrying artifact schemas exist for bounded kernels
   and safety obligations. There is no general reviewed source-to-machine or
   Verus-to-machine refinement proof, so source proof, compiler evidence,

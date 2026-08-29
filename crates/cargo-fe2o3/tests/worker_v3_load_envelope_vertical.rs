@@ -365,11 +365,12 @@ where
             capsule.receipts().proof_binding().canonical_preimage(),
             request.proof_binding_receipt_bytes()
         );
-        let proof_inputs = request.validate_compiler_proof_inputs_v3().unwrap();
+        let proof_inputs = request.validate_compiler_proof_inputs_v4().unwrap();
         assert!(proof_inputs.has_exact_decoded_input_association());
         assert!(proof_inputs.has_structural_mir_to_kir_correspondence());
-        assert!(!proof_inputs.authenticates_verus_execution());
-        assert!(!proof_inputs.establishes_compiler_refinement());
+        assert!(proof_inputs.authenticates_signed_verus_receipt_under_embedded_key());
+        assert!(!proof_inputs.authenticates_compiler_origin());
+        assert!(!proof_inputs.establishes_llvm_or_machine_refinement());
         assert!(!proof_inputs.grants_runtime_authority());
         assert_eq!(
             request
@@ -1740,6 +1741,17 @@ fn authenticated_v3_executable_retains_verifier_entry_currentness_until_drop() {
     let verifier = verifier.into_inner();
     assert!(verifier.observed_busy);
     authenticated.revalidate_currentness().unwrap();
+    assert!(
+        authenticated
+            .verification()
+            .validated_compiler_proof_inputs()
+            .is_none()
+    );
+    assert!(
+        !authenticated
+            .verification()
+            .retains_current_compiler_and_signed_verus_evidence()
+    );
 
     assert!(matches!(
         reacquire_current_hsaco_publication_lease_v3(&directory.0, &claim),

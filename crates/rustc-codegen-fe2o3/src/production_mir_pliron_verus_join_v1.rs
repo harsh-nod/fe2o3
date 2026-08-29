@@ -10,6 +10,7 @@ use fe2o3_pliron::{
 };
 use fe2o3_verifier::{
     FunctionalRefinementVerusRuntimeLeaseV1, ProductionMirPlironPerCompilationVerusErrorV1,
+    ProductionMirPlironPerCompilationVerusExecutionV1,
     ProductionMirPlironPerCompilationVerusReportV1,
     execute_mir_pliron_semantic_contract_per_compilation_borrowed_v1,
 };
@@ -21,13 +22,17 @@ const PER_COMPILATION_PROOF_TIMEOUT_SECONDS_V1: u32 = 120;
 /// Compiler-owned aggregate proof and its ephemeral import policy.
 #[must_use = "dropping this value abandons authenticated conditional-composition evidence"]
 pub(crate) struct AuthenticatedMirPlironPerCompilationVerificationV1 {
-    report: ProductionMirPlironPerCompilationVerusReportV1,
+    execution: ProductionMirPlironPerCompilationVerusExecutionV1,
     _staging_policy: ProductionRefinementStagingPolicyV2,
 }
 
 impl AuthenticatedMirPlironPerCompilationVerificationV1 {
     pub(crate) const fn report(&self) -> ProductionMirPlironPerCompilationVerusReportV1 {
-        self.report
+        self.execution.report()
+    }
+
+    pub(crate) const fn execution(&self) -> &ProductionMirPlironPerCompilationVerusExecutionV1 {
+        &self.execution
     }
 }
 
@@ -51,7 +56,7 @@ pub(crate) fn authenticate_mir_pliron_contract_per_compilation_v1(
             detail: error.to_string(),
         },
     )?;
-    let (report, policy) = execute_mir_pliron_semantic_contract_per_compilation_borrowed_v1(
+    let (execution, policy) = execute_mir_pliron_semantic_contract_per_compilation_borrowed_v1(
         &runtime,
         ranked,
         evidence,
@@ -63,7 +68,7 @@ pub(crate) fn authenticate_mir_pliron_contract_per_compilation_v1(
     )
     .map_err(ProductionMirPlironVerusJoinErrorV1::Verification)?;
     Ok(AuthenticatedMirPlironPerCompilationVerificationV1 {
-        report,
+        execution,
         _staging_policy: policy,
     })
 }

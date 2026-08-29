@@ -83,6 +83,20 @@ oracle, completion writeback, and canaries. That test intentionally uses a
 synthetic verifier and externally injected HSACO, so it validates composition
 and hardware behavior without claiming production proof authority.
 
+The production semantic-lineage handoff now preserves the exact aggregate
+MIR-to-live-PLIRON Verus execution instead of reducing it to a digest. The
+compiler emits a V4 proof association inside the frozen V3 capsule envelope;
+that association binds all five compiler-stage identities and the canonical
+signed receipt, embedded verifying key, binding, toolchain, and execution
+identities. Worker V3 independently decodes every stage, reimports the signed
+receipt, cross-checks its PLIRON identity against the exact middle-end V5
+evidence, and retains the move-only result beside signed compiler-currentness
+evidence through authentication, load, dispatch, and unload. The embedded key
+establishes receipt consistency, not trusted producer origin; protected
+compiler currentness supplies the separate origin join. This milestone does
+not establish LLVM/ISA refinement, final-machine effects, dynamic launch
+preconditions, or runtime authority.
+
 The exact scalar-GEMM production auditor now also joins an independently
 authenticated upstream-LLVM machine analysis to its retained Verus input. The
 generated source binds the Worker V3 challenge, lineage and host contract; the
@@ -1022,10 +1036,12 @@ is complete, and the recorded runs grant no current production authority.
   returning an inert descriptor. This is the sole protected production
   descriptor handoff, but it grants no prerequisite, load, or launch authority.
 
-  No production Worker V3 verifier yet promotes compiler, Verus/proof, Rust
-  ABI, and machine-effect evidence into safe dispatch. Default builds now
-  expose no downstream implementation or decision-construction route; they
-  therefore fail closed until the crate-owned protected verifier exists.
+  No production Worker V3 verifier yet promotes the retained compiler origin,
+  signed MIR-to-live-PLIRON execution, Rust ABI, and machine-effect evidence
+  into safe dispatch. Default decisions require the exact move-only V4 proof
+  inputs and compiler-currentness evidence, but default builds expose no
+  downstream implementation or decision-construction route; they therefore
+  fail closed until the crate-owned protected verifier exists.
   Retired Worker V2 test
   authority is not an alternate route and cannot be selected in any build.
 - Checked mutable views now support simultaneously live disjoint subviews via

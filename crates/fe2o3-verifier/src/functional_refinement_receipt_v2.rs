@@ -18,12 +18,12 @@ use std::{
 
 use ed25519_dalek::{Signer, SigningKey};
 use fe2o3_functional_proof::{
-    FunctionalRefinementBindingV2, FunctionalRefinementBoundaryV2,
-    FunctionalRefinementImportErrorV2, FunctionalRefinementImportExpectationV2,
-    FunctionalRefinementImportPolicyV2, FunctionalRefinementReceiptImporterV2,
-    FunctionalRefinementResultV2, FunctionalRefinementSubjectsV2,
-    ImportedFunctionalRefinementProofV2, UnsignedFunctionalRefinementReceiptV2,
-    VerusToolchainIdentityV2,
+    FUNCTIONAL_REFINEMENT_RECEIPT_WIRE_BYTES_V2, FunctionalRefinementBindingV2,
+    FunctionalRefinementBoundaryV2, FunctionalRefinementImportErrorV2,
+    FunctionalRefinementImportExpectationV2, FunctionalRefinementImportPolicyV2,
+    FunctionalRefinementReceiptImporterV2, FunctionalRefinementResultV2,
+    FunctionalRefinementSubjectsV2, ImportedFunctionalRefinementProofV2,
+    UnsignedFunctionalRefinementReceiptV2, VerusToolchainIdentityV2,
 };
 use fe2o3_pliron::{
     ProductionRankedKernelV1, ProductionRankedOperationV1, ProductionRankedValueIdV1,
@@ -144,6 +144,32 @@ pub struct PreparedFunctionalRefinementReceiptV2 {
     unsigned: UnsignedFunctionalRefinementReceiptV2,
 }
 
+/// Move-only custody of one exact signed receipt after strict local import.
+///
+/// The verifying key and wire are retained so a later process can independently
+/// repeat the same signature, result, boundary, binding, and toolchain checks.
+/// This owner alone does not establish compiler custody or later-stage refinement.
+#[derive(Debug)]
+pub(crate) struct RetainedImportedFunctionalRefinementReceiptV2 {
+    proof: ImportedFunctionalRefinementProofV2,
+    verifying_key: [u8; 32],
+    wire: [u8; FUNCTIONAL_REFINEMENT_RECEIPT_WIRE_BYTES_V2],
+}
+
+impl RetainedImportedFunctionalRefinementReceiptV2 {
+    pub(crate) const fn proof(&self) -> &ImportedFunctionalRefinementProofV2 {
+        &self.proof
+    }
+
+    pub(crate) const fn verifying_key(&self) -> &[u8; 32] {
+        &self.verifying_key
+    }
+
+    pub(crate) const fn wire(&self) -> &[u8; FUNCTIONAL_REFINEMENT_RECEIPT_WIRE_BYTES_V2] {
+        &self.wire
+    }
+}
+
 impl PreparedFunctionalRefinementReceiptV2 {
     pub const fn binding(&self) -> FunctionalRefinementBindingV2 {
         self.binding
@@ -245,15 +271,16 @@ pub(crate) fn execute_and_import_generated_mir_pliron_composition_locally_v1(
     timeout_seconds: u32,
 ) -> Result<
     (
-        ImportedFunctionalRefinementProofV2,
+        RetainedImportedFunctionalRefinementReceiptV2,
         ProductionRefinementStagingPolicyV2,
     ),
     FunctionalRefinementVerusExecutionErrorV2,
 > {
     let signing = SigningKey::generate(&mut OsRng);
+    let verifying_key = signing.verifying_key().to_bytes();
     let toolchain = functional_refinement_verus_toolchain_identity_v2(runtime)?;
     let policy = FunctionalRefinementImportPolicyV2::new(
-        signing.verifying_key().to_bytes(),
+        verifying_key,
         toolchain,
         FunctionalRefinementBoundaryV2::SafeReferenceMirToLivePliron,
     )
@@ -276,7 +303,14 @@ pub(crate) fn execute_and_import_generated_mir_pliron_composition_locally_v1(
     let proof = importer
         .import(FunctionalRefinementImportExpectationV2::new(binding), &wire)
         .map_err(FunctionalRefinementVerusExecutionErrorV2::receipt)?;
-    Ok((proof, production_policy))
+    Ok((
+        RetainedImportedFunctionalRefinementReceiptV2 {
+            proof,
+            verifying_key,
+            wire,
+        },
+        production_policy,
+    ))
 }
 
 fn generate_ranked_functional_refinement_proof_v2(
