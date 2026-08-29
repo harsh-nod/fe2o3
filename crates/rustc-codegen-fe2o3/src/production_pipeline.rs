@@ -1837,20 +1837,30 @@ impl RankedVerifiedProductionCompilation {
         self,
     ) -> Result<TargetNeutralProductionCompilation, ProductionPipelineError> {
         let Self { ranked, bindings } = self;
-        let root_count = ranked.root_count();
+        let roster_receipt = ranked
+            .into_verified_roster_receipt()
+            .map_err(ProductionPipelineError::RankedVerification)?;
+        debug_assert!(!roster_receipt.grants_artifact_or_launch_authority());
+        debug_assert!(roster_receipt.verify_equivalence().is_ok());
+        let root_count = roster_receipt.root_count();
         if root_count != 1 {
-            drop((ranked, bindings));
+            drop((roster_receipt, bindings));
             return Err(ProductionPipelineError::MultiRootTargetNeutralLowering {
                 roots: root_count,
             });
         }
-        let source_rank = ranked
-            .roots()
+        let source_rank = roster_receipt
+            .source_order_roots()
             .first()
             .map(|root| root.source_rank())
             .ok_or(ProductionPipelineError::MultiRootTargetNeutralLowering { roots: 0 })?;
-        let (receipt, ranked_verification) = ranked
-            .into_verified_receipt()
+        debug_assert_eq!(roster_receipt.canonical_kernel_order(), &[0]);
+        debug_assert_ne!(
+            roster_receipt.canonical_roster_identity().as_bytes(),
+            &[0; 32],
+        );
+        let (receipt, ranked_verification) = roster_receipt
+            .into_singleton_verified_receipt()
             .map_err(ProductionPipelineError::RankedVerification)?;
         debug_assert_eq!(
             ranked_verification.has_authenticated_functional_verification(),
@@ -2020,16 +2030,45 @@ mod tests {
         assert!(semantic < parallel && parallel < aggregate);
 
         let pipeline = include_str!("production_pipeline.rs");
-        let verification = pipeline
-            .find(".into_verified_receipt()")
-            .expect("ranked verification transition");
+        let roster = pipeline
+            .find(".into_verified_roster_receipt()")
+            .expect("ranked roster verification transition");
+        let singleton = pipeline
+            .find(".into_singleton_verified_receipt()")
+            .expect("singleton ranked receipt transition");
         let lowering = pipeline
             .find("ProductionSemanticKirOwnerV1::try_lower_after_ranked_checks")
             .expect("KIR lowering transition");
         assert!(
-            verification < lowering,
+            roster < singleton && singleton < lowering,
             "KIR lowering ran before functional verification"
         );
+    }
+
+    #[test]
+    fn ranked_roster_receipt_stops_before_singleton_kir_authority() {
+        let pipeline = include_str!("production_pipeline.rs");
+        let roster = pipeline
+            .find(".into_verified_roster_receipt()")
+            .expect("ranked roster receipt transition");
+        let root_count = pipeline[roster..]
+            .find("let root_count = roster_receipt.root_count()")
+            .map(|offset| roster + offset)
+            .expect("roster cardinality gate");
+        let multi_root_stop = pipeline[root_count..]
+            .find("ProductionPipelineError::MultiRootTargetNeutralLowering")
+            .map(|offset| root_count + offset)
+            .expect("explicit pre-KIR multi-root stop");
+        let singleton = pipeline[multi_root_stop..]
+            .find(".into_singleton_verified_receipt()")
+            .map(|offset| multi_root_stop + offset)
+            .expect("singleton receipt authority");
+        let kir = pipeline[singleton..]
+            .find("ProductionSemanticKirOwnerV1::try_lower_after_ranked_checks")
+            .map(|offset| singleton + offset)
+            .expect("KIR authority transition");
+        assert!(roster < root_count && root_count < multi_root_stop);
+        assert!(multi_root_stop < singleton && singleton < kir);
     }
 
     #[test]
