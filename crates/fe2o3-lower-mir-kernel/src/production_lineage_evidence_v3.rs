@@ -1375,13 +1375,19 @@ impl<'a> ReaderV3<'a> {
 mod tests {
     use fe2o3_kernel_ir::{
         ExplicitLaunchExtent1d, FormalIndexWidth, FormalMemoryObligationAnalysis,
-        InertCanonicalFormalMemoryObligationReceiptV1, derive_kernel_memory_obligations,
+        InertCanonicalFormalMemoryObligationReceiptV1, VerifiedCanonicalKernelIrV5,
+        derive_kernel_memory_obligations,
     };
     use fe2o3_mir_model::semantic_mir_v1::*;
     use fe2o3_pliron::{ProductionSemanticMirLimitsV1, ProductionSemanticMirOwnerV1};
 
     use super::*;
-    use crate::{PRODUCTION_FORMAL_MEMORY_WITNESS_EXTENT_V1, ProductionSemanticKirLimitsV1};
+    use crate::{
+        InertCanonicalMirToKirCorrespondenceEvidenceV4,
+        MAX_MIR_TO_KIR_CORRESPONDENCE_EVIDENCE_BYTES_V4, MAX_MIR_TO_KIR_STATEMENT_SPANS_V4,
+        PRODUCTION_FORMAL_MEMORY_WITNESS_EXTENT_V1, ProductionCorrespondenceEvidenceErrorV4,
+        ProductionSemanticKirLimitsV1,
+    };
 
     const SEMANTIC_SHA_OFFSET: usize = COMMON_HEADER_BYTES_V3;
     const KIR_IDENTITY_OFFSET: usize = SEMANTIC_SHA_OFFSET + 32;
@@ -1619,6 +1625,88 @@ mod tests {
                 .unwrap();
         assert_eq!(decoded_correspondence, first.0);
         assert_eq!(decoded_formal, first.1);
+    }
+
+    #[test]
+    fn lossless_correspondence_retains_every_live_span_and_induction_report() {
+        let semantic_kir = semantic_kir_owner();
+        let semantic = semantic_kir.semantic().semantic();
+        let induction = fe2o3_mir_model::analyze_semantic_u32_induction_no_overflow_v1(
+            semantic,
+            SemanticFunctionIdV1::from_index(0),
+        )
+        .unwrap();
+        let evidence = InertCanonicalMirToKirCorrespondenceEvidenceV4::from_live_owner(
+            &semantic_kir,
+            &induction,
+        )
+        .unwrap();
+        evidence.revalidate().unwrap();
+        assert_eq!(evidence.statement_spans().len(), 1);
+        assert_eq!(evidence.terminator_spans().len(), 2);
+        assert!(evidence.synthetic_spans().is_empty());
+        assert!(evidence.parameter_bindings().is_empty());
+        assert_eq!(
+            evidence.semantic_u32_induction().semantic_mir_sha256(),
+            semantic.semantic_sha256().as_bytes()
+        );
+        let canonical_kir =
+            VerifiedCanonicalKernelIrV5::from_module(semantic_kir.module().clone()).unwrap();
+        assert_eq!(
+            evidence.block_correspondence().canonical_kir_v5_identity(),
+            canonical_kir.identity().digest()
+        );
+        assert!(!evidence.grants_authority());
+
+        let canonical = evidence.canonical_bytes();
+        assert_eq!(
+            InertCanonicalMirToKirCorrespondenceEvidenceV4::decode(canonical).unwrap(),
+            evidence
+        );
+        for end in 0..canonical.len() {
+            assert!(
+                InertCanonicalMirToKirCorrespondenceEvidenceV4::decode(&canonical[..end]).is_err(),
+                "accepted V4 truncation at {end}"
+            );
+        }
+        let mut trailing = canonical.to_vec();
+        trailing.push(0);
+        assert!(InertCanonicalMirToKirCorrespondenceEvidenceV4::decode(&trailing).is_err());
+
+        let mut oversized_statement_count = canonical.to_vec();
+        put_u32(
+            &mut oversized_statement_count,
+            24,
+            MAX_MIR_TO_KIR_STATEMENT_SPANS_V4 as u32 + 1,
+        );
+        assert!(matches!(
+            InertCanonicalMirToKirCorrespondenceEvidenceV4::decode(&oversized_statement_count),
+            Err(ProductionCorrespondenceEvidenceErrorV4::LimitExceeded)
+        ));
+
+        let block_length = u32::from_le_bytes(canonical[20..24].try_into().unwrap()) as usize;
+        let statement_count = u32::from_le_bytes(canonical[24..28].try_into().unwrap()) as usize;
+        let terminator_count = u32::from_le_bytes(canonical[28..32].try_into().unwrap()) as usize;
+        let synthetic_count = u32::from_le_bytes(canonical[32..36].try_into().unwrap()) as usize;
+        let parameter_count = u32::from_le_bytes(canonical[36..40].try_into().unwrap()) as usize;
+        let induction_offset = 44
+            + block_length
+            + statement_count * 24
+            + terminator_count * 20
+            + synthetic_count * 16
+            + parameter_count * 12;
+        let mut mismatched_semantic = canonical.to_vec();
+        mismatched_semantic[induction_offset + 20] ^= 0x80;
+        assert!(matches!(
+            InertCanonicalMirToKirCorrespondenceEvidenceV4::decode(&mismatched_semantic),
+            Err(ProductionCorrespondenceEvidenceErrorV4::NestedIdentityMismatch)
+        ));
+
+        let oversized = vec![0; MAX_MIR_TO_KIR_CORRESPONDENCE_EVIDENCE_BYTES_V4 + 1];
+        assert!(matches!(
+            InertCanonicalMirToKirCorrespondenceEvidenceV4::decode(&oversized),
+            Err(ProductionCorrespondenceEvidenceErrorV4::TooLarge)
+        ));
     }
 
     #[test]
