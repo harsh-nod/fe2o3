@@ -92,6 +92,9 @@ const MUON_LEARNING_RATE: f32 = 0.05;
 #[path = "../../../examples/gfx950_advanced_attention/src/reference.rs"]
 mod attention_reference;
 #[cfg(feature = "hardware-test-hooks")]
+#[path = "../../../examples/gfx950_gpt_oss_decode/src/reference.rs"]
+mod gpt_oss_reference;
+#[cfg(feature = "hardware-test-hooks")]
 #[path = "../../../examples/gfx950_advanced_systems/src/reference.rs"]
 mod systems_reference;
 
@@ -284,6 +287,7 @@ fn performance_hex(name: &'static str, length: usize) -> Result<String, BoxError
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum AbiArg {
     Slice,
+    Pointer,
     U32,
 }
 
@@ -311,6 +315,14 @@ const EXPERT_RANK_ARGS: &[AbiArg] = &[
 ];
 #[cfg(feature = "hardware-test-hooks")]
 const NINE_SLICES: &[AbiArg] = &[AbiArg::Slice; 9];
+#[cfg(feature = "hardware-test-hooks")]
+const THIRTEEN_SLICES: &[AbiArg] = &[AbiArg::Slice; 13];
+#[cfg(feature = "hardware-test-hooks")]
+const THREE_POINTERS: &[AbiArg] = &[AbiArg::Pointer; 3];
+#[cfg(feature = "hardware-test-hooks")]
+const FIVE_POINTERS: &[AbiArg] = &[AbiArg::Pointer; 5];
+#[cfg(feature = "hardware-test-hooks")]
+const SIX_POINTERS: &[AbiArg] = &[AbiArg::Pointer; 6];
 
 #[cfg(feature = "hardware-test-hooks")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -385,6 +397,42 @@ const MHC: AdvancedCase = AdvancedCase {
     workgroup_x: 64,
     static_lds_bytes: 0,
     args: THREE_SLICES,
+};
+#[cfg(feature = "hardware-test-hooks")]
+const GPT_OSS: AdvancedCase = AdvancedCase {
+    label: "gfx950 GPT-OSS-120B batch-1 layer-tile megakernel",
+    export: "gfx950_gpt_oss_120b_decode_megakernel_v1",
+    descriptor: "gfx950_gpt_oss_120b_decode_megakernel_v1.kd",
+    workgroup_x: 64,
+    static_lds_bytes: 0,
+    args: THIRTEEN_SLICES,
+};
+#[cfg(feature = "hardware-test-hooks")]
+const GPT_OSS_UNFUSED_ROUTER: AdvancedCase = AdvancedCase {
+    label: "gfx950 GPT-OSS-120B unfused router comparator",
+    export: "gpt_oss_unfused_router",
+    descriptor: "gpt_oss_unfused_router.kd",
+    workgroup_x: 64,
+    static_lds_bytes: 0,
+    args: THREE_POINTERS,
+};
+#[cfg(feature = "hardware-test-hooks")]
+const GPT_OSS_UNFUSED_ATTENTION: AdvancedCase = AdvancedCase {
+    label: "gfx950 GPT-OSS-120B unfused attention comparator",
+    export: "gpt_oss_unfused_attention",
+    descriptor: "gpt_oss_unfused_attention.kd",
+    workgroup_x: 64,
+    static_lds_bytes: 0,
+    args: FIVE_POINTERS,
+};
+#[cfg(feature = "hardware-test-hooks")]
+const GPT_OSS_UNFUSED_EXPERT: AdvancedCase = AdvancedCase {
+    label: "gfx950 GPT-OSS-120B unfused expert comparator",
+    export: "gpt_oss_unfused_expert",
+    descriptor: "gpt_oss_unfused_expert.kd",
+    workgroup_x: 64,
+    static_lds_bytes: 0,
+    args: SIX_POINTERS,
 };
 #[cfg(feature = "hardware-test-hooks")]
 const MOE_ROUTE: AdvancedCase = AdvancedCase {
@@ -465,6 +513,7 @@ fn kernarg_size(args: &[AbiArg]) -> usize {
         .iter()
         .map(|arg| match arg {
             AbiArg::Slice => 16,
+            AbiArg::Pointer => 8,
             AbiArg::U32 => 4,
         })
         .sum::<usize>();
@@ -481,6 +530,10 @@ fn expected_metadata_arguments(args: &[AbiArg]) -> Vec<(u64, u64, ExplicitValueK
                 result.push((offset, 8, ExplicitValueKind::GlobalBuffer));
                 result.push((offset + 8, 8, ExplicitValueKind::ByValue));
                 offset += 16;
+            }
+            AbiArg::Pointer => {
+                result.push((offset, 8, ExplicitValueKind::GlobalBuffer));
+                offset += 8;
             }
             AbiArg::U32 => {
                 result.push((offset, 4, ExplicitValueKind::ByValue));
@@ -639,6 +692,7 @@ impl ExpectedOutput {
 }
 
 #[cfg(feature = "hardware-test-hooks")]
+#[derive(Clone)]
 struct PlannedBuffer {
     name: &'static str,
     initial: Vec<u8>,
@@ -651,6 +705,7 @@ struct PlannedBuffer {
 #[cfg(feature = "hardware-test-hooks")]
 enum PlannedArg {
     Slice { buffer: usize, elements: usize },
+    Pointer { buffer: usize },
     U32(u32),
 }
 
@@ -1349,7 +1404,84 @@ fn systems_plans(case: AdvancedCase) -> Result<Vec<LaunchPlan>, BoxError> {
 }
 
 #[cfg(feature = "hardware-test-hooks")]
+fn pack_mfma_blocked_output(logical_row_major: &[f32]) -> Result<Vec<f32>, BoxError> {
+    require(
+        logical_row_major.len() == 16 * 16,
+        "MFMA blocked output requires one 16x16 tile",
+    )?;
+    let mut physical = vec![0.0_f32; 16 * 16];
+    for component in 0..4 {
+        for lane in 0..64 {
+            let row = (lane / 16) * 4 + component;
+            let column = lane % 16;
+            physical[component * 64 + lane] = logical_row_major[row * 16 + column];
+        }
+    }
+    Ok(physical)
+}
+
+#[cfg(feature = "hardware-test-hooks")]
+fn gpt_oss_plans(case: AdvancedCase) -> Result<Vec<LaunchPlan>, BoxError> {
+    let inputs = gpt_oss_reference::deterministic_inputs();
+    let expected = gpt_oss_reference::reference(&inputs);
+    let expected_attention = pack_mfma_blocked_output(&expected.attention)?;
+    let expected_expert = pack_mfma_blocked_output(&expected.expert)?;
+    require(
+        expected.top4[0] == 127,
+        "deterministic GPT-OSS fixture did not select expert 127",
+    )?;
+    let lengths = [
+        inputs.hidden_f32.len(),
+        inputs.router_f32.len(),
+        inputs.query_bf16.len(),
+        inputs.key_transposed_bf16.len(),
+        inputs.value_f32.len(),
+        inputs.sinks_f32.len(),
+        inputs.expert_activation_blocks_fp4.len(),
+        inputs.expert_weight_blocks_fp4.len(),
+        inputs.activation_scales.len(),
+        inputs.expert_weight_scales.len(),
+        expected.attention.len(),
+        expected.expert.len(),
+        1,
+    ];
+    Ok(vec![LaunchPlan {
+        label: case.label.into(),
+        buffers: vec![
+            input("hidden_f32", &inputs.hidden_f32),
+            input("router_f32", &inputs.router_f32),
+            input("query_bf16", &inputs.query_bf16),
+            input("key_transposed_bf16", &inputs.key_transposed_bf16),
+            input("value_f32", &inputs.value_f32),
+            input("sinks_f32", &inputs.sinks_f32),
+            input(
+                "expert_activation_blocks_fp4",
+                &inputs.expert_activation_blocks_fp4,
+            ),
+            input("expert_weight_blocks_fp4", &inputs.expert_weight_blocks_fp4),
+            input("activation_scales", &inputs.activation_scales),
+            input("expert_weight_scales", &inputs.expert_weight_scales),
+            f32_output("attention_output", expected_attention, 8.0e-3),
+            f32_output("expert_output", expected_expert, 8.0e-3),
+            output(
+                "packed_top4",
+                ExpectedOutput::U32(vec![expected.packed_top4]),
+            ),
+        ],
+        args: (0..13)
+            .map(|buffer| PlannedArg::Slice {
+                buffer,
+                elements: lengths[buffer],
+            })
+            .collect(),
+    }])
+}
+
+#[cfg(feature = "hardware-test-hooks")]
 fn plans_for(case: AdvancedCase) -> Result<Vec<LaunchPlan>, BoxError> {
+    if case == GPT_OSS {
+        return gpt_oss_plans(case);
+    }
     if [
         KDA_DECODE,
         KDA_PREFILL,
@@ -1403,6 +1535,14 @@ fn explicit_kernarg(
                 );
                 put_u64(&mut bytes, offset + 8, *elements as u64);
                 offset += 16;
+            }
+            (AbiArg::Pointer, PlannedArg::Pointer { buffer }) => {
+                put_u64(
+                    &mut bytes,
+                    offset,
+                    buffers[*buffer].device_address(plan.buffers[*buffer].body_offset)?,
+                );
+                offset += 8;
             }
             (AbiArg::U32, PlannedArg::U32(value)) => {
                 put_u32(&mut bytes, offset, *value);
@@ -1658,6 +1798,225 @@ fn execute_plan(
         format!("{} executable was not released", plan.label),
     )?;
     execution
+}
+
+#[cfg(feature = "hardware-test-hooks")]
+#[cfg(feature = "hardware-test-hooks")]
+fn inspect_gpt_unfused_profile(bytes: &[u8]) -> Result<(), BoxError> {
+    let bound = fe2o3_hsaco::inspect_and_bind_kernel_descriptors(bytes)?;
+    let inspected = bound.inspection();
+    require(
+        inspected.code_object_version() == CodeObjectVersion::V6
+            && inspected.target().processor() == "gfx950"
+            && inspected.target().xnack() == Some(FeatureState::Disabled)
+            && !inspected.has_printf_metadata(),
+        "unfused GPT-OSS comparator must be printf-free gfx950:xnack- COV6",
+    )?;
+    let cases = [
+        GPT_OSS_UNFUSED_ROUTER,
+        GPT_OSS_UNFUSED_ATTENTION,
+        GPT_OSS_UNFUSED_EXPERT,
+    ];
+    require(
+        inspected.kernels().len() == cases.len(),
+        "unfused GPT-OSS comparator kernel count changed",
+    )?;
+    for case in cases {
+        let kernel = inspected
+            .kernels()
+            .iter()
+            .find(|kernel| kernel.name() == case.export)
+            .ok_or_else(|| format!("unfused comparator omitted {}", case.export))?;
+        require(
+            kernel.symbol() == case.descriptor
+                && kernel.kernarg_segment_size() == kernarg_size(case.args) as u64
+                && kernel.kernarg_segment_alignment() == METADATA_KERNARG_ALIGNMENT
+                && kernel.group_segment_fixed_size() == 0
+                && kernel.wavefront_size() == 64
+                && kernel.max_flat_workgroup_size() == 64
+                && !kernel.uses_dynamic_stack(),
+            format!("{} metadata changed", case.label),
+        )?;
+        let arguments = kernel
+            .explicit_arguments()
+            .iter()
+            .map(|argument| (argument.offset(), argument.size(), argument.value_kind()))
+            .collect::<Vec<_>>();
+        require(
+            arguments == expected_metadata_arguments(case.args),
+            format!("{} pointer ABI changed", case.label),
+        )?;
+    }
+    Ok(())
+}
+
+#[cfg(feature = "hardware-test-hooks")]
+fn pointer_kernarg(
+    case: AdvancedCase,
+    plan: &LaunchPlan,
+    buffers: &[ReviewedHsaHardwareTestBufferV1],
+    indices: &[usize],
+) -> Result<Vec<u8>, BoxError> {
+    require(
+        indices.len() == case.args.len()
+            && case
+                .args
+                .iter()
+                .all(|argument| *argument == AbiArg::Pointer),
+        format!("{} pointer launch ABI changed", case.label),
+    )?;
+    let mut explicit = vec![0_u8; kernarg_size(case.args)];
+    for (slot, buffer) in indices.iter().enumerate() {
+        put_u64(
+            &mut explicit,
+            slot * 8,
+            buffers[*buffer].device_address(plan.buffers[*buffer].body_offset)?,
+        );
+    }
+    Ok(explicit)
+}
+
+#[cfg(feature = "hardware-test-hooks")]
+fn gpt_unfused_profile_plans() -> Result<Vec<(AdvancedCase, LaunchPlan)>, BoxError> {
+    let mut plans = gpt_oss_plans(GPT_OSS)?;
+    let full = plans.pop().ok_or("GPT-OSS launch plan is absent")?;
+    require(plans.is_empty(), "GPT-OSS launch plan was duplicated")?;
+
+    let label = "gpt-oss-120b-batch1-layer-tile-exact-unfused";
+    let router = LaunchPlan {
+        label: label.to_owned(),
+        buffers: [0, 1, 12]
+            .into_iter()
+            .map(|index| full.buffers[index].clone())
+            .collect(),
+        args: (0..3)
+            .map(|buffer| PlannedArg::Pointer { buffer })
+            .collect(),
+    };
+    let attention = LaunchPlan {
+        label: label.to_owned(),
+        buffers: [2, 3, 4, 5, 10]
+            .into_iter()
+            .map(|index| full.buffers[index].clone())
+            .collect(),
+        args: (0..5)
+            .map(|buffer| PlannedArg::Pointer { buffer })
+            .collect(),
+    };
+
+    let mut packed = full.buffers[12].clone();
+    let packed_values = match packed.expected.clone() {
+        Some(ExpectedOutput::U32(values)) => values,
+        _ => return Err("GPT-OSS packed top-4 reference changed kind".into()),
+    };
+    let packed_bytes = value_bytes(&packed_values);
+    require(
+        packed_bytes.len() == packed.elements * std::mem::size_of::<u32>(),
+        "GPT-OSS packed top-4 reference changed size",
+    )?;
+    let packed_start = packed.body_offset;
+    packed.initial[packed_start..packed_start + packed_bytes.len()].copy_from_slice(&packed_bytes);
+    packed.immutable = true;
+    packed.expected = None;
+    let expert = LaunchPlan {
+        label: label.to_owned(),
+        buffers: vec![
+            full.buffers[6].clone(),
+            full.buffers[7].clone(),
+            full.buffers[8].clone(),
+            full.buffers[9].clone(),
+            packed,
+            full.buffers[11].clone(),
+        ],
+        args: (0..6)
+            .map(|buffer| PlannedArg::Pointer { buffer })
+            .collect(),
+    };
+
+    Ok(vec![
+        (GPT_OSS_UNFUSED_ROUTER, router),
+        (GPT_OSS_UNFUSED_ATTENTION, attention),
+        (GPT_OSS_UNFUSED_EXPERT, expert),
+    ])
+}
+
+#[cfg(feature = "hardware-test-hooks")]
+fn run_gpt_unfused_comparator() -> Result<(), BoxError> {
+    let (bytes, digest) = read_pinned_hsaco()?;
+    inspect_gpt_unfused_profile(&bytes)?;
+    let mut plans = gpt_oss_plans(GPT_OSS)?;
+    let plan = plans.pop().ok_or("GPT-OSS launch plan is absent")?;
+    require(plans.is_empty(), "GPT-OSS launch plan was duplicated")?;
+
+    let context = GpuContext::new(0)?;
+    let mut adapter = ReviewedHsaRuntimeAdapterV1::new_gfx950(context)?;
+    require(
+        adapter.environment().physical_device().target().processor() == "gfx950"
+            && adapter.environment().physical_device().target().xnack()
+                == Some(FeatureState::Disabled),
+        "unfused GPT-OSS comparator requires gfx950:xnack-",
+    )?;
+    let buffers = plan
+        .buffers
+        .iter()
+        .map(|buffer| adapter.allocate_hardware_test_buffer(&buffer.initial))
+        .collect::<Result<Vec<_>, _>>()?;
+    let cases = [
+        GPT_OSS_UNFUSED_ROUTER,
+        GPT_OSS_UNFUSED_ATTENTION,
+        GPT_OSS_UNFUSED_EXPERT,
+    ];
+    let mappings: [&[usize]; 3] = [&[0, 1, 12], &[2, 3, 4, 5, 10], &[6, 7, 8, 9, 12, 11]];
+    let (executable, load) = unsafe { adapter.load_executable(&bytes, digest) }?;
+    let executable_identity = load.executable_object();
+    let execution = (|| -> Result<(), BoxError> {
+        require(
+            load.finalized_digest() == digest && load.byte_len() == bytes.len() as u64,
+            "unfused comparator load observation changed",
+        )?;
+        let exports = cases.map(|case| case.export);
+        let (kernels, resolutions) = unsafe { adapter.resolve_kernel_set(&executable, exports) }?;
+        require(
+            kernels.len() == cases.len()
+                && resolutions.len() == cases.len()
+                && resolutions
+                    .iter()
+                    .all(|resolution| resolution.executable_object() == executable_identity),
+            "unfused comparator resolved a substituted kernel set",
+        )?;
+        for index in 0..cases.len() {
+            let explicit = pointer_kernarg(cases[index], &plan, &buffers, mappings[index])?;
+            unsafe {
+                dispatch(
+                    cases[index],
+                    &mut adapter,
+                    &executable,
+                    kernels
+                        .get(index)
+                        .ok_or("unfused comparator runtime omitted a kernel")?,
+                    &resolutions[index],
+                    &explicit,
+                )?;
+            }
+        }
+        for (planned, actual) in plan.buffers.iter().zip(&buffers) {
+            verify_buffer(planned, &actual.read_after_synchronous_dispatch())?;
+        }
+        Ok(())
+    })();
+    let unload = unsafe { adapter.unload_executable(executable) }?;
+    require(
+        unload.released() && unload.executable_object() == executable_identity,
+        "unfused comparator executable was not released",
+    )?;
+    execution?;
+    if let Some(config) = PerformanceConfig::from_environment()? {
+        for (case, plan) in gpt_unfused_profile_plans()? {
+            profile_plan(case, &mut adapter, &bytes, digest, plan, &config)?;
+        }
+    }
+    println!("PASS gfx950 GPT-OSS exact unfused three-dispatch comparator");
+    Ok(())
 }
 
 #[cfg(feature = "hardware-test-hooks")]
@@ -1988,6 +2347,18 @@ hardware_case!(
     gfx950_moe_expert_rank_rust_cov6_matches_cpu_reference,
     MOE_EXPERT
 );
+#[cfg(feature = "hardware-test-hooks")]
+hardware_case!(
+    gfx950_gpt_oss_layer_tile_rust_cov6_matches_cpu_reference,
+    GPT_OSS
+);
+#[cfg(feature = "hardware-test-hooks")]
+#[test]
+#[ignore = "non-authoritative: requires the exact HIP gfx950:xnack- comparator HSACO and MI350"]
+fn gfx950_gpt_oss_unfused_hip_matches_cpu_reference() -> Result<(), BoxError> {
+    run_gpt_unfused_comparator()
+}
+
 #[cfg(feature = "hardware-test-hooks")]
 hardware_case!(
     gfx950_combine_expert_ranks_rust_cov6_matches_cpu_reference,

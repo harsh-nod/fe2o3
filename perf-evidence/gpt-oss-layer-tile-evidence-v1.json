@@ -1,0 +1,79 @@
+{
+  "schema": "fe2o3.gfx950.gpt-oss-layer-tile-evidence.v1",
+  "claim_boundary": "batch-1 single-layer fixed-context layer tile; not a full-model or state-of-the-art claim",
+  "machine": {
+    "host": "smci350-rck-g03-b19-03",
+    "physical_gpu": 6,
+    "market_name": "AMD Instinct MI350X",
+    "target": "gfx950",
+    "rocr_visible_devices": "6",
+    "hip_visible_devices": "unset",
+    "clocks_locked": false,
+    "active_gpu_process_observations": 0
+  },
+  "protocol": {
+    "date_utc": "2026-08-29",
+    "order": "five fresh alternating AB/BA process pairs",
+    "initial_warmups": 1000,
+    "blocks": 30,
+    "samples_per_block": 100,
+    "block_rewarm": 20,
+    "timer": "ROCr HSA dispatch timestamps",
+    "source_commit": "109e1966d36d4188c43cafe5cb455c1ac3dd0767",
+    "source_tree": "cb6622e401e3edd2a84b40d4a69406d9dcf7fcd6"
+  },
+  "artifacts": {
+    "fused_hsaco_sha256": "1e7d249dc0c11c412d2bf2d5c4755cc16e145fedea72046b26dc09a3d1656ad2",
+    "exact_unfused_hsaco_sha256": "4be1e6224fb8c18c93bed1fe64c38641b8c392b2cae966803c0d167444c4782a",
+    "raw_samples_sha256": "9175597fb5f0fe2af48c8696567d375e3071b3b61029eb396dd1262c4536e4a2",
+    "series_summary_sha256": "f7b1885100e5b2b307b76315106537991ef4bfb0f0cb759ccf4ea07f875de9cc",
+    "comparison_summary_sha256": "ac4cab6fea05a24a95e443d67d020e8127055f3f68acf73850d7d349a3cc1248",
+    "campaign_checksums_sha256": "847116fec6da7fa8ecb437237d016df46614e9883485abf7cf14ff90a0f10abe"
+  },
+  "results_ns": {
+    "fused": {
+      "samples": 15000,
+      "median": 1068124,
+      "median_bootstrap_ci95": [1067445, 1068925],
+      "p5": 1060885,
+      "p95": 1078085,
+      "mad": 3881
+    },
+    "exact_unfused_three_dispatch_sum": {
+      "samples": 15000,
+      "median": 780683,
+      "median_bootstrap_ci95": [780563, 780844],
+      "p5": 778403,
+      "p95": 790043,
+      "mad": 1241
+    }
+  },
+  "exact_unfused_over_fused": 0.7308917316716037,
+  "fused_faster": false,
+  "optimization_ablation": {
+    "measurement_kind": "single-process smoke attribution; not pooled with the five-process comparison",
+    "held_fragments": {
+      "vgprs": 352,
+      "median_ns": 1240483
+    },
+    "sequential_fragments": {
+      "vgprs": 308,
+      "median_ns": 1065242,
+      "median_reduction_percent": 14.126836079172387
+    },
+    "rejected_bf16_mfma_router": {
+      "median_ns": 2174000,
+      "reason": "one useful batch row incurred padded 16-row MFMA work and additional operand movement"
+    }
+  },
+  "resource_floor": {
+    "compulsory_bytes": 1509972,
+    "fp32_flops": 745472,
+    "bf16_executed_flops": 32768,
+    "mxfp4_executed_flops": 262144,
+    "mxfp4_useful_flops": 4096,
+    "optimistic_whole_device_floor_ns": 188.7465,
+    "fused_over_floor": 5659.040035179461,
+    "exact_unfused_over_floor": 4136.145570911249
+  }
+}
