@@ -37,12 +37,13 @@ This crate does not establish deployment authority by itself. The separate
 measured provisioning helper now creates service-owned key custody, atomically
 opens or initializes state, creates the unnamed socketpair after adopting the
 dedicated identity, transfers one endpoint, and executes this daemon. The
-remaining root coordinator must prepare and launch that helper under the
-distinct locked service account, retain pidfd and reaping custody, authenticate
-the completed exec and live endpoint, and provision the admitted endpoint/pidfd
-pair into the compiler execution supervisor. Creating the socketpair after the
-credential transition makes the supervisor's `SO_PEERCRED`, unnamed-address,
-and distinct-UID checks simultaneously satisfiable.
+root coordinator now prepares and launches that helper under the distinct locked
+service account, retains pidfd and reaping custody, and authenticates the
+completed exec and live endpoint. Its authoritative root-only qualification and
+the concrete admitted endpoint/pidfd transfer into compiler-execution supervisor
+construction remain open. Creating the socketpair after the credential
+transition makes the supervisor's `SO_PEERCRED`, unnamed-address, and
+distinct-UID checks simultaneously satisfiable.
 
 `scripts/build-static-external-anchor-service.sh` builds the pinned musl release
 through the shared syscall-only protected-service entrypoint and rejects any

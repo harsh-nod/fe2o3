@@ -40,8 +40,10 @@ transport and requires a durably recorded exact proposed-position observation
 before the Worker record or ACK can advance. The external-anchor entrypoint now
 admits that exact profile and its fixed descriptor set before serving, and the
 measured helper now performs the service-owned key, state, socket, and daemon
-exec transition. A root-controlled coordinator must still establish the
-distinct UID and supervise an independently operated occurrence. Cargo now
+exec transition. The root-controlled coordinator now establishes the locked
+child profile, retains pidfd/reaping custody, authenticates ready plus exec EOF,
+and admits the live endpoint. Wiring its transfer into supervisor construction
+and running the authoritative root-only qualification remain open. Cargo now
 admits the fixed root-owned client profile and connects only to the fixed
 authenticated listener path.
 The complete receipt carriage, subject-bound current-record recovery operation,
@@ -64,7 +66,8 @@ subject, carriage, policy, occurrence, Worker-ledger record, sequence, and
 rollback anchors, and fail closed without independent protected-policy, ledger,
 and external rollback verification identities. The concrete protected verifier,
 independently deployed monotonic rollback process, hardened key use,
-distinct-UID root coordinator, and exact Cargo-to-KFD run remain open.
+root-coordinator-to-supervisor wiring and qualification, and exact Cargo-to-KFD
+run remain open.
 
 The caller-pinned policy, service launch manifest, external-anchor deployment,
 and service-owned Ed25519 keys have reusable immutable memfd capabilities in
@@ -117,10 +120,11 @@ service-owned custody, atomically opens or initializes state under one retained
 lock, creates the unnamed socketpair after the UID transition, transfers only
 the supervisor endpoint, and executes the measured daemon with this exact
 descriptor set and an empty environment. The remaining privileged coordinator
-must prepare those exact inputs, launch the helper under the dedicated UID/GID,
-retain pidfd and reaping custody, require both the canonical ready transfer and
-bootstrap close-on-exec EOF, admit the endpoint against the same live process,
-and provision that admitted pair into the supervisor.
+now prepares those exact inputs, launches the helper under the dedicated
+UID/GID, retains pidfd and reaping custody, requires both the canonical ready
+transfer and bootstrap close-on-exec EOF, and admits the endpoint against the
+same live process. Its root-only qualification and concrete descriptor transfer
+into the protected supervisor remain unfinished.
 
 ## Transport And Ownership
 

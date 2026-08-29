@@ -15,5 +15,6 @@ the measured daemon with an empty environment. Bootstrap close-on-exec EOF is no
 itself: the root coordinator must also revalidate the transferred endpoint against the same live
 pidfd before admitting service custody.
 
-The helper grants no compiler, publication, loading, launch, or GPU authority. The root coordinator
-and root-only cross-UID qualification remain separate lifecycle responsibilities in this package.
+The helper grants no compiler, publication, loading, launch, or GPU authority. The separate
+`fe2o3-external-anchor-coordinator` crate now owns endpoint/pidfd admission and process lifecycle;
+its supervisor wiring and root-only cross-UID qualification remain open.

@@ -224,8 +224,11 @@ symbol, and silent fail-closed gates. The measured unprivileged provisioning
 helper now reissues root key custody, atomically opens or initializes state under
 one retained lock, creates the service socketpair, transfers one exact endpoint,
 and crosses into the daemon through `execveat` with an empty environment. The
-privileged coordinator, authoritative root-only distinct-UID qualification, and
-refinement evidence join remain open, so the result remains authority-free.
+privileged coordinator now implements measured preparation, atomic pidfd launch,
+profile gating, endpoint admission, transfer cloning, and exact kill/reap custody.
+Its supervisor-construction wiring, authoritative root-only distinct-UID
+qualification, and refinement evidence join remain open, so the result remains
+authority-free.
 The issuer's direct transition
 methods are private. One shared bounded
 client now recovers first and resumes Ready, Prepared, or Issued under one
