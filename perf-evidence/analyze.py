@@ -119,17 +119,17 @@ def load(paths: list[Path]) -> list[dict[str, Any]]:
     return records
 
 
-def operator_key(record: dict[str, Any]) -> tuple[str, str, str, str]:
+def operator_key(record: dict[str, Any]) -> tuple[str, str, str]:
     return (
         record["artifact"]["kernel_export"],
         record["workload"]["id"],
         record["workload"]["input_sha256"],
-        json.dumps(record["launch"], sort_keys=True, separators=(",", ":")),
     )
 
 
 def series_key(record: dict[str, Any]) -> tuple[str, ...]:
     return operator_key(record) + (
+        json.dumps(record["launch"], sort_keys=True, separators=(",", ":")),
         record["implementation"]["id"],
         record["implementation"]["variant"],
         record["artifact"]["hsaco_sha256"],
@@ -174,6 +174,7 @@ def summarize(records: list[dict[str, Any]], repetitions: int, seed: int) -> lis
                 "kernel_export": key[0],
                 "workload_id": key[1],
                 "input_sha256": key[2],
+                "launch": json.loads(key[3]),
                 "implementation_id": key[4],
                 "variant": key[5],
                 "hsaco_sha256": key[6],
@@ -197,20 +198,25 @@ def paired_comparison(
     repetitions: int,
     seed: int,
 ) -> list[dict[str, Any]]:
-    by_operator: dict[tuple[str, ...], dict[str, dict[tuple[str, int, int, int], int]]] = defaultdict(
-        lambda: defaultdict(dict)
-    )
+    by_operator: dict[
+        tuple[str, ...], dict[str, dict[tuple[str, int, int, int], int]]
+    ] = defaultdict(lambda: defaultdict(dict))
+    launches: dict[tuple[tuple[str, ...], str], set[str]] = defaultdict(set)
     for record in records:
         variant = record["implementation"]["variant"]
         if variant not in (baseline, candidate):
             continue
+        key = operator_key(record)
+        launches[(key, variant)].add(
+            json.dumps(record["launch"], sort_keys=True, separators=(",", ":"))
+        )
         pair = (
             record["campaign_id"],
             record["trial"]["process"],
             record["trial"]["block"],
             record["trial"]["sample"],
         )
-        table = by_operator[operator_key(record)][variant]
+        table = by_operator[key][variant]
         if pair in table:
             raise ValueError(f"duplicate pair key for {variant}: {pair}")
         table[pair] = int(record["timer"]["duration_ns"])
@@ -218,6 +224,11 @@ def paired_comparison(
     for index, (key, variants) in enumerate(sorted(by_operator.items())):
         if baseline not in variants or candidate not in variants:
             continue
+        for variant in (baseline, candidate):
+            if len(launches[(key, variant)]) != 1:
+                raise ValueError(
+                    f"{key}: {variant} has multiple launch configurations"
+                )
         pairs = sorted(set(variants[baseline]) & set(variants[candidate]))
         if not pairs:
             continue
@@ -230,49 +241,102 @@ def paired_comparison(
         for pair, ratio in zip(pairs, ratios):
             blocks[pair[:3]].append(ratio)
         low, high = hierarchical_bootstrap(blocks, repetitions, seed + 10_000 + index)
+        median_speedup = float(statistics.median(ratios))
+        median_reduction = float(statistics.median(contributions))
         output.append(
             {
                 "kernel_export": key[0],
                 "workload_id": key[1],
+                "input_sha256": key[2],
+                "baseline_launch": json.loads(next(iter(launches[(key, baseline)]))),
+                "candidate_launch": json.loads(next(iter(launches[(key, candidate)]))),
                 "baseline_variant": baseline,
                 "candidate_variant": candidate,
                 "paired_samples": len(pairs),
-                "median_paired_speedup": float(statistics.median(ratios)),
+                "median_paired_speedup": median_speedup,
                 "paired_speedup_bootstrap_ci95": [low, high],
-                "median_latency_reduction_percent": float(statistics.median(contributions)),
+                "median_latency_reduction_percent": median_reduction,
+                "faster_at_ci95": low > 1.0,
+                "slower_at_ci95": high < 1.0,
+                "direction_indistinguishable_at_ci95": low <= 1.0 <= high,
             }
         )
     return output
 
 
 def chain_contributions(
-    summaries: list[dict[str, Any]], chain: list[str]
+    summaries: list[dict[str, Any]], chain: list[str],
 ) -> list[dict[str, Any]]:
-    table: dict[tuple[str, str], dict[str, float]] = defaultdict(dict)
+    table: dict[tuple[str, str, str], dict[str, dict[str, Any]]] = defaultdict(dict)
     for item in summaries:
-        table[(item["kernel_export"], item["workload_id"])][item["variant"]] = item["median_ns"]
+        table[
+            (item["kernel_export"], item["workload_id"], item["input_sha256"])
+        ][item["variant"]] = item
     result = []
     for key, variants in sorted(table.items()):
         if any(variant not in variants for variant in chain):
             continue
-        total_log_speedup = math.log(variants[chain[0]] / variants[chain[-1]])
+        for variant in chain:
+            matching = [
+                item for item in summaries
+                if item["kernel_export"] == key[0]
+                and item["workload_id"] == key[1]
+                and item["input_sha256"] == key[2]
+                and item["variant"] == variant
+            ]
+            if len(matching) != 1:
+                raise ValueError(f"{key}: {variant} has multiple summarized series")
+        baseline_ns = variants[chain[0]]["median_ns"]
+        final_ns = variants[chain[-1]]["median_ns"]
+        total_log_speedup = math.log(baseline_ns / final_ns)
         steps = []
         for previous, current in zip(chain, chain[1:]):
-            saved = variants[previous] - variants[current]
+            previous_item = variants[previous]
+            current_item = variants[current]
+            previous_ns = previous_item["median_ns"]
+            current_ns = current_item["median_ns"]
+            saved = previous_ns - current_ns
             steps.append(
                 {
                     "from": previous,
                     "to": current,
-                    "incremental_speedup": variants[previous] / variants[current],
+                    "from_hsaco_sha256": previous_item["hsaco_sha256"],
+                    "to_hsaco_sha256": current_item["hsaco_sha256"],
+                    "from_launch": previous_item["launch"],
+                    "to_launch": current_item["launch"],
+                    "artifacts_identical": (
+                        previous_item["hsaco_sha256"] == current_item["hsaco_sha256"]
+                    ),
+                    "incremental_speedup": previous_ns / current_ns,
                     "median_ns_saved": saved,
+                    "median_latency_reduction_percent": 100.0 * saved / previous_ns,
+                    "cumulative_speedup": baseline_ns / current_ns,
+                    "cumulative_latency_reduction_percent": (
+                        100.0 * (baseline_ns - current_ns) / baseline_ns
+                    ),
                     "log_speedup_contribution_percent": (
-                        100.0 * math.log(variants[previous] / variants[current])
+                        100.0 * math.log(previous_ns / current_ns)
                         / total_log_speedup
                         if total_log_speedup != 0 else None
                     ),
                 }
             )
-        result.append({"kernel_export": key[0], "workload_id": key[1], "steps": steps})
+        result.append(
+            {
+                "kernel_export": key[0],
+                "workload_id": key[1],
+                "input_sha256": key[2],
+                "baseline_variant": chain[0],
+                "final_variant": chain[-1],
+                "baseline_median_ns": baseline_ns,
+                "final_median_ns": final_ns,
+                "total_speedup": baseline_ns / final_ns,
+                "total_latency_reduction_percent": (
+                    100.0 * (baseline_ns - final_ns) / baseline_ns
+                ),
+                "steps": steps,
+            }
+        )
     return result
 
 
@@ -281,6 +345,67 @@ def self_test() -> None:
     assert math.isclose(percentile([1, 2, 3, 4, 5], 0.05), 1.2)
     low, high = hierarchical_bootstrap({(0, 0): [10.0] * 4, (0, 1): [10.0] * 4}, 100, 950)
     assert (low, high) == (10.0, 10.0)
+    summaries = [
+        {
+            "kernel_export": "kernel",
+            "workload_id": "shape",
+            "input_sha256": "a" * 64,
+            "variant": "baseline",
+            "launch": {"workgroup": [64, 1, 1]},
+            "hsaco_sha256": "b" * 64,
+            "median_ns": 100.0,
+        },
+        {
+            "kernel_export": "kernel",
+            "workload_id": "shape",
+            "input_sha256": "a" * 64,
+            "variant": "optimized",
+            "launch": {"workgroup": [128, 1, 1]},
+            "hsaco_sha256": "c" * 64,
+            "median_ns": 80.0,
+        },
+    ]
+    chain = chain_contributions(summaries, ["baseline", "optimized"])
+    assert len(chain) == 1
+    assert chain[0]["total_speedup"] == 1.25
+    assert chain[0]["steps"][0]["median_ns_saved"] == 20.0
+    assert chain[0]["steps"][0]["median_latency_reduction_percent"] == 20.0
+    assert chain[0]["steps"][0]["artifacts_identical"] is False
+    assert chain[0]["steps"][0]["to_launch"]["workgroup"] == [128, 1, 1]
+    records = []
+    for variant, workgroup, durations in (
+        ("baseline", 64, (100, 102)),
+        ("optimized", 128, (80, 82)),
+    ):
+        for sample, duration in enumerate(durations):
+            records.append(
+                {
+                    "campaign_id": "campaign",
+                    "implementation": {"id": "rust", "variant": variant},
+                    "artifact": {
+                        "kernel_export": "kernel",
+                        "hsaco_sha256": ("b" if variant == "baseline" else "c") * 64,
+                    },
+                    "workload": {
+                        "id": "shape",
+                        "input_sha256": "a" * 64,
+                    },
+                    "launch": {"workgroup": [workgroup, 1, 1]},
+                    "trial": {
+                        "process": 0,
+                        "block": 0,
+                        "sample": sample,
+                    },
+                    "timer": {"duration_ns": str(duration)},
+                }
+            )
+    comparisons = paired_comparison(
+        records, "baseline", "optimized", 100, 950
+    )
+    assert len(comparisons) == 1
+    assert comparisons[0]["paired_samples"] == 2
+    assert comparisons[0]["baseline_launch"]["workgroup"] == [64, 1, 1]
+    assert comparisons[0]["candidate_launch"]["workgroup"] == [128, 1, 1]
 
 
 def main() -> int:
@@ -290,6 +415,13 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=950)
     parser.add_argument("--baseline-variant")
     parser.add_argument("--candidate-variant")
+    parser.add_argument(
+        "--compare",
+        action="append",
+        default=[],
+        metavar="BASELINE:CANDIDATE",
+        help="repeatable independent paired comparison",
+    )
     parser.add_argument("--chain", help="comma-separated ordered optimization variants")
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
@@ -303,6 +435,16 @@ def main() -> int:
         parser.error("--bootstrap-repetitions must be at least 100")
     if bool(args.baseline_variant) != bool(args.candidate_variant):
         parser.error("baseline and candidate variants must be supplied together")
+    comparisons_requested: list[tuple[str, str]] = []
+    if args.baseline_variant:
+        comparisons_requested.append((args.baseline_variant, args.candidate_variant))
+    for value in args.compare:
+        parts = value.split(":")
+        if len(parts) != 2 or not all(parts) or parts[0] == parts[1]:
+            parser.error("--compare must be BASELINE:CANDIDATE with distinct variants")
+        comparisons_requested.append((parts[0], parts[1]))
+    if len(set(comparisons_requested)) != len(comparisons_requested):
+        parser.error("paired comparisons must be unique")
     records = load(args.jsonl)
     summaries = summarize(records, args.bootstrap_repetitions, args.seed)
     result: dict[str, Any] = {
@@ -315,19 +457,65 @@ def main() -> int:
         },
         "series": summaries,
     }
-    if args.baseline_variant:
-        result["paired_comparisons"] = paired_comparison(
-            records,
-            args.baseline_variant,
-            args.candidate_variant,
-            args.bootstrap_repetitions,
-            args.seed,
-        )
+    if comparisons_requested:
+        comparisons = []
+        for baseline, candidate in comparisons_requested:
+            values = paired_comparison(
+                records,
+                baseline,
+                candidate,
+                args.bootstrap_repetitions,
+                args.seed,
+            )
+            if not values:
+                raise ValueError(
+                    f"requested comparison has no paired samples: {baseline}:{candidate}"
+                )
+            comparisons.extend(values)
+        result["paired_comparisons"] = comparisons
     if args.chain:
         chain = [value for value in args.chain.split(",") if value]
         if len(chain) < 2:
             parser.error("--chain needs at least two comma-separated variants")
-        result["optimization_chain_contributions"] = chain_contributions(summaries, chain)
+        if len(set(chain)) != len(chain):
+            parser.error("--chain variants must be unique")
+        contributions = chain_contributions(summaries, chain)
+        if not contributions:
+            raise ValueError("optimization chain has no complete operator/workload series")
+        comparisons = [
+            comparison
+            for previous, current in zip(chain, chain[1:])
+            for comparison in paired_comparison(
+                records,
+                previous,
+                current,
+                args.bootstrap_repetitions,
+                args.seed,
+            )
+        ]
+        comparison_keys = {
+            (
+                item["kernel_export"],
+                item["workload_id"],
+                item["input_sha256"],
+                item["baseline_variant"],
+                item["candidate_variant"],
+            )
+            for item in comparisons
+        }
+        for item in contributions:
+            for previous, current in zip(chain, chain[1:]):
+                key = (
+                    item["kernel_export"],
+                    item["workload_id"],
+                    item["input_sha256"],
+                    previous,
+                    current,
+                )
+                if key not in comparison_keys:
+                    raise ValueError(f"optimization chain has no paired samples for {key}")
+        result["optimization_chain_contributions"] = contributions
+        result["optimization_chain_paired_comparisons"] = comparisons
     json.dump(result, sys.stdout, indent=2, sort_keys=True)
     print()
     return 0
