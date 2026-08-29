@@ -55,8 +55,7 @@ use fe2o3_host::{
     WorkerV3ProtectedVerifierAdapterV1, WorkerV3ProtectedVerifierBackendV1,
     WorkerV3RosterEntryErrorV1, WorkerV3RosterVerificationAuthenticationErrorV1,
     WorkerV3RosterVerificationDecisionErrorV1, WorkerV3RosterVerificationRequestV1,
-    WorkerV3SafetyPropertiesV1,
-    WorkerV3SyntheticVerifierAdapterV1, WorkerV3SyntheticVerifierV1,
+    WorkerV3SafetyPropertiesV1, WorkerV3SyntheticVerifierAdapterV1, WorkerV3SyntheticVerifierV1,
     WorkerV3VerificationAuthenticationErrorV1, WorkerV3VerificationDecisionErrorV1,
     WorkerV3VerificationDecisionV1, WorkerV3VerificationRequestV1,
     admit_recovered_worker_v3_descriptor_v1, admit_recovered_worker_v3_roster_v1,
@@ -687,8 +686,7 @@ struct ReviewedTestProtectedRosterVerifier {
 // SAFETY: this request-echoing aggregate backend is confined to the receipt-bearing integration
 // test. It exercises the production adapter's exact ordered mapping and rejection paths and does
 // not represent protected compiler, proof, executable, layout, effect, or runtime authority.
-unsafe impl<R> WorkerV3ProtectedRosterVerifierBackendV1<R>
-    for ReviewedTestProtectedRosterVerifier
+unsafe impl<R> WorkerV3ProtectedRosterVerifierBackendV1<R> for ReviewedTestProtectedRosterVerifier
 where
     R: CompilerGeneratedKernelExpectationRosterV1,
 {
@@ -744,9 +742,8 @@ where
             .iter()
             .enumerate()
             .map(|(ordinal, expected)| {
-                let seed = 0x20_u8.wrapping_add(
-                    u8::try_from(ordinal).expect("synthetic roster ordinal fits u8"),
-                );
+                let seed = 0x20_u8
+                    .wrapping_add(u8::try_from(ordinal).expect("synthetic roster ordinal fits u8"));
                 let lineage_ordinal = if matches!(
                     self.fault,
                     ReviewedTestProtectedRosterVerifierFault::SubstitutedEntryLineage
@@ -882,8 +879,7 @@ where
 // SAFETY: this test-only aggregate backend probes the same cooperative publication lock while the
 // one roster-wide currentness token is retained, then delegates to the complete synthetic
 // aggregate evidence fixture above.
-unsafe impl<R> WorkerV3ProtectedRosterVerifierBackendV1<R>
-    for CurrentnessProbingWorkerV3Verifier
+unsafe impl<R> WorkerV3ProtectedRosterVerifierBackendV1<R> for CurrentnessProbingWorkerV3Verifier
 where
     R: CompilerGeneratedKernelExpectationRosterV1,
 {
@@ -2050,12 +2046,11 @@ fn protected_roster_verifier_authenticates_one_artifact_and_borrowed_typed_entri
         admit_recovered_worker_v3_roster_v1::<WorkerV3SyntheticTwoTransformRoster>(recovered)
             .unwrap();
     let admitted_lineage = admitted.lineage_identity();
-    let mut verifier = WorkerV3ProtectedRosterVerifierAdapterV1::new(
-        ReviewedTestProtectedRosterVerifier {
+    let mut verifier =
+        WorkerV3ProtectedRosterVerifierAdapterV1::new(ReviewedTestProtectedRosterVerifier {
             fault: ReviewedTestProtectedRosterVerifierFault::None,
             calls: 0,
-        },
-    );
+        });
     let authenticated =
         AuthenticatedWorkerV3RosterV1::<WorkerV3SyntheticTwoTransformRoster>::authenticate(
             admitted,
@@ -2064,7 +2059,10 @@ fn protected_roster_verifier_authenticates_one_artifact_and_borrowed_typed_entri
         .unwrap();
     assert_eq!(verifier.into_inner().calls, 1);
     assert_eq!(authenticated.entry_count(), 2);
-    assert_eq!(authenticated.verification().lineage_identity(), admitted_lineage);
+    assert_eq!(
+        authenticated.verification().lineage_identity(),
+        admitted_lineage
+    );
     assert_eq!(authenticated.verification().entries().len(), 2);
     assert!(
         authenticated
@@ -2090,11 +2088,20 @@ fn protected_roster_verifier_authenticates_one_artifact_and_borrowed_typed_entri
             .unwrap();
         assert_eq!(second.ordinal(), 0);
         assert_eq!(first.ordinal(), 1);
-        assert_eq!(second.descriptor().kernel_id().as_bytes(), &SYNTHETIC_SECOND_TRANSFORM_BINDING);
-        assert_eq!(first.descriptor().kernel_id().as_bytes(), &SYNTHETIC_FIRST_TRANSFORM_BINDING);
+        assert_eq!(
+            second.descriptor().kernel_id().as_bytes(),
+            &SYNTHETIC_SECOND_TRANSFORM_BINDING
+        );
+        assert_eq!(
+            first.descriptor().kernel_id().as_bytes(),
+            &SYNTHETIC_FIRST_TRANSFORM_BINDING
+        );
         assert_eq!(second.descriptor_binding().kernel_index(), 1);
         assert_eq!(first.descriptor_binding().kernel_index(), 0);
-        assert_eq!(second.physical_kernel().name(), "synthetic_second_transform");
+        assert_eq!(
+            second.physical_kernel().name(),
+            "synthetic_second_transform"
+        );
         assert_eq!(first.physical_kernel().name(), "synthetic_first_transform");
         assert_eq!(
             second.entry_verification().marker_binding_identity(),
@@ -2204,9 +2211,11 @@ fn protected_roster_verifier_rejects_common_and_per_entry_substitution() {
         let admitted =
             admit_recovered_worker_v3_roster_v1::<WorkerV3SyntheticTwoTransformRoster>(recovered)
                 .unwrap();
-        let mut verifier = WorkerV3ProtectedRosterVerifierAdapterV1::new(
-            ReviewedTestProtectedRosterVerifier { fault, calls: 0 },
-        );
+        let mut verifier =
+            WorkerV3ProtectedRosterVerifierAdapterV1::new(ReviewedTestProtectedRosterVerifier {
+                fault,
+                calls: 0,
+            });
         let error =
             AuthenticatedWorkerV3RosterV1::<WorkerV3SyntheticTwoTransformRoster>::authenticate(
                 admitted,
@@ -2229,13 +2238,12 @@ fn authenticated_v3_roster_retains_verifier_entry_currentness_until_drop() {
     let admitted =
         admit_recovered_worker_v3_roster_v1::<WorkerV3SyntheticTwoTransformRoster>(recovered)
             .unwrap();
-    let mut verifier = WorkerV3ProtectedRosterVerifierAdapterV1::new(
-        CurrentnessProbingWorkerV3Verifier {
+    let mut verifier =
+        WorkerV3ProtectedRosterVerifierAdapterV1::new(CurrentnessProbingWorkerV3Verifier {
             output_dir: directory.0.clone(),
             claim: claim.clone(),
             observed_busy: false,
-        },
-    );
+        });
     let authenticated =
         AuthenticatedWorkerV3RosterV1::<WorkerV3SyntheticTwoTransformRoster>::authenticate(
             admitted,

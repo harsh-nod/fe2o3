@@ -24,8 +24,7 @@ use crate::{
 
 const WORKER_V3_VERIFICATION_CHALLENGE_DOMAIN_V1: &[u8] =
     b"fe2o3.host.worker-v3-verification-challenge.v1\0";
-const WORKER_V3_ROSTER_IDENTITY_DOMAIN_V1: &[u8] =
-    b"fe2o3.host.worker-v3-verification-roster.v1\0";
+const WORKER_V3_ROSTER_IDENTITY_DOMAIN_V1: &[u8] = b"fe2o3.host.worker-v3-verification-roster.v1\0";
 const WORKER_V3_ROSTER_VERIFICATION_CHALLENGE_DOMAIN_V1: &[u8] =
     b"fe2o3.host.worker-v3-roster-verification-challenge.v1\0";
 
@@ -1291,9 +1290,7 @@ pub struct WorkerV3RosterVerificationRequestV1<'admission, R> {
     _roster: PhantomData<fn() -> R>,
 }
 
-impl<R: CompilerGeneratedKernelExpectationRosterV1>
-    WorkerV3RosterVerificationRequestV1<'_, R>
-{
+impl<R: CompilerGeneratedKernelExpectationRosterV1> WorkerV3RosterVerificationRequestV1<'_, R> {
     pub const fn challenge_identity(&self) -> WorkerV3RosterVerificationChallengeIdentityV1 {
         self.challenge
     }
@@ -1326,10 +1323,7 @@ impl<R: CompilerGeneratedKernelExpectationRosterV1>
         self.admission.descriptor_binding(ordinal)
     }
 
-    pub fn entry_lineage_identity(
-        &self,
-        ordinal: usize,
-    ) -> Option<WorkerV3HostLineageIdentityV1> {
+    pub fn entry_lineage_identity(&self, ordinal: usize) -> Option<WorkerV3HostLineageIdentityV1> {
         self.admission
             .entrypoints()
             .get(ordinal)
@@ -1344,9 +1338,7 @@ impl<R: CompilerGeneratedKernelExpectationRosterV1>
         self.compiler_execution_subject().canonical_bytes()
     }
 
-    pub const fn compiler_execution_receipt_carriage(
-        &self,
-    ) -> &CompilerExecutionReceiptCarriageV1 {
+    pub const fn compiler_execution_receipt_carriage(&self) -> &CompilerExecutionReceiptCarriageV1 {
         self.admission.compiler_execution_receipt()
     }
 
@@ -1441,9 +1433,7 @@ impl<R: CompilerGeneratedKernelExpectationRosterV1>
     }
 
     pub fn semantic_capsule_bytes(&self) -> &[u8] {
-        self.semantic_compiler_handoff()
-            .capsule()
-            .canonical_bytes()
+        self.semantic_compiler_handoff().capsule().canonical_bytes()
     }
 
     pub fn formal_memory_receipt_bytes(&self) -> &[u8] {
@@ -1634,7 +1624,8 @@ impl WorkerV3ProtectedRosterVerificationEvidenceV1 {
 /// owner alone is not a compiler-produced multi-root proof-to-executable theorem.
 pub unsafe trait WorkerV3ProtectedRosterVerifierBackendV1<
     R: CompilerGeneratedKernelExpectationRosterV1,
-> {
+>
+{
     type Error;
 
     /// Authenticates the complete pinned roster through one protected call.
@@ -1791,7 +1782,9 @@ impl<R: CompilerGeneratedKernelExpectationRosterV1> AuthenticatedWorkerV3RosterV
         let current = admission
             .acquire_retained_currentness_token()
             .map_err(WorkerV3RosterVerificationAuthenticationErrorV1::CurrentPublication)?;
-        let request = prepare_roster_request::<R>(&admission, &current).map_err(|error| match error {
+        let request =
+            prepare_roster_request::<R>(&admission, &current).map_err(|error| {
+                match error {
             WorkerV3RosterVerificationRequestPreparationErrorV1::Marker { ordinal, field } => {
                 WorkerV3RosterVerificationAuthenticationErrorV1::Marker { ordinal, field }
             }
@@ -1800,7 +1793,8 @@ impl<R: CompilerGeneratedKernelExpectationRosterV1> AuthenticatedWorkerV3RosterV
             } => WorkerV3RosterVerificationAuthenticationErrorV1::UnsupportedGeneratedProfile {
                 ordinal,
             },
-        })?;
+        }
+            })?;
         // SAFETY: callers cannot bypass the crate-owned adapter. The unsafe backend owns all
         // protected aggregate obligations and the result is fully revalidated below.
         let verification = unsafe { verifier.verify(&request) };
@@ -1983,10 +1977,7 @@ fn prepare_roster_request<'admission, R: CompilerGeneratedKernelExpectationRoste
         ] {
             if !matches {
                 return Err(
-                    WorkerV3RosterVerificationRequestPreparationErrorV1::Marker {
-                        ordinal,
-                        field,
-                    },
+                    WorkerV3RosterVerificationRequestPreparationErrorV1::Marker { ordinal, field },
                 );
             }
         }
@@ -2019,7 +2010,10 @@ fn derive_roster_identity<R: CompilerGeneratedKernelExpectationRosterV1>()
             .to_le_bytes(),
     );
     for entry in R::ENTRIES {
-        for bytes in [entry.logical_name().as_bytes(), entry.export_name().as_bytes()] {
+        for bytes in [
+            entry.logical_name().as_bytes(),
+            entry.export_name().as_bytes(),
+        ] {
             digest.update(
                 u64::try_from(bytes.len())
                     .expect("generated roster name length fits u64")
@@ -2097,8 +2091,7 @@ fn validate_roster_decision<R: CompilerGeneratedKernelExpectationRosterV1>(
             "compiler-execution carriage",
         ),
         (
-            decision.compiler_execution.policy_sha256
-                == request.compiler_execution_policy_sha256(),
+            decision.compiler_execution.policy_sha256 == request.compiler_execution_policy_sha256(),
             "compiler-execution policy",
         ),
         (
@@ -2147,7 +2140,9 @@ fn validate_roster_decision<R: CompilerGeneratedKernelExpectationRosterV1>(
         ),
     ] {
         if !matches {
-            return Err(WorkerV3RosterVerificationDecisionErrorV1::IdentityMismatch(field));
+            return Err(WorkerV3RosterVerificationDecisionErrorV1::IdentityMismatch(
+                field,
+            ));
         }
     }
     for (identity, field) in [
@@ -2194,16 +2189,14 @@ fn validate_roster_decision<R: CompilerGeneratedKernelExpectationRosterV1>(
         }
     }
     if decision.entries.len() != R::ENTRIES.len() {
-        return Err(WorkerV3RosterVerificationDecisionErrorV1::EntryCountMismatch {
-            expected: R::ENTRIES.len(),
-            actual: decision.entries.len(),
-        });
+        return Err(
+            WorkerV3RosterVerificationDecisionErrorV1::EntryCountMismatch {
+                expected: R::ENTRIES.len(),
+                actual: decision.entries.len(),
+            },
+        );
     }
-    for (ordinal, (expected, actual)) in R::ENTRIES
-        .iter()
-        .zip(&decision.entries)
-        .enumerate()
-    {
+    for (ordinal, (expected, actual)) in R::ENTRIES.iter().zip(&decision.entries).enumerate() {
         let expected_lineage = request
             .entry_lineage_identity(ordinal)
             .expect("admitted roster retains every entry lineage");
@@ -2214,8 +2207,7 @@ fn validate_roster_decision<R: CompilerGeneratedKernelExpectationRosterV1>(
                 "marker binding",
             ),
             (
-                actual.generated_host_contract
-                    == expected.generated_host_contract_identity(),
+                actual.generated_host_contract == expected.generated_host_contract_identity(),
                 "generated host contract",
             ),
         ] {
@@ -2237,10 +2229,7 @@ fn validate_roster_decision<R: CompilerGeneratedKernelExpectationRosterV1>(
                 actual.rust_type_layout_contract_sha256,
                 "Rust type/layout contract",
             ),
-            (
-                actual.rust_effect_contract_sha256,
-                "Rust effect contract",
-            ),
+            (actual.rust_effect_contract_sha256, "Rust effect contract"),
         ] {
             if identity == [0; 32] {
                 return Err(
@@ -2315,9 +2304,7 @@ fn validate_roster_decision_proof_inputs<R: CompilerGeneratedKernelExpectationRo
         ),
     ] {
         if !matches {
-            return Err(
-                WorkerV3RosterVerificationDecisionErrorV1::ProofInputMismatch(field),
-            );
+            return Err(WorkerV3RosterVerificationDecisionErrorV1::ProofInputMismatch(field));
         }
     }
     if inputs.receipt_identity() != receipts.proof_binding().identity() {
@@ -2350,9 +2337,18 @@ pub enum WorkerV3RosterVerificationAuthenticationErrorV1<E> {
 pub enum WorkerV3RosterVerificationDecisionErrorV1 {
     IdentityMismatch(&'static str),
     ZeroAuthenticatedIdentity(&'static str),
-    EntryCountMismatch { expected: usize, actual: usize },
-    EntryIdentityMismatch { ordinal: usize, field: &'static str },
-    ZeroEntryAuthenticatedIdentity { ordinal: usize, field: &'static str },
+    EntryCountMismatch {
+        expected: usize,
+        actual: usize,
+    },
+    EntryIdentityMismatch {
+        ordinal: usize,
+        field: &'static str,
+    },
+    ZeroEntryAuthenticatedIdentity {
+        ordinal: usize,
+        field: &'static str,
+    },
     MissingEntrySafetyProperty {
         ordinal: usize,
         property: WorkerV3SafetyPropertyV1,
@@ -2371,7 +2367,10 @@ impl<E: fmt::Display> fmt::Display for WorkerV3RosterVerificationAuthenticationE
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Marker { ordinal, field } => {
-                write!(formatter, "generated roster marker {ordinal} {field} mismatch")
+                write!(
+                    formatter,
+                    "generated roster marker {ordinal} {field} mismatch"
+                )
             }
             Self::UnsupportedGeneratedProfile { ordinal } => write!(
                 formatter,
@@ -2383,8 +2382,12 @@ impl<E: fmt::Display> fmt::Display for WorkerV3RosterVerificationAuthenticationE
                     "Worker V3 roster publication revalidation failed: {error}"
                 )
             }
-            Self::Verifier(error) => write!(formatter, "reviewed V3 roster verifier failed: {error}"),
-            Self::Decision(error) => write!(formatter, "invalid V3 roster verifier decision: {error}"),
+            Self::Verifier(error) => {
+                write!(formatter, "reviewed V3 roster verifier failed: {error}")
+            }
+            Self::Decision(error) => {
+                write!(formatter, "invalid V3 roster verifier decision: {error}")
+            }
         }
     }
 }
@@ -2401,7 +2404,10 @@ impl fmt::Display for WorkerV3RosterVerificationDecisionErrorV1 {
                 "protected roster entry count {actual} differs from expected {expected}",
             ),
             Self::EntryIdentityMismatch { ordinal, field } => {
-                write!(formatter, "protected roster entry {ordinal} {field} mismatch")
+                write!(
+                    formatter,
+                    "protected roster entry {ordinal} {field} mismatch"
+                )
             }
             Self::ZeroEntryAuthenticatedIdentity { ordinal, field } => write!(
                 formatter,
@@ -2422,9 +2428,14 @@ impl fmt::Display for WorkerV3RosterVerificationDecisionErrorV1 {
 impl fmt::Display for WorkerV3RosterEntryErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::MarkerNotInRoster => formatter.write_str("generated marker is not in the authenticated roster"),
+            Self::MarkerNotInRoster => {
+                formatter.write_str("generated marker is not in the authenticated roster")
+            }
             Self::MarkerMismatch { ordinal, field } => {
-                write!(formatter, "authenticated roster marker {ordinal} {field} mismatch")
+                write!(
+                    formatter,
+                    "authenticated roster marker {ordinal} {field} mismatch"
+                )
             }
         }
     }

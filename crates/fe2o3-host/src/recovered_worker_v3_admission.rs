@@ -31,8 +31,7 @@ use crate::{
 };
 
 const WORKER_V3_HOST_LINEAGE_DOMAIN_V1: &[u8] = b"fe2o3.host.worker-v3-lineage.v1\0";
-const WORKER_V3_HOST_ROSTER_LINEAGE_DOMAIN_V1: &[u8] =
-    b"fe2o3.host.worker-v3-roster-lineage.v1\0";
+const WORKER_V3_HOST_ROSTER_LINEAGE_DOMAIN_V1: &[u8] = b"fe2o3.host.worker-v3-roster-lineage.v1\0";
 
 /// Canonical identity of every V3 compiler, publication, descriptor, and selected-kernel axis
 /// independently retained by host admission.
