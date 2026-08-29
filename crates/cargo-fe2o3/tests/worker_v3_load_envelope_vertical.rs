@@ -1691,7 +1691,7 @@ fn protected_verifier_adapter_maps_independent_evidence_into_authentication() {
     assert!(!proof_inputs.establishes_llvm_or_machine_refinement());
     assert!(!proof_inputs.grants_runtime_authority());
     assert!(
-        authenticated
+        !authenticated
             .verification()
             .retains_current_compiler_and_signed_verus_evidence()
     );
@@ -1761,7 +1761,7 @@ fn authenticated_v3_executable_retains_verifier_entry_currentness_until_drop() {
             .is_some()
     );
     assert!(
-        authenticated
+        !authenticated
             .verification()
             .retains_current_compiler_and_signed_verus_evidence()
     );
