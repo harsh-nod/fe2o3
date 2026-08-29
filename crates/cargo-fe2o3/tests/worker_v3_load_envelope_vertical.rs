@@ -540,7 +540,7 @@ where
             [0xd5; 32],
         );
         let proof_inputs = request
-            .validate_compiler_proof_inputs_v3()
+            .validate_compiler_proof_inputs_v4()
             .expect("the integration fixture carries canonical compiler proof inputs");
         // SAFETY: this test-only backend deliberately supplies complete synthetic identities so
         // the sealed adapter's exact mapping and fail-closed validation can be exercised. The
@@ -1682,6 +1682,19 @@ fn protected_verifier_adapter_maps_independent_evidence_into_authentication() {
     )
     .unwrap();
     assert!(authenticated.authenticates_verification_authority());
+    let proof_inputs = authenticated
+        .verification()
+        .validated_compiler_proof_inputs()
+        .expect("the protected adapter retains exact V4 proof inputs");
+    assert!(proof_inputs.authenticates_signed_verus_receipt_under_embedded_key());
+    assert!(!proof_inputs.authenticates_compiler_origin());
+    assert!(!proof_inputs.establishes_llvm_or_machine_refinement());
+    assert!(!proof_inputs.grants_runtime_authority());
+    assert!(
+        authenticated
+            .verification()
+            .retains_current_compiler_and_signed_verus_evidence()
+    );
     assert!(!authenticated.grants_load_authority());
     assert!(!authenticated.grants_launch_authority());
 }
@@ -1745,10 +1758,10 @@ fn authenticated_v3_executable_retains_verifier_entry_currentness_until_drop() {
         authenticated
             .verification()
             .validated_compiler_proof_inputs()
-            .is_none()
+            .is_some()
     );
     assert!(
-        !authenticated
+        authenticated
             .verification()
             .retains_current_compiler_and_signed_verus_evidence()
     );

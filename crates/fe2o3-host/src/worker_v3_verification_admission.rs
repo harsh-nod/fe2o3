@@ -367,12 +367,13 @@ pub unsafe trait WorkerV3VerifierV1<K: CompilerGeneratedKernelExpectationV1>:
 /// Independently authenticated result returned by a protected verifier backend.
 ///
 /// This value is consumed only by [`WorkerV3ProtectedVerifierAdapterV1`]. It carries the
+/// move-only V4 proof inputs, including the imported signed aggregate Verus evidence, plus the
 /// identities and universally quantified safety properties that cannot be derived by host
 /// admission. The sealed adapter supplies every request-coordinate field directly from the exact
 /// pinned host request and the existing promotion boundary compares the complete decision again.
 pub struct WorkerV3ProtectedVerificationEvidenceV1 {
     compiler_execution: WorkerV3CompilerExecutionVerificationV1,
-    proof_inputs: ValidatedCompilerProofInputsV3,
+    proof_inputs: ValidatedCompilerProofInputsV4,
     verifier_measurement_sha256: [u8; 32],
     verification_transcript_sha256: [u8; 32],
     proof_executable_binding_sha256: [u8; 32],
@@ -393,7 +394,7 @@ impl WorkerV3ProtectedVerificationEvidenceV1 {
     #[allow(clippy::too_many_arguments)]
     pub const unsafe fn new(
         compiler_execution: WorkerV3CompilerExecutionVerificationV1,
-        proof_inputs: ValidatedCompilerProofInputsV3,
+        proof_inputs: ValidatedCompilerProofInputsV4,
         verifier_measurement_sha256: [u8; 32],
         verification_transcript_sha256: [u8; 32],
         proof_executable_binding_sha256: [u8; 32],
