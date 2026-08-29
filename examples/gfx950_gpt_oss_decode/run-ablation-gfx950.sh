@@ -35,7 +35,7 @@ if [[ $GPU != 5 && $GPU != 6 ]]; then
 fi
 export ROCR_VISIBLE_DEVICES=$GPU
 unset HIP_VISIBLE_DEVICES
-TARGET_DIR=${CARGO_TARGET_DIR:-/home/harmenon/fe2o3-ablation-target}
+TARGET_DIR=${CARGO_TARGET_DIR:-$REPO_ROOT/target}
 if [[ $TARGET_DIR != /* ]]; then
     printf 'CARGO_TARGET_DIR must be absolute\n' >&2
     exit 2

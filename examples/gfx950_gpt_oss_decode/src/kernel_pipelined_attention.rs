@@ -63,6 +63,7 @@ pub fn gfx950_gpt_oss_120b_decode_megakernel_v1(
 
     let index = thread::index_1d();
     let lane_index = index.get();
+    let pipeline_lane = lane_index % 64;
     let lane = WaveLane::<Wave64>::current();
     let subgroup = Gfx950Subgroup::current();
 
@@ -215,67 +216,67 @@ pub fn gfx950_gpt_oss_120b_decode_megakernel_v1(
         WorkgroupPipeline::<Bf16MfmaBFragment<'_>, 2, 64, 1>::current(&mut pipeline_scope);
 
     query_pipeline.stage(0);
-    query_pipeline.write(0, lane_index, query.load_m16k16(&lane, 0, 0));
+    query_pipeline.write(0, pipeline_lane, query.load_m16k16(&lane, 0, 0));
     query_pipeline.commit(0);
     key_pipeline.stage(0);
-    key_pipeline.write(0, lane_index, key.load_k16n16(&lane, 0, 0));
+    key_pipeline.write(0, pipeline_lane, key.load_k16n16(&lane, 0, 0));
     key_pipeline.commit(0);
     query_pipeline.stage(1);
-    query_pipeline.write(1, lane_index, query.load_m16k16(&lane, 0, 16));
+    query_pipeline.write(1, pipeline_lane, query.load_m16k16(&lane, 0, 16));
     query_pipeline.commit(1);
     key_pipeline.stage(1);
-    key_pipeline.write(1, lane_index, key.load_k16n16(&lane, 16, 0));
+    key_pipeline.write(1, pipeline_lane, key.load_k16n16(&lane, 16, 0));
     key_pipeline.commit(1);
 
     let scores = F32AccumulatorFragment::zero(&lane);
     query_pipeline.wait(0);
     query_pipeline.consume(0);
-    let query_fragment = query_pipeline.read(0, lane_index);
+    let query_fragment = query_pipeline.read(0, pipeline_lane);
     key_pipeline.wait(0);
     key_pipeline.consume(0);
-    let key_fragment = key_pipeline.read(0, lane_index);
+    let key_fragment = key_pipeline.read(0, pipeline_lane);
     let scores = matrix.multiply_accumulate(query_fragment, key_fragment, scores);
     query_pipeline.release(0);
     key_pipeline.release(0);
 
     query_pipeline.stage(2);
-    query_pipeline.write(2, lane_index, query.load_m16k16(&lane, 0, 32));
+    query_pipeline.write(2, pipeline_lane, query.load_m16k16(&lane, 0, 32));
     query_pipeline.commit(2);
     key_pipeline.stage(2);
-    key_pipeline.write(2, lane_index, key.load_k16n16(&lane, 32, 0));
+    key_pipeline.write(2, pipeline_lane, key.load_k16n16(&lane, 32, 0));
     key_pipeline.commit(2);
     query_pipeline.wait(1);
     query_pipeline.consume(1);
-    let query_fragment = query_pipeline.read(1, lane_index);
+    let query_fragment = query_pipeline.read(1, pipeline_lane);
     key_pipeline.wait(1);
     key_pipeline.consume(1);
-    let key_fragment = key_pipeline.read(1, lane_index);
+    let key_fragment = key_pipeline.read(1, pipeline_lane);
     let scores = matrix.multiply_accumulate(query_fragment, key_fragment, scores);
     query_pipeline.release(1);
     key_pipeline.release(1);
 
     query_pipeline.stage(3);
-    query_pipeline.write(3, lane_index, query.load_m16k16(&lane, 0, 48));
+    query_pipeline.write(3, pipeline_lane, query.load_m16k16(&lane, 0, 48));
     query_pipeline.commit(3);
     key_pipeline.stage(3);
-    key_pipeline.write(3, lane_index, key.load_k16n16(&lane, 48, 0));
+    key_pipeline.write(3, pipeline_lane, key.load_k16n16(&lane, 48, 0));
     key_pipeline.commit(3);
     query_pipeline.wait(2);
     query_pipeline.consume(2);
-    let query_fragment = query_pipeline.read(2, lane_index);
+    let query_fragment = query_pipeline.read(2, pipeline_lane);
     key_pipeline.wait(2);
     key_pipeline.consume(2);
-    let key_fragment = key_pipeline.read(2, lane_index);
+    let key_fragment = key_pipeline.read(2, pipeline_lane);
     let scores = matrix.multiply_accumulate(query_fragment, key_fragment, scores);
     query_pipeline.release(2);
     key_pipeline.release(2);
 
     query_pipeline.wait(3);
     query_pipeline.consume(3);
-    let query_fragment = query_pipeline.read(3, lane_index);
+    let query_fragment = query_pipeline.read(3, pipeline_lane);
     key_pipeline.wait(3);
     key_pipeline.consume(3);
-    let key_fragment = key_pipeline.read(3, lane_index);
+    let key_fragment = key_pipeline.read(3, pipeline_lane);
     let scores = matrix
         .multiply_accumulate(query_fragment, key_fragment, scores)
         .into_values();
