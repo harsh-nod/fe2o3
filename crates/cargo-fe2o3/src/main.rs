@@ -28,6 +28,7 @@ mod pinned_executable;
 mod pinned_executable_test_directory;
 mod process_execution;
 mod production_cargo_plan;
+mod profile_command;
 mod project;
 mod protected_compiler_handoff_v3;
 #[path = "rustc_runtime.rs"]
@@ -187,6 +188,9 @@ fn main() -> ExitCode {
         Some("debug") => with_utf8_args(&rest, |args| {
             tool_report(tool_commands::command(tool_commands::Mode::Debug, args))
         }),
+        Some("profile") => {
+            with_utf8_args(&rest, |args| profile_report(profile_command::command(args)))
+        }
         Some("help" | "--help" | "-h") => {
             print_help();
             ExitCode::SUCCESS
@@ -232,6 +236,23 @@ fn report(result: Result<String, String>) -> ExitCode {
 }
 
 fn tool_report(result: Result<tool_commands::CommandReport, String>) -> ExitCode {
+    match result {
+        Ok(report) => {
+            println!("{}", report.output());
+            if report.succeeded() {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
+            }
+        }
+        Err(error) => {
+            eprintln!("{error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn profile_report(result: Result<profile_command::CommandReport, String>) -> ExitCode {
     match result {
         Ok(report) => {
             println!("{}", report.output());
@@ -3527,7 +3548,7 @@ fn is_gfx_target(candidate: &str) -> bool {
 
 fn print_help() {
     eprintln!(
-        "usage: cargo fe2o3 <command>\n\ncommands:\n  authority release   run an authority build through the protected self-launch boundary\n  doctor              check ROCm/HIP toolchain discovery\n  check               check host targets with compiler-derived binding only\n  test --all-targets  run trusted binding-only host tests; no artifact/GPU authority\n  build               build with the fe2o3 rustc backend\n  run                 run with the fe2o3 rustc backend\n  examples            validate or query the example regression manifest\n  clean [--dry-run]   remove guarded fe2o3-owned target artifacts\n  inspect             inspect bounded artifact or HSACO metadata without execution\n  sanitize            plan or execute bounded ROCgdb precise-memory diagnostics\n  debug               plan or execute bounded batch/interactive ROCgdb sessions",
+        "usage: cargo fe2o3 <command>\n\ncommands:\n  authority release   run an authority build through the protected self-launch boundary\n  doctor              check ROCm/HIP toolchain discovery\n  check               check host targets with compiler-derived binding only\n  test --all-targets  run trusted binding-only host tests; no artifact/GPU authority\n  build               build with the fe2o3 rustc backend\n  run                 run with the fe2o3 rustc backend\n  examples            validate or query the example regression manifest\n  clean [--dry-run]   remove guarded fe2o3-owned target artifacts\n  inspect             inspect bounded artifact or HSACO metadata without execution\n  sanitize            plan or execute bounded ROCgdb precise-memory diagnostics\n  debug               plan or execute bounded batch/interactive ROCgdb sessions\n  profile             plan or authorize bounded rocprofv3 collection",
     );
 }
 
@@ -3572,6 +3593,7 @@ mod tests {
             "inspect",
             "sanitize",
             "debug",
+            "profile",
         ] {
             let direct = vec![OsString::from(command), OsString::from("argument")];
             let cargo = vec![

@@ -183,6 +183,59 @@ compiler, refinement-proof, artifact, runtime, performance-prediction, or GPU
 authority. It does not initialize HIP, HSA, KFD, DRM, or a GPU. Unsupported KIR
 types or operations fail closed.
 
+### Bounded rocprofv3 profiling
+
+`cargo fe2o3 profile` is dry-run only unless collection is separately and
+exactly authorized. A plan measures the exact `rocprofv3` script, native
+Python interpreter, installed ROCProfiler SDK tool
+and core libraries where they use the reviewed ROCm layout, the native target
+ELF, the fixed semantic collector configuration, the cleared and bounded
+environment, and stable device records read directly from KFD sysfs topology.
+The semantic configuration identity excludes output routing and target launch
+authority so independently routed captures remain comparable; the collection
+authorization binds both. Planning creates no output directory and executes
+neither collector nor target. Collection requires `--collect` together with
+the exact lowercase digest printed as `collection-authorization`:
+
+```console
+cargo fe2o3 profile --kind dispatch-json \
+  --output-dir /absolute/new/profile-output -- /absolute/target argument
+cargo fe2o3 profile --kind dispatch-json \
+  --output-dir /absolute/new/profile-output \
+  --collect --authorize-collection <plan-sha256> -- /absolute/target argument
+```
+
+The output directory must be new. The collector receives the target as an
+exact argument vector without a shell, under a fixed timeout and stdout,
+stderr, file-count, depth, and total-storage policy. The orchestrator creates
+the directory with mode `0700`, retains an ownership guard, rejects symbolic
+links and non-regular artifacts, records deterministic content identities,
+and removes its owned directory after spawn, timeout, output, collector, or
+artifact-validation failure. Successful collection retains
+`fe2o3-profile-manifest-v1.txt` plus the bounded collector artifacts.
+
+`--kir-sha256`, `--kir-len`, and `--wave-width` make the dry run print the
+exact `fe2o3-profiler-import` Bundle V4 argument vector. ATT import is deferred
+until every manifest-relative artifact has been content-bound. The resulting
+Bundle V4 is queried with `fe2o3-profiler-query`.
+
+The orchestrator itself has no HIP or HSA runtime dependency. `rocprofv3`
+injects ROCProfiler SDK into the target, however, and its installed option
+surface does not prove that it can observe dispatches submitted directly via
+KFD. The plan identifies the four direct collector entry objects above but
+labels their transitive dynamic-library closure unavailable; it does not call
+that record an authenticated complete installation closure. Collector success
+and JSON/CSV/ATT-looking filenames remain explicitly unvalidated. Only
+successful Bundle V4 import establishes the corresponding profiler record
+shape; it does not grant compiler, runtime, or performance authority.
+
+Generic CI runs the parser, planning, authorization, path-substitution,
+bounded-output, cleanup, and fake-collector tests without discovering or
+executing a host `rocprofv3`. Real GPU collection is intentionally excluded
+from pull-request CI. It requires an operator-selected target, a new private
+output path, and the plan-bound collection authorization on a protected GPU
+runner.
+
 Deletion guards are structural accident and substitution defenses, not
 authentication. Their random tokens correlate an interrupted creation with
 the directory completed by that operation, but every record is stored inside
