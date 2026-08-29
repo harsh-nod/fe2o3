@@ -100,6 +100,41 @@ impl CompilerExecutionExternalAnchorSigningKeyCapabilityV1 {
         Ok(admitted)
     }
 
+    /// Reissues a root-provisioned template into current service-owned key custody.
+    ///
+    /// The source must remain an anonymous root-owned read-only canonical key image. The caller
+    /// must already have the exact dedicated UID/GID named by `deployment`; the returned memfd is
+    /// created under those credentials. Transient seed bytes are zeroized on every return path.
+    pub fn reissue_root_template_for_current_service(
+        image: File,
+        deployment: &CompilerExecutionExternalAnchorDeploymentV1,
+    ) -> Result<Self, String> {
+        Self::reissue_template_for_current_service(image, deployment, 0, 0)
+    }
+
+    fn reissue_template_for_current_service(
+        image: File,
+        deployment: &CompilerExecutionExternalAnchorDeploymentV1,
+        template_uid: u32,
+        template_gid: u32,
+    ) -> Result<Self, String> {
+        let service = deployment.service();
+        if rustix::process::geteuid().as_raw() != service.uid()
+            || rustix::process::getegid().as_raw() != service.gid()
+        {
+            return Err(
+                "external-anchor key reissue process does not have deployment credentials".into(),
+            );
+        }
+        let image = SealedCapabilityImage::from_file(image, ROLE, LENGTH)?;
+        validate_template_image(&image, template_uid, template_gid)?;
+        let key = read_key(&image, deployment)?;
+        let mut seed = key.to_bytes();
+        drop(key);
+        drop(image);
+        Self::create_and_zeroize(&mut seed, deployment)
+    }
+
     /// Admits and privately retains the key inherited at the canonical descriptor.
     pub fn from_inherited(
         deployment: &CompilerExecutionExternalAnchorDeploymentV1,
@@ -261,6 +296,31 @@ fn validate_secret_image(image: &SealedCapabilityImage) -> Result<(), String> {
     Ok(())
 }
 
+fn validate_template_image(
+    image: &SealedCapabilityImage,
+    expected_uid: u32,
+    expected_gid: u32,
+) -> Result<(), String> {
+    let descriptor = image.try_clone_for_transfer()?;
+    let metadata = descriptor
+        .metadata()
+        .map_err(|error| format!("cannot inspect {} template ownership: {error}", ROLE.name))?;
+    let status = rustix::fs::fcntl_getfl(&descriptor)
+        .map_err(|error| format!("cannot inspect {} template access: {error}", ROLE.name))?;
+    if metadata.nlink() != 0
+        || metadata.uid() != expected_uid
+        || metadata.gid() != expected_gid
+        || status & OFlags::ACCMODE != OFlags::RDONLY
+        || status.contains(OFlags::PATH)
+    {
+        return Err(format!(
+            "{} is not an anonymous trusted-owner read-only template",
+            ROLE.name
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -295,6 +355,40 @@ mod tests {
             1001,
             1002,
             CompilerExecutionExternalAnchorServiceIdentityV1::new(service_uid, 1004).unwrap(),
+            CompilerExecutionIssuerMeasurementV1::new([0x55; 32], 16384).unwrap(),
+            &policy,
+        )
+        .unwrap();
+        CompilerExecutionExternalAnchorDeploymentV1::new(
+            &supervisor,
+            &policy,
+            CompilerExecutionIssuerMeasurementV1::new([0x66; 32], 32768).unwrap(),
+        )
+        .unwrap()
+    }
+
+    fn current_service_deployment(anchor_seed: u8) -> CompilerExecutionExternalAnchorDeploymentV1 {
+        let service_uid = rustix::process::geteuid().as_raw();
+        let service_gid = rustix::process::getegid().as_raw();
+        let policy = CompilerExecutionIssuerPolicyV1::new(
+            7,
+            CompilerExecutionIssuerMeasurementV1::new([0x11; 32], 4096).unwrap(),
+            CompilerExecutionIssuerMeasurementV1::new([0x22; 32], 8192).unwrap(),
+            SigningKey::from_bytes(&[0x33; 32])
+                .verifying_key()
+                .to_bytes(),
+            SigningKey::from_bytes(&[anchor_seed; 32])
+                .verifying_key()
+                .to_bytes(),
+        )
+        .unwrap();
+        let service =
+            CompilerExecutionExternalAnchorServiceIdentityV1::new(service_uid, service_gid)
+                .unwrap();
+        let supervisor = CompilerExecutionSupervisorDeploymentV1::new(
+            if service_uid == 1 { 2 } else { 1 },
+            if service_gid == 1 { 2 } else { 1 },
+            service,
             CompilerExecutionIssuerMeasurementV1::new([0x55; 32], 16384).unwrap(),
             &policy,
         )
@@ -353,6 +447,40 @@ mod tests {
         .unwrap();
         let key = recovered.into_signing_key(&expected).unwrap();
         assert_eq!(key.verifying_key().as_bytes(), expected.verifying_key());
+    }
+
+    #[test]
+    fn trusted_template_reissues_under_exact_current_service_credentials() {
+        if rustix::process::geteuid().is_root() || rustix::process::getegid().is_root() {
+            return;
+        }
+        let expected = current_service_deployment(7);
+        let mut seed = [7; KEY_BYTES];
+        let template = CompilerExecutionExternalAnchorSigningKeyCapabilityV1::create_and_zeroize(
+            &mut seed, &expected,
+        )
+        .unwrap();
+        let current_uid = rustix::process::geteuid().as_raw();
+        let current_gid = rustix::process::getegid().as_raw();
+        let reissued = CompilerExecutionExternalAnchorSigningKeyCapabilityV1::reissue_template_for_current_service(
+            template.try_clone_for_transfer().unwrap(),
+            &expected,
+            current_uid,
+            current_gid,
+        )
+        .unwrap();
+        reissued.revalidate(&expected).unwrap();
+        assert_eq!(reissued.verifying_key(), *expected.verifying_key());
+
+        assert!(
+            CompilerExecutionExternalAnchorSigningKeyCapabilityV1::reissue_template_for_current_service(
+                template.try_clone_for_transfer().unwrap(),
+                &expected,
+                current_uid.wrapping_add(1),
+                current_gid,
+            )
+            .is_err()
+        );
     }
 
     #[test]
