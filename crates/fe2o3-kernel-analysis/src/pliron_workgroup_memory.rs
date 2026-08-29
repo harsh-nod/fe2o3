@@ -1,21 +1,33 @@
 //! Workgroup-memory initialization, publication, and race verification.
 
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     fmt,
 };
 
-use dialect_gpu::{AddressSpaceAttr, HierarchyAttr, MemoryOrderAttr, MemoryScopeAttr};
-use dialect_kernel::{
-    AccessKindAttr, AllocationEffectOp, MemorySpaceAttr, PipelineCreateOp, RankedAccessOp,
-    RankedViewOp, is_supported_allocation_effect_contract_v1,
+use dialect_gpu::{
+    AddressSpaceAttr, BarrierOp, ExecutionDomainAttr, HierarchyAttr, MemoryOrderAttr,
+    MemoryScopeAttr,
 };
-use pliron::{builtin::ops::FuncOp, context::Context, operation::Operation, value::Value};
+use dialect_kernel::{
+    AccessKindAttr, AllocationEffectOp, AnalysisSplitOp, BranchArgsOp, BranchOp,
+    IndexEqualBranchArgsOp, IndexEqualBranchOp, IndexLessThanBranchArgsOp, IndexLessThanBranchOp,
+    MemorySpaceAttr, PipelineCreateOp, RankedAccessOp, RankedViewOp, ReturnOp, TrapOp,
+    is_supported_allocation_effect_contract_v1,
+};
+use pliron::{
+    basic_block::BasicBlock,
+    builtin::ops::FuncOp,
+    context::{Context, Ptr},
+    operation::Operation,
+    value::Value,
+};
 
 use crate::pliron_analysis_manager::{PlironAnalysisManagerV1, PlironMemoryOrderAnalysisFailureV1};
 use crate::pliron_barrier::run_pliron_barrier_convergence_check_with_analyses_v1;
+use crate::pliron_function_inventory::BoundedPlironFunctionInventoryV1;
 use crate::pliron_invocation_trace::{
-    PlironInvocationTraceV1, PlironTraceEventV1, PlironTraceLocationV1,
+    PlironTraceLocationV1, pliron_execution_layout_with_inventory_v1,
 };
 use crate::pliron_memory_order::{PlironMemoryOrderFailureV1, PlironMemoryOrderIssueV1};
 use crate::pliron_pipeline_protocol::run_pliron_pipeline_protocol_check_with_analyses_v1;
@@ -240,18 +252,36 @@ pub(crate) fn run_pliron_workgroup_memory_check_with_analyses_v1(
             },
         );
     if !collective_effect_sites.is_empty() {
-        analyses.prepare_exact_trace(context, function);
-        let traces = match analyses.exact_trace() {
-            Ok(traces) => traces,
+        let layout = match pliron_execution_layout_with_inventory_v1(context, &inventory) {
+            Ok(Some(layout)) => layout,
+            Ok(None) => {
+                return one(PlironWorkgroupMemoryFindingV1::AnalysisIncomplete {
+                    detail: "the collective transpose lifecycle has no execution layout".to_owned(),
+                });
+            }
             Err(failure) => {
                 return one(PlironWorkgroupMemoryFindingV1::AnalysisIncomplete {
                     detail: trace_failure_detail(failure),
                 });
             }
         };
-        if let Err(detail) =
-            validate_collective_transpose_lifecycle_v1(traces, &collective_effect_sites)
+        let workgroup_size = layout
+            .workgroup_extents
+            .into_iter()
+            .try_fold(1_u64, u64::checked_mul);
+        if workgroup_size != Some(64)
+            || layout.subgroup_size != 64
+            || layout.execution_domain != ExecutionDomainAttr::FullPhysicalWorkgroups
         {
+            return one(PlironWorkgroupMemoryFindingV1::AnalysisIncomplete {
+                detail: "the coordinate-free gfx950 transpose tile requires one full physical Wave64 per workgroup".to_owned(),
+            });
+        }
+        if let Err(detail) = validate_collective_transpose_lifecycle_v1(
+            context,
+            &inventory,
+            &collective_effect_sites,
+        ) {
             return one(PlironWorkgroupMemoryFindingV1::AnalysisIncomplete { detail });
         }
     }
@@ -345,192 +375,306 @@ pub(crate) fn run_pliron_workgroup_memory_check_with_analyses_v1(
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum CollectiveTransposePhaseV1 {
-    Staged,
-    Published,
+enum CollectiveTransposePathEventV1 {
+    Allocation {
+        location: PlironTraceLocationV1,
+        access: AccessKindAttr,
+        allocation_origin: u64,
+        noalias_class: u64,
+    },
+    Barrier {
+        location: PlironTraceLocationV1,
+        execution_scope: HierarchyAttr,
+        memory_scope: MemoryScopeAttr,
+        address_space: AddressSpaceAttr,
+        order: MemoryOrderAttr,
+    },
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct CollectiveTransposeEventV1 {
-    location: PlironTraceLocationV1,
-    access: AccessKindAttr,
-    allocation_origin: u64,
-    noalias_class: u64,
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct CollectiveTransposePathSummaryV1 {
+    normal: Option<Vec<CollectiveTransposePathEventV1>>,
+    trapped_prefix: Option<Vec<CollectiveTransposePathEventV1>>,
 }
 
-fn collective_trace_v1(trace: &PlironInvocationTraceV1) -> Vec<CollectiveTransposeEventV1> {
-    trace
-        .events
-        .iter()
-        .filter_map(|event| {
-            let PlironTraceEventV1::CollectiveAllocation {
-                location,
+fn prepend_collective_path_v1(
+    local: &[CollectiveTransposePathEventV1],
+    summary: CollectiveTransposePathSummaryV1,
+) -> CollectiveTransposePathSummaryV1 {
+    let prepend = |mut suffix: Vec<CollectiveTransposePathEventV1>| {
+        let mut trace = Vec::with_capacity(local.len().saturating_add(suffix.len()));
+        trace.extend_from_slice(local);
+        trace.append(&mut suffix);
+        trace
+    };
+    CollectiveTransposePathSummaryV1 {
+        normal: summary.normal.map(&prepend),
+        trapped_prefix: summary.trapped_prefix.map(prepend),
+    }
+}
+
+fn merge_collective_path_v1(
+    complete: &mut CollectiveTransposePathSummaryV1,
+    candidate: CollectiveTransposePathSummaryV1,
+) -> Result<(), String> {
+    if let Some(candidate_normal) = candidate.normal {
+        if let Some(first_normal) = &complete.normal
+            && first_normal != &candidate_normal
+        {
+            return Err("normal paths have different collective transpose traces".to_owned());
+        }
+        complete.normal = Some(candidate_normal);
+    }
+    if let Some(candidate_trap) = candidate.trapped_prefix {
+        match &complete.trapped_prefix {
+            Some(first_trap) if first_trap.starts_with(&candidate_trap) => {}
+            Some(first_trap) if candidate_trap.starts_with(first_trap) => {
+                complete.trapped_prefix = Some(candidate_trap);
+            }
+            Some(_) => {
+                return Err(
+                    "terminal trap paths have incompatible collective transpose prefixes"
+                        .to_owned(),
+                );
+            }
+            None => complete.trapped_prefix = Some(candidate_trap),
+        }
+    }
+    if let (Some(normal), Some(trapped_prefix)) = (&complete.normal, &complete.trapped_prefix)
+        && !normal.starts_with(trapped_prefix)
+    {
+        return Err(
+            "a terminal trap path is not a prefix of the normal collective transpose trace"
+                .to_owned(),
+        );
+    }
+    Ok(())
+}
+
+fn collective_block_events_v1(
+    context: &Context,
+    inventory: &BoundedPlironFunctionInventoryV1,
+    block: usize,
+    terminator: Ptr<Operation>,
+) -> Result<Vec<CollectiveTransposePathEventV1>, String> {
+    let mut events = Vec::new();
+    for site in inventory.block_operations(block) {
+        if site.pointer() == terminator {
+            continue;
+        }
+        let operation = Operation::get_op_dyn(site.pointer(), context);
+        if let Some(effect) = operation.downcast_ref::<AllocationEffectOp>()
+            && effect.memory_space(context) == Some(MemorySpaceAttr::Workgroup)
+        {
+            let (Some(access), Some(allocation_origin), Some(noalias_class)) = (
+                effect.kind(context),
+                effect.allocation_origin(context),
+                effect.noalias_class(context),
+            ) else {
+                return Err(format!(
+                    "block {block} op {} has a malformed collective transpose effect",
+                    site.operation()
+                ));
+            };
+            if !is_supported_allocation_effect_contract_v1(
                 access,
-                memory_space: MemorySpaceAttr::Workgroup,
+                MemorySpaceAttr::Workgroup,
                 allocation_origin,
                 noalias_class,
-            } = event
-            else {
-                return None;
+            ) {
+                return Err(format!(
+                    "block {block} op {} uses a non-reserved collective transpose identity",
+                    site.operation()
+                ));
+            }
+            events.push(CollectiveTransposePathEventV1::Allocation {
+                location: PlironTraceLocationV1 {
+                    block,
+                    operation: site.operation(),
+                },
+                access,
+                allocation_origin,
+                noalias_class,
+            });
+        } else if let Some(barrier) = operation.downcast_ref::<BarrierOp>() {
+            let (Some(execution_scope), Some(memory_scope), Some(address_space), Some(order)) = (
+                barrier.execution_scope(context),
+                barrier.memory_scope(context),
+                barrier.address_space(context),
+                barrier.order(context),
+            ) else {
+                return Err(format!(
+                    "block {block} op {} has a malformed collective transpose barrier",
+                    site.operation()
+                ));
             };
-            Some(CollectiveTransposeEventV1 {
-                location: *location,
-                access: *access,
-                allocation_origin: *allocation_origin,
-                noalias_class: *noalias_class,
-            })
-        })
-        .collect()
+            events.push(CollectiveTransposePathEventV1::Barrier {
+                location: PlironTraceLocationV1 {
+                    block,
+                    operation: site.operation(),
+                },
+                execution_scope,
+                memory_scope,
+                address_space,
+                order,
+            });
+        }
+    }
+    Ok(events)
 }
 
 fn validate_collective_transpose_lifecycle_v1(
-    traces: &[PlironInvocationTraceV1],
+    context: &Context,
+    inventory: &BoundedPlironFunctionInventoryV1,
     expected_sites: &HashSet<PlironTraceLocationV1>,
 ) -> Result<(), String> {
-    let mut workgroups = BTreeMap::<(u64, u64), Vec<&PlironInvocationTraceV1>>::new();
-    for trace in traces {
-        workgroups
-            .entry((trace.grid, trace.workgroup))
-            .or_default()
-            .push(trace);
-    }
-    if workgroups.is_empty() {
-        return Err("the collective transpose lifecycle has no exact invocation traces".to_owned());
-    }
+    let blocks = inventory.blocks();
+    let block_indices = blocks
+        .iter()
+        .enumerate()
+        .map(|(index, block)| (*block, index))
+        .collect::<HashMap<Ptr<BasicBlock>, usize>>();
+    let mut successors = vec![Vec::new(); blocks.len()];
+    let mut predecessors = vec![Vec::new(); blocks.len()];
+    let mut local_events = Vec::with_capacity(blocks.len());
+    let mut terminal_kinds = vec![0_u8; blocks.len()];
 
-    for ((grid, workgroup), group) in workgroups {
-        let lanes = group.iter().map(|trace| trace.lane).collect::<HashSet<_>>();
-        let subgroups = group
-            .iter()
-            .map(|trace| trace.subgroup)
-            .collect::<HashSet<_>>();
-        if group.len() != 64
-            || lanes.len() != 64
-            || lanes.iter().any(|lane| *lane >= 64)
-            || subgroups.len() != 1
+    for (block_index, block) in blocks.iter().copied().enumerate() {
+        let terminator = block
+            .deref(context)
+            .get_terminator(context)
+            .ok_or_else(|| format!("block {block_index} has no terminator"))?;
+        local_events.push(collective_block_events_v1(
+            context,
+            inventory,
+            block_index,
+            terminator,
+        )?);
+        let terminator_op = Operation::get_op_dyn(terminator, context);
+        let raw = terminator_op.get_operation().deref(context);
+        if terminator_op.downcast_ref::<ReturnOp>().is_some() {
+            terminal_kinds[block_index] = 1;
+        } else if terminator_op.downcast_ref::<TrapOp>().is_some() {
+            terminal_kinds[block_index] = 2;
+        } else if terminator_op.downcast_ref::<BranchOp>().is_some()
+            || terminator_op.downcast_ref::<BranchArgsOp>().is_some()
+            || terminator_op
+                .downcast_ref::<IndexLessThanBranchOp>()
+                .is_some()
+            || terminator_op
+                .downcast_ref::<IndexLessThanBranchArgsOp>()
+                .is_some()
+            || terminator_op.downcast_ref::<IndexEqualBranchOp>().is_some()
+            || terminator_op
+                .downcast_ref::<IndexEqualBranchArgsOp>()
+                .is_some()
+            || terminator_op.downcast_ref::<AnalysisSplitOp>().is_some()
         {
+            for successor in raw.successors() {
+                let target = block_indices.get(&successor).copied().ok_or_else(|| {
+                    format!("block {block_index} targets a block outside the kernel")
+                })?;
+                successors[block_index].push(target);
+                predecessors[target].push(block_index);
+            }
+            if successors[block_index].is_empty() {
+                return Err(format!("block {block_index} has no CFG successor"));
+            }
+        } else {
             return Err(format!(
-                "grid {grid} workgroup {workgroup} does not execute one full physical Wave64 for the coordinate-free gfx950 transpose tile"
+                "block {block_index} has an unsupported collective transpose terminator"
             ));
         }
+    }
 
-        let expected_trace = collective_trace_v1(group[0]);
-        let observed_sites = expected_trace
-            .iter()
-            .map(|event| event.location)
-            .collect::<HashSet<_>>();
-        if observed_sites != *expected_sites || expected_trace.len() != expected_sites.len() {
-            return Err(format!(
-                "grid {grid} workgroup {workgroup} does not execute every collective transpose effect exactly once"
-            ));
-        }
-        for trace in &group[1..] {
-            if collective_trace_v1(trace) != expected_trace {
-                return Err(format!(
-                    "grid {grid} workgroup {workgroup} has a lane-divergent collective transpose effect trace"
-                ));
+    let mut remaining = successors.iter().map(Vec::len).collect::<Vec<_>>();
+    let mut summaries = vec![None; blocks.len()];
+    let mut ready = VecDeque::new();
+    for block in 0..blocks.len() {
+        match terminal_kinds[block] {
+            1 => {
+                summaries[block] = Some(CollectiveTransposePathSummaryV1 {
+                    normal: Some(local_events[block].clone()),
+                    trapped_prefix: None,
+                });
+                ready.push_back(block);
             }
+            2 => {
+                summaries[block] = Some(CollectiveTransposePathSummaryV1 {
+                    normal: None,
+                    trapped_prefix: Some(local_events[block].clone()),
+                });
+                ready.push_back(block);
+            }
+            _ => {}
         }
+    }
+    while let Some(completed) = ready.pop_front() {
+        for predecessor in predecessors[completed].iter().copied() {
+            remaining[predecessor] = remaining[predecessor]
+                .checked_sub(1)
+                .ok_or_else(|| "collective transpose CFG accounting underflowed".to_owned())?;
+            if remaining[predecessor] != 0 {
+                continue;
+            }
+            let mut summary = CollectiveTransposePathSummaryV1::default();
+            for successor in successors[predecessor].iter().copied() {
+                let suffix = summaries[successor].clone().ok_or_else(|| {
+                    format!("block {predecessor} has an unresolved cyclic CFG successor")
+                })?;
+                merge_collective_path_v1(
+                    &mut summary,
+                    prepend_collective_path_v1(&local_events[predecessor], suffix),
+                )?;
+            }
+            summaries[predecessor] = Some(summary);
+            ready.push_back(predecessor);
+        }
+    }
 
-        for trace in group {
-            let mut phases = HashMap::<(u64, u64), CollectiveTransposePhaseV1>::new();
-            for event in &trace.events {
-                match event {
-                    PlironTraceEventV1::CollectiveAllocation {
-                        location,
-                        access: AccessKindAttr::Write,
-                        memory_space: MemorySpaceAttr::Workgroup,
-                        allocation_origin,
-                        noalias_class,
-                    } => {
-                        if !is_supported_allocation_effect_contract_v1(
-                            AccessKindAttr::Write,
-                            MemorySpaceAttr::Workgroup,
-                            *allocation_origin,
-                            *noalias_class,
-                        ) {
-                            return Err(format!(
-                                "invocation {:?} block {} op {} uses a non-reserved collective transpose identity",
-                                trace.invocation, location.block, location.operation
-                            ));
-                        }
-                        if !phases.is_empty() {
-                            return Err(format!(
-                                "invocation {:?} block {} op {} interleaves or duplicates a collective transpose stage",
-                                trace.invocation, location.block, location.operation
-                            ));
-                        }
-                        phases.insert(
-                            (*allocation_origin, *noalias_class),
-                            CollectiveTransposePhaseV1::Staged,
-                        );
-                    }
-                    PlironTraceEventV1::Barrier {
-                        execution_scope: HierarchyAttr::Workgroup,
-                        memory_scope: MemoryScopeAttr::Workgroup,
-                        address_space: AddressSpaceAttr::Workgroup,
-                        order: MemoryOrderAttr::AcquireRelease,
-                        ..
-                    } => {
-                        if phases
-                            .values()
-                            .any(|phase| *phase == CollectiveTransposePhaseV1::Published)
-                        {
-                            return Err(format!(
-                                "invocation {:?} crosses a duplicate collective transpose publication barrier",
-                                trace.invocation
-                            ));
-                        }
-                        for phase in phases.values_mut() {
-                            if *phase == CollectiveTransposePhaseV1::Staged {
-                                *phase = CollectiveTransposePhaseV1::Published;
-                            }
-                        }
-                    }
-                    PlironTraceEventV1::CollectiveAllocation {
-                        location,
-                        access: AccessKindAttr::Read,
-                        memory_space: MemorySpaceAttr::Workgroup,
-                        allocation_origin,
-                        noalias_class,
-                    } => {
-                        if !is_supported_allocation_effect_contract_v1(
-                            AccessKindAttr::Read,
-                            MemorySpaceAttr::Workgroup,
-                            *allocation_origin,
-                            *noalias_class,
-                        ) {
-                            return Err(format!(
-                                "invocation {:?} block {} op {} uses a non-reserved collective transpose identity",
-                                trace.invocation, location.block, location.operation
-                            ));
-                        }
-                        let key = (*allocation_origin, *noalias_class);
-                        if phases.len() != 1
-                            || phases.remove(&key) != Some(CollectiveTransposePhaseV1::Published)
-                        {
-                            return Err(format!(
-                                "invocation {:?} block {} op {} reads a collective transpose tile without the exact matching staged and published format",
-                                trace.invocation, location.block, location.operation
-                            ));
-                        }
-                    }
-                    PlironTraceEventV1::CollectiveAllocation { location, .. } => {
-                        return Err(format!(
-                            "invocation {:?} block {} op {} has an unsupported collective transpose effect",
-                            trace.invocation, location.block, location.operation
-                        ));
-                    }
-                    _ => {}
-                }
-            }
-            if !phases.is_empty() {
-                return Err(format!(
-                    "invocation {:?} leaves a collective transpose stage unpublished or unread",
-                    trace.invocation
-                ));
-            }
-        }
+    let summary = summaries.first().and_then(Option::as_ref).ok_or_else(|| {
+        "the collective transpose entry participates in cyclic control flow".to_owned()
+    })?;
+    let normal = summary
+        .normal
+        .as_deref()
+        .ok_or_else(|| "the collective transpose CFG has no normal return path".to_owned())?;
+    let [
+        CollectiveTransposePathEventV1::Allocation {
+            location: write_location,
+            access: AccessKindAttr::Write,
+            allocation_origin: write_origin,
+            noalias_class: write_class,
+        },
+        CollectiveTransposePathEventV1::Barrier {
+            execution_scope: HierarchyAttr::Workgroup,
+            memory_scope: MemoryScopeAttr::Workgroup,
+            address_space: AddressSpaceAttr::Workgroup,
+            order: MemoryOrderAttr::AcquireRelease,
+            ..
+        },
+        CollectiveTransposePathEventV1::Allocation {
+            location: read_location,
+            access: AccessKindAttr::Read,
+            allocation_origin: read_origin,
+            noalias_class: read_class,
+        },
+    ] = normal
+    else {
+        return Err(
+            "every normal path must execute exactly stage, workgroup acquire-release publication, then read"
+                .to_owned(),
+        );
+    };
+    if (write_origin, write_class) != (read_origin, read_class) {
+        return Err("the collective transpose stage and read formats differ".to_owned());
+    }
+    let observed_sites = HashSet::from([*write_location, *read_location]);
+    if observed_sites != *expected_sites || expected_sites.len() != 2 {
+        return Err(
+            "the collective transpose path does not execute every reserved effect exactly once"
+                .to_owned(),
+        );
     }
     Ok(())
 }
