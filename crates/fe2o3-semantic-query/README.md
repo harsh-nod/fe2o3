@@ -163,3 +163,38 @@ requires an authenticated stable environment/device/counter identity evidence
 contract; caller declarations are intentionally not accepted as a substitute.
 PC Capture V3 is intentionally absent from comparison because its run, device,
 code-object, and dispatch identities are bound to the complete source bytes.
+
+## Semantic Profiler Bundle V4
+
+`ProfilerQuerySessionV4` and `fe2o3-profiler-query` provide a unified,
+content-bound surface for Bundle V4:
+
+```text
+fe2o3-profiler-query capabilities < run.fe2o3prof4
+fe2o3-profiler-query list-dispatches --limit 64 < run.fe2o3prof4
+fe2o3-profiler-query hotspots < run.fe2o3prof4
+fe2o3-profiler-query list-att-references < att.fe2o3prof4
+fe2o3-profiler-query waits < att.fe2o3prof4
+fe2o3-profiler-query plan-waits < att.fe2o3prof4
+```
+
+Runs, stable devices, dispatch envelopes, duration hotspots, and ATT artifact
+references are paginated with bundle-and-operation-bound cursors. Every result
+links its bundle and record evidence and retains `declared`, `observed`,
+`inferred`, or `unavailable` origin. A wait query over an ATT reference
+manifest returns a typed unavailable item; an empty decoded event set is never
+invented. Next-capture planning is bounded and requests the supported rocprof
+Compute Viewer decoder plus a future strict decoded-event importer. It states
+that selected-wave ATT evidence does not prove full-grid coverage.
+
+`fe2o3-profiler-compare bundle-v4` accepts the same two-capture length-prefixed
+frame as the older comparator. It checks exact environment, collector tool,
+collector configuration, stable-device, KIR, and artifact content claims and
+emits an evidence-linked numeric dispatch-duration delta only when those
+claims match. Equality is explicitly equality of caller-declared content
+identities, not runtime authentication. `counter-delta-v2` emits deterministic
+binary64 sums for counter dimensions with observed records in both captures;
+`pc-delta-v3` emits raw stochastic sample-count deltas only for relative-PC
+dimensions observed in both captures. Missing dimensions are unavailable, not
+zero. V2/V3 stable environment identity, decoded ATT/waits, clock conversion,
+causal diagnosis, and performance prediction remain unavailable.

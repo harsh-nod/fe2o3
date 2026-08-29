@@ -6,6 +6,9 @@ It is an inert adapter library plus the stdin-only `fe2o3-trace-import` CLI.
 It also owns Semantic Capture V1, Semantic Counter Capture V2, and Semantic PC
 Sample Capture V3: strict canonical JSON containers for bounded profiler
 evidence. The containers complement rather than replace per-dispatch Trace V1.
+Semantic Profiler Bundle V4 adds exact caller-declared environment, collector,
+configuration, stable-device, KIR, and artifact content identities around those
+source-bound observations.
 
 ## Accepted evidence
 
@@ -141,6 +144,13 @@ the canonical encoder.
 arguments, JSON recursion, process/record counts, trace events, evidence sets,
 and all integer conversions are independently checked.
 
+The stdin-only `fe2o3-profiler-import` additionally emits Bundle V4 from
+rocprofv3 kernel-dispatch JSON, kernel-dispatch CSV, or an ATT Compute Viewer
+manifest. Content claims use `SCHEME:FORMAT:SHA256:BYTES`, where `SCHEME` is
+`raw` or `domain`; repeated `--device` claims describe the normalized device
+order. ATT artifact claims use `REFERENCE=SCHEME:FORMAT:SHA256:BYTES`. The CLI
+accepts no paths and never opens referenced ATT files.
+
 ```text
 fe2o3-trace-import rocprofv3-json \
   --kir-sha256 KIR_SHA256 --kir-len KIR_BYTES --wave-width 64 \
@@ -168,7 +178,23 @@ fe2o3-trace-import rocprofv3-att-manifest \
   --kir-sha256 KIR_SHA256 --kir-len KIR_BYTES --wave-width 64 \
   --grid 1024,1,1 --grid-workgroups 4,1,1 --workgroup 256,1,1 \
   < ui_output_agent_N_dispatch_N/filenames.json > att.fe2o3tr1
+
+fe2o3-profiler-import dispatch-csv-v4 \
+  --environment domain:1:ENV_SHA256:ENV_BYTES \
+  --tool domain:1:TOOL_SHA256:TOOL_BYTES \
+  --config domain:1:CONFIG_SHA256:CONFIG_BYTES \
+  --device domain:1:DEVICE_SHA256:DEVICE_BYTES \
+  --kir-sha256 KIR_SHA256 --kir-len KIR_BYTES --wave-width 64 \
+  < kernel_trace.csv > run.fe2o3prof4
 ```
+
+Bundle V4's strict CSV importer admits only the bounded rocprofv3
+kernel-dispatch column vocabulary and imports launch/timestamp envelopes. It
+does not retain kernel names or native process, agent, queue, kernel, or
+dispatch identifiers. The ATT importer catalogs safe relative artifact
+references and optional exact content identities; it does not reimplement the
+rocprof decoder or claim decoded wave/wait events. Collector loss remains
+unknown unless a future supported source records it.
 
 `--artifact-sha256`, `--artifact-len`, and `--artifact-format` must appear
 together. They are optional metadata for profiler inputs. Duplicate flags are

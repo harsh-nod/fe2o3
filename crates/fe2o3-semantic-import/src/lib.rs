@@ -15,6 +15,8 @@ use sha2::{Digest, Sha256};
 
 mod capture;
 pub use capture::*;
+mod profiler_bundle;
+pub use profiler_bundle::*;
 mod counter_capture;
 pub use counter_capture::*;
 mod pc_sample_capture;

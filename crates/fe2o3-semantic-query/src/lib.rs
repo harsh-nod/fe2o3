@@ -15,6 +15,8 @@ mod counter_query;
 pub use counter_query::*;
 mod pc_sample_query;
 pub use pc_sample_query::*;
+mod profiler_query;
+pub use profiler_query::*;
 
 use std::error::Error;
 use std::fmt;

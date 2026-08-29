@@ -8,6 +8,7 @@ rust-version.workspace = true
 description = "Bounded profiler/debugger evidence adapters for semantic traces and captures."
 
 [dependencies]
+csv = "1"
 fe2o3-semantic-trace.workspace = true
 serde.workspace = true
 serde_json = "1"
