@@ -162,13 +162,40 @@ declaration does not upgrade `execution_code_object`, which stays typed
 V3 exposes exact bundle/request/KIR/source-map/HSACO correlation, bounded
 target-telemetry summaries, redacted KFD device and queue snapshots, exception
 events, queue suspend/resume, and termination over one agent-friendly JSONL
-stream. It reports the current stopped anchor as `session_not_stopped` while
-this backend is running. Stopped dispatch/workgroup/wave/lane state, PC and
-ISA/source resolution, registers, semantic values, allocation-relative target
-memory, stepping, and breakpoints are explicitly `unsupported` in this
-milestone. The MI300X live-validation test creates a real target KFD queue,
-observes it, suspends and resumes it, and terminates cleanly; it deliberately
-does not load or execute its declared fixture HSACO.
+stream. After a successful `suspend_queues`, a client can capture the exact
+session-owned queue envelope without granting new authority:
+
+```json
+{"schema":"fe2o3-live-gpu-debug-request-v3","operation":"capture_stopped_queue_envelope","request_id":3,"expected_revision":1,"queue":{"generation":1,"ordinal":1}}
+```
+
+The response deliberately keeps the overall session `running`; only the named
+logical queue has retained session-owned suspension. It contains address-free
+queue/device/save-area/header identities, exception bits, ring and queue shape,
+gfx target, XCC count, relative header ranges, and error-binding presence. It
+contains no PID, native queue/device ID, descriptor, virtual address, PC,
+register, checkpoint bytes, source path, or target-memory value. The response
+identities use a fresh private random per-session correlation scope, not the
+public artifact binding, so repeated sessions are not intentionally linkable.
+The scope itself is never serialized or logged. The response
+sets `resume_required: true`; capture never resumes the queue, and the existing
+revision-checked `resume_queues` operation is required. Suspension ownership is
+bound to the exact queue and device snapshot. Native-ID reuse or binding
+substitution invalidates the logical generation, terminally poisons the public
+session, and immediately enters the existing KFD session-finish cleanup; the
+facade never discards suspension ownership while the KFD engine still owns it.
+
+The CPU-visible context header envelope is a bounded, sequential, non-atomic
+observation: KFD queue/device snapshots and the eight XCC VMA header reads occur
+in order with binding checks before and after; they are not one simultaneous
+hardware checkpoint. The envelope is not decoded hardware checkpoint state.
+Hardware checkpoint bytes, wave records, lane state, registers, PC, source,
+and memory remain separately typed unavailable with exact KFD reasons.
+The generic stopped anchor remains `session_not_stopped`, and stopped
+dispatch/workgroup/wave/lane queries remain `unsupported`. The MI300X
+live-validation test creates a real target KFD queue, observes it, suspends it,
+captures the bounded envelope, explicitly resumes it, and terminates cleanly;
+it deliberately does not load or execute its declared fixture HSACO.
 
 ## Structured live ROCgdb protocol V3
 
@@ -183,11 +210,11 @@ The `fe2o3-rocgdb-mi-request-v3` JSONL protocol exposes structured capability
 discovery, asynchronous events, caller-selected generic thread admission from
 `-thread-info` tuple ordinals, and audited breakpoint/continue/pause/step
 control. Native code-object and allocation addresses and source paths occur
-only in admission requests; their
-responses contain content, allocation, or source-span identities. Request
-lines, response lines, command counts, MI records, nesting, strings and waits
-are bounded. Duplicate request IDs, stale revisions, authorization mismatch,
-unknown fields, aliases and malformed MI are rejected without screen scraping.
+only in admission requests; their responses contain content, allocation, or
+source-span identities. Request lines, response lines, command counts, MI
+records, nesting, strings and waits are bounded. Duplicate request IDs, stale
+revisions, authorization mismatch, unknown fields, aliases and malformed MI
+are rejected without screen scraping.
 
 An admitted MI thread remains a generic logical debugger thread. Host, unknown,
 and GPU-looking `target-id` text is not GPU classification evidence. Stopped

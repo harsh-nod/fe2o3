@@ -207,6 +207,7 @@ fn mi300x_live_kfd_v3_binds_observes_controls_and_terminates() {
         .args(["--exact", "live_kfd_v3_live_target", "--nocapture"])
         .env(TARGET_ENV, "1")
         .env(TARGET_HSACO_ENV, &inputs.hsaco)
+        .env("RUST_MIN_STACK", "33554432")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
@@ -429,19 +430,80 @@ fn mi300x_live_kfd_v3_binds_observes_controls_and_terminates() {
         },
     );
     assert_control_committed(suspended, 1);
+    let captured = exchange(
+        &mut input,
+        &receiver,
+        LiveGpuDebugRequestV3::CaptureStoppedQueueEnvelope {
+            schema: LiveGpuRequestSchemaV3::V3,
+            request_id: 702,
+            expected_revision: 1,
+            queue,
+        },
+    );
+    assert!(matches!(
+        captured,
+        LiveGpuDebugResponseV3::Ok {
+            operation: LiveGpuOperationV3::CaptureStoppedQueueEnvelope,
+            session: LiveGpuSessionViewV3 {
+                state: LiveGpuSessionStateV3::Running,
+                revision: 1,
+                runtime_enabled: true,
+                ..
+            },
+            result,
+            ..
+        } if matches!(
+            *result,
+            LiveGpuDebugResultV3::StoppedQueueEnvelope {
+                envelope: LiveGpuStoppedQueueEnvelopeV3 {
+                    queue: actual_queue,
+                    gfx_target_version: 90_402,
+                    xcc_count: 8,
+                    ownership: LiveGpuStoppedQueueOwnershipV3::SessionRetainedSuspension,
+                    resume_required: true,
+                    context_save: LiveGpuStoppedQueueContextSaveV3::Available {
+                        ref headers,
+                        ..
+                    },
+                    hardware_checkpoint_bytes: LiveGpuStoppedQueueUnavailableV3 {
+                        reason: LiveGpuStoppedQueueUnavailableReasonV3::HardwareCheckpointBytesNotCpuVisible,
+                    },
+                    waves: LiveGpuStoppedQueueUnavailableV3 {
+                        reason: LiveGpuStoppedQueueUnavailableReasonV3::WaveRecordLayoutNotInKfdUapi,
+                    },
+                    lanes: LiveGpuStoppedQueueUnavailableV3 {
+                        reason: LiveGpuStoppedQueueUnavailableReasonV3::LaneStateRequiresWaveRecords,
+                    },
+                    registers: LiveGpuStoppedQueueUnavailableV3 {
+                        reason: LiveGpuStoppedQueueUnavailableReasonV3::RegisterRecordLayoutNotInKfdUapi,
+                    },
+                    program_counter: LiveGpuStoppedQueueUnavailableV3 {
+                        reason: LiveGpuStoppedQueueUnavailableReasonV3::ProgramCounterRequiresRegisterRecord,
+                    },
+                    source: LiveGpuStoppedQueueUnavailableV3 {
+                        reason: LiveGpuStoppedQueueUnavailableReasonV3::SourceMapNotBound,
+                    },
+                    memory: LiveGpuStoppedQueueUnavailableV3 {
+                        reason: LiveGpuStoppedQueueUnavailableReasonV3::MemoryValuesNotCaptured,
+                    },
+                    ..
+                },
+            } if actual_queue == queue && headers.len() == 8
+        )
+    ));
     let resumed = exchange(
         &mut input,
         &receiver,
         LiveGpuDebugRequestV3::ResumeQueues {
             schema: LiveGpuRequestSchemaV3::V3,
-            request_id: 702,
+            request_id: 703,
             expected_revision: 1,
             queues: vec![queue],
         },
     );
     assert_control_committed(resumed, 2);
 
-    terminate(&mut input, &receiver, 703, 2);
+    terminate(&mut input, &receiver, 704, 2);
     drop(input);
     child.finish();
 }

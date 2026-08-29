@@ -28,7 +28,7 @@ use crate::hardware_linux_v2::{
     wait_for_tracee_stop,
 };
 use crate::hardware_v2::LiveKfdTransportV2;
-use crate::live_gpu_backend_v3::LiveKfdBackendV3;
+use crate::live_gpu_backend_v3::{LiveKfdBackendV3, generate_live_kfd_stopped_scope_v3};
 use crate::live_kfd_v3::{LiveKfdContentIdentityV3, LiveKfdSemanticSessionBindingV3};
 
 const READER_POLL: Duration = Duration::from_millis(5);
@@ -54,6 +54,17 @@ pub(crate) fn run(
     target_arguments: Vec<OsString>,
     protocol_binding: fe2o3_debug_protocol::LiveGpuArtifactBindingV3,
 ) -> ExitCode {
+    let stopped_scope = match generate_live_kfd_stopped_scope_v3() {
+        Ok(scope) => scope,
+        Err(()) => {
+            bootstrap_error(
+                "launch",
+                "stopped_scope_randomness_failed",
+                "could not generate the private stopped-state correlation scope",
+            );
+            return ExitCode::FAILURE;
+        }
+    };
     let expected_host = admitted.observed_host().content();
     let debugger_process = match KfdTargetDebugTelemetryProcessV1::capture(std::process::id()) {
         Ok(process) => process,
@@ -199,7 +210,11 @@ pub(crate) fn run(
         return ExitCode::FAILURE;
     }
 
-    let mut backend = LiveKfdBackendV3::new(LiveKfdTransportV2::new(session), protocol_binding);
+    let mut backend = LiveKfdBackendV3::new(
+        LiveKfdTransportV2::new(session),
+        protocol_binding,
+        stopped_scope,
+    );
     let receiver = spawn_reader(backend.limits());
     let run_result = run_requests(&receiver, &mut backend, telemetry, expected_host);
     let cleanup_result = cleanup_backend_and_child(backend, &mut child);
@@ -333,6 +348,13 @@ fn run_requests(
         pump_observations(backend, &mut telemetry, expected_host)?;
         let terminate = request.operation() == LiveGpuOperationV3::Terminate;
         let response = backend.handle(request);
+        let terminal = match &response {
+            fe2o3_debug_protocol::LiveGpuDebugResponseV3::Ok { session, .. }
+            | fe2o3_debug_protocol::LiveGpuDebugResponseV3::Unavailable { session, .. }
+            | fe2o3_debug_protocol::LiveGpuDebugResponseV3::Error { session, .. } => {
+                session.state == fe2o3_debug_protocol::LiveGpuSessionStateV3::Poisoned
+            }
+        };
         let line = encode_live_gpu_response_line_v3(&response, backend.limits()).map_err(|_| ())?;
         writer
             .write_all(&line)
@@ -340,6 +362,9 @@ fn run_requests(
             .map_err(|_| ())?;
         if terminate {
             return Ok(());
+        }
+        if terminal {
+            return Err(());
         }
     }
 }

@@ -1,24 +1,54 @@
 //! Artifact-bound V3 facade over the production KFD hardware V2 state machine.
 
+use std::fs::File;
+use std::io::Read;
+
 use fe2o3_debug_protocol::*;
 use fe2o3_kfd::{
-    KfdTargetDebugArtifactRoleV1, KfdTargetDebugTelemetryPayloadV1, KfdTargetDebugTelemetryRecordV1,
+    KfdStoppedAvailabilityV1, KfdStoppedSnapshotOwnershipV1, KfdStoppedStateScopeV1,
+    KfdStoppedUnavailableReasonV1, KfdTargetDebugArtifactRoleV1, KfdTargetDebugTelemetryPayloadV1,
+    KfdTargetDebugTelemetryRecordV1,
 };
 use sha2::{Digest, Sha256};
 
-use crate::hardware_v2::{HardwareBackendV2, HardwareDebugTransportV2, HardwareTransportErrorV2};
+use crate::hardware_v2::{
+    HardwareBackendV2, HardwareDebugTransportV2, HardwareTransportErrorV2,
+    NativeStoppedQueueContextSaveV2, NativeStoppedQueueEnvelopeV2,
+    NativeStoppedQueueRelativeRangeV2, StoppedQueueEnvelopeCaptureV2,
+};
 
 pub(crate) struct LiveKfdBackendV3<T: HardwareDebugTransportV2> {
     hardware: HardwareBackendV2<T>,
     binding: LiveGpuArtifactBindingV3,
+    stopped_scope: LiveKfdStoppedScopeV3,
     limits: LiveGpuProtocolLimitsV3,
 }
 
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct LiveKfdStoppedScopeV3(KfdStoppedStateScopeV1);
+
+pub(crate) fn generate_live_kfd_stopped_scope_v3() -> Result<LiveKfdStoppedScopeV3, ()> {
+    let mut random = File::open("/dev/urandom").map_err(|_| ())?;
+    for _ in 0..2 {
+        let mut bytes = [0_u8; 32];
+        random.read_exact(&mut bytes).map_err(|_| ())?;
+        if let Ok(scope) = KfdStoppedStateScopeV1::new(bytes) {
+            return Ok(LiveKfdStoppedScopeV3(scope));
+        }
+    }
+    Err(())
+}
+
 impl<T: HardwareDebugTransportV2> LiveKfdBackendV3<T> {
-    pub(crate) fn new(transport: T, binding: LiveGpuArtifactBindingV3) -> Self {
+    pub(crate) fn new(
+        transport: T,
+        binding: LiveGpuArtifactBindingV3,
+        stopped_scope: LiveKfdStoppedScopeV3,
+    ) -> Self {
         Self {
             hardware: HardwareBackendV2::new(transport),
             binding,
+            stopped_scope,
             limits: LiveGpuProtocolLimitsV3::default(),
         }
     }
@@ -43,15 +73,269 @@ impl<T: HardwareDebugTransportV2> LiveKfdBackendV3<T> {
     }
 
     pub(crate) fn handle(&mut self, request: LiveGpuDebugRequestV3) -> LiveGpuDebugResponseV3 {
+        if let LiveGpuDebugRequestV3::CaptureStoppedQueueEnvelope {
+            request_id,
+            expected_revision,
+            queue,
+            ..
+        } = &request
+        {
+            let capture = self.hardware.capture_stopped_queue_envelope(
+                *request_id,
+                *expected_revision,
+                *queue,
+                self.stopped_scope.0,
+            );
+            return convert_stopped_queue_capture(
+                capture,
+                *request_id,
+                &self.binding,
+                &mut self.hardware,
+            );
+        }
         let request_id = request.request_id();
         let operation = request.operation();
         let hardware_request = hardware_request(&request);
+        let response = self.hardware.handle(hardware_request);
         convert_response(
-            self.hardware.handle(hardware_request),
+            response,
             request_id,
             operation,
             &self.binding,
+            &mut self.hardware,
         )
+    }
+}
+
+fn convert_stopped_queue_capture<T: HardwareDebugTransportV2>(
+    capture: StoppedQueueEnvelopeCaptureV2,
+    request_id: u64,
+    binding: &LiveGpuArtifactBindingV3,
+    hardware: &mut HardwareBackendV2<T>,
+) -> LiveGpuDebugResponseV3 {
+    let operation = LiveGpuOperationV3::CaptureStoppedQueueEnvelope;
+    match capture {
+        StoppedQueueEnvelopeCaptureV2::Rejected(response) => {
+            convert_response(response, request_id, operation, binding, hardware)
+        }
+        StoppedQueueEnvelopeCaptureV2::Captured {
+            session,
+            queue,
+            device,
+            envelope,
+        } => {
+            let session = live_session(session, binding.binding_identity);
+            let Ok(envelope) = project_stopped_queue_envelope(envelope, queue, device) else {
+                return backend_protocol_error(
+                    request_id,
+                    operation,
+                    binding.binding_identity,
+                    hardware,
+                );
+            };
+            let response = LiveGpuDebugResponseV3::Ok {
+                schema: LiveGpuResponseSchemaV3::V3,
+                request_id,
+                operation,
+                session,
+                result: Box::new(LiveGpuDebugResultV3::StoppedQueueEnvelope { envelope }),
+            };
+            if response
+                .validate(LiveGpuProtocolLimitsV3::default())
+                .is_err()
+            {
+                return backend_protocol_error(
+                    request_id,
+                    operation,
+                    binding.binding_identity,
+                    hardware,
+                );
+            }
+            response
+        }
+    }
+}
+
+fn project_stopped_queue_envelope(
+    value: NativeStoppedQueueEnvelopeV2,
+    queue: HardwareQueueIdV2,
+    device: HardwareDeviceIdV2,
+) -> Result<LiveGpuStoppedQueueEnvelopeV3, ()> {
+    let envelope_identity = opaque_stopped_identity(value.identity)?;
+    let context_save = match value.context_save {
+        NativeStoppedQueueContextSaveV2::Available {
+            identity,
+            context_bytes_per_xcc,
+            total_allocation_bytes,
+            headers,
+        } => LiveGpuStoppedQueueContextSaveV3::Available {
+            identity: opaque_stopped_identity(identity)?,
+            context_bytes_per_xcc,
+            total_allocation_bytes,
+            headers: headers
+                .into_iter()
+                .map(|header| {
+                    Ok(LiveGpuStoppedQueueXccHeaderV3 {
+                        xcc_ordinal: header.xcc_ordinal,
+                        identity: opaque_stopped_identity(header.identity)?,
+                        control_stack: stopped_range(header.control_stack),
+                        wave_state: stopped_range(header.wave_state),
+                        debug: stopped_range(header.debug),
+                        error_binding_present: header.error_binding_present,
+                    })
+                })
+                .collect::<Result<_, ()>>()?,
+        },
+        NativeStoppedQueueContextSaveV2::Unavailable(reason) => {
+            LiveGpuStoppedQueueContextSaveV3::Unavailable {
+                reason: stopped_reason(reason),
+            }
+        }
+    };
+    let ownership = match value.ownership {
+        KfdStoppedSnapshotOwnershipV1::SessionRetainedSuspension => {
+            LiveGpuStoppedQueueOwnershipV3::SessionRetainedSuspension
+        }
+    };
+    Ok(LiveGpuStoppedQueueEnvelopeV3 {
+        envelope_identity,
+        queue,
+        device,
+        queue_observation_identity: opaque_stopped_identity(value.queue_identity)?,
+        device_observation_identity: opaque_stopped_identity(value.device_identity)?,
+        exception_status_bits: value.exception_status_bits,
+        ring_bytes: value.ring_bytes,
+        queue_type: value.queue_type,
+        gfx_target_version: value.gfx_target_version,
+        xcc_count: value.xcc_count,
+        ownership,
+        resume_required: true,
+        context_save,
+        hardware_checkpoint_bytes: stopped_unavailable(
+            value.hardware_checkpoint_bytes,
+            KfdStoppedUnavailableReasonV1::HardwareCheckpointBytesNotCpuVisible,
+        )?,
+        waves: stopped_unavailable(
+            value.waves,
+            KfdStoppedUnavailableReasonV1::WaveRecordLayoutNotInKfdUapi,
+        )?,
+        lanes: stopped_unavailable(
+            value.lanes,
+            KfdStoppedUnavailableReasonV1::LaneStateRequiresWaveRecords,
+        )?,
+        registers: stopped_unavailable(
+            value.registers,
+            KfdStoppedUnavailableReasonV1::RegisterRecordLayoutNotInKfdUapi,
+        )?,
+        program_counter: stopped_unavailable(
+            value.program_counter,
+            KfdStoppedUnavailableReasonV1::ProgramCounterRequiresRegisterRecord,
+        )?,
+        source: stopped_unavailable(
+            value.source,
+            KfdStoppedUnavailableReasonV1::SourceMapNotBound,
+        )?,
+        memory: stopped_unavailable(
+            value.memory,
+            KfdStoppedUnavailableReasonV1::MemoryValuesNotCaptured,
+        )?,
+        truth: LiveGpuTruthV3 {
+            origin: LiveGpuTruthOriginV3::Observed,
+            evidence: vec![LiveGpuEvidenceRefV3 {
+                kind: LiveGpuEvidenceKindV3::RuntimeObservation,
+                identity: envelope_identity,
+            }],
+        },
+    })
+}
+
+fn opaque_stopped_identity(bytes: [u8; 32]) -> Result<OpaqueIdentityV1, ()> {
+    OpaqueIdentityV1::new(bytes).map_err(|_| ())
+}
+
+fn stopped_range(value: NativeStoppedQueueRelativeRangeV2) -> LiveGpuStoppedQueueRelativeRangeV3 {
+    LiveGpuStoppedQueueRelativeRangeV3 {
+        offset: value.offset,
+        bytes: value.bytes,
+    }
+}
+
+fn stopped_unavailable(
+    availability: KfdStoppedAvailabilityV1,
+    expected: KfdStoppedUnavailableReasonV1,
+) -> Result<LiveGpuStoppedQueueUnavailableV3, ()> {
+    match availability {
+        KfdStoppedAvailabilityV1::Unavailable(reason) if reason == expected => {
+            Ok(LiveGpuStoppedQueueUnavailableV3 {
+                reason: stopped_reason(reason),
+            })
+        }
+        KfdStoppedAvailabilityV1::Available | KfdStoppedAvailabilityV1::Unavailable(_) => Err(()),
+    }
+}
+
+fn stopped_reason(reason: KfdStoppedUnavailableReasonV1) -> LiveGpuStoppedQueueUnavailableReasonV3 {
+    match reason {
+        KfdStoppedUnavailableReasonV1::ContextSaveAreaNotReported => {
+            LiveGpuStoppedQueueUnavailableReasonV3::ContextSaveAreaNotReported
+        }
+        KfdStoppedUnavailableReasonV1::GfxTargetNotGfx942 => {
+            LiveGpuStoppedQueueUnavailableReasonV3::GfxTargetNotGfx942
+        }
+        KfdStoppedUnavailableReasonV1::Gfx942XccCountMismatch => {
+            LiveGpuStoppedQueueUnavailableReasonV3::Gfx942XccCountMismatch
+        }
+        KfdStoppedUnavailableReasonV1::Gfx942SaveAreaSizeMismatch => {
+            LiveGpuStoppedQueueUnavailableReasonV3::Gfx942SaveAreaSizeMismatch
+        }
+        KfdStoppedUnavailableReasonV1::TargetAddressNotRepresentable => {
+            LiveGpuStoppedQueueUnavailableReasonV3::TargetAddressNotRepresentable
+        }
+        KfdStoppedUnavailableReasonV1::TargetHeaderReadDenied => {
+            LiveGpuStoppedQueueUnavailableReasonV3::TargetHeaderReadDenied
+        }
+        KfdStoppedUnavailableReasonV1::TargetHeaderReadPartial => {
+            LiveGpuStoppedQueueUnavailableReasonV3::TargetHeaderReadPartial
+        }
+        KfdStoppedUnavailableReasonV1::ContextHeaderReservedNonzero => {
+            LiveGpuStoppedQueueUnavailableReasonV3::ContextHeaderReservedNonzero
+        }
+        KfdStoppedUnavailableReasonV1::ContextHeaderRangePairMalformed => {
+            LiveGpuStoppedQueueUnavailableReasonV3::ContextHeaderRangePairMalformed
+        }
+        KfdStoppedUnavailableReasonV1::ContextHeaderRangeOutOfBounds => {
+            LiveGpuStoppedQueueUnavailableReasonV3::ContextHeaderRangeOutOfBounds
+        }
+        KfdStoppedUnavailableReasonV1::ContextHeaderRangeOverlap => {
+            LiveGpuStoppedQueueUnavailableReasonV3::ContextHeaderRangeOverlap
+        }
+        KfdStoppedUnavailableReasonV1::Gfx942DebugRangeMismatch => {
+            LiveGpuStoppedQueueUnavailableReasonV3::Gfx942DebugRangeMismatch
+        }
+        KfdStoppedUnavailableReasonV1::ContextHeaderBindingSubstituted => {
+            LiveGpuStoppedQueueUnavailableReasonV3::ContextHeaderBindingSubstituted
+        }
+        KfdStoppedUnavailableReasonV1::HardwareCheckpointBytesNotCpuVisible => {
+            LiveGpuStoppedQueueUnavailableReasonV3::HardwareCheckpointBytesNotCpuVisible
+        }
+        KfdStoppedUnavailableReasonV1::WaveRecordLayoutNotInKfdUapi => {
+            LiveGpuStoppedQueueUnavailableReasonV3::WaveRecordLayoutNotInKfdUapi
+        }
+        KfdStoppedUnavailableReasonV1::LaneStateRequiresWaveRecords => {
+            LiveGpuStoppedQueueUnavailableReasonV3::LaneStateRequiresWaveRecords
+        }
+        KfdStoppedUnavailableReasonV1::RegisterRecordLayoutNotInKfdUapi => {
+            LiveGpuStoppedQueueUnavailableReasonV3::RegisterRecordLayoutNotInKfdUapi
+        }
+        KfdStoppedUnavailableReasonV1::ProgramCounterRequiresRegisterRecord => {
+            LiveGpuStoppedQueueUnavailableReasonV3::ProgramCounterRequiresRegisterRecord
+        }
+        KfdStoppedUnavailableReasonV1::SourceMapNotBound => {
+            LiveGpuStoppedQueueUnavailableReasonV3::SourceMapNotBound
+        }
+        KfdStoppedUnavailableReasonV1::MemoryValuesNotCaptured => {
+            LiveGpuStoppedQueueUnavailableReasonV3::MemoryValuesNotCaptured
+        }
     }
 }
 
@@ -240,6 +524,7 @@ fn hardware_request(request: &LiveGpuDebugRequestV3) -> HardwareDebugRequestV2 {
         },
         LiveGpuDebugRequestV3::GetSessionBinding { .. }
         | LiveGpuDebugRequestV3::GetState { .. }
+        | LiveGpuDebugRequestV3::CaptureStoppedQueueEnvelope { .. }
         | LiveGpuDebugRequestV3::InspectStoppedScopes { .. }
         | LiveGpuDebugRequestV3::InspectRegisters { .. }
         | LiveGpuDebugRequestV3::InspectValues { .. }
@@ -257,11 +542,12 @@ fn hardware_request(request: &LiveGpuDebugRequestV3) -> HardwareDebugRequestV2 {
     }
 }
 
-fn convert_response(
+fn convert_response<T: HardwareDebugTransportV2>(
     response: HardwareDebugResponseV2,
     request_id: u64,
     operation: LiveGpuOperationV3,
     binding: &LiveGpuArtifactBindingV3,
+    hardware: &mut HardwareBackendV2<T>,
 ) -> LiveGpuDebugResponseV3 {
     match response {
         HardwareDebugResponseV2::Ok {
@@ -271,7 +557,12 @@ fn convert_response(
             let result = match operation {
                 LiveGpuOperationV3::DiscoverCapabilities => {
                     let HardwareDebugResultV2::Capabilities { capabilities } = result else {
-                        return backend_protocol_error(request_id, operation, session);
+                        return backend_protocol_error(
+                            request_id,
+                            operation,
+                            binding.binding_identity,
+                            hardware,
+                        );
                     };
                     LiveGpuDebugResultV3::Capabilities {
                         capabilities: live_capabilities(&capabilities, binding),
@@ -279,7 +570,12 @@ fn convert_response(
                 }
                 LiveGpuOperationV3::GetSessionBinding => {
                     if !matches!(result, HardwareDebugResultV2::State) {
-                        return backend_protocol_error(request_id, operation, session);
+                        return backend_protocol_error(
+                            request_id,
+                            operation,
+                            binding.binding_identity,
+                            hardware,
+                        );
                     }
                     LiveGpuDebugResultV3::SessionBinding {
                         binding: binding.clone(),
@@ -287,7 +583,12 @@ fn convert_response(
                 }
                 LiveGpuOperationV3::GetState => {
                     if !matches!(result, HardwareDebugResultV2::State) {
-                        return backend_protocol_error(request_id, operation, session);
+                        return backend_protocol_error(
+                            request_id,
+                            operation,
+                            binding.binding_identity,
+                            hardware,
+                        );
                     }
                     LiveGpuDebugResultV3::State {
                         stopped: LiveGpuAvailabilityV3::Unavailable {
@@ -305,7 +606,12 @@ fn convert_response(
                 }
                 LiveGpuOperationV3::Terminate => {
                     if !matches!(result, HardwareDebugResultV2::Terminated) {
-                        return backend_protocol_error(request_id, operation, session);
+                        return backend_protocol_error(
+                            request_id,
+                            operation,
+                            binding.binding_identity,
+                            hardware,
+                        );
                     }
                     LiveGpuDebugResultV3::Terminated
                 }
@@ -326,6 +632,14 @@ fn convert_response(
                         session,
                         reason: LiveGpuUnavailableReasonV3::Unsupported,
                     };
+                }
+                LiveGpuOperationV3::CaptureStoppedQueueEnvelope => {
+                    return backend_protocol_error(
+                        request_id,
+                        operation,
+                        binding.binding_identity,
+                        hardware,
+                    );
                 }
             };
             LiveGpuDebugResponseV3::Ok {
@@ -460,6 +774,24 @@ fn live_capabilities(
             Some(LiveGpuUnavailableReasonV3::Unsupported),
         ));
     }
+    let stopped_queue_envelope_available = [
+        Hardware::HardwareDeviceSnapshot,
+        Hardware::HardwareQueueSnapshot,
+        Hardware::QueueSuspend,
+        Hardware::QueueResume,
+    ]
+    .into_iter()
+    .all(|name| {
+        hardware.iter().any(|capability| {
+            capability.name == name
+                && capability.availability == HardwareCapabilityAvailabilityV2::Available
+        })
+    });
+    capabilities.push(live_capability(
+        Live::StoppedQueueEnvelope,
+        stopped_queue_envelope_available,
+        Some(LiveGpuUnavailableReasonV3::Unsupported),
+    ));
     for name in [
         Live::StoppedDispatch,
         Live::StoppedWorkgroups,
@@ -502,6 +834,7 @@ mod capability_tests {
                 | LiveGpuCapabilityNameV3::HardwareExceptionEvents
                 | LiveGpuCapabilityNameV3::QueueSuspend
                 | LiveGpuCapabilityNameV3::QueueResume
+                | LiveGpuCapabilityNameV3::StoppedQueueEnvelope
                 | LiveGpuCapabilityNameV3::Terminate
                 | LiveGpuCapabilityNameV3::StoppedDispatch
                 | LiveGpuCapabilityNameV3::StoppedWorkgroups
@@ -530,6 +863,7 @@ mod capability_tests {
             LiveGpuCapabilityNameV3::HardwareExceptionEvents,
             LiveGpuCapabilityNameV3::QueueSuspend,
             LiveGpuCapabilityNameV3::QueueResume,
+            LiveGpuCapabilityNameV3::StoppedQueueEnvelope,
             LiveGpuCapabilityNameV3::Terminate,
             LiveGpuCapabilityNameV3::StoppedDispatch,
             LiveGpuCapabilityNameV3::StoppedWorkgroups,
@@ -576,12 +910,13 @@ fn unavailable_truth() -> LiveGpuTruthV3 {
     }
 }
 
-fn backend_protocol_error(
+fn backend_protocol_error<T: HardwareDebugTransportV2>(
     request_id: u64,
     operation: LiveGpuOperationV3,
-    mut session: LiveGpuSessionViewV3,
+    binding_identity: OpaqueIdentityV1,
+    hardware: &mut HardwareBackendV2<T>,
 ) -> LiveGpuDebugResponseV3 {
-    session.state = LiveGpuSessionStateV3::Poisoned;
+    let session = live_session(hardware.poison_protocol_error(), binding_identity);
     LiveGpuDebugResponseV3::Error {
         schema: LiveGpuResponseSchemaV3::V3,
         request_id: Some(request_id),
@@ -601,6 +936,7 @@ mod tests {
     use super::*;
     use crate::hardware_v2::{
         NativeDeviceV2, NativeEventV2, NativeExceptionInfoV2, NativeQueueOutcomeV2, NativeQueueV2,
+        NativeStoppedQueueCaptureErrorV2,
     };
     use fe2o3_kfd::{
         KfdTargetDebugArtifactIdentityV1, KfdTargetDebugSessionNonceV1,
@@ -658,10 +994,22 @@ mod tests {
         ) -> Result<Vec<NativeQueueOutcomeV2>, HardwareTransportErrorV2> {
             unreachable!("empty transport has no queues")
         }
+
+        fn capture_stopped_queue(
+            &mut self,
+            _queue: u32,
+            _scope: KfdStoppedStateScopeV1,
+        ) -> Result<NativeStoppedQueueEnvelopeV2, NativeStoppedQueueCaptureErrorV2> {
+            unreachable!("empty transport has no suspended queues")
+        }
     }
 
     fn identity(seed: u8) -> OpaqueIdentityV1 {
         OpaqueIdentityV1::new([seed; 32]).unwrap()
+    }
+
+    fn test_scope(seed: u8) -> LiveKfdStoppedScopeV3 {
+        LiveKfdStoppedScopeV3(KfdStoppedStateScopeV1::new([seed; 32]).unwrap())
     }
 
     fn content(seed: u8) -> LiveGpuContentIdentityV3 {
@@ -709,9 +1057,172 @@ mod tests {
         }
     }
 
+    fn native_unavailable(reason: KfdStoppedUnavailableReasonV1) -> KfdStoppedAvailabilityV1 {
+        KfdStoppedAvailabilityV1::Unavailable(reason)
+    }
+
+    fn native_stopped_envelope() -> NativeStoppedQueueEnvelopeV2 {
+        NativeStoppedQueueEnvelopeV2 {
+            identity: [61; 32],
+            queue_identity: [62; 32],
+            device_identity: [63; 32],
+            exception_status_bits: 0x20,
+            ring_bytes: 4096,
+            queue_type: 0,
+            gfx_target_version: 90_402,
+            xcc_count: 8,
+            ownership: KfdStoppedSnapshotOwnershipV1::SessionRetainedSuspension,
+            context_save: NativeStoppedQueueContextSaveV2::Unavailable(
+                KfdStoppedUnavailableReasonV1::TargetHeaderReadDenied,
+            ),
+            hardware_checkpoint_bytes: native_unavailable(
+                KfdStoppedUnavailableReasonV1::HardwareCheckpointBytesNotCpuVisible,
+            ),
+            waves: native_unavailable(KfdStoppedUnavailableReasonV1::WaveRecordLayoutNotInKfdUapi),
+            lanes: native_unavailable(KfdStoppedUnavailableReasonV1::LaneStateRequiresWaveRecords),
+            registers: native_unavailable(
+                KfdStoppedUnavailableReasonV1::RegisterRecordLayoutNotInKfdUapi,
+            ),
+            program_counter: native_unavailable(
+                KfdStoppedUnavailableReasonV1::ProgramCounterRequiresRegisterRecord,
+            ),
+            source: native_unavailable(KfdStoppedUnavailableReasonV1::SourceMapNotBound),
+            memory: native_unavailable(KfdStoppedUnavailableReasonV1::MemoryValuesNotCaptured),
+        }
+    }
+
+    #[test]
+    fn stopped_queue_projection_preserves_redaction_and_rejects_claim_upgrades() {
+        let queue = HardwareQueueIdV2 {
+            generation: 1,
+            ordinal: 2,
+        };
+        let device = HardwareDeviceIdV2 {
+            generation: 1,
+            ordinal: 3,
+        };
+        let projected =
+            project_stopped_queue_envelope(native_stopped_envelope(), queue, device).unwrap();
+        assert_eq!(projected.queue, queue);
+        assert_eq!(projected.device, device);
+        assert_eq!(projected.exception_status_bits, 0x20);
+        assert!(projected.resume_required);
+        assert!(matches!(
+            projected.context_save,
+            LiveGpuStoppedQueueContextSaveV3::Unavailable {
+                reason: LiveGpuStoppedQueueUnavailableReasonV3::TargetHeaderReadDenied,
+            }
+        ));
+        assert_eq!(
+            projected.truth,
+            LiveGpuTruthV3 {
+                origin: LiveGpuTruthOriginV3::Observed,
+                evidence: vec![LiveGpuEvidenceRefV3 {
+                    kind: LiveGpuEvidenceKindV3::RuntimeObservation,
+                    identity: projected.envelope_identity,
+                }],
+            }
+        );
+
+        let mut hostile = native_stopped_envelope();
+        hostile.waves = KfdStoppedAvailabilityV1::Available;
+        assert!(project_stopped_queue_envelope(hostile, queue, device).is_err());
+
+        let mut zero_identity = native_stopped_envelope();
+        zero_identity.queue_identity = [0; 32];
+        assert!(project_stopped_queue_envelope(zero_identity, queue, device).is_err());
+    }
+
+    #[test]
+    fn stopped_scopes_are_fresh_private_and_not_binding_derived() {
+        let first = generate_live_kfd_stopped_scope_v3().unwrap();
+        let second = generate_live_kfd_stopped_scope_v3().unwrap();
+        assert_ne!(first, second);
+        assert_eq!(
+            format!("{:?}", first.0),
+            "KfdStoppedStateScopeV1(<redacted>)"
+        );
+        let source = include_str!("live_gpu_backend_v3.rs");
+        let forbidden_derivation = ["binding_identity", ".as_bytes()"].concat();
+        assert!(!source.contains(&forbidden_derivation));
+        assert!(
+            !include_str!("../../fe2o3-debug-protocol/src/live_gpu_v3.rs")
+                .contains("pub stopped_scope")
+        );
+    }
+
+    #[test]
+    fn protocol_projection_failure_poisons_the_actual_backend() {
+        let mut backend = LiveKfdBackendV3::new(EmptyTransportV3, binding(), test_scope(74));
+        let mut envelope = native_stopped_envelope();
+        envelope.queue_identity = envelope.identity;
+        let failed = convert_stopped_queue_capture(
+            StoppedQueueEnvelopeCaptureV2::Captured {
+                session: HardwareSessionViewV2 {
+                    state: HardwareSessionStateV2::Running,
+                    commands_processed: 1,
+                    control_revision: 0,
+                    observation_sequence: 0,
+                    identity_generation: 1,
+                    runtime_enabled: true,
+                    hardware_observed: true,
+                    simulated: false,
+                    performance_prediction: false,
+                },
+                queue: HardwareQueueIdV2 {
+                    generation: 1,
+                    ordinal: 1,
+                },
+                device: HardwareDeviceIdV2 {
+                    generation: 1,
+                    ordinal: 1,
+                },
+                envelope,
+            },
+            1,
+            &backend.binding,
+            &mut backend.hardware,
+        );
+        assert!(matches!(
+            failed,
+            LiveGpuDebugResponseV3::Error {
+                session: LiveGpuSessionViewV3 {
+                    state: LiveGpuSessionStateV3::Poisoned,
+                    ..
+                },
+                error: LiveGpuErrorV3 {
+                    effect: HardwareEffectV2::Indeterminate,
+                    terminal: true,
+                    ..
+                },
+                ..
+            }
+        ));
+        let next = backend.handle(LiveGpuDebugRequestV3::GetState {
+            schema: LiveGpuRequestSchemaV3::V3,
+            request_id: 2,
+            expected_revision: 0,
+        });
+        assert!(matches!(
+            next,
+            LiveGpuDebugResponseV3::Error {
+                session: LiveGpuSessionViewV3 {
+                    state: LiveGpuSessionStateV3::Poisoned,
+                    ..
+                },
+                error: LiveGpuErrorV3 {
+                    code: LiveGpuErrorCodeV3::SessionPoisoned,
+                    terminal: true,
+                    ..
+                },
+                ..
+            }
+        ));
+    }
+
     #[test]
     fn running_kfd_capabilities_do_not_claim_stopped_state() {
-        let mut backend = LiveKfdBackendV3::new(EmptyTransportV3, binding());
+        let mut backend = LiveKfdBackendV3::new(EmptyTransportV3, binding(), test_scope(71));
         let response = backend.handle(LiveGpuDebugRequestV3::DiscoverCapabilities {
             schema: LiveGpuRequestSchemaV3::V3,
             request_id: 1,
@@ -740,7 +1251,7 @@ mod tests {
 
     #[test]
     fn semantic_query_is_typed_unavailable_after_kfd_state_refresh() {
-        let mut backend = LiveKfdBackendV3::new(EmptyTransportV3, binding());
+        let mut backend = LiveKfdBackendV3::new(EmptyTransportV3, binding(), test_scope(72));
         let response = backend.handle(LiveGpuDebugRequestV3::InspectStoppedScopes {
             schema: LiveGpuRequestSchemaV3::V3,
             request_id: 1,
@@ -775,7 +1286,7 @@ mod tests {
 
     #[test]
     fn cooperative_code_object_remains_a_matching_declaration() {
-        let mut backend = LiveKfdBackendV3::new(EmptyTransportV3, binding());
+        let mut backend = LiveKfdBackendV3::new(EmptyTransportV3, binding(), test_scope(73));
         let nonce = KfdTargetDebugSessionNonceV1::from_bytes([12; 32]).unwrap();
         let started = KfdTargetDebugTelemetryRecordV1::new(
             0,

@@ -6,7 +6,10 @@ use fe2o3_debug_protocol::*;
 use fe2o3_kfd::{
     KfdDebugDeviceObservationV1, KfdDebugEventObservationV1, KfdDebugExceptionInfoV1,
     KfdDebugQueueObservationV1, KfdDebugQueueOperationObservationV1, KfdDebugQueueOperationStateV1,
-    KfdLiveDebugSessionErrorV1, KfdLiveDebugSessionV1,
+    KfdLiveDebugSessionErrorV1, KfdLiveDebugSessionV1, KfdStoppedAvailabilityV1,
+    KfdStoppedContextSaveObservationV1, KfdStoppedQueueCapturePlanV1, KfdStoppedQueueSnapshotV1,
+    KfdStoppedSnapshotOwnershipV1, KfdStoppedStateErrorV1, KfdStoppedStateScopeV1,
+    KfdStoppedUnavailableReasonV1,
 };
 use fe2o3_kfd_uapi::{
     KfdDebugExceptionMaskV1, KfdDebugRuntimeStateV1, KfdDebugTrapExceptionCodeV1,
@@ -57,6 +60,7 @@ pub(crate) struct NativeDeviceV2 {
 pub(crate) struct NativeQueueV2 {
     queue_id: u32,
     gpu_id: u32,
+    exception_status_bits: u64,
     ring_bytes: u32,
     queue_type: u32,
     context_save_area_bytes: u32,
@@ -79,6 +83,61 @@ pub(crate) enum NativeExceptionInfoV2 {
 pub(crate) struct NativeQueueOutcomeV2 {
     queue_id: u32,
     state: KfdDebugQueueOperationStateV1,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct NativeStoppedQueueRelativeRangeV2 {
+    pub(crate) offset: u32,
+    pub(crate) bytes: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct NativeStoppedQueueXccHeaderV2 {
+    pub(crate) xcc_ordinal: u32,
+    pub(crate) identity: [u8; 32],
+    pub(crate) control_stack: NativeStoppedQueueRelativeRangeV2,
+    pub(crate) wave_state: NativeStoppedQueueRelativeRangeV2,
+    pub(crate) debug: NativeStoppedQueueRelativeRangeV2,
+    pub(crate) error_binding_present: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum NativeStoppedQueueContextSaveV2 {
+    Available {
+        identity: [u8; 32],
+        context_bytes_per_xcc: u32,
+        total_allocation_bytes: u64,
+        headers: Vec<NativeStoppedQueueXccHeaderV2>,
+    },
+    Unavailable(KfdStoppedUnavailableReasonV1),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct NativeStoppedQueueEnvelopeV2 {
+    pub(crate) identity: [u8; 32],
+    pub(crate) queue_identity: [u8; 32],
+    pub(crate) device_identity: [u8; 32],
+    pub(crate) exception_status_bits: u64,
+    pub(crate) ring_bytes: u32,
+    pub(crate) queue_type: u32,
+    pub(crate) gfx_target_version: u32,
+    pub(crate) xcc_count: u32,
+    pub(crate) ownership: KfdStoppedSnapshotOwnershipV1,
+    pub(crate) context_save: NativeStoppedQueueContextSaveV2,
+    pub(crate) hardware_checkpoint_bytes: KfdStoppedAvailabilityV1,
+    pub(crate) waves: KfdStoppedAvailabilityV1,
+    pub(crate) lanes: KfdStoppedAvailabilityV1,
+    pub(crate) registers: KfdStoppedAvailabilityV1,
+    pub(crate) program_counter: KfdStoppedAvailabilityV1,
+    pub(crate) source: KfdStoppedAvailabilityV1,
+    pub(crate) memory: KfdStoppedAvailabilityV1,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum NativeStoppedQueueCaptureErrorV2 {
+    OwnershipLost,
+    BindingSubstituted,
+    Backend(HardwareTransportErrorV2),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -111,6 +170,11 @@ pub(crate) trait HardwareDebugTransportV2 {
         &mut self,
         queues: &[u32],
     ) -> Result<Vec<NativeQueueOutcomeV2>, HardwareTransportErrorV2>;
+    fn capture_stopped_queue(
+        &mut self,
+        queue: u32,
+        scope: KfdStoppedStateScopeV1,
+    ) -> Result<NativeStoppedQueueEnvelopeV2, NativeStoppedQueueCaptureErrorV2>;
 }
 
 pub(crate) struct LiveKfdTransportV2 {
@@ -238,6 +302,96 @@ impl HardwareDebugTransportV2 for LiveKfdTransportV2 {
             .map(|items| items.into_iter().map(native_outcome).collect())
             .map_err(|_| Self::error("KFD queue resume", HardwareEffectV2::Indeterminate))
     }
+
+    fn capture_stopped_queue(
+        &mut self,
+        queue: u32,
+        scope: KfdStoppedStateScopeV1,
+    ) -> Result<NativeStoppedQueueEnvelopeV2, NativeStoppedQueueCaptureErrorV2> {
+        self.session
+            .capture_stopped_queue_v1(KfdStoppedQueueCapturePlanV1::new(queue, scope))
+            .map(native_stopped_queue)
+            .map_err(native_stopped_queue_error)
+    }
+}
+
+fn native_stopped_queue(value: KfdStoppedQueueSnapshotV1) -> NativeStoppedQueueEnvelopeV2 {
+    let context_save = match value.context_save() {
+        KfdStoppedContextSaveObservationV1::Available(layout) => {
+            NativeStoppedQueueContextSaveV2::Available {
+                identity: *layout.logical_identity().as_bytes(),
+                context_bytes_per_xcc: layout.context_bytes_per_xcc(),
+                total_allocation_bytes: layout.total_allocation_bytes(),
+                headers: layout
+                    .headers()
+                    .iter()
+                    .copied()
+                    .map(|header| NativeStoppedQueueXccHeaderV2 {
+                        xcc_ordinal: u32::from(header.xcc_ordinal()),
+                        identity: *header.logical_identity().as_bytes(),
+                        control_stack: NativeStoppedQueueRelativeRangeV2 {
+                            offset: header.control_stack().offset(),
+                            bytes: header.control_stack().bytes(),
+                        },
+                        wave_state: NativeStoppedQueueRelativeRangeV2 {
+                            offset: header.wave_state().offset(),
+                            bytes: header.wave_state().bytes(),
+                        },
+                        debug: NativeStoppedQueueRelativeRangeV2 {
+                            offset: header.debug().offset(),
+                            bytes: header.debug().bytes(),
+                        },
+                        error_binding_present: header.error_binding_present(),
+                    })
+                    .collect(),
+            }
+        }
+        KfdStoppedContextSaveObservationV1::Unavailable(reason) => {
+            NativeStoppedQueueContextSaveV2::Unavailable(*reason)
+        }
+    };
+    NativeStoppedQueueEnvelopeV2 {
+        identity: *value.logical_identity().as_bytes(),
+        queue_identity: *value.queue_identity().as_bytes(),
+        device_identity: *value.device_identity().as_bytes(),
+        exception_status_bits: value.exception_status().bits(),
+        ring_bytes: value.ring_bytes(),
+        queue_type: value.queue_type(),
+        gfx_target_version: value.gfx_target_version(),
+        xcc_count: value.xcc_count(),
+        ownership: value.ownership(),
+        context_save,
+        hardware_checkpoint_bytes: value.hardware_checkpoint_bytes(),
+        waves: value.waves(),
+        lanes: value.lanes(),
+        registers: value.registers(),
+        program_counter: value.program_counter(),
+        source: value.source_map(),
+        memory: value.memory_values(),
+    }
+}
+
+fn native_stopped_queue_error(error: KfdStoppedStateErrorV1) -> NativeStoppedQueueCaptureErrorV2 {
+    match error {
+        KfdStoppedStateErrorV1::QueueNotSuspendedBySession
+        | KfdStoppedStateErrorV1::SuspensionOwnershipLost => {
+            NativeStoppedQueueCaptureErrorV2::OwnershipLost
+        }
+        KfdStoppedStateErrorV1::QueueBindingSubstituted
+        | KfdStoppedStateErrorV1::DeviceBindingSubstituted
+        | KfdStoppedStateErrorV1::QueueMissing
+        | KfdStoppedStateErrorV1::DuplicateQueueIdentity
+        | KfdStoppedStateErrorV1::DeviceMissing
+        | KfdStoppedStateErrorV1::DuplicateDeviceIdentity => {
+            NativeStoppedQueueCaptureErrorV2::BindingSubstituted
+        }
+        KfdStoppedStateErrorV1::Session(_) => {
+            NativeStoppedQueueCaptureErrorV2::Backend(HardwareTransportErrorV2 {
+                effect: HardwareEffectV2::None,
+                operation: "KFD stopped queue envelope capture",
+            })
+        }
+    }
 }
 
 fn native_device(value: KfdDebugDeviceObservationV1) -> NativeDeviceV2 {
@@ -258,6 +412,7 @@ fn native_queue(value: KfdDebugQueueObservationV1) -> NativeQueueV2 {
     NativeQueueV2 {
         queue_id: value.queue_id(),
         gpu_id: value.gpu_id(),
+        exception_status_bits: value.exception_status().bits(),
         ring_bytes: value.ring_size(),
         queue_type: value.queue_type(),
         context_save_area_bytes: value.context_save_area_size(),
@@ -292,6 +447,22 @@ struct QueueRecordV2 {
     device: HardwareDeviceIdV2,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SuspendedQueueBindingV2 {
+    queue: NativeQueueV2,
+    device: NativeDeviceV2,
+}
+
+pub(crate) enum StoppedQueueEnvelopeCaptureV2 {
+    Captured {
+        session: HardwareSessionViewV2,
+        queue: HardwareQueueIdV2,
+        device: HardwareDeviceIdV2,
+        envelope: NativeStoppedQueueEnvelopeV2,
+    },
+    Rejected(HardwareDebugResponseV2),
+}
+
 pub(crate) struct HardwareBackendV2<T: HardwareDebugTransportV2> {
     transport: T,
     limits: HardwareProtocolLimitsV2,
@@ -305,7 +476,7 @@ pub(crate) struct HardwareBackendV2<T: HardwareDebugTransportV2> {
     terminated: bool,
     devices: Vec<DeviceRecordV2>,
     queues: Vec<QueueRecordV2>,
-    suspended_native: BTreeSet<u32>,
+    suspended_native: BTreeMap<u32, SuspendedQueueBindingV2>,
     events: VecDeque<HardwareEventViewV2>,
 }
 
@@ -324,7 +495,7 @@ impl<T: HardwareDebugTransportV2> HardwareBackendV2<T> {
             terminated: false,
             devices: Vec::new(),
             queues: Vec::new(),
-            suspended_native: BTreeSet::new(),
+            suspended_native: BTreeMap::new(),
             events: VecDeque::new(),
         }
     }
@@ -368,6 +539,11 @@ impl<T: HardwareDebugTransportV2> HardwareBackendV2<T> {
             simulated: false,
             performance_prediction: false,
         }
+    }
+
+    pub(crate) fn poison_protocol_error(&mut self) -> HardwareSessionViewV2 {
+        self.poisoned = true;
+        self.session_view()
     }
 
     pub(crate) fn handle(&mut self, request: HardwareDebugRequestV2) -> HardwareDebugResponseV2 {
@@ -483,6 +659,187 @@ impl<T: HardwareDebugTransportV2> HardwareBackendV2<T> {
         }
     }
 
+    pub(crate) fn capture_stopped_queue_envelope(
+        &mut self,
+        request_id: u64,
+        expected_control_revision: u64,
+        queue: HardwareQueueIdV2,
+        scope: KfdStoppedStateScopeV1,
+    ) -> StoppedQueueEnvelopeCaptureV2 {
+        let operation = HardwareDebugOperationV2::GetState;
+        let preflight = self.handle(HardwareDebugRequestV2::GetState {
+            schema: HardwareRequestSchemaV2::V2,
+            request_id,
+            expected_control_revision,
+        });
+        if !matches!(
+            &preflight,
+            HardwareDebugResponseV2::Ok {
+                result: HardwareDebugResultV2::State,
+                ..
+            }
+        ) {
+            return StoppedQueueEnvelopeCaptureV2::Rejected(preflight);
+        }
+        if !self.runtime_enabled {
+            return StoppedQueueEnvelopeCaptureV2::Rejected(self.unavailable(
+                request_id,
+                operation,
+                HardwareCapabilityNameV2::QueueSuspend,
+                HardwareUnavailableReasonV2::RuntimeNotEnabled,
+                "target KFD runtime is not enabled",
+            ));
+        }
+        if let Err(error) = self.refresh_identity() {
+            return StoppedQueueEnvelopeCaptureV2::Rejected(self.transport_error(
+                request_id,
+                operation,
+                HardwareErrorStageV2::Snapshot,
+                error,
+            ));
+        }
+        if queue.generation != self.generation {
+            return StoppedQueueEnvelopeCaptureV2::Rejected(
+                self.stale_generation(request_id, operation),
+            );
+        }
+        let Some(record) = self
+            .queues
+            .iter()
+            .copied()
+            .find(|record| record.logical == queue)
+        else {
+            return StoppedQueueEnvelopeCaptureV2::Rejected(self.error(
+                request_id,
+                operation,
+                (
+                    HardwareErrorStageV2::Snapshot,
+                    HardwareErrorCodeV2::UnknownLogicalId,
+                ),
+                HardwareEffectV2::None,
+                false,
+                "queue identity is not live in this generation",
+            ));
+        };
+        let Some(suspended_binding) = self.suspended_native.get(&record.native.queue_id).copied()
+        else {
+            return StoppedQueueEnvelopeCaptureV2::Rejected(self.error(
+                request_id,
+                operation,
+                (
+                    HardwareErrorStageV2::Snapshot,
+                    HardwareErrorCodeV2::InvalidRequest,
+                ),
+                HardwareEffectV2::None,
+                false,
+                "queue suspension is not owned by this debug session",
+            ));
+        };
+        let current_device = self
+            .devices
+            .iter()
+            .find(|device| device.logical == record.device)
+            .map(|device| device.native);
+        if suspended_binding.queue != record.native
+            || current_device != Some(suspended_binding.device)
+        {
+            return StoppedQueueEnvelopeCaptureV2::Rejected(self.capture_binding_drift(
+                request_id,
+                operation,
+                "suspended queue binding changed before envelope capture",
+            ));
+        }
+        let envelope = match self
+            .transport
+            .capture_stopped_queue(record.native.queue_id, scope)
+        {
+            Ok(envelope) => envelope,
+            Err(NativeStoppedQueueCaptureErrorV2::OwnershipLost) => {
+                self.suspended_native.remove(&record.native.queue_id);
+                if let Err(error) = self.invalidate_queue_identity() {
+                    return StoppedQueueEnvelopeCaptureV2::Rejected(self.transport_error(
+                        request_id,
+                        operation,
+                        HardwareErrorStageV2::Snapshot,
+                        error,
+                    ));
+                }
+                return StoppedQueueEnvelopeCaptureV2::Rejected(self.error(
+                    request_id,
+                    operation,
+                    (
+                        HardwareErrorStageV2::Snapshot,
+                        HardwareErrorCodeV2::BackendFailure,
+                    ),
+                    HardwareEffectV2::None,
+                    false,
+                    "KFD suspension ownership was lost during envelope capture",
+                ));
+            }
+            Err(NativeStoppedQueueCaptureErrorV2::BindingSubstituted) => {
+                return StoppedQueueEnvelopeCaptureV2::Rejected(self.capture_binding_drift(
+                    request_id,
+                    operation,
+                    "queue or device binding changed during envelope capture",
+                ));
+            }
+            Err(NativeStoppedQueueCaptureErrorV2::Backend(error)) => {
+                return StoppedQueueEnvelopeCaptureV2::Rejected(self.transport_error(
+                    request_id,
+                    operation,
+                    HardwareErrorStageV2::Snapshot,
+                    error,
+                ));
+            }
+        };
+        let envelope_matches_binding = envelope.exception_status_bits
+            == suspended_binding.queue.exception_status_bits
+            && envelope.ring_bytes == suspended_binding.queue.ring_bytes
+            && envelope.queue_type == suspended_binding.queue.queue_type
+            && envelope.gfx_target_version == suspended_binding.device.gfx_target_version
+            && envelope.xcc_count == suspended_binding.device.xcc_count
+            && match &envelope.context_save {
+                NativeStoppedQueueContextSaveV2::Available {
+                    context_bytes_per_xcc,
+                    ..
+                } => *context_bytes_per_xcc == suspended_binding.queue.context_save_area_bytes,
+                NativeStoppedQueueContextSaveV2::Unavailable(_) => true,
+            };
+        if !envelope_matches_binding {
+            return StoppedQueueEnvelopeCaptureV2::Rejected(self.capture_binding_drift(
+                request_id,
+                operation,
+                "stopped envelope did not match the exact suspended queue and device binding",
+            ));
+        }
+        if let Err(error) = self.refresh_identity() {
+            return StoppedQueueEnvelopeCaptureV2::Rejected(self.transport_error(
+                request_id,
+                operation,
+                HardwareErrorStageV2::Snapshot,
+                error,
+            ));
+        }
+        if queue.generation != self.generation
+            || self.queues.iter().all(|current| {
+                current.logical != queue
+                    || current.native != record.native
+                    || current.device != record.device
+            })
+            || self.suspended_native.get(&record.native.queue_id) != Some(&suspended_binding)
+        {
+            return StoppedQueueEnvelopeCaptureV2::Rejected(
+                self.stale_generation(request_id, operation),
+            );
+        }
+        StoppedQueueEnvelopeCaptureV2::Captured {
+            session: self.session_view(),
+            queue,
+            device: record.device,
+            envelope,
+        }
+    }
+
     fn inspect_devices(
         &mut self,
         request_id: u64,
@@ -542,7 +899,7 @@ impl<T: HardwareDebugTransportV2> HardwareBackendV2<T> {
                 ring_bytes: record.native.ring_bytes,
                 queue_type: record.native.queue_type,
                 context_save_area_bytes: record.native.context_save_area_bytes,
-                suspended_by_session: self.suspended_native.contains(&record.native.queue_id),
+                suspended_by_session: self.suspended_native.contains_key(&record.native.queue_id),
             })
             .collect();
         self.ok(
@@ -724,11 +1081,11 @@ impl<T: HardwareDebugTransportV2> HardwareBackendV2<T> {
         if (suspend_grace.is_none()
             && native
                 .iter()
-                .any(|queue| !self.suspended_native.contains(queue)))
+                .any(|queue| !self.suspended_native.contains_key(queue)))
             || (suspend_grace.is_some()
                 && native
                     .iter()
-                    .any(|queue| self.suspended_native.contains(queue)))
+                    .any(|queue| self.suspended_native.contains_key(queue)))
         {
             return self.error(
                 request_id,
@@ -815,7 +1172,23 @@ impl<T: HardwareDebugTransportV2> HardwareBackendV2<T> {
             observations_by_native[queue_id] == KfdDebugQueueOperationStateV1::Complete
         }) {
             if suspend_grace.is_some() {
-                self.suspended_native.insert(queue_id);
+                let queue = self
+                    .queues
+                    .iter()
+                    .find(|record| record.native.queue_id == queue_id)
+                    .expect("admitted control queue remains present");
+                let device = self
+                    .devices
+                    .iter()
+                    .find(|device| device.logical == queue.device)
+                    .expect("admitted control queue device remains present");
+                self.suspended_native.insert(
+                    queue_id,
+                    SuspendedQueueBindingV2 {
+                        queue: queue.native,
+                        device: device.native,
+                    },
+                );
             } else {
                 self.suspended_native.remove(&queue_id);
             }
@@ -865,6 +1238,23 @@ impl<T: HardwareDebugTransportV2> HardwareBackendV2<T> {
                         .iter()
                         .map(|record| record.native)
                         .collect::<Vec<_>>());
+        let suspended_binding_changed = self.suspended_native.iter().any(|(queue_id, binding)| {
+            queues
+                .iter()
+                .find(|queue| queue.queue_id == *queue_id)
+                .is_none_or(|queue| *queue != binding.queue)
+                || devices
+                    .iter()
+                    .find(|device| device.gpu_id == binding.device.gpu_id)
+                    .is_none_or(|device| *device != binding.device)
+        });
+        if suspended_binding_changed {
+            self.invalidate_queue_identity()?;
+            return Err(HardwareTransportErrorV2 {
+                effect: HardwareEffectV2::Indeterminate,
+                operation: "session-owned suspended queue or device binding changed",
+            });
+        }
         let generation = if changed {
             self.generation
                 .checked_add(1)
@@ -917,15 +1307,10 @@ impl<T: HardwareDebugTransportV2> HardwareBackendV2<T> {
                     })
                 })
                 .collect::<Result<_, _>>()?;
-        let mut suspended_native = self.suspended_native.clone();
-        if changed {
-            suspended_native.retain(|queue| queues.iter().any(|entry| entry.queue_id == *queue));
-        }
         self.generation = generation;
         self.initialized_identity = true;
         self.devices = admitted_devices;
         self.queues = admitted_queues;
-        self.suspended_native = suspended_native;
         Ok(())
     }
 
@@ -1109,6 +1494,34 @@ impl<T: HardwareDebugTransportV2> HardwareBackendV2<T> {
             HardwareEffectV2::Indeterminate,
             true,
             "hardware debugger bounded state is exhausted",
+        )
+    }
+
+    fn capture_binding_drift(
+        &mut self,
+        request_id: u64,
+        operation: HardwareDebugOperationV2,
+        message: &str,
+    ) -> HardwareDebugResponseV2 {
+        if let Err(error) = self.invalidate_queue_identity() {
+            return self.transport_error(
+                request_id,
+                operation,
+                HardwareErrorStageV2::Snapshot,
+                error,
+            );
+        }
+        self.poisoned = true;
+        self.error(
+            request_id,
+            operation,
+            (
+                HardwareErrorStageV2::Snapshot,
+                HardwareErrorCodeV2::BackendFailure,
+            ),
+            HardwareEffectV2::Indeterminate,
+            true,
+            message,
         )
     }
 
@@ -1307,9 +1720,12 @@ mod tests {
         exception_info: VecDeque<NativeExceptionInfoV2>,
         suspend_result: Option<Result<Vec<NativeQueueOutcomeV2>, HardwareTransportErrorV2>>,
         resume_result: Option<Result<Vec<NativeQueueOutcomeV2>, HardwareTransportErrorV2>>,
+        capture_result:
+            Option<Result<NativeStoppedQueueEnvelopeV2, NativeStoppedQueueCaptureErrorV2>>,
         runtime_acknowledgements: usize,
         suspend_calls: usize,
         resume_calls: usize,
+        capture_calls: usize,
     }
 
     impl HardwareDebugTransportV2 for ScriptedTransportV2 {
@@ -1381,12 +1797,55 @@ mod tests {
                     .collect())
             })
         }
+
+        fn capture_stopped_queue(
+            &mut self,
+            _queue: u32,
+            _scope: KfdStoppedStateScopeV1,
+        ) -> Result<NativeStoppedQueueEnvelopeV2, NativeStoppedQueueCaptureErrorV2> {
+            self.capture_calls += 1;
+            self.capture_result
+                .take()
+                .unwrap_or_else(|| Ok(stopped_envelope()))
+        }
+    }
+
+    fn unavailable(reason: KfdStoppedUnavailableReasonV1) -> KfdStoppedAvailabilityV1 {
+        KfdStoppedAvailabilityV1::Unavailable(reason)
+    }
+
+    fn stopped_envelope() -> NativeStoppedQueueEnvelopeV2 {
+        NativeStoppedQueueEnvelopeV2 {
+            identity: [31; 32],
+            queue_identity: [32; 32],
+            device_identity: [33; 32],
+            exception_status_bits: 0,
+            ring_bytes: 4096,
+            queue_type: 0,
+            gfx_target_version: 90_402,
+            xcc_count: 8,
+            ownership: KfdStoppedSnapshotOwnershipV1::SessionRetainedSuspension,
+            context_save: NativeStoppedQueueContextSaveV2::Unavailable(
+                KfdStoppedUnavailableReasonV1::ContextSaveAreaNotReported,
+            ),
+            hardware_checkpoint_bytes: unavailable(
+                KfdStoppedUnavailableReasonV1::HardwareCheckpointBytesNotCpuVisible,
+            ),
+            waves: unavailable(KfdStoppedUnavailableReasonV1::WaveRecordLayoutNotInKfdUapi),
+            lanes: unavailable(KfdStoppedUnavailableReasonV1::LaneStateRequiresWaveRecords),
+            registers: unavailable(KfdStoppedUnavailableReasonV1::RegisterRecordLayoutNotInKfdUapi),
+            program_counter: unavailable(
+                KfdStoppedUnavailableReasonV1::ProgramCounterRequiresRegisterRecord,
+            ),
+            source: unavailable(KfdStoppedUnavailableReasonV1::SourceMapNotBound),
+            memory: unavailable(KfdStoppedUnavailableReasonV1::MemoryValuesNotCaptured),
+        }
     }
 
     fn device(gpu_id: u32) -> NativeDeviceV2 {
         NativeDeviceV2 {
             gpu_id,
-            gfx_target_version: 94_200,
+            gfx_target_version: 90_402,
             xcc_count: 8,
             trap_debug_supported: true,
             debug_firmware_supported: true,
@@ -1401,6 +1860,7 @@ mod tests {
         NativeQueueV2 {
             queue_id,
             gpu_id,
+            exception_status_bits: 0,
             ring_bytes: 4096,
             queue_type: 0,
             context_save_area_bytes: 0,
@@ -1423,6 +1883,10 @@ mod tests {
             )]),
             ..ScriptedTransportV2::default()
         }
+    }
+
+    fn stopped_scope() -> KfdStoppedStateScopeV1 {
+        KfdStoppedStateScopeV1::new([91; 32]).unwrap()
     }
 
     fn inspect_queues(
@@ -1542,7 +2006,324 @@ mod tests {
                 ..
             }
         ));
-        assert!(backend.suspended_native.contains(&90));
+        assert!(backend.suspended_native.contains_key(&90));
+    }
+
+    #[test]
+    fn stopped_queue_capture_keeps_owned_suspend_until_authorized_resume() {
+        let mut backend = HardwareBackendV2::new(runtime_enabled_transport(vec![queue(17, 90)]));
+        let id = queue_ids(&inspect_queues(&mut backend, 0))[0];
+        let suspended = backend.handle(HardwareDebugRequestV2::SuspendQueues {
+            schema: HardwareRequestSchemaV2::V2,
+            request_id: 2,
+            expected_control_revision: 0,
+            queues: vec![id],
+            grace_period: 0,
+        });
+        assert!(matches!(suspended, HardwareDebugResponseV2::Ok { .. }));
+
+        let captured = backend.capture_stopped_queue_envelope(3, 1, id, stopped_scope());
+        assert!(matches!(
+            captured,
+            StoppedQueueEnvelopeCaptureV2::Captured {
+                session: HardwareSessionViewV2 {
+                    state: HardwareSessionStateV2::Running,
+                    control_revision: 1,
+                    commands_processed: 3,
+                    ..
+                },
+                queue,
+                device: HardwareDeviceIdV2 {
+                    generation: 1,
+                    ordinal: 1
+                },
+                ..
+            } if queue == id
+        ));
+        assert_eq!(backend.transport.capture_calls, 1);
+        assert_eq!(
+            backend
+                .suspended_native
+                .keys()
+                .copied()
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([90])
+        );
+
+        let resumed = backend.handle(HardwareDebugRequestV2::ResumeQueues {
+            schema: HardwareRequestSchemaV2::V2,
+            request_id: 4,
+            expected_control_revision: 1,
+            queues: vec![id],
+        });
+        assert!(matches!(
+            resumed,
+            HardwareDebugResponseV2::Ok {
+                session: HardwareSessionViewV2 {
+                    control_revision: 2,
+                    ..
+                },
+                ..
+            }
+        ));
+        assert!(backend.suspended_native.is_empty());
+        assert_eq!(backend.transport.resume_calls, 1);
+    }
+
+    #[test]
+    fn stopped_queue_capture_requires_exact_session_owned_suspend() {
+        let mut backend = HardwareBackendV2::new(runtime_enabled_transport(vec![queue(17, 90)]));
+        let id = queue_ids(&inspect_queues(&mut backend, 0))[0];
+        let captured = backend.capture_stopped_queue_envelope(2, 0, id, stopped_scope());
+        assert!(matches!(
+            captured,
+            StoppedQueueEnvelopeCaptureV2::Rejected(HardwareDebugResponseV2::Error {
+                error: HardwareDebugErrorV2 {
+                    code: HardwareErrorCodeV2::InvalidRequest,
+                    effect: HardwareEffectV2::None,
+                    terminal: false,
+                    ..
+                },
+                ..
+            })
+        ));
+        assert_eq!(backend.transport.capture_calls, 0);
+        assert_eq!(backend.control_revision, 0);
+    }
+
+    #[test]
+    fn stopped_queue_capture_cross_checks_outer_binding_fields() {
+        let mutations: [fn(&mut NativeStoppedQueueEnvelopeV2); 5] = [
+            |value| value.exception_status_bits = 1,
+            |value| value.ring_bytes = 8192,
+            |value| value.queue_type = 7,
+            |value| value.gfx_target_version = 90_000,
+            |value| value.xcc_count = 4,
+        ];
+        for mutate in mutations {
+            let mut backend =
+                HardwareBackendV2::new(runtime_enabled_transport(vec![queue(17, 90)]));
+            let id = queue_ids(&inspect_queues(&mut backend, 0))[0];
+            assert!(matches!(
+                backend.handle(HardwareDebugRequestV2::SuspendQueues {
+                    schema: HardwareRequestSchemaV2::V2,
+                    request_id: 2,
+                    expected_control_revision: 0,
+                    queues: vec![id],
+                    grace_period: 0,
+                }),
+                HardwareDebugResponseV2::Ok { .. }
+            ));
+            let mut envelope = stopped_envelope();
+            mutate(&mut envelope);
+            backend.transport.capture_result = Some(Ok(envelope));
+
+            let captured = backend.capture_stopped_queue_envelope(3, 1, id, stopped_scope());
+            assert!(matches!(
+                captured,
+                StoppedQueueEnvelopeCaptureV2::Rejected(HardwareDebugResponseV2::Error {
+                    session: HardwareSessionViewV2 {
+                        state: HardwareSessionStateV2::Poisoned,
+                        identity_generation: 2,
+                        control_revision: 1,
+                        ..
+                    },
+                    error: HardwareDebugErrorV2 {
+                        code: HardwareErrorCodeV2::BackendFailure,
+                        effect: HardwareEffectV2::Indeterminate,
+                        terminal: true,
+                        ..
+                    },
+                    ..
+                })
+            ));
+            assert_eq!(backend.transport.capture_calls, 1);
+            assert!(backend.suspended_native.contains_key(&90));
+            assert!(backend.queues.is_empty());
+        }
+    }
+
+    #[test]
+    fn lost_capture_ownership_invalidates_identity_and_clears_suspend() {
+        let mut backend = HardwareBackendV2::new(runtime_enabled_transport(vec![queue(17, 90)]));
+        let id = queue_ids(&inspect_queues(&mut backend, 0))[0];
+        assert!(matches!(
+            backend.handle(HardwareDebugRequestV2::SuspendQueues {
+                schema: HardwareRequestSchemaV2::V2,
+                request_id: 2,
+                expected_control_revision: 0,
+                queues: vec![id],
+                grace_period: 0,
+            }),
+            HardwareDebugResponseV2::Ok { .. }
+        ));
+        backend.transport.capture_result =
+            Some(Err(NativeStoppedQueueCaptureErrorV2::OwnershipLost));
+
+        let captured = backend.capture_stopped_queue_envelope(3, 1, id, stopped_scope());
+        assert!(matches!(
+            captured,
+            StoppedQueueEnvelopeCaptureV2::Rejected(HardwareDebugResponseV2::Error {
+                session: HardwareSessionViewV2 {
+                    identity_generation: 2,
+                    control_revision: 1,
+                    ..
+                },
+                error: HardwareDebugErrorV2 {
+                    effect: HardwareEffectV2::None,
+                    terminal: false,
+                    ..
+                },
+                ..
+            })
+        ));
+        assert!(backend.suspended_native.is_empty());
+        assert!(backend.queues.is_empty());
+        assert!(!backend.poisoned);
+    }
+
+    #[test]
+    fn binding_substitution_terminally_defers_owned_suspend_to_cleanup() {
+        let mut backend = HardwareBackendV2::new(runtime_enabled_transport(vec![queue(17, 90)]));
+        let id = queue_ids(&inspect_queues(&mut backend, 0))[0];
+        assert!(matches!(
+            backend.handle(HardwareDebugRequestV2::SuspendQueues {
+                schema: HardwareRequestSchemaV2::V2,
+                request_id: 2,
+                expected_control_revision: 0,
+                queues: vec![id],
+                grace_period: 0,
+            }),
+            HardwareDebugResponseV2::Ok { .. }
+        ));
+        backend.transport.capture_result =
+            Some(Err(NativeStoppedQueueCaptureErrorV2::BindingSubstituted));
+
+        let captured = backend.capture_stopped_queue_envelope(3, 1, id, stopped_scope());
+        assert!(matches!(
+            captured,
+            StoppedQueueEnvelopeCaptureV2::Rejected(HardwareDebugResponseV2::Error {
+                session: HardwareSessionViewV2 {
+                    state: HardwareSessionStateV2::Poisoned,
+                    identity_generation: 2,
+                    control_revision: 1,
+                    ..
+                },
+                error: HardwareDebugErrorV2 {
+                    code: HardwareErrorCodeV2::BackendFailure,
+                    effect: HardwareEffectV2::Indeterminate,
+                    terminal: true,
+                    ..
+                },
+                ..
+            })
+        ));
+        assert!(backend.suspended_native.contains_key(&90));
+        assert!(backend.queues.is_empty());
+        let next = backend.handle(HardwareDebugRequestV2::GetState {
+            schema: HardwareRequestSchemaV2::V2,
+            request_id: 4,
+            expected_control_revision: 1,
+        });
+        assert!(matches!(
+            next,
+            HardwareDebugResponseV2::Error {
+                session: HardwareSessionViewV2 {
+                    state: HardwareSessionStateV2::Poisoned,
+                    ..
+                },
+                error: HardwareDebugErrorV2 {
+                    code: HardwareErrorCodeV2::SessionPoisoned,
+                    terminal: true,
+                    ..
+                },
+                ..
+            }
+        ));
+        assert!(backend.suspended_native.contains_key(&90));
+    }
+
+    #[test]
+    fn reused_native_queue_id_is_rejected_before_capture() {
+        let mut backend = HardwareBackendV2::new(runtime_enabled_transport(vec![queue(17, 90)]));
+        let id = queue_ids(&inspect_queues(&mut backend, 0))[0];
+        assert!(matches!(
+            backend.handle(HardwareDebugRequestV2::SuspendQueues {
+                schema: HardwareRequestSchemaV2::V2,
+                request_id: 2,
+                expected_control_revision: 0,
+                queues: vec![id],
+                grace_period: 0,
+            }),
+            HardwareDebugResponseV2::Ok { .. }
+        ));
+        backend.transport.queues[0].ring_bytes = 8192;
+
+        let captured = backend.capture_stopped_queue_envelope(3, 1, id, stopped_scope());
+        assert!(matches!(
+            captured,
+            StoppedQueueEnvelopeCaptureV2::Rejected(HardwareDebugResponseV2::Error {
+                session: HardwareSessionViewV2 {
+                    state: HardwareSessionStateV2::Poisoned,
+                    identity_generation: 2,
+                    control_revision: 1,
+                    ..
+                },
+                error: HardwareDebugErrorV2 {
+                    code: HardwareErrorCodeV2::BackendFailure,
+                    effect: HardwareEffectV2::Indeterminate,
+                    terminal: true,
+                    ..
+                },
+                ..
+            })
+        ));
+        assert_eq!(backend.transport.capture_calls, 0);
+        assert!(backend.suspended_native.contains_key(&90));
+    }
+
+    #[test]
+    fn reused_native_queue_id_is_rejected_before_resume_ioctl() {
+        let mut backend = HardwareBackendV2::new(runtime_enabled_transport(vec![queue(17, 90)]));
+        let id = queue_ids(&inspect_queues(&mut backend, 0))[0];
+        assert!(matches!(
+            backend.handle(HardwareDebugRequestV2::SuspendQueues {
+                schema: HardwareRequestSchemaV2::V2,
+                request_id: 2,
+                expected_control_revision: 0,
+                queues: vec![id],
+                grace_period: 0,
+            }),
+            HardwareDebugResponseV2::Ok { .. }
+        ));
+        backend.transport.queues[0].context_save_area_bytes = 0x162_1000;
+
+        let resumed = backend.handle(HardwareDebugRequestV2::ResumeQueues {
+            schema: HardwareRequestSchemaV2::V2,
+            request_id: 3,
+            expected_control_revision: 1,
+            queues: vec![id],
+        });
+        assert!(matches!(
+            resumed,
+            HardwareDebugResponseV2::Error {
+                session: HardwareSessionViewV2 {
+                    state: HardwareSessionStateV2::Poisoned,
+                    identity_generation: 2,
+                    control_revision: 1,
+                    ..
+                },
+                error: HardwareDebugErrorV2 {
+                    code: HardwareErrorCodeV2::BackendFailure,
+                    effect: HardwareEffectV2::Indeterminate,
+                    terminal: true,
+                    ..
+                },
+                ..
+            }
+        ));
+        assert_eq!(backend.transport.resume_calls, 0);
+        assert!(backend.suspended_native.contains_key(&90));
     }
 
     #[test]
@@ -1636,7 +2417,14 @@ mod tests {
                 ..
             }
         ));
-        assert_eq!(backend.suspended_native, BTreeSet::from([90]));
+        assert_eq!(
+            backend
+                .suspended_native
+                .keys()
+                .copied()
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([90])
+        );
         assert!(!backend.poisoned);
     }
 

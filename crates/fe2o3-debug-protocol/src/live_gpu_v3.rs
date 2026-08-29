@@ -18,10 +18,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     AllocationIdentityV1, HardwareDebugOperationV2, HardwareDebugResponseV2, HardwareDebugResultV2,
-    HardwareEffectV2, HardwareEventPageRequestV2, HardwarePageRequestV2, HardwareProtocolLimitsV2,
-    HardwareQueueIdV2, HardwareResponseSchemaV2, HardwareSessionStateV2, HardwareSessionViewV2,
-    KirSiteV1, MAX_HARDWARE_EVENT_WAIT_MILLISECONDS_V2, MAX_HARDWARE_QUEUE_CONTROL_ITEMS_V2,
-    MAX_HARDWARE_SESSION_COMMANDS_V2, MAX_HARDWARE_SUSPEND_GRACE_PERIOD_V2, OpaqueIdentityV1,
+    HardwareDeviceIdV2, HardwareEffectV2, HardwareEventPageRequestV2, HardwarePageRequestV2,
+    HardwareProtocolLimitsV2, HardwareQueueIdV2, HardwareResponseSchemaV2, HardwareSessionStateV2,
+    HardwareSessionViewV2, KirSiteV1, MAX_HARDWARE_EVENT_WAIT_MILLISECONDS_V2,
+    MAX_HARDWARE_QUEUE_CONTROL_ITEMS_V2, MAX_HARDWARE_SESSION_COMMANDS_V2,
+    MAX_HARDWARE_SUSPEND_GRACE_PERIOD_V2, OpaqueIdentityV1,
 };
 
 pub const LIVE_GPU_REQUEST_SCHEMA_V3: &str = "fe2o3-live-gpu-debug-request-v3";
@@ -35,6 +36,14 @@ pub const MAX_LIVE_GPU_SELECTOR_ITEMS_V3: usize = 256;
 pub const MAX_LIVE_GPU_TEXT_BYTES_V3: usize = 128;
 pub const MAX_LIVE_GPU_VALUE_BITS_V3: u16 = 4_096;
 pub const MAX_LIVE_GPU_TARGET_TELEMETRY_RECORDS_V3: u64 = 4_096;
+pub const MAX_LIVE_GPU_STOPPED_QUEUE_XCC_HEADERS_V3: usize = 64;
+const LIVE_GPU_STOPPED_QUEUE_GFX942_TARGET_V3: u32 = 90_402;
+const LIVE_GPU_STOPPED_QUEUE_GFX942_XCCS_V3: u32 = 8;
+const LIVE_GPU_STOPPED_QUEUE_GFX942_CONTEXT_BYTES_V3: u32 = 0x162_1000;
+const LIVE_GPU_STOPPED_QUEUE_GFX942_DEBUG_BYTES_V3: u32 = 0x5_f000;
+const LIVE_GPU_STOPPED_QUEUE_HEADER_BYTES_V3: u32 = 40;
+const LIVE_GPU_STOPPED_QUEUE_MAX_QUEUE_TYPE_V3: u32 = 3;
+const LIVE_GPU_STOPPED_QUEUE_KFD_EXCEPTION_MASK_V3: u64 = 0x0001_800f_e07f_803f;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct LiveGpuProtocolLimitsV3 {
@@ -120,6 +129,7 @@ pub enum LiveGpuCapabilityNameV3 {
     HardwareExceptionEvents,
     QueueSuspend,
     QueueResume,
+    StoppedQueueEnvelope,
     Terminate,
     StoppedDispatch,
     StoppedWorkgroups,
@@ -970,6 +980,371 @@ pub enum LiveGpuValueSelectorV3 {
     Identities { identities: Vec<OpaqueIdentityV1> },
 }
 
+/// Exact direct-KFD reasons why a stopped-queue envelope cannot expose a fact.
+///
+/// These are intentionally narrower than the generic debugger availability
+/// reasons. They describe the KFD envelope observation and never imply that a
+/// stopped dispatch, workgroup, wave, or lane was observed.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LiveGpuStoppedQueueUnavailableReasonV3 {
+    ContextSaveAreaNotReported,
+    GfxTargetNotGfx942,
+    Gfx942XccCountMismatch,
+    Gfx942SaveAreaSizeMismatch,
+    TargetAddressNotRepresentable,
+    TargetHeaderReadDenied,
+    TargetHeaderReadPartial,
+    ContextHeaderReservedNonzero,
+    ContextHeaderRangePairMalformed,
+    ContextHeaderRangeOutOfBounds,
+    ContextHeaderRangeOverlap,
+    Gfx942DebugRangeMismatch,
+    ContextHeaderBindingSubstituted,
+    HardwareCheckpointBytesNotCpuVisible,
+    WaveRecordLayoutNotInKfdUapi,
+    LaneStateRequiresWaveRecords,
+    RegisterRecordLayoutNotInKfdUapi,
+    ProgramCounterRequiresRegisterRecord,
+    SourceMapNotBound,
+    MemoryValuesNotCaptured,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct LiveGpuStoppedQueueUnavailableV3 {
+    pub reason: LiveGpuStoppedQueueUnavailableReasonV3,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct LiveGpuStoppedQueueRelativeRangeV3 {
+    pub offset: u32,
+    pub bytes: u32,
+}
+
+impl LiveGpuStoppedQueueRelativeRangeV3 {
+    fn validate(self, limit: u32, minimum_offset: u32) -> Result<(), LiveGpuValidationErrorV3> {
+        if self.bytes == 0 {
+            return if self.offset == 0 {
+                Ok(())
+            } else {
+                Err(LiveGpuValidationErrorV3::InvalidRange(
+                    "empty stopped queue range",
+                ))
+            };
+        }
+        let end =
+            self.offset
+                .checked_add(self.bytes)
+                .ok_or(LiveGpuValidationErrorV3::RangeOverflow(
+                    "stopped queue range",
+                ))?;
+        if self.offset < minimum_offset || end > limit {
+            return Err(LiveGpuValidationErrorV3::InvalidRange(
+                "stopped queue range",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Address-free CPU-visible context header ranges for one logical XCC.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct LiveGpuStoppedQueueXccHeaderV3 {
+    pub xcc_ordinal: u32,
+    pub identity: OpaqueIdentityV1,
+    pub control_stack: LiveGpuStoppedQueueRelativeRangeV3,
+    pub wave_state: LiveGpuStoppedQueueRelativeRangeV3,
+    pub debug: LiveGpuStoppedQueueRelativeRangeV3,
+    pub error_binding_present: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "availability", rename_all = "snake_case", deny_unknown_fields)]
+pub enum LiveGpuStoppedQueueContextSaveV3 {
+    Available {
+        identity: OpaqueIdentityV1,
+        context_bytes_per_xcc: u32,
+        total_allocation_bytes: u64,
+        headers: Vec<LiveGpuStoppedQueueXccHeaderV3>,
+    },
+    Unavailable {
+        reason: LiveGpuStoppedQueueUnavailableReasonV3,
+    },
+}
+
+impl LiveGpuStoppedQueueContextSaveV3 {
+    fn validate(
+        &self,
+        gfx_target_version: u32,
+        xcc_count: u32,
+    ) -> Result<(), LiveGpuValidationErrorV3> {
+        match self {
+            Self::Available {
+                context_bytes_per_xcc,
+                total_allocation_bytes,
+                headers,
+                ..
+            } => {
+                if gfx_target_version != LIVE_GPU_STOPPED_QUEUE_GFX942_TARGET_V3
+                    || xcc_count != LIVE_GPU_STOPPED_QUEUE_GFX942_XCCS_V3
+                    || *context_bytes_per_xcc != LIVE_GPU_STOPPED_QUEUE_GFX942_CONTEXT_BYTES_V3
+                {
+                    return Err(LiveGpuValidationErrorV3::InvalidAvailability);
+                }
+                if headers.is_empty()
+                    || headers.len() > MAX_LIVE_GPU_STOPPED_QUEUE_XCC_HEADERS_V3
+                    || usize::try_from(xcc_count).ok() != Some(headers.len())
+                {
+                    return Err(LiveGpuValidationErrorV3::CountOutOfRange(
+                        "stopped queue XCC headers",
+                    ));
+                }
+                let mut identities = BTreeSet::new();
+                let header_bytes = LIVE_GPU_STOPPED_QUEUE_HEADER_BYTES_V3;
+                let debug_bytes = headers[0].debug.bytes;
+                let error_binding_present = headers[0].error_binding_present;
+                if debug_bytes != LIVE_GPU_STOPPED_QUEUE_GFX942_DEBUG_BYTES_V3 {
+                    return Err(LiveGpuValidationErrorV3::InvalidRange(
+                        "stopped queue debug range",
+                    ));
+                }
+                for (ordinal, header) in headers.iter().enumerate() {
+                    let ordinal = u32::try_from(ordinal).map_err(|_| {
+                        LiveGpuValidationErrorV3::CountOutOfRange("stopped queue XCC headers")
+                    })?;
+                    if header.xcc_ordinal != ordinal {
+                        return Err(LiveGpuValidationErrorV3::IdentityMismatch(
+                            "stopped queue XCC ordinal",
+                        ));
+                    }
+                    if header.error_binding_present != error_binding_present {
+                        return Err(LiveGpuValidationErrorV3::InvalidAvailability);
+                    }
+                    if !identities.insert(header.identity) {
+                        return Err(LiveGpuValidationErrorV3::DuplicateIdentity(
+                            "stopped queue XCC header",
+                        ));
+                    }
+                    header
+                        .control_stack
+                        .validate(*context_bytes_per_xcc, header_bytes)?;
+                    header
+                        .wave_state
+                        .validate(*context_bytes_per_xcc, header_bytes)?;
+                    if stopped_queue_ranges_overlap(header.control_stack, header.wave_state) {
+                        return Err(LiveGpuValidationErrorV3::InvalidRange(
+                            "overlapping stopped queue ranges",
+                        ));
+                    }
+                    let remaining = xcc_count.checked_sub(ordinal).ok_or(
+                        LiveGpuValidationErrorV3::InvalidRange("stopped queue debug range"),
+                    )?;
+                    let expected_debug_offset =
+                        context_bytes_per_xcc.checked_mul(remaining).ok_or(
+                            LiveGpuValidationErrorV3::RangeOverflow("stopped queue debug range"),
+                        )?;
+                    if header.debug.offset != expected_debug_offset
+                        || header.debug.bytes != debug_bytes
+                    {
+                        return Err(LiveGpuValidationErrorV3::InvalidRange(
+                            "stopped queue debug range",
+                        ));
+                    }
+                }
+                let context_total = u64::from(*context_bytes_per_xcc)
+                    .checked_mul(u64::from(xcc_count))
+                    .and_then(|bytes| bytes.checked_add(u64::from(debug_bytes)))
+                    .ok_or(LiveGpuValidationErrorV3::RangeOverflow(
+                        "stopped queue context allocation",
+                    ))?;
+                if *total_allocation_bytes != context_total {
+                    return Err(LiveGpuValidationErrorV3::InvalidRange(
+                        "stopped queue context allocation",
+                    ));
+                }
+                Ok(())
+            }
+            Self::Unavailable { reason } => {
+                let producer_possible = match reason {
+                    LiveGpuStoppedQueueUnavailableReasonV3::ContextSaveAreaNotReported => true,
+                    LiveGpuStoppedQueueUnavailableReasonV3::GfxTargetNotGfx942 => {
+                        gfx_target_version != LIVE_GPU_STOPPED_QUEUE_GFX942_TARGET_V3
+                    }
+                    LiveGpuStoppedQueueUnavailableReasonV3::Gfx942XccCountMismatch => {
+                        gfx_target_version == LIVE_GPU_STOPPED_QUEUE_GFX942_TARGET_V3
+                            && xcc_count != LIVE_GPU_STOPPED_QUEUE_GFX942_XCCS_V3
+                    }
+                    LiveGpuStoppedQueueUnavailableReasonV3::Gfx942SaveAreaSizeMismatch
+                    | LiveGpuStoppedQueueUnavailableReasonV3::TargetAddressNotRepresentable
+                    | LiveGpuStoppedQueueUnavailableReasonV3::TargetHeaderReadDenied
+                    | LiveGpuStoppedQueueUnavailableReasonV3::TargetHeaderReadPartial
+                    | LiveGpuStoppedQueueUnavailableReasonV3::ContextHeaderReservedNonzero
+                    | LiveGpuStoppedQueueUnavailableReasonV3::ContextHeaderRangePairMalformed
+                    | LiveGpuStoppedQueueUnavailableReasonV3::ContextHeaderRangeOutOfBounds
+                    | LiveGpuStoppedQueueUnavailableReasonV3::ContextHeaderRangeOverlap
+                    | LiveGpuStoppedQueueUnavailableReasonV3::Gfx942DebugRangeMismatch
+                    | LiveGpuStoppedQueueUnavailableReasonV3::ContextHeaderBindingSubstituted => {
+                        gfx_target_version == LIVE_GPU_STOPPED_QUEUE_GFX942_TARGET_V3
+                            && xcc_count == LIVE_GPU_STOPPED_QUEUE_GFX942_XCCS_V3
+                    }
+                    LiveGpuStoppedQueueUnavailableReasonV3::HardwareCheckpointBytesNotCpuVisible
+                    | LiveGpuStoppedQueueUnavailableReasonV3::WaveRecordLayoutNotInKfdUapi
+                    | LiveGpuStoppedQueueUnavailableReasonV3::LaneStateRequiresWaveRecords
+                    | LiveGpuStoppedQueueUnavailableReasonV3::RegisterRecordLayoutNotInKfdUapi
+                    | LiveGpuStoppedQueueUnavailableReasonV3::ProgramCounterRequiresRegisterRecord
+                    | LiveGpuStoppedQueueUnavailableReasonV3::SourceMapNotBound
+                    | LiveGpuStoppedQueueUnavailableReasonV3::MemoryValuesNotCaptured => false,
+                };
+                if producer_possible {
+                    Ok(())
+                } else {
+                    Err(LiveGpuValidationErrorV3::InvalidAvailability)
+                }
+            }
+        }
+    }
+}
+
+fn stopped_queue_ranges_overlap(
+    left: LiveGpuStoppedQueueRelativeRangeV3,
+    right: LiveGpuStoppedQueueRelativeRangeV3,
+) -> bool {
+    if left.bytes == 0 || right.bytes == 0 {
+        return false;
+    }
+    let Some(left_end) = left.offset.checked_add(left.bytes) else {
+        return true;
+    };
+    let Some(right_end) = right.offset.checked_add(right.bytes) else {
+        return true;
+    };
+    left.offset < right_end && right.offset < left_end
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LiveGpuStoppedQueueOwnershipV3 {
+    SessionRetainedSuspension,
+}
+
+/// One bounded stopped *queue envelope*. It is not a generic stopped anchor.
+///
+/// The exact direct-KFD session still owns the suspension after capture, so an
+/// authorized `resume_queues` operation remains mandatory.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct LiveGpuStoppedQueueEnvelopeV3 {
+    pub envelope_identity: OpaqueIdentityV1,
+    pub queue: HardwareQueueIdV2,
+    pub device: HardwareDeviceIdV2,
+    pub queue_observation_identity: OpaqueIdentityV1,
+    pub device_observation_identity: OpaqueIdentityV1,
+    pub exception_status_bits: u64,
+    pub ring_bytes: u32,
+    pub queue_type: u32,
+    pub gfx_target_version: u32,
+    pub xcc_count: u32,
+    pub ownership: LiveGpuStoppedQueueOwnershipV3,
+    pub resume_required: bool,
+    pub context_save: LiveGpuStoppedQueueContextSaveV3,
+    pub hardware_checkpoint_bytes: LiveGpuStoppedQueueUnavailableV3,
+    pub waves: LiveGpuStoppedQueueUnavailableV3,
+    pub lanes: LiveGpuStoppedQueueUnavailableV3,
+    pub registers: LiveGpuStoppedQueueUnavailableV3,
+    pub program_counter: LiveGpuStoppedQueueUnavailableV3,
+    pub source: LiveGpuStoppedQueueUnavailableV3,
+    pub memory: LiveGpuStoppedQueueUnavailableV3,
+    pub truth: LiveGpuTruthV3,
+}
+
+impl LiveGpuStoppedQueueEnvelopeV3 {
+    fn validate(
+        &self,
+        session: LiveGpuSessionViewV3,
+        limits: LiveGpuProtocolLimitsV3,
+    ) -> Result<(), LiveGpuValidationErrorV3> {
+        self.queue
+            .validate()
+            .map_err(|_| LiveGpuValidationErrorV3::InvalidLogicalIdentity("queue"))?;
+        self.device
+            .validate()
+            .map_err(|_| LiveGpuValidationErrorV3::InvalidLogicalIdentity("device"))?;
+        if session.backend != LiveGpuBackendV3::DirectKfd
+            || session.state != LiveGpuSessionStateV3::Running
+            || !session.runtime_enabled
+            || self.queue.generation != session.identity_generation
+            || self.device.generation != session.identity_generation
+            || !self.resume_required
+        {
+            return Err(LiveGpuValidationErrorV3::InvalidSessionState);
+        }
+        if self.ring_bytes == 0 || self.gfx_target_version == 0 || self.xcc_count == 0 {
+            return Err(LiveGpuValidationErrorV3::ZeroCount(
+                "stopped queue envelope field",
+            ));
+        }
+        if self.queue_type > LIVE_GPU_STOPPED_QUEUE_MAX_QUEUE_TYPE_V3
+            || self.exception_status_bits & !LIVE_GPU_STOPPED_QUEUE_KFD_EXCEPTION_MASK_V3 != 0
+        {
+            return Err(LiveGpuValidationErrorV3::InvalidAvailability);
+        }
+        self.context_save
+            .validate(self.gfx_target_version, self.xcc_count)?;
+        let mut identities = BTreeSet::from([
+            self.envelope_identity,
+            self.queue_observation_identity,
+            self.device_observation_identity,
+        ]);
+        if identities.len() != 3 {
+            return Err(LiveGpuValidationErrorV3::DuplicateIdentity(
+                "stopped queue identity domain",
+            ));
+        }
+        if let LiveGpuStoppedQueueContextSaveV3::Available {
+            identity, headers, ..
+        } = &self.context_save
+            && (!identities.insert(*identity)
+                || headers
+                    .iter()
+                    .any(|header| !identities.insert(header.identity)))
+        {
+            return Err(LiveGpuValidationErrorV3::DuplicateIdentity(
+                "stopped queue identity domain",
+            ));
+        }
+        if self.hardware_checkpoint_bytes.reason
+            != LiveGpuStoppedQueueUnavailableReasonV3::HardwareCheckpointBytesNotCpuVisible
+            || self.waves.reason
+                != LiveGpuStoppedQueueUnavailableReasonV3::WaveRecordLayoutNotInKfdUapi
+            || self.lanes.reason
+                != LiveGpuStoppedQueueUnavailableReasonV3::LaneStateRequiresWaveRecords
+            || self.registers.reason
+                != LiveGpuStoppedQueueUnavailableReasonV3::RegisterRecordLayoutNotInKfdUapi
+            || self.program_counter.reason
+                != LiveGpuStoppedQueueUnavailableReasonV3::ProgramCounterRequiresRegisterRecord
+            || self.source.reason != LiveGpuStoppedQueueUnavailableReasonV3::SourceMapNotBound
+            || self.memory.reason != LiveGpuStoppedQueueUnavailableReasonV3::MemoryValuesNotCaptured
+        {
+            return Err(LiveGpuValidationErrorV3::InvalidAvailability);
+        }
+        self.truth.validate(limits)?;
+        if self.truth.origin != LiveGpuTruthOriginV3::Observed
+            || self.truth.evidence.len() != 1
+            || self.truth.evidence[0]
+                != (LiveGpuEvidenceRefV3 {
+                    kind: LiveGpuEvidenceKindV3::RuntimeObservation,
+                    identity: self.envelope_identity,
+                })
+        {
+            return Err(LiveGpuValidationErrorV3::InvalidTruthEvidence);
+        }
+        Ok(())
+    }
+}
+
 impl LiveGpuValueSelectorV3 {
     fn validate(&self) -> Result<(), LiveGpuValidationErrorV3> {
         match self {
@@ -1001,6 +1376,7 @@ pub enum LiveGpuOperationV3 {
     QueryHardwareExceptionEvents,
     SuspendQueues,
     ResumeQueues,
+    CaptureStoppedQueueEnvelope,
     InspectStoppedScopes,
     InspectRegisters,
     InspectValues,
@@ -1062,6 +1438,12 @@ pub enum LiveGpuDebugRequestV3 {
         request_id: u64,
         expected_revision: u64,
         queues: Vec<HardwareQueueIdV2>,
+    },
+    CaptureStoppedQueueEnvelope {
+        schema: LiveGpuRequestSchemaV3,
+        request_id: u64,
+        expected_revision: u64,
+        queue: HardwareQueueIdV2,
     },
     InspectStoppedScopes {
         schema: LiveGpuRequestSchemaV3,
@@ -1166,6 +1548,7 @@ impl LiveGpuDebugRequestV3 {
             | Self::QueryHardwareExceptionEvents { request_id, .. }
             | Self::SuspendQueues { request_id, .. }
             | Self::ResumeQueues { request_id, .. }
+            | Self::CaptureStoppedQueueEnvelope { request_id, .. }
             | Self::InspectStoppedScopes { request_id, .. }
             | Self::InspectRegisters { request_id, .. }
             | Self::InspectValues { request_id, .. }
@@ -1204,6 +1587,9 @@ impl LiveGpuDebugRequestV3 {
                 expected_revision, ..
             }
             | Self::ResumeQueues {
+                expected_revision, ..
+            }
+            | Self::CaptureStoppedQueueEnvelope {
                 expected_revision, ..
             }
             | Self::InspectStoppedScopes {
@@ -1254,6 +1640,9 @@ impl LiveGpuDebugRequestV3 {
             }
             Self::SuspendQueues { .. } => LiveGpuOperationV3::SuspendQueues,
             Self::ResumeQueues { .. } => LiveGpuOperationV3::ResumeQueues,
+            Self::CaptureStoppedQueueEnvelope { .. } => {
+                LiveGpuOperationV3::CaptureStoppedQueueEnvelope
+            }
             Self::InspectStoppedScopes { .. } => LiveGpuOperationV3::InspectStoppedScopes,
             Self::InspectRegisters { .. } => LiveGpuOperationV3::InspectRegisters,
             Self::InspectValues { .. } => LiveGpuOperationV3::InspectValues,
@@ -1295,6 +1684,9 @@ impl LiveGpuDebugRequestV3 {
                 validate_hardware_queues(queues)
             }
             Self::ResumeQueues { queues, .. } => validate_hardware_queues(queues),
+            Self::CaptureStoppedQueueEnvelope { queue, .. } => queue
+                .validate()
+                .map_err(|_| LiveGpuValidationErrorV3::InvalidLogicalIdentity("queue")),
             Self::InspectStoppedScopes { scope, page, .. } => {
                 scope.validate()?;
                 page.validate(limits)
@@ -1526,6 +1918,9 @@ pub enum LiveGpuDebugResultV3 {
     Hardware {
         hardware: HardwareDebugResultV2,
     },
+    StoppedQueueEnvelope {
+        envelope: LiveGpuStoppedQueueEnvelopeV3,
+    },
     Scopes {
         anchor: LiveGpuStoppedAnchorV3,
         coverage: LiveGpuStoppedCoverageV3,
@@ -1616,6 +2011,10 @@ impl LiveGpuDebugResultV3 {
                     },
                     LiveGpuOperationV3::SuspendQueues | LiveGpuOperationV3::ResumeQueues
                 )
+                | (
+                    Self::StoppedQueueEnvelope { .. },
+                    LiveGpuOperationV3::CaptureStoppedQueueEnvelope
+                )
                 | (Self::Terminated, LiveGpuOperationV3::Terminate)
                 | (
                     Self::Scopes { .. },
@@ -1679,6 +2078,7 @@ impl LiveGpuDebugResultV3 {
                 }
             }
             Self::Hardware { hardware } => validate_hardware_result(hardware, session, limits),
+            Self::StoppedQueueEnvelope { envelope } => envelope.validate(session, limits),
             Self::Scopes {
                 anchor,
                 page,
