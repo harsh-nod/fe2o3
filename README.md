@@ -18,6 +18,7 @@ artifact, runtime, and proof boundaries described below. See the
 [cuda-oxide parity matrix](docs/cuda-oxide-parity-matrix.md),
 [evidence-backed parity dashboard](docs/generated/cuda-oxide-parity-dashboard.md),
 [debugger and profiler architecture V1](docs/debugger-profiler-architecture-v1.md),
+[debugger and profiler task matrix V1](docs/debugger-profiler-task-matrix-v1.md),
 [verification model](docs/verification-model.md),
 [GPU safety contract v1](docs/gpu-safety-contract-v1.md), and
 [implementation roadmap](docs/implementation-roadmap-v2.md). The

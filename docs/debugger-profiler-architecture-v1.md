@@ -92,6 +92,9 @@ exact semantic/evidence graph and deterministic agent queries, not a claim that
 it currently exposes more native registers, richer ATT decoding, or lower
 overhead than the substrate tools.
 
+The pinned task-level comparison is recorded in
+[`debugger-profiler-task-matrix-v1.md`](debugger-profiler-task-matrix-v1.md).
+
 The comparison baseline is the public
 [ROCgdb documentation](https://rocm.docs.amd.com/projects/ROCgdb/en/latest/),
 [ROCprofiler SDK documentation](https://rocm.docs.amd.com/projects/rocprofiler-sdk/en/latest/),
