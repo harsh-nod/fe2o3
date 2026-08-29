@@ -1,0 +1,21 @@
+[package]
+name = "fe2o3-external-anchor-service"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Single-writer durable external monotonic anchor service for fe2o3."
+publish = false
+
+[dependencies]
+ed25519-dalek = { version = "=2.2.0", default-features = false, features = ["fast", "zeroize"] }
+fe2o3-external-anchor-protocol.workspace = true
+rustix = { workspace = true, features = ["process"] }
+sha2.workspace = true
+
+[dev-dependencies]
+tempfile = "=3.21.0"
+
+[lints.rust]
+unsafe_code = "deny"
