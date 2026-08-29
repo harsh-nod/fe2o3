@@ -2230,6 +2230,90 @@ mod tests {
     }
 
     #[test]
+    fn canonical_evidence_retains_every_header_snapshot_fact_and_fails_closed() {
+        let admitted = admitted(Shape {
+            guard_snapshot: true,
+            ..Shape::default()
+        });
+        let report = report(&admitted);
+        let evidence =
+            crate::InertCanonicalSemanticU32InductionEvidenceV1::from_report(&report).unwrap();
+        evidence.revalidate().unwrap();
+        assert_eq!(
+            evidence.semantic_mir_sha256(),
+            admitted.semantic_sha256().as_bytes()
+        );
+        assert_eq!(evidence.function(), 0);
+        assert_eq!(evidence.checked_additions_examined(), 1);
+        assert_eq!(evidence.work_units(), report.work_units() as u64);
+        let [certificate] = evidence.certificates() else {
+            panic!("expected one canonical induction certificate");
+        };
+        assert_eq!(certificate.induction().local(), INDUCTION.index());
+        assert_ne!(certificate.guard_induction().local(), INDUCTION.index());
+        assert_eq!(
+            certificate
+                .guard_induction_snapshot()
+                .expect("retained guard snapshot")
+                .statement(),
+            0
+        );
+        assert_eq!(certificate.guard().statement(), 1);
+        assert!(!certificate.grants_authority());
+        assert!(!evidence.grants_authority());
+
+        let canonical = evidence.canonical_bytes();
+        assert_eq!(
+            crate::InertCanonicalSemanticU32InductionEvidenceV1::decode(canonical).unwrap(),
+            evidence
+        );
+        for end in 0..canonical.len() {
+            assert!(
+                crate::InertCanonicalSemanticU32InductionEvidenceV1::decode(&canonical[..end])
+                    .is_err(),
+                "truncation at {end} decoded"
+            );
+        }
+        let mut trailing = canonical.to_vec();
+        trailing.push(0);
+        assert!(crate::InertCanonicalSemanticU32InductionEvidenceV1::decode(&trailing).is_err());
+
+        let mut reserved = canonical.to_vec();
+        const OPTIONAL_SNAPSHOT_RESERVED_OFFSET: usize = 104 + 5 * 72 + 4 * 36 + 40 + 1;
+        reserved[OPTIONAL_SNAPSHOT_RESERVED_OFFSET] = 1;
+        assert!(matches!(
+            crate::InertCanonicalSemanticU32InductionEvidenceV1::decode(&reserved),
+            Err(crate::SemanticU32InductionEvidenceErrorV1::NonCanonical)
+        ));
+        let mut zero_semantic_identity = canonical.to_vec();
+        zero_semantic_identity[20..52].fill(0);
+        assert!(matches!(
+            crate::InertCanonicalSemanticU32InductionEvidenceV1::decode(&zero_semantic_identity),
+            Err(crate::SemanticU32InductionEvidenceErrorV1::ZeroIdentity)
+        ));
+
+        let mut oversized_count = canonical.to_vec();
+        oversized_count[100..104].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(matches!(
+            crate::InertCanonicalSemanticU32InductionEvidenceV1::decode(&oversized_count),
+            Err(crate::SemanticU32InductionEvidenceErrorV1::InvalidReport)
+        ));
+
+        for (offset, byte) in canonical.iter().copied().enumerate() {
+            for bit in 0..8 {
+                let mut mutated = canonical.to_vec();
+                mutated[offset] = byte ^ (1 << bit);
+                if let Ok(decoded) =
+                    crate::InertCanonicalSemanticU32InductionEvidenceV1::decode(&mutated)
+                {
+                    assert_ne!(decoded.identity(), evidence.identity());
+                    assert_eq!(decoded.canonical_bytes(), mutated);
+                }
+            }
+        }
+    }
+
+    #[test]
     fn identity_substitution_changes_every_bound_certificate_identity() {
         let first = admitted(Shape::default());
         let second = admitted(Shape {
