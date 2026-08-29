@@ -60,19 +60,25 @@ The Worker V3 verifier request and decision now losslessly bind the exact
 subject, carriage, policy, occurrence, Worker-ledger record, sequence, and
 rollback anchors, and fail closed without independent protected-policy, ledger,
 and external rollback verification identities. The concrete protected verifier,
-independently operated monotonic rollback backend, protected key custody,
-deployed distinct-UID service entrypoint, and exact Cargo-to-KFD run remain open.
+independently deployed monotonic rollback process, hardened key use,
+distinct-UID provisioner, and exact Cargo-to-KFD run remain open.
 
-The caller-pinned policy, service launch manifest, and service-owned Ed25519 key
-have reusable immutable memfd capabilities in
+The caller-pinned policy, service launch manifest, external-anchor deployment,
+and service-owned Ed25519 keys have reusable immutable memfd capabilities in
 `fe2o3-compiler-closure-capability`. Each preserves exact bytes under mode
 `0400`, complete seals, retained object identity, and private close-on-exec
-custody. The signing-key capability additionally requires anonymous
-service-owned read-only custody, zeroizes caller seed buffers, binds the public
-key to the policy, and exposes neither bytes nor a signing operation. Policy FD
-202 is reserved for rustc; launch-manifest FD 8 and signing-key FD 7 are
-reserved for the protected issuer. The prepared supervisor now materializes
-both issuer descriptors. Cargo now installs the policy and child-created
+custody. Key capabilities additionally require anonymous service-owned
+read-only custody and zeroize caller seed buffers. Issuer key custody binds to
+the policy and exposes neither bytes nor a signing operation. External-anchor
+key custody has a distinct role-tagged wire image, binds to the complete anchor
+deployment identity and its public key, and can only be consumed into an
+in-memory key after revalidation. Policy FD 202 is reserved for rustc;
+launch-manifest FD 8 and signing-key FD 7 are reserved for the protected issuer;
+anchor deployment FD 221 and anchor signing-key FD 222 are reserved for the
+external-anchor daemon. The key image must be created under the dedicated
+anchor UID: a root-owned or ordinary-file substitute is rejected. The prepared
+supervisor now materializes both issuer descriptors. Cargo now installs the
+policy and child-created
 service channel for the selected rustc, performs the authenticated supervisor
 handoff, and retains readiness through fresh publication. The backend consumes
 both inherited descriptors, publishes its exact V3 handoff, acquires and

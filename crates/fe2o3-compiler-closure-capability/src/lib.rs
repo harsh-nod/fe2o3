@@ -1,8 +1,10 @@
 //! Sealed transport for canonical compiler-execution records and signing-key custody.
 //!
-//! Record descriptors carry coordination evidence only. The signing-key capability carries a
-//! service-owned secret but exposes no key bytes or signing operation. None of these capabilities
-//! grants compiler, publication, linking, receipt-issuance, loading, launch, or execution authority.
+//! Record descriptors carry coordination evidence only. Signing-key capabilities carry
+//! service-owned secrets and expose no key bytes. Issuer custody has no signing operation; exact
+//! external-anchor custody can only be consumed into its key after deployment binding is
+//! revalidated. None of these capabilities grants compiler, publication, linking,
+//! receipt-issuance, loading, launch, or execution authority.
 
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
 
@@ -15,6 +17,7 @@ use sha2::{Digest, Sha256};
 
 mod compiler_execution_client_profile;
 mod compiler_execution_external_anchor_deployment;
+mod compiler_execution_external_anchor_signing_key;
 mod compiler_execution_policy;
 mod compiler_execution_service_launch;
 mod compiler_execution_signing_key;
@@ -26,6 +29,10 @@ pub use compiler_execution_client_profile::CompilerExecutionClientProfileCapabil
 pub use compiler_execution_external_anchor_deployment::{
     COMPILER_EXECUTION_EXTERNAL_ANCHOR_DEPLOYMENT_FD_V1,
     CompilerExecutionExternalAnchorDeploymentCapabilityV1,
+};
+pub use compiler_execution_external_anchor_signing_key::{
+    COMPILER_EXECUTION_EXTERNAL_ANCHOR_SIGNING_KEY_FD_V1,
+    CompilerExecutionExternalAnchorSigningKeyCapabilityV1,
 };
 pub use compiler_execution_policy::{
     COMPILER_EXECUTION_POLICY_CHILD_FD_V1, CompilerExecutionPolicyCapabilityV1,

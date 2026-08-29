@@ -199,9 +199,11 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   application runner uses a fresh child-created fd 195 through the same
   supervisor without inheriting fd 202, and `fe2o3-host` can consume its signed
   challenge-bound receipt-bearing current-record response as move-only audit
-  evidence. Deployed production supervisor provisioning, an independently
-  operated monotonic anchor backend, protected key custody, and final verifier
-  authority remain pending.
+  evidence. The external anchor now has a durable single-writer transition
+  engine, exact connected-packet service loop, sealed deployment manifest, and a
+  role-separated signing-key capability bound to that manifest. Its hardened
+  fixed-descriptor process entrypoint, distinct-UID root provisioner, deployed
+  supervisor provisioning, and final verifier authority remain pending.
 - Versioned artifact, descriptor, durable-publication, and HSA records exist.
   Host execution has one workload-neutral Worker V3 graph. An arbitrary
   manifest cannot manufacture a Rust signature, verifier decision, load

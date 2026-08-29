@@ -195,10 +195,17 @@ endpoint, persists an exact signed proposed-position observation, and only then
 commits and reacquires the Worker record and returns its publication ACK. Restart
 re-emits the same prepared challenge, finishes an already anchor-committed local
 publication without a second exchange, and durably aborts on an exact signed
-prior-position observation. This ordering does not prove that the external
-service is independently operated, monotonic, crash durable, or backed by a
-protected signing key. The result remains authority-free until those external
-rollback properties, protected key custody, and refinement evidence are joined.
+prior-position observation. These issuer-side checks alone do not prove that
+the external service is independently operated. The external-anchor service
+now supplies exclusive single-writer state, exact crash-durable
+write/fsync/rename/fsync transitions, idempotent recovery, and an ancillary-free
+connected `SOCK_SEQPACKET` loop. Its sealed deployment manifest pins the
+dedicated UID/GID, public key, and exact supervisor deployment. A separate
+role-tagged signing-key capability binds the private seed to that complete
+deployment identity, requires anonymous service-owned read-only custody, and
+can release an in-memory key only after revalidation. The fixed-descriptor
+hardened daemon, root-controlled distinct-UID provisioner, and refinement
+evidence join remain open, so the result remains authority-free.
 The issuer's direct transition
 methods are private. One shared bounded
 client now recovers first and resumes Ready, Prepared, or Issued under one
