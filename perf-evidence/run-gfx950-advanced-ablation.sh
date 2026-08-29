@@ -110,13 +110,11 @@ run_case systems kernel-moe-route canonical
 run_case systems kernel-moe-expert-rank canonical
 run_case systems kernel-moe-expert-rank expert-serial
 run_case systems kernel-combine-expert-ranks canonical
-run_case systems kernel-combine-expert-ranks combine-transposed
 run_case systems kernel-speculative-transaction canonical
 run_case systems kernel-speculative-transaction speculative-recompute-prefix
 run_case systems kernel-qwen-ngram-gather canonical
 run_case systems kernel-qwen-ngram-gather ngram-reverse-probe
 run_case systems kernel-stage-gradient-shard canonical
-run_case systems kernel-stage-gradient-shard stage-tile4
 run_case systems kernel-muon-update canonical
 run_case systems kernel-muon-update muon-broadcast16
 
@@ -138,10 +136,8 @@ python3 "$REPO_ROOT/perf-evidence/analyze.py" "$EVIDENCE_DIR/samples.jsonl" \
     --compare canonical:four-branch-explicit \
     --compare canonical:mhc-scalar \
     --compare canonical:expert-serial \
-    --compare canonical:combine-transposed \
     --compare canonical:speculative-recompute-prefix \
     --compare canonical:ngram-reverse-probe \
-    --compare canonical:stage-tile4 \
     --compare canonical:muon-broadcast16 \
     --compare optimized:serial-router \
     --compare optimized:held-fragments \
