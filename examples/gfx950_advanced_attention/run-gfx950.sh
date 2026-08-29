@@ -78,9 +78,24 @@ case "$SUITE:$FEATURE" in
     systems:kernel-muon-update)
         SYMBOL=gfx950_muon_update_4x4_v1; KERNARG=48; WG=64; LDS=0; OCML=0
         TEST=gfx950_muon_update_rust_cov6_matches_cpu_reference; ISA=scalar ;;
-    gpt_oss:kernel-gpt-oss-decode)
+    gpt_oss:kernel-gpt-oss-decode|gpt_oss:kernel-gpt-oss-decode-router-serial|gpt_oss:kernel-gpt-oss-decode-held-fragments|gpt_oss:kernel-gpt-oss-decode-interleaved-stores)
         SYMBOL=gfx950_gpt_oss_120b_decode_megakernel_v1; KERNARG=208; WG=64; LDS=0; OCML=1
         TEST=gfx950_gpt_oss_layer_tile_rust_cov6_matches_cpu_reference; ISA=gpt_oss ;;
+    gpt_oss:kernel-gpt-oss-decode-scalar-attention)
+        SYMBOL=gfx950_gpt_oss_120b_decode_megakernel_v1; KERNARG=208; WG=64; LDS=0; OCML=1
+        TEST=gfx950_gpt_oss_layer_tile_rust_cov6_matches_cpu_reference; ISA=gpt_oss_scalar_attention ;;
+    gpt_oss:kernel-gpt-oss-decode-pipelined-attention)
+        SYMBOL=gfx950_gpt_oss_120b_decode_megakernel_v1; KERNARG=208; WG=64; LDS=2048; OCML=1
+        TEST=gfx950_gpt_oss_pipelined_attention_rust_cov6_matches_cpu_reference; ISA=gpt_oss ;;
+    gpt_oss:kernel-gpt-oss-router-component)
+        SYMBOL=gfx950_gpt_oss_120b_router_v1; KERNARG=48; WG=64; LDS=0; OCML=0
+        TEST=gfx950_gpt_oss_router_component_rust_cov6_matches_cpu_reference; ISA=scalar ;;
+    gpt_oss:kernel-gpt-oss-attention-component)
+        SYMBOL=gfx950_gpt_oss_120b_attention_v1; KERNARG=80; WG=64; LDS=0; OCML=1
+        TEST=gfx950_gpt_oss_attention_component_rust_cov6_matches_cpu_reference; ISA=gpt_oss_attention ;;
+    gpt_oss:kernel-gpt-oss-expert-component)
+        SYMBOL=gfx950_gpt_oss_120b_expert_v1; KERNARG=96; WG=64; LDS=0; OCML=0
+        TEST=gfx950_gpt_oss_expert_component_rust_cov6_matches_cpu_reference; ISA=gpt_oss_expert ;;
     *)
         printf 'unsupported %s kernel feature: %s\n' "$SUITE" "$FEATURE" >&2
         exit 2 ;;
@@ -220,6 +235,20 @@ if [[ $ISA == gpt_oss ]]; then
     require_count "$LLVM_IR" 'call <4 x float> @llvm.amdgcn.mfma.scale.f32.16x16x128.f8f6f4.v8i32.v8i32(' 4 'FP4 MFMA calls'
     require_count "$LLVM_IR" 'i32 4, i32 4, i32 0, i32 0, i32 0, i32 0)' 4 'FP4 selectors and disabled scaling controls'
     require_count "$LLVM_IR" '@llvm.amdgcn.ds.read.tr' 0 'unexpected transpose references with pretransposed KV cache'
+elif [[ $ISA == gpt_oss_scalar_attention ]]; then
+    require_count "$LLVM_IR" 'call <4 x float> @llvm.amdgcn.mfma.f32.16x16x16bf16.1k(' 0 'unexpected BF16 MFMA calls'
+    require_count "$LLVM_IR" 'call <4 x float> @llvm.amdgcn.mfma.scale.f32.16x16x128.f8f6f4.v8i32.v8i32(' 4 'FP4 MFMA calls'
+    require_count "$LLVM_IR" 'i32 4, i32 4, i32 0, i32 0, i32 0, i32 0)' 4 'FP4 selectors and disabled scaling controls'
+    require_count "$LLVM_IR" '@llvm.amdgcn.ds.read.tr' 0 'unexpected transpose references'
+elif [[ $ISA == gpt_oss_attention ]]; then
+    require_count "$LLVM_IR" 'call <4 x float> @llvm.amdgcn.mfma.f32.16x16x16bf16.1k(' 4 'BF16 MFMA calls'
+    require_count "$LLVM_IR" 'call <4 x float> @llvm.amdgcn.mfma.scale.f32.16x16x128.f8f6f4.v8i32.v8i32(' 0 'unexpected FP4 MFMA calls'
+    require_count "$LLVM_IR" '@llvm.amdgcn.ds.read.tr' 0 'unexpected transpose references'
+elif [[ $ISA == gpt_oss_expert ]]; then
+    require_count "$LLVM_IR" 'call <4 x float> @llvm.amdgcn.mfma.f32.16x16x16bf16.1k(' 0 'unexpected BF16 MFMA calls'
+    require_count "$LLVM_IR" 'call <4 x float> @llvm.amdgcn.mfma.scale.f32.16x16x128.f8f6f4.v8i32.v8i32(' 4 'FP4 MFMA calls'
+    require_count "$LLVM_IR" 'i32 4, i32 4, i32 0, i32 0, i32 0, i32 0)' 4 'FP4 selectors and disabled scaling controls'
+    require_count "$LLVM_IR" '@llvm.amdgcn.ds.read.tr' 0 'unexpected transpose references'
 elif [[ $ISA == fp8_attention ]]; then
     require_count "$LLVM_IR" 'call <4 x float> @llvm.amdgcn.mfma.scale.f32.16x16x128.f8f6f4.v8i32.v8i32(' 1 'FP8 MFMA call'
     require_count "$LLVM_IR" 'i32 0, i32 0, i32 0, i32 0, i32 0, i32 0)' 1 'FP8 selectors and disabled scaling controls'
@@ -300,6 +329,27 @@ if [[ $ISA == gpt_oss ]]; then
     [[ $(grep -c -- 'v_mfma_' <<< "$KERNEL_ISA" || true) -eq 8 ]] || { printf 'ISA validation failed: unexpected additional MFMA\n' >&2; exit 1; }
     [[ $(grep -Fc -- 'cbsz:4' <<< "$KERNEL_ISA" || true) -eq 4 ]] || { printf 'ISA validation failed: expected cbsz:4 on all FP4 MFMAs\n' >&2; exit 1; }
     ! grep -Eq -- 'ds_read_b64_tr_b[[:digit:]]+' <<< "$KERNEL_ISA" || { printf 'ISA validation failed: pretransposed KV path emitted a transpose instruction\n' >&2; exit 1; }
+elif [[ $ISA == gpt_oss_scalar_attention ]]; then
+    [[ $(grep -Fc -- 'v_mfma_f32_16x16x16_bf16' <<< "$KERNEL_ISA" || true) -eq 0 ]] || { printf 'ISA validation failed: scalar attention emitted BF16 MFMA
+' >&2; exit 1; }
+    [[ $(grep -Fc -- 'v_mfma_f32_16x16x128_f8f6f4' <<< "$KERNEL_ISA" || true) -eq 4 ]] || { printf 'ISA validation failed: expected exactly four FP4 MFMAs
+' >&2; exit 1; }
+    [[ $(grep -c -- 'v_mfma_' <<< "$KERNEL_ISA" || true) -eq 4 ]] || { printf 'ISA validation failed: unexpected additional MFMA
+' >&2; exit 1; }
+    [[ $(grep -Fc -- 'cbsz:4' <<< "$KERNEL_ISA" || true) -eq 4 ]] || { printf 'ISA validation failed: expected cbsz:4 on all FP4 MFMAs
+' >&2; exit 1; }
+elif [[ $ISA == gpt_oss_attention ]]; then
+    [[ $(grep -Fc -- 'v_mfma_f32_16x16x16_bf16' <<< "$KERNEL_ISA" || true) -eq 4 ]] || { printf 'ISA validation failed: expected exactly four BF16 MFMAs
+' >&2; exit 1; }
+    [[ $(grep -c -- 'v_mfma_' <<< "$KERNEL_ISA" || true) -eq 4 ]] || { printf 'ISA validation failed: unexpected additional MFMA
+' >&2; exit 1; }
+elif [[ $ISA == gpt_oss_expert ]]; then
+    [[ $(grep -Fc -- 'v_mfma_f32_16x16x128_f8f6f4' <<< "$KERNEL_ISA" || true) -eq 4 ]] || { printf 'ISA validation failed: expected exactly four FP4 MFMAs
+' >&2; exit 1; }
+    [[ $(grep -c -- 'v_mfma_' <<< "$KERNEL_ISA" || true) -eq 4 ]] || { printf 'ISA validation failed: unexpected additional MFMA
+' >&2; exit 1; }
+    [[ $(grep -Fc -- 'cbsz:4' <<< "$KERNEL_ISA" || true) -eq 4 ]] || { printf 'ISA validation failed: expected cbsz:4 on all FP4 MFMAs
+' >&2; exit 1; }
 elif [[ $ISA == fp8_attention ]]; then
     [[ $(grep -Fc -- 'ds_read_b64_tr_b8' <<< "$KERNEL_ISA" || true) -eq 4 ]] || { printf 'ISA validation failed: expected exactly four B8 transpose instructions\n' >&2; exit 1; }
     [[ $(grep -Ec -- 'ds_read_b64_tr_b[[:digit:]]+' <<< "$KERNEL_ISA" || true) -eq 4 ]] || { printf 'ISA validation failed: expected exactly four total transpose instructions\n' >&2; exit 1; }

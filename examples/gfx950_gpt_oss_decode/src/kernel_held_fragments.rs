@@ -1,4 +1,4 @@
-//! Safe Rust source for the bounded GPT-OSS-120B gfx950 decode megakernel.
+//! Safe Rust source for the held-fragment GPT-OSS-120B gfx950 decode ablation.
 
 #![allow(missing_docs)]
 
@@ -17,10 +17,13 @@ use crate::{
 const ATTENTION_SCALE: f32 = 0.125;
 const ROUTER_FLOOR: f32 = -1.0e30;
 
-#[cfg(any(not(target_arch = "amdgpu"), feature = "kernel-gpt-oss-decode"))]
+#[cfg(any(
+    not(target_arch = "amdgpu"),
+    feature = "kernel-gpt-oss-decode-held-fragments"
+))]
 #[kernel(
     typed,
-    namespace = "0739c8414cc87e4bd943b2d563152bbb25abc619847f75f405c6dadb154858d9",
+    namespace = "a8d3182189365c136bf3a683bf06bc49274f07bcc3622dd5e9f6cd56e6940ca6",
     launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1]),
     control_flow(loop_bounds(2880, 64, 16))
 )]
@@ -286,6 +289,46 @@ pub fn gfx950_gpt_oss_120b_decode_megakernel_v1(
         token += 1;
     }
 
+    let Ok(activation_matrix0) = Gfx950Fp4MfmaAMatrix::row_major(
+        expert_activation_blocks_fp4,
+        0,
+        MATRIX_ROWS,
+        EXPERT_K_TILE,
+        EXPERT_K_TILE,
+    ) else {
+        return Err(KernelError::InvalidArgument);
+    };
+    let activation0 = activation_matrix0.load_m16k128(&lane, 0, 0);
+    let Ok(activation_matrix1) = Gfx950Fp4MfmaAMatrix::row_major(
+        expert_activation_blocks_fp4,
+        MATRIX_ROWS * EXPERT_K_TILE,
+        MATRIX_ROWS,
+        EXPERT_K_TILE,
+        EXPERT_K_TILE,
+    ) else {
+        return Err(KernelError::InvalidArgument);
+    };
+    let activation1 = activation_matrix1.load_m16k128(&lane, 0, 0);
+    let Ok(activation_matrix2) = Gfx950Fp4MfmaAMatrix::row_major(
+        expert_activation_blocks_fp4,
+        2 * MATRIX_ROWS * EXPERT_K_TILE,
+        MATRIX_ROWS,
+        EXPERT_K_TILE,
+        EXPERT_K_TILE,
+    ) else {
+        return Err(KernelError::InvalidArgument);
+    };
+    let activation2 = activation_matrix2.load_m16k128(&lane, 0, 0);
+    let Ok(activation_matrix3) = Gfx950Fp4MfmaAMatrix::row_major(
+        expert_activation_blocks_fp4,
+        3 * MATRIX_ROWS * EXPERT_K_TILE,
+        MATRIX_ROWS,
+        EXPERT_K_TILE,
+        EXPERT_K_TILE,
+    ) else {
+        return Err(KernelError::InvalidArgument);
+    };
+    let activation3 = activation_matrix3.load_m16k128(&lane, 0, 0);
     let expert_reduction_base = selected * MXFP4_BLOCKS * EXPERT_K_TILE;
     let Ok(weights) = Gfx950Fp4MfmaBMatrix::row_major(
         expert_weight_blocks_fp4,
@@ -296,6 +339,39 @@ pub fn gfx950_gpt_oss_120b_decode_megakernel_v1(
     ) else {
         return Err(KernelError::InvalidArgument);
     };
+    let weight0 = weights.load_k128n16(&lane, expert_reduction_base, 0);
+    let weight1 = weights.load_k128n16(&lane, expert_reduction_base + EXPERT_K_TILE, 0);
+    let weight2 = weights.load_k128n16(&lane, expert_reduction_base + 2 * EXPERT_K_TILE, 0);
+    let weight3 = weights.load_k128n16(&lane, expert_reduction_base + 3 * EXPERT_K_TILE, 0);
+    let gfx950 = Gfx950Matrix::current();
+    let expert0 = gfx950
+        .multiply_accumulate_fp4(
+            activation0,
+            weight0,
+            Gfx950F32AccumulatorFragment::<Gfx950Fp4E2M1>::zero(&lane),
+        )
+        .into_values();
+    let expert1 = gfx950
+        .multiply_accumulate_fp4(
+            activation1,
+            weight1,
+            Gfx950F32AccumulatorFragment::<Gfx950Fp4E2M1>::zero(&lane),
+        )
+        .into_values();
+    let expert2 = gfx950
+        .multiply_accumulate_fp4(
+            activation2,
+            weight2,
+            Gfx950F32AccumulatorFragment::<Gfx950Fp4E2M1>::zero(&lane),
+        )
+        .into_values();
+    let expert3 = gfx950
+        .multiply_accumulate_fp4(
+            activation3,
+            weight3,
+            Gfx950F32AccumulatorFragment::<Gfx950Fp4E2M1>::zero(&lane),
+        )
+        .into_values();
     let Ok(activation_scale) =
         StridedReadView2D::from_shared_slice(activation_scales, 0, 1, MXFP4_BLOCKS, MXFP4_BLOCKS)
     else {
@@ -318,91 +394,6 @@ pub fn gfx950_gpt_oss_120b_decode_megakernel_v1(
         * weight_scale.load_or(selected * MXFP4_BLOCKS + 2, column, 0.0);
     let scale3 = activation_scale.load_or(0, 3, 0.0)
         * weight_scale.load_or(selected * MXFP4_BLOCKS + 3, column, 0.0);
-    let gfx950 = Gfx950Matrix::current();
-
-    let Ok(activation_matrix0) = Gfx950Fp4MfmaAMatrix::row_major(
-        expert_activation_blocks_fp4,
-        0,
-        MATRIX_ROWS,
-        EXPERT_K_TILE,
-        EXPERT_K_TILE,
-    ) else {
-        return Err(KernelError::InvalidArgument);
-    };
-    let expert0 = gfx950
-        .multiply_accumulate_fp4(
-            activation_matrix0.load_m16k128(&lane, 0, 0),
-            weights.load_k128n16(&lane, expert_reduction_base, 0),
-            Gfx950F32AccumulatorFragment::<Gfx950Fp4E2M1>::zero(&lane),
-        )
-        .into_values();
-    let mut expert_acc0 = expert0[0] * scale0;
-    let mut expert_acc1 = expert0[1] * scale0;
-    let mut expert_acc2 = expert0[2] * scale0;
-    let mut expert_acc3 = expert0[3] * scale0;
-
-    let Ok(activation_matrix1) = Gfx950Fp4MfmaAMatrix::row_major(
-        expert_activation_blocks_fp4,
-        MATRIX_ROWS * EXPERT_K_TILE,
-        MATRIX_ROWS,
-        EXPERT_K_TILE,
-        EXPERT_K_TILE,
-    ) else {
-        return Err(KernelError::InvalidArgument);
-    };
-    let expert1 = gfx950
-        .multiply_accumulate_fp4(
-            activation_matrix1.load_m16k128(&lane, 0, 0),
-            weights.load_k128n16(&lane, expert_reduction_base + EXPERT_K_TILE, 0),
-            Gfx950F32AccumulatorFragment::<Gfx950Fp4E2M1>::zero(&lane),
-        )
-        .into_values();
-    expert_acc0 += expert1[0] * scale1;
-    expert_acc1 += expert1[1] * scale1;
-    expert_acc2 += expert1[2] * scale1;
-    expert_acc3 += expert1[3] * scale1;
-
-    let Ok(activation_matrix2) = Gfx950Fp4MfmaAMatrix::row_major(
-        expert_activation_blocks_fp4,
-        2 * MATRIX_ROWS * EXPERT_K_TILE,
-        MATRIX_ROWS,
-        EXPERT_K_TILE,
-        EXPERT_K_TILE,
-    ) else {
-        return Err(KernelError::InvalidArgument);
-    };
-    let expert2 = gfx950
-        .multiply_accumulate_fp4(
-            activation_matrix2.load_m16k128(&lane, 0, 0),
-            weights.load_k128n16(&lane, expert_reduction_base + 2 * EXPERT_K_TILE, 0),
-            Gfx950F32AccumulatorFragment::<Gfx950Fp4E2M1>::zero(&lane),
-        )
-        .into_values();
-    expert_acc0 += expert2[0] * scale2;
-    expert_acc1 += expert2[1] * scale2;
-    expert_acc2 += expert2[2] * scale2;
-    expert_acc3 += expert2[3] * scale2;
-
-    let Ok(activation_matrix3) = Gfx950Fp4MfmaAMatrix::row_major(
-        expert_activation_blocks_fp4,
-        3 * MATRIX_ROWS * EXPERT_K_TILE,
-        MATRIX_ROWS,
-        EXPERT_K_TILE,
-        EXPERT_K_TILE,
-    ) else {
-        return Err(KernelError::InvalidArgument);
-    };
-    let expert3 = gfx950
-        .multiply_accumulate_fp4(
-            activation_matrix3.load_m16k128(&lane, 0, 0),
-            weights.load_k128n16(&lane, expert_reduction_base + 3 * EXPERT_K_TILE, 0),
-            Gfx950F32AccumulatorFragment::<Gfx950Fp4E2M1>::zero(&lane),
-        )
-        .into_values();
-    expert_acc0 += expert3[0] * scale3;
-    expert_acc1 += expert3[1] * scale3;
-    expert_acc2 += expert3[2] * scale3;
-    expert_acc3 += expert3[3] * scale3;
 
     let Some(output_block) = index.checked_block::<64, 4>() else {
         return Err(KernelError::OutOfBounds);
@@ -410,26 +401,30 @@ pub fn gfx950_gpt_oss_120b_decode_megakernel_v1(
     if let Some(slot) = attention_output.get_block_mut(&output_block, 0) {
         *slot = attention0;
     }
+    if let Some(slot) = expert_output.get_block_mut(&output_block, 0) {
+        *slot =
+            expert0[0] * scale0 + expert1[0] * scale1 + expert2[0] * scale2 + expert3[0] * scale3;
+    }
     if let Some(slot) = attention_output.get_block_mut(&output_block, 1) {
         *slot = attention1;
+    }
+    if let Some(slot) = expert_output.get_block_mut(&output_block, 1) {
+        *slot =
+            expert0[1] * scale0 + expert1[1] * scale1 + expert2[1] * scale2 + expert3[1] * scale3;
     }
     if let Some(slot) = attention_output.get_block_mut(&output_block, 2) {
         *slot = attention2;
     }
+    if let Some(slot) = expert_output.get_block_mut(&output_block, 2) {
+        *slot =
+            expert0[2] * scale0 + expert1[2] * scale1 + expert2[2] * scale2 + expert3[2] * scale3;
+    }
     if let Some(slot) = attention_output.get_block_mut(&output_block, 3) {
         *slot = attention3;
     }
-    if let Some(slot) = expert_output.get_block_mut(&output_block, 0) {
-        *slot = expert_acc0;
-    }
-    if let Some(slot) = expert_output.get_block_mut(&output_block, 1) {
-        *slot = expert_acc1;
-    }
-    if let Some(slot) = expert_output.get_block_mut(&output_block, 2) {
-        *slot = expert_acc2;
-    }
     if let Some(slot) = expert_output.get_block_mut(&output_block, 3) {
-        *slot = expert_acc3;
+        *slot =
+            expert0[3] * scale0 + expert1[3] * scale1 + expert2[3] * scale2 + expert3[3] * scale3;
     }
     if lane_index == 0 {
         let packed = id0 | (id1 << 7) | (id2 << 14) | (id3 << 21);

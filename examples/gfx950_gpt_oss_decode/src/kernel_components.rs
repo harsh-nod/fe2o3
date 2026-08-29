@@ -1,4 +1,4 @@
-//! Safe Rust source for the bounded GPT-OSS-120B gfx950 decode megakernel.
+//! Exact-semantics materialized GPT-OSS-120B layer-tile component kernels.
 
 #![allow(missing_docs)]
 
@@ -17,51 +17,30 @@ use crate::{
 const ATTENTION_SCALE: f32 = 0.125;
 const ROUTER_FLOOR: f32 = -1.0e30;
 
-#[cfg(any(not(target_arch = "amdgpu"), feature = "kernel-gpt-oss-decode"))]
+#[cfg(any(
+    not(target_arch = "amdgpu"),
+    feature = "kernel-gpt-oss-router-component"
+))]
 #[kernel(
     typed,
-    namespace = "0739c8414cc87e4bd943b2d563152bbb25abc619847f75f405c6dadb154858d9",
+    namespace = "8ea858c2d33346948501917b2a613d3e4844622372e15b43fb2e2d092e3f336d",
     launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1]),
-    control_flow(loop_bounds(2880, 64, 16))
+    control_flow(loop_bounds(2880, 64))
 )]
-#[allow(clippy::too_many_arguments, clippy::many_single_char_names)]
-pub fn gfx950_gpt_oss_120b_decode_megakernel_v1(
+pub fn gfx950_gpt_oss_120b_router_v1(
     hidden_f32: &[f32],
     router_f32: &[f32],
-    query_bf16: &[u16],
-    key_transposed_bf16: &[u16],
-    value_f32: &[f32],
-    sinks_f32: &[f32],
-    expert_activation_blocks_fp4: &[u8],
-    expert_weight_blocks_fp4: &[u8],
-    activation_scales: &[f32],
-    expert_weight_scales: &[f32],
-    mut attention_output: DisjointSlice<f32, Blocked<Index1D, 64, 4>>,
-    mut expert_output: DisjointSlice<f32, Blocked<Index1D, 64, 4>>,
     mut packed_top4: DisjointSlice<u32>,
 ) -> KernelResult {
     if hidden_f32.len() < HIDDEN_SIZE
         || router_f32.len() < EXPERTS * HIDDEN_SIZE
-        || query_bf16.len() < MATRIX_ROWS * HEAD_DIM
-        || key_transposed_bf16.len() < HEAD_DIM * CONTEXT_TOKENS
-        || value_f32.len() < CONTEXT_TOKENS * VALUE_TILE
-        || sinks_f32.len() < MATRIX_ROWS
-        || expert_activation_blocks_fp4.len() < MXFP4_BLOCKS * MATRIX_ROWS * EXPERT_K_TILE
-        || expert_weight_blocks_fp4.len() < EXPERTS * MXFP4_BLOCKS * EXPERT_K_TILE * EXPERT_N_TILE
-        || activation_scales.len() < MXFP4_BLOCKS
-        || expert_weight_scales.len() < EXPERTS * MXFP4_BLOCKS * EXPERT_N_TILE
-        || attention_output.len() < ATTENTION_OUTPUT_ELEMENTS
-        || expert_output.len() < EXPERT_OUTPUT_ELEMENTS
         || packed_top4.len() < 1
     {
         return Err(KernelError::InvalidArgument);
     }
-
     let index = thread::index_1d();
     let lane_index = index.get();
-    let lane = WaveLane::<Wave64>::current();
     let subgroup = Gfx950Subgroup::current();
-
     let Ok(hidden) =
         StridedReadView2D::from_shared_slice(hidden_f32, 0, 1, HIDDEN_SIZE, HIDDEN_SIZE)
     else {
@@ -188,8 +167,44 @@ pub fn gfx950_gpt_oss_120b_decode_megakernel_v1(
         }
         source += 1;
     }
-    let selected = (id0 as usize) & (EXPERTS - 1);
+    if lane_index == 0 {
+        let packed = id0 | (id1 << 7) | (id2 << 14) | (id3 << 21);
+        if let Some(slot) = packed_top4.get_mut(index) {
+            *slot = packed;
+        }
+    }
+    Ok(())
+}
 
+#[cfg(any(
+    not(target_arch = "amdgpu"),
+    feature = "kernel-gpt-oss-attention-component"
+))]
+#[kernel(
+    typed,
+    namespace = "35a1574b42e18b024498807f2e7dd4bde031da33b5b588652fc699cdebb7bb6a",
+    launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1]),
+    control_flow(loop_bounds(16))
+)]
+pub fn gfx950_gpt_oss_120b_attention_v1(
+    query_bf16: &[u16],
+    key_transposed_bf16: &[u16],
+    value_f32: &[f32],
+    sinks_f32: &[f32],
+    mut attention_output: DisjointSlice<f32, Blocked<Index1D, 64, 4>>,
+) -> KernelResult {
+    if query_bf16.len() < MATRIX_ROWS * HEAD_DIM
+        || key_transposed_bf16.len() < HEAD_DIM * CONTEXT_TOKENS
+        || value_f32.len() < CONTEXT_TOKENS * VALUE_TILE
+        || sinks_f32.len() < MATRIX_ROWS
+        || attention_output.len() < ATTENTION_OUTPUT_ELEMENTS
+    {
+        return Err(KernelError::InvalidArgument);
+    }
+    let index = thread::index_1d();
+    let lane_index = index.get();
+    let lane = WaveLane::<Wave64>::current();
+    let subgroup = Gfx950Subgroup::current();
     let Ok(query) = Bf16MfmaAMatrix::row_major(query_bf16, 0, MATRIX_ROWS, HEAD_DIM, HEAD_DIM)
     else {
         return Err(KernelError::InvalidArgument);
@@ -286,6 +301,58 @@ pub fn gfx950_gpt_oss_120b_decode_megakernel_v1(
         token += 1;
     }
 
+    let Some(output_block) = index.checked_block::<64, 4>() else {
+        return Err(KernelError::OutOfBounds);
+    };
+    if let Some(slot) = attention_output.get_block_mut(&output_block, 0) {
+        *slot = attention0;
+    }
+    if let Some(slot) = attention_output.get_block_mut(&output_block, 1) {
+        *slot = attention1;
+    }
+    if let Some(slot) = attention_output.get_block_mut(&output_block, 2) {
+        *slot = attention2;
+    }
+    if let Some(slot) = attention_output.get_block_mut(&output_block, 3) {
+        *slot = attention3;
+    }
+    Ok(())
+}
+
+#[cfg(any(
+    not(target_arch = "amdgpu"),
+    feature = "kernel-gpt-oss-expert-component"
+))]
+#[kernel(
+    typed,
+    namespace = "d3675e464d34094297c8b0033dc08d278cc17baf15ed6fd5f53bd382421f8c99",
+    launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
+)]
+pub fn gfx950_gpt_oss_120b_expert_v1(
+    expert_activation_blocks_fp4: &[u8],
+    expert_weight_blocks_fp4: &[u8],
+    activation_scales: &[f32],
+    expert_weight_scales: &[f32],
+    packed_top4: &[u32],
+    mut expert_output: DisjointSlice<f32, Blocked<Index1D, 64, 4>>,
+) -> KernelResult {
+    if expert_activation_blocks_fp4.len() < MXFP4_BLOCKS * MATRIX_ROWS * EXPERT_K_TILE
+        || expert_weight_blocks_fp4.len() < EXPERTS * MXFP4_BLOCKS * EXPERT_K_TILE * EXPERT_N_TILE
+        || activation_scales.len() < MXFP4_BLOCKS
+        || expert_weight_scales.len() < EXPERTS * MXFP4_BLOCKS * EXPERT_N_TILE
+        || packed_top4.len() < 1
+        || expert_output.len() < EXPERT_OUTPUT_ELEMENTS
+    {
+        return Err(KernelError::InvalidArgument);
+    }
+    let index = thread::index_1d();
+    let lane_index = index.get();
+    let lane = WaveLane::<Wave64>::current();
+    let Some(packed) = packed_top4.get(0) else {
+        return Err(KernelError::InvalidArgument);
+    };
+    let selected = (*packed as usize) & (EXPERTS - 1);
+    let column = lane_index % EXPERT_N_TILE;
     let expert_reduction_base = selected * MXFP4_BLOCKS * EXPERT_K_TILE;
     let Ok(weights) = Gfx950Fp4MfmaBMatrix::row_major(
         expert_weight_blocks_fp4,
@@ -407,18 +474,6 @@ pub fn gfx950_gpt_oss_120b_decode_megakernel_v1(
     let Some(output_block) = index.checked_block::<64, 4>() else {
         return Err(KernelError::OutOfBounds);
     };
-    if let Some(slot) = attention_output.get_block_mut(&output_block, 0) {
-        *slot = attention0;
-    }
-    if let Some(slot) = attention_output.get_block_mut(&output_block, 1) {
-        *slot = attention1;
-    }
-    if let Some(slot) = attention_output.get_block_mut(&output_block, 2) {
-        *slot = attention2;
-    }
-    if let Some(slot) = attention_output.get_block_mut(&output_block, 3) {
-        *slot = attention3;
-    }
     if let Some(slot) = expert_output.get_block_mut(&output_block, 0) {
         *slot = expert_acc0;
     }
@@ -430,12 +485,6 @@ pub fn gfx950_gpt_oss_120b_decode_megakernel_v1(
     }
     if let Some(slot) = expert_output.get_block_mut(&output_block, 3) {
         *slot = expert_acc3;
-    }
-    if lane_index == 0 {
-        let packed = id0 | (id1 << 7) | (id2 << 14) | (id3 << 21);
-        if let Some(slot) = packed_top4.get_mut(thread::index_1d()) {
-            *slot = packed;
-        }
     }
     Ok(())
 }

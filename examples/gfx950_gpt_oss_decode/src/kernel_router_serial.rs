@@ -1,4 +1,4 @@
-//! Safe Rust source for the bounded GPT-OSS-120B gfx950 decode megakernel.
+//! Safe Rust source for the serial-router GPT-OSS-120B gfx950 decode ablation.
 
 #![allow(missing_docs)]
 
@@ -17,12 +17,15 @@ use crate::{
 const ATTENTION_SCALE: f32 = 0.125;
 const ROUTER_FLOOR: f32 = -1.0e30;
 
-#[cfg(any(not(target_arch = "amdgpu"), feature = "kernel-gpt-oss-decode"))]
+#[cfg(any(
+    not(target_arch = "amdgpu"),
+    feature = "kernel-gpt-oss-decode-router-serial"
+))]
 #[kernel(
     typed,
-    namespace = "0739c8414cc87e4bd943b2d563152bbb25abc619847f75f405c6dadb154858d9",
+    namespace = "39eaa839d327564ce8ea4ba0e28cac0be8dfa374a979571b4cc0e53473768e28",
     launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1]),
-    control_flow(loop_bounds(2880, 64, 16))
+    control_flow(loop_bounds(64, 2880, 2880, 16))
 )]
 #[allow(clippy::too_many_arguments, clippy::many_single_char_names)]
 pub fn gfx950_gpt_oss_120b_decode_megakernel_v1(
@@ -72,17 +75,6 @@ pub fn gfx950_gpt_oss_120b_decode_megakernel_v1(
     else {
         return Err(KernelError::InvalidArgument);
     };
-    let local_expert0 = lane_index * 2;
-    let local_expert1 = local_expert0 + 1;
-    let mut local_logit0 = 0.0_f32;
-    let mut local_logit1 = 0.0_f32;
-    let mut depth = 0_usize;
-    while depth < HIDDEN_SIZE {
-        let activation = hidden.load_or(0, depth, 0.0);
-        local_logit0 += activation * router.load_or(local_expert0, depth, 0.0);
-        local_logit1 += activation * router.load_or(local_expert1, depth, 0.0);
-        depth += 1;
-    }
 
     let mut best0 = ROUTER_FLOOR;
     let mut best1 = ROUTER_FLOOR;
@@ -95,7 +87,13 @@ pub fn gfx950_gpt_oss_120b_decode_megakernel_v1(
     let mut source = 0_u32;
     while source < 64 {
         {
-            let mut candidate_score = subgroup.broadcast_f32::<64>(local_logit0, source);
+            let mut candidate_score = 0.0_f32;
+            let mut serial_depth = 0_usize;
+            while serial_depth < HIDDEN_SIZE {
+                candidate_score += hidden.load_or(0, serial_depth, 0.0)
+                    * router.load_or((source as usize) * 2, serial_depth, 0.0);
+                serial_depth += 1;
+            }
             let mut candidate_id = source * 2;
             let take = ((candidate_score > best0)
                 | ((candidate_score == best0) & (candidate_id < id0)))
@@ -141,7 +139,13 @@ pub fn gfx950_gpt_oss_120b_decode_megakernel_v1(
             id3 = candidate_id * take + old_id * (1 - take);
         }
         {
-            let mut candidate_score = subgroup.broadcast_f32::<64>(local_logit1, source);
+            let mut candidate_score = 0.0_f32;
+            let mut serial_depth = 0_usize;
+            while serial_depth < HIDDEN_SIZE {
+                candidate_score += hidden.load_or(0, serial_depth, 0.0)
+                    * router.load_or((source as usize) * 2 + 1, serial_depth, 0.0);
+                serial_depth += 1;
+            }
             let mut candidate_id = source * 2 + 1;
             let take = ((candidate_score > best0)
                 | ((candidate_score == best0) & (candidate_id < id0)))

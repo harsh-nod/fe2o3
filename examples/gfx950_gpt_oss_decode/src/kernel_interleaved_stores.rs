@@ -1,4 +1,4 @@
-//! Safe Rust source for the bounded GPT-OSS-120B gfx950 decode megakernel.
+//! Safe Rust source for the interleaved-store GPT-OSS-120B gfx950 decode ablation.
 
 #![allow(missing_docs)]
 
@@ -17,10 +17,13 @@ use crate::{
 const ATTENTION_SCALE: f32 = 0.125;
 const ROUTER_FLOOR: f32 = -1.0e30;
 
-#[cfg(any(not(target_arch = "amdgpu"), feature = "kernel-gpt-oss-decode"))]
+#[cfg(any(
+    not(target_arch = "amdgpu"),
+    feature = "kernel-gpt-oss-decode-interleaved-stores"
+))]
 #[kernel(
     typed,
-    namespace = "0739c8414cc87e4bd943b2d563152bbb25abc619847f75f405c6dadb154858d9",
+    namespace = "443005e172c02bb88714b06835d6b3ba915be1271fb335a10a71441e3774d069",
     launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1]),
     control_flow(loop_bounds(2880, 64, 16))
 )]
@@ -410,23 +413,23 @@ pub fn gfx950_gpt_oss_120b_decode_megakernel_v1(
     if let Some(slot) = attention_output.get_block_mut(&output_block, 0) {
         *slot = attention0;
     }
-    if let Some(slot) = attention_output.get_block_mut(&output_block, 1) {
-        *slot = attention1;
-    }
-    if let Some(slot) = attention_output.get_block_mut(&output_block, 2) {
-        *slot = attention2;
-    }
-    if let Some(slot) = attention_output.get_block_mut(&output_block, 3) {
-        *slot = attention3;
-    }
     if let Some(slot) = expert_output.get_block_mut(&output_block, 0) {
         *slot = expert_acc0;
+    }
+    if let Some(slot) = attention_output.get_block_mut(&output_block, 1) {
+        *slot = attention1;
     }
     if let Some(slot) = expert_output.get_block_mut(&output_block, 1) {
         *slot = expert_acc1;
     }
+    if let Some(slot) = attention_output.get_block_mut(&output_block, 2) {
+        *slot = attention2;
+    }
     if let Some(slot) = expert_output.get_block_mut(&output_block, 2) {
         *slot = expert_acc2;
+    }
+    if let Some(slot) = attention_output.get_block_mut(&output_block, 3) {
+        *slot = attention3;
     }
     if let Some(slot) = expert_output.get_block_mut(&output_block, 3) {
         *slot = expert_acc3;

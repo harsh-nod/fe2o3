@@ -408,6 +408,42 @@ const GPT_OSS: AdvancedCase = AdvancedCase {
     args: THIRTEEN_SLICES,
 };
 #[cfg(feature = "hardware-test-hooks")]
+const GPT_OSS_PIPELINED: AdvancedCase = AdvancedCase {
+    label: "gfx950 GPT-OSS-120B batch-1 pipelined-attention megakernel",
+    export: "gfx950_gpt_oss_120b_decode_megakernel_v1",
+    descriptor: "gfx950_gpt_oss_120b_decode_megakernel_v1.kd",
+    workgroup_x: 64,
+    static_lds_bytes: 2048,
+    args: THIRTEEN_SLICES,
+};
+#[cfg(feature = "hardware-test-hooks")]
+const GPT_OSS_ROUTER_COMPONENT: AdvancedCase = AdvancedCase {
+    label: "gfx950 GPT-OSS-120B materialized Rust router",
+    export: "gfx950_gpt_oss_120b_router_v1",
+    descriptor: "gfx950_gpt_oss_120b_router_v1.kd",
+    workgroup_x: 64,
+    static_lds_bytes: 0,
+    args: THREE_SLICES,
+};
+#[cfg(feature = "hardware-test-hooks")]
+const GPT_OSS_ATTENTION_COMPONENT: AdvancedCase = AdvancedCase {
+    label: "gfx950 GPT-OSS-120B materialized Rust attention",
+    export: "gfx950_gpt_oss_120b_attention_v1",
+    descriptor: "gfx950_gpt_oss_120b_attention_v1.kd",
+    workgroup_x: 64,
+    static_lds_bytes: 0,
+    args: FIVE_SLICES,
+};
+#[cfg(feature = "hardware-test-hooks")]
+const GPT_OSS_EXPERT_COMPONENT: AdvancedCase = AdvancedCase {
+    label: "gfx950 GPT-OSS-120B materialized Rust expert",
+    export: "gfx950_gpt_oss_120b_expert_v1",
+    descriptor: "gfx950_gpt_oss_120b_expert_v1.kd",
+    workgroup_x: 64,
+    static_lds_bytes: 0,
+    args: SIX_SLICES,
+};
+#[cfg(feature = "hardware-test-hooks")]
 const GPT_OSS_UNFUSED_ROUTER: AdvancedCase = AdvancedCase {
     label: "gfx950 GPT-OSS-120B unfused router comparator",
     export: "gpt_oss_unfused_router",
@@ -1478,9 +1514,64 @@ fn gpt_oss_plans(case: AdvancedCase) -> Result<Vec<LaunchPlan>, BoxError> {
 }
 
 #[cfg(feature = "hardware-test-hooks")]
+fn gpt_oss_component_plans(case: AdvancedCase) -> Result<Vec<LaunchPlan>, BoxError> {
+    let mut plans = gpt_oss_plans(GPT_OSS)?;
+    let full = plans.pop().ok_or("GPT-OSS launch plan is absent")?;
+    require(plans.is_empty(), "GPT-OSS launch plan was duplicated")?;
+    let indices: &[usize] = if case == GPT_OSS_ROUTER_COMPONENT {
+        &[0, 1, 12]
+    } else if case == GPT_OSS_ATTENTION_COMPONENT {
+        &[2, 3, 4, 5, 10]
+    } else if case == GPT_OSS_EXPERT_COMPONENT {
+        &[6, 7, 8, 9, 12, 11]
+    } else {
+        return Err(format!("unknown GPT-OSS component {}", case.export).into());
+    };
+    let mut buffers = indices
+        .iter()
+        .map(|index| full.buffers[*index].clone())
+        .collect::<Vec<_>>();
+    if case == GPT_OSS_EXPERT_COMPONENT {
+        let packed = buffers
+            .get_mut(4)
+            .ok_or("GPT-OSS packed route buffer is absent")?;
+        let packed_values = match packed.expected.take() {
+            Some(ExpectedOutput::U32(values)) => values,
+            _ => return Err("GPT-OSS packed route reference changed kind".into()),
+        };
+        let packed_bytes = value_bytes(&packed_values);
+        let start = packed.body_offset;
+        packed.initial[start..start + packed_bytes.len()].copy_from_slice(&packed_bytes);
+        packed.immutable = true;
+    }
+    let lengths = buffers
+        .iter()
+        .map(|buffer| buffer.elements)
+        .collect::<Vec<_>>();
+    Ok(vec![LaunchPlan {
+        label: case.label.into(),
+        buffers,
+        args: lengths
+            .into_iter()
+            .enumerate()
+            .map(|(buffer, elements)| PlannedArg::Slice { buffer, elements })
+            .collect(),
+    }])
+}
+
+#[cfg(feature = "hardware-test-hooks")]
 fn plans_for(case: AdvancedCase) -> Result<Vec<LaunchPlan>, BoxError> {
-    if case == GPT_OSS {
+    if [GPT_OSS, GPT_OSS_PIPELINED].contains(&case) {
         return gpt_oss_plans(case);
+    }
+    if [
+        GPT_OSS_ROUTER_COMPONENT,
+        GPT_OSS_ATTENTION_COMPONENT,
+        GPT_OSS_EXPERT_COMPONENT,
+    ]
+    .contains(&case)
+    {
+        return gpt_oss_component_plans(case);
     }
     if [
         KDA_DECODE,
@@ -2351,6 +2442,26 @@ hardware_case!(
 hardware_case!(
     gfx950_gpt_oss_layer_tile_rust_cov6_matches_cpu_reference,
     GPT_OSS
+);
+#[cfg(feature = "hardware-test-hooks")]
+hardware_case!(
+    gfx950_gpt_oss_pipelined_attention_rust_cov6_matches_cpu_reference,
+    GPT_OSS_PIPELINED
+);
+#[cfg(feature = "hardware-test-hooks")]
+hardware_case!(
+    gfx950_gpt_oss_router_component_rust_cov6_matches_cpu_reference,
+    GPT_OSS_ROUTER_COMPONENT
+);
+#[cfg(feature = "hardware-test-hooks")]
+hardware_case!(
+    gfx950_gpt_oss_attention_component_rust_cov6_matches_cpu_reference,
+    GPT_OSS_ATTENTION_COMPONENT
+);
+#[cfg(feature = "hardware-test-hooks")]
+hardware_case!(
+    gfx950_gpt_oss_expert_component_rust_cov6_matches_cpu_reference,
+    GPT_OSS_EXPERT_COMPONENT
 );
 #[cfg(feature = "hardware-test-hooks")]
 #[test]

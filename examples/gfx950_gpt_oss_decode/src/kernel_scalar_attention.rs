@@ -1,12 +1,11 @@
-//! Safe Rust source for the bounded GPT-OSS-120B gfx950 decode megakernel.
+//! Safe Rust source for the scalar-attention GPT-OSS-120B gfx950 decode ablation.
 
 #![allow(missing_docs)]
 
 use fe2o3_device::{
-    Bf16MfmaAMatrix, Bf16MfmaBMatrix, Blocked, DeviceMatrix, DisjointSlice, F32AccumulatorFragment,
-    Gfx950F32AccumulatorFragment, Gfx950Fp4E2M1, Gfx950Fp4MfmaAMatrix, Gfx950Fp4MfmaBMatrix,
-    Gfx950Matrix, Gfx950Subgroup, Index1D, KernelError, KernelResult, Math, StridedReadView2D,
-    Wave64, WaveLane, kernel, thread,
+    Bf16, Blocked, DisjointSlice, Gfx950F32AccumulatorFragment, Gfx950Fp4E2M1,
+    Gfx950Fp4MfmaAMatrix, Gfx950Fp4MfmaBMatrix, Gfx950Matrix, Gfx950Subgroup, Index1D, KernelError,
+    KernelResult, Math, StridedReadView2D, Wave64, WaveLane, kernel, thread,
 };
 
 use crate::{
@@ -17,12 +16,15 @@ use crate::{
 const ATTENTION_SCALE: f32 = 0.125;
 const ROUTER_FLOOR: f32 = -1.0e30;
 
-#[cfg(any(not(target_arch = "amdgpu"), feature = "kernel-gpt-oss-decode"))]
+#[cfg(any(
+    not(target_arch = "amdgpu"),
+    feature = "kernel-gpt-oss-decode-scalar-attention"
+))]
 #[kernel(
     typed,
-    namespace = "0739c8414cc87e4bd943b2d563152bbb25abc619847f75f405c6dadb154858d9",
+    namespace = "8d28f0b43fc6168ab91cf651fa3ff0ff54911fc53053cc94e49b6d72a5cf4211",
     launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1]),
-    control_flow(loop_bounds(2880, 64, 16))
+    control_flow(loop_bounds(2880, 64, 64, 16))
 )]
 #[allow(clippy::too_many_arguments, clippy::many_single_char_names)]
 pub fn gfx950_gpt_oss_120b_decode_megakernel_v1(
@@ -190,11 +192,12 @@ pub fn gfx950_gpt_oss_120b_decode_megakernel_v1(
     }
     let selected = (id0 as usize) & (EXPERTS - 1);
 
-    let Ok(query) = Bf16MfmaAMatrix::row_major(query_bf16, 0, MATRIX_ROWS, HEAD_DIM, HEAD_DIM)
+    let Ok(query) =
+        StridedReadView2D::from_shared_slice(query_bf16, 0, MATRIX_ROWS, HEAD_DIM, HEAD_DIM)
     else {
         return Err(KernelError::InvalidArgument);
     };
-    let Ok(key) = Bf16MfmaBMatrix::row_major(
+    let Ok(key) = StridedReadView2D::from_shared_slice(
         key_transposed_bf16,
         0,
         HEAD_DIM,
@@ -203,30 +206,22 @@ pub fn gfx950_gpt_oss_120b_decode_megakernel_v1(
     ) else {
         return Err(KernelError::InvalidArgument);
     };
-    let matrix = DeviceMatrix::current();
-    let scores = F32AccumulatorFragment::zero(&lane);
-    let scores = matrix.multiply_accumulate(
-        query.load_m16k16(&lane, 0, 0),
-        key.load_k16n16(&lane, 0, 0),
-        scores,
-    );
-    let scores = matrix.multiply_accumulate(
-        query.load_m16k16(&lane, 0, 16),
-        key.load_k16n16(&lane, 16, 0),
-        scores,
-    );
-    let scores = matrix.multiply_accumulate(
-        query.load_m16k16(&lane, 0, 32),
-        key.load_k16n16(&lane, 32, 0),
-        scores,
-    );
-    let scores = matrix
-        .multiply_accumulate(
-            query.load_m16k16(&lane, 0, 48),
-            key.load_k16n16(&lane, 48, 0),
-            scores,
-        )
-        .into_values();
+    let token_index = lane_index % CONTEXT_TOKENS;
+    let row_group = lane_index / CONTEXT_TOKENS;
+    let row0 = row_group * 4;
+    let row1 = row0 + 1;
+    let row2 = row0 + 2;
+    let row3 = row0 + 3;
+    let mut scores = [0.0_f32; 4];
+    let mut attention_depth = 0_usize;
+    while attention_depth < HEAD_DIM {
+        let key_value = Bf16::from_bits(key.load_or(attention_depth, token_index, 0)).to_f32();
+        scores[0] += Bf16::from_bits(query.load_or(row0, attention_depth, 0)).to_f32() * key_value;
+        scores[1] += Bf16::from_bits(query.load_or(row1, attention_depth, 0)).to_f32() * key_value;
+        scores[2] += Bf16::from_bits(query.load_or(row2, attention_depth, 0)).to_f32() * key_value;
+        scores[3] += Bf16::from_bits(query.load_or(row3, attention_depth, 0)).to_f32() * key_value;
+        attention_depth += 1;
+    }
 
     let Ok(values) =
         StridedReadView2D::from_shared_slice(value_f32, 0, CONTEXT_TOKENS, VALUE_TILE, VALUE_TILE)
@@ -237,11 +232,6 @@ pub fn gfx950_gpt_oss_120b_decode_megakernel_v1(
     else {
         return Err(KernelError::InvalidArgument);
     };
-    let row_group = lane_index / CONTEXT_TOKENS;
-    let row0 = row_group * 4;
-    let row1 = row0 + 1;
-    let row2 = row0 + 2;
-    let row3 = row0 + 3;
     let sink0 = sinks.load_or(0, row0, 0.0);
     let sink1 = sinks.load_or(0, row1, 0.0);
     let sink2 = sinks.load_or(0, row2, 0.0);

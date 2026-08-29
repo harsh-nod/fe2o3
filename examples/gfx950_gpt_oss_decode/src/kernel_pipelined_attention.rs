@@ -3,10 +3,11 @@
 #![allow(missing_docs)]
 
 use fe2o3_device::{
-    Bf16MfmaAMatrix, Bf16MfmaBMatrix, Blocked, DeviceMatrix, DisjointSlice, F32AccumulatorFragment,
-    Gfx950F32AccumulatorFragment, Gfx950Fp4E2M1, Gfx950Fp4MfmaAMatrix, Gfx950Fp4MfmaBMatrix,
-    Gfx950Matrix, Gfx950Subgroup, Index1D, KernelError, KernelResult, Math, StridedReadView2D,
-    Wave64, WaveLane, kernel, thread,
+    Bf16MfmaAFragment, Bf16MfmaAMatrix, Bf16MfmaBFragment, Bf16MfmaBMatrix, Blocked,
+    DeviceMatrix, DisjointSlice, F32AccumulatorFragment, Gfx950F32AccumulatorFragment,
+    Gfx950Fp4E2M1, Gfx950Fp4MfmaAMatrix, Gfx950Fp4MfmaBMatrix, Gfx950Matrix, Gfx950Subgroup,
+    Index1D, KernelError, KernelResult, Math, StridedReadView2D, Wave64, WaveLane,
+    WorkgroupLdsScope, WorkgroupPipeline, kernel, thread,
 };
 
 use crate::{
@@ -17,10 +18,13 @@ use crate::{
 const ATTENTION_SCALE: f32 = 0.125;
 const ROUTER_FLOOR: f32 = -1.0e30;
 
-#[cfg(any(not(target_arch = "amdgpu"), feature = "kernel-gpt-oss-decode"))]
+#[cfg(any(
+    not(target_arch = "amdgpu"),
+    feature = "kernel-gpt-oss-decode-pipelined-attention"
+))]
 #[kernel(
     typed,
-    namespace = "0739c8414cc87e4bd943b2d563152bbb25abc619847f75f405c6dadb154858d9",
+    namespace = "fdac2bfe29c5e088f817374ab8ebec27e0574d46b1d2601704a4d1108d2524ed",
     launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1]),
     control_flow(loop_bounds(2880, 64, 16))
 )]
@@ -204,29 +208,79 @@ pub fn gfx950_gpt_oss_120b_decode_megakernel_v1(
         return Err(KernelError::InvalidArgument);
     };
     let matrix = DeviceMatrix::current();
+    let mut pipeline_scope = WorkgroupLdsScope::current();
+    let mut query_pipeline =
+        WorkgroupPipeline::<Bf16MfmaAFragment<'_>, 2, 64, 1>::current(&mut pipeline_scope);
+    let mut key_pipeline =
+        WorkgroupPipeline::<Bf16MfmaBFragment<'_>, 2, 64, 1>::current(&mut pipeline_scope);
+
+    query_pipeline.stage(0);
+    query_pipeline.write(0, lane_index, query.load_m16k16(&lane, 0, 0));
+    query_pipeline.commit(0);
+    key_pipeline.stage(0);
+    key_pipeline.write(0, lane_index, key.load_k16n16(&lane, 0, 0));
+    key_pipeline.commit(0);
+    query_pipeline.stage(1);
+    query_pipeline.write(1, lane_index, query.load_m16k16(&lane, 0, 16));
+    query_pipeline.commit(1);
+    key_pipeline.stage(1);
+    key_pipeline.write(1, lane_index, key.load_k16n16(&lane, 16, 0));
+    key_pipeline.commit(1);
+
     let scores = F32AccumulatorFragment::zero(&lane);
-    let scores = matrix.multiply_accumulate(
-        query.load_m16k16(&lane, 0, 0),
-        key.load_k16n16(&lane, 0, 0),
-        scores,
-    );
-    let scores = matrix.multiply_accumulate(
-        query.load_m16k16(&lane, 0, 16),
-        key.load_k16n16(&lane, 16, 0),
-        scores,
-    );
-    let scores = matrix.multiply_accumulate(
-        query.load_m16k16(&lane, 0, 32),
-        key.load_k16n16(&lane, 32, 0),
-        scores,
-    );
+    query_pipeline.wait(0);
+    query_pipeline.consume(0);
+    let query_fragment = query_pipeline.read(0, lane_index);
+    key_pipeline.wait(0);
+    key_pipeline.consume(0);
+    let key_fragment = key_pipeline.read(0, lane_index);
+    let scores = matrix.multiply_accumulate(query_fragment, key_fragment, scores);
+    query_pipeline.release(0);
+    key_pipeline.release(0);
+
+    query_pipeline.stage(2);
+    query_pipeline.write(2, lane_index, query.load_m16k16(&lane, 0, 32));
+    query_pipeline.commit(2);
+    key_pipeline.stage(2);
+    key_pipeline.write(2, lane_index, key.load_k16n16(&lane, 32, 0));
+    key_pipeline.commit(2);
+    query_pipeline.wait(1);
+    query_pipeline.consume(1);
+    let query_fragment = query_pipeline.read(1, lane_index);
+    key_pipeline.wait(1);
+    key_pipeline.consume(1);
+    let key_fragment = key_pipeline.read(1, lane_index);
+    let scores = matrix.multiply_accumulate(query_fragment, key_fragment, scores);
+    query_pipeline.release(1);
+    key_pipeline.release(1);
+
+    query_pipeline.stage(3);
+    query_pipeline.write(3, lane_index, query.load_m16k16(&lane, 0, 48));
+    query_pipeline.commit(3);
+    key_pipeline.stage(3);
+    key_pipeline.write(3, lane_index, key.load_k16n16(&lane, 48, 0));
+    key_pipeline.commit(3);
+    query_pipeline.wait(2);
+    query_pipeline.consume(2);
+    let query_fragment = query_pipeline.read(2, lane_index);
+    key_pipeline.wait(2);
+    key_pipeline.consume(2);
+    let key_fragment = key_pipeline.read(2, lane_index);
+    let scores = matrix.multiply_accumulate(query_fragment, key_fragment, scores);
+    query_pipeline.release(2);
+    key_pipeline.release(2);
+
+    query_pipeline.wait(3);
+    query_pipeline.consume(3);
+    let query_fragment = query_pipeline.read(3, lane_index);
+    key_pipeline.wait(3);
+    key_pipeline.consume(3);
+    let key_fragment = key_pipeline.read(3, lane_index);
     let scores = matrix
-        .multiply_accumulate(
-            query.load_m16k16(&lane, 0, 48),
-            key.load_k16n16(&lane, 48, 0),
-            scores,
-        )
+        .multiply_accumulate(query_fragment, key_fragment, scores)
         .into_values();
+    query_pipeline.release(3);
+    key_pipeline.release(3);
 
     let Ok(values) =
         StridedReadView2D::from_shared_slice(value_f32, 0, CONTEXT_TOKENS, VALUE_TILE, VALUE_TILE)
