@@ -1901,7 +1901,10 @@ fn production_access_sources(
         if !matches!(
             operation,
             ProductionRankedOperationV1::Access { .. }
+                | ProductionRankedOperationV1::ValueAccess { .. }
                 | ProductionRankedOperationV1::AtomicAccess { .. }
+                | ProductionRankedOperationV1::AtomicValueAccess { .. }
+                | ProductionRankedOperationV1::AllocationEffect { .. }
         ) {
             continue;
         }
@@ -14319,6 +14322,77 @@ mod tests {
         ) -> &'a fe2o3_pliron::ProductionMiddleEndEvidenceV5 =
             AuthenticatedRankedVerificationV5::middle_end_evidence;
         let _ = accessor;
+    }
+
+    #[test]
+    fn value_carrying_accesses_retain_exact_semantic_correspondence() {
+        let view = ProductionRankedValueV1::Argument(0);
+        let value = ProductionRankedValueV1::Argument(1);
+        let blocks = [ProductionRankedBlockV1::new(
+            vec![
+                ProductionRankedOperationV1::ValueAccess {
+                    kind: AccessKindAttr::Write,
+                    view,
+                    indices: vec![],
+                    value,
+                },
+                ProductionRankedOperationV1::AtomicValueAccess {
+                    kind: AccessKindAttr::AtomicReadModifyWrite,
+                    ordering: AtomicOrderingAttr::AcquireRelease,
+                    scope: AtomicScopeAttr::Device,
+                    view,
+                    indices: vec![],
+                    value,
+                },
+            ],
+            ProductionRankedTerminatorV1::Return,
+        )];
+        let sites = [
+            ProjectedAccessSourceV1 {
+                block: 0,
+                operation: 0,
+                access: AccessKindAttr::Write,
+                memory_space: MemorySpaceAttr::Global,
+                source: SemanticSourceProvenanceV1::unavailable(),
+                semantic_site: Some(ProjectedSemanticAccessSiteV1 {
+                    block: 7,
+                    statement: None,
+                }),
+            },
+            ProjectedAccessSourceV1 {
+                block: 0,
+                operation: 1,
+                access: AccessKindAttr::AtomicReadModifyWrite,
+                memory_space: MemorySpaceAttr::Global,
+                source: SemanticSourceProvenanceV1::unavailable(),
+                semantic_site: Some(ProjectedSemanticAccessSiteV1 {
+                    block: 7,
+                    statement: None,
+                }),
+            },
+        ];
+
+        let retained = production_access_sources(&blocks, &sites).unwrap();
+
+        assert_eq!(retained.len(), 2);
+        assert_eq!(
+            (
+                retained[0].semantic_block(),
+                retained[0].semantic_statement(),
+                retained[0].semantic_access_ordinal(),
+                retained[0].ranked_block(),
+                retained[0].ranked_operation(),
+            ),
+            (7, None, 0, 0, 0),
+        );
+        assert_eq!(
+            (
+                retained[1].semantic_block(),
+                retained[1].semantic_access_ordinal(),
+                retained[1].ranked_operation(),
+            ),
+            (7, 1, 1),
+        );
     }
 
     fn bytes(tag: u8) -> [u8; 32] {

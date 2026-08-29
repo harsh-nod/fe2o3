@@ -1645,6 +1645,7 @@ fn ranked_access_sources_are_well_formed(
                 | ProductionRankedOperationV1::ValueAccess { .. }
                 | ProductionRankedOperationV1::AtomicAccess { .. }
                 | ProductionRankedOperationV1::AtomicValueAccess { .. }
+                | ProductionRankedOperationV1::AllocationEffect { .. }
         ) || !ranked_locations.insert((source.ranked_block, source.ranked_operation))
         {
             return false;
@@ -1720,11 +1721,17 @@ struct RankedViewDefinitionV1 {
 }
 
 #[derive(Clone, Copy)]
+enum IndexedRankedAllocationV1 {
+    View(ProductionRankedValueV1),
+    Direct(RankedViewDefinitionV1),
+}
+
+#[derive(Clone, Copy)]
 struct IndexedRankedAccessSourceV1 {
     ranked_block: u32,
     ranked_operation: u32,
     access: dialect_kernel::AccessKindAttr,
-    view: ProductionRankedValueV1,
+    allocation: IndexedRankedAllocationV1,
     value: Option<ProductionRankedValueV1>,
     atomic: Option<NormalizedAtomicContractV1>,
 }
@@ -2543,11 +2550,18 @@ fn index_ranked_correlation(
             .get(source.ranked_block as usize)?
             .operations()
             .get(source.ranked_operation as usize)?;
-        let (access, view, value, atomic) = match operation {
-            ProductionRankedOperationV1::Access { kind, view, .. } => (*kind, *view, None, None),
+        let (access, allocation, value, atomic) = match operation {
+            ProductionRankedOperationV1::Access { kind, view, .. } => {
+                (*kind, IndexedRankedAllocationV1::View(*view), None, None)
+            }
             ProductionRankedOperationV1::ValueAccess {
                 kind, view, value, ..
-            } => (*kind, *view, Some(*value), None),
+            } => (
+                *kind,
+                IndexedRankedAllocationV1::View(*view),
+                Some(*value),
+                None,
+            ),
             ProductionRankedOperationV1::AtomicAccess {
                 kind,
                 ordering,
@@ -2556,7 +2570,7 @@ fn index_ranked_correlation(
                 ..
             } => (
                 *kind,
-                *view,
+                IndexedRankedAllocationV1::View(*view),
                 None,
                 Some(normalize_ranked_atomic_contract_v1(*ordering, *scope)),
             ),
@@ -2569,9 +2583,23 @@ fn index_ranked_correlation(
                 ..
             } => (
                 *kind,
-                *view,
+                IndexedRankedAllocationV1::View(*view),
                 Some(*value),
                 Some(normalize_ranked_atomic_contract_v1(*ordering, *scope)),
+            ),
+            ProductionRankedOperationV1::AllocationEffect {
+                kind,
+                memory_space,
+                allocation_origin,
+                ..
+            } => (
+                *kind,
+                IndexedRankedAllocationV1::Direct(RankedViewDefinitionV1 {
+                    allocation_origin: *allocation_origin,
+                    memory_space: *memory_space,
+                }),
+                None,
+                None,
             ),
             _ => return None,
         };
@@ -2601,7 +2629,7 @@ fn index_ranked_correlation(
                     ranked_block: source.ranked_block,
                     ranked_operation: source.ranked_operation,
                     access,
-                    view,
+                    allocation,
                     value,
                     atomic,
                 },
@@ -2705,10 +2733,16 @@ fn normalize_ranked_expression_v1(
                 .sites_by_ranked_location
                 .get(&(load.block, load.operation))?;
             let source = ranked.sources_by_site.get(&site)?;
-            if source.access != dialect_kernel::AccessKindAttr::Read || source.view != load.view {
+            if source.access != dialect_kernel::AccessKindAttr::Read {
                 return None;
             }
-            let ProductionRankedValueV1::Local(view) = source.view else {
+            let IndexedRankedAllocationV1::View(source_view) = source.allocation else {
+                return None;
+            };
+            if source_view != load.view {
+                return None;
+            }
+            let ProductionRankedValueV1::Local(view) = source_view else {
                 return None;
             };
             let definition = ranked.view_definitions.get(&view)?;
@@ -3242,14 +3276,14 @@ fn validate_mir_pliron_translation_v1(
                 },
             );
         }
-        let ProductionRankedValueV1::Local(view) = source.view else {
-            return Err(
-                ProductionMirPlironTranslationErrorV1::AllocationOriginMismatch {
-                    location: consumer.location,
-                },
-            );
+        let definition = match source.allocation {
+            IndexedRankedAllocationV1::View(ProductionRankedValueV1::Local(view)) => {
+                ranked.view_definitions.get(&view).copied()
+            }
+            IndexedRankedAllocationV1::View(_) => None,
+            IndexedRankedAllocationV1::Direct(definition) => Some(definition),
         };
-        let definition = ranked.view_definitions.get(&view).ok_or(
+        let definition = definition.ok_or(
             ProductionMirPlironTranslationErrorV1::AllocationOriginMismatch {
                 location: consumer.location,
             },
@@ -3970,10 +4004,14 @@ fn indexed_ranked_source_matches_allocation(
     expected_memory_space: dialect_kernel::MemorySpaceAttr,
     parameter_index: u32,
 ) -> bool {
-    let ProductionRankedValueV1::Local(view) = source.view else {
-        return false;
+    let definition = match source.allocation {
+        IndexedRankedAllocationV1::View(ProductionRankedValueV1::Local(view)) => {
+            ranked.view_definitions.get(&view).copied()
+        }
+        IndexedRankedAllocationV1::View(_) => None,
+        IndexedRankedAllocationV1::Direct(definition) => Some(definition),
     };
-    let Some(definition) = ranked.view_definitions.get(&view) else {
+    let Some(definition) = definition else {
         return false;
     };
     source.access == expected_access
@@ -19763,6 +19801,39 @@ mod resource_tests {
         assert_eq!(report.value_expressions(), 0);
         assert_eq!(report.conservative_ranked_effects(), 0);
         assert!(!report.grants_artifact_or_launch_authority());
+    }
+
+    #[test]
+    fn mir_pliron_translation_validation_accepts_exact_conservative_allocation_effect() {
+        let fixture = unsupported_index_correlation_fixture();
+        let lowering = ranked_correlation_input_for_effects(
+            vec![ProductionRankedOperationV1::AllocationEffect {
+                kind: AccessKindAttr::Read,
+                memory_space: dialect_kernel::MemorySpaceAttr::Global,
+                allocation_origin: 1,
+                noalias_class: 1,
+            }],
+            1,
+        );
+        let report = validate_translation_fixture(&fixture, &lowering, &[fixture.source], 16)
+            .expect("the exact conservative allocation effect must reconcile");
+
+        assert_eq!(report.memory_effects(), 1);
+        assert_eq!(report.conservative_ranked_effects(), 1);
+
+        let wrong_allocation = ranked_correlation_input_for_effects(
+            vec![ProductionRankedOperationV1::AllocationEffect {
+                kind: AccessKindAttr::Read,
+                memory_space: dialect_kernel::MemorySpaceAttr::Global,
+                allocation_origin: 2,
+                noalias_class: 2,
+            }],
+            1,
+        );
+        assert!(matches!(
+            validate_translation_fixture(&fixture, &wrong_allocation, &[fixture.source], 16),
+            Err(ProductionMirPlironTranslationErrorV1::AllocationOriginMismatch { .. })
+        ));
     }
 
     #[test]
