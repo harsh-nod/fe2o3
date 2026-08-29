@@ -23,6 +23,10 @@ use fe2o3_compiler_ffi::{
     INERT_SEMANTIC_COMPILER_MODULE_HANDOFF_VERSION_V3, InertFinalCompilerModuleCommitmentV3,
     InertSemanticCompilerModuleHandoffV3,
 };
+use fe2o3_compiler_lineage::{
+    InertLineageContentIdentityV3, InertProofBindingAssociationInputsV4,
+    InertProofBindingAssociationV4,
+};
 use fe2o3_hsaco_finalize::{
     CompilerClosureV2, ContentIdentityV1, InertProtectedFirstBuildWorkerV3EvidenceV1,
     InspectedProtectedWorkerV3HsacoV1, LinkOptionV1, PinnedWorkerV1,
@@ -50,7 +54,9 @@ mod compiler_proof_inputs_v3;
 #[path = "fixtures/worker_v3_hsaco_test_support.rs"]
 mod hsaco_fixture;
 
-use compiler_proof_inputs_v3::canonical_compiler_proof_inputs_v3;
+use compiler_proof_inputs_v3::{
+    canonical_compiler_proof_inputs_v3, canonical_verus_execution_evidence_v1,
+};
 use hsaco_fixture::{
     ScalarAddFixtureMutation, scalar_add_fixture_with, slice_fixture_with_descriptor_table,
     slice_fixture_with_descriptor_table_and_workgroup,
@@ -120,10 +126,6 @@ const RECEIPTS: [(&str, &[u8]); 14] = [
 ];
 const FINAL_RECEIPT_DOMAIN_V3: &[u8] =
     b"FE2O3/INERT-LINEAGE-CONTENT/FINAL-COMPILER-MODULE-COMMITMENT/V3\0";
-const PROOF_BINDING_ASSOCIATION_DOMAIN_V3: &[u8] =
-    b"FE2O3/PRODUCTION-PROOF-BINDING-ASSOCIATION/V3\0";
-const ASSOCIATION_ONLY_CLAIM_V3: &[u8] = b"association-only/no-refinement-proof";
-
 const INVOCATION_20_HEX: &str = "4645324f33524900030000007c02000000000000010021212121212121212121212121212121212121212121212121212121212121212222222222222222222222222222222222222222222222222222222222222222232323232323232323232323232323232323232323232323232323232323232324242424242424242424242424242424242424242424242424242424242424242525252525252525252525252525252525252525252525252525252525252525262626262626262626262626262626262626262626262626262626262626262624242424242424242424242424242424242424242424242424242424242424242626262626262626262626262626262626262626262626262626262626262626100000002f776f726b73706163652f6665326f3307000000100000002f6f70742f6665326f332f72757374630c0000002d2d63726174652d6e616d650c000000776f726b65725f76335f3230230000006372617465732f776f726b65722d76332d666978747572652f7372632f6c69622e7273100000002d2d63726174652d747970653d6c69620e0000002d2d65646974696f6e3d32303234360000002d5a636f646567656e2d6261636b656e643d2f6f70742f6665326f332f6c696272757374635f636f646567656e5f6665326f332e736f040000001500434152474f5f4346475f5441524745545f4152434806000000616d6467636e0f004645324f335f485341434f5f4449521d0000002f776f726b73706163652f6665326f332f7461726765742f6665326f330c004645324f335f5441524745540d0000006766783934323a786e61636b2d16004645324f335f5645524946595f4b45524e454c5f49520100000031";
 const INVOCATION_40_HEX: &str = "4645324f33524900030000007c02000000000000010041414141414141414141414141414141414141414141414141414141414141414242424242424242424242424242424242424242424242424242424242424242434343434343434343434343434343434343434343434343434343434343434344444444444444444444444444444444444444444444444444444444444444444545454545454545454545454545454545454545454545454545454545454545464646464646464646464646464646464646464646464646464646464646464644444444444444444444444444444444444444444444444444444444444444444646464646464646464646464646464646464646464646464646464646464646100000002f776f726b73706163652f6665326f3307000000100000002f6f70742f6665326f332f72757374630c0000002d2d63726174652d6e616d650c000000776f726b65725f76335f3430230000006372617465732f776f726b65722d76332d666978747572652f7372632f6c69622e7273100000002d2d63726174652d747970653d6c69620e0000002d2d65646974696f6e3d32303234360000002d5a636f646567656e2d6261636b656e643d2f6f70742f6665326f332f6c696272757374635f636f646567656e5f6665326f332e736f040000001500434152474f5f4346475f5441524745545f4152434806000000616d6467636e0f004645324f335f485341434f5f4449521d0000002f776f726b73706163652f6665326f332f7461726765742f6665326f330c004645324f335f5441524745540d0000006766783934323a786e61636b2d16004645324f335f5645524946595f4b45524e454c5f49520100000031";
 
@@ -1102,7 +1104,8 @@ fn capsule_bytes(
     {
         receipts[10].0 = descriptor_source;
     }
-    receipts[7].0 = proof_binding_association_payload(&receipts);
+    let verus_execution = canonical_verus_execution_evidence_v1(&receipts[3].0, seed);
+    receipts[7].0 = proof_binding_association_payload(&receipts, &verus_execution);
     receipts[11].0 = handoff.symbol_manifest().canonical_bytes().to_vec();
     match lineage_mutation {
         DescriptorLineageMutation::Exact => {}
@@ -1155,39 +1158,30 @@ fn capsule_bytes(
     capsule
 }
 
-fn proof_binding_association_payload(receipts: &[(Vec<u8>, &[u8])]) -> Vec<u8> {
-    let mut identities = [[0_u8; 40]; 5];
-    for (output, receipt_index) in identities.iter_mut().zip(2..=6) {
-        let (payload, domain) = &receipts[receipt_index];
-        output[..32].copy_from_slice(&identity(domain, payload));
-        output[32..].copy_from_slice(&(payload.len() as u64).to_le_bytes());
+fn proof_binding_association_payload(
+    receipts: &[(Vec<u8>, &[u8])],
+    verus_execution: &[u8],
+) -> Vec<u8> {
+    let mut identities = Vec::with_capacity(5);
+    for (payload, domain) in receipts.iter().take(7).skip(2) {
+        identities.push(
+            InertLineageContentIdentityV3::new(identity(domain, payload), payload.len() as u64)
+                .unwrap(),
+        );
     }
-    let fields: [&[u8]; 7] = [
-        PROOF_BINDING_ASSOCIATION_DOMAIN_V3,
-        ASSOCIATION_ONLY_CLAIM_V3,
-        &identities[0],
-        &identities[1],
-        &identities[2],
-        &identities[3],
-        &identities[4],
-    ];
-    let total = 24 + fields.len() * 8 + fields.iter().map(|field| field.len()).sum::<usize>();
-    let mut bytes = Vec::with_capacity(total);
-    bytes.extend_from_slice(b"F2O3TLV3");
-    bytes.extend_from_slice(&3_u16.to_le_bytes());
-    bytes.extend_from_slice(&6_u16.to_le_bytes());
-    bytes.extend_from_slice(&1_u16.to_le_bytes());
-    bytes.extend_from_slice(&(fields.len() as u16).to_le_bytes());
-    bytes.extend_from_slice(&(total as u32).to_le_bytes());
-    bytes.extend_from_slice(&0_u32.to_le_bytes());
-    for (index, field) in fields.iter().enumerate() {
-        bytes.extend_from_slice(&((index + 1) as u16).to_le_bytes());
-        bytes.extend_from_slice(&0_u16.to_le_bytes());
-        bytes.extend_from_slice(&(field.len() as u32).to_le_bytes());
-        bytes.extend_from_slice(field);
-    }
-    assert_eq!(bytes.len(), total);
-    bytes
+    InertProofBindingAssociationV4::new(
+        InertProofBindingAssociationInputsV4::new(
+            identities[0],
+            identities[1],
+            identities[2],
+            identities[3],
+            identities[4],
+        ),
+        verus_execution,
+    )
+    .unwrap()
+    .canonical_bytes()
+    .to_vec()
 }
 
 fn raw_outer(capsule: &[u8], handoff: &[u8]) -> Vec<u8> {

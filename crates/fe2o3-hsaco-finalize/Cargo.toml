@@ -39,9 +39,14 @@ test = false
 bench = false
 
 [dev-dependencies]
+ed25519-dalek = { version = "=2.2.0", default-features = false, features = ["fast", "zeroize"] }
 fe2o3-compiler-api.workspace = true
+fe2o3-compiler-lineage.workspace = true
+fe2o3-functional-proof.workspace = true
 fe2o3-lower-mir-kernel.workspace = true
 fe2o3-mir-model.workspace = true
 fe2o3-pliron.workspace = true
+fe2o3-proof-contracts.workspace = true
+fe2o3-verifier.workspace = true
 rmpv = { version = "1.3.1", default-features = false }
 trybuild = "1"

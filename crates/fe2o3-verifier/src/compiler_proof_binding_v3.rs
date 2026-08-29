@@ -1,8 +1,9 @@
-//! Independent validation of the compiler's frozen V3 proof inputs.
+//! Independent validation of compiler proof inputs carried by the frozen V3 capsule envelope.
 //!
-//! This validates exact canonical content and structural relationships only. It does not execute
-//! Verus, prove a property, authenticate compiler origin, establish compiler refinement, or grant
-//! runtime authority.
+//! The legacy V3 association validates exact canonical content and structural relationships only.
+//! The current V4 association additionally imports the exact signed aggregate
+//! MIR-to-live-PLIRON Verus receipt under its embedded key. Neither path authenticates compiler
+//! origin, establishes LLVM or machine refinement, or grants runtime authority.
 
 use std::{error::Error, fmt};
 
@@ -181,6 +182,11 @@ impl ValidatedCompilerProofInputsV4 {
 
     /// Reports that all exact stage bytes and the nested Verus evidence were associated.
     pub const fn has_exact_decoded_input_association(&self) -> bool {
+        true
+    }
+
+    /// Reports that retained block locators and source statement counts match decoded MIR and KIR.
+    pub const fn has_structural_mir_to_kir_correspondence(&self) -> bool {
         true
     }
 

@@ -7,8 +7,8 @@ use fe2o3_hsaco::CodeObjectVersion;
 use fe2o3_kernel_descriptor::{KernelDescriptorV1, KernelId};
 use fe2o3_runtime_protocol::CompilerExecutionReceiptCarriageV1;
 use fe2o3_verifier::{
-    CompilerProofInputValidationErrorV3, ValidatedCompilerProofInputsV3,
-    validate_compiler_proof_inputs_v3,
+    CompilerProofInputValidationErrorV4, ValidatedCompilerProofInputsV4,
+    validate_compiler_proof_inputs_v4,
 };
 use sha2::{Digest, Sha256};
 
@@ -255,14 +255,15 @@ impl<K: CompilerGeneratedKernelExpectationV1> WorkerV3VerificationRequestV1<'_, 
     /// Independently decodes and cross-checks every exact compiler proof input retained by the
     /// recovered capsule.
     ///
-    /// The move-only result establishes canonical input ownership and structural MIR-to-KIR
-    /// association only. It does not authenticate Verus execution, establish compiler refinement,
-    /// or grant publication, load, or launch authority.
-    pub fn validate_compiler_proof_inputs_v3(
+    /// The move-only result establishes canonical stage ownership, structural MIR-to-KIR
+    /// association, and strict import of the exact signed aggregate MIR-to-live-PLIRON receipt
+    /// under its embedded key. Protected compiler origin, LLVM/machine refinement, and runtime
+    /// authority remain separate required joins.
+    pub fn validate_compiler_proof_inputs_v4(
         &self,
-    ) -> Result<ValidatedCompilerProofInputsV3, CompilerProofInputValidationErrorV3> {
+    ) -> Result<ValidatedCompilerProofInputsV4, CompilerProofInputValidationErrorV4> {
         let receipts = self.handoff.capsule().receipts();
-        validate_compiler_proof_inputs_v3(
+        validate_compiler_proof_inputs_v4(
             receipts.proof_binding(),
             receipts.semantic_mir(),
             receipts.middle_end(),
@@ -773,7 +774,7 @@ pub struct WorkerV3VerificationDecisionV1 {
 
 #[derive(Debug)]
 enum WorkerV3ProofInputEvidenceV1 {
-    Validated(ValidatedCompilerProofInputsV3),
+    Validated(ValidatedCompilerProofInputsV4),
     #[cfg(feature = "worker-v3-verifier-test-support")]
     Synthetic,
 }
@@ -798,7 +799,7 @@ impl WorkerV3VerificationDecisionV1 {
         target: fe2o3_amd_target::AmdTargetId,
         code_object_version: CodeObjectVersion,
         compiler_execution: WorkerV3CompilerExecutionVerificationV1,
-        proof_inputs: ValidatedCompilerProofInputsV3,
+        proof_inputs: ValidatedCompilerProofInputsV4,
         verifier_measurement_sha256: [u8; 32],
         verification_transcript_sha256: [u8; 32],
         proof_executable_binding_sha256: [u8; 32],
@@ -954,11 +955,27 @@ impl WorkerV3VerificationDecisionV1 {
     ///
     /// The explicit synthetic test feature returns `None`; that lane never represents decoded
     /// proof-input authority.
-    pub const fn validated_compiler_proof_inputs(&self) -> Option<&ValidatedCompilerProofInputsV3> {
+    pub const fn validated_compiler_proof_inputs(&self) -> Option<&ValidatedCompilerProofInputsV4> {
         match &self.proof_inputs {
             WorkerV3ProofInputEvidenceV1::Validated(inputs) => Some(inputs),
             #[cfg(feature = "worker-v3-verifier-test-support")]
             WorkerV3ProofInputEvidenceV1::Synthetic => None,
+        }
+    }
+
+    /// Reports custody of both current compiler-execution evidence and the independently imported
+    /// signed aggregate MIR-to-live-PLIRON receipt. This does not establish LLVM or machine
+    /// refinement and grants no runtime authority.
+    pub const fn retains_current_compiler_and_signed_verus_evidence(&self) -> bool {
+        match &self.proof_inputs {
+            WorkerV3ProofInputEvidenceV1::Validated(inputs) => {
+                inputs.authenticates_signed_verus_receipt_under_embedded_key()
+                    && self
+                        .compiler_execution
+                        .authenticates_signed_currentness_evidence()
+            }
+            #[cfg(feature = "worker-v3-verifier-test-support")]
+            WorkerV3ProofInputEvidenceV1::Synthetic => false,
         }
     }
 }
@@ -1376,6 +1393,11 @@ fn validate_decision_proof_inputs<K: CompilerGeneratedKernelExpectationV1>(
         (
             inputs.association().canonical_bytes() == receipts.proof_binding().canonical_preimage(),
             "proof-binding association",
+        ),
+        (
+            inputs.verus_execution().canonical_bytes()
+                == inputs.association().verus_execution_evidence(),
+            "aggregate Verus execution",
         ),
         (
             inputs.semantic_mir().canonical_encoding()
