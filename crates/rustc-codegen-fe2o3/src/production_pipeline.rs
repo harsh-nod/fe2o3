@@ -1936,7 +1936,7 @@ mod tests {
             "target triple = \"amdgcn-amd-amdhsa\"\ntarget datalayout = \"{}\"\n\n",
             crate::production_target_v1::PRODUCTION_WORKER_DATA_LAYOUT_V1
         )));
-        assert!(!bound.contains("target datalayout = \"e-m:e-"));
+        assert!(bound.contains("target datalayout = \"e-m:e-"));
         assert!(bound.ends_with("define void @body() { ret void }\n"));
         assert_eq!(bound.matches("target triple =").count(), 1);
         assert_eq!(bound.matches("target datalayout =").count(), 1);

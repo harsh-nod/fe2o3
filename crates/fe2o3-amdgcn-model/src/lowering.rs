@@ -41,9 +41,9 @@ const MAX_COMPILER_MODULE_CALL_EDGES: usize = 131_072;
 /// Maximum textual LLVM bytes returned by compiler-module construction.
 pub const MAX_COMPILER_MODULE_TEXT_BYTES: usize = 16 * 1024 * 1024;
 
-/// Deterministic dialect layout used before the production route binds the
-/// exact layout measured from its pinned upstream LLVM target machine.
-pub const GFX942_XNACK_MINUS_DATA_LAYOUT: &str = "e-p:64:64-p1:64:64-p2:32:32-p3:32:32-p4:64:64-p5:32:32-p6:32:32-p7:160:256:256:32-p8:128:128:128:48-p9:192:256:256:32-i64:64-v16:16-v24:32-v32:32-v48:64-v96:128-v192:256-v256:256-v512:512-v1024:1024-v2048:2048-n32:64-S32-A5-G1-ni:7:8:9";
+/// Exact data layout measured from the pinned upstream LLVM target machine.
+pub const GFX942_XNACK_MINUS_DATA_LAYOUT: &str =
+    fe2o3_amd_target::PRODUCTION_AMDHSA_LLVM_DATA_LAYOUT_V1;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum LoweringTarget {
     Baseline,

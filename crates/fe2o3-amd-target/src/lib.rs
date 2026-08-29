@@ -37,6 +37,12 @@ pub use resolved_target_v2::{
 
 /// Exact Cargo/rustc target triple admitted by the first gfx942 production profile.
 pub const PRODUCTION_GFX942_RUSTC_TARGET_V1: &str = "amdgcn-amd-amdhsa";
+/// Exact data layout returned by the pinned upstream LLVM AMDGPU target machine.
+///
+/// The gfx942 and gfx950 production profiles share this layout. Consumers must
+/// retain every component, including the ELF mangling component `m:e`, because
+/// Worker V3 requires byte-for-byte equality with `TargetMachine::createDataLayout`.
+pub const PRODUCTION_AMDHSA_LLVM_DATA_LAYOUT_V1: &str = "e-m:e-p:64:64-p1:64:64-p2:32:32-p3:32:32-p4:64:64-p5:32:32-p6:32:32-p7:160:256:256:32-p8:128:128:128:48-p9:192:256:256:32-i64:64-v16:16-v24:32-v32:32-v48:64-v96:128-v192:256-v256:256-v512:512-v1024:1024-v2048:2048-n32:64-S32-A5-G1-ni:7:8:9";
 /// Exact configured processor admitted by the first gfx942 production profile.
 pub const PRODUCTION_GFX942_DEVICE_CPU_V1: &str = "gfx942";
 /// Exact code-object target ID emitted by the first gfx942 production profile.
@@ -560,6 +566,25 @@ mod tests {
     use std::string::ToString;
 
     use super::*;
+
+    #[test]
+    fn production_amdhsa_layout_retains_the_measured_llvm_contract() {
+        assert!(PRODUCTION_AMDHSA_LLVM_DATA_LAYOUT_V1.starts_with("e-m:e-p:64:64-"));
+        for required in [
+            "p3:32:32",
+            "p7:160:256:256:32",
+            "p8:128:128:128:48",
+            "p9:192:256:256:32",
+            "A5",
+            "G1",
+            "ni:7:8:9",
+        ] {
+            assert!(
+                PRODUCTION_AMDHSA_LLVM_DATA_LAYOUT_V1.contains(required),
+                "missing target-machine layout component {required}"
+            );
+        }
+    }
 
     #[test]
     fn every_known_processor_round_trips() {

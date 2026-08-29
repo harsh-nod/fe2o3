@@ -17,7 +17,8 @@ const MANIFEST_DOMAIN_V1: &[u8] = b"FE2O3/EXTERNAL-DEVICE-LIBRARY-MANIFEST/V1\0"
 /// Reviewed target triple for V1 device-function libraries.
 pub const EXTERNAL_DEVICE_LIBRARY_TARGET_TRIPLE_V1: &str = "amdgcn-amd-amdhsa";
 /// Target-machine data layout reviewed for the gfx942 V1 lane.
-pub const EXTERNAL_DEVICE_LIBRARY_GFX942_DATA_LAYOUT_V1: &str = "e-p:64:64-p1:64:64-p2:32:32-p3:32:32-p4:64:64-p5:32:32-p6:32:32-p7:160:256:256:32-p8:128:128:128:48-p9:192:256:256:32-i64:64-v16:16-v24:32-v32:32-v48:64-v96:128-v192:256-v256:256-v512:512-v1024:1024-v2048:2048-n32:64-S32-A5-G1-ni:7:8:9";
+pub const EXTERNAL_DEVICE_LIBRARY_GFX942_DATA_LAYOUT_V1: &str =
+    fe2o3_amd_target::PRODUCTION_AMDHSA_LLVM_DATA_LAYOUT_V1;
 
 pub const MAX_EXTERNAL_DEVICE_LIBRARY_SYMBOLS_V1: usize = 1_024;
 pub const MAX_EXTERNAL_DEVICE_LIBRARY_DEPENDENCIES_V1: usize = 256;

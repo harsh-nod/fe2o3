@@ -1647,7 +1647,13 @@ define amdgpu_kernel void @kernel() {\nentry:\n  ret void\n}\n";
     }
 
     #[test]
-    fn layout_policy_requires_the_exact_reviewed_rustc_to_worker_bridge() {
+    fn layout_policy_requires_the_exact_shared_rustc_and_worker_contract() {
+        let stale_layout = format!(
+            "e-{}",
+            DATA_LAYOUT
+                .strip_prefix("e-m:e-")
+                .expect("canonical production layout retains ELF mangling")
+        );
         let base = DataLayoutTranscriptInputsV3 {
             semantic_mir: identity(2),
             target_binding: identity(5),
@@ -1674,14 +1680,14 @@ define amdgpu_kernel void @kernel() {\nentry:\n  ret void\n}\n";
         );
         assert!(
             DataLayoutTranscriptV3::new(DataLayoutTranscriptInputsV3 {
-                live_rustc_data_layout: WORKER_DATA_LAYOUT,
+                live_rustc_data_layout: &stale_layout,
                 ..base
             })
             .is_err()
         );
         assert!(
             DataLayoutTranscriptV3::new(DataLayoutTranscriptInputsV3 {
-                final_llvm_data_layout: DATA_LAYOUT,
+                final_llvm_data_layout: &stale_layout,
                 ..base
             })
             .is_err()

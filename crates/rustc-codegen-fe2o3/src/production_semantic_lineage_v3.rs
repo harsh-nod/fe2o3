@@ -703,12 +703,13 @@ mod layout_tests {
         let exact = llvm_with_layout(PRODUCTION_WORKER_DATA_LAYOUT_V1);
         validate_final_llvm_layout(&exact).unwrap();
 
-        assert!(
-            validate_final_llvm_layout(&llvm_with_layout(
-                crate::production_target_v1::PRODUCTION_RUSTC_DATA_LAYOUT_V1
-            ))
-            .is_err()
+        let stale_layout = format!(
+            "e-{}",
+            PRODUCTION_WORKER_DATA_LAYOUT_V1
+                .strip_prefix("e-m:e-")
+                .expect("canonical production layout retains ELF mangling")
         );
+        assert!(validate_final_llvm_layout(&llvm_with_layout(&stale_layout)).is_err());
         assert!(
             validate_final_llvm_layout(&format!(
                 "{exact}target datalayout = \"{PRODUCTION_WORKER_DATA_LAYOUT_V1}\"\n"

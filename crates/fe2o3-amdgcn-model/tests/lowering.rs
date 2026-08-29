@@ -1327,7 +1327,7 @@ fn gfx950_exact_lowering_binds_cpu_features_layout_and_physical_barrier() {
         MemoryOrdering::AcquireRelease,
     ));
     let llvm = lower_kernel_to_gfx950_xnack_minus_llvm_ir(&module, &KernelId::new("fill")).unwrap();
-    assert!(llvm.contains("target datalayout = \"e-p:64:64-p1:64:64"));
+    assert!(llvm.contains("target datalayout = \"e-m:e-p:64:64-p1:64:64"));
     assert!(llvm.contains("\"target-cpu\"=\"gfx950\""));
     assert!(llvm.contains("\"target-features\"=\"-wavefrontsize32,+wavefrontsize64,-xnack\""));
     assert_eq!(

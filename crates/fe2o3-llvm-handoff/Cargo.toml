@@ -13,6 +13,7 @@ publish = false
 name = "fe2o3_llvm_handoff"
 
 [dependencies]
+fe2o3-amd-target.workspace = true
 sha2.workspace = true
 
 [lints.rust]

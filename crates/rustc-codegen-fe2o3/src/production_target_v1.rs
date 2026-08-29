@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-use fe2o3_amd_target::ProductionAmdTargetProfileV1;
+use fe2o3_amd_target::{PRODUCTION_AMDHSA_LLVM_DATA_LAYOUT_V1, ProductionAmdTargetProfileV1};
 use rustc_middle::ty::TyCtxt;
 
 use crate::AmdGpuTarget;
@@ -10,14 +10,9 @@ use crate::semantic_layout_bridge::{
     SemanticLayoutBridgeError, SemanticLayoutTargetV1, rustc_semantic_layout_target_v1,
 };
 
-pub(crate) const PRODUCTION_RUSTC_DATA_LAYOUT_V1: &str = "e-m:e-p:64:64-p1:64:64-p2:32:32-p3:32:32-p4:64:64-p5:32:32-p6:32:32-p7:160:256:256:32-p8:128:128:128:48-p9:192:256:256:32-i64:64-v16:16-v24:32-v32:32-v48:64-v96:128-v192:256-v256:256-v512:512-v1024:1024-v2048:2048-n32:64-S32-A5-G1-ni:7:8:9";
-/// Exact data layout measured from the pinned ROCm LLVM gfx942/gfx950 target machines.
-///
-/// Rustc's built-in AMDGPU target adds the ELF mangling component `m:e`; the pinned worker's
-/// target machine omits that non-physical component. All pointer, address-space, integer, vector,
-/// stack, alloca, global, and non-integral-address-space clauses remain identical.
-pub(crate) const PRODUCTION_WORKER_DATA_LAYOUT_V1: &str =
-    dialect_amdgcn::GFX942_XNACK_MINUS_DATA_LAYOUT;
+pub(crate) const PRODUCTION_RUSTC_DATA_LAYOUT_V1: &str = PRODUCTION_AMDHSA_LLVM_DATA_LAYOUT_V1;
+/// Exact data layout returned by the pinned upstream LLVM gfx942/gfx950 target machines.
+pub(crate) const PRODUCTION_WORKER_DATA_LAYOUT_V1: &str = PRODUCTION_AMDHSA_LLVM_DATA_LAYOUT_V1;
 const PRODUCTION_RUSTC_POINTER_WIDTH_V1: u16 = 64;
 
 /// Move-only proof that the live rustc session was the exact production target
@@ -267,10 +262,10 @@ mod tests {
     }
 
     #[test]
-    fn rustc_and_worker_layouts_differ_only_by_the_elf_mangling_component() {
+    fn rustc_and_worker_layouts_match_the_measured_target_machine() {
         assert_eq!(
-            PRODUCTION_RUSTC_DATA_LAYOUT_V1.strip_prefix("e-m:e-"),
-            PRODUCTION_WORKER_DATA_LAYOUT_V1.strip_prefix("e-")
+            PRODUCTION_RUSTC_DATA_LAYOUT_V1,
+            PRODUCTION_WORKER_DATA_LAYOUT_V1
         );
         assert_eq!(
             PRODUCTION_WORKER_DATA_LAYOUT_V1,
