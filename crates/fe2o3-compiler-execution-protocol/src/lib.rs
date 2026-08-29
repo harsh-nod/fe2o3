@@ -51,6 +51,7 @@ pub use external_anchor_deployment::{
     CompilerExecutionExternalAnchorDeploymentErrorV1,
     CompilerExecutionExternalAnchorDeploymentIdentityV1,
     CompilerExecutionExternalAnchorDeploymentV1,
+    MAX_COMPILER_EXECUTION_EXTERNAL_ANCHOR_EXECUTABLE_BYTES_V1,
 };
 pub use external_anchor_service::{
     CompilerExecutionExternalAnchorServiceIdentityErrorV1,

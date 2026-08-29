@@ -34,7 +34,8 @@ mod service;
 
 pub use entrypoint::{
     EXTERNAL_ANCHOR_SERVICE_PEER_FD_V1, EXTERNAL_ANCHOR_SERVICE_ROOT_FD_V1,
-    ExternalAnchorEntrypointErrorV1, run_inherited_external_anchor_service_v1,
+    ExternalAnchorEntrypointErrorV1, ExternalAnchorExecutableErrorV1,
+    run_inherited_external_anchor_service_v1,
 };
 pub use service::{
     ExternalAnchorDaemonErrorV1, ExternalAnchorServiceReportV1, serve_connected_peer_v1,

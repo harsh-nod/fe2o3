@@ -200,15 +200,18 @@ the external service is independently operated. The external-anchor service
 now supplies exclusive single-writer state, exact crash-durable
 write/fsync/rename/fsync transitions, idempotent recovery, and an ancillary-free
 connected `SOCK_SEQPACKET` loop. Its sealed deployment manifest pins the
-dedicated UID/GID, public key, and exact supervisor deployment. A separate
-role-tagged signing-key capability binds the private seed to that complete
-deployment identity, requires anonymous service-owned read-only custody, and
-can release an in-memory key only after revalidation. The descriptor-only daemon
-now admits the exact locked profile before reading that key, opens only existing
-state, retains root and peer at private FDs 256 and 257, closes every other
-descriptor including stdio, and enters the bounded packet loop. The
-root-controlled distinct-UID provisioner, sealed executable-identity binding,
-and refinement evidence join remain open, so the result remains authority-free.
+dedicated UID/GID, public key, exact supervisor deployment, and bounded SHA-256
+measurement of the daemon executable. A separate role-tagged signing-key
+capability binds the private seed to that complete deployment identity, requires
+anonymous service-owned read-only custody, and can release an in-memory key only
+after revalidation. The descriptor-only daemon admits the exact locked profile,
+then requires `/proc/self/exe` to be the measured service-owned anonymous
+mode-`0555` executable under complete content, execution, and seal locking before
+reading that key. It opens only existing state, retains root and peer at private
+FDs 256 and 257, closes every other descriptor including stdio, and enters the
+bounded packet loop. The root-controlled distinct-UID provisioner, static
+runtime-closure qualification, and refinement evidence join remain open, so the
+result remains authority-free.
 The issuer's direct transition
 methods are private. One shared bounded
 client now recovers first and resumes Ready, Prepared, or Issued under one

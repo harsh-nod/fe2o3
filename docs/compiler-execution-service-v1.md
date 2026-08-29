@@ -99,13 +99,19 @@ exactly these inherited descriptors:
 | 221 | Sealed external-anchor deployment manifest |
 | 222 | Role-separated deployment-bound anchor signing key |
 
-It admits FD 221 and the complete locked service profile before inspecting FD
-222. It then privately retains root and peer at FDs 256 and 257, consumes the
-key capability, closes every other descriptor including stdio, revalidates the
-profile, and strictly opens existing state. Initialization is unavailable from
-the daemon entrypoint. The remaining provisioner must create the state and key
-image under the dedicated anchor UID, create the unnamed socketpair after the
-UID transition so `SO_PEERCRED` records that identity, return only the
+The 168-byte FD 221 manifest also pins a nonzero bounded SHA-256 measurement of
+the exact daemon image. The daemon admits FD 221 and the complete locked service
+profile before inspecting FD 222. It then opens `/proc/self/exe` and requires a
+read-only close-on-exec descriptor for the same anonymous service-owned regular
+mode-`0555` object, with no file capabilities and complete write, size,
+execution-mode, and further-seal prevention. It hashes the sealed bytes once and
+retains that exact object for constant-time revalidation. Only then does it
+inspect and consume FD 222. It privately retains root and peer at FDs 256 and
+257, closes every other descriptor including stdio, revalidates the profile,
+and strictly opens existing state. Initialization is unavailable from the
+daemon entrypoint. The remaining provisioner must create the executable, state,
+and key image under the dedicated anchor UID, create the unnamed socketpair
+after the UID transition so `SO_PEERCRED` records that identity, return only the
 supervisor endpoint to the trusted root process, and execute the measured daemon
 with this exact descriptor set.
 

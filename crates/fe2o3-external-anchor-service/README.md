@@ -17,12 +17,19 @@ The connected-peer transport accepts only an unnamed, nonblocking Unix
 `SOCK_SEQPACKET` with close-on-exec custody. It receives one exact 184-byte
 challenge per packet, rejects truncation and all ancillary data, applies the
 durable transition, and sends one exact 288-byte signed observation. The anchor
-child is expected to create this unnamed socketpair after adopting its dedicated
-UID, return the supervisor endpoint to the root provisioner, and retain its own
-endpoint across `exec`; this is what makes the supervisor's `SO_PEERCRED`,
-unnamed-address, and distinct-UID checks simultaneously satisfiable.
+daemon has a descriptor-only entrypoint with no arguments or environment. It
+admits the sealed deployment and complete locked service profile before reading
+the deployment-bound signing-key capability, opens only existing durable state,
+retains only its private root and peer, and closes every other descriptor. The
+deployment also pins the exact daemon SHA-256 measurement. `/proc/self/exe` must
+be the same anonymous service-owned mode-`0555` executable under complete
+content, execution-mode, and further-seal prevention; its bytes are hashed once
+and the retained immutable object is revalidated before key use.
 
-This increment does not establish deployment authority. A production deployment
-must still provide a distinct locked service account, an independently managed
-signing key, a descriptor-only `SOCK_SEQPACKET` entrypoint, authenticated peer
-admission, and root-owned provisioning into the compiler execution supervisor.
+This crate does not establish deployment authority by itself. The remaining
+root provisioner must create state, key, executable image, and the unnamed
+socketpair under a distinct locked service account, return only the supervisor
+endpoint and pidfd after authenticated child admission, and provision those into
+the compiler execution supervisor. Creating the socketpair after adopting the
+dedicated UID makes the supervisor's `SO_PEERCRED`, unnamed-address, and
+distinct-UID checks simultaneously satisfiable.

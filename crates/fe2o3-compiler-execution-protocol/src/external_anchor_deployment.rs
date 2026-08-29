@@ -9,12 +9,13 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     CompilerExecutionExternalAnchorServiceIdentityErrorV1,
-    CompilerExecutionExternalAnchorServiceIdentityV1, CompilerExecutionIssuerPolicyV1,
-    CompilerExecutionSupervisorDeploymentIdentityV1, CompilerExecutionSupervisorDeploymentV1,
+    CompilerExecutionExternalAnchorServiceIdentityV1, CompilerExecutionIssuerMeasurementV1,
+    CompilerExecutionIssuerPolicyV1, CompilerExecutionSupervisorDeploymentIdentityV1,
+    CompilerExecutionSupervisorDeploymentV1,
 };
 
 const HEADER_BYTES: usize = 24;
-const PREIMAGE_BYTES: usize = 96;
+const PREIMAGE_BYTES: usize = 136;
 const SHA256_BYTES: usize = 32;
 const MAGIC: [u8; 8] = *b"F2O3CEA1";
 const VERSION_V1: u16 = 1;
@@ -23,6 +24,8 @@ const IDENTITY_DOMAIN: &[u8] = b"FE2O3/COMPILER-EXECUTION-EXTERNAL-ANCHOR-DEPLOY
 /// Exact canonical byte length of one external-anchor deployment manifest.
 pub const COMPILER_EXECUTION_EXTERNAL_ANCHOR_DEPLOYMENT_BYTES_V1: usize =
     PREIMAGE_BYTES + SHA256_BYTES;
+/// Maximum admitted external-anchor executable size.
+pub const MAX_COMPILER_EXECUTION_EXTERNAL_ANCHOR_EXECUTABLE_BYTES_V1: u64 = 128 * 1024 * 1024;
 
 /// Domain-separated identity of one canonical external-anchor deployment manifest.
 #[derive(Clone, Copy, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -51,14 +54,15 @@ impl fmt::Debug for CompilerExecutionExternalAnchorDeploymentIdentityV1 {
 
 /// Immutable trust configuration supplied to the external-anchor process.
 ///
-/// This manifest pins the exact dedicated anchor credentials, anchor verification key, and
-/// supervisor deployment identity. It contains no secret key, path, descriptor, state, compiler,
-/// publication, load, launch, or GPU authority.
+/// This manifest pins the exact dedicated anchor credentials, anchor verification key, supervisor
+/// deployment identity, and external-anchor executable measurement. It contains no secret key,
+/// path, descriptor, state, compiler, publication, load, launch, or GPU authority.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CompilerExecutionExternalAnchorDeploymentV1 {
     service: CompilerExecutionExternalAnchorServiceIdentityV1,
     verifying_key: [u8; SHA256_BYTES],
     supervisor_deployment_identity: CompilerExecutionSupervisorDeploymentIdentityV1,
+    executable: CompilerExecutionIssuerMeasurementV1,
     identity: CompilerExecutionExternalAnchorDeploymentIdentityV1,
     bytes: [u8; COMPILER_EXECUTION_EXTERNAL_ANCHOR_DEPLOYMENT_BYTES_V1],
 }
@@ -67,6 +71,7 @@ impl CompilerExecutionExternalAnchorDeploymentV1 {
     pub fn new(
         supervisor: &CompilerExecutionSupervisorDeploymentV1,
         policy: &CompilerExecutionIssuerPolicyV1,
+        executable: CompilerExecutionIssuerMeasurementV1,
     ) -> Result<Self, CompilerExecutionExternalAnchorDeploymentErrorV1> {
         if !supervisor.matches_policy(policy) {
             return Err(CompilerExecutionExternalAnchorDeploymentErrorV1::SupervisorPolicyMismatch);
@@ -75,6 +80,7 @@ impl CompilerExecutionExternalAnchorDeploymentV1 {
             supervisor.external_anchor_service(),
             *policy.external_anchor_verifying_key(),
             supervisor.identity(),
+            executable,
         )
     }
 
@@ -82,14 +88,20 @@ impl CompilerExecutionExternalAnchorDeploymentV1 {
         service: CompilerExecutionExternalAnchorServiceIdentityV1,
         verifying_key: [u8; SHA256_BYTES],
         supervisor_deployment_identity: CompilerExecutionSupervisorDeploymentIdentityV1,
+        executable: CompilerExecutionIssuerMeasurementV1,
     ) -> Result<Self, CompilerExecutionExternalAnchorDeploymentErrorV1> {
         validate_verifying_key(verifying_key)?;
+        if executable.byte_len() > MAX_COMPILER_EXECUTION_EXTERNAL_ANCHOR_EXECUTABLE_BYTES_V1 {
+            return Err(CompilerExecutionExternalAnchorDeploymentErrorV1::ExecutableMeasurement);
+        }
         let mut bytes = [0_u8; COMPILER_EXECUTION_EXTERNAL_ANCHOR_DEPLOYMENT_BYTES_V1];
         encode_header(&mut bytes);
         bytes[24..28].copy_from_slice(&service.uid().to_le_bytes());
         bytes[28..32].copy_from_slice(&service.gid().to_le_bytes());
         bytes[32..64].copy_from_slice(&verifying_key);
         bytes[64..96].copy_from_slice(supervisor_deployment_identity.as_bytes());
+        bytes[96..128].copy_from_slice(&executable.sha256());
+        bytes[128..136].copy_from_slice(&executable.byte_len().to_le_bytes());
         let identity = CompilerExecutionExternalAnchorDeploymentIdentityV1(derive_identity(
             &bytes[..PREIMAGE_BYTES],
         ));
@@ -98,6 +110,7 @@ impl CompilerExecutionExternalAnchorDeploymentV1 {
             service,
             verifying_key,
             supervisor_deployment_identity,
+            executable,
             identity,
             bytes,
         })
@@ -124,6 +137,16 @@ impl CompilerExecutionExternalAnchorDeploymentV1 {
                     .expect("supervisor deployment identity has fixed width"),
             )
             .ok_or(CompilerExecutionExternalAnchorDeploymentErrorV1::SupervisorIdentity)?;
+        let executable = CompilerExecutionIssuerMeasurementV1::new(
+            bytes[96..128]
+                .try_into()
+                .expect("external-anchor executable digest has fixed width"),
+            read_u64(bytes, 128),
+        )
+        .map_err(|_| CompilerExecutionExternalAnchorDeploymentErrorV1::ExecutableMeasurement)?;
+        if executable.byte_len() > MAX_COMPILER_EXECUTION_EXTERNAL_ANCHOR_EXECUTABLE_BYTES_V1 {
+            return Err(CompilerExecutionExternalAnchorDeploymentErrorV1::ExecutableMeasurement);
+        }
         let identity = CompilerExecutionExternalAnchorDeploymentIdentityV1(
             bytes[PREIMAGE_BYTES..]
                 .try_into()
@@ -132,7 +155,12 @@ impl CompilerExecutionExternalAnchorDeploymentV1 {
         if !identity.matches_canonical_bytes(bytes) {
             return Err(CompilerExecutionExternalAnchorDeploymentErrorV1::Identity);
         }
-        let canonical = Self::from_parts(service, verifying_key, supervisor_deployment_identity)?;
+        let canonical = Self::from_parts(
+            service,
+            verifying_key,
+            supervisor_deployment_identity,
+            executable,
+        )?;
         if canonical.bytes.as_slice() != bytes {
             return Err(CompilerExecutionExternalAnchorDeploymentErrorV1::Canonical);
         }
@@ -151,6 +179,11 @@ impl CompilerExecutionExternalAnchorDeploymentV1 {
         &self,
     ) -> CompilerExecutionSupervisorDeploymentIdentityV1 {
         self.supervisor_deployment_identity
+    }
+
+    /// Returns the exact admitted external-anchor executable measurement.
+    pub const fn executable(&self) -> CompilerExecutionIssuerMeasurementV1 {
+        self.executable
     }
 
     pub const fn identity(&self) -> CompilerExecutionExternalAnchorDeploymentIdentityV1 {
@@ -179,6 +212,16 @@ impl CompilerExecutionExternalAnchorDeploymentV1 {
         self.matches_supervisor_deployment(supervisor)
             && supervisor.matches_policy(policy)
             && self.verifying_key == *policy.external_anchor_verifying_key()
+    }
+
+    /// Requires exact supervisor, policy, and executable agreement.
+    pub fn matches_supervisor_policy_and_executable(
+        &self,
+        supervisor: &CompilerExecutionSupervisorDeploymentV1,
+        policy: &CompilerExecutionIssuerPolicyV1,
+        executable: CompilerExecutionIssuerMeasurementV1,
+    ) -> bool {
+        self.matches_supervisor_and_policy(supervisor, policy) && self.executable == executable
     }
 }
 
@@ -231,6 +274,10 @@ fn read_u32(bytes: &[u8], offset: usize) -> u32 {
     u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap())
 }
 
+fn read_u64(bytes: &[u8], offset: usize) -> u64 {
+    u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap())
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum CompilerExecutionExternalAnchorDeploymentErrorV1 {
@@ -242,6 +289,7 @@ pub enum CompilerExecutionExternalAnchorDeploymentErrorV1 {
     SupervisorPolicyMismatch,
     VerifyingKey,
     SupervisorIdentity,
+    ExecutableMeasurement,
     Identity,
     Canonical,
 }
@@ -259,6 +307,7 @@ impl fmt::Display for CompilerExecutionExternalAnchorDeploymentErrorV1 {
             }
             Self::VerifyingKey => "invalid compiler external-anchor verifying key",
             Self::SupervisorIdentity => "invalid supervisor deployment identity",
+            Self::ExecutableMeasurement => "invalid external-anchor executable measurement",
             Self::Identity => "invalid compiler external-anchor deployment identity",
             Self::Canonical => "noncanonical compiler external-anchor deployment",
         })
@@ -313,7 +362,12 @@ mod tests {
 
     fn deployment() -> CompilerExecutionExternalAnchorDeploymentV1 {
         let supervisor = supervisor();
-        CompilerExecutionExternalAnchorDeploymentV1::new(&supervisor, &policy()).unwrap()
+        CompilerExecutionExternalAnchorDeploymentV1::new(
+            &supervisor,
+            &policy(),
+            CompilerExecutionIssuerMeasurementV1::new([0x66; 32], 32768).unwrap(),
+        )
+        .unwrap()
     }
 
     #[test]
@@ -326,6 +380,12 @@ mod tests {
         assert_eq!(decoded.service().uid(), 1003);
         assert!(decoded.matches_supervisor_deployment(&supervisor()));
         assert!(decoded.matches_supervisor_and_policy(&supervisor(), &policy()));
+        assert_eq!(decoded.executable().sha256(), [0x66; 32]);
+        assert!(decoded.matches_supervisor_policy_and_executable(
+            &supervisor(),
+            &policy(),
+            CompilerExecutionIssuerMeasurementV1::new([0x66; 32], 32768).unwrap()
+        ));
         assert!(
             decoded
                 .identity()
@@ -362,7 +422,11 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            CompilerExecutionExternalAnchorDeploymentV1::new(&supervisor, &wrong_policy),
+            CompilerExecutionExternalAnchorDeploymentV1::new(
+                &supervisor,
+                &wrong_policy,
+                CompilerExecutionIssuerMeasurementV1::new([0x66; 32], 32768).unwrap(),
+            ),
             Err(CompilerExecutionExternalAnchorDeploymentErrorV1::SupervisorPolicyMismatch)
         );
         let mut weak_key = *deployment().canonical_bytes();
@@ -376,6 +440,12 @@ mod tests {
         assert_eq!(
             CompilerExecutionExternalAnchorDeploymentV1::decode(&bytes),
             Err(CompilerExecutionExternalAnchorDeploymentErrorV1::SupervisorIdentity)
+        );
+        let mut executable = *deployment().canonical_bytes();
+        executable[96..128].fill(0);
+        assert_eq!(
+            CompilerExecutionExternalAnchorDeploymentV1::decode(&executable),
+            Err(CompilerExecutionExternalAnchorDeploymentErrorV1::ExecutableMeasurement)
         );
     }
 }

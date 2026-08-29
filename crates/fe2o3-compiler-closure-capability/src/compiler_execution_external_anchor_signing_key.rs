@@ -299,7 +299,12 @@ mod tests {
             &policy,
         )
         .unwrap();
-        CompilerExecutionExternalAnchorDeploymentV1::new(&supervisor, &policy).unwrap()
+        CompilerExecutionExternalAnchorDeploymentV1::new(
+            &supervisor,
+            &policy,
+            CompilerExecutionIssuerMeasurementV1::new([0x66; 32], 32768).unwrap(),
+        )
+        .unwrap()
     }
 
     fn raw_image(bytes: &[u8], mode: u32, seals: rustix::fs::SealFlags) -> File {

@@ -39,12 +39,12 @@ The 144-byte supervisor deployment manifest pins the exact dedicated
 supervisor UID/GID, distinct external-anchor service UID/GID, static pre-exec
 launcher measurement, and issuer-policy identity supplied by trusted service
 provisioning. It carries no path, descriptor, secret, timeout, or authority.
-The 128-byte external-anchor deployment manifest derives the anchor verification
-key from that exact issuer policy and binds the dedicated anchor UID/GID and key
-to the exact supervisor deployment identity. Trusted provisioning must retain
-both sealed manifests and the policy and recheck their complete relationship;
-the anchor manifest contains no secret key, endpoint, state, path, descriptor,
-or execution authority.
+The 168-byte external-anchor deployment manifest derives the anchor verification
+key from that exact issuer policy and binds the dedicated anchor UID/GID, key,
+exact supervisor deployment identity, and bounded SHA-256 executable
+measurement. Trusted provisioning must retain both sealed manifests and the
+policy and recheck their complete relationship; the anchor manifest contains no
+secret key, endpoint, state, path, descriptor, or execution authority.
 The 280-byte client profile binds the exact dedicated supervisor UID/GID and
 external-anchor service UID/GID to one complete caller-pinned issuer policy; it
 contains no endpoint, path, descriptor, secret, timeout, or authority. The

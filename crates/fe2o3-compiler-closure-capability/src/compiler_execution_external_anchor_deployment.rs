@@ -123,7 +123,12 @@ mod tests {
             &policy,
         )
         .unwrap();
-        CompilerExecutionExternalAnchorDeploymentV1::new(&supervisor, &policy).unwrap()
+        CompilerExecutionExternalAnchorDeploymentV1::new(
+            &supervisor,
+            &policy,
+            CompilerExecutionIssuerMeasurementV1::new([0x66; 32], 32768).unwrap(),
+        )
+        .unwrap()
     }
 
     #[test]
