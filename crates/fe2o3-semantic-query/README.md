@@ -219,31 +219,41 @@ The V1 operation inventory includes capability discovery, capture open, bounded
 pages for runs/devices/dispatches/ATT references/duration hotspots/waits,
 dispatch inspection, dispatch-scoped kernel identity inspection, Bundle V4
 comparison, and bounded next-capture planning. The agent Plan V1 request names
-one typed ambiguity, the exact missing-evidence set, CU/kernel/dispatch
-selectors, and hard overhead, storage, and record ceilings. The service checks
+one typed ambiguity, the exact missing-evidence set, kernel/dispatch evidence
+selectors, and caller-declared overhead, storage, and record ceilings. The
+service checks
 that set against the opened capture and emits at most one minimum
 discriminating recipe. Capability discovery returns both nested Plan V1 schema
 names and all plan-specific limits. A recipe carries logical counters and data
 classes, required-but-unverified rocprofv3/Compute Viewer capabilities, the
 explicitly unavailable logical-counter mapper or strict decoded-event importer
 when it is needed, mutual exclusions, sampling/completeness limits, profiler
-privilege, a contract-declared overhead envelope that is explicitly not a
-measurement or performance prediction, and a bounded storage estimate derived
-from the existing bundle size. The service can only plan: every stateful collection
+privilege, typed-unavailable overhead when no measurement for the planned action
+was admitted, and a bounded storage estimate derived from the existing bundle
+size. Storage is capped at the 4 GiB architecture ceiling; an estimate above the
+caller's smaller ceiling is reported as a constraint violation without clamping.
+Because overhead is unavailable, the planner does not claim that a proposed
+capture satisfies the caller's overhead ceiling.
+The service can only plan: every stateful collection
 requires separate explicit authorization, and the service has no launch or
-attach authority. Dispatch and kernel selectors are checked against the open
-capture. CU selectors are retained as caller declarations and explicitly
-labeled unvalidated because Bundle V4 has no authenticated CU topology.
+attach authority. Dispatch and kernel selectors identify evidence in the open
+capture. A new-capture recipe derives a reusable launch shape only from admitted
+launch, KIR, and artifact identities; it does not reuse the old dispatch
+occurrence. CU selectors are rejected because Bundle V4 has neither authenticated
+CU topology nor an authenticated collector capability for targeting it.
 
 Pages reuse Bundle V4 content-bound cursors. Every successful value carries the
 service-contract identity, exact capture identities, relevant record
 identities, and a homogeneous, mixed, or empty aggregate of the item-level
-truth origins. Plan results additionally bind the canonical planning-request,
-bundle, and selected-dispatch provenance identities. Every handled request
+truth origins. Plan results additionally bind the canonical planning request,
+the full bundle/environment/tool/configuration/device content identities, any
+available artifact content identity, the full KIR claim, the selected dispatch,
+and any derived launch selector. Every handled request
 attempt, including zero and duplicate IDs, consumes the request budget.
-Responses have checked monotonic revisions and a service-retained state
-binding; request ID, revision, audit, plan, or evidence substitution is
-rejected before encoding. Resident captures, configured input bytes, page
+Responses have checked monotonic revisions. A private, service-instance response
+binding rejects request ID, revision, audit, plan, or evidence substitution
+before encoding; that binding is deliberately not serialized and makes no
+client-verifiable service-state claim. Resident captures, configured input bytes, page
 items, plan inputs, and encoded response bytes have independent hard ceilings.
 
 The closed inventory also admits workgroup/wave/lane inspection, source/IR/ISA
@@ -253,7 +263,10 @@ support from missing methods. Bundle V4 does not carry the evidence needed for
 those operations; capability discovery and operation responses report typed
 `unavailable` reasons. Ranked regression explanation specifically remains
 unavailable because duration deltas do not establish causal counter or decoded
-event attribution. `inspect_kernel` is only the KIR/artifact/source-map
+event attribution. Dispatch-duration ranking through Plan V1 also remains typed
+unavailable: Bundle V4 does not establish a complete set of at least two
+comparable dispatches under an authenticated environment join. `inspect_kernel`
+is only the KIR/artifact/source-map
 identity binding declared on an observed dispatch. It does not expose source
 text, ISA, arguments, variables, or semantic execution history.
 
@@ -262,6 +275,12 @@ The executable accepts only this mode:
 ```text
 fe2o3-profiler-service jsonl
 ```
+
+The `jsonl_binary_keeps_state_across_requests_and_terminates_on_malformed_input`
+integration test is the checked wire example: it performs capability discovery,
+capture admission, dispatch and KIR selection, and Plan V1 construction, then
+asserts the unavailable overhead, future launch shape, and rejected CU selector
+representations in the serialized response.
 
 Each request must be exactly one LF-terminated JSON object with schema
 `fe2o3-agent-profiler-request-v1`. Each response is one deterministic bounded

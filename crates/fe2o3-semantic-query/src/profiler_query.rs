@@ -335,6 +335,10 @@ impl ProfilerQuerySessionV4 {
         }
     }
 
+    pub(crate) fn admitted_bundle(&self) -> &SemanticProfilerBundleV4 {
+        &self.bundle
+    }
+
     pub fn encode_response(
         &self,
         response: &ProfilerQueryResponseV4,

@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 
 const CSV: &[u8] =
     include_bytes!("../../fe2o3-semantic-import/tests/fixtures/rocprofv3-1.1-kernel-dispatch.csv");
+const OTHER_CSV: &[u8] = b"Kind,Agent_Id,Queue_Id,Process_Id,Kernel_Name,Workgroup_Size_X,Workgroup_Size_Y,Workgroup_Size_Z,Grid_Size_X,Grid_Size_Y,Grid_Size_Z,Start_Timestamp,End_Timestamp\nKERNEL_DISPATCH,Agent 17,4,7,\"generic,kernel\",64,1,1,256,1,1,100,181\nKERNEL_DISPATCH,Agent 19,5,9,other,32,2,1,128,2,1,200,260\n";
 const ATT: &[u8] = br#"{"counter_names":[],"gfxip":9,"gfxv":"vega","global_begin_time":0,"is_pcs_stochastic":false,"pc_sampling":false,"thread_trace":true,"version":"3.0.0","wave_filenames":{"0":{"0":{"0":{"0":["waves/se0.json",10,20]}}}},"se_filenames":["se0.json"]}"#;
 
 fn opaque(byte: u8) -> OpaqueIdentityV1 {
@@ -59,6 +60,14 @@ fn bundle(environment: u8) -> Vec<u8> {
     .unwrap()
 }
 
+fn bundle_with_kernel(environment: u8, kernel: u8) -> Vec<u8> {
+    let mut binding = binding(environment);
+    binding.kernel_ir_claim =
+        KernelIrIdentityClaimV1::canonical_v7_claim(opaque(kernel), 97).unwrap();
+    encode_profiler_bundle_v4(&import_rocprofv3_csv_profiler_bundle_v4(OTHER_CSV, binding).unwrap())
+        .unwrap()
+}
+
 fn att_bundle() -> Vec<u8> {
     encode_profiler_bundle_v4(
         &import_rocprofv3_att_profiler_bundle_v4(
@@ -102,7 +111,7 @@ fn planning(
         ambiguity,
         missing_evidence,
         target: AgentProfilerPlanTargetV1 {
-            compute_units: vec![3, 1],
+            compute_units: vec![],
             kernel_ir,
             dispatch,
         },
@@ -251,6 +260,8 @@ fn capability_inventory_is_complete_read_only_and_evidence_bound() {
         limits.max_plan_storage_bytes,
         MAX_AGENT_PROFILER_PLAN_STORAGE_BYTES_V1
     );
+    assert_eq!(limits.max_plan_storage_bytes, 4 * 1024 * 1024 * 1024);
+    assert_eq!(limits.max_plan_compute_units, 0);
     assert!(evidence.captures.is_empty());
     assert!(evidence.records.is_empty());
     assert_eq!(evidence.origin, homogeneous(TruthOriginV1::Declared));
@@ -264,6 +275,7 @@ fn capability_inventory_is_complete_read_only_and_evidence_bound() {
         "\"address\"",
         "\"command\"",
         "\"execution_authority\"",
+        "\"state_binding\"",
     ] {
         assert!(!text.contains(forbidden_key), "leaked {forbidden_key}");
     }
@@ -453,9 +465,9 @@ fn ambiguous_correctness_plan_selects_one_bounded_targeted_att_capture() {
         AgentProfilerPlanDispositionV1::AdditionalCaptureRequiredWithUnavailableConfigurationOrPostprocessing
     );
     assert_eq!(plan.minimum_additional_captures, 1);
-    assert_eq!(plan.target.compute_units, [1, 3]);
-    assert_eq!(plan.target.dispatch, Some(dispatch));
-    assert_eq!(plan.target.kernel_ir, Some(kernel_ir));
+    assert!(plan.evidence_subject.compute_units.is_empty());
+    assert_eq!(plan.evidence_subject.dispatch, Some(dispatch));
+    assert_eq!(plan.evidence_subject.kernel_ir, Some(kernel_ir));
     assert_eq!(
         plan.selected_missing_evidence,
         [
@@ -469,6 +481,14 @@ fn ambiguous_correctness_plan_selects_one_bounded_targeted_att_capture() {
             .contains(&AgentProfilerPlanEvidenceClassV1::DispatchEnvelope)
     );
     let recipe = plan.recipe.as_ref().unwrap();
+    assert!(matches!(
+        &recipe.target,
+        AgentProfilerCaptureTargetV1::FutureDispatchShape {
+            kernel_ir: KernelIrClaimRecordV1 { digest, .. },
+            artifact: ContentIdentityRecordV1 { .. },
+            ..
+        } if *digest == kernel_ir
+    ));
     assert_eq!(
         recipe.requested_data_classes,
         [
@@ -480,11 +500,11 @@ fn ambiguous_correctness_plan_selects_one_bounded_targeted_att_capture() {
     assert!(recipe.requested_logical_counters.is_empty());
     assert_eq!(
         recipe.target_validation.compute_units,
-        AgentProfilerSelectorValidationV1::CallerDeclaredNotValidatedByBundle
+        AgentProfilerSelectorValidationV1::UnavailableWithoutAuthenticatedTopologyAndCollectorCapability
     );
     assert_eq!(
         recipe.target_validation.kernel_ir,
-        AgentProfilerSelectorValidationV1::ValidatedAgainstCapture
+        AgentProfilerSelectorValidationV1::DerivedFromAdmittedCaptureFacts
     );
     assert!(recipe.collector_requirements.iter().any(|requirement| {
         requirement.tool == AgentProfilerCollectorToolV1::Fe2o3SemanticImporter
@@ -493,20 +513,14 @@ fn ambiguous_correctness_plan_selects_one_bounded_targeted_att_capture() {
             && requirement.status
                 == AgentProfilerCollectorCapabilityStatusV1::RequiredUnavailableInCurrentBuild
     }));
-    assert_eq!(recipe.expected_overhead.origin, TruthOriginV1::Declared);
-    assert_eq!(
-        recipe
-            .expected_overhead
-            .additional_runtime_basis_points
-            .maximum,
-        MAX_AGENT_PROFILER_PLAN_OVERHEAD_BASIS_POINTS_V1
-    );
-    assert!(
-        recipe
-            .expected_overhead
-            .limitations
-            .contains(&AgentProfilerOverheadLimitationV1::NotMeasured)
-    );
+    assert!(matches!(
+        &recipe.expected_overhead,
+        AgentProfilerExpectedOverheadV1::Unavailable {
+            origin: TruthOriginV1::Unavailable,
+            reason: AgentProfilerOverheadUnavailableReasonV1::NoAdmittedMeasurementForPlannedAction,
+            limitations,
+        } if limitations.contains(&AgentProfilerOverheadLimitationV1::NotMeasured)
+    ));
     assert_eq!(
         recipe.required_privilege,
         AgentProfilerPrivilegeRequirementV1::ProfilerAccess
@@ -527,9 +541,32 @@ fn ambiguous_correctness_plan_selects_one_bounded_targeted_att_capture() {
     assert_eq!(evidence.records, [dispatch]);
     assert!(plan.provenance.iter().any(|entry| {
         entry.kind == AgentProfilerPlanProvenanceKindV1::PlanningRequest
-            && entry.identity == plan.request_identity
+            && matches!(
+                entry.subject,
+                AgentProfilerPlanProvenanceSubjectV1::CaptureIdentity { identity }
+                    if identity == plan.request_identity
+            )
             && entry.origin == TruthOriginV1::Declared
     }));
+    assert!(plan.provenance.iter().any(|entry| {
+        entry.kind == AgentProfilerPlanProvenanceKindV1::CaptureBundle
+            && matches!(
+                entry.subject,
+                AgentProfilerPlanProvenanceSubjectV1::ContentIdentity { content }
+                    if content == capture
+            )
+    }));
+    for kind in [
+        AgentProfilerPlanProvenanceKindV1::Environment,
+        AgentProfilerPlanProvenanceKindV1::CollectorTool,
+        AgentProfilerPlanProvenanceKindV1::CollectorConfiguration,
+        AgentProfilerPlanProvenanceKindV1::StableDevice,
+        AgentProfilerPlanProvenanceKindV1::KernelIr,
+        AgentProfilerPlanProvenanceKindV1::Artifact,
+        AgentProfilerPlanProvenanceKindV1::LaunchSelector,
+    ] {
+        assert!(plan.provenance.iter().any(|entry| entry.kind == kind));
+    }
     assert!(service.encode_response(&response).is_ok());
 
     let repeated = service.handle(AgentProfilerRequestV1::PlanNextCapture {
@@ -608,7 +645,7 @@ fn schedule_resource_plan_uses_logical_counters_without_causal_overclaim() {
     }));
     assert_eq!(
         recipe.target_validation.compute_units,
-        AgentProfilerSelectorValidationV1::CallerDeclaredNotValidatedByBundle
+        AgentProfilerSelectorValidationV1::UnavailableWithoutAuthenticatedTopologyAndCollectorCapability
     );
     assert_eq!(
         recipe.mutual_exclusions,
@@ -623,14 +660,110 @@ fn schedule_resource_plan_uses_logical_counters_without_causal_overclaim() {
             .limitations
             .contains(&AgentProfilerCompletenessLimitV1::AggregateCountersDoNotEstablishCausality)
     );
-    assert_eq!(
-        recipe.expected_overhead.additional_runtime_basis_points,
-        AgentProfilerBoundedU32RangeV1 {
-            minimum: 0,
-            maximum: 50_000,
-        }
-    );
+    assert!(matches!(
+        &recipe.expected_overhead,
+        AgentProfilerExpectedOverheadV1::Unavailable { .. }
+    ));
     assert!(service.encode_response(&response).is_ok());
+}
+
+#[test]
+fn plan_does_not_clamp_storage_or_treat_unmeasured_overhead_as_feasible() {
+    let mut service = AgentProfilerServiceV1::new(AgentProfilerServiceLimitsV1::default()).unwrap();
+    let (_, capture) = open(&mut service, 1, &bundle(10));
+    let (dispatch, kernel_ir) = dispatch_target(&mut service, 2, capture);
+    let mut request = planning(
+        AgentProfilerPlanGoalV1::ScheduleResourceRegression,
+        AgentProfilerAmbiguityV1::SchedulingDelayVsResourcePressure,
+        vec![AgentProfilerPlanEvidenceClassV1::HardwareCounterMeasurements],
+        Some(dispatch),
+        Some(kernel_ir),
+    );
+    request.constraints.maximum_storage_bytes = 1;
+    request.constraints.maximum_overhead_basis_points = 0;
+    let response = service.handle(AgentProfilerRequestV1::PlanNextCapture {
+        schema: AGENT_PROFILER_REQUEST_SCHEMA_V1.into(),
+        request_id: 4,
+        capture,
+        planning: request,
+    });
+    let AgentProfilerResponseV1::Ok { value, .. } = &response else {
+        panic!("expected bounded plan: {response:?}")
+    };
+    let AgentProfilerResultV1::CapturePlan { plan, .. } = value.as_ref() else {
+        panic!("expected capture plan")
+    };
+    assert_eq!(
+        plan.disposition,
+        AgentProfilerPlanDispositionV1::BlockedByDeclaredStorageLimit
+    );
+    let recipe = plan.recipe.as_ref().unwrap();
+    assert_eq!(recipe.storage.maximum_bytes, 1);
+    assert!(recipe.storage.estimated_bytes.maximum > recipe.storage.maximum_bytes);
+    assert!(
+        recipe
+            .storage
+            .limitations
+            .contains(&AgentProfilerStorageLimitationV1::EstimateExceedsDeclaredMaximum)
+    );
+    assert!(matches!(
+        recipe.expected_overhead,
+        AgentProfilerExpectedOverheadV1::Unavailable {
+            origin: TruthOriginV1::Unavailable,
+            reason: AgentProfilerOverheadUnavailableReasonV1::NoAdmittedMeasurementForPlannedAction,
+            ..
+        }
+    ));
+    assert!(service.encode_response(&response).is_ok());
+}
+
+#[test]
+fn duration_ranking_is_unavailable_without_comparable_complete_environment_join() {
+    let mut service = AgentProfilerServiceV1::new(AgentProfilerServiceLimitsV1::default()).unwrap();
+    let (_, capture) = open(&mut service, 1, &bundle(10));
+    let response = service.handle(AgentProfilerRequestV1::PlanNextCapture {
+        schema: AGENT_PROFILER_REQUEST_SCHEMA_V1.into(),
+        request_id: 2,
+        capture,
+        planning: planning(
+            AgentProfilerPlanGoalV1::RankDispatchDurations,
+            AgentProfilerAmbiguityV1::DispatchDurationOrdering,
+            Vec::new(),
+            None,
+            None,
+        ),
+    });
+    assert!(matches!(
+        &response,
+        AgentProfilerResponseV1::Ok { value, .. }
+            if matches!(
+                value.as_ref(),
+                AgentProfilerResultV1::Unavailable {
+                    operation: AgentProfilerOperationV1::PlanNextCapture,
+                    reason: AgentProfilerUnavailableReasonV1::ComparableDispatchSetOrCompletenessNotEstablished,
+                    evidence,
+                } if evidence.captures == [capture] && evidence.records.is_empty()
+            )
+    ));
+    assert!(service.encode_response(&response).is_ok());
+
+    let mut noncanonical = planning(
+        AgentProfilerPlanGoalV1::RankDispatchDurations,
+        AgentProfilerAmbiguityV1::DispatchDurationOrdering,
+        vec![AgentProfilerPlanEvidenceClassV1::DispatchTiming],
+        None,
+        None,
+    );
+    noncanonical.constraints.maximum_storage_bytes = 1;
+    assert_error(
+        service.handle(AgentProfilerRequestV1::PlanNextCapture {
+            schema: AGENT_PROFILER_REQUEST_SCHEMA_V1.into(),
+            request_id: 3,
+            capture,
+            planning: noncanonical,
+        }),
+        AgentProfilerErrorCodeV1::InvalidPlanRequest,
+    );
 }
 
 #[test]
@@ -681,13 +814,10 @@ fn existing_att_manifest_requires_postprocessing_without_another_capture() {
     assert!(!recipe.collector_requirements.iter().any(|requirement| {
         requirement.capability == AgentProfilerCollectorCapabilityV1::AttThreadTraceCollection
     }));
-    assert_eq!(
-        recipe.expected_overhead.additional_runtime_basis_points,
-        AgentProfilerBoundedU32RangeV1 {
-            minimum: 0,
-            maximum: 0,
-        }
-    );
+    assert!(matches!(
+        &recipe.expected_overhead,
+        AgentProfilerExpectedOverheadV1::Unavailable { .. }
+    ));
     assert_eq!(
         recipe.required_privilege,
         AgentProfilerPrivilegeRequirementV1::None
@@ -828,9 +958,42 @@ fn hostile_plan_bounds_stale_facts_and_substitutions_fail_closed() {
         AgentProfilerErrorCodeV1::InvalidPlanRequest,
     );
 
+    let (_, other_capture) = open(&mut service, 11, &bundle_with_kernel(30, 3));
+    let (other_dispatch, other_kernel_ir) = dispatch_target(&mut service, 12, other_capture);
+    assert_error(
+        service.handle(AgentProfilerRequestV1::PlanNextCapture {
+            schema: AGENT_PROFILER_REQUEST_SCHEMA_V1.into(),
+            request_id: 14,
+            capture,
+            planning: planning(
+                AgentProfilerPlanGoalV1::ScheduleResourceRegression,
+                AgentProfilerAmbiguityV1::SchedulingDelayVsResourcePressure,
+                vec![AgentProfilerPlanEvidenceClassV1::HardwareCounterMeasurements],
+                Some(other_dispatch),
+                Some(other_kernel_ir),
+            ),
+        }),
+        AgentProfilerErrorCodeV1::RecordNotFound,
+    );
+    assert_error(
+        service.handle(AgentProfilerRequestV1::PlanNextCapture {
+            schema: AGENT_PROFILER_REQUEST_SCHEMA_V1.into(),
+            request_id: 15,
+            capture,
+            planning: planning(
+                AgentProfilerPlanGoalV1::ScheduleResourceRegression,
+                AgentProfilerAmbiguityV1::SchedulingDelayVsResourcePressure,
+                vec![AgentProfilerPlanEvidenceClassV1::HardwareCounterMeasurements],
+                Some(dispatch),
+                Some(other_kernel_ir),
+            ),
+        }),
+        AgentProfilerErrorCodeV1::InvalidSelector,
+    );
+
     let valid = service.handle(AgentProfilerRequestV1::PlanNextCapture {
         schema: AGENT_PROFILER_REQUEST_SCHEMA_V1.into(),
-        request_id: 11,
+        request_id: 16,
         capture,
         planning: planning(
             AgentProfilerPlanGoalV1::ScheduleResourceRegression,
@@ -841,7 +1004,7 @@ fn hostile_plan_bounds_stale_facts_and_substitutions_fail_closed() {
         ),
     });
     assert!(service.encode_response(&valid).is_ok());
-    let mut substituted = valid;
+    let mut substituted = valid.clone();
     let AgentProfilerResponseV1::Ok { value, .. } = &mut substituted else {
         unreachable!()
     };
@@ -851,6 +1014,110 @@ fn hostile_plan_bounds_stale_facts_and_substitutions_fail_closed() {
     plan.declared_constraints.maximum_storage_bytes -= 1;
     assert!(matches!(
         service.encode_response(&substituted),
+        Err(AgentProfilerServiceErrorV1::InvalidResponse)
+    ));
+
+    let mut substituted = valid.clone();
+    let AgentProfilerResponseV1::Ok { value, .. } = &mut substituted else {
+        unreachable!()
+    };
+    let AgentProfilerResultV1::CapturePlan { plan, .. } = value.as_mut() else {
+        unreachable!()
+    };
+    let content = plan
+        .provenance
+        .iter_mut()
+        .find_map(|entry| match &mut entry.subject {
+            AgentProfilerPlanProvenanceSubjectV1::ContentIdentity { content }
+                if entry.kind == AgentProfilerPlanProvenanceKindV1::Environment =>
+            {
+                Some(content)
+            }
+            _ => None,
+        })
+        .unwrap();
+    content.canonical_len += 1;
+    assert!(matches!(
+        service.encode_response(&substituted),
+        Err(AgentProfilerServiceErrorV1::InvalidResponse)
+    ));
+
+    let mut substituted = valid.clone();
+    let AgentProfilerResponseV1::Ok { value, .. } = &mut substituted else {
+        unreachable!()
+    };
+    let AgentProfilerResultV1::CapturePlan { plan, .. } = value.as_mut() else {
+        unreachable!()
+    };
+    let content = plan
+        .provenance
+        .iter_mut()
+        .find_map(|entry| match &mut entry.subject {
+            AgentProfilerPlanProvenanceSubjectV1::ContentIdentity { content }
+                if entry.kind == AgentProfilerPlanProvenanceKindV1::CollectorTool =>
+            {
+                Some(content)
+            }
+            _ => None,
+        })
+        .unwrap();
+    content.format_version += 1;
+    assert!(matches!(
+        service.encode_response(&substituted),
+        Err(AgentProfilerServiceErrorV1::InvalidResponse)
+    ));
+
+    let mut substituted = valid.clone();
+    let AgentProfilerResponseV1::Ok { value, .. } = &mut substituted else {
+        unreachable!()
+    };
+    let AgentProfilerResultV1::CapturePlan { plan, .. } = value.as_mut() else {
+        unreachable!()
+    };
+    let claim = plan
+        .provenance
+        .iter_mut()
+        .find_map(|entry| match &mut entry.subject {
+            AgentProfilerPlanProvenanceSubjectV1::KernelIrClaim { claim } => Some(claim),
+            _ => None,
+        })
+        .unwrap();
+    claim.wire_version += 1;
+    assert!(matches!(
+        service.encode_response(&substituted),
+        Err(AgentProfilerServiceErrorV1::InvalidResponse)
+    ));
+
+    let mut substituted = valid.clone();
+    let AgentProfilerResponseV1::Ok { value, .. } = &mut substituted else {
+        unreachable!()
+    };
+    let AgentProfilerResultV1::CapturePlan { plan, .. } = value.as_mut() else {
+        unreachable!()
+    };
+    let claim = plan
+        .provenance
+        .iter_mut()
+        .find_map(|entry| match &mut entry.subject {
+            AgentProfilerPlanProvenanceSubjectV1::KernelIrClaim { claim } => Some(claim),
+            _ => None,
+        })
+        .unwrap();
+    claim.canonical_len += 1;
+    assert!(matches!(
+        service.encode_response(&substituted),
+        Err(AgentProfilerServiceErrorV1::InvalidResponse)
+    ));
+
+    let encoded = service.encode_response(&valid).unwrap();
+    assert!(
+        !String::from_utf8(encoded)
+            .unwrap()
+            .contains("state_binding")
+    );
+    let fresh = AgentProfilerServiceV1::new(AgentProfilerServiceLimitsV1::default()).unwrap();
+    assert!(matches!(
+        fresh.encode_response(&valid),
         Err(AgentProfilerServiceErrorV1::InvalidResponse)
     ));
 }
@@ -1252,15 +1519,32 @@ fn jsonl_binary_keeps_state_across_requests_and_terminates_on_malformed_input() 
         input,
         "{}",
         json!({
-            "operation": "open_capture",
+            "operation": "discover_capabilities",
             "schema": AGENT_PROFILER_REQUEST_SCHEMA_V1,
             "request_id": 1,
-            "bundle_hex": lower_hex(&bundle(10)),
         })
     )
     .unwrap();
     input.flush().unwrap();
     let mut line = String::new();
+    output.read_line(&mut line).unwrap();
+    let capabilities: Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(capabilities["status"], "ok");
+    assert_eq!(capabilities["value"]["limits"]["max_plan_compute_units"], 0);
+
+    writeln!(
+        input,
+        "{}",
+        json!({
+            "operation": "open_capture",
+            "schema": AGENT_PROFILER_REQUEST_SCHEMA_V1,
+            "request_id": 2,
+            "bundle_hex": lower_hex(&bundle(10)),
+        })
+    )
+    .unwrap();
+    input.flush().unwrap();
+    line.clear();
     output.read_line(&mut line).unwrap();
     let opened: Value = serde_json::from_str(&line).unwrap();
     assert_eq!(opened["status"], "ok");
@@ -1272,7 +1556,7 @@ fn jsonl_binary_keeps_state_across_requests_and_terminates_on_malformed_input() 
         json!({
             "operation": "list_dispatches",
             "schema": AGENT_PROFILER_REQUEST_SCHEMA_V1,
-            "request_id": 2,
+            "request_id": 3,
             "capture": capture,
             "page": { "limit": 1, "cursor": null },
         })
@@ -1284,6 +1568,81 @@ fn jsonl_binary_keeps_state_across_requests_and_terminates_on_malformed_input() 
     let page: Value = serde_json::from_str(&line).unwrap();
     assert_eq!(page["status"], "ok");
     assert_eq!(page["value"]["page"]["returned"], 1);
+    let dispatch = page["value"]["page"]["items"][0]["dispatch"]["identity"].clone();
+
+    writeln!(
+        input,
+        "{}",
+        json!({
+            "operation": "inspect_kernel",
+            "schema": AGENT_PROFILER_REQUEST_SCHEMA_V1,
+            "request_id": 4,
+            "capture": capture,
+            "dispatch": dispatch,
+        })
+    )
+    .unwrap();
+    input.flush().unwrap();
+    line.clear();
+    output.read_line(&mut line).unwrap();
+    let kernel: Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(kernel["status"], "ok");
+    let kernel_ir = kernel["value"]["inspection"]["kernel_ir"]["digest"].clone();
+
+    writeln!(
+        input,
+        "{}",
+        json!({
+            "operation": "plan_next_capture",
+            "schema": AGENT_PROFILER_REQUEST_SCHEMA_V1,
+            "request_id": 5,
+            "capture": capture,
+            "planning": {
+                "schema": AGENT_PROFILER_PLAN_REQUEST_SCHEMA_V1,
+                "goal": "ambiguous_correctness_diagnosis",
+                "ambiguity": "memory_fault_vs_barrier_divergence",
+                "missing_evidence": [
+                    "att_manifest",
+                    "decoded_memory_events",
+                    "decoded_barrier_events"
+                ],
+                "target": {
+                    "compute_units": [],
+                    "kernel_ir": kernel_ir,
+                    "dispatch": dispatch
+                },
+                "constraints": {
+                    "maximum_overhead_basis_points": MAX_AGENT_PROFILER_PLAN_OVERHEAD_BASIS_POINTS_V1,
+                    "maximum_storage_bytes": 16 * 1024 * 1024,
+                    "maximum_records": 100_000
+                }
+            }
+        })
+    )
+    .unwrap();
+    input.flush().unwrap();
+    line.clear();
+    output.read_line(&mut line).unwrap();
+    let plan: Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(plan["status"], "ok");
+    assert_eq!(
+        plan["value"]["plan"]["recipe"]["target"]["kind"],
+        "future_dispatch_shape"
+    );
+    assert!(
+        plan["value"]["plan"]["recipe"]["target"]
+            .get("dispatch")
+            .is_none()
+    );
+    assert_eq!(
+        plan["value"]["plan"]["recipe"]["expected_overhead"]["availability"],
+        "unavailable"
+    );
+    assert_eq!(
+        plan["value"]["plan"]["recipe"]["target_validation"]["compute_units"],
+        "unavailable_without_authenticated_topology_and_collector_capability"
+    );
+    assert!(plan.get("state_binding").is_none());
 
     input.write_all(b"not-json\n").unwrap();
     input.flush().unwrap();
@@ -1293,7 +1652,7 @@ fn jsonl_binary_keeps_state_across_requests_and_terminates_on_malformed_input() 
     assert_eq!(terminal["status"], "error");
     assert_eq!(terminal["code"], "invalid_request");
     assert_eq!(terminal["terminal"], true);
-    assert_eq!(terminal["response_revision"], 3);
+    assert_eq!(terminal["response_revision"], 6);
     drop(input);
     let status = child.wait().unwrap();
     assert_eq!(status.code(), Some(1));

@@ -5,8 +5,8 @@ use std::io::{self, BufRead, Write};
 
 use fe2o3_semantic_import::{
     CaptureDispatchV1, CaptureIdentityV1, ContentIdentityRecordV1, ContentSchemeV1, IdentityFactV1,
-    KernelIrClaimRecordV1, MAX_PROFILER_BUNDLE_BYTES_V4, ProfilerCoverageV4, ProfilerSourceKindV4,
-    TruthOriginV1,
+    KernelIrClaimRecordV1, LaunchRecordV1, MAX_PROFILER_BUNDLE_BYTES_V4, ProfilerCoverageV4,
+    ProfilerSourceKindV4, TruthOriginV1,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -28,17 +28,19 @@ pub const DEFAULT_AGENT_PROFILER_OPEN_CAPTURES_V1: u8 = 4;
 pub const AGENT_PROFILER_PLAN_REQUEST_SCHEMA_V1: &str = "fe2o3-agent-profiler-plan-request-v1";
 pub const AGENT_PROFILER_PLAN_SCHEMA_V1: &str = "fe2o3-agent-profiler-plan-v1";
 pub const MAX_AGENT_PROFILER_PLAN_MISSING_FACTS_V1: usize = 8;
-pub const MAX_AGENT_PROFILER_PLAN_COMPUTE_UNITS_V1: usize = 64;
-pub const MAX_AGENT_PROFILER_PLAN_STORAGE_BYTES_V1: u64 = 1 << 40;
+pub const MAX_AGENT_PROFILER_PLAN_COMPUTE_UNITS_V1: usize = 0;
+pub const MAX_AGENT_PROFILER_PLAN_STORAGE_BYTES_V1: u64 = 4 * 1024 * 1024 * 1024;
 pub const MAX_AGENT_PROFILER_PLAN_RECORDS_V1: u64 = 1 << 32;
 pub const MAX_AGENT_PROFILER_PLAN_OVERHEAD_BASIS_POINTS_V1: u32 = 1_000_000;
 
 const AGENT_PROFILER_CONTRACT_DOMAIN_V1: &[u8] = b"fe2o3.agent-profiler.contract.v1\0";
 const AGENT_PROFILER_CONTRACT_BYTES_V1: &[u8] =
-    b"read-only;bundle-v4;bounded-jsonl;plan-v1;no-execution-authority";
+    b"read-only;bundle-v4;bounded-jsonl;plan-v1;4gib-storage;typed-unavailable-overhead;full-plan-provenance;no-execution-authority";
 const AGENT_PROFILER_RESPONSE_BINDING_DOMAIN_V1: &[u8] =
     b"fe2o3.agent-profiler.response-binding.v1\0";
 const AGENT_PROFILER_PLAN_REQUEST_DOMAIN_V1: &[u8] = b"fe2o3.agent-profiler.plan-request.v1\0";
+const AGENT_PROFILER_LAUNCH_SELECTOR_DOMAIN_V1: &[u8] =
+    b"fe2o3.agent-profiler.launch-selector.v1\0";
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -114,6 +116,7 @@ pub enum AgentProfilerUnavailableReasonV1 {
     CausalExplanationNotEstablished,
     RankedExplanationRequiresCausalCounterOrDecodedEventEvidence,
     CapturePlanRequirementsNotRepresented,
+    ComparableDispatchSetOrCompletenessNotEstablished,
     ReproducerInputsNotCaptured,
 }
 
@@ -245,7 +248,8 @@ pub struct AgentProfilerPlanTargetV1 {
 pub enum AgentProfilerSelectorValidationV1 {
     NotSpecified,
     ValidatedAgainstCapture,
-    CallerDeclaredNotValidatedByBundle,
+    UnavailableWithoutAuthenticatedTopologyAndCollectorCapability,
+    DerivedFromAdmittedCaptureFacts,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -281,7 +285,7 @@ pub enum AgentProfilerPlanDispositionV1 {
     AdditionalCaptureRequiredWithUnavailableConfigurationOrPostprocessing,
     ExistingCaptureRequiresUnavailablePostprocessing,
     ExistingEvidenceSufficient,
-    BlockedByDeclaredOverheadLimit,
+    BlockedByDeclaredStorageLimit,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -333,6 +337,7 @@ pub enum AgentProfilerCollectorCapabilityV1 {
     AttThreadTraceCollection,
     DecodedEventExport,
     StrictDecodedEventImport,
+    AuthenticatedComputeUnitSelection,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -350,21 +355,9 @@ pub struct AgentProfilerCollectorRequirementV1 {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
-pub struct AgentProfilerBoundedU32RangeV1 {
-    pub minimum: u32,
-    pub maximum: u32,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub struct AgentProfilerBoundedU64RangeV1 {
     pub minimum: u64,
     pub maximum: u64,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum AgentProfilerOverheadMethodV1 {
-    ContractDeclaredConservativeEnvelope,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -376,11 +369,19 @@ pub enum AgentProfilerOverheadLimitationV1 {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct AgentProfilerExpectedOverheadV1 {
-    pub origin: TruthOriginV1,
-    pub additional_runtime_basis_points: AgentProfilerBoundedU32RangeV1,
-    pub method: AgentProfilerOverheadMethodV1,
-    pub limitations: Vec<AgentProfilerOverheadLimitationV1>,
+#[serde(tag = "availability", rename_all = "snake_case")]
+pub enum AgentProfilerExpectedOverheadV1 {
+    Unavailable {
+        origin: TruthOriginV1,
+        reason: AgentProfilerOverheadUnavailableReasonV1,
+        limitations: Vec<AgentProfilerOverheadLimitationV1>,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentProfilerOverheadUnavailableReasonV1 {
+    NoAdmittedMeasurementForPlannedAction,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -395,6 +396,7 @@ pub enum AgentProfilerStorageLimitationV1 {
     EstimateNotMeasurement,
     EncodingAndWorkloadDependent,
     MaximumMayTruncateCapture,
+    EstimateExceedsDeclaredMaximum,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -465,7 +467,6 @@ pub enum AgentProfilerSamplingModeV1 {
 pub enum AgentProfilerCompletenessLimitV1 {
     CollectorReportedRecordsOnly,
     SelectedDispatchOnly,
-    SelectedComputeUnitsOnly,
     NoFullGridAttClaim,
     AggregateCountersDoNotEstablishCausality,
     StorageCeilingMayTruncate,
@@ -478,10 +479,42 @@ pub struct AgentProfilerSamplingCompletenessV1 {
     pub limitations: Vec<AgentProfilerCompletenessLimitV1>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentProfilerCaptureTargetUnavailableReasonV1 {
+    NoDispatchSubject,
+    ArtifactIdentityUnavailable,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentProfilerComputeUnitSelectorUnavailableReasonV1 {
+    BundleHasNoAuthenticatedTopologyOrCollectorSelectionCapability,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum AgentProfilerCaptureTargetV1 {
+    ExistingCapture {
+        capture: ContentIdentityRecordV1,
+        dispatch: Option<CaptureIdentityV1>,
+    },
+    FutureDispatchShape {
+        launch_identity: CaptureIdentityV1,
+        launch: LaunchRecordV1,
+        kernel_ir: KernelIrClaimRecordV1,
+        artifact: ContentIdentityRecordV1,
+        compute_units_unavailable: AgentProfilerComputeUnitSelectorUnavailableReasonV1,
+    },
+    Unavailable {
+        reason: AgentProfilerCaptureTargetUnavailableReasonV1,
+    },
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct AgentProfilerCaptureRecipeV1 {
     pub action: AgentProfilerCaptureActionV1,
-    pub target: AgentProfilerPlanTargetV1,
+    pub target: AgentProfilerCaptureTargetV1,
     pub target_validation: AgentProfilerTargetValidationV1,
     pub requested_data_classes: Vec<AgentProfilerCaptureDataClassV1>,
     pub requested_logical_counters: Vec<AgentProfilerLogicalCounterV1>,
@@ -507,13 +540,28 @@ pub enum AgentProfilerPlanProvenanceKindV1 {
     PlanningRequest,
     CaptureBundle,
     DispatchRecord,
+    Environment,
+    CollectorTool,
+    CollectorConfiguration,
+    StableDevice,
+    KernelIr,
+    Artifact,
+    LaunchSelector,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub struct AgentProfilerPlanProvenanceV1 {
     pub kind: AgentProfilerPlanProvenanceKindV1,
     pub origin: TruthOriginV1,
-    pub identity: CaptureIdentityV1,
+    pub subject: AgentProfilerPlanProvenanceSubjectV1,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(tag = "identity_kind", rename_all = "snake_case")]
+pub enum AgentProfilerPlanProvenanceSubjectV1 {
+    CaptureIdentity { identity: CaptureIdentityV1 },
+    ContentIdentity { content: ContentIdentityRecordV1 },
+    KernelIrClaim { claim: KernelIrClaimRecordV1 },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -523,7 +571,7 @@ pub struct AgentProfilerNextCapturePlanV1 {
     pub goal: AgentProfilerPlanGoalV1,
     pub ambiguity: AgentProfilerAmbiguityV1,
     pub discrimination_method: AgentProfilerDiscriminationMethodV1,
-    pub target: AgentProfilerPlanTargetV1,
+    pub evidence_subject: AgentProfilerPlanTargetV1,
     pub declared_constraints: AgentProfilerPlanConstraintsV1,
     pub disposition: AgentProfilerPlanDispositionV1,
     pub minimum_additional_captures: u8,
@@ -1331,6 +1379,18 @@ impl AgentProfilerServiceV1 {
         if goal_requires_dispatch(planning.goal) && dispatch.is_none() {
             return Err(AgentProfilerErrorCodeV1::InvalidSelector);
         }
+        if planning.goal == AgentProfilerPlanGoalV1::RankDispatchDurations {
+            let records = dispatch
+                .as_ref()
+                .map(|dispatch| vec![dispatch.identity])
+                .unwrap_or_default();
+            return Ok(self.unavailable(
+                AgentProfilerOperationV1::PlanNextCapture,
+                AgentProfilerUnavailableReasonV1::ComparableDispatchSetOrCompletenessNotEstablished,
+                &[capture],
+                &records,
+            ));
+        }
 
         let required = required_plan_evidence(planning.goal);
         let available = available_plan_evidence(open, dispatch.as_deref());
@@ -1356,19 +1416,21 @@ impl AgentProfilerServiceV1 {
                 &selected_missing,
                 u64::try_from(open.bytes.len())
                     .map_err(|_| AgentProfilerErrorCodeV1::InvalidPlanRequest)?,
-            );
+                capture,
+                dispatch.as_deref(),
+            )?;
             let minimum_additional_captures = u8::from(matches!(
                 recipe.action,
                 AgentProfilerCaptureActionV1::NewCaptureRequired
             ));
-            let disposition = if recipe
-                .expected_overhead
-                .additional_runtime_basis_points
-                .maximum
-                > planning.constraints.maximum_overhead_basis_points
+            let disposition = if recipe.storage.estimated_bytes.maximum
+                > recipe.storage.maximum_bytes
             {
-                AgentProfilerPlanDispositionV1::BlockedByDeclaredOverheadLimit
-            } else if recipe.collector_requirements.iter().any(|requirement| {
+                AgentProfilerPlanDispositionV1::BlockedByDeclaredStorageLimit
+            } else if matches!(
+                &recipe.target,
+                AgentProfilerCaptureTargetV1::Unavailable { .. }
+            ) || recipe.collector_requirements.iter().any(|requirement| {
                 requirement.status
                     == AgentProfilerCollectorCapabilityStatusV1::RequiredUnavailableInCurrentBuild
             }) {
@@ -1390,21 +1452,90 @@ impl AgentProfilerServiceV1 {
             AgentProfilerPlanProvenanceV1 {
                 kind: AgentProfilerPlanProvenanceKindV1::PlanningRequest,
                 origin: TruthOriginV1::Declared,
-                identity: request_identity,
+                subject: AgentProfilerPlanProvenanceSubjectV1::CaptureIdentity {
+                    identity: request_identity,
+                },
             },
             AgentProfilerPlanProvenanceV1 {
                 kind: AgentProfilerPlanProvenanceKindV1::CaptureBundle,
                 origin: TruthOriginV1::Observed,
-                identity: capture.digest,
+                subject: AgentProfilerPlanProvenanceSubjectV1::ContentIdentity { content: capture },
             },
         ];
+        let bundle = open.session.admitted_bundle();
+        for (kind, fact) in [
+            (
+                AgentProfilerPlanProvenanceKindV1::Environment,
+                bundle.environment,
+            ),
+            (
+                AgentProfilerPlanProvenanceKindV1::CollectorTool,
+                bundle.collector_tool,
+            ),
+            (
+                AgentProfilerPlanProvenanceKindV1::CollectorConfiguration,
+                bundle.collector_configuration,
+            ),
+        ] {
+            if let Some(identity) = fact.value {
+                provenance.push(AgentProfilerPlanProvenanceV1 {
+                    kind,
+                    origin: fact.origin,
+                    subject: AgentProfilerPlanProvenanceSubjectV1::ContentIdentity {
+                        content: identity,
+                    },
+                });
+            }
+        }
+        for device in &bundle.devices {
+            if let Some(identity) = device.stable_identity.value {
+                provenance.push(AgentProfilerPlanProvenanceV1 {
+                    kind: AgentProfilerPlanProvenanceKindV1::StableDevice,
+                    origin: device.stable_identity.origin,
+                    subject: AgentProfilerPlanProvenanceSubjectV1::ContentIdentity {
+                        content: identity,
+                    },
+                });
+            }
+        }
         let mut records = Vec::new();
         if let Some(dispatch) = dispatch {
             provenance.push(AgentProfilerPlanProvenanceV1 {
                 kind: AgentProfilerPlanProvenanceKindV1::DispatchRecord,
                 origin: TruthOriginV1::Observed,
-                identity: dispatch.identity,
+                subject: AgentProfilerPlanProvenanceSubjectV1::CaptureIdentity {
+                    identity: dispatch.identity,
+                },
             });
+            provenance.push(AgentProfilerPlanProvenanceV1 {
+                kind: AgentProfilerPlanProvenanceKindV1::KernelIr,
+                origin: dispatch.kernel_ir.origin,
+                subject: AgentProfilerPlanProvenanceSubjectV1::KernelIrClaim {
+                    claim: dispatch.kernel_ir,
+                },
+            });
+            if let Some(artifact) = dispatch.artifact.value {
+                provenance.push(AgentProfilerPlanProvenanceV1 {
+                    kind: AgentProfilerPlanProvenanceKindV1::Artifact,
+                    origin: dispatch.artifact.origin,
+                    subject: AgentProfilerPlanProvenanceSubjectV1::ContentIdentity {
+                        content: artifact,
+                    },
+                });
+            }
+            if let Some(recipe) = &recipe
+                && let AgentProfilerCaptureTargetV1::FutureDispatchShape {
+                    launch_identity, ..
+                } = &recipe.target
+            {
+                provenance.push(AgentProfilerPlanProvenanceV1 {
+                    kind: AgentProfilerPlanProvenanceKindV1::LaunchSelector,
+                    origin: TruthOriginV1::Inferred,
+                    subject: AgentProfilerPlanProvenanceSubjectV1::CaptureIdentity {
+                        identity: *launch_identity,
+                    },
+                });
+            }
             records.push(dispatch.identity);
         }
         let already_available_evidence = required
@@ -1419,7 +1550,7 @@ impl AgentProfilerServiceV1 {
                 goal: planning.goal,
                 ambiguity: planning.ambiguity,
                 discrimination_method: discrimination_method(planning.goal),
-                target: planning.target.clone(),
+                evidence_subject: planning.target.clone(),
                 declared_constraints: planning.constraints,
                 disposition,
                 minimum_additional_captures,
@@ -1828,7 +1959,7 @@ impl AgentProfilerServiceV1 {
                             goal: plan.goal,
                             ambiguity: plan.ambiguity,
                             missing_evidence: plan.selected_missing_evidence.clone(),
-                            target: plan.target.clone(),
+                            target: plan.evidence_subject.clone(),
                             constraints: plan.declared_constraints,
                         },
                     )
@@ -1854,9 +1985,13 @@ impl AgentProfilerServiceV1 {
                     self.capture(*capture)
                         .map_err(|_| AgentProfilerServiceErrorV1::InvalidResponse)?;
                 }
+                let reason_valid = unavailable_reason(*operation) == Some(*reason)
+                    || (*operation == AgentProfilerOperationV1::PlanNextCapture
+                        && *reason
+                            == AgentProfilerUnavailableReasonV1::ComparableDispatchSetOrCompletenessNotEstablished);
                 if !evidence_has_origin(evidence, TruthOriginV1::Unavailable)
                     || evidence.captures.is_empty()
-                    || unavailable_reason(*operation) != Some(*reason)
+                    || !reason_valid
                 {
                     return Err(AgentProfilerServiceErrorV1::InvalidResponse);
                 }
@@ -1872,6 +2007,16 @@ impl AgentProfilerServiceV1 {
                         };
                         self.ensure_dispatch(capture, *dispatch)
                             .map_err(|_| AgentProfilerServiceErrorV1::InvalidResponse)?;
+                    }
+                    AgentProfilerOperationV1::PlanNextCapture => {
+                        let capture = exactly_one_capture(evidence)?;
+                        match evidence.records.as_slice() {
+                            [] => {}
+                            [dispatch] => self
+                                .ensure_dispatch(capture, *dispatch)
+                                .map_err(|_| AgentProfilerServiceErrorV1::InvalidResponse)?,
+                            _ => return Err(AgentProfilerServiceErrorV1::InvalidResponse),
+                        }
                     }
                     _ if !evidence.records.is_empty() => {
                         return Err(AgentProfilerServiceErrorV1::InvalidResponse);
@@ -1898,12 +2043,15 @@ fn canonicalize_plan_request(
         || planning.ambiguity != ambiguity_for_goal(planning.goal)
         || planning.missing_evidence.len() > MAX_AGENT_PROFILER_PLAN_MISSING_FACTS_V1
         || planning.target.compute_units.len() > MAX_AGENT_PROFILER_PLAN_COMPUTE_UNITS_V1
+        || !planning.target.compute_units.is_empty()
         || planning.constraints.maximum_overhead_basis_points
             > MAX_AGENT_PROFILER_PLAN_OVERHEAD_BASIS_POINTS_V1
         || planning.constraints.maximum_storage_bytes == 0
         || planning.constraints.maximum_storage_bytes > MAX_AGENT_PROFILER_PLAN_STORAGE_BYTES_V1
         || planning.constraints.maximum_records == 0
         || planning.constraints.maximum_records > MAX_AGENT_PROFILER_PLAN_RECORDS_V1
+        || (planning.goal == AgentProfilerPlanGoalV1::RankDispatchDurations
+            && !planning.missing_evidence.is_empty())
     {
         return Err(AgentProfilerErrorCodeV1::InvalidPlanRequest);
     }
@@ -1966,7 +2114,6 @@ const fn goal_requires_dispatch(goal: AgentProfilerPlanGoalV1) -> bool {
         goal,
         AgentProfilerPlanGoalV1::AmbiguousCorrectnessDiagnosis
             | AgentProfilerPlanGoalV1::ScheduleResourceRegression
-            | AgentProfilerPlanGoalV1::RankDispatchDurations
     )
 }
 
@@ -2034,17 +2181,101 @@ fn plan_request_identity(
         .map_err(|_| AgentProfilerErrorCodeV1::InvalidPlanRequest)
 }
 
+fn launch_selector_identity(
+    dispatch: &CaptureDispatchV1,
+    artifact: ContentIdentityRecordV1,
+) -> Result<CaptureIdentityV1, AgentProfilerErrorCodeV1> {
+    let mut digest = Sha256::new();
+    digest.update(AGENT_PROFILER_LAUNCH_SELECTOR_DOMAIN_V1);
+    serde_json::to_writer(
+        AgentDigestWriterV1(&mut digest),
+        &(dispatch.launch, dispatch.kernel_ir, artifact),
+    )
+    .map_err(|_| AgentProfilerErrorCodeV1::InvalidPlanRequest)?;
+    CaptureIdentityV1::new(digest.finalize().into())
+        .map_err(|_| AgentProfilerErrorCodeV1::InvalidPlanRequest)
+}
+
+fn recipe_target(
+    action: AgentProfilerCaptureActionV1,
+    capture: ContentIdentityRecordV1,
+    dispatch: Option<&CaptureDispatchV1>,
+) -> Result<
+    (
+        AgentProfilerCaptureTargetV1,
+        AgentProfilerTargetValidationV1,
+    ),
+    AgentProfilerErrorCodeV1,
+> {
+    if action == AgentProfilerCaptureActionV1::PostprocessExistingCapture {
+        return Ok((
+            AgentProfilerCaptureTargetV1::ExistingCapture {
+                capture,
+                dispatch: dispatch.map(|dispatch| dispatch.identity),
+            },
+            AgentProfilerTargetValidationV1 {
+                compute_units: AgentProfilerSelectorValidationV1::NotSpecified,
+                kernel_ir: AgentProfilerSelectorValidationV1::NotSpecified,
+                dispatch: if dispatch.is_some() {
+                    AgentProfilerSelectorValidationV1::ValidatedAgainstCapture
+                } else {
+                    AgentProfilerSelectorValidationV1::NotSpecified
+                },
+            },
+        ));
+    }
+    let Some(dispatch) = dispatch else {
+        return Ok((
+            AgentProfilerCaptureTargetV1::Unavailable {
+                reason: AgentProfilerCaptureTargetUnavailableReasonV1::NoDispatchSubject,
+            },
+            AgentProfilerTargetValidationV1 {
+                compute_units: AgentProfilerSelectorValidationV1::UnavailableWithoutAuthenticatedTopologyAndCollectorCapability,
+                kernel_ir: AgentProfilerSelectorValidationV1::NotSpecified,
+                dispatch: AgentProfilerSelectorValidationV1::NotSpecified,
+            },
+        ));
+    };
+    let Some(artifact) = dispatch.artifact.value else {
+        return Ok((
+            AgentProfilerCaptureTargetV1::Unavailable {
+                reason: AgentProfilerCaptureTargetUnavailableReasonV1::ArtifactIdentityUnavailable,
+            },
+            AgentProfilerTargetValidationV1 {
+                compute_units: AgentProfilerSelectorValidationV1::UnavailableWithoutAuthenticatedTopologyAndCollectorCapability,
+                kernel_ir: AgentProfilerSelectorValidationV1::DerivedFromAdmittedCaptureFacts,
+                dispatch: AgentProfilerSelectorValidationV1::NotSpecified,
+            },
+        ));
+    };
+    Ok((
+        AgentProfilerCaptureTargetV1::FutureDispatchShape {
+            launch_identity: launch_selector_identity(dispatch, artifact)?,
+            launch: dispatch.launch,
+            kernel_ir: dispatch.kernel_ir,
+            artifact,
+            compute_units_unavailable: AgentProfilerComputeUnitSelectorUnavailableReasonV1::BundleHasNoAuthenticatedTopologyOrCollectorSelectionCapability,
+        },
+        AgentProfilerTargetValidationV1 {
+            compute_units: AgentProfilerSelectorValidationV1::UnavailableWithoutAuthenticatedTopologyAndCollectorCapability,
+            kernel_ir: AgentProfilerSelectorValidationV1::DerivedFromAdmittedCaptureFacts,
+            dispatch: AgentProfilerSelectorValidationV1::NotSpecified,
+        },
+    ))
+}
+
 fn capture_recipe(
     planning: &AgentProfilerPlanRequestV1,
     selected_missing: &[AgentProfilerPlanEvidenceClassV1],
     existing_bundle_bytes: u64,
-) -> AgentProfilerCaptureRecipeV1 {
+    capture: ContentIdentityRecordV1,
+    dispatch: Option<&CaptureDispatchV1>,
+) -> Result<AgentProfilerCaptureRecipeV1, AgentProfilerErrorCodeV1> {
     let (
         requested_data_classes,
         requested_logical_counters,
         collector_requirements,
         action,
-        overhead_max,
         storage_multiplier,
         sampling_mode,
         required_privilege,
@@ -2059,7 +2290,6 @@ fn capture_recipe(
             Vec::new(),
             att_collector_requirements(true),
             AgentProfilerCaptureActionV1::NewCaptureRequired,
-            MAX_AGENT_PROFILER_PLAN_OVERHEAD_BASIS_POINTS_V1,
             64,
             AgentProfilerSamplingModeV1::TargetedThreadTrace,
             AgentProfilerPrivilegeRequirementV1::ProfilerAccess,
@@ -2087,7 +2317,6 @@ fn capture_recipe(
                 ),
             ],
             AgentProfilerCaptureActionV1::NewCaptureRequired,
-            50_000,
             8,
             AgentProfilerSamplingModeV1::DispatchCounterAggregate,
             AgentProfilerPrivilegeRequirementV1::ProfilerAccess,
@@ -2126,11 +2355,6 @@ fn capture_recipe(
                 } else {
                     AgentProfilerCaptureActionV1::PostprocessExistingCapture
                 },
-                if capture_required {
-                    MAX_AGENT_PROFILER_PLAN_OVERHEAD_BASIS_POINTS_V1
-                } else {
-                    0
-                },
                 if capture_required { 64 } else { 8 },
                 if capture_required {
                     AgentProfilerSamplingModeV1::TargetedThreadTrace
@@ -2157,7 +2381,6 @@ fn capture_recipe(
                 AgentProfilerCollectorCapabilityV1::KernelDispatchCollection,
             )],
             AgentProfilerCaptureActionV1::NewCaptureRequired,
-            10_000,
             2,
             AgentProfilerSamplingModeV1::CollectorReportedDispatchRecords,
             AgentProfilerPrivilegeRequirementV1::ProfilerAccess,
@@ -2165,17 +2388,14 @@ fn capture_recipe(
         ),
     };
     let estimated_maximum = existing_bundle_bytes
-        .saturating_mul(storage_multiplier)
-        .min(planning.constraints.maximum_storage_bytes);
+        .checked_mul(storage_multiplier)
+        .ok_or(AgentProfilerErrorCodeV1::InvalidPlanRequest)?;
     let mut completeness_limitations = vec![
         AgentProfilerCompletenessLimitV1::CollectorReportedRecordsOnly,
         AgentProfilerCompletenessLimitV1::StorageCeilingMayTruncate,
     ];
     if planning.target.dispatch.is_some() {
         completeness_limitations.push(AgentProfilerCompletenessLimitV1::SelectedDispatchOnly);
-    }
-    if !planning.target.compute_units.is_empty() {
-        completeness_limitations.push(AgentProfilerCompletenessLimitV1::SelectedComputeUnitsOnly);
     }
     if matches!(
         sampling_mode,
@@ -2190,36 +2410,25 @@ fn capture_recipe(
         completeness_limitations
             .push(AgentProfilerCompletenessLimitV1::AggregateCountersDoNotEstablishCausality);
     }
-    AgentProfilerCaptureRecipeV1 {
+    let (target, target_validation) = recipe_target(action, capture, dispatch)?;
+    let mut storage_limitations = vec![
+        AgentProfilerStorageLimitationV1::EstimateNotMeasurement,
+        AgentProfilerStorageLimitationV1::EncodingAndWorkloadDependent,
+        AgentProfilerStorageLimitationV1::MaximumMayTruncateCapture,
+    ];
+    if estimated_maximum > planning.constraints.maximum_storage_bytes {
+        storage_limitations.push(AgentProfilerStorageLimitationV1::EstimateExceedsDeclaredMaximum);
+    }
+    Ok(AgentProfilerCaptureRecipeV1 {
         action,
-        target: planning.target.clone(),
-        target_validation: AgentProfilerTargetValidationV1 {
-            compute_units: if planning.target.compute_units.is_empty() {
-                AgentProfilerSelectorValidationV1::NotSpecified
-            } else {
-                AgentProfilerSelectorValidationV1::CallerDeclaredNotValidatedByBundle
-            },
-            kernel_ir: if planning.target.kernel_ir.is_some() {
-                AgentProfilerSelectorValidationV1::ValidatedAgainstCapture
-            } else {
-                AgentProfilerSelectorValidationV1::NotSpecified
-            },
-            dispatch: if planning.target.dispatch.is_some() {
-                AgentProfilerSelectorValidationV1::ValidatedAgainstCapture
-            } else {
-                AgentProfilerSelectorValidationV1::NotSpecified
-            },
-        },
+        target,
+        target_validation,
         requested_data_classes,
         requested_logical_counters,
         collector_requirements,
-        expected_overhead: AgentProfilerExpectedOverheadV1 {
-            origin: TruthOriginV1::Declared,
-            additional_runtime_basis_points: AgentProfilerBoundedU32RangeV1 {
-                minimum: 0,
-                maximum: overhead_max,
-            },
-            method: AgentProfilerOverheadMethodV1::ContractDeclaredConservativeEnvelope,
+        expected_overhead: AgentProfilerExpectedOverheadV1::Unavailable {
+            origin: TruthOriginV1::Unavailable,
+            reason: AgentProfilerOverheadUnavailableReasonV1::NoAdmittedMeasurementForPlannedAction,
             limitations: vec![
                 AgentProfilerOverheadLimitationV1::NotMeasured,
                 AgentProfilerOverheadLimitationV1::WorkloadDeviceAndCollectorDependent,
@@ -2237,11 +2446,7 @@ fn capture_recipe(
                 AgentProfilerStorageEstimateMethodV1::ExistingBundleBytesScaledBySelectedDataClass,
             estimate_scale_multiplier: u16::try_from(storage_multiplier)
                 .expect("the contract-declared storage multipliers fit u16"),
-            limitations: vec![
-                AgentProfilerStorageLimitationV1::EstimateNotMeasurement,
-                AgentProfilerStorageLimitationV1::EncodingAndWorkloadDependent,
-                AgentProfilerStorageLimitationV1::MaximumMayTruncateCapture,
-            ],
+            limitations: storage_limitations,
         },
         required_privilege,
         mutual_exclusions: excluded_data_class
@@ -2264,7 +2469,7 @@ fn capture_recipe(
                 AgentProfilerExecutionAuthorizationV1::SeparateExplicitAuthorizationRequired,
             attach_authority: AgentProfilerAttachAuthorityV1::NotAvailableToService,
         },
-    }
+    })
 }
 
 fn att_collector_requirements(capture_required: bool) -> Vec<AgentProfilerCollectorRequirementV1> {
@@ -2274,6 +2479,11 @@ fn att_collector_requirements(capture_required: bool) -> Vec<AgentProfilerCollec
             AgentProfilerCollectorToolV1::Rocprofv3,
             AgentProfilerCollectorCapabilityV1::AttThreadTraceCollection,
         ));
+        requirements.push(AgentProfilerCollectorRequirementV1 {
+            tool: AgentProfilerCollectorToolV1::Rocprofv3,
+            capability: AgentProfilerCollectorCapabilityV1::AuthenticatedComputeUnitSelection,
+            status: AgentProfilerCollectorCapabilityStatusV1::RequiredUnavailableInCurrentBuild,
+        });
     }
     requirements.extend([
         collector_requirement(
