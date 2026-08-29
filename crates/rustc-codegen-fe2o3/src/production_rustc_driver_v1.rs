@@ -187,9 +187,11 @@ fn extract_amdgpu_llvm_in_active_session_v1(
         )
     })?;
     eprintln!(
-        "fe2o3 production extraction: Rust -> semantic MIR -> ranked PLIRON -> Kernel IR -> composed formal/ranked memory -> {} LLVM; {} semantic function(s), {} correspondence block(s), {} formal access(es), {} ranked dynamic-index discharge(s), workgroup {:?}, {} LLVM byte(s), artifact/launch authority {}",
+        "fe2o3 production extraction: Rust -> semantic MIR -> ranked PLIRON -> Kernel IR -> composed formal/ranked memory -> {} LLVM; {} semantic function(s), {} semantic u32 induction certificate(s) for {} checked addition(s), {} correspondence block(s), {} formal access(es), {} ranked dynamic-index discharge(s), workgroup {:?}, {} LLVM byte(s), artifact/launch authority {}",
         lowered.target_name(),
         lowered.semantic_function_count(),
+        lowered.semantic_u32_induction_certificate_count(),
+        lowered.semantic_u32_induction_checked_addition_count(),
         lowered.correspondence_block_count(),
         lowered.formal_access_count(),
         lowered.ranked_dynamic_index_discharge_count(),
@@ -367,17 +369,17 @@ fn lower_hex_v1(bytes: &[u8]) -> String {
 /// No host compiler values cross this boundary. The callback discovers roots,
 /// collects, and imports synchronously inside the AMD `TyCtxt` it receives.
 pub fn run_production_extraction_driver_v1(args: &[String]) -> Result<(), String> {
-    let mut callbacks = ProductionExtractionCallbacksV1::default();
-    rustc_driver::run_compiler(args, &mut callbacks);
-    callbacks.result.unwrap_or_else(|| {
-        Err("production extraction callback did not reach rustc analysis".to_owned())
-    })
+    run_production_driver_v1(
+        args,
+        ProductionExtractionCallbacksV1::default(),
+        "production extraction callback did not reach rustc analysis",
+    )
 }
 
 /// Runs the same production importer followed by generic ranked-memory
 /// construction and verification, without granting artifact authority.
 pub fn run_production_ranked_extraction_driver_v1(args: &[String]) -> Result<(), String> {
-    let mut callbacks = ProductionExtractionCallbacksV1 {
+    let callbacks = ProductionExtractionCallbacksV1 {
         ranked_memory: true,
         amdgpu_llvm_output: None,
         expected_llvm_target: None,
@@ -386,10 +388,11 @@ pub fn run_production_ranked_extraction_driver_v1(args: &[String]) -> Result<(),
         simulation_bundle_v2: false,
         result: None,
     };
-    rustc_driver::run_compiler(args, &mut callbacks);
-    callbacks.result.unwrap_or_else(|| {
-        Err("production ranked extraction callback did not reach rustc analysis".to_owned())
-    })
+    run_production_driver_v1(
+        args,
+        callbacks,
+        "production ranked extraction callback did not reach rustc analysis",
+    )
 }
 
 /// Runs the complete production analysis and exact live-target lowering
@@ -398,7 +401,7 @@ pub fn run_production_amdgpu_llvm_extraction_driver_v1(
     args: &[String],
     output: &Path,
 ) -> Result<(), String> {
-    let mut callbacks = ProductionExtractionCallbacksV1 {
+    let callbacks = ProductionExtractionCallbacksV1 {
         ranked_memory: false,
         amdgpu_llvm_output: Some(output.to_path_buf()),
         expected_llvm_target: None,
@@ -407,10 +410,11 @@ pub fn run_production_amdgpu_llvm_extraction_driver_v1(
         simulation_bundle_v2: false,
         result: None,
     };
-    rustc_driver::run_compiler(args, &mut callbacks);
-    callbacks.result.unwrap_or_else(|| {
-        Err("production AMDGPU extraction callback did not reach rustc analysis".to_owned())
-    })
+    run_production_driver_v1(
+        args,
+        callbacks,
+        "production AMDGPU extraction callback did not reach rustc analysis",
+    )
 }
 
 /// Compatibility entry point for the original exact gfx942 extraction API.
@@ -418,7 +422,7 @@ pub fn run_production_gfx942_llvm_extraction_driver_v1(
     args: &[String],
     output: &Path,
 ) -> Result<(), String> {
-    let mut callbacks = ProductionExtractionCallbacksV1 {
+    let callbacks = ProductionExtractionCallbacksV1 {
         ranked_memory: false,
         amdgpu_llvm_output: Some(output.to_path_buf()),
         expected_llvm_target: Some(fe2o3_amd_target::PRODUCTION_GFX942_DEVICE_TARGET_V1),
@@ -427,10 +431,11 @@ pub fn run_production_gfx942_llvm_extraction_driver_v1(
         simulation_bundle_v2: false,
         result: None,
     };
-    rustc_driver::run_compiler(args, &mut callbacks);
-    callbacks.result.unwrap_or_else(|| {
-        Err("production gfx942 extraction callback did not reach rustc analysis".to_owned())
-    })
+    run_production_driver_v1(
+        args,
+        callbacks,
+        "production gfx942 extraction callback did not reach rustc analysis",
+    )
 }
 
 /// Runs the complete production analysis and lowering transaction and emits
@@ -440,7 +445,7 @@ pub fn run_production_gfx942_compiler_handoff_extraction_driver_v1(
     args: &[String],
     output: &Path,
 ) -> Result<(), String> {
-    let mut callbacks = ProductionExtractionCallbacksV1 {
+    let callbacks = ProductionExtractionCallbacksV1 {
         ranked_memory: false,
         amdgpu_llvm_output: None,
         expected_llvm_target: None,
@@ -449,13 +454,11 @@ pub fn run_production_gfx942_compiler_handoff_extraction_driver_v1(
         simulation_bundle_v2: false,
         result: None,
     };
-    rustc_driver::run_compiler(args, &mut callbacks);
-    callbacks.result.unwrap_or_else(|| {
-        Err(
-            "production compiler-handoff extraction callback did not reach rustc analysis"
-                .to_owned(),
-        )
-    })
+    run_production_driver_v1(
+        args,
+        callbacks,
+        "production compiler-handoff extraction callback did not reach rustc analysis",
+    )
 }
 
 /// Runs the sole production source transaction through target-neutral lowering
@@ -465,7 +468,7 @@ pub fn run_production_simulation_bundle_extraction_driver_v1(
     args: &[String],
     output: &Path,
 ) -> Result<(), String> {
-    let mut callbacks = ProductionExtractionCallbacksV1 {
+    let callbacks = ProductionExtractionCallbacksV1 {
         ranked_memory: false,
         amdgpu_llvm_output: None,
         expected_llvm_target: None,
@@ -474,13 +477,11 @@ pub fn run_production_simulation_bundle_extraction_driver_v1(
         simulation_bundle_v2: false,
         result: None,
     };
-    rustc_driver::run_compiler(args, &mut callbacks);
-    callbacks.result.unwrap_or_else(|| {
-        Err(
-            "production simulation-bundle extraction callback did not reach rustc analysis"
-                .to_owned(),
-        )
-    })
+    run_production_driver_v1(
+        args,
+        callbacks,
+        "production simulation-bundle extraction callback did not reach rustc analysis",
+    )
 }
 
 /// Runs the opt-in V2 simulation export with compiler-produced source-variable
@@ -489,7 +490,7 @@ pub fn run_production_simulation_bundle_extraction_driver_v2(
     args: &[String],
     output: &Path,
 ) -> Result<(), String> {
-    let mut callbacks = ProductionExtractionCallbacksV1 {
+    let callbacks = ProductionExtractionCallbacksV1 {
         ranked_memory: false,
         amdgpu_llvm_output: None,
         expected_llvm_target: None,
@@ -498,18 +499,92 @@ pub fn run_production_simulation_bundle_extraction_driver_v2(
         simulation_bundle_v2: true,
         result: None,
     };
+    run_production_driver_v1(
+        args,
+        callbacks,
+        "production simulation-bundle V2 extraction callback did not reach rustc analysis",
+    )
+}
+
+fn run_production_driver_v1(
+    args: &[String],
+    mut callbacks: ProductionExtractionCallbacksV1,
+    missing_callback: &'static str,
+) -> Result<(), String> {
+    require_canonical_overflow_checks_v1(args)?;
     rustc_driver::run_compiler(args, &mut callbacks);
-    callbacks.result.unwrap_or_else(|| {
-        Err(
-            "production simulation-bundle V2 extraction callback did not reach rustc analysis"
-                .to_owned(),
-        )
-    })
+    callbacks
+        .result
+        .unwrap_or_else(|| Err(missing_callback.to_owned()))
+}
+
+fn require_canonical_overflow_checks_v1(args: &[String]) -> Result<(), String> {
+    let mut observed = Vec::new();
+    let mut index = 1;
+    while index < args.len() {
+        let argument = &args[index];
+        if argument == "--" {
+            break;
+        }
+        if argument == "-C" || argument == "--codegen" {
+            let value = args
+                .get(index + 1)
+                .ok_or_else(|| format!("production rustc option `{argument}` has no value"))?;
+            if value.starts_with("overflow-checks=") {
+                observed.push((argument.as_str(), value.as_str()));
+            }
+            index += 2;
+            continue;
+        }
+        if argument.starts_with("-Coverflow-checks=")
+            || argument.starts_with("--codegen=overflow-checks=")
+        {
+            observed.push((argument.as_str(), ""));
+        }
+        index += 1;
+    }
+    if observed == [("-Coverflow-checks=on", "")] {
+        Ok(())
+    } else {
+        Err(format!(
+            "production rustc invocation requires exactly one canonical `-Coverflow-checks=on`; observed {observed:?}"
+        ))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn production_driver_requires_one_canonical_overflow_policy() {
+        require_canonical_overflow_checks_v1(&[
+            "rustc".to_owned(),
+            "--crate-name".to_owned(),
+            "kernel".to_owned(),
+            "-Coverflow-checks=on".to_owned(),
+        ])
+        .unwrap();
+
+        for rejected in [
+            vec!["rustc"],
+            vec!["rustc", "-Coverflow-checks=off"],
+            vec!["rustc", "-C", "overflow-checks=on"],
+            vec![
+                "rustc",
+                "-Coverflow-checks=on",
+                "--codegen=overflow-checks=on",
+            ],
+            vec!["rustc", "--", "-Coverflow-checks=on"],
+        ] {
+            let args = rejected.into_iter().map(str::to_owned).collect::<Vec<_>>();
+            assert!(
+                require_canonical_overflow_checks_v1(&args)
+                    .unwrap_err()
+                    .contains("requires exactly one canonical")
+            );
+        }
+    }
 
     fn scratch() -> PathBuf {
         let path = std::env::temp_dir().join(format!(

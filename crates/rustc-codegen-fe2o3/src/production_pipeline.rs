@@ -709,6 +709,19 @@ impl TargetLoweredProductionCompilation {
             .len()
     }
 
+    pub(crate) fn semantic_u32_induction_checked_addition_count(&self) -> usize {
+        self.ranked_verification
+            .semantic_u32_induction()
+            .checked_additions_examined()
+    }
+
+    pub(crate) fn semantic_u32_induction_certificate_count(&self) -> usize {
+        self.ranked_verification
+            .semantic_u32_induction()
+            .certificates()
+            .len()
+    }
+
     pub(crate) fn correspondence_block_count(&self) -> usize {
         self.admitted.semantic_kir().correspondence().blocks().len()
     }

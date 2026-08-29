@@ -41,7 +41,6 @@ const PORTABLE_CODEGEN_IDENTITY_KEYS_V1: &[&str] = &[
     "lto",
     "no-redzone",
     "opt-level",
-    "overflow-checks",
     "panic",
     "relocation-model",
     "soft-float",
@@ -329,6 +328,7 @@ fn prepare(
                 .ok_or_else(|| "selected extraction argv must be valid UTF-8".to_owned())
         })
         .collect::<Result<Vec<_>, _>>()?;
+    let args = enforce_selected_overflow_checks_v1(args)?;
     let package_identity = match package_identity {
         Some(identity) => identity,
         None => PortablePackageIdentityV1::capture_selected_primary_package_v1()?,
@@ -406,6 +406,64 @@ fn prepare(
         crate_binding_output,
         mode,
     }))
+}
+
+/// Canonicalizes the production arithmetic policy before rustc enters the
+/// selected in-process session. Overflow checks are a fixed compiler policy,
+/// not a user-selectable crate-binding axis.
+fn enforce_selected_overflow_checks_v1(args: Vec<String>) -> Result<Vec<String>, String> {
+    const CANONICAL: &str = "-Coverflow-checks=on";
+
+    let mut rewritten = Vec::with_capacity(args.len().saturating_add(1));
+    let mut index = 0;
+    let mut inserted = false;
+    while index < args.len() {
+        let argument = &args[index];
+        if argument == "--" {
+            rewritten.push(CANONICAL.to_owned());
+            inserted = true;
+            rewritten.extend(args[index..].iter().cloned());
+            break;
+        }
+        if argument == "-C" || argument == "--codegen" {
+            let value = args.get(index + 1).ok_or_else(|| {
+                format!("selected rustc option `{argument}` lost its validated value")
+            })?;
+            if let Some(value) = value.strip_prefix("overflow-checks=") {
+                require_overflow_checks_enabled_v1(value)?;
+                index += 2;
+                continue;
+            }
+            rewritten.push(argument.clone());
+            rewritten.push(value.clone());
+            index += 2;
+            continue;
+        }
+        let joined = argument
+            .strip_prefix("-C")
+            .or_else(|| argument.strip_prefix("--codegen="));
+        if let Some(value) = joined.and_then(|value| value.strip_prefix("overflow-checks=")) {
+            require_overflow_checks_enabled_v1(value)?;
+            index += 1;
+            continue;
+        }
+        rewritten.push(argument.clone());
+        index += 1;
+    }
+    if !inserted {
+        rewritten.push(CANONICAL.to_owned());
+    }
+    Ok(rewritten)
+}
+
+fn require_overflow_checks_enabled_v1(value: &str) -> Result<(), String> {
+    if matches!(value, "y" | "yes" | "on" | "true") {
+        Ok(())
+    } else {
+        Err(format!(
+            "selected production kernel requires `-Coverflow-checks=on`; observed `{value}`"
+        ))
+    }
 }
 
 /// Derives the sole synthetic `-C metadata` token for one terminal-selected
@@ -1054,6 +1112,71 @@ mod tests {
                 "dep=/checkout/target/libdep.rmeta",
                 "-Cmetadata=portable",
             ]
+        );
+    }
+
+    #[test]
+    fn selected_overflow_policy_is_exact_and_canonical() {
+        let normalized = enforce_selected_overflow_checks_v1(
+            [
+                "rustc",
+                "--crate-name",
+                "unit",
+                "unit.rs",
+                "-C",
+                "overflow-checks=yes",
+                "--codegen=overflow-checks=true",
+                "--",
+                "literal",
+            ]
+            .map(str::to_owned)
+            .to_vec(),
+        )
+        .unwrap();
+        assert_eq!(
+            normalized,
+            [
+                "rustc",
+                "--crate-name",
+                "unit",
+                "unit.rs",
+                "-Coverflow-checks=on",
+                "--",
+                "literal",
+            ]
+        );
+
+        for disabled in ["off", "no", "false", "0", "invalid"] {
+            let error = enforce_selected_overflow_checks_v1(vec![
+                "rustc".to_owned(),
+                format!("-Coverflow-checks={disabled}"),
+            ])
+            .unwrap_err();
+            assert!(error.contains("requires `-Coverflow-checks=on`"));
+            assert!(error.contains(disabled));
+        }
+    }
+
+    #[test]
+    fn fixed_overflow_policy_preserves_the_implicit_portable_namespace() {
+        let original = compile_argv("unit", &["cargo-salt"])
+            .into_iter()
+            .skip(1)
+            .map(|argument| argument.into_string().unwrap())
+            .collect::<Vec<_>>();
+        let normalized = enforce_selected_overflow_checks_v1(original.clone()).unwrap();
+        assert_eq!(
+            normalized
+                .iter()
+                .filter(|argument| argument.as_str() == "-Coverflow-checks=on")
+                .count(),
+            1
+        );
+        assert_eq!(
+            portable_selected_metadata_v1("unit", &package_identity("1.0.0", 1), &original)
+                .unwrap(),
+            portable_selected_metadata_v1("unit", &package_identity("1.0.0", 1), &normalized)
+                .unwrap(),
         );
     }
 

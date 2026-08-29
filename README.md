@@ -636,6 +636,13 @@ Safe ownership of resources used by asynchronous copies is documented in
   falls back to a workload-specific implementation. Historical emitters and
   exact workload paths remain only as migration evidence until equivalent
   production coverage permits their deletion.
+- The selected production rustc wrapper canonicalizes every kernel compile to
+  exactly one `-Coverflow-checks=on`; explicit disabled or conflicting settings
+  fail before the in-process driver starts. This fixed compiler policy is not a
+  crate-namespace axis, while the exact protected rustc invocation still
+  retains the canonical flag. Semantic induction certificates remain inert:
+  they do not authorize removing the corresponding LLVM overflow guard until
+  source-to-KIR-to-LLVM refinement is independently authenticated.
 - `fe2o3-core` provides HIP-backed contexts, streams, device buffers, pinned
   host buffers, events, synchronous transfers, and event-backed borrowed and
   owned asynchronous transfers. Its default/production surface exports no raw

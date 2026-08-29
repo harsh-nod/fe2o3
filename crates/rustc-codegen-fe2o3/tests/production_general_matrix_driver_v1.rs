@@ -99,6 +99,7 @@ fn scalar_gemm_kernel_reaches_gfx942_llvm() {
     assert!(
         stderr.contains("Rust -> semantic MIR -> ranked PLIRON -> Kernel IR")
             && stderr.contains("composed formal/ranked memory -> gfx942:xnack- LLVM")
+            && stderr.contains("semantic u32 induction certificate(s)")
             && stderr.contains("artifact/launch authority false"),
         "scalar GEMM extraction omitted its successful lowering receipt:\n{stderr}"
     );
@@ -114,6 +115,8 @@ fn scalar_gemm_kernel_reaches_gfx942_llvm() {
         "target triple = \"amdgcn-amd-amdhsa\"",
         "@scalar_gemm_v1",
         "llvm.amdgcn.workitem.id.x",
+        "llvm.uadd.with.overflow.i32",
+        "call { i32, i1 } @llvm.uadd.with.overflow.i32",
         "fmul float",
         "fadd float",
     ] {
