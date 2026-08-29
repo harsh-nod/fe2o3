@@ -61,6 +61,7 @@ use compiler_proof_inputs_v3::{
 use hsaco_fixture::{
     ScalarAddFixtureMutation, scalar_add_fixture_with, slice_fixture_with_descriptor_table,
     slice_fixture_with_descriptor_table_and_workgroup,
+    two_kernel_slice_fixture_with_descriptor_table,
 };
 
 const TARGET: &str = "gfx942:xnack-";
@@ -182,31 +183,52 @@ pub(crate) fn published_worker_v3_fixture() -> PublishedWorkerV3Fixture {
 }
 
 #[allow(dead_code)]
+pub(crate) fn published_two_kernel_worker_v3_fixture() -> PublishedWorkerV3Fixture {
+    let fixture =
+        two_kernel_slice_fixture_with_descriptor_table(&two_kernel_slice_descriptor_table());
+    published_worker_v3_fixture_from_raw_hsaco_for_kernels(
+        fixture.bytes,
+        &[
+            ("first_transform", "first_transform.kd"),
+            ("second_transform", "second_transform.kd"),
+        ],
+    )
+}
+
+#[allow(dead_code)]
 pub(crate) fn published_worker_v3_fixture_from_raw_hsaco(
     raw_hsaco: Vec<u8>,
     entry_symbol: &str,
     descriptor_symbol: &str,
 ) -> PublishedWorkerV3Fixture {
-    published_worker_v3_fixture_from_raw_hsaco_with_config(
+    published_worker_v3_fixture_from_raw_hsaco_for_kernels_with_config(
         raw_hsaco,
-        entry_symbol,
-        descriptor_symbol,
+        &[(entry_symbol, descriptor_symbol)],
         EvidenceConfig::BASE,
     )
 }
 
-fn published_worker_v3_fixture_from_raw_hsaco_with_config(
+fn published_worker_v3_fixture_from_raw_hsaco_for_kernels(
     raw_hsaco: Vec<u8>,
-    entry_symbol: &str,
-    descriptor_symbol: &str,
+    kernel_symbols: &[(&str, &str)],
+) -> PublishedWorkerV3Fixture {
+    published_worker_v3_fixture_from_raw_hsaco_for_kernels_with_config(
+        raw_hsaco,
+        kernel_symbols,
+        EvidenceConfig::BASE,
+    )
+}
+
+fn published_worker_v3_fixture_from_raw_hsaco_for_kernels_with_config(
+    raw_hsaco: Vec<u8>,
+    kernel_symbols: &[(&str, &str)],
     config: EvidenceConfig,
 ) -> PublishedWorkerV3Fixture {
     let directory = TestDirectory::new();
-    let staged = publish_worker_v3_fixture_in_directory_with_config(
+    let staged = publish_worker_v3_fixture_in_directory_for_kernels_with_config(
         &directory,
         raw_hsaco,
-        entry_symbol,
-        descriptor_symbol,
+        kernel_symbols,
         config,
     );
     PublishedWorkerV3Fixture {
@@ -223,11 +245,10 @@ pub(crate) fn publish_worker_v3_fixture_in_directory(
     attempt_seed: u8,
 ) -> PublishedWorkerV3InDirectory {
     let fixture = slice_fixture_with_descriptor_table(&slice_descriptor_table());
-    publish_worker_v3_fixture_in_directory_with_config(
+    publish_worker_v3_fixture_in_directory_for_kernels_with_config(
         directory,
         fixture.bytes,
-        "vecadd",
-        "vecadd.kd",
+        &[("vecadd", "vecadd.kd")],
         EvidenceConfig {
             attempt_seed,
             ..EvidenceConfig::BASE
@@ -235,20 +256,18 @@ pub(crate) fn publish_worker_v3_fixture_in_directory(
     )
 }
 
-fn publish_worker_v3_fixture_in_directory_with_config(
+fn publish_worker_v3_fixture_in_directory_for_kernels_with_config(
     directory: &TestDirectory,
     raw_hsaco: Vec<u8>,
-    entry_symbol: &str,
-    descriptor_symbol: &str,
+    kernel_symbols: &[(&str, &str)],
     config: EvidenceConfig,
 ) -> PublishedWorkerV3InDirectory {
     let producer = producer();
-    let (attempt, source) = evidence_in_directory_for_kernel_and_providers(
+    let (attempt, source) = evidence_in_directory_for_kernels_and_providers(
         directory,
         raw_hsaco,
         config,
-        entry_symbol,
-        descriptor_symbol,
+        kernel_symbols,
         Vec::new(),
     );
     let inspected = inspect_protected_worker_v3_hsaco_v1(source).unwrap();
@@ -877,6 +896,25 @@ fn evidence_in_directory_for_kernel_and_providers(
     fe2o3_artifact_transaction::BuildAttempt,
     InertProtectedFirstBuildWorkerV3EvidenceV1,
 ) {
+    evidence_in_directory_for_kernels_and_providers(
+        directory,
+        hsaco,
+        config,
+        &[(entry_symbol, descriptor_symbol)],
+        external_providers,
+    )
+}
+
+fn evidence_in_directory_for_kernels_and_providers(
+    directory: &TestDirectory,
+    hsaco: Vec<u8>,
+    config: EvidenceConfig,
+    kernel_symbols: &[(&str, &str)],
+    external_providers: Vec<WorkerInputV1>,
+) -> (
+    fe2o3_artifact_transaction::BuildAttempt,
+    InertProtectedFirstBuildWorkerV3EvidenceV1,
+) {
     let attempt = begin_build_attempt(
         &directory.0,
         &producer(),
@@ -884,12 +922,11 @@ fn evidence_in_directory_for_kernel_and_providers(
         BuildSession::from_bytes([config.attempt_seed.wrapping_add(1); 16]),
     )
     .unwrap();
-    let handoff = outer_for_kernel(
+    let handoff = outer_for_kernels(
         config.invocation_seed,
         config.module_seed,
         &hsaco,
-        entry_symbol,
-        descriptor_symbol,
+        kernel_symbols,
         config.lineage_mutation,
     );
     let receipt = publish_compiler_module_handoff_in_slot_v3(
@@ -946,42 +983,15 @@ fn slice_descriptor_table_with_workgroup(workgroup_size: u32) -> Vec<u8> {
     let source = SourceTypeRecordV1::new(SourceTypeDescriptorV1::shared_slice(ScalarTypeV1::F32));
     let layout =
         DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::shared_slice(ScalarTypeV1::F32));
-    let kernel = KernelDescriptorV1::new(
-        KernelId::from_bytes([0xa1; 32]),
-        ValidName::new("vecadd").unwrap(),
-        ValidName::new("vecadd").unwrap(),
-        ValidName::new("vecadd.kd").unwrap(),
-        BuildEvidenceV1::new(
-            EvidenceIdentity::from_opaque_bytes([0xa2; 32]),
-            EvidenceDigest::from_sha256_bytes([0xa3; 32]),
-        ),
-        BuildEvidenceV1::new(
-            EvidenceIdentity::from_opaque_bytes([0xa4; 32]),
-            EvidenceDigest::from_sha256_bytes([0xa5; 32]),
-        ),
-        Vec::new(),
-        KernelAbiLayoutV1::new(16, 272, 8).unwrap(),
-        LaunchConstraintsV1::new(
-            1,
-            BlockSizeV1::Exact(DimensionsV1::new(workgroup_size, 1, 1).unwrap()),
-            DimensionsV1::new(u32::MAX, 1, 1).unwrap(),
-            workgroup_size,
-            0,
-            64 * 1024,
-        )
-        .unwrap(),
-        vec![
-            LogicalArgumentV1::shared_slice(
-                0,
-                ValidName::new("values").unwrap(),
-                &source,
-                &layout,
-                0,
-            )
-            .unwrap(),
-        ],
-    )
-    .unwrap();
+    let kernel = slice_kernel_descriptor(
+        0xa1,
+        "vecadd",
+        "vecadd",
+        "vecadd.kd",
+        &source,
+        &layout,
+        workgroup_size,
+    );
     let table = DeviceDescriptorTableV1::new(
         CanonicalCodeObjectDigest::from_bytes([0; 32]),
         DescriptorCodeObjectVersion::V6,
@@ -1001,6 +1011,99 @@ fn slice_descriptor_table_with_workgroup(workgroup_size: u32) -> Vec<u8> {
     )
     .unwrap();
     encode_device_descriptor_table_v1(&table).unwrap()
+}
+
+fn two_kernel_slice_descriptor_table() -> Vec<u8> {
+    let source = SourceTypeRecordV1::new(SourceTypeDescriptorV1::shared_slice(ScalarTypeV1::F32));
+    let layout =
+        DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::shared_slice(ScalarTypeV1::F32));
+    let kernels = vec![
+        slice_kernel_descriptor(
+            0xb1,
+            "first_transform",
+            "first_transform",
+            "first_transform.kd",
+            &source,
+            &layout,
+            64,
+        ),
+        slice_kernel_descriptor(
+            0xc1,
+            "second_transform",
+            "second_transform",
+            "second_transform.kd",
+            &source,
+            &layout,
+            64,
+        ),
+    ];
+    let table = DeviceDescriptorTableV1::new(
+        CanonicalCodeObjectDigest::from_bytes([0; 32]),
+        DescriptorCodeObjectVersion::V6,
+        CompilerIdentityV1::new(
+            Text::new("rustc-codegen-fe2o3").unwrap(),
+            Text::new("test").unwrap(),
+            [0xa6; 20],
+        ),
+        ProducerIdentityV1::new(
+            Text::new("rustc-codegen-fe2o3-worker-v3").unwrap(),
+            Text::new("test").unwrap(),
+        ),
+        target(),
+        vec![source],
+        vec![layout],
+        kernels,
+    )
+    .unwrap();
+    encode_device_descriptor_table_v1(&table).unwrap()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn slice_kernel_descriptor(
+    identity_seed: u8,
+    logical_name: &str,
+    entry_name: &str,
+    descriptor_symbol: &str,
+    source: &SourceTypeRecordV1,
+    layout: &DeviceLayoutRecordV1,
+    workgroup_size: u32,
+) -> KernelDescriptorV1 {
+    KernelDescriptorV1::new(
+        KernelId::from_bytes([identity_seed; 32]),
+        ValidName::new(logical_name).unwrap(),
+        ValidName::new(entry_name).unwrap(),
+        ValidName::new(descriptor_symbol).unwrap(),
+        BuildEvidenceV1::new(
+            EvidenceIdentity::from_opaque_bytes([identity_seed.wrapping_add(1); 32]),
+            EvidenceDigest::from_sha256_bytes([identity_seed.wrapping_add(2); 32]),
+        ),
+        BuildEvidenceV1::new(
+            EvidenceIdentity::from_opaque_bytes([identity_seed.wrapping_add(3); 32]),
+            EvidenceDigest::from_sha256_bytes([identity_seed.wrapping_add(4); 32]),
+        ),
+        Vec::new(),
+        KernelAbiLayoutV1::new(16, 272, 8).unwrap(),
+        LaunchConstraintsV1::new(
+            1,
+            BlockSizeV1::Exact(DimensionsV1::new(workgroup_size, 1, 1).unwrap()),
+            DimensionsV1::new(u32::MAX, 1, 1).unwrap(),
+            workgroup_size,
+            0,
+            64 * 1024,
+        )
+        .unwrap(),
+        vec![
+            LogicalArgumentV1::shared_slice(
+                0,
+                ValidName::new("values").unwrap(),
+                source,
+                layout,
+                0,
+            )
+            .unwrap(),
+        ],
+    )
+    .unwrap()
 }
 
 fn worker_path() -> &'static Path {
@@ -1032,11 +1135,10 @@ fn options(optimization: &str) -> Vec<LinkOptionV1> {
     .collect()
 }
 
-fn module_handoff_for_kernel(
+fn module_handoff_for_kernels(
     seed: u8,
     hsaco: &[u8],
-    entry_symbol: &str,
-    descriptor_symbol: &str,
+    kernel_symbols: &[(&str, &str)],
 ) -> CompilerModuleHandoffV2 {
     let mut module = format!("; ModuleID = 'raw-hsaco-v3-{seed:02x}'\n").into_bytes();
     module.extend_from_slice(RAW_HSACO_MARKER);
@@ -1045,14 +1147,20 @@ fn module_handoff_for_kernel(
     let envelope =
         CompilerFfiEnvelopeV1::for_module_without_device_ffi(target(), CodeObjectVersion::V6)
             .unwrap();
-    let manifest = CompilerModuleSymbolManifestV1::new([
-        (CompilerModuleSymbolRoleV1::KernelEntry, entry_symbol),
-        (
-            CompilerModuleSymbolRoleV1::KernelDescriptor,
-            descriptor_symbol,
-        ),
-    ])
-    .unwrap();
+    let mut symbols = kernel_symbols
+        .iter()
+        .flat_map(|(entry_symbol, descriptor_symbol)| {
+            [
+                (CompilerModuleSymbolRoleV1::KernelEntry, *entry_symbol),
+                (
+                    CompilerModuleSymbolRoleV1::KernelDescriptor,
+                    *descriptor_symbol,
+                ),
+            ]
+        })
+        .collect::<Vec<_>>();
+    symbols.sort_unstable();
+    let manifest = CompilerModuleSymbolManifestV1::new(symbols).unwrap();
     CompilerModuleHandoffV2::new(
         CompilerModuleKindV1::LlvmTextIr,
         target(),
@@ -1064,15 +1172,14 @@ fn module_handoff_for_kernel(
     .unwrap()
 }
 
-fn outer_for_kernel(
+fn outer_for_kernels(
     invocation_seed: u8,
     module_seed: u8,
     hsaco: &[u8],
-    entry_symbol: &str,
-    descriptor_symbol: &str,
+    kernel_symbols: &[(&str, &str)],
     lineage_mutation: DescriptorLineageMutation,
 ) -> InertSemanticCompilerModuleHandoffV3 {
-    let handoff = module_handoff_for_kernel(module_seed, hsaco, entry_symbol, descriptor_symbol);
+    let handoff = module_handoff_for_kernels(module_seed, hsaco, kernel_symbols);
     InertSemanticCompilerModuleHandoffV3::decode(&raw_outer(
         &capsule_bytes(invocation_seed, &handoff, lineage_mutation),
         handoff.canonical_bytes(),

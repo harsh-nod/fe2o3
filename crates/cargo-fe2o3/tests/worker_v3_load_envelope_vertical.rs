@@ -72,6 +72,8 @@ mod worker_v3_fixture;
 
 const TEST_MARKER_BINDING: [u8; 32] = [0xa1; 32];
 const TEST_HOST_CONTRACT: [u8; 32] = [0xb2; 32];
+const FIRST_TRANSFORM_BINDING: [u8; 32] = [0xb1; 32];
+const SECOND_TRANSFORM_BINDING: [u8; 32] = [0xc1; 32];
 
 fn carriage_for_subject(
     subject: &InertCompilerExecutionSubjectV1,
@@ -209,6 +211,87 @@ unsafe impl CompilerGeneratedKernelExpectationV1 for WorkerV3VecAddMarker {
 
 fe2o3_host::compiler_generated_kernel_expectation_roster_v1! {
     struct WorkerV3VecAddRoster = [WorkerV3VecAddMarker];
+}
+
+struct WorkerV3FirstTransformMarker;
+
+fn worker_v3_first_transform_function() {}
+
+unsafe impl KernelMarkerV1 for WorkerV3FirstTransformMarker {
+    type Function = fn();
+    type Registration = ();
+
+    const LOGICAL_NAME: &'static str = "first_transform";
+    const EXPORT_NAME: &'static str = "first_transform";
+    const FUNCTION: Self::Function = worker_v3_first_transform_function;
+    const REGISTRATION: &'static Self::Registration = &();
+}
+
+unsafe impl CompilerGeneratedKernelExpectationV1 for WorkerV3FirstTransformMarker {
+    const PROFILE: CompilerGeneratedKernelProfileV1 =
+        CompilerGeneratedKernelProfileV1::new([0xb2; 32]);
+    const KERNEL_BINDING_ID_V1: [u8; 32] = FIRST_TRANSFORM_BINDING;
+}
+
+struct WorkerV3SecondTransformMarker;
+
+fn worker_v3_second_transform_function() {}
+
+unsafe impl KernelMarkerV1 for WorkerV3SecondTransformMarker {
+    type Function = fn();
+    type Registration = ();
+
+    const LOGICAL_NAME: &'static str = "second_transform";
+    const EXPORT_NAME: &'static str = "second_transform";
+    const FUNCTION: Self::Function = worker_v3_second_transform_function;
+    const REGISTRATION: &'static Self::Registration = &();
+}
+
+unsafe impl CompilerGeneratedKernelExpectationV1 for WorkerV3SecondTransformMarker {
+    const PROFILE: CompilerGeneratedKernelProfileV1 =
+        CompilerGeneratedKernelProfileV1::new([0xc2; 32]);
+    const KERNEL_BINDING_ID_V1: [u8; 32] = SECOND_TRANSFORM_BINDING;
+}
+
+struct WorkerV3SubstitutedTransformMarker;
+
+fn worker_v3_substituted_transform_function() {}
+
+unsafe impl KernelMarkerV1 for WorkerV3SubstitutedTransformMarker {
+    type Function = fn();
+    type Registration = ();
+
+    const LOGICAL_NAME: &'static str = "substituted_transform";
+    const EXPORT_NAME: &'static str = "substituted_transform";
+    const FUNCTION: Self::Function = worker_v3_substituted_transform_function;
+    const REGISTRATION: &'static Self::Registration = &();
+}
+
+unsafe impl CompilerGeneratedKernelExpectationV1 for WorkerV3SubstitutedTransformMarker {
+    const PROFILE: CompilerGeneratedKernelProfileV1 =
+        CompilerGeneratedKernelProfileV1::new([0xd2; 32]);
+    const KERNEL_BINDING_ID_V1: [u8; 32] = [0xd1; 32];
+}
+
+fe2o3_host::compiler_generated_kernel_expectation_roster_v1! {
+    struct WorkerV3TwoTransformRoster = [
+        WorkerV3FirstTransformMarker,
+        WorkerV3SecondTransformMarker,
+    ];
+}
+
+fe2o3_host::compiler_generated_kernel_expectation_roster_v1! {
+    struct WorkerV3ReorderedTransformRoster = [
+        WorkerV3SecondTransformMarker,
+        WorkerV3FirstTransformMarker,
+    ];
+}
+
+fe2o3_host::compiler_generated_kernel_expectation_roster_v1! {
+    struct WorkerV3SubstitutedTransformRoster = [
+        WorkerV3FirstTransformMarker,
+        WorkerV3SubstitutedTransformMarker,
+    ];
 }
 
 struct WorkerV3VecAddArguments<'allocation> {
@@ -803,6 +886,13 @@ fn recovered_host_fixture() -> (
     RecoveredWorkerV3LoadEnvelopeV2,
 ) {
     recover_published_worker_v3_fixture(worker_v3_fixture::published_worker_v3_fixture())
+}
+
+fn recovered_two_kernel_host_fixture() -> (
+    worker_v3_fixture::TestDirectory,
+    RecoveredWorkerV3LoadEnvelopeV2,
+) {
+    recover_published_worker_v3_fixture(worker_v3_fixture::published_two_kernel_worker_v3_fixture())
 }
 
 fn recover_published_worker_v3_fixture(
@@ -1648,6 +1738,67 @@ fn v3_host_roster_admission_retains_one_inert_envelope_for_the_exact_table() {
     assert!(!admitted.grants_load_authority());
     assert!(!admitted.grants_launch_authority());
     admitted.revalidate_currentness().unwrap();
+}
+
+#[test]
+fn v3_host_roster_admission_matches_a_two_kernel_compiler_descriptor_exactly() {
+    let (_directory, recovered) = recovered_two_kernel_host_fixture();
+    let admitted =
+        admit_recovered_worker_v3_roster_v1::<WorkerV3TwoTransformRoster>(recovered).unwrap();
+    assert_eq!(admitted.entrypoints().len(), 2);
+    assert_eq!(admitted.entrypoints()[0].ordinal(), 0);
+    assert_eq!(admitted.entrypoints()[1].ordinal(), 1);
+    assert_ne!(
+        admitted.entrypoints()[0].lineage_identity(),
+        admitted.entrypoints()[1].lineage_identity()
+    );
+    assert_eq!(
+        admitted.descriptor(0).unwrap().kernel_id().as_bytes(),
+        &FIRST_TRANSFORM_BINDING
+    );
+    assert_eq!(
+        admitted.descriptor(1).unwrap().kernel_id().as_bytes(),
+        &SECOND_TRANSFORM_BINDING
+    );
+    assert_eq!(
+        admitted.descriptor(0).unwrap().logical_name().as_str(),
+        "first_transform"
+    );
+    assert_eq!(
+        admitted.descriptor(1).unwrap().logical_name().as_str(),
+        "second_transform"
+    );
+    assert_eq!(
+        admitted.physical_kernel(0).unwrap().symbol(),
+        "first_transform.kd"
+    );
+    assert_eq!(
+        admitted.physical_kernel(1).unwrap().symbol(),
+        "second_transform.kd"
+    );
+    assert_eq!(admitted.descriptor_binding(0).unwrap().kernel_index(), 0);
+    assert_eq!(admitted.descriptor_binding(1).unwrap().kernel_index(), 1);
+    assert!(admitted.authenticates_descriptor_source());
+    assert!(!admitted.authenticates_compiler_origin());
+    assert!(!admitted.authenticates_verification_authority());
+    assert!(!admitted.grants_load_authority());
+    assert!(!admitted.grants_launch_authority());
+    admitted.revalidate_currentness().unwrap();
+
+    let (_directory, recovered) = recovered_two_kernel_host_fixture();
+    assert!(matches!(
+        admit_recovered_worker_v3_roster_v1::<WorkerV3ReorderedTransformRoster>(recovered),
+        Err(RecoveredWorkerV3AdmissionErrorV1::RosterEntryReordered {
+            expected_ordinal: 0,
+            actual_ordinal: 1,
+        })
+    ));
+
+    let (_directory, recovered) = recovered_two_kernel_host_fixture();
+    assert!(matches!(
+        admit_recovered_worker_v3_roster_v1::<WorkerV3SubstitutedTransformRoster>(recovered),
+        Err(RecoveredWorkerV3AdmissionErrorV1::RosterEntrySubstituted { ordinal: 1 })
+    ));
 }
 
 #[test]
