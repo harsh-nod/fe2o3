@@ -18,22 +18,43 @@ case "$SUITE:$FEATURE" in
     attention:kernel-kda-decode)
         SYMBOL=gfx950_kda_gdn_decode; KERNARG=96; WG=64; LDS=0; OCML=1
         TEST=gfx950_kda_gdn_decode_rust_cov6_matches_cpu_reference; ISA=scalar ;;
+    attention:kernel-kda-decode-wave-tiled-v1)
+        SYMBOL=gfx950_kda_gdn_decode; KERNARG=96; WG=64; LDS=0; OCML=1
+        TEST=gfx950_kda_gdn_decode_rust_cov6_matches_cpu_reference; ISA=scalar ;;
     attention:kernel-kda-prefill)
+        SYMBOL=gfx950_kda_gdn_prefill; KERNARG=112; WG=64; LDS=0; OCML=1
+        TEST=gfx950_kda_gdn_prefill_rust_cov6_matches_cpu_reference; ISA=scalar ;;
+    attention:kernel-kda-prefill-channel-mask-v1)
         SYMBOL=gfx950_kda_gdn_prefill; KERNARG=112; WG=64; LDS=0; OCML=1
         TEST=gfx950_kda_gdn_prefill_rust_cov6_matches_cpu_reference; ISA=scalar ;;
     attention:kernel-content-sparse-attention)
         SYMBOL=gfx950_content_sparse_attention; KERNARG=96; WG=64; LDS=2048; OCML=1
         TEST=gfx950_content_sparse_attention_rust_cov6_matches_cpu_reference; ISA=fp8_attention ;;
+    attention:kernel-content-sparse-attention-reciprocal-reuse-v1)
+        SYMBOL=gfx950_content_sparse_attention; KERNARG=96; WG=64; LDS=2048; OCML=1
+        TEST=gfx950_content_sparse_attention_rust_cov6_matches_cpu_reference; ISA=fp8_attention ;;
     attention:kernel-compressed-hybrid-attention)
+        SYMBOL=gfx950_compressed_hybrid_attention; KERNARG=80; WG=64; LDS=2048; OCML=1
+        TEST=gfx950_compressed_hybrid_attention_rust_cov6_matches_cpu_reference; ISA=fp8_attention ;;
+    attention:kernel-compressed-hybrid-attention-reciprocal-reuse-v1)
         SYMBOL=gfx950_compressed_hybrid_attention; KERNARG=80; WG=64; LDS=2048; OCML=1
         TEST=gfx950_compressed_hybrid_attention_rust_cov6_matches_cpu_reference; ISA=fp8_attention ;;
     attention:kernel-attnres-aggregate)
         SYMBOL=gfx950_attnres_aggregate; KERNARG=48; WG=64; LDS=0; OCML=1
         TEST=gfx950_attnres_aggregate_rust_cov6_matches_cpu_reference; ISA=scalar ;;
+    attention:kernel-attnres-aggregate-explicit-reuse-v1)
+        SYMBOL=gfx950_attnres_aggregate; KERNARG=48; WG=64; LDS=0; OCML=1
+        TEST=gfx950_attnres_aggregate_rust_cov6_matches_cpu_reference; ISA=scalar ;;
     attention:kernel-four-branch-residual)
         SYMBOL=gfx950_four_branch_residual; KERNARG=64; WG=64; LDS=0; OCML=1
         TEST=gfx950_four_branch_residual_rust_cov6_matches_cpu_reference; ISA=scalar ;;
+    attention:kernel-four-branch-residual-explicit-v1)
+        SYMBOL=gfx950_four_branch_residual; KERNARG=64; WG=64; LDS=0; OCML=1
+        TEST=gfx950_four_branch_residual_rust_cov6_matches_cpu_reference; ISA=scalar ;;
     attention:kernel-mhc-sinkhorn-mix)
+        SYMBOL=gfx950_mhc_sinkhorn_mix; KERNARG=48; WG=64; LDS=0; OCML=1
+        TEST=gfx950_mhc_sinkhorn_mix_rust_cov6_matches_cpu_reference; ISA=scalar ;;
+    attention:kernel-mhc-sinkhorn-mix-scalar-v1)
         SYMBOL=gfx950_mhc_sinkhorn_mix; KERNARG=48; WG=64; LDS=0; OCML=1
         TEST=gfx950_mhc_sinkhorn_mix_rust_cov6_matches_cpu_reference; ISA=scalar ;;
     systems:kernel-moe-route)

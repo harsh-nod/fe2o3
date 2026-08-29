@@ -6,8 +6,8 @@ use fe2o3_device::{DeviceMath, DisjointSlice, thread};
 #[cfg(target_arch = "amdgpu")]
 use fe2o3_device::{
     Gfx950F32AccumulatorFragment, Gfx950Fp8E4M3, Gfx950Fp8MfmaAMatrix, Gfx950LdsTransposeTile,
-    Gfx950Matrix, Gfx950Subgroup, Gfx950TransposeUninitialized, Index1D,
-    KernelError, KernelResult, StridedReadView2D, Wave64, WaveLane, kernel,
+    Gfx950Matrix, Gfx950Subgroup, Gfx950TransposeUninitialized, Index1D, KernelError, KernelResult,
+    StridedReadView2D, Wave64, WaveLane, kernel,
 };
 #[cfg(not(target_arch = "amdgpu"))]
 use fe2o3_device::{GridExclusive, GridLeader};
@@ -213,7 +213,11 @@ fn kda_update_v1(
 }
 
 /// Applies one three-tap gated recurrence and RMS-normalizes its 16-channel state.
-#[cfg(all(target_arch = "amdgpu", feature = "kernel-kda-decode"))]
+#[cfg(all(
+    target_arch = "amdgpu",
+    feature = "kernel-kda-decode",
+    not(feature = "kernel-kda-decode-wave-tiled-v1")
+))]
 #[kernel(
     typed,
     namespace = "e889654ad32a788ce48bde79cfdaea178a36ea3a152838739f4cb3b68fa0ac74",
@@ -315,10 +319,21 @@ pub fn gfx950_kda_gdn_decode(
 
 /// Applies the same recurrence to eight ordered tokens in two four-token chunks.
 #[cfg(all(target_arch = "amdgpu", feature = "kernel-kda-prefill"))]
-#[kernel(
-    typed,
-    namespace = "cd3e02ed84a8aa33b86dbff7f78b04ca4f454df507d15d78a2ff86de83e72706",
-    launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
+#[cfg_attr(
+    not(feature = "kernel-kda-prefill-channel-mask-v1"),
+    kernel(
+        typed,
+        namespace = "aaa9f9d6d19739146cfa7a4c759dfc76f8b0930b9bfd4a6dbbb3ee367d6baa30",
+        launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
+    )
+)]
+#[cfg_attr(
+    feature = "kernel-kda-prefill-channel-mask-v1",
+    kernel(
+        typed,
+        namespace = "4c95e18c7041c547f3f4868d77bb0031f243578ae65cce331bea915b16fa6698",
+        launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
+    )
 )]
 pub fn gfx950_kda_gdn_prefill(
     input: &[f32],
@@ -354,7 +369,10 @@ pub fn gfx950_kda_gdn_prefill(
     };
     let index = thread::index_1d();
     let linear = index.get();
+    #[cfg(not(feature = "kernel-kda-prefill-channel-mask-v1"))]
     let channel = linear % CHANNELS_V1;
+    #[cfg(feature = "kernel-kda-prefill-channel-mask-v1")]
+    let channel = linear & (CHANNELS_V1 - 1);
     let math = DeviceMath::current();
     let subgroup = Gfx950Subgroup::current();
     let mut state = initial_state.load_or(0, channel, 0.0);
@@ -604,10 +622,21 @@ fn attention_score_v1(q: &[u8], k: &[u8], token: usize) -> Option<f32> {
 
 /// Selects two content blocks, retains three tokens, and computes one 16-value output.
 #[cfg(all(target_arch = "amdgpu", feature = "kernel-content-sparse-attention"))]
-#[kernel(
-    typed,
-    namespace = "1ad77b6d88884cb5768cc3b9f3527c5b83fe5f1c04e3fc2823f2f8c0167e058a",
-    launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
+#[cfg_attr(
+    not(feature = "kernel-content-sparse-attention-reciprocal-reuse-v1"),
+    kernel(
+        typed,
+        namespace = "1ad77b6d88884cb5768cc3b9f3527c5b83fe5f1c04e3fc2823f2f8c0167e058a",
+        launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
+    )
+)]
+#[cfg_attr(
+    feature = "kernel-content-sparse-attention-reciprocal-reuse-v1",
+    kernel(
+        typed,
+        namespace = "7b09e8c92ad93d9ee112cdec003e83736c48ddc8b874ca4c677b07c299887d0a",
+        launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
+    )
 )]
 pub fn gfx950_content_sparse_attention(
     q: &[u8],
@@ -1055,9 +1084,18 @@ pub fn gfx950_content_sparse_attention(
     let weight1 = math.exp_f32(selected1_attention - maximum);
     let weight2 = math.exp_f32(selected2_attention - maximum);
     let denominator = weight0 + weight1 + weight2;
+    #[cfg(not(feature = "kernel-content-sparse-attention-reciprocal-reuse-v1"))]
     let result = weight0 / denominator * decode_fp8_e4m3_v1!(value.load_or(selected0, column, 0))
         + weight1 / denominator * decode_fp8_e4m3_v1!(value.load_or(selected1, column, 0))
         + weight2 / denominator * decode_fp8_e4m3_v1!(value.load_or(selected2, column, 0));
+    #[cfg(feature = "kernel-content-sparse-attention-reciprocal-reuse-v1")]
+    let result = {
+        let reciprocal = 1.0 / denominator;
+        (weight0 * decode_fp8_e4m3_v1!(value.load_or(selected0, column, 0))
+            + weight1 * decode_fp8_e4m3_v1!(value.load_or(selected1, column, 0))
+            + weight2 * decode_fp8_e4m3_v1!(value.load_or(selected2, column, 0)))
+            * reciprocal
+    };
     let output_gate = 1.0 / (1.0 + math.exp_f32(-maximum * 0.01));
     if index.get() < CHANNELS_V1 {
         if let Some(slot) = output.get_mut(index) {
@@ -1139,10 +1177,21 @@ pub fn gfx950_content_sparse_attention(
 
 /// Mixes a four-token local window with three four-token compressed global blocks.
 #[cfg(all(target_arch = "amdgpu", feature = "kernel-compressed-hybrid-attention"))]
-#[kernel(
-    typed,
-    namespace = "8fa973d4231e28e54ecbd607f539aaba65a895db610f15d56a698336b119f65a",
-    launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
+#[cfg_attr(
+    not(feature = "kernel-compressed-hybrid-attention-reciprocal-reuse-v1"),
+    kernel(
+        typed,
+        namespace = "8fa973d4231e28e54ecbd607f539aaba65a895db610f15d56a698336b119f65a",
+        launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
+    )
+)]
+#[cfg_attr(
+    feature = "kernel-compressed-hybrid-attention-reciprocal-reuse-v1",
+    kernel(
+        typed,
+        namespace = "d7adec7b36d1cff2570cea261cbfc82bd45eb023c7e4eff3c2bcb1ece171dfe7",
+        launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
+    )
 )]
 pub fn gfx950_compressed_hybrid_attention(
     q: &[u8],
@@ -1223,10 +1272,20 @@ pub fn gfx950_compressed_hybrid_attention(
     let local_weight2 = math.exp_f32(score14 - local_maximum);
     let local_weight3 = math.exp_f32(score15 - local_maximum);
     let local_sum = local_weight0 + local_weight1 + local_weight2 + local_weight3;
+    #[cfg(not(feature = "kernel-compressed-hybrid-attention-reciprocal-reuse-v1"))]
     let local_value = local_weight0 / local_sum * decode_fp8_e4m3_v1!(value.load_or(12, column, 0))
         + local_weight1 / local_sum * decode_fp8_e4m3_v1!(value.load_or(13, column, 0))
         + local_weight2 / local_sum * decode_fp8_e4m3_v1!(value.load_or(14, column, 0))
         + local_weight3 / local_sum * decode_fp8_e4m3_v1!(value.load_or(15, column, 0));
+    #[cfg(feature = "kernel-compressed-hybrid-attention-reciprocal-reuse-v1")]
+    let local_value = {
+        let reciprocal = 1.0 / local_sum;
+        (local_weight0 * decode_fp8_e4m3_v1!(value.load_or(12, column, 0))
+            + local_weight1 * decode_fp8_e4m3_v1!(value.load_or(13, column, 0))
+            + local_weight2 * decode_fp8_e4m3_v1!(value.load_or(14, column, 0))
+            + local_weight3 * decode_fp8_e4m3_v1!(value.load_or(15, column, 0)))
+            * reciprocal
+    };
 
     let mut global_maximum = score0;
     if score4 > global_maximum {
@@ -1254,9 +1313,15 @@ pub fn gfx950_compressed_hybrid_attention(
         + decode_fp8_e4m3_v1!(value.load_or(10, column, 0))
         + decode_fp8_e4m3_v1!(value.load_or(11, column, 0)))
         * 0.25;
+    #[cfg(not(feature = "kernel-compressed-hybrid-attention-reciprocal-reuse-v1"))]
     let global_value = global_weight0 / global_sum * compressed0
         + global_weight1 / global_sum * compressed1
         + global_weight2 / global_sum * compressed2;
+    #[cfg(feature = "kernel-compressed-hybrid-attention-reciprocal-reuse-v1")]
+    let global_value = (global_weight0 * compressed0
+        + global_weight1 * compressed1
+        + global_weight2 * compressed2)
+        * (1.0 / global_sum);
     let mix = 1.0 / (1.0 + math.exp_f32(-score0 * 0.01));
     if index.get() < CHANNELS_V1 {
         if let Some(slot) = output.get_mut(index) {
@@ -1366,7 +1431,11 @@ pub fn gfx950_compressed_hybrid_attention(
 }
 
 /// Softmax-aggregates four residual depths independently for each channel.
-#[cfg(all(target_arch = "amdgpu", feature = "kernel-attnres-aggregate"))]
+#[cfg(all(
+    target_arch = "amdgpu",
+    feature = "kernel-attnres-aggregate",
+    not(feature = "kernel-attnres-aggregate-explicit-reuse-v1")
+))]
 #[kernel(
     typed,
     namespace = "e71b4250d8eb3fd5371802ed2141e5a0fb880b6a79c48d7b928a8cde0ae0e0de",
@@ -1461,7 +1530,11 @@ pub fn gfx950_attnres_aggregate(
 }
 
 /// Adds four sigmoid-gated branches to one 16-channel residual.
-#[cfg(all(target_arch = "amdgpu", feature = "kernel-four-branch-residual"))]
+#[cfg(all(
+    target_arch = "amdgpu",
+    feature = "kernel-four-branch-residual",
+    not(feature = "kernel-four-branch-residual-explicit-v1")
+))]
 #[kernel(
     typed,
     namespace = "a6d721410f3856c46249fb8b78604d6a1f0caf5b050dd6f3a160ab8c40e51583",
@@ -1535,7 +1608,11 @@ pub fn gfx950_four_branch_residual(
 }
 
 /// Runs three Sinkhorn row/column normalizations and mixes four input streams.
-#[cfg(all(target_arch = "amdgpu", feature = "kernel-mhc-sinkhorn-mix"))]
+#[cfg(all(
+    target_arch = "amdgpu",
+    feature = "kernel-mhc-sinkhorn-mix",
+    not(feature = "kernel-mhc-sinkhorn-mix-scalar-v1")
+))]
 #[kernel(
     typed,
     namespace = "f93558928ce6e41a2fe8d78cfb28aa199dae54059fc9b7599a4348f4ad73c966",
