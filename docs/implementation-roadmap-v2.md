@@ -488,10 +488,15 @@ earlier authority transition.
    trace using payload file offsets. The inert trace analysis also derives
    bounded dominators, post-dominators, exact reaching definitions, and
    canonical natural loops with exit edges, while rejecting blocks that cannot
-   reach an exit. These structural facts do not establish machine semantics or
-   termination. Production admission must still establish KIR/LLVM-to-machine
-   semantic refinement and bind its move-only receipt into Worker V3. Hardware
-   success remains an independent evidence class.
+   reach an exit. The bounded EXEC-control layer additionally binds exact
+   zero/nonzero EXEC branches to unique two-half reaching definitions, taken and
+   fallthrough blocks, an immediate post-dominator candidate, scalar mask
+   operands, and structurally matching saved-mask OR sites. These facts do not
+   assign opcode semantics, establish hardware reconvergence, prove a mask empty,
+   or establish termination. Production admission
+   must still establish KIR/LLVM-to-machine semantic refinement and bind its
+   move-only receipt into Worker V3. Hardware success remains an independent
+   evidence class.
 9. **Implemented bounded foundation: alpha/zeta source proofs and proof
    records.** Mechanical source-model proofs, negative mutations, freshness,
    and executable-evidence records exist. They do not give Rust source an

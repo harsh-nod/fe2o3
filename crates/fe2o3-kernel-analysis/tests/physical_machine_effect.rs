@@ -1,18 +1,19 @@
 use fe2o3_kernel_analysis::{
-    Gfx942InstructionRegisterFactsV1, Gfx942MachineDataflowV1, Gfx942ReachingDefinitionV1,
-    Gfx942RegisterAliasV1, Gfx942RegisterFactsErrorV1, Gfx942RegisterUnitV1,
-    PHYSICAL_MACHINE_ANALYSIS_BUNDLE_DOMAIN_V1, PHYSICAL_MACHINE_ANALYSIS_BUNDLE_SCHEMA_VERSION_V1,
-    PHYSICAL_MACHINE_EFFECT_EVIDENCE_DOMAIN_V1, PHYSICAL_MACHINE_EFFECT_REQUEST_DOMAIN_V1,
-    PHYSICAL_MACHINE_EFFECT_SCHEMA_VERSION_V1, PHYSICAL_MACHINE_TRACE_EVIDENCE_DOMAIN_V1,
-    PHYSICAL_MACHINE_TRACE_SCHEMA_VERSION_V1, PhysicalMachineAnalysisEvidenceErrorV1,
-    PhysicalMachineAnalysisEvidenceV1, PhysicalMachineAnalyzerIdentityV1,
-    PhysicalMachineEffectAnalysisBasisV1, PhysicalMachineEffectBudgetV1,
-    PhysicalMachineEffectEntryRequestV1, PhysicalMachineEffectEvidenceErrorV1,
-    PhysicalMachineEffectEvidenceV1, PhysicalMachineEffectKindV1,
-    PhysicalMachineEffectRequestErrorV1, PhysicalMachineEffectRequestV1,
-    PhysicalMachineExecutionChallengeV1, PhysicalMachineOperandValueV1, PhysicalMachineTargetV1,
-    PhysicalMachineToolchainIdentityV1, PhysicalMachineTraceEvidenceErrorV1,
-    PhysicalMachineTraceEvidenceV1,
+    Gfx942ExecBranchSenseV1, Gfx942ExecControlErrorV1, Gfx942ExecControlV1,
+    Gfx942ExecDefinitionOpcodeV1, Gfx942ExecMaskOperandV1, Gfx942InstructionRegisterFactsV1,
+    Gfx942MachineDataflowV1, Gfx942ReachingDefinitionV1, Gfx942RegisterAliasV1,
+    Gfx942RegisterFactsErrorV1, Gfx942RegisterUnitV1, PHYSICAL_MACHINE_ANALYSIS_BUNDLE_DOMAIN_V1,
+    PHYSICAL_MACHINE_ANALYSIS_BUNDLE_SCHEMA_VERSION_V1, PHYSICAL_MACHINE_EFFECT_EVIDENCE_DOMAIN_V1,
+    PHYSICAL_MACHINE_EFFECT_REQUEST_DOMAIN_V1, PHYSICAL_MACHINE_EFFECT_SCHEMA_VERSION_V1,
+    PHYSICAL_MACHINE_TRACE_EVIDENCE_DOMAIN_V1, PHYSICAL_MACHINE_TRACE_SCHEMA_VERSION_V1,
+    PhysicalMachineAnalysisEvidenceErrorV1, PhysicalMachineAnalysisEvidenceV1,
+    PhysicalMachineAnalyzerIdentityV1, PhysicalMachineEffectAnalysisBasisV1,
+    PhysicalMachineEffectBudgetV1, PhysicalMachineEffectEntryRequestV1,
+    PhysicalMachineEffectEvidenceErrorV1, PhysicalMachineEffectEvidenceV1,
+    PhysicalMachineEffectKindV1, PhysicalMachineEffectRequestErrorV1,
+    PhysicalMachineEffectRequestV1, PhysicalMachineExecutionChallengeV1,
+    PhysicalMachineOperandValueV1, PhysicalMachineTargetV1, PhysicalMachineToolchainIdentityV1,
+    PhysicalMachineTraceEvidenceErrorV1, PhysicalMachineTraceEvidenceV1,
 };
 use std::{collections::BTreeSet, fs};
 
@@ -455,6 +456,180 @@ fn loop_trace_fixture() -> (
     (request, effects, trace, offsets)
 }
 
+fn exec_control_trace_fixture(
+    definition_opcode: &'static str,
+    definition_source: &'static str,
+    restore_source: &'static str,
+) -> (
+    PhysicalMachineEffectRequestV1,
+    PhysicalMachineEffectEvidenceV1,
+    Vec<u8>,
+) {
+    let mut payload = vec![0_u8; 64];
+    let encodings = [
+        [0x10, 0x11, 0x12, 0x13],
+        [0x20, 0x21, 0x22, 0x23],
+        [0x30, 0x31, 0x32, 0x33],
+        [0x40, 0x41, 0x42, 0x43],
+        [0x50, 0x51, 0x52, 0x53],
+        [0x60, 0x61, 0x62, 0x63],
+    ];
+    for (index, encoding) in encodings.iter().enumerate() {
+        let offset = 8 + index * 4;
+        payload[offset..offset + 4].copy_from_slice(encoding);
+    }
+    let request = request_with(&payload, vec![entry("loop_entry", budget())]);
+    let function = Function {
+        symbol: "loop_entry",
+        offset: 8,
+        size: 24,
+        callees: Vec::new(),
+    };
+    let effect_records = [Effect {
+        entry: "loop_entry",
+        function: "loop_entry",
+        offset: 28,
+        kind: 4,
+        width: 0,
+    }];
+    let effect_bytes = evidence_with_entry_range(
+        &request,
+        8,
+        24,
+        std::slice::from_ref(&function),
+        &effect_records,
+    );
+    let effects =
+        PhysicalMachineEffectEvidenceV1::decode_canonical_for(&request, &effect_bytes).unwrap();
+    let blocks = [
+        TraceBlock {
+            ordinal: 0,
+            first_offset: 8,
+            instruction_count: 2,
+            successors: vec![1, 2],
+        },
+        TraceBlock {
+            ordinal: 1,
+            first_offset: 16,
+            instruction_count: 1,
+            successors: vec![3],
+        },
+        TraceBlock {
+            ordinal: 2,
+            first_offset: 20,
+            instruction_count: 1,
+            successors: vec![3],
+        },
+        TraceBlock {
+            ordinal: 3,
+            first_offset: 24,
+            instruction_count: 2,
+            successors: Vec::new(),
+        },
+    ];
+    let instructions = [
+        TraceInstruction {
+            offset: 8,
+            block: 0,
+            opcode: definition_opcode,
+            encoding: encodings[0],
+            definitions: 1,
+            operands: vec![
+                TraceOperand::Register("SGPR4_SGPR5", None),
+                TraceOperand::Register(definition_source, None),
+            ],
+            implicit_definitions: vec!["EXEC", "SCC"],
+            implicit_uses: vec!["EXEC"],
+            branch: 0,
+            target: 0,
+            flags: 0,
+            memory: 0,
+            width: 0,
+        },
+        TraceInstruction {
+            offset: 12,
+            block: 0,
+            opcode: "S_CBRANCH_EXECZ_vi",
+            encoding: encodings[1],
+            definitions: 0,
+            operands: vec![TraceOperand::Signed(1)],
+            implicit_definitions: Vec::new(),
+            implicit_uses: vec!["EXEC"],
+            branch: 1,
+            target: 20,
+            flags: 4,
+            memory: 0,
+            width: 0,
+        },
+        TraceInstruction {
+            offset: 16,
+            block: 1,
+            opcode: "S_BRANCH_vi",
+            encoding: encodings[2],
+            definitions: 0,
+            operands: vec![TraceOperand::Signed(1)],
+            implicit_definitions: Vec::new(),
+            implicit_uses: Vec::new(),
+            branch: 2,
+            target: 24,
+            flags: 4,
+            memory: 0,
+            width: 0,
+        },
+        TraceInstruction {
+            offset: 20,
+            block: 2,
+            opcode: "S_BRANCH_vi",
+            encoding: encodings[3],
+            definitions: 0,
+            operands: vec![TraceOperand::Signed(0)],
+            implicit_definitions: Vec::new(),
+            implicit_uses: Vec::new(),
+            branch: 2,
+            target: 24,
+            flags: 4,
+            memory: 0,
+            width: 0,
+        },
+        TraceInstruction {
+            offset: 24,
+            block: 3,
+            opcode: "S_OR_B64_vi",
+            encoding: encodings[4],
+            definitions: 1,
+            operands: vec![
+                TraceOperand::Register("EXEC", None),
+                TraceOperand::Register("EXEC", None),
+                TraceOperand::Register(restore_source, None),
+            ],
+            implicit_definitions: vec!["SCC"],
+            implicit_uses: Vec::new(),
+            branch: 0,
+            target: 0,
+            flags: 0,
+            memory: 0,
+            width: 0,
+        },
+        TraceInstruction {
+            offset: 28,
+            block: 3,
+            opcode: "S_ENDPGM_vi",
+            encoding: encodings[5],
+            definitions: 0,
+            operands: Vec::new(),
+            implicit_definitions: Vec::new(),
+            implicit_uses: Vec::new(),
+            branch: 4,
+            target: 0,
+            flags: 4,
+            memory: 0,
+            width: 0,
+        },
+    ];
+    let (trace, _) = encode_trace(&request, &effects, &blocks, &instructions);
+    (request, effects, trace)
+}
+
 fn encode_trace(
     request: &PhysicalMachineEffectRequestV1,
     effects: &PhysicalMachineEffectEvidenceV1,
@@ -607,6 +782,13 @@ fn configured_retained_machine_analysis_reopens_offline() {
     assert!(!dataflow.establishes_machine_semantics());
     assert!(!dataflow.establishes_compiler_refinement());
     assert!(!dataflow.grants_launch_authority());
+    let exec_control =
+        Gfx942ExecControlV1::derive(analysis.trace()).expect("derive bounded gfx942 EXEC control");
+    assert_eq!(exec_control.trace_identity(), analysis.trace().identity());
+    assert!(!exec_control.establishes_machine_semantics());
+    assert!(!exec_control.establishes_compiler_refinement());
+    assert!(!exec_control.proves_empty_masks());
+    assert!(!exec_control.grants_launch_authority());
 
     let functions = dataflow.function_symbols().collect::<Vec<_>>();
     assert_eq!(functions.len(), 1, "retained scalar slice has one function");
@@ -679,6 +861,36 @@ fn configured_retained_machine_analysis_reopens_offline() {
         dataflow
             .instruction_dominates(function, definition, branch.instruction_offset())
             .unwrap()
+    );
+    let trap_control = exec_control
+        .branches(function)
+        .unwrap()
+        .iter()
+        .find(|candidate| candidate.branch_offset() == branch.instruction_offset())
+        .expect("trap EXEC branch has one structural control record");
+    assert_eq!(trap_control.sense(), Gfx942ExecBranchSenseV1::NonZero);
+    assert_eq!(trap_control.taken_block(), trap.block_ordinal());
+    assert_eq!(
+        trap_control.immediate_post_dominator(),
+        Some(trap_control.fallthrough_block())
+    );
+    assert_eq!(trap_control.definition().offset(), Some(definition));
+    assert_eq!(
+        trap_control.definition().opcode(),
+        Some(Gfx942ExecDefinitionOpcodeV1::AndSave)
+    );
+    let restore = analysis
+        .trace()
+        .instructions()
+        .iter()
+        .find(|instruction| {
+            instruction.block_ordinal() == trap_control.fallthrough_block()
+                && instruction.opcode() == "S_OR_B64_vi"
+        })
+        .expect("trap branch post-dominator has a matching saved-mask OR site");
+    assert_eq!(
+        trap_control.matching_restore_offset(),
+        Some(restore.instruction_offset())
     );
 
     let mut registers = BTreeSet::new();
@@ -787,6 +999,93 @@ fn gfx942_machine_dataflow_is_loop_aware_bounded_and_inert() {
     assert!(!dataflow.establishes_machine_semantics());
     assert!(!dataflow.establishes_compiler_refinement());
     assert!(!dataflow.grants_launch_authority());
+}
+
+#[test]
+fn gfx942_exec_control_binds_mask_branch_post_dominator_and_restore_pattern() {
+    let (request, effects, trace_bytes) =
+        exec_control_trace_fixture("S_AND_SAVEEXEC_B64_vi", "VCC", "SGPR4_SGPR5");
+    let trace =
+        PhysicalMachineTraceEvidenceV1::decode_canonical_for(&request, &effects, &trace_bytes)
+            .unwrap();
+    let control = Gfx942ExecControlV1::derive(&trace).unwrap();
+
+    assert_eq!(control.trace_identity(), trace.identity());
+    assert_eq!(
+        control.function_symbols().collect::<Vec<_>>(),
+        ["loop_entry"]
+    );
+    let branches = control.branches("loop_entry").unwrap();
+    assert_eq!(branches.len(), 1);
+    let branch = &branches[0];
+    assert_eq!(branch.branch_offset(), 12);
+    assert_eq!(branch.block(), 0);
+    assert_eq!(branch.sense(), Gfx942ExecBranchSenseV1::Zero);
+    assert_eq!(branch.taken_block(), 2);
+    assert_eq!(branch.fallthrough_block(), 1);
+    assert_eq!(branch.immediate_post_dominator(), Some(3));
+    assert_eq!(branch.definition().offset(), Some(8));
+    assert_eq!(
+        branch.definition().opcode(),
+        Some(Gfx942ExecDefinitionOpcodeV1::AndSave)
+    );
+    assert_eq!(
+        branch.definition().saved_exec(),
+        Some(&Gfx942RegisterAliasV1::decode("SGPR4_SGPR5").unwrap())
+    );
+    assert_eq!(
+        branch.definition().sources(),
+        [Gfx942ExecMaskOperandV1::Register(
+            Gfx942RegisterAliasV1::decode("VCC").unwrap()
+        )]
+    );
+    assert_eq!(branch.matching_restore_offset(), Some(24));
+    assert!(!control.establishes_machine_semantics());
+    assert!(!control.establishes_compiler_refinement());
+    assert!(!control.proves_empty_masks());
+    assert!(!control.grants_launch_authority());
+    assert_eq!(
+        control.branches("missing"),
+        Err(Gfx942ExecControlErrorV1::UnknownFunction(
+            "missing".to_owned()
+        ))
+    );
+}
+
+#[test]
+fn gfx942_exec_control_rejects_unknown_definitions_and_does_not_infer_restores() {
+    let (request, effects, trace_bytes) =
+        exec_control_trace_fixture("S_UNKNOWN_SAVEEXEC_B64_vi", "VCC", "SGPR4_SGPR5");
+    let trace =
+        PhysicalMachineTraceEvidenceV1::decode_canonical_for(&request, &effects, &trace_bytes)
+            .unwrap();
+    assert_eq!(
+        Gfx942ExecControlV1::derive(&trace),
+        Err(Gfx942ExecControlErrorV1::UnsupportedExecDefinitionOpcode(
+            "S_UNKNOWN_SAVEEXEC_B64_vi".to_owned()
+        ))
+    );
+
+    let (request, effects, trace_bytes) =
+        exec_control_trace_fixture("S_AND_SAVEEXEC_B64_vi", "VCC", "SGPR6_SGPR7");
+    let trace =
+        PhysicalMachineTraceEvidenceV1::decode_canonical_for(&request, &effects, &trace_bytes)
+            .unwrap();
+    let control = Gfx942ExecControlV1::derive(&trace).unwrap();
+    assert_eq!(
+        control.branches("loop_entry").unwrap()[0].matching_restore_offset(),
+        None
+    );
+
+    let (request, effects, trace_bytes) =
+        exec_control_trace_fixture("S_AND_SAVEEXEC_B64_vi", "VGPR0_VGPR1", "SGPR4_SGPR5");
+    let trace =
+        PhysicalMachineTraceEvidenceV1::decode_canonical_for(&request, &effects, &trace_bytes)
+            .unwrap();
+    assert_eq!(
+        Gfx942ExecControlV1::derive(&trace),
+        Err(Gfx942ExecControlErrorV1::InvalidExecDefinitionShape(8))
+    );
 }
 
 #[test]

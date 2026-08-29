@@ -950,9 +950,14 @@ is complete, and the recorded runs grant no current production authority.
   authenticated receipt binds the complete bundle. A bounded inert analysis of
   that trace additionally derives block dominators, post-dominators, exact
   reaching definitions, and canonical natural loops with their exit edges; it
-  rejects CFGs whose blocks cannot reach an exit. These are structural extractor
+  rejects CFGs whose blocks cannot reach an exit. A separate bounded EXEC
+  control analysis joins exact `S_CBRANCH_EXECZ`/`EXECNZ` sites to their taken
+  and fallthrough blocks, unique two-half EXEC reaching definition, immediate
+  post-dominator, canonical scalar mask operands, and a matching saved-mask OR
+  site when one is structurally present. These are structural extractor
   facts, not compiler, source, Verus, address-safety, race-freedom, machine
-  semantics, termination, or launch authority.
+  semantics, hardware reconvergence, a proof that any mask is empty, termination,
+  or launch authority.
   The Worker V3 semantic-refinement join remains open.
 - G6/G7 includes canonical multi-input AMDGPU link plans and a standalone
   direct LLVM/LLD worker with bounded Rust/C++ protocols. Device FFI macros and
