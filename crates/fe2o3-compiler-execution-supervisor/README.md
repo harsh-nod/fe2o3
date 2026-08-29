@@ -8,9 +8,10 @@ Both source images are read through stable file descriptions, checked against
 exact SHA-256 and length measurements, validated as loader-independent x86-64
 ELF images, copied into distinct anonymous mode-0555 memfds, sealed with
 `WRITE`, `GROW`, `SHRINK`, `EXEC`, and `SEAL`, reopened read-only, and measured
-again. The issuer must match the exact executable and runtime measurements in
-the sealed caller policy. The launcher measurement belongs to trusted service
-provisioning and is never accepted in a per-launch request.
+again through the shared protected-static-executable custody contract. The
+issuer must match the exact executable and runtime measurements in the sealed
+caller policy. The launcher measurement belongs to trusted service provisioning
+and is never accepted in a per-launch request.
 
 The admitted program is move-only and exposes no descriptor. A second move-only
 state now binds that exact program and policy to the canonical signing-key

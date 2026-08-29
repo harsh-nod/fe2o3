@@ -860,6 +860,7 @@ dependencies = [
  "fe2o3-compiler-execution-issuer",
  "fe2o3-compiler-execution-protocol",
  "fe2o3-protected-service-profile",
+ "fe2o3-protected-static-executable",
  "fe2o3-runtime-protocol",
  "fe2o3-static-preexec-manifest",
  "libc",

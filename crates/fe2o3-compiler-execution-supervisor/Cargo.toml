@@ -14,6 +14,7 @@ fe2o3-broker-authority-service.workspace = true
 fe2o3-compiler-closure-capability.workspace = true
 fe2o3-compiler-execution-issuer.workspace = true
 fe2o3-compiler-execution-protocol.workspace = true
+fe2o3-protected-static-executable.workspace = true
 fe2o3-protected-service-profile.workspace = true
 fe2o3-runtime-protocol.workspace = true
 fe2o3-static-preexec-manifest.workspace = true

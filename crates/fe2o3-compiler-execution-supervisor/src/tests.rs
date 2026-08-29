@@ -2,8 +2,8 @@ use std::fs::{self, OpenOptions};
 use std::io::{IoSlice, Write as _};
 use std::mem::MaybeUninit;
 use std::os::fd::{AsFd, AsRawFd, OwnedFd};
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-use std::path::Path;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
@@ -18,11 +18,14 @@ use fe2o3_compiler_execution_protocol::{
     CompilerExecutionServiceLaunchManifestV1, CompilerExecutionServiceReadyV1,
     CompilerExecutionSupervisorHandoffV1,
 };
+use fe2o3_runtime_protocol::sealed_static_application_identity_v1;
 use fe2o3_static_preexec_manifest::StaticPreexecObjectClassV1;
+use rustix::fs::{Mode, OFlags, SealFlags};
 use rustix::net::{
     AddressFamily, RecvFlags, SendAncillaryBuffer, SendAncillaryMessage, SendFlags, SocketFlags,
     SocketType, bind, connect, listen, recv, sendmsg, socket_with, socketpair,
 };
+use sha2::{Digest, Sha256};
 
 use super::*;
 
@@ -402,25 +405,29 @@ fn exact_images_are_independently_sealed_before_authority_binding() {
     )
     .unwrap();
     admitted.revalidate().unwrap();
-    assert!(
-        !admitted
-            .launcher
-            .snapshot
-            .same_object_key(&admitted.issuer.snapshot)
+    assert_ne!(
+        admitted.launcher_object_identity().inode(),
+        admitted.issuer_object_identity().inode()
     );
     for image in [&admitted.launcher, &admitted.issuer] {
+        let clone = image.try_clone_for_launch().unwrap();
         assert_eq!(
-            rustix::fs::fcntl_getfl(&image.image).unwrap() & OFlags::ACCMODE,
+            rustix::fs::fcntl_getfl(&clone).unwrap() & OFlags::ACCMODE,
             OFlags::RDONLY
         );
+        let required = SealFlags::WRITE
+            | SealFlags::GROW
+            | SealFlags::SHRINK
+            | SealFlags::EXEC
+            | SealFlags::SEAL;
         assert!(
-            rustix::fs::fcntl_get_seals(&image.image)
+            rustix::fs::fcntl_get_seals(&clone)
                 .unwrap()
-                .contains(REQUIRED_EXECUTABLE_SEALS_V1)
+                .contains(required)
         );
-        assert_eq!(image.snapshot.mode & 0o7777, EXECUTABLE_MODE_V1);
-        assert!(rustix::fs::fchmod(&image.image, Mode::RUSR).is_err());
-        assert!(image.image.set_len(0).is_err());
+        assert_eq!(image.object_identity().mode() & 0o7777, 0o555);
+        assert!(rustix::fs::fchmod(&clone, Mode::RUSR).is_err());
+        assert!(clone.set_len(0).is_err());
     }
     assert_ne!(
         admitted.launcher_object_identity().inode(),
@@ -590,7 +597,7 @@ fn public_debug_contains_no_descriptor_or_source_path() {
     let rendered = format!("{admitted:?}");
     assert!(!rendered.contains("/proc/"));
     assert!(!rendered.contains(fixture.root.to_str().unwrap()));
-    assert!(!rendered.contains(&format!("fd: {}", admitted.launcher.image.as_raw_fd())));
+    assert!(!rendered.contains("descriptor"));
 }
 
 #[test]

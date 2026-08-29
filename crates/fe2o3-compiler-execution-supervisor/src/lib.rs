@@ -6,21 +6,18 @@ compile_error!("fe2o3-compiler-execution-supervisor requires Linux x86-64");
 
 use std::error::Error;
 use std::fmt;
-use std::fs::{File, Metadata};
-use std::io::{self, Write};
-use std::os::fd::AsRawFd;
-use std::os::unix::fs::{FileExt, MetadataExt};
-use std::path::PathBuf;
+use std::fs::File;
+use std::io;
 
 use fe2o3_broker_authority_service::sealed_static_issuer_runtime_measurement_v1;
 use fe2o3_compiler_closure_capability::CompilerExecutionPolicyCapabilityV1;
 use fe2o3_compiler_execution_protocol::CompilerExecutionIssuerMeasurementV1;
-use fe2o3_runtime_protocol::{
-    SealedStaticApplicationErrorV1, sealed_static_application_identity_v1,
+use fe2o3_protected_static_executable::{
+    ProtectedStaticExecutableErrorV1, ProtectedStaticExecutableMeasurementV1,
+    ProtectedStaticExecutableOwnerV1, ProtectedStaticExecutableV1,
 };
+use fe2o3_runtime_protocol::SealedStaticApplicationErrorV1;
 use fe2o3_static_preexec_manifest::StaticPreexecObjectIdentityV1;
-use rustix::fs::{MemfdFlags, Mode, OFlags, SealFlags};
-use sha2::{Digest, Sha256};
 
 mod authority;
 #[allow(unsafe_code)]
@@ -64,12 +61,6 @@ pub use session::{
 
 const MAX_PROVISIONED_EXECUTABLE_BYTES_V1: u64 =
     fe2o3_compiler_execution_protocol::MAX_COMPILER_EXECUTION_SUPERVISOR_LAUNCHER_BYTES_V1;
-const REQUIRED_EXECUTABLE_SEALS_V1: SealFlags = SealFlags::WRITE
-    .union(SealFlags::GROW)
-    .union(SealFlags::SHRINK)
-    .union(SealFlags::EXEC)
-    .union(SealFlags::SEAL);
-const EXECUTABLE_MODE_V1: u32 = 0o555;
 
 /// Exact trusted-provisioning measurement for one static executable image.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -251,7 +242,7 @@ impl AdmittedIssuerProgramV1 {
             )?,
             "compiler issuer",
         )?;
-        if launcher.snapshot.same_object_key(&issuer.snapshot) {
+        if launcher.same_object_key(&issuer) {
             return Err(IssuerProgramAdmissionErrorV1::InvalidSealedImage(
                 "aliased launcher and issuer",
             ));
@@ -281,11 +272,7 @@ impl AdmittedIssuerProgramV1 {
         }
         self.launcher.revalidate()?;
         self.issuer.revalidate()?;
-        if self
-            .launcher
-            .snapshot
-            .same_object_key(&self.issuer.snapshot)
-        {
+        if self.launcher.same_object_key(&self.issuer) {
             return Err(IssuerProgramAdmissionErrorV1::InvalidSealedImage(
                 "aliased launcher and issuer",
             ));
@@ -370,38 +357,33 @@ impl AdmittedIssuerProgramV1 {
 }
 
 struct PinnedSealedStaticExecutableV1 {
-    image: File,
-    snapshot: FileSnapshotV1,
+    executable: ProtectedStaticExecutableV1,
     measurement: ProvisionedStaticExecutableMeasurementV1,
-    sealed_static_identity: [u8; 32],
     role: &'static str,
 }
 
 impl PinnedSealedStaticExecutableV1 {
+    fn same_object_key(&self, other: &Self) -> bool {
+        let this = self.executable.object_identity();
+        let other = other.executable.object_identity();
+        this.device() == other.device() && this.inode() == other.inode()
+    }
+
     fn admit(
         source: File,
         expected: ProvisionedStaticExecutableMeasurementV1,
         role: &'static str,
     ) -> Result<Self, IssuerProgramAdmissionErrorV1> {
-        let before = validate_source(&source, expected, role)?;
-        let bytes = read_exact_source(&source, expected, role)?;
-        let after = snapshot(&source, "inspect provisioned executable after read")?;
-        if before != after {
-            return Err(IssuerProgramAdmissionErrorV1::SourceChanged(role));
-        }
-        let digest: [u8; 32] = Sha256::digest(&bytes).into();
-        if digest != expected.sha256 {
-            return Err(IssuerProgramAdmissionErrorV1::MeasurementMismatch(role));
-        }
-        let sealed_static_identity = sealed_static_application_identity_v1(&bytes)
-            .map_err(|source| IssuerProgramAdmissionErrorV1::InvalidStaticImage { role, source })?;
-        let image = create_sealed_executable(&bytes, role)?;
-        let snapshot = validate_sealed_executable(&image, expected, role)?;
+        let executable = ProtectedStaticExecutableV1::seal_source_for_owner(
+            source,
+            protected_measurement(expected, role)?,
+            ProtectedStaticExecutableOwnerV1::current(),
+            role,
+        )
+        .map_err(|error| map_protected_executable_error(error, role))?;
         let admitted = Self {
-            image,
-            snapshot,
+            executable,
             measurement: expected,
-            sealed_static_identity,
             role,
         };
         admitted.revalidate()?;
@@ -409,281 +391,86 @@ impl PinnedSealedStaticExecutableV1 {
     }
 
     fn revalidate(&self) -> Result<(), IssuerProgramAdmissionErrorV1> {
-        let current = validate_sealed_executable(&self.image, self.measurement, self.role)?;
-        if current != self.snapshot {
-            return Err(IssuerProgramAdmissionErrorV1::InvalidSealedImage(self.role));
-        }
-        let bytes = read_exact_source(&self.image, self.measurement, self.role)?;
-        if <[u8; 32]>::from(Sha256::digest(&bytes)) != self.measurement.sha256
-            || sealed_static_application_identity_v1(&bytes).map_err(|source| {
-                IssuerProgramAdmissionErrorV1::InvalidStaticImage {
-                    role: self.role,
-                    source,
-                }
-            })? != self.sealed_static_identity
-        {
-            return Err(IssuerProgramAdmissionErrorV1::InvalidSealedImage(self.role));
-        }
-        Ok(())
+        self.executable
+            .revalidate()
+            .map_err(|error| map_protected_executable_error(error, self.role))
     }
 
     fn object_identity(&self) -> StaticPreexecObjectIdentityV1 {
+        let object = self.executable.object_identity();
         StaticPreexecObjectIdentityV1::new(
-            self.snapshot.device,
-            self.snapshot.inode,
-            self.snapshot.size,
-            self.snapshot.mode,
+            object.device(),
+            object.inode(),
+            object.byte_len(),
+            object.mode(),
         )
     }
 
     fn try_clone_for_launch(&self) -> Result<File, IssuerProgramAdmissionErrorV1> {
-        self.revalidate()?;
-        let image = self
-            .image
-            .try_clone()
-            .map_err(|source| IssuerProgramAdmissionErrorV1::Io {
-                operation: "clone sealed executable for protected launch",
-                source,
-            })?;
-        rustix::io::fcntl_setfd(&image, rustix::io::FdFlags::CLOEXEC).map_err(|source| {
-            IssuerProgramAdmissionErrorV1::Io {
-                operation: "protect cloned executable launch descriptor",
-                source: source.into(),
-            }
-        })?;
-        self.revalidate_clone(&image)?;
-        Ok(image)
+        self.executable
+            .try_clone_for_exec()
+            .map_err(|error| map_protected_executable_error(error, self.role))
     }
 
     fn revalidate_clone(&self, image: &File) -> Result<(), IssuerProgramAdmissionErrorV1> {
-        let current = validate_sealed_executable(image, self.measurement, self.role)?;
-        if current != self.snapshot {
-            return Err(IssuerProgramAdmissionErrorV1::InvalidSealedImage(self.role));
-        }
-        Ok(())
+        self.executable
+            .revalidate_exec_clone(image)
+            .map_err(|error| map_protected_executable_error(error, self.role))
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct FileSnapshotV1 {
-    device: u64,
-    inode: u64,
-    size: u64,
-    mode: u32,
-    uid: u32,
-    gid: u32,
-    links: u64,
-    modified_seconds: i64,
-    modified_nanoseconds: i64,
-    changed_seconds: i64,
-    changed_nanoseconds: i64,
-}
-
-impl FileSnapshotV1 {
-    fn from_metadata(metadata: &Metadata) -> Self {
-        Self {
-            device: metadata.dev(),
-            inode: metadata.ino(),
-            size: metadata.len(),
-            mode: metadata.mode(),
-            uid: metadata.uid(),
-            gid: metadata.gid(),
-            links: metadata.nlink(),
-            modified_seconds: metadata.mtime(),
-            modified_nanoseconds: metadata.mtime_nsec(),
-            changed_seconds: metadata.ctime(),
-            changed_nanoseconds: metadata.ctime_nsec(),
-        }
-    }
-
-    const fn same_object_key(&self, other: &Self) -> bool {
-        self.device == other.device && self.inode == other.inode
-    }
-}
-
-fn snapshot(
-    file: &File,
-    operation: &'static str,
-) -> Result<FileSnapshotV1, IssuerProgramAdmissionErrorV1> {
-    file.metadata()
-        .map(|metadata| FileSnapshotV1::from_metadata(&metadata))
-        .map_err(|source| IssuerProgramAdmissionErrorV1::Io { operation, source })
-}
-
-fn validate_source(
-    source: &File,
+fn protected_measurement(
     expected: ProvisionedStaticExecutableMeasurementV1,
     role: &'static str,
-) -> Result<FileSnapshotV1, IssuerProgramAdmissionErrorV1> {
-    let descriptor_flags =
-        rustix::io::fcntl_getfd(source).map_err(|source| IssuerProgramAdmissionErrorV1::Io {
-            operation: "inspect provisioned executable descriptor flags",
-            source: source.into(),
-        })?;
-    let status =
-        rustix::fs::fcntl_getfl(source).map_err(|source| IssuerProgramAdmissionErrorV1::Io {
-            operation: "inspect provisioned executable status flags",
-            source: source.into(),
-        })?;
-    let observed = snapshot(source, "inspect provisioned executable")?;
-    if !descriptor_flags.contains(rustix::io::FdFlags::CLOEXEC)
-        || status & OFlags::ACCMODE != OFlags::RDONLY
-        || status.contains(OFlags::PATH)
-        || observed.mode & libc::S_IFMT != libc::S_IFREG
-        || observed.mode & 0o111 == 0
-        || observed.mode & (libc::S_ISUID | libc::S_ISGID) != 0
-        || observed.size != expected.byte_len
-    {
-        return Err(IssuerProgramAdmissionErrorV1::InvalidSource(role));
-    }
-    require_no_file_capability(source, role)?;
-    Ok(observed)
-}
-
-fn require_no_file_capability(
-    file: &File,
-    role: &'static str,
-) -> Result<(), IssuerProgramAdmissionErrorV1> {
-    let mut value = 0_u8;
-    match rustix::fs::fgetxattr(
-        file,
-        "security.capability",
-        std::slice::from_mut(&mut value),
-    ) {
-        Ok(_) | Err(rustix::io::Errno::RANGE) => {
-            Err(IssuerProgramAdmissionErrorV1::SourceFileCapability(role))
-        }
-        Err(rustix::io::Errno::NODATA | rustix::io::Errno::OPNOTSUPP) => Ok(()),
-        Err(source) => Err(IssuerProgramAdmissionErrorV1::Io {
-            operation: "inspect provisioned executable file capability",
-            source: source.into(),
-        }),
-    }
-}
-
-fn read_exact_source(
-    source: &File,
-    expected: ProvisionedStaticExecutableMeasurementV1,
-    role: &'static str,
-) -> Result<Vec<u8>, IssuerProgramAdmissionErrorV1> {
-    let length = usize::try_from(expected.byte_len)
-        .map_err(|_| IssuerProgramAdmissionErrorV1::InvalidMeasurement)?;
-    let mut bytes = Vec::new();
-    bytes
-        .try_reserve_exact(length)
-        .map_err(|_| IssuerProgramAdmissionErrorV1::InvalidMeasurement)?;
-    bytes.resize(length, 0);
-    source
-        .read_exact_at(&mut bytes, 0)
-        .map_err(|source| IssuerProgramAdmissionErrorV1::Io {
-            operation: "read exact provisioned executable",
-            source,
-        })?;
-    let mut trailing = [0_u8; 1];
-    if source
-        .read_at(&mut trailing, expected.byte_len)
-        .map_err(|source| IssuerProgramAdmissionErrorV1::Io {
-            operation: "check provisioned executable boundary",
-            source,
-        })?
-        != 0
-    {
-        return Err(IssuerProgramAdmissionErrorV1::SourceChanged(role));
-    }
-    Ok(bytes)
-}
-
-fn create_sealed_executable(
-    bytes: &[u8],
-    role: &'static str,
-) -> Result<File, IssuerProgramAdmissionErrorV1> {
-    let descriptor = rustix::fs::memfd_create(
-        c"fe2o3-protected-static-executable",
-        MemfdFlags::CLOEXEC | MemfdFlags::ALLOW_SEALING | MemfdFlags::EXEC,
+) -> Result<ProtectedStaticExecutableMeasurementV1, IssuerProgramAdmissionErrorV1> {
+    ProtectedStaticExecutableMeasurementV1::new(
+        expected.sha256,
+        expected.byte_len,
+        MAX_PROVISIONED_EXECUTABLE_BYTES_V1,
     )
-    .map_err(|source| IssuerProgramAdmissionErrorV1::Io {
-        operation: "create protected executable memfd",
-        source: source.into(),
-    })?;
-    let mut writable = File::from(descriptor);
-    writable
-        .write_all(bytes)
-        .map_err(|source| IssuerProgramAdmissionErrorV1::Io {
-            operation: "populate protected executable memfd",
-            source,
-        })?;
-    rustix::fs::fchmod(
-        &writable,
-        Mode::RUSR | Mode::RGRP | Mode::ROTH | Mode::XUSR | Mode::XGRP | Mode::XOTH,
-    )
-    .map_err(|source| IssuerProgramAdmissionErrorV1::Io {
-        operation: "set protected executable mode",
-        source: source.into(),
-    })?;
-    let content_and_exec = SealFlags::WRITE | SealFlags::GROW | SealFlags::SHRINK | SealFlags::EXEC;
-    rustix::fs::fcntl_add_seals(&writable, content_and_exec)
-        .and_then(|()| rustix::fs::fcntl_add_seals(&writable, SealFlags::SEAL))
-        .map_err(|source| IssuerProgramAdmissionErrorV1::Io {
-            operation: "seal protected executable memfd",
-            source: source.into(),
-        })?;
-    let path = PathBuf::from(format!("/proc/self/fd/{}", writable.as_raw_fd()));
-    let read_only = rustix::fs::open(&path, OFlags::RDONLY | OFlags::CLOEXEC, Mode::empty())
-        .map_err(|source| IssuerProgramAdmissionErrorV1::Io {
-            operation: "bind read-only protected executable descriptor",
-            source: source.into(),
-        })?;
-    let image = File::from(read_only);
-    drop(writable);
-    let byte_len = u64::try_from(bytes.len())
-        .map_err(|_| IssuerProgramAdmissionErrorV1::InvalidMeasurement)?;
-    validate_sealed_executable(
-        &image,
-        ProvisionedStaticExecutableMeasurementV1::new(Sha256::digest(bytes).into(), byte_len)?,
-        role,
-    )?;
-    Ok(image)
+    .map_err(|error| match error {
+        ProtectedStaticExecutableErrorV1::InvalidMeasurement => {
+            IssuerProgramAdmissionErrorV1::InvalidMeasurement
+        }
+        error => map_protected_executable_error(error, role),
+    })
 }
 
-fn validate_sealed_executable(
-    image: &File,
-    expected: ProvisionedStaticExecutableMeasurementV1,
-    role: &'static str,
-) -> Result<FileSnapshotV1, IssuerProgramAdmissionErrorV1> {
-    let descriptor_flags =
-        rustix::io::fcntl_getfd(image).map_err(|source| IssuerProgramAdmissionErrorV1::Io {
-            operation: "inspect sealed executable descriptor flags",
-            source: source.into(),
-        })?;
-    let status =
-        rustix::fs::fcntl_getfl(image).map_err(|source| IssuerProgramAdmissionErrorV1::Io {
-            operation: "inspect sealed executable status flags",
-            source: source.into(),
-        })?;
-    let seals =
-        rustix::fs::fcntl_get_seals(image).map_err(|source| IssuerProgramAdmissionErrorV1::Io {
-            operation: "inspect sealed executable seals",
-            source: source.into(),
-        })?;
-    let observed = snapshot(image, "inspect sealed executable object")?;
-    if !descriptor_flags.contains(rustix::io::FdFlags::CLOEXEC)
-        || status & OFlags::ACCMODE != OFlags::RDONLY
-        || status.contains(OFlags::PATH)
-        || !seals.contains(REQUIRED_EXECUTABLE_SEALS_V1)
-        || observed.mode & libc::S_IFMT != libc::S_IFREG
-        || observed.mode & 0o7777 != EXECUTABLE_MODE_V1
-        || observed.links != 0
-        || observed.size != expected.byte_len
-    {
-        return Err(IssuerProgramAdmissionErrorV1::InvalidSealedImage(role));
+fn map_protected_executable_error(
+    error: ProtectedStaticExecutableErrorV1,
+    fallback_role: &'static str,
+) -> IssuerProgramAdmissionErrorV1 {
+    match error {
+        ProtectedStaticExecutableErrorV1::InvalidMeasurement
+        | ProtectedStaticExecutableErrorV1::InvalidOwner => {
+            IssuerProgramAdmissionErrorV1::InvalidMeasurement
+        }
+        ProtectedStaticExecutableErrorV1::OwnerTransition(role)
+        | ProtectedStaticExecutableErrorV1::InvalidSource(role) => {
+            IssuerProgramAdmissionErrorV1::InvalidSource(role)
+        }
+        ProtectedStaticExecutableErrorV1::SourceFileCapability(role) => {
+            IssuerProgramAdmissionErrorV1::SourceFileCapability(role)
+        }
+        ProtectedStaticExecutableErrorV1::SourceChanged(role) => {
+            IssuerProgramAdmissionErrorV1::SourceChanged(role)
+        }
+        ProtectedStaticExecutableErrorV1::MeasurementMismatch(role) => {
+            IssuerProgramAdmissionErrorV1::MeasurementMismatch(role)
+        }
+        ProtectedStaticExecutableErrorV1::InvalidStaticImage { role, source } => {
+            IssuerProgramAdmissionErrorV1::InvalidStaticImage { role, source }
+        }
+        ProtectedStaticExecutableErrorV1::InvalidSealedImage(role)
+        | ProtectedStaticExecutableErrorV1::SealedFileCapability(role)
+        | ProtectedStaticExecutableErrorV1::Changed(role) => {
+            IssuerProgramAdmissionErrorV1::InvalidSealedImage(role)
+        }
+        ProtectedStaticExecutableErrorV1::Io { operation, source } => {
+            IssuerProgramAdmissionErrorV1::Io { operation, source }
+        }
+        _ => IssuerProgramAdmissionErrorV1::InvalidSealedImage(fallback_role),
     }
-    let bytes = read_exact_source(image, expected, role)?;
-    if <[u8; 32]>::from(Sha256::digest(&bytes)) != expected.sha256 {
-        return Err(IssuerProgramAdmissionErrorV1::InvalidSealedImage(role));
-    }
-    sealed_static_application_identity_v1(&bytes)
-        .map_err(|source| IssuerProgramAdmissionErrorV1::InvalidStaticImage { role, source })?;
-    Ok(observed)
 }
 
 #[cfg(test)]

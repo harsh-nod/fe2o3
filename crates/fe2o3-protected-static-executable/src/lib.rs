@@ -335,6 +335,18 @@ impl ProtectedStaticExecutableV1 {
         Ok(image)
     }
 
+    /// Revalidates an independently retained exec clone as the exact same sealed object.
+    pub fn revalidate_exec_clone(
+        &self,
+        image: &File,
+    ) -> Result<(), ProtectedStaticExecutableErrorV1> {
+        self.revalidate()?;
+        if validate_sealed_image(image, self.measurement, self.owner, self.role)? != self.snapshot {
+            return Err(ProtectedStaticExecutableErrorV1::Changed(self.role));
+        }
+        Ok(())
+    }
+
     /// Returns the trusted exact measurement.
     pub const fn measurement(&self) -> ProtectedStaticExecutableMeasurementV1 {
         self.measurement
