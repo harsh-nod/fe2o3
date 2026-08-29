@@ -81,6 +81,7 @@ fe2o3-device = { path = "crates/fe2o3-device", version = "=0.1.0" }
 fe2o3-debug-protocol = { path = "crates/fe2o3-debug-protocol" }
 fe2o3-differential = { path = "crates/fe2o3-differential" }
 fe2o3-drm-uapi = { path = "crates/fe2o3-drm-uapi" }
+fe2o3-external-anchor-coordinator = { path = "crates/fe2o3-external-anchor-coordinator" }
 fe2o3-external-anchor-protocol = { path = "crates/fe2o3-external-anchor-protocol" }
 fe2o3-external-anchor-provisioner = { path = "crates/fe2o3-external-anchor-provisioner" }
 fe2o3-external-anchor-service = { path = "crates/fe2o3-external-anchor-service" }
