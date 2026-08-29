@@ -1788,6 +1788,61 @@ fn remainder_mapping_reports_wraparound_collision() {
 }
 
 #[test]
+fn guarded_quotient_mapping_uses_exact_fallback_and_reports_a_collision() {
+    let context = &mut setup();
+    let function = function(context, "quotient_output");
+    let entry = function.get_entry_block(context);
+    let access_block = block(context, &function, "access");
+    let exit = block(context, &function, "exit");
+    let output = view(context, vec![4], MemorySpaceAttr::Global);
+    let invocation = InvocationIndexOp::new(context, 0, 64);
+    let divisor = IndexConstantOp::new(context, 16);
+    let quotient = IndexBinaryOp::new(
+        context,
+        IndexBinaryKindAttr::Divide,
+        invocation.result(context),
+        divisor.result(context),
+    );
+    let extent = IndexConstantOp::new(context, 4);
+    let guard = IndexLessThanBranchOp::new(
+        context,
+        quotient.result(context),
+        extent.result(context),
+        access_block,
+        exit,
+    );
+    let write = access(
+        context,
+        AccessKindAttr::Write,
+        output.result(context),
+        quotient.result(context),
+    );
+    let to_exit = BranchOp::new(context, exit);
+    let ret = ReturnOp::new(context);
+    append(context, entry, &output);
+    append(context, entry, &invocation);
+    append(context, entry, &divisor);
+    append(context, entry, &quotient);
+    append(context, entry, &extent);
+    append(context, entry, &guard);
+    append(context, access_block, &write);
+    append(context, access_block, &to_exit);
+    append(context, exit, &ret);
+
+    let report = run_pliron_ranked_race_check_v1(context, &function);
+    let (first, second) = report
+        .findings()
+        .iter()
+        .find_map(|finding| match finding {
+            RankedRaceFindingV1::ConflictingEffects { first, second, .. } => Some((first, second)),
+            _ => None,
+        })
+        .expect("quotient collision");
+    assert_eq!(first.invocation(), &[0]);
+    assert_eq!(second.invocation(), &[1]);
+}
+
+#[test]
 fn multidimensional_identity_is_clean_and_dropped_dimension_collides() {
     for drop_y in [false, true] {
         let context = &mut setup();

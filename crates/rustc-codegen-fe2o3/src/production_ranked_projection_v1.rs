@@ -4289,6 +4289,39 @@ fn checked_capability_stored_entries_v1(
     Ok(total)
 }
 
+fn blocked_mapping_fits_launch_v1(
+    linear_launch_upper_bound: Option<u64>,
+    lanes_per_block: u64,
+    elements_per_lane: u64,
+) -> bool {
+    if lanes_per_block == 0 || elements_per_lane == 0 {
+        return false;
+    }
+    let Some(block_elements) = lanes_per_block.checked_mul(elements_per_lane) else {
+        return false;
+    };
+    if lanes_per_block == 1 {
+        return true;
+    }
+    let Some(upper_bound) = linear_launch_upper_bound else {
+        return false;
+    };
+    let Some(maximum_raw) = upper_bound.checked_sub(1) else {
+        return true;
+    };
+    let block = maximum_raw / lanes_per_block;
+    let lane = maximum_raw % lanes_per_block;
+    block
+        .checked_mul(block_elements)
+        .and_then(|base| {
+            (elements_per_lane - 1)
+                .checked_mul(lanes_per_block)
+                .and_then(|component| base.checked_add(component))
+        })
+        .and_then(|base| base.checked_add(lane))
+        .is_some()
+}
+
 fn project_intrinsic_contracts(
     callables: &[SemanticCallableDeclV1],
     types: &[fe2o3_mir_model::semantic_mir_v1::SemanticTypeDeclV1],
@@ -4490,29 +4523,26 @@ fn project_intrinsic_contracts(
                 elements_per_lane,
                 ..
             } => {
-                if *lanes_per_block == 0 {
-                    return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                        "a malformed blocked mapping reached ranked projection",
-                    ));
-                }
-                if *lanes_per_block != 1
-                    && linear_launch_upper_bound
-                        .is_none_or(|upper_bound| upper_bound > *lanes_per_block)
-                {
-                    return Err(ProductionRankedProjectionErrorV1::Incomplete(
-                        "a multi-lane blocked mapping requires an authenticated rank-1 launch extent no larger than its lane block",
-                    ));
-                }
                 let expected = SemanticDisjointIndexSpaceV1::BlockedIndex1d {
                     lanes_per_block: *lanes_per_block,
                     elements_per_lane: *elements_per_lane,
                 };
                 if *output_space != expected
+                    || *lanes_per_block == 0
                     || *elements_per_lane == 0
                     || lanes_per_block.checked_mul(*elements_per_lane).is_none()
                 {
                     return Err(ProductionRankedProjectionErrorV1::Unsupported(
                         "a malformed blocked mapping reached ranked projection",
+                    ));
+                }
+                if !blocked_mapping_fits_launch_v1(
+                    linear_launch_upper_bound,
+                    *lanes_per_block,
+                    *elements_per_lane,
+                ) {
+                    return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                        "a multi-lane blocked mapping requires an authenticated finite rank-1 launch extent whose full blocked index range fits u64",
                     ));
                 }
                 let destination = simple_call_destination(call)?;
@@ -5197,17 +5227,18 @@ fn project_intrinsic_contracts(
                         "blocked accessor mapping identity changed",
                     ));
                 }
-                if *lanes_per_block == 0 {
+                if *lanes_per_block == 0 || *elements_per_lane == 0 {
                     return Err(ProductionRankedProjectionErrorV1::Unsupported(
                         "a malformed blocked mapping reached ranked projection",
                     ));
                 }
-                if *lanes_per_block != 1
-                    && linear_launch_upper_bound
-                        .is_none_or(|upper_bound| upper_bound > *lanes_per_block)
-                {
+                if !blocked_mapping_fits_launch_v1(
+                    linear_launch_upper_bound,
+                    *lanes_per_block,
+                    *elements_per_lane,
+                ) {
                     return Err(ProductionRankedProjectionErrorV1::Incomplete(
-                        "a multi-lane blocked accessor requires an authenticated rank-1 launch extent no larger than its lane block",
+                        "a multi-lane blocked accessor requires an authenticated finite rank-1 launch extent whose full blocked index range fits u64",
                     ));
                 }
                 let component = call
@@ -5250,12 +5281,83 @@ fn project_intrinsic_contracts(
                     )?;
                     (ProductionRankedValueV1::Local(block_base), component)
                 } else {
+                    let block_elements = lanes_per_block.checked_mul(*elements_per_lane).ok_or(
+                        ProductionRankedProjectionErrorV1::Unsupported(
+                            "blocked dimensions overflow u64",
+                        ),
+                    )?;
                     let component_offset = component.checked_mul(*lanes_per_block).ok_or(
                         ProductionRankedProjectionErrorV1::Unsupported(
                             "a blocked component offset overflows u64",
                         ),
                     )?;
-                    (projected.value, component_offset)
+                    reserve_operation(operations)?;
+                    let lanes = next_value_id(next_value)?;
+                    operations.push(ProductionRankedOperationV1::IndexConstant {
+                        result: lanes,
+                        value: *lanes_per_block,
+                    });
+                    reserve_operation(operations)?;
+                    let elements = next_value_id(next_value)?;
+                    operations.push(ProductionRankedOperationV1::IndexConstant {
+                        result: elements,
+                        value: block_elements,
+                    });
+                    reserve_operation(operations)?;
+                    let block = next_value_id(next_value)?;
+                    operations.push(ProductionRankedOperationV1::IndexBinary {
+                        result: block,
+                        kind: IndexBinaryKindAttr::Divide,
+                        lhs: projected.value,
+                        rhs: ProductionRankedValueV1::Local(lanes),
+                    });
+                    reserve_operation(operations)?;
+                    let lane = next_value_id(next_value)?;
+                    operations.push(ProductionRankedOperationV1::IndexBinary {
+                        result: lane,
+                        kind: IndexBinaryKindAttr::Remainder,
+                        lhs: projected.value,
+                        rhs: ProductionRankedValueV1::Local(lanes),
+                    });
+                    reserve_operation(operations)?;
+                    let block_base = next_value_id(next_value)?;
+                    operations.push(ProductionRankedOperationV1::IndexBinary {
+                        result: block_base,
+                        kind: IndexBinaryKindAttr::Multiply,
+                        lhs: ProductionRankedValueV1::Local(block),
+                        rhs: ProductionRankedValueV1::Local(elements),
+                    });
+                    reserve_operation(operations)?;
+                    let lane_base = next_value_id(next_value)?;
+                    operations.push(ProductionRankedOperationV1::IndexBinary {
+                        result: lane_base,
+                        kind: IndexBinaryKindAttr::Add,
+                        lhs: ProductionRankedValueV1::Local(block_base),
+                        rhs: ProductionRankedValueV1::Local(lane),
+                    });
+                    push_ranked_ir(
+                        ranked_ir,
+                        &format!(
+                            "  %{} = kernel.index_constant {}\n  %{} = kernel.index_constant {}\n  %{} = kernel.index_binary Divide {}, %{}\n  %{} = kernel.index_binary Remainder {}, %{}\n  %{} = kernel.index_binary Multiply %{}, %{}\n  %{} = kernel.index_binary Add %{}, %{}\n",
+                            lanes.get(),
+                            lanes_per_block,
+                            elements.get(),
+                            block_elements,
+                            block.get(),
+                            ranked_value_text_v1(projected.value),
+                            lanes.get(),
+                            lane.get(),
+                            ranked_value_text_v1(projected.value),
+                            lanes.get(),
+                            block_base.get(),
+                            block.get(),
+                            elements.get(),
+                            lane_base.get(),
+                            block_base.get(),
+                            lane.get(),
+                        ),
+                    )?;
+                    (ProductionRankedValueV1::Local(lane_base), component_offset)
                 };
                 reserve_operation(operations)?;
                 let component_value = next_value_id(next_value)?;
@@ -9755,7 +9857,11 @@ fn bounded_linear_launch_extent_v1(source_launch: &LaunchContract) -> Option<u64
     let BlockSize::Exact(block) = source_launch.block_size() else {
         return None;
     };
-    u64::from(block.x()).checked_mul(u64::from(source_launch.max_grid().x()))
+    let max_grid = source_launch.max_grid().x();
+    if max_grid == u32::MAX {
+        return None;
+    }
+    u64::from(block.x()).checked_mul(u64::from(max_grid))
 }
 
 fn checked_global_extent_v1(
@@ -14510,6 +14616,21 @@ mod tests {
     const U8_TYPE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(6);
     const I32_TYPE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(7);
     const U64_POINTER_TYPE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(8);
+
+    #[test]
+    fn blocked_launch_bound_checks_the_last_thread_and_component_without_wrapping() {
+        assert!(blocked_mapping_fits_launch_v1(Some(64), 16, 4));
+        assert!(!blocked_mapping_fits_launch_v1(None, 16, 4));
+        assert!(!blocked_mapping_fits_launch_v1(Some(64), 0, 4));
+        assert!(!blocked_mapping_fits_launch_v1(Some(64), 16, 0));
+        assert!(!blocked_mapping_fits_launch_v1(Some(64), u64::MAX, 2,));
+        assert!(blocked_mapping_fits_launch_v1(Some(1_u64 << 62), 16, 4));
+        assert!(!blocked_mapping_fits_launch_v1(
+            Some((1_u64 << 62) + 1),
+            16,
+            4,
+        ));
+    }
 
     #[test]
     fn authenticated_ranked_projection_exposes_only_the_v5_evidence_wire() {

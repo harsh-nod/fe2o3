@@ -24,6 +24,7 @@ use pliron::{
 };
 
 use crate::pliron_analysis_manager::PlironAnalysisManagerV1;
+use crate::pliron_analysis_witness::evaluate_raw_index_at_invocation_v1;
 use crate::pliron_invocation_trace::PlironTraceFailureV1;
 use crate::pliron_ranked_bounds::run_pliron_ranked_bounds_check_with_analyses_v1;
 use crate::pliron_sparse_index::SparseAffineIndexV1;
@@ -703,9 +704,18 @@ pub(crate) fn run_pliron_ranked_race_check_with_analyses_v1(
     }
 
     let zero_invocation = vec![0; launch_extents.len()];
+    let mut raw_evaluation_steps = 0;
     for effect in &effects {
         for (dimension, index) in effect.indices.iter().copied().enumerate() {
-            if sparse.fact(index).evaluate(&zero_invocation).is_none() {
+            if sparse.fact(index).evaluate(&zero_invocation).is_none()
+                && evaluate_raw_index_at_invocation_v1(
+                    context,
+                    index,
+                    &zero_invocation,
+                    &mut raw_evaluation_steps,
+                )
+                .is_none()
+            {
                 return one(RankedRaceFindingV1::UnresolvedIndex {
                     block: effect.location.block,
                     operation: effect.location.operation,
@@ -733,7 +743,16 @@ pub(crate) fn run_pliron_ranked_race_check_with_analyses_v1(
             let Some(indices) = effect
                 .indices
                 .iter()
-                .map(|index| sparse.fact(*index).evaluate(&invocation))
+                .map(|index| {
+                    sparse.fact(*index).evaluate(&invocation).or_else(|| {
+                        evaluate_raw_index_at_invocation_v1(
+                            context,
+                            *index,
+                            &invocation,
+                            &mut raw_evaluation_steps,
+                        )
+                    })
+                })
                 .collect::<Option<Vec<_>>>()
             else {
                 let (dimension, value) = effect
