@@ -627,6 +627,7 @@ dependencies = [
  "fe2o3-hsaco",
  "fe2o3-kfd-uapi",
  "fe2o3-runtime-model",
+ "libc",
  "rustix",
  "sha2 0.11.0",
 ]
