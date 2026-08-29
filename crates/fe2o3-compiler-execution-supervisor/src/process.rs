@@ -15,6 +15,9 @@ use fe2o3_compiler_execution_protocol::{
     CompilerExecutionServiceLaunchManifestV1, CompilerExecutionServiceReadyErrorV1,
     CompilerExecutionServiceReadyV1,
 };
+use fe2o3_protected_service_profile::{
+    ProtectedServiceProfileErrorV1, validate_current_protected_service_profile_v1,
+};
 use fe2o3_static_preexec_manifest::{
     PREEXEC_EXECUTABLE_FD, PREEXEC_MANIFEST_FD, PREEXEC_MAX_DESCRIPTORS, PREEXEC_SOURCE_FD_BASE,
 };
@@ -1527,9 +1530,27 @@ impl ExactProcessProfileV1 {
 pub fn validate_current_issuer_service_profile_v1(
     credentials: IssuerServiceCredentialProfileV1,
 ) -> Result<(), ProtectedIssuerLaunchErrorV1> {
-    ExactProcessProfileV1::capture(credentials)?;
-    require_owned_sigchld()?;
-    NamespaceSetV1::capture_self()?.revalidate_self()
+    validate_current_protected_service_profile_v1(credentials).map_err(map_profile_error)
+}
+
+fn map_profile_error(error: ProtectedServiceProfileErrorV1) -> ProtectedIssuerLaunchErrorV1 {
+    match error {
+        ProtectedServiceProfileErrorV1::ProcessProfile(reason) => {
+            ProtectedIssuerLaunchErrorV1::ProcessProfile(reason)
+        }
+        ProtectedServiceProfileErrorV1::Namespace(namespace) => {
+            ProtectedIssuerLaunchErrorV1::Namespace(namespace)
+        }
+        ProtectedServiceProfileErrorV1::InvalidState(reason) => {
+            ProtectedIssuerLaunchErrorV1::InvalidProcessState(reason)
+        }
+        ProtectedServiceProfileErrorV1::Io { operation, source } => {
+            ProtectedIssuerLaunchErrorV1::Io { operation, source }
+        }
+        _ => ProtectedIssuerLaunchErrorV1::InvalidProcessState(
+            "unrecognized protected-service profile failure",
+        ),
+    }
 }
 
 fn read_proc_status(path: &str) -> Result<ProcStatusProfileV1, ProtectedIssuerLaunchErrorV1> {

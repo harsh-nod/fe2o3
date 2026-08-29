@@ -836,6 +836,7 @@ dependencies = [
  "fe2o3-compiler-execution-client",
  "fe2o3-compiler-execution-issuer",
  "fe2o3-compiler-execution-protocol",
+ "fe2o3-protected-service-profile",
  "fe2o3-runtime-protocol",
  "fe2o3-static-preexec-manifest",
  "libc",
@@ -1413,6 +1414,14 @@ dependencies = [
  "tokio",
  "tower",
  "zeroize",
+]
+
+[[package]]
+name = "fe2o3-protected-service-profile"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "rustix",
 ]
 
 [[package]]

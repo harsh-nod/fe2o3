@@ -8,103 +8,21 @@ use fe2o3_broker_authority_service::{
     ProtectedExternalAnchorServiceAdmissionV1, ProtectedServiceAdmissionErrorV1,
 };
 use fe2o3_compiler_closure_capability::CompilerExecutionSigningKeyCapabilityV1;
+pub use fe2o3_protected_service_profile::{
+    PROTECTED_SERVICE_SECUREBITS_V1 as ISSUER_SERVICE_SECUREBITS_V1,
+    ProtectedServiceCredentialProfileErrorV1 as IssuerServiceCredentialProfileErrorV1,
+    ProtectedServiceCredentialProfileV1 as IssuerServiceCredentialProfileV1,
+};
 use rustix::fs::{FileType, OFlags};
 
 use crate::{AdmittedIssuerProgramV1, IssuerProgramAdmissionErrorV1};
 
 const SERVICE_ROOT_MODE_V1: u32 = 0o700;
 const PERMISSION_AND_SPECIAL_BITS: u32 = 0o7777;
-const INVALID_ID: u32 = u32::MAX;
-
-const SECBIT_NOROOT: u32 = 1 << 0;
-const SECBIT_NOROOT_LOCKED: u32 = 1 << 1;
-const SECBIT_NO_SETUID_FIXUP: u32 = 1 << 2;
-const SECBIT_NO_SETUID_FIXUP_LOCKED: u32 = 1 << 3;
-const SECBIT_KEEP_CAPS_LOCKED: u32 = 1 << 5;
-const SECBIT_NO_CAP_AMBIENT_RAISE: u32 = 1 << 6;
-const SECBIT_NO_CAP_AMBIENT_RAISE_LOCKED: u32 = 1 << 7;
 
 pub(super) struct ExternalAnchorLaunchClonesV1<'a> {
     pub(super) peer: &'a File,
     pub(super) pidfd: &'a File,
-}
-
-/// Exact securebits value required in the protected issuer child.
-///
-/// Root privilege, set-ID capability fixups, retained capabilities, and future
-/// ambient-capability raises are all disabled and locked. `KEEP_CAPS` itself is
-/// deliberately clear while its lock bit is set.
-pub const ISSUER_SERVICE_SECUREBITS_V1: u32 = SECBIT_NOROOT
-    | SECBIT_NOROOT_LOCKED
-    | SECBIT_NO_SETUID_FIXUP
-    | SECBIT_NO_SETUID_FIXUP_LOCKED
-    | SECBIT_KEEP_CAPS_LOCKED
-    | SECBIT_NO_CAP_AMBIENT_RAISE
-    | SECBIT_NO_CAP_AMBIENT_RAISE_LOCKED;
-
-/// Stable failure constructing the one production issuer credential profile.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[non_exhaustive]
-pub enum IssuerServiceCredentialProfileErrorV1 {
-    /// UID zero or the Linux `-1` sentinel cannot be a dedicated service identity.
-    InvalidUid,
-    /// GID zero or the Linux `-1` sentinel cannot be a dedicated service identity.
-    InvalidGid,
-}
-
-impl fmt::Display for IssuerServiceCredentialProfileErrorV1 {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::InvalidUid => formatter.write_str("invalid protected issuer service UID"),
-            Self::InvalidGid => formatter.write_str("invalid protected issuer service GID"),
-        }
-    }
-}
-
-impl Error for IssuerServiceCredentialProfileErrorV1 {}
-
-/// Trusted configuration for the sole protected issuer process profile.
-///
-/// The eventual child must have all real/effective/saved/filesystem IDs equal
-/// to this dedicated non-root identity, no supplementary groups, empty
-/// effective/permitted/inheritable/ambient/bounding capability sets,
-/// [`ISSUER_SERVICE_SECUREBITS_V1`], `no_new_privs=1`, `dumpable=0`, a zero
-/// core limit, umask `077`, and the supervisor's unchanged user, mount, PID,
-/// network, IPC, UTS, cgroup, and time namespaces. This value is inert trusted
-/// configuration; construction does not claim that a process has established
-/// the profile.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct IssuerServiceCredentialProfileV1 {
-    uid: u32,
-    gid: u32,
-}
-
-impl IssuerServiceCredentialProfileV1 {
-    /// Constructs the fixed production profile for one dedicated service user.
-    pub const fn new(uid: u32, gid: u32) -> Result<Self, IssuerServiceCredentialProfileErrorV1> {
-        if uid == 0 || uid == INVALID_ID {
-            return Err(IssuerServiceCredentialProfileErrorV1::InvalidUid);
-        }
-        if gid == 0 || gid == INVALID_ID {
-            return Err(IssuerServiceCredentialProfileErrorV1::InvalidGid);
-        }
-        Ok(Self { uid, gid })
-    }
-
-    /// Returns the required real/effective/saved/filesystem service UID.
-    pub const fn uid(self) -> u32 {
-        self.uid
-    }
-
-    /// Returns the required real/effective/saved/filesystem service GID.
-    pub const fn gid(self) -> u32 {
-        self.gid
-    }
-
-    /// Returns the only accepted securebits value.
-    pub const fn securebits(self) -> u32 {
-        ISSUER_SERVICE_SECUREBITS_V1
-    }
 }
 
 /// Failure while binding or revalidating protected issuer launch custody.
@@ -381,8 +299,8 @@ impl ProtectedIssuerSupervisorV1 {
 fn require_current_service_identity(
     credentials: IssuerServiceCredentialProfileV1,
 ) -> Result<(), ProtectedIssuerSupervisorErrorV1> {
-    if rustix::process::geteuid().as_raw() != credentials.uid
-        || rustix::process::getegid().as_raw() != credentials.gid
+    if rustix::process::geteuid().as_raw() != credentials.uid()
+        || rustix::process::getegid().as_raw() != credentials.gid()
     {
         return Err(ProtectedIssuerSupervisorErrorV1::ServiceIdentityMismatch);
     }
@@ -491,7 +409,7 @@ fn validate_root(
             "object is not a directory",
         ));
     }
-    if snapshot.uid != credentials.uid || snapshot.gid != credentials.gid {
+    if snapshot.uid != credentials.uid() || snapshot.gid != credentials.gid() {
         return Err(ProtectedIssuerSupervisorErrorV1::InvalidRoot(
             "owner does not match the service UID and GID",
         ));
