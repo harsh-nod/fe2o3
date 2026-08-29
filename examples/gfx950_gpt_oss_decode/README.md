@@ -148,16 +148,16 @@ On 2026-08-29, ROCr HSA dispatch timestamps on physical GPU 6 of
 
 | Exact artifact | Samples | Median | Hierarchical bootstrap 95% CI | p5 / p95 |
 | --- | ---: | ---: | ---: | ---: |
-| Production Rust fused | 15,000 | `1.068124 ms` | `[1.067445, 1.068925] ms` | `1.060885 / 1.078085 ms` |
-| Exact HIP router + attention + expert sum | 15,000 triplets | `0.780683 ms` | `[0.780563, 0.780844] ms` | `0.778403 / 0.790043 ms` |
+| Production Rust fused | 15,000 | `1.064644 ms` | `[1.064483, 1.064844] ms` | `1.059803 / 1.069283 ms` |
+| Exact HIP router + attention + expert sum | 15,000 triplets | `0.780362 ms` | `[0.780243, 0.780482] ms` | `0.778162 / 0.783123 ms` |
 
-The exact unfused sequence is `0.7309x` the fused duration, or the fused
-candidate is `1.3682x` slower. Therefore this result does **not** support a
+The exact unfused sequence is `0.7330x` the fused duration, or the fused
+candidate is `1.3643x` slower. Therefore this result does **not** support a
 fastest or state-of-the-art claim, even among the admitted exact artifacts.
 It shows that eliminating two dispatches does not offset the fused kernel's
 long dependency chain and register pressure at this one-wave batch-1 shape.
 
-The campaign source commit is `109e1966d36d4188c43cafe5cb455c1ac3dd0767`.
+The campaign source commit is `c1383e97db732f9f1ff8105f10d5c2b5971143e1`.
 [`perf-evidence/gpt-oss-layer-tile-evidence-v1.json`](../../perf-evidence/gpt-oss-layer-tile-evidence-v1.json)
 pins the summaries and retained raw-record hashes. `amd-smi` observations found
 no process entry with nonzero GPU memory, activity, or CU occupancy before or
@@ -198,8 +198,8 @@ T_resource  = max(above)             = 188.7465 ns
 ```
 
 The bound file does not provide a BF16 peak, so omitting that term makes the
-reported floor more optimistic. The production median is about `5,659x` this
-resource floor; the comparator is about `4,136x`. These ratios do not mean
+reported floor more optimistic. The production median is about `5,641x` this
+resource floor; the comparator is about `4,134x`. These ratios do not mean
 either kernel can approach the bound: `T_resource` assumes full-device
 occupancy, while this tutorial launches one dependent Wave64 workgroup and has
 unmodeled scalar, transcendental, instruction-latency, and dispatch costs. No
