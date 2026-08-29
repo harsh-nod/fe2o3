@@ -1,16 +1,17 @@
 use fe2o3_kernel_analysis::{
-    PHYSICAL_MACHINE_ANALYSIS_BUNDLE_DOMAIN_V1, PHYSICAL_MACHINE_ANALYSIS_BUNDLE_SCHEMA_VERSION_V1,
-    PHYSICAL_MACHINE_EFFECT_EVIDENCE_DOMAIN_V1, PHYSICAL_MACHINE_EFFECT_REQUEST_DOMAIN_V1,
-    PHYSICAL_MACHINE_EFFECT_SCHEMA_VERSION_V1, PHYSICAL_MACHINE_TRACE_EVIDENCE_DOMAIN_V1,
-    PHYSICAL_MACHINE_TRACE_SCHEMA_VERSION_V1, PhysicalMachineAnalysisEvidenceErrorV1,
-    PhysicalMachineAnalysisEvidenceV1, PhysicalMachineAnalyzerIdentityV1,
-    PhysicalMachineEffectAnalysisBasisV1, PhysicalMachineEffectBudgetV1,
-    PhysicalMachineEffectEntryRequestV1, PhysicalMachineEffectEvidenceErrorV1,
-    PhysicalMachineEffectEvidenceV1, PhysicalMachineEffectKindV1,
-    PhysicalMachineEffectRequestErrorV1, PhysicalMachineEffectRequestV1,
-    PhysicalMachineExecutionChallengeV1, PhysicalMachineOperandValueV1, PhysicalMachineTargetV1,
-    PhysicalMachineToolchainIdentityV1, PhysicalMachineTraceEvidenceErrorV1,
-    PhysicalMachineTraceEvidenceV1,
+    Gfx942InstructionRegisterFactsV1, Gfx942RegisterAliasV1, Gfx942RegisterFactsErrorV1,
+    Gfx942RegisterUnitV1, PHYSICAL_MACHINE_ANALYSIS_BUNDLE_DOMAIN_V1,
+    PHYSICAL_MACHINE_ANALYSIS_BUNDLE_SCHEMA_VERSION_V1, PHYSICAL_MACHINE_EFFECT_EVIDENCE_DOMAIN_V1,
+    PHYSICAL_MACHINE_EFFECT_REQUEST_DOMAIN_V1, PHYSICAL_MACHINE_EFFECT_SCHEMA_VERSION_V1,
+    PHYSICAL_MACHINE_TRACE_EVIDENCE_DOMAIN_V1, PHYSICAL_MACHINE_TRACE_SCHEMA_VERSION_V1,
+    PhysicalMachineAnalysisEvidenceErrorV1, PhysicalMachineAnalysisEvidenceV1,
+    PhysicalMachineAnalyzerIdentityV1, PhysicalMachineEffectAnalysisBasisV1,
+    PhysicalMachineEffectBudgetV1, PhysicalMachineEffectEntryRequestV1,
+    PhysicalMachineEffectEvidenceErrorV1, PhysicalMachineEffectEvidenceV1,
+    PhysicalMachineEffectKindV1, PhysicalMachineEffectRequestErrorV1,
+    PhysicalMachineEffectRequestV1, PhysicalMachineExecutionChallengeV1,
+    PhysicalMachineOperandValueV1, PhysicalMachineTargetV1, PhysicalMachineToolchainIdentityV1,
+    PhysicalMachineTraceEvidenceErrorV1, PhysicalMachineTraceEvidenceV1,
 };
 use std::{collections::BTreeSet, fs};
 
@@ -601,6 +602,8 @@ fn configured_retained_machine_analysis_reopens_offline() {
 
     let mut registers = BTreeSet::new();
     for instruction in analysis.trace().instructions() {
+        Gfx942InstructionRegisterFactsV1::derive(instruction)
+            .expect("derive closed gfx942 register facts");
         for operand in instruction.operands() {
             if let PhysicalMachineOperandValueV1::Register(register) = operand.value() {
                 registers.insert(register.as_str());
@@ -628,6 +631,62 @@ fn configured_retained_machine_analysis_reopens_offline() {
         for instruction in analysis.trace().instructions() {
             eprintln!("instruction {instruction:?}");
         }
+    }
+}
+
+#[test]
+fn gfx942_register_aliases_are_atomic_contiguous_and_bounded() {
+    let wide = Gfx942RegisterAliasV1::decode("SGPR4_SGPR5_SGPR6_SGPR7").unwrap();
+    assert_eq!(
+        wide.units(),
+        &[
+            Gfx942RegisterUnitV1::Sgpr(4),
+            Gfx942RegisterUnitV1::Sgpr(5),
+            Gfx942RegisterUnitV1::Sgpr(6),
+            Gfx942RegisterUnitV1::Sgpr(7),
+        ]
+    );
+    assert!(wide.overlaps(&Gfx942RegisterAliasV1::decode("SGPR7").unwrap()));
+    assert!(!wide.overlaps(&Gfx942RegisterAliasV1::decode("VGPR7").unwrap()));
+    assert_eq!(
+        Gfx942RegisterAliasV1::decode("EXEC").unwrap().units(),
+        &[
+            Gfx942RegisterUnitV1::ExecLow,
+            Gfx942RegisterUnitV1::ExecHigh
+        ]
+    );
+    assert_eq!(
+        Gfx942RegisterAliasV1::decode("VCC_LO").unwrap().units(),
+        &[Gfx942RegisterUnitV1::VccLow]
+    );
+
+    for (name, expected) in [
+        (
+            "AGPR0",
+            Gfx942RegisterFactsErrorV1::UnsupportedRegister("AGPR0".to_owned()),
+        ),
+        (
+            "SGPR01",
+            Gfx942RegisterFactsErrorV1::NonCanonicalRegister("SGPR01".to_owned()),
+        ),
+        (
+            "SGPR3_SGPR5",
+            Gfx942RegisterFactsErrorV1::NonContiguousRegisterAlias("SGPR3_SGPR5".to_owned()),
+        ),
+        (
+            "VGPR0_SGPR1",
+            Gfx942RegisterFactsErrorV1::MixedRegisterAlias("VGPR0_SGPR1".to_owned()),
+        ),
+        (
+            "VGPR256",
+            Gfx942RegisterFactsErrorV1::RegisterIndexOutOfRange {
+                name: "VGPR256".to_owned(),
+                index: 256,
+                maximum: 255,
+            },
+        ),
+    ] {
+        assert_eq!(Gfx942RegisterAliasV1::decode(name), Err(expected));
     }
 }
 
@@ -1032,6 +1091,20 @@ fn machine_trace_binds_exact_bytes_def_use_effects_and_loop_cfg() {
     assert_eq!(trace.instructions()[1].implicit_uses(), &["EXEC"]);
     assert!(trace.instructions()[1].flags().may_load());
     assert!(trace.instructions()[3].flags().may_trap());
+    let load = Gfx942InstructionRegisterFactsV1::derive(&trace.instructions()[1]).unwrap();
+    assert_eq!(load.definitions(), &[Gfx942RegisterUnitV1::Vgpr(0)]);
+    assert_eq!(
+        load.uses(),
+        &[
+            Gfx942RegisterUnitV1::Vgpr(2),
+            Gfx942RegisterUnitV1::Vgpr(3),
+            Gfx942RegisterUnitV1::ExecLow,
+            Gfx942RegisterUnitV1::ExecHigh,
+        ]
+    );
+    assert!(!load.establishes_machine_semantics());
+    assert!(!load.establishes_compiler_refinement());
+    assert!(!load.grants_launch_authority());
     assert_eq!(trace.identity().byte_len(), bytes.len() as u64);
     assert!(trace.binds_exact_payload_instruction_bytes());
     assert!(!trace.establishes_machine_semantics());
