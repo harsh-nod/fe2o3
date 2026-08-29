@@ -556,6 +556,10 @@ pub(crate) fn run_pliron_ranked_race_check_with_analyses_v1(
         .iter()
         .filter_map(|effect| effect.kind.writes_memory().then_some(effect.noalias_class))
         .collect::<HashSet<_>>();
+    // Read-only allocation classes cannot participate in a data race. Keep
+    // reads that may alias a write, but do not require unrelated input-only
+    // address calculations to be recoverable by the race proof.
+    effects.retain(|effect| classes_with_writes.contains(&effect.noalias_class));
     let layout = match analyses.execution_layout() {
         Ok(layout) => layout,
         Err(failure) => {
