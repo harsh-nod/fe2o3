@@ -61,7 +61,7 @@ use compiler_proof_inputs_v3::{
 use hsaco_fixture::{
     ScalarAddFixtureMutation, scalar_add_fixture_with, slice_fixture_with_descriptor_table,
     slice_fixture_with_descriptor_table_and_workgroup,
-    two_kernel_slice_fixture_with_descriptor_table,
+    synthetic_two_kernel_slice_fixture_with_descriptor_table,
 };
 
 const TARGET: &str = "gfx942:xnack-";
@@ -183,14 +183,22 @@ pub(crate) fn published_worker_v3_fixture() -> PublishedWorkerV3Fixture {
 }
 
 #[allow(dead_code)]
-pub(crate) fn published_two_kernel_worker_v3_fixture() -> PublishedWorkerV3Fixture {
-    let fixture =
-        two_kernel_slice_fixture_with_descriptor_table(&two_kernel_slice_descriptor_table());
+/// Publishes a hand-authored two-entry fixture; this is not compiler-produced provenance.
+pub(crate) fn published_synthetic_two_kernel_worker_v3_fixture() -> PublishedWorkerV3Fixture {
+    let fixture = synthetic_two_kernel_slice_fixture_with_descriptor_table(
+        &synthetic_two_kernel_slice_descriptor_table(),
+    );
     published_worker_v3_fixture_from_raw_hsaco_for_kernels(
         fixture.bytes,
         &[
-            ("first_transform", "first_transform.kd"),
-            ("second_transform", "second_transform.kd"),
+            (
+                "synthetic_first_transform",
+                "synthetic_first_transform.kd",
+            ),
+            (
+                "synthetic_second_transform",
+                "synthetic_second_transform.kd",
+            ),
         ],
     )
 }
@@ -1013,25 +1021,25 @@ fn slice_descriptor_table_with_workgroup(workgroup_size: u32) -> Vec<u8> {
     encode_device_descriptor_table_v1(&table).unwrap()
 }
 
-fn two_kernel_slice_descriptor_table() -> Vec<u8> {
+fn synthetic_two_kernel_slice_descriptor_table() -> Vec<u8> {
     let source = SourceTypeRecordV1::new(SourceTypeDescriptorV1::shared_slice(ScalarTypeV1::F32));
     let layout =
         DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::shared_slice(ScalarTypeV1::F32));
     let kernels = vec![
         slice_kernel_descriptor(
             0xb1,
-            "first_transform",
-            "first_transform",
-            "first_transform.kd",
+            "synthetic_first_transform",
+            "synthetic_first_transform",
+            "synthetic_first_transform.kd",
             &source,
             &layout,
             64,
         ),
         slice_kernel_descriptor(
             0xc1,
-            "second_transform",
-            "second_transform",
-            "second_transform.kd",
+            "synthetic_second_transform",
+            "synthetic_second_transform",
+            "synthetic_second_transform.kd",
             &source,
             &layout,
             64,

@@ -586,18 +586,23 @@ pub(crate) fn slice_fixture_with_descriptor_table(descriptor_table: &[u8]) -> Fi
 }
 
 #[allow(dead_code)]
-pub(crate) fn two_kernel_slice_fixture_with_descriptor_table(descriptor_table: &[u8]) -> Fixture {
+/// Builds two hand-authored ELF entries for roster-admission testing only.
+///
+/// Neither this ELF nor its descriptor table is compiler-produced evidence.
+pub(crate) fn synthetic_two_kernel_slice_fixture_with_descriptor_table(
+    descriptor_table: &[u8],
+) -> Fixture {
     let mut first = FixtureOptions::valid();
     first.target = "gfx942:xnack-";
-    first.entry = "first_transform";
-    first.descriptor = "first_transform.kd";
+    first.entry = "synthetic_first_transform";
+    first.descriptor = "synthetic_first_transform.kd";
     first.include_export = false;
     first.required_workgroup_size = [64, 1, 1];
     first.max_flat_workgroup_size = 64;
 
     let mut second = first;
-    second.entry = "second_transform";
-    second.descriptor = "second_transform.kd";
+    second.entry = "synthetic_second_transform";
+    second.descriptor = "synthetic_second_transform.kd";
     legacy_fixture_with_optional_second_kernel(first, Some(second), Some(descriptor_table))
 }
 

@@ -72,8 +72,8 @@ mod worker_v3_fixture;
 
 const TEST_MARKER_BINDING: [u8; 32] = [0xa1; 32];
 const TEST_HOST_CONTRACT: [u8; 32] = [0xb2; 32];
-const FIRST_TRANSFORM_BINDING: [u8; 32] = [0xb1; 32];
-const SECOND_TRANSFORM_BINDING: [u8; 32] = [0xc1; 32];
+const SYNTHETIC_FIRST_TRANSFORM_BINDING: [u8; 32] = [0xb1; 32];
+const SYNTHETIC_SECOND_TRANSFORM_BINDING: [u8; 32] = [0xc1; 32];
 
 fn carriage_for_subject(
     subject: &InertCompilerExecutionSubjectV1,
@@ -213,84 +213,93 @@ fe2o3_host::compiler_generated_kernel_expectation_roster_v1! {
     struct WorkerV3VecAddRoster = [WorkerV3VecAddMarker];
 }
 
-struct WorkerV3FirstTransformMarker;
+struct WorkerV3SyntheticFirstTransformMarker;
 
-fn worker_v3_first_transform_function() {}
+fn worker_v3_synthetic_first_transform_function() {}
 
-unsafe impl KernelMarkerV1 for WorkerV3FirstTransformMarker {
+// SAFETY: this hand-authored marker is confined to a synthetic hostile fixture. It exactly mirrors
+// that fixture's names and binding, but does not claim compiler production or verification.
+unsafe impl KernelMarkerV1 for WorkerV3SyntheticFirstTransformMarker {
     type Function = fn();
     type Registration = ();
 
-    const LOGICAL_NAME: &'static str = "first_transform";
-    const EXPORT_NAME: &'static str = "first_transform";
-    const FUNCTION: Self::Function = worker_v3_first_transform_function;
+    const LOGICAL_NAME: &'static str = "synthetic_first_transform";
+    const EXPORT_NAME: &'static str = "synthetic_first_transform";
+    const FUNCTION: Self::Function = worker_v3_synthetic_first_transform_function;
     const REGISTRATION: &'static Self::Registration = &();
 }
 
-unsafe impl CompilerGeneratedKernelExpectationV1 for WorkerV3FirstTransformMarker {
+// SAFETY: the values match only the explicit synthetic descriptor constructed by this test suite.
+unsafe impl CompilerGeneratedKernelExpectationV1 for WorkerV3SyntheticFirstTransformMarker {
     const PROFILE: CompilerGeneratedKernelProfileV1 =
         CompilerGeneratedKernelProfileV1::new([0xb2; 32]);
-    const KERNEL_BINDING_ID_V1: [u8; 32] = FIRST_TRANSFORM_BINDING;
+    const KERNEL_BINDING_ID_V1: [u8; 32] = SYNTHETIC_FIRST_TRANSFORM_BINDING;
 }
 
-struct WorkerV3SecondTransformMarker;
+struct WorkerV3SyntheticSecondTransformMarker;
 
-fn worker_v3_second_transform_function() {}
+fn worker_v3_synthetic_second_transform_function() {}
 
-unsafe impl KernelMarkerV1 for WorkerV3SecondTransformMarker {
+// SAFETY: this hand-authored marker is confined to a synthetic hostile fixture. It exactly mirrors
+// that fixture's names and binding, but does not claim compiler production or verification.
+unsafe impl KernelMarkerV1 for WorkerV3SyntheticSecondTransformMarker {
     type Function = fn();
     type Registration = ();
 
-    const LOGICAL_NAME: &'static str = "second_transform";
-    const EXPORT_NAME: &'static str = "second_transform";
-    const FUNCTION: Self::Function = worker_v3_second_transform_function;
+    const LOGICAL_NAME: &'static str = "synthetic_second_transform";
+    const EXPORT_NAME: &'static str = "synthetic_second_transform";
+    const FUNCTION: Self::Function = worker_v3_synthetic_second_transform_function;
     const REGISTRATION: &'static Self::Registration = &();
 }
 
-unsafe impl CompilerGeneratedKernelExpectationV1 for WorkerV3SecondTransformMarker {
+// SAFETY: the values match only the explicit synthetic descriptor constructed by this test suite.
+unsafe impl CompilerGeneratedKernelExpectationV1 for WorkerV3SyntheticSecondTransformMarker {
     const PROFILE: CompilerGeneratedKernelProfileV1 =
         CompilerGeneratedKernelProfileV1::new([0xc2; 32]);
-    const KERNEL_BINDING_ID_V1: [u8; 32] = SECOND_TRANSFORM_BINDING;
+    const KERNEL_BINDING_ID_V1: [u8; 32] = SYNTHETIC_SECOND_TRANSFORM_BINDING;
 }
 
-struct WorkerV3SubstitutedTransformMarker;
+struct WorkerV3SyntheticSubstitutedTransformMarker;
 
-fn worker_v3_substituted_transform_function() {}
+fn worker_v3_synthetic_substituted_transform_function() {}
 
-unsafe impl KernelMarkerV1 for WorkerV3SubstitutedTransformMarker {
+// SAFETY: this deliberately substituted marker is confined to negative synthetic-fixture coverage.
+unsafe impl KernelMarkerV1 for WorkerV3SyntheticSubstitutedTransformMarker {
     type Function = fn();
     type Registration = ();
 
-    const LOGICAL_NAME: &'static str = "substituted_transform";
-    const EXPORT_NAME: &'static str = "substituted_transform";
-    const FUNCTION: Self::Function = worker_v3_substituted_transform_function;
+    const LOGICAL_NAME: &'static str = "synthetic_substituted_transform";
+    const EXPORT_NAME: &'static str = "synthetic_substituted_transform";
+    const FUNCTION: Self::Function = worker_v3_synthetic_substituted_transform_function;
     const REGISTRATION: &'static Self::Registration = &();
 }
 
-unsafe impl CompilerGeneratedKernelExpectationV1 for WorkerV3SubstitutedTransformMarker {
+// SAFETY: this mismatch is intentional and is admitted only far enough to prove fail-closed roster
+// substitution; it is not used to authorize loading or dispatch.
+unsafe impl CompilerGeneratedKernelExpectationV1 for WorkerV3SyntheticSubstitutedTransformMarker {
     const PROFILE: CompilerGeneratedKernelProfileV1 =
         CompilerGeneratedKernelProfileV1::new([0xd2; 32]);
     const KERNEL_BINDING_ID_V1: [u8; 32] = [0xd1; 32];
 }
 
 fe2o3_host::compiler_generated_kernel_expectation_roster_v1! {
-    struct WorkerV3TwoTransformRoster = [
-        WorkerV3FirstTransformMarker,
-        WorkerV3SecondTransformMarker,
+    struct WorkerV3SyntheticTwoTransformRoster = [
+        WorkerV3SyntheticFirstTransformMarker,
+        WorkerV3SyntheticSecondTransformMarker,
     ];
 }
 
 fe2o3_host::compiler_generated_kernel_expectation_roster_v1! {
-    struct WorkerV3ReorderedTransformRoster = [
-        WorkerV3SecondTransformMarker,
-        WorkerV3FirstTransformMarker,
+    struct WorkerV3SyntheticReorderedTransformRoster = [
+        WorkerV3SyntheticSecondTransformMarker,
+        WorkerV3SyntheticFirstTransformMarker,
     ];
 }
 
 fe2o3_host::compiler_generated_kernel_expectation_roster_v1! {
-    struct WorkerV3SubstitutedTransformRoster = [
-        WorkerV3FirstTransformMarker,
-        WorkerV3SubstitutedTransformMarker,
+    struct WorkerV3SyntheticSubstitutedTransformRoster = [
+        WorkerV3SyntheticFirstTransformMarker,
+        WorkerV3SyntheticSubstitutedTransformMarker,
     ];
 }
 
@@ -888,11 +897,13 @@ fn recovered_host_fixture() -> (
     recover_published_worker_v3_fixture(worker_v3_fixture::published_worker_v3_fixture())
 }
 
-fn recovered_two_kernel_host_fixture() -> (
+fn recovered_synthetic_two_kernel_host_fixture() -> (
     worker_v3_fixture::TestDirectory,
     RecoveredWorkerV3LoadEnvelopeV2,
 ) {
-    recover_published_worker_v3_fixture(worker_v3_fixture::published_two_kernel_worker_v3_fixture())
+    recover_published_worker_v3_fixture(
+        worker_v3_fixture::published_synthetic_two_kernel_worker_v3_fixture(),
+    )
 }
 
 fn recover_published_worker_v3_fixture(
@@ -1741,10 +1752,12 @@ fn v3_host_roster_admission_retains_one_inert_envelope_for_the_exact_table() {
 }
 
 #[test]
-fn v3_host_roster_admission_matches_a_two_kernel_compiler_descriptor_exactly() {
-    let (_directory, recovered) = recovered_two_kernel_host_fixture();
-    let admitted =
-        admit_recovered_worker_v3_roster_v1::<WorkerV3TwoTransformRoster>(recovered).unwrap();
+fn v3_host_roster_admission_matches_a_synthetic_two_kernel_descriptor_exactly() {
+    let (_directory, recovered) = recovered_synthetic_two_kernel_host_fixture();
+    let admitted = admit_recovered_worker_v3_roster_v1::<WorkerV3SyntheticTwoTransformRoster>(
+        recovered,
+    )
+    .unwrap();
     assert_eq!(admitted.entrypoints().len(), 2);
     assert_eq!(admitted.entrypoints()[0].ordinal(), 0);
     assert_eq!(admitted.entrypoints()[1].ordinal(), 1);
@@ -1754,28 +1767,30 @@ fn v3_host_roster_admission_matches_a_two_kernel_compiler_descriptor_exactly() {
     );
     assert_eq!(
         admitted.descriptor(0).unwrap().kernel_id().as_bytes(),
-        &FIRST_TRANSFORM_BINDING
+        &SYNTHETIC_FIRST_TRANSFORM_BINDING
     );
     assert_eq!(
         admitted.descriptor(1).unwrap().kernel_id().as_bytes(),
-        &SECOND_TRANSFORM_BINDING
+        &SYNTHETIC_SECOND_TRANSFORM_BINDING
     );
     assert_eq!(
         admitted.descriptor(0).unwrap().logical_name().as_str(),
-        "first_transform"
+        "synthetic_first_transform"
     );
     assert_eq!(
         admitted.descriptor(1).unwrap().logical_name().as_str(),
-        "second_transform"
+        "synthetic_second_transform"
     );
     assert_eq!(
         admitted.physical_kernel(0).unwrap().symbol(),
-        "first_transform.kd"
+        "synthetic_first_transform.kd"
     );
     assert_eq!(
         admitted.physical_kernel(1).unwrap().symbol(),
-        "second_transform.kd"
+        "synthetic_second_transform.kd"
     );
+    // This hand-authored ELF intentionally places its physical symbols in descriptor order. Roster
+    // admission itself does not equate descriptor ordinals with physical-kernel indices.
     assert_eq!(admitted.descriptor_binding(0).unwrap().kernel_index(), 0);
     assert_eq!(admitted.descriptor_binding(1).unwrap().kernel_index(), 1);
     assert!(admitted.authenticates_descriptor_source());
@@ -1785,18 +1800,20 @@ fn v3_host_roster_admission_matches_a_two_kernel_compiler_descriptor_exactly() {
     assert!(!admitted.grants_launch_authority());
     admitted.revalidate_currentness().unwrap();
 
-    let (_directory, recovered) = recovered_two_kernel_host_fixture();
+    let (_directory, recovered) = recovered_synthetic_two_kernel_host_fixture();
     assert!(matches!(
-        admit_recovered_worker_v3_roster_v1::<WorkerV3ReorderedTransformRoster>(recovered),
+        admit_recovered_worker_v3_roster_v1::<WorkerV3SyntheticReorderedTransformRoster>(recovered),
         Err(RecoveredWorkerV3AdmissionErrorV1::RosterEntryReordered {
             expected_ordinal: 0,
             actual_ordinal: 1,
         })
     ));
 
-    let (_directory, recovered) = recovered_two_kernel_host_fixture();
+    let (_directory, recovered) = recovered_synthetic_two_kernel_host_fixture();
     assert!(matches!(
-        admit_recovered_worker_v3_roster_v1::<WorkerV3SubstitutedTransformRoster>(recovered),
+        admit_recovered_worker_v3_roster_v1::<WorkerV3SyntheticSubstitutedTransformRoster>(
+            recovered
+        ),
         Err(RecoveredWorkerV3AdmissionErrorV1::RosterEntrySubstituted { ordinal: 1 })
     ));
 }
