@@ -13,6 +13,8 @@ mod kernel_check_model;
 mod machine_effect;
 #[cfg(feature = "authenticated-machine-effect")]
 mod physical_machine_effect;
+#[cfg(feature = "authenticated-machine-effect")]
+mod physical_machine_trace;
 #[cfg(feature = "pliron-analysis")]
 mod pliron_analysis_manager;
 #[cfg(feature = "pliron-analysis")]
@@ -83,6 +85,8 @@ pub use kernel_check_model::*;
 pub use machine_effect::*;
 #[cfg(feature = "authenticated-machine-effect")]
 pub use physical_machine_effect::*;
+#[cfg(feature = "authenticated-machine-effect")]
+pub use physical_machine_trace::*;
 #[cfg(feature = "pliron-analysis")]
 pub use pliron_analysis_witness::*;
 #[cfg(feature = "pliron-analysis")]

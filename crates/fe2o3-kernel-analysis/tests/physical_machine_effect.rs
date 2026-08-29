@@ -1,11 +1,13 @@
 use fe2o3_kernel_analysis::{
     PHYSICAL_MACHINE_EFFECT_EVIDENCE_DOMAIN_V1, PHYSICAL_MACHINE_EFFECT_SCHEMA_VERSION_V1,
+    PHYSICAL_MACHINE_TRACE_EVIDENCE_DOMAIN_V1, PHYSICAL_MACHINE_TRACE_SCHEMA_VERSION_V1,
     PhysicalMachineAnalyzerIdentityV1, PhysicalMachineEffectAnalysisBasisV1,
     PhysicalMachineEffectBudgetV1, PhysicalMachineEffectEntryRequestV1,
     PhysicalMachineEffectEvidenceErrorV1, PhysicalMachineEffectEvidenceV1,
     PhysicalMachineEffectKindV1, PhysicalMachineEffectRequestErrorV1,
     PhysicalMachineEffectRequestV1, PhysicalMachineExecutionChallengeV1, PhysicalMachineTargetV1,
-    PhysicalMachineToolchainIdentityV1,
+    PhysicalMachineToolchainIdentityV1, PhysicalMachineTraceEvidenceErrorV1,
+    PhysicalMachineTraceEvidenceV1,
 };
 
 const CODE_OFFSET: u64 = 4;
@@ -186,6 +188,364 @@ fn push_u64(output: &mut Vec<u8>, value: u64) {
 fn push_text(output: &mut Vec<u8>, value: &str) {
     push_u16(output, value.len() as u16);
     output.extend_from_slice(value.as_bytes());
+}
+
+#[derive(Clone)]
+enum TraceOperand<'a> {
+    Register(&'a str, Option<u16>),
+    Signed(i64),
+}
+
+#[derive(Clone)]
+struct TraceInstruction<'a> {
+    offset: u64,
+    block: u32,
+    opcode: &'a str,
+    encoding: [u8; 4],
+    definitions: u16,
+    operands: Vec<TraceOperand<'a>>,
+    implicit_definitions: Vec<&'a str>,
+    implicit_uses: Vec<&'a str>,
+    branch: u8,
+    target: u64,
+    flags: u16,
+    memory: u8,
+    width: u16,
+}
+
+#[derive(Clone)]
+struct TraceBlock {
+    ordinal: u32,
+    first_offset: u64,
+    instruction_count: u32,
+    successors: Vec<u32>,
+}
+
+#[derive(Clone, Copy)]
+struct TraceMutationOffsets {
+    first_encoding: usize,
+    conditional_target: usize,
+    conditional_successor: usize,
+}
+
+fn loop_trace_fixture() -> (
+    PhysicalMachineEffectRequestV1,
+    PhysicalMachineEffectEvidenceV1,
+    Vec<u8>,
+    TraceMutationOffsets,
+) {
+    let mut payload = vec![0_u8; 64];
+    let encodings = [
+        [0x10, 0x11, 0x12, 0x13],
+        [0x20, 0x21, 0x22, 0x23],
+        [0x30, 0x31, 0x32, 0x33],
+        [0x40, 0x41, 0x42, 0x43],
+        [0x50, 0x51, 0x52, 0x53],
+        [0x60, 0x61, 0x62, 0x63],
+        [0x70, 0x71, 0x72, 0x73],
+    ];
+    for (index, encoding) in encodings.iter().enumerate() {
+        let offset = 8 + index * 4;
+        payload[offset..offset + 4].copy_from_slice(encoding);
+    }
+    let request = request_with(&payload, vec![entry("loop_entry", budget())]);
+    let function = Function {
+        symbol: "loop_entry",
+        offset: 8,
+        size: 32,
+        callees: Vec::new(),
+    };
+    let effect_records = vec![
+        Effect {
+            entry: "loop_entry",
+            function: "loop_entry",
+            offset: 12,
+            kind: 1,
+            width: 8,
+        },
+        Effect {
+            entry: "loop_entry",
+            function: "loop_entry",
+            offset: 12,
+            kind: 2,
+            width: 4,
+        },
+        Effect {
+            entry: "loop_entry",
+            function: "loop_entry",
+            offset: 28,
+            kind: 1,
+            width: 8,
+        },
+        Effect {
+            entry: "loop_entry",
+            function: "loop_entry",
+            offset: 28,
+            kind: 3,
+            width: 4,
+        },
+        Effect {
+            entry: "loop_entry",
+            function: "loop_entry",
+            offset: 32,
+            kind: 4,
+            width: 0,
+        },
+    ];
+    let effect_bytes = evidence_with_entry_range(
+        &request,
+        8,
+        32,
+        std::slice::from_ref(&function),
+        &effect_records,
+    );
+    let effects =
+        PhysicalMachineEffectEvidenceV1::decode_canonical_for(&request, &effect_bytes).unwrap();
+    let blocks = [
+        TraceBlock {
+            ordinal: 0,
+            first_offset: 8,
+            instruction_count: 1,
+            successors: vec![1],
+        },
+        TraceBlock {
+            ordinal: 1,
+            first_offset: 12,
+            instruction_count: 2,
+            successors: vec![2, 3],
+        },
+        TraceBlock {
+            ordinal: 2,
+            first_offset: 20,
+            instruction_count: 2,
+            successors: vec![1],
+        },
+        TraceBlock {
+            ordinal: 3,
+            first_offset: 28,
+            instruction_count: 2,
+            successors: Vec::new(),
+        },
+    ];
+    let instructions = [
+        TraceInstruction {
+            offset: 8,
+            block: 0,
+            opcode: "S_MOV_B32_vi",
+            encoding: encodings[0],
+            definitions: 1,
+            operands: vec![
+                TraceOperand::Register("SGPR4", None),
+                TraceOperand::Signed(0),
+            ],
+            implicit_definitions: Vec::new(),
+            implicit_uses: Vec::new(),
+            branch: 0,
+            target: 0,
+            flags: 0,
+            memory: 0,
+            width: 0,
+        },
+        TraceInstruction {
+            offset: 12,
+            block: 1,
+            opcode: "GLOBAL_LOAD_DWORD_vi",
+            encoding: encodings[1],
+            definitions: 1,
+            operands: vec![
+                TraceOperand::Register("VGPR0", None),
+                TraceOperand::Register("VGPR2_VGPR3", None),
+            ],
+            implicit_definitions: Vec::new(),
+            implicit_uses: vec!["EXEC"],
+            branch: 0,
+            target: 0,
+            flags: 1,
+            memory: 1,
+            width: 4,
+        },
+        TraceInstruction {
+            offset: 16,
+            block: 1,
+            opcode: "S_CBRANCH_SCC1_vi",
+            encoding: encodings[2],
+            definitions: 0,
+            operands: Vec::new(),
+            implicit_definitions: Vec::new(),
+            implicit_uses: vec!["SCC"],
+            branch: 1,
+            target: 28,
+            flags: 4,
+            memory: 0,
+            width: 0,
+        },
+        TraceInstruction {
+            offset: 20,
+            block: 2,
+            opcode: "V_ADD_F32_e64_vi",
+            encoding: encodings[3],
+            definitions: 1,
+            operands: vec![
+                TraceOperand::Register("VGPR4", Some(1)),
+                TraceOperand::Register("VGPR4", None),
+                TraceOperand::Register("VGPR0", None),
+            ],
+            implicit_definitions: Vec::new(),
+            implicit_uses: vec!["EXEC"],
+            branch: 0,
+            target: 0,
+            flags: 16,
+            memory: 0,
+            width: 0,
+        },
+        TraceInstruction {
+            offset: 24,
+            block: 2,
+            opcode: "S_BRANCH_vi",
+            encoding: encodings[4],
+            definitions: 0,
+            operands: Vec::new(),
+            implicit_definitions: Vec::new(),
+            implicit_uses: Vec::new(),
+            branch: 2,
+            target: 12,
+            flags: 4,
+            memory: 0,
+            width: 0,
+        },
+        TraceInstruction {
+            offset: 28,
+            block: 3,
+            opcode: "GLOBAL_STORE_DWORD_vi",
+            encoding: encodings[5],
+            definitions: 0,
+            operands: vec![
+                TraceOperand::Register("VGPR6_VGPR7", None),
+                TraceOperand::Register("VGPR4", None),
+            ],
+            implicit_definitions: Vec::new(),
+            implicit_uses: vec!["EXEC"],
+            branch: 0,
+            target: 0,
+            flags: 2,
+            memory: 2,
+            width: 4,
+        },
+        TraceInstruction {
+            offset: 32,
+            block: 3,
+            opcode: "S_ENDPGM_vi",
+            encoding: encodings[6],
+            definitions: 0,
+            operands: Vec::new(),
+            implicit_definitions: Vec::new(),
+            implicit_uses: Vec::new(),
+            branch: 4,
+            target: 0,
+            flags: 4,
+            memory: 0,
+            width: 0,
+        },
+    ];
+
+    let (trace, offsets) = encode_trace(&request, &effects, &blocks, &instructions);
+    (request, effects, trace, offsets)
+}
+
+fn encode_trace(
+    request: &PhysicalMachineEffectRequestV1,
+    effects: &PhysicalMachineEffectEvidenceV1,
+    blocks: &[TraceBlock],
+    instructions: &[TraceInstruction<'_>],
+) -> (Vec<u8>, TraceMutationOffsets) {
+    let mut output = Vec::new();
+    output.extend_from_slice(PHYSICAL_MACHINE_TRACE_EVIDENCE_DOMAIN_V1);
+    push_u32(&mut output, 0);
+    push_u16(&mut output, PHYSICAL_MACHINE_TRACE_SCHEMA_VERSION_V1);
+    output.extend_from_slice(&request.execution_challenge().as_bytes());
+    output.extend_from_slice(&request.identity().sha256());
+    push_u64(&mut output, request.identity().byte_len());
+    output.extend_from_slice(&effects.identity().sha256());
+    push_u64(&mut output, effects.identity().byte_len());
+    output.extend_from_slice(&request.payload_identity().sha256());
+    push_u64(&mut output, request.payload_identity().byte_len());
+    output.extend_from_slice(&request.analyzer_identity().as_bytes());
+    output.extend_from_slice(&request.toolchain_identity().as_bytes());
+    push_u16(&mut output, 1);
+
+    push_u32(&mut output, blocks.len() as u32);
+    let mut conditional_successor = 0;
+    for block in blocks {
+        push_text(&mut output, "loop_entry");
+        push_u32(&mut output, block.ordinal);
+        push_u64(&mut output, block.first_offset);
+        push_u32(&mut output, block.instruction_count);
+        push_u16(&mut output, block.successors.len() as u16);
+        for (index, successor) in block.successors.iter().enumerate() {
+            if block.ordinal == 1 && index == 0 {
+                conditional_successor = output.len();
+            }
+            push_u32(&mut output, *successor);
+        }
+    }
+
+    push_u32(&mut output, instructions.len() as u32);
+    let mut first_encoding = 0;
+    let mut conditional_target = 0;
+    for (index, instruction) in instructions.iter().enumerate() {
+        push_text(&mut output, "loop_entry");
+        push_u64(&mut output, instruction.offset);
+        push_u32(&mut output, instruction.block);
+        push_text(&mut output, instruction.opcode);
+        push_u16(&mut output, instruction.encoding.len() as u16);
+        if index == 0 {
+            first_encoding = output.len();
+        }
+        output.extend_from_slice(&instruction.encoding);
+        push_u16(&mut output, instruction.definitions);
+        push_u16(&mut output, instruction.operands.len() as u16);
+        for operand in &instruction.operands {
+            match operand {
+                TraceOperand::Register(register, tied) => {
+                    output.push(1);
+                    push_u16(&mut output, tied.unwrap_or(u16::MAX));
+                    push_text(&mut output, register);
+                }
+                TraceOperand::Signed(value) => {
+                    output.push(2);
+                    push_u16(&mut output, u16::MAX);
+                    push_u64(&mut output, *value as u64);
+                }
+            }
+        }
+        push_u16(&mut output, instruction.implicit_definitions.len() as u16);
+        for register in &instruction.implicit_definitions {
+            push_text(&mut output, register);
+        }
+        push_u16(&mut output, instruction.implicit_uses.len() as u16);
+        for register in &instruction.implicit_uses {
+            push_text(&mut output, register);
+        }
+        output.push(instruction.branch);
+        if instruction.branch == 1 {
+            conditional_target = output.len();
+        }
+        push_u64(&mut output, instruction.target);
+        push_u16(&mut output, instruction.flags);
+        output.push(instruction.memory);
+        push_u16(&mut output, instruction.width);
+    }
+    let length = output.len() as u32;
+    let offset = PHYSICAL_MACHINE_TRACE_EVIDENCE_DOMAIN_V1.len();
+    output[offset..offset + 4].copy_from_slice(&length.to_le_bytes());
+    (
+        output,
+        TraceMutationOffsets {
+            first_encoding,
+            conditional_target,
+            conditional_successor,
+        },
+    )
 }
 
 #[test]
@@ -513,5 +873,138 @@ fn request_rejects_reserved_identities() {
         Err(PhysicalMachineEffectRequestErrorV1::ZeroIdentity(
             "execution challenge"
         ))
+    );
+}
+
+#[test]
+fn machine_trace_binds_exact_bytes_def_use_effects_and_loop_cfg() {
+    let (request, effects, bytes, _) = loop_trace_fixture();
+    let trace =
+        PhysicalMachineTraceEvidenceV1::decode_canonical_for(&request, &effects, &bytes).unwrap();
+
+    assert_eq!(trace.blocks().len(), 4);
+    assert_eq!(trace.instructions().len(), 7);
+    assert_eq!(trace.blocks()[2].successors(), &[1]);
+    assert_eq!(trace.instructions()[4].branch_target(), Some(12));
+    assert_eq!(trace.instructions()[1].opcode(), "GLOBAL_LOAD_DWORD_vi");
+    assert_eq!(
+        trace.instructions()[1].encoding(),
+        &[0x20, 0x21, 0x22, 0x23]
+    );
+    assert_eq!(trace.instructions()[1].explicit_definition_count(), 1);
+    assert_eq!(trace.instructions()[1].implicit_uses(), &["EXEC"]);
+    assert!(trace.instructions()[1].flags().may_load());
+    assert!(trace.instructions()[3].flags().is_predicable());
+    assert_eq!(trace.identity().byte_len(), bytes.len() as u64);
+    assert!(trace.binds_exact_payload_instruction_bytes());
+    assert!(!trace.establishes_machine_semantics());
+    assert!(!trace.establishes_compiler_refinement());
+    assert!(!trace.grants_load_authority());
+    assert!(!trace.grants_launch_authority());
+}
+
+#[test]
+fn machine_trace_rejects_instruction_byte_substitution() {
+    let (request, effects, mut bytes, offsets) = loop_trace_fixture();
+    bytes[offsets.first_encoding] ^= 1;
+    assert_eq!(
+        PhysicalMachineTraceEvidenceV1::decode_canonical_for(&request, &effects, &bytes),
+        Err(PhysicalMachineTraceEvidenceErrorV1::InstructionBytesMismatch)
+    );
+}
+
+#[test]
+fn machine_trace_rejects_branch_target_and_edge_substitution() {
+    let (request, effects, bytes, offsets) = loop_trace_fixture();
+
+    let mut changed_target = bytes.clone();
+    changed_target[offsets.conditional_target..offsets.conditional_target + 8]
+        .copy_from_slice(&14_u64.to_le_bytes());
+    assert_eq!(
+        PhysicalMachineTraceEvidenceV1::decode_canonical_for(&request, &effects, &changed_target,),
+        Err(PhysicalMachineTraceEvidenceErrorV1::InvalidControlFlow)
+    );
+
+    let mut changed_edge = bytes;
+    changed_edge[offsets.conditional_successor..offsets.conditional_successor + 4]
+        .copy_from_slice(&1_u32.to_le_bytes());
+    assert_eq!(
+        PhysicalMachineTraceEvidenceV1::decode_canonical_for(&request, &effects, &changed_edge),
+        Err(PhysicalMachineTraceEvidenceErrorV1::InvalidControlFlow)
+    );
+}
+
+#[test]
+fn machine_trace_rejects_substituted_effect_evidence_identity() {
+    let (request, effects, mut bytes, _) = loop_trace_fixture();
+    let effect_identity_offset =
+        PHYSICAL_MACHINE_TRACE_EVIDENCE_DOMAIN_V1.len() + 4 + 2 + 32 + 32 + 8;
+    bytes[effect_identity_offset] ^= 1;
+    assert_eq!(
+        PhysicalMachineTraceEvidenceV1::decode_canonical_for(&request, &effects, &bytes),
+        Err(PhysicalMachineTraceEvidenceErrorV1::IdentityMismatch(
+            "machine-effect evidence"
+        ))
+    );
+}
+
+#[test]
+fn machine_trace_rejects_missing_effect_site() {
+    let (request, _, mut trace_bytes, _) = loop_trace_fixture();
+    let function = Function {
+        symbol: "loop_entry",
+        offset: 8,
+        size: 32,
+        callees: Vec::new(),
+    };
+    let incomplete_effects = [
+        Effect {
+            entry: "loop_entry",
+            function: "loop_entry",
+            offset: 12,
+            kind: 1,
+            width: 8,
+        },
+        Effect {
+            entry: "loop_entry",
+            function: "loop_entry",
+            offset: 28,
+            kind: 1,
+            width: 8,
+        },
+        Effect {
+            entry: "loop_entry",
+            function: "loop_entry",
+            offset: 28,
+            kind: 3,
+            width: 4,
+        },
+        Effect {
+            entry: "loop_entry",
+            function: "loop_entry",
+            offset: 32,
+            kind: 4,
+            width: 0,
+        },
+    ];
+    let effect_bytes = evidence_with_entry_range(
+        &request,
+        8,
+        32,
+        std::slice::from_ref(&function),
+        &incomplete_effects,
+    );
+    let incomplete =
+        PhysicalMachineEffectEvidenceV1::decode_canonical_for(&request, &effect_bytes).unwrap();
+    let effect_identity_offset =
+        PHYSICAL_MACHINE_TRACE_EVIDENCE_DOMAIN_V1.len() + 4 + 2 + 32 + 32 + 8;
+    trace_bytes[effect_identity_offset..effect_identity_offset + 32]
+        .copy_from_slice(&incomplete.identity().sha256());
+    trace_bytes[effect_identity_offset + 32..effect_identity_offset + 40]
+        .copy_from_slice(&incomplete.identity().byte_len().to_le_bytes());
+
+    assert_eq!(
+        PhysicalMachineTraceEvidenceV1::decode_canonical_for(&request, &incomplete, &trace_bytes,),
+        Err(PhysicalMachineTraceEvidenceErrorV1::EffectTraceMismatch)
     );
 }
