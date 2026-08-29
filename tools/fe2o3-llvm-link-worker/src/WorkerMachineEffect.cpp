@@ -60,6 +60,8 @@ constexpr StringLiteral EvidenceIdentityDomain =
     "FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-EVIDENCE-IDENTITY/V1\0";
 constexpr StringLiteral TraceEvidenceDomain =
     "FE2O3/GFX942-PHYSICAL-MACHINE-TRACE-EVIDENCE/V1\0";
+constexpr StringLiteral AnalysisBundleDomain =
+    "FE2O3/GFX942-PHYSICAL-MACHINE-ANALYSIS-BUNDLE/V1\0";
 constexpr StringLiteral IdentityChallengeDomain =
     "FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-IDENTITY-CHALLENGE/V1\0";
 constexpr StringLiteral IdentityResponseDomain =
@@ -987,6 +989,19 @@ const SymbolRecord *findSymbol(ArrayRef<SymbolRecord> Symbols, StringRef Name) {
   return &*Iterator;
 }
 
+Expected<uint64_t> functionFileOffset(const SymbolRecord &Function,
+                                      uint64_t Address, uint64_t Size) {
+  if (!Function.Text || Function.Size == 0 || Address < Function.Address)
+    return analysisError(Twine("address is outside text function ") +
+                         Function.Name);
+  uint64_t Delta = Address - Function.Address;
+  if (Delta > Function.Size || Size > Function.Size - Delta ||
+      Function.FileOffset > std::numeric_limits<uint64_t>::max() - Delta)
+    return analysisError(Twine("address range is outside text function ") +
+                         Function.Name);
+  return Function.FileOffset + Delta;
+}
+
 Expected<PhysicalMachineEntryEvidence>
 validateDescriptor(const MetadataKernel &Metadata, const SymbolRecord &Entry,
                    const SymbolRecord &Descriptor) {
@@ -1032,7 +1047,7 @@ validateDescriptor(const MetadataKernel &Metadata, const SymbolRecord &Entry,
     return analysisError(Twine("kernel descriptor points at another entry: ") +
                          Entry.Name);
   return PhysicalMachineEntryEvidence{Entry.Name, SHA256::hash(*Bytes),
-                                      Entry.Address, Entry.Size};
+                                      Entry.FileOffset, Entry.Size};
 }
 
 struct DecodedInstruction {
@@ -1657,7 +1672,8 @@ registerNames(ArrayRef<MCPhysReg> Registers, const McState &Mc) {
 Expected<PhysicalMachineInstructionTrace>
 makeInstructionTrace(StringRef FunctionName,
                      const DecodedInstruction &Instruction,
-                     uint32_t BlockOrdinal, const McState &Mc) {
+                     uint64_t CanonicalOffset, uint32_t BlockOrdinal,
+                     const McState &Mc) {
   const MCInstrDesc &Descriptor =
       Mc.Instructions->get(Instruction.Inst.getOpcode());
   if (!Reader::validSymbol(FunctionName) ||
@@ -1670,7 +1686,7 @@ makeInstructionTrace(StringRef FunctionName,
 
   PhysicalMachineInstructionTrace Result;
   Result.FunctionSymbol = FunctionName.str();
-  Result.InstructionOffset = Instruction.Address;
+  Result.InstructionOffset = CanonicalOffset;
   Result.BlockOrdinal = BlockOrdinal;
   Result.Opcode = Instruction.Name;
   Result.Encoding = Instruction.Encoding;
@@ -1757,7 +1773,7 @@ analyzeFunction(const SymbolRecord &Function, ArrayRef<SymbolRecord> Symbols,
                          Function.Name);
 
   AnalyzedFunction Result;
-  Result.Evidence = {Function.Name, Function.Address, Function.Size, {}};
+  Result.Evidence = {Function.Name, Function.FileOffset, Function.Size, {}};
   Result.Blocks.reserve(Cfg->Blocks.size());
   for (size_t Ordinal = 0; Ordinal < Cfg->Blocks.size(); ++Ordinal) {
     const FunctionCfg::Block &Block = Cfg->Blocks[Ordinal];
@@ -1768,7 +1784,11 @@ analyzeFunction(const SymbolRecord &Function, ArrayRef<SymbolRecord> Symbols,
     PhysicalMachineBasicBlockTrace Trace;
     Trace.FunctionSymbol = Function.Name;
     Trace.Ordinal = static_cast<uint32_t>(Ordinal);
-    Trace.FirstInstructionOffset = (*Decoded)[Block.Begin].Address;
+    auto FirstOffset = functionFileOffset(
+        Function, (*Decoded)[Block.Begin].Address, (*Decoded)[Block.Begin].Size);
+    if (!FirstOffset)
+      return FirstOffset.takeError();
+    Trace.FirstInstructionOffset = *FirstOffset;
     Trace.InstructionCount = static_cast<uint32_t>(Block.End - Block.Begin);
     for (size_t Successor : Block.Successors) {
       if (Successor >= Cfg->Blocks.size() ||
@@ -1788,8 +1808,13 @@ analyzeFunction(const SymbolRecord &Function, ArrayRef<SymbolRecord> Symbols,
     size_t BlockOrdinal = Cfg->InstructionBlocks[Index];
     if (BlockOrdinal > std::numeric_limits<uint32_t>::max())
       return analysisError("machine instruction block exceeds trace bounds");
+    auto CanonicalOffset =
+        functionFileOffset(Function, Instruction.Address, Instruction.Size);
+    if (!CanonicalOffset)
+      return CanonicalOffset.takeError();
     auto InstructionTrace = makeInstructionTrace(
-        Function.Name, Instruction, static_cast<uint32_t>(BlockOrdinal), Mc);
+        Function.Name, Instruction, *CanonicalOffset,
+        static_cast<uint32_t>(BlockOrdinal), Mc);
     if (!InstructionTrace)
       return InstructionTrace.takeError();
     if (forbiddenOpcodeFamily(Name))
@@ -1801,7 +1826,7 @@ analyzeFunction(const SymbolRecord &Function, ArrayRef<SymbolRecord> Symbols,
       return PhysicalReturn.takeError();
     if (*PhysicalReturn) {
       Result.Effects.push_back(
-          {Instruction.Address, PhysicalMachineEffectKind::Return, 0});
+          {*CanonicalOffset, PhysicalMachineEffectKind::Return, 0});
       InstructionTrace->BranchKind = PhysicalMachineBranchKind::Return;
       Result.Instructions.push_back(std::move(*InstructionTrace));
       continue;
@@ -1837,7 +1862,7 @@ analyzeFunction(const SymbolRecord &Function, ArrayRef<SymbolRecord> Symbols,
       }
       Result.Evidence.DirectCallees.push_back(Match->Name);
       InstructionTrace->BranchKind = PhysicalMachineBranchKind::DirectCall;
-      InstructionTrace->BranchTarget = *Target;
+      InstructionTrace->BranchTarget = Match->FileOffset;
       Result.Instructions.push_back(std::move(*InstructionTrace));
       continue;
     }
@@ -1856,7 +1881,10 @@ analyzeFunction(const SymbolRecord &Function, ArrayRef<SymbolRecord> Symbols,
       else
         return analysisError(Twine("unsupported branch kind in ") +
                              Function.Name);
-      InstructionTrace->BranchTarget = Target;
+      auto CanonicalTarget = functionFileOffset(Function, Target, 0);
+      if (!CanonicalTarget)
+        return CanonicalTarget.takeError();
+      InstructionTrace->BranchTarget = *CanonicalTarget;
       Result.Instructions.push_back(std::move(*InstructionTrace));
       continue;
     }
@@ -1874,8 +1902,8 @@ analyzeFunction(const SymbolRecord &Function, ArrayRef<SymbolRecord> Symbols,
       if (!Width)
         return analysisError(Twine("unknown memory width for ") + Name);
       Result.Effects.push_back(
-          {Instruction.Address, PhysicalMachineEffectKind::GlobalAddress, 8});
-      Result.Effects.push_back({Instruction.Address,
+          {*CanonicalOffset, PhysicalMachineEffectKind::GlobalAddress, 8});
+      Result.Effects.push_back({*CanonicalOffset,
                                 Read ? PhysicalMachineEffectKind::GlobalRead
                                      : PhysicalMachineEffectKind::GlobalWrite,
                                 *Width});
@@ -2487,6 +2515,37 @@ Expected<std::vector<uint8_t>> encodePhysicalMachineTraceEvidence(
       Output.size() > std::numeric_limits<uint32_t>::max())
     return analysisError("machine trace bytes exceed bound");
   support::endian::write32le(Output.data() + TraceEvidenceDomain.size(),
+                             static_cast<uint32_t>(Output.size()));
+  return Output;
+}
+
+Expected<std::vector<uint8_t>> encodePhysicalMachineAnalysisBundle(
+    const PhysicalMachineEffectEvidence &Evidence) {
+  auto Effects = encodePhysicalMachineEffectEvidence(Evidence);
+  if (!Effects)
+    return Effects.takeError();
+  auto Trace = encodePhysicalMachineTraceEvidence(Evidence, *Effects);
+  if (!Trace)
+    return Trace.takeError();
+  if (Effects->size() > std::numeric_limits<uint32_t>::max() ||
+      Trace->size() > std::numeric_limits<uint32_t>::max())
+    return analysisError("machine analysis component exceeds u32");
+
+  std::vector<uint8_t> Output;
+  Output.reserve(AnalysisBundleDomain.size() + 14 + Effects->size() +
+                 Trace->size());
+  Output.insert(Output.end(), AnalysisBundleDomain.bytes_begin(),
+                AnalysisBundleDomain.bytes_end());
+  appendU32(Output, 0);
+  appendU16(Output, SchemaVersion);
+  appendU32(Output, static_cast<uint32_t>(Effects->size()));
+  Output.insert(Output.end(), Effects->begin(), Effects->end());
+  appendU32(Output, static_cast<uint32_t>(Trace->size()));
+  Output.insert(Output.end(), Trace->begin(), Trace->end());
+  if (Output.size() > MaxPhysicalMachineAnalysisBundleBytes ||
+      Output.size() > std::numeric_limits<uint32_t>::max())
+    return analysisError("machine analysis bundle exceeds bound");
+  support::endian::write32le(Output.data() + AnalysisBundleDomain.size(),
                              static_cast<uint32_t>(Output.size()));
   return Output;
 }

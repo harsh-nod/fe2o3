@@ -901,15 +901,15 @@ is complete, and the recorded runs grant no current production authority.
   and negative Verus harnesses. `fe2o3-verifier` canonicalizes bounded tool,
   policy, invocation, and result records, has a bounded shell-free process
   executor, and can convert validated results into descriptive proof records.
-  Bounded canonical `gfx942` machine-effect evidence can compute call closure
-  and straight-line effects from caller-supplied mechanics, requiring explicit
-  complete bounds and rejecting indirect calls, unsupported control flow,
-  malformed identities, and resource-limit violations. A separate worker path
-  uses LLVM Object and MC APIs to extract a closed, exact alpha/zeta physical
-  profile from supplied finalized HSACO bytes. Neither path is authenticated
-  into each production payload or proves compiler, source, or Verus refinement.
-  The verifier still has no reviewed production Verus adapter, authenticated
-  proof-to-executable join, or runtime authority.
+  The sole supported `gfx942` physical-machine analysis path executes the
+  upstream-LLVM Object/MC worker from a sealed image under an immutable,
+  policy-pinned runtime closure. It returns one canonical bundle containing
+  closed static effects and a complete byte-exact instruction/CFG trace for up
+  to two arbitrary requested entry symbols. All code locations are validated
+  HSACO file offsets, the trace binds the exact effect record, and the
+  authenticated receipt binds the complete bundle. This is extractor evidence,
+  not compiler, source, Verus, address-safety, race-freedom, or launch authority.
+  The Worker V3 semantic-refinement join remains open.
 - G6/G7 includes canonical multi-input AMDGPU link plans and a standalone
   direct LLVM/LLD worker with bounded Rust/C++ protocols. Device FFI macros and
   compiler validation bind import/export symbols, physical ABI, address spaces,
@@ -1059,18 +1059,15 @@ is complete, and the recorded runs grant no current production authority.
   Verus proof of that split and its allocation-relative region theorem remains
   open.
 - The generated contract identity authenticates compiler declarations and the
-  exact payload bytes. A dedicated worker can extract a bounded physical
-  machine-effect profile from supplied exact `gfx942` alpha/zeta HSACO bytes,
-  and caller-supplied records can be canonicalized and checked. The production
-  authority chain does not yet authenticate that extraction for each finalized
-  payload, and neither mechanism proves correspondence to every executable
-  memory access. The fixed lowering, Kernel IR checks, host alias admission,
+  exact payload bytes. The authenticated physical-machine worker extracts one
+  indivisible effect-and-instruction bundle from exact `gfx942` HSACO bytes,
+  but Worker V3 does not yet consume a semantic refinement receipt relating
+  that trace to KIR. The fixed lowering, Kernel IR checks, host alias admission,
   and tests provide separate defenses. The generic ranked-PLIRON bounds and
-  race analyses now reject unsupported or conflicting compiler IR before
-  lowering, but end-to-end source-to-machine safety still requires complete
-  frontend projection plus authenticated compiler-refinement evidence.
-  Trusted rustc diagnostic-item classification also remains part of the
-  compiler TCB.
+  race analyses reject unsupported or conflicting compiler IR before lowering,
+  but end-to-end source-to-machine safety still requires complete frontend
+  projection plus authenticated compiler-refinement evidence. Trusted rustc
+  diagnostic-item classification also remains part of the compiler TCB.
 - Generated Worker V3 arguments retain the resources required for dispatch,
   but generalized asynchronous application APIs, cancellation, and composition
   remain incomplete.

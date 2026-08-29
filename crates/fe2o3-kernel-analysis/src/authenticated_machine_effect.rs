@@ -1,7 +1,7 @@
-//! Policy-authenticated Linux execution for physical machine-effect analysis.
+//! Policy-authenticated Linux execution for physical-machine analysis.
 //!
-//! This is intentionally separate from the descriptive pathname helper. A
-//! production worker is copied into a sealed memfd, executed only through that
+//! This is the sole supported analyzer execution path. A production worker is
+//! copied into a sealed memfd, executed only through that
 //! retained image, and accepted only when both its bytes and its observed
 //! file-backed runtime closure match a caller-pinned policy. Fresh OS challenges
 //! bind the ready/done/ack process handshake, identity probe, and every analysis
@@ -14,16 +14,16 @@
 //! check cannot observe a mapping created and removed entirely between
 //! snapshots. Receipts remain inert: they cannot publish, load, or launch code.
 //!
-//! The authenticated result is still only a list of reachable static
-//! instruction sites and their bounded effect kinds for one exact finalized
-//! HSACO. It does not establish concrete addresses, runtime execution counts,
-//! out-of-bounds absence, race freedom, source/compiler refinement, Verus
-//! correctness, or safe dispatch.
+//! The authenticated result contains both reachable static effect sites and a
+//! canonical instruction/CFG trace for one exact finalized HSACO. It does not
+//! establish concrete addresses, runtime execution counts, out-of-bounds
+//! absence, race freedom, source/compiler refinement, Verus correctness, or
+//! safe dispatch.
 
 use crate::{
-    MAX_PHYSICAL_MACHINE_EFFECT_EVIDENCE_BYTES_V1, PhysicalMachineAnalyzerIdentityV1,
-    PhysicalMachineEffectEntryRequestV1, PhysicalMachineEffectEvidenceErrorV1,
-    PhysicalMachineEffectEvidenceV1, PhysicalMachineEffectRequestErrorV1,
+    MAX_PHYSICAL_MACHINE_ANALYSIS_BUNDLE_BYTES_V1, PhysicalMachineAnalysisEvidenceErrorV1,
+    PhysicalMachineAnalysisEvidenceV1, PhysicalMachineAnalyzerIdentityV1,
+    PhysicalMachineEffectEntryRequestV1, PhysicalMachineEffectRequestErrorV1,
     PhysicalMachineEffectRequestV1, PhysicalMachineExecutionChallengeV1,
     PhysicalMachineToolchainIdentityV1,
 };
@@ -37,9 +37,9 @@ const RUNTIME_CLOSURE_IDENTITY_DOMAIN: &[u8] =
 const RUNTIME_MAPPING_IDENTITY_DOMAIN: &[u8] =
     b"FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-RUNTIME-MAPPINGS/V1\0";
 const RECEIPT_IDENTITY_DOMAIN: &[u8] =
-    b"FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-AUTHENTICATED-RECEIPT/V1\0";
+    b"FE2O3/GFX942-PHYSICAL-MACHINE-ANALYSIS-AUTHENTICATED-RECEIPT/V1\0";
 const RECEIPT_DOMAIN: &[u8] =
-    b"FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-AUTHENTICATED-RECEIPT-RECORD/V1\0";
+    b"FE2O3/GFX942-PHYSICAL-MACHINE-ANALYSIS-AUTHENTICATED-RECEIPT-RECORD/V1\0";
 const IDENTITY_CHALLENGE_DOMAIN: &[u8] =
     b"FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-IDENTITY-CHALLENGE/V1\0";
 const IDENTITY_RESPONSE_DOMAIN: &[u8] =
@@ -85,7 +85,7 @@ macro_rules! measured_identity {
 measured_identity!(PhysicalMachineWorkerExecutableIdentityV1);
 measured_identity!(PhysicalMachineRuntimeClosureIdentityV1);
 measured_identity!(PhysicalMachineRuntimeMappingIdentityV1);
-measured_identity!(AuthenticatedPhysicalMachineEffectReceiptIdentityV1);
+measured_identity!(AuthenticatedPhysicalMachineAnalysisReceiptIdentityV1);
 
 impl PhysicalMachineWorkerExecutableIdentityV1 {
     pub fn calculate(bytes: &[u8]) -> Self {
@@ -199,7 +199,7 @@ impl AuthenticatedPhysicalMachineEffectLimitsV1 {
         if timeout.is_zero()
             || timeout > MAX_PHYSICAL_MACHINE_EFFECT_TIMEOUT_V1
             || stdout_bytes == 0
-            || stdout_bytes > MAX_PHYSICAL_MACHINE_EFFECT_EVIDENCE_BYTES_V1
+            || stdout_bytes > MAX_PHYSICAL_MACHINE_ANALYSIS_BUNDLE_BYTES_V1
             || stderr_bytes > MAX_PHYSICAL_MACHINE_EFFECT_STDERR_BYTES_V1
         {
             return Err(AuthenticatedPhysicalMachineEffectErrorV1::plain(
@@ -222,7 +222,7 @@ impl Default for AuthenticatedPhysicalMachineEffectLimitsV1 {
     fn default() -> Self {
         Self {
             timeout: DEFAULT_PHYSICAL_MACHINE_EFFECT_TIMEOUT_V1,
-            stdout_bytes: MAX_PHYSICAL_MACHINE_EFFECT_EVIDENCE_BYTES_V1,
+            stdout_bytes: MAX_PHYSICAL_MACHINE_ANALYSIS_BUNDLE_BYTES_V1,
             stderr_bytes: 16 * 1024,
         }
     }
@@ -276,7 +276,7 @@ pub enum AuthenticatedPhysicalMachineEffectErrorKindV1 {
     IdentityProbe,
     IdentityMismatch,
     Request(PhysicalMachineEffectRequestErrorV1),
-    Evidence(PhysicalMachineEffectEvidenceErrorV1),
+    Analysis(PhysicalMachineAnalysisEvidenceErrorV1),
     PersistReceipt,
 }
 
@@ -324,7 +324,7 @@ impl fmt::Display for AuthenticatedPhysicalMachineEffectErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             formatter,
-            "authenticated physical machine-effect execution failed: {:?}",
+            "authenticated physical-machine analysis failed: {:?}",
             self.kind
         )?;
         if let Some(detail) = &self.detail {
@@ -336,37 +336,37 @@ impl fmt::Display for AuthenticatedPhysicalMachineEffectErrorV1 {
 
 impl Error for AuthenticatedPhysicalMachineEffectErrorV1 {}
 
-/// A policy-authenticated static-site analysis receipt. Deliberately not `Clone`.
+/// A policy-authenticated machine-analysis receipt. Deliberately not `Clone`.
 ///
 /// Authentication binds the worker image, observed object and executable mapping closures,
 /// challenge, and exact evidence bytes. Every file-backed mapping and kernel-provided
 /// executable mapping is retained exactly. Anonymous non-executable allocator mappings may move
 /// during analysis; persistent anonymous executable mappings are rejected. This does not upgrade
-/// the static effect list into a memory-safety, race-freedom, refinement, or runtime-count proof.
-pub struct AuthenticatedPhysicalMachineEffectExecutionV1 {
+/// the static analysis into a memory-safety, race-freedom, refinement, or runtime-count proof.
+pub struct AuthenticatedPhysicalMachineAnalysisExecutionV1 {
     policy: PhysicalMachineEffectWorkerPolicyV1,
     execution_challenge: PhysicalMachineExecutionChallengeV1,
     process_id: u32,
     process_start_ticks: u64,
     runtime_mapping_identity: PhysicalMachineRuntimeMappingIdentityV1,
     request: PhysicalMachineEffectRequestV1,
-    evidence: PhysicalMachineEffectEvidenceV1,
+    analysis: PhysicalMachineAnalysisEvidenceV1,
     canonical_receipt: Vec<u8>,
 }
 
-impl fmt::Debug for AuthenticatedPhysicalMachineEffectExecutionV1 {
+impl fmt::Debug for AuthenticatedPhysicalMachineAnalysisExecutionV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("AuthenticatedPhysicalMachineEffectExecutionV1")
+            .debug_struct("AuthenticatedPhysicalMachineAnalysisExecutionV1")
             .field("policy", &self.policy)
             .field("process_id", &self.process_id)
             .field("process_start_ticks", &self.process_start_ticks)
-            .field("evidence_identity", &self.evidence.identity())
+            .field("analysis_identity", &self.analysis.identity())
             .finish_non_exhaustive()
     }
 }
 
-impl AuthenticatedPhysicalMachineEffectExecutionV1 {
+impl AuthenticatedPhysicalMachineAnalysisExecutionV1 {
     pub const fn policy(&self) -> PhysicalMachineEffectWorkerPolicyV1 {
         self.policy
     }
@@ -387,8 +387,8 @@ impl AuthenticatedPhysicalMachineEffectExecutionV1 {
         self.runtime_mapping_identity
     }
 
-    pub const fn evidence(&self) -> &PhysicalMachineEffectEvidenceV1 {
-        &self.evidence
+    pub const fn analysis(&self) -> &PhysicalMachineAnalysisEvidenceV1 {
+        &self.analysis
     }
 
     pub const fn request(&self) -> &PhysicalMachineEffectRequestV1 {
@@ -399,8 +399,8 @@ impl AuthenticatedPhysicalMachineEffectExecutionV1 {
         &self.canonical_receipt
     }
 
-    pub fn identity(&self) -> AuthenticatedPhysicalMachineEffectReceiptIdentityV1 {
-        AuthenticatedPhysicalMachineEffectReceiptIdentityV1 {
+    pub fn identity(&self) -> AuthenticatedPhysicalMachineAnalysisReceiptIdentityV1 {
+        AuthenticatedPhysicalMachineAnalysisReceiptIdentityV1 {
             sha256: domain_hash(RECEIPT_IDENTITY_DOMAIN, &self.canonical_receipt),
             byte_len: self.canonical_receipt.len() as u64,
         }
@@ -490,7 +490,7 @@ fn encode_receipt(
     process_id: u32,
     process_start_ticks: u64,
     runtime_mapping: PhysicalMachineRuntimeMappingIdentityV1,
-    evidence: &PhysicalMachineEffectEvidenceV1,
+    analysis: &PhysicalMachineAnalysisEvidenceV1,
 ) -> Vec<u8> {
     let mut output = Vec::with_capacity(RECEIPT_DOMAIN.len() + 256);
     output.extend_from_slice(RECEIPT_DOMAIN);
@@ -507,12 +507,12 @@ fn encode_receipt(
     push_u64(&mut output, process_start_ticks);
     output.extend_from_slice(&runtime_mapping.sha256);
     push_u64(&mut output, runtime_mapping.byte_len);
-    let request = evidence.request_identity();
+    let request = analysis.effects().request_identity();
     output.extend_from_slice(&request.sha256());
     push_u64(&mut output, request.byte_len());
-    let evidence_identity = evidence.identity();
-    output.extend_from_slice(&evidence_identity.sha256());
-    push_u64(&mut output, evidence_identity.byte_len());
+    let analysis_identity = analysis.identity();
+    output.extend_from_slice(&analysis_identity.sha256());
+    push_u64(&mut output, analysis_identity.byte_len());
     let length = output.len() as u32;
     let offset = RECEIPT_DOMAIN.len();
     output[offset..offset + 4].copy_from_slice(&length.to_le_bytes());
@@ -935,7 +935,7 @@ mod platform {
             entries: Vec<PhysicalMachineEffectEntryRequestV1>,
             limits: AuthenticatedPhysicalMachineEffectLimitsV1,
         ) -> Result<
-            AuthenticatedPhysicalMachineEffectExecutionV1,
+            AuthenticatedPhysicalMachineAnalysisExecutionV1,
             AuthenticatedPhysicalMachineEffectErrorV1,
         > {
             let challenge = fresh_challenge()?;
@@ -952,7 +952,7 @@ mod platform {
                 )
             })?;
             let execution = self.run(
-                "--machine-effects-gfx942-v1",
+                "--machine-analysis-gfx942-v1",
                 request.canonical_bytes(),
                 challenge,
                 limits,
@@ -967,13 +967,13 @@ mod platform {
                     },
                 ));
             }
-            let evidence = PhysicalMachineEffectEvidenceV1::decode_canonical_for(
+            let analysis = PhysicalMachineAnalysisEvidenceV1::decode_canonical_for(
                 &request,
                 &execution.capture.stdout.bytes,
             )
             .map_err(|error| {
                 process_error(
-                    AuthenticatedPhysicalMachineEffectErrorKindV1::Evidence(error),
+                    AuthenticatedPhysicalMachineEffectErrorKindV1::Analysis(error),
                     &execution.capture,
                 )
             })?;
@@ -983,16 +983,16 @@ mod platform {
                 execution.observation.process_id,
                 execution.observation.start_ticks,
                 execution.observation.runtime_mappings,
-                &evidence,
+                &analysis,
             );
-            Ok(AuthenticatedPhysicalMachineEffectExecutionV1 {
+            Ok(AuthenticatedPhysicalMachineAnalysisExecutionV1 {
                 policy: self.policy,
                 execution_challenge: challenge,
                 process_id: execution.observation.process_id,
                 process_start_ticks: execution.observation.start_ticks,
                 runtime_mapping_identity: execution.observation.runtime_mappings,
                 request,
-                evidence,
+                analysis,
                 canonical_receipt,
             })
         }

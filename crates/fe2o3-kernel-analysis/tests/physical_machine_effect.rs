@@ -1,6 +1,8 @@
 use fe2o3_kernel_analysis::{
+    PHYSICAL_MACHINE_ANALYSIS_BUNDLE_DOMAIN_V1, PHYSICAL_MACHINE_ANALYSIS_BUNDLE_SCHEMA_VERSION_V1,
     PHYSICAL_MACHINE_EFFECT_EVIDENCE_DOMAIN_V1, PHYSICAL_MACHINE_EFFECT_SCHEMA_VERSION_V1,
     PHYSICAL_MACHINE_TRACE_EVIDENCE_DOMAIN_V1, PHYSICAL_MACHINE_TRACE_SCHEMA_VERSION_V1,
+    PhysicalMachineAnalysisEvidenceErrorV1, PhysicalMachineAnalysisEvidenceV1,
     PhysicalMachineAnalyzerIdentityV1, PhysicalMachineEffectAnalysisBasisV1,
     PhysicalMachineEffectBudgetV1, PhysicalMachineEffectEntryRequestV1,
     PhysicalMachineEffectEvidenceErrorV1, PhysicalMachineEffectEvidenceV1,
@@ -548,6 +550,24 @@ fn encode_trace(
     )
 }
 
+fn encode_analysis_bundle(effects: &[u8], trace: &[u8]) -> Vec<u8> {
+    let mut output = Vec::new();
+    output.extend_from_slice(PHYSICAL_MACHINE_ANALYSIS_BUNDLE_DOMAIN_V1);
+    push_u32(&mut output, 0);
+    push_u16(
+        &mut output,
+        PHYSICAL_MACHINE_ANALYSIS_BUNDLE_SCHEMA_VERSION_V1,
+    );
+    push_u32(&mut output, effects.len() as u32);
+    output.extend_from_slice(effects);
+    push_u32(&mut output, trace.len() as u32);
+    output.extend_from_slice(trace);
+    let length = output.len() as u32;
+    let offset = PHYSICAL_MACHINE_ANALYSIS_BUNDLE_DOMAIN_V1.len();
+    output[offset..offset + 4].copy_from_slice(&length.to_le_bytes());
+    output
+}
+
 #[test]
 fn canonical_record_binds_exact_payload_worker_target_graph_and_effects() {
     let request = request();
@@ -1006,5 +1026,56 @@ fn machine_trace_rejects_missing_effect_site() {
     assert_eq!(
         PhysicalMachineTraceEvidenceV1::decode_canonical_for(&request, &incomplete, &trace_bytes,),
         Err(PhysicalMachineTraceEvidenceErrorV1::EffectTraceMismatch)
+    );
+}
+
+#[test]
+fn machine_analysis_bundle_keeps_effects_and_trace_indivisible() {
+    let (request, effects, trace_bytes, _) = loop_trace_fixture();
+    let bytes = encode_analysis_bundle(effects.canonical_bytes(), &trace_bytes);
+    let analysis = PhysicalMachineAnalysisEvidenceV1::decode_canonical_for(&request, &bytes)
+        .expect("valid machine analysis bundle");
+
+    assert_eq!(analysis.effects().identity(), effects.identity());
+    assert_eq!(analysis.trace().canonical_bytes(), trace_bytes);
+    assert_eq!(analysis.identity().byte_len(), bytes.len() as u64);
+    assert!(analysis.binds_exact_payload_instruction_bytes());
+    assert!(!analysis.establishes_machine_semantics());
+    assert!(!analysis.establishes_compiler_refinement());
+    assert!(!analysis.grants_load_authority());
+    assert!(!analysis.grants_launch_authority());
+}
+
+#[test]
+fn machine_analysis_bundle_rejects_component_omission_and_trace_mutation() {
+    let (request, effects, trace_bytes, offsets) = loop_trace_fixture();
+    let bytes = encode_analysis_bundle(effects.canonical_bytes(), &trace_bytes);
+    let component_length_offset = PHYSICAL_MACHINE_ANALYSIS_BUNDLE_DOMAIN_V1.len() + 4 + 2;
+
+    let mut omitted_effects = bytes.clone();
+    omitted_effects[component_length_offset..component_length_offset + 4]
+        .copy_from_slice(&0_u32.to_le_bytes());
+    assert_eq!(
+        PhysicalMachineAnalysisEvidenceV1::decode_canonical_for(&request, &omitted_effects),
+        Err(PhysicalMachineAnalysisEvidenceErrorV1::ComponentLength)
+    );
+
+    let trace_length_offset = component_length_offset + 4 + effects.canonical_bytes().len();
+    let mut omitted_trace = bytes.clone();
+    omitted_trace[trace_length_offset..trace_length_offset + 4]
+        .copy_from_slice(&0_u32.to_le_bytes());
+    assert_eq!(
+        PhysicalMachineAnalysisEvidenceV1::decode_canonical_for(&request, &omitted_trace),
+        Err(PhysicalMachineAnalysisEvidenceErrorV1::ComponentLength)
+    );
+
+    let trace_start = trace_length_offset + 4;
+    let mut mutated_trace = bytes;
+    mutated_trace[trace_start + offsets.first_encoding] ^= 1;
+    assert_eq!(
+        PhysicalMachineAnalysisEvidenceV1::decode_canonical_for(&request, &mutated_trace),
+        Err(PhysicalMachineAnalysisEvidenceErrorV1::Trace(
+            PhysicalMachineTraceEvidenceErrorV1::InstructionBytesMismatch
+        ))
     );
 }

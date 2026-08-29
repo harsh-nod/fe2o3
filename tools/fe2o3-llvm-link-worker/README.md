@@ -26,19 +26,27 @@ machine code or grant source-to-machine refinement authority.
 
 The companion machine-effect analyzer reads a bounded `gfx942:xnack-` COV6
 HSACO, validates its loader-visible ELF and metadata views, resolves a bounded
-direct-call graph, and emits deterministic static evidence for global-address,
-global-read, global-write, and return sites. It accepts arbitrary canonical
-entry symbols and uses LLVM MC instruction properties rather than a
-workload-specific opcode or CFG profile. Unsupported memory spaces, atomics,
-indirect control flow, self branches, recursion, and unmodeled side effects fail
-closed. Direct branch backedges are retained in the finite CFG so ordinary
-bounded-loop machine shapes can be analyzed without a workload-specific route.
+direct-call graph, and emits one canonical analysis bundle. The bundle contains
+both static global-address, global-read, global-write, and return sites and the
+complete decoded instruction/CFG trace: exact encodings, operands, explicit and
+implicit register facts, branches, and memory widths. Every serialized code
+range and instruction location is a payload file offset whose bytes must match
+the exact HSACO. The trace hash-binds the effect record, and the outer bundle
+keeps both records indivisible at the worker boundary.
 
-The evidence enumerates reachable static instruction sites in the exact input
-bytes. Accepting a backedge does not prove termination, a trip count, loop-carried
-dataflow, or recurrence semantics. The evidence also does not prove dynamic
-execution counts, concrete addresses, bounds, race freedom, compiler refinement,
-source properties, or launch safety.
+The analyzer accepts arbitrary canonical entry symbols and uses LLVM MC
+instruction properties rather than a workload-specific opcode or CFG profile.
+Unsupported memory spaces, atomics, indirect control flow, self-targeting
+instructions, recursion, and unmodeled side effects fail closed. Direct branch
+backedges, including basic-block self loops, are retained in the finite CFG so
+ordinary bounded-loop machine shapes can be analyzed without a
+workload-specific route.
+
+The bundle enumerates reachable static instruction sites in the exact input
+bytes. Accepting a backedge does not prove termination, a trip count,
+loop-carried dataflow, or recurrence semantics. The evidence also does not
+prove dynamic execution counts, concrete addresses, bounds, race freedom,
+compiler refinement, source properties, or launch safety.
 
 The Rust authenticated execution API copies the exact worker into a sealed
 memfd, clears the environment to `LANG=C`, `LC_ALL=C`, and `TZ=UTC`, retains
@@ -55,6 +63,9 @@ remaps, permission changes, and offset changes fail closed. A mapping created
 and removed entirely between these two snapshots is outside this guarantee;
 there is no continuous kernel-backed map audit.
 Retained files are re-statted and rehashed after execution.
+Every mapped runtime file must be immutable to the analyzer UID; a development
+LLVM build with a writable `libLLVM.so` is intentionally rejected until it is
+deployed read-only or through an equivalently sealed runtime closure.
 
 ## Build
 

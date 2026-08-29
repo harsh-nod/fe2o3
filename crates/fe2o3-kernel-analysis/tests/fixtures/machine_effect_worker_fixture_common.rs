@@ -10,6 +10,11 @@ use std::{
 
 const REQUEST_DOMAIN: &[u8] = b"FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-REQUEST/V1\0";
 const EVIDENCE_DOMAIN: &[u8] = b"FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-EVIDENCE/V1\0";
+const EVIDENCE_IDENTITY_DOMAIN: &[u8] =
+    b"FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-EVIDENCE-IDENTITY/V1\0";
+const TRACE_DOMAIN: &[u8] = b"FE2O3/GFX942-PHYSICAL-MACHINE-TRACE-EVIDENCE/V1\0";
+const ANALYSIS_BUNDLE_DOMAIN: &[u8] =
+    b"FE2O3/GFX942-PHYSICAL-MACHINE-ANALYSIS-BUNDLE/V1\0";
 const REQUEST_IDENTITY_DOMAIN: &[u8] =
     b"FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-REQUEST-IDENTITY/V1\0";
 const IDENTITY_CHALLENGE_DOMAIN: &[u8] =
@@ -69,7 +74,7 @@ pub fn run(analyzer_byte: u8, toolchain_byte: u8) {
         "--machine-effects-gfx942-identities-v1" => {
             identity_response(&input, analyzer_byte, toolchain_byte, challenge)
         }
-        "--machine-effects-gfx942-v1" => analysis_response(input, challenge),
+        "--machine-analysis-gfx942-v1" => analysis_response(input, challenge),
         _ => std::process::exit(64),
     }
     std::io::stdout().flush().unwrap();
@@ -226,14 +231,18 @@ fn analysis_response(bytes: Vec<u8>, control_challenge: [u8; 32]) {
         _ => {}
     }
     let mode = request.payload[0];
-    let mut output = evidence(&request);
+    let mut effects = evidence(&request);
     let challenge_offset = EVIDENCE_DOMAIN.len() + 4 + 2;
     let analyzer_offset = challenge_offset + 32 + 32 + 8 + 32 + 8;
     match mode {
-        5 => output[analyzer_offset] ^= 1,
-        6 => output.push(0xaa),
-        7 => output[challenge_offset] ^= 1,
+        5 => effects[analyzer_offset] ^= 1,
+        7 => effects[challenge_offset] ^= 1,
         _ => {}
+    }
+    let trace = trace(&request, &effects);
+    let mut output = analysis_bundle(&effects, &trace);
+    if mode == 6 {
+        output.push(0xaa);
     }
     std::io::stdout().write_all(&output).unwrap();
     if mode == 16 {
@@ -474,6 +483,66 @@ fn evidence(request: &Request) -> Vec<u8> {
         push_effect(&mut output, &entry.symbol, base, 4, 0);
     }
     set_length(&mut output, EVIDENCE_DOMAIN.len());
+    output
+}
+
+fn trace(request: &Request, effects: &[u8]) -> Vec<u8> {
+    let mut output = Vec::new();
+    output.extend_from_slice(TRACE_DOMAIN);
+    push_u32(&mut output, 0);
+    push_u16(&mut output, 1);
+    output.extend_from_slice(&request.challenge);
+    output.extend_from_slice(&domain_hash(REQUEST_IDENTITY_DOMAIN, &request.bytes));
+    push_u64(&mut output, request.bytes.len() as u64);
+    output.extend_from_slice(&domain_hash(EVIDENCE_IDENTITY_DOMAIN, effects));
+    push_u64(&mut output, effects.len() as u64);
+    output.extend_from_slice(&request.payload_digest);
+    push_u64(&mut output, request.payload_bytes);
+    output.extend_from_slice(&request.analyzer);
+    output.extend_from_slice(&request.toolchain);
+    push_u16(&mut output, 1);
+
+    push_u32(&mut output, request.entries.len() as u32);
+    for entry in &request.entries {
+        push_text(&mut output, &entry.symbol);
+        push_u32(&mut output, 0);
+        push_u64(&mut output, 0);
+        push_u32(&mut output, 1);
+        push_u16(&mut output, 0);
+    }
+
+    push_u32(&mut output, request.entries.len() as u32);
+    for entry in &request.entries {
+        push_text(&mut output, &entry.symbol);
+        push_u64(&mut output, 0);
+        push_u32(&mut output, 0);
+        push_text(&mut output, "S_ENDPGM");
+        push_u16(&mut output, request.payload.len() as u16);
+        output.extend_from_slice(&request.payload);
+        push_u16(&mut output, 0);
+        push_u16(&mut output, 0);
+        push_u16(&mut output, 0);
+        push_u16(&mut output, 0);
+        output.push(4);
+        push_u64(&mut output, 0);
+        push_u16(&mut output, 1 << 2);
+        output.push(0);
+        push_u16(&mut output, 0);
+    }
+    set_length(&mut output, TRACE_DOMAIN.len());
+    output
+}
+
+fn analysis_bundle(effects: &[u8], trace: &[u8]) -> Vec<u8> {
+    let mut output = Vec::new();
+    output.extend_from_slice(ANALYSIS_BUNDLE_DOMAIN);
+    push_u32(&mut output, 0);
+    push_u16(&mut output, 1);
+    push_u32(&mut output, effects.len() as u32);
+    output.extend_from_slice(effects);
+    push_u32(&mut output, trace.len() as u32);
+    output.extend_from_slice(trace);
+    set_length(&mut output, ANALYSIS_BUNDLE_DOMAIN.len());
     output
 }
 

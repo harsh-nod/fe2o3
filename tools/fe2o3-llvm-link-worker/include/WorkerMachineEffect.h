@@ -19,6 +19,9 @@ inline constexpr size_t MaxPhysicalMachineEffectEffects = 16 * 1024;
 inline constexpr size_t MaxPhysicalMachineTraceBlocks = 4 * 1024;
 inline constexpr size_t MaxPhysicalMachineTraceInstructions = 16 * 1024;
 inline constexpr size_t MaxPhysicalMachineTraceBytes = 16 * 1024 * 1024;
+inline constexpr size_t MaxPhysicalMachineAnalysisBundleBytes =
+    MaxPhysicalMachineEffectEvidenceBytes + MaxPhysicalMachineTraceBytes +
+    1024;
 
 struct PhysicalMachineEffectIdentities {
   std::array<uint8_t, 32> Analyzer{};
@@ -176,6 +179,9 @@ llvm::Expected<std::vector<uint8_t>> encodePhysicalMachineEffectEvidence(
 llvm::Expected<std::vector<uint8_t>> encodePhysicalMachineTraceEvidence(
     const PhysicalMachineEffectEvidence &Evidence,
     llvm::ArrayRef<uint8_t> CanonicalEffectEvidence);
+
+llvm::Expected<std::vector<uint8_t>> encodePhysicalMachineAnalysisBundle(
+    const PhysicalMachineEffectEvidence &Evidence);
 
 } // namespace fe2o3::worker
 
