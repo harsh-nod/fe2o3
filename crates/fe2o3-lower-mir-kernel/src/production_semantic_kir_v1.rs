@@ -1718,6 +1718,7 @@ struct KirCorrelationIndexV1<'module> {
 struct RankedViewDefinitionV1 {
     allocation_origin: u64,
     memory_space: dialect_kernel::MemorySpaceAttr,
+    noalias_class: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -2500,6 +2501,7 @@ fn index_ranked_correlation(
                     RankedViewDefinitionV1 {
                         allocation_origin: *allocation_origin,
                         memory_space: dialect_kernel::MemorySpaceAttr::Global,
+                        noalias_class: 0,
                     },
                 )),
                 ProductionRankedOperationV1::ViewInSpace {
@@ -2512,6 +2514,7 @@ fn index_ranked_correlation(
                     RankedViewDefinitionV1 {
                         allocation_origin: *allocation_origin,
                         memory_space: *memory_space,
+                        noalias_class: 0,
                     },
                 )),
                 _ => None,
@@ -2594,12 +2597,13 @@ fn index_ranked_correlation(
                 kind,
                 memory_space,
                 allocation_origin,
-                ..
+                noalias_class,
             } => (
                 *kind,
                 IndexedRankedAllocationV1::Direct(RankedViewDefinitionV1 {
                     allocation_origin: *allocation_origin,
                     memory_space: *memory_space,
+                    noalias_class: *noalias_class,
                 }),
                 None,
                 None,
@@ -3208,6 +3212,33 @@ fn normalize_kir_cast_v1(
     }
 }
 
+fn expected_gfx950_workgroup_allocation_identity_v1(
+    operation: &Operation,
+    operation_access_ordinal: u32,
+) -> Option<(u64, u64)> {
+    let format = match &operation.kind {
+        OperationKind::Gfx950LdsTranspose(Gfx950LdsTransposeOperationV1 {
+            kind: Gfx950LdsTransposeOperationKindV1::Stage { format, .. },
+            ..
+        }) if operation_access_ordinal == 1 => *format,
+        OperationKind::Gfx950LdsTranspose(Gfx950LdsTransposeOperationV1 {
+            kind: Gfx950LdsTransposeOperationKindV1::Read { format, .. },
+            ..
+        }) if operation_access_ordinal == 0 => *format,
+        _ => return None,
+    };
+    Some(match format {
+        Gfx950LdsTransposeFormatV1::Fp4E2M1 => (
+            dialect_kernel::GFX950_TRANSPOSE_FP4_WORKGROUP_ALLOCATION_ORIGIN_V1,
+            dialect_kernel::GFX950_TRANSPOSE_FP4_WORKGROUP_NOALIAS_CLASS_V1,
+        ),
+        Gfx950LdsTransposeFormatV1::Fp8E4M3 => (
+            dialect_kernel::GFX950_TRANSPOSE_FP8_WORKGROUP_ALLOCATION_ORIGIN_V1,
+            dialect_kernel::GFX950_TRANSPOSE_FP8_WORKGROUP_NOALIAS_CLASS_V1,
+        ),
+    })
+}
+
 fn validate_mir_pliron_translation_v1(
     module: &Module,
     correspondence: &SemanticKirCorrespondenceV1,
@@ -3308,6 +3339,30 @@ fn validate_mir_pliron_translation_v1(
             return Err(ProductionMirPlironTranslationErrorV1::MemorySpaceMismatch {
                 location: consumer.location,
             });
+        }
+        if consumer.memory_space == dialect_kernel::MemorySpaceAttr::Workgroup {
+            let operation = kir.operations.get(&consumer.location).ok_or(
+                ProductionMirPlironTranslationErrorV1::AllocationOriginMismatch {
+                    location: consumer.location,
+                },
+            )?;
+            let expected = expected_gfx950_workgroup_allocation_identity_v1(
+                operation,
+                consumer.operation_access_ordinal,
+            );
+            match (source.allocation, expected) {
+                (IndexedRankedAllocationV1::View(_), None) => {}
+                (IndexedRankedAllocationV1::Direct(definition), Some((origin, class)))
+                    if definition.allocation_origin == origin
+                        && definition.noalias_class == class => {}
+                _ => {
+                    return Err(
+                        ProductionMirPlironTranslationErrorV1::AllocationOriginMismatch {
+                            location: consumer.location,
+                        },
+                    );
+                }
+            }
         }
         if consumer.memory_space == dialect_kernel::MemorySpaceAttr::Global {
             let parameter = external_allocation_parameter_v1(
@@ -20197,6 +20252,171 @@ mod resource_tests {
             index.unmodeled_memory_effects,
             vec![FunctionOperationLocation::new(BlockId(0), 0)],
         );
+    }
+
+    fn workgroup_translation_fixture(
+        operation: Operation,
+    ) -> (Module, SemanticKirCorrespondenceV1) {
+        let mut block = BasicBlock::new(BlockId(0));
+        block.operations.push(operation);
+        block.terminator = Some(Terminator::Return { values: vec![] });
+        let mut module = Module::new("workgroup-translation");
+        module.functions.push(Function::kernel_entry(
+            "workgroup_translation",
+            Signature::new(vec![gfx950_lds_transpose_pointer_type_v1()], vec![]),
+            vec![ValueId(0)],
+            vec![block],
+        ));
+        module.kernels.push(Kernel::new(
+            "workgroup-translation",
+            "workgroup_translation",
+            LaunchDomain::D1 {
+                x: LaunchExtent::Static(64),
+            },
+        ));
+        let correspondence = SemanticKirCorrespondenceV1 {
+            semantic_sha256: [10; 32],
+            function_count: 1,
+            blocks: vec![SemanticKirBlockCorrespondenceV1 {
+                semantic_function: SemanticFunctionIdV1::from_index(0),
+                semantic_block: SemanticBlockIdV1::from_index(0),
+                kernel_ir_block: BlockId(0),
+                source_statement_count: 1,
+            }]
+            .into_boxed_slice(),
+            statement_operation_spans: vec![SemanticKirStatementOperationSpanV1 {
+                semantic_function: SemanticFunctionIdV1::from_index(0),
+                semantic_block: SemanticBlockIdV1::from_index(0),
+                statement_ordinal: 0,
+                kernel_ir_block: BlockId(0),
+                first_operation_ordinal: 0,
+                operation_count: 1,
+            }]
+            .into_boxed_slice(),
+            terminator_operation_spans: vec![SemanticKirTerminatorOperationSpanV1 {
+                semantic_function: SemanticFunctionIdV1::from_index(0),
+                semantic_block: SemanticBlockIdV1::from_index(0),
+                kernel_ir_block: BlockId(0),
+                first_operation_ordinal: 1,
+                operation_count: 0,
+            }]
+            .into_boxed_slice(),
+            synthetic_operation_spans: Box::new([]),
+            parameter_bindings: Box::new([]),
+        };
+        (module, correspondence)
+    }
+
+    fn ranked_gfx950_transpose_lifecycle(fp8: bool) -> ProductionRankedKernelLoweringInputV1 {
+        let (allocation_origin, noalias_class) = if fp8 {
+            (
+                dialect_kernel::GFX950_TRANSPOSE_FP8_WORKGROUP_ALLOCATION_ORIGIN_V1,
+                dialect_kernel::GFX950_TRANSPOSE_FP8_WORKGROUP_NOALIAS_CLASS_V1,
+            )
+        } else {
+            (
+                dialect_kernel::GFX950_TRANSPOSE_FP4_WORKGROUP_ALLOCATION_ORIGIN_V1,
+                dialect_kernel::GFX950_TRANSPOSE_FP4_WORKGROUP_NOALIAS_CLASS_V1,
+            )
+        };
+        let effect = |kind| ProductionRankedOperationV1::AllocationEffect {
+            kind,
+            memory_space: dialect_kernel::MemorySpaceAttr::Workgroup,
+            allocation_origin,
+            noalias_class,
+        };
+        let kernel = ProductionRankedKernelV1::new(
+            "workgroup_translation",
+            0,
+            vec![ProductionRankedBlockV1::new(
+                vec![
+                    ProductionRankedOperationV1::ExecutionLayout {
+                        grid_identity: 10,
+                        global_extents: [64, 1, 1],
+                        workgroup_extents: [64, 1, 1],
+                        subgroup_size: 64,
+                        full_physical_workgroups: true,
+                    },
+                    effect(AccessKindAttr::Write),
+                    ProductionRankedOperationV1::Barrier {
+                        execution_scope: dialect_gpu::HierarchyAttr::Workgroup,
+                        memory_scope: dialect_gpu::MemoryScopeAttr::Workgroup,
+                        address_space: dialect_gpu::AddressSpaceAttr::Workgroup,
+                        order: dialect_gpu::MemoryOrderAttr::AcquireRelease,
+                    },
+                    effect(AccessKindAttr::Read),
+                ],
+                ProductionRankedTerminatorV1::Return,
+            )],
+        )
+        .expect("exact reserved transpose lifecycle");
+        compile_ranked_kernel_for_lowering_v1(
+            ProductionConstructionV1::ranked_kernel("workgroup_translation", kernel).unwrap(),
+            ProductionSessionLimitsV1::default(),
+        )
+        .expect("exact reserved transpose lifecycle reaches lowering")
+    }
+
+    #[test]
+    fn mir_pliron_translation_binds_reserved_workgroup_effects_to_format_and_operation() {
+        let read_fp8 = Operation::new(
+            vec![],
+            OperationKind::Gfx950LdsTranspose(Gfx950LdsTransposeOperationV1::full(
+                Gfx950LdsTransposeOperationKindV1::Read {
+                    format: Gfx950LdsTransposeFormatV1::Fp8E4M3,
+                    storage: ValueId(0),
+                },
+            )),
+        );
+        assert_eq!(
+            expected_gfx950_workgroup_allocation_identity_v1(&read_fp8, 0),
+            Some((
+                dialect_kernel::GFX950_TRANSPOSE_FP8_WORKGROUP_ALLOCATION_ORIGIN_V1,
+                dialect_kernel::GFX950_TRANSPOSE_FP8_WORKGROUP_NOALIAS_CLASS_V1,
+            ))
+        );
+        assert_eq!(
+            expected_gfx950_workgroup_allocation_identity_v1(&read_fp8, 1),
+            None
+        );
+
+        let (module, correspondence) = workgroup_translation_fixture(read_fp8);
+        let fp4_lowering = ranked_gfx950_transpose_lifecycle(false);
+        let read_source = ProductionRankedAccessSourceV1::new(0, Some(0), 0, 0, 3);
+        assert!(matches!(
+            validate_mir_pliron_translation_v1(
+                &module,
+                &correspondence,
+                &fp4_lowering,
+                &[read_source],
+                8,
+            ),
+            Err(ProductionMirPlironTranslationErrorV1::AllocationOriginMismatch { .. })
+        ));
+
+        let ordinary_lds = Operation::new(
+            vec![],
+            OperationKind::Matrix(MatrixOperation::lds_load(
+                ValueId(0),
+                fe2o3_kernel_ir::MatrixElement::Bf16,
+            )),
+        );
+        assert_eq!(
+            expected_gfx950_workgroup_allocation_identity_v1(&ordinary_lds, 0),
+            None
+        );
+        let (module, correspondence) = workgroup_translation_fixture(ordinary_lds);
+        let fp8_lowering = ranked_gfx950_transpose_lifecycle(true);
+        assert!(matches!(
+            validate_mir_pliron_translation_v1(
+                &module,
+                &correspondence,
+                &fp8_lowering,
+                &[read_source],
+                8,
+            ),
+            Err(ProductionMirPlironTranslationErrorV1::AllocationOriginMismatch { .. })
+        ));
     }
 
     #[test]

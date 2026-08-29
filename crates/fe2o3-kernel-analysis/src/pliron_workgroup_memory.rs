@@ -1,14 +1,22 @@
 //! Workgroup-memory initialization, publication, and race verification.
 
-use std::{collections::HashSet, fmt};
+use std::{
+    collections::{BTreeMap, HashMap, HashSet},
+    fmt,
+};
 
+use dialect_gpu::{AddressSpaceAttr, HierarchyAttr, MemoryOrderAttr, MemoryScopeAttr};
 use dialect_kernel::{
-    AccessKindAttr, MemorySpaceAttr, PipelineCreateOp, RankedAccessOp, RankedViewOp,
+    AccessKindAttr, AllocationEffectOp, MemorySpaceAttr, PipelineCreateOp, RankedAccessOp,
+    RankedViewOp, is_supported_allocation_effect_contract_v1,
 };
 use pliron::{builtin::ops::FuncOp, context::Context, operation::Operation, value::Value};
 
 use crate::pliron_analysis_manager::{PlironAnalysisManagerV1, PlironMemoryOrderAnalysisFailureV1};
 use crate::pliron_barrier::run_pliron_barrier_convergence_check_with_analyses_v1;
+use crate::pliron_invocation_trace::{
+    PlironInvocationTraceV1, PlironTraceEventV1, PlironTraceLocationV1,
+};
 use crate::pliron_memory_order::{PlironMemoryOrderFailureV1, PlironMemoryOrderIssueV1};
 use crate::pliron_pipeline_protocol::run_pliron_pipeline_protocol_check_with_analyses_v1;
 use crate::pliron_ranked_bounds::run_pliron_ranked_bounds_check_with_analyses_v1;
@@ -191,30 +199,62 @@ pub(crate) fn run_pliron_workgroup_memory_check_with_analyses_v1(
             });
         }
     };
-    let (workgroup_access_views, pipeline_views) = inventory.operations().iter().fold(
-        (HashSet::<Value>::new(), Vec::new()),
-        |(mut accesses, mut pipelines), site| {
-            let operation = Operation::get_op_dyn(site.pointer(), context);
-            if let Some(access) = operation.downcast_ref::<RankedAccessOp>()
-                && access
-                    .view(context)
-                    .defining_op()
-                    .is_some_and(|definition| {
-                        Operation::get_op_dyn(definition, context)
-                            .downcast_ref::<RankedViewOp>()
-                            .is_some_and(|view| {
-                                view.memory_space(context) == Some(MemorySpaceAttr::Workgroup)
-                            })
+    let (workgroup_access_views, pipeline_views, collective_effect_sites) =
+        inventory.operations().iter().fold(
+            (
+                HashSet::<Value>::new(),
+                Vec::new(),
+                HashSet::<PlironTraceLocationV1>::new(),
+            ),
+            |(mut accesses, mut pipelines, mut collective_effects), site| {
+                let operation = Operation::get_op_dyn(site.pointer(), context);
+                if let Some(access) = operation.downcast_ref::<RankedAccessOp>()
+                    && access
+                        .view(context)
+                        .defining_op()
+                        .is_some_and(|definition| {
+                            Operation::get_op_dyn(definition, context)
+                                .downcast_ref::<RankedViewOp>()
+                                .is_some_and(|view| {
+                                    view.memory_space(context) == Some(MemorySpaceAttr::Workgroup)
+                                })
+                        })
+                {
+                    accesses.insert(access.view(context));
+                }
+                if let Some(create) = operation.downcast_ref::<PipelineCreateOp>() {
+                    pipelines.push((site.block(), site.operation(), create.view(context)));
+                }
+                if operation
+                    .downcast_ref::<AllocationEffectOp>()
+                    .is_some_and(|effect| {
+                        effect.memory_space(context) == Some(MemorySpaceAttr::Workgroup)
                     })
-            {
-                accesses.insert(access.view(context));
+                {
+                    collective_effects.insert(PlironTraceLocationV1 {
+                        block: site.block(),
+                        operation: site.operation(),
+                    });
+                }
+                (accesses, pipelines, collective_effects)
+            },
+        );
+    if !collective_effect_sites.is_empty() {
+        analyses.prepare_exact_trace(context, function);
+        let traces = match analyses.exact_trace() {
+            Ok(traces) => traces,
+            Err(failure) => {
+                return one(PlironWorkgroupMemoryFindingV1::AnalysisIncomplete {
+                    detail: trace_failure_detail(failure),
+                });
             }
-            if let Some(create) = operation.downcast_ref::<PipelineCreateOp>() {
-                pipelines.push((site.block(), site.operation(), create.view(context)));
-            }
-            (accesses, pipelines)
-        },
-    );
+        };
+        if let Err(detail) =
+            validate_collective_transpose_lifecycle_v1(traces, &collective_effect_sites)
+        {
+            return one(PlironWorkgroupMemoryFindingV1::AnalysisIncomplete { detail });
+        }
+    }
     if workgroup_access_views.is_empty() {
         return PlironWorkgroupMemoryReportV1 { findings: vec![] };
     }
@@ -304,6 +344,196 @@ pub(crate) fn run_pliron_workgroup_memory_check_with_analyses_v1(
     PlironWorkgroupMemoryReportV1 { findings }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CollectiveTransposePhaseV1 {
+    Staged,
+    Published,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct CollectiveTransposeEventV1 {
+    location: PlironTraceLocationV1,
+    access: AccessKindAttr,
+    allocation_origin: u64,
+    noalias_class: u64,
+}
+
+fn collective_trace_v1(trace: &PlironInvocationTraceV1) -> Vec<CollectiveTransposeEventV1> {
+    trace
+        .events
+        .iter()
+        .filter_map(|event| {
+            let PlironTraceEventV1::CollectiveAllocation {
+                location,
+                access,
+                memory_space: MemorySpaceAttr::Workgroup,
+                allocation_origin,
+                noalias_class,
+            } = event
+            else {
+                return None;
+            };
+            Some(CollectiveTransposeEventV1 {
+                location: *location,
+                access: *access,
+                allocation_origin: *allocation_origin,
+                noalias_class: *noalias_class,
+            })
+        })
+        .collect()
+}
+
+fn validate_collective_transpose_lifecycle_v1(
+    traces: &[PlironInvocationTraceV1],
+    expected_sites: &HashSet<PlironTraceLocationV1>,
+) -> Result<(), String> {
+    let mut workgroups = BTreeMap::<(u64, u64), Vec<&PlironInvocationTraceV1>>::new();
+    for trace in traces {
+        workgroups
+            .entry((trace.grid, trace.workgroup))
+            .or_default()
+            .push(trace);
+    }
+    if workgroups.is_empty() {
+        return Err("the collective transpose lifecycle has no exact invocation traces".to_owned());
+    }
+
+    for ((grid, workgroup), group) in workgroups {
+        let lanes = group.iter().map(|trace| trace.lane).collect::<HashSet<_>>();
+        let subgroups = group
+            .iter()
+            .map(|trace| trace.subgroup)
+            .collect::<HashSet<_>>();
+        if group.len() != 64
+            || lanes.len() != 64
+            || lanes.iter().any(|lane| *lane >= 64)
+            || subgroups.len() != 1
+        {
+            return Err(format!(
+                "grid {grid} workgroup {workgroup} does not execute one full physical Wave64 for the coordinate-free gfx950 transpose tile"
+            ));
+        }
+
+        let expected_trace = collective_trace_v1(group[0]);
+        let observed_sites = expected_trace
+            .iter()
+            .map(|event| event.location)
+            .collect::<HashSet<_>>();
+        if observed_sites != *expected_sites || expected_trace.len() != expected_sites.len() {
+            return Err(format!(
+                "grid {grid} workgroup {workgroup} does not execute every collective transpose effect exactly once"
+            ));
+        }
+        for trace in &group[1..] {
+            if collective_trace_v1(trace) != expected_trace {
+                return Err(format!(
+                    "grid {grid} workgroup {workgroup} has a lane-divergent collective transpose effect trace"
+                ));
+            }
+        }
+
+        for trace in group {
+            let mut phases = HashMap::<(u64, u64), CollectiveTransposePhaseV1>::new();
+            for event in &trace.events {
+                match event {
+                    PlironTraceEventV1::CollectiveAllocation {
+                        location,
+                        access: AccessKindAttr::Write,
+                        memory_space: MemorySpaceAttr::Workgroup,
+                        allocation_origin,
+                        noalias_class,
+                    } => {
+                        if !is_supported_allocation_effect_contract_v1(
+                            AccessKindAttr::Write,
+                            MemorySpaceAttr::Workgroup,
+                            *allocation_origin,
+                            *noalias_class,
+                        ) {
+                            return Err(format!(
+                                "invocation {:?} block {} op {} uses a non-reserved collective transpose identity",
+                                trace.invocation, location.block, location.operation
+                            ));
+                        }
+                        if !phases.is_empty() {
+                            return Err(format!(
+                                "invocation {:?} block {} op {} interleaves or duplicates a collective transpose stage",
+                                trace.invocation, location.block, location.operation
+                            ));
+                        }
+                        phases.insert(
+                            (*allocation_origin, *noalias_class),
+                            CollectiveTransposePhaseV1::Staged,
+                        );
+                    }
+                    PlironTraceEventV1::Barrier {
+                        execution_scope: HierarchyAttr::Workgroup,
+                        memory_scope: MemoryScopeAttr::Workgroup,
+                        address_space: AddressSpaceAttr::Workgroup,
+                        order: MemoryOrderAttr::AcquireRelease,
+                        ..
+                    } => {
+                        if phases
+                            .values()
+                            .any(|phase| *phase == CollectiveTransposePhaseV1::Published)
+                        {
+                            return Err(format!(
+                                "invocation {:?} crosses a duplicate collective transpose publication barrier",
+                                trace.invocation
+                            ));
+                        }
+                        for phase in phases.values_mut() {
+                            if *phase == CollectiveTransposePhaseV1::Staged {
+                                *phase = CollectiveTransposePhaseV1::Published;
+                            }
+                        }
+                    }
+                    PlironTraceEventV1::CollectiveAllocation {
+                        location,
+                        access: AccessKindAttr::Read,
+                        memory_space: MemorySpaceAttr::Workgroup,
+                        allocation_origin,
+                        noalias_class,
+                    } => {
+                        if !is_supported_allocation_effect_contract_v1(
+                            AccessKindAttr::Read,
+                            MemorySpaceAttr::Workgroup,
+                            *allocation_origin,
+                            *noalias_class,
+                        ) {
+                            return Err(format!(
+                                "invocation {:?} block {} op {} uses a non-reserved collective transpose identity",
+                                trace.invocation, location.block, location.operation
+                            ));
+                        }
+                        let key = (*allocation_origin, *noalias_class);
+                        if phases.len() != 1
+                            || phases.remove(&key) != Some(CollectiveTransposePhaseV1::Published)
+                        {
+                            return Err(format!(
+                                "invocation {:?} block {} op {} reads a collective transpose tile without the exact matching staged and published format",
+                                trace.invocation, location.block, location.operation
+                            ));
+                        }
+                    }
+                    PlironTraceEventV1::CollectiveAllocation { location, .. } => {
+                        return Err(format!(
+                            "invocation {:?} block {} op {} has an unsupported collective transpose effect",
+                            trace.invocation, location.block, location.operation
+                        ));
+                    }
+                    _ => {}
+                }
+            }
+            if !phases.is_empty() {
+                return Err(format!(
+                    "invocation {:?} leaves a collective transpose stage unpublished or unread",
+                    trace.invocation
+                ));
+            }
+        }
+    }
+    Ok(())
+}
 fn memory_order_failure_detail(failure: PlironMemoryOrderAnalysisFailureV1) -> String {
     match failure {
         PlironMemoryOrderAnalysisFailureV1::Trace(failure) => trace_failure_detail(failure),

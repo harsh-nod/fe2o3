@@ -600,7 +600,8 @@ fn barrier_trace(
             | PlironTraceEventV1::Fence { .. }
             | PlironTraceEventV1::TensorInstruction { .. }
             | PlironTraceEventV1::Trap { .. }
-            | PlironTraceEventV1::Memory { .. } => None,
+            | PlironTraceEventV1::Memory { .. }
+            | PlironTraceEventV1::CollectiveAllocation { .. } => None,
         })
         .collect()
 }
