@@ -4,7 +4,7 @@ use fe2o3_tiled_gemm_general_v1::{
     GENERAL_TILED_GEMM_PROTECTED_EXECUTION_SUPPORTED_V1,
     GENERAL_TILED_GEMM_QUALIFICATION_EXECUTION_SUPPORTED_V1,
     GENERAL_TILED_GEMM_SAFE_SOURCE_PRESENT_V1, GENERAL_TILED_GEMM_SOURCE_LOWERING_SUPPORTED_V1,
-    GENERAL_TILED_GEMM_SOURCE_LOWERING_BLOCKER_V1, GENERAL_TILED_GEMM_SOURCE_TO_IR_SUPPORTED_V1,
+    GENERAL_TILED_GEMM_SOURCE_TO_IR_SUPPORTED_V1,
     kernel::{__fe2o3_kernel_marker_tiled_gemm_general_v1, GENERAL_TILED_GEMM_WORKGROUP_V1},
 };
 use syn::visit::Visit;
@@ -220,16 +220,12 @@ fn status_records_current_fail_closed_boundaries() {
     assert!(std::hint::black_box(
         GENERAL_TILED_GEMM_SOURCE_TO_IR_SUPPORTED_V1
     ));
-    assert!(!std::hint::black_box(
+    assert!(std::hint::black_box(
         GENERAL_TILED_GEMM_SOURCE_LOWERING_SUPPORTED_V1
     ));
-    assert!(!std::hint::black_box(
+    assert!(std::hint::black_box(
         GENERAL_TILED_GEMM_QUALIFICATION_EXECUTION_SUPPORTED_V1
     ));
-    assert_eq!(
-        GENERAL_TILED_GEMM_SOURCE_LOWERING_BLOCKER_V1,
-        "FE2O3-RACE-002: dynamic-launch checked-tiled ownership is not yet proved"
-    );
     assert!(!std::hint::black_box(
         GENERAL_TILED_GEMM_PROTECTED_EXECUTION_SUPPORTED_V1
     ));

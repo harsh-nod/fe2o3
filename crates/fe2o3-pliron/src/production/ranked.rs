@@ -858,9 +858,11 @@ pub fn normalized_effect_refinement_hash_for_kernel_v2(
                 {
                     unmodeled_matching_write = true;
                 }
-                ProductionRankedOperationV1::PredicatedAccess { view, index, .. }
-                    if *view == contract.view
-                        && [*index].as_slice() == contract.indices.as_slice() =>
+                ProductionRankedOperationV1::PredicatedAccess {
+                    kind, view, index, ..
+                } if kind.writes_memory()
+                    && *view == contract.view
+                    && [*index].as_slice() == contract.indices.as_slice() =>
                 {
                     unmodeled_matching_write = true;
                 }
@@ -1023,8 +1025,8 @@ pub fn normalized_tensor_refinement_hash_for_kernel_v1(
                 {
                     return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
                 }
-                ProductionRankedOperationV1::PredicatedAccess { view, .. }
-                    if *view == contract.output_view =>
+                ProductionRankedOperationV1::PredicatedAccess { kind, view, .. }
+                    if kind.writes_memory() && *view == contract.output_view =>
                 {
                     return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
                 }
@@ -1615,9 +1617,10 @@ pub enum ProductionRankedOperationV1 {
         view: ProductionRankedValueV1,
         indices: Vec<ProductionRankedValueV1>,
     },
-    /// One non-atomic write structurally paired with the checked mapping that
+    /// One non-atomic access structurally paired with the checked mapping that
     /// produced `index` and `success`. This shape grants no authority.
     PredicatedAccess {
+        kind: AccessKindAttr,
         view: ProductionRankedValueV1,
         index: ProductionRankedValueV1,
         success: ProductionRankedValueV1,
@@ -2227,7 +2230,7 @@ impl ProductionRankedKernelV1 {
                     *uses = uses.checked_add(1).ok_or(
                         ProductionRankedKernelErrorV1::ResourceLimit {
                             resource: "predicated success use",
-                            limit: 1,
+                            limit: MAX_RANKED_BOUNDS_OPERATIONS,
                             actual: usize::MAX,
                         },
                     )?;
@@ -2298,7 +2301,7 @@ impl ProductionRankedKernelV1 {
         }
         if let Some((success, uses)) = predicated_success_uses
             .into_iter()
-            .find(|(_, uses)| *uses != 1)
+            .find(|(_, uses)| *uses == 0)
         {
             return Err(ProductionRankedKernelErrorV1::InvalidPredicatedAccessUse {
                 success,
@@ -2832,7 +2835,7 @@ impl fmt::Display for ProductionRankedKernelErrorV1 {
             ),
             Self::InvalidPredicatedAccessUse { success, uses } => write!(
                 formatter,
-                "ranked predicated success value {} must be consumed exactly once but has {uses} uses",
+                "ranked predicated success value {} must be consumed at least once but has {uses} uses",
                 success.get(),
             ),
             Self::InvalidPredicatedAccessIndexUse { index } => write!(
@@ -3373,17 +3376,21 @@ fn validate_operation(
             Ok(None)
         }
         ProductionRankedOperationV1::PredicatedAccess {
+            kind,
             view,
             index,
             success,
         } => {
-            let kind = require_value(*view, argument_count, locals)?;
+            if kind.is_atomic() {
+                return Err(ProductionRankedKernelErrorV1::AtomicContractRequired);
+            }
+            validate_access(*kind, *view, &[*index], argument_count, locals)?;
+            let view_kind = require_value(*view, argument_count, locals)?;
             let RecipeValueKindV1::View {
                 rank: 1,
-                writable: true,
                 dynamic_extent: Some(view_extent),
                 ..
-            } = kind
+            } = view_kind
             else {
                 return Err(ProductionRankedKernelErrorV1::InvalidShape);
             };
@@ -3825,6 +3832,7 @@ fn validate_scoped_operation_values_v1(
             view,
             index,
             success,
+            ..
         } => {
             validate(*view)?;
             validate(*index)?;
@@ -5124,12 +5132,14 @@ fn materialize_operation(
             (op.get_operation(), None)
         }
         ProductionRankedOperationV1::PredicatedAccess {
+            kind,
             view,
             index,
             success,
         } => {
             let op = RankedAccessOp::new_predicated(
                 context,
+                *kind,
                 resolve_value(*view, arguments, locals, block_arguments)?,
                 resolve_value(*index, arguments, locals, block_arguments)?,
                 resolve_value(*success, arguments, locals, block_arguments)?,

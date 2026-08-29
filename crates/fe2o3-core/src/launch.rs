@@ -1,11 +1,11 @@
 use core::marker::PhantomData;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "qualification-unsafe-launch"))]
 use crate::{GpuFunction, Result, Stream, check};
-#[cfg(test)]
+#[cfg(any(test, feature = "qualification-unsafe-launch"))]
 use core::{any::Any, ffi::c_void};
 
-#[cfg(test)]
+#[cfg(any(test, feature = "qualification-unsafe-launch"))]
 #[derive(Clone, Copy, Debug)]
 pub struct LaunchConfig {
     pub grid_dim: (u32, u32, u32),
@@ -13,7 +13,7 @@ pub struct LaunchConfig {
     pub shared_mem_bytes: u32,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "qualification-unsafe-launch"))]
 impl LaunchConfig {
     pub fn for_num_elems(n: u32) -> Self {
         const DEFAULT_BLOCK_SIZE: u32 = 256;
@@ -54,14 +54,14 @@ impl<T> DevicePtr<T> {
 }
 
 /// Owns the host-side values whose addresses HIP reads during launch.
-#[cfg(test)]
+#[cfg(any(test, feature = "qualification-unsafe-launch"))]
 #[derive(Default)]
 pub struct KernelParams {
     owned: Vec<Box<dyn Any>>,
     params: Vec<*mut c_void>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "qualification-unsafe-launch"))]
 impl KernelParams {
     pub fn new() -> Self {
         Self::default()
@@ -102,7 +102,7 @@ impl KernelParams {
 /// also remain loaded until that completion. The caller must uphold the kernel's
 /// aliasing and synchronization requirements and provide valid grid, block, and
 /// shared-memory dimensions in `config`.
-#[cfg(test)]
+#[cfg(any(test, feature = "qualification-unsafe-launch"))]
 pub unsafe fn launch_kernel_on_stream(
     function: &GpuFunction,
     config: LaunchConfig,

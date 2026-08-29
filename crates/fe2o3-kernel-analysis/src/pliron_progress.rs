@@ -11,8 +11,8 @@ use std::{
 };
 
 use dialect_kernel::{
-    BranchArgsOp, BranchOp, IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp,
-    IndexLessThanBranchArgsOp, IndexUnsignedCastOp,
+    AnalysisSplitOp, BranchArgsOp, BranchOp, IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp,
+    IndexEqualBranchArgsOp, IndexLessThanBranchArgsOp, IndexUnsignedCastOp,
 };
 use pliron::{
     basic_block::BasicBlock,
@@ -151,7 +151,7 @@ struct ProgressWorkBudgetV1 {
 
 impl ProgressWorkBudgetV1 {
     fn charge(&mut self, units: usize) -> Result<(), PlironProgressFindingV1> {
-        let actual = self.work_units.checked_add(units).unwrap_or(usize::MAX);
+        let actual = self.work_units.saturating_add(units);
         if actual > MAX_PLIRON_PROGRESS_WORK_UNITS_V1 {
             return Err(PlironProgressFindingV1::ResourceLimitExceeded {
                 resource: "work units",
@@ -265,11 +265,12 @@ fn run_pliron_progress_check_inner_v1(
 
     let reachable = reachable_blocks(&graph.edges);
     let definitely_reachable = reachable_blocks(&graph.unconditional_edges);
+    let dominators = progress_dominators_v1(&graph.edges, &graph.predecessors);
     let mut findings = Vec::new();
     let mut certificates = Vec::new();
     for mut component in strongly_connected_components(&graph.edges) {
         component.sort_unstable();
-        let component_work = component.len().checked_mul(4).unwrap_or(usize::MAX);
+        let component_work = component.len().saturating_mul(4);
         if let Err(finding) = work.charge(component_work) {
             return report(finding);
         }
@@ -320,10 +321,23 @@ fn run_pliron_progress_check_inner_v1(
                 });
             }
             CanonicalLoopResultV1::Incomplete(reason) => {
-                findings.push(PlironProgressFindingV1::ProgressIncomplete {
-                    blocks: component,
-                    reason,
-                });
+                match prove_nested_positive_induction_loops_v1(
+                    context,
+                    &blocks,
+                    &block_indices,
+                    &inventory.root_operation_blocks,
+                    &dominators,
+                    &graph.predecessors,
+                    &graph.edges,
+                    &component,
+                    &component_members,
+                ) {
+                    Ok(mut nested) => certificates.append(&mut nested),
+                    Err(()) => findings.push(PlironProgressFindingV1::ProgressIncomplete {
+                        blocks: component,
+                        reason,
+                    }),
+                }
             }
         }
     }
@@ -331,6 +345,347 @@ fn run_pliron_progress_check_inner_v1(
         findings,
         certificates,
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn prove_nested_positive_induction_loops_v1(
+    context: &Context,
+    blocks: &[Ptr<BasicBlock>],
+    block_indices: &HashMap<Ptr<BasicBlock>, usize>,
+    operation_blocks: &HashMap<Ptr<Operation>, usize>,
+    dominators: &[HashSet<usize>],
+    predecessors: &[Vec<usize>],
+    edges: &[Vec<usize>],
+    component: &[usize],
+    component_members: &HashSet<usize>,
+) -> Result<Vec<PlironProgressCertificateV1>, ()> {
+    let mut backedges = Vec::new();
+    for source in component.iter().copied() {
+        for target in edges[source].iter().copied() {
+            if component_members.contains(&target) && dominators[source].contains(&target) {
+                backedges.push((source, target));
+            }
+        }
+    }
+    if backedges.is_empty() {
+        return Err(());
+    }
+
+    let mut certificates = Vec::with_capacity(backedges.len());
+    let mut proved_backedges = HashSet::new();
+    for (latch, header_index) in backedges {
+        let header = blocks[header_index];
+        let header_ref = header.deref(context);
+        let terminator = header_ref.get_terminator(context).ok_or(())?;
+        let operation = Operation::get_op_dyn(terminator, context);
+        let branch = operation
+            .downcast_ref::<IndexLessThanBranchArgsOp>()
+            .ok_or(())?;
+        let induction = branch.lhs(context);
+        let induction_argument = (0..header_ref.get_num_arguments())
+            .find(|argument| header_ref.get_argument(*argument) == induction)
+            .ok_or(())?;
+        let successors = operation
+            .get_operation()
+            .deref(context)
+            .successors()
+            .collect::<Vec<_>>();
+        let [body, exit] = successors.as_slice() else {
+            return Err(());
+        };
+        let body_index = *block_indices.get(body).ok_or(())?;
+        let exit_index = *block_indices.get(exit).ok_or(())?;
+
+        let mut natural_loop = HashSet::from([header_index, latch]);
+        let mut pending = vec![latch];
+        while let Some(block) = pending.pop() {
+            for predecessor in predecessors[block].iter().copied() {
+                if predecessor != header_index
+                    && dominators[predecessor].contains(&header_index)
+                    && natural_loop.insert(predecessor)
+                {
+                    pending.push(predecessor);
+                }
+            }
+        }
+        if !natural_loop.contains(&body_index) || natural_loop.contains(&exit_index) {
+            return Err(());
+        }
+        for block in natural_loop.iter().copied() {
+            if block != header_index
+                && predecessors[block]
+                    .iter()
+                    .any(|predecessor| !natural_loop.contains(predecessor))
+            {
+                return Err(());
+            }
+        }
+        let entries = predecessors[header_index]
+            .iter()
+            .copied()
+            .filter(|predecessor| !natural_loop.contains(predecessor))
+            .collect::<Vec<_>>();
+        let [entry] = entries.as_slice() else {
+            return Err(());
+        };
+        let entry_arguments = progress_edge_arguments_v1(context, blocks[*entry], header)?;
+        if entry_arguments
+            .get(induction_argument)
+            .and_then(|value| index_constant(context, *value))
+            != Some(0)
+        {
+            return Err(());
+        }
+        if branch
+            .rhs(context)
+            .defining_op()
+            .and_then(|definition| operation_blocks.get(&definition).copied())
+            .is_some_and(|block| natural_loop.contains(&block))
+        {
+            return Err(());
+        }
+
+        let inductions = propagate_loop_induction_v1(
+            context,
+            blocks,
+            edges,
+            &natural_loop,
+            header_index,
+            induction,
+        )?;
+        let latch_induction = *inductions.get(&latch).ok_or(())?;
+        let latch_arguments = progress_edge_arguments_v1(context, blocks[latch], header)?;
+        let next = *latch_arguments.get(induction_argument).ok_or(())?;
+        let step = progress_index_offset_v1(context, next, latch_induction).ok_or(())?;
+        if step == 0 {
+            return Err(());
+        }
+        if step > 1 {
+            let upper_bound = index_constant(context, branch.rhs(context))
+                .or_else(|| unsigned_cast_upper_bound(context, branch.rhs(context)))
+                .ok_or(())?;
+            if upper_bound != 0 && (upper_bound - 1).checked_add(step).is_none() {
+                return Err(());
+            }
+        }
+        proved_backedges.insert((latch, header_index));
+        certificates.push(PlironProgressCertificateV1 {
+            header: header_index,
+            body: body_index,
+            exit: exit_index,
+            induction: induction.unique_name(context).to_string(),
+            bound: branch.rhs(context).unique_name(context).to_string(),
+            step,
+        });
+    }
+    if !is_acyclic_without_edges_v1(component_members, edges, &proved_backedges) {
+        return Err(());
+    }
+    certificates.sort_by_key(|certificate| certificate.header);
+    Ok(certificates)
+}
+
+fn progress_dominators_v1(
+    edges: &[Vec<usize>],
+    predecessors: &[Vec<usize>],
+) -> Vec<HashSet<usize>> {
+    let reachable = reachable_blocks(edges);
+    let all = reachable
+        .iter()
+        .enumerate()
+        .filter_map(|(block, reachable)| (*reachable).then_some(block))
+        .collect::<HashSet<_>>();
+    let mut dominators = vec![HashSet::new(); edges.len()];
+    for block in all.iter().copied() {
+        dominators[block] = all.clone();
+    }
+    if !edges.is_empty() {
+        dominators[0] = HashSet::from([0]);
+    }
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for block in all.iter().copied().filter(|block| *block != 0) {
+            let mut incoming = predecessors[block]
+                .iter()
+                .copied()
+                .filter(|predecessor| reachable[*predecessor]);
+            let Some(first) = incoming.next() else {
+                continue;
+            };
+            let mut next = dominators[first].clone();
+            for predecessor in incoming {
+                next.retain(|dominator| dominators[predecessor].contains(dominator));
+            }
+            next.insert(block);
+            if next != dominators[block] {
+                dominators[block] = next;
+                changed = true;
+            }
+        }
+    }
+    dominators
+}
+
+fn propagate_loop_induction_v1(
+    context: &Context,
+    blocks: &[Ptr<BasicBlock>],
+    edges: &[Vec<usize>],
+    members: &HashSet<usize>,
+    header: usize,
+    induction: pliron::value::Value,
+) -> Result<HashMap<usize, pliron::value::Value>, ()> {
+    let mut inductions = HashMap::from([(header, induction)]);
+    for _ in 0..members.len() {
+        let mut changed = false;
+        for source in members.iter().copied().collect::<Vec<_>>() {
+            let Some(source_induction) = inductions.get(&source).copied() else {
+                continue;
+            };
+            for target in edges[source].iter().copied() {
+                if target == header || !members.contains(&target) {
+                    continue;
+                }
+                let arguments =
+                    progress_edge_arguments_v1(context, blocks[source], blocks[target])?;
+                let matching = arguments
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, argument)| **argument == source_induction)
+                    .map(|(argument, _)| argument)
+                    .collect::<Vec<_>>();
+                let [argument] = matching.as_slice() else {
+                    continue;
+                };
+                let target_induction = blocks[target].deref(context).get_argument(*argument);
+                if let Some(existing) = inductions.get(&target) {
+                    if *existing != target_induction {
+                        return Err(());
+                    }
+                } else {
+                    inductions.insert(target, target_induction);
+                    changed = true;
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    Ok(inductions)
+}
+
+fn progress_edge_arguments_v1(
+    context: &Context,
+    source: Ptr<BasicBlock>,
+    target: Ptr<BasicBlock>,
+) -> Result<Vec<pliron::value::Value>, ()> {
+    let terminator = source.deref(context).get_terminator(context).ok_or(())?;
+    let operation = Operation::get_op_dyn(terminator, context);
+    let successor = operation
+        .get_operation()
+        .deref(context)
+        .successors()
+        .position(|successor| successor == target)
+        .ok_or(())?;
+    if let Some(branch) = operation.downcast_ref::<BranchArgsOp>() {
+        return (successor == 0)
+            .then(|| branch.arguments(context))
+            .ok_or(());
+    }
+    if let Some(branch) = operation.downcast_ref::<IndexLessThanBranchArgsOp>() {
+        return match successor {
+            0 => Ok(branch.true_arguments(context)),
+            1 => Ok(branch.false_arguments(context)),
+            _ => Err(()),
+        };
+    }
+    if let Some(branch) = operation.downcast_ref::<IndexEqualBranchArgsOp>() {
+        return match successor {
+            0 => Ok(branch.true_arguments(context)),
+            1 => Ok(branch.false_arguments(context)),
+            _ => Err(()),
+        };
+    }
+    if let Some(split) = operation.downcast_ref::<AnalysisSplitOp>() {
+        return match successor {
+            0 => Ok(split.first_arguments(context)),
+            1 => Ok(split.second_arguments(context)),
+            _ => Err(()),
+        };
+    }
+    (target.deref(context).get_num_arguments() == 0)
+        .then(Vec::new)
+        .ok_or(())
+}
+
+fn progress_index_offset_v1(
+    context: &Context,
+    value: pliron::value::Value,
+    base: pliron::value::Value,
+) -> Option<u64> {
+    if value == base {
+        return Some(0);
+    }
+    let definition = value.defining_op()?;
+    let operation = Operation::get_op_dyn(definition, context);
+    let add = operation.downcast_ref::<IndexBinaryOp>()?;
+    if add.kind(context) != Some(IndexBinaryKindAttr::Add) {
+        return None;
+    }
+    if add.lhs(context) == base {
+        index_constant(context, add.rhs(context))
+    } else if add.rhs(context) == base {
+        index_constant(context, add.lhs(context))
+    } else {
+        None
+    }
+}
+
+fn is_acyclic_without_edges_v1(
+    members: &HashSet<usize>,
+    edges: &[Vec<usize>],
+    removed: &HashSet<(usize, usize)>,
+) -> bool {
+    let mut incoming = members
+        .iter()
+        .copied()
+        .map(|block| (block, 0_usize))
+        .collect::<HashMap<_, _>>();
+    for source in members.iter().copied() {
+        for target in edges[source].iter().copied() {
+            if members.contains(&target) && !removed.contains(&(source, target)) {
+                let Some(count) = incoming.get_mut(&target) else {
+                    return false;
+                };
+                *count += 1;
+            }
+        }
+    }
+    let mut ready = incoming
+        .iter()
+        .filter_map(|(block, count)| (*count == 0).then_some(*block))
+        .collect::<Vec<_>>();
+    let mut visited = 0_usize;
+    while let Some(source) = ready.pop() {
+        visited += 1;
+        for target in edges[source].iter().copied() {
+            if !members.contains(&target) || removed.contains(&(source, target)) {
+                continue;
+            }
+            let Some(count) = incoming.get_mut(&target) else {
+                return false;
+            };
+            let Some(next) = count.checked_sub(1) else {
+                return false;
+            };
+            *count = next;
+            if next == 0 {
+                ready.push(target);
+            }
+        }
+    }
+    visited == members.len()
 }
 
 #[derive(Default)]
@@ -599,6 +954,7 @@ enum CanonicalLoopResultV1 {
     Incomplete(&'static str),
 }
 
+#[allow(clippy::too_many_arguments)]
 fn canonical_positive_induction_loop(
     context: &Context,
     blocks: &[Ptr<BasicBlock>],
