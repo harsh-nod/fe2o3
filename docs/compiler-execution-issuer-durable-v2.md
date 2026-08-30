@@ -219,6 +219,7 @@ invocation, non-compile input, and missing or malformed managed attempts.
 The issuer constructs every occurrence from its own admission, and a guard
 contention test proves a superseding attempt cannot advance until issuer
 currentness custody is explicitly dropped. The bounded `SOCK_SEQPACKET` service
-and exact replay path are implemented. Production distinct-UID launch and
-inspection policy, Worker V3 load-envelope/verification carriage, external
-monotonic rollback anchoring, and the MI300X Cargo-to-KFD run remain required.
+and exact replay path plus the root-owned distinct-UID launch/inspection path are
+implemented. Privileged system qualification, production Worker V3 verifier
+authority, independently administered external monotonic rollback anchoring,
+and the MI300X Cargo-to-KFD run remain required.

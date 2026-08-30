@@ -136,6 +136,12 @@ and root/socket policy remains pending. The reviewed supervisor image is built
 and checked as a loader-independent static executable by
 `scripts/build-static-compiler-execution-supervisor.sh`.
 
+The same private root bootstrap is inherited at FD 11 and must be an unnamed,
+connected, nonblocking Unix `SOCK_SEQPACKET` whose exact direct parent has root
+credentials. After all deployment inputs and service authority bind, the
+supervisor publishes the canonical PID/deployment readiness record under a
+fixed bound, closes the bootstrap, and only then enters the worker loop.
+
 Root-side provisioning reuses the same listener and durable-root validators
 through one move-only `ProvisionedProtectedIssuerServiceInputsV1`. It admits the
 fixed listener pathname and exact target-service ownership without changing the

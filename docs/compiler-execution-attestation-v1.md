@@ -15,8 +15,9 @@ compiler occurrence. The
 also fixes authority-free sidecar and ACK bytes. The descriptor-relative Worker
 ledger now implements durable publication and rollback verification. Bounded
 service packets and the allocation-free service loop are implemented over one
-already admitted issuer. The production distinct-UID launcher and inspection
-policy and the concrete protected Worker V3 verifier remain open. Complete
+already admitted issuer. The root-owned distinct-UID launcher and inspection
+path are implemented; privileged account/socket qualification and the concrete
+protected Worker V3 verifier remain open. Complete
 receipt carriage,
 backend acquisition, subject-bound sidecar transport, and the lossless
 receipt-bearing V2 route through Cargo, application transfer, and host
@@ -168,6 +169,6 @@ These tests qualify only the codec and pinned-key signature boundary. The
 local protected signer and supervised occurrence foundation. The receipt
 sidecar codec and [Worker ledger](compiler-execution-worker-ledger-v1.md) are
 frozen separately. The [bounded service](compiler-execution-service-v1.md) is
-implemented over an admitted connection. Production distinct-UID deployment, a
-concrete protected verifier, external anti-rollback, and MI300X
-end-to-end tests remain required.
+implemented over an admitted connection. Privileged distinct-UID deployment
+qualification, a concrete protected verifier, independently administered
+external anti-rollback, and MI300X end-to-end tests remain required.

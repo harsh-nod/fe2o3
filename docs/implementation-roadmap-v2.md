@@ -64,9 +64,10 @@ can acknowledge publication, and recovery accepts only the three legal
 cross-journal positions. A fixed-width canonical packet protocol and bounded
 allocation-free `SOCK_SEQPACKET` loop now make that composition the sole public
 issuer transition path over an admitted connection. This closes local service
-transport and durable receipt publication, but not the production distinct-UID
-launcher and inspection policy, external monotonic rollback anchor, or
-production Worker verifier. The next major gates are:
+transport, durable receipt publication, and root-owned distinct-UID launcher
+implementation. Exact account/socket provisioning, privileged end-to-end
+qualification, independent monotonic deployment, and the production Worker
+verifier remain open. The next major gates are:
 
 1. implement the reviewed concrete production Worker V3 verifier behind the
    sealed host boundary, make generated
