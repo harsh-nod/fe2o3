@@ -1838,7 +1838,7 @@ fn project_and_verify_ranked_root_v1(
         .kernel_binding_identity()
         .as_bytes();
 
-    let constants = constant_locals(function);
+    let constants = constant_locals(function)?;
     let mut entry_operations = vec![source_execution_layout_v1(
         semantic.target().architecture(),
         root_function,
@@ -2968,7 +2968,7 @@ fn project_rust_bounds_checks(
         must_authorize_access: bool,
     }
 
-    let constants = constant_locals(function);
+    let constants = constant_locals(function)?;
     let mut definitions = vec![LocalDefinitionV1::default(); function.locals().len()];
     let mut predecessors = vec![Vec::new(); function.blocks().len()];
     for (block_index, block) in function.blocks().iter().enumerate() {
@@ -13337,7 +13337,7 @@ fn build_ranked_cfg(
             "semantic CFG projection lost a basic block",
         ));
     }
-    let constants = constant_locals(function);
+    let constants = constant_locals(function)?;
     let mut proved_assertions = SemanticAssertProofsV1::analyze(types, function)?;
     for induction in uniform_inductions {
         let Some(block) = induction
@@ -16116,8 +16116,17 @@ enum ConstantDefinitionV1 {
     Invalid,
 }
 
-fn constant_locals(function: &SemanticFunctionDeclV1) -> Vec<Option<u64>> {
-    let mut definitions = vec![ConstantDefinitionV1::Missing; function.locals().len()];
+fn constant_locals(
+    function: &SemanticFunctionDeclV1,
+) -> Result<Vec<Option<u64>>, ProductionRankedProjectionErrorV1> {
+    let local_count = function.locals().len();
+    let mut definitions = Vec::new();
+    definitions.try_reserve_exact(local_count).map_err(|_| {
+        ProductionRankedProjectionErrorV1::Unsupported(
+            "constant-local definition storage cannot be reserved",
+        )
+    })?;
+    definitions.resize(local_count, ConstantDefinitionV1::Missing);
     for block in function.blocks() {
         for statement in block.statements() {
             match statement.kind() {
@@ -16193,13 +16202,30 @@ fn constant_locals(function: &SemanticFunctionDeclV1) -> Vec<Option<u64>> {
             );
         }
     }
-    let mut states = vec![0_u8; definitions.len()];
-    let mut values = vec![None; definitions.len()];
-    let mut path = Vec::with_capacity(definitions.len());
+    let mut states = Vec::new();
+    states.try_reserve_exact(local_count).map_err(|_| {
+        ProductionRankedProjectionErrorV1::Unsupported(
+            "constant-local resolution-state storage cannot be reserved",
+        )
+    })?;
+    states.resize(local_count, 0_u8);
+    let mut values = Vec::new();
+    values.try_reserve_exact(local_count).map_err(|_| {
+        ProductionRankedProjectionErrorV1::Unsupported(
+            "constant-local value storage cannot be reserved",
+        )
+    })?;
+    values.resize(local_count, None);
+    let mut path = Vec::new();
+    path.try_reserve_exact(local_count).map_err(|_| {
+        ProductionRankedProjectionErrorV1::Unsupported(
+            "constant-local resolution-path storage cannot be reserved",
+        )
+    })?;
     for index in 0..definitions.len() {
         resolve_constant_iterative(index, &definitions, &mut states, &mut values, &mut path);
     }
-    values
+    Ok(values)
 }
 
 fn constant_definition(operand: &SemanticOperandV1) -> ConstantDefinitionV1 {
@@ -18555,7 +18581,7 @@ mod tests {
         local_contracts: &ProjectionLocalContractsV1,
     ) -> Result<AuditOutput, ProductionRankedProjectionErrorV1> {
         let types = projection_types();
-        let constants = constant_locals(function);
+        let constants = constant_locals(function)?;
         let mut operations = Vec::new();
         let mut sources = Vec::new();
         let mut projected_views = vec![None; function.locals().len()];
@@ -24693,7 +24719,7 @@ mod tests {
         ),
         ProductionRankedProjectionErrorV1,
     > {
-        let constants = constant_locals(function);
+        let constants = constant_locals(function)?;
         let definitions = local_definition_counts(function);
         let mut arguments = vec![None; function.locals().len()];
         let mut next_argument = 1;
@@ -26852,7 +26878,7 @@ mod tests {
         ),
         ProductionRankedProjectionErrorV1,
     > {
-        let constants = constant_locals(function);
+        let constants = constant_locals(function)?;
         let origins = local_stable_argument_origins(types, function).unwrap();
         let definitions = local_definition_counts(function);
         let mut arguments = vec![None; function.locals().len()];
@@ -26914,7 +26940,7 @@ mod tests {
     #[test]
     fn dynamic_parameter_induction_projects_to_legal_ranked_ssa_edges() {
         let function = uniform_induction_function(SemanticLocalRoleV1::Argument(0));
-        let constants = constant_locals(&function);
+        let constants = constant_locals(&function).unwrap();
         let origins = local_stable_argument_origins(&projection_types(), &function).unwrap();
         let definitions = local_definition_counts(&function);
         let mut arguments = vec![None; function.locals().len()];
@@ -27962,7 +27988,7 @@ mod tests {
     fn checked_overflow_field_cannot_be_projected_as_an_unsigned_bound_value() {
         let (function, types) =
             checked_derived_uniform_induction_bound_function(CheckedBoundKind::Exact);
-        let constants = constant_locals(&function);
+        let constants = constant_locals(&function).unwrap();
         let definitions = local_definition_counts(&function);
         let mut proof = SemanticAssertProofsV1::new(&types, &function).unwrap();
         let assignment_sites = proof.assignments.clone();
@@ -28019,7 +28045,7 @@ mod tests {
     fn unsigned_cast_reconciliation_rejects_stale_type_and_value_substitution() {
         let types = assertion_proof_types();
         let function = widened_u64_induction_function(16);
-        let constants = constant_locals(&function);
+        let constants = constant_locals(&function).unwrap();
         let origins = local_stable_argument_origins(&types, &function).unwrap();
         let definitions = local_definition_counts(&function);
         let mut arguments = vec![None; function.locals().len()];
@@ -28572,6 +28598,115 @@ mod tests {
     }
 
     #[test]
+    fn admitted_ranked_projection_handles_a_deep_reverse_constant_chain() {
+        let alias_count = 16_384_usize;
+        let first_alias = 1_u32;
+        let terminal = first_alias + u32::try_from(alias_count).unwrap();
+        let array_local = terminal + 1;
+        let mut statements = vec![typed_assignment(
+            terminal,
+            SCALAR_TYPE,
+            SemanticRvalueKindV1::Use(constant(7)),
+        )];
+        for destination in (first_alias..terminal).rev() {
+            statements.push(typed_assignment(
+                destination,
+                SCALAR_TYPE,
+                SemanticRvalueKindV1::Use(typed_operand(destination + 1, SCALAR_TYPE)),
+            ));
+        }
+        statements.push(statement(SemanticStatementKindV1::Assign(
+            SemanticAssignmentV1::new(
+                SemanticPlaceV1::new(
+                    SemanticLocalIdV1::from_index(array_local),
+                    vec![
+                        SemanticProjectionV1::new(
+                            SemanticProjectionKindV1::ConstantIndex {
+                                offset: 0,
+                                minimum_length: 4,
+                                from_end: false,
+                            },
+                            SCALAR_TYPE,
+                        )
+                        .unwrap(),
+                    ],
+                    SCALAR_TYPE,
+                )
+                .unwrap(),
+                SemanticRvalueV1::new(
+                    SCALAR_TYPE,
+                    SemanticRvalueKindV1::Use(typed_operand(first_alias, SCALAR_TYPE)),
+                ),
+            ),
+        )));
+
+        let mut locals = Vec::new();
+        for index in 0..=array_local {
+            let mut identity = [0_u8; 32];
+            identity[28..].copy_from_slice(&index.to_be_bytes());
+            locals.push(SemanticLocalDeclV1::new(
+                SemanticLocalIdentityV1::from_sha256(identity),
+                if index == array_local {
+                    ARRAY_TYPE
+                } else {
+                    SCALAR_TYPE
+                },
+                if index == 0 {
+                    SemanticLocalRoleV1::Return
+                } else {
+                    SemanticLocalRoleV1::Temporary
+                },
+                SemanticSourceProvenanceV1::unavailable(),
+            ));
+        }
+        let dimensions = SemanticWorkgroupDimensionsV1::new([64, 1, 1]).unwrap();
+        let source_contract = SemanticKernelSourceContractV1::new(
+            Some(
+                SemanticKernelLaunchBoundsV1::new(Some(dimensions), Some(dimensions), None)
+                    .unwrap(),
+            ),
+            None,
+            None,
+        )
+        .unwrap();
+        let function = projection_function_with_locals(
+            vec![block(215, statements, SemanticTerminatorKindV1::Return)],
+            locals,
+        )
+        .with_kernel_entry(SemanticKernelEntryV1::new(
+            SemanticLinkSymbolV1::new(b"deep_constant_alias".to_vec()).unwrap(),
+            SemanticKernelBindingIdentityV1::from_sha256(bytes(0xd5)),
+            source_contract,
+        ));
+        let admitted = InertSemanticMirRequestV1::new(
+            SemanticTargetDataLayoutV1::gfx942(SemanticLayoutIdentityV1::from_sha256(bytes(250))),
+            projection_types(),
+            vec![],
+            vec![],
+            vec![],
+            vec![function],
+            vec![SemanticFunctionIdV1::from_index(0)],
+        )
+        .unwrap()
+        .admit_exact_v3(SemanticMirLimitsV1::default())
+        .unwrap();
+        let owner = ProductionSemanticMirOwnerV1::try_new(
+            admitted,
+            fe2o3_pliron::ProductionSemanticMirLimitsV1::default(),
+        )
+        .unwrap();
+        let projected = project_and_verify_ranked_semantic_mir_v1(
+            owner,
+            &[ranked_root_input("deep_constant_alias", 0xd5, 1)],
+            &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1::default(),
+        )
+        .unwrap();
+
+        assert_eq!(projected.roots.len(), 1);
+        assert_eq!(projected.roots[0].kernel_binding, bytes(0xd5));
+    }
+
+    #[test]
     fn pipeline_free_capability_projection_skips_a_large_irrelevant_alias_graph() {
         let (statements, locals) = linear_scalar_alias_chain_v1(16_384, U64_TYPE);
         let function = projection_function_with_locals(
@@ -28582,7 +28717,7 @@ mod tests {
         let enum_payload_dominance =
             SemanticEnumPayloadDominanceV1::analyze(&function, &types).unwrap();
         let local_allocations = vec![None; function.locals().len()];
-        let constants = constant_locals(&function);
+        let constants = constant_locals(&function).unwrap();
         project_authenticated_capabilities_v1(
             &[],
             &function,
@@ -28817,7 +28952,7 @@ mod tests {
             locals,
         );
         let types = assertion_proof_types();
-        let constants = constant_locals(&function);
+        let constants = constant_locals(&function).unwrap();
         let definitions = local_definition_counts(&function);
         let graph = projected_loop_cfg_graph_v1(&function).unwrap();
         let mut proof = SemanticAssertProofsV1::new(&types, &function).unwrap();
@@ -29340,7 +29475,7 @@ mod tests {
     #[test]
     fn lane_derived_induction_bound_cannot_mint_uniform_control() {
         let function = uniform_induction_function(SemanticLocalRoleV1::Temporary);
-        let constants = constant_locals(&function);
+        let constants = constant_locals(&function).unwrap();
         let origins = local_stable_argument_origins(&projection_types(), &function).unwrap();
         let definitions = local_definition_counts(&function);
         let mut arguments = vec![None; function.locals().len()];
