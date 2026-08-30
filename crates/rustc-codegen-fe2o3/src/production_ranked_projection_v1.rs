@@ -1653,7 +1653,8 @@ fn partition_reference_effect_binding_indices_v1(
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DefinedCallableEmptyEffectDecisionV1 {
     Unknown,
-    ExactEmpty,
+    ExactEmptyDeterministicScalar,
+    ExactEmptyOnly,
     Rejected,
 }
 
@@ -1663,13 +1664,24 @@ struct DefinedCallableEmptyEffectSummariesV1 {
 
 impl DefinedCallableEmptyEffectSummariesV1 {
     fn is_exact_empty(&self, function: SemanticFunctionIdV1) -> bool {
+        matches!(
+            self.decisions.get(function.index() as usize),
+            Some(
+                DefinedCallableEmptyEffectDecisionV1::ExactEmptyDeterministicScalar
+                    | DefinedCallableEmptyEffectDecisionV1::ExactEmptyOnly
+            )
+        )
+    }
+
+    fn is_exact_empty_deterministic_scalar(&self, function: SemanticFunctionIdV1) -> bool {
         self.decisions.get(function.index() as usize)
-            == Some(&DefinedCallableEmptyEffectDecisionV1::ExactEmpty)
+            == Some(&DefinedCallableEmptyEffectDecisionV1::ExactEmptyDeterministicScalar)
     }
 }
 
 struct DefinedCallableDirectSummaryV1 {
-    eligible: bool,
+    empty_eligible: bool,
+    deterministic_scalar_eligible: bool,
     callees: Vec<usize>,
 }
 
@@ -1700,6 +1712,32 @@ fn scalar_defined_callable_type_v1(types: &[SemanticTypeDeclV1], ty: SemanticTyp
                 | SemanticTypeShapeV1::ValidityScalar(_)
         )
     })
+}
+
+fn checked_scalar_carrier_type_v1(
+    types: &[SemanticTypeDeclV1],
+    ty: SemanticTypeIdV1,
+) -> Option<(SemanticTypeIdV1, SemanticTypeIdV1)> {
+    let SemanticTypeShapeV1::Tuple(fields) = types.get(ty.index() as usize)?.shape() else {
+        return None;
+    };
+    let [value, overflow] = fields.fields() else {
+        return None;
+    };
+    if !scalar_defined_callable_type_v1(types, *value)
+        || !matches!(
+            types.get(overflow.index() as usize).map(|ty| ty.shape()),
+            Some(SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Bool))
+        )
+    {
+        return None;
+    }
+    Some((*value, *overflow))
+}
+
+fn scalar_or_checked_carrier_type_v1(types: &[SemanticTypeDeclV1], ty: SemanticTypeIdV1) -> bool {
+    scalar_defined_callable_type_v1(types, ty)
+        || checked_scalar_carrier_type_v1(types, ty).is_some()
 }
 
 fn scalar_direct_abi_value_v1(
@@ -1742,12 +1780,60 @@ fn scalar_defined_callable_place_v1(
     work: &mut usize,
 ) -> Result<bool, ProductionRankedProjectionErrorV1> {
     charge_defined_callable_summary_work_v1(work, 1 + place.projections().len())?;
+    let Some(local) = function.locals().get(place.local().index() as usize) else {
+        return Ok(false);
+    };
+    if !scalar_defined_callable_type_v1(types, place.ty()) {
+        return Ok(false);
+    }
+    match place.projections() {
+        [] => Ok(local.ty() == place.ty()),
+        [projection] => {
+            let SemanticProjectionKindV1::Field(field) = projection.kind() else {
+                return Ok(false);
+            };
+            let Some((value, overflow)) = checked_scalar_carrier_type_v1(types, local.ty()) else {
+                return Ok(false);
+            };
+            let expected = match field {
+                0 => value,
+                1 => overflow,
+                _ => return Ok(false),
+            };
+            Ok(projection.result_type() == expected && place.ty() == expected)
+        }
+        _ => Ok(false),
+    }
+}
+
+fn scalar_or_checked_carrier_destination_v1(
+    types: &[SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1,
+    place: &SemanticPlaceV1,
+    work: &mut usize,
+) -> Result<bool, ProductionRankedProjectionErrorV1> {
+    charge_defined_callable_summary_work_v1(work, 1 + place.projections().len())?;
+    Ok(place.projections().is_empty()
+        && scalar_or_checked_carrier_type_v1(types, place.ty())
+        && function
+            .locals()
+            .get(place.local().index() as usize)
+            .is_some_and(|local| local.ty() == place.ty()))
+}
+
+fn scalar_defined_callable_destination_v1(
+    types: &[SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1,
+    place: &SemanticPlaceV1,
+    work: &mut usize,
+) -> Result<bool, ProductionRankedProjectionErrorV1> {
+    charge_defined_callable_summary_work_v1(work, 1 + place.projections().len())?;
     Ok(place.projections().is_empty()
         && scalar_defined_callable_type_v1(types, place.ty())
         && function
             .locals()
             .get(place.local().index() as usize)
-            .is_some_and(|local| scalar_defined_callable_type_v1(types, local.ty())))
+            .is_some_and(|local| local.ty() == place.ty()))
 }
 
 fn scalar_defined_callable_operand_v1(
@@ -1778,37 +1864,37 @@ fn scalar_defined_callable_rvalue_v1(
     work: &mut usize,
 ) -> Result<bool, ProductionRankedProjectionErrorV1> {
     charge_defined_callable_summary_work_v1(work, 1)?;
-    if !scalar_defined_callable_type_v1(types, value.result_type()) {
-        return Ok(false);
-    }
     match value.kind() {
         SemanticRvalueKindV1::Use(operand) | SemanticRvalueKindV1::Unary { operand, .. } => {
-            scalar_defined_callable_operand_v1(types, function, operand, work)
+            Ok(scalar_defined_callable_type_v1(types, value.result_type())
+                && scalar_defined_callable_operand_v1(types, function, operand, work)?)
         }
-        SemanticRvalueKindV1::Binary { left, right, .. } => Ok(scalar_defined_callable_operand_v1(
-            types, function, left, work,
-        )?
-            && scalar_defined_callable_operand_v1(types, function, right, work)?),
+        SemanticRvalueKindV1::Binary { left, right, .. } => {
+            Ok(scalar_defined_callable_type_v1(types, value.result_type())
+                && scalar_defined_callable_operand_v1(types, function, left, work)?
+                && scalar_defined_callable_operand_v1(types, function, right, work)?)
+        }
         SemanticRvalueKindV1::CheckedBinary(checked) => {
             Ok(
-                scalar_defined_callable_operand_v1(types, function, checked.left(), work)?
+                checked_scalar_carrier_type_v1(types, value.result_type()).is_some_and(
+                    |(result, _)| result == checked.left().ty() && result == checked.right().ty(),
+                ) && scalar_defined_callable_operand_v1(types, function, checked.left(), work)?
                     && scalar_defined_callable_operand_v1(types, function, checked.right(), work)?,
             )
         }
-        SemanticRvalueKindV1::UncheckedBinary(unchecked) => Ok(scalar_defined_callable_operand_v1(
-            types,
-            function,
-            unchecked.left(),
-            work,
-        )?
-            && scalar_defined_callable_operand_v1(types, function, unchecked.right(), work)?),
+        SemanticRvalueKindV1::UncheckedBinary(unchecked) => {
+            Ok(scalar_defined_callable_type_v1(types, value.result_type())
+                && scalar_defined_callable_operand_v1(types, function, unchecked.left(), work)?
+                && scalar_defined_callable_operand_v1(types, function, unchecked.right(), work)?)
+        }
         SemanticRvalueKindV1::Cast { kind, operand }
             if matches!(
                 kind,
                 SemanticCastKindV1::Integer | SemanticCastKindV1::Float
             ) =>
         {
-            scalar_defined_callable_operand_v1(types, function, operand, work)
+            Ok(scalar_defined_callable_type_v1(types, value.result_type())
+                && scalar_defined_callable_operand_v1(types, function, operand, work)?)
         }
         SemanticRvalueKindV1::Cast { .. }
         | SemanticRvalueKindV1::Borrow { .. }
@@ -1829,21 +1915,18 @@ fn scalar_defined_callable_statement_v1(
     charge_defined_callable_summary_work_v1(work, 1)?;
     match statement.kind() {
         SemanticStatementKindV1::Assign(assignment) => {
-            Ok(
-                scalar_defined_callable_place_v1(types, function, assignment.destination(), work)?
-                    && scalar_defined_callable_rvalue_v1(
-                        types,
-                        function,
-                        assignment.value(),
-                        work,
-                    )?,
-            )
+            Ok(scalar_or_checked_carrier_destination_v1(
+                types,
+                function,
+                assignment.destination(),
+                work,
+            )? && scalar_defined_callable_rvalue_v1(types, function, assignment.value(), work)?)
         }
         SemanticStatementKindV1::StorageLive(local)
         | SemanticStatementKindV1::StorageDead(local) => Ok(function
             .locals()
             .get(local.index() as usize)
-            .is_some_and(|local| scalar_defined_callable_type_v1(types, local.ty()))),
+            .is_some_and(|local| scalar_or_checked_carrier_type_v1(types, local.ty()))),
         SemanticStatementKindV1::Assume(condition) => {
             scalar_defined_callable_operand_v1(types, function, condition, work)
         }
@@ -1856,9 +1939,37 @@ fn scalar_defined_callable_statement_v1(
     }
 }
 
+fn deterministic_scalar_defined_callable_statement_v1(
+    statement: &fe2o3_mir_model::semantic_mir_v1::SemanticStatementV1,
+) -> bool {
+    match statement.kind() {
+        SemanticStatementKindV1::Assign(assignment) => matches!(
+            assignment.value().kind(),
+            SemanticRvalueKindV1::Use(_)
+                | SemanticRvalueKindV1::Unary { .. }
+                | SemanticRvalueKindV1::Binary { .. }
+                | SemanticRvalueKindV1::CheckedBinary(_)
+                | SemanticRvalueKindV1::Cast {
+                    kind: SemanticCastKindV1::Integer | SemanticCastKindV1::Float,
+                    ..
+                }
+        ),
+        SemanticStatementKindV1::StorageLive(_)
+        | SemanticStatementKindV1::StorageDead(_)
+        | SemanticStatementKindV1::Nop => true,
+        SemanticStatementKindV1::Assume(_)
+        | SemanticStatementKindV1::Store(_)
+        | SemanticStatementKindV1::AtomicRmw(_)
+        | SemanticStatementKindV1::AtomicCompareExchange(_)
+        | SemanticStatementKindV1::SetDiscriminant { .. }
+        | SemanticStatementKindV1::Deinitialize(_) => false,
+    }
+}
+
 fn scalar_defined_callable_call_v1(
     types: &[SemanticTypeDeclV1],
     function: &SemanticFunctionDeclV1,
+    function_count: usize,
     callables: &[SemanticCallableDeclV1],
     call: &SemanticDirectCallV1,
     callees: &mut Vec<usize>,
@@ -1875,7 +1986,8 @@ fn scalar_defined_callable_call_v1(
         eligible &= scalar_defined_callable_operand_v1(types, function, argument, work)?;
     }
     if let Some(destination) = call.destination() {
-        eligible &= scalar_defined_callable_place_v1(types, function, destination.place(), work)?;
+        eligible &=
+            scalar_defined_callable_destination_v1(types, function, destination.place(), work)?;
     }
     let Some(SemanticCallableDeclV1::Defined { function: callee }) =
         callables.get(call.callee().index() as usize)
@@ -1883,7 +1995,7 @@ fn scalar_defined_callable_call_v1(
         return Ok(false);
     };
     let callee = callee.index() as usize;
-    if callee >= callables.len() {
+    if callee >= function_count {
         return Ok(false);
     }
     *call_edges =
@@ -1909,6 +2021,7 @@ fn scalar_defined_callable_call_v1(
 fn scalar_defined_callable_tail_call_v1(
     types: &[SemanticTypeDeclV1],
     function: &SemanticFunctionDeclV1,
+    function_count: usize,
     callables: &[SemanticCallableDeclV1],
     call: &SemanticDirectTailCallV1,
     callees: &mut Vec<usize>,
@@ -1929,7 +2042,7 @@ fn scalar_defined_callable_tail_call_v1(
         return Ok(false);
     };
     let callee = callee.index() as usize;
-    if callee >= callables.len() {
+    if callee >= function_count {
         return Ok(false);
     }
     *call_edges =
@@ -1952,10 +2065,42 @@ fn scalar_defined_callable_tail_call_v1(
     Ok(eligible)
 }
 
+fn scalar_defined_callable_assert_message_v1(
+    types: &[SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1,
+    message: &SemanticAssertMessageV1,
+    work: &mut usize,
+) -> Result<bool, ProductionRankedProjectionErrorV1> {
+    match message {
+        SemanticAssertMessageV1::BoundsCheck { length, index }
+        | SemanticAssertMessageV1::Overflow {
+            left: length,
+            right: index,
+            ..
+        }
+        | SemanticAssertMessageV1::MisalignedPointerDereference {
+            required_alignment: length,
+            found_alignment: index,
+        } => Ok(
+            scalar_defined_callable_operand_v1(types, function, length, work)?
+                && scalar_defined_callable_operand_v1(types, function, index, work)?,
+        ),
+        SemanticAssertMessageV1::DivisionByZero(operand)
+        | SemanticAssertMessageV1::RemainderByZero(operand) => {
+            scalar_defined_callable_operand_v1(types, function, operand, work)
+        }
+        SemanticAssertMessageV1::NullPointerDereference
+        | SemanticAssertMessageV1::ResumedAfterReturn
+        | SemanticAssertMessageV1::ResumedAfterPanic => Ok(true),
+    }
+}
+
 fn scalar_defined_callable_terminator_v1(
     types: &[SemanticTypeDeclV1],
     function: &SemanticFunctionDeclV1,
+    function_count: usize,
     callables: &[SemanticCallableDeclV1],
+    assert_proved: bool,
     terminator: &SemanticTerminatorKindV1,
     callees: &mut Vec<usize>,
     call_edges: &mut usize,
@@ -1970,13 +2115,37 @@ fn scalar_defined_callable_terminator_v1(
             scalar_defined_callable_operand_v1(types, function, discriminant, work)
         }
         SemanticTerminatorKindV1::Call(call) => scalar_defined_callable_call_v1(
-            types, function, callables, call, callees, call_edges, work,
+            types,
+            function,
+            function_count,
+            callables,
+            call,
+            callees,
+            call_edges,
+            work,
         ),
         SemanticTerminatorKindV1::TailCall(call) => scalar_defined_callable_tail_call_v1(
-            types, function, callables, call, callees, call_edges, work,
+            types,
+            function,
+            function_count,
+            callables,
+            call,
+            callees,
+            call_edges,
+            work,
         ),
+        SemanticTerminatorKindV1::Assert {
+            condition,
+            message,
+            target,
+            unwind,
+            ..
+        } => Ok(assert_proved
+            && target.role() == SemanticEdgeRoleV1::AssertSuccess
+            && matches!(unwind, SemanticUnwindActionV1::Unreachable)
+            && scalar_defined_callable_operand_v1(types, function, condition, work)?
+            && scalar_defined_callable_assert_message_v1(types, function, message, work)?),
         SemanticTerminatorKindV1::Drop { .. }
-        | SemanticTerminatorKindV1::Assert { .. }
         | SemanticTerminatorKindV1::FalseEdge { .. }
         | SemanticTerminatorKindV1::UnwindResume
         | SemanticTerminatorKindV1::UnwindTerminate
@@ -1987,33 +2156,65 @@ fn scalar_defined_callable_terminator_v1(
 fn direct_defined_callable_summary_v1(
     types: &[SemanticTypeDeclV1],
     function: &SemanticFunctionDeclV1,
+    function_count: usize,
     callables: &[SemanticCallableDeclV1],
     call_edges: &mut usize,
     work: &mut usize,
 ) -> Result<DefinedCallableDirectSummaryV1, ProductionRankedProjectionErrorV1> {
     charge_defined_callable_summary_work_v1(work, 1 + function.locals().len())?;
-    let mut eligible = scalar_direct_defined_callable_abi_v1(types, function)
+    let base_eligible = scalar_direct_defined_callable_abi_v1(types, function)
         && function
             .locals()
             .iter()
-            .all(|local| scalar_defined_callable_type_v1(types, local.ty()));
+            .all(|local| scalar_or_checked_carrier_type_v1(types, local.ty()));
+    let mut empty_eligible = base_eligible;
+    let mut deterministic_scalar_eligible = base_eligible;
+    let assert_proofs = if base_eligible
+        && function.blocks().iter().any(|block| {
+            matches!(
+                block.terminator().kind(),
+                SemanticTerminatorKindV1::Assert { .. }
+            )
+        }) {
+        Some(SemanticAssertProofsV1::analyze_defined_callable_asserts_v1(
+            types, function,
+        )?)
+    } else {
+        None
+    };
     let mut callees = Vec::new();
-    for block in function.blocks() {
+    for (block_index, block) in function.blocks().iter().enumerate() {
         charge_defined_callable_summary_work_v1(work, 1)?;
         for statement in block.statements() {
-            eligible &= scalar_defined_callable_statement_v1(types, function, statement, work)?;
+            let statement_eligible =
+                scalar_defined_callable_statement_v1(types, function, statement, work)?;
+            empty_eligible &= statement_eligible;
+            deterministic_scalar_eligible &=
+                statement_eligible && deterministic_scalar_defined_callable_statement_v1(statement);
         }
-        eligible &= scalar_defined_callable_terminator_v1(
+        let terminator_eligible = scalar_defined_callable_terminator_v1(
             types,
             function,
+            function_count,
             callables,
+            assert_proofs
+                .as_deref()
+                .and_then(|proved| proved.get(block_index))
+                .copied()
+                .unwrap_or(false),
             block.terminator().kind(),
             &mut callees,
             call_edges,
             work,
         )?;
+        empty_eligible &= terminator_eligible;
+        deterministic_scalar_eligible &= terminator_eligible;
     }
-    Ok(DefinedCallableDirectSummaryV1 { eligible, callees })
+    Ok(DefinedCallableDirectSummaryV1 {
+        empty_eligible,
+        deterministic_scalar_eligible,
+        callees,
+    })
 }
 
 fn derive_defined_callable_empty_effect_summaries_v1(
@@ -2038,12 +2239,12 @@ fn derive_defined_callable_empty_effect_summaries_v1(
         direct.push(direct_defined_callable_summary_v1(
             types,
             function,
+            functions.len(),
             callables,
             &mut call_edges,
             &mut work,
         )?);
     }
-
     let mut callers = Vec::new();
     callers.try_reserve_exact(functions.len()).map_err(|_| {
         ProductionRankedProjectionErrorV1::Unsupported(
@@ -2072,13 +2273,18 @@ fn derive_defined_callable_empty_effect_summaries_v1(
         .iter()
         .map(|summary| summary.callees.len())
         .collect::<Vec<_>>();
+    let mut all_callees_deterministic = vec![true; functions.len()];
     let mut pending = VecDeque::new();
     for (function, summary) in direct.iter().enumerate() {
-        if !summary.eligible {
+        if !summary.empty_eligible {
             decisions[function] = DefinedCallableEmptyEffectDecisionV1::Rejected;
             pending.push_back(function);
         } else if remaining[function] == 0 {
-            decisions[function] = DefinedCallableEmptyEffectDecisionV1::ExactEmpty;
+            decisions[function] = if summary.deterministic_scalar_eligible {
+                DefinedCallableEmptyEffectDecisionV1::ExactEmptyDeterministicScalar
+            } else {
+                DefinedCallableEmptyEffectDecisionV1::ExactEmptyOnly
+            };
             pending.push_back(function);
         }
     }
@@ -2096,9 +2302,19 @@ fn derive_defined_callable_empty_effect_summaries_v1(
             if decisions[callee] == DefinedCallableEmptyEffectDecisionV1::Rejected {
                 decisions[caller] = DefinedCallableEmptyEffectDecisionV1::Rejected;
                 pending.push_back(caller);
-            } else if remaining[caller] == 0 {
-                decisions[caller] = DefinedCallableEmptyEffectDecisionV1::ExactEmpty;
-                pending.push_back(caller);
+            } else {
+                all_callees_deterministic[caller] &= decisions[callee]
+                    == DefinedCallableEmptyEffectDecisionV1::ExactEmptyDeterministicScalar;
+                if remaining[caller] == 0 {
+                    decisions[caller] = if direct[caller].deterministic_scalar_eligible
+                        && all_callees_deterministic[caller]
+                    {
+                        DefinedCallableEmptyEffectDecisionV1::ExactEmptyDeterministicScalar
+                    } else {
+                        DefinedCallableEmptyEffectDecisionV1::ExactEmptyOnly
+                    };
+                    pending.push_back(caller);
+                }
             }
         }
     }
@@ -2357,6 +2573,7 @@ fn project_and_verify_ranked_root_v1(
     let mut discarded_ir = String::new();
     let intrinsic = project_intrinsic_contracts(
         semantic.callables(),
+        callable_effects,
         semantic.types(),
         function,
         bounded_linear_launch_extent_v1(source_launch),
@@ -5755,6 +5972,7 @@ fn blocked_mapping_fits_launch_v1(
 
 fn project_intrinsic_contracts(
     callables: &[SemanticCallableDeclV1],
+    callable_effects: &DefinedCallableEmptyEffectSummariesV1,
     types: &[fe2o3_mir_model::semantic_mir_v1::SemanticTypeDeclV1],
     function: &SemanticFunctionDeclV1,
     linear_launch_upper_bound: Option<u64>,
@@ -7222,6 +7440,7 @@ fn project_intrinsic_contracts(
     let deterministic_switches = project_deterministic_scalar_switches_v1(
         types,
         callables,
+        callable_effects,
         function,
         constants,
         &local_definitions,
@@ -8062,6 +8281,7 @@ fn retain_identical_direct_switch_predicate_v1(
 
 struct DeterministicScalarProjectorV1<'a> {
     callables: &'a [SemanticCallableDeclV1],
+    callable_effects: &'a DefinedCallableEmptyEffectSummariesV1,
     function: &'a SemanticFunctionDeclV1,
     constants: &'a [Option<u64>],
     local_definitions: &'a [u8],
@@ -8086,6 +8306,7 @@ impl<'a> DeterministicScalarProjectorV1<'a> {
     #[allow(clippy::too_many_arguments)]
     fn new(
         callables: &'a [SemanticCallableDeclV1],
+        callable_effects: &'a DefinedCallableEmptyEffectSummariesV1,
         function: &'a SemanticFunctionDeclV1,
         constants: &'a [Option<u64>],
         local_definitions: &'a [u8],
@@ -8154,6 +8375,7 @@ impl<'a> DeterministicScalarProjectorV1<'a> {
         }
         Ok(Self {
             callables,
+            callable_effects,
             function,
             constants,
             local_definitions,
@@ -8655,9 +8877,19 @@ impl<'a> DeterministicScalarProjectorV1<'a> {
         if matches!(call.unwind(), SemanticUnwindActionV1::Cleanup(_)) {
             return Ok(None);
         }
-        let Some(SemanticCallableDeclV1::CompilerIntrinsic { operation, .. }) =
-            self.callables.get(call.callee().index() as usize)
-        else {
+        let Some(callable) = self.callables.get(call.callee().index() as usize) else {
+            return Ok(None);
+        };
+        if let SemanticCallableDeclV1::Defined { function } = callable {
+            if !self
+                .callable_effects
+                .is_exact_empty_deterministic_scalar(*function)
+            {
+                return Ok(None);
+            }
+            return self.resolve_explicit_call_dependencies_v1(call);
+        }
+        let SemanticCallableDeclV1::CompilerIntrinsic { operation, .. } = callable else {
             return Ok(None);
         };
         if matches!(
@@ -8682,6 +8914,13 @@ impl<'a> DeterministicScalarProjectorV1<'a> {
         if !compiler_intrinsic_is_pure_total_scalar_dependency_v1(operation) {
             return Ok(None);
         }
+        self.resolve_explicit_call_dependencies_v1(call)
+    }
+
+    fn resolve_explicit_call_dependencies_v1(
+        &mut self,
+        call: &SemanticDirectCallV1,
+    ) -> Result<Option<DeterministicScalarSummaryV1>, ProductionRankedProjectionErrorV1> {
         let mut inputs = Vec::new();
         inputs.try_reserve(call.arguments().len()).map_err(|_| {
             ProductionRankedProjectionErrorV1::Unsupported(
@@ -8985,6 +9224,7 @@ fn authenticated_switch_targets_exhaust_domain_v1(
 fn project_deterministic_scalar_switches_v1(
     types: &[SemanticTypeDeclV1],
     callables: &[SemanticCallableDeclV1],
+    callable_effects: &DefinedCallableEmptyEffectSummariesV1,
     function: &SemanticFunctionDeclV1,
     constants: &[Option<u64>],
     local_definitions: &[u8],
@@ -9003,6 +9243,7 @@ fn project_deterministic_scalar_switches_v1(
     }
     let mut projector = DeterministicScalarProjectorV1::new(
         callables,
+        callable_effects,
         function,
         constants,
         local_definitions,
@@ -10327,6 +10568,38 @@ impl<'a> SemanticAssertProofsV1<'a> {
             proved[block_index] = proof
                 .range_at_operand(condition, block_index, block.statements().len())?
                 .is_some_and(|range| range.is_exact(u128::from(*expected)));
+        }
+        Ok(proved)
+    }
+
+    fn analyze_defined_callable_asserts_v1(
+        types: &'a [SemanticTypeDeclV1],
+        function: &'a SemanticFunctionDeclV1,
+    ) -> Result<Vec<bool>, ProductionRankedProjectionErrorV1> {
+        let mut proof = Self::new(types, function)?;
+        let mut proved = vec![false; function.blocks().len()];
+        for (block_index, block) in function.blocks().iter().enumerate() {
+            let SemanticTerminatorKindV1::Assert {
+                condition,
+                expected,
+                message,
+                ..
+            } = block.terminator().kind()
+            else {
+                continue;
+            };
+            proved[block_index] = match message {
+                SemanticAssertMessageV1::Overflow { .. } => proof
+                    .proves_checked_overflow_assert_v1(
+                        condition,
+                        *expected,
+                        message,
+                        block_index,
+                    )?,
+                _ => proof
+                    .range_at_operand(condition, block_index, block.statements().len())?
+                    .is_some_and(|range| range.is_exact(u128::from(*expected))),
+            };
         }
         Ok(proved)
     }
@@ -22878,8 +23151,12 @@ mod tests {
         let mut operations = Vec::new();
         let mut next_value = 0;
         let mut ranked_ir = String::new();
+        let callable_effects = DefinedCallableEmptyEffectSummariesV1 {
+            decisions: Box::new([]),
+        };
         project_intrinsic_contracts(
             callables,
+            &callable_effects,
             types,
             function,
             Some(64),
@@ -25795,6 +26072,36 @@ mod tests {
         function: &SemanticFunctionDeclV1,
         index_values: &[Option<ProjectedDisjointIndexV1>],
         local_allocations: &[Option<AllocationContractV1>],
+        operations: Vec<ProductionRankedOperationV1>,
+        next_value: u32,
+    ) -> Result<
+        (
+            Vec<Option<ProjectedDeterministicSwitchV1>>,
+            Vec<ProductionRankedOperationV1>,
+            usize,
+        ),
+        ProductionRankedProjectionErrorV1,
+    > {
+        let callable_effects = DefinedCallableEmptyEffectSummariesV1 {
+            decisions: Box::new([]),
+        };
+        deterministic_scalar_switch_projection_with_effects(
+            callables,
+            &callable_effects,
+            function,
+            index_values,
+            local_allocations,
+            operations,
+            next_value,
+        )
+    }
+
+    fn deterministic_scalar_switch_projection_with_effects(
+        callables: &[SemanticCallableDeclV1],
+        callable_effects: &DefinedCallableEmptyEffectSummariesV1,
+        function: &SemanticFunctionDeclV1,
+        index_values: &[Option<ProjectedDisjointIndexV1>],
+        local_allocations: &[Option<AllocationContractV1>],
         mut operations: Vec<ProductionRankedOperationV1>,
         mut next_value: u32,
     ) -> Result<
@@ -25812,6 +26119,7 @@ mod tests {
         let switches = project_deterministic_scalar_switches_v1(
             &projection_types(),
             callables,
+            callable_effects,
             function,
             &constants,
             &definitions,
@@ -26343,6 +26651,128 @@ mod tests {
         .unwrap()
     }
 
+    fn scalar_summary_argument_helper(
+        tag: u8,
+        blocks: Vec<SemanticBasicBlockV1>,
+    ) -> SemanticFunctionDeclV1 {
+        let scalar_abi = || {
+            SemanticAbiValueV1::new(
+                SCALAR_TYPE,
+                SemanticAbiPassModeV1::Direct(SemanticAbiValueAttributesV1::plain()),
+            )
+        };
+        let abi = SemanticFunctionAbiV1::new(
+            SemanticAbiIdentityV1::from_sha256(bytes(tag)),
+            SemanticLayoutIdentityV1::from_sha256(bytes(tag)),
+            SemanticCanonAbiV1::Rust,
+            false,
+            false,
+            vec![scalar_abi(), scalar_abi()],
+            scalar_abi(),
+        )
+        .unwrap();
+        SemanticFunctionDeclV1::new(
+            SemanticFunctionIdentityV1::from_sha256(bytes(tag.wrapping_add(1))),
+            SemanticFunctionRoleV1::InternalHelper,
+            SemanticItemDefinitionIdentityV1::from_sha256(bytes(tag.wrapping_add(2))),
+            SemanticMonomorphizationIdentityV1::from_sha256(bytes(tag.wrapping_add(3))),
+            SemanticGenericTypeArgumentsIdentityV1::from_sha256(bytes(tag.wrapping_add(4))),
+            SemanticConstGenericArgumentsIdentityV1::from_sha256(bytes(tag.wrapping_add(5))),
+            SemanticSourceProvenanceV1::unavailable(),
+            abi,
+            vec![
+                local(
+                    tag.wrapping_add(6),
+                    SCALAR_TYPE,
+                    SemanticLocalRoleV1::Return,
+                ),
+                local(
+                    tag.wrapping_add(7),
+                    SCALAR_TYPE,
+                    SemanticLocalRoleV1::Argument(0),
+                ),
+                local(
+                    tag.wrapping_add(8),
+                    SCALAR_TYPE,
+                    SemanticLocalRoleV1::Argument(1),
+                ),
+            ],
+            SemanticBlockIdV1::from_index(0),
+            blocks,
+        )
+        .unwrap()
+    }
+
+    fn scalar_summary_argument_leaf(tag: u8) -> SemanticFunctionDeclV1 {
+        scalar_summary_argument_helper(
+            tag,
+            vec![block(
+                tag,
+                vec![scalar_assignment(
+                    0,
+                    SemanticRvalueKindV1::Use(tensor_operand(1)),
+                )],
+                SemanticTerminatorKindV1::Return,
+            )],
+        )
+    }
+
+    fn scalar_summary_unchecked_argument_leaf(tag: u8) -> SemanticFunctionDeclV1 {
+        scalar_summary_argument_helper(
+            tag,
+            vec![block(
+                tag,
+                vec![scalar_assignment(
+                    0,
+                    SemanticRvalueKindV1::UncheckedBinary(SemanticUncheckedBinaryRvalueV1::new(
+                        SemanticUncheckedBinaryOpV1::Add,
+                        tensor_operand(1),
+                        tensor_operand(2),
+                    )),
+                )],
+                SemanticTerminatorKindV1::Return,
+            )],
+        )
+    }
+
+    fn scalar_summary_assume_argument_leaf(tag: u8) -> SemanticFunctionDeclV1 {
+        scalar_summary_argument_helper(
+            tag,
+            vec![block(
+                tag,
+                vec![
+                    statement(SemanticStatementKindV1::Assume(tensor_operand(1))),
+                    scalar_assignment(0, SemanticRvalueKindV1::Use(tensor_operand(2))),
+                ],
+                SemanticTerminatorKindV1::Return,
+            )],
+        )
+    }
+
+    fn scalar_summary_calling_argument_helper(tag: u8, callee: u32) -> SemanticFunctionDeclV1 {
+        let call = SemanticDirectCallV1::new_callable(
+            SemanticCallableIdV1::from_index(callee),
+            vec![tensor_operand(1), tensor_operand(2)],
+            Some(SemanticCallDestinationV1::new(
+                summary_scalar_place(),
+                cfg_edge(SemanticEdgeRoleV1::CallReturn, 1),
+            )),
+            SemanticUnwindActionV1::Unreachable,
+        )
+        .unwrap();
+        scalar_summary_argument_helper(
+            tag,
+            vec![
+                block(tag, vec![], SemanticTerminatorKindV1::Call(call)),
+                block(
+                    tag.wrapping_add(1),
+                    vec![],
+                    SemanticTerminatorKindV1::Return,
+                ),
+            ],
+        )
+    }
+
     fn scalar_summary_calling_helper(tag: u8, callee: u32) -> SemanticFunctionDeclV1 {
         let call = SemanticDirectCallV1::new_callable(
             SemanticCallableIdV1::from_index(callee),
@@ -26364,6 +26794,19 @@ mod tests {
                     SemanticTerminatorKindV1::Return,
                 ),
             ],
+        )
+    }
+
+    fn scalar_summary_tail_calling_helper(tag: u8, callee: u32) -> SemanticFunctionDeclV1 {
+        let call = SemanticDirectTailCallV1::new_callable(
+            SemanticCallableIdV1::from_index(callee),
+            vec![],
+            SemanticUnwindActionV1::Unreachable,
+        )
+        .unwrap();
+        scalar_summary_helper(
+            tag,
+            vec![block(tag, vec![], SemanticTerminatorKindV1::TailCall(call))],
         )
     }
 
@@ -26405,6 +26848,125 @@ mod tests {
         scalar_summary_helper(tag, blocks)
     }
 
+    #[derive(Clone, Copy)]
+    enum CheckedScalarSummaryShapeV1 {
+        Exact,
+        ForgedMessage,
+        OverflowingInput,
+        CleanupUnwind,
+    }
+
+    fn checked_scalar_summary_helper_v1(
+        shape: CheckedScalarSummaryShapeV1,
+    ) -> SemanticFunctionDeclV1 {
+        let abi = SemanticFunctionAbiV1::new(
+            SemanticAbiIdentityV1::from_sha256(bytes(210)),
+            SemanticLayoutIdentityV1::from_sha256(bytes(210)),
+            SemanticCanonAbiV1::Rust,
+            false,
+            false,
+            vec![],
+            SemanticAbiValueV1::new(
+                U64_TYPE,
+                SemanticAbiPassModeV1::Direct(SemanticAbiValueAttributesV1::plain()),
+            ),
+        )
+        .unwrap();
+        let checked_local = SemanticLocalIdV1::from_index(1);
+        let left_value = if matches!(shape, CheckedScalarSummaryShapeV1::OverflowingInput) {
+            u128::from(u64::MAX)
+        } else {
+            7
+        };
+        let left = typed_constant(U64_TYPE, left_value, 8);
+        let right = typed_constant(U64_TYPE, 1, 8);
+        let message_right = if matches!(shape, CheckedScalarSummaryShapeV1::ForgedMessage) {
+            typed_constant(U64_TYPE, 2, 8)
+        } else {
+            right.clone()
+        };
+        let checked_place = |field, ty| {
+            SemanticPlaceV1::new(
+                checked_local,
+                vec![
+                    SemanticProjectionV1::new(SemanticProjectionKindV1::Field(field), ty).unwrap(),
+                ],
+                ty,
+            )
+            .unwrap()
+        };
+        let unwind = if matches!(shape, CheckedScalarSummaryShapeV1::CleanupUnwind) {
+            SemanticUnwindActionV1::Cleanup(cfg_edge(SemanticEdgeRoleV1::AssertUnwind, 2))
+        } else {
+            SemanticUnwindActionV1::Unreachable
+        };
+        let blocks = vec![
+            block(
+                210,
+                vec![statement(SemanticStatementKindV1::Assign(
+                    SemanticAssignmentV1::new(
+                        SemanticPlaceV1::new(checked_local, vec![], CHECKED_U64_TYPE).unwrap(),
+                        SemanticRvalueV1::new(
+                            CHECKED_U64_TYPE,
+                            SemanticRvalueKindV1::CheckedBinary(
+                                SemanticCheckedBinaryRvalueV1::new(
+                                    SemanticCheckedBinaryOpV1::Add,
+                                    left.clone(),
+                                    right.clone(),
+                                ),
+                            ),
+                        ),
+                    ),
+                ))],
+                SemanticTerminatorKindV1::Assert {
+                    condition: SemanticOperandV1::Move(checked_place(1, BOOL_TYPE)),
+                    expected: false,
+                    message: SemanticAssertMessageV1::Overflow {
+                        operation: SemanticBinaryOpV1::Add,
+                        left,
+                        right: message_right,
+                    },
+                    target: cfg_edge(SemanticEdgeRoleV1::AssertSuccess, 1),
+                    unwind,
+                },
+            ),
+            block(
+                211,
+                vec![statement(SemanticStatementKindV1::Assign(
+                    SemanticAssignmentV1::new(
+                        SemanticPlaceV1::new(SemanticLocalIdV1::from_index(0), vec![], U64_TYPE)
+                            .unwrap(),
+                        SemanticRvalueV1::new(
+                            U64_TYPE,
+                            SemanticRvalueKindV1::Use(SemanticOperandV1::Move(checked_place(
+                                0, U64_TYPE,
+                            ))),
+                        ),
+                    ),
+                ))],
+                SemanticTerminatorKindV1::Return,
+            ),
+            block(212, vec![], SemanticTerminatorKindV1::Unreachable),
+        ];
+        SemanticFunctionDeclV1::new(
+            SemanticFunctionIdentityV1::from_sha256(bytes(211)),
+            SemanticFunctionRoleV1::InternalHelper,
+            SemanticItemDefinitionIdentityV1::from_sha256(bytes(212)),
+            SemanticMonomorphizationIdentityV1::from_sha256(bytes(213)),
+            SemanticGenericTypeArgumentsIdentityV1::from_sha256(bytes(214)),
+            SemanticConstGenericArgumentsIdentityV1::from_sha256(bytes(215)),
+            SemanticSourceProvenanceV1::unavailable(),
+            abi,
+            vec![
+                local(216, U64_TYPE, SemanticLocalRoleV1::Return),
+                local(217, CHECKED_U64_TYPE, SemanticLocalRoleV1::Temporary),
+            ],
+            SemanticBlockIdV1::from_index(0),
+            blocks,
+        )
+        .unwrap()
+    }
+
     #[test]
     fn defined_scalar_helper_chain_has_an_exact_empty_effect_summary() {
         let functions = vec![
@@ -26424,6 +26986,8 @@ mod tests {
 
         assert!(summaries.is_exact_empty(SemanticFunctionIdV1::from_index(0)));
         assert!(summaries.is_exact_empty(SemanticFunctionIdV1::from_index(1)));
+        assert!(summaries.is_exact_empty_deterministic_scalar(SemanticFunctionIdV1::from_index(0)));
+        assert!(summaries.is_exact_empty_deterministic_scalar(SemanticFunctionIdV1::from_index(1)));
         assert!(
             require_bounds_neutral_callable(
                 &callables,
@@ -26432,6 +26996,330 @@ mod tests {
             )
             .is_ok()
         );
+    }
+
+    #[test]
+    fn defined_scalar_helper_admits_only_proven_checked_scalar_carriers() {
+        let callables = vec![SemanticCallableDeclV1::defined(
+            SemanticFunctionIdV1::from_index(0),
+        )];
+        let exact = vec![checked_scalar_summary_helper_v1(
+            CheckedScalarSummaryShapeV1::Exact,
+        )];
+        let summaries = derive_defined_callable_empty_effect_summaries_v1(
+            &assertion_proof_types(),
+            &exact,
+            &callables,
+        )
+        .unwrap();
+        assert!(summaries.is_exact_empty(SemanticFunctionIdV1::from_index(0)));
+        assert!(summaries.is_exact_empty_deterministic_scalar(SemanticFunctionIdV1::from_index(0)));
+
+        for shape in [
+            CheckedScalarSummaryShapeV1::ForgedMessage,
+            CheckedScalarSummaryShapeV1::OverflowingInput,
+            CheckedScalarSummaryShapeV1::CleanupUnwind,
+        ] {
+            let functions = vec![checked_scalar_summary_helper_v1(shape)];
+            let summaries = derive_defined_callable_empty_effect_summaries_v1(
+                &assertion_proof_types(),
+                &functions,
+                &callables,
+            )
+            .unwrap();
+            assert!(!summaries.is_exact_empty(SemanticFunctionIdV1::from_index(0)));
+        }
+    }
+
+    #[test]
+    fn checked_scalar_helper_rejects_forged_carrier_shapes_and_projections() {
+        let mut types = assertion_proof_types();
+        let pointer_carrier = SemanticTypeIdV1::from_index(types.len() as u32);
+        types.push(SemanticTypeDeclV1::new(
+            SemanticTypeIdentityV1::from_sha256(bytes(218)),
+            SemanticLayoutIdentityV1::from_sha256(bytes(218)),
+            SemanticTypeLayoutV1::aggregate(
+                Some(16),
+                8,
+                SemanticAggregateLayoutV1::new(
+                    vec![0, 8],
+                    vec![SemanticPaddingV1::new(9, 7).unwrap()],
+                )
+                .unwrap(),
+            )
+            .unwrap(),
+            SemanticTypeShapeV1::Tuple(
+                SemanticAggregateTypeV1::new(vec![U64_POINTER_TYPE, BOOL_TYPE]).unwrap(),
+            ),
+        ));
+        let non_bool_carrier = SemanticTypeIdV1::from_index(types.len() as u32);
+        types.push(SemanticTypeDeclV1::new(
+            SemanticTypeIdentityV1::from_sha256(bytes(219)),
+            SemanticLayoutIdentityV1::from_sha256(bytes(219)),
+            SemanticTypeLayoutV1::aggregate(
+                Some(16),
+                8,
+                SemanticAggregateLayoutV1::new(
+                    vec![0, 8],
+                    vec![SemanticPaddingV1::new(9, 7).unwrap()],
+                )
+                .unwrap(),
+            )
+            .unwrap(),
+            SemanticTypeShapeV1::Tuple(
+                SemanticAggregateTypeV1::new(vec![U64_TYPE, U8_TYPE]).unwrap(),
+            ),
+        ));
+        assert!(checked_scalar_carrier_type_v1(&types, pointer_carrier).is_none());
+        assert!(checked_scalar_carrier_type_v1(&types, non_bool_carrier).is_none());
+
+        let function = checked_scalar_summary_helper_v1(CheckedScalarSummaryShapeV1::Exact);
+        let projected_value = SemanticPlaceV1::new(
+            SemanticLocalIdV1::from_index(1),
+            vec![SemanticProjectionV1::new(SemanticProjectionKindV1::Field(0), U64_TYPE).unwrap()],
+            U64_TYPE,
+        )
+        .unwrap();
+        let nested_value = SemanticPlaceV1::new(
+            SemanticLocalIdV1::from_index(1),
+            vec![
+                SemanticProjectionV1::new(SemanticProjectionKindV1::Field(0), U64_TYPE).unwrap(),
+                SemanticProjectionV1::new(SemanticProjectionKindV1::OpaqueCast, U64_TYPE).unwrap(),
+            ],
+            U64_TYPE,
+        )
+        .unwrap();
+        let dereferenced_value = SemanticPlaceV1::new(
+            SemanticLocalIdV1::from_index(1),
+            vec![
+                SemanticProjectionV1::new(SemanticProjectionKindV1::Dereference, U64_TYPE).unwrap(),
+            ],
+            U64_TYPE,
+        )
+        .unwrap();
+        let indexed_value = SemanticPlaceV1::new(
+            SemanticLocalIdV1::from_index(1),
+            vec![
+                SemanticProjectionV1::new(
+                    SemanticProjectionKindV1::Index(SemanticLocalIdV1::from_index(0)),
+                    U64_TYPE,
+                )
+                .unwrap(),
+            ],
+            U64_TYPE,
+        )
+        .unwrap();
+        let wrong_field = SemanticPlaceV1::new(
+            SemanticLocalIdV1::from_index(1),
+            vec![SemanticProjectionV1::new(SemanticProjectionKindV1::Field(2), U64_TYPE).unwrap()],
+            U64_TYPE,
+        )
+        .unwrap();
+        let wrong_result = SemanticPlaceV1::new(
+            SemanticLocalIdV1::from_index(1),
+            vec![SemanticProjectionV1::new(SemanticProjectionKindV1::Field(0), BOOL_TYPE).unwrap()],
+            BOOL_TYPE,
+        )
+        .unwrap();
+        let mut work = 0;
+        assert!(
+            scalar_defined_callable_place_v1(&types, &function, &projected_value, &mut work)
+                .unwrap()
+        );
+        assert!(
+            !scalar_or_checked_carrier_destination_v1(
+                &types,
+                &function,
+                &projected_value,
+                &mut work,
+            )
+            .unwrap()
+        );
+        assert!(
+            !scalar_defined_callable_destination_v1(
+                &types,
+                &function,
+                &projected_value,
+                &mut work,
+            )
+            .unwrap()
+        );
+        for place in [
+            &nested_value,
+            &dereferenced_value,
+            &indexed_value,
+            &wrong_field,
+            &wrong_result,
+        ] {
+            assert!(
+                !scalar_defined_callable_place_v1(&types, &function, place, &mut work).unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn only_exact_deterministic_scalar_helpers_project_call_result_control() {
+        let exact_functions = vec![scalar_summary_argument_leaf(232)];
+        let exact_callables = vec![SemanticCallableDeclV1::defined(
+            SemanticFunctionIdV1::from_index(0),
+        )];
+        let exact_effects = derive_defined_callable_empty_effect_summaries_v1(
+            &projection_types(),
+            &exact_functions,
+            &exact_callables,
+        )
+        .unwrap();
+        assert!(
+            exact_effects.is_exact_empty_deterministic_scalar(SemanticFunctionIdV1::from_index(0))
+        );
+        let caller = defined_scalar_call_switch(0, vec![tensor_operand(1), tensor_operand(2)]);
+        let (switches, operations, _) = deterministic_scalar_switch_projection_with_effects(
+            &exact_callables,
+            &exact_effects,
+            &caller,
+            &vec![None; caller.locals().len()],
+            &vec![None; caller.locals().len()],
+            vec![],
+            0,
+        )
+        .unwrap();
+        assert!(switches[1].is_some());
+        assert!(operations.iter().any(|operation| matches!(
+            operation,
+            ProductionRankedOperationV1::DeterministicJoin { dependencies, .. }
+                if dependencies.contains(&ProductionRankedValueV1::Argument(1))
+                    && dependencies.contains(&ProductionRankedValueV1::Argument(2))
+        )));
+
+        let transitive_functions = vec![
+            scalar_summary_calling_argument_helper(234, 1),
+            scalar_summary_argument_leaf(236),
+        ];
+        let transitive_callables = vec![
+            SemanticCallableDeclV1::defined(SemanticFunctionIdV1::from_index(0)),
+            SemanticCallableDeclV1::defined(SemanticFunctionIdV1::from_index(1)),
+        ];
+        let transitive_effects = derive_defined_callable_empty_effect_summaries_v1(
+            &projection_types(),
+            &transitive_functions,
+            &transitive_callables,
+        )
+        .unwrap();
+        assert!(
+            transitive_effects
+                .is_exact_empty_deterministic_scalar(SemanticFunctionIdV1::from_index(0))
+        );
+        let (switches, _, _) = deterministic_scalar_switch_projection_with_effects(
+            &transitive_callables,
+            &transitive_effects,
+            &caller,
+            &vec![None; caller.locals().len()],
+            &vec![None; caller.locals().len()],
+            vec![],
+            0,
+        )
+        .unwrap();
+        assert!(switches[1].is_some());
+
+        for function in [
+            scalar_summary_unchecked_argument_leaf(238),
+            scalar_summary_assume_argument_leaf(240),
+        ] {
+            let functions = [function];
+            let effects = derive_defined_callable_empty_effect_summaries_v1(
+                &projection_types(),
+                &functions,
+                &exact_callables,
+            )
+            .unwrap();
+            assert!(effects.is_exact_empty(SemanticFunctionIdV1::from_index(0)));
+            assert!(
+                !effects.is_exact_empty_deterministic_scalar(SemanticFunctionIdV1::from_index(0))
+            );
+            let (switches, _, _) = deterministic_scalar_switch_projection_with_effects(
+                &exact_callables,
+                &effects,
+                &caller,
+                &vec![None; caller.locals().len()],
+                &vec![None; caller.locals().len()],
+                vec![],
+                0,
+            )
+            .unwrap();
+            assert!(switches[1].is_none());
+        }
+
+        let invocation = ProductionRankedValueIdV1::new(0);
+        let mut varying = vec![None; caller.locals().len()];
+        varying[1] = Some(ProjectedDisjointIndexV1 {
+            value: ProductionRankedValueV1::Local(invocation),
+            mapping: SemanticDisjointIndexSpaceV1::Index1d,
+            precondition: None,
+            availability: None,
+        });
+        let (switches, operations, _) = deterministic_scalar_switch_projection_with_effects(
+            &exact_callables,
+            &exact_effects,
+            &caller,
+            &varying,
+            &vec![None; caller.locals().len()],
+            vec![ProductionRankedOperationV1::InvocationIndex {
+                result: invocation,
+                dimension: 0,
+                launch_extent: 0,
+            }],
+            1,
+        )
+        .unwrap();
+        assert!(switches[1].is_some());
+        assert!(operations.iter().any(|operation| matches!(
+            operation,
+            ProductionRankedOperationV1::DeterministicJoin { dependencies, .. }
+                if dependencies.contains(&ProductionRankedValueV1::Local(invocation))
+        )));
+
+        let zero_functions = vec![scalar_summary_leaf(242)];
+        let zero_effects = derive_defined_callable_empty_effect_summaries_v1(
+            &projection_types(),
+            &zero_functions,
+            &exact_callables,
+        )
+        .unwrap();
+        assert!(
+            zero_effects.is_exact_empty_deterministic_scalar(SemanticFunctionIdV1::from_index(0))
+        );
+        let zero_caller = defined_scalar_call_switch(0, vec![]);
+        let (switches, _, _) = deterministic_scalar_switch_projection_with_effects(
+            &exact_callables,
+            &zero_effects,
+            &zero_caller,
+            &vec![None; zero_caller.locals().len()],
+            &vec![None; zero_caller.locals().len()],
+            vec![],
+            0,
+        )
+        .unwrap();
+        assert!(switches[1].is_none());
+    }
+
+    #[test]
+    fn defined_scalar_helper_rejects_missing_function_ids_for_calls_and_tail_calls() {
+        let callables = vec![
+            SemanticCallableDeclV1::defined(SemanticFunctionIdV1::from_index(0)),
+            SemanticCallableDeclV1::defined(SemanticFunctionIdV1::from_index(1)),
+        ];
+        for function in [
+            scalar_summary_calling_helper(220, 1),
+            scalar_summary_tail_calling_helper(230, 1),
+        ] {
+            let summaries = derive_defined_callable_empty_effect_summaries_v1(
+                &projection_types(),
+                &[function],
+                &callables,
+            )
+            .unwrap();
+            assert!(!summaries.is_exact_empty(SemanticFunctionIdV1::from_index(0)));
+        }
     }
 
     #[test]
@@ -26538,6 +27426,50 @@ mod tests {
             ProjectedCfgTerminatorV1::Return,
         );
     }
+    fn defined_scalar_call_switch(
+        callee: u32,
+        arguments: Vec<SemanticOperandV1>,
+    ) -> SemanticFunctionDeclV1 {
+        let call = SemanticDirectCallV1::new_callable(
+            SemanticCallableIdV1::from_index(callee),
+            arguments,
+            Some(SemanticCallDestinationV1::new(
+                typed_place(3, SCALAR_TYPE),
+                cfg_edge(SemanticEdgeRoleV1::CallReturn, 1),
+            )),
+            SemanticUnwindActionV1::Unreachable,
+        )
+        .unwrap();
+        projection_function_with_locals(
+            vec![
+                block(118, vec![], SemanticTerminatorKindV1::Call(call)),
+                block(
+                    119,
+                    vec![],
+                    SemanticTerminatorKindV1::SwitchInt {
+                        discriminant: tensor_operand(3),
+                        targets: SemanticSwitchTargetsV1::new(
+                            vec![SemanticSwitchTargetV1::new(
+                                0,
+                                cfg_edge(SemanticEdgeRoleV1::SwitchValue, 2),
+                            )],
+                            cfg_edge(SemanticEdgeRoleV1::SwitchOtherwise, 3),
+                        )
+                        .unwrap(),
+                    },
+                ),
+                block(120, vec![], SemanticTerminatorKindV1::Return),
+                block(121, vec![], SemanticTerminatorKindV1::Return),
+            ],
+            vec![
+                local(118, SCALAR_TYPE, SemanticLocalRoleV1::Return),
+                local(119, SCALAR_TYPE, SemanticLocalRoleV1::Argument(0)),
+                local(120, SCALAR_TYPE, SemanticLocalRoleV1::Argument(1)),
+                local(121, SCALAR_TYPE, SemanticLocalRoleV1::Temporary),
+            ],
+        )
+    }
+
     fn call_discriminant_switch(
         callee: u32,
         arguments: Vec<SemanticOperandV1>,
