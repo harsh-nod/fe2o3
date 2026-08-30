@@ -3759,7 +3759,7 @@ impl<'a> FunctionLowerer<'a> {
             OperationKind::MemoryIntrinsic(intrinsic) => {
                 validate_memory_intrinsic(intrinsic, &location, self.target)?;
             }
-            OperationKind::Binary { op, lhs, .. } => {
+            OperationKind::Binary { op, lhs, rhs } => {
                 let ty = self.value_type(*lhs);
                 if matches!(op, BinaryOp::Checked(_)) {
                     if !ty.as_scalar().is_some_and(ScalarType::is_integer) {
@@ -3770,6 +3770,16 @@ impl<'a> FunctionLowerer<'a> {
                         ));
                     }
                     return Ok(());
+                }
+                let rhs_ty = self.value_type(*rhs);
+                if matches!(op, BinaryOp::ShiftLeft | BinaryOp::ShiftRight) && ty != rhs_ty {
+                    return Err(LoweringErrors::one(
+                        location,
+                        LoweringDiagnosticCode::UnsupportedOperation,
+                        format!(
+                            "G1 requires matching operand types for {op:?}, found {ty:?} and {rhs_ty:?}"
+                        ),
+                    ));
                 }
                 if !supported_binary(*op, ty, self.target) {
                     return Err(LoweringErrors::one(

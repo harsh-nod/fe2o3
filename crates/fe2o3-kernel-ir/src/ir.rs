@@ -1570,7 +1570,9 @@ pub enum BinaryOp {
     BitAnd,
     BitOr,
     BitXor,
+    /// Integer left shift whose RHS may use any integer scalar type.
     ShiftLeft,
+    /// Integer right shift whose RHS may use any integer scalar type.
     ShiftRight,
     /// Integer arithmetic with explicit `(value, overflow)` results.
     Checked(CheckedBinaryOperator),
