@@ -9,8 +9,8 @@ mod entrypoint;
 
 pub use entrypoint::{
     EXTERNAL_ANCHOR_HELPER_BOOTSTRAP_FD_V1, EXTERNAL_ANCHOR_HELPER_DAEMON_EXECUTABLE_FD_V1,
-    EXTERNAL_ANCHOR_HELPER_ROOT_FD_V1, ExternalAnchorProvisioningHelperErrorV1,
-    run_inherited_external_anchor_provisioning_helper_v1,
+    EXTERNAL_ANCHOR_HELPER_LIFECYCLE_FD_V1, EXTERNAL_ANCHOR_HELPER_ROOT_FD_V1,
+    ExternalAnchorProvisioningHelperErrorV1, run_inherited_external_anchor_provisioning_helper_v1,
 };
 
 const READY_MAGIC_V1: [u8; 8] = *b"F2O3AHR1";
@@ -135,6 +135,7 @@ mod tests {
         assert_eq!(EXTERNAL_ANCHOR_HELPER_BOOTSTRAP_FD_V1, 3);
         assert_eq!(EXTERNAL_ANCHOR_HELPER_ROOT_FD_V1, 4);
         assert_eq!(EXTERNAL_ANCHOR_HELPER_DAEMON_EXECUTABLE_FD_V1, 5);
+        assert_eq!(EXTERNAL_ANCHOR_HELPER_LIFECYCLE_FD_V1, 6);
         assert_eq!(
             fe2o3_compiler_closure_capability::COMPILER_EXECUTION_EXTERNAL_ANCHOR_DEPLOYMENT_FD_V1,
             221

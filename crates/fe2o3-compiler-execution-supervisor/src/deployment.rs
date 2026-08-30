@@ -14,6 +14,9 @@ use fe2o3_compiler_closure_capability::{
     COMPILER_EXECUTION_SUPERVISOR_DEPLOYMENT_FD_V1, CompilerExecutionPolicyCapabilityV1,
     CompilerExecutionSigningKeyCapabilityV1, CompilerExecutionSupervisorDeploymentCapabilityV1,
 };
+use fe2o3_compiler_execution_lifecycle::{
+    CompilerExecutionServiceLifecycleLeaseV1, LifecycleLeaseErrorV1,
+};
 use fe2o3_compiler_execution_protocol::{
     CompilerExecutionSupervisorReadyErrorV1, CompilerExecutionSupervisorReadyV1,
 };
@@ -47,6 +50,8 @@ pub const COMPILER_EXECUTION_SUPERVISOR_EXTERNAL_ANCHOR_PEER_FD_V1: RawFd = 9;
 pub const COMPILER_EXECUTION_SUPERVISOR_EXTERNAL_ANCHOR_PIDFD_V1: RawFd = 10;
 /// Private root bootstrap carrying exact deployment readiness.
 pub const COMPILER_EXECUTION_SUPERVISOR_BOOTSTRAP_FD_V1: RawFd = 11;
+/// Independent shared lifecycle lease retained through protected-supervisor process death.
+pub const COMPILER_EXECUTION_SUPERVISOR_LIFECYCLE_FD_V1: RawFd = 12;
 
 const PRIVATE_DESCRIPTOR_FLOOR_V1: RawFd = 256;
 const CLOSE_RANGE_CLOEXEC: i32 = 1 << 2;
@@ -88,7 +93,10 @@ const _: () = assert!(
         < COMPILER_EXECUTION_SUPERVISOR_BOOTSTRAP_FD_V1
 );
 const _: () = assert!(
-    COMPILER_EXECUTION_SUPERVISOR_BOOTSTRAP_FD_V1 < COMPILER_EXECUTION_SUPERVISOR_DEPLOYMENT_FD_V1
+    COMPILER_EXECUTION_SUPERVISOR_BOOTSTRAP_FD_V1 < COMPILER_EXECUTION_SUPERVISOR_LIFECYCLE_FD_V1
+);
+const _: () = assert!(
+    COMPILER_EXECUTION_SUPERVISOR_LIFECYCLE_FD_V1 < COMPILER_EXECUTION_SUPERVISOR_DEPLOYMENT_FD_V1
 );
 const _: () = assert!(COMPILER_EXECUTION_SUPERVISOR_DEPLOYMENT_FD_V1 < PRIVATE_DESCRIPTOR_FLOOR_V1);
 
@@ -135,6 +143,13 @@ pub fn run_inherited_protected_issuer_service_v1()
 
     let listener = take_inherited(COMPILER_EXECUTION_SUPERVISOR_LISTENER_FD_V1)?;
     let root = File::from(take_inherited(COMPILER_EXECUTION_SUPERVISOR_ROOT_FD_V1)?);
+    let lifecycle = CompilerExecutionServiceLifecycleLeaseV1::admit(
+        File::from(take_inherited(
+            COMPILER_EXECUTION_SUPERVISOR_LIFECYCLE_FD_V1,
+        )?),
+        &root,
+    )
+    .map_err(ProtectedIssuerDeploymentErrorV1::Lifecycle)?;
     let launcher = File::from(take_inherited(
         COMPILER_EXECUTION_SUPERVISOR_LAUNCHER_FD_V1,
     )?);
@@ -146,6 +161,9 @@ pub fn run_inherited_protected_issuer_service_v1()
     let bootstrap = take_inherited(COMPILER_EXECUTION_SUPERVISOR_BOOTSTRAP_FD_V1)?;
     validate_bootstrap::<true>(&bootstrap, rustix::process::getppid())?;
     protect_unrelated_descriptors_v1()?;
+    lifecycle
+        .revalidate()
+        .map_err(ProtectedIssuerDeploymentErrorV1::Lifecycle)?;
 
     let launcher_measurement = ProvisionedStaticExecutableMeasurementV1::new(
         manifest.launcher().sha256(),
@@ -176,6 +194,9 @@ pub fn run_inherited_protected_issuer_service_v1()
         .map_err(ProtectedIssuerDeploymentErrorV1::Service)?;
     let workers = ProtectedIssuerServiceWorkerCountV1::new(WORKER_COUNT_V1)
         .map_err(ProtectedIssuerDeploymentErrorV1::Service)?;
+    lifecycle
+        .revalidate()
+        .map_err(ProtectedIssuerDeploymentErrorV1::Lifecycle)?;
     publish_ready(&bootstrap, manifest)?;
     drop(bootstrap);
     service
@@ -386,6 +407,8 @@ pub enum ProtectedIssuerDeploymentErrorV1 {
     Credentials(IssuerServiceCredentialProfileErrorV1),
     /// The current process does not have the exact locked service profile.
     ProcessProfile(ProtectedIssuerLaunchErrorV1),
+    /// The inherited crash-retained lifecycle lease is invalid or changed.
+    Lifecycle(LifecycleLeaseErrorV1),
     /// The trusted launcher measurement was invalid.
     LauncherMeasurement(IssuerProgramAdmissionErrorV1),
     /// Static launcher or issuer program admission failed.
@@ -446,6 +469,7 @@ impl fmt::Display for ProtectedIssuerDeploymentErrorV1 {
             Self::ProcessProfile(error) => {
                 write!(formatter, "supervisor process profile failed: {error}")
             }
+            Self::Lifecycle(error) => write!(formatter, "supervisor lifecycle failed: {error}"),
             Self::LauncherMeasurement(error) => {
                 write!(formatter, "supervisor launcher measurement failed: {error}")
             }
@@ -471,6 +495,7 @@ impl Error for ProtectedIssuerDeploymentErrorV1 {
             Self::Descriptor { source, .. } => Some(source),
             Self::Credentials(error) => Some(error),
             Self::ProcessProfile(error) => Some(error),
+            Self::Lifecycle(error) => Some(error),
             Self::LauncherMeasurement(error) | Self::Program(error) => Some(error),
             Self::ExternalAnchor(error) => Some(error),
             Self::Supervisor(error) => Some(error),
@@ -511,6 +536,7 @@ mod tests {
         assert_eq!(COMPILER_EXECUTION_SUPERVISOR_LISTENER_FD_V1, 3);
         assert_eq!(COMPILER_EXECUTION_SUPERVISOR_EXTERNAL_ANCHOR_PIDFD_V1, 10);
         assert_eq!(COMPILER_EXECUTION_SUPERVISOR_BOOTSTRAP_FD_V1, 11);
+        assert_eq!(COMPILER_EXECUTION_SUPERVISOR_LIFECYCLE_FD_V1, 12);
         assert_eq!(COMPILER_EXECUTION_SUPERVISOR_DEPLOYMENT_FD_V1, 220);
         assert_eq!(WORKER_COUNT_V1, 4);
     }

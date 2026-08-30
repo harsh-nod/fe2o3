@@ -131,12 +131,6 @@ impl CompilerExecutionLifecycleLeaseV1 {
     }
 }
 
-impl Drop for CompilerExecutionLifecycleLeaseV1 {
-    fn drop(&mut self) {
-        let _ = flock(&self.file, FlockOperation::Unlock);
-    }
-}
-
 fn validate_parent(
     parent: &impl AsFd,
     expected_uid: u32,
@@ -244,7 +238,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn owner_drop_unlocks_even_when_a_fork_style_duplicate_survives() {
+    fn last_open_file_description_reference_releases_the_lease() {
         let fixture = tempfile::tempdir().unwrap();
         let path = fixture.path().join("lifecycle");
         std::fs::write(&path, []).unwrap();
@@ -274,6 +268,16 @@ mod tests {
             Err(CompilerExecutionCoordinatorErrorV1::LifecycleBusy)
         ));
         drop(shared);
+        assert!(matches!(
+            CompilerExecutionLifecycleLeaseV1::admit(
+                File::open(&path).unwrap(),
+                CompilerExecutionLifecycleLeaseModeV1::ExclusiveProvisioning,
+                uid,
+                gid,
+            ),
+            Err(CompilerExecutionCoordinatorErrorV1::LifecycleBusy)
+        ));
+        drop(duplicate);
         let exclusive = CompilerExecutionLifecycleLeaseV1::admit(
             File::open(&path).unwrap(),
             CompilerExecutionLifecycleLeaseModeV1::ExclusiveProvisioning,
@@ -282,7 +286,6 @@ mod tests {
         )
         .unwrap();
         exclusive.revalidate().unwrap();
-        drop(duplicate);
     }
 
     #[test]

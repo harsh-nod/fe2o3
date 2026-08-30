@@ -7,6 +7,7 @@ use fe2o3_compiler_closure_capability::{
     CompilerExecutionExternalAnchorSigningKeyCapabilityV1, CompilerExecutionPolicyCapabilityV1,
     CompilerExecutionSigningKeyCapabilityV1, CompilerExecutionSupervisorDeploymentCapabilityV1,
 };
+use fe2o3_compiler_execution_lifecycle::CompilerExecutionServiceLifecycleLeaseV1;
 use fe2o3_compiler_execution_protocol::{
     COMPILER_EXECUTION_EXTERNAL_ANCHOR_DEPLOYMENT_BYTES_V1,
     COMPILER_EXECUTION_EXTERNAL_ANCHOR_PROVISIONING_BYTES_V1,
@@ -104,6 +105,7 @@ pub struct InheritedCompilerExecutionDeploymentV1 {
     trust: CompilerExecutionSupervisorTrustV1,
     service_inputs: ProvisionedProtectedIssuerServiceInputsV1,
     anchor: PreparedExternalAnchorOccurrenceV1,
+    supervisor_lifecycle: CompilerExecutionServiceLifecycleLeaseV1,
     lifecycle: CompilerExecutionLifecycleLeaseV1,
 }
 
@@ -140,6 +142,10 @@ impl InheritedCompilerExecutionDeploymentV1 {
 
         let lifecycle =
             CompilerExecutionLifecycleLeaseV1::admit_service_from_root(&supervisor_root)?;
+        let supervisor_lifecycle = CompilerExecutionServiceLifecycleLeaseV1::open(&supervisor_root)
+            .map_err(CompilerExecutionCoordinatorErrorV1::ServiceLifecycle)?;
+        let anchor_lifecycle = CompilerExecutionServiceLifecycleLeaseV1::open(&anchor_root)
+            .map_err(CompilerExecutionCoordinatorErrorV1::ServiceLifecycle)?;
 
         let supervisor_deployment =
             decode_supervisor_deployment(File::from(supervisor_deployment))?;
@@ -193,6 +199,7 @@ impl InheritedCompilerExecutionDeploymentV1 {
             anchor_helper,
             anchor_daemon,
             File::from(anchor_root),
+            anchor_lifecycle,
             anchor_deployment,
             anchor_provisioning,
             anchor_key,
@@ -205,6 +212,7 @@ impl InheritedCompilerExecutionDeploymentV1 {
             trust,
             service_inputs,
             anchor,
+            supervisor_lifecycle,
             lifecycle,
         })
     }
@@ -222,6 +230,7 @@ impl InheritedCompilerExecutionDeploymentV1 {
             self.programs,
             self.trust,
             self.service_inputs,
+            self.supervisor_lifecycle,
             self.lifecycle,
             anchor,
         )?

@@ -16,6 +16,9 @@ use fe2o3_compiler_closure_capability::{
     COMPILER_EXECUTION_SUPERVISOR_DEPLOYMENT_FD_V1, CompilerExecutionPolicyCapabilityV1,
     CompilerExecutionSigningKeyCapabilityV1, CompilerExecutionSupervisorDeploymentCapabilityV1,
 };
+use fe2o3_compiler_execution_lifecycle::{
+    CompilerExecutionServiceLifecycleLeaseV1, LifecycleLeaseErrorV1,
+};
 use fe2o3_compiler_execution_protocol::{
     COMPILER_EXECUTION_SUPERVISOR_READY_BYTES_V1, CompilerExecutionIssuerMeasurementV1,
     CompilerExecutionSupervisorDeploymentV1, CompilerExecutionSupervisorReadyErrorV1,
@@ -27,10 +30,11 @@ use fe2o3_compiler_execution_supervisor::{
     COMPILER_EXECUTION_SUPERVISOR_EXTERNAL_ANCHOR_PEER_FD_V1,
     COMPILER_EXECUTION_SUPERVISOR_EXTERNAL_ANCHOR_PIDFD_V1,
     COMPILER_EXECUTION_SUPERVISOR_ISSUER_FD_V1, COMPILER_EXECUTION_SUPERVISOR_LAUNCHER_FD_V1,
-    COMPILER_EXECUTION_SUPERVISOR_LISTENER_FD_V1, COMPILER_EXECUTION_SUPERVISOR_POLICY_FD_V1,
-    COMPILER_EXECUTION_SUPERVISOR_ROOT_FD_V1, COMPILER_EXECUTION_SUPERVISOR_SIGNING_KEY_FD_V1,
-    IssuerServiceCredentialProfileV1, ProtectedIssuerServiceDeploymentInputsV1,
-    ProtectedIssuerServiceProvisioningErrorV1, ProvisionedProtectedIssuerServiceInputsV1,
+    COMPILER_EXECUTION_SUPERVISOR_LIFECYCLE_FD_V1, COMPILER_EXECUTION_SUPERVISOR_LISTENER_FD_V1,
+    COMPILER_EXECUTION_SUPERVISOR_POLICY_FD_V1, COMPILER_EXECUTION_SUPERVISOR_ROOT_FD_V1,
+    COMPILER_EXECUTION_SUPERVISOR_SIGNING_KEY_FD_V1, IssuerServiceCredentialProfileV1,
+    ProtectedIssuerServiceDeploymentInputsV1, ProtectedIssuerServiceProvisioningErrorV1,
+    ProvisionedProtectedIssuerServiceInputsV1,
 };
 use fe2o3_external_anchor_coordinator::{
     ExternalAnchorCoordinatorErrorV1, RootManagedExternalAnchorV1,
@@ -282,6 +286,7 @@ pub struct PreparedCompilerExecutionSupervisorV1 {
     issuer: PinnedDeploymentExecutableV1,
     trust: CompilerExecutionSupervisorTrustV1,
     service_inputs: ProtectedIssuerServiceDeploymentInputsV1,
+    supervisor_lifecycle: CompilerExecutionServiceLifecycleLeaseV1,
     anchor: RootManagedExternalAnchorV1,
     credentials: IssuerServiceCredentialProfileV1,
     namespaces: ProtectedServiceNamespaceSetV1,
@@ -307,6 +312,7 @@ impl PreparedCompilerExecutionSupervisorV1 {
         programs: CompilerExecutionSupervisorProgramSourcesV1,
         trust: CompilerExecutionSupervisorTrustV1,
         service_inputs: ProvisionedProtectedIssuerServiceInputsV1,
+        supervisor_lifecycle: CompilerExecutionServiceLifecycleLeaseV1,
         lifecycle: lifecycle::CompilerExecutionLifecycleLeaseV1,
         anchor: RootManagedExternalAnchorV1,
     ) -> Result<Self, CompilerExecutionCoordinatorErrorV1> {
@@ -324,6 +330,9 @@ impl PreparedCompilerExecutionSupervisorV1 {
         service_inputs
             .revalidate()
             .map_err(CompilerExecutionCoordinatorErrorV1::ServiceInputs)?;
+        supervisor_lifecycle
+            .revalidate()
+            .map_err(CompilerExecutionCoordinatorErrorV1::ServiceLifecycle)?;
         anchor
             .validate_continuity()
             .map_err(CompilerExecutionCoordinatorErrorV1::Anchor)?;
@@ -368,6 +377,7 @@ impl PreparedCompilerExecutionSupervisorV1 {
             issuer,
             trust,
             service_inputs,
+            supervisor_lifecycle,
             anchor,
             credentials,
             namespaces: ProtectedServiceNamespaceSetV1::capture_self()
@@ -416,6 +426,9 @@ impl PreparedCompilerExecutionSupervisorV1 {
         self.service_inputs
             .revalidate()
             .map_err(CompilerExecutionCoordinatorErrorV1::ServiceInputs)?;
+        self.supervisor_lifecycle
+            .revalidate()
+            .map_err(CompilerExecutionCoordinatorErrorV1::ServiceLifecycle)?;
         self.lifecycle.revalidate()?;
         self.anchor
             .validate_continuity()
@@ -508,6 +521,10 @@ impl PreparedCompilerExecutionSupervisorV1 {
                 binding(
                     child_bootstrap.as_fd(),
                     COMPILER_EXECUTION_SUPERVISOR_BOOTSTRAP_FD_V1,
+                )?,
+                binding(
+                    self.supervisor_lifecycle.as_fd(),
+                    COMPILER_EXECUTION_SUPERVISOR_LIFECYCLE_FD_V1,
                 )?,
                 binding(
                     deployment.as_fd(),
@@ -932,6 +949,8 @@ pub enum CompilerExecutionCoordinatorErrorV1 {
     KeyMismatch,
     /// Persistent listener/root admission or continuity failed.
     ServiceInputs(ProtectedIssuerServiceProvisioningErrorV1),
+    /// Crash-retained protected-service lifecycle custody failed.
+    ServiceLifecycle(LifecycleLeaseErrorV1),
     /// External-anchor lifecycle, transfer, or shutdown failed.
     Anchor(ExternalAnchorCoordinatorErrorV1),
     /// External-anchor deployment does not bind this supervisor and policy.
@@ -1040,6 +1059,9 @@ impl fmt::Display for CompilerExecutionCoordinatorErrorV1 {
             Self::ServiceInputs(error) => {
                 write!(formatter, "supervisor service inputs failed: {error}")
             }
+            Self::ServiceLifecycle(error) => {
+                write!(formatter, "protected service lifecycle failed: {error}")
+            }
             Self::Anchor(error) => write!(formatter, "external-anchor custody failed: {error}"),
             Self::AnchorBindingMismatch => {
                 formatter.write_str("external-anchor deployment names another supervisor or policy")
@@ -1084,6 +1106,7 @@ impl Error for CompilerExecutionCoordinatorErrorV1 {
             Self::Credentials(error) => Some(error),
             Self::Executable(error) => Some(error),
             Self::ServiceInputs(error) => Some(error),
+            Self::ServiceLifecycle(error) => Some(error),
             Self::Anchor(error) => Some(error),
             Self::Spawn(error) => Some(error),
             Self::Profile(error) => Some(error),
@@ -1131,6 +1154,7 @@ mod tests {
             COMPILER_EXECUTION_SUPERVISOR_EXTERNAL_ANCHOR_PEER_FD_V1,
             COMPILER_EXECUTION_SUPERVISOR_EXTERNAL_ANCHOR_PIDFD_V1,
             COMPILER_EXECUTION_SUPERVISOR_BOOTSTRAP_FD_V1,
+            COMPILER_EXECUTION_SUPERVISOR_LIFECYCLE_FD_V1,
             COMPILER_EXECUTION_SUPERVISOR_DEPLOYMENT_FD_V1,
         ];
         for (index, destination) in destinations.iter().enumerate() {

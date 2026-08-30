@@ -8,6 +8,9 @@ rust-version.workspace = true
 description = "Crash-retained lifecycle lease custody for protected fe2o3 compiler services."
 publish = false
 
+[features]
+test-support = []
+
 [dependencies]
 fe2o3-compiler-execution-protocol.workspace = true
 rustix.workspace = true

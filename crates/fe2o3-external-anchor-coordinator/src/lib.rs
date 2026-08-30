@@ -20,6 +20,9 @@ use fe2o3_compiler_closure_capability::{
     CompilerExecutionExternalAnchorProvisioningCapabilityV1,
     CompilerExecutionExternalAnchorSigningKeyCapabilityV1,
 };
+use fe2o3_compiler_execution_lifecycle::{
+    CompilerExecutionServiceLifecycleLeaseV1, LifecycleLeaseErrorV1,
+};
 use fe2o3_compiler_execution_protocol::{
     CompilerExecutionExternalAnchorDeploymentIdentityV1,
     CompilerExecutionExternalAnchorDeploymentV1, CompilerExecutionExternalAnchorProvisioningV1,
@@ -29,8 +32,8 @@ use fe2o3_compiler_execution_protocol::{
     MAX_COMPILER_EXECUTION_EXTERNAL_ANCHOR_EXECUTABLE_BYTES_V1,
 };
 use fe2o3_external_anchor_provisioner::{
-    EXTERNAL_ANCHOR_PROVISIONING_READY_BYTES_V1, ExternalAnchorProvisioningReadyDispositionV1,
-    ExternalAnchorProvisioningReadyV1,
+    EXTERNAL_ANCHOR_HELPER_LIFECYCLE_FD_V1, EXTERNAL_ANCHOR_PROVISIONING_READY_BYTES_V1,
+    ExternalAnchorProvisioningReadyDispositionV1, ExternalAnchorProvisioningReadyV1,
 };
 use fe2o3_protected_service_profile::{
     ProtectedServiceCredentialProfileErrorV1, ProtectedServiceCredentialProfileV1,
@@ -65,6 +68,7 @@ pub struct PreparedExternalAnchorOccurrenceV1 {
     helper: ProtectedStaticExecutableV1,
     daemon: ProtectedStaticExecutableV1,
     root: File,
+    lifecycle: CompilerExecutionServiceLifecycleLeaseV1,
     deployment: CompilerExecutionExternalAnchorDeploymentCapabilityV1,
     provisioning: CompilerExecutionExternalAnchorProvisioningCapabilityV1,
     key_template: CompilerExecutionExternalAnchorSigningKeyCapabilityV1,
@@ -98,6 +102,7 @@ impl PreparedExternalAnchorOccurrenceV1 {
         helper_source: File,
         daemon_source: File,
         root: File,
+        lifecycle: CompilerExecutionServiceLifecycleLeaseV1,
         deployment: CompilerExecutionExternalAnchorDeploymentV1,
         provisioning: CompilerExecutionExternalAnchorProvisioningV1,
         key_template: CompilerExecutionExternalAnchorSigningKeyCapabilityV1,
@@ -106,6 +111,7 @@ impl PreparedExternalAnchorOccurrenceV1 {
             helper_source,
             daemon_source,
             root,
+            lifecycle,
             deployment,
             provisioning,
             key_template,
@@ -117,6 +123,7 @@ impl PreparedExternalAnchorOccurrenceV1 {
         helper_source: File,
         daemon_source: File,
         root: File,
+        lifecycle: CompilerExecutionServiceLifecycleLeaseV1,
         deployment: CompilerExecutionExternalAnchorDeploymentV1,
         provisioning: CompilerExecutionExternalAnchorProvisioningV1,
         key_template: CompilerExecutionExternalAnchorSigningKeyCapabilityV1,
@@ -157,6 +164,9 @@ impl PreparedExternalAnchorOccurrenceV1 {
         )
         .map_err(ExternalAnchorCoordinatorErrorV1::Executable)?;
         let root_snapshot = validate_state_root(&root, service)?;
+        lifecycle
+            .revalidate()
+            .map_err(ExternalAnchorCoordinatorErrorV1::Lifecycle)?;
         key_template
             .revalidate(&deployment)
             .map_err(ExternalAnchorCoordinatorErrorV1::KeyTemplate)?;
@@ -173,6 +183,7 @@ impl PreparedExternalAnchorOccurrenceV1 {
             helper,
             daemon,
             root,
+            lifecycle,
             deployment: deployment_capability,
             provisioning: provisioning_capability,
             key_template,
@@ -237,6 +248,9 @@ impl PreparedExternalAnchorOccurrenceV1 {
             .key_template
             .try_clone_for_transfer()
             .map_err(ExternalAnchorCoordinatorErrorV1::KeyTemplate)?;
+        self.lifecycle
+            .revalidate()
+            .map_err(ExternalAnchorCoordinatorErrorV1::Lifecycle)?;
         let bindings = [
             ProtectedServiceDescriptorBindingV1::new(
                 child_bootstrap.as_fd(),
@@ -246,6 +260,11 @@ impl PreparedExternalAnchorOccurrenceV1 {
             ProtectedServiceDescriptorBindingV1::new(
                 self.root.as_fd(),
                 fe2o3_external_anchor_provisioner::EXTERNAL_ANCHOR_HELPER_ROOT_FD_V1,
+            )
+            .map_err(ExternalAnchorCoordinatorErrorV1::Spawn)?,
+            ProtectedServiceDescriptorBindingV1::new(
+                self.lifecycle.as_fd(),
+                EXTERNAL_ANCHOR_HELPER_LIFECYCLE_FD_V1,
             )
             .map_err(ExternalAnchorCoordinatorErrorV1::Spawn)?,
             ProtectedServiceDescriptorBindingV1::new(
@@ -357,6 +376,9 @@ impl PreparedExternalAnchorOccurrenceV1 {
         {
             return Err(ExternalAnchorCoordinatorErrorV1::StateRootChanged);
         }
+        self.lifecycle
+            .revalidate()
+            .map_err(ExternalAnchorCoordinatorErrorV1::Lifecycle)?;
         self.deployment
             .revalidate()
             .map_err(ExternalAnchorCoordinatorErrorV1::DeploymentCapability)?;
@@ -809,6 +831,8 @@ pub enum ExternalAnchorCoordinatorErrorV1 {
     KeyMismatch,
     /// Parent or child protected-service profile validation failed.
     Profile(ProtectedServiceProfileErrorV1),
+    /// Crash-retained child lifecycle custody is invalid or changed.
+    Lifecycle(LifecycleLeaseErrorV1),
     /// Shared protected-service staging, spawn, or pidfd custody failed.
     Spawn(ProtectedServiceSpawnErrorV1),
     /// The bounded launch timeout is zero, excessive, or unrepresentable.
@@ -860,6 +884,7 @@ impl fmt::Display for ExternalAnchorCoordinatorErrorV1 {
             Self::KeyTemplate(error) => write!(formatter, "invalid anchor key template: {error}"),
             Self::KeyMismatch => formatter.write_str("anchor key does not match deployment"),
             Self::Profile(error) => write!(formatter, "invalid anchor child profile: {error}"),
+            Self::Lifecycle(error) => write!(formatter, "invalid anchor lifecycle: {error}"),
             Self::Spawn(error) => write!(formatter, "protected anchor spawn failed: {error}"),
             Self::InvalidTimeout => formatter.write_str("invalid anchor launch timeout"),
             Self::NoncanonicalProfileReady => {
@@ -891,6 +916,7 @@ impl Error for ExternalAnchorCoordinatorErrorV1 {
             Self::Credentials(error) => Some(error),
             Self::Executable(error) => Some(error),
             Self::Profile(error) => Some(error),
+            Self::Lifecycle(error) => Some(error),
             Self::Spawn(error) => Some(error),
             Self::Admission(error) => Some(error),
             Self::Io { source, .. } => Some(source),
@@ -932,19 +958,39 @@ mod tests {
         let daemon_source = ExecutableSource::new("daemon", &bytes);
         let measurement = measurement(&bytes);
         let (deployment, provisioning, key_template, _, _) = manifests(measurement, measurement);
-        let state_root = tempfile::tempdir().unwrap();
-        fs::set_permissions(state_root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let lifecycle_root = tempfile::tempdir().unwrap();
+        fs::set_permissions(lifecycle_root.path(), fs::Permissions::from_mode(0o755)).unwrap();
+        let state_root = lifecycle_root.path().join("state");
+        fs::create_dir(&state_root).unwrap();
+        fs::set_permissions(&state_root, fs::Permissions::from_mode(0o700)).unwrap();
+        let lifecycle_path = lifecycle_root.path().join(
+            std::path::Path::new(
+                fe2o3_compiler_execution_protocol::COMPILER_EXECUTION_LIFECYCLE_LOCK_PATH_V1,
+            )
+            .file_name()
+            .unwrap(),
+        );
+        fs::write(&lifecycle_path, []).unwrap();
+        fs::set_permissions(&lifecycle_path, fs::Permissions::from_mode(0o400)).unwrap();
+        let root = File::open(&state_root).unwrap();
+        let lifecycle =
+            CompilerExecutionServiceLifecycleLeaseV1::admit_non_authoritative_same_owner_test(
+                File::open(lifecycle_path).unwrap(),
+                &root,
+            )
+            .unwrap();
         let prepared = PreparedExternalAnchorOccurrenceV1::prepare_inner::<false>(
             File::open(&helper_source.path).unwrap(),
             File::open(&daemon_source.path).unwrap(),
-            File::open(state_root.path()).unwrap(),
+            root,
+            lifecycle,
             deployment,
             provisioning,
             key_template,
         )
         .unwrap();
         prepared.revalidate_inner::<false>().unwrap();
-        fs::set_permissions(state_root.path(), fs::Permissions::from_mode(0o755)).unwrap();
+        fs::set_permissions(&state_root, fs::Permissions::from_mode(0o755)).unwrap();
         assert!(matches!(
             prepared.revalidate_inner::<false>(),
             Err(ExternalAnchorCoordinatorErrorV1::InvalidStateRoot)
