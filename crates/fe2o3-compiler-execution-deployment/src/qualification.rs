@@ -123,8 +123,9 @@ impl PreparedCompilerExecutionQualificationV1 {
 /// Prepares one exact installed deployment and pinned base image for disposable qualification.
 ///
 /// The process must have effective UID 0. `qualification_parent` must be root-owned,
-/// root-group, mode `0700`, and carry no extended attributes. The base image must be a
-/// root-owned, root-group, single-link, mode `0444` regular file without extended attributes.
+/// root-group, mode `0700`, and carry no extended attributes. The inert base image may be owned
+/// by its non-root builder, but it must be a single-link, mode `0444` regular file without
+/// extended attributes and is copied into sealed custody before use.
 pub fn prepare_compiler_execution_qualification_v1(
     installed: InstalledCompilerExecutionDeploymentV1,
     base_image_path: &Path,
@@ -193,7 +194,7 @@ fn prepare_for_owner(
     expected_sha256.copy_from_slice(&expected_digest);
     revalidate_installed_deployment(&installed, owner)?;
     let parent = open_qualification_parent(qualification_parent, owner)?;
-    let base = admit_qualification_base_image(base_image_path, expected_sha256, owner)?;
+    let base = admit_qualification_base_image(base_image_path, expected_sha256)?;
     let prepared = PreparedCompilerExecutionQualificationV1 {
         installed,
         base,
@@ -264,7 +265,6 @@ fn open_qualification_parent(
 fn admit_qualification_base_image(
     path: &Path,
     expected_sha256: [u8; 32],
-    owner: (u32, u32),
 ) -> Result<SealedQualificationBaseImageV1, DeploymentVerificationErrorV1> {
     let mut source = openat2(
         rustix::fs::CWD,
@@ -275,7 +275,7 @@ fn admit_qualification_base_image(
     )
     .map(File::from)
     .map_err(|source| io_error("open qualification base image", source))?;
-    let initial = validate_base_image_source(&source, owner)?;
+    let initial = validate_base_image_source(&source)?;
     let descriptor = memfd_create(
         c"fe2o3-qualification-base-v1",
         MemfdFlags::CLOEXEC | MemfdFlags::ALLOW_SEALING,
@@ -341,7 +341,6 @@ fn admit_qualification_base_image(
 
 fn validate_base_image_source(
     source: &File,
-    owner: (u32, u32),
 ) -> Result<super::ObjectSnapshotV1, DeploymentVerificationErrorV1> {
     let descriptor_flags = rustix::io::fcntl_getfd(source)
         .map_err(|source| io_error("inspect qualification base-image descriptor flags", source))?;
@@ -357,7 +356,6 @@ fn validate_base_image_source(
         || status.intersects(forbidden)
         || FileType::from_raw_mode(observed.mode) != FileType::RegularFile
         || observed.mode & 0o7777 != QUALIFICATION_BASE_IMAGE_MODE_V1
-        || (observed.uid, observed.gid) != owner
         || observed.links != 1
         || !(SQUASHFS_SUPERBLOCK_BYTES_V1 as u64..=QUALIFICATION_BASE_IMAGE_MAX_BYTES_V1)
             .contains(&observed.byte_len)
