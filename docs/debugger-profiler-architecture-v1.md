@@ -148,6 +148,48 @@ Cleanup owns and terminates only processes and queue suspensions acquired by
 the session. A failed identity revalidation poisons the stateful operation and
 cannot be cleared by retrying with a new caller assertion.
 
+### Variant regression evidence
+
+`fe2o3-semantic-query` keeps Bundle V4's same-artifact comparator unchanged.
+The separate Profiler Variant V1 path instead anchors two canonical treatment
+manifests to one caller-declared semantic-workload identity and the exact
+supplied rocprofv3 source bytes. Semantic Import re-imports those bounded bytes
+and requires every source-derived normalized Bundle V4 fact to match the
+supplied bundle. Schema-valid trailing catalog entries that no dispatch uses do
+not participate in comparability. This is a content-bound supplied-source
+relation, not a signature or external provenance claim. Admission requires
+exact environment, collector
+tool/configuration, stable per-dispatch device, selector, workload, and launch
+axes while permitting KIR, schedule, artifact, optional ISA projection, and
+observed HSACO resources to differ.
+
+Counter V2 and PC V3 wires remain unchanged. A separate in-process relation
+sidecar maps process-local raw `dispatch_id` values to exact Bundle dispatches;
+collection order, equal timing, or equal launch envelopes never establish that
+relation. Each side capture is also re-imported from the exact supplied bytes
+and its normalized process, device, source ordinal where represented, launch,
+timing, KIR, artifact, and source-map axes are checked against the mapped
+Bundle record. Missing, duplicate, unknown, or mismatched dispatch IDs leave
+the side evidence typed unavailable. Independently collected V2/V3 files have
+no common exact supplied-source relation and remain unavailable. Because
+Bundle V4 has no content-bound kernel-symbol field, HSACO resource admission
+currently requires a single-kernel artifact instead of trusting a
+caller-selected metadata ordinal.
+
+The only seeded explanation is a deterministic co-observation: captured
+duration increased while declared schedule identity and observed static HSACO
+resources changed. It cites the exact manifests, bundles, dispatch records,
+schedule identities, and resource identities and explicitly does not claim
+causation or superiority. Duration, counter, and resource deltas are all empty
+unless every narrow comparison axis is exact; device comparison uses the exact
+stable device assigned to each dispatch and ignores unused catalog entries.
+Decoded ATT, runtime/copy events, PC-to-semantic/ISA
+correlation, semantic-to-schedule-to-ISA localization, counter completeness,
+dispatch argument/input equivalence, loss-free complete-workload coverage,
+clock normalization, and causal attribution remain typed unavailable. Exact
+comparison axes therefore do not imply a complete workload comparison. This
+foundation does not satisfy the T3 exit by itself.
+
 ## Closure matrix
 
 The issue can close only when every row is accepted on the current production
@@ -159,7 +201,7 @@ contract and an unavailable response are both tested here.
 | T0 baseline/ADR | archived capture queries without a source checkout; pinned feature/task matrix; ownership, threat, completeness, and budget policy | measured overhead budgets and installed compute-viewer/Mojo task comparison are absent |
 | T1 semantic map | elementwise, collective, and tiled kernels round-trip source to ISA and ISA to source; optimization shapes and hostile substitution tested | general schedule/LLVM/ISA intervals and optimization-shape round trips are incomplete |
 | T2 debugger | seeded OOB and barrier divergence identify dispatch, site, workgroup, wave/lane scope, region/phase contract, and origin without raw-log parsing | authenticated native wave/register/PC/memory state and general seeded acceptance are incomplete |
-| T3 profiler | seeded schedule/resource regression is attributed to semantic/IR/ISA change with exact comparable evidence | decoded ATT/runtime/copy attribution and end-to-end regression explanation are incomplete |
+| T3 profiler | seeded schedule/resource regression is attributed to semantic/IR/ISA change with exact comparable evidence | strict variant admission and schedule/resource co-observation exist; authenticated semantic/IR/ISA localization, decoded ATT/runtime/copy attribution, and causal end-to-end explanation are incomplete |
 | T4 agent protocol | fresh non-privileged client completes T2/T3 diagnoses, cites evidence, and plans the minimum next capture | canonical read-only service and complete operation acceptance are incomplete |
 | T5 distributed | eight-GPU overlap regression localizes to an admitted graph edge or interval while preserving clock/loss uncertainty | awaits versioned #182 operation, transfer, collective, and clock-correlation inputs |
 | T6 qualification | overhead, target, pagination, loss, reset, optimized-out, partial-capture, and comparative usability gates pass | broad target/overhead/reset/usability evidence is incomplete |

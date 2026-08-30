@@ -21,6 +21,8 @@ mod counter_capture;
 pub use counter_capture::*;
 mod pc_sample_capture;
 pub use pc_sample_capture::*;
+mod raw_source_relation;
+pub use raw_source_relation::*;
 
 pub const MAX_IMPORT_SOURCE_BYTES_V1: u64 = 8 * 1024 * 1024;
 pub const MAX_IMPORT_OUTPUT_BYTES_V1: u64 = 64 * 1024;
@@ -1398,6 +1400,8 @@ struct RocprofDispatchRecord {
 struct RocprofDispatchInfo {
     #[serde(default)]
     agent_id: Option<RocprofHandle>,
+    #[serde(default)]
+    dispatch_id: Option<u64>,
     workgroup_size: JsonDimensions,
     grid_size: JsonDimensions,
 }

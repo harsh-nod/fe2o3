@@ -1645,8 +1645,10 @@ dependencies = [
 name = "fe2o3-semantic-query"
 version = "0.1.0"
 dependencies = [
+ "fe2o3-hsaco",
  "fe2o3-semantic-import",
  "fe2o3-semantic-trace",
+ "rmpv",
  "serde",
  "serde_json",
  "sha2 0.11.0",
