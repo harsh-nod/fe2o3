@@ -217,4 +217,7 @@ fn package_states_the_production_source_and_evidence_boundary() {
             "missing rejected variant {rejected}"
         );
     }
+    assert!(RUNNER_SOURCE.contains("cd -- \"$ATTEMPT_DIR\""));
+    assert!(RUNNER_SOURCE.contains("\"$(basename -- \"$HSACO\")\""));
+    assert!(!RUNNER_SOURCE.contains("--mcpu=gfx950 \"$HSACO\""));
 }

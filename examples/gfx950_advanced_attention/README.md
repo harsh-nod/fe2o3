@@ -121,7 +121,12 @@ The validated code-object SHA-256 was
 the host executable SHA-256 was
 `d741786606e6a4d05ab2fd5f0a411bbc696a3dc6b12bce87c98eb624be39901e`.
 
-## mHC Sinkhorn performance ablation
+## Historical mHC Sinkhorn performance ablation
+
+This section retains the pre-da6 campaign verbatim for provenance. The final
+da6 tutorial campaign in `perf-evidence/gfx950-advanced-ablation-evidence-v1.json`
+supersedes these latency numbers; it is intentionally attributed to its own
+source and artifact digests.
 
 The production Rust mHC kernel keeps the exact 4x4 mixing matrix, four 16-channel
 streams, three Sinkhorn row/column normalization iterations, and 64-output ABI.

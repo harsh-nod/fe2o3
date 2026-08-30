@@ -74,7 +74,13 @@ references. Set `FE2O3_REPO_ROOT`, `ROCM_PATH`, `RUSTUP`, `CARGO`, or the
 documented tool and target-directory environment variables when validating a
 copied checkout.
 
-## Production Rust optimization evidence
+## Historical exploratory Rust optimization evidence
+
+This section records the 2026-08-29 exploratory campaign and its then-current
+lowering state. The final da6 tutorial campaign in
+`perf-evidence/gfx950-advanced-ablation-evidence-v1.json` supersedes these
+latencies and production-status statements; each campaign keeps separate
+source and artifact identities.
 
 The 2026-08-29 optimization pass used only physical GPU 6 on SSH host `mi350`
 (`ROCR_VISIBLE_DEVICES=6`, with `HIP_VISIBLE_DEVICES` unset) and ROCm 7.2.1.
@@ -165,7 +171,11 @@ so a whole-device bandwidth/compute roof is much lower than the practical HSA
 dispatch floor. The resource bound is useful for checking arithmetic and byte
 assumptions, not for claiming that this microbenchmark can occupy all 256 CUs.
 
-### Unresolved production lowering
+### Historical lowering blockers
+
+The following diagnostics explain why the exploratory campaign did not time
+route and expert rank. They are resolved in the promoted gfx950 source and are
+not the status of the final compatibility campaign.
 
 Host contracts pass for all seven sources. Five production wrappers (combine,
 speculative, N-gram, stage, and Muon) lower and run numerically on GPU 6. Route
