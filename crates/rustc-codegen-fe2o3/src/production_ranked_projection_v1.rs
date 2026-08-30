@@ -79,6 +79,9 @@ const MAX_PROJECTED_LOOP_GRAPH_WORK_V1: usize =
     MAX_RANKED_BOUNDS_BLOCKS * (MAX_RANKED_BOUNDS_BLOCKS + MAX_RANKED_BOUNDS_EDGES);
 const MAX_PIPELINE_SCALAR_NODES_V1: usize = 64;
 const MAX_PURE_UNIFORM_INDEX_NODES_V1: usize = 64;
+const MAX_DEFINED_CALLABLE_SUMMARY_FUNCTIONS_V1: usize = 4_096;
+const MAX_DEFINED_CALLABLE_SUMMARY_EDGES_V1: usize = 65_536;
+const MAX_DEFINED_CALLABLE_SUMMARY_WORK_V1: usize = 16_000_000;
 const PRIVATE_ALLOCATION_ORIGIN_TAG_V1: u64 = 1_u64 << 63;
 const TENSOR_CAPABILITY_ROOT_DOMAIN_V1: &[u8] = b"FE2O3/TENSOR-CAPABILITY-ROOT/V1\0";
 const RANKED_KERNEL_ROSTER_IDENTITY_DOMAIN_V1: &[u8] =
@@ -1647,6 +1650,470 @@ fn partition_reference_effect_binding_indices_v1(
     Ok(partitions)
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DefinedCallableEmptyEffectDecisionV1 {
+    Unknown,
+    ExactEmpty,
+    Rejected,
+}
+
+struct DefinedCallableEmptyEffectSummariesV1 {
+    decisions: Box<[DefinedCallableEmptyEffectDecisionV1]>,
+}
+
+impl DefinedCallableEmptyEffectSummariesV1 {
+    fn is_exact_empty(&self, function: SemanticFunctionIdV1) -> bool {
+        self.decisions.get(function.index() as usize)
+            == Some(&DefinedCallableEmptyEffectDecisionV1::ExactEmpty)
+    }
+}
+
+struct DefinedCallableDirectSummaryV1 {
+    eligible: bool,
+    callees: Vec<usize>,
+}
+
+fn charge_defined_callable_summary_work_v1(
+    work: &mut usize,
+    amount: usize,
+) -> Result<(), ProductionRankedProjectionErrorV1> {
+    *work = work
+        .checked_add(amount)
+        .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+            "defined-callable effect-summary work overflowed",
+        ))?;
+    if *work > MAX_DEFINED_CALLABLE_SUMMARY_WORK_V1 {
+        return Err(ProductionRankedProjectionErrorV1::Unsupported(
+            "defined-callable effect-summary work exceeded its production limit",
+        ));
+    }
+    Ok(())
+}
+
+fn scalar_defined_callable_type_v1(types: &[SemanticTypeDeclV1], ty: SemanticTypeIdV1) -> bool {
+    types.get(ty.index() as usize).is_some_and(|ty| {
+        matches!(
+            ty.shape(),
+            SemanticTypeShapeV1::Unit
+                | SemanticTypeShapeV1::Never
+                | SemanticTypeShapeV1::Scalar(_)
+                | SemanticTypeShapeV1::ValidityScalar(_)
+        )
+    })
+}
+
+fn scalar_direct_abi_value_v1(
+    types: &[SemanticTypeDeclV1],
+    value: &fe2o3_mir_model::semantic_mir_v1::SemanticAbiValueV1,
+) -> bool {
+    scalar_defined_callable_type_v1(types, value.source_ty())
+        && value.adjusted().is_none()
+        && value.pointee_override().is_none()
+        && matches!(
+            value.mode(),
+            SemanticAbiPassModeV1::Ignore | SemanticAbiPassModeV1::Direct(_)
+        )
+}
+
+fn scalar_direct_defined_callable_abi_v1(
+    types: &[SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1,
+) -> bool {
+    let abi = function.abi();
+    !abi.c_variadic()
+        && abi.hidden_arguments().is_empty()
+        && abi
+            .arguments()
+            .iter()
+            .all(|argument| scalar_direct_abi_value_v1(types, argument.value()))
+        && scalar_direct_abi_value_v1(types, abi.return_value())
+        && abi
+            .source_input_types()
+            .iter()
+            .copied()
+            .all(|ty| scalar_defined_callable_type_v1(types, ty))
+        && scalar_defined_callable_type_v1(types, abi.source_output_type())
+}
+
+fn scalar_defined_callable_place_v1(
+    types: &[SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1,
+    place: &SemanticPlaceV1,
+    work: &mut usize,
+) -> Result<bool, ProductionRankedProjectionErrorV1> {
+    charge_defined_callable_summary_work_v1(work, 1 + place.projections().len())?;
+    Ok(place.projections().is_empty()
+        && scalar_defined_callable_type_v1(types, place.ty())
+        && function
+            .locals()
+            .get(place.local().index() as usize)
+            .is_some_and(|local| scalar_defined_callable_type_v1(types, local.ty())))
+}
+
+fn scalar_defined_callable_operand_v1(
+    types: &[SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1,
+    operand: &SemanticOperandV1,
+    work: &mut usize,
+) -> Result<bool, ProductionRankedProjectionErrorV1> {
+    charge_defined_callable_summary_work_v1(work, 1)?;
+    match operand {
+        SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place) => {
+            scalar_defined_callable_place_v1(types, function, place, work)
+        }
+        SemanticOperandV1::Constant(constant) => {
+            Ok(scalar_defined_callable_type_v1(types, constant.ty())
+                && matches!(
+                    constant.value(),
+                    SemanticConstantValueV1::ZeroSized | SemanticConstantValueV1::Scalar(_)
+                ))
+        }
+    }
+}
+
+fn scalar_defined_callable_rvalue_v1(
+    types: &[SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1,
+    value: &SemanticRvalueV1,
+    work: &mut usize,
+) -> Result<bool, ProductionRankedProjectionErrorV1> {
+    charge_defined_callable_summary_work_v1(work, 1)?;
+    if !scalar_defined_callable_type_v1(types, value.result_type()) {
+        return Ok(false);
+    }
+    match value.kind() {
+        SemanticRvalueKindV1::Use(operand) | SemanticRvalueKindV1::Unary { operand, .. } => {
+            scalar_defined_callable_operand_v1(types, function, operand, work)
+        }
+        SemanticRvalueKindV1::Binary { left, right, .. } => Ok(scalar_defined_callable_operand_v1(
+            types, function, left, work,
+        )?
+            && scalar_defined_callable_operand_v1(types, function, right, work)?),
+        SemanticRvalueKindV1::CheckedBinary(checked) => {
+            Ok(
+                scalar_defined_callable_operand_v1(types, function, checked.left(), work)?
+                    && scalar_defined_callable_operand_v1(types, function, checked.right(), work)?,
+            )
+        }
+        SemanticRvalueKindV1::UncheckedBinary(unchecked) => Ok(scalar_defined_callable_operand_v1(
+            types,
+            function,
+            unchecked.left(),
+            work,
+        )?
+            && scalar_defined_callable_operand_v1(types, function, unchecked.right(), work)?),
+        SemanticRvalueKindV1::Cast { kind, operand }
+            if matches!(
+                kind,
+                SemanticCastKindV1::Integer | SemanticCastKindV1::Float
+            ) =>
+        {
+            scalar_defined_callable_operand_v1(types, function, operand, work)
+        }
+        SemanticRvalueKindV1::Cast { .. }
+        | SemanticRvalueKindV1::Borrow { .. }
+        | SemanticRvalueKindV1::AddressOf { .. }
+        | SemanticRvalueKindV1::Length(_)
+        | SemanticRvalueKindV1::Discriminant(_)
+        | SemanticRvalueKindV1::Aggregate(_)
+        | SemanticRvalueKindV1::Load(_) => Ok(false),
+    }
+}
+
+fn scalar_defined_callable_statement_v1(
+    types: &[SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1,
+    statement: &fe2o3_mir_model::semantic_mir_v1::SemanticStatementV1,
+    work: &mut usize,
+) -> Result<bool, ProductionRankedProjectionErrorV1> {
+    charge_defined_callable_summary_work_v1(work, 1)?;
+    match statement.kind() {
+        SemanticStatementKindV1::Assign(assignment) => {
+            Ok(
+                scalar_defined_callable_place_v1(types, function, assignment.destination(), work)?
+                    && scalar_defined_callable_rvalue_v1(
+                        types,
+                        function,
+                        assignment.value(),
+                        work,
+                    )?,
+            )
+        }
+        SemanticStatementKindV1::StorageLive(local)
+        | SemanticStatementKindV1::StorageDead(local) => Ok(function
+            .locals()
+            .get(local.index() as usize)
+            .is_some_and(|local| scalar_defined_callable_type_v1(types, local.ty()))),
+        SemanticStatementKindV1::Assume(condition) => {
+            scalar_defined_callable_operand_v1(types, function, condition, work)
+        }
+        SemanticStatementKindV1::Nop => Ok(true),
+        SemanticStatementKindV1::Store(_)
+        | SemanticStatementKindV1::AtomicRmw(_)
+        | SemanticStatementKindV1::AtomicCompareExchange(_)
+        | SemanticStatementKindV1::SetDiscriminant { .. }
+        | SemanticStatementKindV1::Deinitialize(_) => Ok(false),
+    }
+}
+
+fn scalar_defined_callable_call_v1(
+    types: &[SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1,
+    callables: &[SemanticCallableDeclV1],
+    call: &SemanticDirectCallV1,
+    callees: &mut Vec<usize>,
+    call_edges: &mut usize,
+    work: &mut usize,
+) -> Result<bool, ProductionRankedProjectionErrorV1> {
+    charge_defined_callable_summary_work_v1(work, 1 + call.arguments().len())?;
+    let mut eligible = call.variadic_argument_abis().is_empty()
+        && matches!(
+            call.unwind(),
+            SemanticUnwindActionV1::Continue | SemanticUnwindActionV1::Unreachable
+        );
+    for argument in call.arguments() {
+        eligible &= scalar_defined_callable_operand_v1(types, function, argument, work)?;
+    }
+    if let Some(destination) = call.destination() {
+        eligible &= scalar_defined_callable_place_v1(types, function, destination.place(), work)?;
+    }
+    let Some(SemanticCallableDeclV1::Defined { function: callee }) =
+        callables.get(call.callee().index() as usize)
+    else {
+        return Ok(false);
+    };
+    let callee = callee.index() as usize;
+    if callee >= callables.len() {
+        return Ok(false);
+    }
+    *call_edges =
+        call_edges
+            .checked_add(1)
+            .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+                "defined-callable effect-summary edge count overflowed",
+            ))?;
+    if *call_edges > MAX_DEFINED_CALLABLE_SUMMARY_EDGES_V1 {
+        return Err(ProductionRankedProjectionErrorV1::Unsupported(
+            "defined-callable effect-summary edge count exceeded its production limit",
+        ));
+    }
+    callees.try_reserve(1).map_err(|_| {
+        ProductionRankedProjectionErrorV1::Unsupported(
+            "defined-callable effect-summary edge storage cannot be reserved",
+        )
+    })?;
+    callees.push(callee);
+    Ok(eligible)
+}
+
+fn scalar_defined_callable_tail_call_v1(
+    types: &[SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1,
+    callables: &[SemanticCallableDeclV1],
+    call: &SemanticDirectTailCallV1,
+    callees: &mut Vec<usize>,
+    call_edges: &mut usize,
+    work: &mut usize,
+) -> Result<bool, ProductionRankedProjectionErrorV1> {
+    charge_defined_callable_summary_work_v1(work, 1 + call.arguments().len())?;
+    let mut eligible = matches!(
+        call.unwind(),
+        SemanticUnwindActionV1::Continue | SemanticUnwindActionV1::Unreachable
+    );
+    for argument in call.arguments() {
+        eligible &= scalar_defined_callable_operand_v1(types, function, argument, work)?;
+    }
+    let Some(SemanticCallableDeclV1::Defined { function: callee }) =
+        callables.get(call.callee().index() as usize)
+    else {
+        return Ok(false);
+    };
+    let callee = callee.index() as usize;
+    if callee >= callables.len() {
+        return Ok(false);
+    }
+    *call_edges =
+        call_edges
+            .checked_add(1)
+            .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+                "defined-callable effect-summary edge count overflowed",
+            ))?;
+    if *call_edges > MAX_DEFINED_CALLABLE_SUMMARY_EDGES_V1 {
+        return Err(ProductionRankedProjectionErrorV1::Unsupported(
+            "defined-callable effect-summary edge count exceeded its production limit",
+        ));
+    }
+    callees.try_reserve(1).map_err(|_| {
+        ProductionRankedProjectionErrorV1::Unsupported(
+            "defined-callable effect-summary edge storage cannot be reserved",
+        )
+    })?;
+    callees.push(callee);
+    Ok(eligible)
+}
+
+fn scalar_defined_callable_terminator_v1(
+    types: &[SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1,
+    callables: &[SemanticCallableDeclV1],
+    terminator: &SemanticTerminatorKindV1,
+    callees: &mut Vec<usize>,
+    call_edges: &mut usize,
+    work: &mut usize,
+) -> Result<bool, ProductionRankedProjectionErrorV1> {
+    charge_defined_callable_summary_work_v1(work, 1)?;
+    match terminator {
+        SemanticTerminatorKindV1::Goto(_)
+        | SemanticTerminatorKindV1::Return
+        | SemanticTerminatorKindV1::Unreachable => Ok(true),
+        SemanticTerminatorKindV1::SwitchInt { discriminant, .. } => {
+            scalar_defined_callable_operand_v1(types, function, discriminant, work)
+        }
+        SemanticTerminatorKindV1::Call(call) => scalar_defined_callable_call_v1(
+            types, function, callables, call, callees, call_edges, work,
+        ),
+        SemanticTerminatorKindV1::TailCall(call) => scalar_defined_callable_tail_call_v1(
+            types, function, callables, call, callees, call_edges, work,
+        ),
+        SemanticTerminatorKindV1::Drop { .. }
+        | SemanticTerminatorKindV1::Assert { .. }
+        | SemanticTerminatorKindV1::FalseEdge { .. }
+        | SemanticTerminatorKindV1::UnwindResume
+        | SemanticTerminatorKindV1::UnwindTerminate
+        | SemanticTerminatorKindV1::Abort => Ok(false),
+    }
+}
+
+fn direct_defined_callable_summary_v1(
+    types: &[SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1,
+    callables: &[SemanticCallableDeclV1],
+    call_edges: &mut usize,
+    work: &mut usize,
+) -> Result<DefinedCallableDirectSummaryV1, ProductionRankedProjectionErrorV1> {
+    charge_defined_callable_summary_work_v1(work, 1 + function.locals().len())?;
+    let mut eligible = scalar_direct_defined_callable_abi_v1(types, function)
+        && function
+            .locals()
+            .iter()
+            .all(|local| scalar_defined_callable_type_v1(types, local.ty()));
+    let mut callees = Vec::new();
+    for block in function.blocks() {
+        charge_defined_callable_summary_work_v1(work, 1)?;
+        for statement in block.statements() {
+            eligible &= scalar_defined_callable_statement_v1(types, function, statement, work)?;
+        }
+        eligible &= scalar_defined_callable_terminator_v1(
+            types,
+            function,
+            callables,
+            block.terminator().kind(),
+            &mut callees,
+            call_edges,
+            work,
+        )?;
+    }
+    Ok(DefinedCallableDirectSummaryV1 { eligible, callees })
+}
+
+fn derive_defined_callable_empty_effect_summaries_v1(
+    types: &[SemanticTypeDeclV1],
+    functions: &[SemanticFunctionDeclV1],
+    callables: &[SemanticCallableDeclV1],
+) -> Result<DefinedCallableEmptyEffectSummariesV1, ProductionRankedProjectionErrorV1> {
+    if functions.len() > MAX_DEFINED_CALLABLE_SUMMARY_FUNCTIONS_V1 {
+        return Err(ProductionRankedProjectionErrorV1::Unsupported(
+            "defined-callable effect-summary function count exceeded its production limit",
+        ));
+    }
+    let mut direct = Vec::new();
+    direct.try_reserve_exact(functions.len()).map_err(|_| {
+        ProductionRankedProjectionErrorV1::Unsupported(
+            "defined-callable effect-summary storage cannot be reserved",
+        )
+    })?;
+    let mut call_edges = 0_usize;
+    let mut work = 0_usize;
+    for function in functions {
+        direct.push(direct_defined_callable_summary_v1(
+            types,
+            function,
+            callables,
+            &mut call_edges,
+            &mut work,
+        )?);
+    }
+
+    let mut callers = Vec::new();
+    callers.try_reserve_exact(functions.len()).map_err(|_| {
+        ProductionRankedProjectionErrorV1::Unsupported(
+            "defined-callable reverse-edge storage cannot be reserved",
+        )
+    })?;
+    callers.resize_with(functions.len(), Vec::new);
+    for (caller, summary) in direct.iter().enumerate() {
+        for &callee in &summary.callees {
+            let Some(reverse) = callers.get_mut(callee) else {
+                return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                    "defined-callable effect summary references a missing function",
+                ));
+            };
+            reverse.try_reserve(1).map_err(|_| {
+                ProductionRankedProjectionErrorV1::Unsupported(
+                    "defined-callable reverse edge cannot be reserved",
+                )
+            })?;
+            reverse.push(caller);
+        }
+    }
+
+    let mut decisions = vec![DefinedCallableEmptyEffectDecisionV1::Unknown; functions.len()];
+    let mut remaining = direct
+        .iter()
+        .map(|summary| summary.callees.len())
+        .collect::<Vec<_>>();
+    let mut pending = VecDeque::new();
+    for (function, summary) in direct.iter().enumerate() {
+        if !summary.eligible {
+            decisions[function] = DefinedCallableEmptyEffectDecisionV1::Rejected;
+            pending.push_back(function);
+        } else if remaining[function] == 0 {
+            decisions[function] = DefinedCallableEmptyEffectDecisionV1::ExactEmpty;
+            pending.push_back(function);
+        }
+    }
+    while let Some(callee) = pending.pop_front() {
+        charge_defined_callable_summary_work_v1(&mut work, 1 + callers[callee].len())?;
+        for &caller in &callers[callee] {
+            if decisions[caller] != DefinedCallableEmptyEffectDecisionV1::Unknown {
+                continue;
+            }
+            remaining[caller] = remaining[caller].checked_sub(1).ok_or(
+                ProductionRankedProjectionErrorV1::Unsupported(
+                    "defined-callable effect-summary dependency accounting underflowed",
+                ),
+            )?;
+            if decisions[callee] == DefinedCallableEmptyEffectDecisionV1::Rejected {
+                decisions[caller] = DefinedCallableEmptyEffectDecisionV1::Rejected;
+                pending.push_back(caller);
+            } else if remaining[caller] == 0 {
+                decisions[caller] = DefinedCallableEmptyEffectDecisionV1::ExactEmpty;
+                pending.push_back(caller);
+            }
+        }
+    }
+    for decision in &mut decisions {
+        if *decision == DefinedCallableEmptyEffectDecisionV1::Unknown {
+            // The unresolved subgraph consists of recursive cycles and callers
+            // that depend on them. Recursion has no production call-stack proof.
+            *decision = DefinedCallableEmptyEffectDecisionV1::Rejected;
+        }
+    }
+    Ok(DefinedCallableEmptyEffectSummariesV1 {
+        decisions: decisions.into_boxed_slice(),
+    })
+}
+
 pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
     semantic_owner: ProductionSemanticMirOwnerV1,
     root_inputs: &[ProductionRankedRootInputV1],
@@ -1656,6 +2123,11 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
         .verify_equivalence()
         .map_err(ProductionRankedProjectionErrorV1::SemanticOwner)?;
     let semantic = semantic_owner.semantic();
+    let callable_effects = derive_defined_callable_empty_effect_summaries_v1(
+        semantic.types(),
+        semantic.functions(),
+        semantic.callables(),
+    )?;
     let matched_roots = match_ranked_semantic_root_roster_v1(semantic, root_inputs)?;
     let root_logical_names = root_inputs
         .iter()
@@ -1700,6 +2172,7 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
             ))?;
         let root = project_and_verify_ranked_root_v1(
             semantic,
+            &callable_effects,
             selection,
             &input.logical_name,
             &input.source_launch,
@@ -1805,6 +2278,7 @@ fn match_ranked_root_bindings_v1(
 
 fn project_and_verify_ranked_root_v1(
     semantic: &AdmittedInertSemanticMirV1,
+    callable_effects: &DefinedCallableEmptyEffectSummariesV1,
     selection: SemanticKernelBodySelectionV1,
     logical_name: &str,
     source_launch: &LaunchContract,
@@ -1945,6 +2419,7 @@ fn project_and_verify_ranked_root_v1(
         retain_incomplete(
             project_terminator_accesses(
                 semantic.callables(),
+                callable_effects,
                 semantic.types(),
                 function,
                 block_index,
@@ -15864,6 +16339,7 @@ fn project_atomic_address(
 #[allow(clippy::too_many_arguments)]
 fn project_terminator_accesses(
     callables: &[SemanticCallableDeclV1],
+    callable_effects: &DefinedCallableEmptyEffectSummariesV1,
     types: &[fe2o3_mir_model::semantic_mir_v1::SemanticTypeDeclV1],
     function: &SemanticFunctionDeclV1,
     block_index: usize,
@@ -15900,6 +16376,7 @@ fn project_terminator_accesses(
         ),
         SemanticTerminatorKindV1::Call(call) => project_direct_call_accesses(
             callables,
+            callable_effects,
             types,
             function,
             block_index,
@@ -15918,6 +16395,7 @@ fn project_terminator_accesses(
         ),
         SemanticTerminatorKindV1::TailCall(call) => project_tail_call_accesses(
             callables,
+            callable_effects,
             types,
             function,
             block_index,
@@ -15983,6 +16461,7 @@ const fn requires_ranked_workgroup_barrier_v1(
 #[allow(clippy::too_many_arguments)]
 fn project_direct_call_accesses(
     callables: &[SemanticCallableDeclV1],
+    callable_effects: &DefinedCallableEmptyEffectSummariesV1,
     types: &[fe2o3_mir_model::semantic_mir_v1::SemanticTypeDeclV1],
     function: &SemanticFunctionDeclV1,
     block_index: usize,
@@ -16053,7 +16532,7 @@ fn project_direct_call_accesses(
     ) {
         return Ok(());
     }
-    require_bounds_neutral_callable(callables, call.callee())?;
+    require_bounds_neutral_callable(callables, callable_effects, call.callee())?;
     for argument in call.arguments() {
         project_operand_read(
             types,
@@ -16100,6 +16579,7 @@ fn project_direct_call_accesses(
 #[allow(clippy::too_many_arguments)]
 fn project_tail_call_accesses(
     callables: &[SemanticCallableDeclV1],
+    callable_effects: &DefinedCallableEmptyEffectSummariesV1,
     types: &[fe2o3_mir_model::semantic_mir_v1::SemanticTypeDeclV1],
     function: &SemanticFunctionDeclV1,
     block_index: usize,
@@ -16116,7 +16596,7 @@ fn project_tail_call_accesses(
     next_value: &mut u32,
     ranked_ir: &mut String,
 ) -> Result<(), ProductionRankedProjectionErrorV1> {
-    require_bounds_neutral_callable(callables, call.callee())?;
+    require_bounds_neutral_callable(callables, callable_effects, call.callee())?;
     for argument in call.arguments() {
         project_operand_read(
             types,
@@ -16141,10 +16621,16 @@ fn project_tail_call_accesses(
 
 fn require_bounds_neutral_callable(
     callables: &[SemanticCallableDeclV1],
+    callable_effects: &DefinedCallableEmptyEffectSummariesV1,
     callable: SemanticCallableIdV1,
 ) -> Result<(), ProductionRankedProjectionErrorV1> {
     match callables.get(callable.index() as usize) {
         Some(SemanticCallableDeclV1::CompilerIntrinsic { .. }) => Ok(()),
+        Some(SemanticCallableDeclV1::Defined { function })
+            if callable_effects.is_exact_empty(*function) =>
+        {
+            Ok(())
+        }
         Some(
             SemanticCallableDeclV1::Defined { .. } | SemanticCallableDeclV1::DeviceFfiImport { .. },
         )
@@ -18639,6 +19125,9 @@ mod tests {
         let mut guarded_sites = Vec::new();
         let mut next_value = 0;
         let mut ranked_ir = String::new();
+        let callable_effects = DefinedCallableEmptyEffectSummariesV1 {
+            decisions: Box::new([]),
+        };
         for (block_index, basic_block) in function.blocks().iter().enumerate() {
             for semantic_statement in basic_block.statements() {
                 project_statement_accesses(
@@ -18660,6 +19149,7 @@ mod tests {
             }
             project_terminator_accesses(
                 &[],
+                &callable_effects,
                 &types,
                 function,
                 block_index,
@@ -25791,6 +26281,205 @@ mod tests {
             operation,
             operation_identity: SemanticCompilerIntrinsicIdentityV1::from_sha256(bytes(121)),
         }
+    }
+
+    fn summary_scalar_place() -> SemanticPlaceV1 {
+        SemanticPlaceV1::new(SemanticLocalIdV1::from_index(0), vec![], SCALAR_TYPE).unwrap()
+    }
+
+    fn scalar_summary_helper(tag: u8, blocks: Vec<SemanticBasicBlockV1>) -> SemanticFunctionDeclV1 {
+        let abi = SemanticFunctionAbiV1::new(
+            SemanticAbiIdentityV1::from_sha256(bytes(tag)),
+            SemanticLayoutIdentityV1::from_sha256(bytes(tag)),
+            SemanticCanonAbiV1::Rust,
+            false,
+            false,
+            vec![],
+            SemanticAbiValueV1::new(
+                SCALAR_TYPE,
+                SemanticAbiPassModeV1::Direct(SemanticAbiValueAttributesV1::plain()),
+            ),
+        )
+        .unwrap();
+        SemanticFunctionDeclV1::new(
+            SemanticFunctionIdentityV1::from_sha256(bytes(tag.wrapping_add(1))),
+            SemanticFunctionRoleV1::InternalHelper,
+            SemanticItemDefinitionIdentityV1::from_sha256(bytes(tag.wrapping_add(2))),
+            SemanticMonomorphizationIdentityV1::from_sha256(bytes(tag.wrapping_add(3))),
+            SemanticGenericTypeArgumentsIdentityV1::from_sha256(bytes(tag.wrapping_add(4))),
+            SemanticConstGenericArgumentsIdentityV1::from_sha256(bytes(tag.wrapping_add(5))),
+            SemanticSourceProvenanceV1::unavailable(),
+            abi,
+            vec![local(
+                tag.wrapping_add(6),
+                SCALAR_TYPE,
+                SemanticLocalRoleV1::Return,
+            )],
+            SemanticBlockIdV1::from_index(0),
+            blocks,
+        )
+        .unwrap()
+    }
+
+    fn scalar_summary_calling_helper(tag: u8, callee: u32) -> SemanticFunctionDeclV1 {
+        let call = SemanticDirectCallV1::new_callable(
+            SemanticCallableIdV1::from_index(callee),
+            vec![],
+            Some(SemanticCallDestinationV1::new(
+                summary_scalar_place(),
+                cfg_edge(SemanticEdgeRoleV1::CallReturn, 1),
+            )),
+            SemanticUnwindActionV1::Unreachable,
+        )
+        .unwrap();
+        scalar_summary_helper(
+            tag,
+            vec![
+                block(tag, vec![], SemanticTerminatorKindV1::Call(call)),
+                block(
+                    tag.wrapping_add(1),
+                    vec![],
+                    SemanticTerminatorKindV1::Return,
+                ),
+            ],
+        )
+    }
+
+    fn scalar_summary_leaf(tag: u8) -> SemanticFunctionDeclV1 {
+        scalar_summary_helper(
+            tag,
+            vec![block(
+                tag,
+                vec![statement(SemanticStatementKindV1::Assign(
+                    SemanticAssignmentV1::new(
+                        summary_scalar_place(),
+                        SemanticRvalueV1::new(SCALAR_TYPE, SemanticRvalueKindV1::Use(constant(7))),
+                    ),
+                ))],
+                SemanticTerminatorKindV1::Return,
+            )],
+        )
+    }
+
+    fn scalar_summary_effect_leaf(tag: u8, unreachable: bool) -> SemanticFunctionDeclV1 {
+        let effect = statement(SemanticStatementKindV1::Store(SemanticMemoryStoreV1::new(
+            summary_scalar_place(),
+            constant(1),
+            SemanticVolatilityV1::NonVolatile,
+            None,
+        )));
+        let blocks = if unreachable {
+            vec![
+                block(tag, vec![], SemanticTerminatorKindV1::Return),
+                block(
+                    tag.wrapping_add(1),
+                    vec![effect],
+                    SemanticTerminatorKindV1::Unreachable,
+                ),
+            ]
+        } else {
+            vec![block(tag, vec![effect], SemanticTerminatorKindV1::Return)]
+        };
+        scalar_summary_helper(tag, blocks)
+    }
+
+    #[test]
+    fn defined_scalar_helper_chain_has_an_exact_empty_effect_summary() {
+        let functions = vec![
+            scalar_summary_calling_helper(130, 1),
+            scalar_summary_leaf(140),
+        ];
+        let callables = vec![
+            SemanticCallableDeclV1::defined(SemanticFunctionIdV1::from_index(0)),
+            SemanticCallableDeclV1::defined(SemanticFunctionIdV1::from_index(1)),
+        ];
+        let summaries = derive_defined_callable_empty_effect_summaries_v1(
+            &projection_types(),
+            &functions,
+            &callables,
+        )
+        .unwrap();
+
+        assert!(summaries.is_exact_empty(SemanticFunctionIdV1::from_index(0)));
+        assert!(summaries.is_exact_empty(SemanticFunctionIdV1::from_index(1)));
+        assert!(
+            require_bounds_neutral_callable(
+                &callables,
+                &summaries,
+                SemanticCallableIdV1::from_index(1),
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn defined_scalar_helper_rejects_a_transitive_memory_effect() {
+        let functions = vec![
+            scalar_summary_calling_helper(150, 1),
+            scalar_summary_effect_leaf(160, false),
+        ];
+        let callables = vec![
+            SemanticCallableDeclV1::defined(SemanticFunctionIdV1::from_index(0)),
+            SemanticCallableDeclV1::defined(SemanticFunctionIdV1::from_index(1)),
+        ];
+        let summaries = derive_defined_callable_empty_effect_summaries_v1(
+            &projection_types(),
+            &functions,
+            &callables,
+        )
+        .unwrap();
+
+        assert!(!summaries.is_exact_empty(SemanticFunctionIdV1::from_index(0)));
+        assert!(!summaries.is_exact_empty(SemanticFunctionIdV1::from_index(1)));
+    }
+
+    #[test]
+    fn defined_scalar_helper_rejects_a_hidden_compiler_intrinsic() {
+        let functions = vec![scalar_summary_calling_helper(170, 1)];
+        let callables = vec![
+            SemanticCallableDeclV1::defined(SemanticFunctionIdV1::from_index(0)),
+            compiler_intrinsic_callable(SemanticCompilerIntrinsicOperationV1::WorkgroupBarrier),
+        ];
+        let summaries = derive_defined_callable_empty_effect_summaries_v1(
+            &projection_types(),
+            &functions,
+            &callables,
+        )
+        .unwrap();
+
+        assert!(!summaries.is_exact_empty(SemanticFunctionIdV1::from_index(0)));
+    }
+
+    #[test]
+    fn defined_scalar_helper_audits_unreachable_effects() {
+        let functions = vec![scalar_summary_effect_leaf(180, true)];
+        let callables = vec![SemanticCallableDeclV1::defined(
+            SemanticFunctionIdV1::from_index(0),
+        )];
+        let summaries = derive_defined_callable_empty_effect_summaries_v1(
+            &projection_types(),
+            &functions,
+            &callables,
+        )
+        .unwrap();
+
+        assert!(!summaries.is_exact_empty(SemanticFunctionIdV1::from_index(0)));
+    }
+
+    #[test]
+    fn defined_scalar_helper_rejects_recursion() {
+        let functions = vec![scalar_summary_calling_helper(190, 0)];
+        let callables = vec![SemanticCallableDeclV1::defined(
+            SemanticFunctionIdV1::from_index(0),
+        )];
+        let summaries = derive_defined_callable_empty_effect_summaries_v1(
+            &projection_types(),
+            &functions,
+            &callables,
+        )
+        .unwrap();
+
+        assert!(!summaries.is_exact_empty(SemanticFunctionIdV1::from_index(0)));
     }
 
     fn destinationless_call(callee: u32) -> SemanticFunctionDeclV1 {
