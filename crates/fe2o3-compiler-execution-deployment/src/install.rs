@@ -14,7 +14,7 @@ use super::{
     AdmittedSourceV1, DeploymentVerificationErrorKindV1, DeploymentVerificationErrorV1,
     ManifestEntryV1, ObjectSnapshotV1, SealedDeploymentFileV1,
     VerifiedCompilerExecutionDeploymentV1, admit_source_file, changed, io_error, lower_hex,
-    open_beneath, parse_manifest, snapshot, std_io_error, validate_build_info,
+    open_beneath, parse_manifest, random_staging_name, snapshot, std_io_error, validate_build_info,
     validate_directory_mode, validate_sealed_file, validate_sealed_files, validate_sha256sums,
     verify_directory_children,
 };
@@ -772,7 +772,10 @@ impl<'a> StagingRootV1<'a> {
     ) -> Result<Self, DeploymentVerificationErrorV1> {
         for _ in 0..16 {
             hooks.checkpoint(InstallationFaultPointV1::BeforeStagingCreate)?;
-            let name = random_staging_name()?;
+            let name = random_staging_name(
+                STAGING_PREFIX_V1,
+                "generate install-root staging randomness",
+            )?;
             match mkdirat(
                 parent,
                 name.as_str(),
@@ -994,7 +997,7 @@ fn open_relative_directory(root: &File, path: &str) -> Result<File, DeploymentVe
     }
 }
 
-fn set_owner_and_mode(
+pub(super) fn set_owner_and_mode(
     file: &File,
     owner: (u32, u32),
     mode: u32,
@@ -1059,22 +1062,4 @@ fn copy_exact_source(
         ));
     }
     Ok(())
-}
-
-fn random_staging_name() -> Result<String, DeploymentVerificationErrorV1> {
-    let mut random = [0_u8; 16];
-    let mut filled = 0;
-    while filled < random.len() {
-        let count =
-            rustix::rand::getrandom(&mut random[filled..], rustix::rand::GetRandomFlags::empty())
-                .map_err(|source| io_error("generate install-root staging randomness", source))?;
-        if count == 0 {
-            return Err(super::invalid(
-                DeploymentVerificationErrorKindV1::Io,
-                "Linux getrandom returned no staging-name bytes",
-            ));
-        }
-        filled += count;
-    }
-    Ok(format!("{STAGING_PREFIX_V1}{}", lower_hex(&random)))
 }

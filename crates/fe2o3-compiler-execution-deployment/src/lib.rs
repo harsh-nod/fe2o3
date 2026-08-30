@@ -21,6 +21,7 @@ use sha2::{Digest, Sha256};
 
 mod install;
 mod qualification;
+mod staging;
 
 pub use install::{
     CompilerExecutionInstalledRootPublicationV1, InstalledCompilerExecutionDeploymentV1,
@@ -28,6 +29,9 @@ pub use install::{
 };
 pub use qualification::{
     PreparedCompilerExecutionQualificationV1, prepare_compiler_execution_qualification_v1,
+};
+pub use staging::{
+    StagedCompilerExecutionQualificationV1, stage_compiler_execution_qualification_v1,
 };
 
 /// Canonical deployment target admitted by this V1 profile.
@@ -957,6 +961,27 @@ fn lower_hex(bytes: &[u8]) -> String {
     encoded
 }
 
+fn random_staging_name(
+    prefix: &str,
+    operation: &'static str,
+) -> Result<String, DeploymentVerificationErrorV1> {
+    let mut random = [0_u8; 16];
+    let mut filled = 0;
+    while filled < random.len() {
+        let count =
+            rustix::rand::getrandom(&mut random[filled..], rustix::rand::GetRandomFlags::empty())
+                .map_err(|source| io_error(operation, source))?;
+        if count == 0 {
+            return Err(invalid(
+                DeploymentVerificationErrorKindV1::Io,
+                "Linux getrandom returned no staging-name bytes",
+            ));
+        }
+        filled += count;
+    }
+    Ok(format!("{prefix}{}", lower_hex(&random)))
+}
+
 fn validate_build_info(
     bytes: &[u8],
     git_commit: &str,
@@ -1635,6 +1660,27 @@ mod tests {
         (installed, parent)
     }
 
+    fn prepared_for_staging() -> (
+        qualification::PreparedCompilerExecutionQualificationV1,
+        tempfile::TempDir,
+        tempfile::TempDir,
+        tempfile::TempDir,
+    ) {
+        let base_bytes = canonical_qualification_base_bytes();
+        let (base_root, base_path, base_sha256) = qualification_base_fixture(&base_bytes);
+        let qualification_parent = private_install_parent();
+        let (installed, install_parent) = installed_for_qualification();
+        let prepared = qualification::prepare_compiler_execution_qualification_for_test_v1(
+            installed,
+            &base_path,
+            &base_sha256,
+            qualification_parent.path(),
+            current_owner(),
+        )
+        .unwrap();
+        (prepared, qualification_parent, base_root, install_parent)
+    }
+
     fn assert_installed_root_mutation_rejected(
         expected_kind: DeploymentVerificationErrorKindV1,
         mutate: impl FnOnce(&Path),
@@ -2227,6 +2273,158 @@ mod tests {
                 DeploymentVerificationErrorKindV1::InsufficientPrivilege
             );
         }
+    }
+
+    #[test]
+    fn qualification_staging_retains_one_exact_empty_tree_and_cleans_it() {
+        let (prepared, qualification_parent, _base_root, _install_parent) = prepared_for_staging();
+        let expected_commit = prepared.git_commit().to_owned();
+        let expected_manifest = prepared.manifest_sha256();
+        let expected_base = prepared.base_image_sha256();
+        let staged =
+            staging::stage_compiler_execution_qualification_for_test_v1(prepared, current_owner())
+                .unwrap();
+        assert_eq!(staged.git_commit(), expected_commit);
+        assert_eq!(staged.manifest_sha256(), expected_manifest);
+        assert_eq!(staged.base_image_sha256(), expected_base);
+        assert_eq!(staged.directory_count(), 8);
+        assert!(
+            staged
+                .run_name()
+                .strip_prefix(".compiler-execution-qualification-v1-")
+                .is_some_and(|suffix| suffix.len() == 32
+                    && suffix
+                        .bytes()
+                        .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()))
+        );
+        let root = qualification_parent.path().join(staged.run_name());
+        assert_eq!(tree_counts(&root), (8, 0));
+        for path in [
+            root.clone(),
+            root.join("base"),
+            root.join("evidence"),
+            root.join("root"),
+            root.join("run"),
+            root.join("state"),
+            root.join("upper"),
+            root.join("work"),
+        ] {
+            assert_eq!(
+                fs::metadata(path).unwrap().permissions().mode() & 0o7777,
+                0o700
+            );
+        }
+        staging::revalidate_staged_qualification_for_test_v1(&staged, current_owner()).unwrap();
+        staged.cleanup().unwrap();
+        assert_eq!(
+            fs::read_dir(qualification_parent.path()).unwrap().count(),
+            0
+        );
+
+        let (prepared, qualification_parent, _base_root, _install_parent) = prepared_for_staging();
+        let staged =
+            staging::stage_compiler_execution_qualification_for_test_v1(prepared, current_owner())
+                .unwrap();
+        drop(staged);
+        assert_eq!(
+            fs::read_dir(qualification_parent.path()).unwrap().count(),
+            0
+        );
+    }
+
+    #[test]
+    fn every_qualification_staging_boundary_cleans_to_an_empty_parent() {
+        let points = staging::qualification_staging_fault_points_for_test_v1();
+        assert_eq!(points.len(), 21);
+        for point in points {
+            let (prepared, qualification_parent, _base_root, _install_parent) =
+                prepared_for_staging();
+            let error = staging::stage_compiler_execution_qualification_at_fault_for_test_v1(
+                prepared,
+                current_owner(),
+                point,
+            )
+            .unwrap_err();
+            assert_eq!(
+                error.kind(),
+                DeploymentVerificationErrorKindV1::InjectedFailure,
+                "unexpected result at {point:?}: {error}"
+            );
+            assert_eq!(
+                fs::read_dir(qualification_parent.path()).unwrap().count(),
+                0,
+                "staging residue remained at {point:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn qualification_staging_rejects_mutation_and_parent_replacement() {
+        let (prepared, qualification_parent, _base_root, _install_parent) = prepared_for_staging();
+        let staged =
+            staging::stage_compiler_execution_qualification_for_test_v1(prepared, current_owner())
+                .unwrap();
+        let run = qualification_parent.path().join(staged.run_name());
+        fs::set_permissions(run.join("upper"), fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(
+            staging::revalidate_staged_qualification_for_test_v1(&staged, current_owner())
+                .unwrap_err()
+                .kind(),
+            DeploymentVerificationErrorKindV1::InvalidMetadata
+        );
+        fs::set_permissions(run.join("upper"), fs::Permissions::from_mode(0o700)).unwrap();
+        fs::write(run.join("evidence/unexpected"), b"hostile").unwrap();
+        assert_eq!(
+            staging::revalidate_staged_qualification_for_test_v1(&staged, current_owner())
+                .unwrap_err()
+                .kind(),
+            DeploymentVerificationErrorKindV1::InvalidInventory
+        );
+        fs::remove_file(run.join("evidence/unexpected")).unwrap();
+        staged.cleanup().unwrap();
+
+        let (prepared, qualification_parent, _base_root, _install_parent) = prepared_for_staging();
+        let staged =
+            staging::stage_compiler_execution_qualification_for_test_v1(prepared, current_owner())
+                .unwrap();
+        let displaced = qualification_parent
+            .path()
+            .with_extension("qualification-staging-displaced");
+        fs::rename(qualification_parent.path(), &displaced).unwrap();
+        fs::create_dir(qualification_parent.path()).unwrap();
+        fs::set_permissions(
+            qualification_parent.path(),
+            fs::Permissions::from_mode(0o700),
+        )
+        .unwrap();
+        assert_eq!(
+            staging::revalidate_staged_qualification_for_test_v1(&staged, current_owner())
+                .unwrap_err()
+                .kind(),
+            DeploymentVerificationErrorKindV1::InputChanged
+        );
+        staged.cleanup().unwrap();
+        assert_eq!(fs::read_dir(&displaced).unwrap().count(), 0);
+        fs::remove_dir(qualification_parent.path()).unwrap();
+        fs::rename(&displaced, qualification_parent.path()).unwrap();
+    }
+
+    #[test]
+    fn production_qualification_staging_requires_effective_root() {
+        if rustix::process::geteuid().as_raw() == 0 {
+            return;
+        }
+        let (prepared, qualification_parent, _base_root, _install_parent) = prepared_for_staging();
+        assert_eq!(
+            stage_compiler_execution_qualification_v1(prepared)
+                .unwrap_err()
+                .kind(),
+            DeploymentVerificationErrorKindV1::InsufficientPrivilege
+        );
+        assert_eq!(
+            fs::read_dir(qualification_parent.path()).unwrap().count(),
+            0
+        );
     }
 
     #[test]

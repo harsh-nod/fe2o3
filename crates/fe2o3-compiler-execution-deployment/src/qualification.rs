@@ -118,6 +118,10 @@ impl PreparedCompilerExecutionQualificationV1 {
     pub fn revalidate(&self) -> Result<(), DeploymentVerificationErrorV1> {
         revalidate_prepared_qualification(self, (0, 0))
     }
+
+    pub(super) fn qualification_parent(&self) -> &File {
+        &self.parent
+    }
 }
 
 /// Prepares one exact installed deployment and pinned base image for disposable qualification.
@@ -209,6 +213,14 @@ fn revalidate_prepared_qualification(
     prepared: &PreparedCompilerExecutionQualificationV1,
     owner: (u32, u32),
 ) -> Result<(), DeploymentVerificationErrorV1> {
+    revalidate_prepared_qualification_with_parent_children(prepared, owner, &[])
+}
+
+pub(super) fn revalidate_prepared_qualification_with_parent_children(
+    prepared: &PreparedCompilerExecutionQualificationV1,
+    owner: (u32, u32),
+    expected_parent_children: &[&str],
+) -> Result<(), DeploymentVerificationErrorV1> {
     revalidate_installed_deployment(&prepared.installed, owner)?;
     validate_sealed_base_image(&prepared.base)?;
     validate_directory_mode(
@@ -217,29 +229,69 @@ fn revalidate_prepared_qualification(
         QUALIFICATION_PARENT_MODE_V1,
         "compiler-execution qualification parent",
     )?;
-    let reopened = open_qualification_parent(&prepared.parent_path, owner)?;
+    verify_directory_children(
+        &prepared.parent,
+        expected_parent_children,
+        "compiler-execution qualification parent",
+    )?;
+    let reopened = open_qualification_parent_metadata(&prepared.parent_path, owner)?;
     let retained = snapshot(
         &fstat(&prepared.parent)
             .map_err(|source| io_error("reinspect retained qualification parent", source))?,
     );
-    let reopened = snapshot(
+    let reopened_snapshot = snapshot(
         &fstat(&reopened)
             .map_err(|source| io_error("reinspect canonical qualification parent", source))?,
     );
-    if retained.device != reopened.device
-        || retained.inode != reopened.inode
-        || retained.mode != reopened.mode
-        || retained.uid != reopened.uid
-        || retained.gid != reopened.gid
+    if retained.device != reopened_snapshot.device
+        || retained.inode != reopened_snapshot.inode
+        || retained.mode != reopened_snapshot.mode
+        || retained.uid != reopened_snapshot.uid
+        || retained.gid != reopened_snapshot.gid
     {
         return Err(changed(
             "qualification-parent pathname changed after preparation",
+        ));
+    }
+    verify_directory_children(
+        &reopened,
+        expected_parent_children,
+        "canonical compiler-execution qualification parent",
+    )?;
+    if snapshot(
+        &fstat(&reopened)
+            .map_err(|source| io_error("reinspect canonical qualification parent", source))?,
+    ) != reopened_snapshot
+    {
+        return Err(changed(
+            "canonical qualification parent changed during enumeration",
         ));
     }
     Ok(())
 }
 
 fn open_qualification_parent(
+    path: &Path,
+    owner: (u32, u32),
+) -> Result<File, DeploymentVerificationErrorV1> {
+    open_qualification_parent_with_children(path, owner, &[])
+}
+
+fn open_qualification_parent_with_children(
+    path: &Path,
+    owner: (u32, u32),
+    expected_children: &[&str],
+) -> Result<File, DeploymentVerificationErrorV1> {
+    let parent = open_qualification_parent_metadata(path, owner)?;
+    verify_directory_children(
+        &parent,
+        expected_children,
+        "compiler-execution qualification parent",
+    )?;
+    Ok(parent)
+}
+
+fn open_qualification_parent_metadata(
     path: &Path,
     owner: (u32, u32),
 ) -> Result<File, DeploymentVerificationErrorV1> {
@@ -258,7 +310,6 @@ fn open_qualification_parent(
         QUALIFICATION_PARENT_MODE_V1,
         "compiler-execution qualification parent",
     )?;
-    verify_directory_children(&parent, &[], "compiler-execution qualification parent")?;
     Ok(parent)
 }
 
