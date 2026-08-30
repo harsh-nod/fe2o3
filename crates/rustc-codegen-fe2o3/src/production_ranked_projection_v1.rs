@@ -77,6 +77,7 @@ const MAX_PROJECTED_CAPABILITY_DATAFLOW_WORK_V1: usize = MAX_RANKED_BOUNDS_OPERA
 const MAX_PROJECTED_CAPABILITY_ENUM_DEPTH_V1: usize = 8;
 const MAX_PROJECTED_LOOP_GRAPH_WORK_V1: usize =
     MAX_RANKED_BOUNDS_BLOCKS * (MAX_RANKED_BOUNDS_BLOCKS + MAX_RANKED_BOUNDS_EDGES);
+const MAX_PIPELINE_SCALAR_NODES_V1: usize = 64;
 const MAX_PURE_UNIFORM_INDEX_NODES_V1: usize = 64;
 const PRIVATE_ALLOCATION_ORIGIN_TAG_V1: u64 = 1_u64 << 63;
 const TENSOR_CAPABILITY_ROOT_DOMAIN_V1: &[u8] = b"FE2O3/TENSOR-CAPABILITY-ROOT/V1\0";
@@ -6738,8 +6739,6 @@ fn project_intrinsic_contracts(
         callables,
         types,
         function,
-        constants,
-        &stable_argument_origins,
         &index_values,
         &mut runtime_index_arguments,
         &mut next_runtime_argument,
@@ -6804,8 +6803,6 @@ fn project_workgroup_pipeline_effects_v1(
     callables: &[SemanticCallableDeclV1],
     types: &[SemanticTypeDeclV1],
     function: &SemanticFunctionDeclV1,
-    constants: &[Option<u64>],
-    stable_argument_origins: &[Option<u32>],
     index_values: &[Option<ProjectedDisjointIndexV1>],
     runtime_index_arguments: &mut [Option<u32>],
     next_runtime_argument: &mut usize,
@@ -6857,7 +6854,7 @@ fn project_workgroup_pipeline_effects_v1(
     if pending.is_empty() {
         return Ok(vec![None; function.blocks().len()]);
     }
-    let mut scalar_assertion_proofs = SemanticAssertProofsV1::new(types, function)?;
+    let scalar_assertion_proofs = SemanticAssertProofsV1::new(types, function)?;
     for _ in 0..function.locals().len() {
         let mut changed = false;
         for block in function.blocks() {
@@ -6989,6 +6986,18 @@ fn project_workgroup_pipeline_effects_v1(
         pipeline.modulus = Some(ProductionRankedValueV1::Local(modulus_id));
     }
 
+    let mut scalar_projector = PipelineScalarProjectorV1 {
+        types,
+        function,
+        index_values,
+        runtime_index_arguments,
+        next_runtime_argument,
+        uniform_inductions,
+        entry_operations,
+        next_value,
+        assertion_proofs: scalar_assertion_proofs,
+        work: 0,
+    };
     let mut effects = vec![None; function.blocks().len()];
     for (block_index, block) in function.blocks().iter().enumerate() {
         let SemanticTerminatorKindV1::Call(call) = block.terminator().kind() else {
@@ -7023,21 +7032,7 @@ fn project_workgroup_pipeline_effects_v1(
             SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineEvent { event, .. } => {
                 let owner = pipeline_call_owner_v1(call, &owners)?;
                 let contract = &pending[owner];
-                let epoch = project_pipeline_scalar_v1(
-                    function,
-                    &mut scalar_assertion_proofs,
-                    block_index,
-                    &call.arguments()[1],
-                    constants,
-                    stable_argument_origins,
-                    index_values,
-                    runtime_index_arguments,
-                    next_runtime_argument,
-                    uniform_inductions,
-                    entry_operations,
-                    next_value,
-                    &mut HashSet::new(),
-                )?;
+                let epoch = scalar_projector.project_root(block_index, &call.arguments()[1])?;
                 ProjectedPipelineEffectV1::Event {
                     owner,
                     epoch,
@@ -7050,36 +7045,8 @@ fn project_workgroup_pipeline_effects_v1(
             | SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineRead { .. } => {
                 let owner = pipeline_call_owner_v1(call, &owners)?;
                 let contract = &pending[owner];
-                let epoch = project_pipeline_scalar_v1(
-                    function,
-                    &mut scalar_assertion_proofs,
-                    block_index,
-                    &call.arguments()[1],
-                    constants,
-                    stable_argument_origins,
-                    index_values,
-                    runtime_index_arguments,
-                    next_runtime_argument,
-                    uniform_inductions,
-                    entry_operations,
-                    next_value,
-                    &mut HashSet::new(),
-                )?;
-                let index = project_pipeline_scalar_v1(
-                    function,
-                    &mut scalar_assertion_proofs,
-                    block_index,
-                    &call.arguments()[2],
-                    constants,
-                    stable_argument_origins,
-                    index_values,
-                    runtime_index_arguments,
-                    next_runtime_argument,
-                    uniform_inductions,
-                    entry_operations,
-                    next_value,
-                    &mut HashSet::new(),
-                )?;
+                let epoch = scalar_projector.project_root(block_index, &call.arguments()[1])?;
+                let index = scalar_projector.project_root(block_index, &call.arguments()[2])?;
                 ProjectedPipelineEffectV1::Access {
                     view: ProductionRankedValueV1::Local(contract.view.expect("assigned view")),
                     epoch,
@@ -7139,50 +7106,200 @@ const fn pipeline_event_kind_v1(event: SemanticWorkgroupPipelineEventV1) -> Pipe
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn project_pipeline_scalar_v1(
-    function: &SemanticFunctionDeclV1,
-    assertion_proofs: &mut SemanticAssertProofsV1<'_>,
-    block_index: usize,
-    operand: &SemanticOperandV1,
-    constants: &[Option<u64>],
-    stable_argument_origins: &[Option<u32>],
-    index_values: &[Option<ProjectedDisjointIndexV1>],
-    runtime_index_arguments: &mut [Option<u32>],
-    next_runtime_argument: &mut usize,
-    uniform_inductions: &[ProjectedUniformInductionV1],
-    entry_operations: &mut Vec<ProductionRankedOperationV1>,
-    next_value: &mut u32,
-    visiting: &mut HashSet<usize>,
-) -> Result<ProjectedPipelineScalarV1, ProductionRankedProjectionErrorV1> {
-    if let Some(value) = constant_operand_value(operand, constants) {
-        let result = next_value_id(next_value)?;
-        reserve_operation(entry_operations)?;
-        entry_operations.push(ProductionRankedOperationV1::IndexConstant { result, value });
-        return Ok(ProjectedPipelineScalarV1::Value(
-            ProductionRankedValueV1::Local(result),
-        ));
-    }
-    for (induction_index, induction) in uniform_inductions.iter().enumerate() {
-        if operand == &induction.source_progress.bound_operand {
-            return Ok(ProjectedPipelineScalarV1::Value(induction.bound));
-        }
-        if simple_operand_local(operand) == Some(induction.source_progress.induction)
-            && (induction.loop_blocks.contains(&block_index)
-                || induction.header == block_index
-                || induction.exit == block_index)
-        {
-            return Ok(ProjectedPipelineScalarV1::Induction {
-                induction: induction_index,
-            });
-        }
-    }
-    if tuple_field_operand_local_v1(operand, 0).is_some() {
-        let Some(authenticated) = assertion_proofs.authenticated_checked_binary_value_v1(
+struct PipelineScalarProjectorV1<'a> {
+    types: &'a [SemanticTypeDeclV1],
+    function: &'a SemanticFunctionDeclV1,
+    index_values: &'a [Option<ProjectedDisjointIndexV1>],
+    runtime_index_arguments: &'a mut [Option<u32>],
+    next_runtime_argument: &'a mut usize,
+    uniform_inductions: &'a [ProjectedUniformInductionV1],
+    entry_operations: &'a mut Vec<ProductionRankedOperationV1>,
+    next_value: &'a mut u32,
+    assertion_proofs: SemanticAssertProofsV1<'a>,
+    work: usize,
+}
+
+impl PipelineScalarProjectorV1<'_> {
+    fn project_root(
+        &mut self,
+        block: usize,
+        operand: &SemanticOperandV1,
+    ) -> Result<ProjectedPipelineScalarV1, ProductionRankedProjectionErrorV1> {
+        let Some(semantic_block) = self.function.blocks().get(block) else {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "a pipeline scalar use is outside the semantic CFG",
+            ));
+        };
+        self.work = 0;
+        self.project_operand(
             operand,
-            block_index,
-            function.blocks()[block_index].statements().len(),
-        )?
+            ScalarAssignmentSiteV1 {
+                block,
+                statement: semantic_block.statements().len(),
+            },
+            &mut HashSet::new(),
+        )
+    }
+
+    fn charge(&mut self) -> Result<(), ProductionRankedProjectionErrorV1> {
+        self.work =
+            self.work
+                .checked_add(1)
+                .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+                    "pipeline scalar work accounting overflowed",
+                ))?;
+        if self.work > MAX_PIPELINE_SCALAR_NODES_V1 {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "pipeline scalar expression exceeds its node limit",
+            ));
+        }
+        Ok(())
+    }
+
+    fn project_operand(
+        &mut self,
+        operand: &SemanticOperandV1,
+        use_site: ScalarAssignmentSiteV1,
+        visiting: &mut HashSet<usize>,
+    ) -> Result<ProjectedPipelineScalarV1, ProductionRankedProjectionErrorV1> {
+        self.charge()?;
+
+        // Checked field zero is authority-bearing. Authenticate it before any
+        // bound/constant shortcut can substitute a ranked value.
+        if tuple_field_operand_local_v1(operand, 0).is_some() {
+            return self.project_checked_result(operand, use_site, visiting);
+        }
+        if unsigned_index_bits_v1(self.types, operand.ty()).is_none() {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a pipeline scalar is not an exact unsigned index expression",
+            ));
+        }
+        if let SemanticOperandV1::Constant(constant) = operand {
+            let SemanticConstantValueV1::Scalar(value) = constant.value() else {
+                return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                    "a pipeline scalar constant is not a scalar integer",
+                ));
+            };
+            let value = u64::try_from(value.bits()).map_err(|_| {
+                ProductionRankedProjectionErrorV1::Incomplete(
+                    "a pipeline scalar constant exceeds ranked index width",
+                )
+            })?;
+            let bits = unsigned_index_bits_v1(self.types, operand.ty())
+                .expect("validated unsigned pipeline scalar type");
+            if bits < 64 && value >= (1_u64 << bits) {
+                return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                    "a pipeline scalar constant exceeds its semantic type",
+                ));
+            }
+            return self.constant(value);
+        }
+        for (induction_index, induction) in self.uniform_inductions.iter().enumerate() {
+            if operand == &induction.source_progress.bound_operand {
+                return Ok(ProjectedPipelineScalarV1::Value(induction.bound));
+            }
+            if simple_operand_local(operand) == Some(induction.source_progress.induction)
+                && (induction.contains_block(use_site.block)
+                    || induction.header == use_site.block
+                    || induction.exit == use_site.block)
+            {
+                return Ok(ProjectedPipelineScalarV1::Induction {
+                    induction: induction_index,
+                });
+            }
+        }
+        let place =
+            raw_operand_place(operand).ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                "a pipeline epoch or element index is not a retained scalar place",
+            ))?;
+        if !place.projections().is_empty() {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a pipeline scalar uses an unsupported place projection",
+            ));
+        }
+        let local = place.local().index() as usize;
+        if let Some(index) = self.index_values.get(local).copied().flatten() {
+            return Ok(ProjectedPipelineScalarV1::Value(index.value));
+        }
+        let declaration = self.function.locals().get(local).ok_or(
+            ProductionRankedProjectionErrorV1::Unsupported(
+                "a pipeline scalar local is outside the semantic local table",
+            ),
+        )?;
+        if self.assertion_proofs.address_escaped.get(local).copied() != Some(false) {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a pipeline scalar local has address-escaped value semantics",
+            ));
+        }
+        match self.assertion_proofs.definition_counts.get(local).copied() {
+            Some(0) => {
+                let SemanticLocalRoleV1::Argument(origin) = declaration.role() else {
+                    return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                        "a pipeline scalar temporary has no retained definition",
+                    ));
+                };
+                return self.argument(origin as usize);
+            }
+            Some(1) => {}
+            Some(_) => {
+                return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                    "a pipeline scalar temporary has multiple definitions",
+                ));
+            }
+            None => {
+                return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                    "a pipeline scalar definition is outside the semantic local table",
+                ));
+            }
+        }
+        let Some(definition) = self
+            .assertion_proofs
+            .assignments
+            .get(local)
+            .copied()
+            .flatten()
+        else {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a pipeline scalar has no exact assignment definition",
+            ));
+        };
+        if !self.assertion_proofs.assignment_dominates_use(
+            definition,
+            use_site.block,
+            use_site.statement,
+        )? {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a pipeline scalar definition does not dominate its exact use",
+            ));
+        }
+        if !visiting.insert(local) {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a pipeline scalar expression is cyclic",
+            ));
+        }
+        let statement = self.function.blocks()[definition.block].statements()[definition.statement]
+            .kind()
+            .clone();
+        let SemanticStatementKindV1::Assign(assignment) = statement else {
+            visiting.remove(&local);
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "an indexed pipeline scalar assignment changed semantic kind",
+            ));
+        };
+        let result = self.project_rvalue(assignment.value(), definition, visiting);
+        visiting.remove(&local);
+        result
+    }
+
+    fn project_checked_result(
+        &mut self,
+        operand: &SemanticOperandV1,
+        use_site: ScalarAssignmentSiteV1,
+        visiting: &mut HashSet<usize>,
+    ) -> Result<ProjectedPipelineScalarV1, ProductionRankedProjectionErrorV1> {
+        let Some(authenticated) = self
+            .assertion_proofs
+            .authenticated_checked_binary_value_v1(operand, use_site.block, use_site.statement)?
         else {
             return Err(ProductionRankedProjectionErrorV1::Incomplete(
                 "a checked pipeline scalar lacks exact dominating overflow authority",
@@ -7202,66 +7319,107 @@ fn project_pipeline_scalar_v1(
                 "a checked pipeline scalar expression is cyclic",
             ));
         }
-        let left = project_pipeline_scalar_v1(
-            function,
-            assertion_proofs,
-            block_index,
-            authenticated.checked.left(),
-            constants,
-            stable_argument_origins,
-            index_values,
-            runtime_index_arguments,
-            next_runtime_argument,
-            uniform_inductions,
-            entry_operations,
-            next_value,
-            visiting,
-        )?;
-        let right = project_pipeline_scalar_v1(
-            function,
-            assertion_proofs,
-            block_index,
-            authenticated.checked.right(),
-            constants,
-            stable_argument_origins,
-            index_values,
-            runtime_index_arguments,
-            next_runtime_argument,
-            uniform_inductions,
-            entry_operations,
-            next_value,
-            visiting,
-        )?;
+        let definition = authenticated.definition;
+        let left = self.project_operand(authenticated.checked.left(), definition, visiting);
+        let right = match left {
+            Ok(left) => self
+                .project_operand(authenticated.checked.right(), definition, visiting)
+                .map(|right| (left, right)),
+            Err(error) => Err(error),
+        };
         visiting.remove(&authenticated.local);
-        if !assertion_proofs.proves_authenticated_checked_binary_total_for_pipeline_v1(
-            &authenticated,
-            &left,
-            &right,
-            block_index,
-            uniform_inductions,
-        )? {
+        let (left, right) = right?;
+        if !self
+            .assertion_proofs
+            .proves_authenticated_checked_binary_total_for_pipeline_v1(
+                &authenticated,
+                &left,
+                &right,
+                self.uniform_inductions,
+            )?
+        {
             return Err(ProductionRankedProjectionErrorV1::Incomplete(
                 "a checked pipeline scalar is not an exact total unsigned index expression",
             ));
         }
-        return Ok(ProjectedPipelineScalarV1::Binary {
+        Ok(ProjectedPipelineScalarV1::Binary {
             result: None,
             kind,
             left: Box::new(left),
             right: Box::new(right),
-        });
+        })
     }
-    let local = raw_operand_place(operand)
-        .map(|place| place.local().index() as usize)
-        .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
-            "a pipeline epoch or element index is not a retained scalar place",
-        ))?;
-    if let Some(index) = index_values.get(local).copied().flatten() {
-        return Ok(ProjectedPipelineScalarV1::Value(index.value));
+
+    fn project_rvalue(
+        &mut self,
+        value: &fe2o3_mir_model::semantic_mir_v1::SemanticRvalueV1,
+        definition: ScalarAssignmentSiteV1,
+        visiting: &mut HashSet<usize>,
+    ) -> Result<ProjectedPipelineScalarV1, ProductionRankedProjectionErrorV1> {
+        match value.kind() {
+            SemanticRvalueKindV1::Use(source) if source.ty() == value.result_type() => {
+                self.project_operand(source, definition, visiting)
+            }
+            SemanticRvalueKindV1::Cast {
+                kind: SemanticCastKindV1::Integer,
+                operand: source,
+            } if value_preserving_unsigned_index_cast_v1(
+                self.types,
+                source.ty(),
+                value.result_type(),
+            ) =>
+            {
+                self.project_operand(source, definition, visiting)
+            }
+            SemanticRvalueKindV1::Binary {
+                operation,
+                left,
+                right,
+            } => {
+                let kind = match operation {
+                    SemanticBinaryOpV1::Add => IndexBinaryKindAttr::Add,
+                    SemanticBinaryOpV1::Multiply => IndexBinaryKindAttr::Multiply,
+                    SemanticBinaryOpV1::Divide => IndexBinaryKindAttr::Divide,
+                    SemanticBinaryOpV1::Remainder => IndexBinaryKindAttr::Remainder,
+                    _ => {
+                        return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                            "a pipeline scalar uses an unsupported integer operation",
+                        ));
+                    }
+                };
+                let left = self.project_operand(left, definition, visiting)?;
+                let right = self.project_operand(right, definition, visiting)?;
+                Ok(ProjectedPipelineScalarV1::Binary {
+                    result: None,
+                    kind,
+                    left: Box::new(left),
+                    right: Box::new(right),
+                })
+            }
+            _ => Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a pipeline scalar is not an exact unsigned index expression",
+            )),
+        }
     }
-    if let Some(origin) = stable_argument_origins.get(local).copied().flatten() {
-        let origin = origin as usize;
-        let slot = runtime_index_arguments.get_mut(origin).ok_or(
+
+    fn constant(
+        &mut self,
+        value: u64,
+    ) -> Result<ProjectedPipelineScalarV1, ProductionRankedProjectionErrorV1> {
+        let result = next_value_id(self.next_value)?;
+        reserve_operation(self.entry_operations)?;
+        self.entry_operations
+            .push(ProductionRankedOperationV1::IndexConstant { result, value });
+        Ok(ProjectedPipelineScalarV1::Value(
+            ProductionRankedValueV1::Local(result),
+        ))
+    }
+
+    fn argument(
+        &mut self,
+        origin: usize,
+    ) -> Result<ProjectedPipelineScalarV1, ProductionRankedProjectionErrorV1> {
+        let slot = self.runtime_index_arguments.get_mut(origin).ok_or(
             ProductionRankedProjectionErrorV1::Unsupported(
                 "a pipeline scalar argument is outside the semantic local table",
             ),
@@ -7269,12 +7427,12 @@ fn project_pipeline_scalar_v1(
         let argument = match *slot {
             Some(argument) => argument,
             None => {
-                let argument = u32::try_from(*next_runtime_argument).map_err(|_| {
+                let argument = u32::try_from(*self.next_runtime_argument).map_err(|_| {
                     ProductionRankedProjectionErrorV1::Unsupported(
                         "too many pipeline scalar ranked arguments",
                     )
                 })?;
-                *next_runtime_argument = next_runtime_argument.checked_add(1).ok_or(
+                *self.next_runtime_argument = self.next_runtime_argument.checked_add(1).ok_or(
                     ProductionRankedProjectionErrorV1::Unsupported(
                         "pipeline scalar ranked argument count overflow",
                     ),
@@ -7283,118 +7441,30 @@ fn project_pipeline_scalar_v1(
                 argument
             }
         };
-        return Ok(ProjectedPipelineScalarV1::Value(
+        Ok(ProjectedPipelineScalarV1::Value(
             ProductionRankedValueV1::Argument(argument),
-        ));
+        ))
     }
-    if !visiting.insert(local) {
-        return Err(ProductionRankedProjectionErrorV1::Incomplete(
-            "a pipeline scalar expression is cyclic",
-        ));
+}
+
+fn value_preserving_unsigned_index_cast_v1(
+    types: &[SemanticTypeDeclV1],
+    source: SemanticTypeIdV1,
+    destination: SemanticTypeIdV1,
+) -> bool {
+    unsigned_index_bits_v1(types, source)
+        .zip(unsigned_index_bits_v1(types, destination))
+        .is_some_and(|(source, destination)| source <= destination)
+}
+
+fn unsigned_index_bits_v1(types: &[SemanticTypeDeclV1], ty: SemanticTypeIdV1) -> Option<u16> {
+    match types.get(ty.index() as usize)?.shape() {
+        SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
+            signed: false,
+            bits,
+        }) if *bits <= 64 => Some(*bits),
+        _ => None,
     }
-    let mut definition = None;
-    for block in function.blocks() {
-        for statement in block.statements() {
-            let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
-                continue;
-            };
-            if assignment.destination().projections().is_empty()
-                && assignment.destination().local().index() as usize == local
-            {
-                if definition.replace(assignment.value()).is_some() {
-                    visiting.remove(&local);
-                    return Err(ProductionRankedProjectionErrorV1::Incomplete(
-                        "a pipeline scalar temporary has multiple definitions",
-                    ));
-                }
-            }
-        }
-    }
-    let value = definition.ok_or(ProductionRankedProjectionErrorV1::Incomplete(
-        "a pipeline scalar temporary has no retained definition",
-    ))?;
-    let projected = match value.kind() {
-        SemanticRvalueKindV1::Use(source)
-        | SemanticRvalueKindV1::Cast {
-            operand: source, ..
-        } => project_pipeline_scalar_v1(
-            function,
-            assertion_proofs,
-            block_index,
-            source,
-            constants,
-            stable_argument_origins,
-            index_values,
-            runtime_index_arguments,
-            next_runtime_argument,
-            uniform_inductions,
-            entry_operations,
-            next_value,
-            visiting,
-        )?,
-        SemanticRvalueKindV1::Binary {
-            operation,
-            left,
-            right,
-        } => {
-            let kind = match operation {
-                SemanticBinaryOpV1::Add => IndexBinaryKindAttr::Add,
-                SemanticBinaryOpV1::Multiply => IndexBinaryKindAttr::Multiply,
-                SemanticBinaryOpV1::Divide => IndexBinaryKindAttr::Divide,
-                SemanticBinaryOpV1::Remainder => IndexBinaryKindAttr::Remainder,
-                _ => {
-                    visiting.remove(&local);
-                    return Err(ProductionRankedProjectionErrorV1::Incomplete(
-                        "a pipeline scalar uses an unsupported integer operation",
-                    ));
-                }
-            };
-            let left = project_pipeline_scalar_v1(
-                function,
-                assertion_proofs,
-                block_index,
-                left,
-                constants,
-                stable_argument_origins,
-                index_values,
-                runtime_index_arguments,
-                next_runtime_argument,
-                uniform_inductions,
-                entry_operations,
-                next_value,
-                visiting,
-            )?;
-            let right = project_pipeline_scalar_v1(
-                function,
-                assertion_proofs,
-                block_index,
-                right,
-                constants,
-                stable_argument_origins,
-                index_values,
-                runtime_index_arguments,
-                next_runtime_argument,
-                uniform_inductions,
-                entry_operations,
-                next_value,
-                visiting,
-            )?;
-            ProjectedPipelineScalarV1::Binary {
-                result: None,
-                kind,
-                left: Box::new(left),
-                right: Box::new(right),
-            }
-        }
-        _ => {
-            visiting.remove(&local);
-            return Err(ProductionRankedProjectionErrorV1::Incomplete(
-                "a pipeline scalar is not an exact unsigned index expression",
-            ));
-        }
-    };
-    visiting.remove(&local);
-    Ok(projected)
 }
 
 fn reject_retired_production_intrinsics_v1(
@@ -8654,6 +8724,8 @@ fn project_uniform_inductions_v1(
 ) -> Result<Vec<ProjectedUniformInductionV1>, ProductionRankedProjectionErrorV1> {
     let graph = projected_loop_cfg_graph_v1(function)?;
     let mut semantic_ranges = SemanticAssertProofsV1::new(types, function)?;
+    let pure_uniform_definitions = semantic_ranges.assignments.clone();
+    let pure_uniform_address_escaped = semantic_ranges.address_escaped.clone();
     let mut graph_work = 0_usize;
     let mut inductions = Vec::new();
     for (header, block) in function.blocks().iter().enumerate() {
@@ -8834,7 +8906,9 @@ fn project_uniform_inductions_v1(
             function,
             constants,
             local_definitions,
-            &semantic_ranges.address_escaped,
+            &pure_uniform_address_escaped,
+            &pure_uniform_definitions,
+            &mut semantic_ranges,
             &graph,
             header,
             comparison_index,
@@ -9671,7 +9745,6 @@ impl<'a> SemanticAssertProofsV1<'a> {
         value: &AuthenticatedCheckedBinaryValueV1,
         projected_left: &ProjectedPipelineScalarV1,
         projected_right: &ProjectedPipelineScalarV1,
-        use_block: usize,
         uniform_inductions: &[ProjectedUniformInductionV1],
     ) -> Result<bool, ProductionRankedProjectionErrorV1> {
         if self.proves_authenticated_checked_binary_total_v1(value)? {
@@ -9681,14 +9754,12 @@ impl<'a> SemanticAssertProofsV1<'a> {
             value.checked.left(),
             projected_left,
             value.definition,
-            use_block,
             uniform_inductions,
         )?;
         let right = self.pipeline_operand_range_v1(
             value.checked.right(),
             projected_right,
             value.definition,
-            use_block,
             uniform_inductions,
         )?;
         let operation = match value.checked.operation() {
@@ -9710,7 +9781,6 @@ impl<'a> SemanticAssertProofsV1<'a> {
         operand: &SemanticOperandV1,
         projected: &ProjectedPipelineScalarV1,
         definition: ScalarAssignmentSiteV1,
-        use_block: usize,
         uniform_inductions: &[ProjectedUniformInductionV1],
     ) -> Result<Option<UnsignedRangeProofV1>, ProductionRankedProjectionErrorV1> {
         if let ProjectedPipelineScalarV1::Induction { induction } = projected {
@@ -9719,7 +9789,9 @@ impl<'a> SemanticAssertProofsV1<'a> {
                     "a checked pipeline scalar references a stale uniform induction",
                 ));
             };
-            if !(induction.contains_block(use_block) || induction.header == use_block) {
+            if !(induction.contains_block(definition.block) || induction.header == definition.block)
+                || simple_operand_local(operand) != Some(induction.source_progress.induction)
+            {
                 return Ok(None);
             }
             let Some(type_maximum) = self.scalar_unsigned_maximum(operand.ty()) else {
@@ -10990,70 +11062,52 @@ struct PureUniformIndexValueV1 {
 // Reconstruct only exact unsigned expressions rooted in constants or kernel arguments.
 // Keeping this separate from the general scalar projector prevents lane-derived values,
 // opaque joins, calls, and operations without a checked total range from proving progress.
-struct PureUniformIndexProjectorV1<'a> {
-    types: &'a [fe2o3_mir_model::semantic_mir_v1::SemanticTypeDeclV1],
-    function: &'a SemanticFunctionDeclV1,
-    constants: &'a [Option<u64>],
-    local_definitions: &'a [u8],
-    address_escaped: &'a [bool],
-    graph: &'a ProjectedLoopCfgV1,
-    argument_slots: &'a mut [Option<u32>],
-    next_argument: &'a mut usize,
-    operations: &'a mut Vec<ProductionRankedOperationV1>,
-    next_value: &'a mut u32,
-    definitions: Vec<Option<(usize, usize)>>,
-    assertion_proofs: SemanticAssertProofsV1<'a>,
+struct PureUniformIndexProjectorV1<'model, 'state, 'proof> {
+    types: &'model [fe2o3_mir_model::semantic_mir_v1::SemanticTypeDeclV1],
+    function: &'model SemanticFunctionDeclV1,
+    constants: &'state [Option<u64>],
+    local_definitions: &'state [u8],
+    address_escaped: &'state [bool],
+    graph: &'state ProjectedLoopCfgV1,
+    argument_slots: &'state mut [Option<u32>],
+    next_argument: &'state mut usize,
+    operations: &'state mut Vec<ProductionRankedOperationV1>,
+    next_value: &'state mut u32,
+    definitions: &'state [Option<ScalarAssignmentSiteV1>],
+    assertion_proofs: &'proof mut SemanticAssertProofsV1<'model>,
     states: Vec<u8>,
     summaries: Vec<Option<PureUniformIndexValueV1>>,
     node_work: usize,
     graph_work: usize,
 }
 
-impl<'a> PureUniformIndexProjectorV1<'a> {
+impl<'model, 'state, 'proof> PureUniformIndexProjectorV1<'model, 'state, 'proof> {
     #[allow(clippy::too_many_arguments)]
     fn new(
-        types: &'a [fe2o3_mir_model::semantic_mir_v1::SemanticTypeDeclV1],
-        function: &'a SemanticFunctionDeclV1,
-        constants: &'a [Option<u64>],
-        local_definitions: &'a [u8],
-        address_escaped: &'a [bool],
-        graph: &'a ProjectedLoopCfgV1,
-        argument_slots: &'a mut [Option<u32>],
-        next_argument: &'a mut usize,
-        operations: &'a mut Vec<ProductionRankedOperationV1>,
-        next_value: &'a mut u32,
+        types: &'model [fe2o3_mir_model::semantic_mir_v1::SemanticTypeDeclV1],
+        function: &'model SemanticFunctionDeclV1,
+        constants: &'state [Option<u64>],
+        local_definitions: &'state [u8],
+        address_escaped: &'state [bool],
+        definitions: &'state [Option<ScalarAssignmentSiteV1>],
+        assertion_proofs: &'proof mut SemanticAssertProofsV1<'model>,
+        graph: &'state ProjectedLoopCfgV1,
+        argument_slots: &'state mut [Option<u32>],
+        next_argument: &'state mut usize,
+        operations: &'state mut Vec<ProductionRankedOperationV1>,
+        next_value: &'state mut u32,
     ) -> Result<Self, ProductionRankedProjectionErrorV1> {
         let local_count = function.locals().len();
         if constants.len() != local_count
             || local_definitions.len() != local_count
             || address_escaped.len() != local_count
+            || definitions.len() != local_count
             || argument_slots.len() != local_count
         {
             return Err(ProductionRankedProjectionErrorV1::Unsupported(
                 "pure uniform index tables do not match the semantic local table",
             ));
         }
-        let mut definitions = vec![None; local_count];
-        for (block, semantic_block) in function.blocks().iter().enumerate() {
-            for (statement, semantic_statement) in semantic_block.statements().iter().enumerate() {
-                let SemanticStatementKindV1::Assign(assignment) = semantic_statement.kind() else {
-                    continue;
-                };
-                if !assignment.destination().projections().is_empty() {
-                    continue;
-                }
-                let local = assignment.destination().local().index() as usize;
-                let Some(slot) = definitions.get_mut(local) else {
-                    return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                        "a pure uniform index definition is outside the semantic local table",
-                    ));
-                };
-                if slot.is_none() {
-                    *slot = Some((block, statement));
-                }
-            }
-        }
-        let assertion_proofs = SemanticAssertProofsV1::new(types, function)?;
         Ok(Self {
             types,
             function,
@@ -11230,9 +11284,11 @@ impl<'a> PureUniformIndexProjectorV1<'a> {
         if self.local_definitions.get(local).copied() != Some(1) {
             return Ok(None);
         }
-        let Some((definition_block, definition_statement)) = self.definitions[local] else {
+        let Some(definition) = self.definitions[local] else {
             return Ok(None);
         };
+        let definition_block = definition.block;
+        let definition_statement = definition.statement;
         if (definition_block == use_block && definition_statement >= use_statement)
             || (definition_block != use_block
                 && !self.block_dominates(definition_block, use_block)?)
@@ -11479,12 +11535,14 @@ impl<'a> PureUniformIndexProjectorV1<'a> {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn project_pure_uniform_index_operand_v1(
-    types: &[fe2o3_mir_model::semantic_mir_v1::SemanticTypeDeclV1],
-    function: &SemanticFunctionDeclV1,
+fn project_pure_uniform_index_operand_v1<'model>(
+    types: &'model [fe2o3_mir_model::semantic_mir_v1::SemanticTypeDeclV1],
+    function: &'model SemanticFunctionDeclV1,
     constants: &[Option<u64>],
     local_definitions: &[u8],
     address_escaped: &[bool],
+    definitions: &[Option<ScalarAssignmentSiteV1>],
+    assertion_proofs: &mut SemanticAssertProofsV1<'model>,
     graph: &ProjectedLoopCfgV1,
     use_block: usize,
     use_statement: usize,
@@ -11500,6 +11558,8 @@ fn project_pure_uniform_index_operand_v1(
         constants,
         local_definitions,
         address_escaped,
+        definitions,
+        assertion_proofs,
         graph,
         arguments,
         next_argument,
@@ -16691,6 +16751,9 @@ mod tests {
     const I32_TYPE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(7);
     const U64_POINTER_TYPE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(8);
     const CHECKED_U64_TYPE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(9);
+    const CHECKED_U64_POINTER_TYPE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(10);
+    const F64_TYPE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(11);
+    const U128_TYPE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(12);
 
     #[test]
     fn blocked_launch_bound_checks_the_last_thread_and_component_without_wrapping() {
@@ -17352,6 +17415,36 @@ mod tests {
             SemanticTypeShapeV1::Tuple(
                 SemanticAggregateTypeV1::new(vec![U64_TYPE, BOOL_TYPE]).unwrap(),
             ),
+        ));
+        types.push(SemanticTypeDeclV1::new(
+            SemanticTypeIdentityV1::from_sha256(bytes(46)),
+            SemanticLayoutIdentityV1::from_sha256(bytes(46)),
+            SemanticTypeLayoutV1::new(Some(8), 8).unwrap(),
+            SemanticTypeShapeV1::Pointer(
+                SemanticPointerTypeV1::new(
+                    CHECKED_U64_TYPE,
+                    SemanticMutabilityV1::Mutable,
+                    5,
+                    64,
+                    SemanticPointerMetadataV1::None,
+                )
+                .unwrap(),
+            ),
+        ));
+        types.push(SemanticTypeDeclV1::new(
+            SemanticTypeIdentityV1::from_sha256(bytes(47)),
+            SemanticLayoutIdentityV1::from_sha256(bytes(47)),
+            SemanticTypeLayoutV1::new(Some(8), 8).unwrap(),
+            SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Float { bits: 64 }),
+        ));
+        types.push(SemanticTypeDeclV1::new(
+            SemanticTypeIdentityV1::from_sha256(bytes(48)),
+            SemanticLayoutIdentityV1::from_sha256(bytes(48)),
+            SemanticTypeLayoutV1::new(Some(16), 16).unwrap(),
+            SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
+                signed: false,
+                bits: 128,
+            }),
         ));
         types
     }
@@ -24995,11 +25088,19 @@ mod tests {
         MissingAssertion,
         StaleResultAssertion,
         WrongOperation,
+        WrongSuccessRole,
         ExpectedOverflow,
         ReachableUnwind,
         NonDominatingAssertion,
         Overflowable,
         AddressEscaped,
+        TupleAddressEscaped,
+        MultipleDefinitions,
+        NestedMissingAuthority,
+        FloatCast,
+        NarrowingCast,
+        Multiply,
+        Subtract,
     }
 
     fn checked_derived_uniform_induction_bound_function(
@@ -25014,15 +25115,16 @@ mod tests {
         let argument = SemanticLocalIdV1::from_index(7);
         let escaped_pointer = SemanticLocalIdV1::from_index(8);
         let stale_result = SemanticLocalIdV1::from_index(9);
-        let input_type = if matches!(kind, CheckedBoundKind::Overflowable) {
-            U64_TYPE
-        } else {
-            SCALAR_TYPE
+        let input_type = match kind {
+            CheckedBoundKind::Overflowable => U64_TYPE,
+            CheckedBoundKind::FloatCast => F64_TYPE,
+            CheckedBoundKind::NarrowingCast => U128_TYPE,
+            _ => SCALAR_TYPE,
         };
-        let pointer_type = if input_type == U64_TYPE {
-            U64_POINTER_TYPE
-        } else {
-            POINTER_TYPE
+        let pointer_type = match kind {
+            CheckedBoundKind::TupleAddressEscaped => CHECKED_U64_POINTER_TYPE,
+            _ if input_type == U64_TYPE => U64_POINTER_TYPE,
+            _ => POINTER_TYPE,
         };
         let place = |local, ty| SemanticPlaceV1::new(local, vec![], ty).unwrap();
         let operand = |local, ty| SemanticOperandV1::Copy(place(local, ty));
@@ -25045,10 +25147,15 @@ mod tests {
                 SemanticRvalueV1::new(ty, value),
             )))
         };
-        let checked_add = |right| {
+        let checked_operation = match kind {
+            CheckedBoundKind::Multiply => SemanticCheckedBinaryOpV1::Multiply,
+            CheckedBoundKind::Subtract => SemanticCheckedBinaryOpV1::Subtract,
+            _ => SemanticCheckedBinaryOpV1::Add,
+        };
+        let checked_binary = |left, right| {
             SemanticRvalueKindV1::CheckedBinary(SemanticCheckedBinaryRvalueV1::new(
-                SemanticCheckedBinaryOpV1::Add,
-                operand(widened, U64_TYPE),
+                checked_operation,
+                left,
                 typed_constant(U64_TYPE, right, 8),
             ))
         };
@@ -25066,18 +25173,72 @@ mod tests {
         entry_statements.push(assign(
             widened,
             U64_TYPE,
-            if input_type == U64_TYPE {
-                SemanticRvalueKindV1::Use(operand(argument, input_type))
-            } else {
+            if matches!(kind, CheckedBoundKind::FloatCast) {
+                SemanticRvalueKindV1::Cast {
+                    kind: SemanticCastKindV1::Float,
+                    operand: operand(argument, input_type),
+                }
+            } else if input_type != U64_TYPE {
                 SemanticRvalueKindV1::Cast {
                     kind: SemanticCastKindV1::Integer,
                     operand: operand(argument, input_type),
                 }
+            } else {
+                SemanticRvalueKindV1::Use(operand(argument, input_type))
             },
         ));
-        entry_statements.push(assign(checked_result, CHECKED_U64_TYPE, checked_add(15)));
+        let checked_right = if matches!(kind, CheckedBoundKind::Multiply) {
+            1
+        } else if matches!(kind, CheckedBoundKind::Subtract) {
+            0
+        } else {
+            15
+        };
+        let nested_result = SemanticLocalIdV1::from_index(10);
+        if matches!(kind, CheckedBoundKind::NestedMissingAuthority) {
+            entry_statements.push(assign(
+                nested_result,
+                CHECKED_U64_TYPE,
+                SemanticRvalueKindV1::CheckedBinary(SemanticCheckedBinaryRvalueV1::new(
+                    SemanticCheckedBinaryOpV1::Add,
+                    operand(widened, U64_TYPE),
+                    typed_constant(U64_TYPE, 0, 8),
+                )),
+            ));
+        }
+        let checked_left = if matches!(kind, CheckedBoundKind::NestedMissingAuthority) {
+            checked_field(nested_result, 0, U64_TYPE)
+        } else {
+            operand(widened, U64_TYPE)
+        };
+        entry_statements.push(assign(
+            checked_result,
+            CHECKED_U64_TYPE,
+            checked_binary(checked_left.clone(), checked_right),
+        ));
+        if matches!(kind, CheckedBoundKind::MultipleDefinitions) {
+            entry_statements.push(assign(
+                checked_result,
+                CHECKED_U64_TYPE,
+                checked_binary(checked_left.clone(), checked_right),
+            ));
+        }
+        if matches!(kind, CheckedBoundKind::TupleAddressEscaped) {
+            entry_statements.push(assign(
+                escaped_pointer,
+                CHECKED_U64_POINTER_TYPE,
+                SemanticRvalueKindV1::Borrow {
+                    kind: SemanticBorrowKindV1::Mutable,
+                    place: place(checked_result, CHECKED_U64_TYPE),
+                },
+            ));
+        }
         if matches!(kind, CheckedBoundKind::StaleResultAssertion) {
-            entry_statements.push(assign(stale_result, CHECKED_U64_TYPE, checked_add(16)));
+            entry_statements.push(assign(
+                stale_result,
+                CHECKED_U64_TYPE,
+                checked_binary(operand(widened, U64_TYPE), 16),
+            ));
         }
         let asserted_result = if matches!(kind, CheckedBoundKind::StaleResultAssertion) {
             stale_result
@@ -25087,21 +25248,33 @@ mod tests {
         let asserted_right = if asserted_result == stale_result {
             16
         } else {
-            15
+            checked_right
         };
         let exact_assertion = || SemanticTerminatorKindV1::Assert {
             condition: checked_field(asserted_result, 1, BOOL_TYPE),
             expected: matches!(kind, CheckedBoundKind::ExpectedOverflow),
             message: SemanticAssertMessageV1::Overflow {
-                operation: if matches!(kind, CheckedBoundKind::WrongOperation) {
-                    SemanticBinaryOpV1::Subtract
-                } else {
-                    SemanticBinaryOpV1::Add
+                operation: match kind {
+                    CheckedBoundKind::WrongOperation => SemanticBinaryOpV1::Subtract,
+                    CheckedBoundKind::Multiply => SemanticBinaryOpV1::Multiply,
+                    CheckedBoundKind::Subtract => SemanticBinaryOpV1::Subtract,
+                    _ => SemanticBinaryOpV1::Add,
                 },
-                left: operand(widened, U64_TYPE),
+                left: if asserted_result == stale_result {
+                    operand(widened, U64_TYPE)
+                } else {
+                    checked_left.clone()
+                },
                 right: typed_constant(U64_TYPE, asserted_right, 8),
             },
-            target: cfg_edge(SemanticEdgeRoleV1::AssertSuccess, 1),
+            target: cfg_edge(
+                if matches!(kind, CheckedBoundKind::WrongSuccessRole) {
+                    SemanticEdgeRoleV1::Goto
+                } else {
+                    SemanticEdgeRoleV1::AssertSuccess
+                },
+                1,
+            ),
             unwind: if matches!(kind, CheckedBoundKind::ReachableUnwind) {
                 SemanticUnwindActionV1::Continue
             } else {
@@ -25197,6 +25370,7 @@ mod tests {
                 local(111, input_type, SemanticLocalRoleV1::Argument(0)),
                 local(112, pointer_type, SemanticLocalRoleV1::Temporary),
                 local(113, CHECKED_U64_TYPE, SemanticLocalRoleV1::Temporary),
+                local(114, CHECKED_U64_TYPE, SemanticLocalRoleV1::Temporary),
             ],
         );
         (function, assertion_proof_types())
@@ -26104,11 +26278,18 @@ mod tests {
             CheckedBoundKind::MissingAssertion,
             CheckedBoundKind::StaleResultAssertion,
             CheckedBoundKind::WrongOperation,
+            CheckedBoundKind::WrongSuccessRole,
             CheckedBoundKind::ExpectedOverflow,
             CheckedBoundKind::ReachableUnwind,
             CheckedBoundKind::NonDominatingAssertion,
             CheckedBoundKind::Overflowable,
             CheckedBoundKind::AddressEscaped,
+            CheckedBoundKind::TupleAddressEscaped,
+            CheckedBoundKind::MultipleDefinitions,
+            CheckedBoundKind::NestedMissingAuthority,
+            CheckedBoundKind::FloatCast,
+            CheckedBoundKind::NarrowingCast,
+            CheckedBoundKind::Subtract,
         ] {
             let (function, types) = checked_derived_uniform_induction_bound_function(kind);
             assert_incomplete(
@@ -26135,28 +26316,34 @@ mod tests {
             )
             .unwrap(),
         );
-        let constants = constant_locals(&function);
-        let origins = local_stable_argument_origins(&types, &function).unwrap();
+        project_pipeline_operand_at(&types, &function, 1, &operand, &[])
+    }
+
+    fn project_pipeline_operand_at(
+        types: &[SemanticTypeDeclV1],
+        function: &SemanticFunctionDeclV1,
+        block: usize,
+        operand: &SemanticOperandV1,
+        uniform_inductions: &[ProjectedUniformInductionV1],
+    ) -> Result<ProjectedPipelineScalarV1, ProductionRankedProjectionErrorV1> {
         let mut runtime_arguments = vec![None; function.locals().len()];
         let mut next_argument = 1;
         let mut operations = Vec::new();
         let mut next_value = 0;
-        let mut proofs = SemanticAssertProofsV1::new(&types, &function)?;
-        project_pipeline_scalar_v1(
-            &function,
-            &mut proofs,
-            1,
-            &operand,
-            &constants,
-            &origins,
-            &vec![None; function.locals().len()],
-            &mut runtime_arguments,
-            &mut next_argument,
-            &[],
-            &mut operations,
-            &mut next_value,
-            &mut HashSet::new(),
-        )
+        let index_values = vec![None; function.locals().len()];
+        let mut projector = PipelineScalarProjectorV1 {
+            types,
+            function,
+            index_values: &index_values,
+            runtime_index_arguments: &mut runtime_arguments,
+            next_runtime_argument: &mut next_argument,
+            uniform_inductions,
+            entry_operations: &mut operations,
+            next_value: &mut next_value,
+            assertion_proofs: SemanticAssertProofsV1::new(types, function)?,
+            work: 0,
+        };
+        projector.project_root(block, operand)
     }
 
     #[test]
@@ -26172,11 +26359,17 @@ mod tests {
             CheckedBoundKind::MissingAssertion,
             CheckedBoundKind::StaleResultAssertion,
             CheckedBoundKind::WrongOperation,
+            CheckedBoundKind::WrongSuccessRole,
             CheckedBoundKind::ExpectedOverflow,
             CheckedBoundKind::ReachableUnwind,
             CheckedBoundKind::NonDominatingAssertion,
             CheckedBoundKind::Overflowable,
             CheckedBoundKind::AddressEscaped,
+            CheckedBoundKind::TupleAddressEscaped,
+            CheckedBoundKind::MultipleDefinitions,
+            CheckedBoundKind::NestedMissingAuthority,
+            CheckedBoundKind::FloatCast,
+            CheckedBoundKind::NarrowingCast,
         ] {
             assert!(matches!(
                 project_checked_bound_as_pipeline_scalar(kind, 0),
@@ -26186,6 +26379,273 @@ mod tests {
         assert!(matches!(
             project_checked_bound_as_pipeline_scalar(CheckedBoundKind::Exact, 1),
             Err(ProductionRankedProjectionErrorV1::Incomplete(_))
+        ));
+        assert!(matches!(
+            project_checked_bound_as_pipeline_scalar(CheckedBoundKind::Multiply, 0).unwrap(),
+            ProjectedPipelineScalarV1::Binary {
+                kind: IndexBinaryKindAttr::Multiply,
+                ..
+            }
+        ));
+        assert!(matches!(
+            project_checked_bound_as_pipeline_scalar(CheckedBoundKind::Subtract, 0),
+            Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a checked pipeline scalar uses an unsupported integer operation"
+            ))
+        ));
+    }
+
+    #[test]
+    fn checked_pipeline_scalar_success_edge_must_dominate_the_exact_use_site() {
+        let (function, types) =
+            checked_derived_uniform_induction_bound_function(CheckedBoundKind::Exact);
+        let operand = SemanticOperandV1::Copy(
+            SemanticPlaceV1::new(
+                SemanticLocalIdV1::from_index(5),
+                vec![
+                    SemanticProjectionV1::new(SemanticProjectionKindV1::Field(0), U64_TYPE)
+                        .unwrap(),
+                ],
+                U64_TYPE,
+            )
+            .unwrap(),
+        );
+        assert!(matches!(
+            project_pipeline_operand_at(&types, &function, 0, &operand, &[]),
+            Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a checked pipeline scalar lacks exact dominating overflow authority"
+            ))
+        ));
+    }
+
+    #[test]
+    fn checked_pipeline_scalar_cannot_bypass_authority_as_an_induction_bound() {
+        let (exact, types) =
+            checked_derived_uniform_induction_bound_function(CheckedBoundKind::Exact);
+        let (mut inductions, _, _) = project_test_inductions_with_types(&types, &exact).unwrap();
+        let (missing, _) =
+            checked_derived_uniform_induction_bound_function(CheckedBoundKind::MissingAssertion);
+        let checked_value = SemanticOperandV1::Copy(
+            SemanticPlaceV1::new(
+                SemanticLocalIdV1::from_index(5),
+                vec![
+                    SemanticProjectionV1::new(SemanticProjectionKindV1::Field(0), U64_TYPE)
+                        .unwrap(),
+                ],
+                U64_TYPE,
+            )
+            .unwrap(),
+        );
+        inductions[0].source_progress.bound_operand = checked_value.clone();
+        assert!(matches!(
+            project_pipeline_operand_at(&types, &missing, 1, &checked_value, &inductions),
+            Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a checked pipeline scalar lacks exact dominating overflow authority"
+            ))
+        ));
+    }
+
+    #[test]
+    fn checked_pipeline_scalar_rejects_value_erasing_cast_origins() {
+        for kind in [CheckedBoundKind::FloatCast, CheckedBoundKind::NarrowingCast] {
+            assert!(matches!(
+                project_checked_bound_as_pipeline_scalar(kind, 0),
+                Err(ProductionRankedProjectionErrorV1::Incomplete(
+                    "a pipeline scalar is not an exact unsigned index expression"
+                ))
+            ));
+        }
+    }
+
+    fn pipeline_alias_chain_function(
+        aliases: usize,
+    ) -> (SemanticFunctionDeclV1, SemanticOperandV1) {
+        let mut statements = Vec::new();
+        for offset in 0..aliases {
+            let destination = u32::try_from(offset + 2).unwrap();
+            let source = u32::try_from(offset + 1).unwrap();
+            statements.push(typed_assignment(
+                destination,
+                U64_TYPE,
+                SemanticRvalueKindV1::Use(typed_operand(source, U64_TYPE)),
+            ));
+        }
+        let mut locals = vec![
+            local(220, U64_TYPE, SemanticLocalRoleV1::Return),
+            local(221, U64_TYPE, SemanticLocalRoleV1::Argument(0)),
+        ];
+        for offset in 0..aliases {
+            locals.push(local(
+                u8::try_from(offset + 1).unwrap(),
+                U64_TYPE,
+                SemanticLocalRoleV1::Temporary,
+            ));
+        }
+        let operand = typed_operand(u32::try_from(aliases + 1).unwrap(), U64_TYPE);
+        (
+            projection_function_with_locals(
+                vec![
+                    block(
+                        220,
+                        statements,
+                        SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 1)),
+                    ),
+                    block(221, vec![], SemanticTerminatorKindV1::Return),
+                ],
+                locals,
+            ),
+            operand,
+        )
+    }
+
+    #[test]
+    fn pipeline_scalar_projection_has_an_exact_node_budget() {
+        let types = assertion_proof_types();
+        let (at_limit, operand) = pipeline_alias_chain_function(MAX_PIPELINE_SCALAR_NODES_V1 - 1);
+        project_pipeline_operand_at(&types, &at_limit, 1, &operand, &[]).unwrap();
+
+        let (beyond_limit, operand) = pipeline_alias_chain_function(MAX_PIPELINE_SCALAR_NODES_V1);
+        assert!(matches!(
+            project_pipeline_operand_at(&types, &beyond_limit, 1, &operand, &[]),
+            Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "pipeline scalar expression exceeds its node limit"
+            ))
+        ));
+    }
+
+    fn preheader_checked_induction_capture_function() -> SemanticFunctionDeclV1 {
+        let checked_result = SemanticLocalIdV1::from_index(5);
+        let checked_field = |field, ty| {
+            SemanticOperandV1::Move(
+                SemanticPlaceV1::new(
+                    checked_result,
+                    vec![
+                        SemanticProjectionV1::new(SemanticProjectionKindV1::Field(field), ty)
+                            .unwrap(),
+                    ],
+                    ty,
+                )
+                .unwrap(),
+            )
+        };
+        projection_function_with_locals(
+            vec![
+                block(
+                    222,
+                    vec![
+                        typed_assignment(
+                            1,
+                            U64_TYPE,
+                            SemanticRvalueKindV1::Use(typed_constant(U64_TYPE, 0, 8)),
+                        ),
+                        typed_assignment(
+                            3,
+                            U64_TYPE,
+                            SemanticRvalueKindV1::Cast {
+                                kind: SemanticCastKindV1::Integer,
+                                operand: typed_operand(4, SCALAR_TYPE),
+                            },
+                        ),
+                        typed_assignment(
+                            5,
+                            CHECKED_U64_TYPE,
+                            SemanticRvalueKindV1::CheckedBinary(
+                                SemanticCheckedBinaryRvalueV1::new(
+                                    SemanticCheckedBinaryOpV1::Add,
+                                    typed_operand(1, U64_TYPE),
+                                    typed_constant(U64_TYPE, 0, 8),
+                                ),
+                            ),
+                        ),
+                    ],
+                    SemanticTerminatorKindV1::Assert {
+                        condition: checked_field(1, BOOL_TYPE),
+                        expected: false,
+                        message: SemanticAssertMessageV1::Overflow {
+                            operation: SemanticBinaryOpV1::Add,
+                            left: typed_operand(1, U64_TYPE),
+                            right: typed_constant(U64_TYPE, 0, 8),
+                        },
+                        target: cfg_edge(SemanticEdgeRoleV1::AssertSuccess, 1),
+                        unwind: SemanticUnwindActionV1::Unreachable,
+                    },
+                ),
+                block(
+                    223,
+                    vec![typed_assignment(
+                        2,
+                        SCALAR_TYPE,
+                        SemanticRvalueKindV1::Binary {
+                            operation: SemanticBinaryOpV1::LessThan,
+                            left: typed_operand(1, U64_TYPE),
+                            right: typed_operand(3, U64_TYPE),
+                        },
+                    )],
+                    SemanticTerminatorKindV1::SwitchInt {
+                        discriminant: typed_operand(2, SCALAR_TYPE),
+                        targets: SemanticSwitchTargetsV1::new(
+                            vec![SemanticSwitchTargetV1::new(
+                                0,
+                                cfg_edge(SemanticEdgeRoleV1::SwitchValue, 4),
+                            )],
+                            cfg_edge(SemanticEdgeRoleV1::SwitchOtherwise, 2),
+                        )
+                        .unwrap(),
+                    },
+                ),
+                block(
+                    224,
+                    vec![],
+                    SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 3)),
+                ),
+                block(
+                    225,
+                    vec![typed_assignment(
+                        1,
+                        U64_TYPE,
+                        SemanticRvalueKindV1::Binary {
+                            operation: SemanticBinaryOpV1::Add,
+                            left: typed_operand(1, U64_TYPE),
+                            right: typed_constant(U64_TYPE, 1, 8),
+                        },
+                    )],
+                    SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 1)),
+                ),
+                block(226, vec![], SemanticTerminatorKindV1::Return),
+            ],
+            vec![
+                local(222, U64_TYPE, SemanticLocalRoleV1::Return),
+                local(223, U64_TYPE, SemanticLocalRoleV1::Temporary),
+                local(224, SCALAR_TYPE, SemanticLocalRoleV1::Temporary),
+                local(225, U64_TYPE, SemanticLocalRoleV1::Temporary),
+                local(226, SCALAR_TYPE, SemanticLocalRoleV1::Argument(0)),
+                local(227, CHECKED_U64_TYPE, SemanticLocalRoleV1::Temporary),
+            ],
+        )
+    }
+
+    #[test]
+    fn checked_pipeline_reconstruction_preserves_definition_site_induction_identity() {
+        let types = assertion_proof_types();
+        let function = preheader_checked_induction_capture_function();
+        let (inductions, _, _) = project_test_inductions_with_types(&types, &function).unwrap();
+        assert_eq!(inductions.len(), 1);
+        let checked_value = SemanticOperandV1::Copy(
+            SemanticPlaceV1::new(
+                SemanticLocalIdV1::from_index(5),
+                vec![
+                    SemanticProjectionV1::new(SemanticProjectionKindV1::Field(0), U64_TYPE)
+                        .unwrap(),
+                ],
+                U64_TYPE,
+            )
+            .unwrap(),
+        );
+        assert!(matches!(
+            project_pipeline_operand_at(&types, &function, 2, &checked_value, &inductions),
+            Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a pipeline scalar temporary has multiple definitions"
+            ))
         ));
     }
 
@@ -26221,7 +26681,9 @@ mod tests {
             checked_derived_uniform_induction_bound_function(CheckedBoundKind::Exact);
         let constants = constant_locals(&function);
         let definitions = local_definition_counts(&function);
-        let proof = SemanticAssertProofsV1::new(&types, &function).unwrap();
+        let mut proof = SemanticAssertProofsV1::new(&types, &function).unwrap();
+        let assignment_sites = proof.assignments.clone();
+        let address_escaped = proof.address_escaped.clone();
         let mut arguments = vec![None; function.locals().len()];
         let mut next_argument = 1;
         let mut operations = Vec::new();
@@ -26244,7 +26706,9 @@ mod tests {
                 &function,
                 &constants,
                 &definitions,
-                &proof.address_escaped,
+                &address_escaped,
+                &assignment_sites,
+                &mut proof,
                 &graph,
                 &mut arguments,
                 &mut next_argument,
