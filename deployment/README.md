@@ -16,6 +16,19 @@ at the paths named by the service unit. None may carry a file capability or
 POSIX ACL. Build and install the root provisioning command with
 `scripts/build-static-compiler-execution-provisioner.sh`.
 
+For a complete installed fixture, build every qualified static image and the
+exact deployment inputs as an immutable hash-addressed bundle from a clean
+checkout:
+
+```console
+$ scripts/build-static-compiler-execution-deployment.sh /tmp/fe2o3-deployment
+```
+
+The bundle contains all seven executables under `usr/libexec/fe2o3`, the exact
+systemd, sysusers, and tmpfiles inputs, `BUILD-INFO`, and a strict
+`SHA256SUMS`. Compilation and CMake/CTest qualification run as the invoking
+non-root user; installation is a separate privileged phase.
+
 With both the service and socket stopped, provision one nonzero policy
 generation:
 
