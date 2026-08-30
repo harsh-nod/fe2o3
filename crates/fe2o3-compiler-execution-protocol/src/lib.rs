@@ -17,6 +17,15 @@ mod supervisor_handoff;
 mod supervisor_ready;
 mod worker_anchor_journal;
 
+/// Sole production runtime directory for the protected compiler-execution supervisor.
+pub const COMPILER_EXECUTION_SUPERVISOR_RUNTIME_DIRECTORY_V1: &str = "/run/fe2o3";
+
+/// Exact root-owned production runtime-directory mode.
+pub const COMPILER_EXECUTION_SUPERVISOR_RUNTIME_DIRECTORY_MODE_V1: u32 = 0o755;
+
+/// Exact root-owned, service-group-accessible production socket mode.
+pub const COMPILER_EXECUTION_SUPERVISOR_SOCKET_MODE_V1: u32 = 0o660;
+
 /// Sole production Unix socket pathname for the protected compiler-execution supervisor.
 pub const COMPILER_EXECUTION_SUPERVISOR_SOCKET_PATH_V1: &str =
     "/run/fe2o3/compiler-execution-supervisor.sock";

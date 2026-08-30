@@ -910,6 +910,13 @@ fn named_seqpacket_listener(path: &Path) -> OwnedFd {
     .unwrap();
     let address = rustix::net::SocketAddrUnix::new(path).unwrap();
     bind(&listener, &address).unwrap();
+    fs::set_permissions(
+        path,
+        fs::Permissions::from_mode(
+            fe2o3_compiler_execution_protocol::COMPILER_EXECUTION_SUPERVISOR_SOCKET_MODE_V1,
+        ),
+    )
+    .unwrap();
     listen(&listener, 16).unwrap();
     listener
 }
@@ -1005,6 +1012,51 @@ fn provisioned_service_inputs_reject_root_and_listener_substitution() {
     assert!(matches!(
         admitted.revalidate(),
         Err(ProtectedIssuerServiceProvisioningErrorV1::Listener(_))
+    ));
+}
+
+#[test]
+fn provisioned_service_inputs_reject_listener_mode_and_parent_mutation() {
+    let fixture = Fixture::new("provisioned-listener-policy");
+    let listener_path = fixture.root.join("supervisor.sock");
+    let listener = named_seqpacket_listener(&listener_path);
+    let credentials = IssuerServiceCredentialProfileV1::new(
+        rustix::process::geteuid().as_raw(),
+        rustix::process::getegid().as_raw(),
+    )
+    .unwrap();
+    fs::set_permissions(&listener_path, fs::Permissions::from_mode(0o600)).unwrap();
+    assert!(matches!(
+        ProvisionedProtectedIssuerServiceInputsV1::admit_at(
+            listener,
+            File::open(&fixture.root).unwrap(),
+            credentials,
+            &listener_path,
+        ),
+        Err(ProtectedIssuerServiceProvisioningErrorV1::Listener(
+            ProtectedIssuerServiceErrorV1::InvalidListener(
+                "listener pathname has the wrong type, owner, group, mode, or link count"
+            )
+        ))
+    ));
+
+    fs::remove_file(&listener_path).unwrap();
+    let listener = named_seqpacket_listener(&listener_path);
+    let admitted = ProvisionedProtectedIssuerServiceInputsV1::admit_at(
+        listener,
+        File::open(&fixture.root).unwrap(),
+        credentials,
+        &listener_path,
+    )
+    .unwrap();
+    fs::set_permissions(&listener_path, fs::Permissions::from_mode(0o666)).unwrap();
+    assert!(matches!(
+        admitted.revalidate(),
+        Err(ProtectedIssuerServiceProvisioningErrorV1::Listener(
+            ProtectedIssuerServiceErrorV1::InvalidListener(
+                "listener pathname has the wrong type, owner, group, mode, or link count"
+            )
+        ))
     ));
 }
 
@@ -1736,6 +1788,7 @@ fn production_listener_rejects_alternate_and_blocking_endpoints() {
         &rustix::net::SocketAddrUnix::new(&blocking_path).unwrap(),
     )
     .unwrap();
+    fs::set_permissions(&blocking_path, fs::Permissions::from_mode(0o660)).unwrap();
     listen(&blocking, 1).unwrap();
     let Some(supervisor) = bound_supervisor(&blocking_fixture) else {
         return;

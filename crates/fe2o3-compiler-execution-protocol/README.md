@@ -74,7 +74,11 @@ Worker record or ACK. No descriptor is serialized in these records, and none
 of them grants process or signing authority.
 The sole production supervisor endpoint is the named Unix `SOCK_SEQPACKET`
 socket `/run/fe2o3/compiler-execution-supervisor.sock`; alternate paths are not
-part of the production protocol.
+part of the production protocol. Its runtime directory is root-owned mode
+`0755`; the socket pathname is root-owned, owned by the deployment supervisor
+GID, and exactly mode `0660`. This keeps replacement authority out of the
+unprivileged supervisor while allowing explicitly enrolled group members to
+connect.
 The sole production profile source is
 `/etc/fe2o3/compiler-execution/client-profile-v1`. Admission walks that fixed
 tree without following symlinks, requires root-owned non-writable directories,
