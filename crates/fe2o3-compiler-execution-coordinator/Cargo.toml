@@ -17,11 +17,15 @@ fe2o3-external-anchor-coordinator.workspace = true
 fe2o3-protected-service-profile.workspace = true
 fe2o3-protected-service-spawn.workspace = true
 fe2o3-protected-static-executable.workspace = true
+libc.workspace = true
 rustix = { workspace = true, features = ["event", "pipe", "process", "thread"] }
+subtle = "=2.6.1"
+zeroize = "=1.9.0"
 
 [dev-dependencies]
 ed25519-dalek = { version = "=2.2.0", default-features = false, features = ["fast", "zeroize"] }
 fe2o3-protected-service-spawn = { workspace = true, features = ["test-support"] }
+tempfile = "=3.21.0"
 
 [lints.rust]
 unsafe_code = "deny"
