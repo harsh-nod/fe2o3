@@ -124,8 +124,10 @@ also provision the supervisor with the already connected external-anchor peer
 and matching live pidfd; neither Cargo nor rustc can select or replace them.
 The descriptor-only deployed entrypoint is implemented and accepts no arguments
 or environment. It consumes the canonical deployment manifest at FD 220 plus
-fixed inherited listener, root, launcher, issuer, policy, signing-key, and
-external-anchor descriptors; validates the complete locked service profile;
+fixed inherited listener, root, launcher, issuer, policy, root-owned signing-key
+template, and external-anchor descriptors; validates the complete locked service
+profile; reissues the exact policy-bound key template into a fresh anonymous
+service-owned sealed image only after the deployment UID/GID and policy agree;
 requires that manifest to pin the exact protected-supervisor executable as a
 role distinct from the issuer pre-exec launcher; and enters only the existing
 fixed-worker service loop. System provisioning of

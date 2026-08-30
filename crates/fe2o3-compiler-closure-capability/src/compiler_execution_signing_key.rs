@@ -6,7 +6,9 @@ use std::os::unix::fs::MetadataExt;
 use std::path::PathBuf;
 
 use ed25519_dalek::SigningKey;
-use fe2o3_compiler_execution_protocol::CompilerExecutionIssuerPolicyV1;
+use fe2o3_compiler_execution_protocol::{
+    CompilerExecutionIssuerPolicyV1, CompilerExecutionSupervisorDeploymentV1,
+};
 use rustix::fs::{Mode, OFlags};
 use zeroize::Zeroize;
 
@@ -110,6 +112,50 @@ impl CompilerExecutionSigningKeyCapabilityV1 {
         Ok(admitted)
     }
 
+    /// Reissues a root-provisioned template into current supervisor-owned key custody.
+    ///
+    /// The source must remain an anonymous root-owned read-only canonical key image. The caller
+    /// must already have the exact dedicated UID/GID named by `deployment`, and `deployment` must
+    /// name `policy`; the returned memfd is created under those credentials. Transient seed bytes
+    /// are zeroized on every return path.
+    pub fn reissue_root_template_for_current_service(
+        image: File,
+        deployment: &CompilerExecutionSupervisorDeploymentV1,
+        policy: &CompilerExecutionIssuerPolicyV1,
+    ) -> Result<Self, String> {
+        Self::reissue_template_for_current_service(image, deployment, policy, 0, 0)
+    }
+
+    fn reissue_template_for_current_service(
+        image: File,
+        deployment: &CompilerExecutionSupervisorDeploymentV1,
+        policy: &CompilerExecutionIssuerPolicyV1,
+        template_uid: u32,
+        template_gid: u32,
+    ) -> Result<Self, String> {
+        if rustix::process::geteuid().as_raw() != deployment.service_uid()
+            || rustix::process::getegid().as_raw() != deployment.service_gid()
+        {
+            return Err(
+                "compiler-execution key reissue process does not have deployment credentials"
+                    .into(),
+            );
+        }
+        if !deployment.matches_policy(policy) {
+            return Err(
+                "compiler-execution key reissue deployment names another issuer policy".into(),
+            );
+        }
+        let image = SealedCapabilityImage::from_file(image, ROLE, LENGTH)?;
+        validate_template_image(&image, template_uid, template_gid)?;
+        let key = read_key(&image)?;
+        require_policy_key(&key, policy)?;
+        let mut seed = key.to_bytes();
+        drop(key);
+        drop(image);
+        Self::create_and_zeroize(&mut seed, policy)
+    }
+
     /// Revalidates object identity, ownership, mode, seals, bytes, access, and policy binding.
     pub fn revalidate(&self, policy: &CompilerExecutionIssuerPolicyV1) -> Result<(), String> {
         self.revalidate_image()?;
@@ -170,6 +216,31 @@ fn validate_secret_image(image: &SealedCapabilityImage) -> Result<(), String> {
     Ok(())
 }
 
+fn validate_template_image(
+    image: &SealedCapabilityImage,
+    expected_uid: u32,
+    expected_gid: u32,
+) -> Result<(), String> {
+    let descriptor = image.try_clone_for_transfer()?;
+    let metadata = descriptor
+        .metadata()
+        .map_err(|error| format!("cannot inspect {} template ownership: {error}", ROLE.name))?;
+    let status = rustix::fs::fcntl_getfl(&descriptor)
+        .map_err(|error| format!("cannot inspect {} template access: {error}", ROLE.name))?;
+    if metadata.nlink() != 0
+        || metadata.uid() != expected_uid
+        || metadata.gid() != expected_gid
+        || status & OFlags::ACCMODE != OFlags::RDONLY
+        || status.contains(OFlags::PATH)
+    {
+        return Err(format!(
+            "{} is not an anonymous trusted-owner read-only template",
+            ROLE.name
+        ));
+    }
+    Ok(())
+}
+
 fn read_key(image: &SealedCapabilityImage) -> Result<SigningKey, String> {
     let image = image.try_clone_for_transfer()?;
     let mut seed = [0_u8; KEY_BYTES];
@@ -201,7 +272,8 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
 
     use fe2o3_compiler_execution_protocol::{
-        CompilerExecutionIssuerMeasurementV1, CompilerExecutionIssuerPolicyV1,
+        CompilerExecutionExternalAnchorServiceIdentityV1, CompilerExecutionIssuerMeasurementV1,
+        CompilerExecutionIssuerPolicyV1, CompilerExecutionSupervisorDeploymentV1,
     };
 
     use super::*;
@@ -216,6 +288,24 @@ mod tests {
             SigningKey::from_bytes(&[seed.wrapping_add(1); KEY_BYTES])
                 .verifying_key()
                 .to_bytes(),
+        )
+        .unwrap()
+    }
+
+    fn deployment(
+        policy: &CompilerExecutionIssuerPolicyV1,
+        service_uid: u32,
+        service_gid: u32,
+    ) -> CompilerExecutionSupervisorDeploymentV1 {
+        let anchor_uid = if service_uid == 1 { 2 } else { 1 };
+        let anchor_gid = if service_gid == 1 { 2 } else { 1 };
+        CompilerExecutionSupervisorDeploymentV1::new(
+            service_uid,
+            service_gid,
+            CompilerExecutionExternalAnchorServiceIdentityV1::new(anchor_uid, anchor_gid).unwrap(),
+            CompilerExecutionIssuerMeasurementV1::new([4; 32], 4).unwrap(),
+            CompilerExecutionIssuerMeasurementV1::new([5; 32], 5).unwrap(),
+            policy,
         )
         .unwrap()
     }
@@ -267,6 +357,56 @@ mod tests {
                 .set_len(0)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn trusted_template_reissues_only_for_exact_current_deployment() {
+        if rustix::process::geteuid().is_root() || rustix::process::getegid().is_root() {
+            return;
+        }
+        let expected = policy(7);
+        let uid = rustix::process::geteuid().as_raw();
+        let gid = rustix::process::getegid().as_raw();
+        let exact_deployment = deployment(&expected, uid, gid);
+        let mut seed = [7; KEY_BYTES];
+        let template =
+            CompilerExecutionSigningKeyCapabilityV1::create_and_zeroize(&mut seed, &expected)
+                .unwrap();
+
+        let wrong_service_uid = if uid == 1 { 2 } else { 1 };
+        let wrong_deployment = deployment(&expected, wrong_service_uid, gid);
+        assert!(
+            CompilerExecutionSigningKeyCapabilityV1::reissue_template_for_current_service(
+                template.try_clone_for_transfer().unwrap(),
+                &wrong_deployment,
+                &expected,
+                uid,
+                gid,
+            )
+            .is_err()
+        );
+        assert!(
+            CompilerExecutionSigningKeyCapabilityV1::reissue_template_for_current_service(
+                template.try_clone_for_transfer().unwrap(),
+                &exact_deployment,
+                &policy(8),
+                uid,
+                gid,
+            )
+            .is_err()
+        );
+
+        let reissued =
+            CompilerExecutionSigningKeyCapabilityV1::reissue_template_for_current_service(
+                template.try_clone_for_transfer().unwrap(),
+                &exact_deployment,
+                &expected,
+                uid,
+                gid,
+            )
+            .unwrap();
+        assert_eq!(reissued.verifying_key(), *expected.verifying_key());
+        reissued.revalidate(&expected).unwrap();
     }
 
     #[test]
