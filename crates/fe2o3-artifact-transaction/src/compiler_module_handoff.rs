@@ -7544,6 +7544,182 @@ pub(crate) mod semantic_v3 {
         }
 
         #[test]
+        fn publication_object_inventory_rejects_module_metadata_mutations() {
+            let (temp, producer, attempt, receipt, expected_root, descriptors) =
+                exported_publication_objects(221);
+            let module = slot_path(
+                &temp.0,
+                &producer,
+                attempt,
+                CompilerModuleHandoffSlotV3::Production,
+            )
+            .join(PAYLOAD_ENTRY);
+            fs::set_permissions(&module, fs::Permissions::from_mode(0o640)).unwrap();
+            assert!(matches!(
+                crate::import_compiler_module_handoff_publication_objects_v1(
+                    descriptors,
+                    expected_root,
+                    &producer,
+                    receipt,
+                ),
+                Err(
+                    crate::CompilerModuleHandoffPublicationObjectErrorV1::InvalidDescriptor {
+                        role: crate::PublicationObjectRoleV1::ModulePayload,
+                        ref reason,
+                    }
+                ) if reason == "descriptor has the wrong permission mode"
+            ));
+
+            let (temp, producer, attempt, receipt, expected_root, descriptors) =
+                exported_publication_objects(222);
+            let module = slot_path(
+                &temp.0,
+                &producer,
+                attempt,
+                CompilerModuleHandoffSlotV3::Production,
+            )
+            .join(PAYLOAD_ENTRY);
+            fs::hard_link(&module, temp.0.join("module-hard-link")).unwrap();
+            assert!(matches!(
+                crate::import_compiler_module_handoff_publication_objects_v1(
+                    descriptors,
+                    expected_root,
+                    &producer,
+                    receipt,
+                ),
+                Err(
+                    crate::CompilerModuleHandoffPublicationObjectErrorV1::InvalidDescriptor {
+                        role: crate::PublicationObjectRoleV1::ModulePayload,
+                        ref reason,
+                    }
+                ) if reason == "regular object must have exactly one link"
+            ));
+
+            let (temp, producer, _attempt, receipt, expected_root, mut descriptors) =
+                exported_publication_objects(223);
+            descriptors[8] = publication_root_descriptor(&temp.0);
+            assert!(matches!(
+                crate::import_compiler_module_handoff_publication_objects_v1(
+                    descriptors,
+                    expected_root,
+                    &producer,
+                    receipt,
+                ),
+                Err(
+                    crate::CompilerModuleHandoffPublicationObjectErrorV1::InvalidDescriptor {
+                        role: crate::PublicationObjectRoleV1::ModulePayload,
+                        ref reason,
+                    }
+                ) if reason == "descriptor has the wrong object type"
+            ));
+        }
+
+        #[test]
+        fn publication_object_inventory_rejects_ready_record_tamper() {
+            let (temp, producer, attempt, receipt, expected_root, descriptors) =
+                exported_publication_objects(224);
+            let ready = slot_path(
+                &temp.0,
+                &producer,
+                attempt,
+                CompilerModuleHandoffSlotV3::Production,
+            )
+            .join(READY_ENTRY);
+            let mut bytes = fs::read(&ready).unwrap();
+            let last = bytes.last_mut().expect("ready record is nonempty");
+            *last ^= 1;
+            fs::write(ready, bytes).unwrap();
+
+            assert!(matches!(
+                crate::import_compiler_module_handoff_publication_objects_v1(
+                    descriptors,
+                    expected_root,
+                    &producer,
+                    receipt,
+                ),
+                Err(crate::CompilerModuleHandoffPublicationObjectErrorV1::Handoff(
+                    CompilerModuleHandoffErrorV3::InvalidSlot { ref reason, .. }
+                )) if reason == "record checksum mismatch"
+            ));
+        }
+
+        #[test]
+        fn publication_object_inventory_revalidation_rejects_module_digest_tamper() {
+            let (temp, producer, attempt, receipt, expected_root, descriptors) =
+                exported_publication_objects(225);
+            let inventory = crate::import_compiler_module_handoff_publication_objects_v1(
+                descriptors,
+                expected_root,
+                &producer,
+                receipt,
+            )
+            .unwrap();
+            let slot = slot_path(
+                &temp.0,
+                &producer,
+                attempt,
+                CompilerModuleHandoffSlotV3::Production,
+            );
+            let mut tampered = inventory.handoff().canonical_bytes().to_vec();
+            tampered[0] ^= 1;
+            rewrite_record_for_payload(&slot, &tampered, false);
+
+            assert!(matches!(
+                inventory.revalidate(),
+                Err(
+                    crate::CompilerModuleHandoffPublicationObjectErrorV1::Handoff(
+                        CompilerModuleHandoffErrorV3::DigestMismatch
+                    )
+                )
+            ));
+        }
+
+        #[test]
+        fn publication_object_inventory_rejects_attempt_registry_mutations() {
+            let (temp, producer, attempt, receipt, expected_root, descriptors) =
+                exported_publication_objects(226);
+            let attempts_path = temp.0.join(crate::ATTEMPT_FILE);
+            let mut attempts =
+                crate::attempt::AttemptRegistry::decode(&fs::read(&attempts_path).unwrap())
+                    .unwrap();
+            attempts
+                .claim_backend(&producer.stable_source, attempt)
+                .unwrap();
+            fs::write(&attempts_path, attempts.encode().unwrap()).unwrap();
+            assert!(matches!(
+                crate::import_compiler_module_handoff_publication_objects_v1(
+                    descriptors,
+                    expected_root,
+                    &producer,
+                    receipt,
+                ),
+                Err(crate::CompilerModuleHandoffPublicationObjectErrorV1::Attempt {
+                    ref reason,
+                }) if reason == "attempt is not the exact frontend-owned building generation without a backend receipt"
+            ));
+
+            let (temp, producer, _attempt, receipt, expected_root, descriptors) =
+                exported_publication_objects(227);
+            let inventory = crate::import_compiler_module_handoff_publication_objects_v1(
+                descriptors,
+                expected_root,
+                &producer,
+                receipt,
+            )
+            .unwrap();
+            let attempts_path = temp.0.join(crate::ATTEMPT_FILE);
+            let mut bytes = fs::read(&attempts_path).unwrap();
+            bytes[0] ^= 1;
+            fs::write(attempts_path, bytes).unwrap();
+            assert!(matches!(
+                inventory.revalidate(),
+                Err(crate::CompilerModuleHandoffPublicationObjectErrorV1::Attempt {
+                    ref reason,
+                }) if reason == "bad attempt registry magic"
+            ));
+        }
+
+        #[test]
         fn publication_object_inventory_rejects_producer_and_slot_roster_growth() {
             for (seed, producer_roster) in [(209, true), (210, false)] {
                 let (temp, producer, attempt, receipt, expected_root, descriptors) =
