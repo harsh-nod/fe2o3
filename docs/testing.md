@@ -118,6 +118,28 @@ host-specific compiler/code-object profile. It does not authenticate origin,
 run the GPU, establish source/Verus-to-machine refinement, prove memory safety
 or race freedom, or grant publication, load, launch, or parity authority.
 
+## External rollback crash and replay coverage
+
+The external monotonic service and the local compiler Worker ledger exercise
+opposite sides of the same restart protocol:
+
+```text
+cargo test --locked -p fe2o3-external-anchor-service --all-targets
+cargo test --locked -p fe2o3-broker-authority-service --lib -- --test-threads=1
+bash scripts/build-static-external-anchor-service.sh
+```
+
+The first suite interrupts the real atomic state replacement before and after
+cleanup, create, write, file sync, rename, and directory sync, and interrupts
+the daemon before and after receive, durable exchange, and send. Every restart
+must recover exactly the prior or proposed state and exact request replay must
+terminate at one proposed head. The broker suite covers the complementary local
+journal orderings, queued-response recovery, exact challenge re-emission,
+anchor-committed restart, and every retained-record boundary. These tests prove
+deterministic same-host protocol recovery. Production rollback authority still
+requires the root-managed distinct-UID anchor to be wired into the deployed
+supervisor and qualified as an independently administered service.
+
 ## Retained bounded MoE evidence
 
 The obsolete MoE V1/V2 host routes and their workload-specific hardware

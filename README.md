@@ -294,8 +294,12 @@ checks the fresh signed response, and returns move-only authority-free evidence.
 Backend receipt acquisition, lossless V2 carriage, exact protected
 Worker-record verification, receipt-bearing V3 VerifyCurrent response, and the
 receipt-complete Worker V3 promotion boundary are implemented.
-Deployed distinct-UID service provisioning, the concrete protected verifier,
-and external monotonic anchor remain absent. A fixed
+The durable external monotonic service, measured distinct-UID launcher, and
+root-owned coordinator exist, and their persistence plus packet loops now
+converge to only the exact prior or proposed state across every injected
+create/write/fsync/rename and receive/exchange/send interruption. Deployed
+root-coordinator-to-supervisor wiring, the combined privileged qualification,
+and the concrete protected verifier remain absent. A fixed
 receipt sidecar and publication ACK now
 carry the exact journal, occurrence, receipt, Worker record, sequence, and
 advanced rollback anchor without granting authority from wire bytes. The

@@ -221,9 +221,13 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   role-separated signing-key capability bound to that manifest. Its
   descriptor-only process entrypoint admits the shared locked profile and exact
   deployment-bound sealed executable before reading the key, opens only existing
-  state, closes all unrelated descriptors, and serves the sole exact peer. The
-  distinct-UID root provisioner, deployed supervisor provisioning, and final
-  verifier authority remain pending.
+  state, closes all unrelated descriptors, and serves the sole exact peer. Its
+  production persistence and packet paths have exhaustive injected-crash coverage
+  around cleanup, create, write, file sync, rename, directory sync, receive,
+  exchange, and send. Restart admits only the exact prior or proposed state and
+  exact challenge replay advances at most once. The distinct-UID root coordinator
+  and its endpoint/pidfd transfer are implemented; deployed supervisor wiring,
+  combined privileged qualification, and final verifier authority remain pending.
 - Versioned artifact, descriptor, durable-publication, and HSA records exist.
   Host execution has one workload-neutral Worker V3 graph. An arbitrary
   manifest cannot manufacture a Rust signature, verifier decision, load

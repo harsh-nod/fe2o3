@@ -13,6 +13,16 @@ position. Stale, future, malformed, and key-substituted challenges fail closed.
 Any uncertain persistence failure poisons the in-memory service so it cannot
 issue another response before restart and state revalidation.
 
+The production persistence path has deterministic fault-injection coverage
+before and after cleanup, state-file creation, write, file sync, atomic rename,
+and directory sync. Recovery admits only the exact prior or proposed state at
+all twelve boundaries, removes an abandoned next-state file, and converges to
+one proposed head when the original challenge is replayed. The daemon loop has
+the same coverage before and after receive, durable exchange, and send. A lost
+request leaves the prior state, while a lost response after commit reopens the
+proposed state and returns the same signed observation without advancing the
+sequence again.
+
 Provisioning can atomically open existing state or initialize genesis while
 holding the same exclusive directory lock. Genesis is created only for an
 exactly absent state file; malformed, inaccessible, or key-substituted state
@@ -39,9 +49,10 @@ opens or initializes state, creates the unnamed socketpair after adopting the
 dedicated identity, transfers one endpoint, and executes this daemon. The
 root coordinator now prepares and launches that helper under the distinct locked
 service account, retains pidfd and reaping custody, and authenticates the
-completed exec and live endpoint. Its authoritative root-only qualification and
-the concrete admitted endpoint/pidfd transfer into compiler-execution supervisor
-construction remain open. Creating the socketpair after the credential
+completed exec and live endpoint. The endpoint/pidfd transfer type is
+implemented, but wiring it into deployed compiler-execution supervisor
+construction and running that combined authoritative root-only qualification
+remain open. Creating the socketpair after the credential
 transition makes the supervisor's `SO_PEERCRED`, unnamed-address, and
 distinct-UID checks simultaneously satisfiable.
 
