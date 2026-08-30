@@ -712,6 +712,7 @@ enum ReviewedTestProtectedRosterVerifierFault {
 struct ReviewedTestProtectedRosterVerifier {
     fault: ReviewedTestProtectedRosterVerifierFault,
     calls: usize,
+    foreign_finalizer: Option<RevalidatedProtectedWorkerV3FinalizerDerivationV1>,
 }
 
 // SAFETY: this request-echoing aggregate backend is confined to the receipt-bearing integration
@@ -768,6 +769,11 @@ where
         let proof_inputs = request
             .validate_compiler_proof_inputs_v4()
             .expect("the integration fixture carries canonical compiler proof inputs");
+        let finalizer_derivation = self.foreign_finalizer.take().unwrap_or_else(|| {
+            request
+                .independently_revalidate_finalizer_derivation()
+                .expect("the exact fixture finalizer derivation must replay")
+        });
         let mut entries = request
             .marker_entries()
             .iter()
@@ -870,6 +876,7 @@ where
         // aggregate promotion and fail-closed field validation can be exercised.
         Ok(unsafe {
             WorkerV3ProtectedRosterVerificationEvidenceV1::new(
+                finalizer_derivation,
                 compiler_execution,
                 proof_inputs,
                 [0xc1; 32],
@@ -931,6 +938,7 @@ where
             ReviewedTestProtectedRosterVerifier {
                 fault: ReviewedTestProtectedRosterVerifierFault::None,
                 calls: 0,
+                foreign_finalizer: None,
             }
             .verify_protected_roster(request)
         }
@@ -2082,6 +2090,7 @@ fn protected_roster_verifier_authenticates_one_artifact_and_borrowed_typed_entri
         WorkerV3ProtectedRosterVerifierAdapterV1::new(ReviewedTestProtectedRosterVerifier {
             fault: ReviewedTestProtectedRosterVerifierFault::None,
             calls: 0,
+            foreign_finalizer: None,
         });
     let authenticated =
         AuthenticatedWorkerV3RosterV1::<WorkerV3SyntheticTwoTransformRoster>::authenticate(
@@ -2096,6 +2105,16 @@ fn protected_roster_verifier_authenticates_one_artifact_and_borrowed_typed_entri
         admitted_lineage
     );
     assert_eq!(authenticated.verification().entries().len(), 2);
+    let finalizer = authenticated.verification().finalizer_derivation();
+    assert_eq!(
+        finalizer.finalized_hsaco_identity().sha256(),
+        &authenticated.verification().finalized_hsaco_sha256(),
+    );
+    assert!(!finalizer.proves_llvm_to_machine_semantic_refinement());
+    assert!(!finalizer.grants_compiler_authority());
+    assert!(!finalizer.grants_publication_authority());
+    assert!(!finalizer.grants_load_authority());
+    assert!(!finalizer.grants_launch_authority());
     assert!(
         authenticated
             .verification()
@@ -2136,6 +2155,16 @@ fn protected_roster_verifier_authenticates_one_artifact_and_borrowed_typed_entri
         );
         assert_eq!(first.physical_kernel().name(), "synthetic_first_transform");
         assert_eq!(
+            second
+                .aggregate_verification()
+                .finalizer_derivation()
+                .identity(),
+            authenticated
+                .verification()
+                .finalizer_derivation()
+                .identity(),
+        );
+        assert_eq!(
             second.entry_verification().marker_binding_identity(),
             SYNTHETIC_SECOND_TRANSFORM_BINDING,
         );
@@ -2158,6 +2187,57 @@ fn protected_roster_verifier_authenticates_one_artifact_and_borrowed_typed_entri
     ));
     drop(authenticated);
     drop(reacquire_current_hsaco_publication_lease_v3(&directory.0, &claim).unwrap());
+}
+
+#[test]
+fn protected_roster_verifier_rejects_same_hsaco_from_foreign_finalizer_derivation() {
+    let (_primary_directory, primary) = recovered_synthetic_two_kernel_host_fixture();
+    let (_foreign_directory, foreign) = recover_published_worker_v3_fixture(
+        worker_v3_fixture::published_synthetic_two_kernel_worker_v3_fixture_with_llvm_build_identity(
+            "upstream-llvm-test-build-foreign-roster",
+        ),
+    );
+    assert_eq!(
+        primary.exact_artifact_bytes(),
+        foreign.exact_artifact_bytes()
+    );
+    assert_ne!(
+        primary.wire().replay().transcript(),
+        foreign.wire().replay().transcript(),
+    );
+
+    let foreign_admission = admit_recovered_worker_v3_descriptor_v1(
+        foreign,
+        KernelId::from_bytes(SYNTHETIC_SECOND_TRANSFORM_BINDING),
+    )
+    .unwrap();
+    let foreign_finalizer = audit_recovered_worker_v3_verification_v1::<
+        WorkerV3SyntheticSecondTransformMarker,
+        _,
+    >(&foreign_admission, &mut FinalizerCapturingWorkerV3Auditor)
+    .unwrap();
+    drop(foreign_admission);
+
+    let primary_admission =
+        admit_recovered_worker_v3_roster_v1::<WorkerV3SyntheticTwoTransformRoster>(primary)
+            .unwrap();
+    let mut verifier =
+        WorkerV3ProtectedRosterVerifierAdapterV1::new(ReviewedTestProtectedRosterVerifier {
+            fault: ReviewedTestProtectedRosterVerifierFault::None,
+            calls: 0,
+            foreign_finalizer: Some(foreign_finalizer),
+        });
+    let error = AuthenticatedWorkerV3RosterV1::<WorkerV3SyntheticTwoTransformRoster>::authenticate(
+        primary_admission,
+        &mut verifier,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        WorkerV3RosterVerificationAuthenticationErrorV1::Decision(
+            WorkerV3RosterVerificationDecisionErrorV1::IdentityMismatch("finalizer derivation")
+        )
+    ));
 }
 
 #[test]
@@ -2247,6 +2327,7 @@ fn protected_roster_verifier_rejects_common_and_per_entry_substitution() {
             WorkerV3ProtectedRosterVerifierAdapterV1::new(ReviewedTestProtectedRosterVerifier {
                 fault,
                 calls: 0,
+                foreign_finalizer: None,
             });
         let error =
             AuthenticatedWorkerV3RosterV1::<WorkerV3SyntheticTwoTransformRoster>::authenticate(

@@ -349,6 +349,18 @@ impl<R> RecoveredWorkerV3PinnedRosterV1<R> {
         self.artifact.compiler_execution_receipt()
     }
 
+    pub(crate) const fn finalizer_derivation(
+        &self,
+    ) -> &RevalidatedProtectedWorkerV3FinalizerDerivationV1 {
+        self.artifact.finalizer_derivation()
+    }
+
+    pub(crate) const fn finalizer_replay(
+        &self,
+    ) -> &fe2o3_runtime_protocol::WorkerV3LoadEnvelopeWireV1 {
+        self.artifact.finalizer_replay()
+    }
+
     /// Exact descriptor-source association was independently checked during construction.
     /// This does not authenticate compiler process origin or formal verification authority.
     pub const fn authenticates_descriptor_source(&self) -> bool {
@@ -569,7 +581,8 @@ fn derive_roster_host_lineage_identity(
         .expect("exact roster admission rejects an empty roster")
         .lineage;
     debug_assert!(entrypoints.iter().all(|entrypoint| {
-        entrypoint.lineage.capsule_sha256 == first.capsule_sha256
+        entrypoint.lineage.finalizer_derivation_sha256 == first.finalizer_derivation_sha256
+            && entrypoint.lineage.capsule_sha256 == first.capsule_sha256
             && entrypoint.lineage.formal_memory_sha256 == first.formal_memory_sha256
             && entrypoint.lineage.proof_binding_sha256 == first.proof_binding_sha256
             && entrypoint.lineage.finalized_sha256 == first.finalized_sha256

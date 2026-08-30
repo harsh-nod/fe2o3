@@ -202,10 +202,19 @@ pub(crate) fn published_worker_v3_fixture_with_llvm_build_identity(
 #[allow(dead_code)]
 /// Publishes a hand-authored two-entry fixture; this is not compiler-produced provenance.
 pub(crate) fn published_synthetic_two_kernel_worker_v3_fixture() -> PublishedWorkerV3Fixture {
+    published_synthetic_two_kernel_worker_v3_fixture_with_llvm_build_identity(
+        EvidenceConfig::BASE.llvm_build_identity,
+    )
+}
+
+#[allow(dead_code)]
+pub(crate) fn published_synthetic_two_kernel_worker_v3_fixture_with_llvm_build_identity(
+    llvm_build_identity: &'static str,
+) -> PublishedWorkerV3Fixture {
     let fixture = synthetic_two_kernel_slice_fixture_with_descriptor_table(
         &synthetic_two_kernel_slice_descriptor_table(),
     );
-    published_worker_v3_fixture_from_raw_hsaco_for_kernels(
+    published_worker_v3_fixture_from_raw_hsaco_for_kernels_with_config(
         fixture.bytes,
         &[
             ("synthetic_first_transform", "synthetic_first_transform.kd"),
@@ -214,6 +223,10 @@ pub(crate) fn published_synthetic_two_kernel_worker_v3_fixture() -> PublishedWor
                 "synthetic_second_transform.kd",
             ),
         ],
+        EvidenceConfig {
+            llvm_build_identity,
+            ..EvidenceConfig::BASE
+        },
     )
 }
 
@@ -226,17 +239,6 @@ pub(crate) fn published_worker_v3_fixture_from_raw_hsaco(
     published_worker_v3_fixture_from_raw_hsaco_for_kernels_with_config(
         raw_hsaco,
         &[(entry_symbol, descriptor_symbol)],
-        EvidenceConfig::BASE,
-    )
-}
-
-fn published_worker_v3_fixture_from_raw_hsaco_for_kernels(
-    raw_hsaco: Vec<u8>,
-    kernel_symbols: &[(&str, &str)],
-) -> PublishedWorkerV3Fixture {
-    published_worker_v3_fixture_from_raw_hsaco_for_kernels_with_config(
-        raw_hsaco,
-        kernel_symbols,
         EvidenceConfig::BASE,
     )
 }

@@ -1333,7 +1333,9 @@ impl WorkerV3RosterVerificationChallengeIdentityV1 {
 ///
 /// V4 compiler proof inputs are common capsule evidence. They do not independently establish a
 /// proof-to-executable, Rust layout, or Rust effect theorem for each roster entry. The protected
-/// aggregate backend must establish those per-entry joins separately.
+/// aggregate backend must establish those per-entry joins separately. It must also independently
+/// reconstruct the finalizer derivation from the exact replay; a host-projected digest is not
+/// finalizer custody.
 pub struct WorkerV3RosterVerificationRequestV1<'admission, R> {
     challenge: WorkerV3RosterVerificationChallengeIdentityV1,
     roster_identity: WorkerV3VerificationRosterIdentityV1,
@@ -1353,6 +1355,36 @@ impl<R: CompilerGeneratedKernelExpectationRosterV1> WorkerV3RosterVerificationRe
 
     pub const fn lineage_identity(&self) -> WorkerV3HostLineageIdentityV1 {
         self.admission.lineage_identity()
+    }
+
+    /// Returns the derivation independently reconstructed by host roster admission.
+    pub const fn finalizer_derivation(&self) -> &RevalidatedProtectedWorkerV3FinalizerDerivationV1 {
+        self.admission.finalizer_derivation()
+    }
+
+    /// Reconstructs a second move-only finalizer owner from the exact borrowed envelope replay.
+    ///
+    /// Protected aggregate backends use this operation instead of echoing host projections. The
+    /// returned owner remains authority-free and is compared again during decision promotion.
+    pub fn independently_revalidate_finalizer_derivation(
+        &self,
+    ) -> Result<RevalidatedProtectedWorkerV3FinalizerDerivationV1, WorkerV3HsacoPublicationErrorV1>
+    {
+        let replay = self.admission.finalizer_replay();
+        revalidate_protected_worker_v3_finalizer_derivation_v1(
+            replay.publication_intent_record().attempt(),
+            replay.outer_handoff(),
+            replay.external_provider_payloads(),
+            replay.transcript(),
+            self.finalized_hsaco_bytes(),
+        )
+    }
+
+    /// Returns the finalizer identity bound into every entry lineage and the roster lineage.
+    pub const fn finalizer_derivation_sha256(&self) -> [u8; 32] {
+        self.admission
+            .lineage_evidence()
+            .finalizer_derivation_sha256()
     }
 
     pub fn marker_entries(&self) -> &'static [CompilerGeneratedKernelExpectationRosterEntryV1] {
@@ -1630,9 +1662,11 @@ impl WorkerV3ProtectedRosterEntryEvidenceV1 {
 
 /// One protected result for a complete marker roster.
 ///
-/// The V4 proof owner is common capsule custody. `entries` separately supplies the protected
-/// proof-to-executable, layout, effect, and universal-safety join for every canonical marker.
+/// The finalizer derivation and V4 proof owner are common artifact custody. `entries` separately
+/// supplies the protected proof-to-executable, layout, effect, and universal-safety join for every
+/// canonical marker.
 pub struct WorkerV3ProtectedRosterVerificationEvidenceV1 {
+    finalizer_derivation: RevalidatedProtectedWorkerV3FinalizerDerivationV1,
     compiler_execution: WorkerV3CompilerExecutionVerificationV1,
     proof_inputs: ValidatedCompilerProofInputsV4,
     verifier_measurement_sha256: [u8; 32],
@@ -1645,9 +1679,11 @@ impl WorkerV3ProtectedRosterVerificationEvidenceV1 {
     ///
     /// # Safety
     ///
-    /// The common coordinates must bind the exact aggregate request and `entries` must cover every
-    /// request entry exactly once in canonical descriptor order.
+    /// `finalizer_derivation` must be independently reconstructed from the exact request replay,
+    /// the common coordinates must bind the exact aggregate request, and `entries` must cover
+    /// every request entry exactly once in canonical descriptor order.
     pub unsafe fn new(
+        finalizer_derivation: RevalidatedProtectedWorkerV3FinalizerDerivationV1,
         compiler_execution: WorkerV3CompilerExecutionVerificationV1,
         proof_inputs: ValidatedCompilerProofInputsV4,
         verifier_measurement_sha256: [u8; 32],
@@ -1655,6 +1691,7 @@ impl WorkerV3ProtectedRosterVerificationEvidenceV1 {
         entries: Vec<WorkerV3ProtectedRosterEntryEvidenceV1>,
     ) -> Self {
         Self {
+            finalizer_derivation,
             compiler_execution,
             proof_inputs,
             verifier_measurement_sha256,
@@ -1670,10 +1707,12 @@ impl WorkerV3ProtectedRosterVerificationEvidenceV1 {
 ///
 /// Implementations must satisfy the compiler-policy, protected Worker-ledger, and external
 /// rollback obligations of [`WorkerV3ProtectedVerifierBackendV1`] once for the exact common
-/// artifact. They must additionally inspect every descriptor and independently selected physical
-/// executable, authenticate one ordered entry result for every marker, and establish each result
-/// for all concrete invocations satisfying that marker's generated contracts. The common V4 proof
-/// owner alone is not a compiler-produced multi-root proof-to-executable theorem.
+/// artifact. They must independently reconstruct and retain the move-only finalizer derivation from
+/// the exact replay, rather than echoing a host digest. They must additionally inspect every
+/// descriptor and independently selected physical executable, authenticate one ordered entry result
+/// for every marker, and establish each result for all concrete invocations satisfying that
+/// marker's generated contracts. The common V4 proof owner alone is not a compiler-produced
+/// multi-root proof-to-executable theorem.
 pub unsafe trait WorkerV3ProtectedRosterVerifierBackendV1<
     R: CompilerGeneratedKernelExpectationRosterV1,
 >
@@ -1726,6 +1765,7 @@ impl<B> WorkerV3ProtectedRosterVerifierAdapterV1<B> {
             finalized_length: request.finalized_hsaco_length(),
             target: request.target(),
             code_object_version: request.code_object_version(),
+            finalizer_derivation: evidence.finalizer_derivation,
             compiler_execution: evidence.compiler_execution,
             proof_inputs: evidence.proof_inputs,
             verifier_measurement_sha256: evidence.verifier_measurement_sha256,
@@ -1747,6 +1787,7 @@ pub struct WorkerV3RosterVerificationDecisionV1 {
     finalized_length: u64,
     target: fe2o3_amd_target::AmdTargetId,
     code_object_version: CodeObjectVersion,
+    finalizer_derivation: RevalidatedProtectedWorkerV3FinalizerDerivationV1,
     compiler_execution: WorkerV3CompilerExecutionVerificationV1,
     proof_inputs: ValidatedCompilerProofInputsV4,
     verifier_measurement_sha256: [u8; 32],
@@ -1777,6 +1818,11 @@ impl WorkerV3RosterVerificationDecisionV1 {
 
     pub const fn finalized_hsaco_length(&self) -> u64 {
         self.finalized_length
+    }
+
+    /// Returns protected finalizer custody independently reconstructed from the exact roster replay.
+    pub const fn finalizer_derivation(&self) -> &RevalidatedProtectedWorkerV3FinalizerDerivationV1 {
+        &self.finalizer_derivation
     }
 
     pub const fn compiler_execution(&self) -> &WorkerV3CompilerExecutionVerificationV1 {
@@ -2126,6 +2172,10 @@ fn validate_roster_decision<R: CompilerGeneratedKernelExpectationRosterV1>(
         (
             decision.finalized_length == request.finalized_hsaco_length(),
             "finalized HSACO length",
+        ),
+        (
+            decision.finalizer_derivation.identity() == request.finalizer_derivation().identity(),
+            "finalizer derivation",
         ),
         (decision.target == request.target(), "target"),
         (
