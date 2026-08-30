@@ -1788,7 +1788,8 @@ impl<'a, 'module> FunctionVerifier<'a, 'module> {
         let rhs_scalar = rhs_ty.as_scalar();
         let valid = match op {
             BinaryOp::ShiftLeft | BinaryOp::ShiftRight => {
-                lhs_scalar.is_some_and(ScalarType::is_integer)
+                lhs_ty == rhs_ty
+                    && lhs_scalar.is_some_and(ScalarType::is_integer)
                     && rhs_scalar.is_some_and(ScalarType::is_integer)
             }
             BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor => {

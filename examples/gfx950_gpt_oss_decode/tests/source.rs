@@ -1,4 +1,6 @@
-use fe2o3_gfx950_gpt_oss_decode::{OPENAI_GPT_OSS_COMMIT, PROFILE_BOUNDARY};
+use fe2o3_gfx950_gpt_oss_decode::{
+    CONTEXT_TOKENS, EXPERTS, HIDDEN_SIZE, MATRIX_ROWS, OPENAI_GPT_OSS_COMMIT, PROFILE_BOUNDARY,
+};
 
 #[test]
 fn production_source_preserves_the_fixed_layer_tile_contract() {
@@ -9,8 +11,8 @@ fn production_source_preserves_the_fixed_layer_tile_contract() {
     assert_eq!(source.matches("multiply_accumulate(\n").count(), 4);
     assert_eq!(source.matches("multiply_accumulate_fp4(").count(), 4);
     assert!(source.contains("while source < 64"));
-    assert!(source.contains("local_expert0 = lane_index * 2"));
-    assert!(source.contains("local_expert1 = local_expert0 + 1"));
+    assert!(source.contains("local_expert0 = lane_index.wrapping_mul(2)"));
+    assert!(source.contains("local_expert1 = local_expert0.wrapping_add(1)"));
     assert!(source.contains("let selected = (id0 as usize)"));
     assert!(!source.contains("unsafe"));
     assert_eq!(OPENAI_GPT_OSS_COMMIT.len(), 40);
@@ -19,6 +21,10 @@ fn production_source_preserves_the_fixed_layer_tile_contract() {
     assert!(PROFILE_BOUNDARY.contains("selected top-1 MLP1"));
     assert!(PROFILE_BOUNDARY.contains("attention rows 8..16"));
     assert!(PROFILE_BOUNDARY.contains("expert rows 1..16"));
+    assert_eq!(HIDDEN_SIZE, 2880);
+    assert_eq!(CONTEXT_TOKENS, 16);
+    assert_eq!(CONTEXT_TOKENS, MATRIX_ROWS);
+    assert_eq!(EXPERTS, 128);
 }
 
 #[test]
@@ -96,4 +102,29 @@ fn materialized_components_preserve_all_three_exact_stage_exports() {
     assert_eq!(source.matches("multiply_accumulate(\n").count(), 4);
     assert_eq!(source.matches("multiply_accumulate_fp4(").count(), 4);
     assert!(!source.contains("unsafe"));
+}
+
+#[test]
+fn router_selector_uses_the_exact_boolean_xor_complement() {
+    let sources = [
+        include_str!("../src/kernel.rs"),
+        include_str!("../src/kernel_components.rs"),
+        include_str!("../src/kernel_held_fragments.rs"),
+        include_str!("../src/kernel_interleaved_stores.rs"),
+        include_str!("../src/kernel_pipelined_attention.rs"),
+        include_str!("../src/kernel_router_serial.rs"),
+        include_str!("../src/kernel_scalar_attention.rs"),
+    ];
+    for source in sources {
+        let compact = source.split_whitespace().collect::<String>();
+        assert!(!source.contains("1 - take"));
+        assert!(source.contains("take ^ 1"));
+        assert!(compact.contains("wrapping_mul(take).wrapping_add"));
+    }
+
+    for predicate in [false, true] {
+        let take = predicate as u32;
+        assert!(take <= 1);
+        assert_eq!(take ^ 1, 1 - take);
+    }
 }

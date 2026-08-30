@@ -61,7 +61,8 @@ pub fn gfx950_moe_route_fp4_t16_e4_k2_v1(
     let mut depth = 0_usize;
     while depth < HIDDEN {
         let bits = activations.load_or(token, depth, 0);
-        let magnitude = ((0xc864_3210_u32 >> (((bits & 7) as u32) * 4)) & 15) as f32 * 0.5;
+        let magnitude =
+            (0xc864_3210_u32.wrapping_shr(((bits & 7) as u32).wrapping_mul(4)) & 15) as f32 * 0.5;
         let sign = 1.0 - 2.0 * ((bits >> 3) & 1) as f32;
         let activation = sign * magnitude;
         route_logit0 += activation * router_weights.load_or(0, depth, 0.0);
@@ -73,12 +74,23 @@ pub fn gfx950_moe_route_fp4_t16_e4_k2_v1(
     let precedes12 = (route_logit1 >= route_logit2) as u32;
     let precedes13 = (route_logit1 >= route_logit3) as u32;
     let precedes23 = (route_logit2 >= route_logit3) as u32;
-    let rank1 = (route_logit0 >= route_logit1) as u32 + 2 - precedes12 - precedes13;
-    let rank2 = (route_logit0 >= route_logit2) as u32 + precedes12 + 1 - precedes23;
-    let rank3 = (route_logit0 >= route_logit3) as u32 + precedes13 + precedes23;
-    let first_local = ((rank1 == 0) as u32) + 2 * ((rank2 == 0) as u32) + 3 * ((rank3 == 0) as u32);
-    let second_local =
-        ((rank1 == 1) as u32) + 2 * ((rank2 == 1) as u32) + 3 * ((rank3 == 1) as u32);
+    let rank1 = ((route_logit0 >= route_logit1) as u32)
+        .wrapping_add(2)
+        .wrapping_sub(precedes12)
+        .wrapping_sub(precedes13);
+    let rank2 = ((route_logit0 >= route_logit2) as u32)
+        .wrapping_add(precedes12)
+        .wrapping_add(1)
+        .wrapping_sub(precedes23);
+    let rank3 = ((route_logit0 >= route_logit3) as u32)
+        .wrapping_add(precedes13)
+        .wrapping_add(precedes23);
+    let first_local = ((rank1 == 0) as u32)
+        .wrapping_add(2_u32.wrapping_mul((rank2 == 0) as u32))
+        .wrapping_add(3_u32.wrapping_mul((rank3 == 0) as u32));
+    let second_local = ((rank1 == 1) as u32)
+        .wrapping_add(2_u32.wrapping_mul((rank2 == 1) as u32))
+        .wrapping_add(3_u32.wrapping_mul((rank3 == 1) as u32));
     let first_logit = if first_local == 0 {
         route_logit0
     } else if first_local == 1 {
@@ -149,18 +161,22 @@ pub fn gfx950_moe_route_fp4_t16_e4_k2_v1(
     }
     let dispatch_expert = (lane / DISPATCH_CAPACITY) as u32;
     let count_expert = lane as u32;
-    let wanted = lane - dispatch_expert as usize * DISPATCH_CAPACITY;
+    let wanted = lane.wrapping_sub((dispatch_expert as usize).wrapping_mul(DISPATCH_CAPACITY));
     let mut seen = 0_usize;
     let mut dispatched = -1_i32;
     let mut count = 0_u32;
     let mut record = 0_usize;
     while record < TOKENS * TOP_K {
-        let selected = ((packed_routes >> (2 * record)) & 3) as u32;
+        let selected = (packed_routes.wrapping_shr(2_usize.wrapping_mul(record) as u32) & 3) as u32;
         let dispatch_matches = (selected == dispatch_expert) as usize;
         let choose = ((dispatch_matches != 0) & (seen == wanted)) as i32;
-        dispatched += (record as i32 - dispatched) * choose;
-        count += (selected == count_expert) as u32;
-        seen += dispatch_matches;
+        dispatched = dispatched.wrapping_add(
+            (record as i32)
+                .wrapping_sub(dispatched)
+                .wrapping_mul(choose),
+        );
+        count = count.wrapping_add((selected == count_expert) as u32);
+        seen = seen.wrapping_add(dispatch_matches);
         record += 1;
     }
     if lane < EXPERTS {
@@ -208,12 +224,15 @@ pub fn gfx950_moe_expert_rank_fp4_fp8_v1(
         || top_experts.len() < TOKENS * TOP_K
         || top_weights.len() < TOKENS * TOP_K
         || output.len() < TOKENS * OUTPUT
-        || first_expert as usize + 1 >= EXPERTS
+        || first_expert as usize >= EXPERTS - 1
     {
         return;
     }
+    let second_expert = first_expert.wrapping_add(1);
     let lane = WaveLane::<Wave64>::current();
-    let first_offset = first_expert as usize * HIDDEN * OUTPUT;
+    let first_offset = (first_expert as usize)
+        .wrapping_mul(HIDDEN)
+        .wrapping_mul(OUTPUT);
     #[cfg(not(feature = "ablation-expert-serial"))]
     let (first_values, second_values, shared_values) = {
         let Ok(activations_view) =
@@ -232,7 +251,7 @@ pub fn gfx950_moe_expert_rank_fp4_fp8_v1(
         let first_weights = first_weights_view.load_k128n16(&lane, 0, 0);
         let Ok(second_weights_view) = Gfx950Fp8MfmaBMatrix::row_major(
             expert_weights,
-            first_offset + HIDDEN * OUTPUT,
+            first_offset.wrapping_add(HIDDEN * OUTPUT),
             HIDDEN,
             OUTPUT,
             OUTPUT,
@@ -300,7 +319,7 @@ pub fn gfx950_moe_expert_rank_fp4_fp8_v1(
         let activations_second = activations_view.load_m16k128(&lane, 0, 0);
         let Ok(second_weights_view) = Gfx950Fp8MfmaBMatrix::row_major(
             expert_weights,
-            first_offset + HIDDEN * OUTPUT,
+            first_offset.wrapping_add(HIDDEN * OUTPUT),
             HIDDEN,
             OUTPUT,
             OUTPUT,
@@ -353,10 +372,10 @@ pub fn gfx950_moe_expert_rank_fp4_fp8_v1(
             $shared2:ident,
             $shared3:ident
         ) => {
-            let element = lane_index + $output_component * 64;
+            let element = lane_index.wrapping_add($output_component * 64);
             let token = element / OUTPUT;
-            let column = element - token * OUTPUT;
-            let source_lane = (((token / 4) * OUTPUT + column) as u32) & 63;
+            let column = element & (OUTPUT - 1);
+            let source_lane = ((token / 4).wrapping_mul(OUTPUT).wrapping_add(column) as u32) & 63;
             let $first0 = subgroup.broadcast_f32::<64>(first_values[0], source_lane);
             let $first1 = subgroup.broadcast_f32::<64>(first_values[1], source_lane);
             let $first2 = subgroup.broadcast_f32::<64>(first_values[2], source_lane);
@@ -404,9 +423,9 @@ pub fn gfx950_moe_expert_rank_fp4_fp8_v1(
             $shared2:ident,
             $shared3:ident
         ) => {{
-            let element = lane_index + $output_component * 64;
+            let element = lane_index.wrapping_add($output_component * 64);
             let token = element / OUTPUT;
-            let accumulator_component = token - (token / 4) * 4;
+            let accumulator_component = token & 3;
             let first = if accumulator_component == 0 {
                 $first0
             } else if accumulator_component == 1 {
@@ -434,20 +453,21 @@ pub fn gfx950_moe_expert_rank_fp4_fp8_v1(
             } else {
                 $shared3
             };
-            let route_base = token * TOP_K;
+            let route_base = token.wrapping_mul(TOP_K);
+            let route_second = route_base.wrapping_add(1);
             let selected0 = top_experts[route_base];
-            let selected1 = top_experts[route_base + 1];
+            let selected1 = top_experts[route_second];
             let gate0 = top_weights[route_base];
-            let gate1 = top_weights[route_base + 1];
+            let gate1 = top_weights[route_second];
             let mut result = 0.0_f32;
             if selected0 == first_expert {
                 result += gate0 * (first / (1.0 + math.exp_f32(-first)));
-            } else if selected0 == first_expert + 1 {
+            } else if selected0 == second_expert {
                 result += gate0 * (second / (1.0 + math.exp_f32(-second)));
             }
             if selected1 == first_expert {
                 result += gate1 * (first / (1.0 + math.exp_f32(-first)));
-            } else if selected1 == first_expert + 1 {
+            } else if selected1 == second_expert {
                 result += gate1 * (second / (1.0 + math.exp_f32(-second)));
             }
             if include_shared_expert != 0 {
@@ -619,7 +639,10 @@ pub fn gfx950_speculative_transaction_v1(
             let accepts3 = accepts2
                 & (draft_tokens.load_or($candidate, 3, 0) == target_tokens.load_or(0, 3, 0))
                 & (draft_scores.load_or($candidate, 3, 0.0) >= thresholds.load_or(0, 3, 0.0));
-            accepts0 as usize + accepts1 as usize + accepts2 as usize + accepts3 as usize
+            (accepts0 as usize)
+                .wrapping_add(accepts1 as usize)
+                .wrapping_add(accepts2 as usize)
+                .wrapping_add(accepts3 as usize)
         }};
     }
     let acceptance_candidate = lane & (CANDIDATES - 1);
@@ -635,10 +658,12 @@ pub fn gfx950_speculative_transaction_v1(
     let accepts3 = accepts2
         & (draft_tokens.load_or(acceptance_candidate, 3, 0) == target_tokens.load_or(0, 3, 0))
         & (draft_scores.load_or(acceptance_candidate, 3, 0.0) >= thresholds.load_or(0, 3, 0.0));
-    let accepted_local =
-        accepts0 as usize + accepts1 as usize + accepts2 as usize + accepts3 as usize;
+    let accepted_local = (accepts0 as usize)
+        .wrapping_add(accepts1 as usize)
+        .wrapping_add(accepts2 as usize)
+        .wrapping_add(accepts3 as usize);
     let candidate = lane / STATE_WIDTH;
-    let state_element = lane - candidate * STATE_WIDTH;
+    let state_element = lane.wrapping_sub(candidate.wrapping_mul(STATE_WIDTH));
     #[cfg(not(feature = "ablation-speculative-recompute-prefix"))]
     let accepted = Gfx950Subgroup::current()
         .broadcast_f32::<64>(accepted_local as f32, candidate as u32 & 63)
@@ -655,10 +680,25 @@ pub fn gfx950_speculative_transaction_v1(
     }
     let mut value = base_state[state_element];
     if accepted == DRAFT_STEPS {
-        value += proposed_deltas[candidate * DRAFT_STEPS * STATE_WIDTH + state_element];
-        value += proposed_deltas[(candidate * DRAFT_STEPS + 1) * STATE_WIDTH + state_element];
-        value += proposed_deltas[(candidate * DRAFT_STEPS + 2) * STATE_WIDTH + state_element];
-        value += proposed_deltas[(candidate * DRAFT_STEPS + 3) * STATE_WIDTH + state_element];
+        value += proposed_deltas[candidate
+            .wrapping_mul(DRAFT_STEPS)
+            .wrapping_mul(STATE_WIDTH)
+            .wrapping_add(state_element)];
+        value += proposed_deltas[candidate
+            .wrapping_mul(DRAFT_STEPS)
+            .wrapping_add(1)
+            .wrapping_mul(STATE_WIDTH)
+            .wrapping_add(state_element)];
+        value += proposed_deltas[candidate
+            .wrapping_mul(DRAFT_STEPS)
+            .wrapping_add(2)
+            .wrapping_mul(STATE_WIDTH)
+            .wrapping_add(state_element)];
+        value += proposed_deltas[candidate
+            .wrapping_mul(DRAFT_STEPS)
+            .wrapping_add(3)
+            .wrapping_mul(STATE_WIDTH)
+            .wrapping_add(state_element)];
     }
     if let Some(slot) = output_state.get_mut(thread::index_1d()) {
         *slot = value;
@@ -705,13 +745,13 @@ pub fn gfx950_qwen_ngram_gather_v1(
     if query >= QUERIES {
         return;
     }
-    let base = query * NGRAM;
+    let base = query.wrapping_mul(NGRAM);
     let mut hash = 1_469_598_103_934_665_603_u64;
     hash ^= queries[base] as u32 as u64;
     hash = hash.wrapping_mul(1_099_511_628_211);
-    hash ^= queries[base + 1] as u32 as u64;
+    hash ^= queries[base.wrapping_add(1)] as u32 as u64;
     hash = hash.wrapping_mul(1_099_511_628_211);
-    hash ^= queries[base + 2] as u32 as u64;
+    hash ^= queries[base.wrapping_add(2)] as u32 as u64;
     hash = hash.wrapping_mul(1_099_511_628_211);
     let mut best_slot = usize::MAX;
     let mut best_priority = i32::MIN;
@@ -720,9 +760,11 @@ pub fn gfx950_qwen_ngram_gather_v1(
         ($probe:literal) => {{
             let slot = hash.wrapping_add($probe) as usize & (TABLE_SIZE - 1);
             let equal = (table_hashes[slot] == hash)
-                & (table_grams[slot * NGRAM] == queries[base])
-                & (table_grams[slot * NGRAM + 1] == queries[base + 1])
-                & (table_grams[slot * NGRAM + 2] == queries[base + 2]);
+                & (table_grams[slot.wrapping_mul(NGRAM)] == queries[base])
+                & (table_grams[slot.wrapping_mul(NGRAM).wrapping_add(1)]
+                    == queries[base.wrapping_add(1)])
+                & (table_grams[slot.wrapping_mul(NGRAM).wrapping_add(2)]
+                    == queries[base.wrapping_add(2)]);
             if equal {
                 let priority = priorities[slot];
                 if priority > best_priority || (priority == best_priority && slot < best_slot) {
@@ -738,9 +780,11 @@ pub fn gfx950_qwen_ngram_gather_v1(
         ($probe:literal) => {{
             let slot = hash.wrapping_add($probe) as usize & (TABLE_SIZE - 1);
             let equal = (table_hashes[slot] == hash)
-                & (table_grams[slot * NGRAM] == queries[base])
-                & (table_grams[slot * NGRAM + 1] == queries[base + 1])
-                & (table_grams[slot * NGRAM + 2] == queries[base + 2]);
+                & (table_grams[slot.wrapping_mul(NGRAM)] == queries[base])
+                & (table_grams[slot.wrapping_mul(NGRAM).wrapping_add(1)]
+                    == queries[base.wrapping_add(1)])
+                & (table_grams[slot.wrapping_mul(NGRAM).wrapping_add(2)]
+                    == queries[base.wrapping_add(2)]);
             if equal {
                 let priority = priorities[slot];
                 if priority > best_priority || (priority == best_priority && slot < best_slot) {
@@ -830,8 +874,8 @@ pub fn gfx950_stage_gradient_shard_v1(input: &[f32], mut output: DisjointSlice<f
         if element < 4 {
             let tile_base = element * 4;
             tile0 = input[tile_base];
-            tile1 = input[tile_base + 1];
-            tile2 = input[tile_base + 2];
+            tile1 = input[tile_base.wrapping_add(1)];
+            tile2 = input[tile_base.wrapping_add(2)];
             tile3 = input[tile_base + 3];
         }
         let source = (element / 4) as u32;
@@ -926,27 +970,35 @@ pub fn gfx950_muon_update_4x4_v1(
     let inverse_norm = 1.0 / (norm + 1.0e-6);
     matrix_value *= inverse_norm;
     let row = matrix_element / 4;
-    let column = matrix_element - row * 4;
+    let column = matrix_element.wrapping_sub(row.wrapping_mul(4));
+    let row_base = row.wrapping_mul(4);
+    let column_base = column.wrapping_mul(4);
     macro_rules! muon_iteration {
         () => {{
             let mut gram = 0.0_f32;
-            gram += subgroup.broadcast_f32::<64>(matrix_value, (row * 4) as u32 & 63)
-                * subgroup.broadcast_f32::<64>(matrix_value, (column * 4) as u32 & 63);
-            gram += subgroup.broadcast_f32::<64>(matrix_value, (row * 4 + 1) as u32 & 63)
-                * subgroup.broadcast_f32::<64>(matrix_value, (column * 4 + 1) as u32 & 63);
-            gram += subgroup.broadcast_f32::<64>(matrix_value, (row * 4 + 2) as u32 & 63)
-                * subgroup.broadcast_f32::<64>(matrix_value, (column * 4 + 2) as u32 & 63);
-            gram += subgroup.broadcast_f32::<64>(matrix_value, (row * 4 + 3) as u32 & 63)
-                * subgroup.broadcast_f32::<64>(matrix_value, (column * 4 + 3) as u32 & 63);
+            gram += subgroup.broadcast_f32::<64>(matrix_value, row_base as u32 & 63)
+                * subgroup.broadcast_f32::<64>(matrix_value, column_base as u32 & 63);
+            gram += subgroup
+                .broadcast_f32::<64>(matrix_value, row_base.wrapping_add(1) as u32 & 63)
+                * subgroup
+                    .broadcast_f32::<64>(matrix_value, column_base.wrapping_add(1) as u32 & 63);
+            gram += subgroup
+                .broadcast_f32::<64>(matrix_value, row_base.wrapping_add(2) as u32 & 63)
+                * subgroup
+                    .broadcast_f32::<64>(matrix_value, column_base.wrapping_add(2) as u32 & 63);
+            gram += subgroup
+                .broadcast_f32::<64>(matrix_value, row_base.wrapping_add(3) as u32 & 63)
+                * subgroup
+                    .broadcast_f32::<64>(matrix_value, column_base.wrapping_add(3) as u32 & 63);
             let mut cubic = 0.0_f32;
-            cubic += subgroup.broadcast_f32::<64>(gram, (row * 4) as u32 & 63)
+            cubic += subgroup.broadcast_f32::<64>(gram, row_base as u32 & 63)
                 * subgroup.broadcast_f32::<64>(matrix_value, column as u32 & 63);
-            cubic += subgroup.broadcast_f32::<64>(gram, (row * 4 + 1) as u32 & 63)
-                * subgroup.broadcast_f32::<64>(matrix_value, (4 + column) as u32 & 63);
-            cubic += subgroup.broadcast_f32::<64>(gram, (row * 4 + 2) as u32 & 63)
-                * subgroup.broadcast_f32::<64>(matrix_value, (8 + column) as u32 & 63);
-            cubic += subgroup.broadcast_f32::<64>(gram, (row * 4 + 3) as u32 & 63)
-                * subgroup.broadcast_f32::<64>(matrix_value, (12 + column) as u32 & 63);
+            cubic += subgroup.broadcast_f32::<64>(gram, row_base.wrapping_add(1) as u32 & 63)
+                * subgroup.broadcast_f32::<64>(matrix_value, column.wrapping_add(4) as u32 & 63);
+            cubic += subgroup.broadcast_f32::<64>(gram, row_base.wrapping_add(2) as u32 & 63)
+                * subgroup.broadcast_f32::<64>(matrix_value, column.wrapping_add(8) as u32 & 63);
+            cubic += subgroup.broadcast_f32::<64>(gram, row_base.wrapping_add(3) as u32 & 63)
+                * subgroup.broadcast_f32::<64>(matrix_value, column.wrapping_add(12) as u32 & 63);
             matrix_value = 1.5 * matrix_value - 0.5 * cubic;
         }};
     }

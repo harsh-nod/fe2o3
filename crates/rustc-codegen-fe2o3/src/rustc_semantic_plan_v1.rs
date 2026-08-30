@@ -1091,6 +1091,8 @@ impl<'a, 'tcx> BodyPreflightV1<'a, 'tcx> {
                 | BinOp::BitOr
                 | BinOp::Shl
                 | BinOp::Shr
+                | BinOp::ShlUnchecked
+                | BinOp::ShrUnchecked
                 | BinOp::Eq
                 | BinOp::Lt
                 | BinOp::Le

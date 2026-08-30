@@ -9338,24 +9338,99 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                         right_ty = converted_ty;
                     }
                 }
+                let is_shift = matches!(
+                    operation,
+                    SemanticBinaryOpV1::ShiftLeft | SemanticBinaryOpV1::ShiftRight
+                );
+                if is_shift {
+                    let (Some(left_scalar), Some(right_scalar)) =
+                        (left_ty.as_scalar(), right_ty.as_scalar())
+                    else {
+                        return Err(unsupported(
+                            0,
+                            Some(block.index()),
+                            statement,
+                            "semantic shift operands are not integral scalars",
+                        ));
+                    };
+                    if !left_scalar.is_integer() || !right_scalar.is_integer() {
+                        return Err(unsupported(
+                            0,
+                            Some(block.index()),
+                            statement,
+                            "semantic shift operands are not integral scalars",
+                        ));
+                    }
+                    let cast_path =
+                        plan_integer_cast_v1(right_scalar, left_scalar).ok_or_else(|| {
+                            unsupported(
+                                0,
+                                Some(block.index()),
+                                statement,
+                                "semantic shift count has no exact Kernel IR cast rule",
+                            )
+                        })?;
+                    for (kind, target_scalar) in cast_path.into_iter().flatten() {
+                        let target = Type::Scalar(target_scalar);
+                        let converted = self.emit(
+                            operations,
+                            target.clone(),
+                            OperationKind::Cast {
+                                kind,
+                                value: right,
+                                to: target,
+                            },
+                        )?;
+                        right = converted
+                            .value()
+                            .map_err(|detail| {
+                                unsupported(0, Some(block.index()), statement, detail)
+                            })?
+                            .0;
+                    }
+                    let width = match left_scalar {
+                        ScalarType::Index => 64,
+                        scalar => scalar.bit_width().ok_or_else(|| {
+                            unsupported(
+                                0,
+                                Some(block.index()),
+                                statement,
+                                "semantic shift left operand has no fixed integer width",
+                            )
+                        })?,
+                    };
+                    let mask = integer_constant(&left_ty, u128::from(width - 1)).map_err(|_| {
+                        unsupported(
+                            0,
+                            Some(block.index()),
+                            statement,
+                            "semantic shift mask has no Kernel IR constant representation",
+                        )
+                    })?;
+                    let mask =
+                        self.emit(operations, left_ty.clone(), OperationKind::Constant(mask))?;
+                    let (mask, _) = mask
+                        .value()
+                        .map_err(|detail| unsupported(0, Some(block.index()), statement, detail))?;
+                    let normalized = self.emit(
+                        operations,
+                        left_ty.clone(),
+                        OperationKind::Binary {
+                            op: BinaryOp::BitAnd,
+                            lhs: right,
+                            rhs: mask,
+                        },
+                    )?;
+                    (right, right_ty) = normalized
+                        .value()
+                        .map_err(|detail| unsupported(0, Some(block.index()), statement, detail))?;
+                }
                 if left_ty != right_ty {
                     return Err(unsupported(
                         0,
                         Some(block.index()),
                         statement,
                         "semantic binary operand types differ",
-                    ));
-                }
-                if matches!(
-                    operation,
-                    SemanticBinaryOpV1::ShiftLeft | SemanticBinaryOpV1::ShiftRight
-                ) && !left_ty.as_scalar().is_some_and(ScalarType::is_integer)
-                {
-                    return Err(unsupported(
-                        0,
-                        Some(block.index()),
-                        statement,
-                        "semantic shift operands are not integral scalars",
                     ));
                 }
                 if let Some(predicate) = lower_compare(*operation) {
@@ -19447,6 +19522,7 @@ mod resource_tests {
     }
 
     fn lower_heterogeneous_u8_shift(
+        operation: SemanticBinaryOpV1,
         right: SemanticOperandV1,
         max_operations: usize,
     ) -> Result<Vec<Operation>, ProductionSemanticKirErrorV1> {
@@ -19546,7 +19622,7 @@ mod resource_tests {
             Some(0),
             u8_ty,
             &SemanticRvalueKindV1::Binary {
-                operation: SemanticBinaryOpV1::ShiftRight,
+                operation,
                 left,
                 right,
             },
@@ -19562,8 +19638,9 @@ mod resource_tests {
             i32_ty,
             SemanticConstantValueV1::Scalar(SemanticScalarValueV1::new(3, 4).unwrap()),
         ));
-        let operations = lower_heterogeneous_u8_shift(right, 2).unwrap();
-        assert_eq!(operations.len(), 2);
+        let operations =
+            lower_heterogeneous_u8_shift(SemanticBinaryOpV1::ShiftRight, right, 4).unwrap();
+        assert_eq!(operations.len(), 4);
         assert!(matches!(
             &operations[0].kind,
             OperationKind::Constant(Constant::U8(3))
@@ -19572,13 +19649,33 @@ mod resource_tests {
             &operations[1],
             Operation {
                 results,
+                kind: OperationKind::Constant(Constant::U8(7)),
+                ..
+            } if results == &[ValueDef::new(ValueId(3), Type::Scalar(ScalarType::U8))]
+        ));
+        assert!(matches!(
+            &operations[2],
+            Operation {
+                results,
+                kind: OperationKind::Binary {
+                    op: BinaryOp::BitAnd,
+                    lhs: ValueId(2),
+                    rhs: ValueId(3),
+                },
+                ..
+            } if results == &[ValueDef::new(ValueId(4), Type::Scalar(ScalarType::U8))]
+        ));
+        assert!(matches!(
+            &operations[3],
+            Operation {
+                results,
                 kind: OperationKind::Binary {
                     op: BinaryOp::ShiftRight,
                     lhs: ValueId(0),
-                    rhs: ValueId(2),
+                    rhs: ValueId(4),
                 },
                 ..
-            } if results == &[ValueDef::new(ValueId(3), Type::Scalar(ScalarType::U8))]
+            } if results == &[ValueDef::new(ValueId(5), Type::Scalar(ScalarType::U8))]
         ));
         assert!(!operations.iter().any(|operation| matches!(
             operation.kind,
@@ -19587,18 +19684,58 @@ mod resource_tests {
     }
 
     #[test]
-    fn heterogeneous_shift_count_rejects_nonconstant_and_unrepresentable_values() {
+    fn heterogeneous_shift_count_is_cast_masked_and_well_typed() {
         let i32_ty = SemanticTypeIdV1::from_index(2);
         let dynamic = SemanticOperandV1::Copy(
             SemanticPlaceV1::new(SemanticLocalIdV1::from_index(2), vec![], i32_ty).unwrap(),
         );
-        assert!(matches!(
-            lower_heterogeneous_u8_shift(dynamic, 2),
-            Err(ProductionSemanticKirErrorV1::Unsupported {
-                detail: "semantic binary operand types differ",
-                ..
-            })
-        ));
+        for (semantic, lowered) in [
+            (SemanticBinaryOpV1::ShiftLeft, BinaryOp::ShiftLeft),
+            (SemanticBinaryOpV1::ShiftRight, BinaryOp::ShiftRight),
+        ] {
+            let operations = lower_heterogeneous_u8_shift(semantic, dynamic.clone(), 4).unwrap();
+            assert!(matches!(
+                operations.as_slice(),
+                [
+                    Operation {
+                        results: cast_results,
+                        kind: OperationKind::Cast {
+                            kind: CastKind::Truncate,
+                            value: ValueId(1),
+                            to: Type::Scalar(ScalarType::U8),
+                        },
+                        ..
+                    },
+                    Operation {
+                        results: mask_results,
+                        kind: OperationKind::Constant(Constant::U8(7)),
+                        ..
+                    },
+                    Operation {
+                        results: and_results,
+                        kind: OperationKind::Binary {
+                            op: BinaryOp::BitAnd,
+                            lhs: ValueId(2),
+                            rhs: ValueId(3),
+                        },
+                        ..
+                    },
+                    Operation {
+                        results: shift_results,
+                        kind: OperationKind::Binary {
+                            op,
+                            lhs: ValueId(0),
+                            rhs: ValueId(4),
+                        },
+                        ..
+                    }
+                ] if *op == lowered
+                    && cast_results == &[ValueDef::new(ValueId(2), Type::Scalar(ScalarType::U8))]
+                    && mask_results == &[ValueDef::new(ValueId(3), Type::Scalar(ScalarType::U8))]
+                    && and_results == &[ValueDef::new(ValueId(4), Type::Scalar(ScalarType::U8))]
+                    && shift_results == &[ValueDef::new(ValueId(5), Type::Scalar(ScalarType::U8))]
+            ));
+        }
 
         let constant = |bits| {
             SemanticOperandV1::Constant(SemanticConstantV1::new(
@@ -19607,10 +19744,24 @@ mod resource_tests {
             ))
         };
         for hostile in [constant(u128::from(u32::MAX)), constant(256)] {
+            let operations =
+                lower_heterogeneous_u8_shift(SemanticBinaryOpV1::ShiftRight, hostile, 5).unwrap();
+            assert!(operations.iter().any(|operation| matches!(
+                operation.kind,
+                OperationKind::Cast {
+                    kind: CastKind::Truncate,
+                    to: Type::Scalar(ScalarType::U8),
+                    ..
+                }
+            )));
+            assert!(operations.iter().any(|operation| matches!(
+                operation.kind,
+                OperationKind::Constant(Constant::U8(7))
+            )));
             assert!(matches!(
-                lower_heterogeneous_u8_shift(hostile, 2),
-                Err(ProductionSemanticKirErrorV1::Unsupported {
-                    detail: "semantic binary operand types differ",
+                operations.last().map(|operation| &operation.kind),
+                Some(OperationKind::Binary {
+                    op: BinaryOp::ShiftRight,
                     ..
                 })
             ));

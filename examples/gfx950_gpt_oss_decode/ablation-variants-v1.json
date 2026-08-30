@@ -5,7 +5,7 @@
     "full_kernel_export": "gfx950_gpt_oss_120b_decode_megakernel_v1",
     "same_full_kernel_abi_inputs_and_cpu_oracle": true,
     "batch": 1,
-    "hidden": 512,
+    "hidden": 2880,
     "experts": 128,
     "selected_experts": 4,
     "attention_tokens": 16,

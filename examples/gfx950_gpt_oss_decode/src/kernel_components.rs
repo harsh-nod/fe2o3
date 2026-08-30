@@ -51,8 +51,8 @@ pub fn gfx950_gpt_oss_120b_router_v1(
     else {
         return Err(KernelError::InvalidArgument);
     };
-    let local_expert0 = lane_index * 2;
-    let local_expert1 = local_expert0 + 1;
+    let local_expert0 = lane_index.wrapping_mul(2);
+    let local_expert1 = local_expert0.wrapping_add(1);
     let mut local_logit0 = 0.0_f32;
     let mut local_logit1 = 0.0_f32;
     let mut depth = 0_usize;
@@ -74,8 +74,8 @@ pub fn gfx950_gpt_oss_120b_router_v1(
     let mut source = 0_u32;
     while source < 64 {
         {
-            let mut candidate_score = subgroup.broadcast_f32::<64>(local_logit0, source);
-            let mut candidate_id = source * 2;
+            let mut candidate_score = subgroup.broadcast_f32::<64>(local_logit0, source & 63);
+            let mut candidate_id = source.wrapping_mul(2);
             let take = ((candidate_score > best0)
                 | ((candidate_score == best0) & (candidate_id < id0)))
                 as u32;
@@ -84,9 +84,13 @@ pub fn gfx950_gpt_oss_120b_router_v1(
             let old_score = best0;
             let old_id = id0;
             best0 = candidate_score * choose + old_score * keep;
-            id0 = candidate_id * take + old_id * (1 - take);
+            id0 = candidate_id
+                .wrapping_mul(take)
+                .wrapping_add(old_id.wrapping_mul(take ^ 1));
             candidate_score = old_score * choose + candidate_score * keep;
-            candidate_id = old_id * take + candidate_id * (1 - take);
+            candidate_id = old_id
+                .wrapping_mul(take)
+                .wrapping_add(candidate_id.wrapping_mul(take ^ 1));
             let take = ((candidate_score > best1)
                 | ((candidate_score == best1) & (candidate_id < id1)))
                 as u32;
@@ -95,9 +99,13 @@ pub fn gfx950_gpt_oss_120b_router_v1(
             let old_score = best1;
             let old_id = id1;
             best1 = candidate_score * choose + old_score * keep;
-            id1 = candidate_id * take + old_id * (1 - take);
+            id1 = candidate_id
+                .wrapping_mul(take)
+                .wrapping_add(old_id.wrapping_mul(take ^ 1));
             candidate_score = old_score * choose + candidate_score * keep;
-            candidate_id = old_id * take + candidate_id * (1 - take);
+            candidate_id = old_id
+                .wrapping_mul(take)
+                .wrapping_add(candidate_id.wrapping_mul(take ^ 1));
             let take = ((candidate_score > best2)
                 | ((candidate_score == best2) & (candidate_id < id2)))
                 as u32;
@@ -106,9 +114,13 @@ pub fn gfx950_gpt_oss_120b_router_v1(
             let old_score = best2;
             let old_id = id2;
             best2 = candidate_score * choose + old_score * keep;
-            id2 = candidate_id * take + old_id * (1 - take);
+            id2 = candidate_id
+                .wrapping_mul(take)
+                .wrapping_add(old_id.wrapping_mul(take ^ 1));
             candidate_score = old_score * choose + candidate_score * keep;
-            candidate_id = old_id * take + candidate_id * (1 - take);
+            candidate_id = old_id
+                .wrapping_mul(take)
+                .wrapping_add(candidate_id.wrapping_mul(take ^ 1));
             let take = ((candidate_score > best3)
                 | ((candidate_score == best3) & (candidate_id < id3)))
                 as u32;
@@ -117,11 +129,13 @@ pub fn gfx950_gpt_oss_120b_router_v1(
             let old_score = best3;
             let old_id = id3;
             best3 = candidate_score * choose + old_score * keep;
-            id3 = candidate_id * take + old_id * (1 - take);
+            id3 = candidate_id
+                .wrapping_mul(take)
+                .wrapping_add(old_id.wrapping_mul(take ^ 1));
         }
         {
-            let mut candidate_score = subgroup.broadcast_f32::<64>(local_logit1, source);
-            let mut candidate_id = source * 2 + 1;
+            let mut candidate_score = subgroup.broadcast_f32::<64>(local_logit1, source & 63);
+            let mut candidate_id = source.wrapping_mul(2).wrapping_add(1);
             let take = ((candidate_score > best0)
                 | ((candidate_score == best0) & (candidate_id < id0)))
                 as u32;
@@ -130,9 +144,13 @@ pub fn gfx950_gpt_oss_120b_router_v1(
             let old_score = best0;
             let old_id = id0;
             best0 = candidate_score * choose + old_score * keep;
-            id0 = candidate_id * take + old_id * (1 - take);
+            id0 = candidate_id
+                .wrapping_mul(take)
+                .wrapping_add(old_id.wrapping_mul(take ^ 1));
             candidate_score = old_score * choose + candidate_score * keep;
-            candidate_id = old_id * take + candidate_id * (1 - take);
+            candidate_id = old_id
+                .wrapping_mul(take)
+                .wrapping_add(candidate_id.wrapping_mul(take ^ 1));
             let take = ((candidate_score > best1)
                 | ((candidate_score == best1) & (candidate_id < id1)))
                 as u32;
@@ -141,9 +159,13 @@ pub fn gfx950_gpt_oss_120b_router_v1(
             let old_score = best1;
             let old_id = id1;
             best1 = candidate_score * choose + old_score * keep;
-            id1 = candidate_id * take + old_id * (1 - take);
+            id1 = candidate_id
+                .wrapping_mul(take)
+                .wrapping_add(old_id.wrapping_mul(take ^ 1));
             candidate_score = old_score * choose + candidate_score * keep;
-            candidate_id = old_id * take + candidate_id * (1 - take);
+            candidate_id = old_id
+                .wrapping_mul(take)
+                .wrapping_add(candidate_id.wrapping_mul(take ^ 1));
             let take = ((candidate_score > best2)
                 | ((candidate_score == best2) & (candidate_id < id2)))
                 as u32;
@@ -152,9 +174,13 @@ pub fn gfx950_gpt_oss_120b_router_v1(
             let old_score = best2;
             let old_id = id2;
             best2 = candidate_score * choose + old_score * keep;
-            id2 = candidate_id * take + old_id * (1 - take);
+            id2 = candidate_id
+                .wrapping_mul(take)
+                .wrapping_add(old_id.wrapping_mul(take ^ 1));
             candidate_score = old_score * choose + candidate_score * keep;
-            candidate_id = old_id * take + candidate_id * (1 - take);
+            candidate_id = old_id
+                .wrapping_mul(take)
+                .wrapping_add(candidate_id.wrapping_mul(take ^ 1));
             let take = ((candidate_score > best3)
                 | ((candidate_score == best3) & (candidate_id < id3)))
                 as u32;
@@ -163,7 +189,9 @@ pub fn gfx950_gpt_oss_120b_router_v1(
             let old_score = best3;
             let old_id = id3;
             best3 = candidate_score * choose + old_score * keep;
-            id3 = candidate_id * take + old_id * (1 - take);
+            id3 = candidate_id
+                .wrapping_mul(take)
+                .wrapping_add(old_id.wrapping_mul(take ^ 1));
         }
         source += 1;
     }
@@ -253,10 +281,10 @@ pub fn gfx950_gpt_oss_120b_attention_v1(
         return Err(KernelError::InvalidArgument);
     };
     let row_group = lane_index / CONTEXT_TOKENS;
-    let row0 = row_group * 4;
-    let row1 = row0 + 1;
-    let row2 = row0 + 2;
-    let row3 = row0 + 3;
+    let row0 = row_group.wrapping_mul(4);
+    let row1 = row0.wrapping_add(1);
+    let row2 = row0.wrapping_add(2);
+    let row3 = row0.wrapping_add(3);
     let sink0 = sinks.load_or(0, row0, 0.0);
     let sink1 = sinks.load_or(0, row1, 0.0);
     let sink2 = sinks.load_or(0, row2, 0.0);
@@ -294,10 +322,10 @@ pub fn gfx950_gpt_oss_120b_attention_v1(
     let mut token = 0_usize;
     while token < CONTEXT_TOKENS {
         let value = values.load_or(token, column, 0.0);
-        attention0 += subgroup.broadcast_f32::<16>(probability0, token as u32) * value;
-        attention1 += subgroup.broadcast_f32::<16>(probability1, token as u32) * value;
-        attention2 += subgroup.broadcast_f32::<16>(probability2, token as u32) * value;
-        attention3 += subgroup.broadcast_f32::<16>(probability3, token as u32) * value;
+        attention0 += subgroup.broadcast_f32::<16>(probability0, (token as u32) & 15) * value;
+        attention1 += subgroup.broadcast_f32::<16>(probability1, (token as u32) & 15) * value;
+        attention2 += subgroup.broadcast_f32::<16>(probability2, (token as u32) & 15) * value;
+        attention3 += subgroup.broadcast_f32::<16>(probability3, (token as u32) & 15) * value;
         token += 1;
     }
 
@@ -348,13 +376,14 @@ pub fn gfx950_gpt_oss_120b_expert_v1(
     let index = thread::index_1d();
     let lane_index = index.get();
     let lane = WaveLane::<Wave64>::current();
-    let Ok(packed) = StridedReadView2D::from_shared_slice(packed_top4, 0, 1, 1, 1)
-    else {
+    let Ok(packed) = StridedReadView2D::from_shared_slice(packed_top4, 0, 1, 1, 1) else {
         return Err(KernelError::InvalidArgument);
     };
     let selected = (packed.load_or(0, 0, 0) as usize) & (EXPERTS - 1);
     let column = lane_index % EXPERT_N_TILE;
-    let expert_reduction_base = selected * MXFP4_BLOCKS * EXPERT_K_TILE;
+    let expert_reduction_base = selected
+        .wrapping_mul(MXFP4_BLOCKS)
+        .wrapping_mul(EXPERT_K_TILE);
     let Ok(weights) = Gfx950Fp4MfmaBMatrix::row_major(
         expert_weight_blocks_fp4,
         0,
@@ -379,13 +408,25 @@ pub fn gfx950_gpt_oss_120b_expert_v1(
         return Err(KernelError::InvalidArgument);
     };
     let scale0 = activation_scale.load_or(0, 0, 0.0)
-        * weight_scale.load_or(selected * MXFP4_BLOCKS, column, 0.0);
+        * weight_scale.load_or(selected.wrapping_mul(MXFP4_BLOCKS), column, 0.0);
     let scale1 = activation_scale.load_or(0, 1, 0.0)
-        * weight_scale.load_or(selected * MXFP4_BLOCKS + 1, column, 0.0);
+        * weight_scale.load_or(
+            selected.wrapping_mul(MXFP4_BLOCKS).wrapping_add(1),
+            column,
+            0.0,
+        );
     let scale2 = activation_scale.load_or(0, 2, 0.0)
-        * weight_scale.load_or(selected * MXFP4_BLOCKS + 2, column, 0.0);
+        * weight_scale.load_or(
+            selected.wrapping_mul(MXFP4_BLOCKS).wrapping_add(2),
+            column,
+            0.0,
+        );
     let scale3 = activation_scale.load_or(0, 3, 0.0)
-        * weight_scale.load_or(selected * MXFP4_BLOCKS + 3, column, 0.0);
+        * weight_scale.load_or(
+            selected.wrapping_mul(MXFP4_BLOCKS).wrapping_add(3),
+            column,
+            0.0,
+        );
     let gfx950 = Gfx950Matrix::current();
 
     let Ok(activation_matrix0) = Gfx950Fp4MfmaAMatrix::row_major(
@@ -421,7 +462,7 @@ pub fn gfx950_gpt_oss_120b_expert_v1(
     let expert1 = gfx950
         .multiply_accumulate_fp4(
             activation_matrix1.load_m16k128(&lane, 0, 0),
-            weights.load_k128n16(&lane, expert_reduction_base + EXPERT_K_TILE, 0),
+            weights.load_k128n16(&lane, expert_reduction_base.wrapping_add(EXPERT_K_TILE), 0),
             Gfx950F32AccumulatorFragment::<Gfx950Fp4E2M1>::zero(&lane),
         )
         .into_values();
@@ -442,7 +483,11 @@ pub fn gfx950_gpt_oss_120b_expert_v1(
     let expert2 = gfx950
         .multiply_accumulate_fp4(
             activation_matrix2.load_m16k128(&lane, 0, 0),
-            weights.load_k128n16(&lane, expert_reduction_base + 2 * EXPERT_K_TILE, 0),
+            weights.load_k128n16(
+                &lane,
+                expert_reduction_base.wrapping_add(2 * EXPERT_K_TILE),
+                0,
+            ),
             Gfx950F32AccumulatorFragment::<Gfx950Fp4E2M1>::zero(&lane),
         )
         .into_values();
@@ -463,7 +508,11 @@ pub fn gfx950_gpt_oss_120b_expert_v1(
     let expert3 = gfx950
         .multiply_accumulate_fp4(
             activation_matrix3.load_m16k128(&lane, 0, 0),
-            weights.load_k128n16(&lane, expert_reduction_base + 3 * EXPERT_K_TILE, 0),
+            weights.load_k128n16(
+                &lane,
+                expert_reduction_base.wrapping_add(3 * EXPERT_K_TILE),
+                0,
+            ),
             Gfx950F32AccumulatorFragment::<Gfx950Fp4E2M1>::zero(&lane),
         )
         .into_values();

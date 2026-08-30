@@ -69,23 +69,27 @@ fn decode_fp8_e4m3_v1(value: u8) -> f32 {
     }
 }
 
-#[cfg(target_arch = "amdgpu")]
+#[cfg(any(target_arch = "amdgpu", test))]
 macro_rules! decode_fp8_e4m3_v1 {
     ($value:expr) => {{
         let bits = $value;
         let exponent = (bits >> 3_u8) & 0xf;
         let mantissa = bits & 0x7;
         let magnitude = if exponent == 0xf && mantissa == 0x7 {
-            let nan_source = f32::from(mantissa - 7_u8);
+            let nan_source = f32::from(mantissa ^ 7_u8);
             nan_source / nan_source
         } else if exponent == 0 {
             f32::from(mantissa) / 512.0
         } else {
-            let scale = if exponent < 8 {
-                f32::from(1_u8 << exponent) / 128.0
-            } else {
-                f32::from(1_u8 << (exponent - 7_u8))
-            };
+            let exponent0 = f32::from(exponent & 0x1);
+            let exponent1 = f32::from((exponent >> 1_u8) & 0x1);
+            let exponent2 = f32::from((exponent >> 2_u8) & 0x1);
+            let exponent3 = f32::from((exponent >> 3_u8) & 0x1);
+            let scale = (1.0 + exponent0)
+                * (1.0 + 3.0 * exponent1)
+                * (1.0 + 15.0 * exponent2)
+                * (1.0 + 255.0 * exponent3)
+                / 128.0;
             (1.0 + f32::from(mantissa) / 8.0) * scale
         };
         if bits & 0x80 == 0 {
@@ -220,7 +224,7 @@ fn kda_update_v1(
 ))]
 #[kernel(
     typed,
-    namespace = "32d98826b8e7144ccd84186aef763064c4d6f7fca5631c29314047ad462fd257",
+    namespace = "1bb95ea1c1a6dba00f16cefba570323638c550b4df1192d82c45817088520f10",
     launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
 )]
 pub fn gfx950_kda_gdn_decode(
@@ -323,7 +327,7 @@ pub fn gfx950_kda_gdn_decode(
     not(feature = "kernel-kda-prefill-channel-mask-v1"),
     kernel(
         typed,
-        namespace = "aaa9f9d6d19739146cfa7a4c759dfc76f8b0930b9bfd4a6dbbb3ee367d6baa30",
+        namespace = "65c813046838ac237dbc845ddb78d0b61db8c031914908a6a0a1304a338e68c0",
         launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
     )
 )]
@@ -331,7 +335,7 @@ pub fn gfx950_kda_gdn_decode(
     feature = "kernel-kda-prefill-channel-mask-v1",
     kernel(
         typed,
-        namespace = "4c95e18c7041c547f3f4868d77bb0031f243578ae65cce331bea915b16fa6698",
+        namespace = "a615c0a65c792796355f0c284c3964ec7f3a5485546a907d5b6e1876ec240a9f",
         launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
     )
 )]
@@ -626,7 +630,7 @@ fn attention_score_v1(q: &[u8], k: &[u8], token: usize) -> Option<f32> {
     not(feature = "kernel-content-sparse-attention-reciprocal-reuse-v1"),
     kernel(
         typed,
-        namespace = "9173ef11ab9a528cd764e5d7c8aea5347f72eb3b8d84aec7e9cbca5510ed8b49",
+        namespace = "8e4b6794b9080758a96900d9f3bedc81f043b9c733ce0348fd3d56ab46e4ccf7",
         launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
     )
 )]
@@ -634,7 +638,7 @@ fn attention_score_v1(q: &[u8], k: &[u8], token: usize) -> Option<f32> {
     feature = "kernel-content-sparse-attention-reciprocal-reuse-v1",
     kernel(
         typed,
-        namespace = "0cbe67b9610ebf0a07c14fa92cebd7b26b1f143e6eae3bc30846ffba8e8e3c15",
+        namespace = "f218efb0354f7130940595fdb01023c6a5ec4dfd290be3858934c069d0db78b7",
         launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
     )
 )]
@@ -1438,7 +1442,7 @@ pub fn gfx950_compressed_hybrid_attention(
 ))]
 #[kernel(
     typed,
-    namespace = "8ce6f447416acb25d3708e21b8f1b1ac79e9d3a40350d54c07492e082df0230c",
+    namespace = "0f1b91664465bf059b47aa1fda8168a1cb4901cbfb81fd4dc770184520fca412",
     launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1]),
     control_flow(loop_bounds(4, 4))
 )]
@@ -1537,7 +1541,7 @@ pub fn gfx950_attnres_aggregate(
 ))]
 #[kernel(
     typed,
-    namespace = "d6335f62afe3df03ec2466b441ea5dd82b55a87b6899f9c95722fb86b5907cd8",
+    namespace = "5a21124887ab5e89f2893f9a688ddc75efe2cf1c40dfda56be36acb530d69326",
     launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1]),
     control_flow(loop_bounds(4))
 )]
@@ -1561,9 +1565,10 @@ pub fn gfx950_four_branch_residual(
     }
     let math = DeviceMath::current();
     let mut value = residual[channel];
-    for branch in 0..4 {
-        let gate = 1.0 / (1.0 + math.exp_f32(-gate_logits[branch * CHANNELS_V1 + channel]));
-        value += 0.25 * gate * branches[branch * CHANNELS_V1 + channel];
+    for branch in 0_usize..4 {
+        let offset = branch.wrapping_mul(CHANNELS_V1).wrapping_add(channel);
+        let gate = 1.0 / (1.0 + math.exp_f32(-gate_logits[offset]));
+        value += 0.25 * gate * branches[offset];
     }
     if let Some(slot) = output.get_mut(index) {
         *slot = value;
@@ -1615,7 +1620,7 @@ pub fn gfx950_four_branch_residual(
 ))]
 #[kernel(
     typed,
-    namespace = "febc97fab4675a82add36de7ba400c3aef06fe5c788fc6083712033260b9c10c",
+    namespace = "e2bce999a5fa1929fa89c847d6dade5511566efd3cffca3003a77d00e870fdbf",
     launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1]),
     control_flow(loop_bounds(3))
 )]
@@ -1642,8 +1647,8 @@ pub fn gfx950_mhc_sinkhorn_mix(
     };
     let row = linear / CHANNELS_V1;
     let local_lane = linear % CHANNELS_V1;
-    let matrix_index =
-        (local_lane + row * MIXING_STREAMS_V1) % (MIXING_STREAMS_V1 * MIXING_STREAMS_V1);
+    let matrix_index = local_lane.wrapping_add(row.wrapping_mul(MIXING_STREAMS_V1))
+        % (MIXING_STREAMS_V1 * MIXING_STREAMS_V1);
     let mut matrix = math.exp_f32(logits.load_or(0, matrix_index, 0.0));
     for _iteration in 0..3 {
         let row_reciprocal = 1.0 / subgroup.reduce_sum_f32::<4>(matrix);
@@ -1651,9 +1656,9 @@ pub fn gfx950_mhc_sinkhorn_mix(
 
         let column = (local_lane as u32) & 3;
         let column_sum = subgroup.broadcast_f32::<16>(matrix, column)
-            + subgroup.broadcast_f32::<16>(matrix, (column + 4) & 15)
-            + subgroup.broadcast_f32::<16>(matrix, (column + 8) & 15)
-            + subgroup.broadcast_f32::<16>(matrix, (column + 12) & 15);
+            + subgroup.broadcast_f32::<16>(matrix, column.wrapping_add(4) & 15)
+            + subgroup.broadcast_f32::<16>(matrix, column.wrapping_add(8) & 15)
+            + subgroup.broadcast_f32::<16>(matrix, column.wrapping_add(12) & 15);
         matrix *= 1.0 / column_sum;
     }
     let weight0 = subgroup.broadcast_f32::<16>(matrix, 0);
@@ -1750,5 +1755,31 @@ pub fn gfx950_mhc_sinkhorn_mix(
             channel += 1;
         }
         row += 1;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::reference::decode_fp8_e4m3_reference_v1;
+
+    #[test]
+    fn target_fp8_e4m3_formula_matches_all_encodings() {
+        for bits in u8::MIN..=u8::MAX {
+            let actual = decode_fp8_e4m3_v1!(bits);
+            let expected = decode_fp8_e4m3_reference_v1(bits);
+            if matches!(bits, 0x7f | 0xff) {
+                assert!(actual.is_nan(), "0x{bits:02x} must decode as NaN");
+                assert!(expected.is_nan(), "reference 0x{bits:02x} must be NaN");
+            } else {
+                assert_eq!(
+                    actual.to_bits(),
+                    expected.to_bits(),
+                    "finite E4M3FN encoding 0x{bits:02x} changed"
+                );
+            }
+        }
+
+        assert_eq!(decode_fp8_e4m3_v1!(0x00).to_bits(), 0.0_f32.to_bits());
+        assert_eq!(decode_fp8_e4m3_v1!(0x80).to_bits(), (-0.0_f32).to_bits());
     }
 }

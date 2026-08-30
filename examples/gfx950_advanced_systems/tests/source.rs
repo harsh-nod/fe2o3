@@ -1,6 +1,7 @@
 use fe2o3_gfx950_advanced_systems::{
-    GFX950_ADVANCED_SYSTEMS_RUST_SOURCE_PRESENT_V1, GFX950_ADVANCED_SYSTEMS_SOURCE_BLOCKER,
-    GFX950_ADVANCED_SYSTEMS_SOURCE_LOWERING_SUPPORTED,
+    DISPATCH_CAPACITY, GFX950_ADVANCED_SYSTEMS_RUST_SOURCE_PRESENT_V1,
+    GFX950_ADVANCED_SYSTEMS_SOURCE_BLOCKER, GFX950_ADVANCED_SYSTEMS_SOURCE_LOWERING_SUPPORTED,
+    MUON_ELEMENTS, OUTPUT, STATE_WIDTH, TABLE_SIZE, TOKENS, TOP_K,
 };
 
 #[test]
@@ -53,4 +54,34 @@ fn rust_source_is_primary_and_uses_production_lowering() {
     assert!(crate_root.contains("ablation-route-unpacked is retained only"));
     assert_eq!(source.matches("namespace = \"").count(), 13);
     assert_eq!(source.matches("max_grid = [1, 1, 1]").count(), 11);
+    assert_eq!(source.matches("launch(required = [256, 1, 1]").count(), 3);
+    assert_eq!(source.matches("launch(required = [64, 1, 1]").count(), 10);
+
+    assert_eq!(OUTPUT, 16);
+    assert!(OUTPUT.is_power_of_two());
+    assert_eq!(TOP_K, 2);
+    assert_eq!(STATE_WIDTH, 8);
+    assert!(STATE_WIDTH.is_power_of_two());
+    assert_eq!(TABLE_SIZE, 16);
+    assert!(TABLE_SIZE.is_power_of_two());
+    assert_eq!(MUON_ELEMENTS, 16);
+    assert!(MUON_ELEMENTS.is_power_of_two());
+
+    assert_eq!(TOKENS * TOP_K, 32);
+    assert_eq!(DISPATCH_CAPACITY, TOKENS * TOP_K);
+    assert!(TOKENS * TOP_K <= i32::MAX as usize);
+    let compact = source.split_whitespace().collect::<String>();
+    assert!(compact.contains("(recordasi32).wrapping_sub(dispatched).wrapping_mul(choose)"));
+    assert!(source.contains("count.wrapping_add((selected == count_expert) as u32)"));
+    assert!(source.contains("seen.wrapping_add(dispatch_matches)"));
+    assert!(compact.contains(".wrapping_sub(precedes12).wrapping_sub(precedes13)"));
+    assert!(
+        compact.contains(
+            "lane.wrapping_sub((dispatch_expertasusize).wrapping_mul(DISPATCH_CAPACITY))"
+        )
+    );
+    assert!(source.contains(".wrapping_shr(((bits & 7) as u32).wrapping_mul(4))"));
+    assert!(compact.contains("packed_routes.wrapping_shr(2_usize.wrapping_mul(record)asu32)"));
+    assert!(source.contains("record += 1;"));
+    assert!(source.contains("depth += 1;"));
 }

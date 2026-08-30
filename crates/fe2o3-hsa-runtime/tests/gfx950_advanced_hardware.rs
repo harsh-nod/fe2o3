@@ -1199,6 +1199,48 @@ fn systems_plans(case: AdvancedCase) -> Result<Vec<LaunchPlan>, BoxError> {
                     buffers,
                 });
             }
+            for first_expert in [3_u32, u32::MAX] {
+                let canary = vec![0.25_f32; TOKENS * OUTPUT];
+                let mut preserved_output = f32_output("output", canary.clone(), 0.0);
+                let canary_bytes = value_bytes(&canary);
+                preserved_output.initial[GUARD_BYTES..GUARD_BYTES + canary_bytes.len()]
+                    .copy_from_slice(&canary_bytes);
+                let buffers = vec![
+                    input("activations", &activations),
+                    input("expert_weights", &weights),
+                    input("top_experts", &routing.top_experts),
+                    input("top_weights", &routing.top_weights),
+                    preserved_output,
+                ];
+                plans.push(LaunchPlan {
+                    label: format!("{} invalid first_expert {first_expert}", case.label),
+                    args: vec![
+                        PlannedArg::Slice {
+                            buffer: 0,
+                            elements: activations.len(),
+                        },
+                        PlannedArg::Slice {
+                            buffer: 1,
+                            elements: weights.len(),
+                        },
+                        PlannedArg::Slice {
+                            buffer: 2,
+                            elements: routing.top_experts.len(),
+                        },
+                        PlannedArg::Slice {
+                            buffer: 3,
+                            elements: routing.top_weights.len(),
+                        },
+                        PlannedArg::U32(first_expert),
+                        PlannedArg::U32(1),
+                        PlannedArg::Slice {
+                            buffer: 4,
+                            elements: TOKENS * OUTPUT,
+                        },
+                    ],
+                    buffers,
+                });
+            }
             Ok(plans)
         }
         "gfx950_combine_expert_ranks_v1" => {

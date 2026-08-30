@@ -115,7 +115,11 @@ fn source_is_safe_fixed_shape_rust_without_hip_escape_hatches() {
     assert!(!SOURCE.contains("unsafe"));
     assert!(!SOURCE.contains("include!"));
     assert_eq!(SOURCE.matches("macro_rules!").count(), 2);
-    assert!(SOURCE.contains("#[cfg(target_arch = \"amdgpu\")]\nmacro_rules! decode_fp8_e4m3_v1"));
+    assert!(
+        SOURCE.contains(
+            "#[cfg(any(target_arch = \"amdgpu\", test))]\nmacro_rules! decode_fp8_e4m3_v1"
+        )
+    );
     assert!(
         SOURCE.contains(
             "#[cfg(target_arch = \"amdgpu\")]\nmacro_rules! consider_sparse_candidate_v1"

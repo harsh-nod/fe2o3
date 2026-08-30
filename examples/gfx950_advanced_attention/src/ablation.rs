@@ -17,7 +17,7 @@ const RMS_EPSILON_V1: f32 = 1.0e-5;
 #[cfg(feature = "kernel-kda-decode-wave-tiled-v1")]
 #[kernel(
     typed,
-    namespace = "0b443b66dad3dfcf5b0371fd0eff95417e092ebf210e72579530370d27a0df02",
+    namespace = "8694f5eade82ca24253b385db2193a3828e5be457049e9ebfd6cc05e300abf00",
     launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
 )]
 pub fn gfx950_kda_gdn_decode(
@@ -80,7 +80,7 @@ pub fn gfx950_kda_gdn_decode(
 #[cfg(feature = "kernel-attnres-aggregate-explicit-reuse-v1")]
 #[kernel(
     typed,
-    namespace = "d0b89989ca0856b1b46c570ee4c7d736ee62e1568209cacfbffb61d5158b442b",
+    namespace = "fe6d11c689feb27ace6afe63785978ffefe8668f0b93fa0e33b50e5185b6fb43",
     launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
 )]
 pub fn gfx950_attnres_aggregate(
@@ -139,7 +139,7 @@ pub fn gfx950_attnres_aggregate(
 #[cfg(feature = "kernel-four-branch-residual-explicit-v1")]
 #[kernel(
     typed,
-    namespace = "61d9eb3a4348ae2ff0d3a43a566af303c69bf15f3ad452ebb46433f6c073da0d",
+    namespace = "5972789e1c05e3508b65dd3ce977460423b63b30b306e0a5d82ff4003d8b4d67",
     launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
 )]
 pub fn gfx950_four_branch_residual(
@@ -161,15 +161,18 @@ pub fn gfx950_four_branch_residual(
         return;
     }
     let math = DeviceMath::current();
+    let offset1 = CHANNELS_V1.wrapping_add(channel);
+    let offset2 = (2 * CHANNELS_V1).wrapping_add(channel);
+    let offset3 = (3 * CHANNELS_V1).wrapping_add(channel);
     let gate0 = 1.0 / (1.0 + math.exp_f32(-gate_logits[channel]));
-    let gate1 = 1.0 / (1.0 + math.exp_f32(-gate_logits[CHANNELS_V1 + channel]));
-    let gate2 = 1.0 / (1.0 + math.exp_f32(-gate_logits[2 * CHANNELS_V1 + channel]));
-    let gate3 = 1.0 / (1.0 + math.exp_f32(-gate_logits[3 * CHANNELS_V1 + channel]));
+    let gate1 = 1.0 / (1.0 + math.exp_f32(-gate_logits[offset1]));
+    let gate2 = 1.0 / (1.0 + math.exp_f32(-gate_logits[offset2]));
+    let gate3 = 1.0 / (1.0 + math.exp_f32(-gate_logits[offset3]));
     let value = residual[channel]
         + 0.25 * gate0 * branches[channel]
-        + 0.25 * gate1 * branches[CHANNELS_V1 + channel]
-        + 0.25 * gate2 * branches[2 * CHANNELS_V1 + channel]
-        + 0.25 * gate3 * branches[3 * CHANNELS_V1 + channel];
+        + 0.25 * gate1 * branches[offset1]
+        + 0.25 * gate2 * branches[offset2]
+        + 0.25 * gate3 * branches[offset3];
     if let Some(slot) = output.get_mut(thread::index_1d()) {
         *slot = value;
     }
@@ -179,7 +182,7 @@ pub fn gfx950_four_branch_residual(
 #[cfg(feature = "kernel-mhc-sinkhorn-mix-scalar-v1")]
 #[kernel(
     typed,
-    namespace = "7b063c99e8c5116f197cc09da681cd55883a917e688bd8753d2183fd359f6110",
+    namespace = "0e2a561e71ced26b05bcaf0287320b4e1969b9909709417dfafb4299ecc6eb92",
     launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1]),
     control_flow(loop_bounds(3))
 )]

@@ -2157,8 +2157,8 @@ fn semantic_binary_operation(operation: BinOp) -> Option<SemanticBinaryOpV1> {
         BinOp::BitXor => Some(SemanticBinaryOpV1::BitXor),
         BinOp::BitAnd => Some(SemanticBinaryOpV1::BitAnd),
         BinOp::BitOr => Some(SemanticBinaryOpV1::BitOr),
-        BinOp::Shl => Some(SemanticBinaryOpV1::ShiftLeft),
-        BinOp::Shr => Some(SemanticBinaryOpV1::ShiftRight),
+        BinOp::Shl | BinOp::ShlUnchecked => Some(SemanticBinaryOpV1::ShiftLeft),
+        BinOp::Shr | BinOp::ShrUnchecked => Some(SemanticBinaryOpV1::ShiftRight),
         BinOp::Eq => Some(SemanticBinaryOpV1::Equal),
         BinOp::Lt => Some(SemanticBinaryOpV1::LessThan),
         BinOp::Le => Some(SemanticBinaryOpV1::LessOrEqual),
@@ -2172,9 +2172,7 @@ fn semantic_binary_operation(operation: BinOp) -> Option<SemanticBinaryOpV1> {
         | BinOp::MulWithOverflow
         | BinOp::AddUnchecked
         | BinOp::SubUnchecked
-        | BinOp::MulUnchecked
-        | BinOp::ShlUnchecked
-        | BinOp::ShrUnchecked => None,
+        | BinOp::MulUnchecked => None,
     }
 }
 

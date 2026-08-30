@@ -103,9 +103,9 @@
         "assessment": "typed gfx950 MFMA fragments are loaded from global-backed views; adding raw LDS address-space plumbing would change the compiler surface rather than isolate scheduling"
       },
       "pipeline": {
-        "software_pipeline": "applicable",
+        "software_pipeline": "rejected",
         "multi_buffer": "rejected",
-        "reason": "three independent activation/weight/MFMA streams permit instruction scheduling, but this single K=128 tile has no next K tile to double-buffer"
+        "reason": "the eager schedule exposes instruction-level parallelism across three independent one-tile activation/weight/MFMA streams; with no next K tile, it is not a multistage software pipeline and cannot double-buffer"
       },
       "tile_assessment": "one Wave64 owns a 16x16 output through Blocked<Index1D,64,4>; changing ownership changes the typed output ABI",
       "variants": [
