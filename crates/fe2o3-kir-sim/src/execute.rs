@@ -669,6 +669,14 @@ pub struct DivergentWorkgroupBarrierV1 {
     pub exited: WorkgroupParticipantV1,
 }
 
+/// Complete debugger-only participant inventory for a V1 barrier-divergence error.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DivergentWorkgroupBarrierV2 {
+    pub phase: u64,
+    pub waiting: Vec<WorkgroupParticipantV1>,
+    pub exited: Vec<WorkgroupParticipantV1>,
+}
+
 /// Exact bounded detail for incompatible same-phase barrier arrivals.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MismatchedWorkgroupBarrierV1 {
@@ -710,6 +718,32 @@ pub struct MismatchedWaveV1 {
 pub struct WorkgroupParticipantV1 {
     pub local: [u32; 3],
 }
+
+/// Exact request-local ABI view retained with an out-of-bounds pointer fault.
+///
+/// This is logical simulator metadata. It contains neither a host/native pointer nor a GPU
+/// address. Aliased arguments remain distinguishable by `argument_ordinal`; a consumer joins
+/// that ordinal to the admitted request to recover the named backing identity.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SimulationAbiViewV1 {
+    pub argument_ordinal: u32,
+    pub byte_offset: usize,
+    pub byte_len: usize,
+}
+
+/// Exact debugger-only address and ABI-view evidence for a V1 OOB error.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SimulationOutOfBoundsV2 {
+    pub allocation: u64,
+    pub offset: usize,
+    pub bytes: usize,
+    pub allocation_bytes: usize,
+    pub legal_lower_bound: usize,
+    pub legal_upper_bound: usize,
+    pub abi_view: Option<SimulationAbiViewV1>,
+}
+
+const NO_ABI_ARGUMENT_V1: u32 = u32::MAX;
 
 impl From<SimulationInvocationV1> for WorkgroupParticipantV1 {
     fn from(invocation: SimulationInvocationV1) -> Self {
@@ -914,6 +948,7 @@ struct PointerValue {
     access: AccessMode,
     lower_bound: usize,
     upper_bound: usize,
+    abi_argument_ordinal: u32,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -925,6 +960,7 @@ struct SliceValue {
     access: AccessMode,
     byte_offset: usize,
     byte_len: usize,
+    abi_argument_ordinal: u32,
 }
 
 struct Allocation {
@@ -1303,26 +1339,58 @@ fn validate_access(
             offset: pointer.byte_offset,
         });
     }
-    let end = pointer.byte_offset.checked_add(width).ok_or(
-        SimulationExecutionErrorKindV1::OutOfBounds {
-            allocation: pointer.allocation,
-            offset: pointer.byte_offset,
-            bytes: width,
-            allocation_bytes: allocation.bytes.len(),
-        },
-    )?;
+    let end = pointer
+        .byte_offset
+        .checked_add(width)
+        .ok_or_else(|| out_of_bounds_error(pointer, width, allocation.bytes.len()))?;
     if pointer.byte_offset < pointer.lower_bound
         || end > pointer.upper_bound
         || end > allocation.bytes.len()
     {
-        return Err(SimulationExecutionErrorKindV1::OutOfBounds {
-            allocation: pointer.allocation,
-            offset: pointer.byte_offset,
-            bytes: width,
-            allocation_bytes: allocation.bytes.len(),
-        });
+        return Err(out_of_bounds_error(pointer, width, allocation.bytes.len()));
     }
     Ok(())
+}
+
+fn out_of_bounds_error(
+    pointer: &PointerValue,
+    bytes: usize,
+    allocation_bytes: usize,
+) -> SimulationExecutionErrorKindV1 {
+    SimulationExecutionErrorKindV1::OutOfBounds {
+        allocation: pointer.allocation,
+        offset: pointer.byte_offset,
+        bytes,
+        allocation_bytes,
+    }
+}
+
+fn out_of_bounds_detail_v2(
+    pointer: &PointerValue,
+    bytes: usize,
+    allocation_bytes: usize,
+) -> SimulationOutOfBoundsV2 {
+    let abi_view = (pointer.abi_argument_ordinal != NO_ABI_ARGUMENT_V1)
+        .then_some(())
+        .and_then(|()| {
+            pointer
+                .upper_bound
+                .checked_sub(pointer.lower_bound)
+                .map(|byte_len| SimulationAbiViewV1 {
+                    argument_ordinal: pointer.abi_argument_ordinal,
+                    byte_offset: pointer.lower_bound,
+                    byte_len,
+                })
+        });
+    SimulationOutOfBoundsV2 {
+        allocation: pointer.allocation,
+        offset: pointer.byte_offset,
+        bytes,
+        allocation_bytes,
+        legal_lower_bound: pointer.lower_bound,
+        legal_upper_bound: pointer.upper_bound,
+        abi_view,
+    }
 }
 
 struct Engine<'a, S> {
@@ -1618,6 +1686,10 @@ pub(crate) fn conservative_execution_resident_bytes(
     // assessments own clones of all four sites: twelve function identities.
     // Dynamic primary plus bounded secondary errors require no more clones.
     resident.add_product(maximum_reachable_identifier_bytes, 12)?;
+    resident.add_product(
+        reserved_vec_bytes::<WorkgroupParticipantV1>(workgroup_participants)?,
+        2,
+    )?;
 
     // The borrowed request and completed result coexist with simulated memory at copy-back.
     resident.add_product(
@@ -1760,6 +1832,28 @@ impl<S: SimulationEventSinkV1> Engine<'_, S> {
             kind,
             observation_failure: None,
         }
+    }
+
+    fn memory_error_at(
+        &mut self,
+        site: CompactSite,
+        pointer: &PointerValue,
+        kind: SimulationExecutionErrorKindV1,
+    ) -> SimulationExecutionErrorV1 {
+        if let SimulationExecutionErrorKindV1::OutOfBounds {
+            bytes,
+            allocation_bytes,
+            ..
+        } = &kind
+        {
+            self.debug_sink
+                .terminal_out_of_bounds_v2(out_of_bounds_detail_v2(
+                    pointer,
+                    *bytes,
+                    *allocation_bytes,
+                ));
+        }
+        self.at(site, kind)
     }
 
     fn materialize_site(&self, site: CompactSite) -> SimulationSiteV1 {
@@ -2168,6 +2262,7 @@ impl<S: SimulationEventSinkV1> Engine<'_, S> {
                 access: AccessMode::ReadWrite,
                 lower_bound: 0,
                 upper_bound: bytes,
+                abi_argument_ordinal: NO_ABI_ARGUMENT_V1,
             });
         }
 
@@ -2220,6 +2315,7 @@ impl<S: SimulationEventSinkV1> Engine<'_, S> {
             access: AccessMode::ReadWrite,
             lower_bound: 0,
             upper_bound: bytes,
+            abi_argument_ordinal: NO_ABI_ARGUMENT_V1,
         })
     }
 
@@ -3518,54 +3614,127 @@ fn release_workgroup_barrier<'a>(
     schedule: &mut PreparedScheduleV1<'_>,
     phase: &mut u64,
 ) -> Result<(), SimulationExecutionErrorV1> {
+    for machine in machines.iter() {
+        let valid = matches!(
+            (machine.completed, machine.waiting),
+            (false, Some(MachineWait::Barrier(_))) | (true, None)
+        );
+        if !valid {
+            engine.invocation = Some(machine.invocation);
+            return Err(
+                engine.fail(SimulationExecutionErrorKindV1::InternalInvariant(
+                    "barrier resolution machine state",
+                )),
+            );
+        }
+    }
     let first_waiting = machines.iter().find_map(|machine| match machine.waiting {
         Some(MachineWait::Barrier(arrival)) => Some((machine.invocation, arrival)),
         _ => None,
     });
     let Some((representative, expected)) = first_waiting else {
-        return Err(engine
-            .fail(SimulationExecutionErrorKindV1::WorkgroupSchedulerNoProgress { phase: *phase }));
+        return Err(
+            engine.fail(SimulationExecutionErrorKindV1::InternalInvariant(
+                "barrier resolution without a waiting participant",
+            )),
+        );
     };
     for machine in machines.iter() {
-        match machine.waiting {
-            Some(MachineWait::Barrier(arrival)) => {
-                if arrival.site != expected.site || arrival.barrier != expected.barrier {
-                    let mismatch = match (
-                        arrival.site != expected.site,
-                        arrival.barrier != expected.barrier,
-                    ) {
-                        (true, true) => WorkgroupBarrierMismatchV1::SiteAndSemantics,
-                        (true, false) => WorkgroupBarrierMismatchV1::Site,
-                        (false, true) => WorkgroupBarrierMismatchV1::Semantics,
-                        (false, false) => unreachable!(),
-                    };
-                    engine.invocation = Some(machine.invocation);
+        if let Some(MachineWait::Barrier(arrival)) = machine.waiting
+            && (arrival.site != expected.site || arrival.barrier != expected.barrier)
+        {
+            let mismatch = match (
+                arrival.site != expected.site,
+                arrival.barrier != expected.barrier,
+            ) {
+                (true, true) => WorkgroupBarrierMismatchV1::SiteAndSemantics,
+                (true, false) => WorkgroupBarrierMismatchV1::Site,
+                (false, true) => WorkgroupBarrierMismatchV1::Semantics,
+                (false, false) => {
                     return Err(engine.at(
                         arrival.site,
-                        SimulationExecutionErrorKindV1::MismatchedWorkgroupBarrier(
-                            MismatchedWorkgroupBarrierV1 {
-                                phase: *phase,
-                                expected: engine.materialize_event_site(expected.site),
-                                mismatch,
-                            },
+                        SimulationExecutionErrorKindV1::InternalInvariant(
+                            "barrier mismatch classification",
                         ),
                     ));
                 }
-            }
-            _ => {
-                engine.invocation = Some(representative);
-                return Err(engine.at(
-                    expected.site,
-                    SimulationExecutionErrorKindV1::DivergentWorkgroupBarrier(
-                        DivergentWorkgroupBarrierV1 {
-                            phase: *phase,
-                            waiting: representative.into(),
-                            exited: machine.invocation.into(),
-                        },
-                    ),
-                ));
-            }
+            };
+            engine.invocation = Some(machine.invocation);
+            return Err(engine.at(
+                arrival.site,
+                SimulationExecutionErrorKindV1::MismatchedWorkgroupBarrier(
+                    MismatchedWorkgroupBarrierV1 {
+                        phase: *phase,
+                        expected: engine.materialize_event_site(expected.site),
+                        mismatch,
+                    },
+                ),
+            ));
         }
+    }
+    if machines.iter().any(|machine| machine.completed) {
+        let exited_representative = machines
+            .iter()
+            .find(|machine| machine.completed)
+            .map(|machine| machine.invocation)
+            .ok_or_else(|| {
+                engine.at(
+                    expected.site,
+                    SimulationExecutionErrorKindV1::InternalInvariant(
+                        "divergent barrier exited participant",
+                    ),
+                )
+            })?;
+        if engine.debug_capture.is_enabled() {
+            let mut waiting = Vec::new();
+            let mut exited = Vec::new();
+            waiting.try_reserve_exact(machines.len()).map_err(|_| {
+                engine.at(
+                    expected.site,
+                    SimulationExecutionErrorKindV1::AllocationFailure,
+                )
+            })?;
+            exited.try_reserve_exact(machines.len()).map_err(|_| {
+                engine.at(
+                    expected.site,
+                    SimulationExecutionErrorKindV1::AllocationFailure,
+                )
+            })?;
+            for machine in machines.iter() {
+                match (machine.completed, machine.waiting) {
+                    (false, Some(MachineWait::Barrier(_))) => {
+                        waiting.push(machine.invocation.into());
+                    }
+                    (true, None) => exited.push(machine.invocation.into()),
+                    _ => {
+                        return Err(engine.at(
+                            expected.site,
+                            SimulationExecutionErrorKindV1::InternalInvariant(
+                                "validated barrier resolution machine state",
+                            ),
+                        ));
+                    }
+                }
+            }
+            engine
+                .debug_sink
+                .terminal_barrier_divergence_v2(DivergentWorkgroupBarrierV2 {
+                    phase: *phase,
+                    waiting,
+                    exited,
+                });
+        }
+        engine.invocation = Some(representative);
+        return Err(engine.at(
+            expected.site,
+            SimulationExecutionErrorKindV1::DivergentWorkgroupBarrier(
+                DivergentWorkgroupBarrierV1 {
+                    phase: *phase,
+                    waiting: representative.into(),
+                    exited: exited_representative.into(),
+                },
+            ),
+        ));
     }
     let participants = u32::try_from(machines.len()).map_err(|_| {
         engine.at(
@@ -3677,6 +3846,11 @@ fn initialize_arguments(
         .zip(&entry.signature.parameters)
         .enumerate()
     {
+        let argument_ordinal = u32::try_from(index).map_err(|_| {
+            engine.fail(SimulationExecutionErrorKindV1::InternalInvariant(
+                "preflighted ABI argument ordinal",
+            ))
+        })?;
         let parameter = match (argument, ty) {
             (SimulationArgumentV1::Scalar(value), Type::Scalar(_)) => {
                 Ok(RuntimeValue::Scalar(*value))
@@ -3702,6 +3876,7 @@ fn initialize_arguments(
                     access: slice.access,
                     byte_offset: 0,
                     byte_len: buffer.bytes().len(),
+                    abi_argument_ordinal: argument_ordinal,
                 }))
             }
             (SimulationArgumentV1::Buffer(buffer), Type::Pointer(pointer)) => {
@@ -3721,6 +3896,7 @@ fn initialize_arguments(
                     access: pointer.access,
                     lower_bound: 0,
                     upper_bound: buffer.bytes().len(),
+                    abi_argument_ordinal: argument_ordinal,
                 }))
             }
             (SimulationArgumentV1::BufferView(view), Type::Slice(slice)) => {
@@ -3753,6 +3929,7 @@ fn initialize_arguments(
                     access: slice.access,
                     byte_offset: view.byte_offset(),
                     byte_len,
+                    abi_argument_ordinal: argument_ordinal,
                 }))
             }
             (SimulationArgumentV1::BufferView(view), Type::Pointer(pointer)) => {
@@ -3792,6 +3969,7 @@ fn initialize_arguments(
                     access: pointer.access,
                     lower_bound: view.byte_offset(),
                     upper_bound,
+                    abi_argument_ordinal: argument_ordinal,
                 }))
             }
             _ => Err(
@@ -5309,6 +5487,7 @@ fn execute_operation(
                 access: AccessMode::ReadWrite,
                 lower_bound: 0,
                 upper_bound: bytes,
+                abi_argument_ordinal: NO_ABI_ARGUMENT_V1,
             }))
         }
         OperationKind::SliceLength { slice } => {
@@ -5356,6 +5535,7 @@ fn execute_operation(
                 access: slice.access,
                 lower_bound: slice.byte_offset,
                 upper_bound,
+                abi_argument_ordinal: slice.abi_argument_ordinal,
             }))
         }
         OperationKind::GetElementPointer { base, offset } => {
@@ -5440,7 +5620,7 @@ fn execute_operation(
             let bytes = engine
                 .memory
                 .validate_store(pointer_value, *access, stored, engine.target)
-                .map_err(|kind| engine.at(site, kind))?;
+                .map_err(|kind| engine.memory_error_at(site, pointer_value, kind))?;
             if pointer_value.address_space == AddressSpace::Global {
                 engine.record_access(
                     &site,
@@ -5564,7 +5744,7 @@ fn execute_atomic(
             engine
                 .memory
                 .load(&pointer, atomic.access, engine.target, invocation)
-                .map_err(|kind| engine.at(*site, kind))?,
+                .map_err(|kind| engine.memory_error_at(*site, &pointer, kind))?,
         )
     };
     let (committed, compare_exchange_success) = match atomic.kind {
@@ -5613,7 +5793,7 @@ fn execute_atomic(
         engine
             .memory
             .validate_store(&pointer, atomic.access, value, engine.target)
-            .map_err(|kind| engine.at(*site, kind))?
+            .map_err(|kind| engine.memory_error_at(*site, &pointer, kind))?
     } else {
         engine.target.scalar_bytes(pointer.element).ok_or_else(|| {
             engine.at(
@@ -5808,7 +5988,7 @@ fn execute_scalar_load(
                 )
             })?,
         )
-        .map_err(|kind| engine.at(*site, kind))?;
+        .map_err(|kind| engine.memory_error_at(*site, pointer_value, kind))?;
     let bytes = engine
         .target
         .scalar_bytes(pointer_value.element)

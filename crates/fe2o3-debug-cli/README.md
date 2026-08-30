@@ -74,13 +74,19 @@ arithmetic.
 `fe2o3-debug-diagnosis-request-v2` adds a read-only, page-bounded diagnosis
 query to the same simulator JSONL stream without changing the closed V1
 operation set. For a retained out-of-bounds failure it returns the exact
-trace-local allocation and requested/available byte range plus the admitted
-allocation and uniquely joined kernel-ABI argument contract. For retained
+trace-local backing allocation, requested range, and narrower legal pointer or
+slice view plus the admitted allocation and uniquely joined kernel-ABI
+argument contract. Aliased views retain both their common backing identity and
+their distinct ABI ordinal/range, so an access can be outside one view while
+remaining inside the backing allocation. ABI-required access, request
+buffer/view access, and backing-allocation access remain distinct and are
+joined with the simulator's monotonic capability rule. For retained
 workgroup-barrier divergence it returns the exact phase, declared scope,
-ordering and address-space semantics, current LDS epoch, waiting/exited local
-participants, the observed arrival count when the transcript is complete, and
-the expected participant count derived from admitted launch geometry. An LDS
-epoch after a barrier that did not release remains unavailable.
+ordering and address-space semantics, a phase-derived LDS epoch, complete
+arrived/waiting/exited local participant inventories, the observed arrival
+count when the transcript is complete, and the expected participant inventory
+derived from admitted launch geometry. An LDS epoch after a barrier that did
+not release remains unavailable.
 
 Every diagnosis also binds the stable simulator configuration, a
 domain-separated identity of the exact request and canonical KIR dispatch
@@ -92,10 +98,26 @@ are content association only: the debugger does not relabel lineage receipts
 as property proofs, and finalized artifact/property fields remain typed
 unavailable without independent authority.
 
+Each material fact carries a claim identity tied to a retained input,
+simulator-terminal, simulator-transcript, KIR-operation, ABI, source-map,
+derived, or availability record identity. The evidence manifest also binds
+session revision, configuration, completeness, finding sequence/class, exact
+admitted input, and canonical bounded terminal/transcript content. Hashes and
+wire decoding prove content integrity, not producer identity. Before returning
+a production Bundle V2 diagnosis, the CLI independently rederives the expected
+capture binding from its owned deterministic simulator result and exact Bundle
+envelope/subject, full input manifest, session/completeness, and response
+wrapper (request, operation, and pagination cursor), then exact-compares it
+with the response. Source spans include a bounded membership proof against the
+exact admitted Source Map V2 operation inventory; changing a span to another
+range in the same map fails validation.
+
 Dispatch geometry is `declared`; terminal invocation, KIR site, dynamic range,
-phase, and local participants are CPU-semantic `observed` facts; global
-participant coordinates and logical wave/lane partitions are `inferred` with
-their derivation; absent facts remain typed `unavailable`. This diagnoses any
+phase, and arrived/waiting/exited local participants are CPU-semantic
+`observed` facts; expected locals, global participant coordinates, logical
+wave/lane partitions, logical element indices, legal-bounds results, and the
+current LDS epoch are `inferred` with their derivation; absent facts remain
+typed `unavailable`. This diagnoses any
 admitted KIR kernel that reaches those simulator error classes and contains no
 kernel-name or fixture-specific rule.
 

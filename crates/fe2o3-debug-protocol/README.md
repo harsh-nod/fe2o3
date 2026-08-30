@@ -85,6 +85,32 @@ request/KIR dispatch-input identity, checks bundle/map/subject and source-site
 bindings, checks allocation/ABI view bounds, and requires barrier phase,
 semantics, LDS epoch, participant, and mismatch fields to agree.
 
+The memory contract separates a pointer/slice legal view from its backing
+allocation and retains every aliased ABI argument without collapsing their
+ordinals or ranges. ABI-required, request-view, and backing-allocation access
+capabilities are separate facts joined by the simulator's monotonic admission
+rule. Barrier divergence retains complete bounded expected,
+arrived, waiting, and exited participant inventories. Expected local
+coordinates are launch-geometry inferences; arrived/waiting/exited local
+coordinates are simulator observations. The current LDS epoch is derived from
+the retained barrier phase and is never labeled as an independent observation.
+
+Every material claim cites a stable retained evidence-record identity and has
+a distinct claim identity binding field, value, origin, and source record. The
+canonical evidence manifest binds session/revision/configuration,
+completeness, finding sequence/class, exact input evidence, and canonical
+bounded terminal/transcript records. Their identities are recomputed during
+admission; barrier-arrival claims cite the transcript record. This establishes
+content integrity and internal consistency, not producer signing or capture
+authenticity. A capture owner authenticates a response by separately deriving
+`DiagnosisCaptureBindingV2` from its owned deterministic simulator result and
+calling `validate_against_capture_v2`; that binding retains the exact input
+manifest, full session and completeness, response request/operation/cursor,
+and Bundle envelope and subject when supplied. Declared source operations
+carry a bounded membership proof against the exact admitted Source Map V2
+operation/span inventory, preventing substitution of another span from the
+same map.
+
 Bundle, KIR, request, ABI, source-map, and source-lineage references are exact
 declared content associations. A source operation retains the source map's
 `caller_bound` or `compiler_bundle_bound` provenance. Source-lineage receipts

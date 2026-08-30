@@ -6,14 +6,14 @@ use std::fmt;
 
 use fe2o3_kernel_ir::{BlockId, ValueId};
 use fe2o3_kir_sim::{
-    AdmittedSimulationModuleV1, ScalarBitsV1, SimulationDebugCaptureLimitsV1,
-    SimulationDebugCheckpointPhaseV1, SimulationDebugCollectionV1, SimulationDebugFrameV1,
-    SimulationDebugMemoryAccessV1, SimulationDebugRecordKindV1, SimulationDebugRecordV1,
-    SimulationDebugSinkControlV1, SimulationDebugSinkV1, SimulationDebugSiteV1,
-    SimulationDebugUnavailableReasonV1, SimulationDebugValueV1, SimulationErrorV1,
-    SimulationExecutionErrorKindV1, SimulationExecutionV1, SimulationInvocationV1,
-    SimulationLimitsV1, SimulationRequestV1, SimulationScheduleRecordV1,
-    SimulationScheduleRequestV1, SimulationSiteV1, SimulationTargetV1,
+    AdmittedSimulationModuleV1, DivergentWorkgroupBarrierV2, ScalarBitsV1,
+    SimulationDebugCaptureLimitsV1, SimulationDebugCheckpointPhaseV1, SimulationDebugCollectionV1,
+    SimulationDebugFrameV1, SimulationDebugMemoryAccessV1, SimulationDebugRecordKindV1,
+    SimulationDebugRecordV1, SimulationDebugSinkControlV1, SimulationDebugSinkV1,
+    SimulationDebugSiteV1, SimulationDebugUnavailableReasonV1, SimulationDebugValueV1,
+    SimulationErrorV1, SimulationExecutionErrorKindV1, SimulationExecutionV1,
+    SimulationInvocationV1, SimulationLimitsV1, SimulationOutOfBoundsV2, SimulationRequestV1,
+    SimulationScheduleRecordV1, SimulationScheduleRequestV1, SimulationSiteV1, SimulationTargetV1,
 };
 
 pub const MAX_DEBUGGER_RECORDS_V1: usize = 1_000_000;
@@ -122,7 +122,24 @@ pub struct DebugTranscriptV1 {
     wave_width: DebugWaveWidthV1,
     records: Vec<SimulationDebugRecordV1>,
     terminal_fault: Option<DebugTerminalFaultV1>,
+    terminal_detail_v2: DebugTerminalDetailStateV2,
     completeness: DebugTranscriptCompletenessV1,
+}
+
+/// Debugger-only terminal evidence that augments, but never changes, public V1 errors.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DebugTerminalDetailV2 {
+    OutOfBounds(SimulationOutOfBoundsV2),
+    BarrierDivergence(DivergentWorkgroupBarrierV2),
+}
+
+/// Exact-one capture state for debugger-only terminal evidence.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub enum DebugTerminalDetailStateV2 {
+    #[default]
+    Absent,
+    Captured(DebugTerminalDetailV2),
+    InvalidMultiple,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -153,6 +170,10 @@ impl DebugTranscriptV1 {
     pub const fn terminal_fault(&self) -> Option<&DebugTerminalFaultV1> {
         self.terminal_fault.as_ref()
     }
+
+    pub const fn terminal_detail_v2(&self) -> &DebugTerminalDetailStateV2 {
+        &self.terminal_detail_v2
+    }
 }
 
 #[derive(Debug)]
@@ -167,6 +188,7 @@ struct TranscriptCollectorV1 {
     retained_values: usize,
     retained_memory_bytes: usize,
     truncation: Option<DebugTranscriptTruncationV1>,
+    terminal_detail_v2: DebugTerminalDetailStateV2,
 }
 
 impl TranscriptCollectorV1 {
@@ -177,6 +199,7 @@ impl TranscriptCollectorV1 {
             retained_values: 0,
             retained_memory_bytes: 0,
             truncation: None,
+            terminal_detail_v2: DebugTerminalDetailStateV2::Absent,
         }
     }
 
@@ -191,6 +214,7 @@ impl TranscriptCollectorV1 {
             wave_width,
             records: self.records,
             terminal_fault,
+            terminal_detail_v2: self.terminal_detail_v2,
             completeness: self
                 .truncation
                 .map(DebugTranscriptCompletenessV1::Truncated)
@@ -229,6 +253,26 @@ impl SimulationDebugSinkV1 for TranscriptCollectorV1 {
         self.retained_memory_bytes = next_memory;
         self.records.push(record);
         SimulationDebugSinkControlV1::Continue
+    }
+
+    fn terminal_out_of_bounds_v2(&mut self, detail: SimulationOutOfBoundsV2) {
+        self.retain_terminal_detail_v2(DebugTerminalDetailV2::OutOfBounds(detail));
+    }
+
+    fn terminal_barrier_divergence_v2(&mut self, detail: DivergentWorkgroupBarrierV2) {
+        self.retain_terminal_detail_v2(DebugTerminalDetailV2::BarrierDivergence(detail));
+    }
+}
+
+impl TranscriptCollectorV1 {
+    fn retain_terminal_detail_v2(&mut self, detail: DebugTerminalDetailV2) {
+        self.terminal_detail_v2 = match std::mem::take(&mut self.terminal_detail_v2) {
+            DebugTerminalDetailStateV2::Absent => DebugTerminalDetailStateV2::Captured(detail),
+            DebugTerminalDetailStateV2::Captured(_)
+            | DebugTerminalDetailStateV2::InvalidMultiple => {
+                DebugTerminalDetailStateV2::InvalidMultiple
+            }
+        };
     }
 }
 

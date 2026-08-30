@@ -22,10 +22,10 @@ use fe2o3_kir_sim::{
     SimulationDebugSinkV1, SimulationErrorV1, SimulationEventKindV1, SimulationEventSinkControlV1,
     SimulationEventSinkV1, SimulationEventV1, SimulationExecutionErrorKindV1,
     SimulationExecutionOutcomeV1, SimulationExplorationRequestV1, SimulationExplorationV1,
-    SimulationLimitsV1, SimulationPreflightErrorV1, SimulationRaceAssessmentV1,
-    SimulationRequestV1, SimulationScheduleDecisionV1, SimulationScheduleIdentityV1,
-    SimulationScheduleReplayErrorV1, SimulationScheduleRequestV1, SimulationTargetV1,
-    UnsupportedFeatureV1,
+    SimulationLimitsV1, SimulationOutOfBoundsV2, SimulationPreflightErrorV1,
+    SimulationRaceAssessmentV1, SimulationRequestV1, SimulationScheduleDecisionV1,
+    SimulationScheduleIdentityV1, SimulationScheduleReplayErrorV1, SimulationScheduleRequestV1,
+    SimulationTargetV1, UnsupportedFeatureV1,
 };
 
 fn op(result: u32, ty: Type, kind: OperationKind) -> Operation {
@@ -151,12 +151,19 @@ fn words(bytes: &[u8]) -> Vec<u32> {
 struct Collector(Vec<SimulationEventV1>);
 
 #[derive(Default)]
-struct DebugCollector(Vec<SimulationDebugRecordV1>);
+struct DebugCollector(
+    Vec<SimulationDebugRecordV1>,
+    Option<SimulationOutOfBoundsV2>,
+);
 
 impl SimulationDebugSinkV1 for DebugCollector {
     fn record(&mut self, record: SimulationDebugRecordV1) -> SimulationDebugSinkControlV1 {
         self.0.push(record);
         SimulationDebugSinkControlV1::Continue
+    }
+
+    fn terminal_out_of_bounds_v2(&mut self, detail: SimulationOutOfBoundsV2) {
+        self.1 = Some(detail);
     }
 }
 
@@ -1604,6 +1611,84 @@ fn alias_module() -> Module {
     module
 }
 
+fn aliased_view_bounds_module() -> Module {
+    let scalar = Type::Scalar(ScalarType::U32);
+    let pointer = Type::pointer(scalar.clone(), AddressSpace::Global, AccessMode::ReadWrite);
+    let mut block = BasicBlock::new(BlockId(0));
+    block.operations = vec![
+        op(2, scalar.clone(), OperationKind::Constant(Constant::U32(1))),
+        op(
+            3,
+            pointer.clone(),
+            OperationKind::GetElementPointer {
+                base: ValueId(0),
+                offset: ValueId(2),
+            },
+        ),
+        op(
+            4,
+            scalar,
+            OperationKind::Load {
+                pointer: ValueId(3),
+                access: MemoryAccess::new(AddressSpace::Global, 4),
+            },
+        ),
+    ];
+    block.terminator = Some(Terminator::Return { values: vec![] });
+    let entry = Function::kernel_entry(
+        "aliased_view_bounds_impl",
+        Signature::new(vec![pointer.clone(), pointer], vec![]),
+        vec![ValueId(0), ValueId(1)],
+        vec![block],
+    );
+    let mut module = Module::new("sim-tests::aliased-view-bounds");
+    module.functions.push(entry);
+    module.kernels.push(Kernel::new(
+        "aliased_view_bounds",
+        "aliased_view_bounds_impl",
+        dynamic_domain_1d(),
+    ));
+    module
+}
+
+fn aliased_view_bounds_request() -> SimulationRequestV1 {
+    let target = SimulationTargetV1::amdgpu_64();
+    let backing = BufferBackingIdV1(9);
+    let narrow = BufferViewArgumentV1::new(
+        backing,
+        ScalarType::U32,
+        AccessMode::ReadWrite,
+        4,
+        4,
+        1,
+        target,
+    )
+    .unwrap();
+    let wide = BufferViewArgumentV1::new(
+        backing,
+        ScalarType::U32,
+        AccessMode::ReadWrite,
+        4,
+        0,
+        3,
+        target,
+    )
+    .unwrap();
+    SimulationRequestV1::new(
+        "aliased_view_bounds",
+        [1, 1, 1],
+        [1, 1, 1],
+        vec![
+            SimulationArgumentV1::BufferView(narrow),
+            SimulationArgumentV1::BufferView(wide),
+        ],
+    )
+    .with_shared_buffers(vec![SharedBufferV1 {
+        id: backing,
+        buffer: u32_buffer(&[10, 20, 30]),
+    }])
+}
+
 #[test]
 fn shared_backing_views_preserve_aliasing_and_copy_back_once() {
     let target = SimulationTargetV1::amdgpu_64();
@@ -1671,6 +1756,109 @@ fn shared_backing_views_preserve_aliasing_and_copy_back_once() {
         admitted(alias_module()).preflight(&invalid, target, SimulationLimitsV1::default(),),
         Err(SimulationPreflightErrorV1::BufferViewBounds { argument: 0 })
     ));
+}
+
+#[test]
+fn pointer_view_oob_retains_exact_argument_and_bounds_inside_shared_allocation() {
+    let target = SimulationTargetV1::amdgpu_64();
+    let request = aliased_view_bounds_request();
+
+    let error = admitted(aliased_view_bounds_module())
+        .simulate(&request, target, SimulationLimitsV1::default())
+        .expect_err("the narrow view ends before the backing allocation");
+    let SimulationErrorV1::Execution(error) = error else {
+        panic!("expected execution failure");
+    };
+    let SimulationExecutionErrorKindV1::OutOfBounds {
+        allocation,
+        offset,
+        bytes,
+        allocation_bytes,
+    } = error.kind
+    else {
+        panic!("expected out-of-bounds failure");
+    };
+    assert_eq!((allocation, offset, bytes, allocation_bytes), (1, 8, 4, 12));
+}
+
+#[test]
+fn public_v1_terminal_error_shapes_remain_scalar_and_constructible() {
+    let _ = SimulationExecutionErrorKindV1::OutOfBounds {
+        allocation: 1,
+        offset: 8,
+        bytes: 4,
+        allocation_bytes: 12,
+    };
+    let _ = fe2o3_kir_sim::DivergentWorkgroupBarrierV1 {
+        phase: 0,
+        waiting: fe2o3_kir_sim::WorkgroupParticipantV1 { local: [0, 0, 0] },
+        exited: fe2o3_kir_sim::WorkgroupParticipantV1 { local: [1, 0, 0] },
+    };
+}
+
+#[test]
+fn pointer_view_oob_debug_side_record_is_exact_bounded_and_small_stack_safe() {
+    std::thread::Builder::new()
+        .name("sim-oob-small-stack".to_owned())
+        .stack_size(256 * 1024)
+        .spawn(|| {
+            let target = SimulationTargetV1::amdgpu_64();
+            let request = aliased_view_bounds_request();
+            let admitted = admitted(aliased_view_bounds_module());
+            let base_limits = SimulationLimitsV1::default();
+            let resident = admitted
+                .preflight(&request, target, base_limits)
+                .unwrap()
+                .resident_bytes();
+            assert!(matches!(
+                admitted.preflight(
+                    &request,
+                    target,
+                    SimulationLimitsV1 {
+                        max_resident_bytes: resident - 1,
+                        ..base_limits
+                    }
+                ),
+                Err(SimulationPreflightErrorV1::ResourceLimit {
+                    resource: "resident bytes",
+                    actual,
+                    limit,
+                }) if actual == resident as u64 && limit == (resident - 1) as u64
+            ));
+            let mut debug = DebugCollector::default();
+            let error = admitted
+                .simulate_debugged_with_sink(
+                    &request,
+                    target,
+                    SimulationLimitsV1 {
+                        max_resident_bytes: resident,
+                        ..base_limits
+                    },
+                    SimulationDebugCaptureLimitsV1::new(16, 64, 16, 4_096).unwrap(),
+                    &mut debug,
+                )
+                .expect_err("narrow view must fault");
+            assert!(matches!(
+                error,
+                SimulationErrorV1::Execution(ref execution)
+                    if matches!(
+                        execution.kind,
+                        SimulationExecutionErrorKindV1::OutOfBounds {
+                            allocation: 1,
+                            offset: 8,
+                            bytes: 4,
+                            allocation_bytes: 12,
+                        }
+                    )
+            ));
+            let detail = debug.1.expect("exact-one V2 side record");
+            assert_eq!(detail.legal_lower_bound, 4);
+            assert_eq!(detail.legal_upper_bound, 8);
+            assert_eq!(detail.abi_view.unwrap().argument_ordinal, 0);
+        })
+        .unwrap()
+        .join()
+        .unwrap();
 }
 
 fn conflicting_store_module() -> Module {

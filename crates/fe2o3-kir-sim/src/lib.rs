@@ -22,13 +22,14 @@ pub use debug::{
     SimulationDebugSiteV1, SimulationDebugUnavailableReasonV1, SimulationDebugValueV1,
 };
 pub use execute::{
-    DivergentWaveV1, DivergentWorkgroupBarrierV1, IncompleteWaveV1, MismatchedWaveV1,
-    MismatchedWorkgroupBarrierV1, NoopSimulationEventSinkV1, SimulationConflictAssessmentV1,
-    SimulationDataRaceV1, SimulationErrorV1, SimulationEventKindV1, SimulationEventSinkControlV1,
-    SimulationEventSinkErrorV1, SimulationEventSinkV1, SimulationEventSiteV1, SimulationEventV1,
-    SimulationExecutionErrorKindV1, SimulationExecutionErrorV1, SimulationExecutionOutcomeV1,
-    SimulationExecutionV1, SimulationHappensBeforeReasonV1, SimulationMemoryConflictV1,
-    SimulationObservationFailureV1, SimulationOrderedMemoryConflictV1, SimulationRaceAssessmentV1,
+    DivergentWaveV1, DivergentWorkgroupBarrierV1, DivergentWorkgroupBarrierV2, IncompleteWaveV1,
+    MismatchedWaveV1, MismatchedWorkgroupBarrierV1, NoopSimulationEventSinkV1, SimulationAbiViewV1,
+    SimulationConflictAssessmentV1, SimulationDataRaceV1, SimulationErrorV1, SimulationEventKindV1,
+    SimulationEventSinkControlV1, SimulationEventSinkErrorV1, SimulationEventSinkV1,
+    SimulationEventSiteV1, SimulationEventV1, SimulationExecutionErrorKindV1,
+    SimulationExecutionErrorV1, SimulationExecutionOutcomeV1, SimulationExecutionV1,
+    SimulationHappensBeforeReasonV1, SimulationMemoryConflictV1, SimulationObservationFailureV1,
+    SimulationOrderedMemoryConflictV1, SimulationOutOfBoundsV2, SimulationRaceAssessmentV1,
     WorkgroupBarrierMismatchV1, WorkgroupParticipantV1,
 };
 pub use explore::{

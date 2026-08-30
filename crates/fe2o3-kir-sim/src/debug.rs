@@ -283,6 +283,12 @@ pub enum SimulationDebugSinkControlV1 {
 
 pub trait SimulationDebugSinkV1 {
     fn record(&mut self, record: SimulationDebugRecordV1) -> SimulationDebugSinkControlV1;
+
+    /// Retains debugger-only ABI-view evidence without changing the public V1 error shape.
+    fn terminal_out_of_bounds_v2(&mut self, _detail: crate::SimulationOutOfBoundsV2) {}
+
+    /// Retains complete debugger-only participants without changing the scalar V1 error.
+    fn terminal_barrier_divergence_v2(&mut self, _detail: crate::DivergentWorkgroupBarrierV2) {}
 }
 
 #[derive(Default)]
