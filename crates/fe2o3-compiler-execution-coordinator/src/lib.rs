@@ -59,6 +59,8 @@ mod entrypoint;
 #[allow(unsafe_code)]
 mod inherited;
 mod provisioning;
+#[allow(unsafe_code)]
+mod provisioning_entrypoint;
 
 pub use entrypoint::run_inherited_compiler_execution_coordinator_v1;
 
@@ -79,6 +81,9 @@ pub use inherited::{
 pub use provisioning::{
     CompilerExecutionProvisioningBundleV1, CompilerExecutionProvisioningErrorV1,
     CompilerExecutionProvisioningInputsV1,
+};
+pub use provisioning_entrypoint::{
+    CompilerExecutionProvisioningInstallErrorV1, run_compiler_execution_reference_provisioner_v1,
 };
 
 const MAX_DEPLOYMENT_TIMEOUT_V1: Duration = Duration::from_secs(120);

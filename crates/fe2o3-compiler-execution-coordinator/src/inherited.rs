@@ -275,14 +275,14 @@ fn take_inherited_descriptors() -> Result<[OwnedFd; 14], CompilerExecutionCoordi
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct RootFileSnapshotV1 {
+pub(crate) struct RootFileSnapshotV1 {
     device: u64,
     inode: u64,
     mode: u32,
     uid: u32,
     gid: u32,
     links: u64,
-    byte_len: u64,
+    pub(crate) byte_len: u64,
 }
 
 fn admit_executable(
@@ -433,7 +433,7 @@ fn validate_root_file(
     )
 }
 
-fn validate_provisioned_file(
+pub(crate) fn validate_provisioned_file(
     file: &File,
     role: &'static str,
     expected_mode: u32,
