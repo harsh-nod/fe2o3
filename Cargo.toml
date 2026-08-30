@@ -71,6 +71,7 @@ fe2o3-compiler-closure-capability = { path = "crates/fe2o3-compiler-closure-capa
 fe2o3-compiler-execution-client = { path = "crates/fe2o3-compiler-execution-client" }
 fe2o3-compiler-execution-coordinator = { path = "crates/fe2o3-compiler-execution-coordinator" }
 fe2o3-compiler-execution-issuer = { path = "crates/fe2o3-compiler-execution-issuer" }
+fe2o3-compiler-execution-lifecycle = { path = "crates/fe2o3-compiler-execution-lifecycle" }
 fe2o3-compiler-execution-protocol = { path = "crates/fe2o3-compiler-execution-protocol" }
 fe2o3-compiler-execution-supervisor = { path = "crates/fe2o3-compiler-execution-supervisor" }
 fe2o3-compiler-ffi = { path = "crates/fe2o3-compiler-ffi" }

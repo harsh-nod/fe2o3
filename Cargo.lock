@@ -862,6 +862,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe2o3-compiler-execution-lifecycle"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-compiler-execution-protocol",
+ "rustix",
+ "tempfile",
+]
+
+[[package]]
 name = "fe2o3-compiler-execution-protocol"
 version = "0.1.0"
 dependencies = [

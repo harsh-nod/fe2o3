@@ -90,6 +90,7 @@
         "fe2o3-compiler-execution-client",
         "fe2o3-compiler-execution-coordinator",
         "fe2o3-compiler-execution-issuer",
+        "fe2o3-compiler-execution-lifecycle",
         "fe2o3-compiler-execution-supervisor",
         "fe2o3-core",
         "fe2o3-external-anchor-coordinator",
