@@ -143,11 +143,14 @@ pub use worker_v3_hsaco_finalization::{
 pub use worker_v3_hsaco_publication::{
     PreparedProtectedWorkerV3HsacoPublicationV1, PublishedProtectedWorkerV3HsacoV1,
     PublishedProtectedWorkerV3LoadEnvelopePartsV1, RecoveredProtectedWorkerV3HsacoPublicationV1,
+    RevalidatedProtectedWorkerV3FinalizerDerivationIdentityV1,
+    RevalidatedProtectedWorkerV3FinalizerDerivationV1,
     SealedProtectedWorkerV3HsacoPublicationIntentV1, WorkerV3HsacoPublicationErrorV1,
     persist_prepared_protected_worker_v3_hsaco_publication_v1,
     prepare_protected_worker_v3_hsaco_publication_v1,
     publish_recovered_protected_worker_v3_hsaco_v1,
     recover_protected_worker_v3_hsaco_publication_v1,
+    revalidate_protected_worker_v3_finalizer_derivation_v1,
 };
 
 /// The only ELF section name recognized for a canonical V1 descriptor table.

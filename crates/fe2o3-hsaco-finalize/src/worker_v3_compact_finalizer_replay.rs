@@ -389,6 +389,14 @@ impl ProtectedWorkerV3CompactFinalizerReplayV2 {
         &self.canonical_bytes
     }
 
+    /// Reports whether this transcript retains exact LLVM/object/LLD derivation bodies.
+    ///
+    /// Legacy wire V2 remains decodable for storage inspection but is insufficient for production
+    /// finalizer-derivation admission.
+    pub fn retains_derivation_metadata(&self) -> bool {
+        self.canonical_bytes.starts_with(COMPACT_REPLAY_MAGIC_V3)
+    }
+
     pub fn try_encode_canonical(
         &self,
     ) -> Result<Vec<u8>, ProtectedWorkerV3CompactFinalizerReplayErrorV1> {
@@ -1014,9 +1022,46 @@ fn encode_compact_replay_v2(
     )
 }
 
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
+fn encode_legacy_compact_replay_v2(
+    finalization_identity: FinalizedProtectedWorkerV3HsacoIdentityV1,
+    source_evidence_identity: [u8; 32],
+    handoff_slot: CompilerModuleHandoffSlotV3,
+    transaction_identity: CompilerModuleHandoffTransactionIdentityV3,
+    worker: &WorkerMeasurementV1,
+    limits: WorkerExecutionLimitsV1,
+    bootstrap_output_bound: u64,
+    external_providers: &[OwnedWorkerV3ProviderReplayPartV1],
+    link_options: &[LinkOptionV1],
+    bootstrap_metadata: WorkerResponseReplayMetadataV1<'_>,
+    replay_metadata: WorkerResponseReplayMetadataV1<'_>,
+) -> Result<Vec<u8>, ProtectedWorkerV3CompactFinalizerReplayErrorV1> {
+    encode_compact_replay_with_binding(
+        finalization_identity,
+        source_evidence_identity,
+        CompactReplayBindingHeaderV1::TransactionLegacyV2 {
+            handoff_slot,
+            transaction_identity,
+        },
+        worker,
+        limits,
+        bootstrap_output_bound,
+        external_providers,
+        link_options,
+        bootstrap_metadata,
+        replay_metadata,
+    )
+}
+
 #[derive(Clone, Copy)]
 enum CompactReplayBindingHeaderV1 {
     OpaqueV1([u8; 32]),
+    #[cfg(test)]
+    TransactionLegacyV2 {
+        handoff_slot: CompilerModuleHandoffSlotV3,
+        transaction_identity: CompilerModuleHandoffTransactionIdentityV3,
+    },
     TransactionV2 {
         handoff_slot: CompilerModuleHandoffSlotV3,
         transaction_identity: CompilerModuleHandoffTransactionIdentityV3,
@@ -1027,6 +1072,8 @@ impl CompactReplayBindingHeaderV1 {
     const fn encoded_len(self) -> usize {
         match self {
             Self::OpaqueV1(_) => 32,
+            #[cfg(test)]
+            Self::TransactionLegacyV2 { .. } => 33,
             Self::TransactionV2 { .. } => 33,
         }
     }
@@ -1034,6 +1081,8 @@ impl CompactReplayBindingHeaderV1 {
     const fn magic(self) -> &'static [u8; 8] {
         match self {
             Self::OpaqueV1(_) => COMPACT_REPLAY_MAGIC_V1,
+            #[cfg(test)]
+            Self::TransactionLegacyV2 { .. } => COMPACT_REPLAY_MAGIC_V2,
             Self::TransactionV2 { .. } => COMPACT_REPLAY_MAGIC_V3,
         }
     }
@@ -1041,6 +1090,8 @@ impl CompactReplayBindingHeaderV1 {
     const fn version(self) -> u16 {
         match self {
             Self::OpaqueV1(_) => COMPACT_REPLAY_VERSION_V1,
+            #[cfg(test)]
+            Self::TransactionLegacyV2 { .. } => COMPACT_REPLAY_VERSION_V2,
             Self::TransactionV2 { .. } => COMPACT_REPLAY_VERSION_V3,
         }
     }
@@ -1048,6 +1099,8 @@ impl CompactReplayBindingHeaderV1 {
     const fn checksum_domain(self) -> &'static [u8] {
         match self {
             Self::OpaqueV1(_) => COMPACT_REPLAY_CHECKSUM_DOMAIN_V1,
+            #[cfg(test)]
+            Self::TransactionLegacyV2 { .. } => COMPACT_REPLAY_CHECKSUM_DOMAIN_V2,
             Self::TransactionV2 { .. } => COMPACT_REPLAY_CHECKSUM_DOMAIN_V3,
         }
     }
@@ -1059,6 +1112,19 @@ impl CompactReplayBindingHeaderV1 {
     fn encode(self, bytes: &mut Vec<u8>) {
         match self {
             Self::OpaqueV1(binding_identity) => bytes.extend_from_slice(&binding_identity),
+            #[cfg(test)]
+            Self::TransactionLegacyV2 {
+                handoff_slot,
+                transaction_identity,
+            }
+            | Self::TransactionV2 {
+                handoff_slot,
+                transaction_identity,
+            } => {
+                bytes.push(handoff_slot as u8);
+                bytes.extend_from_slice(transaction_identity.as_bytes());
+            }
+            #[cfg(not(test))]
             Self::TransactionV2 {
                 handoff_slot,
                 transaction_identity,
@@ -1614,6 +1680,26 @@ mod tests {
         .unwrap()
     }
 
+    fn valid_legacy_v2_bytes() -> Vec<u8> {
+        let diagnostics = 0_u32.to_le_bytes();
+        let metadata = WorkerResponseReplayMetadataV1::from_test_bodies(&diagnostics, None);
+        let (worker, limits) = valid_parts();
+        encode_legacy_compact_replay_v2(
+            FinalizedProtectedWorkerV3HsacoIdentityV1::from_test_bytes([1; 32]),
+            [2; 32],
+            CompilerModuleHandoffSlotV3::Production,
+            CompilerModuleHandoffTransactionIdentityV3::from_bytes([3; 32]),
+            &worker,
+            limits,
+            4096,
+            &[],
+            &[],
+            metadata,
+            metadata,
+        )
+        .unwrap()
+    }
+
     fn reseal(bytes: &mut [u8]) {
         let body_end = bytes.len() - 32;
         let checksum = hash_domain_blob(COMPACT_REPLAY_CHECKSUM_DOMAIN_V1, &bytes[..body_end]);
@@ -1661,6 +1747,7 @@ mod tests {
             CompilerModuleHandoffSlotV3::Production
         );
         assert_eq!(replay.transaction_identity().as_bytes(), &[3; 32]);
+        assert!(replay.retains_derivation_metadata());
         assert!(!replay.authenticates_compiler_origin());
         assert!(!replay.grants_publication_authority());
         assert!(!replay.grants_load_authority());
@@ -1673,6 +1760,14 @@ mod tests {
             ProtectedWorkerV3CompactFinalizerReplayV2::decode_canonical(&valid_bytes()),
             Err(ProtectedWorkerV3CompactFinalizerReplayErrorV1::Checksum)
         );
+    }
+
+    #[test]
+    fn legacy_compact_v2_remains_decodable_but_identifies_missing_derivation_custody() {
+        let bytes = valid_legacy_v2_bytes();
+        let replay = ProtectedWorkerV3CompactFinalizerReplayV2::decode_canonical(&bytes).unwrap();
+        assert_eq!(replay.canonical_bytes(), bytes);
+        assert!(!replay.retains_derivation_metadata());
     }
 
     #[test]

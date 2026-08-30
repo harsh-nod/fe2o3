@@ -36,9 +36,11 @@ use fe2o3_hsaco_finalize::{
     execute_protected_reproducible_first_build_worker_v3, finalize_protected_worker_v3_hsaco_v1,
     inspect_protected_worker_v3_hsaco_v1, inspect_unfinalized,
     persist_prepared_protected_worker_v3_hsaco_publication_v1,
+    prepare_protected_worker_v3_compact_finalizer_replay_v2,
     prepare_protected_worker_v3_hsaco_publication_v1,
     publish_recovered_protected_worker_v3_hsaco_v1,
     recover_protected_worker_v3_hsaco_publication_v1,
+    revalidate_protected_worker_v3_finalizer_derivation_v1,
 };
 use fe2o3_kernel_descriptor::{
     BlockSizeV1, BuildEvidenceV1, CanonicalCodeObjectDigest,
@@ -180,6 +182,21 @@ pub(crate) struct PublishedWorkerV3InDirectory {
 pub(crate) fn published_worker_v3_fixture() -> PublishedWorkerV3Fixture {
     let fixture = slice_fixture_with_descriptor_table(&slice_descriptor_table());
     published_worker_v3_fixture_from_raw_hsaco(fixture.bytes, "vecadd", "vecadd.kd")
+}
+
+#[allow(dead_code)]
+pub(crate) fn published_worker_v3_fixture_with_llvm_build_identity(
+    llvm_build_identity: &'static str,
+) -> PublishedWorkerV3Fixture {
+    let fixture = slice_fixture_with_descriptor_table(&slice_descriptor_table());
+    published_worker_v3_fixture_from_raw_hsaco_for_kernels_with_config(
+        fixture.bytes,
+        &[("vecadd", "vecadd.kd")],
+        EvidenceConfig {
+            llvm_build_identity,
+            ..EvidenceConfig::BASE
+        },
+    )
 }
 
 #[allow(dead_code)]
@@ -364,6 +381,98 @@ fn native_v3_inspection_retains_every_boundary_axis_without_authority() {
     assert!(!inspected.grants_publication_authority());
     assert!(!inspected.grants_load_authority());
     assert!(!inspected.grants_launch_authority());
+}
+
+#[test]
+fn borrowed_finalizer_revalidation_retains_exact_stage_custody_without_payloads_or_authority() {
+    let directory = TestDirectory::new();
+    let fixture = slice_fixture_with_descriptor_table(&slice_descriptor_table());
+    let (attempt, evidence) = evidence_in_directory_for_kernel(
+        &directory,
+        fixture.bytes,
+        EvidenceConfig::BASE,
+        "vecadd",
+        "vecadd.kd",
+    );
+    let source = evidence.identity();
+    let binding = evidence.binding().identity();
+    let worker = evidence.worker_measurement().clone();
+    let compiler_module =
+        ContentIdentityV1::calculate(evidence.handoff().module_handoff().module_bytes());
+    let link_plan = evidence.plan().identity();
+    let derivation = evidence.derivation_evidence().clone();
+    let raw_hsaco = evidence.output_identity();
+    let inspected = inspect_protected_worker_v3_hsaco_v1(evidence).unwrap();
+    let finalized = finalize_protected_worker_v3_hsaco_v1(inspected).unwrap();
+    let finalization = finalized.identity();
+    let finalized_hsaco = finalized.finalized_output_identity();
+    let prepared = prepare_protected_worker_v3_compact_finalizer_replay_v2(finalized).unwrap();
+    let parts = prepared.into_parts();
+    let transcript =
+        ProtectedWorkerV3CompactFinalizerReplayV2::decode_canonical(&parts.transcript).unwrap();
+
+    let revalidated = revalidate_protected_worker_v3_finalizer_derivation_v1(
+        attempt,
+        &parts.outer_handoff,
+        parts.external_provider_payloads.iter().map(Vec::as_slice),
+        &parts.transcript,
+        &parts.finalized_hsaco,
+    )
+    .unwrap();
+    assert_eq!(revalidated.transcript_identity(), transcript.identity());
+    assert_eq!(revalidated.source_evidence_identity(), source);
+    assert_eq!(revalidated.binding_identity(), binding);
+    assert_eq!(revalidated.worker_measurement(), &worker);
+    assert_eq!(revalidated.compiler_module_identity(), compiler_module);
+    assert_eq!(revalidated.link_plan_identity(), link_plan);
+    assert_eq!(revalidated.derivation_evidence(), &derivation);
+    assert_eq!(revalidated.raw_hsaco_identity(), raw_hsaco);
+    assert_eq!(revalidated.finalization_identity(), finalization);
+    assert_eq!(revalidated.finalized_hsaco_identity(), finalized_hsaco);
+    assert!(!revalidated.proves_llvm_to_machine_semantic_refinement());
+    assert!(!revalidated.grants_compiler_authority());
+    assert!(!revalidated.grants_publication_authority());
+    assert!(!revalidated.grants_load_authority());
+    assert!(!revalidated.grants_launch_authority());
+
+    let mut corrupt_transcript = parts.transcript.clone();
+    *corrupt_transcript.last_mut().unwrap() ^= 1;
+    assert!(matches!(
+        revalidate_protected_worker_v3_finalizer_derivation_v1(
+            attempt,
+            &parts.outer_handoff,
+            parts.external_provider_payloads.iter().map(Vec::as_slice),
+            &corrupt_transcript,
+            &parts.finalized_hsaco,
+        ),
+        Err(WorkerV3HsacoPublicationErrorV1::CompactReplay(_))
+    ));
+
+    let mut corrupt_outer = parts.outer_handoff.clone();
+    corrupt_outer[0] ^= 1;
+    assert!(matches!(
+        revalidate_protected_worker_v3_finalizer_derivation_v1(
+            attempt,
+            &corrupt_outer,
+            parts.external_provider_payloads.iter().map(Vec::as_slice),
+            &parts.transcript,
+            &parts.finalized_hsaco,
+        ),
+        Err(WorkerV3HsacoPublicationErrorV1::OuterHandoff(_))
+    ));
+
+    let mut corrupt_finalized = parts.finalized_hsaco.clone();
+    corrupt_finalized[0] ^= 1;
+    assert!(
+        revalidate_protected_worker_v3_finalizer_derivation_v1(
+            attempt,
+            &parts.outer_handoff,
+            parts.external_provider_payloads.iter().map(Vec::as_slice),
+            &parts.transcript,
+            &corrupt_finalized,
+        )
+        .is_err()
+    );
 }
 
 #[test]

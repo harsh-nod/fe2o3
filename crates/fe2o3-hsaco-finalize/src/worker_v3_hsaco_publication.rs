@@ -25,11 +25,12 @@ use sha2::{Digest, Sha256};
 use crate::{
     ContentIdentityV1, FinalizedProtectedWorkerV3HsacoIdentityV1,
     InspectedProtectedWorkerV3HsacoIdentityV1, LinkInputKindClosureV1, LinkInputV1, LinkOutputV1,
-    MultiInputLinkPlanV1, PreparedFinalizedProtectedWorkerV3HsacoV1,
+    LinkPlanIdentityV1, MultiInputLinkPlanV1, PreparedFinalizedProtectedWorkerV3HsacoV1,
     PreparedProtectedWorkerV3CompactFinalizerReplayV2, ProtectedCompilerHandoffBindingIdentityV3,
     ProtectedCompilerHandoffBindingV3, ProtectedFirstBuildWorkerV3Error,
     ProtectedFirstBuildWorkerV3IdentityV1, ProtectedWorkerV3CompactFinalizerReplayErrorV1,
-    ProtectedWorkerV3CompactFinalizerReplayV2, ProvenanceNodeV1, WorkerInputV1,
+    ProtectedWorkerV3CompactFinalizerReplayIdentityV2, ProtectedWorkerV3CompactFinalizerReplayV2,
+    ProvenanceNodeV1, WorkerDerivationEvidenceV1, WorkerInputV1, WorkerMeasurementV1,
     WorkerOutputConstraintsV1, WorkerProtocolError, WorkerRequestConstructionError,
     derive_unfinalized_hsaco_from_finalized_v1, finalize_protected_worker_v3_hsaco_v1,
     first_build_worker_v3::recover_inert_protected_first_build_worker_v3_evidence_v1,
@@ -62,6 +63,156 @@ const PUBLICATION_DOMAIN_V1: &[u8] =
     b"FE2O3/SEMANTIC-CAPSULE-PROTECTED-WORKER-V3-ATOMIC-PUBLICATION/V1\0";
 const UPSTREAM_DOMAIN_V1: &[u8] =
     b"FE2O3/SEMANTIC-CAPSULE-PROTECTED-WORKER-V3-PUBLICATION-UPSTREAM/V1\0";
+const REVALIDATED_FINALIZER_DERIVATION_DOMAIN_V1: &[u8] =
+    b"FE2O3/PROTECTED-WORKER-V3-REVALIDATED-FINALIZER-DERIVATION/V1\0";
+
+/// Stable identity of one independently reconstructed Worker V3 finalizer derivation.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct RevalidatedProtectedWorkerV3FinalizerDerivationIdentityV1([u8; 32]);
+
+impl RevalidatedProtectedWorkerV3FinalizerDerivationIdentityV1 {
+    /// Returns the domain-separated identity bytes.
+    pub const fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+/// Move-only, authority-free custody of an independently reconstructed finalizer lineage.
+///
+/// This compact owner binds the durable transcript, strict bootstrap and replay requests, exact
+/// compiler module, measured worker, canonical link plan, linked/optimized LLVM modules, generated
+/// object, ordered native-link inputs, in-process LLD policy, raw HSACO, descriptor finalization,
+/// and finalized HSACO. It records exact byte and policy custody only; it does not prove semantic
+/// refinement from LLVM to machine code and grants no compiler, publication, load, or launch
+/// authority.
+///
+/// ```compile_fail
+/// use fe2o3_hsaco_finalize::RevalidatedProtectedWorkerV3FinalizerDerivationV1;
+///
+/// fn cannot_duplicate(value: RevalidatedProtectedWorkerV3FinalizerDerivationV1) {
+///     let _duplicate = value.clone();
+/// }
+/// ```
+#[derive(Debug, Eq, PartialEq)]
+pub struct RevalidatedProtectedWorkerV3FinalizerDerivationV1 {
+    identity: RevalidatedProtectedWorkerV3FinalizerDerivationIdentityV1,
+    transcript: ProtectedWorkerV3CompactFinalizerReplayIdentityV2,
+    source: ProtectedFirstBuildWorkerV3IdentityV1,
+    binding: ProtectedCompilerHandoffBindingIdentityV3,
+    worker: WorkerMeasurementV1,
+    bootstrap_request_id: [u8; 32],
+    bootstrap_request_identity: [u8; 32],
+    replay_request_id: [u8; 32],
+    replay_request_identity: [u8; 32],
+    compiler_module: ContentIdentityV1,
+    link_plan: LinkPlanIdentityV1,
+    derivation: WorkerDerivationEvidenceV1,
+    raw_hsaco: ContentIdentityV1,
+    finalization: FinalizedProtectedWorkerV3HsacoIdentityV1,
+    finalized_hsaco: ContentIdentityV1,
+}
+
+impl RevalidatedProtectedWorkerV3FinalizerDerivationV1 {
+    /// Returns the identity of every retained finalizer-custody axis.
+    pub const fn identity(&self) -> RevalidatedProtectedWorkerV3FinalizerDerivationIdentityV1 {
+        self.identity
+    }
+
+    /// Returns the exact compact transcript identity.
+    pub const fn transcript_identity(&self) -> ProtectedWorkerV3CompactFinalizerReplayIdentityV2 {
+        self.transcript
+    }
+
+    /// Returns the strict bootstrap/replay source-evidence identity.
+    pub const fn source_evidence_identity(&self) -> ProtectedFirstBuildWorkerV3IdentityV1 {
+        self.source
+    }
+
+    /// Returns the complete compiler-handoff binding identity.
+    pub const fn binding_identity(&self) -> ProtectedCompilerHandoffBindingIdentityV3 {
+        self.binding
+    }
+
+    /// Returns the exact measured worker declaration.
+    pub const fn worker_measurement(&self) -> &WorkerMeasurementV1 {
+        &self.worker
+    }
+
+    /// Returns the bootstrap request identifier.
+    pub const fn bootstrap_request_id(&self) -> &[u8; 32] {
+        &self.bootstrap_request_id
+    }
+
+    /// Returns the canonical bootstrap request identity.
+    pub const fn bootstrap_request_identity(&self) -> &[u8; 32] {
+        &self.bootstrap_request_identity
+    }
+
+    /// Returns the exact-output replay request identifier.
+    pub const fn replay_request_id(&self) -> &[u8; 32] {
+        &self.replay_request_id
+    }
+
+    /// Returns the canonical exact-output replay request identity.
+    pub const fn replay_request_identity(&self) -> &[u8; 32] {
+        &self.replay_request_identity
+    }
+
+    /// Returns the compiler-module content identity sent to the worker.
+    pub const fn compiler_module_identity(&self) -> ContentIdentityV1 {
+        self.compiler_module
+    }
+
+    /// Returns the canonical multi-input link-plan identity.
+    pub const fn link_plan_identity(&self) -> LinkPlanIdentityV1 {
+        self.link_plan
+    }
+
+    /// Returns the independently decoded LLVM/object/LLD derivation evidence.
+    pub const fn derivation_evidence(&self) -> &WorkerDerivationEvidenceV1 {
+        &self.derivation
+    }
+
+    /// Returns the raw worker-produced HSACO identity.
+    pub const fn raw_hsaco_identity(&self) -> ContentIdentityV1 {
+        self.raw_hsaco
+    }
+
+    /// Returns the canonical descriptor-finalization identity.
+    pub const fn finalization_identity(&self) -> FinalizedProtectedWorkerV3HsacoIdentityV1 {
+        self.finalization
+    }
+
+    /// Returns the finalized HSACO identity.
+    pub const fn finalized_hsaco_identity(&self) -> ContentIdentityV1 {
+        self.finalized_hsaco
+    }
+
+    /// Exact custody does not prove semantic refinement from LLVM to machine code.
+    pub const fn proves_llvm_to_machine_semantic_refinement(&self) -> bool {
+        false
+    }
+
+    /// Reports that this structural evidence grants no compiler authority.
+    pub const fn grants_compiler_authority(&self) -> bool {
+        false
+    }
+
+    /// Reports that this structural evidence grants no publication authority.
+    pub const fn grants_publication_authority(&self) -> bool {
+        false
+    }
+
+    /// Reports that this structural evidence grants no load authority.
+    pub const fn grants_load_authority(&self) -> bool {
+        false
+    }
+
+    /// Reports that this structural evidence grants no launch authority.
+    pub const fn grants_launch_authority(&self) -> bool {
+        false
+    }
+}
 
 /// Copyable identity view of one internally derived strict-V3 publication intent.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -395,6 +546,7 @@ impl RecoveredProtectedWorkerV3HsacoPublicationV1 {
 pub enum WorkerV3HsacoPublicationErrorV1 {
     ProducerIdentityMismatch,
     CompilerClosureMismatch,
+    MissingExactFinalizerDerivation,
     RawOutputMismatch,
     FinalizedOutputMismatch,
     TranscriptFinalizationMismatch,
@@ -426,6 +578,9 @@ impl fmt::Display for WorkerV3HsacoPublicationErrorV1 {
             }
             Self::CompilerClosureMismatch => formatter
                 .write_str("V3 publication compiler closure differs from recovered handoff"),
+            Self::MissingExactFinalizerDerivation => formatter.write_str(
+                "legacy Worker V3 finalizer replay lacks exact LLVM/object/LLD derivation custody",
+            ),
             Self::RawOutputMismatch => {
                 formatter.write_str("recovered raw HSACO differs from strict V3 replay evidence")
             }
@@ -577,6 +732,39 @@ pub fn recover_protected_worker_v3_hsaco_publication_v1(
     validate_recovered_publication(producer, recovered)
 }
 
+/// Independently reconstructs exact finalizer custody from borrowed durable-envelope components.
+///
+/// The returned value is compact and move-only. This operation uses bounded transient copies for
+/// external providers while rebuilding the exact strict Worker V3 requests and responses; no
+/// provider, compiler-module, raw-HSACO, or finalized-HSACO payload is retained in the result.
+pub fn revalidate_protected_worker_v3_finalizer_derivation_v1<'payload, I>(
+    attempt: BuildAttempt,
+    outer_handoff: &[u8],
+    external_provider_payloads: I,
+    transcript: &[u8],
+    exact_finalized_hsaco: &[u8],
+) -> Result<RevalidatedProtectedWorkerV3FinalizerDerivationV1, WorkerV3HsacoPublicationErrorV1>
+where
+    I: IntoIterator<Item = &'payload [u8]>,
+    I::IntoIter: ExactSizeIterator,
+{
+    let transcript = ProtectedWorkerV3CompactFinalizerReplayV2::decode_canonical(transcript)?;
+    let outer = InertSemanticCompilerModuleHandoffV3::decode(outer_handoff)?;
+    let payloads = external_provider_payloads.into_iter();
+    let mut borrowed = try_vec(payloads.len(), "borrowed provider inputs")?;
+    for payload in payloads {
+        borrowed.push(BorrowedProviderPayloadV1(payload));
+    }
+    Ok(validate_finalizer_replay_components(
+        attempt,
+        outer,
+        borrowed,
+        transcript,
+        exact_finalized_hsaco,
+    )?
+    .derivation)
+}
+
 /// Completes the production V3 publication path from one independently replayed restart owner.
 ///
 /// This is the production entry point. The lower-level artifact-transaction V3 API independently
@@ -627,12 +815,76 @@ fn validate_recovered_publication(
     let transcript =
         ProtectedWorkerV3CompactFinalizerReplayV2::decode_canonical(&transcript_bytes)?;
     let outer = InertSemanticCompilerModuleHandoffV3::decode_shared_vec(Arc::new(outer_handoff))?;
+    let validated = validate_finalizer_replay_components(
+        record.attempt(),
+        outer,
+        provider_payloads,
+        transcript,
+        &exact_finalized_hsaco,
+    )?;
+    let finalized = validated.finalized;
+    let intent = derive_publication_intent(producer_package_identity_v1(producer), &finalized)?;
+    if intent.plan != record.plan() {
+        return Err(WorkerV3HsacoPublicationErrorV1::DurablePlanMismatch);
+    }
+    Ok(RecoveredProtectedWorkerV3HsacoPublicationV1 {
+        outcome,
+        record,
+        finalized,
+        intent,
+    })
+}
+
+struct ValidatedFinalizerReplayComponentsV1 {
+    finalized: PreparedFinalizedProtectedWorkerV3HsacoV1,
+    derivation: RevalidatedProtectedWorkerV3FinalizerDerivationV1,
+}
+
+trait FinalizerProviderPayloadV1 {
+    fn as_bytes(&self) -> &[u8];
+
+    fn into_owned(self) -> Result<Vec<u8>, WorkerV3HsacoPublicationErrorV1>;
+}
+
+impl FinalizerProviderPayloadV1 for Vec<u8> {
+    fn as_bytes(&self) -> &[u8] {
+        self
+    }
+
+    fn into_owned(self) -> Result<Vec<u8>, WorkerV3HsacoPublicationErrorV1> {
+        Ok(self)
+    }
+}
+
+struct BorrowedProviderPayloadV1<'payload>(&'payload [u8]);
+
+impl FinalizerProviderPayloadV1 for BorrowedProviderPayloadV1<'_> {
+    fn as_bytes(&self) -> &[u8] {
+        self.0
+    }
+
+    fn into_owned(self) -> Result<Vec<u8>, WorkerV3HsacoPublicationErrorV1> {
+        try_copy_bytes(self.0, "borrowed provider payload")
+    }
+}
+
+fn validate_finalizer_replay_components<P: FinalizerProviderPayloadV1>(
+    attempt: BuildAttempt,
+    outer: InertSemanticCompilerModuleHandoffV3,
+    provider_payloads: Vec<P>,
+    transcript: ProtectedWorkerV3CompactFinalizerReplayV2,
+    exact_finalized_hsaco: &[u8],
+) -> Result<ValidatedFinalizerReplayComponentsV1, WorkerV3HsacoPublicationErrorV1> {
+    if !transcript.retains_derivation_metadata() {
+        return Err(WorkerV3HsacoPublicationErrorV1::MissingExactFinalizerDerivation);
+    }
     let binding = ProtectedCompilerHandoffBindingV3::from_replay_parts(
         &outer,
-        record.attempt(),
+        attempt,
         transcript.handoff_slot(),
         transcript.transaction_identity(),
     )?;
+    let transcript_identity = transcript.identity();
     let replay = transcript.replay_view();
     if replay.external_providers.len() != provider_payloads.len() {
         return Err(WorkerV3HsacoPublicationErrorV1::ProviderCountMismatch);
@@ -644,10 +896,10 @@ fn validate_recovered_publication(
         .zip(provider_payloads)
         .enumerate()
     {
-        if !reference.identity.matches(&payload) {
+        if !reference.identity.matches(payload.as_bytes()) {
             return Err(WorkerV3HsacoPublicationErrorV1::ProviderIdentityMismatch { index });
         }
-        let input = WorkerInputV1::new(reference.kind, payload)?;
+        let input = WorkerInputV1::new(reference.kind, payload.into_owned()?)?;
         if input.identity() != reference.identity {
             return Err(WorkerV3HsacoPublicationErrorV1::ProviderIdentityMismatch { index });
         }
@@ -657,7 +909,7 @@ fn validate_recovered_publication(
     let decoded = decode_compiler_module_handoff_v2(outer.module_handoff().canonical_bytes())
         .map_err(WorkerRequestConstructionError::CompilerModuleHandoff)?;
     let (_, worker_options) = decode_link_options(replay.link_options)?;
-    let raw_hsaco = derive_unfinalized_hsaco_from_finalized_v1(&exact_finalized_hsaco)?;
+    let raw_hsaco = derive_unfinalized_hsaco_from_finalized_v1(exact_finalized_hsaco)?;
     let raw_identity = ContentIdentityV1::calculate(&raw_hsaco);
     let plan = derive_link_plan(&decoded, &providers, replay.link_options, raw_identity)?;
     let input_kinds =
@@ -725,16 +977,75 @@ fn validate_recovered_publication(
     if finalized.exact_finalized_bytes() != exact_finalized_hsaco {
         return Err(WorkerV3HsacoPublicationErrorV1::FinalizedOutputMismatch);
     }
-    let intent = derive_publication_intent(producer_package_identity_v1(producer), &finalized)?;
-    if intent.plan != record.plan() {
-        return Err(WorkerV3HsacoPublicationErrorV1::DurablePlanMismatch);
-    }
-    Ok(RecoveredProtectedWorkerV3HsacoPublicationV1 {
-        outcome,
-        record,
+    let derivation = derive_revalidated_finalizer_derivation(transcript_identity, &finalized);
+    Ok(ValidatedFinalizerReplayComponentsV1 {
         finalized,
-        intent,
+        derivation,
     })
+}
+
+fn derive_revalidated_finalizer_derivation(
+    transcript: ProtectedWorkerV3CompactFinalizerReplayIdentityV2,
+    finalized: &PreparedFinalizedProtectedWorkerV3HsacoV1,
+) -> RevalidatedProtectedWorkerV3FinalizerDerivationV1 {
+    let source = finalized.source_evidence();
+    let worker = source.worker_measurement().clone();
+    let bootstrap = source.bootstrap().response();
+    let replay = source.exact_replay().response();
+    let compiler_module =
+        ContentIdentityV1::calculate(finalized.outer_handoff().module_handoff().module_bytes());
+    let derivation = source.derivation_evidence().clone();
+    let raw_hsaco = finalized.raw_output_identity();
+    debug_assert_eq!(derivation.hsaco(), raw_hsaco);
+    let finalization = finalized.identity();
+    let finalized_hsaco = finalized.finalized_output_identity();
+    let identity = RevalidatedProtectedWorkerV3FinalizerDerivationIdentityV1(hash_identity(
+        REVALIDATED_FINALIZER_DERIVATION_DOMAIN_V1,
+        |hash| {
+            hash.update(transcript.as_bytes());
+            hash.update(source.identity().as_bytes());
+            hash.update(source.binding().identity().as_bytes());
+            hash_content_identity(hash, worker.executable());
+            hash_text(hash, worker.worker_build_identity());
+            hash_text(hash, worker.llvm_build_identity());
+            hash.update(bootstrap.request_id());
+            hash.update(bootstrap.request_identity());
+            hash.update(replay.request_id());
+            hash.update(replay.request_identity());
+            hash_content_identity(hash, compiler_module);
+            hash.update(source.plan().identity().as_bytes());
+            hash.update(derivation.evidence_identity());
+            hash_content_identity(hash, derivation.linked_module());
+            hash_content_identity(hash, derivation.optimized_module());
+            hash_content_identity(hash, derivation.generated_object());
+            hash.update((derivation.native_link_inputs().len() as u64).to_le_bytes());
+            for input in derivation.native_link_inputs() {
+                hash.update([input.source() as u8]);
+                hash_content_identity(hash, input.content());
+            }
+            hash.update(derivation.lld_invocation_identity());
+            hash_content_identity(hash, raw_hsaco);
+            hash.update(finalization.as_bytes());
+            hash_content_identity(hash, finalized_hsaco);
+        },
+    ));
+    RevalidatedProtectedWorkerV3FinalizerDerivationV1 {
+        identity,
+        transcript,
+        source: source.identity(),
+        binding: source.binding().identity(),
+        worker,
+        bootstrap_request_id: *bootstrap.request_id(),
+        bootstrap_request_identity: *bootstrap.request_identity(),
+        replay_request_id: *replay.request_id(),
+        replay_request_identity: *replay.request_identity(),
+        compiler_module,
+        link_plan: source.plan().identity(),
+        derivation,
+        raw_hsaco,
+        finalization,
+        finalized_hsaco,
+    }
 }
 
 fn derive_link_plan(
@@ -942,6 +1253,15 @@ fn hash_attempt(hash: &mut Sha256, attempt: BuildAttempt) {
 fn hash_blob(hash: &mut Sha256, bytes: &[u8]) {
     hash.update((bytes.len() as u64).to_le_bytes());
     hash.update(bytes);
+}
+
+fn hash_text(hash: &mut Sha256, value: &str) {
+    hash_blob(hash, value.as_bytes());
+}
+
+fn hash_content_identity(hash: &mut Sha256, identity: ContentIdentityV1) {
+    hash.update(identity.sha256());
+    hash.update(identity.byte_len().to_le_bytes());
 }
 
 fn hash_content(hash: &mut Sha256, identity: ContentIdentityV1) {
