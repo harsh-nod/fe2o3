@@ -444,7 +444,7 @@ fn approved_policy_satisfaction_is_rederived_over_exact_comparison_axes() {
     if let OverheadObservationV1::Measured { measurement } =
         &mut failed.overhead_budgets[0].observation
     {
-        measurement.loss_free = false;
+        measurement.storage_bytes = 1;
     } else {
         unreachable!()
     }
@@ -455,7 +455,7 @@ fn approved_policy_satisfaction_is_rederived_over_exact_comparison_axes() {
     if let OverheadObservationV1::Measured { measurement } =
         &mut failed.overhead_budgets[0].observation
     {
-        measurement.loss_free = true;
+        measurement.storage_bytes = 0;
         measurement.metric = MeasuredOverheadMetricV1::RelativeDuration {
             baseline_nanoseconds: 0,
             captured_nanoseconds: 1,
@@ -553,6 +553,30 @@ fn non_no_capture_measurement_must_bind_the_canonical_no_capture_comparator() {
     assert_eq!(
         manifest.evaluate_overhead(CaptureModeV1::Counters).unwrap(),
         OverheadAssessmentV1::CallerBoundPolicySatisfied
+    );
+
+    let mut lossy_baseline = manifest.clone();
+    let OverheadObservationV1::Measured { measurement } =
+        &mut lossy_baseline.overhead_budgets[0].observation
+    else {
+        unreachable!()
+    };
+    measurement.loss_free = false;
+    assert_eq!(
+        lossy_baseline.evaluate_overhead(CaptureModeV1::Counters),
+        Err(QualificationValidationErrorV1::BaselineComparatorContradiction)
+    );
+
+    let mut truncated_baseline = manifest.clone();
+    let OverheadObservationV1::Measured { measurement } =
+        &mut truncated_baseline.overhead_budgets[0].observation
+    else {
+        unreachable!()
+    };
+    measurement.truncated = true;
+    assert_eq!(
+        truncated_baseline.evaluate_overhead(CaptureModeV1::Counters),
+        Err(QualificationValidationErrorV1::BaselineComparatorContradiction)
     );
 
     let mut raw_evidence_alias = manifest.clone();

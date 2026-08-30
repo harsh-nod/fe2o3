@@ -96,9 +96,10 @@ It never upgrades caller-supplied bytes into an authenticated qualification.
 Comparator availability is consistent only when the no-capture row is itself
 measured and exactly matches the comparator axes, configurations, raw and
 no-capture evidence, statistic, clock, warmups, repetitions, and durations.
-All other measured modes must use treatment evidence distinct from both the
-raw and no-capture evidence identities. An unavailable comparator with
-unavailable modes remains a valid, explicit qualification state.
+The canonical no-capture baseline must be loss-free and non-truncated. All
+other measured modes must use treatment evidence distinct from both the raw
+and no-capture evidence identities. An unavailable comparator with unavailable
+modes remains a valid, explicit qualification state.
 
 T0 still needs an authenticated producer and archived query acceptance without
 a source checkout. T6 still needs approved budgets, real measurements, broader

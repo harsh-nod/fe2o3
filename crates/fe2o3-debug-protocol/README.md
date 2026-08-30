@@ -182,9 +182,10 @@ production observation claim.
 
 An available comparator requires exactly one measured no-capture row whose
 axes, configurations, raw/no-capture evidence, statistic, clock, warmups,
-repetitions, and durations match the comparator record. Every other measured
-mode uses that no-capture evidence and configuration as its baseline and must
-use treatment evidence distinct from both canonical evidence records.
+repetitions, and durations match the comparator record. That baseline must be
+loss-free and non-truncated. Every other measured mode uses that no-capture
+evidence and configuration as its baseline and must use treatment evidence
+distinct from both canonical evidence records.
 
 The manifest is capped at 256 KiB. It requires all seven component rows and all
 six capture-mode rows once in canonical order, bounds all text and numeric

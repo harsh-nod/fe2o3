@@ -272,6 +272,8 @@ impl CanonicalBaselineComparatorV1 {
             || measurement.repetitions != record.repetitions
             || measurement.statistic != record.statistic
             || measurement.clock_domain != record.clock_domain
+            || !measurement.loss_free
+            || measurement.truncated
             || *baseline_nanoseconds != record.raw_duration_nanoseconds
             || *captured_nanoseconds != record.no_capture_duration_nanoseconds
         {
