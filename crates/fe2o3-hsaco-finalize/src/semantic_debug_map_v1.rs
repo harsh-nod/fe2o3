@@ -9,11 +9,13 @@ use fe2o3_compiler_lineage::{
 };
 use fe2o3_kernel_ir::{
     DebugSourceMapDocumentV2, DebugSourceMapKirSiteV1, DebugSourceMapSpanV1,
+    MAX_SEMANTIC_DEBUG_BOUNDARIES_V1, MAX_SEMANTIC_DEBUG_MAPPING_REFERENCES_V1,
     ProductionSemanticDebugAvailabilityV1, ProductionSemanticDebugCarrierV1,
     ProductionSemanticDebugFragmentErrorV1, ProductionSemanticDebugProducerGapV1,
-    ProductionSemanticDebugReceiptExtensionV1, SemanticDebugContentIdentityV1,
-    SemanticDebugLayerV1, SemanticDebugLocationV1, SemanticDebugMapDocumentV1,
-    SemanticDebugMapErrorV1, SemanticDebugMapInputsV1, SemanticDebugTransformationV1,
+    ProductionSemanticDebugReceiptExtensionV1, SemanticDebugBoundaryDirectionV1,
+    SemanticDebugBoundaryV1, SemanticDebugContentIdentityV1, SemanticDebugLayerV1,
+    SemanticDebugLocationV1, SemanticDebugMapDocumentV1, SemanticDebugMapErrorV1,
+    SemanticDebugMapInputsV1, SemanticDebugMappingV1, SemanticDebugTransformationV1,
     SemanticDebugUnavailableReasonV1, VerifiedCanonicalKernelIrV8, decode_module_v7,
     semantic_debug_map_identity_v1,
 };
@@ -62,6 +64,7 @@ pub struct AdmittedFinalizedSemanticDebugMapV1 {
     status: FinalizedSemanticDebugMapAdmissionStatusV1,
     canonical_bytes: Vec<u8>,
     document: SemanticDebugMapDocumentV1,
+    graph_indices: SemanticDebugGraphIndicesV1,
 }
 
 impl AdmittedFinalizedSemanticDebugMapV1 {
@@ -96,6 +99,10 @@ impl AdmittedFinalizedSemanticDebugMapV1 {
         &self.document
     }
 
+    pub(crate) const fn graph_indices(&self) -> &SemanticDebugGraphIndicesV1 {
+        &self.graph_indices
+    }
+
     pub const fn authenticates_compiler_execution(&self) -> bool {
         false
     }
@@ -111,6 +118,133 @@ impl AdmittedFinalizedSemanticDebugMapV1 {
     pub const fn grants_launch_authority(&self) -> bool {
         false
     }
+}
+
+#[derive(Debug)]
+pub(crate) struct SemanticDebugGraphIndicesV1 {
+    mapping_inputs: Vec<([u8; 32], usize)>,
+    mapping_outputs: Vec<([u8; 32], usize)>,
+    boundaries: Vec<(([u8; 32], SemanticDebugBoundaryDirectionV1), usize)>,
+}
+
+impl SemanticDebugGraphIndicesV1 {
+    fn try_new(map: &SemanticDebugMapDocumentV1) -> Result<Self, FinalizedSemanticDebugMapErrorV1> {
+        let (input_count, output_count) = map
+            .mappings()
+            .iter()
+            .try_fold((0_usize, 0_usize), |(inputs, outputs), mapping| {
+                Some((
+                    inputs.checked_add(mapping.inputs().len())?,
+                    outputs.checked_add(mapping.output().nodes().len())?,
+                ))
+            })
+            .ok_or(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence)?;
+        validate_graph_index_cardinalities(input_count, output_count, map.boundaries().len())?;
+
+        let mut mapping_inputs = Vec::new();
+        let mut mapping_outputs = Vec::new();
+        let mut boundaries = Vec::new();
+        mapping_inputs
+            .try_reserve_exact(input_count)
+            .map_err(|_| FinalizedSemanticDebugMapErrorV1::AllocationFailure)?;
+        mapping_outputs
+            .try_reserve_exact(output_count)
+            .map_err(|_| FinalizedSemanticDebugMapErrorV1::AllocationFailure)?;
+        boundaries
+            .try_reserve_exact(map.boundaries().len())
+            .map_err(|_| FinalizedSemanticDebugMapErrorV1::AllocationFailure)?;
+
+        for (mapping_index, mapping) in map.mappings().iter().enumerate() {
+            mapping_inputs.extend(
+                mapping
+                    .inputs()
+                    .iter()
+                    .map(|identity| (*identity, mapping_index)),
+            );
+            mapping_outputs.extend(
+                mapping
+                    .output()
+                    .nodes()
+                    .iter()
+                    .map(|identity| (*identity, mapping_index)),
+            );
+        }
+        boundaries.extend(
+            map.boundaries()
+                .iter()
+                .enumerate()
+                .map(|(boundary_index, boundary)| {
+                    ((boundary.node(), boundary.direction()), boundary_index)
+                }),
+        );
+        normalize_unique_owner_index(&mut mapping_inputs)?;
+        normalize_unique_owner_index(&mut mapping_outputs)?;
+        normalize_unique_owner_index(&mut boundaries)?;
+        Ok(Self {
+            mapping_inputs,
+            mapping_outputs,
+            boundaries,
+        })
+    }
+
+    pub(crate) fn mapping_from<'a>(
+        &self,
+        map: &'a SemanticDebugMapDocumentV1,
+        identity: [u8; 32],
+    ) -> Option<&'a SemanticDebugMappingV1> {
+        owner_lookup(&self.mapping_inputs, &identity).and_then(|index| map.mappings().get(index))
+    }
+
+    pub(crate) fn mapping_to<'a>(
+        &self,
+        map: &'a SemanticDebugMapDocumentV1,
+        identity: [u8; 32],
+    ) -> Option<&'a SemanticDebugMappingV1> {
+        owner_lookup(&self.mapping_outputs, &identity).and_then(|index| map.mappings().get(index))
+    }
+
+    fn boundary<'a>(
+        &self,
+        map: &'a SemanticDebugMapDocumentV1,
+        identity: [u8; 32],
+        direction: SemanticDebugBoundaryDirectionV1,
+    ) -> Option<&'a SemanticDebugBoundaryV1> {
+        owner_lookup(&self.boundaries, &(identity, direction))
+            .and_then(|index| map.boundaries().get(index))
+    }
+}
+
+fn validate_graph_index_cardinalities(
+    input_count: usize,
+    output_count: usize,
+    boundary_count: usize,
+) -> Result<(), FinalizedSemanticDebugMapErrorV1> {
+    let reference_count = input_count
+        .checked_add(output_count)
+        .ok_or(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence)?;
+    if reference_count > MAX_SEMANTIC_DEBUG_MAPPING_REFERENCES_V1
+        || boundary_count > MAX_SEMANTIC_DEBUG_BOUNDARIES_V1
+    {
+        return Err(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence);
+    }
+    Ok(())
+}
+
+fn normalize_unique_owner_index<K: Ord>(
+    entries: &mut [(K, usize)],
+) -> Result<(), FinalizedSemanticDebugMapErrorV1> {
+    entries.sort_unstable_by(|left, right| left.0.cmp(&right.0));
+    if entries.windows(2).any(|pair| pair[0].0 == pair[1].0) {
+        return Err(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence);
+    }
+    Ok(())
+}
+
+fn owner_lookup<K: Ord + Copy>(entries: &[(K, usize)], key: &K) -> Option<usize> {
+    entries
+        .binary_search_by_key(key, |entry| entry.0)
+        .ok()
+        .map(|index| entries[index].1)
 }
 
 /// Independently parses the finalized HSACO, then admits only symbol-relative ISA intervals that
@@ -212,14 +346,17 @@ impl PreparedFinalizedProtectedWorkerV3HsacoV1 {
         let map =
             SemanticDebugMapDocumentV1::from_canonical_json_bytes(fragment.pre_finalization_map())
                 .map_err(FinalizedSemanticDebugMapErrorV1::SemanticMap)?;
+        let graph_indices = SemanticDebugGraphIndicesV1::try_new(&map)?;
         validate_exact_production_correspondence(
             &map,
+            &graph_indices,
             fragment.source_map_v2(),
             semantic_mir,
             exact_kir_v8,
             fragment.canonical_kir_v7(),
             correspondence_bytes,
         )?;
+        drop(graph_indices);
 
         let artifact_identity =
             SemanticDebugContentIdentityV1::calculate(self.exact_finalized_bytes())
@@ -356,6 +493,7 @@ fn bounded_copy(bytes: &[u8]) -> Result<Vec<u8>, FinalizedSemanticDebugMapErrorV
 #[allow(clippy::too_many_lines)]
 fn validate_exact_production_correspondence(
     map: &SemanticDebugMapDocumentV1,
+    graph_indices: &SemanticDebugGraphIndicesV1,
     source_map_bytes: &[u8],
     semantic_mir_bytes: &[u8],
     canonical_kir_v8_bytes: &[u8],
@@ -511,8 +649,8 @@ fn validate_exact_production_correspondence(
         };
         let mir_id = node_id(mir_location)
             .ok_or(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence)?;
-        let source_mapping = map
-            .mapping_to(mir_id)
+        let source_mapping = graph_indices
+            .mapping_to(map, mir_id)
             .filter(|mapping| mapping.inputs().len() == 1)
             .ok_or(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence)?;
         let source_id = source_mapping.inputs()[0];
@@ -521,6 +659,7 @@ fn validate_exact_production_correspondence(
         }
         require_mapping(
             map,
+            graph_indices,
             source_id,
             &[mir_id],
             SemanticDebugLayerV1::Source,
@@ -534,6 +673,7 @@ fn validate_exact_production_correspondence(
             }
             require_unavailable_mapping(
                 map,
+                graph_indices,
                 mir_id,
                 SemanticDebugLayerV1::Mir,
                 SemanticDebugLayerV1::Kir,
@@ -587,14 +727,15 @@ fn validate_exact_production_correspondence(
             };
             let kir_id = node_id(kir_location)
                 .ok_or(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence)?;
-            let boundary = map.boundaries().iter().filter(|boundary| {
-                boundary.node() == kir_id
-                    && boundary.direction()
-                        == fe2o3_kernel_ir::SemanticDebugBoundaryDirectionV1::SuccessorUnavailable
-                    && boundary.reason()
-                        == fe2o3_kernel_ir::SemanticDebugBoundaryReasonV1::UnsupportedLayer
-            });
-            if boundary.count() != 1 {
+            let boundary = graph_indices.boundary(
+                map,
+                kir_id,
+                SemanticDebugBoundaryDirectionV1::SuccessorUnavailable,
+            );
+            if boundary.is_none_or(|boundary| {
+                boundary.reason()
+                    != fe2o3_kernel_ir::SemanticDebugBoundaryReasonV1::UnsupportedLayer
+            }) {
                 return Err(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence);
             }
             kir_ids.push(kir_id);
@@ -606,6 +747,7 @@ fn validate_exact_production_correspondence(
         };
         require_mapping(
             map,
+            graph_indices,
             mir_id,
             &kir_ids,
             SemanticDebugLayerV1::Mir,
@@ -618,14 +760,15 @@ fn validate_exact_production_correspondence(
 
 fn require_mapping(
     map: &SemanticDebugMapDocumentV1,
+    graph_indices: &SemanticDebugGraphIndicesV1,
     input: [u8; 32],
     outputs: &[[u8; 32]],
     input_layer: SemanticDebugLayerV1,
     output_layer: SemanticDebugLayerV1,
     transformation: SemanticDebugTransformationV1,
 ) -> Result<(), FinalizedSemanticDebugMapErrorV1> {
-    let mapping = map
-        .mapping_from(input)
+    let mapping = graph_indices
+        .mapping_from(map, input)
         .ok_or(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence)?;
     let mut expected_outputs = bounded_copy_identities(outputs)?;
     expected_outputs.sort_unstable();
@@ -642,14 +785,15 @@ fn require_mapping(
 
 fn require_unavailable_mapping(
     map: &SemanticDebugMapDocumentV1,
+    graph_indices: &SemanticDebugGraphIndicesV1,
     input: [u8; 32],
     input_layer: SemanticDebugLayerV1,
     output_layer: SemanticDebugLayerV1,
     transformation: SemanticDebugTransformationV1,
     reason: SemanticDebugUnavailableReasonV1,
 ) -> Result<(), FinalizedSemanticDebugMapErrorV1> {
-    let mapping = map
-        .mapping_from(input)
+    let mapping = graph_indices
+        .mapping_from(map, input)
         .ok_or(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence)?;
     if mapping.inputs() != [input]
         || !mapping.output().nodes().is_empty()
@@ -713,6 +857,7 @@ fn admit_with_entry_sizes_and_status(
 ) -> Result<AdmittedFinalizedSemanticDebugMapV1, FinalizedSemanticDebugMapErrorV1> {
     let document = SemanticDebugMapDocumentV1::from_canonical_json_bytes(map_bytes)
         .map_err(FinalizedSemanticDebugMapErrorV1::SemanticMap)?;
+    let graph_indices = SemanticDebugGraphIndicesV1::try_new(&document)?;
     if let Some(inputs) = inputs {
         document
             .validate_exact_inputs(inputs)
@@ -732,6 +877,7 @@ fn admit_with_entry_sizes_and_status(
         status,
         canonical_bytes,
         document,
+        graph_indices,
     })
 }
 
@@ -804,6 +950,13 @@ mod tests {
 
     fn id(byte: u8) -> [u8; 32] {
         [byte; 32]
+    }
+
+    fn ordinal_id(ordinal: usize) -> [u8; 32] {
+        let mut identity = [0_u8; 32];
+        identity[..8].copy_from_slice(&(ordinal as u64).to_le_bytes());
+        identity[31] = 1;
+        identity
     }
 
     fn content(bytes: &[u8]) -> SemanticDebugContentIdentityV1 {
@@ -912,6 +1065,47 @@ mod tests {
                 SemanticDebugMapErrorV1::NonCanonicalEncoding
             ))
         ));
+    }
+
+    #[test]
+    fn graph_indices_are_bounded_unique_and_logarithmically_queryable_at_the_wire_limit() {
+        let mut owners = Vec::new();
+        owners
+            .try_reserve_exact(MAX_SEMANTIC_DEBUG_MAPPING_REFERENCES_V1)
+            .unwrap();
+        owners.extend(
+            (0..MAX_SEMANTIC_DEBUG_MAPPING_REFERENCES_V1)
+                .rev()
+                .map(|ordinal| (ordinal_id(ordinal), ordinal)),
+        );
+        normalize_unique_owner_index(&mut owners).unwrap();
+        for ordinal in 0..MAX_SEMANTIC_DEBUG_MAPPING_REFERENCES_V1 {
+            assert_eq!(owner_lookup(&owners, &ordinal_id(ordinal)), Some(ordinal));
+        }
+
+        assert!(matches!(
+            validate_graph_index_cardinalities(MAX_SEMANTIC_DEBUG_MAPPING_REFERENCES_V1, 1, 0,),
+            Err(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence)
+        ));
+        assert!(matches!(
+            validate_graph_index_cardinalities(0, 0, MAX_SEMANTIC_DEBUG_BOUNDARIES_V1 + 1),
+            Err(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence)
+        ));
+    }
+
+    #[test]
+    fn graph_owner_index_rejects_duplicate_and_missing_source_mapping() {
+        let source = id(9);
+        let mut duplicate_source_owners = vec![(source, 0), (source, 1)];
+        assert!(matches!(
+            normalize_unique_owner_index(&mut duplicate_source_owners),
+            Err(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence)
+        ));
+
+        let mut exact_source_owners = vec![(source, 0)];
+        normalize_unique_owner_index(&mut exact_source_owners).unwrap();
+        assert_eq!(owner_lookup(&exact_source_owners, &source), Some(0));
+        assert_eq!(owner_lookup(&exact_source_owners, &id(0xfe)), None);
     }
 
     #[test]
@@ -1340,8 +1534,10 @@ mod production_correspondence_tests {
     #[test]
     fn exact_v4_edges_are_admitted_and_coordinated_valid_member_reseal_is_rejected() {
         let fixture = exact_map_fixture();
+        let fixture_indices = SemanticDebugGraphIndicesV1::try_new(&fixture.map).unwrap();
         validate_exact_production_correspondence(
             &fixture.map,
+            &fixture_indices,
             &fixture.source_map,
             &fixture.semantic_mir,
             &fixture.canonical_kir_v8,
@@ -1384,9 +1580,11 @@ mod production_correspondence_tests {
             fixture.map.boundaries().to_vec(),
         )
         .unwrap();
+        let resealed_indices = SemanticDebugGraphIndicesV1::try_new(&resealed).unwrap();
         assert!(matches!(
             validate_exact_production_correspondence(
                 &resealed,
+                &resealed_indices,
                 &fixture.source_map,
                 &fixture.semantic_mir,
                 &fixture.canonical_kir_v8,

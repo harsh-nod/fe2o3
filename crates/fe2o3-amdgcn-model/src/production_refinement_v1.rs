@@ -127,11 +127,11 @@ impl ProductionTargetBoundKernelIrV1 {
         neutral_module: &Module,
         neutral_kernel_ir: ProductionReplayKernelIrIdentityV1,
         target_bound_kernel_ir: ProductionReplayKernelIrIdentityV1,
-    ) -> Result<ProductionTargetStructuralBindingV1, ProductionTargetBindingErrorV1> {
+    ) -> Result<ProductionTargetStructuralBindingV1, ProductionTargetStructuralBindingErrorV1> {
         if neutral_kernel_ir.version() != target_bound_kernel_ir.version()
             || !same_coordinate_shape(neutral_module, &self.module)
         {
-            return Err(ProductionTargetBindingErrorV1::CoordinateShapeMismatch);
+            return Err(ProductionTargetStructuralBindingErrorV1::CoordinateShapeMismatch);
         }
         let counts = structural_counts(neutral_module)?;
         let mut digest = Sha256::new();
@@ -204,9 +204,9 @@ fn same_coordinate_shape(neutral: &Module, target: &Module) -> bool {
 
 fn structural_counts(
     module: &Module,
-) -> Result<ProductionTargetStructuralCountsV1, ProductionTargetBindingErrorV1> {
+) -> Result<ProductionTargetStructuralCountsV1, ProductionTargetStructuralBindingErrorV1> {
     let functions = u64::try_from(module.functions.len())
-        .map_err(|_| ProductionTargetBindingErrorV1::CoordinateCountOverflow)?;
+        .map_err(|_| ProductionTargetStructuralBindingErrorV1::CoordinateCountOverflow)?;
     let (defined_bodies, blocks, operations) = module.functions.iter().try_fold(
         (0_u64, 0_u64, 0_u64),
         |(defined_bodies, blocks, operations), function| {
@@ -215,23 +215,22 @@ fn structural_counts(
             };
             let defined_bodies = defined_bodies
                 .checked_add(1)
-                .ok_or(ProductionTargetBindingErrorV1::CoordinateCountOverflow)?;
+                .ok_or(ProductionTargetStructuralBindingErrorV1::CoordinateCountOverflow)?;
             let blocks = blocks
-                .checked_add(
-                    u64::try_from(body.blocks.len())
-                        .map_err(|_| ProductionTargetBindingErrorV1::CoordinateCountOverflow)?,
-                )
-                .ok_or(ProductionTargetBindingErrorV1::CoordinateCountOverflow)?;
-            let operations =
-                body.blocks
-                    .iter()
-                    .try_fold(operations, |operations, block| {
-                        operations
-                            .checked_add(u64::try_from(block.operations.len()).map_err(|_| {
-                                ProductionTargetBindingErrorV1::CoordinateCountOverflow
-                            })?)
-                            .ok_or(ProductionTargetBindingErrorV1::CoordinateCountOverflow)
-                    })?;
+                .checked_add(u64::try_from(body.blocks.len()).map_err(|_| {
+                    ProductionTargetStructuralBindingErrorV1::CoordinateCountOverflow
+                })?)
+                .ok_or(ProductionTargetStructuralBindingErrorV1::CoordinateCountOverflow)?;
+            let operations = body
+                .blocks
+                .iter()
+                .try_fold(operations, |operations, block| {
+                    operations
+                        .checked_add(u64::try_from(block.operations.len()).map_err(|_| {
+                            ProductionTargetStructuralBindingErrorV1::CoordinateCountOverflow
+                        })?)
+                        .ok_or(ProductionTargetStructuralBindingErrorV1::CoordinateCountOverflow)
+                })?;
             Ok((defined_bodies, blocks, operations))
         },
     )?;
@@ -243,13 +242,17 @@ fn structural_counts(
     })
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ProductionTargetStructuralBindingErrorV1 {
+    CoordinateShapeMismatch,
+    CoordinateCountOverflow,
+}
+
 /// Closed failures for the production neutral-KIR target-binding transform.
 #[derive(Debug)]
 pub enum ProductionTargetBindingErrorV1 {
     KernelClosure { observed: usize },
     MissingEntry { entry: FunctionId },
-    CoordinateShapeMismatch,
-    CoordinateCountOverflow,
     InvalidTargetBoundModule(VerificationErrors),
 }
 
@@ -264,12 +267,6 @@ impl fmt::Display for ProductionTargetBindingErrorV1 {
                 formatter,
                 "production target binding cannot find kernel entry {entry}"
             ),
-            Self::CoordinateShapeMismatch => formatter.write_str(
-                "production target binding changed function, block, or operation coordinates",
-            ),
-            Self::CoordinateCountOverflow => {
-                formatter.write_str("production target structural coordinate counts overflowed")
-            }
             Self::InvalidTargetBoundModule(error) => {
                 write!(
                     formatter,
@@ -284,10 +281,7 @@ impl Error for ProductionTargetBindingErrorV1 {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::InvalidTargetBoundModule(error) => Some(error),
-            Self::KernelClosure { .. }
-            | Self::MissingEntry { .. }
-            | Self::CoordinateShapeMismatch
-            | Self::CoordinateCountOverflow => None,
+            Self::KernelClosure { .. } | Self::MissingEntry { .. } => None,
         }
     }
 }
@@ -530,6 +524,28 @@ mod tests {
             bind_production_target_v1(&neutral, ProductionAmdTargetProfileV1::Gfx942),
             Err(ProductionTargetBindingErrorV1::KernelClosure { observed: 2 })
         ));
+    }
+
+    #[test]
+    fn target_binding_error_surface_remains_exhaustively_matchable() {
+        fn classify(error: &ProductionTargetBindingErrorV1) -> u8 {
+            match error {
+                ProductionTargetBindingErrorV1::KernelClosure { .. } => 1,
+                ProductionTargetBindingErrorV1::MissingEntry { .. } => 2,
+                ProductionTargetBindingErrorV1::InvalidTargetBoundModule(_) => 3,
+            }
+        }
+
+        assert_eq!(
+            classify(&ProductionTargetBindingErrorV1::KernelClosure { observed: 0 }),
+            1
+        );
+        assert_eq!(
+            classify(&ProductionTargetBindingErrorV1::MissingEntry {
+                entry: FunctionId::new("missing"),
+            }),
+            2
+        );
     }
 
     #[test]

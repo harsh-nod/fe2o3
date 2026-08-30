@@ -258,7 +258,9 @@ impl CanonicalProductionKirToLlvmReplayEvidenceV1 {
         )?;
         let structural_binding = target_bound
             .admit_exact_structural_binding_v1(&neutral_module, neutral_identity, target_identity)
-            .map_err(ProductionKirToLlvmReplayErrorV1::TargetBinding)?;
+            .map_err(|_| ProductionKirToLlvmReplayErrorV1::IdentityMismatch {
+                field: "target structural coordinate binding",
+            })?;
         let (target_bound_module, _) = target_bound.into_parts();
         Ok(ValidatedProductionKirToLlvmReplayV1 {
             evidence: self,

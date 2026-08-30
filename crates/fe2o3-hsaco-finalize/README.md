@@ -183,7 +183,16 @@ projection to decode to the identical `Module`, and checks every map edge agains
 statement correspondence, semantic MIR call-site span, and Source Map operation site.
 
 The finalizer also independently replays the retained whole-module neutral-KIR-to-target-KIR-to-
-pre-descriptor-LLVM evidence. That evidence does not provide per-operation LLVM instruction spans,
-LLVM-to-machine refinement, a schedule stage, or ISA intervals. Those deeper mappings remain typed
-unavailable; `ExactInputsAndArtifact` means the declared byte axes and the available V4 semantic
-members were joined, not that full source-to-ISA refinement was established.
+pre-descriptor-LLVM evidence. For exact V8 inputs, the bounded source/ISA correlation API joins the
+Source Map V2 span and node, semantic MIR, neutral KIR coordinate, target KIR coordinate, Worker-
+input LLVM pseudo-probe coordinate, and sparse four-byte final-HSACO pseudo-probe interval. It
+supports forward queries by exact source node or span and reverse queries by exact metadata kernel
+ordinal plus aligned symbol-relative PC. The record set preserves one-to-many, many-to-one,
+duplicate/coalesced, eliminated, and no-source operations instead of inferring missing provenance.
+
+This sparse correlation is descriptive evidence, not a complete source-to-machine refinement. It
+does not establish optimized or final LLVM custody, instruction scheduling, complete ISA coverage,
+live-PC ownership, or runtime authority. Non-anchor and unaligned PCs remain typed unavailable. A
+V9 replay with the exact current V7 source-projection producer gap is also typed unavailable; the
+finalizer does not infer a V9 source projection. `ExactInputsAndArtifact` means the declared byte
+axes and available V4 semantic members were joined to the identical finalized artifact.

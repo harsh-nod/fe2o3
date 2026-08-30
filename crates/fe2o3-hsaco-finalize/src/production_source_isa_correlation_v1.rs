@@ -34,8 +34,9 @@ const MAX_CORRELATION_RECORDS_V1: usize =
 pub enum ProductionSourceIsaCorrelationUnavailableV1 {
     SemanticDebugCarrier(ProductionSemanticDebugProducerGapV1),
     SemanticAnchors(ProductionSemanticAnchorUnavailableV1),
-    /// The source carrier has an exact V7-to-V8 debug projection, but no authenticated V8-to-V9
-    /// source projection exists. V1 therefore refuses to infer V9 source coordinates.
+    /// Exact replay is KIR V9 and the compiler reported precisely that the V7 source projection is
+    /// unavailable. V1 validates the independent anchor/artifact path and refuses to infer V9
+    /// source coordinates.
     SourceProjectionForKirV9,
 }
 
@@ -244,7 +245,6 @@ pub struct AdmittedProductionSourceIsaCorrelationV1 {
     source_node_index: Vec<([u8; 32], usize)>,
     source_span_index: Vec<(DebugSourceMapSpanV1, usize)>,
     isa_index: Vec<(ProductionIsaPointV1, usize)>,
-    metadata_kernel_ordinals: Vec<u64>,
 }
 
 impl AdmittedProductionSourceIsaCorrelationV1 {
@@ -303,11 +303,7 @@ impl AdmittedProductionSourceIsaCorrelationV1 {
         if !point.symbol_relative_pc.is_multiple_of(4) {
             return Err(ProductionSourceIsaQueryUnavailableV1::UnalignedProgramCounter);
         }
-        if self
-            .metadata_kernel_ordinals
-            .binary_search(&point.kernel_ordinal)
-            .is_err()
-        {
+        if point.kernel_ordinal != 0 {
             return Err(ProductionSourceIsaQueryUnavailableV1::UnknownMetadataKernelOrdinal);
         }
         let range = equal_range_by_key(&self.isa_index, &point, |entry| &entry.0);
@@ -355,48 +351,6 @@ impl PreparedFinalizedProtectedWorkerV3HsacoV1 {
     ) -> Result<ProductionSourceIsaCorrelationAdmissionV1, ProductionSourceIsaCorrelationErrorV1>
     {
         let receipts = self.outer_handoff().capsule().receipts();
-        let semantic_map = match self.admit_production_semantic_debug_map_v1() {
-            Ok(ProductionFinalizedSemanticDebugAdmissionV1::Admitted(map)) => map,
-            Ok(ProductionFinalizedSemanticDebugAdmissionV1::Unavailable(reason)) => {
-                return Ok(ProductionSourceIsaCorrelationAdmissionV1::Unavailable(
-                    ProductionSourceIsaCorrelationUnavailableV1::SemanticDebugCarrier(reason),
-                ));
-            }
-            Err(map_error) => {
-                let replay = CanonicalProductionKirToLlvmReplayEvidenceV1::decode(
-                    receipts.amdgpu_lowering().canonical_preimage(),
-                )
-                .and_then(|evidence| {
-                    evidence.validate_against_neutral_kernel_ir(
-                        receipts.kernel_ir().canonical_preimage(),
-                    )
-                });
-                if replay.is_ok_and(|replay| {
-                    replay.structural_binding().version() == ProductionReplayKernelIrVersionV1::V9
-                }) {
-                    match self
-                        .admit_production_semantic_anchors_v1()
-                        .map_err(ProductionSourceIsaCorrelationErrorV1::SemanticAnchors)?
-                    {
-                        ProductionSemanticAnchorAdmissionV1::Admitted(_) => {
-                            return Ok(ProductionSourceIsaCorrelationAdmissionV1::Unavailable(
-                                ProductionSourceIsaCorrelationUnavailableV1::SourceProjectionForKirV9,
-                            ));
-                        }
-                        ProductionSemanticAnchorAdmissionV1::Unavailable(reason) => {
-                            return Ok(ProductionSourceIsaCorrelationAdmissionV1::Unavailable(
-                                ProductionSourceIsaCorrelationUnavailableV1::SemanticAnchors(
-                                    reason,
-                                ),
-                            ));
-                        }
-                    }
-                }
-                return Err(ProductionSourceIsaCorrelationErrorV1::SemanticDebugMap(
-                    map_error,
-                ));
-            }
-        };
         let replay = CanonicalProductionKirToLlvmReplayEvidenceV1::decode(
             receipts.amdgpu_lowering().canonical_preimage(),
         )
@@ -404,6 +358,45 @@ impl PreparedFinalizedProtectedWorkerV3HsacoV1 {
             evidence.validate_against_neutral_kernel_ir(receipts.kernel_ir().canonical_preimage())
         })
         .map_err(|_| ProductionSourceIsaCorrelationErrorV1::InvalidKirToLlvmReplay)?;
+        let semantic_admission = self
+            .admit_production_semantic_debug_map_v1()
+            .map_err(ProductionSourceIsaCorrelationErrorV1::SemanticDebugMap)?;
+        if replay.structural_binding().version() == ProductionReplayKernelIrVersionV1::V9 {
+            return match semantic_admission {
+                ProductionFinalizedSemanticDebugAdmissionV1::Unavailable(reason)
+                    if is_exact_v9_source_projection_gap(reason) => match self
+                    .admit_production_semantic_anchors_v1()
+                    .map_err(ProductionSourceIsaCorrelationErrorV1::SemanticAnchors)?
+                {
+                    ProductionSemanticAnchorAdmissionV1::Admitted(_) => {
+                        Ok(ProductionSourceIsaCorrelationAdmissionV1::Unavailable(
+                            ProductionSourceIsaCorrelationUnavailableV1::SourceProjectionForKirV9,
+                        ))
+                    }
+                    ProductionSemanticAnchorAdmissionV1::Unavailable(reason) => {
+                        Ok(ProductionSourceIsaCorrelationAdmissionV1::Unavailable(
+                            ProductionSourceIsaCorrelationUnavailableV1::SemanticAnchors(reason),
+                        ))
+                    }
+                },
+                ProductionFinalizedSemanticDebugAdmissionV1::Unavailable(reason) => {
+                    Ok(ProductionSourceIsaCorrelationAdmissionV1::Unavailable(
+                        ProductionSourceIsaCorrelationUnavailableV1::SemanticDebugCarrier(reason),
+                    ))
+                }
+                ProductionFinalizedSemanticDebugAdmissionV1::Admitted(_) => {
+                    Err(ProductionSourceIsaCorrelationErrorV1::TargetKirIdentityMismatch)
+                }
+            };
+        }
+        let semantic_map = match semantic_admission {
+            ProductionFinalizedSemanticDebugAdmissionV1::Admitted(map) => map,
+            ProductionFinalizedSemanticDebugAdmissionV1::Unavailable(reason) => {
+                return Ok(ProductionSourceIsaCorrelationAdmissionV1::Unavailable(
+                    ProductionSourceIsaCorrelationUnavailableV1::SemanticDebugCarrier(reason),
+                ));
+            }
+        };
         let anchors = match self
             .admit_production_semantic_anchors_v1()
             .map_err(ProductionSourceIsaCorrelationErrorV1::SemanticAnchors)?
@@ -415,11 +408,6 @@ impl PreparedFinalizedProtectedWorkerV3HsacoV1 {
                 ));
             }
         };
-        if replay.structural_binding().version() == ProductionReplayKernelIrVersionV1::V9 {
-            return Ok(ProductionSourceIsaCorrelationAdmissionV1::Unavailable(
-                ProductionSourceIsaCorrelationUnavailableV1::SourceProjectionForKirV9,
-            ));
-        }
         if semantic_map.admission_status()
             != FinalizedSemanticDebugMapAdmissionStatusV1::ExactInputsAndArtifact
         {
@@ -445,6 +433,7 @@ impl PreparedFinalizedProtectedWorkerV3HsacoV1 {
         }
 
         let document = semantic_map.document();
+        let graph_indices = semantic_map.graph_indices();
         let anchor_records = anchors.anchors();
         let mut anchors_by_kir = Vec::new();
         anchors_by_kir
@@ -474,9 +463,23 @@ impl PreparedFinalizedProtectedWorkerV3HsacoV1 {
         if requested_records > MAX_CORRELATION_RECORDS_V1 {
             return Err(ProductionSourceIsaCorrelationErrorV1::ResourceLimit);
         }
+        let source_record_count = document
+            .mappings()
+            .iter()
+            .filter(|mapping| {
+                mapping.input_layer() == SemanticDebugLayerV1::Mir
+                    && mapping.output_layer() == SemanticDebugLayerV1::Kir
+            })
+            .try_fold(0_usize, |count, mapping| {
+                count.checked_add(mapping.output().nodes().len().max(1))
+            })
+            .ok_or(ProductionSourceIsaCorrelationErrorV1::ResourceLimit)?;
+        if source_record_count > requested_records {
+            return Err(ProductionSourceIsaCorrelationErrorV1::ResourceLimit);
+        }
         let mut records = Vec::new();
         records
-            .try_reserve_exact(requested_records)
+            .try_reserve_exact(source_record_count)
             .map_err(|_| ProductionSourceIsaCorrelationErrorV1::AllocationFailure)?;
 
         for mapping in document.mappings().iter().filter(|mapping| {
@@ -489,8 +492,8 @@ impl PreparedFinalizedProtectedWorkerV3HsacoV1 {
             let mir_node = document
                 .node(*mir_node_identity)
                 .ok_or(ProductionSourceIsaCorrelationErrorV1::InvalidSourceGraph)?;
-            let source_mapping = document
-                .mapping_to(*mir_node_identity)
+            let source_mapping = graph_indices
+                .mapping_to(document, *mir_node_identity)
                 .filter(|source_mapping| {
                     source_mapping.input_layer() == SemanticDebugLayerV1::Source
                         && source_mapping.output_layer() == SemanticDebugLayerV1::Mir
@@ -550,6 +553,20 @@ impl PreparedFinalizedProtectedWorkerV3HsacoV1 {
                 )?);
             }
         }
+        if records.len() != source_record_count {
+            return Err(ProductionSourceIsaCorrelationErrorV1::InvalidSourceGraph);
+        }
+        let no_source_count = has_source.iter().filter(|has_source| !**has_source).count();
+        let exact_record_count = source_record_count
+            .checked_add(no_source_count)
+            .ok_or(ProductionSourceIsaCorrelationErrorV1::ResourceLimit)?;
+        if exact_record_count > requested_records || exact_record_count > MAX_CORRELATION_RECORDS_V1
+        {
+            return Err(ProductionSourceIsaCorrelationErrorV1::ResourceLimit);
+        }
+        records
+            .try_reserve_exact(no_source_count)
+            .map_err(|_| ProductionSourceIsaCorrelationErrorV1::AllocationFailure)?;
         for (anchor_index, anchor) in anchor_records.iter().enumerate() {
             if !has_source
                 .get(anchor_index)
@@ -559,39 +576,40 @@ impl PreparedFinalizedProtectedWorkerV3HsacoV1 {
                 records.push(no_source_anchor_record(anchor)?);
             }
         }
-        if records.len() > MAX_CORRELATION_RECORDS_V1 {
-            return Err(ProductionSourceIsaCorrelationErrorV1::ResourceLimit);
+        if records.len() != exact_record_count {
+            return Err(ProductionSourceIsaCorrelationErrorV1::InvalidSourceGraph);
         }
+        let semantic_map_identity = *semantic_map.identity().as_bytes();
+        let artifact_identity = semantic_map.artifact_identity();
+        drop(semantic_map);
+        drop(anchors);
 
-        let (source_node_index, source_span_index, isa_index, mut metadata_kernel_ordinals) =
-            build_indices(&records)?;
-        if metadata_kernel_ordinals.is_empty() {
-            metadata_kernel_ordinals
-                .try_reserve_exact(1)
-                .map_err(|_| ProductionSourceIsaCorrelationErrorV1::AllocationFailure)?;
-            metadata_kernel_ordinals.push(0);
-        } else if metadata_kernel_ordinals != [0] {
-            return Err(ProductionSourceIsaCorrelationErrorV1::CoordinateShapeMismatch);
-        }
+        let (source_node_index, source_span_index, isa_index) = build_indices(&records)?;
         let identity = correlation_identity(
-            semantic_map.identity().as_bytes(),
-            semantic_map.artifact_identity(),
+            &semantic_map_identity,
+            artifact_identity,
             structural_binding,
             &records,
-        );
+        )?;
         Ok(ProductionSourceIsaCorrelationAdmissionV1::Admitted(
             Box::new(AdmittedProductionSourceIsaCorrelationV1 {
                 identity,
-                artifact_identity: semantic_map.artifact_identity(),
+                artifact_identity,
                 structural_binding,
                 records,
                 source_node_index,
                 source_span_index,
                 isa_index,
-                metadata_kernel_ordinals,
             }),
         ))
     }
+}
+
+const fn is_exact_v9_source_projection_gap(reason: ProductionSemanticDebugProducerGapV1) -> bool {
+    matches!(
+        reason,
+        ProductionSemanticDebugProducerGapV1::CanonicalKirV7ProjectionUnavailable
+    )
 }
 
 fn source_anchor_record(
@@ -652,35 +670,44 @@ type CorrelationIndicesV1 = (
     Vec<([u8; 32], usize)>,
     Vec<(DebugSourceMapSpanV1, usize)>,
     Vec<(ProductionIsaPointV1, usize)>,
-    Vec<u64>,
 );
 
 fn build_indices(
     records: &[AdmittedProductionSourceIsaRecordV1],
 ) -> Result<CorrelationIndicesV1, ProductionSourceIsaCorrelationErrorV1> {
-    let isa_count = records.iter().try_fold(0_usize, |count, record| {
-        count
-            .checked_add(record.isa.len())
-            .ok_or(ProductionSourceIsaCorrelationErrorV1::ResourceLimit)
-    })?;
+    let (source_node_count, source_span_count, isa_count) = records
+        .iter()
+        .try_fold(
+            (0_usize, 0_usize, 0_usize),
+            |(source_nodes, source_spans, isa), record| {
+                Some((
+                    source_nodes.checked_add(usize::from(record.source_node_identity.is_some()))?,
+                    source_spans.checked_add(usize::from(record.source_span.is_some()))?,
+                    isa.checked_add(record.isa.len())?,
+                ))
+            },
+        )
+        .ok_or(ProductionSourceIsaCorrelationErrorV1::ResourceLimit)?;
     if isa_count > MAX_SEMANTIC_DEBUG_MAPPING_REFERENCES_V1 {
         return Err(ProductionSourceIsaCorrelationErrorV1::ResourceLimit);
     }
     let mut source_node_index = Vec::new();
     let mut source_span_index = Vec::new();
     let mut isa_index = Vec::new();
-    let mut metadata_kernel_ordinals = Vec::new();
+    source_node_index
+        .try_reserve_exact(source_node_count)
+        .map_err(|_| ProductionSourceIsaCorrelationErrorV1::AllocationFailure)?;
+    source_span_index
+        .try_reserve_exact(source_span_count)
+        .map_err(|_| ProductionSourceIsaCorrelationErrorV1::AllocationFailure)?;
+    isa_index
+        .try_reserve_exact(isa_count)
+        .map_err(|_| ProductionSourceIsaCorrelationErrorV1::AllocationFailure)?;
     for (index, record) in records.iter().enumerate() {
         if record.source_node_identity.is_some() {
-            source_node_index
-                .try_reserve(1)
-                .map_err(|_| ProductionSourceIsaCorrelationErrorV1::AllocationFailure)?;
             source_node_index.push((record.source_node_identity.unwrap_or([0; 32]), index));
         }
         if let Some(span) = record.source_span {
-            source_span_index
-                .try_reserve(1)
-                .map_err(|_| ProductionSourceIsaCorrelationErrorV1::AllocationFailure)?;
             source_span_index.push((span, index));
         }
         for location in &record.isa {
@@ -692,34 +719,21 @@ fn build_indices(
             else {
                 return Err(ProductionSourceIsaCorrelationErrorV1::CoordinateShapeMismatch);
             };
-            if byte_end
-                != byte_start
-                    .checked_add(4)
-                    .ok_or(ProductionSourceIsaCorrelationErrorV1::CoordinateShapeMismatch)?
+            if kernel_ordinal != 0
+                || byte_end
+                    != byte_start
+                        .checked_add(4)
+                        .ok_or(ProductionSourceIsaCorrelationErrorV1::CoordinateShapeMismatch)?
             {
                 return Err(ProductionSourceIsaCorrelationErrorV1::CoordinateShapeMismatch);
             }
-            isa_index
-                .try_reserve(1)
-                .map_err(|_| ProductionSourceIsaCorrelationErrorV1::AllocationFailure)?;
             isa_index.push((ProductionIsaPointV1::new(kernel_ordinal, byte_start), index));
-            metadata_kernel_ordinals
-                .try_reserve(1)
-                .map_err(|_| ProductionSourceIsaCorrelationErrorV1::AllocationFailure)?;
-            metadata_kernel_ordinals.push(kernel_ordinal);
         }
     }
     source_node_index.sort_unstable();
     source_span_index.sort_unstable();
     isa_index.sort_unstable();
-    metadata_kernel_ordinals.sort_unstable();
-    metadata_kernel_ordinals.dedup();
-    Ok((
-        source_node_index,
-        source_span_index,
-        isa_index,
-        metadata_kernel_ordinals,
-    ))
+    Ok((source_node_index, source_span_index, isa_index))
 }
 
 fn equal_range_by_key<T, K: Ord, F: Fn(&T) -> &K>(
@@ -737,7 +751,7 @@ fn correlation_identity(
     artifact_identity: ContentIdentityV1,
     structural_binding: ProductionTargetStructuralBindingV1,
     records: &[AdmittedProductionSourceIsaRecordV1],
-) -> [u8; 32] {
+) -> Result<[u8; 32], ProductionSourceIsaCorrelationErrorV1> {
     let mut digest = Sha256::new();
     digest.update((CORRELATION_IDENTITY_DOMAIN_V1.len() as u32).to_le_bytes());
     digest.update(CORRELATION_IDENTITY_DOMAIN_V1);
@@ -745,32 +759,144 @@ fn correlation_identity(
     digest.update(artifact_identity.sha256());
     digest.update(artifact_identity.byte_len().to_le_bytes());
     digest.update(structural_binding.identity());
-    digest.update((records.len() as u64).to_le_bytes());
+    digest.update(
+        u64::try_from(records.len())
+            .map_err(|_| ProductionSourceIsaCorrelationErrorV1::ResourceLimit)?
+            .to_le_bytes(),
+    );
     for record in records {
         digest.update([match record.kind {
             ProductionSourceIsaRecordKindV1::EliminatedBeforeKir => 1,
             ProductionSourceIsaRecordKindV1::SourceAnchored => 2,
             ProductionSourceIsaRecordKindV1::NoSourceProvenance => 3,
         }]);
-        digest.update(record.source_node_identity.unwrap_or([0; 32]));
-        digest.update(record.mir_node_identity.unwrap_or([0; 32]));
-        digest.update(record.neutral_kir_node_identity.unwrap_or([0; 32]));
-        digest.update(record.semantic_operation_id.unwrap_or([0; 32]));
-        digest.update((record.isa.len() as u64).to_le_bytes());
+        hash_optional_identity(&mut digest, record.source_node_identity);
+        hash_optional_span(&mut digest, record.source_span);
+        hash_optional_identity(&mut digest, record.mir_node_identity);
+        hash_optional_location(&mut digest, record.mir);
+        hash_optional_identity(&mut digest, record.neutral_kir_node_identity);
+        hash_optional_location(&mut digest, record.neutral_kir);
+        hash_optional_location(&mut digest, record.target_kir);
+        hash_optional_identity(&mut digest, record.semantic_operation_id);
+        hash_optional_location(&mut digest, record.compiler_handoff_llvm);
+        digest.update(
+            u64::try_from(record.isa.len())
+                .map_err(|_| ProductionSourceIsaCorrelationErrorV1::ResourceLimit)?
+                .to_le_bytes(),
+        );
         for isa in &record.isa {
-            if let SemanticDebugLocationV1::Isa {
-                kernel_ordinal,
-                byte_start,
-                byte_end,
-            } = isa
-            {
-                digest.update(kernel_ordinal.to_le_bytes());
-                digest.update(byte_start.to_le_bytes());
-                digest.update(byte_end.to_le_bytes());
-            }
+            hash_location(&mut digest, *isa);
+        }
+        hash_optional_transformation(&mut digest, record.anchor_transformation);
+    }
+    Ok(digest.finalize().into())
+}
+
+fn hash_optional_identity(digest: &mut Sha256, value: Option<[u8; 32]>) {
+    match value {
+        Some(value) => {
+            digest.update([1]);
+            digest.update(value);
+        }
+        None => digest.update([0]),
+    }
+}
+
+fn hash_optional_span(digest: &mut Sha256, value: Option<DebugSourceMapSpanV1>) {
+    match value {
+        Some(value) => {
+            digest.update([1]);
+            hash_span(digest, value);
+        }
+        None => digest.update([0]),
+    }
+}
+
+fn hash_span(digest: &mut Sha256, span: DebugSourceMapSpanV1) {
+    digest.update(span.file_identity());
+    digest.update(span.byte_start().to_le_bytes());
+    digest.update(span.byte_end().to_le_bytes());
+    digest.update(span.line().to_le_bytes());
+    digest.update(span.column().to_le_bytes());
+}
+
+fn hash_optional_location(digest: &mut Sha256, value: Option<SemanticDebugLocationV1>) {
+    match value {
+        Some(value) => {
+            digest.update([1]);
+            hash_location(digest, value);
+        }
+        None => digest.update([0]),
+    }
+}
+
+fn hash_location(digest: &mut Sha256, location: SemanticDebugLocationV1) {
+    match location {
+        SemanticDebugLocationV1::Source { span } => {
+            digest.update([1]);
+            hash_span(digest, span);
+        }
+        SemanticDebugLocationV1::Mir {
+            body_ordinal,
+            block_ordinal,
+            statement_ordinal,
+        } => {
+            digest.update([2]);
+            hash_ordinals(digest, body_ordinal, block_ordinal, statement_ordinal);
+        }
+        SemanticDebugLocationV1::Kir {
+            function_ordinal,
+            block_ordinal,
+            operation_ordinal,
+        } => {
+            digest.update([3]);
+            hash_ordinals(digest, function_ordinal, block_ordinal, operation_ordinal);
+        }
+        SemanticDebugLocationV1::Schedule {
+            function_ordinal,
+            region_ordinal,
+            operation_ordinal,
+        } => {
+            digest.update([4]);
+            hash_ordinals(digest, function_ordinal, region_ordinal, operation_ordinal);
+        }
+        SemanticDebugLocationV1::Llvm {
+            function_ordinal,
+            block_ordinal,
+            instruction_ordinal,
+        } => {
+            digest.update([5]);
+            hash_ordinals(digest, function_ordinal, block_ordinal, instruction_ordinal);
+        }
+        SemanticDebugLocationV1::Isa {
+            kernel_ordinal,
+            byte_start,
+            byte_end,
+        } => {
+            digest.update([6]);
+            hash_ordinals(digest, kernel_ordinal, byte_start, byte_end);
         }
     }
-    digest.finalize().into()
+}
+
+fn hash_ordinals(digest: &mut Sha256, first: u64, second: u64, third: u64) {
+    digest.update(first.to_le_bytes());
+    digest.update(second.to_le_bytes());
+    digest.update(third.to_le_bytes());
+}
+
+fn hash_optional_transformation(
+    digest: &mut Sha256,
+    value: Option<ProductionSemanticAnchorTransformationV1>,
+) {
+    digest.update([match value {
+        None => 0,
+        Some(ProductionSemanticAnchorTransformationV1::Preserved) => 1,
+        Some(ProductionSemanticAnchorTransformationV1::Duplicated) => 2,
+        Some(ProductionSemanticAnchorTransformationV1::Coalesced) => 3,
+        Some(ProductionSemanticAnchorTransformationV1::DuplicatedAndCoalesced) => 4,
+        Some(ProductionSemanticAnchorTransformationV1::Eliminated) => 5,
+    }]);
 }
 
 #[cfg(test)]
@@ -967,8 +1093,7 @@ mod tests {
             eliminated_record(3, span(2, 16)),
             synthetic_record(),
         ];
-        let (source_node_index, source_span_index, isa_index, metadata_kernel_ordinals) =
-            build_indices(&records).unwrap();
+        let (source_node_index, source_span_index, isa_index) = build_indices(&records).unwrap();
         AdmittedProductionSourceIsaCorrelationV1 {
             identity: [9; 32],
             artifact_identity: ContentIdentityV1::calculate(b"artifact"),
@@ -977,7 +1102,6 @@ mod tests {
             source_node_index,
             source_span_index,
             isa_index,
-            metadata_kernel_ordinals,
         }
     }
 
@@ -1069,6 +1193,179 @@ mod tests {
                 .query_isa_pc(ProductionIsaPointV1::new(0, 4))
                 .unwrap_err(),
             ProductionSourceIsaQueryUnavailableV1::ProgramCounterIsNotAnAdmittedAnchor
+        );
+    }
+
+    #[test]
+    fn isa_index_at_the_wire_limit_retains_no_kernel_ordinal_heap_and_rejects_wrong_ordinal() {
+        let mut isa = Vec::new();
+        isa.try_reserve_exact(MAX_SEMANTIC_DEBUG_MAPPING_REFERENCES_V1)
+            .unwrap();
+        isa.extend(
+            (0..MAX_SEMANTIC_DEBUG_MAPPING_REFERENCES_V1).map(|ordinal| {
+                let byte_start = u64::try_from(ordinal).unwrap().checked_mul(4).unwrap();
+                SemanticDebugLocationV1::Isa {
+                    kernel_ordinal: 0,
+                    byte_start,
+                    byte_end: byte_start + 4,
+                }
+            }),
+        );
+        let records = vec![source_record(1, span(1, 0), 0, isa)];
+        let (_, _, isa_index) = build_indices(&records).unwrap();
+        assert_eq!(isa_index.len(), MAX_SEMANTIC_DEBUG_MAPPING_REFERENCES_V1);
+        assert!(
+            isa_index.capacity()
+                < MAX_SEMANTIC_DEBUG_MAPPING_REFERENCES_V1
+                    .checked_mul(2)
+                    .unwrap()
+        );
+
+        let mut wrong_ordinal = records;
+        wrong_ordinal[0].isa[0] = SemanticDebugLocationV1::Isa {
+            kernel_ordinal: 1,
+            byte_start: 0,
+            byte_end: 4,
+        };
+        assert!(matches!(
+            build_indices(&wrong_ordinal),
+            Err(ProductionSourceIsaCorrelationErrorV1::CoordinateShapeMismatch)
+        ));
+    }
+
+    #[test]
+    fn correlation_identity_commits_to_every_tagged_public_record_axis() {
+        let base = source_record(
+            1,
+            span(1, 0),
+            0,
+            vec![SemanticDebugLocationV1::Isa {
+                kernel_ordinal: 0,
+                byte_start: 0,
+                byte_end: 4,
+            }],
+        );
+        let structural_binding = structural_binding();
+        let artifact = ContentIdentityV1::calculate(b"identity-artifact");
+        let identity = |record: &AdmittedProductionSourceIsaRecordV1| {
+            correlation_identity(&[7; 32], artifact, structural_binding, &[record.clone()]).unwrap()
+        };
+        let base_identity = identity(&base);
+        let mut mutations = Vec::new();
+        macro_rules! mutate {
+            ($field:ident, $value:expr) => {{
+                let mut record = base.clone();
+                record.$field = $value;
+                mutations.push(record);
+            }};
+        }
+
+        mutate!(kind, ProductionSourceIsaRecordKindV1::NoSourceProvenance);
+        mutate!(source_node_identity, Some([2; 32]));
+        mutate!(source_node_identity, None);
+        for changed_span in [
+            DebugSourceMapSpanV1::new([2; 32], 0, 4, 1, 1).unwrap(),
+            DebugSourceMapSpanV1::new([1; 32], 4, 8, 1, 1).unwrap(),
+            DebugSourceMapSpanV1::new([1; 32], 0, 4, 2, 1).unwrap(),
+            DebugSourceMapSpanV1::new([1; 32], 0, 4, 1, 2).unwrap(),
+        ] {
+            mutate!(source_span, Some(changed_span));
+        }
+        mutate!(source_span, None);
+        mutate!(mir_node_identity, Some([12; 32]));
+        mutate!(mir_node_identity, None);
+        mutate!(
+            mir,
+            Some(SemanticDebugLocationV1::Mir {
+                body_ordinal: 0,
+                block_ordinal: 0,
+                statement_ordinal: 1,
+            })
+        );
+        mutate!(mir, None);
+        mutate!(neutral_kir_node_identity, Some([22; 32]));
+        mutate!(neutral_kir_node_identity, None);
+        mutate!(
+            neutral_kir,
+            Some(SemanticDebugLocationV1::Kir {
+                function_ordinal: 0,
+                block_ordinal: 0,
+                operation_ordinal: 1,
+            })
+        );
+        mutate!(neutral_kir, None);
+        mutate!(
+            target_kir,
+            Some(SemanticDebugLocationV1::Kir {
+                function_ordinal: 0,
+                block_ordinal: 0,
+                operation_ordinal: 1,
+            })
+        );
+        mutate!(target_kir, None);
+        mutate!(semantic_operation_id, Some([32; 32]));
+        mutate!(semantic_operation_id, None);
+        mutate!(
+            compiler_handoff_llvm,
+            Some(SemanticDebugLocationV1::Llvm {
+                function_ordinal: 0,
+                block_ordinal: 0,
+                instruction_ordinal: 1,
+            })
+        );
+        mutate!(compiler_handoff_llvm, None);
+        mutate!(isa, Vec::new());
+        mutate!(
+            isa,
+            vec![SemanticDebugLocationV1::Isa {
+                kernel_ordinal: 0,
+                byte_start: 4,
+                byte_end: 8,
+            }]
+        );
+        mutate!(
+            anchor_transformation,
+            Some(ProductionSemanticAnchorTransformationV1::Duplicated)
+        );
+        mutate!(anchor_transformation, None);
+
+        let identities = mutations.iter().map(identity).collect::<Vec<_>>();
+        assert!(identities.iter().all(|changed| *changed != base_identity));
+        assert_eq!(
+            identities
+                .iter()
+                .copied()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len(),
+            identities.len()
+        );
+    }
+
+    #[test]
+    fn v9_unavailable_predicate_accepts_only_the_exact_source_projection_gap() {
+        let all_reasons = [
+            ProductionSemanticDebugProducerGapV1::MultipleKirFunctionBodies,
+            ProductionSemanticDebugProducerGapV1::NoStatementCorrespondence,
+            ProductionSemanticDebugProducerGapV1::SourceMapUnavailable,
+            ProductionSemanticDebugProducerGapV1::ResourceLimit,
+            ProductionSemanticDebugProducerGapV1::CanonicalKirV7ProjectionUnavailable,
+            ProductionSemanticDebugProducerGapV1::SourceObservationUnrepresentable,
+            ProductionSemanticDebugProducerGapV1::SemanticMapConstructionUnavailable,
+            ProductionSemanticDebugProducerGapV1::SemanticMapEncodingUnavailable,
+            ProductionSemanticDebugProducerGapV1::FragmentConstructionUnavailable,
+            ProductionSemanticDebugProducerGapV1::CarrierConstructionUnavailable,
+            ProductionSemanticDebugProducerGapV1::ReceiptExtensionConstructionUnavailable,
+            ProductionSemanticDebugProducerGapV1::CorrespondenceValidationUnavailable,
+            ProductionSemanticDebugProducerGapV1::CanonicalKirModuleMismatch,
+            ProductionSemanticDebugProducerGapV1::LegacyBareAssociationNoAttachment,
+        ];
+        let accepted = all_reasons
+            .into_iter()
+            .filter(|reason| is_exact_v9_source_projection_gap(*reason))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            accepted,
+            vec![ProductionSemanticDebugProducerGapV1::CanonicalKirV7ProjectionUnavailable]
         );
     }
 }

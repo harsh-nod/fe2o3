@@ -8,8 +8,9 @@ use std::{
 };
 
 use dialect_amdgcn::{
-    CanonicalProductionKirToLlvmReplayEvidenceV1, bind_production_llvm22_worker_layout_v1,
-    bind_production_target_v1, lower_kernel_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1,
+    CanonicalProductionKirToLlvmReplayEvidenceV1, ProductionReplayKernelIrVersionV1,
+    bind_production_llvm22_worker_layout_v1, bind_production_target_v1,
+    lower_kernel_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1,
     lower_kernel_to_gfx950_xnack_minus_llvm_ir_with_semantic_anchors_v1,
 };
 use fe2o3_amd_target::ProductionAmdTargetProfileV1;
@@ -37,16 +38,18 @@ use fe2o3_compiler_lineage::{
 };
 use fe2o3_hsaco_finalize::{
     CompilerClosureV2, ContentIdentityV1, FinalizedSemanticDebugMapAdmissionStatusV1,
-    InertProtectedFirstBuildWorkerV3EvidenceV1, InspectedProtectedWorkerV3HsacoV1, LinkOptionV1,
-    PinnedWorkerV1, ProductionFinalizedSemanticDebugAdmissionV1, ProductionIsaPointV1,
+    FinalizedSemanticDebugMapErrorV1, InertProtectedFirstBuildWorkerV3EvidenceV1,
+    InspectedProtectedWorkerV3HsacoV1, LinkOptionV1, PinnedWorkerV1,
+    ProductionFinalizedSemanticDebugAdmissionV1, ProductionIsaPointV1,
     ProductionSemanticAnchorAdmissionV1, ProductionSemanticAnchorErrorV1,
-    ProductionSourceIsaCorrelationAdmissionV1, ProductionSourceIsaCorrelationUnavailableV1,
-    ProductionSourceIsaRecordKindV1, ProtectedWorkerV3CompactFinalizerReplayV2,
-    WorkerExecutionLimitsV1, WorkerInputKindV1, WorkerInputV1, WorkerMeasurementV1,
-    WorkerOutputConstraintsV1, WorkerV3HsacoFinalizationError, WorkerV3HsacoInspectionError,
-    WorkerV3HsacoPublicationErrorV1, execute_protected_reproducible_first_build_worker_v3,
-    finalize_protected_worker_v3_hsaco_v1, inspect_protected_worker_v3_hsaco_v1,
-    inspect_unfinalized, persist_prepared_protected_worker_v3_hsaco_publication_v1,
+    ProductionSourceIsaCorrelationAdmissionV1, ProductionSourceIsaCorrelationErrorV1,
+    ProductionSourceIsaCorrelationUnavailableV1, ProductionSourceIsaRecordKindV1,
+    ProtectedWorkerV3CompactFinalizerReplayV2, WorkerExecutionLimitsV1, WorkerInputKindV1,
+    WorkerInputV1, WorkerMeasurementV1, WorkerOutputConstraintsV1, WorkerV3HsacoFinalizationError,
+    WorkerV3HsacoInspectionError, WorkerV3HsacoPublicationErrorV1,
+    execute_protected_reproducible_first_build_worker_v3, finalize_protected_worker_v3_hsaco_v1,
+    inspect_protected_worker_v3_hsaco_v1, inspect_unfinalized,
+    persist_prepared_protected_worker_v3_hsaco_publication_v1,
     prepare_protected_worker_v3_compact_finalizer_replay_v2,
     prepare_protected_worker_v3_hsaco_publication_v1,
     publish_recovered_protected_worker_v3_hsaco_v1,
@@ -70,7 +73,7 @@ use fe2o3_kernel_ir::{
     SemanticDebugMapBindingV1, SemanticDebugMapDocumentV1, SemanticDebugMapErrorV1,
     SemanticDebugMappingOutputV1, SemanticDebugMappingV1, SemanticDebugNodeV1,
     SemanticDebugTransformationV1, SemanticDebugUnavailableReasonV1, VerifiedCanonicalKernelIrV7,
-    VerifiedCanonicalKernelIrV8,
+    VerifiedCanonicalKernelIrV8, VerifiedCanonicalKernelIrV9,
 };
 use object::{Object as _, ObjectSection as _};
 use sha2::{Digest, Sha256};
@@ -1596,16 +1599,40 @@ fn append_descriptor_source_assembly(llvm: &mut String, bytes: &[u8]) {
 fn semantic_anchor_handoff(
     profile: ProductionAmdTargetProfileV1,
 ) -> (CompilerModuleHandoffV2, CompilerDescriptorSourceV1, String) {
+    semantic_anchor_handoff_with_version(profile, ProductionReplayKernelIrVersionV1::V8)
+}
+
+fn semantic_anchor_handoff_with_version(
+    profile: ProductionAmdTargetProfileV1,
+    version: ProductionReplayKernelIrVersionV1,
+) -> (CompilerModuleHandoffV2, CompilerDescriptorSourceV1, String) {
     let proof_inputs = canonical_compiler_proof_inputs_v4_with_sourceful_induction(0x20);
-    let (_, neutral_module) = VerifiedCanonicalKernelIrV8::from_canonical_bytes_with_module(
-        proof_inputs.kernel_ir().to_vec(),
-    )
-    .unwrap();
+    let neutral_bytes = replay_kernel_ir_bytes(proof_inputs.kernel_ir(), version);
+    let neutral_module = match version {
+        ProductionReplayKernelIrVersionV1::V8 => {
+            VerifiedCanonicalKernelIrV8::from_canonical_bytes_with_module(neutral_bytes)
+                .unwrap()
+                .1
+        }
+        ProductionReplayKernelIrVersionV1::V9 => {
+            VerifiedCanonicalKernelIrV9::from_canonical_bytes_with_module(neutral_bytes)
+                .unwrap()
+                .1
+        }
+    };
     let target_bound = bind_production_target_v1(&neutral_module, profile).unwrap();
-    let target_owner =
-        VerifiedCanonicalKernelIrV8::from_module(target_bound.module().clone()).unwrap();
-    let anchor_identity =
-        dialect_amdgcn::ProductionSemanticAnchorKirIdentityV1::from_v8(&target_owner);
+    let anchor_identity = match version {
+        ProductionReplayKernelIrVersionV1::V8 => {
+            let owner =
+                VerifiedCanonicalKernelIrV8::from_module(target_bound.module().clone()).unwrap();
+            dialect_amdgcn::ProductionSemanticAnchorKirIdentityV1::from_v8(&owner)
+        }
+        ProductionReplayKernelIrVersionV1::V9 => {
+            let owner =
+                VerifiedCanonicalKernelIrV9::from_module(target_bound.module().clone()).unwrap();
+            dialect_amdgcn::ProductionSemanticAnchorKirIdentityV1::from_v9(&owner)
+        }
+    };
     let dialect = match profile {
         ProductionAmdTargetProfileV1::Gfx942 => {
             lower_kernel_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1(
@@ -1650,6 +1677,22 @@ fn semantic_anchor_handoff(
     )
     .unwrap();
     (handoff, descriptor_source, entry)
+}
+
+fn replay_kernel_ir_bytes(
+    canonical_v8: &[u8],
+    version: ProductionReplayKernelIrVersionV1,
+) -> Vec<u8> {
+    let (_, module) =
+        VerifiedCanonicalKernelIrV8::from_canonical_bytes_with_module(canonical_v8.to_vec())
+            .unwrap();
+    match version {
+        ProductionReplayKernelIrVersionV1::V8 => canonical_v8.to_vec(),
+        ProductionReplayKernelIrVersionV1::V9 => VerifiedCanonicalKernelIrV9::from_module(module)
+            .unwrap()
+            .canonical_bytes()
+            .to_vec(),
+    }
 }
 
 fn semantic_anchor_outer(
@@ -1732,6 +1775,98 @@ fn semantic_anchor_outer_with_association_seed(
             Some(extension.canonical_bytes()),
             Some(profile),
             Some(descriptor_source.canonical_bytes()),
+        ),
+        handoff.canonical_bytes(),
+    ))
+    .unwrap()
+}
+
+#[derive(Clone, Copy)]
+enum V9SourceCarrierFixture {
+    ExactProjectionGap,
+    OtherProducerGap,
+    AvailableV8Substitution,
+    StaleAssociation,
+}
+
+fn semantic_anchor_outer_v9(
+    handoff: &CompilerModuleHandoffV2,
+    descriptor_source: &CompilerDescriptorSourceV1,
+    profile: ProductionAmdTargetProfileV1,
+    fixture: V9SourceCarrierFixture,
+) -> InertSemanticCompilerModuleHandoffV3 {
+    let base = InertSemanticCompilerModuleHandoffV3::decode(&raw_outer(
+        &capsule_bytes_with_semantic_to_llvm_and_version(
+            0x20,
+            handoff,
+            DescriptorLineageMutation::Exact,
+            None,
+            Some(profile),
+            Some(descriptor_source.canonical_bytes()),
+            ProductionReplayKernelIrVersionV1::V9,
+        ),
+        handoff.canonical_bytes(),
+    ))
+    .unwrap();
+    let association = match fixture {
+        V9SourceCarrierFixture::StaleAssociation => {
+            let other = InertSemanticCompilerModuleHandoffV3::decode(&raw_outer(
+                &capsule_bytes_with_semantic_to_llvm_and_version(
+                    0x40,
+                    handoff,
+                    DescriptorLineageMutation::Exact,
+                    None,
+                    Some(profile),
+                    Some(descriptor_source.canonical_bytes()),
+                    ProductionReplayKernelIrVersionV1::V9,
+                ),
+                handoff.canonical_bytes(),
+            ))
+            .unwrap();
+            association_from_outer(&other)
+        }
+        V9SourceCarrierFixture::ExactProjectionGap
+        | V9SourceCarrierFixture::OtherProducerGap
+        | V9SourceCarrierFixture::AvailableV8Substitution => association_from_outer(&base),
+    };
+    let availability = match fixture {
+        V9SourceCarrierFixture::ExactProjectionGap | V9SourceCarrierFixture::StaleAssociation => {
+            ProductionSemanticDebugAvailabilityV1::Unavailable(
+                ProductionSemanticDebugProducerGapV1::CanonicalKirV7ProjectionUnavailable,
+            )
+        }
+        V9SourceCarrierFixture::OtherProducerGap => {
+            ProductionSemanticDebugAvailabilityV1::Unavailable(
+                ProductionSemanticDebugProducerGapV1::SourceMapUnavailable,
+            )
+        }
+        V9SourceCarrierFixture::AvailableV8Substitution => {
+            let proof = canonical_compiler_proof_inputs_v4_with_sourceful_induction(0x20);
+            exact_source_mir_kir_carrier_v1(
+                association.canonical_bytes(),
+                proof.semantic_mir(),
+                proof.kernel_ir(),
+                proof.correspondence(),
+                handoff.module_bytes(),
+            )
+            .availability()
+            .clone()
+        }
+    };
+    let carrier =
+        ProductionSemanticDebugCarrierV1::new(association.canonical_bytes(), availability).unwrap();
+    let extension =
+        ProductionSemanticDebugReceiptExtensionV1::new(association.canonical_bytes(), carrier)
+            .unwrap();
+    InertSemanticCompilerModuleHandoffV3::decode(&raw_outer(
+        &capsule_bytes_with_semantic_to_llvm_and_version(
+            0x20,
+            handoff,
+            DescriptorLineageMutation::Exact,
+            Some(extension.canonical_bytes()),
+            Some(profile),
+            Some(descriptor_source.canonical_bytes()),
+            ProductionReplayKernelIrVersionV1::V9,
         ),
         handoff.canonical_bytes(),
     ))
@@ -2002,6 +2137,133 @@ fn production_semantic_anchors_admit_real_worker_gfx942_and_gfx950() {
         assert!(!correlation.proves_optimized_or_final_llvm_custody());
         assert!(!correlation.proves_live_program_counter_ownership());
         assert!(!correlation.grants_runtime_authority());
+
+        let (v9_handoff, v9_descriptor_source, _) =
+            semantic_anchor_handoff_with_version(profile, ProductionReplayKernelIrVersionV1::V9);
+        let v9_outer = semantic_anchor_outer_v9(
+            &v9_handoff,
+            &v9_descriptor_source,
+            profile,
+            V9SourceCarrierFixture::ExactProjectionGap,
+        );
+        let v9_directory = TestDirectory::new();
+        let v9_real_worker = pinned_external(
+            &v9_directory,
+            &worker_path,
+            &worker_build_identity,
+            llvm_build_identity,
+        );
+        let (v9_finalized, v9_raw_worker_output) = execute_semantic_anchor_outer(
+            &v9_directory,
+            &v9_outer,
+            &v9_real_worker,
+            llvm_build_identity,
+        );
+        assert!(matches!(
+            v9_finalized
+                .admit_production_source_isa_correlation_v1()
+                .unwrap(),
+            ProductionSourceIsaCorrelationAdmissionV1::Unavailable(
+                ProductionSourceIsaCorrelationUnavailableV1::SourceProjectionForKirV9
+            )
+        ));
+
+        let v9_actual_handoff = handoff_with_raw_worker_output(&v9_handoff, &v9_raw_worker_output);
+        let other_gap = semantic_anchor_outer_v9(
+            &v9_actual_handoff,
+            &v9_descriptor_source,
+            profile,
+            V9SourceCarrierFixture::OtherProducerGap,
+        );
+        let other_gap_directory = TestDirectory::new();
+        let fixture_worker = pinned(
+            &other_gap_directory,
+            EvidenceConfig::BASE.llvm_build_identity,
+        );
+        let (other_gap_finalized, _) = execute_semantic_anchor_outer(
+            &other_gap_directory,
+            &other_gap,
+            &fixture_worker,
+            EvidenceConfig::BASE.llvm_build_identity,
+        );
+        assert!(matches!(
+            other_gap_finalized
+                .admit_production_source_isa_correlation_v1()
+                .unwrap(),
+            ProductionSourceIsaCorrelationAdmissionV1::Unavailable(
+                ProductionSourceIsaCorrelationUnavailableV1::SemanticDebugCarrier(
+                    ProductionSemanticDebugProducerGapV1::SourceMapUnavailable
+                )
+            )
+        ));
+
+        let substituted_carrier = semantic_anchor_outer_v9(
+            &v9_actual_handoff,
+            &v9_descriptor_source,
+            profile,
+            V9SourceCarrierFixture::AvailableV8Substitution,
+        );
+        let substituted_directory = TestDirectory::new();
+        let fixture_worker = pinned(
+            &substituted_directory,
+            EvidenceConfig::BASE.llvm_build_identity,
+        );
+        let (substituted_finalized, _) = execute_semantic_anchor_outer(
+            &substituted_directory,
+            &substituted_carrier,
+            &fixture_worker,
+            EvidenceConfig::BASE.llvm_build_identity,
+        );
+        assert!(matches!(
+            substituted_finalized.admit_production_source_isa_correlation_v1(),
+            Err(ProductionSourceIsaCorrelationErrorV1::SemanticDebugMap(
+                FinalizedSemanticDebugMapErrorV1::InvalidBoundCanonicalKirV8
+            ))
+        ));
+
+        let stale_association = semantic_anchor_outer_v9(
+            &v9_actual_handoff,
+            &v9_descriptor_source,
+            profile,
+            V9SourceCarrierFixture::StaleAssociation,
+        );
+        let stale_directory = TestDirectory::new();
+        let fixture_worker = pinned(&stale_directory, EvidenceConfig::BASE.llvm_build_identity);
+        let (stale_finalized, _) = execute_semantic_anchor_outer(
+            &stale_directory,
+            &stale_association,
+            &fixture_worker,
+            EvidenceConfig::BASE.llvm_build_identity,
+        );
+        assert!(matches!(
+            stale_finalized.admit_production_source_isa_correlation_v1(),
+            Err(ProductionSourceIsaCorrelationErrorV1::SemanticDebugMap(
+                FinalizedSemanticDebugMapErrorV1::ProductionAssociationMismatch
+            ))
+        ));
+
+        let artifact_substitution = handoff_with_raw_worker_output(&v9_handoff, &raw_worker_output);
+        let artifact_substitution = semantic_anchor_outer_v9(
+            &artifact_substitution,
+            &v9_descriptor_source,
+            profile,
+            V9SourceCarrierFixture::ExactProjectionGap,
+        );
+        let artifact_directory = TestDirectory::new();
+        let fixture_worker = pinned(
+            &artifact_directory,
+            EvidenceConfig::BASE.llvm_build_identity,
+        );
+        let (artifact_finalized, _) = execute_semantic_anchor_outer(
+            &artifact_directory,
+            &artifact_substitution,
+            &fixture_worker,
+            EvidenceConfig::BASE.llvm_build_identity,
+        );
+        assert!(matches!(
+            artifact_finalized.admit_production_source_isa_correlation_v1(),
+            Err(ProductionSourceIsaCorrelationErrorV1::SemanticAnchors(_))
+        ));
 
         let diagnostic_handoff = handoff_with_diagnostic_probe_descriptor_name(&handoff);
         let diagnostic_handoff =
@@ -2612,6 +2874,26 @@ fn capsule_bytes_with_semantic_to_llvm(
     replay_profile: Option<ProductionAmdTargetProfileV1>,
     descriptor_source_override: Option<&[u8]>,
 ) -> Vec<u8> {
+    capsule_bytes_with_semantic_to_llvm_and_version(
+        seed,
+        handoff,
+        lineage_mutation,
+        semantic_to_llvm,
+        replay_profile,
+        descriptor_source_override,
+        ProductionReplayKernelIrVersionV1::V8,
+    )
+}
+
+fn capsule_bytes_with_semantic_to_llvm_and_version(
+    seed: u8,
+    handoff: &CompilerModuleHandoffV2,
+    lineage_mutation: DescriptorLineageMutation,
+    semantic_to_llvm: Option<&[u8]>,
+    replay_profile: Option<ProductionAmdTargetProfileV1>,
+    descriptor_source_override: Option<&[u8]>,
+    replay_version: ProductionReplayKernelIrVersionV1,
+) -> Vec<u8> {
     let invocation = invocation_bytes_for_target(seed, &handoff.target().to_string());
     let final_commitment = InertFinalCompilerModuleCommitmentV3::from_handoff(handoff).unwrap();
     let mut receipts = RECEIPTS
@@ -2630,20 +2912,35 @@ fn capsule_bytes_with_semantic_to_llvm(
     };
     receipts[2].0 = proof_inputs.semantic_mir().to_vec();
     receipts[3].0 = proof_inputs.middle_end().to_vec();
-    receipts[4].0 = proof_inputs.kernel_ir().to_vec();
+    receipts[4].0 = replay_kernel_ir_bytes(proof_inputs.kernel_ir(), replay_version);
     receipts[5].0 = proof_inputs.correspondence().to_vec();
     receipts[6].0 = proof_inputs.formal_memory().to_vec();
     if let Some(profile) = replay_profile {
-        let (_, neutral_module) =
-            fe2o3_kernel_ir::VerifiedCanonicalKernelIrV8::from_canonical_bytes_with_module(
-                proof_inputs.kernel_ir().to_vec(),
-            )
-            .unwrap();
+        let neutral_module = match replay_version {
+            ProductionReplayKernelIrVersionV1::V8 => {
+                VerifiedCanonicalKernelIrV8::from_canonical_bytes_with_module(receipts[4].0.clone())
+                    .unwrap()
+                    .1
+            }
+            ProductionReplayKernelIrVersionV1::V9 => {
+                VerifiedCanonicalKernelIrV9::from_canonical_bytes_with_module(receipts[4].0.clone())
+                    .unwrap()
+                    .1
+            }
+        };
         let target = bind_production_target_v1(&neutral_module, profile).unwrap();
-        let target_owner =
-            VerifiedCanonicalKernelIrV8::from_module(target.module().clone()).unwrap();
-        let anchor_identity =
-            dialect_amdgcn::ProductionSemanticAnchorKirIdentityV1::from_v8(&target_owner);
+        let anchor_identity = match replay_version {
+            ProductionReplayKernelIrVersionV1::V8 => {
+                let owner =
+                    VerifiedCanonicalKernelIrV8::from_module(target.module().clone()).unwrap();
+                dialect_amdgcn::ProductionSemanticAnchorKirIdentityV1::from_v8(&owner)
+            }
+            ProductionReplayKernelIrVersionV1::V9 => {
+                let owner =
+                    VerifiedCanonicalKernelIrV9::from_module(target.module().clone()).unwrap();
+                dialect_amdgcn::ProductionSemanticAnchorKirIdentityV1::from_v9(&owner)
+            }
+        };
         let dialect = match profile {
             ProductionAmdTargetProfileV1::Gfx942 => {
                 lower_kernel_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1(
@@ -2663,7 +2960,7 @@ fn capsule_bytes_with_semantic_to_llvm(
         .unwrap();
         let llvm = bind_production_llvm22_worker_layout_v1(&dialect).unwrap();
         receipts[12].0 = CanonicalProductionKirToLlvmReplayEvidenceV1::from_live_inputs(
-            proof_inputs.kernel_ir(),
+            &receipts[4].0,
             target.module(),
             profile,
             &llvm,
