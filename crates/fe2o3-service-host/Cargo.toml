@@ -11,6 +11,9 @@ publish = false
 [lib]
 name = "fe2o3_service_host"
 
+[features]
+qualification-fault-injection = []
+
 [dependencies]
 fe2o3-amdhsa-loader.workspace = true
 fe2o3-aql.workspace = true

@@ -558,6 +558,11 @@ impl fmt::Debug for ServiceHostDispatchSnapshotRangeV1 {
 }
 
 impl ServiceHostDispatchSnapshotRangeV1 {
+    /// Returns the exact initialized enclosing range without exposing a native address.
+    pub const fn enclosing_dispatch_range(self) -> ServiceHostDispatchRangeV1 {
+        self.range
+    }
+
     /// Returns the checked byte offset without exposing a native address.
     pub const fn offset_bytes(self) -> u64 {
         self.range.offset_bytes
@@ -570,6 +575,10 @@ impl ServiceHostDispatchSnapshotRangeV1 {
 
     pub(crate) const fn dispatch_range(self) -> ServiceHostDispatchRangeV1 {
         self.range
+    }
+
+    pub(crate) const fn from_initialized_range(range: ServiceHostDispatchRangeV1) -> Self {
+        Self { range }
     }
 }
 
@@ -707,6 +716,45 @@ pub(crate) struct ServiceQueueAllocationReplacementV1 {
     new_subleases: Option<Vec<ServiceAllocationSubleaseRangeV1>>,
 }
 
+pub(crate) struct ServiceQueuePartitionedAllocationInsertionV1<const N: usize> {
+    binding: AllocationBindingV1,
+    data_index: usize,
+    ranges: [ServiceAllocationSubleaseRangeV1; N],
+    retained_ranges: Vec<ServiceAllocationSubleaseRangeV1>,
+}
+
+impl<const N: usize> ServiceQueuePartitionedAllocationInsertionV1<N> {
+    pub(crate) const fn data_index(&self) -> usize {
+        self.data_index
+    }
+}
+
+pub(crate) struct ServiceQueuePartitionedAllocationRemovalV1 {
+    allocation_index: usize,
+    data_index: usize,
+    binding: AllocationBindingV1,
+}
+
+impl ServiceQueuePartitionedAllocationRemovalV1 {
+    pub(crate) const fn data_index(&self) -> usize {
+        self.data_index
+    }
+}
+
+pub(crate) struct ServiceQueueHostAllocationReplacementV1 {
+    allocation_index: usize,
+    host_binding_index: usize,
+    data_index: usize,
+    old_binding: AllocationBindingV1,
+    new_binding: AllocationBindingV1,
+}
+
+impl ServiceQueueHostAllocationReplacementV1 {
+    pub(crate) const fn data_index(&self) -> usize {
+        self.data_index
+    }
+}
+
 impl ServiceQueueAllocationReplacementV1 {
     pub(crate) const fn data_index(&self) -> usize {
         self.data_index
@@ -763,6 +811,367 @@ impl ServiceQueueAllocationLedgerV1 {
                 .checked_sub(self.device_bindings.len())
                 .and_then(|index| self.host_bindings.get(index).copied())
         })
+    }
+
+    pub(crate) fn reissue_partitioned_device_local<R, const N: usize>(
+        &self,
+        subleases: &ServiceAllocationSubleaseSetV1<R, DeviceLocalAllocationV1, N>,
+    ) -> Result<[ServiceDeviceDispatchRangeV1; N], ServiceAllocationErrorV1>
+    where
+        R: DeviceAllocationRoleMarkerV1,
+    {
+        let allocation_index =
+            validate_sublease_set_binding(self.owner, &self.allocations, subleases)?;
+        let binding = self.allocations[allocation_index].binding;
+        if binding.role_id != R::ROLE_ID {
+            return Err(ServiceAllocationErrorV1::RoleMismatch);
+        }
+        if binding.kind_id != AllocationKindV1::DeviceLocal as u8 {
+            return Err(ServiceAllocationErrorV1::KindMismatch);
+        }
+        let data_index = self
+            .device_bindings
+            .iter()
+            .position(|candidate| *candidate == binding)
+            .ok_or(ServiceAllocationErrorV1::AllocationGenerationMismatch)?;
+        let ranges = core::array::from_fn(|index| ServiceDeviceDispatchRangeV1 {
+            binding,
+            data_index,
+            offset_bytes: subleases.ranges[index].offset_bytes,
+            extent_bytes: subleases.ranges[index].extent_bytes,
+            sublease_index: Some(index),
+        });
+        for range in &ranges {
+            self.validate_range(*range)?;
+        }
+        Ok(ranges)
+    }
+
+    pub(crate) fn reissue_device_local<R>(
+        &self,
+        range: ServiceDeviceDispatchRangeV1,
+    ) -> Result<ServiceDeviceDispatchRangeV1, ServiceAllocationErrorV1>
+    where
+        R: DeviceAllocationRoleMarkerV1,
+    {
+        if range.binding.owner != self.owner {
+            return Err(ServiceAllocationErrorV1::OwnerBindingMismatch);
+        }
+        if range.binding.role_id != R::ROLE_ID {
+            return Err(ServiceAllocationErrorV1::RoleMismatch);
+        }
+        if range.binding.kind_id != AllocationKindV1::DeviceLocal as u8 {
+            return Err(ServiceAllocationErrorV1::KindMismatch);
+        }
+        if range.sublease_index.is_some() {
+            return Err(ServiceAllocationErrorV1::SubleaseBindingMismatch);
+        }
+        let allocation = self
+            .allocations
+            .iter()
+            .find(|allocation| allocation.binding.id == range.binding.id)
+            .ok_or(ServiceAllocationErrorV1::AllocationGenerationMismatch)?;
+        if allocation.binding != range.binding {
+            return Err(ServiceAllocationErrorV1::AllocationGenerationMismatch);
+        }
+        if allocation.subleases.is_some() {
+            return Err(ServiceAllocationErrorV1::SubleaseBindingMismatch);
+        }
+        let data_index = self
+            .device_bindings
+            .iter()
+            .position(|candidate| *candidate == range.binding)
+            .ok_or(ServiceAllocationErrorV1::AllocationGenerationMismatch)?;
+        let reissued = ServiceDeviceDispatchRangeV1 {
+            data_index,
+            ..range
+        };
+        self.validate_range(reissued)?;
+        Ok(reissued)
+    }
+
+    pub(crate) fn reissue_host_visible<R>(
+        &self,
+        range: ServiceHostDispatchRangeV1,
+    ) -> Result<ServiceHostDispatchRangeV1, ServiceAllocationErrorV1>
+    where
+        R: HostAllocationRoleMarkerV1,
+    {
+        if range.binding.owner != self.owner {
+            return Err(ServiceAllocationErrorV1::OwnerBindingMismatch);
+        }
+        if range.binding.role_id != R::ROLE_ID {
+            return Err(ServiceAllocationErrorV1::RoleMismatch);
+        }
+        if range.binding.kind_id != AllocationKindV1::HostVisible as u8 {
+            return Err(ServiceAllocationErrorV1::KindMismatch);
+        }
+        let host_index = self
+            .host_bindings
+            .iter()
+            .position(|candidate| *candidate == range.binding)
+            .ok_or(ServiceAllocationErrorV1::AllocationGenerationMismatch)?;
+        let data_index = self
+            .device_bindings
+            .len()
+            .checked_add(host_index)
+            .ok_or(ServiceAllocationErrorV1::AllocationGenerationMismatch)?;
+        let reissued = ServiceHostDispatchRangeV1 {
+            data_index,
+            ..range
+        };
+        self.validate_range(reissued)?;
+        Ok(reissued)
+    }
+
+    pub(crate) fn reissue_host_visible_snapshot<R>(
+        &self,
+        snapshot: ServiceHostDispatchSnapshotRangeV1,
+    ) -> Result<ServiceHostDispatchSnapshotRangeV1, ServiceAllocationErrorV1>
+    where
+        R: HostAllocationRoleMarkerV1,
+    {
+        let range = self.reissue_host_visible::<R>(snapshot.range)?;
+        Ok(ServiceHostDispatchSnapshotRangeV1::from_initialized_range(
+            range,
+        ))
+    }
+
+    pub(crate) fn prepare_initialized_partition_insertion<R, const N: usize>(
+        &mut self,
+        extent_bytes: u64,
+        alignment: u64,
+        members: [(u64, u64, u64); N],
+    ) -> Result<ServiceQueuePartitionedAllocationInsertionV1<N>, ServiceAllocationErrorV1>
+    where
+        R: DeviceAllocationRoleMarkerV1,
+    {
+        if self.allocations.len() >= MAX_SERVICE_ALLOCATIONS_V1 {
+            return Err(ServiceAllocationErrorV1::AllocationCapacity {
+                maximum: MAX_SERVICE_ALLOCATIONS_V1,
+            });
+        }
+        if extent_bytes == 0 {
+            return Err(ServiceAllocationErrorV1::InvalidExtent);
+        }
+        if alignment == 0 || !alignment.is_power_of_two() || alignment > MAX_SERVICE_ALIGNMENT_V1 {
+            return Err(ServiceAllocationErrorV1::InvalidAlignment);
+        }
+        if self
+            .device_bytes
+            .checked_add(extent_bytes)
+            .is_none_or(|total| total > MAX_SERVICE_DEVICE_BYTES_V1)
+        {
+            return Err(ServiceAllocationErrorV1::ByteCapacity {
+                maximum_bytes: MAX_SERVICE_DEVICE_BYTES_V1,
+            });
+        }
+        self.allocations
+            .try_reserve(1)
+            .map_err(|_| ServiceAllocationErrorV1::AllocationRegistryReservation)?;
+        self.device_bindings
+            .try_reserve(1)
+            .map_err(|_| ServiceAllocationErrorV1::AllocationRegistryReservation)?;
+        let next_allocation_id = self
+            .next_allocation_id
+            .checked_add(1)
+            .ok_or(ServiceAllocationErrorV1::AllocationGenerationMismatch)?;
+        let binding = AllocationBindingV1 {
+            owner: self.owner,
+            id: self.next_allocation_id,
+            generation: 1,
+            role_id: R::ROLE_ID,
+            kind_id: AllocationKindV1::DeviceLocal as u8,
+            extent_bytes,
+            alignment,
+        };
+        let ranges = validate_sublease_layout(binding, members)?;
+        let mut retained_ranges = Vec::new();
+        retained_ranges
+            .try_reserve_exact(N)
+            .map_err(|_| ServiceAllocationErrorV1::AllocationRegistryReservation)?;
+        retained_ranges.extend_from_slice(&ranges);
+        let data_index = self.device_bindings.len();
+        self.next_allocation_id = next_allocation_id;
+        Ok(ServiceQueuePartitionedAllocationInsertionV1 {
+            binding,
+            data_index,
+            ranges,
+            retained_ranges,
+        })
+    }
+
+    pub(crate) fn commit_initialized_partition_insertion<R, const N: usize>(
+        &mut self,
+        insertion: ServiceQueuePartitionedAllocationInsertionV1<N>,
+    ) -> (
+        ServiceAllocationSubleaseSetV1<R, DeviceLocalAllocationV1, N>,
+        [ServiceDeviceDispatchRangeV1; N],
+    )
+    where
+        R: DeviceAllocationRoleMarkerV1,
+    {
+        let ServiceQueuePartitionedAllocationInsertionV1 {
+            binding,
+            data_index,
+            ranges,
+            retained_ranges,
+        } = insertion;
+        debug_assert_eq!(data_index, self.device_bindings.len());
+        self.allocations.push(OwnedAllocationV1 {
+            binding,
+            token: None,
+            subleases: Some(retained_ranges),
+        });
+        self.device_bindings.push(binding);
+        self.device_bytes += binding.extent_bytes;
+        let subleases = ServiceAllocationSubleaseSetV1 {
+            key: key(binding),
+            ranges,
+        };
+        let dispatch_ranges = core::array::from_fn(|index| ServiceDeviceDispatchRangeV1 {
+            binding,
+            data_index,
+            offset_bytes: ranges[index].offset_bytes,
+            extent_bytes: ranges[index].extent_bytes,
+            sublease_index: Some(index),
+        });
+        (subleases, dispatch_ranges)
+    }
+
+    pub(crate) fn prepare_partitioned_removal<R, const N: usize>(
+        &self,
+        subleases: &ServiceAllocationSubleaseSetV1<R, DeviceLocalAllocationV1, N>,
+    ) -> Result<ServiceQueuePartitionedAllocationRemovalV1, ServiceAllocationErrorV1>
+    where
+        R: DeviceAllocationRoleMarkerV1,
+    {
+        let allocation_index =
+            validate_sublease_set_binding(self.owner, &self.allocations, subleases)?;
+        let binding = self.allocations[allocation_index].binding;
+        let data_index = self
+            .device_bindings
+            .iter()
+            .position(|candidate| *candidate == binding)
+            .ok_or(ServiceAllocationErrorV1::AllocationGenerationMismatch)?;
+        Ok(ServiceQueuePartitionedAllocationRemovalV1 {
+            allocation_index,
+            data_index,
+            binding,
+        })
+    }
+
+    pub(crate) fn commit_partitioned_removal(
+        &mut self,
+        removal: ServiceQueuePartitionedAllocationRemovalV1,
+    ) {
+        let removed = self.allocations.remove(removal.allocation_index);
+        debug_assert!(removed.binding == removal.binding);
+        debug_assert!(removed.token.is_none());
+        let removed_binding = self.device_bindings.remove(removal.data_index);
+        debug_assert!(removed_binding == removal.binding);
+        self.device_bytes -= removal.binding.extent_bytes;
+    }
+
+    pub(crate) fn prepare_host_replacement<R>(
+        &mut self,
+        range: ServiceHostDispatchRangeV1,
+        extent_bytes: u64,
+    ) -> Result<ServiceQueueHostAllocationReplacementV1, ServiceAllocationErrorV1>
+    where
+        R: HostAllocationRoleMarkerV1,
+    {
+        self.validate_range(range)?;
+        if range.offset_bytes != 0 || range.extent_bytes != range.binding.extent_bytes {
+            return Err(ServiceAllocationErrorV1::InvalidRange);
+        }
+        if range.binding.role_id != R::ROLE_ID {
+            return Err(ServiceAllocationErrorV1::RoleMismatch);
+        }
+        if extent_bytes == 0 {
+            return Err(ServiceAllocationErrorV1::InvalidExtent);
+        }
+        let retained_without_old = self
+            .host_bytes
+            .checked_sub(range.binding.extent_bytes)
+            .ok_or(ServiceAllocationErrorV1::AllocationGenerationMismatch)?;
+        if retained_without_old
+            .checked_add(extent_bytes)
+            .is_none_or(|total| total > MAX_SERVICE_HOST_BYTES_V1)
+        {
+            return Err(ServiceAllocationErrorV1::ByteCapacity {
+                maximum_bytes: MAX_SERVICE_HOST_BYTES_V1,
+            });
+        }
+        let next_allocation_id = self
+            .next_allocation_id
+            .checked_add(1)
+            .ok_or(ServiceAllocationErrorV1::AllocationGenerationMismatch)?;
+        let allocation_index = self
+            .allocations
+            .iter()
+            .position(|allocation| allocation.binding == range.binding)
+            .ok_or(ServiceAllocationErrorV1::AllocationGenerationMismatch)?;
+        let host_binding_index = range
+            .data_index
+            .checked_sub(self.device_bindings.len())
+            .ok_or(ServiceAllocationErrorV1::AllocationGenerationMismatch)?;
+        if self.host_bindings.get(host_binding_index) != Some(&range.binding) {
+            return Err(ServiceAllocationErrorV1::AllocationGenerationMismatch);
+        }
+        let new_binding = AllocationBindingV1 {
+            owner: self.owner,
+            id: self.next_allocation_id,
+            generation: 1,
+            role_id: R::ROLE_ID,
+            kind_id: AllocationKindV1::HostVisible as u8,
+            extent_bytes,
+            alignment: MAX_SERVICE_ALIGNMENT_V1,
+        };
+        self.next_allocation_id = next_allocation_id;
+        Ok(ServiceQueueHostAllocationReplacementV1 {
+            allocation_index,
+            host_binding_index,
+            data_index: range.data_index,
+            old_binding: range.binding,
+            new_binding,
+        })
+    }
+
+    pub(crate) fn commit_host_replacement_release(
+        &mut self,
+        replacement: &ServiceQueueHostAllocationReplacementV1,
+    ) {
+        let removed = self.allocations.remove(replacement.allocation_index);
+        debug_assert!(removed.binding == replacement.old_binding);
+        debug_assert!(removed.token.is_none());
+        let removed_binding = self.host_bindings.remove(replacement.host_binding_index);
+        debug_assert!(removed_binding == replacement.old_binding);
+        self.host_bytes -= replacement.old_binding.extent_bytes;
+    }
+
+    pub(crate) fn commit_host_replacement(
+        &mut self,
+        replacement: ServiceQueueHostAllocationReplacementV1,
+    ) -> ServiceHostDispatchRangeV1 {
+        self.allocations.insert(
+            replacement.allocation_index,
+            OwnedAllocationV1 {
+                binding: replacement.new_binding,
+                token: None,
+                subleases: None,
+            },
+        );
+        self.host_bindings
+            .insert(replacement.host_binding_index, replacement.new_binding);
+        self.host_bytes += replacement.new_binding.extent_bytes;
+        ServiceHostDispatchRangeV1 {
+            binding: replacement.new_binding,
+            data_index: replacement.data_index,
+            offset_bytes: 0,
+            extent_bytes: replacement.new_binding.extent_bytes,
+            sublease_index: None,
+        }
     }
 
     pub(crate) fn prepare_initialized_replacement<R>(
@@ -2127,6 +2536,9 @@ impl ServiceAllocationSessionV1 {
                 ServiceAllocationErrorV1::AllocationRegistryReservation,
             ));
         };
+        if let Err(error) = validate_queue_dispatch_count(dispatch_count) {
+            return Err((self, error));
+        }
         if dispatch_count == 0 {
             return Err((self, ServiceAllocationErrorV1::AllocationState));
         }
@@ -2393,6 +2805,15 @@ where
         binding,
         marker: PhantomData,
     }
+}
+
+fn validate_queue_dispatch_count(dispatch_count: usize) -> Result<(), ServiceAllocationErrorV1> {
+    if dispatch_count > fe2o3_kfd::GFX942_MAX_FIXED_DISPATCH_DATA_V1 {
+        return Err(ServiceAllocationErrorV1::AllocationCapacity {
+            maximum: fe2o3_kfd::GFX942_MAX_FIXED_DISPATCH_DATA_V1,
+        });
+    }
+    Ok(())
 }
 
 fn validate_dispatch_range(
@@ -2746,6 +3167,18 @@ mod tests {
             ["host-upload", "host-download"]
         );
         assert_eq!(MAX_SERVICE_ALIGNMENT_V1, HOST_VISIBLE_MEMORY_PAGE_BYTES_V1);
+    }
+
+    #[test]
+    fn queue_transfer_dispatch_count_accepts_sixteen_and_rejects_seventeen() {
+        assert!(validate_queue_dispatch_count(0).is_ok());
+        assert!(validate_queue_dispatch_count(16).is_ok());
+        assert!(matches!(
+            validate_queue_dispatch_count(17),
+            Err(ServiceAllocationErrorV1::AllocationCapacity {
+                maximum: fe2o3_kfd::GFX942_MAX_FIXED_DISPATCH_DATA_V1
+            })
+        ));
     }
 
     #[test]
@@ -3249,6 +3682,360 @@ mod tests {
             device_bindings: vec![expected],
             host_bindings: vec![],
         }
+    }
+
+    #[test]
+    fn partition_insertion_and_removal_shift_only_the_host_data_suffix() {
+        let mut device = binding(
+            AllocationRoleV1::DeviceWorkspace,
+            AllocationKindV1::DeviceLocal,
+        );
+        device.extent_bytes = 8_192;
+        let old_ranges = validate_sublease_layout(device, [(0, 8_192, 4_096)]).unwrap();
+        let mut host = binding(
+            AllocationRoleV1::HostDownload,
+            AllocationKindV1::HostVisible,
+        );
+        host.id = 2;
+        host.extent_bytes = 4_096;
+        let mut ledger = ServiceQueueAllocationLedgerV1 {
+            owner: device.owner,
+            next_allocation_id: 3,
+            allocations: vec![
+                OwnedAllocationV1 {
+                    binding: device,
+                    token: None,
+                    subleases: Some(old_ranges.to_vec()),
+                },
+                OwnedAllocationV1 {
+                    binding: host,
+                    token: None,
+                    subleases: None,
+                },
+            ],
+            device_bytes: device.extent_bytes,
+            host_bytes: host.extent_bytes,
+            device_bindings: vec![device],
+            host_bindings: vec![host],
+        };
+        let old_host = ServiceHostDispatchRangeV1 {
+            binding: host,
+            data_index: 1,
+            offset_bytes: 0,
+            extent_bytes: host.extent_bytes,
+            sublease_index: None,
+        };
+        assert!(ledger.validate_range(old_host).is_ok());
+        assert!(matches!(
+            ledger.reissue_host_visible::<HostUploadRoleV1>(old_host),
+            Err(ServiceAllocationErrorV1::RoleMismatch)
+        ));
+
+        let insertion = ledger
+            .prepare_initialized_partition_insertion::<DeviceWorkspaceRoleV1, 2>(
+                12_288,
+                4_096,
+                [(0, 4_096, 4_096), (4_096, 8_192, 4_096)],
+            )
+            .unwrap();
+        assert_eq!(insertion.data_index(), 1);
+        let (inserted, inserted_ranges) =
+            ledger.commit_initialized_partition_insertion::<DeviceWorkspaceRoleV1, 2>(insertion);
+        assert!(ledger.device_bindings == [device, inserted.key.binding]);
+        assert_eq!(inserted_ranges[0].data_index, 1);
+        assert_eq!(inserted_ranges[1].data_index, 1);
+        assert!(matches!(
+            ledger.validate_range(old_host),
+            Err(ServiceAllocationErrorV1::AllocationGenerationMismatch)
+        ));
+        let shifted_host = ledger
+            .reissue_host_visible::<HostDownloadRoleV1>(old_host)
+            .expect("retained host allocation must be reissued");
+        assert_eq!(shifted_host.data_index, 2);
+        assert!(ledger.validate_range(shifted_host).is_ok());
+        assert!(ledger.validate_range(inserted_ranges[0]).is_ok());
+
+        let removal = ledger
+            .prepare_partitioned_removal(&inserted)
+            .expect("fresh inserted witness");
+        assert_eq!(removal.data_index(), 1);
+        ledger.commit_partitioned_removal(removal);
+        assert!(ledger.device_bindings == [device]);
+        assert!(ledger.validate_range(old_host).is_ok());
+        assert_eq!(
+            ledger
+                .reissue_host_visible::<HostDownloadRoleV1>(shifted_host)
+                .unwrap()
+                .data_index,
+            1
+        );
+        assert!(matches!(
+            ledger.validate_range(inserted_ranges[0]),
+            Err(ServiceAllocationErrorV1::AllocationGenerationMismatch)
+        ));
+        assert!(matches!(
+            ledger.reissue_partitioned_device_local(&inserted),
+            Err(ServiceAllocationErrorV1::AllocationGenerationMismatch)
+        ));
+    }
+
+    #[test]
+    fn partition_removal_reissues_later_device_partition_at_current_ordinal() {
+        let mut first = binding(
+            AllocationRoleV1::DeviceWorkspace,
+            AllocationKindV1::DeviceLocal,
+        );
+        first.extent_bytes = 4_096;
+        let first_ranges = validate_sublease_layout(first, [(0, 4_096, 4_096)]).unwrap();
+        let first_subleases =
+            ServiceAllocationSubleaseSetV1::<DeviceWorkspaceRoleV1, DeviceLocalAllocationV1, 1> {
+                key: key(first),
+                ranges: first_ranges,
+            };
+
+        let mut second = first;
+        second.id = 2;
+        second.extent_bytes = 8_192;
+        let second_ranges =
+            validate_sublease_layout(second, [(0, 4_096, 4_096), (4_096, 4_096, 4_096)]).unwrap();
+        let second_subleases =
+            ServiceAllocationSubleaseSetV1::<DeviceWorkspaceRoleV1, DeviceLocalAllocationV1, 2> {
+                key: key(second),
+                ranges: second_ranges,
+            };
+        let mut ledger = ServiceQueueAllocationLedgerV1 {
+            owner: first.owner,
+            next_allocation_id: 3,
+            allocations: vec![
+                OwnedAllocationV1 {
+                    binding: first,
+                    token: None,
+                    subleases: Some(first_ranges.to_vec()),
+                },
+                OwnedAllocationV1 {
+                    binding: second,
+                    token: None,
+                    subleases: Some(second_ranges.to_vec()),
+                },
+            ],
+            device_bytes: first.extent_bytes + second.extent_bytes,
+            host_bytes: 0,
+            device_bindings: vec![first, second],
+            host_bindings: vec![],
+        };
+        let old_second = ledger
+            .reissue_partitioned_device_local(&second_subleases)
+            .unwrap();
+        assert!(old_second.iter().all(|range| range.data_index == 1));
+
+        let removal = ledger
+            .prepare_partitioned_removal(&first_subleases)
+            .unwrap();
+        ledger.commit_partitioned_removal(removal);
+        assert!(matches!(
+            ledger.validate_range(old_second[0]),
+            Err(ServiceAllocationErrorV1::AllocationGenerationMismatch)
+        ));
+        let reissued = ledger
+            .reissue_partitioned_device_local(&second_subleases)
+            .unwrap();
+        assert!(reissued.iter().all(|range| range.data_index == 0));
+        assert_eq!(reissued[0].offset_bytes, 0);
+        assert_eq!(reissued[1].offset_bytes, 4_096);
+        assert!(
+            reissued
+                .iter()
+                .all(|range| ledger.validate_range(*range).is_ok())
+        );
+        assert!(matches!(
+            ledger.reissue_partitioned_device_local(&first_subleases),
+            Err(ServiceAllocationErrorV1::AllocationGenerationMismatch)
+        ));
+    }
+
+    #[test]
+    fn partition_removal_reissues_whole_device_and_remints_host_snapshot() {
+        let mut first = binding(
+            AllocationRoleV1::DeviceWorkspace,
+            AllocationKindV1::DeviceLocal,
+        );
+        first.extent_bytes = 4_096;
+        let first_ranges = validate_sublease_layout(first, [(0, 4_096, 4_096)]).unwrap();
+        let first_subleases =
+            ServiceAllocationSubleaseSetV1::<DeviceWorkspaceRoleV1, DeviceLocalAllocationV1, 1> {
+                key: key(first),
+                ranges: first_ranges,
+            };
+
+        let mut second = first;
+        second.id = 2;
+        second.extent_bytes = 8_192;
+        let mut host = binding(
+            AllocationRoleV1::HostDownload,
+            AllocationKindV1::HostVisible,
+        );
+        host.id = 3;
+        host.extent_bytes = 12_288;
+        let mut ledger = ServiceQueueAllocationLedgerV1 {
+            owner: first.owner,
+            next_allocation_id: 4,
+            allocations: vec![
+                OwnedAllocationV1 {
+                    binding: first,
+                    token: None,
+                    subleases: Some(first_ranges.to_vec()),
+                },
+                OwnedAllocationV1 {
+                    binding: second,
+                    token: None,
+                    subleases: None,
+                },
+                OwnedAllocationV1 {
+                    binding: host,
+                    token: None,
+                    subleases: None,
+                },
+            ],
+            device_bytes: first.extent_bytes + second.extent_bytes,
+            host_bytes: host.extent_bytes,
+            device_bindings: vec![first, second],
+            host_bindings: vec![host],
+        };
+        let old_second = ServiceDeviceDispatchRangeV1 {
+            binding: second,
+            data_index: 1,
+            offset_bytes: 0,
+            extent_bytes: second.extent_bytes,
+            sublease_index: None,
+        };
+        let old_host = ServiceHostDispatchRangeV1 {
+            binding: host,
+            data_index: 2,
+            offset_bytes: 0,
+            extent_bytes: host.extent_bytes,
+            sublease_index: None,
+        };
+        let old_interior = old_host.checked_subrange(4_096, 4_096, 4_096).unwrap();
+        let old_snapshot = ServiceHostDispatchSnapshotRangeV1::from_initialized_range(old_host);
+
+        let removal = ledger
+            .prepare_partitioned_removal(&first_subleases)
+            .unwrap();
+        ledger.commit_partitioned_removal(removal);
+        assert!(ledger.validate_range(old_second).is_err());
+        assert!(ledger.validate_range(old_host).is_err());
+        assert!(ledger.validate_range(old_snapshot.range).is_err());
+
+        let second = ledger
+            .reissue_device_local::<DeviceWorkspaceRoleV1>(old_second)
+            .unwrap();
+        assert_eq!(second.data_index, 0);
+        assert_eq!(second.offset_bytes, old_second.offset_bytes);
+        assert_eq!(second.extent_bytes, old_second.extent_bytes);
+        let interior = ledger
+            .reissue_host_visible::<HostDownloadRoleV1>(old_interior)
+            .unwrap();
+        let snapshot = ledger
+            .reissue_host_visible_snapshot::<HostDownloadRoleV1>(old_snapshot)
+            .unwrap();
+        assert_eq!(interior.data_index, 1);
+        assert_eq!(snapshot.range.data_index, 1);
+        assert!(
+            ledger
+                .validate_host_dispatch_snapshot(interior, snapshot)
+                .is_ok()
+        );
+
+        assert!(matches!(
+            ledger.reissue_device_local::<DeviceStateRoleV1>(old_second),
+            Err(ServiceAllocationErrorV1::RoleMismatch)
+        ));
+        let mut foreign = old_second;
+        foreign.binding.owner.vm_owner_generation += 1;
+        assert!(matches!(
+            ledger.reissue_device_local::<DeviceWorkspaceRoleV1>(foreign),
+            Err(ServiceAllocationErrorV1::OwnerBindingMismatch)
+        ));
+        let mut stale = old_second;
+        stale.binding.generation += 1;
+        assert!(matches!(
+            ledger.reissue_device_local::<DeviceWorkspaceRoleV1>(stale),
+            Err(ServiceAllocationErrorV1::AllocationGenerationMismatch)
+        ));
+        let mut stale_snapshot = old_snapshot;
+        stale_snapshot.range.binding.generation += 1;
+        assert!(matches!(
+            ledger.reissue_host_visible_snapshot::<HostDownloadRoleV1>(stale_snapshot),
+            Err(ServiceAllocationErrorV1::AllocationGenerationMismatch)
+        ));
+    }
+
+    #[test]
+    fn host_replacement_advances_binding_and_preserves_exact_data_ordinal() {
+        let mut host = binding(
+            AllocationRoleV1::HostDownload,
+            AllocationKindV1::HostVisible,
+        );
+        host.extent_bytes = 4_096;
+        let mut ledger = ServiceQueueAllocationLedgerV1 {
+            owner: host.owner,
+            next_allocation_id: 2,
+            allocations: vec![OwnedAllocationV1 {
+                binding: host,
+                token: None,
+                subleases: None,
+            }],
+            device_bytes: 0,
+            host_bytes: host.extent_bytes,
+            device_bindings: vec![],
+            host_bindings: vec![host],
+        };
+        let old = ServiceHostDispatchRangeV1 {
+            binding: host,
+            data_index: 0,
+            offset_bytes: 0,
+            extent_bytes: host.extent_bytes,
+            sublease_index: None,
+        };
+        let replacement = ledger
+            .prepare_host_replacement::<HostDownloadRoleV1>(old, 12_288)
+            .unwrap();
+        assert_eq!(replacement.data_index(), 0);
+        ledger.commit_host_replacement_release(&replacement);
+        let fresh = ledger.commit_host_replacement(replacement);
+        assert_eq!(fresh.data_index, 0);
+        assert_eq!(fresh.extent_bytes(), 12_288);
+        assert_ne!(fresh.binding.id, old.binding.id);
+        assert!(ledger.validate_range(fresh).is_ok());
+        assert!(matches!(
+            ledger.validate_range(old),
+            Err(ServiceAllocationErrorV1::AllocationGenerationMismatch)
+        ));
+        let snapshot = ServiceHostDispatchSnapshotRangeV1::from_initialized_range(fresh);
+        assert!(snapshot.enclosing_dispatch_range() == fresh);
+    }
+
+    #[test]
+    fn partition_insertion_rejects_invalid_layout_without_ledger_mutation() {
+        let expected = binding(
+            AllocationRoleV1::DeviceWorkspace,
+            AllocationKindV1::DeviceLocal,
+        );
+        let mut ledger = queue_ledger(expected);
+        let next_id = ledger.next_allocation_id;
+        let error = match ledger
+            .prepare_initialized_partition_insertion::<DeviceWorkspaceRoleV1, 2>(
+                8_192,
+                4_096,
+                [(0, 8_192, 4_096), (4_096, 4_096, 4_096)],
+            ) {
+            Ok(_) => panic!("overlapping insertion layout was admitted"),
+            Err(error) => error,
+        };
+        assert!(matches!(error, ServiceAllocationErrorV1::AliasingRange));
+        assert_eq!(ledger.next_allocation_id, next_id);
+        assert!(ledger.device_bindings == [expected]);
+        assert_eq!(ledger.device_bytes, expected.extent_bytes);
     }
 
     #[test]

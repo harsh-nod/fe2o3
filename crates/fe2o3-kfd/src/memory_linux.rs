@@ -24,6 +24,9 @@ use rustix::ioctl::{Opcode, Setter, Updater};
 use rustix::mm::{Advice, MapFlags, MprotectFlags, ProtFlags};
 
 use super::memory::{KernelOutcome, MemoryBackend, MemorySessionError};
+use super::queue_resources::{
+    AMD_AQL_READ_DISPATCH_ID_OFFSET_V1, AMD_AQL_WRITE_DISPATCH_ID_OFFSET_V1,
+};
 use crate::{CheckedGfx942XnackMinusDevice, InclusiveAperture};
 
 const ACQUIRE_VM_OPCODE: Opcode = AMDKFD_IOC_ACQUIRE_VM as Opcode;
@@ -566,8 +569,15 @@ impl MemoryBackend for LinuxMemoryBackend {
         mapping: &mut Self::Mapping,
         requested_bytes: usize,
     ) -> Result<(u64, u64), MemorySessionError> {
-        let write = checked_atomic_u64(mapping, requested_bytes, 0)?.load(Ordering::Acquire);
-        let read = checked_atomic_u64(mapping, requested_bytes, 8)?.load(Ordering::Acquire);
+        let write = checked_atomic_u64(
+            mapping,
+            requested_bytes,
+            AMD_AQL_WRITE_DISPATCH_ID_OFFSET_V1,
+        )?
+        .load(Ordering::Acquire);
+        let read =
+            checked_atomic_u64(mapping, requested_bytes, AMD_AQL_READ_DISPATCH_ID_OFFSET_V1)?
+                .load(Ordering::Acquire);
         Ok((write, read))
     }
 
@@ -576,7 +586,12 @@ impl MemoryBackend for LinuxMemoryBackend {
         requested_bytes: usize,
         increment: u64,
     ) -> Result<u64, MemorySessionError> {
-        Ok(checked_atomic_u64(mapping, requested_bytes, 0)?.fetch_add(increment, Ordering::AcqRel))
+        Ok(checked_atomic_u64(
+            mapping,
+            requested_bytes,
+            AMD_AQL_WRITE_DISPATCH_ID_OFFSET_V1,
+        )?
+        .fetch_add(increment, Ordering::AcqRel))
     }
 
     fn write_aql_slot(
@@ -914,6 +929,45 @@ mod tests {
 
     #[repr(C, align(64))]
     struct MinimumRing([u8; 4096]);
+
+    #[repr(C, align(64))]
+    struct AmdAqlControl([u8; 4096]);
+
+    #[test]
+    fn aql_counter_operations_use_the_reviewed_amd_control_offsets() {
+        let mut control = AmdAqlControl([0xff; 4096]);
+        crate::queue::submit::initialize_amd_aql_control(&mut control.0).unwrap();
+        control.0[..8].copy_from_slice(&0xaaaa_aaaa_aaaa_aaaa_u64.to_le_bytes());
+        control.0[8..16].copy_from_slice(&0xbbbb_bbbb_bbbb_bbbb_u64.to_le_bytes());
+        let mut mapping = LinuxCpuMapping {
+            address: NonNull::from(&mut control).cast(),
+            bytes: 4096,
+            active: true,
+            accessible: true,
+            reservation_phase: Arc::new(AtomicU8::new(VA_IDENTITY_MAPPED)),
+        };
+        checked_atomic_u64(&mut mapping, 4096, AMD_AQL_WRITE_DISPATCH_ID_OFFSET_V1)
+            .unwrap()
+            .store(17, Ordering::Relaxed);
+        checked_atomic_u64(&mut mapping, 4096, AMD_AQL_READ_DISPATCH_ID_OFFSET_V1)
+            .unwrap()
+            .store(9, Ordering::Relaxed);
+
+        assert_eq!(
+            LinuxMemoryBackend::observe_aql_counters(&mut mapping, 4096).unwrap(),
+            (17, 9)
+        );
+        assert_eq!(
+            LinuxMemoryBackend::fetch_add_aql_write(&mut mapping, 4096, 4).unwrap(),
+            17
+        );
+        assert_eq!(
+            LinuxMemoryBackend::observe_aql_counters(&mut mapping, 4096).unwrap(),
+            (21, 9)
+        );
+        assert_eq!(&control.0[..8], &0xaaaa_aaaa_aaaa_aaaa_u64.to_le_bytes());
+        assert_eq!(&control.0[8..16], &0xbbbb_bbbb_bbbb_bbbb_u64.to_le_bytes());
+    }
 
     #[test]
     fn mapped_packet_accepts_exact_wait_for_prior_release_header() {

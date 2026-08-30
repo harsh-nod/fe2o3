@@ -36,13 +36,13 @@ use super::dispatch_binding::{
     Gfx942DispatchBatchV1, Gfx942DispatchBindingErrorV1, Gfx942DispatchPollV1,
     Gfx942DispatchPollWithProgressV1, Gfx942FixedDispatchDataV1, Gfx942FixedDispatchPacketV1,
     Gfx942FixedDispatchStorageIdentityV1, ReturnedDispatchDataV1, TypedKernargImageV1,
-    prepare_dispatch_resources, prepare_public_fixed_dispatch_resources, unwrap_completed,
-    unwrap_published, validate_fixed_batch_ring, wrap_completed, wrap_poll_with_progress,
-    wrap_published,
+    prepare_dispatch_resources, prepare_public_fixed_dispatch_resources,
+    prepare_public_fixed_dispatch_resources_after_recycle, unwrap_completed, unwrap_published,
+    validate_fixed_batch_ring, wrap_completed, wrap_poll_with_progress, wrap_published,
 };
 use super::submit::{
     NativeAqlSubmissionBackendV1, NativeAqlSubmissionErrorV1, NativeAqlSubmissionOwnerV1,
-    NativeBarrierAndSubmissionFailureV1, initialize_control_atomics, initialize_invalid_ring,
+    NativeBarrierAndSubmissionFailureV1, initialize_amd_aql_control, initialize_invalid_ring,
 };
 use super::*;
 use crate::queue_linux::{
@@ -56,9 +56,9 @@ use crate::shared_memory::{
     AqlCompletionSignalResourceRoleV1, AqlContextSaveResourceRoleV1, AqlControlResourceRoleV1,
     AqlEndOfPipeResourceRoleV1, AqlQueueGttV1, AqlRingResourceRoleV1, ExecutableAqlQueueProbeGttV1,
     ExecutableGttV1, GttCpuWritableV1, GttGpuAccessibleExecutableV1, GttGpuAccessibleMutableV1,
-    HostVisibleCoherentGttV1, SharedGttAllocationV1, SharedGttMappedResourceFactsV1,
-    SharedGttMemorySessionV1, SharedGttQueueResourceAuthorityV1, UserptrAqlControlGttV1,
-    UserptrAqlQueueProbeGttV1,
+    HostVisibleCoherentGttV1, LiveQueueModelFoundationLoanV1, SharedGttAllocationV1,
+    SharedGttMappedResourceFactsV1, SharedGttMemorySessionV1, SharedGttQueueResourceAuthorityV1,
+    UserptrAqlControlGttV1, UserptrAqlQueueProbeGttV1,
 };
 use crate::{
     CheckedGfx942XnackMinusDevice, GFX942_QUEUE_RESOURCE_PROFILE_SHA256_V1,
@@ -88,17 +88,17 @@ static NEXT_QUEUE_INSTANCE: AtomicU64 = AtomicU64::new(1);
 
 /// Canonical claim boundary for the live queue and fixed-batch foundation.
 pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-gfx942-compute-aql-session-r27-v1\n",
+    "profile=fe2o3-mi300x-gfx942-compute-aql-session-r30-v1\n",
     "target=gfx942:xnack-,SPX/NPS1,KFD-1.18,one-selected-current-device\n",
-    "memory_profile_sha256=5f6ee74edb84802dcfe472b4cf99aea04a2f8c7e8828a331901f990ca3fded1b\n",
+    "memory_profile_sha256=965ff9f903665a15a26dd37695413d8621a5019bae99e5f2be464777de34ce79\n",
     "kfd_userptr_memory_schema_sha256=c1cee09bdf884d2c14a5dbb89c1f6f7885962c75b1457caf412821490919ee9e\n",
     "kfd_userptr_queue_control_schema_sha256=f1d75410d6bfacff2ea15ecfff226eb8aed7912ee324a36b8ed8550fa52bce02\n",
-    "queue_resource_profile_sha256=822d8b9c60a74bc9905a0e3d9a5518e657def0c40406c1d5978c485650477b9d\n",
+    "queue_resource_profile_sha256=37d45132916d2ecefdec8f53ecab817cbdbaa9b9863440353163bd460626ab02\n",
     "aql_dispatch_schema_sha256=82fbd7cf0b6c8647dce3f9b11e4f13a2dadfe3423509f769a4bc6cc87bb7acd0\n",
     "aql_barrier_and_schema_sha256=bdca900cd5c6eaccbddfc5a854e956382a08ce87bec4ccd5284baacf932cdfb5\n",
     "aql_fixed_batch_schema_sha256=a3c74fe4aa26a62772253de267812f2fb1626247685d8c4e8ed8bbb2a5a9e34a\n",
     "aql_completion_schema_sha256=56c7fb38daeffda945cffeb287ed61f26ee9446dbf8edbbd5337dd008309bd0f\n",
-    "dispatch_binding_schema_sha256=4307f4e7aedd1a1b8582fd150966fb5d8b9a4c95955759abcf5d755faa113da4\n",
+    "dispatch_binding_schema_sha256=0a8d45c4050b754bda7591889ee3ae5cf83ffde1d83ec9cce750f12576bac188\n",
     "event_schema_sha256=bdde2e2d9b03690d6a63dba3d91074da214d87ece9ae1894c4d7a160bced58b8\n",
     "runtime_enable_schema_sha256=fa47481b10ea4bd89438d10b82bd8197088906e55f5f0c827dc7aa5aba906288\n",
     "source.rocr.queues.c=b7ead541340ac996c2305b2e9660cb3176edcd61ee509d4880f02659fbb6f32b\n",
@@ -112,13 +112,13 @@ pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
     "userptr-diagnostic=smallest-selected-gpu-ring-backing-discriminator,no-full-rocr-allocation-or-map-order-parity-claim\n",
     "creation-boundary=planning-session-dispatch-and-ring-errors-before-userptr-control-registration-entry-retain-existing-classification,every-error-from-the-control-allocation-attempt-through-live-session-return-is-terminal-recovers-no-authority-permanently-poisons-the-process-global-runtime-gate-and-requires-process-termination\n",
     "runtime=one-process-global-fe2o3-owner;exact-enable-r_debug0-mode1-capabilities0-before-event-and-any-queue;ordinary-queue-fd-or-consumed-debug-token-with-separate-same-process-admitted-control-fd;ttmp-save-excluded;foreign-kfd-clients-excluded\n",
-    "initialization=every-logical-ring-slot-explicit-atomic-u32-invalid-1;control-explicit-two-atomic-u64-zero;completion-arena-exact-8192-typed-64-byte-user-signals-pending-1-before-gpu-map;one-first-internal-auto-reset-signal-event-id-1-through-255-before-create;8-cwsr-bo-and-shadow-headers-at-0x1621000-stride,debug-offset-descending,debug-size-0x5f000,one-first-shadow-aligned-error-reason-zero,exact-event-id\n",
+    "initialization=every-logical-ring-slot-explicit-atomic-u32-invalid-1;control-amd-aql-v1-write-dispatch-id-at-0x38-read-dispatch-id-at-0x80-both-atomic-u64-zero-read-base-offset-u32-0x80-at-0x88;completion-arena-exact-8192-typed-64-byte-user-signals-pending-1-before-gpu-map;one-first-internal-auto-reset-signal-event-id-1-through-255-before-create;8-cwsr-bo-and-shadow-headers-at-0x1621000-stride,debug-offset-descending,debug-size-0x5f000,one-first-shadow-aligned-error-reason-zero,exact-event-id\n",
     "submission=crate-private-non-clone-single-producer,aql-fixed-batch-v2-count-1-through-8192-and-ring-capacity-bounded,heap-owned-fixed-cardinality-state,no-mapped-slice-or-raw-pointer-escape,rptr-wptr-acquire,one-actual-wptr-acq-rel-fetch-add-by-count,all-invalid-bodies-before-per-packet-independent-0x1402-or-wait-for-prior-0x1502-ordered-u32-release-headers,exact-one-zero-setup-barrier-and-0x1403,conservative-service-default-wait-for-prior,release-fence-x86-sfence,one-final-volatile-u64-doorbell-store-of-last-packet-id\n",
     "completion=crate-private-non-clone-generation-bound-fixed-batches-and-one-signal-barrier-probe,fixed-batch-signal-code-kernarg-dispatch-and-queue-generations-retained,barrier-probe-queue-and-signal-generations-only,bounded-atomic-acquire-poll-with-one-pre-post-currentness-envelope-and-same-scan-redacted-progress,pending-ready-fault-timeout-distinct,timeout-retains-private-linear-operation-through-sequential-pre-post-currentness-enveloped-addressless-write-read-counter-first-retained-packet-header-setup-first-retained-signal-kind-value-and-CWSR-reason-observation-before-poison,release-reset-only-after-all-retained-signals-zero\n",
     "liveness-probe=three-public-consuming-checked-device-entries-select-production-gfx942-executable-one-span-diagnostic-plain-executable-one-span-or-diagnostic-userptr-writable-executable-coherent-uncached-no-substitute-one-span-ring,selected-backing-and-exact-ring-span-bound-into-plan-and-configuration,selected-backing-bound-into-every-redacted-outcome,typed-nonzero-bounded-polls-validated-before-device-consumption,diagnostic-backings-not-selectable-by-reusable-or-dispatch-queue-APIs,exact-fresh-zero-history-no-dispatch-queue,one-zero-dependency-system-scope-barrier,queue-and-signal-generation-only,submission-retryable-only-by-explicit-before-side-effect-stage-classification,success-requires-currentness-packet-count1-write1-read0or1-timing-sensitive-header0x1403-or-device-consumed-invalid1-setup0-user-signal-completed-zero-exception-then-signal-reset-and-confirmed-explicit-queue-destroy,Creation-has-no-live-queue-and-precedes-userptr-control-registration-entry,TerminalCreation-covers-every-error-at-or-after-userptr-control-registration-entry-every-create-result-not-explicitly-failed-no-effect-and-every-post-create-failure-recovers-no-authority-permanently-poisons-process-global-runtime-gate-and-requires-process-termination,QuarantinedExecution-retains-opaque-custody-until-process-teardown,process-global-runtime-gate-poison-armed-before-destroy-and-cleared-only-after-confirmed-success,TerminalTeardown-and-panic-retain-permanent-gate-poison-and-recover-no-authority-native-resource-disposition-indeterminate-process-termination-required-no-retry-reopen-or-confirmed-cleanup\n",
     "dispatch=public-addressless-linear-fixed-batch,1-through-32-inspected-programs,1-through-8192-packets,validated-code-materialization,zero-pointer-kernarg-internal-injection,metadata-derived-COV6-geometry-and-dynamic-lds-implicit-subset-with-caller-zero-suffix,queue-pointer-and-runtime-address-fields-rejected,exact-mapped-data-set-retained-even-when-unreferenced-by-current-batch,referenced-subset-only-inspected-access-and-sealed-initialization-gates,ordinary-release-or-exact-recycle-gated-attached-or-detached-return-after-destroy\n",
     "readback=coherent-host-data-only,owned-bounded-copy-after-exact-acquire-observed-completion-and-signal-recycle,exact-dispatch-generation,ordinary-range-within-one-inspected-write-or-readwrite-binding-or-exact-admitted-initialized-enclosing-snapshot,no-native-address-or-mapped-borrow,no-whole-allocation-initialization-promotion\n",
-    "rebinding=exact-completion-and-signal-recycle-before-detach,code-and-kernarg-released,queue-ring-signal-event-doorbell-and-runtime-remain-live,exact-complete-detached-generation-cardinality-and-ordered-private-storage-identity-ledger,all-mapped-data-retained-with-inspected-effects-only-for-currently-referenced-subset,new-program-count-packet-count-geometry-kernarg-and-data-admitted-before-next-publication,fully-initialized-state-preserved-without-stale-current-content-digest\n",
+    "rebinding=exact-completion-and-signal-recycle-before-detach,code-and-kernarg-released,live-rebind-retains-queue-ring-signal-event-doorbell-and-runtime,quiescent-rollover-confirms-old-native-destroy-before-new-queue-creation,exact-complete-detached-generation-cardinality-and-ordered-private-storage-identity-ledger,preflighted-device-or-host-insertion-at-exact-ordinal-and-release-gated-removal-or-replacement-while-unbound,replacement-owner-seeded-from-exact-predecessor-and-next-publication-strictly-advances-dispatch-generation-across-live-rebind-or-queue-rollover,all-mapped-data-retained-with-inspected-effects-only-for-currently-referenced-subset,new-ring-program-count-packet-count-geometry-kernarg-and-data-admitted-before-next-publication,fully-initialized-state-preserved-without-stale-current-content-digest,authoritative-model-foundation-restored-around-every-live-queue-allocation-lifecycle-mutation-and-reclaimed-before-return\n",
     "doorbell=complete-8192-byte-kfd-slice,exact-returned-offset,madv-dontfork,no-public-address-pointer-or-mmio-accessor\n",
     "lifecycle=runtime-enable,event-create,queue-create;all-completion-batches-observed-and-recycled;queue-destroy,event-destroy,runtime-disable,doorbell-release,cwsr-queue-resource-and-completion-arena-release;debug-runtime-authority-leaves-token-before-event-and-create-lifecycle-mutation-with-no-post-handoff-restoration;no-drop-ioctl-store-munmap-or-free\n",
     "currentness=pid-and-device-before-publication,after-bounded-preparation,and-before-mmio;timeout-observation-confirms-device-runtime-event-and-CWSR-structure-before-and-after-its-sequential-racy-loads\n",
@@ -132,7 +132,7 @@ pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1`].
 pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_SHA256_V1: &str =
-    "6c06d36eac63f99f44fd6cbbcbdae74bc959551c07607add458edf3648f1881a";
+    "cad16095d8b14f73fae906ebaa2ab21b0763d46f95e45622eb75f3f33c535fcf";
 
 type AqlSpecialRingAuthority = SharedGttQueueResourceAuthorityV1<
     AqlRingResourceRoleV1,
@@ -952,6 +952,48 @@ impl Gfx942RecycledDispatchResourcesV1 {
     ) -> (SharedGttMemorySessionV1, Vec<Gfx942FixedDispatchDataV1>) {
         (self.memory, self.data)
     }
+
+    /// Creates a replacement native queue while retaining the exact mapped
+    /// data returned by the confirmed destruction of its predecessor.
+    ///
+    /// The replacement dispatch owner advances from the exact recycled
+    /// predecessor generation. This transition does not restore stale content
+    /// authority or expose native addresses. Any error consumes the returned
+    /// resources because queue creation may have crossed a native side-effect
+    /// boundary.
+    pub fn recreate_compute_aql_queue_with_fixed_dispatch<const N: usize>(
+        self,
+        ring_bytes: u32,
+        programs: Vec<fe2o3_amdhsa_loader::ValidatedKernelEnvelope<'_>>,
+        packets: [Gfx942FixedDispatchPacketV1; N],
+    ) -> Result<ComputeAqlQueueSessionV1, ComputeAqlQueueSessionErrorV1> {
+        validate_fixed_batch_ring::<N>(ring_bytes)?;
+        let Self {
+            destroyed: _,
+            memory,
+            dispatch_generation,
+            data,
+        } = self;
+        let geometry = memory.plan_aql_queue_resources(ring_bytes)?;
+        ComputeAqlQueueSessionV1::create_compute_aql_queue_inner(
+            memory,
+            geometry,
+            ring_bytes,
+            QueueRingBackingV1::AqlSpecial,
+            move |memory| {
+                prepare_public_fixed_dispatch_resources_after_recycle(
+                    memory,
+                    programs,
+                    packets,
+                    data,
+                    dispatch_generation,
+                )
+                .map(Some)
+                .map_err(ComputeAqlQueueSessionErrorV1::DispatchBinding)
+            },
+            None,
+        )
+    }
 }
 
 fn recover_fixed_dispatch_data(dispatch: ReturnedDispatchDataV1) -> Vec<Gfx942FixedDispatchDataV1> {
@@ -985,6 +1027,29 @@ fn insert_detached_identity<T>(
 ) {
     let index = next_insertion_index.take().unwrap_or(identities.len());
     identities.insert(index, identity);
+}
+
+fn validate_new_detached_data_index(
+    detached_data_count: usize,
+    data_index: usize,
+) -> Result<(), Gfx942DispatchBindingErrorV1> {
+    if data_index > detached_data_count {
+        return Err(Gfx942DispatchBindingErrorV1::InvalidData {
+            index: detached_data_count,
+            detail: "detached insertion ordinal",
+        });
+    }
+    Ok(())
+}
+
+fn insert_detached_identity_at<T>(
+    identities: &mut Vec<T>,
+    next_insertion_index: &mut Option<usize>,
+    identity: T,
+    data_index: usize,
+) {
+    identities.insert(data_index, identity);
+    *next_insertion_index = None;
 }
 
 enum QueueDestroyOutcomeV1 {
@@ -1701,9 +1766,9 @@ impl ComputeAqlQueueSessionV1 {
         ring_initialization
             .map_err(|_| ComputeAqlQueueSessionErrorV1::Contract("INVALID ring initialization"))?;
         let control_initialization =
-            memory.with_bytes_mut(&mut control, initialize_control_atomics)?;
+            memory.with_bytes_mut(&mut control, initialize_amd_aql_control)?;
         control_initialization.map_err(|_| {
-            ComputeAqlQueueSessionErrorV1::Contract("AQL control atomic initialization")
+            ComputeAqlQueueSessionErrorV1::Contract("AMD AQL control initialization")
         })?;
         let completion_initialization = memory.with_bytes_mut(
             &mut completion_signals,
@@ -1941,22 +2006,16 @@ impl ComputeAqlQueueSessionV1 {
             .dispatch
             .take()
             .ok_or(Gfx942DispatchBindingErrorV1::ResourcePhase)?;
-        let returned = {
-            let memory = &mut self
-                .engine
-                .as_mut()
-                .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
-                    "missing queue engine",
-                ))?
-                .backend
-                .session;
-            dispatch.release_non_data_after_recycle(memory)
-        };
+        let returned = self.with_live_queue_memory_model(|memory| {
+            dispatch
+                .release_non_data_after_recycle(memory)
+                .map_err(Into::into)
+        });
         let returned = match returned {
             Ok(returned) => returned,
             Err(error) => {
                 self.poison_terminal();
-                return Err(error.into());
+                return Err(error);
             }
         };
         let generation = returned.generation();
@@ -2027,22 +2086,24 @@ impl ComputeAqlQueueSessionV1 {
         }
         self.completion_owner.ensure_releasable()?;
         validate_fixed_batch_ring::<N>(self.observation.ring_bytes)?;
-        let prepared = {
-            let memory = &mut self
-                .engine
-                .as_mut()
-                .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
-                    "missing queue engine",
-                ))?
-                .backend
-                .session;
-            prepare_public_fixed_dispatch_resources(memory, programs, packets, data)
-        };
+        let predecessor_generation = self
+            .detached_dispatch_generation
+            .expect("checked detached dispatch generation");
+        let prepared = self.with_live_queue_memory_model(|memory| {
+            prepare_public_fixed_dispatch_resources_after_recycle(
+                memory,
+                programs,
+                packets,
+                data,
+                predecessor_generation,
+            )
+            .map_err(Into::into)
+        });
         let prepared = match prepared {
             Ok(prepared) => prepared,
             Err(error) => {
                 self.poison_terminal();
-                return Err(error.into());
+                return Err(error);
             }
         };
         let device_authorities = prepared.device_authorities();
@@ -2074,19 +2135,12 @@ impl ComputeAqlQueueSessionV1 {
     ) -> Result<Gfx942FixedDispatchDataV1, ComputeAqlQueueSessionErrorV1> {
         self.require_unbound_fixed_dispatch()?;
         self.require_detached_allocation_capacity()?;
-        let result = {
-            let memory = &mut self
-                .engine
-                .as_mut()
-                .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
-                    "missing queue engine",
-                ))?
-                .backend
-                .session;
+        let result = self.with_live_queue_memory_model(|memory| {
             memory
                 .allocate_gfx942_device_memory(requested_bytes, alignment)
                 .and_then(|lease| memory.map_gfx942_device_memory(lease))
-        };
+                .map_err(Into::into)
+        });
         match result {
             Ok(lease) => {
                 let data = Gfx942FixedDispatchDataV1::uninitialized(lease);
@@ -2095,7 +2149,7 @@ impl ComputeAqlQueueSessionV1 {
             }
             Err(error) => {
                 self.poison_terminal();
-                Err(error.into())
+                Err(error)
             }
         }
     }
@@ -2110,15 +2164,11 @@ impl ComputeAqlQueueSessionV1 {
     ) -> Result<Gfx942FixedDispatchDataV1, ComputeAqlQueueSessionErrorV1> {
         self.require_unbound_fixed_dispatch()?;
         self.require_detached_allocation_capacity()?;
-        let result = self
-            .engine
-            .as_mut()
-            .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
-                "missing queue engine",
-            ))?
-            .backend
-            .session
-            .initialize_gfx942_device_memory(bytes, alignment, content);
+        let result = self.with_live_queue_memory_model(|memory| {
+            memory
+                .initialize_gfx942_device_memory(bytes, alignment, content)
+                .map_err(Into::into)
+        });
         match result {
             Ok(memory) => {
                 let data = Gfx942FixedDispatchDataV1::initialized(memory);
@@ -2127,7 +2177,168 @@ impl ComputeAqlQueueSessionV1 {
             }
             Err(error) => {
                 self.poison_terminal();
-                Err(error.into())
+                Err(error)
+            }
+        }
+    }
+
+    /// Allocates and inserts one initialized device-local extent at an exact
+    /// detached data ordinal without replacing an existing allocation.
+    ///
+    /// The insertion ordinal is validated before allocation. It is intended
+    /// for service ledgers that keep device-local entries before coherent host
+    /// entries while changing the detached allocation cardinality.
+    pub fn insert_initialized_fixed_dispatch_data(
+        &mut self,
+        data_index: usize,
+        bytes: Box<[u8]>,
+        alignment: u64,
+        content: Gfx942DeviceContentDescriptorV1,
+    ) -> Result<Gfx942FixedDispatchDataV1, ComputeAqlQueueSessionErrorV1> {
+        self.require_unbound_fixed_dispatch()?;
+        self.require_detached_allocation_capacity()?;
+        self.require_new_detached_data_index(data_index)?;
+        let result = self.with_live_queue_memory_model(|memory| {
+            memory
+                .initialize_gfx942_device_memory(bytes, alignment, content)
+                .map_err(Into::into)
+        });
+        match result {
+            Ok(memory) => {
+                let data = Gfx942FixedDispatchDataV1::initialized(memory);
+                self.record_new_detached_data_at(&data, data_index);
+                Ok(data)
+            }
+            Err(error) => {
+                self.poison_terminal();
+                Err(error)
+            }
+        }
+    }
+
+    /// Validates an exact detached-data insertion without allocating, mapping,
+    /// or changing queue state.
+    ///
+    /// Service layers can use this before mutating their own allocation ledger,
+    /// so a full lower data roster or an invalid ordinal remains a retry-safe
+    /// rejection with unchanged custody.
+    pub fn preflight_fixed_dispatch_data_insertion(
+        &self,
+        data_index: usize,
+    ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+        self.require_unbound_fixed_dispatch()?;
+        self.require_detached_allocation_capacity()?;
+        self.require_new_detached_data_index(data_index)
+    }
+
+    /// Allocates, initializes, and inserts one coherent host-visible extent at
+    /// an exact detached data ordinal.
+    pub fn insert_initialized_host_visible_fixed_dispatch_data(
+        &mut self,
+        data_index: usize,
+        bytes: Box<[u8]>,
+    ) -> Result<Gfx942FixedDispatchDataV1, ComputeAqlQueueSessionErrorV1> {
+        self.require_unbound_fixed_dispatch()?;
+        self.require_detached_allocation_capacity()?;
+        self.require_new_detached_data_index(data_index)?;
+        let result = self.with_live_queue_memory_model(|memory| {
+            memory
+                .initialize_host_visible_coherent(bytes)
+                .map_err(Into::into)
+        });
+        match result {
+            Ok(memory) => {
+                let data = Gfx942FixedDispatchDataV1::host_visible_initialized(memory);
+                self.record_new_detached_data_at(&data, data_index);
+                Ok(data)
+            }
+            Err(error) => {
+                self.poison_terminal();
+                Err(error)
+            }
+        }
+    }
+
+    /// Allocates and initializes one coherent host-visible extent at the exact
+    /// ordinal vacated by the immediately preceding detached release.
+    pub fn initialize_host_visible_fixed_dispatch_data(
+        &mut self,
+        bytes: Box<[u8]>,
+    ) -> Result<Gfx942FixedDispatchDataV1, ComputeAqlQueueSessionErrorV1> {
+        self.require_unbound_fixed_dispatch()?;
+        self.require_detached_allocation_capacity()?;
+        if self.detached_next_insertion_index.is_none() {
+            return Err(Gfx942DispatchBindingErrorV1::ResourcePhase.into());
+        }
+        let result = self.with_live_queue_memory_model(|memory| {
+            memory
+                .initialize_host_visible_coherent(bytes)
+                .map_err(Into::into)
+        });
+        match result {
+            Ok(memory) => {
+                let data = Gfx942FixedDispatchDataV1::host_visible_initialized(memory);
+                self.record_new_detached_data(&data);
+                Ok(data)
+            }
+            Err(error) => {
+                self.poison_terminal();
+                Err(error)
+            }
+        }
+    }
+
+    /// Allocates, maps, and inserts one uninitialized coherent host-visible
+    /// extent at an exact detached data ordinal.
+    pub fn insert_host_visible_fixed_dispatch_data(
+        &mut self,
+        data_index: usize,
+        requested_bytes: usize,
+    ) -> Result<Gfx942FixedDispatchDataV1, ComputeAqlQueueSessionErrorV1> {
+        self.require_unbound_fixed_dispatch()?;
+        self.require_detached_allocation_capacity()?;
+        self.require_new_detached_data_index(data_index)?;
+        let result = self.with_live_queue_memory_model(|memory| {
+            let allocation = memory.allocate_host_visible_coherent(requested_bytes)?;
+            memory.map_to_gpu(allocation).map_err(Into::into)
+        });
+        match result {
+            Ok(memory) => {
+                let data = Gfx942FixedDispatchDataV1::host_visible_uninitialized(memory);
+                self.record_new_detached_data_at(&data, data_index);
+                Ok(data)
+            }
+            Err(error) => {
+                self.poison_terminal();
+                Err(error)
+            }
+        }
+    }
+
+    /// Allocates and maps one uninitialized coherent host-visible extent at the
+    /// exact ordinal vacated by the immediately preceding detached release.
+    pub fn allocate_host_visible_fixed_dispatch_data(
+        &mut self,
+        requested_bytes: usize,
+    ) -> Result<Gfx942FixedDispatchDataV1, ComputeAqlQueueSessionErrorV1> {
+        self.require_unbound_fixed_dispatch()?;
+        self.require_detached_allocation_capacity()?;
+        if self.detached_next_insertion_index.is_none() {
+            return Err(Gfx942DispatchBindingErrorV1::ResourcePhase.into());
+        }
+        let result = self.with_live_queue_memory_model(|memory| {
+            let allocation = memory.allocate_host_visible_coherent(requested_bytes)?;
+            memory.map_to_gpu(allocation).map_err(Into::into)
+        });
+        match result {
+            Ok(memory) => {
+                let data = Gfx942FixedDispatchDataV1::host_visible_uninitialized(memory);
+                self.record_new_detached_data(&data);
+                Ok(data)
+            }
+            Err(error) => {
+                self.poison_terminal();
+                Err(error)
             }
         }
     }
@@ -2158,20 +2369,12 @@ impl ComputeAqlQueueSessionV1 {
                 "duplicate detached storage identity",
             ));
         }
-        let result = {
-            let memory = &mut self
-                .engine
-                .as_mut()
-                .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
-                    "missing queue engine",
-                ))?
-                .backend
-                .session;
-            memory.release_fixed_dispatch_data(data)
-        };
+        let result = self.with_live_queue_memory_model(|memory| {
+            memory.release_fixed_dispatch_data(data).map_err(Into::into)
+        });
         if let Err(error) = result {
             self.poison_terminal();
-            return Err(error.into());
+            return Err(error);
         }
         self.detached_data_count = self.detached_data_count.checked_sub(1).ok_or(
             ComputeAqlQueueSessionErrorV1::Contract("detached dispatch-data ledger underflow"),
@@ -2212,11 +2415,28 @@ impl ComputeAqlQueueSessionV1 {
         Ok(())
     }
 
+    fn require_new_detached_data_index(
+        &self,
+        data_index: usize,
+    ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+        validate_new_detached_data_index(self.detached_data_count, data_index).map_err(Into::into)
+    }
+
     fn record_new_detached_data(&mut self, data: &Gfx942FixedDispatchDataV1) {
         insert_detached_identity(
             &mut self.detached_data_identities,
             &mut self.detached_next_insertion_index,
             data.storage_identity(),
+        );
+        self.detached_data_count += 1;
+    }
+
+    fn record_new_detached_data_at(&mut self, data: &Gfx942FixedDispatchDataV1, data_index: usize) {
+        insert_detached_identity_at(
+            &mut self.detached_data_identities,
+            &mut self.detached_next_insertion_index,
+            data.storage_identity(),
+            data_index,
         );
         self.detached_data_count += 1;
     }
@@ -3510,6 +3730,81 @@ impl ComputeAqlQueueSessionV1 {
         engine.prepare_operation().map_err(map_native)
     }
 
+    fn with_live_queue_memory_model<R>(
+        &mut self,
+        operation: impl FnOnce(
+            &mut SharedGttMemorySessionV1,
+        ) -> Result<R, ComputeAqlQueueSessionErrorV1>,
+    ) -> Result<R, ComputeAqlQueueSessionErrorV1> {
+        let loan = self.restore_model_ownership_for_live_mutation()?;
+        let result = {
+            let engine = self
+                .engine
+                .as_mut()
+                .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
+                    "missing queue engine",
+                ))?;
+            operation(&mut engine.backend.session)
+        };
+        if let Err(error) = self.retake_model_ownership_after_live_mutation(loan) {
+            self.poison_terminal();
+            return Err(error);
+        }
+        result
+    }
+
+    fn restore_model_ownership_for_live_mutation(
+        &mut self,
+    ) -> Result<LiveQueueModelFoundationLoanV1, ComputeAqlQueueSessionErrorV1> {
+        let engine = self
+            .engine
+            .as_mut()
+            .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
+                "missing queue engine",
+            ))?;
+        if !engine.backend.foundation_in_engine {
+            return Err(ComputeAqlQueueSessionErrorV1::Contract(
+                "live-queue model foundation was already restored",
+            ));
+        }
+        let loan = engine
+            .backend
+            .session
+            .loan_queue_model_foundation_for_live_mutation(
+                &mut engine.identity,
+                &mut engine.memory,
+            )?;
+        engine.backend.foundation_in_engine = false;
+        Ok(loan)
+    }
+
+    fn retake_model_ownership_after_live_mutation(
+        &mut self,
+        loan: LiveQueueModelFoundationLoanV1,
+    ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+        let engine = self
+            .engine
+            .as_mut()
+            .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
+                "missing queue engine",
+            ))?;
+        if engine.backend.foundation_in_engine {
+            return Err(ComputeAqlQueueSessionErrorV1::Contract(
+                "live-queue model foundation was not restored",
+            ));
+        }
+        engine
+            .backend
+            .session
+            .retake_queue_model_foundation_after_live_mutation(
+                &mut engine.identity,
+                &mut engine.memory,
+                loan,
+            )?;
+        engine.backend.foundation_in_engine = true;
+        Ok(())
+    }
+
     fn restore_model_ownership(&mut self) -> Result<(), ComputeAqlQueueSessionErrorV1> {
         let engine = self
             .engine
@@ -3522,7 +3817,10 @@ impl ComputeAqlQueueSessionV1 {
         }
         let domain = engine.identity.domain_id();
         let identity = core::mem::replace(&mut engine.identity, DeviceIdentityStateV1::new(domain));
-        let memory = core::mem::replace(&mut engine.memory, MemoryLifecycleStateV1::new(domain));
+        let memory = core::mem::replace(
+            &mut engine.memory,
+            MemoryLifecycleStateV1::new_monotonic_non_reusable(domain),
+        );
         engine
             .backend
             .session
@@ -3604,10 +3902,21 @@ fn build_resource_authority(
         ));
     }
     // KFD truncates each pointer to its GPU page and requires that page to be
-    // one exact PAGE_SIZE GPUVM mapping. Both distinct counters live within
-    // that single reviewed page.
+    // one exact PAGE_SIZE GPUVM mapping. The AMD AQL queue ABI places these
+    // counters in distinct cache lines within that single reviewed page.
     let (write_pointer, read_pointer) = cf
-        .checked_disjoint_gpu_subranges((0, 8, 8), (8, 8, 8))
+        .checked_disjoint_gpu_subranges(
+            (
+                geometry.control().write_dispatch_id_offset_bytes(),
+                geometry.control().counter_bytes(),
+                geometry.control().counter_alignment_bytes(),
+            ),
+            (
+                geometry.control().read_dispatch_id_offset_bytes(),
+                geometry.control().counter_bytes(),
+                geometry.control().counter_alignment_bytes(),
+            ),
+        )
         .ok_or(ComputeAqlQueueSessionErrorV1::Contract("control subranges"))?;
     let eop_base = ef
         .checked_gpu_subrange(0, geometry.end_of_pipe().mapping_bytes(), 4096)
@@ -4399,6 +4708,38 @@ mod tests {
     }
 
     #[test]
+    fn exact_detached_insertion_clears_legacy_replacement_state_at_any_valid_ordinal() {
+        let mut same_ordinal = vec![11_u64, 13];
+        let mut pending = Some(1);
+        validate_new_detached_data_index(same_ordinal.len(), 1).unwrap();
+        insert_detached_identity_at(&mut same_ordinal, &mut pending, 12, 1);
+        assert_eq!(same_ordinal, [11, 12, 13]);
+        assert_eq!(pending, None);
+
+        let mut different_ordinal = vec![21_u64, 23];
+        let mut pending = Some(1);
+        validate_new_detached_data_index(different_ordinal.len(), 0).unwrap();
+        insert_detached_identity_at(&mut different_ordinal, &mut pending, 20, 0);
+        assert_eq!(different_ordinal, [20, 21, 23]);
+        assert_eq!(pending, None);
+    }
+
+    #[test]
+    fn exact_detached_insertion_rejects_out_of_range_without_mutation() {
+        let identities = vec![31_u64, 32];
+        let pending = Some(0);
+        assert!(matches!(
+            validate_new_detached_data_index(identities.len(), 3),
+            Err(Gfx942DispatchBindingErrorV1::InvalidData {
+                index: 2,
+                detail: "detached insertion ordinal",
+            })
+        ));
+        assert_eq!(identities, [31, 32]);
+        assert_eq!(pending, Some(0));
+    }
+
+    #[test]
     fn session_manifest_digest_is_frozen() {
         assert_eq!(
             fe2o3_aql::AQL_DISPATCH_ABI_SCHEMA_MANIFEST_SHA256_V1,
@@ -4418,15 +4759,19 @@ mod tests {
         );
         assert_eq!(
             super::super::dispatch_binding::GFX942_AQL_DISPATCH_BINDING_MANIFEST_SHA256_V1,
-            "4307f4e7aedd1a1b8582fd150966fb5d8b9a4c95955759abcf5d755faa113da4"
+            "0a8d45c4050b754bda7591889ee3ae5cf83ffde1d83ec9cce750f12576bac188"
         );
+        assert!(GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1.contains(&format!(
+            "dispatch_binding_schema_sha256={}\n",
+            super::super::dispatch_binding::GFX942_AQL_DISPATCH_BINDING_MANIFEST_SHA256_V1
+        )));
         assert_eq!(
             SHARED_GTT_MEMORY_PROFILE_SHA256_V1,
-            "5f6ee74edb84802dcfe472b4cf99aea04a2f8c7e8828a331901f990ca3fded1b"
+            "965ff9f903665a15a26dd37695413d8621a5019bae99e5f2be464777de34ce79"
         );
         assert_eq!(
             GFX942_QUEUE_RESOURCE_PROFILE_SHA256_V1,
-            "822d8b9c60a74bc9905a0e3d9a5518e657def0c40406c1d5978c485650477b9d"
+            "37d45132916d2ecefdec8f53ecab817cbdbaa9b9863440353163bd460626ab02"
         );
         assert_eq!(
             fe2o3_kfd_uapi::KFD_USERPTR_MEMORY_SCHEMA_MANIFEST_SHA256,

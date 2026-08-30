@@ -250,6 +250,24 @@ impl ServiceFixedDispatchPacketV1 {
             buffers,
         )
     }
+
+    fn to_kfd_preflight(&self) -> Gfx942FixedDispatchPacketV1 {
+        let buffers = self
+            .buffers
+            .iter()
+            .copied()
+            .map(ServiceFixedDispatchBufferV1::into_kfd)
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        Gfx942FixedDispatchPacketV1::new_with_ordering(
+            self.program_index,
+            self.geometry,
+            self.ordering,
+            self.dynamic_group_segment_bytes,
+            self.kernarg_bytes.clone(),
+            buffers,
+        )
+    }
 }
 
 impl fmt::Debug for ServiceFixedDispatchPacketV1 {
@@ -346,6 +364,23 @@ impl<'a, const N: usize> ServiceFixedBatchV1<'a, N> {
         [Gfx942FixedDispatchPacketV1; N],
     ) {
         (self.programs, self.packets.map(|packet| packet.into_kfd()))
+    }
+
+    pub(crate) fn preflight_replacement(
+        &self,
+        ring_bytes: u32,
+        data: &[fe2o3_kfd::Gfx942FixedDispatchDataV1],
+        predecessor_generation: u64,
+    ) -> Result<u64, fe2o3_kfd::Gfx942DispatchBindingErrorV1> {
+        let packets: [Gfx942FixedDispatchPacketV1; N] =
+            core::array::from_fn(|index| self.packets[index].to_kfd_preflight());
+        fe2o3_kfd::preflight_gfx942_fixed_dispatch_replacement(
+            ring_bytes,
+            &self.programs,
+            &packets,
+            data,
+            predecessor_generation,
+        )
     }
 }
 

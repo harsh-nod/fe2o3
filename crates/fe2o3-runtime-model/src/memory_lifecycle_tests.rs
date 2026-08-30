@@ -244,6 +244,89 @@ fn live_allocation(
     (state, reservation, allocation)
 }
 
+fn live_monotonic_allocation(
+    devices: AdmissionFixture,
+) -> (
+    MemoryLifecycleStateV1,
+    VaReservationKeyV1,
+    MemoryAllocationKeyV1,
+) {
+    let vm = devices.first_vm.model_key();
+    let reservation = reservation(vm, 20);
+    let allocation = allocation(vm, 30, 1);
+    let state = acquire(
+        MemoryLifecycleStateV1::new_monotonic_non_reusable(domain(1)),
+        devices.first_vm,
+        vec![devices.first, devices.second],
+        100,
+    );
+    let state = advance(
+        state,
+        MemoryTransitionV1::ReserveVa {
+            key: reservation,
+            range: GpuVaRangeV1 {
+                base: 0x2_0000,
+                byte_len: MEMORY_PAGE_BYTES_V1,
+            },
+            alignment: MEMORY_PAGE_BYTES_V1,
+        },
+    );
+    let state = advance(
+        state,
+        MemoryTransitionV1::Allocate {
+            key: allocation,
+            reservation,
+            handle: UntrustedAllocationHandleObservationV1(200),
+            spec: spec(),
+        },
+    );
+    (state, reservation, allocation)
+}
+
+fn map_succeeded(
+    state: MemoryLifecycleStateV1,
+    key: MemoryMappingKeyV1,
+    devices: &[DeviceKeyV1],
+) -> MemoryLifecycleStateV1 {
+    let state = advance(
+        state,
+        MemoryTransitionV1::BeginMap {
+            key,
+            target_devices: devices.to_vec(),
+            access: MemoryAccessV1::ReadWrite,
+        },
+    );
+    advance(
+        state,
+        MemoryTransitionV1::ObserveMap {
+            key,
+            progress: PartialProgressObservationV1 {
+                n_success: devices.len(),
+                status: PartialOperationStatusV1::Succeeded,
+            },
+        },
+    )
+}
+
+fn unmap_and_release(
+    state: MemoryLifecycleStateV1,
+    key: MemoryMappingKeyV1,
+    device_count: usize,
+) -> MemoryLifecycleStateV1 {
+    let state = advance(state, MemoryTransitionV1::BeginUnmap { key });
+    let state = advance(
+        state,
+        MemoryTransitionV1::ObserveUnmap {
+            key,
+            progress: PartialProgressObservationV1 {
+                n_success: device_count,
+                status: PartialOperationStatusV1::Succeeded,
+            },
+        },
+    );
+    advance(state, MemoryTransitionV1::ReleaseMapping { key })
+}
+
 #[test]
 fn partial_map_and_unmap_retain_exact_device_progress_until_bottom_up_release() {
     let devices = admissions();
@@ -751,6 +834,325 @@ fn allocation_generations_and_opaque_handles_cannot_be_substituted() {
     );
     assert_eq!(state.allocations().len(), 2);
     assert_eq!(state.allocations()[1].key, generation_three);
+    assert_eq!(
+        state.checkpoint_released(),
+        Err(MemoryTransitionErrorV1::CheckpointRequiresMonotonicIdentities)
+    );
+}
+
+#[test]
+fn monotonic_checkpoint_keeps_lower_live_identity_and_rejects_nonmonotonic_admission() {
+    let devices = admissions();
+    let vm = devices.first_vm.model_key();
+    let lower_reservation = reservation(vm, 10);
+    let higher_reservation = reservation(vm, 20);
+    let lower_allocation = allocation(vm, 10, 1);
+    let higher_allocation = allocation(vm, 20, 1);
+    let mut state = acquire(
+        MemoryLifecycleStateV1::new_monotonic_non_reusable(domain(1)),
+        devices.first_vm,
+        vec![devices.first],
+        100,
+    );
+    for (key, base) in [
+        (lower_reservation, 0x2_0000),
+        (higher_reservation, 0x3_0000),
+    ] {
+        state = advance(
+            state,
+            MemoryTransitionV1::ReserveVa {
+                key,
+                range: GpuVaRangeV1 {
+                    base,
+                    byte_len: MEMORY_PAGE_BYTES_V1,
+                },
+                alignment: MEMORY_PAGE_BYTES_V1,
+            },
+        );
+    }
+    state = advance(
+        state,
+        MemoryTransitionV1::Allocate {
+            key: lower_allocation,
+            reservation: lower_reservation,
+            handle: UntrustedAllocationHandleObservationV1(110),
+            spec: spec(),
+        },
+    );
+    state = advance(
+        state,
+        MemoryTransitionV1::Allocate {
+            key: higher_allocation,
+            reservation: higher_reservation,
+            handle: UntrustedAllocationHandleObservationV1(120),
+            spec: spec(),
+        },
+    );
+    state = advance(
+        state,
+        MemoryTransitionV1::ReleaseAllocation {
+            key: higher_allocation,
+        },
+    );
+    state = advance(
+        state,
+        MemoryTransitionV1::ReleaseVaReservation {
+            key: higher_reservation,
+        },
+    );
+
+    let skipped_reservation = reservation(vm, 15);
+    assert_eq!(
+        state.next(MemoryTransitionV1::ReserveVa {
+            key: skipped_reservation,
+            range: GpuVaRangeV1 {
+                base: 0x4_0000,
+                byte_len: MEMORY_PAGE_BYTES_V1,
+            },
+            alignment: MEMORY_PAGE_BYTES_V1,
+        }),
+        Err(MemoryTransitionErrorV1::NonMonotonicIdentity(
+            MemoryRecordRefV1::VaReservation(skipped_reservation)
+        ))
+    );
+
+    state = state.checkpoint_released().unwrap();
+    assert_eq!(state.reservations().len(), 1);
+    assert_eq!(state.reservations()[0].key, lower_reservation);
+    assert_eq!(state.allocations().len(), 1);
+    assert_eq!(state.allocations()[0].key, lower_allocation);
+    assert!(
+        state
+            .issued_id_high_watermarks()
+            .iter()
+            .any(
+                |watermark| watermark.scope == MemoryIssuedIdScopeV1::Allocation(vm)
+                    && watermark.last_id == 20
+            )
+    );
+
+    let fresh_reservation = reservation(vm, 21);
+    state = advance(
+        state,
+        MemoryTransitionV1::ReserveVa {
+            key: fresh_reservation,
+            range: GpuVaRangeV1 {
+                base: 0x4_0000,
+                byte_len: MEMORY_PAGE_BYTES_V1,
+            },
+            alignment: MEMORY_PAGE_BYTES_V1,
+        },
+    );
+    let skipped_allocation = allocation(vm, 15, 99);
+    assert_eq!(
+        state.next(MemoryTransitionV1::Allocate {
+            key: skipped_allocation,
+            reservation: fresh_reservation,
+            handle: UntrustedAllocationHandleObservationV1(115),
+            spec: spec(),
+        }),
+        Err(MemoryTransitionErrorV1::NonMonotonicIdentity(
+            MemoryRecordRefV1::Allocation(skipped_allocation)
+        ))
+    );
+    assert!(state.validate_global_invariants().is_ok());
+}
+
+#[test]
+fn checkpoint_preserves_live_parent_descendant_tombstones() {
+    let devices = admissions();
+    let (state, reservation, allocation) = live_monotonic_allocation(devices);
+    let mapping = mapping(allocation, 40);
+    let targets = [devices.first.model_key(), devices.second.model_key()];
+    let state = map_succeeded(state, mapping, &targets);
+    let publication = MemoryPublicationKeyV1 {
+        mapping,
+        id: MemoryPublicationIdV1(50),
+    };
+    let state = advance(
+        state,
+        MemoryTransitionV1::PublishMapping { key: publication },
+    );
+    let state = advance(
+        state,
+        MemoryTransitionV1::ReleasePublication { key: publication },
+    );
+    let state = state.checkpoint_released().unwrap();
+    assert!(state.publications().is_empty());
+    assert_eq!(state.mappings().len(), 1);
+    assert_eq!(state.issued_id_high_watermarks().len(), 4);
+    assert_eq!(
+        state.next(MemoryTransitionV1::PublishMapping { key: publication }),
+        Err(MemoryTransitionErrorV1::NonMonotonicIdentity(
+            MemoryRecordRefV1::Publication(publication)
+        ))
+    );
+
+    let state = unmap_and_release(state, mapping, targets.len());
+    let state = state.checkpoint_released().unwrap();
+    assert!(state.mappings().is_empty());
+    assert_eq!(state.issued_id_high_watermarks().len(), 3);
+    assert_eq!(
+        state.next(MemoryTransitionV1::BeginMap {
+            key: mapping,
+            target_devices: targets.to_vec(),
+            access: MemoryAccessV1::ReadWrite,
+        }),
+        Err(MemoryTransitionErrorV1::NonMonotonicIdentity(
+            MemoryRecordRefV1::Mapping(mapping)
+        ))
+    );
+
+    let state = advance(
+        state,
+        MemoryTransitionV1::ReleaseAllocation { key: allocation },
+    );
+    let state = advance(
+        state,
+        MemoryTransitionV1::ReleaseVaReservation { key: reservation },
+    );
+    let state = state.checkpoint_released().unwrap();
+    assert_eq!(state.issued_id_high_watermarks().len(), 2);
+    assert!(state.validate_global_invariants().is_ok());
+}
+
+#[test]
+fn checkpoint_supports_more_than_the_old_journal_cap_without_identity_reuse() {
+    const CYCLES: u64 = MAX_MEMORY_ALLOCATIONS_V1 as u64 + 128;
+    let devices = admissions();
+    let vm = devices.first_vm.model_key();
+    let targets = [devices.first.model_key(), devices.second.model_key()];
+    let mut state = acquire(
+        MemoryLifecycleStateV1::new_monotonic_non_reusable(domain(1)),
+        devices.first_vm,
+        vec![devices.first, devices.second],
+        100,
+    );
+
+    for id in 1..=CYCLES {
+        let reservation = reservation(vm, id);
+        let allocation = allocation(vm, id, 1);
+        let mapping = mapping(allocation, id);
+        state = advance(
+            state,
+            MemoryTransitionV1::ReserveVa {
+                key: reservation,
+                range: GpuVaRangeV1 {
+                    base: 0x2_0000,
+                    byte_len: MEMORY_PAGE_BYTES_V1,
+                },
+                alignment: MEMORY_PAGE_BYTES_V1,
+            },
+        );
+        state = advance(
+            state,
+            MemoryTransitionV1::Allocate {
+                key: allocation,
+                reservation,
+                handle: UntrustedAllocationHandleObservationV1(1_000 + id),
+                spec: spec(),
+            },
+        );
+        state = map_succeeded(state, mapping, &targets);
+        let publication = MemoryPublicationKeyV1 {
+            mapping,
+            id: MemoryPublicationIdV1(id),
+        };
+        state = advance(
+            state,
+            MemoryTransitionV1::PublishMapping { key: publication },
+        );
+        state = advance(
+            state,
+            MemoryTransitionV1::ReleasePublication { key: publication },
+        );
+        state = unmap_and_release(state, mapping, targets.len());
+        state = advance(
+            state,
+            MemoryTransitionV1::ReleaseAllocation { key: allocation },
+        );
+        state = advance(
+            state,
+            MemoryTransitionV1::ReleaseVaReservation { key: reservation },
+        );
+        state = state.checkpoint_released().unwrap();
+        assert!(state.reservations().is_empty());
+        assert!(state.allocations().is_empty());
+        assert!(state.mappings().is_empty());
+        assert!(state.publications().is_empty());
+    }
+
+    assert_eq!(state.issued_id_high_watermarks().len(), 2);
+    assert!(
+        state
+            .issued_id_high_watermarks()
+            .iter()
+            .all(|watermark| watermark.last_id == CYCLES)
+    );
+    let stale_reservation = reservation(vm, 1);
+    assert_eq!(
+        state.next(MemoryTransitionV1::ReserveVa {
+            key: stale_reservation,
+            range: GpuVaRangeV1 {
+                base: 0x2_0000,
+                byte_len: MEMORY_PAGE_BYTES_V1,
+            },
+            alignment: MEMORY_PAGE_BYTES_V1,
+        }),
+        Err(MemoryTransitionErrorV1::NonMonotonicIdentity(
+            MemoryRecordRefV1::VaReservation(stale_reservation)
+        ))
+    );
+
+    let fresh_reservation = reservation(vm, CYCLES + 1);
+    let state = advance(
+        state,
+        MemoryTransitionV1::ReserveVa {
+            key: fresh_reservation,
+            range: GpuVaRangeV1 {
+                base: 0x2_0000,
+                byte_len: MEMORY_PAGE_BYTES_V1,
+            },
+            alignment: MEMORY_PAGE_BYTES_V1,
+        },
+    );
+    let stale_allocation = allocation(vm, 1, u64::MAX);
+    assert_eq!(
+        state.next(MemoryTransitionV1::Allocate {
+            key: stale_allocation,
+            reservation: fresh_reservation,
+            handle: UntrustedAllocationHandleObservationV1(9_999),
+            spec: spec(),
+        }),
+        Err(MemoryTransitionErrorV1::NonMonotonicIdentity(
+            MemoryRecordRefV1::Allocation(stale_allocation)
+        ))
+    );
+
+    let stale_mapping = mapping(allocation(vm, 1, 1), 1);
+    assert_eq!(
+        state.next(MemoryTransitionV1::BeginMap {
+            key: stale_mapping,
+            target_devices: targets.to_vec(),
+            access: MemoryAccessV1::ReadWrite,
+        }),
+        Err(MemoryTransitionErrorV1::NotFound(
+            MemoryRecordRefV1::Allocation(stale_mapping.allocation)
+        ))
+    );
+    let stale_publication = MemoryPublicationKeyV1 {
+        mapping: stale_mapping,
+        id: MemoryPublicationIdV1(1),
+    };
+    assert_eq!(
+        state.next(MemoryTransitionV1::PublishMapping {
+            key: stale_publication,
+        }),
+        Err(MemoryTransitionErrorV1::NotFound(
+            MemoryRecordRefV1::Mapping(stale_mapping)
+        ))
+    );
+    assert!(state.validate_global_invariants().is_ok());
 }
 
 #[test]
