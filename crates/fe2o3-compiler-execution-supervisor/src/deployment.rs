@@ -611,10 +611,21 @@ mod tests {
         let ready = CompilerExecutionSupervisorReadyV1::decode(&bytes).unwrap();
         let pid = u32::try_from(rustix::process::getpid().as_raw_pid()).unwrap();
         assert!(ready.matches_deployment(pid, &deployment));
-        assert_eq!(
-            recv(&receiver, &mut bytes, RecvFlags::empty()).unwrap().0,
-            0
-        );
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            match recv(&receiver, &mut bytes, RecvFlags::empty()) {
+                Ok((0, _)) => break,
+                Ok(_) => panic!("bootstrap published trailing readiness"),
+                Err(rustix::io::Errno::AGAIN | rustix::io::Errno::INTR) => {
+                    assert!(
+                        Instant::now() < deadline,
+                        "bootstrap closure observation timed out"
+                    );
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                Err(error) => panic!("bootstrap closure observation failed: {error}"),
+            }
+        }
     }
 
     fn deployment() -> CompilerExecutionSupervisorDeploymentV1 {
