@@ -294,7 +294,6 @@ struct LlvmAnchorManifestV1 {
     target: String,
     guid: u64,
     function_hash: u64,
-    descriptor_name: String,
     records: Vec<LlvmAnchorRecordV1>,
 }
 
@@ -515,7 +514,7 @@ fn parse_llvm_manifest_v1(
     {
         return Err(ProductionSemanticAnchorErrorV1::BindingMismatch);
     }
-    let descriptor_name = parse_metadata_string(descriptor[2], "")?;
+    let _diagnostic_descriptor_name = parse_metadata_string(descriptor[2], "")?;
 
     let mut records = Vec::new();
     records
@@ -584,7 +583,6 @@ fn parse_llvm_manifest_v1(
         target,
         guid,
         function_hash,
-        descriptor_name,
         records,
     }))
 }
@@ -863,14 +861,13 @@ fn admit_final_artifact_v1(
     if descriptors.len() != 1
         || descriptors[0].guid != manifest.guid
         || descriptors[0].function_hash != manifest.function_hash
-        || descriptors[0].name != manifest.descriptor_name
     {
         return Err(ProductionSemanticAnchorErrorV1::ProbeDescriptorMismatch);
     }
 
     let inspected = crate::inspect_and_bind_kernel_descriptors(artifact)
         .map_err(|_| ProductionSemanticAnchorErrorV1::InvalidArtifact)?;
-    let symbol = unique_entry_symbol(&object, &manifest.descriptor_name, &inspected)?;
+    let symbol = sole_metadata_entry_symbol(&object, &inspected)?;
     let decoded = decode_probe_records(probes, manifest.guid, symbol.entry_address)?;
     let mut addresses = Vec::<Vec<u64>>::new();
     addresses
@@ -1047,7 +1044,6 @@ fn classify_transformation(
 struct ProbeDescriptorV1 {
     guid: u64,
     function_hash: u64,
-    name: String,
 }
 
 fn decode_probe_descriptors(
@@ -1074,15 +1070,9 @@ fn decode_probe_descriptors(
         result
             .try_reserve(1)
             .map_err(|_| ProductionSemanticAnchorErrorV1::AllocationFailure)?;
-        let mut owned_name = String::new();
-        owned_name
-            .try_reserve_exact(name.len())
-            .map_err(|_| ProductionSemanticAnchorErrorV1::AllocationFailure)?;
-        owned_name.push_str(name);
         result.push(ProbeDescriptorV1 {
             guid,
             function_hash,
-            name: owned_name,
         });
     }
     Ok(result)
@@ -1172,54 +1162,78 @@ struct EntrySymbolV1 {
     entry_file_offset: u64,
 }
 
-fn unique_entry_symbol(
+#[derive(Clone, Copy)]
+struct EntryTextSymbolFactV1 {
+    defined_text: bool,
+    address: u64,
+    size: u64,
+}
+
+fn is_sole_metadata_ordinal(
+    kernel_count: usize,
+    binding_count: usize,
+    kernel_index: usize,
+) -> bool {
+    kernel_count == 1 && binding_count == 1 && kernel_index == 0
+}
+
+fn has_unique_bound_entry_symbol(
+    entry_address: u64,
+    entry_size: u64,
+    facts: impl Iterator<Item = EntryTextSymbolFactV1>,
+) -> bool {
+    if entry_size == 0 {
+        return false;
+    }
+    let mut exact = 0_usize;
+    let mut same_address = 0_usize;
+    for fact in facts.filter(|fact| fact.defined_text && fact.address == entry_address) {
+        same_address = match same_address.checked_add(1) {
+            Some(count) => count,
+            None => return false,
+        };
+        if fact.size == entry_size {
+            exact = match exact.checked_add(1) {
+                Some(count) => count,
+                None => return false,
+            };
+        }
+    }
+    exact == 1 && same_address == 1
+}
+
+/// Selects the exact sole-kernel entry from the already reconciled AMDHSA metadata binding.
+/// Symbol and metadata names never choose or validate the final join candidate.
+fn sole_metadata_entry_symbol(
     object: &object::File<'_>,
-    expected_name: &str,
     inspected: &fe2o3_hsaco::InspectedKernelBindings,
 ) -> Result<EntrySymbolV1, ProductionSemanticAnchorErrorV1> {
-    let mut candidate = None;
-    for symbol in object.symbols() {
-        if symbol.kind() != SymbolKind::Text
-            || symbol.name() != Ok(expected_name)
-            || symbol.size() == 0
-            || symbol.is_undefined()
-        {
-            continue;
-        }
-        if candidate.replace(symbol).is_some() {
-            return Err(ProductionSemanticAnchorErrorV1::AmbiguousEntrySymbol);
-        }
-    }
-    let candidate = candidate.ok_or(ProductionSemanticAnchorErrorV1::AmbiguousEntrySymbol)?;
-    let mut matching_binding = None;
-    for binding in inspected.bindings() {
-        if binding.entry_address() != candidate.address()
-            || binding.entry_size() != candidate.size()
-        {
-            continue;
-        }
-        if matching_binding.replace(binding).is_some() {
-            return Err(ProductionSemanticAnchorErrorV1::AmbiguousEntrySymbol);
-        }
-    }
-    let binding = matching_binding.ok_or(ProductionSemanticAnchorErrorV1::AmbiguousEntrySymbol)?;
-    let aliases = object
-        .symbols()
-        .filter(|symbol| {
-            symbol.kind() == SymbolKind::Text
-                && !symbol.is_undefined()
-                && symbol.address() == candidate.address()
-        })
-        .count();
-    if aliases != 1 {
+    let [binding] = inspected.bindings() else {
+        return Err(ProductionSemanticAnchorErrorV1::AmbiguousEntrySymbol);
+    };
+    if !is_sole_metadata_ordinal(
+        inspected.inspection().kernels().len(),
+        inspected.bindings().len(),
+        binding.kernel_index(),
+    ) {
         return Err(ProductionSemanticAnchorErrorV1::AmbiguousEntrySymbol);
     }
-    let kernel = inspected
+    let _kernel = inspected
         .inspection()
         .kernels()
         .get(binding.kernel_index())
+        .filter(|_| inspected.inspection().kernels().len() == 1)
         .ok_or(ProductionSemanticAnchorErrorV1::AmbiguousEntrySymbol)?;
-    if kernel.name() != expected_name {
+
+    if !has_unique_bound_entry_symbol(
+        binding.entry_address(),
+        binding.entry_size(),
+        object.symbols().map(|symbol| EntryTextSymbolFactV1 {
+            defined_text: symbol.kind() == SymbolKind::Text && !symbol.is_undefined(),
+            address: symbol.address(),
+            size: symbol.size(),
+        }),
+    ) {
         return Err(ProductionSemanticAnchorErrorV1::AmbiguousEntrySymbol);
     }
     Ok(EntrySymbolV1 {
@@ -1228,6 +1242,50 @@ fn unique_entry_symbol(
         entry_size: binding.entry_size(),
         entry_file_offset: binding.entry_file_offset(),
     })
+}
+
+#[cfg(test)]
+mod entry_selection_tests {
+    use super::*;
+
+    const fn fact(address: u64, size: u64) -> EntryTextSymbolFactV1 {
+        EntryTextSymbolFactV1 {
+            defined_text: true,
+            address,
+            size,
+        }
+    }
+
+    #[test]
+    fn sole_metadata_selection_rejects_multi_kernel_and_wrong_ordinal() {
+        assert!(is_sole_metadata_ordinal(1, 1, 0));
+        assert!(!is_sole_metadata_ordinal(2, 1, 0));
+        assert!(!is_sole_metadata_ordinal(1, 2, 0));
+        assert!(!is_sole_metadata_ordinal(1, 1, 1));
+    }
+
+    #[test]
+    fn numeric_entry_selection_rejects_aliases_and_tolerates_decoys() {
+        let exact = fact(0x1000, 64);
+        let decoy = fact(0x2000, 64);
+        assert!(has_unique_bound_entry_symbol(
+            0x1000,
+            64,
+            [exact, decoy].into_iter()
+        ));
+        for alias in [fact(0x1000, 0), fact(0x1000, 32), fact(0x1000, 64)] {
+            assert!(!has_unique_bound_entry_symbol(
+                0x1000,
+                64,
+                [exact, alias].into_iter()
+            ));
+        }
+        assert!(!has_unique_bound_entry_symbol(
+            0x1000,
+            0,
+            [fact(0x1000, 0)].into_iter()
+        ));
+    }
 }
 
 fn unique_section<'a>(

@@ -38,14 +38,15 @@ use fe2o3_compiler_lineage::{
 use fe2o3_hsaco_finalize::{
     CompilerClosureV2, ContentIdentityV1, FinalizedSemanticDebugMapAdmissionStatusV1,
     InertProtectedFirstBuildWorkerV3EvidenceV1, InspectedProtectedWorkerV3HsacoV1, LinkOptionV1,
-    PinnedWorkerV1, ProductionFinalizedSemanticDebugAdmissionV1,
+    PinnedWorkerV1, ProductionFinalizedSemanticDebugAdmissionV1, ProductionIsaPointV1,
     ProductionSemanticAnchorAdmissionV1, ProductionSemanticAnchorErrorV1,
-    ProtectedWorkerV3CompactFinalizerReplayV2, WorkerExecutionLimitsV1, WorkerInputKindV1,
-    WorkerInputV1, WorkerMeasurementV1, WorkerOutputConstraintsV1, WorkerV3HsacoFinalizationError,
-    WorkerV3HsacoInspectionError, WorkerV3HsacoPublicationErrorV1,
-    execute_protected_reproducible_first_build_worker_v3, finalize_protected_worker_v3_hsaco_v1,
-    inspect_protected_worker_v3_hsaco_v1, inspect_unfinalized,
-    persist_prepared_protected_worker_v3_hsaco_publication_v1,
+    ProductionSourceIsaCorrelationAdmissionV1, ProductionSourceIsaCorrelationUnavailableV1,
+    ProductionSourceIsaRecordKindV1, ProtectedWorkerV3CompactFinalizerReplayV2,
+    WorkerExecutionLimitsV1, WorkerInputKindV1, WorkerInputV1, WorkerMeasurementV1,
+    WorkerOutputConstraintsV1, WorkerV3HsacoFinalizationError, WorkerV3HsacoInspectionError,
+    WorkerV3HsacoPublicationErrorV1, execute_protected_reproducible_first_build_worker_v3,
+    finalize_protected_worker_v3_hsaco_v1, inspect_protected_worker_v3_hsaco_v1,
+    inspect_unfinalized, persist_prepared_protected_worker_v3_hsaco_publication_v1,
     prepare_protected_worker_v3_compact_finalizer_replay_v2,
     prepare_protected_worker_v3_hsaco_publication_v1,
     publish_recovered_protected_worker_v3_hsaco_v1,
@@ -1656,7 +1657,42 @@ fn semantic_anchor_outer(
     descriptor_source: &CompilerDescriptorSourceV1,
     profile: ProductionAmdTargetProfileV1,
 ) -> InertSemanticCompilerModuleHandoffV3 {
-    semantic_anchor_outer_with_association_seed(handoff, descriptor_source, profile, 0x20)
+    let base = InertSemanticCompilerModuleHandoffV3::decode(&raw_outer(
+        &capsule_bytes_with_semantic_to_llvm(
+            0x20,
+            handoff,
+            DescriptorLineageMutation::Exact,
+            None,
+            Some(profile),
+            Some(descriptor_source.canonical_bytes()),
+        ),
+        handoff.canonical_bytes(),
+    ))
+    .unwrap();
+    let association = association_from_outer(&base);
+    let proof = canonical_compiler_proof_inputs_v4_with_sourceful_induction(0x20);
+    let carrier = exact_source_mir_kir_carrier_v1(
+        association.canonical_bytes(),
+        proof.semantic_mir(),
+        proof.kernel_ir(),
+        proof.correspondence(),
+        handoff.module_bytes(),
+    );
+    let extension =
+        ProductionSemanticDebugReceiptExtensionV1::new(association.canonical_bytes(), carrier)
+            .unwrap();
+    InertSemanticCompilerModuleHandoffV3::decode(&raw_outer(
+        &capsule_bytes_with_semantic_to_llvm(
+            0x20,
+            handoff,
+            DescriptorLineageMutation::Exact,
+            Some(extension.canonical_bytes()),
+            Some(profile),
+            Some(descriptor_source.canonical_bytes()),
+        ),
+        handoff.canonical_bytes(),
+    ))
+    .unwrap()
 }
 
 fn semantic_anchor_outer_with_association_seed(
@@ -1803,6 +1839,36 @@ fn handoff_with_module_bytes(
     .unwrap()
 }
 
+fn handoff_with_diagnostic_probe_descriptor_name(
+    base: &CompilerModuleHandoffV2,
+) -> CompilerModuleHandoffV2 {
+    let llvm = std::str::from_utf8(base.module_bytes()).unwrap();
+    let named = llvm
+        .lines()
+        .find(|line| line.starts_with("!llvm.pseudo_probe_desc = !{!"))
+        .unwrap();
+    let reference = named
+        .strip_prefix("!llvm.pseudo_probe_desc = !{!")
+        .and_then(|line| line.strip_suffix('}'))
+        .unwrap();
+    let definition_prefix = format!("!{reference} = !{{i64 ");
+    let mut changed = false;
+    let mut output = String::new();
+    for line in llvm.lines() {
+        if line.starts_with(&definition_prefix) {
+            let name_start = line.rfind("!\"").unwrap();
+            output.push_str(&line[..name_start]);
+            output.push_str("!\"diagnostic-only-name\"}");
+            changed = true;
+        } else {
+            output.push_str(line);
+        }
+        output.push('\n');
+    }
+    assert!(changed);
+    handoff_with_module_bytes(base, output.as_bytes())
+}
+
 #[test]
 fn semantic_anchor_admission_rejects_resealed_cross_spliced_association_by_default() {
     let finalized = finalized_with_optional_semantic_debug(
@@ -1815,6 +1881,26 @@ fn semantic_anchor_admission_rejects_resealed_cross_spliced_association_by_defau
             .unwrap_err(),
         ProductionSemanticAnchorErrorV1::InvalidProductionAssociation
     );
+}
+
+#[test]
+fn source_isa_correlation_preserves_exact_source_carrier_unavailability() {
+    let finalized = finalized_with_optional_semantic_debug(
+        slice_fixture_with_descriptor_table(&slice_descriptor_table()).bytes,
+        OptionalSemanticDebugFixture::Unavailable(
+            ProductionSemanticDebugProducerGapV1::SourceMapUnavailable,
+        ),
+    );
+    assert!(matches!(
+        finalized
+            .admit_production_source_isa_correlation_v1()
+            .unwrap(),
+        ProductionSourceIsaCorrelationAdmissionV1::Unavailable(
+            ProductionSourceIsaCorrelationUnavailableV1::SemanticDebugCarrier(
+                ProductionSemanticDebugProducerGapV1::SourceMapUnavailable
+            )
+        )
+    ));
 }
 
 #[test]
@@ -1864,6 +1950,81 @@ fn production_semantic_anchors_admit_real_worker_gfx942_and_gfx950() {
         assert!(!admitted.proves_general_executable_bytes_unchanged());
         assert!(!admitted.proves_general_resource_metadata_unchanged());
         assert!(!admitted.proves_zero_runtime_or_code_size_overhead());
+
+        let correlation = match finalized
+            .admit_production_source_isa_correlation_v1()
+            .unwrap()
+        {
+            ProductionSourceIsaCorrelationAdmissionV1::Admitted(correlation) => correlation,
+            ProductionSourceIsaCorrelationAdmissionV1::Unavailable(reason) => {
+                panic!("real Worker source/ISA correlation unexpectedly unavailable: {reason:?}")
+            }
+        };
+        let sourceful = correlation
+            .records()
+            .iter()
+            .find(|record| {
+                record.kind() == ProductionSourceIsaRecordKindV1::SourceAnchored
+                    && !record.isa().is_empty()
+            })
+            .expect("real Worker has one sourceful sparse ISA anchor");
+        let source_matches = correlation
+            .query_source_node(sourceful.source_node_identity().unwrap())
+            .unwrap()
+            .collect::<Vec<_>>();
+        assert!(
+            source_matches.iter().any(|record| {
+                record.semantic_operation_id() == sourceful.semantic_operation_id()
+            })
+        );
+        let SemanticDebugLocationV1::Isa {
+            kernel_ordinal,
+            byte_start,
+            ..
+        } = sourceful.isa()[0]
+        else {
+            unreachable!()
+        };
+        let reverse = correlation
+            .query_isa_pc(ProductionIsaPointV1::new(kernel_ordinal, byte_start))
+            .unwrap()
+            .collect::<Vec<_>>();
+        assert!(reverse.iter().any(|record| {
+            record.semantic_operation_id() == sourceful.semantic_operation_id()
+                && record.source_node_identity() == sourceful.source_node_identity()
+        }));
+        assert!(correlation.records().iter().any(|record| {
+            record.kind() == ProductionSourceIsaRecordKindV1::EliminatedBeforeKir
+        }));
+        assert!(!correlation.proves_complete_machine_instruction_coverage());
+        assert!(!correlation.proves_a_schedule());
+        assert!(!correlation.proves_semantic_refinement());
+        assert!(!correlation.proves_optimized_or_final_llvm_custody());
+        assert!(!correlation.proves_live_program_counter_ownership());
+        assert!(!correlation.grants_runtime_authority());
+
+        let diagnostic_handoff = handoff_with_diagnostic_probe_descriptor_name(&handoff);
+        let diagnostic_handoff =
+            handoff_with_raw_worker_output(&diagnostic_handoff, &raw_worker_output);
+        let diagnostic_directory = TestDirectory::new();
+        let diagnostic_worker = pinned(
+            &diagnostic_directory,
+            EvidenceConfig::BASE.llvm_build_identity,
+        );
+        let (diagnostic_finalized, _) = execute_semantic_anchor_handoff(
+            &diagnostic_directory,
+            &diagnostic_handoff,
+            &descriptor_source,
+            profile,
+            &diagnostic_worker,
+            EvidenceConfig::BASE.llvm_build_identity,
+        );
+        assert!(matches!(
+            diagnostic_finalized
+                .admit_production_source_isa_correlation_v1()
+                .unwrap(),
+            ProductionSourceIsaCorrelationAdmissionV1::Admitted(_)
+        ));
 
         let actual_handoff = handoff_with_raw_worker_output(&handoff, &raw_worker_output);
         let cross_spliced = semantic_anchor_outer_with_association_seed(
@@ -2602,7 +2763,7 @@ fn hex_encode(bytes: &[u8]) -> String {
 }
 
 fn hex_decode(encoded: &[u8]) -> Option<Vec<u8>> {
-    if encoded.len() % 2 != 0 {
+    if !encoded.len().is_multiple_of(2) {
         return None;
     }
     encoded

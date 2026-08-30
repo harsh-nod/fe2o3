@@ -13,8 +13,9 @@ use crate::{
     LoweringErrors, MAX_PRODUCTION_KIR_TO_LLVM_REPLAY_EVIDENCE_BYTES_V1,
     MAX_PRODUCTION_LEGACY_REPLAY_LLVM_TEXT_BYTES_V1, ProductionLlvmLayoutBindingErrorV1,
     ProductionSemanticAnchorKirIdentityV1, ProductionTargetBindingErrorV1,
-    bind_historical_replay_llvm_layout_v1, bind_production_llvm22_worker_layout_v1,
-    bind_production_target_v1, lower_kernel_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1,
+    ProductionTargetStructuralBindingV1, bind_historical_replay_llvm_layout_v1,
+    bind_production_llvm22_worker_layout_v1, bind_production_target_v1,
+    lower_kernel_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1,
     lower_kernel_to_gfx942_xnack_minus_replay_llvm_ir_v1,
     lower_kernel_to_gfx950_xnack_minus_llvm_ir_with_semantic_anchors_v1,
     lower_kernel_to_gfx950_xnack_minus_replay_llvm_ir_v1,
@@ -255,6 +256,9 @@ impl CanonicalProductionKirToLlvmReplayEvidenceV1 {
             target_owner.semantic_anchor_identity(),
             &self.pre_descriptor_llvm,
         )?;
+        let structural_binding = target_bound
+            .admit_exact_structural_binding_v1(&neutral_module, neutral_identity, target_identity)
+            .map_err(ProductionKirToLlvmReplayErrorV1::TargetBinding)?;
         let (target_bound_module, _) = target_bound.into_parts();
         Ok(ValidatedProductionKirToLlvmReplayV1 {
             evidence: self,
@@ -262,6 +266,7 @@ impl CanonicalProductionKirToLlvmReplayEvidenceV1 {
             neutral_owner,
             target_owner,
             target_bound_module,
+            structural_binding,
         })
     }
 
@@ -307,6 +312,7 @@ pub struct ValidatedProductionKirToLlvmReplayV1 {
     neutral_owner: ExactKernelIrOwnerV1,
     target_owner: ExactKernelIrOwnerV1,
     target_bound_module: Module,
+    structural_binding: ProductionTargetStructuralBindingV1,
 }
 
 impl ValidatedProductionKirToLlvmReplayV1 {
@@ -328,6 +334,10 @@ impl ValidatedProductionKirToLlvmReplayV1 {
 
     pub const fn target_bound_module(&self) -> &Module {
         &self.target_bound_module
+    }
+
+    pub const fn structural_binding(&self) -> ProductionTargetStructuralBindingV1 {
+        self.structural_binding
     }
 
     pub const fn has_exact_target_binding_replay(&self) -> bool {
@@ -959,6 +969,20 @@ mod tests {
             validated.llvm_mode(),
             ProductionKirToLlvmReplayModeV1::LegacyUninstrumented
         );
+        let structure = validated.structural_binding();
+        assert_eq!(structure.version(), ProductionReplayKernelIrVersionV1::V8);
+        assert_eq!(structure.neutral_kernel_ir(), evidence.neutral_kernel_ir);
+        assert_eq!(
+            structure.target_bound_kernel_ir(),
+            evidence.target_bound_kernel_ir
+        );
+        assert_eq!(structure.counts().functions(), 1);
+        assert_eq!(structure.counts().defined_bodies(), 1);
+        assert_eq!(structure.counts().blocks(), 1);
+        assert_eq!(structure.counts().operations(), 1);
+        assert!(structure.preserves_function_block_operation_coordinates());
+        assert!(!structure.proves_semantic_refinement());
+        assert!(!structure.grants_runtime_authority());
         assert!(validated.has_exact_target_binding_replay());
         assert!(validated.has_exact_kir_to_llvm_replay());
         assert!(!validated.establishes_formal_semantic_refinement());

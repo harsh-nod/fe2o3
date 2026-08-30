@@ -52,26 +52,31 @@ using namespace llvm::object;
 namespace fe2o3::worker {
 namespace {
 
-constexpr StringLiteral RequestDomain =
-    "FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-REQUEST/V1\0";
-constexpr StringLiteral EvidenceDomain =
-    "FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-EVIDENCE/V1\0";
-constexpr StringLiteral EvidenceIdentityDomain =
-    "FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-EVIDENCE-IDENTITY/V1\0";
-constexpr StringLiteral TraceEvidenceDomain =
-    "FE2O3/GFX942-PHYSICAL-MACHINE-TRACE-EVIDENCE/V1\0";
-constexpr StringLiteral AnalysisBundleDomain =
-    "FE2O3/GFX942-PHYSICAL-MACHINE-ANALYSIS-BUNDLE/V1\0";
-constexpr StringLiteral IdentityChallengeDomain =
-    "FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-IDENTITY-CHALLENGE/V1\0";
-constexpr StringLiteral IdentityResponseDomain =
-    "FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-IDENTITY-RESPONSE/V1\0";
-constexpr StringLiteral RequestIdentityDomain =
-    "FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-REQUEST-IDENTITY/V1\0";
-constexpr StringLiteral AnalyzerIdentityDomain =
-    "FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-ANALYZER/V1\0";
-constexpr StringLiteral ToolchainIdentityDomain =
-    "FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-TOOLCHAIN/V1\0";
+template <size_t N>
+constexpr StringRef nulTerminatedDomain(const char (&Value)[N]) {
+  return StringRef(Value, N - 1);
+}
+
+constexpr StringRef RequestDomain =
+    nulTerminatedDomain("FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-REQUEST/V1\0");
+constexpr StringRef EvidenceDomain =
+    nulTerminatedDomain("FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-EVIDENCE/V1\0");
+constexpr StringRef EvidenceIdentityDomain = nulTerminatedDomain(
+    "FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-EVIDENCE-IDENTITY/V1\0");
+constexpr StringRef TraceEvidenceDomain =
+    nulTerminatedDomain("FE2O3/GFX942-PHYSICAL-MACHINE-TRACE-EVIDENCE/V1\0");
+constexpr StringRef AnalysisBundleDomain =
+    nulTerminatedDomain("FE2O3/GFX942-PHYSICAL-MACHINE-ANALYSIS-BUNDLE/V1\0");
+constexpr StringRef IdentityChallengeDomain = nulTerminatedDomain(
+    "FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-IDENTITY-CHALLENGE/V1\0");
+constexpr StringRef IdentityResponseDomain = nulTerminatedDomain(
+    "FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-IDENTITY-RESPONSE/V1\0");
+constexpr StringRef RequestIdentityDomain = nulTerminatedDomain(
+    "FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-REQUEST-IDENTITY/V1\0");
+constexpr StringRef AnalyzerIdentityDomain =
+    nulTerminatedDomain("FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-ANALYZER/V1\0");
+constexpr StringRef ToolchainIdentityDomain =
+    nulTerminatedDomain("FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-TOOLCHAIN/V1\0");
 constexpr StringLiteral PhysicalProfileMetadataTarget =
     "amdgcn-amd-amdhsa--gfx942:xnack-";
 constexpr uint32_t PhysicalProfileElfFlags =

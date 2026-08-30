@@ -24,6 +24,7 @@ mod first_build_worker_engine;
 mod first_build_worker_v3;
 mod link_plan;
 mod production_semantic_anchor_v1;
+mod production_source_isa_correlation_v1;
 mod request_construction;
 mod semantic_debug_map_v1;
 mod worker_executor;
@@ -89,6 +90,13 @@ pub use production_semantic_anchor_v1::{
     AdmittedProductionSemanticAnchorV1, AdmittedProductionSemanticAnchorsV1,
     ProductionSemanticAnchorAdmissionV1, ProductionSemanticAnchorErrorV1,
     ProductionSemanticAnchorTransformationV1, ProductionSemanticAnchorUnavailableV1,
+};
+pub use production_source_isa_correlation_v1::{
+    AdmittedProductionSourceIsaCorrelationV1, AdmittedProductionSourceIsaRecordV1,
+    ProductionIsaPointV1, ProductionSourceIsaCorrelationAdmissionV1,
+    ProductionSourceIsaCorrelationErrorV1, ProductionSourceIsaCorrelationUnavailableV1,
+    ProductionSourceIsaMatchesV1, ProductionSourceIsaQueryUnavailableV1,
+    ProductionSourceIsaRecordKindV1,
 };
 pub use request_construction::{
     LinkInputKindClosureIdentityV1, LinkInputKindClosureV1, LinkSymbolClosureIdentityV1,

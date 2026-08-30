@@ -56,12 +56,16 @@ using namespace llvm::object;
 namespace {
 
 constexpr StringLiteral TripleName = "amdgcn-amd-amdhsa";
-constexpr StringLiteral RequestDomain =
-    "FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-REQUEST/V1\0";
-constexpr StringLiteral RequestIdentityDomain =
-    "FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-REQUEST-IDENTITY/V1\0";
-constexpr StringLiteral IdentityChallengeDomain =
-    "FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-IDENTITY-CHALLENGE/V1\0";
+template <size_t N>
+constexpr StringRef nulTerminatedDomain(const char (&Value)[N]) {
+  return StringRef(Value, N - 1);
+}
+constexpr StringRef RequestDomain =
+    nulTerminatedDomain("FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-REQUEST/V1\0");
+constexpr StringRef RequestIdentityDomain = nulTerminatedDomain(
+    "FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-REQUEST-IDENTITY/V1\0");
+constexpr StringRef IdentityChallengeDomain = nulTerminatedDomain(
+    "FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-IDENTITY-CHALLENGE/V1\0");
 
 [[noreturn]] void fail(StringRef Message) {
   errs() << "machine-effect test failed: " << Message << '\n';

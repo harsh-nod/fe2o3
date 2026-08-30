@@ -9,8 +9,93 @@ use fe2o3_kernel_ir::{
     FunctionId, KernelId, Module, TargetCapability, VerificationErrors, WaveWidth,
     gfx942_xnack_minus_target_capability, gfx950_xnack_minus_target_capability, verify_module,
 };
+use sha2::{Digest, Sha256};
 
-use crate::{AMDGPU_TRIPLE, GFX942_XNACK_MINUS_DATA_LAYOUT};
+use crate::{
+    AMDGPU_TRIPLE, GFX942_XNACK_MINUS_DATA_LAYOUT, ProductionReplayKernelIrIdentityV1,
+    ProductionReplayKernelIrVersionV1,
+};
+
+const STRUCTURAL_BINDING_DOMAIN_V1: &[u8] = b"FE2O3/PRODUCTION-TARGET-STRUCTURAL-BINDING/V1\0";
+
+/// Exact, name-independent coordinate counts retained by production target binding.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct ProductionTargetStructuralCountsV1 {
+    functions: u64,
+    defined_bodies: u64,
+    blocks: u64,
+    operations: u64,
+}
+
+impl ProductionTargetStructuralCountsV1 {
+    pub const fn functions(self) -> u64 {
+        self.functions
+    }
+
+    pub const fn defined_bodies(self) -> u64 {
+        self.defined_bodies
+    }
+
+    pub const fn blocks(self) -> u64 {
+        self.blocks
+    }
+
+    pub const fn operations(self) -> u64 {
+        self.operations
+    }
+}
+
+/// Exact canonical identities and coordinate shape joined by the sole production target binder.
+///
+/// This record proves only that function, block, and operation ordinals were retained while the
+/// binder added its target capabilities. It is not a semantic-refinement or execution proof.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct ProductionTargetStructuralBindingV1 {
+    identity: [u8; 32],
+    profile: ProductionAmdTargetProfileV1,
+    version: ProductionReplayKernelIrVersionV1,
+    neutral_kernel_ir: ProductionReplayKernelIrIdentityV1,
+    target_bound_kernel_ir: ProductionReplayKernelIrIdentityV1,
+    counts: ProductionTargetStructuralCountsV1,
+}
+
+impl ProductionTargetStructuralBindingV1 {
+    pub const fn identity(self) -> [u8; 32] {
+        self.identity
+    }
+
+    pub const fn profile(self) -> ProductionAmdTargetProfileV1 {
+        self.profile
+    }
+
+    pub const fn version(self) -> ProductionReplayKernelIrVersionV1 {
+        self.version
+    }
+
+    pub const fn neutral_kernel_ir(self) -> ProductionReplayKernelIrIdentityV1 {
+        self.neutral_kernel_ir
+    }
+
+    pub const fn target_bound_kernel_ir(self) -> ProductionReplayKernelIrIdentityV1 {
+        self.target_bound_kernel_ir
+    }
+
+    pub const fn counts(self) -> ProductionTargetStructuralCountsV1 {
+        self.counts
+    }
+
+    pub const fn preserves_function_block_operation_coordinates(self) -> bool {
+        true
+    }
+
+    pub const fn proves_semantic_refinement(self) -> bool {
+        false
+    }
+
+    pub const fn grants_runtime_authority(self) -> bool {
+        false
+    }
+}
 
 /// The deterministic target-bound Kernel IR produced from one neutral module.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -36,6 +121,126 @@ impl ProductionTargetBoundKernelIrV1 {
     pub fn into_parts(self) -> (Module, KernelId) {
         (self.module, self.kernel_id)
     }
+
+    pub(crate) fn admit_exact_structural_binding_v1(
+        &self,
+        neutral_module: &Module,
+        neutral_kernel_ir: ProductionReplayKernelIrIdentityV1,
+        target_bound_kernel_ir: ProductionReplayKernelIrIdentityV1,
+    ) -> Result<ProductionTargetStructuralBindingV1, ProductionTargetBindingErrorV1> {
+        if neutral_kernel_ir.version() != target_bound_kernel_ir.version()
+            || !same_coordinate_shape(neutral_module, &self.module)
+        {
+            return Err(ProductionTargetBindingErrorV1::CoordinateShapeMismatch);
+        }
+        let counts = structural_counts(neutral_module)?;
+        let mut digest = Sha256::new();
+        digest.update((STRUCTURAL_BINDING_DOMAIN_V1.len() as u32).to_le_bytes());
+        digest.update(STRUCTURAL_BINDING_DOMAIN_V1);
+        digest.update([match self.profile {
+            ProductionAmdTargetProfileV1::Gfx942 => 1,
+            ProductionAmdTargetProfileV1::Gfx950 => 2,
+        }]);
+        digest.update([match neutral_kernel_ir.version() {
+            ProductionReplayKernelIrVersionV1::V8 => 8,
+            ProductionReplayKernelIrVersionV1::V9 => 9,
+        }]);
+        for identity in [neutral_kernel_ir, target_bound_kernel_ir] {
+            digest.update(identity.sha256());
+            digest.update(identity.byte_len().to_le_bytes());
+        }
+        for count in [
+            counts.functions,
+            counts.defined_bodies,
+            counts.blocks,
+            counts.operations,
+        ] {
+            digest.update(count.to_le_bytes());
+        }
+        for function in &neutral_module.functions {
+            match &function.body {
+                Some(body) => {
+                    digest.update([1]);
+                    digest.update((body.blocks.len() as u64).to_le_bytes());
+                    for block in &body.blocks {
+                        digest.update((block.operations.len() as u64).to_le_bytes());
+                    }
+                }
+                None => digest.update([0]),
+            }
+        }
+        Ok(ProductionTargetStructuralBindingV1 {
+            identity: digest.finalize().into(),
+            profile: self.profile,
+            version: neutral_kernel_ir.version(),
+            neutral_kernel_ir,
+            target_bound_kernel_ir,
+            counts,
+        })
+    }
+}
+
+fn same_coordinate_shape(neutral: &Module, target: &Module) -> bool {
+    neutral.functions.len() == target.functions.len()
+        && neutral
+            .functions
+            .iter()
+            .zip(&target.functions)
+            .all(|(neutral, target)| match (&neutral.body, &target.body) {
+                (None, None) => true,
+                (Some(neutral), Some(target)) => {
+                    neutral.blocks.len() == target.blocks.len()
+                        && neutral
+                            .blocks
+                            .iter()
+                            .zip(&target.blocks)
+                            .all(|(neutral, target)| {
+                                neutral.operations.len() == target.operations.len()
+                            })
+                }
+                _ => false,
+            })
+}
+
+fn structural_counts(
+    module: &Module,
+) -> Result<ProductionTargetStructuralCountsV1, ProductionTargetBindingErrorV1> {
+    let functions = u64::try_from(module.functions.len())
+        .map_err(|_| ProductionTargetBindingErrorV1::CoordinateCountOverflow)?;
+    let (defined_bodies, blocks, operations) = module.functions.iter().try_fold(
+        (0_u64, 0_u64, 0_u64),
+        |(defined_bodies, blocks, operations), function| {
+            let Some(body) = &function.body else {
+                return Ok((defined_bodies, blocks, operations));
+            };
+            let defined_bodies = defined_bodies
+                .checked_add(1)
+                .ok_or(ProductionTargetBindingErrorV1::CoordinateCountOverflow)?;
+            let blocks = blocks
+                .checked_add(
+                    u64::try_from(body.blocks.len())
+                        .map_err(|_| ProductionTargetBindingErrorV1::CoordinateCountOverflow)?,
+                )
+                .ok_or(ProductionTargetBindingErrorV1::CoordinateCountOverflow)?;
+            let operations =
+                body.blocks
+                    .iter()
+                    .try_fold(operations, |operations, block| {
+                        operations
+                            .checked_add(u64::try_from(block.operations.len()).map_err(|_| {
+                                ProductionTargetBindingErrorV1::CoordinateCountOverflow
+                            })?)
+                            .ok_or(ProductionTargetBindingErrorV1::CoordinateCountOverflow)
+                    })?;
+            Ok((defined_bodies, blocks, operations))
+        },
+    )?;
+    Ok(ProductionTargetStructuralCountsV1 {
+        functions,
+        defined_bodies,
+        blocks,
+        operations,
+    })
 }
 
 /// Closed failures for the production neutral-KIR target-binding transform.
@@ -43,6 +248,8 @@ impl ProductionTargetBoundKernelIrV1 {
 pub enum ProductionTargetBindingErrorV1 {
     KernelClosure { observed: usize },
     MissingEntry { entry: FunctionId },
+    CoordinateShapeMismatch,
+    CoordinateCountOverflow,
     InvalidTargetBoundModule(VerificationErrors),
 }
 
@@ -57,6 +264,12 @@ impl fmt::Display for ProductionTargetBindingErrorV1 {
                 formatter,
                 "production target binding cannot find kernel entry {entry}"
             ),
+            Self::CoordinateShapeMismatch => formatter.write_str(
+                "production target binding changed function, block, or operation coordinates",
+            ),
+            Self::CoordinateCountOverflow => {
+                formatter.write_str("production target structural coordinate counts overflowed")
+            }
             Self::InvalidTargetBoundModule(error) => {
                 write!(
                     formatter,
@@ -71,7 +284,10 @@ impl Error for ProductionTargetBindingErrorV1 {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::InvalidTargetBoundModule(error) => Some(error),
-            Self::KernelClosure { .. } | Self::MissingEntry { .. } => None,
+            Self::KernelClosure { .. }
+            | Self::MissingEntry { .. }
+            | Self::CoordinateShapeMismatch
+            | Self::CoordinateCountOverflow => None,
         }
     }
 }
