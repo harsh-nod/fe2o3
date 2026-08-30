@@ -12,8 +12,9 @@
 //! while that exact generation is current. Both registries use the same pinned directory and
 //! exclusive lock. Attempt state prevents stale cooperating compilers from publishing, but it is
 //! coordination metadata rather than artifact or launch authority.
-//! On Linux, a canonical `/proc/self/fd/<n>` output root is imported by duplicating that descriptor;
-//! every ordinary configured path is still opened one component at a time without following
+//! On Linux, a canonical `/proc/self/fd/<n>` output root is imported by duplicating that descriptor
+//! as a stable identity anchor, then opening a readable handle for the same exact directory inode.
+//! Every ordinary configured path is still opened one component at a time without following
 //! symlinks.
 //!
 //! The configured output directory is a generated-artifact namespace. Canonically named files
@@ -1190,6 +1191,8 @@ impl PublicationState {
 mod tests {
     use super::*;
     use std::cell::Cell;
+    #[cfg(target_os = "linux")]
+    use std::os::fd::AsRawFd;
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
     use std::os::unix::net::UnixStream;
     use std::os::unix::process::CommandExt;
@@ -1199,6 +1202,31 @@ mod tests {
     use std::time::{Duration, Instant};
 
     static NEXT_TEST_DIRECTORY: AtomicU64 = AtomicU64::new(0);
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn proc_self_fd_opath_import_is_a_readable_handle_for_the_same_directory() {
+        let temp = TestDirectory::new();
+        let retained = rustix::fs::open(
+            &temp.path,
+            OFlags::PATH | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .unwrap();
+        let retained_stat = fstat(&retained).unwrap();
+        let path = PathBuf::from(format!("/proc/self/fd/{}", retained.as_raw_fd()));
+
+        let imported = duplicate_proc_self_fd_directory(&path).unwrap().unwrap();
+        let imported_stat = fstat(&imported).unwrap();
+        assert_eq!(imported_stat.st_dev, retained_stat.st_dev);
+        assert_eq!(imported_stat.st_ino, retained_stat.st_ino);
+        assert_eq!(imported_stat.st_mode, retained_stat.st_mode);
+
+        let mut directory = Dir::read_from(&imported).unwrap();
+        for entry in &mut directory {
+            entry.unwrap();
+        }
+    }
 
     fn spawn_test_process(command: &mut process::Command) -> io::Result<process::Child> {
         with_artifact_process_spawn_v1(|| command.spawn())
@@ -4806,15 +4834,41 @@ fn duplicate_proc_self_fd_directory(path: &Path) -> Option<Result<OwnedFd, EmitE
     if duplicated < 0 {
         return Some(Err(std::io::Error::last_os_error().into()));
     }
-    let directory = unsafe { OwnedFd::from_raw_fd(duplicated) };
+    let anchor = unsafe { OwnedFd::from_raw_fd(duplicated) };
+    let anchor_stat = match fstat(&anchor) {
+        Ok(stat) => stat,
+        Err(error) => return Some(Err(std::io::Error::from(error).into())),
+    };
+    if FileType::from_raw_mode(anchor_stat.st_mode) != FileType::Directory {
+        return Some(Err(EmitError::InvalidArtifactDestination {
+            path: path.to_path_buf(),
+            reason: "procfs descriptor does not reference a directory".to_string(),
+        }));
+    }
+
+    // Imported capabilities may be O_PATH descriptors. Keep the duplicate as the stable anchor,
+    // then normalize through that exact inode so namespace scans receive a readable directory.
+    let directory = match openat(
+        &anchor,
+        Path::new("."),
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    ) {
+        Ok(directory) => directory,
+        Err(error) => return Some(Err(std::io::Error::from(error).into())),
+    };
     let stat = match fstat(&directory) {
         Ok(stat) => stat,
         Err(error) => return Some(Err(std::io::Error::from(error).into())),
     };
-    if FileType::from_raw_mode(stat.st_mode) != FileType::Directory {
+    if FileType::from_raw_mode(stat.st_mode) != FileType::Directory
+        || stat.st_dev != anchor_stat.st_dev
+        || stat.st_ino != anchor_stat.st_ino
+        || stat.st_mode != anchor_stat.st_mode
+    {
         return Some(Err(EmitError::InvalidArtifactDestination {
             path: path.to_path_buf(),
-            reason: "procfs descriptor does not reference a directory".to_string(),
+            reason: "procfs descriptor did not retain one readable directory identity".to_string(),
         }));
     }
     Some(Ok(directory))
