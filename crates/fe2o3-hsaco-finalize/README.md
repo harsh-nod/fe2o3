@@ -170,3 +170,20 @@ kernel semantics, prove what implementation produced a measured worker binary,
 or independently grant HSA load or launch authority. The scalar-GEMM descriptor
 validator is retained because Worker V3 authority consumes it; no scalar-GEMM
 worker publication route is retained.
+
+## Production semantic debug attachment
+
+The frozen Worker V3 semantic-to-LLVM association may carry a separately versioned, bounded,
+authority-free debug extension. A legacy bare V3 association remains valid and is reported as an
+explicit unavailable attachment; malformed wrappers and direct carrier substitution fail closed.
+An available attachment retains exact Source Map V2, semantic MIR, canonical KIR V7 projection,
+typed schedule-unavailable status, and a partial Source-to-MIR-to-KIR map. Final admission joins all
+13 frozen association axes, decodes the exact outer canonical KIR V8, requires the carried V7
+projection to decode to the identical `Module`, and checks every map edge against the exact V4
+statement correspondence, semantic MIR call-site span, and Source Map operation site.
+
+The finalizer also independently replays the retained whole-module neutral-KIR-to-target-KIR-to-
+pre-descriptor-LLVM evidence. That evidence does not provide per-operation LLVM instruction spans,
+LLVM-to-machine refinement, a schedule stage, or ISA intervals. Those deeper mappings remain typed
+unavailable; `ExactInputsAndArtifact` means the declared byte axes and the available V4 semantic
+members were joined, not that full source-to-ISA refinement was established.

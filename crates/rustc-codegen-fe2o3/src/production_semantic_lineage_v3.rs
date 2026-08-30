@@ -17,11 +17,14 @@ use fe2o3_compiler_lineage::{
     InertProofBindingAssociationErrorV3, InertProofBindingAssociationErrorV4,
     InertProofBindingAssociationInputsV4, InertProofBindingAssociationV4,
     InertProofBindingReceiptV3, InertRustcIdentityInventoryReceiptV3,
-    InertRustcPreflightPlanReceiptV3, InertSemanticToLlvmReceiptV3, InertTargetBindingReceiptV3,
-    LineageErrorV3, OrderedInertSemanticLineageReceiptsV3,
+    InertRustcPreflightPlanReceiptV3, InertSemanticToLlvmAssociationV3,
+    InertSemanticToLlvmReceiptV3, InertTargetBindingReceiptV3, LineageErrorV3,
+    OrderedInertSemanticLineageReceiptsV3,
 };
 use fe2o3_kernel_ir::{
-    FunctionRole, Module, VerifiedCanonicalKernelIrErrorV8, VerifiedCanonicalKernelIrV8,
+    FunctionRole, Module, ProductionSemanticDebugAvailabilityV1, ProductionSemanticDebugCarrierV1,
+    ProductionSemanticDebugProducerGapV1, ProductionSemanticDebugReceiptExtensionV1,
+    VerifiedCanonicalKernelIrErrorV8, VerifiedCanonicalKernelIrV8,
 };
 use fe2o3_lower_mir_kernel::{
     InertCanonicalFormalMemoryAdmissionEvidenceV4, InertCanonicalMirToKirCorrespondenceEvidenceV4,
@@ -77,6 +80,7 @@ pub(crate) struct PreparedProductionSemanticLineageV3 {
     formal_memory: InertFormalMemoryReceiptV3,
     verus_execution: CanonicalProductionMirPlironVerusExecutionEvidenceV1,
     amdgpu_lowering_replay: dialect_amdgcn::CanonicalProductionKirToLlvmReplayEvidenceV1,
+    semantic_debug: crate::production_semantic_debug_v1::PreparedProductionSemanticDebugV1,
     neutral_kir_custody: ProductionCanonicalKernelIrIdentityV1,
     neutral_kir_identity: TargetLineageIdentityV3,
     bound_kir_identity: TargetLineageIdentityV3,
@@ -96,6 +100,7 @@ impl PreparedProductionSemanticLineageV3 {
         admitted: &ProductionFormalMemoryOwnerV1,
         target_module: &Module,
         pre_descriptor_llvm: &str,
+        semantic_debug_inputs: crate::production_semantic_debug_v1::ProductionSemanticDebugInputsV1,
     ) -> Result<Self, ProductionSemanticLineageErrorV3> {
         admitted
             .verify_equivalence()
@@ -173,6 +178,27 @@ impl PreparedProductionSemanticLineageV3 {
             InertMirToKirCorrespondenceReceiptV3::from_canonical_preimage(
                 correspondence.canonical_bytes(),
             )?;
+        let semantic_debug = match semantic_debug_inputs {
+            crate::production_semantic_debug_v1::ProductionSemanticDebugInputsV1::Unavailable(
+                gap,
+            ) => crate::production_semantic_debug_v1::PreparedProductionSemanticDebugV1::Unavailable(
+                gap,
+            ),
+            crate::production_semantic_debug_v1::ProductionSemanticDebugInputsV1::Available {
+                source_map,
+                canonical_kir_v7,
+            } => match crate::production_semantic_debug_v1::prepare_production_semantic_debug_v1(
+                admitted.semantic_kir(),
+                &correspondence,
+                *source_map,
+                &canonical_kir_v7,
+            ) {
+                Ok(prepared) => prepared,
+                Err(error) => crate::production_semantic_debug_v1::PreparedProductionSemanticDebugV1::Unavailable(
+                    semantic_debug_prepare_gap(&error),
+                ),
+            },
+        };
 
         let formal = InertCanonicalFormalMemoryAdmissionEvidenceV4::from_live_owner(admitted)?;
         if formal.canonical_kernel_ir_identity() != neutral_kir_custody {
@@ -242,6 +268,7 @@ impl PreparedProductionSemanticLineageV3 {
             formal_memory,
             verus_execution,
             amdgpu_lowering_replay,
+            semantic_debug,
             neutral_kir_custody,
             neutral_kir_identity,
             bound_kir_identity,
@@ -465,7 +492,7 @@ impl PreparedProductionSemanticLineageV3 {
         let final_llvm_identity =
             TargetLineageIdentityV3::new(*module_identity.sha256(), module_identity.byte_len())?;
 
-        let semantic_to_llvm =
+        let semantic_to_llvm_association =
             SemanticToLlvmAssociationTranscriptV3::new(SemanticToLlvmAssociationInputsV3 {
                 semantic_mir: semantic_identity,
                 middle_end: middle_end_identity,
@@ -481,8 +508,19 @@ impl PreparedProductionSemanticLineageV3 {
                 final_llvm: final_llvm_identity,
                 final_compiler_module_commitment: final_commitment_identity,
             })?;
-        let semantic_to_llvm = InertSemanticToLlvmReceiptV3::from_canonical_preimage(
-            semantic_to_llvm.canonical_bytes(),
+        InertSemanticToLlvmAssociationV3::decode(semantic_to_llvm_association.canonical_bytes())
+            .map_err(|_| {
+                ProductionSemanticLineageErrorV3::AxisMismatch(
+                    "compiler semantic-to-LLVM association is not the frozen canonical V3 schema",
+                )
+            })?;
+        let semantic_debug = self.semantic_debug.finish(
+            self.semantic_mir.canonical_preimage(),
+            module_handoff.module_bytes(),
+        );
+        let semantic_to_llvm = attach_optional_semantic_debug_v1(
+            semantic_to_llvm_association.canonical_bytes(),
+            semantic_debug,
         )?;
 
         let receipts = OrderedInertSemanticLineageReceiptsV3::new(
@@ -505,6 +543,142 @@ impl PreparedProductionSemanticLineageV3 {
         let capsule = InertProductionSemanticCapsuleV3::new(invocation, target, receipts)?;
         InertSemanticCompilerModuleHandoffV3::new(capsule, module_handoff).map_err(Into::into)
     }
+}
+
+fn semantic_debug_prepare_gap(
+    error: &crate::production_pipeline::ProductionPipelineError,
+) -> ProductionSemanticDebugProducerGapV1 {
+    match error {
+        crate::production_pipeline::ProductionPipelineError::SimulationProductionKirV9 => {
+            ProductionSemanticDebugProducerGapV1::CanonicalKirV7ProjectionUnavailable
+        }
+        crate::production_pipeline::ProductionPipelineError::SemanticDebugMap(
+            fe2o3_kernel_ir::SemanticDebugMapErrorV1::InvalidLength
+            | fe2o3_kernel_ir::SemanticDebugMapErrorV1::Encoding
+            | fe2o3_kernel_ir::SemanticDebugMapErrorV1::ResourceLimit
+            | fe2o3_kernel_ir::SemanticDebugMapErrorV1::AllocationFailure,
+        )
+        | crate::production_pipeline::ProductionPipelineError::SemanticDebugFragment(
+            fe2o3_kernel_ir::ProductionSemanticDebugFragmentErrorV1::ResourceLimit
+            | fe2o3_kernel_ir::ProductionSemanticDebugFragmentErrorV1::AllocationFailure,
+        ) => ProductionSemanticDebugProducerGapV1::ResourceLimit,
+        crate::production_pipeline::ProductionPipelineError::SimulationDebugMapCorrespondence(
+            _,
+        ) => ProductionSemanticDebugProducerGapV1::CorrespondenceValidationUnavailable,
+        crate::production_pipeline::ProductionPipelineError::SemanticDebugFragment(_) => {
+            ProductionSemanticDebugProducerGapV1::FragmentConstructionUnavailable
+        }
+        crate::production_pipeline::ProductionPipelineError::SemanticDebugMap(_) => {
+            ProductionSemanticDebugProducerGapV1::SemanticMapConstructionUnavailable
+        }
+        _ => ProductionSemanticDebugProducerGapV1::CorrespondenceValidationUnavailable,
+    }
+}
+
+fn attach_optional_semantic_debug_v1(
+    association: &[u8],
+    availability: ProductionSemanticDebugAvailabilityV1,
+) -> Result<InertSemanticToLlvmReceiptV3, ProductionSemanticLineageErrorV3> {
+    attach_optional_semantic_debug_with_fault_v1(
+        association,
+        availability,
+        OptionalSemanticDebugAttachmentFaultV1::None,
+    )
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(not(test), allow(dead_code))]
+enum OptionalSemanticDebugAttachmentFaultV1 {
+    None,
+    PrimaryCarrierResource,
+    PrimaryCarrierStructural,
+    FallbackCarrier,
+    Extension,
+    ExtensionReceipt,
+}
+
+fn attach_optional_semantic_debug_with_fault_v1(
+    association: &[u8],
+    availability: ProductionSemanticDebugAvailabilityV1,
+    fault: OptionalSemanticDebugAttachmentFaultV1,
+) -> Result<InertSemanticToLlvmReceiptV3, ProductionSemanticLineageErrorV3> {
+    let primary = if matches!(
+        fault,
+        OptionalSemanticDebugAttachmentFaultV1::PrimaryCarrierResource
+            | OptionalSemanticDebugAttachmentFaultV1::PrimaryCarrierStructural
+            | OptionalSemanticDebugAttachmentFaultV1::FallbackCarrier
+    ) {
+        None
+    } else {
+        Some(ProductionSemanticDebugCarrierV1::new(
+            association,
+            availability,
+        ))
+    };
+    let carrier = match primary {
+        Some(Ok(carrier)) => carrier,
+        Some(Err(error)) => {
+            let gap = if matches!(
+                error,
+                fe2o3_kernel_ir::ProductionSemanticDebugFragmentErrorV1::ResourceLimit
+                    | fe2o3_kernel_ir::ProductionSemanticDebugFragmentErrorV1::AllocationFailure
+            ) {
+                ProductionSemanticDebugProducerGapV1::ResourceLimit
+            } else {
+                ProductionSemanticDebugProducerGapV1::CarrierConstructionUnavailable
+            };
+            let Some(carrier) = fallback_debug_carrier_v1(association, gap, fault) else {
+                return InertSemanticToLlvmReceiptV3::from_canonical_preimage(association)
+                    .map_err(Into::into);
+            };
+            carrier
+        }
+        None => {
+            let gap = if fault == OptionalSemanticDebugAttachmentFaultV1::PrimaryCarrierResource {
+                ProductionSemanticDebugProducerGapV1::ResourceLimit
+            } else {
+                ProductionSemanticDebugProducerGapV1::CarrierConstructionUnavailable
+            };
+            let Some(carrier) = fallback_debug_carrier_v1(association, gap, fault) else {
+                return InertSemanticToLlvmReceiptV3::from_canonical_preimage(association)
+                    .map_err(Into::into);
+            };
+            carrier
+        }
+    };
+    if fault == OptionalSemanticDebugAttachmentFaultV1::Extension {
+        return InertSemanticToLlvmReceiptV3::from_canonical_preimage(association)
+            .map_err(Into::into);
+    }
+    let Ok(extension) = ProductionSemanticDebugReceiptExtensionV1::new(association, carrier) else {
+        return InertSemanticToLlvmReceiptV3::from_canonical_preimage(association)
+            .map_err(Into::into);
+    };
+    if fault == OptionalSemanticDebugAttachmentFaultV1::ExtensionReceipt {
+        return InertSemanticToLlvmReceiptV3::from_canonical_preimage(association)
+            .map_err(Into::into);
+    }
+    match InertSemanticToLlvmReceiptV3::from_canonical_preimage(extension.canonical_bytes()) {
+        Ok(receipt) => Ok(receipt),
+        Err(_) => {
+            InertSemanticToLlvmReceiptV3::from_canonical_preimage(association).map_err(Into::into)
+        }
+    }
+}
+
+fn fallback_debug_carrier_v1(
+    association: &[u8],
+    gap: ProductionSemanticDebugProducerGapV1,
+    fault: OptionalSemanticDebugAttachmentFaultV1,
+) -> Option<ProductionSemanticDebugCarrierV1> {
+    if fault == OptionalSemanticDebugAttachmentFaultV1::FallbackCarrier {
+        return None;
+    }
+    ProductionSemanticDebugCarrierV1::new(
+        association,
+        ProductionSemanticDebugAvailabilityV1::Unavailable(gap),
+    )
+    .ok()
 }
 
 fn receipt_identity(
@@ -824,5 +998,74 @@ mod layout_tests {
         assert!(source.contains("CanonicalProductionKirToLlvmReplayEvidenceV1::from_live_inputs"));
         assert!(source.contains("validate_compiler_kir_to_llvm_replay_v1"));
         assert!(!source.contains(concat!("AmdgpuLoweringTranscript", "V3::new")));
+    }
+
+    fn test_association() -> Vec<u8> {
+        let identity =
+            fe2o3_compiler_lineage::InertSemanticToLlvmContentIdentityV3::new([0x41; 32], 1)
+                .unwrap();
+        fe2o3_compiler_lineage::InertSemanticToLlvmAssociationV3::new(
+            fe2o3_compiler_lineage::InertSemanticToLlvmAssociationInputsV3::new(
+                identity, identity, identity, identity, identity, identity, identity, identity,
+                identity, identity, identity, identity, identity,
+            ),
+        )
+        .unwrap()
+        .canonical_bytes()
+        .to_vec()
+    }
+
+    #[test]
+    fn every_debug_attachment_failure_preserves_the_frozen_core_association() {
+        let association = test_association();
+        let availability = ProductionSemanticDebugAvailabilityV1::Unavailable(
+            ProductionSemanticDebugProducerGapV1::SourceMapUnavailable,
+        );
+        for (fault, expected_gap) in [
+            (
+                OptionalSemanticDebugAttachmentFaultV1::PrimaryCarrierResource,
+                ProductionSemanticDebugProducerGapV1::ResourceLimit,
+            ),
+            (
+                OptionalSemanticDebugAttachmentFaultV1::PrimaryCarrierStructural,
+                ProductionSemanticDebugProducerGapV1::CarrierConstructionUnavailable,
+            ),
+        ] {
+            let receipt = attach_optional_semantic_debug_with_fault_v1(
+                &association,
+                availability.clone(),
+                fault,
+            )
+            .unwrap();
+            let extension = ProductionSemanticDebugReceiptExtensionV1::from_canonical_bytes(
+                receipt.canonical_preimage(),
+            )
+            .unwrap();
+            assert_eq!(extension.association_v3(), association);
+            assert!(matches!(
+                extension.carrier_v1().availability(),
+                ProductionSemanticDebugAvailabilityV1::Unavailable(gap) if *gap == expected_gap
+            ));
+        }
+
+        for fault in [
+            OptionalSemanticDebugAttachmentFaultV1::FallbackCarrier,
+            OptionalSemanticDebugAttachmentFaultV1::Extension,
+            OptionalSemanticDebugAttachmentFaultV1::ExtensionReceipt,
+        ] {
+            let receipt = attach_optional_semantic_debug_with_fault_v1(
+                &association,
+                availability.clone(),
+                fault,
+            )
+            .unwrap();
+            assert_eq!(receipt.canonical_preimage(), association);
+            assert!(
+                fe2o3_compiler_lineage::InertSemanticToLlvmAssociationV3::decode(
+                    receipt.canonical_preimage(),
+                )
+                .is_ok()
+            );
+        }
     }
 }

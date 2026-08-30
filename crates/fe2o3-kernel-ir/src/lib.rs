@@ -52,6 +52,7 @@ mod ir;
 #[path = "launch_kernel_v2.rs"]
 mod launch_kernel_contract_v2;
 mod matrix;
+mod production_semantic_debug_fragment_v1;
 mod region_effects;
 pub mod scalar_ops_v2;
 mod semantic_debug_map_v1;
@@ -96,6 +97,7 @@ pub use launch_kernel_contract_v2::{
     canonical_occupancy_subject_identity_v2, canonical_variant_tuple_identity_v2,
 };
 pub use matrix::*;
+pub use production_semantic_debug_fragment_v1::*;
 pub use region_effects::*;
 pub use semantic_debug_map_v1::*;
 pub use semantic_operations::*;

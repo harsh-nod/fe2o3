@@ -242,6 +242,7 @@ pub(crate) struct ConstructedProductionSemanticMirV1 {
         Box<[crate::rustc_semantic_plan_v1::RetainedDebugSourceScopeV2]>,
     pub(crate) debug_source_variables:
         Box<[crate::rustc_semantic_plan_v1::RetainedDebugSourceVariableV2]>,
+    pub(crate) debug_capture_gap: Option<fe2o3_kernel_ir::ProductionSemanticDebugProducerGapV1>,
 }
 
 pub(crate) fn construct_production_semantic_mir_v1<'tcx>(
@@ -364,6 +365,7 @@ pub(crate) fn construct_production_semantic_mir_v1<'tcx>(
         debug_source_files,
         debug_source_scopes,
         debug_source_variables,
+        debug_capture_gap,
     ) = plan
         .into_identity_transcript_and_debug_files()
         .map_err(|error| ProductionSemanticImportErrorV1::Preflight(Box::new(error)))?;
@@ -384,6 +386,7 @@ pub(crate) fn construct_production_semantic_mir_v1<'tcx>(
         debug_source_files,
         debug_source_scopes,
         debug_source_variables,
+        debug_capture_gap,
     })
 }
 

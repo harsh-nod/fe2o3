@@ -54,6 +54,8 @@ pub(crate) enum ProductionPipelineError {
     SimulationBundleV2(fe2o3_kernel_ir::SimulationBundleErrorV2),
     SimulationDebugMapV2(fe2o3_kernel_ir::DebugSourceMapErrorV2),
     SimulationDebugMapCorrespondence(&'static str),
+    SemanticDebugMap(fe2o3_kernel_ir::SemanticDebugMapErrorV1),
+    SemanticDebugFragment(fe2o3_kernel_ir::ProductionSemanticDebugFragmentErrorV1),
     SimulationSourceLineage(fe2o3_compiler_lineage::LineageErrorV3),
     SimulationProductionKirV9,
     FormalMemoryAdmission(fe2o3_lower_mir_kernel::ProductionFormalMemoryErrorV1),
@@ -128,6 +130,14 @@ impl fmt::Display for ProductionPipelineError {
             Self::SimulationDebugMapCorrespondence(detail) => write!(
                 formatter,
                 "production compilation simulation debug-map correspondence failed: {detail}"
+            ),
+            Self::SemanticDebugMap(error) => write!(
+                formatter,
+                "production semantic debug map construction failed: {error}"
+            ),
+            Self::SemanticDebugFragment(error) => write!(
+                formatter,
+                "production semantic debug fragment construction failed: {error}"
             ),
             Self::SimulationSourceLineage(error) => write!(
                 formatter,
@@ -206,6 +216,8 @@ impl std::error::Error for ProductionPipelineError {
             Self::SimulationDebugMap(error) => Some(error),
             Self::SimulationBundleV2(error) => Some(error),
             Self::SimulationDebugMapV2(error) => Some(error),
+            Self::SemanticDebugMap(error) => Some(error),
+            Self::SemanticDebugFragment(error) => Some(error),
             Self::SimulationSourceLineage(error) => Some(error),
             Self::FormalMemoryAdmission(error) => Some(error),
             Self::Geometry(error) => Some(error),
@@ -328,6 +340,7 @@ struct AuthenticatedProductionBindings {
     debug_source_files: Box<[fe2o3_kernel_ir::DebugSourceMapFileV1]>,
     debug_source_scopes: Box<[crate::rustc_semantic_plan_v1::RetainedDebugSourceScopeV2]>,
     debug_source_variables: Box<[crate::rustc_semantic_plan_v1::RetainedDebugSourceVariableV2]>,
+    debug_capture_gap: Option<fe2o3_kernel_ir::ProductionSemanticDebugProducerGapV1>,
     typed_descriptor_roots: Vec<crate::compiler_descriptor::TypedDescriptorRootV1>,
     transaction: ProductionTransactionBindings,
 }
@@ -744,6 +757,7 @@ impl TargetLoweredProductionCompilation {
             debug_source_files: _,
             debug_source_scopes: _,
             debug_source_variables: _,
+            debug_capture_gap: _,
             typed_descriptor_roots,
             transaction,
         } = bindings;
@@ -805,9 +819,10 @@ impl TargetLoweredProductionCompilation {
             rustc_preflight_plan,
             rustc_target,
             reference_effect_bindings,
-            debug_source_files: _,
-            debug_source_scopes: _,
-            debug_source_variables: _,
+            debug_source_files,
+            debug_source_scopes,
+            debug_source_variables,
+            debug_capture_gap,
             typed_descriptor_roots,
             transaction,
         } = bindings;
@@ -822,6 +837,16 @@ impl TargetLoweredProductionCompilation {
         {
             return Err(ProductionPipelineError::RustcLineageMismatch);
         }
+        let semantic_debug_inputs = prepare_production_semantic_debug_inputs_v1(
+            admitted.semantic_kir(),
+            &rustc_identity_inventory,
+            &rustc_preflight_plan,
+            &rustc_target,
+            &debug_source_files,
+            &debug_source_scopes,
+            &debug_source_variables,
+            debug_capture_gap,
+        );
         drop(reference_effect_bindings);
         let ProtectedProductionPublicationCustody {
             attempt,
@@ -836,6 +861,7 @@ impl TargetLoweredProductionCompilation {
             &admitted,
             &target_module,
             &llvm_ir,
+            semantic_debug_inputs,
         )
         .map_err(ProductionPipelineError::SemanticLineage)?;
         let compiler_module = AuthenticatedProductionTargetModule {
@@ -937,6 +963,144 @@ fn sole_debug_map_body_v1(
         ));
     }
     Ok(body)
+}
+
+fn prepare_production_semantic_debug_inputs_v1(
+    lowered: &fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1,
+    rustc_identity_inventory: &crate::collector::AuthenticatedRustcIdentityInventoryV3,
+    rustc_preflight_plan: &crate::collector::AuthenticatedRustcPreflightPlanV3,
+    rustc_target: &crate::production_target_v1::AuthenticatedProductionTargetV1,
+    captured_files: &[fe2o3_kernel_ir::DebugSourceMapFileV1],
+    captured_scopes: &[crate::rustc_semantic_plan_v1::RetainedDebugSourceScopeV2],
+    captured_variables: &[crate::rustc_semantic_plan_v1::RetainedDebugSourceVariableV2],
+    capture_gap: Option<fe2o3_kernel_ir::ProductionSemanticDebugProducerGapV1>,
+) -> crate::production_semantic_debug_v1::ProductionSemanticDebugInputsV1 {
+    if let Some(gap) = capture_gap {
+        return crate::production_semantic_debug_v1::ProductionSemanticDebugInputsV1::unavailable(
+            gap,
+        );
+    }
+    match compiler_production_semantic_debug_source_map_v1(
+        lowered,
+        rustc_identity_inventory,
+        rustc_preflight_plan,
+        rustc_target,
+        captured_files,
+        captured_scopes,
+        captured_variables,
+    ) {
+        Ok((source_map, canonical_kir_v7)) => {
+            crate::production_semantic_debug_v1::ProductionSemanticDebugInputsV1::Available {
+                source_map: Box::new(source_map),
+                canonical_kir_v7,
+            }
+        }
+        Err(ProductionPipelineError::SimulationProductionKirV9) => {
+            crate::production_semantic_debug_v1::ProductionSemanticDebugInputsV1::unavailable(
+                fe2o3_kernel_ir::ProductionSemanticDebugProducerGapV1::CanonicalKirV7ProjectionUnavailable,
+            )
+        }
+        Err(
+            ProductionPipelineError::SimulationDebugMap(
+                fe2o3_kernel_ir::DebugSourceMapErrorV1::InvalidLength
+                | fe2o3_kernel_ir::DebugSourceMapErrorV1::ResourceLimit
+                | fe2o3_kernel_ir::DebugSourceMapErrorV1::AllocationFailure
+                | fe2o3_kernel_ir::DebugSourceMapErrorV1::Encoding,
+            )
+            | ProductionPipelineError::SimulationDebugMapV2(
+                fe2o3_kernel_ir::DebugSourceMapErrorV2::InvalidLength
+                | fe2o3_kernel_ir::DebugSourceMapErrorV2::ResourceLimit
+                | fe2o3_kernel_ir::DebugSourceMapErrorV2::AllocationFailure
+                | fe2o3_kernel_ir::DebugSourceMapErrorV2::Encoding,
+            ),
+        ) => crate::production_semantic_debug_v1::ProductionSemanticDebugInputsV1::unavailable(
+            fe2o3_kernel_ir::ProductionSemanticDebugProducerGapV1::ResourceLimit,
+        ),
+        Err(_) => crate::production_semantic_debug_v1::ProductionSemanticDebugInputsV1::unavailable(
+            fe2o3_kernel_ir::ProductionSemanticDebugProducerGapV1::SourceMapUnavailable,
+        ),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn compiler_production_semantic_debug_source_map_v1(
+    lowered: &fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1,
+    rustc_identity_inventory: &crate::collector::AuthenticatedRustcIdentityInventoryV3,
+    rustc_preflight_plan: &crate::collector::AuthenticatedRustcPreflightPlanV3,
+    rustc_target: &crate::production_target_v1::AuthenticatedProductionTargetV1,
+    captured_files: &[fe2o3_kernel_ir::DebugSourceMapFileV1],
+    captured_scopes: &[crate::rustc_semantic_plan_v1::RetainedDebugSourceScopeV2],
+    captured_variables: &[crate::rustc_semantic_plan_v1::RetainedDebugSourceVariableV2],
+) -> Result<
+    (
+        fe2o3_kernel_ir::DebugSourceMapDocumentV2,
+        fe2o3_kernel_ir::VerifiedCanonicalKernelIrV7,
+    ),
+    ProductionPipelineError,
+> {
+    let production_identity = lowered.canonical_kernel_ir_identity();
+    let production_identity = match production_identity.version() {
+        fe2o3_lower_mir_kernel::ProductionCanonicalKernelIrVersionV1::V8 => {
+            fe2o3_kernel_ir::SimulationProductionKirIdentityV1::v8(
+                *production_identity.digest(),
+                production_identity.canonical_length(),
+            )
+            .map_err(ProductionPipelineError::SimulationBundle)?
+        }
+        fe2o3_lower_mir_kernel::ProductionCanonicalKernelIrVersionV1::V9 => {
+            return Err(ProductionPipelineError::SimulationProductionKirV9);
+        }
+    };
+    let canonical_kir =
+        fe2o3_kernel_ir::VerifiedCanonicalKernelIrV7::from_module(lowered.module().clone())
+            .map_err(ProductionPipelineError::SimulationKernelIrV7)?;
+    let mut prepared_kir_bytes = Vec::new();
+    prepared_kir_bytes
+        .try_reserve_exact(canonical_kir.canonical_bytes().len())
+        .map_err(|_| {
+            ProductionPipelineError::SemanticDebugFragment(
+                fe2o3_kernel_ir::ProductionSemanticDebugFragmentErrorV1::AllocationFailure,
+            )
+        })?;
+    prepared_kir_bytes.extend_from_slice(canonical_kir.canonical_bytes());
+    let prepared_kir =
+        fe2o3_kernel_ir::VerifiedCanonicalKernelIrV7::from_canonical_bytes(prepared_kir_bytes)
+            .map_err(ProductionPipelineError::SimulationKernelIrV7)?;
+    let inventory_receipt =
+        fe2o3_compiler_lineage::InertRustcIdentityInventoryReceiptV3::from_canonical_preimage(
+            rustc_identity_inventory.canonical_transcript(),
+        )
+        .map_err(ProductionPipelineError::SimulationSourceLineage)?;
+    let preflight_receipt =
+        fe2o3_compiler_lineage::InertRustcPreflightPlanReceiptV3::from_canonical_preimage(
+            rustc_preflight_plan.canonical_transcript(),
+        )
+        .map_err(ProductionPipelineError::SimulationSourceLineage)?;
+    let inventory_identity = inventory_receipt.identity();
+    let preflight_identity = preflight_receipt.identity();
+    let lineage = fe2o3_kernel_ir::SimulationSourceLineageV1::new(
+        *inventory_identity.sha256(),
+        inventory_identity.byte_len(),
+        *preflight_identity.sha256(),
+        preflight_identity.byte_len(),
+    )
+    .map_err(ProductionPipelineError::SimulationBundle)?;
+    let prepared = fe2o3_kernel_ir::PreparedSimulationBundleV1::new(
+        fe2o3_kernel_ir::SimulationCompilerExecutionBindingV1::UnavailableExtractionOnly,
+        lineage,
+        production_identity,
+        rustc_target.profile().device_target(),
+        prepared_kir,
+    )
+    .map_err(ProductionPipelineError::SimulationBundle)?;
+    let source_map = compiler_debug_source_map_v2(
+        lowered,
+        captured_files,
+        captured_scopes,
+        captured_variables,
+        &prepared,
+    )?;
+    Ok((source_map, canonical_kir))
 }
 
 fn compiler_debug_source_map_v1(
@@ -1256,13 +1420,13 @@ fn compiler_debug_source_map_v2(
         .collect::<BTreeMap<_, _>>();
     for scope in &scopes {
         let identity = scope.span().file_identity();
-        if !files.contains_key(&identity) {
+        if let std::collections::btree_map::Entry::Vacant(entry) = files.entry(identity) {
             let file = captured_files.get(&identity).cloned().ok_or(
                 ProductionPipelineError::SimulationDebugMapCorrespondence(
                     "source-variable scope has no same-session rustc file observation",
                 ),
             )?;
-            files.insert(identity, file);
+            entry.insert(file);
         }
     }
     let mut file_values = Vec::new();
@@ -1517,7 +1681,7 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
             producer,
             output_dir,
             ProductionCompilerCustody::protected(invocation, compiler_execution, build_attempt),
-            crate::rustc_semantic_plan_v1::DebugSourceCaptureRequestV2::Disabled,
+            crate::rustc_semantic_plan_v1::DebugSourceCaptureRequestV2::SourceVariables,
         )
     }
 
@@ -1605,6 +1769,7 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
             debug_source_files,
             debug_source_scopes,
             debug_source_variables,
+            debug_capture_gap,
         } = crate::collector::construct_production_semantic_mir_v1(
             tcx,
             closure,
@@ -1622,6 +1787,7 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
                     debug_source_files,
                     debug_source_scopes,
                     debug_source_variables,
+                    debug_capture_gap,
                     typed_descriptor_roots,
                     transaction,
                 },

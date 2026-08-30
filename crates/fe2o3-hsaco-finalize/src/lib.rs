@@ -98,7 +98,8 @@ pub use reserved_fe2o3_symbols::{
 pub use semantic_debug_map_v1::{
     AdmittedFinalizedSemanticDebugMapV1, FinalizedSemanticDebugMapAdmissionStatusV1,
     FinalizedSemanticDebugMapErrorV1, FinalizedSemanticDebugMapIdentityV1,
-    admit_finalized_semantic_debug_map_v1, admit_finalized_semantic_debug_map_with_inputs_v1,
+    ProductionFinalizedSemanticDebugAdmissionV1, admit_finalized_semantic_debug_map_v1,
+    admit_finalized_semantic_debug_map_with_inputs_v1,
 };
 pub use worker_executor::{
     DEFAULT_WORKER_STDERR_BYTES, DEFAULT_WORKER_TIMEOUT, MAX_WORKER_EXECUTABLE_BYTES,

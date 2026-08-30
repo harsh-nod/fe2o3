@@ -583,6 +583,29 @@ pub struct SemanticDebugMapInputsV1<'a> {
 }
 
 impl SemanticDebugMapDocumentV1 {
+    /// Rebinds only the pre-finalization artifact axis. All compiler input axes and graph
+    /// records are retained and revalidated.
+    pub fn with_finalized_artifact_identity(
+        self,
+        finalized_artifact: SemanticDebugContentIdentityV1,
+    ) -> Result<Self, SemanticDebugMapErrorV1> {
+        let binding = SemanticDebugMapBindingV1::new(
+            self.binding.source_map_v2(),
+            self.binding.semantic_mir(),
+            self.binding.canonical_kir(),
+            self.binding.schedule(),
+            self.binding.llvm_module(),
+            finalized_artifact,
+        )?;
+        Self::new_with_status(
+            binding,
+            self.status,
+            self.nodes,
+            self.mappings,
+            self.boundaries,
+        )
+    }
+
     /// Constructs a complete map. Every non-source node must have a recorded predecessor outcome
     /// and every non-ISA node must have a recorded successor outcome.
     pub fn new(
@@ -743,13 +766,16 @@ impl SemanticDebugMapDocumentV1 {
         canonical_kir.extend_from_slice(inputs.canonical_kir);
         let admitted_kir = VerifiedCanonicalKernelIrV7::from_canonical_bytes(canonical_kir)
             .map_err(|_| SemanticDebugMapErrorV1::InvalidBoundCanonicalKir)?;
+        let decoded_kir = crate::decode_module_v7(admitted_kir.canonical_bytes())
+            .map_err(|_| SemanticDebugMapErrorV1::InvalidBoundCanonicalKir)?;
         let source_map_kir = source_map.binding().canonical_kir();
         if source_map_kir.digest() != *admitted_kir.identity().digest()
             || source_map_kir.canonical_bytes() != admitted_kir.identity().canonical_length()
         {
             return Err(SemanticDebugMapErrorV1::SourceMapKirBindingMismatch);
         }
-        self.validate_source_nodes(&source_map)
+        self.validate_source_nodes(&source_map)?;
+        self.validate_kir_nodes(&decoded_kir)
     }
 
     /// Revalidates the artifact binding and every symbol-relative ISA interval. Entry sizes must
@@ -798,6 +824,44 @@ impl SemanticDebugMapDocumentV1 {
                 .ok_or(SemanticDebugMapErrorV1::InvalidBoundSourceMap)?;
             if span.byte_end() > file.byte_len() {
                 return Err(SemanticDebugMapErrorV1::InvalidBoundSourceMap);
+            }
+            if !source_map
+                .sites()
+                .iter()
+                .any(|site| site.spans().contains(&span))
+            {
+                return Err(SemanticDebugMapErrorV1::InvalidSourceLocation);
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_kir_nodes(&self, module: &crate::Module) -> Result<(), SemanticDebugMapErrorV1> {
+        for node in &self.nodes {
+            let SemanticDebugLocationV1::Kir {
+                function_ordinal,
+                block_ordinal,
+                operation_ordinal,
+            } = node.location
+            else {
+                continue;
+            };
+            let exists = usize::try_from(function_ordinal)
+                .ok()
+                .and_then(|ordinal| module.functions.get(ordinal))
+                .and_then(|function| function.body.as_ref())
+                .and_then(|body| {
+                    usize::try_from(block_ordinal)
+                        .ok()
+                        .and_then(|ordinal| body.blocks.get(ordinal))
+                })
+                .is_some_and(|block| {
+                    usize::try_from(operation_ordinal)
+                        .ok()
+                        .is_some_and(|ordinal| ordinal < block.operations.len())
+                });
+            if !exists {
+                return Err(SemanticDebugMapErrorV1::InvalidKirLocation);
             }
         }
         Ok(())
@@ -1063,6 +1127,9 @@ pub enum SemanticDebugMapErrorV1 {
     InvalidBoundSourceMap,
     InvalidBoundCanonicalKir,
     SourceMapKirBindingMismatch,
+    InvalidSourceLocation,
+    InvalidMirLocation,
+    InvalidKirLocation,
     InvalidIsaInterval,
 }
 
@@ -1296,7 +1363,9 @@ struct HexIdentityV1(#[serde(with = "hex_identity_v1")] [u8; 32]);
 mod tests {
     use super::*;
     use crate::{
-        DebugSourceMapBindingV1, DebugSourceMapFileV1, DebugSourceMapSiteV1, Module,
+        BasicBlock, BlockId, Constant, DebugSourceMapBindingV1, DebugSourceMapFileV1,
+        DebugSourceMapKirSiteV1, DebugSourceMapSiteV1, Function, Module, Operation, OperationKind,
+        ScalarType, Signature, Terminator, Type, ValueDef, ValueId,
         VerifiedCanonicalKernelIrIdentityV7,
     };
 
@@ -1305,12 +1374,32 @@ mod tests {
     }
 
     fn canonical_kir(module_id: &str) -> (Vec<u8>, VerifiedCanonicalKernelIrIdentityV7) {
-        let owner = VerifiedCanonicalKernelIrV7::from_module(Module::new(module_id)).unwrap();
+        let mut module = Module::new(module_id);
+        let mut block = BasicBlock::new(BlockId(0));
+        block.operations.push(Operation::effect_free(
+            ValueDef::new(ValueId(0), Type::Scalar(ScalarType::U32)),
+            OperationKind::Constant(Constant::U32(1)),
+        ));
+        block.terminator = Some(Terminator::Return { values: Vec::new() });
+        module.functions.push(Function::definition(
+            "mapped",
+            Signature::new(Vec::new(), Vec::new()),
+            Vec::new(),
+            vec![block],
+        ));
+        let owner = VerifiedCanonicalKernelIrV7::from_module(module).unwrap();
         let identity = *owner.identity();
         (owner.into_canonical_bytes(), identity)
     }
 
     fn source_map(kir_identity: VerifiedCanonicalKernelIrIdentityV7) -> Vec<u8> {
+        source_map_with_sites(kir_identity, true)
+    }
+
+    fn source_map_with_sites(
+        kir_identity: VerifiedCanonicalKernelIrIdentityV7,
+        include_site: bool,
+    ) -> Vec<u8> {
         DebugSourceMapDocumentV2::new(
             DebugSourceMapBindingV1::new(
                 id(80),
@@ -1319,7 +1408,16 @@ mod tests {
             )
             .unwrap(),
             vec![DebugSourceMapFileV1::new(id(1), 128, "/src/kernel.rs".into()).unwrap()],
-            Vec::<DebugSourceMapSiteV1>::new(),
+            include_site
+                .then(|| {
+                    DebugSourceMapSiteV1::new(
+                        DebugSourceMapKirSiteV1::operation(0, 0, 0),
+                        vec![DebugSourceMapSpanV1::new(id(1), 4, 8, 1, 5).unwrap()],
+                    )
+                    .unwrap()
+                })
+                .into_iter()
+                .collect(),
             Vec::new(),
             Vec::new(),
             Vec::new(),
@@ -1417,7 +1515,7 @@ mod tests {
                 SemanticDebugLocationV1::Kir {
                     function_ordinal: 0,
                     block_ordinal: 0,
-                    operation_ordinal: 2,
+                    operation_ordinal: 0,
                 },
             ),
             node(
@@ -1766,6 +1864,93 @@ mod tests {
         assert_eq!(
             invalid_map.validate_exact_inputs(invalid_inputs.borrowed()),
             Err(SemanticDebugMapErrorV1::InvalidBoundCanonicalKir)
+        );
+
+        let mut invalid_source_nodes = map.nodes().to_vec();
+        let source_index = invalid_source_nodes
+            .iter()
+            .position(|node| node.layer() == SemanticDebugLayerV1::Source)
+            .unwrap();
+        invalid_source_nodes[source_index] = node(
+            10,
+            SemanticDebugLocationV1::Source {
+                span: DebugSourceMapSpanV1::new(id(1), 8, 12, 2, 1).unwrap(),
+            },
+        );
+        let invalid_source = SemanticDebugMapDocumentV1::new(
+            inputs.binding(),
+            invalid_source_nodes,
+            map.mappings().to_vec(),
+        )
+        .unwrap();
+        assert_eq!(
+            invalid_source.validate_exact_inputs(inputs.borrowed()),
+            Err(SemanticDebugMapErrorV1::InvalidSourceLocation)
+        );
+
+        let (_, kir_identity) = canonical_kir("semantic-debug-map-test");
+        let empty_source_sites = Inputs {
+            source_map: source_map_with_sites(kir_identity, false),
+            mir: inputs.mir.clone(),
+            kir: inputs.kir.clone(),
+            schedule: inputs.schedule.clone(),
+            llvm: inputs.llvm.clone(),
+            artifact: inputs.artifact.clone(),
+        };
+        let empty_source_map = SemanticDebugMapDocumentV1::new(
+            empty_source_sites.binding(),
+            map.nodes().to_vec(),
+            map.mappings().to_vec(),
+        )
+        .unwrap();
+        assert_eq!(
+            empty_source_map.validate_exact_inputs(empty_source_sites.borrowed()),
+            Err(SemanticDebugMapErrorV1::InvalidSourceLocation)
+        );
+
+        let mut invalid_kir_nodes = map.nodes().to_vec();
+        let kir_index = invalid_kir_nodes
+            .iter()
+            .position(|node| node.layer() == SemanticDebugLayerV1::Kir)
+            .unwrap();
+        invalid_kir_nodes[kir_index] = node(
+            12,
+            SemanticDebugLocationV1::Kir {
+                function_ordinal: 0,
+                block_ordinal: 0,
+                operation_ordinal: 1,
+            },
+        );
+        let invalid_kir = SemanticDebugMapDocumentV1::new(
+            inputs.binding(),
+            invalid_kir_nodes,
+            map.mappings().to_vec(),
+        )
+        .unwrap();
+        assert_eq!(
+            invalid_kir.validate_exact_inputs(inputs.borrowed()),
+            Err(SemanticDebugMapErrorV1::InvalidKirLocation)
+        );
+
+        let empty_kir = VerifiedCanonicalKernelIrV7::from_module(Module::new("empty")).unwrap();
+        let empty_kir_identity = *empty_kir.identity();
+        let empty_kir_inputs = Inputs {
+            source_map: source_map(empty_kir_identity),
+            mir: inputs.mir.clone(),
+            kir: empty_kir.into_canonical_bytes(),
+            schedule: inputs.schedule.clone(),
+            llvm: inputs.llvm.clone(),
+            artifact: inputs.artifact.clone(),
+        };
+        let empty_kir_map = SemanticDebugMapDocumentV1::new(
+            empty_kir_inputs.binding(),
+            map.nodes().to_vec(),
+            map.mappings().to_vec(),
+        )
+        .unwrap();
+        assert_eq!(
+            empty_kir_map.validate_exact_inputs(empty_kir_inputs.borrowed()),
+            Err(SemanticDebugMapErrorV1::InvalidKirLocation)
         );
     }
 

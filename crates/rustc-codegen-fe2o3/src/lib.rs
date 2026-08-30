@@ -35,6 +35,7 @@ mod production_rustc_driver_v1;
 mod production_rustc_drop_v1;
 mod production_rustc_intrinsic_v1;
 mod production_semantic_body_v1;
+mod production_semantic_debug_v1;
 mod production_semantic_fn_abi_v1;
 mod production_semantic_lineage_v3;
 mod production_semantic_terminal_v1;

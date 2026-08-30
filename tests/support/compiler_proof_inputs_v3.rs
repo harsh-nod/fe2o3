@@ -77,7 +77,14 @@ pub(crate) fn canonical_compiler_proof_inputs_v4(seed: u8) -> CanonicalCompilerP
 pub(crate) fn canonical_compiler_proof_inputs_v4_with_induction(
     seed: u8,
 ) -> CanonicalCompilerProofInputsV3 {
-    canonical_compiler_proof_inputs(seed, semantic_induction_owner(seed), true)
+    canonical_compiler_proof_inputs(seed, semantic_induction_owner(seed, false), true)
+}
+
+#[allow(dead_code, reason = "shared sourceful V4 finalizer fixture")]
+pub(crate) fn canonical_compiler_proof_inputs_v4_with_sourceful_induction(
+    seed: u8,
+) -> CanonicalCompilerProofInputsV3 {
+    canonical_compiler_proof_inputs(seed, semantic_induction_owner(seed, true), true)
 }
 
 fn canonical_compiler_proof_inputs(
@@ -338,7 +345,7 @@ fn semantic_owner(seed: u8) -> ProductionSemanticMirOwnerV1 {
     dead_code,
     reason = "used only by the shared checked-induction V4 fixture"
 )]
-fn semantic_induction_owner(seed: u8) -> ProductionSemanticMirOwnerV1 {
+fn semantic_induction_owner(seed: u8, sourceful: bool) -> ProductionSemanticMirOwnerV1 {
     let unit = SemanticTypeIdV1::from_index(0);
     let u32_ty = SemanticTypeIdV1::from_index(1);
     let bool_ty = SemanticTypeIdV1::from_index(2);
@@ -410,9 +417,26 @@ fn semantic_induction_owner(seed: u8) -> ProductionSemanticMirOwnerV1 {
             SemanticConstantValueV1::Scalar(SemanticScalarValueV1::new(value, 4).unwrap()),
         ))
     };
-    let assign = |destination, ty, value| {
+    let source = |tag: u8| {
+        if !sourceful {
+            return SemanticSourceProvenanceV1::unavailable();
+        }
+        let byte_start = u64::from(tag) * 8;
+        let origin = SemanticSourceOriginV1::new(
+            SemanticSourceFileIdentityV1::from_sha256(bytes(200, seed)),
+            byte_start,
+            byte_start + 4,
+            u32::from(tag) + 1,
+            1,
+            u32::from(tag) + 1,
+            5,
+        )
+        .unwrap();
+        SemanticSourceProvenanceV1::new(None, Some(origin))
+    };
+    let assign = |tag, destination, ty, value| {
         SemanticStatementV1::new(
-            SemanticSourceProvenanceV1::unavailable(),
+            source(tag),
             SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
                 destination,
                 SemanticRvalueV1::new(ty, value),
@@ -424,11 +448,13 @@ fn semantic_induction_owner(seed: u8) -> ProductionSemanticMirOwnerV1 {
     let semantic_block = |tag, statements, terminator| block(tag, seed, statements, terminator);
 
     let initialization = assign(
+        1,
         place(induction, u32_ty),
         u32_ty,
         SemanticRvalueKindV1::Use(constant(0)),
     );
     let guard = assign(
+        2,
         place(predicate, bool_ty),
         bool_ty,
         SemanticRvalueKindV1::Binary {
@@ -438,6 +464,7 @@ fn semantic_induction_owner(seed: u8) -> ProductionSemanticMirOwnerV1 {
         },
     );
     let checked_add = assign(
+        4,
         place(checked_result, checked_u32),
         checked_u32,
         SemanticRvalueKindV1::CheckedBinary(SemanticCheckedBinaryRvalueV1::new(
@@ -447,6 +474,7 @@ fn semantic_induction_owner(seed: u8) -> ProductionSemanticMirOwnerV1 {
         )),
     );
     let update = assign(
+        5,
         place(induction, u32_ty),
         u32_ty,
         SemanticRvalueKindV1::Use(SemanticOperandV1::Move(field(checked_result, 0, u32_ty))),
@@ -475,10 +503,7 @@ fn semantic_induction_owner(seed: u8) -> ProductionSemanticMirOwnerV1 {
         semantic_block(
             112,
             vec![
-                SemanticStatementV1::new(
-                    SemanticSourceProvenanceV1::unavailable(),
-                    SemanticStatementKindV1::Nop,
-                ),
+                SemanticStatementV1::new(source(3), SemanticStatementKindV1::Nop),
                 checked_add,
             ],
             SemanticTerminatorKindV1::Assert {

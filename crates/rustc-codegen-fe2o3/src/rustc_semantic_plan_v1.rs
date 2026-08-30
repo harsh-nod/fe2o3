@@ -129,6 +129,7 @@ struct RetainedRawBodySourceProducerV1 {
     blocks: Box<[RetainedRawBlockSourceProducerV1]>,
     debug_scopes: Box<[RetainedRawDebugSourceScopeV2]>,
     debug_variables: Box<[RetainedRawDebugSourceVariableV2]>,
+    debug_capture_gap: Option<fe2o3_kernel_ir::ProductionSemanticDebugProducerGapV1>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -191,6 +192,7 @@ pub(crate) struct RetainedSemanticBodyProducerV1 {
     pub(crate) raw_to_semantic_blocks: Box<[SemanticBlockIdV1]>,
     pub(crate) debug_scopes: Box<[RetainedDebugSourceScopeV2]>,
     pub(crate) debug_variables: Box<[RetainedDebugSourceVariableV2]>,
+    pub(crate) debug_capture_gap: Option<fe2o3_kernel_ir::ProductionSemanticDebugProducerGapV1>,
 }
 
 struct CanonicalProducerTablesV1<'tcx> {
@@ -344,6 +346,7 @@ pub(crate) struct ProductionSemanticPreflightPlanV1<'tcx> {
     terminal_expansions: Box<[TerminalExpansionRecipeV1<'tcx>]>,
     normalized_intrinsics: Box<[NormalizedRustcIntrinsicRecipeV1<'tcx>]>,
     debug_source_files: Box<[fe2o3_kernel_ir::DebugSourceMapFileV1]>,
+    debug_capture_gap: Option<fe2o3_kernel_ir::ProductionSemanticDebugProducerGapV1>,
     sha256: [u8; 32],
     canonical_transcript: Box<[u8]>,
 }
@@ -400,6 +403,7 @@ impl<'tcx> ProductionSemanticPreflightPlanV1<'tcx> {
             Box<[fe2o3_kernel_ir::DebugSourceMapFileV1]>,
             Box<[RetainedDebugSourceScopeV2]>,
             Box<[RetainedDebugSourceVariableV2]>,
+            Option<fe2o3_kernel_ir::ProductionSemanticDebugProducerGapV1>,
         ),
         ProductionSemanticPreflightErrorV1,
     > {
@@ -409,20 +413,29 @@ impl<'tcx> ProductionSemanticPreflightPlanV1<'tcx> {
         let variable_count = self.bodies.iter().try_fold(0_usize, |count, body| {
             count.checked_add(body.debug_variables.len())
         });
-        let (Some(scope_count), Some(variable_count)) = (scope_count, variable_count) else {
-            return Err(ProductionSemanticPreflightErrorV1::IdentityTableMismatch);
+        let mut debug_capture_gap = self.debug_capture_gap;
+        let (scope_count, variable_count) = match (scope_count, variable_count) {
+            (Some(scope_count), Some(variable_count)) => (scope_count, variable_count),
+            _ => {
+                debug_capture_gap =
+                    Some(fe2o3_kernel_ir::ProductionSemanticDebugProducerGapV1::ResourceLimit);
+                (0, 0)
+            }
         };
         let mut debug_source_scopes = Vec::new();
         let mut debug_source_variables = Vec::new();
-        debug_source_scopes
-            .try_reserve_exact(scope_count)
-            .map_err(|_| ProductionSemanticPreflightErrorV1::IdentityTableMismatch)?;
-        debug_source_variables
-            .try_reserve_exact(variable_count)
-            .map_err(|_| ProductionSemanticPreflightErrorV1::IdentityTableMismatch)?;
-        for body in self.bodies.into_vec() {
-            debug_source_scopes.extend(body.debug_scopes.into_vec());
-            debug_source_variables.extend(body.debug_variables.into_vec());
+        let reserved = debug_source_scopes.try_reserve_exact(scope_count).is_ok()
+            && debug_source_variables
+                .try_reserve_exact(variable_count)
+                .is_ok();
+        if reserved && debug_capture_gap.is_none() {
+            for body in self.bodies.into_vec() {
+                debug_source_scopes.extend(body.debug_scopes.into_vec());
+                debug_source_variables.extend(body.debug_variables.into_vec());
+            }
+        } else if !reserved {
+            debug_capture_gap =
+                Some(fe2o3_kernel_ir::ProductionSemanticDebugProducerGapV1::ResourceLimit);
         }
         Ok((
             self.sha256,
@@ -430,6 +443,7 @@ impl<'tcx> ProductionSemanticPreflightPlanV1<'tcx> {
             self.debug_source_files,
             debug_source_scopes.into_boxed_slice(),
             debug_source_variables.into_boxed_slice(),
+            debug_capture_gap,
         ))
     }
 }
@@ -542,6 +556,53 @@ struct BodyPreflightV1<'a, 'tcx> {
 pub(crate) enum DebugSourceCaptureRequestV2 {
     Disabled,
     SourceVariables,
+}
+
+#[derive(Default)]
+struct OptionalDebugCaptureBudgetV2 {
+    variables: usize,
+    scopes: usize,
+}
+
+impl OptionalDebugCaptureBudgetV2 {
+    fn charge_variables(
+        &mut self,
+        amount: usize,
+    ) -> Result<(), ProductionSemanticPreflightErrorV1> {
+        self.variables = charge_optional_debug_count_v2(
+            self.variables,
+            amount,
+            fe2o3_kernel_ir::MAX_DEBUG_SOURCE_VARIABLES_V2,
+        )?;
+        Ok(())
+    }
+
+    fn charge_scopes(&mut self, amount: usize) -> Result<(), ProductionSemanticPreflightErrorV1> {
+        self.scopes = charge_optional_debug_count_v2(
+            self.scopes,
+            amount,
+            fe2o3_kernel_ir::MAX_DEBUG_SOURCE_SCOPES_V2,
+        )?;
+        Ok(())
+    }
+}
+
+fn charge_optional_debug_count_v2(
+    current: usize,
+    amount: usize,
+    maximum: usize,
+) -> Result<usize, ProductionSemanticPreflightErrorV1> {
+    let actual = current
+        .checked_add(amount)
+        .ok_or(ProductionSemanticPreflightErrorV1::IdentityTableMismatch)?;
+    if actual > maximum {
+        return Err(ProductionSemanticPreflightErrorV1::LimitExceeded {
+            resource: SemanticMirResourceV1::Locals,
+            actual: u64::try_from(actual).unwrap_or(u64::MAX),
+            maximum: maximum as u64,
+        });
+    }
+    Ok(actual)
 }
 
 pub(crate) fn build_production_semantic_preflight_plan_v1<'tcx>(
@@ -760,6 +821,9 @@ pub(crate) fn build_production_semantic_preflight_plan_v1<'tcx>(
     let mut source_producers = Vec::with_capacity(functions.len());
     let mut source_cache = HashMap::new();
     let mut debug_source_files = BTreeMap::new();
+    let mut debug_counts = RawMirPreflightCountsV1::default();
+    let mut debug_budget = OptionalDebugCaptureBudgetV2::default();
+    let mut debug_capture_gap = None;
     for (index, function) in functions.iter().enumerate() {
         let function_id = SemanticFunctionIdV1::from_index(index as u32);
         let body = tcx.instance_mir(function.instance.def);
@@ -770,12 +834,21 @@ pub(crate) fn build_production_semantic_preflight_plan_v1<'tcx>(
             &mut source_cache,
             &mut debug_source_files,
             &mut counts,
+            &mut debug_counts,
+            &mut debug_budget,
             limits,
-            debug_source_capture,
+            if debug_capture_gap.is_none() {
+                debug_source_capture
+            } else {
+                DebugSourceCaptureRequestV2::Disabled
+            },
         )
         .map_err(|rejection| {
             materialize_rejection_v1(tcx, &functions, &roots, &edges, rejection)
         })?;
+        if debug_capture_gap.is_none() {
+            debug_capture_gap = sources.debug_capture_gap;
+        }
         source_producers.push(sources);
         let mut preflight = BodyPreflightV1 {
             tcx,
@@ -875,6 +948,7 @@ pub(crate) fn build_production_semantic_preflight_plan_v1<'tcx>(
         source_files,
         bodies,
     } = build_canonical_producer_tables_v1(tcx, target, &functions, source_producers, types)?;
+    let debug_capture_gap = bodies.iter().find_map(|body| body.debug_capture_gap);
 
     let direct_calls = direct_calls.into_iter().collect::<Box<[_]>>();
     let terminal_expansions = terminal_expansions.into_boxed_slice();
@@ -907,6 +981,7 @@ pub(crate) fn build_production_semantic_preflight_plan_v1<'tcx>(
         terminal_expansions,
         normalized_intrinsics,
         debug_source_files: debug_source_files.into_values().collect(),
+        debug_capture_gap,
         sha256,
         canonical_transcript,
     })
@@ -1429,6 +1504,8 @@ fn capture_body_sources_v1<'tcx>(
     cache: &mut HashMap<Span, RetainedSemanticSourceProducerV1>,
     debug_source_files: &mut BTreeMap<[u8; 32], fe2o3_kernel_ir::DebugSourceMapFileV1>,
     counts: &mut RawMirPreflightCountsV1,
+    debug_counts: &mut RawMirPreflightCountsV1,
+    debug_budget: &mut OptionalDebugCaptureBudgetV2,
     limits: SemanticMirLimitsV1,
     debug_source_capture: DebugSourceCaptureRequestV2,
 ) -> Result<RetainedRawBodySourceProducerV1, PendingRejectionV1> {
@@ -1528,28 +1605,104 @@ fn capture_body_sources_v1<'tcx>(
             terminator,
         });
     }
-    let (debug_scopes, debug_variables) =
-        with_debug_source_capture_v2(debug_source_capture, || {
-            capture_debug_sources_v2(
-                tcx,
-                body,
-                function_site,
-                cache,
-                debug_source_files,
-                counts,
-                limits,
-            )
-        })?
-        .unwrap_or_else(|| (Box::new([]), Box::new([])));
+    let (debug_scopes, debug_variables, debug_capture_gap) = match debug_source_capture {
+        DebugSourceCaptureRequestV2::Disabled => (
+            Box::<[RetainedRawDebugSourceScopeV2]>::default(),
+            Box::<[RetainedRawDebugSourceVariableV2]>::default(),
+            None,
+        ),
+        DebugSourceCaptureRequestV2::SourceVariables => {
+            let mut debug_cache = HashMap::new();
+            let mut captured_files = BTreeMap::new();
+            match observe_optional_debug_capture_v2(|| {
+                capture_debug_sources_v2(
+                    tcx,
+                    body,
+                    function_site,
+                    &mut debug_cache,
+                    &mut captured_files,
+                    debug_counts,
+                    debug_budget,
+                    limits,
+                )
+            }) {
+                Ok(Ok((scopes, variables))) => {
+                    let consistent = captured_files.iter().all(|(identity, file)| {
+                        debug_source_files
+                            .get(identity)
+                            .is_none_or(|existing| existing == file)
+                    });
+                    if consistent {
+                        debug_source_files.extend(captured_files);
+                        (scopes, variables, None)
+                    } else {
+                        (
+                            Box::<[RetainedRawDebugSourceScopeV2]>::default(),
+                            Box::<[RetainedRawDebugSourceVariableV2]>::default(),
+                            Some(fe2o3_kernel_ir::ProductionSemanticDebugProducerGapV1::SourceObservationUnrepresentable),
+                        )
+                    }
+                }
+                Ok(Err(gap)) => (
+                    Box::<[RetainedRawDebugSourceScopeV2]>::default(),
+                    Box::<[RetainedRawDebugSourceVariableV2]>::default(),
+                    Some(gap),
+                ),
+                Err(error) => return Err(error),
+            }
+        }
+    };
     Ok(RetainedRawBodySourceProducerV1 {
         source,
         locals: locals.into_boxed_slice(),
         blocks: blocks.into_boxed_slice(),
         debug_scopes,
         debug_variables,
+        debug_capture_gap,
     })
 }
 
+fn classify_optional_debug_rejection_v2(
+    error: &PendingRejectionV1,
+) -> Option<fe2o3_kernel_ir::ProductionSemanticDebugProducerGapV1> {
+    match error {
+        PendingRejectionV1::Fatal(
+            ProductionSemanticPreflightErrorV1::LimitExceeded { .. }
+            | ProductionSemanticPreflightErrorV1::AccountingDomain { .. }
+            | ProductionSemanticPreflightErrorV1::IdentityTableMismatch,
+        ) => Some(fe2o3_kernel_ir::ProductionSemanticDebugProducerGapV1::ResourceLimit),
+        PendingRejectionV1::Unsupported { .. } => Some(
+            fe2o3_kernel_ir::ProductionSemanticDebugProducerGapV1::SourceObservationUnrepresentable,
+        ),
+        PendingRejectionV1::Fatal(_) => None,
+    }
+}
+
+fn observe_optional_debug_capture_v2<T>(
+    capture: impl FnOnce() -> Result<T, PendingRejectionV1>,
+) -> Result<Result<T, fe2o3_kernel_ir::ProductionSemanticDebugProducerGapV1>, PendingRejectionV1> {
+    match capture() {
+        Ok(value) => Ok(Ok(value)),
+        Err(error) => match classify_optional_debug_rejection_v2(&error) {
+            Some(gap) => Ok(Err(gap)),
+            None => Err(error),
+        },
+    }
+}
+
+fn exact_debug_variable_name_or_rejection_v2(
+    name: &str,
+    site: RejectionSiteV1,
+) -> Result<String, PendingRejectionV1> {
+    exact_debug_variable_name_v2(name).ok_or_else(|| {
+        reject(
+            "source debug variable name is not exactly representable",
+            site,
+        )
+    })
+}
+
+#[cfg(test)]
 fn with_debug_source_capture_v2<T, E>(
     request: DebugSourceCaptureRequestV2,
     capture: impl FnOnce() -> Result<T, E>,
@@ -1568,6 +1721,7 @@ fn capture_debug_sources_v2<'tcx>(
     cache: &mut HashMap<Span, RetainedSemanticSourceProducerV1>,
     debug_source_files: &mut BTreeMap<[u8; 32], fe2o3_kernel_ir::DebugSourceMapFileV1>,
     counts: &mut RawMirPreflightCountsV1,
+    budget: &mut OptionalDebugCaptureBudgetV2,
     limits: SemanticMirLimitsV1,
 ) -> Result<
     (
@@ -1576,15 +1730,9 @@ fn capture_debug_sources_v2<'tcx>(
     ),
     PendingRejectionV1,
 > {
-    if body.var_debug_info.len() > fe2o3_kernel_ir::MAX_DEBUG_SOURCE_VARIABLES_V2 {
-        return Err(PendingRejectionV1::Fatal(
-            ProductionSemanticPreflightErrorV1::LimitExceeded {
-                resource: SemanticMirResourceV1::Locals,
-                actual: u64::try_from(body.var_debug_info.len()).unwrap_or(u64::MAX),
-                maximum: fe2o3_kernel_ir::MAX_DEBUG_SOURCE_VARIABLES_V2 as u64,
-            },
-        ));
-    }
+    budget
+        .charge_variables(body.var_debug_info.len())
+        .map_err(PendingRejectionV1::Fatal)?;
     counts
         .charge(
             SemanticMirResourceV1::ValidationWork,
@@ -1630,6 +1778,7 @@ fn capture_debug_sources_v2<'tcx>(
             current = data.parent_scope;
         }
         let name = variable.name.as_str();
+        let exact_name = exact_debug_variable_name_or_rejection_v2(name, function_site)?;
         let mut name_digest = SemanticIdentityDigestV1::new(b"fe2o3/debug/source-variable/name/v2");
         name_digest.field(name.as_bytes());
         let (class, entry_value_preserved) = match &variable.value {
@@ -1649,7 +1798,7 @@ fn capture_debug_sources_v2<'tcx>(
         };
         variables.push(RetainedRawDebugSourceVariableV2 {
             ordinal,
-            exact_name: exact_debug_variable_name_v2(name),
+            exact_name: Some(exact_name),
             name_sha256: name_digest.finish(),
             raw_scope,
             class,
@@ -1665,6 +1814,9 @@ fn capture_debug_sources_v2<'tcx>(
             },
         ));
     }
+    budget
+        .charge_scopes(referenced_scopes.len())
+        .map_err(PendingRejectionV1::Fatal)?;
     counts
         .charge(
             SemanticMirResourceV1::ValidationWork,
@@ -2322,91 +2474,30 @@ fn build_canonical_producer_tables_v1<'tcx>(
             .copied()
             .ok_or(ProductionSemanticPreflightErrorV1::IdentityTableMismatch)?;
 
-        let mut scope_identity_by_raw = BTreeMap::new();
-        for scope in &raw_sources.debug_scopes {
-            let mut digest =
-                SemanticIdentityDigestV1::new(b"fe2o3/debug/source-scope/logical-identity/v2");
-            digest.field(function_identity.as_bytes());
-            digest.field(&scope.raw_scope.to_le_bytes());
-            digest.field(&scope.source.expansion_chain_sha256);
-            if scope_identity_by_raw
-                .insert(scope.raw_scope, digest.finish())
-                .is_some()
-            {
-                return Err(ProductionSemanticPreflightErrorV1::IdentityTableMismatch);
-            }
-        }
-        let mut debug_scopes = Vec::new();
-        debug_scopes
-            .try_reserve_exact(raw_sources.debug_scopes.len())
-            .map_err(|_| ProductionSemanticPreflightErrorV1::IdentityTableMismatch)?;
-        for scope in &raw_sources.debug_scopes {
-            debug_scopes.push(RetainedDebugSourceScopeV2 {
-                identity: *scope_identity_by_raw
-                    .get(&scope.raw_scope)
-                    .ok_or(ProductionSemanticPreflightErrorV1::IdentityTableMismatch)?,
-                function: function_id,
-                parent_identity: scope
-                    .parent_raw_scope
-                    .map(|parent| {
-                        scope_identity_by_raw
-                            .get(&parent)
-                            .copied()
-                            .ok_or(ProductionSemanticPreflightErrorV1::IdentityTableMismatch)
-                    })
-                    .transpose()?,
-                depth: scope.depth,
-                source: scope.source.provenance,
-            });
-        }
-        let mut debug_variables = Vec::new();
-        debug_variables
-            .try_reserve_exact(raw_sources.debug_variables.len())
-            .map_err(|_| ProductionSemanticPreflightErrorV1::IdentityTableMismatch)?;
-        for variable in &raw_sources.debug_variables {
-            let class = match variable.class {
-                RetainedRawDebugSourceVariableClassV2::Local(raw) => {
-                    let semantic = raw_to_semantic_locals
-                        .get(raw as usize)
-                        .copied()
-                        .ok_or(ProductionSemanticPreflightErrorV1::IdentityTableMismatch)?;
-                    RetainedDebugSourceVariableClassV2::Local(semantic)
-                }
-                RetainedRawDebugSourceVariableClassV2::Unrepresented => {
-                    RetainedDebugSourceVariableClassV2::Unrepresented
+        let (debug_scopes, debug_variables, debug_capture_gap) =
+            if let Some(gap) = raw_sources.debug_capture_gap {
+                (
+                    Box::<[RetainedDebugSourceScopeV2]>::default(),
+                    Box::<[RetainedDebugSourceVariableV2]>::default(),
+                    Some(gap),
+                )
+            } else {
+                match convert_debug_sources_v2(
+                    function_id,
+                    function_identity,
+                    &raw_sources.debug_scopes,
+                    &raw_sources.debug_variables,
+                    &raw_to_semantic_locals,
+                    &locals,
+                ) {
+                    Ok((scopes, variables)) => (scopes, variables, None),
+                    Err(_) => (
+                        Box::<[RetainedDebugSourceScopeV2]>::default(),
+                        Box::<[RetainedDebugSourceVariableV2]>::default(),
+                        Some(fe2o3_kernel_ir::ProductionSemanticDebugProducerGapV1::ResourceLimit),
+                    ),
                 }
             };
-            let scope_identity = *scope_identity_by_raw
-                .get(&variable.raw_scope)
-                .ok_or(ProductionSemanticPreflightErrorV1::IdentityTableMismatch)?;
-            let mut digest =
-                SemanticIdentityDigestV1::new(b"fe2o3/debug/source-variable/logical-identity/v2");
-            digest.field(function_identity.as_bytes());
-            digest.field(&variable.ordinal.to_le_bytes());
-            digest.field(&scope_identity);
-            digest.field(&variable.name_sha256);
-            match class {
-                RetainedDebugSourceVariableClassV2::Local(local) => {
-                    digest.field(&[0]);
-                    digest.field(
-                        locals
-                            .get(local.index() as usize)
-                            .ok_or(ProductionSemanticPreflightErrorV1::IdentityTableMismatch)?
-                            .identity
-                            .as_bytes(),
-                    );
-                }
-                RetainedDebugSourceVariableClassV2::Unrepresented => digest.field(&[1]),
-            }
-            debug_variables.push(RetainedDebugSourceVariableV2 {
-                identity: digest.finish(),
-                function: function_id,
-                name: variable.exact_name.clone(),
-                scope_identity,
-                class,
-                entry_value_preserved: variable.entry_value_preserved,
-            });
-        }
 
         bodies.push(RetainedSemanticBodyProducerV1 {
             function: function_id,
@@ -2416,8 +2507,9 @@ fn build_canonical_producer_tables_v1<'tcx>(
             entry,
             blocks: blocks.into_boxed_slice(),
             raw_to_semantic_blocks: raw_to_semantic_blocks.into_boxed_slice(),
-            debug_scopes: debug_scopes.into_boxed_slice(),
-            debug_variables: debug_variables.into_boxed_slice(),
+            debug_scopes,
+            debug_variables,
+            debug_capture_gap,
         });
     }
     let mut source_files = BTreeSet::new();
@@ -2442,6 +2534,109 @@ fn build_canonical_producer_tables_v1<'tcx>(
         source_files: source_files.into_iter().collect(),
         bodies: bodies.into_boxed_slice(),
     })
+}
+
+fn convert_debug_sources_v2(
+    function: SemanticFunctionIdV1,
+    function_identity: SemanticFunctionIdentityV1,
+    raw_scopes: &[RetainedRawDebugSourceScopeV2],
+    raw_variables: &[RetainedRawDebugSourceVariableV2],
+    raw_to_semantic_locals: &[SemanticLocalIdV1],
+    locals: &[RetainedSemanticLocalProducerV1],
+) -> Result<
+    (
+        Box<[RetainedDebugSourceScopeV2]>,
+        Box<[RetainedDebugSourceVariableV2]>,
+    ),
+    ProductionSemanticPreflightErrorV1,
+> {
+    let mut scope_identity_by_raw = BTreeMap::new();
+    for scope in raw_scopes {
+        let mut digest =
+            SemanticIdentityDigestV1::new(b"fe2o3/debug/source-scope/logical-identity/v2");
+        digest.field(function_identity.as_bytes());
+        digest.field(&scope.raw_scope.to_le_bytes());
+        digest.field(&scope.source.expansion_chain_sha256);
+        if scope_identity_by_raw
+            .insert(scope.raw_scope, digest.finish())
+            .is_some()
+        {
+            return Err(ProductionSemanticPreflightErrorV1::IdentityTableMismatch);
+        }
+    }
+    let mut scopes = Vec::new();
+    scopes
+        .try_reserve_exact(raw_scopes.len())
+        .map_err(|_| ProductionSemanticPreflightErrorV1::IdentityTableMismatch)?;
+    for scope in raw_scopes {
+        scopes.push(RetainedDebugSourceScopeV2 {
+            identity: *scope_identity_by_raw
+                .get(&scope.raw_scope)
+                .ok_or(ProductionSemanticPreflightErrorV1::IdentityTableMismatch)?,
+            function,
+            parent_identity: scope
+                .parent_raw_scope
+                .map(|parent| {
+                    scope_identity_by_raw
+                        .get(&parent)
+                        .copied()
+                        .ok_or(ProductionSemanticPreflightErrorV1::IdentityTableMismatch)
+                })
+                .transpose()?,
+            depth: scope.depth,
+            source: scope.source.provenance,
+        });
+    }
+    let mut variables = Vec::new();
+    variables
+        .try_reserve_exact(raw_variables.len())
+        .map_err(|_| ProductionSemanticPreflightErrorV1::IdentityTableMismatch)?;
+    for variable in raw_variables {
+        let class = match variable.class {
+            RetainedRawDebugSourceVariableClassV2::Local(raw) => {
+                RetainedDebugSourceVariableClassV2::Local(
+                    raw_to_semantic_locals
+                        .get(raw as usize)
+                        .copied()
+                        .ok_or(ProductionSemanticPreflightErrorV1::IdentityTableMismatch)?,
+                )
+            }
+            RetainedRawDebugSourceVariableClassV2::Unrepresented => {
+                RetainedDebugSourceVariableClassV2::Unrepresented
+            }
+        };
+        let scope_identity = *scope_identity_by_raw
+            .get(&variable.raw_scope)
+            .ok_or(ProductionSemanticPreflightErrorV1::IdentityTableMismatch)?;
+        let mut digest =
+            SemanticIdentityDigestV1::new(b"fe2o3/debug/source-variable/logical-identity/v2");
+        digest.field(function_identity.as_bytes());
+        digest.field(&variable.ordinal.to_le_bytes());
+        digest.field(&scope_identity);
+        digest.field(&variable.name_sha256);
+        match class {
+            RetainedDebugSourceVariableClassV2::Local(local) => {
+                digest.field(&[0]);
+                digest.field(
+                    locals
+                        .get(local.index() as usize)
+                        .ok_or(ProductionSemanticPreflightErrorV1::IdentityTableMismatch)?
+                        .identity
+                        .as_bytes(),
+                );
+            }
+            RetainedDebugSourceVariableClassV2::Unrepresented => digest.field(&[1]),
+        }
+        variables.push(RetainedDebugSourceVariableV2 {
+            identity: digest.finish(),
+            function,
+            name: variable.exact_name.clone(),
+            scope_identity,
+            class,
+            entry_value_preserved: variable.entry_value_preserved,
+        });
+    }
+    Ok((scopes.into_boxed_slice(), variables.into_boxed_slice()))
 }
 
 fn remember_source_files_v1(
@@ -3055,6 +3250,108 @@ mod tests {
         assert_eq!(exact_debug_variable_name_v2(""), None);
         assert_eq!(exact_debug_variable_name_v2("line\nbreak"), None);
         assert_eq!(exact_debug_variable_name_v2(&"x".repeat(maximum + 1)), None);
+    }
+
+    #[test]
+    fn optional_debug_count_allocation_and_name_failures_are_typed_gaps() {
+        let mut budget = OptionalDebugCaptureBudgetV2::default();
+        budget
+            .charge_variables(fe2o3_kernel_ir::MAX_DEBUG_SOURCE_VARIABLES_V2)
+            .unwrap();
+        let count_error = PendingRejectionV1::Fatal(budget.charge_variables(1).unwrap_err());
+        assert_eq!(
+            classify_optional_debug_rejection_v2(&count_error),
+            Some(fe2o3_kernel_ir::ProductionSemanticDebugProducerGapV1::ResourceLimit)
+        );
+        let mut scope_budget = OptionalDebugCaptureBudgetV2::default();
+        scope_budget
+            .charge_scopes(fe2o3_kernel_ir::MAX_DEBUG_SOURCE_SCOPES_V2)
+            .unwrap();
+        assert!(scope_budget.charge_scopes(1).is_err());
+
+        let allocation_error =
+            PendingRejectionV1::Fatal(ProductionSemanticPreflightErrorV1::IdentityTableMismatch);
+        assert_eq!(
+            classify_optional_debug_rejection_v2(&allocation_error),
+            Some(fe2o3_kernel_ir::ProductionSemanticDebugProducerGapV1::ResourceLimit)
+        );
+
+        let site = RejectionSiteV1 {
+            function: SemanticFunctionIdV1::from_index(0),
+            block: None,
+            statement: None,
+            local: None,
+            span: rustc_span::DUMMY_SP,
+        };
+        let name_error = exact_debug_variable_name_or_rejection_v2(
+            &"x".repeat(fe2o3_kernel_ir::MAX_DEBUG_SOURCE_VARIABLE_NAME_BYTES_V2 + 1),
+            site,
+        )
+        .unwrap_err();
+        assert_eq!(
+            classify_optional_debug_rejection_v2(&name_error),
+            Some(
+                fe2o3_kernel_ir::ProductionSemanticDebugProducerGapV1::SourceObservationUnrepresentable
+            )
+        );
+    }
+
+    #[test]
+    fn every_debug_only_failure_leaves_the_ordinary_artifact_path_unchanged() {
+        let ordinary_artifact = [0x5a; 32];
+        let mut budget = OptionalDebugCaptureBudgetV2::default();
+        budget
+            .charge_variables(fe2o3_kernel_ir::MAX_DEBUG_SOURCE_VARIABLES_V2)
+            .unwrap();
+        let over_limit = PendingRejectionV1::Fatal(budget.charge_variables(1).unwrap_err());
+        let allocation =
+            PendingRejectionV1::Fatal(ProductionSemanticPreflightErrorV1::IdentityTableMismatch);
+        let site = RejectionSiteV1 {
+            function: SemanticFunctionIdV1::from_index(0),
+            block: None,
+            statement: None,
+            local: None,
+            span: rustc_span::DUMMY_SP,
+        };
+        let overlong_name = exact_debug_variable_name_or_rejection_v2(
+            &"x".repeat(fe2o3_kernel_ir::MAX_DEBUG_SOURCE_VARIABLE_NAME_BYTES_V2 + 1),
+            site,
+        )
+        .unwrap_err();
+
+        for (error, expected) in [
+            (
+                over_limit,
+                fe2o3_kernel_ir::ProductionSemanticDebugProducerGapV1::ResourceLimit,
+            ),
+            (
+                allocation,
+                fe2o3_kernel_ir::ProductionSemanticDebugProducerGapV1::ResourceLimit,
+            ),
+            (
+                overlong_name,
+                fe2o3_kernel_ir::ProductionSemanticDebugProducerGapV1::SourceObservationUnrepresentable,
+            ),
+        ] {
+            let observed = match observe_optional_debug_capture_v2::<()>(|| Err(error)) {
+                Ok(observed) => observed,
+                Err(_) => panic!("debug-only rejection escaped the observational boundary"),
+            };
+            assert_eq!(observed.unwrap_err(), expected);
+            assert_eq!(ordinary_artifact, [0x5a; 32]);
+        }
+
+        let structural =
+            PendingRejectionV1::Fatal(ProductionSemanticPreflightErrorV1::TypeIdentityCollision);
+        assert!(observe_optional_debug_capture_v2::<()>(|| Err(structural)).is_err());
+        assert_eq!(ordinary_artifact, [0x5a; 32]);
+    }
+
+    #[test]
+    fn optional_debug_fallback_never_hides_structural_preflight_failures() {
+        let structural =
+            PendingRejectionV1::Fatal(ProductionSemanticPreflightErrorV1::TypeIdentityCollision);
+        assert_eq!(classify_optional_debug_rejection_v2(&structural), None);
     }
 
     #[test]
