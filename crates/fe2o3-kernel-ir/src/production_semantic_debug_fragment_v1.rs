@@ -196,7 +196,7 @@ pub enum ProductionSemanticDebugProducerCapabilityV1 {
     ExactSourceMirKir,
     ScheduleUnavailableNoProductionStage,
     InstructionLlvmUnavailableNoCorrespondence,
-    CanonicalKirV7ProjectionUnavailable,
+    ExactCanonicalKirV7DebugProjection,
 }
 
 impl ProductionScheduleStatusV1 {
@@ -279,7 +279,7 @@ impl ProductionSemanticDebugFragmentV1 {
             ProductionSemanticDebugProducerCapabilityV1::ExactSourceMirKir,
             ProductionSemanticDebugProducerCapabilityV1::ScheduleUnavailableNoProductionStage,
             ProductionSemanticDebugProducerCapabilityV1::InstructionLlvmUnavailableNoCorrespondence,
-            ProductionSemanticDebugProducerCapabilityV1::CanonicalKirV7ProjectionUnavailable,
+            ProductionSemanticDebugProducerCapabilityV1::ExactCanonicalKirV7DebugProjection,
         ]
     }
 

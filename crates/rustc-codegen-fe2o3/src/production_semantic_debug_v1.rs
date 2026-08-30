@@ -13,7 +13,7 @@ use fe2o3_kernel_ir::{
     SemanticDebugContentIdentityV1, SemanticDebugLayerV1, SemanticDebugLocationV1,
     SemanticDebugMapBindingV1, SemanticDebugMapDocumentV1, SemanticDebugMapErrorV1,
     SemanticDebugMappingOutputV1, SemanticDebugMappingV1, SemanticDebugNodeV1,
-    SemanticDebugTransformationV1, VerifiedCanonicalKernelIrV7,
+    SemanticDebugTransformationV1, SemanticDebugUnavailableReasonV1, VerifiedCanonicalKernelIrV7,
 };
 use fe2o3_lower_mir_kernel::{
     InertCanonicalMirToKirCorrespondenceEvidenceV4, ProductionSemanticKirOwnerV1,
@@ -253,16 +253,15 @@ pub(crate) fn prepare_production_semantic_debug_v1(
         ));
     }
 
-    let counts = correspondence
-        .statement_spans()
-        .iter()
-        .filter(|span| span.operation_count() != 0)
-        .try_fold((0_usize, 0_usize), |(statements, operations), span| {
+    let counts = correspondence.statement_spans().iter().try_fold(
+        (0_usize, 0_usize),
+        |(statements, operations), span| {
             Some((
                 statements.checked_add(1)?,
                 operations.checked_add(span.operation_count() as usize)?,
             ))
-        });
+        },
+    );
     let Some((statement_count, operation_count)) = counts else {
         return Ok(PreparedProductionSemanticDebugV1::Unavailable(
             ProductionSemanticDebugProducerGapV1::ResourceLimit,
@@ -296,9 +295,6 @@ pub(crate) fn prepare_production_semantic_debug_v1(
         ));
     }
     for span in correspondence.statement_spans() {
-        if span.operation_count() == 0 {
-            continue;
-        }
         let source = lowered
             .semantic()
             .resolve_statement(
@@ -322,26 +318,24 @@ pub(crate) fn prepare_production_semantic_debug_v1(
                 ))?;
         let (byte_start, byte_end) = origin.byte_range();
         let (line, column) = origin.start_coordinate();
-        let source_span = DebugSourceMapSpanV1::new(
-            *origin.file().as_bytes(),
-            byte_start,
-            byte_end,
-            line,
-            column,
-        )
-        .map_err(ProductionPipelineError::SimulationDebugMap)?;
-        let block_ordinal = u64::try_from(
-            *block_ordinals
-                .get(&fe2o3_kernel_ir::BlockId(span.kernel_ir_block()))
-                .ok_or(ProductionPipelineError::SimulationDebugMapCorrespondence(
-                    "statement debug correspondence names an unknown KIR block",
-                ))?,
-        )
-        .map_err(|_| {
-            ProductionPipelineError::SimulationDebugMapCorrespondence(
-                "KIR block ordinal exceeds the semantic debug wire",
+        let source_span = if span.operation_count() == 0 {
+            DebugSourceMapSpanV1::new_eliminated(
+                *origin.file().as_bytes(),
+                byte_start,
+                byte_end,
+                line,
+                column,
             )
-        })?;
+        } else {
+            DebugSourceMapSpanV1::new(
+                *origin.file().as_bytes(),
+                byte_start,
+                byte_end,
+                line,
+                column,
+            )
+        }
+        .map_err(ProductionPipelineError::SimulationDebugMap)?;
         let source_id = node_identity(
             context,
             1,
@@ -378,6 +372,38 @@ pub(crate) fn prepare_production_semantic_debug_v1(
             vec![source_id],
             SemanticDebugMappingOutputV1::available(vec![mir_id]),
         )));
+
+        if span.operation_count() == 0 {
+            if source_map.eliminated().binary_search(&source_span).is_err() {
+                return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
+                    "eliminated semantic statement span is absent from exact Source Map V2",
+                ));
+            }
+            mappings.push(semantic_map_value!(SemanticDebugMappingV1::new(
+                mapping_identity(context, 2, mir_id, 0),
+                SemanticDebugLayerV1::Mir,
+                SemanticDebugLayerV1::Kir,
+                SemanticDebugTransformationV1::Eliminated,
+                vec![mir_id],
+                SemanticDebugMappingOutputV1::unavailable(
+                    SemanticDebugUnavailableReasonV1::Eliminated,
+                ),
+            )));
+            continue;
+        }
+
+        let block_ordinal = u64::try_from(
+            *block_ordinals
+                .get(&fe2o3_kernel_ir::BlockId(span.kernel_ir_block()))
+                .ok_or(ProductionPipelineError::SimulationDebugMapCorrespondence(
+                    "statement debug correspondence names an unknown KIR block",
+                ))?,
+        )
+        .map_err(|_| {
+            ProductionPipelineError::SimulationDebugMapCorrespondence(
+                "KIR block ordinal exceeds the semantic debug wire",
+            )
+        })?;
 
         let mut kir_ids = Vec::new();
         if kir_ids

@@ -422,10 +422,11 @@ fn semantic_induction_owner(seed: u8, sourceful: bool) -> ProductionSemanticMirO
             return SemanticSourceProvenanceV1::unavailable();
         }
         let byte_start = u64::from(tag) * 8;
+        let byte_end = if tag == 3 { byte_start } else { byte_start + 4 };
         let origin = SemanticSourceOriginV1::new(
             SemanticSourceFileIdentityV1::from_sha256(bytes(200, seed)),
             byte_start,
-            byte_start + 4,
+            byte_end,
             u32::from(tag) + 1,
             1,
             u32::from(tag) + 1,

@@ -10,6 +10,7 @@ use std::{
 use dialect_amdgcn::{
     CanonicalProductionKirToLlvmReplayEvidenceV1, bind_production_target_v1,
     bind_production_upstream_llvm_layout_v1, lower_kernel_to_gfx942_xnack_minus_llvm_ir,
+    lower_kernel_to_gfx950_xnack_minus_llvm_ir,
 };
 use fe2o3_amd_target::ProductionAmdTargetProfileV1;
 use fe2o3_artifact_transaction::{
@@ -59,12 +60,14 @@ use fe2o3_kernel_descriptor::{
 };
 use fe2o3_kernel_ir::{
     ProductionSemanticDebugAvailabilityV1, ProductionSemanticDebugCarrierV1,
+    ProductionSemanticDebugFragmentV1, ProductionSemanticDebugProducerCapabilityV1,
     ProductionSemanticDebugProducerGapV1, ProductionSemanticDebugReceiptExtensionV1,
     SemanticDebugBoundaryDirectionV1, SemanticDebugBoundaryReasonV1, SemanticDebugBoundaryV1,
     SemanticDebugContentIdentityV1, SemanticDebugLayerV1, SemanticDebugLocationV1,
     SemanticDebugMapBindingV1, SemanticDebugMapDocumentV1, SemanticDebugMapErrorV1,
     SemanticDebugMappingOutputV1, SemanticDebugMappingV1, SemanticDebugNodeV1,
-    SemanticDebugTransformationV1,
+    SemanticDebugTransformationV1, SemanticDebugUnavailableReasonV1, VerifiedCanonicalKernelIrV7,
+    VerifiedCanonicalKernelIrV8,
 };
 use sha2::{Digest, Sha256};
 
@@ -85,7 +88,9 @@ use hsaco_fixture::{
     slice_fixture_with_descriptor_table_and_workgroup,
     synthetic_two_kernel_slice_fixture_with_descriptor_table,
 };
-use production_semantic_debug_fixture_v1::exact_source_mir_kir_carrier_v1;
+use production_semantic_debug_fixture_v1::{
+    exact_source_mir_kir_carrier_v1, exact_source_mir_kir_carrier_with_projection_v1,
+};
 
 const TARGET: &str = "gfx942:xnack-";
 const WORKER_BUILD_ID: &str = "fixture-worker-v3-hsaco-v1";
@@ -700,6 +705,78 @@ fn production_semantic_debug_legacy_and_unavailable_states_are_typed() {
             .artifact_identity()
             .matches(available.exact_finalized_bytes())
     );
+    let outer = available.outer_handoff();
+    let extension = ProductionSemanticDebugReceiptExtensionV1::from_canonical_bytes(
+        outer
+            .capsule()
+            .receipts()
+            .semantic_to_llvm()
+            .canonical_preimage(),
+    )
+    .unwrap();
+    let ProductionSemanticDebugAvailabilityV1::Available(fragment) =
+        extension.carrier_v1().availability()
+    else {
+        panic!("available fixture lost its debug fragment")
+    };
+    assert!(fragment.producer_capabilities().contains(
+        &ProductionSemanticDebugProducerCapabilityV1::ExactCanonicalKirV7DebugProjection
+    ));
+    let (_, exact_v8) = VerifiedCanonicalKernelIrV8::from_canonical_bytes_with_module(
+        outer
+            .capsule()
+            .receipts()
+            .kernel_ir()
+            .canonical_preimage()
+            .to_vec(),
+    )
+    .unwrap();
+    let exact_v7 =
+        VerifiedCanonicalKernelIrV7::from_canonical_bytes(fragment.canonical_kir_v7().to_vec())
+            .unwrap();
+    assert_eq!(
+        fe2o3_kernel_ir::decode_module_v7(exact_v7.canonical_bytes()).unwrap(),
+        exact_v8
+    );
+}
+
+#[test]
+fn production_semantic_debug_rejects_canonically_resealed_correspondence_substitution() {
+    for fixture in [
+        OptionalSemanticDebugFixture::AvailableDeleteEliminated,
+        OptionalSemanticDebugFixture::AvailableRetypeEliminated,
+        OptionalSemanticDebugFixture::AvailableRepointEliminated,
+    ] {
+        let finalized = finalized_with_optional_semantic_debug(
+            slice_fixture_with_descriptor_table(&slice_descriptor_table()).bytes,
+            fixture,
+        );
+        assert!(matches!(
+            finalized.admit_production_semantic_debug_map_v1(),
+            Err(fe2o3_hsaco_finalize::FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence)
+        ));
+    }
+}
+
+#[test]
+fn production_semantic_debug_rejects_changed_v7_projection_and_replay_target() {
+    let changed_projection = finalized_with_optional_semantic_debug(
+        slice_fixture_with_descriptor_table(&slice_descriptor_table()).bytes,
+        OptionalSemanticDebugFixture::AvailableDifferentKirV7Module,
+    );
+    assert!(matches!(
+        changed_projection.admit_production_semantic_debug_map_v1(),
+        Err(fe2o3_hsaco_finalize::FinalizedSemanticDebugMapErrorV1::CanonicalKirProjectionMismatch)
+    ));
+
+    let changed_replay_target = finalized_with_optional_semantic_debug(
+        slice_fixture_with_descriptor_table(&slice_descriptor_table()).bytes,
+        OptionalSemanticDebugFixture::AvailableGfx950Replay,
+    );
+    assert!(matches!(
+        changed_replay_target.admit_production_semantic_debug_map_v1(),
+        Err(fe2o3_hsaco_finalize::FinalizedSemanticDebugMapErrorV1::KirToLlvmReplayTargetMismatch)
+    ));
 }
 
 fn finalizer_semantic_map(artifact: &[u8], isa_end: u64) -> Vec<u8> {
@@ -1468,6 +1545,42 @@ enum OptionalSemanticDebugFixture {
     LegacyBare,
     Unavailable(ProductionSemanticDebugProducerGapV1),
     Available,
+    AvailableDeleteEliminated,
+    AvailableRetypeEliminated,
+    AvailableRepointEliminated,
+    AvailableDifferentKirV7Module,
+    AvailableGfx950Replay,
+}
+
+impl OptionalSemanticDebugFixture {
+    const fn is_available(self) -> bool {
+        matches!(
+            self,
+            Self::Available
+                | Self::AvailableDeleteEliminated
+                | Self::AvailableRetypeEliminated
+                | Self::AvailableRepointEliminated
+                | Self::AvailableDifferentKirV7Module
+                | Self::AvailableGfx950Replay
+        )
+    }
+
+    const fn replay_profile(self) -> Option<ProductionAmdTargetProfileV1> {
+        if matches!(self, Self::AvailableGfx950Replay) {
+            Some(ProductionAmdTargetProfileV1::Gfx950)
+        } else if self.is_available() {
+            Some(ProductionAmdTargetProfileV1::Gfx942)
+        } else {
+            None
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum AvailableMapMutation {
+    DeleteEliminated,
+    RetypeEliminated,
+    RepointEliminated,
 }
 
 fn finalized_with_optional_semantic_debug(
@@ -1522,14 +1635,14 @@ fn outer_for_kernels_with_optional_semantic_debug(
     fixture: OptionalSemanticDebugFixture,
 ) -> InertSemanticCompilerModuleHandoffV3 {
     let handoff = module_handoff_for_kernels(module_seed, hsaco, kernel_symbols);
-    let sourceful = matches!(fixture, OptionalSemanticDebugFixture::Available);
+    let replay_profile = fixture.replay_profile();
     let base = InertSemanticCompilerModuleHandoffV3::decode(&raw_outer(
         &capsule_bytes_with_semantic_to_llvm(
             invocation_seed,
             &handoff,
             lineage_mutation,
             None,
-            sourceful,
+            replay_profile,
         ),
         handoff.canonical_bytes(),
     ))
@@ -1548,16 +1661,50 @@ fn outer_for_kernels_with_optional_semantic_debug(
                 .canonical_bytes()
                 .to_vec()
         }
-        OptionalSemanticDebugFixture::Available => {
+        OptionalSemanticDebugFixture::Available
+        | OptionalSemanticDebugFixture::AvailableDeleteEliminated
+        | OptionalSemanticDebugFixture::AvailableRetypeEliminated
+        | OptionalSemanticDebugFixture::AvailableRepointEliminated
+        | OptionalSemanticDebugFixture::AvailableDifferentKirV7Module
+        | OptionalSemanticDebugFixture::AvailableGfx950Replay => {
             let proof =
                 canonical_compiler_proof_inputs_v4_with_sourceful_induction(invocation_seed);
-            let carrier = exact_source_mir_kir_carrier_v1(
-                association.canonical_bytes(),
-                proof.semantic_mir(),
-                proof.kernel_ir(),
-                proof.correspondence(),
-                handoff.module_bytes(),
-            );
+            let carrier = if matches!(
+                fixture,
+                OptionalSemanticDebugFixture::AvailableDifferentKirV7Module
+            ) {
+                let other = canonical_compiler_proof_inputs_v4_with_sourceful_induction(
+                    invocation_seed.wrapping_add(1),
+                );
+                exact_source_mir_kir_carrier_with_projection_v1(
+                    association.canonical_bytes(),
+                    proof.semantic_mir(),
+                    proof.kernel_ir(),
+                    proof.correspondence(),
+                    handoff.module_bytes(),
+                    other.kernel_ir(),
+                )
+            } else {
+                exact_source_mir_kir_carrier_v1(
+                    association.canonical_bytes(),
+                    proof.semantic_mir(),
+                    proof.kernel_ir(),
+                    proof.correspondence(),
+                    handoff.module_bytes(),
+                )
+            };
+            let carrier = match fixture {
+                OptionalSemanticDebugFixture::AvailableDeleteEliminated => {
+                    mutate_available_map(carrier, AvailableMapMutation::DeleteEliminated)
+                }
+                OptionalSemanticDebugFixture::AvailableRetypeEliminated => {
+                    mutate_available_map(carrier, AvailableMapMutation::RetypeEliminated)
+                }
+                OptionalSemanticDebugFixture::AvailableRepointEliminated => {
+                    mutate_available_map(carrier, AvailableMapMutation::RepointEliminated)
+                }
+                _ => carrier,
+            };
             ProductionSemanticDebugReceiptExtensionV1::new(association.canonical_bytes(), carrier)
                 .unwrap()
                 .canonical_bytes()
@@ -1570,10 +1717,112 @@ fn outer_for_kernels_with_optional_semantic_debug(
             &handoff,
             lineage_mutation,
             Some(&receipt),
-            sourceful,
+            replay_profile,
         ),
         handoff.canonical_bytes(),
     ))
+    .unwrap()
+}
+
+fn mutate_available_map(
+    carrier: ProductionSemanticDebugCarrierV1,
+    mutation: AvailableMapMutation,
+) -> ProductionSemanticDebugCarrierV1 {
+    let ProductionSemanticDebugAvailabilityV1::Available(fragment) = carrier.availability() else {
+        panic!("map mutation requires an available fragment")
+    };
+    let map =
+        SemanticDebugMapDocumentV1::from_canonical_json_bytes(fragment.pre_finalization_map())
+            .unwrap();
+    let mut mappings = map.mappings().to_vec();
+    let mut boundaries = map.boundaries().to_vec();
+    let eliminated = mappings
+        .iter()
+        .position(|mapping| {
+            mapping.input_layer() == SemanticDebugLayerV1::Mir
+                && mapping.output_layer() == SemanticDebugLayerV1::Kir
+                && mapping.transformation() == SemanticDebugTransformationV1::Eliminated
+        })
+        .expect("sourceful fixture has one eliminated statement");
+    let eliminated_input = mappings[eliminated].inputs()[0];
+    match mutation {
+        AvailableMapMutation::DeleteEliminated => {
+            mappings.remove(eliminated);
+            boundaries.push(
+                SemanticDebugBoundaryV1::new(
+                    eliminated_input,
+                    SemanticDebugBoundaryDirectionV1::SuccessorUnavailable,
+                    SemanticDebugBoundaryReasonV1::NotRepresented,
+                )
+                .unwrap(),
+            );
+        }
+        AvailableMapMutation::RetypeEliminated => {
+            let mapping = &mappings[eliminated];
+            mappings[eliminated] = SemanticDebugMappingV1::new(
+                mapping.identity(),
+                SemanticDebugLayerV1::Mir,
+                SemanticDebugLayerV1::Kir,
+                SemanticDebugTransformationV1::Unavailable,
+                vec![eliminated_input],
+                SemanticDebugMappingOutputV1::unavailable(
+                    SemanticDebugUnavailableReasonV1::OptimizedOut,
+                ),
+            )
+            .unwrap();
+        }
+        AvailableMapMutation::RepointEliminated => {
+            let available = mappings
+                .iter()
+                .position(|mapping| {
+                    mapping.input_layer() == SemanticDebugLayerV1::Mir
+                        && mapping.output_layer() == SemanticDebugLayerV1::Kir
+                        && mapping.output().reason().is_none()
+                })
+                .expect("sourceful fixture has a retained statement");
+            let available_mapping = mappings[available].clone();
+            let available_input = available_mapping.inputs()[0];
+            let eliminated_mapping = mappings[eliminated].clone();
+            mappings[available] = SemanticDebugMappingV1::new(
+                available_mapping.identity(),
+                available_mapping.input_layer(),
+                available_mapping.output_layer(),
+                available_mapping.transformation(),
+                vec![eliminated_input],
+                available_mapping.output().clone(),
+            )
+            .unwrap();
+            mappings[eliminated] = SemanticDebugMappingV1::new(
+                eliminated_mapping.identity(),
+                eliminated_mapping.input_layer(),
+                eliminated_mapping.output_layer(),
+                eliminated_mapping.transformation(),
+                vec![available_input],
+                eliminated_mapping.output().clone(),
+            )
+            .unwrap();
+        }
+    }
+    let map = SemanticDebugMapDocumentV1::new_partial(
+        map.binding(),
+        map.nodes().to_vec(),
+        mappings,
+        boundaries,
+    )
+    .unwrap()
+    .to_canonical_json_bytes()
+    .unwrap();
+    let fragment = ProductionSemanticDebugFragmentV1::new(
+        fragment.source_map_v2().to_vec(),
+        fragment.canonical_kir_v7().to_vec(),
+        fragment.schedule_status().to_vec(),
+        map,
+    )
+    .unwrap();
+    ProductionSemanticDebugCarrierV1::new(
+        carrier.association_v3(),
+        ProductionSemanticDebugAvailabilityV1::Available(fragment),
+    )
     .unwrap()
 }
 
@@ -1665,7 +1914,7 @@ fn capsule_bytes(
     handoff: &CompilerModuleHandoffV2,
     lineage_mutation: DescriptorLineageMutation,
 ) -> Vec<u8> {
-    capsule_bytes_with_semantic_to_llvm(seed, handoff, lineage_mutation, None, false)
+    capsule_bytes_with_semantic_to_llvm(seed, handoff, lineage_mutation, None, None)
 }
 
 fn capsule_bytes_with_semantic_to_llvm(
@@ -1673,7 +1922,7 @@ fn capsule_bytes_with_semantic_to_llvm(
     handoff: &CompilerModuleHandoffV2,
     lineage_mutation: DescriptorLineageMutation,
     semantic_to_llvm: Option<&[u8]>,
-    sourceful_proof: bool,
+    replay_profile: Option<ProductionAmdTargetProfileV1>,
 ) -> Vec<u8> {
     let invocation = invocation_bytes(seed);
     let final_commitment = InertFinalCompilerModuleCommitmentV3::from_handoff(handoff).unwrap();
@@ -1686,7 +1935,7 @@ fn capsule_bytes_with_semantic_to_llvm(
             )
         })
         .collect::<Vec<_>>();
-    let proof_inputs = if sourceful_proof {
+    let proof_inputs = if replay_profile.is_some() {
         canonical_compiler_proof_inputs_v4_with_sourceful_induction(seed)
     } else {
         canonical_compiler_proof_inputs_v4(seed)
@@ -1696,23 +1945,27 @@ fn capsule_bytes_with_semantic_to_llvm(
     receipts[4].0 = proof_inputs.kernel_ir().to_vec();
     receipts[5].0 = proof_inputs.correspondence().to_vec();
     receipts[6].0 = proof_inputs.formal_memory().to_vec();
-    if sourceful_proof {
+    if let Some(profile) = replay_profile {
         let (_, neutral_module) =
             fe2o3_kernel_ir::VerifiedCanonicalKernelIrV8::from_canonical_bytes_with_module(
                 proof_inputs.kernel_ir().to_vec(),
             )
             .unwrap();
-        let target =
-            bind_production_target_v1(&neutral_module, ProductionAmdTargetProfileV1::Gfx942)
-                .unwrap();
-        let dialect =
-            lower_kernel_to_gfx942_xnack_minus_llvm_ir(target.module(), target.kernel_id())
-                .unwrap();
+        let target = bind_production_target_v1(&neutral_module, profile).unwrap();
+        let dialect = match profile {
+            ProductionAmdTargetProfileV1::Gfx942 => {
+                lower_kernel_to_gfx942_xnack_minus_llvm_ir(target.module(), target.kernel_id())
+            }
+            ProductionAmdTargetProfileV1::Gfx950 => {
+                lower_kernel_to_gfx950_xnack_minus_llvm_ir(target.module(), target.kernel_id())
+            }
+        }
+        .unwrap();
         let llvm = bind_production_upstream_llvm_layout_v1(&dialect).unwrap();
         receipts[12].0 = CanonicalProductionKirToLlvmReplayEvidenceV1::from_live_inputs(
             proof_inputs.kernel_ir(),
             target.module(),
-            ProductionAmdTargetProfileV1::Gfx942,
+            profile,
             &llvm,
         )
         .unwrap()

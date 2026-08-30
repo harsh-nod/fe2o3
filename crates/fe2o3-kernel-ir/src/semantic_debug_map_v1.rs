@@ -225,7 +225,7 @@ impl SemanticDebugLocationV1 {
     fn validate(self) -> Result<(), SemanticDebugMapErrorV1> {
         let ordinal_is_invalid = |ordinal: u64| ordinal > u64::from(u32::MAX);
         match self {
-            Self::Source { span } => DebugSourceMapSpanV1::new(
+            Self::Source { span } => DebugSourceMapSpanV1::new_eliminated(
                 span.file_identity(),
                 span.byte_start(),
                 span.byte_end(),
@@ -825,11 +825,12 @@ impl SemanticDebugMapDocumentV1 {
             if span.byte_end() > file.byte_len() {
                 return Err(SemanticDebugMapErrorV1::InvalidBoundSourceMap);
             }
-            if !source_map
+            let is_site = source_map
                 .sites()
                 .iter()
-                .any(|site| site.spans().contains(&span))
-            {
+                .any(|site| site.spans().contains(&span));
+            let is_eliminated = source_map.eliminated().binary_search(&span).is_ok();
+            if !is_site && !is_eliminated {
                 return Err(SemanticDebugMapErrorV1::InvalidSourceLocation);
             }
         }

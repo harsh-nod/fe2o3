@@ -14,7 +14,8 @@ use fe2o3_kernel_ir::{
     ProductionSemanticDebugReceiptExtensionV1, SemanticDebugContentIdentityV1,
     SemanticDebugLayerV1, SemanticDebugLocationV1, SemanticDebugMapDocumentV1,
     SemanticDebugMapErrorV1, SemanticDebugMapInputsV1, SemanticDebugTransformationV1,
-    VerifiedCanonicalKernelIrV8, decode_module_v7, semantic_debug_map_identity_v1,
+    SemanticDebugUnavailableReasonV1, VerifiedCanonicalKernelIrV8, decode_module_v7,
+    semantic_debug_map_identity_v1,
 };
 use fe2o3_lower_mir_kernel::{
     InertCanonicalMirToKirCorrespondenceEvidenceV4, ProductionCanonicalKernelIrVersionV1,
@@ -187,13 +188,19 @@ impl PreparedFinalizedProtectedWorkerV3HsacoV1 {
             ));
         };
 
-        let _validated_replay = CanonicalProductionKirToLlvmReplayEvidenceV1::decode(
+        let validated_replay = CanonicalProductionKirToLlvmReplayEvidenceV1::decode(
             receipts.amdgpu_lowering().canonical_preimage(),
         )
         .and_then(|evidence| {
             evidence.validate_against_neutral_kernel_ir(receipts.kernel_ir().canonical_preimage())
         })
         .map_err(|_| FinalizedSemanticDebugMapErrorV1::InvalidKirToLlvmReplay)?;
+        let replay_target = validated_replay.evidence().profile().device_target();
+        if outer.module_handoff().target().to_string() != replay_target
+            || self.target().to_string() != replay_target
+        {
+            return Err(FinalizedSemanticDebugMapErrorV1::KirToLlvmReplayTargetMismatch);
+        }
 
         let semantic_mir = receipts.semantic_mir().canonical_preimage();
         let exact_kir_v8 = receipts.kernel_ir().canonical_preimage();
@@ -414,7 +421,6 @@ fn validate_exact_production_correspondence(
     let counts = correspondence
         .statement_spans()
         .iter()
-        .filter(|span| span.operation_count() != 0)
         .try_fold((0_usize, 0_usize), |(statements, operations), span| {
             Some((
                 statements.checked_add(1)?,
@@ -456,11 +462,7 @@ fn validate_exact_production_correspondence(
             .map(|index| nodes_by_location[index].1)
     };
 
-    for span in correspondence
-        .statement_spans()
-        .iter()
-        .filter(|span| span.operation_count() != 0)
-    {
+    for span in correspondence.statement_spans() {
         let function = semantic_mir
             .functions()
             .get(span.semantic_function() as usize)
@@ -479,13 +481,23 @@ fn validate_exact_production_correspondence(
             .ok_or(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence)?;
         let (byte_start, byte_end) = origin.byte_range();
         let (line, column) = origin.start_coordinate();
-        let source_span = DebugSourceMapSpanV1::new(
-            *origin.file().as_bytes(),
-            byte_start,
-            byte_end,
-            line,
-            column,
-        )
+        let source_span = if span.operation_count() == 0 {
+            DebugSourceMapSpanV1::new_eliminated(
+                *origin.file().as_bytes(),
+                byte_start,
+                byte_end,
+                line,
+                column,
+            )
+        } else {
+            DebugSourceMapSpanV1::new(
+                *origin.file().as_bytes(),
+                byte_start,
+                byte_end,
+                line,
+                column,
+            )
+        }
         .map_err(|_| FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence)?;
         let source_location = SemanticDebugLocationV1::Source { span: source_span };
         let mir_location = SemanticDebugLocationV1::Mir {
@@ -511,6 +523,21 @@ fn validate_exact_production_correspondence(
             SemanticDebugLayerV1::Mir,
             SemanticDebugTransformationV1::Preserved,
         )?;
+
+        if span.operation_count() == 0 {
+            if source_map.eliminated().binary_search(&source_span).is_err() {
+                return Err(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence);
+            }
+            require_unavailable_mapping(
+                map,
+                mir_id,
+                SemanticDebugLayerV1::Mir,
+                SemanticDebugLayerV1::Kir,
+                SemanticDebugTransformationV1::Eliminated,
+                SemanticDebugUnavailableReasonV1::Eliminated,
+            )?;
+            continue;
+        }
 
         let block_index = block_ordinals
             .binary_search_by_key(&span.kernel_ir_block(), |entry| entry.0)
@@ -609,6 +636,29 @@ fn require_mapping(
     Ok(())
 }
 
+fn require_unavailable_mapping(
+    map: &SemanticDebugMapDocumentV1,
+    input: [u8; 32],
+    input_layer: SemanticDebugLayerV1,
+    output_layer: SemanticDebugLayerV1,
+    transformation: SemanticDebugTransformationV1,
+    reason: SemanticDebugUnavailableReasonV1,
+) -> Result<(), FinalizedSemanticDebugMapErrorV1> {
+    let mapping = map
+        .mapping_from(input)
+        .ok_or(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence)?;
+    if mapping.inputs() != [input]
+        || !mapping.output().nodes().is_empty()
+        || mapping.output().reason() != Some(reason)
+        || mapping.input_layer() != input_layer
+        || mapping.output_layer() != output_layer
+        || mapping.transformation() != transformation
+    {
+        return Err(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence);
+    }
+    Ok(())
+}
+
 fn bounded_copy_identities(
     values: &[[u8; 32]],
 ) -> Result<Vec<[u8; 32]>, FinalizedSemanticDebugMapErrorV1> {
@@ -688,6 +738,7 @@ pub enum FinalizedSemanticDebugMapErrorV1 {
     ProductionAssociation,
     ProductionAssociationMismatch,
     InvalidKirToLlvmReplay,
+    KirToLlvmReplayTargetMismatch,
     InvalidBoundSourceMap,
     InvalidBoundSemanticMir,
     InvalidBoundCorrespondenceV4,
@@ -717,6 +768,7 @@ impl Error for FinalizedSemanticDebugMapErrorV1 {
             Self::ProductionAssociation
             | Self::ProductionAssociationMismatch
             | Self::InvalidKirToLlvmReplay
+            | Self::KirToLlvmReplayTargetMismatch
             | Self::InvalidBoundSourceMap
             | Self::InvalidBoundSemanticMir
             | Self::InvalidBoundCorrespondenceV4
@@ -986,7 +1038,7 @@ mod production_correspondence_tests {
         SemanticDebugContentIdentityV1, SemanticDebugLayerV1, SemanticDebugLocationV1,
         SemanticDebugMapBindingV1, SemanticDebugMapDocumentV1, SemanticDebugMappingOutputV1,
         SemanticDebugMappingV1, SemanticDebugNodeV1, SemanticDebugTransformationV1,
-        VerifiedCanonicalKernelIrV7, VerifiedCanonicalKernelIrV8,
+        SemanticDebugUnavailableReasonV1, VerifiedCanonicalKernelIrV7, VerifiedCanonicalKernelIrV8,
     };
     use fe2o3_lower_mir_kernel::InertCanonicalMirToKirCorrespondenceEvidenceV4;
     use fe2o3_mir_model::semantic_mir_v1::{AdmittedInertSemanticMirV1, SemanticMirLimitsV1};
@@ -1060,24 +1112,31 @@ mod production_correspondence_tests {
         let mut nodes = Vec::new();
         let mut mappings = Vec::new();
         let mut boundaries = Vec::new();
-        for span in correspondence
-            .statement_spans()
-            .iter()
-            .filter(|span| span.operation_count() != 0)
-        {
+        let mut eliminated = Vec::new();
+        for span in correspondence.statement_spans() {
             let statement = &semantic.functions()[span.semantic_function() as usize].blocks()
                 [span.semantic_block() as usize]
                 .statements()[span.statement() as usize];
             let origin = statement.source().call_site().unwrap();
             let (byte_start, byte_end) = origin.byte_range();
             let (line, column) = origin.start_coordinate();
-            let source_span = DebugSourceMapSpanV1::new(
-                *origin.file().as_bytes(),
-                byte_start,
-                byte_end,
-                line,
-                column,
-            )
+            let source_span = if span.operation_count() == 0 {
+                DebugSourceMapSpanV1::new_eliminated(
+                    *origin.file().as_bytes(),
+                    byte_start,
+                    byte_end,
+                    line,
+                    column,
+                )
+            } else {
+                DebugSourceMapSpanV1::new(
+                    *origin.file().as_bytes(),
+                    byte_start,
+                    byte_end,
+                    line,
+                    column,
+                )
+            }
             .unwrap();
             let source_id = stable_id(
                 1,
@@ -1131,6 +1190,30 @@ mod production_correspondence_tests {
                 )
                 .unwrap(),
             );
+            if span.operation_count() == 0 {
+                eliminated.push(source_span);
+                mappings.push(
+                    SemanticDebugMappingV1::new(
+                        stable_id(
+                            5,
+                            &[
+                                span.semantic_function(),
+                                span.semantic_block(),
+                                span.statement(),
+                            ],
+                        ),
+                        SemanticDebugLayerV1::Mir,
+                        SemanticDebugLayerV1::Kir,
+                        SemanticDebugTransformationV1::Eliminated,
+                        vec![mir_id],
+                        SemanticDebugMappingOutputV1::unavailable(
+                            SemanticDebugUnavailableReasonV1::Eliminated,
+                        ),
+                    )
+                    .unwrap(),
+                );
+                continue;
+            }
             let block_ordinal = block_ordinals[&span.kernel_ir_block()];
             let mut kir_ids = Vec::new();
             for operation in span.first_operation()
@@ -1219,7 +1302,7 @@ mod production_correspondence_tests {
                     .unwrap(),
             ],
             sites,
-            Vec::new(),
+            eliminated,
             Vec::new(),
             Vec::new(),
         )
