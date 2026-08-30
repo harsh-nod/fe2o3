@@ -4,8 +4,12 @@ use fe2o3_artifact_transaction::{
     DurableCurrentLinkPublicationTokenV1, InertCompilerExecutionSubjectV1,
 };
 use fe2o3_hsaco::CodeObjectVersion;
+use fe2o3_hsaco_finalize::{
+    RevalidatedProtectedWorkerV3FinalizerDerivationV1, WorkerV3HsacoPublicationErrorV1,
+    revalidate_protected_worker_v3_finalizer_derivation_v1,
+};
 use fe2o3_kernel_descriptor::{KernelDescriptorV1, KernelId};
-use fe2o3_runtime_protocol::CompilerExecutionReceiptCarriageV1;
+use fe2o3_runtime_protocol::{CompilerExecutionReceiptCarriageV1, WorkerV3LoadEnvelopeWireV1};
 use fe2o3_verifier::{
     CompilerProofInputValidationErrorV4, ValidatedCompilerProofInputsV4,
     validate_compiler_proof_inputs_v4,
@@ -96,6 +100,8 @@ impl WorkerV3VerificationChallengeIdentityV1 {
 pub struct WorkerV3VerificationRequestV1<'admission, K> {
     challenge: WorkerV3VerificationChallengeIdentityV1,
     lineage: WorkerV3HostLineageEvidenceV1,
+    finalizer_derivation: &'admission RevalidatedProtectedWorkerV3FinalizerDerivationV1,
+    finalizer_replay: &'admission WorkerV3LoadEnvelopeWireV1,
     compiler_execution_subject: &'admission InertCompilerExecutionSubjectV1,
     compiler_execution_receipt: &'admission CompilerExecutionReceiptCarriageV1,
     handoff: &'admission fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffV3,
@@ -114,6 +120,33 @@ impl<K: CompilerGeneratedKernelExpectationV1> WorkerV3VerificationRequestV1<'_, 
 
     pub const fn lineage_identity(&self) -> WorkerV3HostLineageIdentityV1 {
         self.lineage.identity()
+    }
+
+    /// Returns the finalizer derivation independently reconstructed by host admission.
+    pub const fn finalizer_derivation(&self) -> &RevalidatedProtectedWorkerV3FinalizerDerivationV1 {
+        self.finalizer_derivation
+    }
+
+    /// Reconstructs a second move-only finalizer owner from the exact borrowed envelope bytes.
+    ///
+    /// Protected verifier backends use this operation instead of echoing host projections. The
+    /// result remains authority-free and must still be compared at decision promotion.
+    pub fn independently_revalidate_finalizer_derivation(
+        &self,
+    ) -> Result<RevalidatedProtectedWorkerV3FinalizerDerivationV1, WorkerV3HsacoPublicationErrorV1>
+    {
+        revalidate_protected_worker_v3_finalizer_derivation_v1(
+            self.finalizer_replay.publication_intent_record().attempt(),
+            self.finalizer_replay.outer_handoff(),
+            self.finalizer_replay.external_provider_payloads(),
+            self.finalizer_replay.transcript(),
+            self.finalized_hsaco,
+        )
+    }
+
+    /// Returns the finalizer identity bound into the complete host-lineage challenge.
+    pub const fn finalizer_derivation_sha256(&self) -> [u8; 32] {
+        self.lineage.finalizer_derivation_sha256()
     }
 
     /// Returns the exact canonical compiler occurrence reconstructed from durable V3 replay.
@@ -335,7 +368,10 @@ impl<K: CompilerGeneratedKernelExpectationV1> WorkerV3VerificationRequestV1<'_, 
 /// approved policy. They must compare the carried compiler-execution policy with independently
 /// retained protected configuration, reacquire and match the exact protected Worker ledger record,
 /// and establish the carried sequence and rollback anchor as current through an external protected
-/// anti-rollback authority. The resulting policy, ledger, and rollback verification identities must
+/// anti-rollback authority. They must also independently reconstruct the exact finalizer derivation
+/// from the borrowed durable envelope bytes and retain that move-only owner in their result rather
+/// than echoing the host admission identity. The resulting policy, ledger, rollback, and finalizer
+/// verification identities must
 /// bind the exact subject, carriage, compiler occurrence, and complete verification transcript;
 /// they must not be copied or derived solely from request fields. Implementations must also
 /// establish that the formal-memory and proof-binding receipts apply to this exact semantic
@@ -372,6 +408,7 @@ pub unsafe trait WorkerV3VerifierV1<K: CompilerGeneratedKernelExpectationV1>:
 /// admission. The sealed adapter supplies every request-coordinate field directly from the exact
 /// pinned host request and the existing promotion boundary compares the complete decision again.
 pub struct WorkerV3ProtectedVerificationEvidenceV1 {
+    finalizer_derivation: RevalidatedProtectedWorkerV3FinalizerDerivationV1,
     compiler_execution: WorkerV3CompilerExecutionVerificationV1,
     proof_inputs: ValidatedCompilerProofInputsV4,
     verifier_measurement_sha256: [u8; 32],
@@ -393,6 +430,7 @@ impl WorkerV3ProtectedVerificationEvidenceV1 {
     /// alone do not satisfy it.
     #[allow(clippy::too_many_arguments)]
     pub const unsafe fn new(
+        finalizer_derivation: RevalidatedProtectedWorkerV3FinalizerDerivationV1,
         compiler_execution: WorkerV3CompilerExecutionVerificationV1,
         proof_inputs: ValidatedCompilerProofInputsV4,
         verifier_measurement_sha256: [u8; 32],
@@ -403,6 +441,7 @@ impl WorkerV3ProtectedVerificationEvidenceV1 {
         safety_properties: WorkerV3SafetyPropertiesV1,
     ) -> Self {
         Self {
+            finalizer_derivation,
             compiler_execution,
             proof_inputs,
             verifier_measurement_sha256,
@@ -496,6 +535,7 @@ where
             request.finalized_hsaco_length(),
             request.target(),
             request.code_object_version(),
+            evidence.finalizer_derivation,
             evidence.compiler_execution,
             evidence.proof_inputs,
             evidence.verifier_measurement_sha256,
@@ -926,6 +966,7 @@ pub struct WorkerV3VerificationDecisionV1 {
     finalized_length: u64,
     target: fe2o3_amd_target::AmdTargetId,
     code_object_version: CodeObjectVersion,
+    finalizer_derivation: RevalidatedProtectedWorkerV3FinalizerDerivationV1,
     compiler_execution: WorkerV3CompilerExecutionVerificationV1,
     proof_inputs: WorkerV3ProofInputEvidenceV1,
     verifier_measurement_sha256: [u8; 32],
@@ -962,6 +1003,7 @@ impl WorkerV3VerificationDecisionV1 {
         finalized_length: u64,
         target: fe2o3_amd_target::AmdTargetId,
         code_object_version: CodeObjectVersion,
+        finalizer_derivation: RevalidatedProtectedWorkerV3FinalizerDerivationV1,
         compiler_execution: WorkerV3CompilerExecutionVerificationV1,
         proof_inputs: ValidatedCompilerProofInputsV4,
         verifier_measurement_sha256: [u8; 32],
@@ -984,6 +1026,7 @@ impl WorkerV3VerificationDecisionV1 {
             finalized_length,
             target,
             code_object_version,
+            finalizer_derivation,
             compiler_execution,
             WorkerV3ProofInputEvidenceV1::Validated(proof_inputs),
             verifier_measurement_sha256,
@@ -1009,6 +1052,7 @@ impl WorkerV3VerificationDecisionV1 {
         finalized_length: u64,
         target: fe2o3_amd_target::AmdTargetId,
         code_object_version: CodeObjectVersion,
+        finalizer_derivation: RevalidatedProtectedWorkerV3FinalizerDerivationV1,
         compiler_execution: WorkerV3CompilerExecutionVerificationV1,
         proof_inputs: WorkerV3ProofInputEvidenceV1,
         verifier_measurement_sha256: [u8; 32],
@@ -1031,6 +1075,7 @@ impl WorkerV3VerificationDecisionV1 {
             finalized_length,
             target,
             code_object_version,
+            finalizer_derivation,
             compiler_execution,
             proof_inputs,
             verifier_measurement_sha256,
@@ -1059,6 +1104,7 @@ impl WorkerV3VerificationDecisionV1 {
         finalized_length: u64,
         target: fe2o3_amd_target::AmdTargetId,
         code_object_version: CodeObjectVersion,
+        finalizer_derivation: RevalidatedProtectedWorkerV3FinalizerDerivationV1,
         compiler_execution: WorkerV3CompilerExecutionVerificationV1,
         verifier_measurement_sha256: [u8; 32],
         verification_transcript_sha256: [u8; 32],
@@ -1080,6 +1126,7 @@ impl WorkerV3VerificationDecisionV1 {
             finalized_length,
             target,
             code_object_version,
+            finalizer_derivation,
             compiler_execution,
             WorkerV3ProofInputEvidenceV1::Synthetic,
             verifier_measurement_sha256,
@@ -1113,6 +1160,11 @@ impl WorkerV3VerificationDecisionV1 {
 
     pub const fn compiler_execution(&self) -> &WorkerV3CompilerExecutionVerificationV1 {
         &self.compiler_execution
+    }
+
+    /// Returns the independently reconstructed finalizer owner retained by this decision.
+    pub const fn finalizer_derivation(&self) -> &RevalidatedProtectedWorkerV3FinalizerDerivationV1 {
+        &self.finalizer_derivation
     }
 
     /// Returns exact decoded compiler proof inputs for a default-build production decision.
@@ -1298,6 +1350,8 @@ fn prepare_request<'admission, K: CompilerGeneratedKernelExpectationV1>(
     Ok(WorkerV3VerificationRequestV1 {
         challenge,
         lineage,
+        finalizer_derivation: admission.finalizer_derivation(),
+        finalizer_replay: admission.finalizer_replay(),
         compiler_execution_subject: admission.compiler_execution_subject(),
         compiler_execution_receipt: admission.compiler_execution_receipt(),
         handoff: admission.outer_handoff(),
@@ -1370,6 +1424,10 @@ fn validate_decision<K: CompilerGeneratedKernelExpectationV1>(
         (
             decision.lineage == request.lineage.identity(),
             "host lineage",
+        ),
+        (
+            decision.finalizer_derivation.identity() == request.finalizer_derivation.identity(),
+            "finalizer derivation",
         ),
         (
             decision.kernel_id == request.descriptor.kernel_id(),

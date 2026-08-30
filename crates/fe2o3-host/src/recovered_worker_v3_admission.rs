@@ -11,8 +11,10 @@ use fe2o3_compiler_ffi::{
 };
 use fe2o3_hsaco::{CodeObjectVersion, InspectedKernel, KernelDescriptorBinding};
 use fe2o3_hsaco_finalize::{
-    FinalizationError, FinalizedDescriptorInspection, derive_unfinalized_hsaco_from_finalized_v1,
-    verify_finalized,
+    FinalizationError, FinalizedDescriptorInspection,
+    RevalidatedProtectedWorkerV3FinalizerDerivationV1, WorkerV3HsacoPublicationErrorV1,
+    derive_unfinalized_hsaco_from_finalized_v1,
+    revalidate_protected_worker_v3_finalizer_derivation_v1, verify_finalized,
 };
 use fe2o3_kernel_descriptor::{
     CANONICAL_CODE_OBJECT_DIGEST_OFFSET, DeviceDescriptorTableV1, KernelDescriptorV1, KernelId,
@@ -46,6 +48,7 @@ impl WorkerV3HostLineageIdentityV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct WorkerV3HostLineageEvidenceV1 {
     identity: WorkerV3HostLineageIdentityV1,
+    finalizer_derivation_sha256: [u8; 32],
     capsule_sha256: [u8; 32],
     formal_memory_sha256: [u8; 32],
     proof_binding_sha256: [u8; 32],
@@ -56,6 +59,10 @@ pub(crate) struct WorkerV3HostLineageEvidenceV1 {
 impl WorkerV3HostLineageEvidenceV1 {
     pub(crate) const fn identity(self) -> WorkerV3HostLineageIdentityV1 {
         self.identity
+    }
+
+    pub(crate) const fn finalizer_derivation_sha256(self) -> [u8; 32] {
+        self.finalizer_derivation_sha256
     }
 
     pub(crate) const fn capsule_sha256(self) -> [u8; 32] {
@@ -81,6 +88,7 @@ impl WorkerV3HostLineageEvidenceV1 {
 
 struct RecoveredWorkerV3ArtifactStateV1 {
     envelope: RecoveredWorkerV3LoadEnvelopeV2,
+    finalizer_derivation: RevalidatedProtectedWorkerV3FinalizerDerivationV1,
     compiler_execution_subject: InertCompilerExecutionSubjectV1,
     outer_handoff: InertSemanticCompilerModuleHandoffV3,
     inspection: FinalizedDescriptorInspection,
@@ -121,6 +129,11 @@ impl RecoveredWorkerV3ArtifactStateV1 {
         if inspected != self.inspection {
             return Err(RecoveredWorkerV3AdmissionErrorV1::InspectionChanged);
         }
+        validate_finalizer_derivation_association(
+            &self.envelope,
+            current.exact_artifact_bytes(),
+            &self.finalizer_derivation,
+        )?;
         let outer_handoff = InertSemanticCompilerModuleHandoffV3::decode(
             self.envelope.wire().replay().outer_handoff(),
         )
@@ -171,6 +184,14 @@ impl RecoveredWorkerV3ArtifactStateV1 {
 
     const fn compiler_execution_receipt(&self) -> &CompilerExecutionReceiptCarriageV1 {
         self.envelope.wire().compiler_execution_receipt()
+    }
+
+    const fn finalizer_derivation(&self) -> &RevalidatedProtectedWorkerV3FinalizerDerivationV1 {
+        &self.finalizer_derivation
+    }
+
+    const fn finalizer_replay(&self) -> &fe2o3_runtime_protocol::WorkerV3LoadEnvelopeWireV1 {
+        self.envelope.wire().replay()
     }
 
     fn target(&self) -> fe2o3_amd_target::AmdTargetId {
@@ -403,6 +424,18 @@ impl RecoveredWorkerV3PinnedDescriptorV1 {
         self.artifact.compiler_execution_receipt()
     }
 
+    pub(crate) const fn finalizer_derivation(
+        &self,
+    ) -> &RevalidatedProtectedWorkerV3FinalizerDerivationV1 {
+        self.artifact.finalizer_derivation()
+    }
+
+    pub(crate) const fn finalizer_replay(
+        &self,
+    ) -> &fe2o3_runtime_protocol::WorkerV3LoadEnvelopeWireV1 {
+        self.artifact.finalizer_replay()
+    }
+
     pub fn target(&self) -> fe2o3_amd_target::AmdTargetId {
         self.artifact.target()
     }
@@ -507,6 +540,24 @@ fn admit_recovered_worker_v3_artifact_v1(
         .revalidate_locked_currentness()
         .map_err(RecoveredWorkerV3AdmissionErrorV1::CurrentPublication)?;
 
+    let finalizer_derivation = revalidate_protected_worker_v3_finalizer_derivation_v1(
+        envelope
+            .wire()
+            .replay()
+            .publication_intent_record()
+            .attempt(),
+        envelope.wire().replay().outer_handoff(),
+        envelope.wire().replay().external_provider_payloads(),
+        envelope.wire().replay().transcript(),
+        current.exact_artifact_bytes(),
+    )
+    .map_err(RecoveredWorkerV3AdmissionErrorV1::FinalizerDerivation)?;
+    validate_finalizer_derivation_association(
+        &envelope,
+        current.exact_artifact_bytes(),
+        &finalizer_derivation,
+    )?;
+
     let inspection = validate_finalized_identity(
         envelope.wire().replay().publication_intent_record(),
         current.exact_artifact_bytes(),
@@ -524,6 +575,7 @@ fn admit_recovered_worker_v3_artifact_v1(
     Ok((
         RecoveredWorkerV3ArtifactStateV1 {
             envelope,
+            finalizer_derivation,
             compiler_execution_subject,
             outer_handoff: outer,
             inspection,
@@ -551,6 +603,7 @@ fn select_entrypoint(
         kernel_id,
         &artifact.compiler_execution_subject,
         artifact.envelope.wire().compiler_execution_receipt(),
+        &artifact.finalizer_derivation,
     );
     Ok(RecoveredWorkerV3EntrypointV1 {
         ordinal: descriptor_index,
@@ -567,6 +620,7 @@ fn derive_host_lineage_identity(
     kernel_id: KernelId,
     compiler_execution_subject: &InertCompilerExecutionSubjectV1,
     compiler_execution_receipt: &CompilerExecutionReceiptCarriageV1,
+    finalizer_derivation: &RevalidatedProtectedWorkerV3FinalizerDerivationV1,
 ) -> WorkerV3HostLineageEvidenceV1 {
     let capsule = outer.capsule();
     let receipts = capsule.receipts();
@@ -583,6 +637,7 @@ fn derive_host_lineage_identity(
     digest.update(compiler_execution_subject.canonical_bytes());
     digest.update(compiler_execution_receipt.identity().as_bytes());
     digest.update(compiler_execution_receipt.canonical_bytes());
+    digest.update(finalizer_derivation.identity().as_bytes());
     digest.update(record.identity().as_bytes());
     update_identity(
         &mut digest,
@@ -689,6 +744,7 @@ fn derive_host_lineage_identity(
 
     WorkerV3HostLineageEvidenceV1 {
         identity: WorkerV3HostLineageIdentityV1(digest.finalize().into()),
+        finalizer_derivation_sha256: *finalizer_derivation.identity().as_bytes(),
         capsule_sha256: *capsule_identity.sha256(),
         formal_memory_sha256: *formal_memory.sha256(),
         proof_binding_sha256: *proof_binding.sha256(),
@@ -700,6 +756,25 @@ fn derive_host_lineage_identity(
 fn update_identity(digest: &mut Sha256, sha256: &[u8; 32], byte_len: u64) {
     digest.update(sha256);
     digest.update(byte_len.to_le_bytes());
+}
+
+fn validate_finalizer_derivation_association(
+    envelope: &RecoveredWorkerV3LoadEnvelopeV2,
+    finalized: &[u8],
+    derivation: &RevalidatedProtectedWorkerV3FinalizerDerivationV1,
+) -> Result<(), RecoveredWorkerV3AdmissionErrorV1> {
+    let record = envelope.wire().replay().publication_intent_record();
+    if !derivation.finalized_hsaco_identity().matches(finalized)
+        || derivation.finalized_hsaco_identity().sha256() != &record.output_sha256()
+        || derivation.finalized_hsaco_identity().byte_len()
+            != u64::try_from(record.output_length()).map_err(|_| {
+                RecoveredWorkerV3AdmissionErrorV1::FinalizerDerivationAssociationMismatch
+            })?
+        || derivation.raw_hsaco_identity().sha256() != record.plan().linked_output().as_bytes()
+    {
+        return Err(RecoveredWorkerV3AdmissionErrorV1::FinalizerDerivationAssociationMismatch);
+    }
+    Ok(())
 }
 
 fn validate_finalized_identity(
@@ -963,6 +1038,8 @@ fn select_exact_kernel(
 pub enum RecoveredWorkerV3AdmissionErrorV1 {
     Envelope(WorkerV3LoadEnvelopeErrorV2),
     CurrentPublication(DurableLinkPublicationError),
+    FinalizerDerivation(WorkerV3HsacoPublicationErrorV1),
+    FinalizerDerivationAssociationMismatch,
     FinalizedLengthMismatch,
     FinalizedIdentityMismatch,
     FinalizedVerification(FinalizationError),
@@ -1015,6 +1092,12 @@ impl fmt::Display for RecoveredWorkerV3AdmissionErrorV1 {
             Self::CurrentPublication(error) => {
                 write!(formatter, "Worker V3 publication is not current: {error}")
             }
+            Self::FinalizerDerivation(error) => {
+                write!(formatter, "invalid Worker V3 finalizer derivation: {error}")
+            }
+            Self::FinalizerDerivationAssociationMismatch => formatter.write_str(
+                "Worker V3 finalizer derivation differs from the current publication",
+            ),
             Self::FinalizedLengthMismatch => {
                 formatter.write_str("finalized HSACO length differs from the Worker V3 publication")
             }
@@ -1134,6 +1217,7 @@ impl Error for RecoveredWorkerV3AdmissionErrorV1 {
         match self {
             Self::Envelope(error) => Some(error),
             Self::CurrentPublication(error) => Some(error),
+            Self::FinalizerDerivation(error) => Some(error),
             Self::FinalizedVerification(error) | Self::UnfinalizedReconstruction(error) => {
                 Some(error)
             }
