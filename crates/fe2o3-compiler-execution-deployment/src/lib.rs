@@ -1111,6 +1111,8 @@ pub enum DeploymentVerificationErrorKindV1 {
     PublicationAmbiguous,
     /// Bounded descriptor-relative staging cleanup failed.
     CleanupFailed,
+    /// A deterministic test interrupted one installation transaction boundary.
+    InjectedFailure,
 }
 
 /// Stable deployment generation, verification, or installation error.
@@ -1731,5 +1733,67 @@ mod tests {
             DeploymentVerificationErrorKindV1::InsufficientPrivilege
         );
         assert_eq!(fs::read_dir(parent.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn every_installation_boundary_is_absent_or_completely_reacquirable() {
+        let points = install::installation_fault_points_for_test_v1();
+        assert_eq!(points.len(), 99);
+        for point in points {
+            let fixture = Fixture::new();
+            let generation = fixture.generate();
+            let parent = private_install_parent();
+            let root_name = install::compiler_execution_install_root_name_v1(generation.sha256());
+            let error = install::install_compiler_execution_deployment_at_fault_for_test_v1(
+                fixture.verify(generation.sha256()).unwrap(),
+                parent.path(),
+                current_owner(),
+                point,
+            )
+            .unwrap_err();
+            let after_publication =
+                install::installation_fault_is_after_publication_for_test_v1(point);
+            assert_eq!(
+                error.kind(),
+                if after_publication {
+                    DeploymentVerificationErrorKindV1::PublicationAmbiguous
+                } else {
+                    DeploymentVerificationErrorKindV1::InjectedFailure
+                },
+                "unexpected failure category at {point:?}: {error}"
+            );
+            let entries: Vec<_> = fs::read_dir(parent.path())
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name())
+                .collect();
+            if after_publication {
+                assert_eq!(entries, [OsString::from(&root_name)]);
+                let recovery_fixture = Fixture::new();
+                let recovery_generation = recovery_fixture.generate();
+                assert_eq!(recovery_generation.sha256(), generation.sha256());
+                let recovered = install::install_compiler_execution_deployment_for_test_v1(
+                    recovery_fixture
+                        .verify(recovery_generation.sha256())
+                        .unwrap(),
+                    parent.path(),
+                    current_owner(),
+                )
+                .unwrap();
+                assert_eq!(
+                    recovered.publication(),
+                    install::CompilerExecutionInstalledRootPublicationV1::Reacquired
+                );
+                assert_eq!(
+                    tree_counts(&parent.path().join(&root_name)),
+                    (12, 14),
+                    "published fault point left a partial root: {point:?}"
+                );
+            } else {
+                assert!(
+                    entries.is_empty(),
+                    "pre-publication fault left staging or final state at {point:?}: {entries:?}"
+                );
+            }
+        }
     }
 }

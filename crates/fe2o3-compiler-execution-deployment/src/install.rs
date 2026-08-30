@@ -66,6 +66,68 @@ const INSTALL_DIRECTORY_SPECS_V1: &[(&str, &[&str])] = &[
     ),
 ];
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum InstallationFaultPointV1 {
+    BeforeStagingCreate,
+    StagingCreated,
+    StagingMetadataSet,
+    DirectoryCreated(usize),
+    DirectoryMetadataSet(usize),
+    FileCreated(usize),
+    FileWritten(usize),
+    FileModeSet(usize),
+    FileSynced(usize),
+    RootModeSet,
+    RootVerified,
+    DirectorySynced(usize),
+    RootSynced,
+    ParentPathVerified,
+    RootRenamed,
+    ParentSynced,
+    PublishedRootVerified,
+}
+
+trait InstallationHooksV1 {
+    fn checkpoint(
+        &mut self,
+        point: InstallationFaultPointV1,
+    ) -> Result<(), DeploymentVerificationErrorV1>;
+}
+
+struct NoInstallationFaultV1;
+
+impl InstallationHooksV1 for NoInstallationFaultV1 {
+    fn checkpoint(
+        &mut self,
+        _point: InstallationFaultPointV1,
+    ) -> Result<(), DeploymentVerificationErrorV1> {
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+struct InjectInstallationFaultV1 {
+    point: InstallationFaultPointV1,
+    fired: bool,
+}
+
+#[cfg(test)]
+impl InstallationHooksV1 for InjectInstallationFaultV1 {
+    fn checkpoint(
+        &mut self,
+        point: InstallationFaultPointV1,
+    ) -> Result<(), DeploymentVerificationErrorV1> {
+        if !self.fired && self.point == point {
+            self.fired = true;
+            return Err(super::invalid(
+                DeploymentVerificationErrorKindV1::InjectedFailure,
+                format!("injected installed-root interruption at {point:?}"),
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// Whether an exact installed root was newly published or safely reacquired.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CompilerExecutionInstalledRootPublicationV1 {
@@ -179,10 +241,89 @@ pub(super) fn install_compiler_execution_deployment_for_test_v1(
     install_for_owner(deployment, install_parent, owner)
 }
 
+#[cfg(test)]
+pub(super) fn install_compiler_execution_deployment_at_fault_for_test_v1(
+    deployment: VerifiedCompilerExecutionDeploymentV1,
+    install_parent: &Path,
+    owner: (u32, u32),
+    point: InstallationFaultPointV1,
+) -> Result<InstalledCompilerExecutionDeploymentV1, DeploymentVerificationErrorV1> {
+    let mut hooks = InjectInstallationFaultV1 {
+        point,
+        fired: false,
+    };
+    let result = install_for_owner_with_hooks(deployment, install_parent, owner, &mut hooks);
+    assert!(
+        hooks.fired,
+        "requested installation fault point was not reached"
+    );
+    result
+}
+
+#[cfg(test)]
+pub(super) fn installation_fault_points_for_test_v1() -> Vec<InstallationFaultPointV1> {
+    let mut points = vec![
+        InstallationFaultPointV1::BeforeStagingCreate,
+        InstallationFaultPointV1::StagingCreated,
+        InstallationFaultPointV1::StagingMetadataSet,
+    ];
+    for index in 0..INSTALL_DIRECTORY_SPECS_V1.len() {
+        points.push(InstallationFaultPointV1::DirectoryCreated(index));
+        points.push(InstallationFaultPointV1::DirectoryMetadataSet(index));
+    }
+    for index in 0..14 {
+        points.push(InstallationFaultPointV1::FileCreated(index));
+        points.push(InstallationFaultPointV1::FileWritten(index));
+        points.push(InstallationFaultPointV1::FileModeSet(index));
+        points.push(InstallationFaultPointV1::FileSynced(index));
+    }
+    points.extend([
+        InstallationFaultPointV1::RootModeSet,
+        InstallationFaultPointV1::RootVerified,
+    ]);
+    for index in (0..INSTALL_DIRECTORY_SPECS_V1.len()).rev() {
+        points.push(InstallationFaultPointV1::DirectorySynced(index));
+    }
+    points.extend([
+        InstallationFaultPointV1::RootSynced,
+        InstallationFaultPointV1::ParentPathVerified,
+        InstallationFaultPointV1::RootRenamed,
+        InstallationFaultPointV1::ParentSynced,
+        InstallationFaultPointV1::PublishedRootVerified,
+    ]);
+    points
+}
+
+#[cfg(test)]
+pub(super) fn installation_fault_is_after_publication_for_test_v1(
+    point: InstallationFaultPointV1,
+) -> bool {
+    matches!(
+        point,
+        InstallationFaultPointV1::RootRenamed
+            | InstallationFaultPointV1::ParentSynced
+            | InstallationFaultPointV1::PublishedRootVerified
+    )
+}
+
 fn install_for_owner(
     deployment: VerifiedCompilerExecutionDeploymentV1,
     install_parent: &Path,
     owner: (u32, u32),
+) -> Result<InstalledCompilerExecutionDeploymentV1, DeploymentVerificationErrorV1> {
+    install_for_owner_with_hooks(
+        deployment,
+        install_parent,
+        owner,
+        &mut NoInstallationFaultV1,
+    )
+}
+
+fn install_for_owner_with_hooks(
+    deployment: VerifiedCompilerExecutionDeploymentV1,
+    install_parent: &Path,
+    owner: (u32, u32),
+    hooks: &mut impl InstallationHooksV1,
 ) -> Result<InstalledCompilerExecutionDeploymentV1, DeploymentVerificationErrorV1> {
     validate_sealed_file(&deployment.manifest)?;
     validate_sealed_files(&deployment.files)?;
@@ -202,12 +343,15 @@ fn install_for_owner(
         ));
     }
 
-    let mut staging = StagingRootV1::create(&parent, parent_snapshot, owner)?;
-    let prepared = prepare_staging_root(&mut staging, owner, &deployment);
+    let mut staging = StagingRootV1::create(&parent, parent_snapshot, owner, hooks)?;
+    let prepared = prepare_staging_root(&mut staging, owner, &deployment, hooks);
     if let Err(error) = prepared {
         return Err(staging.cleanup_or(error));
     }
     if let Err(error) = verify_install_parent_path(install_parent, &parent, owner) {
+        return Err(staging.cleanup_or(error));
+    }
+    if let Err(error) = hooks.checkpoint(InstallationFaultPointV1::ParentPathVerified) {
         return Err(staging.cleanup_or(error));
     }
 
@@ -220,6 +364,9 @@ fn install_for_owner(
     ) {
         Ok(()) => {
             staging.cleanup_required = false;
+            if let Err(error) = hooks.checkpoint(InstallationFaultPointV1::RootRenamed) {
+                return Err(publication_ambiguous(error));
+            }
         }
         Err(rustix::io::Errno::EXIST) => {
             let existing = open_named_root(&parent, &root_name)?.ok_or_else(|| {
@@ -243,6 +390,9 @@ fn install_for_owner(
     parent
         .sync_all()
         .map_err(|source| publication_ambiguous(format!("install-parent sync failed: {source}")))?;
+    hooks
+        .checkpoint(InstallationFaultPointV1::ParentSynced)
+        .map_err(publication_ambiguous)?;
     verify_install_parent_path(install_parent, &parent, owner).map_err(publication_ambiguous)?;
     let published = open_named_root(&parent, &root_name)
         .map_err(publication_ambiguous)?
@@ -269,6 +419,9 @@ fn install_for_owner(
         ));
     }
     verify_installed_root(&published, owner, &deployment).map_err(publication_ambiguous)?;
+    hooks
+        .checkpoint(InstallationFaultPointV1::PublishedRootVerified)
+        .map_err(publication_ambiguous)?;
     let root = staging
         .root
         .take()
@@ -376,12 +529,16 @@ fn prepare_staging_root(
     staging: &mut StagingRootV1,
     owner: (u32, u32),
     deployment: &VerifiedCompilerExecutionDeploymentV1,
+    hooks: &mut impl InstallationHooksV1,
 ) -> Result<(), DeploymentVerificationErrorV1> {
-    for &(path, _) in INSTALL_DIRECTORY_SPECS_V1 {
-        staging.create_directory(path, owner)?;
+    for (index, &(path, _)) in INSTALL_DIRECTORY_SPECS_V1.iter().enumerate() {
+        staging.create_directory(path, owner, index, hooks)?;
     }
-    for source in std::iter::once(&deployment.manifest).chain(&deployment.files) {
-        staging.copy_source(source, owner)?;
+    for (index, source) in std::iter::once(&deployment.manifest)
+        .chain(&deployment.files)
+        .enumerate()
+    {
+        staging.copy_source(source, owner, index, hooks)?;
     }
     let root = staging
         .root
@@ -389,14 +546,18 @@ fn prepare_staging_root(
         .expect("active staging root retains its descriptor");
     fchmod(root, Mode::from_raw_mode(INSTALLED_DIRECTORY_MODE_V1))
         .map_err(|source| io_error("set installed-root mode", source))?;
+    hooks.checkpoint(InstallationFaultPointV1::RootModeSet)?;
     verify_installed_root(root, owner, deployment)?;
-    for &(path, _) in INSTALL_DIRECTORY_SPECS_V1.iter().rev() {
+    hooks.checkpoint(InstallationFaultPointV1::RootVerified)?;
+    for (index, &(path, _)) in INSTALL_DIRECTORY_SPECS_V1.iter().enumerate().rev() {
         open_beneath(root, path, true)?
             .sync_all()
             .map_err(|source| std_io_error("sync installed-root directory", source))?;
+        hooks.checkpoint(InstallationFaultPointV1::DirectorySynced(index))?;
     }
     root.sync_all()
-        .map_err(|source| std_io_error("sync complete installed root", source))
+        .map_err(|source| std_io_error("sync complete installed root", source))?;
+    hooks.checkpoint(InstallationFaultPointV1::RootSynced)
 }
 
 fn verify_installed_root(
@@ -515,8 +676,10 @@ impl<'a> StagingRootV1<'a> {
         parent: &'a File,
         parent_snapshot: ObjectSnapshotV1,
         owner: (u32, u32),
+        hooks: &mut impl InstallationHooksV1,
     ) -> Result<Self, DeploymentVerificationErrorV1> {
         for _ in 0..16 {
+            hooks.checkpoint(InstallationFaultPointV1::BeforeStagingCreate)?;
             let name = random_staging_name()?;
             match mkdirat(
                 parent,
@@ -532,6 +695,9 @@ impl<'a> StagingRootV1<'a> {
                         created_directories: Vec::new(),
                         cleanup_required: true,
                     };
+                    if let Err(error) = hooks.checkpoint(InstallationFaultPointV1::StagingCreated) {
+                        return Err(staging.cleanup_or(error));
+                    }
                     let root = match open_named_root(parent, &staging.name) {
                         Ok(Some(root)) => root,
                         Ok(None) => {
@@ -566,6 +732,11 @@ impl<'a> StagingRootV1<'a> {
                         );
                         return Err(staging.cleanup_or(error));
                     }
+                    if let Err(error) =
+                        hooks.checkpoint(InstallationFaultPointV1::StagingMetadataSet)
+                    {
+                        return Err(staging.cleanup_or(error));
+                    }
                     return Ok(staging);
                 }
                 Err(rustix::io::Errno::EXIST) => continue,
@@ -582,6 +753,8 @@ impl<'a> StagingRootV1<'a> {
         &mut self,
         path: &'static str,
         owner: (u32, u32),
+        index: usize,
+        hooks: &mut impl InstallationHooksV1,
     ) -> Result<(), DeploymentVerificationErrorV1> {
         let root = self
             .root
@@ -596,6 +769,7 @@ impl<'a> StagingRootV1<'a> {
         )
         .map_err(|source| io_error("create installed-root directory", source))?;
         self.created_directories.push(path);
+        hooks.checkpoint(InstallationFaultPointV1::DirectoryCreated(index))?;
         let directory = open_beneath(root, path, true)?;
         set_owner_and_mode(&directory, owner, INSTALLED_DIRECTORY_MODE_V1)?;
         let root_device = fstat(root)
@@ -613,6 +787,7 @@ impl<'a> StagingRootV1<'a> {
                 "new installed-root directory crosses a filesystem boundary",
             ));
         }
+        hooks.checkpoint(InstallationFaultPointV1::DirectoryMetadataSet(index))?;
         Ok(())
     }
 
@@ -620,6 +795,8 @@ impl<'a> StagingRootV1<'a> {
         &mut self,
         source: &SealedDeploymentFileV1,
         owner: (u32, u32),
+        index: usize,
+        hooks: &mut impl InstallationHooksV1,
     ) -> Result<(), DeploymentVerificationErrorV1> {
         validate_sealed_file(source)?;
         let relative = source
@@ -642,14 +819,18 @@ impl<'a> StagingRootV1<'a> {
         )
         .map_err(|error| io_error("create installed-root file", error))?;
         self.created_files.push(relative);
+        hooks.checkpoint(InstallationFaultPointV1::FileCreated(index))?;
         let mut destination = File::from(descriptor);
         set_owner_if_needed(&destination, owner)?;
         copy_exact_source(source, &mut destination)?;
+        hooks.checkpoint(InstallationFaultPointV1::FileWritten(index))?;
         fchmod(&destination, Mode::from_raw_mode(source.entry.spec.mode))
             .map_err(|error| io_error("set installed-root file mode", error))?;
+        hooks.checkpoint(InstallationFaultPointV1::FileModeSet(index))?;
         destination
             .sync_all()
-            .map_err(|error| std_io_error("sync installed-root file", error))
+            .map_err(|error| std_io_error("sync installed-root file", error))?;
+        hooks.checkpoint(InstallationFaultPointV1::FileSynced(index))
     }
 
     fn cleanup_or(
