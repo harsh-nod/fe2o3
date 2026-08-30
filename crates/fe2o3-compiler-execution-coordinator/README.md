@@ -58,3 +58,10 @@ while revalidating service continuity. `deployment/` defines the matching
 socket, service, account, and directory policy. The release build gate emits a
 static `ET_EXEC` image with no interpreter, dynamic section, runtime dependency,
 RPATH, RUNPATH, undefined symbol, or executable stack.
+
+`fe2o3-compiler-execution-provision` is the sole same-host reference
+provisioning command. It takes one nonzero canonical decimal policy generation
+and otherwise uses only fixed service names, image paths, output names, and
+filesystem policy. It creates missing signing seeds, derives the complete
+policy/supervisor/anchor/provisioning record graph, and uses durable no-replace
+publication. An exact rerun is accepted; substitution is not overwritten.

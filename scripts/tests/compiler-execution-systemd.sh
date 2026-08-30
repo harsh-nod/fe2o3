@@ -7,6 +7,8 @@ readonly SOCKET="${REPO_ROOT}/deployment/systemd/fe2o3-compiler-execution.socket
 readonly SYSUSERS="${REPO_ROOT}/deployment/sysusers.d/fe2o3-compiler-execution.conf"
 readonly TMPFILES="${REPO_ROOT}/deployment/tmpfiles.d/fe2o3-compiler-execution.conf"
 readonly ENTRYPOINT="${REPO_ROOT}/crates/fe2o3-compiler-execution-coordinator/src/entrypoint.rs"
+readonly PROVISIONER="${REPO_ROOT}/crates/fe2o3-compiler-execution-coordinator/src/provisioning_entrypoint.rs"
+readonly COORDINATOR_MANIFEST="${REPO_ROOT}/crates/fe2o3-compiler-execution-coordinator/Cargo.toml"
 
 fail() {
   printf 'compiler-execution systemd contract failed: %s\n' "$*" >&2
@@ -54,6 +56,27 @@ for open_file in "${open_files[@]}"; do
   activation_names+=":${without_options##*:}"
 done
 grep -Fq -- "${activation_names}" "${ENTRYPOINT}" || fail 'entrypoint activation names changed'
+for path in \
+  /usr/libexec/fe2o3/fe2o3-compiler-execution-supervisor \
+  /usr/libexec/fe2o3/fe2o3-static-preexec-launcher \
+  /usr/libexec/fe2o3/fe2o3-compiler-execution-issuer \
+  /usr/libexec/fe2o3/fe2o3-external-anchor-provisioning-helper \
+  /usr/libexec/fe2o3/fe2o3-external-anchor-service; do
+  grep -Fq -- "\"${path}\"" "${PROVISIONER}" || fail "provisioner path ${path} changed"
+done
+for name in \
+  supervisor-deployment-v1 \
+  issuer-policy-v1 \
+  anchor-deployment-v1 \
+  anchor-provisioning-v1 \
+  issuer-signing-key-seed-v1 \
+  anchor-signing-key-seed-v1; do
+  grep -Fq -- "\"${name}\"" "${PROVISIONER}" || fail "provisioner file ${name} changed"
+  grep -Fq -- "/etc/fe2o3/compiler-execution/${name}:" "${SERVICE}" ||
+    fail "service file ${name} changed"
+done
+grep -Fq -- 'name = "fe2o3-compiler-execution-provision"' "${COORDINATOR_MANIFEST}" ||
+  fail 'provisioner binary target is missing'
 require_line "${SERVICE}" 'Sockets=fe2o3-compiler-execution.socket'
 require_line "${SERVICE}" 'KillMode=mixed'
 require_line "${SERVICE}" 'Restart=on-failure'

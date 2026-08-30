@@ -307,9 +307,11 @@ root-owned coordinator exist, and their persistence plus packet loops now
 converge to only the exact prior or proposed state across every injected
 create/write/fsync/rename and receive/exchange/send interruption. Deployed
 root-coordinator-to-supervisor wiring, lifecycle custody, and exact systemd
-service-account/socket policy are implemented. Canonical installation-record
-generation, combined privileged qualification, and the concrete protected
-verifier remain absent. A fixed
+service-account/socket policy are implemented. The fixed root provisioner now
+derives and durably installs the complete canonical record graph from measured
+static images, provisioned identities, and freshly generated or retained key
+seeds. Combined privileged qualification and the concrete protected verifier
+remain absent. A fixed
 receipt sidecar and publication ACK now
 carry the exact journal, occurrence, receipt, Worker record, sequence, and
 advanced rollback anchor without granting authority from wire bytes. The
