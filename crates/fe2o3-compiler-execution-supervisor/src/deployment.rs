@@ -228,7 +228,7 @@ fn close_inherited(descriptor: RawFd) -> Result<(), ProtectedIssuerDeploymentErr
 fn protect_unrelated_descriptors_v1() -> Result<(), ProtectedIssuerDeploymentErrorV1> {
     // SAFETY: close_range with CLOEXEC changes descriptor flags only and does not dereference user
     // memory. Private retained descriptors are already close-on-exec; this protects all extras.
-    if unsafe { libc::close_range(3, u32::MAX, CLOSE_RANGE_CLOEXEC) } != 0 {
+    if unsafe { libc::syscall(libc::SYS_close_range, 3_u32, u32::MAX, CLOSE_RANGE_CLOEXEC) } != 0 {
         return Err(ProtectedIssuerDeploymentErrorV1::Descriptor {
             operation: "protect unrelated supervisor descriptors",
             source: io::Error::last_os_error(),

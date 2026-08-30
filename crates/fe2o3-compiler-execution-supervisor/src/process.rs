@@ -37,6 +37,8 @@ const SIGCHLD: u64 = 17;
 const SIGKILL: c_int = 9;
 const SIGSTOP: c_int = 19;
 const SYS_CLONE3: c_long = 435;
+const SYS_CLOSE_RANGE: c_long = 436;
+const SYS_EXECVEAT: c_long = 322;
 const SYS_RT_SIGACTION: c_long = 13;
 const SYS_RT_SIGPROCMASK: c_long = 14;
 const SYS_GETGROUPS: c_long = 115;
@@ -85,15 +87,7 @@ const _: () = assert!(STAGED_DESCRIPTOR_FLOOR == 216);
 
 unsafe extern "C" {
     fn close(descriptor: c_int) -> c_int;
-    fn close_range(first: u32, last: u32, flags: u32) -> c_int;
     fn dup3(old_descriptor: c_int, new_descriptor: c_int, flags: c_int) -> c_int;
-    fn execveat(
-        descriptor: c_int,
-        path: *const c_char,
-        arguments: *const *const c_char,
-        environment: *const *const c_char,
-        flags: c_int,
-    ) -> c_int;
     fn prctl(option: c_int, ...) -> c_int;
     fn syscall(number: c_long, ...) -> c_long;
     fn write(descriptor: c_int, bytes: *const c_void, length: usize) -> isize;
@@ -968,7 +962,7 @@ unsafe fn child_exec(
         if release != GATE_RELEASE_V1 {
             child_fail(staged.exec_status_writer.as_raw_fd(), 6);
         }
-        if close_range(3, u32::MAX, CLOSE_RANGE_CLOEXEC) != 0 {
+        if syscall(SYS_CLOSE_RANGE, 3_u32, u32::MAX, CLOSE_RANGE_CLOEXEC) != 0 {
             child_fail(staged.exec_status_writer.as_raw_fd(), 7);
         }
         for (target, source) in staged.stdio_sources.into_iter().enumerate() {
@@ -984,7 +978,8 @@ unsafe fn child_exec(
         let launcher_name = c"fe2o3-static-preexec-launcher";
         let arguments = [launcher_name.as_ptr(), std::ptr::null()];
         let environment = [std::ptr::null::<c_char>()];
-        execveat(
+        syscall(
+            SYS_EXECVEAT,
             staged.launcher.as_raw_fd(),
             c"".as_ptr(),
             arguments.as_ptr(),

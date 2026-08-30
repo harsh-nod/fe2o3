@@ -132,4 +132,6 @@ requires that manifest to pin the exact protected-supervisor executable as a
 role distinct from the issuer pre-exec launcher; and enters only the existing
 fixed-worker service loop. System provisioning of
 the distinct service accounts, independently administered external anchor,
-root/socket policy, and reviewed installed image measurements remains pending.
+and root/socket policy remains pending. The reviewed supervisor image is built
+and checked as a loader-independent static executable by
+`scripts/build-static-compiler-execution-supervisor.sh`.
