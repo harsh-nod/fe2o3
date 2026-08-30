@@ -20,10 +20,14 @@ use rustix::fs::{
 use sha2::{Digest, Sha256};
 
 mod install;
+mod qualification;
 
 pub use install::{
     CompilerExecutionInstalledRootPublicationV1, InstalledCompilerExecutionDeploymentV1,
     compiler_execution_install_root_name_v1, install_compiler_execution_deployment_v1,
+};
+pub use qualification::{
+    PreparedCompilerExecutionQualificationV1, prepare_compiler_execution_qualification_v1,
 };
 
 /// Canonical deployment target admitted by this V1 profile.
@@ -1105,7 +1109,9 @@ pub enum DeploymentVerificationErrorKindV1 {
     InputChanged,
     /// A bounded operating-system operation failed.
     Io,
-    /// The production installer did not run with effective UID 0.
+    /// A pinned qualification base image is outside the sole supported V1 profile.
+    InvalidQualificationBase,
+    /// A production root operation did not run with effective UID 0.
     InsufficientPrivilege,
     /// Atomic publication happened, but its durability result is ambiguous.
     PublicationAmbiguous,
@@ -1180,6 +1186,7 @@ mod tests {
     use std::fs;
     use std::os::unix::ffi::OsStringExt;
     use std::os::unix::fs::{PermissionsExt, symlink};
+    use std::path::PathBuf;
 
     use rustix::fs::XattrFlags;
 
@@ -1569,6 +1576,65 @@ mod tests {
         parent
     }
 
+    fn canonical_qualification_base_bytes() -> Vec<u8> {
+        fn put_u16(bytes: &mut [u8], offset: usize, value: u16) {
+            bytes[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
+        }
+        fn put_u32(bytes: &mut [u8], offset: usize, value: u32) {
+            bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+        }
+        fn put_u64(bytes: &mut [u8], offset: usize, value: u64) {
+            bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
+        }
+
+        let mut bytes = vec![0_u8; 4096];
+        put_u32(&mut bytes, 0, 0x7371_7368);
+        put_u32(&mut bytes, 4, 1);
+        put_u32(&mut bytes, 8, 1_700_000_000);
+        put_u32(&mut bytes, 12, 128 * 1024);
+        put_u16(&mut bytes, 20, 6);
+        put_u16(&mut bytes, 22, 17);
+        put_u16(&mut bytes, 24, 0x0100);
+        put_u16(&mut bytes, 26, 1);
+        put_u16(&mut bytes, 28, 4);
+        put_u16(&mut bytes, 30, 0);
+        put_u64(&mut bytes, 40, 128);
+        put_u64(&mut bytes, 48, 96);
+        put_u64(&mut bytes, 56, u64::MAX);
+        put_u64(&mut bytes, 64, 104);
+        put_u64(&mut bytes, 72, 112);
+        for (index, byte) in bytes[96..128].iter_mut().enumerate() {
+            *byte = index as u8;
+        }
+        bytes
+    }
+
+    fn qualification_base_fixture(bytes: &[u8]) -> (tempfile::TempDir, PathBuf, String) {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("qualification-base-v1.squashfs");
+        fs::write(&path, bytes).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o444)).unwrap();
+        let digest: [u8; 32] = Sha256::digest(bytes).into();
+        let digest = lower_hex(&digest);
+        (root, path, digest)
+    }
+
+    fn installed_for_qualification() -> (
+        install::InstalledCompilerExecutionDeploymentV1,
+        tempfile::TempDir,
+    ) {
+        let fixture = Fixture::new();
+        let generation = fixture.generate();
+        let parent = private_install_parent();
+        let installed = install::install_compiler_execution_deployment_for_test_v1(
+            fixture.verify(generation.sha256()).unwrap(),
+            parent.path(),
+            current_owner(),
+        )
+        .unwrap();
+        (installed, parent)
+    }
+
     fn assert_installed_root_mutation_rejected(
         expected_kind: DeploymentVerificationErrorKindV1,
         mutate: impl FnOnce(&Path),
@@ -1898,6 +1964,269 @@ mod tests {
                 fs::set_permissions(&manifest, fs::Permissions::from_mode(0o444)).unwrap();
             },
         );
+    }
+
+    #[test]
+    fn qualification_preparation_retains_exact_installed_and_base_evidence() {
+        let (installed, _install_parent) = installed_for_qualification();
+        let expected_manifest_sha256 = installed.manifest_sha256();
+        let expected_root_name = installed.root_name().to_owned();
+        let base_bytes = canonical_qualification_base_bytes();
+        let (base_root, base_path, base_sha256) = qualification_base_fixture(&base_bytes);
+        let qualification_parent = private_install_parent();
+        let prepared = qualification::prepare_compiler_execution_qualification_for_test_v1(
+            installed,
+            &base_path,
+            &base_sha256,
+            qualification_parent.path(),
+            current_owner(),
+        )
+        .unwrap();
+        assert_eq!(prepared.manifest_sha256(), expected_manifest_sha256);
+        assert_eq!(prepared.installed_root_name(), expected_root_name);
+        assert_eq!(lower_hex(&prepared.base_image_sha256()), base_sha256);
+        assert_eq!(prepared.base_image_byte_len(), 4096);
+        assert_eq!(prepared.base_image_created_epoch(), 1_700_000_000);
+        assert_eq!(
+            fs::read_dir(qualification_parent.path()).unwrap().count(),
+            0
+        );
+
+        drop(base_root);
+        qualification::revalidate_prepared_qualification_for_test_v1(&prepared, current_owner())
+            .unwrap();
+    }
+
+    #[test]
+    fn qualification_preparation_rejects_wrong_pin_profile_and_source_metadata() {
+        let base_bytes = canonical_qualification_base_bytes();
+        let (_base_root, base_path, _base_sha256) = qualification_base_fixture(&base_bytes);
+        let qualification_parent = private_install_parent();
+        let (installed, _install_parent) = installed_for_qualification();
+        assert_eq!(
+            qualification::prepare_compiler_execution_qualification_for_test_v1(
+                installed,
+                &base_path,
+                &"00".repeat(32),
+                qualification_parent.path(),
+                current_owner(),
+            )
+            .unwrap_err()
+            .kind(),
+            DeploymentVerificationErrorKindV1::ContentMismatch
+        );
+
+        let (installed, _install_parent) = installed_for_qualification();
+        assert_eq!(
+            qualification::prepare_compiler_execution_qualification_for_test_v1(
+                installed,
+                &base_path,
+                "AA",
+                qualification_parent.path(),
+                current_owner(),
+            )
+            .unwrap_err()
+            .kind(),
+            DeploymentVerificationErrorKindV1::InvalidDigest
+        );
+
+        let mut malformed = canonical_qualification_base_bytes();
+        malformed[0] ^= 1;
+        let (_base_root, base_path, base_sha256) = qualification_base_fixture(&malformed);
+        let (installed, _install_parent) = installed_for_qualification();
+        assert_eq!(
+            qualification::prepare_compiler_execution_qualification_for_test_v1(
+                installed,
+                &base_path,
+                &base_sha256,
+                qualification_parent.path(),
+                current_owner(),
+            )
+            .unwrap_err()
+            .kind(),
+            DeploymentVerificationErrorKindV1::InvalidQualificationBase
+        );
+
+        let base_bytes = canonical_qualification_base_bytes();
+        let (base_root, base_path, base_sha256) = qualification_base_fixture(&base_bytes);
+        fs::set_permissions(&base_path, fs::Permissions::from_mode(0o644)).unwrap();
+        let (installed, _install_parent) = installed_for_qualification();
+        assert_eq!(
+            qualification::prepare_compiler_execution_qualification_for_test_v1(
+                installed,
+                &base_path,
+                &base_sha256,
+                qualification_parent.path(),
+                current_owner(),
+            )
+            .unwrap_err()
+            .kind(),
+            DeploymentVerificationErrorKindV1::InvalidMetadata
+        );
+
+        fs::set_permissions(&base_path, fs::Permissions::from_mode(0o600)).unwrap();
+        let file = File::options()
+            .read(true)
+            .write(true)
+            .open(&base_path)
+            .unwrap();
+        rustix::fs::fsetxattr(&file, "user.fe2o3-test", b"1", XattrFlags::empty()).unwrap();
+        fs::set_permissions(&base_path, fs::Permissions::from_mode(0o444)).unwrap();
+        let (installed, _install_parent) = installed_for_qualification();
+        assert_eq!(
+            qualification::prepare_compiler_execution_qualification_for_test_v1(
+                installed,
+                &base_path,
+                &base_sha256,
+                qualification_parent.path(),
+                current_owner(),
+            )
+            .unwrap_err()
+            .kind(),
+            DeploymentVerificationErrorKindV1::ForbiddenAttributes
+        );
+        drop(file);
+        drop(base_root);
+
+        let base_bytes = canonical_qualification_base_bytes();
+        let (base_root, base_path, base_sha256) = qualification_base_fixture(&base_bytes);
+        fs::hard_link(&base_path, base_root.path().join("base-hardlink")).unwrap();
+        let (installed, _install_parent) = installed_for_qualification();
+        assert_eq!(
+            qualification::prepare_compiler_execution_qualification_for_test_v1(
+                installed,
+                &base_path,
+                &base_sha256,
+                qualification_parent.path(),
+                current_owner(),
+            )
+            .unwrap_err()
+            .kind(),
+            DeploymentVerificationErrorKindV1::InvalidMetadata
+        );
+
+        let base_bytes = canonical_qualification_base_bytes();
+        let (base_root, base_path, base_sha256) = qualification_base_fixture(&base_bytes);
+        let base_link = base_root.path().join("base-link");
+        symlink(&base_path, &base_link).unwrap();
+        let (installed, _install_parent) = installed_for_qualification();
+        assert_eq!(
+            qualification::prepare_compiler_execution_qualification_for_test_v1(
+                installed,
+                &base_link,
+                &base_sha256,
+                qualification_parent.path(),
+                current_owner(),
+            )
+            .unwrap_err()
+            .kind(),
+            DeploymentVerificationErrorKindV1::Io
+        );
+
+        let nonempty_parent = private_install_parent();
+        fs::write(nonempty_parent.path().join("hostile"), b"do not use").unwrap();
+        let (installed, _install_parent) = installed_for_qualification();
+        assert_eq!(
+            qualification::prepare_compiler_execution_qualification_for_test_v1(
+                installed,
+                &base_path,
+                &base_sha256,
+                nonempty_parent.path(),
+                current_owner(),
+            )
+            .unwrap_err()
+            .kind(),
+            DeploymentVerificationErrorKindV1::InvalidInventory
+        );
+
+        let (installed, _install_parent) = installed_for_qualification();
+        assert_eq!(
+            qualification::prepare_compiler_execution_qualification_for_test_v1(
+                installed,
+                Path::new("relative-base.squashfs"),
+                &base_sha256,
+                qualification_parent.path(),
+                current_owner(),
+            )
+            .unwrap_err()
+            .kind(),
+            DeploymentVerificationErrorKindV1::InvalidMetadata
+        );
+    }
+
+    #[test]
+    fn qualification_preparation_rejects_changed_installed_root_parent_and_privilege() {
+        let base_bytes = canonical_qualification_base_bytes();
+        let (_base_root, base_path, base_sha256) = qualification_base_fixture(&base_bytes);
+        let qualification_parent = private_install_parent();
+        let (installed, install_parent) = installed_for_qualification();
+        let build_info = install_parent
+            .path()
+            .join(installed.root_name())
+            .join("usr/share/fe2o3/compiler-execution/BUILD-INFO");
+        fs::set_permissions(&build_info, fs::Permissions::from_mode(0o600)).unwrap();
+        let mut bytes = fs::read(&build_info).unwrap();
+        bytes[0] ^= 1;
+        fs::write(&build_info, bytes).unwrap();
+        fs::set_permissions(&build_info, fs::Permissions::from_mode(0o444)).unwrap();
+        assert_eq!(
+            qualification::prepare_compiler_execution_qualification_for_test_v1(
+                installed,
+                &base_path,
+                &base_sha256,
+                qualification_parent.path(),
+                current_owner(),
+            )
+            .unwrap_err()
+            .kind(),
+            DeploymentVerificationErrorKindV1::ContentMismatch
+        );
+
+        let (installed, _install_parent) = installed_for_qualification();
+        let prepared = qualification::prepare_compiler_execution_qualification_for_test_v1(
+            installed,
+            &base_path,
+            &base_sha256,
+            qualification_parent.path(),
+            current_owner(),
+        )
+        .unwrap();
+        let displaced = qualification_parent
+            .path()
+            .with_extension("qualification-parent-displaced");
+        fs::rename(qualification_parent.path(), &displaced).unwrap();
+        fs::create_dir(qualification_parent.path()).unwrap();
+        fs::set_permissions(
+            qualification_parent.path(),
+            fs::Permissions::from_mode(0o700),
+        )
+        .unwrap();
+        assert_eq!(
+            qualification::revalidate_prepared_qualification_for_test_v1(
+                &prepared,
+                current_owner(),
+            )
+            .unwrap_err()
+            .kind(),
+            DeploymentVerificationErrorKindV1::InputChanged
+        );
+        drop(prepared);
+        fs::remove_dir(displaced).unwrap();
+
+        if rustix::process::geteuid().as_raw() != 0 {
+            let (installed, _install_parent) = installed_for_qualification();
+            assert_eq!(
+                prepare_compiler_execution_qualification_v1(
+                    installed,
+                    &base_path,
+                    &base_sha256,
+                    qualification_parent.path(),
+                )
+                .unwrap_err()
+                .kind(),
+                DeploymentVerificationErrorKindV1::InsufficientPrivilege
+            );
+        }
     }
 
     #[test]
