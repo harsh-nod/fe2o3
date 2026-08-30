@@ -7196,9 +7196,6 @@ impl PipelineScalarProjectorV1<'_> {
             ));
         }
         let local = place.local().index() as usize;
-        if let Some(index) = self.index_values.get(local).copied().flatten() {
-            return Ok(ProjectedPipelineScalarV1::Value(index.value));
-        }
         let declaration = self.function.locals().get(local).ok_or(
             ProductionRankedProjectionErrorV1::Unsupported(
                 "a pipeline scalar local is outside the semantic local table",
@@ -7208,6 +7205,9 @@ impl PipelineScalarProjectorV1<'_> {
             return Err(ProductionRankedProjectionErrorV1::Incomplete(
                 "a pipeline scalar local has address-escaped value semantics",
             ));
+        }
+        if let Some(index) = self.index_values.get(local).copied().flatten() {
+            return Ok(ProjectedPipelineScalarV1::Value(index.value));
         }
         match self.assertion_proofs.definition_counts.get(local).copied() {
             Some(0) => {
@@ -9645,7 +9645,9 @@ enum AssertionRangeOperandTaskV1 {
         bits: Option<u128>,
     },
     Local(usize),
-    CheckedResult { local: usize },
+    CheckedResult {
+        local: usize,
+    },
     Unsupported,
 }
 
@@ -9863,7 +9865,9 @@ impl<'a> SemanticAssertProofsV1<'a> {
             return Ok(false);
         };
         let local = result_local.index() as usize;
-        if self.definition_counts.get(local).copied() != Some(1) {
+        if self.definition_counts.get(local).copied() != Some(1)
+            || self.address_escaped.get(local).copied() != Some(false)
+        {
             return Ok(false);
         }
         let Some(site) = self.assignments.get(local).copied().flatten() else {
@@ -10139,9 +10143,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
         }
     }
 
-    fn assertion_range_operand_task_v1(
-        operand: &SemanticOperandV1,
-    ) -> AssertionRangeOperandTaskV1 {
+    fn assertion_range_operand_task_v1(operand: &SemanticOperandV1) -> AssertionRangeOperandTaskV1 {
         match operand {
             SemanticOperandV1::Constant(constant) => AssertionRangeOperandTaskV1::Constant {
                 ty: constant.ty(),
@@ -10204,10 +10206,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
         task: AssertionRangeOperandTaskV1,
         use_site: ScalarAssignmentSiteV1,
     ) -> Result<(), ProductionRankedProjectionErrorV1> {
-        push_assertion_range_frame_v1(
-            frames,
-            AssertionRangeFrameV1::Operand { task, use_site },
-        )
+        push_assertion_range_frame_v1(frames, AssertionRangeFrameV1::Operand { task, use_site })
     }
 
     fn schedule_assertion_range_expression_v1(
@@ -10289,19 +10288,17 @@ impl<'a> SemanticAssertProofsV1<'a> {
         })?;
         push_assertion_range_frame_v1(
             frames,
-            AssertionRangeFrameV1::ContinueStrictUpperBound(
-                AssertionStrictUpperBoundStateV1 {
-                    local,
-                    use_block,
-                    next_switch_block: 0,
-                    range: result,
-                    can_reach_use,
-                    stability_visited,
-                    stability_pending,
-                    stability_generation: 0,
-                    proven_upper_bound: None,
-                },
-            ),
+            AssertionRangeFrameV1::ContinueStrictUpperBound(AssertionStrictUpperBoundStateV1 {
+                local,
+                use_block,
+                next_switch_block: 0,
+                range: result,
+                can_reach_use,
+                stability_visited,
+                stability_pending,
+                stability_generation: 0,
+                proven_upper_bound: None,
+            }),
         )
     }
 
@@ -10399,8 +10396,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
                                     )?;
                                 }
                                 Some(1) => {
-                                    let Some(site) =
-                                        self.assignments.get(local).copied().flatten()
+                                    let Some(site) = self.assignments.get(local).copied().flatten()
                                     else {
                                         self.schedule_assertion_local_narrowing_v1(
                                             &mut frames,
@@ -10425,10 +10421,10 @@ impl<'a> SemanticAssertProofsV1<'a> {
                                         )?;
                                         continue;
                                     }
-                                    let SemanticStatementKindV1::Assign(assignment) = self.function
-                                        .blocks()[site.block]
-                                        .statements()[site.statement]
-                                        .kind()
+                                    let SemanticStatementKindV1::Assign(assignment) =
+                                        self.function.blocks()[site.block].statements()
+                                            [site.statement]
+                                            .kind()
                                     else {
                                         return Err(
                                             ProductionRankedProjectionErrorV1::Unsupported(
@@ -10493,10 +10489,9 @@ impl<'a> SemanticAssertProofsV1<'a> {
                                 push_assertion_range_value_v1(&mut values, None)?;
                                 continue;
                             }
-                            let SemanticStatementKindV1::Assign(assignment) = self.function.blocks()
-                                [site.block]
-                                .statements()[site.statement]
-                                .kind()
+                            let SemanticStatementKindV1::Assign(assignment) =
+                                self.function.blocks()[site.block].statements()[site.statement]
+                                    .kind()
                             else {
                                 visiting.remove(&local);
                                 push_assertion_range_value_v1(&mut values, None)?;
@@ -10579,8 +10574,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
                             if targets.values().len() != 1 || targets.values()[0].value() != 0 {
                                 return None;
                             }
-                            let false_target =
-                                targets.values()[0].edge().target().index() as usize;
+                            let false_target = targets.values()[0].edge().target().index() as usize;
                             let true_target = targets.otherwise().target().index() as usize;
                             if false_target == true_target {
                                 return None;
@@ -10590,7 +10584,8 @@ impl<'a> SemanticAssertProofsV1<'a> {
                                 true_target,
                                 block.statements().len(),
                             ))
-                        })() else {
+                        })(
+                        ) else {
                             continue;
                         };
                         if self.definition_counts.get(condition_local).copied() != Some(1)
@@ -10598,8 +10593,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
                         {
                             continue;
                         }
-                        let Some(site) =
-                            self.assignments.get(condition_local).copied().flatten()
+                        let Some(site) = self.assignments.get(condition_local).copied().flatten()
                         else {
                             continue;
                         };
@@ -10613,10 +10607,9 @@ impl<'a> SemanticAssertProofsV1<'a> {
                             continue;
                         }
                         let Some((left_local, right)) = (|| {
-                            let SemanticStatementKindV1::Assign(assignment) = self.function.blocks()
-                                [site.block]
-                                .statements()[site.statement]
-                                .kind()
+                            let SemanticStatementKindV1::Assign(assignment) =
+                                self.function.blocks()[site.block].statements()[site.statement]
+                                    .kind()
                             else {
                                 return None;
                             };
@@ -10644,12 +10637,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
                         {
                             continue;
                         }
-                        scheduled = Some((
-                            right,
-                            site,
-                            switch_block,
-                            true_target,
-                        ));
+                        scheduled = Some((right, site, switch_block, true_target));
                         break;
                     }
                     if let Some((task, site, switch_block, true_target)) = scheduled {
@@ -15202,10 +15190,8 @@ fn assertion_definition_inventory(
                         });
                     }
                 }
-                if let SemanticRvalueKindV1::Borrow { place, .. }
-                | SemanticRvalueKindV1::AddressOf { place, .. } = assignment.value().kind()
-                    && let Some(slot) = local_definition_index(place)
-                        .and_then(|local| address_escaped.get_mut(local))
+                if let Some(slot) = address_escaped_local_index_v1(assignment.value().kind())
+                    .and_then(|local| address_escaped.get_mut(local))
                 {
                     *slot = true;
                 }
@@ -15279,6 +15265,14 @@ fn local_definition_index(place: &SemanticPlaceV1) -> Option<usize> {
         Some(SemanticProjectionKindV1::Dereference)
     ))
     .then_some(place.local().index() as usize)
+}
+
+fn address_escaped_local_index_v1(kind: &SemanticRvalueKindV1) -> Option<usize> {
+    match kind {
+        SemanticRvalueKindV1::Borrow { place, .. }
+        | SemanticRvalueKindV1::AddressOf { place, .. } => local_definition_index(place),
+        _ => None,
+    }
 }
 
 fn checked_reference_origin_for_place(
@@ -16129,6 +16123,12 @@ fn constant_locals(
     definitions.resize(local_count, ConstantDefinitionV1::Missing);
     for block in function.blocks() {
         for statement in block.statements() {
+            if let SemanticStatementKindV1::Assign(assignment) = statement.kind()
+                && let Some(definition) = address_escaped_local_index_v1(assignment.value().kind())
+                    .and_then(|local| definitions.get_mut(local))
+            {
+                *definition = ConstantDefinitionV1::Invalid;
+            }
             match statement.kind() {
                 SemanticStatementKindV1::Assign(assignment)
                     if assignment.destination().projections().is_empty() =>
@@ -16321,10 +16321,9 @@ fn resolve_constant_iterative(
     for current in path.drain(..).rev() {
         let resolved = match definitions[current] {
             ConstantDefinitionV1::Direct(value) => Some(value),
-            ConstantDefinitionV1::Alias(local) => values
-                .get(local.index() as usize)
-                .copied()
-                .flatten(),
+            ConstantDefinitionV1::Alias(local) => {
+                values.get(local.index() as usize).copied().flatten()
+            }
             ConstantDefinitionV1::Missing | ConstantDefinitionV1::Invalid => None,
         };
         states[current] = 2;
@@ -20774,13 +20773,7 @@ mod tests {
         let mut values = [None; 3];
         let mut path = Vec::new();
         assert_eq!(
-            resolve_constant_iterative(
-                2,
-                &definitions,
-                &mut states,
-                &mut values,
-                &mut path,
-            ),
+            resolve_constant_iterative(2, &definitions, &mut states, &mut values, &mut path,),
             Some(64),
         );
         assert_eq!(values, [Some(64); 3]);
@@ -24158,6 +24151,267 @@ mod tests {
         }
     }
 
+    fn address_escaped_constant_assert_function()
+    -> (Vec<SemanticTypeDeclV1>, SemanticFunctionDeclV1) {
+        let mut types = assertion_proof_types();
+        let bool_pointer = SemanticTypeIdV1::from_index(types.len() as u32);
+        types.push(SemanticTypeDeclV1::new(
+            SemanticTypeIdentityV1::from_sha256(bytes(50)),
+            SemanticLayoutIdentityV1::from_sha256(bytes(50)),
+            SemanticTypeLayoutV1::new(Some(8), 8).unwrap(),
+            SemanticTypeShapeV1::Pointer(
+                SemanticPointerTypeV1::new(
+                    BOOL_TYPE,
+                    SemanticMutabilityV1::Mutable,
+                    5,
+                    64,
+                    SemanticPointerMetadataV1::None,
+                )
+                .unwrap(),
+            ),
+        ));
+        let through_pointer = SemanticPlaceV1::new(
+            SemanticLocalIdV1::from_index(2),
+            vec![
+                SemanticProjectionV1::new(SemanticProjectionKindV1::Dereference, BOOL_TYPE)
+                    .unwrap(),
+            ],
+            BOOL_TYPE,
+        )
+        .unwrap();
+        let function = projection_function_with_locals(
+            vec![
+                block(
+                    202,
+                    vec![
+                        typed_assignment(
+                            1,
+                            BOOL_TYPE,
+                            SemanticRvalueKindV1::Use(typed_constant(BOOL_TYPE, 1, 1)),
+                        ),
+                        statement(SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+                            SemanticPlaceV1::new(
+                                SemanticLocalIdV1::from_index(2),
+                                vec![
+                                    SemanticProjectionV1::new(
+                                        SemanticProjectionKindV1::OpaqueCast,
+                                        bool_pointer,
+                                    )
+                                    .unwrap(),
+                                ],
+                                bool_pointer,
+                            )
+                            .unwrap(),
+                            SemanticRvalueV1::new(
+                                bool_pointer,
+                                SemanticRvalueKindV1::Borrow {
+                                    kind: SemanticBorrowKindV1::Mutable,
+                                    place: typed_place(1, BOOL_TYPE),
+                                },
+                            ),
+                        ))),
+                        statement(SemanticStatementKindV1::Store(SemanticMemoryStoreV1::new(
+                            through_pointer,
+                            typed_constant(BOOL_TYPE, 0, 1),
+                            SemanticVolatilityV1::NonVolatile,
+                            None,
+                        ))),
+                    ],
+                    SemanticTerminatorKindV1::Assert {
+                        condition: typed_operand(1, BOOL_TYPE),
+                        expected: true,
+                        message: SemanticAssertMessageV1::DivisionByZero(typed_constant(
+                            U64_TYPE, 1, 8,
+                        )),
+                        target: cfg_edge(SemanticEdgeRoleV1::AssertSuccess, 1),
+                        unwind: SemanticUnwindActionV1::Unreachable,
+                    },
+                ),
+                block(203, vec![], SemanticTerminatorKindV1::Return),
+            ],
+            vec![
+                local(202, SCALAR_TYPE, SemanticLocalRoleV1::Return),
+                local(203, BOOL_TYPE, SemanticLocalRoleV1::Temporary),
+                local(204, bool_pointer, SemanticLocalRoleV1::Temporary),
+            ],
+        );
+        (types, function)
+    }
+
+    #[test]
+    fn address_escaped_constants_cannot_elide_non_bounds_assertions() {
+        let (types, function) = address_escaped_constant_assert_function();
+        let constants = constant_locals(&function).unwrap();
+        assert_eq!(constants[1], None);
+        assert!(!SemanticAssertProofsV1::analyze(&types, &function).unwrap()[0]);
+        assert!(matches!(
+            build_ranked_cfg(
+                &types,
+                &function,
+                &[],
+                &vec![None; function.locals().len()],
+                &vec![None; function.blocks().len()],
+                &[],
+                vec![],
+                (0..function.blocks().len())
+                    .map(|_| ProjectedSemanticBlockV1 { items: vec![] })
+                    .collect(),
+            ),
+            Err(ProductionRankedProjectionErrorV1::UnprovenAssert {
+                block: 0,
+                kind: "division-by-zero",
+                ..
+            })
+        ));
+    }
+
+    fn address_escaped_checked_overflow_assert_function() -> SemanticFunctionDeclV1 {
+        let checked_result = SemanticLocalIdV1::from_index(1);
+        let pointer = SemanticLocalIdV1::from_index(2);
+        let checked_field = |field, ty| {
+            SemanticOperandV1::Copy(
+                SemanticPlaceV1::new(
+                    checked_result,
+                    vec![
+                        SemanticProjectionV1::new(SemanticProjectionKindV1::Field(field), ty)
+                            .unwrap(),
+                    ],
+                    ty,
+                )
+                .unwrap(),
+            )
+        };
+        let through_pointer = SemanticPlaceV1::new(
+            pointer,
+            vec![
+                SemanticProjectionV1::new(SemanticProjectionKindV1::Dereference, CHECKED_U64_TYPE)
+                    .unwrap(),
+                SemanticProjectionV1::new(SemanticProjectionKindV1::Field(1), BOOL_TYPE).unwrap(),
+            ],
+            BOOL_TYPE,
+        )
+        .unwrap();
+        let left = typed_constant(U64_TYPE, 1, 8);
+        let right = typed_constant(U64_TYPE, 2, 8);
+        projection_function_with_locals(
+            vec![
+                block(
+                    204,
+                    vec![
+                        typed_assignment(
+                            checked_result.index(),
+                            CHECKED_U64_TYPE,
+                            SemanticRvalueKindV1::CheckedBinary(
+                                SemanticCheckedBinaryRvalueV1::new(
+                                    SemanticCheckedBinaryOpV1::Add,
+                                    left.clone(),
+                                    right.clone(),
+                                ),
+                            ),
+                        ),
+                        typed_assignment(
+                            pointer.index(),
+                            CHECKED_U64_POINTER_TYPE,
+                            SemanticRvalueKindV1::Borrow {
+                                kind: SemanticBorrowKindV1::Mutable,
+                                place: typed_place(checked_result.index(), CHECKED_U64_TYPE),
+                            },
+                        ),
+                        statement(SemanticStatementKindV1::Store(SemanticMemoryStoreV1::new(
+                            through_pointer,
+                            typed_constant(BOOL_TYPE, 1, 1),
+                            SemanticVolatilityV1::NonVolatile,
+                            None,
+                        ))),
+                    ],
+                    SemanticTerminatorKindV1::Assert {
+                        condition: checked_field(1, BOOL_TYPE),
+                        expected: false,
+                        message: SemanticAssertMessageV1::Overflow {
+                            operation: SemanticBinaryOpV1::Add,
+                            left,
+                            right,
+                        },
+                        target: cfg_edge(SemanticEdgeRoleV1::AssertSuccess, 1),
+                        unwind: SemanticUnwindActionV1::Unreachable,
+                    },
+                ),
+                block(205, vec![], SemanticTerminatorKindV1::Return),
+            ],
+            vec![
+                local(204, U64_TYPE, SemanticLocalRoleV1::Return),
+                local(205, CHECKED_U64_TYPE, SemanticLocalRoleV1::Temporary),
+                local(
+                    206,
+                    CHECKED_U64_POINTER_TYPE,
+                    SemanticLocalRoleV1::Temporary,
+                ),
+            ],
+        )
+    }
+
+    #[test]
+    fn address_escaped_checked_results_cannot_prove_overflow_assertions() {
+        let types = assertion_proof_types();
+        let function = address_escaped_checked_overflow_assert_function();
+        let inventory = assertion_definition_inventory(&function).unwrap();
+        assert!(inventory.address_escaped[1]);
+        assert!(!SemanticAssertProofsV1::analyze(&types, &function).unwrap()[0]);
+        assert!(matches!(
+            build_ranked_cfg(
+                &types,
+                &function,
+                &[],
+                &vec![None; function.locals().len()],
+                &vec![None; function.blocks().len()],
+                &[],
+                vec![],
+                (0..function.blocks().len())
+                    .map(|_| ProjectedSemanticBlockV1 { items: vec![] })
+                    .collect(),
+            ),
+            Err(ProductionRankedProjectionErrorV1::UnprovenAssert {
+                block: 0,
+                kind: "arithmetic-overflow",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn address_escaped_pipeline_index_cache_is_not_authority() {
+        let types = assertion_proof_types();
+        let function = address_escaped_guard_function(false);
+        let cached = ProductionRankedValueV1::Argument(7);
+        let mut index_values = vec![None; function.locals().len()];
+        index_values[1] = Some(ProjectedDisjointIndexV1 {
+            value: cached,
+            mapping: SemanticDisjointIndexSpaceV1::Index1d,
+            precondition: None,
+            availability: None,
+        });
+        let mut runtime_arguments = vec![None; function.locals().len()];
+        let mut next_argument = 8;
+        let mut operations = Vec::new();
+        let mut next_value = 0;
+        let mut projector = PipelineScalarProjectorV1 {
+            types: &types,
+            function: &function,
+            index_values: &index_values,
+            runtime_index_arguments: &mut runtime_arguments,
+            next_runtime_argument: &mut next_argument,
+            uniform_inductions: &[],
+            entry_operations: &mut operations,
+            next_value: &mut next_value,
+            assertion_proofs: SemanticAssertProofsV1::new(&types, &function).unwrap(),
+            work: 0,
+        };
+        assert_incomplete(
+            projector.project_root(0, &typed_operand(1, U64_TYPE)),
+            "a pipeline scalar local has address-escaped value semantics",
+        );
+    }
+
     #[derive(Clone, Copy)]
     enum MutatedGuardProofV1 {
         ZeroExclusion,
@@ -25694,11 +25948,8 @@ mod tests {
         let through_pointer = SemanticPlaceV1::new(
             SemanticLocalIdV1::from_index(6),
             vec![
-                SemanticProjectionV1::new(
-                    SemanticProjectionKindV1::Dereference,
-                    SCALAR_TYPE,
-                )
-                .unwrap(),
+                SemanticProjectionV1::new(SemanticProjectionKindV1::Dereference, SCALAR_TYPE)
+                    .unwrap(),
             ],
             SCALAR_TYPE,
         )
@@ -28247,8 +28498,7 @@ mod tests {
         let (inductions, _, _) = project_test_inductions(&safe).unwrap();
         assert_eq!(inductions.len(), 1);
 
-        let escaped =
-            escaped_uniform_induction_alias_function(EscapedUniformAliasV1::Induction);
+        let escaped = escaped_uniform_induction_alias_function(EscapedUniformAliasV1::Induction);
         assert_incomplete(
             project_pipeline_operand_at(
                 &projection_types(),
@@ -28428,11 +28678,8 @@ mod tests {
                 SemanticPlaceV1::new(
                     SemanticLocalIdV1::from_index(local),
                     vec![
-                        SemanticProjectionV1::new(
-                            SemanticProjectionKindV1::Field(0),
-                            U64_TYPE,
-                        )
-                        .unwrap(),
+                        SemanticProjectionV1::new(SemanticProjectionKindV1::Field(0), U64_TYPE)
+                            .unwrap(),
                     ],
                     U64_TYPE,
                 )
@@ -28480,11 +28727,7 @@ mod tests {
                 right: typed_constant(U64_TYPE, 0, 8),
             },
         ));
-        locals.push(local(
-            209,
-            BOOL_TYPE,
-            SemanticLocalRoleV1::Temporary,
-        ));
+        locals.push(local(209, BOOL_TYPE, SemanticLocalRoleV1::Temporary));
         let function = projection_function_with_locals(
             vec![
                 block(
@@ -28514,11 +28757,7 @@ mod tests {
         let first_alias = 4_u32;
         let terminal = first_alias + u32::try_from(alias_count).unwrap();
         let mut entry = vec![
-            typed_assignment(
-                1,
-                SCALAR_TYPE,
-                SemanticRvalueKindV1::Use(constant(0)),
-            ),
+            typed_assignment(1, SCALAR_TYPE, SemanticRvalueKindV1::Use(constant(0))),
             typed_assignment(
                 terminal,
                 SCALAR_TYPE,
