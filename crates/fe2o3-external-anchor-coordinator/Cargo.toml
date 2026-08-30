@@ -15,6 +15,7 @@ fe2o3-compiler-closure-capability.workspace = true
 fe2o3-compiler-execution-protocol.workspace = true
 fe2o3-external-anchor-provisioner.workspace = true
 fe2o3-protected-service-profile.workspace = true
+fe2o3-protected-service-spawn.workspace = true
 fe2o3-protected-static-executable.workspace = true
 libc.workspace = true
 rustix = { workspace = true, features = ["event", "pipe", "process", "thread"] }
@@ -23,6 +24,7 @@ rustix = { workspace = true, features = ["event", "pipe", "process", "thread"] }
 ed25519-dalek = { version = "=2.2.0", default-features = false, features = ["fast", "zeroize"] }
 fe2o3-broker-authority-service = { workspace = true, features = ["test-support"] }
 fe2o3-external-anchor-protocol.workspace = true
+fe2o3-protected-service-spawn = { workspace = true, features = ["test-support"] }
 sha2.workspace = true
 tempfile = "=3.21.0"
 

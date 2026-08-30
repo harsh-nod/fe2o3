@@ -111,6 +111,7 @@ fe2o3-pliron-owner-core = { path = "crates/fe2o3-pliron-owner-core" }
 fe2o3-process-identity = { path = "crates/fe2o3-process-identity" }
 fe2o3-protected-static-executable = { path = "crates/fe2o3-protected-static-executable" }
 fe2o3-protected-service-profile = { path = "crates/fe2o3-protected-service-profile" }
+fe2o3-protected-service-spawn = { path = "crates/fe2o3-protected-service-spawn" }
 fe2o3-semantic-import = { path = "crates/fe2o3-semantic-import" }
 fe2o3-semantic-query = { path = "crates/fe2o3-semantic-query" }
 fe2o3-semantic-trace = { path = "crates/fe2o3-semantic-trace" }

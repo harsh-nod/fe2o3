@@ -1,25 +1,20 @@
 use core::ffi::{c_char, c_int, c_long, c_void};
 use std::fs::File;
 use std::io;
-use std::os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
 
-use fe2o3_compiler_closure_capability::{
-    COMPILER_EXECUTION_EXTERNAL_ANCHOR_DEPLOYMENT_FD_V1,
-    COMPILER_EXECUTION_EXTERNAL_ANCHOR_PROVISIONING_FD_V1,
-    COMPILER_EXECUTION_EXTERNAL_ANCHOR_SIGNING_KEY_FD_V1,
-};
-use fe2o3_external_anchor_provisioner::{
-    EXTERNAL_ANCHOR_HELPER_BOOTSTRAP_FD_V1, EXTERNAL_ANCHOR_HELPER_DAEMON_EXECUTABLE_FD_V1,
-    EXTERNAL_ANCHOR_HELPER_ROOT_FD_V1,
-};
 use fe2o3_protected_service_profile::{
     PROTECTED_SERVICE_SECUREBITS_V1, ProtectedServiceCredentialProfileV1,
+};
+
+use crate::{
+    PROTECTED_SERVICE_GATE_RELEASE_V1, PROTECTED_SERVICE_PROFILE_READY_V1,
+    PROTECTED_SERVICE_STAGED_DESCRIPTOR_FLOOR_V1, ProtectedServiceDescriptorBindingV1,
 };
 
 const CLONE_PIDFD: u64 = 0x0000_1000;
 const CLONE_CLEAR_SIGHAND: u64 = 0x0000_0001_0000_0000;
 const CLOSE_RANGE_CLOEXEC: u32 = 1 << 2;
-const STAGED_DESCRIPTOR_FLOOR: RawFd = 400;
 const SIGCHLD: u64 = 17;
 const SIGKILL: c_int = 9;
 const SIGSTOP: c_int = 19;
@@ -41,18 +36,12 @@ const PR_CAP_AMBIENT_IS_SET: c_int = 1;
 const PR_CAP_AMBIENT_CLEAR_ALL: c_int = 4;
 const RLIMIT_CORE: c_int = 4;
 const LINUX_CAPABILITY_VERSION_3: u32 = 0x2008_0522;
-const PROFILE_READY: u8 = 0xa5;
-const GATE_RELEASE: u8 = 0x5a;
 const FAILURE_BASE: u8 = 0xc0;
-
-pub(crate) const PROFILE_READY_V1: u8 = PROFILE_READY;
-pub(crate) const GATE_RELEASE_V1: u8 = GATE_RELEASE;
 
 pub(crate) fn has_exact_root_identity() -> bool {
     let mut uids = [u32::MAX; 3];
     let mut gids = [u32::MAX; 3];
-    // SAFETY: all pointers identify writable local scalar storage. Passing the UID/GID sentinel to
-    // setfsuid/setfsgid performs the standard readback without changing either filesystem ID.
+    // SAFETY: pointers name writable scalars; sentinel setfsid calls perform readback only.
     unsafe {
         libc::syscall(
             libc::SYS_getresuid,
@@ -116,47 +105,51 @@ struct LinuxRlimit64V1 {
     maximum: u64,
 }
 
-pub(crate) struct StagedHelperLaunchV1 {
-    helper: OwnedFd,
-    bootstrap: OwnedFd,
-    root: OwnedFd,
-    daemon: OwnedFd,
-    deployment: OwnedFd,
-    key_template: OwnedFd,
-    provisioning: OwnedFd,
-    profile_ready: OwnedFd,
-    gate: OwnedFd,
+struct StagedBindingV1 {
+    source: OwnedFd,
+    destination: RawFd,
 }
 
-impl StagedHelperLaunchV1 {
-    #[allow(clippy::too_many_arguments)]
+pub(crate) struct StagedProtectedServiceExecV1 {
+    executable: OwnedFd,
+    bindings: Vec<StagedBindingV1>,
+    profile_ready_writer: OwnedFd,
+    gate_reader: OwnedFd,
+    exec_status_writer: OwnedFd,
+}
+
+impl StagedProtectedServiceExecV1 {
     pub(crate) fn new(
-        helper: &File,
-        bootstrap: &OwnedFd,
-        root: &File,
-        daemon: &File,
-        deployment: &File,
-        key_template: &File,
-        provisioning: &File,
-        profile_ready: &OwnedFd,
-        gate: &OwnedFd,
+        executable: &File,
+        bindings: &[ProtectedServiceDescriptorBindingV1<'_>],
+        profile_ready_writer: BorrowedFd<'_>,
+        gate_reader: BorrowedFd<'_>,
+        exec_status_writer: BorrowedFd<'_>,
     ) -> io::Result<Self> {
-        let mut next = STAGED_DESCRIPTOR_FLOOR;
+        let mut next = PROTECTED_SERVICE_STAGED_DESCRIPTOR_FLOOR_V1;
+        let executable = duplicate_above(executable.as_fd(), &mut next)?;
+        let mut staged_bindings = Vec::with_capacity(bindings.len());
+        for binding in bindings {
+            staged_bindings.push(StagedBindingV1 {
+                source: duplicate_above(binding.source, &mut next)?,
+                destination: binding.destination,
+            });
+        }
         Ok(Self {
-            helper: duplicate_above(helper, &mut next)?,
-            bootstrap: duplicate_above(bootstrap, &mut next)?,
-            root: duplicate_above(root, &mut next)?,
-            daemon: duplicate_above(daemon, &mut next)?,
-            deployment: duplicate_above(deployment, &mut next)?,
-            key_template: duplicate_above(key_template, &mut next)?,
-            provisioning: duplicate_above(provisioning, &mut next)?,
-            profile_ready: duplicate_above(profile_ready, &mut next)?,
-            gate: duplicate_above(gate, &mut next)?,
+            executable,
+            bindings: staged_bindings,
+            profile_ready_writer: duplicate_above(profile_ready_writer, &mut next)?,
+            gate_reader: duplicate_above(gate_reader, &mut next)?,
+            exec_status_writer: duplicate_above(exec_status_writer, &mut next)?,
         })
+    }
+
+    pub(crate) fn descriptor_count(&self) -> usize {
+        self.bindings.len()
     }
 }
 
-fn duplicate_above(source: &impl AsFd, next: &mut RawFd) -> io::Result<OwnedFd> {
+fn duplicate_above(source: BorrowedFd<'_>, next: &mut RawFd) -> io::Result<OwnedFd> {
     let duplicate = rustix::io::fcntl_dupfd_cloexec(source, *next).map_err(io::Error::from)?;
     *next = duplicate
         .as_raw_fd()
@@ -165,19 +158,12 @@ fn duplicate_above(source: &impl AsFd, next: &mut RawFd) -> io::Result<OwnedFd> 
     Ok(duplicate)
 }
 
-pub(crate) struct SpawnedHelperV1 {
-    pub(crate) pid: rustix::process::Pid,
-    pub(crate) pidfd: OwnedFd,
-}
-
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn spawn(
-    staged: &StagedHelperLaunchV1,
+    staged: &StagedProtectedServiceExecV1,
     credentials: ProtectedServiceCredentialProfileV1,
     cap_last_cap: u32,
     expected_parent: rustix::process::Pid,
-    inherited_to_close: &[RawFd],
-) -> io::Result<SpawnedHelperV1> {
+) -> io::Result<RootOwnedProtectedServiceChildV1> {
     let mut pidfd_raw = -1_i32;
     let arguments = CloneArgsV1 {
         flags: CLONE_PIDFD | CLONE_CLEAR_SIGHAND,
@@ -193,7 +179,7 @@ pub(crate) fn spawn(
         cgroup: 0,
     };
     // SAFETY: clone3 receives the exact Linux ABI record without VM or file-table sharing. The
-    // child executes only direct syscalls over preallocated values and cannot return into Rust.
+    // child executes direct syscalls only and cannot return into Rust.
     let result = unsafe {
         libc::syscall(
             libc::SYS_clone3,
@@ -205,14 +191,13 @@ pub(crate) fn spawn(
         return Err(io::Error::last_os_error());
     }
     if result == 0 {
-        // SAFETY: this is the direct post-clone child and `child_exec` always execs or exits.
+        // SAFETY: this is the direct post-clone child; child_exec always execs or exits.
         unsafe {
             child_exec(
                 staged,
                 credentials,
                 cap_last_cap,
                 expected_parent.as_raw_pid(),
-                inherited_to_close,
             )
         }
     }
@@ -225,7 +210,7 @@ pub(crate) fn spawn(
         reap_pid(pid);
         return Err(io::Error::from_raw_os_error(libc::EBADFD));
     }
-    // SAFETY: successful CLONE_PIDFD installed one fresh descriptor in `pidfd_raw`.
+    // SAFETY: successful CLONE_PIDFD installed one fresh descriptor in pidfd_raw.
     let pidfd = unsafe { OwnedFd::from_raw_fd(pidfd_raw) };
     let flags = match rustix::io::fcntl_getfd(&pidfd) {
         Ok(flags) => flags,
@@ -238,7 +223,122 @@ pub(crate) fn spawn(
         terminate_and_reap(pid, &pidfd);
         return Err(io::Error::from_raw_os_error(libc::EPERM));
     }
-    Ok(SpawnedHelperV1 { pid, pidfd })
+    Ok(RootOwnedProtectedServiceChildV1 {
+        pid,
+        pidfd: Some(pidfd),
+    })
+}
+
+pub(crate) struct RootOwnedProtectedServiceChildV1 {
+    pid: rustix::process::Pid,
+    pidfd: Option<OwnedFd>,
+}
+
+impl RootOwnedProtectedServiceChildV1 {
+    #[cfg(feature = "test-support")]
+    pub(crate) fn admit_non_authoritative_test(
+        pid: rustix::process::Pid,
+        pidfd: OwnedFd,
+    ) -> io::Result<Self> {
+        if !rustix::io::fcntl_getfd(&pidfd)
+            .map_err(io::Error::from)?
+            .contains(rustix::io::FdFlags::CLOEXEC)
+        {
+            return Err(io::Error::from_raw_os_error(libc::EPERM));
+        }
+        Ok(Self {
+            pid,
+            pidfd: Some(pidfd),
+        })
+    }
+
+    pub(crate) const fn pid(&self) -> rustix::process::Pid {
+        self.pid
+    }
+
+    fn pidfd(&self) -> &OwnedFd {
+        self.pidfd.as_ref().expect("live child retains pidfd")
+    }
+
+    pub(crate) fn is_live(&self) -> io::Result<bool> {
+        match rustix::process::waitid(
+            rustix::process::WaitId::PidFd(self.pidfd().as_fd()),
+            rustix::process::WaitIdOptions::EXITED
+                | rustix::process::WaitIdOptions::NOHANG
+                | rustix::process::WaitIdOptions::NOWAIT,
+        ) {
+            Ok(None) | Err(rustix::io::Errno::INTR) => Ok(true),
+            Ok(Some(_)) => Ok(false),
+            Err(source) => Err(source.into()),
+        }
+    }
+
+    pub(crate) fn try_clone_pidfd(&self) -> io::Result<OwnedFd> {
+        rustix::io::fcntl_dupfd_cloexec(self.pidfd(), 0).map_err(io::Error::from)
+    }
+
+    pub(crate) fn exit_description(&self, fallback: &'static str) -> String {
+        rustix::process::waitid(
+            rustix::process::WaitId::PidFd(self.pidfd().as_fd()),
+            rustix::process::WaitIdOptions::EXITED
+                | rustix::process::WaitIdOptions::NOHANG
+                | rustix::process::WaitIdOptions::NOWAIT,
+        )
+        .ok()
+        .flatten()
+        .map_or_else(|| fallback.to_owned(), |status| format!("{status:?}"))
+    }
+
+    pub(crate) fn cancel_and_reap(&mut self) -> Result<(), ReapErrorV1> {
+        let Some(pidfd) = self.pidfd.as_ref() else {
+            return Ok(());
+        };
+        let signal_error =
+            match rustix::process::pidfd_send_signal(pidfd, rustix::process::Signal::KILL) {
+                Ok(()) | Err(rustix::io::Errno::SRCH) => None,
+                Err(pidfd_source) => {
+                    match rustix::process::kill_process(self.pid, rustix::process::Signal::KILL) {
+                        Ok(()) | Err(rustix::io::Errno::SRCH) => {
+                            Some(io::Error::from(pidfd_source))
+                        }
+                        Err(_) => return Err(ReapErrorV1::Io(pidfd_source.into())),
+                    }
+                }
+            };
+        let wait_result = loop {
+            match rustix::process::waitid(
+                rustix::process::WaitId::PidFd(pidfd.as_fd()),
+                rustix::process::WaitIdOptions::EXITED,
+            ) {
+                Ok(Some(_)) => break Ok(()),
+                Ok(None) | Err(rustix::io::Errno::INTR) => {}
+                Err(rustix::io::Errno::CHILD) => break Err(ReapErrorV1::OwnershipLost),
+                Err(source) => break Err(ReapErrorV1::Io(source.into())),
+            }
+        };
+        match wait_result {
+            Ok(()) => {
+                self.pidfd.take();
+                signal_error.map_or(Ok(()), |source| Err(ReapErrorV1::Io(source)))
+            }
+            Err(ReapErrorV1::OwnershipLost) => {
+                self.pidfd.take();
+                Err(ReapErrorV1::OwnershipLost)
+            }
+            Err(error) => Err(error),
+        }
+    }
+}
+
+impl Drop for RootOwnedProtectedServiceChildV1 {
+    fn drop(&mut self) {
+        let _ = self.cancel_and_reap();
+    }
+}
+
+pub(crate) enum ReapErrorV1 {
+    OwnershipLost,
+    Io(io::Error),
 }
 
 fn terminate_and_reap(pid: rustix::process::Pid, pidfd: &OwnedFd) {
@@ -250,7 +350,16 @@ fn terminate_and_reap(pid: rustix::process::Pid, pidfd: &OwnedFd) {
         ),
     };
     if signaled {
-        reap_pidfd(pidfd);
+        loop {
+            match rustix::process::waitid(
+                rustix::process::WaitId::PidFd(pidfd.as_fd()),
+                rustix::process::WaitIdOptions::EXITED,
+            ) {
+                Ok(Some(_)) | Err(rustix::io::Errno::CHILD) => break,
+                Ok(None) | Err(rustix::io::Errno::INTR) => {}
+                Err(_) => break,
+            }
+        }
     }
 }
 
@@ -264,53 +373,36 @@ fn reap_pid(pid: rustix::process::Pid) {
     }
 }
 
-fn reap_pidfd(pidfd: &OwnedFd) {
-    loop {
-        match rustix::process::waitid(
-            rustix::process::WaitId::PidFd(pidfd.as_fd()),
-            rustix::process::WaitIdOptions::EXITED,
-        ) {
-            Ok(Some(_)) | Err(rustix::io::Errno::CHILD) => return,
-            Ok(None) | Err(rustix::io::Errno::INTR) => {}
-            Err(_) => return,
-        }
-    }
-}
-
 unsafe fn child_exec(
-    staged: &StagedHelperLaunchV1,
+    staged: &StagedProtectedServiceExecV1,
     credentials: ProtectedServiceCredentialProfileV1,
     cap_last_cap: u32,
     expected_parent: i32,
-    inherited_to_close: &[RawFd],
 ) -> ! {
-    // SAFETY: all calls below are direct scalar Linux syscalls over inherited storage.
+    // SAFETY: every operation below is a direct scalar syscall over inherited storage.
     unsafe {
-        for descriptor in inherited_to_close {
-            libc::close(*descriptor);
-        }
         if normalize_signal_state() != 0 {
-            child_fail(staged.bootstrap.as_raw_fd(), 1);
+            child_fail(staged.exec_status_writer.as_raw_fd(), 1);
         }
         if arm_parent_death(expected_parent) != 0 {
-            child_fail(staged.bootstrap.as_raw_fd(), 2);
+            child_fail(staged.exec_status_writer.as_raw_fd(), 2);
         }
         if establish_profile(credentials, cap_last_cap) != 0 {
-            child_fail(staged.bootstrap.as_raw_fd(), 3);
+            child_fail(staged.exec_status_writer.as_raw_fd(), 3);
         }
-        let ready = PROFILE_READY;
+        let ready = PROTECTED_SERVICE_PROFILE_READY_V1;
         if libc::write(
-            staged.profile_ready.as_raw_fd(),
+            staged.profile_ready_writer.as_raw_fd(),
             (&raw const ready).cast::<c_void>(),
             1,
         ) != 1
         {
-            child_fail(staged.bootstrap.as_raw_fd(), 4);
+            child_fail(staged.exec_status_writer.as_raw_fd(), 4);
         }
         let mut release = 0_u8;
         loop {
             let count = libc::read(
-                staged.gate.as_raw_fd(),
+                staged.gate_reader.as_raw_fd(),
                 (&raw mut release).cast::<c_void>(),
                 1,
             );
@@ -320,56 +412,35 @@ unsafe fn child_exec(
             if count < 0 && *libc::__errno_location() == libc::EINTR {
                 continue;
             }
-            child_fail(staged.bootstrap.as_raw_fd(), 5);
+            child_fail(staged.exec_status_writer.as_raw_fd(), 5);
         }
-        if release != GATE_RELEASE {
-            child_fail(staged.bootstrap.as_raw_fd(), 6);
+        if release != PROTECTED_SERVICE_GATE_RELEASE_V1 {
+            child_fail(staged.exec_status_writer.as_raw_fd(), 6);
         }
         if libc::syscall(libc::SYS_close_range, 3_u32, u32::MAX, CLOSE_RANGE_CLOEXEC) != 0 {
-            child_fail(staged.bootstrap.as_raw_fd(), 7);
+            child_fail(staged.exec_status_writer.as_raw_fd(), 7);
         }
-        for (source, target) in [
-            (
-                staged.bootstrap.as_raw_fd(),
-                EXTERNAL_ANCHOR_HELPER_BOOTSTRAP_FD_V1,
-            ),
-            (staged.root.as_raw_fd(), EXTERNAL_ANCHOR_HELPER_ROOT_FD_V1),
-            (
-                staged.daemon.as_raw_fd(),
-                EXTERNAL_ANCHOR_HELPER_DAEMON_EXECUTABLE_FD_V1,
-            ),
-            (
-                staged.deployment.as_raw_fd(),
-                COMPILER_EXECUTION_EXTERNAL_ANCHOR_DEPLOYMENT_FD_V1,
-            ),
-            (
-                staged.key_template.as_raw_fd(),
-                COMPILER_EXECUTION_EXTERNAL_ANCHOR_SIGNING_KEY_FD_V1,
-            ),
-            (
-                staged.provisioning.as_raw_fd(),
-                COMPILER_EXECUTION_EXTERNAL_ANCHOR_PROVISIONING_FD_V1,
-            ),
-        ] {
-            if libc::dup3(source, target, 0) != target {
-                child_fail(staged.bootstrap.as_raw_fd(), 8);
+        for binding in &staged.bindings {
+            if libc::dup3(binding.source.as_raw_fd(), binding.destination, 0) != binding.destination
+            {
+                child_fail(staged.exec_status_writer.as_raw_fd(), 8);
             }
         }
         libc::close(0);
         libc::close(1);
         libc::close(2);
-        let name = c"fe2o3-external-anchor-provisioning-helper";
+        let name = c"fe2o3-protected-service";
         let arguments = [name.as_ptr().cast_mut(), std::ptr::null_mut()];
         let environment = [std::ptr::null_mut::<c_char>()];
         libc::syscall(
             libc::SYS_execveat,
-            staged.helper.as_raw_fd(),
+            staged.executable.as_raw_fd(),
             c"".as_ptr(),
             arguments.as_ptr(),
             environment.as_ptr(),
             libc::AT_EMPTY_PATH,
         );
-        child_fail(staged.bootstrap.as_raw_fd(), 9)
+        child_fail(staged.exec_status_writer.as_raw_fd(), 9)
     }
 }
 
@@ -417,7 +488,7 @@ unsafe fn normalize_signal_state() -> c_int {
 
 unsafe fn arm_parent_death(expected_parent: i32) -> c_int {
     let mut observed = 0_i32;
-    // SAFETY: these operations consume only scalar process state in the direct child.
+    // SAFETY: scalar getppid/prctl operations run in the direct child.
     if unsafe { libc::syscall(libc::SYS_getppid) } != c_long::from(expected_parent)
         || unsafe { libc::prctl(PR_SET_PDEATHSIG, SIGKILL, 0, 0, 0) } != 0
         || unsafe { libc::syscall(libc::SYS_getppid) } != c_long::from(expected_parent)
@@ -437,7 +508,7 @@ unsafe fn establish_profile(
         current: 0,
         maximum: 0,
     };
-    // SAFETY: all operations below use fixed scalar arguments or local kernel ABI records.
+    // SAFETY: fixed scalar arguments and local Linux ABI records are supplied throughout.
     if unsafe { libc::syscall(libc::SYS_umask, 0o077_u32) } < 0
         || unsafe {
             libc::syscall(
@@ -493,7 +564,7 @@ unsafe fn establish_profile(
     {
         return -1;
     }
-    // SAFETY: direct readback validates the complete child-local profile before release.
+    // SAFETY: direct readback validates complete child-local profile state.
     unsafe { validate_profile(credentials, cap_last_cap) }
 }
 
@@ -516,7 +587,7 @@ unsafe fn validate_profile(
         current: u64::MAX,
         maximum: u64::MAX,
     };
-    // SAFETY: all pointers identify writable child stack storage.
+    // SAFETY: pointers identify writable direct-child stack storage.
     if unsafe {
         libc::syscall(
             libc::SYS_getresuid,
@@ -574,12 +645,12 @@ unsafe fn validate_profile(
     0
 }
 
-unsafe fn child_fail(bootstrap: RawFd, stage: u8) -> ! {
+unsafe fn child_fail(exec_status: RawFd, stage: u8) -> ! {
     let message = FAILURE_BASE.saturating_add(stage);
-    // SAFETY: bootstrap is the retained private seqpacket and message names one live byte.
+    // SAFETY: exec_status is the staged seqpacket and message names one live byte.
     unsafe {
         let _ = libc::send(
-            bootstrap,
+            exec_status,
             (&raw const message).cast::<c_void>(),
             1,
             libc::MSG_NOSIGNAL,

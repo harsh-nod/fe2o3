@@ -986,6 +986,7 @@ dependencies = [
  "fe2o3-external-anchor-protocol",
  "fe2o3-external-anchor-provisioner",
  "fe2o3-protected-service-profile",
+ "fe2o3-protected-service-spawn",
  "fe2o3-protected-static-executable",
  "libc",
  "rustix",
@@ -1484,6 +1485,15 @@ dependencies = [
 name = "fe2o3-protected-service-profile"
 version = "0.1.0"
 dependencies = [
+ "libc",
+ "rustix",
+]
+
+[[package]]
+name = "fe2o3-protected-service-spawn"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-protected-service-profile",
  "libc",
  "rustix",
 ]
