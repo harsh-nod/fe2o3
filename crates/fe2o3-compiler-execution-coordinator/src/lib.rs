@@ -58,6 +58,7 @@ use rustix::pipe::{PipeFlags, pipe_with};
 mod entrypoint;
 #[allow(unsafe_code)]
 mod inherited;
+mod provisioning;
 
 pub use entrypoint::run_inherited_compiler_execution_coordinator_v1;
 
@@ -74,6 +75,10 @@ pub use inherited::{
     COMPILER_EXECUTION_COORDINATOR_SUPERVISOR_DEPLOYMENT_FD_V1,
     COMPILER_EXECUTION_COORDINATOR_SUPERVISOR_FD_V1,
     COMPILER_EXECUTION_COORDINATOR_SUPERVISOR_ROOT_FD_V1, InheritedCompilerExecutionDeploymentV1,
+};
+pub use provisioning::{
+    CompilerExecutionProvisioningBundleV1, CompilerExecutionProvisioningErrorV1,
+    CompilerExecutionProvisioningInputsV1,
 };
 
 const MAX_DEPLOYMENT_TIMEOUT_V1: Duration = Duration::from_secs(120);
