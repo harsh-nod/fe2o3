@@ -304,6 +304,65 @@ fn decoder_rejects_noncanonical_and_stale_bundle_claims() {
 }
 
 #[test]
+fn decoder_rejects_inexact_launches_and_hostile_multi_device_joins() {
+    let bundle =
+        import_rocprofv3_json_profiler_bundle_v4(json_source(), dispatch_binding(&[20, 21]))
+            .unwrap();
+
+    let mut inconsistent = bundle.clone();
+    inconsistent.dispatch_capture.as_mut().unwrap().dispatches[0]
+        .launch
+        .logical_grid[0] = 129;
+    assert!(matches!(
+        decode_profiler_bundle_v4(&serde_json::to_vec(&inconsistent).unwrap()),
+        Err(ProfilerBundleErrorV4::InvalidDispatchCapture)
+    ));
+
+    let mut overflowing = bundle.clone();
+    let launch = &mut overflowing.dispatch_capture.as_mut().unwrap().dispatches[0].launch;
+    launch.logical_grid = [u64::from(u32::MAX), u64::from(u32::MAX), 2];
+    launch.grid_workgroups = [u32::MAX, u32::MAX, 2];
+    launch.workgroup_size = [1, 1, 1];
+    assert!(matches!(
+        decode_profiler_bundle_v4(&serde_json::to_vec(&overflowing).unwrap()),
+        Err(ProfilerBundleErrorV4::InvalidDispatchCapture)
+    ));
+
+    let mut wrong_source_device = bundle.clone();
+    wrong_source_device.devices.swap(0, 1);
+    wrong_source_device.devices[0].ordinal = 0;
+    wrong_source_device.devices[1].ordinal = 1;
+    assert!(matches!(
+        decode_profiler_bundle_v4(&serde_json::to_vec(&wrong_source_device).unwrap()),
+        Err(ProfilerBundleErrorV4::StaleReference)
+    ));
+
+    let mut missing_source_device = bundle.clone();
+    missing_source_device.devices[0].source_bound_identity = None;
+    missing_source_device.devices[0].source_bound_origin = TruthOriginV1::Unavailable;
+    assert!(matches!(
+        decode_profiler_bundle_v4(&serde_json::to_vec(&missing_source_device).unwrap()),
+        Err(ProfilerBundleErrorV4::StaleReference)
+    ));
+
+    let mut duplicate_source_device = bundle.clone();
+    duplicate_source_device.devices[1].source_bound_identity =
+        duplicate_source_device.devices[0].source_bound_identity;
+    assert!(matches!(
+        decode_profiler_bundle_v4(&serde_json::to_vec(&duplicate_source_device).unwrap()),
+        Err(ProfilerBundleErrorV4::StaleReference)
+    ));
+
+    let mut duplicate_stable_device = bundle;
+    duplicate_stable_device.devices[1].stable_identity =
+        duplicate_stable_device.devices[0].stable_identity;
+    assert!(matches!(
+        decode_profiler_bundle_v4(&serde_json::to_vec(&duplicate_stable_device).unwrap()),
+        Err(ProfilerBundleErrorV4::InvalidDevice)
+    ));
+}
+
+#[test]
 fn profiler_import_cli_emits_canonical_v4_without_paths_or_native_handles() {
     let id = |byte: u8, len: u64| format!("domain:1:{}:{len}", format!("{byte:02x}").repeat(32));
     let mut child = Command::new(env!("CARGO_BIN_EXE_fe2o3-profiler-import"))

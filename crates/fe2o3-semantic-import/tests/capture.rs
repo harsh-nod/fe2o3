@@ -132,6 +132,42 @@ fn capture_rejects_noncanonical_malformed_and_stale_documents() {
 }
 
 #[test]
+fn capture_rejects_inexact_and_overflowing_launch_geometry() {
+    let capture =
+        import_rocprofv3_capture_v1(&source(), binding(), ImportLimitsV1::default()).unwrap();
+
+    let mut inconsistent = capture.clone();
+    inconsistent.dispatches[0].launch.logical_grid[0] = 129;
+    assert!(matches!(
+        decode_capture_v1(&serde_json::to_vec(&inconsistent).unwrap()),
+        Err(CaptureErrorV1::InvalidObservedEnvelope)
+    ));
+
+    let mut overflowing = capture;
+    overflowing.dispatches[0].launch.logical_grid = [u64::from(u32::MAX), u64::from(u32::MAX), 2];
+    overflowing.dispatches[0].launch.grid_workgroups = [u32::MAX, u32::MAX, 2];
+    overflowing.dispatches[0].launch.workgroup_size = [1, 1, 1];
+    assert!(matches!(
+        decode_capture_v1(&serde_json::to_vec(&overflowing).unwrap()),
+        Err(CaptureErrorV1::InvalidObservedEnvelope)
+    ));
+
+    let mut workgroup_product_overflow =
+        import_rocprofv3_capture_v1(&source(), binding(), ImportLimitsV1::default()).unwrap();
+    workgroup_product_overflow.dispatches[0].launch.logical_grid = [1, 1, 1];
+    workgroup_product_overflow.dispatches[0]
+        .launch
+        .grid_workgroups = [1, 1, 1];
+    workgroup_product_overflow.dispatches[0]
+        .launch
+        .workgroup_size = [u32::MAX, u32::MAX, 2];
+    assert!(matches!(
+        decode_capture_v1(&serde_json::to_vec(&workgroup_product_overflow).unwrap()),
+        Err(CaptureErrorV1::InvalidObservedEnvelope)
+    ));
+}
+
+#[test]
 fn capture_rejects_provenance_upgrades_and_noncanonical_source_selectors() {
     let capture =
         import_rocprofv3_capture_v1(&source(), binding(), ImportLimitsV1::default()).unwrap();

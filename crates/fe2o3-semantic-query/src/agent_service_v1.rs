@@ -6,7 +6,7 @@ use std::io::{self, BufRead, Write};
 use fe2o3_semantic_import::{
     CaptureDispatchV1, CaptureIdentityV1, ContentIdentityRecordV1, ContentSchemeV1, IdentityFactV1,
     KernelIrClaimRecordV1, LaunchRecordV1, MAX_PROFILER_BUNDLE_BYTES_V4, ProfilerCoverageV4,
-    ProfilerSourceKindV4, TruthOriginV1,
+    ProfilerSourceKindV4, SemanticProfilerBundleV4, TruthOriginV1,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -484,12 +484,28 @@ pub struct AgentProfilerSamplingCompletenessV1 {
 pub enum AgentProfilerCaptureTargetUnavailableReasonV1 {
     NoDispatchSubject,
     ArtifactIdentityUnavailable,
+    InvalidLaunchGeometry,
+    DispatchDeviceIdentityNotUniquelyBound,
+    StableDeviceIdentityUnavailable,
+    ActionableCaptureContextUnavailable,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentProfilerComputeUnitSelectorUnavailableReasonV1 {
     BundleHasNoAuthenticatedTopologyOrCollectorSelectionCapability,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub struct AgentProfilerFutureDispatchContextV1 {
+    pub stable_device: ContentIdentityRecordV1,
+    pub stable_device_origin: TruthOriginV1,
+    pub environment: ContentIdentityRecordV1,
+    pub environment_origin: TruthOriginV1,
+    pub collector_tool: ContentIdentityRecordV1,
+    pub collector_tool_origin: TruthOriginV1,
+    pub collector_configuration: ContentIdentityRecordV1,
+    pub collector_configuration_origin: TruthOriginV1,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -502,6 +518,8 @@ pub enum AgentProfilerCaptureTargetV1 {
     FutureDispatchShape {
         launch_identity: CaptureIdentityV1,
         launch: LaunchRecordV1,
+        launch_origin: TruthOriginV1,
+        context: Box<AgentProfilerFutureDispatchContextV1>,
         kernel_ir: KernelIrClaimRecordV1,
         artifact: ContentIdentityRecordV1,
         compute_units_unavailable: AgentProfilerComputeUnitSelectorUnavailableReasonV1,
@@ -543,6 +561,7 @@ pub enum AgentProfilerPlanProvenanceKindV1 {
     Environment,
     CollectorTool,
     CollectorConfiguration,
+    ObservedSourceDevice,
     StableDevice,
     KernelIr,
     Artifact,
@@ -1394,6 +1413,7 @@ impl AgentProfilerServiceV1 {
 
         let required = required_plan_evidence(planning.goal);
         let available = available_plan_evidence(open, dispatch.as_deref());
+        let bundle = open.session.admitted_bundle();
         let selected_missing = required
             .iter()
             .copied()
@@ -1418,6 +1438,7 @@ impl AgentProfilerServiceV1 {
                     .map_err(|_| AgentProfilerErrorCodeV1::InvalidPlanRequest)?,
                 capture,
                 dispatch.as_deref(),
+                bundle,
             )?;
             let minimum_additional_captures = u8::from(matches!(
                 recipe.action,
@@ -1462,7 +1483,6 @@ impl AgentProfilerServiceV1 {
                 subject: AgentProfilerPlanProvenanceSubjectV1::ContentIdentity { content: capture },
             },
         ];
-        let bundle = open.session.admitted_bundle();
         for (kind, fact) in [
             (
                 AgentProfilerPlanProvenanceKindV1::Environment,
@@ -1487,16 +1507,23 @@ impl AgentProfilerServiceV1 {
                 });
             }
         }
-        for device in &bundle.devices {
-            if let Some(identity) = device.stable_identity.value {
-                provenance.push(AgentProfilerPlanProvenanceV1 {
-                    kind: AgentProfilerPlanProvenanceKindV1::StableDevice,
-                    origin: device.stable_identity.origin,
-                    subject: AgentProfilerPlanProvenanceSubjectV1::ContentIdentity {
-                        content: identity,
-                    },
-                });
-            }
+        if let Some(dispatch) = dispatch.as_deref()
+            && let Ok(context) = future_dispatch_context(bundle, dispatch)
+        {
+            provenance.push(AgentProfilerPlanProvenanceV1 {
+                kind: AgentProfilerPlanProvenanceKindV1::ObservedSourceDevice,
+                origin: TruthOriginV1::Observed,
+                subject: AgentProfilerPlanProvenanceSubjectV1::CaptureIdentity {
+                    identity: dispatch.device_identity,
+                },
+            });
+            provenance.push(AgentProfilerPlanProvenanceV1 {
+                kind: AgentProfilerPlanProvenanceKindV1::StableDevice,
+                origin: context.stable_device_origin,
+                subject: AgentProfilerPlanProvenanceSubjectV1::ContentIdentity {
+                    content: context.stable_device,
+                },
+            });
         }
         let mut records = Vec::new();
         if let Some(dispatch) = dispatch {
@@ -2182,24 +2209,82 @@ fn plan_request_identity(
 }
 
 fn launch_selector_identity(
-    dispatch: &CaptureDispatchV1,
+    launch: LaunchRecordV1,
+    launch_origin: TruthOriginV1,
+    kernel_ir: KernelIrClaimRecordV1,
     artifact: ContentIdentityRecordV1,
+    context: AgentProfilerFutureDispatchContextV1,
 ) -> Result<CaptureIdentityV1, AgentProfilerErrorCodeV1> {
     let mut digest = Sha256::new();
     digest.update(AGENT_PROFILER_LAUNCH_SELECTOR_DOMAIN_V1);
     serde_json::to_writer(
         AgentDigestWriterV1(&mut digest),
-        &(dispatch.launch, dispatch.kernel_ir, artifact),
+        &(launch, launch_origin, kernel_ir, artifact, context),
     )
     .map_err(|_| AgentProfilerErrorCodeV1::InvalidPlanRequest)?;
     CaptureIdentityV1::new(digest.finalize().into())
         .map_err(|_| AgentProfilerErrorCodeV1::InvalidPlanRequest)
 }
 
+fn future_dispatch_context(
+    bundle: &SemanticProfilerBundleV4,
+    dispatch: &CaptureDispatchV1,
+) -> Result<AgentProfilerFutureDispatchContextV1, AgentProfilerCaptureTargetUnavailableReasonV1> {
+    let mut matching = bundle
+        .devices
+        .iter()
+        .filter(|device| device.source_bound_identity == Some(dispatch.device_identity));
+    let Some(device) = matching.next() else {
+        return Err(
+            AgentProfilerCaptureTargetUnavailableReasonV1::DispatchDeviceIdentityNotUniquelyBound,
+        );
+    };
+    if matching.next().is_some() {
+        return Err(
+            AgentProfilerCaptureTargetUnavailableReasonV1::DispatchDeviceIdentityNotUniquelyBound,
+        );
+    }
+    let stable_device = device
+        .stable_identity
+        .value
+        .ok_or(AgentProfilerCaptureTargetUnavailableReasonV1::StableDeviceIdentityUnavailable)?;
+    let (Some(environment), Some(collector_tool), Some(collector_configuration)) = (
+        bundle.environment.value,
+        bundle.collector_tool.value,
+        bundle.collector_configuration.value,
+    ) else {
+        return Err(
+            AgentProfilerCaptureTargetUnavailableReasonV1::ActionableCaptureContextUnavailable,
+        );
+    };
+    if device.source_bound_origin != TruthOriginV1::Observed
+        || device.stable_identity.origin != TruthOriginV1::Declared
+        || bundle.environment.origin != TruthOriginV1::Declared
+        || bundle.collector_tool.origin != TruthOriginV1::Declared
+        || bundle.collector_configuration.origin != TruthOriginV1::Declared
+        || dispatch.launch_origin != TruthOriginV1::Observed
+    {
+        return Err(
+            AgentProfilerCaptureTargetUnavailableReasonV1::ActionableCaptureContextUnavailable,
+        );
+    }
+    Ok(AgentProfilerFutureDispatchContextV1 {
+        stable_device,
+        stable_device_origin: device.stable_identity.origin,
+        environment,
+        environment_origin: bundle.environment.origin,
+        collector_tool,
+        collector_tool_origin: bundle.collector_tool.origin,
+        collector_configuration,
+        collector_configuration_origin: bundle.collector_configuration.origin,
+    })
+}
+
 fn recipe_target(
     action: AgentProfilerCaptureActionV1,
     capture: ContentIdentityRecordV1,
     dispatch: Option<&CaptureDispatchV1>,
+    bundle: &SemanticProfilerBundleV4,
 ) -> Result<
     (
         AgentProfilerCaptureTargetV1,
@@ -2248,10 +2333,46 @@ fn recipe_target(
             },
         ));
     };
+    let launch = match dispatch.launch.exact_geometry() {
+        Ok(launch) => LaunchRecordV1::from(launch),
+        Err(_) => {
+            return Ok((
+                AgentProfilerCaptureTargetV1::Unavailable {
+                    reason: AgentProfilerCaptureTargetUnavailableReasonV1::InvalidLaunchGeometry,
+                },
+                AgentProfilerTargetValidationV1 {
+                    compute_units: AgentProfilerSelectorValidationV1::UnavailableWithoutAuthenticatedTopologyAndCollectorCapability,
+                    kernel_ir: AgentProfilerSelectorValidationV1::DerivedFromAdmittedCaptureFacts,
+                    dispatch: AgentProfilerSelectorValidationV1::NotSpecified,
+                },
+            ));
+        }
+    };
+    let context = match future_dispatch_context(bundle, dispatch) {
+        Ok(context) => context,
+        Err(reason) => {
+            return Ok((
+                AgentProfilerCaptureTargetV1::Unavailable { reason },
+                AgentProfilerTargetValidationV1 {
+                    compute_units: AgentProfilerSelectorValidationV1::UnavailableWithoutAuthenticatedTopologyAndCollectorCapability,
+                    kernel_ir: AgentProfilerSelectorValidationV1::DerivedFromAdmittedCaptureFacts,
+                    dispatch: AgentProfilerSelectorValidationV1::NotSpecified,
+                },
+            ));
+        }
+    };
     Ok((
         AgentProfilerCaptureTargetV1::FutureDispatchShape {
-            launch_identity: launch_selector_identity(dispatch, artifact)?,
-            launch: dispatch.launch,
+            launch_identity: launch_selector_identity(
+                launch,
+                dispatch.launch_origin,
+                dispatch.kernel_ir,
+                artifact,
+                context,
+            )?,
+            launch,
+            launch_origin: dispatch.launch_origin,
+            context: Box::new(context),
             kernel_ir: dispatch.kernel_ir,
             artifact,
             compute_units_unavailable: AgentProfilerComputeUnitSelectorUnavailableReasonV1::BundleHasNoAuthenticatedTopologyOrCollectorSelectionCapability,
@@ -2270,6 +2391,7 @@ fn capture_recipe(
     existing_bundle_bytes: u64,
     capture: ContentIdentityRecordV1,
     dispatch: Option<&CaptureDispatchV1>,
+    bundle: &SemanticProfilerBundleV4,
 ) -> Result<AgentProfilerCaptureRecipeV1, AgentProfilerErrorCodeV1> {
     let (
         requested_data_classes,
@@ -2410,7 +2532,7 @@ fn capture_recipe(
         completeness_limitations
             .push(AgentProfilerCompletenessLimitV1::AggregateCountersDoNotEstablishCausality);
     }
-    let (target, target_validation) = recipe_target(action, capture, dispatch)?;
+    let (target, target_validation) = recipe_target(action, capture, dispatch, bundle)?;
     let mut storage_limitations = vec![
         AgentProfilerStorageLimitationV1::EstimateNotMeasurement,
         AgentProfilerStorageLimitationV1::EncodingAndWorkloadDependent,

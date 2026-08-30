@@ -430,7 +430,11 @@ fn open_page_inspect_compare_plan_and_unavailable_are_state_validated() {
 #[test]
 fn ambiguous_correctness_plan_selects_one_bounded_targeted_att_capture() {
     let mut service = AgentProfilerServiceV1::new(AgentProfilerServiceLimitsV1::default()).unwrap();
-    let (_, capture) = open(&mut service, 1, &bundle(10));
+    let bundle_bytes = bundle(10);
+    let admitted = decode_profiler_bundle_v4(&bundle_bytes).unwrap();
+    let expected_source_device =
+        admitted.dispatch_capture.as_ref().unwrap().dispatches[0].device_identity;
+    let (_, capture) = open(&mut service, 1, &bundle_bytes);
     let (dispatch, kernel_ir) = dispatch_target(&mut service, 2, capture);
     let request = planning(
         AgentProfilerPlanGoalV1::AmbiguousCorrectnessDiagnosis,
@@ -481,14 +485,42 @@ fn ambiguous_correctness_plan_selects_one_bounded_targeted_att_capture() {
             .contains(&AgentProfilerPlanEvidenceClassV1::DispatchEnvelope)
     );
     let recipe = plan.recipe.as_ref().unwrap();
-    assert!(matches!(
-        &recipe.target,
-        AgentProfilerCaptureTargetV1::FutureDispatchShape {
-            kernel_ir: KernelIrClaimRecordV1 { digest, .. },
-            artifact: ContentIdentityRecordV1 { .. },
-            ..
-        } if *digest == kernel_ir
-    ));
+    let AgentProfilerCaptureTargetV1::FutureDispatchShape {
+        launch,
+        launch_origin,
+        context,
+        kernel_ir: target_kernel_ir,
+        artifact,
+        ..
+    } = &recipe.target
+    else {
+        panic!("expected future dispatch target")
+    };
+    assert_eq!(launch.logical_grid, [256, 1, 1]);
+    assert_eq!(launch.grid_workgroups, [4, 1, 1]);
+    assert_eq!(launch.workgroup_size, [64, 1, 1]);
+    assert_eq!(target_kernel_ir.digest, kernel_ir);
+    assert_eq!(
+        *artifact,
+        ContentIdentityRecordV1 {
+            scheme: ContentSchemeV1::RawCanonicalSha256,
+            format_version: 1,
+            digest: CaptureIdentityV1::new([2; 32]).unwrap(),
+            canonical_len: 4_096,
+        }
+    );
+    assert_eq!(*launch_origin, TruthOriginV1::Observed);
+    assert_eq!(context.stable_device, content(20, 64));
+    assert_eq!(context.stable_device_origin, TruthOriginV1::Declared);
+    assert_eq!(context.environment, content(10, 200));
+    assert_eq!(context.environment_origin, TruthOriginV1::Declared);
+    assert_eq!(context.collector_tool, content(11, 50));
+    assert_eq!(context.collector_tool_origin, TruthOriginV1::Declared);
+    assert_eq!(context.collector_configuration, content(12, 80));
+    assert_eq!(
+        context.collector_configuration_origin,
+        TruthOriginV1::Declared
+    );
     assert_eq!(
         recipe.requested_data_classes,
         [
@@ -560,6 +592,7 @@ fn ambiguous_correctness_plan_selects_one_bounded_targeted_att_capture() {
         AgentProfilerPlanProvenanceKindV1::Environment,
         AgentProfilerPlanProvenanceKindV1::CollectorTool,
         AgentProfilerPlanProvenanceKindV1::CollectorConfiguration,
+        AgentProfilerPlanProvenanceKindV1::ObservedSourceDevice,
         AgentProfilerPlanProvenanceKindV1::StableDevice,
         AgentProfilerPlanProvenanceKindV1::KernelIr,
         AgentProfilerPlanProvenanceKindV1::Artifact,
@@ -567,6 +600,36 @@ fn ambiguous_correctness_plan_selects_one_bounded_targeted_att_capture() {
     ] {
         assert!(plan.provenance.iter().any(|entry| entry.kind == kind));
     }
+    let stable_device_provenance = plan
+        .provenance
+        .iter()
+        .filter(|entry| entry.kind == AgentProfilerPlanProvenanceKindV1::StableDevice)
+        .collect::<Vec<_>>();
+    assert_eq!(stable_device_provenance.len(), 1);
+    assert!(matches!(
+        stable_device_provenance[0],
+        AgentProfilerPlanProvenanceV1 {
+            origin: TruthOriginV1::Declared,
+            subject: AgentProfilerPlanProvenanceSubjectV1::ContentIdentity {
+                content: stable_device
+            },
+            ..
+        } if *stable_device == content(20, 64)
+    ));
+    let observed_source_device_provenance = plan
+        .provenance
+        .iter()
+        .filter(|entry| entry.kind == AgentProfilerPlanProvenanceKindV1::ObservedSourceDevice)
+        .collect::<Vec<_>>();
+    assert_eq!(observed_source_device_provenance.len(), 1);
+    assert!(matches!(
+        observed_source_device_provenance[0],
+        AgentProfilerPlanProvenanceV1 {
+            origin: TruthOriginV1::Observed,
+            subject: AgentProfilerPlanProvenanceSubjectV1::CaptureIdentity { identity },
+            ..
+        } if *identity == expected_source_device
+    ));
     assert!(service.encode_response(&response).is_ok());
 
     let repeated = service.handle(AgentProfilerRequestV1::PlanNextCapture {
@@ -1109,6 +1172,42 @@ fn hostile_plan_bounds_stale_facts_and_substitutions_fail_closed() {
         Err(AgentProfilerServiceErrorV1::InvalidResponse)
     ));
 
+    let mut substituted = valid.clone();
+    let AgentProfilerResponseV1::Ok { value, .. } = &mut substituted else {
+        unreachable!()
+    };
+    let AgentProfilerResultV1::CapturePlan { plan, .. } = value.as_mut() else {
+        unreachable!()
+    };
+    let AgentProfilerCaptureTargetV1::FutureDispatchShape { context, .. } =
+        &mut plan.recipe.as_mut().unwrap().target
+    else {
+        unreachable!()
+    };
+    context.stable_device.canonical_len += 1;
+    assert!(matches!(
+        service.encode_response(&substituted),
+        Err(AgentProfilerServiceErrorV1::InvalidResponse)
+    ));
+
+    let mut substituted = valid.clone();
+    let AgentProfilerResponseV1::Ok { value, .. } = &mut substituted else {
+        unreachable!()
+    };
+    let AgentProfilerResultV1::CapturePlan { plan, .. } = value.as_mut() else {
+        unreachable!()
+    };
+    let AgentProfilerCaptureTargetV1::FutureDispatchShape { launch_origin, .. } =
+        &mut plan.recipe.as_mut().unwrap().target
+    else {
+        unreachable!()
+    };
+    *launch_origin = TruthOriginV1::Declared;
+    assert!(matches!(
+        service.encode_response(&substituted),
+        Err(AgentProfilerServiceErrorV1::InvalidResponse)
+    ));
+
     let encoded = service.encode_response(&valid).unwrap();
     assert!(
         !String::from_utf8(encoded)
@@ -1119,6 +1218,32 @@ fn hostile_plan_bounds_stale_facts_and_substitutions_fail_closed() {
     assert!(matches!(
         fresh.encode_response(&valid),
         Err(AgentProfilerServiceErrorV1::InvalidResponse)
+    ));
+}
+
+#[test]
+fn future_dispatch_plan_respects_the_configured_response_ceiling() {
+    let query = ProfilerQueryLimitsV4::new(MAX_PROFILER_BUNDLE_BYTES_V4, 4 * 1024, 128).unwrap();
+    let limits =
+        AgentProfilerServiceLimitsV1::new(MAX_AGENT_PROFILER_REQUESTS_V1, 4, query).unwrap();
+    let mut service = AgentProfilerServiceV1::new(limits).unwrap();
+    let (_, capture) = open(&mut service, 1, &bundle(10));
+    let (dispatch, kernel_ir) = dispatch_target(&mut service, 2, capture);
+    let response = service.handle(AgentProfilerRequestV1::PlanNextCapture {
+        schema: AGENT_PROFILER_REQUEST_SCHEMA_V1.into(),
+        request_id: 4,
+        capture,
+        planning: planning(
+            AgentProfilerPlanGoalV1::ScheduleResourceRegression,
+            AgentProfilerAmbiguityV1::SchedulingDelayVsResourcePressure,
+            vec![AgentProfilerPlanEvidenceClassV1::HardwareCounterMeasurements],
+            Some(dispatch),
+            Some(kernel_ir),
+        ),
+    });
+    assert!(matches!(
+        service.encode_response(&response),
+        Err(AgentProfilerServiceErrorV1::ResponseTooLarge)
     ));
 }
 

@@ -310,6 +310,29 @@ impl From<LaunchGeometryV1> for LaunchRecordV1 {
     }
 }
 
+impl LaunchRecordV1 {
+    /// Reconstructs the exact admitted geometry rather than treating the four
+    /// serialized launch fields as independent nonzero observations.
+    pub fn exact_geometry(self) -> Result<LaunchGeometryV1, CaptureErrorV1> {
+        self.logical_grid
+            .into_iter()
+            .try_fold(1_u64, u64::checked_mul)
+            .ok_or(CaptureErrorV1::InvalidObservedEnvelope)?;
+        let wave_width = match self.wave_width {
+            32 => WaveWidthV1::Wave32,
+            64 => WaveWidthV1::Wave64,
+            _ => return Err(CaptureErrorV1::InvalidObservedEnvelope),
+        };
+        LaunchGeometryV1::new_exact(
+            self.logical_grid,
+            self.grid_workgroups,
+            self.workgroup_size,
+            wave_width,
+        )
+        .map_err(|_| CaptureErrorV1::InvalidObservedEnvelope)
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct CaptureDispatchV1 {
@@ -435,10 +458,7 @@ impl SemanticCaptureV1 {
             dispatch.source_map.validate()?;
             if dispatch.launch_origin != TruthOriginV1::Observed
                 || dispatch.timing_origin != TruthOriginV1::Observed
-                || !matches!(dispatch.launch.wave_width, 32 | 64)
-                || dispatch.launch.logical_grid.contains(&0)
-                || dispatch.launch.grid_workgroups.contains(&0)
-                || dispatch.launch.workgroup_size.contains(&0)
+                || dispatch.launch.exact_geometry().is_err()
             {
                 return Err(CaptureErrorV1::InvalidObservedEnvelope);
             }

@@ -237,16 +237,24 @@ capture satisfies the caller's overhead ceiling.
 The service can only plan: every stateful collection
 requires separate explicit authorization, and the service has no launch or
 attach authority. Dispatch and kernel selectors identify evidence in the open
-capture. A new-capture recipe derives a reusable launch shape only from admitted
-launch, KIR, and artifact identities; it does not reuse the old dispatch
-occurrence. CU selectors are rejected because Bundle V4 has neither authenticated
+capture. A new-capture recipe derives a reusable launch shape only after Bundle
+V4 admits the exact logical-grid/workgroup relation and the planner reconstructs
+it defensively. The observed dispatch device must join exactly one source-bound
+device carrying a declared stable identity; the selector also binds that stable
+identity and the declared environment, collector tool, and collector
+configuration. The capture-local observed source device remains a separate plan
+provenance entry rather than becoming an actionable future selector; the observed
+launch origin is bound explicitly. The recipe does not reuse the old dispatch
+occurrence. Missing, duplicate, or inconsistent device/launch relations are
+rejected during admission and cannot become future selectors. CU selectors are
+rejected because Bundle V4 has neither authenticated
 CU topology nor an authenticated collector capability for targeting it.
 
 Pages reuse Bundle V4 content-bound cursors. Every successful value carries the
 service-contract identity, exact capture identities, relevant record
 identities, and a homogeneous, mixed, or empty aggregate of the item-level
 truth origins. Plan results additionally bind the canonical planning request,
-the full bundle/environment/tool/configuration/device content identities, any
+the full bundle/environment/tool/configuration and relevant joined-device content identities, any
 available artifact content identity, the full KIR claim, the selected dispatch,
 and any derived launch selector. Every handled request
 attempt, including zero and duplicate IDs, consumes the request budget.
