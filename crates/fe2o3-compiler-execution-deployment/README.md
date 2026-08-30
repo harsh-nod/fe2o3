@@ -19,6 +19,10 @@ The crate also prepares disposable-root qualification custody. It freshly
 revalidates the installed root, admits an independently SHA-pinned SquashFS V4
 base image through two reads into a sealed memfd, verifies the exact image
 profile, and retains an empty root-owned qualification-parent descriptor. This
-preparation grants no mount or execution authority. Root composition and real
-root/distinct-UID systemd execution remain separate deployment gates. See the
+preparation grants no mount or execution authority. A second root-only
+transaction creates and descriptor-retains the exact empty base/root,
+upper/work, run/state, and evidence staging tree. Its fault campaign proves
+every interrupted boundary restores an empty parent. Mount attachment, root
+composition, and real root/distinct-UID systemd execution remain separate
+deployment gates. See the
 [disposable-root V1 contract](../../docs/compiler-execution-disposable-root-v1.md).

@@ -63,7 +63,9 @@ The non-root builder admits exactly 71 package identities from the checked-in
 version/architecture/SHA-256 lock and emits a deterministic SquashFS image plus
 matching `BASE-INFO` and `SHA256SUMS`. The deployment crate can freshly
 revalidate the installed tree and seal an independently digest-pinned base
-image together with an empty root-owned qualification parent. Root composition
+image together with an empty root-owned qualification parent. It then creates
+one exact descriptor-retained empty staging tree for base/root mounts and
+disposable upper/work/run/state/evidence. Mount attachment, root composition,
 and real systemd execution still remain qualification gates. See
 [disposable-root V1](../docs/compiler-execution-disposable-root-v1.md).
 

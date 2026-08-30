@@ -1,8 +1,9 @@
 # Compiler-execution deployment bundle V1
 
 Status: implemented source-bundle admission, atomic offline-root publication,
-fresh installed-root revalidation, and sealed disposable-root preparation.
-Root composition and distinct-UID systemd execution qualification remain open.
+fresh installed-root revalidation, sealed disposable-root preparation, and an
+exact fault-cleaned empty staging transaction. Mount attachment, root
+composition, and distinct-UID systemd execution qualification remain open.
 
 ## Boundary
 

@@ -1,8 +1,9 @@
 # Compiler-execution disposable root V1
 
-Status: deterministic base construction, caller-pinned SquashFS admission, and
-sealed preparation custody are implemented. Root composition, isolated systemd
-boot, distinct-UID execution, and lifecycle fault qualification remain open.
+Status: deterministic base construction, caller-pinned SquashFS admission,
+sealed preparation custody, and the exact empty staging transaction are
+implemented. Mount attachment, root composition, isolated systemd boot,
+distinct-UID execution, and lifecycle fault qualification remain open.
 
 ## Purpose
 
@@ -84,6 +85,35 @@ offsets, and exact zero padding to a 4 KiB boundary. Revalidation repeats the
 installed-root check, sealed-image checks, qualification-parent policy, and
 parent pathname-to-descriptor continuity.
 
+## Empty staging transaction
+
+Staging consumes prepared custody and requires effective UID zero. It creates
+one random private child beneath the retained qualification-parent descriptor,
+then exactly seven root-owned, root-group, mode-`0700` empty directories:
+
+| Name | Intended ownership |
+| --- | --- |
+| `base` | read-only base-image mount point |
+| `root` | composed root mount point |
+| `upper` | disposable overlay upper layer |
+| `work` | matching overlay work directory |
+| `run` | disposable runtime state |
+| `state` | disposable fe2o3 durable-state fixture |
+| `evidence` | canonical report staging |
+
+The move-only staged value privately retains every directory descriptor and the
+complete prepared evidence. Revalidation checks exact inventory, metadata,
+empty children, one-filesystem placement, descriptor-to-path identity, and
+qualification-parent continuity. It still grants no mount or execution
+authority. Explicit cleanup and `Drop` remove only the transaction's random
+child and synchronize the retained parent.
+
+A 21-checkpoint interruption campaign covers root creation and metadata, every
+child create and metadata transition, complete-tree verification, root sync,
+parent-path verification, and parent sync. Every injected failure restores the
+qualification parent to empty. Separate tests reject metadata/content
+insertion and parent-path replacement.
+
 ## Qualification
 
 The source-only contract runs on any generic CI host:
@@ -106,10 +136,10 @@ The full check validates exact inventory, modes, links, `SHA256SUMS`, checkout
 commit and epoch, all package records, SquashFS profile, embedded metadata and
 target bytes, and byte equality of every published file.
 
-The remaining production gate must consume only retained descriptors, mount or
-materialize the sealed base read-only, layer the installed root without
-reopening admitted content, create disposable writable state, and boot
-`fe2o3-qualification.target` in an isolated namespace. It must then exercise
+The remaining production gate must consume only retained staged descriptors,
+attach the sealed base read-only, layer the installed root without reopening
+admitted content, and boot `fe2o3-qualification.target` in an isolated
+namespace. It must then exercise
 sysusers/tmpfiles, socket activation, distinct service and client identities,
 provisioning exclusion, successful compiler execution, restart and crash
 recovery, mount-crossing and hostile-parent cases, and complete cleanup.

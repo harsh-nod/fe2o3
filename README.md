@@ -329,8 +329,11 @@ post-publication failure leaves a complete reacquirable root. The installed
 value retains its sealed evidence for fresh revalidation. A deterministic
 71-package Ubuntu 24.04 systemd base builder and caller-pinned SquashFS admission
 now prepare that installed root, sealed base image, and empty root-owned parent
-as one move-only, authority-free qualification value. Disposable-root
-composition and combined root/distinct-UID systemd execution remain absent. The concrete
+as one move-only, authority-free qualification value. A root-only staging
+transaction descriptor-retains the exact empty base/root, upper/work,
+run/state, and evidence tree and cleans all 21 interrupted boundaries.
+Disposable-root mount composition and combined root/distinct-UID systemd
+execution remain absent. The concrete
 protected verifier also remains absent. A fixed
 receipt sidecar and publication ACK now
 carry the exact journal, occurrence, receipt, Worker record, sequence, and

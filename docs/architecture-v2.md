@@ -245,9 +245,13 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   fresh revalidation. A deterministic 71-package Ubuntu 24.04 systemd base is
   independently digest-pinned, copied into a sealed memfd after two identical
   reads, checked for the exact SquashFS V4 profile, and retained with an empty
-  root-owned qualification-parent descriptor. This closes disposable-root
-  preparation, not root composition or live system deployment: isolated boot
-  and root/distinct-UID systemd execution qualification remain open.
+  root-owned qualification-parent descriptor. A root-only transaction then
+  creates and descriptor-retains the exact empty base/root mount points and
+  disposable upper/work/run/state/evidence directories; its 21-checkpoint fault
+  campaign always restores an empty parent. This closes disposable-root
+  preparation and staging, not mount composition or live system deployment:
+  isolated boot and root/distinct-UID systemd execution qualification remain
+  open.
 - Versioned artifact, descriptor, durable-publication, and HSA records exist.
   Host execution has one workload-neutral Worker V3 graph. An arbitrary
   manifest cannot manufacture a Rust signature, verifier decision, load
