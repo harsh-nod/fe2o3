@@ -23,6 +23,7 @@ mod compiler_ffi_observation;
 mod first_build_worker_engine;
 mod first_build_worker_v3;
 mod link_plan;
+mod production_semantic_anchor_v1;
 mod request_construction;
 mod semantic_debug_map_v1;
 mod worker_executor;
@@ -83,6 +84,11 @@ pub use link_plan::{
     ContentIdentityV1, LinkInputV1, LinkOptionV1, LinkOutputV1, LinkPlanError, LinkPlanIdentityV1,
     MAX_LINK_INPUTS, MAX_LINK_OPTION_NAME_BYTES, MAX_LINK_OPTION_VALUE_BYTES, MAX_LINK_OPTIONS,
     MAX_LINK_PROVENANCE_EDGES, MAX_LINK_PROVENANCE_NODES, MultiInputLinkPlanV1, ProvenanceNodeV1,
+};
+pub use production_semantic_anchor_v1::{
+    AdmittedProductionSemanticAnchorV1, AdmittedProductionSemanticAnchorsV1,
+    ProductionSemanticAnchorAdmissionV1, ProductionSemanticAnchorErrorV1,
+    ProductionSemanticAnchorTransformationV1, ProductionSemanticAnchorUnavailableV1,
 };
 pub use request_construction::{
     LinkInputKindClosureIdentityV1, LinkInputKindClosureV1, LinkSymbolClosureIdentityV1,

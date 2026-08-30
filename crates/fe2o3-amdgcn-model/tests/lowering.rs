@@ -6,8 +6,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use fe2o3_amdgcn_model::{
     LoweringDiagnosticCode, lower_compiler_module_to_gfx950_xnack_minus_llvm_ir,
-    lower_kernel_to_gfx942_xnack_minus_llvm_ir, lower_kernel_to_gfx950_xnack_minus_llvm_ir,
-    lower_kernel_to_llvm_ir,
+    lower_kernel_to_gfx942_xnack_minus_llvm_ir,
+    lower_kernel_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1,
+    lower_kernel_to_gfx950_xnack_minus_llvm_ir, lower_kernel_to_llvm_ir,
 };
 use fe2o3_kernel_ir::*;
 
@@ -1318,6 +1319,67 @@ fn gfx942_barriers_use_one_workload_neutral_physical_policy() {
         1
     );
     assert!(!llvm.contains("call void @llvm.amdgcn.s.barrier()"));
+}
+
+#[test]
+fn production_semantic_anchors_cover_every_operation_with_function_unique_indices() {
+    let module = exact_gfx942_xnack_minus(fill_module());
+    let operation_count = module.functions[0]
+        .body
+        .as_ref()
+        .unwrap()
+        .blocks
+        .iter()
+        .map(|block| block.operations.len())
+        .sum::<usize>();
+    let anchored = lower_kernel_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1(
+        &module,
+        &KernelId::new("fill"),
+    )
+    .unwrap();
+    let unanchored =
+        lower_kernel_to_gfx942_xnack_minus_llvm_ir(&module, &KernelId::new("fill")).unwrap();
+
+    assert_occurrences(&anchored, "call void @llvm.pseudoprobe(", operation_count);
+    assert_occurrences(&anchored, "!llvm.pseudo_probe_desc = ", 1);
+    assert_occurrences(&anchored, "!fe2o3.semantic_anchor.v1 = ", 1);
+    for probe_index in 1..=operation_count {
+        assert!(
+            anchored.contains(&format!(", i64 {probe_index}, i32 0, i64 -1)")),
+            "missing function-unique probe {probe_index} in:\n{anchored}"
+        );
+    }
+    assert!(!unanchored.contains("llvm.pseudoprobe"));
+    assert!(!unanchored.contains("fe2o3.semantic_anchor.v1"));
+}
+
+#[test]
+fn production_semantic_anchors_mark_constant_ops_and_reject_partial_multi_body_claims() {
+    let mut single = exact_gfx942_xnack_minus(phi_loop_module());
+    let anchored = lower_kernel_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1(
+        &single,
+        &KernelId::new("phi_loop"),
+    )
+    .unwrap();
+    let lines = anchored.lines().collect::<Vec<_>>();
+    assert!(
+        lines.windows(2).any(|lines| {
+            lines[0].contains("@llvm.pseudoprobe") && lines[1].contains("@llvm.pseudoprobe")
+        }),
+        "an instruction-free constant operation must retain its own compiler anchor"
+    );
+
+    let mut helper = single.functions[0].clone();
+    helper.id = FunctionId::new("phi_loop_helper");
+    helper.role = FunctionRole::InternalHelper;
+    single.functions.push(helper);
+    let multi_body = lower_kernel_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1(
+        &single,
+        &KernelId::new("phi_loop"),
+    )
+    .unwrap();
+    assert!(!multi_body.contains("llvm.pseudoprobe"));
+    assert!(!multi_body.contains("fe2o3.semantic_anchor.v1"));
 }
 
 #[test]

@@ -586,6 +586,71 @@ makeKernelBitcode(StringRef Name,
   return std::vector<uint8_t>(Buffer.begin(), Buffer.end());
 }
 
+std::vector<uint8_t> makeSemanticAnchorKernelBitcode(bool Anchored) {
+  LLVMContext Context;
+  Module ModuleValue("semantic-anchor-kernel", Context);
+  std::unique_ptr<TargetMachine> Machine = createMachine("gfx942");
+  ModuleValue.setTargetTriple(Triple(AmdGpuTriple));
+  ModuleValue.setDataLayout(Machine->createDataLayout());
+  ModuleValue.addModuleFlag(Module::Error, "amdhsa_code_object_version", 600);
+
+  Type *I32 = Type::getInt32Ty(Context);
+  Type *I64 = Type::getInt64Ty(Context);
+  PointerType *GlobalI32 = PointerType::get(Context, 1);
+  FunctionType *Signature =
+      FunctionType::get(Type::getVoidTy(Context), {GlobalI32}, false);
+  Function *Kernel = Function::Create(Signature, GlobalValue::ExternalLinkage,
+                                      "anchor_kernel", ModuleValue);
+  Kernel->setCallingConv(CallingConv::AMDGPU_KERNEL);
+  Kernel->addFnAttr("target-cpu", "gfx942");
+  Kernel->addFnAttr("target-features",
+                    "-wavefrontsize32,+wavefrontsize64,-xnack");
+  Kernel->addFnAttr("amdgpu-flat-work-group-size", "64,64");
+  Metadata *Workgroup[] = {ConstantAsMetadata::get(ConstantInt::get(I32, 64)),
+                           ConstantAsMetadata::get(ConstantInt::get(I32, 1)),
+                           ConstantAsMetadata::get(ConstantInt::get(I32, 1))};
+  Kernel->setMetadata("reqd_work_group_size", MDNode::get(Context, Workgroup));
+
+  FunctionCallee WorkitemId = ModuleValue.getOrInsertFunction(
+      "llvm.amdgcn.workitem.id.x", FunctionType::get(I32, false));
+  FunctionCallee Probe;
+  constexpr uint64_t Guid = 0x1122334455667788ULL;
+  if (Anchored) {
+    Probe = ModuleValue.getOrInsertFunction(
+        "llvm.pseudoprobe", FunctionType::get(Type::getVoidTy(Context),
+                                              {I64, I64, I32, I64}, false));
+    Metadata *Descriptor[] = {
+        ConstantAsMetadata::get(ConstantInt::get(I64, Guid)),
+        ConstantAsMetadata::get(ConstantInt::get(I64, 0x1020304050607080ULL)),
+        MDString::get(Context, "anchor_kernel")};
+    ModuleValue.getOrInsertNamedMetadata("llvm.pseudo_probe_desc")
+        ->addOperand(MDNode::get(Context, Descriptor));
+  }
+
+  BasicBlock *Entry = BasicBlock::Create(Context, "entry", Kernel);
+  IRBuilder<> Builder(Entry);
+  auto EmitProbe = [&](uint64_t Index) {
+    if (Anchored)
+      Builder.CreateCall(
+          Probe, {ConstantInt::get(I64, Guid), ConstantInt::get(I64, Index),
+                  ConstantInt::get(I32, 0), ConstantInt::getSigned(I64, -1)});
+  };
+  EmitProbe(1);
+  Value *Lane = Builder.CreateCall(WorkitemId);
+  EmitProbe(2);
+  Value *One = ConstantInt::get(I32, 1);
+  EmitProbe(3);
+  Value *Result = Builder.CreateAdd(Lane, One);
+  EmitProbe(4);
+  Builder.CreateStore(Result, Kernel->getArg(0));
+  Builder.CreateRetVoid();
+
+  SmallVector<char, 0> Buffer;
+  raw_svector_ostream Stream(Buffer);
+  WriteBitcodeToFile(ModuleValue, Stream);
+  return std::vector<uint8_t>(Buffer.begin(), Buffer.end());
+}
+
 std::vector<uint8_t> makeCov6TwoKernelBitcode() {
   LLVMContext Context;
   Module ModuleValue("cov6-two-kernel", Context);
@@ -1186,6 +1251,97 @@ bool hasObjectSymbol(ArrayRef<uint8_t> Bytes, StringRef Expected) {
   return false;
 }
 
+std::optional<uint64_t> uniqueObjectSectionSize(ArrayRef<uint8_t> Bytes,
+                                                StringRef Expected) {
+  StringRef Data(reinterpret_cast<const char *>(Bytes.data()), Bytes.size());
+  auto ObjectOrError =
+      ObjectFile::createObjectFile(MemoryBufferRef(Data, "section-output"));
+  if (!ObjectOrError)
+    fail(toString(ObjectOrError.takeError()));
+  std::optional<uint64_t> Result;
+  for (SectionRef Section : (*ObjectOrError)->sections()) {
+    auto Name = Section.getName();
+    if (!Name)
+      fail(toString(Name.takeError()));
+    if (*Name != Expected)
+      continue;
+    require(!Result.has_value(), "output contains a duplicate named section");
+    Result = Section.getSize();
+  }
+  return Result;
+}
+
+std::optional<std::vector<uint8_t>>
+uniqueObjectSectionContents(ArrayRef<uint8_t> Bytes, StringRef Expected) {
+  StringRef Data(reinterpret_cast<const char *>(Bytes.data()), Bytes.size());
+  auto ObjectOrError =
+      ObjectFile::createObjectFile(MemoryBufferRef(Data, "section-output"));
+  if (!ObjectOrError)
+    fail(toString(ObjectOrError.takeError()));
+  std::optional<std::vector<uint8_t>> Result;
+  for (SectionRef Section : (*ObjectOrError)->sections()) {
+    auto Name = Section.getName();
+    if (!Name)
+      fail(toString(Name.takeError()));
+    if (*Name != Expected)
+      continue;
+    require(!Result.has_value(), "output contains a duplicate named section");
+    auto Contents = Section.getContents();
+    if (!Contents)
+      fail(toString(Contents.takeError()));
+    Result.emplace(Contents->bytes_begin(), Contents->bytes_end());
+  }
+  return Result;
+}
+
+void testProductionSemanticAnchorRetention() {
+  auto MakeRequest = [](bool Anchored) {
+    Request Result = makeV2Request(
+        makeInput(InputKind::LlvmBitcode,
+                  makeSemanticAnchorKernelBitcode(Anchored)),
+        {}, {}, {"anchor_kernel"}, {"anchor_kernel", "anchor_kernel.kd"}, 6);
+    Result.Target = "gfx942:xnack-";
+    return Result;
+  };
+  Response Baseline =
+      runSuccess(MakeRequest(false), {"anchor_kernel", "anchor_kernel.kd"});
+  Response Anchored =
+      runSuccess(MakeRequest(true), {"anchor_kernel", "anchor_kernel.kd"});
+  require(!uniqueObjectSectionSize(Baseline.LinkedOutput->Bytes,
+                                   ".pseudo_probe_desc"),
+          "unanchored Worker output unexpectedly contains probe descriptors");
+  require(
+      !uniqueObjectSectionSize(Baseline.LinkedOutput->Bytes, ".pseudo_probe"),
+      "unanchored Worker output unexpectedly contains probe addresses");
+  auto DescriptorBytes = uniqueObjectSectionSize(Anchored.LinkedOutput->Bytes,
+                                                 ".pseudo_probe_desc");
+  auto ProbeBytes =
+      uniqueObjectSectionSize(Anchored.LinkedOutput->Bytes, ".pseudo_probe");
+  require(DescriptorBytes && *DescriptorBytes > 16,
+          "production Worker/LLD dropped the probe descriptor section");
+  require(ProbeBytes && *ProbeBytes > 10,
+          "production Worker/LLD dropped the address-bearing probe section");
+  auto BaselineText =
+      uniqueObjectSectionContents(Baseline.LinkedOutput->Bytes, ".text");
+  auto AnchoredText =
+      uniqueObjectSectionContents(Anchored.LinkedOutput->Bytes, ".text");
+  require(BaselineText && AnchoredText && !BaselineText->empty(),
+          "production Worker output has no executable text");
+  require(*BaselineText == *AnchoredText,
+          "semantic anchors changed representative executable text");
+  auto BaselineMetadata =
+      uniqueObjectSectionContents(Baseline.LinkedOutput->Bytes, ".note");
+  auto AnchoredMetadata =
+      uniqueObjectSectionContents(Anchored.LinkedOutput->Bytes, ".note");
+  require(BaselineMetadata && AnchoredMetadata && !BaselineMetadata->empty(),
+          "production Worker output has no AMDHSA metadata note");
+  require(*BaselineMetadata == *AnchoredMetadata,
+          "semantic anchors changed representative AMDHSA resource metadata");
+  require(Anchored.LinkedOutput->Bytes.size() >
+              Baseline.LinkedOutput->Bytes.size(),
+          "probe section artifact-size effect was not observable");
+}
+
 struct SyntheticDeviceLibraryDirectory {
   SmallString<128> Path;
 
@@ -1593,6 +1749,7 @@ int main(int ArgumentCount, char **Arguments) {
   testLldExitPolicy(1);
   testGfx950RejectsExternalProviders();
   testSyntheticOcmlPipeline();
+  testProductionSemanticAnchorRetention();
   std::optional<std::vector<uint8_t>> MeasuredOcmlOutput =
       testMeasuredOcmlPipeline();
 

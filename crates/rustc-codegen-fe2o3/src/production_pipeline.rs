@@ -614,13 +614,13 @@ impl FormalMemoryAdmittedProductionCompilation {
         let (target_module, kernel_id) = target_bound.into_parts();
         let lowering = match target_profile {
             fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx942 => {
-                dialect_amdgcn::lower_kernel_to_gfx942_xnack_minus_llvm_ir(
+                dialect_amdgcn::lower_kernel_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1(
                     &target_module,
                     &kernel_id,
                 )
             }
             fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx950 => {
-                dialect_amdgcn::lower_kernel_to_gfx950_xnack_minus_llvm_ir(
+                dialect_amdgcn::lower_kernel_to_gfx950_xnack_minus_llvm_ir_with_semantic_anchors_v1(
                     &target_module,
                     &kernel_id,
                 )

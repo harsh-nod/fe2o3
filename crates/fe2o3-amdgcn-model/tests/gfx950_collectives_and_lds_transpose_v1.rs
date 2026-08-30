@@ -5,6 +5,7 @@ use std::process::Command;
 use fe2o3_amdgcn_model::{
     LoweringDiagnosticCode, lower_compiler_module_to_gfx950_xnack_minus_llvm_ir,
     lower_kernel_to_gfx942_xnack_minus_llvm_ir,
+    lower_kernel_to_gfx950_xnack_minus_llvm_ir_with_semantic_anchors_v1,
 };
 use fe2o3_kernel_ir::*;
 
@@ -227,6 +228,18 @@ fn lowers_exact_fp4_and_fp8_collective_and_lds_transpose_modules() {
     ] {
         let module = collective_and_lds_transpose_module(format);
         verify_module(&module).unwrap();
+        let anchored = lower_kernel_to_gfx950_xnack_minus_llvm_ir_with_semantic_anchors_v1(
+            &module,
+            &KernelId::new("collective"),
+        )
+        .unwrap();
+        let operations = module.functions[0].body.as_ref().unwrap().blocks[0]
+            .operations
+            .len();
+        assert_eq!(
+            anchored.matches("call void @llvm.pseudoprobe(").count(),
+            operations
+        );
         let llvm = lower_compiler_module_to_gfx950_xnack_minus_llvm_ir(&module).unwrap();
         assert!(llvm.contains(&format!(
             "@__fe2o3_lds_collective_10 = internal addrspace(3) global [{bytes} x i8] undef, align 64"

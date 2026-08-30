@@ -9,8 +9,9 @@ use std::{
 
 use dialect_amdgcn::{
     CanonicalProductionKirToLlvmReplayEvidenceV1, bind_production_target_v1,
-    bind_production_upstream_llvm_layout_v1, lower_kernel_to_gfx942_xnack_minus_llvm_ir,
-    lower_kernel_to_gfx950_xnack_minus_llvm_ir,
+    bind_production_upstream_llvm_layout_v1,
+    lower_kernel_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1,
+    lower_kernel_to_gfx950_xnack_minus_llvm_ir_with_semantic_anchors_v1,
 };
 use fe2o3_amd_target::ProductionAmdTargetProfileV1;
 use fe2o3_artifact_transaction::{
@@ -1958,10 +1959,16 @@ fn capsule_bytes_with_semantic_to_llvm(
         let target = bind_production_target_v1(&neutral_module, profile).unwrap();
         let dialect = match profile {
             ProductionAmdTargetProfileV1::Gfx942 => {
-                lower_kernel_to_gfx942_xnack_minus_llvm_ir(target.module(), target.kernel_id())
+                lower_kernel_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1(
+                    target.module(),
+                    target.kernel_id(),
+                )
             }
             ProductionAmdTargetProfileV1::Gfx950 => {
-                lower_kernel_to_gfx950_xnack_minus_llvm_ir(target.module(), target.kernel_id())
+                lower_kernel_to_gfx950_xnack_minus_llvm_ir_with_semantic_anchors_v1(
+                    target.module(),
+                    target.kernel_id(),
+                )
             }
         }
         .unwrap();

@@ -12,7 +12,8 @@ use sha2::{Digest, Sha256};
 use crate::{
     LoweringErrors, ProductionLlvmLayoutBindingErrorV1, ProductionTargetBindingErrorV1,
     bind_production_target_v1, bind_production_upstream_llvm_layout_v1,
-    lower_kernel_to_gfx942_xnack_minus_llvm_ir, lower_kernel_to_gfx950_xnack_minus_llvm_ir,
+    lower_kernel_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1,
+    lower_kernel_to_gfx950_xnack_minus_llvm_ir_with_semantic_anchors_v1,
 };
 
 const EVIDENCE_MAGIC_V1: &[u8] = b"FE2O3/KIR-TO-LLVM-REPLAY/V1\0";
@@ -432,10 +433,16 @@ fn replay_llvm(
 ) -> Result<String, ProductionKirToLlvmReplayErrorV1> {
     let dialect_llvm = match profile {
         ProductionAmdTargetProfileV1::Gfx942 => {
-            lower_kernel_to_gfx942_xnack_minus_llvm_ir(target_bound_module, kernel_id)
+            lower_kernel_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1(
+                target_bound_module,
+                kernel_id,
+            )
         }
         ProductionAmdTargetProfileV1::Gfx950 => {
-            lower_kernel_to_gfx950_xnack_minus_llvm_ir(target_bound_module, kernel_id)
+            lower_kernel_to_gfx950_xnack_minus_llvm_ir_with_semantic_anchors_v1(
+                target_bound_module,
+                kernel_id,
+            )
         }
     }
     .map_err(ProductionKirToLlvmReplayErrorV1::TargetLowering)?;

@@ -27,10 +27,12 @@ use fe2o3_kernel_ir::{
     PointerDistanceUnit, SCALED_FP4_E2M1_F32_M16N16K128_CAPABILITY,
     SCALED_FP4_E2M1_FP8_E4M3_F32_M16N16K128_CAPABILITY, SCALED_FP8_E4M3_F32_M16N16K128_CAPABILITY,
     ScalarType, Signature, SynchronizationScope, TargetCapability, TensorInstructionProfileV1,
-    Terminator, Type, UnaryOp, ValueId, VerificationErrors, WaveF32ReductionKindV1, WaveOperation,
-    WaveOperationKind, WaveWidth, WidenedFloatBinaryOp, WorkgroupMemoryExtent, WorkgroupSize,
-    analyze_control_flow, verify_module,
+    Terminator, Type, UnaryOp, ValueId, VerificationErrors, VerifiedCanonicalKernelIrV8,
+    VerifiedCanonicalKernelIrV9, WaveF32ReductionKindV1, WaveOperation, WaveOperationKind,
+    WaveWidth, WidenedFloatBinaryOp, WorkgroupMemoryExtent, WorkgroupSize, analyze_control_flow,
+    verify_module,
 };
+use sha2::{Digest, Sha256};
 
 use crate::{AMDGPU_TRIPLE, AmdgcnIntrinsic, Dim};
 
@@ -401,7 +403,7 @@ pub fn lower_kernel_to_llvm_ir(
     module: &Module,
     kernel_id: &KernelId,
 ) -> Result<String, LoweringErrors> {
-    lower_kernel_to_llvm_ir_for_target(module, kernel_id, LoweringTarget::Baseline)
+    lower_kernel_to_llvm_ir_for_target(module, kernel_id, LoweringTarget::Baseline, false)
 }
 
 /// Lowers one kernel for the strict gfx942 floating-point profile.
@@ -414,7 +416,12 @@ pub fn lower_kernel_to_gfx942_llvm_ir(
     module: &Module,
     kernel_id: &KernelId,
 ) -> Result<String, LoweringErrors> {
-    lower_kernel_to_llvm_ir_for_target(module, kernel_id, LoweringTarget::Gfx942StrictFloatV1)
+    lower_kernel_to_llvm_ir_for_target(
+        module,
+        kernel_id,
+        LoweringTarget::Gfx942StrictFloatV1,
+        false,
+    )
 }
 
 /// Lowers one kernel only when Kernel IR retains the exact gfx942:xnack- binding.
@@ -427,7 +434,23 @@ pub fn lower_kernel_to_gfx942_xnack_minus_llvm_ir(
     module: &Module,
     kernel_id: &KernelId,
 ) -> Result<String, LoweringErrors> {
-    lower_kernel_to_llvm_ir_for_target(module, kernel_id, LoweringTarget::Gfx942XnackMinusV1)
+    lower_kernel_to_llvm_ir_for_target(module, kernel_id, LoweringTarget::Gfx942XnackMinusV1, false)
+}
+
+/// Lowers the exact gfx942 production kernel with one non-executing metadata anchor per KIR
+/// operation.
+///
+/// Anchors use LLVM pseudo probes. Their function GUID binds the exact target, exact canonical KIR
+/// identity, and function shape; each index is a function-unique structural operation ordinal.
+/// They provide compiler-owned correspondence points through optimization and object emission;
+/// they do not claim that the following machine instructions are a complete lowering of the
+/// operation, nor do they establish a schedule or semantic refinement proof. Modules with more
+/// than one function body remain uninstrumented instead of claiming partial helper coverage.
+pub fn lower_kernel_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1(
+    module: &Module,
+    kernel_id: &KernelId,
+) -> Result<String, LoweringErrors> {
+    lower_kernel_to_llvm_ir_for_target(module, kernel_id, LoweringTarget::Gfx942XnackMinusV1, true)
 }
 
 /// Lowers one kernel only when Kernel IR retains the exact gfx950:xnack- binding.
@@ -439,13 +462,23 @@ pub fn lower_kernel_to_gfx950_xnack_minus_llvm_ir(
     module: &Module,
     kernel_id: &KernelId,
 ) -> Result<String, LoweringErrors> {
-    lower_kernel_to_llvm_ir_for_target(module, kernel_id, LoweringTarget::Gfx950XnackMinusV1)
+    lower_kernel_to_llvm_ir_for_target(module, kernel_id, LoweringTarget::Gfx950XnackMinusV1, false)
+}
+
+/// Gfx950 counterpart of
+/// [`lower_kernel_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1`].
+pub fn lower_kernel_to_gfx950_xnack_minus_llvm_ir_with_semantic_anchors_v1(
+    module: &Module,
+    kernel_id: &KernelId,
+) -> Result<String, LoweringErrors> {
+    lower_kernel_to_llvm_ir_for_target(module, kernel_id, LoweringTarget::Gfx950XnackMinusV1, true)
 }
 
 fn lower_kernel_to_llvm_ir_for_target(
     module: &Module,
     kernel_id: &KernelId,
     target: LoweringTarget,
+    semantic_anchors: bool,
 ) -> Result<String, LoweringErrors> {
     verify_module(module).map_err(LoweringErrors::verification)?;
 
@@ -544,8 +577,45 @@ fn lower_kernel_to_llvm_ir_for_target(
         ));
     }
 
-    let mut lowerer =
-        FunctionLowerer::new(module, kernel, entry, workgroup_size, wave_width, target);
+    let definition_count = module
+        .functions
+        .iter()
+        .filter(|function| function.body.is_some())
+        .count();
+    let semantic_anchor_context = if semantic_anchors && definition_count == 1 {
+        let canonical_kir_identity = match VerifiedCanonicalKernelIrV8::from_module(module.clone())
+        {
+            Ok(canonical) => *canonical.identity().digest(),
+            Err(v8_error) => VerifiedCanonicalKernelIrV9::from_module(module.clone())
+                .map(|canonical| *canonical.identity().digest())
+                .map_err(|v9_error| {
+                    LoweringErrors::one(
+                        LoweringLocation::module(module),
+                        LoweringDiagnosticCode::ResourceLimit,
+                        format!(
+                            "cannot bind semantic anchors to canonical production KIR: V8: {v8_error}; V9: {v9_error}"
+                        ),
+                    )
+                })?,
+        };
+        Some(SemanticAnchorContextV1 {
+            canonical_kir_identity,
+            target: target
+                .exact_target_binding()
+                .expect("semantic anchors require an exact production target"),
+        })
+    } else {
+        None
+    };
+    let mut lowerer = FunctionLowerer::new(
+        module,
+        kernel,
+        entry,
+        workgroup_size,
+        wave_width,
+        target,
+        semantic_anchor_context,
+    );
     preflight_function(&mut lowerer)?;
     lowerer.emit()
 }
@@ -2945,6 +3015,38 @@ struct FunctionLowerer<'a> {
     bindings: BTreeMap<ValueId, ValueBinding>,
     control_flow: IndexedControlFlow,
     split_edges: Vec<bool>,
+    semantic_anchor_context: Option<SemanticAnchorContextV1>,
+}
+
+#[derive(Clone, Copy)]
+struct SemanticAnchorContextV1 {
+    canonical_kir_identity: [u8; 32],
+    target: &'static str,
+}
+
+const SEMANTIC_ANCHOR_GUID_DOMAIN_V1: &[u8] = b"FE2O3/PRODUCTION-KIR-LLVM-ISA-ANCHOR-GUID/V1\0";
+const SEMANTIC_ANCHOR_HASH_DOMAIN_V1: &[u8] = b"FE2O3/PRODUCTION-KIR-LLVM-ISA-ANCHOR-HASH/V1\0";
+
+fn semantic_anchor_digest_v1(
+    domain: &[u8],
+    context: SemanticAnchorContextV1,
+    function_ordinal: u64,
+    block_count: u64,
+    operation_count: u64,
+) -> u64 {
+    let mut hasher = Sha256::new();
+    hasher.update(domain);
+    hasher.update(context.canonical_kir_identity);
+    hasher.update((context.target.len() as u64).to_le_bytes());
+    hasher.update(context.target.as_bytes());
+    hasher.update(function_ordinal.to_le_bytes());
+    hasher.update(block_count.to_le_bytes());
+    hasher.update(operation_count.to_le_bytes());
+    let digest = hasher.finalize();
+    let mut prefix = [0_u8; 8];
+    prefix.copy_from_slice(&digest[..8]);
+    let value = u64::from_le_bytes(prefix);
+    if value == 0 { 1 } else { value }
 }
 
 fn matrix_frontend_binding(function: &Function) -> Option<&MatrixFrontendBindingV2> {
@@ -3167,6 +3269,7 @@ impl<'a> FunctionLowerer<'a> {
         workgroup_size: WorkgroupSize,
         wave_width: Option<WaveWidth>,
         target: LoweringTarget,
+        semantic_anchor_context: Option<SemanticAnchorContextV1>,
     ) -> Self {
         let (control_flow, split_edges) = control_flow_emission_plan(function);
         Self {
@@ -3182,6 +3285,7 @@ impl<'a> FunctionLowerer<'a> {
             bindings: BTreeMap::new(),
             control_flow,
             split_edges,
+            semantic_anchor_context,
         }
     }
 
@@ -3210,6 +3314,7 @@ impl<'a> FunctionLowerer<'a> {
             bindings: BTreeMap::new(),
             control_flow,
             split_edges,
+            semantic_anchor_context: None,
         }
     }
 
@@ -3234,6 +3339,7 @@ impl<'a> FunctionLowerer<'a> {
             bindings: BTreeMap::new(),
             control_flow,
             split_edges,
+            semantic_anchor_context: None,
         }
     }
 
@@ -4733,6 +4839,9 @@ impl<'a> FunctionLowerer<'a> {
             writeln!(output).unwrap();
         }
         let invocation_intrinsics = collect_intrinsic_declarations(std::iter::once(self));
+        if self.semantic_anchor_context.is_some() {
+            writeln!(output, "declare void @llvm.pseudoprobe(i64, i64, i32, i64)").unwrap();
+        }
         writeln!(
             output,
             "declare i32 @{}() #1",
@@ -4888,6 +4997,7 @@ impl<'a> FunctionLowerer<'a> {
             workgroup_size.x, workgroup_size.y, workgroup_size.z
         )
         .unwrap();
+        self.emit_semantic_anchor_metadata_v1(&mut output);
         Ok(output)
     }
 
@@ -4938,6 +5048,7 @@ impl<'a> FunctionLowerer<'a> {
             writeln!(output, "{}:", block_label(block.id)).unwrap();
             self.emit_block_parameters(output, block);
             for (operation_index, operation) in block.operations.iter().enumerate() {
+                self.emit_semantic_anchor_v1(output, block, operation_index);
                 self.emit_operation(output, block.id, operation_index, operation)?;
             }
             self.emit_terminator(
@@ -4948,6 +5059,123 @@ impl<'a> FunctionLowerer<'a> {
             self.emit_split_edges(output, block);
         }
         Ok(())
+    }
+
+    fn semantic_anchor_descriptor_v1(&self) -> Option<(u64, u64)> {
+        let context = self.semantic_anchor_context?;
+        let function =
+            self.module
+                .functions
+                .iter()
+                .position(|candidate| std::ptr::eq(candidate, self.function))? as u64;
+        let body = self.function.body.as_ref()?;
+        let block_count = body.blocks.len() as u64;
+        let operation_count = body
+            .blocks
+            .iter()
+            .map(|block| block.operations.len() as u64)
+            .sum();
+        Some((
+            semantic_anchor_digest_v1(
+                SEMANTIC_ANCHOR_GUID_DOMAIN_V1,
+                context,
+                function,
+                block_count,
+                operation_count,
+            ),
+            semantic_anchor_digest_v1(
+                SEMANTIC_ANCHOR_HASH_DOMAIN_V1,
+                context,
+                function,
+                block_count,
+                operation_count,
+            ),
+        ))
+    }
+
+    fn emit_semantic_anchor_v1(
+        &self,
+        output: &mut dyn fmt::Write,
+        block: &BasicBlock,
+        operation_index: usize,
+    ) {
+        let Some((guid, _)) = self.semantic_anchor_descriptor_v1() else {
+            return;
+        };
+        let body = self.function.body.as_ref().expect("definition required");
+        let block_ordinal = body
+            .blocks
+            .iter()
+            .position(|candidate| std::ptr::eq(candidate, block))
+            .expect("emitted block belongs to the function");
+        let preceding = body.blocks[..block_ordinal]
+            .iter()
+            .map(|block| block.operations.len())
+            .sum::<usize>();
+        let probe_index = preceding
+            .checked_add(operation_index)
+            .and_then(|value| value.checked_add(1))
+            .expect("verified KIR operation count is bounded");
+        writeln!(
+            output,
+            "  call void @llvm.pseudoprobe(i64 {guid}, i64 {probe_index}, i32 0, i64 -1)"
+        )
+        .unwrap();
+    }
+
+    fn emit_semantic_anchor_metadata_v1(&self, output: &mut dyn fmt::Write) {
+        let Some(context) = self.semantic_anchor_context else {
+            return;
+        };
+        let body = self.function.body.as_ref().expect("definition required");
+        let (guid, hash) = self
+            .semantic_anchor_descriptor_v1()
+            .expect("semantic anchor descriptor context");
+        writeln!(output, "!llvm.pseudo_probe_desc = !{{!1}}").unwrap();
+        writeln!(
+            output,
+            "!1 = !{{i64 {guid}, i64 {hash}, !\"{}\"}}",
+            self.symbol
+        )
+        .unwrap();
+        let binding_index = 2;
+        let record_start = 3;
+        let operation_count = body
+            .blocks
+            .iter()
+            .map(|block| block.operations.len())
+            .sum::<usize>();
+        write!(output, "!fe2o3.semantic_anchor.v1 = !{{!{binding_index}").unwrap();
+        for index in 0..operation_count {
+            write!(output, ", !{}", record_start + index).unwrap();
+        }
+        writeln!(output, "}}").unwrap();
+        writeln!(
+            output,
+            "!{binding_index} = !{{!\"sha256:{}\", !\"target:{}\", i64 {guid}, i64 {hash}, i64 {}, i64 {operation_count}}}",
+            lower_hex(&context.canonical_kir_identity),
+            context.target,
+            body.blocks.len()
+        )
+        .unwrap();
+        let function = self
+            .module
+            .functions
+            .iter()
+            .position(|candidate| std::ptr::eq(candidate, self.function))
+            .expect("emitted function belongs to the module");
+        let mut probe_index = 1_usize;
+        for (block_ordinal, block) in body.blocks.iter().enumerate() {
+            for operation_ordinal in 0..block.operations.len() {
+                writeln!(
+                    output,
+                    "!{} = !{{i64 {probe_index}, i64 {function}, i64 {block_ordinal}, i64 {operation_ordinal}}}",
+                    record_start + probe_index - 1
+                )
+                .unwrap();
+                probe_index += 1;
+            }
+        }
     }
 
     fn has_workgroup_barrier(&self) -> bool {

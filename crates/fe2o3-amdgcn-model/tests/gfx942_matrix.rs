@@ -6,7 +6,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use fe2o3_amdgcn_model::{
     GFX942_XNACK_MINUS_DATA_LAYOUT, LoweringDiagnosticCode,
     lower_compiler_module_to_gfx942_llvm_ir, lower_kernel_to_gfx942_llvm_ir,
-    lower_kernel_to_gfx942_xnack_minus_llvm_ir, lower_kernel_to_llvm_ir,
+    lower_kernel_to_gfx942_xnack_minus_llvm_ir,
+    lower_kernel_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1, lower_kernel_to_llvm_ir,
 };
 use fe2o3_kernel_ir::*;
 
@@ -247,6 +248,23 @@ fn exact_xnack_minus_kernel_api_requires_and_emits_the_retained_target_identity(
     assert!(llvm.contains(GFX942_XNACK_MINUS_DATA_LAYOUT));
     assert!(llvm.contains("-wavefrontsize32,+wavefrontsize64,-xnack"));
     assert!(llvm.contains("\"fp-contract\"=\"off\""));
+    let anchored = lower_kernel_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1(
+        &module,
+        &module.kernels[0].id,
+    )
+    .unwrap();
+    let operations = module.functions[0]
+        .body
+        .as_ref()
+        .unwrap()
+        .blocks
+        .iter()
+        .map(|block| block.operations.len())
+        .sum::<usize>();
+    assert_eq!(
+        anchored.matches("call void @llvm.pseudoprobe(").count(),
+        operations
+    );
 
     for owner in 0..3 {
         let mut mutated = module.clone();
