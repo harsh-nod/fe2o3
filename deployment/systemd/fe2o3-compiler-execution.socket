@@ -1,0 +1,17 @@
+[Unit]
+Description=fe2o3 protected compiler-execution listener
+Documentation=https://github.com/harsh-nod/fe2o3/blob/main/docs/compiler-execution-service-v1.md
+
+[Socket]
+ListenSequentialPacket=/run/fe2o3/compiler-execution-supervisor.sock
+Accept=no
+Service=fe2o3-compiler-execution.service
+FileDescriptorName=compiler-execution-listener
+SocketUser=root
+SocketGroup=fe2o3-compiler
+SocketMode=0660
+DirectoryMode=0755
+RemoveOnStop=yes
+
+[Install]
+WantedBy=sockets.target
