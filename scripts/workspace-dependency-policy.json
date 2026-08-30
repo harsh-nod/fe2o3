@@ -160,6 +160,13 @@
     },
     {
       "from": "fe2o3-verifier",
+      "to": "dialect-amdgcn",
+      "kinds": [
+        "normal"
+      ]
+    },
+    {
+      "from": "fe2o3-verifier",
       "to": "fe2o3-lower-mir-kernel",
       "kinds": [
         "normal"
