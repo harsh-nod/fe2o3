@@ -20,16 +20,12 @@ const IDENTITY_BYTES_V3: usize = 32 + 8;
 
 /// Maximum canonical size accepted for any one target-lineage receipt preimage.
 pub(crate) const MAX_PRODUCTION_TARGET_LINEAGE_TRANSCRIPT_BYTES_V3: usize = 4 * 1024 * 1024;
-/// Maximum exact LLVM text retained before descriptor publication.
-pub(crate) const MAX_PRE_DESCRIPTOR_LLVM_BYTES_V3: usize =
-    MAX_PRODUCTION_TARGET_LINEAGE_TRANSCRIPT_BYTES_V3 - 1024;
 
 const MAX_TARGET_TEXT_BYTES_V3: usize = 256;
 const MAX_TARGET_FEATURES_BYTES_V3: usize = 4 * 1024;
 const MAX_DATA_LAYOUT_BYTES_V3: usize = 16 * 1024;
 const TARGET_BINDING_KIND_V3: u16 = 1;
 const DATA_LAYOUT_KIND_V3: u16 = 2;
-const AMDGPU_LOWERING_KIND_V3: u16 = 4;
 const SEMANTIC_TO_LLVM_KIND_V3: u16 = 5;
 
 /// Exact-input association policy. It intentionally makes no refinement claim.
@@ -38,7 +34,6 @@ pub(crate) const ASSOCIATION_ONLY_NO_REFINEMENT_PROOF_POLICY_V3: u16 = 1;
 const ASSOCIATION_ONLY_CLAIM_V3: &[u8] = b"association-only/no-refinement-proof";
 const TARGET_BINDING_DOMAIN_V3: &[u8] = b"FE2O3/PRODUCTION-TARGET-BINDING-TRANSCRIPT/V3\0";
 const DATA_LAYOUT_DOMAIN_V3: &[u8] = b"FE2O3/PRODUCTION-DATA-LAYOUT-TRANSCRIPT/V3\0";
-const AMDGPU_LOWERING_DOMAIN_V3: &[u8] = b"FE2O3/PRODUCTION-AMDGPU-LOWERING-TRANSCRIPT/V3\0";
 const SEMANTIC_TO_LLVM_DOMAIN_V3: &[u8] = b"FE2O3/PRODUCTION-SEMANTIC-TO-LLVM-ASSOCIATION/V3\0";
 
 const EXACT_GFX942_TARGET_V3: &str = "gfx942:xnack-";
@@ -170,19 +165,6 @@ const DATA_LAYOUT_FIELDS_V3: &[FieldSchemaV3] = &[
     FieldSchemaV3::exact("default pointer width", 2),
 ];
 
-const AMDGPU_LOWERING_FIELDS_V3: &[FieldSchemaV3] = &[
-    FieldSchemaV3::exact("domain", AMDGPU_LOWERING_DOMAIN_V3.len()),
-    FieldSchemaV3::exact("claim", ASSOCIATION_ONLY_CLAIM_V3.len()),
-    FieldSchemaV3::exact("target binding identity", IDENTITY_BYTES_V3),
-    FieldSchemaV3::exact("data layout identity", IDENTITY_BYTES_V3),
-    FieldSchemaV3::exact("target-bound Kernel IR identity", IDENTITY_BYTES_V3),
-    FieldSchemaV3::bounded("configured target", MAX_TARGET_TEXT_BYTES_V3),
-    FieldSchemaV3::bounded(
-        "exact pre-descriptor LLVM",
-        MAX_PRE_DESCRIPTOR_LLVM_BYTES_V3,
-    ),
-];
-
 const SEMANTIC_TO_LLVM_FIELDS_V3: &[FieldSchemaV3] = &[
     FieldSchemaV3::exact("domain", SEMANTIC_TO_LLVM_DOMAIN_V3.len()),
     FieldSchemaV3::exact("claim", ASSOCIATION_ONLY_CLAIM_V3.len()),
@@ -217,13 +199,6 @@ const DATA_LAYOUT_SCHEMA_V3: RecordSchemaV3 = RecordSchemaV3 {
     policy: ASSOCIATION_ONLY_NO_REFINEMENT_PROOF_POLICY_V3,
     domain: DATA_LAYOUT_DOMAIN_V3,
     fields: DATA_LAYOUT_FIELDS_V3,
-};
-const AMDGPU_LOWERING_SCHEMA_V3: RecordSchemaV3 = RecordSchemaV3 {
-    name: "AMDGPU lowering transcript",
-    kind: AMDGPU_LOWERING_KIND_V3,
-    policy: ASSOCIATION_ONLY_NO_REFINEMENT_PROOF_POLICY_V3,
-    domain: AMDGPU_LOWERING_DOMAIN_V3,
-    fields: AMDGPU_LOWERING_FIELDS_V3,
 };
 const SEMANTIC_TO_LLVM_SCHEMA_V3: RecordSchemaV3 = RecordSchemaV3 {
     name: "semantic-to-LLVM association",
@@ -624,18 +599,6 @@ fn validate_ascii_token<'a>(
     Ok(text)
 }
 
-fn validate_llvm_text(bytes: &[u8]) -> Result<&str, ProductionTargetLineageErrorV3> {
-    let text = str::from_utf8(bytes).map_err(|_| ProductionTargetLineageErrorV3::InvalidText {
-        field: "exact pre-descriptor LLVM",
-    })?;
-    if text.is_empty() || text.as_bytes().contains(&0) || text.as_bytes().contains(&b'\r') {
-        return Err(ProductionTargetLineageErrorV3::InvalidText {
-            field: "exact pre-descriptor LLVM",
-        });
-    }
-    Ok(text)
-}
-
 fn require_exact_text(
     field: &'static str,
     observed: &str,
@@ -955,105 +918,6 @@ fn validate_data_layout_inputs_v3(
             observed: u64::from(inputs.default_pointer_width_bits),
         });
     }
-    Ok(())
-}
-
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct AmdgpuLoweringTranscriptInputsV3<'a> {
-    pub(crate) target_binding: TargetLineageIdentityV3,
-    pub(crate) data_layout: TargetLineageIdentityV3,
-    pub(crate) target_bound_kir: TargetLineageIdentityV3,
-    pub(crate) configured_target: &'a str,
-    /// Exact LLVM text before compiler descriptor publication or linking.
-    pub(crate) pre_descriptor_llvm: &'a [u8],
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct AmdgpuLoweringTranscriptV3 {
-    record: CanonicalRecordV3,
-}
-
-impl AmdgpuLoweringTranscriptV3 {
-    pub(crate) fn new(
-        inputs: AmdgpuLoweringTranscriptInputsV3<'_>,
-    ) -> Result<Self, ProductionTargetLineageErrorV3> {
-        validate_amdgpu_lowering_inputs_v3(&inputs)?;
-        let target_binding = inputs.target_binding.encode();
-        let data_layout = inputs.data_layout.encode();
-        let target_bound_kir = inputs.target_bound_kir.encode();
-        let fields: [&[u8]; 7] = [
-            AMDGPU_LOWERING_DOMAIN_V3,
-            ASSOCIATION_ONLY_CLAIM_V3,
-            &target_binding,
-            &data_layout,
-            &target_bound_kir,
-            inputs.configured_target.as_bytes(),
-            inputs.pre_descriptor_llvm,
-        ];
-        Ok(Self {
-            record: CanonicalRecordV3::build(&AMDGPU_LOWERING_SCHEMA_V3, &fields)?,
-        })
-    }
-
-    #[cfg(test)]
-    pub(crate) fn decode(bytes: &[u8]) -> Result<Self, ProductionTargetLineageErrorV3> {
-        let record = CanonicalRecordV3::decode(&AMDGPU_LOWERING_SCHEMA_V3, bytes)?;
-        let value = Self { record };
-        validate_amdgpu_lowering_inputs_v3(&value.inputs()?)?;
-        Ok(value)
-    }
-
-    pub(crate) fn canonical_bytes(&self) -> &[u8] {
-        self.record.canonical_bytes()
-    }
-
-    #[cfg(test)]
-    pub(crate) const fn claim(&self) -> TargetLineageClaimV3 {
-        TargetLineageClaimV3::AssociationOnlyNoRefinementProof
-    }
-
-    #[cfg(test)]
-    pub(crate) const fn establishes_refinement_proof(&self) -> bool {
-        false
-    }
-
-    #[cfg(test)]
-    pub(crate) fn inputs(
-        &self,
-    ) -> Result<AmdgpuLoweringTranscriptInputsV3<'_>, ProductionTargetLineageErrorV3> {
-        Ok(AmdgpuLoweringTranscriptInputsV3 {
-            target_binding: TargetLineageIdentityV3::decode(
-                "target binding identity",
-                self.record.field(2),
-            )?,
-            data_layout: TargetLineageIdentityV3::decode(
-                "data layout identity",
-                self.record.field(3),
-            )?,
-            target_bound_kir: TargetLineageIdentityV3::decode(
-                "target-bound Kernel IR identity",
-                self.record.field(4),
-            )?,
-            configured_target: validate_ascii_token("configured target", self.record.field(5))?,
-            pre_descriptor_llvm: validate_llvm_text(self.record.field(6))?.as_bytes(),
-        })
-    }
-}
-
-fn validate_amdgpu_lowering_inputs_v3(
-    inputs: &AmdgpuLoweringTranscriptInputsV3<'_>,
-) -> Result<(), ProductionTargetLineageErrorV3> {
-    let configured_target =
-        validate_ascii_token("configured target", inputs.configured_target.as_bytes())?;
-    if !matches!(
-        configured_target,
-        EXACT_GFX942_TARGET_V3 | EXACT_GFX950_TARGET_V3
-    ) {
-        return Err(ProductionTargetLineageErrorV3::ExactValueMismatch {
-            field: "configured target",
-        });
-    }
-    validate_llvm_text(inputs.pre_descriptor_llvm)?;
     Ok(())
 }
 
@@ -1397,9 +1261,6 @@ mod tests {
 
     const DATA_LAYOUT: &str = crate::production_target_v1::PRODUCTION_RUSTC_DATA_LAYOUT_V1;
     const WORKER_DATA_LAYOUT: &str = crate::production_target_v1::PRODUCTION_WORKER_DATA_LAYOUT_V1;
-    const LLVM: &[u8] = b"target triple = \"amdgcn-amd-amdhsa\"\n\
-target datalayout = \"e-p:64:64-p1:64:64-n32:64-S32-A5-G1\"\n\n\
-define amdgpu_kernel void @kernel() {\nentry:\n  ret void\n}\n";
 
     fn identity(seed: u8) -> TargetLineageIdentityV3 {
         TargetLineageIdentityV3::new([seed; 32], u64::from(seed) + 1).unwrap()
@@ -1432,17 +1293,6 @@ define amdgpu_kernel void @kernel() {\nentry:\n  ret void\n}\n";
             final_llvm_target: EXACT_RUSTC_LLVM_TARGET_V3,
             final_llvm_data_layout: WORKER_DATA_LAYOUT,
             default_pointer_width_bits: 64,
-        })
-        .unwrap()
-    }
-
-    fn lowering() -> AmdgpuLoweringTranscriptV3 {
-        AmdgpuLoweringTranscriptV3::new(AmdgpuLoweringTranscriptInputsV3 {
-            target_binding: identity(5),
-            data_layout: identity(8),
-            target_bound_kir: identity(4),
-            configured_target: EXACT_GFX942_TARGET_V3,
-            pre_descriptor_llvm: LLVM,
         })
         .unwrap()
     }
@@ -1493,17 +1343,6 @@ define amdgpu_kernel void @kernel() {\nentry:\n  ret void\n}\n";
             layout.canonical_bytes()
         );
 
-        let lowering = lowering();
-        let decoded = AmdgpuLoweringTranscriptV3::decode(lowering.canonical_bytes()).unwrap();
-        assert_eq!(decoded.canonical_bytes(), lowering.canonical_bytes());
-        assert_eq!(decoded.inputs().unwrap().pre_descriptor_llvm, LLVM);
-        assert_eq!(
-            AmdgpuLoweringTranscriptV3::new(decoded.inputs().unwrap())
-                .unwrap()
-                .canonical_bytes(),
-            lowering.canonical_bytes()
-        );
-
         let association = association();
         let decoded =
             SemanticToLlvmAssociationTranscriptV3::decode(association.canonical_bytes()).unwrap();
@@ -1537,12 +1376,6 @@ define amdgpu_kernel void @kernel() {\nentry:\n  ret void\n}\n";
             TargetLineageClaimV3::AssociationOnlyNoRefinementProof
         );
         assert!(!layout.establishes_refinement_proof());
-        let lowering = lowering();
-        assert_eq!(
-            lowering.claim(),
-            TargetLineageClaimV3::AssociationOnlyNoRefinementProof
-        );
-        assert!(!lowering.establishes_refinement_proof());
         let association = association();
         assert_eq!(
             association.claim(),
@@ -1557,7 +1390,6 @@ define amdgpu_kernel void @kernel() {\nentry:\n  ret void\n}\n";
     fn every_prefix_and_trailing_byte_is_rejected() {
         let target = target_binding();
         let layout = data_layout();
-        let lowering = lowering();
         let association = association();
         let records: Vec<(&[u8], DecoderV3)> = vec![
             (target.canonical_bytes(), |bytes| {
@@ -1565,9 +1397,6 @@ define amdgpu_kernel void @kernel() {\nentry:\n  ret void\n}\n";
             }),
             (layout.canonical_bytes(), |bytes| {
                 DataLayoutTranscriptV3::decode(bytes).is_ok()
-            }),
-            (lowering.canonical_bytes(), |bytes| {
-                AmdgpuLoweringTranscriptV3::decode(bytes).is_ok()
             }),
             (association.canonical_bytes(), |bytes| {
                 SemanticToLlvmAssociationTranscriptV3::decode(bytes).is_ok()
@@ -1696,17 +1525,16 @@ define amdgpu_kernel void @kernel() {\nentry:\n  ret void\n}\n";
 
     #[test]
     fn bounds_are_checked_before_record_allocation() {
-        let oversized_llvm = vec![b'x'; MAX_PRE_DESCRIPTOR_LLVM_BYTES_V3 + 1];
+        let oversized_features = "x".repeat(MAX_TARGET_FEATURES_BYTES_V3 + 1);
+        let target = target_binding();
+        let mut fields = (0..TARGET_BINDING_FIELDS_V3.len())
+            .map(|index| target.record.field(index))
+            .collect::<Vec<_>>();
+        fields[9] = oversized_features.as_bytes();
         assert!(matches!(
-            AmdgpuLoweringTranscriptV3::new(AmdgpuLoweringTranscriptInputsV3 {
-                target_binding: identity(5),
-                data_layout: identity(8),
-                target_bound_kir: identity(4),
-                configured_target: EXACT_GFX942_TARGET_V3,
-                pre_descriptor_llvm: &oversized_llvm,
-            }),
+            CanonicalRecordV3::build(&TARGET_BINDING_SCHEMA_V3, &fields),
             Err(ProductionTargetLineageErrorV3::FieldTooLarge {
-                field: "exact pre-descriptor LLVM",
+                field: "target features",
                 ..
             })
         ));

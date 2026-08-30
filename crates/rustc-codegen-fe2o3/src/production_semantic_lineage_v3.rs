@@ -31,17 +31,16 @@ use fe2o3_lower_mir_kernel::{
 };
 use fe2o3_rustc_invocation::{InvocationDigestV3, encode_descriptor_v3};
 use fe2o3_verifier::{
-    CanonicalProductionMirPlironVerusExecutionEvidenceV1,
+    CanonicalProductionMirPlironVerusExecutionEvidenceV1, CompilerKirToLlvmReplayValidationErrorV1,
     ProductionMirPlironVerusExecutionEvidenceErrorV1,
 };
 use sha2::{Digest, Sha256};
 
 use crate::production_ranked_projection_v1::AuthenticatedRankedVerificationV5;
 use crate::production_target_lineage_v3::{
-    AmdgpuLoweringTranscriptInputsV3, AmdgpuLoweringTranscriptV3, DataLayoutTranscriptInputsV3,
-    DataLayoutTranscriptV3, ProductionTargetLineageErrorV3, SemanticToLlvmAssociationInputsV3,
-    SemanticToLlvmAssociationTranscriptV3, TargetBindingTranscriptInputsV3,
-    TargetBindingTranscriptV3, TargetLineageIdentityV3,
+    DataLayoutTranscriptInputsV3, DataLayoutTranscriptV3, ProductionTargetLineageErrorV3,
+    SemanticToLlvmAssociationInputsV3, SemanticToLlvmAssociationTranscriptV3,
+    TargetBindingTranscriptInputsV3, TargetBindingTranscriptV3, TargetLineageIdentityV3,
 };
 use crate::production_target_v1::PRODUCTION_WORKER_DATA_LAYOUT_V1;
 use crate::protected_rustc_invocation::{
@@ -77,6 +76,7 @@ pub(crate) struct PreparedProductionSemanticLineageV3 {
     mir_to_kir_correspondence: InertMirToKirCorrespondenceReceiptV3,
     formal_memory: InertFormalMemoryReceiptV3,
     verus_execution: CanonicalProductionMirPlironVerusExecutionEvidenceV1,
+    amdgpu_lowering_replay: dialect_amdgcn::CanonicalProductionKirToLlvmReplayEvidenceV1,
     neutral_kir_custody: ProductionCanonicalKernelIrIdentityV1,
     neutral_kir_identity: TargetLineageIdentityV3,
     bound_kir_identity: TargetLineageIdentityV3,
@@ -84,7 +84,6 @@ pub(crate) struct PreparedProductionSemanticLineageV3 {
     expected_exports: BTreeSet<(CompilerModuleSymbolRoleV1, String)>,
     rustc_layout: crate::semantic_layout_bridge::SemanticLayoutTargetV1,
     default_workgroup: [u32; 3],
-    pre_descriptor_llvm: Box<[u8]>,
 }
 
 impl PreparedProductionSemanticLineageV3 {
@@ -153,6 +152,13 @@ impl PreparedProductionSemanticLineageV3 {
         )?;
         let kernel_ir =
             InertKernelIrReceiptV3::from_canonical_preimage(neutral_kir.canonical_bytes())?;
+        let amdgpu_lowering_replay =
+            dialect_amdgcn::CanonicalProductionKirToLlvmReplayEvidenceV1::from_live_inputs(
+                neutral_kir.canonical_bytes(),
+                target_module,
+                rustc_target.profile(),
+                pre_descriptor_llvm,
+            )?;
 
         let correspondence = InertCanonicalMirToKirCorrespondenceEvidenceV4::from_live_owner(
             admitted.semantic_kir(),
@@ -235,6 +241,7 @@ impl PreparedProductionSemanticLineageV3 {
             mir_to_kir_correspondence,
             formal_memory,
             verus_execution,
+            amdgpu_lowering_replay,
             neutral_kir_custody,
             neutral_kir_identity,
             bound_kir_identity,
@@ -242,7 +249,6 @@ impl PreparedProductionSemanticLineageV3 {
             expected_exports,
             rustc_layout: rustc_target.rustc_layout().clone(),
             default_workgroup: [workgroup.x, workgroup.y, workgroup.z],
-            pre_descriptor_llvm: pre_descriptor_llvm.as_bytes().into(),
         })
     }
 
@@ -422,16 +428,25 @@ impl PreparedProductionSemanticLineageV3 {
             export_manifest.identity().byte_len(),
         )?;
 
-        let amdgpu_lowering = AmdgpuLoweringTranscriptV3::new(AmdgpuLoweringTranscriptInputsV3 {
-            target_binding: target_binding_identity,
-            data_layout: data_layout_identity,
-            target_bound_kir: self.bound_kir_identity,
-            configured_target: &configured_target,
-            pre_descriptor_llvm: &self.pre_descriptor_llvm,
-        })?;
         let amdgpu_lowering = InertAmdgpuLoweringReceiptV3::from_canonical_preimage(
-            amdgpu_lowering.canonical_bytes(),
+            self.amdgpu_lowering_replay.canonical_bytes(),
         )?;
+        let validated_lowering = fe2o3_verifier::validate_compiler_kir_to_llvm_replay_v1(
+            &self.kernel_ir,
+            &amdgpu_lowering,
+        )?;
+        let replay_evidence = validated_lowering.replay().evidence();
+        let replay_target_identity = TargetLineageIdentityV3::new(
+            replay_evidence.target_bound_kernel_ir_identity().sha256(),
+            replay_evidence.target_bound_kernel_ir_identity().byte_len(),
+        )?;
+        if replay_target_identity != self.bound_kir_identity
+            || replay_evidence.profile().device_target() != configured_target
+        {
+            return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
+                "independently replayed AMDGPU lowering changed target-bound KIR or target profile",
+            ));
+        }
         let amdgpu_lowering_identity = receipt_identity(
             amdgpu_lowering.identity().sha256(),
             amdgpu_lowering.identity().byte_len(),
@@ -627,6 +642,8 @@ pub(crate) enum ProductionSemanticLineageErrorV3 {
     Correspondence(ProductionCorrespondenceEvidenceErrorV4),
     FormalMemory(ProductionFormalMemoryEvidenceErrorV4),
     VerusEvidence(ProductionMirPlironVerusExecutionEvidenceErrorV1),
+    KirToLlvmReplay(dialect_amdgcn::ProductionKirToLlvmReplayErrorV1),
+    KirToLlvmReplayValidation(CompilerKirToLlvmReplayValidationErrorV1),
     Receipt(LineageErrorV3),
     ProofIdentity(InertProofBindingAssociationErrorV3),
     ProofBinding(InertProofBindingAssociationErrorV4),
@@ -672,6 +689,13 @@ impl fmt::Display for ProductionSemanticLineageErrorV3 {
                     "production V3 aggregate Verus evidence failed: {error}"
                 )
             }
+            Self::KirToLlvmReplay(error) => {
+                write!(formatter, "production KIR-to-LLVM replay failed: {error}")
+            }
+            Self::KirToLlvmReplayValidation(error) => write!(
+                formatter,
+                "production independent KIR-to-LLVM validation failed: {error}"
+            ),
             Self::Receipt(error) => write!(formatter, "production V3 receipt failed: {error}"),
             Self::ProofIdentity(error) => {
                 write!(formatter, "production V3 proof identity failed: {error}")
@@ -719,6 +743,18 @@ impl From<LineageErrorV3> for ProductionSemanticLineageErrorV3 {
 impl From<ProductionMirPlironVerusExecutionEvidenceErrorV1> for ProductionSemanticLineageErrorV3 {
     fn from(error: ProductionMirPlironVerusExecutionEvidenceErrorV1) -> Self {
         Self::VerusEvidence(error)
+    }
+}
+
+impl From<dialect_amdgcn::ProductionKirToLlvmReplayErrorV1> for ProductionSemanticLineageErrorV3 {
+    fn from(error: dialect_amdgcn::ProductionKirToLlvmReplayErrorV1) -> Self {
+        Self::KirToLlvmReplay(error)
+    }
+}
+
+impl From<CompilerKirToLlvmReplayValidationErrorV1> for ProductionSemanticLineageErrorV3 {
+    fn from(error: CompilerKirToLlvmReplayValidationErrorV1) -> Self {
+        Self::KirToLlvmReplayValidation(error)
     }
 }
 
@@ -780,5 +816,13 @@ mod layout_tests {
             ))
             .is_err()
         );
+    }
+
+    #[test]
+    fn production_capsule_requires_shared_independent_kir_to_llvm_replay() {
+        let source = include_str!("production_semantic_lineage_v3.rs");
+        assert!(source.contains("CanonicalProductionKirToLlvmReplayEvidenceV1::from_live_inputs"));
+        assert!(source.contains("validate_compiler_kir_to_llvm_replay_v1"));
+        assert!(!source.contains(concat!("AmdgpuLoweringTranscript", "V3::new")));
     }
 }

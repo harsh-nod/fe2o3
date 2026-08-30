@@ -320,7 +320,7 @@ impl ValidatedProductionKirToLlvmReplayV1 {
         false
     }
 
-    fn into_evidence(self) -> CanonicalProductionKirToLlvmReplayEvidenceV1 {
+    pub fn into_evidence(self) -> CanonicalProductionKirToLlvmReplayEvidenceV1 {
         self.evidence
     }
 }
