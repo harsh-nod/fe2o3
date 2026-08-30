@@ -1029,6 +1029,29 @@ fn insert_detached_identity<T>(
     identities.insert(index, identity);
 }
 
+fn validate_new_detached_data_index(
+    detached_data_count: usize,
+    data_index: usize,
+) -> Result<(), Gfx942DispatchBindingErrorV1> {
+    if data_index > detached_data_count {
+        return Err(Gfx942DispatchBindingErrorV1::InvalidData {
+            index: detached_data_count,
+            detail: "detached insertion ordinal",
+        });
+    }
+    Ok(())
+}
+
+fn insert_detached_identity_at<T>(
+    identities: &mut Vec<T>,
+    next_insertion_index: &mut Option<usize>,
+    identity: T,
+    data_index: usize,
+) {
+    identities.insert(data_index, identity);
+    *next_insertion_index = None;
+}
+
 enum QueueDestroyOutcomeV1 {
     Released(ComputeAqlQueueDestroyedV1),
     Returned(Box<Gfx942RecycledDispatchResourcesV1>),
@@ -2193,6 +2216,21 @@ impl ComputeAqlQueueSessionV1 {
         }
     }
 
+    /// Validates an exact detached-data insertion without allocating, mapping,
+    /// or changing queue state.
+    ///
+    /// Service layers can use this before mutating their own allocation ledger,
+    /// so a full lower data roster or an invalid ordinal remains a retry-safe
+    /// rejection with unchanged custody.
+    pub fn preflight_fixed_dispatch_data_insertion(
+        &self,
+        data_index: usize,
+    ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+        self.require_unbound_fixed_dispatch()?;
+        self.require_detached_allocation_capacity()?;
+        self.require_new_detached_data_index(data_index)
+    }
+
     /// Allocates, initializes, and inserts one coherent host-visible extent at
     /// an exact detached data ordinal.
     pub fn insert_initialized_host_visible_fixed_dispatch_data(
@@ -2381,14 +2419,7 @@ impl ComputeAqlQueueSessionV1 {
         &self,
         data_index: usize,
     ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
-        if self.detached_next_insertion_index.is_some() || data_index > self.detached_data_count {
-            return Err(Gfx942DispatchBindingErrorV1::InvalidData {
-                index: data_index.min(self.detached_data_count),
-                detail: "detached insertion ordinal",
-            }
-            .into());
-        }
-        Ok(())
+        validate_new_detached_data_index(self.detached_data_count, data_index).map_err(Into::into)
     }
 
     fn record_new_detached_data(&mut self, data: &Gfx942FixedDispatchDataV1) {
@@ -2401,8 +2432,12 @@ impl ComputeAqlQueueSessionV1 {
     }
 
     fn record_new_detached_data_at(&mut self, data: &Gfx942FixedDispatchDataV1, data_index: usize) {
-        self.detached_data_identities
-            .insert(data_index, data.storage_identity());
+        insert_detached_identity_at(
+            &mut self.detached_data_identities,
+            &mut self.detached_next_insertion_index,
+            data.storage_identity(),
+            data_index,
+        );
         self.detached_data_count += 1;
     }
 
@@ -3782,7 +3817,10 @@ impl ComputeAqlQueueSessionV1 {
         }
         let domain = engine.identity.domain_id();
         let identity = core::mem::replace(&mut engine.identity, DeviceIdentityStateV1::new(domain));
-        let memory = core::mem::replace(&mut engine.memory, MemoryLifecycleStateV1::new(domain));
+        let memory = core::mem::replace(
+            &mut engine.memory,
+            MemoryLifecycleStateV1::new_monotonic_non_reusable(domain),
+        );
         engine
             .backend
             .session
@@ -4667,6 +4705,38 @@ mod tests {
             first_ordered_identity_mismatch(&identities, &[11, 22, 13]),
             None
         );
+    }
+
+    #[test]
+    fn exact_detached_insertion_clears_legacy_replacement_state_at_any_valid_ordinal() {
+        let mut same_ordinal = vec![11_u64, 13];
+        let mut pending = Some(1);
+        validate_new_detached_data_index(same_ordinal.len(), 1).unwrap();
+        insert_detached_identity_at(&mut same_ordinal, &mut pending, 12, 1);
+        assert_eq!(same_ordinal, [11, 12, 13]);
+        assert_eq!(pending, None);
+
+        let mut different_ordinal = vec![21_u64, 23];
+        let mut pending = Some(1);
+        validate_new_detached_data_index(different_ordinal.len(), 0).unwrap();
+        insert_detached_identity_at(&mut different_ordinal, &mut pending, 20, 0);
+        assert_eq!(different_ordinal, [20, 21, 23]);
+        assert_eq!(pending, None);
+    }
+
+    #[test]
+    fn exact_detached_insertion_rejects_out_of_range_without_mutation() {
+        let identities = vec![31_u64, 32];
+        let pending = Some(0);
+        assert!(matches!(
+            validate_new_detached_data_index(identities.len(), 3),
+            Err(Gfx942DispatchBindingErrorV1::InvalidData {
+                index: 2,
+                detail: "detached insertion ordinal",
+            })
+        ));
+        assert_eq!(identities, [31, 32]);
+        assert_eq!(pending, Some(0));
     }
 
     #[test]

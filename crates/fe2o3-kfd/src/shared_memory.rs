@@ -15,11 +15,11 @@ use fe2o3_kfd_uapi::{
 use fe2o3_runtime_model::{
     AllocationGenerationV1, AllocationIdV1, DeviceIdentityStateV1, DeviceKeyV1, GpuVaRangeV1,
     MappingIdV1, MemoryAccessV1, MemoryAllocationKeyV1, MemoryAllocationSpecV1, MemoryCoherenceV1,
-    MemoryKindV1, MemoryLifecycleStateV1, MemoryMappingKeyV1, MemoryPublicationIdV1,
-    MemoryPublicationKeyV1, MemoryTransitionErrorV1, MemoryTransitionV1, ModelAdmissionStatusV1,
-    ModelDeviceAdmissionV1, PartialOperationStatusV1, PartialProgressObservationV1,
-    UntrustedAllocationHandleObservationV1, UntrustedVmHandleObservationV1, VaReservationIdV1,
-    VaReservationKeyV1, VmIdV1, VmKeyV1,
+    MemoryIdentityDisciplineV1, MemoryKindV1, MemoryLifecycleStateV1, MemoryMappingKeyV1,
+    MemoryPublicationIdV1, MemoryPublicationKeyV1, MemoryTransitionErrorV1, MemoryTransitionV1,
+    ModelAdmissionStatusV1, ModelDeviceAdmissionV1, PartialOperationStatusV1,
+    PartialProgressObservationV1, UntrustedAllocationHandleObservationV1,
+    UntrustedVmHandleObservationV1, VaReservationIdV1, VaReservationKeyV1, VmIdV1, VmKeyV1,
 };
 use sha2::{Digest, Sha256};
 
@@ -2435,17 +2435,18 @@ impl CheckedGfx942XnackMinusDevice {
                 .checked_sub(aperture.base())
                 .and_then(|length| length.checked_add(1))
                 .ok_or(MemorySessionError::Model("invalid model aperture"))?;
-            let model = MemoryLifecycleStateV1::new(model_device.domain_id())
-                .next(MemoryTransitionV1::AcquireVm {
-                    admission: model_vm,
-                    mapping_devices: vec![model_device],
-                    handle: UntrustedVmHandleObservationV1(vm_id),
-                    aperture: GpuVaRangeV1 {
-                        base: aperture.base(),
-                        byte_len,
-                    },
-                })
-                .map_err(|_| MemorySessionError::Model("VM acquisition projection"))?;
+            let model =
+                MemoryLifecycleStateV1::new_monotonic_non_reusable(model_device.domain_id())
+                    .next(MemoryTransitionV1::AcquireVm {
+                        admission: model_vm,
+                        mapping_devices: vec![model_device],
+                        handle: UntrustedVmHandleObservationV1(vm_id),
+                        aperture: GpuVaRangeV1 {
+                            base: aperture.base(),
+                            byte_len,
+                        },
+                    })
+                    .map_err(|_| MemorySessionError::Model("VM acquisition projection"))?;
             Ok(SharedGttMemorySessionV1 {
                 engine,
                 identity,
@@ -2749,7 +2750,10 @@ impl SharedGttMemorySessionV1 {
         let domain = self.model.domain_id();
         Ok((
             core::mem::replace(&mut self.identity, DeviceIdentityStateV1::new(domain)),
-            core::mem::replace(&mut self.model, MemoryLifecycleStateV1::new(domain)),
+            core::mem::replace(
+                &mut self.model,
+                MemoryLifecycleStateV1::new_monotonic_non_reusable(domain),
+            ),
         ))
     }
 
@@ -2811,6 +2815,7 @@ impl SharedGttMemorySessionV1 {
     ) -> bool {
         identity.domain_id() == self.model_device.domain_id()
             && model.domain_id() == self.model_device.domain_id()
+            && model.identity_discipline() == MemoryIdentityDisciplineV1::MonotonicNonReusable
             && identity.validate_global_invariants().is_ok()
             && model.validate_global_invariants().is_ok()
             && identity.devices().iter().any(|record| {
@@ -3168,6 +3173,10 @@ impl SharedGttMemorySessionV1 {
         &mut self,
         requested_bytes: usize,
     ) -> Result<SharedGttAllocationV1<P, GttCpuWritableV1>, MemorySessionError> {
+        self.model = self
+            .model
+            .checkpoint_released()
+            .map_err(|_| MemorySessionError::Model("shared memory journal checkpoint"))?;
         let token = self.engine.allocate::<P>(requested_bytes)?;
         let (id, generation, layout, base, handle) = self.engine.evidence(&token)?;
         let (reservation, allocation, _) = model_keys(self.vm, id, generation);
@@ -4085,7 +4094,7 @@ mod tests {
                 },
             )
             .unwrap();
-        let memory = MemoryLifecycleStateV1::new(domain_id)
+        let memory = MemoryLifecycleStateV1::new_monotonic_non_reusable(domain_id)
             .next(MemoryTransitionV1::AcquireVm {
                 admission: vm,
                 mapping_devices: vec![device],
@@ -4177,7 +4186,7 @@ mod tests {
         let (mut queue_identity, mut queue_model, device, vm) = transferred_model_foundation();
         let domain = queue_model.domain_id();
         let mut session_identity = DeviceIdentityStateV1::new(domain);
-        let mut session_model = MemoryLifecycleStateV1::new(domain);
+        let mut session_model = MemoryLifecycleStateV1::new_monotonic_non_reusable(domain);
         let mut ownership = QueueModelOwnershipV1::new();
         ownership.transfer_to_queue().unwrap();
 
@@ -4264,7 +4273,7 @@ mod tests {
         let expected = queue_model.clone();
         let domain = queue_model.domain_id();
         let mut session_identity = DeviceIdentityStateV1::new(domain);
-        let mut session_model = MemoryLifecycleStateV1::new(domain);
+        let mut session_model = MemoryLifecycleStateV1::new_monotonic_non_reusable(domain);
         let mut ownership = QueueModelOwnershipV1::new();
         ownership.transfer_to_queue().unwrap();
 

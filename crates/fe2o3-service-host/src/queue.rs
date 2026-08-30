@@ -569,6 +569,22 @@ pub enum ServiceQualificationQueueFaultPointV1 {
     PostRecycleBeforeCompletedReadAttempt,
 }
 
+#[cfg(feature = "qualification-fault-injection")]
+fn admit_qualification_fault(
+    completed_read_attempted: bool,
+    point: ServiceQualificationQueueFaultPointV1,
+) -> Result<ServiceQualificationQueueFaultPointV1, ()> {
+    if completed_read_attempted {
+        Err(())
+    } else {
+        Ok(point)
+    }
+}
+
+fn record_completed_read_attempt(completed_read_attempted: &mut bool) {
+    *completed_read_attempted = true;
+}
+
 /// Terminal custody after a deliberate qualification queue-transition fault.
 ///
 /// The ordinary recycled owner is consumed. This state exposes no readback,
@@ -593,6 +609,13 @@ pub enum ServiceQualificationQueueFaultPointV1 {
 /// use fe2o3_service_host::ServiceQualificationFaultedQueueSessionV1;
 /// fn detach<const N: usize>(queue: ServiceQualificationFaultedQueueSessionV1<N>) {
 ///     let _ = queue.detach();
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use fe2o3_service_host::ServiceQualificationFaultedQueueSessionV1;
+/// fn snapshot<const N: usize>(mut queue: ServiceQualificationFaultedQueueSessionV1<N>) {
+///     let _ = queue.read_completed_snapshot(todo!());
 /// }
 /// ```
 #[cfg(feature = "qualification-fault-injection")]
@@ -694,9 +717,12 @@ impl<const N: usize> ServiceRecycledQueueSessionV1<N> {
         self,
         point: ServiceQualificationQueueFaultPointV1,
     ) -> Result<ServiceQualificationFaultedQueueSessionV1<N>, Box<Self>> {
-        if self.completed_read_attempted {
-            return Err(Box::new(self));
-        }
+        let point = match admit_qualification_fault(self.completed_read_attempted, point) {
+            Ok(point) => point,
+            Err(()) => {
+                return Err(Box::new(self));
+            }
+        };
         Ok(ServiceQualificationFaultedQueueSessionV1 {
             owner: self.owner,
             recycle: self.recycle,
@@ -732,7 +758,7 @@ impl<const N: usize> ServiceRecycledQueueSessionV1<N> {
         &mut self,
         request: ServiceCompletedReadRequestV1,
     ) -> Result<ServiceCompletedReadbackV1, ServiceQueueErrorV1> {
-        self.completed_read_attempted = true;
+        record_completed_read_attempt(&mut self.completed_read_attempted);
         if request.dispatch_generation != self.dispatch_generation {
             return Err(ServiceQueueErrorV1::Kfd(
                 fe2o3_kfd::Gfx942DispatchBindingErrorV1::StaleDispatchGeneration.into(),
@@ -760,7 +786,7 @@ impl<const N: usize> ServiceRecycledQueueSessionV1<N> {
         &mut self,
         request: ServiceCompletedSnapshotRequestV1,
     ) -> Result<ServiceCompletedReadbackV1, ServiceQueueErrorV1> {
-        self.completed_read_attempted = true;
+        record_completed_read_attempt(&mut self.completed_read_attempted);
         if request.dispatch_generation != self.dispatch_generation {
             return Err(ServiceQueueErrorV1::Kfd(
                 fe2o3_kfd::Gfx942DispatchBindingErrorV1::StaleDispatchGeneration.into(),
@@ -943,6 +969,23 @@ impl ServiceQueueUnboundSessionV1 {
             .reissue_partitioned_device_local(subleases)
     }
 
+    /// Reissues one retained unpartitioned device-local range at its current
+    /// detached-data ordinal after an earlier device allocation was inserted or
+    /// removed.
+    ///
+    /// The allocation generation, role, and byte interval are unchanged. A
+    /// partition member, stale allocation generation, foreign owner, or role
+    /// substitution is rejected without mutating queue custody.
+    pub fn reissue_device_local<R>(
+        &self,
+        range: ServiceDeviceDispatchRangeV1,
+    ) -> Result<ServiceDeviceDispatchRangeV1, ServiceAllocationErrorV1>
+    where
+        R: DeviceAllocationRoleMarkerV1,
+    {
+        self.owner.ledger.reissue_device_local::<R>(range)
+    }
+
     /// Reissues one retained host-visible range at its current detached-data
     /// ordinal after device allocation insertion or removal.
     ///
@@ -957,6 +1000,24 @@ impl ServiceQueueUnboundSessionV1 {
         R: crate::HostAllocationRoleMarkerV1,
     {
         self.owner.ledger.reissue_host_visible::<R>(range)
+    }
+
+    /// Remints one retained initialized host-visible snapshot at its current
+    /// detached-data ordinal after the device-local prefix changed.
+    ///
+    /// Only the ordinal is updated. The exact initialized allocation binding and
+    /// snapshot byte interval are authenticated against the live ledger, so a
+    /// stale replacement generation or foreign witness cannot be reminted.
+    pub fn reissue_host_visible_snapshot<R>(
+        &self,
+        snapshot: crate::ServiceHostDispatchSnapshotRangeV1,
+    ) -> Result<crate::ServiceHostDispatchSnapshotRangeV1, ServiceAllocationErrorV1>
+    where
+        R: crate::HostAllocationRoleMarkerV1,
+    {
+        self.owner
+            .ledger
+            .reissue_host_visible_snapshot::<R>(snapshot)
     }
 
     /// Destroys the live queue and releases its exact detached allocation set.
@@ -1009,6 +1070,17 @@ impl ServiceQueueUnboundSessionV1 {
                 batch: Box::new(batch),
             });
         }
+        if let Err(error) = batch.preflight_replacement(
+            self.owner.observation().ring_bytes(),
+            &self.data,
+            self.dispatch_generation,
+        ) {
+            return Err(ServiceQueueBindFailureV1::Rejected {
+                error: ServiceQueueErrorV1::Kfd(error.into()),
+                queue: Box::new(self),
+                batch: Box::new(batch),
+            });
+        }
         let (programs, packets) = batch.into_kfd();
         match self
             .owner
@@ -1053,18 +1125,17 @@ impl ServiceQueueUnboundSessionV1 {
                 batch: Box::new(batch),
             });
         }
-        let replacement_dispatch_generation = match self.dispatch_generation.checked_add(1) {
-            Some(generation) => generation,
-            None => {
-                return Err(ServiceQueueRolloverFailureV1::Rejected {
-                    error: ServiceQueueErrorV1::BatchContract(
-                        "rollover dispatch generation exhaustion",
-                    ),
-                    queue: Box::new(self),
-                    batch: Box::new(batch),
-                });
-            }
-        };
+        let replacement_dispatch_generation =
+            match batch.preflight_replacement(ring_bytes, &self.data, self.dispatch_generation) {
+                Ok(generation) => generation,
+                Err(error) => {
+                    return Err(ServiceQueueRolloverFailureV1::Rejected {
+                        error: ServiceQueueErrorV1::Kfd(error.into()),
+                        queue: Box::new(self),
+                        batch: Box::new(batch),
+                    });
+                }
+            };
         let Self {
             owner,
             dispatch_generation,
@@ -1326,6 +1397,17 @@ impl ServiceQueueUnboundSessionV1 {
                 });
             }
         };
+        let data_index = self.owner.ledger.device_allocation_count();
+        if let Err(error) = self
+            .owner
+            .queue
+            .preflight_fixed_dispatch_data_insertion(data_index)
+        {
+            return Err(ServiceQueueDataUpdateFailureV1::Rejected {
+                error: ServiceQueueErrorV1::Kfd(error),
+                queue: Box::new(self),
+            });
+        }
         if self.data.try_reserve(1).is_err() {
             return Err(ServiceQueueDataUpdateFailureV1::Rejected {
                 error: ServiceQueueErrorV1::Allocation(
@@ -2082,6 +2164,21 @@ mod tests {
             write!(&mut actual, "{byte:02x}").unwrap();
         }
         assert_eq!(actual, SERVICE_QUALIFICATION_QUEUE_FAULT_CONTRACT_SHA256_V1);
+    }
+
+    #[cfg(feature = "qualification-fault-injection")]
+    #[test]
+    fn qualification_fault_is_exactly_pre_read_and_every_read_attempt_closes_it() {
+        let point = ServiceQualificationQueueFaultPointV1::PostRecycleBeforeCompletedReadAttempt;
+        assert_eq!(admit_qualification_fault(false, point), Ok(point));
+
+        let mut completed_read_attempted = false;
+        record_completed_read_attempt(&mut completed_read_attempted);
+        assert!(completed_read_attempted);
+        assert_eq!(
+            admit_qualification_fault(completed_read_attempted, point),
+            Err(())
+        );
     }
 
     #[test]

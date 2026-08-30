@@ -74,9 +74,10 @@ pub use queue::{
     GFX942_DEVICE_CONTENT_COPY_FOUNDATION_MANIFEST_SHA256_V1,
     GFX942_DEVICE_CONTENT_COPY_FOUNDATION_MANIFEST_V1,
     GFX942_KFD_DISPATCH_TRANSACTION_MANIFEST_SHA256_V1,
-    GFX942_KFD_DISPATCH_TRANSACTION_MANIFEST_V1, GFX942_MAX_FIXED_DISPATCH_PACKETS_V1,
-    GFX942_MAX_FIXED_DISPATCH_PROGRAMS_V1, Gfx942BarrierProbeExecutionObservationV1,
-    Gfx942BarrierProbeFailureV1, Gfx942BarrierProbePollBoundErrorV1, Gfx942BarrierProbePollBoundV1,
+    GFX942_KFD_DISPATCH_TRANSACTION_MANIFEST_V1, GFX942_MAX_FIXED_DISPATCH_DATA_V1,
+    GFX942_MAX_FIXED_DISPATCH_PACKETS_V1, GFX942_MAX_FIXED_DISPATCH_PROGRAMS_V1,
+    Gfx942BarrierProbeExecutionObservationV1, Gfx942BarrierProbeFailureV1,
+    Gfx942BarrierProbePollBoundErrorV1, Gfx942BarrierProbePollBoundV1,
     Gfx942BarrierProbeRingBackingV1, Gfx942BarrierProbeSuccessV1, Gfx942CompletedBatchV1,
     Gfx942CompletedDispatchBatchV1, Gfx942CompletedDispatchReadRequestV1,
     Gfx942CompletedDispatchReadbackV1, Gfx942CompletedDispatchSnapshotRequestV1,
@@ -96,7 +97,7 @@ pub use queue::{
     NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_SHA256_V1,
     NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_V1, QuarantinedGfx942BarrierProbeV1,
     execute_gfx942_kfd_debug_target_dispatch_unchecked_v1,
-    execute_gfx942_kfd_dispatch_unchecked_v1,
+    execute_gfx942_kfd_dispatch_unchecked_v1, preflight_gfx942_fixed_dispatch_replacement,
 };
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]

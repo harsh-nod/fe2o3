@@ -48,13 +48,14 @@ pub use completion::{
 
 pub use dispatch_binding::{
     GFX942_AQL_DISPATCH_BINDING_MANIFEST_SHA256_V1, GFX942_AQL_DISPATCH_BINDING_MANIFEST_V1,
-    GFX942_MAX_FIXED_DISPATCH_PACKETS_V1, GFX942_MAX_FIXED_DISPATCH_PROGRAMS_V1,
-    Gfx942CompletedDispatchBatchV1, Gfx942CompletedDispatchReadRequestV1,
-    Gfx942CompletedDispatchReadbackV1, Gfx942CompletedDispatchSnapshotRequestV1,
-    Gfx942DispatchBatchV1, Gfx942DispatchBindingErrorV1, Gfx942DispatchBufferBindingV1,
-    Gfx942DispatchPollV1, Gfx942DispatchPollWithProgressV1, Gfx942DispatchProgressV1,
-    Gfx942FixedDispatchDataKindV1, Gfx942FixedDispatchDataLayoutV1, Gfx942FixedDispatchDataV1,
-    Gfx942FixedDispatchPacketV1,
+    GFX942_MAX_FIXED_DISPATCH_DATA_V1, GFX942_MAX_FIXED_DISPATCH_PACKETS_V1,
+    GFX942_MAX_FIXED_DISPATCH_PROGRAMS_V1, Gfx942CompletedDispatchBatchV1,
+    Gfx942CompletedDispatchReadRequestV1, Gfx942CompletedDispatchReadbackV1,
+    Gfx942CompletedDispatchSnapshotRequestV1, Gfx942DispatchBatchV1, Gfx942DispatchBindingErrorV1,
+    Gfx942DispatchBufferBindingV1, Gfx942DispatchPollV1, Gfx942DispatchPollWithProgressV1,
+    Gfx942DispatchProgressV1, Gfx942FixedDispatchDataKindV1, Gfx942FixedDispatchDataLayoutV1,
+    Gfx942FixedDispatchDataV1, Gfx942FixedDispatchPacketV1,
+    preflight_gfx942_fixed_dispatch_replacement,
 };
 
 pub use device_content::{

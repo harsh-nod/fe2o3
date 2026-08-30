@@ -39,7 +39,9 @@ use crate::shared_memory::{
     SharedGttQueueResourceAuthorityV1,
 };
 
-pub(crate) const MAX_DISPATCH_DATA_LEASES_V1: usize = 16;
+/// Maximum retained data allocations in one fixed-dispatch queue owner.
+pub const GFX942_MAX_FIXED_DISPATCH_DATA_V1: usize = 16;
+pub(crate) const MAX_DISPATCH_DATA_LEASES_V1: usize = GFX942_MAX_FIXED_DISPATCH_DATA_V1;
 pub(crate) const MAX_DISPATCH_KERNARG_BYTES_V1: usize = 65_536;
 pub const GFX942_MAX_FIXED_DISPATCH_PROGRAMS_V1: usize = 32;
 pub const GFX942_MAX_FIXED_DISPATCH_PACKETS_V1: usize = AQL_MAX_FIXED_BATCH_PACKETS_V2 as usize;
@@ -1851,13 +1853,19 @@ struct FixedDispatchProgramPlanV1 {
 }
 
 struct FixedDispatchPacketPlanV1 {
-    input: Gfx942FixedDispatchPacketV1,
     patches: Box<[DevicePointerPatchV1]>,
     implicit_kernarg: Option<Cov6ImplicitKernargValuesV1>,
     kernarg_offset: usize,
     kernarg_alignment: usize,
     private_segment_size: u32,
     group_segment_size: u32,
+}
+
+struct FixedDispatchPreparationPlanV1 {
+    programs: Vec<FixedDispatchProgramPlanV1>,
+    packets: Vec<FixedDispatchPacketPlanV1>,
+    data: Vec<PublicRetainedDataPlanV1>,
+    kernarg_arena_bytes: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1906,6 +1914,190 @@ fn validate_packet_program_indices<const N: usize>(
     Ok(())
 }
 
+fn plan_public_fixed_dispatch_resources<const N: usize>(
+    programs: &[ValidatedKernelEnvelope<'_>],
+    packets: &[Gfx942FixedDispatchPacketV1; N],
+    data_layouts: &[Gfx942FixedDispatchDataLayoutV1],
+    data_initialized: &[bool],
+) -> Result<FixedDispatchPreparationPlanV1, Gfx942DispatchBindingErrorV1> {
+    validate_packet_count::<N>()?;
+    if programs.is_empty() || programs.len() > GFX942_MAX_FIXED_DISPATCH_PROGRAMS_V1 {
+        return Err(Gfx942DispatchBindingErrorV1::ProgramCount {
+            requested: programs.len(),
+            maximum: GFX942_MAX_FIXED_DISPATCH_PROGRAMS_V1,
+        });
+    }
+    if data_layouts.is_empty() || data_layouts.len() > MAX_DISPATCH_DATA_LEASES_V1 {
+        return Err(Gfx942DispatchBindingErrorV1::DataLeaseCount {
+            requested: data_layouts.len(),
+            maximum: MAX_DISPATCH_DATA_LEASES_V1,
+        });
+    }
+    if data_layouts.len() != data_initialized.len() {
+        return Err(Gfx942DispatchBindingErrorV1::InvalidData {
+            index: data_layouts.len().min(data_initialized.len()),
+            detail: "initialization/layout cardinality",
+        });
+    }
+    validate_packet_program_indices(programs.len(), packets)?;
+
+    let mut program_plans = Vec::with_capacity(programs.len());
+    for kernel in programs {
+        let resources = kernel.resources();
+        let plan = *kernel.envelope().plan();
+        let image_len_u64 = plan
+            .image_end()
+            .checked_sub(plan.image_start())
+            .ok_or(Gfx942DispatchBindingErrorV1::InvalidCode("image range"))?;
+        let image_len = usize::try_from(image_len_u64)
+            .map_err(|_| Gfx942DispatchBindingErrorV1::InvalidCode("image size conversion"))?;
+        let descriptor_offset = kernel
+            .selected_binding()
+            .descriptor_address()
+            .checked_sub(plan.image_start())
+            .ok_or(Gfx942DispatchBindingErrorV1::InvalidCode(
+                "descriptor precedes image",
+            ))?;
+        if image_len == 0
+            || descriptor_offset
+                .checked_add(KERNEL_DESCRIPTOR_BYTES_V1)
+                .is_none_or(|end| end > image_len_u64)
+            || !descriptor_offset.is_multiple_of(KERNEL_DESCRIPTOR_BYTES_V1)
+        {
+            return Err(Gfx942DispatchBindingErrorV1::InvalidCode(
+                "descriptor image range",
+            ));
+        }
+        let implicit_kernarg = validate_cov6_implicit_kernarg_layout(kernel.selected_kernel())?;
+        validate_kernarg_resource_shape(resources)?;
+        program_plans.push(FixedDispatchProgramPlanV1 {
+            image_len,
+            descriptor_offset,
+            resources,
+            implicit_kernarg,
+        });
+    }
+
+    let mut data_effects = vec![None; data_layouts.len()];
+    let mut data_writable_ranges = vec![Vec::new(); data_layouts.len()];
+    let mut data_completed_snapshots = vec![Vec::new(); data_layouts.len()];
+    let mut packet_plans = Vec::with_capacity(N);
+    let mut kernarg_arena_bytes = 0usize;
+    for (packet_index, input) in packets.iter().enumerate() {
+        let program_plan = program_plans.get(input.program_index).ok_or(
+            Gfx942DispatchBindingErrorV1::InvalidKernarg {
+                packet: packet_index,
+                detail: "program index",
+            },
+        )?;
+        let kernel = &programs[input.program_index];
+        let kernarg_size = usize::try_from(program_plan.resources.kernarg_segment_size())
+            .map_err(|_| Gfx942DispatchBindingErrorV1::InvalidCode("kernarg size conversion"))?;
+        if input.kernarg_bytes.len() != kernarg_size {
+            return Err(Gfx942DispatchBindingErrorV1::InvalidKernarg {
+                packet: packet_index,
+                detail: "exact kernarg byte extent",
+            });
+        }
+        let kernarg_alignment = usize::try_from(program_plan.resources.kernarg_segment_alignment())
+            .map_err(|_| {
+                Gfx942DispatchBindingErrorV1::InvalidCode("kernarg alignment conversion")
+            })?;
+        let kernarg_offset = align_up(kernarg_arena_bytes, kernarg_alignment).ok_or(
+            Gfx942DispatchBindingErrorV1::InvalidKernarg {
+                packet: packet_index,
+                detail: "kernarg arena offset",
+            },
+        )?;
+        kernarg_arena_bytes = kernarg_offset.checked_add(kernarg_size).ok_or(
+            Gfx942DispatchBindingErrorV1::InvalidKernarg {
+                packet: packet_index,
+                detail: "kernarg arena extent",
+            },
+        )?;
+        let patches = validate_public_packet_bindings(
+            packet_index,
+            kernel,
+            input,
+            data_layouts,
+            PublicDataBindingStateV1 {
+                effects: &mut data_effects,
+                writable_ranges: &mut data_writable_ranges,
+                completed_snapshots: &mut data_completed_snapshots,
+            },
+        )?;
+        let geometry = DispatchGeometryV1::new(input.geometry, input.dynamic_group_segment_bytes);
+        validate_geometry(
+            program_plan.resources,
+            kernel.selected_kernel().uniform_work_group_size(),
+            &[geometry],
+        )?;
+        let implicit_kernarg = validate_and_derive_cov6_implicit_kernarg(
+            packet_index,
+            kernel.selected_kernel(),
+            input,
+            program_plan.implicit_kernarg.as_ref(),
+        )?;
+        let private_segment_size =
+            u32::try_from(program_plan.resources.private_segment_fixed_size())
+                .map_err(|_| Gfx942DispatchBindingErrorV1::InvalidCode("private segment size"))?;
+        let group_segment_size = u64::from(input.dynamic_group_segment_bytes)
+            .checked_add(program_plan.resources.group_segment_fixed_size())
+            .and_then(|bytes| u32::try_from(bytes).ok())
+            .ok_or(Gfx942DispatchBindingErrorV1::Geometry {
+                packet: packet_index,
+                detail: "group segment size",
+            })?;
+        packet_plans.push(FixedDispatchPacketPlanV1 {
+            patches,
+            implicit_kernarg,
+            kernarg_offset,
+            kernarg_alignment,
+            private_segment_size,
+            group_segment_size,
+        });
+    }
+    let data = plan_public_retained_data(
+        data_layouts,
+        data_initialized,
+        data_effects,
+        data_writable_ranges,
+        data_completed_snapshots,
+    )?;
+
+    Ok(FixedDispatchPreparationPlanV1 {
+        programs: program_plans,
+        packets: packet_plans,
+        data,
+        kernarg_arena_bytes,
+    })
+}
+
+/// Validates every deterministic replacement fixed-dispatch property without
+/// consuming allocation, executable, packet, or queue custody.
+///
+/// The returned generation is the first generation the replacement queue will
+/// publish. Success reserves one further counter value so a later begin cannot
+/// fail immediately after confirmed predecessor destruction.
+pub fn preflight_gfx942_fixed_dispatch_replacement<const N: usize>(
+    ring_bytes: u32,
+    programs: &[ValidatedKernelEnvelope<'_>],
+    packets: &[Gfx942FixedDispatchPacketV1; N],
+    data: &[Gfx942FixedDispatchDataV1],
+    predecessor_generation: u64,
+) -> Result<u64, Gfx942DispatchBindingErrorV1> {
+    validate_fixed_batch_ring::<N>(ring_bytes)?;
+    DispatchGenerationOwnerV1::after_recycled(predecessor_generation)?;
+    let data_layouts: Vec<_> = data.iter().map(Gfx942FixedDispatchDataV1::layout).collect();
+    let data_initialized: Vec<_> = data
+        .iter()
+        .map(Gfx942FixedDispatchDataV1::is_fully_initialized)
+        .collect();
+    let _ =
+        plan_public_fixed_dispatch_resources(programs, packets, &data_layouts, &data_initialized)?;
+    Ok(predecessor_generation + 1)
+}
+
 /// Consumes inspected executable custody and exact mapped data authorities,
 /// then prepares one addressless fixed batch without publishing it.
 pub(super) fn prepare_public_fixed_dispatch_resources<const N: usize>(
@@ -1943,148 +2135,21 @@ fn prepare_public_fixed_dispatch_resources_with_generation<const N: usize>(
     data: Vec<Gfx942FixedDispatchDataV1>,
     generation: DispatchGenerationOwnerV1,
 ) -> Result<DispatchResourceOwnerV1, Gfx942DispatchBindingErrorV1> {
-    validate_packet_count::<N>()?;
-    if programs.is_empty() || programs.len() > GFX942_MAX_FIXED_DISPATCH_PROGRAMS_V1 {
-        return Err(Gfx942DispatchBindingErrorV1::ProgramCount {
-            requested: programs.len(),
-            maximum: GFX942_MAX_FIXED_DISPATCH_PROGRAMS_V1,
-        });
-    }
-    if data.is_empty() || data.len() > MAX_DISPATCH_DATA_LEASES_V1 {
-        return Err(Gfx942DispatchBindingErrorV1::DataLeaseCount {
-            requested: data.len(),
-            maximum: MAX_DISPATCH_DATA_LEASES_V1,
-        });
-    }
-    validate_packet_program_indices(programs.len(), &packets)?;
     let data_layouts: Vec<_> = data.iter().map(Gfx942FixedDispatchDataV1::layout).collect();
     let data_initialized: Vec<_> = data
         .iter()
         .map(Gfx942FixedDispatchDataV1::is_fully_initialized)
         .collect();
-    let mut program_plans = Vec::with_capacity(programs.len());
-    for kernel in &programs {
-        let resources = kernel.resources();
-        let plan = *kernel.envelope().plan();
-        let image_len_u64 = plan
-            .image_end()
-            .checked_sub(plan.image_start())
-            .ok_or(Gfx942DispatchBindingErrorV1::InvalidCode("image range"))?;
-        let image_len = usize::try_from(image_len_u64)
-            .map_err(|_| Gfx942DispatchBindingErrorV1::InvalidCode("image size conversion"))?;
-        let descriptor_offset = kernel
-            .selected_binding()
-            .descriptor_address()
-            .checked_sub(plan.image_start())
-            .ok_or(Gfx942DispatchBindingErrorV1::InvalidCode(
-                "descriptor precedes image",
-            ))?;
-        if image_len == 0
-            || descriptor_offset
-                .checked_add(KERNEL_DESCRIPTOR_BYTES_V1)
-                .is_none_or(|end| end > image_len_u64)
-            || !descriptor_offset.is_multiple_of(KERNEL_DESCRIPTOR_BYTES_V1)
-        {
-            return Err(Gfx942DispatchBindingErrorV1::InvalidCode(
-                "descriptor image range",
-            ));
-        }
-        let implicit_kernarg = validate_cov6_implicit_kernarg_layout(kernel.selected_kernel())?;
-        validate_kernarg_resource_shape(resources)?;
-        program_plans.push(FixedDispatchProgramPlanV1 {
-            image_len,
-            descriptor_offset,
-            resources,
-            implicit_kernarg,
-        });
-    }
-
-    let mut data_effects = vec![None; data.len()];
-    let mut data_writable_ranges = vec![Vec::new(); data.len()];
-    let mut data_completed_snapshots = vec![Vec::new(); data.len()];
-    let mut packet_plans = Vec::with_capacity(N);
-    let mut kernarg_arena_bytes = 0usize;
-    for (packet_index, input) in packets.into_iter().enumerate() {
-        let program_plan = program_plans.get(input.program_index).ok_or(
-            Gfx942DispatchBindingErrorV1::InvalidKernarg {
-                packet: packet_index,
-                detail: "program index",
-            },
-        )?;
-        let kernel = &programs[input.program_index];
-        let kernarg_size = usize::try_from(program_plan.resources.kernarg_segment_size())
-            .map_err(|_| Gfx942DispatchBindingErrorV1::InvalidCode("kernarg size conversion"))?;
-        if input.kernarg_bytes.len() != kernarg_size {
-            return Err(Gfx942DispatchBindingErrorV1::InvalidKernarg {
-                packet: packet_index,
-                detail: "exact kernarg byte extent",
-            });
-        }
-        let kernarg_alignment = usize::try_from(program_plan.resources.kernarg_segment_alignment())
-            .map_err(|_| {
-                Gfx942DispatchBindingErrorV1::InvalidCode("kernarg alignment conversion")
-            })?;
-        let kernarg_offset = align_up(kernarg_arena_bytes, kernarg_alignment).ok_or(
-            Gfx942DispatchBindingErrorV1::InvalidKernarg {
-                packet: packet_index,
-                detail: "kernarg arena offset",
-            },
-        )?;
-        kernarg_arena_bytes = kernarg_offset.checked_add(kernarg_size).ok_or(
-            Gfx942DispatchBindingErrorV1::InvalidKernarg {
-                packet: packet_index,
-                detail: "kernarg arena extent",
-            },
-        )?;
-        let patches = validate_public_packet_bindings(
-            packet_index,
-            kernel,
-            &input,
-            &data_layouts,
-            PublicDataBindingStateV1 {
-                effects: &mut data_effects,
-                writable_ranges: &mut data_writable_ranges,
-                completed_snapshots: &mut data_completed_snapshots,
-            },
-        )?;
-        let geometry = DispatchGeometryV1::new(input.geometry, input.dynamic_group_segment_bytes);
-        validate_geometry(
-            program_plan.resources,
-            kernel.selected_kernel().uniform_work_group_size(),
-            &[geometry],
-        )?;
-        let implicit_kernarg = validate_and_derive_cov6_implicit_kernarg(
-            packet_index,
-            kernel.selected_kernel(),
-            &input,
-            program_plan.implicit_kernarg.as_ref(),
-        )?;
-        let private_segment_size =
-            u32::try_from(program_plan.resources.private_segment_fixed_size())
-                .map_err(|_| Gfx942DispatchBindingErrorV1::InvalidCode("private segment size"))?;
-        let group_segment_size = u64::from(input.dynamic_group_segment_bytes)
-            .checked_add(program_plan.resources.group_segment_fixed_size())
-            .and_then(|bytes| u32::try_from(bytes).ok())
-            .ok_or(Gfx942DispatchBindingErrorV1::Geometry {
-                packet: packet_index,
-                detail: "group segment size",
-            })?;
-        packet_plans.push(FixedDispatchPacketPlanV1 {
-            input,
-            patches,
-            implicit_kernarg,
-            kernarg_offset,
-            kernarg_alignment,
-            private_segment_size,
-            group_segment_size,
-        });
-    }
-    let data_plans = plan_public_retained_data(
+    let FixedDispatchPreparationPlanV1 {
+        programs: program_plans,
+        packets: packet_plans,
+        data: data_plans,
+        kernarg_arena_bytes,
+    } = plan_public_fixed_dispatch_resources(
+        &programs,
+        &packets,
         &data_layouts,
         &data_initialized,
-        data_effects,
-        data_writable_ranges,
-        data_completed_snapshots,
     )?;
 
     let mut data_authorities = Vec::with_capacity(data.len());
@@ -2156,11 +2221,11 @@ fn prepare_public_fixed_dispatch_resources_with_generation<const N: usize>(
     let mut kernarg = memory.allocate_kernarg(kernarg_arena_bytes)?;
     memory.with_bytes_mut(&mut kernarg, |bytes| {
         bytes.fill(0);
-        for packet in &packet_plans {
+        for (input, packet) in packets.iter().zip(&packet_plans) {
             let start = packet.kernarg_offset;
-            let end = start + packet.input.kernarg_bytes.len();
+            let end = start + input.kernarg_bytes.len();
             let packet_bytes = &mut bytes[start..end];
-            packet_bytes.copy_from_slice(&packet.input.kernarg_bytes);
+            packet_bytes.copy_from_slice(&input.kernarg_bytes);
             for patch in &packet.patches {
                 let address = data_authorities[patch.data_index]
                     .checked_gpu_subrange(
@@ -2173,9 +2238,7 @@ fn prepare_public_fixed_dispatch_resources_with_generation<const N: usize>(
                     .copy_from_slice(&address.to_le_bytes());
             }
             match (
-                program_plans[packet.input.program_index]
-                    .implicit_kernarg
-                    .as_ref(),
+                program_plans[input.program_index].implicit_kernarg.as_ref(),
                 packet.implicit_kernarg,
             ) {
                 (Some(plan), Some(values)) => {
@@ -2189,12 +2252,12 @@ fn prepare_public_fixed_dispatch_resources_with_generation<const N: usize>(
     let kernarg = memory.map_to_gpu(kernarg)?;
     let kernarg = memory.retain_aql_dispatch_kernarg_resource(kernarg)?;
     let mut prepared_packets = Vec::with_capacity(N);
-    for packet in packet_plans {
+    for (input, packet) in packets.iter().zip(packet_plans) {
         let kernarg_address = kernarg
             .facts()
             .checked_gpu_subrange(
                 packet.kernarg_offset as u64,
-                packet.input.kernarg_bytes.len() as u64,
+                input.kernarg_bytes.len() as u64,
                 packet.kernarg_alignment as u64,
             )
             .and_then(|address| ObservedGpuAddressV1::new(address).ok())
@@ -2203,17 +2266,16 @@ fn prepare_public_fixed_dispatch_resources_with_generation<const N: usize>(
                 detail: "mapped kernarg address",
             })?;
         prepared_packets.push(PreparedDispatchPacketV1 {
-            geometry: packet.input.geometry,
-            ordering: packet.input.ordering,
+            geometry: input.geometry,
+            ordering: input.ordering,
             private_segment_size: packet.private_segment_size,
             group_segment_size: packet.group_segment_size,
             kernarg_address,
             kernarg_alignment: packet.kernarg_alignment as u64,
             kernarg_mapping: kernarg.facts().mapping(),
-            kernarg_layout_identity: code_identity[packet.input.program_index]
-                .dispatch_abi_identity,
+            kernarg_layout_identity: code_identity[input.program_index].dispatch_abi_identity,
             code_bound_kernarg_layout: true,
-            code_index: packet.input.program_index,
+            code_index: input.program_index,
         });
     }
 
@@ -4079,6 +4141,29 @@ mod tests {
                 packet: 0,
                 detail: "program index",
             })
+        ));
+    }
+
+    #[test]
+    fn replacement_preflight_rejects_empty_programs_and_exhausted_generation_before_mutation() {
+        let packets = [Gfx942FixedDispatchPacketV1::new(
+            0,
+            AqlDispatchGeometryV1::new([64, 1, 1], [64, 1, 1]).unwrap(),
+            0,
+            Vec::new().into_boxed_slice(),
+            Vec::new().into_boxed_slice(),
+        )];
+        assert!(matches!(
+            plan_public_fixed_dispatch_resources(&[], &packets, &[], &[]),
+            Err(Gfx942DispatchBindingErrorV1::ProgramCount { requested: 0, .. })
+        ));
+        assert!(matches!(
+            preflight_gfx942_fixed_dispatch_replacement(4_096, &[], &packets, &[], u64::MAX - 1,),
+            Err(Gfx942DispatchBindingErrorV1::GenerationExhausted)
+        ));
+        assert!(matches!(
+            preflight_gfx942_fixed_dispatch_replacement(4_096, &[], &packets, &[], u64::MAX - 2,),
+            Err(Gfx942DispatchBindingErrorV1::ProgramCount { requested: 0, .. })
         ));
     }
 
