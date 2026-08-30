@@ -310,10 +310,14 @@ root-coordinator-to-supervisor wiring, lifecycle custody, and exact systemd
 service-account/socket policy are implemented. The fixed root provisioner now
 derives and durably installs the complete canonical record graph from measured
 static images, provisioned identities, and freshly generated or retained key
-seeds. A shared-service/exclusive-provisioner lifecycle lease on a root-only
-sibling lock file prevents activation from overlapping provisioning without
-adding another deployment descriptor or conflicting with the issuer's
-state-root singleton. Combined privileged qualification and the concrete
+seeds. The root coordinator opens three independent shared-service leases on a
+root-only sibling lock file before key admission: one for its own lifecycle,
+one transferred to supervisor FD 12, and one transferred through anchor-helper
+FD 6 to daemon FD 5. Close-only custody keeps exclusive provisioning blocked
+after coordinator death until both protected children exit, without adding a
+systemd activation descriptor or conflicting with the issuer's state-root
+singleton. Non-root process tests cover coordinator `SIGKILL` and both child
+exit orders. Combined privileged qualification and the concrete
 protected verifier remain absent. A fixed
 receipt sidecar and publication ACK now
 carry the exact journal, occurrence, receipt, Worker record, sequence, and

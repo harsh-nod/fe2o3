@@ -16,6 +16,9 @@ The coordinator accepts only the helper's canonical ready record with one `SCM_R
 then requires bootstrap close-on-exec EOF and continued pidfd liveness. It admits that endpoint
 against the same process and deployment UID/GID before any supervisor transfer. The retained
 admission and a separate reaping pidfd remain root-owned for the daemon's lifetime.
+The occurrence also owns an independently opened shared lifecycle lease and
+installs it at helper FD 6. This is not a duplicate of the root coordinator's
+lease, so coordinator loss cannot release anchor-side provisioning exclusion.
 
 A supervisor transfer is available only when the supplied canonical supervisor deployment and
 issuer policy exactly match the anchor deployment retained with the live occurrence. The move-only

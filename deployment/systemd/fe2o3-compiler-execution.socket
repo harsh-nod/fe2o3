@@ -12,6 +12,7 @@ SocketGroup=fe2o3-compiler
 SocketMode=0660
 DirectoryMode=0755
 RemoveOnStop=yes
+FlushPending=no
 
 [Install]
 WantedBy=sockets.target

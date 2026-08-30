@@ -3,6 +3,7 @@ Description=fe2o3 protected compiler-execution coordinator
 Documentation=https://github.com/harsh-nod/fe2o3/blob/main/docs/compiler-execution-service-v1.md
 Requires=fe2o3-compiler-execution.socket
 After=fe2o3-compiler-execution.socket
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple

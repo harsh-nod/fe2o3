@@ -51,6 +51,13 @@ existing sealed capabilities, executable measurements are enforced by the
 existing coordinators, and launch remains anchor-first and supervisor-second.
 No inherited source descriptor is transferred directly to either service.
 
+Before either key seed is read, admission opens three separate shared-lock open
+file descriptions for the canonical lifecycle file. The coordinator retains
+one, transfers one to supervisor FD 12, and transfers one to anchor-helper FD 6.
+No lease uses explicit `LOCK_UN`; last close releases each description. A killed
+coordinator therefore cannot admit the exclusive provisioner while either
+protected child remains alive.
+
 `fe2o3-compiler-execution-coordinator` is the sole root process entrypoint. It
 accepts no arguments, requires exact systemd activation metadata for the dense
 descriptor table, clears its environment, and synchronously handles termination
@@ -68,6 +75,6 @@ publication. Before reading or publishing mutable deployment state it retains an
 exclusive lease on the dedicated root-only lifecycle file and its root-owned
 parent pathname. The production coordinator derives that sibling from its
 existing state-root descriptor, takes the corresponding shared lease before key
-admission, and retains it through supervisor and anchor reap. This leaves the
+admission, and gives both protected children independent shared custody. This leaves the
 issuer's independent state-root singleton lock unchanged. An exact rerun is
 accepted; substitution is not overwritten.

@@ -45,7 +45,12 @@ child profile, retains pidfd/reaping custody, authenticates ready plus exec EOF,
 and admits the live endpoint. The sole root coordinator transfers that admitted
 endpoint into the protected supervisor, retains both child lifecycles, and is
 exposed through one fixed systemd activation contract. Running the authoritative
-root-only qualification remains open. Cargo now
+root-only qualification remains open. Lifecycle custody is three independently
+opened shared-lock descriptions: coordinator ownership, supervisor FD 12, and
+anchor-helper FD 6 transferred to daemon FD 5. The protected children retain
+their leases through their service loops and release only by last descriptor
+close, so abrupt coordinator death cannot overlap exclusive provisioning with a
+surviving child. Cargo now
 admits the fixed root-owned client profile and connects only to the fixed
 authenticated listener path.
 The complete receipt carriage, subject-bound current-record recovery operation,
@@ -414,8 +419,13 @@ and measures all five installed service images, creates or verifies both key
 seeds, constructs all four cross-bound records, and publishes them durably
 without replacement. It owns an exclusive lease on a dedicated root-only file
 through a retained root-owned parent. Service admission derives the same sibling
-from existing state-root FD 4, takes the corresponding shared lease before key
-material is read, and retains it through supervisor and anchor reap. The lock
+from existing state-root FD 4 and takes all three corresponding shared leases
+before key material is read. Supervisor FD 12 and anchor helper FD 6 carry
+independent child open file descriptions; the helper installs its lease at
+daemon FD 5, where the daemon privately retains the lock and canonical parent
+at FDs 258 and 259. Non-root subprocess tests kill the coordinator holder and
+prove exclusive admission remains blocked until both service holders exit in
+either order. The lock
 therefore adds no activation descriptor and does not conflict with the issuer's
 independent state-root singleton. Idempotence, partial-publication recovery,
 generation substitution, listener, mutual exclusion, mode, static-image,

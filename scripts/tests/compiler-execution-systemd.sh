@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-readonly REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+readonly REPO_ROOT
 readonly SERVICE="${REPO_ROOT}/deployment/systemd/fe2o3-compiler-execution.service"
 readonly SOCKET="${REPO_ROOT}/deployment/systemd/fe2o3-compiler-execution.socket"
 readonly SYSUSERS="${REPO_ROOT}/deployment/sysusers.d/fe2o3-compiler-execution.conf"
@@ -9,6 +10,11 @@ readonly TMPFILES="${REPO_ROOT}/deployment/tmpfiles.d/fe2o3-compiler-execution.c
 readonly ENTRYPOINT="${REPO_ROOT}/crates/fe2o3-compiler-execution-coordinator/src/entrypoint.rs"
 readonly INHERITED="${REPO_ROOT}/crates/fe2o3-compiler-execution-coordinator/src/inherited.rs"
 readonly PROVISIONER="${REPO_ROOT}/crates/fe2o3-compiler-execution-coordinator/src/provisioning_entrypoint.rs"
+readonly COORDINATOR_LIFECYCLE="${REPO_ROOT}/crates/fe2o3-compiler-execution-coordinator/src/lifecycle.rs"
+readonly SERVICE_LIFECYCLE="${REPO_ROOT}/crates/fe2o3-compiler-execution-lifecycle/src/lib.rs"
+readonly SUPERVISOR_DEPLOYMENT="${REPO_ROOT}/crates/fe2o3-compiler-execution-supervisor/src/deployment.rs"
+readonly ANCHOR_HELPER="${REPO_ROOT}/crates/fe2o3-external-anchor-provisioner/src/entrypoint.rs"
+readonly ANCHOR_SERVICE="${REPO_ROOT}/crates/fe2o3-external-anchor-service/src/entrypoint.rs"
 readonly PROTOCOL="${REPO_ROOT}/crates/fe2o3-compiler-execution-protocol/src/lib.rs"
 readonly COORDINATOR_MANIFEST="${REPO_ROOT}/crates/fe2o3-compiler-execution-coordinator/Cargo.toml"
 
@@ -29,6 +35,7 @@ require_line "${SOCKET}" 'SocketUser=root'
 require_line "${SOCKET}" 'SocketGroup=fe2o3-compiler'
 require_line "${SOCKET}" 'SocketMode=0660'
 require_line "${SOCKET}" 'DirectoryMode=0755'
+require_line "${SOCKET}" 'FlushPending=no'
 
 mapfile -t open_files < <(sed -n 's/^OpenFile=//p' "${SERVICE}")
 readonly expected_open_files=(
@@ -89,12 +96,32 @@ fi
 grep -Fq -- 'RetainedProvisioningLifecycleLeaseV1::admit(' "${PROVISIONER}" ||
   fail 'provisioner lifecycle lease is missing'
 lifecycle_lease_line="$(grep -n -m1 -F -- 'CompilerExecutionLifecycleLeaseV1::admit_service_from_root(&supervisor_root)' "${INHERITED}" | cut -d: -f1)"
+supervisor_lifecycle_line="$(grep -n -m1 -F -- 'CompilerExecutionServiceLifecycleLeaseV1::open(&supervisor_root)' "${INHERITED}" | cut -d: -f1)"
+anchor_lifecycle_line="$(grep -n -m1 -F -- 'CompilerExecutionServiceLifecycleLeaseV1::open(&anchor_root)' "${INHERITED}" | cut -d: -f1)"
 issuer_seed_line="$(grep -n -m1 -F -- 'let mut seed = read_seed(File::from(issuer_key_seed)' "${INHERITED}" | cut -d: -f1)"
 [[ -n "${lifecycle_lease_line}" && -n "${issuer_seed_line}" && "${lifecycle_lease_line}" -lt "${issuer_seed_line}" ]] ||
   fail 'service lifecycle lease must precede issuer key admission'
+[[ -n "${supervisor_lifecycle_line}" && -n "${anchor_lifecycle_line}" &&
+  "${supervisor_lifecycle_line}" -lt "${issuer_seed_line}" &&
+  "${anchor_lifecycle_line}" -lt "${issuer_seed_line}" ]] ||
+  fail 'independent child lifecycle leases must precede issuer key admission'
+grep -Fq -- 'COMPILER_EXECUTION_SUPERVISOR_LIFECYCLE_FD_V1: RawFd = 12' "${SUPERVISOR_DEPLOYMENT}" ||
+  fail 'supervisor lifecycle descriptor contract changed'
+grep -Fq -- 'EXTERNAL_ANCHOR_HELPER_LIFECYCLE_FD_V1: RawFd = 6' "${ANCHOR_HELPER}" ||
+  fail 'anchor-helper lifecycle descriptor contract changed'
+grep -Fq -- 'EXTERNAL_ANCHOR_SERVICE_LIFECYCLE_FD_V1: RawFd = 5' "${ANCHOR_SERVICE}" ||
+  fail 'anchor-service lifecycle descriptor contract changed'
+grep -Fq -- 'PRIVATE_LIFECYCLE_PARENT_FD_V1: RawFd = 259' "${ANCHOR_SERVICE}" ||
+  fail 'anchor-service private lifecycle-parent descriptor changed'
+if sed '/^#\[cfg(test)\]/,$d' "${COORDINATOR_LIFECYCLE}" "${SERVICE_LIFECYCLE}" |
+  grep -Fq -- 'FlockOperation::Unlock'; then
+  fail 'production lifecycle custody must release only by last close'
+fi
 require_line "${SERVICE}" 'Sockets=fe2o3-compiler-execution.socket'
+require_line "${SERVICE}" 'StartLimitIntervalSec=0'
 require_line "${SERVICE}" 'KillMode=mixed'
 require_line "${SERVICE}" 'Restart=on-failure'
+require_line "${SERVICE}" 'RestartSec=1'
 require_line "${SERVICE}" 'RestrictAddressFamilies=AF_UNIX'
 
 require_line "${SYSUSERS}" 'u fe2o3-compiler - "fe2o3 compiler-execution supervisor" /var/lib/fe2o3/compiler-execution -'
