@@ -1,0 +1,11 @@
+error[E0599]: no method named `load` found for struct `AuthenticatedWorkerV3RosterV1<R>` in the current scope
+ --> tests/ui/worker_v3_verification_admission/authenticated_roster_load_and_launch_are_unavailable.rs:4:11
+  |
+4 |     value.load();
+  |           ^^^^ method not found in `AuthenticatedWorkerV3RosterV1<R>`
+
+error[E0599]: no method named `launch` found for struct `AuthenticatedWorkerV3RosterV1<R>` in the current scope
+ --> tests/ui/worker_v3_verification_admission/authenticated_roster_load_and_launch_are_unavailable.rs:5:11
+  |
+5 |     value.launch();
+  |           ^^^^^^ method not found in `AuthenticatedWorkerV3RosterV1<R>`

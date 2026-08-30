@@ -1,0 +1,12 @@
+error[E0200]: the trait `WorkerV3ProtectedRosterVerifierBackendV1<R>` requires an `unsafe impl` declaration
+ --> tests/ui/worker_v3_verification_admission/protected_roster_backend_requires_unsafe_impl.rs:8:1
+  |
+8 | / impl<R: CompilerGeneratedKernelExpectationRosterV1> WorkerV3ProtectedRosterVerifierBackendV1<R>
+9 | |     for ExternalBackend
+  | |_______________________^
+  |
+  = note: the trait `WorkerV3ProtectedRosterVerifierBackendV1<R>` enforces invariants that the compiler can't check. Review the trait documentation and make sure this implementation upholds those invariants before adding the `unsafe` keyword
+help: add `unsafe` to this trait implementation
+  |
+8 | unsafe impl<R: CompilerGeneratedKernelExpectationRosterV1> WorkerV3ProtectedRosterVerifierBackendV1<R>
+  | ++++++

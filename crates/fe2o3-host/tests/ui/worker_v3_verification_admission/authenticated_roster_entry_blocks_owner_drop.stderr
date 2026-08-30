@@ -1,0 +1,12 @@
+error[E0505]: cannot move out of `roster` because it is borrowed
+  --> tests/ui/worker_v3_verification_admission/authenticated_roster_entry_blocks_owner_drop.rs:12:10
+   |
+ 6 | fn drop_owner_while_borrowed<R, K>(roster: AuthenticatedWorkerV3RosterV1<R>)
+   |                                    ------ binding `roster` declared here
+...
+11 |     let entry = roster.entry::<K>().unwrap();
+   |                 ------ borrow of `roster` occurs here
+12 |     drop(roster);
+   |          ^^^^^^ move out of `roster` occurs here
+13 |     let _ = entry.ordinal();
+   |             ----- borrow later used here

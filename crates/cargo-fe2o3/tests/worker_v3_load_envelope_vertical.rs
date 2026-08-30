@@ -36,7 +36,8 @@ use fe2o3_host::{
         application_handoff_observed_context_fixture_v1,
         generated_shared_f32_argument_pair_fixture_v1,
     },
-    AuthenticatedWorkerV3ExecutableV1, CompilerGeneratedArgumentLayoutV1,
+    AuthenticatedWorkerV3ExecutableV1, AuthenticatedWorkerV3RosterV1,
+    CompilerGeneratedArgumentLayoutV1, CompilerGeneratedKernelExpectationRosterV1,
     CompilerGeneratedKernelExpectationV1, CompilerGeneratedKernelProfileV1,
     CompilerGeneratedWorkerV3ArgumentsV1, GeneratedArgumentLayoutError, GeneratedArgumentPackError,
     GeneratedArgumentPackingPlanV1, GeneratedDeviceScalarV1, GeneratedWorkerV3ArgumentBindingV1,
@@ -48,8 +49,12 @@ use fe2o3_host::{
     ProductionWorkerV3ApplicationLoadErrorV1, RecoveredWorkerV3AdmissionErrorV1,
     ReviewedHsaExecutableLifecycleAdapterV1, ReviewedHsaImplicitKernargAdapterV1,
     WorkerV3AuditorV1, WorkerV3CompilerExecutionVerificationV1, WorkerV3GeneratedDispatchErrorV1,
-    WorkerV3HsaLoadAuthorizationErrorV1, WorkerV3ProtectedVerificationEvidenceV1,
+    WorkerV3HsaLoadAuthorizationErrorV1, WorkerV3ProtectedRosterEntryEvidenceV1,
+    WorkerV3ProtectedRosterVerificationEvidenceV1, WorkerV3ProtectedRosterVerifierAdapterV1,
+    WorkerV3ProtectedRosterVerifierBackendV1, WorkerV3ProtectedVerificationEvidenceV1,
     WorkerV3ProtectedVerifierAdapterV1, WorkerV3ProtectedVerifierBackendV1,
+    WorkerV3RosterEntryErrorV1, WorkerV3RosterVerificationAuthenticationErrorV1,
+    WorkerV3RosterVerificationDecisionErrorV1, WorkerV3RosterVerificationRequestV1,
     WorkerV3SafetyPropertiesV1, WorkerV3SyntheticVerifierAdapterV1, WorkerV3SyntheticVerifierV1,
     WorkerV3VerificationAuthenticationErrorV1, WorkerV3VerificationDecisionErrorV1,
     WorkerV3VerificationDecisionV1, WorkerV3VerificationRequestV1,
@@ -688,6 +693,200 @@ where
     }
 }
 
+#[derive(Clone, Copy)]
+enum ReviewedTestProtectedRosterVerifierFault {
+    None,
+    CompilerSubject,
+    ZeroVerificationTranscript,
+    MissingEntry,
+    SwappedEntries,
+    SubstitutedMarkerBinding,
+    SubstitutedEntryLineage,
+    SubstitutedGeneratedHostContract,
+    ZeroProofExecutableBinding,
+    ZeroEntryLayout,
+    ZeroEntryEffect,
+    MissingEntrySafetyProperty,
+}
+
+struct ReviewedTestProtectedRosterVerifier {
+    fault: ReviewedTestProtectedRosterVerifierFault,
+    calls: usize,
+    foreign_finalizer: Option<RevalidatedProtectedWorkerV3FinalizerDerivationV1>,
+}
+
+// SAFETY: this request-echoing aggregate backend is confined to the receipt-bearing integration
+// test. It exercises the production adapter's exact ordered mapping and rejection paths and does
+// not represent protected compiler, proof, executable, layout, effect, or runtime authority.
+unsafe impl<R> WorkerV3ProtectedRosterVerifierBackendV1<R> for ReviewedTestProtectedRosterVerifier
+where
+    R: CompilerGeneratedKernelExpectationRosterV1,
+{
+    type Error = Infallible;
+
+    unsafe fn verify_protected_roster(
+        &mut self,
+        request: &WorkerV3RosterVerificationRequestV1<'_, R>,
+    ) -> Result<WorkerV3ProtectedRosterVerificationEvidenceV1, Self::Error> {
+        self.calls += 1;
+        let mut subject = request.compiler_execution_subject_sha256();
+        let mut verification_transcript = [0xc2; 32];
+        match self.fault {
+            ReviewedTestProtectedRosterVerifierFault::None
+            | ReviewedTestProtectedRosterVerifierFault::MissingEntry
+            | ReviewedTestProtectedRosterVerifierFault::SwappedEntries
+            | ReviewedTestProtectedRosterVerifierFault::SubstitutedMarkerBinding
+            | ReviewedTestProtectedRosterVerifierFault::SubstitutedEntryLineage
+            | ReviewedTestProtectedRosterVerifierFault::SubstitutedGeneratedHostContract
+            | ReviewedTestProtectedRosterVerifierFault::ZeroProofExecutableBinding
+            | ReviewedTestProtectedRosterVerifierFault::ZeroEntryLayout
+            | ReviewedTestProtectedRosterVerifierFault::ZeroEntryEffect
+            | ReviewedTestProtectedRosterVerifierFault::MissingEntrySafetyProperty => {}
+            ReviewedTestProtectedRosterVerifierFault::CompilerSubject => subject[0] ^= 0xff,
+            ReviewedTestProtectedRosterVerifierFault::ZeroVerificationTranscript => {
+                verification_transcript = [0; 32];
+            }
+        }
+        let compiler_execution = WorkerV3CompilerExecutionVerificationV1::synthetic_for_test_only(
+            subject,
+            request.compiler_execution_carriage_sha256(),
+            request.compiler_execution_policy_sha256(),
+            request.compiler_execution_issuer_journal_sha256(),
+            request.compiler_occurrence_sha256(),
+            request.compiler_execution_receipt_sha256(),
+            request.compiler_execution_publication_sha256(),
+            request.compiler_execution_acknowledgment_sha256(),
+            request.compiler_execution_worker_ledger_record_sha256(),
+            request.compiler_execution_sequence(),
+            request.compiler_execution_prior_rollback_anchor(),
+            request.compiler_execution_current_rollback_anchor(),
+            [0xd1; 32],
+            [0xd2; 32],
+            [0xd3; 32],
+            [0xd4; 32],
+            [0xd5; 32],
+        );
+        let proof_inputs = request
+            .validate_compiler_proof_inputs_v4()
+            .expect("the integration fixture carries canonical compiler proof inputs");
+        let finalizer_derivation = self.foreign_finalizer.take().unwrap_or_else(|| {
+            request
+                .independently_revalidate_finalizer_derivation()
+                .expect("the exact fixture finalizer derivation must replay")
+        });
+        let mut entries = request
+            .marker_entries()
+            .iter()
+            .enumerate()
+            .map(|(ordinal, expected)| {
+                let seed = 0x20_u8
+                    .wrapping_add(u8::try_from(ordinal).expect("synthetic roster ordinal fits u8"));
+                let lineage_ordinal = if matches!(
+                    self.fault,
+                    ReviewedTestProtectedRosterVerifierFault::SubstitutedEntryLineage
+                ) && ordinal == 1
+                {
+                    0
+                } else {
+                    ordinal
+                };
+                let mut marker_binding = expected.kernel_binding_id();
+                if matches!(
+                    self.fault,
+                    ReviewedTestProtectedRosterVerifierFault::SubstitutedMarkerBinding
+                ) && ordinal == 1
+                {
+                    marker_binding[0] ^= 0xff;
+                }
+                let mut generated_host_contract = expected.generated_host_contract_identity();
+                if matches!(
+                    self.fault,
+                    ReviewedTestProtectedRosterVerifierFault::SubstitutedGeneratedHostContract
+                ) && ordinal == 1
+                {
+                    generated_host_contract[0] ^= 0xff;
+                }
+                let proof_executable = if matches!(
+                    self.fault,
+                    ReviewedTestProtectedRosterVerifierFault::ZeroProofExecutableBinding
+                ) && ordinal == 1
+                {
+                    [0; 32]
+                } else {
+                    [seed; 32]
+                };
+                let layout = if matches!(
+                    self.fault,
+                    ReviewedTestProtectedRosterVerifierFault::ZeroEntryLayout
+                ) && ordinal == 1
+                {
+                    [0; 32]
+                } else {
+                    [seed.wrapping_add(1); 32]
+                };
+                let effect = if matches!(
+                    self.fault,
+                    ReviewedTestProtectedRosterVerifierFault::ZeroEntryEffect
+                ) && ordinal == 1
+                {
+                    [0; 32]
+                } else {
+                    [seed.wrapping_add(2); 32]
+                };
+                let safety_properties = if matches!(
+                    self.fault,
+                    ReviewedTestProtectedRosterVerifierFault::MissingEntrySafetyProperty
+                ) && ordinal == 1
+                {
+                    WorkerV3SafetyPropertiesV1::new(u8::MAX - 1)
+                        .expect("the synthetic safety bitset uses only known bits")
+                } else {
+                    WorkerV3SafetyPropertiesV1::required()
+                };
+                // SAFETY: this explicit hostile test seam supplies synthetic nonzero identities;
+                // host promotion still checks all request coordinates and rejection cases.
+                unsafe {
+                    WorkerV3ProtectedRosterEntryEvidenceV1::new(
+                        request
+                            .entry_lineage_identity(lineage_ordinal)
+                            .expect("request retains every roster lineage"),
+                        marker_binding,
+                        generated_host_contract,
+                        proof_executable,
+                        layout,
+                        effect,
+                        safety_properties,
+                    )
+                }
+            })
+            .collect::<Vec<_>>();
+        if matches!(
+            self.fault,
+            ReviewedTestProtectedRosterVerifierFault::MissingEntry
+        ) {
+            entries.pop();
+        }
+        if matches!(
+            self.fault,
+            ReviewedTestProtectedRosterVerifierFault::SwappedEntries
+        ) {
+            entries.swap(0, 1);
+        }
+        // SAFETY: this test-only backend deliberately supplies synthetic evidence so the exact
+        // aggregate promotion and fail-closed field validation can be exercised.
+        Ok(unsafe {
+            WorkerV3ProtectedRosterVerificationEvidenceV1::new(
+                finalizer_derivation,
+                compiler_execution,
+                proof_inputs,
+                [0xc1; 32],
+                verification_transcript,
+                entries,
+            )
+        })
+    }
+}
+
 // SAFETY: this test-only protected backend probes the cooperative publication lock before
 // delegating to the complete protected-evidence fixture above.
 unsafe impl<K> WorkerV3ProtectedVerifierBackendV1<K> for CurrentnessProbingWorkerV3Verifier
@@ -712,6 +911,36 @@ where
                 foreign_finalizer: None,
             }
             .verify_protected(request)
+        }
+    }
+}
+
+// SAFETY: this test-only aggregate backend probes the same cooperative publication lock while the
+// one roster-wide currentness token is retained, then delegates to the complete synthetic
+// aggregate evidence fixture above.
+unsafe impl<R> WorkerV3ProtectedRosterVerifierBackendV1<R> for CurrentnessProbingWorkerV3Verifier
+where
+    R: CompilerGeneratedKernelExpectationRosterV1,
+{
+    type Error = Infallible;
+
+    unsafe fn verify_protected_roster(
+        &mut self,
+        request: &WorkerV3RosterVerificationRequestV1<'_, R>,
+    ) -> Result<WorkerV3ProtectedRosterVerificationEvidenceV1, Self::Error> {
+        self.observed_busy = matches!(
+            reacquire_current_hsaco_publication_lease_v3(&self.output_dir, &self.claim),
+            Err(DurablePublishedClaimReacquisitionErrorV3::Busy)
+        );
+        assert!(self.observed_busy);
+        // SAFETY: both implementations satisfy the same test-only aggregate-backend contract.
+        unsafe {
+            ReviewedTestProtectedRosterVerifier {
+                fault: ReviewedTestProtectedRosterVerifierFault::None,
+                calls: 0,
+                foreign_finalizer: None,
+            }
+            .verify_protected_roster(request)
         }
     }
 }
@@ -1847,6 +2076,301 @@ fn v3_host_roster_admission_uses_canonical_descriptor_order_not_source_or_elf_or
         ),
         Err(RecoveredWorkerV3AdmissionErrorV1::RosterEntrySubstituted { ordinal: 1 })
     ));
+}
+
+#[test]
+fn protected_roster_verifier_authenticates_one_artifact_and_borrowed_typed_entries() {
+    let (directory, recovered) = recovered_synthetic_two_kernel_host_fixture();
+    let claim = recovered.wire().published_claim().clone();
+    let admitted =
+        admit_recovered_worker_v3_roster_v1::<WorkerV3SyntheticTwoTransformRoster>(recovered)
+            .unwrap();
+    let admitted_lineage = admitted.lineage_identity();
+    let mut verifier =
+        WorkerV3ProtectedRosterVerifierAdapterV1::new(ReviewedTestProtectedRosterVerifier {
+            fault: ReviewedTestProtectedRosterVerifierFault::None,
+            calls: 0,
+            foreign_finalizer: None,
+        });
+    let authenticated =
+        AuthenticatedWorkerV3RosterV1::<WorkerV3SyntheticTwoTransformRoster>::authenticate(
+            admitted,
+            &mut verifier,
+        )
+        .unwrap();
+    assert_eq!(verifier.into_inner().calls, 1);
+    assert_eq!(authenticated.entry_count(), 2);
+    assert_eq!(
+        authenticated.verification().lineage_identity(),
+        admitted_lineage
+    );
+    assert_eq!(authenticated.verification().entries().len(), 2);
+    let finalizer = authenticated.verification().finalizer_derivation();
+    assert_eq!(
+        finalizer.finalized_hsaco_identity().sha256(),
+        &authenticated.verification().finalized_hsaco_sha256(),
+    );
+    assert!(!finalizer.proves_llvm_to_machine_semantic_refinement());
+    assert!(!finalizer.grants_compiler_authority());
+    assert!(!finalizer.grants_publication_authority());
+    assert!(!finalizer.grants_load_authority());
+    assert!(!finalizer.grants_launch_authority());
+    assert!(
+        authenticated
+            .verification()
+            .validated_compiler_proof_inputs()
+            .authenticates_signed_verus_receipt_under_embedded_key()
+    );
+    assert!(
+        !authenticated
+            .verification()
+            .validated_compiler_proof_inputs()
+            .establishes_llvm_or_machine_refinement()
+    );
+    assert!(!authenticated.grants_load_authority());
+    assert!(!authenticated.grants_launch_authority());
+
+    {
+        let second = authenticated
+            .entry::<WorkerV3SyntheticSecondTransformMarker>()
+            .unwrap();
+        let first = authenticated
+            .entry::<WorkerV3SyntheticFirstTransformMarker>()
+            .unwrap();
+        assert_eq!(second.ordinal(), 0);
+        assert_eq!(first.ordinal(), 1);
+        assert_eq!(
+            second.descriptor().kernel_id().as_bytes(),
+            &SYNTHETIC_SECOND_TRANSFORM_BINDING
+        );
+        assert_eq!(
+            first.descriptor().kernel_id().as_bytes(),
+            &SYNTHETIC_FIRST_TRANSFORM_BINDING
+        );
+        assert_eq!(second.descriptor_binding().kernel_index(), 1);
+        assert_eq!(first.descriptor_binding().kernel_index(), 0);
+        assert_eq!(
+            second.physical_kernel().name(),
+            "synthetic_second_transform"
+        );
+        assert_eq!(first.physical_kernel().name(), "synthetic_first_transform");
+        assert_eq!(
+            second
+                .aggregate_verification()
+                .finalizer_derivation()
+                .identity(),
+            authenticated
+                .verification()
+                .finalizer_derivation()
+                .identity(),
+        );
+        assert_eq!(
+            second.entry_verification().marker_binding_identity(),
+            SYNTHETIC_SECOND_TRANSFORM_BINDING,
+        );
+        assert_eq!(
+            first.entry_verification().marker_binding_identity(),
+            SYNTHETIC_FIRST_TRANSFORM_BINDING,
+        );
+        assert!(second.authenticates_verification_authority());
+        assert!(!second.grants_load_authority());
+        assert!(!second.grants_launch_authority());
+    }
+    assert!(matches!(
+        authenticated.entry::<WorkerV3VecAddMarker>(),
+        Err(WorkerV3RosterEntryErrorV1::MarkerNotInRoster)
+    ));
+    authenticated.revalidate_currentness().unwrap();
+    assert!(matches!(
+        reacquire_current_hsaco_publication_lease_v3(&directory.0, &claim),
+        Err(DurablePublishedClaimReacquisitionErrorV3::Busy)
+    ));
+    drop(authenticated);
+    drop(reacquire_current_hsaco_publication_lease_v3(&directory.0, &claim).unwrap());
+}
+
+#[test]
+fn protected_roster_verifier_rejects_same_hsaco_from_foreign_finalizer_derivation() {
+    let (_primary_directory, primary) = recovered_synthetic_two_kernel_host_fixture();
+    let (_foreign_directory, foreign) = recover_published_worker_v3_fixture(
+        worker_v3_fixture::published_synthetic_two_kernel_worker_v3_fixture_with_llvm_build_identity(
+            "upstream-llvm-test-build-foreign-roster",
+        ),
+    );
+    assert_eq!(
+        primary.exact_artifact_bytes(),
+        foreign.exact_artifact_bytes()
+    );
+    assert_ne!(
+        primary.wire().replay().transcript(),
+        foreign.wire().replay().transcript(),
+    );
+
+    let foreign_admission = admit_recovered_worker_v3_descriptor_v1(
+        foreign,
+        KernelId::from_bytes(SYNTHETIC_SECOND_TRANSFORM_BINDING),
+    )
+    .unwrap();
+    let foreign_finalizer = audit_recovered_worker_v3_verification_v1::<
+        WorkerV3SyntheticSecondTransformMarker,
+        _,
+    >(&foreign_admission, &mut FinalizerCapturingWorkerV3Auditor)
+    .unwrap();
+    drop(foreign_admission);
+
+    let primary_admission =
+        admit_recovered_worker_v3_roster_v1::<WorkerV3SyntheticTwoTransformRoster>(primary)
+            .unwrap();
+    let mut verifier =
+        WorkerV3ProtectedRosterVerifierAdapterV1::new(ReviewedTestProtectedRosterVerifier {
+            fault: ReviewedTestProtectedRosterVerifierFault::None,
+            calls: 0,
+            foreign_finalizer: Some(foreign_finalizer),
+        });
+    let error = AuthenticatedWorkerV3RosterV1::<WorkerV3SyntheticTwoTransformRoster>::authenticate(
+        primary_admission,
+        &mut verifier,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        WorkerV3RosterVerificationAuthenticationErrorV1::Decision(
+            WorkerV3RosterVerificationDecisionErrorV1::IdentityMismatch("finalizer derivation")
+        )
+    ));
+}
+
+#[test]
+fn protected_roster_verifier_rejects_common_and_per_entry_substitution() {
+    for (fault, expected) in [
+        (
+            ReviewedTestProtectedRosterVerifierFault::CompilerSubject,
+            WorkerV3RosterVerificationDecisionErrorV1::IdentityMismatch(
+                "compiler-execution subject",
+            ),
+        ),
+        (
+            ReviewedTestProtectedRosterVerifierFault::ZeroVerificationTranscript,
+            WorkerV3RosterVerificationDecisionErrorV1::ZeroAuthenticatedIdentity(
+                "verification transcript",
+            ),
+        ),
+        (
+            ReviewedTestProtectedRosterVerifierFault::MissingEntry,
+            WorkerV3RosterVerificationDecisionErrorV1::EntryCountMismatch {
+                expected: 2,
+                actual: 1,
+            },
+        ),
+        (
+            ReviewedTestProtectedRosterVerifierFault::SwappedEntries,
+            WorkerV3RosterVerificationDecisionErrorV1::EntryIdentityMismatch {
+                ordinal: 0,
+                field: "entry lineage",
+            },
+        ),
+        (
+            ReviewedTestProtectedRosterVerifierFault::SubstitutedMarkerBinding,
+            WorkerV3RosterVerificationDecisionErrorV1::EntryIdentityMismatch {
+                ordinal: 1,
+                field: "marker binding",
+            },
+        ),
+        (
+            ReviewedTestProtectedRosterVerifierFault::SubstitutedEntryLineage,
+            WorkerV3RosterVerificationDecisionErrorV1::EntryIdentityMismatch {
+                ordinal: 1,
+                field: "entry lineage",
+            },
+        ),
+        (
+            ReviewedTestProtectedRosterVerifierFault::SubstitutedGeneratedHostContract,
+            WorkerV3RosterVerificationDecisionErrorV1::EntryIdentityMismatch {
+                ordinal: 1,
+                field: "generated host contract",
+            },
+        ),
+        (
+            ReviewedTestProtectedRosterVerifierFault::ZeroProofExecutableBinding,
+            WorkerV3RosterVerificationDecisionErrorV1::ZeroEntryAuthenticatedIdentity {
+                ordinal: 1,
+                field: "proof/executable binding",
+            },
+        ),
+        (
+            ReviewedTestProtectedRosterVerifierFault::ZeroEntryLayout,
+            WorkerV3RosterVerificationDecisionErrorV1::ZeroEntryAuthenticatedIdentity {
+                ordinal: 1,
+                field: "Rust type/layout contract",
+            },
+        ),
+        (
+            ReviewedTestProtectedRosterVerifierFault::ZeroEntryEffect,
+            WorkerV3RosterVerificationDecisionErrorV1::ZeroEntryAuthenticatedIdentity {
+                ordinal: 1,
+                field: "Rust effect contract",
+            },
+        ),
+        (
+            ReviewedTestProtectedRosterVerifierFault::MissingEntrySafetyProperty,
+            WorkerV3RosterVerificationDecisionErrorV1::MissingEntrySafetyProperty {
+                ordinal: 1,
+                property: fe2o3_host::WorkerV3SafetyPropertyV1::Bounds,
+            },
+        ),
+    ] {
+        let (_directory, recovered) = recovered_synthetic_two_kernel_host_fixture();
+        let admitted =
+            admit_recovered_worker_v3_roster_v1::<WorkerV3SyntheticTwoTransformRoster>(recovered)
+                .unwrap();
+        let mut verifier =
+            WorkerV3ProtectedRosterVerifierAdapterV1::new(ReviewedTestProtectedRosterVerifier {
+                fault,
+                calls: 0,
+                foreign_finalizer: None,
+            });
+        let error =
+            AuthenticatedWorkerV3RosterV1::<WorkerV3SyntheticTwoTransformRoster>::authenticate(
+                admitted,
+                &mut verifier,
+            )
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            WorkerV3RosterVerificationAuthenticationErrorV1::Decision(actual)
+                if actual == expected
+        ));
+        assert_eq!(verifier.into_inner().calls, 1);
+    }
+}
+
+#[test]
+fn authenticated_v3_roster_retains_verifier_entry_currentness_until_drop() {
+    let (directory, recovered) = recovered_synthetic_two_kernel_host_fixture();
+    let claim = recovered.wire().published_claim().clone();
+    let admitted =
+        admit_recovered_worker_v3_roster_v1::<WorkerV3SyntheticTwoTransformRoster>(recovered)
+            .unwrap();
+    let mut verifier =
+        WorkerV3ProtectedRosterVerifierAdapterV1::new(CurrentnessProbingWorkerV3Verifier {
+            output_dir: directory.0.clone(),
+            claim: claim.clone(),
+            observed_busy: false,
+        });
+    let authenticated =
+        AuthenticatedWorkerV3RosterV1::<WorkerV3SyntheticTwoTransformRoster>::authenticate(
+            admitted,
+            &mut verifier,
+        )
+        .unwrap();
+    assert!(verifier.into_inner().observed_busy);
+    authenticated.revalidate_currentness().unwrap();
+    assert!(matches!(
+        reacquire_current_hsaco_publication_lease_v3(&directory.0, &claim),
+        Err(DurablePublishedClaimReacquisitionErrorV3::Busy)
+    ));
+    drop(authenticated);
+    drop(reacquire_current_hsaco_publication_lease_v3(&directory.0, &claim).unwrap());
 }
 
 #[test]
