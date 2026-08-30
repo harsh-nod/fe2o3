@@ -129,6 +129,7 @@ mod tests {
             1001,
             1002,
             CompilerExecutionExternalAnchorServiceIdentityV1::new(1003, 1004).unwrap(),
+            CompilerExecutionIssuerMeasurementV1::new([0x54; 32], 12288).unwrap(),
             CompilerExecutionIssuerMeasurementV1::new([0x55; 32], 16384).unwrap(),
             &policy,
         )

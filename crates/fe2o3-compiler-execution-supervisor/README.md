@@ -126,6 +126,8 @@ The descriptor-only deployed entrypoint is implemented and accepts no arguments
 or environment. It consumes the canonical deployment manifest at FD 220 plus
 fixed inherited listener, root, launcher, issuer, policy, signing-key, and
 external-anchor descriptors; validates the complete locked service profile;
-and enters only the existing fixed-worker service loop. System provisioning of
+requires that manifest to pin the exact protected-supervisor executable as a
+role distinct from the issuer pre-exec launcher; and enters only the existing
+fixed-worker service loop. System provisioning of
 the distinct service accounts, independently administered external anchor,
 root/socket policy, and reviewed installed image measurements remains pending.

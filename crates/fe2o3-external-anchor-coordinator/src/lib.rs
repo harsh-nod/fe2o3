@@ -1070,6 +1070,7 @@ mod tests {
             supervisor.service_uid(),
             supervisor.service_gid(),
             service,
+            supervisor.executable(),
             CompilerExecutionIssuerMeasurementV1::new([0x55; 32], 5).unwrap(),
             &policy,
         )
@@ -1242,6 +1243,7 @@ mod tests {
             service.uid().checked_add(1).unwrap(),
             service.gid(),
             service,
+            CompilerExecutionIssuerMeasurementV1::new([3; 32], 3).unwrap(),
             CompilerExecutionIssuerMeasurementV1::new([4; 32], 4).unwrap(),
             &policy,
         )
