@@ -260,6 +260,12 @@ impl PreparedFinalizedProtectedWorkerV3HsacoV1 {
         self.raw.linked_output_identity()
     }
 
+    /// Returns the exact linked-LLVM, optimized-LLVM, object, LLD-input, and raw-HSACO custody
+    /// already validated by the retained Worker V3 bootstrap and replay.
+    pub fn llvm_to_hsaco_derivation_evidence(&self) -> &crate::WorkerDerivationEvidenceV1 {
+        self.raw.source_evidence().derivation_evidence()
+    }
+
     pub const fn finalized_output_identity(&self) -> ContentIdentityV1 {
         self.finalized_output
     }

@@ -705,6 +705,10 @@ fn production_semantic_debug_legacy_and_unavailable_states_are_typed() {
             .artifact_identity()
             .matches(available.exact_finalized_bytes())
     );
+    assert_eq!(
+        available.llvm_to_hsaco_derivation_evidence().hsaco(),
+        available.raw_output_identity()
+    );
     let outer = available.outer_handoff();
     let extension = ProductionSemanticDebugReceiptExtensionV1::from_canonical_bytes(
         outer
@@ -1578,9 +1582,9 @@ impl OptionalSemanticDebugFixture {
 
 #[derive(Clone, Copy)]
 enum AvailableMapMutation {
-    DeleteEliminated,
-    RetypeEliminated,
-    RepointEliminated,
+    Delete,
+    Retype,
+    Repoint,
 }
 
 fn finalized_with_optional_semantic_debug(
@@ -1695,13 +1699,13 @@ fn outer_for_kernels_with_optional_semantic_debug(
             };
             let carrier = match fixture {
                 OptionalSemanticDebugFixture::AvailableDeleteEliminated => {
-                    mutate_available_map(carrier, AvailableMapMutation::DeleteEliminated)
+                    mutate_available_map(carrier, AvailableMapMutation::Delete)
                 }
                 OptionalSemanticDebugFixture::AvailableRetypeEliminated => {
-                    mutate_available_map(carrier, AvailableMapMutation::RetypeEliminated)
+                    mutate_available_map(carrier, AvailableMapMutation::Retype)
                 }
                 OptionalSemanticDebugFixture::AvailableRepointEliminated => {
-                    mutate_available_map(carrier, AvailableMapMutation::RepointEliminated)
+                    mutate_available_map(carrier, AvailableMapMutation::Repoint)
                 }
                 _ => carrier,
             };
@@ -1746,7 +1750,7 @@ fn mutate_available_map(
         .expect("sourceful fixture has one eliminated statement");
     let eliminated_input = mappings[eliminated].inputs()[0];
     match mutation {
-        AvailableMapMutation::DeleteEliminated => {
+        AvailableMapMutation::Delete => {
             mappings.remove(eliminated);
             boundaries.push(
                 SemanticDebugBoundaryV1::new(
@@ -1757,7 +1761,7 @@ fn mutate_available_map(
                 .unwrap(),
             );
         }
-        AvailableMapMutation::RetypeEliminated => {
+        AvailableMapMutation::Retype => {
             let mapping = &mappings[eliminated];
             mappings[eliminated] = SemanticDebugMappingV1::new(
                 mapping.identity(),
@@ -1771,7 +1775,7 @@ fn mutate_available_map(
             )
             .unwrap();
         }
-        AvailableMapMutation::RepointEliminated => {
+        AvailableMapMutation::Repoint => {
             let available = mappings
                 .iter()
                 .position(|mapping| {

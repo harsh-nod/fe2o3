@@ -201,6 +201,10 @@ impl PreparedFinalizedProtectedWorkerV3HsacoV1 {
         {
             return Err(FinalizedSemanticDebugMapErrorV1::KirToLlvmReplayTargetMismatch);
         }
+        let llvm_to_hsaco = self.llvm_to_hsaco_derivation_evidence();
+        if llvm_to_hsaco.hsaco() != self.raw_output_identity() {
+            return Err(FinalizedSemanticDebugMapErrorV1::InvalidLlvmToHsacoCustody);
+        }
 
         let semantic_mir = receipts.semantic_mir().canonical_preimage();
         let exact_kir_v8 = receipts.kernel_ir().canonical_preimage();
@@ -739,6 +743,7 @@ pub enum FinalizedSemanticDebugMapErrorV1 {
     ProductionAssociationMismatch,
     InvalidKirToLlvmReplay,
     KirToLlvmReplayTargetMismatch,
+    InvalidLlvmToHsacoCustody,
     InvalidBoundSourceMap,
     InvalidBoundSemanticMir,
     InvalidBoundCorrespondenceV4,
@@ -769,6 +774,7 @@ impl Error for FinalizedSemanticDebugMapErrorV1 {
             | Self::ProductionAssociationMismatch
             | Self::InvalidKirToLlvmReplay
             | Self::KirToLlvmReplayTargetMismatch
+            | Self::InvalidLlvmToHsacoCustody
             | Self::InvalidBoundSourceMap
             | Self::InvalidBoundSemanticMir
             | Self::InvalidBoundCorrespondenceV4
