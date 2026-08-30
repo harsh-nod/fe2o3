@@ -46,6 +46,7 @@ pub enum RocgdbMiNativeCorrelationErrorV4 {
     HierarchySubstitution,
     ThreadSubstitution,
     LaneSubstitution,
+    StopSubstitution,
     StaleGeneration,
     IdentityCollision,
     ProtocolRejected,
@@ -182,7 +183,6 @@ struct AgentV4 {
 #[derive(Clone, Debug)]
 struct QueueV4 {
     id: QualifiedIdV4,
-    agent_id: Vec<u8>,
     target_agent: u32,
     target_queue: u32,
     queue_id: u32,
@@ -192,7 +192,6 @@ struct QueueV4 {
 #[derive(Clone, Debug)]
 struct DispatchV4 {
     id: QualifiedIdV4,
-    queue_id: Vec<u8>,
     target_agent: u32,
     target_queue: u32,
     target_dispatch: u32,
@@ -210,7 +209,7 @@ struct ThreadV4 {
     target_dispatch: u32,
     wave: u32,
     workgroup: [u32; 3],
-    workgroup_thread_index: u32,
+    wave_in_workgroup: u32,
     frame_address: Option<u64>,
     evidence: OpaqueIdentityV1,
 }
@@ -221,7 +220,7 @@ struct ParsedThreadTargetV4 {
     dispatch: u32,
     wave: u32,
     workgroup: [u32; 3],
-    workgroup_thread_index: u32,
+    wave_in_workgroup: u32,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -247,6 +246,7 @@ struct LaneV4 {
 /// Stateful V4 admission. It does not own ROCgdb or KFD control authority.
 pub struct RocgdbMiNativeCorrelationAdapterV4 {
     session: OpaqueIdentityV1,
+    stop: Option<OpaqueIdentityV1>,
     agents: Vec<AgentV4>,
     queues: Vec<QueueV4>,
     dispatches: Vec<DispatchV4>,
@@ -258,12 +258,23 @@ impl RocgdbMiNativeCorrelationAdapterV4 {
     pub fn new(session: OpaqueIdentityV1) -> Self {
         Self {
             session,
+            stop: None,
             agents: Vec::new(),
             queues: Vec::new(),
             dispatches: Vec::new(),
             threads: Vec::new(),
             lanes: Vec::new(),
         }
+    }
+
+    pub(crate) fn bind_stop_identity_v4(
+        &mut self,
+        stop: OpaqueIdentityV1,
+    ) -> Result<(), RocgdbMiNativeCorrelationErrorV4> {
+        if self.stop.replace(stop).is_some() {
+            return Err(RocgdbMiNativeCorrelationErrorV4::StopSubstitution);
+        }
+        Ok(())
     }
 
     pub fn admit_agent_info(
@@ -320,22 +331,10 @@ impl RocgdbMiNativeCorrelationAdapterV4 {
         for tuple in tuples {
             validate_fields(
                 tuple,
-                &[
-                    "id",
-                    "agent-id",
-                    "target-id",
-                    "details",
-                    "type",
-                    "read",
-                    "write",
-                    "size",
-                    "addr",
-                ],
-                &["id", "agent-id", "target-id", "type", "size", "addr"],
+                &["id", "target-id", "type", "read", "write", "size", "addr"],
+                &["id", "target-id", "type", "size", "addr"],
             )?;
             let id = parse_qualified_id(constant(tuple, "id")?)?;
-            let agent_id = constant(tuple, "agent-id")?.to_vec();
-            parse_qualified_id(&agent_id)?;
             if constant(tuple, "type")? != b"HSA" {
                 continue;
             }
@@ -358,7 +357,6 @@ impl RocgdbMiNativeCorrelationAdapterV4 {
                 parse_queue_target_id(constant(tuple, "target-id")?)?;
             parsed.push(QueueV4 {
                 id,
-                agent_id,
                 target_agent,
                 target_queue,
                 queue_id,
@@ -380,31 +378,54 @@ impl RocgdbMiNativeCorrelationAdapterV4 {
         require_count(tuples.len())?;
         let mut parsed = Vec::with_capacity(tuples.len());
         for tuple in tuples {
+            // ROCm 7.2.4's deployed emitter is authoritative. Its bundled
+            // manual shows an incompatible stale queue_id/fences list schema.
             validate_fields(
                 tuple,
                 &[
                     "id",
-                    "queue-id",
                     "target-id",
-                    "details",
                     "grid",
                     "workgroup",
                     "fence",
-                    "kernel",
+                    "address-spaces",
+                    "kernel-desc",
+                    "kernel-args",
+                    "completion",
+                    "kernel-function",
                 ],
-                &["id", "queue-id", "target-id", "grid", "workgroup"],
+                &[
+                    "id",
+                    "target-id",
+                    "grid",
+                    "workgroup",
+                    "fence",
+                    "address-spaces",
+                    "kernel-desc",
+                    "kernel-args",
+                    "completion",
+                    "kernel-function",
+                ],
             )?;
+            validate_deployed_fence_v4(constant(tuple, "fence")?)?;
+            validate_deployed_address_spaces_v4(constant(tuple, "address-spaces")?)?;
             let id = parse_qualified_id(constant(tuple, "id")?)?;
-            let queue_id = constant(tuple, "queue-id")?.to_vec();
-            parse_qualified_id(&queue_id)?;
             let (target_agent, target_queue, target_dispatch, packet_id) =
                 parse_dispatch_target_id(constant(tuple, "target-id")?)?;
-            let grid = dimension_list(required(tuple, "grid")?, "grid")?;
-            let workgroup = dimension_list(required(tuple, "workgroup")?, "workgroup")?;
+            let grid = dimension_constant(constant(tuple, "grid")?, "grid")?;
+            let workgroup = dimension_constant(constant(tuple, "workgroup")?, "workgroup")?;
+            for field in [
+                "kernel-desc",
+                "kernel-args",
+                "completion",
+                "kernel-function",
+            ] {
+                parse_hex_u64(constant(tuple, field)?)
+                    .ok_or(RocgdbMiNativeCorrelationErrorV4::InvalidField(field))?;
+            }
             validate_geometry(grid, workgroup)?;
             parsed.push(DispatchV4 {
                 id,
-                queue_id,
                 target_agent,
                 target_queue,
                 target_dispatch,
@@ -464,7 +485,7 @@ impl RocgdbMiNativeCorrelationAdapterV4 {
                 target_dispatch: target.dispatch,
                 wave: target.wave,
                 workgroup: target.workgroup,
-                workgroup_thread_index: target.workgroup_thread_index,
+                wave_in_workgroup: target.wave_in_workgroup,
                 frame_address,
                 evidence: self.evidence(b"thread-info", line)?,
             });
@@ -620,6 +641,9 @@ impl RocgdbMiNativeCorrelationAdapterV4 {
         }
         validate_code_binding(code)?;
         validate_geometry(kfd.grid, kfd.workgroup)?;
+        let stop = self
+            .stop
+            .ok_or(RocgdbMiNativeCorrelationErrorV4::StopSubstitution)?;
 
         let agent = unique(self.agents.iter().filter(|item| item.gpu_id == kfd.gpu_id))
             .map_err(|_| RocgdbMiNativeCorrelationErrorV4::DeviceSubstitution)?;
@@ -629,8 +653,7 @@ impl RocgdbMiNativeCorrelationAdapterV4 {
                 .filter(|item| item.queue_id == kfd.queue_id),
         )
         .map_err(|_| RocgdbMiNativeCorrelationErrorV4::QueueSubstitution)?;
-        if queue.agent_id != agent.id.raw
-            || queue.id.inferior != agent.id.inferior
+        if queue.id.inferior != agent.id.inferior
             || queue.target_agent != agent.id.local
             || queue.target_queue != queue.id.local
         {
@@ -642,8 +665,7 @@ impl RocgdbMiNativeCorrelationAdapterV4 {
                 .filter(|item| item.packet_id == kfd.packet_id),
         )
         .map_err(|_| RocgdbMiNativeCorrelationErrorV4::PacketSubstitution)?;
-        if dispatch.queue_id != queue.id.raw
-            || dispatch.id.inferior != queue.id.inferior
+        if dispatch.id.inferior != queue.id.inferior
             || dispatch.target_agent != queue.target_agent
             || dispatch.target_queue != queue.target_queue
             || dispatch.target_dispatch != dispatch.id.local
@@ -659,11 +681,22 @@ impl RocgdbMiNativeCorrelationAdapterV4 {
                 && item.target_dispatch == dispatch.target_dispatch
         }))
         .map_err(|_| RocgdbMiNativeCorrelationErrorV4::ThreadSubstitution)?;
-        validate_workgroup_scope(thread, kfd.grid, kfd.workgroup)?;
+        let actual_workgroup = validate_workgroup_scope(thread, kfd.grid, kfd.workgroup)?;
         let wave_width = self.lanes.len();
         if !matches!(wave_width, 32 | 64) {
             return Err(RocgdbMiNativeCorrelationErrorV4::CountOutOfRange);
         }
+        // `validate_geometry` already bounds the nominal workgroup to 1024;
+        // keep this derived edge extent independently checked.
+        let actual_volume = actual_workgroup
+            .into_iter()
+            .try_fold(1_u32, u32::checked_mul)
+            .ok_or(RocgdbMiNativeCorrelationErrorV4::GeometrySubstitution)?;
+        let wave_start = thread
+            .wave_in_workgroup
+            .checked_mul(u32::try_from(wave_width).expect("bounded wave width"))
+            .filter(|start| *start < actual_volume)
+            .ok_or(RocgdbMiNativeCorrelationErrorV4::ThreadSubstitution)?;
         let mut lanes = self.lanes.iter().collect::<Vec<_>>();
         lanes.sort_by_key(|lane| lane.lane);
         let mut output_lanes = Vec::with_capacity(wave_width);
@@ -677,12 +710,13 @@ impl RocgdbMiNativeCorrelationAdapterV4 {
             {
                 return Err(RocgdbMiNativeCorrelationErrorV4::LaneSubstitution);
             }
-            let linear = linear_workitem(lane.workitem, kfd.workgroup)?;
-            let expected_linear = thread
-                .workgroup_thread_index
+            let linear = linear_workitem(lane.workitem, actual_workgroup)?;
+            let expected_linear = wave_start
                 .checked_add(u32::from(lane.lane))
                 .ok_or(RocgdbMiNativeCorrelationErrorV4::LaneSubstitution)?;
-            if linear != expected_linear {
+            if linear != expected_linear
+                || lane.state == LaneStateV4::Active && expected_linear >= actual_volume
+            {
                 return Err(RocgdbMiNativeCorrelationErrorV4::LaneSubstitution);
             }
             let active = match lane.state {
@@ -717,6 +751,7 @@ impl RocgdbMiNativeCorrelationAdapterV4 {
                     b"relative-pc",
                     &[
                         &thread.evidence.as_bytes(),
+                        &stop.as_bytes(),
                         &code.artifact.digest.as_bytes(),
                         &code.artifact.canonical_bytes.to_le_bytes(),
                         &code.load_base.to_le_bytes(),
@@ -740,6 +775,7 @@ impl RocgdbMiNativeCorrelationAdapterV4 {
                 &queue.evidence.as_bytes(),
                 &dispatch.evidence.as_bytes(),
                 &thread.evidence.as_bytes(),
+                &stop.as_bytes(),
             ],
         )?;
         let output = RocgdbMiNativeStoppedStateV4 {
@@ -748,7 +784,10 @@ impl RocgdbMiNativeCorrelationAdapterV4 {
                 b"queue-occurrence-redacted",
                 &[&kfd.queue_occurrence.as_bytes()],
             )?,
-            process_instance_identity: kfd.process_instance,
+            process_instance_identity: self.derive(
+                b"process-instance-redacted",
+                &[&kfd.process_instance.as_bytes()],
+            )?,
             dispatch_identity: kfd.dispatch,
             artifact: kfd.artifact,
             grid: kfd.grid,
@@ -759,8 +798,7 @@ impl RocgdbMiNativeCorrelationAdapterV4 {
                 z: thread.workgroup[2],
             },
             wave_identity: self.derive(b"wave", &[&thread.evidence.as_bytes()])?,
-            wave_ordinal: thread.wave,
-            workgroup_thread_index: thread.workgroup_thread_index,
+            wave_in_workgroup: thread.wave_in_workgroup,
             lanes: output_lanes,
             relative_pc,
             source,
@@ -895,25 +933,72 @@ fn validate_fields(
     Ok(())
 }
 
-fn dimension_list(
-    value: &MiValueV3,
+fn dimension_constant(
+    value: &[u8],
     field: &'static str,
 ) -> Result<[u32; 3], RocgdbMiNativeCorrelationErrorV4> {
-    let values = value
-        .as_values()
+    let inner = value
+        .strip_prefix(b"[")
+        .and_then(|value| value.strip_suffix(b"]"))
         .ok_or(RocgdbMiNativeCorrelationErrorV4::InvalidField(field))?;
+    let values = inner.split(|byte| *byte == b',').collect::<Vec<_>>();
     if values.is_empty() || values.len() > 3 {
         return Err(RocgdbMiNativeCorrelationErrorV4::InvalidField(field));
     }
     let mut result = [1_u32; 3];
     for (index, value) in values.iter().enumerate() {
-        result[index] = value
-            .as_const()
-            .and_then(parse_decimal::<u32>)
+        result[index] = parse_decimal::<u32>(value)
             .filter(|value| *value != 0)
             .ok_or(RocgdbMiNativeCorrelationErrorV4::InvalidField(field))?;
     }
     Ok(result)
+}
+
+fn validate_deployed_fence_v4(value: &[u8]) -> Result<(), RocgdbMiNativeCorrelationErrorV4> {
+    if value.is_empty() {
+        return Ok(());
+    }
+    let mut previous = None;
+    for token in value.split(|byte| *byte == b'|') {
+        let rank = match token {
+            b"B" => 0,
+            b"Aa" | b"As" => 1,
+            b"Ra" | b"Rs" => 2,
+            _ => return Err(RocgdbMiNativeCorrelationErrorV4::InvalidField("fence")),
+        };
+        if previous.is_some_and(|previous| previous >= rank) {
+            return Err(RocgdbMiNativeCorrelationErrorV4::InvalidField("fence"));
+        }
+        previous = Some(rank);
+    }
+    Ok(())
+}
+
+fn validate_deployed_address_spaces_v4(
+    value: &[u8],
+) -> Result<(), RocgdbMiNativeCorrelationErrorV4> {
+    let value =
+        value
+            .strip_prefix(b"Shared(")
+            .ok_or(RocgdbMiNativeCorrelationErrorV4::InvalidField(
+                "address-spaces",
+            ))?;
+    let close = value.iter().position(|byte| *byte == b')').ok_or(
+        RocgdbMiNativeCorrelationErrorV4::InvalidField("address-spaces"),
+    )?;
+    let (shared, suffix) = value.split_at(close);
+    let private = suffix
+        .strip_prefix(b"), Private(")
+        .and_then(|value| value.strip_suffix(b")"))
+        .ok_or(RocgdbMiNativeCorrelationErrorV4::InvalidField(
+            "address-spaces",
+        ))?;
+    for size in [shared, private] {
+        parse_decimal::<u64>(size).ok_or(RocgdbMiNativeCorrelationErrorV4::InvalidField(
+            "address-spaces",
+        ))?;
+    }
+    Ok(())
 }
 
 fn validate_geometry(
@@ -957,7 +1042,8 @@ fn validate_workgroup_scope(
     thread: &ThreadV4,
     grid: [u32; 3],
     workgroup: [u32; 3],
-) -> Result<(), RocgdbMiNativeCorrelationErrorV4> {
+) -> Result<[u32; 3], RocgdbMiNativeCorrelationErrorV4> {
+    let mut actual = [0_u32; 3];
     for axis in 0..3 {
         let start = thread.workgroup[axis]
             .checked_mul(workgroup[axis])
@@ -965,23 +1051,16 @@ fn validate_workgroup_scope(
         if start >= grid[axis] {
             return Err(RocgdbMiNativeCorrelationErrorV4::ThreadSubstitution);
         }
+        actual[axis] = workgroup[axis].min(grid[axis] - start);
     }
-    let volume = workgroup.into_iter().product::<u32>();
-    if thread.workgroup_thread_index >= volume {
-        return Err(RocgdbMiNativeCorrelationErrorV4::ThreadSubstitution);
-    }
-    Ok(())
+    Ok(actual)
 }
 
 fn linear_workitem(
     workitem: [u32; 3],
     workgroup: [u32; 3],
 ) -> Result<u32, RocgdbMiNativeCorrelationErrorV4> {
-    if workitem
-        .iter()
-        .zip(workgroup)
-        .any(|(item, extent)| *item >= extent)
-    {
+    if workitem[0] >= workgroup[0] || workitem[1] >= workgroup[1] {
         return Err(RocgdbMiNativeCorrelationErrorV4::LaneSubstitution);
     }
     workitem[2]
@@ -1075,7 +1154,7 @@ fn parse_thread_target_id(
         dispatch,
         wave,
         workgroup,
-        workgroup_thread_index: index,
+        wave_in_workgroup: index,
     })
 }
 
@@ -1181,8 +1260,11 @@ fn parse_decimal<T: std::str::FromStr>(bytes: &[u8]) -> Option<T> {
 fn parse_hex_u64(bytes: &[u8]) -> Option<u64> {
     let digits = bytes.strip_prefix(b"0x")?;
     if digits.is_empty()
-        || (digits.len() > 1 && digits[0] == b'0')
-        || !digits.iter().all(u8::is_ascii_hexdigit)
+        || digits.len() > 16
+        || !digits
+            .iter()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+        || (digits.len() != 16 && digits.len() > 1 && digits[0] == b'0')
     {
         return None;
     }
@@ -1280,17 +1362,18 @@ mod tests {
 
     fn fixture(lanes: usize) -> RocgdbMiNativeCorrelationAdapterV4 {
         let mut adapter = RocgdbMiNativeCorrelationAdapterV4::new(identity(1));
+        adapter.bind_stop_identity_v4(identity(9)).unwrap();
         adapter
             .admit_agent_info(b"1^done,agents=[{id=\"1.1\",state=\"A\",target-id=\"AMDGPU Agent (GPUID 35090)\",architecture=\"gfx942\",name=\"MI300X\",cores=\"304\",threads=\"19456\",location=\"0000:01:00.0\"}]\n")
             .unwrap();
         adapter
-            .admit_queue_info(b"2^done,queues=[{id=\"1.2\",agent-id=\"1.1\",target-id=\"AMDGPU Queue 1:2 (QID 7)\",type=\"HSA\",read=\"41\",write=\"42\",size=\"4096\",addr=\"0x1000\"}]\n")
+            .admit_queue_info(b"2^done,queues=[{id=\"1.2\",target-id=\"AMDGPU Queue 1:2 (QID 7)\",type=\"HSA\",read=\"41\",write=\"42\",size=\"4096\",addr=\"0x0000000000001000\"}]\n")
             .unwrap();
         adapter
-            .admit_dispatch_info(b"3^done,dispatches=[{id=\"1.3\",queue-id=\"1.2\",target-id=\"AMDGPU Dispatch 1:2:3 (PKID 41)\",grid=[\"64\",\"1\",\"1\"],workgroup=[\"64\",\"1\",\"1\"]}]\n")
+            .admit_dispatch_info(b"3^done,dispatches=[{id=\"1.3\",target-id=\"AMDGPU Dispatch 1:2:3 (PKID 41)\",grid=\"[64,1,1]\",workgroup=\"[64,1,1]\",fence=\"B|As|Rs\",address-spaces=\"Shared(0), Private(0)\",kernel-desc=\"0x0000000000002000\",kernel-args=\"0x0000000000003000\",completion=\"0x0000000000000000\",kernel-function=\"0x0000000000001000\"}]\n")
             .unwrap();
         adapter
-            .admit_thread_info(b"4^done,threads=[{id=\"9\",target-id=\"AMDGPU Wave 1:2:3:4 (0,0,0)/0\",frame={level=\"0\",addr=\"0x1010\",func=\"kernel\",args=[]},state=\"stopped\"}],current-thread-id=\"9\"\n")
+            .admit_thread_info(b"4^done,threads=[{id=\"9\",target-id=\"AMDGPU Wave 1:2:3:4 (0,0,0)/0\",frame={level=\"0\",addr=\"0x0000000000001010\",func=\"kernel\",args=[]},state=\"stopped\"}],current-thread-id=\"9\"\n")
             .unwrap();
         let lane_tuples = (0..lanes)
             .map(|lane| {
@@ -1384,7 +1467,8 @@ mod tests {
 
     #[test]
     fn exact_hierarchy_correlates_and_redacts_native_identifiers() {
-        let output = correlate(&fixture(64), kfd()).unwrap();
+        let native = kfd();
+        let output = correlate(&fixture(64), native).unwrap();
         assert_eq!(output.lanes.len(), 64);
         assert!(matches!(
             output.lanes[0].active,
@@ -1395,7 +1479,14 @@ mod tests {
             LiveGpuAvailabilityV3::Available { value: false, .. }
         ));
         let json = serde_json::to_string(&output).unwrap();
-        for private in ["35090", "\"queue_id\"", "\"packet_id\"", "0x1010", "0x1000"] {
+        assert_ne!(output.process_instance_identity, native.process_instance);
+        for private in [
+            "35090",
+            "\"queue_id\"",
+            "\"packet_id\"",
+            "0x0000000000001010",
+            "0x0000000000001000",
+        ] {
             assert!(
                 !json.contains(private),
                 "leaked private field {private}: {json}"
@@ -1631,6 +1722,11 @@ mod tests {
     #[test]
     fn rejects_malformed_hierarchy_threads_lanes_and_stream_records() {
         let mut adapter = RocgdbMiNativeCorrelationAdapterV4::new(identity(1));
+        adapter.bind_stop_identity_v4(identity(8)).unwrap();
+        assert_eq!(
+            adapter.bind_stop_identity_v4(identity(9)),
+            Err(RocgdbMiNativeCorrelationErrorV4::StopSubstitution)
+        );
         for line in [
             b"~\"AMDGPU Agent (GPUID 35090)\"\n".as_slice(),
             b"1^done,agents=[{id=\"1.1\",state=\"A\",target-id=\"AMDGPU Agent (GPUID 035090)\"}]\n",
@@ -1650,6 +1746,97 @@ mod tests {
             correlate(&bad_thread, kfd()),
             Err(RocgdbMiNativeCorrelationErrorV4::ThreadSubstitution)
         );
+    }
+
+    #[test]
+    fn deployed_rocgdb_16_3_queue_and_dispatch_schema_is_exact() {
+        let queue = b"2^done,queues=[{id=\"1.2\",target-id=\"AMDGPU Queue 1:2 (QID 7)\",type=\"HSA\",read=\"41\",write=\"42\",size=\"4096\",addr=\"0x00007ffff7ee0000\"}],current-queue-id=\"1.2\"\n";
+        let dispatch = b"3^done,dispatches=[{id=\"1.3\",target-id=\"AMDGPU Dispatch 1:2:3 (PKID 41)\",grid=\"[1024,1,1]\",workgroup=\"[256,1,1]\",fence=\"B|As|Rs\",address-spaces=\"Shared(0), Private(0)\",kernel-desc=\"0x00007ffde7e00740\",kernel-args=\"0x00007fffeff00000\",completion=\"0x0000000000000000\",kernel-function=\"0x00007ffde7e01000\"}],current-dispatch-id=\"1.3\"\n";
+        let mut adapter = RocgdbMiNativeCorrelationAdapterV4::new(identity(1));
+        adapter.bind_stop_identity_v4(identity(9)).unwrap();
+        adapter.admit_queue_info(queue).unwrap();
+        adapter.admit_dispatch_info(dispatch).unwrap();
+
+        let stale_documented = b"3^done,dispatches=[{id=\"1.3\",queue_id=\"1.2\",target-id=\"AMDGPU Dispatch 1:2:3 (PKID 41)\",grid=\"[1024,1,1]\",workgroup=\"[256,1,1]\",fences=[{name=\"Barrier\",abbrev=\"B\"}],address-spaces=[{name=\"Shared\",size=\"0\"},{name=\"Private\",size=\"0\"}],kernel-desc=\"0x00007ffde7e00740\",kernel-args=\"0x00007fffeff00000\",completion=\"0x0000000000000000\",kernel-function=\"0x00007ffde7e01000\"}]\n";
+        let bad_dispatches = [
+            stale_documented.as_slice(),
+            b"3^done,dispatches=[{id=\"1.3\",target-id=\"AMDGPU Dispatch 1:2:3 (PKID 41)\",grid=[\"1024\",\"1\",\"1\"],workgroup=\"[256,1,1]\",fence=\"\",address-spaces=\"Shared(0), Private(0)\",kernel-desc=\"0x00007ffde7e00740\",kernel-args=\"0x00007fffeff00000\",completion=\"0x0000000000000000\",kernel-function=\"0x00007ffde7e01000\"}]\n",
+            b"3^done,dispatches=[{id=\"1.3\",target-id=\"AMDGPU Dispatch 1:2:3 (PKID 41)\",grid=\"[1024,01,1]\",workgroup=\"[256,1,1]\",fence=\"\",address-spaces=\"Shared(0), Private(0)\",kernel-desc=\"0x00007ffde7e00740\",kernel-args=\"0x00007fffeff00000\",completion=\"0x0000000000000000\",kernel-function=\"0x00007ffde7e01000\"}]\n",
+            b"3^done,dispatches=[{id=\"1.3\",target-id=\"AMDGPU Dispatch 1:2:3 (PKID 41)\",grid=\"[1024,1,1,1]\",workgroup=\"[256,1,1]\",fence=\"\",address-spaces=\"Shared(0), Private(0)\",kernel-desc=\"0x00007ffde7e00740\",kernel-args=\"0x00007fffeff00000\",completion=\"0x0000000000000000\",kernel-function=\"0x00007ffde7e01000\"}]\n",
+            b"3^done,dispatches=[{id=\"1.3\",target-id=\"AMDGPU Dispatch 1:2:3 (PKID 41)\",grid=\"[1024,1,1]\",workgroup=\"[256,1,1]\",fence=\"Rs|B\",address-spaces=\"Shared(0), Private(0)\",kernel-desc=\"0x00007ffde7e00740\",kernel-args=\"0x00007fffeff00000\",completion=\"0x0000000000000000\",kernel-function=\"0x00007ffde7e01000\"}]\n",
+            b"3^done,dispatches=[{id=\"1.3\",target-id=\"AMDGPU Dispatch 1:2:3 (PKID 41)\",grid=\"[1024,1,1]\",workgroup=\"[256,1,1]\",fence=\"\",address-spaces=\"Private(0), Shared(0)\",kernel-desc=\"0x00007ffde7e00740\",kernel-args=\"0x00007fffeff00000\",completion=\"0x0000000000000000\",kernel-function=\"0x00007ffde7e01000\"}]\n",
+            b"3^done,dispatches=[{id=\"1.3\",target-id=\"AMDGPU Dispatch 1:2:3 (PKID 41)\",grid=\"[1024,1,1]\",workgroup=\"[256,1,1]\",fence=\"\",address-spaces=\"Shared(0), Private(0)\",kernel-desc=\"0x00007FFDE7E00740\",kernel-args=\"0x00007fffeff00000\",completion=\"0x0000000000000000\",kernel-function=\"0x00007ffde7e01000\"}]\n",
+            b"3^done,dispatches=[{id=\"1.3\",target-id=\"AMDGPU Dispatch 1:2:3 (PKID 41)\",grid=\"[1024,1,1]\",workgroup=\"[256,1,1]\",fence=\"\",address-spaces=\"Shared(0), Private(0)\",kernel-desc=\"0x00007ffde7e00740\",kernel-args=\"0x00007fffeff00000\",completion=\"0x0000000000000000\",kernel-function=\"0x00007ffde7e01000\",unknown=\"x\"}]\n",
+            b"3^done,dispatches=[{id=\"1.3\",id=\"1.4\",target-id=\"AMDGPU Dispatch 1:2:3 (PKID 41)\",grid=\"[1024,1,1]\",workgroup=\"[256,1,1]\",fence=\"\",address-spaces=\"Shared(0), Private(0)\",kernel-desc=\"0x00007ffde7e00740\",kernel-args=\"0x00007fffeff00000\",completion=\"0x0000000000000000\",kernel-function=\"0x00007ffde7e01000\"}]\n",
+        ];
+        for line in bad_dispatches {
+            assert!(
+                adapter.admit_dispatch_info(line).is_err(),
+                "accepted {line:?}"
+            );
+        }
+
+        for line in [
+            b"2^done,queues=[{id=\"1.2\",agent-id=\"1.1\",target-id=\"AMDGPU Queue 1:2 (QID 7)\",type=\"HSA\",size=\"4096\",addr=\"0x00007ffff7ee0000\"}]\n".as_slice(),
+            b"2^done,queues=[{id=\"1.2\",target-id=\"AMDGPU Queue 1:2 (QID 7)\",type=\"HSA\",size=\"4096\",addr=\"0x00007FFFF7EE0000\"}]\n",
+            b"2^done,queues=[{id=\"1.2\",target-id=\"AMDGPU Queue 1:2 (QID 7)\",type=\"HSA\",size=\"4096\",addr=\"0x00000000000001000\"}]\n",
+            b"2^done,queues=[{id=\"1.2\",target-id=\"AMDGPU Queue 1:2 (QID 7)\",type=\"HSA\",size=\"4096\",addr=\"0x00007ffff7ee0000\",unknown=\"x\"}]\n",
+        ] {
+            assert!(adapter.admit_queue_info(line).is_err(), "accepted {line:?}");
+        }
+    }
+
+    #[test]
+    fn wave_one_correlates_partial_multidimensional_edge_workgroup() {
+        let mut adapter = RocgdbMiNativeCorrelationAdapterV4::new(identity(1));
+        adapter.bind_stop_identity_v4(identity(9)).unwrap();
+        adapter
+            .admit_agent_info(b"1^done,agents=[{id=\"1.1\",state=\"A\",target-id=\"AMDGPU Agent (GPUID 35090)\",architecture=\"gfx942\",name=\"MI300X\",cores=\"304\",threads=\"19456\",location=\"0000:01:00.0\"}]\n")
+            .unwrap();
+        adapter
+            .admit_queue_info(b"2^done,queues=[{id=\"1.2\",target-id=\"AMDGPU Queue 1:2 (QID 7)\",type=\"HSA\",read=\"41\",write=\"42\",size=\"4096\",addr=\"0x0000000000001000\"}]\n")
+            .unwrap();
+        adapter
+            .admit_dispatch_info(b"3^done,dispatches=[{id=\"1.3\",target-id=\"AMDGPU Dispatch 1:2:3 (PKID 41)\",grid=\"[30,15,1]\",workgroup=\"[16,8,1]\",fence=\"\",address-spaces=\"Shared(0), Private(0)\",kernel-desc=\"0x0000000000002000\",kernel-args=\"0x0000000000003000\",completion=\"0x0000000000000000\",kernel-function=\"0x0000000000001000\"}]\n")
+            .unwrap();
+        adapter
+            .admit_thread_info(b"4^done,threads=[{id=\"9\",target-id=\"AMDGPU Wave 1:2:3:4 (1,1,0)/1\",frame={level=\"0\",addr=\"0x0000000000001010\",func=\"kernel\",args=[]},state=\"stopped\"}],current-thread-id=\"9\"\n")
+            .unwrap();
+        let lanes = (0_u32..64)
+            .map(|lane| {
+                let flat = 64 + lane;
+                let x = flat % 14;
+                let y = (flat / 14) % 7;
+                let z = flat / 98;
+                let state = if flat < 98 { "A" } else { "I" };
+                format!(
+                    "{{id=\"{lane}\",state=\"{state}\",target-id=\"AMDGPU Lane 1:2:3:4/{lane} (1,1,0)[{x},{y},{z}]\"}}"
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        adapter
+            .admit_lane_info(format!("5^done,lanes=[{lanes}]\n").as_bytes())
+            .unwrap();
+        let native = KfdPublishedDispatchBindingV4 {
+            grid: [30, 15, 1],
+            workgroup: [16, 8, 1],
+            ..kfd()
+        };
+        let output = correlate(&adapter, native).unwrap();
+        assert_eq!(output.wave_in_workgroup, 1);
+        assert_eq!(
+            output.workgroup_coordinate,
+            RocgdbMiWorkgroupCoordinateV4 { x: 1, y: 1, z: 0 }
+        );
+        assert!(matches!(
+            output.lanes[33].active,
+            LiveGpuAvailabilityV3::Available { value: true, .. }
+        ));
+        assert!(matches!(
+            output.lanes[34].active,
+            LiveGpuAvailabilityV3::Available { value: false, .. }
+        ));
     }
 
     #[test]

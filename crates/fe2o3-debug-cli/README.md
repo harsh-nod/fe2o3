@@ -302,6 +302,18 @@ dispatch generation, and geometry before workgroup, wave, or lane coordinates
 are returned. AMD `target-id` values use a strict versioned grammar; MI stream
 text and `details` are never evidence.
 
+The structured tuple grammar is pinned to the emitter in the installed
+ROCm 7.2.4 `rocm-gdb` source. Queue tuples have no `agent-id`; dispatch tuples
+have no queue field, use constant strings for `grid`, `workgroup`, `fence`, and
+`address-spaces`, and use zero-padded core addresses. The manual bundled with
+that release contains a stale incompatible example with `queue_id`, plural
+`fences`, and list-valued address spaces; V4 rejects that example and all
+hybrids. Queue association comes only from the strict target-id hierarchy and
+the independent KFD publication join. A capture also pins one exact native stop
+generation across all five queries and rejects intervening running, exit, or
+new-stop events. Wave coordinates use the target's wave-in-workgroup ordinal
+and the actual partial edge-workgroup extents.
+
 Native GPU, queue, packet, address, descriptor, PID, and target-id values remain
 private. The response contains only derived identities, logical coordinates,
 and capability truth. The code load base is an explicit caller admission and

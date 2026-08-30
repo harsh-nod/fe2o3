@@ -21,6 +21,19 @@ pub(crate) struct RocgdbMiNativeSpawnProvisionV4<'a> {
     pub(crate) debugger_pid: u32,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct RocgdbMiNativeStopPinV4 {
+    revision: u64,
+    identity: OpaqueIdentityV1,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RocgdbMiNativeStopTransitionV4 {
+    None,
+    Clear,
+    Stopped,
+}
+
 enum ReaderItemV3 {
     Line(Vec<u8>),
     TooLarge,
@@ -49,6 +62,7 @@ pub struct RocgdbMiProcessV3 {
     pending_events: VecDeque<RocgdbMiExecutionEventV3>,
     inferior_process: Option<OwnedFd>,
     inferior_pid: Option<u32>,
+    native_stop_v4: Option<RocgdbMiNativeStopPinV4>,
     inferior_ownership: InferiorOwnershipV3,
 }
 
@@ -122,6 +136,7 @@ impl RocgdbMiProcessV3 {
             pending_events: VecDeque::new(),
             inferior_process: None,
             inferior_pid: None,
+            native_stop_v4: None,
             inferior_ownership: InferiorOwnershipV3::Unknown,
         })
     }
@@ -208,6 +223,7 @@ impl RocgdbMiProcessV3 {
             pending_events: VecDeque::new(),
             inferior_process: None,
             inferior_pid: None,
+            native_stop_v4: None,
             inferior_ownership: InferiorOwnershipV3::Unknown,
         })
     }
@@ -687,9 +703,12 @@ impl RocgdbMiProcessV3 {
             if !authority_observed {
                 self.observe_process_authority(&record)?;
             }
+            let transition = native_stop_transition_v4(&record);
             if let Some(event) = self.adapter.ingest_record(record, &line)? {
+                self.apply_native_stop_transition_v4(transition, &line)?;
                 return Ok(event);
             }
+            self.apply_native_stop_transition_v4(transition, &line)?;
         }
     }
 
@@ -716,9 +735,12 @@ impl RocgdbMiProcessV3 {
         timeout: Duration,
     ) -> Result<(), crate::rocgdb_mi_v4::RocgdbMiNativeQueryErrorV4> {
         let deadline = deadline(timeout)?;
+        let stop = native_stop_pin_v4(&self.adapter, self.native_stop_v4)?;
+        adapter.bind_stop_identity_v4(stop.identity)?;
         macro_rules! collect {
             ($command:literal, $admit:ident) => {{
                 let (class, _) = self.send_command($command, deadline)?;
+                validate_native_stop_pin_v4(&self.adapter, self.native_stop_v4, stop)?;
                 if class != "done" {
                     return Err(RocgdbMiAdapterErrorV3::BackendRejected.into());
                 }
@@ -1370,6 +1392,7 @@ impl RocgdbMiProcessV3 {
                         self.deferred_records.push_back((record, line));
                         continue;
                     }
+                    let transition = native_stop_transition_v4(&record);
                     let event = match self.adapter.ingest_record(record, &line) {
                         Ok(event) => event,
                         Err(error) => {
@@ -1377,6 +1400,10 @@ impl RocgdbMiProcessV3 {
                             return Err(error);
                         }
                     };
+                    if let Err(error) = self.apply_native_stop_transition_v4(transition, &line) {
+                        self.pending_token = None;
+                        return Err(error);
+                    }
                     if let Some(event) = event {
                         if self.pending_events.len() >= self.adapter.limits.max_pending_events {
                             self.pending_token = None;
@@ -1460,6 +1487,82 @@ impl RocgdbMiProcessV3 {
         self.inferior_process = Some(unsafe { OwnedFd::from_raw_fd(descriptor as i32) });
         self.inferior_pid = Some(pid as u32);
         Ok(())
+    }
+
+    pub(crate) fn native_v4_stop_is_current(&self) -> bool {
+        native_stop_pin_v4(&self.adapter, self.native_stop_v4).is_ok()
+    }
+
+    fn apply_native_stop_transition_v4(
+        &mut self,
+        transition: RocgdbMiNativeStopTransitionV4,
+        evidence: &[u8],
+    ) -> Result<(), RocgdbMiAdapterErrorV3> {
+        match transition {
+            RocgdbMiNativeStopTransitionV4::None => {}
+            RocgdbMiNativeStopTransitionV4::Clear => self.native_stop_v4 = None,
+            RocgdbMiNativeStopTransitionV4::Stopped => {
+                let mut material = evidence.to_vec();
+                material.extend_from_slice(&self.adapter.revision.to_le_bytes());
+                self.native_stop_v4 = Some(RocgdbMiNativeStopPinV4 {
+                    revision: self.adapter.revision,
+                    identity: self.adapter.derive_identity(b"native-v4-stop", &material)?,
+                });
+            }
+        }
+        Ok(())
+    }
+}
+
+fn native_stop_pin_v4(
+    adapter: &RocgdbMiObservationAdapterV3,
+    native_stop: Option<RocgdbMiNativeStopPinV4>,
+) -> Result<RocgdbMiNativeStopPinV4, RocgdbMiAdapterErrorV3> {
+    match (adapter.state, native_stop) {
+        (ExecutionStateV3::Stopped, Some(stop)) if stop.revision == adapter.revision => Ok(stop),
+        _ => Err(RocgdbMiAdapterErrorV3::SessionNotStopped),
+    }
+}
+
+fn validate_native_stop_pin_v4(
+    adapter: &RocgdbMiObservationAdapterV3,
+    native_stop: Option<RocgdbMiNativeStopPinV4>,
+    expected: RocgdbMiNativeStopPinV4,
+) -> Result<(), RocgdbMiAdapterErrorV3> {
+    if native_stop_pin_v4(adapter, native_stop)? != expected {
+        return Err(RocgdbMiAdapterErrorV3::StaleRevision);
+    }
+    Ok(())
+}
+
+fn native_stop_transition_v4(record: &MiRecordV3) -> RocgdbMiNativeStopTransitionV4 {
+    match record {
+        MiRecordV3::Async {
+            kind: MiAsyncKindV3::Exec,
+            class,
+            results,
+            ..
+        } if class == "stopped" => {
+            if matches!(
+                optional_const(results, "reason"),
+                Some(b"exited" | b"exited-normally" | b"exited-signalled")
+            ) {
+                RocgdbMiNativeStopTransitionV4::Clear
+            } else {
+                RocgdbMiNativeStopTransitionV4::Stopped
+            }
+        }
+        MiRecordV3::Async {
+            kind: MiAsyncKindV3::Exec,
+            class,
+            ..
+        } if class == "running" => RocgdbMiNativeStopTransitionV4::Clear,
+        MiRecordV3::Async {
+            kind: MiAsyncKindV3::Notify,
+            class,
+            ..
+        } if class == "thread-group-exited" => RocgdbMiNativeStopTransitionV4::Clear,
+        _ => RocgdbMiNativeStopTransitionV4::None,
     }
 }
 
@@ -1774,5 +1877,63 @@ mod tests {
                 revision: before + 1
             })
         );
+    }
+
+    #[test]
+    fn native_v4_stop_pin_rejects_running_replay_and_substitution() {
+        for (line, expected) in [
+            (
+                b"*stopped,reason=\"signal-received\",thread-id=\"9\"\n".as_slice(),
+                RocgdbMiNativeStopTransitionV4::Stopped,
+            ),
+            (
+                b"*running,thread-id=\"9\"\n".as_slice(),
+                RocgdbMiNativeStopTransitionV4::Clear,
+            ),
+            (
+                b"*stopped,reason=\"exited-normally\"\n".as_slice(),
+                RocgdbMiNativeStopTransitionV4::Clear,
+            ),
+        ] {
+            let record = parse_mi_record_v3(line, MiParserLimitsV3::default()).unwrap();
+            assert_eq!(native_stop_transition_v4(&record), expected);
+        }
+        let (mut adapter, _) = stopped_adapter();
+        let original = RocgdbMiNativeStopPinV4 {
+            revision: adapter.revision(),
+            identity: identity(9),
+        };
+        native_stop_pin_v4(&adapter, Some(original)).unwrap();
+        validate_native_stop_pin_v4(&adapter, Some(original), original).unwrap();
+        assert!(matches!(
+            validate_native_stop_pin_v4(
+                &adapter,
+                Some(original),
+                RocgdbMiNativeStopPinV4 {
+                    identity: identity(99),
+                    ..original
+                }
+            ),
+            Err(RocgdbMiAdapterErrorV3::StaleRevision)
+        ));
+
+        adapter
+            .ingest_line(b"*running,thread-id=\"9\"\n")
+            .expect("running transition");
+        assert!(matches!(
+            validate_native_stop_pin_v4(&adapter, None, original),
+            Err(RocgdbMiAdapterErrorV3::SessionNotStopped)
+        ));
+        adapter
+            .ingest_line(b"*stopped,reason=\"signal-received\",thread-id=\"9\"\n")
+            .expect("new stop");
+        let replacement = RocgdbMiNativeStopPinV4 {
+            revision: adapter.revision(),
+            identity: identity(10),
+        };
+        assert!(matches!(
+            validate_native_stop_pin_v4(&adapter, Some(replacement), original),
+            Err(RocgdbMiAdapterErrorV3::StaleRevision)
+        ));
     }
 }

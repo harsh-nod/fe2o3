@@ -129,8 +129,7 @@ pub struct RocgdbMiNativeStoppedStateV4 {
     pub workgroup: [u32; 3],
     pub workgroup_coordinate: RocgdbMiWorkgroupCoordinateV4,
     pub wave_identity: OpaqueIdentityV1,
-    pub wave_ordinal: u32,
-    pub workgroup_thread_index: u32,
+    pub wave_in_workgroup: u32,
     pub lanes: Vec<RocgdbMiNativeLaneV4>,
     pub relative_pc: LiveGpuAvailabilityV3<LiveGpuRelativePcV3>,
     pub source: LiveGpuAvailabilityV3<LiveGpuSourceSpanV3>,
@@ -157,6 +156,33 @@ impl RocgdbMiNativeStoppedStateV4 {
         {
             return Err(RocgdbMiNativeProtocolErrorV4::InvalidGeometry);
         }
+        self.workgroup
+            .into_iter()
+            .try_fold(1_u32, u32::checked_mul)
+            .filter(|volume| *volume <= 1_024)
+            .ok_or(RocgdbMiNativeProtocolErrorV4::InvalidGeometry)?;
+        let mut actual_workgroup = [0_u32; 3];
+        for (axis, extent) in actual_workgroup.iter_mut().enumerate() {
+            let start = self
+                .workgroup_coordinate
+                .component(axis)
+                .checked_mul(self.workgroup[axis]);
+            let Some(start) = start.filter(|start| *start < self.grid[axis]) else {
+                return Err(RocgdbMiNativeProtocolErrorV4::InvalidGeometry);
+            };
+            *extent = self.workgroup[axis].min(self.grid[axis] - start);
+        }
+        let actual_volume = actual_workgroup
+            .into_iter()
+            .try_fold(1_u32, u32::checked_mul)
+            .ok_or(RocgdbMiNativeProtocolErrorV4::InvalidGeometry)?;
+        if self
+            .wave_in_workgroup
+            .checked_mul(u32::try_from(wave_width).expect("bounded wave width"))
+            .is_none_or(|start| start >= actual_volume)
+        {
+            return Err(RocgdbMiNativeProtocolErrorV4::InvalidGeometry);
+        }
         for (expected, lane) in self.lanes.iter().enumerate() {
             if usize::from(lane.lane_index) != expected {
                 return Err(RocgdbMiNativeProtocolErrorV4::InvalidLane);
@@ -176,6 +202,17 @@ impl RocgdbMiNativeStoppedStateV4 {
     }
 }
 
+impl RocgdbMiWorkgroupCoordinateV4 {
+    const fn component(self, axis: usize) -> u32 {
+        match axis {
+            0 => self.x,
+            1 => self.y,
+            2 => self.z,
+            _ => unreachable!(),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RocgdbMiNativeProtocolErrorV4 {
@@ -184,4 +221,93 @@ pub enum RocgdbMiNativeProtocolErrorV4 {
     InvalidLane,
     InvalidOrigins,
     InvalidProbe,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{LiveGpuEvidenceRefV3, LiveGpuTruthOriginV3, LiveGpuTruthV3};
+
+    fn identity(seed: u8) -> OpaqueIdentityV1 {
+        OpaqueIdentityV1::new([seed; 32]).unwrap()
+    }
+
+    fn unavailable<T>() -> LiveGpuAvailabilityV3<T> {
+        LiveGpuAvailabilityV3::Unavailable {
+            reason: crate::LiveGpuUnavailableReasonV3::NotCaptured,
+            truth: LiveGpuTruthV3 {
+                origin: LiveGpuTruthOriginV3::Unavailable,
+                evidence: Vec::<LiveGpuEvidenceRefV3>::new(),
+            },
+        }
+    }
+
+    fn state() -> RocgdbMiNativeStoppedStateV4 {
+        RocgdbMiNativeStoppedStateV4 {
+            association_identity: identity(1),
+            queue_occurrence_identity: identity(2),
+            process_instance_identity: identity(3),
+            dispatch_identity: identity(4),
+            artifact: LiveGpuContentIdentityV3 {
+                digest: identity(5),
+                canonical_bytes: 64,
+            },
+            grid: [32, 1, 1],
+            workgroup: [32, 1, 1],
+            workgroup_coordinate: RocgdbMiWorkgroupCoordinateV4 { x: 0, y: 0, z: 0 },
+            wave_identity: identity(6),
+            wave_in_workgroup: 0,
+            lanes: (0_u16..32)
+                .map(|lane| RocgdbMiNativeLaneV4 {
+                    lane_identity: identity(u8::try_from(lane + 7).unwrap()),
+                    lane_index: lane,
+                    workitem: RocgdbMiWorkitemCoordinateV4 {
+                        x: u32::from(lane),
+                        y: 0,
+                        z: 0,
+                    },
+                    active: unavailable(),
+                })
+                .collect(),
+            relative_pc: unavailable(),
+            source: unavailable(),
+            registers: unavailable(),
+            memory: unavailable(),
+            origins: vec![
+                RocgdbMiNativeCorrelationOriginV4::TargetKfdPublicationObservation,
+                RocgdbMiNativeCorrelationOriginV4::RocgdbStructuredObservation,
+                RocgdbMiNativeCorrelationOriginV4::ExplicitCodeObjectAdmission,
+                RocgdbMiNativeCorrelationOriginV4::Correlated,
+            ],
+        }
+    }
+
+    #[test]
+    fn hostile_max_geometry_decode_and_validate_is_panic_total() {
+        let mut hostile = state();
+        hostile.grid = [u32::MAX; 3];
+        hostile.workgroup = [u32::MAX; 3];
+        let encoded = serde_json::to_vec(&hostile).unwrap();
+        let decoded: RocgdbMiNativeStoppedStateV4 = serde_json::from_slice(&encoded).unwrap();
+        let result = std::panic::catch_unwind(|| decoded.validate());
+        assert!(matches!(
+            result,
+            Ok(Err(RocgdbMiNativeProtocolErrorV4::InvalidGeometry))
+        ));
+
+        let mut hostile_coordinate = state();
+        hostile_coordinate.grid = [u32::MAX; 3];
+        hostile_coordinate.workgroup = [2, 2, 2];
+        hostile_coordinate.workgroup_coordinate = RocgdbMiWorkgroupCoordinateV4 {
+            x: u32::MAX,
+            y: u32::MAX,
+            z: u32::MAX,
+        };
+        let encoded = serde_json::to_vec(&hostile_coordinate).unwrap();
+        let decoded: RocgdbMiNativeStoppedStateV4 = serde_json::from_slice(&encoded).unwrap();
+        assert!(matches!(
+            std::panic::catch_unwind(|| decoded.validate()),
+            Ok(Err(RocgdbMiNativeProtocolErrorV4::InvalidGeometry))
+        ));
+    }
 }

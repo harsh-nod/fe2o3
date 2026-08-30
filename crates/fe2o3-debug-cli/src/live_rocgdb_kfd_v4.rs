@@ -306,7 +306,10 @@ fn run_inner(
                 ));
             }
         }
-        if stopped && declaration.is_some() && publication.is_some()
+        if stopped
+            && process.native_v4_stop_is_current()
+            && declaration.is_some()
+            && publication.is_some()
             || telemetry_terminal
             || mi_terminal && publication.is_some()
         {
@@ -320,9 +323,14 @@ fn run_inner(
             }
             match process.next_event(poll) {
                 Ok(RocgdbMiExecutionEventV3::Stopped { .. }) => stopped = true,
+                Ok(RocgdbMiExecutionEventV3::Unavailable { .. })
+                    if process.native_v4_stop_is_current() =>
+                {
+                    stopped = true
+                }
                 Ok(RocgdbMiExecutionEventV3::Exited { .. })
                 | Ok(RocgdbMiExecutionEventV3::Unavailable { .. }) => mi_terminal = true,
-                Ok(RocgdbMiExecutionEventV3::Running { .. }) => {}
+                Ok(RocgdbMiExecutionEventV3::Running { .. }) => stopped = false,
                 Err(RocgdbMiAdapterErrorV3::Timeout) => {}
                 Err(_) => mi_terminal = true,
             }
@@ -330,6 +338,7 @@ fn run_inner(
             std::thread::sleep(Duration::from_millis(2));
         }
     }
+    stopped &= process.native_v4_stop_is_current();
     let reason = native_collection_unavailable_reason_v4(stopped, &declaration, &publication);
     if let Some(reason) = reason {
         return Ok(unavailable(probe, reason));
