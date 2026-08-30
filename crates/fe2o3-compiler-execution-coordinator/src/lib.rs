@@ -54,6 +54,24 @@ use rustix::net::{
 };
 use rustix::pipe::{PipeFlags, pipe_with};
 
+#[allow(unsafe_code)]
+mod inherited;
+
+pub use inherited::{
+    COMPILER_EXECUTION_COORDINATOR_ANCHOR_DAEMON_FD_V1,
+    COMPILER_EXECUTION_COORDINATOR_ANCHOR_DEPLOYMENT_FD_V1,
+    COMPILER_EXECUTION_COORDINATOR_ANCHOR_HELPER_FD_V1,
+    COMPILER_EXECUTION_COORDINATOR_ANCHOR_KEY_SEED_FD_V1,
+    COMPILER_EXECUTION_COORDINATOR_ANCHOR_PROVISIONING_FD_V1,
+    COMPILER_EXECUTION_COORDINATOR_ANCHOR_ROOT_FD_V1, COMPILER_EXECUTION_COORDINATOR_ISSUER_FD_V1,
+    COMPILER_EXECUTION_COORDINATOR_ISSUER_KEY_SEED_FD_V1,
+    COMPILER_EXECUTION_COORDINATOR_LAUNCHER_FD_V1, COMPILER_EXECUTION_COORDINATOR_LISTENER_FD_V1,
+    COMPILER_EXECUTION_COORDINATOR_POLICY_FD_V1,
+    COMPILER_EXECUTION_COORDINATOR_SUPERVISOR_DEPLOYMENT_FD_V1,
+    COMPILER_EXECUTION_COORDINATOR_SUPERVISOR_FD_V1,
+    COMPILER_EXECUTION_COORDINATOR_SUPERVISOR_ROOT_FD_V1, InheritedCompilerExecutionDeploymentV1,
+};
+
 const MAX_DEPLOYMENT_TIMEOUT_V1: Duration = Duration::from_secs(120);
 const POLL_INTERVAL_V1: Duration = Duration::from_millis(1);
 
@@ -837,6 +855,29 @@ fn io_error(operation: &'static str, source: io::Error) -> CompilerExecutionCoor
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum CompilerExecutionCoordinatorErrorV1 {
+    /// One fixed root-entrypoint descriptor was absent, inheritable-state changed, or inaccessible.
+    InheritedDescriptor {
+        /// Fixed descriptor number whose admission failed.
+        descriptor: i32,
+        /// Exact descriptor operation that failed.
+        operation: &'static str,
+        /// Kernel failure.
+        source: io::Error,
+    },
+    /// One root-provisioned source has invalid type, access, ownership, mode, links, metadata, or bytes.
+    ProvisionedInput {
+        /// Stable deployment role.
+        role: &'static str,
+        /// Stable rejection reason.
+        reason: &'static str,
+    },
+    /// One canonical root-provisioned record failed strict decoding.
+    ProvisionedRecord {
+        /// Stable deployment role.
+        role: &'static str,
+        /// Decoder failure.
+        reason: String,
+    },
     /// The root coordinator PID changed after preparation.
     CoordinatorChanged,
     /// The deployment service UID/GID is invalid.
@@ -857,6 +898,8 @@ pub enum CompilerExecutionCoordinatorErrorV1 {
     PolicyMismatch,
     /// The root-owned signing-key template failed continuity.
     KeyTemplate(String),
+    /// The root-owned external-anchor signing-key template failed admission.
+    ExternalAnchorKeyTemplate(String),
     /// Signing-key template and issuer policy disagree.
     KeyMismatch,
     /// Persistent listener/root admission or continuity failed.
@@ -903,6 +946,23 @@ pub enum CompilerExecutionCoordinatorErrorV1 {
 impl fmt::Display for CompilerExecutionCoordinatorErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::InheritedDescriptor {
+                descriptor,
+                operation,
+                source,
+            } => write!(
+                formatter,
+                "coordinator descriptor {descriptor} failed during {operation}: {source}"
+            ),
+            Self::ProvisionedInput { role, reason } => {
+                write!(formatter, "invalid root-provisioned {role}: {reason}")
+            }
+            Self::ProvisionedRecord { role, reason } => {
+                write!(
+                    formatter,
+                    "invalid root-provisioned {role} record: {reason}"
+                )
+            }
             Self::CoordinatorChanged => formatter.write_str("root coordinator PID changed"),
             Self::Credentials(error) => {
                 write!(formatter, "invalid supervisor credentials: {error}")
@@ -929,6 +989,12 @@ impl fmt::Display for CompilerExecutionCoordinatorErrorV1 {
             }
             Self::KeyTemplate(error) => {
                 write!(formatter, "root signing-key template failed: {error}")
+            }
+            Self::ExternalAnchorKeyTemplate(error) => {
+                write!(
+                    formatter,
+                    "root external-anchor key template failed: {error}"
+                )
             }
             Self::KeyMismatch => {
                 formatter.write_str("root signing-key template names another policy key")
@@ -975,6 +1041,7 @@ impl fmt::Display for CompilerExecutionCoordinatorErrorV1 {
 impl Error for CompilerExecutionCoordinatorErrorV1 {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
+            Self::InheritedDescriptor { source, .. } => Some(source),
             Self::Credentials(error) => Some(error),
             Self::Executable(error) => Some(error),
             Self::ServiceInputs(error) => Some(error),

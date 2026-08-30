@@ -838,7 +838,11 @@ dependencies = [
  "fe2o3-protected-service-profile",
  "fe2o3-protected-service-spawn",
  "fe2o3-protected-static-executable",
+ "libc",
  "rustix",
+ "subtle",
+ "tempfile",
+ "zeroize",
 ]
 
 [[package]]
