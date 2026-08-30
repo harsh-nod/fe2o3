@@ -8562,9 +8562,8 @@ fn source_induction_update_v1<'a>(
             };
             let producer_block = authenticated.definition.block;
             let producer_statement = authenticated.definition.statement;
-            let SemanticStatementKindV1::Assign(definition) = function.blocks()[producer_block]
-                .statements()[producer_statement]
-                .kind()
+            let SemanticStatementKindV1::Assign(definition) =
+                function.blocks()[producer_block].statements()[producer_statement].kind()
             else {
                 return Err(ProductionRankedProjectionErrorV1::Incomplete(
                     "a checked induction result has no assignment definition",
@@ -9574,10 +9573,8 @@ impl<'a> SemanticAssertProofsV1<'a> {
         if !self.assignment_dominates_use(definition, use_block, use_statement)? {
             return Ok(None);
         }
-        let SemanticStatementKindV1::Assign(assignment) = self.function.blocks()
-            [definition.block]
-            .statements()[definition.statement]
-            .kind()
+        let SemanticStatementKindV1::Assign(assignment) =
+            self.function.blocks()[definition.block].statements()[definition.statement].kind()
         else {
             return Ok(None);
         };
@@ -9635,8 +9632,8 @@ impl<'a> SemanticAssertProofsV1<'a> {
                 continue;
             }
             let success = target.target().index() as usize;
-            let assertion_dominates = assertion_block != use_block
-                && self.block_dominates(assertion_block, use_block)?;
+            let assertion_dominates =
+                assertion_block != use_block && self.block_dominates(assertion_block, use_block)?;
             let success_dominates =
                 success == use_block || self.block_dominates(success, use_block)?;
             if assertion_dominates && success_dominates {
@@ -9666,12 +9663,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
         else {
             unreachable!("authenticated checked arithmetic assertion changed kind")
         };
-        self.proves_checked_overflow_assert_v1(
-            condition,
-            *expected,
-            message,
-            value.assertion_block,
-        )
+        self.proves_checked_overflow_assert_v1(condition, *expected, message, value.assertion_block)
     }
 
     fn proves_authenticated_checked_binary_total_for_pipeline_v1(
@@ -9928,10 +9920,8 @@ impl<'a> SemanticAssertProofsV1<'a> {
             Some(1) => {
                 if let Some(site) = self.assignments.get(local).copied().flatten() {
                     if self.assignment_dominates_use(site, use_block, use_statement)? {
-                        let SemanticStatementKindV1::Assign(assignment) = self.function.blocks()
-                            [site.block]
-                            .statements()[site.statement]
-                            .kind()
+                        let SemanticStatementKindV1::Assign(assignment) =
+                            self.function.blocks()[site.block].statements()[site.statement].kind()
                         else {
                             visiting.remove(&local);
                             return Err(ProductionRankedProjectionErrorV1::Unsupported(
@@ -10070,12 +10060,10 @@ impl<'a> SemanticAssertProofsV1<'a> {
                 minimum: left.minimum / right.maximum,
                 maximum: left.maximum / right.minimum,
             }),
-            SemanticBinaryOpV1::Remainder if right.minimum != 0 => {
-                Some(UnsignedRangeProofV1 {
-                    minimum: 0,
-                    maximum: left.maximum.min(right.maximum - 1),
-                })
-            }
+            SemanticBinaryOpV1::Remainder if right.minimum != 0 => Some(UnsignedRangeProofV1 {
+                minimum: 0,
+                maximum: left.maximum.min(right.maximum - 1),
+            }),
             SemanticBinaryOpV1::Equal => Some(
                 if left.maximum < right.minimum || right.maximum < left.minimum {
                     UnsignedRangeProofV1::exact(0)
@@ -10330,11 +10318,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
                 continue;
             };
             if site.block != switch_block
-                || !self.assignment_dominates_use(
-                    site,
-                    switch_block,
-                    block.statements().len(),
-                )?
+                || !self.assignment_dominates_use(site, switch_block, block.statements().len())?
             {
                 continue;
             }
@@ -10351,8 +10335,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
             else {
                 continue;
             };
-            let Some(left_local) =
-                simple_operand_local(left).map(|value| value.index() as usize)
+            let Some(left_local) = simple_operand_local(left).map(|value| value.index() as usize)
             else {
                 continue;
             };
@@ -10367,12 +10350,8 @@ impl<'a> SemanticAssertProofsV1<'a> {
             {
                 continue;
             }
-            let Some(bound) = self.range_of_operand(
-                right,
-                site.block,
-                site.statement,
-                range_visiting,
-            )?
+            let Some(bound) =
+                self.range_of_operand(right, site.block, site.statement, range_visiting)?
             else {
                 continue;
             };
@@ -11213,11 +11192,7 @@ impl<'a> PureUniformIndexProjectorV1<'a> {
             }
             SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place) => {
                 if tuple_field_operand_local_v1(operand, 0).is_some() {
-                    return self.resolve_checked_result_value(
-                        operand,
-                        use_block,
-                        use_statement,
-                    );
+                    return self.resolve_checked_result_value(operand, use_block, use_statement);
                 }
                 if !place.projections().is_empty() {
                     return Ok(None);
@@ -26153,11 +26128,8 @@ mod tests {
             SemanticPlaceV1::new(
                 SemanticLocalIdV1::from_index(5),
                 vec![
-                    SemanticProjectionV1::new(
-                        SemanticProjectionKindV1::Field(field),
-                        field_type,
-                    )
-                    .unwrap(),
+                    SemanticProjectionV1::new(SemanticProjectionKindV1::Field(field), field_type)
+                        .unwrap(),
                 ],
                 field_type,
             )
