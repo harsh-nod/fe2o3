@@ -35,7 +35,10 @@ pub const MAX_EXECUTABLE_ADDRESS_SPACE: u32 = 6;
 pub const GFX942_TARGET_TRIPLE: &str = "amdgcn-amd-amdhsa";
 pub const GFX942_TARGET_CPU: &str = "gfx942";
 pub const GFX942_TARGET_FEATURES: &str = "-wavefrontsize32,+wavefrontsize64";
-pub const GFX942_TARGET_DATA_LAYOUT: &str = fe2o3_amd_target::PRODUCTION_AMDHSA_LLVM_DATA_LAYOUT_V1;
+/// Historical executable MIR V1 layout. This frozen wire contract follows the live rustc target
+/// spelling and is distinct from the LLVM 22 Worker input layout.
+pub const GFX942_TARGET_DATA_LAYOUT: &str =
+    fe2o3_amd_target::PRODUCTION_AMDHSA_RUSTC_DATA_LAYOUT_V1;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum MirExecutableVersion {

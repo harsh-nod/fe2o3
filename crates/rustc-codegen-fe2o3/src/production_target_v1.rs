@@ -2,7 +2,10 @@
 
 use std::fmt;
 
-use fe2o3_amd_target::{PRODUCTION_AMDHSA_LLVM_DATA_LAYOUT_V1, ProductionAmdTargetProfileV1};
+use fe2o3_amd_target::{
+    PRODUCTION_AMDHSA_LLVM22_WORKER_DATA_LAYOUT_V1, PRODUCTION_AMDHSA_RUSTC_DATA_LAYOUT_V1,
+    ProductionAmdTargetProfileV1,
+};
 use rustc_middle::ty::TyCtxt;
 
 use crate::AmdGpuTarget;
@@ -10,9 +13,10 @@ use crate::semantic_layout_bridge::{
     SemanticLayoutBridgeError, SemanticLayoutTargetV1, rustc_semantic_layout_target_v1,
 };
 
-pub(crate) const PRODUCTION_RUSTC_DATA_LAYOUT_V1: &str = PRODUCTION_AMDHSA_LLVM_DATA_LAYOUT_V1;
+pub(crate) const PRODUCTION_RUSTC_DATA_LAYOUT_V1: &str = PRODUCTION_AMDHSA_RUSTC_DATA_LAYOUT_V1;
 /// Exact data layout returned by the pinned upstream LLVM gfx942/gfx950 target machines.
-pub(crate) const PRODUCTION_WORKER_DATA_LAYOUT_V1: &str = PRODUCTION_AMDHSA_LLVM_DATA_LAYOUT_V1;
+pub(crate) const PRODUCTION_WORKER_DATA_LAYOUT_V1: &str =
+    PRODUCTION_AMDHSA_LLVM22_WORKER_DATA_LAYOUT_V1;
 const PRODUCTION_RUSTC_POINTER_WIDTH_V1: u16 = 64;
 
 /// Move-only proof that the live rustc session was the exact production target
@@ -262,12 +266,20 @@ mod tests {
     }
 
     #[test]
-    fn rustc_and_worker_layouts_match_the_measured_target_machine() {
-        assert_eq!(
+    fn rustc_and_worker_layouts_retain_distinct_measured_contracts() {
+        assert_ne!(
             PRODUCTION_RUSTC_DATA_LAYOUT_V1,
             PRODUCTION_WORKER_DATA_LAYOUT_V1
         );
         assert_eq!(
+            PRODUCTION_RUSTC_DATA_LAYOUT_V1,
+            format!("e-m:e-{}", &PRODUCTION_WORKER_DATA_LAYOUT_V1[2..])
+        );
+        assert_eq!(
+            PRODUCTION_RUSTC_DATA_LAYOUT_V1,
+            fe2o3_compiler_ffi::EXTERNAL_DEVICE_LIBRARY_GFX942_DATA_LAYOUT_V1
+        );
+        assert_ne!(
             PRODUCTION_WORKER_DATA_LAYOUT_V1,
             fe2o3_compiler_ffi::EXTERNAL_DEVICE_LIBRARY_GFX942_DATA_LAYOUT_V1
         );

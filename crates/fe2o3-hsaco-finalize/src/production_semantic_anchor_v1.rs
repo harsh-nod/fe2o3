@@ -4,24 +4,28 @@
 //! correspondence point, not complete machine-instruction coverage, a schedule, or a refinement
 //! proof.
 
-use std::collections::{BTreeMap, BTreeSet};
 use std::{error::Error, fmt};
 
-use dialect_amdgcn::CanonicalProductionKirToLlvmReplayEvidenceV1;
-use fe2o3_compiler_lineage::InertSemanticToLlvmAssociationV3;
-use fe2o3_kernel_ir::{
-    Module, ProductionSemanticDebugAvailabilityV1, ProductionSemanticDebugProducerGapV1,
-    ProductionSemanticDebugReceiptExtensionV1, SemanticDebugLocationV1,
+use dialect_amdgcn::{
+    CanonicalProductionKirToLlvmReplayEvidenceV1, MAX_PRODUCTION_SEMANTIC_ANCHORS_V1,
+    ProductionKirToLlvmReplayModeV1, ProductionReplayKernelIrIdentityV1,
+    ProductionReplayKernelIrVersionV1,
 };
+use fe2o3_compiler_lineage::InertSemanticToLlvmAssociationV3;
+use fe2o3_kernel_ir::{Module, ProductionSemanticDebugReceiptExtensionV1, SemanticDebugLocationV1};
 use object::{Object, ObjectSection, ObjectSymbol, SymbolKind};
 use sha2::{Digest, Sha256};
 
-use crate::{ContentIdentityV1, PreparedFinalizedProtectedWorkerV3HsacoV1};
+use crate::{
+    ContentIdentityV1, PreparedFinalizedProtectedWorkerV3HsacoV1,
+    semantic_debug_map_v1::validate_production_association,
+};
 
 const GUID_DOMAIN_V1: &[u8] = b"FE2O3/PRODUCTION-KIR-LLVM-ISA-ANCHOR-GUID/V1\0";
 const HASH_DOMAIN_V1: &[u8] = b"FE2O3/PRODUCTION-KIR-LLVM-ISA-ANCHOR-HASH/V1\0";
 const IDENTITY_DOMAIN_V1: &[u8] = b"FE2O3/PRODUCTION-KIR-LLVM-ISA-ANCHOR-ID/V1\0";
-const MAX_ANCHORS_V1: usize = 1 << 20;
+const MAX_ANCHORS_V1: usize = MAX_PRODUCTION_SEMANTIC_ANCHORS_V1;
+const MAX_ANCHOR_METADATA_DEFINITIONS_V1: usize = MAX_ANCHORS_V1 + 3;
 const MAX_PROBE_SECTION_BYTES_V1: usize = 64 * 1024 * 1024;
 
 /// What happened to one compiler-inserted pseudo-probe record during backend lowering.
@@ -40,8 +44,10 @@ pub enum ProductionSemanticAnchorTransformationV1 {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ProductionSemanticAnchorUnavailableV1 {
-    Producer(ProductionSemanticDebugProducerGapV1),
-    LegacyBareAssociationNoAttachment,
+    LegacySemanticAttachment,
+    LegacyUninstrumentedReplay,
+    NoOperations,
+    MultipleDefinedBodies,
     CompilerInstrumentationAbsent,
 }
 
@@ -55,7 +61,7 @@ pub enum ProductionSemanticAnchorAdmissionV1 {
 pub struct AdmittedProductionSemanticAnchorV1 {
     semantic_operation_id: [u8; 32],
     kir: SemanticDebugLocationV1,
-    llvm: SemanticDebugLocationV1,
+    compiler_handoff_llvm: SemanticDebugLocationV1,
     isa: Vec<SemanticDebugLocationV1>,
     transformation: ProductionSemanticAnchorTransformationV1,
 }
@@ -69,8 +75,11 @@ impl AdmittedProductionSemanticAnchorV1 {
         self.kir
     }
 
-    pub const fn llvm(&self) -> SemanticDebugLocationV1 {
-        self.llvm
+    /// Exact LLVM coordinate in the compiler handoff consumed by the Worker.
+    ///
+    /// It does not name optimized LLVM retained inside the Worker or final LLVM after O3.
+    pub const fn compiler_handoff_llvm(&self) -> SemanticDebugLocationV1 {
+        self.compiler_handoff_llvm
     }
 
     pub fn isa(&self) -> &[SemanticDebugLocationV1] {
@@ -85,12 +94,18 @@ impl AdmittedProductionSemanticAnchorV1 {
     pub const fn proves_kir_operation_machine_shape(&self) -> bool {
         false
     }
+
+    pub const fn proves_optimized_or_final_llvm_custody(&self) -> bool {
+        false
+    }
 }
 
 #[derive(Debug)]
 pub struct AdmittedProductionSemanticAnchorsV1 {
     artifact_identity: ContentIdentityV1,
+    target_bound_kir_version: ProductionReplayKernelIrVersionV1,
     target_bound_kir_sha256: [u8; 32],
+    target_bound_kir_bytes: u64,
     target: String,
     pseudo_probe_desc_bytes: u64,
     pseudo_probe_bytes: u64,
@@ -104,6 +119,14 @@ impl AdmittedProductionSemanticAnchorsV1 {
 
     pub const fn target_bound_kir_sha256(&self) -> &[u8; 32] {
         &self.target_bound_kir_sha256
+    }
+
+    pub const fn target_bound_kir_version(&self) -> ProductionReplayKernelIrVersionV1 {
+        self.target_bound_kir_version
+    }
+
+    pub const fn target_bound_kir_bytes(&self) -> u64 {
+        self.target_bound_kir_bytes
     }
 
     pub fn target(&self) -> &str {
@@ -146,10 +169,23 @@ impl AdmittedProductionSemanticAnchorsV1 {
     pub const fn grants_execution_authority(&self) -> bool {
         false
     }
+
+    pub const fn proves_general_executable_bytes_unchanged(&self) -> bool {
+        false
+    }
+
+    pub const fn proves_general_resource_metadata_unchanged(&self) -> bool {
+        false
+    }
+
+    pub const fn proves_zero_runtime_or_code_size_overhead(&self) -> bool {
+        false
+    }
 }
 
 impl PreparedFinalizedProtectedWorkerV3HsacoV1 {
-    /// Replays exact target-bound KIR custody, parses compiler anchors from exact final LLVM, and
+    /// Replays exact target-bound KIR custody, parses compiler anchors from the exact compiler
+    /// handoff consumed by the Worker, and
     /// independently joins the corresponding final-HSACO pseudo-probe addresses to metadata-order
     /// kernel entry ranges.
     pub fn admit_production_semantic_anchors_v1(
@@ -163,15 +199,16 @@ impl PreparedFinalizedProtectedWorkerV3HsacoV1 {
                 Ok(extension) => extension,
                 Err(_) if InertSemanticToLlvmAssociationV3::decode(receipt_bytes).is_ok() => {
                     return Ok(ProductionSemanticAnchorAdmissionV1::Unavailable(
-                        ProductionSemanticAnchorUnavailableV1::LegacyBareAssociationNoAttachment,
+                        ProductionSemanticAnchorUnavailableV1::LegacySemanticAttachment,
                     ));
                 }
                 Err(_) => return Err(ProductionSemanticAnchorErrorV1::InvalidCompilerAttachment),
             };
-        let producer_gap = match extension.carrier_v1().availability() {
-            ProductionSemanticDebugAvailabilityV1::Available(_) => None,
-            ProductionSemanticDebugAvailabilityV1::Unavailable(gap) => Some(*gap),
-        };
+        let association = InertSemanticToLlvmAssociationV3::decode(extension.association_v3())
+            .map_err(|_| ProductionSemanticAnchorErrorV1::InvalidProductionAssociation)?;
+        validate_production_association(outer, association.inputs())
+            .map_err(|_| ProductionSemanticAnchorErrorV1::InvalidProductionAssociation)?;
+        let _source_carrier_status = extension.carrier_v1().availability();
 
         let replay = CanonicalProductionKirToLlvmReplayEvidenceV1::decode(
             receipts.amdgpu_lowering().canonical_preimage(),
@@ -180,26 +217,49 @@ impl PreparedFinalizedProtectedWorkerV3HsacoV1 {
             evidence.validate_against_neutral_kernel_ir(receipts.kernel_ir().canonical_preimage())
         })
         .map_err(|_| ProductionSemanticAnchorErrorV1::InvalidKirToLlvmReplay)?;
+        if replay.llvm_mode() != ProductionKirToLlvmReplayModeV1::SemanticAnchorsV1 {
+            return Ok(ProductionSemanticAnchorAdmissionV1::Unavailable(
+                ProductionSemanticAnchorUnavailableV1::LegacyUninstrumentedReplay,
+            ));
+        }
         let expected_target = replay.evidence().profile().device_target();
         if expected_target != self.target().to_string()
             || expected_target != outer.module_handoff().target().to_string()
         {
             return Err(ProductionSemanticAnchorErrorV1::TargetMismatch);
         }
-        let expected_kir = replay.evidence().target_bound_kernel_ir_identity().sha256();
+        let expected_kir =
+            ExpectedTargetKirIdentityV1::from(replay.evidence().target_bound_kernel_ir_identity());
         let llvm = std::str::from_utf8(outer.module_handoff().module_bytes())
             .map_err(|_| ProductionSemanticAnchorErrorV1::InvalidLlvm)?;
         let replay_llvm = replay.evidence().pre_descriptor_llvm();
-        let replay_manifest = parse_llvm_manifest_v1(replay_llvm, expected_kir, &expected_target)?;
-        let Some(manifest) = parse_llvm_manifest_v1(llvm, expected_kir, &expected_target)? else {
-            let unavailable = producer_gap.map_or(
-                ProductionSemanticAnchorUnavailableV1::CompilerInstrumentationAbsent,
-                ProductionSemanticAnchorUnavailableV1::Producer,
-            );
+        let replay_absence = parse_llvm_absence_v1(replay_llvm, expected_kir, expected_target)?;
+        let handoff_absence = parse_llvm_absence_v1(llvm, expected_kir, expected_target)?;
+        if replay_absence != handoff_absence {
+            return Err(ProductionSemanticAnchorErrorV1::KirToLlvmAnchorMismatch);
+        }
+        let replay_manifest = parse_llvm_manifest_v1(replay_llvm, expected_kir, expected_target)?;
+        let Some(manifest) = parse_llvm_manifest_v1(llvm, expected_kir, expected_target)? else {
+            let expected_absence = expected_absence_v1(replay.target_bound_module());
+            if replay_absence != expected_absence {
+                return Err(ProductionSemanticAnchorErrorV1::ContradictoryLlvm);
+            }
+            let unavailable = match expected_absence {
+                Some(LlvmAnchorAbsenceV1::NoOperations) => {
+                    ProductionSemanticAnchorUnavailableV1::NoOperations
+                }
+                Some(LlvmAnchorAbsenceV1::MultipleDefinedBodies) => {
+                    ProductionSemanticAnchorUnavailableV1::MultipleDefinedBodies
+                }
+                None => ProductionSemanticAnchorUnavailableV1::CompilerInstrumentationAbsent,
+            };
             return Ok(ProductionSemanticAnchorAdmissionV1::Unavailable(
                 unavailable,
             ));
         };
+        if replay_absence.is_some() {
+            return Err(ProductionSemanticAnchorErrorV1::ContradictoryLlvm);
+        }
         if replay_manifest.as_ref() != Some(&manifest) {
             return Err(ProductionSemanticAnchorErrorV1::KirToLlvmAnchorMismatch);
         }
@@ -228,7 +288,9 @@ struct LlvmAnchorRecordV1 {
 
 #[derive(Debug, Eq, PartialEq)]
 struct LlvmAnchorManifestV1 {
+    target_bound_kir_version: ProductionReplayKernelIrVersionV1,
     target_bound_kir_sha256: [u8; 32],
+    target_bound_kir_bytes: u64,
     target: String,
     guid: u64,
     function_hash: u64,
@@ -236,36 +298,151 @@ struct LlvmAnchorManifestV1 {
     records: Vec<LlvmAnchorRecordV1>,
 }
 
+#[derive(Clone, Copy)]
+struct ExpectedTargetKirIdentityV1 {
+    version: ProductionReplayKernelIrVersionV1,
+    sha256: [u8; 32],
+    byte_len: u64,
+}
+
+impl From<ProductionReplayKernelIrIdentityV1> for ExpectedTargetKirIdentityV1 {
+    fn from(value: ProductionReplayKernelIrIdentityV1) -> Self {
+        Self {
+            version: value.version(),
+            sha256: value.sha256(),
+            byte_len: value.byte_len(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LlvmAnchorAbsenceV1 {
+    NoOperations,
+    MultipleDefinedBodies,
+}
+
+fn expected_absence_v1(module: &Module) -> Option<LlvmAnchorAbsenceV1> {
+    let defined_body_count = module
+        .functions
+        .iter()
+        .filter(|function| function.body.is_some())
+        .count();
+    if defined_body_count > 1 {
+        return Some(LlvmAnchorAbsenceV1::MultipleDefinedBodies);
+    }
+    let has_operations = module
+        .functions
+        .iter()
+        .filter_map(|function| function.body.as_ref())
+        .flat_map(|body| &body.blocks)
+        .any(|block| !block.operations.is_empty());
+    (!has_operations).then_some(LlvmAnchorAbsenceV1::NoOperations)
+}
+
+fn parse_llvm_absence_v1(
+    llvm: &str,
+    expected_kir: ExpectedTargetKirIdentityV1,
+    expected_target: &str,
+) -> Result<Option<LlvmAnchorAbsenceV1>, ProductionSemanticAnchorErrorV1> {
+    let mut named = None;
+    for line in llvm
+        .lines()
+        .filter(|line| line.starts_with("!fe2o3.semantic_anchor.absence.v1 = "))
+    {
+        if named.replace(line).is_some() {
+            return Err(ProductionSemanticAnchorErrorV1::ContradictoryLlvm);
+        }
+    }
+    let Some(named) = named else {
+        if llvm.contains("fe2o3.semantic_anchor.absence.v1") {
+            return Err(ProductionSemanticAnchorErrorV1::ContradictoryLlvm);
+        }
+        return Ok(None);
+    };
+    if llvm.contains("!fe2o3.semantic_anchor.v1 = ")
+        || llvm.contains("@llvm.pseudoprobe")
+        || llvm.contains("!llvm.pseudo_probe_desc")
+    {
+        return Err(ProductionSemanticAnchorErrorV1::ContradictoryLlvm);
+    }
+    let references = parse_metadata_references(
+        named
+            .strip_prefix("!fe2o3.semantic_anchor.absence.v1 = ")
+            .ok_or(ProductionSemanticAnchorErrorV1::InvalidLlvm)?,
+    )?;
+    if references.len() != 1 {
+        return Err(ProductionSemanticAnchorErrorV1::ContradictoryLlvm);
+    }
+    let definitions = metadata_definitions(llvm)?;
+    let fields = metadata_fields(
+        definitions
+            .get(&references[0])
+            .ok_or(ProductionSemanticAnchorErrorV1::InvalidLlvm)?,
+    )?;
+    if fields.len() != 5 {
+        return Err(ProductionSemanticAnchorErrorV1::InvalidLlvm);
+    }
+    let reason = match parse_metadata_string(fields[0], "")?.as_str() {
+        "no_operations" => LlvmAnchorAbsenceV1::NoOperations,
+        "multiple_defined_bodies" => LlvmAnchorAbsenceV1::MultipleDefinedBodies,
+        _ => return Err(ProductionSemanticAnchorErrorV1::ContradictoryLlvm),
+    };
+    let kir = parse_prefixed_sha256(fields[1], "sha256:")?;
+    let version = parse_metadata_string(fields[2], "kir-version:")?;
+    let version = match version.as_str() {
+        "8" => ProductionReplayKernelIrVersionV1::V8,
+        "9" => ProductionReplayKernelIrVersionV1::V9,
+        _ => return Err(ProductionSemanticAnchorErrorV1::BindingMismatch),
+    };
+    let byte_len = parse_i64_field(fields[3])?;
+    let target = parse_metadata_string(fields[4], "target:")?;
+    if kir != expected_kir.sha256
+        || version != expected_kir.version
+        || byte_len != expected_kir.byte_len
+        || target != expected_target
+    {
+        return Err(ProductionSemanticAnchorErrorV1::BindingMismatch);
+    }
+    Ok(Some(reason))
+}
+
 fn parse_llvm_manifest_v1(
     llvm: &str,
-    expected_kir: [u8; 32],
+    expected_kir: ExpectedTargetKirIdentityV1,
     expected_target: &str,
 ) -> Result<Option<LlvmAnchorManifestV1>, ProductionSemanticAnchorErrorV1> {
-    let named = llvm
+    let mut named = None;
+    for line in llvm
         .lines()
         .filter(|line| line.starts_with("!fe2o3.semantic_anchor.v1 = "))
-        .collect::<Vec<_>>();
-    if named.is_empty() {
+    {
+        if named.replace(line).is_some() {
+            return Err(ProductionSemanticAnchorErrorV1::ContradictoryLlvm);
+        }
+    }
+    let Some(named) = named else {
         if llvm.contains("@llvm.pseudoprobe") || llvm.contains("!llvm.pseudo_probe_desc") {
             return Err(ProductionSemanticAnchorErrorV1::ContradictoryLlvm);
         }
         return Ok(None);
-    }
-    if named.len() != 1 {
-        return Err(ProductionSemanticAnchorErrorV1::ContradictoryLlvm);
-    }
+    };
 
     let definitions = metadata_definitions(llvm)?;
     let references = parse_metadata_references(
-        named[0]
+        named
             .strip_prefix("!fe2o3.semantic_anchor.v1 = ")
             .ok_or(ProductionSemanticAnchorErrorV1::InvalidLlvm)?,
     )?;
     if references.len() < 2 {
         return Err(ProductionSemanticAnchorErrorV1::InvalidLlvm);
     }
-    let referenced = references.iter().copied().collect::<BTreeSet<_>>();
-    if referenced.len() != references.len() {
+    let mut referenced = Vec::new();
+    referenced
+        .try_reserve_exact(references.len())
+        .map_err(|_| ProductionSemanticAnchorErrorV1::AllocationFailure)?;
+    referenced.extend_from_slice(&references);
+    referenced.sort_unstable();
+    if referenced.windows(2).any(|pair| pair[0] == pair[1]) {
         return Err(ProductionSemanticAnchorErrorV1::ContradictoryLlvm);
     }
     let binding_reference = references[0];
@@ -273,38 +450,57 @@ fn parse_llvm_manifest_v1(
         .get(&binding_reference)
         .ok_or(ProductionSemanticAnchorErrorV1::InvalidLlvm)?;
     let fields = metadata_fields(binding)?;
-    if fields.len() != 6 {
+    if fields.len() != 8 {
         return Err(ProductionSemanticAnchorErrorV1::InvalidLlvm);
     }
     let kir = parse_prefixed_sha256(fields[0], "sha256:")?;
-    let target = parse_metadata_string(fields[1], "target:")?;
-    let guid = parse_i64_field(fields[2])?;
-    let function_hash = parse_i64_field(fields[3])?;
-    let block_count = parse_i64_field(fields[4])?;
-    let operation_count = parse_i64_field(fields[5])?;
-    if kir != expected_kir
+    let kir_version = match parse_metadata_string(fields[1], "kir-version:")?.as_str() {
+        "8" => ProductionReplayKernelIrVersionV1::V8,
+        "9" => ProductionReplayKernelIrVersionV1::V9,
+        _ => return Err(ProductionSemanticAnchorErrorV1::BindingMismatch),
+    };
+    let kir_bytes = parse_i64_field(fields[2])?;
+    let target = parse_metadata_string(fields[3], "target:")?;
+    let guid = parse_i64_field(fields[4])?;
+    let function_hash = parse_i64_field(fields[5])?;
+    let block_count = parse_i64_field(fields[6])?;
+    let operation_count = parse_i64_field(fields[7])?;
+    let block_count_usize =
+        usize::try_from(block_count).map_err(|_| ProductionSemanticAnchorErrorV1::ResourceLimit)?;
+    let operation_count_usize = usize::try_from(operation_count)
+        .map_err(|_| ProductionSemanticAnchorErrorV1::ResourceLimit)?;
+    if kir != expected_kir.sha256
+        || kir_version != expected_kir.version
+        || kir_bytes != expected_kir.byte_len
         || target != expected_target
         || guid == 0
         || function_hash == 0
         || operation_count == 0
-        || usize::try_from(operation_count).ok() != Some(references.len() - 1)
-        || operation_count as usize > MAX_ANCHORS_V1
+        || operation_count_usize != references.len() - 1
+        || operation_count_usize > MAX_ANCHORS_V1
+        || block_count_usize > MAX_ANCHORS_V1
     {
         return Err(ProductionSemanticAnchorErrorV1::BindingMismatch);
     }
-    let descriptor_line = llvm
+    let mut descriptor_line = None;
+    for line in llvm
         .lines()
         .filter(|line| line.starts_with("!llvm.pseudo_probe_desc = "))
-        .collect::<Vec<_>>();
-    if descriptor_line.len() != 1 {
-        return Err(ProductionSemanticAnchorErrorV1::ContradictoryLlvm);
+    {
+        if descriptor_line.replace(line).is_some() {
+            return Err(ProductionSemanticAnchorErrorV1::ContradictoryLlvm);
+        }
     }
+    let descriptor_line =
+        descriptor_line.ok_or(ProductionSemanticAnchorErrorV1::ContradictoryLlvm)?;
     let descriptor_references = parse_metadata_references(
-        descriptor_line[0]
+        descriptor_line
             .strip_prefix("!llvm.pseudo_probe_desc = ")
             .ok_or(ProductionSemanticAnchorErrorV1::InvalidLlvm)?,
     )?;
-    if descriptor_references.len() != 1 || referenced.contains(&descriptor_references[0]) {
+    if descriptor_references.len() != 1
+        || referenced.binary_search(&descriptor_references[0]).is_ok()
+    {
         return Err(ProductionSemanticAnchorErrorV1::ContradictoryLlvm);
     }
     let descriptor_reference = descriptor_references[0];
@@ -350,28 +546,41 @@ fn parse_llvm_manifest_v1(
     }
 
     bind_exact_llvm_locations(llvm, guid, &mut records)?;
-    let function_ordinal = records[0].function_ordinal;
+    let function_ordinal = records
+        .first()
+        .ok_or(ProductionSemanticAnchorErrorV1::InvalidLlvm)?
+        .function_ordinal;
     let expected_guid = anchor_digest(
         GUID_DOMAIN_V1,
-        kir,
-        &target,
-        function_ordinal,
-        block_count,
-        operation_count,
+        AnchorDigestInputV1 {
+            kir_version,
+            kir,
+            kir_bytes,
+            target: &target,
+            function: function_ordinal,
+            blocks: block_count,
+            operations: operation_count,
+        },
     );
     let expected_hash = anchor_digest(
         HASH_DOMAIN_V1,
-        kir,
-        &target,
-        function_ordinal,
-        block_count,
-        operation_count,
+        AnchorDigestInputV1 {
+            kir_version,
+            kir,
+            kir_bytes,
+            target: &target,
+            function: function_ordinal,
+            blocks: block_count,
+            operations: operation_count,
+        },
     );
     if guid != expected_guid || function_hash != expected_hash {
         return Err(ProductionSemanticAnchorErrorV1::BindingMismatch);
     }
     Ok(Some(LlvmAnchorManifestV1 {
+        target_bound_kir_version: kir_version,
         target_bound_kir_sha256: kir,
+        target_bound_kir_bytes: kir_bytes,
         target,
         guid,
         function_hash,
@@ -380,10 +589,23 @@ fn parse_llvm_manifest_v1(
     }))
 }
 
+struct MetadataDefinitionsV1<'a> {
+    entries: Vec<(usize, &'a str)>,
+}
+
+impl<'a> MetadataDefinitionsV1<'a> {
+    fn get(&self, number: &usize) -> Option<&&'a str> {
+        self.entries
+            .binary_search_by_key(number, |(number, _)| *number)
+            .ok()
+            .map(|index| &self.entries[index].1)
+    }
+}
+
 fn metadata_definitions(
     llvm: &str,
-) -> Result<BTreeMap<usize, &str>, ProductionSemanticAnchorErrorV1> {
-    let mut definitions = BTreeMap::new();
+) -> Result<MetadataDefinitionsV1<'_>, ProductionSemanticAnchorErrorV1> {
+    let mut entries = Vec::new();
     for line in llvm.lines() {
         let Some(rest) = line.strip_prefix('!') else {
             continue;
@@ -394,11 +616,21 @@ fn metadata_definitions(
         let Ok(number) = number.parse::<usize>() else {
             continue;
         };
-        if definitions.insert(number, value).is_some() {
-            return Err(ProductionSemanticAnchorErrorV1::ContradictoryLlvm);
+        // Active manifests own one workgroup definition, one descriptor, one
+        // binding, and one definition per semantic anchor record.
+        if entries.len() >= MAX_ANCHOR_METADATA_DEFINITIONS_V1 {
+            return Err(ProductionSemanticAnchorErrorV1::ResourceLimit);
         }
+        entries
+            .try_reserve(1)
+            .map_err(|_| ProductionSemanticAnchorErrorV1::AllocationFailure)?;
+        entries.push((number, value));
     }
-    Ok(definitions)
+    entries.sort_unstable_by_key(|(number, _)| *number);
+    if entries.windows(2).any(|pair| pair[0].0 == pair[1].0) {
+        return Err(ProductionSemanticAnchorErrorV1::ContradictoryLlvm);
+    }
+    Ok(MetadataDefinitionsV1 { entries })
 }
 
 fn parse_metadata_references(value: &str) -> Result<Vec<usize>, ProductionSemanticAnchorErrorV1> {
@@ -408,6 +640,12 @@ fn parse_metadata_references(value: &str) -> Result<Vec<usize>, ProductionSemant
         .ok_or(ProductionSemanticAnchorErrorV1::InvalidLlvm)?;
     let mut result = Vec::new();
     for field in inner.split(", ") {
+        if result.len() > MAX_ANCHORS_V1 {
+            return Err(ProductionSemanticAnchorErrorV1::ResourceLimit);
+        }
+        result
+            .try_reserve(1)
+            .map_err(|_| ProductionSemanticAnchorErrorV1::AllocationFailure)?;
         result.push(
             field
                 .strip_prefix('!')
@@ -424,7 +662,17 @@ fn metadata_fields(value: &str) -> Result<Vec<&str>, ProductionSemanticAnchorErr
         .strip_prefix("!{")
         .and_then(|value| value.strip_suffix('}'))
         .ok_or(ProductionSemanticAnchorErrorV1::InvalidLlvm)?;
-    Ok(inner.split(", ").collect())
+    let mut fields = Vec::new();
+    for field in inner.split(", ") {
+        if fields.len() >= 16 {
+            return Err(ProductionSemanticAnchorErrorV1::InvalidLlvm);
+        }
+        fields
+            .try_reserve(1)
+            .map_err(|_| ProductionSemanticAnchorErrorV1::AllocationFailure)?;
+        fields.push(field);
+    }
+    Ok(fields)
 }
 
 fn parse_i64_field(value: &str) -> Result<u64, ProductionSemanticAnchorErrorV1> {
@@ -435,8 +683,8 @@ fn parse_i64_field(value: &str) -> Result<u64, ProductionSemanticAnchorErrorV1> 
         .map_err(|_| ProductionSemanticAnchorErrorV1::InvalidLlvm)
 }
 
-fn parse_metadata_string<'a>(
-    value: &'a str,
+fn parse_metadata_string(
+    value: &str,
     prefix: &str,
 ) -> Result<String, ProductionSemanticAnchorErrorV1> {
     let value = value
@@ -447,7 +695,12 @@ fn parse_metadata_string<'a>(
     if value.is_empty() || !value.is_ascii() || value.contains(['"', '\\']) {
         return Err(ProductionSemanticAnchorErrorV1::InvalidLlvm);
     }
-    Ok(value.to_owned())
+    let mut owned = String::new();
+    owned
+        .try_reserve_exact(value.len())
+        .map_err(|_| ProductionSemanticAnchorErrorV1::AllocationFailure)?;
+    owned.push_str(value);
+    Ok(owned)
 }
 
 fn parse_prefixed_sha256(
@@ -482,7 +735,10 @@ fn bind_exact_llvm_locations(
     let mut next_function = 0_u64;
     let mut block = None::<u64>;
     let mut instruction = 0_u64;
-    let mut seen = BTreeSet::new();
+    let mut seen = Vec::new();
+    seen.try_reserve_exact(records.len())
+        .map_err(|_| ProductionSemanticAnchorErrorV1::AllocationFailure)?;
+    seen.resize(records.len(), false);
     for line in llvm.lines() {
         if line.starts_with("define ") {
             function = Some(next_function);
@@ -512,29 +768,43 @@ fn bind_exact_llvm_locations(
             .strip_prefix("call void @llvm.pseudoprobe(")
             .and_then(|line| line.strip_suffix(')'))
         {
-            let fields = arguments.split(", ").collect::<Vec<_>>();
-            if fields.len() != 4
-                || parse_i64_field(fields[0])? != guid
-                || fields[2] != "i32 0"
-                || fields[3] != "i64 -1"
+            let mut fields = arguments.split(", ");
+            let guid_field = fields.next();
+            let probe_field = fields.next();
+            let type_field = fields.next();
+            let discriminator_field = fields.next();
+            if fields.next().is_some()
+                || guid_field.map(parse_i64_field).transpose()? != Some(guid)
+                || type_field != Some("i32 0")
+                || discriminator_field != Some("i64 -1")
             {
                 return Err(ProductionSemanticAnchorErrorV1::ContradictoryLlvm);
             }
-            let probe_index = parse_i64_field(fields[1])?;
-            let record = records
-                .iter_mut()
-                .find(|record| record.probe_index == probe_index)
+            let probe_index = probe_field
+                .ok_or(ProductionSemanticAnchorErrorV1::ContradictoryLlvm)
+                .and_then(parse_i64_field)?;
+            let record_index = probe_index
+                .checked_sub(1)
+                .and_then(|index| usize::try_from(index).ok())
                 .ok_or(ProductionSemanticAnchorErrorV1::ContradictoryLlvm)?;
-            if !seen.insert(probe_index) {
+            let record = records
+                .get_mut(record_index)
+                .filter(|record| record.probe_index == probe_index)
+                .ok_or(ProductionSemanticAnchorErrorV1::ContradictoryLlvm)?;
+            let was_seen = seen
+                .get_mut(record_index)
+                .ok_or(ProductionSemanticAnchorErrorV1::ContradictoryLlvm)?;
+            if *was_seen {
                 return Err(ProductionSemanticAnchorErrorV1::ContradictoryLlvm);
             }
+            *was_seen = true;
             record.llvm_function_ordinal = function;
             record.llvm_block_ordinal = block;
             record.llvm_instruction_ordinal = instruction;
         }
         instruction += 1;
     }
-    if seen.len() != records.len() {
+    if seen.iter().any(|seen| !seen) {
         return Err(ProductionSemanticAnchorErrorV1::ContradictoryLlvm);
     }
     Ok(())
@@ -602,29 +872,84 @@ fn admit_final_artifact_v1(
         .map_err(|_| ProductionSemanticAnchorErrorV1::InvalidArtifact)?;
     let symbol = unique_entry_symbol(&object, &manifest.descriptor_name, &inspected)?;
     let decoded = decode_probe_records(probes, manifest.guid, symbol.entry_address)?;
-    let mut addresses = BTreeMap::<u64, Vec<u64>>::new();
+    let mut addresses = Vec::<Vec<u64>>::new();
+    addresses
+        .try_reserve_exact(manifest.records.len())
+        .map_err(|_| ProductionSemanticAnchorErrorV1::AllocationFailure)?;
+    addresses.resize_with(manifest.records.len(), Vec::new);
+    let mut raw_record_counts = Vec::new();
+    raw_record_counts
+        .try_reserve_exact(manifest.records.len())
+        .map_err(|_| ProductionSemanticAnchorErrorV1::AllocationFailure)?;
+    raw_record_counts.resize(manifest.records.len(), 0_usize);
     for record in decoded {
-        if !manifest
+        let record_index = record
+            .probe_index
+            .checked_sub(1)
+            .and_then(|index| usize::try_from(index).ok())
+            .ok_or(ProductionSemanticAnchorErrorV1::UnexpectedProbe)?;
+        if manifest
             .records
-            .iter()
-            .any(|expected| expected.probe_index == record.probe_index)
+            .get(record_index)
+            .is_none_or(|expected| expected.probe_index != record.probe_index)
         {
             return Err(ProductionSemanticAnchorErrorV1::UnexpectedProbe);
         }
-        addresses
-            .entry(record.probe_index)
-            .or_default()
-            .push(record.address);
+        let count = raw_record_counts
+            .get_mut(record_index)
+            .ok_or(ProductionSemanticAnchorErrorV1::UnexpectedProbe)?;
+        *count = count
+            .checked_add(1)
+            .ok_or(ProductionSemanticAnchorErrorV1::ResourceLimit)?;
+        let record_addresses = addresses
+            .get_mut(record_index)
+            .ok_or(ProductionSemanticAnchorErrorV1::UnexpectedProbe)?;
+        record_addresses
+            .try_reserve(1)
+            .map_err(|_| ProductionSemanticAnchorErrorV1::AllocationFailure)?;
+        record_addresses.push(record.address);
     }
-    for values in addresses.values_mut() {
+    for values in &mut addresses {
         values.sort_unstable();
         values.dedup();
     }
-    let mut address_owners = BTreeMap::<u64, usize>::new();
-    for values in addresses.values() {
+
+    let unique_address_count = addresses.iter().try_fold(0_usize, |total, values| {
+        total
+            .checked_add(values.len())
+            .ok_or(ProductionSemanticAnchorErrorV1::ResourceLimit)
+    })?;
+    let mut address_owners = Vec::<(u64, usize)>::new();
+    address_owners
+        .try_reserve_exact(unique_address_count)
+        .map_err(|_| ProductionSemanticAnchorErrorV1::AllocationFailure)?;
+    for (record_index, values) in addresses.iter().enumerate() {
         for address in values {
-            *address_owners.entry(*address).or_default() += 1;
+            address_owners.push((*address, record_index));
         }
+    }
+    address_owners.sort_unstable();
+    let mut coalesced = Vec::new();
+    coalesced
+        .try_reserve_exact(manifest.records.len())
+        .map_err(|_| ProductionSemanticAnchorErrorV1::AllocationFailure)?;
+    coalesced.resize(manifest.records.len(), false);
+    let mut owner_start = 0;
+    while owner_start < address_owners.len() {
+        let mut owner_end = owner_start + 1;
+        while owner_end < address_owners.len()
+            && address_owners[owner_end].0 == address_owners[owner_start].0
+        {
+            owner_end += 1;
+        }
+        if owner_end - owner_start > 1 {
+            for (_, record_index) in &address_owners[owner_start..owner_end] {
+                *coalesced
+                    .get_mut(*record_index)
+                    .ok_or(ProductionSemanticAnchorErrorV1::UnexpectedProbe)? = true;
+            }
+        }
+        owner_start = owner_end;
     }
 
     let entry_end = symbol
@@ -635,9 +960,20 @@ fn admit_final_artifact_v1(
     admitted
         .try_reserve_exact(manifest.records.len())
         .map_err(|_| ProductionSemanticAnchorErrorV1::AllocationFailure)?;
-    for record in manifest.records {
-        let values = addresses.remove(&record.probe_index).unwrap_or_default();
-        let transformation = classify_transformation(&values, &address_owners);
+    for (record_index, record) in manifest.records.into_iter().enumerate() {
+        let values = std::mem::take(
+            addresses
+                .get_mut(record_index)
+                .ok_or(ProductionSemanticAnchorErrorV1::UnexpectedProbe)?,
+        );
+        let transformation = classify_transformation(
+            *raw_record_counts
+                .get(record_index)
+                .ok_or(ProductionSemanticAnchorErrorV1::UnexpectedProbe)?,
+            *coalesced
+                .get(record_index)
+                .ok_or(ProductionSemanticAnchorErrorV1::UnexpectedProbe)?,
+        );
         let mut isa = Vec::new();
         isa.try_reserve_exact(values.len())
             .map_err(|_| ProductionSemanticAnchorErrorV1::AllocationFailure)?;
@@ -659,7 +995,9 @@ fn admit_final_artifact_v1(
             });
         }
         let semantic_operation_id = semantic_operation_identity(
+            manifest.target_bound_kir_version,
             manifest.target_bound_kir_sha256,
+            manifest.target_bound_kir_bytes,
             &manifest.target,
             record.function_ordinal,
             record.block_ordinal,
@@ -672,7 +1010,7 @@ fn admit_final_artifact_v1(
                 block_ordinal: record.block_ordinal,
                 operation_ordinal: record.operation_ordinal,
             },
-            llvm: SemanticDebugLocationV1::Llvm {
+            compiler_handoff_llvm: SemanticDebugLocationV1::Llvm {
                 function_ordinal: record.llvm_function_ordinal,
                 block_ordinal: record.llvm_block_ordinal,
                 instruction_ordinal: record.llvm_instruction_ordinal,
@@ -681,12 +1019,11 @@ fn admit_final_artifact_v1(
             transformation,
         });
     }
-    if !addresses.is_empty() {
-        return Err(ProductionSemanticAnchorErrorV1::UnexpectedProbe);
-    }
     Ok(AdmittedProductionSemanticAnchorsV1 {
         artifact_identity: ContentIdentityV1::calculate(artifact),
+        target_bound_kir_version: manifest.target_bound_kir_version,
         target_bound_kir_sha256: manifest.target_bound_kir_sha256,
+        target_bound_kir_bytes: manifest.target_bound_kir_bytes,
         target: manifest.target,
         pseudo_probe_desc_bytes: desc.len() as u64,
         pseudo_probe_bytes: probes.len() as u64,
@@ -695,13 +1032,10 @@ fn admit_final_artifact_v1(
 }
 
 fn classify_transformation(
-    addresses: &[u64],
-    address_owners: &BTreeMap<u64, usize>,
+    raw_record_count: usize,
+    coalesced: bool,
 ) -> ProductionSemanticAnchorTransformationV1 {
-    let coalesced = addresses
-        .iter()
-        .any(|address| address_owners.get(address).copied().unwrap_or(0) > 1);
-    match (addresses.len(), coalesced) {
+    match (raw_record_count, coalesced) {
         (0, _) => ProductionSemanticAnchorTransformationV1::Eliminated,
         (1, false) => ProductionSemanticAnchorTransformationV1::Preserved,
         (1, true) => ProductionSemanticAnchorTransformationV1::Coalesced,
@@ -737,10 +1071,18 @@ fn decode_probe_descriptors(
         if guid == 0 || function_hash == 0 || name.is_empty() || !name.is_ascii() {
             return Err(ProductionSemanticAnchorErrorV1::InvalidProbeEncoding);
         }
+        result
+            .try_reserve(1)
+            .map_err(|_| ProductionSemanticAnchorErrorV1::AllocationFailure)?;
+        let mut owned_name = String::new();
+        owned_name
+            .try_reserve_exact(name.len())
+            .map_err(|_| ProductionSemanticAnchorErrorV1::AllocationFailure)?;
+        owned_name.push_str(name);
         result.push(ProbeDescriptorV1 {
             guid,
             function_hash,
-            name: name.to_owned(),
+            name: owned_name,
         });
     }
     Ok(result)
@@ -758,15 +1100,35 @@ fn decode_probe_records(
 ) -> Result<Vec<DecodedProbeV1>, ProductionSemanticAnchorErrorV1> {
     let mut cursor = Cursor::new(bytes);
     let mut result = Vec::new();
+    let mut group_count = 0_usize;
+    let mut total_record_count = 0_usize;
     while !cursor.is_empty() {
+        group_count = group_count
+            .checked_add(1)
+            .ok_or(ProductionSemanticAnchorErrorV1::ResourceLimit)?;
+        if group_count > MAX_ANCHORS_V1 {
+            return Err(ProductionSemanticAnchorErrorV1::ResourceLimit);
+        }
         let guid = cursor.u64()?;
         let count = cursor.uleb()?;
         let inline_count = cursor.uleb()?;
         let count = usize::try_from(count)
             .map_err(|_| ProductionSemanticAnchorErrorV1::InvalidProbeEncoding)?;
-        if guid != expected_guid || inline_count != 0 || count > MAX_ANCHORS_V1 + 1 {
+        if guid != expected_guid || inline_count != 0 || count > MAX_ANCHORS_V1 {
             return Err(ProductionSemanticAnchorErrorV1::InvalidProbeEncoding);
         }
+        if count > cursor.remaining() / 3 {
+            return Err(ProductionSemanticAnchorErrorV1::InvalidProbeEncoding);
+        }
+        total_record_count = total_record_count
+            .checked_add(count)
+            .ok_or(ProductionSemanticAnchorErrorV1::ResourceLimit)?;
+        if total_record_count > MAX_ANCHORS_V1 {
+            return Err(ProductionSemanticAnchorErrorV1::ResourceLimit);
+        }
+        result
+            .try_reserve(count)
+            .map_err(|_| ProductionSemanticAnchorErrorV1::AllocationFailure)?;
         let mut last_address = function_start;
         for _ in 0..count {
             let probe_index = cursor.uleb()?;
@@ -815,30 +1177,32 @@ fn unique_entry_symbol(
     expected_name: &str,
     inspected: &fe2o3_hsaco::InspectedKernelBindings,
 ) -> Result<EntrySymbolV1, ProductionSemanticAnchorErrorV1> {
-    let candidates = object
-        .symbols()
-        .filter(|symbol| {
-            symbol.kind() == SymbolKind::Text
-                && symbol.name() == Ok(expected_name)
-                && symbol.size() != 0
-                && !symbol.is_undefined()
-        })
-        .collect::<Vec<_>>();
-    if candidates.len() != 1 {
-        return Err(ProductionSemanticAnchorErrorV1::AmbiguousEntrySymbol);
+    let mut candidate = None;
+    for symbol in object.symbols() {
+        if symbol.kind() != SymbolKind::Text
+            || symbol.name() != Ok(expected_name)
+            || symbol.size() == 0
+            || symbol.is_undefined()
+        {
+            continue;
+        }
+        if candidate.replace(symbol).is_some() {
+            return Err(ProductionSemanticAnchorErrorV1::AmbiguousEntrySymbol);
+        }
     }
-    let candidate = &candidates[0];
-    let matches = inspected
-        .bindings()
-        .iter()
-        .filter(|binding| {
-            binding.entry_address() == candidate.address()
-                && binding.entry_size() == candidate.size()
-        })
-        .collect::<Vec<_>>();
-    if matches.len() != 1 {
-        return Err(ProductionSemanticAnchorErrorV1::AmbiguousEntrySymbol);
+    let candidate = candidate.ok_or(ProductionSemanticAnchorErrorV1::AmbiguousEntrySymbol)?;
+    let mut matching_binding = None;
+    for binding in inspected.bindings() {
+        if binding.entry_address() != candidate.address()
+            || binding.entry_size() != candidate.size()
+        {
+            continue;
+        }
+        if matching_binding.replace(binding).is_some() {
+            return Err(ProductionSemanticAnchorErrorV1::AmbiguousEntrySymbol);
+        }
     }
+    let binding = matching_binding.ok_or(ProductionSemanticAnchorErrorV1::AmbiguousEntrySymbol)?;
     let aliases = object
         .symbols()
         .filter(|symbol| {
@@ -850,7 +1214,6 @@ fn unique_entry_symbol(
     if aliases != 1 {
         return Err(ProductionSemanticAnchorErrorV1::AmbiguousEntrySymbol);
     }
-    let binding = matches[0];
     let kernel = inspected
         .inspection()
         .kernels()
@@ -923,22 +1286,30 @@ fn validate_amdgpu_et_dyn(bytes: &[u8]) -> Result<(), ProductionSemanticAnchorEr
     Ok(())
 }
 
-fn anchor_digest(
-    domain: &[u8],
+struct AnchorDigestInputV1<'a> {
+    kir_version: ProductionReplayKernelIrVersionV1,
     kir: [u8; 32],
-    target: &str,
+    kir_bytes: u64,
+    target: &'a str,
     function: u64,
     blocks: u64,
     operations: u64,
-) -> u64 {
+}
+
+fn anchor_digest(domain: &[u8], input: AnchorDigestInputV1<'_>) -> u64 {
     let mut hasher = Sha256::new();
     hasher.update(domain);
-    hasher.update(kir);
-    hasher.update((target.len() as u64).to_le_bytes());
-    hasher.update(target.as_bytes());
-    hasher.update(function.to_le_bytes());
-    hasher.update(blocks.to_le_bytes());
-    hasher.update(operations.to_le_bytes());
+    hasher.update([match input.kir_version {
+        ProductionReplayKernelIrVersionV1::V8 => 8,
+        ProductionReplayKernelIrVersionV1::V9 => 9,
+    }]);
+    hasher.update(input.kir);
+    hasher.update(input.kir_bytes.to_le_bytes());
+    hasher.update((input.target.len() as u64).to_le_bytes());
+    hasher.update(input.target.as_bytes());
+    hasher.update(input.function.to_le_bytes());
+    hasher.update(input.blocks.to_le_bytes());
+    hasher.update(input.operations.to_le_bytes());
     let digest = hasher.finalize();
     let mut prefix = [0_u8; 8];
     prefix.copy_from_slice(&digest[..8]);
@@ -947,7 +1318,9 @@ fn anchor_digest(
 }
 
 fn semantic_operation_identity(
+    kir_version: ProductionReplayKernelIrVersionV1,
     kir: [u8; 32],
+    kir_bytes: u64,
     target: &str,
     function: u64,
     block: u64,
@@ -955,7 +1328,12 @@ fn semantic_operation_identity(
 ) -> [u8; 32] {
     let mut hasher = Sha256::new();
     hasher.update(IDENTITY_DOMAIN_V1);
+    hasher.update([match kir_version {
+        ProductionReplayKernelIrVersionV1::V8 => 8,
+        ProductionReplayKernelIrVersionV1::V9 => 9,
+    }]);
     hasher.update(kir);
+    hasher.update(kir_bytes.to_le_bytes());
     hasher.update((target.len() as u64).to_le_bytes());
     hasher.update(target.as_bytes());
     hasher.update(function.to_le_bytes());
@@ -976,6 +1354,10 @@ impl<'a> Cursor<'a> {
 
     fn is_empty(&self) -> bool {
         self.offset == self.bytes.len()
+    }
+
+    fn remaining(&self) -> usize {
+        self.bytes.len() - self.offset
     }
 
     fn bytes(&mut self, length: usize) -> Result<&'a [u8], ProductionSemanticAnchorErrorV1> {
@@ -1024,6 +1406,7 @@ impl<'a> Cursor<'a> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ProductionSemanticAnchorErrorV1 {
     InvalidCompilerAttachment,
+    InvalidProductionAssociation,
     InvalidKirToLlvmReplay,
     TargetMismatch,
     InvalidLlvm,
@@ -1057,13 +1440,49 @@ impl Error for ProductionSemanticAnchorErrorV1 {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dialect_amdgcn::{
+        ProductionSemanticAnchorKirIdentityV1,
+        lower_kernel_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1,
+    };
+    use fe2o3_kernel_ir::{
+        BasicBlock, BlockId, Constant, Function, Kernel, KernelId, LaunchDomain, LaunchExtent,
+        Module, Operation, OperationKind, ScalarType, Signature, Terminator, Type, ValueDef,
+        ValueId, VerifiedCanonicalKernelIrV8, WorkgroupSize, gfx942_xnack_minus_target_capability,
+    };
 
     const TARGET: &str = "gfx942:xnack-";
 
-    fn llvm_fixture(ids: [usize; 4], swap_markers: bool) -> (String, [u8; 32]) {
+    fn llvm_fixture(ids: [usize; 4], swap_markers: bool) -> (String, ExpectedTargetKirIdentityV1) {
         let kir = [7_u8; 32];
-        let guid = anchor_digest(GUID_DOMAIN_V1, kir, TARGET, 0, 2, 2);
-        let hash = anchor_digest(HASH_DOMAIN_V1, kir, TARGET, 0, 2, 2);
+        let kir_identity = ExpectedTargetKirIdentityV1 {
+            version: ProductionReplayKernelIrVersionV1::V8,
+            sha256: kir,
+            byte_len: 123,
+        };
+        let guid = anchor_digest(
+            GUID_DOMAIN_V1,
+            AnchorDigestInputV1 {
+                kir_version: kir_identity.version,
+                kir,
+                kir_bytes: kir_identity.byte_len,
+                target: TARGET,
+                function: 0,
+                blocks: 2,
+                operations: 2,
+            },
+        );
+        let hash = anchor_digest(
+            HASH_DOMAIN_V1,
+            AnchorDigestInputV1 {
+                kir_version: kir_identity.version,
+                kir,
+                kir_bytes: kir_identity.byte_len,
+                target: TARGET,
+                function: 0,
+                blocks: 2,
+                operations: 2,
+            },
+        );
         let (first, second) = if swap_markers { (2, 1) } else { (1, 2) };
         let [descriptor, header, record_one, record_two] = ids;
         (
@@ -1081,7 +1500,7 @@ mod tests {
                     "!llvm.pseudo_probe_desc = !{{!{descriptor}}}\n",
                     "!fe2o3.semantic_anchor.v1 = !{{!{header}, !{record_one}, !{record_two}}}\n",
                     "!{descriptor} = !{{i64 {guid}, i64 {hash}, !\"kernel\"}}\n",
-                    "!{header} = !{{!\"sha256:{kir_hex}\", !\"target:{target}\", i64 {guid}, i64 {hash}, i64 2, i64 2}}\n",
+                    "!{header} = !{{!\"sha256:{kir_hex}\", !\"kir-version:8\", i64 123, !\"target:{target}\", i64 {guid}, i64 {hash}, i64 2, i64 2}}\n",
                     "!{record_one} = !{{i64 1, i64 0, i64 0, i64 0}}\n",
                     "!{record_two} = !{{i64 2, i64 0, i64 1, i64 0}}\n",
                 ),
@@ -1096,7 +1515,7 @@ mod tests {
                 record_one = record_one,
                 record_two = record_two,
             ),
-            kir,
+            kir_identity,
         )
     }
 
@@ -1107,6 +1526,72 @@ mod tests {
         let canonical = parse_llvm_manifest_v1(&canonical, kir, TARGET).unwrap();
         let renumbered = parse_llvm_manifest_v1(&renumbered, kir, TARGET).unwrap();
         assert_eq!(canonical, renumbered);
+    }
+
+    #[test]
+    fn maximum_actual_anchor_lowering_fits_exact_metadata_definition_bound() {
+        let mut block = BasicBlock::new(BlockId(0));
+        block.operations = (0..MAX_ANCHORS_V1)
+            .map(|index| {
+                Operation::effect_free(
+                    ValueDef::new(
+                        ValueId(u32::try_from(index).unwrap()),
+                        Type::Scalar(ScalarType::U32),
+                    ),
+                    OperationKind::Constant(Constant::U32(7)),
+                )
+            })
+            .collect();
+        block.terminator = Some(Terminator::Return { values: Vec::new() });
+        let mut function = Function::kernel_entry(
+            "anchor_limit_impl",
+            Signature::new(Vec::new(), Vec::new()),
+            Vec::new(),
+            vec![block],
+        );
+        let target = gfx942_xnack_minus_target_capability();
+        function.required_capabilities.insert(target.clone());
+        let mut kernel = Kernel::new(
+            "anchor_limit",
+            "anchor_limit_impl",
+            LaunchDomain::D1 {
+                x: LaunchExtent::Static(1),
+            },
+        );
+        kernel.workgroup_size = Some(WorkgroupSize::new(64, 1, 1));
+        kernel.required_capabilities.insert(target.clone());
+        let mut module = Module::new("tests::anchor_limit");
+        module.required_capabilities.insert(target);
+        module.functions.push(function);
+        module.kernels.push(kernel);
+
+        let owner = VerifiedCanonicalKernelIrV8::from_module(module.clone()).unwrap();
+        let anchor_identity = ProductionSemanticAnchorKirIdentityV1::from_v8(&owner);
+        let expected = ExpectedTargetKirIdentityV1 {
+            version: ProductionReplayKernelIrVersionV1::V8,
+            sha256: anchor_identity.sha256(),
+            byte_len: anchor_identity.byte_len(),
+        };
+        let llvm = lower_kernel_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1(
+            &module,
+            &KernelId::new("anchor_limit"),
+            anchor_identity,
+        )
+        .unwrap();
+        let manifest = parse_llvm_manifest_v1(&llvm, expected, TARGET)
+            .unwrap()
+            .unwrap();
+        assert_eq!(manifest.records.len(), MAX_ANCHORS_V1);
+        assert_eq!(
+            metadata_definitions(&llvm).unwrap().entries.len(),
+            MAX_ANCHOR_METADATA_DEFINITIONS_V1
+        );
+
+        let one_over = format!("{llvm}!999999 = !{{i64 0}}\n");
+        assert_eq!(
+            parse_llvm_manifest_v1(&one_over, expected, TARGET),
+            Err(ProductionSemanticAnchorErrorV1::ResourceLimit)
+        );
     }
 
     #[test]
@@ -1133,6 +1618,50 @@ mod tests {
         );
         assert_eq!(
             parse_llvm_manifest_v1(&duplicated, kir, TARGET),
+            Err(ProductionSemanticAnchorErrorV1::ContradictoryLlvm)
+        );
+    }
+
+    #[test]
+    fn llvm_absence_parser_is_exact_and_rejects_hostile_markers() {
+        let (_, kir) = llvm_fixture([1, 2, 3, 4], false);
+        let no_operations = format!(
+            concat!(
+                "define amdgpu_kernel void @kernel() {{\n",
+                "bb0:\n",
+                "  ret void\n",
+                "}}\n",
+                "!fe2o3.semantic_anchor.absence.v1 = !{{!9}}\n",
+                "!9 = !{{!\"no_operations\", !\"sha256:{kir_hex}\", !\"kir-version:8\", i64 123, !\"target:{target}\"}}\n",
+            ),
+            kir_hex = "07".repeat(32),
+            target = TARGET,
+        );
+        assert_eq!(
+            parse_llvm_absence_v1(&no_operations, kir, TARGET).unwrap(),
+            Some(LlvmAnchorAbsenceV1::NoOperations)
+        );
+        let multiple = no_operations.replace("no_operations", "multiple_defined_bodies");
+        assert_eq!(
+            parse_llvm_absence_v1(&multiple, kir, TARGET).unwrap(),
+            Some(LlvmAnchorAbsenceV1::MultipleDefinedBodies)
+        );
+
+        let duplicated = format!("{no_operations}!fe2o3.semantic_anchor.absence.v1 = !{{!9}}\n");
+        assert_eq!(
+            parse_llvm_absence_v1(&duplicated, kir, TARGET),
+            Err(ProductionSemanticAnchorErrorV1::ContradictoryLlvm)
+        );
+        let substituted = no_operations.replace("sha256:07", "sha256:08");
+        assert_eq!(
+            parse_llvm_absence_v1(&substituted, kir, TARGET),
+            Err(ProductionSemanticAnchorErrorV1::BindingMismatch)
+        );
+        let contradictory = format!(
+            "{no_operations}!llvm.pseudo_probe_desc = !{{!10}}\n!10 = !{{i64 1, i64 1, !\"kernel\"}}\n"
+        );
+        assert_eq!(
+            parse_llvm_absence_v1(&contradictory, kir, TARGET),
             Err(ProductionSemanticAnchorErrorV1::ContradictoryLlvm)
         );
     }
@@ -1176,21 +1705,37 @@ mod tests {
         assert_eq!(decoded[0].probe_index, 1);
         assert_eq!(decoded[1].address, 0x108);
 
-        let owners = BTreeMap::from([(0x100, 1), (0x108, 2)]);
         assert_eq!(
-            classify_transformation(&[0x100, 0x108], &owners),
+            classify_transformation(2, true),
             ProductionSemanticAnchorTransformationV1::DuplicatedAndCoalesced
         );
         assert_eq!(
-            classify_transformation(&[0x108], &owners),
+            classify_transformation(1, true),
             ProductionSemanticAnchorTransformationV1::Coalesced
         );
         assert_eq!(
-            classify_transformation(&[], &owners),
+            classify_transformation(0, false),
             ProductionSemanticAnchorTransformationV1::Eliminated
+        );
+        assert_eq!(
+            classify_transformation(2, false),
+            ProductionSemanticAnchorTransformationV1::Duplicated
         );
         assert!(matches!(
             decode_probe_records(&probes(12, &[(1, 0x100)]), 11, 0x100),
+            Err(ProductionSemanticAnchorErrorV1::InvalidProbeEncoding)
+        ));
+    }
+
+    #[test]
+    fn probe_decoder_rejects_declared_records_larger_than_remaining_payload() {
+        let mut truncated = Vec::new();
+        truncated.extend_from_slice(&11_u64.to_le_bytes());
+        push_uleb(&mut truncated, 4);
+        push_uleb(&mut truncated, 0);
+
+        assert!(matches!(
+            decode_probe_records(&truncated, 11, 0x100),
             Err(ProductionSemanticAnchorErrorV1::InvalidProbeEncoding)
         ));
     }

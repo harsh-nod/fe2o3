@@ -251,6 +251,9 @@ fn exact_xnack_minus_kernel_api_requires_and_emits_the_retained_target_identity(
     let anchored = lower_kernel_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1(
         &module,
         &module.kernels[0].id,
+        fe2o3_amdgcn_model::ProductionSemanticAnchorKirIdentityV1::from_v8(
+            &VerifiedCanonicalKernelIrV8::from_module(module.clone()).unwrap(),
+        ),
     )
     .unwrap();
     let operations = module.functions[0]

@@ -268,7 +268,7 @@ impl PreparedFinalizedProtectedWorkerV3HsacoV1 {
     }
 }
 
-fn validate_production_association(
+pub(crate) fn validate_production_association(
     outer: &fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffV3,
     actual: InertSemanticToLlvmAssociationInputsV3,
 ) -> Result<(), FinalizedSemanticDebugMapErrorV1> {

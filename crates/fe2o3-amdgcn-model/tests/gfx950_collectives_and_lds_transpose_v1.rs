@@ -228,9 +228,13 @@ fn lowers_exact_fp4_and_fp8_collective_and_lds_transpose_modules() {
     ] {
         let module = collective_and_lds_transpose_module(format);
         verify_module(&module).unwrap();
+        assert!(VerifiedCanonicalKernelIrV8::from_module(module.clone()).is_err());
         let anchored = lower_kernel_to_gfx950_xnack_minus_llvm_ir_with_semantic_anchors_v1(
             &module,
             &KernelId::new("collective"),
+            fe2o3_amdgcn_model::ProductionSemanticAnchorKirIdentityV1::from_v9(
+                &VerifiedCanonicalKernelIrV9::from_module(module.clone()).unwrap(),
+            ),
         )
         .unwrap();
         let operations = module.functions[0].body.as_ref().unwrap().blocks[0]

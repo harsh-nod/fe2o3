@@ -34,7 +34,10 @@ use fe2o3_kernel_ir::{
 };
 use sha2::{Digest, Sha256};
 
-use crate::{AMDGPU_TRIPLE, AmdgcnIntrinsic, Dim};
+use crate::{
+    AMDGPU_TRIPLE, AmdgcnIntrinsic, Dim, MAX_PRODUCTION_LEGACY_REPLAY_LLVM_TEXT_BYTES_V1,
+    MAX_PRODUCTION_SEMANTIC_ANCHOR_LLVM_TEXT_BYTES_V1, MAX_PRODUCTION_SEMANTIC_ANCHORS_V1,
+};
 
 const MAX_G1_FLAT_WORKGROUP_SIZE: u32 = 1024;
 const MAX_COMPILER_MODULE_GRAPH_FUNCTIONS: usize = 1_024;
@@ -43,7 +46,9 @@ const MAX_COMPILER_MODULE_CALL_EDGES: usize = 131_072;
 /// Maximum textual LLVM bytes returned by compiler-module construction.
 pub const MAX_COMPILER_MODULE_TEXT_BYTES: usize = 16 * 1024 * 1024;
 
-/// Exact data layout measured from the pinned upstream LLVM target machine.
+/// Historical dialect LLVM V1 layout retained for exact replay compatibility.
+///
+/// Physical LLVM 22 Worker input is produced by the additive Worker-layout binder.
 pub const GFX942_XNACK_MINUS_DATA_LAYOUT: &str =
     fe2o3_amd_target::PRODUCTION_AMDHSA_LLVM_DATA_LAYOUT_V1;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -170,6 +175,8 @@ pub enum LoweringDiagnosticCode {
     AmbiguousKernel,
     ConflictingSymbol,
     ResourceLimit,
+    AllocationFailure,
+    SemanticAnchorIdentityMismatch,
     IncompatibleWaveCallGraph,
     MissingWaveWidth,
     UnsafeSymbolName,
@@ -201,6 +208,44 @@ pub enum LoweringDiagnosticCode {
     UnsupportedConstant,
     UnsupportedTerminator,
     IrreducibleControlFlow,
+}
+
+/// Exact version-bound target KIR identity retained by semantic-anchor lowering.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProductionSemanticAnchorKirIdentityV1 {
+    version: u8,
+    sha256: [u8; 32],
+    byte_len: u64,
+}
+
+impl ProductionSemanticAnchorKirIdentityV1 {
+    pub fn from_v8(owner: &VerifiedCanonicalKernelIrV8) -> Self {
+        Self {
+            version: 8,
+            sha256: *owner.identity().digest(),
+            byte_len: owner.identity().canonical_length(),
+        }
+    }
+
+    pub fn from_v9(owner: &VerifiedCanonicalKernelIrV9) -> Self {
+        Self {
+            version: 9,
+            sha256: *owner.identity().digest(),
+            byte_len: owner.identity().canonical_length(),
+        }
+    }
+
+    pub const fn version(self) -> u8 {
+        self.version
+    }
+
+    pub const fn sha256(self) -> [u8; 32] {
+        self.sha256
+    }
+
+    pub const fn byte_len(self) -> u64 {
+        self.byte_len
+    }
 }
 
 /// A deterministic source location in the kernel IR.
@@ -403,7 +448,13 @@ pub fn lower_kernel_to_llvm_ir(
     module: &Module,
     kernel_id: &KernelId,
 ) -> Result<String, LoweringErrors> {
-    lower_kernel_to_llvm_ir_for_target(module, kernel_id, LoweringTarget::Baseline, false)
+    lower_kernel_to_llvm_ir_for_target(
+        module,
+        kernel_id,
+        LoweringTarget::Baseline,
+        None,
+        MAX_COMPILER_MODULE_TEXT_BYTES,
+    )
 }
 
 /// Lowers one kernel for the strict gfx942 floating-point profile.
@@ -420,7 +471,8 @@ pub fn lower_kernel_to_gfx942_llvm_ir(
         module,
         kernel_id,
         LoweringTarget::Gfx942StrictFloatV1,
-        false,
+        None,
+        MAX_COMPILER_MODULE_TEXT_BYTES,
     )
 }
 
@@ -434,7 +486,13 @@ pub fn lower_kernel_to_gfx942_xnack_minus_llvm_ir(
     module: &Module,
     kernel_id: &KernelId,
 ) -> Result<String, LoweringErrors> {
-    lower_kernel_to_llvm_ir_for_target(module, kernel_id, LoweringTarget::Gfx942XnackMinusV1, false)
+    lower_kernel_to_llvm_ir_for_target(
+        module,
+        kernel_id,
+        LoweringTarget::Gfx942XnackMinusV1,
+        None,
+        MAX_COMPILER_MODULE_TEXT_BYTES,
+    )
 }
 
 /// Lowers the exact gfx942 production kernel with one non-executing metadata anchor per KIR
@@ -449,8 +507,15 @@ pub fn lower_kernel_to_gfx942_xnack_minus_llvm_ir(
 pub fn lower_kernel_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1(
     module: &Module,
     kernel_id: &KernelId,
+    target_kir_identity: ProductionSemanticAnchorKirIdentityV1,
 ) -> Result<String, LoweringErrors> {
-    lower_kernel_to_llvm_ir_for_target(module, kernel_id, LoweringTarget::Gfx942XnackMinusV1, true)
+    lower_kernel_to_llvm_ir_for_target(
+        module,
+        kernel_id,
+        LoweringTarget::Gfx942XnackMinusV1,
+        Some(target_kir_identity),
+        MAX_PRODUCTION_SEMANTIC_ANCHOR_LLVM_TEXT_BYTES_V1,
+    )
 }
 
 /// Lowers one kernel only when Kernel IR retains the exact gfx950:xnack- binding.
@@ -462,7 +527,13 @@ pub fn lower_kernel_to_gfx950_xnack_minus_llvm_ir(
     module: &Module,
     kernel_id: &KernelId,
 ) -> Result<String, LoweringErrors> {
-    lower_kernel_to_llvm_ir_for_target(module, kernel_id, LoweringTarget::Gfx950XnackMinusV1, false)
+    lower_kernel_to_llvm_ir_for_target(
+        module,
+        kernel_id,
+        LoweringTarget::Gfx950XnackMinusV1,
+        None,
+        MAX_COMPILER_MODULE_TEXT_BYTES,
+    )
 }
 
 /// Gfx950 counterpart of
@@ -470,15 +541,49 @@ pub fn lower_kernel_to_gfx950_xnack_minus_llvm_ir(
 pub fn lower_kernel_to_gfx950_xnack_minus_llvm_ir_with_semantic_anchors_v1(
     module: &Module,
     kernel_id: &KernelId,
+    target_kir_identity: ProductionSemanticAnchorKirIdentityV1,
 ) -> Result<String, LoweringErrors> {
-    lower_kernel_to_llvm_ir_for_target(module, kernel_id, LoweringTarget::Gfx950XnackMinusV1, true)
+    lower_kernel_to_llvm_ir_for_target(
+        module,
+        kernel_id,
+        LoweringTarget::Gfx950XnackMinusV1,
+        Some(target_kir_identity),
+        MAX_PRODUCTION_SEMANTIC_ANCHOR_LLVM_TEXT_BYTES_V1,
+    )
+}
+
+pub(crate) fn lower_kernel_to_gfx942_xnack_minus_replay_llvm_ir_v1(
+    module: &Module,
+    kernel_id: &KernelId,
+) -> Result<String, LoweringErrors> {
+    lower_kernel_to_llvm_ir_for_target(
+        module,
+        kernel_id,
+        LoweringTarget::Gfx942XnackMinusV1,
+        None,
+        MAX_PRODUCTION_LEGACY_REPLAY_LLVM_TEXT_BYTES_V1,
+    )
+}
+
+pub(crate) fn lower_kernel_to_gfx950_xnack_minus_replay_llvm_ir_v1(
+    module: &Module,
+    kernel_id: &KernelId,
+) -> Result<String, LoweringErrors> {
+    lower_kernel_to_llvm_ir_for_target(
+        module,
+        kernel_id,
+        LoweringTarget::Gfx950XnackMinusV1,
+        None,
+        MAX_PRODUCTION_LEGACY_REPLAY_LLVM_TEXT_BYTES_V1,
+    )
 }
 
 fn lower_kernel_to_llvm_ir_for_target(
     module: &Module,
     kernel_id: &KernelId,
     target: LoweringTarget,
-    semantic_anchors: bool,
+    semantic_anchor_identity: Option<ProductionSemanticAnchorKirIdentityV1>,
+    max_text_bytes: usize,
 ) -> Result<String, LoweringErrors> {
     verify_module(module).map_err(LoweringErrors::verification)?;
 
@@ -577,35 +682,95 @@ fn lower_kernel_to_llvm_ir_for_target(
         ));
     }
 
-    let definition_count = module
-        .functions
-        .iter()
-        .filter(|function| function.body.is_some())
-        .count();
-    let semantic_anchor_context = if semantic_anchors && definition_count == 1 {
-        let canonical_kir_identity = match VerifiedCanonicalKernelIrV8::from_module(module.clone())
-        {
-            Ok(canonical) => *canonical.identity().digest(),
-            Err(v8_error) => VerifiedCanonicalKernelIrV9::from_module(module.clone())
-                .map(|canonical| *canonical.identity().digest())
-                .map_err(|v9_error| {
-                    LoweringErrors::one(
-                        LoweringLocation::module(module),
-                        LoweringDiagnosticCode::ResourceLimit,
-                        format!(
-                            "cannot bind semantic anchors to canonical production KIR: V8: {v8_error}; V9: {v9_error}"
-                        ),
-                    )
-                })?,
-        };
-        Some(SemanticAnchorContextV1 {
-            canonical_kir_identity,
-            target: target
+    let semantic_anchor_emission = match semantic_anchor_identity {
+        None => SemanticAnchorEmissionV1::Disabled,
+        Some(identity) => {
+            validate_semantic_anchor_identity_v1(module, identity)?;
+            let target = target
                 .exact_target_binding()
-                .expect("semantic anchors require an exact production target"),
-        })
-    } else {
-        None
+                .expect("semantic anchors require an exact production target");
+            let definition_count = module
+                .functions
+                .iter()
+                .filter(|function| function.body.is_some())
+                .count();
+            let context = SemanticAnchorContextV1 { identity, target };
+            if definition_count != 1 {
+                SemanticAnchorEmissionV1::MultipleDefinedBodies(context)
+            } else {
+                let function_ordinal = u64::try_from(
+                    module
+                        .functions
+                        .iter()
+                        .position(|candidate| std::ptr::eq(candidate, entry))
+                        .expect("the entry belongs to the verified module"),
+                )
+                .map_err(|_| {
+                    LoweringErrors::one(
+                        LoweringLocation::function(module, kernel, entry),
+                        LoweringDiagnosticCode::ResourceLimit,
+                        "semantic anchor function ordinal exceeds u64",
+                    )
+                })?;
+                let body = entry.body.as_ref().expect("entry definition checked above");
+                let block_count = u64::try_from(body.blocks.len()).map_err(|_| {
+                    LoweringErrors::one(
+                        LoweringLocation::function(module, kernel, entry),
+                        LoweringDiagnosticCode::ResourceLimit,
+                        "semantic anchor block count exceeds u64",
+                    )
+                })?;
+                let operation_count = body.blocks.iter().try_fold(0_u64, |total, block| {
+                    u64::try_from(block.operations.len())
+                        .ok()
+                        .and_then(|count| total.checked_add(count))
+                        .ok_or_else(|| {
+                            LoweringErrors::one(
+                                LoweringLocation::function(module, kernel, entry),
+                                LoweringDiagnosticCode::ResourceLimit,
+                                "semantic anchor operation count exceeds u64",
+                            )
+                        })
+                })?;
+                if operation_count == 0 {
+                    SemanticAnchorEmissionV1::NoOperations(context)
+                } else {
+                    if !semantic_anchor_manifest_counts_within_limit_v1(
+                        block_count,
+                        operation_count,
+                    ) {
+                        return Err(LoweringErrors::one(
+                            LoweringLocation::function(module, kernel, entry),
+                            LoweringDiagnosticCode::ResourceLimit,
+                            format!(
+                                "semantic anchor manifest has {block_count} blocks and {operation_count} operations; maximum for each is {}",
+                                MAX_PRODUCTION_SEMANTIC_ANCHORS_V1
+                            ),
+                        ));
+                    }
+                    SemanticAnchorEmissionV1::Active(SemanticAnchorPlanV1 {
+                        context,
+                        function_ordinal,
+                        block_count,
+                        operation_count,
+                        guid: semantic_anchor_digest_v1(
+                            SEMANTIC_ANCHOR_GUID_DOMAIN_V1,
+                            context,
+                            function_ordinal,
+                            block_count,
+                            operation_count,
+                        ),
+                        function_hash: semantic_anchor_digest_v1(
+                            SEMANTIC_ANCHOR_HASH_DOMAIN_V1,
+                            context,
+                            function_ordinal,
+                            block_count,
+                            operation_count,
+                        ),
+                    })
+                }
+            }
+        }
     };
     let mut lowerer = FunctionLowerer::new(
         module,
@@ -614,10 +779,39 @@ fn lower_kernel_to_llvm_ir_for_target(
         workgroup_size,
         wave_width,
         target,
-        semantic_anchor_context,
+        semantic_anchor_emission,
     );
     preflight_function(&mut lowerer)?;
-    lowerer.emit()
+    lowerer.emit(max_text_bytes)
+}
+
+const fn semantic_anchor_manifest_counts_within_limit_v1(
+    block_count: u64,
+    operation_count: u64,
+) -> bool {
+    block_count <= MAX_PRODUCTION_SEMANTIC_ANCHORS_V1 as u64
+        && operation_count <= MAX_PRODUCTION_SEMANTIC_ANCHORS_V1 as u64
+}
+
+fn validate_semantic_anchor_identity_v1(
+    module: &Module,
+    expected: ProductionSemanticAnchorKirIdentityV1,
+) -> Result<(), LoweringErrors> {
+    let matches = match expected.version() {
+        8 => VerifiedCanonicalKernelIrV8::from_module(module.clone())
+            .is_ok_and(|owner| ProductionSemanticAnchorKirIdentityV1::from_v8(&owner) == expected),
+        9 => VerifiedCanonicalKernelIrV9::from_module(module.clone())
+            .is_ok_and(|owner| ProductionSemanticAnchorKirIdentityV1::from_v9(&owner) == expected),
+        _ => unreachable!("semantic anchor identities have a closed version constructor"),
+    };
+    if !matches {
+        return Err(LoweringErrors::one(
+            LoweringLocation::module(module),
+            LoweringDiagnosticCode::SemanticAnchorIdentityMismatch,
+            "semantic anchors require the exact retained version-bound target KIR identity",
+        ));
+    }
+    Ok(())
 }
 
 /// Lowers one verified kernel-IR module to one deterministic textual AMDGPU LLVM module.
@@ -2158,7 +2352,7 @@ fn emit_compiler_module(
     let readnone_attribute = has_readnone.then_some(kernels.len());
     let convergent_attribute = has_convergent.then_some(kernels.len() + usize::from(has_readnone));
 
-    let mut output = CapacityLimitedText::new(MAX_COMPILER_MODULE_TEXT_BYTES);
+    let mut output = CapacityLimitedText::try_new(module, MAX_COMPILER_MODULE_TEXT_BYTES)?;
     writeln!(output, "target triple = \"{AMDGPU_TRIPLE}\"").unwrap();
     if let Some(data_layout) = target.data_layout() {
         writeln!(output, "target datalayout = \"{data_layout}\"").unwrap();
@@ -2284,19 +2478,35 @@ struct CapacityLimitedText {
     attempted_bytes: usize,
     max_bytes: usize,
     overflowed: bool,
+    allocation_failed: bool,
 }
 
 impl CapacityLimitedText {
-    fn new(max_bytes: usize) -> Self {
-        Self {
-            output: String::with_capacity(max_bytes),
+    fn try_new(module: &Module, max_bytes: usize) -> Result<Self, LoweringErrors> {
+        if max_bytes == 0 {
+            return Err(LoweringErrors::one(
+                LoweringLocation::module(module),
+                LoweringDiagnosticCode::ResourceLimit,
+                "textual LLVM byte limit must be nonzero",
+            ));
+        }
+        Ok(Self {
+            output: String::new(),
             attempted_bytes: 0,
             max_bytes,
             overflowed: false,
-        }
+            allocation_failed: false,
+        })
     }
 
     fn finish(self, module: &Module) -> Result<String, LoweringErrors> {
+        if self.allocation_failed {
+            return Err(LoweringErrors::one(
+                LoweringLocation::module(module),
+                LoweringDiagnosticCode::AllocationFailure,
+                "could not grow bounded textual LLVM output",
+            ));
+        }
         if self.overflowed {
             return Err(LoweringErrors::one(
                 LoweringLocation::module(module),
@@ -2313,9 +2523,17 @@ impl CapacityLimitedText {
 
 impl fmt::Write for CapacityLimitedText {
     fn write_str(&mut self, text: &str) -> fmt::Result {
-        self.attempted_bytes = self.attempted_bytes.saturating_add(text.len());
-        if self.overflowed || self.attempted_bytes > self.max_bytes {
+        let Some(attempted_bytes) = self.attempted_bytes.checked_add(text.len()) else {
             self.overflowed = true;
+            return Ok(());
+        };
+        self.attempted_bytes = attempted_bytes;
+        if self.overflowed || self.allocation_failed || attempted_bytes > self.max_bytes {
+            self.overflowed |= attempted_bytes > self.max_bytes;
+            return Ok(());
+        }
+        if self.output.try_reserve(text.len()).is_err() {
+            self.allocation_failed = true;
             return Ok(());
         }
         self.output.push_str(text);
@@ -3015,13 +3233,48 @@ struct FunctionLowerer<'a> {
     bindings: BTreeMap<ValueId, ValueBinding>,
     control_flow: IndexedControlFlow,
     split_edges: Vec<bool>,
-    semantic_anchor_context: Option<SemanticAnchorContextV1>,
+    semantic_anchor_emission: SemanticAnchorEmissionV1,
 }
 
 #[derive(Clone, Copy)]
 struct SemanticAnchorContextV1 {
-    canonical_kir_identity: [u8; 32],
+    identity: ProductionSemanticAnchorKirIdentityV1,
     target: &'static str,
+}
+
+#[derive(Clone, Copy)]
+struct SemanticAnchorPlanV1 {
+    context: SemanticAnchorContextV1,
+    function_ordinal: u64,
+    block_count: u64,
+    operation_count: u64,
+    guid: u64,
+    function_hash: u64,
+}
+
+#[derive(Clone, Copy)]
+enum SemanticAnchorEmissionV1 {
+    Disabled,
+    NoOperations(SemanticAnchorContextV1),
+    MultipleDefinedBodies(SemanticAnchorContextV1),
+    Active(SemanticAnchorPlanV1),
+}
+
+fn emit_semantic_anchor_absence_v1(
+    output: &mut dyn fmt::Write,
+    reason: &str,
+    context: SemanticAnchorContextV1,
+) {
+    writeln!(output, "!fe2o3.semantic_anchor.absence.v1 = !{{!1}}").unwrap();
+    writeln!(
+        output,
+        "!1 = !{{!\"{reason}\", !\"sha256:{}\", !\"kir-version:{}\", i64 {}, !\"target:{}\"}}",
+        lower_hex(&context.identity.sha256()),
+        context.identity.version(),
+        context.identity.byte_len(),
+        context.target,
+    )
+    .unwrap();
 }
 
 const SEMANTIC_ANCHOR_GUID_DOMAIN_V1: &[u8] = b"FE2O3/PRODUCTION-KIR-LLVM-ISA-ANCHOR-GUID/V1\0";
@@ -3036,7 +3289,9 @@ fn semantic_anchor_digest_v1(
 ) -> u64 {
     let mut hasher = Sha256::new();
     hasher.update(domain);
-    hasher.update(context.canonical_kir_identity);
+    hasher.update([context.identity.version()]);
+    hasher.update(context.identity.sha256());
+    hasher.update(context.identity.byte_len().to_le_bytes());
     hasher.update((context.target.len() as u64).to_le_bytes());
     hasher.update(context.target.as_bytes());
     hasher.update(function_ordinal.to_le_bytes());
@@ -3269,7 +3524,7 @@ impl<'a> FunctionLowerer<'a> {
         workgroup_size: WorkgroupSize,
         wave_width: Option<WaveWidth>,
         target: LoweringTarget,
-        semantic_anchor_context: Option<SemanticAnchorContextV1>,
+        semantic_anchor_emission: SemanticAnchorEmissionV1,
     ) -> Self {
         let (control_flow, split_edges) = control_flow_emission_plan(function);
         Self {
@@ -3285,7 +3540,7 @@ impl<'a> FunctionLowerer<'a> {
             bindings: BTreeMap::new(),
             control_flow,
             split_edges,
-            semantic_anchor_context,
+            semantic_anchor_emission,
         }
     }
 
@@ -3314,7 +3569,7 @@ impl<'a> FunctionLowerer<'a> {
             bindings: BTreeMap::new(),
             control_flow,
             split_edges,
-            semantic_anchor_context: None,
+            semantic_anchor_emission: SemanticAnchorEmissionV1::Disabled,
         }
     }
 
@@ -3339,7 +3594,7 @@ impl<'a> FunctionLowerer<'a> {
             bindings: BTreeMap::new(),
             control_flow,
             split_edges,
-            semantic_anchor_context: None,
+            semantic_anchor_emission: SemanticAnchorEmissionV1::Disabled,
         }
     }
 
@@ -4752,8 +5007,8 @@ impl<'a> FunctionLowerer<'a> {
         Ok(())
     }
 
-    fn emit(&self) -> Result<String, LoweringErrors> {
-        let mut output = String::new();
+    fn emit(&self, max_bytes: usize) -> Result<String, LoweringErrors> {
+        let mut output = CapacityLimitedText::try_new(self.module, max_bytes)?;
         writeln!(output, "target triple = \"{AMDGPU_TRIPLE}\"").unwrap();
         if let Some(data_layout) = self.target.data_layout() {
             writeln!(output, "target datalayout = \"{data_layout}\"").unwrap();
@@ -4839,7 +5094,10 @@ impl<'a> FunctionLowerer<'a> {
             writeln!(output).unwrap();
         }
         let invocation_intrinsics = collect_intrinsic_declarations(std::iter::once(self));
-        if self.semantic_anchor_context.is_some() {
+        if matches!(
+            self.semantic_anchor_emission,
+            SemanticAnchorEmissionV1::Active(_)
+        ) {
             writeln!(output, "declare void @llvm.pseudoprobe(i64, i64, i32, i64)").unwrap();
         }
         writeln!(
@@ -4998,7 +5256,7 @@ impl<'a> FunctionLowerer<'a> {
         )
         .unwrap();
         self.emit_semantic_anchor_metadata_v1(&mut output);
-        Ok(output)
+        output.finish(self.module)
     }
 
     fn emit_compiler_module_definition(
@@ -5044,11 +5302,30 @@ impl<'a> FunctionLowerer<'a> {
 
     fn emit_body(&self, output: &mut dyn fmt::Write) -> Result<(), LoweringErrors> {
         let body = self.function.body.as_ref().expect("definition required");
+        let mut next_probe_index = 1_u64;
         for block in &body.blocks {
             writeln!(output, "{}:", block_label(block.id)).unwrap();
             self.emit_block_parameters(output, block);
             for (operation_index, operation) in block.operations.iter().enumerate() {
-                self.emit_semantic_anchor_v1(output, block, operation_index);
+                self.emit_semantic_anchor_v1(output, next_probe_index);
+                if matches!(
+                    self.semantic_anchor_emission,
+                    SemanticAnchorEmissionV1::Active(_)
+                ) {
+                    next_probe_index = next_probe_index.checked_add(1).ok_or_else(|| {
+                        LoweringErrors::one(
+                            LoweringLocation::operation(
+                                self.module,
+                                self.kernel.expect("semantic anchors are kernel-only"),
+                                self.function,
+                                block.id,
+                                operation_index,
+                            ),
+                            LoweringDiagnosticCode::ResourceLimit,
+                            "semantic anchor probe index exceeds u64",
+                        )
+                    })?;
+                }
                 self.emit_operation(output, block.id, operation_index, operation)?;
             }
             self.emit_terminator(
@@ -5058,123 +5335,87 @@ impl<'a> FunctionLowerer<'a> {
             );
             self.emit_split_edges(output, block);
         }
+        if let SemanticAnchorEmissionV1::Active(plan) = self.semantic_anchor_emission {
+            debug_assert_eq!(next_probe_index - 1, plan.operation_count);
+        }
         Ok(())
     }
 
-    fn semantic_anchor_descriptor_v1(&self) -> Option<(u64, u64)> {
-        let context = self.semantic_anchor_context?;
-        let function =
-            self.module
-                .functions
-                .iter()
-                .position(|candidate| std::ptr::eq(candidate, self.function))? as u64;
-        let body = self.function.body.as_ref()?;
-        let block_count = body.blocks.len() as u64;
-        let operation_count = body
-            .blocks
-            .iter()
-            .map(|block| block.operations.len() as u64)
-            .sum();
-        Some((
-            semantic_anchor_digest_v1(
-                SEMANTIC_ANCHOR_GUID_DOMAIN_V1,
-                context,
-                function,
-                block_count,
-                operation_count,
-            ),
-            semantic_anchor_digest_v1(
-                SEMANTIC_ANCHOR_HASH_DOMAIN_V1,
-                context,
-                function,
-                block_count,
-                operation_count,
-            ),
-        ))
-    }
-
-    fn emit_semantic_anchor_v1(
-        &self,
-        output: &mut dyn fmt::Write,
-        block: &BasicBlock,
-        operation_index: usize,
-    ) {
-        let Some((guid, _)) = self.semantic_anchor_descriptor_v1() else {
+    fn emit_semantic_anchor_v1(&self, output: &mut dyn fmt::Write, probe_index: u64) {
+        let SemanticAnchorEmissionV1::Active(plan) = self.semantic_anchor_emission else {
             return;
         };
-        let body = self.function.body.as_ref().expect("definition required");
-        let block_ordinal = body
-            .blocks
-            .iter()
-            .position(|candidate| std::ptr::eq(candidate, block))
-            .expect("emitted block belongs to the function");
-        let preceding = body.blocks[..block_ordinal]
-            .iter()
-            .map(|block| block.operations.len())
-            .sum::<usize>();
-        let probe_index = preceding
-            .checked_add(operation_index)
-            .and_then(|value| value.checked_add(1))
-            .expect("verified KIR operation count is bounded");
         writeln!(
             output,
-            "  call void @llvm.pseudoprobe(i64 {guid}, i64 {probe_index}, i32 0, i64 -1)"
+            "  call void @llvm.pseudoprobe(i64 {}, i64 {probe_index}, i32 0, i64 -1)",
+            plan.guid,
         )
         .unwrap();
     }
 
     fn emit_semantic_anchor_metadata_v1(&self, output: &mut dyn fmt::Write) {
-        let Some(context) = self.semantic_anchor_context else {
-            return;
+        let plan = match self.semantic_anchor_emission {
+            SemanticAnchorEmissionV1::Disabled => return,
+            SemanticAnchorEmissionV1::NoOperations(context) => {
+                emit_semantic_anchor_absence_v1(output, "no_operations", context);
+                return;
+            }
+            SemanticAnchorEmissionV1::MultipleDefinedBodies(context) => {
+                emit_semantic_anchor_absence_v1(output, "multiple_defined_bodies", context);
+                return;
+            }
+            SemanticAnchorEmissionV1::Active(plan) => plan,
         };
         let body = self.function.body.as_ref().expect("definition required");
-        let (guid, hash) = self
-            .semantic_anchor_descriptor_v1()
-            .expect("semantic anchor descriptor context");
         writeln!(output, "!llvm.pseudo_probe_desc = !{{!1}}").unwrap();
         writeln!(
             output,
-            "!1 = !{{i64 {guid}, i64 {hash}, !\"{}\"}}",
-            self.symbol
+            "!1 = !{{i64 {}, i64 {}, !\"{}\"}}",
+            plan.guid, plan.function_hash, self.symbol
         )
         .unwrap();
-        let binding_index = 2;
-        let record_start = 3;
-        let operation_count = body
-            .blocks
-            .iter()
-            .map(|block| block.operations.len())
-            .sum::<usize>();
+        let binding_index = 2_u64;
+        let record_start = 3_u64;
         write!(output, "!fe2o3.semantic_anchor.v1 = !{{!{binding_index}").unwrap();
-        for index in 0..operation_count {
+        for index in 0..plan.operation_count {
             write!(output, ", !{}", record_start + index).unwrap();
         }
         writeln!(output, "}}").unwrap();
         writeln!(
             output,
-            "!{binding_index} = !{{!\"sha256:{}\", !\"target:{}\", i64 {guid}, i64 {hash}, i64 {}, i64 {operation_count}}}",
-            lower_hex(&context.canonical_kir_identity),
-            context.target,
-            body.blocks.len()
+            "!{binding_index} = !{{!\"sha256:{}\", !\"kir-version:{}\", i64 {}, !\"target:{}\", i64 {}, i64 {}, i64 {}, i64 {}}}",
+            lower_hex(&plan.context.identity.sha256()),
+            plan.context.identity.version(),
+            plan.context.identity.byte_len(),
+            plan.context.target,
+            plan.guid,
+            plan.function_hash,
+            plan.block_count,
+            plan.operation_count,
         )
         .unwrap();
-        let function = self
-            .module
-            .functions
-            .iter()
-            .position(|candidate| std::ptr::eq(candidate, self.function))
-            .expect("emitted function belongs to the module");
-        let mut probe_index = 1_usize;
-        for (block_ordinal, block) in body.blocks.iter().enumerate() {
-            for operation_ordinal in 0..block.operations.len() {
+        let mut probe_index = 1_u64;
+        let mut block_ordinal = 0_u64;
+        for block in &body.blocks {
+            let mut operation_ordinal = 0_u64;
+            for _ in &block.operations {
                 writeln!(
                     output,
-                    "!{} = !{{i64 {probe_index}, i64 {function}, i64 {block_ordinal}, i64 {operation_ordinal}}}",
-                    record_start + probe_index - 1
+                    "!{} = !{{i64 {probe_index}, i64 {}, i64 {block_ordinal}, i64 {operation_ordinal}}}",
+                    record_start + probe_index - 1,
+                    plan.function_ordinal,
                 )
                 .unwrap();
-                probe_index += 1;
+                probe_index = probe_index
+                    .checked_add(1)
+                    .expect("the precomputed operation count is bounded");
+                operation_ordinal = operation_ordinal
+                    .checked_add(1)
+                    .expect("the precomputed operation count is bounded");
             }
+            block_ordinal = block_ordinal
+                .checked_add(1)
+                .expect("the precomputed block count is bounded");
         }
     }
 
@@ -8361,6 +8602,48 @@ fn cast_opcode(kind: CastKind, from: &Type, to: &Type) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn semantic_anchor_manifest_limits_have_exact_boundaries() {
+        let maximum = MAX_PRODUCTION_SEMANTIC_ANCHORS_V1 as u64;
+        assert!(semantic_anchor_manifest_counts_within_limit_v1(
+            maximum, maximum
+        ));
+        assert!(!semantic_anchor_manifest_counts_within_limit_v1(
+            maximum + 1,
+            1
+        ));
+        assert!(!semantic_anchor_manifest_counts_within_limit_v1(
+            1,
+            maximum + 1
+        ));
+    }
+
+    #[test]
+    fn capacity_limited_text_is_exact_and_overflow_safe() {
+        let module = Module::new("bounded");
+        let mut exact = CapacityLimitedText::try_new(&module, 3).unwrap();
+        exact.write_str("abc").unwrap();
+        assert_eq!(exact.finish(&module).unwrap(), "abc");
+
+        let mut over = CapacityLimitedText::try_new(&module, 3).unwrap();
+        over.write_str("ab").unwrap();
+        over.write_str("cd").unwrap();
+        let error = over.finish(&module).unwrap_err();
+        assert_eq!(
+            error.diagnostics()[0].code,
+            LoweringDiagnosticCode::ResourceLimit
+        );
+
+        let mut overflow = CapacityLimitedText::try_new(&module, 3).unwrap();
+        overflow.attempted_bytes = usize::MAX;
+        overflow.write_str("x").unwrap();
+        let error = overflow.finish(&module).unwrap_err();
+        assert_eq!(
+            error.diagnostics()[0].code,
+            LoweringDiagnosticCode::ResourceLimit
+        );
+    }
 
     #[test]
     fn safe_symbols_are_intentionally_conservative() {

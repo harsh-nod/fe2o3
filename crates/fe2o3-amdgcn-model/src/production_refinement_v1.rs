@@ -1,7 +1,10 @@
 use std::error::Error;
 use std::fmt;
 
-use fe2o3_amd_target::{PRODUCTION_AMDHSA_LLVM_DATA_LAYOUT_V1, ProductionAmdTargetProfileV1};
+use fe2o3_amd_target::{
+    PRODUCTION_AMDHSA_LLVM_DATA_LAYOUT_V1, PRODUCTION_AMDHSA_LLVM22_WORKER_DATA_LAYOUT_V1,
+    ProductionAmdTargetProfileV1,
+};
 use fe2o3_kernel_ir::{
     FunctionId, KernelId, Module, TargetCapability, VerificationErrors, WaveWidth,
     gfx942_xnack_minus_target_capability, gfx950_xnack_minus_target_capability, verify_module,
@@ -123,6 +126,9 @@ pub fn bind_production_target_v1(
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ProductionLlvmLayoutBindingErrorV1 {
     NonCanonicalTargetHeader,
+    Overflow,
+    ResourceLimit,
+    AllocationFailure,
 }
 
 impl fmt::Display for ProductionLlvmLayoutBindingErrorV1 {
@@ -130,13 +136,20 @@ impl fmt::Display for ProductionLlvmLayoutBindingErrorV1 {
         match self {
             Self::NonCanonicalTargetHeader => formatter
                 .write_str("verified AMDGPU lowering did not retain one canonical target header"),
+            Self::Overflow => formatter.write_str("LLVM target-header binding length overflowed"),
+            Self::ResourceLimit => {
+                formatter.write_str("LLVM target-header binding exceeds its byte limit")
+            }
+            Self::AllocationFailure => {
+                formatter.write_str("LLVM target-header binding allocation failed")
+            }
         }
     }
 }
 
 impl Error for ProductionLlvmLayoutBindingErrorV1 {}
 
-/// Rebinds deterministic dialect LLVM to the layout measured from upstream LLVM.
+/// Retains the historical production LLVM V1 layout for exact replay compatibility.
 ///
 /// The input must contain exactly one canonical AMDGPU target header. The
 /// returned text is suitable for exact replay by an independent verifier; it
@@ -144,27 +157,82 @@ impl Error for ProductionLlvmLayoutBindingErrorV1 {}
 pub fn bind_production_upstream_llvm_layout_v1(
     dialect_llvm_ir: &str,
 ) -> Result<String, ProductionLlvmLayoutBindingErrorV1> {
-    let triple_header = format!("target triple = \"{AMDGPU_TRIPLE}\"\n");
-    let dialect_layout = format!("target datalayout = \"{GFX942_XNACK_MINUS_DATA_LAYOUT}\"\n");
-    let expected_prefix = format!("{triple_header}{dialect_layout}\n");
-    if !dialect_llvm_ir.starts_with(&expected_prefix)
+    bind_exact_llvm_layout_v1(
+        dialect_llvm_ir,
+        PRODUCTION_AMDHSA_LLVM_DATA_LAYOUT_V1,
+        crate::MAX_COMPILER_MODULE_TEXT_BYTES,
+    )
+}
+
+pub(crate) fn bind_historical_replay_llvm_layout_v1(
+    dialect_llvm_ir: &str,
+) -> Result<String, ProductionLlvmLayoutBindingErrorV1> {
+    bind_exact_llvm_layout_v1(
+        dialect_llvm_ir,
+        PRODUCTION_AMDHSA_LLVM_DATA_LAYOUT_V1,
+        crate::MAX_PRODUCTION_LEGACY_REPLAY_LLVM_TEXT_BYTES_V1,
+    )
+}
+
+/// Rebinds deterministic dialect LLVM to the layout measured from the LLVM 22 Worker.
+///
+/// This additive surface is for physical Worker input. It does not change the byte meaning of the
+/// historical V1 binder or serialized V1 policies.
+pub fn bind_production_llvm22_worker_layout_v1(
+    dialect_llvm_ir: &str,
+) -> Result<String, ProductionLlvmLayoutBindingErrorV1> {
+    bind_exact_llvm_layout_v1(
+        dialect_llvm_ir,
+        PRODUCTION_AMDHSA_LLVM22_WORKER_DATA_LAYOUT_V1,
+        crate::MAX_PRODUCTION_SEMANTIC_ANCHOR_LLVM_TEXT_BYTES_V1,
+    )
+}
+
+fn bind_exact_llvm_layout_v1(
+    dialect_llvm_ir: &str,
+    bound_layout: &str,
+    max_bytes: usize,
+) -> Result<String, ProductionLlvmLayoutBindingErrorV1> {
+    const TRIPLE_HEADER: &str = "target triple = \"amdgcn-amd-amdhsa\"\n";
+    const LAYOUT_HEADER: &str = "target datalayout = \"";
+    const HEADER_SUFFIX: &str = "\"\n\n";
+    debug_assert_eq!(AMDGPU_TRIPLE, "amdgcn-amd-amdhsa");
+    let body = dialect_llvm_ir
+        .strip_prefix(TRIPLE_HEADER)
+        .and_then(|text| text.strip_prefix(LAYOUT_HEADER))
+        .and_then(|text| text.strip_prefix(GFX942_XNACK_MINUS_DATA_LAYOUT))
+        .and_then(|text| text.strip_prefix(HEADER_SUFFIX))
+        .ok_or(ProductionLlvmLayoutBindingErrorV1::NonCanonicalTargetHeader)?;
+    if dialect_llvm_ir.matches("target triple =").count() != 1
+        || dialect_llvm_ir.matches("target datalayout =").count() != 1
+    {
+        return Err(ProductionLlvmLayoutBindingErrorV1::NonCanonicalTargetHeader);
+    }
+    let output_len = TRIPLE_HEADER
+        .len()
+        .checked_add(LAYOUT_HEADER.len())
+        .and_then(|length| length.checked_add(bound_layout.len()))
+        .and_then(|length| length.checked_add(HEADER_SUFFIX.len()))
+        .and_then(|length| length.checked_add(body.len()))
+        .ok_or(ProductionLlvmLayoutBindingErrorV1::Overflow)?;
+    if output_len > max_bytes {
+        return Err(ProductionLlvmLayoutBindingErrorV1::ResourceLimit);
+    }
+    let mut bound = String::new();
+    bound
+        .try_reserve_exact(output_len)
+        .map_err(|_| ProductionLlvmLayoutBindingErrorV1::AllocationFailure)?;
+    bound.push_str(TRIPLE_HEADER);
+    bound.push_str(LAYOUT_HEADER);
+    bound.push_str(bound_layout);
+    bound.push_str(HEADER_SUFFIX);
+    bound.push_str(body);
+    if bound.len() != output_len
         || dialect_llvm_ir.matches("target triple =").count() != 1
         || dialect_llvm_ir.matches("target datalayout =").count() != 1
     {
         return Err(ProductionLlvmLayoutBindingErrorV1::NonCanonicalTargetHeader);
     }
-
-    let mut bound = String::with_capacity(
-        dialect_llvm_ir.len()
-            + PRODUCTION_AMDHSA_LLVM_DATA_LAYOUT_V1
-                .len()
-                .saturating_sub(GFX942_XNACK_MINUS_DATA_LAYOUT.len()),
-    );
-    bound.push_str(&triple_header);
-    bound.push_str("target datalayout = \"");
-    bound.push_str(PRODUCTION_AMDHSA_LLVM_DATA_LAYOUT_V1);
-    bound.push_str("\"\n\n");
-    bound.push_str(&dialect_llvm_ir[expected_prefix.len()..]);
     Ok(bound)
 }
 
@@ -260,6 +328,13 @@ mod tests {
             bind_production_upstream_llvm_layout_v1(&dialect).unwrap(),
             expected
         );
+        let worker_expected = format!(
+            "target triple = \"{AMDGPU_TRIPLE}\"\ntarget datalayout = \"{PRODUCTION_AMDHSA_LLVM22_WORKER_DATA_LAYOUT_V1}\"\n\ndefine void @kernel() {{\n  ret void\n}}\n"
+        );
+        assert_eq!(
+            bind_production_llvm22_worker_layout_v1(&dialect).unwrap(),
+            worker_expected
+        );
 
         for hostile in [
             dialect.replacen("target triple", "source triple", 1),
@@ -269,6 +344,10 @@ mod tests {
         ] {
             assert_eq!(
                 bind_production_upstream_llvm_layout_v1(&hostile),
+                Err(ProductionLlvmLayoutBindingErrorV1::NonCanonicalTargetHeader)
+            );
+            assert_eq!(
+                bind_production_llvm22_worker_layout_v1(&hostile),
                 Err(ProductionLlvmLayoutBindingErrorV1::NonCanonicalTargetHeader)
             );
         }

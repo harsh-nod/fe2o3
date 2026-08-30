@@ -61,6 +61,8 @@ pub(crate) enum ProductionPipelineError {
     FormalMemoryAdmission(fe2o3_lower_mir_kernel::ProductionFormalMemoryErrorV1),
     Geometry(crate::production_geometry_v1::ProductionGeometryErrorV1),
     TargetBinding(dialect_amdgcn::ProductionTargetBindingErrorV1),
+    TargetKernelIrV8(fe2o3_kernel_ir::VerifiedCanonicalKernelIrErrorV8),
+    TargetKernelIrV9(fe2o3_kernel_ir::VerifiedCanonicalKernelIrErrorV9),
     TargetLowering(dialect_amdgcn::LoweringErrors),
     UpstreamLlvmLayoutBinding(dialect_amdgcn::ProductionLlvmLayoutBindingErrorV1),
     DescriptorEvidence(crate::compiler_descriptor::CompilerDescriptorError),
@@ -155,6 +157,14 @@ impl fmt::Display for ProductionPipelineError {
             Self::TargetBinding(error) => {
                 write!(formatter, "production compilation AMDGPU target binding failed: {error}")
             }
+            Self::TargetKernelIrV8(error) => write!(
+                formatter,
+                "production compilation target-bound Kernel IR V8 identity failed: {error}"
+            ),
+            Self::TargetKernelIrV9(error) => write!(
+                formatter,
+                "production compilation target-bound Kernel IR V9 identity failed: {error}"
+            ),
             Self::TargetLowering(error) => {
                 write!(formatter, "production compilation AMDGPU LLVM lowering failed: {error}")
             }
@@ -222,6 +232,8 @@ impl std::error::Error for ProductionPipelineError {
             Self::FormalMemoryAdmission(error) => Some(error),
             Self::Geometry(error) => Some(error),
             Self::TargetBinding(error) => Some(error),
+            Self::TargetKernelIrV8(error) => Some(error),
+            Self::TargetKernelIrV9(error) => Some(error),
             Self::TargetLowering(error) => Some(error),
             Self::UpstreamLlvmLayoutBinding(error) => Some(error),
             Self::DescriptorEvidence(error) => Some(error),
@@ -612,22 +624,44 @@ impl FormalMemoryAdmittedProductionCompilation {
         )
         .map_err(ProductionPipelineError::TargetBinding)?;
         let (target_module, kernel_id) = target_bound.into_parts();
+        let target_kir_identity = match admitted
+            .semantic_kir()
+            .canonical_kernel_ir_identity()
+            .version()
+        {
+            fe2o3_lower_mir_kernel::ProductionCanonicalKernelIrVersionV1::V8 => {
+                let owner = fe2o3_kernel_ir::VerifiedCanonicalKernelIrV8::from_module(
+                    target_module.clone(),
+                )
+                .map_err(ProductionPipelineError::TargetKernelIrV8)?;
+                dialect_amdgcn::ProductionSemanticAnchorKirIdentityV1::from_v8(&owner)
+            }
+            fe2o3_lower_mir_kernel::ProductionCanonicalKernelIrVersionV1::V9 => {
+                let owner = fe2o3_kernel_ir::VerifiedCanonicalKernelIrV9::from_module(
+                    target_module.clone(),
+                )
+                .map_err(ProductionPipelineError::TargetKernelIrV9)?;
+                dialect_amdgcn::ProductionSemanticAnchorKirIdentityV1::from_v9(&owner)
+            }
+        };
         let lowering = match target_profile {
             fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx942 => {
                 dialect_amdgcn::lower_kernel_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1(
                     &target_module,
                     &kernel_id,
+                    target_kir_identity,
                 )
             }
             fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx950 => {
                 dialect_amdgcn::lower_kernel_to_gfx950_xnack_minus_llvm_ir_with_semantic_anchors_v1(
                     &target_module,
                     &kernel_id,
+                    target_kir_identity,
                 )
             }
         };
         let dialect_llvm_ir = lowering.map_err(ProductionPipelineError::TargetLowering)?;
-        let llvm_ir = dialect_amdgcn::bind_production_upstream_llvm_layout_v1(&dialect_llvm_ir)
+        let llvm_ir = dialect_amdgcn::bind_production_llvm22_worker_layout_v1(&dialect_llvm_ir)
             .map_err(ProductionPipelineError::UpstreamLlvmLayoutBinding)?;
         Ok(TargetLoweredProductionCompilation {
             admitted,
@@ -2093,12 +2127,12 @@ mod tests {
             "target triple = \"amdgcn-amd-amdhsa\"\ntarget datalayout = \"{}\"\n\ndefine void @body() {{ ret void }}\n",
             dialect_amdgcn::GFX942_XNACK_MINUS_DATA_LAYOUT
         );
-        let bound = dialect_amdgcn::bind_production_upstream_llvm_layout_v1(&legacy).unwrap();
+        let bound = dialect_amdgcn::bind_production_llvm22_worker_layout_v1(&legacy).unwrap();
         assert!(bound.starts_with(&format!(
             "target triple = \"amdgcn-amd-amdhsa\"\ntarget datalayout = \"{}\"\n\n",
             crate::production_target_v1::PRODUCTION_WORKER_DATA_LAYOUT_V1
         )));
-        assert!(bound.contains("target datalayout = \"e-m:e-"));
+        assert!(bound.contains("target datalayout = \"e-p:64:64-"));
         assert!(bound.ends_with("define void @body() { ret void }\n"));
         assert_eq!(bound.matches("target triple =").count(), 1);
         assert_eq!(bound.matches("target datalayout =").count(), 1);
@@ -2115,7 +2149,7 @@ mod tests {
             canonical.replacen("\n\n", "\n", 1),
             format!("{canonical}target datalayout = \"e-p:64:64\"\n"),
         ] {
-            assert!(dialect_amdgcn::bind_production_upstream_llvm_layout_v1(&hostile).is_err());
+            assert!(dialect_amdgcn::bind_production_llvm22_worker_layout_v1(&hostile).is_err());
         }
     }
 
@@ -2130,7 +2164,7 @@ mod tests {
             .next()
             .expect("bounded target-lowering body");
         assert!(transaction.contains("dialect_amdgcn::bind_production_target_v1("));
-        assert!(transaction.contains("dialect_amdgcn::bind_production_upstream_llvm_layout_v1("));
+        assert!(transaction.contains("dialect_amdgcn::bind_production_llvm22_worker_layout_v1("));
         assert!(!transaction.contains("required_capabilities.insert"));
     }
 

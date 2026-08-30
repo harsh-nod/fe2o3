@@ -10,10 +10,14 @@ use fe2o3_kernel_ir::{
 use sha2::{Digest, Sha256};
 
 use crate::{
-    LoweringErrors, ProductionLlvmLayoutBindingErrorV1, ProductionTargetBindingErrorV1,
-    bind_production_target_v1, bind_production_upstream_llvm_layout_v1,
-    lower_kernel_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1,
+    LoweringErrors, MAX_PRODUCTION_KIR_TO_LLVM_REPLAY_EVIDENCE_BYTES_V1,
+    MAX_PRODUCTION_LEGACY_REPLAY_LLVM_TEXT_BYTES_V1, ProductionLlvmLayoutBindingErrorV1,
+    ProductionSemanticAnchorKirIdentityV1, ProductionTargetBindingErrorV1,
+    bind_historical_replay_llvm_layout_v1, bind_production_llvm22_worker_layout_v1,
+    bind_production_target_v1, lower_kernel_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1,
+    lower_kernel_to_gfx942_xnack_minus_replay_llvm_ir_v1,
     lower_kernel_to_gfx950_xnack_minus_llvm_ir_with_semantic_anchors_v1,
+    lower_kernel_to_gfx950_xnack_minus_replay_llvm_ir_v1,
 };
 
 const EVIDENCE_MAGIC_V1: &[u8] = b"FE2O3/KIR-TO-LLVM-REPLAY/V1\0";
@@ -26,10 +30,8 @@ const KIR_V8_TAG_V1: u8 = 8;
 const KIR_V9_TAG_V1: u8 = 9;
 const IDENTITY_DOMAIN_V1: &[u8] = b"FE2O3/KIR-TO-LLVM-REPLAY/IDENTITY/V1\0";
 
-/// The frozen outer lineage receipt admits at most four MiB per preimage.
-pub const MAX_PRODUCTION_KIR_TO_LLVM_REPLAY_EVIDENCE_BYTES_V1: usize = 4 * 1024 * 1024;
 pub const MAX_PRODUCTION_PRE_DESCRIPTOR_LLVM_BYTES_V1: usize =
-    MAX_PRODUCTION_KIR_TO_LLVM_REPLAY_EVIDENCE_BYTES_V1 - 256;
+    MAX_PRODUCTION_LEGACY_REPLAY_LLVM_TEXT_BYTES_V1;
 
 /// Exact canonical Kernel IR version carried by replay evidence.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -61,6 +63,13 @@ pub struct ProductionReplayKernelIrIdentityV1 {
     version: ProductionReplayKernelIrVersionV1,
     sha256: [u8; 32],
     byte_len: u64,
+}
+
+/// LLVM lowering variant admitted by frozen replay V1 bytes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProductionKirToLlvmReplayModeV1 {
+    LegacyUninstrumented,
+    SemanticAnchorsV1,
 }
 
 impl ProductionReplayKernelIrIdentityV1 {
@@ -127,11 +136,15 @@ impl CanonicalProductionKirToLlvmReplayEvidenceV1 {
             return Err(ProductionKirToLlvmReplayErrorV1::LiveTargetModuleMismatch);
         }
         let kernel_id = target_bound.kernel_id().clone();
-        let (_, target_identity) = canonicalize_target_module(target_bound.module(), version)?;
-        let replayed_llvm = replay_llvm(target_bound.module(), &kernel_id, profile)?;
-        if replayed_llvm.as_bytes() != pre_descriptor_llvm.as_bytes() {
-            return Err(ProductionKirToLlvmReplayErrorV1::LlvmMismatch);
-        }
+        let (target_owner, target_identity) =
+            canonicalize_target_module(target_bound.module(), version)?;
+        classify_replay_llvm(
+            target_bound.module(),
+            &kernel_id,
+            profile,
+            target_owner.semantic_anchor_identity(),
+            pre_descriptor_llvm,
+        )?;
 
         let canonical_bytes = encode_evidence(
             profile,
@@ -184,12 +197,15 @@ impl CanonicalProductionKirToLlvmReplayEvidenceV1 {
         }
         reader.finish()?;
 
+        let kernel_id = KernelId::new(try_owned_string(kernel_id)?);
+        let pre_descriptor_llvm = try_owned_string(pre_descriptor_llvm)?;
+
         let canonical_bytes = encode_evidence(
             profile,
             neutral_kernel_ir,
             target_bound_kernel_ir,
-            &KernelId::new(kernel_id),
-            pre_descriptor_llvm,
+            &kernel_id,
+            &pre_descriptor_llvm,
         )?;
         if canonical_bytes.as_slice() != bytes {
             return Err(ProductionKirToLlvmReplayErrorV1::NonCanonical);
@@ -201,8 +217,8 @@ impl CanonicalProductionKirToLlvmReplayEvidenceV1 {
             profile,
             neutral_kernel_ir,
             target_bound_kernel_ir,
-            kernel_id: KernelId::new(kernel_id),
-            pre_descriptor_llvm: pre_descriptor_llvm.to_owned().into_boxed_str(),
+            kernel_id,
+            pre_descriptor_llvm: pre_descriptor_llvm.into_boxed_str(),
         })
     }
 
@@ -232,13 +248,17 @@ impl CanonicalProductionKirToLlvmReplayEvidenceV1 {
                 field: "target-bound Kernel IR",
             });
         }
-        let replayed_llvm = replay_llvm(target_bound.module(), &self.kernel_id, self.profile)?;
-        if replayed_llvm.as_bytes() != self.pre_descriptor_llvm.as_bytes() {
-            return Err(ProductionKirToLlvmReplayErrorV1::LlvmMismatch);
-        }
+        let llvm_mode = classify_replay_llvm(
+            target_bound.module(),
+            &self.kernel_id,
+            self.profile,
+            target_owner.semantic_anchor_identity(),
+            &self.pre_descriptor_llvm,
+        )?;
         let (target_bound_module, _) = target_bound.into_parts();
         Ok(ValidatedProductionKirToLlvmReplayV1 {
             evidence: self,
+            llvm_mode,
             neutral_owner,
             target_owner,
             target_bound_module,
@@ -283,6 +303,7 @@ impl CanonicalProductionKirToLlvmReplayEvidenceV1 {
 #[must_use = "dropping validated replay abandons exact KIR-to-LLVM custody"]
 pub struct ValidatedProductionKirToLlvmReplayV1 {
     evidence: CanonicalProductionKirToLlvmReplayEvidenceV1,
+    llvm_mode: ProductionKirToLlvmReplayModeV1,
     neutral_owner: ExactKernelIrOwnerV1,
     target_owner: ExactKernelIrOwnerV1,
     target_bound_module: Module,
@@ -291,6 +312,10 @@ pub struct ValidatedProductionKirToLlvmReplayV1 {
 impl ValidatedProductionKirToLlvmReplayV1 {
     pub const fn evidence(&self) -> &CanonicalProductionKirToLlvmReplayEvidenceV1 {
         &self.evidence
+    }
+
+    pub const fn llvm_mode(&self) -> ProductionKirToLlvmReplayModeV1 {
+        self.llvm_mode
     }
 
     pub fn neutral_kernel_ir_bytes(&self) -> &[u8] {
@@ -354,6 +379,13 @@ impl ExactKernelIrOwnerV1 {
             },
         }
     }
+
+    fn semantic_anchor_identity(&self) -> ProductionSemanticAnchorKirIdentityV1 {
+        match self {
+            Self::V8(owner) => ProductionSemanticAnchorKirIdentityV1::from_v8(owner),
+            Self::V9(owner) => ProductionSemanticAnchorKirIdentityV1::from_v9(owner),
+        }
+    }
 }
 
 fn infer_kernel_ir_version(
@@ -387,16 +419,17 @@ fn decode_exact_kernel_ir(
     ),
     ProductionKirToLlvmReplayErrorV1,
 > {
+    let canonical_bytes = try_owned_bytes(bytes)?;
     let (owner, module) = match version {
         ProductionReplayKernelIrVersionV1::V8 => {
             let (owner, module) =
-                VerifiedCanonicalKernelIrV8::from_canonical_bytes_with_module(bytes.to_vec())
+                VerifiedCanonicalKernelIrV8::from_canonical_bytes_with_module(canonical_bytes)
                     .map_err(ProductionKirToLlvmReplayErrorV1::KernelIrV8)?;
             (ExactKernelIrOwnerV1::V8(owner), module)
         }
         ProductionReplayKernelIrVersionV1::V9 => {
             let (owner, module) =
-                VerifiedCanonicalKernelIrV9::from_canonical_bytes_with_module(bytes.to_vec())
+                VerifiedCanonicalKernelIrV9::from_canonical_bytes_with_module(canonical_bytes)
                     .map_err(ProductionKirToLlvmReplayErrorV1::KernelIrV9)?;
             (ExactKernelIrOwnerV1::V9(owner), module)
         }
@@ -430,24 +463,79 @@ fn replay_llvm(
     target_bound_module: &Module,
     kernel_id: &KernelId,
     profile: ProductionAmdTargetProfileV1,
+    mode: ProductionKirToLlvmReplayModeV1,
+    target_kir_identity: ProductionSemanticAnchorKirIdentityV1,
 ) -> Result<String, ProductionKirToLlvmReplayErrorV1> {
-    let dialect_llvm = match profile {
-        ProductionAmdTargetProfileV1::Gfx942 => {
-            lower_kernel_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1(
-                target_bound_module,
-                kernel_id,
-            )
-        }
-        ProductionAmdTargetProfileV1::Gfx950 => {
-            lower_kernel_to_gfx950_xnack_minus_llvm_ir_with_semantic_anchors_v1(
-                target_bound_module,
-                kernel_id,
-            )
-        }
+    let dialect_llvm = match (profile, mode) {
+        (
+            ProductionAmdTargetProfileV1::Gfx942,
+            ProductionKirToLlvmReplayModeV1::LegacyUninstrumented,
+        ) => lower_kernel_to_gfx942_xnack_minus_replay_llvm_ir_v1(target_bound_module, kernel_id),
+        (
+            ProductionAmdTargetProfileV1::Gfx942,
+            ProductionKirToLlvmReplayModeV1::SemanticAnchorsV1,
+        ) => lower_kernel_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1(
+            target_bound_module,
+            kernel_id,
+            target_kir_identity,
+        ),
+        (
+            ProductionAmdTargetProfileV1::Gfx950,
+            ProductionKirToLlvmReplayModeV1::LegacyUninstrumented,
+        ) => lower_kernel_to_gfx950_xnack_minus_replay_llvm_ir_v1(target_bound_module, kernel_id),
+        (
+            ProductionAmdTargetProfileV1::Gfx950,
+            ProductionKirToLlvmReplayModeV1::SemanticAnchorsV1,
+        ) => lower_kernel_to_gfx950_xnack_minus_llvm_ir_with_semantic_anchors_v1(
+            target_bound_module,
+            kernel_id,
+            target_kir_identity,
+        ),
     }
     .map_err(ProductionKirToLlvmReplayErrorV1::TargetLowering)?;
-    bind_production_upstream_llvm_layout_v1(&dialect_llvm)
-        .map_err(ProductionKirToLlvmReplayErrorV1::LayoutBinding)
+    match mode {
+        ProductionKirToLlvmReplayModeV1::LegacyUninstrumented => {
+            bind_historical_replay_llvm_layout_v1(&dialect_llvm)
+        }
+        ProductionKirToLlvmReplayModeV1::SemanticAnchorsV1 => {
+            bind_production_llvm22_worker_layout_v1(&dialect_llvm)
+        }
+    }
+    .map_err(ProductionKirToLlvmReplayErrorV1::LayoutBinding)
+}
+
+fn classify_replay_llvm(
+    target_bound_module: &Module,
+    kernel_id: &KernelId,
+    profile: ProductionAmdTargetProfileV1,
+    target_kir_identity: ProductionSemanticAnchorKirIdentityV1,
+    expected: &str,
+) -> Result<ProductionKirToLlvmReplayModeV1, ProductionKirToLlvmReplayErrorV1> {
+    let legacy_matches = {
+        let legacy = replay_llvm(
+            target_bound_module,
+            kernel_id,
+            profile,
+            ProductionKirToLlvmReplayModeV1::LegacyUninstrumented,
+            target_kir_identity,
+        )?;
+        legacy.as_bytes() == expected.as_bytes()
+    };
+    if legacy_matches {
+        return Ok(ProductionKirToLlvmReplayModeV1::LegacyUninstrumented);
+    }
+    let anchored = replay_llvm(
+        target_bound_module,
+        kernel_id,
+        profile,
+        ProductionKirToLlvmReplayModeV1::SemanticAnchorsV1,
+        target_kir_identity,
+    )?;
+    if anchored.as_bytes() == expected.as_bytes() {
+        Ok(ProductionKirToLlvmReplayModeV1::SemanticAnchorsV1)
+    } else {
+        Err(ProductionKirToLlvmReplayErrorV1::LlvmMismatch)
+    }
 }
 
 fn encode_evidence(
@@ -485,7 +573,10 @@ fn encode_evidence(
         .map_err(|_| ProductionKirToLlvmReplayErrorV1::Overflow)?;
     let llvm_length = u32::try_from(pre_descriptor_llvm.len())
         .map_err(|_| ProductionKirToLlvmReplayErrorV1::Overflow)?;
-    let mut bytes = Vec::with_capacity(total);
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(total)
+        .map_err(|_| ProductionKirToLlvmReplayErrorV1::AllocationFailure)?;
     bytes.extend_from_slice(EVIDENCE_MAGIC_V1);
     bytes.extend_from_slice(&EVIDENCE_VERSION_V1.to_le_bytes());
     bytes.push(EXACT_DETERMINISTIC_REPLAY_CLAIM_V1);
@@ -502,6 +593,24 @@ fn encode_evidence(
         return Err(ProductionKirToLlvmReplayErrorV1::InvalidLength);
     }
     Ok(bytes)
+}
+
+fn try_owned_bytes(bytes: &[u8]) -> Result<Vec<u8>, ProductionKirToLlvmReplayErrorV1> {
+    let mut owned = Vec::new();
+    owned
+        .try_reserve_exact(bytes.len())
+        .map_err(|_| ProductionKirToLlvmReplayErrorV1::AllocationFailure)?;
+    owned.extend_from_slice(bytes);
+    Ok(owned)
+}
+
+fn try_owned_string(value: &str) -> Result<String, ProductionKirToLlvmReplayErrorV1> {
+    let mut owned = String::new();
+    owned
+        .try_reserve_exact(value.len())
+        .map_err(|_| ProductionKirToLlvmReplayErrorV1::AllocationFailure)?;
+    owned.push_str(value);
+    Ok(owned)
 }
 
 const fn encode_profile(profile: ProductionAmdTargetProfileV1) -> u8 {
@@ -558,6 +667,7 @@ fn evidence_identity(bytes: &[u8]) -> ProductionKirToLlvmReplayEvidenceIdentityV
 #[derive(Debug)]
 pub enum ProductionKirToLlvmReplayErrorV1 {
     TooLarge,
+    AllocationFailure,
     Overflow,
     Truncated,
     TrailingBytes,
@@ -582,6 +692,8 @@ impl fmt::Display for ProductionKirToLlvmReplayErrorV1 {
         match self {
             Self::TooLarge => formatter
                 .write_str("production KIR-to-LLVM replay evidence exceeds its hard byte bound"),
+            Self::AllocationFailure => formatter
+                .write_str("production KIR-to-LLVM replay allocation failed within its hard bound"),
             Self::Overflow => {
                 formatter.write_str("production KIR-to-LLVM replay evidence length overflowed")
             }
@@ -705,13 +817,43 @@ impl<'a> Reader<'a> {
 #[cfg(test)]
 mod tests {
     use fe2o3_kernel_ir::{
-        BasicBlock, BlockId, Function, LaunchDomain, LaunchExtent, Module, Signature, Terminator,
+        BasicBlock, BlockId, Constant, Function, LaunchDomain, LaunchExtent, Module, Operation,
+        OperationKind, ScalarType, Signature, Terminator, Type, ValueDef, ValueId,
         VerifiedCanonicalKernelIrV8, WorkgroupSize,
     };
 
     use super::*;
 
     fn neutral_module(name: &str) -> Module {
+        let mut block = BasicBlock::new(BlockId(0));
+        block.operations.push(Operation::effect_free(
+            ValueDef::new(ValueId(0), Type::Scalar(ScalarType::U32)),
+            OperationKind::Constant(Constant::U32(7)),
+        ));
+        block.terminator = Some(Terminator::Return { values: vec![] });
+        let function = Function::kernel_entry(
+            format!("{name}_entry"),
+            Signature::new(vec![], vec![]),
+            vec![],
+            vec![block],
+        );
+        let mut kernel = fe2o3_kernel_ir::Kernel::new(
+            format!("{name}_kernel"),
+            format!("{name}_entry"),
+            LaunchDomain::D1 {
+                x: LaunchExtent::Static(1),
+            },
+        );
+        kernel.workgroup_size = Some(WorkgroupSize::new(64, 1, 1));
+        let mut module = Module::new(name);
+        module.functions.push(function);
+        module.kernels.push(kernel);
+        module
+    }
+
+    // This matches the exact no-operation fixture in the pre-anchor parent revision. Keep it
+    // separate from `neutral_module`, whose operation is needed by active anchor tests.
+    fn historical_neutral_module(name: &str) -> Module {
         let mut block = BasicBlock::new(BlockId(0));
         block.terminator = Some(Terminator::Return { values: vec![] });
         let function = Function::kernel_entry(
@@ -734,8 +876,37 @@ mod tests {
         module
     }
 
+    fn neutral_module_above_anchor_limit(name: &str) -> Module {
+        let mut module = historical_neutral_module(name);
+        let operations = (0..=crate::MAX_PRODUCTION_SEMANTIC_ANCHORS_V1)
+            .map(|index| {
+                Operation::effect_free(
+                    ValueDef::new(
+                        ValueId(u32::try_from(index).unwrap()),
+                        Type::Scalar(ScalarType::U32),
+                    ),
+                    OperationKind::Constant(Constant::U32(7)),
+                )
+            })
+            .collect();
+        module.functions[0].body.as_mut().unwrap().blocks[0].operations = operations;
+        module
+    }
+
     fn fixture(
         name: &str,
+    ) -> (
+        Vec<u8>,
+        Module,
+        String,
+        CanonicalProductionKirToLlvmReplayEvidenceV1,
+    ) {
+        fixture_with_mode(name, ProductionKirToLlvmReplayModeV1::LegacyUninstrumented)
+    }
+
+    fn fixture_with_mode(
+        name: &str,
+        mode: ProductionKirToLlvmReplayModeV1,
     ) -> (
         Vec<u8>,
         Module,
@@ -749,10 +920,14 @@ mod tests {
         let target =
             bind_production_target_v1(&neutral_module, ProductionAmdTargetProfileV1::Gfx942)
                 .unwrap();
+        let target_owner =
+            VerifiedCanonicalKernelIrV8::from_module(target.module().clone()).unwrap();
         let llvm = replay_llvm(
             target.module(),
             target.kernel_id(),
             ProductionAmdTargetProfileV1::Gfx942,
+            mode,
+            ProductionSemanticAnchorKirIdentityV1::from_v8(&target_owner),
         )
         .unwrap();
         let target_module = target.module().clone();
@@ -780,10 +955,219 @@ mod tests {
             .validate_against_neutral_kernel_ir(&neutral)
             .unwrap();
         assert_eq!(validated.target_bound_module(), &target_module);
+        assert_eq!(
+            validated.llvm_mode(),
+            ProductionKirToLlvmReplayModeV1::LegacyUninstrumented
+        );
         assert!(validated.has_exact_target_binding_replay());
         assert!(validated.has_exact_kir_to_llvm_replay());
         assert!(!validated.establishes_formal_semantic_refinement());
         assert!(!validated.grants_object_or_runtime_authority());
+    }
+
+    #[test]
+    fn frozen_pre_anchor_v1_bytes_remain_exact_legacy_replay() {
+        const FROZEN: &[u8] =
+            include_bytes!("../tests/fixtures/production-kir-to-llvm-replay-v1-legacy.bin");
+        const FROZEN_SHA256: [u8; 32] = [
+            0xe2, 0x83, 0x42, 0xea, 0x91, 0x8e, 0x0c, 0xd2, 0xdb, 0xef, 0xd4, 0x5b, 0x3a, 0xf5,
+            0x22, 0x80, 0x6d, 0x12, 0xcd, 0x4c, 0xd9, 0xd4, 0x4e, 0xe4, 0xdd, 0x97, 0x86, 0x71,
+            0x42, 0x78, 0x95, 0xf7,
+        ];
+        let neutral = VerifiedCanonicalKernelIrV8::from_module(historical_neutral_module("replay"))
+            .unwrap()
+            .into_canonical_bytes();
+        assert_eq!(FROZEN.len(), 1_054);
+        assert_eq!(<[u8; 32]>::from(Sha256::digest(FROZEN)), FROZEN_SHA256);
+
+        let decoded = CanonicalProductionKirToLlvmReplayEvidenceV1::decode(FROZEN).unwrap();
+        assert!(
+            decoded
+                .pre_descriptor_llvm()
+                .contains("target datalayout = \"e-m:e-p:64:64-p1:64:64-p2:32:32-p3:32:32")
+        );
+        assert!(
+            !decoded
+                .pre_descriptor_llvm()
+                .contains("fe2o3.semantic_anchor")
+        );
+        let validated = decoded
+            .validate_against_neutral_kernel_ir(&neutral)
+            .unwrap();
+        assert_eq!(
+            validated.llvm_mode(),
+            ProductionKirToLlvmReplayModeV1::LegacyUninstrumented
+        );
+    }
+
+    #[test]
+    fn exact_replay_classifies_anchored_bytes_without_changing_v1_encoding() {
+        let (neutral, _, llvm, evidence) = fixture_with_mode(
+            "anchored",
+            ProductionKirToLlvmReplayModeV1::SemanticAnchorsV1,
+        );
+        assert!(llvm.contains("!fe2o3.semantic_anchor.v1"));
+        let validated = evidence
+            .validate_against_neutral_kernel_ir(&neutral)
+            .unwrap();
+        assert_eq!(
+            validated.llvm_mode(),
+            ProductionKirToLlvmReplayModeV1::SemanticAnchorsV1
+        );
+
+        let mut hybrid = llvm;
+        hybrid = hybrid.replace(
+            "!fe2o3.semantic_anchor.v1",
+            "!fe2o3.semantic_anchor.hybrid.v1",
+        );
+        assert!(matches!(
+            CanonicalProductionKirToLlvmReplayEvidenceV1::from_live_inputs(
+                &neutral,
+                validated.target_bound_module(),
+                ProductionAmdTargetProfileV1::Gfx942,
+                &hybrid,
+            ),
+            Err(ProductionKirToLlvmReplayErrorV1::LlvmMismatch)
+        ));
+    }
+
+    #[test]
+    fn replay_v1_text_limit_exactly_accounts_for_maximum_kernel_id() {
+        assert_eq!(
+            EVIDENCE_MAGIC_V1.len() + (2 + 4 + 32 + 8 + 32 + 8 + 4 + 4),
+            crate::PRODUCTION_KIR_TO_LLVM_REPLAY_FIXED_BYTES_V1
+        );
+        let identity = ProductionReplayKernelIrIdentityV1 {
+            version: ProductionReplayKernelIrVersionV1::V8,
+            sha256: [7; 32],
+            byte_len: 1,
+        };
+        let kernel_id = KernelId::new("k".repeat(MAX_TEXT_BYTES_V1));
+        let maximum = "x".repeat(crate::MAX_PRODUCTION_SEMANTIC_ANCHOR_LLVM_TEXT_BYTES_V1);
+        let encoded = encode_evidence(
+            ProductionAmdTargetProfileV1::Gfx942,
+            identity,
+            identity,
+            &kernel_id,
+            &maximum,
+        )
+        .unwrap();
+        assert_eq!(
+            encoded.len(),
+            MAX_PRODUCTION_KIR_TO_LLVM_REPLAY_EVIDENCE_BYTES_V1
+        );
+
+        let short_kernel_id = KernelId::new("k");
+        let historical_maximum = "x".repeat(MAX_PRODUCTION_PRE_DESCRIPTOR_LLVM_BYTES_V1);
+        assert!(
+            encode_evidence(
+                ProductionAmdTargetProfileV1::Gfx942,
+                identity,
+                identity,
+                &short_kernel_id,
+                &historical_maximum,
+            )
+            .is_ok()
+        );
+
+        let over = "x".repeat(MAX_PRODUCTION_PRE_DESCRIPTOR_LLVM_BYTES_V1 + 1);
+        assert!(matches!(
+            encode_evidence(
+                ProductionAmdTargetProfileV1::Gfx942,
+                identity,
+                identity,
+                &short_kernel_id,
+                &over,
+            ),
+            Err(ProductionKirToLlvmReplayErrorV1::InvalidLength)
+        ));
+    }
+
+    #[test]
+    fn exact_legacy_match_does_not_construct_over_limit_anchor_candidate() {
+        let neutral_module = neutral_module_above_anchor_limit("large_legacy");
+        let neutral = VerifiedCanonicalKernelIrV8::from_module(neutral_module.clone()).unwrap();
+        let neutral_bytes = neutral.canonical_bytes();
+        let target =
+            bind_production_target_v1(&neutral_module, ProductionAmdTargetProfileV1::Gfx942)
+                .unwrap();
+        let target_owner =
+            VerifiedCanonicalKernelIrV8::from_module(target.module().clone()).unwrap();
+        let anchor_identity = ProductionSemanticAnchorKirIdentityV1::from_v8(&target_owner);
+        let legacy = replay_llvm(
+            target.module(),
+            target.kernel_id(),
+            ProductionAmdTargetProfileV1::Gfx942,
+            ProductionKirToLlvmReplayModeV1::LegacyUninstrumented,
+            anchor_identity,
+        )
+        .unwrap();
+        assert!(matches!(
+            replay_llvm(
+                target.module(),
+                target.kernel_id(),
+                ProductionAmdTargetProfileV1::Gfx942,
+                ProductionKirToLlvmReplayModeV1::SemanticAnchorsV1,
+                anchor_identity,
+            ),
+            Err(ProductionKirToLlvmReplayErrorV1::TargetLowering(_))
+        ));
+        let evidence = CanonicalProductionKirToLlvmReplayEvidenceV1::from_live_inputs(
+            neutral_bytes,
+            target.module(),
+            ProductionAmdTargetProfileV1::Gfx942,
+            &legacy,
+        )
+        .unwrap();
+        assert_eq!(
+            evidence
+                .validate_against_neutral_kernel_ir(neutral_bytes)
+                .unwrap()
+                .llvm_mode(),
+            ProductionKirToLlvmReplayModeV1::LegacyUninstrumented
+        );
+    }
+
+    #[test]
+    fn anchored_replay_retains_v9_for_a_graph_that_is_also_v8_representable() {
+        let neutral_owner =
+            VerifiedCanonicalKernelIrV9::from_module(neutral_module("v9_compatible")).unwrap();
+        let neutral_bytes = neutral_owner.canonical_bytes();
+        let (_, neutral_module, _) =
+            decode_exact_kernel_ir(neutral_bytes, ProductionReplayKernelIrVersionV1::V9).unwrap();
+        assert!(VerifiedCanonicalKernelIrV8::from_module(neutral_module.clone()).is_ok());
+        let target =
+            bind_production_target_v1(&neutral_module, ProductionAmdTargetProfileV1::Gfx942)
+                .unwrap();
+        let target_owner =
+            VerifiedCanonicalKernelIrV9::from_module(target.module().clone()).unwrap();
+        let llvm = replay_llvm(
+            target.module(),
+            target.kernel_id(),
+            ProductionAmdTargetProfileV1::Gfx942,
+            ProductionKirToLlvmReplayModeV1::SemanticAnchorsV1,
+            ProductionSemanticAnchorKirIdentityV1::from_v9(&target_owner),
+        )
+        .unwrap();
+        assert!(llvm.contains("!\"kir-version:9\""));
+        let evidence = CanonicalProductionKirToLlvmReplayEvidenceV1::from_live_inputs(
+            neutral_bytes,
+            target.module(),
+            ProductionAmdTargetProfileV1::Gfx942,
+            &llvm,
+        )
+        .unwrap();
+        assert_eq!(
+            evidence.target_bound_kernel_ir_identity().version(),
+            ProductionReplayKernelIrVersionV1::V9
+        );
+        assert_eq!(
+            evidence
+                .validate_against_neutral_kernel_ir(neutral_bytes)
+                .unwrap()
+                .llvm_mode(),
+            ProductionKirToLlvmReplayModeV1::SemanticAnchorsV1
+        );
     }
 
     #[test]

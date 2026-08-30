@@ -8,9 +8,8 @@ use std::{
 };
 
 use dialect_amdgcn::{
-    CanonicalProductionKirToLlvmReplayEvidenceV1, bind_production_target_v1,
-    bind_production_upstream_llvm_layout_v1,
-    lower_kernel_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1,
+    CanonicalProductionKirToLlvmReplayEvidenceV1, bind_production_llvm22_worker_layout_v1,
+    bind_production_target_v1, lower_kernel_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1,
     lower_kernel_to_gfx950_xnack_minus_llvm_ir_with_semantic_anchors_v1,
 };
 use fe2o3_amd_target::ProductionAmdTargetProfileV1;
@@ -23,8 +22,9 @@ use fe2o3_artifact_transaction::{
     publish_compiler_module_handoff_in_slot_v3, reacquire_current_hsaco_publication_lease_v3,
 };
 use fe2o3_compiler_ffi::{
-    CodeObjectVersion, CompilerDescriptorSourceV1, CompilerFfiEnvelopeV1, CompilerModuleHandoffV2,
-    CompilerModuleKindV1, CompilerModuleSymbolManifestV1, CompilerModuleSymbolRoleV1,
+    COMPILER_DESCRIPTOR_SECTION_NAME_V1, CodeObjectVersion, CompilerDescriptorSourceV1,
+    CompilerFfiEnvelopeV1, CompilerModuleHandoffV2, CompilerModuleKindV1,
+    CompilerModuleSymbolManifestV1, CompilerModuleSymbolRoleV1,
     INERT_COMPILER_MODULE_PAIR_BINDING_BYTES_V3, INERT_COMPILER_MODULE_PAIR_BINDING_MAGIC_V3,
     INERT_COMPILER_MODULE_PAIR_BINDING_VERSION_V3, INERT_SEMANTIC_COMPILER_MODULE_HANDOFF_MAGIC_V3,
     INERT_SEMANTIC_COMPILER_MODULE_HANDOFF_VERSION_V3, InertFinalCompilerModuleCommitmentV3,
@@ -39,6 +39,7 @@ use fe2o3_hsaco_finalize::{
     CompilerClosureV2, ContentIdentityV1, FinalizedSemanticDebugMapAdmissionStatusV1,
     InertProtectedFirstBuildWorkerV3EvidenceV1, InspectedProtectedWorkerV3HsacoV1, LinkOptionV1,
     PinnedWorkerV1, ProductionFinalizedSemanticDebugAdmissionV1,
+    ProductionSemanticAnchorAdmissionV1, ProductionSemanticAnchorErrorV1,
     ProtectedWorkerV3CompactFinalizerReplayV2, WorkerExecutionLimitsV1, WorkerInputKindV1,
     WorkerInputV1, WorkerMeasurementV1, WorkerOutputConstraintsV1, WorkerV3HsacoFinalizationError,
     WorkerV3HsacoInspectionError, WorkerV3HsacoPublicationErrorV1,
@@ -70,6 +71,7 @@ use fe2o3_kernel_ir::{
     SemanticDebugTransformationV1, SemanticDebugUnavailableReasonV1, VerifiedCanonicalKernelIrV7,
     VerifiedCanonicalKernelIrV8,
 };
+use object::{Object as _, ObjectSection as _};
 use sha2::{Digest, Sha256};
 
 #[path = "../../../tests/support/compiler_proof_inputs_v3.rs"]
@@ -94,6 +96,8 @@ use production_semantic_debug_fixture_v1::{
 };
 
 const TARGET: &str = "gfx942:xnack-";
+// Measured for this test's one explicit i32, COV6, ROCm 7.2.4 LLVM 22 Worker signature.
+const SCALAR_COV6_KERNARG_SEGMENT_BYTES: u32 = 264;
 const WORKER_BUILD_ID: &str = "fixture-worker-v3-hsaco-v1";
 const RAW_HSACO_MARKER: &[u8] = b"; FE2O3/TEST-HSACO-PAYLOAD/V2-HEX:";
 const CAPSULE_IDENTITY_DOMAIN_V3: &[u8] = b"FE2O3/INERT-PRODUCTION-SEMANTIC-CAPSULE/V3\0";
@@ -1496,6 +1500,491 @@ fn pinned(directory: &TestDirectory, llvm_build_identity: &str) -> PinnedWorkerV
     PinnedWorkerV1::open(private_worker, measurement).unwrap()
 }
 
+fn pinned_external(
+    directory: &TestDirectory,
+    worker_path: &Path,
+    worker_build_identity: &str,
+    llvm_build_identity: &str,
+) -> PinnedWorkerV1 {
+    let private_worker = directory.0.join("real-worker");
+    fs::copy(worker_path, &private_worker).unwrap();
+    let bytes = fs::read(&private_worker).unwrap();
+    let measurement = WorkerMeasurementV1::new(
+        ContentIdentityV1::calculate(&bytes),
+        worker_build_identity,
+        llvm_build_identity,
+    )
+    .unwrap();
+    PinnedWorkerV1::open(private_worker, measurement).unwrap()
+}
+
+fn scalar_descriptor_source_for_target(
+    entry: &str,
+    target: DeviceTargetV1,
+) -> CompilerDescriptorSourceV1 {
+    let source = SourceTypeRecordV1::new(SourceTypeDescriptorV1::scalar(ScalarTypeV1::U32));
+    let layout = DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::scalar(ScalarTypeV1::U32));
+    let kernel = KernelDescriptorV1::new(
+        KernelId::from_bytes([0xd1; 32]),
+        ValidName::new(entry).unwrap(),
+        ValidName::new(entry).unwrap(),
+        ValidName::new(format!("{entry}.kd")).unwrap(),
+        BuildEvidenceV1::new(
+            EvidenceIdentity::from_opaque_bytes([0xd2; 32]),
+            EvidenceDigest::from_sha256_bytes([0xd3; 32]),
+        ),
+        BuildEvidenceV1::new(
+            EvidenceIdentity::from_opaque_bytes([0xd4; 32]),
+            EvidenceDigest::from_sha256_bytes([0xd5; 32]),
+        ),
+        Vec::new(),
+        KernelAbiLayoutV1::new(4, SCALAR_COV6_KERNARG_SEGMENT_BYTES, 8).unwrap(),
+        LaunchConstraintsV1::new(
+            1,
+            BlockSizeV1::Exact(DimensionsV1::new(64, 1, 1).unwrap()),
+            DimensionsV1::new(u32::MAX, 1, 1).unwrap(),
+            64,
+            0,
+            64 * 1024,
+        )
+        .unwrap(),
+        vec![
+            LogicalArgumentV1::scalar(0, ValidName::new("value").unwrap(), &source, &layout, 0)
+                .unwrap(),
+        ],
+    )
+    .unwrap();
+    let table = DeviceDescriptorTableV1::new(
+        CanonicalCodeObjectDigest::from_bytes([0; 32]),
+        DescriptorCodeObjectVersion::V6,
+        CompilerIdentityV1::new(
+            Text::new("rustc-codegen-fe2o3").unwrap(),
+            Text::new("real-worker-semantic-anchor-test").unwrap(),
+            [0xd6; 20],
+        ),
+        ProducerIdentityV1::new(
+            Text::new("rustc-codegen-fe2o3-worker-v3").unwrap(),
+            Text::new("real-worker-semantic-anchor-test").unwrap(),
+        ),
+        target,
+        vec![source],
+        vec![layout],
+        vec![kernel],
+    )
+    .unwrap();
+    CompilerDescriptorSourceV1::new(table).unwrap()
+}
+
+fn append_descriptor_source_assembly(llvm: &mut String, bytes: &[u8]) {
+    llvm.push_str("\nmodule asm \".section ");
+    llvm.push_str(COMPILER_DESCRIPTOR_SECTION_NAME_V1);
+    llvm.push_str(",\\22\\22,@progbits\"\n");
+    llvm.push_str("module asm \".balign 8\"\n");
+    for chunk in bytes.chunks(16) {
+        llvm.push_str("module asm \".byte ");
+        for (index, byte) in chunk.iter().enumerate() {
+            if index != 0 {
+                llvm.push_str(", ");
+            }
+            llvm.push_str(&format!("0x{byte:02x}"));
+        }
+        llvm.push_str("\"\n");
+    }
+}
+
+fn semantic_anchor_handoff(
+    profile: ProductionAmdTargetProfileV1,
+) -> (CompilerModuleHandoffV2, CompilerDescriptorSourceV1, String) {
+    let proof_inputs = canonical_compiler_proof_inputs_v4_with_sourceful_induction(0x20);
+    let (_, neutral_module) = VerifiedCanonicalKernelIrV8::from_canonical_bytes_with_module(
+        proof_inputs.kernel_ir().to_vec(),
+    )
+    .unwrap();
+    let target_bound = bind_production_target_v1(&neutral_module, profile).unwrap();
+    let target_owner =
+        VerifiedCanonicalKernelIrV8::from_module(target_bound.module().clone()).unwrap();
+    let anchor_identity =
+        dialect_amdgcn::ProductionSemanticAnchorKirIdentityV1::from_v8(&target_owner);
+    let dialect = match profile {
+        ProductionAmdTargetProfileV1::Gfx942 => {
+            lower_kernel_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1(
+                target_bound.module(),
+                target_bound.kernel_id(),
+                anchor_identity,
+            )
+        }
+        ProductionAmdTargetProfileV1::Gfx950 => {
+            lower_kernel_to_gfx950_xnack_minus_llvm_ir_with_semantic_anchors_v1(
+                target_bound.module(),
+                target_bound.kernel_id(),
+                anchor_identity,
+            )
+        }
+    }
+    .unwrap();
+    let mut llvm = bind_production_llvm22_worker_layout_v1(&dialect).unwrap();
+    let entry = target_bound.kernel_id().as_str().to_owned();
+    let target = DeviceTargetV1::parse(profile.device_target()).unwrap();
+    let descriptor_source = scalar_descriptor_source_for_target(&entry, target);
+    append_descriptor_source_assembly(&mut llvm, descriptor_source.canonical_bytes());
+    let envelope =
+        CompilerFfiEnvelopeV1::for_module_without_device_ffi(target, CodeObjectVersion::V6)
+            .unwrap();
+    let descriptor = format!("{entry}.kd");
+    let manifest = CompilerModuleSymbolManifestV1::new(vec![
+        (CompilerModuleSymbolRoleV1::KernelEntry, entry.as_str()),
+        (
+            CompilerModuleSymbolRoleV1::KernelDescriptor,
+            descriptor.as_str(),
+        ),
+    ])
+    .unwrap();
+    let handoff = CompilerModuleHandoffV2::new(
+        CompilerModuleKindV1::LlvmTextIr,
+        target,
+        CodeObjectVersion::V6,
+        envelope,
+        manifest,
+        llvm.as_bytes(),
+    )
+    .unwrap();
+    (handoff, descriptor_source, entry)
+}
+
+fn semantic_anchor_outer(
+    handoff: &CompilerModuleHandoffV2,
+    descriptor_source: &CompilerDescriptorSourceV1,
+    profile: ProductionAmdTargetProfileV1,
+) -> InertSemanticCompilerModuleHandoffV3 {
+    semantic_anchor_outer_with_association_seed(handoff, descriptor_source, profile, 0x20)
+}
+
+fn semantic_anchor_outer_with_association_seed(
+    handoff: &CompilerModuleHandoffV2,
+    descriptor_source: &CompilerDescriptorSourceV1,
+    profile: ProductionAmdTargetProfileV1,
+    association_seed: u8,
+) -> InertSemanticCompilerModuleHandoffV3 {
+    let base = InertSemanticCompilerModuleHandoffV3::decode(&raw_outer(
+        &capsule_bytes_with_semantic_to_llvm(
+            association_seed,
+            handoff,
+            DescriptorLineageMutation::Exact,
+            None,
+            Some(profile),
+            Some(descriptor_source.canonical_bytes()),
+        ),
+        handoff.canonical_bytes(),
+    ))
+    .unwrap();
+    let association = association_from_outer(&base);
+    let carrier = ProductionSemanticDebugCarrierV1::new(
+        association.canonical_bytes(),
+        ProductionSemanticDebugAvailabilityV1::Unavailable(
+            ProductionSemanticDebugProducerGapV1::SourceMapUnavailable,
+        ),
+    )
+    .unwrap();
+    let extension =
+        ProductionSemanticDebugReceiptExtensionV1::new(association.canonical_bytes(), carrier)
+            .unwrap();
+    InertSemanticCompilerModuleHandoffV3::decode(&raw_outer(
+        &capsule_bytes_with_semantic_to_llvm(
+            0x20,
+            handoff,
+            DescriptorLineageMutation::Exact,
+            Some(extension.canonical_bytes()),
+            Some(profile),
+            Some(descriptor_source.canonical_bytes()),
+        ),
+        handoff.canonical_bytes(),
+    ))
+    .unwrap()
+}
+
+fn execute_semantic_anchor_handoff(
+    directory: &TestDirectory,
+    handoff: &CompilerModuleHandoffV2,
+    descriptor_source: &CompilerDescriptorSourceV1,
+    profile: ProductionAmdTargetProfileV1,
+    worker: &PinnedWorkerV1,
+    llvm_build_identity: &'static str,
+) -> (
+    fe2o3_hsaco_finalize::PreparedFinalizedProtectedWorkerV3HsacoV1,
+    Vec<u8>,
+) {
+    let outer = semantic_anchor_outer(handoff, descriptor_source, profile);
+    execute_semantic_anchor_outer(directory, &outer, worker, llvm_build_identity)
+}
+
+fn execute_semantic_anchor_outer(
+    directory: &TestDirectory,
+    outer: &InertSemanticCompilerModuleHandoffV3,
+    worker: &PinnedWorkerV1,
+    llvm_build_identity: &'static str,
+) -> (
+    fe2o3_hsaco_finalize::PreparedFinalizedProtectedWorkerV3HsacoV1,
+    Vec<u8>,
+) {
+    let config = EvidenceConfig {
+        optimization: "3",
+        llvm_build_identity,
+        ..EvidenceConfig::BASE
+    };
+    let attempt = begin_build_attempt(
+        &directory.0,
+        &producer(),
+        BuildInvocation::from_bytes([config.attempt_seed; 32]),
+        BuildSession::from_bytes([config.attempt_seed.wrapping_add(1); 16]),
+    )
+    .unwrap();
+    let receipt = publish_compiler_module_handoff_in_slot_v3(
+        &directory.0,
+        &producer(),
+        attempt,
+        config.slot,
+        outer,
+    )
+    .unwrap();
+    let consumed = consume_compiler_module_handoff_in_slot_v3(
+        &directory.0,
+        &producer(),
+        attempt,
+        config.slot,
+        outer.identity(),
+    )
+    .unwrap();
+    let evidence = execute(config, receipt, consumed, worker, Vec::new());
+    let raw_worker_output = evidence.output_bytes().to_vec();
+    let inspected = inspect_protected_worker_v3_hsaco_v1(evidence).unwrap();
+    let finalized = finalize_protected_worker_v3_hsaco_v1(inspected).unwrap();
+    (finalized, raw_worker_output)
+}
+
+fn mutate_section_first_byte(bytes: &mut [u8], section_name: &str) {
+    let (offset, size) = {
+        let object = object::File::parse(&*bytes).unwrap();
+        let mut sections = object
+            .sections()
+            .filter(|section| section.name() == Ok(section_name));
+        let section = sections
+            .next()
+            .expect("actual Worker output retains section");
+        assert!(sections.next().is_none());
+        section.file_range().expect("section is file-backed")
+    };
+    assert!(size > 8);
+    bytes[usize::try_from(offset).unwrap()] ^= 1;
+}
+
+fn handoff_with_raw_worker_output(
+    base: &CompilerModuleHandoffV2,
+    raw_worker_output: &[u8],
+) -> CompilerModuleHandoffV2 {
+    let mut module = base.module_bytes().to_vec();
+    module.extend_from_slice(RAW_HSACO_MARKER);
+    module.extend_from_slice(hex_encode(raw_worker_output).as_bytes());
+    module.push(b'\n');
+    handoff_with_module_bytes(base, &module)
+}
+
+fn handoff_with_module_bytes(
+    base: &CompilerModuleHandoffV2,
+    module: &[u8],
+) -> CompilerModuleHandoffV2 {
+    CompilerModuleHandoffV2::new(
+        CompilerModuleKindV1::LlvmTextIr,
+        base.target(),
+        base.code_object_version(),
+        base.envelope().clone(),
+        base.symbol_manifest().clone(),
+        module,
+    )
+    .unwrap()
+}
+
+#[test]
+fn semantic_anchor_admission_rejects_resealed_cross_spliced_association_by_default() {
+    let finalized = finalized_with_optional_semantic_debug(
+        slice_fixture_with_descriptor_table(&slice_descriptor_table()).bytes,
+        OptionalSemanticDebugFixture::UnavailableCrossSpliced,
+    );
+    assert_eq!(
+        finalized
+            .admit_production_semantic_anchors_v1()
+            .unwrap_err(),
+        ProductionSemanticAnchorErrorV1::InvalidProductionAssociation
+    );
+}
+
+#[test]
+#[ignore = "requires FE2O3_TEST_REAL_WORKER, FE2O3_TEST_REAL_WORKER_BUILD_ID, and FE2O3_TEST_REAL_LLVM_BUILD_ID"]
+fn production_semantic_anchors_admit_real_worker_gfx942_and_gfx950() {
+    let worker_path = PathBuf::from(std::env::var("FE2O3_TEST_REAL_WORKER").unwrap());
+    let worker_build_identity = std::env::var("FE2O3_TEST_REAL_WORKER_BUILD_ID").unwrap();
+    let llvm_build_identity: &'static str = Box::leak(
+        std::env::var("FE2O3_TEST_REAL_LLVM_BUILD_ID")
+            .unwrap()
+            .into_boxed_str(),
+    );
+    for profile in [
+        ProductionAmdTargetProfileV1::Gfx942,
+        ProductionAmdTargetProfileV1::Gfx950,
+    ] {
+        let (handoff, descriptor_source, _) = semantic_anchor_handoff(profile);
+        let directory = TestDirectory::new();
+        let real_worker = pinned_external(
+            &directory,
+            &worker_path,
+            &worker_build_identity,
+            llvm_build_identity,
+        );
+        let (finalized, raw_worker_output) = execute_semantic_anchor_handoff(
+            &directory,
+            &handoff,
+            &descriptor_source,
+            profile,
+            &real_worker,
+            llvm_build_identity,
+        );
+        let admitted = match finalized.admit_production_semantic_anchors_v1().unwrap() {
+            ProductionSemanticAnchorAdmissionV1::Admitted(admitted) => admitted,
+            ProductionSemanticAnchorAdmissionV1::Unavailable(reason) => {
+                panic!("real Worker anchors unexpectedly unavailable: {reason:?}")
+            }
+        };
+        assert_eq!(admitted.target(), profile.device_target());
+        assert!(!admitted.anchors().is_empty());
+        assert!(
+            admitted
+                .anchors()
+                .iter()
+                .any(|anchor| !anchor.isa().is_empty())
+        );
+        assert!(!admitted.proves_general_executable_bytes_unchanged());
+        assert!(!admitted.proves_general_resource_metadata_unchanged());
+        assert!(!admitted.proves_zero_runtime_or_code_size_overhead());
+
+        let actual_handoff = handoff_with_raw_worker_output(&handoff, &raw_worker_output);
+        let cross_spliced = semantic_anchor_outer_with_association_seed(
+            &actual_handoff,
+            &descriptor_source,
+            profile,
+            0x40,
+        );
+        let cross_splice_directory = TestDirectory::new();
+        let cross_splice_worker = pinned(
+            &cross_splice_directory,
+            EvidenceConfig::BASE.llvm_build_identity,
+        );
+        let (cross_spliced_finalized, _) = execute_semantic_anchor_outer(
+            &cross_splice_directory,
+            &cross_spliced,
+            &cross_splice_worker,
+            EvidenceConfig::BASE.llvm_build_identity,
+        );
+        assert_eq!(
+            cross_spliced_finalized
+                .admit_production_semantic_anchors_v1()
+                .unwrap_err(),
+            ProductionSemanticAnchorErrorV1::InvalidProductionAssociation
+        );
+
+        for (section, expected_error) in [
+            (
+                ".pseudo_probe_desc",
+                ProductionSemanticAnchorErrorV1::ProbeDescriptorMismatch,
+            ),
+            (
+                ".pseudo_probe",
+                ProductionSemanticAnchorErrorV1::InvalidProbeEncoding,
+            ),
+        ] {
+            let mut mutated = raw_worker_output.clone();
+            mutate_section_first_byte(&mut mutated, section);
+            let mutated_handoff = handoff_with_raw_worker_output(&handoff, &mutated);
+            let mutation_directory = TestDirectory::new();
+            let fixture_worker = pinned(
+                &mutation_directory,
+                EvidenceConfig::BASE.llvm_build_identity,
+            );
+            let (mutated_finalized, _) = execute_semantic_anchor_handoff(
+                &mutation_directory,
+                &mutated_handoff,
+                &descriptor_source,
+                profile,
+                &fixture_worker,
+                EvidenceConfig::BASE.llvm_build_identity,
+            );
+            assert_eq!(
+                mutated_finalized
+                    .admit_production_semantic_anchors_v1()
+                    .unwrap_err(),
+                expected_error
+            );
+        }
+
+        let compiler_handoff = std::str::from_utf8(handoff.module_bytes()).unwrap();
+        let hostile = compiler_handoff.replacen(
+            "!fe2o3.semantic_anchor.v1",
+            "!fe2o3.semantic_anchor.hybrid.v1",
+            1,
+        );
+        assert_ne!(hostile, compiler_handoff);
+        let hostile = handoff_with_module_bytes(&handoff, hostile.as_bytes());
+        let hostile = handoff_with_raw_worker_output(&hostile, &raw_worker_output);
+        let mutation_directory = TestDirectory::new();
+        let fixture_worker = pinned(
+            &mutation_directory,
+            EvidenceConfig::BASE.llvm_build_identity,
+        );
+        let (hostile_finalized, _) = execute_semantic_anchor_handoff(
+            &mutation_directory,
+            &hostile,
+            &descriptor_source,
+            profile,
+            &fixture_worker,
+            EvidenceConfig::BASE.llvm_build_identity,
+        );
+        assert_eq!(
+            hostile_finalized
+                .admit_production_semantic_anchors_v1()
+                .unwrap_err(),
+            ProductionSemanticAnchorErrorV1::ContradictoryLlvm
+        );
+
+        let compiler_handoff = std::str::from_utf8(handoff.module_bytes()).unwrap();
+        let digest_start = compiler_handoff.find("sha256:").unwrap() + "sha256:".len();
+        let mut stale = compiler_handoff.as_bytes().to_vec();
+        stale[digest_start] = if stale[digest_start] == b'0' {
+            b'1'
+        } else {
+            b'0'
+        };
+        let stale = handoff_with_module_bytes(&handoff, &stale);
+        let stale = handoff_with_raw_worker_output(&stale, &raw_worker_output);
+        let mutation_directory = TestDirectory::new();
+        let fixture_worker = pinned(
+            &mutation_directory,
+            EvidenceConfig::BASE.llvm_build_identity,
+        );
+        let (stale_finalized, _) = execute_semantic_anchor_handoff(
+            &mutation_directory,
+            &stale,
+            &descriptor_source,
+            profile,
+            &fixture_worker,
+            EvidenceConfig::BASE.llvm_build_identity,
+        );
+        assert_eq!(
+            stale_finalized
+                .admit_production_semantic_anchors_v1()
+                .unwrap_err(),
+            ProductionSemanticAnchorErrorV1::BindingMismatch
+        );
+    }
+}
+
 fn options(optimization: &str) -> Vec<LinkOptionV1> {
     [
         ("verify-each", "true"),
@@ -1549,6 +2038,7 @@ fn module_handoff_for_kernels(
 enum OptionalSemanticDebugFixture {
     LegacyBare,
     Unavailable(ProductionSemanticDebugProducerGapV1),
+    UnavailableCrossSpliced,
     Available,
     AvailableDeleteEliminated,
     AvailableRetypeEliminated,
@@ -1648,6 +2138,7 @@ fn outer_for_kernels_with_optional_semantic_debug(
             lineage_mutation,
             None,
             replay_profile,
+            None,
         ),
         handoff.canonical_bytes(),
     ))
@@ -1665,6 +2156,35 @@ fn outer_for_kernels_with_optional_semantic_debug(
                 .unwrap()
                 .canonical_bytes()
                 .to_vec()
+        }
+        OptionalSemanticDebugFixture::UnavailableCrossSpliced => {
+            let other = InertSemanticCompilerModuleHandoffV3::decode(&raw_outer(
+                &capsule_bytes_with_semantic_to_llvm(
+                    0x40,
+                    &handoff,
+                    lineage_mutation,
+                    None,
+                    replay_profile,
+                    None,
+                ),
+                handoff.canonical_bytes(),
+            ))
+            .unwrap();
+            let other_association = association_from_outer(&other);
+            let carrier = ProductionSemanticDebugCarrierV1::new(
+                other_association.canonical_bytes(),
+                ProductionSemanticDebugAvailabilityV1::Unavailable(
+                    ProductionSemanticDebugProducerGapV1::SourceMapUnavailable,
+                ),
+            )
+            .unwrap();
+            ProductionSemanticDebugReceiptExtensionV1::new(
+                other_association.canonical_bytes(),
+                carrier,
+            )
+            .unwrap()
+            .canonical_bytes()
+            .to_vec()
         }
         OptionalSemanticDebugFixture::Available
         | OptionalSemanticDebugFixture::AvailableDeleteEliminated
@@ -1723,6 +2243,7 @@ fn outer_for_kernels_with_optional_semantic_debug(
             lineage_mutation,
             Some(&receipt),
             replay_profile,
+            None,
         ),
         handoff.canonical_bytes(),
     ))
@@ -1919,7 +2440,7 @@ fn capsule_bytes(
     handoff: &CompilerModuleHandoffV2,
     lineage_mutation: DescriptorLineageMutation,
 ) -> Vec<u8> {
-    capsule_bytes_with_semantic_to_llvm(seed, handoff, lineage_mutation, None, None)
+    capsule_bytes_with_semantic_to_llvm(seed, handoff, lineage_mutation, None, None, None)
 }
 
 fn capsule_bytes_with_semantic_to_llvm(
@@ -1928,8 +2449,9 @@ fn capsule_bytes_with_semantic_to_llvm(
     lineage_mutation: DescriptorLineageMutation,
     semantic_to_llvm: Option<&[u8]>,
     replay_profile: Option<ProductionAmdTargetProfileV1>,
+    descriptor_source_override: Option<&[u8]>,
 ) -> Vec<u8> {
-    let invocation = invocation_bytes(seed);
+    let invocation = invocation_bytes_for_target(seed, &handoff.target().to_string());
     let final_commitment = InertFinalCompilerModuleCommitmentV3::from_handoff(handoff).unwrap();
     let mut receipts = RECEIPTS
         .iter()
@@ -1957,22 +2479,28 @@ fn capsule_bytes_with_semantic_to_llvm(
             )
             .unwrap();
         let target = bind_production_target_v1(&neutral_module, profile).unwrap();
+        let target_owner =
+            VerifiedCanonicalKernelIrV8::from_module(target.module().clone()).unwrap();
+        let anchor_identity =
+            dialect_amdgcn::ProductionSemanticAnchorKirIdentityV1::from_v8(&target_owner);
         let dialect = match profile {
             ProductionAmdTargetProfileV1::Gfx942 => {
                 lower_kernel_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1(
                     target.module(),
                     target.kernel_id(),
+                    anchor_identity,
                 )
             }
             ProductionAmdTargetProfileV1::Gfx950 => {
                 lower_kernel_to_gfx950_xnack_minus_llvm_ir_with_semantic_anchors_v1(
                     target.module(),
                     target.kernel_id(),
+                    anchor_identity,
                 )
             }
         }
         .unwrap();
-        let llvm = bind_production_upstream_llvm_layout_v1(&dialect).unwrap();
+        let llvm = bind_production_llvm22_worker_layout_v1(&dialect).unwrap();
         receipts[12].0 = CanonicalProductionKirToLlvmReplayEvidenceV1::from_live_inputs(
             proof_inputs.kernel_ir(),
             target.module(),
@@ -1992,13 +2520,17 @@ fn capsule_bytes_with_semantic_to_llvm(
             let line = encoded.split(|byte| *byte == b'\n').next()?;
             hex_decode(line)
         });
-    if let Some(descriptor_source) = hsaco
-        .as_deref()
-        .and_then(|bytes| inspect_unfinalized(bytes).ok())
-        .and_then(|inspection| {
-            encode_device_descriptor_table_v1(inspection.descriptor_table()).ok()
-        })
-    {
+    let descriptor_source = descriptor_source_override
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            hsaco
+                .as_deref()
+                .and_then(|bytes| inspect_unfinalized(bytes).ok())
+                .and_then(|inspection| {
+                    encode_device_descriptor_table_v1(inspection.descriptor_table()).ok()
+                })
+        });
+    if let Some(descriptor_source) = descriptor_source {
         receipts[10].0 = descriptor_source;
     }
     let verus_execution = canonical_verus_execution_evidence_v1(&receipts[3].0, seed);
@@ -2027,12 +2559,13 @@ fn capsule_bytes_with_semantic_to_llvm(
         final_commitment.canonical_bytes().to_vec(),
         FINAL_RECEIPT_DOMAIN_V3,
     ));
+    let capsule_target = handoff.target().to_string();
     let total_len = 24
         + 4
         + invocation.len()
         + 32
         + 2
-        + TARGET.len()
+        + capsule_target.len()
         + receipts
             .iter()
             .map(|(payload, _)| 4 + payload.len() + 32)
@@ -2046,8 +2579,8 @@ fn capsule_bytes_with_semantic_to_llvm(
     capsule.extend_from_slice(&0_u32.to_le_bytes());
     push_blob(&mut capsule, &invocation);
     capsule.extend_from_slice(&identity(INVOCATION_DIGEST_DOMAIN_V3, &invocation));
-    capsule.extend_from_slice(&(TARGET.len() as u16).to_le_bytes());
-    capsule.extend_from_slice(TARGET.as_bytes());
+    capsule.extend_from_slice(&(capsule_target.len() as u16).to_le_bytes());
+    capsule.extend_from_slice(capsule_target.as_bytes());
     for (payload, domain) in receipts {
         push_blob(&mut capsule, &payload);
         capsule.extend_from_slice(&identity(domain, &payload));
@@ -2157,6 +2690,19 @@ fn invocation_bytes(seed: u8) -> Vec<u8> {
         .chunks_exact(2)
         .map(|pair| (hex_nibble(pair[0]) << 4) | hex_nibble(pair[1]))
         .collect()
+}
+
+fn invocation_bytes_for_target(seed: u8, target: &str) -> Vec<u8> {
+    let mut invocation = invocation_bytes(seed);
+    if target != TARGET {
+        assert_eq!(target.len(), TARGET.len());
+        let offset = invocation
+            .windows(TARGET.len())
+            .position(|window| window == TARGET.as_bytes())
+            .expect("strict invocation fixture contains its target");
+        invocation[offset..offset + target.len()].copy_from_slice(target.as_bytes());
+    }
+    invocation
 }
 
 fn hex_nibble(value: u8) -> u8 {

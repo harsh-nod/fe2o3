@@ -977,12 +977,7 @@ mod layout_tests {
         let exact = llvm_with_layout(PRODUCTION_WORKER_DATA_LAYOUT_V1);
         validate_final_llvm_layout(&exact).unwrap();
 
-        let stale_layout = format!(
-            "e-{}",
-            PRODUCTION_WORKER_DATA_LAYOUT_V1
-                .strip_prefix("e-m:e-")
-                .expect("canonical production layout retains ELF mangling")
-        );
+        let stale_layout = format!("e-m:e-{}", &PRODUCTION_WORKER_DATA_LAYOUT_V1[2..]);
         assert!(validate_final_llvm_layout(&llvm_with_layout(&stale_layout)).is_err());
         assert!(
             validate_final_llvm_layout(&format!(

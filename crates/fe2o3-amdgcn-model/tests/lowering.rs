@@ -5,12 +5,22 @@ use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use fe2o3_amdgcn_model::{
-    LoweringDiagnosticCode, lower_compiler_module_to_gfx950_xnack_minus_llvm_ir,
+    LoweringDiagnosticCode, MAX_PRODUCTION_SEMANTIC_ANCHORS_V1,
+    bind_production_llvm22_worker_layout_v1, lower_compiler_module_to_gfx950_xnack_minus_llvm_ir,
     lower_kernel_to_gfx942_xnack_minus_llvm_ir,
     lower_kernel_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1,
     lower_kernel_to_gfx950_xnack_minus_llvm_ir, lower_kernel_to_llvm_ir,
 };
 use fe2o3_kernel_ir::*;
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn anchor_v8(module: &Module) -> fe2o3_amdgcn_model::ProductionSemanticAnchorKirIdentityV1 {
+    let owner = VerifiedCanonicalKernelIrV8::from_module(module.clone()).unwrap();
+    fe2o3_amdgcn_model::ProductionSemanticAnchorKirIdentityV1::from_v8(&owner)
+}
 
 struct TemporaryDirectory(PathBuf);
 
@@ -303,6 +313,38 @@ fn fill_module() -> Module {
     module.functions.push(function);
     module.kernels.push(kernel);
     module
+}
+
+fn semantic_anchor_count_module(operation_count: usize) -> Module {
+    let mut block = BasicBlock::new(BlockId(0));
+    block.operations = (0..operation_count)
+        .map(|index| {
+            op(
+                u32::try_from(index).unwrap(),
+                Type::Scalar(ScalarType::U32),
+                OperationKind::Constant(Constant::U32(7)),
+            )
+        })
+        .collect();
+    block.terminator = Some(Terminator::Return { values: vec![] });
+    let function = Function::kernel_entry(
+        "anchor_limit_impl",
+        Signature::new(vec![], vec![]),
+        vec![],
+        vec![block],
+    );
+    let mut kernel = Kernel::new(
+        "anchor_limit",
+        "anchor_limit_impl",
+        LaunchDomain::D1 {
+            x: LaunchExtent::Static(1),
+        },
+    );
+    kernel.workgroup_size = Some(WorkgroupSize::new(64, 1, 1));
+    let mut module = Module::new("tests::anchor_limit");
+    module.functions.push(function);
+    module.kernels.push(kernel);
+    exact_gfx942_xnack_minus(module)
 }
 
 fn private_pointer_slot_module() -> Module {
@@ -1335,6 +1377,7 @@ fn production_semantic_anchors_cover_every_operation_with_function_unique_indice
     let anchored = lower_kernel_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1(
         &module,
         &KernelId::new("fill"),
+        anchor_v8(&module),
     )
     .unwrap();
     let unanchored =
@@ -1359,6 +1402,7 @@ fn production_semantic_anchors_mark_constant_ops_and_reject_partial_multi_body_c
     let anchored = lower_kernel_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1(
         &single,
         &KernelId::new("phi_loop"),
+        anchor_v8(&single),
     )
     .unwrap();
     let lines = anchored.lines().collect::<Vec<_>>();
@@ -1376,10 +1420,116 @@ fn production_semantic_anchors_mark_constant_ops_and_reject_partial_multi_body_c
     let multi_body = lower_kernel_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1(
         &single,
         &KernelId::new("phi_loop"),
+        anchor_v8(&single),
     )
     .unwrap();
     assert!(!multi_body.contains("llvm.pseudoprobe"));
     assert!(!multi_body.contains("fe2o3.semantic_anchor.v1"));
+    assert!(multi_body.contains("fe2o3.semantic_anchor.absence.v1"));
+    assert!(multi_body.contains("multiple_defined_bodies"));
+}
+
+#[test]
+fn production_semantic_anchors_retain_exact_v9_identity_even_when_v8_is_representable() {
+    let module = exact_gfx942_xnack_minus(fill_module());
+    let v8 = VerifiedCanonicalKernelIrV8::from_module(module.clone()).unwrap();
+    let v9 = VerifiedCanonicalKernelIrV9::from_module(module.clone()).unwrap();
+    assert_ne!(v8.identity().digest(), v9.identity().digest());
+    let anchored = lower_kernel_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1(
+        &module,
+        &KernelId::new("fill"),
+        fe2o3_amdgcn_model::ProductionSemanticAnchorKirIdentityV1::from_v9(&v9),
+    )
+    .unwrap();
+    assert!(anchored.contains("!\"kir-version:9\""));
+    assert!(anchored.contains(&format!("!\"sha256:{}\"", hex(v9.identity().digest()))));
+    assert!(!anchored.contains(&format!("!\"sha256:{}\"", hex(v8.identity().digest()))));
+}
+
+#[test]
+fn production_semantic_anchor_count_limit_is_enforced_only_for_active_manifests() {
+    let maximum = semantic_anchor_count_module(MAX_PRODUCTION_SEMANTIC_ANCHORS_V1);
+    let llvm = lower_kernel_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1(
+        &maximum,
+        &KernelId::new("anchor_limit"),
+        anchor_v8(&maximum),
+    )
+    .unwrap();
+    assert_eq!(
+        llvm.matches("call void @llvm.pseudoprobe(").count(),
+        MAX_PRODUCTION_SEMANTIC_ANCHORS_V1
+    );
+
+    let over = semantic_anchor_count_module(MAX_PRODUCTION_SEMANTIC_ANCHORS_V1 + 1);
+    let error = lower_kernel_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1(
+        &over,
+        &KernelId::new("anchor_limit"),
+        anchor_v8(&over),
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.diagnostics()[0].code,
+        LoweringDiagnosticCode::ResourceLimit
+    );
+
+    let mut multiple_bodies = over;
+    let mut helper = multiple_bodies.functions[0].clone();
+    helper.id = FunctionId::new("anchor_limit_helper");
+    helper.role = FunctionRole::InternalHelper;
+    multiple_bodies.functions.push(helper);
+    let llvm = lower_kernel_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1(
+        &multiple_bodies,
+        &KernelId::new("anchor_limit"),
+        anchor_v8(&multiple_bodies),
+    )
+    .unwrap();
+    assert!(llvm.contains("multiple_defined_bodies"));
+    assert!(!llvm.contains("llvm.pseudoprobe"));
+}
+
+#[test]
+fn production_semantic_anchor_absence_and_identity_mismatch_are_explicit() {
+    let mut block = BasicBlock::new(BlockId(0));
+    block.terminator = Some(Terminator::Return { values: vec![] });
+    let function = Function::kernel_entry(
+        "empty_entry",
+        Signature::new(vec![], vec![]),
+        vec![],
+        vec![block],
+    );
+    let mut kernel = Kernel::new(
+        "empty",
+        "empty_entry",
+        LaunchDomain::D1 {
+            x: LaunchExtent::Static(1),
+        },
+    );
+    kernel.workgroup_size = Some(WorkgroupSize::new(64, 1, 1));
+    let mut empty = Module::new("tests::empty");
+    empty.functions.push(function);
+    empty.kernels.push(kernel);
+    let empty = exact_gfx942_xnack_minus(empty);
+    let anchored = lower_kernel_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1(
+        &empty,
+        &KernelId::new("empty"),
+        anchor_v8(&empty),
+    )
+    .unwrap();
+    assert!(anchored.contains("fe2o3.semantic_anchor.absence.v1"));
+    assert!(anchored.contains("no_operations"));
+    assert!(!anchored.contains("llvm.pseudoprobe"));
+
+    let other = exact_gfx942_xnack_minus(fill_module());
+    let error = lower_kernel_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1(
+        &empty,
+        &KernelId::new("empty"),
+        anchor_v8(&other),
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.diagnostics()[0].code,
+        LoweringDiagnosticCode::SemanticAnchorIdentityMismatch
+    );
 }
 
 #[test]
@@ -1390,6 +1540,8 @@ fn gfx950_exact_lowering_binds_cpu_features_layout_and_physical_barrier() {
     ));
     let llvm = lower_kernel_to_gfx950_xnack_minus_llvm_ir(&module, &KernelId::new("fill")).unwrap();
     assert!(llvm.contains("target datalayout = \"e-m:e-p:64:64-p1:64:64"));
+    let worker_llvm = bind_production_llvm22_worker_layout_v1(&llvm).unwrap();
+    assert!(worker_llvm.contains("target datalayout = \"e-p:64:64-p1:64:64"));
     assert!(llvm.contains("\"target-cpu\"=\"gfx950\""));
     assert!(llvm.contains("\"target-features\"=\"-wavefrontsize32,+wavefrontsize64,-xnack\""));
     assert_eq!(
