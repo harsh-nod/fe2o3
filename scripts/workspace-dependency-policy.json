@@ -87,6 +87,7 @@
       "name": "host-runtime",
       "packages": [
         "fe2o3-broker-authority-service",
+        "fe2o3-compiler-execution-coordinator",
         "fe2o3-compiler-execution-client",
         "fe2o3-compiler-execution-issuer",
         "fe2o3-compiler-execution-supervisor",
@@ -101,6 +102,7 @@
         "fe2o3-kir-debugger",
         "fe2o3-kir-sim",
         "fe2o3-kir-sim-trace",
+        "fe2o3-protected-service-spawn",
         "fe2o3-protected-static-executable",
         "fe2o3-runtime",
         "fe2o3-runtime-protocol",
