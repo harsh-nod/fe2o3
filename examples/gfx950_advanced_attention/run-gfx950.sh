@@ -353,7 +353,11 @@ if ! awk '/amdhsa.version:/ { v=1; next } v==1 && /^[[:space:]]*-[[:space:]]+1[[
     exit 1
 fi
 
-"$OBJDUMP" --disassemble --mcpu=gfx950 "$HSACO" > "$DISASSEMBLY"
+(
+    cd -- "$ATTEMPT_DIR"
+    "$OBJDUMP" --disassemble --mcpu=gfx950 "$(basename -- "$HSACO")" \
+        > "$(basename -- "$DISASSEMBLY")"
+)
 KERNEL_ISA=$(awk -v marker="<$SYMBOL>:" 'index($0, marker) { capture=1 } capture && /^[[:xdigit:]]+ <[^>]+>:/ && !index($0, marker) { exit } capture { print }' "$DISASSEMBLY")
 if [[ -z $KERNEL_ISA ]]; then
     printf 'ISA validation failed: %s is absent\n' "$SYMBOL" >&2
