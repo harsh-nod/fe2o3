@@ -3366,54 +3366,51 @@ fn workgroup_pipeline_local_owners_v1(
             ));
         }
     }
-    for _ in 0..function.locals().len() {
-        let mut changed = false;
-        for block in function.blocks() {
-            for statement in block.statements() {
-                let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
-                    continue;
-                };
-                if !assignment.destination().projections().is_empty() {
-                    continue;
-                }
-                let source = match assignment.value().kind() {
-                    SemanticRvalueKindV1::Use(operand) => raw_operand_place(operand),
-                    SemanticRvalueKindV1::Borrow { place, .. }
-                    | SemanticRvalueKindV1::AddressOf { place, .. } => Some(place),
-                    _ => None,
-                };
-                let Some(source) = source else {
-                    continue;
-                };
-                let source = source.local().index() as usize;
-                let destination = assignment.destination().local().index() as usize;
-                let Some(owner) = owners.get(source).copied().flatten() else {
-                    continue;
-                };
-                let slot = owners.get_mut(destination).ok_or(
-                    ProductionRankedProjectionErrorV1::Unsupported(
-                        "a pipeline alias is outside the semantic local table",
-                    ),
-                )?;
-                match *slot {
-                    None => {
-                        *slot = Some(owner);
-                        changed = true;
-                    }
-                    Some(existing) if existing == owner => {}
-                    Some(_) => {
-                        return Err(ProductionRankedProjectionErrorV1::Incomplete(
-                            "one Rust local may alias two workgroup pipelines",
-                        ));
-                    }
-                }
+    propagate_workgroup_pipeline_aliases_v1(function, &mut owners)?;
+    Ok(owners)
+}
+
+fn propagate_workgroup_pipeline_aliases_v1(
+    function: &SemanticFunctionDeclV1,
+    owners: &mut [Option<usize>],
+) -> Result<(), ProductionRankedProjectionErrorV1> {
+    if owners.len() != function.locals().len() {
+        return Err(ProductionRankedProjectionErrorV1::Unsupported(
+            "pipeline owner storage does not match the semantic local table",
+        ));
+    }
+    let mut aliases = vec![Vec::new(); owners.len()];
+    let mut alias_count = 0_usize;
+    for block in function.blocks() {
+        for statement in block.statements() {
+            let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
+                continue;
+            };
+            if !assignment.destination().projections().is_empty() {
+                continue;
             }
-        }
-        if !changed {
-            break;
+            let source = match assignment.value().kind() {
+                SemanticRvalueKindV1::Use(operand) => raw_operand_place(operand),
+                SemanticRvalueKindV1::Borrow { place, .. }
+                | SemanticRvalueKindV1::AddressOf { place, .. } => Some(place),
+                _ => None,
+            };
+            let Some(source) = source else {
+                continue;
+            };
+            push_local_provenance_edge_v1(
+                &mut aliases,
+                source.local().index() as usize,
+                assignment.destination().local().index() as usize,
+                &mut alias_count,
+            )?;
         }
     }
-    Ok(owners)
+    propagate_exact_local_origins_v1(
+        owners,
+        &aliases,
+        "one Rust local may alias two workgroup pipelines",
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -6855,53 +6852,7 @@ fn project_workgroup_pipeline_effects_v1(
         return Ok(vec![None; function.blocks().len()]);
     }
     let scalar_assertion_proofs = SemanticAssertProofsV1::new(types, function)?;
-    for _ in 0..function.locals().len() {
-        let mut changed = false;
-        for block in function.blocks() {
-            for statement in block.statements() {
-                let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
-                    continue;
-                };
-                if !assignment.destination().projections().is_empty() {
-                    continue;
-                }
-                let source = match assignment.value().kind() {
-                    SemanticRvalueKindV1::Use(operand) => raw_operand_place(operand),
-                    SemanticRvalueKindV1::Borrow { place, .. }
-                    | SemanticRvalueKindV1::AddressOf { place, .. } => Some(place),
-                    _ => None,
-                };
-                let Some(source) = source else {
-                    continue;
-                };
-                let source = source.local().index() as usize;
-                let destination = assignment.destination().local().index() as usize;
-                let Some(owner) = owners.get(source).copied().flatten() else {
-                    continue;
-                };
-                let slot = owners.get_mut(destination).ok_or(
-                    ProductionRankedProjectionErrorV1::Unsupported(
-                        "a pipeline borrow alias is outside the semantic local table",
-                    ),
-                )?;
-                match *slot {
-                    None => {
-                        *slot = Some(owner);
-                        changed = true;
-                    }
-                    Some(existing) if existing == owner => {}
-                    Some(_) => {
-                        return Err(ProductionRankedProjectionErrorV1::Incomplete(
-                            "one Rust local may alias two workgroup pipelines",
-                        ));
-                    }
-                }
-            }
-        }
-        if !changed {
-            break;
-        }
-    }
+    propagate_workgroup_pipeline_aliases_v1(function, &mut owners)?;
 
     for block in function.blocks() {
         let SemanticTerminatorKindV1::Call(call) = block.terminator().kind() else {
@@ -8653,6 +8604,8 @@ fn source_induction_update_v1<'a>(
     induction: SemanticLocalIdV1,
     latch_statement: usize,
     local_definitions: &[u8],
+    assignment_sites: &[Option<ScalarAssignmentSiteV1>],
+    alias_work: &mut usize,
 ) -> Result<
     Option<(ProjectedSourceInductionUpdateV1, &'a SemanticOperandV1)>,
     ProductionRankedProjectionErrorV1,
@@ -8787,11 +8740,26 @@ fn source_induction_update_v1<'a>(
     if left.ty() != latch.destination().ty() || right.ty() != latch.destination().ty() {
         return Ok(None);
     }
-    let producer = &function.blocks()[producer_block];
-    let left_origin =
-        resolve_block_copy_alias_before_v1(producer, producer_statement, left, local_definitions)?;
-    let right_origin =
-        resolve_block_copy_alias_before_v1(producer, producer_statement, right, local_definitions)?;
+    let use_site = ScalarAssignmentSiteV1 {
+        block: producer_block,
+        statement: producer_statement,
+    };
+    let left_origin = resolve_block_copy_alias_before_v1(
+        function,
+        use_site,
+        left,
+        local_definitions,
+        assignment_sites,
+        alias_work,
+    )?;
+    let right_origin = resolve_block_copy_alias_before_v1(
+        function,
+        use_site,
+        right,
+        local_definitions,
+        assignment_sites,
+        alias_work,
+    )?;
     let step = if left_origin == Some(induction) {
         right
     } else if right_origin == Some(induction) {
@@ -8820,6 +8788,7 @@ fn project_uniform_inductions_v1(
     let pure_uniform_definitions = semantic_ranges.assignments.clone();
     let pure_uniform_address_escaped = semantic_ranges.address_escaped.clone();
     let mut graph_work = 0_usize;
+    let mut alias_work = 0_usize;
     let mut inductions = Vec::new();
     for (header, block) in function.blocks().iter().enumerate() {
         let SemanticTerminatorKindV1::SwitchInt {
@@ -8864,8 +8833,17 @@ fn project_uniform_inductions_v1(
         else {
             continue;
         };
-        let Some(induction) =
-            resolve_block_copy_alias_before_v1(block, comparison_index, left, local_definitions)?
+        let Some(induction) = resolve_block_copy_alias_before_v1(
+            function,
+            ScalarAssignmentSiteV1 {
+                block: header,
+                statement: comparison_index,
+            },
+            left,
+            local_definitions,
+            &pure_uniform_definitions,
+            &mut alias_work,
+        )?
         else {
             continue;
         };
@@ -8931,6 +8909,8 @@ fn project_uniform_inductions_v1(
                     induction,
                     statement_index,
                     local_definitions,
+                    &pure_uniform_definitions,
+                    &mut alias_work,
                 )?
                 .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
                     "a uniform induction has a non-canonical latch definition",
@@ -9118,6 +9098,8 @@ fn reconcile_source_progress_and_emit_unsigned_casts_v1(
     let mut reconciled = BTreeMap::new();
     let graph = projected_loop_cfg_graph_v1(function)?;
     let mut semantic_ranges = SemanticAssertProofsV1::new(types, function)?;
+    let assignment_sites = semantic_ranges.assignments.clone();
+    let mut alias_work = 0_usize;
     for induction in inductions.iter() {
         let source = &induction.source_progress;
         let induction_type = function
@@ -9150,10 +9132,15 @@ fn reconcile_source_progress_and_emit_unsigned_casts_v1(
             ));
         };
         let compared_induction = resolve_block_copy_alias_before_v1(
-            &function.blocks()[induction.header],
-            source.header_statement,
+            function,
+            ScalarAssignmentSiteV1 {
+                block: induction.header,
+                statement: source.header_statement,
+            },
             left,
             local_definitions,
+            &assignment_sites,
+            &mut alias_work,
         )?;
         if induction_type != source.induction_type
             || left.ty() != source.induction_type
@@ -9196,6 +9183,8 @@ fn reconcile_source_progress_and_emit_unsigned_casts_v1(
             source.induction,
             source.latch_statement,
             local_definitions,
+            &assignment_sites,
+            &mut alias_work,
         )?
         .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
             "a compiler-derived source induction latch is no longer an authenticated Add recurrence",
@@ -9352,33 +9341,95 @@ fn reconcile_source_progress_and_emit_unsigned_casts_v1(
 }
 
 fn resolve_block_copy_alias_before_v1(
-    block: &fe2o3_mir_model::semantic_mir_v1::SemanticBasicBlockV1,
-    statement_index: usize,
+    function: &SemanticFunctionDeclV1,
+    use_site: ScalarAssignmentSiteV1,
     operand: &SemanticOperandV1,
     local_definitions: &[u8],
+    assignment_sites: &[Option<ScalarAssignmentSiteV1>],
+    work: &mut usize,
 ) -> Result<Option<SemanticLocalIdV1>, ProductionRankedProjectionErrorV1> {
+    resolve_block_copy_alias_before_with_limit_v1(
+        function,
+        use_site,
+        operand,
+        local_definitions,
+        assignment_sites,
+        work,
+        MAX_PROJECTED_CAPABILITY_DATAFLOW_WORK_V1,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn resolve_block_copy_alias_before_with_limit_v1(
+    function: &SemanticFunctionDeclV1,
+    mut use_site: ScalarAssignmentSiteV1,
+    operand: &SemanticOperandV1,
+    local_definitions: &[u8],
+    assignment_sites: &[Option<ScalarAssignmentSiteV1>],
+    work: &mut usize,
+    work_limit: usize,
+) -> Result<Option<SemanticLocalIdV1>, ProductionRankedProjectionErrorV1> {
+    let Some(block) = function.blocks().get(use_site.block) else {
+        return Err(ProductionRankedProjectionErrorV1::Unsupported(
+            "a uniform induction alias use is outside the semantic CFG",
+        ));
+    };
+    if use_site.statement > block.statements().len()
+        || local_definitions.len() != function.locals().len()
+        || assignment_sites.len() != function.locals().len()
+    {
+        return Err(ProductionRankedProjectionErrorV1::Unsupported(
+            "uniform induction alias tables or use site are inconsistent",
+        ));
+    }
     let Some(mut current) = simple_operand_local(operand) else {
         return Ok(None);
     };
-    for _ in 0..=statement_index {
+    loop {
+        *work = work
+            .checked_add(1)
+            .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+                "uniform induction alias work accounting overflowed",
+            ))?;
+        if *work > work_limit {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "uniform induction alias analysis exceeds its work limit",
+            ));
+        }
         let current_index = current.index() as usize;
         if local_definitions.get(current_index).copied() != Some(1) {
             return Ok(Some(current));
         }
-        let alias = block.statements()[..statement_index]
-            .iter()
-            .rev()
-            .find_map(|statement| {
-                let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
-                    return None;
-                };
-                (assignment.destination().projections().is_empty()
-                    && assignment.destination().local() == current)
-                    .then_some(assignment)
-            });
-        let Some(alias) = alias else {
+        let Some(definition) = assignment_sites.get(current_index).copied().flatten() else {
             return Ok(Some(current));
         };
+        if definition.block != use_site.block {
+            return Ok(Some(current));
+        }
+        if definition.statement >= use_site.statement {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a uniform induction operand has a cyclic copy alias",
+            ));
+        }
+        let Some(statement) = function
+            .blocks()
+            .get(definition.block)
+            .and_then(|block| block.statements().get(definition.statement))
+        else {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "a uniform induction alias definition is outside the semantic CFG",
+            ));
+        };
+        let SemanticStatementKindV1::Assign(alias) = statement.kind() else {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "an indexed uniform induction alias changed semantic kind",
+            ));
+        };
+        if !alias.destination().projections().is_empty() || alias.destination().local() != current {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "an indexed uniform induction alias changed destination",
+            ));
+        }
         let SemanticRvalueKindV1::Use(source) = alias.value().kind() else {
             return Ok(Some(current));
         };
@@ -9388,11 +9439,9 @@ fn resolve_block_copy_alias_before_v1(
         let Some(source) = simple_operand_local(source) else {
             return Ok(Some(current));
         };
+        use_site = definition;
         current = source;
     }
-    Err(ProductionRankedProjectionErrorV1::Incomplete(
-        "a uniform induction operand has a cyclic copy alias",
-    ))
 }
 
 #[derive(Debug)]
@@ -10340,13 +10389,6 @@ impl<'a> SemanticAssertProofsV1<'a> {
             )
         })?;
         let mut visiting = HashSet::new();
-        visiting
-            .try_reserve(self.function.locals().len())
-            .map_err(|_| {
-                ProductionRankedProjectionErrorV1::Unsupported(
-                    "assertion proof alias storage cannot be reserved",
-                )
-            })?;
         let mut stability_visited = Vec::new();
         stability_visited
             .try_reserve_exact(block_count)
@@ -10443,13 +10485,6 @@ impl<'a> SemanticAssertProofsV1<'a> {
         let block_count = self.function.blocks().len();
         let can_reach_use = self.blocks_reaching(use_block)?;
         let mut alias_visiting = HashSet::new();
-        alias_visiting
-            .try_reserve(self.function.locals().len())
-            .map_err(|_| {
-                ProductionRankedProjectionErrorV1::Unsupported(
-                    "assertion proof upper-bound alias storage cannot be reserved",
-                )
-            })?;
         let mut stability_visited = Vec::new();
         stability_visited
             .try_reserve_exact(block_count)
@@ -10767,10 +10802,17 @@ impl<'a> SemanticAssertProofsV1<'a> {
         if candidate == source {
             return Ok(true);
         }
-        if !visiting.insert(candidate) || self.definition_counts.get(candidate).copied() != Some(1)
+        if visiting.contains(&candidate)
+            || self.definition_counts.get(candidate).copied() != Some(1)
         {
             return Ok(false);
         }
+        visiting.try_reserve(1).map_err(|_| {
+            ProductionRankedProjectionErrorV1::Unsupported(
+                "assertion proof alias storage cannot be reserved",
+            )
+        })?;
+        visiting.insert(candidate);
         let Some(site) = self.assignments.get(candidate).copied().flatten() else {
             visiting.remove(&candidate);
             return Ok(false);
@@ -11172,6 +11214,12 @@ struct PureUniformIndexValueV1 {
     exact: Option<u64>,
 }
 
+#[derive(Clone, Copy, Debug)]
+enum PureUniformIndexStateV1 {
+    Visiting,
+    Complete(Option<PureUniformIndexValueV1>),
+}
+
 // Reconstruct only exact unsigned expressions rooted in constants or kernel arguments.
 // Keeping this separate from the general scalar projector prevents lane-derived values,
 // opaque joins, calls, and operations without a checked total range from proving progress.
@@ -11188,8 +11236,7 @@ struct PureUniformIndexProjectorV1<'model, 'state, 'proof> {
     next_value: &'state mut u32,
     definitions: &'state [Option<ScalarAssignmentSiteV1>],
     assertion_proofs: &'proof mut SemanticAssertProofsV1<'model>,
-    states: Vec<u8>,
-    summaries: Vec<Option<PureUniformIndexValueV1>>,
+    states: HashMap<usize, PureUniformIndexStateV1>,
     node_work: usize,
     graph_work: usize,
 }
@@ -11221,6 +11268,14 @@ impl<'model, 'state, 'proof> PureUniformIndexProjectorV1<'model, 'state, 'proof>
                 "pure uniform index tables do not match the semantic local table",
             ));
         }
+        let mut states = HashMap::new();
+        states
+            .try_reserve(MAX_PURE_UNIFORM_INDEX_NODES_V1)
+            .map_err(|_| {
+                ProductionRankedProjectionErrorV1::Unsupported(
+                    "pure uniform index state storage cannot be reserved",
+                )
+            })?;
         Ok(Self {
             types,
             function,
@@ -11234,8 +11289,7 @@ impl<'model, 'state, 'proof> PureUniformIndexProjectorV1<'model, 'state, 'proof>
             next_value,
             definitions,
             assertion_proofs,
-            states: vec![0; local_count],
-            summaries: vec![None; local_count],
+            states,
             node_work: 0,
             graph_work: 0,
         })
@@ -11411,12 +11465,12 @@ impl<'model, 'state, 'proof> PureUniformIndexProjectorV1<'model, 'state, 'proof>
         if let Some(value) = self.constants.get(local).copied().flatten() {
             return self.constant(value, maximum).map(Some);
         }
-        match self.states[local] {
-            2 => return Ok(self.summaries[local]),
-            1 => return Ok(None),
-            _ => {}
+        match self.states.get(&local).copied() {
+            Some(PureUniformIndexStateV1::Complete(summary)) => return Ok(summary),
+            Some(PureUniformIndexStateV1::Visiting) => return Ok(None),
+            None => {}
         }
-        self.states[local] = 1;
+        self.states.insert(local, PureUniformIndexStateV1::Visiting);
         let statement = self.function.blocks()[definition_block].statements()[definition_statement]
             .kind()
             .clone();
@@ -11427,8 +11481,8 @@ impl<'model, 'state, 'proof> PureUniformIndexProjectorV1<'model, 'state, 'proof>
         let value = assignment.value().kind().clone();
         let summary =
             self.resolve_rvalue(result_type, value, definition_block, definition_statement)?;
-        self.states[local] = 2;
-        self.summaries[local] = summary;
+        self.states
+            .insert(local, PureUniformIndexStateV1::Complete(summary));
         Ok(summary)
     }
 
@@ -11461,12 +11515,12 @@ impl<'model, 'state, 'proof> PureUniformIndexProjectorV1<'model, 'state, 'proof>
             SemanticCheckedBinaryOpV1::Multiply => IndexBinaryKindAttr::Multiply,
             SemanticCheckedBinaryOpV1::Subtract => return Ok(None),
         };
-        match self.states[local] {
-            2 => return Ok(self.summaries[local]),
-            1 => return Ok(None),
-            _ => {}
+        match self.states.get(&local).copied() {
+            Some(PureUniformIndexStateV1::Complete(summary)) => return Ok(summary),
+            Some(PureUniformIndexStateV1::Visiting) => return Ok(None),
+            None => {}
         }
-        self.states[local] = 1;
+        self.states.insert(local, PureUniformIndexStateV1::Visiting);
         let left = self.resolve_operand(
             authenticated.checked.left(),
             definition_block,
@@ -11483,8 +11537,8 @@ impl<'model, 'state, 'proof> PureUniformIndexProjectorV1<'model, 'state, 'proof>
             }
             _ => None,
         };
-        self.states[local] = 2;
-        self.summaries[local] = summary;
+        self.states
+            .insert(local, PureUniformIndexStateV1::Complete(summary));
         Ok(summary)
     }
 
@@ -23749,11 +23803,10 @@ mod tests {
         };
         let through_pointer = SemanticPlaceV1::new(
             SemanticLocalIdV1::from_index(4),
-            vec![SemanticProjectionV1::new(
-                SemanticProjectionKindV1::Dereference,
-                stored_type,
-            )
-            .unwrap()],
+            vec![
+                SemanticProjectionV1::new(SemanticProjectionKindV1::Dereference, stored_type)
+                    .unwrap(),
+            ],
             stored_type,
         )
         .unwrap();
@@ -23765,14 +23818,12 @@ mod tests {
                 place: borrowed_place,
             },
         );
-        let store = statement(SemanticStatementKindV1::Store(
-            SemanticMemoryStoreV1::new(
-                through_pointer,
-                stored_value,
-                SemanticVolatilityV1::NonVolatile,
-                None,
-            ),
-        ));
+        let store = statement(SemanticStatementKindV1::Store(SemanticMemoryStoreV1::new(
+            through_pointer,
+            stored_value,
+            SemanticVolatilityV1::NonVolatile,
+            None,
+        )));
         let comparison = typed_assignment(
             3,
             BOOL_TYPE,
@@ -27702,6 +27753,265 @@ mod tests {
         )
         .unwrap();
         ProductionRankedKernelV1::new("header_copy_alias_loop", next_argument, blocks).unwrap();
+    }
+
+    #[test]
+    fn indexed_uniform_alias_resolution_is_linear_bounded_and_monotonic() {
+        let alias_count = 128_usize;
+        let mut statements = Vec::new();
+        let mut locals = vec![
+            local(0, U64_TYPE, SemanticLocalRoleV1::Return),
+            local(1, U64_TYPE, SemanticLocalRoleV1::Argument(0)),
+        ];
+        for offset in 0..alias_count {
+            let destination = u32::try_from(offset + 2).unwrap();
+            let source = u32::try_from(offset + 1).unwrap();
+            statements.push(typed_assignment(
+                destination,
+                U64_TYPE,
+                SemanticRvalueKindV1::Use(typed_operand(source, U64_TYPE)),
+            ));
+            locals.push(local(
+                u8::try_from(offset + 2).unwrap(),
+                U64_TYPE,
+                SemanticLocalRoleV1::Temporary,
+            ));
+        }
+        let function = projection_function_with_locals(
+            vec![block(210, statements, SemanticTerminatorKindV1::Return)],
+            locals,
+        );
+        let definitions = local_definition_counts(&function);
+        let inventory = assertion_definition_inventory(&function).unwrap();
+        let use_site = ScalarAssignmentSiteV1 {
+            block: 0,
+            statement: alias_count,
+        };
+        let operand = typed_operand(u32::try_from(alias_count + 1).unwrap(), U64_TYPE);
+        let mut work = 0;
+        assert_eq!(
+            resolve_block_copy_alias_before_v1(
+                &function,
+                use_site,
+                &operand,
+                &definitions,
+                &inventory.assignments,
+                &mut work,
+            )
+            .unwrap(),
+            Some(SemanticLocalIdV1::from_index(1))
+        );
+        assert_eq!(work, alias_count + 1);
+
+        let mut exhausted_work = 0;
+        assert_loop_unsupported(
+            resolve_block_copy_alias_before_with_limit_v1(
+                &function,
+                use_site,
+                &operand,
+                &definitions,
+                &inventory.assignments,
+                &mut exhausted_work,
+                alias_count,
+            ),
+            "uniform induction alias analysis exceeds its work limit",
+        );
+
+        for statements in [
+            vec![
+                typed_assignment(
+                    2,
+                    U64_TYPE,
+                    SemanticRvalueKindV1::Use(typed_operand(3, U64_TYPE)),
+                ),
+                typed_assignment(
+                    3,
+                    U64_TYPE,
+                    SemanticRvalueKindV1::Use(typed_operand(1, U64_TYPE)),
+                ),
+            ],
+            vec![
+                typed_assignment(
+                    2,
+                    U64_TYPE,
+                    SemanticRvalueKindV1::Use(typed_operand(3, U64_TYPE)),
+                ),
+                typed_assignment(
+                    3,
+                    U64_TYPE,
+                    SemanticRvalueKindV1::Use(typed_operand(2, U64_TYPE)),
+                ),
+            ],
+        ] {
+            let function = projection_function_with_locals(
+                vec![block(211, statements, SemanticTerminatorKindV1::Return)],
+                vec![
+                    local(0, U64_TYPE, SemanticLocalRoleV1::Return),
+                    local(1, U64_TYPE, SemanticLocalRoleV1::Argument(0)),
+                    local(2, U64_TYPE, SemanticLocalRoleV1::Temporary),
+                    local(3, U64_TYPE, SemanticLocalRoleV1::Temporary),
+                ],
+            );
+            let definitions = local_definition_counts(&function);
+            let inventory = assertion_definition_inventory(&function).unwrap();
+            let mut work = 0;
+            assert_incomplete(
+                resolve_block_copy_alias_before_v1(
+                    &function,
+                    ScalarAssignmentSiteV1 {
+                        block: 0,
+                        statement: 2,
+                    },
+                    &typed_operand(2, U64_TYPE),
+                    &definitions,
+                    &inventory.assignments,
+                    &mut work,
+                ),
+                "a uniform induction operand has a cyclic copy alias",
+            );
+        }
+    }
+
+    #[test]
+    fn pipeline_owner_worklist_handles_reverse_aliases_and_conflicts() {
+        let alias_count = 64_usize;
+        let mut statements = (0..alias_count)
+            .map(|offset| {
+                typed_assignment(
+                    u32::try_from(offset + 2).unwrap(),
+                    U64_TYPE,
+                    SemanticRvalueKindV1::Use(typed_operand(
+                        u32::try_from(offset + 1).unwrap(),
+                        U64_TYPE,
+                    )),
+                )
+            })
+            .collect::<Vec<_>>();
+        statements.reverse();
+        let mut locals = vec![
+            local(0, U64_TYPE, SemanticLocalRoleV1::Return),
+            local(1, U64_TYPE, SemanticLocalRoleV1::Argument(0)),
+        ];
+        for offset in 0..alias_count {
+            locals.push(local(
+                u8::try_from(offset + 2).unwrap(),
+                U64_TYPE,
+                SemanticLocalRoleV1::Temporary,
+            ));
+        }
+        let function = projection_function_with_locals(
+            vec![block(212, statements, SemanticTerminatorKindV1::Return)],
+            locals,
+        );
+        let mut owners = vec![None; function.locals().len()];
+        owners[1] = Some(7);
+        propagate_workgroup_pipeline_aliases_v1(&function, &mut owners).unwrap();
+        assert_eq!(owners.last(), Some(&Some(7)));
+
+        let conflict = projection_function_with_locals(
+            vec![block(
+                213,
+                vec![
+                    typed_assignment(
+                        3,
+                        U64_TYPE,
+                        SemanticRvalueKindV1::Use(typed_operand(1, U64_TYPE)),
+                    ),
+                    typed_assignment(
+                        3,
+                        U64_TYPE,
+                        SemanticRvalueKindV1::Use(typed_operand(2, U64_TYPE)),
+                    ),
+                ],
+                SemanticTerminatorKindV1::Return,
+            )],
+            vec![
+                local(0, U64_TYPE, SemanticLocalRoleV1::Return),
+                local(1, U64_TYPE, SemanticLocalRoleV1::Argument(0)),
+                local(2, U64_TYPE, SemanticLocalRoleV1::Argument(1)),
+                local(3, U64_TYPE, SemanticLocalRoleV1::Temporary),
+            ],
+        );
+        let mut owners = vec![None; conflict.locals().len()];
+        owners[1] = Some(0);
+        owners[2] = Some(1);
+        assert_incomplete(
+            propagate_workgroup_pipeline_aliases_v1(&conflict, &mut owners),
+            "one Rust local may alias two workgroup pipelines",
+        );
+    }
+
+    #[test]
+    fn pure_uniform_projector_scratch_tracks_only_visited_locals() {
+        let mut locals = vec![
+            local(0, U64_TYPE, SemanticLocalRoleV1::Return),
+            local(1, U64_TYPE, SemanticLocalRoleV1::Argument(0)),
+            local(2, U64_TYPE, SemanticLocalRoleV1::Temporary),
+            local(3, U64_TYPE, SemanticLocalRoleV1::Temporary),
+        ];
+        for local_index in 4..196 {
+            locals.push(local(
+                u8::try_from(local_index).unwrap(),
+                U64_TYPE,
+                SemanticLocalRoleV1::Temporary,
+            ));
+        }
+        let function = projection_function_with_locals(
+            vec![block(
+                214,
+                vec![
+                    typed_assignment(
+                        2,
+                        U64_TYPE,
+                        SemanticRvalueKindV1::Use(typed_operand(1, U64_TYPE)),
+                    ),
+                    typed_assignment(
+                        3,
+                        U64_TYPE,
+                        SemanticRvalueKindV1::Use(typed_operand(1, U64_TYPE)),
+                    ),
+                ],
+                SemanticTerminatorKindV1::Return,
+            )],
+            locals,
+        );
+        let types = assertion_proof_types();
+        let constants = constant_locals(&function);
+        let definitions = local_definition_counts(&function);
+        let graph = projected_loop_cfg_graph_v1(&function).unwrap();
+        let mut proof = SemanticAssertProofsV1::new(&types, &function).unwrap();
+        let assignment_sites = proof.assignments.clone();
+        let address_escaped = proof.address_escaped.clone();
+        for root in [2, 3] {
+            let mut arguments = vec![None; function.locals().len()];
+            let mut next_argument = 1;
+            let mut operations = Vec::new();
+            let mut next_value = 0;
+            let mut projector = PureUniformIndexProjectorV1::new(
+                &types,
+                &function,
+                &constants,
+                &definitions,
+                &address_escaped,
+                &assignment_sites,
+                &mut proof,
+                &graph,
+                &mut arguments,
+                &mut next_argument,
+                &mut operations,
+                &mut next_value,
+            )
+            .unwrap();
+            assert!(projector.states.is_empty());
+            assert!(projector.states.capacity() <= MAX_PURE_UNIFORM_INDEX_NODES_V1 * 2);
+            assert!(
+                projector
+                    .resolve_operand(&typed_operand(root, U64_TYPE), 0, 2)
+                    .unwrap()
+                    .is_some()
+            );
+            assert_eq!(projector.states.len(), 1);
+        }
     }
 
     #[test]
