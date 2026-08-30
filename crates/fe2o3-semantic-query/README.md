@@ -278,7 +278,7 @@ is only the KIR/artifact/source-map
 identity binding declared on an observed dispatch. It does not expose source
 text, ISA, arguments, variables, or semantic execution history.
 
-The executable accepts only this mode:
+The V1 service mode is:
 
 ```text
 fe2o3-profiler-service jsonl
@@ -296,3 +296,37 @@ object with schema `fe2o3-agent-profiler-response-v1`. Malformed or oversized
 input emits a typed terminal error and closes the session. The existing
 `generic-core` workspace gate builds and tests all targets in this crate, which
 includes the service binary and its protocol tests.
+
+## Distributed-overlap extension
+
+`AgentProfilerDistributedOverlapServiceV1` and
+`fe2o3-profiler-service distributed-overlap-jsonl` form a separate versioned
+extension. They do not add an operation, capability field, schema, or result to
+`AgentProfilerServiceV1`; the existing V1 JSONL wire remains frozen. The
+extension has only `discover_capabilities` and `explain_distributed_overlap`.
+Discovery returns the extension request, response, and result schemas together
+with the exact version and full content identity of its dependency contract, so
+a fresh client can construct the flat explain request without opening a capture.
+Every serialized extension response, including the trailing LF and maximum
+`u64` request/revision representation, is independently capped at 4,096 bytes.
+
+The dependency identity canonically binds `harsh-nod/fe2o3` issue #182,
+contract version 1, and the required producer axes. Those axes are the operation
+identity; exact directed dependency-edge identity; distinct predecessor and
+successor operation identities; node, device, and queue identities; compute,
+copy, transfer, and collective intervals or phases; local clock domain; clock
+correlation interval; distinct correlation uncertainty and precision; explicit
+loss and completeness status; and evidence content identity and schema version.
+The service accepts none of those facts yet. It returns bounded
+consumer-requirements metadata with no capture or record evidence.
+
+Measured intervals will require observed origin. Producer inferences will
+require a rule identity and exact input evidence, and any eventual overlap value
+will itself be inferred from admitted inputs. Loss must be reported with origin
+and lost-record count or be explicitly unknown with origin and a reason. Missing
+events cannot establish idle time, completion, or causality. Global-time
+precision remains unavailable without an admitted correlation interval plus
+uncertainty/precision; causal localization remains unavailable without complete
+dependency and phase evidence. The extension cannot execute, attach, schedule,
+collect, or grant authority. It implements no issue #182 identity producer or
+distributed runtime and does not claim the #215 T5 exit.
