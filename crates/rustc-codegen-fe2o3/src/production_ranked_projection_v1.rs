@@ -28603,17 +28603,70 @@ mod tests {
         let first_alias = 1_u32;
         let terminal = first_alias + u32::try_from(alias_count).unwrap();
         let array_local = terminal + 1;
-        let deep_array_type = SemanticTypeIdV1::from_index(3);
-        let mut types = projection_types();
-        types.push(SemanticTypeDeclV1::new(
-            SemanticTypeIdentityV1::from_sha256(bytes(0xd6)),
-            SemanticLayoutIdentityV1::from_sha256(bytes(0xd6)),
-            SemanticTypeLayoutV1::new(Some(32), 4).unwrap(),
-            SemanticTypeShapeV1::Array {
-                element: SCALAR_TYPE,
-                length: 8,
-            },
-        ));
+        let deep_array_type = SemanticTypeIdV1::from_index(1);
+        let unit_type = SemanticTypeIdV1::from_index(2);
+        let scalar_backend = SemanticBackendScalarV1::initialized(
+            SemanticBackendPrimitiveV1::integer(false, 32, 4),
+            SemanticScalarValidityRangeV1::new(0, u32::MAX.into()),
+        );
+        let types = vec![
+            SemanticTypeDeclV1::new(
+                SemanticTypeIdentityV1::from_sha256(bytes(1)),
+                SemanticLayoutIdentityV1::from_sha256(bytes(1)),
+                SemanticTypeLayoutV1::new_with_backend_repr(
+                    Some(4),
+                    4,
+                    SemanticBackendReprV1::scalar(scalar_backend),
+                    false,
+                )
+                .unwrap(),
+                SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
+                    signed: false,
+                    bits: 32,
+                }),
+            ),
+            SemanticTypeDeclV1::new(
+                SemanticTypeIdentityV1::from_sha256(bytes(0xd6)),
+                SemanticLayoutIdentityV1::from_sha256(bytes(0xd6)),
+                SemanticTypeLayoutV1::with_exact_rustc_layout(
+                    32,
+                    4,
+                    SemanticFieldsShapeV1::array(4, 8),
+                    SemanticRustcVariantsV1::Single { index: 0 },
+                    SemanticBackendReprV1::memory(true),
+                    None,
+                    false,
+                    None,
+                    4,
+                    0,
+                    SemanticTypeLayoutDetailsV1::None,
+                )
+                .unwrap(),
+                SemanticTypeShapeV1::Array {
+                    element: SCALAR_TYPE,
+                    length: 8,
+                },
+            ),
+            SemanticTypeDeclV1::new(
+                SemanticTypeIdentityV1::from_sha256(bytes(0xd7)),
+                SemanticLayoutIdentityV1::from_sha256(bytes(0xd7)),
+                SemanticTypeLayoutV1::with_exact_rustc_layout(
+                    0,
+                    1,
+                    SemanticFieldsShapeV1::arbitrary(vec![], vec![]).unwrap(),
+                    SemanticRustcVariantsV1::Single { index: 0 },
+                    SemanticBackendReprV1::memory(true),
+                    None,
+                    false,
+                    None,
+                    1,
+                    0,
+                    SemanticTypeLayoutDetailsV1::None,
+                )
+                .unwrap(),
+                SemanticTypeShapeV1::Unit,
+            ),
+        ];
         let mut statements = vec![typed_assignment(
             terminal,
             SCALAR_TYPE,
@@ -28652,7 +28705,9 @@ mod tests {
             identity[28..].copy_from_slice(&index.to_be_bytes());
             locals.push(SemanticLocalDeclV1::new(
                 SemanticLocalIdentityV1::from_sha256(identity),
-                if index == array_local {
+                if index == 0 {
+                    unit_type
+                } else if index == array_local {
                     deep_array_type
                 } else {
                     SCALAR_TYPE
@@ -28675,10 +28730,32 @@ mod tests {
             None,
         )
         .unwrap();
-        let function = projection_function_with_locals(
-            vec![block(215, statements, SemanticTerminatorKindV1::Return)],
-            locals,
+        let abi = SemanticFunctionAbiV1::from_rustc(
+            SemanticAbiIdentityV1::from_sha256(bytes(10)),
+            SemanticLayoutIdentityV1::from_sha256(bytes(250)),
+            SemanticCanonAbiV1::GpuKernel,
+            SemanticExternAbiV1::GpuKernel,
+            false,
+            false,
+            0,
+            vec![],
+            SemanticAbiValueV1::new(unit_type, SemanticAbiPassModeV1::Ignore),
         )
+        .unwrap();
+        let function = SemanticFunctionDeclV1::new(
+            SemanticFunctionIdentityV1::from_sha256(bytes(11)),
+            SemanticFunctionRoleV1::KernelRoot,
+            SemanticItemDefinitionIdentityV1::from_sha256(bytes(12)),
+            SemanticMonomorphizationIdentityV1::from_sha256(bytes(13)),
+            SemanticGenericTypeArgumentsIdentityV1::from_sha256(bytes(14)),
+            SemanticConstGenericArgumentsIdentityV1::from_sha256(bytes(15)),
+            SemanticSourceProvenanceV1::unavailable(),
+            abi,
+            locals,
+            SemanticBlockIdV1::from_index(0),
+            vec![block(215, statements, SemanticTerminatorKindV1::Return)],
+        )
+        .unwrap()
         .with_kernel_entry(SemanticKernelEntryV1::new(
             SemanticLinkSymbolV1::new(b"deep_constant_alias".to_vec()).unwrap(),
             SemanticKernelBindingIdentityV1::from_sha256(bytes(0xd5)),
@@ -28711,42 +28788,54 @@ mod tests {
         assert_eq!(projected.roots.len(), 1);
         assert_eq!(projected.roots[0].kernel_binding, bytes(0xd5));
         let expected_origin = PRIVATE_ALLOCATION_ORIGIN_TAG_V1 + u64::from(array_local) + 1;
-        let linked_private_writes = projected.roots[0]
-            .lowering
-            .kernel()
-            .blocks()
+        let blocks = projected.roots[0].lowering.kernel().blocks();
+        let private_views = blocks
             .iter()
-            .flat_map(|block| block.operations().windows(3))
-            .filter(|operations| {
+            .flat_map(|block| block.operations())
+            .filter_map(|operation| match operation {
+                ProductionRankedOperationV1::ViewInSpace {
+                    result,
+                    element_width: 32,
+                    writable: true,
+                    shape,
+                    dynamic_extents,
+                    memory_space: MemorySpaceAttr::Private,
+                    allocation_origin,
+                    noalias_class,
+                } if shape == &[8]
+                    && dynamic_extents.is_empty()
+                    && *allocation_origin == expected_origin
+                    && allocation_origin == noalias_class =>
+                {
+                    Some(*result)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let constant_sevens = blocks
+            .iter()
+            .flat_map(|block| block.operations())
+            .filter_map(|operation| match operation {
+                ProductionRankedOperationV1::IndexConstant { result, value: 7 } => Some(*result),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(private_views.len(), 1);
+        assert_eq!(constant_sevens.len(), 1);
+        let view = private_views[0];
+        let index = constant_sevens[0];
+        let linked_private_writes = blocks
+            .iter()
+            .flat_map(|block| block.operations())
+            .filter(|operation| {
                 matches!(
-                    *operations,
-                    [
-                        ProductionRankedOperationV1::ViewInSpace {
-                            result: view,
-                            element_width: 32,
-                            writable: true,
-                            shape,
-                            dynamic_extents,
-                            memory_space: MemorySpaceAttr::Private,
-                            allocation_origin,
-                            noalias_class,
-                        },
-                        ProductionRankedOperationV1::IndexConstant {
-                            result: index,
-                            value: 7,
-                        },
-                        ProductionRankedOperationV1::Access {
-                            kind: AccessKindAttr::Write,
-                            view: ProductionRankedValueV1::Local(access_view),
-                            indices,
-                        },
-                    ] if shape == &[8]
-                        && dynamic_extents.is_empty()
-                        && *allocation_origin == expected_origin
-                        && allocation_origin == noalias_class
-                        && view == access_view
-                        && indices.as_slice()
-                            == &[ProductionRankedValueV1::Local(*index)]
+                    operation,
+                    ProductionRankedOperationV1::Access {
+                        kind: AccessKindAttr::Write,
+                        view: ProductionRankedValueV1::Local(access_view),
+                        indices,
+                    } if *access_view == view
+                        && indices.as_slice() == &[ProductionRankedValueV1::Local(index)]
                 )
             })
             .count();
