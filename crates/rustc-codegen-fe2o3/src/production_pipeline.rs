@@ -598,19 +598,13 @@ impl FormalMemoryAdmittedProductionCompilation {
             target_profile,
         )
         .map_err(ProductionPipelineError::TargetBinding)?;
-        let (target_module, kernel_id) = target_bound.into_parts();
+        let (target_module, _kernel_id) = target_bound.into_parts();
         let lowering = match target_profile {
             fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx942 => {
-                dialect_amdgcn::lower_kernel_to_gfx942_xnack_minus_llvm_ir(
-                    &target_module,
-                    &kernel_id,
-                )
+                dialect_amdgcn::lower_compiler_module_to_gfx942_xnack_minus_llvm_ir(&target_module)
             }
             fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx950 => {
-                dialect_amdgcn::lower_kernel_to_gfx950_xnack_minus_llvm_ir(
-                    &target_module,
-                    &kernel_id,
-                )
+                dialect_amdgcn::lower_compiler_module_to_gfx950_xnack_minus_llvm_ir(&target_module)
             }
         };
         let dialect_llvm_ir = lowering.map_err(ProductionPipelineError::TargetLowering)?;

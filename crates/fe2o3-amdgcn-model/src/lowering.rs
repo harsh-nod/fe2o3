@@ -583,6 +583,21 @@ pub fn lower_compiler_module_to_gfx942_llvm_ir(module: &Module) -> Result<String
     )
 }
 
+/// Lowers a complete compiler module for the exact gfx942:xnack- profile.
+///
+/// Unlike the kernel-only exact entry point, this retains every verified
+/// internal helper and call edge in the emitted LLVM module.
+pub fn lower_compiler_module_to_gfx942_xnack_minus_llvm_ir(
+    module: &Module,
+) -> Result<String, LoweringErrors> {
+    lower_compiler_module_to_llvm_ir_for_target(
+        module,
+        LoweringTarget::Gfx942XnackMinusV1,
+        None,
+        true,
+    )
+}
+
 /// Lowers a complete compiler module for the exact gfx950:xnack- profile.
 pub fn lower_compiler_module_to_gfx950_xnack_minus_llvm_ir(
     module: &Module,

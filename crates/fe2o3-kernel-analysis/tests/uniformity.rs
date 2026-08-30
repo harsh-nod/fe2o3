@@ -5,9 +5,10 @@ use fe2o3_kernel_ir::{
     AccessMode, AddressSpace, AmdGpuDiagnosticOperation, Axis, Barrier, BarrierSemantics,
     BasicBlock, BinaryOp, BlockId, CastKind, CheckedBinaryOperator, ComparePredicate, Constant,
     Convergence, F32MathFunction, FloatOperation, Function, FunctionId, IndexKind, IntrinsicKind,
-    IntrinsicOperation, Kernel, LaunchDomain, LaunchExtent, MemoryAccess, MemoryOrdering, Module,
-    Operation, OperationKind, ScalarType, Signature, SwitchCase, SynchronizationScope, Terminator,
-    Type, ValueDef, ValueId, WaveOperation, WaveOperationKind, WaveWidth, WorkgroupBarrier,
+    IntrinsicOperation, Kernel, LaunchDomain, LaunchExtent,
+    MAX_INTERPROCEDURAL_EFFECT_FUNCTIONS_V1, MemoryAccess, MemoryOrdering, Module, Operation,
+    OperationKind, ScalarType, Signature, SwitchCase, SynchronizationScope, Terminator, Type,
+    ValueDef, ValueId, WaveOperation, WaveOperationKind, WaveWidth, WorkgroupBarrier,
     WorkgroupMemory, WorkgroupMemoryExtent, WorkgroupSize,
 };
 
@@ -1615,6 +1616,412 @@ fn closed_float_intrinsics_and_pure_math_helpers_are_summarized() {
     let report = analyze_kernel_entry(&module, &kernel);
     assert_eq!(report.value(ValueId(1)), Variation::GridUniform);
     assert!(report.diagnostics().is_empty());
+}
+
+#[test]
+fn nested_context_free_scalar_helpers_preserve_uniform_actuals() {
+    let mut leaf_block = returning(0);
+    leaf_block
+        .operations
+        .extend([constant(11, Constant::Index(1)), add(12, 10, 11)]);
+    leaf_block.terminator = Some(Terminator::Return {
+        values: vec![ValueId(12)],
+    });
+    let leaf = Function::internal_helper(
+        "uniform_leaf",
+        Signature::new(vec![Type::INDEX], vec![Type::INDEX]),
+        vec![ValueId(10)],
+        vec![leaf_block],
+    );
+
+    let mut outer_block = returning(0);
+    outer_block.operations.push(Operation::effect_free(
+        ValueDef::new(ValueId(21), Type::INDEX),
+        OperationKind::Call {
+            callee: leaf.id.clone(),
+            arguments: vec![ValueId(20)],
+        },
+    ));
+    outer_block.terminator = Some(Terminator::Return {
+        values: vec![ValueId(21)],
+    });
+    let outer = Function::internal_helper(
+        "uniform_outer",
+        Signature::new(vec![Type::INDEX], vec![Type::INDEX]),
+        vec![ValueId(20)],
+        vec![outer_block],
+    );
+
+    let mut entry = returning(0);
+    entry.operations.extend([
+        constant(0, Constant::Index(7)),
+        Operation::effect_free(
+            ValueDef::new(ValueId(1), Type::INDEX),
+            OperationKind::Call {
+                callee: outer.id.clone(),
+                arguments: vec![ValueId(0)],
+            },
+        ),
+    ]);
+    let kernel = function(vec![], vec![entry]);
+    let mut module = Module::new("uniformity_nested_scalar_helpers");
+    module.functions = vec![kernel.clone(), outer, leaf];
+
+    let report = analyze_kernel_entry(&module, &kernel);
+    assert_eq!(report.value(ValueId(1)), Variation::GridUniform);
+    assert!(report.diagnostics().is_empty());
+}
+
+#[test]
+fn pure_helper_with_workitem_source_is_not_a_uniform_call_summary() {
+    let mut helper_block = returning(0);
+    helper_block.operations.push(intrinsic(
+        10,
+        IntrinsicKind::InvocationIndex {
+            kind: IndexKind::Local,
+            axis: Axis::X,
+        },
+    ));
+    helper_block.terminator = Some(Terminator::Return {
+        values: vec![ValueId(10)],
+    });
+    let helper = Function::internal_helper(
+        "lane_dependent_helper",
+        Signature::new(vec![], vec![Type::INDEX]),
+        vec![],
+        vec![helper_block],
+    );
+
+    let mut entry = returning(0);
+    entry.operations.push(Operation::effect_free(
+        ValueDef::new(ValueId(0), Type::INDEX),
+        OperationKind::Call {
+            callee: helper.id.clone(),
+            arguments: vec![],
+        },
+    ));
+    let kernel = function(vec![], vec![entry]);
+    let mut module = Module::new("uniformity_lane_dependent_helper");
+    module.functions = vec![kernel.clone(), helper.clone()];
+
+    let report = analyze_kernel_entry(&module, &kernel);
+    assert_eq!(report.value(ValueId(0)), Variation::Varying);
+    assert!(report.diagnostics().contains(&Diagnostic::Unsupported {
+        block: Some(BlockId(0)),
+        operation_index: Some(0),
+        reason: UnsupportedReason::CallWithoutSummary { callee: helper.id },
+    }));
+}
+
+#[test]
+fn pure_helper_with_workgroup_source_is_not_a_uniform_call_summary() {
+    let mut helper_block = returning(0);
+    helper_block.operations.push(intrinsic(
+        10,
+        IntrinsicKind::InvocationIndex {
+            kind: IndexKind::Workgroup,
+            axis: Axis::X,
+        },
+    ));
+    helper_block.terminator = Some(Terminator::Return {
+        values: vec![ValueId(10)],
+    });
+    let helper = Function::internal_helper(
+        "workgroup_dependent_helper",
+        Signature::new(vec![], vec![Type::INDEX]),
+        vec![],
+        vec![helper_block],
+    );
+    let mut entry = returning(0);
+    entry.operations.push(Operation::effect_free(
+        ValueDef::new(ValueId(0), Type::INDEX),
+        OperationKind::Call {
+            callee: helper.id.clone(),
+            arguments: vec![],
+        },
+    ));
+    let kernel = function(vec![], vec![entry]);
+    let mut module = Module::new("uniformity_workgroup_dependent_helper");
+    module.functions = vec![kernel.clone(), helper.clone()];
+
+    let report = analyze_kernel_entry(&module, &kernel);
+    assert!(report.diagnostics().contains(&Diagnostic::Unsupported {
+        block: Some(BlockId(0)),
+        operation_index: Some(0),
+        reason: UnsupportedReason::CallWithoutSummary { callee: helper.id },
+    }));
+}
+
+#[test]
+fn terminating_helper_summary_requires_grid_uniform_actuals() {
+    let mut dispatch = BasicBlock::new(BlockId(0));
+    dispatch
+        .operations
+        .extend([constant(11, Constant::Index(0)), compare(12, 10, 11)]);
+    dispatch.terminator = Some(Terminator::ConditionalBranch {
+        condition: ValueId(12),
+        then_target: BlockId(1),
+        then_arguments: vec![],
+        else_target: BlockId(2),
+        else_arguments: vec![],
+    });
+    let mut trap = BasicBlock::new(BlockId(1));
+    trap.operations
+        .push(AmdGpuDiagnosticOperation::Trap.operation(None));
+    trap.terminator = Some(Terminator::Unreachable);
+    let mut returned = returning(2);
+    returned.terminator = Some(Terminator::Return {
+        values: vec![ValueId(10)],
+    });
+    let helper = Function::internal_helper(
+        "checked_uniform_helper",
+        Signature::new(vec![Type::INDEX], vec![Type::INDEX]),
+        vec![ValueId(10)],
+        vec![dispatch, trap, returned],
+    );
+
+    let mut uniform_entry = returning(0);
+    uniform_entry.operations.push(Operation::effect_free(
+        ValueDef::new(ValueId(1), Type::INDEX),
+        OperationKind::Call {
+            callee: helper.id.clone(),
+            arguments: vec![ValueId(0)],
+        },
+    ));
+    let uniform_kernel = function(vec![ValueId(0)], vec![uniform_entry]);
+    let mut uniform_module = Module::new("uniformity_checked_helper_uniform_actual");
+    uniform_module.functions = vec![uniform_kernel.clone(), helper.clone()];
+    let uniform_report = analyze_kernel_entry(&uniform_module, &uniform_kernel);
+    assert_eq!(uniform_report.value(ValueId(1)), Variation::GridUniform);
+    assert!(uniform_report.diagnostics().is_empty());
+
+    let mut varying_entry = returning(0);
+    varying_entry.operations.extend([
+        intrinsic(
+            0,
+            IntrinsicKind::InvocationIndex {
+                kind: IndexKind::Local,
+                axis: Axis::X,
+            },
+        ),
+        Operation::effect_free(
+            ValueDef::new(ValueId(1), Type::INDEX),
+            OperationKind::Call {
+                callee: helper.id.clone(),
+                arguments: vec![ValueId(0)],
+            },
+        ),
+    ]);
+    let varying_kernel = function(vec![], vec![varying_entry]);
+    let mut varying_module = Module::new("uniformity_checked_helper_varying_actual");
+    varying_module.functions = vec![varying_kernel.clone(), helper.clone()];
+    let varying_report = analyze_kernel_entry(&varying_module, &varying_kernel);
+    assert!(
+        varying_report
+            .diagnostics()
+            .contains(&Diagnostic::Unsupported {
+                block: Some(BlockId(0)),
+                operation_index: Some(1),
+                reason: UnsupportedReason::CallWithoutSummary {
+                    callee: helper.id.clone(),
+                },
+            })
+    );
+
+    let mut divergent_dispatch = BasicBlock::new(BlockId(0));
+    divergent_dispatch.operations.extend([
+        intrinsic(
+            0,
+            IntrinsicKind::InvocationIndex {
+                kind: IndexKind::Local,
+                axis: Axis::X,
+            },
+        ),
+        constant(1, Constant::Index(0)),
+        compare(2, 0, 1),
+    ]);
+    divergent_dispatch.terminator = Some(Terminator::ConditionalBranch {
+        condition: ValueId(2),
+        then_target: BlockId(1),
+        then_arguments: vec![],
+        else_target: BlockId(2),
+        else_arguments: vec![],
+    });
+    let mut divergent_call = BasicBlock::new(BlockId(1));
+    divergent_call.operations.push(Operation::effect_free(
+        ValueDef::new(ValueId(3), Type::INDEX),
+        OperationKind::Call {
+            callee: helper.id.clone(),
+            arguments: vec![ValueId(1)],
+        },
+    ));
+    divergent_call.terminator = Some(Terminator::Branch {
+        target: BlockId(3),
+        arguments: vec![],
+    });
+    let mut bypass = BasicBlock::new(BlockId(2));
+    bypass.terminator = Some(Terminator::Branch {
+        target: BlockId(3),
+        arguments: vec![],
+    });
+    let control_kernel = function(
+        vec![],
+        vec![divergent_dispatch, divergent_call, bypass, returning(3)],
+    );
+    let mut control_module = Module::new("uniformity_checked_helper_divergent_control");
+    control_module.functions = vec![control_kernel.clone(), helper.clone()];
+    let control_report = analyze_kernel_entry(&control_module, &control_kernel);
+    assert!(
+        control_report
+            .diagnostics()
+            .contains(&Diagnostic::Unsupported {
+                block: Some(BlockId(1)),
+                operation_index: Some(0),
+                reason: UnsupportedReason::CallWithoutSummary { callee: helper.id },
+            })
+    );
+}
+
+#[test]
+fn helper_call_cycle_fails_closed_without_recursive_walk() {
+    let mut first_block = returning(0);
+    first_block.operations.push(Operation::effect_free(
+        ValueDef::new(ValueId(0), Type::INDEX),
+        OperationKind::Call {
+            callee: FunctionId::new("cycle_second"),
+            arguments: vec![],
+        },
+    ));
+    first_block.terminator = Some(Terminator::Return {
+        values: vec![ValueId(0)],
+    });
+    let first = Function::internal_helper(
+        "cycle_first",
+        Signature::new(vec![], vec![Type::INDEX]),
+        vec![],
+        vec![first_block],
+    );
+    let mut second_block = returning(0);
+    second_block.operations.push(Operation::effect_free(
+        ValueDef::new(ValueId(0), Type::INDEX),
+        OperationKind::Call {
+            callee: first.id.clone(),
+            arguments: vec![],
+        },
+    ));
+    second_block.terminator = Some(Terminator::Return {
+        values: vec![ValueId(0)],
+    });
+    let second = Function::internal_helper(
+        "cycle_second",
+        Signature::new(vec![], vec![Type::INDEX]),
+        vec![],
+        vec![second_block],
+    );
+    let mut entry = returning(0);
+    entry.operations.push(Operation::effect_free(
+        ValueDef::new(ValueId(0), Type::INDEX),
+        OperationKind::Call {
+            callee: first.id.clone(),
+            arguments: vec![],
+        },
+    ));
+    let kernel = function(vec![], vec![entry]);
+    let mut module = Module::new("uniformity_helper_call_cycle");
+    module.functions = vec![kernel.clone(), first.clone(), second];
+
+    let report = analyze_kernel_entry(&module, &kernel);
+    assert!(report.diagnostics().contains(&Diagnostic::Unsupported {
+        block: Some(BlockId(0)),
+        operation_index: Some(0),
+        reason: UnsupportedReason::CallWithoutSummary { callee: first.id },
+    }));
+}
+
+#[test]
+fn device_ffi_definition_is_not_admitted_as_a_uniform_helper() {
+    let mut ffi_block = returning(0);
+    ffi_block.operations.push(constant(10, Constant::Index(1)));
+    ffi_block.terminator = Some(Terminator::Return {
+        values: vec![ValueId(10)],
+    });
+    let ffi = Function::device_ffi_export(
+        "device_ffi",
+        Signature::new(vec![], vec![Type::INDEX]),
+        vec![],
+        vec![ffi_block],
+    );
+    let mut entry = returning(0);
+    entry.operations.push(Operation::effect_free(
+        ValueDef::new(ValueId(0), Type::INDEX),
+        OperationKind::Call {
+            callee: ffi.id.clone(),
+            arguments: vec![],
+        },
+    ));
+    let kernel = function(vec![], vec![entry]);
+    let mut module = Module::new("uniformity_device_ffi");
+    module.functions = vec![kernel.clone(), ffi.clone()];
+
+    let report = analyze_kernel_entry(&module, &kernel);
+    assert!(report.diagnostics().contains(&Diagnostic::Unsupported {
+        block: Some(BlockId(0)),
+        operation_index: Some(0),
+        reason: UnsupportedReason::CallWithoutSummary { callee: ffi.id },
+    }));
+}
+
+#[test]
+fn oversized_deep_helper_chain_fails_closed_without_recursive_walk() {
+    let helper_count = MAX_INTERPROCEDURAL_EFFECT_FUNCTIONS_V1;
+    let helper_ids = (0..helper_count)
+        .map(|index| FunctionId::new(format!("deep_helper_{index}")))
+        .collect::<Vec<_>>();
+    let mut helpers = Vec::with_capacity(helper_count);
+    for (index, helper_id) in helper_ids.iter().enumerate() {
+        let mut block = returning(0);
+        if let Some(callee) = helper_ids.get(index + 1) {
+            block.operations.push(Operation::effect_free(
+                ValueDef::new(ValueId(0), Type::INDEX),
+                OperationKind::Call {
+                    callee: callee.clone(),
+                    arguments: vec![],
+                },
+            ));
+        } else {
+            block.operations.push(constant(0, Constant::Index(0)));
+        }
+        block.terminator = Some(Terminator::Return {
+            values: vec![ValueId(0)],
+        });
+        helpers.push(Function::internal_helper(
+            helper_id.clone(),
+            Signature::new(vec![], vec![Type::INDEX]),
+            vec![],
+            vec![block],
+        ));
+    }
+    let mut entry = returning(0);
+    entry.operations.push(Operation::effect_free(
+        ValueDef::new(ValueId(0), Type::INDEX),
+        OperationKind::Call {
+            callee: helper_ids[0].clone(),
+            arguments: vec![],
+        },
+    ));
+    let kernel = function(vec![], vec![entry]);
+    let mut module = Module::new("uniformity_oversized_deep_chain");
+    module.functions.push(kernel.clone());
+    module.functions.extend(helpers);
+
+    let report = analyze_kernel_entry(&module, &kernel);
+    assert!(report.diagnostics().contains(&Diagnostic::Unsupported {
+        block: Some(BlockId(0)),
+        operation_index: Some(0),
+        reason: UnsupportedReason::CallWithoutSummary {
+            callee: helper_ids[0].clone(),
+        },
+    }));
 }
 
 #[test]

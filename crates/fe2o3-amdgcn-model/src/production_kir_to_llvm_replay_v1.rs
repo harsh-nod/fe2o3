@@ -12,7 +12,8 @@ use sha2::{Digest, Sha256};
 use crate::{
     LoweringErrors, ProductionLlvmLayoutBindingErrorV1, ProductionTargetBindingErrorV1,
     bind_production_target_v1, bind_production_upstream_llvm_layout_v1,
-    lower_kernel_to_gfx942_xnack_minus_llvm_ir, lower_kernel_to_gfx950_xnack_minus_llvm_ir,
+    lower_compiler_module_to_gfx942_xnack_minus_llvm_ir,
+    lower_compiler_module_to_gfx950_xnack_minus_llvm_ir,
 };
 
 const EVIDENCE_MAGIC_V1: &[u8] = b"FE2O3/KIR-TO-LLVM-REPLAY/V1\0";
@@ -127,7 +128,7 @@ impl CanonicalProductionKirToLlvmReplayEvidenceV1 {
         }
         let kernel_id = target_bound.kernel_id().clone();
         let (_, target_identity) = canonicalize_target_module(target_bound.module(), version)?;
-        let replayed_llvm = replay_llvm(target_bound.module(), &kernel_id, profile)?;
+        let replayed_llvm = replay_llvm(target_bound.module(), profile)?;
         if replayed_llvm.as_bytes() != pre_descriptor_llvm.as_bytes() {
             return Err(ProductionKirToLlvmReplayErrorV1::LlvmMismatch);
         }
@@ -231,7 +232,7 @@ impl CanonicalProductionKirToLlvmReplayEvidenceV1 {
                 field: "target-bound Kernel IR",
             });
         }
-        let replayed_llvm = replay_llvm(target_bound.module(), &self.kernel_id, self.profile)?;
+        let replayed_llvm = replay_llvm(target_bound.module(), self.profile)?;
         if replayed_llvm.as_bytes() != self.pre_descriptor_llvm.as_bytes() {
             return Err(ProductionKirToLlvmReplayErrorV1::LlvmMismatch);
         }
@@ -427,15 +428,14 @@ fn canonicalize_target_module(
 
 fn replay_llvm(
     target_bound_module: &Module,
-    kernel_id: &KernelId,
     profile: ProductionAmdTargetProfileV1,
 ) -> Result<String, ProductionKirToLlvmReplayErrorV1> {
     let dialect_llvm = match profile {
         ProductionAmdTargetProfileV1::Gfx942 => {
-            lower_kernel_to_gfx942_xnack_minus_llvm_ir(target_bound_module, kernel_id)
+            lower_compiler_module_to_gfx942_xnack_minus_llvm_ir(target_bound_module)
         }
         ProductionAmdTargetProfileV1::Gfx950 => {
-            lower_kernel_to_gfx950_xnack_minus_llvm_ir(target_bound_module, kernel_id)
+            lower_compiler_module_to_gfx950_xnack_minus_llvm_ir(target_bound_module)
         }
     }
     .map_err(ProductionKirToLlvmReplayErrorV1::TargetLowering)?;
@@ -742,12 +742,7 @@ mod tests {
         let target =
             bind_production_target_v1(&neutral_module, ProductionAmdTargetProfileV1::Gfx942)
                 .unwrap();
-        let llvm = replay_llvm(
-            target.module(),
-            target.kernel_id(),
-            ProductionAmdTargetProfileV1::Gfx942,
-        )
-        .unwrap();
+        let llvm = replay_llvm(target.module(), ProductionAmdTargetProfileV1::Gfx942).unwrap();
         let target_module = target.module().clone();
         let evidence = CanonicalProductionKirToLlvmReplayEvidenceV1::from_live_inputs(
             &neutral_bytes,

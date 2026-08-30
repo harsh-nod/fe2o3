@@ -2,8 +2,9 @@ use crate::{AnalysisReport, Diagnostic, UnsupportedReason, Variation};
 use fe2o3_kernel_ir::{
     AddressSpace, AmdGpuDiagnosticOperation, Axis, BasicBlock, BinaryOp, BlockId, CastKind,
     CheckedBinaryOperator, ComparePredicate, Constant, FloatOperation, Function, FunctionBody,
-    IndexKind, IntrinsicKind, Module, Operation, OperationKind, ScalarType, Terminator, Type,
-    UnaryOp, ValueId, WaveOperationKind, WorkgroupSize,
+    FunctionId, FunctionRole, IndexKind, IntrinsicKind, MAX_INTERPROCEDURAL_EFFECT_CALL_EDGES_V1,
+    MAX_INTERPROCEDURAL_EFFECT_FUNCTIONS_V1, Module, Operation, OperationKind, ScalarType,
+    Terminator, Type, UnaryOp, ValueId, WaveOperationKind, WorkgroupSize,
 };
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -24,25 +25,13 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 ///
 /// The returned report is analysis evidence only and grants no assurance.
 pub fn analyze_function(function: &Function) -> AnalysisReport {
-    analyze_function_with_contract(function, &[], &BTreeSet::new(), None)
+    analyze_function_with_contract(function, &[], &BTreeSet::new(), &BTreeSet::new(), None)
 }
 
 /// Classifies one kernel entry using uniform ABI parameters and conservative
 /// summaries for reachable pure helpers.
 pub fn analyze_kernel_entry(module: &Module, function: &Function) -> AnalysisReport {
-    let mut summarized_calls = BTreeSet::new();
-    let mut visiting = BTreeSet::new();
-    if let Some(body) = &function.body {
-        for operation in body.blocks.iter().flat_map(|block| &block.operations) {
-            if let OperationKind::Call { callee, arguments } = &operation.kind {
-                if FloatOperation::from_intrinsic_call(callee, arguments).is_some() {
-                    summarized_calls.insert(callee.clone());
-                } else {
-                    summarize_pure_helper(module, callee, &mut visiting, &mut summarized_calls);
-                }
-            }
-        }
-    }
+    let (summarized_calls, uniform_input_calls) = summarize_uniform_helpers(module, function);
     let parameters = vec![Variation::GridUniform; function.signature.parameters.len()];
     let mut matching_contracts = module
         .kernels
@@ -53,13 +42,20 @@ pub fn analyze_kernel_entry(module: &Module, function: &Function) -> AnalysisRep
         .next()
         .filter(|first| matching_contracts.all(|contract| contract == *first))
         .flatten();
-    analyze_function_with_contract(function, &parameters, &summarized_calls, workgroup_size)
+    analyze_function_with_contract(
+        function,
+        &parameters,
+        &summarized_calls,
+        &uniform_input_calls,
+        workgroup_size,
+    )
 }
 
 fn analyze_function_with_contract(
     function: &Function,
     parameter_variations: &[Variation],
     summarized_calls: &BTreeSet<fe2o3_kernel_ir::FunctionId>,
+    uniform_input_calls: &BTreeSet<fe2o3_kernel_ir::FunctionId>,
     workgroup_size: Option<WorkgroupSize>,
 ) -> AnalysisReport {
     let mut report = AnalysisReport {
@@ -83,60 +79,254 @@ fn analyze_function_with_contract(
         report,
         parameter_variations,
         summarized_calls,
+        uniform_input_calls,
         workgroup_size,
     )
     .run()
 }
 
-fn summarize_pure_helper(
+#[derive(Debug, Default)]
+struct UniformHelperCandidate {
+    callees: BTreeSet<FunctionId>,
+    call_edges: usize,
+    requires_uniform_inputs: bool,
+    structurally_supported: bool,
+}
+
+/// Finds context-free helper calls whose results cannot be more varying than
+/// their actual arguments. Collection and evaluation are iterative so hostile
+/// call depth cannot consume the host stack.
+fn summarize_uniform_helpers(
     module: &Module,
-    function: &fe2o3_kernel_ir::FunctionId,
-    visiting: &mut BTreeSet<fe2o3_kernel_ir::FunctionId>,
-    summarized: &mut BTreeSet<fe2o3_kernel_ir::FunctionId>,
-) -> bool {
-    if summarized.contains(function) {
-        return true;
+    entry: &Function,
+) -> (BTreeSet<FunctionId>, BTreeSet<FunctionId>) {
+    let mut summarized = BTreeSet::new();
+    let mut uniform_inputs_required = BTreeSet::new();
+    let mut pending = BTreeSet::new();
+    let mut call_edges = 0usize;
+    let Some(entry_body) = &entry.body else {
+        return (summarized, uniform_inputs_required);
+    };
+    collect_entry_calls(entry_body, &mut pending, &mut summarized, &mut call_edges);
+    if module.functions.len() > MAX_INTERPROCEDURAL_EFFECT_FUNCTIONS_V1
+        || call_edges > MAX_INTERPROCEDURAL_EFFECT_CALL_EDGES_V1
+    {
+        return (summarized, uniform_inputs_required);
     }
-    if !visiting.insert(function.clone()) {
+
+    let mut candidates = BTreeMap::<FunctionId, UniformHelperCandidate>::new();
+    while let Some(function_id) = pending.pop_first() {
+        if candidates.contains_key(&function_id) {
+            continue;
+        }
+        if candidates.len() == MAX_INTERPROCEDURAL_EFFECT_FUNCTIONS_V1 {
+            return (summarized, uniform_inputs_required);
+        }
+        let candidate = collect_uniform_helper_candidate(module, &function_id, &mut summarized);
+        call_edges = call_edges.saturating_add(candidate.call_edges);
+        if call_edges > MAX_INTERPROCEDURAL_EFFECT_CALL_EDGES_V1 {
+            return (summarized, uniform_inputs_required);
+        }
+        pending.extend(candidate.callees.iter().cloned());
+        candidates.insert(function_id, candidate);
+    }
+
+    let mut callers = candidates
+        .keys()
+        .cloned()
+        .map(|function| (function, BTreeSet::new()))
+        .collect::<BTreeMap<_, _>>();
+    let mut remaining_callees = BTreeMap::new();
+    for (caller, candidate) in &candidates {
+        remaining_callees.insert(caller.clone(), candidate.callees.len());
+        for callee in &candidate.callees {
+            if let Some(dependents) = callers.get_mut(callee) {
+                dependents.insert(caller.clone());
+            }
+        }
+    }
+    let mut ready = remaining_callees
+        .iter()
+        .filter_map(|(function, remaining)| (*remaining == 0).then_some(function.clone()))
+        .collect::<BTreeSet<_>>();
+
+    while let Some(function_id) = ready.pop_first() {
+        let candidate = &candidates[&function_id];
+        if candidate.structurally_supported
+            && candidate
+                .callees
+                .iter()
+                .all(|callee| summarized.contains(callee))
+            && uniform_helper_returns_are_proven(
+                module,
+                &function_id,
+                &summarized,
+                &uniform_inputs_required,
+            )
+        {
+            summarized.insert(function_id.clone());
+            if candidate.requires_uniform_inputs
+                || candidate
+                    .callees
+                    .iter()
+                    .any(|callee| uniform_inputs_required.contains(callee))
+            {
+                uniform_inputs_required.insert(function_id.clone());
+            }
+        }
+        for caller in &callers[&function_id] {
+            let remaining = remaining_callees
+                .get_mut(caller)
+                .expect("candidate caller has dependency accounting");
+            *remaining -= 1;
+            if *remaining == 0 {
+                ready.insert(caller.clone());
+            }
+        }
+    }
+    (summarized, uniform_inputs_required)
+}
+
+fn collect_entry_calls(
+    body: &FunctionBody,
+    pending: &mut BTreeSet<FunctionId>,
+    summarized: &mut BTreeSet<FunctionId>,
+    call_edges: &mut usize,
+) {
+    for operation in body.blocks.iter().flat_map(|block| &block.operations) {
+        let OperationKind::Call { callee, arguments } = &operation.kind else {
+            continue;
+        };
+        *call_edges = call_edges.saturating_add(1);
+        if FloatOperation::from_intrinsic_call(callee, arguments).is_some() {
+            summarized.insert(callee.clone());
+        } else if AmdGpuDiagnosticOperation::from_intrinsic_call(callee, arguments).is_none() {
+            pending.insert(callee.clone());
+        }
+    }
+}
+
+fn collect_uniform_helper_candidate(
+    module: &Module,
+    function_id: &FunctionId,
+    summarized: &mut BTreeSet<FunctionId>,
+) -> UniformHelperCandidate {
+    let mut matches = module
+        .functions
+        .iter()
+        .filter(|function| function.id == *function_id);
+    let Some(function) = matches.next() else {
+        return UniformHelperCandidate::default();
+    };
+    if matches.next().is_some() || function.role != FunctionRole::InternalHelper {
+        return UniformHelperCandidate::default();
+    }
+    let Some(body) = &function.body else {
+        return UniformHelperCandidate::default();
+    };
+
+    let mut candidate = UniformHelperCandidate {
+        callees: BTreeSet::new(),
+        call_edges: 0,
+        requires_uniform_inputs: false,
+        structurally_supported: true,
+    };
+    for block in &body.blocks {
+        if block.terminator.is_none()
+            || matches!(block.terminator, Some(Terminator::Unreachable))
+                && !block.operations.last().is_some_and(|operation| {
+                    let OperationKind::Call { callee, arguments } = &operation.kind else {
+                        return false;
+                    };
+                    AmdGpuDiagnosticOperation::from_intrinsic_call(callee, arguments)
+                        .is_some_and(|diagnostic| diagnostic.is_terminating())
+                })
+        {
+            candidate.structurally_supported = false;
+        }
+        for operation in &block.operations {
+            match &operation.kind {
+                OperationKind::Call { callee, arguments }
+                    if FloatOperation::from_intrinsic_call(callee, arguments).is_some() =>
+                {
+                    candidate.call_edges = candidate.call_edges.saturating_add(1);
+                    summarized.insert(callee.clone());
+                }
+                OperationKind::Call { callee, arguments } => {
+                    candidate.call_edges = candidate.call_edges.saturating_add(1);
+                    if let Some(diagnostic) =
+                        AmdGpuDiagnosticOperation::from_intrinsic_call(callee, arguments)
+                    {
+                        if diagnostic.is_terminating() {
+                            candidate.requires_uniform_inputs = true;
+                        } else {
+                            candidate.structurally_supported = false;
+                        }
+                    } else {
+                        candidate.callees.insert(callee.clone());
+                    }
+                }
+                OperationKind::Intrinsic(intrinsic) => match intrinsic.kind {
+                    IntrinsicKind::LaunchExtent { .. }
+                    | IntrinsicKind::InvocationIndex {
+                        kind: IndexKind::WorkgroupSize | IndexKind::WorkgroupCount,
+                        ..
+                    } => {}
+                    IntrinsicKind::InvocationIndex { .. } => {
+                        candidate.structurally_supported = false;
+                    }
+                },
+                OperationKind::Alloca { .. }
+                | OperationKind::Atomic(_)
+                | OperationKind::Barrier(_)
+                | OperationKind::Fence(_)
+                | OperationKind::Gfx950LdsTranspose(_)
+                | OperationKind::InlineAssembly(_)
+                | OperationKind::Matrix(_)
+                | OperationKind::Wave(_)
+                | OperationKind::WorkgroupBarrier(_)
+                | OperationKind::WorkgroupMemory(_) => {
+                    candidate.structurally_supported = false;
+                }
+                _ if !operation.memory_effects().is_empty() => {
+                    candidate.structurally_supported = false;
+                }
+                _ => {}
+            }
+        }
+    }
+    candidate
+}
+
+fn uniform_helper_returns_are_proven(
+    module: &Module,
+    function_id: &FunctionId,
+    summarized: &BTreeSet<FunctionId>,
+    uniform_inputs_required: &BTreeSet<FunctionId>,
+) -> bool {
+    let Some(function) = module.function(function_id) else {
+        return false;
+    };
+    let parameters = vec![Variation::GridUniform; function.signature.parameters.len()];
+    let report = analyze_function_with_contract(
+        function,
+        &parameters,
+        summarized,
+        uniform_inputs_required,
+        None,
+    );
+    if !report.diagnostics().is_empty() {
         return false;
     }
-    let accepted = module
-        .function(function)
-        .and_then(|function| function.body.as_ref())
-        .is_some_and(|body| {
-            body.blocks.iter().all(|block| {
-                !matches!(block.terminator, Some(Terminator::Unreachable) | None)
-                    && block
-                        .operations
-                        .iter()
-                        .all(|operation| match &operation.kind {
-                            OperationKind::Call { callee, arguments }
-                                if FloatOperation::from_intrinsic_call(callee, arguments)
-                                    .is_some() =>
-                            {
-                                true
-                            }
-                            OperationKind::Call { callee, .. } => {
-                                summarize_pure_helper(module, callee, visiting, summarized)
-                            }
-                            OperationKind::Intrinsic(_)
-                            | OperationKind::Atomic(_)
-                            | OperationKind::Barrier(_)
-                            | OperationKind::Fence(_)
-                            | OperationKind::Matrix(_)
-                            | OperationKind::InlineAssembly(_)
-                            | OperationKind::Wave(_)
-                            | OperationKind::WorkgroupBarrier(_)
-                            | OperationKind::WorkgroupMemory(_) => false,
-                            _ => operation.memory_effects().is_empty(),
-                        })
-            })
-        });
-    visiting.remove(function);
-    if accepted {
-        summarized.insert(function.clone());
-    }
-    accepted
+    function.body.as_ref().is_some_and(|body| {
+        body.blocks.iter().all(|block| match &block.terminator {
+            Some(Terminator::Return { values }) => values
+                .iter()
+                .all(|value| report.value(*value) == Variation::GridUniform),
+            Some(_) => true,
+            None => false,
+        })
+    })
 }
 
 struct Analyzer<'a> {
@@ -151,6 +341,7 @@ struct Analyzer<'a> {
     proven_no_overflow: BTreeSet<ValueId>,
     parameter_variations: &'a [Variation],
     summarized_calls: &'a BTreeSet<fe2o3_kernel_ir::FunctionId>,
+    uniform_input_calls: &'a BTreeSet<fe2o3_kernel_ir::FunctionId>,
     workgroup_size: Option<WorkgroupSize>,
     value_definitions: BTreeMap<ValueId, &'a Operation>,
     report: AnalysisReport,
@@ -177,6 +368,7 @@ impl<'a> Analyzer<'a> {
         mut report: AnalysisReport,
         parameter_variations: &'a [Variation],
         summarized_calls: &'a BTreeSet<fe2o3_kernel_ir::FunctionId>,
+        uniform_input_calls: &'a BTreeSet<fe2o3_kernel_ir::FunctionId>,
         workgroup_size: Option<WorkgroupSize>,
     ) -> Self {
         let mut blocks = BTreeMap::new();
@@ -301,6 +493,7 @@ impl<'a> Analyzer<'a> {
             proven_no_overflow,
             parameter_variations,
             summarized_calls,
+            uniform_input_calls,
             workgroup_size,
             value_definitions,
             report,
@@ -311,6 +504,7 @@ impl<'a> Analyzer<'a> {
         self.collect_unsupported_diagnostics();
         self.initialize_facts();
         self.solve();
+        self.diagnose_nonuniform_helper_calls();
         self.diagnose_barriers();
         self.report
     }
@@ -775,6 +969,33 @@ impl<'a> Analyzer<'a> {
                         operation_index,
                         execution_scope,
                         control,
+                    });
+                }
+            }
+        }
+    }
+
+    fn diagnose_nonuniform_helper_calls(&mut self) {
+        for block in &self.body.blocks {
+            if !self.reachable.contains(&block.id) {
+                continue;
+            }
+            for (operation_index, operation) in block.operations.iter().enumerate() {
+                let OperationKind::Call { callee, arguments } = &operation.kind else {
+                    continue;
+                };
+                if self.uniform_input_calls.contains(callee)
+                    && (self.report.block_control(block.id) != Variation::GridUniform
+                        || arguments
+                            .iter()
+                            .any(|argument| self.value(*argument) != Variation::GridUniform))
+                {
+                    self.report.diagnostics.push(Diagnostic::Unsupported {
+                        block: Some(block.id),
+                        operation_index: Some(operation_index),
+                        reason: UnsupportedReason::CallWithoutSummary {
+                            callee: callee.clone(),
+                        },
                     });
                 }
             }

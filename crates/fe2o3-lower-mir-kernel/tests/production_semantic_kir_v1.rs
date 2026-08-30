@@ -1,10 +1,13 @@
-use dialect_amdgcn::lower_compiler_module_to_gfx950_xnack_minus_llvm_ir;
+use dialect_amdgcn::{
+    lower_compiler_module_to_gfx942_xnack_minus_llvm_ir,
+    lower_compiler_module_to_gfx950_xnack_minus_llvm_ir,
+};
 use dialect_kernel::IndexBinaryKindAttr;
 use fe2o3_kernel_ir::{
-    AmdGpuDiagnosticOperation, BinaryOp, BlockId, CheckedBinaryOperator, LaunchDomain,
-    OperationKind, ScalarType, TargetCapability, Terminator, Type, WaveWidth, WorkgroupSize,
-    decode_module_v8, gfx942_xnack_minus_target_capability, gfx950_xnack_minus_target_capability,
-    verify_module,
+    AmdGpuDiagnosticOperation, BinaryOp, BlockId, CheckedBinaryOperator, FunctionRole,
+    LaunchDomain, OperationKind, ScalarType, TargetCapability, Terminator, Type, WaveWidth,
+    WorkgroupSize, analyze_interprocedural_effects_v1, decode_module_v8,
+    gfx942_xnack_minus_target_capability, gfx950_xnack_minus_target_capability, verify_module,
 };
 use fe2o3_lower_mir_kernel::{
     InertCanonicalFormalMemoryAdmissionEvidenceV3, PRODUCTION_FORMAL_MEMORY_WITNESS_EXTENT_V1,
@@ -2315,4 +2318,626 @@ fn emitted_operations_are_charged_before_storage() {
             limit: 1,
         })
     ));
+}
+
+#[derive(Clone, Copy)]
+enum DefinedHelperFixtureV1 {
+    Valid,
+    BranchReturn,
+    Impure,
+    Recursive,
+    TailCall,
+    MissingCallable,
+    MissingFunction,
+    MismatchedArgument,
+}
+
+fn defined_helper_request_v1(mode: DefinedHelperFixtureV1) -> InertSemanticMirRequestV1 {
+    let unit = SemanticTypeIdV1::from_index(0);
+    let u64_ty = SemanticTypeIdV1::from_index(1);
+    let u32_ty = SemanticTypeIdV1::from_index(2);
+    let source = SemanticSourceProvenanceV1::unavailable();
+    let edge = |target| {
+        SemanticControlFlowEdgeV1::new(
+            SemanticEdgeRoleV1::CallReturn,
+            SemanticBlockIdV1::from_index(target),
+        )
+    };
+    let root_argument_ty = if matches!(mode, DefinedHelperFixtureV1::MismatchedArgument) {
+        u32_ty
+    } else {
+        u64_ty
+    };
+    let callable = if matches!(mode, DefinedHelperFixtureV1::MissingCallable) {
+        SemanticCallableIdV1::from_index(7)
+    } else {
+        SemanticCallableIdV1::from_index(1)
+    };
+    let root_call = SemanticDirectCallV1::new_callable(
+        callable,
+        vec![SemanticOperandV1::Copy(local_place(1, root_argument_ty))],
+        Some(SemanticCallDestinationV1::new(
+            local_place(2, u64_ty),
+            edge(1),
+        )),
+        SemanticUnwindActionV1::Unreachable,
+    )
+    .unwrap();
+    let root_abi = SemanticFunctionAbiV1::from_rustc(
+        SemanticAbiIdentityV1::from_sha256(bytes(200)),
+        SemanticLayoutIdentityV1::from_sha256(bytes(250)),
+        SemanticCanonAbiV1::GpuKernel,
+        SemanticExternAbiV1::GpuKernel,
+        false,
+        false,
+        1,
+        vec![SemanticAbiArgumentV1::source(direct_abi_value(
+            root_argument_ty,
+        ))],
+        SemanticAbiValueV1::new(unit, SemanticAbiPassModeV1::Ignore),
+    )
+    .unwrap();
+    let dimensions = SemanticWorkgroupDimensionsV1::new([64, 1, 1]).unwrap();
+    let contract = SemanticKernelSourceContractV1::new(
+        Some(SemanticKernelLaunchBoundsV1::new(Some(dimensions), Some(dimensions), None).unwrap()),
+        None,
+        None,
+    )
+    .unwrap();
+    let root = SemanticFunctionDeclV1::new(
+        SemanticFunctionIdentityV1::from_sha256(bytes(201)),
+        SemanticFunctionRoleV1::KernelRoot,
+        SemanticItemDefinitionIdentityV1::from_sha256(bytes(202)),
+        SemanticMonomorphizationIdentityV1::from_sha256(bytes(203)),
+        SemanticGenericTypeArgumentsIdentityV1::from_sha256(bytes(204)),
+        SemanticConstGenericArgumentsIdentityV1::from_sha256(bytes(205)),
+        source,
+        root_abi,
+        vec![
+            SemanticLocalDeclV1::new(
+                SemanticLocalIdentityV1::from_sha256(bytes(206)),
+                unit,
+                SemanticLocalRoleV1::Return,
+                source,
+            ),
+            SemanticLocalDeclV1::new(
+                SemanticLocalIdentityV1::from_sha256(bytes(207)),
+                root_argument_ty,
+                SemanticLocalRoleV1::Argument(0),
+                source,
+            ),
+            SemanticLocalDeclV1::new(
+                SemanticLocalIdentityV1::from_sha256(bytes(208)),
+                u64_ty,
+                SemanticLocalRoleV1::Temporary,
+                source,
+            ),
+        ],
+        SemanticBlockIdV1::from_index(0),
+        vec![
+            block(209, vec![], SemanticTerminatorKindV1::Call(root_call)),
+            block(210, vec![], SemanticTerminatorKindV1::Return),
+        ],
+    )
+    .unwrap()
+    .with_kernel_entry(SemanticKernelEntryV1::new(
+        SemanticLinkSymbolV1::new(b"defined_helper_kernel_v1".to_vec()).unwrap(),
+        SemanticKernelBindingIdentityV1::from_sha256(bytes(211)),
+        contract,
+    ));
+
+    let helper_abi = SemanticFunctionAbiV1::from_rustc(
+        SemanticAbiIdentityV1::from_sha256(bytes(212)),
+        SemanticLayoutIdentityV1::from_sha256(bytes(250)),
+        SemanticCanonAbiV1::Rust,
+        SemanticExternAbiV1::Rust,
+        false,
+        false,
+        1,
+        vec![SemanticAbiArgumentV1::source(direct_abi_value(u64_ty))],
+        direct_abi_value(u64_ty),
+    )
+    .unwrap();
+    let return_assignment = || {
+        SemanticStatementV1::new(
+            source,
+            SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+                local_place(0, u64_ty),
+                SemanticRvalueV1::new(
+                    u64_ty,
+                    SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(local_place(1, u64_ty))),
+                ),
+            )),
+        )
+    };
+    let helper_blocks = if matches!(mode, DefinedHelperFixtureV1::BranchReturn) {
+        let branch = |role, target| {
+            SemanticControlFlowEdgeV1::new(role, SemanticBlockIdV1::from_index(target))
+        };
+        let otherwise = branch(SemanticEdgeRoleV1::SwitchOtherwise, 2);
+        let switch = SemanticSwitchTargetsV1::new(
+            vec![SemanticSwitchTargetV1::new(
+                0,
+                branch(SemanticEdgeRoleV1::SwitchValue, 1),
+            )],
+            otherwise,
+        )
+        .unwrap();
+        let assign_constant = SemanticStatementV1::new(
+            source,
+            SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+                local_place(0, u64_ty),
+                SemanticRvalueV1::new(
+                    u64_ty,
+                    SemanticRvalueKindV1::Use(scalar_constant(u64_ty, 7, 8)),
+                ),
+            )),
+        );
+        vec![
+            block(
+                212,
+                vec![],
+                SemanticTerminatorKindV1::SwitchInt {
+                    discriminant: SemanticOperandV1::Copy(local_place(1, u64_ty)),
+                    targets: switch,
+                },
+            ),
+            block(
+                213,
+                vec![return_assignment()],
+                SemanticTerminatorKindV1::Goto(branch(SemanticEdgeRoleV1::Goto, 3)),
+            ),
+            block(
+                214,
+                vec![assign_constant],
+                SemanticTerminatorKindV1::Goto(branch(SemanticEdgeRoleV1::Goto, 3)),
+            ),
+            block(215, vec![], SemanticTerminatorKindV1::Return),
+        ]
+    } else if matches!(mode, DefinedHelperFixtureV1::Impure) {
+        let barrier = SemanticDirectCallV1::new_callable(
+            SemanticCallableIdV1::from_index(2),
+            vec![],
+            Some(SemanticCallDestinationV1::new(
+                local_place(2, unit),
+                edge(1),
+            )),
+            SemanticUnwindActionV1::Unreachable,
+        )
+        .unwrap();
+        vec![
+            block(212, vec![], SemanticTerminatorKindV1::Call(barrier)),
+            block(
+                213,
+                vec![return_assignment()],
+                SemanticTerminatorKindV1::Return,
+            ),
+        ]
+    } else if matches!(mode, DefinedHelperFixtureV1::Recursive) {
+        let recursive = SemanticDirectCallV1::new_callable(
+            SemanticCallableIdV1::from_index(1),
+            vec![SemanticOperandV1::Copy(local_place(1, u64_ty))],
+            Some(SemanticCallDestinationV1::new(
+                local_place(0, u64_ty),
+                edge(1),
+            )),
+            SemanticUnwindActionV1::Unreachable,
+        )
+        .unwrap();
+        vec![
+            block(214, vec![], SemanticTerminatorKindV1::Call(recursive)),
+            block(215, vec![], SemanticTerminatorKindV1::Return),
+        ]
+    } else if matches!(mode, DefinedHelperFixtureV1::TailCall) {
+        let tail = SemanticDirectTailCallV1::new_callable(
+            SemanticCallableIdV1::from_index(1),
+            vec![SemanticOperandV1::Copy(local_place(1, u64_ty))],
+            SemanticUnwindActionV1::Unreachable,
+        )
+        .unwrap();
+        vec![block(216, vec![], SemanticTerminatorKindV1::TailCall(tail))]
+    } else {
+        vec![block(
+            217,
+            vec![return_assignment()],
+            SemanticTerminatorKindV1::Return,
+        )]
+    };
+    let mut helper_locals = vec![
+        SemanticLocalDeclV1::new(
+            SemanticLocalIdentityV1::from_sha256(bytes(221)),
+            u64_ty,
+            SemanticLocalRoleV1::Return,
+            source,
+        ),
+        SemanticLocalDeclV1::new(
+            SemanticLocalIdentityV1::from_sha256(bytes(222)),
+            u64_ty,
+            SemanticLocalRoleV1::Argument(0),
+            source,
+        ),
+    ];
+    if matches!(mode, DefinedHelperFixtureV1::Impure) {
+        helper_locals.push(SemanticLocalDeclV1::new(
+            SemanticLocalIdentityV1::from_sha256(bytes(225)),
+            unit,
+            SemanticLocalRoleV1::Temporary,
+            source,
+        ));
+    }
+    let helper = SemanticFunctionDeclV1::new(
+        SemanticFunctionIdentityV1::from_sha256(bytes(216)),
+        SemanticFunctionRoleV1::InternalHelper,
+        SemanticItemDefinitionIdentityV1::from_sha256(bytes(217)),
+        SemanticMonomorphizationIdentityV1::from_sha256(bytes(218)),
+        SemanticGenericTypeArgumentsIdentityV1::from_sha256(bytes(219)),
+        SemanticConstGenericArgumentsIdentityV1::from_sha256(bytes(220)),
+        source,
+        helper_abi,
+        helper_locals,
+        SemanticBlockIdV1::from_index(0),
+        helper_blocks,
+    )
+    .unwrap();
+
+    let functions = if matches!(mode, DefinedHelperFixtureV1::MissingFunction) {
+        vec![root]
+    } else {
+        vec![root, helper]
+    };
+    let mut callables = if matches!(mode, DefinedHelperFixtureV1::MissingFunction) {
+        vec![
+            SemanticCallableDeclV1::defined(SemanticFunctionIdV1::from_index(0)),
+            SemanticCallableDeclV1::defined(SemanticFunctionIdV1::from_index(9)),
+        ]
+    } else {
+        vec![
+            SemanticCallableDeclV1::defined(SemanticFunctionIdV1::from_index(0)),
+            SemanticCallableDeclV1::defined(SemanticFunctionIdV1::from_index(1)),
+        ]
+    };
+    if matches!(mode, DefinedHelperFixtureV1::Impure) {
+        callables.push(compiler_intrinsic_callable(
+            226,
+            vec![],
+            SemanticAbiValueV1::new(unit, SemanticAbiPassModeV1::Ignore),
+            SemanticCompilerIntrinsicOperationV1::WorkgroupBarrier,
+        ));
+    }
+    let mut types = vec![
+        unit_type(),
+        scalar_type(
+            223,
+            SemanticScalarTypeV1::Integer {
+                signed: false,
+                bits: 64,
+            },
+        ),
+    ];
+    if matches!(mode, DefinedHelperFixtureV1::MismatchedArgument) {
+        types.push(scalar_type(
+            224,
+            SemanticScalarTypeV1::Integer {
+                signed: false,
+                bits: 32,
+            },
+        ));
+    }
+    InertSemanticMirRequestV1::new_with_callables(
+        SemanticTargetDataLayoutV1::gfx942(SemanticLayoutIdentityV1::from_sha256(bytes(250))),
+        types,
+        vec![],
+        vec![],
+        vec![],
+        functions,
+        callables,
+        vec![SemanticFunctionIdV1::from_index(0)],
+    )
+    .unwrap()
+}
+
+fn defined_helper_owner_v1(mode: DefinedHelperFixtureV1) -> ProductionSemanticMirOwnerV1 {
+    let admitted = defined_helper_request_v1(mode)
+        .admit_current_production(SemanticMirLimitsV1::default())
+        .unwrap();
+    ProductionSemanticMirOwnerV1::try_new(admitted, ProductionSemanticMirLimitsV1::default())
+        .unwrap()
+}
+
+#[test]
+fn reachable_defined_scalar_helper_survives_kir_effects_and_exact_llvm() {
+    let lowered = ProductionSemanticKirOwnerV1::try_lower(
+        defined_helper_owner_v1(DefinedHelperFixtureV1::Valid),
+        ProductionSemanticKirLimitsV1::default(),
+    )
+    .unwrap();
+    lowered.verify_equivalence().unwrap();
+    assert_eq!(lowered.correspondence().lowered_functions().len(), 2);
+    let helper_mapping = &lowered.correspondence().lowered_functions()[1];
+    let helper_id = helper_mapping.kernel_ir_function().clone();
+    let entry = &lowered.module().functions[0];
+    let helper = &lowered.module().functions[1];
+    assert_eq!(entry.role, FunctionRole::KernelEntry);
+    assert_eq!(helper.role, FunctionRole::InternalHelper);
+    assert_eq!(helper.signature.parameters, [Type::Scalar(ScalarType::U64)]);
+    assert_eq!(helper.signature.results, [Type::Scalar(ScalarType::U64)]);
+    let entry_body = entry.body.as_ref().unwrap();
+    let call = entry_body.blocks[0]
+        .operations
+        .iter()
+        .find(|operation| matches!(operation.kind, OperationKind::Call { .. }))
+        .unwrap();
+    assert!(matches!(
+        &call.kind,
+        OperationKind::Call { callee, arguments }
+            if callee == &helper_id && arguments == entry_body.parameters.as_slice()
+    ));
+    assert_eq!(call.results.len(), 1);
+    assert!(!call.has_complete_effect_summary());
+    assert!(matches!(
+        helper.body.as_ref().unwrap().blocks[0].terminator,
+        Some(Terminator::Return { ref values })
+            if values == helper.body.as_ref().unwrap().parameters.as_slice()
+    ));
+    let effects = analyze_interprocedural_effects_v1(lowered.module()).unwrap();
+    assert!(effects.function(&helper_id).unwrap().is_complete_and_pure());
+    assert!(effects.function(&entry.id).unwrap().is_complete_and_pure());
+
+    let mut module = lowered.module().clone();
+    let target = gfx942_xnack_minus_target_capability();
+    module.required_capabilities.insert(target.clone());
+    for function in &mut module.functions {
+        if function.body.is_some() {
+            function.required_capabilities.insert(target.clone());
+        }
+    }
+    module.kernels[0]
+        .required_capabilities
+        .insert(TargetCapability::WaveWidth(WaveWidth::Wave64));
+    module.kernels[0].required_capabilities.insert(target);
+    verify_module(&module).unwrap();
+    let llvm = lower_compiler_module_to_gfx942_xnack_minus_llvm_ir(&module).unwrap();
+    assert!(llvm.contains(&format!("define internal i64 @{helper_id}(i64 %arg0)")));
+    assert!(llvm.contains(&format!("call i64 @{helper_id}(i64 %arg0)")));
+}
+
+#[test]
+fn recursive_defined_helper_closure_fails_closed() {
+    let error = ProductionSemanticKirOwnerV1::try_lower(
+        defined_helper_owner_v1(DefinedHelperFixtureV1::Recursive),
+        ProductionSemanticKirLimitsV1::default(),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        ProductionSemanticKirErrorV1::Unsupported {
+            detail: "recursive deterministic helper call graph is unsupported",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn branched_helper_return_is_a_live_block_parameter() {
+    let lowered = ProductionSemanticKirOwnerV1::try_lower(
+        defined_helper_owner_v1(DefinedHelperFixtureV1::BranchReturn),
+        ProductionSemanticKirLimitsV1::default(),
+    )
+    .unwrap();
+    lowered.verify_equivalence().unwrap();
+    let return_block = lowered.module().functions[1]
+        .body
+        .as_ref()
+        .unwrap()
+        .blocks
+        .iter()
+        .find(|block| block.id == BlockId(3))
+        .unwrap();
+    let [parameter] = return_block.parameters.as_slice() else {
+        panic!("branched scalar return must have one block parameter");
+    };
+    assert!(matches!(
+        return_block.terminator,
+        Some(Terminator::Return { ref values }) if values == &[parameter.id]
+    ));
+}
+
+#[test]
+fn impure_and_tail_called_helpers_fail_closed() {
+    let impure = ProductionSemanticKirOwnerV1::try_lower(
+        defined_helper_owner_v1(DefinedHelperFixtureV1::Impure),
+        ProductionSemanticKirLimitsV1::default(),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        impure,
+        ProductionSemanticKirErrorV1::Unsupported {
+            detail: "reachable deterministic scalar helper is not interprocedurally complete and pure",
+            ..
+        }
+    ));
+
+    let tail = ProductionSemanticKirOwnerV1::try_lower(
+        defined_helper_owner_v1(DefinedHelperFixtureV1::TailCall),
+        ProductionSemanticKirLimitsV1::default(),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        tail,
+        ProductionSemanticKirErrorV1::Unsupported {
+            detail: "semantic tail calls remain closed in deterministic helper lowering",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn malformed_defined_helper_roster_and_types_fail_before_lowering() {
+    assert!(matches!(
+        defined_helper_request_v1(DefinedHelperFixtureV1::MissingCallable)
+            .admit_current_production(SemanticMirLimitsV1::default()),
+        Err(SemanticMirErrorV1::InvalidReference {
+            reference: SemanticMirReferenceV1::Callable,
+            index: 7,
+            ..
+        })
+    ));
+    assert!(matches!(
+        defined_helper_request_v1(DefinedHelperFixtureV1::MissingFunction)
+            .admit_current_production(SemanticMirLimitsV1::default()),
+        Err(SemanticMirErrorV1::InvalidFunctionAbi)
+    ));
+    assert!(matches!(
+        defined_helper_request_v1(DefinedHelperFixtureV1::MismatchedArgument)
+            .admit_current_production(SemanticMirLimitsV1::default()),
+        Err(SemanticMirErrorV1::TypeMismatch { .. })
+    ));
+}
+
+fn indexed_identity_v1(index: u32, domain: u8) -> [u8; 32] {
+    let mut identity = [domain; 32];
+    identity[..4].copy_from_slice(&index.to_be_bytes());
+    identity
+}
+
+#[test]
+fn explicit_function_limit_above_the_default_revalidates_exactly() {
+    const FUNCTION_COUNT: usize = 1_025;
+    let unit = SemanticTypeIdV1::from_index(0);
+    let source = SemanticSourceProvenanceV1::unavailable();
+    let mut functions = Vec::with_capacity(FUNCTION_COUNT);
+    for index in 0..FUNCTION_COUNT {
+        let index_u32 = u32::try_from(index).unwrap();
+        let role = if index == 0 {
+            SemanticFunctionRoleV1::KernelRoot
+        } else {
+            SemanticFunctionRoleV1::InternalHelper
+        };
+        let abi = SemanticFunctionAbiV1::from_rustc(
+            SemanticAbiIdentityV1::from_sha256(indexed_identity_v1(index_u32, 230)),
+            SemanticLayoutIdentityV1::from_sha256(bytes(250)),
+            if index == 0 {
+                SemanticCanonAbiV1::GpuKernel
+            } else {
+                SemanticCanonAbiV1::Rust
+            },
+            if index == 0 {
+                SemanticExternAbiV1::GpuKernel
+            } else {
+                SemanticExternAbiV1::Rust
+            },
+            false,
+            false,
+            0,
+            vec![],
+            SemanticAbiValueV1::new(unit, SemanticAbiPassModeV1::Ignore),
+        )
+        .unwrap();
+        let blocks = if index + 1 == FUNCTION_COUNT {
+            vec![
+                SemanticBasicBlockV1::new(
+                    SemanticBlockIdentityV1::from_sha256(indexed_identity_v1(index_u32, 231)),
+                    source,
+                    vec![],
+                    SemanticTerminatorV1::new(source, SemanticTerminatorKindV1::Return),
+                )
+                .unwrap(),
+            ]
+        } else {
+            let call = SemanticDirectCallV1::new_callable(
+                SemanticCallableIdV1::from_index(index_u32 + 1),
+                vec![],
+                Some(SemanticCallDestinationV1::new(
+                    local_place(0, unit),
+                    SemanticControlFlowEdgeV1::new(
+                        SemanticEdgeRoleV1::CallReturn,
+                        SemanticBlockIdV1::from_index(1),
+                    ),
+                )),
+                SemanticUnwindActionV1::Unreachable,
+            )
+            .unwrap();
+            vec![
+                SemanticBasicBlockV1::new(
+                    SemanticBlockIdentityV1::from_sha256(indexed_identity_v1(index_u32, 232)),
+                    source,
+                    vec![],
+                    SemanticTerminatorV1::new(source, SemanticTerminatorKindV1::Call(call)),
+                )
+                .unwrap(),
+                SemanticBasicBlockV1::new(
+                    SemanticBlockIdentityV1::from_sha256(indexed_identity_v1(index_u32, 233)),
+                    source,
+                    vec![],
+                    SemanticTerminatorV1::new(source, SemanticTerminatorKindV1::Return),
+                )
+                .unwrap(),
+            ]
+        };
+        let function = SemanticFunctionDeclV1::new(
+            SemanticFunctionIdentityV1::from_sha256(indexed_identity_v1(index_u32, 234)),
+            role,
+            SemanticItemDefinitionIdentityV1::from_sha256(indexed_identity_v1(index_u32, 235)),
+            SemanticMonomorphizationIdentityV1::from_sha256(indexed_identity_v1(index_u32, 236)),
+            SemanticGenericTypeArgumentsIdentityV1::from_sha256(indexed_identity_v1(
+                index_u32, 237,
+            )),
+            SemanticConstGenericArgumentsIdentityV1::from_sha256(indexed_identity_v1(
+                index_u32, 238,
+            )),
+            source,
+            abi,
+            vec![SemanticLocalDeclV1::new(
+                SemanticLocalIdentityV1::from_sha256(indexed_identity_v1(index_u32, 239)),
+                unit,
+                SemanticLocalRoleV1::Return,
+                source,
+            )],
+            SemanticBlockIdV1::from_index(0),
+            blocks,
+        )
+        .unwrap();
+        functions.push(if index == 0 {
+            function.with_kernel_entry(SemanticKernelEntryV1::new(
+                SemanticLinkSymbolV1::new(b"large_defined_helper_closure_v1".to_vec()).unwrap(),
+                SemanticKernelBindingIdentityV1::from_sha256(bytes(240)),
+                SemanticKernelSourceContractV1::new(None, None, None).unwrap(),
+            ))
+        } else {
+            function
+        });
+    }
+    let callables = (0..FUNCTION_COUNT)
+        .map(|index| {
+            SemanticCallableDeclV1::defined(SemanticFunctionIdV1::from_index(
+                u32::try_from(index).unwrap(),
+            ))
+        })
+        .collect();
+    let admitted = InertSemanticMirRequestV1::new_with_callables(
+        SemanticTargetDataLayoutV1::gfx942(SemanticLayoutIdentityV1::from_sha256(bytes(250))),
+        vec![unit_type()],
+        vec![],
+        vec![],
+        vec![],
+        functions,
+        callables,
+        vec![SemanticFunctionIdV1::from_index(0)],
+    )
+    .unwrap()
+    .admit_current_production(SemanticMirLimitsV1::default())
+    .unwrap();
+    let owner =
+        ProductionSemanticMirOwnerV1::try_new(admitted, ProductionSemanticMirLimitsV1::default())
+            .unwrap();
+    let lowered = ProductionSemanticKirOwnerV1::try_lower(
+        owner,
+        ProductionSemanticKirLimitsV1::new(FUNCTION_COUNT, 2 * FUNCTION_COUNT, 0),
+    )
+    .unwrap();
+    assert_eq!(
+        lowered.correspondence().lowered_functions().len(),
+        FUNCTION_COUNT
+    );
+    lowered.verify_equivalence().unwrap();
 }
