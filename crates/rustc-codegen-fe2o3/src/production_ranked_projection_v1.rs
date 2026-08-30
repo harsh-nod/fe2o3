@@ -10489,7 +10489,9 @@ impl<'a> SemanticAssertProofsV1<'a> {
             else {
                 continue;
             };
-            if self.definition_counts.get(condition_local).copied() != Some(1) {
+            if self.definition_counts.get(condition_local).copied() != Some(1)
+                || self.address_escaped.get(condition_local).copied() != Some(false)
+            {
                 continue;
             }
             let Some(site) = self.assignments.get(condition_local).copied().flatten() else {
@@ -10660,7 +10662,9 @@ impl<'a> SemanticAssertProofsV1<'a> {
         true_target: usize,
         visiting: &mut HashSet<usize>,
     ) -> Result<Option<usize>, ProductionRankedProjectionErrorV1> {
-        if self.definition_counts.get(condition_local).copied() != Some(1) {
+        if self.definition_counts.get(condition_local).copied() != Some(1)
+            || self.address_escaped.get(condition_local).copied() != Some(false)
+        {
             return Ok(None);
         }
         let Some(site) = self.assignments.get(condition_local).copied().flatten() else {
@@ -10757,6 +10761,9 @@ impl<'a> SemanticAssertProofsV1<'a> {
         visiting: &mut HashSet<usize>,
     ) -> Result<bool, ProductionRankedProjectionErrorV1> {
         self.charge(1)?;
+        if self.address_escaped.get(candidate).copied() != Some(false) {
+            return Ok(false);
+        }
         if candidate == source {
             return Ok(true);
         }
@@ -23684,6 +23691,159 @@ mod tests {
             );
             assert!(!SemanticAssertProofsV1::analyze(&types, &function).unwrap()[2]);
         }
+    }
+
+    #[derive(Clone, Copy)]
+    enum MutatedGuardProofV1 {
+        ZeroExclusion,
+        StrictUpperBound,
+    }
+
+    #[derive(Clone, Copy)]
+    enum MutatedGuardShapeV1 {
+        Discriminant,
+        ComparisonAlias,
+    }
+
+    fn mutated_guard_range_function(
+        proof: MutatedGuardProofV1,
+        shape: MutatedGuardShapeV1,
+    ) -> (Vec<SemanticTypeDeclV1>, SemanticFunctionDeclV1) {
+        let mut types = assertion_proof_types();
+        let bool_pointer = SemanticTypeIdV1::from_index(types.len() as u32);
+        types.push(SemanticTypeDeclV1::new(
+            SemanticTypeIdentityV1::from_sha256(bytes(49)),
+            SemanticLayoutIdentityV1::from_sha256(bytes(49)),
+            SemanticTypeLayoutV1::new(Some(8), 8).unwrap(),
+            SemanticTypeShapeV1::Pointer(
+                SemanticPointerTypeV1::new(
+                    BOOL_TYPE,
+                    SemanticMutabilityV1::Mutable,
+                    5,
+                    64,
+                    SemanticPointerMetadataV1::None,
+                )
+                .unwrap(),
+            ),
+        ));
+
+        let (operation, compared_value) = match proof {
+            MutatedGuardProofV1::ZeroExclusion => (SemanticBinaryOpV1::NotEqual, 0),
+            MutatedGuardProofV1::StrictUpperBound => (SemanticBinaryOpV1::LessThan, 255),
+        };
+        let (guard_input, pointer_type, borrowed_place, stored_type, stored_value) = match shape {
+            MutatedGuardShapeV1::Discriminant => (
+                typed_operand(1, U64_TYPE),
+                bool_pointer,
+                typed_place(3, BOOL_TYPE),
+                BOOL_TYPE,
+                typed_constant(BOOL_TYPE, 1, 1),
+            ),
+            MutatedGuardShapeV1::ComparisonAlias => (
+                typed_operand(2, U64_TYPE),
+                U64_POINTER_TYPE,
+                typed_place(2, U64_TYPE),
+                U64_TYPE,
+                typed_constant(U64_TYPE, 1, 8),
+            ),
+        };
+        let through_pointer = SemanticPlaceV1::new(
+            SemanticLocalIdV1::from_index(4),
+            vec![SemanticProjectionV1::new(
+                SemanticProjectionKindV1::Dereference,
+                stored_type,
+            )
+            .unwrap()],
+            stored_type,
+        )
+        .unwrap();
+        let borrow = typed_assignment(
+            4,
+            pointer_type,
+            SemanticRvalueKindV1::Borrow {
+                kind: SemanticBorrowKindV1::Mutable,
+                place: borrowed_place,
+            },
+        );
+        let store = statement(SemanticStatementKindV1::Store(
+            SemanticMemoryStoreV1::new(
+                through_pointer,
+                stored_value,
+                SemanticVolatilityV1::NonVolatile,
+                None,
+            ),
+        ));
+        let comparison = typed_assignment(
+            3,
+            BOOL_TYPE,
+            SemanticRvalueKindV1::Binary {
+                operation,
+                left: guard_input,
+                right: typed_constant(U64_TYPE, compared_value, 8),
+            },
+        );
+        let statements = match shape {
+            MutatedGuardShapeV1::Discriminant => vec![comparison, borrow, store],
+            MutatedGuardShapeV1::ComparisonAlias => vec![
+                typed_assignment(
+                    2,
+                    U64_TYPE,
+                    SemanticRvalueKindV1::Use(typed_operand(1, U64_TYPE)),
+                ),
+                borrow,
+                store,
+                comparison,
+            ],
+        };
+        let function = projection_function_with_locals(
+            vec![
+                block(248, statements, zero_switch(3, BOOL_TYPE, 2, 1)),
+                block(249, vec![], SemanticTerminatorKindV1::Return),
+                block(250, vec![], SemanticTerminatorKindV1::Return),
+            ],
+            vec![
+                local(248, U64_TYPE, SemanticLocalRoleV1::Return),
+                local(249, U64_TYPE, SemanticLocalRoleV1::Argument(0)),
+                local(250, U64_TYPE, SemanticLocalRoleV1::Temporary),
+                local(251, BOOL_TYPE, SemanticLocalRoleV1::Temporary),
+                local(252, pointer_type, SemanticLocalRoleV1::Temporary),
+            ],
+        );
+        (types, function)
+    }
+
+    fn assert_mutated_guard_does_not_narrow_range(shape: MutatedGuardShapeV1) {
+        for proof_kind in [
+            MutatedGuardProofV1::ZeroExclusion,
+            MutatedGuardProofV1::StrictUpperBound,
+        ] {
+            let (types, function) = mutated_guard_range_function(proof_kind, shape);
+            let escaped = match shape {
+                MutatedGuardShapeV1::Discriminant => 3,
+                MutatedGuardShapeV1::ComparisonAlias => 2,
+            };
+            let mut proof = SemanticAssertProofsV1::new(&types, &function).unwrap();
+            assert!(proof.address_escaped[escaped]);
+            assert_eq!(
+                proof
+                    .range_at_operand(&typed_operand(1, U64_TYPE), 1, 0)
+                    .unwrap(),
+                Some(UnsignedRangeProofV1 {
+                    minimum: 0,
+                    maximum: u128::from(u64::MAX),
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn mutated_address_escaped_discriminants_do_not_prove_scalar_ranges() {
+        assert_mutated_guard_does_not_narrow_range(MutatedGuardShapeV1::Discriminant);
+    }
+
+    #[test]
+    fn mutated_address_escaped_comparison_aliases_do_not_prove_scalar_ranges() {
+        assert_mutated_guard_does_not_narrow_range(MutatedGuardShapeV1::ComparisonAlias);
     }
 
     fn guarded_value_with_optional_loop_redefinition(redefine: bool) -> SemanticFunctionDeclV1 {
