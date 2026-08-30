@@ -67,9 +67,13 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   path-independent LLD invocation, and final HSACO. Rust independently decodes
   the record and recomputes its identity, request-derived object order, linker
   invocation, and final payload identity; strict Worker V3 replay also requires
-  every measured stage identity to agree. These identities record exact content
-  and policy custody; they do not establish semantic preservation or grant
-  publication, load, or launch authority.
+  every measured stage identity to agree. Recovered host admission reconstructs
+  the complete finalizer owner, binds its identity into host lineage, and lends
+  it with the exact replay bytes to the protected verifier. The verifier repeats
+  the reconstruction independently, promotion compares both identities, and
+  the accepted decision retains the second move-only owner. These identities
+  record exact content and policy custody; they do not establish semantic
+  preservation or grant publication, load, or launch authority.
 - Compiler provenance now has a canonical six-pin `CompilerClosureV2`, with
   an explicit Cargo-to-trampoline-to-wrapper transition protocol, and a
   `RustcInvocationDescriptorV3` that preserves the exact V2 process and
@@ -130,7 +134,8 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   backend consumes the inherited service and policy descriptors, acquires the
   exact receipt after V3 handoff publication, and carries it through the sole
   top-level V2 load envelope into host admission. Host lineage and the Worker V3
-  verifier request now bind the exact subject and complete carriage. The
+  verifier request now bind the exact subject, complete carriage, and
+  independently reconstructed finalizer derivation. The
   application runner creates a separate child-bound fd 195, reaches the same
   fixed supervisor before ACK, exposes no policy fd 202, and retains readiness
   through exit. A one-use host auditor consumes that endpoint and verifies the
@@ -238,7 +243,11 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   exact compiler stages, reimports the nested signed aggregate
   MIR-to-live-PLIRON receipt under its embedded key, checks its PLIRON identity
   against middle-end V5, and retains that move-only owner beside signed
-  compiler-currentness evidence throughout the HSA lifecycle. The production
+  compiler-currentness evidence throughout the HSA lifecycle. Host admission
+  and the protected verifier also independently reconstruct the exact compact
+  finalizer derivation; the accepted decision retains the verifier-owned result
+  and rejects a foreign derivation even when the finalized HSACO bytes match.
+  The production
   capsule also replaces the backend-private association-only AMDGPU transcript
   with the independently replayed target-KIR-to-LLVM record. This proves exact
   deterministic derivation by the reviewed serializer. The Worker continuation

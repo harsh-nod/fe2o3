@@ -660,11 +660,17 @@ Safe ownership of resources used by asynchronous copies is documented in
   invocation, and final HSACO. Rust independently decodes and recomputes the
   bounded response evidence, exact request-relocatable order, canonical linker
   policy, and final payload identity; strict Worker V3 replay requires the
-  bootstrap and replay derivations to agree. Mutation, truncation, trailing
-  bytes, reordered inputs, a resealed false linker identity, and a foreign
-  HSACO endpoint fail closed. This is measured byte and policy custody, not a
-  formal LLVM-to-machine semantic-refinement proof or publication, load, or
-  launch authority.
+  bootstrap and replay derivations to agree. Recovered host admission now
+  reconstructs that complete finalizer derivation from the exact envelope and
+  binds its identity into host lineage. The protected verifier independently
+  repeats the reconstruction from borrowed canonical bytes, and every accepted
+  decision retains the resulting move-only owner. Mutation, truncation,
+  trailing bytes, reordered inputs, a resealed false linker identity, a foreign
+  HSACO endpoint, and a same-HSACO foreign-compiler splice fail closed. Legacy
+  compact V2 transcripts remain decodable for storage inspection but cannot
+  satisfy production finalizer admission because they lack the derivation
+  bodies. This is measured byte and policy custody, not a formal LLVM-to-machine
+  semantic-refinement proof or publication, load, or launch authority.
 - `fe2o3-core` provides HIP-backed contexts, streams, device buffers, pinned
   host buffers, events, synchronous transfers, and event-backed borrowed and
   owned asynchronous transfers. Its default/production surface exports no raw
@@ -885,12 +891,17 @@ is complete, and the recorded runs grant no current production authority.
   retirement of the duplicate current-generation replay intent, while
   registry-rooted scavenging removes only superseded custody. The envelope
   still grants no compiler, semantic, HSA readiness, load, or launch authority.
-  Host admission reconstructs the exact compiler subject and binds it together
-  with the complete carriage bytes into the Worker V3 lineage challenge. The
-  verifier request lends both canonical records without projection; promotion
-  compares every policy, occurrence, receipt, publication, Worker-ledger,
-  sequence, and rollback coordinate and rejects missing protected-policy,
-  Worker-ledger, or external rollback verification identities before HSA load.
+  Host admission reconstructs the exact compiler subject and complete
+  finalizer derivation and binds both identities together with the complete
+  carriage bytes into the Worker V3 lineage challenge. The verifier request
+  lends both canonical records and the host-revalidated finalizer owner without
+  projection. The protected verifier independently reconstructs finalizer
+  custody from the exact replay bytes; promotion compares its identity with the
+  host reconstruction as well as every policy, occurrence, receipt,
+  publication, Worker-ledger, sequence, and rollback coordinate. A decision
+  retains the second move-only finalizer owner, while missing protected-policy,
+  Worker-ledger, or external rollback verification identities still fail before
+  HSA load.
   Production transfers only the canonical V3 envelope and artifact-directory
   descriptors to an identity-pinned sealed application. A
   fresh occurrence binds those descriptors and the ACK channel; Cargo checks
