@@ -432,7 +432,7 @@ fn rejects_type_invalid_memory_operations() {
 }
 
 #[test]
-fn rejects_mixed_width_shift_operands_before_target_lowering() {
+fn accepts_mixed_width_integer_shift_operands() {
     for shift in [BinaryOp::ShiftLeft, BinaryOp::ShiftRight] {
         let module = one_block_module(
             vec![Type::Scalar(ScalarType::U64), Type::Scalar(ScalarType::U32)],
@@ -446,11 +446,15 @@ fn rejects_mixed_width_shift_operands_before_target_lowering() {
                 },
             )],
         );
-        let errors = verify_module(&module).unwrap_err();
-        assert!(errors.contains(DiagnosticCode::InvalidOperandType));
+        verify_module(&module).expect("shift counts may use a different integer type");
+    }
+}
 
-        let same_width = one_block_module(
-            vec![Type::Scalar(ScalarType::U64), Type::Scalar(ScalarType::U64)],
+#[test]
+fn rejects_non_integer_shift_rhs() {
+    for shift in [BinaryOp::ShiftLeft, BinaryOp::ShiftRight] {
+        let module = one_block_module(
+            vec![Type::Scalar(ScalarType::U64), Type::F32],
             vec![op(
                 2,
                 Type::Scalar(ScalarType::U64),
@@ -461,7 +465,8 @@ fn rejects_mixed_width_shift_operands_before_target_lowering() {
                 },
             )],
         );
-        verify_module(&same_width).expect("normalized shifts use one exact integer type");
+        let errors = verify_module(&module).unwrap_err();
+        assert!(errors.contains(DiagnosticCode::InvalidOperandType));
     }
 }
 
