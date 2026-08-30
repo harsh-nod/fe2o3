@@ -1,7 +1,7 @@
 # Compiler-execution deployment bundle V1
 
-Status: implemented source-bundle admission. Atomic privileged installation is
-not implemented.
+Status: implemented source-bundle admission and atomic offline-root
+publication. Root/distinct-UID systemd execution qualification remains open.
 
 ## Boundary
 
@@ -12,8 +12,8 @@ the manifest nor any other bundle file can select its own expected identity.
 
 Successful admission grants no installation, compiler, signing, publication,
 load, launch, execution, or GPU authority. The move-only verified value exposes
-metadata but no file descriptor or pathname. A future privileged installer must
-consume its sealed source custody directly; it must not reopen the original
+metadata but no file descriptor or pathname. The root-only installer consumes
+that value and its sealed source custody directly; it never reopens the original
 bundle by path after verification.
 
 ## Exact inventory
@@ -83,6 +83,38 @@ for every content file except itself.
 Any unsupported filesystem behavior, metadata race, malformed record, changed
 pathname, or inconsistent identity fails closed.
 
+## Atomic offline-root publication
+
+The privileged installer requires effective UID 0 and a root-owned,
+root-group, mode-`0700` install parent without extended attributes. It derives
+the sole final name from the admitted manifest digest:
+
+```text
+compiler-execution-v1-<manifest_sha256>
+```
+
+The caller cannot choose the name or destination inventory. The installer
+creates one random private sibling staging directory through the retained
+parent descriptor, creates the fixed 12-directory hierarchy one component at a
+time, and copies the manifest plus 13 content files only from sealed memfds.
+Every file is create-new, root-owned, single-link, hashed while copying, assigned
+its fixed mode, and synchronized. The complete 14-file root is then
+descriptor-relatively reverified, including the manifest, `BUILD-INFO`, and
+`SHA256SUMS`; its directories are synchronized bottom-up.
+
+After revalidating the install-parent pathname against the retained descriptor,
+the installer publishes the whole root with one
+`renameat2(RENAME_NOREPLACE)` and synchronizes the parent. An existing final
+name is reacquired only after complete identity and tree verification. A
+conflicting tree is never replaced. Pre-publication failures remove only the
+fixed inventory created beneath the retained staging descriptor. Failures after
+the rename report `PublicationAmbiguous`; a retry either reacquires the complete
+content-addressed root or rejects it.
+
+This transaction publishes an **offline filesystem root**. It does not claim
+atomic replacement of the independent `/usr` paths in a running host, which
+Linux cannot provide as one filesystem transaction.
+
 ## Build and qualification
 
 From a clean checkout:
@@ -95,19 +127,41 @@ git_commit=<40 lowercase hexadecimal characters>
 ```
 
 The builder qualifies all seven service images, runs the launcher's CTests,
-builds loader-independent static musl manifest and verifier executables,
-generates `SHA256SUMS` and `INSTALL-MANIFEST-V1`, and runs the static verifier
-before publishing the output directory. The final two lines are release inputs
-and must be distributed outside the bundle.
+builds loader-independent static musl manifest, verifier, and installer
+executables, generates `SHA256SUMS` and `INSTALL-MANIFEST-V1`, and runs the
+static verifier before publishing the output directory. The final two lines are
+release inputs and must be distributed outside the bundle. The non-root builder
+does not invoke the privileged installer.
 
-The crate tests cover wrong independent pins, malformed and trailing manifest
-records, extra and non-UTF-8 entries, symlink and hardlink replacement, wrong
-modes, same-length content replacement, extended attributes, inconsistent
-`BUILD-INFO` and `SHA256SUMS`, root symlinks, and custody after the source tree
-has been removed. Static ELF inspection rejects an interpreter, dynamic
-section, runtime dependency, RPATH/RUNPATH, or undefined symbol.
+Install a qualified bundle into a private offline-root parent with the two
+out-of-band pins printed by the builder:
 
-The next boundary is a descriptor-relative privileged installer that creates a
-new install root, copies only from sealed admitted sources, validates the final
-tree, and atomically publishes or rolls it back. Root/distinct-UID systemd
-qualification follows that installer.
+```console
+# install -d -o 0 -g 0 -m 0700 /var/lib/fe2o3/deployments-v1
+# fe2o3-compiler-execution-deployment-install \
+    /tmp/fe2o3-deployment <manifest_sha256> <git_commit> \
+    /var/lib/fe2o3/deployments-v1
+installed_root_name=compiler-execution-v1-<manifest_sha256>
+installed_file_count=14
+installed_publication=created
+```
+
+Repeating the exact command reports `installed_publication=reacquired` after a
+fresh complete verification.
+
+The 16 crate tests cover wrong independent pins, malformed manifests, hostile
+source and installed inventories, wrong parent policy, symlinks, hardlinks,
+wrong modes, same-length substitutions, extended attributes, inconsistent
+identity files, source-tree removal after verification, and install-parent
+pathname replacement during copying and after publication. A 99-checkpoint
+fault campaign covers every staging create, directory create, file
+create/write/mode/sync, tree sync, rename, parent sync, and final verification
+boundary. Before the rename the parent is empty after cleanup; after the rename
+the only possible result is a complete, reacquirable 12-directory/14-file root.
+Static ELF inspection rejects an interpreter, dynamic section, runtime
+dependency, RPATH/RUNPATH, or undefined symbol.
+
+The next boundary is a disposable installed-root harness, followed by real
+root/distinct-UID systemd execution and crash qualification. Those gates must
+exercise the static installer under host root and do not inherit authority from
+the non-root test-only owner parameter.

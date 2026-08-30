@@ -236,10 +236,14 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   caller-pinned canonical manifest and Git commit. Admission is
   descriptor-relative, rejects alternate inventory and metadata, double-reads
   every bounded file, cross-checks `BUILD-INFO` and `SHA256SUMS`, and retains
-  the 13 content files in sealed anonymous custody. This closes build-time
-  bundle admission, not privileged installation: the atomic installer that
-  consumes those sealed sources and root/distinct-UID systemd qualification
-  remain open.
+  the manifest and 13 content files in sealed anonymous custody. A root-only
+  static installer consumes only that custody, constructs and verifies one
+  exact 12-directory/14-file offline root, synchronizes it bottom-up, and
+  publishes the complete content-addressed root with one durable no-replace
+  rename. Exact existing roots are revalidated and reacquired; conflicting
+  roots are never replaced. This closes offline-root publication, not live
+  system deployment: disposable-root and root/distinct-UID systemd execution
+  qualification remain open.
 - Versioned artifact, descriptor, durable-publication, and HSA records exist.
   Host execution has one workload-neutral Worker V3 graph. An arbitrary
   manifest cannot manufacture a Rust signature, verifier decision, load

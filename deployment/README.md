@@ -35,9 +35,24 @@ anonymous sources. See [deployment bundle
 V1](../docs/compiler-execution-deployment-bundle-v1.md).
 
 Compilation and CMake/CTest qualification run as the invoking non-root user.
-Descriptor-relative atomic installation from those sealed sources is a
-separate privileged phase and remains to be implemented. Do not verify a
-bundle and then install by reopening its pathnames.
+Descriptor-relative atomic publication into an offline filesystem root is a
+separate privileged phase:
+
+```console
+# install -d -o 0 -g 0 -m 0700 /var/lib/fe2o3/deployments-v1
+# fe2o3-compiler-execution-deployment-install \
+    /tmp/fe2o3-deployment <manifest_sha256> <git_commit> \
+    /var/lib/fe2o3/deployments-v1
+```
+
+The static installer verifies the bundle into sealed anonymous custody, creates
+and verifies one exact 12-directory/14-file sibling root, and publishes it with
+one durable no-replace rename. Its final name is
+`compiler-execution-v1-<manifest_sha256>`; an exact retry revalidates and
+reacquires that root, while a conflicting root is not replaced. It never
+reopens bundle content after admission. This is not a transaction over the
+independent paths in a live `/`. The disposable-root and real systemd harnesses
+that consume the published root remain qualification gates.
 
 With both the service and socket stopped, provision one nonzero policy
 generation:

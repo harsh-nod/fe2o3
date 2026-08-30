@@ -320,10 +320,14 @@ singleton. Non-root process tests cover coordinator `SIGKILL` and both child
 exit orders. The clean-checkout deployment builder now emits one canonical
 14-file static bundle plus out-of-band manifest and commit pins. A separate
 static musl verifier admits the exact descriptor-relative inventory and retains
-all 13 content files in sealed anonymous custody before bundle publication.
-Atomic privileged installation from that custody is not yet implemented.
-Combined privileged qualification and the concrete
-protected verifier remain absent. A fixed
+the manifest and all 13 content files in sealed anonymous custody before bundle
+publication. A static root-only installer now consumes only that custody,
+constructs and verifies one exact offline filesystem root, and publishes it
+with one durable content-addressed no-replace rename. Its exhaustive fault
+campaign proves every pre-publication failure leaves no staging state and every
+post-publication failure leaves a complete reacquirable root. Disposable-root
+and combined root/distinct-UID systemd qualification remain absent. The concrete
+protected verifier also remains absent. A fixed
 receipt sidecar and publication ACK now
 carry the exact journal, occurrence, receipt, Worker record, sequence, and
 advanced rollback anchor without granting authority from wire bytes. The
