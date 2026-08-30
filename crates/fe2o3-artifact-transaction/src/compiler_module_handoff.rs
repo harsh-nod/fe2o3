@@ -28,8 +28,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 const PARENT_PREFIX: &str = ".fe2o3-compiler-module-handoff-v1-";
 const SLOT_PREFIX: &str = "attempt-";
-const PAYLOAD_ENTRY: &str = "module";
-const READY_ENTRY: &str = "ready";
+pub(crate) const PAYLOAD_ENTRY: &str = "module";
+pub(crate) const READY_ENTRY: &str = "ready";
 const CONSUMED_ENTRY: &str = "consumed";
 const TEMP_PREFIX: &str = ".tmp-";
 const RECORD_MAGIC: &[u8] = b"FE2O3-COMPILER-MODULE-HANDOFF-V1\0";
@@ -38,8 +38,8 @@ const PRODUCER_DOMAIN: &[u8] = b"fe2o3.compiler-module-handoff.producer.v1\0";
 const SLOT_DOMAIN: &[u8] = b"fe2o3.compiler-module-handoff.slot.v1\0";
 const NAMED_SLOT_DOMAIN: &[u8] = b"fe2o3.compiler-module-handoff.named-slot.v1\0";
 const RECORD_DOMAIN: &[u8] = b"fe2o3.compiler-module-handoff.record.v1\0";
-const MAX_SLOT_ENTRIES: usize = 16;
-const MAX_STALE_SLOTS: usize = 1024;
+pub(crate) const MAX_SLOT_ENTRIES: usize = 16;
+pub(crate) const MAX_STALE_SLOTS: usize = 1024;
 const MAX_TEMP_ATTEMPTS: u64 = 64;
 const RECORD_BYTES: usize = RECORD_MAGIC.len() + 2 + 32 + 8 + 16 + 32 + 32 + 32 + 8 + (7 * 8) + 32;
 const SIMULATION_PARENT_PREFIX: &str = ".fe2o3-simulation-kir-handoff-v1-";
@@ -3251,7 +3251,7 @@ pub use protected_v2::{
     publish_compiler_module_handoff_in_slot_v2, publish_compiler_module_handoff_v2,
 };
 
-mod semantic_v3 {
+pub(crate) mod semantic_v3 {
     use super::*;
 
     const PARENT_PREFIX_V3: &str = ".fe2o3-compiler-module-handoff-v3-";
@@ -4370,6 +4370,119 @@ mod semantic_v3 {
             digest.update(handoff_bytes);
             digest.finalize().into()
         }
+    }
+
+    pub(crate) struct PublicationObjectHandoffValidationV1 {
+        pub(crate) receipt: CompilerModuleHandoffReceiptV3,
+        pub(crate) handoff: fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffV3,
+    }
+
+    pub(crate) fn publication_object_names_v1(
+        producer: &ProducerIdentity,
+        attempt: BuildAttempt,
+    ) -> (String, String) {
+        let producer_identity = producer_identity_for::<HandoffV3Schema>(producer);
+        let slot_identity = slot_identity_for::<HandoffV3Schema>(
+            producer_identity,
+            attempt,
+            CompilerModuleHandoffSlotV3::Production,
+        );
+        (
+            format!("{PARENT_PREFIX_V3}{}", hex(&producer_identity)),
+            format!("{SLOT_PREFIX_V3}{}", hex(&slot_identity)),
+        )
+    }
+
+    pub(crate) const fn publication_object_ready_bytes_v1() -> usize {
+        RECORD_BYTES_V3
+    }
+
+    pub(crate) fn validate_publication_object_handoff_v1(
+        producer: &ProducerIdentity,
+        expected_receipt: CompilerModuleHandoffReceiptV3,
+        ready_bytes: &[u8],
+        module_stat: &rustix::fs::Stat,
+        module_bytes: Vec<u8>,
+    ) -> Result<PublicationObjectHandoffValidationV1, CompilerModuleHandoffErrorV3> {
+        if expected_receipt.slot() != CompilerModuleHandoffSlotV3::Production {
+            return Err(CompilerModuleHandoffErrorV3::InvalidSlot {
+                path: PathBuf::from(READY_ENTRY),
+                reason: "publication-object inventory requires the sole Production slot".to_owned(),
+            });
+        }
+        let producer_identity = producer_identity_for::<HandoffV3Schema>(producer);
+        let slot_identity = slot_identity_for::<HandoffV3Schema>(
+            producer_identity,
+            expected_receipt.attempt(),
+            expected_receipt.slot(),
+        );
+        let record = HandoffRecord::<HandoffV3Schema>::decode(ready_bytes).map_err(|reason| {
+            CompilerModuleHandoffErrorV3::InvalidSlot {
+                path: PathBuf::from(READY_ENTRY),
+                reason: reason.to_owned(),
+            }
+        })?;
+        if record.producer != producer_identity
+            || record.slot != slot_identity
+            || record.attempt != expected_receipt.attempt()
+            || record.attempt.generation() != expected_receipt.attempt().generation()
+        {
+            return Err(CompilerModuleHandoffErrorV3::InvalidSlot {
+                path: PathBuf::from(READY_ENTRY),
+                reason: "record does not match the expected producer, Production slot, attempt, and generation"
+                    .to_owned(),
+            });
+        }
+        if !is_private_file(module_stat)
+            || record.file != FileIdentity::from_stat(module_stat)
+            || usize::try_from(module_stat.st_size).ok() != Some(record.length)
+        {
+            return Err(CompilerModuleHandoffErrorV3::InvalidSlot {
+                path: PathBuf::from(PAYLOAD_ENTRY),
+                reason: "module descriptor metadata does not match the durable ready record"
+                    .to_owned(),
+            });
+        }
+        if record.binding != HandoffBindingV3::from(expected_receipt.handoff_identity()) {
+            return Err(CompilerModuleHandoffErrorV3::WrongHandoffIdentity);
+        }
+        if record.identity != *expected_receipt.transaction_identity().as_bytes()
+            || record.length != expected_receipt.length()
+            || module_bytes.len() != record.length
+        {
+            return Err(CompilerModuleHandoffErrorV3::DigestMismatch);
+        }
+        validate_decode_working_set::<HandoffV3Schema>(
+            record.length,
+            MAX_V3_DECODE_WORKING_SET_BYTES,
+        )
+        .map_err(engine_error_v3)?;
+        let transaction_identity = HandoffV3Schema::derive_identity(
+            record.producer,
+            record.slot,
+            record.attempt,
+            record.binding,
+            &module_bytes,
+        );
+        if transaction_identity != record.identity {
+            return Err(CompilerModuleHandoffErrorV3::DigestMismatch);
+        }
+        let handoff = HandoffV3Schema::decode_payload(record.binding, module_bytes)
+            .map_err(engine_error_v3)?;
+        if handoff.identity() != expected_receipt.handoff_identity() {
+            return Err(CompilerModuleHandoffErrorV3::HandoffIdentityMismatch);
+        }
+        let receipt = CompilerModuleHandoffReceiptV3 {
+            attempt: record.attempt,
+            slot: CompilerModuleHandoffSlotV3::Production,
+            handoff_identity: handoff.identity(),
+            transaction_identity: CompilerModuleHandoffTransactionIdentityV3(transaction_identity),
+            length: record.length,
+        };
+        if receipt != expected_receipt {
+            return Err(CompilerModuleHandoffErrorV3::DigestMismatch);
+        }
+        Ok(PublicationObjectHandoffValidationV1 { receipt, handoff })
     }
 
     fn transaction_identity_digest_v3(
@@ -6947,6 +7060,284 @@ mod semantic_v3 {
             assert!(matches!(
                 consume_compiler_module_handoff_v3(&temp.0, &producer, attempt, handoff.identity()),
                 Err(CompilerModuleHandoffErrorV3::AlreadyConsumed)
+            ));
+        }
+
+        fn exported_publication_objects(
+            seed: u8,
+        ) -> (
+            TestDirectory,
+            ProducerIdentity,
+            BuildAttempt,
+            CompilerModuleHandoffReceiptV3,
+            crate::PublicationObjectRootIdentityV1,
+            Vec<OwnedFd>,
+        ) {
+            let temp = TestDirectory::new();
+            fs::set_permissions(&temp.0, fs::Permissions::from_mode(0o700)).unwrap();
+            let producer = producer(&format!("publication_objects_{seed:02x}"));
+            let attempt = begin(&temp.0, &producer, seed);
+            let handoff = outer(seed.wrapping_add(1));
+            let receipt =
+                publish_compiler_module_handoff_v3(&temp.0, &producer, attempt, &handoff).unwrap();
+            let export = crate::export_compiler_module_handoff_publication_objects_v1(
+                &temp.0, &producer, receipt,
+            )
+            .unwrap();
+            let expected_root = export.expected_root();
+            let descriptors = export.into_descriptors();
+            (temp, producer, attempt, receipt, expected_root, descriptors)
+        }
+
+        #[test]
+        fn publication_object_inventory_imports_and_revalidates_exact_v3_custody() {
+            let (_temp, producer, _attempt, receipt, expected_root, descriptors) =
+                exported_publication_objects(201);
+            let inventory = crate::import_compiler_module_handoff_publication_objects_v1(
+                descriptors,
+                expected_root,
+                &producer,
+                receipt,
+            )
+            .unwrap();
+            assert_eq!(inventory.receipt(), receipt);
+            assert_eq!(inventory.handoff().identity(), receipt.handoff_identity());
+            inventory.revalidate().unwrap();
+            assert!(!inventory.grants_compiler_authority());
+            assert!(!inventory.grants_publication_authority());
+            assert!(!inventory.grants_link_authority());
+            assert!(!inventory.grants_load_authority());
+            assert!(!inventory.grants_launch_authority());
+        }
+
+        #[test]
+        fn publication_object_inventory_rejects_missing_and_extra_descriptors() {
+            for (seed, extra) in [(202, false), (203, true)] {
+                let (_temp, producer, _attempt, receipt, expected_root, mut descriptors) =
+                    exported_publication_objects(seed);
+                if extra {
+                    let duplicate = rustix::io::fcntl_dupfd_cloexec(&descriptors[8], 0).unwrap();
+                    descriptors.push(duplicate);
+                } else {
+                    drop(descriptors.pop());
+                }
+                assert!(matches!(
+                    crate::import_compiler_module_handoff_publication_objects_v1(
+                        descriptors,
+                        expected_root,
+                        &producer,
+                        receipt,
+                    ),
+                    Err(
+                        crate::CompilerModuleHandoffPublicationObjectErrorV1::DescriptorCount { .. }
+                    )
+                ));
+            }
+        }
+
+        #[test]
+        fn publication_object_inventory_rejects_swapped_roles() {
+            let (_temp, producer, _attempt, receipt, expected_root, mut descriptors) =
+                exported_publication_objects(204);
+            descriptors.swap(4, 7);
+            assert!(matches!(
+                crate::import_compiler_module_handoff_publication_objects_v1(
+                    descriptors,
+                    expected_root,
+                    &producer,
+                    receipt,
+                ),
+                Err(crate::CompilerModuleHandoffPublicationObjectErrorV1::InvalidDescriptor { .. })
+            ));
+        }
+
+        #[test]
+        fn publication_object_inventory_rejects_same_ofd_holder_probe_alias() {
+            let (_temp, producer, _attempt, receipt, expected_root, mut descriptors) =
+                exported_publication_objects(205);
+            descriptors[3] = rustix::io::fcntl_dupfd_cloexec(&descriptors[2], 0).unwrap();
+            assert!(matches!(
+                crate::import_compiler_module_handoff_publication_objects_v1(
+                    descriptors,
+                    expected_root,
+                    &producer,
+                    receipt,
+                ),
+                Err(
+                    crate::CompilerModuleHandoffPublicationObjectErrorV1::LockNotHeld {
+                        role: crate::PublicationObjectRoleV1::ArtifactLockHolder,
+                    }
+                )
+            ));
+        }
+
+        #[test]
+        fn publication_object_inventory_rejects_released_root_lock() {
+            let (_temp, producer, _attempt, receipt, expected_root, descriptors) =
+                exported_publication_objects(206);
+            let result = unsafe {
+                libc::flock(
+                    rustix::fd::AsRawFd::as_raw_fd(&descriptors[1]),
+                    libc::LOCK_UN,
+                )
+            };
+            assert_eq!(result, 0);
+            assert!(matches!(
+                crate::import_compiler_module_handoff_publication_objects_v1(
+                    descriptors,
+                    expected_root,
+                    &producer,
+                    receipt,
+                ),
+                Err(
+                    crate::CompilerModuleHandoffPublicationObjectErrorV1::LockNotHeld {
+                        role: crate::PublicationObjectRoleV1::OutputRootFlockHolder,
+                    }
+                )
+            ));
+        }
+
+        #[test]
+        fn publication_object_inventory_rejects_released_artifact_lock() {
+            let (_temp, producer, _attempt, receipt, expected_root, descriptors) =
+                exported_publication_objects(212);
+            let mut unlock: libc::flock = unsafe { std::mem::zeroed() };
+            unlock.l_type = libc::F_UNLCK as _;
+            unlock.l_whence = libc::SEEK_SET as _;
+            let result = unsafe {
+                libc::fcntl(
+                    rustix::fd::AsRawFd::as_raw_fd(&descriptors[2]),
+                    libc::F_OFD_SETLK,
+                    &unlock,
+                )
+            };
+            assert_eq!(result, 0);
+            assert!(matches!(
+                crate::import_compiler_module_handoff_publication_objects_v1(
+                    descriptors,
+                    expected_root,
+                    &producer,
+                    receipt,
+                ),
+                Err(
+                    crate::CompilerModuleHandoffPublicationObjectErrorV1::LockNotHeld {
+                        role: crate::PublicationObjectRoleV1::ArtifactLockHolder,
+                    }
+                )
+            ));
+        }
+
+        #[test]
+        fn publication_object_inventory_rejects_wrong_remote_root_snapshot() {
+            let (_temp, producer, _attempt, receipt, expected_root, descriptors) =
+                exported_publication_objects(213);
+            let wrong_root = crate::PublicationObjectRootIdentityV1::new(
+                expected_root.device(),
+                expected_root.inode(),
+                expected_root.owner_uid().wrapping_add(1),
+                expected_root.owner_gid(),
+                expected_root.mode(),
+                expected_root.link_count(),
+            );
+            assert!(matches!(
+                crate::import_compiler_module_handoff_publication_objects_v1(
+                    descriptors,
+                    wrong_root,
+                    &producer,
+                    receipt,
+                ),
+                Err(crate::CompilerModuleHandoffPublicationObjectErrorV1::RootIdentityMismatch)
+            ));
+        }
+
+        #[test]
+        fn publication_object_inventory_rejects_o_path_and_writable_payloads() {
+            for (seed, flags) in [
+                (207, OFlags::PATH | OFlags::CLOEXEC),
+                (
+                    208,
+                    OFlags::RDWR | OFlags::NONBLOCK | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                ),
+            ] {
+                let (temp, producer, attempt, receipt, expected_root, mut descriptors) =
+                    exported_publication_objects(seed);
+                let module = slot_path(
+                    &temp.0,
+                    &producer,
+                    attempt,
+                    CompilerModuleHandoffSlotV3::Production,
+                )
+                .join(PAYLOAD_ENTRY);
+                descriptors[8] = rustix::fs::open(&module, flags, Mode::empty()).unwrap();
+                assert!(matches!(
+                    crate::import_compiler_module_handoff_publication_objects_v1(
+                        descriptors,
+                        expected_root,
+                        &producer,
+                        receipt,
+                    ),
+                    Err(
+                        crate::CompilerModuleHandoffPublicationObjectErrorV1::InvalidDescriptor {
+                            role: crate::PublicationObjectRoleV1::ModulePayload,
+                            ..
+                        }
+                    )
+                ));
+            }
+        }
+
+        #[test]
+        fn publication_object_inventory_rejects_producer_and_slot_roster_growth() {
+            for (seed, producer_roster) in [(209, true), (210, false)] {
+                let (temp, producer, attempt, receipt, expected_root, descriptors) =
+                    exported_publication_objects(seed);
+                let slot = slot_path(
+                    &temp.0,
+                    &producer,
+                    attempt,
+                    CompilerModuleHandoffSlotV3::Production,
+                );
+                let extra = if producer_roster {
+                    slot.parent().unwrap().join("unexpected")
+                } else {
+                    slot.join("compiler-execution-receipt-v1")
+                };
+                fs::write(&extra, b"unexpected").unwrap();
+                fs::set_permissions(&extra, fs::Permissions::from_mode(0o600)).unwrap();
+                assert!(matches!(
+                    crate::import_compiler_module_handoff_publication_objects_v1(
+                        descriptors,
+                        expected_root,
+                        &producer,
+                        receipt,
+                    ),
+                    Err(crate::CompilerModuleHandoffPublicationObjectErrorV1::InvalidRoster { .. })
+                ));
+            }
+        }
+
+        #[test]
+        fn publication_object_inventory_rejects_named_module_replacement() {
+            let (temp, producer, attempt, receipt, expected_root, descriptors) =
+                exported_publication_objects(211);
+            let slot = slot_path(
+                &temp.0,
+                &producer,
+                attempt,
+                CompilerModuleHandoffSlotV3::Production,
+            );
+            let module = slot.join(PAYLOAD_ENTRY);
+            fs::rename(&module, slot.join("displaced-module")).unwrap();
+            fs::write(&module, b"replacement").unwrap();
+            fs::set_permissions(&module, fs::Permissions::from_mode(0o600)).unwrap();
+            assert!(matches!(
+                crate::import_compiler_module_handoff_publication_objects_v1(
+                    descriptors,
+                    expected_root,
+                    &producer,
+                    receipt,
+                ),
+                Err(crate::CompilerModuleHandoffPublicationObjectErrorV1::InvalidRoster { .. })
             ));
         }
     }
