@@ -226,6 +226,7 @@ pub struct VerifiedCompilerExecutionDeploymentV1 {
     git_commit: String,
     target: String,
     manifest_sha256: [u8; 32],
+    manifest: SealedDeploymentFileV1,
     files: Vec<SealedDeploymentFileV1>,
 }
 
@@ -236,6 +237,7 @@ impl fmt::Debug for VerifiedCompilerExecutionDeploymentV1 {
             .field("git_commit", &self.git_commit)
             .field("target", &self.target)
             .field("file_count", &self.files.len())
+            .field("sealed_source_file_count", &self.sealed_source_file_count())
             .field("authority", &"verified-source-custody-only")
             .finish_non_exhaustive()
     }
@@ -260,6 +262,11 @@ impl VerifiedCompilerExecutionDeploymentV1 {
     /// Returns the exact number of sealed deployment content files.
     pub fn file_count(&self) -> usize {
         self.files.len()
+    }
+
+    /// Returns the manifest plus the exact number of sealed deployment content files.
+    pub fn sealed_source_file_count(&self) -> usize {
+        std::iter::once(&self.manifest).chain(&self.files).count()
     }
 }
 
@@ -370,6 +377,14 @@ pub fn verify_compiler_execution_deployment_v1(
         ));
     }
     let manifest = parse_manifest(&manifest_file.bytes, expected_git_commit)?;
+    let sealed_manifest = seal_source(
+        ManifestEntryV1 {
+            spec: manifest_spec,
+            byte_len: manifest_file.bytes.len() as u64,
+            sha256: manifest_file.sha256,
+        },
+        &manifest_file.bytes,
+    )?;
 
     let mut files = Vec::with_capacity(manifest.entries.len());
     let mut contents = Vec::with_capacity(manifest.entries.len());
@@ -382,6 +397,7 @@ pub fn verify_compiler_execution_deployment_v1(
     validate_build_info(&contents[0], expected_git_commit, &manifest.target)?;
     validate_sha256sums(&contents[1], &manifest.entries)?;
     verify_inventory(&root, root_snapshot, true)?;
+    validate_sealed_file(&sealed_manifest)?;
     validate_sealed_files(&files)?;
     Ok(VerifiedCompilerExecutionDeploymentV1 {
         git_commit: manifest.git_commit,
@@ -389,6 +405,7 @@ pub fn verify_compiler_execution_deployment_v1(
         manifest_sha256: expected_manifest
             .try_into()
             .expect("32-byte manifest digest was checked"),
+        manifest: sealed_manifest,
         files,
     })
 }
@@ -1000,19 +1017,26 @@ fn seal_source(
 fn validate_sealed_files(
     files: &[SealedDeploymentFileV1],
 ) -> Result<(), DeploymentVerificationErrorV1> {
-    let expected_seals = SealFlags::WRITE | SealFlags::GROW | SealFlags::SHRINK | SealFlags::SEAL;
     for retained in files {
-        let stat = fstat(&retained.file)
-            .map_err(|source| io_error("inspect sealed deployment source", source))?;
-        if FileType::from_raw_mode(stat.st_mode) != FileType::RegularFile
-            || stat.st_mode & 0o7777 != retained.entry.spec.mode
-            || u64::try_from(stat.st_size).unwrap_or(u64::MAX) != retained.entry.byte_len
-            || fcntl_get_seals(&retained.file)
-                .map_err(|source| io_error("inspect deployment source seals", source))?
-                != expected_seals
-        {
-            return Err(changed("sealed deployment source changed after admission"));
-        }
+        validate_sealed_file(retained)?;
+    }
+    Ok(())
+}
+
+fn validate_sealed_file(
+    retained: &SealedDeploymentFileV1,
+) -> Result<(), DeploymentVerificationErrorV1> {
+    let expected_seals = SealFlags::WRITE | SealFlags::GROW | SealFlags::SHRINK | SealFlags::SEAL;
+    let stat = fstat(&retained.file)
+        .map_err(|source| io_error("inspect sealed deployment source", source))?;
+    if FileType::from_raw_mode(stat.st_mode) != FileType::RegularFile
+        || stat.st_mode & 0o7777 != retained.entry.spec.mode
+        || u64::try_from(stat.st_size).unwrap_or(u64::MAX) != retained.entry.byte_len
+        || fcntl_get_seals(&retained.file)
+            .map_err(|source| io_error("inspect deployment source seals", source))?
+            != expected_seals
+    {
+        return Err(changed("sealed deployment source changed after admission"));
     }
     Ok(())
 }
@@ -1246,7 +1270,12 @@ mod tests {
             verified.file_count(),
             COMPILER_EXECUTION_INSTALL_FILE_COUNT_V1
         );
+        assert_eq!(verified.sealed_source_file_count(), 14);
         assert_eq!(verified.manifest_sha256(), generation.sha256());
+        assert_eq!(
+            verified.manifest.entry.spec.source,
+            COMPILER_EXECUTION_INSTALL_MANIFEST_NAME_V1
+        );
 
         let expected_build_info = fs::read(fixture.path("BUILD-INFO")).unwrap();
         drop(fixture);
@@ -1255,6 +1284,7 @@ mod tests {
         let mut bytes = Vec::new();
         retained.read_to_end(&mut bytes).unwrap();
         assert_eq!(bytes, expected_build_info);
+        validate_sealed_file(&verified.manifest).unwrap();
         validate_sealed_files(&verified.files).unwrap();
     }
 
