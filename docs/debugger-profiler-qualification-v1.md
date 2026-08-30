@@ -18,10 +18,11 @@ statuses therefore say `caller_bound_observed`, never `observed`. Documentation
 claims and unavailable states are separate variants. The APIs report that the
 manifest grants neither observation nor qualification authority.
 
-No field can name an executable path, argv, PID, native address, descriptor,
-queue token, or state-changing operation. ROCgdb and rocprof tools remain
-collectors outside this admission crate. Production runtime authority remains
-pure KFD.
+No typed field interprets text as an executable path, argv, PID, native
+address, descriptor, queue token, or state-changing operation. Free text may
+mention any of those things, but it grants no authority. ROCgdb and rocprof
+tools remain collectors outside this admission crate. Production runtime
+authority remains pure KFD.
 
 The protocol library does not launch tools or parse terminal output. The
 checked-in record is an archived caller-supplied projection of separately run
@@ -58,6 +59,10 @@ mojo:unavailable
 These labels aid reproduction; their hashes are identities, not signatures or
 proof of who ran a probe.
 
+The candidate comparator separately binds `raw-production-baseline:v1` and
+`no-capture:v1`. Capture-mode configuration identities must be pairwise
+distinct and cannot collide with the raw baseline identity.
+
 ## Candidate budgets
 
 The six required modes have candidate, not approved, policies. Relative
@@ -77,10 +82,16 @@ profiler overhead. All require 5 warmups and 30 measured repetitions.
 These are declared candidate ceilings, not evidence that any mode meets them.
 A supplied measurement must bind exact workload, input, artifact, environment,
 device, collector content, baseline configuration, and captured configuration
-identities; warmups, repetitions, clock domain, duration statistic, storage,
-collection time, loss, and truncation are mandatory. The local evaluator only
-checks policy satisfaction and never upgrades caller-supplied bytes into an
-authenticated qualification.
+identities plus the domain-separated canonical baseline-comparator identity.
+That comparator fixes distinct raw and no-capture configurations and exact
+caller-bound workload, input, artifact, environment, device, collector,
+evidence, clock, repetition, and duration records. The no-capture measurement
+binds raw execution as its baseline; every other mode binds the admitted
+no-capture record, preventing arbitrary or swapped baselines. Warmups,
+repetitions, clock domain, duration statistic, storage, collection time, loss,
+and truncation are mandatory. Only manifest-level evaluation is public, and it
+revalidates the complete current manifest before checking policy satisfaction.
+It never upgrades caller-supplied bytes into an authenticated qualification.
 
 T0 still needs an authenticated producer and archived query acceptance without
 a source checkout. T6 still needs approved budgets, real measurements, broader

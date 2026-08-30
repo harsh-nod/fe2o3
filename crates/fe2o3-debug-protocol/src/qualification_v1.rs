@@ -49,6 +49,7 @@ pub struct QualificationManifestV1 {
     pub qualification_date_utc: String,
     pub environment: QualificationEnvironmentV1,
     pub components: Vec<ComponentQualificationV1>,
+    pub baseline_comparator: CanonicalBaselineComparatorV1,
     pub overhead_budgets: Vec<CaptureModeQualificationV1>,
 }
 
@@ -67,8 +68,24 @@ impl QualificationManifestV1 {
             record.validate()?;
         }
 
+        self.baseline_comparator.validate(self)?;
+
         if self.overhead_budgets.len() != REQUIRED_CAPTURE_MODES_V1.len() {
             return Err(QualificationValidationErrorV1::IncompleteOverheadMatrix);
+        }
+        if self.overhead_budgets.iter().any(|record| {
+            record.configuration_sha256 == self.baseline_comparator.raw_configuration_sha256
+        }) || self
+            .overhead_budgets
+            .iter()
+            .enumerate()
+            .any(|(index, record)| {
+                self.overhead_budgets[index + 1..]
+                    .iter()
+                    .any(|later| later.configuration_sha256 == record.configuration_sha256)
+            })
+        {
+            return Err(QualificationValidationErrorV1::InvalidBudgetConfiguration);
         }
         for (record, expected) in self.overhead_budgets.iter().zip(REQUIRED_CAPTURE_MODES_V1) {
             if record.mode != expected {
@@ -105,6 +122,19 @@ impl QualificationManifestV1 {
         self.components
             .iter()
             .find(|record| record.component == component)
+    }
+
+    pub fn evaluate_overhead(
+        &self,
+        mode: CaptureModeV1,
+    ) -> Result<OverheadAssessmentV1, QualificationValidationErrorV1> {
+        self.validate()?;
+        let record = self
+            .overhead_budgets
+            .iter()
+            .find(|record| record.mode == mode)
+            .ok_or(QualificationValidationErrorV1::IncompleteOverheadMatrix)?;
+        Ok(record.assessment_after_manifest_validation())
     }
 
     /// Decoding this inert, caller-supplied record never authenticates a tool,
@@ -161,6 +191,121 @@ impl QualificationEnvironmentV1 {
         let digest: [u8; 32] = hasher.finalize().into();
         OpaqueIdentityV1::new(digest).map_err(|_| QualificationValidationErrorV1::EncodingFailed)
     }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CanonicalBaselineComparatorV1 {
+    pub raw_configuration_sha256: OpaqueIdentityV1,
+    pub no_capture_configuration_sha256: OpaqueIdentityV1,
+    pub availability: BaselineComparatorAvailabilityV1,
+}
+
+impl CanonicalBaselineComparatorV1 {
+    fn validate(
+        &self,
+        manifest: &QualificationManifestV1,
+    ) -> Result<(), QualificationValidationErrorV1> {
+        if self.raw_configuration_sha256 == self.no_capture_configuration_sha256 {
+            return Err(QualificationValidationErrorV1::InvalidBaselineComparator);
+        }
+        let no_capture = manifest
+            .overhead_budgets
+            .first()
+            .filter(|record| record.mode == CaptureModeV1::NoCapture)
+            .ok_or(QualificationValidationErrorV1::IncompleteOverheadMatrix)?;
+        if no_capture.configuration_sha256 != self.no_capture_configuration_sha256 {
+            return Err(QualificationValidationErrorV1::InvalidBaselineComparator);
+        }
+        let BaselineComparatorAvailabilityV1::CallerBoundAvailable { record } = &self.availability
+        else {
+            return Ok(());
+        };
+        let collector_component = manifest
+            .component(QualificationComponentV1::Fe2o3NativeKfdDebugger)
+            .ok_or(QualificationValidationErrorV1::BaselineComparatorUnavailable)?;
+        if !collector_component.installation.is_usable() {
+            return Err(QualificationValidationErrorV1::BaselineComparatorUnavailable);
+        }
+        let collector = collector_component
+            .installation
+            .identity()
+            .ok_or(QualificationValidationErrorV1::BaselineComparatorUnavailable)?;
+        if record.environment_identity != manifest.environment.identity()?
+            || record.collector_content_sha256 != collector.content_sha256
+            || record.raw_evidence_id == record.no_capture_evidence_id
+            || record.raw_duration_nanoseconds == 0
+            || record.no_capture_duration_nanoseconds == 0
+            || record.warmups == 0
+            || record.warmups > MAX_QUALIFICATION_REPETITIONS_V1
+            || record.repetitions == 0
+            || record.repetitions > MAX_QUALIFICATION_REPETITIONS_V1
+        {
+            return Err(QualificationValidationErrorV1::InvalidBaselineComparator);
+        }
+        validate_text(&record.clock_domain, "baseline clock domain")
+    }
+
+    pub fn identity(&self) -> Result<OpaqueIdentityV1, QualificationValidationErrorV1> {
+        let encoded =
+            serde_json::to_vec(self).map_err(|_| QualificationValidationErrorV1::EncodingFailed)?;
+        let mut hasher = Sha256::new();
+        hasher.update(b"fe2o3-debug-canonical-baseline-comparator-v1\0");
+        hasher.update(
+            u64::try_from(encoded.len())
+                .map_err(|_| QualificationValidationErrorV1::EncodingFailed)?
+                .to_le_bytes(),
+        );
+        hasher.update(encoded);
+        let digest: [u8; 32] = hasher.finalize().into();
+        OpaqueIdentityV1::new(digest).map_err(|_| QualificationValidationErrorV1::EncodingFailed)
+    }
+
+    fn available_record(&self) -> Option<&CallerBoundBaselineComparatorRecordV1> {
+        match &self.availability {
+            BaselineComparatorAvailabilityV1::CallerBoundAvailable { record } => Some(record),
+            BaselineComparatorAvailabilityV1::Unavailable { .. } => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
+pub enum BaselineComparatorAvailabilityV1 {
+    CallerBoundAvailable {
+        record: Box<CallerBoundBaselineComparatorRecordV1>,
+    },
+    Unavailable {
+        reason: BaselineComparatorUnavailableReasonV1,
+        evidence_id: OpaqueIdentityV1,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BaselineComparatorUnavailableReasonV1 {
+    NotMeasured,
+    ComparatorUnavailable,
+    TargetUnsupported,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CallerBoundBaselineComparatorRecordV1 {
+    pub workload_identity: OpaqueIdentityV1,
+    pub input_identity: OpaqueIdentityV1,
+    pub artifact_identity: OpaqueIdentityV1,
+    pub environment_identity: OpaqueIdentityV1,
+    pub device_identity: OpaqueIdentityV1,
+    pub collector_content_sha256: OpaqueIdentityV1,
+    pub raw_evidence_id: OpaqueIdentityV1,
+    pub no_capture_evidence_id: OpaqueIdentityV1,
+    pub warmups: u16,
+    pub repetitions: u16,
+    pub statistic: DurationStatisticV1,
+    pub clock_domain: String,
+    pub raw_duration_nanoseconds: u64,
+    pub no_capture_duration_nanoseconds: u64,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -422,12 +567,11 @@ impl CaptureModeQualificationV1 {
             .component(self.collector)
             .ok_or(QualificationValidationErrorV1::UnknownBudgetCollector)?;
         self.policy.validate(self.mode)?;
-        self.observation
-            .validate(self, component, manifest.environment.identity()?)?;
+        self.observation.validate(self, component, manifest)?;
         Ok(())
     }
 
-    pub fn assessment(&self) -> OverheadAssessmentV1 {
+    fn assessment_after_manifest_validation(&self) -> OverheadAssessmentV1 {
         if self.policy.status == BudgetPolicyStatusV1::Candidate {
             return OverheadAssessmentV1::CandidatePolicy;
         }
@@ -576,7 +720,7 @@ impl OverheadObservationV1 {
         &self,
         qualification: &CaptureModeQualificationV1,
         component: &ComponentQualificationV1,
-        environment_identity: OpaqueIdentityV1,
+        manifest: &QualificationManifestV1,
     ) -> Result<(), QualificationValidationErrorV1> {
         let Self::Measured {
             measurement: measured,
@@ -594,14 +738,41 @@ impl OverheadObservationV1 {
             .installation
             .identity()
             .ok_or(QualificationValidationErrorV1::MeasuredWithUnusableCollector)?;
+        let baseline = manifest
+            .baseline_comparator
+            .available_record()
+            .ok_or(QualificationValidationErrorV1::BaselineComparatorUnavailable)?;
+        if measured.baseline_comparator_identity != manifest.baseline_comparator.identity()? {
+            return Err(QualificationValidationErrorV1::MeasurementBaselineMismatch);
+        }
+        let expected_baseline_configuration = if qualification.mode == CaptureModeV1::NoCapture {
+            manifest.baseline_comparator.raw_configuration_sha256
+        } else {
+            manifest.baseline_comparator.no_capture_configuration_sha256
+        };
+        let expected_baseline_evidence = if qualification.mode == CaptureModeV1::NoCapture {
+            baseline.raw_evidence_id
+        } else {
+            baseline.no_capture_evidence_id
+        };
         if measured.comparison.collector_content_sha256 != identity.content_sha256
             || measured.comparison.captured_configuration_sha256
                 != qualification.configuration_sha256
-            || measured.comparison.baseline_configuration_sha256
-                == measured.comparison.captured_configuration_sha256
-            || measured.comparison.environment_identity != environment_identity
+            || measured.comparison.baseline_configuration_sha256 != expected_baseline_configuration
+            || measured.baseline_evidence_id != expected_baseline_evidence
+            || measured.captured_evidence_id == expected_baseline_evidence
+            || measured.comparison.workload_identity != baseline.workload_identity
+            || measured.comparison.input_identity != baseline.input_identity
+            || measured.comparison.artifact_identity != baseline.artifact_identity
+            || measured.comparison.environment_identity != baseline.environment_identity
+            || measured.comparison.device_identity != baseline.device_identity
         {
-            return Err(QualificationValidationErrorV1::MeasurementComparisonMismatch);
+            return Err(QualificationValidationErrorV1::MeasurementBaselineMismatch);
+        }
+        if qualification.mode == CaptureModeV1::NoCapture
+            && measured.captured_evidence_id != baseline.no_capture_evidence_id
+        {
+            return Err(QualificationValidationErrorV1::MeasurementBaselineMismatch);
         }
         if measured.warmups == 0
             || measured.warmups > MAX_QUALIFICATION_REPETITIONS_V1
@@ -621,7 +792,28 @@ impl OverheadObservationV1 {
                     baseline_nanoseconds,
                     captured_nanoseconds,
                 },
-            ) if *baseline_nanoseconds != 0 && *captured_nanoseconds != 0 => Ok(()),
+            ) if *baseline_nanoseconds != 0 && *captured_nanoseconds != 0 => {
+                if measured.warmups != baseline.warmups
+                    || measured.repetitions != baseline.repetitions
+                    || measured.statistic != baseline.statistic
+                    || measured.clock_domain != baseline.clock_domain
+                {
+                    return Err(QualificationValidationErrorV1::MeasurementBaselineMismatch);
+                }
+                let expected_baseline_duration = if qualification.mode == CaptureModeV1::NoCapture {
+                    baseline.raw_duration_nanoseconds
+                } else {
+                    baseline.no_capture_duration_nanoseconds
+                };
+                if *baseline_nanoseconds != expected_baseline_duration
+                    || (qualification.mode == CaptureModeV1::NoCapture
+                        && *captured_nanoseconds != baseline.no_capture_duration_nanoseconds)
+                {
+                    Err(QualificationValidationErrorV1::MeasurementBaselineMismatch)
+                } else {
+                    Ok(())
+                }
+            }
             (
                 OverheadBudgetMetricV1::StopResumeControlLatency { .. },
                 MeasuredOverheadMetricV1::StopResumeControlLatency {
@@ -647,6 +839,7 @@ pub enum OverheadUnavailableReasonV1 {
 #[serde(deny_unknown_fields)]
 pub struct MeasuredOverheadV1 {
     pub configuration_sha256: OpaqueIdentityV1,
+    pub baseline_comparator_identity: OpaqueIdentityV1,
     pub baseline_evidence_id: OpaqueIdentityV1,
     pub captured_evidence_id: OpaqueIdentityV1,
     pub comparison: OverheadComparisonAxesV1,
@@ -737,10 +930,47 @@ fn validate_text(value: &str, field: &'static str) -> Result<(), QualificationVa
 
 fn validate_url(value: &str) -> Result<(), QualificationValidationErrorV1> {
     if value.len() > MAX_QUALIFICATION_URL_BYTES_V1
-        || value.chars().any(char::is_control)
+        || value
+            .chars()
+            .any(|character| character.is_control() || character.is_whitespace())
         || !value.starts_with("https://")
     {
         return Err(QualificationValidationErrorV1::InvalidDocumentationUrl);
+    }
+    let remainder = &value["https://".len()..];
+    let authority_end = remainder.find(['/', '?', '#']).unwrap_or(remainder.len());
+    let authority = &remainder[..authority_end];
+    if authority.is_empty()
+        || authority.contains('@')
+        || authority.contains('\\')
+        || authority.bytes().any(|byte| byte.is_ascii_whitespace())
+    {
+        return Err(QualificationValidationErrorV1::InvalidDocumentationUrl);
+    }
+    let (host, port) = match authority.rsplit_once(':') {
+        Some((host, port)) if !host.contains(':') => (host, Some(port)),
+        Some(_) => return Err(QualificationValidationErrorV1::InvalidDocumentationUrl),
+        None => (authority, None),
+    };
+    if host.is_empty()
+        || host.split('.').any(|label| {
+            label.is_empty()
+                || label.starts_with('-')
+                || label.ends_with('-')
+                || !label
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        })
+    {
+        return Err(QualificationValidationErrorV1::InvalidDocumentationUrl);
+    }
+    if let Some(port) = port {
+        let parsed = port
+            .parse::<u16>()
+            .map_err(|_| QualificationValidationErrorV1::InvalidDocumentationUrl)?;
+        if parsed == 0 {
+            return Err(QualificationValidationErrorV1::InvalidDocumentationUrl);
+        }
     }
     Ok(())
 }
@@ -757,9 +987,31 @@ fn validate_date(value: &str) -> Result<(), QualificationValidationErrorV1> {
     {
         return Err(QualificationValidationErrorV1::InvalidQualificationDate);
     }
-    let month = (bytes[5] - b'0') * 10 + bytes[6] - b'0';
-    let day = (bytes[8] - b'0') * 10 + bytes[9] - b'0';
-    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+    let year = u32::from(bytes[0] - b'0') * 1_000
+        + u32::from(bytes[1] - b'0') * 100
+        + u32::from(bytes[2] - b'0') * 10
+        + u32::from(bytes[3] - b'0');
+    let month = usize::from((bytes[5] - b'0') * 10 + bytes[6] - b'0');
+    let day = usize::from((bytes[8] - b'0') * 10 + bytes[9] - b'0');
+    if year == 0 || !(1..=12).contains(&month) {
+        return Err(QualificationValidationErrorV1::InvalidQualificationDate);
+    }
+    let leap = year.is_multiple_of(4) && !year.is_multiple_of(100) || year.is_multiple_of(400);
+    let month_days = [
+        31,
+        if leap { 29 } else { 28 },
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    ];
+    if day == 0 || day > month_days[month - 1] {
         return Err(QualificationValidationErrorV1::InvalidQualificationDate);
     }
     Ok(())
@@ -797,11 +1049,14 @@ pub enum QualificationValidationErrorV1 {
     ObservedCapabilityWithoutUsableTool,
     UnknownBudgetCollector,
     InvalidBudgetCollector,
+    InvalidBudgetConfiguration,
+    InvalidBaselineComparator,
+    BaselineComparatorUnavailable,
     BudgetOutOfRange(&'static str),
     InvalidBudgetMetric,
     MeasuredWithUnusableCollector,
     MeasurementConfigurationMismatch,
-    MeasurementComparisonMismatch,
+    MeasurementBaselineMismatch,
     MeasurementOutOfRange,
     InvalidMeasurementMetric,
     ManifestTooLarge,
@@ -820,11 +1075,14 @@ impl fmt::Display for QualificationValidationErrorV1 {
             Self::ObservedCapabilityWithoutUsableTool => formatter.write_str("a caller-bound observation claim is attached to a component that was not recorded as caller-bound usable"),
             Self::UnknownBudgetCollector => formatter.write_str("overhead budget names an unknown collector component"),
             Self::InvalidBudgetCollector => formatter.write_str("capture mode names the wrong collector component"),
+            Self::InvalidBudgetConfiguration => formatter.write_str("capture-mode configurations are duplicated or collide with the raw baseline"),
+            Self::InvalidBaselineComparator => formatter.write_str("canonical baseline comparator is inconsistent with the manifest"),
+            Self::BaselineComparatorUnavailable => formatter.write_str("canonical no-capture baseline comparator is unavailable"),
             Self::BudgetOutOfRange(field) => write!(formatter, "{field} budget is out of range"),
             Self::InvalidBudgetMetric => formatter.write_str("capture mode and budget metric are incompatible"),
             Self::MeasuredWithUnusableCollector => formatter.write_str("measured overhead names a collector that was not observed usable"),
             Self::MeasurementConfigurationMismatch => formatter.write_str("measurement configuration does not match its declared budget"),
-            Self::MeasurementComparisonMismatch => formatter.write_str("measurement comparison axes do not match the manifest environment, collector, or configuration"),
+            Self::MeasurementBaselineMismatch => formatter.write_str("measurement does not bind the canonical baseline comparator, axes, evidence, or configuration"),
             Self::MeasurementOutOfRange => formatter.write_str("overhead measurement is out of range"),
             Self::InvalidMeasurementMetric => formatter.write_str("measurement and budget metrics are incompatible or zero"),
             Self::ManifestTooLarge => formatter.write_str("qualification manifest is too large"),

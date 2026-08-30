@@ -168,6 +168,15 @@
       }
     }
   ],
+  "baseline_comparator": {
+    "raw_configuration_sha256": "1415795786fcb203706558869a22dc519593c35c117adf2dd1c6f7e31b29cea5",
+    "no_capture_configuration_sha256": "f9307cb37c9c114bb51225ebcaceee89afa8ad9a2f63a3518d9ec2eac5ecbbbc",
+    "availability": {
+      "status": "unavailable",
+      "reason": "not_measured",
+      "evidence_id": "4ec4c447df37b3f27de9fe16bbe5048bb9c676acfd18e91c40ff7313edba3561"
+    }
+  },
   "overhead_budgets": [
     {
       "mode": "no_capture",

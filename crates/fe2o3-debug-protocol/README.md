@@ -174,16 +174,19 @@ association only. `grants_observation_authority()` and every policy
 assessment's `grants_qualification_authority()` return `false`. A measured
 policy comparison must name exact workload, input, artifact, environment,
 device, collector content, baseline configuration, and captured configuration
-identities. The assessment only re-derives whether caller-supplied values meet
-the declared policy; a separate authenticated producer is required for a
+identities and the canonical raw/no-capture comparator record. Only the
+manifest-level evaluator is public; it revalidates the complete current
+manifest immediately before re-deriving whether caller-supplied values meet
+the declared policy. A separate authenticated producer is required for a
 production observation claim.
 
 The manifest is capped at 256 KiB. It requires all seven component rows and all
 six capture-mode rows once in canonical order, bounds all text and numeric
 fields, rejects unknown/duplicate/trailing JSON, and domain-separates and
-length-binds its content identity. It contains no executable path, argument
-vector, process/device address, descriptor, queue token, or execution action.
-Unavailable tools and unmeasured modes remain first-class records.
+length-binds its content identity. No typed field interprets text as an
+executable path, argument vector, process/device address, descriptor, queue
+token, or execution action, and text grants no such authority. Unavailable
+tools and unmeasured modes remain first-class records.
 
 ## Hardware V2
 
