@@ -31,11 +31,10 @@ use fe2o3_mir_model::semantic_mir_v1::{
     SemanticAggregateKindV1, SemanticAssertMessageV1, SemanticAtomicAccessV1,
     SemanticAtomicOrderingV1, SemanticAtomicScopeV1, SemanticBackendPrimitiveV1,
     SemanticBackendReprV1, SemanticBinaryOpV1, SemanticBlockIdV1, SemanticBorrowKindV1,
-    SemanticCallableDeclV1, SemanticCallableIdV1, SemanticCastKindV1,
-    SemanticCheckedBinaryOpV1, SemanticCheckedBinaryRvalueV1,
-    SemanticCompilerIntrinsicOperationV1, SemanticConstantValueV1, SemanticDirectCallV1,
-    SemanticDirectTailCallV1, SemanticDisjointIndexSpaceV1, SemanticEdgeRoleV1,
-    SemanticFunctionDeclV1, SemanticFunctionIdV1, SemanticFunctionIdentityV1,
+    SemanticCallableDeclV1, SemanticCallableIdV1, SemanticCastKindV1, SemanticCheckedBinaryOpV1,
+    SemanticCheckedBinaryRvalueV1, SemanticCompilerIntrinsicOperationV1, SemanticConstantValueV1,
+    SemanticDirectCallV1, SemanticDirectTailCallV1, SemanticDisjointIndexSpaceV1,
+    SemanticEdgeRoleV1, SemanticFunctionDeclV1, SemanticFunctionIdV1, SemanticFunctionIdentityV1,
     SemanticFunctionRoleV1, SemanticGfx950LdsTransposeFormatV1, SemanticKernelBodySelectionV1,
     SemanticLocalIdV1, SemanticLocalRoleV1, SemanticMfmaAccumulatorContractV1,
     SemanticMfmaAccumulatorDistributionV1, SemanticMfmaOperandContractV1,
@@ -10903,7 +10902,8 @@ impl<'a> PureUniformIndexProjectorV1<'a> {
         }
         self.states[local] = 1;
         let left = self.resolve_operand(checked.left(), definition_block, definition_statement)?;
-        let right = self.resolve_operand(checked.right(), definition_block, definition_statement)?;
+        let right =
+            self.resolve_operand(checked.right(), definition_block, definition_statement)?;
         let summary = match (left, right) {
             (Some(left), Some(right)) => {
                 self.project_total_binary(kind, left, right, result_maximum)?
@@ -10958,19 +10958,15 @@ impl<'a> PureUniformIndexProjectorV1<'a> {
                         && same_semantic_operand_value_v1(left, checked.left())
                         && same_semantic_operand_value_v1(right, checked.right())
             );
-            if tuple_field_operand_local_v1(&condition, 1)
-                .map(|asserted| asserted.index() as usize)
+            if tuple_field_operand_local_v1(&condition, 1).map(|asserted| asserted.index() as usize)
                 != Some(local)
                 || expected
                 || !exact_message
                 || target.role() != SemanticEdgeRoleV1::AssertSuccess
                 || !matches!(unwind, SemanticUnwindActionV1::Unreachable)
-                || !self.assertion_proofs.proves_checked_overflow_assert_v1(
-                    &condition,
-                    expected,
-                    &message,
-                    block,
-                )?
+                || !self
+                    .assertion_proofs
+                    .proves_checked_overflow_assert_v1(&condition, expected, &message, block)?
             {
                 continue;
             }
@@ -24659,11 +24655,10 @@ mod tests {
             SemanticOperandV1::Move(
                 SemanticPlaceV1::new(
                     local,
-                    vec![SemanticProjectionV1::new(
-                        SemanticProjectionKindV1::Field(field),
-                        ty,
-                    )
-                    .unwrap()],
+                    vec![
+                        SemanticProjectionV1::new(SemanticProjectionKindV1::Field(field), ty)
+                            .unwrap(),
+                    ],
                     ty,
                 )
                 .unwrap(),
@@ -24705,24 +24700,20 @@ mod tests {
                 }
             },
         ));
-        entry_statements.push(assign(
-            checked_result,
-            CHECKED_U64_TYPE,
-            checked_add(15),
-        ));
+        entry_statements.push(assign(checked_result, CHECKED_U64_TYPE, checked_add(15)));
         if matches!(kind, CheckedBoundKind::StaleResultAssertion) {
-            entry_statements.push(assign(
-                stale_result,
-                CHECKED_U64_TYPE,
-                checked_add(16),
-            ));
+            entry_statements.push(assign(stale_result, CHECKED_U64_TYPE, checked_add(16)));
         }
         let asserted_result = if matches!(kind, CheckedBoundKind::StaleResultAssertion) {
             stale_result
         } else {
             checked_result
         };
-        let asserted_right = if asserted_result == stale_result { 16 } else { 15 };
+        let asserted_right = if asserted_result == stale_result {
+            16
+        } else {
+            15
+        };
         let exact_assertion = || SemanticTerminatorKindV1::Assert {
             condition: checked_field(asserted_result, 1, BOOL_TYPE),
             expected: matches!(kind, CheckedBoundKind::ExpectedOverflow),
@@ -24758,11 +24749,7 @@ mod tests {
                     assign(
                         numerator,
                         U64_TYPE,
-                        SemanticRvalueKindV1::Use(checked_field(
-                            checked_result,
-                            0,
-                            U64_TYPE,
-                        )),
+                        SemanticRvalueKindV1::Use(checked_field(checked_result, 0, U64_TYPE)),
                     ),
                     assign(
                         bound,
@@ -25771,11 +25758,8 @@ mod tests {
             SemanticPlaceV1::new(
                 SemanticLocalIdV1::from_index(5),
                 vec![
-                    SemanticProjectionV1::new(
-                        SemanticProjectionKindV1::Field(1),
-                        BOOL_TYPE,
-                    )
-                    .unwrap(),
+                    SemanticProjectionV1::new(SemanticProjectionKindV1::Field(1), BOOL_TYPE)
+                        .unwrap(),
                 ],
                 BOOL_TYPE,
             )
