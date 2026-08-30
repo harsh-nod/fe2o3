@@ -28603,6 +28603,17 @@ mod tests {
         let first_alias = 1_u32;
         let terminal = first_alias + u32::try_from(alias_count).unwrap();
         let array_local = terminal + 1;
+        let deep_array_type = SemanticTypeIdV1::from_index(3);
+        let mut types = projection_types();
+        types.push(SemanticTypeDeclV1::new(
+            SemanticTypeIdentityV1::from_sha256(bytes(0xd6)),
+            SemanticLayoutIdentityV1::from_sha256(bytes(0xd6)),
+            SemanticTypeLayoutV1::new(Some(32), 4).unwrap(),
+            SemanticTypeShapeV1::Array {
+                element: SCALAR_TYPE,
+                length: 8,
+            },
+        ));
         let mut statements = vec![typed_assignment(
             terminal,
             SCALAR_TYPE,
@@ -28621,11 +28632,9 @@ mod tests {
                     SemanticLocalIdV1::from_index(array_local),
                     vec![
                         SemanticProjectionV1::new(
-                            SemanticProjectionKindV1::ConstantIndex {
-                                offset: 0,
-                                minimum_length: 4,
-                                from_end: false,
-                            },
+                            SemanticProjectionKindV1::Index(SemanticLocalIdV1::from_index(
+                                first_alias,
+                            )),
                             SCALAR_TYPE,
                         )
                         .unwrap(),
@@ -28633,10 +28642,7 @@ mod tests {
                     SCALAR_TYPE,
                 )
                 .unwrap(),
-                SemanticRvalueV1::new(
-                    SCALAR_TYPE,
-                    SemanticRvalueKindV1::Use(typed_operand(first_alias, SCALAR_TYPE)),
-                ),
+                SemanticRvalueV1::new(SCALAR_TYPE, SemanticRvalueKindV1::Use(constant(0))),
             ),
         )));
 
@@ -28647,7 +28653,7 @@ mod tests {
             locals.push(SemanticLocalDeclV1::new(
                 SemanticLocalIdentityV1::from_sha256(identity),
                 if index == array_local {
-                    ARRAY_TYPE
+                    deep_array_type
                 } else {
                     SCALAR_TYPE
                 },
@@ -28680,7 +28686,7 @@ mod tests {
         ));
         let admitted = InertSemanticMirRequestV1::new(
             SemanticTargetDataLayoutV1::gfx942(SemanticLayoutIdentityV1::from_sha256(bytes(250))),
-            projection_types(),
+            types,
             vec![],
             vec![],
             vec![],
@@ -28704,6 +28710,47 @@ mod tests {
 
         assert_eq!(projected.roots.len(), 1);
         assert_eq!(projected.roots[0].kernel_binding, bytes(0xd5));
+        let expected_origin = PRIVATE_ALLOCATION_ORIGIN_TAG_V1 + u64::from(array_local) + 1;
+        let linked_private_writes = projected.roots[0]
+            .lowering
+            .kernel()
+            .blocks()
+            .iter()
+            .flat_map(|block| block.operations().windows(3))
+            .filter(|operations| {
+                matches!(
+                    *operations,
+                    [
+                        ProductionRankedOperationV1::ViewInSpace {
+                            result: view,
+                            element_width: 32,
+                            writable: true,
+                            shape,
+                            dynamic_extents,
+                            memory_space: MemorySpaceAttr::Private,
+                            allocation_origin,
+                            noalias_class,
+                        },
+                        ProductionRankedOperationV1::IndexConstant {
+                            result: index,
+                            value: 7,
+                        },
+                        ProductionRankedOperationV1::Access {
+                            kind: AccessKindAttr::Write,
+                            view: ProductionRankedValueV1::Local(access_view),
+                            indices,
+                        },
+                    ] if shape == &[8]
+                        && dynamic_extents.is_empty()
+                        && *allocation_origin == expected_origin
+                        && allocation_origin == noalias_class
+                        && view == access_view
+                        && indices.as_slice()
+                            == &[ProductionRankedValueV1::Local(*index)]
+                )
+            })
+            .count();
+        assert_eq!(linked_private_writes, 1);
     }
 
     #[test]
