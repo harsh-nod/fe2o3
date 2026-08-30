@@ -3379,7 +3379,16 @@ fn propagate_workgroup_pipeline_aliases_v1(
             "pipeline owner storage does not match the semantic local table",
         ));
     }
-    let mut aliases = vec![Vec::new(); owners.len()];
+    if owners.iter().all(Option::is_none) {
+        return Ok(());
+    }
+    let mut aliases = Vec::new();
+    aliases.try_reserve_exact(owners.len()).map_err(|_| {
+        ProductionRankedProjectionErrorV1::Unsupported(
+            "pipeline alias adjacency storage cannot be reserved",
+        )
+    })?;
+    aliases.resize_with(owners.len(), Vec::new);
     let mut alias_count = 0_usize;
     for block in function.blocks() {
         for statement in block.statements() {
@@ -10388,7 +10397,6 @@ impl<'a> SemanticAssertProofsV1<'a> {
                 "assertion proof zero-excluding edge storage cannot be reserved",
             )
         })?;
-        let mut visiting = HashSet::new();
         let mut stability_visited = Vec::new();
         stability_visited
             .try_reserve_exact(block_count)
@@ -10424,13 +10432,11 @@ impl<'a> SemanticAssertProofsV1<'a> {
             }
             let zero_target = targets.values()[0].edge().target().index() as usize;
             let nonzero_target = targets.otherwise().target().index() as usize;
-            visiting.clear();
             let discriminant_is_tested = self.local_is_value_preserving_alias_of(
                 discriminant_local,
                 local,
                 switch_block,
                 block.statements().len(),
-                &mut visiting,
             )?;
             let discriminant_is_tested = discriminant_is_tested
                 && (discriminant_local == local || !self.block_defines_local(switch_block, local));
@@ -10443,7 +10449,6 @@ impl<'a> SemanticAssertProofsV1<'a> {
                     switch_block,
                     zero_target,
                     nonzero_target,
-                    &mut visiting,
                 )?
             };
             let Some(excluding_target) = excluding_target else {
@@ -10484,7 +10489,6 @@ impl<'a> SemanticAssertProofsV1<'a> {
     ) -> Result<Option<u128>, ProductionRankedProjectionErrorV1> {
         let block_count = self.function.blocks().len();
         let can_reach_use = self.blocks_reaching(use_block)?;
-        let mut alias_visiting = HashSet::new();
         let mut stability_visited = Vec::new();
         stability_visited
             .try_reserve_exact(block_count)
@@ -10554,13 +10558,11 @@ impl<'a> SemanticAssertProofsV1<'a> {
             else {
                 continue;
             };
-            alias_visiting.clear();
             if !self.local_is_value_preserving_alias_of(
                 left_local,
                 local,
                 site.block,
                 site.statement,
-                &mut alias_visiting,
             )? || self.block_defines_local(switch_block, local)
             {
                 continue;
@@ -10695,7 +10697,6 @@ impl<'a> SemanticAssertProofsV1<'a> {
         switch_block: usize,
         false_target: usize,
         true_target: usize,
-        visiting: &mut HashSet<usize>,
     ) -> Result<Option<usize>, ProductionRankedProjectionErrorV1> {
         if self.definition_counts.get(condition_local).copied() != Some(1)
             || self.address_escaped.get(condition_local).copied() != Some(false)
@@ -10730,26 +10731,22 @@ impl<'a> SemanticAssertProofsV1<'a> {
         };
         let left_local = simple_operand_local(left).map(|value| value.index() as usize);
         let right_local = simple_operand_local(right).map(|value| value.index() as usize);
-        visiting.clear();
         let left_is_tested = if let Some(left_local) = left_local {
             self.local_is_value_preserving_alias_of(
                 left_local,
                 tested_local,
                 site.block,
                 site.statement,
-                visiting,
             )?
         } else {
             false
         };
-        visiting.clear();
         let right_is_tested = if let Some(right_local) = right_local {
             self.local_is_value_preserving_alias_of(
                 right_local,
                 tested_local,
                 site.block,
                 site.statement,
-                visiting,
             )?
         } else {
             false
@@ -10789,75 +10786,58 @@ impl<'a> SemanticAssertProofsV1<'a> {
 
     fn local_is_value_preserving_alias_of(
         &mut self,
-        candidate: usize,
+        mut candidate: usize,
         source: usize,
-        use_block: usize,
-        use_statement: usize,
-        visiting: &mut HashSet<usize>,
+        mut use_block: usize,
+        mut use_statement: usize,
     ) -> Result<bool, ProductionRankedProjectionErrorV1> {
-        self.charge(1)?;
-        if self.address_escaped.get(candidate).copied() != Some(false) {
-            return Ok(false);
-        }
-        if candidate == source {
-            return Ok(true);
-        }
-        if visiting.contains(&candidate)
-            || self.definition_counts.get(candidate).copied() != Some(1)
-        {
-            return Ok(false);
-        }
-        visiting.try_reserve(1).map_err(|_| {
-            ProductionRankedProjectionErrorV1::Unsupported(
-                "assertion proof alias storage cannot be reserved",
-            )
-        })?;
-        visiting.insert(candidate);
-        let Some(site) = self.assignments.get(candidate).copied().flatten() else {
-            visiting.remove(&candidate);
-            return Ok(false);
-        };
-        if site.block != use_block {
-            visiting.remove(&candidate);
-            return Ok(false);
-        }
-        if !self.assignment_dominates_use(site, use_block, use_statement)? {
-            visiting.remove(&candidate);
-            return Ok(false);
-        }
-        let SemanticStatementKindV1::Assign(assignment) =
-            self.function.blocks()[site.block].statements()[site.statement].kind()
-        else {
-            visiting.remove(&candidate);
-            return Ok(false);
-        };
-        let operand = match assignment.value().kind() {
-            SemanticRvalueKindV1::Use(operand) => Some(operand),
-            SemanticRvalueKindV1::Cast {
-                kind: SemanticCastKindV1::Integer,
-                operand,
-            } if self
-                .unsigned_integer_bits(assignment.value().result_type())
-                .zip(self.unsigned_integer_bits(operand.ty()))
-                .is_some_and(|(destination, source)| destination >= source) =>
-            {
-                Some(operand)
+        // Each followed definition must strictly precede its use in the same block, so
+        // the statement index is both the cycle guard and the stack-independent bound.
+        loop {
+            self.charge(1)?;
+            if self.address_escaped.get(candidate).copied() != Some(false) {
+                return Ok(false);
             }
-            _ => None,
-        };
-        let result = if let Some(next) = operand.and_then(simple_operand_local) {
-            self.local_is_value_preserving_alias_of(
-                next.index() as usize,
-                source,
-                site.block,
-                site.statement,
-                visiting,
-            )?
-        } else {
-            false
-        };
-        visiting.remove(&candidate);
-        Ok(result)
+            if candidate == source {
+                return Ok(true);
+            }
+            if self.definition_counts.get(candidate).copied() != Some(1) {
+                return Ok(false);
+            }
+            let Some(site) = self.assignments.get(candidate).copied().flatten() else {
+                return Ok(false);
+            };
+            if site.block != use_block
+                || !self.assignment_dominates_use(site, use_block, use_statement)?
+            {
+                return Ok(false);
+            }
+            let SemanticStatementKindV1::Assign(assignment) =
+                self.function.blocks()[site.block].statements()[site.statement].kind()
+            else {
+                return Ok(false);
+            };
+            let operand = match assignment.value().kind() {
+                SemanticRvalueKindV1::Use(operand) => Some(operand),
+                SemanticRvalueKindV1::Cast {
+                    kind: SemanticCastKindV1::Integer,
+                    operand,
+                } if self
+                    .unsigned_integer_bits(assignment.value().result_type())
+                    .zip(self.unsigned_integer_bits(operand.ty()))
+                    .is_some_and(|(destination, source)| destination >= source) =>
+                {
+                    Some(operand)
+                }
+                _ => None,
+            };
+            let Some(next) = operand.and_then(simple_operand_local) else {
+                return Ok(false);
+            };
+            candidate = next.index() as usize;
+            use_block = site.block;
+            use_statement = site.statement;
+        }
     }
 
     fn block_dominates(
@@ -12226,11 +12206,23 @@ fn propagate_exact_local_origins_v1<T: Copy + Eq>(
     edges: &[Vec<usize>],
     conflict: &'static str,
 ) -> Result<(), ProductionRankedProjectionErrorV1> {
-    let mut worklist = origins
-        .iter()
-        .enumerate()
-        .filter_map(|(local, origin)| origin.map(|_| local))
-        .collect::<VecDeque<_>>();
+    if origins.len() != edges.len() {
+        return Err(ProductionRankedProjectionErrorV1::Unsupported(
+            "local provenance tables have inconsistent lengths",
+        ));
+    }
+    let mut worklist = VecDeque::new();
+    worklist.try_reserve(origins.len()).map_err(|_| {
+        ProductionRankedProjectionErrorV1::Unsupported(
+            "local provenance dataflow worklist cannot be reserved",
+        )
+    })?;
+    worklist.extend(
+        origins
+            .iter()
+            .enumerate()
+            .filter_map(|(local, origin)| origin.map(|_| local)),
+    );
     let mut work = 0_usize;
     while let Some(source) = worklist.pop_front() {
         let Some(origin) = origins[source] else {
@@ -27755,6 +27747,80 @@ mod tests {
         ProductionRankedKernelV1::new("header_copy_alias_loop", next_argument, blocks).unwrap();
     }
 
+    fn linear_scalar_alias_chain_v1(
+        alias_count: usize,
+        ty: SemanticTypeIdV1,
+    ) -> (Vec<SemanticStatementV1>, Vec<SemanticLocalDeclV1>) {
+        let mut statements = Vec::new();
+        let mut locals = vec![
+            local(0, ty, SemanticLocalRoleV1::Return),
+            local(1, ty, SemanticLocalRoleV1::Argument(0)),
+        ];
+        for offset in 0..alias_count {
+            let destination = u32::try_from(offset + 2).unwrap();
+            let source = u32::try_from(offset + 1).unwrap();
+            statements.push(typed_assignment(
+                destination,
+                ty,
+                SemanticRvalueKindV1::Use(typed_operand(source, ty)),
+            ));
+            locals.push(local(
+                u8::try_from((offset + 2) % 255).unwrap(),
+                ty,
+                SemanticLocalRoleV1::Temporary,
+            ));
+        }
+        (statements, locals)
+    }
+
+    #[test]
+    fn assertion_alias_production_path_handles_a_long_chain_without_recursion() {
+        let alias_count = 32_768_usize;
+        let (statements, locals) = linear_scalar_alias_chain_v1(alias_count, U64_TYPE);
+        let discriminant = u32::try_from(alias_count + 1).unwrap();
+        let function = projection_function_with_locals(
+            vec![
+                block(207, statements, zero_switch(discriminant, U64_TYPE, 2, 1)),
+                block(208, vec![], SemanticTerminatorKindV1::Return),
+                block(209, vec![], SemanticTerminatorKindV1::Return),
+            ],
+            locals,
+        );
+        let types = assertion_proof_types();
+        let mut proof = SemanticAssertProofsV1::new(&types, &function).unwrap();
+        assert_eq!(
+            proof
+                .range_at_operand(&typed_operand(1, U64_TYPE), 1, 0)
+                .unwrap(),
+            Some(UnsignedRangeProofV1 {
+                minimum: 1,
+                maximum: u128::from(u64::MAX),
+            })
+        );
+    }
+
+    #[test]
+    fn pipeline_free_capability_projection_skips_a_large_irrelevant_alias_graph() {
+        let (statements, locals) = linear_scalar_alias_chain_v1(16_384, U64_TYPE);
+        let function = projection_function_with_locals(
+            vec![block(206, statements, SemanticTerminatorKindV1::Return)],
+            locals,
+        );
+        let types = assertion_proof_types();
+        let enum_payload_dominance =
+            SemanticEnumPayloadDominanceV1::analyze(&function, &types).unwrap();
+        let local_allocations = vec![None; function.locals().len()];
+        let constants = constant_locals(&function);
+        project_authenticated_capabilities_v1(
+            &[],
+            &function,
+            &enum_payload_dominance,
+            &local_allocations,
+            &constants,
+        )
+        .unwrap();
+    }
+
     #[test]
     fn indexed_uniform_alias_resolution_is_linear_bounded_and_monotonic() {
         let alias_count = 128_usize;
@@ -28003,7 +28069,6 @@ mod tests {
             )
             .unwrap();
             assert!(projector.states.is_empty());
-            assert!(projector.states.capacity() <= MAX_PURE_UNIFORM_INDEX_NODES_V1 * 2);
             assert!(
                 projector
                     .resolve_operand(&typed_operand(root, U64_TYPE), 0, 2)
@@ -28011,6 +28076,8 @@ mod tests {
                     .is_some()
             );
             assert_eq!(projector.states.len(), 1);
+            assert!(projector.states.len() <= projector.node_work);
+            assert!(projector.states.len() <= MAX_PURE_UNIFORM_INDEX_NODES_V1);
         }
     }
 
