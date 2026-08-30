@@ -6857,6 +6857,7 @@ fn project_workgroup_pipeline_effects_v1(
     if pending.is_empty() {
         return Ok(vec![None; function.blocks().len()]);
     }
+    let mut scalar_assertion_proofs = SemanticAssertProofsV1::new(types, function)?;
     for _ in 0..function.locals().len() {
         let mut changed = false;
         for block in function.blocks() {
@@ -7024,6 +7025,7 @@ fn project_workgroup_pipeline_effects_v1(
                 let contract = &pending[owner];
                 let epoch = project_pipeline_scalar_v1(
                     function,
+                    &mut scalar_assertion_proofs,
                     block_index,
                     &call.arguments()[1],
                     constants,
@@ -7050,6 +7052,7 @@ fn project_workgroup_pipeline_effects_v1(
                 let contract = &pending[owner];
                 let epoch = project_pipeline_scalar_v1(
                     function,
+                    &mut scalar_assertion_proofs,
                     block_index,
                     &call.arguments()[1],
                     constants,
@@ -7064,6 +7067,7 @@ fn project_workgroup_pipeline_effects_v1(
                 )?;
                 let index = project_pipeline_scalar_v1(
                     function,
+                    &mut scalar_assertion_proofs,
                     block_index,
                     &call.arguments()[2],
                     constants,
@@ -7138,6 +7142,7 @@ const fn pipeline_event_kind_v1(event: SemanticWorkgroupPipelineEventV1) -> Pipe
 #[allow(clippy::too_many_arguments)]
 fn project_pipeline_scalar_v1(
     function: &SemanticFunctionDeclV1,
+    assertion_proofs: &mut SemanticAssertProofsV1<'_>,
     block_index: usize,
     operand: &SemanticOperandV1,
     constants: &[Option<u64>],
@@ -7171,6 +7176,80 @@ fn project_pipeline_scalar_v1(
                 induction: induction_index,
             });
         }
+    }
+    if tuple_field_operand_local_v1(operand, 0).is_some() {
+        let Some(authenticated) = assertion_proofs.authenticated_checked_binary_value_v1(
+            operand,
+            block_index,
+            function.blocks()[block_index].statements().len(),
+        )?
+        else {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a checked pipeline scalar lacks exact dominating overflow authority",
+            ));
+        };
+        let kind = match authenticated.checked.operation() {
+            SemanticCheckedBinaryOpV1::Add => IndexBinaryKindAttr::Add,
+            SemanticCheckedBinaryOpV1::Multiply => IndexBinaryKindAttr::Multiply,
+            SemanticCheckedBinaryOpV1::Subtract => {
+                return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                    "a checked pipeline scalar uses an unsupported integer operation",
+                ));
+            }
+        };
+        if !visiting.insert(authenticated.local) {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a checked pipeline scalar expression is cyclic",
+            ));
+        }
+        let left = project_pipeline_scalar_v1(
+            function,
+            assertion_proofs,
+            block_index,
+            authenticated.checked.left(),
+            constants,
+            stable_argument_origins,
+            index_values,
+            runtime_index_arguments,
+            next_runtime_argument,
+            uniform_inductions,
+            entry_operations,
+            next_value,
+            visiting,
+        )?;
+        let right = project_pipeline_scalar_v1(
+            function,
+            assertion_proofs,
+            block_index,
+            authenticated.checked.right(),
+            constants,
+            stable_argument_origins,
+            index_values,
+            runtime_index_arguments,
+            next_runtime_argument,
+            uniform_inductions,
+            entry_operations,
+            next_value,
+            visiting,
+        )?;
+        visiting.remove(&authenticated.local);
+        if !assertion_proofs.proves_authenticated_checked_binary_total_for_pipeline_v1(
+            &authenticated,
+            &left,
+            &right,
+            block_index,
+            uniform_inductions,
+        )? {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a checked pipeline scalar is not an exact total unsigned index expression",
+            ));
+        }
+        return Ok(ProjectedPipelineScalarV1::Binary {
+            result: None,
+            kind,
+            left: Box::new(left),
+            right: Box::new(right),
+        });
     }
     let local = raw_operand_place(operand)
         .map(|place| place.local().index() as usize)
@@ -7240,6 +7319,7 @@ fn project_pipeline_scalar_v1(
             operand: source, ..
         } => project_pipeline_scalar_v1(
             function,
+            assertion_proofs,
             block_index,
             source,
             constants,
@@ -7271,6 +7351,7 @@ fn project_pipeline_scalar_v1(
             };
             let left = project_pipeline_scalar_v1(
                 function,
+                assertion_proofs,
                 block_index,
                 left,
                 constants,
@@ -7285,6 +7366,7 @@ fn project_pipeline_scalar_v1(
             )?;
             let right = project_pipeline_scalar_v1(
                 function,
+                assertion_proofs,
                 block_index,
                 right,
                 constants,
@@ -8403,6 +8485,7 @@ fn same_semantic_operand_value_v1(left: &SemanticOperandV1, right: &SemanticOper
 fn source_induction_update_v1<'a>(
     function: &'a SemanticFunctionDeclV1,
     graph: &ProjectedLoopCfgV1,
+    assertion_proofs: &mut SemanticAssertProofsV1<'_>,
     topology: &ProjectedNaturalLoopTopologyV1,
     induction: SemanticLocalIdV1,
     latch_statement: usize,
@@ -8467,27 +8550,22 @@ fn source_induction_update_v1<'a>(
                     "a checked induction result has the wrong value type or definition count",
                 ));
             }
-            let mut definition = None;
-            for (block_index, block) in function.blocks().iter().enumerate() {
-                for (statement_index, statement) in block.statements().iter().enumerate() {
-                    let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
-                        continue;
-                    };
-                    if assignment.destination().projections().is_empty()
-                        && assignment.destination().local() == result_local
-                    {
-                        if definition
-                            .replace((block_index, statement_index, assignment))
-                            .is_some()
-                        {
-                            return Err(ProductionRankedProjectionErrorV1::Incomplete(
-                                "a checked induction result has multiple assignment definitions",
-                            ));
-                        }
-                    }
-                }
-            }
-            let Some((producer_block, producer_statement, definition)) = definition else {
+            let Some(authenticated) = assertion_proofs.authenticated_checked_binary_value_v1(
+                result,
+                topology.latch,
+                latch_statement,
+            )?
+            else {
+                return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                    "a checked induction overflow assertion does not authenticate its exact Add result and success edge",
+                ));
+            };
+            let producer_block = authenticated.definition.block;
+            let producer_statement = authenticated.definition.statement;
+            let SemanticStatementKindV1::Assign(definition) = function.blocks()[producer_block]
+                .statements()[producer_statement]
+                .kind()
+            else {
                 return Err(ProductionRankedProjectionErrorV1::Incomplete(
                     "a checked induction result has no assignment definition",
                 ));
@@ -8515,36 +8593,15 @@ fn source_induction_update_v1<'a>(
                     "a checked induction latch does not have one exact producer predecessor",
                 ));
             }
-            let SemanticTerminatorKindV1::Assert {
-                condition,
-                expected,
-                message,
-                target,
-                unwind,
-            } = function.blocks()[producer_block].terminator().kind()
+            let SemanticTerminatorKindV1::Assert { target, .. } =
+                function.blocks()[producer_block].terminator().kind()
             else {
                 return Err(ProductionRankedProjectionErrorV1::Incomplete(
                     "a checked induction producer does not terminate with an assertion",
                 ));
             };
-            let SemanticAssertMessageV1::Overflow {
-                operation,
-                left: message_left,
-                right: message_right,
-            } = message
-            else {
-                return Err(ProductionRankedProjectionErrorV1::Incomplete(
-                    "a checked induction assertion is not an overflow assertion",
-                ));
-            };
-            if *expected
-                || *operation != SemanticBinaryOpV1::Add
-                || !same_semantic_operand_value_v1(message_left, checked.left())
-                || !same_semantic_operand_value_v1(message_right, checked.right())
-                || tuple_field_operand_local_v1(condition, 1) != Some(result_local)
-                || target.role() != SemanticEdgeRoleV1::AssertSuccess
+            if authenticated.assertion_block != producer_block
                 || target.target().index() as usize != topology.latch
-                || !matches!(unwind, SemanticUnwindActionV1::Unreachable)
             {
                 return Err(ProductionRankedProjectionErrorV1::Incomplete(
                     "a checked induction overflow assertion does not authenticate its exact Add result and success edge",
@@ -8705,6 +8762,7 @@ fn project_uniform_inductions_v1(
                 let (update, candidate) = source_induction_update_v1(
                     function,
                     &graph,
+                    &mut semantic_ranges,
                     &topology,
                     induction,
                     statement_index,
@@ -8967,6 +9025,7 @@ fn reconcile_source_progress_and_emit_unsigned_casts_v1(
         let (replayed_update, replayed_step) = source_induction_update_v1(
             function,
             &graph,
+            &mut semantic_ranges,
             &topology,
             source.induction,
             source.latch_statement,
@@ -9317,6 +9376,14 @@ struct ScalarAssignmentSiteV1 {
     statement: usize,
 }
 
+#[derive(Clone, Debug)]
+struct AuthenticatedCheckedBinaryValueV1 {
+    local: usize,
+    definition: ScalarAssignmentSiteV1,
+    assertion_block: usize,
+    checked: SemanticCheckedBinaryRvalueV1,
+}
+
 struct AssertionDefinitionInventoryV1 {
     counts: Vec<u8>,
     blocks: Vec<Vec<usize>>,
@@ -9332,6 +9399,7 @@ struct SemanticAssertProofsV1<'a> {
     block_definitions: Vec<Vec<usize>>,
     address_escaped: Vec<bool>,
     assignments: Vec<Option<ScalarAssignmentSiteV1>>,
+    checked_assertion_blocks: Vec<Vec<usize>>,
     dominance: HashMap<(usize, usize), bool>,
     zero_exclusion: HashMap<(usize, usize), bool>,
     work: usize,
@@ -9344,6 +9412,27 @@ impl<'a> SemanticAssertProofsV1<'a> {
     ) -> Result<Self, ProductionRankedProjectionErrorV1> {
         let graph = projected_loop_cfg_graph_v1(function)?;
         let inventory = assertion_definition_inventory(function)?;
+        let mut checked_assertion_blocks = vec![Vec::new(); function.locals().len()];
+        for (block_index, block) in function.blocks().iter().enumerate() {
+            let SemanticTerminatorKindV1::Assert { condition, .. } = block.terminator().kind()
+            else {
+                continue;
+            };
+            let Some(local) = tuple_field_operand_local_v1(condition, 1) else {
+                continue;
+            };
+            let Some(blocks) = checked_assertion_blocks.get_mut(local.index() as usize) else {
+                return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                    "a checked arithmetic assertion is outside the semantic local table",
+                ));
+            };
+            blocks.try_reserve(1).map_err(|_| {
+                ProductionRankedProjectionErrorV1::Unsupported(
+                    "checked arithmetic assertion storage cannot be reserved",
+                )
+            })?;
+            blocks.push(block_index);
+        }
         Ok(Self {
             types,
             function,
@@ -9352,6 +9441,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
             block_definitions: inventory.blocks,
             address_escaped: inventory.address_escaped,
             assignments: inventory.assignments,
+            checked_assertion_blocks,
             dominance: HashMap::new(),
             zero_exclusion: HashMap::new(),
             work: 0,
@@ -9461,6 +9551,208 @@ impl<'a> SemanticAssertProofsV1<'a> {
             self.range_of_operand(checked.right(), site.block, site.statement, &mut visiting)?;
         let maximum = self.scalar_unsigned_maximum(checked.left().ty());
         Ok(Self::range_of_binary(checked_operation, left, right, maximum)?.is_some())
+    }
+
+    fn authenticated_checked_binary_value_v1(
+        &mut self,
+        operand: &SemanticOperandV1,
+        use_block: usize,
+        use_statement: usize,
+    ) -> Result<Option<AuthenticatedCheckedBinaryValueV1>, ProductionRankedProjectionErrorV1> {
+        let Some(result_local) = tuple_field_operand_local_v1(operand, 0) else {
+            return Ok(None);
+        };
+        let local = result_local.index() as usize;
+        if self.definition_counts.get(local).copied() != Some(1)
+            || self.address_escaped.get(local).copied() != Some(false)
+        {
+            return Ok(None);
+        }
+        let Some(definition) = self.assignments.get(local).copied().flatten() else {
+            return Ok(None);
+        };
+        if !self.assignment_dominates_use(definition, use_block, use_statement)? {
+            return Ok(None);
+        }
+        let SemanticStatementKindV1::Assign(assignment) = self.function.blocks()
+            [definition.block]
+            .statements()[definition.statement]
+            .kind()
+        else {
+            return Ok(None);
+        };
+        let SemanticRvalueKindV1::CheckedBinary(checked) = assignment.value().kind() else {
+            return Ok(None);
+        };
+        if checked.left().ty() != operand.ty() || checked.right().ty() != operand.ty() {
+            return Ok(None);
+        }
+        let checked_operation = match checked.operation() {
+            SemanticCheckedBinaryOpV1::Add => SemanticBinaryOpV1::Add,
+            SemanticCheckedBinaryOpV1::Subtract => SemanticBinaryOpV1::Subtract,
+            SemanticCheckedBinaryOpV1::Multiply => SemanticBinaryOpV1::Multiply,
+        };
+        let assertion_count = self
+            .checked_assertion_blocks
+            .get(local)
+            .map(Vec::len)
+            .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+                "a checked arithmetic result is outside the assertion table",
+            ))?;
+        for assertion_index in 0..assertion_count {
+            self.charge(1)?;
+            let assertion_block = self.checked_assertion_blocks[local][assertion_index];
+            let SemanticTerminatorKindV1::Assert {
+                condition,
+                expected,
+                message,
+                target,
+                unwind,
+            } = self.function.blocks()[assertion_block].terminator().kind()
+            else {
+                unreachable!("indexed checked arithmetic assertion changed kind")
+            };
+            let exact_message = matches!(
+                message,
+                SemanticAssertMessageV1::Overflow { operation, left, right }
+                    if *operation == checked_operation
+                        && same_semantic_operand_value_v1(left, checked.left())
+                        && same_semantic_operand_value_v1(right, checked.right())
+            );
+            if tuple_field_operand_local_v1(condition, 1) != Some(result_local)
+                || *expected
+                || !exact_message
+                || target.role() != SemanticEdgeRoleV1::AssertSuccess
+                || !matches!(unwind, SemanticUnwindActionV1::Unreachable)
+            {
+                continue;
+            }
+            if !self.assignment_dominates_use(
+                definition,
+                assertion_block,
+                self.function.blocks()[assertion_block].statements().len(),
+            )? {
+                continue;
+            }
+            let success = target.target().index() as usize;
+            let assertion_dominates = assertion_block != use_block
+                && self.block_dominates(assertion_block, use_block)?;
+            let success_dominates =
+                success == use_block || self.block_dominates(success, use_block)?;
+            if assertion_dominates && success_dominates {
+                return Ok(Some(AuthenticatedCheckedBinaryValueV1 {
+                    local,
+                    definition,
+                    assertion_block,
+                    checked: checked.clone(),
+                }));
+            }
+        }
+        Ok(None)
+    }
+
+    fn proves_authenticated_checked_binary_total_v1(
+        &mut self,
+        value: &AuthenticatedCheckedBinaryValueV1,
+    ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+        let SemanticTerminatorKindV1::Assert {
+            condition,
+            expected,
+            message,
+            ..
+        } = self.function.blocks()[value.assertion_block]
+            .terminator()
+            .kind()
+        else {
+            unreachable!("authenticated checked arithmetic assertion changed kind")
+        };
+        self.proves_checked_overflow_assert_v1(
+            condition,
+            *expected,
+            message,
+            value.assertion_block,
+        )
+    }
+
+    fn proves_authenticated_checked_binary_total_for_pipeline_v1(
+        &mut self,
+        value: &AuthenticatedCheckedBinaryValueV1,
+        projected_left: &ProjectedPipelineScalarV1,
+        projected_right: &ProjectedPipelineScalarV1,
+        use_block: usize,
+        uniform_inductions: &[ProjectedUniformInductionV1],
+    ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+        if self.proves_authenticated_checked_binary_total_v1(value)? {
+            return Ok(true);
+        }
+        let left = self.pipeline_operand_range_v1(
+            value.checked.left(),
+            projected_left,
+            value.definition,
+            use_block,
+            uniform_inductions,
+        )?;
+        let right = self.pipeline_operand_range_v1(
+            value.checked.right(),
+            projected_right,
+            value.definition,
+            use_block,
+            uniform_inductions,
+        )?;
+        let operation = match value.checked.operation() {
+            SemanticCheckedBinaryOpV1::Add => SemanticBinaryOpV1::Add,
+            SemanticCheckedBinaryOpV1::Subtract => SemanticBinaryOpV1::Subtract,
+            SemanticCheckedBinaryOpV1::Multiply => SemanticBinaryOpV1::Multiply,
+        };
+        Ok(Self::range_of_binary(
+            operation,
+            left,
+            right,
+            self.scalar_unsigned_maximum(value.checked.left().ty()),
+        )?
+        .is_some())
+    }
+
+    fn pipeline_operand_range_v1(
+        &mut self,
+        operand: &SemanticOperandV1,
+        projected: &ProjectedPipelineScalarV1,
+        definition: ScalarAssignmentSiteV1,
+        use_block: usize,
+        uniform_inductions: &[ProjectedUniformInductionV1],
+    ) -> Result<Option<UnsignedRangeProofV1>, ProductionRankedProjectionErrorV1> {
+        if let ProjectedPipelineScalarV1::Induction { induction } = projected {
+            let Some(induction) = uniform_inductions.get(*induction) else {
+                return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                    "a checked pipeline scalar references a stale uniform induction",
+                ));
+            };
+            if !(induction.contains_block(use_block) || induction.header == use_block) {
+                return Ok(None);
+            }
+            let Some(type_maximum) = self.scalar_unsigned_maximum(operand.ty()) else {
+                return Ok(None);
+            };
+            let Some(bound) = self.range_at_operand(
+                &induction.source_progress.bound_operand,
+                induction.header,
+                induction.source_progress.header_statement,
+            )?
+            else {
+                return Ok(None);
+            };
+            let Some(maximum) = bound.maximum.checked_sub(1) else {
+                return Ok(None);
+            };
+            if maximum > type_maximum {
+                return Ok(None);
+            }
+            return Ok(Some(UnsignedRangeProofV1 {
+                minimum: 0,
+                maximum,
+            }));
+        }
+        self.range_at_operand(operand, definition.block, definition.statement)
     }
 
     fn range_at_operand(
@@ -9634,23 +9926,25 @@ impl<'a> SemanticAssertProofsV1<'a> {
                 Some(UnsignedRangeProofV1 { minimum, maximum })
             }
             Some(1) => {
-                let Some(site) = self.assignments.get(local).copied().flatten() else {
-                    visiting.remove(&local);
-                    return Ok(None);
-                };
-                if !self.assignment_dominates_use(site, use_block, use_statement)? {
-                    visiting.remove(&local);
-                    return Ok(None);
+                if let Some(site) = self.assignments.get(local).copied().flatten() {
+                    if self.assignment_dominates_use(site, use_block, use_statement)? {
+                        let SemanticStatementKindV1::Assign(assignment) = self.function.blocks()
+                            [site.block]
+                            .statements()[site.statement]
+                            .kind()
+                        else {
+                            visiting.remove(&local);
+                            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                                "an indexed assertion proof assignment changed semantic kind",
+                            ));
+                        };
+                        self.range_of_rvalue(assignment.value(), site, visiting)?
+                    } else {
+                        None
+                    }
+                } else {
+                    None
                 }
-                let SemanticStatementKindV1::Assign(assignment) =
-                    self.function.blocks()[site.block].statements()[site.statement].kind()
-                else {
-                    visiting.remove(&local);
-                    return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                        "an indexed assertion proof assignment changed semantic kind",
-                    ));
-                };
-                self.range_of_rvalue(assignment.value(), site, visiting)?
             }
             Some(_) | None => None,
         };
@@ -9663,7 +9957,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
             maximum,
         }));
         let zero_is_excluded = self.zero_excluding_edge_dominates(local, use_block)?;
-        let result = match (result, zero_is_excluded) {
+        let mut result = match (result, zero_is_excluded) {
             (Some(mut range), true) => {
                 range.minimum = range.minimum.max(1);
                 Some(range)
@@ -9674,6 +9968,23 @@ impl<'a> SemanticAssertProofsV1<'a> {
             }),
             (result, false) => result,
         };
+        if let Some(upper_bound) =
+            self.strict_unsigned_upper_bound_edge_dominates(local, use_block, visiting)?
+        {
+            result = Some(match result {
+                Some(mut range) => {
+                    range.maximum = range.maximum.min(upper_bound);
+                    range
+                }
+                None => UnsignedRangeProofV1 {
+                    minimum: 0,
+                    maximum: upper_bound,
+                },
+            });
+            if result.is_some_and(|range| range.minimum > range.maximum) {
+                result = None;
+            }
+        }
         visiting.remove(&local);
         Ok(result)
     }
@@ -9759,12 +10070,10 @@ impl<'a> SemanticAssertProofsV1<'a> {
                 minimum: left.minimum / right.maximum,
                 maximum: left.maximum / right.minimum,
             }),
-            SemanticBinaryOpV1::Remainder
-                if right.is_exact(right.minimum) && right.minimum != 0 =>
-            {
+            SemanticBinaryOpV1::Remainder if right.minimum != 0 => {
                 Some(UnsignedRangeProofV1 {
                     minimum: 0,
-                    maximum: left.maximum.min(right.minimum - 1),
+                    maximum: left.maximum.min(right.maximum - 1),
                 })
             }
             SemanticBinaryOpV1::Equal => Some(
@@ -9957,6 +10266,149 @@ impl<'a> SemanticAssertProofsV1<'a> {
         let result = self.edge_set_dominates(&excluding_edges, use_block)?;
         insert_assertion_proof_cache(&mut self.zero_exclusion, (local, use_block), result)?;
         Ok(result)
+    }
+
+    fn strict_unsigned_upper_bound_edge_dominates(
+        &mut self,
+        local: usize,
+        use_block: usize,
+        range_visiting: &mut HashSet<usize>,
+    ) -> Result<Option<u128>, ProductionRankedProjectionErrorV1> {
+        let block_count = self.function.blocks().len();
+        let can_reach_use = self.blocks_reaching(use_block)?;
+        let mut alias_visiting = HashSet::new();
+        alias_visiting
+            .try_reserve(self.function.locals().len())
+            .map_err(|_| {
+                ProductionRankedProjectionErrorV1::Unsupported(
+                    "assertion proof upper-bound alias storage cannot be reserved",
+                )
+            })?;
+        let mut stability_visited = Vec::new();
+        stability_visited
+            .try_reserve_exact(block_count)
+            .map_err(|_| {
+                ProductionRankedProjectionErrorV1::Unsupported(
+                    "assertion proof upper-bound stability storage cannot be reserved",
+                )
+            })?;
+        stability_visited.resize(block_count, 0_usize);
+        let mut stability_pending = VecDeque::new();
+        stability_pending.try_reserve(block_count).map_err(|_| {
+            ProductionRankedProjectionErrorV1::Unsupported(
+                "assertion proof upper-bound stability worklist cannot be reserved",
+            )
+        })?;
+        let mut stability_generation = 0_usize;
+        let mut proven_upper_bound = None;
+        for (switch_block, block) in self.function.blocks().iter().enumerate() {
+            self.charge(1)?;
+            let SemanticTerminatorKindV1::SwitchInt {
+                discriminant,
+                targets,
+            } = block.terminator().kind()
+            else {
+                continue;
+            };
+            if targets.values().len() != 1 || targets.values()[0].value() != 0 {
+                continue;
+            }
+            let false_target = targets.values()[0].edge().target().index() as usize;
+            let true_target = targets.otherwise().target().index() as usize;
+            if false_target == true_target {
+                continue;
+            }
+            let Some(condition_local) =
+                simple_operand_local(discriminant).map(|value| value.index() as usize)
+            else {
+                continue;
+            };
+            if self.definition_counts.get(condition_local).copied() != Some(1) {
+                continue;
+            }
+            let Some(site) = self.assignments.get(condition_local).copied().flatten() else {
+                continue;
+            };
+            if site.block != switch_block
+                || !self.assignment_dominates_use(
+                    site,
+                    switch_block,
+                    block.statements().len(),
+                )?
+            {
+                continue;
+            }
+            let SemanticStatementKindV1::Assign(assignment) =
+                self.function.blocks()[site.block].statements()[site.statement].kind()
+            else {
+                continue;
+            };
+            let SemanticRvalueKindV1::Binary {
+                operation: SemanticBinaryOpV1::LessThan,
+                left,
+                right,
+            } = assignment.value().kind()
+            else {
+                continue;
+            };
+            let Some(left_local) =
+                simple_operand_local(left).map(|value| value.index() as usize)
+            else {
+                continue;
+            };
+            alias_visiting.clear();
+            if !self.local_is_value_preserving_alias_of(
+                left_local,
+                local,
+                site.block,
+                site.statement,
+                &mut alias_visiting,
+            )? || self.block_defines_local(switch_block, local)
+            {
+                continue;
+            }
+            let Some(bound) = self.range_of_operand(
+                right,
+                site.block,
+                site.statement,
+                range_visiting,
+            )?
+            else {
+                continue;
+            };
+            let Some(candidate) = bound.maximum.checked_sub(1) else {
+                continue;
+            };
+            stability_generation = stability_generation.checked_add(1).ok_or(
+                ProductionRankedProjectionErrorV1::Unsupported(
+                    "assertion proof upper-bound stability generation overflowed",
+                ),
+            )?;
+            if !self.local_is_stable_between_edge_and_use(
+                local,
+                true_target,
+                use_block,
+                &can_reach_use,
+                &mut stability_visited,
+                &mut stability_pending,
+                stability_generation,
+            )? {
+                continue;
+            }
+            let mut edge = HashSet::new();
+            edge.try_reserve(1).map_err(|_| {
+                ProductionRankedProjectionErrorV1::Unsupported(
+                    "assertion proof upper-bound edge storage cannot be reserved",
+                )
+            })?;
+            edge.insert((switch_block, true_target));
+            if self.edge_set_dominates(&edge, use_block)? {
+                proven_upper_bound = Some(
+                    proven_upper_bound.map_or(candidate, |current: u128| current.min(candidate)),
+                );
+            }
+        }
+        Ok(proven_upper_bound)
     }
 
     fn blocks_reaching(
@@ -10571,7 +11023,6 @@ struct PureUniformIndexProjectorV1<'a> {
     operations: &'a mut Vec<ProductionRankedOperationV1>,
     next_value: &'a mut u32,
     definitions: Vec<Option<(usize, usize)>>,
-    checked_assertion_blocks: Vec<Vec<usize>>,
     assertion_proofs: SemanticAssertProofsV1<'a>,
     states: Vec<u8>,
     summaries: Vec<Option<PureUniformIndexValueV1>>,
@@ -10604,7 +11055,6 @@ impl<'a> PureUniformIndexProjectorV1<'a> {
             ));
         }
         let mut definitions = vec![None; local_count];
-        let mut checked_assertion_blocks = vec![Vec::new(); local_count];
         for (block, semantic_block) in function.blocks().iter().enumerate() {
             for (statement, semantic_statement) in semantic_block.statements().iter().enumerate() {
                 let SemanticStatementKindV1::Assign(assignment) = semantic_statement.kind() else {
@@ -10623,25 +11073,6 @@ impl<'a> PureUniformIndexProjectorV1<'a> {
                     *slot = Some((block, statement));
                 }
             }
-            let SemanticTerminatorKindV1::Assert { condition, .. } =
-                semantic_block.terminator().kind()
-            else {
-                continue;
-            };
-            let Some(local) = tuple_field_operand_local_v1(condition, 1) else {
-                continue;
-            };
-            let Some(blocks) = checked_assertion_blocks.get_mut(local.index() as usize) else {
-                return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                    "a checked arithmetic assertion is outside the semantic local table",
-                ));
-            };
-            blocks.try_reserve(1).map_err(|_| {
-                ProductionRankedProjectionErrorV1::Unsupported(
-                    "checked arithmetic assertion storage cannot be reserved",
-                )
-            })?;
-            blocks.push(block);
         }
         let assertion_proofs = SemanticAssertProofsV1::new(types, function)?;
         Ok(Self {
@@ -10656,7 +11087,6 @@ impl<'a> PureUniformIndexProjectorV1<'a> {
             operations,
             next_value,
             definitions,
-            checked_assertion_blocks,
             assertion_proofs,
             states: vec![0; local_count],
             summaries: vec![None; local_count],
@@ -10782,11 +11212,11 @@ impl<'a> PureUniformIndexProjectorV1<'a> {
                 self.constant(value, maximum).map(Some)
             }
             SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place) => {
-                if let Some(local) = tuple_field_operand_local_v1(operand, 0) {
+                if tuple_field_operand_local_v1(operand, 0).is_some() {
                     return self.resolve_checked_result_value(
-                        local.index() as usize,
-                        operand.ty(),
+                        operand,
                         use_block,
+                        use_statement,
                     );
                 }
                 if !place.projections().is_empty() {
@@ -10860,50 +11290,49 @@ impl<'a> PureUniformIndexProjectorV1<'a> {
 
     fn resolve_checked_result_value(
         &mut self,
-        local: usize,
-        result_type: SemanticTypeIdV1,
+        operand: &SemanticOperandV1,
         use_block: usize,
+        use_statement: usize,
     ) -> Result<Option<PureUniformIndexValueV1>, ProductionRankedProjectionErrorV1> {
-        let Some(result_maximum) = self.unsigned_maximum(result_type) else {
+        let Some(result_maximum) = self.unsigned_maximum(operand.ty()) else {
             return Ok(None);
         };
-        if self.local_definitions.get(local).copied() != Some(1)
-            || self.address_escaped.get(local).copied() != Some(false)
+        let Some(authenticated) = self
+            .assertion_proofs
+            .authenticated_checked_binary_value_v1(operand, use_block, use_statement)?
+        else {
+            return Ok(None);
+        };
+        if !self
+            .assertion_proofs
+            .proves_authenticated_checked_binary_total_v1(&authenticated)?
         {
             return Ok(None);
         }
-        let Some((definition_block, definition_statement)) = self.definitions[local] else {
-            return Ok(None);
-        };
-        let statement = self.function.blocks()[definition_block].statements()[definition_statement]
-            .kind()
-            .clone();
-        let SemanticStatementKindV1::Assign(assignment) = statement else {
-            unreachable!("indexed checked arithmetic assignment changed kind")
-        };
-        let SemanticRvalueKindV1::CheckedBinary(checked) = assignment.value().kind().clone() else {
-            return Ok(None);
-        };
-        if checked.left().ty() != result_type || checked.right().ty() != result_type {
-            return Ok(None);
-        }
-        let kind = match checked.operation() {
+        let local = authenticated.local;
+        let definition_block = authenticated.definition.block;
+        let definition_statement = authenticated.definition.statement;
+        let kind = match authenticated.checked.operation() {
             SemanticCheckedBinaryOpV1::Add => IndexBinaryKindAttr::Add,
             SemanticCheckedBinaryOpV1::Multiply => IndexBinaryKindAttr::Multiply,
             SemanticCheckedBinaryOpV1::Subtract => return Ok(None),
         };
-        if !self.checked_success_dominates_use(local, &checked, use_block)? {
-            return Ok(None);
-        }
         match self.states[local] {
             2 => return Ok(self.summaries[local]),
             1 => return Ok(None),
             _ => {}
         }
         self.states[local] = 1;
-        let left = self.resolve_operand(checked.left(), definition_block, definition_statement)?;
-        let right =
-            self.resolve_operand(checked.right(), definition_block, definition_statement)?;
+        let left = self.resolve_operand(
+            authenticated.checked.left(),
+            definition_block,
+            definition_statement,
+        )?;
+        let right = self.resolve_operand(
+            authenticated.checked.right(),
+            definition_block,
+            definition_statement,
+        )?;
         let summary = match (left, right) {
             (Some(left), Some(right)) => {
                 self.project_total_binary(kind, left, right, result_maximum)?
@@ -10913,73 +11342,6 @@ impl<'a> PureUniformIndexProjectorV1<'a> {
         self.states[local] = 2;
         self.summaries[local] = summary;
         Ok(summary)
-    }
-
-    fn checked_success_dominates_use(
-        &mut self,
-        local: usize,
-        checked: &SemanticCheckedBinaryRvalueV1,
-        use_block: usize,
-    ) -> Result<bool, ProductionRankedProjectionErrorV1> {
-        let assertion_count = self
-            .checked_assertion_blocks
-            .get(local)
-            .map(Vec::len)
-            .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
-                "a checked arithmetic result is outside the assertion table",
-            ))?;
-        for assertion_index in 0..assertion_count {
-            self.charge_node()?;
-            let block = self.checked_assertion_blocks[local][assertion_index];
-            let SemanticTerminatorKindV1::Assert {
-                condition,
-                expected,
-                message,
-                target,
-                unwind,
-            } = self.function.blocks()[block].terminator().kind()
-            else {
-                unreachable!("indexed checked arithmetic assertion changed kind")
-            };
-            let condition = condition.clone();
-            let expected = *expected;
-            let message = message.clone();
-            let target = target.clone();
-            let unwind = unwind.clone();
-            let checked_operation = match checked.operation() {
-                SemanticCheckedBinaryOpV1::Add => SemanticBinaryOpV1::Add,
-                SemanticCheckedBinaryOpV1::Subtract => SemanticBinaryOpV1::Subtract,
-                SemanticCheckedBinaryOpV1::Multiply => SemanticBinaryOpV1::Multiply,
-            };
-            let exact_message = matches!(
-                &message,
-                SemanticAssertMessageV1::Overflow { operation, left, right }
-                    if *operation == checked_operation
-                        && same_semantic_operand_value_v1(left, checked.left())
-                        && same_semantic_operand_value_v1(right, checked.right())
-            );
-            if tuple_field_operand_local_v1(&condition, 1).map(|asserted| asserted.index() as usize)
-                != Some(local)
-                || expected
-                || !exact_message
-                || target.role() != SemanticEdgeRoleV1::AssertSuccess
-                || !matches!(unwind, SemanticUnwindActionV1::Unreachable)
-                || !self
-                    .assertion_proofs
-                    .proves_checked_overflow_assert_v1(&condition, expected, &message, block)?
-            {
-                continue;
-            }
-            let success = target.target().index() as usize;
-            let assertion_dominates =
-                block != use_block && self.block_dominates(block, use_block)?;
-            let success_dominates =
-                success == use_block || self.block_dominates(success, use_block)?;
-            if assertion_dominates && success_dominates {
-                return Ok(true);
-            }
-        }
-        Ok(false)
     }
 
     fn project_total_binary(
@@ -23380,6 +23742,44 @@ mod tests {
     }
 
     #[test]
+    fn unsigned_remainder_range_accepts_a_variable_nonzero_divisor() {
+        let left = UnsignedRangeProofV1 {
+            minimum: 0,
+            maximum: 100,
+        };
+        let right = UnsignedRangeProofV1 {
+            minimum: 2,
+            maximum: 9,
+        };
+        assert_eq!(
+            SemanticAssertProofsV1::<'_>::range_of_binary(
+                SemanticBinaryOpV1::Remainder,
+                Some(left),
+                Some(right),
+                Some(u128::from(u64::MAX)),
+            )
+            .unwrap(),
+            Some(UnsignedRangeProofV1 {
+                minimum: 0,
+                maximum: 8,
+            })
+        );
+        assert_eq!(
+            SemanticAssertProofsV1::<'_>::range_of_binary(
+                SemanticBinaryOpV1::Remainder,
+                Some(left),
+                Some(UnsignedRangeProofV1 {
+                    minimum: 0,
+                    maximum: 9,
+                }),
+                Some(u128::from(u64::MAX)),
+            )
+            .unwrap(),
+            None
+        );
+    }
+
+    #[test]
     fn assertion_proof_cache_is_bounded_and_overwrites_without_growth() {
         let mut cache = HashMap::new();
         insert_assertion_proof_cache_with_limit(&mut cache, (0, 0), true, 2).unwrap();
@@ -25636,8 +26036,8 @@ mod tests {
             }
         );
         assert!(
-            !SemanticAssertProofsV1::analyze(&types, &function).unwrap()[3],
-            "the generic scalar range proof must not invent the loop guard fact",
+            SemanticAssertProofsV1::analyze(&types, &function).unwrap()[3],
+            "the generic scalar range proof must retain the exact stable loop guard fact",
         );
 
         let (blocks, _) = build_ranked_cfg(
@@ -25741,6 +26141,106 @@ mod tests {
                 "a uniform induction bound is not an exact total unsigned index expression",
             );
         }
+    }
+
+    fn project_checked_bound_as_pipeline_scalar(
+        kind: CheckedBoundKind,
+        field: u32,
+    ) -> Result<ProjectedPipelineScalarV1, ProductionRankedProjectionErrorV1> {
+        let (function, types) = checked_derived_uniform_induction_bound_function(kind);
+        let field_type = if field == 0 { U64_TYPE } else { BOOL_TYPE };
+        let operand = SemanticOperandV1::Copy(
+            SemanticPlaceV1::new(
+                SemanticLocalIdV1::from_index(5),
+                vec![
+                    SemanticProjectionV1::new(
+                        SemanticProjectionKindV1::Field(field),
+                        field_type,
+                    )
+                    .unwrap(),
+                ],
+                field_type,
+            )
+            .unwrap(),
+        );
+        let constants = constant_locals(&function);
+        let origins = local_stable_argument_origins(&types, &function).unwrap();
+        let mut runtime_arguments = vec![None; function.locals().len()];
+        let mut next_argument = 1;
+        let mut operations = Vec::new();
+        let mut next_value = 0;
+        let mut proofs = SemanticAssertProofsV1::new(&types, &function)?;
+        project_pipeline_scalar_v1(
+            &function,
+            &mut proofs,
+            1,
+            &operand,
+            &constants,
+            &origins,
+            &vec![None; function.locals().len()],
+            &mut runtime_arguments,
+            &mut next_argument,
+            &[],
+            &mut operations,
+            &mut next_value,
+            &mut HashSet::new(),
+        )
+    }
+
+    #[test]
+    fn checked_pipeline_scalar_requires_the_same_exact_overflow_authority() {
+        assert!(matches!(
+            project_checked_bound_as_pipeline_scalar(CheckedBoundKind::Exact, 0).unwrap(),
+            ProjectedPipelineScalarV1::Binary {
+                kind: IndexBinaryKindAttr::Add,
+                ..
+            }
+        ));
+        for kind in [
+            CheckedBoundKind::MissingAssertion,
+            CheckedBoundKind::StaleResultAssertion,
+            CheckedBoundKind::WrongOperation,
+            CheckedBoundKind::ExpectedOverflow,
+            CheckedBoundKind::ReachableUnwind,
+            CheckedBoundKind::NonDominatingAssertion,
+            CheckedBoundKind::Overflowable,
+            CheckedBoundKind::AddressEscaped,
+        ] {
+            assert!(matches!(
+                project_checked_bound_as_pipeline_scalar(kind, 0),
+                Err(ProductionRankedProjectionErrorV1::Incomplete(_))
+            ));
+        }
+        assert!(matches!(
+            project_checked_bound_as_pipeline_scalar(CheckedBoundKind::Exact, 1),
+            Err(ProductionRankedProjectionErrorV1::Incomplete(_))
+        ));
+    }
+
+    #[test]
+    fn strict_loop_guard_range_applies_only_on_its_stable_true_edge() {
+        let types = projection_types();
+        let function = multi_block_induction_function(
+            InductionCfgShape::Chain,
+            SemanticLocalRoleV1::Argument(0),
+            1,
+        );
+        let induction = typed_operand(1, SCALAR_TYPE);
+        let mut proof = SemanticAssertProofsV1::new(&types, &function).unwrap();
+        assert_eq!(
+            proof.range_at_operand(&induction, 2, 0).unwrap(),
+            Some(UnsignedRangeProofV1 {
+                minimum: 0,
+                maximum: u128::from(u32::MAX - 1),
+            })
+        );
+        assert_eq!(
+            proof.range_at_operand(&induction, 5, 0).unwrap(),
+            Some(UnsignedRangeProofV1 {
+                minimum: 0,
+                maximum: u128::from(u32::MAX),
+            })
+        );
     }
 
     #[test]
