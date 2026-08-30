@@ -46,7 +46,17 @@ aggregate MIR-to-live-PLIRON execution: a V4 association inside the frozen V3
 capsule binds all five compiler stages, and Worker V3 independently reimports
 the receipt, cross-checks middle-end V5, and retains it beside signed compiler
 currentness through the HSA lifecycle. This proves custody and signature
-consistency, not LLVM/final-machine refinement or runtime authority.
+consistency, not LLVM/final-machine refinement or runtime authority. The
+2026-08-29 continuation closes exact LLVM-to-HSACO stage custody: the Worker
+records linked and optimized modules, the generated object, ordered native
+inputs, canonical path-independent in-process LLD arguments, and final HSACO;
+Rust independently reconstructs the evidence identity, request-derived order,
+linker policy, and final payload relation, then requires every measured stage
+to agree across strict Worker V3 replay. A real gfx942 run produced and
+independently inspected one scalar-GEMM COV6 artifact through upstream LLVM
+22.1.8. This remains
+measured derivation evidence, not a semantic-refinement or runtime-authority
+claim.
 Compiler-execution authority now has signed request and receipt
 records plus separate crash-safe issuer and Worker journals. The Worker journal
 verifies and durably reacquires the exact request and receipt before the issuer
@@ -496,9 +506,14 @@ earlier authority transition.
    or establish termination. Production admission
    now has exact deterministic target-KIR-to-LLVM replay from the neutral KIR
    receipt, including byte equality with the retained LLVM. Production
-   admission must still establish formal KIR-to-LLVM semantic preservation and
-   LLVM-to-machine semantic refinement, then bind the machine receipt into
-   Worker V3. Hardware success remains an independent evidence class.
+   admission now also retains exact linked-module, optimized-module,
+   generated-object, ordered native-input, path-independent LLD-invocation, and
+   final-HSACO identities, independently recomputes the evidence identity and
+   request/output-derived relations, and requires bootstrap/replay equality for
+   every measured stage. It must still establish formal KIR-to-LLVM semantic
+   preservation and LLVM-to-machine semantic
+   refinement, then bind the machine receipt into Worker V3 runtime authority.
+   Hardware success remains an independent evidence class.
 9. **Implemented bounded foundation: alpha/zeta source proofs and proof
    records.** Mechanical source-model proofs, negative mutations, freshness,
    and executable-evidence records exist. They do not give Rust source an

@@ -654,6 +654,17 @@ Safe ownership of resources used by asynchronous copies is documented in
   establishes exact deterministic KIR-to-LLVM derivation and custody, not a
   formal semantic-preservation proof, LLVM-to-machine refinement, or authority
   to remove the guard, publish, load, or launch.
+- The same production Worker exchange now retains exact downstream derivation
+  custody from linked LLVM module through optimized LLVM module, generated
+  object, ordered native-link inputs, the path-independent in-process LLD
+  invocation, and final HSACO. Rust independently decodes and recomputes the
+  bounded response evidence, exact request-relocatable order, canonical linker
+  policy, and final payload identity; strict Worker V3 replay requires the
+  bootstrap and replay derivations to agree. Mutation, truncation, trailing
+  bytes, reordered inputs, a resealed false linker identity, and a foreign
+  HSACO endpoint fail closed. This is measured byte and policy custody, not a
+  formal LLVM-to-machine semantic-refinement proof or publication, load, or
+  launch authority.
 - `fe2o3-core` provides HIP-backed contexts, streams, device buffers, pinned
   host buffers, events, synchronous transfers, and event-backed borrowed and
   owned asynchronous transfers. Its default/production surface exports no raw
@@ -1135,6 +1146,11 @@ is complete, and the recorded runs grant no current production authority.
   but end-to-end source-to-machine safety still requires complete frontend
   projection plus authenticated compiler-refinement evidence. Trusted rustc
   diagnostic-item classification also remains part of the compiler TCB.
+- The production link worker now returns independently replayable identities
+  for the exact linked and optimized LLVM modules, generated object, ordered
+  native inputs, canonical in-process LLD policy, and final HSACO. Worker V3
+  retains this chain across durable replay. Formal preservation from KIR/LLVM
+  to machine behavior and the final join into runtime authority remain open.
 - Generated Worker V3 arguments retain the resources required for dispatch,
   but generalized asynchronous application APIs, cancellation, and composition
   remain incomplete.

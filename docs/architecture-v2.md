@@ -61,6 +61,15 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   upstream LLVM build for module linking, optimization, target-machine object
   emission, and in-process LLD linking. It neither uses COMGR nor shells out to
   `clang`, `llc`, or `ld.lld`.
+- Every successful production Worker response retains a bounded derivation
+  chain for the exact linked LLVM module, optimized LLVM module, generated
+  object, ordered request relocatables plus generated object, canonical
+  path-independent LLD invocation, and final HSACO. Rust independently decodes
+  the record and recomputes its identity, request-derived object order, linker
+  invocation, and final payload identity; strict Worker V3 replay also requires
+  every measured stage identity to agree. These identities record exact content
+  and policy custody; they do not establish semantic preservation or grant
+  publication, load, or launch authority.
 - Compiler provenance now has a canonical six-pin `CompilerClosureV2`, with
   an explicit Cargo-to-trampoline-to-wrapper transition protocol, and a
   `RustcInvocationDescriptorV3` that preserves the exact V2 process and
@@ -232,9 +241,12 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   compiler-currentness evidence throughout the HSA lifecycle. The production
   capsule also replaces the backend-private association-only AMDGPU transcript
   with the independently replayed target-KIR-to-LLVM record. This proves exact
-  deterministic derivation by the reviewed serializer, not formal semantic
-  preservation. The signature does not authenticate compiler origin by itself
-  and grants no machine, load, or launch authority. In default builds the
+  deterministic derivation by the reviewed serializer. The Worker continuation
+  now also independently validates the response identity, request-derived input
+  order, LLD policy, final HSACO, and bootstrap/replay equality for the measured
+  linked-module, optimized-module, and object identities. Neither custody chain
+  is formal semantic preservation. The signature does not authenticate compiler
+  origin by itself and grants no machine, load, or launch authority. In default builds the
   verifier trait is sealed against external implementations and the decision
   constructor is crate-private. No reviewed concrete production verifier
   exists yet, so ordinary generated application execution remains fail-closed
@@ -755,6 +767,17 @@ as an inspection format but is not the semantic IR boundary. For the selective
 scalar slice, deterministic bounded LLVM assembly is the worker transport; the
 canonical V2 handoff remains the semantic boundary, and the exact assembly
 bytes and digest are bound to its identity.
+
+The successful compiler response also binds the exact serialized linked and
+optimized modules, generated object, ordered native-link inputs, canonical
+path-independent LLD argument sequence, and returned HSACO. The generated
+object is required to be the final ordered input. Fixed policy arguments and
+the real `lld::lldMain` invocation share one construction path, so policy drift
+changes the custody identity. Rust reconstructs the expected input order and
+linker identity independently before accepting the response or a durable
+Worker V3 replay, then requires all worker-measured stage identities to remain
+equal across replay. This closes the measured LLVM-to-HSACO derivation-custody
+gap; formal LLVM-to-machine refinement remains a separate proof obligation.
 
 The existing lowering implementation is owned by `fe2o3-amdgcn-model` and
 re-exported by the historical `dialect-amdgcn` facade. A future general
