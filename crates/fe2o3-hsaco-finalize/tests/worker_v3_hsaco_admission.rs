@@ -2486,7 +2486,7 @@ impl OptionalSemanticDebugFixture {
     const fn replay_profile(self) -> Option<ProductionAmdTargetProfileV1> {
         if matches!(self, Self::AvailableGfx950Replay) {
             Some(ProductionAmdTargetProfileV1::Gfx950)
-        } else if self.is_available() {
+        } else if self.is_available() || matches!(self, Self::Unavailable(_)) {
             Some(ProductionAmdTargetProfileV1::Gfx942)
         } else {
             None

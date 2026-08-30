@@ -1248,7 +1248,13 @@ mod tests {
         let structural_binding = structural_binding();
         let artifact = ContentIdentityV1::calculate(b"identity-artifact");
         let identity = |record: &AdmittedProductionSourceIsaRecordV1| {
-            correlation_identity(&[7; 32], artifact, structural_binding, &[record.clone()]).unwrap()
+            correlation_identity(
+                &[7; 32],
+                artifact,
+                structural_binding,
+                std::slice::from_ref(record),
+            )
+            .unwrap()
         };
         let base_identity = identity(&base);
         let mut mutations = Vec::new();
