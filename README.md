@@ -231,6 +231,10 @@ listener, service root, three measured static images, policy, root key template,
 and deployment manifest through the shared protected-service spawn path. It
 requires independent profile and namespace validation, canonical PID/deployment
 readiness, bootstrap EOF, pidfd liveness, and supervisor-before-anchor teardown.
+One static root entrypoint consumes the fixed 14-descriptor systemd activation
+contract, clears the environment, continuously revalidates both children, and
+performs supervisor-before-anchor shutdown. The checked-in socket, service,
+sysusers, and tmpfiles definitions pin the listener and account policy.
 Authoritative root-only distinct-UID qualification and the refinement evidence
 join remain open, so the result remains authority-free.
 The issuer's direct transition
@@ -302,9 +306,10 @@ The durable external monotonic service, measured distinct-UID launcher, and
 root-owned coordinator exist, and their persistence plus packet loops now
 converge to only the exact prior or proposed state across every injected
 create/write/fsync/rename and receive/exchange/send interruption. Deployed
-root-coordinator-to-supervisor wiring and lifecycle custody are implemented.
-Exact service-account/socket provisioning, combined privileged qualification,
-and the concrete protected verifier remain absent. A fixed
+root-coordinator-to-supervisor wiring, lifecycle custody, and exact systemd
+service-account/socket policy are implemented. Canonical installation-record
+generation, combined privileged qualification, and the concrete protected
+verifier remain absent. A fixed
 receipt sidecar and publication ACK now
 carry the exact journal, occurrence, receipt, Worker record, sequence, and
 advanced rollback anchor without granting authority from wire bytes. The

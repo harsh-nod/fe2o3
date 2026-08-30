@@ -50,3 +50,11 @@ and every temporary copy is zeroized. The records are then copied into the
 existing sealed capabilities, executable measurements are enforced by the
 existing coordinators, and launch remains anchor-first and supervisor-second.
 No inherited source descriptor is transferred directly to either service.
+
+`fe2o3-compiler-execution-coordinator` is the sole root process entrypoint. It
+accepts no arguments, requires exact systemd activation metadata for the dense
+descriptor table, clears its environment, and synchronously handles termination
+while revalidating service continuity. `deployment/` defines the matching
+socket, service, account, and directory policy. The release build gate emits a
+static `ET_EXEC` image with no interpreter, dynamic section, runtime dependency,
+RPATH, RUNPATH, undefined symbol, or executable stack.

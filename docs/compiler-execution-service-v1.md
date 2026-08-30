@@ -42,8 +42,10 @@ admits that exact profile and its fixed descriptor set before serving, and the
 measured helper now performs the service-owned key, state, socket, and daemon
 exec transition. The root-controlled coordinator now establishes the locked
 child profile, retains pidfd/reaping custody, authenticates ready plus exec EOF,
-and admits the live endpoint. Wiring its transfer into supervisor construction
-and running the authoritative root-only qualification remain open. Cargo now
+and admits the live endpoint. The sole root coordinator transfers that admitted
+endpoint into the protected supervisor, retains both child lifecycles, and is
+exposed through one fixed systemd activation contract. Running the authoritative
+root-only qualification remains open. Cargo now
 admits the fixed root-owned client profile and connects only to the fixed
 authenticated listener path.
 The complete receipt carriage, subject-bound current-record recovery operation,
@@ -73,8 +75,8 @@ subject, carriage, policy, occurrence, Worker-ledger record, sequence, and
 rollback anchors, and fail closed without independent protected-policy, ledger,
 and external rollback verification identities. The concrete protected verifier,
 independently deployed monotonic rollback process, hardened key use,
-root-coordinator-to-supervisor wiring and qualification, and exact Cargo-to-KFD
-run remain open.
+privileged root-coordinator qualification, and exact Cargo-to-KFD run remain
+open.
 
 The caller-pinned policy, service launch manifest, external-anchor deployment,
 and service-owned Ed25519 keys have reusable immutable memfd capabilities in
@@ -130,8 +132,9 @@ descriptor set and an empty environment. The remaining privileged coordinator
 now prepares those exact inputs, launches the helper under the dedicated
 UID/GID, retains pidfd and reaping custody, requires both the canonical ready
 transfer and bootstrap close-on-exec EOF, and admits the endpoint against the
-same live process. Its root-only qualification and concrete descriptor transfer
-into the protected supervisor remain unfinished.
+same live process. The sole root coordinator transfers that exact live endpoint
+into the protected supervisor and retains anchor-after-supervisor teardown
+custody. Its installed root-only qualification remains unfinished.
 
 ## Transport And Ownership
 
@@ -402,6 +405,9 @@ mandatory EOF, malformed and substituted packets, ancillary descriptors,
 trailing packets, timeout, closed-peer cleanup, and serving typestate custody.
 The root-owned distinct-UID launcher, profile gate, fixed descriptor transfer,
 canonical deployment readiness, and supervisor/anchor lifecycle custody are
-implemented. A privileged service-account/socket fixture remains pending.
+implemented. The fixed systemd socket/service, sysusers, tmpfiles, and 14 named
+activation descriptors are implemented and structurally checked. Installing the
+complete fixture and running it under the provisioned root/distinct-UID accounts
+remain pending.
 Cargo's fixed listener acquisition, child-channel transfer, and readiness gate
 are covered by unit suites; they have not yet been qualified against that fixture.
