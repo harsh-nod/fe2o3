@@ -14,6 +14,7 @@ mod service;
 mod service_ready;
 mod supervisor_deployment;
 mod supervisor_handoff;
+mod supervisor_ready;
 mod worker_anchor_journal;
 
 /// Sole production Unix socket pathname for the protected compiler-execution supervisor.
@@ -116,6 +117,10 @@ pub use supervisor_deployment::{
 pub use supervisor_handoff::{
     COMPILER_EXECUTION_SUPERVISOR_HANDOFF_BYTES_V1, CompilerExecutionSupervisorHandoffErrorV1,
     CompilerExecutionSupervisorHandoffIdentityV1, CompilerExecutionSupervisorHandoffV1,
+};
+pub use supervisor_ready::{
+    COMPILER_EXECUTION_SUPERVISOR_READY_BYTES_V1, CompilerExecutionSupervisorReadyErrorV1,
+    CompilerExecutionSupervisorReadyIdentityV1, CompilerExecutionSupervisorReadyV1,
 };
 pub use worker_anchor_journal::{
     COMPILER_EXECUTION_WORKER_ANCHOR_JOURNAL_BYTES_V1, CompilerExecutionWorkerAnchorJournalErrorV1,

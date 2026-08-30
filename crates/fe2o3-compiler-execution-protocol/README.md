@@ -41,6 +41,11 @@ executable measurement, static pre-exec launcher measurement, and issuer-policy
 identity supplied by trusted service provisioning. The two executable roles must
 have distinct measurements. The manifest carries no path, descriptor, secret,
 timeout, or authority.
+The private root bootstrap carries one fixed 88-byte supervisor-readiness record.
+It binds the exact deployed child PID and supervisor-deployment identity under a
+domain-separated terminal identity. The record is authority-free: the root
+coordinator must independently establish private-channel provenance and exact
+pidfd liveness.
 The 168-byte external-anchor deployment manifest derives the anchor verification
 key from that exact issuer policy and binds the dedicated anchor UID/GID, key,
 exact supervisor deployment identity, and bounded SHA-256 executable
