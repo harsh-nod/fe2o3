@@ -5302,11 +5302,17 @@ fn project_intrinsic_contracts(
         .map_err(|error| ProductionRankedProjectionErrorV1::Unsupported(error.detail()))?;
     let enum_payload_dominance = SemanticEnumPayloadDominanceV1::analyze(function, types)
         .map_err(|error| ProductionRankedProjectionErrorV1::Unsupported(error.detail()))?;
+    let scalar_inventory = assertion_definition_inventory(function)?;
     let LocalProvenanceV1 {
         stable_argument_origins,
         allocation_origins,
         allocation_provenance,
-    } = local_provenance_v1(types, function)?;
+    } = local_provenance_with_scalar_inventory_v1(
+        types,
+        function,
+        &scalar_inventory.counts,
+        &scalar_inventory.address_escaped,
+    )?;
     let local_allocations = local_allocation_contracts(types, function, &allocation_origins)?;
     let capability_effects = project_authenticated_capabilities_v1(
         callables,
@@ -5338,7 +5344,7 @@ fn project_intrinsic_contracts(
     // source launch contract authenticates the former; the latter remains
     // dynamic until host launch evidence is joined.
     let launch_extent = 0;
-    let local_definitions = local_definition_counts(function);
+    let local_definitions = scalar_inventory.counts.clone();
 
     for (block_index, block) in function.blocks().iter().enumerate() {
         for (statement_index, statement) in block.statements().iter().enumerate() {
@@ -5695,6 +5701,11 @@ fn project_intrinsic_contracts(
         )?;
         match operation {
             SemanticCompilerIntrinsicOperationV1::ThreadIndex1d { .. } => {
+                require_index_scalar_custody_v1(
+                    destination,
+                    &local_definitions,
+                    &scalar_inventory.address_escaped,
+                )?;
                 index_values[destination] = Some(ProjectedDisjointIndexV1 {
                     value: ProductionRankedValueV1::Local(result),
                     mapping: SemanticDisjointIndexSpaceV1::Index1d,
@@ -5785,6 +5796,11 @@ fn project_intrinsic_contracts(
 
     let mut processed_edges = 0_usize;
     while let Some(source) = index_worklist.pop_front() {
+        require_index_scalar_custody_v1(
+            source,
+            &local_definitions,
+            &scalar_inventory.address_escaped,
+        )?;
         let input = index_values[source].ok_or(ProductionRankedProjectionErrorV1::Unsupported(
             "the capability worklist lost an index value",
         ))?;
@@ -6662,12 +6678,15 @@ fn project_intrinsic_contracts(
                 continue;
             };
             let destination = assignment.destination().local().index() as usize;
+            if local_definitions.get(destination).copied() != Some(1)
+                || scalar_inventory.address_escaped.get(destination).copied() != Some(false)
+            {
+                continue;
+            }
             let Some(lhs) = project_uniform_switch_operand_v1(
                 left,
                 constants,
                 &stable_argument_origins,
-                &local_definitions,
-                function,
                 &mut runtime_index_arguments,
                 &mut next_runtime_argument,
                 operations,
@@ -6680,8 +6699,6 @@ fn project_intrinsic_contracts(
                 right,
                 constants,
                 &stable_argument_origins,
-                &local_definitions,
-                function,
                 &mut runtime_index_arguments,
                 &mut next_runtime_argument,
                 operations,
@@ -8986,8 +9003,6 @@ fn project_uniform_inductions_v1(
             initial,
             constants,
             stable_argument_origins,
-            local_definitions,
-            function,
             arguments,
             next_argument,
             operations,
@@ -9024,8 +9039,6 @@ fn project_uniform_inductions_v1(
             step,
             constants,
             stable_argument_origins,
-            local_definitions,
-            function,
             arguments,
             next_argument,
             operations,
@@ -12069,8 +12082,6 @@ fn project_uniform_switch_operand_v1(
     operand: &SemanticOperandV1,
     constants: &[Option<u64>],
     stable_argument_origins: &[Option<u32>],
-    local_definitions: &[u8],
-    function: &SemanticFunctionDeclV1,
     arguments: &mut [Option<u32>],
     next_argument: &mut usize,
     operations: &mut Vec<ProductionRankedOperationV1>,
@@ -12086,18 +12097,7 @@ fn project_uniform_switch_operand_v1(
         return Ok(None);
     };
     let local_index = local.index() as usize;
-    let origin = stable_argument_origins
-        .get(local_index)
-        .copied()
-        .flatten()
-        .or_else(|| {
-            (local_definitions.get(local_index).copied() == Some(0)
-                && function
-                    .locals()
-                    .get(local_index)
-                    .is_some_and(|local| matches!(local.role(), SemanticLocalRoleV1::Argument(_))))
-            .then_some(local.index())
-        });
+    let origin = stable_argument_origins.get(local_index).copied().flatten();
     let Some(origin) = origin.map(|origin| origin as usize) else {
         return Ok(None);
     };
@@ -12258,6 +12258,21 @@ fn assign_index_capability(
     Ok(())
 }
 
+fn require_index_scalar_custody_v1(
+    local: usize,
+    definitions: &[u8],
+    address_escaped: &[bool],
+) -> Result<(), ProductionRankedProjectionErrorV1> {
+    if definitions.get(local).copied() != Some(1)
+        || address_escaped.get(local).copied() != Some(false)
+    {
+        return Err(ProductionRankedProjectionErrorV1::Incomplete(
+            "an index capability local has mutable or address-escaped value semantics",
+        ));
+    }
+    Ok(())
+}
+
 fn source_execution_layout_v1(
     architecture: SemanticTargetArchitectureV1,
     function: &SemanticFunctionDeclV1,
@@ -12374,8 +12389,27 @@ fn local_provenance_v1(
     types: &[fe2o3_mir_model::semantic_mir_v1::SemanticTypeDeclV1],
     function: &SemanticFunctionDeclV1,
 ) -> Result<LocalProvenanceV1, ProductionRankedProjectionErrorV1> {
-    let definitions = local_definition_counts(function);
+    let inventory = assertion_definition_inventory(function)?;
+    local_provenance_with_scalar_inventory_v1(
+        types,
+        function,
+        &inventory.counts,
+        &inventory.address_escaped,
+    )
+}
+
+fn local_provenance_with_scalar_inventory_v1(
+    types: &[fe2o3_mir_model::semantic_mir_v1::SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1,
+    definitions: &[u8],
+    address_escaped: &[bool],
+) -> Result<LocalProvenanceV1, ProductionRankedProjectionErrorV1> {
     let local_count = function.locals().len();
+    if definitions.len() != local_count || address_escaped.len() != local_count {
+        return Err(ProductionRankedProjectionErrorV1::Unsupported(
+            "local provenance scalar custody tables do not match the semantic local table",
+        ));
+    }
     let mut stable_argument_origins = vec![None; local_count];
     let mut allocation_origins = vec![None; local_count];
     let mut allocation_provenance = vec![None; local_count];
@@ -12384,7 +12418,9 @@ fn local_provenance_v1(
     let mut allocation_contract_edges = vec![Vec::new(); local_count];
     for (local_index, local) in function.locals().iter().enumerate() {
         if let SemanticLocalRoleV1::Argument(argument) = local.role() {
-            stable_argument_origins[local_index] = Some(argument);
+            if definitions[local_index] == 0 && !address_escaped[local_index] {
+                stable_argument_origins[local_index] = Some(argument);
+            }
             allocation_origins[local_index] = Some(argument);
             allocation_provenance[local_index] =
                 Some(LocalAllocationProvenanceV1::Argument(argument));
@@ -12413,12 +12449,17 @@ fn local_provenance_v1(
                 _ => None,
             };
             if let Some(source) = stable_source {
-                push_local_provenance_edge_v1(
-                    &mut stable_edges,
-                    source.index() as usize,
-                    destination,
-                    &mut edge_count,
-                )?;
+                let source = source.index() as usize;
+                if address_escaped.get(source).copied() == Some(false)
+                    && !address_escaped[destination]
+                {
+                    push_local_provenance_edge_v1(
+                        &mut stable_edges,
+                        source,
+                        destination,
+                        &mut edge_count,
+                    )?;
+                }
             };
 
             let allocation_source = match assignment.value().kind() {
@@ -12877,6 +12918,7 @@ fn switch_predicates(
             "direct switch predicates do not match the semantic local table",
         ));
     }
+    let scalar_inventory = assertion_definition_inventory(function)?;
     let mut predicates = direct_switch_predicates.to_vec();
     for block in function.blocks() {
         for statement in block.statements() {
@@ -12893,17 +12935,27 @@ fn switch_predicates(
             if !source.projections().is_empty() {
                 continue;
             }
+            let destination_index = destination.local().index() as usize;
+            if scalar_inventory.counts.get(destination_index).copied() != Some(1)
+                || scalar_inventory
+                    .address_escaped
+                    .get(destination_index)
+                    .copied()
+                    != Some(false)
+            {
+                continue;
+            }
             let Some(predicate) = option_predicates
                 .get(source.local().index() as usize)
                 .and_then(Clone::clone)
             else {
                 continue;
             };
-            let slot = predicates
-                .get_mut(destination.local().index() as usize)
-                .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+            let slot = predicates.get_mut(destination_index).ok_or(
+                ProductionRankedProjectionErrorV1::Unsupported(
                     "an Option discriminant outside the semantic local table",
-                ))?;
+                ),
+            )?;
             if slot.is_some() {
                 return Err(ProductionRankedProjectionErrorV1::Incomplete(
                     "an Option discriminant local with multiple definitions",
@@ -22287,7 +22339,6 @@ mod tests {
                 local(95, SCALAR_TYPE, SemanticLocalRoleV1::Temporary),
             ],
         );
-        let definitions = local_definition_counts(&function);
         let origins = local_stable_argument_origins(&projection_types(), &function).unwrap();
         let mut arguments = vec![None; function.locals().len()];
         let mut next_argument = 1;
@@ -22298,8 +22349,6 @@ mod tests {
                 &tensor_operand(1),
                 &[None; 3],
                 &origins,
-                &definitions,
-                &function,
                 &mut arguments,
                 &mut next_argument,
                 &mut operations,
@@ -22313,8 +22362,6 @@ mod tests {
                 &tensor_operand(2),
                 &[None; 3],
                 &origins,
-                &definitions,
-                &function,
                 &mut arguments,
                 &mut next_argument,
                 &mut operations,
@@ -22323,6 +22370,279 @@ mod tests {
             .unwrap()
             .is_none()
         );
+    }
+
+    fn project_intrinsic_contracts_for_test(
+        types: &[SemanticTypeDeclV1],
+        callables: &[SemanticCallableDeclV1],
+        function: &SemanticFunctionDeclV1,
+    ) -> Result<IntrinsicProjectionV1, ProductionRankedProjectionErrorV1> {
+        let constants = constant_locals(function)?;
+        let mut operations = Vec::new();
+        let mut next_value = 0;
+        let mut ranked_ir = String::new();
+        project_intrinsic_contracts(
+            callables,
+            types,
+            function,
+            Some(64),
+            &constants,
+            &mut operations,
+            &mut next_value,
+            &mut ranked_ir,
+        )
+    }
+
+    #[derive(Clone, Copy)]
+    enum CachedIndexMutationV1 {
+        Redefined,
+        AddressEscaped,
+    }
+
+    fn cached_index_mutation_function(shape: CachedIndexMutationV1) -> SemanticFunctionDeclV1 {
+        let call = |callee, arguments, destination, target| {
+            SemanticTerminatorKindV1::Call(
+                SemanticDirectCallV1::new_callable(
+                    SemanticCallableIdV1::from_index(callee),
+                    arguments,
+                    Some(SemanticCallDestinationV1::new(
+                        typed_place(destination, SCALAR_TYPE),
+                        cfg_edge(SemanticEdgeRoleV1::CallReturn, target),
+                    )),
+                    SemanticUnwindActionV1::Unreachable,
+                )
+                .unwrap(),
+            )
+        };
+        let mutation = match shape {
+            CachedIndexMutationV1::Redefined => {
+                typed_assignment(2, SCALAR_TYPE, SemanticRvalueKindV1::Use(constant(0)))
+            }
+            CachedIndexMutationV1::AddressEscaped => typed_assignment(
+                3,
+                POINTER_TYPE,
+                SemanticRvalueKindV1::Borrow {
+                    kind: SemanticBorrowKindV1::Mutable,
+                    place: typed_place(2, SCALAR_TYPE),
+                },
+            ),
+        };
+        projection_function_with_locals(
+            vec![
+                block(130, vec![], call(0, vec![], 1, 1)),
+                block(
+                    131,
+                    vec![],
+                    call(1, vec![typed_operand(1, SCALAR_TYPE)], 2, 2),
+                ),
+                block(132, vec![mutation], zero_switch(2, SCALAR_TYPE, 3, 4)),
+                block(133, vec![], SemanticTerminatorKindV1::Return),
+                block(134, vec![], SemanticTerminatorKindV1::Return),
+            ],
+            vec![
+                local(130, SCALAR_TYPE, SemanticLocalRoleV1::Return),
+                local(131, SCALAR_TYPE, SemanticLocalRoleV1::Temporary),
+                local(132, SCALAR_TYPE, SemanticLocalRoleV1::Temporary),
+                local(133, POINTER_TYPE, SemanticLocalRoleV1::Temporary),
+            ],
+        )
+    }
+
+    #[test]
+    fn mutated_cached_indices_fail_closed_in_production_intrinsic_projection() {
+        let callables = [
+            compiler_intrinsic_callable(SemanticCompilerIntrinsicOperationV1::ThreadIndex1d {
+                index_witness: SCALAR_TYPE,
+                raw_index: SCALAR_TYPE,
+            }),
+            compiler_intrinsic_callable(SemanticCompilerIntrinsicOperationV1::ThreadIndexGet {
+                index_witness: SCALAR_TYPE,
+                raw_index: SCALAR_TYPE,
+            }),
+        ];
+        for shape in [
+            CachedIndexMutationV1::Redefined,
+            CachedIndexMutationV1::AddressEscaped,
+        ] {
+            assert_incomplete(
+                project_intrinsic_contracts_for_test(
+                    &projection_types(),
+                    &callables,
+                    &cached_index_mutation_function(shape),
+                ),
+                "an index capability local has mutable or address-escaped value semantics",
+            );
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    enum DirectPredicateMutationV1 {
+        Stable,
+        DestinationOverwrite,
+        ReassignedArgument,
+        EscapedAlias,
+    }
+
+    fn mutated_direct_predicate_function(
+        shape: DirectPredicateMutationV1,
+    ) -> SemanticFunctionDeclV1 {
+        let mut statements = Vec::new();
+        let left = match shape {
+            DirectPredicateMutationV1::Stable | DirectPredicateMutationV1::DestinationOverwrite => {
+                typed_operand(2, SCALAR_TYPE)
+            }
+            DirectPredicateMutationV1::ReassignedArgument => {
+                statements.push(typed_assignment(
+                    2,
+                    SCALAR_TYPE,
+                    SemanticRvalueKindV1::Binary {
+                        operation: SemanticBinaryOpV1::Add,
+                        left: typed_operand(2, SCALAR_TYPE),
+                        right: constant(1),
+                    },
+                ));
+                typed_operand(2, SCALAR_TYPE)
+            }
+            DirectPredicateMutationV1::EscapedAlias => {
+                statements.push(typed_assignment(
+                    4,
+                    SCALAR_TYPE,
+                    SemanticRvalueKindV1::Use(typed_operand(2, SCALAR_TYPE)),
+                ));
+                statements.push(typed_assignment(
+                    5,
+                    POINTER_TYPE,
+                    SemanticRvalueKindV1::Borrow {
+                        kind: SemanticBorrowKindV1::Mutable,
+                        place: typed_place(4, SCALAR_TYPE),
+                    },
+                ));
+                typed_operand(4, SCALAR_TYPE)
+            }
+        };
+        statements.push(typed_assignment(
+            1,
+            BOOL_TYPE,
+            SemanticRvalueKindV1::Binary {
+                operation: SemanticBinaryOpV1::LessThan,
+                left,
+                right: typed_operand(3, SCALAR_TYPE),
+            },
+        ));
+        if matches!(shape, DirectPredicateMutationV1::DestinationOverwrite) {
+            statements.push(typed_assignment(
+                1,
+                BOOL_TYPE,
+                SemanticRvalueKindV1::Use(typed_constant(BOOL_TYPE, 1, 1)),
+            ));
+        }
+        projection_function_with_locals(
+            vec![
+                block(135, statements, zero_switch(1, BOOL_TYPE, 1, 2)),
+                block(136, vec![], SemanticTerminatorKindV1::Return),
+                block(137, vec![], SemanticTerminatorKindV1::Return),
+            ],
+            vec![
+                local(135, SCALAR_TYPE, SemanticLocalRoleV1::Return),
+                local(136, BOOL_TYPE, SemanticLocalRoleV1::Temporary),
+                local(137, SCALAR_TYPE, SemanticLocalRoleV1::Argument(0)),
+                local(138, SCALAR_TYPE, SemanticLocalRoleV1::Argument(1)),
+                local(139, SCALAR_TYPE, SemanticLocalRoleV1::Temporary),
+                local(140, POINTER_TYPE, SemanticLocalRoleV1::Temporary),
+            ],
+        )
+    }
+
+    #[test]
+    fn mutated_uniform_comparisons_do_not_mint_direct_switch_predicates() {
+        let stable = mutated_direct_predicate_function(DirectPredicateMutationV1::Stable);
+        assert!(
+            project_intrinsic_contracts_for_test(&assertion_proof_types(), &[], &stable)
+                .unwrap()
+                .direct_switch_predicates[1]
+                .is_some()
+        );
+        assert_incomplete(
+            project_intrinsic_contracts_for_test(
+                &assertion_proof_types(),
+                &[],
+                &mutated_direct_predicate_function(DirectPredicateMutationV1::DestinationOverwrite),
+            ),
+            "a uniform induction comparison with multiple header definitions",
+        );
+        let reassigned =
+            mutated_direct_predicate_function(DirectPredicateMutationV1::ReassignedArgument);
+        let projected =
+            project_intrinsic_contracts_for_test(&assertion_proof_types(), &[], &reassigned)
+                .unwrap();
+        assert!(projected.direct_switch_predicates[1].is_none());
+        assert_incomplete(
+            project_intrinsic_contracts_for_test(
+                &assertion_proof_types(),
+                &[],
+                &mutated_direct_predicate_function(DirectPredicateMutationV1::EscapedAlias),
+            ),
+            "a uniform induction alias has address-escaped value semantics",
+        );
+    }
+
+    #[test]
+    fn mutated_option_discriminants_do_not_mint_switch_predicates() {
+        let predicate = GuardPredicateV1 {
+            comparisons: vec![(
+                ProductionRankedValueV1::Argument(1),
+                ProductionRankedValueV1::Argument(2),
+            )],
+        };
+        for mutation in [None, Some(false), Some(true)] {
+            let mut statements = vec![
+                enum_definition(SemanticLocalIdV1::from_index(1), 0),
+                enum_discriminant(
+                    SemanticLocalIdV1::from_index(1),
+                    SemanticLocalIdV1::from_index(2),
+                ),
+            ];
+            if let Some(address_escaped) = mutation {
+                if address_escaped {
+                    statements.push(typed_assignment(
+                        3,
+                        POINTER_TYPE,
+                        SemanticRvalueKindV1::Borrow {
+                            kind: SemanticBorrowKindV1::Mutable,
+                            place: typed_place(2, SCALAR_TYPE),
+                        },
+                    ));
+                } else {
+                    statements.push(typed_assignment(
+                        2,
+                        SCALAR_TYPE,
+                        SemanticRvalueKindV1::Use(constant(1)),
+                    ));
+                }
+            }
+            let function = projection_function_with_locals(
+                vec![block(141, statements, SemanticTerminatorKindV1::Return)],
+                vec![
+                    local(141, SCALAR_TYPE, SemanticLocalRoleV1::Return),
+                    local(142, ENUM_TYPE, SemanticLocalRoleV1::Temporary),
+                    local(143, SCALAR_TYPE, SemanticLocalRoleV1::Temporary),
+                    local(144, POINTER_TYPE, SemanticLocalRoleV1::Temporary),
+                ],
+            );
+            let mut option_predicates = vec![None; function.locals().len()];
+            option_predicates[1] = Some(predicate.clone());
+            let projected = switch_predicates(
+                &function,
+                &option_predicates,
+                &vec![None; function.locals().len()],
+            )
+            .unwrap();
+            if mutation.is_some() {
+                assert!(projected[2].is_none());
+            } else {
+                assert_eq!(projected[2], Some(predicate.clone()));
+            }
+        }
     }
 
     #[test]
