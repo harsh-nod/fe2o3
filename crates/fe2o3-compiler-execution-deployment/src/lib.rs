@@ -1577,7 +1577,7 @@ mod tests {
         let generation = fixture.generate();
         let parent = private_install_parent();
         let root_name = install::compiler_execution_install_root_name_v1(generation.sha256());
-        install::install_compiler_execution_deployment_for_test_v1(
+        let installed = install::install_compiler_execution_deployment_for_test_v1(
             fixture.verify(generation.sha256()).unwrap(),
             parent.path(),
             current_owner(),
@@ -1585,6 +1585,12 @@ mod tests {
         .unwrap();
         let root = parent.path().join(root_name);
         mutate(&root);
+        assert_eq!(
+            install::revalidate_installed_deployment_for_test_v1(&installed, current_owner(),)
+                .unwrap_err()
+                .kind(),
+            expected_kind
+        );
 
         let second_fixture = Fixture::new();
         let second_generation = second_fixture.generate();
@@ -1791,7 +1797,7 @@ mod tests {
         let generation = fixture.generate();
         let parent = private_install_parent();
         let root_name = install::compiler_execution_install_root_name_v1(generation.sha256());
-        install::install_compiler_execution_deployment_for_test_v1(
+        let installed = install::install_compiler_execution_deployment_for_test_v1(
             fixture.verify(generation.sha256()).unwrap(),
             parent.path(),
             current_owner(),
@@ -1806,6 +1812,12 @@ mod tests {
         bytes[0] ^= 1;
         fs::write(&build_info, bytes).unwrap();
         fs::set_permissions(&build_info, fs::Permissions::from_mode(0o444)).unwrap();
+        assert_eq!(
+            install::revalidate_installed_deployment_for_test_v1(&installed, current_owner(),)
+                .unwrap_err()
+                .kind(),
+            DeploymentVerificationErrorKindV1::ContentMismatch
+        );
 
         let second_fixture = Fixture::new();
         let second_generation = second_fixture.generate();

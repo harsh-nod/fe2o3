@@ -197,21 +197,22 @@ pub enum CompilerExecutionInstalledRootPublicationV1 {
 /// require_as_fd::<InstalledCompilerExecutionDeploymentV1>();
 /// ```
 pub struct InstalledCompilerExecutionDeploymentV1 {
-    git_commit: String,
-    target: String,
-    manifest_sha256: [u8; 32],
+    deployment: VerifiedCompilerExecutionDeploymentV1,
     root_name: String,
     publication: CompilerExecutionInstalledRootPublicationV1,
-    _root: File,
+    root: File,
 }
 
 impl fmt::Debug for InstalledCompilerExecutionDeploymentV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("InstalledCompilerExecutionDeploymentV1")
-            .field("git_commit", &self.git_commit)
-            .field("target", &self.target)
-            .field("manifest_sha256", &lower_hex(&self.manifest_sha256))
+            .field("git_commit", &self.deployment.git_commit)
+            .field("target", &self.deployment.target)
+            .field(
+                "manifest_sha256",
+                &lower_hex(&self.deployment.manifest_sha256),
+            )
             .field("root_name", &self.root_name)
             .field("publication", &self.publication)
             .field("authority", &"installed-root-custody-only")
@@ -222,17 +223,17 @@ impl fmt::Debug for InstalledCompilerExecutionDeploymentV1 {
 impl InstalledCompilerExecutionDeploymentV1 {
     /// Returns the exact source commit bound by the installed root.
     pub fn git_commit(&self) -> &str {
-        &self.git_commit
+        &self.deployment.git_commit
     }
 
     /// Returns the exact target bound by the installed root.
     pub fn target(&self) -> &str {
-        &self.target
+        &self.deployment.target
     }
 
     /// Returns the manifest digest that deterministically names the installed root.
     pub const fn manifest_sha256(&self) -> [u8; 32] {
-        self.manifest_sha256
+        self.deployment.manifest_sha256
     }
 
     /// Returns the deterministic final name beneath the caller's retained install parent.
@@ -248,6 +249,14 @@ impl InstalledCompilerExecutionDeploymentV1 {
     /// Returns the exact manifest-plus-content file count in the installed root.
     pub const fn file_count(&self) -> usize {
         14
+    }
+
+    /// Revalidates the complete root-owned tree against its retained sealed sources.
+    ///
+    /// This does not expose the retained root or source descriptors and grants no execution or
+    /// service authority.
+    pub fn revalidate(&self) -> Result<(), DeploymentVerificationErrorV1> {
+        revalidate_installed_deployment(self, (0, 0))
     }
 }
 
@@ -509,13 +518,28 @@ fn installed_result(
     root: File,
 ) -> InstalledCompilerExecutionDeploymentV1 {
     InstalledCompilerExecutionDeploymentV1 {
-        git_commit: deployment.git_commit,
-        target: deployment.target,
-        manifest_sha256: deployment.manifest_sha256,
+        deployment,
         root_name,
         publication,
-        _root: root,
+        root,
     }
+}
+
+#[cfg(test)]
+pub(super) fn revalidate_installed_deployment_for_test_v1(
+    installed: &InstalledCompilerExecutionDeploymentV1,
+    owner: (u32, u32),
+) -> Result<(), DeploymentVerificationErrorV1> {
+    revalidate_installed_deployment(installed, owner)
+}
+
+pub(super) fn revalidate_installed_deployment(
+    installed: &InstalledCompilerExecutionDeploymentV1,
+    owner: (u32, u32),
+) -> Result<(), DeploymentVerificationErrorV1> {
+    validate_sealed_file(&installed.deployment.manifest)?;
+    validate_sealed_files(&installed.deployment.files)?;
+    verify_installed_root(&installed.root, owner, &installed.deployment)
 }
 
 fn open_install_parent(
