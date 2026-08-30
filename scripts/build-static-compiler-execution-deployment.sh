@@ -74,6 +74,8 @@ FE2O3_STATIC_ANCHOR_TARGET_DIR="${target_root}/anchor" \
   "${repo_root}/scripts/build-static-external-anchor-service.sh"
 FE2O3_STATIC_PROVISIONER_TARGET_DIR="${target_root}/provisioner" \
   "${repo_root}/scripts/build-static-compiler-execution-provisioner.sh"
+FE2O3_STATIC_DEPLOYMENT_VERIFIER_TARGET_DIR="${target_root}/deployment-verifier" \
+  "${repo_root}/scripts/build-static-compiler-execution-deployment-verifier.sh"
 
 cmake \
   -S "${repo_root}/tools/fe2o3-static-preexec-launcher" \
@@ -87,6 +89,8 @@ readonly image_dir="${partial}/usr/libexec/fe2o3"
 readonly systemd_dir="${partial}/systemd"
 readonly sysusers_dir="${partial}/sysusers.d"
 readonly tmpfiles_dir="${partial}/tmpfiles.d"
+readonly manifest_generator="${target_root}/deployment-verifier/${target}/release/fe2o3-compiler-execution-manifest"
+readonly deployment_verifier="${target_root}/deployment-verifier/${target}/release/fe2o3-compiler-execution-deployment-verify"
 install -d -m 0700 -- "${image_dir}" "${systemd_dir}" "${sysusers_dir}" "${tmpfiles_dir}"
 
 install -m 0555 -- \
@@ -140,6 +144,39 @@ chmod 0444 "${partial}/SHA256SUMS"
   cd -- "${partial}"
   sha256sum --check --strict SHA256SUMS
 )
+
+manifest_report="$("${manifest_generator}" "${partial}" "${commit}" "${target}")"
+readonly manifest_report
+manifest_sha256="$(
+  printf '%s\n' "${manifest_report}" \
+    | /usr/bin/sed -n 's/^manifest_sha256=\([0-9a-f]\{64\}\)$/\1/p'
+)"
+readonly manifest_sha256
+manifest_byte_len="$(
+  printf '%s\n' "${manifest_report}" \
+    | /usr/bin/sed -n 's/^manifest_byte_len=\([1-9][0-9]*\)$/\1/p'
+)"
+readonly manifest_byte_len
+if [[ -z "${manifest_sha256}" || -z "${manifest_byte_len}" \
+  || "${manifest_report}" != "manifest_sha256=${manifest_sha256}"$'\n'"manifest_byte_len=${manifest_byte_len}" ]]; then
+  printf 'deployment manifest generator returned a noncanonical report\n' >&2
+  exit 1
+fi
+
+verification_report="$("${deployment_verifier}" "${partial}" "${manifest_sha256}" "${commit}")"
+readonly verification_report
+expected_verification_report="$(
+  printf 'verified_git_commit=%s\nverified_target=%s\nverified_manifest_sha256=%s\nverified_file_count=13' \
+    "${commit}" "${target}" "${manifest_sha256}"
+)"
+readonly expected_verification_report
+if [[ "${verification_report}" != "${expected_verification_report}" ]]; then
+  printf 'deployment verifier returned a noncanonical report\n' >&2
+  exit 1
+fi
+
 mv -- "${partial}" "${output}"
 trap - EXIT INT TERM HUP
-printf '%s\n' "${output}"
+printf 'bundle_path=%s\n' "${output}"
+printf 'manifest_sha256=%s\n' "${manifest_sha256}"
+printf 'git_commit=%s\n' "${commit}"

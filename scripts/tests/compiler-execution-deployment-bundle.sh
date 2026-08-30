@@ -23,7 +23,8 @@ for helper in \
   build-static-compiler-execution-issuer.sh \
   build-static-external-anchor-provisioning-helper.sh \
   build-static-external-anchor-service.sh \
-  build-static-compiler-execution-provisioner.sh; do
+  build-static-compiler-execution-provisioner.sh \
+  build-static-compiler-execution-deployment-verifier.sh; do
   grep -Fq -- "scripts/${helper}" "${builder}" || fail "missing ${helper}"
 done
 
@@ -41,5 +42,25 @@ done
 grep -Fq -- 'ctest --test-dir' "${builder}" || fail 'launcher CTest qualification is missing'
 grep -Fq -- 'sha256sum --check --strict SHA256SUMS' "${builder}" ||
   fail 'strict bundle hash verification is missing'
+grep -Fq -- 'fe2o3-compiler-execution-manifest' "${builder}" ||
+  fail 'pinned install manifest generation is missing'
+grep -Fq -- 'fe2o3-compiler-execution-deployment-verify' "${builder}" ||
+  fail 'sealed deployment verification is missing'
+grep -Fq -- 'manifest_sha256=%s' "${builder}" ||
+  fail 'out-of-band manifest digest publication is missing'
+
+readonly verifier_builder="${repo_root}/scripts/build-static-compiler-execution-deployment-verifier.sh"
+bash -n "${verifier_builder}"
+for binary in \
+  fe2o3-compiler-execution-manifest \
+  fe2o3-compiler-execution-deployment-verify; do
+  grep -Fq -- "${binary}" "${verifier_builder}" || fail "missing static image ${binary}"
+done
+grep -Fq -- "--target \"\${target}\"" "${verifier_builder}" ||
+  fail 'static verifier target is not pinned'
+grep -Fq -- '-C link-arg=-static' "${verifier_builder}" ||
+  fail 'static verifier link contract is missing'
+grep -Fq -- "'INTERP|DYNAMIC|\\(NEEDED\\)|\\(RPATH\\)|\\(RUNPATH\\)'" "${verifier_builder}" ||
+  fail 'static verifier loader-independence gate is missing'
 
 printf 'compiler-execution deployment-bundle inputs are complete\n'
