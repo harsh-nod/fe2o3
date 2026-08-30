@@ -1569,6 +1569,38 @@ mod tests {
         parent
     }
 
+    fn assert_installed_root_mutation_rejected(
+        expected_kind: DeploymentVerificationErrorKindV1,
+        mutate: impl FnOnce(&Path),
+    ) {
+        let fixture = Fixture::new();
+        let generation = fixture.generate();
+        let parent = private_install_parent();
+        let root_name = install::compiler_execution_install_root_name_v1(generation.sha256());
+        install::install_compiler_execution_deployment_for_test_v1(
+            fixture.verify(generation.sha256()).unwrap(),
+            parent.path(),
+            current_owner(),
+        )
+        .unwrap();
+        let root = parent.path().join(root_name);
+        mutate(&root);
+
+        let second_fixture = Fixture::new();
+        let second_generation = second_fixture.generate();
+        assert_eq!(second_generation.sha256(), generation.sha256());
+        assert_eq!(
+            install::install_compiler_execution_deployment_for_test_v1(
+                second_fixture.verify(second_generation.sha256()).unwrap(),
+                parent.path(),
+                current_owner(),
+            )
+            .unwrap_err()
+            .kind(),
+            expected_kind
+        );
+    }
+
     #[test]
     fn sealed_sources_publish_and_reacquire_one_exact_offline_root() {
         let fixture = Fixture::new();
@@ -1676,6 +1708,81 @@ mod tests {
             fs::read(final_root.join("hostile")).unwrap(),
             b"do not replace"
         );
+
+        let fixture = Fixture::new();
+        let generation = fixture.generate();
+        let parent = private_install_parent();
+        let target = tempfile::tempdir().unwrap();
+        let final_root = parent
+            .path()
+            .join(install::compiler_execution_install_root_name_v1(
+                generation.sha256(),
+            ));
+        symlink(target.path(), &final_root).unwrap();
+        assert_eq!(
+            install::install_compiler_execution_deployment_for_test_v1(
+                fixture.verify(generation.sha256()).unwrap(),
+                parent.path(),
+                current_owner(),
+            )
+            .unwrap_err()
+            .kind(),
+            DeploymentVerificationErrorKindV1::Io
+        );
+        assert_eq!(fs::read_link(final_root).unwrap(), target.path());
+    }
+
+    #[test]
+    fn installer_rejects_wrong_parent_owner_xattrs_and_symlink_path() {
+        let fixture = Fixture::new();
+        let generation = fixture.generate();
+        let parent = private_install_parent();
+        let owner = current_owner();
+        let wrong_owner = (owner.0.wrapping_add(1), owner.1);
+        assert_eq!(
+            install::install_compiler_execution_deployment_for_test_v1(
+                fixture.verify(generation.sha256()).unwrap(),
+                parent.path(),
+                wrong_owner,
+            )
+            .unwrap_err()
+            .kind(),
+            DeploymentVerificationErrorKindV1::InvalidMetadata
+        );
+
+        let fixture = Fixture::new();
+        let generation = fixture.generate();
+        let parent = private_install_parent();
+        let parent_file = File::open(parent.path()).unwrap();
+        rustix::fs::fsetxattr(&parent_file, "user.fe2o3-test", b"1", XattrFlags::empty()).unwrap();
+        assert_eq!(
+            install::install_compiler_execution_deployment_for_test_v1(
+                fixture.verify(generation.sha256()).unwrap(),
+                parent.path(),
+                current_owner(),
+            )
+            .unwrap_err()
+            .kind(),
+            DeploymentVerificationErrorKindV1::ForbiddenAttributes
+        );
+
+        let fixture = Fixture::new();
+        let generation = fixture.generate();
+        let parent = private_install_parent();
+        let link_container = tempfile::tempdir().unwrap();
+        let parent_link = link_container.path().join("install-parent-link");
+        symlink(parent.path(), &parent_link).unwrap();
+        assert_eq!(
+            install::install_compiler_execution_deployment_for_test_v1(
+                fixture.verify(generation.sha256()).unwrap(),
+                &parent_link,
+                current_owner(),
+            )
+            .unwrap_err()
+            .kind(),
+            DeploymentVerificationErrorKindV1::Io
+        );
+        assert_eq!(fs::read_dir(parent.path()).unwrap().count(), 0);
     }
 
     #[test]
@@ -1712,6 +1819,133 @@ mod tests {
             .unwrap_err()
             .kind(),
             DeploymentVerificationErrorKindV1::ContentMismatch
+        );
+    }
+
+    #[test]
+    fn installer_rejects_installed_inventory_type_mode_link_xattr_and_manifest_mutations() {
+        assert_installed_root_mutation_rejected(
+            DeploymentVerificationErrorKindV1::InvalidInventory,
+            |root| fs::write(root.join("unexpected"), b"extra").unwrap(),
+        );
+        assert_installed_root_mutation_rejected(
+            DeploymentVerificationErrorKindV1::InvalidInventory,
+            |root| {
+                fs::remove_file(root.join("usr/share/fe2o3/compiler-execution/BUILD-INFO"))
+                    .unwrap();
+            },
+        );
+        assert_installed_root_mutation_rejected(
+            DeploymentVerificationErrorKindV1::InvalidMetadata,
+            |root| {
+                let path = root.join("usr/share/fe2o3/compiler-execution/BUILD-INFO");
+                fs::remove_file(&path).unwrap();
+                fs::create_dir(path).unwrap();
+            },
+        );
+        assert_installed_root_mutation_rejected(
+            DeploymentVerificationErrorKindV1::InvalidMetadata,
+            |root| {
+                fs::set_permissions(
+                    root.join("usr/share/fe2o3/compiler-execution/BUILD-INFO"),
+                    fs::Permissions::from_mode(0o644),
+                )
+                .unwrap();
+            },
+        );
+        assert_installed_root_mutation_rejected(
+            DeploymentVerificationErrorKindV1::InvalidMetadata,
+            |root| {
+                let systemd = root.join("usr/lib/systemd/system");
+                let service = systemd.join("fe2o3-compiler-execution.service");
+                let socket = systemd.join("fe2o3-compiler-execution.socket");
+                fs::remove_file(&service).unwrap();
+                fs::set_permissions(&socket, fs::Permissions::from_mode(0o644)).unwrap();
+                fs::hard_link(&socket, service).unwrap();
+                fs::set_permissions(socket, fs::Permissions::from_mode(0o444)).unwrap();
+            },
+        );
+        assert_installed_root_mutation_rejected(
+            DeploymentVerificationErrorKindV1::ForbiddenAttributes,
+            |root| {
+                let path = root.join("usr/share/fe2o3/compiler-execution/BUILD-INFO");
+                fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+                let file = File::options().read(true).write(true).open(&path).unwrap();
+                rustix::fs::fsetxattr(&file, "user.fe2o3-test", b"1", XattrFlags::empty()).unwrap();
+                fs::set_permissions(path, fs::Permissions::from_mode(0o444)).unwrap();
+            },
+        );
+        assert_installed_root_mutation_rejected(
+            DeploymentVerificationErrorKindV1::ContentMismatch,
+            |root| {
+                let manifest = root.join("usr/share/fe2o3/compiler-execution/INSTALL-MANIFEST-V1");
+                fs::set_permissions(&manifest, fs::Permissions::from_mode(0o600)).unwrap();
+                let mut bytes = fs::read(&manifest).unwrap();
+                bytes[0] ^= 1;
+                fs::write(&manifest, bytes).unwrap();
+                fs::set_permissions(&manifest, fs::Permissions::from_mode(0o444)).unwrap();
+            },
+        );
+    }
+
+    #[test]
+    fn install_parent_replacement_fails_closed_before_and_after_publication() {
+        let fixture = Fixture::new();
+        let generation = fixture.generate();
+        let parent = private_install_parent();
+        let displaced = parent.path().with_extension("displaced-before-publication");
+        let error =
+            install::install_compiler_execution_deployment_with_parent_replacement_for_test_v1(
+                fixture.verify(generation.sha256()).unwrap(),
+                parent.path(),
+                &displaced,
+                current_owner(),
+                install::InstallParentReplacementPointV1::DuringCopy,
+            )
+            .unwrap_err();
+        assert_eq!(
+            error.kind(),
+            DeploymentVerificationErrorKindV1::InputChanged
+        );
+        assert_eq!(fs::read_dir(parent.path()).unwrap().count(), 0);
+        assert_eq!(fs::read_dir(&displaced).unwrap().count(), 0);
+        fs::remove_dir(&displaced).unwrap();
+
+        let fixture = Fixture::new();
+        let generation = fixture.generate();
+        let root_name = install::compiler_execution_install_root_name_v1(generation.sha256());
+        let displaced = parent.path().with_extension("displaced-after-publication");
+        let error =
+            install::install_compiler_execution_deployment_with_parent_replacement_for_test_v1(
+                fixture.verify(generation.sha256()).unwrap(),
+                parent.path(),
+                &displaced,
+                current_owner(),
+                install::InstallParentReplacementPointV1::AfterPublication,
+            )
+            .unwrap_err();
+        assert_eq!(
+            error.kind(),
+            DeploymentVerificationErrorKindV1::PublicationAmbiguous
+        );
+        assert_eq!(fs::read_dir(parent.path()).unwrap().count(), 0);
+        assert_eq!(tree_counts(&displaced.join(&root_name)), (12, 14));
+
+        fs::remove_dir(parent.path()).unwrap();
+        fs::rename(&displaced, parent.path()).unwrap();
+        let recovery_fixture = Fixture::new();
+        let recovery_generation = recovery_fixture.generate();
+        let recovered = install::install_compiler_execution_deployment_for_test_v1(
+            recovery_fixture
+                .verify(recovery_generation.sha256())
+                .unwrap(),
+            parent.path(),
+            current_owner(),
+        )
+        .unwrap();
+        assert_eq!(
+            recovered.publication(),
+            install::CompilerExecutionInstalledRootPublicationV1::Reacquired
         );
     }
 

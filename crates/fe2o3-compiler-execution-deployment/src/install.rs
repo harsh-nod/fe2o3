@@ -106,6 +106,48 @@ impl InstallationHooksV1 for NoInstallationFaultV1 {
 }
 
 #[cfg(test)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum InstallParentReplacementPointV1 {
+    DuringCopy,
+    AfterPublication,
+}
+
+#[cfg(test)]
+struct ReplaceInstallParentPathV1 {
+    original: std::path::PathBuf,
+    displaced: std::path::PathBuf,
+    trigger: InstallationFaultPointV1,
+    fired: bool,
+}
+
+#[cfg(test)]
+impl InstallationHooksV1 for ReplaceInstallParentPathV1 {
+    fn checkpoint(
+        &mut self,
+        point: InstallationFaultPointV1,
+    ) -> Result<(), DeploymentVerificationErrorV1> {
+        if !self.fired && self.trigger == point {
+            std::fs::rename(&self.original, &self.displaced).map_err(|source| {
+                std_io_error("displace install-parent pathname during test", source)
+            })?;
+            std::fs::create_dir(&self.original).map_err(|source| {
+                std_io_error("replace install-parent pathname during test", source)
+            })?;
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(
+                &self.original,
+                std::fs::Permissions::from_mode(INSTALL_PARENT_MODE_V1),
+            )
+            .map_err(|source| {
+                std_io_error("set replacement install-parent mode during test", source)
+            })?;
+            self.fired = true;
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
 struct InjectInstallationFaultV1 {
     point: InstallationFaultPointV1,
     fired: bool,
@@ -256,6 +298,32 @@ pub(super) fn install_compiler_execution_deployment_at_fault_for_test_v1(
     assert!(
         hooks.fired,
         "requested installation fault point was not reached"
+    );
+    result
+}
+
+#[cfg(test)]
+pub(super) fn install_compiler_execution_deployment_with_parent_replacement_for_test_v1(
+    deployment: VerifiedCompilerExecutionDeploymentV1,
+    install_parent: &Path,
+    displaced_parent: &Path,
+    owner: (u32, u32),
+    point: InstallParentReplacementPointV1,
+) -> Result<InstalledCompilerExecutionDeploymentV1, DeploymentVerificationErrorV1> {
+    let trigger = match point {
+        InstallParentReplacementPointV1::DuringCopy => InstallationFaultPointV1::FileWritten(0),
+        InstallParentReplacementPointV1::AfterPublication => InstallationFaultPointV1::RootRenamed,
+    };
+    let mut hooks = ReplaceInstallParentPathV1 {
+        original: install_parent.to_owned(),
+        displaced: displaced_parent.to_owned(),
+        trigger,
+        fired: false,
+    };
+    let result = install_for_owner_with_hooks(deployment, install_parent, owner, &mut hooks);
+    assert!(
+        hooks.fired,
+        "install-parent replacement checkpoint was not reached"
     );
     result
 }
