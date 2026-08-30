@@ -25,9 +25,19 @@ $ scripts/build-static-compiler-execution-deployment.sh /tmp/fe2o3-deployment
 ```
 
 The bundle contains all seven executables under `usr/libexec/fe2o3`, the exact
-systemd, sysusers, and tmpfiles inputs, `BUILD-INFO`, and a strict
-`SHA256SUMS`. Compilation and CMake/CTest qualification run as the invoking
-non-root user; installation is a separate privileged phase.
+systemd, sysusers, and tmpfiles inputs, `BUILD-INFO`, a strict `SHA256SUMS`, and
+`INSTALL-MANIFEST-V1`. The builder prints `bundle_path`, `manifest_sha256`, and
+`git_commit`; the latter two are independent admission pins and must be
+distributed outside the bundle. A static musl verifier admits the exact tree
+through retained descriptors, rejects links, mount crossings, extra names,
+metadata or content substitution, and retains the 13 content files as sealed
+anonymous sources. See [deployment bundle
+V1](../docs/compiler-execution-deployment-bundle-v1.md).
+
+Compilation and CMake/CTest qualification run as the invoking non-root user.
+Descriptor-relative atomic installation from those sealed sources is a
+separate privileged phase and remains to be implemented. Do not verify a
+bundle and then install by reopening its pathnames.
 
 With both the service and socket stopped, provision one nonzero policy
 generation:

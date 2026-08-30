@@ -317,7 +317,12 @@ FD 6 to daemon FD 5. Close-only custody keeps exclusive provisioning blocked
 after coordinator death until both protected children exit, without adding a
 systemd activation descriptor or conflicting with the issuer's state-root
 singleton. Non-root process tests cover coordinator `SIGKILL` and both child
-exit orders. Combined privileged qualification and the concrete
+exit orders. The clean-checkout deployment builder now emits one canonical
+14-file static bundle plus out-of-band manifest and commit pins. A separate
+static musl verifier admits the exact descriptor-relative inventory and retains
+all 13 content files in sealed anonymous custody before bundle publication.
+Atomic privileged installation from that custody is not yet implemented.
+Combined privileged qualification and the concrete
 protected verifier remain absent. A fixed
 receipt sidecar and publication ACK now
 carry the exact journal, occurrence, receipt, Worker record, sequence, and

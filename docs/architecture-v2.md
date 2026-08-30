@@ -20,6 +20,7 @@ Related documents:
 - [GPU safety contract v1](gpu-safety-contract-v1.md)
 - [implementation roadmap](implementation-roadmap-v2.md)
 - [general typed dispatch V1](general-typed-dispatch-v1.md)
+- [compiler-execution deployment bundle V1](compiler-execution-deployment-bundle-v1.md)
 
 ## One Executable Architecture
 
@@ -230,6 +231,15 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   readiness, and combined supervisor/anchor custody are implemented. Exact
   service-account/socket provisioning, combined privileged qualification, and
   final verifier authority remain pending.
+- The compiler-execution deployment builder publishes one exact 14-file static
+  source bundle only after a separate static musl verifier admits its
+  caller-pinned canonical manifest and Git commit. Admission is
+  descriptor-relative, rejects alternate inventory and metadata, double-reads
+  every bounded file, cross-checks `BUILD-INFO` and `SHA256SUMS`, and retains
+  the 13 content files in sealed anonymous custody. This closes build-time
+  bundle admission, not privileged installation: the atomic installer that
+  consumes those sealed sources and root/distinct-UID systemd qualification
+  remain open.
 - Versioned artifact, descriptor, durable-publication, and HSA records exist.
   Host execution has one workload-neutral Worker V3 graph. An arbitrary
   manifest cannot manufacture a Rust signature, verifier decision, load

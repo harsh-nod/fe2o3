@@ -411,9 +411,12 @@ trailing packets, timeout, closed-peer cleanup, and serving typestate custody.
 The root-owned distinct-UID launcher, profile gate, fixed descriptor transfer,
 canonical deployment readiness, and supervisor/anchor lifecycle custody are
 implemented. The fixed systemd socket/service, sysusers, tmpfiles, and 14 named
-activation descriptors are implemented and structurally checked. Installing the
-complete fixture and running it under the provisioned root/distinct-UID accounts
-remain pending.
+activation descriptors are implemented and structurally checked. A canonical
+caller-pinned install manifest and static musl verifier now admit the complete
+14-file source bundle through retained descriptors and preserve its 13 content
+files in sealed anonymous custody. Atomic privileged installation from that
+custody and execution under the provisioned root/distinct-UID accounts remain
+pending.
 The fixed static reference provisioner now resolves those accounts, validates
 and measures all five installed service images, creates or verifies both key
 seeds, constructs all four cross-bound records, and publishes them durably
