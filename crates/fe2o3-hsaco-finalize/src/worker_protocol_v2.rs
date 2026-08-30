@@ -28,13 +28,17 @@ use crate::{
 pub const WORKER_REQUEST_MAGIC_V2: &[u8; 8] = b"F3LREQ02";
 pub const WORKER_RESPONSE_MAGIC_V2: &[u8; 8] = b"F3LRSP02";
 pub const WORKER_RESPONSE_MAGIC_V3: &[u8; 8] = b"F3LRSP03";
+pub const WORKER_RESPONSE_MAGIC_V4: &[u8; 8] = b"F3LRSP04";
 
 const REQUEST_DOMAIN_V2: &[u8] = b"FE2O3/DIRECT-LLVM-WORKER-REQUEST/V2\0";
 const PROVIDER_MANIFEST_DOMAIN_V1: &[u8] = b"FE2O3/DEVICE-LIBRARY-PROVIDER-MANIFEST/V1\0";
 const RESPONSE_DOMAIN_V3: &[u8] = b"FE2O3/DIRECT-LLVM-WORKER-RESPONSE/V3\0";
+const RESPONSE_DOMAIN_V4: &[u8] = b"FE2O3/DIRECT-LLVM-WORKER-RESPONSE/V4\0";
+const DERIVATION_EVIDENCE_DOMAIN_V1: &[u8] = b"FE2O3/UPSTREAM-LLVM-LLD-DERIVATION-EVIDENCE/V1\0";
 const REQUEST_FIELD_COUNT_V2: u16 = 15;
 const RESPONSE_FIELD_COUNT_V2: u16 = 7;
 const RESPONSE_FIELD_COUNT_V3: u16 = 9;
+const RESPONSE_FIELD_COUNT_V4: u16 = 10;
 const INPUT_OVERHEAD_BYTES: usize = 1 + 32 + 8;
 const CONTENT_IDENTITY_BYTES: usize = 32 + 8;
 const MAX_PROVIDER_IDENTITY_BYTES: usize = 128;
@@ -64,11 +68,22 @@ const MAX_PROVIDER_EVIDENCE_BYTES: usize = checked_bound_add(
         49,
     ),
 );
+const MAX_NATIVE_LINK_INPUTS: usize = MAX_LINK_INPUTS + 1;
+const MAX_DERIVATION_EVIDENCE_BYTES: usize = 1
+    + 3 * CONTENT_IDENTITY_BYTES
+    + 4
+    + MAX_NATIVE_LINK_INPUTS * (1 + CONTENT_IDENTITY_BYTES)
+    + 32
+    + CONTENT_IDENTITY_BYTES
+    + 32;
 
 /// Maximum exact response-body bytes retained by one replay metadata shell.
 pub(crate) const MAX_WORKER_RESPONSE_REPLAY_METADATA_SHELL_BYTES_V1: usize = checked_bound_add(
-    MAX_RESPONSE_DIAGNOSTICS_BODY_BYTES,
-    MAX_PROVIDER_EVIDENCE_BYTES,
+    checked_bound_add(
+        MAX_RESPONSE_DIAGNOSTICS_BODY_BYTES,
+        MAX_PROVIDER_EVIDENCE_BYTES,
+    ),
+    MAX_DERIVATION_EVIDENCE_BYTES,
 );
 
 /// Maximum exact response-body bytes retained by two independent metadata shells.
@@ -345,6 +360,81 @@ pub struct WorkerDeviceLibraryProviderEvidenceV1 {
     manifest_identity: [u8; 32],
 }
 
+/// Origin of one exact object in the ordered in-process LLD input sequence.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[repr(u8)]
+pub enum WorkerNativeLinkInputSourceV1 {
+    RequestRelocatable = 1,
+    GeneratedObject = 2,
+}
+
+/// One exact object identity and its position-preserving source classification.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct WorkerNativeLinkInputEvidenceV1 {
+    source: WorkerNativeLinkInputSourceV1,
+    content: ContentIdentityV1,
+}
+
+impl WorkerNativeLinkInputEvidenceV1 {
+    pub const fn source(&self) -> WorkerNativeLinkInputSourceV1 {
+        self.source
+    }
+
+    pub const fn content(&self) -> ContentIdentityV1 {
+        self.content
+    }
+}
+
+/// Bounded exact stage custody emitted by the measured upstream LLVM/LLD worker.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WorkerDerivationEvidenceV1 {
+    linked_module: ContentIdentityV1,
+    optimized_module: ContentIdentityV1,
+    generated_object: ContentIdentityV1,
+    native_link_inputs: Vec<WorkerNativeLinkInputEvidenceV1>,
+    lld_invocation_identity: [u8; 32],
+    hsaco: ContentIdentityV1,
+    evidence_identity: [u8; 32],
+}
+
+impl WorkerDerivationEvidenceV1 {
+    pub const fn linked_module(&self) -> ContentIdentityV1 {
+        self.linked_module
+    }
+
+    pub const fn optimized_module(&self) -> ContentIdentityV1 {
+        self.optimized_module
+    }
+
+    pub const fn generated_object(&self) -> ContentIdentityV1 {
+        self.generated_object
+    }
+
+    pub fn native_link_inputs(&self) -> &[WorkerNativeLinkInputEvidenceV1] {
+        &self.native_link_inputs
+    }
+
+    pub const fn lld_invocation_identity(&self) -> &[u8; 32] {
+        &self.lld_invocation_identity
+    }
+
+    pub const fn hsaco(&self) -> ContentIdentityV1 {
+        self.hsaco
+    }
+
+    pub const fn evidence_identity(&self) -> &[u8; 32] {
+        &self.evidence_identity
+    }
+
+    pub const fn grants_compiler_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_runtime_authority(&self) -> bool {
+        false
+    }
+}
+
 impl WorkerDeviceLibraryProviderEvidenceV1 {
     pub fn provider_identity(&self) -> &str {
         &self.provider_identity
@@ -379,16 +469,19 @@ impl WorkerDeviceLibraryProviderEvidenceV1 {
 pub(crate) struct WorkerResponseReplayMetadataV1<'response> {
     diagnostics_body: &'response [u8],
     provider_evidence_body: Option<&'response [u8]>,
+    derivation_evidence_body: Option<&'response [u8]>,
 }
 
 impl<'response> WorkerResponseReplayMetadataV1<'response> {
     pub(crate) const fn from_bodies(
         diagnostics_body: &'response [u8],
         provider_evidence_body: Option<&'response [u8]>,
+        derivation_evidence_body: Option<&'response [u8]>,
     ) -> Self {
         Self {
             diagnostics_body,
             provider_evidence_body,
+            derivation_evidence_body,
         }
     }
 
@@ -397,7 +490,7 @@ impl<'response> WorkerResponseReplayMetadataV1<'response> {
         diagnostics_body: &'response [u8],
         provider_evidence_body: Option<&'response [u8]>,
     ) -> Self {
-        Self::from_bodies(diagnostics_body, provider_evidence_body)
+        Self::from_bodies(diagnostics_body, provider_evidence_body, None)
     }
 
     pub(crate) const fn diagnostics_body(&self) -> &'response [u8] {
@@ -406,6 +499,10 @@ impl<'response> WorkerResponseReplayMetadataV1<'response> {
 
     pub(crate) const fn provider_evidence_body(&self) -> Option<&'response [u8]> {
         self.provider_evidence_body
+    }
+
+    pub(crate) const fn derivation_evidence_body(&self) -> Option<&'response [u8]> {
+        self.derivation_evidence_body
     }
 }
 
@@ -422,6 +519,7 @@ pub(crate) fn reconstruct_complete_worker_response_v2(
     validate_worker_response_replay_metadata_bodies_v1(
         metadata.diagnostics_body(),
         metadata.provider_evidence_body(),
+        metadata.derivation_evidence_body(),
     )?;
     let output_identity = ContentIdentityV1::calculate(output);
     let output_body_len = 1_usize
@@ -435,7 +533,10 @@ pub(crate) fn reconstruct_complete_worker_response_v2(
     output_body.extend_from_slice(output);
 
     let provider = metadata.provider_evidence_body();
-    let magic = if provider.is_some() {
+    let derivation = metadata.derivation_evidence_body();
+    let magic = if derivation.is_some() {
+        WORKER_RESPONSE_MAGIC_V4
+    } else if provider.is_some() {
         WORKER_RESPONSE_MAGIC_V3
     } else {
         WORKER_RESPONSE_MAGIC_V2
@@ -447,10 +548,13 @@ pub(crate) fn reconstruct_complete_worker_response_v2(
         .and_then(|value| value.checked_add(request.worker_build_identity().len()))
         .and_then(|value| value.checked_add(metadata.diagnostics_body().len()))
         .and_then(|value| value.checked_add(output_body.len()))
-        .and_then(|value| {
-            provider.map_or(Some(value), |body| {
+        .and_then(|value| match derivation {
+            Some(derivation) => {
+                value.checked_add(3 * 6 + provider.map_or(0, <[u8]>::len) + derivation.len() + 32)
+            }
+            None => provider.map_or(Some(value), |body| {
                 value.checked_add(2 * 6 + body.len() + 32)
-            })
+            }),
         })
         .ok_or(WorkerProtocolError::IntegerOverflow)?;
     if estimated_len > MAX_WORKER_RESPONSE_BYTES {
@@ -469,9 +573,14 @@ pub(crate) fn reconstruct_complete_worker_response_v2(
     push_field(&mut encoded, 5, &[WorkerStageV1::Complete as u8])?;
     push_field(&mut encoded, 6, metadata.diagnostics_body())?;
     push_field(&mut encoded, 7, &output_body)?;
-    if let Some(provider) = provider {
+    if let Some(derivation) = derivation {
+        push_field(&mut encoded, 8, provider.unwrap_or_default())?;
+        push_field(&mut encoded, 9, derivation)?;
+        let response_identity = calculate_response_identity_v4(&encoded);
+        push_field(&mut encoded, 10, &response_identity)?;
+    } else if let Some(provider) = provider {
         push_field(&mut encoded, 8, provider)?;
-        let response_identity = calculate_response_identity(&encoded);
+        let response_identity = calculate_response_identity_v3(&encoded);
         push_field(&mut encoded, 9, &response_identity)?;
     }
     debug_assert_eq!(encoded.len(), estimated_len);
@@ -489,6 +598,7 @@ pub struct WorkerResponseV2 {
     diagnostics: Vec<String>,
     output: Option<WorkerOutputV2>,
     device_library_provider: Option<WorkerDeviceLibraryProviderEvidenceV1>,
+    derivation: Option<WorkerDerivationEvidenceV1>,
     response_identity: Option<[u8; 32]>,
     canonical_bytes: Vec<u8>,
 }
@@ -501,8 +611,11 @@ impl WorkerResponseV2 {
         if bytes.len() > MAX_WORKER_RESPONSE_BYTES {
             return Err(WorkerProtocolError::ResponseTooLarge);
         }
+        let has_derivation_extension = bytes.starts_with(WORKER_RESPONSE_MAGIC_V4);
         let has_provider_extension = bytes.starts_with(WORKER_RESPONSE_MAGIC_V3);
-        let (magic, field_count) = if has_provider_extension {
+        let (magic, field_count) = if has_derivation_extension {
+            (WORKER_RESPONSE_MAGIC_V4, RESPONSE_FIELD_COUNT_V4)
+        } else if has_provider_extension {
             (WORKER_RESPONSE_MAGIC_V3, RESPONSE_FIELD_COUNT_V3)
         } else {
             (WORKER_RESPONSE_MAGIC_V2, RESPONSE_FIELD_COUNT_V2)
@@ -526,19 +639,37 @@ impl WorkerResponseV2 {
             true,
         )?;
         let raw_output = decode_output(decoder.field(7, MAX_RESPONSE_OUTPUT_BODY_BYTES)?)?;
-        let (device_library_provider, response_identity) = if has_provider_extension {
+        let (device_library_provider, derivation, response_identity) = if has_derivation_extension {
+            let provider_body = decoder.field(8, MAX_PROVIDER_EVIDENCE_BYTES)?;
+            let provider = if provider_body.is_empty() {
+                None
+            } else {
+                Some(decode_provider_evidence(provider_body)?)
+            };
+            let derivation =
+                decode_derivation_evidence(decoder.field(9, MAX_DERIVATION_EVIDENCE_BYTES)?)?;
+            let identity_field_offset = decoder.position();
+            let declared_identity = fixed::<32>(decoder.field(10, 32)?)?;
+            decoder.finish(RESPONSE_FIELD_COUNT_V4)?;
+            if calculate_response_identity_v4(&bytes[..identity_field_offset]) != declared_identity
+            {
+                return Err(WorkerProtocolError::ResponseIdentityMismatch);
+            }
+            (provider, Some(derivation), Some(declared_identity))
+        } else if has_provider_extension {
             let provider =
                 decode_provider_evidence(decoder.field(8, MAX_PROVIDER_EVIDENCE_BYTES)?)?;
             let identity_field_offset = decoder.position();
             let declared_identity = fixed::<32>(decoder.field(9, 32)?)?;
             decoder.finish(RESPONSE_FIELD_COUNT_V3)?;
-            if calculate_response_identity(&bytes[..identity_field_offset]) != declared_identity {
+            if calculate_response_identity_v3(&bytes[..identity_field_offset]) != declared_identity
+            {
                 return Err(WorkerProtocolError::ResponseIdentityMismatch);
             }
-            (Some(provider), Some(declared_identity))
+            (Some(provider), None, Some(declared_identity))
         } else {
             decoder.finish(RESPONSE_FIELD_COUNT_V2)?;
-            (None, None)
+            (None, None, None)
         };
 
         if request_id != request.request_id
@@ -557,6 +688,9 @@ impl WorkerResponseV2 {
         }) {
             return Err(WorkerProtocolError::ProviderEvidenceMismatch);
         }
+        if let Some(evidence) = &derivation {
+            validate_derivation_against_request(request, evidence)?;
+        }
         if (stage == WorkerStageV1::Complete) != raw_output.is_some() {
             return Err(WorkerProtocolError::InvalidResponseState);
         }
@@ -572,6 +706,16 @@ impl WorkerResponseV2 {
         {
             return Err(WorkerProtocolError::InvalidOutputBound);
         }
+        if derivation
+            .as_ref()
+            .zip(output.as_ref())
+            .is_some_and(|(evidence, output)| evidence.hsaco != output.identity)
+        {
+            return Err(WorkerProtocolError::ContentIdentityMismatch);
+        }
+        if derivation.is_some() != output.is_some() && has_derivation_extension {
+            return Err(WorkerProtocolError::InvalidResponseState);
+        }
         Ok(Self {
             request_id,
             request_identity,
@@ -581,6 +725,7 @@ impl WorkerResponseV2 {
             diagnostics,
             output,
             device_library_provider,
+            derivation,
             response_identity,
             canonical_bytes: copy_bytes(bytes, "decoded response canonical bytes")?,
         })
@@ -598,6 +743,9 @@ impl WorkerResponseV2 {
         }
         let metadata = response_replay_metadata_from_bytes(self.canonical_bytes())?;
         if metadata.provider_evidence_body.is_some() != self.device_library_provider.is_some() {
+            return Err(WorkerProtocolError::NonCanonicalEncoding);
+        }
+        if metadata.derivation_evidence_body.is_some() != self.derivation.is_some() {
             return Err(WorkerProtocolError::NonCanonicalEncoding);
         }
         Ok(metadata)
@@ -633,6 +781,10 @@ impl WorkerResponseV2 {
 
     pub const fn device_library_provider(&self) -> Option<&WorkerDeviceLibraryProviderEvidenceV1> {
         self.device_library_provider.as_ref()
+    }
+
+    pub const fn derivation(&self) -> Option<&WorkerDerivationEvidenceV1> {
+        self.derivation.as_ref()
     }
 
     pub const fn response_identity(&self) -> Option<&[u8; 32]> {
@@ -671,14 +823,18 @@ fn response_replay_metadata_from_bytes(
     let magic = bytes
         .get(..WORKER_RESPONSE_MAGIC_V2.len())
         .ok_or(WorkerProtocolError::Truncated)?;
-    let has_provider_extension = if magic == WORKER_RESPONSE_MAGIC_V2 {
-        false
+    let (has_provider_extension, has_derivation_extension) = if magic == WORKER_RESPONSE_MAGIC_V2 {
+        (false, false)
     } else if magic == WORKER_RESPONSE_MAGIC_V3 {
-        true
+        (true, false)
+    } else if magic == WORKER_RESPONSE_MAGIC_V4 {
+        (false, true)
     } else {
         return Err(WorkerProtocolError::BadMagic);
     };
-    let (expected_magic, field_count) = if has_provider_extension {
+    let (expected_magic, field_count) = if has_derivation_extension {
+        (WORKER_RESPONSE_MAGIC_V4, RESPONSE_FIELD_COUNT_V4)
+    } else if has_provider_extension {
         (WORKER_RESPONSE_MAGIC_V3, RESPONSE_FIELD_COUNT_V3)
     } else {
         (WORKER_RESPONSE_MAGIC_V2, RESPONSE_FIELD_COUNT_V2)
@@ -700,27 +856,38 @@ fn response_replay_metadata_from_bytes(
     validate_diagnostics_body(diagnostics_body)?;
     validate_complete_output_body(decoder.field(7, MAX_RESPONSE_OUTPUT_BODY_BYTES)?)?;
 
-    let provider_evidence_body = if has_provider_extension {
+    let (provider_evidence_body, derivation_evidence_body) = if has_derivation_extension {
+        let provider = decoder.field(8, MAX_PROVIDER_EVIDENCE_BYTES)?;
+        if !provider.is_empty() {
+            decode_provider_evidence(provider)?;
+        }
+        let derivation = decoder.field(9, MAX_DERIVATION_EVIDENCE_BYTES)?;
+        decode_derivation_evidence(derivation)?;
+        fixed::<32>(decoder.field(10, 32)?)?;
+        ((!provider.is_empty()).then_some(provider), Some(derivation))
+    } else if has_provider_extension {
         let body = decoder.field(8, MAX_PROVIDER_EVIDENCE_BYTES)?;
         if body.is_empty() {
             return Err(WorkerProtocolError::InvalidFieldLength(8));
         }
         fixed::<32>(decoder.field(9, 32)?)?;
-        Some(body)
+        (Some(body), None)
     } else {
-        None
+        (None, None)
     };
     decoder.finish(field_count)?;
 
     Ok(WorkerResponseReplayMetadataV1 {
         diagnostics_body,
         provider_evidence_body,
+        derivation_evidence_body,
     })
 }
 
 pub(crate) fn validate_worker_response_replay_metadata_bodies_v1(
     diagnostics_body: &[u8],
     provider_evidence_body: Option<&[u8]>,
+    derivation_evidence_body: Option<&[u8]>,
 ) -> Result<(), WorkerProtocolError> {
     if diagnostics_body.len() > MAX_RESPONSE_DIAGNOSTICS_BODY_BYTES {
         return Err(WorkerProtocolError::DiagnosticsTooLarge);
@@ -731,6 +898,12 @@ pub(crate) fn validate_worker_response_replay_metadata_bodies_v1(
             return Err(WorkerProtocolError::InvalidFieldLength(8));
         }
         decode_provider_evidence(provider)?;
+    }
+    if let Some(derivation) = derivation_evidence_body {
+        if derivation.is_empty() || derivation.len() > MAX_DERIVATION_EVIDENCE_BYTES {
+            return Err(WorkerProtocolError::InvalidFieldLength(9));
+        }
+        decode_derivation_evidence(derivation)?;
     }
     Ok(())
 }
@@ -1405,6 +1578,159 @@ fn decode_provider_evidence(
     })
 }
 
+fn decode_stage_content_identity(
+    cursor: &mut Cursor<'_>,
+) -> Result<ContentIdentityV1, WorkerProtocolError> {
+    let sha256 = cursor.fixed::<32>()?;
+    let byte_len = cursor.u64()?;
+    if byte_len == 0 {
+        return Err(WorkerProtocolError::InvalidOutputBound);
+    }
+    Ok(ContentIdentityV1::from_parts(sha256, byte_len))
+}
+
+fn decode_derivation_evidence(
+    bytes: &[u8],
+) -> Result<WorkerDerivationEvidenceV1, WorkerProtocolError> {
+    let preimage_len = bytes
+        .len()
+        .checked_sub(32)
+        .ok_or(WorkerProtocolError::Truncated)?;
+    let mut cursor = Cursor::new(bytes);
+    if cursor.byte()? != 1 {
+        return Err(WorkerProtocolError::UnknownEnum(
+            "derivation evidence version",
+        ));
+    }
+    let linked_module = decode_stage_content_identity(&mut cursor)?;
+    let optimized_module = decode_stage_content_identity(&mut cursor)?;
+    let generated_object = decode_stage_content_identity(&mut cursor)?;
+    let input_count = cursor.u32()? as usize;
+    if input_count == 0 || input_count > MAX_NATIVE_LINK_INPUTS {
+        return Err(WorkerProtocolError::TooManyInputs);
+    }
+    let mut native_link_inputs = fallible_vec(input_count, "decoded native-link inputs")?;
+    let mut generated_count = 0_usize;
+    for index in 0..input_count {
+        let source = match cursor.byte()? {
+            1 => WorkerNativeLinkInputSourceV1::RequestRelocatable,
+            2 => WorkerNativeLinkInputSourceV1::GeneratedObject,
+            _ => return Err(WorkerProtocolError::UnknownEnum("native-link input source")),
+        };
+        let content = decode_stage_content_identity(&mut cursor)?;
+        if source == WorkerNativeLinkInputSourceV1::GeneratedObject {
+            generated_count += 1;
+            if index + 1 != input_count || content != generated_object {
+                return Err(WorkerProtocolError::NonCanonicalEncoding);
+            }
+        }
+        native_link_inputs.push(WorkerNativeLinkInputEvidenceV1 { source, content });
+    }
+    if generated_count != 1 {
+        return Err(WorkerProtocolError::NonCanonicalEncoding);
+    }
+    let lld_invocation_identity = cursor.fixed::<32>()?;
+    if lld_invocation_identity == [0; 32] {
+        return Err(WorkerProtocolError::NonCanonicalEncoding);
+    }
+    let hsaco = decode_stage_content_identity(&mut cursor)?;
+    if cursor.position != preimage_len {
+        return Err(WorkerProtocolError::NonCanonicalEncoding);
+    }
+    let evidence_identity = cursor.fixed::<32>()?;
+    cursor.finish()?;
+    if calculate_derivation_evidence_identity(&bytes[..preimage_len]) != evidence_identity {
+        return Err(WorkerProtocolError::ContentIdentityMismatch);
+    }
+    Ok(WorkerDerivationEvidenceV1 {
+        linked_module,
+        optimized_module,
+        generated_object,
+        native_link_inputs,
+        lld_invocation_identity,
+        hsaco,
+        evidence_identity,
+    })
+}
+
+fn validate_derivation_against_request(
+    request: &WorkerRequestV2,
+    evidence: &WorkerDerivationEvidenceV1,
+) -> Result<(), WorkerProtocolError> {
+    let mut inputs: Vec<&WorkerInputV1> = request.external_providers.iter().collect();
+    inputs.push(&request.compiler_module);
+    inputs.sort_by_key(|input| (input.identity(), input.kind()));
+    let mut expected: Vec<WorkerNativeLinkInputEvidenceV1> = inputs
+        .into_iter()
+        .filter(|input| input.kind() == WorkerInputKindV1::AmdGpuRelocatable)
+        .map(|input| WorkerNativeLinkInputEvidenceV1 {
+            source: WorkerNativeLinkInputSourceV1::RequestRelocatable,
+            content: input.identity(),
+        })
+        .collect();
+    expected.push(WorkerNativeLinkInputEvidenceV1 {
+        source: WorkerNativeLinkInputSourceV1::GeneratedObject,
+        content: evidence.generated_object,
+    });
+    if evidence.native_link_inputs != expected
+        || evidence.lld_invocation_identity
+            != calculate_lld_invocation_identity(request, &evidence.native_link_inputs)
+    {
+        return Err(WorkerProtocolError::NonCanonicalEncoding);
+    }
+    Ok(())
+}
+
+fn calculate_lld_invocation_identity(
+    request: &WorkerRequestV2,
+    inputs: &[WorkerNativeLinkInputEvidenceV1],
+) -> [u8; 32] {
+    const DOMAIN: &[u8] = b"FE2O3/UPSTREAM-LLD-ELF-INVOCATION/V1\0";
+    let mut arguments: Vec<String> = [
+        "ld.lld",
+        "--shared",
+        "-Bsymbolic",
+        "--no-undefined",
+        "--export-dynamic",
+        "--build-id=none",
+        "--nostdlib",
+        "--no-dependent-libraries",
+        "--fatal-warnings",
+        "--threads=1",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect();
+    if request.options.strip_debug() {
+        arguments.push("--strip-debug".to_owned());
+    }
+    arguments.extend(
+        request
+            .final_symbols
+            .iter()
+            .map(|symbol| format!("--undefined={symbol}")),
+    );
+    arguments.extend(inputs.iter().map(|input| {
+        format!(
+            "@input={}:{}:{}",
+            input.source as u8,
+            lower_hex(input.content.sha256()),
+            input.content.byte_len()
+        )
+    }));
+    arguments.push("-o".to_owned());
+    arguments.push("@output=linked.hsaco".to_owned());
+
+    let mut hasher = Sha256::new();
+    hasher.update(DOMAIN);
+    hasher.update((arguments.len() as u32).to_le_bytes());
+    for argument in arguments {
+        hasher.update((argument.len() as u32).to_le_bytes());
+        hasher.update(argument.as_bytes());
+    }
+    hasher.finalize().into()
+}
+
 fn calculate_provider_manifest_identity(preimage: &[u8]) -> [u8; 32] {
     let mut hasher = Sha256::new();
     hasher.update(PROVIDER_MANIFEST_DOMAIN_V1);
@@ -1413,9 +1739,25 @@ fn calculate_provider_manifest_identity(preimage: &[u8]) -> [u8; 32] {
     hasher.finalize().into()
 }
 
-fn calculate_response_identity(encoded_without_identity: &[u8]) -> [u8; 32] {
+fn calculate_derivation_evidence_identity(preimage: &[u8]) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(DERIVATION_EVIDENCE_DOMAIN_V1);
+    hasher.update((preimage.len() as u64).to_le_bytes());
+    hasher.update(preimage);
+    hasher.finalize().into()
+}
+
+fn calculate_response_identity_v3(encoded_without_identity: &[u8]) -> [u8; 32] {
     let mut hasher = Sha256::new();
     hasher.update(RESPONSE_DOMAIN_V3);
+    hasher.update((encoded_without_identity.len() as u64).to_le_bytes());
+    hasher.update(encoded_without_identity);
+    hasher.finalize().into()
+}
+
+fn calculate_response_identity_v4(encoded_without_identity: &[u8]) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(RESPONSE_DOMAIN_V4);
     hasher.update((encoded_without_identity.len() as u64).to_le_bytes());
     hasher.update(encoded_without_identity);
     hasher.finalize().into()
@@ -1905,7 +2247,7 @@ mod tests {
         encoded[..8].copy_from_slice(WORKER_RESPONSE_MAGIC_V3);
         let provider = provider_evidence_body(provider_identity, file_digests);
         push_field(&mut encoded, 8, &provider).unwrap();
-        let response_identity = calculate_response_identity(&encoded);
+        let response_identity = calculate_response_identity_v3(&encoded);
         push_field(&mut encoded, 9, &response_identity).unwrap();
         encoded
     }
@@ -1918,6 +2260,72 @@ mod tests {
             "gfx942-ocml-v1",
             [[0x41; 32], [0x42; 32]],
         )
+    }
+
+    fn derivation_evidence_body(request: &WorkerRequestV2, output: &[u8]) -> Vec<u8> {
+        let linked_module = ContentIdentityV1::calculate(b"linked-module");
+        let optimized_module = ContentIdentityV1::calculate(b"optimized-module");
+        let generated_object = ContentIdentityV1::calculate(b"generated-object");
+        let mut request_inputs: Vec<&WorkerInputV1> = request.external_providers.iter().collect();
+        request_inputs.push(&request.compiler_module);
+        request_inputs.sort_by_key(|input| (input.identity(), input.kind()));
+        let mut native_link_inputs: Vec<WorkerNativeLinkInputEvidenceV1> = request_inputs
+            .into_iter()
+            .filter(|input| input.kind() == WorkerInputKindV1::AmdGpuRelocatable)
+            .map(|input| WorkerNativeLinkInputEvidenceV1 {
+                source: WorkerNativeLinkInputSourceV1::RequestRelocatable,
+                content: input.identity(),
+            })
+            .collect();
+        native_link_inputs.push(WorkerNativeLinkInputEvidenceV1 {
+            source: WorkerNativeLinkInputSourceV1::GeneratedObject,
+            content: generated_object,
+        });
+        let lld_invocation_identity =
+            calculate_lld_invocation_identity(request, &native_link_inputs);
+
+        let mut body = vec![1];
+        for identity in [linked_module, optimized_module, generated_object] {
+            body.extend_from_slice(identity.sha256());
+            body.extend_from_slice(&identity.byte_len().to_le_bytes());
+        }
+        body.extend_from_slice(&(native_link_inputs.len() as u32).to_le_bytes());
+        for input in &native_link_inputs {
+            body.push(input.source as u8);
+            body.extend_from_slice(input.content.sha256());
+            body.extend_from_slice(&input.content.byte_len().to_le_bytes());
+        }
+        body.extend_from_slice(&lld_invocation_identity);
+        let hsaco = ContentIdentityV1::calculate(output);
+        body.extend_from_slice(hsaco.sha256());
+        body.extend_from_slice(&hsaco.byte_len().to_le_bytes());
+        let identity = calculate_derivation_evidence_identity(&body);
+        body.extend_from_slice(&identity);
+        body
+    }
+
+    fn derivation_response_from_body(
+        request: &WorkerRequestV2,
+        output: &[u8],
+        derivation_body: &[u8],
+    ) -> Vec<u8> {
+        let mut encoded = success_response_with_diagnostics(request, output, &[]);
+        encoded[..8].copy_from_slice(WORKER_RESPONSE_MAGIC_V4);
+        push_field(&mut encoded, 8, &[]).unwrap();
+        push_field(&mut encoded, 9, derivation_body).unwrap();
+        let response_identity = calculate_response_identity_v4(&encoded);
+        push_field(&mut encoded, 10, &response_identity).unwrap();
+        encoded
+    }
+
+    fn derivation_response(request: &WorkerRequestV2, output: &[u8]) -> Vec<u8> {
+        derivation_response_from_body(request, output, &derivation_evidence_body(request, output))
+    }
+
+    fn reseal_derivation_body(body: &mut [u8]) {
+        let identity_offset = body.len() - 32;
+        let identity = calculate_derivation_evidence_identity(&body[..identity_offset]);
+        body[identity_offset..].copy_from_slice(&identity);
     }
 
     fn incomplete_response(request: &WorkerRequestV2) -> Vec<u8> {
@@ -2251,7 +2659,7 @@ mod tests {
         assert!(response_replay_metadata_from_bytes(&valid_v2).is_ok());
 
         let mut bad_magic = valid_v2.clone();
-        bad_magic[..8].copy_from_slice(b"F3LRSP04");
+        bad_magic[..8].copy_from_slice(b"F3LRSP05");
         assert_eq!(
             response_replay_metadata_from_bytes(&bad_magic),
             Err(WorkerProtocolError::BadMagic)
@@ -2301,12 +2709,15 @@ mod tests {
     fn response_replay_metadata_shell_bounds_are_exact_and_independent() {
         assert_eq!(MAX_RESPONSE_DIAGNOSTICS_BODY_BYTES, 16_644);
         assert_eq!(MAX_PROVIDER_EVIDENCE_BYTES, 1_067_889);
+        assert_eq!(MAX_DERIVATION_EVIDENCE_BYTES, 5_518);
 
         let bootstrap_shell = MAX_RESPONSE_DIAGNOSTICS_BODY_BYTES
             .checked_add(MAX_PROVIDER_EVIDENCE_BYTES)
+            .and_then(|value| value.checked_add(MAX_DERIVATION_EVIDENCE_BYTES))
             .unwrap();
         let replay_shell = MAX_RESPONSE_DIAGNOSTICS_BODY_BYTES
             .checked_add(MAX_PROVIDER_EVIDENCE_BYTES)
+            .and_then(|value| value.checked_add(MAX_DERIVATION_EVIDENCE_BYTES))
             .unwrap();
         assert_eq!(
             MAX_WORKER_RESPONSE_REPLAY_METADATA_SHELL_BYTES_V1,
@@ -2314,7 +2725,7 @@ mod tests {
         );
         assert_eq!(
             MAX_WORKER_RESPONSE_REPLAY_METADATA_SHELL_BYTES_V1,
-            1_084_533
+            1_090_051
         );
         assert_eq!(
             MAX_WORKER_RESPONSE_REPLAY_METADATA_TWO_SHELL_BYTES_V1,
@@ -2322,7 +2733,7 @@ mod tests {
         );
         assert_eq!(
             MAX_WORKER_RESPONSE_REPLAY_METADATA_TWO_SHELL_BYTES_V1,
-            2_169_066
+            2_180_102
         );
     }
 
@@ -2363,5 +2774,79 @@ mod tests {
             ),
             Err(WorkerProtocolError::ResponseIdentityMismatch)
         );
+    }
+
+    #[test]
+    fn v4_derivation_custody_is_exact_independent_and_fail_closed() {
+        let request = request();
+        let output = b"linked-with-stage-custody";
+        let encoded = derivation_response(&request, output);
+        let exchange =
+            InertDecodedWorkerExchangeV2::decode(request.canonical_bytes(), &encoded).unwrap();
+        let response = exchange.response();
+        let evidence = response.derivation().unwrap();
+        assert_eq!(evidence.hsaco(), ContentIdentityV1::calculate(output));
+        assert_eq!(evidence.native_link_inputs().len(), 2);
+        assert_eq!(
+            evidence.native_link_inputs()[0].source(),
+            WorkerNativeLinkInputSourceV1::RequestRelocatable
+        );
+        assert_eq!(
+            evidence.native_link_inputs()[1].source(),
+            WorkerNativeLinkInputSourceV1::GeneratedObject
+        );
+        assert_eq!(
+            evidence.native_link_inputs()[1].content(),
+            evidence.generated_object()
+        );
+        assert!(!evidence.grants_compiler_authority());
+        assert!(!evidence.grants_runtime_authority());
+
+        for end in 0..encoded.len() {
+            assert!(
+                WorkerResponseV2::decode_for_request(&encoded[..end], &request).is_err(),
+                "accepted V4 response prefix ending at {end}"
+            );
+        }
+        let mut trailing = encoded.clone();
+        trailing.push(0);
+        assert!(WorkerResponseV2::decode_for_request(&trailing, &request).is_err());
+
+        let derivation_range = response_field_body_range(&encoded, 9);
+        for relative in [0, 1, 41, 81, 121, derivation_range.len() - 1] {
+            let mut mutated = encoded.clone();
+            mutated[derivation_range.start + relative] ^= 1;
+            assert!(WorkerResponseV2::decode_for_request(&mutated, &request).is_err());
+        }
+
+        let mut false_lld = derivation_evidence_body(&request, output);
+        let native_count = 2_usize;
+        let lld_offset = 1 + 3 * CONTENT_IDENTITY_BYTES + 4 + native_count * 41;
+        false_lld[lld_offset] ^= 1;
+        reseal_derivation_body(&mut false_lld);
+        let false_lld = derivation_response_from_body(&request, output, &false_lld);
+        assert_eq!(
+            WorkerResponseV2::decode_for_request(&false_lld, &request),
+            Err(WorkerProtocolError::NonCanonicalEncoding)
+        );
+
+        let mut false_hsaco = derivation_evidence_body(&request, output);
+        false_hsaco[lld_offset + 32] ^= 1;
+        reseal_derivation_body(&mut false_hsaco);
+        let false_hsaco = derivation_response_from_body(&request, output, &false_hsaco);
+        assert_eq!(
+            WorkerResponseV2::decode_for_request(&false_hsaco, &request),
+            Err(WorkerProtocolError::ContentIdentityMismatch)
+        );
+
+        let mut reordered = derivation_evidence_body(&request, output);
+        let inputs_offset = 1 + 3 * CONTENT_IDENTITY_BYTES + 4;
+        let first = reordered[inputs_offset..inputs_offset + 41].to_vec();
+        let second = reordered[inputs_offset + 41..inputs_offset + 82].to_vec();
+        reordered[inputs_offset..inputs_offset + 41].copy_from_slice(&second);
+        reordered[inputs_offset + 41..inputs_offset + 82].copy_from_slice(&first);
+        reseal_derivation_body(&mut reordered);
+        let reordered = derivation_response_from_body(&request, output, &reordered);
+        assert!(WorkerResponseV2::decode_for_request(&reordered, &request).is_err());
     }
 }

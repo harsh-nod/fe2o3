@@ -355,6 +355,7 @@ mod tests {
             1001,
             1002,
             CompilerExecutionExternalAnchorServiceIdentityV1::new(service_uid, 1004).unwrap(),
+            CompilerExecutionIssuerMeasurementV1::new([0x54; 32], 12288).unwrap(),
             CompilerExecutionIssuerMeasurementV1::new([0x55; 32], 16384).unwrap(),
             &policy,
         )
@@ -389,6 +390,7 @@ mod tests {
             if service_uid == 1 { 2 } else { 1 },
             if service_gid == 1 { 2 } else { 1 },
             service,
+            CompilerExecutionIssuerMeasurementV1::new([0x54; 32], 12288).unwrap(),
             CompilerExecutionIssuerMeasurementV1::new([0x55; 32], 16384).unwrap(),
             &policy,
         )

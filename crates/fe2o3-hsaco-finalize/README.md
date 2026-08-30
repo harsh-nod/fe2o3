@@ -151,6 +151,19 @@ preparation, persistence, and recovery rederive the V3 binding, replay both
 worker exchanges, re-inspect and re-finalize the raw HSACO, and require exact
 source, plan, finalization, and byte identities before durable publication.
 
+`revalidate_protected_worker_v3_finalizer_derivation_v1` performs the same
+strict reconstruction from borrowed envelope components and returns a compact,
+move-only `RevalidatedProtectedWorkerV3FinalizerDerivationV1`. It retains the
+exact transcript, source and binding, measured worker, request, compiler-module,
+link-plan, linked-module, optimized-module, object, native-input, in-process LLD,
+raw-HSACO, finalization, and finalized-HSACO identities. Recovered host admission
+and the protected verifier call this shared validator independently; host
+lineage includes the first identity, promotion compares both, and an accepted
+decision retains the verifier-owned result. The validator uses bounded transient
+copies only where an external provider interface requires ownership. Legacy
+compact V2 transcripts remain decodable for inspection but fail production
+revalidation because they do not retain exact derivation bodies.
+
 These checks establish structural consistency and custody for the sole Worker
 V3 route. They do not authenticate compiler origin, prove compiler refinement or
 kernel semantics, prove what implementation produced a measured worker binary,

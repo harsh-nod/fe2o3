@@ -54,20 +54,92 @@ fn serve_connected_peer_with_timeout(
     peer: OwnedFd,
     response_timeout: Duration,
 ) -> Result<ExternalAnchorServiceReportV1, ExternalAnchorDaemonErrorV1> {
+    serve_connected_peer_with_hooks(anchor, peer, response_timeout, &mut NoopServiceHooksV1)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ServiceBoundaryV1 {
+    BeforeReceive,
+    AfterReceive,
+    BeforeExchange,
+    AfterExchange,
+    BeforeSend,
+    AfterSend,
+}
+
+impl ServiceBoundaryV1 {
+    #[cfg(test)]
+    const ALL: [Self; 6] = [
+        Self::BeforeReceive,
+        Self::AfterReceive,
+        Self::BeforeExchange,
+        Self::AfterExchange,
+        Self::BeforeSend,
+        Self::AfterSend,
+    ];
+
+    const fn operation(self) -> &'static str {
+        match self {
+            Self::BeforeReceive => "before receiving external-anchor challenge",
+            Self::AfterReceive => "after receiving external-anchor challenge",
+            Self::BeforeExchange => "before applying external-anchor challenge",
+            Self::AfterExchange => "after applying external-anchor challenge",
+            Self::BeforeSend => "before sending external-anchor observation",
+            Self::AfterSend => "after sending external-anchor observation",
+        }
+    }
+}
+
+trait ServiceHooksV1 {
+    fn checkpoint(&mut self, boundary: ServiceBoundaryV1) -> io::Result<()>;
+}
+
+struct NoopServiceHooksV1;
+
+impl ServiceHooksV1 for NoopServiceHooksV1 {
+    fn checkpoint(&mut self, _boundary: ServiceBoundaryV1) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+fn serve_connected_peer_with_hooks<H: ServiceHooksV1>(
+    anchor: &mut DurableExternalAnchorV1,
+    peer: OwnedFd,
+    response_timeout: Duration,
+    hooks: &mut H,
+) -> Result<ExternalAnchorServiceReportV1, ExternalAnchorDaemonErrorV1> {
     if response_timeout.is_zero() {
         return Err(ExternalAnchorDaemonErrorV1::InvalidResponseTimeout);
     }
     let mut exchanges = 0_u64;
     loop {
+        service_checkpoint(hooks, ServiceBoundaryV1::BeforeReceive)?;
         let Some(challenge) = receive_challenge(&peer)? else {
             return Ok(ExternalAnchorServiceReportV1 { exchanges });
         };
+        service_checkpoint(hooks, ServiceBoundaryV1::AfterReceive)?;
+        service_checkpoint(hooks, ServiceBoundaryV1::BeforeExchange)?;
         let observation = anchor.exchange(&challenge)?;
+        service_checkpoint(hooks, ServiceBoundaryV1::AfterExchange)?;
+        service_checkpoint(hooks, ServiceBoundaryV1::BeforeSend)?;
         send_observation(&peer, &observation, response_timeout)?;
+        service_checkpoint(hooks, ServiceBoundaryV1::AfterSend)?;
         exchanges = exchanges
             .checked_add(1)
             .ok_or(ExternalAnchorDaemonErrorV1::ExchangeCountOverflow)?;
     }
+}
+
+fn service_checkpoint<H: ServiceHooksV1>(
+    hooks: &mut H,
+    boundary: ServiceBoundaryV1,
+) -> Result<(), ExternalAnchorDaemonErrorV1> {
+    hooks
+        .checkpoint(boundary)
+        .map_err(|source| ExternalAnchorDaemonErrorV1::Io {
+            operation: boundary.operation(),
+            source,
+        })
 }
 
 fn validate_peer(peer: &OwnedFd) -> Result<(), ExternalAnchorDaemonErrorV1> {
@@ -381,7 +453,8 @@ impl From<ExternalAnchorServiceErrorV1> for ExternalAnchorDaemonErrorV1 {
 #[cfg(test)]
 mod tests {
     use std::fs::{self, File};
-    use std::os::fd::AsFd;
+    use std::io;
+    use std::os::fd::{AsFd, AsRawFd};
     use std::os::unix::fs::PermissionsExt;
     use std::thread;
 
@@ -398,6 +471,32 @@ mod tests {
     use rustix::process::{PidfdFlags, getpid, pidfd_open};
 
     use super::*;
+
+    struct CrashAtServiceBoundaryV1 {
+        target: ServiceBoundaryV1,
+        fired: bool,
+    }
+
+    impl CrashAtServiceBoundaryV1 {
+        const fn new(target: ServiceBoundaryV1) -> Self {
+            Self {
+                target,
+                fired: false,
+            }
+        }
+    }
+
+    impl ServiceHooksV1 for CrashAtServiceBoundaryV1 {
+        fn checkpoint(&mut self, boundary: ServiceBoundaryV1) -> io::Result<()> {
+            if !self.fired && boundary == self.target {
+                self.fired = true;
+                return Err(io::Error::other(
+                    "injected external-anchor daemon process crash",
+                ));
+            }
+            Ok(())
+        }
+    }
 
     fn root() -> (tempfile::TempDir, OwnedFd) {
         let directory = tempfile::tempdir().unwrap();
@@ -479,6 +578,163 @@ mod tests {
 
         let report = service.join().unwrap().unwrap();
         assert_eq!(report.exchanges(), 2);
+    }
+
+    #[test]
+    fn response_delivery_failure_restarts_and_replays_exact_committed_advance() {
+        let (directory, root) = root();
+        let (signing, pinned) = keys(29);
+        let mut anchor = DurableExternalAnchorV1::initialize(root, signing).unwrap();
+        let advance = challenge(
+            AnchoredStateV1::from_local_state(0, HashChainHeadV1::from_bytes([0; 32])),
+            63,
+            33,
+            &pinned,
+        );
+        let proposed_head = advance.proposed_head();
+        let (service_peer, client_peer) =
+            endpoint_pair(SocketFlags::CLOEXEC | SocketFlags::NONBLOCK);
+
+        // Keep the request direction live while making response delivery fail deterministically.
+        // SAFETY: `client_peer` is a live connected socket and shutdown consumes no memory.
+        assert_eq!(
+            unsafe { libc::shutdown(client_peer.as_raw_fd(), libc::SHUT_RD) },
+            0
+        );
+        let service = thread::spawn(move || serve_connected_peer_v1(&mut anchor, service_peer));
+        assert_eq!(
+            send(&client_peer, advance.as_bytes(), SendFlags::NOSIGNAL).unwrap(),
+            advance.as_bytes().len()
+        );
+        assert!(matches!(
+            service.join().unwrap(),
+            Err(ExternalAnchorDaemonErrorV1::PeerClosed)
+        ));
+        drop(client_peer);
+
+        let root = File::open(directory.path()).unwrap().into();
+        let (signing, _) = keys(29);
+        let mut restarted = DurableExternalAnchorV1::open(root, signing).unwrap();
+        assert_eq!(restarted.sequence(), 1);
+        assert_eq!(restarted.head(), proposed_head);
+
+        let (service_peer, client_peer) =
+            endpoint_pair(SocketFlags::CLOEXEC | SocketFlags::NONBLOCK);
+        let service = thread::spawn(move || serve_connected_peer_v1(&mut restarted, service_peer));
+        let identity = CompilerExecutionExternalAnchorServiceIdentityV1::new(
+            rustix::process::geteuid().as_raw(),
+            rustix::process::getegid().as_raw(),
+        )
+        .unwrap();
+        let admission =
+            ProtectedExternalAnchorServiceAdmissionV1::admit_non_authoritative_same_uid_test(
+                client_peer,
+                pidfd_open(getpid(), PidfdFlags::empty()).unwrap(),
+                identity,
+            )
+            .unwrap();
+        let mut transport =
+            ProtectedCompilerExecutionExternalAnchorV1::new(admission, pinned).unwrap();
+        let receipt = transport.exchange(&advance).unwrap();
+        assert_eq!(receipt.position(), AnchorPositionV1::Proposed);
+        assert_eq!(receipt.challenge().proposed_head(), proposed_head);
+        drop(transport);
+        assert_eq!(service.join().unwrap().unwrap().exchanges(), 1);
+
+        let root = File::open(directory.path()).unwrap().into();
+        let (signing, _) = keys(29);
+        let reopened = DurableExternalAnchorV1::open(root, signing).unwrap();
+        assert_eq!(reopened.sequence(), 1);
+        assert_eq!(reopened.head(), proposed_head);
+    }
+
+    #[test]
+    fn every_transport_boundary_restarts_at_prior_or_exact_proposed_state() {
+        for boundary in ServiceBoundaryV1::ALL {
+            let (directory, root) = root();
+            let (signing, pinned) = keys(30);
+            let mut anchor = DurableExternalAnchorV1::initialize(root, signing).unwrap();
+            let advance = challenge(
+                AnchoredStateV1::from_local_state(0, HashChainHeadV1::from_bytes([0; 32])),
+                64,
+                34,
+                &pinned,
+            );
+            let proposed_head = advance.proposed_head();
+            let (service_peer, client_peer) =
+                endpoint_pair(SocketFlags::CLOEXEC | SocketFlags::NONBLOCK);
+            assert_eq!(
+                send(&client_peer, advance.as_bytes(), SendFlags::NOSIGNAL).unwrap(),
+                advance.as_bytes().len()
+            );
+            let mut fault = CrashAtServiceBoundaryV1::new(boundary);
+            assert!(matches!(
+                serve_connected_peer_with_hooks(
+                    &mut anchor,
+                    service_peer,
+                    EXTERNAL_ANCHOR_RESPONSE_TIMEOUT_V1,
+                    &mut fault,
+                ),
+                Err(ExternalAnchorDaemonErrorV1::Io { .. })
+            ));
+            assert!(fault.fired, "fault did not fire at {boundary:?}");
+            drop(anchor);
+            drop(client_peer);
+
+            let root = File::open(directory.path()).unwrap().into();
+            let (signing, _) = keys(30);
+            let mut restarted = DurableExternalAnchorV1::open(root, signing).unwrap();
+            let persisted_proposed = matches!(
+                boundary,
+                ServiceBoundaryV1::AfterExchange
+                    | ServiceBoundaryV1::BeforeSend
+                    | ServiceBoundaryV1::AfterSend
+            );
+            assert_eq!(
+                restarted.sequence(),
+                u64::from(persisted_proposed),
+                "unexpected recovered sequence at {boundary:?}"
+            );
+            assert_eq!(
+                restarted.head(),
+                if persisted_proposed {
+                    proposed_head
+                } else {
+                    HashChainHeadV1::from_bytes([0; 32])
+                },
+                "unexpected recovered head at {boundary:?}"
+            );
+
+            let (service_peer, client_peer) =
+                endpoint_pair(SocketFlags::CLOEXEC | SocketFlags::NONBLOCK);
+            let service =
+                thread::spawn(move || serve_connected_peer_v1(&mut restarted, service_peer));
+            let identity = CompilerExecutionExternalAnchorServiceIdentityV1::new(
+                rustix::process::geteuid().as_raw(),
+                rustix::process::getegid().as_raw(),
+            )
+            .unwrap();
+            let admission =
+                ProtectedExternalAnchorServiceAdmissionV1::admit_non_authoritative_same_uid_test(
+                    client_peer,
+                    pidfd_open(getpid(), PidfdFlags::empty()).unwrap(),
+                    identity,
+                )
+                .unwrap();
+            let mut transport =
+                ProtectedCompilerExecutionExternalAnchorV1::new(admission, pinned).unwrap();
+            let receipt = transport.exchange(&advance).unwrap();
+            assert_eq!(receipt.position(), AnchorPositionV1::Proposed);
+            assert_eq!(receipt.challenge().proposed_head(), proposed_head);
+            drop(transport);
+            assert_eq!(service.join().unwrap().unwrap().exchanges(), 1);
+
+            let root = File::open(directory.path()).unwrap().into();
+            let (signing, _) = keys(30);
+            let reopened = DurableExternalAnchorV1::open(root, signing).unwrap();
+            assert_eq!(reopened.sequence(), 1);
+            assert_eq!(reopened.head(), proposed_head);
+        }
     }
 
     #[test]

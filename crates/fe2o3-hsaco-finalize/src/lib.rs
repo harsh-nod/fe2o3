@@ -110,9 +110,11 @@ pub use worker_protocol::{
 };
 pub use worker_protocol_v2::{
     InertDecodedWorkerExchangeV2, WORKER_REQUEST_MAGIC_V2, WORKER_RESPONSE_MAGIC_V2,
-    WORKER_RESPONSE_MAGIC_V3, WorkerCompilerFfiEnvelopeIdentityV2,
-    WorkerDeviceLibraryProviderEvidenceV1, WorkerDeviceLibraryProviderFileEvidenceV1,
-    WorkerEvidenceClassV2, WorkerOutputV2, WorkerRequestV2, WorkerResponseV2,
+    WORKER_RESPONSE_MAGIC_V3, WORKER_RESPONSE_MAGIC_V4, WorkerCompilerFfiEnvelopeIdentityV2,
+    WorkerDerivationEvidenceV1, WorkerDeviceLibraryProviderEvidenceV1,
+    WorkerDeviceLibraryProviderFileEvidenceV1, WorkerEvidenceClassV2,
+    WorkerNativeLinkInputEvidenceV1, WorkerNativeLinkInputSourceV1, WorkerOutputV2,
+    WorkerRequestV2, WorkerResponseV2,
 };
 pub use worker_v3_compact_finalizer_replay::{
     MAX_PROTECTED_WORKER_V3_COMPACT_FINALIZER_REPLAY_BYTES_V1,
@@ -141,11 +143,14 @@ pub use worker_v3_hsaco_finalization::{
 pub use worker_v3_hsaco_publication::{
     PreparedProtectedWorkerV3HsacoPublicationV1, PublishedProtectedWorkerV3HsacoV1,
     PublishedProtectedWorkerV3LoadEnvelopePartsV1, RecoveredProtectedWorkerV3HsacoPublicationV1,
+    RevalidatedProtectedWorkerV3FinalizerDerivationIdentityV1,
+    RevalidatedProtectedWorkerV3FinalizerDerivationV1,
     SealedProtectedWorkerV3HsacoPublicationIntentV1, WorkerV3HsacoPublicationErrorV1,
     persist_prepared_protected_worker_v3_hsaco_publication_v1,
     prepare_protected_worker_v3_hsaco_publication_v1,
     publish_recovered_protected_worker_v3_hsaco_v1,
     recover_protected_worker_v3_hsaco_publication_v1,
+    revalidate_protected_worker_v3_finalizer_derivation_v1,
 };
 
 /// The only ELF section name recognized for a canonical V1 descriptor table.

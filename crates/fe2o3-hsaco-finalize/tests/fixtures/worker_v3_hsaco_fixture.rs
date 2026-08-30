@@ -2,6 +2,9 @@ use std::io::{self, Read, Write};
 
 use sha2::{Digest, Sha256};
 
+mod worker_derivation_fixture_support;
+use worker_derivation_fixture_support::append_derivation_response_fields;
+
 #[allow(dead_code)]
 mod worker_v3_hsaco_test_support;
 
@@ -101,7 +104,7 @@ fn response(
         request_identity[0] ^= 1;
     }
     let mut bytes = if is_v2 {
-        b"F3LRSP02".to_vec()
+        b"F3LRSP04".to_vec()
     } else {
         b"F3LRSP01".to_vec()
     };
@@ -141,6 +144,9 @@ fn response(
     output.extend_from_slice(&(output_bytes.len() as u64).to_le_bytes());
     output.extend_from_slice(output_bytes);
     push_field(&mut bytes, 6 + offset, &output);
+    if is_v2 {
+        append_derivation_response_fields(&mut bytes, request, output_bytes);
+    }
     bytes
 }
 

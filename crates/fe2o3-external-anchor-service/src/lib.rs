@@ -255,6 +255,14 @@ impl DurableExternalAnchorV1 {
         &mut self,
         challenge_bytes: &[u8],
     ) -> Result<[u8; ANCHOR_OBSERVATION_WIRE_LEN_V1], ExternalAnchorServiceErrorV1> {
+        self.exchange_with_persistence_hooks(challenge_bytes, &mut NoopPersistenceHooksV1)
+    }
+
+    fn exchange_with_persistence_hooks<H: PersistenceHooksV1>(
+        &mut self,
+        challenge_bytes: &[u8],
+        hooks: &mut H,
+    ) -> Result<[u8; ANCHOR_OBSERVATION_WIRE_LEN_V1], ExternalAnchorServiceErrorV1> {
         if self.poisoned {
             return Err(ExternalAnchorServiceErrorV1::Poisoned);
         }
@@ -277,7 +285,9 @@ impl DurableExternalAnchorV1 {
                     sequence: challenge.expected_sequence(),
                     head: challenge.proposed_head(),
                 };
-                if let Err(error) = replace_state(&self.root, &next.encode(&self.pinned_key)) {
+                if let Err(error) =
+                    replace_state_with_hooks(&self.root, &next.encode(&self.pinned_key), hooks)
+                {
                     self.poisoned = true;
                     return Err(error);
                 }
@@ -350,11 +360,78 @@ fn create_initial_state(
     fsync(root).map_err(|source| io_error("sync initial anchor state directory", source))
 }
 
-fn replace_state(
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PersistenceBoundaryV1 {
+    BeforeCleanup,
+    AfterCleanup,
+    BeforeCreate,
+    AfterCreate,
+    BeforeWrite,
+    AfterWrite,
+    BeforeFileSync,
+    AfterFileSync,
+    BeforeRename,
+    AfterRename,
+    BeforeDirectorySync,
+    AfterDirectorySync,
+}
+
+impl PersistenceBoundaryV1 {
+    #[cfg(test)]
+    const ALL: [Self; 12] = [
+        Self::BeforeCleanup,
+        Self::AfterCleanup,
+        Self::BeforeCreate,
+        Self::AfterCreate,
+        Self::BeforeWrite,
+        Self::AfterWrite,
+        Self::BeforeFileSync,
+        Self::AfterFileSync,
+        Self::BeforeRename,
+        Self::AfterRename,
+        Self::BeforeDirectorySync,
+        Self::AfterDirectorySync,
+    ];
+
+    const fn operation(self) -> &'static str {
+        match self {
+            Self::BeforeCleanup => "before cleaning next anchor state",
+            Self::AfterCleanup => "after cleaning next anchor state",
+            Self::BeforeCreate => "before creating next anchor state",
+            Self::AfterCreate => "after creating next anchor state",
+            Self::BeforeWrite => "before writing next anchor state",
+            Self::AfterWrite => "after writing next anchor state",
+            Self::BeforeFileSync => "before syncing next anchor state",
+            Self::AfterFileSync => "after syncing next anchor state",
+            Self::BeforeRename => "before publishing next anchor state",
+            Self::AfterRename => "after publishing next anchor state",
+            Self::BeforeDirectorySync => "before syncing published anchor state",
+            Self::AfterDirectorySync => "after syncing published anchor state",
+        }
+    }
+}
+
+trait PersistenceHooksV1 {
+    fn checkpoint(&mut self, boundary: PersistenceBoundaryV1) -> io::Result<()>;
+}
+
+struct NoopPersistenceHooksV1;
+
+impl PersistenceHooksV1 for NoopPersistenceHooksV1 {
+    fn checkpoint(&mut self, _boundary: PersistenceBoundaryV1) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+fn replace_state_with_hooks<H: PersistenceHooksV1>(
     root: &OwnedFd,
     bytes: &[u8; EXTERNAL_ANCHOR_STATE_BYTES_V1],
+    hooks: &mut H,
 ) -> Result<(), ExternalAnchorServiceErrorV1> {
+    checkpoint(hooks, PersistenceBoundaryV1::BeforeCleanup)?;
     remove_leftover_next(root)?;
+    checkpoint(hooks, PersistenceBoundaryV1::AfterCleanup)?;
+    checkpoint(hooks, PersistenceBoundaryV1::BeforeCreate)?;
     let fd = openat(
         root,
         NEXT_STATE_FILE,
@@ -362,15 +439,42 @@ fn replace_state(
         Mode::RUSR | Mode::WUSR,
     )
     .map_err(|source| io_error("create next anchor state", source))?;
-    if let Err(error) = write_and_sync(fd, bytes, "write next anchor state") {
-        let _ = unlinkat(root, NEXT_STATE_FILE, AtFlags::empty());
-        return Err(error);
-    }
-    if let Err(source) = renameat(root, NEXT_STATE_FILE, root, STATE_FILE) {
-        let _ = unlinkat(root, NEXT_STATE_FILE, AtFlags::empty());
-        return Err(io_error("publish next anchor state", source));
-    }
-    fsync(root).map_err(|source| io_error("sync published anchor state", source))
+    checkpoint(hooks, PersistenceBoundaryV1::AfterCreate)?;
+    let mut file = File::from(fd);
+    checkpoint(hooks, PersistenceBoundaryV1::BeforeWrite)?;
+    file.write_all(bytes)
+        .map_err(|source| ExternalAnchorServiceErrorV1::Io {
+            operation: "write next anchor state",
+            source,
+        })?;
+    checkpoint(hooks, PersistenceBoundaryV1::AfterWrite)?;
+    checkpoint(hooks, PersistenceBoundaryV1::BeforeFileSync)?;
+    file.sync_all()
+        .map_err(|source| ExternalAnchorServiceErrorV1::Io {
+            operation: "sync next anchor state",
+            source,
+        })?;
+    checkpoint(hooks, PersistenceBoundaryV1::AfterFileSync)?;
+    drop(file);
+    checkpoint(hooks, PersistenceBoundaryV1::BeforeRename)?;
+    renameat(root, NEXT_STATE_FILE, root, STATE_FILE)
+        .map_err(|source| io_error("publish next anchor state", source))?;
+    checkpoint(hooks, PersistenceBoundaryV1::AfterRename)?;
+    checkpoint(hooks, PersistenceBoundaryV1::BeforeDirectorySync)?;
+    fsync(root).map_err(|source| io_error("sync published anchor state", source))?;
+    checkpoint(hooks, PersistenceBoundaryV1::AfterDirectorySync)
+}
+
+fn checkpoint<H: PersistenceHooksV1>(
+    hooks: &mut H,
+    boundary: PersistenceBoundaryV1,
+) -> Result<(), ExternalAnchorServiceErrorV1> {
+    hooks
+        .checkpoint(boundary)
+        .map_err(|source| ExternalAnchorServiceErrorV1::Io {
+            operation: boundary.operation(),
+            source,
+        })
 }
 
 fn write_and_sync(
@@ -555,6 +659,7 @@ impl From<AnchorProtocolErrorV1> for ExternalAnchorServiceErrorV1 {
 #[cfg(test)]
 mod tests {
     use std::fs::{self, File, OpenOptions};
+    use std::io;
     use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
     use ed25519_dalek::SigningKey;
@@ -567,8 +672,32 @@ mod tests {
     use super::{
         DurableAnchorStateV1, DurableExternalAnchorOpenDispositionV1, DurableExternalAnchorV1,
         EXTERNAL_ANCHOR_STATE_BYTES_V1, ExternalAnchorServiceErrorV1, NEXT_STATE_FILE,
-        STATE_CHECKSUM_OFFSET, STATE_FILE,
+        PersistenceBoundaryV1, PersistenceHooksV1, STATE_CHECKSUM_OFFSET, STATE_FILE,
     };
+
+    struct CrashAtPersistenceBoundaryV1 {
+        target: PersistenceBoundaryV1,
+        fired: bool,
+    }
+
+    impl CrashAtPersistenceBoundaryV1 {
+        const fn new(target: PersistenceBoundaryV1) -> Self {
+            Self {
+                target,
+                fired: false,
+            }
+        }
+    }
+
+    impl PersistenceHooksV1 for CrashAtPersistenceBoundaryV1 {
+        fn checkpoint(&mut self, boundary: PersistenceBoundaryV1) -> io::Result<()> {
+            if !self.fired && boundary == self.target {
+                self.fired = true;
+                return Err(io::Error::other("injected external-anchor process crash"));
+            }
+            Ok(())
+        }
+    }
 
     fn root() -> (TempDir, File) {
         let directory = tempfile::tempdir().unwrap();
@@ -718,6 +847,119 @@ mod tests {
             AnchorDecisionV1::Commit(_)
         ));
         assert_eq!(service.sequence(), 1);
+    }
+
+    #[test]
+    fn every_persistence_boundary_restarts_at_prior_or_exact_proposed_state() {
+        for boundary in PersistenceBoundaryV1::ALL {
+            let (directory, root) = root();
+            let (signing, pinned) = keys(21);
+            let mut service = DurableExternalAnchorV1::initialize(root.into(), signing).unwrap();
+            let prepared = prepared(
+                AnchoredStateV1::from_local_state(0, HashChainHeadV1::from_bytes([0; 32])),
+                61,
+                &pinned,
+            );
+            let proposed_head = prepared.proposed_head();
+            let pending = prepared
+                .begin_advance(CallerNonceV1::from_bytes([22; 32]), &pinned)
+                .unwrap();
+            let challenge = pending.challenge().as_bytes().to_vec();
+            let mut fault = CrashAtPersistenceBoundaryV1::new(boundary);
+
+            assert!(matches!(
+                service.exchange_with_persistence_hooks(&challenge, &mut fault),
+                Err(ExternalAnchorServiceErrorV1::Io { .. })
+            ));
+            assert!(fault.fired, "fault did not fire at {boundary:?}");
+            assert!(matches!(
+                service.exchange(&challenge),
+                Err(ExternalAnchorServiceErrorV1::Poisoned)
+            ));
+            drop(service);
+
+            let root = File::open(directory.path()).unwrap();
+            let (signing, _) = keys(21);
+            let mut restarted = DurableExternalAnchorV1::open(root.into(), signing).unwrap();
+            let persisted_proposed = matches!(
+                boundary,
+                PersistenceBoundaryV1::AfterRename
+                    | PersistenceBoundaryV1::BeforeDirectorySync
+                    | PersistenceBoundaryV1::AfterDirectorySync
+            );
+            assert_eq!(
+                restarted.sequence(),
+                u64::from(persisted_proposed),
+                "unexpected recovered sequence at {boundary:?}"
+            );
+            assert_eq!(
+                restarted.head(),
+                if persisted_proposed {
+                    proposed_head
+                } else {
+                    HashChainHeadV1::from_bytes([0; 32])
+                },
+                "unexpected recovered head at {boundary:?}"
+            );
+
+            let response = restarted.exchange(&challenge).unwrap();
+            assert!(matches!(
+                pending.verify(&response).unwrap(),
+                AnchorDecisionV1::Commit(_)
+            ));
+            assert_eq!(restarted.sequence(), 1);
+            assert_eq!(restarted.head(), proposed_head);
+            assert!(
+                !directory.path().join(NEXT_STATE_FILE).exists(),
+                "temporary state survived recovery at {boundary:?}"
+            );
+
+            drop(restarted);
+            let root = File::open(directory.path()).unwrap();
+            let (signing, _) = keys(21);
+            let reopened = DurableExternalAnchorV1::open(root.into(), signing).unwrap();
+            assert_eq!(reopened.sequence(), 1);
+            assert_eq!(reopened.head(), proposed_head);
+        }
+    }
+
+    #[test]
+    fn lost_request_and_response_replay_converge_without_double_advance() {
+        let (directory, root) = root();
+        let (signing, pinned) = keys(23);
+        let service = DurableExternalAnchorV1::initialize(root.into(), signing).unwrap();
+        let prepared = prepared(
+            AnchoredStateV1::from_local_state(0, HashChainHeadV1::from_bytes([0; 32])),
+            62,
+            &pinned,
+        );
+        let proposed_head = prepared.proposed_head();
+        let pending = prepared
+            .begin_advance(CallerNonceV1::from_bytes([24; 32]), &pinned)
+            .unwrap();
+        let challenge = pending.challenge().as_bytes().to_vec();
+
+        // A process loss before receiving the request leaves the durable prior state untouched.
+        drop(service);
+        let root = File::open(directory.path()).unwrap();
+        let (signing, _) = keys(23);
+        let mut restarted = DurableExternalAnchorV1::open(root.into(), signing).unwrap();
+        let lost_response = restarted.exchange(&challenge).unwrap();
+        assert_eq!(restarted.sequence(), 1);
+        drop(restarted);
+
+        // A process loss after commit but before response delivery replays byte-identical output.
+        let root = File::open(directory.path()).unwrap();
+        let (signing, _) = keys(23);
+        let mut restarted = DurableExternalAnchorV1::open(root.into(), signing).unwrap();
+        let replayed = restarted.exchange(&challenge).unwrap();
+        assert_eq!(replayed, lost_response);
+        assert!(matches!(
+            pending.verify(&replayed).unwrap(),
+            AnchorDecisionV1::Commit(_)
+        ));
+        assert_eq!(restarted.sequence(), 1);
+        assert_eq!(restarted.head(), proposed_head);
     }
 
     #[test]

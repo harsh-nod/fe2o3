@@ -2,6 +2,11 @@ use std::io::{self, Read, Write};
 
 use sha2::{Digest, Sha256};
 
+mod worker_derivation_fixture_support;
+use worker_derivation_fixture_support::{
+    append_derivation_response_fields, append_derivation_response_fields_with_salt,
+};
+
 const WORKER_ID: &str = "fixture-worker-v3";
 const OUTPUT: &[u8] = b"fixture-output";
 const MISMATCH_OUTPUT: &[u8] = b"changed-output";
@@ -35,6 +40,11 @@ fn main() {
     } else {
         &[]
     };
+    let stage_salt = if exact_replay && contains(&request, b"worker-v3-5b") {
+        b"foreign-replay-stage".as_slice()
+    } else {
+        &[]
+    };
     io::stdout()
         .write_all(&response_with_diagnostics(
             &request,
@@ -43,6 +53,7 @@ fn main() {
             wrong_request,
             output,
             diagnostics,
+            stage_salt,
         ))
         .unwrap();
 }
@@ -54,13 +65,18 @@ fn response_with_diagnostics(
     wrong_request: bool,
     output_bytes: &[u8],
     diagnostics: &[&str],
+    stage_salt: &[u8],
 ) -> Vec<u8> {
     let request_id: [u8; 32] = request[14..46].try_into().unwrap();
     let mut request_identity: [u8; 32] = field(request, 15).try_into().unwrap();
     if wrong_request {
         request_identity[0] ^= 1;
     }
-    let mut bytes = b"F3LRSP02".to_vec();
+    let mut bytes = if with_output {
+        b"F3LRSP04".to_vec()
+    } else {
+        b"F3LRSP02".to_vec()
+    };
     push_field(&mut bytes, 1, &request_id);
     push_field(&mut bytes, 2, &request_identity);
     push_field(&mut bytes, 3, field(request, 8));
@@ -80,6 +96,16 @@ fn response_with_diagnostics(
         output.extend_from_slice(&(output_bytes.len() as u64).to_le_bytes());
         output.extend_from_slice(output_bytes);
         push_field(&mut bytes, 7, &output);
+        if stage_salt.is_empty() {
+            append_derivation_response_fields(&mut bytes, request, output_bytes);
+        } else {
+            append_derivation_response_fields_with_salt(
+                &mut bytes,
+                request,
+                output_bytes,
+                stage_salt,
+            );
+        }
     } else {
         push_field(&mut bytes, 7, &[0]);
     }

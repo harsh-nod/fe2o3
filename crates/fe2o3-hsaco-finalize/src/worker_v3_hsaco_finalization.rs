@@ -204,6 +204,10 @@ impl PreparedFinalizedProtectedWorkerV3HsacoV1 {
         self.raw.source_evidence_identity()
     }
 
+    pub(crate) const fn source_evidence(&self) -> &InertProtectedFirstBuildWorkerV3EvidenceV1 {
+        self.raw.source_evidence()
+    }
+
     pub const fn binding_identity(&self) -> ProtectedCompilerHandoffBindingIdentityV3 {
         self.raw.binding_identity()
     }

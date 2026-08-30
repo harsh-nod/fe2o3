@@ -294,8 +294,12 @@ checks the fresh signed response, and returns move-only authority-free evidence.
 Backend receipt acquisition, lossless V2 carriage, exact protected
 Worker-record verification, receipt-bearing V3 VerifyCurrent response, and the
 receipt-complete Worker V3 promotion boundary are implemented.
-Deployed distinct-UID service provisioning, the concrete protected verifier,
-and external monotonic anchor remain absent. A fixed
+The durable external monotonic service, measured distinct-UID launcher, and
+root-owned coordinator exist, and their persistence plus packet loops now
+converge to only the exact prior or proposed state across every injected
+create/write/fsync/rename and receive/exchange/send interruption. Deployed
+root-coordinator-to-supervisor wiring, the combined privileged qualification,
+and the concrete protected verifier remain absent. A fixed
 receipt sidecar and publication ACK now
 carry the exact journal, occurrence, receipt, Worker record, sequence, and
 advanced rollback anchor without granting authority from wire bytes. The
@@ -646,9 +650,31 @@ Safe ownership of resources used by asynchronous copies is documented in
   validator strictly decodes canonical KIR V8, deterministically replays the
   exact induction report, and requires that certificate's precise MIR span to
   contain exactly one checked KIR addition. Correspondence and formal-memory
-  evidence bind the same versioned KIR digest and byte length. This evidence
-  remains inert and does not establish KIR-to-LLVM or LLVM-to-machine
-  refinement or authorize removing the guard.
+  evidence bind the same versioned KIR digest and byte length. The sole
+  production target stage now emits a bounded replay record; an independent
+  verifier reconstructs exact target-bound KIR V8, reruns the shared gfx942
+  lowering and upstream-layout binding, and byte-compares the retained LLVM.
+  The retired association-only lowering transcript has been deleted. This
+  establishes exact deterministic KIR-to-LLVM derivation and custody, not a
+  formal semantic-preservation proof, LLVM-to-machine refinement, or authority
+  to remove the guard, publish, load, or launch.
+- The same production Worker exchange now retains exact downstream derivation
+  custody from linked LLVM module through optimized LLVM module, generated
+  object, ordered native-link inputs, the path-independent in-process LLD
+  invocation, and final HSACO. Rust independently decodes and recomputes the
+  bounded response evidence, exact request-relocatable order, canonical linker
+  policy, and final payload identity; strict Worker V3 replay requires the
+  bootstrap and replay derivations to agree. Recovered host admission now
+  reconstructs that complete finalizer derivation from the exact envelope and
+  binds its identity into host lineage. The protected verifier independently
+  repeats the reconstruction from borrowed canonical bytes, and every accepted
+  decision retains the resulting move-only owner. Mutation, truncation,
+  trailing bytes, reordered inputs, a resealed false linker identity, a foreign
+  HSACO endpoint, and a same-HSACO foreign-compiler splice fail closed. Legacy
+  compact V2 transcripts remain decodable for storage inspection but cannot
+  satisfy production finalizer admission because they lack the derivation
+  bodies. This is measured byte and policy custody, not a formal LLVM-to-machine
+  semantic-refinement proof or publication, load, or launch authority.
 - `fe2o3-core` provides HIP-backed contexts, streams, device buffers, pinned
   host buffers, events, synchronous transfers, and event-backed borrowed and
   owned asynchronous transfers. Its default/production surface exports no raw
@@ -869,12 +895,17 @@ is complete, and the recorded runs grant no current production authority.
   retirement of the duplicate current-generation replay intent, while
   registry-rooted scavenging removes only superseded custody. The envelope
   still grants no compiler, semantic, HSA readiness, load, or launch authority.
-  Host admission reconstructs the exact compiler subject and binds it together
-  with the complete carriage bytes into the Worker V3 lineage challenge. The
-  verifier request lends both canonical records without projection; promotion
-  compares every policy, occurrence, receipt, publication, Worker-ledger,
-  sequence, and rollback coordinate and rejects missing protected-policy,
-  Worker-ledger, or external rollback verification identities before HSA load.
+  Host admission reconstructs the exact compiler subject and complete
+  finalizer derivation and binds both identities together with the complete
+  carriage bytes into the Worker V3 lineage challenge. The verifier request
+  lends both canonical records and the host-revalidated finalizer owner without
+  projection. The protected verifier independently reconstructs finalizer
+  custody from the exact replay bytes; promotion compares its identity with the
+  host reconstruction as well as every policy, occurrence, receipt,
+  publication, Worker-ledger, sequence, and rollback coordinate. A decision
+  retains the second move-only finalizer owner, while missing protected-policy,
+  Worker-ledger, or external rollback verification identities still fail before
+  HSA load.
   Production transfers only the canonical V3 envelope and artifact-directory
   descriptors to an identity-pinned sealed application. A
   fresh occurrence binds those descriptors and the ACK channel; Cargo checks
@@ -1130,6 +1161,11 @@ is complete, and the recorded runs grant no current production authority.
   but end-to-end source-to-machine safety still requires complete frontend
   projection plus authenticated compiler-refinement evidence. Trusted rustc
   diagnostic-item classification also remains part of the compiler TCB.
+- The production link worker now returns independently replayable identities
+  for the exact linked and optimized LLVM modules, generated object, ordered
+  native inputs, canonical in-process LLD policy, and final HSACO. Worker V3
+  retains this chain across durable replay. Formal preservation from KIR/LLVM
+  to machine behavior and the final join into runtime authority remain open.
 - Generated Worker V3 arguments retain the resources required for dispatch,
   but generalized asynchronous application APIs, cancellation, and composition
   remain incomplete.

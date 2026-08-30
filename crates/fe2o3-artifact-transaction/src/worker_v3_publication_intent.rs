@@ -123,6 +123,7 @@ const MAX_REPLAY_PROVIDER_EVIDENCE_METADATA_BYTES_V1: usize = MAX_REPLAY_PROVIDE
     + MAX_REPLAY_SYMBOLS_V1 * (MAX_REPLAY_SYMBOL_BYTES_V1 + 4)
     + MAX_REPLAY_PROVIDER_FILES_V1 * (MAX_REPLAY_PROVIDER_BASENAME_BYTES_V1 + 36)
     + 49;
+const MAX_REPLAY_DERIVATION_EVIDENCE_METADATA_BYTES_V1: usize = 5_518;
 
 const MAX_REPLAY_DIAGNOSTIC_BODY_BYTES_V1: usize =
     MAX_REPLAY_TOTAL_DIAGNOSTIC_BYTES_V1 + MAX_REPLAY_DIAGNOSTICS_V1 * 4 + 4;
@@ -132,9 +133,7 @@ const MAX_REPLAY_SHARED_WORKER_OPTION_METADATA_BYTES_V1: usize = 2
     + MAX_REPLAY_TARGET_BYTES_V1
     + MAX_REPLAY_LINK_OPTIONS_V1
         * (8 + MAX_REPLAY_LINK_OPTION_NAME_BYTES_V1 + MAX_REPLAY_LINK_OPTION_VALUE_BYTES_V1);
-// Exact V3 response metadata shell excluding the separately stored output payload: magic, nine
-// field headers, three request/closure identities, worker build identity, stage, diagnostics,
-// output identity/length shell, provider evidence, and response identity.
+// Exact response metadata shell excluding the separately stored output payload.
 const MAX_REPLAY_RESPONSE_METADATA_SHELL_BYTES_V1: usize = 8
     + 9 * (2 + 4)
     + 3 * 32
@@ -143,6 +142,8 @@ const MAX_REPLAY_RESPONSE_METADATA_SHELL_BYTES_V1: usize = 8
     + MAX_REPLAY_DIAGNOSTIC_BODY_BYTES_V1
     + (1 + REPLAY_CONTENT_IDENTITY_BYTES_V1)
     + MAX_REPLAY_PROVIDER_EVIDENCE_METADATA_BYTES_V1
+    + 2
+    + MAX_REPLAY_DERIVATION_EVIDENCE_METADATA_BYTES_V1
     + 32;
 // Audited bound for versioned transcript framing and fixed request/plan identities not already in
 // the two response shells or shared worker/target/option reconstruction metadata.
@@ -158,7 +159,7 @@ pub const MAX_WORKER_V3_FINALIZER_REPLAY_TRANSCRIPT_BYTES_V1: usize = 2
     * MAX_REPLAY_RESPONSE_METADATA_SHELL_BYTES_V1
     + MAX_REPLAY_SHARED_WORKER_OPTION_METADATA_BYTES_V1
     + MAX_REPLAY_SHARED_FRAMING_AND_IDENTITIES_BYTES_V1;
-const _: () = assert!(MAX_WORKER_V3_FINALIZER_REPLAY_TRANSCRIPT_BYTES_V1 == 2_195_505);
+const _: () = assert!(MAX_WORKER_V3_FINALIZER_REPLAY_TRANSCRIPT_BYTES_V1 == 2_206_545);
 
 const PROVIDER_ARCHIVE_MAGIC_V1: &[u8] = b"FE2O3-WORKER-V3-PROVIDER-PAYLOADS-V1\0";
 const PROVIDER_ARCHIVE_VERSION_V1: u16 = 1;
@@ -4941,7 +4942,7 @@ mod tests {
         );
         assert_eq!(
             MAX_WORKER_V3_FINALIZER_REPLAY_TRANSCRIPT_BYTES_V1,
-            2_195_505
+            2_206_545
         );
         assert_eq!(
             validate_caller_owner_capacity_values(
@@ -4959,11 +4960,11 @@ mod tests {
         {
             assert_eq!(
                 MAX_WORKER_V3_PUBLICATION_INTENT_RECOVERY_BYTES_V1,
-                388_610_319
+                388_621_359
             );
             assert_eq!(
                 MAX_WORKER_V3_PUBLICATION_INTENT_CALLER_OWNER_CAPACITY_BYTES_V1,
-                388_599_264
+                388_610_304
             );
         }
         assert!(matches!(

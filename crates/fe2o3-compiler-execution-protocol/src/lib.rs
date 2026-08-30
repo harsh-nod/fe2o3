@@ -110,7 +110,8 @@ pub use service_ready::{
 pub use supervisor_deployment::{
     COMPILER_EXECUTION_SUPERVISOR_DEPLOYMENT_BYTES_V1,
     CompilerExecutionSupervisorDeploymentErrorV1, CompilerExecutionSupervisorDeploymentIdentityV1,
-    CompilerExecutionSupervisorDeploymentV1, MAX_COMPILER_EXECUTION_SUPERVISOR_LAUNCHER_BYTES_V1,
+    CompilerExecutionSupervisorDeploymentV1, MAX_COMPILER_EXECUTION_SUPERVISOR_EXECUTABLE_BYTES_V1,
+    MAX_COMPILER_EXECUTION_SUPERVISOR_LAUNCHER_BYTES_V1,
 };
 pub use supervisor_handoff::{
     COMPILER_EXECUTION_SUPERVISOR_HANDOFF_BYTES_V1, CompilerExecutionSupervisorHandoffErrorV1,

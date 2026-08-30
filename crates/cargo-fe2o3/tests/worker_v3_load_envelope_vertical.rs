@@ -56,6 +56,7 @@ use fe2o3_host::{
     admit_recovered_worker_v3_descriptor_v1, admit_recovered_worker_v3_roster_v1,
     audit_recovered_worker_v3_verification_v1,
 };
+use fe2o3_hsaco_finalize::RevalidatedProtectedWorkerV3FinalizerDerivationV1;
 use fe2o3_kernel_descriptor::KernelId;
 use fe2o3_runtime_protocol::{
     CompilerExecutionAttestationChallengeV1, CompilerExecutionAttestationReceiptV1,
@@ -425,6 +426,25 @@ where
     }
 }
 
+struct FinalizerCapturingWorkerV3Auditor;
+
+impl<K> WorkerV3AuditorV1<K> for FinalizerCapturingWorkerV3Auditor
+where
+    K: CompilerGeneratedKernelExpectationV1,
+{
+    type Error = Infallible;
+    type Evidence = RevalidatedProtectedWorkerV3FinalizerDerivationV1;
+
+    fn audit(
+        &mut self,
+        request: &WorkerV3VerificationRequestV1<'_, K>,
+    ) -> Result<Self::Evidence, Self::Error> {
+        Ok(request
+            .independently_revalidate_finalizer_derivation()
+            .expect("the exact fixture finalizer derivation must replay"))
+    }
+}
+
 // SAFETY: this synthetic verifier is confined to test-only fixtures. It mirrors every requested
 // identity and must never be used as production proof authority.
 unsafe impl<K> WorkerV3SyntheticVerifierV1<K> for ReviewedTestWorkerV3Verifier
@@ -560,6 +580,9 @@ where
             protected_worker_ledger_verification,
             external_rollback_verification,
         );
+        let finalizer_derivation = request
+            .independently_revalidate_finalizer_derivation()
+            .expect("the exact fixture finalizer derivation must replay");
         Ok(WorkerV3VerificationDecisionV1::synthetic_for_test_only(
             request.challenge_identity(),
             request.lineage_identity(),
@@ -573,6 +596,7 @@ where
             request.finalized_hsaco_length(),
             request.target(),
             request.code_object_version(),
+            finalizer_derivation,
             compiler_execution,
             [0xc1; 32],
             [0xc2; 32],
@@ -593,6 +617,7 @@ enum ReviewedTestProtectedVerifierFault {
 
 struct ReviewedTestProtectedVerifier {
     fault: ReviewedTestProtectedVerifierFault,
+    foreign_finalizer: Option<RevalidatedProtectedWorkerV3FinalizerDerivationV1>,
 }
 
 // SAFETY: this request-echoing backend exists only in the receipt-bearing integration-test
@@ -639,11 +664,17 @@ where
         let proof_inputs = request
             .validate_compiler_proof_inputs_v4()
             .expect("the integration fixture carries canonical compiler proof inputs");
+        let finalizer_derivation = self.foreign_finalizer.take().unwrap_or_else(|| {
+            request
+                .independently_revalidate_finalizer_derivation()
+                .expect("the exact fixture finalizer derivation must replay")
+        });
         // SAFETY: this test-only backend deliberately supplies complete synthetic identities so
         // the sealed adapter's exact mapping and fail-closed validation can be exercised. The
         // proof-input owner was decoded from the exact borrowed request above.
         Ok(unsafe {
             WorkerV3ProtectedVerificationEvidenceV1::new(
+                finalizer_derivation,
                 compiler_execution,
                 proof_inputs,
                 [0xc1; 32],
@@ -678,6 +709,7 @@ where
         unsafe {
             ReviewedTestProtectedVerifier {
                 fault: ReviewedTestProtectedVerifierFault::None,
+                foreign_finalizer: None,
             }
             .verify_protected(request)
         }
@@ -1870,6 +1902,7 @@ fn protected_verifier_adapter_maps_independent_evidence_into_authentication() {
     .unwrap();
     let mut verifier = WorkerV3ProtectedVerifierAdapterV1::new(ReviewedTestProtectedVerifier {
         fault: ReviewedTestProtectedVerifierFault::None,
+        foreign_finalizer: None,
     });
     let authenticated = AuthenticatedWorkerV3ExecutableV1::<WorkerV3VecAddMarker>::authenticate(
         admitted,
@@ -1885,6 +1918,16 @@ fn protected_verifier_adapter_maps_independent_evidence_into_authentication() {
     assert!(!proof_inputs.authenticates_compiler_origin());
     assert!(!proof_inputs.establishes_llvm_or_machine_refinement());
     assert!(!proof_inputs.grants_runtime_authority());
+    let finalizer = authenticated.verification().finalizer_derivation();
+    assert_eq!(
+        finalizer.finalized_hsaco_identity().sha256(),
+        &authenticated.verification().finalized_hsaco_sha256()
+    );
+    assert!(!finalizer.proves_llvm_to_machine_semantic_refinement());
+    assert!(!finalizer.grants_compiler_authority());
+    assert!(!finalizer.grants_publication_authority());
+    assert!(!finalizer.grants_load_authority());
+    assert!(!finalizer.grants_launch_authority());
     assert!(
         !authenticated
             .verification()
@@ -1892,6 +1935,53 @@ fn protected_verifier_adapter_maps_independent_evidence_into_authentication() {
     );
     assert!(!authenticated.grants_load_authority());
     assert!(!authenticated.grants_launch_authority());
+}
+
+#[test]
+fn protected_verifier_rejects_same_hsaco_from_foreign_finalizer_derivation() {
+    let (_primary_directory, primary) = recovered_host_fixture();
+    let (_foreign_directory, foreign) = recover_published_worker_v3_fixture(
+        worker_v3_fixture::published_worker_v3_fixture_with_llvm_build_identity(
+            "upstream-llvm-test-build-foreign",
+        ),
+    );
+    assert_eq!(
+        primary.exact_artifact_bytes(),
+        foreign.exact_artifact_bytes()
+    );
+    assert_ne!(
+        primary.wire().replay().transcript(),
+        foreign.wire().replay().transcript()
+    );
+
+    let foreign_admission =
+        admit_recovered_worker_v3_descriptor_v1(foreign, KernelId::from_bytes(TEST_MARKER_BINDING))
+            .unwrap();
+    let foreign_finalizer = audit_recovered_worker_v3_verification_v1::<WorkerV3VecAddMarker, _>(
+        &foreign_admission,
+        &mut FinalizerCapturingWorkerV3Auditor,
+    )
+    .unwrap();
+    drop(foreign_admission);
+
+    let primary_admission =
+        admit_recovered_worker_v3_descriptor_v1(primary, KernelId::from_bytes(TEST_MARKER_BINDING))
+            .unwrap();
+    let mut verifier = WorkerV3ProtectedVerifierAdapterV1::new(ReviewedTestProtectedVerifier {
+        fault: ReviewedTestProtectedVerifierFault::None,
+        foreign_finalizer: Some(foreign_finalizer),
+    });
+    let error = AuthenticatedWorkerV3ExecutableV1::<WorkerV3VecAddMarker>::authenticate(
+        primary_admission,
+        &mut verifier,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        WorkerV3VerificationAuthenticationErrorV1::Decision(
+            WorkerV3VerificationDecisionErrorV1::IdentityMismatch("finalizer derivation")
+        )
+    ));
 }
 
 #[test]
@@ -1914,8 +2004,10 @@ fn protected_verifier_adapter_rejects_substituted_and_zero_evidence() {
             KernelId::from_bytes(TEST_MARKER_BINDING),
         )
         .unwrap();
-        let mut verifier =
-            WorkerV3ProtectedVerifierAdapterV1::new(ReviewedTestProtectedVerifier { fault });
+        let mut verifier = WorkerV3ProtectedVerifierAdapterV1::new(ReviewedTestProtectedVerifier {
+            fault,
+            foreign_finalizer: None,
+        });
         let error = AuthenticatedWorkerV3ExecutableV1::<WorkerV3VecAddMarker>::authenticate(
             admitted,
             &mut verifier,

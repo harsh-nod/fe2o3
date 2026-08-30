@@ -29,6 +29,7 @@ mod monomorphization_dead_binding;
 mod multi_kernel_proof;
 mod persistent_freshness;
 mod plan;
+mod production_kir_to_llvm_replay_v1;
 mod proof_capsule;
 mod result;
 mod retained_functional_refinement_runtime_v1;
@@ -160,6 +161,10 @@ pub use persistent_freshness::{
 pub use plan::{
     CommandSpec, InvocationPaths, InvocationPlan, MAX_PATH_BYTES, MAX_TIMEOUT_SECONDS, PlanError,
     VerifierPolicy, build_invocation_plan,
+};
+pub use production_kir_to_llvm_replay_v1::{
+    CompilerKirToLlvmReplayValidationErrorV1, ValidatedCompilerKirToLlvmReplayV1,
+    validate_compiler_kir_to_llvm_replay_v1,
 };
 pub use proof_capsule::{
     MAX_PROCESS_LOCAL_PROOF_CAPSULE_RECORDS_V1, MAX_PROOF_CAPSULE_BYTES_V1,

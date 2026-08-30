@@ -312,9 +312,15 @@ bounded Worker transport and inspection form, not a semantic identity boundary.
 The production finalizer returns a generic move-only inspected-artifact owner.
 It retains and freshly revalidates the exact compiler graph/handoff, Worker,
 finalized bytes, descriptor, ELF, metadata, target, and ISA observations. The
-current General GEMM owner chain under #173 is a qualification oracle for this
-generic boundary. Its three late-machine axes must not become a second
-GEMM-only authority path.
+successful Worker exchange now also retains exact linked-LLVM,
+optimized-LLVM, generated-object, ordered native-input, path-independent LLD
+invocation, and final-HSACO identities. Rust independently reconstructs that
+record's identity, request-derived object order, linker policy, and output
+identity; strict Worker V3 bootstrap and durable replay require every measured
+stage to agree. The current General GEMM owner chain
+under #173 is a qualification oracle for this generic boundary. Its three
+late-machine axes must not become a second GEMM-only authority path. Exact
+derivation custody is not formal LLVM-to-machine semantic preservation.
 
 Generated host interfaces derive from the canonical Kernel IR ABI and are
 checked against the inspected descriptor. They still grant no launch authority;
@@ -463,8 +469,18 @@ currently grants load or launch authority.
    alias, convergence, and address-space proofs remain.
 4. **Rust and verification:** current gfx942 receipts bind exact semantic MIR,
    canonical KIR V8, complete operation spans, formal obligations, and replayed
-   checked-induction anchors. KIR-to-LLVM and machine refinement remain open;
-   no profile-selected semantic replacement remains.
+   checked-induction anchors. They now also bind neutral and target KIR
+   identities, target profile, kernel ID, and exact pre-descriptor LLVM. The
+   independent verifier reconstructs target KIR, reruns deterministic AMDGPU
+   lowering and layout binding, and requires byte equality. The sole Worker
+   continuation now records and independently replays exact linked and
+   optimized LLVM, generated object, ordered native inputs, canonical
+   in-process LLD policy, and final HSACO. Rust recomputes the request-derived
+   and final-output relations and requires the worker-measured stages to match
+   across replay. Formal KIR-to-LLVM semantic
+   preservation and LLVM-to-machine refinement remain open; no
+   profile-selected semantic replacement or association-only lowering variant
+   remains.
 5. **Parameterized GEMM:** ordinary attributed Rust GEMM reaches inspected
    HSACO through the production transaction; #173 remains only an oracle.
  6. **Worker V3/KFD execution:** the source-bound artifact enters the sole

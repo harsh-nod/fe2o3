@@ -61,6 +61,13 @@ expected carriage, and both receipts to report the exact proposed transition.
 That evidence remains authority-free: it authenticates the signed external
 commit and fresh current-head observation but does not prove protected key
 custody or independently administered monotonic service deployment.
+The external service's real persistence path is fault-injected before and after
+cleanup, next-file creation, write, file sync, rename, and directory sync. Its
+packet loop is interrupted before and after receive, durable exchange, and send.
+At all eighteen boundaries, restart admits only the exact prior or proposed
+state; replaying the persisted challenge converges to one proposed head without
+a duplicate advance. A real closed response direction also proves that commit
+precedes delivery and that a fresh daemon can replay after delivery failure.
 The Worker V3 verifier request and decision now losslessly bind the exact
 subject, carriage, policy, occurrence, Worker-ledger record, sequence, and
 rollback anchors, and fail closed without independent protected-policy, ledger,
@@ -360,7 +367,10 @@ blocked response delivery, all operation transitions and exact replay, complete
 carriage recovery, exact-current verification, stale carriage rejection,
 nonterminal absence, subject and policy substitution without mutation, four
 continuity checks per packet, cancellation, and packet
-exhaustion. Compile-fail tests reject direct external access to all issuer
+exhaustion. The anchor service additionally exercises twelve persistence and six
+packet-loop interruption points plus a real response-delivery failure, while the
+Worker ledger exercises both cross-system commit orders and all retained-record
+boundaries. Compile-fail tests reject direct external access to all issuer
 transition methods.
 
 `scripts/build-static-compiler-execution-issuer.sh` builds the pinned musl

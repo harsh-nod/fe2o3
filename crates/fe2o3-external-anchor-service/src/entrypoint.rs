@@ -486,6 +486,7 @@ mod tests {
             service.uid().wrapping_add(1).max(1),
             service.gid().wrapping_add(1).max(1),
             service,
+            CompilerExecutionIssuerMeasurementV1::new([3; 32], 3).unwrap(),
             CompilerExecutionIssuerMeasurementV1::new([4; 32], 4).unwrap(),
             &policy,
         )

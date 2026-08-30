@@ -61,6 +61,19 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   upstream LLVM build for module linking, optimization, target-machine object
   emission, and in-process LLD linking. It neither uses COMGR nor shells out to
   `clang`, `llc`, or `ld.lld`.
+- Every successful production Worker response retains a bounded derivation
+  chain for the exact linked LLVM module, optimized LLVM module, generated
+  object, ordered request relocatables plus generated object, canonical
+  path-independent LLD invocation, and final HSACO. Rust independently decodes
+  the record and recomputes its identity, request-derived object order, linker
+  invocation, and final payload identity; strict Worker V3 replay also requires
+  every measured stage identity to agree. Recovered host admission reconstructs
+  the complete finalizer owner, binds its identity into host lineage, and lends
+  it with the exact replay bytes to the protected verifier. The verifier repeats
+  the reconstruction independently, promotion compares both identities, and
+  the accepted decision retains the second move-only owner. These identities
+  record exact content and policy custody; they do not establish semantic
+  preservation or grant publication, load, or launch authority.
 - Compiler provenance now has a canonical six-pin `CompilerClosureV2`, with
   an explicit Cargo-to-trampoline-to-wrapper transition protocol, and a
   `RustcInvocationDescriptorV3` that preserves the exact V2 process and
@@ -121,7 +134,8 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   backend consumes the inherited service and policy descriptors, acquires the
   exact receipt after V3 handoff publication, and carries it through the sole
   top-level V2 load envelope into host admission. Host lineage and the Worker V3
-  verifier request now bind the exact subject and complete carriage. The
+  verifier request now bind the exact subject, complete carriage, and
+  independently reconstructed finalizer derivation. The
   application runner creates a separate child-bound fd 195, reaches the same
   fixed supervisor before ACK, exposes no policy fd 202, and retains readiness
   through exit. A one-use host auditor consumes that endpoint and verifies the
@@ -155,9 +169,12 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   same `ProductionCompilation` typestate as backend codegen. Its
   `ExtractionOnly` custody can run general checks, semantic MIR import, ranked
   projection, verified Kernel IR lowering, and deterministic gfx942 LLVM
-  extraction, but cannot publish a compiler-module handoff. Real AMDGPU tests
-  cover safe and unsafe collection, dynamic ranked bounds, reference binding,
-  and a loop-carried BF16/F32 MFMA GEMM.
+  extraction, but cannot publish a compiler-module handoff. Target binding and
+  KIR-to-LLVM serialization are shared deterministic transforms. The compiler
+  records exact neutral/target KIR identities, profile, kernel ID, and LLVM;
+  `fe2o3-verifier` independently replays both transforms and compares the exact
+  result. Real AMDGPU tests cover safe and unsafe collection, dynamic ranked
+  bounds, reference binding, and a loop-carried BF16/F32 MFMA GEMM.
 - A protected continuation of that transaction now carries the WG64 `i32` LDS
   reduction through a compiler-bound inert handoff, measured upstream LLVM
   target APIs, in-process LLD, and COV6 inspection. The source, semantic MIR,
@@ -204,9 +221,13 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   role-separated signing-key capability bound to that manifest. Its
   descriptor-only process entrypoint admits the shared locked profile and exact
   deployment-bound sealed executable before reading the key, opens only existing
-  state, closes all unrelated descriptors, and serves the sole exact peer. The
-  distinct-UID root provisioner, deployed supervisor provisioning, and final
-  verifier authority remain pending.
+  state, closes all unrelated descriptors, and serves the sole exact peer. Its
+  production persistence and packet paths have exhaustive injected-crash coverage
+  around cleanup, create, write, file sync, rename, directory sync, receive,
+  exchange, and send. Restart admits only the exact prior or proposed state and
+  exact challenge replay advances at most once. The distinct-UID root coordinator
+  and its endpoint/pidfd transfer are implemented; deployed supervisor wiring,
+  combined privileged qualification, and final verifier authority remain pending.
 - Versioned artifact, descriptor, durable-publication, and HSA records exist.
   Host execution has one workload-neutral Worker V3 graph. An arbitrary
   manifest cannot manufacture a Rust signature, verifier decision, load
@@ -226,13 +247,23 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   exact compiler stages, reimports the nested signed aggregate
   MIR-to-live-PLIRON receipt under its embedded key, checks its PLIRON identity
   against middle-end V5, and retains that move-only owner beside signed
-  compiler-currentness evidence throughout the HSA lifecycle. The signature
-  does not authenticate compiler origin by itself and grants no LLVM, machine,
-  load, or launch authority. In default builds the verifier trait is sealed
-  against external implementations and the decision constructor is
-  crate-private. No reviewed concrete production verifier exists yet, so
-  ordinary generated application execution remains fail-closed rather than
-  accepting caller-asserted hashes or safety bits.
+  compiler-currentness evidence throughout the HSA lifecycle. Host admission
+  and the protected verifier also independently reconstruct the exact compact
+  finalizer derivation; the accepted decision retains the verifier-owned result
+  and rejects a foreign derivation even when the finalized HSACO bytes match.
+  The production
+  capsule also replaces the backend-private association-only AMDGPU transcript
+  with the independently replayed target-KIR-to-LLVM record. This proves exact
+  deterministic derivation by the reviewed serializer. The Worker continuation
+  now also independently validates the response identity, request-derived input
+  order, LLD policy, final HSACO, and bootstrap/replay equality for the measured
+  linked-module, optimized-module, and object identities. Neither custody chain
+  is formal semantic preservation. The signature does not authenticate compiler
+  origin by itself and grants no machine, load, or launch authority. In default builds the
+  verifier trait is sealed against external implementations and the decision
+  constructor is crate-private. No reviewed concrete production verifier
+  exists yet, so ordinary generated application execution remains fail-closed
+  rather than accepting caller-asserted hashes or safety bits.
 - Verus models and proof-carrying artifact schemas exist for bounded kernels
   and safety obligations. There is no general reviewed source-to-machine or
   Verus-to-machine refinement proof, so source proof, compiler evidence,
@@ -749,6 +780,17 @@ as an inspection format but is not the semantic IR boundary. For the selective
 scalar slice, deterministic bounded LLVM assembly is the worker transport; the
 canonical V2 handoff remains the semantic boundary, and the exact assembly
 bytes and digest are bound to its identity.
+
+The successful compiler response also binds the exact serialized linked and
+optimized modules, generated object, ordered native-link inputs, canonical
+path-independent LLD argument sequence, and returned HSACO. The generated
+object is required to be the final ordered input. Fixed policy arguments and
+the real `lld::lldMain` invocation share one construction path, so policy drift
+changes the custody identity. Rust reconstructs the expected input order and
+linker identity independently before accepting the response or a durable
+Worker V3 replay, then requires all worker-measured stage identities to remain
+equal across replay. This closes the measured LLVM-to-HSACO derivation-custody
+gap; formal LLVM-to-machine refinement remains a separate proof obligation.
 
 The existing lowering implementation is owned by `fe2o3-amdgcn-model` and
 re-exported by the historical `dialect-amdgcn` facade. A future general

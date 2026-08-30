@@ -13,6 +13,30 @@ request. For Worker V2/V3 compiler requests, launch metadata in the output is
 reconciled with the compiler module's `amdgpu_kernel` calling convention,
 required workgroup dimensions, maximum workgroup size, and wavefront mode.
 
+## Derivation custody
+
+A successful compiler response includes one bounded, domain-separated
+derivation record for the exact linked LLVM module, optimized LLVM module,
+generated AMDGPU object, ordered native-link inputs, path-independent LLD
+invocation, and final HSACO. The generated object must be the final ordered
+input after the request relocatables. Module identities are computed while
+serializing through LLVM's streaming APIs, and the object and HSACO identities
+cover the exact emitted bytes.
+
+The LLD identity covers the fixed policy arguments, ordered undefined-symbol
+roots, and ordered content identities rather than temporary paths. The policy
+arguments used for that identity are also used to construct the real
+`lld::lldMain` invocation. Rust independently decodes the response,
+reconstructs the input order and canonical linker arguments from the exact
+request, checks the final payload identity, and requires strict Worker V3
+bootstrap/replay agreement. The wire version records this schema migration; it
+does not add another compiler route.
+
+This evidence establishes exact content and policy custody through the
+upstream LLVM/LLD stages. It does not prove LLVM optimization or code-generation
+semantic preservation, machine-code safety, or publication, load, or launch
+authority.
+
 ## Output inspection
 
 Publication inspection verifies the AMDGPU ELF class, target flags, code-object

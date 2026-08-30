@@ -455,6 +455,14 @@ fn consumed_v3_executes_natively_and_retains_every_exact_axis() {
         evidence.output_identity(),
         ContentIdentityV1::calculate(OUTPUT)
     );
+    let derivation = evidence.derivation_evidence();
+    assert_eq!(derivation.hsaco(), evidence.output_identity());
+    assert_eq!(
+        derivation.native_link_inputs().last().unwrap().content(),
+        derivation.generated_object()
+    );
+    assert!(evidence.replays_exact_llvm_object_lld_derivation());
+    assert!(!evidence.proves_llvm_to_machine_semantic_refinement());
     assert!(!evidence.authenticates_compiler_origin());
     assert!(!evidence.grants_compiler_authority());
     assert!(!evidence.grants_link_authority());
@@ -879,6 +887,36 @@ fn identical_v3_inputs_produce_deterministic_execution_evidence() {
     assert_eq!(
         first.exact_replay().response().canonical_bytes(),
         second.exact_replay().response().canonical_bytes()
+    );
+}
+
+#[test]
+fn same_output_with_foreign_exact_replay_derivation_fails_closed() {
+    let directory = TestDirectory::new();
+    let (_, receipt, consumed) = consumed(
+        &directory,
+        0x76,
+        CompilerModuleHandoffSlotV3::Production,
+        0x20,
+        0x5b,
+    );
+    let closure = *consumed.handoff().capsule().compiler_closure();
+    let error = execute_protected_reproducible_first_build_worker_v3(
+        consumed,
+        receipt,
+        closure,
+        &pinned(),
+        vec![provider()],
+        options(),
+        WorkerOutputConstraintsV1::new(4096).unwrap(),
+        limits(),
+    )
+    .unwrap_err();
+    assert_eq!(
+        error,
+        ProtectedFirstBuildWorkerV3Error::ReplayValidation {
+            field: "reproducible LLVM/object/LLD derivation custody"
+        }
     );
 }
 

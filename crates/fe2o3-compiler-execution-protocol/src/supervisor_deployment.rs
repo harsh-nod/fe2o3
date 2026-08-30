@@ -11,12 +11,14 @@ use crate::{
 };
 
 const HEADER_BYTES: usize = 24;
-const PREIMAGE_BYTES: usize = 112;
+const PREIMAGE_BYTES: usize = 152;
 const SHA256_BYTES: usize = 32;
 const MAGIC: [u8; 8] = *b"F2O3CED1";
 const VERSION_V1: u16 = 1;
 const IDENTITY_DOMAIN: &[u8] = b"FE2O3/COMPILER-EXECUTION-SUPERVISOR-DEPLOYMENT/V1\0";
 
+/// Maximum admitted protected-supervisor executable size.
+pub const MAX_COMPILER_EXECUTION_SUPERVISOR_EXECUTABLE_BYTES_V1: u64 = 128 * 1024 * 1024;
 /// Maximum admitted static pre-exec launcher size.
 pub const MAX_COMPILER_EXECUTION_SUPERVISOR_LAUNCHER_BYTES_V1: u64 = 128 * 1024 * 1024;
 
@@ -57,13 +59,15 @@ impl fmt::Debug for CompilerExecutionSupervisorDeploymentIdentityV1 {
 /// Immutable trust configuration supplied by protected service provisioning.
 ///
 /// The manifest pins the supervisor's dedicated credentials, the independently operated external
-/// anchor's credentials, the exact static pre-exec launcher, and the exact issuer policy. It
-/// contains no path, descriptor, secret, timeout, compiler, publication, load, or launch authority.
+/// anchor's credentials, the exact supervisor executable, the exact static pre-exec launcher, and
+/// the exact issuer policy. It contains no path, descriptor, secret, timeout, compiler,
+/// publication, load, or launch authority.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CompilerExecutionSupervisorDeploymentV1 {
     service_uid: u32,
     service_gid: u32,
     external_anchor_service: CompilerExecutionExternalAnchorServiceIdentityV1,
+    executable: CompilerExecutionIssuerMeasurementV1,
     launcher: CompilerExecutionIssuerMeasurementV1,
     policy_identity: CompilerExecutionIssuerPolicyIdentityV1,
     identity: CompilerExecutionSupervisorDeploymentIdentityV1,
@@ -76,6 +80,7 @@ impl CompilerExecutionSupervisorDeploymentV1 {
         service_uid: u32,
         service_gid: u32,
         external_anchor_service: CompilerExecutionExternalAnchorServiceIdentityV1,
+        executable: CompilerExecutionIssuerMeasurementV1,
         launcher: CompilerExecutionIssuerMeasurementV1,
         policy: &CompilerExecutionIssuerPolicyV1,
     ) -> Result<Self, CompilerExecutionSupervisorDeploymentErrorV1> {
@@ -83,6 +88,7 @@ impl CompilerExecutionSupervisorDeploymentV1 {
             service_uid,
             service_gid,
             external_anchor_service,
+            executable,
             launcher,
             policy.identity(),
         )
@@ -92,6 +98,7 @@ impl CompilerExecutionSupervisorDeploymentV1 {
         service_uid: u32,
         service_gid: u32,
         external_anchor_service: CompilerExecutionExternalAnchorServiceIdentityV1,
+        executable: CompilerExecutionIssuerMeasurementV1,
         launcher: CompilerExecutionIssuerMeasurementV1,
         policy_identity: CompilerExecutionIssuerPolicyIdentityV1,
     ) -> Result<Self, CompilerExecutionSupervisorDeploymentErrorV1> {
@@ -99,8 +106,16 @@ impl CompilerExecutionSupervisorDeploymentV1 {
         if service_uid == external_anchor_service.uid() {
             return Err(CompilerExecutionSupervisorDeploymentErrorV1::SharedServiceUid);
         }
+        if executable.byte_len() > MAX_COMPILER_EXECUTION_SUPERVISOR_EXECUTABLE_BYTES_V1 {
+            return Err(CompilerExecutionSupervisorDeploymentErrorV1::ExecutableMeasurement);
+        }
         if launcher.byte_len() > MAX_COMPILER_EXECUTION_SUPERVISOR_LAUNCHER_BYTES_V1 {
             return Err(CompilerExecutionSupervisorDeploymentErrorV1::LauncherMeasurement);
+        }
+        if executable == launcher {
+            return Err(
+                CompilerExecutionSupervisorDeploymentErrorV1::AliasedExecutableMeasurements,
+            );
         }
         let mut bytes = [0_u8; COMPILER_EXECUTION_SUPERVISOR_DEPLOYMENT_BYTES_V1];
         encode_header(&mut bytes);
@@ -108,9 +123,11 @@ impl CompilerExecutionSupervisorDeploymentV1 {
         bytes[28..32].copy_from_slice(&service_gid.to_le_bytes());
         bytes[32..36].copy_from_slice(&external_anchor_service.uid().to_le_bytes());
         bytes[36..40].copy_from_slice(&external_anchor_service.gid().to_le_bytes());
-        bytes[40..72].copy_from_slice(&launcher.sha256());
-        bytes[72..80].copy_from_slice(&launcher.byte_len().to_le_bytes());
-        bytes[80..112].copy_from_slice(policy_identity.as_bytes());
+        bytes[40..72].copy_from_slice(&executable.sha256());
+        bytes[72..80].copy_from_slice(&executable.byte_len().to_le_bytes());
+        bytes[80..112].copy_from_slice(&launcher.sha256());
+        bytes[112..120].copy_from_slice(&launcher.byte_len().to_le_bytes());
+        bytes[120..152].copy_from_slice(policy_identity.as_bytes());
         let identity = CompilerExecutionSupervisorDeploymentIdentityV1(derive_identity(
             &bytes[..PREIMAGE_BYTES],
         ));
@@ -119,6 +136,7 @@ impl CompilerExecutionSupervisorDeploymentV1 {
             service_uid,
             service_gid,
             external_anchor_service,
+            executable,
             launcher,
             policy_identity,
             identity,
@@ -143,17 +161,32 @@ impl CompilerExecutionSupervisorDeploymentV1 {
         if service_uid == external_anchor_service.uid() {
             return Err(CompilerExecutionSupervisorDeploymentErrorV1::SharedServiceUid);
         }
-        let launcher = CompilerExecutionIssuerMeasurementV1::new(
+        let executable = CompilerExecutionIssuerMeasurementV1::new(
             bytes[40..72]
                 .try_into()
-                .expect("launcher digest has fixed width"),
+                .expect("supervisor executable digest has fixed width"),
             read_u64(bytes, 72),
+        )
+        .map_err(|_| CompilerExecutionSupervisorDeploymentErrorV1::ExecutableMeasurement)?;
+        if executable.byte_len() > MAX_COMPILER_EXECUTION_SUPERVISOR_EXECUTABLE_BYTES_V1 {
+            return Err(CompilerExecutionSupervisorDeploymentErrorV1::ExecutableMeasurement);
+        }
+        let launcher = CompilerExecutionIssuerMeasurementV1::new(
+            bytes[80..112]
+                .try_into()
+                .expect("launcher digest has fixed width"),
+            read_u64(bytes, 112),
         )
         .map_err(|_| CompilerExecutionSupervisorDeploymentErrorV1::LauncherMeasurement)?;
         if launcher.byte_len() > MAX_COMPILER_EXECUTION_SUPERVISOR_LAUNCHER_BYTES_V1 {
             return Err(CompilerExecutionSupervisorDeploymentErrorV1::LauncherMeasurement);
         }
-        let policy_identity_bytes: [u8; SHA256_BYTES] = bytes[80..112]
+        if executable == launcher {
+            return Err(
+                CompilerExecutionSupervisorDeploymentErrorV1::AliasedExecutableMeasurements,
+            );
+        }
+        let policy_identity_bytes: [u8; SHA256_BYTES] = bytes[120..152]
             .try_into()
             .expect("policy identity has fixed width");
         if policy_identity_bytes == [0; SHA256_BYTES] {
@@ -173,6 +206,7 @@ impl CompilerExecutionSupervisorDeploymentV1 {
             service_uid,
             service_gid,
             external_anchor_service,
+            executable,
             launcher,
             policy_identity,
         )?;
@@ -197,6 +231,11 @@ impl CompilerExecutionSupervisorDeploymentV1 {
         &self,
     ) -> CompilerExecutionExternalAnchorServiceIdentityV1 {
         self.external_anchor_service
+    }
+
+    /// Returns the exact protected-supervisor executable measurement.
+    pub const fn executable(&self) -> CompilerExecutionIssuerMeasurementV1 {
+        self.executable
     }
 
     /// Returns the exact trusted static pre-exec launcher measurement.
@@ -301,8 +340,12 @@ pub enum CompilerExecutionSupervisorDeploymentErrorV1 {
     ExternalAnchorServiceIdentity(CompilerExecutionExternalAnchorServiceIdentityErrorV1),
     /// Supervisor and external-anchor services share one UID.
     SharedServiceUid,
+    /// The protected-supervisor executable measurement is empty or invalid.
+    ExecutableMeasurement,
     /// The static launcher measurement is empty or invalid.
     LauncherMeasurement,
+    /// The supervisor executable and issuer pre-exec launcher measurements are identical.
+    AliasedExecutableMeasurements,
     /// The issuer-policy identity is zero.
     PolicyIdentity,
     /// The terminal identity does not match the canonical preimage.
@@ -326,8 +369,14 @@ impl fmt::Display for CompilerExecutionSupervisorDeploymentErrorV1 {
             Self::SharedServiceUid => {
                 "compiler-execution supervisor and external-anchor services share one UID"
             }
+            Self::ExecutableMeasurement => {
+                "invalid compiler-execution supervisor executable measurement"
+            }
             Self::LauncherMeasurement => {
                 "invalid compiler-execution supervisor static-launcher measurement"
+            }
+            Self::AliasedExecutableMeasurements => {
+                "compiler-execution supervisor and static launcher measurements alias"
             }
             Self::PolicyIdentity => "invalid compiler-execution supervisor policy identity",
             Self::Identity => "invalid compiler-execution supervisor deployment identity",
@@ -372,6 +421,7 @@ mod tests {
             1001,
             1002,
             CompilerExecutionExternalAnchorServiceIdentityV1::new(1003, 1004).unwrap(),
+            CompilerExecutionIssuerMeasurementV1::new([0x54; 32], 12288).unwrap(),
             CompilerExecutionIssuerMeasurementV1::new([0x55; 32], 16384).unwrap(),
             &policy(),
         )
@@ -387,6 +437,7 @@ mod tests {
         assert_eq!(decoded.service_uid(), 1001);
         assert_eq!(decoded.service_gid(), 1002);
         assert_eq!(decoded.external_anchor_service().uid(), 1003);
+        assert_eq!(decoded.executable().byte_len(), 12288);
         assert_eq!(decoded.launcher().byte_len(), 16384);
         assert!(decoded.matches_policy(&policy()));
         assert!(
@@ -412,15 +463,36 @@ mod tests {
     #[test]
     fn privileged_shared_and_substituted_identities_are_rejected() {
         let anchor = CompilerExecutionExternalAnchorServiceIdentityV1::new(1003, 1004).unwrap();
+        let executable = CompilerExecutionIssuerMeasurementV1::new([0x54; 32], 12288).unwrap();
         let launcher = CompilerExecutionIssuerMeasurementV1::new([0x55; 32], 16384).unwrap();
         let policy = policy();
         assert_eq!(
-            CompilerExecutionSupervisorDeploymentV1::new(0, 1002, anchor, launcher, &policy),
+            CompilerExecutionSupervisorDeploymentV1::new(
+                0, 1002, anchor, executable, launcher, &policy
+            ),
             Err(CompilerExecutionSupervisorDeploymentErrorV1::ServiceUid)
         );
         assert_eq!(
-            CompilerExecutionSupervisorDeploymentV1::new(1003, 1002, anchor, launcher, &policy),
+            CompilerExecutionSupervisorDeploymentV1::new(
+                1003, 1002, anchor, executable, launcher, &policy
+            ),
             Err(CompilerExecutionSupervisorDeploymentErrorV1::SharedServiceUid)
+        );
+        let oversized_executable = CompilerExecutionIssuerMeasurementV1::new(
+            [0x53; 32],
+            MAX_COMPILER_EXECUTION_SUPERVISOR_EXECUTABLE_BYTES_V1 + 1,
+        )
+        .unwrap();
+        assert_eq!(
+            CompilerExecutionSupervisorDeploymentV1::new(
+                1001,
+                1002,
+                anchor,
+                oversized_executable,
+                launcher,
+                &policy,
+            ),
+            Err(CompilerExecutionSupervisorDeploymentErrorV1::ExecutableMeasurement)
         );
         let oversized = CompilerExecutionIssuerMeasurementV1::new(
             [0x56; 32],
@@ -428,9 +500,27 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            CompilerExecutionSupervisorDeploymentV1::new(1001, 1002, anchor, oversized, &policy),
+            CompilerExecutionSupervisorDeploymentV1::new(
+                1001, 1002, anchor, executable, oversized, &policy,
+            ),
             Err(CompilerExecutionSupervisorDeploymentErrorV1::LauncherMeasurement)
         );
+        assert_eq!(
+            CompilerExecutionSupervisorDeploymentV1::new(
+                1001, 1002, anchor, launcher, launcher, &policy,
+            ),
+            Err(CompilerExecutionSupervisorDeploymentErrorV1::AliasedExecutableMeasurements)
+        );
+        let substituted_executable = CompilerExecutionSupervisorDeploymentV1::new(
+            1001,
+            1002,
+            anchor,
+            CompilerExecutionIssuerMeasurementV1::new([0x53; 32], 12288).unwrap(),
+            launcher,
+            &policy,
+        )
+        .unwrap();
+        assert_ne!(substituted_executable.identity(), deployment().identity());
         let other_policy = CompilerExecutionIssuerPolicyV1::new(
             8,
             CompilerExecutionIssuerMeasurementV1::new([0x61; 32], 4096).unwrap(),

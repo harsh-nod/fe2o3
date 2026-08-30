@@ -210,7 +210,16 @@ lifecycle above does not use that fake path, but it also does not authenticate
 compiler origin, consume production Verus certificates
 ([#91](https://github.com/harsh-nod/fe2o3/issues/91)), or prove MIR/KIR/LLVM/ISA
 refinement ([#106](https://github.com/harsh-nod/fe2o3/issues/106) and
-[#107](https://github.com/harsh-nod/fe2o3/issues/107)). General
+[#107](https://github.com/harsh-nod/fe2o3/issues/107)). The current capsule does
+independently reconstruct target-bound KIR and byte-exact LLVM from neutral
+KIR, replacing the old association-only transcript; that deterministic custody
+fact is not yet a formal semantic-refinement proof. The production Worker now
+extends exact custody through linked and optimized LLVM, generated object,
+ordered native-link inputs, the canonical in-process LLD policy, and final
+HSACO. Rust independently recomputes the evidence identity, request-derived
+input order and linker policy, and final payload relation; strict replay
+requires every worker-measured stage to remain equal. This measured derivation
+evidence is not formal LLVM-to-machine refinement or runtime authority. General
 illegal-memory/race proofs, shapes, and protected Slice 3/4 remain open. These
 gaps keep every Complete count at zero and prevent any cuda-oxide parity claim.
 

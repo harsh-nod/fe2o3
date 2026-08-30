@@ -110,12 +110,16 @@ pub fn run_inherited_protected_issuer_service_v1()
     if !deployment.deployment().matches_policy(policy.policy()) {
         return Err(ProtectedIssuerDeploymentErrorV1::PolicyMismatch);
     }
-    let signing_key = CompilerExecutionSigningKeyCapabilityV1::from_inherited_at(
+    let signing_key_template = File::from(take_inherited(
         COMPILER_EXECUTION_SUPERVISOR_SIGNING_KEY_FD_V1,
-        policy.policy(),
-    )
-    .map_err(ProtectedIssuerDeploymentErrorV1::SigningKeyCapability)?;
-    close_inherited(COMPILER_EXECUTION_SUPERVISOR_SIGNING_KEY_FD_V1)?;
+    )?);
+    let signing_key =
+        CompilerExecutionSigningKeyCapabilityV1::reissue_root_template_for_current_service(
+            signing_key_template,
+            deployment.deployment(),
+            policy.policy(),
+        )
+        .map_err(ProtectedIssuerDeploymentErrorV1::SigningKeyCapability)?;
 
     let listener = take_inherited(COMPILER_EXECUTION_SUPERVISOR_LISTENER_FD_V1)?;
     let root = File::from(take_inherited(COMPILER_EXECUTION_SUPERVISOR_ROOT_FD_V1)?);
@@ -224,7 +228,7 @@ fn close_inherited(descriptor: RawFd) -> Result<(), ProtectedIssuerDeploymentErr
 fn protect_unrelated_descriptors_v1() -> Result<(), ProtectedIssuerDeploymentErrorV1> {
     // SAFETY: close_range with CLOEXEC changes descriptor flags only and does not dereference user
     // memory. Private retained descriptors are already close-on-exec; this protects all extras.
-    if unsafe { libc::close_range(3, u32::MAX, CLOSE_RANGE_CLOEXEC) } != 0 {
+    if unsafe { libc::syscall(libc::SYS_close_range, 3_u32, u32::MAX, CLOSE_RANGE_CLOEXEC) } != 0 {
         return Err(ProtectedIssuerDeploymentErrorV1::Descriptor {
             operation: "protect unrelated supervisor descriptors",
             source: io::Error::last_os_error(),
