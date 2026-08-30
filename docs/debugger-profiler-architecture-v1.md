@@ -257,13 +257,26 @@ Profiler V1's versioned capture-plan request/result contracts. It validates
 both diagnosis evidence manifests and Variant response identities. The bounded
 report retains each complete authenticated diagnosis and actual citation IDs,
 plus the capture plan's exact evidence identities/origins. It traverses two
-one-item dispatch pages with a content-bound cursor and submits the exact
-selected dispatch to the planner. Process-level hostile tests cover stale and
-duplicate requests, raw-source substitution, response substitution, malformed
-terminal input, post-preload simulator snapshot substitution, evidence
-symlinks/hard links, determinism, and line/response bounds. A descriptor-level
-hostile test covers executable symlink/hard-link rejection plus
-rename/replacement retention and mutation rejection.
+one-item dispatch pages with a progressing content-bound cursor, distinct
+dispatch identities, exact capture bindings, and second-page exhaustion, then
+submits the exact selected dispatch to the planner. Every Agent Profiler V1
+response is associated with the issued schema, request ID, expected response
+revision, status, and result kind.
+
+Dedicated stdout and stderr readers retain no more than each compiled bound
+plus one overflow byte and drain concurrently under one session deadline. The
+client rejects oversized output without a newline, stderr floods, trailing
+lines or bytes, hangs, and unsolicited output. An armed child guard terminates
+the launch-owned process group and boundedly reaps the direct child on every
+error. It also terminates any remaining group member after an otherwise
+successful leader exit and boundedly verifies group absence before disarming.
+Process-level hostile tests cover these cases, stale and duplicate requests,
+swapped or unrelated Agent envelopes, repeated cursors/pages, wrong capture
+bindings, raw-source and response substitution, malformed terminal input,
+post-preload simulator snapshot substitution, evidence symlinks/hard links,
+determinism, and line/response bounds. A descriptor-level hostile test covers
+executable symlink/hard-link rejection plus rename/replacement retention and
+mutation rejection.
 
 This satisfies the scoped T4 workflow acceptance for the two seeded simulator
 diagnoses, the conservative T3 co-observation, and the ambiguous next-capture

@@ -192,6 +192,15 @@ the protocol or final report. Simulator results must name the exact preloaded
 request and canonical KIR identities, so replacing a snapshot does not yield
 an accepted diagnosis.
 
+Every child session has one compiled deadline. Dedicated bounded readers drain
+stdout and stderr concurrently, retain at most the documented limit plus one
+overflow byte, and reject oversized, unterminated, unsolicited, or trailing
+output. Every error path terminates the launch-owned process group and
+boundedly reaps the direct child. Even after a successful direct-child exit,
+the client terminates any remaining member of that group before accepting the
+session and boundedly verifies that the group is absent, so a forked helper
+cannot outlive it.
+
 One workflow discovers capabilities and then performs four read-only tasks:
 
 - diagnose a retained simulator memory out-of-bounds failure;
@@ -205,7 +214,11 @@ The client decodes simulator diagnoses with the full evidence-manifest
 validator, validates the serialized Variant response identity, and requires
 exact citations for ranked explanations. Its bounded report retains each full
 authenticated diagnosis with every material citation identity and the capture
-plan's exact Agent V1 evidence/origins. It otherwise contains only inert
+plan's exact Agent V1 evidence/origins. Agent Profiler V1 responses must match
+the issued schema, request ID, response revision, status, and result kind.
+Dispatch pagination additionally requires exact capture binding, a progressing
+content-bound cursor, distinct dispatch identities, and second-page exhaustion.
+The report otherwise contains only inert
 content identities, truth classifications, cited claims, typed unavailable
 states, and pagination counts. It has no launch, attach,
 pause, scheduling, KFD, ROCgdb-control, rocprofv3-collection, or recapture
