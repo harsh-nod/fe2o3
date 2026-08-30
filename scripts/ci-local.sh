@@ -704,6 +704,12 @@ run_auxiliary_tests() {
   run_step core-production-runtime-surface-ui \
     env FE2O3_HIP_SYS_DISABLE=1 \
       cargo test --locked -p fe2o3-core --test production_runtime_surface_ui
+  run_step compiler-execution-systemd-contract \
+    bash scripts/tests/compiler-execution-systemd.sh
+  run_step compiler-execution-deployment-bundle-contract \
+    bash scripts/tests/compiler-execution-deployment-bundle.sh
+  run_step compiler-execution-qualification-base-contract \
+    bash scripts/tests/compiler-execution-qualification-base.sh
   run_step s09-debug-checker bash scripts/tests/s09-debug.sh
 }
 
