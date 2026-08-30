@@ -256,27 +256,41 @@ the Variant extension's read-only authority and exact-input contract; and Agent
 Profiler V1's versioned capture-plan request/result contracts. It validates
 both diagnosis evidence manifests and Variant response identities. The bounded
 report retains each complete authenticated diagnosis and actual citation IDs,
-plus the capture plan's exact evidence identities/origins. It traverses two
+plus the capture plan's exact evidence identities/origins. Capability,
+continued, and diagnosis simulator responses must retain one configuration
+identity, and the diagnosis SessionView must exactly equal the continued
+SessionView. Variant treatment admission consumes a decreasing aggregate byte
+budget; bounded streaming hex carries the exact bytes. The typed returned
+comparison must equal a production comparator replay over those retained bytes,
+including its request and both treatment summaries. It traverses two
 one-item dispatch pages with a progressing content-bound cursor, distinct
 dispatch identities, exact capture bindings, and second-page exhaustion, then
-submits the exact selected dispatch to the planner. Every Agent Profiler V1
+submits the exact selected dispatch to the planner. A separate production
+`ProfilerQuerySessionV4` over the retained bundle derives the full expected
+context, ordered dispatch pages, cursor binding/positions, and exhaustion.
+Every Agent Profiler V1
 response is associated with the issued schema, request ID, expected response
-revision, status, and result kind.
+revision, status, and result kind; strict identities, contexts, cursors, pages,
+and evidence must equal that independent result and share one service contract.
 
 Dedicated stdout and stderr readers retain no more than each compiled bound
 plus one overflow byte and drain concurrently under one session deadline. The
 client rejects oversized output without a newline, stderr floods, trailing
 lines or bytes, hangs, and unsolicited output. An armed child guard terminates
-the launch-owned process group and boundedly reaps the direct child on every
-error. It also terminates any remaining group member after an otherwise
-successful leader exit and boundedly verifies group absence before disarming.
+the launch-owned process group at most once and boundedly reaps the direct child
+on every error. On nominal completion it first observes leader exit with
+`waitid(WNOWAIT)`, revokes numeric PGID signal authority, signals the group,
+reaps the direct child, and verifies group absence. Reap and absence checks are
+still attempted after a signal error, while Drop cannot repeat the group signal.
 Process-level hostile tests cover these cases, stale and duplicate requests,
 swapped or unrelated Agent envelopes, repeated cursors/pages, wrong capture
 bindings, raw-source and response substitution, malformed terminal input,
 post-preload simulator snapshot substitution, evidence symlinks/hard links,
-determinism, and line/response bounds. A descriptor-level hostile test covers
-executable symlink/hard-link rejection plus rename/replacement retention and
-mutation rejection.
+determinism, and line/response bounds. Separate admission tests cover aggregate
+treatment overflow, and the exact Variant decoder rejects a canonically
+resealed comparison from different retained treatment inputs. A
+descriptor-level hostile test covers executable symlink/hard-link rejection
+plus rename/replacement retention and mutation rejection.
 
 This satisfies the scoped T4 workflow acceptance for the two seeded simulator
 diagnoses, the conservative T3 co-observation, and the ambiguous next-capture

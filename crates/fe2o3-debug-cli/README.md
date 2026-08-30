@@ -195,11 +195,11 @@ an accepted diagnosis.
 Every child session has one compiled deadline. Dedicated bounded readers drain
 stdout and stderr concurrently, retain at most the documented limit plus one
 overflow byte, and reject oversized, unterminated, unsolicited, or trailing
-output. Every error path terminates the launch-owned process group and
-boundedly reaps the direct child. Even after a successful direct-child exit,
-the client terminates any remaining member of that group before accepting the
-session and boundedly verifies that the group is absent, so a forked helper
-cannot outlive it.
+output. The client observes a successful leader exit without reaping it, makes
+one process-group termination attempt while the PID/PGID remains pinned, then
+always boundedly reaps the direct child and checks group absence. Signal
+authority is permanently revoked before that attempt, including failure paths,
+so cleanup never signals a numeric PGID again after the leader was reaped.
 
 One workflow discovers capabilities and then performs four read-only tasks:
 
@@ -212,12 +212,21 @@ One workflow discovers capabilities and then performs four read-only tasks:
 
 The client decodes simulator diagnoses with the full evidence-manifest
 validator, validates the serialized Variant response identity, and requires
-exact citations for ranked explanations. Its bounded report retains each full
+the capability, continued, and diagnosis sessions to carry one configuration
+identity, with the diagnosis session exactly equal to the continued session.
+Treatment files consume one decreasing aggregate admission budget before any
+read past that budget, and exact byte inputs are emitted with fallible bounded
+streaming hex encoding. The returned typed Variant comparison is independently
+recomputed and decoded with the production exact-input comparator. Its bounded
+report retains each full
 authenticated diagnosis with every material citation identity and the capture
 plan's exact Agent V1 evidence/origins. Agent Profiler V1 responses must match
 the issued schema, request ID, response revision, status, and result kind.
 Dispatch pagination additionally requires exact capture binding, a progressing
 content-bound cursor, distinct dispatch identities, and second-page exhaustion.
+The client independently opens the retained bundle with
+`ProfilerQuerySessionV4` and requires full context, cursor, dispatch order, and
+evidence arrays to equal the two locally derived pages.
 The report otherwise contains only inert
 content identities, truth classifications, cited claims, typed unavailable
 states, and pagination counts. It has no launch, attach,

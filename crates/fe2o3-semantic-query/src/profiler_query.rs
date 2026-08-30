@@ -83,7 +83,8 @@ pub struct ProfilerCapabilityV4 {
     pub reason: Option<&'static str>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProfilerQueryContextV4 {
     pub bundle_identity: ContentIdentityRecordV1,
     pub run_identity: CaptureIdentityV1,
@@ -127,14 +128,16 @@ impl Default for ProfilerPageRequestV4 {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProfilerEvidenceV4 {
     pub origin: TruthOriginV1,
     pub bundle: CaptureIdentityV1,
     pub record: Option<CaptureIdentityV1>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProfilerDispatchSummaryV4 {
     pub identity: CaptureIdentityV1,
     pub device_identity: CaptureIdentityV1,

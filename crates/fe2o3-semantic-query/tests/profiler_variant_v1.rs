@@ -784,6 +784,57 @@ fn stale_substitution_reseal_and_hostile_result_are_rejected() {
     let request =
         build_profiler_variant_request_v1(workload, &baseline.manifest, &candidate.manifest)
             .unwrap();
+    let accepted =
+        compare_profiler_variants_v1(request, baseline.input(), candidate.input()).unwrap();
+    let accepted_bytes = encode_profiler_variant_comparison_v1(
+        request,
+        baseline.input(),
+        candidate.input(),
+        &accepted,
+    )
+    .unwrap();
+    let stale_candidate = treatment(
+        workload,
+        &source,
+        hsaco(9, 2),
+        3,
+        b"schedule-c",
+        b"isa-c",
+        None,
+    );
+    let stale_request =
+        build_profiler_variant_request_v1(workload, &baseline.manifest, &stale_candidate.manifest)
+            .unwrap();
+    let stale =
+        compare_profiler_variants_v1(stale_request, baseline.input(), stale_candidate.input())
+            .unwrap();
+    let stale_bytes = encode_profiler_variant_comparison_v1(
+        stale_request,
+        baseline.input(),
+        stale_candidate.input(),
+        &stale,
+    )
+    .unwrap();
+    assert_eq!(
+        decode_profiler_variant_comparison_v1(
+            &accepted_bytes,
+            request,
+            baseline.input(),
+            candidate.input(),
+        )
+        .unwrap(),
+        accepted
+    );
+    assert_eq!(
+        decode_profiler_variant_comparison_v1(
+            &stale_bytes,
+            request,
+            baseline.input(),
+            candidate.input(),
+        )
+        .unwrap_err(),
+        ProfilerVariantErrorV1::InvalidResult
+    );
     let mut result =
         compare_profiler_variants_v1(request, baseline.input(), candidate.input()).unwrap();
     result.comparable = false;

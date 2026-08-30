@@ -13,25 +13,37 @@ use std::process::{
 };
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, TryRecvError, sync_channel};
+#[cfg(test)]
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use fe2o3_debug_protocol::{
     CapabilityAvailabilityV1, DebugCapabilityNameV1, DebugOperationNameV1, DebugResponseV1,
     DebugResultV1, DiagnosisClassV2, DiagnosisFactV2, DiagnosisOperationV2, DiagnosisResponseV2,
-    DiagnosisViewV2, ProtocolLimitsV1, decode_diagnosis_response_line_v2, decode_response_line_v1,
+    DiagnosisViewV2, PageCursorV1, ProtocolLimitsV1, SessionViewV1,
+    decode_diagnosis_response_line_v2, decode_response_line_v1,
 };
 use fe2o3_kernel_ir::VerifiedCanonicalKernelIrV7;
+use fe2o3_semantic_import::{
+    CaptureIdentityV1, ContentIdentityRecordV1, ProfilerCoverageV4, TruthOriginV1,
+};
 use fe2o3_semantic_query::{
     AGENT_PROFILER_PLAN_REQUEST_SCHEMA_V1, AGENT_PROFILER_PLAN_SCHEMA_V1,
     AGENT_PROFILER_REQUEST_SCHEMA_V1, AGENT_PROFILER_RESPONSE_SCHEMA_V1,
     AGENT_PROFILER_VARIANT_COMPARISON_SCHEMA_V1, AGENT_PROFILER_VARIANT_REQUEST_SCHEMA_V1,
     AGENT_PROFILER_VARIANT_RESPONSE_SCHEMA_V1, MAX_AGENT_PROFILER_REQUEST_BYTES_V1,
     MAX_AGENT_PROFILER_RESPONSE_BYTES_V1, MAX_AGENT_PROFILER_VARIANT_REQUEST_BYTES_V1,
-    MAX_AGENT_PROFILER_VARIANT_RESPONSE_BYTES_V1, MAX_PROFILER_VARIANT_TREATMENT_BYTES_V1,
+    MAX_AGENT_PROFILER_VARIANT_RESPONSE_BYTES_V1, MAX_PROFILER_VARIANT_RESULT_BYTES_V1,
+    MAX_PROFILER_VARIANT_TREATMENT_BYTES_V1, ProfilerCursorV4, ProfilerDispatchSummaryV4,
+    ProfilerListKindV4, ProfilerPageRequestV4, ProfilerPageV4, ProfilerQueryContextV4,
+    ProfilerQueryItemV4, ProfilerQueryLimitsV4, ProfilerQueryRequestV4, ProfilerQueryResponseV4,
+    ProfilerQuerySessionV4, ProfilerVariantComparisonV1, ProfilerVariantTreatmentInputV1,
+    ProfilerVariantUnavailableKindV1, build_profiler_variant_request_v1,
+    compare_profiler_variants_v1, decode_profiler_variant_comparison_v1,
     validate_agent_profiler_variant_response_line_v1,
 };
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
@@ -45,13 +57,13 @@ const MAX_REFERENCE_REPORT_BYTES_V1: usize = 16 * 1024 * 1024;
 const CHILD_SESSION_TIMEOUT_V1: Duration = Duration::from_secs(10);
 const CHILD_REAP_TIMEOUT_V1: Duration = Duration::from_secs(2);
 const CHILD_POLL_INTERVAL_V1: Duration = Duration::from_millis(2);
-const REQUIRED_VARIANT_GAPS_V1: [&str; 6] = [
-    "decoded_att_events",
-    "runtime_api_events",
-    "copy_events",
-    "pc_to_semantic_or_isa_correlation",
-    "semantic_ir_isa_change_localization",
-    "causal_regression_attribution",
+const REQUIRED_VARIANT_GAPS_V1: [ProfilerVariantUnavailableKindV1; 6] = [
+    ProfilerVariantUnavailableKindV1::DecodedAttEvents,
+    ProfilerVariantUnavailableKindV1::RuntimeApiEvents,
+    ProfilerVariantUnavailableKindV1::CopyEvents,
+    ProfilerVariantUnavailableKindV1::PcToSemanticOrIsaCorrelation,
+    ProfilerVariantUnavailableKindV1::SemanticIrIsaChangeLocalization,
+    ProfilerVariantUnavailableKindV1::CausalRegressionAttribution,
 ];
 
 static NEXT_SNAPSHOT_V1: AtomicU64 = AtomicU64::new(1);
@@ -281,79 +293,51 @@ impl LoadedSimulatorCaseV1 {
 
 impl LoadedTreatmentV1 {
     fn load(value: TreatmentFilesV1) -> Result<Self, String> {
-        let result = Self {
-            manifest: read_bounded(
-                &value.manifest,
-                MAX_PROFILER_VARIANT_TREATMENT_BYTES_V1,
-                "manifest",
-            )?,
-            semantic_workload: read_bounded(
+        Self::load_with_budget(value, MAX_PROFILER_VARIANT_TREATMENT_BYTES_V1)
+    }
+
+    fn load_with_budget(value: TreatmentFilesV1, mut remaining: u64) -> Result<Self, String> {
+        Ok(Self {
+            manifest: read_budgeted(&value.manifest, &mut remaining, "manifest")?,
+            semantic_workload: read_budgeted(
                 &value.semantic_workload,
-                MAX_PROFILER_VARIANT_TREATMENT_BYTES_V1,
+                &mut remaining,
                 "semantic workload",
             )?,
-            raw_profiler_source: read_bounded(
+            raw_profiler_source: read_budgeted(
                 &value.raw_profiler_source,
-                MAX_PROFILER_VARIANT_TREATMENT_BYTES_V1,
+                &mut remaining,
                 "raw profiler source",
             )?,
-            bundle: read_bounded(
-                &value.bundle,
-                MAX_PROFILER_VARIANT_TREATMENT_BYTES_V1,
-                "profiler bundle",
+            bundle: read_budgeted(&value.bundle, &mut remaining, "profiler bundle")?,
+            schedule: read_budgeted(&value.schedule, &mut remaining, "schedule")?,
+            artifact: read_budgeted(&value.artifact, &mut remaining, "artifact")?,
+            isa_projection: read_optional_budgeted(
+                &value.isa_projection,
+                &mut remaining,
+                "ISA projection",
             )?,
-            schedule: read_bounded(
-                &value.schedule,
-                MAX_PROFILER_VARIANT_TREATMENT_BYTES_V1,
-                "schedule",
+            counters: read_optional_budgeted(&value.counters, &mut remaining, "counter capture")?,
+            pc_samples: read_optional_budgeted(
+                &value.pc_samples,
+                &mut remaining,
+                "PC sample capture",
             )?,
-            artifact: read_bounded(
-                &value.artifact,
-                MAX_PROFILER_VARIANT_TREATMENT_BYTES_V1,
-                "artifact",
-            )?,
-            isa_projection: read_optional(&value.isa_projection, "ISA projection")?,
-            counters: read_optional(&value.counters, "counter capture")?,
-            pc_samples: read_optional(&value.pc_samples, "PC sample capture")?,
-        };
-        let total = result
-            .parts()
-            .try_fold(0_u64, |sum, bytes| sum.checked_add(bytes.len() as u64))
-            .ok_or("treatment size overflow")?;
-        if total > MAX_PROFILER_VARIANT_TREATMENT_BYTES_V1 {
-            return Err("treatment exceeds service bound".into());
-        }
-        Ok(result)
-    }
-
-    fn parts(&self) -> impl Iterator<Item = &[u8]> {
-        [
-            Some(self.manifest.as_slice()),
-            Some(self.semantic_workload.as_slice()),
-            Some(self.raw_profiler_source.as_slice()),
-            Some(self.bundle.as_slice()),
-            Some(self.schedule.as_slice()),
-            Some(self.artifact.as_slice()),
-            self.isa_projection.as_deref(),
-            self.counters.as_deref(),
-            self.pc_samples.as_deref(),
-        ]
-        .into_iter()
-        .flatten()
-    }
-
-    fn json(&self) -> Value {
-        json!({
-            "manifest_hex": lower_hex(&self.manifest),
-            "semantic_workload_hex": lower_hex(&self.semantic_workload),
-            "raw_profiler_source_hex": lower_hex(&self.raw_profiler_source),
-            "bundle_hex": lower_hex(&self.bundle),
-            "schedule_hex": lower_hex(&self.schedule),
-            "artifact_hex": lower_hex(&self.artifact),
-            "isa_projection_hex": self.isa_projection.as_deref().map(lower_hex),
-            "counters_hex": self.counters.as_deref().map(lower_hex),
-            "pc_samples_hex": self.pc_samples.as_deref().map(lower_hex),
         })
+    }
+
+    fn input(&self) -> ProfilerVariantTreatmentInputV1<'_> {
+        ProfilerVariantTreatmentInputV1 {
+            manifest: &self.manifest,
+            semantic_workload: &self.semantic_workload,
+            raw_profiler_source: &self.raw_profiler_source,
+            bundle: &self.bundle,
+            schedule: &self.schedule,
+            artifact: &self.artifact,
+            isa_projection: self.isa_projection.as_deref(),
+            counters: self.counters.as_deref(),
+            pc_samples: self.pc_samples.as_deref(),
+        }
     }
 }
 
@@ -431,13 +415,14 @@ fn diagnose_simulator(
         request_id: 2,
         operation: DebugOperationNameV1::Continue,
         session: continued_session,
+        result: continued_result,
         ..
     } = continued
     else {
         return Err("debugger control response association mismatch".into());
     };
-    if continued_session.revision != 1 {
-        return Err("debugger control response revision mismatch".into());
+    if !matches!(continued_result.as_ref(), DebugResultV1::Control { .. }) {
+        return Err("debugger control result kind mismatch".into());
     }
     let diagnosis = decode_diagnosis_response_line_v2(&lines[2], limits)
         .map_err(|_| "invalid or unauthenticated diagnosis response")?;
@@ -447,12 +432,18 @@ fn diagnose_simulator(
         session,
         completeness,
         diagnoses,
-        next_cursor: None,
+        next_cursor,
         ..
     } = diagnosis
     else {
         return Err("diagnosis request failed".into());
     };
+    validate_simulator_session_chain_v1(
+        capability_session,
+        continued_session,
+        session,
+        next_cursor,
+    )?;
     let [diagnosis] = diagnoses.as_slice() else {
         return Err("diagnosis page did not contain exactly one result".into());
     };
@@ -513,6 +504,23 @@ fn diagnose_simulator(
             .map_err(|_| "encode citations")?,
         citation_count: diagnosis.evidence.citations.len(),
     })
+}
+
+fn validate_simulator_session_chain_v1(
+    capability: SessionViewV1,
+    continued: SessionViewV1,
+    diagnosis: SessionViewV1,
+    next_cursor: Option<PageCursorV1>,
+) -> Result<(), String> {
+    if capability.revision != 0
+        || continued.revision != 1
+        || capability.configuration_identity != continued.configuration_identity
+        || diagnosis != continued
+        || next_cursor.is_some()
+    {
+        return Err("simulator response session/configuration/cursor association mismatch".into());
+    }
+    Ok(())
 }
 
 fn require_debug_capability(
@@ -622,7 +630,7 @@ struct AgentOkWireV1<T> {
     value: T,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 struct AgentCapabilitiesWireV1 {
     result: String,
@@ -631,7 +639,7 @@ struct AgentCapabilitiesWireV1 {
     evidence: AgentEvidenceWireV1,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 struct AgentLimitsWireV1 {
     max_request_bytes: u64,
@@ -647,18 +655,33 @@ struct AgentLimitsWireV1 {
     max_plan_overhead_basis_points: u32,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 struct AgentCaptureOpenedWireV1 {
     result: String,
-    context: AgentContextWireV1,
-    coverage: Value,
+    context: ProfilerQueryContextV4,
+    coverage: ProfilerCoverageV4,
     capture_capabilities: Vec<Value>,
-    audit: Value,
+    audit: AgentOpenAuditWireV1,
     evidence: AgentEvidenceWireV1,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+struct AgentOpenAuditWireV1 {
+    before_open_captures: u8,
+    after_open_captures: u8,
+    effect: AgentOpenEffectWireV1,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+enum AgentOpenEffectWireV1 {
+    Registered,
+    AlreadyOpen,
+}
+
+#[derive(Debug, Deserialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 struct AgentPageResultWireV1 {
     result: String,
@@ -666,7 +689,7 @@ struct AgentPageResultWireV1 {
     evidence: AgentEvidenceWireV1,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 struct AgentCapturePlanWireV1 {
     result: String,
@@ -674,55 +697,69 @@ struct AgentCapturePlanWireV1 {
     evidence: AgentEvidenceWireV1,
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct AgentContextWireV1 {
-    bundle_identity: Value,
-    run_identity: Value,
-    source_kind: String,
-    device_count: u64,
-    dispatch_count: u64,
-    att_reference_count: u64,
-}
-
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 struct AgentPageWireV1 {
-    context: AgentContextWireV1,
-    kind: String,
+    context: ProfilerQueryContextV4,
+    kind: ProfilerListKindV4,
     returned: u16,
-    next_cursor: Option<Value>,
-    items: Vec<Value>,
+    next_cursor: Option<ProfilerCursorV4>,
+    items: Vec<AgentDispatchItemWireV1>,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize, Eq, PartialEq)]
+#[serde(tag = "item", rename_all = "snake_case", deny_unknown_fields)]
+enum AgentDispatchItemWireV1 {
+    Dispatch { dispatch: ProfilerDispatchSummaryV4 },
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "classification", rename_all = "snake_case", deny_unknown_fields)]
+enum AgentAggregateOriginWireV1 {
+    Homogeneous { origin: TruthOriginV1 },
+    Mixed { origins: Vec<TruthOriginV1> },
+    Empty,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 struct AgentEvidenceWireV1 {
-    origin: Value,
-    service_contract: Value,
-    captures: Vec<Value>,
-    records: Vec<Value>,
+    origin: AgentAggregateOriginWireV1,
+    service_contract: ContentIdentityRecordV1,
+    captures: Vec<ContentIdentityRecordV1>,
+    records: Vec<CaptureIdentityV1>,
+}
+
+enum ValidatedAgentResponseV1 {
+    Capabilities(AgentCapabilitiesWireV1),
+    CaptureOpened(AgentCaptureOpenedWireV1),
+    Page(AgentPageResultWireV1),
+    CapturePlan(AgentCapturePlanWireV1),
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct VariantOkWireV1 {
+struct VariantOkWireV1<T> {
     status: String,
     schema: String,
     request_id: u64,
     response_revision: u64,
-    value: VariantValueWireV1,
-    response_identity: Value,
+    value: T,
+    response_identity: ContentIdentityRecordV1,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct VariantValueWireV1 {
+struct VariantCapabilitiesValueWireV1 {
     result: String,
-    #[serde(default)]
-    capabilities: Option<Value>,
-    #[serde(default)]
-    comparison: Option<Value>,
+    capabilities: Value,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct VariantComparisonValueWireV1 {
+    result: String,
+    comparison: ProfilerVariantComparisonV1,
 }
 
 fn validate_agent_ok_envelope<T>(
@@ -740,35 +777,10 @@ fn validate_agent_ok_envelope<T>(
     Ok(())
 }
 
-fn validate_agent_context_wire_v1(context: &AgentContextWireV1) -> Result<(), String> {
-    if context.bundle_identity.is_null()
-        || context.run_identity.is_null()
-        || context.source_kind.is_empty()
-    {
-        return Err("Agent V1 context identity is incomplete".into());
-    }
-    let _ = (
-        context.device_count,
-        context.dispatch_count,
-        context.att_reference_count,
-    );
-    Ok(())
-}
-
-fn validate_agent_evidence_wire_v1(evidence: &AgentEvidenceWireV1) -> Result<(), String> {
-    if evidence.origin.is_null() || evidence.service_contract.is_null() {
-        return Err("Agent V1 evidence identity is incomplete".into());
-    }
-    let _ = (&evidence.captures, &evidence.records);
-    Ok(())
-}
-
 fn validate_agent_page_wire_v1(page: &AgentPageWireV1) -> Result<(), String> {
-    validate_agent_context_wire_v1(&page.context)?;
-    if page.kind.is_empty() || usize::from(page.returned) != page.items.len() {
+    if usize::from(page.returned) != page.items.len() {
         return Err("Agent V1 page shape is inconsistent".into());
     }
-    let _ = &page.next_cursor;
     Ok(())
 }
 
@@ -777,7 +789,7 @@ fn validate_agent_response_line_v1(
     request_id: u64,
     response_revision: u64,
     expected: ExpectedAgentResultV1,
-) -> Result<Value, String> {
+) -> Result<ValidatedAgentResponseV1, String> {
     match expected {
         ExpectedAgentResultV1::Capabilities => {
             let response: AgentOkWireV1<AgentCapabilitiesWireV1> =
@@ -786,21 +798,7 @@ fn validate_agent_response_line_v1(
             if response.value.result != expected.wire() {
                 return Err("Agent V1 capabilities result kind mismatch".into());
             }
-            validate_agent_evidence_wire_v1(&response.value.evidence)?;
-            let _ = (
-                response.value.capabilities,
-                response.value.limits.max_request_bytes,
-                response.value.limits.max_response_bytes,
-                response.value.limits.max_requests,
-                response.value.limits.max_open_captures,
-                response.value.limits.max_page_items,
-                response.value.limits.max_bundle_bytes,
-                response.value.limits.max_plan_missing_facts,
-                response.value.limits.max_plan_compute_units,
-                response.value.limits.max_plan_storage_bytes,
-                response.value.limits.max_plan_records,
-                response.value.limits.max_plan_overhead_basis_points,
-            );
+            Ok(ValidatedAgentResponseV1::Capabilities(response.value))
         }
         ExpectedAgentResultV1::CaptureOpened => {
             let response: AgentOkWireV1<AgentCaptureOpenedWireV1> =
@@ -809,13 +807,7 @@ fn validate_agent_response_line_v1(
             if response.value.result != expected.wire() {
                 return Err("Agent V1 open result kind mismatch".into());
             }
-            validate_agent_context_wire_v1(&response.value.context)?;
-            validate_agent_evidence_wire_v1(&response.value.evidence)?;
-            let _ = (
-                response.value.coverage,
-                response.value.capture_capabilities,
-                response.value.audit,
-            );
+            Ok(ValidatedAgentResponseV1::CaptureOpened(response.value))
         }
         ExpectedAgentResultV1::Page => {
             let response: AgentOkWireV1<AgentPageResultWireV1> =
@@ -825,7 +817,7 @@ fn validate_agent_response_line_v1(
                 return Err("Agent V1 page result kind mismatch".into());
             }
             validate_agent_page_wire_v1(&response.value.page)?;
-            validate_agent_evidence_wire_v1(&response.value.evidence)?;
+            Ok(ValidatedAgentResponseV1::Page(response.value))
         }
         ExpectedAgentResultV1::CapturePlan => {
             let response: AgentOkWireV1<AgentCapturePlanWireV1> =
@@ -834,11 +826,9 @@ fn validate_agent_response_line_v1(
             if response.value.result != expected.wire() {
                 return Err("Agent V1 plan result kind mismatch".into());
             }
-            validate_agent_evidence_wire_v1(&response.value.evidence)?;
-            let _ = response.value.plan;
+            Ok(ValidatedAgentResponseV1::CapturePlan(response.value))
         }
     }
-    serde_json::from_slice(line).map_err(|_| "invalid Agent V1 JSON response".into())
 }
 
 fn exchange_agent_v1(
@@ -847,7 +837,7 @@ fn exchange_agent_v1(
     request_id: u64,
     response_revision: u64,
     expected: ExpectedAgentResultV1,
-) -> Result<Value, String> {
+) -> Result<ValidatedAgentResponseV1, String> {
     if request["schema"] != AGENT_PROFILER_REQUEST_SCHEMA_V1 || request["request_id"] != request_id
     {
         return Err("issued Agent V1 request association is invalid".into());
@@ -856,13 +846,42 @@ fn exchange_agent_v1(
     validate_agent_response_line_v1(&line, request_id, response_revision, expected)
 }
 
-fn exchange_variant_v1(
+fn exchange_encoded_agent_v1(
+    session: &mut JsonlChildV1<'_>,
+    request: Vec<u8>,
+    request_id: u64,
+    response_revision: u64,
+    expected: ExpectedAgentResultV1,
+) -> Result<ValidatedAgentResponseV1, String> {
+    let line = session.exchange_encoded_line(request, MAX_AGENT_PROFILER_REQUEST_BYTES_V1)?;
+    validate_agent_response_line_v1(&line, request_id, response_revision, expected)
+}
+
+fn validate_variant_response_v1<T: DeserializeOwned>(
+    line: &[u8],
+    request_id: u64,
+    response_revision: u64,
+) -> Result<VariantOkWireV1<T>, String> {
+    validate_agent_profiler_variant_response_line_v1(line)
+        .map_err(|_| "profiler response identity mismatch")?;
+    let response: VariantOkWireV1<T> =
+        serde_json::from_slice(line).map_err(|_| "invalid Variant V1 response wire")?;
+    if response.status != "ok"
+        || response.schema != AGENT_PROFILER_VARIANT_RESPONSE_SCHEMA_V1
+        || response.request_id != request_id
+        || response.response_revision != response_revision
+    {
+        return Err("Variant V1 response association mismatch".into());
+    }
+    Ok(response)
+}
+
+fn exchange_variant_v1<T: DeserializeOwned>(
     session: &mut JsonlChildV1<'_>,
     request: &Value,
     request_id: u64,
     response_revision: u64,
-    expected_result: &str,
-) -> Result<Value, String> {
+) -> Result<VariantOkWireV1<T>, String> {
     if request["schema"] != AGENT_PROFILER_VARIANT_REQUEST_SCHEMA_V1
         || request["request_id"] != request_id
         || request["expected_revision"] != response_revision - 1
@@ -870,24 +889,18 @@ fn exchange_variant_v1(
         return Err("issued Variant V1 request association is invalid".into());
     }
     let line = session.exchange_line(request, MAX_AGENT_PROFILER_VARIANT_REQUEST_BYTES_V1)?;
-    validate_agent_profiler_variant_response_line_v1(&line)
-        .map_err(|_| "profiler response identity mismatch")?;
-    let response: VariantOkWireV1 =
-        serde_json::from_slice(&line).map_err(|_| "invalid Variant V1 response wire")?;
-    if response.status != "ok"
-        || response.schema != AGENT_PROFILER_VARIANT_RESPONSE_SCHEMA_V1
-        || response.request_id != request_id
-        || response.response_revision != response_revision
-        || response.value.result != expected_result
-        || response.response_identity.is_null()
-        || (expected_result == "capabilities"
-            && (response.value.capabilities.is_none() || response.value.comparison.is_some()))
-        || (expected_result == "comparison"
-            && (response.value.comparison.is_none() || response.value.capabilities.is_some()))
-    {
-        return Err("Variant V1 response association mismatch".into());
-    }
-    serde_json::from_slice(&line).map_err(|_| "invalid Variant V1 JSON response".into())
+    validate_variant_response_v1(&line, request_id, response_revision)
+}
+
+fn exchange_encoded_variant_v1<T: DeserializeOwned>(
+    session: &mut JsonlChildV1<'_>,
+    request: Vec<u8>,
+    request_id: u64,
+    response_revision: u64,
+) -> Result<VariantOkWireV1<T>, String> {
+    let line =
+        session.exchange_encoded_line(request, MAX_AGENT_PROFILER_VARIANT_REQUEST_BYTES_V1)?;
+    validate_variant_response_v1(&line, request_id, response_revision)
 }
 
 fn compare_variants(
@@ -907,10 +920,12 @@ fn compare_variants(
         "request_id":1,
         "expected_revision":0
     });
-    let capabilities =
-        exchange_variant_v1(&mut session, &capabilities_request, 1, 1, "capabilities")?;
-    require_eq(&capabilities["status"], "ok", "variant discovery")?;
-    let variant_capabilities = &capabilities["value"]["capabilities"];
+    let capabilities: VariantOkWireV1<VariantCapabilitiesValueWireV1> =
+        exchange_variant_v1(&mut session, &capabilities_request, 1, 1)?;
+    if capabilities.value.result != "capabilities" {
+        return Err("Variant capability result kind mismatch".into());
+    }
+    let variant_capabilities = &capabilities.value.capabilities;
     require_eq(
         &variant_capabilities["authority"],
         "read_only_no_execution_attach_scheduling_or_collection_authority",
@@ -947,136 +962,215 @@ fn compare_variants(
     {
         return Err("Variant discovered bounds cannot serve this workflow".into());
     }
-    let comparison_request = json!({
-        "operation":"compare_variants",
-        "schema":AGENT_PROFILER_VARIANT_REQUEST_SCHEMA_V1,
-        "request_id":2,
-        "expected_revision":1,
-        "baseline":baseline.json(),
-        "candidate":candidate.json(),
-    });
-    let compared = exchange_variant_v1(&mut session, &comparison_request, 2, 2, "comparison")?;
+    let comparison_request = build_profiler_variant_request_v1(
+        &baseline.semantic_workload,
+        &baseline.manifest,
+        &candidate.manifest,
+    )
+    .map_err(|_| "could not build retained Variant request")?;
+    let expected =
+        compare_profiler_variants_v1(comparison_request, baseline.input(), candidate.input())
+            .map_err(|_| "retained Variant inputs failed production comparison")?;
+    let encoded_request = encode_variant_comparison_request_v1(baseline, candidate)?;
+    let compared: VariantOkWireV1<VariantComparisonValueWireV1> =
+        exchange_encoded_variant_v1(&mut session, encoded_request, 2, 2)?;
     session.finish()?;
-    require_eq(&compared["status"], "ok", "variant comparison")?;
-    let comparison = &compared["value"]["comparison"];
-    let explanations = comparison["ranked_explanations"]
-        .as_array()
-        .ok_or("missing ranked explanations")?;
-    if explanations.is_empty()
-        || explanations
+    if compared.value.result != "comparison" {
+        return Err("Variant comparison result kind mismatch".into());
+    }
+    let comparison = compared.value.comparison;
+    let mut canonical = encode_json_line(
+        &comparison,
+        MAX_PROFILER_VARIANT_RESULT_BYTES_V1.saturating_add(1),
+    )?;
+    if canonical.pop() != Some(b'\n') {
+        return Err("typed Variant comparison encoding is not canonical JSONL".into());
+    }
+    let decoded = decode_profiler_variant_comparison_v1(
+        &canonical,
+        comparison_request,
+        baseline.input(),
+        candidate.input(),
+    )
+    .map_err(|_| "Variant comparison does not match the retained exact inputs")?;
+    if decoded != expected || comparison != expected {
+        return Err("Variant comparison differs from independent production output".into());
+    }
+    if comparison.ranked_explanations.is_empty()
+        || comparison
+            .ranked_explanations
             .iter()
-            .any(|entry| entry["evidence"].as_array().is_none_or(Vec::is_empty))
+            .any(|entry| entry.evidence.is_empty())
     {
         return Err("ranked explanation lacks exact evidence".into());
     }
-    let unavailable = comparison["unavailable"]
-        .as_array()
-        .ok_or("missing typed unavailable results")?;
-    let kinds = unavailable
+    let kinds = comparison
+        .unavailable
         .iter()
-        .filter_map(|entry| entry["kind"].as_str())
+        .map(|entry| entry.kind)
         .collect::<BTreeSet<_>>();
     if REQUIRED_VARIANT_GAPS_V1
         .iter()
         .any(|kind| !kinds.contains(kind))
-        || compared["response_identity"].is_null()
     {
         return Err("Variant truth-boundary gaps are incomplete or uncited".into());
     }
     Ok(VariantReportV1 {
         claim_truth: "conservative_co_observation_not_causal_attribution",
-        request_identity: comparison["request_identity"].clone(),
-        baseline_manifest: comparison["baseline_treatment"]["manifest"].clone(),
-        candidate_manifest: comparison["candidate_treatment"]["manifest"].clone(),
-        ranked_explanations: comparison["ranked_explanations"].clone(),
-        unavailable: comparison["unavailable"].clone(),
-        response_identity: compared["response_identity"].clone(),
+        request_identity: serde_json::to_value(comparison.request_identity)
+            .map_err(|_| "encode Variant request identity")?,
+        baseline_manifest: serde_json::to_value(comparison.baseline_treatment.manifest)
+            .map_err(|_| "encode baseline manifest identity")?,
+        candidate_manifest: serde_json::to_value(comparison.candidate_treatment.manifest)
+            .map_err(|_| "encode candidate manifest identity")?,
+        ranked_explanations: serde_json::to_value(&comparison.ranked_explanations)
+            .map_err(|_| "encode Variant explanations")?,
+        unavailable: serde_json::to_value(&comparison.unavailable)
+            .map_err(|_| "encode Variant unavailables")?,
+        response_identity: serde_json::to_value(compared.response_identity)
+            .map_err(|_| "encode Variant response identity")?,
     })
 }
 
 fn validate_dispatch_page_v1(
-    response: &Value,
-    capture: &Value,
-    prior_dispatch: Option<&Value>,
-    require_next_cursor: bool,
-) -> Result<(Value, Value), String> {
-    let page = &response["value"]["page"];
-    let evidence = &response["value"]["evidence"];
-    let items = page["items"]
-        .as_array()
-        .ok_or("Agent V1 dispatch page items missing")?;
-    if page["kind"] != "dispatches"
-        || page["context"]["bundle_identity"] != *capture
-        || page["context"]["dispatch_count"] != 2
-        || page["returned"] != 1
-        || items.len() != 1
-        || items[0]["item"] != "dispatch"
-        || !evidence["captures"]
-            .as_array()
-            .is_some_and(|values| values.contains(capture))
+    response: &AgentPageResultWireV1,
+    expected: &ProfilerPageV4,
+    expected_evidence: &AgentEvidenceWireV1,
+) -> Result<CaptureIdentityV1, String> {
+    if response.result != "page"
+        || response.page.context != expected.context
+        || response.page.kind != expected.kind
+        || response.page.returned != expected.returned
+        || response.page.next_cursor != expected.next_cursor
+        || response.evidence != *expected_evidence
+        || response.page.items.len() != expected.items.len()
     {
-        return Err("Agent V1 dispatch page is not bound to the selected capture".into());
+        return Err("Agent V1 dispatch page differs from the independent bundle query".into());
     }
-    let dispatch = items[0]["dispatch"]["identity"].clone();
-    if dispatch.is_null()
-        || prior_dispatch.is_some_and(|prior| *prior == dispatch)
-        || items[0]["dispatch"]["evidence"]["record"] != dispatch
-        || items[0]["dispatch"]["evidence"]["bundle"] != capture["digest"]
-        || evidence["records"]
-            .as_array()
-            .is_none_or(|values| !values.is_empty())
-    {
-        return Err("Agent V1 dispatch page repeated or omitted its record identity".into());
+    let [wire_item] = response.page.items.as_slice() else {
+        return Err("Agent V1 dispatch page did not contain exactly one item".into());
+    };
+    let [expected_item] = expected.items.as_slice() else {
+        return Err("independent dispatch page did not contain exactly one item".into());
+    };
+    let (
+        AgentDispatchItemWireV1::Dispatch { dispatch },
+        ProfilerQueryItemV4::Dispatch {
+            dispatch: expected_dispatch,
+        },
+    ) = (wire_item, expected_item)
+    else {
+        return Err("Agent V1 page item kind differs from the independent query".into());
+    };
+    if dispatch != expected_dispatch {
+        return Err("Agent V1 dispatch record differs from the independent bundle query".into());
     }
-    let next_cursor = page["next_cursor"].clone();
-    if require_next_cursor {
-        if next_cursor.is_null()
-            || next_cursor["query_binding"].is_null()
-            || next_cursor["position"] != 1
-        {
-            return Err("Agent V1 first dispatch cursor did not advance exactly once".into());
-        }
-    } else if !next_cursor.is_null() {
-        return Err("Agent V1 second dispatch page did not exhaust the capture".into());
-    }
-    Ok((dispatch, next_cursor))
+    Ok(dispatch.identity)
 }
 
 fn plan_next_capture(
     executable: &PinnedExecutableV1,
     bundle: &[u8],
 ) -> Result<CapturePlanReportV1, String> {
+    let independent = ProfilerQuerySessionV4::open(bundle, ProfilerQueryLimitsV4::default())
+        .map_err(|_| "retained bundle failed independent production admission")?;
+    let (expected_context, expected_coverage) = match independent
+        .query(ProfilerQueryRequestV4::Open)
+        .map_err(|_| "independent bundle open failed")?
+    {
+        ProfilerQueryResponseV4::Open { context, coverage } => (context, coverage),
+        _ => return Err("independent bundle open returned the wrong result".into()),
+    };
+    let expected_capture_capabilities = match independent
+        .query(ProfilerQueryRequestV4::Capabilities)
+        .map_err(|_| "independent bundle capabilities failed")?
+    {
+        ProfilerQueryResponseV4::Capabilities { capabilities, .. } => capabilities,
+        _ => return Err("independent bundle capabilities returned the wrong result".into()),
+    };
+    if expected_context.dispatch_count != 2 {
+        return Err("seeded capture no longer contains exactly two dispatches".into());
+    }
+    let expected_first = match independent
+        .query(ProfilerQueryRequestV4::List {
+            kind: ProfilerListKindV4::Dispatches,
+            page: ProfilerPageRequestV4 {
+                limit: 1,
+                cursor: None,
+            },
+        })
+        .map_err(|_| "independent first dispatch page failed")?
+    {
+        ProfilerQueryResponseV4::Page { page } => page,
+        _ => return Err("independent first dispatch page returned the wrong result".into()),
+    };
+    let expected_cursor = expected_first
+        .next_cursor
+        .ok_or("independent first dispatch page did not advance")?;
+    let expected_second = match independent
+        .query(ProfilerQueryRequestV4::List {
+            kind: ProfilerListKindV4::Dispatches,
+            page: ProfilerPageRequestV4 {
+                limit: 1,
+                cursor: Some(expected_cursor),
+            },
+        })
+        .map_err(|_| "independent second dispatch page failed")?
+    {
+        ProfilerQueryResponseV4::Page { page } => page,
+        _ => return Err("independent second dispatch page returned the wrong result".into()),
+    };
+    if expected_cursor.position != 1 || expected_second.next_cursor.is_some() {
+        return Err("independent dispatch cursor contract changed".into());
+    }
+
     let mut session =
         JsonlChildV1::spawn(executable, "jsonl", MAX_AGENT_PROFILER_RESPONSE_BYTES_V1, 5)?;
     let capabilities_request = json!({
         "operation":"discover_capabilities","schema":AGENT_PROFILER_REQUEST_SCHEMA_V1,"request_id":1
     });
-    let capabilities = exchange_agent_v1(
+    let ValidatedAgentResponseV1::Capabilities(capabilities) = exchange_agent_v1(
         &mut session,
         &capabilities_request,
         1,
         1,
         ExpectedAgentResultV1::Capabilities,
-    )?;
-    let capability = capabilities["value"]["capabilities"]
-        .as_array()
-        .ok_or("missing Agent V1 capabilities")?
+    )?
+    else {
+        return Err("Agent V1 capabilities response kind changed".into());
+    };
+    if capabilities.evidence.origin
+        != (AgentAggregateOriginWireV1::Homogeneous {
+            origin: TruthOriginV1::Declared,
+        })
+        || !capabilities.evidence.captures.is_empty()
+        || !capabilities.evidence.records.is_empty()
+    {
+        return Err("Agent V1 capability evidence is not exact".into());
+    }
+    let service_contract = capabilities.evidence.service_contract;
+    let capability = capabilities
+        .capabilities
         .iter()
         .find(|entry| entry["operation"] == "plan_next_capture")
         .ok_or("capture planning capability absent")?;
-    let limits = &capabilities["value"]["limits"];
-    if limits["max_requests"]
-        .as_u64()
-        .is_none_or(|count| count < 5)
-        || limits["max_page_items"]
-            .as_u64()
-            .is_none_or(|count| count < 1)
-        || limits["max_bundle_bytes"]
-            .as_u64()
-            .is_none_or(|count| count < bundle.len() as u64)
+    let limits = &capabilities.limits;
+    if limits.max_requests < 5
+        || limits.max_page_items < 1
+        || limits.max_bundle_bytes < bundle.len() as u64
     {
         return Err("Agent V1 discovered bounds cannot serve this workflow".into());
     }
+    let _ = (
+        limits.max_request_bytes,
+        limits.max_response_bytes,
+        limits.max_open_captures,
+        limits.max_plan_missing_facts,
+        limits.max_plan_compute_units,
+        limits.max_plan_storage_bytes,
+        limits.max_plan_records,
+        limits.max_plan_overhead_basis_points,
+    );
     require_eq(
         &capability["request_contract_schema"],
         AGENT_PROFILER_PLAN_REQUEST_SCHEMA_V1,
@@ -1087,50 +1181,78 @@ fn plan_next_capture(
         AGENT_PROFILER_PLAN_SCHEMA_V1,
         "plan result schema",
     )?;
-    let open_request = json!({
-        "operation":"open_capture","schema":AGENT_PROFILER_REQUEST_SCHEMA_V1,"request_id":2,"bundle_hex":lower_hex(bundle)
-    });
-    let opened = exchange_agent_v1(
+    let open_request = encode_open_capture_request_v1(bundle)?;
+    let ValidatedAgentResponseV1::CaptureOpened(opened) = exchange_encoded_agent_v1(
         &mut session,
-        &open_request,
+        open_request,
         2,
         2,
         ExpectedAgentResultV1::CaptureOpened,
-    )?;
-    let capture = opened["value"]["context"]["bundle_identity"].clone();
-    if capture.is_null()
-        || opened["value"]["context"]["dispatch_count"] != 2
-        || !opened["value"]["evidence"]["captures"]
-            .as_array()
-            .is_some_and(|values| values.contains(&capture))
-        || opened["value"]["audit"]["effect"] != "registered"
+    )?
+    else {
+        return Err("Agent V1 open response kind changed".into());
+    };
+    let capture = expected_context.bundle_identity;
+    let expected_capture_capabilities = serde_json::to_value(expected_capture_capabilities)
+        .map_err(|_| "encode independent capture capabilities")?;
+    if opened.context != expected_context
+        || opened.coverage != expected_coverage
+        || Value::Array(opened.capture_capabilities.clone()) != expected_capture_capabilities
+        || opened.audit
+            != (AgentOpenAuditWireV1 {
+                before_open_captures: 0,
+                after_open_captures: 1,
+                effect: AgentOpenEffectWireV1::Registered,
+            })
+        || opened.evidence
+            != (AgentEvidenceWireV1 {
+                origin: AgentAggregateOriginWireV1::Homogeneous {
+                    origin: TruthOriginV1::Observed,
+                },
+                service_contract,
+                captures: vec![capture],
+                records: Vec::new(),
+            })
     {
-        return Err("opened capture identity or audit is not bound".into());
+        return Err("opened capture differs from independent admission".into());
     }
     let first_request = json!({
         "operation":"list_dispatches","schema":AGENT_PROFILER_REQUEST_SCHEMA_V1,"request_id":3,"capture":capture,"page":{"limit":1,"cursor":null}
     });
-    let first = exchange_agent_v1(
+    let ValidatedAgentResponseV1::Page(first) = exchange_agent_v1(
         &mut session,
         &first_request,
         3,
         3,
         ExpectedAgentResultV1::Page,
-    )?;
-    let (dispatch, cursor) = validate_dispatch_page_v1(&first, &capture, None, true)?;
+    )?
+    else {
+        return Err("Agent V1 first page response kind changed".into());
+    };
+    let page_evidence = AgentEvidenceWireV1 {
+        origin: AgentAggregateOriginWireV1::Homogeneous {
+            origin: TruthOriginV1::Observed,
+        },
+        service_contract,
+        captures: vec![capture],
+        records: Vec::new(),
+    };
+    let dispatch = validate_dispatch_page_v1(&first, &expected_first, &page_evidence)?;
     let second_request = json!({
-        "operation":"list_dispatches","schema":AGENT_PROFILER_REQUEST_SCHEMA_V1,"request_id":4,"capture":capture,"page":{"limit":1,"cursor":cursor}
+        "operation":"list_dispatches","schema":AGENT_PROFILER_REQUEST_SCHEMA_V1,"request_id":4,"capture":capture,"page":{"limit":1,"cursor":expected_cursor}
     });
-    let second = exchange_agent_v1(
+    let ValidatedAgentResponseV1::Page(second) = exchange_agent_v1(
         &mut session,
         &second_request,
         4,
         4,
         ExpectedAgentResultV1::Page,
-    )?;
-    let (second_dispatch, second_cursor) =
-        validate_dispatch_page_v1(&second, &capture, Some(&dispatch), false)?;
-    if !second_cursor.is_null() || second_dispatch == dispatch {
+    )?
+    else {
+        return Err("Agent V1 second page response kind changed".into());
+    };
+    let second_dispatch = validate_dispatch_page_v1(&second, &expected_second, &page_evidence)?;
+    if second_dispatch == dispatch {
         return Err("Agent V1 dispatch cursor repeated a page".into());
     }
     let plan_request = json!({
@@ -1144,40 +1266,49 @@ fn plan_next_capture(
             "constraints":{"maximum_overhead_basis_points":1_000_000,"maximum_storage_bytes":16_777_216,"maximum_records":100_000}
         }
     });
-    let planned = exchange_agent_v1(
+    let ValidatedAgentResponseV1::CapturePlan(planned) = exchange_agent_v1(
         &mut session,
         &plan_request,
         5,
         5,
         ExpectedAgentResultV1::CapturePlan,
-    )?;
+    )?
+    else {
+        return Err("Agent V1 plan response kind changed".into());
+    };
     session.finish()?;
-    require_eq(&planned["status"], "ok", "capture plan")?;
-    let plan = &planned["value"]["plan"];
-    let evidence = &planned["value"]["evidence"];
+    let plan = &planned.plan;
+    let evidence = &planned.evidence;
     if plan["provenance"].as_array().is_none_or(Vec::is_empty)
         || plan["selected_missing_evidence"]
             .as_array()
             .is_none_or(Vec::is_empty)
-        || evidence.is_null()
     {
         return Err("capture plan lacks provenance or selected evidence".into());
     }
     if plan["selected_missing_evidence"] != json!(["hardware_counter_measurements"])
         || plan["minimum_additional_captures"] != 1
-        || !evidence["captures"]
-            .as_array()
-            .is_some_and(|values| values.contains(&capture))
-        || !evidence["records"]
-            .as_array()
-            .is_some_and(|values| values.contains(&dispatch))
-        || evidence["service_contract"].is_null()
+        || evidence
+            != &(AgentEvidenceWireV1 {
+                origin: AgentAggregateOriginWireV1::Mixed {
+                    origins: vec![
+                        TruthOriginV1::Declared,
+                        TruthOriginV1::Observed,
+                        TruthOriginV1::Inferred,
+                    ],
+                },
+                service_contract,
+                captures: vec![capture],
+                records: vec![dispatch],
+            })
     {
         return Err("minimum capture plan is not covered by exact evidence".into());
     }
     let provenance = plan["provenance"]
         .as_array()
         .ok_or("capture plan provenance is not an array")?;
+    let capture_value = serde_json::to_value(capture).map_err(|_| "encode capture identity")?;
+    let dispatch_value = serde_json::to_value(dispatch).map_err(|_| "encode dispatch identity")?;
     let has_subject = |kind: &str, origin: &str, field: &str, expected: &Value| {
         provenance.iter().any(|entry| {
             entry["kind"] == kind
@@ -1190,8 +1321,8 @@ fn plan_next_capture(
         "declared",
         "identity",
         &plan["request_identity"],
-    ) || !has_subject("capture_bundle", "observed", "content", &capture)
-        || !has_subject("dispatch_record", "observed", "identity", &dispatch)
+    ) || !has_subject("capture_bundle", "observed", "content", &capture_value)
+        || !has_subject("dispatch_record", "observed", "identity", &dispatch_value)
     {
         return Err("capture plan provenance is not covered by selected identities".into());
     }
@@ -1202,9 +1333,9 @@ fn plan_next_capture(
         minimum_additional_captures: plan["minimum_additional_captures"].clone(),
         selected_missing_evidence: plan["selected_missing_evidence"].clone(),
         provenance: plan["provenance"].clone(),
-        evidence: evidence.clone(),
-        first_page_returned: first["value"]["page"]["returned"].clone(),
-        second_page_returned: second["value"]["page"]["returned"].clone(),
+        evidence: serde_json::to_value(evidence).map_err(|_| "encode capture plan evidence")?,
+        first_page_returned: json!(first.page.returned),
+        second_page_returned: json!(second.page.returned),
     })
 }
 
@@ -1240,6 +1371,14 @@ impl<'a> JsonlChildV1<'a> {
         self.inner.exchange_line(request, max_request)
     }
 
+    fn exchange_encoded_line(
+        &mut self,
+        request: Vec<u8>,
+        max_request: u64,
+    ) -> Result<Vec<u8>, String> {
+        self.inner.exchange_encoded_line(request, max_request)
+    }
+
     fn finish(self) -> Result<(), String> {
         self.inner.finish()
     }
@@ -1267,7 +1406,32 @@ struct StderrCaptureV1 {
 struct OwnedChildGuardV1 {
     child: Child,
     process_group: u32,
+    group_signal_authority: ProcessGroupSignalAuthorityV1,
     armed: bool,
+    #[cfg(test)]
+    lifecycle_test: Option<LifecycleTestControlV1>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ProcessGroupSignalAuthorityV1 {
+    Authorized,
+    Revoked,
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LifecycleEventV1 {
+    ObservedLeaderExit,
+    SignaledProcessGroup,
+    ReapedDirectChild,
+    VerifiedProcessGroupAbsent,
+}
+
+#[cfg(test)]
+struct LifecycleTestControlV1 {
+    events: Arc<Mutex<Vec<LifecycleEventV1>>>,
+    fail_signal_after_delivery: bool,
+    fail_absence_after_reap: bool,
 }
 
 impl OwnedChildGuardV1 {
@@ -1276,48 +1440,105 @@ impl OwnedChildGuardV1 {
         Self {
             child,
             process_group,
+            group_signal_authority: ProcessGroupSignalAuthorityV1::Authorized,
             armed: true,
+            #[cfg(test)]
+            lifecycle_test: None,
         }
     }
 
-    fn try_wait(&mut self) -> Result<Option<ExitStatus>, String> {
-        self.child
-            .try_wait()
-            .map_err(|_| "owned child wait failed".into())
+    #[cfg(test)]
+    fn set_lifecycle_test_control(&mut self, control: LifecycleTestControlV1) {
+        self.lifecycle_test = Some(control);
+    }
+
+    #[cfg(test)]
+    fn record_lifecycle(&self, event: LifecycleEventV1) {
+        if let Some(control) = &self.lifecycle_test {
+            control.events.lock().unwrap().push(event);
+        }
+    }
+
+    #[allow(unsafe_code)]
+    fn observe_leader_exit_without_reaping(&self) -> Result<bool, String> {
+        let pid =
+            libc::id_t::try_from(self.process_group).map_err(|_| "owned child PID is invalid")?;
+        let mut information = std::mem::MaybeUninit::<libc::siginfo_t>::zeroed();
+        // SAFETY: waitid writes one siginfo_t to the initialized storage. P_PID
+        // targets the exact still-owned child PID, WNOHANG is nonblocking, and
+        // WNOWAIT deliberately retains the zombie until the ordered reap.
+        let result = unsafe {
+            libc::waitid(
+                libc::P_PID,
+                pid,
+                information.as_mut_ptr(),
+                libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+            )
+        };
+        if result != 0 {
+            return Err("owned child non-reaping observation failed".into());
+        }
+        // SAFETY: successful waitid initialized the siginfo_t output.
+        let information = unsafe { information.assume_init() };
+        let exited = unsafe { information.si_pid() } != 0;
+        if exited {
+            #[cfg(test)]
+            self.record_lifecycle(LifecycleEventV1::ObservedLeaderExit);
+        }
+        Ok(exited)
     }
 
     fn terminate_and_reap(&mut self) -> Result<ExitStatus, String> {
-        let observed = self.try_wait();
         let termination = self.signal_owned_process_group();
-        let observed = observed?;
-        termination?;
-        let status = if let Some(status) = observed {
-            status
-        } else {
-            let deadline = Instant::now() + CHILD_REAP_TIMEOUT_V1;
-            loop {
-                if let Some(status) = self.try_wait()? {
-                    break status;
-                }
-                if Instant::now() >= deadline {
-                    return Err("owned child bounded reap timed out".into());
-                }
-                thread::sleep(CHILD_POLL_INTERVAL_V1);
-            }
-        };
-        self.wait_for_process_group_absence()?;
-        Ok(status)
+        if termination.is_err() {
+            let _ = self.child.kill();
+        }
+        let reaped = self.reap_direct_child();
+        let absent = self.wait_for_process_group_absence();
+        combine_lifecycle_results(termination, reaped, absent)
     }
 
-    fn terminate_remaining_process_group(&self) -> Result<(), String> {
-        self.signal_owned_process_group()?;
-        self.wait_for_process_group_absence()
+    fn finalize_observed_leader_exit(&mut self) -> Result<ExitStatus, String> {
+        let termination = self.signal_owned_process_group();
+        let reaped = self.reap_direct_child();
+        let absent = self.wait_for_process_group_absence();
+        combine_lifecycle_results(termination, reaped, absent)
+    }
+
+    fn reap_direct_child(&mut self) -> Result<ExitStatus, String> {
+        let deadline = Instant::now() + CHILD_REAP_TIMEOUT_V1;
+        loop {
+            match self.child.try_wait() {
+                Ok(Some(status)) => {
+                    #[cfg(test)]
+                    self.record_lifecycle(LifecycleEventV1::ReapedDirectChild);
+                    return Ok(status);
+                }
+                Ok(None) => {}
+                Err(_) => return Err("owned child wait failed".into()),
+            }
+            if Instant::now() >= deadline {
+                return Err("owned child bounded reap timed out".into());
+            }
+            thread::sleep(CHILD_POLL_INTERVAL_V1);
+        }
     }
 
     fn wait_for_process_group_absence(&self) -> Result<(), String> {
         let deadline = Instant::now() + CHILD_REAP_TIMEOUT_V1;
         loop {
             if !self.process_group_exists()? {
+                #[cfg(test)]
+                {
+                    self.record_lifecycle(LifecycleEventV1::VerifiedProcessGroupAbsent);
+                    if self
+                        .lifecycle_test
+                        .as_ref()
+                        .is_some_and(|control| control.fail_absence_after_reap)
+                    {
+                        return Err("injected process-group absence failure".into());
+                    }
+                }
                 return Ok(());
             }
             if Instant::now() >= deadline {
@@ -1328,14 +1549,30 @@ impl OwnedChildGuardV1 {
     }
 
     #[allow(unsafe_code)]
-    fn signal_owned_process_group(&self) -> Result<(), String> {
+    fn signal_owned_process_group(&mut self) -> Result<(), String> {
+        if self.group_signal_authority == ProcessGroupSignalAuthorityV1::Revoked {
+            return Ok(());
+        }
+        self.group_signal_authority = ProcessGroupSignalAuthorityV1::Revoked;
         let process_group = i32::try_from(self.process_group)
             .map_err(|_| "owned child process group is invalid")?;
+        #[cfg(test)]
+        self.record_lifecycle(LifecycleEventV1::SignaledProcessGroup);
         // SAFETY: `process_group` is captured from the successfully spawned
         // child after `process_group(0)`. A negative PID targets only that
         // owned group; no pointers or borrowed memory cross the syscall.
         let result = unsafe { libc::kill(-process_group, libc::SIGKILL) };
         if result == 0 {
+            #[cfg(test)]
+            {
+                if self
+                    .lifecycle_test
+                    .as_ref()
+                    .is_some_and(|control| control.fail_signal_after_delivery)
+                {
+                    return Err("injected process-group signal failure".into());
+                }
+            }
             return Ok(());
         }
         let error = std::io::Error::last_os_error();
@@ -1367,6 +1604,17 @@ impl OwnedChildGuardV1 {
     fn disarm(&mut self) {
         self.armed = false;
     }
+}
+
+fn combine_lifecycle_results(
+    termination: Result<(), String>,
+    reaped: Result<ExitStatus, String>,
+    absent: Result<(), String>,
+) -> Result<ExitStatus, String> {
+    let status = reaped?;
+    termination?;
+    absent?;
+    Ok(status)
 }
 
 impl Drop for OwnedChildGuardV1 {
@@ -1467,6 +1715,15 @@ impl<'a> BoundedChildV1<'a> {
     }
 
     fn exchange_line(&mut self, request: &Value, max_request: u64) -> Result<Vec<u8>, String> {
+        let bytes = encode_json_line(request, max_request)?;
+        self.exchange_encoded_line(bytes, max_request)
+    }
+
+    fn exchange_encoded_line(
+        &mut self,
+        bytes: Vec<u8>,
+        max_request: u64,
+    ) -> Result<Vec<u8>, String> {
         match self.stdout.try_recv() {
             Err(TryRecvError::Empty) => {}
             Ok(_) => return Err(format!("{} emitted an unsolicited response", self.label)),
@@ -1474,7 +1731,18 @@ impl<'a> BoundedChildV1<'a> {
                 return Err(format!("{} stdout closed before request", self.label));
             }
         }
-        let bytes = encode_json_line(request, max_request)?;
+        if bytes.is_empty()
+            || bytes.len() as u64 > max_request
+            || !bytes.ends_with(b"\n")
+            || bytes[..bytes.len() - 1]
+                .iter()
+                .any(|byte| matches!(byte, b'\n' | b'\r'))
+        {
+            return Err(format!(
+                "{} encoded request is not bounded JSONL",
+                self.label
+            ));
+        }
         let (completed_tx, completed_rx) = sync_channel(1);
         self.writer
             .as_ref()
@@ -1516,8 +1784,8 @@ impl<'a> BoundedChildV1<'a> {
                     }
                 }
             }
-            if let Some(status) = self.owned.try_wait()? {
-                break status;
+            if self.owned.observe_leader_exit_without_reaping()? {
+                break self.owned.finalize_observed_leader_exit()?;
             }
             self.remaining()?;
             thread::sleep(CHILD_POLL_INTERVAL_V1);
@@ -1552,7 +1820,6 @@ impl<'a> BoundedChildV1<'a> {
             return Err(format!("{} wrote unexpected stderr", self.label));
         }
         self.executable.revalidate(self.label)?;
-        self.owned.terminate_remaining_process_group()?;
         self.owned.disarm();
         Ok(())
     }
@@ -1727,6 +1994,117 @@ fn encode_json_line<T: Serialize>(value: &T, max_bytes: u64) -> Result<Vec<u8>, 
     Ok(writer.into_inner())
 }
 
+fn write_lower_hex_json_string_v1(
+    writer: &mut BoundedVecWriterV1,
+    bytes: &[u8],
+) -> Result<(), String> {
+    bytes.len().checked_mul(2).ok_or("hex length overflow")?;
+    writer.write_all(b"\"").map_err(|error| error.to_string())?;
+    let mut encoded = [0_u8; 8 * 1024];
+    for chunk in bytes.chunks(encoded.len() / 2) {
+        for (index, byte) in chunk.iter().copied().enumerate() {
+            encoded[index * 2] = hex_digit_v1(byte >> 4);
+            encoded[index * 2 + 1] = hex_digit_v1(byte & 0x0f);
+        }
+        writer
+            .write_all(&encoded[..chunk.len() * 2])
+            .map_err(|error| error.to_string())?;
+    }
+    writer.write_all(b"\"").map_err(|error| error.to_string())
+}
+
+fn write_optional_lower_hex_json_string_v1(
+    writer: &mut BoundedVecWriterV1,
+    bytes: Option<&[u8]>,
+) -> Result<(), String> {
+    match bytes {
+        Some(bytes) => write_lower_hex_json_string_v1(writer, bytes),
+        None => writer.write_all(b"null").map_err(|error| error.to_string()),
+    }
+}
+
+fn write_variant_treatment_v1(
+    writer: &mut BoundedVecWriterV1,
+    treatment: &LoadedTreatmentV1,
+) -> Result<(), String> {
+    writer
+        .write_all(b"{\"manifest_hex\":")
+        .map_err(|error| error.to_string())?;
+    write_lower_hex_json_string_v1(writer, &treatment.manifest)?;
+    writer
+        .write_all(b",\"semantic_workload_hex\":")
+        .map_err(|error| error.to_string())?;
+    write_lower_hex_json_string_v1(writer, &treatment.semantic_workload)?;
+    writer
+        .write_all(b",\"raw_profiler_source_hex\":")
+        .map_err(|error| error.to_string())?;
+    write_lower_hex_json_string_v1(writer, &treatment.raw_profiler_source)?;
+    writer
+        .write_all(b",\"bundle_hex\":")
+        .map_err(|error| error.to_string())?;
+    write_lower_hex_json_string_v1(writer, &treatment.bundle)?;
+    writer
+        .write_all(b",\"schedule_hex\":")
+        .map_err(|error| error.to_string())?;
+    write_lower_hex_json_string_v1(writer, &treatment.schedule)?;
+    writer
+        .write_all(b",\"artifact_hex\":")
+        .map_err(|error| error.to_string())?;
+    write_lower_hex_json_string_v1(writer, &treatment.artifact)?;
+    writer
+        .write_all(b",\"isa_projection_hex\":")
+        .map_err(|error| error.to_string())?;
+    write_optional_lower_hex_json_string_v1(writer, treatment.isa_projection.as_deref())?;
+    writer
+        .write_all(b",\"counters_hex\":")
+        .map_err(|error| error.to_string())?;
+    write_optional_lower_hex_json_string_v1(writer, treatment.counters.as_deref())?;
+    writer
+        .write_all(b",\"pc_samples_hex\":")
+        .map_err(|error| error.to_string())?;
+    write_optional_lower_hex_json_string_v1(writer, treatment.pc_samples.as_deref())?;
+    writer.write_all(b"}").map_err(|error| error.to_string())
+}
+
+fn encode_variant_comparison_request_v1(
+    baseline: &LoadedTreatmentV1,
+    candidate: &LoadedTreatmentV1,
+) -> Result<Vec<u8>, String> {
+    let mut writer = BoundedVecWriterV1::new(MAX_AGENT_PROFILER_VARIANT_REQUEST_BYTES_V1)?;
+    writer
+        .write_all(b"{\"operation\":\"compare_variants\",\"schema\":\"fe2o3-agent-profiler-variant-request-v1\",\"request_id\":2,\"expected_revision\":1,\"baseline\":")
+        .map_err(|error| error.to_string())?;
+    write_variant_treatment_v1(&mut writer, baseline)?;
+    writer
+        .write_all(b",\"candidate\":")
+        .map_err(|error| error.to_string())?;
+    write_variant_treatment_v1(&mut writer, candidate)?;
+    writer
+        .write_all(b"}\n")
+        .map_err(|error| error.to_string())?;
+    Ok(writer.into_inner())
+}
+
+fn encode_open_capture_request_v1(bundle: &[u8]) -> Result<Vec<u8>, String> {
+    let mut writer = BoundedVecWriterV1::new(MAX_AGENT_PROFILER_REQUEST_BYTES_V1)?;
+    writer
+        .write_all(b"{\"operation\":\"open_capture\",\"schema\":\"fe2o3-agent-profiler-request-v1\",\"request_id\":2,\"bundle_hex\":")
+        .map_err(|error| error.to_string())?;
+    write_lower_hex_json_string_v1(&mut writer, bundle)?;
+    writer
+        .write_all(b"}\n")
+        .map_err(|error| error.to_string())?;
+    Ok(writer.into_inner())
+}
+
+const fn hex_digit_v1(value: u8) -> u8 {
+    if value < 10 {
+        b'0' + value
+    } else {
+        b'a' + value - 10
+    }
+}
+
 fn require_eq(actual: &Value, expected: &str, field: &str) -> Result<(), String> {
     if actual == expected {
         Ok(())
@@ -1857,15 +2235,28 @@ fn executable_content_identity(
     let digest: [u8; 32] = digest.finalize().into();
     Ok(ExecutableContentIdentityV1 {
         scheme: "sha256_of_exact_executable_bytes",
-        sha256: lower_hex(&digest),
+        sha256: lower_hex(&digest)?,
         bytes,
     })
 }
 
-fn read_optional(path: &Option<PathBuf>, label: &str) -> Result<Option<Vec<u8>>, String> {
+fn read_optional_budgeted(
+    path: &Option<PathBuf>,
+    remaining: &mut u64,
+    label: &str,
+) -> Result<Option<Vec<u8>>, String> {
     path.as_ref()
-        .map(|path| read_bounded(path, MAX_PROFILER_VARIANT_TREATMENT_BYTES_V1, label))
+        .map(|path| read_budgeted(path, remaining, label))
         .transpose()
+}
+
+fn read_budgeted(path: &Path, remaining: &mut u64, label: &str) -> Result<Vec<u8>, String> {
+    let bytes = read_bounded(path, *remaining, label)?;
+    let admitted = u64::try_from(bytes.len()).map_err(|_| format!("{label} is too large"))?;
+    *remaining = remaining
+        .checked_sub(admitted)
+        .ok_or_else(|| format!("{label} exceeds the remaining treatment budget"))?;
+    Ok(bytes)
 }
 
 fn read_bounded(path: impl AsRef<Path>, max: u64, label: &str) -> Result<Vec<u8>, String> {
@@ -1911,13 +2302,17 @@ fn read_bounded(path: impl AsRef<Path>, max: u64, label: &str) -> Result<Vec<u8>
     Ok(bytes)
 }
 
-fn lower_hex(bytes: &[u8]) -> String {
-    let mut output = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        use std::fmt::Write as _;
-        write!(&mut output, "{byte:02x}").expect("writing to String cannot fail");
-    }
+fn lower_hex(bytes: &[u8]) -> Result<String, String> {
+    let capacity = bytes.len().checked_mul(2).ok_or("hex length overflow")?;
+    let mut output = String::new();
     output
+        .try_reserve_exact(capacity)
+        .map_err(|_| "hex allocation failed")?;
+    for byte in bytes.iter().copied() {
+        output.push(char::from(hex_digit_v1(byte >> 4)));
+        output.push(char::from(hex_digit_v1(byte & 0x0f)));
+    }
+    Ok(output)
 }
 
 struct TempSnapshotV1(PathBuf);
@@ -2034,7 +2429,7 @@ mod tests {
                     "context":{
                         "bundle_identity":capture,
                         "run_identity":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                        "source_kind":"rocprofv3_json",
+                        "source_kind":"rocprofv3_kernel_dispatch_json",
                         "device_count":1,
                         "dispatch_count":2,
                         "att_reference_count":0
@@ -2046,6 +2441,18 @@ mod tests {
                         "item":"dispatch",
                         "dispatch":{
                             "identity":dispatch,
+                            "device_identity":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+                            "process_index":0,
+                            "dispatch_index":0,
+                            "launch":{
+                                "logical_grid":[64,1,1],
+                                "grid_workgroups":[1,1,1],
+                                "workgroup_size":[64,1,1],
+                                "wave_width":64
+                            },
+                            "start_timestamp":10,
+                            "end_timestamp":20,
+                            "duration_ticks":10,
                             "evidence":{
                                 "origin":"observed",
                                 "bundle":capture["digest"],
@@ -2069,6 +2476,42 @@ mod tests {
         })
     }
 
+    fn decoded_page(response: &Value, request_id: u64, revision: u64) -> AgentPageResultWireV1 {
+        let mut line = serde_json::to_vec(response).unwrap();
+        line.push(b'\n');
+        let ValidatedAgentResponseV1::Page(page) = validate_agent_response_line_v1(
+            &line,
+            request_id,
+            revision,
+            ExpectedAgentResultV1::Page,
+        )
+        .unwrap() else {
+            panic!("response was not a page")
+        };
+        page
+    }
+
+    fn expected_page(response: &AgentPageResultWireV1) -> ProfilerPageV4 {
+        ProfilerPageV4 {
+            context: response.page.context,
+            kind: response.page.kind,
+            returned: response.page.returned,
+            next_cursor: response.page.next_cursor,
+            items: response
+                .page
+                .items
+                .iter()
+                .map(|item| match item {
+                    AgentDispatchItemWireV1::Dispatch { dispatch } => {
+                        ProfilerQueryItemV4::Dispatch {
+                            dispatch: *dispatch,
+                        }
+                    }
+                })
+                .collect(),
+        }
+    }
+
     #[test]
     fn executable_descriptor_retains_renamed_bytes_and_rejects_substitution() {
         let ordinal = NEXT_SNAPSHOT_V1.fetch_add(1, Ordering::Relaxed);
@@ -2084,7 +2527,10 @@ mod tests {
         executable_file(&selected, original);
         let pinned = PinnedExecutableV1::open(&selected, "test executable").unwrap();
         let original_digest: [u8; 32] = Sha256::digest(original).into();
-        assert_eq!(pinned.identity().sha256, lower_hex(&original_digest));
+        assert_eq!(
+            pinned.identity().sha256,
+            lower_hex(&original_digest).unwrap()
+        );
 
         fs::rename(&selected, &retained_name).unwrap();
         executable_file(&selected, replacement);
@@ -2170,12 +2616,71 @@ mod tests {
             detached_descendant_pid.display()
         );
         let mut child = helper_session(&executable, &script, Duration::from_secs(2));
+        let lifecycle_events = Arc::new(Mutex::new(Vec::new()));
+        child
+            .owned
+            .set_lifecycle_test_control(LifecycleTestControlV1 {
+                events: Arc::clone(&lifecycle_events),
+                fail_signal_after_delivery: false,
+                fail_absence_after_reap: false,
+            });
         let pid = wait_for_pid(&successful_leader_pid);
         assert_eq!(child.exchange_line(&request, 1024).unwrap(), b"ok\n");
         let descendant = wait_for_pid(&detached_descendant_pid);
         child.finish().unwrap();
+        assert_eq!(
+            *lifecycle_events.lock().unwrap(),
+            [
+                LifecycleEventV1::ObservedLeaderExit,
+                LifecycleEventV1::SignaledProcessGroup,
+                LifecycleEventV1::ReapedDirectChild,
+                LifecycleEventV1::VerifiedProcessGroupAbsent,
+            ]
+        );
         assert_pid_reaped(pid);
         assert_pid_reaped(descendant);
+
+        for (label, fail_signal, fail_absence) in [
+            ("signal-failure", true, false),
+            ("absence-failure", false, true),
+        ] {
+            let pid_path = root.join(format!("{label}.pid"));
+            let script = format!(
+                "printf '%s\\n' $$ > {}; IFS= read -r line; printf 'ok\\n'",
+                pid_path.display()
+            );
+            let mut child = helper_session(&executable, &script, Duration::from_secs(2));
+            let events = Arc::new(Mutex::new(Vec::new()));
+            child
+                .owned
+                .set_lifecycle_test_control(LifecycleTestControlV1 {
+                    events: Arc::clone(&events),
+                    fail_signal_after_delivery: fail_signal,
+                    fail_absence_after_reap: fail_absence,
+                });
+            let pid = wait_for_pid(&pid_path);
+            assert_eq!(child.exchange_line(&request, 1024).unwrap(), b"ok\n");
+            assert!(child.finish().is_err());
+            assert_pid_reaped(pid);
+            let events = events.lock().unwrap();
+            assert_eq!(
+                events[..4],
+                [
+                    LifecycleEventV1::ObservedLeaderExit,
+                    LifecycleEventV1::SignaledProcessGroup,
+                    LifecycleEventV1::ReapedDirectChild,
+                    LifecycleEventV1::VerifiedProcessGroupAbsent,
+                ]
+            );
+            assert_eq!(
+                events
+                    .iter()
+                    .filter(|event| **event == LifecycleEventV1::SignaledProcessGroup)
+                    .count(),
+                1,
+                "Drop must not signal a revoked PGID after {label}"
+            );
+        }
 
         let hung_pid = root.join("hung.pid");
         let script = format!(
@@ -2208,6 +2713,88 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
+    fn simulator_session(
+        revision: u64,
+        state: &str,
+        configuration: &str,
+        event: u64,
+    ) -> SessionViewV1 {
+        serde_json::from_value(json!({
+            "backend":"cpu_kir_simulator",
+            "execution_kind":"cpu_kir_simulation",
+            "state":state,
+            "revision":revision,
+            "configuration_identity":configuration,
+            "cursor":{
+                "configuration_identity":configuration,
+                "event_sequence":event,
+                "state_revision":revision
+            },
+            "simulated":true,
+            "hardware_observed":false,
+            "performance_prediction":false
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn simulator_session_chain_rejects_stale_config_cursor_and_state() {
+        let first = "1111111111111111111111111111111111111111111111111111111111111111";
+        let second = "2222222222222222222222222222222222222222222222222222222222222222";
+        let capability = simulator_session(0, "stopped", first, 0);
+        let continued = simulator_session(1, "stopped", first, 9);
+        validate_simulator_session_chain_v1(capability, continued, continued, None).unwrap();
+
+        for hostile in [
+            simulator_session(0, "stopped", first, 9),
+            simulator_session(1, "stopped", second, 9),
+            simulator_session(1, "stopped", first, 10),
+            simulator_session(1, "running", first, 9),
+        ] {
+            assert!(
+                validate_simulator_session_chain_v1(capability, continued, hostile, None).is_err()
+            );
+        }
+        let cursor: PageCursorV1 = serde_json::from_value(json!({
+            "query_identity":"3333333333333333333333333333333333333333333333333333333333333333",
+            "position":1
+        }))
+        .unwrap();
+        assert!(
+            validate_simulator_session_chain_v1(capability, continued, continued, Some(cursor))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn treatment_admission_rejects_aggregate_overflow_before_excess_read() {
+        let ordinal = NEXT_SNAPSHOT_V1.fetch_add(1, Ordering::Relaxed);
+        let root = env::temp_dir().join(format!(
+            "fe2o3-treatment-budget-test-{}-{ordinal}",
+            std::process::id()
+        ));
+        fs::create_dir(&root).unwrap();
+        let paths = (0..7)
+            .map(|index| root.join(format!("part-{index}")))
+            .collect::<Vec<_>>();
+        for path in &paths {
+            fs::write(path, b"x").unwrap();
+        }
+        let files = TreatmentFilesV1 {
+            manifest: paths[0].clone(),
+            semantic_workload: paths[1].clone(),
+            raw_profiler_source: paths[2].clone(),
+            bundle: paths[3].clone(),
+            schedule: paths[4].clone(),
+            artifact: paths[5].clone(),
+            isa_projection: Some(paths[6].clone()),
+            counters: None,
+            pc_samples: None,
+        };
+        assert!(LoadedTreatmentV1::load_with_budget(files, 6).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn agent_envelopes_and_dispatch_pages_fail_closed_on_substitution() {
         let capture = json!({
@@ -2223,11 +2810,11 @@ mod tests {
             "position":1
         });
         let first = page_response(&capture, first_dispatch, first_cursor.clone(), 3, 3);
-        let mut line = serde_json::to_vec(&first).unwrap();
-        line.push(b'\n');
-        validate_agent_response_line_v1(&line, 3, 3, ExpectedAgentResultV1::Page).unwrap();
-        let (selected, cursor) = validate_dispatch_page_v1(&first, &capture, None, true).unwrap();
-        assert_eq!(cursor, first_cursor);
+        let first_wire = decoded_page(&first, 3, 3);
+        let expected_first = expected_page(&first_wire);
+        let expected_evidence = first_wire.evidence.clone();
+        let selected =
+            validate_dispatch_page_v1(&first_wire, &expected_first, &expected_evidence).unwrap();
 
         for hostile in [
             ("request_id", json!(4)),
@@ -2252,22 +2839,73 @@ mod tests {
         );
 
         let second = page_response(&capture, second_dispatch, Value::Null, 4, 4);
-        validate_dispatch_page_v1(&second, &capture, Some(&selected), false).unwrap();
-        let repeated = page_response(&capture, first_dispatch, Value::Null, 4, 4);
-        assert!(validate_dispatch_page_v1(&repeated, &capture, Some(&selected), false).is_err());
-        let repeated_cursor = page_response(&capture, second_dispatch, first_cursor, 4, 4);
+        let second_wire = decoded_page(&second, 4, 4);
+        let expected_second = expected_page(&second_wire);
+        let second_selected =
+            validate_dispatch_page_v1(&second_wire, &expected_second, &expected_evidence).unwrap();
+        assert_ne!(selected, second_selected);
         assert!(
-            validate_dispatch_page_v1(&repeated_cursor, &capture, Some(&selected), false).is_err()
+            validate_dispatch_page_v1(&first_wire, &expected_second, &expected_evidence).is_err()
         );
-        let wrong_capture = json!({
-            "scheme":"domain_separated_sha256",
-            "format_version":1,
-            "digest":"5555555555555555555555555555555555555555555555555555555555555555",
-            "canonical_len":64
-        });
-        assert!(validate_dispatch_page_v1(&first, &wrong_capture, None, true).is_err());
-        let mut stale_cursor = first;
-        stale_cursor["value"]["page"]["next_cursor"]["position"] = json!(2);
-        assert!(validate_dispatch_page_v1(&stale_cursor, &capture, None, true).is_err());
+
+        for (pointer, replacement) in [
+            (
+                "/value/page/context/bundle_identity/digest",
+                json!("5555555555555555555555555555555555555555555555555555555555555555"),
+            ),
+            ("/value/page/context/dispatch_count", json!(3)),
+            (
+                "/value/page/next_cursor/query_binding",
+                json!("6666666666666666666666666666666666666666666666666666666666666666"),
+            ),
+            ("/value/page/next_cursor/position", json!(2)),
+            (
+                "/value/page/items/0/dispatch/identity",
+                json!(second_dispatch),
+            ),
+        ] {
+            let mut hostile = first.clone();
+            *hostile.pointer_mut(pointer).unwrap() = replacement;
+            let hostile = decoded_page(&hostile, 3, 3);
+            assert!(
+                validate_dispatch_page_v1(&hostile, &expected_first, &expected_evidence).is_err()
+            );
+        }
+
+        let mut extra_evidence = first.clone();
+        extra_evidence["value"]["evidence"]["records"] = json!([first_dispatch]);
+        let extra_evidence = decoded_page(&extra_evidence, 3, 3);
+        assert!(
+            validate_dispatch_page_v1(&extra_evidence, &expected_first, &expected_evidence)
+                .is_err()
+        );
+
+        for (pointer, replacement) in [
+            ("/value/page/context/run_identity", json!(0)),
+            (
+                "/value/page/context/run_identity",
+                json!("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"),
+            ),
+            (
+                "/value/page/context/run_identity",
+                json!("0000000000000000000000000000000000000000000000000000000000000000"),
+            ),
+        ] {
+            let mut hostile = first.clone();
+            *hostile.pointer_mut(pointer).unwrap() = replacement;
+            let mut bytes = serde_json::to_vec(&hostile).unwrap();
+            bytes.push(b'\n');
+            assert!(
+                validate_agent_response_line_v1(&bytes, 3, 3, ExpectedAgentResultV1::Page).is_err()
+            );
+        }
+
+        let mut unknown_evidence = first;
+        unknown_evidence["value"]["evidence"]["unexpected"] = json!(true);
+        let mut bytes = serde_json::to_vec(&unknown_evidence).unwrap();
+        bytes.push(b'\n');
+        assert!(
+            validate_agent_response_line_v1(&bytes, 3, 3, ExpectedAgentResultV1::Page).is_err()
+        );
     }
 }
