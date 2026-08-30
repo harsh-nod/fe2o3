@@ -65,7 +65,7 @@
       "variant": "scalar-attention",
       "feature": "kernel-gpt-oss-decode-scalar-attention",
       "status": "compiler-rejected",
-      "reason": "native BF16 widening reaches an unsupported MIR Transmute; the arithmetic-safe helper then reaches a call terminator without an exact callable memory-effect summary",
+      "reason": "the arithmetic-safe scalar helper reaches a call terminator before exact callable memory-effect summaries are available",
       "retained_conclusion": "no HSACO, numerical result, or latency contribution is claimed"
     },
     {
@@ -75,7 +75,7 @@
       "planned_lds_bytes": 2048,
       "planned_stages": 2,
       "planned_prefetch_distance": 1,
-      "reason": "the ranked projection rejects a pipeline scalar temporary with multiple definitions after the exact prime, loop, and drain lifecycle is constructed",
+      "reason": "the ranked projection rejects a pipeline scalar because it is not an exact unsigned index expression after the exact prime, loop, and drain lifecycle is constructed",
       "retained_conclusion": "this is a production-lowering feasibility rejection, not a measured slowdown"
     },
     {
