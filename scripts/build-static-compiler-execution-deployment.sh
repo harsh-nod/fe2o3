@@ -85,13 +85,21 @@ cmake \
 cmake --build "${target_root}/launcher" --parallel
 ctest --test-dir "${target_root}/launcher" --output-on-failure
 
-readonly image_dir="${partial}/usr/libexec/fe2o3"
+readonly usr_dir="${partial}/usr"
+readonly libexec_dir="${usr_dir}/libexec"
+readonly image_dir="${libexec_dir}/fe2o3"
 readonly systemd_dir="${partial}/systemd"
 readonly sysusers_dir="${partial}/sysusers.d"
 readonly tmpfiles_dir="${partial}/tmpfiles.d"
 readonly manifest_generator="${target_root}/deployment-verifier/${target}/release/fe2o3-compiler-execution-manifest"
 readonly deployment_verifier="${target_root}/deployment-verifier/${target}/release/fe2o3-compiler-execution-deployment-verify"
-install -d -m 0700 -- "${image_dir}" "${systemd_dir}" "${sysusers_dir}" "${tmpfiles_dir}"
+install -d -m 0700 -- \
+  "${usr_dir}" \
+  "${libexec_dir}" \
+  "${image_dir}" \
+  "${systemd_dir}" \
+  "${sysusers_dir}" \
+  "${tmpfiles_dir}"
 
 install -m 0555 -- \
   "${target_root}/coordinator/${target}/release/fe2o3-compiler-execution-coordinator" \

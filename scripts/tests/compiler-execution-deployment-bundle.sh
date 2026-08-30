@@ -42,6 +42,10 @@ done
 grep -Fq -- 'ctest --test-dir' "${builder}" || fail 'launcher CTest qualification is missing'
 grep -Fq -- 'sha256sum --check --strict SHA256SUMS' "${builder}" ||
   fail 'strict bundle hash verification is missing'
+grep -Fq -- 'readonly usr_dir=' "${builder}" || fail 'explicit usr directory custody is missing'
+grep -Fq -- 'readonly libexec_dir=' "${builder}" ||
+  fail 'explicit libexec directory custody is missing'
+grep -Fq -- 'install -d -m 0700' "${builder}" || fail 'exact directory mode creation is missing'
 grep -Fq -- 'fe2o3-compiler-execution-manifest' "${builder}" ||
   fail 'pinned install manifest generation is missing'
 grep -Fq -- 'fe2o3-compiler-execution-deployment-verify' "${builder}" ||
