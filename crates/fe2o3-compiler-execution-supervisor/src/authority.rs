@@ -8,6 +8,7 @@ use fe2o3_broker_authority_service::{
     ProtectedExternalAnchorServiceAdmissionV1, ProtectedServiceAdmissionErrorV1,
 };
 use fe2o3_compiler_closure_capability::CompilerExecutionSigningKeyCapabilityV1;
+use fe2o3_compiler_execution_protocol::COMPILER_EXECUTION_SUPERVISOR_STATE_ROOT_MODE_V1;
 pub use fe2o3_protected_service_profile::{
     PROTECTED_SERVICE_SECUREBITS_V1 as ISSUER_SERVICE_SECUREBITS_V1,
     ProtectedServiceCredentialProfileErrorV1 as IssuerServiceCredentialProfileErrorV1,
@@ -17,7 +18,6 @@ use rustix::fs::{FileType, OFlags};
 
 use crate::{AdmittedIssuerProgramV1, IssuerProgramAdmissionErrorV1};
 
-const SERVICE_ROOT_MODE_V1: u32 = 0o700;
 const PERMISSION_AND_SPECIAL_BITS: u32 = 0o7777;
 
 pub(super) struct ExternalAnchorLaunchClonesV1<'a> {
@@ -414,7 +414,9 @@ fn validate_root(
             "owner does not match the service UID and GID",
         ));
     }
-    if snapshot.mode & PERMISSION_AND_SPECIAL_BITS != SERVICE_ROOT_MODE_V1 {
+    if snapshot.mode & PERMISSION_AND_SPECIAL_BITS
+        != COMPILER_EXECUTION_SUPERVISOR_STATE_ROOT_MODE_V1
+    {
         return Err(ProtectedIssuerSupervisorErrorV1::InvalidRoot(
             "mode is not exactly 0700",
         ));

@@ -30,6 +30,20 @@ pub const COMPILER_EXECUTION_SUPERVISOR_SOCKET_MODE_V1: u32 = 0o660;
 pub const COMPILER_EXECUTION_SUPERVISOR_SOCKET_PATH_V1: &str =
     "/run/fe2o3/compiler-execution-supervisor.sock";
 
+/// Sole production durable-root pathname for the protected compiler-execution supervisor.
+pub const COMPILER_EXECUTION_SUPERVISOR_STATE_ROOT_PATH_V1: &str =
+    "/var/lib/fe2o3/compiler-execution";
+
+/// Exact dedicated-service-owned production durable-root mode.
+pub const COMPILER_EXECUTION_SUPERVISOR_STATE_ROOT_MODE_V1: u32 = 0o700;
+
+/// Sole root-owned deployment lifecycle-lock pathname.
+pub const COMPILER_EXECUTION_LIFECYCLE_LOCK_PATH_V1: &str =
+    "/var/lib/fe2o3/compiler-execution-lifecycle-v1";
+
+/// Exact root-only deployment lifecycle-lock mode.
+pub const COMPILER_EXECUTION_LIFECYCLE_LOCK_MODE_V1: u32 = 0o400;
+
 /// Sole production public client-profile pathname.
 pub const COMPILER_EXECUTION_CLIENT_PROFILE_PATH_V1: &str =
     "/etc/fe2o3/compiler-execution/client-profile-v1";

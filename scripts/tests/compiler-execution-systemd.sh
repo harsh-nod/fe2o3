@@ -7,7 +7,9 @@ readonly SOCKET="${REPO_ROOT}/deployment/systemd/fe2o3-compiler-execution.socket
 readonly SYSUSERS="${REPO_ROOT}/deployment/sysusers.d/fe2o3-compiler-execution.conf"
 readonly TMPFILES="${REPO_ROOT}/deployment/tmpfiles.d/fe2o3-compiler-execution.conf"
 readonly ENTRYPOINT="${REPO_ROOT}/crates/fe2o3-compiler-execution-coordinator/src/entrypoint.rs"
+readonly INHERITED="${REPO_ROOT}/crates/fe2o3-compiler-execution-coordinator/src/inherited.rs"
 readonly PROVISIONER="${REPO_ROOT}/crates/fe2o3-compiler-execution-coordinator/src/provisioning_entrypoint.rs"
+readonly PROTOCOL="${REPO_ROOT}/crates/fe2o3-compiler-execution-protocol/src/lib.rs"
 readonly COORDINATOR_MANIFEST="${REPO_ROOT}/crates/fe2o3-compiler-execution-coordinator/Cargo.toml"
 
 fail() {
@@ -77,6 +79,19 @@ for name in \
 done
 grep -Fq -- 'name = "fe2o3-compiler-execution-provision"' "${COORDINATOR_MANIFEST}" ||
   fail 'provisioner binary target is missing'
+grep -Fq -- '"/var/lib/fe2o3/compiler-execution"' "${PROTOCOL}" ||
+  fail 'canonical supervisor state-root path is missing'
+grep -Fq -- '"/var/lib/fe2o3/compiler-execution-lifecycle-v1"' "${PROTOCOL}" ||
+  fail 'canonical lifecycle-lock path is missing'
+if grep -Fq -- '/var/lib/fe2o3/compiler-execution-lifecycle-v1:' "${SERVICE}"; then
+  fail 'lifecycle lock must derive from supervisor-root instead of adding an activation descriptor'
+fi
+grep -Fq -- 'RetainedProvisioningLifecycleLeaseV1::admit(' "${PROVISIONER}" ||
+  fail 'provisioner lifecycle lease is missing'
+lifecycle_lease_line="$(grep -n -m1 -F -- 'CompilerExecutionLifecycleLeaseV1::admit_service_from_root(&supervisor_root)' "${INHERITED}" | cut -d: -f1)"
+issuer_seed_line="$(grep -n -m1 -F -- 'let mut seed = read_seed(File::from(issuer_key_seed)' "${INHERITED}" | cut -d: -f1)"
+[[ -n "${lifecycle_lease_line}" && -n "${issuer_seed_line}" && "${lifecycle_lease_line}" -lt "${issuer_seed_line}" ]] ||
+  fail 'service lifecycle lease must precede issuer key admission'
 require_line "${SERVICE}" 'Sockets=fe2o3-compiler-execution.socket'
 require_line "${SERVICE}" 'KillMode=mixed'
 require_line "${SERVICE}" 'Restart=on-failure'
@@ -85,7 +100,9 @@ require_line "${SERVICE}" 'RestrictAddressFamilies=AF_UNIX'
 require_line "${SYSUSERS}" 'u fe2o3-compiler - "fe2o3 compiler-execution supervisor" /var/lib/fe2o3/compiler-execution -'
 require_line "${SYSUSERS}" 'u fe2o3-anchor - "fe2o3 external monotonic anchor" /var/lib/fe2o3/external-anchor -'
 require_line "${TMPFILES}" 'd /run/fe2o3 0755 root root -'
+require_line "${TMPFILES}" 'd /var/lib/fe2o3 0755 root root -'
 require_line "${TMPFILES}" 'd /var/lib/fe2o3/compiler-execution 0700 fe2o3-compiler fe2o3-compiler -'
 require_line "${TMPFILES}" 'd /var/lib/fe2o3/external-anchor 0700 fe2o3-anchor fe2o3-anchor -'
+require_line "${TMPFILES}" 'f /var/lib/fe2o3/compiler-execution-lifecycle-v1 0400 root root -'
 
 printf 'compiler-execution systemd descriptor and filesystem policy is exact\n'

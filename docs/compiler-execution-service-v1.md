@@ -412,8 +412,14 @@ remain pending.
 The fixed static reference provisioner now resolves those accounts, validates
 and measures all five installed service images, creates or verifies both key
 seeds, constructs all four cross-bound records, and publishes them durably
-without replacement. Its idempotence, partial-publication recovery, generation
-substitution, listener, lock, mode, static-image, and retained-path failures are
-covered by the coordinator suite.
+without replacement. It owns an exclusive lease on a dedicated root-only file
+through a retained root-owned parent. Service admission derives the same sibling
+from existing state-root FD 4, takes the corresponding shared lease before key
+material is read, and retains it through supervisor and anchor reap. The lock
+therefore adds no activation descriptor and does not conflict with the issuer's
+independent state-root singleton. Idempotence, partial-publication recovery,
+generation substitution, listener, mutual exclusion, mode, static-image,
+lock/parent replacement, and retained-path failures are covered by the
+coordinator suite.
 Cargo's fixed listener acquisition, child-channel transfer, and readiness gate
 are covered by unit suites; they have not yet been qualified against that fixture.

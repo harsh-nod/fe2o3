@@ -46,6 +46,11 @@ It binds the exact deployed child PID and supervisor-deployment identity under a
 domain-separated terminal identity. The record is authority-free: the root
 coordinator must independently establish private-channel provenance and exact
 pidfd liveness.
+The deployment constants also pin the sole runtime socket and mode-`0700`
+service-owned durable-root path plus a distinct root-only lifecycle-lock file.
+The root coordinator and provisioner use the dedicated file as their
+shared/exclusive lock domain, leaving the issuer's state-root singleton lock
+independent. Neither pathname grants authority.
 The 168-byte external-anchor deployment manifest derives the anchor verification
 key from that exact issuer policy and binds the dedicated anchor UID/GID, key,
 exact supervisor deployment identity, and bounded SHA-256 executable

@@ -58,6 +58,7 @@ use rustix::pipe::{PipeFlags, pipe_with};
 mod entrypoint;
 #[allow(unsafe_code)]
 mod inherited;
+mod lifecycle;
 mod provisioning;
 #[allow(unsafe_code)]
 mod provisioning_entrypoint;
@@ -285,6 +286,8 @@ pub struct PreparedCompilerExecutionSupervisorV1 {
     credentials: IssuerServiceCredentialProfileV1,
     namespaces: ProtectedServiceNamespaceSetV1,
     prepared_by: rustix::process::Pid,
+    // Keep last so implicit drop reaps the retained anchor before unlocking provisioning.
+    lifecycle: lifecycle::CompilerExecutionLifecycleLeaseV1,
 }
 
 impl fmt::Debug for PreparedCompilerExecutionSupervisorV1 {
@@ -300,10 +303,11 @@ impl fmt::Debug for PreparedCompilerExecutionSupervisorV1 {
 
 impl PreparedCompilerExecutionSupervisorV1 {
     /// Admits, seals, and binds every input required by the sole deployed supervisor path.
-    pub fn prepare(
+    pub(crate) fn prepare(
         programs: CompilerExecutionSupervisorProgramSourcesV1,
         trust: CompilerExecutionSupervisorTrustV1,
         service_inputs: ProvisionedProtectedIssuerServiceInputsV1,
+        lifecycle: lifecycle::CompilerExecutionLifecycleLeaseV1,
         anchor: RootManagedExternalAnchorV1,
     ) -> Result<Self, CompilerExecutionCoordinatorErrorV1> {
         require_exact_root_identity_v1().map_err(CompilerExecutionCoordinatorErrorV1::Spawn)?;
@@ -369,6 +373,7 @@ impl PreparedCompilerExecutionSupervisorV1 {
             namespaces: ProtectedServiceNamespaceSetV1::capture_self()
                 .map_err(CompilerExecutionCoordinatorErrorV1::Profile)?,
             prepared_by: rustix::process::getpid(),
+            lifecycle,
         };
         prepared.revalidate()?;
         Ok(prepared)
@@ -411,6 +416,7 @@ impl PreparedCompilerExecutionSupervisorV1 {
         self.service_inputs
             .revalidate()
             .map_err(CompilerExecutionCoordinatorErrorV1::ServiceInputs)?;
+        self.lifecycle.revalidate()?;
         self.anchor
             .validate_continuity()
             .map_err(CompilerExecutionCoordinatorErrorV1::Anchor)?;
@@ -896,6 +902,10 @@ pub enum CompilerExecutionCoordinatorErrorV1 {
         /// Decoder failure.
         reason: String,
     },
+    /// Another deployment occurrence owns an incompatible lifecycle lease.
+    LifecycleBusy,
+    /// The retained lifecycle-lock file identity or security metadata changed.
+    LifecycleChanged,
     /// The root coordinator PID changed after preparation.
     CoordinatorChanged,
     /// The deployment service UID/GID is invalid.
@@ -984,6 +994,12 @@ impl fmt::Display for CompilerExecutionCoordinatorErrorV1 {
                     formatter,
                     "invalid root-provisioned {role} record: {reason}"
                 )
+            }
+            Self::LifecycleBusy => {
+                formatter.write_str("another compiler-execution lifecycle occurrence is active")
+            }
+            Self::LifecycleChanged => {
+                formatter.write_str("compiler-execution lifecycle-lock identity or policy changed")
             }
             Self::CoordinatorChanged => formatter.write_str("root coordinator PID changed"),
             Self::Credentials(error) => {

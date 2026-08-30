@@ -64,4 +64,10 @@ provisioning command. It takes one nonzero canonical decimal policy generation
 and otherwise uses only fixed service names, image paths, output names, and
 filesystem policy. It creates missing signing seeds, derives the complete
 policy/supervisor/anchor/provisioning record graph, and uses durable no-replace
-publication. An exact rerun is accepted; substitution is not overwritten.
+publication. Before reading or publishing mutable deployment state it retains an
+exclusive lease on the dedicated root-only lifecycle file and its root-owned
+parent pathname. The production coordinator derives that sibling from its
+existing state-root descriptor, takes the corresponding shared lease before key
+admission, and retains it through supervisor and anchor reap. This leaves the
+issuer's independent state-root singleton lock unchanged. An exact rerun is
+accepted; substitution is not overwritten.

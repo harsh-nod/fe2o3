@@ -23,6 +23,7 @@ use rustix::fs::{FileType, OFlags};
 use subtle::ConstantTimeEq;
 use zeroize::Zeroize;
 
+use crate::lifecycle::CompilerExecutionLifecycleLeaseV1;
 use crate::{
     CompilerExecutionCoordinatorErrorV1, CompilerExecutionSupervisorProgramSourcesV1,
     CompilerExecutionSupervisorTrustV1, PreparedCompilerExecutionSupervisorV1,
@@ -103,6 +104,7 @@ pub struct InheritedCompilerExecutionDeploymentV1 {
     trust: CompilerExecutionSupervisorTrustV1,
     service_inputs: ProvisionedProtectedIssuerServiceInputsV1,
     anchor: PreparedExternalAnchorOccurrenceV1,
+    lifecycle: CompilerExecutionLifecycleLeaseV1,
 }
 
 impl std::fmt::Debug for InheritedCompilerExecutionDeploymentV1 {
@@ -136,14 +138,32 @@ impl InheritedCompilerExecutionDeploymentV1 {
             anchor_key_seed,
         ] = take_inherited_descriptors()?;
 
+        let lifecycle =
+            CompilerExecutionLifecycleLeaseV1::admit_service_from_root(&supervisor_root)?;
+
+        let supervisor_deployment =
+            decode_supervisor_deployment(File::from(supervisor_deployment))?;
+        let deployment_capability =
+            CompilerExecutionSupervisorDeploymentCapabilityV1::create(supervisor_deployment)
+                .map_err(CompilerExecutionCoordinatorErrorV1::DeploymentCapability)?;
+        let credentials = IssuerServiceCredentialProfileV1::new(
+            deployment_capability.deployment().service_uid(),
+            deployment_capability.deployment().service_gid(),
+        )
+        .map_err(CompilerExecutionCoordinatorErrorV1::Credentials)?;
+        let service_inputs = ProvisionedProtectedIssuerServiceInputsV1::admit(
+            listener,
+            File::from(supervisor_root),
+            credentials,
+        )
+        .map_err(CompilerExecutionCoordinatorErrorV1::ServiceInputs)?;
+
         let supervisor = admit_executable(File::from(supervisor), "supervisor executable")?;
         let launcher = admit_executable(File::from(launcher), "issuer pre-exec launcher")?;
         let issuer = admit_executable(File::from(issuer), "compiler-execution issuer")?;
         let anchor_helper = admit_executable(File::from(anchor_helper), "external-anchor helper")?;
         let anchor_daemon = admit_executable(File::from(anchor_daemon), "external-anchor daemon")?;
 
-        let supervisor_deployment =
-            decode_supervisor_deployment(File::from(supervisor_deployment))?;
         let policy = decode_policy(File::from(policy))?;
         let anchor_deployment = decode_anchor_deployment(File::from(anchor_deployment))?;
         let anchor_provisioning = decode_anchor_provisioning(File::from(anchor_provisioning))?;
@@ -162,27 +182,13 @@ impl InheritedCompilerExecutionDeploymentV1 {
         )
         .map_err(CompilerExecutionCoordinatorErrorV1::ExternalAnchorKeyTemplate)?;
 
-        let deployment_capability =
-            CompilerExecutionSupervisorDeploymentCapabilityV1::create(supervisor_deployment)
-                .map_err(CompilerExecutionCoordinatorErrorV1::DeploymentCapability)?;
         let policy_capability = CompilerExecutionPolicyCapabilityV1::create(policy)
             .map_err(CompilerExecutionCoordinatorErrorV1::PolicyCapability)?;
-        let credentials = IssuerServiceCredentialProfileV1::new(
-            deployment_capability.deployment().service_uid(),
-            deployment_capability.deployment().service_gid(),
-        )
-        .map_err(CompilerExecutionCoordinatorErrorV1::Credentials)?;
         let trust = CompilerExecutionSupervisorTrustV1::new(
             deployment_capability,
             policy_capability,
             issuer_key,
         )?;
-        let service_inputs = ProvisionedProtectedIssuerServiceInputsV1::admit(
-            listener,
-            File::from(supervisor_root),
-            credentials,
-        )
-        .map_err(CompilerExecutionCoordinatorErrorV1::ServiceInputs)?;
         let anchor = PreparedExternalAnchorOccurrenceV1::prepare(
             anchor_helper,
             anchor_daemon,
@@ -199,6 +205,7 @@ impl InheritedCompilerExecutionDeploymentV1 {
             trust,
             service_inputs,
             anchor,
+            lifecycle,
         })
     }
 
@@ -215,6 +222,7 @@ impl InheritedCompilerExecutionDeploymentV1 {
             self.programs,
             self.trust,
             self.service_inputs,
+            self.lifecycle,
             anchor,
         )?
         .launch(timeout)

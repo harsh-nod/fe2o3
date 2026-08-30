@@ -24,13 +24,24 @@ generation:
 ```
 
 The command resolves the actual `fe2o3-compiler` and `fe2o3-anchor` UID/GID
-values, measures every fixed static image twice, creates missing 32-byte key
-seeds from the kernel random source, derives the complete four-record graph, and
-publishes each file with no-replace rename plus file and directory durability.
+values and first takes an exclusive nonblocking lifecycle lease on the exact
+root-only `/var/lib/fe2o3/compiler-execution-lifecycle-v1` file through its
+retained parent. The running coordinator derives that sibling from its existing
+state-root descriptor, takes a shared lease before key admission, and retains it
+through supervisor and anchor reap. Provisioning and activation therefore
+cannot overlap without adding another activation descriptor or conflicting with
+the issuer's independent state-root singleton lock. The provisioner then
+measures every fixed static image twice, creates missing 32-byte key seeds from
+the kernel random source, derives the complete four-record graph, and publishes
+each file with no-replace rename plus file and directory durability.
+The lifecycle parent must reside on a local Linux filesystem with native
+`flock(2)` open-file-description semantics; NFS and SMB/CIFS are not supported
+by this reference profile.
 It is idempotent for identical inputs. Existing mismatched bytes, modes,
 ownership, links, ACLs, capabilities, image paths, or generations fail closed
-and are never replaced. Seeds use mode `0400`; public records use mode `0444`.
-A partial first publication can be resumed with the same command and inputs.
+and are never replaced. Lifecycle parent and lock-file replacement also fail
+closed. Seeds use mode `0400`; public records use mode `0444`. A partial first
+publication can be resumed with the same command and inputs.
 
 Add only authorized Cargo users to the `fe2o3-compiler` group. Enabling
 `fe2o3-compiler-execution.socket` starts the coordinator on first connection.

@@ -10,7 +10,8 @@ use std::path::{Path, PathBuf};
 
 use ed25519_dalek::SigningKey;
 use fe2o3_compiler_execution_protocol::{
-    COMPILER_EXECUTION_SUPERVISOR_SOCKET_PATH_V1, CompilerExecutionIssuerMeasurementV1,
+    COMPILER_EXECUTION_LIFECYCLE_LOCK_PATH_V1, COMPILER_EXECUTION_SUPERVISOR_SOCKET_PATH_V1,
+    CompilerExecutionIssuerMeasurementV1,
     MAX_COMPILER_EXECUTION_EXTERNAL_ANCHOR_EXECUTABLE_BYTES_V1,
     MAX_COMPILER_EXECUTION_SUPERVISOR_EXECUTABLE_BYTES_V1,
     MAX_COMPILER_EXECUTION_SUPERVISOR_LAUNCHER_BYTES_V1,
@@ -28,6 +29,7 @@ use subtle::ConstantTimeEq;
 use zeroize::Zeroize;
 
 use crate::inherited::{RootFileSnapshotV1, validate_provisioned_file};
+use crate::lifecycle::{CompilerExecutionLifecycleLeaseModeV1, CompilerExecutionLifecycleLeaseV1};
 use crate::{
     CompilerExecutionCoordinatorErrorV1, CompilerExecutionProvisioningBundleV1,
     CompilerExecutionProvisioningErrorV1, CompilerExecutionProvisioningInputsV1,
@@ -54,6 +56,7 @@ const ANCHOR_GROUP_V1: &[u8] = b"fe2o3-anchor\0";
 
 const ROOT_ID_V1: u32 = 0;
 const CONFIG_DIRECTORY_MODE_V1: u32 = 0o755;
+const LIFECYCLE_PARENT_MODE_V1: u32 = 0o755;
 const EXECUTABLE_MODE_V1: u32 = 0o555;
 const PUBLIC_RECORD_MODE_V1: u32 = 0o444;
 const SECRET_SEED_MODE_V1: u32 = 0o400;
@@ -236,6 +239,7 @@ fn lookup_group(name: &'static [u8]) -> Result<u32, CompilerExecutionProvisionin
 
 struct ProvisioningLayoutV1 {
     config_directory: PathBuf,
+    lifecycle_lock: PathBuf,
     listener: PathBuf,
     supervisor: PathBuf,
     launcher: PathBuf,
@@ -248,6 +252,7 @@ impl ProvisioningLayoutV1 {
     fn production() -> Self {
         Self {
             config_directory: CONFIG_DIRECTORY_V1.into(),
+            lifecycle_lock: COMPILER_EXECUTION_LIFECYCLE_LOCK_PATH_V1.into(),
             listener: COMPILER_EXECUTION_SUPERVISOR_SOCKET_PATH_V1.into(),
             supervisor: SUPERVISOR_PATH_V1.into(),
             launcher: LAUNCHER_PATH_V1.into(),
@@ -266,12 +271,19 @@ fn provision_layout(
     expected_file_uid: u32,
     expected_file_gid: u32,
 ) -> Result<(), CompilerExecutionProvisioningInstallErrorV1> {
+    let lifecycle = RetainedProvisioningLifecycleLeaseV1::admit(
+        &layout.lifecycle_lock,
+        expected_file_uid,
+        expected_file_gid,
+    )?;
     require_listener_absent(&layout.listener)?;
     let (directory, directory_snapshot) = open_and_lock_directory(
         &layout.config_directory,
         expected_file_uid,
         expected_file_gid,
     )?;
+    lifecycle.revalidate()?;
+    require_listener_absent(&layout.listener)?;
     let supervisor = measure_static_image(
         &layout.supervisor,
         "protected supervisor",
@@ -348,6 +360,8 @@ fn provision_layout(
     drop(issuer_seed);
     drop(anchor_seed);
 
+    lifecycle.revalidate()?;
+    require_listener_absent(&layout.listener)?;
     publish_or_verify(
         &directory,
         ISSUER_POLICY_FILE_V1,
@@ -392,6 +406,7 @@ fn provision_layout(
         expected_file_uid,
         expected_file_gid,
     )?;
+    lifecycle.revalidate()?;
     require_listener_absent(&layout.listener)?;
     Ok(())
 }
@@ -405,6 +420,138 @@ fn require_listener_absent(path: &Path) -> Result<(), CompilerExecutionProvision
             source,
         }),
     }
+}
+
+struct RetainedProvisioningLifecycleLeaseV1 {
+    parent_path: PathBuf,
+    lock_name: PathBuf,
+    parent: OwnedFd,
+    parent_snapshot: DirectorySnapshotV1,
+    parent_uid: u32,
+    parent_gid: u32,
+    lease: CompilerExecutionLifecycleLeaseV1,
+}
+
+impl RetainedProvisioningLifecycleLeaseV1 {
+    fn admit(
+        lock_path: &Path,
+        parent_uid: u32,
+        parent_gid: u32,
+    ) -> Result<Self, CompilerExecutionProvisioningInstallErrorV1> {
+        let parent_path = lock_path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .ok_or(CompilerExecutionProvisioningInstallErrorV1::InvalidLifecycleParent)?;
+        let lock_name = lock_path
+            .file_name()
+            .filter(|name| !name.is_empty())
+            .ok_or(CompilerExecutionProvisioningInstallErrorV1::InvalidLifecycleParent)?;
+        let parent = open_directory(parent_path, "open compiler-execution lifecycle parent")?;
+        let parent_snapshot = inspect_lifecycle_parent(&parent, parent_uid, parent_gid)?;
+        let lock = openat(
+            &parent,
+            lock_name,
+            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .map_err(|source| CompilerExecutionProvisioningInstallErrorV1::Io {
+            operation: "open compiler-execution lifecycle lock",
+            source: source.into(),
+        })?;
+        let lease = CompilerExecutionLifecycleLeaseV1::admit(
+            File::from(lock),
+            CompilerExecutionLifecycleLeaseModeV1::ExclusiveProvisioning,
+            parent_uid,
+            parent_gid,
+        )
+        .map_err(CompilerExecutionProvisioningInstallErrorV1::Coordinator)?;
+        let admitted = Self {
+            parent_path: parent_path.to_path_buf(),
+            lock_name: lock_name.into(),
+            parent,
+            parent_snapshot,
+            parent_uid,
+            parent_gid,
+            lease,
+        };
+        admitted.revalidate()?;
+        Ok(admitted)
+    }
+
+    fn revalidate(&self) -> Result<(), CompilerExecutionProvisioningInstallErrorV1> {
+        self.lease
+            .revalidate()
+            .map_err(CompilerExecutionProvisioningInstallErrorV1::Coordinator)?;
+        if inspect_lifecycle_parent(&self.parent, self.parent_uid, self.parent_gid)?
+            != self.parent_snapshot
+        {
+            return Err(CompilerExecutionProvisioningInstallErrorV1::LifecycleParentChanged);
+        }
+        let reopened_parent = open_directory(
+            &self.parent_path,
+            "reopen compiler-execution lifecycle parent",
+        )?;
+        if inspect_lifecycle_parent(&reopened_parent, self.parent_uid, self.parent_gid)?
+            != self.parent_snapshot
+        {
+            return Err(CompilerExecutionProvisioningInstallErrorV1::LifecycleParentChanged);
+        }
+        for parent in [&self.parent, &reopened_parent] {
+            let alias = openat(
+                parent,
+                &self.lock_name,
+                OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::empty(),
+            )
+            .map_err(|source| CompilerExecutionProvisioningInstallErrorV1::Io {
+                operation: "reopen compiler-execution lifecycle lock",
+                source: source.into(),
+            })?;
+            self.lease
+                .revalidate_alias(File::from(alias))
+                .map_err(CompilerExecutionProvisioningInstallErrorV1::Coordinator)?;
+        }
+        self.lease
+            .revalidate()
+            .map_err(CompilerExecutionProvisioningInstallErrorV1::Coordinator)
+    }
+}
+
+fn open_directory(
+    path: &Path,
+    operation: &'static str,
+) -> Result<OwnedFd, CompilerExecutionProvisioningInstallErrorV1> {
+    open(
+        path,
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .map_err(|source| CompilerExecutionProvisioningInstallErrorV1::Io {
+        operation,
+        source: source.into(),
+    })
+}
+
+fn inspect_lifecycle_parent(
+    directory: &OwnedFd,
+    expected_uid: u32,
+    expected_gid: u32,
+) -> Result<DirectorySnapshotV1, CompilerExecutionProvisioningInstallErrorV1> {
+    let stat =
+        fstat(directory).map_err(|source| CompilerExecutionProvisioningInstallErrorV1::Io {
+            operation: "inspect compiler-execution lifecycle parent",
+            source: source.into(),
+        })?;
+    if FileType::from_raw_mode(stat.st_mode) != FileType::Directory
+        || stat.st_mode & 0o7777 != LIFECYCLE_PARENT_MODE_V1
+        || stat.st_uid != expected_uid
+        || stat.st_gid != expected_gid
+        || stat.st_nlink == 0
+    {
+        return Err(CompilerExecutionProvisioningInstallErrorV1::InvalidLifecycleParent);
+    }
+    reject_forbidden_metadata(directory, "lifecycle parent")?;
+    Ok(DirectorySnapshotV1::from_stat(&stat))
 }
 
 fn open_and_lock_directory(
@@ -431,6 +578,7 @@ fn open_and_lock_directory(
         || stat.st_mode & 0o7777 != CONFIG_DIRECTORY_MODE_V1
         || stat.st_uid != expected_uid
         || stat.st_gid != expected_gid
+        || stat.st_nlink == 0
     {
         return Err(CompilerExecutionProvisioningInstallErrorV1::InvalidDirectory);
     }
@@ -455,6 +603,7 @@ struct DirectorySnapshotV1 {
     mode: u32,
     uid: u32,
     gid: u32,
+    links: u64,
 }
 
 impl DirectorySnapshotV1 {
@@ -465,6 +614,7 @@ impl DirectorySnapshotV1 {
             mode: stat.st_mode,
             uid: stat.st_uid,
             gid: stat.st_gid,
+            links: stat.st_nlink,
         }
     }
 }
@@ -500,6 +650,7 @@ fn revalidate_directory_path(
         || reopened_stat.st_mode & 0o7777 != CONFIG_DIRECTORY_MODE_V1
         || reopened_stat.st_uid != expected_uid
         || reopened_stat.st_gid != expected_gid
+        || reopened_stat.st_nlink == 0
     {
         return Err(CompilerExecutionProvisioningInstallErrorV1::DirectoryChanged);
     }
@@ -985,6 +1136,10 @@ pub enum CompilerExecutionProvisioningInstallErrorV1 {
         /// Same-named group database GID.
         named_gid: u32,
     },
+    /// The root-owned parent of the lifecycle lock has an invalid policy.
+    InvalidLifecycleParent,
+    /// The root-owned parent of the lifecycle lock changed during provisioning.
+    LifecycleParentChanged,
     /// The protected service listener still exists and may activate the deployment.
     ListenerActive,
     /// The configuration directory has the wrong type, owner, group, or mode.
@@ -1065,6 +1220,12 @@ impl fmt::Display for CompilerExecutionProvisioningInstallErrorV1 {
                 formatter,
                 "service UID {uid} has primary GID {primary_gid}, expected {named_gid}"
             ),
+            Self::InvalidLifecycleParent => {
+                formatter.write_str("invalid compiler-execution lifecycle-lock parent directory")
+            }
+            Self::LifecycleParentChanged => {
+                formatter.write_str("compiler-execution lifecycle-lock parent directory changed")
+            }
             Self::ListenerActive => {
                 formatter.write_str("compiler-execution listener must be stopped for provisioning")
             }
@@ -1130,7 +1291,7 @@ mod tests {
     use fe2o3_compiler_execution_protocol::{
         COMPILER_EXECUTION_EXTERNAL_ANCHOR_DEPLOYMENT_BYTES_V1,
         COMPILER_EXECUTION_EXTERNAL_ANCHOR_PROVISIONING_BYTES_V1,
-        COMPILER_EXECUTION_ISSUER_POLICY_BYTES_V1,
+        COMPILER_EXECUTION_ISSUER_POLICY_BYTES_V1, COMPILER_EXECUTION_LIFECYCLE_LOCK_MODE_V1,
         COMPILER_EXECUTION_SUPERVISOR_DEPLOYMENT_BYTES_V1,
         CompilerExecutionExternalAnchorDeploymentV1, CompilerExecutionExternalAnchorProvisioningV1,
         CompilerExecutionIssuerPolicyV1, CompilerExecutionSupervisorDeploymentV1,
@@ -1162,13 +1323,31 @@ mod tests {
     #[test]
     fn provisioning_is_idempotent_and_generation_substitution_fails_closed() {
         let fixture = tempfile::tempdir().unwrap();
+        let uid = rustix::process::geteuid().as_raw();
+        let gid = rustix::process::getegid().as_raw();
+        let compiler = ServiceIdentityV1 {
+            uid: nonroot_id(uid, 1_001),
+            gid: nonroot_id(gid, 1_002),
+        };
         let config = fixture.path().join("config");
         let images = fixture.path().join("images");
+        let lifecycle_lock = fixture.path().join("lifecycle-lock");
         std::fs::create_dir(&config).unwrap();
         std::fs::create_dir(&images).unwrap();
+        std::fs::write(&lifecycle_lock, []).unwrap();
+        std::fs::set_permissions(
+            fixture.path(),
+            std::fs::Permissions::from_mode(LIFECYCLE_PARENT_MODE_V1),
+        )
+        .unwrap();
         std::fs::set_permissions(
             &config,
             std::fs::Permissions::from_mode(CONFIG_DIRECTORY_MODE_V1),
+        )
+        .unwrap();
+        std::fs::set_permissions(
+            &lifecycle_lock,
+            std::fs::Permissions::from_mode(COMPILER_EXECUTION_LIFECYCLE_LOCK_MODE_V1),
         )
         .unwrap();
         let paths: Vec<_> = (0_u8..5)
@@ -1185,6 +1364,7 @@ mod tests {
             .collect();
         let layout = ProvisioningLayoutV1 {
             config_directory: config.clone(),
+            lifecycle_lock: lifecycle_lock.clone(),
             listener: fixture.path().join("absent-listener"),
             supervisor: paths[0].clone(),
             launcher: paths[1].clone(),
@@ -1192,16 +1372,22 @@ mod tests {
             anchor_helper: paths[3].clone(),
             anchor_daemon: paths[4].clone(),
         };
-        let uid = rustix::process::geteuid().as_raw();
-        let gid = rustix::process::getegid().as_raw();
-        let compiler = ServiceIdentityV1 {
-            uid: nonroot_id(uid, 1_001),
-            gid: nonroot_id(gid, 1_002),
-        };
         let anchor = ServiceIdentityV1 {
             uid: distinct_nonroot_id(compiler.uid, 2_001),
             gid: nonroot_id(gid, 2_002),
         };
+
+        let active_service = File::open(&lifecycle_lock).unwrap();
+        flock(&active_service, FlockOperation::NonBlockingLockShared).unwrap();
+        assert!(matches!(
+            provision_layout(&layout, 7, compiler, anchor, uid, gid),
+            Err(CompilerExecutionProvisioningInstallErrorV1::Coordinator(
+                CompilerExecutionCoordinatorErrorV1::LifecycleBusy
+            ))
+        ));
+        assert!(!config.join(ISSUER_SEED_FILE_V1).exists());
+        assert!(!config.join(ISSUER_POLICY_FILE_V1).exists());
+        drop(active_service);
 
         provision_layout(&layout, 7, compiler, anchor, uid, gid).unwrap();
         let before = read_records(&config);
@@ -1330,6 +1516,73 @@ mod tests {
         assert!(matches!(
             revalidate_directory_path(&directory, &retained, snapshot, uid, gid),
             Err(CompilerExecutionProvisioningInstallErrorV1::DirectoryChanged)
+        ));
+
+        let lifecycle_parent = fixture.path().join("lifecycle-parent");
+        let lifecycle_lock = lifecycle_parent.join("lifecycle-lock");
+        std::fs::create_dir(&lifecycle_parent).unwrap();
+        std::fs::set_permissions(
+            &lifecycle_parent,
+            std::fs::Permissions::from_mode(LIFECYCLE_PARENT_MODE_V1),
+        )
+        .unwrap();
+        std::fs::write(&lifecycle_lock, []).unwrap();
+        std::fs::set_permissions(
+            &lifecycle_lock,
+            std::fs::Permissions::from_mode(COMPILER_EXECUTION_LIFECYCLE_LOCK_MODE_V1),
+        )
+        .unwrap();
+        let lifecycle =
+            RetainedProvisioningLifecycleLeaseV1::admit(&lifecycle_lock, uid, gid).unwrap();
+        std::fs::rename(
+            &lifecycle_lock,
+            lifecycle_parent.join("displaced-lifecycle-lock"),
+        )
+        .unwrap();
+        std::fs::write(&lifecycle_lock, []).unwrap();
+        std::fs::set_permissions(
+            &lifecycle_lock,
+            std::fs::Permissions::from_mode(COMPILER_EXECUTION_LIFECYCLE_LOCK_MODE_V1),
+        )
+        .unwrap();
+        assert!(matches!(
+            lifecycle.revalidate(),
+            Err(CompilerExecutionProvisioningInstallErrorV1::Coordinator(
+                CompilerExecutionCoordinatorErrorV1::LifecycleChanged
+            ))
+        ));
+
+        let parent = fixture.path().join("replaceable-parent");
+        let lock = parent.join("lifecycle-lock");
+        std::fs::create_dir(&parent).unwrap();
+        std::fs::set_permissions(
+            &parent,
+            std::fs::Permissions::from_mode(LIFECYCLE_PARENT_MODE_V1),
+        )
+        .unwrap();
+        std::fs::write(&lock, []).unwrap();
+        std::fs::set_permissions(
+            &lock,
+            std::fs::Permissions::from_mode(COMPILER_EXECUTION_LIFECYCLE_LOCK_MODE_V1),
+        )
+        .unwrap();
+        let lifecycle = RetainedProvisioningLifecycleLeaseV1::admit(&lock, uid, gid).unwrap();
+        std::fs::rename(&parent, fixture.path().join("displaced-parent")).unwrap();
+        std::fs::create_dir(&parent).unwrap();
+        std::fs::set_permissions(
+            &parent,
+            std::fs::Permissions::from_mode(LIFECYCLE_PARENT_MODE_V1),
+        )
+        .unwrap();
+        std::fs::write(&lock, []).unwrap();
+        std::fs::set_permissions(
+            &lock,
+            std::fs::Permissions::from_mode(COMPILER_EXECUTION_LIFECYCLE_LOCK_MODE_V1),
+        )
+        .unwrap();
+        assert!(matches!(
+            lifecycle.revalidate(),
+            Err(CompilerExecutionProvisioningInstallErrorV1::LifecycleParentChanged)
         ));
     }
 
