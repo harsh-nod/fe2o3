@@ -51,8 +51,21 @@ one durable no-replace rename. Its final name is
 `compiler-execution-v1-<manifest_sha256>`; an exact retry revalidates and
 reacquires that root, while a conflicting root is not replaced. It never
 reopens bundle content after admission. This is not a transaction over the
-independent paths in a live `/`. The disposable-root and real systemd harnesses
-that consume the published root remain qualification gates.
+independent paths in a live `/`.
+
+Build the pinned minimal systemd base used to qualify that offline root:
+
+```console
+$ scripts/build-compiler-execution-qualification-base.sh /tmp/fe2o3-base
+```
+
+The non-root builder admits exactly 71 package identities from the checked-in
+version/architecture/SHA-256 lock and emits a deterministic SquashFS image plus
+matching `BASE-INFO` and `SHA256SUMS`. The deployment crate can freshly
+revalidate the installed tree and seal an independently digest-pinned base
+image together with an empty root-owned qualification parent. Root composition
+and real systemd execution still remain qualification gates. See
+[disposable-root V1](../docs/compiler-execution-disposable-root-v1.md).
 
 With both the service and socket stopped, provision one nonzero policy
 generation:

@@ -241,9 +241,13 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   exact 12-directory/14-file offline root, synchronizes it bottom-up, and
   publishes the complete content-addressed root with one durable no-replace
   rename. Exact existing roots are revalidated and reacquired; conflicting
-  roots are never replaced. This closes offline-root publication, not live
-  system deployment: disposable-root and root/distinct-UID systemd execution
-  qualification remain open.
+  roots are never replaced. The installed value retains its sealed evidence for
+  fresh revalidation. A deterministic 71-package Ubuntu 24.04 systemd base is
+  independently digest-pinned, copied into a sealed memfd after two identical
+  reads, checked for the exact SquashFS V4 profile, and retained with an empty
+  root-owned qualification-parent descriptor. This closes disposable-root
+  preparation, not root composition or live system deployment: isolated boot
+  and root/distinct-UID systemd execution qualification remain open.
 - Versioned artifact, descriptor, durable-publication, and HSA records exist.
   Host execution has one workload-neutral Worker V3 graph. An arbitrary
   manifest cannot manufacture a Rust signature, verifier decision, load

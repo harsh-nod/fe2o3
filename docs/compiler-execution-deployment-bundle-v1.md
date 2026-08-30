@@ -1,7 +1,8 @@
 # Compiler-execution deployment bundle V1
 
-Status: implemented source-bundle admission and atomic offline-root
-publication. Root/distinct-UID systemd execution qualification remains open.
+Status: implemented source-bundle admission, atomic offline-root publication,
+fresh installed-root revalidation, and sealed disposable-root preparation.
+Root composition and distinct-UID systemd execution qualification remain open.
 
 ## Boundary
 
@@ -161,7 +162,9 @@ the only possible result is a complete, reacquirable 12-directory/14-file root.
 Static ELF inspection rejects an interpreter, dynamic section, runtime
 dependency, RPATH/RUNPATH, or undefined symbol.
 
-The next boundary is a disposable installed-root harness, followed by real
+The next boundary composes the retained installed root with the deterministic,
+independently pinned base described by [disposable-root
+V1](compiler-execution-disposable-root-v1.md), followed by real
 root/distinct-UID systemd execution and crash qualification. Those gates must
 exercise the static installer under host root and do not inherit authority from
 the non-root test-only owner parameter.
