@@ -22,8 +22,9 @@ use fe2o3_compiler_lineage::{
 };
 use fe2o3_kernel_ir::{FunctionRole, Module, VerifiedCanonicalKernelIrErrorV5};
 use fe2o3_lower_mir_kernel::{
-    InertCanonicalFormalMemoryAdmissionEvidenceV3, InertCanonicalMirToKirCorrespondenceEvidenceV3,
-    ProductionFormalMemoryOwnerV1, ProductionLineageEvidenceErrorV3,
+    InertCanonicalFormalMemoryAdmissionEvidenceV3, InertCanonicalMirToKirCorrespondenceEvidenceV4,
+    ProductionCorrespondenceEvidenceErrorV4, ProductionFormalMemoryOwnerV1,
+    ProductionLineageEvidenceErrorV3,
 };
 use fe2o3_rustc_invocation::{InvocationDigestV3, encode_descriptor_v3};
 use fe2o3_verifier::{
@@ -73,7 +74,6 @@ pub(crate) struct PreparedProductionSemanticLineageV3 {
     mir_to_kir_correspondence: InertMirToKirCorrespondenceReceiptV3,
     formal_memory: InertFormalMemoryReceiptV3,
     verus_execution: CanonicalProductionMirPlironVerusExecutionEvidenceV1,
-    semantic_u32_induction: fe2o3_mir_model::SemanticU32InductionNoOverflowReportV1,
     neutral_kir_identity: TargetLineageIdentityV3,
     bound_kir_identity: TargetLineageIdentityV3,
     semantic_layout_identity: TargetLineageIdentityV3,
@@ -147,10 +147,15 @@ impl PreparedProductionSemanticLineageV3 {
         let kernel_ir =
             InertKernelIrReceiptV3::from_canonical_preimage(neutral_kir.canonical_bytes())?;
 
-        let correspondence = InertCanonicalMirToKirCorrespondenceEvidenceV3::from_live_owner(
+        let correspondence = InertCanonicalMirToKirCorrespondenceEvidenceV4::from_live_owner(
             admitted.semantic_kir(),
+            semantic_u32_induction,
         )?;
-        if correspondence.canonical_kir_v5_identity() != neutral_kir.identity().digest() {
+        if correspondence
+            .block_correspondence()
+            .canonical_kir_v5_identity()
+            != neutral_kir.identity().digest()
+        {
             return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
                 "MIR-to-KIR correspondence names a different neutral KIR",
             ));
@@ -218,7 +223,6 @@ impl PreparedProductionSemanticLineageV3 {
                 "target-bound KIR has no exact workgroup size",
             ))?;
 
-        let semantic_u32_induction = ranked_verification.into_semantic_u32_induction();
         Ok(Self {
             rustc_identity_inventory,
             rustc_preflight_plan,
@@ -228,7 +232,6 @@ impl PreparedProductionSemanticLineageV3 {
             mir_to_kir_correspondence,
             formal_memory,
             verus_execution,
-            semantic_u32_induction,
             neutral_kir_identity,
             bound_kir_identity,
             semantic_layout_identity,
@@ -271,13 +274,18 @@ impl PreparedProductionSemanticLineageV3 {
             )
         })?;
         validate_final_llvm_layout(final_llvm)?;
-        if self.semantic_u32_induction.semantic_mir_sha256().as_bytes()
+        let correspondence = InertCanonicalMirToKirCorrespondenceEvidenceV4::decode(
+            self.mir_to_kir_correspondence.canonical_preimage(),
+        )?;
+        if correspondence
+            .semantic_u32_induction()
+            .semantic_mir_sha256()
             != self.semantic_mir.identity().sha256()
-            || self.semantic_u32_induction.grants_authority()
-            || self.semantic_u32_induction.authorizes_compiler_transform()
+            || correspondence.grants_authority()
+            || correspondence.semantic_u32_induction().grants_authority()
         {
             return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
-                "semantic induction custody changed before final handoff",
+                "lossless semantic correspondence custody changed before final handoff",
             ));
         }
 
@@ -607,6 +615,7 @@ pub(crate) enum ProductionSemanticLineageErrorV3 {
     LiveOwner(String),
     CanonicalKir(VerifiedCanonicalKernelIrErrorV5),
     Evidence(ProductionLineageEvidenceErrorV3),
+    Correspondence(ProductionCorrespondenceEvidenceErrorV4),
     VerusEvidence(ProductionMirPlironVerusExecutionEvidenceErrorV1),
     Receipt(LineageErrorV3),
     ProofIdentity(InertProofBindingAssociationErrorV3),
@@ -636,6 +645,12 @@ impl fmt::Display for ProductionSemanticLineageErrorV3 {
                 write!(formatter, "production V3 canonical KIR failed: {error}")
             }
             Self::Evidence(error) => write!(formatter, "production V3 evidence failed: {error}"),
+            Self::Correspondence(error) => {
+                write!(
+                    formatter,
+                    "production lossless correspondence failed: {error}"
+                )
+            }
             Self::VerusEvidence(error) => {
                 write!(
                     formatter,
@@ -671,6 +686,12 @@ impl From<VerifiedCanonicalKernelIrErrorV5> for ProductionSemanticLineageErrorV3
 impl From<ProductionLineageEvidenceErrorV3> for ProductionSemanticLineageErrorV3 {
     fn from(error: ProductionLineageEvidenceErrorV3) -> Self {
         Self::Evidence(error)
+    }
+}
+
+impl From<ProductionCorrespondenceEvidenceErrorV4> for ProductionSemanticLineageErrorV3 {
+    fn from(error: ProductionCorrespondenceEvidenceErrorV4) -> Self {
+        Self::Correspondence(error)
     }
 }
 

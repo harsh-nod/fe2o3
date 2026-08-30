@@ -816,12 +816,6 @@ impl AuthenticatedRankedVerificationV5 {
     ) -> &fe2o3_mir_model::SemanticU32InductionNoOverflowReportV1 {
         &self.semantic_u32_induction
     }
-
-    pub(crate) fn into_semantic_u32_induction(
-        self,
-    ) -> fe2o3_mir_model::SemanticU32InductionNoOverflowReportV1 {
-        self.semantic_u32_induction
-    }
 }
 
 #[derive(Debug)]
