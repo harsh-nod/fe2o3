@@ -366,6 +366,10 @@ fn proc_stat_parser_handles_the_current_process_identity_stably() {
     let captured = process();
     assert_eq!(captured.pid(), std::process::id());
     assert_ne!(captured.start_time_ticks(), 0);
+    assert_eq!(
+        captured.correlation_identity_v2().unwrap(),
+        process().correlation_identity_v2().unwrap()
+    );
 
     let mut status = String::new();
     File::open("/proc/self/status")

@@ -288,3 +288,41 @@ The deterministic MI fixture validates the currently available JSONL workflow
 in generic CI. Installed ROCgdb capability discovery is validated on MI300X. A
 live pure-KFD GPU wave stop with PC, `exec`, registers and resume has not yet
 been validated, so this command does not claim that milestone.
+
+## Native ROCgdb/KFD correlation V4
+
+`fe2o3-debug live-rocgdb-kfd-v4` is a separate one-shot JSONL launcher; it does
+not change the V3 protocol. It provisions a credential-bound V2 telemetry
+endpoint into the exact ROCgdb-launched target, admits one explicitly selected
+direct-KFD device, and queries only structured `-agent-info`, `-queue-info`,
+`-dispatch-info`, `-thread-info`, and `-lane-info` result tuples at a ROCgdb
+stop. The exact target-side KFD publication observation must match the selected
+device, target process instance, queue occurrence, AQL packet, artifact,
+dispatch generation, and geometry before workgroup, wave, or lane coordinates
+are returned. AMD `target-id` values use a strict versioned grammar; MI stream
+text and `details` are never evidence.
+
+Native GPU, queue, packet, address, descriptor, PID, and target-id values remain
+private. The response contains only derived identities, logical coordinates,
+and capability truth. The code load base is an explicit caller admission and
+is labeled as such; kernel entry address and size come from the exact admitted
+HSACO descriptor inspection. Relative PC evidence binds all of those fields.
+Source, registers, and memory remain typed unavailable. ROCgdb is the
+sole stop owner and this path never acquires KFD debug-trap ownership. A target
+or platform that cannot produce the exact cooperative stop returns a typed V4
+unavailable result. The collector pumps MI events and V2 telemetry together,
+so a missed breakpoint or target exit cannot erase an already observed AQL
+publication.
+
+On 2026-08-30, installed `/usr/bin/rocgdb` (GDB 16.3) and direct KFD on MI300X
+ran the public command with the SHA-pinned
+`lds_publish_read_reduce_i32_v1` diagnostic HSACO
+(`ab6bda1e8af05b61c22753382e75dd6a9952db8e598eaac3cb5769863a618ed0`).
+The safe V2 target declared the dispatch and emitted its target-side KFD
+observation at the real post-AQL-publication point. ROCgdb did not return a
+structured GPU stopped hierarchy for that direct-KFD code image, so the exact
+result was unavailable rather than inferred:
+
+```json
+{"schema":"fe2o3-rocgdb-kfd-native-response-v4","result":{"status":"unavailable","probe":{"structured_mi_commands":true,"direct_kfd_device_admitted":true,"cooperative_v2_declaration":true,"cooperative_v2_publication":true},"reason":"gpu_stopped_state_unavailable"}}
+```

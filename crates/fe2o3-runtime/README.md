@@ -35,6 +35,15 @@ native transaction returns. They remain target declarations. Queue and runtime
 lifecycle facts shown by the debugger come independently from KFD observations;
 neither source upgrades the code object to observed execution in V3.
 
+The separate V2 native telemetry composition emits a declaration before queue
+preparation and one target-side KFD publication observation immediately after
+the release-header/doorbell publication point. The low-level transition returns
+a linear terminal handle after confirmed completion and teardown. Only this
+safe runtime boundary can emit `Completed`, after completed-buffer validation
+and post-completion Worker V3 currentness both succeed. Either rejection emits
+`Failed`; an inability to send that terminal aborts. V2 does not mutate the V1
+wire or lifecycle and grants no queue or packet authority.
+
 `fe2o3-host` now has one private implementation of the unsafe authority trait.
 It is constructible only by consuming an authenticated Worker V3 executable,
 compiler-generated host-memory arguments, retained current-publication custody,

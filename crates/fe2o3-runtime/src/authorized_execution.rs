@@ -4,12 +4,15 @@ use core::{fmt, time::Duration};
 
 use fe2o3_kfd::{
     CheckedGfx942XnackMinusDevice, HOST_VISIBLE_MEMORY_PAGE_BYTES_V1,
-    KfdCooperativeTargetTelemetryEndpointV1, KfdTargetDebugAllocationPhaseV1,
-    KfdTargetDebugArtifactIdentityV1, KfdTargetDebugArtifactRoleV1, KfdTargetDebugDispatchPhaseV1,
+    KfdCooperativeTargetTelemetryEndpointV1, KfdCooperativeTargetTelemetryEndpointV2,
+    KfdNativeDispatchTelemetrySinkV2, KfdTargetDebugAllocationPhaseV1,
+    KfdTargetDebugArtifactIdentityV1, KfdTargetDebugArtifactRoleV1,
+    KfdTargetDebugDispatchDeclarationV2, KfdTargetDebugDispatchPhaseV1,
     KfdTargetDebugMemoryAccessV1, KfdTargetDebugMemoryKindV1, KfdTargetDebugSessionOutcomeV1,
     KfdTargetDebugTelemetryDigestV1, KfdTargetDebugTelemetryPayloadV1,
-    KfdTargetDebugTelemetryTransportErrorV1, KfdTargetRuntimeDebugTokenV1,
-    execute_gfx942_kfd_debug_target_dispatch_unchecked_v1,
+    KfdTargetDebugTelemetryTransportErrorV1, KfdTargetDebugTelemetryTransportErrorV2,
+    KfdTargetRuntimeDebugTokenV1, execute_gfx942_kfd_debug_target_dispatch_unchecked_v1,
+    execute_gfx942_kfd_debug_target_dispatch_unchecked_v2,
     execute_gfx942_kfd_dispatch_unchecked_v1,
 };
 use sha2::{Digest, Sha256};
@@ -163,6 +166,73 @@ pub struct AuthorizedRuntimeDebugTelemetrySessionV1 {
     endpoint: KfdCooperativeTargetTelemetryEndpointV1,
     process_instance: KfdTargetDebugTelemetryDigestV1,
     executable: KfdTargetDebugArtifactIdentityV1,
+}
+
+/// V2 target endpoint and exact launcher-owned process/session binding.
+#[must_use = "a V2 telemetry session must be consumed by a debug-target execution"]
+pub struct AuthorizedRuntimeDebugTelemetrySessionV2 {
+    endpoint: KfdCooperativeTargetTelemetryEndpointV2,
+    process_instance: KfdTargetDebugTelemetryDigestV1,
+    executable: KfdTargetDebugArtifactIdentityV1,
+    generation: u64,
+}
+
+impl fmt::Debug for AuthorizedRuntimeDebugTelemetrySessionV2 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AuthorizedRuntimeDebugTelemetrySessionV2")
+            .field("endpoint", &"telemetry-only")
+            .field("process_instance", &self.process_instance)
+            .field("executable", &self.executable)
+            .field("generation", &self.generation)
+            .finish_non_exhaustive()
+    }
+}
+
+impl AuthorizedRuntimeDebugTelemetrySessionV2 {
+    pub fn new(
+        endpoint: KfdCooperativeTargetTelemetryEndpointV2,
+        process_instance: KfdTargetDebugTelemetryDigestV1,
+        executable: KfdTargetDebugArtifactIdentityV1,
+        generation: u64,
+    ) -> Result<Self, fe2o3_kfd::KfdTargetDebugTelemetryDataErrorV2> {
+        if generation == 0 {
+            return Err(fe2o3_kfd::KfdTargetDebugTelemetryDataErrorV2::ZeroGeneration);
+        }
+        Ok(Self {
+            endpoint,
+            process_instance,
+            executable,
+            generation,
+        })
+    }
+}
+
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum Gfx942AuthorizedRuntimeDebugExecutionErrorV2<E> {
+    Preflight(Gfx942AuthorizedRuntimeExecutionErrorV1<E>),
+    TelemetryDeclaration(KfdTargetDebugTelemetryTransportErrorV1),
+    TelemetryData(fe2o3_kfd::KfdTargetDebugTelemetryDataErrorV2),
+}
+
+impl<E: fmt::Display> fmt::Display for Gfx942AuthorizedRuntimeDebugExecutionErrorV2<E> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Preflight(error) => error.fmt(formatter),
+            Self::TelemetryDeclaration(error) => {
+                write!(formatter, "native telemetry declaration facts: {error}")
+            }
+            Self::TelemetryData(error) => {
+                write!(formatter, "native telemetry declaration: {error}")
+            }
+        }
+    }
+}
+
+impl<E> std::error::Error for Gfx942AuthorizedRuntimeDebugExecutionErrorV2<E> where
+    E: std::error::Error + 'static
+{
 }
 
 impl fmt::Debug for AuthorizedRuntimeDebugTelemetrySessionV1 {
@@ -363,6 +433,113 @@ where
         abort_on_telemetry_error(
             session.emit_session_end(KfdTargetDebugSessionOutcomeV1::Completed),
         );
+    }
+    Ok(result)
+}
+
+/// Executes an authorized direct-KFD target and emits exact V2 publication evidence.
+///
+/// ROCgdb is the sole stop owner. This path does not acquire KFD debug-trap
+/// ownership, and any low-level failure after entering the native V2 path is
+/// terminal for the target process.
+pub fn execute_authorized_gfx942_runtime_debug_target_dispatch_v2<A>(
+    authority: A,
+    token: KfdTargetRuntimeDebugTokenV1,
+    device: CheckedGfx942XnackMinusDevice,
+    prepared: PreparedGfx942RuntimeDispatchV1,
+    telemetry: AuthorizedRuntimeDebugTelemetrySessionV2,
+) -> Result<
+    Gfx942AuthorizedRuntimeDispatchResultV1,
+    Gfx942AuthorizedRuntimeDebugExecutionErrorV2<A::CurrentnessError>,
+>
+where
+    A: WorkerV3Gfx942ExecutionAuthorityV1,
+{
+    authority
+        .revalidate_currentness()
+        .map_err(Gfx942AuthorizedRuntimeExecutionErrorV1::CurrentnessBeforeDispatch)
+        .map_err(Gfx942AuthorizedRuntimeDebugExecutionErrorV2::Preflight)?;
+    validate_authority_v1(&authority, &device, &prepared)
+        .map_err(Gfx942AuthorizedRuntimeDebugExecutionErrorV2::Preflight)?;
+    let facts = DebugTelemetryFactsV1::from_prepared(&prepared)
+        .map_err(Gfx942AuthorizedRuntimeDebugExecutionErrorV2::TelemetryDeclaration)?;
+    let declaration = KfdTargetDebugDispatchDeclarationV2::new(
+        telemetry.process_instance,
+        telemetry.executable,
+        facts.code_object,
+        facts.dispatch,
+        facts.kernel,
+        facts.logical_queue,
+        facts.grid,
+        facts.workgroup,
+        facts.dynamic_shared_memory_bytes,
+        telemetry.generation,
+    )
+    .map_err(Gfx942AuthorizedRuntimeDebugExecutionErrorV2::TelemetryData)?;
+    let sink = KfdNativeDispatchTelemetrySinkV2::new(telemetry.endpoint, declaration);
+    let (request, buffer_policies) = prepared.into_authorized_execution_parts();
+    // SAFETY: exact Worker V3 authority was checked above; V2 adds only a
+    // linear, telemetry-only observer at the existing publication boundary.
+    let native = match unsafe {
+        execute_gfx942_kfd_debug_target_dispatch_unchecked_v2(token, device, request, sink)
+    } {
+        Ok(result) => result,
+        Err(_) => std::process::abort(),
+    };
+    let (native, terminal) = native.into_parts();
+    finalize_native_v2(
+        terminal,
+        validate_completed_buffers_v1(native, buffer_policies)
+            .map_err(map_completed_buffer_error_v1),
+        || authority.revalidate_currentness(),
+    )
+}
+
+trait NativeDispatchTerminalV2 {
+    fn completed(self) -> Result<(), KfdTargetDebugTelemetryTransportErrorV2>;
+    fn failed(self) -> Result<(), KfdTargetDebugTelemetryTransportErrorV2>;
+}
+
+impl NativeDispatchTerminalV2 for fe2o3_kfd::KfdNativeDispatchTerminalV2 {
+    fn completed(self) -> Result<(), KfdTargetDebugTelemetryTransportErrorV2> {
+        self.finish_completed()
+    }
+
+    fn failed(self) -> Result<(), KfdTargetDebugTelemetryTransportErrorV2> {
+        self.finish_failed()
+    }
+}
+
+fn finalize_native_v2<T, E, Terminal, Currentness>(
+    terminal: Terminal,
+    validated: Result<T, Gfx942AuthorizedRuntimeExecutionErrorV1<E>>,
+    currentness: Currentness,
+) -> Result<T, Gfx942AuthorizedRuntimeDebugExecutionErrorV2<E>>
+where
+    Terminal: NativeDispatchTerminalV2,
+    Currentness: FnOnce() -> Result<(), E>,
+{
+    let result = match validated {
+        Ok(result) => result,
+        Err(error) => {
+            if terminal.failed().is_err() {
+                std::process::abort();
+            }
+            return Err(Gfx942AuthorizedRuntimeDebugExecutionErrorV2::Preflight(
+                error,
+            ));
+        }
+    };
+    if let Err(error) = currentness() {
+        if terminal.failed().is_err() {
+            std::process::abort();
+        }
+        return Err(Gfx942AuthorizedRuntimeDebugExecutionErrorV2::Preflight(
+            Gfx942AuthorizedRuntimeExecutionErrorV1::CurrentnessAfterCompletion(error),
+        ));
+    }
+    if terminal.completed().is_err() {
+        std::process::abort();
     }
     Ok(result)
 }
@@ -727,8 +904,30 @@ mod tests {
         KfdDebuggerTelemetryEndpointV1, KfdTargetDebugSessionNonceV1,
         KfdTargetDebugTelemetryProcessV1, create_kfd_target_debug_telemetry_channel_v1,
     };
+    use std::cell::Cell;
+    use std::rc::Rc;
 
     const TELEMETRY_ABORT_CASE: &str = "FE2O3_RUNTIME_TELEMETRY_ABORT_CASE";
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum NativeTerminalOutcomeForTest {
+        Completed,
+        Failed,
+    }
+
+    struct NativeTerminalForTest(Rc<Cell<Option<NativeTerminalOutcomeForTest>>>);
+
+    impl NativeDispatchTerminalV2 for NativeTerminalForTest {
+        fn completed(self) -> Result<(), KfdTargetDebugTelemetryTransportErrorV2> {
+            self.0.set(Some(NativeTerminalOutcomeForTest::Completed));
+            Ok(())
+        }
+
+        fn failed(self) -> Result<(), KfdTargetDebugTelemetryTransportErrorV2> {
+            self.0.set(Some(NativeTerminalOutcomeForTest::Failed));
+            Ok(())
+        }
+    }
 
     struct TestAuthorityV1 {
         object: [u8; 32],
@@ -818,6 +1017,59 @@ mod tests {
             validate(&changed),
             Err(Gfx942AuthorizedRuntimeExecutionErrorV1::DeviceIdentityMismatch)
         ));
+    }
+
+    #[test]
+    fn native_v2_buffer_rejection_emits_failed_not_completed() {
+        let outcome = Rc::new(Cell::new(None));
+        let result = finalize_native_v2(
+            NativeTerminalForTest(Rc::clone(&outcome)),
+            Err::<(), _>(
+                Gfx942AuthorizedRuntimeExecutionErrorV1::CompletedBufferCardinalityMismatch,
+            ),
+            || -> Result<(), &'static str> { panic!("currentness must not run") },
+        );
+        assert!(matches!(
+            result,
+            Err(Gfx942AuthorizedRuntimeDebugExecutionErrorV2::Preflight(
+                Gfx942AuthorizedRuntimeExecutionErrorV1::CompletedBufferCardinalityMismatch
+            ))
+        ));
+        assert_eq!(outcome.get(), Some(NativeTerminalOutcomeForTest::Failed));
+    }
+
+    #[test]
+    fn native_v2_stale_post_completion_authority_emits_failed_not_completed() {
+        let outcome = Rc::new(Cell::new(None));
+        let result = finalize_native_v2(
+            NativeTerminalForTest(Rc::clone(&outcome)),
+            Ok(17_u32),
+            || Err("stale authority"),
+        );
+        assert!(matches!(
+            result,
+            Err(Gfx942AuthorizedRuntimeDebugExecutionErrorV2::Preflight(
+                Gfx942AuthorizedRuntimeExecutionErrorV1::CurrentnessAfterCompletion(
+                    "stale authority"
+                )
+            ))
+        ));
+        assert_eq!(outcome.get(), Some(NativeTerminalOutcomeForTest::Failed));
+    }
+
+    #[test]
+    fn native_v2_success_emits_completed_after_all_checks() {
+        let outcome = Rc::new(Cell::new(None));
+        assert_eq!(
+            finalize_native_v2(
+                NativeTerminalForTest(Rc::clone(&outcome)),
+                Ok::<_, Gfx942AuthorizedRuntimeExecutionErrorV1<&'static str>>(17_u32),
+                || Ok(()),
+            )
+            .unwrap(),
+            17
+        );
+        assert_eq!(outcome.get(), Some(NativeTerminalOutcomeForTest::Completed));
     }
 
     #[test]

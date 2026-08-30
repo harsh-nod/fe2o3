@@ -4,6 +4,7 @@ use std::collections::{BTreeSet, VecDeque};
 use std::ffi::OsString;
 use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
@@ -13,6 +14,12 @@ use std::time::{Duration, Instant};
 use crate::rocgdb_mi_parser_v3::{MiListV3, MiRecordV3, MiValueV3, parse_mi_record_v3};
 
 const MAX_COMMAND_BYTES_V3: usize = 64 * 1024;
+
+pub(crate) struct RocgdbMiNativeSpawnProvisionV4<'a> {
+    pub(crate) target_endpoint: &'a OwnedFd,
+    pub(crate) nonce: fe2o3_kfd::KfdTargetDebugSessionNonceV1,
+    pub(crate) debugger_pid: u32,
+}
 
 enum ReaderItemV3 {
     Line(Vec<u8>),
@@ -41,6 +48,7 @@ pub struct RocgdbMiProcessV3 {
     adapter: RocgdbMiObservationAdapterV3,
     pending_events: VecDeque<RocgdbMiExecutionEventV3>,
     inferior_process: Option<OwnedFd>,
+    inferior_pid: Option<u32>,
     inferior_ownership: InferiorOwnershipV3,
 }
 
@@ -113,8 +121,155 @@ impl RocgdbMiProcessV3 {
             )?,
             pending_events: VecDeque::new(),
             inferior_process: None,
+            inferior_pid: None,
             inferior_ownership: InferiorOwnershipV3::Unknown,
         })
+    }
+
+    /// V4-only launcher substrate that provisions one inherited cooperative
+    /// telemetry descriptor without changing the V3 spawn path.
+    pub(crate) fn spawn_native_v4(
+        rocgdb: &Path,
+        session_identity: OpaqueIdentityV1,
+        authorization_identity: OpaqueIdentityV1,
+        wave_width: u16,
+        limits: RocgdbMiAdapterLimitsV3,
+        provision: RocgdbMiNativeSpawnProvisionV4<'_>,
+    ) -> Result<Self, RocgdbMiAdapterErrorV3> {
+        limits.validate()?;
+        let inherited = provision.target_endpoint.as_raw_fd();
+        let mut command = Command::new(rocgdb);
+        command
+            .args(["--interpreter=mi3", "--nx", "--quiet"])
+            .env(
+                fe2o3_kfd::KFD_TARGET_DEBUG_TELEMETRY_FD_ENV_V2,
+                inherited.to_string(),
+            )
+            .env(
+                fe2o3_kfd::KFD_TARGET_DEBUG_TELEMETRY_NONCE_ENV_V2,
+                lower_hex_v4(provision.nonce.as_bytes()),
+            )
+            .env(
+                fe2o3_kfd::KFD_TARGET_DEBUG_TELEMETRY_DEBUGGER_PID_ENV_V2,
+                provision.debugger_pid.to_string(),
+            )
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        // SAFETY: the hook performs two scalar fcntl operations. The retained
+        // descriptor is provisioned only into ROCgdb and its launched target.
+        unsafe {
+            command.pre_exec(move || {
+                let flags = libc::fcntl(inherited, libc::F_GETFD);
+                if flags < 0 || libc::fcntl(inherited, libc::F_SETFD, flags & !libc::FD_CLOEXEC) < 0
+                {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let mut child = command
+            .spawn()
+            .map_err(|_| RocgdbMiAdapterErrorV3::ProcessSpawn)?;
+        let input = child
+            .stdin
+            .take()
+            .ok_or(RocgdbMiAdapterErrorV3::ProcessSpawn)?;
+        let output = child
+            .stdout
+            .take()
+            .ok_or(RocgdbMiAdapterErrorV3::ProcessSpawn)?;
+        let (sender, receiver) = mpsc::sync_channel(64);
+        thread::spawn(move || {
+            let mut reader = BufReader::new(output);
+            loop {
+                let item = read_bounded_line(&mut reader, limits.max_line_bytes);
+                let terminal = !matches!(item, ReaderItemV3::Line(_));
+                if sender.send(item).is_err() || terminal {
+                    break;
+                }
+            }
+        });
+        Ok(Self {
+            child,
+            input: BufWriter::new(input),
+            output: receiver,
+            next_token: 1,
+            pending_token: None,
+            last_response_evidence: Vec::new(),
+            defer_observations: false,
+            deferred_records: VecDeque::new(),
+            adapter: RocgdbMiObservationAdapterV3::new(
+                session_identity,
+                authorization_identity,
+                wave_width,
+                limits,
+            )?,
+            pending_events: VecDeque::new(),
+            inferior_process: None,
+            inferior_pid: None,
+            inferior_ownership: InferiorOwnershipV3::Unknown,
+        })
+    }
+
+    pub(crate) fn native_v4_commands_available(
+        &mut self,
+        timeout: Duration,
+    ) -> Result<bool, RocgdbMiAdapterErrorV3> {
+        let deadline = deadline(timeout)?;
+        for command in [
+            "-agent-info",
+            "-queue-info",
+            "-dispatch-info",
+            "-thread-info",
+            "-lane-info",
+        ] {
+            let mut request = b"-info-gdb-mi-command ".to_vec();
+            request.extend_from_slice(command.as_bytes());
+            let (class, result) = self.send_command(&request, deadline)?;
+            let present = class == "done"
+                && result
+                    .get("command")
+                    .and_then(MiValueV3::as_tuple)
+                    .and_then(|value| optional_const(value, "exists"))
+                    == Some(b"true");
+            if !present {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    pub(crate) fn launch_native_v4(
+        &mut self,
+        target: &Path,
+        arguments: &[OsString],
+        kernel_breakpoint: &[u8],
+        timeout: Duration,
+    ) -> Result<u32, RocgdbMiAdapterErrorV3> {
+        if kernel_breakpoint.is_empty()
+            || kernel_breakpoint.len() > 4_096
+            || kernel_breakpoint.contains(&b'\n')
+            || kernel_breakpoint.contains(&b'\r')
+        {
+            return Err(RocgdbMiAdapterErrorV3::InvalidField("kernel breakpoint"));
+        }
+        self.configure_launch(target, arguments, timeout)?;
+        let mut breakpoint = b"-break-insert -f ".to_vec();
+        append_quoted(&mut breakpoint, kernel_breakpoint)?;
+        expect_class(self.send_command(&breakpoint, deadline(timeout)?)?, "done")?;
+        self.inferior_ownership = InferiorOwnershipV3::LaunchOwned;
+        self.launch(timeout)?;
+        self.adapter.bump_revision()?;
+        self.adapter.state = ExecutionStateV3::Running;
+        let deadline = deadline(timeout)?;
+        while self.inferior_pid.is_none() {
+            let line = self.receive_line(deadline)?;
+            let record = parse_mi_record_v3(&line, self.adapter.limits.parser())?;
+            self.observe_process_authority(&record)?;
+            self.deferred_records.push_back((record, line));
+        }
+        Ok(self.inferior_pid.expect("loop establishes inferior PID"))
     }
 
     pub const fn adapter(&self) -> &RocgdbMiObservationAdapterV3 {
@@ -550,6 +705,32 @@ impl RocgdbMiProcessV3 {
         let evidence = self.last_response_evidence.clone();
         self.adapter
             .admit_thread_results(&results, ordinals, &evidence)
+    }
+
+    /// Collects only the five documented structured MI3 hierarchy records for V4.
+    /// Stream records may be processed for ordinary V3 async state, but are
+    /// never forwarded to or interpreted by the V4 correlation adapter.
+    pub fn collect_native_hierarchy_v4(
+        &mut self,
+        adapter: &mut crate::rocgdb_mi_v4::RocgdbMiNativeCorrelationAdapterV4,
+        timeout: Duration,
+    ) -> Result<(), crate::rocgdb_mi_v4::RocgdbMiNativeQueryErrorV4> {
+        let deadline = deadline(timeout)?;
+        macro_rules! collect {
+            ($command:literal, $admit:ident) => {{
+                let (class, _) = self.send_command($command, deadline)?;
+                if class != "done" {
+                    return Err(RocgdbMiAdapterErrorV3::BackendRejected.into());
+                }
+                adapter.$admit(&self.last_response_evidence)?;
+            }};
+        }
+        collect!(b"-agent-info", admit_agent_info);
+        collect!(b"-queue-info", admit_queue_info);
+        collect!(b"-dispatch-info", admit_dispatch_info);
+        collect!(b"-thread-info", admit_thread_info);
+        collect!(b"-lane-info", admit_lane_info);
+        Ok(())
     }
 
     pub fn inspect_registers(
@@ -1254,6 +1435,7 @@ impl RocgdbMiProcessV3 {
         };
         if class == "thread-group-exited" {
             self.inferior_process = None;
+            self.inferior_pid = None;
             return Ok(());
         }
         if class != "thread-group-started" {
@@ -1276,8 +1458,13 @@ impl RocgdbMiProcessV3 {
         }
         // SAFETY: successful `pidfd_open` returned one owned descriptor.
         self.inferior_process = Some(unsafe { OwnedFd::from_raw_fd(descriptor as i32) });
+        self.inferior_pid = Some(pid as u32);
         Ok(())
     }
+}
+
+fn lower_hex_v4(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 impl Drop for RocgdbMiProcessV3 {

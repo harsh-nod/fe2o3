@@ -638,6 +638,16 @@ tests cover malformed environments, invalid and wrong-type descriptors, wrong
 peers, the positive handoff, credential binding, hostile ancillary data, and
 record lifecycle substitution.
 
+V2 is a distinct fixed 384-byte contract for ROCgdb correlation and leaves V1
+byte-exact. Its declaration is followed by at most one
+`NativeDispatchPublished` record emitted inside the direct-KFD queue owner at
+the real post-AQL-publication boundary. The record binds a process instance,
+queue occurrence, dispatch generation, artifact, geometry, selected KFD GPU,
+actual queue ID, and actual packet ID. Those native observations remain private
+correlation inputs. Failed or cancelled terminals are legal both before and
+after publication; a completed terminal is legal only after publication and is
+owned by the safe runtime after its final validation gates.
+
 `kfd-compute-aql-queue-policy` links the default
 production closure for the no-ROCm ELF audit.
 

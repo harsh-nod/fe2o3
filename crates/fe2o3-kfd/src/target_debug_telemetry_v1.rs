@@ -158,14 +158,27 @@ impl KfdTargetDebugTelemetryProcessV1 {
         self.effective_gid
     }
 
-    fn validate_current(self) -> Result<(), KfdTargetDebugTelemetryProcessErrorV1> {
+    /// Opaque V2 correlation identity for this exact process occurrence.
+    pub fn correlation_identity_v2(
+        self,
+    ) -> Result<KfdTargetDebugTelemetryDigestV1, KfdTargetDebugTelemetryDataErrorV1> {
+        let mut digest = Sha256::new();
+        digest.update(b"fe2o3-kfd-target-process-instance-v2\0");
+        digest.update(self.pid.to_le_bytes());
+        digest.update(self.start_time_ticks.to_le_bytes());
+        digest.update(self.effective_uid.to_le_bytes());
+        digest.update(self.effective_gid.to_le_bytes());
+        KfdTargetDebugTelemetryDigestV1::from_bytes(digest.finalize().into())
+    }
+
+    pub(super) fn validate_current(self) -> Result<(), KfdTargetDebugTelemetryProcessErrorV1> {
         if Self::capture(self.pid)? != self {
             return Err(KfdTargetDebugTelemetryProcessErrorV1::IdentityChanged);
         }
         Ok(())
     }
 
-    fn validate_after_authenticated_packet(
+    pub(super) fn validate_after_authenticated_packet(
         self,
     ) -> Result<(), KfdTargetDebugTelemetryProcessErrorV1> {
         match self.validate_current() {
@@ -182,7 +195,7 @@ impl KfdTargetDebugTelemetryProcessV1 {
         }
     }
 
-    fn matches_credentials(self, pid: i32, uid: u32, gid: u32) -> bool {
+    pub(super) fn matches_credentials(self, pid: i32, uid: u32, gid: u32) -> bool {
         u32::try_from(pid).ok() == Some(self.pid)
             && uid == self.effective_uid
             && gid == self.effective_gid
@@ -258,7 +271,7 @@ pub fn admit_inherited_kfd_target_debug_telemetry_v1()
     Ok(Some(endpoint))
 }
 
-fn decode_nonce_hex_v1(value: &str) -> Option<[u8; 32]> {
+pub(super) fn decode_nonce_hex_v1(value: &str) -> Option<[u8; 32]> {
     if value.len() != 64
         || !value
             .bytes()
@@ -275,7 +288,7 @@ fn decode_nonce_hex_v1(value: &str) -> Option<[u8; 32]> {
     Some(output)
 }
 
-fn decode_canonical_decimal_v1<T: std::str::FromStr>(value: &str) -> Option<T> {
+pub(super) fn decode_canonical_decimal_v1<T: std::str::FromStr>(value: &str) -> Option<T> {
     if !value
         .as_bytes()
         .first()
@@ -287,7 +300,9 @@ fn decode_canonical_decimal_v1<T: std::str::FromStr>(value: &str) -> Option<T> {
     value.parse().ok()
 }
 
-fn duplicate_raw_descriptor_cloexec_v1(descriptor: i32) -> Result<OwnedFd, rustix::io::Errno> {
+pub(super) fn duplicate_raw_descriptor_cloexec_v1(
+    descriptor: i32,
+) -> Result<OwnedFd, rustix::io::Errno> {
     // SAFETY: fcntl treats the scalar as an index into the calling process's descriptor table.
     // It returns EBADF for an invalid or concurrently closed entry. Only a distinct nonnegative
     // descriptor returned by F_DUPFD_CLOEXEC is converted into Rust ownership.
@@ -299,7 +314,7 @@ fn duplicate_raw_descriptor_cloexec_v1(descriptor: i32) -> Result<OwnedFd, rusti
     Ok(unsafe { OwnedFd::from_raw_fd(duplicate) })
 }
 
-fn protect_raw_descriptor_v1(descriptor: i32) -> Result<(), rustix::io::Errno> {
+pub(super) fn protect_raw_descriptor_v1(descriptor: i32) -> Result<(), rustix::io::Errno> {
     // SAFETY: F_GETFD consumes only the scalar descriptor number and returns EBADF when it is no
     // longer valid. No Rust ownership is constructed for the inherited descriptor.
     let flags = unsafe { libc::fcntl(descriptor, libc::F_GETFD) };
@@ -1122,7 +1137,7 @@ impl KfdCooperativeTargetTelemetryEndpointV1 {
     }
 }
 
-fn validate_connected_seqpacket(
+pub(super) fn validate_connected_seqpacket(
     endpoint: &OwnedFd,
 ) -> Result<(), KfdTargetDebugTelemetryTransportErrorV1> {
     let domain =

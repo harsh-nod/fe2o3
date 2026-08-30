@@ -5,9 +5,11 @@
 mod authorized_execution;
 
 pub use authorized_execution::{
-    AuthorizedRuntimeDebugTelemetrySessionV1, Gfx942AuthorizedRuntimeCompletedBufferV1,
+    AuthorizedRuntimeDebugTelemetrySessionV1, AuthorizedRuntimeDebugTelemetrySessionV2,
+    Gfx942AuthorizedRuntimeCompletedBufferV1, Gfx942AuthorizedRuntimeDebugExecutionErrorV2,
     Gfx942AuthorizedRuntimeDispatchResultV1, Gfx942AuthorizedRuntimeExecutionErrorV1,
     WorkerV3Gfx942ExecutionAuthorityV1, execute_authorized_gfx942_runtime_debug_target_dispatch_v1,
+    execute_authorized_gfx942_runtime_debug_target_dispatch_v2,
     execute_authorized_gfx942_runtime_dispatch_v1,
 };
 

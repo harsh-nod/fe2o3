@@ -46,6 +46,9 @@ mod stopped_state_v1;
 #[cfg(target_os = "linux")]
 #[allow(unsafe_code)]
 mod target_debug_telemetry_v1;
+#[cfg(target_os = "linux")]
+#[allow(unsafe_code)]
+mod target_debug_telemetry_v2;
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[allow(unsafe_code)]
@@ -87,15 +90,17 @@ pub use queue::{
     Gfx942DeviceContentRoleV1, Gfx942DispatchBatchV1, Gfx942DispatchBindingErrorV1,
     Gfx942DispatchBufferBindingV1, Gfx942DispatchPollV1, Gfx942DispatchPollWithProgressV1,
     Gfx942DispatchProgressV1, Gfx942FixedDispatchDataKindV1, Gfx942FixedDispatchDataLayoutV1,
-    Gfx942FixedDispatchDataV1, Gfx942FixedDispatchPacketV1, Gfx942KfdDispatchBufferV1,
-    Gfx942KfdDispatchErrorV1, Gfx942KfdDispatchPointerFixupV1, Gfx942KfdDispatchRequestErrorV1,
-    Gfx942KfdDispatchRequestV1, Gfx942KfdDispatchResultV1, Gfx942KfdQueueExceptionObservationV1,
+    Gfx942FixedDispatchDataV1, Gfx942FixedDispatchPacketV1, Gfx942KfdDebugTargetDispatchErrorV2,
+    Gfx942KfdDebugTargetDispatchResultV2, Gfx942KfdDispatchBufferV1, Gfx942KfdDispatchErrorV1,
+    Gfx942KfdDispatchPointerFixupV1, Gfx942KfdDispatchRequestErrorV1, Gfx942KfdDispatchRequestV1,
+    Gfx942KfdDispatchResultV1, Gfx942KfdQueueExceptionObservationV1,
     Gfx942RecycledDispatchResourcesV1, Gfx942RepeatedByteContentV1,
     Gfx942TimeoutExecutionObservationV1, Gfx942TimeoutSignalObservationV1,
     KfdTargetRuntimeDebugQueueTeardownV1, KfdTargetRuntimeDebugQueueV1,
     NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_SHA256_V1,
     NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_V1, QuarantinedGfx942BarrierProbeV1,
     execute_gfx942_kfd_debug_target_dispatch_unchecked_v1,
+    execute_gfx942_kfd_debug_target_dispatch_unchecked_v2,
     execute_gfx942_kfd_dispatch_unchecked_v1,
 };
 
@@ -110,6 +115,8 @@ pub use stopped_state_v1::*;
 
 #[cfg(target_os = "linux")]
 pub use target_debug_telemetry_v1::*;
+#[cfg(target_os = "linux")]
+pub use target_debug_telemetry_v2::*;
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 pub use currentness::ObservableDeviceCurrentnessV1;

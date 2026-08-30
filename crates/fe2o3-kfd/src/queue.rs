@@ -70,11 +70,13 @@ pub use live::{
     GFX942_KFD_DISPATCH_TRANSACTION_MANIFEST_V1, Gfx942BarrierProbeExecutionObservationV1,
     Gfx942BarrierProbeFailureV1, Gfx942BarrierProbePollBoundErrorV1, Gfx942BarrierProbePollBoundV1,
     Gfx942BarrierProbeRingBackingV1, Gfx942BarrierProbeSuccessV1, Gfx942DetachedFixedDispatchV1,
+    Gfx942KfdDebugTargetDispatchErrorV2, Gfx942KfdDebugTargetDispatchResultV2,
     Gfx942KfdDispatchBufferV1, Gfx942KfdDispatchErrorV1, Gfx942KfdDispatchPointerFixupV1,
     Gfx942KfdDispatchRequestErrorV1, Gfx942KfdDispatchRequestV1, Gfx942KfdDispatchResultV1,
     Gfx942KfdQueueExceptionObservationV1, Gfx942RecycledDispatchResourcesV1,
     KfdTargetRuntimeDebugQueueTeardownV1, KfdTargetRuntimeDebugQueueV1,
     QuarantinedGfx942BarrierProbeV1, execute_gfx942_kfd_debug_target_dispatch_unchecked_v1,
+    execute_gfx942_kfd_debug_target_dispatch_unchecked_v2,
     execute_gfx942_kfd_dispatch_unchecked_v1,
 };
 

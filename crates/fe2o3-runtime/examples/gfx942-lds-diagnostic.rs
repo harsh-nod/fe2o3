@@ -7,12 +7,15 @@ use std::{convert::Infallible, env, fs};
 use fe2o3_aql::AqlDispatchGeometryV1;
 use fe2o3_kfd::{
     DeviceSelector, GFX942_KFD_DISPATCH_TRANSACTION_MANIFEST_SHA256_V1,
-    Gfx942KfdDispatchPointerFixupV1, OpenedKfd,
+    Gfx942KfdDispatchPointerFixupV1, KfdTargetDebugArtifactIdentityV1,
+    KfdTargetDebugTelemetryDigestV1, KfdTargetRuntimeDebugTokenV1, OpenedKfd,
+    admit_inherited_kfd_target_debug_telemetry_v2,
 };
 use fe2o3_runtime::{
-    Gfx942RuntimeBufferAccessV1, Gfx942RuntimeDispatchBufferV1, Gfx942RuntimeDispatchInputsV1,
-    WorkerV3Gfx942ExecutionAuthorityV1, execute_authorized_gfx942_runtime_dispatch_v1,
-    prepare_gfx942_runtime_dispatch_v1,
+    AuthorizedRuntimeDebugTelemetrySessionV2, Gfx942RuntimeBufferAccessV1,
+    Gfx942RuntimeDispatchBufferV1, Gfx942RuntimeDispatchInputsV1,
+    WorkerV3Gfx942ExecutionAuthorityV1, execute_authorized_gfx942_runtime_debug_target_dispatch_v2,
+    execute_authorized_gfx942_runtime_dispatch_v1, prepare_gfx942_runtime_dispatch_v1,
 };
 
 const USAGE: &str = "usage: gfx942-lds-diagnostic <unique-id> <exact-hsaco-path>";
@@ -77,11 +80,25 @@ fn sha256_hex(bytes: &[u8]) -> String {
         .collect()
 }
 
+fn digest(bytes: &[u8]) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes).into()
+}
+
 fn canaries_unchanged(bytes: &[u8], payload_offset: usize, payload_bytes: usize) -> bool {
     bytes[..payload_offset].iter().all(|byte| *byte == 0xa5)
         && bytes[payload_offset + payload_bytes..]
             .iter()
             .all(|byte| *byte == 0xa5)
+}
+
+fn artifact_identity(bytes: &[u8]) -> Result<KfdTargetDebugArtifactIdentityV1, String> {
+    KfdTargetDebugArtifactIdentityV1::new(
+        KfdTargetDebugTelemetryDigestV1::from_bytes(digest(bytes))
+            .map_err(|error| format!("invalid artifact digest: {error:?}"))?,
+        u64::try_from(bytes.len()).map_err(|_| "artifact length exceeds u64")?,
+    )
+    .map_err(|error| format!("invalid artifact identity: {error}"))
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -146,7 +163,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .admit_uapi()?
         .bind_gfx942_xnack_minus(DeviceSelector::UniqueId(unique_id))?;
 
-    let result = execute_authorized_gfx942_runtime_dispatch_v1(authority, device, prepared)?;
+    let result = match admit_inherited_kfd_target_debug_telemetry_v2()? {
+        Some(endpoint) => {
+            let executable = fs::read(env::current_exe()?)?;
+            let executable = artifact_identity(&executable)?;
+            let process_instance =
+                fe2o3_kfd::KfdTargetDebugTelemetryProcessV1::capture(std::process::id())?
+                    .correlation_identity_v2()?;
+            let generation = endpoint.session_generation();
+            let telemetry = AuthorizedRuntimeDebugTelemetrySessionV2::new(
+                endpoint,
+                process_instance,
+                executable,
+                generation,
+            )?;
+            let token = KfdTargetRuntimeDebugTokenV1::enable_current_process()?;
+            execute_authorized_gfx942_runtime_debug_target_dispatch_v2(
+                authority, token, device, prepared, telemetry,
+            )?
+        }
+        None => execute_authorized_gfx942_runtime_dispatch_v1(authority, device, prepared)?,
+    };
     let [input, output] = result
         .into_buffers()
         .try_into()

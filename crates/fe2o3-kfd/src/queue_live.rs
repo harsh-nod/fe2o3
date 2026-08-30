@@ -76,10 +76,12 @@ mod dispatch;
 
 pub use dispatch::{
     GFX942_KFD_DISPATCH_TRANSACTION_MANIFEST_SHA256_V1,
-    GFX942_KFD_DISPATCH_TRANSACTION_MANIFEST_V1, Gfx942KfdDispatchBufferV1,
-    Gfx942KfdDispatchErrorV1, Gfx942KfdDispatchPointerFixupV1, Gfx942KfdDispatchRequestErrorV1,
-    Gfx942KfdDispatchRequestV1, Gfx942KfdDispatchResultV1, Gfx942KfdQueueExceptionObservationV1,
+    GFX942_KFD_DISPATCH_TRANSACTION_MANIFEST_V1, Gfx942KfdDebugTargetDispatchErrorV2,
+    Gfx942KfdDebugTargetDispatchResultV2, Gfx942KfdDispatchBufferV1, Gfx942KfdDispatchErrorV1,
+    Gfx942KfdDispatchPointerFixupV1, Gfx942KfdDispatchRequestErrorV1, Gfx942KfdDispatchRequestV1,
+    Gfx942KfdDispatchResultV1, Gfx942KfdQueueExceptionObservationV1,
     execute_gfx942_kfd_debug_target_dispatch_unchecked_v1,
+    execute_gfx942_kfd_debug_target_dispatch_unchecked_v2,
     execute_gfx942_kfd_dispatch_unchecked_v1,
 };
 
@@ -1916,6 +1918,22 @@ impl ComputeAqlQueueSessionV1 {
 
     pub const fn observation(&self) -> ComputeAqlQueueObservationV1 {
         self.observation
+    }
+
+    /// Exact process-local queue occurrence for private debugger correlation.
+    pub(crate) fn target_debug_queue_occurrence_v2(&self) -> [u8; 32] {
+        let mut digest = Sha256::new();
+        digest.update(b"fe2o3-kfd-target-debug-queue-occurrence-v2\0");
+        digest.update(self.key.vm.device.physical.0.to_le_bytes());
+        digest.update(self.key.vm.device.generation.0.to_le_bytes());
+        digest.update(self.key.vm.id.0.to_le_bytes());
+        digest.update(self.key.id.0.to_le_bytes());
+        digest.update(self.key.generation.0.to_le_bytes());
+        digest.update(self.observation.queue_id.to_le_bytes());
+        digest.update(self.observation.ring_bytes.to_le_bytes());
+        digest.update(self.observation.event_id.to_le_bytes());
+        digest.update([self.observation.cwsr_shadow_pages]);
+        digest.finalize().into()
     }
 
     /// Detaches one exactly completed and recycled fixed batch while keeping

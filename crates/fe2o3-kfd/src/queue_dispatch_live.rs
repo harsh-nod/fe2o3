@@ -25,7 +25,11 @@ use crate::shared_memory::{
     HostVisibleCoherentGttV1, KernargGttV1, SharedGttAllocationV1, SharedGttMappedResourceFactsV1,
     SharedGttMemorySessionV1,
 };
-use crate::{CheckedGfx942XnackMinusDevice, KfdTargetRuntimeDebugTokenV1, KfdWithAdmittedUapi};
+use crate::{
+    CheckedGfx942XnackMinusDevice, KfdNativeDispatchTelemetrySinkV2, KfdNativeDispatchTerminalV2,
+    KfdTargetDebugTelemetryDigestV1, KfdTargetDebugTelemetryTransportErrorV2,
+    KfdTargetRuntimeDebugTokenV1, KfdWithAdmittedUapi,
+};
 
 const KERNEL_DESCRIPTOR_BYTES: u64 = 64;
 const POINTER_BYTES: usize = 8;
@@ -405,6 +409,107 @@ pub unsafe fn execute_gfx942_kfd_debug_target_dispatch_unchecked_v1(
     )
 }
 
+/// Executes one debug-target dispatch with exact post-publication V2 telemetry.
+///
+/// This distinct entry point preserves V1 behavior. ROCgdb remains the sole
+/// stop owner; this path acquires no KFD debug-trap session.
+///
+/// # Safety
+///
+/// The caller must satisfy every obligation of
+/// [`execute_gfx942_kfd_debug_target_dispatch_unchecked_v1`] and terminate the
+/// process after any error following native queue mutation.
+pub unsafe fn execute_gfx942_kfd_debug_target_dispatch_unchecked_v2(
+    mut token: KfdTargetRuntimeDebugTokenV1,
+    device: CheckedGfx942XnackMinusDevice,
+    request: Gfx942KfdDispatchRequestV1,
+    mut telemetry: KfdNativeDispatchTelemetrySinkV2,
+) -> Result<Gfx942KfdDebugTargetDispatchResultV2, Gfx942KfdDebugTargetDispatchErrorV2> {
+    telemetry
+        .emit_declaration()
+        .map_err(|error| Gfx942KfdDebugTargetDispatchErrorV2::Telemetry(Box::new(error)))?;
+    let gpu_id = device.observation().kfd_gpu_id();
+    let timeout_milliseconds = request.timeout_milliseconds;
+    let (runtime, runtime_control) = token.queue_handoff_slots();
+    let prepared = device.create_compute_aql_queue_for_debug_target_with(
+        AQL_MIN_RING_BYTES_V1,
+        move |memory| prepare_dispatch_resources(memory, request),
+        runtime,
+        runtime_control,
+    );
+    let (session, resources) = match prepared {
+        Ok(value) => value,
+        Err(error) => {
+            return Err(failed_dispatch_v2(
+                &mut telemetry,
+                Gfx942KfdDispatchErrorV1::Preparation(error),
+            ));
+        }
+    };
+    execute_prepared_dispatch_v2(
+        session,
+        resources,
+        timeout_milliseconds,
+        gpu_id,
+        telemetry,
+        move |session, resources| {
+            let mut teardown = KfdTargetRuntimeDebugQueueV1::new(session).destroy()?;
+            teardown.finish_with(move |memory| release_dispatch_resources(memory, resources))
+        },
+    )
+}
+
+#[derive(Debug)]
+pub enum Gfx942KfdDebugTargetDispatchErrorV2 {
+    Dispatch(Box<Gfx942KfdDispatchErrorV1>),
+    Telemetry(Box<KfdTargetDebugTelemetryTransportErrorV2>),
+    DispatchAndTelemetry {
+        dispatch: Box<Gfx942KfdDispatchErrorV1>,
+        telemetry: Box<KfdTargetDebugTelemetryTransportErrorV2>,
+    },
+}
+
+/// Confirmed native completion and the still-pending cooperative terminal record.
+#[must_use = "the safe runtime must validate the result and finish telemetry"]
+pub struct Gfx942KfdDebugTargetDispatchResultV2 {
+    dispatch: Gfx942KfdDispatchResultV1,
+    terminal: KfdNativeDispatchTerminalV2,
+}
+
+impl fmt::Debug for Gfx942KfdDebugTargetDispatchResultV2 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Gfx942KfdDebugTargetDispatchResultV2")
+            .field("dispatch", &self.dispatch)
+            .field("terminal", &self.terminal)
+            .finish()
+    }
+}
+
+impl Gfx942KfdDebugTargetDispatchResultV2 {
+    pub fn into_parts(self) -> (Gfx942KfdDispatchResultV1, KfdNativeDispatchTerminalV2) {
+        (self.dispatch, self.terminal)
+    }
+}
+
+impl fmt::Display for Gfx942KfdDebugTargetDispatchErrorV2 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Dispatch(error) => write!(formatter, "direct-KFD debug dispatch: {error}"),
+            Self::Telemetry(error) => write!(formatter, "native debug telemetry: {error}"),
+            Self::DispatchAndTelemetry {
+                dispatch,
+                telemetry,
+            } => write!(
+                formatter,
+                "direct-KFD debug dispatch: {dispatch}; failed telemetry terminal: {telemetry}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for Gfx942KfdDebugTargetDispatchErrorV2 {}
+
 fn execute_gfx942_kfd_debug_target_dispatch_with_runtime_unchecked_v1(
     device: CheckedGfx942XnackMinusDevice,
     request: Gfx942KfdDispatchRequestV1,
@@ -503,6 +608,135 @@ fn execute_prepared_dispatch(
         queue_id: destroyed.queue_id(),
         completion_elapsed,
     })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn execute_prepared_dispatch_v2(
+    mut session: ComputeAqlQueueSessionV1,
+    mut resources: PreparedDispatchResourcesV1,
+    timeout_milliseconds: u32,
+    gpu_id: u32,
+    mut telemetry: KfdNativeDispatchTelemetrySinkV2,
+    teardown: impl FnOnce(
+        ComputeAqlQueueSessionV1,
+        PreparedDispatchResourcesV1,
+    ) -> Result<
+        (ComputeAqlQueueDestroyedV1, Vec<Gfx942KfdDispatchBufferV1>),
+        ComputeAqlQueueSessionErrorV1,
+    >,
+) -> Result<Gfx942KfdDebugTargetDispatchResultV2, Gfx942KfdDebugTargetDispatchErrorV2> {
+    let packet = resources
+        .packet
+        .take()
+        .expect("validated preparation retains one packet");
+    let started = Instant::now();
+    let packet_id = match session.submit_prepared(packet) {
+        Ok(packet_id) => packet_id,
+        Err(_) => {
+            session.poison_terminal();
+            return Err(failed_dispatch_v2(
+                &mut telemetry,
+                Gfx942KfdDispatchErrorV1::Submission,
+            ));
+        }
+    };
+    let queue = session.observation();
+    let occurrence =
+        KfdTargetDebugTelemetryDigestV1::from_bytes(session.target_debug_queue_occurrence_v2())
+            .map_err(|_| {
+                session.poison_terminal();
+                Gfx942KfdDebugTargetDispatchErrorV2::Telemetry(Box::new(
+                    KfdTargetDebugTelemetryTransportErrorV2::InvalidSinkState,
+                ))
+            })?;
+    if let Err(error) =
+        telemetry.emit_native_publication(occurrence, gpu_id, queue.queue_id(), packet_id)
+    {
+        session.poison_terminal();
+        return Err(Gfx942KfdDebugTargetDispatchErrorV2::Telemetry(Box::new(
+            error,
+        )));
+    }
+    let timeout = Duration::from_millis(u64::from(timeout_milliseconds));
+    let mut polls = 0_u32;
+    let completion_elapsed = loop {
+        let value = match session.observe_dispatch_completion(&mut resources.signal) {
+            Ok(value) => value,
+            Err(error) => {
+                session.poison_terminal();
+                return Err(failed_dispatch_v2(
+                    &mut telemetry,
+                    Gfx942KfdDispatchErrorV1::CompletionObservation(error),
+                ));
+            }
+        };
+        match classify_acquired_completion_value_v1(value) {
+            AqlCompletionObservationV1::Completed => break started.elapsed(),
+            AqlCompletionObservationV1::Unexpected(value) => {
+                session.poison_terminal();
+                return Err(failed_dispatch_v2(
+                    &mut telemetry,
+                    Gfx942KfdDispatchErrorV1::UnexpectedCompletion(value),
+                ));
+            }
+            AqlCompletionObservationV1::Pending => {}
+        }
+        if started.elapsed() >= timeout {
+            let queue_counters = session.observe_dispatch_counters().ok();
+            let queue_exception = session
+                .observe_queue_exception(0)
+                .map(Gfx942KfdQueueExceptionObservationV1::from_private)
+                .unwrap_or(Gfx942KfdQueueExceptionObservationV1::ObservationUnavailable);
+            return Err(failed_dispatch_v2(
+                &mut telemetry,
+                Gfx942KfdDispatchErrorV1::CompletionTimeout {
+                    timeout_milliseconds,
+                    packet_id,
+                    queue_counters,
+                    queue_exception,
+                },
+            ));
+        }
+        polls = polls.wrapping_add(1);
+        if polls.is_multiple_of(4096) {
+            std::thread::yield_now();
+        } else {
+            core::hint::spin_loop();
+        }
+    };
+    let (destroyed, buffers) = match teardown(session, resources) {
+        Ok(value) => value,
+        Err(error) => {
+            return Err(failed_dispatch_v2(
+                &mut telemetry,
+                Gfx942KfdDispatchErrorV1::Teardown(error),
+            ));
+        }
+    };
+    let terminal = KfdNativeDispatchTerminalV2::from_published(telemetry)
+        .map_err(|error| Gfx942KfdDebugTargetDispatchErrorV2::Telemetry(Box::new(error)))?;
+    Ok(Gfx942KfdDebugTargetDispatchResultV2 {
+        dispatch: Gfx942KfdDispatchResultV1 {
+            buffers,
+            packet_id,
+            queue_id: destroyed.queue_id(),
+            completion_elapsed,
+        },
+        terminal,
+    })
+}
+
+fn failed_dispatch_v2(
+    telemetry: &mut KfdNativeDispatchTelemetrySinkV2,
+    dispatch: Gfx942KfdDispatchErrorV1,
+) -> Gfx942KfdDebugTargetDispatchErrorV2 {
+    match telemetry.emit_failed() {
+        Ok(()) => Gfx942KfdDebugTargetDispatchErrorV2::Dispatch(Box::new(dispatch)),
+        Err(telemetry) => Gfx942KfdDebugTargetDispatchErrorV2::DispatchAndTelemetry {
+            dispatch: Box::new(dispatch),
+            telemetry: Box::new(telemetry),
+        },
+    }
 }
 
 impl ComputeAqlQueueSessionV1 {
