@@ -57,7 +57,8 @@ readonly verifier_builder="${repo_root}/scripts/build-static-compiler-execution-
 bash -n "${verifier_builder}"
 for binary in \
   fe2o3-compiler-execution-manifest \
-  fe2o3-compiler-execution-deployment-verify; do
+  fe2o3-compiler-execution-deployment-verify \
+  fe2o3-compiler-execution-deployment-install; do
   grep -Fq -- "${binary}" "${verifier_builder}" || fail "missing static image ${binary}"
 done
 grep -Fq -- "--target \"\${target}\"" "${verifier_builder}" ||

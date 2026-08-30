@@ -29,3 +29,9 @@ name = "fe2o3-compiler-execution-deployment-verify"
 path = "src/bin/verify.rs"
 test = false
 bench = false
+
+[[bin]]
+name = "fe2o3-compiler-execution-deployment-install"
+path = "src/bin/install.rs"
+test = false
+bench = false

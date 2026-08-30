@@ -7,6 +7,7 @@ readonly target_dir="${FE2O3_STATIC_DEPLOYMENT_VERIFIER_TARGET_DIR:-${repo_root}
 readonly target="x86_64-unknown-linux-musl"
 readonly manifest="${target_dir}/${target}/release/fe2o3-compiler-execution-manifest"
 readonly verifier="${target_dir}/${target}/release/fe2o3-compiler-execution-deployment-verify"
+readonly installer="${target_dir}/${target}/release/fe2o3-compiler-execution-deployment-install"
 
 cd -- "${repo_root}"
 CARGO_TARGET_DIR="${target_dir}/profile-test" \
@@ -14,7 +15,8 @@ CARGO_TARGET_DIR="${target_dir}/profile-test" \
 
 for binary in \
   fe2o3-compiler-execution-manifest \
-  fe2o3-compiler-execution-deployment-verify; do
+  fe2o3-compiler-execution-deployment-verify \
+  fe2o3-compiler-execution-deployment-install; do
   CARGO_TARGET_DIR="${target_dir}" cargo rustc \
     --locked \
     --release \
@@ -49,6 +51,8 @@ manifest_usage="$(/usr/bin/env -i "${manifest}" 2>&1)"
 manifest_status=$?
 verifier_usage="$(/usr/bin/env -i "${verifier}" 2>&1)"
 verifier_status=$?
+installer_usage="$(/usr/bin/env -i "${installer}" 2>&1)"
+installer_status=$?
 set -e
 if [[ ${manifest_status} -ne 2 \
   || "${manifest_usage}" != 'usage: fe2o3-compiler-execution-manifest BUNDLE_ROOT GIT_COMMIT TARGET' ]]; then
@@ -60,6 +64,12 @@ if [[ ${verifier_status} -ne 2 \
   printf 'static deployment verifier argument gate changed\n' >&2
   exit 1
 fi
+if [[ ${installer_status} -ne 2 \
+  || "${installer_usage}" != 'usage: fe2o3-compiler-execution-deployment-install BUNDLE_ROOT EXPECTED_MANIFEST_SHA256 EXPECTED_GIT_COMMIT INSTALL_PARENT' ]]; then
+  printf 'static deployment installer argument gate changed\n' >&2
+  exit 1
+fi
 
 printf 'manifest_generator=%s\n' "${manifest}"
 printf 'deployment_verifier=%s\n' "${verifier}"
+printf 'deployment_installer=%s\n' "${installer}"
