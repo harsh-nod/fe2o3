@@ -55,7 +55,8 @@ pub use authenticated_verus_execution_v2::{
 pub use compiler_proof_binding_v3::{
     CompilerProofInputValidationErrorV3, CompilerProofInputValidationErrorV4,
     ValidatedCompilerProofInputsV3, ValidatedCompilerProofInputsV4,
-    validate_compiler_proof_inputs_v3, validate_compiler_proof_inputs_v4,
+    VerifiedSemanticU32InductionKirAnchorV1, validate_compiler_proof_inputs_v3,
+    validate_compiler_proof_inputs_v4,
 };
 // Deprecated compatibility exports. Despite their Verus-oriented names, these
 // authenticate and execute only the recorder; they do not show that Verus or a
