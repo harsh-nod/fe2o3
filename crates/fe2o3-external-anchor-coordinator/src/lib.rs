@@ -24,8 +24,11 @@ use fe2o3_compiler_closure_capability::{
     CompilerExecutionExternalAnchorSigningKeyCapabilityV1,
 };
 use fe2o3_compiler_execution_protocol::{
+    CompilerExecutionExternalAnchorDeploymentIdentityV1,
     CompilerExecutionExternalAnchorDeploymentV1, CompilerExecutionExternalAnchorProvisioningV1,
-    CompilerExecutionExternalAnchorServiceIdentityV1,
+    CompilerExecutionExternalAnchorServiceIdentityV1, CompilerExecutionIssuerPolicyIdentityV1,
+    CompilerExecutionIssuerPolicyV1, CompilerExecutionSupervisorDeploymentIdentityV1,
+    CompilerExecutionSupervisorDeploymentV1,
     MAX_COMPILER_EXECUTION_EXTERNAL_ANCHOR_EXECUTABLE_BYTES_V1,
 };
 use fe2o3_external_anchor_provisioner::{
@@ -308,7 +311,7 @@ impl PreparedExternalAnchorOccurrenceV1 {
                 admission,
                 child,
                 disposition,
-                deployment: self.deployment_manifest.identity(),
+                deployment: self.deployment_manifest,
             }),
             Err(error) => match child.cancel_and_reap() {
                 Ok(()) => Err(error),
@@ -366,8 +369,7 @@ pub struct RootManagedExternalAnchorV1 {
     admission: ProtectedExternalAnchorServiceAdmissionV1,
     child: RootOwnedAnchorChildV1,
     disposition: ExternalAnchorProvisioningReadyDispositionV1,
-    deployment:
-        fe2o3_compiler_execution_protocol::CompilerExecutionExternalAnchorDeploymentIdentityV1,
+    deployment: CompilerExecutionExternalAnchorDeploymentV1,
 }
 
 impl fmt::Debug for RootManagedExternalAnchorV1 {
@@ -378,7 +380,7 @@ impl fmt::Debug for RootManagedExternalAnchorV1 {
             .field("service", &self.admission.service_identity())
             .field("process", &self.admission.service_process_identity())
             .field("disposition", &self.disposition)
-            .field("deployment", &self.deployment)
+            .field("deployment", &self.deployment.identity())
             .finish_non_exhaustive()
     }
 }
@@ -387,6 +389,11 @@ impl RootManagedExternalAnchorV1 {
     /// Returns whether this occurrence opened existing state or initialized genesis.
     pub const fn disposition(&self) -> ExternalAnchorProvisioningReadyDispositionV1 {
         self.disposition
+    }
+
+    /// Returns the canonical deployment retained with this live occurrence.
+    pub const fn deployment(&self) -> &CompilerExecutionExternalAnchorDeploymentV1 {
+        &self.deployment
     }
 
     /// Revalidates the exact endpoint, pidfd target, credentials, and point-in-time liveness.
@@ -409,14 +416,24 @@ impl RootManagedExternalAnchorV1 {
     /// Clones one admitted endpoint/pidfd pair for a protected supervisor transfer.
     pub fn try_clone_for_supervisor(
         &self,
+        supervisor: &CompilerExecutionSupervisorDeploymentV1,
+        policy: &CompilerExecutionIssuerPolicyV1,
     ) -> Result<ExternalAnchorSupervisorTransferV1, ExternalAnchorCoordinatorErrorV1> {
-        self.try_clone_for_supervisor_inner::<true>()
+        self.try_clone_for_supervisor_inner::<true>(supervisor, policy)
     }
 
     fn try_clone_for_supervisor_inner<const REQUIRE_ROOT: bool>(
         &self,
+        supervisor: &CompilerExecutionSupervisorDeploymentV1,
+        policy: &CompilerExecutionIssuerPolicyV1,
     ) -> Result<ExternalAnchorSupervisorTransferV1, ExternalAnchorCoordinatorErrorV1> {
         self.validate_continuity_inner::<REQUIRE_ROOT>()?;
+        if !self
+            .deployment
+            .matches_supervisor_and_policy(supervisor, policy)
+        {
+            return Err(ExternalAnchorCoordinatorErrorV1::SupervisorBindingMismatch);
+        }
         let (endpoint, pidfd) = self
             .admission
             .try_clone_for_transfer()
@@ -426,6 +443,9 @@ impl RootManagedExternalAnchorV1 {
             endpoint,
             pidfd,
             service: self.admission.service_identity(),
+            deployment: self.deployment.identity(),
+            supervisor: supervisor.identity(),
+            policy: policy.identity(),
         })
     }
 
@@ -446,6 +466,9 @@ pub struct ExternalAnchorSupervisorTransferV1 {
     endpoint: OwnedFd,
     pidfd: OwnedFd,
     service: CompilerExecutionExternalAnchorServiceIdentityV1,
+    deployment: CompilerExecutionExternalAnchorDeploymentIdentityV1,
+    supervisor: CompilerExecutionSupervisorDeploymentIdentityV1,
+    policy: CompilerExecutionIssuerPolicyIdentityV1,
 }
 
 impl fmt::Debug for ExternalAnchorSupervisorTransferV1 {
@@ -454,6 +477,9 @@ impl fmt::Debug for ExternalAnchorSupervisorTransferV1 {
             .debug_struct("ExternalAnchorSupervisorTransferV1")
             .field("authority", &"descriptor-transfer-only")
             .field("service", &self.service)
+            .field("deployment", &self.deployment)
+            .field("supervisor", &self.supervisor)
+            .field("policy", &self.policy)
             .finish_non_exhaustive()
     }
 }
@@ -462,6 +488,21 @@ impl ExternalAnchorSupervisorTransferV1 {
     /// Returns the deployment-pinned service identity carried with this pair.
     pub const fn service(&self) -> CompilerExecutionExternalAnchorServiceIdentityV1 {
         self.service
+    }
+
+    /// Returns the exact external-anchor deployment identity authorized for this transfer.
+    pub const fn deployment_identity(&self) -> CompilerExecutionExternalAnchorDeploymentIdentityV1 {
+        self.deployment
+    }
+
+    /// Returns the exact supervisor deployment identity authorized to receive this transfer.
+    pub const fn supervisor_identity(&self) -> CompilerExecutionSupervisorDeploymentIdentityV1 {
+        self.supervisor
+    }
+
+    /// Returns the exact issuer-policy identity shared by the anchor and supervisor deployments.
+    pub const fn policy_identity(&self) -> CompilerExecutionIssuerPolicyIdentityV1 {
+        self.policy
     }
 
     /// Consumes the transfer into the two ordered close-on-exec descriptors.
@@ -851,6 +892,8 @@ pub enum ExternalAnchorCoordinatorErrorV1 {
     Timeout(&'static str),
     /// Endpoint/pidfd protected admission failed.
     Admission(ProtectedServiceAdmissionErrorV1),
+    /// The receiving supervisor deployment or issuer policy does not name this exact anchor.
+    SupervisorBindingMismatch,
     /// Another owner reaped the direct child.
     ReapingOwnershipLost,
     /// A bounded kernel or filesystem operation failed.
@@ -903,6 +946,8 @@ impl fmt::Display for ExternalAnchorCoordinatorErrorV1 {
             Self::Admission(error) => {
                 write!(formatter, "anchor endpoint admission failed: {error}")
             }
+            Self::SupervisorBindingMismatch => formatter
+                .write_str("supervisor deployment or issuer policy does not bind this anchor"),
             Self::ReapingOwnershipLost => {
                 formatter.write_str("external-anchor child reaping ownership was lost")
             }
@@ -956,7 +1001,7 @@ mod tests {
         let helper_source = ExecutableSource::new("helper", &bytes);
         let daemon_source = ExecutableSource::new("daemon", &bytes);
         let measurement = measurement(&bytes);
-        let (deployment, provisioning, key_template) = manifests(measurement, measurement);
+        let (deployment, provisioning, key_template, _, _) = manifests(measurement, measurement);
         let state_root = tempfile::tempdir().unwrap();
         fs::set_permissions(state_root.path(), fs::Permissions::from_mode(0o700)).unwrap();
         let prepared = PreparedExternalAnchorOccurrenceV1::prepare_inner::<false>(
@@ -1011,16 +1056,49 @@ mod tests {
             .unwrap();
         let bytes = static_pause_elf();
         let measurement = measurement(&bytes);
-        let (deployment, _, _) = manifests(measurement, measurement);
+        let (deployment, _, _, supervisor, policy) = manifests(measurement, measurement);
         let managed = RootManagedExternalAnchorV1 {
             admission,
             child,
             disposition: ready.disposition(),
-            deployment: deployment.identity(),
+            deployment: deployment.clone(),
         };
         managed.validate_continuity_inner::<false>().unwrap();
-        let transfer = managed.try_clone_for_supervisor_inner::<false>().unwrap();
+        assert_eq!(managed.deployment(), &deployment);
+
+        let wrong_supervisor = CompilerExecutionSupervisorDeploymentV1::new(
+            supervisor.service_uid(),
+            supervisor.service_gid(),
+            service,
+            CompilerExecutionIssuerMeasurementV1::new([0x55; 32], 5).unwrap(),
+            &policy,
+        )
+        .unwrap();
+        assert!(matches!(
+            managed.try_clone_for_supervisor_inner::<false>(&wrong_supervisor, &policy),
+            Err(ExternalAnchorCoordinatorErrorV1::SupervisorBindingMismatch)
+        ));
+
+        let wrong_policy = CompilerExecutionIssuerPolicyV1::new(
+            policy.generation() + 1,
+            policy.executable(),
+            policy.runtime(),
+            *policy.verifying_key(),
+            *policy.external_anchor_verifying_key(),
+        )
+        .unwrap();
+        assert!(matches!(
+            managed.try_clone_for_supervisor_inner::<false>(&supervisor, &wrong_policy),
+            Err(ExternalAnchorCoordinatorErrorV1::SupervisorBindingMismatch)
+        ));
+
+        let transfer = managed
+            .try_clone_for_supervisor_inner::<false>(&supervisor, &policy)
+            .unwrap();
         assert_eq!(transfer.service(), service);
+        assert_eq!(transfer.deployment_identity(), deployment.identity());
+        assert_eq!(transfer.supervisor_identity(), supervisor.identity());
+        assert_eq!(transfer.policy_identity(), policy.identity());
         let (transferred_endpoint, transferred_pidfd) = transfer.into_ordered_descriptors();
         assert!(
             rustix::io::fcntl_getfd(&transferred_endpoint)
@@ -1143,6 +1221,8 @@ mod tests {
         CompilerExecutionExternalAnchorDeploymentV1,
         CompilerExecutionExternalAnchorProvisioningV1,
         CompilerExecutionExternalAnchorSigningKeyCapabilityV1,
+        CompilerExecutionSupervisorDeploymentV1,
+        CompilerExecutionIssuerPolicyV1,
     ) {
         let mut seed = [0x31; 32];
         let policy = CompilerExecutionIssuerPolicyV1::new(
@@ -1175,7 +1255,7 @@ mod tests {
             &deployment,
         )
         .unwrap();
-        (deployment, provisioning, key)
+        (deployment, provisioning, key, supervisor, policy)
     }
 
     fn measurement(bytes: &[u8]) -> CompilerExecutionIssuerMeasurementV1 {

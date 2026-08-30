@@ -11,6 +11,12 @@ then requires bootstrap close-on-exec EOF and continued pidfd liveness. It admit
 against the same process and deployment UID/GID before any supervisor transfer. The retained
 admission and a separate reaping pidfd remain root-owned for the daemon's lifetime.
 
+A supervisor transfer is available only when the supplied canonical supervisor deployment and
+issuer policy exactly match the anchor deployment retained with the live occurrence. The move-only
+transfer carries the anchor deployment, supervisor deployment, and policy identities alongside the
+already admitted endpoint and pidfd, allowing the root launcher to reject every one-axis manifest
+substitution before installing inherited descriptors.
+
 The coordinator grants no compiler, publication, loading, kernel-launch, or GPU authority. A
 non-root test can exercise inert parsing and lifecycle pieces, but only the ignored root
 qualification can authorize a real distinct-UID deployment claim.

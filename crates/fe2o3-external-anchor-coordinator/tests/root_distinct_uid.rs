@@ -43,7 +43,7 @@ fn real_distinct_uid_helper_daemon_exchange_and_restart() {
     )
     .unwrap();
 
-    let (deployment, provisioning, key_template, pinned) = manifests(
+    let (deployment, provisioning, key_template, pinned, supervisor, policy) = manifests(
         service_uid,
         service_gid,
         daemon_measurement,
@@ -65,7 +65,9 @@ fn real_distinct_uid_helper_daemon_exchange_and_restart() {
         ExternalAnchorProvisioningReadyDispositionV1::Initialized
     );
     first.validate_continuity().unwrap();
-    let transfer = first.try_clone_for_supervisor().unwrap();
+    let transfer = first
+        .try_clone_for_supervisor(&supervisor, &policy)
+        .unwrap();
     let (endpoint, pidfd) = transfer.into_ordered_descriptors();
     let pending = AnchoredStateV1::from_local_state(0, HashChainHeadV1::from_bytes([0; 32]))
         .prepare(TransactionDigestV1::from_bytes([0x42; 32]), &pinned)
@@ -85,7 +87,7 @@ fn real_distinct_uid_helper_daemon_exchange_and_restart() {
     first.shutdown().unwrap();
     assert!(state_root.path().join("anchor-state-v1").is_file());
 
-    let (_, _, second_key_template, _) = manifests(
+    let (_, _, second_key_template, _, _, _) = manifests(
         service_uid,
         service_gid,
         daemon_measurement,
@@ -131,6 +133,8 @@ fn manifests(
     CompilerExecutionExternalAnchorProvisioningV1,
     CompilerExecutionExternalAnchorSigningKeyCapabilityV1,
     PinnedAnchorKeyV1,
+    CompilerExecutionSupervisorDeploymentV1,
+    CompilerExecutionIssuerPolicyV1,
 ) {
     let mut seed = [0x37; 32];
     let signing = SigningKey::from_bytes(&seed);
@@ -162,7 +166,7 @@ fn manifests(
         &deployment,
     )
     .unwrap();
-    (deployment, provisioning, key, pinned)
+    (deployment, provisioning, key, pinned, supervisor, policy)
 }
 
 fn receive_exact(endpoint: &impl std::os::fd::AsFd, bytes: &mut [u8]) {
