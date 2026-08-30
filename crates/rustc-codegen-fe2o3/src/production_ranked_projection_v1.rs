@@ -10259,7 +10259,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
             maximum,
         }));
         let zero_is_excluded = self.zero_excluding_edge_dominates(local, use_block)?;
-        let mut result = match (result, zero_is_excluded) {
+        let result = match (result, zero_is_excluded) {
             (Some(mut range), true) => {
                 range.minimum = range.minimum.max(1);
                 Some(range)
@@ -10294,7 +10294,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
                     local,
                     use_block,
                     next_switch_block: 0,
-                    range,
+                    range: result,
                     can_reach_use,
                     stability_visited,
                     stability_pending,
@@ -28594,7 +28594,7 @@ mod tests {
         );
         let (inductions, _, _) = project_test_inductions(&function).unwrap();
         assert_eq!(inductions.len(), 1);
-        assert_eq!(inductions[0].step_value, 1);
+        assert_eq!(inductions[0].source_progress.step_value, 1);
     }
 
     #[test]
