@@ -7169,6 +7169,18 @@ impl PipelineScalarProjectorV1<'_> {
                     || induction.header == use_site.block
                     || induction.exit == use_site.block)
             {
+                let induction_local = induction.source_progress.induction.index() as usize;
+                if self
+                    .assertion_proofs
+                    .address_escaped
+                    .get(induction_local)
+                    .copied()
+                    != Some(false)
+                {
+                    return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                        "a cached pipeline induction has address-escaped value semantics",
+                    ));
+                }
                 return Ok(ProjectedPipelineScalarV1::Induction {
                     induction: induction_index,
                 });
@@ -8759,6 +8771,7 @@ fn source_induction_update_v1<'a>(
         left,
         local_definitions,
         assignment_sites,
+        &assertion_proofs.address_escaped,
         alias_work,
     )?;
     let right_origin = resolve_block_copy_alias_before_v1(
@@ -8767,6 +8780,7 @@ fn source_induction_update_v1<'a>(
         right,
         local_definitions,
         assignment_sites,
+        &assertion_proofs.address_escaped,
         alias_work,
     )?;
     let step = if left_origin == Some(induction) {
@@ -8851,6 +8865,7 @@ fn project_uniform_inductions_v1(
             left,
             local_definitions,
             &pure_uniform_definitions,
+            &pure_uniform_address_escaped,
             &mut alias_work,
         )?
         else {
@@ -9108,6 +9123,7 @@ fn reconcile_source_progress_and_emit_unsigned_casts_v1(
     let graph = projected_loop_cfg_graph_v1(function)?;
     let mut semantic_ranges = SemanticAssertProofsV1::new(types, function)?;
     let assignment_sites = semantic_ranges.assignments.clone();
+    let address_escaped = semantic_ranges.address_escaped.clone();
     let mut alias_work = 0_usize;
     for induction in inductions.iter() {
         let source = &induction.source_progress;
@@ -9149,6 +9165,7 @@ fn reconcile_source_progress_and_emit_unsigned_casts_v1(
             left,
             local_definitions,
             &assignment_sites,
+            &address_escaped,
             &mut alias_work,
         )?;
         if induction_type != source.induction_type
@@ -9355,6 +9372,7 @@ fn resolve_block_copy_alias_before_v1(
     operand: &SemanticOperandV1,
     local_definitions: &[u8],
     assignment_sites: &[Option<ScalarAssignmentSiteV1>],
+    address_escaped: &[bool],
     work: &mut usize,
 ) -> Result<Option<SemanticLocalIdV1>, ProductionRankedProjectionErrorV1> {
     resolve_block_copy_alias_before_with_limit_v1(
@@ -9363,6 +9381,7 @@ fn resolve_block_copy_alias_before_v1(
         operand,
         local_definitions,
         assignment_sites,
+        address_escaped,
         work,
         MAX_PROJECTED_CAPABILITY_DATAFLOW_WORK_V1,
     )
@@ -9375,6 +9394,7 @@ fn resolve_block_copy_alias_before_with_limit_v1(
     operand: &SemanticOperandV1,
     local_definitions: &[u8],
     assignment_sites: &[Option<ScalarAssignmentSiteV1>],
+    address_escaped: &[bool],
     work: &mut usize,
     work_limit: usize,
 ) -> Result<Option<SemanticLocalIdV1>, ProductionRankedProjectionErrorV1> {
@@ -9386,6 +9406,7 @@ fn resolve_block_copy_alias_before_with_limit_v1(
     if use_site.statement > block.statements().len()
         || local_definitions.len() != function.locals().len()
         || assignment_sites.len() != function.locals().len()
+        || address_escaped.len() != function.locals().len()
     {
         return Err(ProductionRankedProjectionErrorV1::Unsupported(
             "uniform induction alias tables or use site are inconsistent",
@@ -9406,6 +9427,11 @@ fn resolve_block_copy_alias_before_with_limit_v1(
             ));
         }
         let current_index = current.index() as usize;
+        if address_escaped.get(current_index).copied() != Some(false) {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a uniform induction alias has address-escaped value semantics",
+            ));
+        }
         if local_definitions.get(current_index).copied() != Some(1) {
             return Ok(Some(current));
         }
@@ -9613,6 +9639,100 @@ struct ScalarAssignmentSiteV1 {
     statement: usize,
 }
 
+enum AssertionRangeOperandTaskV1 {
+    Constant {
+        ty: SemanticTypeIdV1,
+        bits: Option<u128>,
+    },
+    Local(usize),
+    CheckedResult { local: usize },
+    Unsupported,
+}
+
+enum AssertionRangeExpressionTaskV1 {
+    Operand(AssertionRangeOperandTaskV1),
+    Binary {
+        operation: SemanticBinaryOpV1,
+        destination_maximum: Option<u128>,
+        left: AssertionRangeOperandTaskV1,
+        right: AssertionRangeOperandTaskV1,
+    },
+    Unsupported,
+}
+
+struct AssertionStrictUpperBoundStateV1 {
+    local: usize,
+    use_block: usize,
+    next_switch_block: usize,
+    range: Option<UnsignedRangeProofV1>,
+    can_reach_use: Vec<bool>,
+    stability_visited: Vec<usize>,
+    stability_pending: VecDeque<usize>,
+    stability_generation: usize,
+    proven_upper_bound: Option<u128>,
+}
+
+enum AssertionRangeFrameV1 {
+    Operand {
+        task: AssertionRangeOperandTaskV1,
+        use_site: ScalarAssignmentSiteV1,
+    },
+    FinishBinary {
+        operation: SemanticBinaryOpV1,
+        destination_maximum: Option<u128>,
+    },
+    FinishCheckedResult {
+        local: usize,
+    },
+    FinishLocalDefinition {
+        local: usize,
+        use_block: usize,
+        maximum: u128,
+    },
+    ContinueStrictUpperBound(AssertionStrictUpperBoundStateV1),
+    ApplyStrictUpperBoundCandidate {
+        state: AssertionStrictUpperBoundStateV1,
+        switch_block: usize,
+        true_target: usize,
+    },
+}
+
+fn push_assertion_range_frame_v1(
+    frames: &mut Vec<AssertionRangeFrameV1>,
+    frame: AssertionRangeFrameV1,
+) -> Result<(), ProductionRankedProjectionErrorV1> {
+    frames.try_reserve(1).map_err(|_| {
+        ProductionRankedProjectionErrorV1::Unsupported(
+            "assertion range evaluator frame storage cannot be reserved",
+        )
+    })?;
+    frames.push(frame);
+    Ok(())
+}
+
+fn push_assertion_range_value_v1(
+    values: &mut Vec<Option<UnsignedRangeProofV1>>,
+    value: Option<UnsignedRangeProofV1>,
+) -> Result<(), ProductionRankedProjectionErrorV1> {
+    values.try_reserve(1).map_err(|_| {
+        ProductionRankedProjectionErrorV1::Unsupported(
+            "assertion range evaluator value storage cannot be reserved",
+        )
+    })?;
+    values.push(value);
+    Ok(())
+}
+
+fn pop_assertion_range_value_v1(
+    values: &mut Vec<Option<UnsignedRangeProofV1>>,
+) -> Result<Option<UnsignedRangeProofV1>, ProductionRankedProjectionErrorV1> {
+    values
+        .pop()
+        .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+            "assertion range evaluator result stack is inconsistent",
+        ))
+}
+
 #[derive(Clone, Debug)]
 struct AuthenticatedCheckedBinaryValueV1 {
     local: usize,
@@ -9714,14 +9834,8 @@ impl<'a> SemanticAssertProofsV1<'a> {
                 proved[block_index] = true;
                 continue;
             }
-            let mut visiting = HashSet::new();
             proved[block_index] = proof
-                .range_of_operand(
-                    condition,
-                    block_index,
-                    block.statements().len(),
-                    &mut visiting,
-                )?
+                .range_at_operand(condition, block_index, block.statements().len())?
                 .is_some_and(|range| range.is_exact(u128::from(*expected)));
         }
         Ok(proved)
@@ -9781,11 +9895,8 @@ impl<'a> SemanticAssertProofsV1<'a> {
         {
             return Ok(false);
         }
-        let mut visiting = HashSet::new();
-        let left =
-            self.range_of_operand(checked.left(), site.block, site.statement, &mut visiting)?;
-        let right =
-            self.range_of_operand(checked.right(), site.block, site.statement, &mut visiting)?;
+        let left = self.range_at_operand(checked.left(), site.block, site.statement)?;
+        let right = self.range_at_operand(checked.right(), site.block, site.statement)?;
         let maximum = self.scalar_unsigned_maximum(checked.left().ty());
         Ok(Self::range_of_binary(checked_operation, left, right, maximum)?.is_some())
     }
@@ -9996,7 +10107,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
                 "a compiler-derived unsigned cast has a stale semantic use site",
             ));
         }
-        self.range_of_operand(operand, block, statement, &mut HashSet::new())
+        self.evaluate_assertion_range_operand_v1(operand, block, statement)
     }
 
     fn charge(&mut self, amount: usize) -> Result<(), ProductionRankedProjectionErrorV1> {
@@ -10028,152 +10139,117 @@ impl<'a> SemanticAssertProofsV1<'a> {
         }
     }
 
-    fn range_of_operand(
-        &mut self,
+    fn assertion_range_operand_task_v1(
         operand: &SemanticOperandV1,
-        use_block: usize,
-        use_statement: usize,
-        visiting: &mut HashSet<usize>,
-    ) -> Result<Option<UnsignedRangeProofV1>, ProductionRankedProjectionErrorV1> {
-        self.charge(1)?;
+    ) -> AssertionRangeOperandTaskV1 {
         match operand {
-            SemanticOperandV1::Constant(constant) => {
-                let Some(maximum) = self.scalar_unsigned_maximum(constant.ty()) else {
-                    return Ok(None);
-                };
-                let SemanticConstantValueV1::Scalar(value) = constant.value() else {
-                    return Ok(None);
-                };
-                (value.bits() <= maximum)
-                    .then_some(UnsignedRangeProofV1::exact(value.bits()))
-                    .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
-                        "an unsigned scalar constant exceeds its semantic type",
-                    ))
-                    .map(Some)
-            }
+            SemanticOperandV1::Constant(constant) => AssertionRangeOperandTaskV1::Constant {
+                ty: constant.ty(),
+                bits: match constant.value() {
+                    SemanticConstantValueV1::Scalar(value) => Some(value.bits()),
+                    _ => None,
+                },
+            },
             SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place) => {
                 if tuple_field_operand_local_v1(operand, 0).is_some() {
-                    return self.range_of_checked_result_value_v1(
-                        place.local().index() as usize,
-                        use_block,
-                        use_statement,
-                        visiting,
-                    );
+                    AssertionRangeOperandTaskV1::CheckedResult {
+                        local: place.local().index() as usize,
+                    }
+                } else if place.projections().is_empty() {
+                    AssertionRangeOperandTaskV1::Local(place.local().index() as usize)
+                } else {
+                    AssertionRangeOperandTaskV1::Unsupported
                 }
-                if !place.projections().is_empty() {
-                    return Ok(None);
-                }
-                self.range_of_local(
-                    place.local().index() as usize,
-                    use_block,
-                    use_statement,
-                    visiting,
-                )
             }
         }
     }
 
-    fn range_of_checked_result_value_v1(
-        &mut self,
-        local: usize,
-        use_block: usize,
-        use_statement: usize,
-        visiting: &mut HashSet<usize>,
-    ) -> Result<Option<UnsignedRangeProofV1>, ProductionRankedProjectionErrorV1> {
-        self.charge(1)?;
-        if self.definition_counts.get(local).copied() != Some(1)
-            || self.address_escaped.get(local).copied() != Some(false)
-            || !visiting.insert(local)
-        {
-            return Ok(None);
-        }
-        let result = (|| {
-            let Some(site) = self.assignments.get(local).copied().flatten() else {
-                return Ok(None);
-            };
-            if !self.assignment_dominates_use(site, use_block, use_statement)? {
-                return Ok(None);
+    fn assertion_range_expression_task_v1(
+        &self,
+        value: &fe2o3_mir_model::semantic_mir_v1::SemanticRvalueV1,
+    ) -> AssertionRangeExpressionTaskV1 {
+        let destination_maximum = self.scalar_unsigned_maximum(value.result_type());
+        match value.kind() {
+            SemanticRvalueKindV1::Use(operand) => AssertionRangeExpressionTaskV1::Operand(
+                Self::assertion_range_operand_task_v1(operand),
+            ),
+            SemanticRvalueKindV1::Cast {
+                kind: SemanticCastKindV1::Integer,
+                operand,
+            } if self
+                .unsigned_integer_bits(operand.ty())
+                .zip(self.unsigned_integer_bits(value.result_type()))
+                .is_some_and(|(source, destination)| destination >= source) =>
+            {
+                AssertionRangeExpressionTaskV1::Operand(Self::assertion_range_operand_task_v1(
+                    operand,
+                ))
             }
-            let SemanticStatementKindV1::Assign(assignment) =
-                self.function.blocks()[site.block].statements()[site.statement].kind()
-            else {
-                return Ok(None);
-            };
-            let SemanticRvalueKindV1::CheckedBinary(checked) = assignment.value().kind() else {
-                return Ok(None);
-            };
-            let operation = match checked.operation() {
-                SemanticCheckedBinaryOpV1::Add => SemanticBinaryOpV1::Add,
-                SemanticCheckedBinaryOpV1::Subtract => SemanticBinaryOpV1::Subtract,
-                SemanticCheckedBinaryOpV1::Multiply => SemanticBinaryOpV1::Multiply,
-            };
-            let left =
-                self.range_of_operand(checked.left(), site.block, site.statement, visiting)?;
-            let right =
-                self.range_of_operand(checked.right(), site.block, site.statement, visiting)?;
-            Self::range_of_binary(
+            SemanticRvalueKindV1::Binary {
                 operation,
                 left,
                 right,
-                self.scalar_unsigned_maximum(checked.left().ty()),
-            )
-        })();
-        visiting.remove(&local);
-        result
+            } => AssertionRangeExpressionTaskV1::Binary {
+                operation: *operation,
+                destination_maximum,
+                left: Self::assertion_range_operand_task_v1(left),
+                right: Self::assertion_range_operand_task_v1(right),
+            },
+            _ => AssertionRangeExpressionTaskV1::Unsupported,
+        }
     }
 
-    fn range_of_local(
+    fn schedule_assertion_range_operand_v1(
+        frames: &mut Vec<AssertionRangeFrameV1>,
+        task: AssertionRangeOperandTaskV1,
+        use_site: ScalarAssignmentSiteV1,
+    ) -> Result<(), ProductionRankedProjectionErrorV1> {
+        push_assertion_range_frame_v1(
+            frames,
+            AssertionRangeFrameV1::Operand { task, use_site },
+        )
+    }
+
+    fn schedule_assertion_range_expression_v1(
+        frames: &mut Vec<AssertionRangeFrameV1>,
+        values: &mut Vec<Option<UnsignedRangeProofV1>>,
+        task: AssertionRangeExpressionTaskV1,
+        use_site: ScalarAssignmentSiteV1,
+    ) -> Result<(), ProductionRankedProjectionErrorV1> {
+        match task {
+            AssertionRangeExpressionTaskV1::Operand(operand) => {
+                Self::schedule_assertion_range_operand_v1(frames, operand, use_site)
+            }
+            AssertionRangeExpressionTaskV1::Binary {
+                operation,
+                destination_maximum,
+                left,
+                right,
+            } => {
+                push_assertion_range_frame_v1(
+                    frames,
+                    AssertionRangeFrameV1::FinishBinary {
+                        operation,
+                        destination_maximum,
+                    },
+                )?;
+                Self::schedule_assertion_range_operand_v1(frames, right, use_site)?;
+                Self::schedule_assertion_range_operand_v1(frames, left, use_site)
+            }
+            AssertionRangeExpressionTaskV1::Unsupported => {
+                push_assertion_range_value_v1(values, None)
+            }
+        }
+    }
+
+    fn schedule_assertion_local_narrowing_v1(
         &mut self,
+        frames: &mut Vec<AssertionRangeFrameV1>,
         local: usize,
         use_block: usize,
-        use_statement: usize,
-        visiting: &mut HashSet<usize>,
-    ) -> Result<Option<UnsignedRangeProofV1>, ProductionRankedProjectionErrorV1> {
-        self.charge(1)?;
-        let Some(declaration) = self.function.locals().get(local) else {
-            return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                "an assertion proof local is outside the semantic local table",
-            ));
-        };
-        let Some(maximum) = self.scalar_unsigned_maximum(declaration.ty()) else {
-            return Ok(None);
-        };
-        if self.address_escaped.get(local).copied() != Some(false) {
-            return Ok(None);
-        }
-        if !visiting.insert(local) {
-            return Ok(None);
-        }
-        let result = match self.definition_counts.get(local).copied() {
-            Some(0) if matches!(declaration.role(), SemanticLocalRoleV1::Argument(_)) => {
-                let minimum = if self.zero_excluding_edge_dominates(local, use_block)? {
-                    1
-                } else {
-                    0
-                };
-                Some(UnsignedRangeProofV1 { minimum, maximum })
-            }
-            Some(1) => {
-                if let Some(site) = self.assignments.get(local).copied().flatten() {
-                    if self.assignment_dominates_use(site, use_block, use_statement)? {
-                        let SemanticStatementKindV1::Assign(assignment) =
-                            self.function.blocks()[site.block].statements()[site.statement].kind()
-                        else {
-                            visiting.remove(&local);
-                            return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                                "an indexed assertion proof assignment changed semantic kind",
-                            ));
-                        };
-                        self.range_of_rvalue(assignment.value(), site, visiting)?
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            }
-            Some(_) | None => None,
-        };
+        maximum: u128,
+        result: Option<UnsignedRangeProofV1>,
+    ) -> Result<(), ProductionRankedProjectionErrorV1> {
         // A live safe-Rust unsigned scalar always inhabits its declared bit
         // width even when exact single-definition reconstruction is
         // unavailable (for example, a loop-carried induction). This fallback
@@ -10194,64 +10270,473 @@ impl<'a> SemanticAssertProofsV1<'a> {
             }),
             (result, false) => result,
         };
-        if let Some(upper_bound) =
-            self.strict_unsigned_upper_bound_edge_dominates(local, use_block, visiting)?
-        {
-            result = Some(match result {
-                Some(mut range) => {
-                    range.maximum = range.maximum.min(upper_bound);
-                    range
-                }
-                None => UnsignedRangeProofV1 {
-                    minimum: 0,
-                    maximum: upper_bound,
+        let block_count = self.function.blocks().len();
+        let can_reach_use = self.blocks_reaching(use_block)?;
+        let mut stability_visited = Vec::new();
+        stability_visited
+            .try_reserve_exact(block_count)
+            .map_err(|_| {
+                ProductionRankedProjectionErrorV1::Unsupported(
+                    "assertion proof upper-bound stability storage cannot be reserved",
+                )
+            })?;
+        stability_visited.resize(block_count, 0_usize);
+        let mut stability_pending = VecDeque::new();
+        stability_pending.try_reserve(block_count).map_err(|_| {
+            ProductionRankedProjectionErrorV1::Unsupported(
+                "assertion proof upper-bound stability worklist cannot be reserved",
+            )
+        })?;
+        push_assertion_range_frame_v1(
+            frames,
+            AssertionRangeFrameV1::ContinueStrictUpperBound(
+                AssertionStrictUpperBoundStateV1 {
+                    local,
+                    use_block,
+                    next_switch_block: 0,
+                    range,
+                    can_reach_use,
+                    stability_visited,
+                    stability_pending,
+                    stability_generation: 0,
+                    proven_upper_bound: None,
                 },
-            });
-            if result.is_some_and(|range| range.minimum > range.maximum) {
-                result = None;
-            }
-        }
-        visiting.remove(&local);
-        Ok(result)
+            ),
+        )
     }
 
-    fn range_of_rvalue(
+    fn evaluate_assertion_range_operand_v1(
         &mut self,
-        value: &fe2o3_mir_model::semantic_mir_v1::SemanticRvalueV1,
-        site: ScalarAssignmentSiteV1,
-        visiting: &mut HashSet<usize>,
+        operand: &SemanticOperandV1,
+        use_block: usize,
+        use_statement: usize,
     ) -> Result<Option<UnsignedRangeProofV1>, ProductionRankedProjectionErrorV1> {
-        let destination_maximum = self.scalar_unsigned_maximum(value.result_type());
-        match value.kind() {
-            SemanticRvalueKindV1::Use(operand) => {
-                self.range_of_operand(operand, site.block, site.statement, visiting)
-            }
-            SemanticRvalueKindV1::Cast {
-                kind: SemanticCastKindV1::Integer,
-                operand,
-            } => {
-                let Some(source_bits) = self.unsigned_integer_bits(operand.ty()) else {
-                    return Ok(None);
-                };
-                let Some(destination_bits) = self.unsigned_integer_bits(value.result_type()) else {
-                    return Ok(None);
-                };
-                if destination_bits < source_bits {
-                    return Ok(None);
+        let mut frames = Vec::new();
+        let mut values = Vec::new();
+        let mut visiting = HashSet::new();
+        Self::schedule_assertion_range_operand_v1(
+            &mut frames,
+            Self::assertion_range_operand_task_v1(operand),
+            ScalarAssignmentSiteV1 {
+                block: use_block,
+                statement: use_statement,
+            },
+        )?;
+
+        while let Some(frame) = frames.pop() {
+            match frame {
+                AssertionRangeFrameV1::Operand { task, use_site } => {
+                    self.charge(1)?;
+                    match task {
+                        AssertionRangeOperandTaskV1::Constant { ty, bits } => {
+                            let Some(maximum) = self.scalar_unsigned_maximum(ty) else {
+                                push_assertion_range_value_v1(&mut values, None)?;
+                                continue;
+                            };
+                            let Some(bits) = bits else {
+                                push_assertion_range_value_v1(&mut values, None)?;
+                                continue;
+                            };
+                            let value = (bits <= maximum)
+                                .then_some(UnsignedRangeProofV1::exact(bits))
+                                .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+                                    "an unsigned scalar constant exceeds its semantic type",
+                                ))?;
+                            push_assertion_range_value_v1(&mut values, Some(value))?;
+                        }
+                        AssertionRangeOperandTaskV1::Unsupported => {
+                            push_assertion_range_value_v1(&mut values, None)?;
+                        }
+                        AssertionRangeOperandTaskV1::Local(local) => {
+                            self.charge(1)?;
+                            let (ty, is_argument) = self
+                                .function
+                                .locals()
+                                .get(local)
+                                .map(|declaration| {
+                                    (
+                                        declaration.ty(),
+                                        matches!(
+                                            declaration.role(),
+                                            SemanticLocalRoleV1::Argument(_)
+                                        ),
+                                    )
+                                })
+                                .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+                                    "an assertion proof local is outside the semantic local table",
+                                ))?;
+                            let Some(maximum) = self.scalar_unsigned_maximum(ty) else {
+                                push_assertion_range_value_v1(&mut values, None)?;
+                                continue;
+                            };
+                            if self.address_escaped.get(local).copied() != Some(false)
+                                || visiting.contains(&local)
+                            {
+                                push_assertion_range_value_v1(&mut values, None)?;
+                                continue;
+                            }
+                            visiting.try_reserve(1).map_err(|_| {
+                                ProductionRankedProjectionErrorV1::Unsupported(
+                                    "assertion range evaluator path storage cannot be reserved",
+                                )
+                            })?;
+                            visiting.insert(local);
+                            match self.definition_counts.get(local).copied() {
+                                Some(0) if is_argument => {
+                                    let minimum = if self
+                                        .zero_excluding_edge_dominates(local, use_site.block)?
+                                    {
+                                        1
+                                    } else {
+                                        0
+                                    };
+                                    self.schedule_assertion_local_narrowing_v1(
+                                        &mut frames,
+                                        local,
+                                        use_site.block,
+                                        maximum,
+                                        Some(UnsignedRangeProofV1 { minimum, maximum }),
+                                    )?;
+                                }
+                                Some(1) => {
+                                    let Some(site) =
+                                        self.assignments.get(local).copied().flatten()
+                                    else {
+                                        self.schedule_assertion_local_narrowing_v1(
+                                            &mut frames,
+                                            local,
+                                            use_site.block,
+                                            maximum,
+                                            None,
+                                        )?;
+                                        continue;
+                                    };
+                                    if !self.assignment_dominates_use(
+                                        site,
+                                        use_site.block,
+                                        use_site.statement,
+                                    )? {
+                                        self.schedule_assertion_local_narrowing_v1(
+                                            &mut frames,
+                                            local,
+                                            use_site.block,
+                                            maximum,
+                                            None,
+                                        )?;
+                                        continue;
+                                    }
+                                    let SemanticStatementKindV1::Assign(assignment) = self.function
+                                        .blocks()[site.block]
+                                        .statements()[site.statement]
+                                        .kind()
+                                    else {
+                                        return Err(
+                                            ProductionRankedProjectionErrorV1::Unsupported(
+                                                "an indexed assertion proof assignment changed semantic kind",
+                                            ),
+                                        );
+                                    };
+                                    let expression =
+                                        self.assertion_range_expression_task_v1(assignment.value());
+                                    push_assertion_range_frame_v1(
+                                        &mut frames,
+                                        AssertionRangeFrameV1::FinishLocalDefinition {
+                                            local,
+                                            use_block: use_site.block,
+                                            maximum,
+                                        },
+                                    )?;
+                                    Self::schedule_assertion_range_expression_v1(
+                                        &mut frames,
+                                        &mut values,
+                                        expression,
+                                        site,
+                                    )?;
+                                }
+                                Some(_) | None => {
+                                    self.schedule_assertion_local_narrowing_v1(
+                                        &mut frames,
+                                        local,
+                                        use_site.block,
+                                        maximum,
+                                        None,
+                                    )?;
+                                }
+                            }
+                        }
+                        AssertionRangeOperandTaskV1::CheckedResult { local } => {
+                            self.charge(1)?;
+                            if self.definition_counts.get(local).copied() != Some(1)
+                                || self.address_escaped.get(local).copied() != Some(false)
+                                || visiting.contains(&local)
+                            {
+                                push_assertion_range_value_v1(&mut values, None)?;
+                                continue;
+                            }
+                            visiting.try_reserve(1).map_err(|_| {
+                                ProductionRankedProjectionErrorV1::Unsupported(
+                                    "assertion range evaluator path storage cannot be reserved",
+                                )
+                            })?;
+                            visiting.insert(local);
+                            let Some(site) = self.assignments.get(local).copied().flatten() else {
+                                visiting.remove(&local);
+                                push_assertion_range_value_v1(&mut values, None)?;
+                                continue;
+                            };
+                            if !self.assignment_dominates_use(
+                                site,
+                                use_site.block,
+                                use_site.statement,
+                            )? {
+                                visiting.remove(&local);
+                                push_assertion_range_value_v1(&mut values, None)?;
+                                continue;
+                            }
+                            let SemanticStatementKindV1::Assign(assignment) = self.function.blocks()
+                                [site.block]
+                                .statements()[site.statement]
+                                .kind()
+                            else {
+                                visiting.remove(&local);
+                                push_assertion_range_value_v1(&mut values, None)?;
+                                continue;
+                            };
+                            let SemanticRvalueKindV1::CheckedBinary(checked) =
+                                assignment.value().kind()
+                            else {
+                                visiting.remove(&local);
+                                push_assertion_range_value_v1(&mut values, None)?;
+                                continue;
+                            };
+                            let operation = match checked.operation() {
+                                SemanticCheckedBinaryOpV1::Add => SemanticBinaryOpV1::Add,
+                                SemanticCheckedBinaryOpV1::Subtract => SemanticBinaryOpV1::Subtract,
+                                SemanticCheckedBinaryOpV1::Multiply => SemanticBinaryOpV1::Multiply,
+                            };
+                            let expression = AssertionRangeExpressionTaskV1::Binary {
+                                operation,
+                                destination_maximum: self
+                                    .scalar_unsigned_maximum(checked.left().ty()),
+                                left: Self::assertion_range_operand_task_v1(checked.left()),
+                                right: Self::assertion_range_operand_task_v1(checked.right()),
+                            };
+                            push_assertion_range_frame_v1(
+                                &mut frames,
+                                AssertionRangeFrameV1::FinishCheckedResult { local },
+                            )?;
+                            Self::schedule_assertion_range_expression_v1(
+                                &mut frames,
+                                &mut values,
+                                expression,
+                                site,
+                            )?;
+                        }
+                    }
                 }
-                self.range_of_operand(operand, site.block, site.statement, visiting)
+                AssertionRangeFrameV1::FinishBinary {
+                    operation,
+                    destination_maximum,
+                } => {
+                    let right = pop_assertion_range_value_v1(&mut values)?;
+                    let left = pop_assertion_range_value_v1(&mut values)?;
+                    let result =
+                        Self::range_of_binary(operation, left, right, destination_maximum)?;
+                    push_assertion_range_value_v1(&mut values, result)?;
+                }
+                AssertionRangeFrameV1::FinishCheckedResult { local } => {
+                    visiting.remove(&local);
+                }
+                AssertionRangeFrameV1::FinishLocalDefinition {
+                    local,
+                    use_block,
+                    maximum,
+                } => {
+                    let result = pop_assertion_range_value_v1(&mut values)?;
+                    self.schedule_assertion_local_narrowing_v1(
+                        &mut frames,
+                        local,
+                        use_block,
+                        maximum,
+                        result,
+                    )?;
+                }
+                AssertionRangeFrameV1::ContinueStrictUpperBound(mut state) => {
+                    let mut scheduled = None;
+                    while state.next_switch_block < self.function.blocks().len() {
+                        let switch_block = state.next_switch_block;
+                        state.next_switch_block += 1;
+                        self.charge(1)?;
+                        let Some((condition_local, true_target, statement_count)) = (|| {
+                            let block = &self.function.blocks()[switch_block];
+                            let SemanticTerminatorKindV1::SwitchInt {
+                                discriminant,
+                                targets,
+                            } = block.terminator().kind()
+                            else {
+                                return None;
+                            };
+                            if targets.values().len() != 1 || targets.values()[0].value() != 0 {
+                                return None;
+                            }
+                            let false_target =
+                                targets.values()[0].edge().target().index() as usize;
+                            let true_target = targets.otherwise().target().index() as usize;
+                            if false_target == true_target {
+                                return None;
+                            }
+                            Some((
+                                simple_operand_local(discriminant)?.index() as usize,
+                                true_target,
+                                block.statements().len(),
+                            ))
+                        })() else {
+                            continue;
+                        };
+                        if self.definition_counts.get(condition_local).copied() != Some(1)
+                            || self.address_escaped.get(condition_local).copied() != Some(false)
+                        {
+                            continue;
+                        }
+                        let Some(site) =
+                            self.assignments.get(condition_local).copied().flatten()
+                        else {
+                            continue;
+                        };
+                        if site.block != switch_block
+                            || !self.assignment_dominates_use(
+                                site,
+                                switch_block,
+                                statement_count,
+                            )?
+                        {
+                            continue;
+                        }
+                        let Some((left_local, right)) = (|| {
+                            let SemanticStatementKindV1::Assign(assignment) = self.function.blocks()
+                                [site.block]
+                                .statements()[site.statement]
+                                .kind()
+                            else {
+                                return None;
+                            };
+                            let SemanticRvalueKindV1::Binary {
+                                operation: SemanticBinaryOpV1::LessThan,
+                                left,
+                                right,
+                            } = assignment.value().kind()
+                            else {
+                                return None;
+                            };
+                            Some((
+                                simple_operand_local(left)?.index() as usize,
+                                Self::assertion_range_operand_task_v1(right),
+                            ))
+                        })() else {
+                            continue;
+                        };
+                        if !self.local_is_value_preserving_alias_of(
+                            left_local,
+                            state.local,
+                            site.block,
+                            site.statement,
+                        )? || self.block_defines_local(switch_block, state.local)
+                        {
+                            continue;
+                        }
+                        scheduled = Some((
+                            right,
+                            site,
+                            switch_block,
+                            true_target,
+                        ));
+                        break;
+                    }
+                    if let Some((task, site, switch_block, true_target)) = scheduled {
+                        push_assertion_range_frame_v1(
+                            &mut frames,
+                            AssertionRangeFrameV1::ApplyStrictUpperBoundCandidate {
+                                state,
+                                switch_block,
+                                true_target,
+                            },
+                        )?;
+                        Self::schedule_assertion_range_operand_v1(&mut frames, task, site)?;
+                    } else {
+                        if let Some(upper_bound) = state.proven_upper_bound {
+                            state.range = Some(match state.range {
+                                Some(mut range) => {
+                                    range.maximum = range.maximum.min(upper_bound);
+                                    range
+                                }
+                                None => UnsignedRangeProofV1 {
+                                    minimum: 0,
+                                    maximum: upper_bound,
+                                },
+                            });
+                            if state
+                                .range
+                                .is_some_and(|range| range.minimum > range.maximum)
+                            {
+                                state.range = None;
+                            }
+                        }
+                        visiting.remove(&state.local);
+                        push_assertion_range_value_v1(&mut values, state.range)?;
+                    }
+                }
+                AssertionRangeFrameV1::ApplyStrictUpperBoundCandidate {
+                    mut state,
+                    switch_block,
+                    true_target,
+                } => {
+                    let bound = pop_assertion_range_value_v1(&mut values)?;
+                    if let Some(candidate) = bound.and_then(|bound| bound.maximum.checked_sub(1)) {
+                        state.stability_generation = state
+                            .stability_generation
+                            .checked_add(1)
+                            .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+                                "assertion proof upper-bound stability generation overflowed",
+                            ))?;
+                        if self.local_is_stable_between_edge_and_use(
+                            state.local,
+                            true_target,
+                            state.use_block,
+                            &state.can_reach_use,
+                            &mut state.stability_visited,
+                            &mut state.stability_pending,
+                            state.stability_generation,
+                        )? {
+                            let mut edge = HashSet::new();
+                            edge.try_reserve(1).map_err(|_| {
+                                ProductionRankedProjectionErrorV1::Unsupported(
+                                    "assertion proof upper-bound edge storage cannot be reserved",
+                                )
+                            })?;
+                            edge.insert((switch_block, true_target));
+                            if self.edge_set_dominates(&edge, state.use_block)? {
+                                state.proven_upper_bound = Some(
+                                    state
+                                        .proven_upper_bound
+                                        .map_or(candidate, |current| current.min(candidate)),
+                                );
+                            }
+                        }
+                    }
+                    push_assertion_range_frame_v1(
+                        &mut frames,
+                        AssertionRangeFrameV1::ContinueStrictUpperBound(state),
+                    )?;
+                }
             }
-            SemanticRvalueKindV1::Binary {
-                operation,
-                left,
-                right,
-            } => {
-                let left = self.range_of_operand(left, site.block, site.statement, visiting)?;
-                let right = self.range_of_operand(right, site.block, site.statement, visiting)?;
-                Self::range_of_binary(*operation, left, right, destination_maximum)
-            }
-            _ => Ok(None),
         }
+
+        if !visiting.is_empty() || values.len() != 1 {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "assertion range evaluator did not finish with one exact result",
+            ));
+        }
+        pop_assertion_range_value_v1(&mut values)
     }
 
     fn range_of_binary(
@@ -10479,132 +10964,6 @@ impl<'a> SemanticAssertProofsV1<'a> {
         let result = self.edge_set_dominates(&excluding_edges, use_block)?;
         insert_assertion_proof_cache(&mut self.zero_exclusion, (local, use_block), result)?;
         Ok(result)
-    }
-
-    fn strict_unsigned_upper_bound_edge_dominates(
-        &mut self,
-        local: usize,
-        use_block: usize,
-        range_visiting: &mut HashSet<usize>,
-    ) -> Result<Option<u128>, ProductionRankedProjectionErrorV1> {
-        let block_count = self.function.blocks().len();
-        let can_reach_use = self.blocks_reaching(use_block)?;
-        let mut stability_visited = Vec::new();
-        stability_visited
-            .try_reserve_exact(block_count)
-            .map_err(|_| {
-                ProductionRankedProjectionErrorV1::Unsupported(
-                    "assertion proof upper-bound stability storage cannot be reserved",
-                )
-            })?;
-        stability_visited.resize(block_count, 0_usize);
-        let mut stability_pending = VecDeque::new();
-        stability_pending.try_reserve(block_count).map_err(|_| {
-            ProductionRankedProjectionErrorV1::Unsupported(
-                "assertion proof upper-bound stability worklist cannot be reserved",
-            )
-        })?;
-        let mut stability_generation = 0_usize;
-        let mut proven_upper_bound = None;
-        for (switch_block, block) in self.function.blocks().iter().enumerate() {
-            self.charge(1)?;
-            let SemanticTerminatorKindV1::SwitchInt {
-                discriminant,
-                targets,
-            } = block.terminator().kind()
-            else {
-                continue;
-            };
-            if targets.values().len() != 1 || targets.values()[0].value() != 0 {
-                continue;
-            }
-            let false_target = targets.values()[0].edge().target().index() as usize;
-            let true_target = targets.otherwise().target().index() as usize;
-            if false_target == true_target {
-                continue;
-            }
-            let Some(condition_local) =
-                simple_operand_local(discriminant).map(|value| value.index() as usize)
-            else {
-                continue;
-            };
-            if self.definition_counts.get(condition_local).copied() != Some(1)
-                || self.address_escaped.get(condition_local).copied() != Some(false)
-            {
-                continue;
-            }
-            let Some(site) = self.assignments.get(condition_local).copied().flatten() else {
-                continue;
-            };
-            if site.block != switch_block
-                || !self.assignment_dominates_use(site, switch_block, block.statements().len())?
-            {
-                continue;
-            }
-            let SemanticStatementKindV1::Assign(assignment) =
-                self.function.blocks()[site.block].statements()[site.statement].kind()
-            else {
-                continue;
-            };
-            let SemanticRvalueKindV1::Binary {
-                operation: SemanticBinaryOpV1::LessThan,
-                left,
-                right,
-            } = assignment.value().kind()
-            else {
-                continue;
-            };
-            let Some(left_local) = simple_operand_local(left).map(|value| value.index() as usize)
-            else {
-                continue;
-            };
-            if !self.local_is_value_preserving_alias_of(
-                left_local,
-                local,
-                site.block,
-                site.statement,
-            )? || self.block_defines_local(switch_block, local)
-            {
-                continue;
-            }
-            let Some(bound) =
-                self.range_of_operand(right, site.block, site.statement, range_visiting)?
-            else {
-                continue;
-            };
-            let Some(candidate) = bound.maximum.checked_sub(1) else {
-                continue;
-            };
-            stability_generation = stability_generation.checked_add(1).ok_or(
-                ProductionRankedProjectionErrorV1::Unsupported(
-                    "assertion proof upper-bound stability generation overflowed",
-                ),
-            )?;
-            if !self.local_is_stable_between_edge_and_use(
-                local,
-                true_target,
-                use_block,
-                &can_reach_use,
-                &mut stability_visited,
-                &mut stability_pending,
-                stability_generation,
-            )? {
-                continue;
-            }
-            let mut edge = HashSet::new();
-            edge.try_reserve(1).map_err(|_| {
-                ProductionRankedProjectionErrorV1::Unsupported(
-                    "assertion proof upper-bound edge storage cannot be reserved",
-                )
-            })?;
-            edge.insert((switch_block, true_target));
-            if self.edge_set_dominates(&edge, use_block)? {
-                proven_upper_bound = Some(
-                    proven_upper_bound.map_or(candidate, |current: u128| current.min(candidate)),
-                );
-            }
-        }
-        Ok(proven_upper_bound)
     }
 
     fn blocks_reaching(
@@ -15836,8 +16195,9 @@ fn constant_locals(function: &SemanticFunctionDeclV1) -> Vec<Option<u64>> {
     }
     let mut states = vec![0_u8; definitions.len()];
     let mut values = vec![None; definitions.len()];
+    let mut path = Vec::with_capacity(definitions.len());
     for index in 0..definitions.len() {
-        resolve_constant(index, &definitions, &mut states, &mut values);
+        resolve_constant_iterative(index, &definitions, &mut states, &mut values, &mut path);
     }
     values
 }
@@ -15901,28 +16261,50 @@ fn record_constant_definition(
     }
 }
 
-fn resolve_constant(
+fn resolve_constant_iterative(
     index: usize,
     definitions: &[ConstantDefinitionV1],
     states: &mut [u8],
     values: &mut [Option<u64>],
+    path: &mut Vec<usize>,
 ) -> Option<u64> {
     match states.get(index).copied() {
         Some(2) => return values[index],
         Some(1) | None => return None,
         Some(_) => {}
     }
-    states[index] = 1;
-    let value = match definitions[index] {
-        ConstantDefinitionV1::Direct(value) => Some(value),
-        ConstantDefinitionV1::Alias(local) => {
-            resolve_constant(local.index() as usize, definitions, states, values)
+
+    path.clear();
+    let mut current = index;
+    // Constant aliases form a functional graph. Retain one reusable heap path
+    // so every traversed node can be finalized without recursive call depth.
+    loop {
+        match states.get(current).copied() {
+            Some(2) | Some(1) | None => break,
+            Some(_) => {}
         }
-        ConstantDefinitionV1::Missing | ConstantDefinitionV1::Invalid => None,
-    };
-    states[index] = 2;
-    values[index] = value;
-    value
+        states[current] = 1;
+        path.push(current);
+        match definitions[current] {
+            ConstantDefinitionV1::Direct(_) => break,
+            ConstantDefinitionV1::Alias(local) => current = local.index() as usize,
+            ConstantDefinitionV1::Missing | ConstantDefinitionV1::Invalid => break,
+        }
+    }
+
+    for current in path.drain(..).rev() {
+        let resolved = match definitions[current] {
+            ConstantDefinitionV1::Direct(value) => Some(value),
+            ConstantDefinitionV1::Alias(local) => values
+                .get(local.index() as usize)
+                .copied()
+                .flatten(),
+            ConstantDefinitionV1::Missing | ConstantDefinitionV1::Invalid => None,
+        };
+        states[current] = 2;
+        values[current] = resolved;
+    }
+    values[index]
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -20364,8 +20746,15 @@ mod tests {
         ];
         let mut states = [0; 3];
         let mut values = [None; 3];
+        let mut path = Vec::new();
         assert_eq!(
-            resolve_constant(2, &definitions, &mut states, &mut values),
+            resolve_constant_iterative(
+                2,
+                &definitions,
+                &mut states,
+                &mut values,
+                &mut path,
+            ),
             Some(64),
         );
         assert_eq!(values, [Some(64); 3]);
@@ -20380,7 +20769,11 @@ mod tests {
         ];
         let mut states = [0; 2];
         let mut values = [None; 2];
-        assert_eq!(resolve_constant(0, &cycle, &mut states, &mut values), None,);
+        let mut path = Vec::new();
+        assert_eq!(
+            resolve_constant_iterative(0, &cycle, &mut states, &mut values, &mut path),
+            None,
+        );
 
         let mut definitions = [ConstantDefinitionV1::Missing];
         record_constant_definition(
@@ -25241,6 +25634,149 @@ mod tests {
         )
     }
 
+    #[derive(Clone, Copy)]
+    enum EscapedUniformAliasV1 {
+        None,
+        Induction,
+        Comparison,
+        Update,
+    }
+
+    fn escaped_uniform_induction_alias_function(
+        escaped: EscapedUniformAliasV1,
+    ) -> SemanticFunctionDeclV1 {
+        let place = |local, ty| {
+            SemanticPlaceV1::new(SemanticLocalIdV1::from_index(local), vec![], ty).unwrap()
+        };
+        let operand = |local, ty| SemanticOperandV1::Copy(place(local, ty));
+        let assign = |destination, ty, value| {
+            statement(SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+                place(destination, ty),
+                SemanticRvalueV1::new(ty, value),
+            )))
+        };
+        let borrow = |source| {
+            assign(
+                6,
+                POINTER_TYPE,
+                SemanticRvalueKindV1::Borrow {
+                    kind: SemanticBorrowKindV1::Mutable,
+                    place: place(source, SCALAR_TYPE),
+                },
+            )
+        };
+        let through_pointer = SemanticPlaceV1::new(
+            SemanticLocalIdV1::from_index(6),
+            vec![
+                SemanticProjectionV1::new(
+                    SemanticProjectionKindV1::Dereference,
+                    SCALAR_TYPE,
+                )
+                .unwrap(),
+            ],
+            SCALAR_TYPE,
+        )
+        .unwrap();
+        let indirect_write = || {
+            statement(SemanticStatementKindV1::Store(SemanticMemoryStoreV1::new(
+                through_pointer.clone(),
+                constant(0),
+                SemanticVolatilityV1::NonVolatile,
+                None,
+            )))
+        };
+        let mut entry = vec![assign(
+            1,
+            SCALAR_TYPE,
+            SemanticRvalueKindV1::Use(constant(0)),
+        )];
+        if matches!(escaped, EscapedUniformAliasV1::Induction) {
+            entry.push(borrow(1));
+            entry.push(indirect_write());
+        }
+        let mut header = vec![assign(
+            4,
+            SCALAR_TYPE,
+            SemanticRvalueKindV1::Use(operand(1, SCALAR_TYPE)),
+        )];
+        if matches!(escaped, EscapedUniformAliasV1::Comparison) {
+            header.push(borrow(4));
+            header.push(indirect_write());
+        }
+        header.push(assign(
+            2,
+            SCALAR_TYPE,
+            SemanticRvalueKindV1::Binary {
+                operation: SemanticBinaryOpV1::LessThan,
+                left: operand(4, SCALAR_TYPE),
+                right: operand(3, SCALAR_TYPE),
+            },
+        ));
+        let mut latch = vec![assign(
+            5,
+            SCALAR_TYPE,
+            SemanticRvalueKindV1::Use(operand(1, SCALAR_TYPE)),
+        )];
+        if matches!(escaped, EscapedUniformAliasV1::Update) {
+            latch.push(borrow(5));
+            latch.push(indirect_write());
+        }
+        latch.push(assign(
+            1,
+            SCALAR_TYPE,
+            SemanticRvalueKindV1::Binary {
+                operation: SemanticBinaryOpV1::Add,
+                left: operand(5, SCALAR_TYPE),
+                right: constant(1),
+            },
+        ));
+
+        projection_function_with_locals(
+            vec![
+                block(
+                    104,
+                    entry,
+                    SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 1)),
+                ),
+                block(
+                    105,
+                    header,
+                    SemanticTerminatorKindV1::SwitchInt {
+                        discriminant: operand(2, SCALAR_TYPE),
+                        targets: SemanticSwitchTargetsV1::new(
+                            vec![SemanticSwitchTargetV1::new(
+                                0,
+                                cfg_edge(SemanticEdgeRoleV1::SwitchValue, 4),
+                            )],
+                            cfg_edge(SemanticEdgeRoleV1::SwitchOtherwise, 2),
+                        )
+                        .unwrap(),
+                    },
+                ),
+                block(
+                    106,
+                    vec![],
+                    SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 3)),
+                ),
+                block(
+                    107,
+                    latch,
+                    SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 1)),
+                ),
+                block(108, vec![], SemanticTerminatorKindV1::Return),
+            ],
+            vec![
+                local(104, SCALAR_TYPE, SemanticLocalRoleV1::Return),
+                local(105, SCALAR_TYPE, SemanticLocalRoleV1::Temporary),
+                local(106, SCALAR_TYPE, SemanticLocalRoleV1::Temporary),
+                local(107, SCALAR_TYPE, SemanticLocalRoleV1::Argument(0)),
+                local(108, SCALAR_TYPE, SemanticLocalRoleV1::Temporary),
+                local(109, SCALAR_TYPE, SemanticLocalRoleV1::Temporary),
+                local(110, POINTER_TYPE, SemanticLocalRoleV1::Temporary),
+            ],
+        )
+    }
+
     fn derived_uniform_induction_bound_function(
         widen_before_add: bool,
         escape_argument: bool,
@@ -27665,6 +28201,41 @@ mod tests {
     }
 
     #[test]
+    fn address_escaped_induction_and_aliases_fail_closed_at_production_entry() {
+        for escaped in [
+            EscapedUniformAliasV1::Induction,
+            EscapedUniformAliasV1::Comparison,
+            EscapedUniformAliasV1::Update,
+        ] {
+            let function = escaped_uniform_induction_alias_function(escaped);
+            assert_incomplete(
+                project_test_inductions(&function),
+                "a uniform induction alias has address-escaped value semantics",
+            );
+        }
+    }
+
+    #[test]
+    fn cached_pipeline_induction_reauthenticates_address_custody() {
+        let safe = escaped_uniform_induction_alias_function(EscapedUniformAliasV1::None);
+        let (inductions, _, _) = project_test_inductions(&safe).unwrap();
+        assert_eq!(inductions.len(), 1);
+
+        let escaped =
+            escaped_uniform_induction_alias_function(EscapedUniformAliasV1::Induction);
+        assert_incomplete(
+            project_pipeline_operand_at(
+                &projection_types(),
+                &escaped,
+                2,
+                &typed_operand(1, SCALAR_TYPE),
+                &inductions,
+            ),
+            "a cached pipeline induction has address-escaped value semantics",
+        );
+    }
+
+    #[test]
     fn multi_block_induction_threads_ssa_and_preserves_body_effects() {
         let function = multi_block_induction_function(
             InductionCfgShape::Chain,
@@ -27776,27 +28347,228 @@ mod tests {
     #[test]
     fn assertion_alias_production_path_handles_a_long_chain_without_recursion() {
         let alias_count = 32_768_usize;
-        let (statements, locals) = linear_scalar_alias_chain_v1(alias_count, U64_TYPE);
-        let discriminant = u32::try_from(alias_count + 1).unwrap();
+        let mut statements = vec![typed_assignment(
+            1,
+            BOOL_TYPE,
+            SemanticRvalueKindV1::Use(typed_constant(BOOL_TYPE, 1, 1)),
+        )];
+        let mut locals = vec![
+            local(0, BOOL_TYPE, SemanticLocalRoleV1::Return),
+            local(1, BOOL_TYPE, SemanticLocalRoleV1::Temporary),
+        ];
+        for offset in 0..alias_count {
+            let destination = u32::try_from(offset + 2).unwrap();
+            let source = u32::try_from(offset + 1).unwrap();
+            statements.push(typed_assignment(
+                destination,
+                BOOL_TYPE,
+                SemanticRvalueKindV1::Use(typed_operand(source, BOOL_TYPE)),
+            ));
+            locals.push(local(
+                u8::try_from((offset + 2) % 255).unwrap(),
+                BOOL_TYPE,
+                SemanticLocalRoleV1::Temporary,
+            ));
+        }
+        let terminal = u32::try_from(alias_count + 1).unwrap();
         let function = projection_function_with_locals(
             vec![
-                block(207, statements, zero_switch(discriminant, U64_TYPE, 2, 1)),
+                block(
+                    207,
+                    statements,
+                    SemanticTerminatorKindV1::Assert {
+                        condition: typed_operand(terminal, BOOL_TYPE),
+                        expected: true,
+                        message: SemanticAssertMessageV1::DivisionByZero(typed_constant(
+                            U64_TYPE, 1, 8,
+                        )),
+                        target: cfg_edge(SemanticEdgeRoleV1::AssertSuccess, 1),
+                        unwind: SemanticUnwindActionV1::Unreachable,
+                    },
+                ),
                 block(208, vec![], SemanticTerminatorKindV1::Return),
-                block(209, vec![], SemanticTerminatorKindV1::Return),
             ],
             locals,
         );
         let types = assertion_proof_types();
-        let mut proof = SemanticAssertProofsV1::new(&types, &function).unwrap();
-        assert_eq!(
-            proof
-                .range_at_operand(&typed_operand(1, U64_TYPE), 1, 0)
+        assert!(SemanticAssertProofsV1::analyze(&types, &function).unwrap()[0]);
+    }
+
+    #[test]
+    fn checked_result_range_production_path_handles_a_deep_expression_graph() {
+        let depth = 16_384_usize;
+        let checked_field = |local: u32| {
+            SemanticOperandV1::Copy(
+                SemanticPlaceV1::new(
+                    SemanticLocalIdV1::from_index(local),
+                    vec![
+                        SemanticProjectionV1::new(
+                            SemanticProjectionKindV1::Field(0),
+                            U64_TYPE,
+                        )
+                        .unwrap(),
+                    ],
+                    U64_TYPE,
+                )
                 .unwrap(),
-            Some(UnsignedRangeProofV1 {
-                minimum: 1,
-                maximum: u128::from(u64::MAX),
-            })
+            )
+        };
+        let mut statements = vec![typed_assignment(
+            1,
+            U64_TYPE,
+            SemanticRvalueKindV1::Use(typed_constant(U64_TYPE, 0, 8)),
+        )];
+        let mut locals = vec![
+            local(0, U64_TYPE, SemanticLocalRoleV1::Return),
+            local(1, U64_TYPE, SemanticLocalRoleV1::Temporary),
+        ];
+        for offset in 0..depth {
+            let destination = u32::try_from(offset + 2).unwrap();
+            let left = if offset == 0 {
+                typed_operand(1, U64_TYPE)
+            } else {
+                checked_field(destination - 1)
+            };
+            statements.push(typed_assignment(
+                destination,
+                CHECKED_U64_TYPE,
+                SemanticRvalueKindV1::CheckedBinary(SemanticCheckedBinaryRvalueV1::new(
+                    SemanticCheckedBinaryOpV1::Add,
+                    left,
+                    typed_constant(U64_TYPE, 0, 8),
+                )),
+            ));
+            locals.push(local(
+                u8::try_from((offset + 2) % 255).unwrap(),
+                CHECKED_U64_TYPE,
+                SemanticLocalRoleV1::Temporary,
+            ));
+        }
+        let predicate = u32::try_from(depth + 2).unwrap();
+        statements.push(typed_assignment(
+            predicate,
+            BOOL_TYPE,
+            SemanticRvalueKindV1::Binary {
+                operation: SemanticBinaryOpV1::Equal,
+                left: checked_field(predicate - 1),
+                right: typed_constant(U64_TYPE, 0, 8),
+            },
+        ));
+        locals.push(local(
+            209,
+            BOOL_TYPE,
+            SemanticLocalRoleV1::Temporary,
+        ));
+        let function = projection_function_with_locals(
+            vec![
+                block(
+                    209,
+                    statements,
+                    SemanticTerminatorKindV1::Assert {
+                        condition: typed_operand(predicate, BOOL_TYPE),
+                        expected: true,
+                        message: SemanticAssertMessageV1::DivisionByZero(typed_constant(
+                            U64_TYPE, 1, 8,
+                        )),
+                        target: cfg_edge(SemanticEdgeRoleV1::AssertSuccess, 1),
+                        unwind: SemanticUnwindActionV1::Unreachable,
+                    },
+                ),
+                block(210, vec![], SemanticTerminatorKindV1::Return),
+            ],
+            locals,
         );
+        let types = assertion_proof_types();
+        assert!(SemanticAssertProofsV1::analyze(&types, &function).unwrap()[0]);
+    }
+
+    #[test]
+    fn reverse_numbered_constant_chain_reaches_uniform_induction_production_entry() {
+        let alias_count = 32_768_usize;
+        let first_alias = 4_u32;
+        let terminal = first_alias + u32::try_from(alias_count).unwrap();
+        let mut entry = vec![
+            typed_assignment(
+                1,
+                SCALAR_TYPE,
+                SemanticRvalueKindV1::Use(constant(0)),
+            ),
+            typed_assignment(
+                terminal,
+                SCALAR_TYPE,
+                SemanticRvalueKindV1::Use(constant(1)),
+            ),
+        ];
+        for destination in (first_alias..terminal).rev() {
+            entry.push(typed_assignment(
+                destination,
+                SCALAR_TYPE,
+                SemanticRvalueKindV1::Use(typed_operand(destination + 1, SCALAR_TYPE)),
+            ));
+        }
+        let mut locals = vec![
+            local(0, SCALAR_TYPE, SemanticLocalRoleV1::Return),
+            local(1, SCALAR_TYPE, SemanticLocalRoleV1::Temporary),
+            local(2, SCALAR_TYPE, SemanticLocalRoleV1::Temporary),
+            local(3, SCALAR_TYPE, SemanticLocalRoleV1::Argument(0)),
+        ];
+        for local_index in first_alias..=terminal {
+            locals.push(local(
+                u8::try_from(local_index % 255).unwrap(),
+                SCALAR_TYPE,
+                SemanticLocalRoleV1::Temporary,
+            ));
+        }
+        let function = projection_function_with_locals(
+            vec![
+                block(
+                    211,
+                    entry,
+                    SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 1)),
+                ),
+                block(
+                    212,
+                    vec![typed_assignment(
+                        2,
+                        SCALAR_TYPE,
+                        SemanticRvalueKindV1::Binary {
+                            operation: SemanticBinaryOpV1::LessThan,
+                            left: typed_operand(1, SCALAR_TYPE),
+                            right: typed_operand(3, SCALAR_TYPE),
+                        },
+                    )],
+                    SemanticTerminatorKindV1::SwitchInt {
+                        discriminant: typed_operand(2, SCALAR_TYPE),
+                        targets: SemanticSwitchTargetsV1::new(
+                            vec![SemanticSwitchTargetV1::new(
+                                0,
+                                cfg_edge(SemanticEdgeRoleV1::SwitchValue, 3),
+                            )],
+                            cfg_edge(SemanticEdgeRoleV1::SwitchOtherwise, 2),
+                        )
+                        .unwrap(),
+                    },
+                ),
+                block(
+                    213,
+                    vec![typed_assignment(
+                        1,
+                        SCALAR_TYPE,
+                        SemanticRvalueKindV1::Binary {
+                            operation: SemanticBinaryOpV1::Add,
+                            left: typed_operand(1, SCALAR_TYPE),
+                            right: typed_operand(first_alias, SCALAR_TYPE),
+                        },
+                    )],
+                    SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 1)),
+                ),
+                block(214, vec![], SemanticTerminatorKindV1::Return),
+            ],
+            locals,
+        );
+        let (inductions, _, _) = project_test_inductions(&function).unwrap();
+        assert_eq!(inductions.len(), 1);
+        assert_eq!(inductions[0].step_value, 1);
     }
 
     #[test]
@@ -27862,6 +28634,7 @@ mod tests {
                 &operand,
                 &definitions,
                 &inventory.assignments,
+                &inventory.address_escaped,
                 &mut work,
             )
             .unwrap(),
@@ -27877,6 +28650,7 @@ mod tests {
                 &operand,
                 &definitions,
                 &inventory.assignments,
+                &inventory.address_escaped,
                 &mut exhausted_work,
                 alias_count,
             ),
@@ -27931,6 +28705,7 @@ mod tests {
                     &typed_operand(2, U64_TYPE),
                     &definitions,
                     &inventory.assignments,
+                    &inventory.address_escaped,
                     &mut work,
                 ),
                 "a uniform induction operand has a cyclic copy alias",
