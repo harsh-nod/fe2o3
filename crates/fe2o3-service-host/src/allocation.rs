@@ -3173,12 +3173,12 @@ mod tests {
     fn queue_transfer_dispatch_count_accepts_sixteen_and_rejects_seventeen() {
         assert!(validate_queue_dispatch_count(0).is_ok());
         assert!(validate_queue_dispatch_count(16).is_ok());
-        assert_eq!(
+        assert!(matches!(
             validate_queue_dispatch_count(17),
             Err(ServiceAllocationErrorV1::AllocationCapacity {
-                maximum: fe2o3_kfd::GFX942_MAX_FIXED_DISPATCH_DATA_V1,
+                maximum: fe2o3_kfd::GFX942_MAX_FIXED_DISPATCH_DATA_V1
             })
-        );
+        ));
     }
 
     #[test]
