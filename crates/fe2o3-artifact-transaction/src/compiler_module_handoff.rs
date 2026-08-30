@@ -7089,6 +7089,78 @@ pub(crate) mod semantic_v3 {
             (temp, producer, attempt, receipt, expected_root, descriptors)
         }
 
+        fn publication_root_descriptor(path: &Path) -> OwnedFd {
+            rustix::fs::open(
+                path,
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::empty(),
+            )
+            .unwrap()
+        }
+
+        fn artifact_lock_descriptor(path: &Path) -> OwnedFd {
+            rustix::fs::open(
+                path.join(crate::LOCK_FILE),
+                OFlags::RDWR | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::empty(),
+            )
+            .unwrap()
+        }
+
+        fn try_test_flock(descriptor: &OwnedFd, operation: i32) -> bool {
+            loop {
+                let result =
+                    unsafe { libc::flock(rustix::fd::AsRawFd::as_raw_fd(descriptor), operation) };
+                if result == 0 {
+                    return true;
+                }
+                let error = std::io::Error::last_os_error();
+                match error.raw_os_error() {
+                    Some(libc::EINTR) => continue,
+                    Some(libc::EACCES) | Some(libc::EAGAIN) => return false,
+                    _ => panic!("test flock operation failed: {error}"),
+                }
+            }
+        }
+
+        fn try_test_ofd_lock(descriptor: &OwnedFd, lock_type: libc::c_short) -> bool {
+            let mut lock: libc::flock = unsafe { std::mem::zeroed() };
+            lock.l_type = lock_type;
+            lock.l_whence = libc::SEEK_SET as _;
+            loop {
+                let result = unsafe {
+                    libc::fcntl(
+                        rustix::fd::AsRawFd::as_raw_fd(descriptor),
+                        libc::F_OFD_SETLK,
+                        &lock,
+                    )
+                };
+                if result == 0 {
+                    return true;
+                }
+                let error = std::io::Error::last_os_error();
+                match error.raw_os_error() {
+                    Some(libc::EINTR) => continue,
+                    Some(libc::EACCES) | Some(libc::EAGAIN) => return false,
+                    _ => panic!("test OFD lock operation failed: {error}"),
+                }
+            }
+        }
+
+        fn assert_publication_object_lock_not_held(
+            result: Result<
+                crate::CompilerModuleHandoffPublicationObjectInventoryV1,
+                crate::CompilerModuleHandoffPublicationObjectErrorV1,
+            >,
+            expected_role: crate::PublicationObjectRoleV1,
+        ) {
+            assert!(matches!(
+                result,
+                Err(crate::CompilerModuleHandoffPublicationObjectErrorV1::LockNotHeld { role })
+                    if role == expected_role
+            ));
+        }
+
         #[test]
         fn publication_object_inventory_imports_and_revalidates_exact_v3_custody() {
             let (_temp, producer, _attempt, receipt, expected_root, descriptors) =
@@ -7103,11 +7175,6 @@ pub(crate) mod semantic_v3 {
             assert_eq!(inventory.receipt(), receipt);
             assert_eq!(inventory.handoff().identity(), receipt.handoff_identity());
             inventory.revalidate().unwrap();
-            assert!(!inventory.grants_compiler_authority());
-            assert!(!inventory.grants_publication_authority());
-            assert!(!inventory.grants_link_authority());
-            assert!(!inventory.grants_load_authority());
-            assert!(!inventory.grants_launch_authority());
         }
 
         #[test]
@@ -7224,6 +7291,196 @@ pub(crate) mod semantic_v3 {
                         role: crate::PublicationObjectRoleV1::ArtifactLockHolder,
                     }
                 )
+            ));
+        }
+
+        #[test]
+        fn publication_object_inventory_rejects_external_flock_holder_decoy() {
+            let (temp, producer, _attempt, receipt, expected_root, descriptors) =
+                exported_publication_objects(214);
+            let external_holder = publication_root_descriptor(&temp.0);
+            assert!(try_test_flock(&descriptors[1], libc::LOCK_UN));
+            assert!(try_test_flock(
+                &external_holder,
+                libc::LOCK_EX | libc::LOCK_NB
+            ));
+
+            let result = crate::import_compiler_module_handoff_publication_objects_v1(
+                descriptors,
+                expected_root,
+                &producer,
+                receipt,
+            );
+            assert_publication_object_lock_not_held(
+                result,
+                crate::PublicationObjectRoleV1::OutputRootFlockHolder,
+            );
+        }
+
+        #[test]
+        fn publication_object_inventory_rejects_external_ofd_holder_decoy() {
+            let (temp, producer, _attempt, receipt, expected_root, descriptors) =
+                exported_publication_objects(215);
+            let external_holder = artifact_lock_descriptor(&temp.0);
+            assert!(try_test_ofd_lock(&descriptors[2], libc::F_UNLCK as _));
+            assert!(try_test_ofd_lock(&external_holder, libc::F_WRLCK as _));
+
+            let result = crate::import_compiler_module_handoff_publication_objects_v1(
+                descriptors,
+                expected_root,
+                &producer,
+                receipt,
+            );
+            assert_publication_object_lock_not_held(
+                result,
+                crate::PublicationObjectRoleV1::ArtifactLockHolder,
+            );
+        }
+
+        #[test]
+        fn publication_object_inventory_rejects_weak_shared_flock_without_upgrading_it() {
+            let (temp, producer, _attempt, receipt, expected_root, descriptors) =
+                exported_publication_objects(216);
+            assert!(try_test_flock(&descriptors[1], libc::LOCK_UN));
+            assert!(try_test_flock(
+                &descriptors[1],
+                libc::LOCK_SH | libc::LOCK_NB
+            ));
+            let retained_holder = rustix::io::fcntl_dupfd_cloexec(&descriptors[1], 0).unwrap();
+
+            let result = crate::import_compiler_module_handoff_publication_objects_v1(
+                descriptors,
+                expected_root,
+                &producer,
+                receipt,
+            );
+            assert_publication_object_lock_not_held(
+                result,
+                crate::PublicationObjectRoleV1::OutputRootFlockHolder,
+            );
+
+            let compatible_observer = publication_root_descriptor(&temp.0);
+            assert!(
+                try_test_flock(&compatible_observer, libc::LOCK_SH | libc::LOCK_NB),
+                "validation upgraded the rejected shared flock to exclusive"
+            );
+            drop(retained_holder);
+        }
+
+        #[test]
+        fn publication_object_inventory_rejects_weak_ofd_read_lock_without_upgrading_it() {
+            let (temp, producer, _attempt, receipt, expected_root, descriptors) =
+                exported_publication_objects(217);
+            assert!(try_test_ofd_lock(&descriptors[2], libc::F_UNLCK as _));
+            assert!(try_test_ofd_lock(&descriptors[2], libc::F_RDLCK as _));
+            let retained_holder = rustix::io::fcntl_dupfd_cloexec(&descriptors[2], 0).unwrap();
+
+            let result = crate::import_compiler_module_handoff_publication_objects_v1(
+                descriptors,
+                expected_root,
+                &producer,
+                receipt,
+            );
+            assert_publication_object_lock_not_held(
+                result,
+                crate::PublicationObjectRoleV1::ArtifactLockHolder,
+            );
+
+            let compatible_observer = artifact_lock_descriptor(&temp.0);
+            assert!(
+                try_test_ofd_lock(&compatible_observer, libc::F_RDLCK as _),
+                "validation upgraded the rejected OFD read lock to a write lock"
+            );
+            drop(retained_holder);
+        }
+
+        #[test]
+        fn publication_object_inventory_revalidation_rejects_root_flock_loss() {
+            let (_temp, producer, _attempt, receipt, expected_root, descriptors) =
+                exported_publication_objects(218);
+            let holder_alias = rustix::io::fcntl_dupfd_cloexec(&descriptors[1], 0).unwrap();
+            let inventory = crate::import_compiler_module_handoff_publication_objects_v1(
+                descriptors,
+                expected_root,
+                &producer,
+                receipt,
+            )
+            .unwrap();
+            assert!(try_test_flock(&holder_alias, libc::LOCK_UN));
+            assert!(matches!(
+                inventory.revalidate(),
+                Err(
+                    crate::CompilerModuleHandoffPublicationObjectErrorV1::LockNotHeld {
+                        role: crate::PublicationObjectRoleV1::OutputRootFlockHolder,
+                    }
+                )
+            ));
+        }
+
+        #[test]
+        fn publication_object_inventory_revalidation_rejects_artifact_ofd_lock_loss() {
+            let (_temp, producer, _attempt, receipt, expected_root, descriptors) =
+                exported_publication_objects(219);
+            let holder_alias = rustix::io::fcntl_dupfd_cloexec(&descriptors[2], 0).unwrap();
+            let inventory = crate::import_compiler_module_handoff_publication_objects_v1(
+                descriptors,
+                expected_root,
+                &producer,
+                receipt,
+            )
+            .unwrap();
+            assert!(try_test_ofd_lock(&holder_alias, libc::F_UNLCK as _));
+            assert!(matches!(
+                inventory.revalidate(),
+                Err(
+                    crate::CompilerModuleHandoffPublicationObjectErrorV1::LockNotHeld {
+                        role: crate::PublicationObjectRoleV1::ArtifactLockHolder,
+                    }
+                )
+            ));
+        }
+
+        #[test]
+        fn publication_object_inventory_enforces_independently_observed_fd197_identity() {
+            let (_temp, producer, _attempt, receipt, transfer_root, descriptors) =
+                exported_publication_objects(220);
+            let remote_root = TestDirectory::new();
+            fs::set_permissions(&remote_root.0, fs::Permissions::from_mode(0o700)).unwrap();
+            fs::create_dir(remote_root.0.join("one-child-directory")).unwrap();
+            let remote_fd_197 = publication_root_descriptor(&remote_root.0);
+            let remote_stat = fstat(&remote_fd_197).unwrap();
+            let independently_observed = crate::PublicationObjectRootIdentityV1::new(
+                remote_stat.st_dev,
+                remote_stat.st_ino,
+                remote_stat.st_uid,
+                remote_stat.st_gid,
+                remote_stat.st_mode,
+                remote_stat.st_nlink as u64,
+            );
+            assert_eq!(independently_observed.device(), transfer_root.device());
+            assert_ne!(independently_observed.inode(), transfer_root.inode());
+            assert_eq!(
+                independently_observed.owner_uid(),
+                transfer_root.owner_uid()
+            );
+            assert_eq!(
+                independently_observed.owner_gid(),
+                transfer_root.owner_gid()
+            );
+            assert_eq!(independently_observed.mode(), transfer_root.mode());
+            assert_eq!(
+                independently_observed.link_count(),
+                transfer_root.link_count()
+            );
+
+            assert!(matches!(
+                crate::import_compiler_module_handoff_publication_objects_v1(
+                    descriptors,
+                    independently_observed,
+                    &producer,
+                    receipt,
+                ),
+                Err(crate::CompilerModuleHandoffPublicationObjectErrorV1::RootIdentityMismatch)
             ));
         }
 

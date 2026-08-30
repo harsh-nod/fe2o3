@@ -325,6 +325,24 @@ impl CompilerModuleHandoffPublicationObjectExportV1 {
 /// The owner deliberately implements neither `Clone` nor `AsFd` and has no operation that moves
 /// out the strict handoff or any descriptor. Its only state transition is fail-closed,
 /// descriptor-only revalidation.
+///
+/// ```compile_fail
+/// use fe2o3_artifact_transaction::CompilerModuleHandoffPublicationObjectInventoryV1;
+///
+/// fn cannot_duplicate(inventory: CompilerModuleHandoffPublicationObjectInventoryV1) {
+///     let _duplicate = inventory.clone();
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use std::os::fd::AsFd;
+///
+/// use fe2o3_artifact_transaction::CompilerModuleHandoffPublicationObjectInventoryV1;
+///
+/// fn cannot_borrow_descriptor(inventory: &CompilerModuleHandoffPublicationObjectInventoryV1) {
+///     let _descriptor = inventory.as_fd();
+/// }
+/// ```
 pub struct CompilerModuleHandoffPublicationObjectInventoryV1 {
     expected_root: PublicationObjectRootIdentityV1,
     producer: ProducerIdentity,
@@ -380,31 +398,6 @@ impl CompilerModuleHandoffPublicationObjectInventoryV1 {
             ));
         }
         Ok(())
-    }
-
-    /// Descriptor custody is not compiler authority.
-    pub const fn grants_compiler_authority(&self) -> bool {
-        false
-    }
-
-    /// Descriptor custody is not publication authority.
-    pub const fn grants_publication_authority(&self) -> bool {
-        false
-    }
-
-    /// Descriptor custody is not link authority.
-    pub const fn grants_link_authority(&self) -> bool {
-        false
-    }
-
-    /// Descriptor custody is not load authority.
-    pub const fn grants_load_authority(&self) -> bool {
-        false
-    }
-
-    /// Descriptor custody is not launch authority.
-    pub const fn grants_launch_authority(&self) -> bool {
-        false
     }
 }
 
@@ -899,7 +892,9 @@ fn same_inode(left: &ValidatedObjectV1, right: &ValidatedObjectV1) -> bool {
 fn validate_locks(
     descriptors: &[OwnedFd; COMPILER_MODULE_HANDOFF_PUBLICATION_OBJECT_FDS_V1],
 ) -> Result<(), CompilerModuleHandoffPublicationObjectErrorV1> {
-    match acquire_linux_descriptor_flock(&descriptors[ROOT_SCAN_INDEX], true) {
+    // Probe with the compatible weak mode first. Success proves that no exclusive lock exists, so
+    // reject before an exclusive operation on a weak designated holder could upgrade its lock.
+    match acquire_linux_descriptor_shared_flock(&descriptors[ROOT_SCAN_INDEX]) {
         Ok(false) => {}
         Ok(true) => {
             unlock_flock(&descriptors[ROOT_SCAN_INDEX])?;
@@ -909,7 +904,15 @@ fn validate_locks(
         }
         Err(error) => return Err(error.into()),
     }
-    match acquire_linux_ofd_exclusive_lock(&descriptors[ARTIFACT_LOCK_PROBE_INDEX], true) {
+    // An exclusive operation is idempotent only on the designated holder. An exclusive lock held
+    // by an external open description instead conflicts here and is rejected as a decoy.
+    if !acquire_linux_descriptor_flock(&descriptors[ROOT_FLOCK_HOLDER_INDEX], true)? {
+        return Err(CompilerModuleHandoffPublicationObjectErrorV1::LockNotHeld {
+            role: PublicationObjectRoleV1::OutputRootFlockHolder,
+        });
+    }
+
+    match acquire_linux_ofd_read_lock(&descriptors[ARTIFACT_LOCK_PROBE_INDEX]) {
         Ok(false) => {}
         Ok(true) => {
             unlock_ofd(&descriptors[ARTIFACT_LOCK_PROBE_INDEX])?;
@@ -919,7 +922,75 @@ fn validate_locks(
         }
         Err(error) => return Err(error.into()),
     }
+    if !acquire_linux_ofd_exclusive_lock(&descriptors[ARTIFACT_LOCK_HOLDER_INDEX], true)? {
+        return Err(CompilerModuleHandoffPublicationObjectErrorV1::LockNotHeld {
+            role: PublicationObjectRoleV1::ArtifactLockHolder,
+        });
+    }
     Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn acquire_linux_descriptor_shared_flock(descriptor: &OwnedFd) -> io::Result<bool> {
+    loop {
+        // SAFETY: the descriptor is live and LOCK_SH | LOCK_NB is a valid flock operation.
+        if unsafe { libc::flock(descriptor.as_raw_fd(), libc::LOCK_SH | libc::LOCK_NB) } == 0 {
+            return Ok(true);
+        }
+        let error = io::Error::last_os_error();
+        match error.raw_os_error() {
+            Some(libc::EINTR) => continue,
+            Some(libc::EACCES) | Some(libc::EAGAIN) => return Ok(false),
+            Some(libc::EINVAL) | Some(libc::ENOSYS) | Some(libc::EOPNOTSUPP) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "publication-object custody requires Linux descriptor-owned directory flock support",
+                ));
+            }
+            _ => return Err(error),
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn acquire_linux_descriptor_shared_flock(_descriptor: &OwnedFd) -> io::Result<bool> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "publication-object custody requires Linux descriptor-owned directory flock support",
+    ))
+}
+
+#[cfg(target_os = "linux")]
+fn acquire_linux_ofd_read_lock(descriptor: &OwnedFd) -> io::Result<bool> {
+    let mut lock: libc::flock = unsafe { std::mem::zeroed() };
+    lock.l_type = libc::F_RDLCK as _;
+    lock.l_whence = libc::SEEK_SET as _;
+    loop {
+        // SAFETY: the descriptor is live and `lock` is a fully initialized whole-file read lock.
+        if unsafe { libc::fcntl(descriptor.as_raw_fd(), libc::F_OFD_SETLK, &lock) } == 0 {
+            return Ok(true);
+        }
+        let error = io::Error::last_os_error();
+        match error.raw_os_error() {
+            Some(libc::EINTR) => continue,
+            Some(libc::EACCES) | Some(libc::EAGAIN) => return Ok(false),
+            Some(libc::EINVAL) | Some(libc::ENOSYS) | Some(libc::EOPNOTSUPP) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "publication-object custody requires Linux open-file-description lock support",
+                ));
+            }
+            _ => return Err(error),
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn acquire_linux_ofd_read_lock(_descriptor: &OwnedFd) -> io::Result<bool> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "publication-object custody requires Linux open-file-description lock support",
+    ))
 }
 
 fn validate_rosters(
