@@ -75,8 +75,9 @@ collapsed to a preferred source line.
 
 ## Pinned baseline
 
-The qualification host was measured on 2026-08-29. These pins describe the
-tested baseline, not a claim about every installation.
+The qualification host was measured on 2026-08-29 and its tool-presence record
+was refreshed on 2026-08-30. These pins describe the tested baseline, not a
+claim about every installation.
 
 | Component | Tested pin | fe2o3 use | Current authenticated boundary |
 | --- | --- | --- | --- |
@@ -84,7 +85,7 @@ tested baseline, not a claim about every installation.
 | ROCgdb | `rocm-rel-7.2-93`, GDB 16.3 | bounded MI launch/attach and process control | generic MI threads; no authenticated GPU wave identity |
 | rocprofv3 | 1.1.0, git `97f5574f`, ROCm 7.2.4 | dispatch/counter/PC/ATT collection substrate | strict structured import and artifact references; missing output is unavailable |
 | ROCm | 7.2.4 | installed collector/toolchain baseline | not runtime authority |
-| rocprof-compute-viewer | not installed on the qualification host | external raw ATT drill-down | no fe2o3 decoded ATT acceptance yet |
+| rocprof-compute-viewer / `rocprof-compute` | entrypoint present in ROCm 7.2.4, but its version probe exits unavailable because required Python dependencies are absent | external raw ATT drill-down | caller-bound installed-artifact/probe identities are recorded; no usable local viewer or fe2o3 decoded ATT acceptance |
 | Mojo | not installed on the qualification host | comparison workflow only | no local parity measurement |
 
 Feature comparison must be task based. fe2o3's intended differentiator is an
@@ -94,6 +95,9 @@ overhead than the substrate tools.
 
 The pinned task-level comparison is recorded in
 [`debugger-profiler-task-matrix-v1.md`](debugger-profiler-task-matrix-v1.md).
+The machine-readable caller-bound installation/capability matrix and candidate
+overhead policies are recorded in
+[`debugger-profiler-qualification-v1.md`](debugger-profiler-qualification-v1.md).
 
 The comparison baseline is the public
 [ROCgdb documentation](https://rocm.docs.amd.com/projects/ROCgdb/en/latest/),
@@ -120,6 +124,7 @@ unbounded state. Important current ceilings include:
 | profiler capture storage | 4 GiB |
 | profiler collection time | 900 seconds |
 | profiler artifacts | 4,096 entries, depth 8 |
+| qualification manifest | 256 KiB; exactly 7 component rows and 6 capture-mode rows |
 
 These are safety ceilings, not recommended defaults or performance budgets.
 Every capture records its requested limits, truncation/loss state, and actual
@@ -198,13 +203,13 @@ contract and an unavailable response are both tested here.
 
 | Track | Exit evidence | Current closure gap |
 | --- | --- | --- |
-| T0 baseline/ADR | archived capture queries without a source checkout; pinned feature/task matrix; ownership, threat, completeness, and budget policy | measured overhead budgets and installed compute-viewer/Mojo task comparison are absent |
+| T0 baseline/ADR | archived capture queries without a source checkout; pinned feature/task matrix; ownership, threat, completeness, and budget policy | caller-bound machine comparison and candidate policies exist; authenticated overhead observations, approved policies, and usable local Compute Viewer/Mojo task runs are absent |
 | T1 semantic map | elementwise, collective, and tiled kernels round-trip source to ISA and ISA to source; optimization shapes and hostile substitution tested | general schedule/LLVM/ISA intervals and optimization-shape round trips are incomplete |
 | T2 debugger | seeded OOB and barrier divergence identify dispatch, site, workgroup, wave/lane scope, region/phase contract, and origin without raw-log parsing | V4 exact KFD publication-to-structured-MI correlation is implemented and the installed ROCgdb path reports typed stopped-state unavailability; authenticated native registers/source/memory and general cooperative live-kernel acceptance remain incomplete |
 | T3 profiler | seeded schedule/resource regression is attributed to semantic/IR/ISA change with exact comparable evidence | strict variant admission and schedule/resource co-observation exist; authenticated semantic/IR/ISA localization, decoded ATT/runtime/copy attribution, and causal end-to-end explanation are incomplete |
 | T4 agent protocol | fresh non-privileged client completes T2/T3 diagnoses, cites evidence, and plans the minimum next capture | canonical read-only service and complete operation acceptance are incomplete |
 | T5 distributed | eight-GPU overlap regression localizes to an admitted graph edge or interval while preserving clock/loss uncertainty | awaits versioned #182 operation, transfer, collective, and clock-correlation inputs |
-| T6 qualification | overhead, target, pagination, loss, reset, optimized-out, partial-capture, and comparative usability gates pass | broad target/overhead/reset/usability evidence is incomplete |
+| T6 qualification | overhead, target, pagination, loss, reset, optimized-out, partial-capture, and comparative usability gates pass | all six overhead modes remain unmeasured or unsupported under candidate policies; broad target/reset/usability evidence is incomplete |
 
 ## Required acceptance records
 

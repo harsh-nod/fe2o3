@@ -157,6 +157,34 @@ session resident memory, checkpoints, total commands, and device/runtime
 resources. Those are execution concerns and are deliberately not granted by
 this inert wire crate.
 
+## Qualification V1
+
+`fe2o3-debug-qualification-manifest-v1` is an additive inert comparison and
+overhead-policy record. Its fixed component matrix covers the two fe2o3 KFD
+debugger modes, ROCgdb, rocprofv3, ROCprof Compute Viewer/ATT, and
+representative HIP and Mojo workflows. Every task cell is explicitly
+caller-bound observed, documentation-only, or unavailable. The fixed overhead
+matrix covers no-capture, counters, PC sampling, ATT, debugger-stop, and
+instrumented modes.
+
+Decoding this manifest never authenticates an observation or qualifies a
+capture mode. Caller-bound observations retain exact content, version,
+configuration, and evidence identities, but those identities provide content
+association only. `grants_observation_authority()` and every policy
+assessment's `grants_qualification_authority()` return `false`. A measured
+policy comparison must name exact workload, input, artifact, environment,
+device, collector content, baseline configuration, and captured configuration
+identities. The assessment only re-derives whether caller-supplied values meet
+the declared policy; a separate authenticated producer is required for a
+production observation claim.
+
+The manifest is capped at 256 KiB. It requires all seven component rows and all
+six capture-mode rows once in canonical order, bounds all text and numeric
+fields, rejects unknown/duplicate/trailing JSON, and domain-separates and
+length-binds its content identity. It contains no executable path, argument
+vector, process/device address, descriptor, queue token, or execution action.
+Unavailable tools and unmeasured modes remain first-class records.
+
 ## Hardware V2
 
 The separate `fe2o3-hardware-debug-request-v2` and response schemas describe

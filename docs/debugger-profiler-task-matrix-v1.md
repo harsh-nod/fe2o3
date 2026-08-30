@@ -10,6 +10,9 @@ property identity.
 
 The local qualification pins remain in
 [`debugger-profiler-architecture-v1.md`](debugger-profiler-architecture-v1.md).
+An additive machine-readable projection, including caller-bound installation
+identities and typed unavailable states, is described in
+[`debugger-profiler-qualification-v1.md`](debugger-profiler-qualification-v1.md).
 The external rows below use the public documentation available on 2026-08-29:
 
 - [ROCgdb overview](https://rocm.docs.amd.com/projects/ROCgdb/en/latest/)

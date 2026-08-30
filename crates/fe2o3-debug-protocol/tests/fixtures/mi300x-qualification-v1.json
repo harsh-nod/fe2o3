@@ -1,0 +1,215 @@
+{
+  "schema": "fe2o3-debug-qualification-manifest-v1",
+  "qualification_date_utc": "2026-08-30",
+  "environment": {
+    "host_class": "mi300x",
+    "kernel_release": "6.8.0-124-generic",
+    "os_release_sha256": "01af466feb100306498c86aa6bad1815e33036019aa34d4362c20f374ea5c829",
+    "kernel_build_sha256": "da06ffcbc1b8da4ad7abd6d2dbb50a7ee93d003e6ea6aac6150677b3befffedd",
+    "target": "gfx942:wave64",
+    "kfd_topology_sha256": "08d4f1a10c0ca4fa14d726b7fb20d30bdc26a34d24c32323c5f2c4bdf9ce1cea"
+  },
+  "components": [
+    {
+      "component": "fe2o3_native_kfd_debugger",
+      "installation": {
+        "status": "caller_bound_observed_usable",
+        "identity": {
+          "kind": "executable",
+          "version": { "status": "exact", "value": "0.1.0@1795071e131d2aa832e329da4f1f30ee8edd193c" },
+          "content_sha256": "176a76e2880c223c347988397e0942d53c5c572ee81dc7e9ed78526d39b57260",
+          "configuration_sha256": "5a663952dc91b4b17de5426726dc1242688e61d9115572de60542c2d6bb9df2d"
+        },
+        "evidence_id": "5fc3881c71a0c13c878ca947f59c0ad5b8e3e5f46d4718d864f126721e8e3ce3"
+      },
+      "capabilities": {
+        "live_gpu_state": { "origin": "caller_bound_observed", "evidence_id": "5fc3881c71a0c13c878ca947f59c0ad5b8e3e5f46d4718d864f126721e8e3ce3", "limitations": "Exact KFD device, queue, and cooperative publication state only; no native wave, register, source, or target-memory claim." },
+        "source_break_and_step": { "origin": "unavailable", "reason": "not_implemented", "evidence_id": "4b5b997e26412b56f65f417d970b97591e5dc5ef032d055bea056d1208f37365", "limitations": "The direct-KFD mode does not implement live source breakpoints or stepping." },
+        "deterministic_cpu_diagnosis": { "origin": "unavailable", "reason": "not_implemented", "evidence_id": "4b5b997e26412b56f65f417d970b97591e5dc5ef032d055bea056d1208f37365", "limitations": "CPU simulation is a separate backend and is not attributed to this native KFD component." },
+        "semantic_identity_graph": { "origin": "unavailable", "reason": "not_observed", "evidence_id": "4b5b997e26412b56f65f417d970b97591e5dc5ef032d055bea056d1208f37365", "limitations": "The hardware probe does not establish complete source-through-ISA semantic correspondence." },
+        "dispatch_counter_pc_att_collection": { "origin": "unavailable", "reason": "not_implemented", "evidence_id": "4b5b997e26412b56f65f417d970b97591e5dc5ef032d055bea056d1208f37365", "limitations": "The native debugger is not a profiler collector." },
+        "decoded_att_visualization": { "origin": "unavailable", "reason": "not_implemented", "evidence_id": "4b5b997e26412b56f65f417d970b97591e5dc5ef032d055bea056d1208f37365", "limitations": "No ATT decoder or visualization is owned by this component." },
+        "bounded_read_only_agent_queries": { "origin": "unavailable", "reason": "not_observed", "evidence_id": "4b5b997e26412b56f65f417d970b97591e5dc5ef032d055bea056d1208f37365", "limitations": "The qualified command owns a launched target; this record does not relabel it as a read-only service." },
+        "supported_hardware_path": { "origin": "caller_bound_observed", "evidence_id": "08d4f1a10c0ca4fa14d726b7fb20d30bdc26a34d24c32323c5f2c4bdf9ce1cea", "limitations": "Caller-bound record from one MI300X gfx942 node with wave64; no CDNA or RDNA target matrix is implied." }
+      }
+    },
+    {
+      "component": "fe2o3_rocgdb_kfd_debugger",
+      "installation": {
+        "status": "caller_bound_observed_usable",
+        "identity": {
+          "kind": "workflow_driver",
+          "version": { "status": "exact", "value": "0.1.0@1795071e131d2aa832e329da4f1f30ee8edd193c+rocgdb-rocm-rel-7.2-93" },
+          "content_sha256": "176a76e2880c223c347988397e0942d53c5c572ee81dc7e9ed78526d39b57260",
+          "configuration_sha256": "daefb5d1b67882a3aa7f36c412dbd226de25bf935f2cc3517b7d2c9dc7a23169"
+        },
+        "evidence_id": "5fc3881c71a0c13c878ca947f59c0ad5b8e3e5f46d4718d864f126721e8e3ce3"
+      },
+      "capabilities": {
+        "live_gpu_state": { "origin": "unavailable", "reason": "collector_output_not_admitted", "evidence_id": "5fc3881c71a0c13c878ca947f59c0ad5b8e3e5f46d4718d864f126721e8e3ce3", "limitations": "KFD publication was admitted, but installed ROCgdb returned gpu_stopped_state_unavailable for the exact run." },
+        "source_break_and_step": { "origin": "unavailable", "reason": "not_observed", "evidence_id": "5fc3881c71a0c13c878ca947f59c0ad5b8e3e5f46d4718d864f126721e8e3ce3", "limitations": "No authenticated fe2o3 live source stop or step was returned." },
+        "deterministic_cpu_diagnosis": { "origin": "unavailable", "reason": "not_implemented", "evidence_id": "4b5b997e26412b56f65f417d970b97591e5dc5ef032d055bea056d1208f37365", "limitations": "Deterministic CPU diagnosis is a separate execution and backend." },
+        "semantic_identity_graph": { "origin": "unavailable", "reason": "collector_output_not_admitted", "evidence_id": "5fc3881c71a0c13c878ca947f59c0ad5b8e3e5f46d4718d864f126721e8e3ce3", "limitations": "No stopped PC was available to join to source, KIR, LLVM, or ISA." },
+        "dispatch_counter_pc_att_collection": { "origin": "unavailable", "reason": "not_implemented", "evidence_id": "4b5b997e26412b56f65f417d970b97591e5dc5ef032d055bea056d1208f37365", "limitations": "This workflow does not collect profiler counters, PC samples, or ATT." },
+        "decoded_att_visualization": { "origin": "unavailable", "reason": "not_implemented", "evidence_id": "4b5b997e26412b56f65f417d970b97591e5dc5ef032d055bea056d1208f37365", "limitations": "This workflow does not decode or visualize ATT." },
+        "bounded_read_only_agent_queries": { "origin": "unavailable", "reason": "not_observed", "evidence_id": "4b5b997e26412b56f65f417d970b97591e5dc5ef032d055bea056d1208f37365", "limitations": "The qualified command launches and owns a debug target; it is not a read-only evidence service." },
+        "supported_hardware_path": { "origin": "caller_bound_observed", "evidence_id": "5fc3881c71a0c13c878ca947f59c0ad5b8e3e5f46d4718d864f126721e8e3ce3", "limitations": "The caller-bound exact gfx942 record reached cooperative KFD publication and structured ROCgdb probing; native stopped state remained unavailable." }
+      }
+    },
+    {
+      "component": "rocgdb",
+      "installation": {
+        "status": "caller_bound_observed_usable",
+        "identity": {
+          "kind": "executable",
+          "version": { "status": "exact", "value": "GNU gdb (rocm-rel-7.2-93) 16.3" },
+          "content_sha256": "1ebab3209fe8dadf333df06bc9282f2105ce0e15abee9b1d295e32b18045b5f3",
+          "configuration_sha256": "f596966de8cf70ae670d95491971fa84ba5a3d744cfc7259fc50aec72aa8aadc"
+        },
+        "evidence_id": "69dfb7e42d817e5e4c62a7956d9f964c5a5eb7fad27cc47a6f8c95f743b71191"
+      },
+      "capabilities": {
+        "live_gpu_state": { "origin": "documented", "reference": { "title": "ROCgdb documentation", "url": "https://rocm.docs.amd.com/projects/ROCgdb/en/latest/", "version_or_access_date": "accessed-2026-08-30", "reference_identity": "07dcc6935e1638e9281da901f3f5a4ba3b59de9117c8d430130d801d0fc7f873" }, "limitations": "Documented native AMD GPU debugging is not an observed fe2o3 identity join on this host." },
+        "source_break_and_step": { "origin": "documented", "reference": { "title": "ROCgdb documentation", "url": "https://rocm.docs.amd.com/projects/ROCgdb/en/latest/", "version_or_access_date": "accessed-2026-08-30", "reference_identity": "07dcc6935e1638e9281da901f3f5a4ba3b59de9117c8d430130d801d0fc7f873" }, "limitations": "Source debugging is documented; the fe2o3 hardware acceptance did not return an authenticated stop." },
+        "deterministic_cpu_diagnosis": { "origin": "unavailable", "reason": "not_documented", "evidence_id": "07dcc6935e1638e9281da901f3f5a4ba3b59de9117c8d430130d801d0fc7f873", "limitations": "ROCgdb is not a deterministic CPU oracle for fe2o3 KIR." },
+        "semantic_identity_graph": { "origin": "unavailable", "reason": "not_documented", "evidence_id": "07dcc6935e1638e9281da901f3f5a4ba3b59de9117c8d430130d801d0fc7f873", "limitations": "ROCgdb does not document fe2o3 source, KIR, schedule, proof, and artifact identities." },
+        "dispatch_counter_pc_att_collection": { "origin": "unavailable", "reason": "not_documented", "evidence_id": "07dcc6935e1638e9281da901f3f5a4ba3b59de9117c8d430130d801d0fc7f873", "limitations": "ROCgdb is not the rocprofv3 counter, PC sampling, and ATT collector." },
+        "decoded_att_visualization": { "origin": "unavailable", "reason": "not_documented", "evidence_id": "07dcc6935e1638e9281da901f3f5a4ba3b59de9117c8d430130d801d0fc7f873", "limitations": "ROCgdb is not ROCprof Compute Viewer." },
+        "bounded_read_only_agent_queries": { "origin": "unavailable", "reason": "not_documented", "evidence_id": "07dcc6935e1638e9281da901f3f5a4ba3b59de9117c8d430130d801d0fc7f873", "limitations": "GDB MI carries debugger control and is not itself a fe2o3 read-only evidence authority boundary." },
+        "supported_hardware_path": { "origin": "documented", "reference": { "title": "ROCgdb documentation", "url": "https://rocm.docs.amd.com/projects/ROCgdb/en/latest/", "version_or_access_date": "accessed-2026-08-30", "reference_identity": "07dcc6935e1638e9281da901f3f5a4ba3b59de9117c8d430130d801d0fc7f873" }, "limitations": "AMD GPU support is documented; this record observes only the installed gfx942 qualification host." }
+      }
+    },
+    {
+      "component": "rocprofv3",
+      "installation": {
+        "status": "caller_bound_observed_usable",
+        "identity": {
+          "kind": "executable",
+          "version": { "status": "exact", "value": "1.1.0+97f5574fe2fdc7bef44fb01545347912ee9f1779; ROCm 7.2.4" },
+          "content_sha256": "195ff5e6faf48a3abbc6f4db9f69dd598fe71fa9ff695ba2556d65af636fdc48",
+          "configuration_sha256": "169f6f7f3b38dec8e764f5d4dd9429361f5715327db8bba446b0620ca35f9632"
+        },
+        "evidence_id": "0f014987e7d2d0ffd95880b6eca37b6a96f9ac67b1eed12e94d3559abb45ebcf"
+      },
+      "capabilities": {
+        "live_gpu_state": { "origin": "unavailable", "reason": "not_documented", "evidence_id": "d1d85867fccd7b3795bb3e8652eff96294f287d53a6567282237a12593181703", "limitations": "rocprofv3 collection is not an interactive stopped-state debugger." },
+        "source_break_and_step": { "origin": "unavailable", "reason": "not_documented", "evidence_id": "d1d85867fccd7b3795bb3e8652eff96294f287d53a6567282237a12593181703", "limitations": "rocprofv3 does not provide debugger break-and-step control." },
+        "deterministic_cpu_diagnosis": { "origin": "unavailable", "reason": "requires_different_hardware", "evidence_id": "d1d85867fccd7b3795bb3e8652eff96294f287d53a6567282237a12593181703", "limitations": "Hardware profiler collection is not deterministic CPU KIR simulation." },
+        "semantic_identity_graph": { "origin": "unavailable", "reason": "collector_output_not_admitted", "evidence_id": "d1d85867fccd7b3795bb3e8652eff96294f287d53a6567282237a12593181703", "limitations": "Collector-local records alone do not establish fe2o3 source, KIR, proof, artifact, and dispatch joins." },
+        "dispatch_counter_pc_att_collection": { "origin": "documented", "reference": { "title": "ROCprofiler SDK documentation", "url": "https://rocm.docs.amd.com/projects/rocprofiler-sdk/en/latest/", "version_or_access_date": "accessed-2026-08-30", "reference_identity": "d1d85867fccd7b3795bb3e8652eff96294f287d53a6567282237a12593181703" }, "limitations": "Collection classes are documented; this manifest does not claim a new complete capture or zero loss." },
+        "decoded_att_visualization": { "origin": "unavailable", "reason": "not_implemented", "evidence_id": "d1d85867fccd7b3795bb3e8652eff96294f287d53a6567282237a12593181703", "limitations": "rocprofv3 collection is separate from admitted decoded Compute Viewer visualization." },
+        "bounded_read_only_agent_queries": { "origin": "unavailable", "reason": "not_documented", "evidence_id": "d1d85867fccd7b3795bb3e8652eff96294f287d53a6567282237a12593181703", "limitations": "Structured collector output is not by itself the bounded fe2o3 agent query protocol." },
+        "supported_hardware_path": { "origin": "documented", "reference": { "title": "ROCprofiler SDK documentation", "url": "https://rocm.docs.amd.com/projects/rocprofiler-sdk/en/latest/", "version_or_access_date": "accessed-2026-08-30", "reference_identity": "d1d85867fccd7b3795bb3e8652eff96294f287d53a6567282237a12593181703" }, "limitations": "Supported AMD targets are collector-version dependent; only the installed MI300X tool identity is observed here." }
+      }
+    },
+    {
+      "component": "rocprof_compute_viewer_att",
+      "installation": {
+        "status": "caller_bound_observed_unusable",
+        "identity": {
+          "kind": "executable",
+          "version": { "status": "unavailable", "reason": "probe_failed" },
+          "content_sha256": "c8b6f2bd389b4e031cc8b700c3310e3de2799bd1a07da6cf2d58208cf46a9ba6",
+          "configuration_sha256": "65b1ce88c31225c921edf2d983f617ddaeaee7e3bfd60c30dd61a23b4c5e97c8"
+        },
+        "reason": "dependency_unavailable",
+        "evidence_id": "33fd0d0c9df203771c2c8a3ec4f0dc685cd088ad37b2862fd0d527a78a929c72"
+      },
+      "capabilities": {
+        "live_gpu_state": { "origin": "unavailable", "reason": "installation_unusable", "evidence_id": "33fd0d0c9df203771c2c8a3ec4f0dc685cd088ad37b2862fd0d527a78a929c72", "limitations": "The installed entrypoint cannot initialize and is not an interactive debugger." },
+        "source_break_and_step": { "origin": "unavailable", "reason": "installation_unusable", "evidence_id": "33fd0d0c9df203771c2c8a3ec4f0dc685cd088ad37b2862fd0d527a78a929c72", "limitations": "The installed entrypoint cannot initialize and does not provide debugger control." },
+        "deterministic_cpu_diagnosis": { "origin": "unavailable", "reason": "installation_unusable", "evidence_id": "33fd0d0c9df203771c2c8a3ec4f0dc685cd088ad37b2862fd0d527a78a929c72", "limitations": "The installed entrypoint cannot initialize and is not a CPU KIR oracle." },
+        "semantic_identity_graph": { "origin": "unavailable", "reason": "installation_unusable", "evidence_id": "33fd0d0c9df203771c2c8a3ec4f0dc685cd088ad37b2862fd0d527a78a929c72", "limitations": "No local decoded ATT output was admitted into a fe2o3 semantic graph." },
+        "dispatch_counter_pc_att_collection": { "origin": "unavailable", "reason": "dependency_unavailable", "evidence_id": "33fd0d0c9df203771c2c8a3ec4f0dc685cd088ad37b2862fd0d527a78a929c72", "limitations": "The entrypoint reports missing Python dependencies before it can run." },
+        "decoded_att_visualization": { "origin": "documented", "reference": { "title": "ROCprof Compute Viewer documentation", "url": "https://rocm.docs.amd.com/projects/rocprof-compute-viewer/en/amd-mainline/quick-reference/rcv-at-a-glance.html", "version_or_access_date": "accessed-2026-08-30", "reference_identity": "e598f7e5e0f3a9bcacc771e3a314ec02c5810339e86a4cff2656ee6140f54ab8" }, "limitations": "ATT visualization is documentation-only on this host because the installed entrypoint is unusable." },
+        "bounded_read_only_agent_queries": { "origin": "unavailable", "reason": "installation_unusable", "evidence_id": "33fd0d0c9df203771c2c8a3ec4f0dc685cd088ad37b2862fd0d527a78a929c72", "limitations": "No local query workflow was admitted and the entrypoint cannot initialize." },
+        "supported_hardware_path": { "origin": "unavailable", "reason": "installation_unusable", "evidence_id": "33fd0d0c9df203771c2c8a3ec4f0dc685cd088ad37b2862fd0d527a78a929c72", "limitations": "The local dependency failure prevents a target qualification claim." }
+      }
+    },
+    {
+      "component": "hip_amd_workflow",
+      "installation": {
+        "status": "caller_bound_observed_usable",
+        "identity": {
+          "kind": "workflow_driver",
+          "version": { "status": "exact", "value": "HIP 7.2.53211-97f5574fe2; AMD clang 22.0.0git roc-7.2.4" },
+          "content_sha256": "7e6614203ff9838f64581a4c9522dd4794834d7e91bad8074bb8c88d85618d09",
+          "configuration_sha256": "ee3ddb2b4f86c0cd02e8fce4d0e43be733be95869ed4572280b9fa2418780be6"
+        },
+        "evidence_id": "dfbceb5633e00ea1fb2f6ea5fc0c95a503e53b3b1c27b7f56244ec8e2934b2ef"
+      },
+      "capabilities": {
+        "live_gpu_state": { "origin": "documented", "reference": { "title": "ROCgdb documentation", "url": "https://rocm.docs.amd.com/projects/ROCgdb/en/latest/", "version_or_access_date": "accessed-2026-08-30", "reference_identity": "07dcc6935e1638e9281da901f3f5a4ba3b59de9117c8d430130d801d0fc7f873" }, "limitations": "HIP applications can use ROCgdb, but the installed hipcc version probe is not a live-debug acceptance." },
+        "source_break_and_step": { "origin": "documented", "reference": { "title": "ROCgdb documentation", "url": "https://rocm.docs.amd.com/projects/ROCgdb/en/latest/", "version_or_access_date": "accessed-2026-08-30", "reference_identity": "07dcc6935e1638e9281da901f3f5a4ba3b59de9117c8d430130d801d0fc7f873" }, "limitations": "The workflow is documented; no comparative time-to-diagnosis study was run." },
+        "deterministic_cpu_diagnosis": { "origin": "unavailable", "reason": "not_documented", "evidence_id": "dfbceb5633e00ea1fb2f6ea5fc0c95a503e53b3b1c27b7f56244ec8e2934b2ef", "limitations": "This representative HIP workflow is not a deterministic CPU execution oracle." },
+        "semantic_identity_graph": { "origin": "unavailable", "reason": "not_documented", "evidence_id": "dfbceb5633e00ea1fb2f6ea5fc0c95a503e53b3b1c27b7f56244ec8e2934b2ef", "limitations": "The HIP workflow does not supply fe2o3 compiler, proof, and artifact identities." },
+        "dispatch_counter_pc_att_collection": { "origin": "documented", "reference": { "title": "ROCprofiler SDK documentation", "url": "https://rocm.docs.amd.com/projects/rocprofiler-sdk/en/latest/", "version_or_access_date": "accessed-2026-08-30", "reference_identity": "d1d85867fccd7b3795bb3e8652eff96294f287d53a6567282237a12593181703" }, "limitations": "HIP workloads can be collected by rocprofv3; this is not a local complete-capture observation." },
+        "decoded_att_visualization": { "origin": "documented", "reference": { "title": "ROCprof Compute Viewer documentation", "url": "https://rocm.docs.amd.com/projects/rocprof-compute-viewer/en/amd-mainline/quick-reference/rcv-at-a-glance.html", "version_or_access_date": "accessed-2026-08-30", "reference_identity": "e598f7e5e0f3a9bcacc771e3a314ec02c5810339e86a4cff2656ee6140f54ab8" }, "limitations": "The local Compute Viewer entrypoint is unusable, so this remains documentation-only." },
+        "bounded_read_only_agent_queries": { "origin": "unavailable", "reason": "not_documented", "evidence_id": "dfbceb5633e00ea1fb2f6ea5fc0c95a503e53b3b1c27b7f56244ec8e2934b2ef", "limitations": "The workflow does not define a bounded evidence-linked read-only agent protocol." },
+        "supported_hardware_path": { "origin": "documented", "reference": { "title": "ROCprofiler SDK documentation", "url": "https://rocm.docs.amd.com/projects/rocprofiler-sdk/en/latest/", "version_or_access_date": "accessed-2026-08-30", "reference_identity": "d1d85867fccd7b3795bb3e8652eff96294f287d53a6567282237a12593181703" }, "limitations": "The installed compiler identifies ROCm 7.2.4; this manifest does not run a HIP kernel or claim broad target coverage." }
+      }
+    },
+    {
+      "component": "mojo_gpu_workflow",
+      "installation": {
+        "status": "unavailable",
+        "reason": "not_installed",
+        "evidence_id": "b2a0cfff88bf0b174487474cd2ff8ec19213df80dba8f9dd809305784752e380"
+      },
+      "capabilities": {
+        "live_gpu_state": { "origin": "documented", "reference": { "title": "Mojo GPU debugging", "url": "https://docs.modular.com/mojo/tools/gpu-debugging/", "version_or_access_date": "accessed-2026-08-30", "reference_identity": "4922e0438ae69799dafb10f8a0c22a08f0e7918e84005853794b6965f2dcda05" }, "limitations": "The documented path uses CUDA-GDB on NVIDIA; Mojo is not installed and no AMD comparison was measured." },
+        "source_break_and_step": { "origin": "documented", "reference": { "title": "Mojo GPU debugging", "url": "https://docs.modular.com/mojo/tools/gpu-debugging/", "version_or_access_date": "accessed-2026-08-30", "reference_identity": "4922e0438ae69799dafb10f8a0c22a08f0e7918e84005853794b6965f2dcda05" }, "limitations": "CUDA-GDB source debugging is documented, with GPU stepping limitations; it was not observed locally." },
+        "deterministic_cpu_diagnosis": { "origin": "unavailable", "reason": "not_installed", "evidence_id": "b2a0cfff88bf0b174487474cd2ff8ec19213df80dba8f9dd809305784752e380", "limitations": "No installed Mojo workflow was available for a CPU simulator comparison." },
+        "semantic_identity_graph": { "origin": "unavailable", "reason": "not_documented", "evidence_id": "4922e0438ae69799dafb10f8a0c22a08f0e7918e84005853794b6965f2dcda05", "limitations": "The referenced workflow does not document the fe2o3 semantic identity and evidence graph." },
+        "dispatch_counter_pc_att_collection": { "origin": "unavailable", "reason": "not_documented", "evidence_id": "4922e0438ae69799dafb10f8a0c22a08f0e7918e84005853794b6965f2dcda05", "limitations": "The referenced debugger workflow is not an AMD rocprofv3 collection contract." },
+        "decoded_att_visualization": { "origin": "unavailable", "reason": "not_documented", "evidence_id": "4922e0438ae69799dafb10f8a0c22a08f0e7918e84005853794b6965f2dcda05", "limitations": "The referenced workflow does not document ROCm ATT visualization." },
+        "bounded_read_only_agent_queries": { "origin": "unavailable", "reason": "not_documented", "evidence_id": "4922e0438ae69799dafb10f8a0c22a08f0e7918e84005853794b6965f2dcda05", "limitations": "No bounded evidence-linked read-only agent protocol is documented by the referenced workflow." },
+        "supported_hardware_path": { "origin": "documented", "reference": { "title": "Mojo GPU debugging", "url": "https://docs.modular.com/mojo/tools/gpu-debugging/", "version_or_access_date": "accessed-2026-08-30", "reference_identity": "4922e0438ae69799dafb10f8a0c22a08f0e7918e84005853794b6965f2dcda05" }, "limitations": "The documented debugger path is NVIDIA CUDA-GDB, not an observed AMD MI300X workflow." }
+      }
+    }
+  ],
+  "overhead_budgets": [
+    {
+      "mode": "no_capture",
+      "collector": "fe2o3_native_kfd_debugger",
+      "configuration_sha256": "f9307cb37c9c114bb51225ebcaceee89afa8ad9a2f63a3518d9ec2eac5ecbbbc",
+      "policy": { "status": "candidate", "metric": { "metric": "relative_duration", "max_overhead_basis_points": 100 }, "max_storage_bytes": 0, "max_collection_milliseconds": 300000, "min_warmups": 5, "min_repetitions": 30, "statistic": "median" },
+      "observation": { "status": "unavailable", "reason": "not_measured", "evidence_id": "4ec4c447df37b3f27de9fe16bbe5048bb9c676acfd18e91c40ff7313edba3561" }
+    },
+    {
+      "mode": "counters",
+      "collector": "rocprofv3",
+      "configuration_sha256": "245d01347d4f05b77059fbfdbf33e587399cc9ea6cb34730f6c30e776a0db34a",
+      "policy": { "status": "candidate", "metric": { "metric": "relative_duration", "max_overhead_basis_points": 1000 }, "max_storage_bytes": 1073741824, "max_collection_milliseconds": 900000, "min_warmups": 5, "min_repetitions": 30, "statistic": "median" },
+      "observation": { "status": "unavailable", "reason": "not_measured", "evidence_id": "4ec4c447df37b3f27de9fe16bbe5048bb9c676acfd18e91c40ff7313edba3561" }
+    },
+    {
+      "mode": "pc_sampling",
+      "collector": "rocprofv3",
+      "configuration_sha256": "7ae833ea4417bad64efc56b54fc13950ee547c5dc927033b93fe1bbb012792b6",
+      "policy": { "status": "candidate", "metric": { "metric": "relative_duration", "max_overhead_basis_points": 2000 }, "max_storage_bytes": 2147483648, "max_collection_milliseconds": 900000, "min_warmups": 5, "min_repetitions": 30, "statistic": "median" },
+      "observation": { "status": "unavailable", "reason": "not_measured", "evidence_id": "4ec4c447df37b3f27de9fe16bbe5048bb9c676acfd18e91c40ff7313edba3561" }
+    },
+    {
+      "mode": "att",
+      "collector": "rocprofv3",
+      "configuration_sha256": "a0aeab1094d3864d3e107ad38b949819ff6b9730b73cd45ea346674897b22662",
+      "policy": { "status": "candidate", "metric": { "metric": "relative_duration", "max_overhead_basis_points": 10000 }, "max_storage_bytes": 4294967296, "max_collection_milliseconds": 900000, "min_warmups": 5, "min_repetitions": 30, "statistic": "median" },
+      "observation": { "status": "unavailable", "reason": "not_measured", "evidence_id": "4ec4c447df37b3f27de9fe16bbe5048bb9c676acfd18e91c40ff7313edba3561" }
+    },
+    {
+      "mode": "debugger_stop",
+      "collector": "fe2o3_rocgdb_kfd_debugger",
+      "configuration_sha256": "2bb35f5354fa82377d8c5c1b8bfd1ac4fd614db90b800ef37e2cca84a6189328",
+      "policy": { "status": "candidate", "metric": { "metric": "stop_resume_control_latency", "max_latency_nanoseconds": 500000000 }, "max_storage_bytes": 67108864, "max_collection_milliseconds": 900000, "min_warmups": 5, "min_repetitions": 30, "statistic": "p95" },
+      "observation": { "status": "unavailable", "reason": "capability_unsupported", "evidence_id": "5fc3881c71a0c13c878ca947f59c0ad5b8e3e5f46d4718d864f126721e8e3ce3" }
+    },
+    {
+      "mode": "instrumented",
+      "collector": "fe2o3_native_kfd_debugger",
+      "configuration_sha256": "8f807daa6df321ae921d16ac50ab682ec8826f5846ec1df7752df20a0fb9617a",
+      "policy": { "status": "candidate", "metric": { "metric": "relative_duration", "max_overhead_basis_points": 10000 }, "max_storage_bytes": 1073741824, "max_collection_milliseconds": 900000, "min_warmups": 5, "min_repetitions": 30, "statistic": "median" },
+      "observation": { "status": "unavailable", "reason": "not_measured", "evidence_id": "4ec4c447df37b3f27de9fe16bbe5048bb9c676acfd18e91c40ff7313edba3561" }
+    }
+  ]
+}
