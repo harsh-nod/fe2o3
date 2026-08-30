@@ -210,7 +210,10 @@ lifecycle above does not use that fake path, but it also does not authenticate
 compiler origin, consume production Verus certificates
 ([#91](https://github.com/harsh-nod/fe2o3/issues/91)), or prove MIR/KIR/LLVM/ISA
 refinement ([#106](https://github.com/harsh-nod/fe2o3/issues/106) and
-[#107](https://github.com/harsh-nod/fe2o3/issues/107)). General
+[#107](https://github.com/harsh-nod/fe2o3/issues/107)). The current capsule does
+independently reconstruct target-bound KIR and byte-exact LLVM from neutral
+KIR, replacing the old association-only transcript; that deterministic custody
+fact is not yet a formal semantic-refinement proof. General
 illegal-memory/race proofs, shapes, and protected Slice 3/4 remain open. These
 gaps keep every Complete count at zero and prevent any cuda-oxide parity claim.
 

@@ -155,9 +155,12 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   same `ProductionCompilation` typestate as backend codegen. Its
   `ExtractionOnly` custody can run general checks, semantic MIR import, ranked
   projection, verified Kernel IR lowering, and deterministic gfx942 LLVM
-  extraction, but cannot publish a compiler-module handoff. Real AMDGPU tests
-  cover safe and unsafe collection, dynamic ranked bounds, reference binding,
-  and a loop-carried BF16/F32 MFMA GEMM.
+  extraction, but cannot publish a compiler-module handoff. Target binding and
+  KIR-to-LLVM serialization are shared deterministic transforms. The compiler
+  records exact neutral/target KIR identities, profile, kernel ID, and LLVM;
+  `fe2o3-verifier` independently replays both transforms and compares the exact
+  result. Real AMDGPU tests cover safe and unsafe collection, dynamic ranked
+  bounds, reference binding, and a loop-carried BF16/F32 MFMA GEMM.
 - A protected continuation of that transaction now carries the WG64 `i32` LDS
   reduction through a compiler-bound inert handoff, measured upstream LLVM
   target APIs, in-process LLD, and COV6 inspection. The source, semantic MIR,
@@ -226,13 +229,16 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   exact compiler stages, reimports the nested signed aggregate
   MIR-to-live-PLIRON receipt under its embedded key, checks its PLIRON identity
   against middle-end V5, and retains that move-only owner beside signed
-  compiler-currentness evidence throughout the HSA lifecycle. The signature
-  does not authenticate compiler origin by itself and grants no LLVM, machine,
-  load, or launch authority. In default builds the verifier trait is sealed
-  against external implementations and the decision constructor is
-  crate-private. No reviewed concrete production verifier exists yet, so
-  ordinary generated application execution remains fail-closed rather than
-  accepting caller-asserted hashes or safety bits.
+  compiler-currentness evidence throughout the HSA lifecycle. The production
+  capsule also replaces the backend-private association-only AMDGPU transcript
+  with the independently replayed target-KIR-to-LLVM record. This proves exact
+  deterministic derivation by the reviewed serializer, not formal semantic
+  preservation. The signature does not authenticate compiler origin by itself
+  and grants no machine, load, or launch authority. In default builds the
+  verifier trait is sealed against external implementations and the decision
+  constructor is crate-private. No reviewed concrete production verifier
+  exists yet, so ordinary generated application execution remains fail-closed
+  rather than accepting caller-asserted hashes or safety bits.
 - Verus models and proof-carrying artifact schemas exist for bounded kernels
   and safety obligations. There is no general reviewed source-to-machine or
   Verus-to-machine refinement proof, so source proof, compiler evidence,

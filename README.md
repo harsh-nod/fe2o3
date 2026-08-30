@@ -646,9 +646,14 @@ Safe ownership of resources used by asynchronous copies is documented in
   validator strictly decodes canonical KIR V8, deterministically replays the
   exact induction report, and requires that certificate's precise MIR span to
   contain exactly one checked KIR addition. Correspondence and formal-memory
-  evidence bind the same versioned KIR digest and byte length. This evidence
-  remains inert and does not establish KIR-to-LLVM or LLVM-to-machine
-  refinement or authorize removing the guard.
+  evidence bind the same versioned KIR digest and byte length. The sole
+  production target stage now emits a bounded replay record; an independent
+  verifier reconstructs exact target-bound KIR V8, reruns the shared gfx942
+  lowering and upstream-layout binding, and byte-compares the retained LLVM.
+  The retired association-only lowering transcript has been deleted. This
+  establishes exact deterministic KIR-to-LLVM derivation and custody, not a
+  formal semantic-preservation proof, LLVM-to-machine refinement, or authority
+  to remove the guard, publish, load, or launch.
 - `fe2o3-core` provides HIP-backed contexts, streams, device buffers, pinned
   host buffers, events, synchronous transfers, and event-backed borrowed and
   owned asynchronous transfers. Its default/production surface exports no raw

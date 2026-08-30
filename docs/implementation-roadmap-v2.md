@@ -494,9 +494,11 @@ earlier authority transition.
    operands, and structurally matching saved-mask OR sites. These facts do not
    assign opcode semantics, establish hardware reconvergence, prove a mask empty,
    or establish termination. Production admission
-   must still establish KIR/LLVM-to-machine semantic refinement and bind its
-   move-only receipt into Worker V3. Hardware success remains an independent
-   evidence class.
+   now has exact deterministic target-KIR-to-LLVM replay from the neutral KIR
+   receipt, including byte equality with the retained LLVM. Production
+   admission must still establish formal KIR-to-LLVM semantic preservation and
+   LLVM-to-machine semantic refinement, then bind the machine receipt into
+   Worker V3. Hardware success remains an independent evidence class.
 9. **Implemented bounded foundation: alpha/zeta source proofs and proof
    records.** Mechanical source-model proofs, negative mutations, freshness,
    and executable-evidence records exist. They do not give Rust source an
