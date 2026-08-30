@@ -10,7 +10,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, SyncSender};
 use std::time::{Duration, Instant};
 
-use fe2o3_compiler_execution_protocol::COMPILER_EXECUTION_SUPERVISOR_SOCKET_PATH_V1;
+use fe2o3_compiler_execution_protocol::{
+    COMPILER_EXECUTION_SUPERVISOR_RUNTIME_DIRECTORY_MODE_V1,
+    COMPILER_EXECUTION_SUPERVISOR_SOCKET_MODE_V1, COMPILER_EXECUTION_SUPERVISOR_SOCKET_PATH_V1,
+};
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
 use rustix::fs::OFlags;
 use rustix::net::{
@@ -25,6 +28,7 @@ use crate::{
 const MAX_ACCEPT_TIMEOUT_V1: Duration = Duration::from_secs(120);
 const SERVICE_ACCEPT_OBSERVATION_V1: Duration = Duration::from_secs(1);
 const PERMISSION_AND_SPECIAL_BITS: u32 = 0o7777;
+const ROOT_ID_V1: u32 = 0;
 
 /// Failure admitting or using the sole protected issuer service listener.
 #[derive(Debug)]
@@ -200,24 +204,28 @@ impl ProtectedIssuerServiceV1 {
         listener: OwnedFd,
         timeouts: ProtectedIssuerSessionTimeoutsV1,
     ) -> Result<Self, ProtectedIssuerServiceErrorV1> {
-        Self::bind_at(
+        let credentials = supervisor.credentials();
+        Self::bind_with_policy(
             supervisor,
             listener,
             timeouts,
             Path::new(COMPILER_EXECUTION_SUPERVISOR_SOCKET_PATH_V1),
+            ListenerFilesystemPolicyV1::production(credentials),
         )
     }
 
-    fn bind_at(
+    fn bind_with_policy(
         supervisor: ProtectedIssuerSupervisorV1,
         listener: OwnedFd,
         timeouts: ProtectedIssuerSessionTimeoutsV1,
         expected_path: &Path,
+        filesystem_policy: ListenerFilesystemPolicyV1,
     ) -> Result<Self, ProtectedIssuerServiceErrorV1> {
         supervisor
             .revalidate()
             .map_err(ProtectedIssuerServiceErrorV1::Supervisor)?;
-        let listener = ProtectedIssuerListenerV1::admit(listener, expected_path)?;
+        let listener =
+            ProtectedIssuerListenerV1::admit(listener, expected_path, filesystem_policy)?;
         supervisor
             .revalidate()
             .map_err(ProtectedIssuerServiceErrorV1::Supervisor)?;
@@ -406,7 +414,14 @@ impl ProtectedIssuerServiceV1 {
         timeouts: ProtectedIssuerSessionTimeoutsV1,
         expected_path: &Path,
     ) -> Result<Self, ProtectedIssuerServiceErrorV1> {
-        Self::bind_at(supervisor, listener, timeouts, expected_path)
+        let credentials = supervisor.credentials();
+        Self::bind_with_policy(
+            supervisor,
+            listener,
+            timeouts,
+            expected_path,
+            ListenerFilesystemPolicyV1::fixture(credentials),
+        )
     }
 
     #[cfg(test)]
@@ -458,6 +473,41 @@ struct SocketSnapshotV1 {
     links: u64,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct ListenerFilesystemPolicyV1 {
+    parent_owner: u32,
+    parent_group: u32,
+    parent_mode: u32,
+    socket_owner: u32,
+    socket_group: u32,
+    socket_mode: u32,
+}
+
+impl ListenerFilesystemPolicyV1 {
+    pub(super) const fn production(credentials: crate::IssuerServiceCredentialProfileV1) -> Self {
+        Self {
+            parent_owner: ROOT_ID_V1,
+            parent_group: ROOT_ID_V1,
+            parent_mode: COMPILER_EXECUTION_SUPERVISOR_RUNTIME_DIRECTORY_MODE_V1,
+            socket_owner: ROOT_ID_V1,
+            socket_group: credentials.gid(),
+            socket_mode: COMPILER_EXECUTION_SUPERVISOR_SOCKET_MODE_V1,
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) const fn fixture(credentials: crate::IssuerServiceCredentialProfileV1) -> Self {
+        Self {
+            parent_owner: credentials.uid(),
+            parent_group: credentials.gid(),
+            parent_mode: 0o700,
+            socket_owner: credentials.uid(),
+            socket_group: credentials.gid(),
+            socket_mode: COMPILER_EXECUTION_SUPERVISOR_SOCKET_MODE_V1,
+        }
+    }
+}
+
 impl SocketSnapshotV1 {
     fn from_stat(stat: rustix::fs::Stat) -> Self {
         Self {
@@ -474,14 +524,17 @@ impl SocketSnapshotV1 {
 pub(super) struct ProtectedIssuerListenerV1 {
     descriptor: OwnedFd,
     expected_path: PathBuf,
+    filesystem_policy: ListenerFilesystemPolicyV1,
     descriptor_snapshot: SocketSnapshotV1,
     path_snapshot: SocketSnapshotV1,
+    parent_snapshot: SocketSnapshotV1,
 }
 
 impl ProtectedIssuerListenerV1 {
     pub(super) fn admit(
         descriptor: OwnedFd,
         expected_path: &Path,
+        filesystem_policy: ListenerFilesystemPolicyV1,
     ) -> Result<Self, ProtectedIssuerServiceErrorV1> {
         if !expected_path.is_absolute() {
             return Err(ProtectedIssuerServiceErrorV1::InvalidListener(
@@ -489,12 +542,15 @@ impl ProtectedIssuerListenerV1 {
             ));
         }
         let descriptor_snapshot = snapshot_descriptor(&descriptor)?;
-        let path_snapshot = snapshot_path(expected_path)?;
+        let path_snapshot = snapshot_path(expected_path, filesystem_policy)?;
+        let parent_snapshot = snapshot_parent(expected_path, filesystem_policy)?;
         let listener = Self {
             descriptor,
             expected_path: expected_path.to_owned(),
+            filesystem_policy,
             descriptor_snapshot,
             path_snapshot,
+            parent_snapshot,
         };
         listener.revalidate()?;
         Ok(listener)
@@ -503,7 +559,8 @@ impl ProtectedIssuerListenerV1 {
     pub(super) fn revalidate(&self) -> Result<(), ProtectedIssuerServiceErrorV1> {
         validate_listener_shape(&self.descriptor, &self.expected_path)?;
         if snapshot_descriptor(&self.descriptor)? != self.descriptor_snapshot
-            || snapshot_path(&self.expected_path)? != self.path_snapshot
+            || snapshot_path(&self.expected_path, self.filesystem_policy)? != self.path_snapshot
+            || snapshot_parent(&self.expected_path, self.filesystem_policy)? != self.parent_snapshot
         {
             return Err(ProtectedIssuerServiceErrorV1::InvalidListener(
                 "descriptor or pathname identity changed",
@@ -520,7 +577,8 @@ impl ProtectedIssuerListenerV1 {
             .map_err(|source| io_error("clone protected issuer listener", source.into()))?;
         validate_listener_shape(&descriptor, &self.expected_path)?;
         if snapshot_descriptor(&descriptor)? != self.descriptor_snapshot
-            || snapshot_path(&self.expected_path)? != self.path_snapshot
+            || snapshot_path(&self.expected_path, self.filesystem_policy)? != self.path_snapshot
+            || snapshot_parent(&self.expected_path, self.filesystem_policy)? != self.parent_snapshot
         {
             return Err(ProtectedIssuerServiceErrorV1::InvalidListener(
                 "deployment clone changed descriptor or pathname identity",
@@ -629,25 +687,95 @@ fn snapshot_descriptor(
     Ok(snapshot)
 }
 
-fn snapshot_path(path: &Path) -> Result<SocketSnapshotV1, ProtectedIssuerServiceErrorV1> {
+fn snapshot_path(
+    path: &Path,
+    policy: ListenerFilesystemPolicyV1,
+) -> Result<SocketSnapshotV1, ProtectedIssuerServiceErrorV1> {
     let snapshot = SocketSnapshotV1::from_stat(
         rustix::fs::lstat(path)
             .map_err(|source| io_error("inspect issuer listener pathname", source.into()))?,
     );
-    require_socket_snapshot(snapshot)?;
+    require_socket_path_snapshot(snapshot, policy)?;
+    require_absent_path_attributes(path, "inspect issuer listener pathname attributes")?;
+    Ok(snapshot)
+}
+
+fn snapshot_parent(
+    path: &Path,
+    policy: ListenerFilesystemPolicyV1,
+) -> Result<SocketSnapshotV1, ProtectedIssuerServiceErrorV1> {
+    let parent = path
+        .parent()
+        .ok_or(ProtectedIssuerServiceErrorV1::InvalidListener(
+            "listener pathname has no parent directory",
+        ))?;
+    let snapshot =
+        SocketSnapshotV1::from_stat(rustix::fs::lstat(parent).map_err(|source| {
+            io_error("inspect issuer listener parent directory", source.into())
+        })?);
+    if snapshot.mode & libc::S_IFMT != libc::S_IFDIR
+        || snapshot.mode & PERMISSION_AND_SPECIAL_BITS != policy.parent_mode
+        || snapshot.owner != policy.parent_owner
+        || snapshot.group != policy.parent_group
+        || snapshot.links == 0
+    {
+        return Err(ProtectedIssuerServiceErrorV1::InvalidListener(
+            "listener parent directory has the wrong type, owner, group, mode, or link count",
+        ));
+    }
+    require_absent_path_attributes(parent, "inspect issuer listener parent attributes")?;
     Ok(snapshot)
 }
 
 fn require_socket_snapshot(
     snapshot: SocketSnapshotV1,
 ) -> Result<(), ProtectedIssuerServiceErrorV1> {
+    if snapshot.mode & libc::S_IFMT != libc::S_IFSOCK || snapshot.links == 0 {
+        return Err(ProtectedIssuerServiceErrorV1::InvalidListener(
+            "listener descriptor is not a linked Unix socket",
+        ));
+    }
+    Ok(())
+}
+
+fn require_socket_path_snapshot(
+    snapshot: SocketSnapshotV1,
+    policy: ListenerFilesystemPolicyV1,
+) -> Result<(), ProtectedIssuerServiceErrorV1> {
     if snapshot.mode & libc::S_IFMT != libc::S_IFSOCK
-        || snapshot.mode & PERMISSION_AND_SPECIAL_BITS == 0
+        || snapshot.mode & PERMISSION_AND_SPECIAL_BITS != policy.socket_mode
+        || snapshot.owner != policy.socket_owner
+        || snapshot.group != policy.socket_group
         || snapshot.links == 0
     {
         return Err(ProtectedIssuerServiceErrorV1::InvalidListener(
-            "listener object is not a linked permissioned Unix socket",
+            "listener pathname has the wrong type, owner, group, mode, or link count",
         ));
+    }
+    Ok(())
+}
+
+fn require_absent_path_attributes(
+    path: &Path,
+    operation: &'static str,
+) -> Result<(), ProtectedIssuerServiceErrorV1> {
+    for attribute in [
+        "security.capability",
+        "system.posix_acl_access",
+        "system.posix_acl_default",
+    ] {
+        let mut byte = 0_u8;
+        match rustix::fs::lgetxattr(path, attribute, std::slice::from_mut(&mut byte)) {
+            Err(rustix::io::Errno::NODATA | rustix::io::Errno::OPNOTSUPP) => {}
+            Ok(_) | Err(rustix::io::Errno::RANGE) => {
+                return Err(ProtectedIssuerServiceErrorV1::InvalidListener(
+                    "listener path has a forbidden capability or POSIX ACL",
+                ));
+            }
+            Err(source) => {
+                return Err(io_error(operation, source.into()));
+            }
+        }
     }
     Ok(())
 }

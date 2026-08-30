@@ -9,7 +9,7 @@ use std::path::Path;
 use fe2o3_compiler_execution_protocol::COMPILER_EXECUTION_SUPERVISOR_SOCKET_PATH_V1;
 
 use crate::authority::ProtectedIssuerRootV1;
-use crate::listener::ProtectedIssuerListenerV1;
+use crate::listener::{ListenerFilesystemPolicyV1, ProtectedIssuerListenerV1};
 use crate::{
     IssuerServiceCredentialProfileV1, ProtectedIssuerServiceErrorV1,
     ProtectedIssuerSupervisorErrorV1,
@@ -57,23 +57,41 @@ impl ProvisionedProtectedIssuerServiceInputsV1 {
         root: File,
         credentials: IssuerServiceCredentialProfileV1,
     ) -> Result<Self, ProtectedIssuerServiceProvisioningErrorV1> {
-        Self::admit_at(
+        Self::admit_with_policy(
             listener,
             root,
             credentials,
             Path::new(COMPILER_EXECUTION_SUPERVISOR_SOCKET_PATH_V1),
+            ListenerFilesystemPolicyV1::production(credentials),
         )
     }
 
+    #[cfg(test)]
     pub(super) fn admit_at(
         listener: OwnedFd,
         root: File,
         credentials: IssuerServiceCredentialProfileV1,
         expected_path: &Path,
     ) -> Result<Self, ProtectedIssuerServiceProvisioningErrorV1> {
+        Self::admit_with_policy(
+            listener,
+            root,
+            credentials,
+            expected_path,
+            ListenerFilesystemPolicyV1::fixture(credentials),
+        )
+    }
+
+    fn admit_with_policy(
+        listener: OwnedFd,
+        root: File,
+        credentials: IssuerServiceCredentialProfileV1,
+        expected_path: &Path,
+        filesystem_policy: ListenerFilesystemPolicyV1,
+    ) -> Result<Self, ProtectedIssuerServiceProvisioningErrorV1> {
         let root = ProtectedIssuerRootV1::admit(root, credentials)
             .map_err(ProtectedIssuerServiceProvisioningErrorV1::Root)?;
-        let listener = ProtectedIssuerListenerV1::admit(listener, expected_path)
+        let listener = ProtectedIssuerListenerV1::admit(listener, expected_path, filesystem_policy)
             .map_err(ProtectedIssuerServiceProvisioningErrorV1::Listener)?;
         let admitted = Self {
             credentials,

@@ -98,7 +98,10 @@ production listener at
 `/run/fe2o3/compiler-execution-supervisor.sock`. Admission requires an exact
 nonblocking close-on-exec listening Unix `SOCK_SEQPACKET`, no connected peer,
 no pending socket error, and stable descriptor plus filesystem-socket
-identities. Each accept operation waits under one absolute bound and uses
+identities. The retained pathname policy additionally requires a root-owned
+mode-`0755` `/run/fe2o3` without POSIX ACLs or file capabilities and a
+root-owned, deployment-service-GID, mode-`0660` socket with the same metadata
+exclusions. Each accept operation waits under one absolute bound and uses
 `CLOEXEC | NONBLOCK`, repeats listener and supervisor validation around the
 accept, and dispatches the control descriptor directly into `run_session`.
 Alternate production paths and caller-visible accepted descriptors do not
