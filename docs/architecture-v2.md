@@ -225,9 +225,11 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   production persistence and packet paths have exhaustive injected-crash coverage
   around cleanup, create, write, file sync, rename, directory sync, receive,
   exchange, and send. Restart admits only the exact prior or proposed state and
-  exact challenge replay advances at most once. The distinct-UID root coordinator
-  and its endpoint/pidfd transfer are implemented; deployed supervisor wiring,
-  combined privileged qualification, and final verifier authority remain pending.
+  exact challenge replay advances at most once. The distinct-UID root coordinator,
+  endpoint/pidfd transfer, measured supervisor spawn, profile gate, canonical
+  readiness, and combined supervisor/anchor custody are implemented. Exact
+  service-account/socket provisioning, combined privileged qualification, and
+  final verifier authority remain pending.
 - Versioned artifact, descriptor, durable-publication, and HSA records exist.
   Host execution has one workload-neutral Worker V3 graph. An arbitrary
   manifest cannot manufacture a Rust signature, verifier decision, load

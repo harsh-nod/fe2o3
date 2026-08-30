@@ -400,6 +400,8 @@ admits exact readiness from the resulting pidfd occurrence. The client and
 supervisor suites also qualify exact descriptor-free Cargo publication,
 mandatory EOF, malformed and substituted packets, ancillary descriptors,
 trailing packets, timeout, closed-peer cleanup, and serving typestate custody.
-A deployed distinct-UID service-profile fixture remains pending. Cargo's fixed
-listener acquisition, child-channel transfer, and readiness gate are covered by
-unit suites; they have not yet been qualified against that deployed fixture.
+The root-owned distinct-UID launcher, profile gate, fixed descriptor transfer,
+canonical deployment readiness, and supervisor/anchor lifecycle custody are
+implemented. A privileged service-account/socket fixture remains pending.
+Cargo's fixed listener acquisition, child-channel transfer, and readiness gate
+are covered by unit suites; they have not yet been qualified against that fixture.

@@ -140,9 +140,12 @@ transition methods private. The descriptor-only musl-static issuer entrypoint
 now admits the exact policy, launch manifest, client pidfd, peer, root, key, and
 readiness pipe. It emits readiness only after complete admission and durable
 recovery. The supervisor now provisions, launches, inspects, and owns those
-descriptors and that exact child. The remaining issuer deployment work is the
-production distinct-UID service entrypoint and Cargo-side acquisition path.
-Until that complete chain lands, `CompilerExecutionProvenance` remains open.
+descriptors and that exact child. The root coordinator now establishes the
+supervisor's distinct-UID profile, fixed descriptor set, deployment readiness,
+pidfd custody, and external-anchor lifetime. The remaining issuer deployment
+work is privileged account/socket qualification and a real Cargo-to-KFD run.
+Until that chain and the concrete verifier land, `CompilerExecutionProvenance`
+remains open.
 
 ## Qualification
 

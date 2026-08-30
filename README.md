@@ -226,9 +226,13 @@ one retained lock, creates the service socketpair, transfers one exact endpoint,
 and crosses into the daemon through `execveat` with an empty environment. The
 privileged coordinator now implements measured preparation, atomic pidfd launch,
 profile gating, endpoint admission, transfer cloning, and exact kill/reap custody.
-Its supervisor-construction wiring, authoritative root-only distinct-UID
-qualification, and refinement evidence join remain open, so the result remains
-authority-free.
+The root-owned supervisor coordinator now composes that anchor with the exact
+listener, service root, three measured static images, policy, root key template,
+and deployment manifest through the shared protected-service spawn path. It
+requires independent profile and namespace validation, canonical PID/deployment
+readiness, bootstrap EOF, pidfd liveness, and supervisor-before-anchor teardown.
+Authoritative root-only distinct-UID qualification and the refinement evidence
+join remain open, so the result remains authority-free.
 The issuer's direct transition
 methods are private. One shared bounded
 client now recovers first and resumes Ready, Prepared, or Issued under one
@@ -298,7 +302,8 @@ The durable external monotonic service, measured distinct-UID launcher, and
 root-owned coordinator exist, and their persistence plus packet loops now
 converge to only the exact prior or proposed state across every injected
 create/write/fsync/rename and receive/exchange/send interruption. Deployed
-root-coordinator-to-supervisor wiring, the combined privileged qualification,
+root-coordinator-to-supervisor wiring and lifecycle custody are implemented.
+Exact service-account/socket provisioning, combined privileged qualification,
 and the concrete protected verifier remain absent. A fixed
 receipt sidecar and publication ACK now
 carry the exact journal, occurrence, receipt, Worker record, sequence, and
