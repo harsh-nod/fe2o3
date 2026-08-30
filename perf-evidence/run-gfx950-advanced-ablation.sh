@@ -56,8 +56,8 @@ run_case() {
         gpt_oss) script_dir=$REPO_ROOT/examples/gfx950_gpt_oss_decode ;;
         *) printf 'unknown suite: %s\n' "$suite" >&2; return 2 ;;
     esac
-    output=$EVIDENCE_DIR/artifacts/$suite-$variant
-    log=$EVIDENCE_DIR/logs/$suite-$variant.log
+    output=$EVIDENCE_DIR/artifacts/$suite-$feature-$variant
+    log=$EVIDENCE_DIR/logs/$suite-$feature-$variant.log
     printf 'RUN suite=%s feature=%s variant=%s gpu=%s\n' "$suite" "$feature" "$variant" "$GPU"
 
     env -u HIP_VISIBLE_DEVICES \
