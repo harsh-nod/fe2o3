@@ -21,6 +21,8 @@ mod profiler_variant_v1;
 pub use profiler_variant_v1::*;
 mod distributed_overlap_v1;
 pub use distributed_overlap_v1::*;
+mod agent_variant_service_v1;
+pub use agent_variant_service_v1::*;
 mod agent_service_v1;
 pub use agent_service_v1::*;
 

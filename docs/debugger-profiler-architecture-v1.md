@@ -207,7 +207,7 @@ contract and an unavailable response are both tested here.
 | T1 semantic map | elementwise, collective, and tiled kernels round-trip source to ISA and ISA to source; optimization shapes and hostile substitution tested | general schedule/LLVM/ISA intervals and optimization-shape round trips are incomplete |
 | T2 debugger | seeded OOB and barrier divergence identify dispatch, site, workgroup, wave/lane scope, region/phase contract, and origin without raw-log parsing | V4 exact KFD publication-to-structured-MI correlation is implemented and the installed ROCgdb path reports typed stopped-state unavailability; authenticated native registers/source/memory and general cooperative live-kernel acceptance remain incomplete |
 | T3 profiler | seeded schedule/resource regression is attributed to semantic/IR/ISA change with exact comparable evidence | strict variant admission and schedule/resource co-observation exist; authenticated semantic/IR/ISA localization, decoded ATT/runtime/copy attribution, and causal end-to-end explanation are incomplete |
-| T4 agent protocol | fresh non-privileged client completes T2/T3 diagnoses, cites evidence, and plans the minimum next capture | canonical read-only service and complete operation acceptance are incomplete |
+| T4 agent protocol | fresh non-privileged client completes T2/T3 diagnoses, cites evidence, and plans the minimum next capture | process-isolated reference acceptance now covers seeded OOB, barrier divergence, Variant V1 schedule/resource co-observation, bounded paging, and the minimum ambiguous capture plan; operating-system sandbox deployment is external to the evidence protocol |
 | T5 distributed | eight-GPU overlap regression localizes to an admitted graph edge or interval while preserving clock/loss uncertainty | awaits versioned #182 operation, transfer, collective, and clock-correlation inputs |
 | T6 qualification | overhead, target, pagination, loss, reset, optimized-out, partial-capture, and comparative usability gates pass | all six overhead modes remain unmeasured or unsupported under candidate policies; broad target/reset/usability evidence is incomplete |
 
@@ -227,6 +227,49 @@ Every committed acceptance fixture contains:
 7. for measured modes, warm-up policy, repetitions, clock domain, duration
    statistic, storage, and observed perturbation relative to the admitted
    no-capture comparator.
+
+### T4 fresh-process acceptance
+
+The production reference client is deterministic and usable without an LLM.
+It opens bounded regular evidence once with no-follow semantics, rejects
+symlinks and hard links, revalidates the same descriptor's stable filesystem
+identity and mutation metadata after reading, and spawns fresh debugger/
+profiler children with piped stdin, stdout, and stderr. Simulator
+launch-time inputs are private snapshots; accepted diagnoses must independently
+return the exact preloaded KIR policy identity and request SHA-256/length. The
+profiler Variant extension instead carries all exact bytes as canonical
+lowercase hex, so a mutable path is never evidence.
+
+Debugger and profiler executables are admitted once as bounded singly-linked
+regular files with executable permission, no-follow and close-on-exec flags,
+stable descriptor metadata, and SHA-256 over the exact descriptor bytes. The
+client retains those descriptors, launches only `/proc/self/fd/N`, revalidates
+metadata and content around each child, and records both exact executable byte
+identities in its report. Replacing a workflow path after admission cannot
+substitute an impostor producer. Operator policy still decides which initial
+executable identities are trusted; the report is content association, not a
+signature or software-supply-chain attestation.
+
+Capability discovery precedes every operation. The client requires simulator
+semantic-trace availability and explicit KFD dispatch-control unavailability;
+the Variant extension's read-only authority and exact-input contract; and Agent
+Profiler V1's versioned capture-plan request/result contracts. It validates
+both diagnosis evidence manifests and Variant response identities. The bounded
+report retains each complete authenticated diagnosis and actual citation IDs,
+plus the capture plan's exact evidence identities/origins. It traverses two
+one-item dispatch pages with a content-bound cursor and submits the exact
+selected dispatch to the planner. Process-level hostile tests cover stale and
+duplicate requests, raw-source substitution, response substitution, malformed
+terminal input, post-preload simulator snapshot substitution, evidence
+symlinks/hard links, determinism, and line/response bounds. A descriptor-level
+hostile test covers executable symlink/hard-link rejection plus
+rename/replacement retention and mutation rejection.
+
+This satisfies the scoped T4 workflow acceptance for the two seeded simulator
+diagnoses, the conservative T3 co-observation, and the ambiguous next-capture
+plan. It does not supply the semantic/IR/ISA or causal attribution still open
+in T3, native evidence still open in T2, or an operating-system sandbox. Those
+facts remain separate from the protocol's absence of execution authority.
 
 Closing #215 means these records pass in production CI and on the declared
 hardware targets. Documentation, a UI projection, or a schema without its

@@ -172,6 +172,47 @@ and KFD dispatch control remain typed `unavailable`; no value is fabricated.
 KIR, request, and sidecar files use the hardened regular-file capture boundary
 shared with `fe2o3-kir-sim`.
 
+## Fresh reference client
+
+`fe2o3-agent-reference-client --workflow WORKFLOW.json` is a deterministic,
+LLM-independent acceptance client. It opens each bounded regular evidence file
+once with no-follow semantics, rejects symlinks and hard links, and revalidates
+the same descriptor's device, inode, type, link count, size, modification time,
+and change time after the bounded read. It snapshots simulator inputs privately
+and then communicates with `fe2o3-debug` and the profiler services only through
+documented JSONL stdin/stdout. The launch-time workflow names trusted installed
+debugger/profiler executables and hostile evidence paths. Each executable is
+also opened once with no-follow/close-on-exec semantics, required to be a
+bounded singly-linked executable regular file, hashed from that descriptor,
+and retained for every launch through `/proc/self/fd/N`. Descriptor metadata
+and content are revalidated around each child, and the exact executable byte
+identities are included in the report. A later path replacement therefore
+cannot select the producer of accepted evidence. Evidence paths never enter
+the protocol or final report. Simulator results must name the exact preloaded
+request and canonical KIR identities, so replacing a snapshot does not yield
+an accepted diagnosis.
+
+One workflow discovers capabilities and then performs four read-only tasks:
+
+- diagnose a retained simulator memory out-of-bounds failure;
+- diagnose a retained simulator workgroup-barrier divergence;
+- compare a seeded schedule/resource Variant V1 regression while preserving
+  decoded ATT, runtime/copy, semantic/ISA, and causal gaps as unavailable; and
+- page the exact dispatch set and ask Agent Profiler V1 for the minimum capture
+  that distinguishes scheduling delay from resource pressure.
+
+The client decodes simulator diagnoses with the full evidence-manifest
+validator, validates the serialized Variant response identity, and requires
+exact citations for ranked explanations. Its bounded report retains each full
+authenticated diagnosis with every material citation identity and the capture
+plan's exact Agent V1 evidence/origins. It otherwise contains only inert
+content identities, truth classifications, cited claims, typed unavailable
+states, and pagination counts. It has no launch, attach,
+pause, scheduling, KFD, ROCgdb-control, rocprofv3-collection, or recapture
+operation. `fe2o3-agent-profiler-service` is a small companion executable that
+exposes the unchanged Agent Profiler V1 JSONL mode and the separate Variant V1
+mode for this process-isolated workflow; it is not an MCP adapter.
+
 ## KFD hardware protocol V2
 
 `fe2o3-debug hardware -- PROGRAM [ARG...]` launches that exact argument vector

@@ -296,6 +296,54 @@ struct Treatment {
     pc: Option<Vec<u8>>,
 }
 
+fn lower_hex(bytes: &[u8]) -> String {
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        use std::fmt::Write as _;
+        write!(&mut output, "{byte:02x}").unwrap();
+    }
+    output
+}
+
+fn treatment_json(treatment: &Treatment) -> JsonValue {
+    serde_json::json!({
+        "manifest_hex": lower_hex(&treatment.manifest),
+        "semantic_workload_hex": lower_hex(&treatment.workload),
+        "raw_profiler_source_hex": lower_hex(&treatment.raw_source),
+        "bundle_hex": lower_hex(&treatment.bundle),
+        "schedule_hex": lower_hex(&treatment.schedule),
+        "artifact_hex": lower_hex(&treatment.artifact),
+        "isa_projection_hex": lower_hex(&treatment.isa),
+        "counters_hex": treatment.counters.as_deref().map(lower_hex),
+        "pc_samples_hex": treatment.pc.as_deref().map(lower_hex),
+    })
+}
+
+fn run_variant_service(requests: &[JsonValue]) -> std::process::Output {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_fe2o3-profiler-service"))
+        .arg("variant-jsonl")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut input = child.stdin.take().unwrap();
+    for request in requests {
+        serde_json::to_writer(&mut input, request).unwrap();
+        input.write_all(b"\n").unwrap();
+    }
+    drop(input);
+    child.wait_with_output().unwrap()
+}
+
+fn output_json_lines(output: &[u8]) -> Vec<JsonValue> {
+    output
+        .split_inclusive(|byte| *byte == b'\n')
+        .filter(|line| !line.is_empty())
+        .map(|line| serde_json::from_slice(line).unwrap())
+        .collect()
+}
+
 impl Treatment {
     fn input(&self) -> ProfilerVariantTreatmentInputV1<'_> {
         ProfilerVariantTreatmentInputV1 {
@@ -1294,6 +1342,188 @@ fn multi_kernel_hsaco_is_not_bound_by_an_unauthenticated_ordinal() {
     );
 }
 
+#[test]
+fn additive_variant_jsonl_is_discoverable_bounded_and_deterministic() {
+    let workload = br#"{"kernel":"generic","shape":[256,2,1]}"#;
+    let baseline_source = combined_counter_source(140, 260, 9.0);
+    let candidate_source = combined_counter_source(170, 310, 11.0);
+    let baseline = treatment(
+        workload,
+        &baseline_source,
+        hsaco(7, 0),
+        1,
+        b"schedule-v1",
+        b"isa-v1",
+        Some(&baseline_source),
+    );
+    let candidate = treatment(
+        workload,
+        &candidate_source,
+        hsaco(11, 2),
+        2,
+        b"schedule-v2",
+        b"isa-v2",
+        Some(&candidate_source),
+    );
+    let requests = vec![
+        serde_json::json!({
+            "operation": "discover_capabilities",
+            "schema": AGENT_PROFILER_VARIANT_REQUEST_SCHEMA_V1,
+            "request_id": 1,
+            "expected_revision": 0,
+        }),
+        serde_json::json!({
+            "operation": "compare_variants",
+            "schema": AGENT_PROFILER_VARIANT_REQUEST_SCHEMA_V1,
+            "request_id": 2,
+            "expected_revision": 1,
+            "baseline": treatment_json(&baseline),
+            "candidate": treatment_json(&candidate),
+        }),
+    ];
+    let first = run_variant_service(&requests);
+    let second = run_variant_service(&requests);
+    assert!(first.status.success());
+    assert!(first.stderr.is_empty());
+    assert_eq!(first.stdout, second.stdout);
+    let responses = output_json_lines(&first.stdout);
+    assert_eq!(responses.len(), 2);
+    for line in first
+        .stdout
+        .split_inclusive(|byte| *byte == b'\n')
+        .filter(|line| !line.is_empty())
+    {
+        validate_agent_profiler_variant_response_line_v1(line).unwrap();
+    }
+    assert!(responses.iter().all(|response| {
+        serde_json::to_vec(response).unwrap().len() as u64
+            <= MAX_AGENT_PROFILER_VARIANT_RESPONSE_BYTES_V1
+    }));
+    let capabilities = &responses[0]["value"]["capabilities"];
+    assert_eq!(
+        capabilities["authority"],
+        "read_only_no_execution_attach_scheduling_or_collection_authority"
+    );
+    assert_eq!(
+        capabilities["exact_input_encoding"],
+        "canonical_lowercase_hex_of_exact_bytes"
+    );
+    assert_eq!(capabilities["operations"].as_array().unwrap().len(), 2);
+    let comparison = &responses[1]["value"]["comparison"];
+    assert_eq!(comparison["comparable"], true);
+    assert!(
+        !comparison["ranked_explanations"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    for kind in [
+        "decoded_att_events",
+        "runtime_api_events",
+        "copy_events",
+        "pc_to_semantic_or_isa_correlation",
+        "semantic_ir_isa_change_localization",
+        "causal_regression_attribution",
+    ] {
+        assert!(
+            comparison["unavailable"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|fact| fact["kind"] == kind)
+        );
+    }
+    let encoded = String::from_utf8(first.stdout).unwrap();
+    for forbidden in ["/dev/kfd", "launch_kernel", "collect_profile"] {
+        assert!(!encoded.contains(forbidden));
+    }
+    let mut substituted = responses[1].clone();
+    substituted["value"]["comparison"]["ranking_policy"] = "forged".into();
+    let mut substituted = serde_json::to_vec(&substituted).unwrap();
+    substituted.push(b'\n');
+    assert!(validate_agent_profiler_variant_response_line_v1(&substituted).is_err());
+}
+
+#[test]
+fn additive_variant_jsonl_rejects_stale_duplicate_and_substituted_evidence() {
+    assert!(decode_agent_profiler_variant_request_line_v1(
+        br#"{"operation":"compare_variants","schema":"fe2o3-agent-profiler-variant-request-v1","request_id":1,"expected_revision":0,"baseline":{"manifest_path":"mutable.json"},"candidate":{"manifest_path":"mutable.json"}}
+"#,
+    )
+    .is_err());
+    let workload = b"service-hostile-workload";
+    let source = combined_counter_source(140, 260, 9.0);
+    let treatment = treatment(
+        workload,
+        &source,
+        hsaco(7, 0),
+        1,
+        b"schedule",
+        b"isa",
+        Some(&source),
+    );
+    let mut substituted = treatment_json(&treatment);
+    substituted["raw_profiler_source_hex"] = lower_hex(b"{}").into();
+    let output = run_variant_service(&[
+        serde_json::json!({
+            "operation": "discover_capabilities",
+            "schema": AGENT_PROFILER_VARIANT_REQUEST_SCHEMA_V1,
+            "request_id": 1,
+            "expected_revision": 0,
+        }),
+        serde_json::json!({
+            "operation": "compare_variants",
+            "schema": AGENT_PROFILER_VARIANT_REQUEST_SCHEMA_V1,
+            "request_id": 2,
+            "expected_revision": 0,
+            "baseline": treatment_json(&treatment),
+            "candidate": treatment_json(&treatment),
+        }),
+        serde_json::json!({
+            "operation": "compare_variants",
+            "schema": AGENT_PROFILER_VARIANT_REQUEST_SCHEMA_V1,
+            "request_id": 2,
+            "expected_revision": 2,
+            "baseline": treatment_json(&treatment),
+            "candidate": treatment_json(&treatment),
+        }),
+        serde_json::json!({
+            "operation": "compare_variants",
+            "schema": AGENT_PROFILER_VARIANT_REQUEST_SCHEMA_V1,
+            "request_id": 3,
+            "expected_revision": 3,
+            "baseline": treatment_json(&treatment),
+            "candidate": substituted,
+        }),
+    ]);
+    assert!(output.status.success());
+    let responses = output_json_lines(&output.stdout);
+    assert_eq!(responses[1]["code"], "stale_revision");
+    assert_eq!(responses[2]["code"], "duplicate_request_id");
+    assert_eq!(responses[3]["code"], "evidence_admission_failed");
+    assert!(
+        responses
+            .iter()
+            .all(|response| !response["response_identity"].is_null())
+    );
+
+    let malformed = Command::new(env!("CARGO_BIN_EXE_fe2o3-profiler-service"))
+        .arg("variant-jsonl")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .and_then(|mut child| {
+            child.stdin.take().unwrap().write_all(b"{}\n")?;
+            child.wait_with_output()
+        })
+        .unwrap();
+    assert_eq!(malformed.status.code(), Some(1));
+    let response = &output_json_lines(&malformed.stdout)[0];
+    assert_eq!(response["code"], "invalid_request");
+    assert_eq!(response["terminal"], true);
+}
+
 fn hsaco(vgpr_count: u64, spill_count: u64) -> Vec<u8> {
     hsaco_with_kernels(vec![kernel("generic", vgpr_count, spill_count)])
 }
@@ -1413,3 +1643,5 @@ fn write_u32(bytes: &mut [u8], offset: usize, value: u32) {
 fn write_u64(bytes: &mut [u8], offset: usize, value: u64) {
     bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
 }
+use std::io::Write;
+use std::process::{Command, Stdio};

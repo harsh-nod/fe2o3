@@ -20,11 +20,25 @@ fe2o3-kernel-ir.workspace = true
 fe2o3-kir-debugger.workspace = true
 fe2o3-kir-sim.workspace = true
 fe2o3-kir-sim-cli.workspace = true
+fe2o3-semantic-query.workspace = true
 serde.workspace = true
 serde_json = "1"
 sha2.workspace = true
 libc.workspace = true
 
+[dev-dependencies]
+fe2o3-semantic-import.workspace = true
+fe2o3-semantic-trace.workspace = true
+rmpv = { version = "1.3.1", default-features = false }
+
 [[bin]]
 name = "fe2o3-debug"
 path = "src/main.rs"
+
+[[bin]]
+name = "fe2o3-agent-reference-client"
+path = "src/bin/fe2o3-agent-reference-client.rs"
+
+[[bin]]
+name = "fe2o3-agent-profiler-service"
+path = "src/bin/fe2o3-agent-profiler-service.rs"

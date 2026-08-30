@@ -2880,6 +2880,89 @@ pub fn read_agent_profiler_request_line_v1<R: BufRead>(
     }
 }
 
+pub fn run_agent_profiler_jsonl_v1<R: BufRead, W: Write>(
+    input: &mut R,
+    output: &mut W,
+) -> Result<(), AgentProfilerServiceErrorV1> {
+    let mut service = AgentProfilerServiceV1::new(AgentProfilerServiceLimitsV1::default())?;
+    loop {
+        let line = match read_agent_profiler_request_line_v1(input) {
+            Ok(Some(line)) => line,
+            Ok(None) => return Ok(()),
+            Err(AgentProfilerServiceErrorV1::RequestTooLarge) => {
+                write_agent_profiler_terminal_v1(
+                    output,
+                    &mut service,
+                    AgentProfilerErrorCodeV1::RequestTooLarge,
+                )?;
+                return Err(AgentProfilerServiceErrorV1::InvalidRequest);
+            }
+            Err(_) => {
+                write_agent_profiler_terminal_v1(
+                    output,
+                    &mut service,
+                    AgentProfilerErrorCodeV1::InvalidRequest,
+                )?;
+                return Err(AgentProfilerServiceErrorV1::InvalidRequest);
+            }
+        };
+        let request = match decode_agent_profiler_request_line_v1(&line) {
+            Ok(request) => request,
+            Err(_) => {
+                write_agent_profiler_terminal_v1(
+                    output,
+                    &mut service,
+                    AgentProfilerErrorCodeV1::InvalidRequest,
+                )?;
+                return Err(AgentProfilerServiceErrorV1::InvalidRequest);
+            }
+        };
+        let response = service.handle(request);
+        let terminal = response.is_terminal();
+        let encoded = match service.encode_response(&response) {
+            Ok(encoded) => encoded,
+            Err(AgentProfilerServiceErrorV1::ResponseTooLarge) => {
+                write_agent_profiler_terminal_v1(
+                    output,
+                    &mut service,
+                    AgentProfilerErrorCodeV1::ResponseTooLarge,
+                )?;
+                return Err(AgentProfilerServiceErrorV1::ResponseTooLarge);
+            }
+            Err(_) => {
+                write_agent_profiler_terminal_v1(
+                    output,
+                    &mut service,
+                    AgentProfilerErrorCodeV1::InternalEvidenceMismatch,
+                )?;
+                return Err(AgentProfilerServiceErrorV1::InvalidResponse);
+            }
+        };
+        output
+            .write_all(&encoded)
+            .map_err(|_| AgentProfilerServiceErrorV1::Io)?;
+        output
+            .flush()
+            .map_err(|_| AgentProfilerServiceErrorV1::Io)?;
+        if terminal {
+            return Err(AgentProfilerServiceErrorV1::InvalidRequest);
+        }
+    }
+}
+
+fn write_agent_profiler_terminal_v1<W: Write>(
+    output: &mut W,
+    service: &mut AgentProfilerServiceV1,
+    code: AgentProfilerErrorCodeV1,
+) -> Result<(), AgentProfilerServiceErrorV1> {
+    let response = service.terminal_protocol_error(code)?;
+    let encoded = service.encode_response(&response)?;
+    output
+        .write_all(&encoded)
+        .map_err(|_| AgentProfilerServiceErrorV1::Io)?;
+    output.flush().map_err(|_| AgentProfilerServiceErrorV1::Io)
+}
+
 fn encode_response_bounded(
     response: &AgentProfilerResponseV1,
     max_response_bytes: u64,

@@ -297,6 +297,26 @@ input emits a typed terminal error and closes the session. The existing
 `generic-core` workspace gate builds and tests all targets in this crate, which
 includes the service binary and its protocol tests.
 
+## Additive Variant V1 agent service
+
+`fe2o3-profiler-service variant-jsonl` is a separate extension; it does not
+add operations to or change bytes from the frozen Agent Profiler V1 service.
+Capability discovery publishes the extension schemas, exact-input encoding,
+hard request/response/request-count bounds, and its read-only authority. A
+`compare_variants` request carries every exact treatment input as canonical
+lowercase hex. Paths, mutable handles, collector commands, and device handles
+are not protocol inputs.
+
+The service admits both manifests and exact supplied rocprofv3 sources through
+the production Variant V1 comparator. Successful results retain the ranked
+co-observation, evidence identities, and every typed unavailable result from
+Variant V1. They do not upgrade schedule/resource correlation into causality.
+Requests have unique IDs and exact expected revisions. Every response has a
+serialized content identity over the complete response preimage; the reference
+client validates it before reading claims. Stale revisions, duplicate IDs,
+noncanonical hex, manifest/raw-source substitutions, oversized input, and
+response substitutions fail closed.
+
 ## Distributed-overlap extension
 
 `AgentProfilerDistributedOverlapServiceV1` and
