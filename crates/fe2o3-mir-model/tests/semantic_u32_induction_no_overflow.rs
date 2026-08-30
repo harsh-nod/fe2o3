@@ -27,6 +27,7 @@ enum Mutation {
     #[default]
     None,
     AliasGuardInduction,
+    StaleAliasGuardInduction,
     AliasGuardBound,
     ProjectedCheckedInduction,
     U64Induction,
@@ -317,6 +318,14 @@ fn function(seed: u8, mutation: Mutation) -> (Vec<SemanticTypeDeclV1>, SemanticF
         integer_ty,
         SemanticRvalueKindV1::Use(scalar_constant(integer_ty, initial, integer_size)),
     );
+    let mut preheader_statements = vec![initialization];
+    if matches!(mutation, Mutation::StaleAliasGuardInduction) {
+        preheader_statements.push(assign(
+            place(ALIAS, integer_ty),
+            integer_ty,
+            SemanticRvalueKindV1::Use(copy(INDUCTION, integer_ty)),
+        ));
+    }
     let preheader_terminator = if matches!(mutation, Mutation::AlternateBodyEntry) {
         SemanticTerminatorKindV1::FalseEdge {
             real_target: edge(SemanticEdgeRoleV1::FalseEdgeReal, 1),
@@ -333,6 +342,8 @@ fn function(seed: u8, mutation: Mutation) -> (Vec<SemanticTypeDeclV1>, SemanticF
             integer_ty,
             SemanticRvalueKindV1::Use(copy(INDUCTION, integer_ty)),
         ));
+        copy(ALIAS, integer_ty)
+    } else if matches!(mutation, Mutation::StaleAliasGuardInduction) {
         copy(ALIAS, integer_ty)
     } else {
         copy(INDUCTION, integer_ty)
@@ -497,7 +508,7 @@ fn function(seed: u8, mutation: Mutation) -> (Vec<SemanticTypeDeclV1>, SemanticF
         vec![]
     };
     let mut blocks = vec![
-        block(seed, 40, vec![initialization], preheader_terminator),
+        block(seed, 40, preheader_statements, preheader_terminator),
         block(seed, 41, guard_statements, header_terminator),
         block(seed, 42, checked_statements, checked_terminator),
         block(
@@ -605,6 +616,8 @@ fn canonical_guarded_u32_increment_binds_every_exact_identity() {
     );
     assert_eq!(certificate.function(), FUNCTION);
     assert_eq!(certificate.induction().local(), INDUCTION);
+    assert_eq!(certificate.guard_induction().local(), INDUCTION);
+    assert_eq!(certificate.guard_induction_snapshot(), None);
     assert_eq!(
         certificate.induction().local_identity(),
         function.locals()[INDUCTION.index() as usize].identity()
@@ -715,9 +728,31 @@ fn function_selection_is_exact_and_bounded() {
 }
 
 #[test]
-fn aliases_projections_and_non_u32_places_fail_closed() {
+fn exact_header_induction_snapshot_is_admitted() {
+    let admitted = admitted(1, Mutation::AliasGuardInduction);
+    let report = analyze_semantic_u32_induction_no_overflow_v1(&admitted, FUNCTION).unwrap();
+    let [certificate] = report.certificates() else {
+        panic!("the exact header snapshot must produce one certificate");
+    };
+    assert_eq!(certificate.induction().local(), INDUCTION);
+    assert_eq!(certificate.guard_induction().local(), ALIAS);
+    assert_eq!(
+        certificate
+            .guard_induction_snapshot()
+            .expect("exact header snapshot site")
+            .statement(),
+        0
+    );
+    assert_eq!(certificate.guard().statement(), 1);
+    assert!(certificate.establishes_semantic_no_overflow());
+    assert!(!certificate.grants_authority());
+    assert!(!certificate.authorizes_compiler_transform());
+}
+
+#[test]
+fn stale_aliases_projections_and_non_u32_places_fail_closed() {
     for mutation in [
-        Mutation::AliasGuardInduction,
+        Mutation::StaleAliasGuardInduction,
         Mutation::AliasGuardBound,
         Mutation::ProjectedCheckedInduction,
         Mutation::U64Induction,
