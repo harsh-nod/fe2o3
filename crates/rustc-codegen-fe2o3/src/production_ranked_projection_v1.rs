@@ -15796,8 +15796,15 @@ fn local_definition_index(place: &SemanticPlaceV1) -> Option<usize> {
 
 fn address_escaped_local_index_v1(kind: &SemanticRvalueKindV1) -> Option<usize> {
     match kind {
-        SemanticRvalueKindV1::Borrow { place, .. }
+        SemanticRvalueKindV1::Borrow {
+            kind: SemanticBorrowKindV1::Mutable,
+            place,
+        }
         | SemanticRvalueKindV1::AddressOf { place, .. } => local_definition_index(place),
+        SemanticRvalueKindV1::Borrow {
+            kind: SemanticBorrowKindV1::Shared | SemanticBorrowKindV1::Fake,
+            ..
+        } => None,
         _ => None,
     }
 }
@@ -22885,6 +22892,7 @@ mod tests {
 
     #[derive(Clone, Copy)]
     enum CachedIndexMutationV1 {
+        SharedBorrow,
         Redefined,
         AddressEscaped,
     }
@@ -22905,6 +22913,14 @@ mod tests {
             )
         };
         let mutation = match shape {
+            CachedIndexMutationV1::SharedBorrow => typed_assignment(
+                3,
+                POINTER_TYPE,
+                SemanticRvalueKindV1::Borrow {
+                    kind: SemanticBorrowKindV1::Shared,
+                    place: typed_place(2, SCALAR_TYPE),
+                },
+            ),
             CachedIndexMutationV1::Redefined => {
                 typed_assignment(2, SCALAR_TYPE, SemanticRvalueKindV1::Use(constant(0)))
             }
@@ -22950,6 +22966,12 @@ mod tests {
                 raw_index: SCALAR_TYPE,
             }),
         ];
+        project_intrinsic_contracts_for_test(
+            &projection_types(),
+            &callables,
+            &cached_index_mutation_function(CachedIndexMutationV1::SharedBorrow),
+        )
+        .unwrap();
         for shape in [
             CachedIndexMutationV1::Redefined,
             CachedIndexMutationV1::AddressEscaped,
