@@ -944,6 +944,7 @@ mod tests {
             bytes: 4096,
             active: true,
             accessible: true,
+            reservation_phase: Arc::new(AtomicU8::new(VA_IDENTITY_MAPPED)),
         };
         checked_atomic_u64(&mut mapping, 4096, AMD_AQL_WRITE_DISPATCH_ID_OFFSET_V1)
             .unwrap()

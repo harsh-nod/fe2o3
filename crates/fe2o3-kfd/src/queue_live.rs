@@ -991,6 +991,7 @@ impl Gfx942RecycledDispatchResourcesV1 {
                 .map(Some)
                 .map_err(ComputeAqlQueueSessionErrorV1::DispatchBinding)
             },
+            None,
         )
     }
 }
