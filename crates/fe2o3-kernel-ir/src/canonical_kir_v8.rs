@@ -92,9 +92,20 @@ impl VerifiedCanonicalKernelIrV8 {
     pub fn from_canonical_bytes(
         canonical_bytes: Vec<u8>,
     ) -> Result<Self, VerifiedCanonicalKernelIrErrorV8> {
+        Self::from_canonical_bytes_with_module(canonical_bytes).map(|(owner, _)| owner)
+    }
+
+    /// Takes ownership of exact canonical V8 bytes and returns both their owner and the same
+    /// semantically verified decoded module.
+    ///
+    /// This avoids a second full decode for consumers that inspect the verified module while
+    /// retaining custody of its exact canonical bytes.
+    pub fn from_canonical_bytes_with_module(
+        canonical_bytes: Vec<u8>,
+    ) -> Result<(Self, Module), VerifiedCanonicalKernelIrErrorV8> {
         let decoded = decode_exact_v8(&canonical_bytes)?;
         verify_module(&decoded).map_err(VerifiedCanonicalKernelIrErrorV8::Verification)?;
-        Ok(Self::from_validated_bytes(canonical_bytes))
+        Ok((Self::from_validated_bytes(canonical_bytes), decoded))
     }
 
     /// Borrows the complete exact canonical V8 bytes.
@@ -299,5 +310,18 @@ mod tests {
             owner.revalidate(),
             Err(VerifiedCanonicalKernelIrErrorV8::IdentityMismatch)
         );
+    }
+
+    #[test]
+    fn exact_decode_returns_one_owner_and_the_same_verified_module() {
+        let v6 = from_hex(include_str!("../tests/fixtures/checked_add_i128_v6.hex"));
+        let expected = crate::decode_module_v6(&v6).unwrap();
+        let bytes = encode_module_v8(&expected).unwrap();
+        let (owner, decoded) =
+            VerifiedCanonicalKernelIrV8::from_canonical_bytes_with_module(bytes.clone()).unwrap();
+
+        assert_eq!(decoded, expected);
+        assert_eq!(owner.canonical_bytes(), bytes);
+        owner.revalidate().unwrap();
     }
 }
