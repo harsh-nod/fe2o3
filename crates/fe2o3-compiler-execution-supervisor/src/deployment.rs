@@ -611,10 +611,18 @@ mod tests {
         let ready = CompilerExecutionSupervisorReadyV1::decode(&bytes).unwrap();
         let pid = u32::try_from(rustix::process::getpid().as_raw_pid()).unwrap();
         assert!(ready.matches_deployment(pid, &deployment));
-        assert_eq!(
-            recv(&receiver, &mut bytes, RecvFlags::empty()).unwrap().0,
-            0
-        );
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            match recv(&receiver, &mut bytes, RecvFlags::empty()) {
+                Ok((0, _)) => break,
+                Err(rustix::io::Errno::AGAIN | rustix::io::Errno::INTR)
+                    if Instant::now() < deadline =>
+                {
+                    std::thread::sleep(BOOTSTRAP_RETRY_INTERVAL_V1);
+                }
+                result => panic!("bootstrap did not reach exact EOF: {result:?}"),
+            }
+        }
     }
 
     fn deployment() -> CompilerExecutionSupervisorDeploymentV1 {
