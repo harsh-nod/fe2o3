@@ -9,7 +9,7 @@ description = "Pinned manifest and sealed source custody for compiler-execution 
 publish = false
 
 [dependencies]
-rustix.workspace = true
+rustix = { workspace = true, features = ["process", "rand"] }
 sha2.workspace = true
 
 [dev-dependencies]

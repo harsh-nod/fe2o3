@@ -19,6 +19,13 @@ use rustix::fs::{
 };
 use sha2::{Digest, Sha256};
 
+mod install;
+
+pub use install::{
+    CompilerExecutionInstalledRootPublicationV1, InstalledCompilerExecutionDeploymentV1,
+    compiler_execution_install_root_name_v1, install_compiler_execution_deployment_v1,
+};
+
 /// Canonical deployment target admitted by this V1 profile.
 pub const COMPILER_EXECUTION_DEPLOYMENT_TARGET_V1: &str = "x86_64-unknown-linux-musl";
 /// Canonical install-manifest source name inside a deployment bundle.
@@ -41,6 +48,13 @@ struct FileSpecV1 {
     mode: u32,
     max_bytes: u64,
 }
+
+const MANIFEST_FILE_SPEC_V1: FileSpecV1 = FileSpecV1 {
+    source: COMPILER_EXECUTION_INSTALL_MANIFEST_NAME_V1,
+    install: "/usr/share/fe2o3/compiler-execution/INSTALL-MANIFEST-V1",
+    mode: MANIFEST_MODE_V1,
+    max_bytes: MANIFEST_MAX_BYTES_V1 as u64,
+};
 
 const FILE_SPECS_V1: [FileSpecV1; COMPILER_EXECUTION_INSTALL_FILE_COUNT_V1] = [
     FileSpecV1 {
@@ -363,12 +377,7 @@ pub fn verify_compiler_execution_deployment_v1(
     let root_snapshot = validate_directory(&root, None, "bundle root")?;
     verify_inventory(&root, root_snapshot, true)?;
 
-    let manifest_spec = FileSpecV1 {
-        source: COMPILER_EXECUTION_INSTALL_MANIFEST_NAME_V1,
-        install: "/usr/share/fe2o3/compiler-execution/INSTALL-MANIFEST-V1",
-        mode: MANIFEST_MODE_V1,
-        max_bytes: MANIFEST_MAX_BYTES_V1 as u64,
-    };
+    let manifest_spec = MANIFEST_FILE_SPEC_V1;
     let manifest_file = admit_source_file(&root, root_snapshot, manifest_spec, None)?;
     if manifest_file.sha256 != expected_manifest.as_slice() {
         return Err(invalid(
@@ -468,6 +477,15 @@ fn validate_directory(
     expected_owner: Option<(u32, u32)>,
     role: &'static str,
 ) -> Result<ObjectSnapshotV1, DeploymentVerificationErrorV1> {
+    validate_directory_mode(directory, expected_owner, DIRECTORY_MODE_V1, role)
+}
+
+fn validate_directory_mode(
+    directory: &File,
+    expected_owner: Option<(u32, u32)>,
+    expected_mode: u32,
+    role: &'static str,
+) -> Result<ObjectSnapshotV1, DeploymentVerificationErrorV1> {
     let descriptor_flags = rustix::io::fcntl_getfd(directory)
         .map_err(|source| io_error("inspect deployment directory descriptor flags", source))?;
     let status = rustix::fs::fcntl_getfl(directory)
@@ -479,13 +497,19 @@ fn validate_directory(
         || status & OFlags::ACCMODE != OFlags::RDONLY
         || status.contains(OFlags::PATH)
         || FileType::from_raw_mode(snapshot.mode) != FileType::Directory
-        || snapshot.mode & 0o7777 != DIRECTORY_MODE_V1
+        || snapshot.mode & 0o7777 != expected_mode
         || snapshot.links == 0
         || expected_owner.is_some_and(|owner| owner != (snapshot.uid, snapshot.gid))
     {
         return Err(invalid(
             DeploymentVerificationErrorKindV1::InvalidMetadata,
-            format!("{role} has an invalid type, access mode, owner, mode, or link count"),
+            format!(
+                "{role} has invalid metadata: mode={:04o} owner={}:{} links={} fd_flags={descriptor_flags:?} status_flags={status:?}",
+                snapshot.mode & 0o7777,
+                snapshot.uid,
+                snapshot.gid,
+                snapshot.links,
+            ),
         ));
     }
     require_no_xattrs(directory, role)?;
@@ -1081,9 +1105,15 @@ pub enum DeploymentVerificationErrorKindV1 {
     InputChanged,
     /// A bounded operating-system operation failed.
     Io,
+    /// The production installer did not run with effective UID 0.
+    InsufficientPrivilege,
+    /// Atomic publication happened, but its durability result is ambiguous.
+    PublicationAmbiguous,
+    /// Bounded descriptor-relative staging cleanup failed.
+    CleanupFailed,
 }
 
-/// Stable deployment generation or verification error.
+/// Stable deployment generation, verification, or installation error.
 #[derive(Debug)]
 pub struct DeploymentVerificationErrorV1 {
     kind: DeploymentVerificationErrorKindV1,
@@ -1503,5 +1533,203 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    fn current_owner() -> (u32, u32) {
+        (
+            rustix::process::geteuid().as_raw(),
+            rustix::process::getegid().as_raw(),
+        )
+    }
+
+    fn tree_counts(root: &Path) -> (usize, usize) {
+        let mut directories = 1;
+        let mut files = 0;
+        for entry in fs::read_dir(root).unwrap() {
+            let entry = entry.unwrap();
+            let metadata = entry.metadata().unwrap();
+            if metadata.is_dir() {
+                let nested = tree_counts(&entry.path());
+                directories += nested.0;
+                files += nested.1;
+            } else if metadata.is_file() {
+                files += 1;
+            } else {
+                panic!("installed root contains a non-file, non-directory object");
+            }
+        }
+        (directories, files)
+    }
+
+    fn private_install_parent() -> tempfile::TempDir {
+        let parent = tempfile::tempdir().unwrap();
+        fs::set_permissions(parent.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        parent
+    }
+
+    #[test]
+    fn sealed_sources_publish_and_reacquire_one_exact_offline_root() {
+        let fixture = Fixture::new();
+        let generation = fixture.generate();
+        let expected_manifest =
+            fs::read(fixture.path(COMPILER_EXECUTION_INSTALL_MANIFEST_NAME_V1)).unwrap();
+        let verified = fixture.verify(generation.sha256()).unwrap();
+        let install_parent = private_install_parent();
+        let root_name = install::compiler_execution_install_root_name_v1(generation.sha256());
+        drop(fixture);
+
+        let installed = install::install_compiler_execution_deployment_for_test_v1(
+            verified,
+            install_parent.path(),
+            current_owner(),
+        )
+        .unwrap();
+        assert_eq!(
+            installed.publication(),
+            install::CompilerExecutionInstalledRootPublicationV1::Created
+        );
+        assert_eq!(installed.root_name(), root_name);
+        assert_eq!(installed.file_count(), 14);
+        let root = install_parent.path().join(&root_name);
+        assert_eq!(tree_counts(&root), (12, 14));
+        assert_eq!(
+            fs::read(root.join("usr/share/fe2o3/compiler-execution/INSTALL-MANIFEST-V1")).unwrap(),
+            expected_manifest
+        );
+        for path in [
+            root.clone(),
+            root.join("usr"),
+            root.join("usr/lib"),
+            root.join("usr/lib/systemd"),
+            root.join("usr/lib/systemd/system"),
+            root.join("usr/lib/sysusers.d"),
+            root.join("usr/lib/tmpfiles.d"),
+            root.join("usr/libexec"),
+            root.join("usr/libexec/fe2o3"),
+            root.join("usr/share"),
+            root.join("usr/share/fe2o3"),
+            root.join("usr/share/fe2o3/compiler-execution"),
+        ] {
+            assert_eq!(
+                fs::metadata(path).unwrap().permissions().mode() & 0o7777,
+                0o755
+            );
+        }
+
+        let second_fixture = Fixture::new();
+        let second_generation = second_fixture.generate();
+        assert_eq!(second_generation.sha256(), generation.sha256());
+        let reacquired = install::install_compiler_execution_deployment_for_test_v1(
+            second_fixture.verify(second_generation.sha256()).unwrap(),
+            install_parent.path(),
+            current_owner(),
+        )
+        .unwrap();
+        assert_eq!(
+            reacquired.publication(),
+            install::CompilerExecutionInstalledRootPublicationV1::Reacquired
+        );
+        assert_eq!(tree_counts(&root), (12, 14));
+    }
+
+    #[test]
+    fn installer_rejects_parent_policy_and_conflicting_final_root() {
+        let fixture = Fixture::new();
+        let generation = fixture.generate();
+        let parent = private_install_parent();
+        fs::set_permissions(parent.path(), fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(
+            install::install_compiler_execution_deployment_for_test_v1(
+                fixture.verify(generation.sha256()).unwrap(),
+                parent.path(),
+                current_owner(),
+            )
+            .unwrap_err()
+            .kind(),
+            DeploymentVerificationErrorKindV1::InvalidMetadata
+        );
+
+        let fixture = Fixture::new();
+        let generation = fixture.generate();
+        let parent = private_install_parent();
+        let final_root = parent
+            .path()
+            .join(install::compiler_execution_install_root_name_v1(
+                generation.sha256(),
+            ));
+        fs::create_dir(&final_root).unwrap();
+        fs::set_permissions(&final_root, fs::Permissions::from_mode(0o755)).unwrap();
+        fs::write(final_root.join("hostile"), b"do not replace").unwrap();
+        assert_eq!(
+            install::install_compiler_execution_deployment_for_test_v1(
+                fixture.verify(generation.sha256()).unwrap(),
+                parent.path(),
+                current_owner(),
+            )
+            .unwrap_err()
+            .kind(),
+            DeploymentVerificationErrorKindV1::InvalidInventory
+        );
+        assert_eq!(
+            fs::read(final_root.join("hostile")).unwrap(),
+            b"do not replace"
+        );
+    }
+
+    #[test]
+    fn installer_rejects_same_length_installed_content_substitution() {
+        let fixture = Fixture::new();
+        let generation = fixture.generate();
+        let parent = private_install_parent();
+        let root_name = install::compiler_execution_install_root_name_v1(generation.sha256());
+        install::install_compiler_execution_deployment_for_test_v1(
+            fixture.verify(generation.sha256()).unwrap(),
+            parent.path(),
+            current_owner(),
+        )
+        .unwrap();
+        let build_info = parent
+            .path()
+            .join(root_name)
+            .join("usr/share/fe2o3/compiler-execution/BUILD-INFO");
+        fs::set_permissions(&build_info, fs::Permissions::from_mode(0o600)).unwrap();
+        let mut bytes = fs::read(&build_info).unwrap();
+        bytes[0] ^= 1;
+        fs::write(&build_info, bytes).unwrap();
+        fs::set_permissions(&build_info, fs::Permissions::from_mode(0o444)).unwrap();
+
+        let second_fixture = Fixture::new();
+        let second_generation = second_fixture.generate();
+        assert_eq!(second_generation.sha256(), generation.sha256());
+        assert_eq!(
+            install::install_compiler_execution_deployment_for_test_v1(
+                second_fixture.verify(second_generation.sha256()).unwrap(),
+                parent.path(),
+                current_owner(),
+            )
+            .unwrap_err()
+            .kind(),
+            DeploymentVerificationErrorKindV1::ContentMismatch
+        );
+    }
+
+    #[test]
+    fn production_installer_requires_effective_root() {
+        if rustix::process::geteuid().as_raw() == 0 {
+            return;
+        }
+        let fixture = Fixture::new();
+        let generation = fixture.generate();
+        let parent = private_install_parent();
+        assert_eq!(
+            install::install_compiler_execution_deployment_v1(
+                fixture.verify(generation.sha256()).unwrap(),
+                parent.path(),
+            )
+            .unwrap_err()
+            .kind(),
+            DeploymentVerificationErrorKindV1::InsufficientPrivilege
+        );
+        assert_eq!(fs::read_dir(parent.path()).unwrap().count(), 0);
     }
 }
