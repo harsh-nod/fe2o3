@@ -471,7 +471,7 @@ impl SocketSnapshotV1 {
     }
 }
 
-struct ProtectedIssuerListenerV1 {
+pub(super) struct ProtectedIssuerListenerV1 {
     descriptor: OwnedFd,
     expected_path: PathBuf,
     descriptor_snapshot: SocketSnapshotV1,
@@ -479,7 +479,7 @@ struct ProtectedIssuerListenerV1 {
 }
 
 impl ProtectedIssuerListenerV1 {
-    fn admit(
+    pub(super) fn admit(
         descriptor: OwnedFd,
         expected_path: &Path,
     ) -> Result<Self, ProtectedIssuerServiceErrorV1> {
@@ -500,7 +500,7 @@ impl ProtectedIssuerListenerV1 {
         Ok(listener)
     }
 
-    fn revalidate(&self) -> Result<(), ProtectedIssuerServiceErrorV1> {
+    pub(super) fn revalidate(&self) -> Result<(), ProtectedIssuerServiceErrorV1> {
         validate_listener_shape(&self.descriptor, &self.expected_path)?;
         if snapshot_descriptor(&self.descriptor)? != self.descriptor_snapshot
             || snapshot_path(&self.expected_path)? != self.path_snapshot
@@ -510,6 +510,24 @@ impl ProtectedIssuerListenerV1 {
             ));
         }
         Ok(())
+    }
+
+    pub(super) fn try_clone_for_deployment(
+        &self,
+    ) -> Result<OwnedFd, ProtectedIssuerServiceErrorV1> {
+        self.revalidate()?;
+        let descriptor = rustix::io::fcntl_dupfd_cloexec(&self.descriptor, 0)
+            .map_err(|source| io_error("clone protected issuer listener", source.into()))?;
+        validate_listener_shape(&descriptor, &self.expected_path)?;
+        if snapshot_descriptor(&descriptor)? != self.descriptor_snapshot
+            || snapshot_path(&self.expected_path)? != self.path_snapshot
+        {
+            return Err(ProtectedIssuerServiceErrorV1::InvalidListener(
+                "deployment clone changed descriptor or pathname identity",
+            ));
+        }
+        self.revalidate()?;
+        Ok(descriptor)
     }
 
     fn accept(&self, timeout: Duration) -> Result<OwnedFd, ProtectedIssuerServiceErrorV1> {

@@ -4,15 +4,12 @@
 #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
 compile_error!("fe2o3-external-anchor-coordinator requires Linux x86-64");
 
-#[allow(unsafe_code)]
-mod child;
-
 use std::error::Error;
 use std::fmt;
 use std::fs::File;
 use std::io::{self, IoSliceMut};
 use std::mem::MaybeUninit;
-use std::os::fd::{AsFd, AsRawFd, OwnedFd};
+use std::os::fd::{AsFd, OwnedFd};
 use std::time::{Duration, Instant};
 
 use fe2o3_broker_authority_service::{
@@ -37,8 +34,13 @@ use fe2o3_external_anchor_provisioner::{
 };
 use fe2o3_protected_service_profile::{
     ProtectedServiceCredentialProfileErrorV1, ProtectedServiceCredentialProfileV1,
-    ProtectedServiceNamespaceSetV1, ProtectedServiceProfileErrorV1, require_owned_sigchld_v1,
+    ProtectedServiceNamespaceSetV1, ProtectedServiceProfileErrorV1,
     validate_protected_service_process_v1,
+};
+use fe2o3_protected_service_spawn::{
+    PROTECTED_SERVICE_GATE_RELEASE_V1, PROTECTED_SERVICE_PROFILE_READY_V1,
+    ProtectedServiceDescriptorBindingV1, ProtectedServiceSpawnErrorV1,
+    RootOwnedProtectedServiceChildV1, StagedProtectedServiceExecV1, require_exact_root_identity_v1,
 };
 use fe2o3_protected_static_executable::{
     ProtectedStaticExecutableErrorV1, ProtectedStaticExecutableMeasurementV1,
@@ -51,7 +53,6 @@ use rustix::net::{
 };
 use rustix::pipe::{PipeFlags, pipe_with};
 
-const MAX_CAPABILITY_NUMBER_V1: u32 = 63;
 const MAX_LAUNCH_TIMEOUT_V1: Duration = Duration::from_secs(120);
 const POLL_INTERVAL_V1: Duration = Duration::from_millis(1);
 const STATE_ROOT_MODE_V1: u32 = 0o700;
@@ -196,10 +197,8 @@ impl PreparedExternalAnchorOccurrenceV1 {
     ) -> Result<RootManagedExternalAnchorV1, ExternalAnchorCoordinatorErrorV1> {
         let deadline = bounded_deadline(timeout)?;
         self.revalidate_inner::<true>()?;
-        require_owned_sigchld_v1().map_err(ExternalAnchorCoordinatorErrorV1::Profile)?;
         let namespaces = ProtectedServiceNamespaceSetV1::capture_self()
             .map_err(ExternalAnchorCoordinatorErrorV1::Profile)?;
-        let cap_last_cap = read_cap_last_cap()?;
         let credentials = ProtectedServiceCredentialProfileV1::new(
             self.deployment_manifest.service().uid(),
             self.deployment_manifest.service().gid(),
@@ -238,37 +237,52 @@ impl PreparedExternalAnchorOccurrenceV1 {
             .key_template
             .try_clone_for_transfer()
             .map_err(ExternalAnchorCoordinatorErrorV1::KeyTemplate)?;
-        let staged = child::StagedHelperLaunchV1::new(
-            &helper,
-            &child_bootstrap,
-            &self.root,
-            &daemon,
-            &deployment,
-            &key_template,
-            &provisioning,
-            &profile_writer,
-            &gate_reader,
-        )
-        .map_err(|source| io_error("stage external-anchor helper launch", source))?;
-        let inherited_to_close = [
-            root_bootstrap.as_raw_fd(),
-            child_bootstrap.as_raw_fd(),
-            profile_reader.as_raw_fd(),
-            profile_writer.as_raw_fd(),
-            gate_reader.as_raw_fd(),
-            gate_writer.as_raw_fd(),
-        ];
-        let spawned = fe2o3_artifact_transaction::with_artifact_process_spawn_v1(|| {
-            child::spawn(
-                &staged,
-                credentials,
-                cap_last_cap,
-                self.prepared_by,
-                &inherited_to_close,
+        let bindings = [
+            ProtectedServiceDescriptorBindingV1::new(
+                child_bootstrap.as_fd(),
+                fe2o3_external_anchor_provisioner::EXTERNAL_ANCHOR_HELPER_BOOTSTRAP_FD_V1,
             )
-            .map_err(|source| io_error("clone measured external-anchor helper", source))
+            .map_err(ExternalAnchorCoordinatorErrorV1::Spawn)?,
+            ProtectedServiceDescriptorBindingV1::new(
+                self.root.as_fd(),
+                fe2o3_external_anchor_provisioner::EXTERNAL_ANCHOR_HELPER_ROOT_FD_V1,
+            )
+            .map_err(ExternalAnchorCoordinatorErrorV1::Spawn)?,
+            ProtectedServiceDescriptorBindingV1::new(
+                daemon.as_fd(),
+                fe2o3_external_anchor_provisioner::EXTERNAL_ANCHOR_HELPER_DAEMON_EXECUTABLE_FD_V1,
+            )
+            .map_err(ExternalAnchorCoordinatorErrorV1::Spawn)?,
+            ProtectedServiceDescriptorBindingV1::new(
+                deployment.as_fd(),
+                fe2o3_compiler_closure_capability::COMPILER_EXECUTION_EXTERNAL_ANCHOR_DEPLOYMENT_FD_V1,
+            )
+            .map_err(ExternalAnchorCoordinatorErrorV1::Spawn)?,
+            ProtectedServiceDescriptorBindingV1::new(
+                key_template.as_fd(),
+                fe2o3_compiler_closure_capability::COMPILER_EXECUTION_EXTERNAL_ANCHOR_SIGNING_KEY_FD_V1,
+            )
+            .map_err(ExternalAnchorCoordinatorErrorV1::Spawn)?,
+            ProtectedServiceDescriptorBindingV1::new(
+                provisioning.as_fd(),
+                fe2o3_compiler_closure_capability::COMPILER_EXECUTION_EXTERNAL_ANCHOR_PROVISIONING_FD_V1,
+            )
+            .map_err(ExternalAnchorCoordinatorErrorV1::Spawn)?,
+        ];
+        let staged = StagedProtectedServiceExecV1::new(
+            &helper,
+            &bindings,
+            profile_writer.as_fd(),
+            gate_reader.as_fd(),
+            child_bootstrap.as_fd(),
+        )
+        .map_err(ExternalAnchorCoordinatorErrorV1::Spawn)?;
+        let spawned = fe2o3_artifact_transaction::with_artifact_process_spawn_v1(|| {
+            staged
+                .spawn(credentials)
+                .map_err(ExternalAnchorCoordinatorErrorV1::Spawn)
         })?;
-        let mut child = RootOwnedAnchorChildV1::new(spawned.pid, spawned.pidfd);
+        let mut child = RootOwnedAnchorChildV1(spawned);
         drop(staged);
         drop(child_bootstrap);
         drop(profile_writer);
@@ -280,9 +294,9 @@ impl PreparedExternalAnchorOccurrenceV1 {
                 .revalidate_self()
                 .map_err(ExternalAnchorCoordinatorErrorV1::Profile)?;
             namespaces
-                .revalidate_process(child.pid)
+                .revalidate_process(child.pid())
                 .map_err(ExternalAnchorCoordinatorErrorV1::Profile)?;
-            validate_protected_service_process_v1(credentials, child.pid)
+            validate_protected_service_process_v1(credentials, child.pid())
                 .map_err(ExternalAnchorCoordinatorErrorV1::Profile)?;
             self.revalidate_inner::<true>()?;
             release_child(&gate_writer)?;
@@ -293,8 +307,7 @@ impl PreparedExternalAnchorOccurrenceV1 {
             if !child.is_live()? {
                 return Err(child.exited_error("daemon exited immediately after exec"));
             }
-            let admission_pidfd = rustix::io::fcntl_dupfd_cloexec(child.pidfd(), 0)
-                .map_err(|source| io_error("clone anchor pidfd for admission", source.into()))?;
+            let admission_pidfd = child.try_clone_pidfd()?;
             let admission = ProtectedExternalAnchorServiceAdmissionV1::admit(
                 endpoint,
                 admission_pidfd,
@@ -556,96 +569,38 @@ fn validate_state_root(
     })
 }
 
-struct RootOwnedAnchorChildV1 {
-    pid: rustix::process::Pid,
-    pidfd: Option<OwnedFd>,
-}
+struct RootOwnedAnchorChildV1(RootOwnedProtectedServiceChildV1);
 
 impl RootOwnedAnchorChildV1 {
+    #[cfg(test)]
     fn new(pid: rustix::process::Pid, pidfd: OwnedFd) -> Self {
-        Self {
-            pid,
-            pidfd: Some(pidfd),
-        }
+        Self(RootOwnedProtectedServiceChildV1::admit_non_authoritative_test(pid, pidfd).unwrap())
     }
 
-    fn pidfd(&self) -> &OwnedFd {
-        self.pidfd.as_ref().expect("live child retains its pidfd")
+    fn pid(&self) -> rustix::process::Pid {
+        self.0.pid()
+    }
+
+    fn try_clone_pidfd(&self) -> Result<OwnedFd, ExternalAnchorCoordinatorErrorV1> {
+        self.0
+            .try_clone_pidfd()
+            .map_err(ExternalAnchorCoordinatorErrorV1::Spawn)
     }
 
     fn is_live(&self) -> Result<bool, ExternalAnchorCoordinatorErrorV1> {
-        match rustix::process::waitid(
-            rustix::process::WaitId::PidFd(self.pidfd().as_fd()),
-            rustix::process::WaitIdOptions::EXITED
-                | rustix::process::WaitIdOptions::NOHANG
-                | rustix::process::WaitIdOptions::NOWAIT,
-        ) {
-            Ok(None) | Err(rustix::io::Errno::INTR) => Ok(true),
-            Ok(Some(_)) => Ok(false),
-            Err(source) => Err(io_error("observe exact anchor pidfd", source.into())),
-        }
+        self.0
+            .is_live()
+            .map_err(ExternalAnchorCoordinatorErrorV1::Spawn)
     }
 
     fn exited_error(&self, context: &'static str) -> ExternalAnchorCoordinatorErrorV1 {
-        let detail = rustix::process::waitid(
-            rustix::process::WaitId::PidFd(self.pidfd().as_fd()),
-            rustix::process::WaitIdOptions::EXITED
-                | rustix::process::WaitIdOptions::NOHANG
-                | rustix::process::WaitIdOptions::NOWAIT,
-        )
-        .ok()
-        .flatten()
-        .map_or_else(|| context.to_owned(), |status| format!("{status:?}"));
-        ExternalAnchorCoordinatorErrorV1::ChildExited(detail)
+        ExternalAnchorCoordinatorErrorV1::ChildExited(self.0.exit_description(context))
     }
 
     fn cancel_and_reap(&mut self) -> Result<(), ExternalAnchorCoordinatorErrorV1> {
-        let Some(pidfd) = self.pidfd.as_ref() else {
-            return Ok(());
-        };
-        let signal_error =
-            match rustix::process::pidfd_send_signal(pidfd, rustix::process::Signal::KILL) {
-                Ok(()) | Err(rustix::io::Errno::SRCH) => None,
-                Err(pidfd_source) => {
-                    match rustix::process::kill_process(self.pid, rustix::process::Signal::KILL) {
-                        Ok(()) | Err(rustix::io::Errno::SRCH) => {
-                            Some(io_error("pidfd-kill external anchor", pidfd_source.into()))
-                        }
-                        Err(_) => {
-                            return Err(io_error(
-                                "pidfd-kill external anchor",
-                                pidfd_source.into(),
-                            ));
-                        }
-                    }
-                }
-            };
-        let wait_result = loop {
-            match rustix::process::waitid(
-                rustix::process::WaitId::PidFd(pidfd.as_fd()),
-                rustix::process::WaitIdOptions::EXITED,
-            ) {
-                Ok(Some(_)) => break Ok(()),
-                Ok(None) | Err(rustix::io::Errno::INTR) => {}
-                Err(rustix::io::Errno::CHILD) => {
-                    break Err(ExternalAnchorCoordinatorErrorV1::ReapingOwnershipLost);
-                }
-                Err(source) => {
-                    break Err(io_error("reap exact external-anchor pidfd", source.into()));
-                }
-            }
-        };
-        match wait_result {
-            Ok(()) => {
-                self.pidfd.take();
-                signal_error.map_or(Ok(()), Err)
-            }
-            Err(error @ ExternalAnchorCoordinatorErrorV1::ReapingOwnershipLost) => {
-                self.pidfd.take();
-                Err(error)
-            }
-            Err(error) => Err(error),
-        }
+        self.0
+            .cancel_and_reap()
+            .map_err(ExternalAnchorCoordinatorErrorV1::Spawn)
     }
 }
 
@@ -658,7 +613,7 @@ fn await_profile_ready(
     let mut bytes = [0_u8; 2];
     loop {
         match rustix::io::read(profile, &mut bytes) {
-            Ok(1) if bytes[0] == child::PROFILE_READY_V1 => return Ok(()),
+            Ok(1) if bytes[0] == PROTECTED_SERVICE_PROFILE_READY_V1 => return Ok(()),
             Ok(0) => return Err(child_failure(bootstrap, child, "child profile")),
             Ok(_) => return Err(ExternalAnchorCoordinatorErrorV1::NoncanonicalProfileReady),
             Err(rustix::io::Errno::AGAIN | rustix::io::Errno::INTR) => {
@@ -671,7 +626,7 @@ fn await_profile_ready(
 
 fn release_child(gate: &OwnedFd) -> Result<(), ExternalAnchorCoordinatorErrorV1> {
     loop {
-        match rustix::io::write(gate, &[child::GATE_RELEASE_V1]) {
+        match rustix::io::write(gate, &[PROTECTED_SERVICE_GATE_RELEASE_V1]) {
             Ok(1) => return Ok(()),
             Ok(_) => return Err(ExternalAnchorCoordinatorErrorV1::NoncanonicalGateRelease),
             Err(rustix::io::Errno::INTR) => {}
@@ -809,26 +764,10 @@ fn child_failure(
 
 fn require_coordinator_identity<const REQUIRE_ROOT: bool>()
 -> Result<(), ExternalAnchorCoordinatorErrorV1> {
-    if REQUIRE_ROOT && !child::has_exact_root_identity() {
-        return Err(ExternalAnchorCoordinatorErrorV1::RootRequired);
+    if REQUIRE_ROOT {
+        require_exact_root_identity_v1().map_err(ExternalAnchorCoordinatorErrorV1::Spawn)?;
     }
     Ok(())
-}
-
-fn read_cap_last_cap() -> Result<u32, ExternalAnchorCoordinatorErrorV1> {
-    let text = std::fs::read_to_string("/proc/sys/kernel/cap_last_cap")
-        .map_err(|source| io_error("read kernel capability ceiling", source))?;
-    let value = text.trim().parse::<u32>().map_err(|_| {
-        ExternalAnchorCoordinatorErrorV1::InvalidKernelProfile(
-            "kernel capability ceiling is malformed",
-        )
-    })?;
-    if value > MAX_CAPABILITY_NUMBER_V1 {
-        return Err(ExternalAnchorCoordinatorErrorV1::InvalidKernelProfile(
-            "kernel capability ceiling exceeds the supported 64-bit set",
-        ));
-    }
-    Ok(value)
 }
 
 fn bounded_deadline(timeout: Duration) -> Result<Instant, ExternalAnchorCoordinatorErrorV1> {
@@ -848,8 +787,6 @@ fn io_error(operation: &'static str, source: io::Error) -> ExternalAnchorCoordin
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum ExternalAnchorCoordinatorErrorV1 {
-    /// The operation requires exact real root credentials.
-    RootRequired,
     /// The coordinator PID changed after input preparation.
     CoordinatorChanged,
     /// The deployment contains an invalid protected-service identity.
@@ -872,8 +809,8 @@ pub enum ExternalAnchorCoordinatorErrorV1 {
     KeyMismatch,
     /// Parent or child protected-service profile validation failed.
     Profile(ProtectedServiceProfileErrorV1),
-    /// The host kernel profile cannot represent the required locked service state.
-    InvalidKernelProfile(&'static str),
+    /// Shared protected-service staging, spawn, or pidfd custody failed.
+    Spawn(ProtectedServiceSpawnErrorV1),
     /// The bounded launch timeout is zero, excessive, or unrepresentable.
     InvalidTimeout,
     /// The gated child emitted a noncanonical profile record.
@@ -894,8 +831,6 @@ pub enum ExternalAnchorCoordinatorErrorV1 {
     Admission(ProtectedServiceAdmissionErrorV1),
     /// The receiving supervisor deployment or issuer policy does not name this exact anchor.
     SupervisorBindingMismatch,
-    /// Another owner reaped the direct child.
-    ReapingOwnershipLost,
     /// A bounded kernel or filesystem operation failed.
     Io {
         /// Operation that failed.
@@ -908,7 +843,6 @@ pub enum ExternalAnchorCoordinatorErrorV1 {
 impl fmt::Display for ExternalAnchorCoordinatorErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::RootRequired => formatter.write_str("external-anchor coordinator requires root"),
             Self::CoordinatorChanged => formatter.write_str("coordinator process identity changed"),
             Self::Credentials(error) => write!(formatter, "invalid anchor credentials: {error}"),
             Self::ProvisioningMismatch => {
@@ -926,9 +860,7 @@ impl fmt::Display for ExternalAnchorCoordinatorErrorV1 {
             Self::KeyTemplate(error) => write!(formatter, "invalid anchor key template: {error}"),
             Self::KeyMismatch => formatter.write_str("anchor key does not match deployment"),
             Self::Profile(error) => write!(formatter, "invalid anchor child profile: {error}"),
-            Self::InvalidKernelProfile(reason) => {
-                write!(formatter, "unsupported anchor kernel profile: {reason}")
-            }
+            Self::Spawn(error) => write!(formatter, "protected anchor spawn failed: {error}"),
             Self::InvalidTimeout => formatter.write_str("invalid anchor launch timeout"),
             Self::NoncanonicalProfileReady => {
                 formatter.write_str("noncanonical anchor child-profile record")
@@ -948,9 +880,6 @@ impl fmt::Display for ExternalAnchorCoordinatorErrorV1 {
             }
             Self::SupervisorBindingMismatch => formatter
                 .write_str("supervisor deployment or issuer policy does not bind this anchor"),
-            Self::ReapingOwnershipLost => {
-                formatter.write_str("external-anchor child reaping ownership was lost")
-            }
             Self::Io { operation, source } => write!(formatter, "{operation}: {source}"),
         }
     }
@@ -962,6 +891,7 @@ impl Error for ExternalAnchorCoordinatorErrorV1 {
             Self::Credentials(error) => Some(error),
             Self::Executable(error) => Some(error),
             Self::Profile(error) => Some(error),
+            Self::Spawn(error) => Some(error),
             Self::Admission(error) => Some(error),
             Self::Io { source, .. } => Some(source),
             _ => None,
@@ -1046,7 +976,7 @@ mod tests {
         assert_eq!(peer.pid, pid);
         assert_eq!(peer.uid.as_raw(), service.uid());
         assert_eq!(peer.gid.as_raw(), service.gid());
-        let admission_pidfd = rustix::io::fcntl_dupfd_cloexec(child.pidfd(), 0).unwrap();
+        let admission_pidfd = child.try_clone_pidfd().unwrap();
         let admission =
             ProtectedExternalAnchorServiceAdmissionV1::admit_non_authoritative_same_uid_test(
                 endpoint,

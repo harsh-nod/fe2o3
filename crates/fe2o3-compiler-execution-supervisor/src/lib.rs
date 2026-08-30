@@ -27,6 +27,7 @@ mod launch;
 mod listener;
 #[allow(unsafe_code)]
 mod process;
+mod provisioning;
 mod session;
 
 pub use authority::{
@@ -53,6 +54,10 @@ pub use process::{
     ExitedProtectedIssuerV1, LaunchedProtectedIssuerV1, MAX_PROTECTED_ISSUER_PROCESSES_V1,
     ProtectedIssuerLaunchErrorV1, ProtectedIssuerTerminationV1, ReadyProtectedIssuerV1,
     ServingProtectedIssuerV1, validate_current_issuer_service_profile_v1,
+};
+pub use provisioning::{
+    ProtectedIssuerServiceDeploymentInputsV1, ProtectedIssuerServiceProvisioningErrorV1,
+    ProvisionedProtectedIssuerServiceInputsV1,
 };
 pub use session::{
     ProtectedIssuerSessionErrorV1, ProtectedIssuerSessionTimeoutErrorV1,

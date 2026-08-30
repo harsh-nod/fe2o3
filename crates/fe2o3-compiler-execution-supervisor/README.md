@@ -135,3 +135,10 @@ the distinct service accounts, independently administered external anchor,
 and root/socket policy remains pending. The reviewed supervisor image is built
 and checked as a loader-independent static executable by
 `scripts/build-static-compiler-execution-supervisor.sh`.
+
+Root-side provisioning reuses the same listener and durable-root validators
+through one move-only `ProvisionedProtectedIssuerServiceInputsV1`. It admits the
+fixed listener pathname and exact target-service ownership without changing the
+root coordinator's identity, retains descriptor and filesystem snapshots, and
+permits only one consuming ordered listener/root transfer. The deployed process
+independently repeats those checks after entering the locked service profile.

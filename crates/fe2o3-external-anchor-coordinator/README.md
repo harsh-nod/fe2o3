@@ -6,6 +6,12 @@ service identity, retains an exact service-owned state root and root-owned key t
 the helper with an atomic pidfd, and gates execution on independent child-profile and namespace
 observation.
 
+The root credential transition, profile gate, fixed-descriptor installation, `clone3` pidfd
+creation, and exact reaping lifecycle are provided by the shared
+`fe2o3-protected-service-spawn` owner used by protected deployment coordinators. This package adds
+only the anchor-specific measured inputs, ready protocol, endpoint admission, and deployment
+binding; it contains no second credential-drop or child-lifecycle implementation.
+
 The coordinator accepts only the helper's canonical ready record with one `SCM_RIGHTS` endpoint,
 then requires bootstrap close-on-exec EOF and continued pidfd liveness. It admits that endpoint
 against the same process and deployment UID/GID before any supervisor transfer. The retained

@@ -307,13 +307,13 @@ fn require_current_service_identity(
     Ok(())
 }
 
-struct ProtectedIssuerRootV1 {
+pub(super) struct ProtectedIssuerRootV1 {
     root: File,
     snapshot: RootSnapshotV1,
 }
 
 impl ProtectedIssuerRootV1 {
-    fn admit(
+    pub(super) fn admit(
         root: File,
         credentials: IssuerServiceCredentialProfileV1,
     ) -> Result<Self, ProtectedIssuerSupervisorErrorV1> {
@@ -323,7 +323,7 @@ impl ProtectedIssuerRootV1 {
         Ok(admitted)
     }
 
-    fn revalidate(
+    pub(super) fn revalidate(
         &self,
         credentials: IssuerServiceCredentialProfileV1,
     ) -> Result<(), ProtectedIssuerSupervisorErrorV1> {
@@ -333,7 +333,7 @@ impl ProtectedIssuerRootV1 {
         Ok(())
     }
 
-    fn try_clone_for_launch(
+    pub(super) fn try_clone_for_launch(
         &self,
         credentials: IssuerServiceCredentialProfileV1,
     ) -> Result<File, ProtectedIssuerSupervisorErrorV1> {
