@@ -61,7 +61,7 @@ case "$SUITE:$FEATURE" in
     attention:kernel-compressed-hybrid-attention)
         SYMBOL=gfx950_compressed_hybrid_attention; KERNARG=80; WG=64; LDS=2048; OCML=1
         TEST=gfx950_compressed_hybrid_attention_rust_cov6_matches_cpu_reference; ISA=fp8_attention ;;
-    attention:kernel-compressed-hybrid-attention-reciprocal-reuse-v1)
+    attention:kernel-compressed-hybrid-attention-division-baseline-v1)
         SYMBOL=gfx950_compressed_hybrid_attention; KERNARG=80; WG=64; LDS=2048; OCML=1
         TEST=gfx950_compressed_hybrid_attention_rust_cov6_matches_cpu_reference; ISA=fp8_attention ;;
     attention:kernel-attnres-aggregate)

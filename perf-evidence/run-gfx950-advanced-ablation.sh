@@ -95,8 +95,8 @@ run_case attention kernel-kda-prefill canonical
 run_case attention kernel-kda-prefill-channel-mask-v1 kda-prefill-channel-mask
 run_case attention kernel-content-sparse-attention canonical
 run_case attention kernel-content-sparse-attention-reciprocal-reuse-v1 content-sparse-reciprocal
+run_case attention kernel-compressed-hybrid-attention-division-baseline-v1 compressed-hybrid-division
 run_case attention kernel-compressed-hybrid-attention canonical
-run_case attention kernel-compressed-hybrid-attention-reciprocal-reuse-v1 compressed-hybrid-reciprocal
 run_case attention kernel-attnres-aggregate canonical
 run_case attention kernel-attnres-aggregate-explicit-reuse-v1 attnres-explicit
 run_case attention kernel-four-branch-residual canonical
@@ -131,7 +131,7 @@ python3 "$REPO_ROOT/perf-evidence/analyze.py" "$EVIDENCE_DIR/samples.jsonl" \
     --compare canonical:kda-decode-wave-tiled \
     --compare canonical:kda-prefill-channel-mask \
     --compare canonical:content-sparse-reciprocal \
-    --compare canonical:compressed-hybrid-reciprocal \
+    --compare compressed-hybrid-division:canonical \
     --compare canonical:attnres-explicit \
     --compare canonical:four-branch-explicit \
     --compare canonical:mhc-scalar \

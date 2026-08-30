@@ -44,16 +44,17 @@
       "pipeline_assessment": "K=128 is exactly one native MFMA tile, leaving no next K tile for a useful ping-pong stage"
     },
     {
-      "feature": "kernel-compressed-hybrid-attention-reciprocal-reuse-v1",
+      "feature": "kernel-compressed-hybrid-attention-division-baseline-v1",
       "kernel_export": "gfx950_compressed_hybrid_attention",
-      "baseline_feature": "kernel-compressed-hybrid-attention",
-      "isolated_change": "reuse one reciprocal for four local weights and one reciprocal for three compressed-global weights",
+      "production_feature": "kernel-compressed-hybrid-attention",
+      "role": "pre-promotion division baseline",
+      "isolated_change": "restore four local and three global normalized divisions instead of the production kernel's two reciprocal reuses",
       "shape": "one 16x16x128 E4M3 score tile; four local tokens; three compressed four-token blocks; 16 output channels",
       "unique_compulsory_global_bytes": 4480,
       "mfma_tile_flops": 65536,
       "lds_bytes": 2048,
       "lds_stages": 1,
-      "pipeline_assessment": "K=128 is exactly one native MFMA tile, leaving no next K tile for a useful ping-pong stage"
+      "pipeline_assessment": "K=128 is exactly one native MFMA tile, leaving no next K tile for a useful ping-pong stage; final GPU6 evidence promoted reciprocal reuse into production"
     },
     {
       "feature": "kernel-attnres-aggregate-explicit-reuse-v1",

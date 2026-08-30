@@ -98,7 +98,7 @@ compile_error!("an AMDGPU build must not select more than one advanced-attention
     any(
         feature = "kernel-kda-decode-wave-tiled-v1",
         feature = "kernel-content-sparse-attention-reciprocal-reuse-v1",
-        feature = "kernel-compressed-hybrid-attention-reciprocal-reuse-v1",
+        feature = "kernel-compressed-hybrid-attention-division-baseline-v1",
         feature = "kernel-attnres-aggregate-explicit-reuse-v1",
         feature = "kernel-four-branch-residual-explicit-v1",
         feature = "kernel-mhc-sinkhorn-mix-scalar-v1",

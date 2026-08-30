@@ -176,7 +176,7 @@ fn package_states_the_production_source_and_evidence_boundary() {
         "kernel-kda-decode-wave-tiled-v1",
         "kernel-kda-prefill-channel-mask-v1",
         "kernel-content-sparse-attention-reciprocal-reuse-v1",
-        "kernel-compressed-hybrid-attention-reciprocal-reuse-v1",
+        "kernel-compressed-hybrid-attention-division-baseline-v1",
         "kernel-attnres-aggregate-explicit-reuse-v1",
         "kernel-four-branch-residual-explicit-v1",
         "kernel-mhc-sinkhorn-mix-scalar-v1",
@@ -200,7 +200,7 @@ fn package_states_the_production_source_and_evidence_boundary() {
     }
 
     assert!(SOURCE.contains("kernel-content-sparse-attention-reciprocal-reuse-v1"));
-    assert!(SOURCE.contains("kernel-compressed-hybrid-attention-reciprocal-reuse-v1"));
+    assert!(SOURCE.contains("kernel-compressed-hybrid-attention-division-baseline-v1"));
     for rejected in [
         "content-sparse-selected-score-scalar-v1",
         "compressed-hybrid-seven-score-scalar-v1",

@@ -1178,18 +1178,18 @@ pub fn gfx950_content_sparse_attention(
 /// Mixes a four-token local window with three four-token compressed global blocks.
 #[cfg(all(target_arch = "amdgpu", feature = "kernel-compressed-hybrid-attention"))]
 #[cfg_attr(
-    not(feature = "kernel-compressed-hybrid-attention-reciprocal-reuse-v1"),
+    not(feature = "kernel-compressed-hybrid-attention-division-baseline-v1"),
     kernel(
         typed,
-        namespace = "dce6cc065e6f9153ced26939d04b8c49ecd89520f092d212bd44053209c9a734",
+        namespace = "c8cf1919826911b62fad830db644250616be68fd3aa252db280fb6cbf9157d3b",
         launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
     )
 )]
 #[cfg_attr(
-    feature = "kernel-compressed-hybrid-attention-reciprocal-reuse-v1",
+    feature = "kernel-compressed-hybrid-attention-division-baseline-v1",
     kernel(
         typed,
-        namespace = "0f357dc9bc205fbea9c82e7426fc3b1e8cad56b562fa6457ed42923f47505cc4",
+        namespace = "df561e677c408c086c041faff22c05436c173edc2e4f9deda3eeaca93dc2a32b",
         launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
     )
 )]
@@ -1272,12 +1272,12 @@ pub fn gfx950_compressed_hybrid_attention(
     let local_weight2 = math.exp_f32(score14 - local_maximum);
     let local_weight3 = math.exp_f32(score15 - local_maximum);
     let local_sum = local_weight0 + local_weight1 + local_weight2 + local_weight3;
-    #[cfg(not(feature = "kernel-compressed-hybrid-attention-reciprocal-reuse-v1"))]
+    #[cfg(feature = "kernel-compressed-hybrid-attention-division-baseline-v1")]
     let local_value = local_weight0 / local_sum * decode_fp8_e4m3_v1!(value.load_or(12, column, 0))
         + local_weight1 / local_sum * decode_fp8_e4m3_v1!(value.load_or(13, column, 0))
         + local_weight2 / local_sum * decode_fp8_e4m3_v1!(value.load_or(14, column, 0))
         + local_weight3 / local_sum * decode_fp8_e4m3_v1!(value.load_or(15, column, 0));
-    #[cfg(feature = "kernel-compressed-hybrid-attention-reciprocal-reuse-v1")]
+    #[cfg(not(feature = "kernel-compressed-hybrid-attention-division-baseline-v1"))]
     let local_value = {
         let reciprocal = 1.0 / local_sum;
         (local_weight0 * decode_fp8_e4m3_v1!(value.load_or(12, column, 0))
@@ -1313,11 +1313,11 @@ pub fn gfx950_compressed_hybrid_attention(
         + decode_fp8_e4m3_v1!(value.load_or(10, column, 0))
         + decode_fp8_e4m3_v1!(value.load_or(11, column, 0)))
         * 0.25;
-    #[cfg(not(feature = "kernel-compressed-hybrid-attention-reciprocal-reuse-v1"))]
+    #[cfg(feature = "kernel-compressed-hybrid-attention-division-baseline-v1")]
     let global_value = global_weight0 / global_sum * compressed0
         + global_weight1 / global_sum * compressed1
         + global_weight2 / global_sum * compressed2;
-    #[cfg(feature = "kernel-compressed-hybrid-attention-reciprocal-reuse-v1")]
+    #[cfg(not(feature = "kernel-compressed-hybrid-attention-division-baseline-v1"))]
     let global_value = (global_weight0 * compressed0
         + global_weight1 * compressed1
         + global_weight2 * compressed2)
