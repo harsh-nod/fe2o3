@@ -48,7 +48,41 @@ fn install_baseline_comparator(
         BaselineComparatorAvailabilityV1::CallerBoundAvailable {
             record: Box::new(record.clone()),
         };
-    (manifest.baseline_comparator.identity().unwrap(), record)
+    let baseline_comparator_identity = manifest.baseline_comparator.identity().unwrap();
+    let raw_configuration_sha256 = manifest.baseline_comparator.raw_configuration_sha256;
+    let no_capture_configuration_sha256 =
+        manifest.baseline_comparator.no_capture_configuration_sha256;
+    manifest.overhead_budgets[0].observation = OverheadObservationV1::Measured {
+        measurement: Box::new(MeasuredOverheadV1 {
+            configuration_sha256: no_capture_configuration_sha256,
+            baseline_comparator_identity,
+            baseline_evidence_id: record.raw_evidence_id,
+            captured_evidence_id: record.no_capture_evidence_id,
+            comparison: OverheadComparisonAxesV1 {
+                workload_identity: record.workload_identity,
+                input_identity: record.input_identity,
+                artifact_identity: record.artifact_identity,
+                environment_identity: record.environment_identity,
+                device_identity: record.device_identity,
+                collector_content_sha256: record.collector_content_sha256,
+                baseline_configuration_sha256: raw_configuration_sha256,
+                captured_configuration_sha256: no_capture_configuration_sha256,
+            },
+            warmups: record.warmups,
+            repetitions: record.repetitions,
+            statistic: record.statistic,
+            clock_domain: record.clock_domain.clone(),
+            metric: MeasuredOverheadMetricV1::RelativeDuration {
+                baseline_nanoseconds: record.raw_duration_nanoseconds,
+                captured_nanoseconds: record.no_capture_duration_nanoseconds,
+            },
+            storage_bytes: 0,
+            collection_milliseconds: 10_000,
+            loss_free: true,
+            truncated: false,
+        }),
+    };
+    (baseline_comparator_identity, record)
 }
 
 #[test]
@@ -229,6 +263,32 @@ fn manifest_level_evaluation_revalidates_all_post_decode_mutations() {
 }
 
 #[test]
+fn available_comparator_requires_one_exact_measured_no_capture_row() {
+    let unavailable_observation = fixture().overhead_budgets[0].observation.clone();
+
+    let mut manifest = fixture();
+    install_baseline_comparator(&mut manifest);
+    manifest.overhead_budgets[0].observation = unavailable_observation;
+    assert_eq!(
+        manifest.validate(),
+        Err(QualificationValidationErrorV1::BaselineComparatorContradiction)
+    );
+
+    let mut manifest = fixture();
+    install_baseline_comparator(&mut manifest);
+    let OverheadObservationV1::Measured { measurement } =
+        &mut manifest.overhead_budgets[0].observation
+    else {
+        unreachable!()
+    };
+    measurement.captured_evidence_id = identity(14);
+    assert_eq!(
+        manifest.validate(),
+        Err(QualificationValidationErrorV1::BaselineComparatorContradiction)
+    );
+}
+
+#[test]
 fn dates_are_gregorian_and_documentation_urls_have_real_https_authorities() {
     let mut manifest = fixture();
     manifest.qualification_date_utc = "2024-02-29".to_owned();
@@ -405,7 +465,7 @@ fn approved_policy_satisfaction_is_rederived_over_exact_comparison_axes() {
     }
     assert_eq!(
         failed.evaluate_overhead(CaptureModeV1::NoCapture),
-        Err(QualificationValidationErrorV1::InvalidMeasurementMetric)
+        Err(QualificationValidationErrorV1::BaselineComparatorContradiction)
     );
 
     if let OverheadObservationV1::Measured { measurement } =
@@ -417,7 +477,7 @@ fn approved_policy_satisfaction_is_rederived_over_exact_comparison_axes() {
     }
     assert_eq!(
         manifest.validate(),
-        Err(QualificationValidationErrorV1::MeasurementBaselineMismatch)
+        Err(QualificationValidationErrorV1::BaselineComparatorContradiction)
     );
     if let OverheadObservationV1::Measured { measurement } =
         &mut manifest.overhead_budgets[0].observation
@@ -429,7 +489,7 @@ fn approved_policy_satisfaction_is_rederived_over_exact_comparison_axes() {
     }
     assert_eq!(
         manifest.validate(),
-        Err(QualificationValidationErrorV1::MeasurementBaselineMismatch)
+        Err(QualificationValidationErrorV1::BaselineComparatorContradiction)
     );
     if let OverheadObservationV1::Measured { measurement } =
         &mut manifest.overhead_budgets[0].observation
@@ -442,7 +502,7 @@ fn approved_policy_satisfaction_is_rederived_over_exact_comparison_axes() {
     }
     assert_eq!(
         manifest.validate(),
-        Err(QualificationValidationErrorV1::MeasurementBaselineMismatch)
+        Err(QualificationValidationErrorV1::BaselineComparatorContradiction)
     );
 }
 
@@ -493,6 +553,18 @@ fn non_no_capture_measurement_must_bind_the_canonical_no_capture_comparator() {
     assert_eq!(
         manifest.evaluate_overhead(CaptureModeV1::Counters).unwrap(),
         OverheadAssessmentV1::CallerBoundPolicySatisfied
+    );
+
+    let mut raw_evidence_alias = manifest.clone();
+    let OverheadObservationV1::Measured { measurement } =
+        &mut raw_evidence_alias.overhead_budgets[1].observation
+    else {
+        unreachable!()
+    };
+    measurement.captured_evidence_id = baseline.raw_evidence_id;
+    assert_eq!(
+        raw_evidence_alias.evaluate_overhead(CaptureModeV1::Counters),
+        Err(QualificationValidationErrorV1::MeasurementBaselineMismatch)
     );
 
     if let OverheadObservationV1::Measured { measurement } =

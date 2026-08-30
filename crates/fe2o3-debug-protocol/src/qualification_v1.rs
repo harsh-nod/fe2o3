@@ -243,7 +243,41 @@ impl CanonicalBaselineComparatorV1 {
         {
             return Err(QualificationValidationErrorV1::InvalidBaselineComparator);
         }
-        validate_text(&record.clock_domain, "baseline clock domain")
+        validate_text(&record.clock_domain, "baseline clock domain")?;
+
+        let OverheadObservationV1::Measured { measurement } = &no_capture.observation else {
+            return Err(QualificationValidationErrorV1::BaselineComparatorContradiction);
+        };
+        let MeasuredOverheadMetricV1::RelativeDuration {
+            baseline_nanoseconds,
+            captured_nanoseconds,
+        } = &measurement.metric
+        else {
+            return Err(QualificationValidationErrorV1::BaselineComparatorContradiction);
+        };
+        if measurement.configuration_sha256 != self.no_capture_configuration_sha256
+            || measurement.baseline_comparator_identity != self.identity()?
+            || measurement.baseline_evidence_id != record.raw_evidence_id
+            || measurement.captured_evidence_id != record.no_capture_evidence_id
+            || measurement.comparison.workload_identity != record.workload_identity
+            || measurement.comparison.input_identity != record.input_identity
+            || measurement.comparison.artifact_identity != record.artifact_identity
+            || measurement.comparison.environment_identity != record.environment_identity
+            || measurement.comparison.device_identity != record.device_identity
+            || measurement.comparison.collector_content_sha256 != record.collector_content_sha256
+            || measurement.comparison.baseline_configuration_sha256 != self.raw_configuration_sha256
+            || measurement.comparison.captured_configuration_sha256
+                != self.no_capture_configuration_sha256
+            || measurement.warmups != record.warmups
+            || measurement.repetitions != record.repetitions
+            || measurement.statistic != record.statistic
+            || measurement.clock_domain != record.clock_domain
+            || *baseline_nanoseconds != record.raw_duration_nanoseconds
+            || *captured_nanoseconds != record.no_capture_duration_nanoseconds
+        {
+            return Err(QualificationValidationErrorV1::BaselineComparatorContradiction);
+        }
+        Ok(())
     }
 
     pub fn identity(&self) -> Result<OpaqueIdentityV1, QualificationValidationErrorV1> {
@@ -761,6 +795,8 @@ impl OverheadObservationV1 {
             || measured.comparison.baseline_configuration_sha256 != expected_baseline_configuration
             || measured.baseline_evidence_id != expected_baseline_evidence
             || measured.captured_evidence_id == expected_baseline_evidence
+            || (qualification.mode != CaptureModeV1::NoCapture
+                && measured.captured_evidence_id == baseline.raw_evidence_id)
             || measured.comparison.workload_identity != baseline.workload_identity
             || measured.comparison.input_identity != baseline.input_identity
             || measured.comparison.artifact_identity != baseline.artifact_identity
@@ -1052,6 +1088,7 @@ pub enum QualificationValidationErrorV1 {
     InvalidBudgetConfiguration,
     InvalidBaselineComparator,
     BaselineComparatorUnavailable,
+    BaselineComparatorContradiction,
     BudgetOutOfRange(&'static str),
     InvalidBudgetMetric,
     MeasuredWithUnusableCollector,
@@ -1078,6 +1115,7 @@ impl fmt::Display for QualificationValidationErrorV1 {
             Self::InvalidBudgetConfiguration => formatter.write_str("capture-mode configurations are duplicated or collide with the raw baseline"),
             Self::InvalidBaselineComparator => formatter.write_str("canonical baseline comparator is inconsistent with the manifest"),
             Self::BaselineComparatorUnavailable => formatter.write_str("canonical no-capture baseline comparator is unavailable"),
+            Self::BaselineComparatorContradiction => formatter.write_str("available baseline comparator and no-capture measurement contradict each other"),
             Self::BudgetOutOfRange(field) => write!(formatter, "{field} budget is out of range"),
             Self::InvalidBudgetMetric => formatter.write_str("capture mode and budget metric are incompatible"),
             Self::MeasuredWithUnusableCollector => formatter.write_str("measured overhead names a collector that was not observed usable"),
