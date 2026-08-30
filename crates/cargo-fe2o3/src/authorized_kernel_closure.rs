@@ -207,8 +207,10 @@ const TRUSTED_GIT_PROC_MACROS: [(&str, &str, &str, &str); 1] = [(
 )];
 const TRUSTED_FE2O3_MACROS_TREE: &str =
     "d8431aefc140f868ed1f62918af9ff87e7049b17b32ec02bdc53755b502484b6";
+// This digest belongs to TRUSTED_FE2O3_EXTERNAL_SOURCE and is intentionally
+// independent of the workspace-local macros tree.
 const TRUSTED_FE2O3_EXTERNAL_MACROS_TREE: &str =
-    "d8431aefc140f868ed1f62918af9ff87e7049b17b32ec02bdc53755b502484b6";
+    "d641d46fd0342ed09057fda4604c6d7feed0437f8bf026af5b0dd08957b87052";
 const TRUSTED_FE2O3_HIP_SYS_TREE: &str =
     "fc950a51041eeb74fd756624e3c981fe24d52a6e8b4868da613e5b9a8c499429";
 
@@ -1638,9 +1640,13 @@ mod tests {
             let root = crates.join(name);
             assert_eq!(hex(&canonical_tree_digest(&root, None).unwrap()), expected);
         }
-        assert_eq!(
+        assert_ne!(
             TRUSTED_FE2O3_EXTERNAL_MACROS_TREE,
             TRUSTED_FE2O3_MACROS_TREE
+        );
+        assert_eq!(
+            TRUSTED_FE2O3_EXTERNAL_MACROS_TREE,
+            "d641d46fd0342ed09057fda4604c6d7feed0437f8bf026af5b0dd08957b87052"
         );
     }
 

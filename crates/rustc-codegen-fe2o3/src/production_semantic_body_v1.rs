@@ -2417,4 +2417,16 @@ mod tests {
             assert_eq!(semantic_checked_binary_operation(operation), None);
         }
     }
+
+    #[test]
+    fn unchecked_raw_mir_shifts_are_admitted_with_their_exact_direction() {
+        for (operation, expected) in [
+            (BinOp::ShlUnchecked, SemanticBinaryOpV1::ShiftLeft),
+            (BinOp::ShrUnchecked, SemanticBinaryOpV1::ShiftRight),
+        ] {
+            assert_eq!(semantic_binary_operation(operation), Some(expected));
+            assert_eq!(semantic_checked_binary_operation(operation), None);
+            assert_eq!(semantic_unchecked_binary_operation(operation), None);
+        }
+    }
 }

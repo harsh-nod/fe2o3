@@ -433,34 +433,36 @@ fn rejects_type_invalid_memory_operations() {
 
 #[test]
 fn rejects_mixed_width_shift_operands_before_target_lowering() {
-    let module = one_block_module(
-        vec![Type::Scalar(ScalarType::U64), Type::Scalar(ScalarType::U32)],
-        vec![op(
-            2,
-            Type::Scalar(ScalarType::U64),
-            OperationKind::Binary {
-                op: BinaryOp::ShiftRight,
-                lhs: ValueId(0),
-                rhs: ValueId(1),
-            },
-        )],
-    );
-    let errors = verify_module(&module).unwrap_err();
-    assert!(errors.contains(DiagnosticCode::InvalidOperandType));
+    for shift in [BinaryOp::ShiftLeft, BinaryOp::ShiftRight] {
+        let module = one_block_module(
+            vec![Type::Scalar(ScalarType::U64), Type::Scalar(ScalarType::U32)],
+            vec![op(
+                2,
+                Type::Scalar(ScalarType::U64),
+                OperationKind::Binary {
+                    op: shift,
+                    lhs: ValueId(0),
+                    rhs: ValueId(1),
+                },
+            )],
+        );
+        let errors = verify_module(&module).unwrap_err();
+        assert!(errors.contains(DiagnosticCode::InvalidOperandType));
 
-    let same_width = one_block_module(
-        vec![Type::Scalar(ScalarType::U64), Type::Scalar(ScalarType::U64)],
-        vec![op(
-            2,
-            Type::Scalar(ScalarType::U64),
-            OperationKind::Binary {
-                op: BinaryOp::ShiftRight,
-                lhs: ValueId(0),
-                rhs: ValueId(1),
-            },
-        )],
-    );
-    verify_module(&same_width).expect("normalized shifts use one exact integer type");
+        let same_width = one_block_module(
+            vec![Type::Scalar(ScalarType::U64), Type::Scalar(ScalarType::U64)],
+            vec![op(
+                2,
+                Type::Scalar(ScalarType::U64),
+                OperationKind::Binary {
+                    op: shift,
+                    lhs: ValueId(0),
+                    rhs: ValueId(1),
+                },
+            )],
+        );
+        verify_module(&same_width).expect("normalized shifts use one exact integer type");
+    }
 }
 
 #[test]
