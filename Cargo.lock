@@ -826,6 +826,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe2o3-compiler-execution-coordinator"
+version = "0.1.0"
+dependencies = [
+ "ed25519-dalek",
+ "fe2o3-artifact-transaction",
+ "fe2o3-compiler-closure-capability",
+ "fe2o3-compiler-execution-protocol",
+ "fe2o3-compiler-execution-supervisor",
+ "fe2o3-external-anchor-coordinator",
+ "fe2o3-protected-service-profile",
+ "fe2o3-protected-service-spawn",
+ "fe2o3-protected-static-executable",
+ "rustix",
+]
+
+[[package]]
 name = "fe2o3-compiler-execution-issuer"
 version = "0.1.0"
 dependencies = [
