@@ -30,6 +30,7 @@ const MANIFEST_HEADER_V1: &str = "fe2o3-compiler-execution-install-manifest-v1";
 const MANIFEST_MAX_BYTES_V1: usize = 32 * 1024;
 const CONFIG_MAX_BYTES_V1: u64 = 1024 * 1024;
 const EXECUTABLE_MAX_BYTES_V1: u64 = 128 * 1024 * 1024;
+const GIT_COMMIT_BYTES_V1: usize = 20;
 const DIRECTORY_MODE_V1: u32 = 0o700;
 const MANIFEST_MODE_V1: u32 = 0o444;
 
@@ -287,7 +288,7 @@ pub fn generate_compiler_execution_install_manifest_v1(
     git_commit: &str,
     target: &str,
 ) -> Result<CompilerExecutionManifestGenerationV1, DeploymentVerificationErrorV1> {
-    parse_lower_hex_exact(git_commit, 32, "git commit")?;
+    parse_lower_hex_exact(git_commit, GIT_COMMIT_BYTES_V1, "git commit")?;
     if target != COMPILER_EXECUTION_DEPLOYMENT_TARGET_V1 {
         return Err(invalid(
             DeploymentVerificationErrorKindV1::InvalidManifest,
@@ -346,7 +347,11 @@ pub fn verify_compiler_execution_deployment_v1(
 ) -> Result<VerifiedCompilerExecutionDeploymentV1, DeploymentVerificationErrorV1> {
     let expected_manifest =
         parse_lower_hex_exact(expected_manifest_sha256, 32, "expected manifest SHA-256")?;
-    parse_lower_hex_exact(expected_git_commit, 32, "expected git commit")?;
+    parse_lower_hex_exact(
+        expected_git_commit,
+        GIT_COMMIT_BYTES_V1,
+        "expected git commit",
+    )?;
     let root = open_bundle_root(bundle_root)?;
     let root_snapshot = validate_directory(&root, None, "bundle root")?;
     verify_inventory(&root, root_snapshot, true)?;
@@ -757,7 +762,7 @@ fn parse_manifest(
         ));
     }
     let git_commit = parse_single_field(lines.next(), "git_commit")?;
-    parse_lower_hex_exact(git_commit, 32, "manifest git commit")?;
+    parse_lower_hex_exact(git_commit, GIT_COMMIT_BYTES_V1, "manifest git commit")?;
     if git_commit != expected_git_commit {
         return Err(invalid(
             DeploymentVerificationErrorKindV1::CommitMismatch,
@@ -1124,8 +1129,8 @@ mod tests {
 
     use super::*;
 
-    const COMMIT: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    const OTHER_COMMIT: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const COMMIT: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const OTHER_COMMIT: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
     struct Fixture {
         root: tempfile::TempDir,
@@ -1432,6 +1437,21 @@ mod tests {
     fn noncanonical_pins_and_root_symlinks_are_rejected() {
         let fixture = Fixture::new();
         let generation = fixture.generate();
+        for commit in [
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        ] {
+            assert_eq!(
+                verify_compiler_execution_deployment_v1(
+                    fixture.root.path(),
+                    &lower_hex(&generation.sha256()),
+                    commit,
+                )
+                .unwrap_err()
+                .kind(),
+                DeploymentVerificationErrorKindV1::InvalidDigest
+            );
+        }
         assert_eq!(
             verify_compiler_execution_deployment_v1(
                 fixture.root.path(),
