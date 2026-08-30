@@ -21,11 +21,15 @@ constexpr uint8_t ResponseMagicV1[] = {'F', '3', 'L', 'R', 'S', 'P', '0', '1'};
 constexpr uint8_t RequestMagicV2[] = {'F', '3', 'L', 'R', 'E', 'Q', '0', '2'};
 constexpr uint8_t ResponseMagicV2[] = {'F', '3', 'L', 'R', 'S', 'P', '0', '2'};
 constexpr uint8_t ResponseMagicV3[] = {'F', '3', 'L', 'R', 'S', 'P', '0', '3'};
+constexpr uint8_t ResponseMagicV4[] = {'F', '3', 'L', 'R', 'S', 'P', '0', '4'};
 constexpr char RequestDomainV1[] = "FE2O3/DIRECT-LLVM-WORKER-REQUEST/V1\0";
 constexpr char RequestDomainV2[] = "FE2O3/DIRECT-LLVM-WORKER-REQUEST/V2\0";
 constexpr char ProviderManifestDomainV1[] =
     "FE2O3/DEVICE-LIBRARY-PROVIDER-MANIFEST/V1\0";
 constexpr char ResponseDomainV3[] = "FE2O3/DIRECT-LLVM-WORKER-RESPONSE/V3\0";
+constexpr char ResponseDomainV4[] = "FE2O3/DIRECT-LLVM-WORKER-RESPONSE/V4\0";
+constexpr char DerivationEvidenceDomainV1[] =
+    "FE2O3/UPSTREAM-LLVM-LLD-DERIVATION-EVIDENCE/V1\0";
 constexpr size_t MaxBuildIdentityBytes = 160;
 constexpr size_t MaxTargetBytes = 128;
 constexpr size_t MaxProviderIdentityBytes = 128;
@@ -431,6 +435,63 @@ encodeProviderManifestPreimage(const DeviceLibraryProviderEvidence &Evidence) {
   return Encoded;
 }
 
+void appendContentIdentity(std::vector<uint8_t> &Out,
+                           const StageContentIdentity &Identity) {
+  Out.insert(Out.end(), Identity.Digest.begin(), Identity.Digest.end());
+  appendU64(Out, Identity.ByteLength);
+}
+
+bool isZero(ArrayRef<uint8_t> Bytes) {
+  return llvm::all_of(Bytes, [](uint8_t Byte) { return Byte == 0; });
+}
+
+Expected<std::vector<uint8_t>>
+encodeDerivationEvidencePreimage(const DerivationEvidence &Evidence) {
+  if (Evidence.LinkedModule.ByteLength == 0 ||
+      Evidence.OptimizedModule.ByteLength == 0 ||
+      Evidence.GeneratedObject.ByteLength == 0 ||
+      Evidence.Hsaco.ByteLength == 0)
+    return protocolError("derivation evidence has an empty stage");
+  if (Evidence.NativeLinkInputs.empty() ||
+      Evidence.NativeLinkInputs.size() > MaxNativeLinkInputs)
+    return protocolError("invalid native-link input evidence count");
+  if (isZero(Evidence.LldInvocationIdentity))
+    return protocolError("LLD invocation identity is the reserved zero value");
+
+  size_t GeneratedInputs = 0;
+  std::vector<uint8_t> Encoded;
+  Encoded.push_back(1);
+  appendContentIdentity(Encoded, Evidence.LinkedModule);
+  appendContentIdentity(Encoded, Evidence.OptimizedModule);
+  appendContentIdentity(Encoded, Evidence.GeneratedObject);
+  appendU32(Encoded,
+            static_cast<uint32_t>(Evidence.NativeLinkInputs.size()));
+  for (size_t I = 0; I < Evidence.NativeLinkInputs.size(); ++I) {
+    const NativeLinkInputEvidence &Input = Evidence.NativeLinkInputs[I];
+    uint8_t Source = static_cast<uint8_t>(Input.Source);
+    if (Input.Content.ByteLength == 0 ||
+        (Source != static_cast<uint8_t>(
+                       NativeLinkInputSource::RequestRelocatable) &&
+         Source !=
+             static_cast<uint8_t>(NativeLinkInputSource::GeneratedObject)))
+      return protocolError("invalid native-link input evidence");
+    if (Input.Source == NativeLinkInputSource::GeneratedObject) {
+      ++GeneratedInputs;
+      if (I + 1 != Evidence.NativeLinkInputs.size() ||
+          Input.Content != Evidence.GeneratedObject)
+        return protocolError("generated object is not the final LLD input");
+    }
+    Encoded.push_back(Source);
+    appendContentIdentity(Encoded, Input.Content);
+  }
+  if (GeneratedInputs != 1)
+    return protocolError("derivation evidence has no unique generated object");
+  Encoded.insert(Encoded.end(), Evidence.LldInvocationIdentity.begin(),
+                 Evidence.LldInvocationIdentity.end());
+  appendContentIdentity(Encoded, Evidence.Hsaco);
+  return Encoded;
+}
+
 } // namespace
 
 Expected<std::array<uint8_t, 32>> calculateProviderManifestIdentity(
@@ -441,6 +502,21 @@ Expected<std::array<uint8_t, 32>> calculateProviderManifestIdentity(
   SHA256 Hasher;
   Hasher.update(StringRef(ProviderManifestDomainV1,
                           sizeof(ProviderManifestDomainV1) - 1));
+  uint8_t LengthBytes[8];
+  support::endian::write64le(LengthBytes, Preimage->size());
+  Hasher.update(ArrayRef<uint8_t>(LengthBytes));
+  Hasher.update(*Preimage);
+  return Hasher.final();
+}
+
+Expected<std::array<uint8_t, 32>>
+calculateDerivationEvidenceIdentity(const DerivationEvidence &Evidence) {
+  auto Preimage = encodeDerivationEvidencePreimage(Evidence);
+  if (!Preimage)
+    return Preimage.takeError();
+  SHA256 Hasher;
+  Hasher.update(StringRef(DerivationEvidenceDomainV1,
+                          sizeof(DerivationEvidenceDomainV1) - 1));
   uint8_t LengthBytes[8];
   support::endian::write64le(LengthBytes, Preimage->size());
   Hasher.update(ArrayRef<uint8_t>(LengthBytes));
@@ -828,16 +904,35 @@ Expected<std::vector<uint8_t>> encodeResponse(Response Value) {
     if (*ManifestIdentity != Value.DeviceLibraryProvider->ManifestIdentity)
       return protocolError("provider manifest identity mismatch");
   }
+  if (Value.Derivation) {
+    if (Value.Protocol != ProtocolVersion::V2 || !Success)
+      return protocolError(
+          "derivation evidence requires a successful V2 response");
+    auto EvidenceIdentity =
+        calculateDerivationEvidenceIdentity(*Value.Derivation);
+    if (!EvidenceIdentity)
+      return EvidenceIdentity.takeError();
+    if (*EvidenceIdentity != Value.Derivation->EvidenceIdentity)
+      return protocolError("derivation evidence identity mismatch");
+    if (Value.Derivation->Hsaco.Digest != Value.LinkedOutput->Digest ||
+        Value.Derivation->Hsaco.ByteLength != Value.LinkedOutput->Bytes.size())
+      return protocolError("derivation HSACO identity does not match output");
+  } else if (Value.Protocol == ProtocolVersion::V2 && Success) {
+    return protocolError("successful V2 response has no derivation evidence");
+  }
 
   std::vector<uint8_t> Encoded;
   if (Value.Protocol == ProtocolVersion::V1)
     Encoded.assign(std::begin(ResponseMagicV1), std::end(ResponseMagicV1));
-  else if (Value.Protocol == ProtocolVersion::V2)
-    Encoded.assign(Value.DeviceLibraryProvider ? std::begin(ResponseMagicV3)
-                                               : std::begin(ResponseMagicV2),
-                   Value.DeviceLibraryProvider ? std::end(ResponseMagicV3)
-                                               : std::end(ResponseMagicV2));
-  else
+  else if (Value.Protocol == ProtocolVersion::V2) {
+    if (Value.Derivation)
+      Encoded.assign(std::begin(ResponseMagicV4), std::end(ResponseMagicV4));
+    else
+      Encoded.assign(Value.DeviceLibraryProvider ? std::begin(ResponseMagicV3)
+                                                 : std::begin(ResponseMagicV2),
+                     Value.DeviceLibraryProvider ? std::end(ResponseMagicV3)
+                                                 : std::end(ResponseMagicV2));
+  } else
     return protocolError("unsupported response protocol version");
   if (Error E = appendField(Encoded, 1, Value.RequestId))
     return E;
@@ -876,7 +971,39 @@ Expected<std::vector<uint8_t>> encodeResponse(Response Value) {
   }
   if (Error E = appendField(Encoded, 6 + Offset, OutputBytes))
     return E;
-  if (Value.DeviceLibraryProvider) {
+  if (Value.Derivation) {
+    std::vector<uint8_t> ProviderBytes;
+    if (Value.DeviceLibraryProvider) {
+      auto EncodedProvider =
+          encodeProviderManifestPreimage(*Value.DeviceLibraryProvider);
+      if (!EncodedProvider)
+        return EncodedProvider.takeError();
+      ProviderBytes = std::move(*EncodedProvider);
+      ProviderBytes.insert(
+          ProviderBytes.end(),
+          Value.DeviceLibraryProvider->ManifestIdentity.begin(),
+          Value.DeviceLibraryProvider->ManifestIdentity.end());
+    }
+    if (Error E = appendField(Encoded, 8, ProviderBytes))
+      return E;
+    auto DerivationBytes = encodeDerivationEvidencePreimage(*Value.Derivation);
+    if (!DerivationBytes)
+      return DerivationBytes.takeError();
+    DerivationBytes->insert(DerivationBytes->end(),
+                            Value.Derivation->EvidenceIdentity.begin(),
+                            Value.Derivation->EvidenceIdentity.end());
+    if (Error E = appendField(Encoded, 9, *DerivationBytes))
+      return E;
+
+    SHA256 Hasher;
+    Hasher.update(StringRef(ResponseDomainV4, sizeof(ResponseDomainV4) - 1));
+    uint8_t LengthBytes[8];
+    support::endian::write64le(LengthBytes, Encoded.size());
+    Hasher.update(ArrayRef<uint8_t>(LengthBytes));
+    Hasher.update(Encoded);
+    if (Error E = appendField(Encoded, 10, Hasher.final()))
+      return E;
+  } else if (Value.DeviceLibraryProvider) {
     auto ProviderBytes =
         encodeProviderManifestPreimage(*Value.DeviceLibraryProvider);
     if (!ProviderBytes)

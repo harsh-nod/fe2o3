@@ -31,6 +31,7 @@ inline constexpr size_t MaxDiagnostics = 64;
 inline constexpr size_t MaxDiagnosticBytes = 1024;
 inline constexpr size_t MaxTotalDiagnosticBytes = 16 * 1024;
 inline constexpr size_t MaxWorkerExecutableBytes = 512 * 1024 * 1024;
+inline constexpr size_t MaxNativeLinkInputs = MaxInputs + 1;
 
 enum class ProtocolVersion : uint8_t { V1 = 1, V2 = 2 };
 enum class InputKind : uint8_t {
@@ -105,6 +106,37 @@ struct DeviceLibraryProviderEvidence {
   std::array<uint8_t, 32> ManifestIdentity{};
 };
 
+struct StageContentIdentity {
+  std::array<uint8_t, 32> Digest{};
+  uint64_t ByteLength = 0;
+
+  bool operator==(const StageContentIdentity &) const = default;
+};
+
+enum class NativeLinkInputSource : uint8_t {
+  RequestRelocatable = 1,
+  GeneratedObject = 2,
+};
+
+struct NativeLinkInputEvidence {
+  NativeLinkInputSource Source = NativeLinkInputSource::RequestRelocatable;
+  StageContentIdentity Content;
+
+  bool operator==(const NativeLinkInputEvidence &) const = default;
+};
+
+/// Exact, path-independent custody for the upstream LLVM and in-process LLD
+/// stages used to produce one successful output.
+struct DerivationEvidence {
+  StageContentIdentity LinkedModule;
+  StageContentIdentity OptimizedModule;
+  StageContentIdentity GeneratedObject;
+  std::vector<NativeLinkInputEvidence> NativeLinkInputs;
+  std::array<uint8_t, 32> LldInvocationIdentity{};
+  StageContentIdentity Hsaco;
+  std::array<uint8_t, 32> EvidenceIdentity{};
+};
+
 struct Response {
   std::array<uint8_t, 32> RequestId{};
   std::array<uint8_t, 32> RequestIdentity{};
@@ -116,6 +148,7 @@ struct Response {
   std::array<uint8_t, 32> CompilerEnvelopeIdentity{};
   std::optional<DeviceLibraryProviderEvidence> DeviceLibraryProvider =
       std::nullopt;
+  std::optional<DerivationEvidence> Derivation = std::nullopt;
 };
 
 llvm::Expected<Request> decodeRequest(llvm::ArrayRef<uint8_t> Bytes);
@@ -126,6 +159,8 @@ detectRequestProtocol(llvm::ArrayRef<uint8_t> Bytes);
 llvm::Expected<std::vector<uint8_t>> encodeResponse(Response ResponseValue);
 llvm::Expected<std::array<uint8_t, 32>> calculateProviderManifestIdentity(
     const DeviceLibraryProviderEvidence &Evidence);
+llvm::Expected<std::array<uint8_t, 32>>
+calculateDerivationEvidenceIdentity(const DerivationEvidence &Evidence);
 
 std::vector<std::string>
 canonicalDiagnostics(llvm::ArrayRef<std::string> Diagnostics,

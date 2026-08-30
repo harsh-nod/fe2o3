@@ -1,12 +1,14 @@
 #include "WorkerProtocol.h"
 
 #include "llvm/Support/Error.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/SHA256.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <string>
 #include <vector>
 
 #ifndef FE2O3_LLVM_BUILD_ID
@@ -46,6 +48,28 @@ std::vector<uint8_t> fromHex(llvm::StringRef Hex) {
     Result.push_back(static_cast<uint8_t>((High << 4) | Low));
   }
   return Result;
+}
+
+DerivationEvidence derivationFor(llvm::ArrayRef<uint8_t> OutputBytes) {
+  DerivationEvidence Evidence;
+  const std::vector<uint8_t> Linked = {'l', 'i', 'n', 'k', 'e', 'd'};
+  const std::vector<uint8_t> Optimized = {'o', 'p', 't'};
+  const std::vector<uint8_t> Object = {'o', 'b', 'j'};
+  Evidence.LinkedModule = {llvm::SHA256::hash(Linked), Linked.size()};
+  Evidence.OptimizedModule = {llvm::SHA256::hash(Optimized),
+                              Optimized.size()};
+  Evidence.GeneratedObject = {llvm::SHA256::hash(Object), Object.size()};
+  Evidence.NativeLinkInputs = {
+      {NativeLinkInputSource::GeneratedObject, Evidence.GeneratedObject}};
+  Evidence.LldInvocationIdentity[0] = 1;
+  Evidence.Hsaco = {llvm::SHA256::hash(OutputBytes), OutputBytes.size()};
+  auto Identity = calculateDerivationEvidenceIdentity(Evidence);
+  if (!Identity) {
+    std::string Message = llvm::toString(Identity.takeError());
+    llvm::report_fatal_error(llvm::StringRef(Message));
+  }
+  Evidence.EvidenceIdentity = *Identity;
+  return Evidence;
 }
 
 } // namespace
@@ -152,14 +176,44 @@ int main() {
   ProviderSuccess.CompilerEnvelopeIdentity =
       V2Request->CompilerEnvelopeIdentity;
   ProviderSuccess.DeviceLibraryProvider = Provider;
+  ProviderSuccess.Derivation =
+      derivationFor(ProviderSuccess.LinkedOutput->Bytes);
   auto EncodedProviderResponse = encodeResponse(ProviderSuccess);
   if (!EncodedProviderResponse)
     return fail("provider response could not be encoded");
-  const std::array<uint8_t, 8> ResponseMagicV3 = {'F', '3', 'L', 'R',
-                                                  'S', 'P', '0', '3'};
-  if (!std::equal(ResponseMagicV3.begin(), ResponseMagicV3.end(),
+  const std::array<uint8_t, 8> ResponseMagicV4 = {'F', '3', 'L', 'R',
+                                                  'S', 'P', '0', '4'};
+  if (!std::equal(ResponseMagicV4.begin(), ResponseMagicV4.end(),
                   EncodedProviderResponse->begin()))
-    return fail("provider response omitted the authenticated extension");
+    return fail("success response omitted exact derivation custody");
+  Response MissingDerivation = ProviderSuccess;
+  MissingDerivation.Derivation.reset();
+  auto MissingDerivationResult = encodeResponse(std::move(MissingDerivation));
+  if (MissingDerivationResult)
+    return fail("successful V2 response omitted derivation evidence");
+  llvm::consumeError(MissingDerivationResult.takeError());
+  Response FalseDerivationIdentity = ProviderSuccess;
+  FalseDerivationIdentity.Derivation->EvidenceIdentity[0] ^= 0xff;
+  auto FalseDerivationIdentityResult =
+      encodeResponse(std::move(FalseDerivationIdentity));
+  if (FalseDerivationIdentityResult)
+    return fail("false derivation evidence identity was accepted");
+  llvm::consumeError(FalseDerivationIdentityResult.takeError());
+  Response FalseHsaco = ProviderSuccess;
+  ++FalseHsaco.Derivation->Hsaco.ByteLength;
+  auto FalseHsacoResult = encodeResponse(std::move(FalseHsaco));
+  if (FalseHsacoResult)
+    return fail("derivation terminating at a foreign HSACO was accepted");
+  llvm::consumeError(FalseHsacoResult.takeError());
+  Response ReorderedGeneratedObject = ProviderSuccess;
+  ReorderedGeneratedObject.Derivation->NativeLinkInputs.insert(
+      ReorderedGeneratedObject.Derivation->NativeLinkInputs.begin(),
+      ReorderedGeneratedObject.Derivation->NativeLinkInputs.back());
+  auto ReorderedGeneratedObjectResult =
+      encodeResponse(std::move(ReorderedGeneratedObject));
+  if (ReorderedGeneratedObjectResult)
+    return fail("non-final generated LLD input was accepted");
+  llvm::consumeError(ReorderedGeneratedObjectResult.takeError());
   ProviderSuccess.DeviceLibraryProvider->ManifestIdentity[0] ^= 0xff;
   auto WrongProviderIdentity = encodeResponse(std::move(ProviderSuccess));
   if (WrongProviderIdentity)

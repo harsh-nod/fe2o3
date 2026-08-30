@@ -776,6 +776,14 @@ Response runSuccess(const Request &RequestValue,
   require(Result.LinkedOutput->Digest ==
               SHA256::hash(Result.LinkedOutput->Bytes),
           "success output digest is incorrect");
+  if (RequestValue.Protocol == ProtocolVersion::V2) {
+    require(Result.Derivation.has_value(),
+            "V2 success omitted LLVM/object/LLD derivation evidence");
+    require(Result.Derivation->Hsaco.Digest == Result.LinkedOutput->Digest &&
+                Result.Derivation->Hsaco.ByteLength ==
+                    Result.LinkedOutput->Bytes.size(),
+            "success derivation does not terminate at the exact HSACO");
+  }
   require(inspectHsaco(Result.LinkedOutput->Bytes,
                        RequestValue.CodeObjectVersion) == ExpectedSymbols,
           "HSACO exports do not match the request");
@@ -798,6 +806,8 @@ Response runSuccessWithPolicy(const Request &RequestValue,
   require(Result.LinkedOutput->Digest ==
               SHA256::hash(Result.LinkedOutput->Bytes),
           "synthetic OCML output digest is incorrect");
+  require(Result.Derivation.has_value(),
+          "synthetic OCML success omitted derivation evidence");
   require(inspectHsaco(Result.LinkedOutput->Bytes,
                        RequestValue.CodeObjectVersion) == ExpectedSymbols,
           "synthetic OCML HSACO exports do not match the request");

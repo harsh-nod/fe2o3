@@ -28,6 +28,8 @@ const COMPACT_REPLAY_MAGIC_V1: &[u8; 8] = b"F2V3CFR1";
 const COMPACT_REPLAY_VERSION_V1: u16 = 1;
 const COMPACT_REPLAY_MAGIC_V2: &[u8; 8] = b"F2V3CFR2";
 const COMPACT_REPLAY_VERSION_V2: u16 = 2;
+const COMPACT_REPLAY_MAGIC_V3: &[u8; 8] = b"F2V3CFR3";
+const COMPACT_REPLAY_VERSION_V3: u16 = 3;
 const COMPACT_REPLAY_CHECKSUM_DOMAIN_V1: &[u8] =
     b"FE2O3/WORKER-V3-COMPACT-FINALIZER-REPLAY-CHECKSUM/V1\0";
 const COMPACT_REPLAY_IDENTITY_DOMAIN_V1: &[u8] =
@@ -36,15 +38,20 @@ const COMPACT_REPLAY_CHECKSUM_DOMAIN_V2: &[u8] =
     b"FE2O3/WORKER-V3-COMPACT-FINALIZER-REPLAY-CHECKSUM/V2\0";
 const COMPACT_REPLAY_IDENTITY_DOMAIN_V2: &[u8] =
     b"FE2O3/WORKER-V3-COMPACT-FINALIZER-REPLAY-IDENTITY/V2\0";
+const COMPACT_REPLAY_CHECKSUM_DOMAIN_V3: &[u8] =
+    b"FE2O3/WORKER-V3-COMPACT-FINALIZER-REPLAY-CHECKSUM/V3\0";
+const COMPACT_REPLAY_IDENTITY_DOMAIN_V3: &[u8] =
+    b"FE2O3/WORKER-V3-COMPACT-FINALIZER-REPLAY-IDENTITY/V3\0";
 
 const MAX_RESPONSE_DIAGNOSTICS_BODY_BYTES_V1: usize = 16_644;
 const MAX_RESPONSE_PROVIDER_EVIDENCE_BODY_BYTES_V1: usize = 1_067_889;
+const MAX_RESPONSE_DERIVATION_EVIDENCE_BODY_BYTES_V1: usize = 5_518;
 
 /// Maximum canonical bytes in one compact native-V3 finalizer replay transcript.
 pub const MAX_PROTECTED_WORKER_V3_COMPACT_FINALIZER_REPLAY_BYTES_V1: usize =
     MAX_WORKER_V3_FINALIZER_REPLAY_TRANSCRIPT_BYTES_V1;
 
-const _: () = assert!(MAX_PROTECTED_WORKER_V3_COMPACT_FINALIZER_REPLAY_BYTES_V1 == 2_195_505);
+const _: () = assert!(MAX_PROTECTED_WORKER_V3_COMPACT_FINALIZER_REPLAY_BYTES_V1 == 2_206_545);
 
 /// Domain-separated identity of one exact compact V3 finalizer replay transcript.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -76,6 +83,7 @@ pub(crate) struct WorkerV3ProviderReplayReferenceV1 {
 struct CompactResponseMetadataRangesV1 {
     diagnostics: Range<usize>,
     provider_evidence: Option<Range<usize>>,
+    derivation_evidence: Option<Range<usize>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -195,7 +203,7 @@ impl ProtectedWorkerV3CompactFinalizerReplayV1 {
         if source_evidence_identity == [0; 32] || binding_identity == [0; 32] {
             return Err(ProtectedWorkerV3CompactFinalizerReplayErrorV1::Identity);
         }
-        let tail = decode_compact_replay_tail(&mut reader)?;
+        let tail = decode_compact_replay_tail(&mut reader, false)?;
         let identity = ProtectedWorkerV3CompactFinalizerReplayIdentityV1(hash_domain_blob(
             COMPACT_REPLAY_IDENTITY_DOMAIN_V1,
             &canonical_bytes,
@@ -235,6 +243,7 @@ impl ProtectedWorkerV3CompactFinalizerReplayV1 {
 
 fn decode_compact_replay_tail(
     reader: &mut CompactReplayReaderV1<'_>,
+    has_derivation_metadata: bool,
 ) -> Result<DecodedCompactReplayTailV1, ProtectedWorkerV3CompactFinalizerReplayErrorV1> {
     let worker_executable = decode_content_identity(reader, MAX_WORKER_EXECUTABLE_BYTES)?;
     let worker_build_identity = copy_text(
@@ -317,8 +326,8 @@ fn decode_compact_replay_tail(
         link_options.push(option);
     }
 
-    let bootstrap_metadata = decode_response_metadata(reader)?;
-    let replay_metadata = decode_response_metadata(reader)?;
+    let bootstrap_metadata = decode_response_metadata(reader, has_derivation_metadata)?;
+    let replay_metadata = decode_response_metadata(reader, has_derivation_metadata)?;
     if !reader.finished() {
         return Err(ProtectedWorkerV3CompactFinalizerReplayErrorV1::TrailingBytes);
     }
@@ -401,6 +410,16 @@ impl ProtectedWorkerV3CompactFinalizerReplayV2 {
             .provider_evidence
             .as_ref()
             .map(|range| &self.canonical_bytes[range.clone()]);
+        let bootstrap_derivation = self
+            .bootstrap_metadata
+            .derivation_evidence
+            .as_ref()
+            .map(|range| &self.canonical_bytes[range.clone()]);
+        let replay_derivation = self
+            .replay_metadata
+            .derivation_evidence
+            .as_ref()
+            .map(|range| &self.canonical_bytes[range.clone()]);
         ProtectedWorkerV3CompactFinalizerReplayViewV2 {
             worker: &self.worker,
             execution_limits: self.execution_limits,
@@ -410,10 +429,12 @@ impl ProtectedWorkerV3CompactFinalizerReplayV2 {
             bootstrap_metadata: WorkerResponseReplayMetadataV1::from_bodies(
                 &self.canonical_bytes[self.bootstrap_metadata.diagnostics.clone()],
                 bootstrap_provider,
+                bootstrap_derivation,
             ),
             replay_metadata: WorkerResponseReplayMetadataV1::from_bodies(
                 &self.canonical_bytes[self.replay_metadata.diagnostics.clone()],
                 replay_provider,
+                replay_derivation,
             ),
         }
     }
@@ -442,15 +463,33 @@ impl ProtectedWorkerV3CompactFinalizerReplayV2 {
             .checked_sub(32)
             .ok_or(ProtectedWorkerV3CompactFinalizerReplayErrorV1::Length)?;
         let (body, checksum) = canonical_bytes.split_at(checksum_offset);
-        if hash_domain_blob(COMPACT_REPLAY_CHECKSUM_DOMAIN_V2, body) != checksum {
+        let (magic, version, checksum_domain, identity_domain, has_derivation) =
+            if body.starts_with(COMPACT_REPLAY_MAGIC_V3) {
+                (
+                    COMPACT_REPLAY_MAGIC_V3,
+                    COMPACT_REPLAY_VERSION_V3,
+                    COMPACT_REPLAY_CHECKSUM_DOMAIN_V3,
+                    COMPACT_REPLAY_IDENTITY_DOMAIN_V3,
+                    true,
+                )
+            } else {
+                (
+                    COMPACT_REPLAY_MAGIC_V2,
+                    COMPACT_REPLAY_VERSION_V2,
+                    COMPACT_REPLAY_CHECKSUM_DOMAIN_V2,
+                    COMPACT_REPLAY_IDENTITY_DOMAIN_V2,
+                    false,
+                )
+            };
+        if hash_domain_blob(checksum_domain, body) != checksum {
             return Err(ProtectedWorkerV3CompactFinalizerReplayErrorV1::Checksum);
         }
 
         let mut reader = CompactReplayReaderV1::new(body);
-        if reader.take(COMPACT_REPLAY_MAGIC_V2.len())? != COMPACT_REPLAY_MAGIC_V2 {
+        if reader.take(magic.len())? != magic {
             return Err(ProtectedWorkerV3CompactFinalizerReplayErrorV1::Magic);
         }
-        if reader.u16()? != COMPACT_REPLAY_VERSION_V2 {
+        if reader.u16()? != version {
             return Err(ProtectedWorkerV3CompactFinalizerReplayErrorV1::Version);
         }
         let expected_finalization_identity = reader.array()?;
@@ -464,9 +503,9 @@ impl ProtectedWorkerV3CompactFinalizerReplayV2 {
         if transaction_identity.as_bytes() == &[0; 32] {
             return Err(ProtectedWorkerV3CompactFinalizerReplayErrorV1::Identity);
         }
-        let tail = decode_compact_replay_tail(&mut reader)?;
+        let tail = decode_compact_replay_tail(&mut reader, has_derivation)?;
         let identity = ProtectedWorkerV3CompactFinalizerReplayIdentityV2(hash_domain_blob(
-            COMPACT_REPLAY_IDENTITY_DOMAIN_V2,
+            identity_domain,
             &canonical_bytes,
         ));
         Ok(Self {
@@ -995,22 +1034,26 @@ impl CompactReplayBindingHeaderV1 {
     const fn magic(self) -> &'static [u8; 8] {
         match self {
             Self::OpaqueV1(_) => COMPACT_REPLAY_MAGIC_V1,
-            Self::TransactionV2 { .. } => COMPACT_REPLAY_MAGIC_V2,
+            Self::TransactionV2 { .. } => COMPACT_REPLAY_MAGIC_V3,
         }
     }
 
     const fn version(self) -> u16 {
         match self {
             Self::OpaqueV1(_) => COMPACT_REPLAY_VERSION_V1,
-            Self::TransactionV2 { .. } => COMPACT_REPLAY_VERSION_V2,
+            Self::TransactionV2 { .. } => COMPACT_REPLAY_VERSION_V3,
         }
     }
 
     const fn checksum_domain(self) -> &'static [u8] {
         match self {
             Self::OpaqueV1(_) => COMPACT_REPLAY_CHECKSUM_DOMAIN_V1,
-            Self::TransactionV2 { .. } => COMPACT_REPLAY_CHECKSUM_DOMAIN_V2,
+            Self::TransactionV2 { .. } => COMPACT_REPLAY_CHECKSUM_DOMAIN_V3,
         }
+    }
+
+    const fn retains_derivation_metadata(self) -> bool {
+        matches!(self, Self::TransactionV2 { .. })
     }
 
     fn encode(self, bytes: &mut Vec<u8>) {
@@ -1049,6 +1092,7 @@ fn encode_compact_replay_with_binding(
     )?;
     let exact_length = compact_replay_encoded_length(
         binding.encoded_len(),
+        binding.retains_derivation_metadata(),
         worker,
         external_providers,
         link_options,
@@ -1097,8 +1141,16 @@ fn encode_compact_replay_with_binding(
         push_u8_text(&mut bytes, option.name())?;
         push_u16_text(&mut bytes, option.value())?;
     }
-    encode_response_metadata(&mut bytes, bootstrap_metadata)?;
-    encode_response_metadata(&mut bytes, replay_metadata)?;
+    encode_response_metadata(
+        &mut bytes,
+        bootstrap_metadata,
+        binding.retains_derivation_metadata(),
+    )?;
+    encode_response_metadata(
+        &mut bytes,
+        replay_metadata,
+        binding.retains_derivation_metadata(),
+    )?;
     let checksum = hash_domain_blob(binding.checksum_domain(), &bytes);
     bytes.extend_from_slice(&checksum);
     debug_assert_eq!(bytes.len(), exact_length);
@@ -1153,6 +1205,7 @@ fn validate_construction_parts(
         validate_worker_response_replay_metadata_bodies_v1(
             metadata.diagnostics_body(),
             metadata.provider_evidence_body(),
+            metadata.derivation_evidence_body(),
         )?;
     }
     Ok(())
@@ -1160,6 +1213,7 @@ fn validate_construction_parts(
 
 fn compact_replay_encoded_length(
     binding_header_bytes: usize,
+    retains_derivation_metadata: bool,
     worker: &WorkerMeasurementV1,
     external_providers: &[OwnedWorkerV3ProviderReplayPartV1],
     link_options: &[LinkOptionV1],
@@ -1194,6 +1248,17 @@ fn compact_replay_encoded_length(
                     .and_then(|value| {
                         value.checked_add(metadata.provider_evidence_body().map_or(0, <[u8]>::len))
                     })
+                    .and_then(|value| {
+                        if retains_derivation_metadata {
+                            value.checked_add(2).and_then(|value| {
+                                value.checked_add(
+                                    metadata.derivation_evidence_body().map_or(0, <[u8]>::len),
+                                )
+                            })
+                        } else {
+                            Some(value)
+                        }
+                    })
             });
     fixed
         .checked_add(worker.worker_build_identity().len())
@@ -1207,6 +1272,7 @@ fn compact_replay_encoded_length(
 fn encode_response_metadata(
     bytes: &mut Vec<u8>,
     metadata: WorkerResponseReplayMetadataV1<'_>,
+    retains_derivation_metadata: bool,
 ) -> Result<(), ProtectedWorkerV3CompactFinalizerReplayErrorV1> {
     let diagnostics_len = u16::try_from(metadata.diagnostics_body().len())
         .map_err(|_| ProtectedWorkerV3CompactFinalizerReplayErrorV1::ResponseMetadata)?;
@@ -1218,11 +1284,21 @@ fn encode_response_metadata(
     if let Some(provider) = metadata.provider_evidence_body() {
         bytes.extend_from_slice(provider);
     }
+    if retains_derivation_metadata {
+        let derivation_len =
+            u16::try_from(metadata.derivation_evidence_body().map_or(0, <[u8]>::len))
+                .map_err(|_| ProtectedWorkerV3CompactFinalizerReplayErrorV1::ResponseMetadata)?;
+        bytes.extend_from_slice(&derivation_len.to_le_bytes());
+        if let Some(derivation) = metadata.derivation_evidence_body() {
+            bytes.extend_from_slice(derivation);
+        }
+    }
     Ok(())
 }
 
 fn decode_response_metadata(
     reader: &mut CompactReplayReaderV1<'_>,
+    has_derivation_metadata: bool,
 ) -> Result<CompactResponseMetadataRangesV1, ProtectedWorkerV3CompactFinalizerReplayErrorV1> {
     let diagnostics_len = reader.u16()? as usize;
     if diagnostics_len > MAX_RESPONSE_DIAGNOSTICS_BODY_BYTES_V1 {
@@ -1239,9 +1315,26 @@ fn decode_response_metadata(
     } else {
         Some(reader.range(provider_len)?)
     };
+    let derivation_evidence = if has_derivation_metadata {
+        let derivation_len = reader.u16()? as usize;
+        if derivation_len > MAX_RESPONSE_DERIVATION_EVIDENCE_BODY_BYTES_V1 {
+            return Err(ProtectedWorkerV3CompactFinalizerReplayErrorV1::ResponseMetadata);
+        }
+        if derivation_len == 0 {
+            None
+        } else {
+            Some(reader.range(derivation_len)?)
+        }
+    } else {
+        None
+    };
     validate_worker_response_replay_metadata_bodies_v1(
         reader.bytes(&diagnostics)?,
         provider_evidence
+            .as_ref()
+            .map(|range| reader.bytes(range))
+            .transpose()?,
+        derivation_evidence
             .as_ref()
             .map(|range| reader.bytes(range))
             .transpose()?,
@@ -1250,6 +1343,7 @@ fn decode_response_metadata(
     Ok(CompactResponseMetadataRangesV1 {
         diagnostics,
         provider_evidence,
+        derivation_evidence,
     })
 }
 
@@ -1528,7 +1622,7 @@ mod tests {
 
     fn reseal_v2(bytes: &mut [u8]) {
         let body_end = bytes.len() - 32;
-        let checksum = hash_domain_blob(COMPACT_REPLAY_CHECKSUM_DOMAIN_V2, &bytes[..body_end]);
+        let checksum = hash_domain_blob(COMPACT_REPLAY_CHECKSUM_DOMAIN_V3, &bytes[..body_end]);
         bytes[body_end..].copy_from_slice(&checksum);
     }
 
@@ -1772,6 +1866,8 @@ mod tests {
             * (2 + MAX_RESPONSE_DIAGNOSTICS_BODY_BYTES_V1
                 + 4
                 + MAX_RESPONSE_PROVIDER_EVIDENCE_BODY_BYTES_V1);
+        const MAX_DERIVATION_RESPONSE_BYTES: usize =
+            2 * (2 + MAX_RESPONSE_DERIVATION_EVIDENCE_BODY_BYTES_V1);
         const V1_CODEC_MAXIMUM: usize = V1_FIXED_BYTES
             + MAX_BUILD_ID_BYTES
             + MAX_PROVIDER_REFERENCE_BYTES
@@ -1781,10 +1877,11 @@ mod tests {
             + MAX_BUILD_ID_BYTES
             + MAX_PROVIDER_REFERENCE_BYTES
             + MAX_OPTION_BYTES
-            + MAX_RESPONSE_BYTES;
+            + MAX_RESPONSE_BYTES
+            + MAX_DERIVATION_RESPONSE_BYTES;
 
         assert_eq!(V1_CODEC_MAXIMUM, 2_195_495);
-        assert_eq!(V2_CODEC_MAXIMUM, 2_195_496);
+        assert_eq!(V2_CODEC_MAXIMUM, 2_206_536);
         assert_eq!(
             MAX_PROTECTED_WORKER_V3_COMPACT_FINALIZER_REPLAY_BYTES_V1 - V2_CODEC_MAXIMUM,
             9

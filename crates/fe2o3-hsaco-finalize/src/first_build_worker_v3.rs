@@ -638,6 +638,24 @@ impl InertProtectedFirstBuildWorkerV3EvidenceV1 {
             .bytes()
     }
 
+    /// Returns the independently decoded exact LLVM/object/LLD stage custody from the replay.
+    pub fn derivation_evidence(&self) -> &crate::WorkerDerivationEvidenceV1 {
+        self.replay
+            .response()
+            .derivation()
+            .expect("validated Worker V3 replay retains derivation evidence")
+    }
+
+    /// Reports that bootstrap and replay retained identical exact stage custody.
+    pub const fn replays_exact_llvm_object_lld_derivation(&self) -> bool {
+        true
+    }
+
+    /// Exact stage custody does not itself prove semantic refinement to machine code.
+    pub const fn proves_llvm_to_machine_semantic_refinement(&self) -> bool {
+        false
+    }
+
     /// Returns the exact output identity committed by the complete link plan.
     pub const fn output_identity(&self) -> ContentIdentityV1 {
         self.plan.output().identity()
@@ -1280,6 +1298,12 @@ fn validate_replay_parts(
     let replay_output = replay_response
         .output()
         .ok_or_else(|| replay_error("missing exact-replay output"))?;
+    let bootstrap_derivation = bootstrap_response
+        .derivation()
+        .ok_or_else(|| replay_error("missing bootstrap LLVM/object/LLD derivation"))?;
+    let replay_derivation = replay_response
+        .derivation()
+        .ok_or_else(|| replay_error("missing exact-replay LLVM/object/LLD derivation"))?;
     if bootstrap_output.bytes() != replay_output.bytes()
         || bootstrap_output.identity() != replay_output.identity()
         || !bootstrap_output
@@ -1287,6 +1311,13 @@ fn validate_replay_parts(
             .matches(bootstrap_output.bytes())
     {
         return Err(replay_error("reproducible output bytes and identity"));
+    }
+    if bootstrap_derivation != replay_derivation
+        || bootstrap_derivation.hsaco() != bootstrap_output.identity()
+    {
+        return Err(replay_error(
+            "reproducible LLVM/object/LLD derivation custody",
+        ));
     }
 
     let (_, options) =

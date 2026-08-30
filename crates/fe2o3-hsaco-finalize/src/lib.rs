@@ -110,9 +110,11 @@ pub use worker_protocol::{
 };
 pub use worker_protocol_v2::{
     InertDecodedWorkerExchangeV2, WORKER_REQUEST_MAGIC_V2, WORKER_RESPONSE_MAGIC_V2,
-    WORKER_RESPONSE_MAGIC_V3, WorkerCompilerFfiEnvelopeIdentityV2,
-    WorkerDeviceLibraryProviderEvidenceV1, WorkerDeviceLibraryProviderFileEvidenceV1,
-    WorkerEvidenceClassV2, WorkerOutputV2, WorkerRequestV2, WorkerResponseV2,
+    WORKER_RESPONSE_MAGIC_V3, WORKER_RESPONSE_MAGIC_V4, WorkerCompilerFfiEnvelopeIdentityV2,
+    WorkerDerivationEvidenceV1, WorkerDeviceLibraryProviderEvidenceV1,
+    WorkerDeviceLibraryProviderFileEvidenceV1, WorkerEvidenceClassV2,
+    WorkerNativeLinkInputEvidenceV1, WorkerNativeLinkInputSourceV1, WorkerOutputV2,
+    WorkerRequestV2, WorkerResponseV2,
 };
 pub use worker_v3_compact_finalizer_replay::{
     MAX_PROTECTED_WORKER_V3_COMPACT_FINALIZER_REPLAY_BYTES_V1,

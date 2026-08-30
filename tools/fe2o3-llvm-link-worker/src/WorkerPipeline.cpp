@@ -39,6 +39,7 @@
 #include "llvm/Passes/OptimizationLevel.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/FileSystem.h"
+#include "llvm/Support/Endian.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/SHA256.h"
@@ -82,6 +83,8 @@ constexpr StringLiteral WorkerBuildIdentity = FE2O3_WORKER_BUILD_ID;
 constexpr StringLiteral UnauthenticatedTestWorkerIdentity =
     "fe2o3-unauthenticated-test-device-library-policy";
 constexpr StringLiteral AmdGpuTriple = "amdgcn-amd-amdhsa";
+constexpr char LldInvocationDomainV1[] =
+    "FE2O3/UPSTREAM-LLD-ELF-INVOCATION/V1\0";
 
 Response failure(const Request &RequestValue, Stage FailureStage,
                  std::vector<std::string> Diagnostics) {
@@ -682,6 +685,93 @@ Expected<std::vector<uint8_t>> emitObject(Module &ModuleValue,
     return pipelineError("AMDGPU target does not support object emission");
   Passes.run(ModuleValue);
   return std::vector<uint8_t>(Buffer.begin(), Buffer.end());
+}
+
+StageContentIdentity contentIdentity(ArrayRef<uint8_t> Bytes) {
+  return {SHA256::hash(Bytes), static_cast<uint64_t>(Bytes.size())};
+}
+
+class ContentIdentityRawStream final : public raw_ostream {
+public:
+  ContentIdentityRawStream() { SetUnbuffered(); }
+
+  StageContentIdentity finish() {
+    flush();
+    return {Hasher.final(), ByteLength};
+  }
+
+private:
+  void write_impl(const char *Pointer, size_t Size) override {
+    Hasher.update(ArrayRef<uint8_t>(
+        reinterpret_cast<const uint8_t *>(Pointer), Size));
+    ByteLength += static_cast<uint64_t>(Size);
+  }
+
+  uint64_t current_pos() const override { return ByteLength; }
+
+  SHA256 Hasher;
+  uint64_t ByteLength = 0;
+};
+
+StageContentIdentity moduleIdentity(const Module &ModuleValue) {
+  ContentIdentityRawStream Stream;
+  WriteBitcodeToFile(ModuleValue, Stream);
+  return Stream.finish();
+}
+
+void hashU32(SHA256 &Hasher, uint32_t Value) {
+  uint8_t Bytes[4];
+  support::endian::write32le(Bytes, Value);
+  Hasher.update(ArrayRef<uint8_t>(Bytes));
+}
+
+std::vector<std::string> lldPolicyArguments(const Request &RequestValue) {
+  std::vector<std::string> Arguments = {
+      "ld.lld",           "--shared",
+      "-Bsymbolic",       "--no-undefined",
+      "--export-dynamic", "--build-id=none",
+      "--nostdlib",       "--no-dependent-libraries",
+      "--fatal-warnings", "--threads=1"};
+  if (RequestValue.LinkOptions.StripDebug)
+    Arguments.push_back("--strip-debug");
+  for (const std::string &Name : RequestValue.ExpectedDefinedSymbols)
+    Arguments.push_back((Twine("--undefined=") + Name).str());
+  return Arguments;
+}
+
+std::string lowerHex(ArrayRef<uint8_t> Bytes) {
+  constexpr char Digits[] = "0123456789abcdef";
+  std::string Result;
+  Result.reserve(Bytes.size() * 2);
+  for (uint8_t Byte : Bytes) {
+    Result.push_back(Digits[Byte >> 4]);
+    Result.push_back(Digits[Byte & 0x0f]);
+  }
+  return Result;
+}
+
+std::array<uint8_t, 32> calculateLldInvocationIdentity(
+    const Request &RequestValue,
+    ArrayRef<NativeLinkInputEvidence> NativeInputs) {
+  SHA256 Hasher;
+  Hasher.update(StringRef(LldInvocationDomainV1,
+                          sizeof(LldInvocationDomainV1) - 1));
+  std::vector<std::string> Arguments = lldPolicyArguments(RequestValue);
+  for (const NativeLinkInputEvidence &Input : NativeInputs)
+    Arguments.push_back(
+        (Twine("@input=") +
+         Twine(static_cast<unsigned>(Input.Source)) + ":" +
+         lowerHex(Input.Content.Digest) + ":" +
+         Twine(Input.Content.ByteLength))
+            .str());
+  Arguments.emplace_back("-o");
+  Arguments.emplace_back("@output=linked.hsaco");
+  hashU32(Hasher, static_cast<uint32_t>(Arguments.size()));
+  for (const std::string &Argument : Arguments) {
+    hashU32(Hasher, static_cast<uint32_t>(Argument.size()));
+    Hasher.update(Argument);
+  }
+  return Hasher.final();
 }
 
 struct ElfContract {
@@ -1778,16 +1868,7 @@ nativeLink(ArrayRef<std::vector<uint8_t>> Objects, const Request &RequestValue,
   SmallString<160> OutputPath(Directory);
   sys::path::append(OutputPath, "linked.hsaco");
 
-  std::vector<std::string> OwnedArguments = {
-      "ld.lld",           "--shared",
-      "-Bsymbolic",       "--no-undefined",
-      "--export-dynamic", "--build-id=none",
-      "--nostdlib",       "--no-dependent-libraries",
-      "--fatal-warnings", "--threads=1"};
-  if (RequestValue.LinkOptions.StripDebug)
-    OwnedArguments.push_back("--strip-debug");
-  for (const std::string &Name : RequestValue.ExpectedDefinedSymbols)
-    OwnedArguments.push_back((Twine("--undefined=") + Name).str());
+  std::vector<std::string> OwnedArguments = lldPolicyArguments(RequestValue);
   OwnedArguments.insert(OwnedArguments.end(), Paths.begin(), Paths.end());
   OwnedArguments.push_back("-o");
   OwnedArguments.push_back(OutputPath.str().str());
@@ -1996,6 +2077,7 @@ Response executeImpl(const Request &RequestValue,
 
   std::vector<std::vector<uint8_t>> Objects;
   std::vector<ElfContract> ObjectContracts;
+  std::vector<NativeLinkInputEvidence> NativeLinkEvidence;
   for (const Input &InputValue : RequestValue.Inputs) {
     if (InputValue.Kind != InputKind::AmdGpuRelocatable)
       continue;
@@ -2007,12 +2089,20 @@ Response executeImpl(const Request &RequestValue,
       return failure(RequestValue, Stage::InputValidation,
                      {"native input target or code-object version mismatch"});
     Objects.push_back(InputValue.Bytes);
+    NativeLinkEvidence.push_back(
+        {NativeLinkInputSource::RequestRelocatable,
+         contentIdentity(InputValue.Bytes)});
     ObjectContracts.push_back(std::move(*Contract));
   }
 
+  std::optional<StageContentIdentity> LinkedModuleIdentity;
+  std::optional<StageContentIdentity> OptimizedModuleIdentity;
+  std::optional<StageContentIdentity> GeneratedObjectIdentity;
   if (*LinkedModule) {
+    LinkedModuleIdentity = moduleIdentity(**LinkedModule);
     if (Error E = optimizeModule(**LinkedModule, RequestValue, *Machine))
       return failure(RequestValue, Stage::Optimization, std::move(E));
+    OptimizedModuleIdentity = moduleIdentity(**LinkedModule);
     auto GeneratedObject = emitObject(**LinkedModule, *Machine);
     if (!GeneratedObject)
       return failure(RequestValue, Stage::Codegen, GeneratedObject.takeError());
@@ -2022,9 +2112,18 @@ Response executeImpl(const Request &RequestValue,
     if (!matches(*Contract, *ExpectedElf))
       return failure(RequestValue, Stage::Codegen,
                      {"generated object target contract mismatch"});
+    GeneratedObjectIdentity = contentIdentity(*GeneratedObject);
     Objects.push_back(std::move(*GeneratedObject));
+    NativeLinkEvidence.push_back(
+        {NativeLinkInputSource::GeneratedObject, *GeneratedObjectIdentity});
     ObjectContracts.push_back(std::move(*Contract));
   }
+  if (RequestValue.Protocol == ProtocolVersion::V2 &&
+      (!LinkedModuleIdentity || !OptimizedModuleIdentity ||
+       !GeneratedObjectIdentity))
+    return failure(RequestValue, Stage::Codegen,
+                   {"V2 compiler module produced no complete LLVM/object "
+                    "derivation"});
   if (Objects.empty())
     return failure(RequestValue, Stage::InputValidation,
                    {"request produced no native link inputs"});
@@ -2073,6 +2172,26 @@ Response executeImpl(const Request &RequestValue,
   Result.Protocol = RequestValue.Protocol;
   Result.CompilerEnvelopeIdentity = RequestValue.CompilerEnvelopeIdentity;
   Result.DeviceLibraryProvider = std::move(ProviderEvidence);
+  if (RequestValue.Protocol == ProtocolVersion::V2) {
+    DerivationEvidence Evidence{*LinkedModuleIdentity,
+                                *OptimizedModuleIdentity,
+                                *GeneratedObjectIdentity,
+                                std::move(NativeLinkEvidence),
+                                {},
+                                {Result.LinkedOutput->Digest,
+                                 static_cast<uint64_t>(
+                                     Result.LinkedOutput->Bytes.size())},
+                                {}};
+    Evidence.LldInvocationIdentity =
+        calculateLldInvocationIdentity(RequestValue,
+                                       Evidence.NativeLinkInputs);
+    auto Identity = calculateDerivationEvidenceIdentity(Evidence);
+    if (!Identity)
+      return failure(RequestValue, Stage::OutputInspection,
+                     Identity.takeError());
+    Evidence.EvidenceIdentity = *Identity;
+    Result.Derivation = std::move(Evidence);
+  }
   return Result;
 }
 
