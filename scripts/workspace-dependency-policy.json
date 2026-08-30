@@ -89,6 +89,7 @@
         "fe2o3-broker-authority-service",
         "fe2o3-compiler-execution-client",
         "fe2o3-compiler-execution-coordinator",
+        "fe2o3-compiler-execution-deployment",
         "fe2o3-compiler-execution-issuer",
         "fe2o3-compiler-execution-lifecycle",
         "fe2o3-compiler-execution-supervisor",

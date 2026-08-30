@@ -850,6 +850,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe2o3-compiler-execution-deployment"
+version = "0.1.0"
+dependencies = [
+ "rustix",
+ "sha2 0.11.0",
+ "tempfile",
+]
+
+[[package]]
 name = "fe2o3-compiler-execution-issuer"
 version = "0.1.0"
 dependencies = [
