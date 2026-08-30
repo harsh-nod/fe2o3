@@ -17,7 +17,7 @@ POSIX ACL. Build and install the root provisioning command with
 `scripts/build-static-compiler-execution-provisioner.sh`.
 
 For a complete installed fixture, build every qualified static image and the
-exact deployment inputs as an immutable hash-addressed bundle from a clean
+exact deployment inputs as a read-only, hash-manifested bundle from a clean
 checkout:
 
 ```console
