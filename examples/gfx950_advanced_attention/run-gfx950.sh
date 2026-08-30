@@ -198,6 +198,13 @@ DISASSEMBLY=$ATTEMPT_DIR/$FEATURE.isa
 BINDING_PATH=$ATTEMPT_DIR/crate-binding-v1
 AMD_TARGET_DIR=$ATTEMPT_DIR/amdgpu-target
 
+cleanup_amdgpu_target() {
+    if [[ ${FE2O3_GFX950_PRUNE_AMDGPU_TARGET:-0} == 1 ]]; then
+        rm -rf -- "$AMD_TARGET_DIR"
+    fi
+}
+trap cleanup_amdgpu_target EXIT
+
 if [[ -n ${FE2O3_RUSTC_EXTRACTOR:-} ]]; then
     EXTRACTOR=$FE2O3_RUSTC_EXTRACTOR
 else
@@ -422,9 +429,6 @@ SOURCE_TREE=$("$GIT" -C "$REPO_ROOT" rev-parse --verify 'HEAD^{tree}')
         --test gfx950_advanced_hardware "$TEST" -- --ignored --exact --nocapture
 )
 
-if [[ ${FE2O3_GFX950_PRUNE_AMDGPU_TARGET:-0} == 1 ]]; then
-    rm -rf -- "$AMD_TARGET_DIR"
-fi
 printf 'PASS %s production Rust gfx950 build and numerical run\n' "$SYMBOL"
 printf 'Binding: %s\nLLVM:   %s\nHSACO:  %s\nSHA256: %s\nISA:    %s\n' \
     "$CRATE_BINDING" "$LLVM_IR" "$HSACO" "$HSACO_SHA256" "$DISASSEMBLY"

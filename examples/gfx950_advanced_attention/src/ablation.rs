@@ -17,7 +17,7 @@ const RMS_EPSILON_V1: f32 = 1.0e-5;
 #[cfg(feature = "kernel-kda-decode-wave-tiled-v1")]
 #[kernel(
     typed,
-    namespace = "c813a11ad6b8ae71777206564124bddf002d04a1a0719120e5366f28ceec887d",
+    namespace = "0b443b66dad3dfcf5b0371fd0eff95417e092ebf210e72579530370d27a0df02",
     launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
 )]
 pub fn gfx950_kda_gdn_decode(

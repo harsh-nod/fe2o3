@@ -634,7 +634,7 @@ fn attention_score_v1(q: &[u8], k: &[u8], token: usize) -> Option<f32> {
     feature = "kernel-content-sparse-attention-reciprocal-reuse-v1",
     kernel(
         typed,
-        namespace = "7b09e8c92ad93d9ee112cdec003e83736c48ddc8b874ca4c677b07c299887d0a",
+        namespace = "0cbe67b9610ebf0a07c14fa92cebd7b26b1f143e6eae3bc30846ffba8e8e3c15",
         launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
     )
 )]
@@ -1189,7 +1189,7 @@ pub fn gfx950_content_sparse_attention(
     feature = "kernel-compressed-hybrid-attention-reciprocal-reuse-v1",
     kernel(
         typed,
-        namespace = "d7adec7b36d1cff2570cea261cbfc82bd45eb023c7e4eff3c2bcb1ece171dfe7",
+        namespace = "0f357dc9bc205fbea9c82e7426fc3b1e8cad56b562fa6457ed42923f47505cc4",
         launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
     )
 )]
