@@ -29,3 +29,9 @@ tempfile = "=3.21.0"
 
 [lints.rust]
 unsafe_code = "deny"
+
+[[bin]]
+name = "fe2o3-compiler-execution-coordinator"
+path = "src/main.rs"
+test = false
+bench = false

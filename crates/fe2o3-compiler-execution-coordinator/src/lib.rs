@@ -55,7 +55,11 @@ use rustix::net::{
 use rustix::pipe::{PipeFlags, pipe_with};
 
 #[allow(unsafe_code)]
+mod entrypoint;
+#[allow(unsafe_code)]
 mod inherited;
+
+pub use entrypoint::run_inherited_compiler_execution_coordinator_v1;
 
 pub use inherited::{
     COMPILER_EXECUTION_COORDINATOR_ANCHOR_DAEMON_FD_V1,
@@ -855,6 +859,10 @@ fn io_error(operation: &'static str, source: io::Error) -> CompilerExecutionCoor
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum CompilerExecutionCoordinatorErrorV1 {
+    /// Process arguments or system-manager activation metadata are not exact.
+    InvalidActivation(&'static str),
+    /// Signal-mask installation or synchronous shutdown waiting failed.
+    Signal(io::Error),
     /// One fixed root-entrypoint descriptor was absent, inheritable-state changed, or inaccessible.
     InheritedDescriptor {
         /// Fixed descriptor number whose admission failed.
@@ -946,6 +954,10 @@ pub enum CompilerExecutionCoordinatorErrorV1 {
 impl fmt::Display for CompilerExecutionCoordinatorErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::InvalidActivation(reason) => {
+                write!(formatter, "invalid coordinator activation: {reason}")
+            }
+            Self::Signal(error) => write!(formatter, "coordinator signal handling failed: {error}"),
             Self::InheritedDescriptor {
                 descriptor,
                 operation,
@@ -1041,6 +1053,7 @@ impl fmt::Display for CompilerExecutionCoordinatorErrorV1 {
 impl Error for CompilerExecutionCoordinatorErrorV1 {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
+            Self::Signal(error) => Some(error),
             Self::InheritedDescriptor { source, .. } => Some(source),
             Self::Credentials(error) => Some(error),
             Self::Executable(error) => Some(error),
