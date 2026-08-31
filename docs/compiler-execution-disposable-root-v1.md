@@ -159,8 +159,9 @@ creating a namespace, mount, or service. `run` is the sole high-level path throu
 verification, installation, base preparation, staging, private namespace entry,
 mount attachment, pinned-base `systemd-sysusers`, `systemd-tmpfiles --create`,
 offline `systemd-analyze verify`, exact postcondition admission, execution of the
-shipped generation-1 production provisioner, independent admission of its six
-files, two seed-derived keys, four-record graph, service identities, sealed
+shipped generation-1 production provisioner, independent admission of its seven
+files, two seed-derived keys, four-record service graph, derived Cargo client
+profile, service identities, sealed
 runtime, and five executable measurements, descriptor-pinned
 `systemd-nspawn` boot, exact authenticated Unix `SOCK_SEQPACKET` connection
 admission, bounded graceful shutdown,

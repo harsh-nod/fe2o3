@@ -6,12 +6,13 @@ use std::process::{Command, Stdio};
 
 use ed25519_dalek::SigningKey;
 use fe2o3_compiler_execution_protocol::{
+    COMPILER_EXECUTION_CLIENT_PROFILE_BYTES_V1,
     COMPILER_EXECUTION_EXTERNAL_ANCHOR_DEPLOYMENT_BYTES_V1,
     COMPILER_EXECUTION_EXTERNAL_ANCHOR_PROVISIONING_BYTES_V1,
     COMPILER_EXECUTION_ISSUER_POLICY_BYTES_V1, COMPILER_EXECUTION_SUPERVISOR_DEPLOYMENT_BYTES_V1,
-    CompilerExecutionExternalAnchorDeploymentV1, CompilerExecutionExternalAnchorProvisioningV1,
-    CompilerExecutionIssuerMeasurementV1, CompilerExecutionIssuerPolicyV1,
-    CompilerExecutionSupervisorDeploymentV1,
+    CompilerExecutionClientProfileV1, CompilerExecutionExternalAnchorDeploymentV1,
+    CompilerExecutionExternalAnchorProvisioningV1, CompilerExecutionIssuerMeasurementV1,
+    CompilerExecutionIssuerPolicyV1, CompilerExecutionSupervisorDeploymentV1,
     MAX_COMPILER_EXECUTION_EXTERNAL_ANCHOR_EXECUTABLE_BYTES_V1,
     MAX_COMPILER_EXECUTION_SUPERVISOR_EXECUTABLE_BYTES_V1,
     MAX_COMPILER_EXECUTION_SUPERVISOR_LAUNCHER_BYTES_V1,
@@ -43,12 +44,14 @@ const ISSUER_POLICY_FILE_V1: &str = "issuer-policy-v1";
 const SUPERVISOR_DEPLOYMENT_FILE_V1: &str = "supervisor-deployment-v1";
 const ANCHOR_DEPLOYMENT_FILE_V1: &str = "anchor-deployment-v1";
 const ANCHOR_PROVISIONING_FILE_V1: &str = "anchor-provisioning-v1";
+const CLIENT_PROFILE_FILE_V1: &str = "client-profile-v1";
 const ISSUER_SEED_FILE_V1: &str = "issuer-signing-key-seed-v1";
 const ANCHOR_SEED_FILE_V1: &str = "anchor-signing-key-seed-v1";
 const CONFIG_FILES_V1: &[&str] = &[
     ANCHOR_DEPLOYMENT_FILE_V1,
     ANCHOR_PROVISIONING_FILE_V1,
     ANCHOR_SEED_FILE_V1,
+    CLIENT_PROFILE_FILE_V1,
     ISSUER_POLICY_FILE_V1,
     ISSUER_SEED_FILE_V1,
     SUPERVISOR_DEPLOYMENT_FILE_V1,
@@ -70,12 +73,16 @@ const HASH_BUFFER_BYTES_V1: usize = 64 * 1024;
 
 pub(super) struct CompilerExecutionProvisionedQualificationV1 {
     preflight: CompilerExecutionSystemdPreflightV1,
-    policy_generation: u64,
+    admitted: AdmittedCompilerExecutionProvisioningV1,
 }
 
 impl CompilerExecutionProvisionedQualificationV1 {
     pub(super) const fn policy_generation(&self) -> u64 {
-        self.policy_generation
+        self.admitted.policy_generation
+    }
+
+    pub(super) const fn client_profile(&self) -> &CompilerExecutionClientProfileV1 {
+        &self.admitted.client_profile
     }
 
     pub(super) fn systemd_version(&self) -> &str {
@@ -140,11 +147,11 @@ impl CompilerExecutionProvisionedQualificationV1 {
         &self,
         root: &OwnedFd,
     ) -> Result<(), DeploymentVerificationErrorV1> {
-        let generation =
+        let admitted =
             admit_provisioned_state(root, ROOT_OWNER_V1, COMPILER_UID_V1, ANCHOR_UID_V1)?;
-        if generation != self.policy_generation {
+        if admitted != self.admitted {
             return Err(provisioning_invalid(
-                "compiler-execution policy generation changed after provisioning",
+                "compiler-execution admitted provisioning changed after provisioning",
             ));
         }
         Ok(())
@@ -156,9 +163,9 @@ pub(super) fn run_compiler_execution_provisioning_with_hooks_v1(
     hooks: &mut impl QualificationFaultHooksV1,
 ) -> Result<CompilerExecutionProvisionedQualificationV1, DeploymentVerificationErrorV1> {
     match run_provisioning_inner(&preflight, hooks) {
-        Ok(policy_generation) => Ok(CompilerExecutionProvisionedQualificationV1 {
+        Ok(admitted) => Ok(CompilerExecutionProvisionedQualificationV1 {
             preflight,
-            policy_generation,
+            admitted,
         }),
         Err(error) => match preflight.cleanup_with_hooks(hooks) {
             Ok(()) => Err(error),
@@ -175,16 +182,16 @@ pub(super) fn run_compiler_execution_provisioning_with_hooks_v1(
 fn run_provisioning_inner(
     preflight: &CompilerExecutionSystemdPreflightV1,
     hooks: &mut impl QualificationFaultHooksV1,
-) -> Result<u64, DeploymentVerificationErrorV1> {
+) -> Result<AdmittedCompilerExecutionProvisioningV1, DeploymentVerificationErrorV1> {
     let root = preflight.inherit_provisioning_root_descriptor()?;
     run_production_provisioner(&root)?;
     hooks.checkpoint(QualificationFaultPointV1::CompilerExecutionProvisioningComplete)?;
     preflight.revalidate_systemd_machine_state()?;
     hooks.checkpoint(QualificationFaultPointV1::CompilerExecutionProvisioningRevalidated)?;
-    let generation = admit_provisioned_state(&root, ROOT_OWNER_V1, COMPILER_UID_V1, ANCHOR_UID_V1)?;
+    let admitted = admit_provisioned_state(&root, ROOT_OWNER_V1, COMPILER_UID_V1, ANCHOR_UID_V1)?;
     preflight.revalidate_systemd_machine_state()?;
     hooks.checkpoint(QualificationFaultPointV1::CompilerExecutionProvisioningAdmitted)?;
-    Ok(generation)
+    Ok(admitted)
 }
 
 fn run_production_provisioner(root: &OwnedFd) -> Result<(), DeploymentVerificationErrorV1> {
@@ -305,12 +312,18 @@ fn validate_composed_root(root: &File) -> Result<(), DeploymentVerificationError
     Ok(())
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct AdmittedCompilerExecutionProvisioningV1 {
+    policy_generation: u64,
+    client_profile: CompilerExecutionClientProfileV1,
+}
+
 fn admit_provisioned_state(
     root: &OwnedFd,
     root_owner: (u32, u32),
     compiler_uid: u32,
     anchor_uid: u32,
-) -> Result<u64, DeploymentVerificationErrorV1> {
+) -> Result<AdmittedCompilerExecutionProvisioningV1, DeploymentVerificationErrorV1> {
     let config = open_root_object(root, CONFIG_DIRECTORY_V1, true)?;
     let config_before = snapshot(&fstat(&config).map_err(|source| {
         io_error("inspect compiler-execution configuration directory", source)
@@ -379,6 +392,19 @@ fn admit_provisioned_state(
                 "external-anchor provisioning is not canonical: {error}"
             ))
         })?;
+    let client_profile = CompilerExecutionClientProfileV1::decode(&read_fixed_file::<
+        COMPILER_EXECUTION_CLIENT_PROFILE_BYTES_V1,
+    >(
+        &config,
+        CLIENT_PROFILE_FILE_V1,
+        PUBLIC_RECORD_MODE_V1,
+        root_owner,
+    )?)
+    .map_err(|error| {
+        provisioning_invalid(format!(
+            "compiler-execution client profile is not canonical: {error}"
+        ))
+    })?;
 
     let anchor_service = supervisor.external_anchor_service();
     if policy.generation() != POLICY_GENERATION_V1
@@ -390,6 +416,10 @@ fn admit_provisioned_state(
         || !supervisor.matches_policy(&policy)
         || !anchor.matches_supervisor_and_policy(&supervisor, &policy)
         || !anchor_provisioning.matches_deployment(&anchor)
+        || client_profile.supervisor_uid() != supervisor.service_uid()
+        || client_profile.supervisor_gid() != supervisor.service_gid()
+        || client_profile.external_anchor_service() != anchor_service
+        || client_profile.policy() != &policy
     {
         return Err(provisioning_invalid(
             "provisioned record graph does not bind the exact generation, runtime, or service identities",
@@ -468,7 +498,10 @@ fn admit_provisioned_state(
         ));
     }
     revalidate_config_directory(root, &config, config_before)?;
-    Ok(policy.generation())
+    Ok(AdmittedCompilerExecutionProvisioningV1 {
+        policy_generation: policy.generation(),
+        client_profile,
+    })
 }
 
 #[cfg(test)]
@@ -669,7 +702,8 @@ mod tests {
         let fixture = provisioned_fixture();
         assert_eq!(
             admit_provisioned_state(&fixture.root, owner(), COMPILER_UID_V1, ANCHOR_UID_V1)
-                .unwrap(),
+                .unwrap()
+                .policy_generation,
             POLICY_GENERATION_V1
         );
     }
@@ -678,6 +712,7 @@ mod tests {
     fn provisioned_state_rejects_record_seed_image_and_inventory_substitution() {
         for mutation in [
             FixtureMutationV1::Policy,
+            FixtureMutationV1::ClientProfile,
             FixtureMutationV1::IssuerSeed,
             FixtureMutationV1::SupervisorImage,
             FixtureMutationV1::ExtraInventory,
@@ -728,6 +763,7 @@ mod tests {
     #[derive(Clone, Copy, Debug)]
     enum FixtureMutationV1 {
         Policy,
+        ClientProfile,
         IssuerSeed,
         SupervisorImage,
         ExtraInventory,
@@ -740,6 +776,28 @@ mod tests {
                     &fixture.path(&config_path(ISSUER_POLICY_FILE_V1)),
                     PUBLIC_RECORD_MODE_V1,
                 ),
+                Self::ClientProfile => {
+                    let policy = CompilerExecutionIssuerPolicyV1::decode(
+                        &fs::read(fixture.path(&config_path(ISSUER_POLICY_FILE_V1))).unwrap(),
+                    )
+                    .unwrap();
+                    let substituted = CompilerExecutionClientProfileV1::new(
+                        COMPILER_UID_V1 + 1,
+                        COMPILER_UID_V1,
+                        CompilerExecutionExternalAnchorServiceIdentityV1::new(
+                            ANCHOR_UID_V1,
+                            ANCHOR_UID_V1,
+                        )
+                        .unwrap(),
+                        policy,
+                    )
+                    .unwrap();
+                    replace_file(
+                        &fixture.path(&config_path(CLIENT_PROFILE_FILE_V1)),
+                        substituted.canonical_bytes(),
+                        PUBLIC_RECORD_MODE_V1,
+                    );
+                }
                 Self::IssuerSeed => flip_first_byte(
                     &fixture.path(&config_path(ISSUER_SEED_FILE_V1)),
                     SECRET_SEED_MODE_V1,
@@ -865,6 +923,13 @@ mod tests {
         let anchor_provisioning =
             CompilerExecutionExternalAnchorProvisioningV1::new(&anchor, anchor_helper_measurement)
                 .unwrap();
+        let client_profile = CompilerExecutionClientProfileV1::new(
+            supervisor.service_uid(),
+            supervisor.service_gid(),
+            supervisor.external_anchor_service(),
+            policy.clone(),
+        )
+        .unwrap();
 
         for (name, bytes, mode) in [
             (
@@ -885,6 +950,11 @@ mod tests {
             (
                 ANCHOR_PROVISIONING_FILE_V1,
                 anchor_provisioning.canonical_bytes().as_slice(),
+                PUBLIC_RECORD_MODE_V1,
+            ),
+            (
+                CLIENT_PROFILE_FILE_V1,
+                client_profile.canonical_bytes().as_slice(),
                 PUBLIC_RECORD_MODE_V1,
             ),
             (
@@ -916,6 +986,12 @@ mod tests {
         fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
         let mut bytes = fs::read(path).unwrap();
         bytes[0] ^= 0x80;
+        fs::write(path, bytes).unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(final_mode)).unwrap();
+    }
+
+    fn replace_file(path: &Path, bytes: &[u8], final_mode: u32) {
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
         fs::write(path, bytes).unwrap();
         fs::set_permissions(path, fs::Permissions::from_mode(final_mode)).unwrap();
     }

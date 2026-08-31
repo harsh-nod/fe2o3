@@ -29,8 +29,9 @@ then rechecks the composed deployment projection against sealed custody. The
 same transaction now launches the exact pinned-base loader and `systemd-nspawn`
 through retained descriptors. Before boot it runs the shipped static
 generation-1 provisioner inside the composed root and independently admits
-its exact inventory, modes, identities, key-to-policy bindings, canonical
-record graph, sealed runtime measurement, and five executable measurements.
+its exact seven-file inventory, modes, identities, key-to-policy bindings,
+canonical record graph, derived Cargo client profile, sealed runtime
+measurement, and five executable measurements.
 It then opens and retains an exact nonblocking Unix `SOCK_SEQPACKET` connection,
 admits the canonical listener path and root peer credentials, revalidates the
 socket object, performs bounded pidfd shutdown, proves pathname removal, and

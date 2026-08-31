@@ -70,8 +70,10 @@ RPATH, RUNPATH, undefined symbol, or executable stack.
 provisioning command. It takes one nonzero canonical decimal policy generation
 and otherwise uses only fixed service names, image paths, output names, and
 filesystem policy. It creates missing signing seeds, derives the complete
-policy/supervisor/anchor/provisioning record graph, and uses durable no-replace
-publication. Before reading or publishing mutable deployment state it retains an
+policy/supervisor/anchor/provisioning record graph and Cargo-facing client
+profile, and uses durable no-replace publication. The client profile is derived
+only from that graph and is not supplied to the coordinator. Before reading or
+publishing mutable deployment state it retains an
 exclusive lease on the dedicated root-only lifecycle file and its root-owned
 parent pathname. The production coordinator derives that sibling from its
 existing state-root descriptor, takes the corresponding shared lease before key

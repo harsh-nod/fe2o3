@@ -46,6 +46,7 @@ const SUPERVISOR_DEPLOYMENT_FILE_V1: &str = "supervisor-deployment-v1";
 const ISSUER_POLICY_FILE_V1: &str = "issuer-policy-v1";
 const ANCHOR_DEPLOYMENT_FILE_V1: &str = "anchor-deployment-v1";
 const ANCHOR_PROVISIONING_FILE_V1: &str = "anchor-provisioning-v1";
+const CLIENT_PROFILE_FILE_V1: &str = "client-profile-v1";
 const ISSUER_SEED_FILE_V1: &str = "issuer-signing-key-seed-v1";
 const ANCHOR_SEED_FILE_V1: &str = "anchor-signing-key-seed-v1";
 
@@ -391,6 +392,14 @@ fn provision_layout(
         ANCHOR_PROVISIONING_FILE_V1,
         "external-anchor provisioning",
         bundle.anchor_provisioning().canonical_bytes(),
+        expected_file_uid,
+        expected_file_gid,
+    )?;
+    publish_or_verify(
+        &directory,
+        CLIENT_PROFILE_FILE_V1,
+        "compiler-execution client profile",
+        bundle.client_profile().canonical_bytes(),
         expected_file_uid,
         expected_file_gid,
     )?;
@@ -1289,10 +1298,11 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
 
     use fe2o3_compiler_execution_protocol::{
+        COMPILER_EXECUTION_CLIENT_PROFILE_BYTES_V1,
         COMPILER_EXECUTION_EXTERNAL_ANCHOR_DEPLOYMENT_BYTES_V1,
         COMPILER_EXECUTION_EXTERNAL_ANCHOR_PROVISIONING_BYTES_V1,
         COMPILER_EXECUTION_ISSUER_POLICY_BYTES_V1, COMPILER_EXECUTION_LIFECYCLE_LOCK_MODE_V1,
-        COMPILER_EXECUTION_SUPERVISOR_DEPLOYMENT_BYTES_V1,
+        COMPILER_EXECUTION_SUPERVISOR_DEPLOYMENT_BYTES_V1, CompilerExecutionClientProfileV1,
         CompilerExecutionExternalAnchorDeploymentV1, CompilerExecutionExternalAnchorProvisioningV1,
         CompilerExecutionIssuerPolicyV1, CompilerExecutionSupervisorDeploymentV1,
     };
@@ -1439,9 +1449,17 @@ mod tests {
         let anchor = CompilerExecutionExternalAnchorDeploymentV1::decode(&before[2]).unwrap();
         let provisioning =
             CompilerExecutionExternalAnchorProvisioningV1::decode(&before[3]).unwrap();
+        let client_profile = CompilerExecutionClientProfileV1::decode(&before[4]).unwrap();
         assert!(supervisor.matches_policy(&policy));
         assert!(anchor.matches_supervisor_and_policy(&supervisor, &policy));
         assert!(provisioning.matches_deployment(&anchor));
+        assert_eq!(client_profile.policy(), &policy);
+        assert_eq!(client_profile.supervisor_uid(), supervisor.service_uid());
+        assert_eq!(client_profile.supervisor_gid(), supervisor.service_gid());
+        assert_eq!(
+            client_profile.external_anchor_service(),
+            supervisor.external_anchor_service()
+        );
         for (name, mode, length) in [
             (ISSUER_SEED_FILE_V1, SECRET_SEED_MODE_V1, KEY_SEED_BYTES_V1),
             (ANCHOR_SEED_FILE_V1, SECRET_SEED_MODE_V1, KEY_SEED_BYTES_V1),
@@ -1464,6 +1482,11 @@ mod tests {
                 ANCHOR_PROVISIONING_FILE_V1,
                 PUBLIC_RECORD_MODE_V1,
                 COMPILER_EXECUTION_EXTERNAL_ANCHOR_PROVISIONING_BYTES_V1,
+            ),
+            (
+                CLIENT_PROFILE_FILE_V1,
+                PUBLIC_RECORD_MODE_V1,
+                COMPILER_EXECUTION_CLIENT_PROFILE_BYTES_V1,
             ),
         ] {
             let metadata = std::fs::metadata(config.join(name)).unwrap();
@@ -1610,12 +1633,13 @@ mod tests {
         ));
     }
 
-    fn read_records(directory: &Path) -> [Vec<u8>; 4] {
+    fn read_records(directory: &Path) -> [Vec<u8>; 5] {
         [
             std::fs::read(directory.join(ISSUER_POLICY_FILE_V1)).unwrap(),
             std::fs::read(directory.join(SUPERVISOR_DEPLOYMENT_FILE_V1)).unwrap(),
             std::fs::read(directory.join(ANCHOR_DEPLOYMENT_FILE_V1)).unwrap(),
             std::fs::read(directory.join(ANCHOR_PROVISIONING_FILE_V1)).unwrap(),
+            std::fs::read(directory.join(CLIENT_PROFILE_FILE_V1)).unwrap(),
         ]
     }
 

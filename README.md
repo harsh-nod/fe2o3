@@ -310,7 +310,8 @@ root-coordinator-to-supervisor wiring, lifecycle custody, and exact systemd
 service-account/socket policy are implemented. The fixed root provisioner now
 derives and durably installs the complete canonical record graph from measured
 static images, provisioned identities, and freshly generated or retained key
-seeds. The root coordinator opens three independent shared-service leases on a
+seeds, including the root-owned Cargo client profile derived from that same
+graph. The root coordinator opens three independent shared-service leases on a
 root-only sibling lock file before key admission: one for its own lifecycle,
 one transferred to supervisor FD 12, and one transferred through anchor-helper
 FD 6 to daemon FD 5. Close-only custody keeps exclusive provisioning blocked

@@ -100,15 +100,18 @@ exited. Provisioning and activation therefore
 cannot overlap without adding another activation descriptor or conflicting with
 the issuer's independent state-root singleton lock. The provisioner then
 measures every fixed static image twice, creates missing 32-byte key seeds from
-the kernel random source, derives the complete four-record graph, and publishes
-each file with no-replace rename plus file and directory durability.
+the kernel random source, derives the complete four-record service graph and
+the Cargo-facing client profile, and publishes all five public records with
+no-replace rename plus file and directory durability. The profile is fixed at
+`/etc/fe2o3/compiler-execution/client-profile-v1`; it is public client trust
+configuration and is deliberately not a coordinator activation descriptor.
 The lifecycle parent must reside on a local Linux filesystem with native
 `flock(2)` open-file-description semantics; NFS and SMB/CIFS are not supported
 by this reference profile.
 It is idempotent for identical inputs. Existing mismatched bytes, modes,
 ownership, links, ACLs, capabilities, image paths, or generations fail closed
 and are never replaced. Lifecycle parent and lock-file replacement also fail
-closed. Seeds use mode `0400`; public records use mode `0444`. A partial first
+closed. Seeds use mode `0400`; all five public records use mode `0444`. A partial first
 publication can be resumed with the same command and inputs.
 
 Add only authorized Cargo users to the `fe2o3-compiler` group. Enabling

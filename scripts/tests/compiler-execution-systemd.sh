@@ -84,6 +84,13 @@ for name in \
   grep -Fq -- "/etc/fe2o3/compiler-execution/${name}:" "${SERVICE}" ||
     fail "service file ${name} changed"
 done
+grep -Fq -- '"client-profile-v1"' "${PROVISIONER}" ||
+  fail 'provisioner client profile is missing'
+grep -Fq -- '"/etc/fe2o3/compiler-execution/client-profile-v1"' "${PROTOCOL}" ||
+  fail 'canonical client-profile path is missing'
+if grep -Fq -- '/etc/fe2o3/compiler-execution/client-profile-v1:' "${SERVICE}"; then
+  fail 'public client profile must not add a coordinator activation descriptor'
+fi
 grep -Fq -- 'name = "fe2o3-compiler-execution-provision"' "${COORDINATOR_MANIFEST}" ||
   fail 'provisioner binary target is missing'
 grep -Fq -- '"/var/lib/fe2o3/compiler-execution"' "${PROTOCOL}" ||

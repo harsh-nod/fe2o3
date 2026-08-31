@@ -156,6 +156,7 @@ for provision_contract in \
   admit_provisioned_state \
   require_current_provisioned_state \
   CompilerExecutionIssuerPolicyV1::decode \
+  CompilerExecutionClientProfileV1::decode \
   CompilerExecutionSupervisorDeploymentV1::decode \
   CompilerExecutionExternalAnchorDeploymentV1::decode \
   CompilerExecutionExternalAnchorProvisioningV1::decode \

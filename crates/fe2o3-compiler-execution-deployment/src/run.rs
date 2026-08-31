@@ -40,6 +40,7 @@ pub struct CompilerExecutionQualificationReportV1 {
     anchor_uid: u32,
     anchor_gid: u32,
     policy_generation: u64,
+    client_profile_identity: [u8; 32],
 }
 
 impl CompilerExecutionQualificationReportV1 {
@@ -83,6 +84,14 @@ impl CompilerExecutionQualificationReportV1 {
             ("anchor_uid", self.anchor_uid.to_string()),
             ("anchor_gid", self.anchor_gid.to_string()),
             ("policy_generation", self.policy_generation.to_string()),
+            (
+                "compiler_execution_client_profile_identity",
+                encode_sha256_lower_hex_v1(self.client_profile_identity),
+            ),
+            (
+                "compiler_execution_client_profile_admitted",
+                "true".to_owned(),
+            ),
             ("compiler_execution_provisioning", "complete".to_owned()),
             ("installed_lower_revalidated", "true".to_owned()),
             ("post_boot_provisioning_revalidated", "true".to_owned()),
@@ -159,6 +168,7 @@ pub struct CompilerExecutionQualificationCampaignReportV1 {
     anchor_uid: u32,
     anchor_gid: u32,
     policy_generation: u64,
+    client_profile_identity: [u8; 32],
 }
 
 impl CompilerExecutionQualificationCampaignReportV1 {
@@ -190,6 +200,10 @@ impl CompilerExecutionQualificationCampaignReportV1 {
             ("normal_run_count", "2".to_owned()),
             ("systemd_preflight_run_count", "2".to_owned()),
             ("compiler_execution_provisioning_run_count", "2".to_owned()),
+            (
+                "compiler_execution_client_profile_admission_run_count",
+                "2".to_owned(),
+            ),
             ("systemd_boot_run_count", "2".to_owned()),
             ("supervisor_socket_connectivity_run_count", "2".to_owned()),
             ("systemd_version", self.systemd_version.clone()),
@@ -198,6 +212,10 @@ impl CompilerExecutionQualificationCampaignReportV1 {
             ("anchor_uid", self.anchor_uid.to_string()),
             ("anchor_gid", self.anchor_gid.to_string()),
             ("policy_generation", self.policy_generation.to_string()),
+            (
+                "compiler_execution_client_profile_identity",
+                encode_sha256_lower_hex_v1(self.client_profile_identity),
+            ),
             (
                 "qualification_fault_count",
                 QualificationFaultPointV1::all().len().to_string(),
@@ -330,6 +348,7 @@ fn execute_staged_qualification_with_hooks(
         anchor_uid: provisioned.anchor_uid(),
         anchor_gid: provisioned.anchor_gid(),
         policy_generation: provisioned.policy_generation(),
+        client_profile_identity: *provisioned.client_profile().identity().as_bytes(),
     };
     provisioned.cleanup_with_hooks(hooks)?;
     Ok(report)
@@ -498,6 +517,7 @@ pub fn run_compiler_execution_qualification_campaign_v1(
         anchor_uid: first.anchor_uid,
         anchor_gid: first.anchor_gid,
         policy_generation: first.policy_generation,
+        client_profile_identity: first.client_profile_identity,
     })
 }
 
@@ -563,6 +583,7 @@ fn require_systemd_identity(
         || expected.anchor_uid != observed.anchor_uid
         || expected.anchor_gid != observed.anchor_gid
         || expected.policy_generation != observed.policy_generation
+        || expected.client_profile_identity != observed.client_profile_identity
     {
         return Err(super::invalid(
             DeploymentVerificationErrorKindV1::InputChanged,
@@ -620,9 +641,10 @@ mod tests {
             anchor_uid: 998,
             anchor_gid: 998,
             policy_generation: 1,
+            client_profile_identity: [0x67; 32],
         };
         let encoded = report.canonical_report();
-        assert_eq!(encoded.lines().count(), 28);
+        assert_eq!(encoded.lines().count(), 30);
         assert!(encoded.contains("systemd_sysusers=complete\n"));
         assert!(encoded.contains("systemd_unit_verify_count=3\n"));
         assert!(encoded.contains("systemd_boot=complete\n"));
@@ -630,6 +652,11 @@ mod tests {
         assert!(encoded.contains("systemd_machine_ready=true\n"));
         assert!(encoded.contains("supervisor_socket_type=unix-seqpacket\n"));
         assert!(encoded.contains("supervisor_socket_connected=true\n"));
+        assert!(encoded.contains("compiler_execution_client_profile_admitted=true\n"));
+        assert!(encoded.contains(&format!(
+            "compiler_execution_client_profile_identity={}\n",
+            encode_sha256_lower_hex_v1([0x67; 32])
+        )));
         assert!(encoded.ends_with("post_boot_lower_revalidated=true\ncleanup=complete\n"));
         assert!(encoded.contains(&format!(
             "manifest_sha256={}\n",
@@ -671,12 +698,18 @@ mod tests {
             anchor_uid: 998,
             anchor_gid: 998,
             policy_generation: 1,
+            client_profile_identity: [0x34; 32],
         };
         let encoded = report.canonical_report();
-        assert_eq!(encoded.lines().count(), 23);
+        assert_eq!(encoded.lines().count(), 25);
         assert!(encoded.contains("normal_run_count=2\n"));
         assert!(encoded.contains("systemd_preflight_run_count=2\n"));
         assert!(encoded.contains("compiler_execution_provisioning_run_count=2\n"));
+        assert!(encoded.contains("compiler_execution_client_profile_admission_run_count=2\n"));
+        assert!(encoded.contains(&format!(
+            "compiler_execution_client_profile_identity={}\n",
+            encode_sha256_lower_hex_v1([0x34; 32])
+        )));
         assert!(encoded.contains("systemd_boot_run_count=2\n"));
         assert!(encoded.contains("supervisor_socket_connectivity_run_count=2\n"));
         assert!(encoded.contains("qualification_fault_count=25\n"));

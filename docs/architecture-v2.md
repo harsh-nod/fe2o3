@@ -257,8 +257,9 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   systemd version, sysusers, tmpfiles, and offline unit-verification tools,
   admits exact account and filesystem postconditions, revalidates the installed
   lower after every tool, runs the shipped generation-1 root provisioner, and
-  independently admits the six-file configuration inventory, key-derived
-  verifying keys, canonical record graph, service identities, sealed runtime,
+  independently admits the seven-file configuration inventory, key-derived
+  verifying keys, canonical service record graph, derived Cargo client profile,
+  service identities, sealed runtime,
   and all five record-bound static-image measurements before boot. The tools enter
   the descriptor-retained root through the static harness itself; no host
   `chroot` executable is trusted. The provisioned graph and images are

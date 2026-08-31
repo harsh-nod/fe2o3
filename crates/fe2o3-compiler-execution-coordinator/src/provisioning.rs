@@ -3,7 +3,8 @@ use std::fmt;
 
 use fe2o3_broker_authority_service::sealed_static_issuer_runtime_measurement_v1;
 use fe2o3_compiler_execution_protocol::{
-    CompilerExecutionAttestationErrorV1, CompilerExecutionExternalAnchorDeploymentErrorV1,
+    CompilerExecutionAttestationErrorV1, CompilerExecutionClientProfileErrorV1,
+    CompilerExecutionClientProfileV1, CompilerExecutionExternalAnchorDeploymentErrorV1,
     CompilerExecutionExternalAnchorDeploymentV1,
     CompilerExecutionExternalAnchorProvisioningErrorV1,
     CompilerExecutionExternalAnchorProvisioningV1,
@@ -101,6 +102,7 @@ pub struct CompilerExecutionProvisioningBundleV1 {
     supervisor: CompilerExecutionSupervisorDeploymentV1,
     anchor_deployment: CompilerExecutionExternalAnchorDeploymentV1,
     anchor_provisioning: CompilerExecutionExternalAnchorProvisioningV1,
+    client_profile: CompilerExecutionClientProfileV1,
 }
 
 impl CompilerExecutionProvisioningBundleV1 {
@@ -136,11 +138,19 @@ impl CompilerExecutionProvisioningBundleV1 {
             inputs.anchor_helper,
         )
         .map_err(CompilerExecutionProvisioningErrorV1::ExternalAnchorProvisioning)?;
+        let client_profile = CompilerExecutionClientProfileV1::new(
+            supervisor.service_uid(),
+            supervisor.service_gid(),
+            supervisor.external_anchor_service(),
+            policy.clone(),
+        )
+        .map_err(CompilerExecutionProvisioningErrorV1::ClientProfile)?;
         Ok(Self {
             policy,
             supervisor,
             anchor_deployment,
             anchor_provisioning,
+            client_profile,
         })
     }
 
@@ -162,6 +172,11 @@ impl CompilerExecutionProvisioningBundleV1 {
     /// Returns the canonical external-anchor provisioning record.
     pub const fn anchor_provisioning(&self) -> &CompilerExecutionExternalAnchorProvisioningV1 {
         &self.anchor_provisioning
+    }
+
+    /// Returns the canonical Cargo-facing client profile derived from the service record graph.
+    pub const fn client_profile(&self) -> &CompilerExecutionClientProfileV1 {
+        &self.client_profile
     }
 }
 
@@ -186,6 +201,8 @@ pub enum CompilerExecutionProvisioningErrorV1 {
     ExternalAnchorDeployment(CompilerExecutionExternalAnchorDeploymentErrorV1),
     /// The external-anchor provisioning record is not canonical.
     ExternalAnchorProvisioning(CompilerExecutionExternalAnchorProvisioningErrorV1),
+    /// The Cargo-facing client profile could not be derived from the service graph.
+    ClientProfile(CompilerExecutionClientProfileErrorV1),
 }
 
 impl fmt::Display for CompilerExecutionProvisioningErrorV1 {
@@ -210,6 +227,12 @@ impl fmt::Display for CompilerExecutionProvisioningErrorV1 {
             Self::ExternalAnchorProvisioning(error) => {
                 write!(formatter, "invalid external-anchor provisioning: {error}")
             }
+            Self::ClientProfile(error) => {
+                write!(
+                    formatter,
+                    "invalid compiler-execution client profile: {error}"
+                )
+            }
         }
     }
 }
@@ -223,6 +246,7 @@ impl Error for CompilerExecutionProvisioningErrorV1 {
             Self::SupervisorDeployment(error) => Some(error),
             Self::ExternalAnchorDeployment(error) => Some(error),
             Self::ExternalAnchorProvisioning(error) => Some(error),
+            Self::ClientProfile(error) => Some(error),
         }
     }
 }
@@ -231,8 +255,9 @@ impl Error for CompilerExecutionProvisioningErrorV1 {
 mod tests {
     use ed25519_dalek::SigningKey;
     use fe2o3_compiler_execution_protocol::{
-        CompilerExecutionExternalAnchorDeploymentV1, CompilerExecutionExternalAnchorProvisioningV1,
-        CompilerExecutionIssuerPolicyV1, CompilerExecutionSupervisorDeploymentV1,
+        CompilerExecutionClientProfileV1, CompilerExecutionExternalAnchorDeploymentV1,
+        CompilerExecutionExternalAnchorProvisioningV1, CompilerExecutionIssuerPolicyV1,
+        CompilerExecutionSupervisorDeploymentV1,
     };
 
     use super::*;
@@ -256,10 +281,20 @@ mod tests {
             first.anchor_provisioning().canonical_bytes(),
         )
         .unwrap();
+        let client_profile =
+            CompilerExecutionClientProfileV1::decode(first.client_profile().canonical_bytes())
+                .unwrap();
 
         assert!(supervisor.matches_policy(&policy));
         assert!(anchor.matches_supervisor_and_policy(&supervisor, &policy));
         assert!(provisioning.matches_deployment(&anchor));
+        assert_eq!(client_profile.policy(), &policy);
+        assert_eq!(client_profile.supervisor_uid(), supervisor.service_uid());
+        assert_eq!(client_profile.supervisor_gid(), supervisor.service_gid());
+        assert_eq!(
+            client_profile.external_anchor_service(),
+            supervisor.external_anchor_service()
+        );
     }
 
     #[test]
@@ -283,6 +318,10 @@ mod tests {
         assert_ne!(
             original.anchor_provisioning().identity(),
             substituted.anchor_provisioning().identity()
+        );
+        assert_ne!(
+            original.client_profile().identity(),
+            substituted.client_profile().identity()
         );
     }
 
