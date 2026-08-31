@@ -4,6 +4,7 @@
 
 mod capsule;
 mod error;
+mod multi_root_target_lineage_v2;
 mod proof_binding;
 mod proof_binding_v4;
 mod receipt;
@@ -17,6 +18,12 @@ pub use capsule::{
     OrderedInertSemanticLineageReceiptsV3,
 };
 pub use error::{LineageDecodeErrorV3, LineageErrorV3};
+pub use multi_root_target_lineage_v2::{
+    MAX_MULTI_ROOT_TARGET_BINDING_ROOTS_V2, MULTI_ROOT_TARGET_BINDING_MAGIC_V2,
+    MULTI_ROOT_TARGET_BINDING_VERSION_V2, MultiRootTargetBindingInputsV2,
+    MultiRootTargetBindingTranscriptV2, MultiRootTargetWorkgroupInputV2,
+    MultiRootTargetWorkgroupV2,
+};
 pub use proof_binding::{
     INERT_PROOF_BINDING_ASSOCIATION_MAGIC_V3, INERT_PROOF_BINDING_ASSOCIATION_VERSION_V3,
     InertLineageContentIdentityV3, InertProofBindingAssociationErrorV3,

@@ -149,7 +149,10 @@ impl TargetLineageIdentityV3 {
         encoded
     }
 
-    fn decode(field: &'static str, encoded: &[u8]) -> Result<Self, ProductionTargetLineageErrorV3> {
+    pub(crate) fn decode(
+        field: &'static str,
+        encoded: &[u8],
+    ) -> Result<Self, ProductionTargetLineageErrorV3> {
         if encoded.len() != IDENTITY_BYTES_V3 {
             return Err(ProductionTargetLineageErrorV3::InvalidFieldLength {
                 field,
