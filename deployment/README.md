@@ -69,7 +69,9 @@ disposable upper/work/run/state/evidence. Mount attachment, root composition,
 and real systemd execution still remain qualification gates. The mount
 transaction is implemented with atomic loop configuration and upstream Linux
 detached-mount APIs, but the current unprivileged `mi300x` session cannot
-execute its root-only integration path. See
+execute its root-only integration path. The fully static
+`fe2o3-compiler-execution-qualification` image provides a read-only host probe
+and the single exact mount transaction for a privileged runner. See
 [disposable-root V1](../docs/compiler-execution-disposable-root-v1.md).
 
 With both the service and socket stopped, provision one nonzero policy

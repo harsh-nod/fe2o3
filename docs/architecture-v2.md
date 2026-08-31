@@ -252,9 +252,12 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   preparation and staging. A private single-thread mount namespace, atomic
   read-only/autoclear loop handle, detached SquashFS and OverlayFS mounts, fixed
   installed-root-over-base lower order, and sealed deployment-projection
-  revalidation are implemented. That path still lacks host-root execution
-  evidence, so mount composition, isolated boot, and root/distinct-UID systemd
-  qualification remain open rather than production-qualified.
+  revalidation are implemented. One static harness now drives the complete
+  mount-only transaction and emits a canonical cleanup report, while a
+  non-mutating probe records every host prerequisite. That path still lacks
+  host-root execution evidence, so mount composition, isolated boot, and
+  root/distinct-UID systemd qualification remain open rather than
+  production-qualified.
 - Versioned artifact, descriptor, durable-publication, and HSA records exist.
   Host execution has one workload-neutral Worker V3 graph. An arbitrary
   manifest cannot manufacture a Rust signature, verifier decision, load

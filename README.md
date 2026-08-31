@@ -334,8 +334,10 @@ transaction descriptor-retains the exact empty base/root, upper/work,
 run/state, and evidence tree and cleans all 21 interrupted boundaries.
 Atomic read-only loop attachment plus detached SquashFS/OverlayFS composition
 is implemented and rechecks the installed projection against sealed custody,
-but has not run under host root. Combined root/distinct-UID systemd execution
-remains absent. The concrete
+but has not run under host root. A static mount-qualification harness and
+read-only host probe now drive the sole verify-to-cleanup transaction; its
+`run` path remains unexecuted because the available SSH identity is not root.
+Combined root/distinct-UID systemd execution remains absent. The concrete
 protected verifier also remains absent. A fixed
 receipt sidecar and publication ACK now
 carry the exact journal, occurrence, receipt, Worker record, sequence, and

@@ -3,8 +3,9 @@
 Status: deterministic base construction, caller-pinned SquashFS admission,
 sealed preparation custody, and the exact empty staging transaction are
 implemented. Private-namespace mount composition is implemented but has not yet
-run under host root. Root execution, isolated systemd boot, distinct-UID
-execution, and lifecycle fault qualification remain open.
+run under host root. Its static probe and exact high-level mount harness are
+implemented. Root execution, isolated systemd boot, distinct-UID execution, and
+lifecycle fault qualification remain open.
 
 ## Purpose
 
@@ -145,11 +146,21 @@ custody. The move-only mounted value still grants no boot or execution
 authority. Cleanup unmounts overlay first, SquashFS second, releases the
 autoclear loop device, and then removes the exact staging tree.
 
+The fully static `fe2o3-compiler-execution-qualification` image exposes two
+commands. `probe` observes effective UID, task count, procfs, loop-control
+identity, filesystem support, new mount API recognition, isolation namespaces,
+cgroup V2, and fixed systemd tool paths without creating a namespace, mount, or
+service. `run` is the sole high-level path through bundle verification,
+installation, base preparation, staging, private namespace entry, mount
+attachment, revalidation, explicit cleanup, and a canonical completion report.
+It grants no boot or service authority.
+
 This implementation currently has compile, unit, custody-doctest, strict
-Clippy, and strict rustdoc evidence only. The current `mi300x` SSH identity has
-neither effective UID zero nor mount capabilities, so no successful kernel
-mount is claimed yet. The static root harness and live fault campaign remain
-required before this boundary is production-qualified.
+Clippy, strict rustdoc, static-musl, ELF loader-independence, and live read-only
+probe evidence. The current `mi300x` SSH identity has effective UID `1002` and
+no mount capabilities, so no successful kernel mount is claimed yet. The live
+root harness and mount fault campaign remain required before this boundary is
+production-qualified.
 
 ## Qualification
 
@@ -173,9 +184,10 @@ The full check validates exact inventory, modes, links, `SHA256SUMS`, checkout
 commit and epoch, all package records, SquashFS profile, embedded metadata and
 target bytes, and byte equality of every published file.
 
-The remaining production gate must drive the implemented mount transaction
-under real host root and boot `fe2o3-qualification.target` in isolated PID,
-network, IPC, UTS, cgroup, and mount namespaces. It must then exercise
+The remaining production gate must execute the static harness under real host
+root, add live interruption evidence at every loop and mount boundary, and boot
+`fe2o3-qualification.target` in isolated PID, network, IPC, UTS, cgroup, and
+mount namespaces. It must then exercise
 sysusers/tmpfiles, socket activation, distinct service and client identities,
 provisioning exclusion, successful compiler execution, restart and crash
 recovery, mount-crossing and hostile-parent cases, and complete cleanup.

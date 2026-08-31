@@ -5,7 +5,8 @@ fresh installed-root revalidation, sealed disposable-root preparation, and an
 exact fault-cleaned empty staging transaction. Mount attachment, root
 composition, and distinct-UID systemd execution qualification remain open. The
 private-namespace mount transaction is implemented but not yet host-root
-qualified.
+qualified. A static host probe and sole verify-to-mount-to-cleanup harness are
+implemented; successful privileged execution is not yet claimed.
 
 ## Boundary
 

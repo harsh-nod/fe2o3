@@ -28,5 +28,7 @@ deployment gates. The private-namespace attachment implementation now uses an
 atomic read-only autoclear loop device and detached upstream Linux mount APIs,
 then rechecks the composed deployment projection against sealed custody. It has
 not yet run under real host root, so live mount and systemd qualification remain
-open. See the
+open. `fe2o3-compiler-execution-qualification probe` reports each host
+prerequisite without mutation; its `run` command is the sole static
+verify/install/prepare/stage/mount/revalidate/cleanup path. See the
 [disposable-root V1 contract](../../docs/compiler-execution-disposable-root-v1.md).
