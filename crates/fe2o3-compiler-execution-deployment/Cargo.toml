@@ -12,6 +12,7 @@ publish = false
 fe2o3-loop-device.workspace = true
 rustix = { workspace = true, features = ["mount", "process", "rand", "thread"] }
 sha2.workspace = true
+signal-hook.workspace = true
 
 [dev-dependencies]
 tempfile = "=3.21.0"
@@ -40,5 +41,4 @@ bench = false
 [[bin]]
 name = "fe2o3-compiler-execution-qualification"
 path = "src/bin/qualification.rs"
-test = false
 bench = false

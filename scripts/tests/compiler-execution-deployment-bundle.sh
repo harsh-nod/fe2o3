@@ -54,6 +54,7 @@ grep -Fq -- 'manifest_sha256=%s' "${builder}" ||
   fail 'out-of-band manifest digest publication is missing'
 
 readonly verifier_builder="${repo_root}/scripts/build-static-compiler-execution-deployment-verifier.sh"
+readonly qualification_source="${repo_root}/crates/fe2o3-compiler-execution-deployment/src/bin/qualification.rs"
 bash -n "${verifier_builder}"
 for binary in \
   fe2o3-compiler-execution-manifest \
@@ -72,6 +73,16 @@ grep -Fq -- 'recover QUALIFICATION_PARENT' "${verifier_builder}" ||
   fail 'static qualification recovery command is missing'
 grep -Fq -- 'recover-install EXPECTED_MANIFEST_SHA256 INSTALL_PARENT' "${verifier_builder}" ||
   fail 'static installer recovery command is missing'
+for supervisor_contract in \
+  acquire_compiler_execution_qualification_supervisor_lease_v1 \
+  wait_for_compiler_execution_qualification_supervisor_lease_v1 \
+  wait_for_qualification_worker_v1 \
+  set_parent_process_death_signal \
+  signal_hook::flag::register_usize \
+  WorkerOutputCaptureV1; do
+  grep -Fq -- "${supervisor_contract}" "${qualification_source}" ||
+    fail "missing qualification supervisor contract ${supervisor_contract}"
+done
 grep -Fq -- "--target \"\${target}\"" "${verifier_builder}" ||
   fail 'static verifier target is not pinned'
 grep -Fq -- '-C link-arg=-static' "${verifier_builder}" ||
