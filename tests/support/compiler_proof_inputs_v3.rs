@@ -1,4 +1,5 @@
 use ed25519_dalek::{Signer as _, SigningKey};
+use fe2o3_compiler_lineage::derive_semantic_target_layout_identity_v1;
 use fe2o3_functional_proof::{
     FunctionalRefinementBindingV2, FunctionalRefinementBoundaryV2,
     FunctionalRefinementImportExpectationV2, FunctionalRefinementImportPolicyV2,
@@ -23,6 +24,25 @@ use fe2o3_verifier::{
     CanonicalProductionMirPlironVerusExecutionEvidenceV1, ProductionMirPlironVerusExecutionClaimsV1,
 };
 use sha2::{Digest, Sha256};
+
+const PRODUCTION_RUSTC_LLVM_TARGET: &str = "amdgcn-amd-amdhsa";
+const PRODUCTION_AMDHSA_DATA_LAYOUT: &str = "e-m:e-p:64:64-p1:64:64-p2:32:32-p3:32:32-p4:64:64-p5:32:32-p6:32:32-p7:160:256:256:32-p8:128:128:128:48-p9:192:256:256:32-i64:64-v16:16-v24:32-v32:32-v48:64-v96:128-v192:256-v256:256-v512:512-v1024:1024-v2048:2048-n32:64-S32-A5-G1-ni:7:8:9";
+const PRODUCTION_TARGET_CPU: &str = "gfx942";
+const PRODUCTION_TARGET_FEATURES: &str = "-wavefrontsize32,+wavefrontsize64,-xnack";
+
+fn production_target_layout_identity() -> SemanticLayoutIdentityV1 {
+    SemanticLayoutIdentityV1::from_sha256(
+        derive_semantic_target_layout_identity_v1(
+            PRODUCTION_RUSTC_LLVM_TARGET,
+            PRODUCTION_AMDHSA_DATA_LAYOUT,
+            64,
+            PRODUCTION_TARGET_CPU,
+            PRODUCTION_TARGET_FEATURES,
+        )
+        .unwrap()
+        .sha256(),
+    )
+}
 
 pub(crate) struct CanonicalCompilerProofInputsV3 {
     semantic_mir: Vec<u8>,
@@ -263,7 +283,7 @@ fn block(
 
 fn semantic_owner(seed: u8) -> ProductionSemanticMirOwnerV1 {
     let type_id = SemanticTypeIdV1::from_index(0);
-    let layout = SemanticLayoutIdentityV1::from_sha256(bytes(250, seed));
+    let layout = production_target_layout_identity();
     let abi = SemanticFunctionAbiV1::from_rustc(
         SemanticAbiIdentityV1::from_sha256(bytes(2, seed)),
         layout,
@@ -571,7 +591,7 @@ fn semantic_induction_owner(seed: u8) -> ProductionSemanticMirOwnerV1 {
         .unwrap(),
     ));
     let admitted = InertSemanticMirRequestV1::new(
-        SemanticTargetDataLayoutV1::gfx942(SemanticLayoutIdentityV1::from_sha256(bytes(250, seed))),
+        SemanticTargetDataLayoutV1::gfx942(production_target_layout_identity()),
         vec![unit_type(seed), u32_type, bool_type, checked_type],
         vec![],
         vec![],

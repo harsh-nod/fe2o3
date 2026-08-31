@@ -51,4 +51,5 @@ pub use target_lineage_v3::{
     ProductionTargetLineageErrorV3, SemanticToLlvmAssociationInputsV3,
     SemanticToLlvmAssociationTranscriptV3, TargetBindingTranscriptInputsV3,
     TargetBindingTranscriptV3, TargetLineageClaimV3, TargetLineageIdentityV3,
+    canonical_semantic_target_layout_transcript_v1, derive_semantic_target_layout_identity_v1,
 };

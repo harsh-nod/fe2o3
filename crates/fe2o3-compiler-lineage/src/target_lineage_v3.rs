@@ -13,6 +13,7 @@
 use std::{error::Error, fmt, str};
 
 use fe2o3_amd_target::PRODUCTION_AMDHSA_LLVM_DATA_LAYOUT_V1;
+use sha2::{Digest, Sha256};
 
 const TRANSCRIPT_MAGIC_V3: [u8; 8] = *b"F2O3TLV3";
 const TRANSCRIPT_VERSION_V3: u16 = 3;
@@ -46,6 +47,75 @@ const EXACT_GFX950_CPU_V3: &str = "gfx950";
 const EXACT_GFX942_FEATURES_V3: &str = "-wavefrontsize32,+wavefrontsize64,-xnack";
 const EXACT_CODE_OBJECT_VERSION_V3: u16 = 6;
 const EXACT_WAVE_WIDTH_BITS_V3: u16 = 64;
+const SEMANTIC_TARGET_LAYOUT_DOMAIN_V1: &[u8] = b"fe2o3/semantic-mir/rustc-target-layout/v1";
+const SEMANTIC_TARGET_LAYOUT_FIELD_COUNT_V1: usize = 6;
+
+/// Builds the exact semantic-MIR target-layout digest preimage used by rustc collection.
+///
+/// The returned bytes are an internal association input. They authenticate neither rustc nor the
+/// target facts supplied by the caller.
+pub fn canonical_semantic_target_layout_transcript_v1(
+    rustc_llvm_target: &str,
+    rustc_data_layout: &str,
+    default_pointer_width_bits: u16,
+    target_cpu: &str,
+    target_features: &str,
+) -> Result<Box<[u8]>, ProductionTargetLineageErrorV3> {
+    let pointer_width = default_pointer_width_bits.to_le_bytes();
+    let fields: [&[u8]; SEMANTIC_TARGET_LAYOUT_FIELD_COUNT_V1] = [
+        SEMANTIC_TARGET_LAYOUT_DOMAIN_V1,
+        rustc_llvm_target.as_bytes(),
+        rustc_data_layout.as_bytes(),
+        &pointer_width,
+        target_cpu.as_bytes(),
+        target_features.as_bytes(),
+    ];
+    let mut exact_length = 0_usize;
+    for field in fields {
+        exact_length = exact_length
+            .checked_add(size_of::<u64>())
+            .and_then(|length| length.checked_add(field.len()))
+            .ok_or(ProductionTargetLineageErrorV3::LengthOverflow)?;
+    }
+    if exact_length > MAX_PRODUCTION_TARGET_LINEAGE_TRANSCRIPT_BYTES_V3 {
+        return Err(ProductionTargetLineageErrorV3::TranscriptTooLarge {
+            actual: exact_length,
+            max: MAX_PRODUCTION_TARGET_LINEAGE_TRANSCRIPT_BYTES_V3,
+        });
+    }
+    let mut transcript = Vec::new();
+    transcript
+        .try_reserve_exact(exact_length)
+        .map_err(|_| ProductionTargetLineageErrorV3::AllocationFailed)?;
+    for field in fields {
+        transcript.extend_from_slice(
+            &u64::try_from(field.len())
+                .map_err(|_| ProductionTargetLineageErrorV3::LengthOverflow)?
+                .to_le_bytes(),
+        );
+        transcript.extend_from_slice(field);
+    }
+    debug_assert_eq!(transcript.len(), exact_length);
+    Ok(transcript.into_boxed_slice())
+}
+
+/// Rederives the semantic-MIR target-layout identity from exact target transcript fields.
+pub fn derive_semantic_target_layout_identity_v1(
+    rustc_llvm_target: &str,
+    rustc_data_layout: &str,
+    default_pointer_width_bits: u16,
+    target_cpu: &str,
+    target_features: &str,
+) -> Result<TargetLineageIdentityV3, ProductionTargetLineageErrorV3> {
+    let transcript = canonical_semantic_target_layout_transcript_v1(
+        rustc_llvm_target,
+        rustc_data_layout,
+        default_pointer_width_bits,
+        target_cpu,
+        target_features,
+    )?;
+    TargetLineageIdentityV3::new(Sha256::digest(&transcript).into(), transcript.len() as u64)
+}
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 /// SHA-256 and byte-length coordinates used by target-side association records.

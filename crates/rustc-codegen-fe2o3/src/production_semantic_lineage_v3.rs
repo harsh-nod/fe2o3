@@ -22,6 +22,7 @@ use fe2o3_compiler_lineage::{
     OrderedInertSemanticLineageReceiptsV3, ProductionTargetLineageErrorV3,
     SemanticToLlvmAssociationInputsV3, SemanticToLlvmAssociationTranscriptV3,
     TargetBindingTranscriptInputsV3, TargetBindingTranscriptV3, TargetLineageIdentityV3,
+    derive_semantic_target_layout_identity_v1,
 };
 use fe2o3_kernel_descriptor::KernelId as DescriptorKernelId;
 use fe2o3_kernel_ir::{
@@ -1068,17 +1069,21 @@ impl PreparedProductionSemanticLineageV3 {
             neutral_kir_custody,
         )?;
 
-        let target_layout = crate::rustc_semantic_adapter_v1::canonical_target_layout_transcript_v1(
-            rustc_target.rustc_layout(),
-        );
-        let target_layout_sha256: [u8; 32] = Sha256::digest(&target_layout).into();
-        if semantic.target_layout_identity().as_bytes() != &target_layout_sha256 {
+        let semantic_layout_identity = derive_semantic_target_layout_identity_v1(
+            rustc_target.rustc_layout().llvm_target(),
+            rustc_target.rustc_layout().data_layout(),
+            rustc_target.rustc_layout().default_pointer_width_bits(),
+            rustc_target.rustc_layout().active_cpu().unwrap_or_default(),
+            rustc_target
+                .rustc_layout()
+                .active_features()
+                .unwrap_or_default(),
+        )?;
+        if semantic.target_layout_identity().as_bytes() != &semantic_layout_identity.sha256() {
             return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
                 "semantic MIR target layout differs from the authenticated rustc layout",
             ));
         }
-        let semantic_layout_identity =
-            TargetLineageIdentityV3::new(target_layout_sha256, target_layout.len() as u64)?;
 
         validate_final_llvm_layout(pre_descriptor_llvm)?;
 

@@ -1838,6 +1838,7 @@ dependencies = [
  "fe2o3-pliron",
  "fe2o3-proof-contracts",
  "fe2o3-rustc-front",
+ "fe2o3-rustc-invocation",
  "rand_core 0.6.4",
  "rustix",
  "sha2 0.11.0",
