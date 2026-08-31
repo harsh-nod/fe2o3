@@ -328,6 +328,7 @@ dependencies = [
  "fe2o3-rustc-invocation",
  "fe2o3-verifier",
  "libc",
+ "object 0.39.1",
  "proc-macro2",
  "reserved-fe2o3-symbols",
  "rustix",

@@ -12,6 +12,9 @@ use rustc_hir::def_id::LOCAL_CRATE;
 use rustc_interface::interface::Compiler;
 use rustc_middle::ty::TyCtxt;
 
+const EXTRACT_INERT_RUSTC_INVOCATION_V3_HEX_ENV_V1: &str =
+    "FE2O3_EXTRACT_INERT_RUSTC_INVOCATION_V3_HEX";
+
 #[derive(Default)]
 struct ProductionExtractionCallbacksV1 {
     ranked_memory: bool,
@@ -257,6 +260,9 @@ fn extract_gfx942_compiler_handoff_in_active_session_v1(
     tcx: TyCtxt<'_>,
     output: &Path,
 ) -> Result<(), String> {
+    if env::var_os(EXTRACT_INERT_RUSTC_INVOCATION_V3_HEX_ENV_V1).is_some() {
+        return extract_gfx942_semantic_compiler_handoff_in_active_session_v3(tcx, output);
+    }
     let lowered = transaction_in_active_session_v1(
         tcx,
         crate::rustc_semantic_plan_v1::DebugSourceCaptureRequestV2::Disabled,
@@ -288,6 +294,87 @@ fn extract_gfx942_compiler_handoff_in_active_session_v1(
         handoff.canonical_bytes().len(),
     );
     Ok(())
+}
+
+fn extract_gfx942_semantic_compiler_handoff_in_active_session_v3(
+    tcx: TyCtxt<'_>,
+    output: &Path,
+) -> Result<(), String> {
+    let invocation = inert_extraction_invocation_v3()?;
+    let lowered = transaction_in_active_session_v1(
+        tcx,
+        crate::rustc_semantic_plan_v1::DebugSourceCaptureRequestV2::Disabled,
+    )?
+    .lower_production_target()
+    .map_err(|error| error.to_string())?;
+    if lowered.target_name() != fe2o3_amd_target::PRODUCTION_GFX942_DEVICE_TARGET_V1 {
+        return Err(format!(
+            "production gfx942 semantic compiler handoff expected live target {:?}; found {:?}",
+            fe2o3_amd_target::PRODUCTION_GFX942_DEVICE_TARGET_V1,
+            lowered.target_name()
+        ));
+    }
+    let canonical_kernel_ir_version = lowered.canonical_kernel_ir_version();
+    let guarded_store_count = lowered.guarded_store_count();
+    let handoff = lowered
+        .into_inert_semantic_worker_handoff_for_extraction(invocation)
+        .map_err(|error| error.to_string())?;
+    std::fs::write(output, handoff.canonical_bytes()).map_err(|error| {
+        format!(
+            "failed to write inert production semantic compiler-module handoff extraction `{}`: {error}",
+            output.display()
+        )
+    })?;
+    eprintln!(
+        "fe2o3 production extraction: Rust -> semantic MIR -> ranked PLIRON -> Kernel IR V{} with {} GuardedStore operation(s) -> composed formal/ranked memory -> gfx942 LLVM -> proof-carrying semantic compiler-bound inert handoff; {} handoff byte(s), artifact/launch authority false",
+        canonical_kernel_ir_version,
+        guarded_store_count,
+        handoff.canonical_bytes().len(),
+    );
+    Ok(())
+}
+
+fn inert_extraction_invocation_v3()
+-> Result<fe2o3_rustc_invocation::RustcInvocationDescriptorV3, String> {
+    let encoded = env::var(EXTRACT_INERT_RUSTC_INVOCATION_V3_HEX_ENV_V1).map_err(|_| {
+        format!(
+            "semantic compiler-handoff extraction requires exact inert invocation bytes in {EXTRACT_INERT_RUSTC_INVOCATION_V3_HEX_ENV_V1}"
+        )
+    })?;
+    if encoded.is_empty()
+        || encoded.len() % 2 != 0
+        || encoded.len() > fe2o3_rustc_invocation::MAX_DESCRIPTOR_BYTES_V3.saturating_mul(2)
+    {
+        return Err(format!(
+            "{EXTRACT_INERT_RUSTC_INVOCATION_V3_HEX_ENV_V1} has an invalid canonical length"
+        ));
+    }
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(encoded.len() / 2)
+        .map_err(|_| "inert extraction invocation is too large".to_owned())?;
+    for pair in encoded.as_bytes().chunks_exact(2) {
+        let high = canonical_hex_nibble(pair[0]).ok_or_else(|| {
+            format!("{EXTRACT_INERT_RUSTC_INVOCATION_V3_HEX_ENV_V1} is not lowercase hexadecimal")
+        })?;
+        let low = canonical_hex_nibble(pair[1]).ok_or_else(|| {
+            format!("{EXTRACT_INERT_RUSTC_INVOCATION_V3_HEX_ENV_V1} is not lowercase hexadecimal")
+        })?;
+        bytes.push((high << 4) | low);
+    }
+    fe2o3_rustc_invocation::decode_descriptor_v3(&bytes).map_err(|error| {
+        format!(
+            "{EXTRACT_INERT_RUSTC_INVOCATION_V3_HEX_ENV_V1} is not a canonical V3 invocation: {error}"
+        )
+    })
+}
+
+const fn canonical_hex_nibble(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        _ => None,
+    }
 }
 
 fn extract_simulation_bundle_in_active_session_v1(

@@ -2,9 +2,10 @@
 
 use fe2o3_compiler_lineage::{
     DataLayoutTranscriptV3, InertProductionSemanticCapsuleV3, MultiRootTargetBindingTranscriptV2,
-    SemanticToLlvmAssociationTranscriptV3, TargetLineageIdentityV3,
+    MultiRootTargetWorkgroupV2, SemanticToLlvmAssociationTranscriptV3, TargetLineageIdentityV3,
     derive_semantic_target_layout_identity_v1,
 };
+use fe2o3_kernel_ir::Kernel;
 use fe2o3_rustc_invocation::encode_descriptor_v3;
 
 use crate::compiler_target_lineage_v1::{receipt_identity, require_identity_match};
@@ -239,19 +240,12 @@ pub fn validate_compiler_multi_root_target_lineage_v1(
                 field: "replayed target-bound root",
             },
         )?;
-        let workgroup = kernel.workgroup_size.ok_or(
-            CompilerTargetLineageValidationErrorV1::IdentityMismatch {
-                field: "replayed target-bound workgroup",
-            },
-        )?;
-        require_identity_match(
-            target.kernel() == root.kernel_id()
-                && target.workgroup() == root.workgroup()
-                && kernel.id.as_str() == root.kernel_id()
-                && kernel.entry.as_str() == root.kernel_id()
-                && kernel.domain.rank() == root.source_rank()
-                && [workgroup.x, workgroup.y, workgroup.z] == target.workgroup(),
-            "per-root target workgroup",
+        require_exact_multi_root_target_v1(
+            target,
+            kernel,
+            root.kernel_id(),
+            root.source_rank(),
+            root.workgroup(),
         )?;
     }
 
@@ -398,4 +392,198 @@ pub fn validate_compiler_multi_root_target_lineage_v1(
         final_llvm: association_inputs.final_llvm,
         final_compiler_module_commitment: association_inputs.final_compiler_module_commitment,
     })
+}
+
+fn require_exact_multi_root_target_v1(
+    target: MultiRootTargetWorkgroupV2<'_>,
+    kernel: &Kernel,
+    expected_kernel: &str,
+    expected_source_rank: u8,
+    expected_workgroup: [u32; 3],
+) -> Result<(), CompilerTargetLineageValidationErrorV1> {
+    let workgroup =
+        kernel
+            .workgroup_size
+            .ok_or(CompilerTargetLineageValidationErrorV1::IdentityMismatch {
+                field: "replayed target-bound workgroup",
+            })?;
+    require_identity_match(
+        target.kernel() == expected_kernel
+            && target.workgroup() == expected_workgroup
+            && kernel.id.as_str() == expected_kernel
+            && kernel.entry.as_str() == expected_kernel
+            && kernel.domain.rank() == expected_source_rank
+            && [workgroup.x, workgroup.y, workgroup.z] == target.workgroup(),
+        "per-root target workgroup",
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use fe2o3_compiler_lineage::{MultiRootTargetBindingInputsV2, MultiRootTargetWorkgroupInputV2};
+    use fe2o3_kernel_ir::{LaunchDomain, LaunchExtent, WorkgroupSize};
+
+    use super::*;
+
+    fn identity(seed: u8, byte_len: u64) -> TargetLineageIdentityV3 {
+        TargetLineageIdentityV3::new([seed; 32], byte_len).unwrap()
+    }
+
+    fn target_binding() -> MultiRootTargetBindingTranscriptV2 {
+        let workgroups = [
+            MultiRootTargetWorkgroupInputV2 {
+                kernel: "alpha_kernel",
+                workgroup: [64, 1, 1],
+            },
+            MultiRootTargetWorkgroupInputV2 {
+                kernel: "zeta_kernel",
+                workgroup: [8, 4, 1],
+            },
+        ];
+        MultiRootTargetBindingTranscriptV2::new(MultiRootTargetBindingInputsV2 {
+            protected_rustc_invocation: identity(1, 101),
+            semantic_mir: identity(2, 202),
+            target_neutral_kir: identity(3, 303),
+            target_bound_kir: identity(4, 404),
+            configured_target: "gfx942:xnack-",
+            rustc_llvm_target: "amdgcn-amd-amdhsa",
+            target_cpu: "gfx942",
+            target_features: "-wavefrontsize32,+wavefrontsize64,-xnack",
+            roster_identity: [5; 32],
+            code_object_version: 6,
+            wave_width_bits: 64,
+            workgroups: &workgroups,
+        })
+        .unwrap()
+    }
+
+    fn target_kernel(name: &str, rank: u8, workgroup: [u32; 3]) -> Kernel {
+        let domain = match rank {
+            1 => LaunchDomain::D1 {
+                x: LaunchExtent::Static(1),
+            },
+            2 => LaunchDomain::D2 {
+                x: LaunchExtent::Static(1),
+                y: LaunchExtent::Static(1),
+            },
+            3 => LaunchDomain::D3 {
+                x: LaunchExtent::Static(1),
+                y: LaunchExtent::Static(1),
+                z: LaunchExtent::Static(1),
+            },
+            _ => panic!("unsupported test rank"),
+        };
+        let mut kernel = Kernel::new(name, name, domain);
+        kernel.workgroup_size = Some(WorkgroupSize::new(workgroup[0], workgroup[1], workgroup[2]));
+        kernel
+    }
+
+    #[test]
+    fn exact_root_coordinate_join_is_accepted() {
+        let binding = target_binding();
+        let target = binding.workgroup(1).unwrap();
+        let kernel = target_kernel("zeta_kernel", 2, [8, 4, 1]);
+
+        require_exact_multi_root_target_v1(target, &kernel, "zeta_kernel", 2, [8, 4, 1]).unwrap();
+    }
+
+    #[test]
+    fn root_join_rejects_each_cross_spliced_axis() {
+        let binding = target_binding();
+        let target = binding.workgroup(1).unwrap();
+        let exact_kernel = target_kernel("zeta_kernel", 2, [8, 4, 1]);
+        let wrong_rank = target_kernel("zeta_kernel", 1, [8, 4, 1]);
+        let wrong_kernel = target_kernel("alpha_kernel", 2, [8, 4, 1]);
+        let mut wrong_entry = target_kernel("zeta_kernel", 2, [8, 4, 1]);
+        wrong_entry.entry = "alpha_kernel".into();
+        let wrong_replayed_workgroup = target_kernel("zeta_kernel", 2, [16, 2, 1]);
+
+        for (axis, result) in [
+            (
+                "proof root order",
+                require_exact_multi_root_target_v1(
+                    target,
+                    &exact_kernel,
+                    "alpha_kernel",
+                    2,
+                    [8, 4, 1],
+                ),
+            ),
+            (
+                "replayed kernel",
+                require_exact_multi_root_target_v1(
+                    target,
+                    &wrong_kernel,
+                    "zeta_kernel",
+                    2,
+                    [8, 4, 1],
+                ),
+            ),
+            (
+                "source rank",
+                require_exact_multi_root_target_v1(
+                    target,
+                    &wrong_rank,
+                    "zeta_kernel",
+                    2,
+                    [8, 4, 1],
+                ),
+            ),
+            (
+                "replayed entry",
+                require_exact_multi_root_target_v1(
+                    target,
+                    &wrong_entry,
+                    "zeta_kernel",
+                    2,
+                    [8, 4, 1],
+                ),
+            ),
+            (
+                "proof workgroup",
+                require_exact_multi_root_target_v1(
+                    target,
+                    &exact_kernel,
+                    "zeta_kernel",
+                    2,
+                    [16, 2, 1],
+                ),
+            ),
+            (
+                "replayed workgroup",
+                require_exact_multi_root_target_v1(
+                    target,
+                    &wrong_replayed_workgroup,
+                    "zeta_kernel",
+                    2,
+                    [8, 4, 1],
+                ),
+            ),
+        ] {
+            assert!(
+                matches!(
+                    result,
+                    Err(CompilerTargetLineageValidationErrorV1::IdentityMismatch {
+                        field: "per-root target workgroup"
+                    })
+                ),
+                "accepted cross-spliced {axis}"
+            );
+        }
+    }
+
+    #[test]
+    fn root_join_rejects_absent_replayed_workgroup() {
+        let binding = target_binding();
+        let target = binding.workgroup(1).unwrap();
+        let mut kernel = target_kernel("zeta_kernel", 2, [8, 4, 1]);
+        kernel.workgroup_size = None;
+
+        assert!(matches!(
+            require_exact_multi_root_target_v1(target, &kernel, "zeta_kernel", 2, [8, 4, 1]),
+            Err(CompilerTargetLineageValidationErrorV1::IdentityMismatch {
+                field: "replayed target-bound workgroup"
+            })
+        ));
+    }
 }

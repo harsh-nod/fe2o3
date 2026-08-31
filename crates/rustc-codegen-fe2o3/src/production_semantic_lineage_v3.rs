@@ -43,7 +43,9 @@ use fe2o3_lower_mir_kernel::{
 };
 use fe2o3_mir_model::InertCanonicalSemanticU32InductionEvidenceV1;
 use fe2o3_pliron::InertProductionMiddleEndEvidenceV5;
-use fe2o3_rustc_invocation::{InvocationDigestV3, encode_descriptor_v3};
+use fe2o3_rustc_invocation::{
+    InvocationDigestV3, RustcInvocationDescriptorV3, encode_descriptor_v3,
+};
 use fe2o3_verifier::{
     CanonicalProductionMirPlironVerusExecutionEvidenceV1, CompilerKirToLlvmReplayValidationErrorV1,
     CompilerMultiRootProofValidationErrorV1, CompilerTargetLineageValidationErrorV1,
@@ -990,6 +992,31 @@ impl PreparedProductionSemanticLineageV3 {
             .revalidate_for_publication()
             .map_err(ProductionSemanticLineageErrorV3::ProtectedRustcInvocation)?;
         let invocation = invocation_custody.descriptor().clone();
+        self.finish_with_inert_invocation(invocation, target, descriptor_source, module_handoff)
+    }
+
+    /// Builds the same authority-free V3 handoff for an explicit extraction descriptor.
+    ///
+    /// Unlike [`Self::finish`], this diagnostic boundary does not authenticate the descriptor
+    /// against the running compiler process. Its output is therefore inert and cannot enter the
+    /// protected publication transition.
+    pub(crate) fn finish_for_inert_extraction(
+        self,
+        invocation: RustcInvocationDescriptorV3,
+        target: fe2o3_compiler_ffi::DeviceTargetV1,
+        descriptor_source: &CompilerDescriptorSourceV1,
+        module_handoff: CompilerModuleHandoffV2,
+    ) -> Result<InertSemanticCompilerModuleHandoffV3, ProductionSemanticLineageErrorV3> {
+        self.finish_with_inert_invocation(invocation, target, descriptor_source, module_handoff)
+    }
+
+    fn finish_with_inert_invocation(
+        self,
+        invocation: RustcInvocationDescriptorV3,
+        target: fe2o3_compiler_ffi::DeviceTargetV1,
+        descriptor_source: &CompilerDescriptorSourceV1,
+        module_handoff: CompilerModuleHandoffV2,
+    ) -> Result<InertSemanticCompilerModuleHandoffV3, ProductionSemanticLineageErrorV3> {
         if invocation.amd_target() != target.to_string()
             || descriptor_source.table().device_target() != target
             || module_handoff.target() != target

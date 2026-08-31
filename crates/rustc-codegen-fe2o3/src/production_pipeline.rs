@@ -912,6 +912,81 @@ impl TargetLoweredProductionCompilation {
         Ok(handoff)
     }
 
+    pub(crate) fn into_inert_semantic_worker_handoff_for_extraction(
+        self,
+        invocation: fe2o3_rustc_invocation::RustcInvocationDescriptorV3,
+    ) -> Result<fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffV3, ProductionPipelineError>
+    {
+        let Self {
+            admitted,
+            ranked_verification,
+            target_module,
+            workgroups: _,
+            llvm_ir,
+            bindings,
+        } = self;
+        let AuthenticatedProductionBindings {
+            rustc_identity_inventory,
+            rustc_preflight_plan,
+            rustc_target,
+            reference_effect_bindings: _,
+            debug_source_files,
+            debug_source_scopes,
+            debug_source_variables,
+            debug_capture_gap,
+            typed_descriptor_roots,
+            transaction,
+        } = bindings;
+        if rustc_preflight_plan.rustc_identity_inventory_sha256()
+            != rustc_identity_inventory.sha256()
+        {
+            return Err(ProductionPipelineError::RustcLineageMismatch);
+        }
+        if !transaction.compiler_custody.is_extraction_only() {
+            return Err(ProductionPipelineError::WorkerHandoffExtractionRequiresExtractionCustody);
+        }
+        let semantic_debug_inputs = prepare_production_semantic_debug_inputs_v1(
+            admitted.semantic_kir(),
+            &rustc_identity_inventory,
+            &rustc_preflight_plan,
+            &rustc_target,
+            &debug_source_files,
+            &debug_source_scopes,
+            &debug_source_variables,
+            debug_capture_gap,
+        );
+        let semantic_lineage =
+            crate::production_semantic_lineage_v3::PreparedProductionSemanticLineageV3::try_prepare(
+                &rustc_identity_inventory,
+                &rustc_preflight_plan,
+                &rustc_target,
+                ranked_verification,
+                &admitted,
+                &target_module,
+                &llvm_ir,
+                semantic_debug_inputs,
+            )
+            .map_err(ProductionPipelineError::SemanticLineage)?;
+        let target = rustc_target.device_target();
+        let compiler_module = AuthenticatedProductionTargetModule {
+            admitted,
+            target,
+            target_module,
+            llvm_ir,
+            typed_descriptor_roots,
+            compiler_ffi_envelope: transaction.compiler_ffi_envelope,
+        };
+        let prepared =
+            crate::production_worker_handoff::prepare_production_worker_handoff(compiler_module)
+                .map_err(ProductionPipelineError::WorkerHandoff)?;
+        let (handoff, descriptor_source) = prepared
+            .into_validated_parts()
+            .map_err(ProductionPipelineError::WorkerHandoff)?;
+        semantic_lineage
+            .finish_for_inert_extraction(invocation, target, &descriptor_source, handoff)
+            .map_err(ProductionPipelineError::SemanticLineage)
+    }
+
     fn prepare_worker_handoff(
         self,
     ) -> Result<PreparedProductionWorkerPublication, ProductionPipelineError> {

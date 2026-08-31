@@ -62,6 +62,7 @@ fe2o3-mir-model.workspace = true
 fe2o3-pliron.workspace = true
 fe2o3-proof-contracts.workspace = true
 fe2o3-verifier.workspace = true
+object = { version = "0.39.1", default-features = false, features = ["elf", "read_core", "std"] }
 
 [[bin]]
 name = "cargo-fe2o3"

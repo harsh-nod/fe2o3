@@ -11,9 +11,12 @@ use fe2o3_hsaco_finalize::{
 use fe2o3_kernel_descriptor::{BlockSizeV1, DeviceDescriptorTableV1, KernelDescriptorV1, KernelId};
 use fe2o3_runtime_protocol::{CompilerExecutionReceiptCarriageV1, WorkerV3LoadEnvelopeWireV1};
 use fe2o3_verifier::{
-    CompilerProofInputValidationErrorV4, CompilerTargetLineageValidationErrorV1,
-    ValidatedCompilerProofInputsV4, ValidatedCompilerTargetLineageV1,
-    validate_compiler_proof_inputs_v4, validate_compiler_target_lineage_v1,
+    CompilerMultiRootProofValidationErrorV1, CompilerProofInputValidationErrorV4,
+    CompilerTargetLineageValidationErrorV1, ValidatedCompilerMultiRootProofInputsV1,
+    ValidatedCompilerMultiRootTargetLineageV1, ValidatedCompilerProofInputsV4,
+    ValidatedCompilerTargetLineageV1, validate_compiler_multi_root_proof_inputs_v1,
+    validate_compiler_multi_root_target_lineage_v1, validate_compiler_proof_inputs_v4,
+    validate_compiler_target_lineage_v1,
 };
 use sha2::{Digest, Sha256};
 
@@ -1584,21 +1587,39 @@ impl<R: CompilerGeneratedKernelExpectationRosterV1> WorkerV3RosterVerificationRe
             .canonical_preimage()
     }
 
-    /// Decodes the one common V4 compiler-proof owner for the complete capsule.
+    /// Decodes the one common multi-root compiler-proof owner for the complete capsule.
     ///
     /// This custody does not establish the per-entry proof-to-executable, layout, or effect joins
     /// returned separately by the protected aggregate backend.
-    pub fn validate_compiler_proof_inputs_v4(
+    pub fn validate_compiler_multi_root_proof_inputs_v1(
         &self,
-    ) -> Result<ValidatedCompilerProofInputsV4, CompilerProofInputValidationErrorV4> {
+    ) -> Result<ValidatedCompilerMultiRootProofInputsV1, CompilerMultiRootProofValidationErrorV1>
+    {
         let receipts = self.semantic_compiler_handoff().capsule().receipts();
-        validate_compiler_proof_inputs_v4(
+        validate_compiler_multi_root_proof_inputs_v1(
             receipts.proof_binding(),
             receipts.semantic_mir(),
             receipts.middle_end(),
             receipts.kernel_ir(),
             receipts.mir_to_kir_correspondence(),
             receipts.formal_memory(),
+        )
+    }
+
+    /// Independently validates exact multi-root target association and KIR-to-LLVM replay.
+    ///
+    /// The caller must retain `proof_inputs` from
+    /// [`Self::validate_compiler_multi_root_proof_inputs_v1`]. The returned owner remains
+    /// authority-free until host promotion cross-binds it to every descriptor, physical symbol,
+    /// final compiler module, and finalizer derivation.
+    pub fn validate_compiler_multi_root_target_lineage_v1(
+        &self,
+        proof_inputs: &ValidatedCompilerMultiRootProofInputsV1,
+    ) -> Result<ValidatedCompilerMultiRootTargetLineageV1, CompilerTargetLineageValidationErrorV1>
+    {
+        validate_compiler_multi_root_target_lineage_v1(
+            self.semantic_compiler_handoff().capsule(),
+            proof_inputs,
         )
     }
 
@@ -1710,13 +1731,14 @@ impl WorkerV3ProtectedRosterEntryEvidenceV1 {
 
 /// One protected result for a complete marker roster.
 ///
-/// The finalizer derivation and V4 proof owner are common artifact custody. `entries` separately
-/// supplies the protected proof-to-executable, layout, effect, and universal-safety join for every
-/// canonical marker.
+/// The finalizer derivation and multi-root source/target owners are common artifact custody.
+/// `entries` separately supplies the protected proof-to-executable, layout, effect, and
+/// universal-safety join for every canonical marker.
 pub struct WorkerV3ProtectedRosterVerificationEvidenceV1 {
     finalizer_derivation: RevalidatedProtectedWorkerV3FinalizerDerivationV1,
     compiler_execution: WorkerV3CompilerExecutionVerificationV1,
-    proof_inputs: ValidatedCompilerProofInputsV4,
+    proof_inputs: WorkerV3RosterProofInputEvidenceV1,
+    target_lineage: WorkerV3RosterTargetLineageEvidenceV1,
     verifier_measurement_sha256: [u8; 32],
     verification_transcript_sha256: [u8; 32],
     entries: Vec<WorkerV3ProtectedRosterEntryEvidenceV1>,
@@ -1733,7 +1755,8 @@ impl WorkerV3ProtectedRosterVerificationEvidenceV1 {
     pub unsafe fn new(
         finalizer_derivation: RevalidatedProtectedWorkerV3FinalizerDerivationV1,
         compiler_execution: WorkerV3CompilerExecutionVerificationV1,
-        proof_inputs: ValidatedCompilerProofInputsV4,
+        proof_inputs: ValidatedCompilerMultiRootProofInputsV1,
+        target_lineage: ValidatedCompilerMultiRootTargetLineageV1,
         verifier_measurement_sha256: [u8; 32],
         verification_transcript_sha256: [u8; 32],
         entries: Vec<WorkerV3ProtectedRosterEntryEvidenceV1>,
@@ -1741,12 +1764,48 @@ impl WorkerV3ProtectedRosterVerificationEvidenceV1 {
         Self {
             finalizer_derivation,
             compiler_execution,
-            proof_inputs,
+            proof_inputs: WorkerV3RosterProofInputEvidenceV1::Validated(proof_inputs),
+            target_lineage: WorkerV3RosterTargetLineageEvidenceV1::Validated(Box::new(
+                target_lineage,
+            )),
             verifier_measurement_sha256,
             verification_transcript_sha256,
             entries,
         }
     }
+
+    /// Constructs descriptive aggregate evidence for the explicit integration-test verifier seam.
+    #[cfg(feature = "worker-v3-verifier-test-support")]
+    #[doc(hidden)]
+    pub unsafe fn synthetic_for_test_only(
+        finalizer_derivation: RevalidatedProtectedWorkerV3FinalizerDerivationV1,
+        compiler_execution: WorkerV3CompilerExecutionVerificationV1,
+        verifier_measurement_sha256: [u8; 32],
+        verification_transcript_sha256: [u8; 32],
+        entries: Vec<WorkerV3ProtectedRosterEntryEvidenceV1>,
+    ) -> Self {
+        Self {
+            finalizer_derivation,
+            compiler_execution,
+            proof_inputs: WorkerV3RosterProofInputEvidenceV1::Synthetic,
+            target_lineage: WorkerV3RosterTargetLineageEvidenceV1::Synthetic,
+            verifier_measurement_sha256,
+            verification_transcript_sha256,
+            entries,
+        }
+    }
+}
+
+enum WorkerV3RosterProofInputEvidenceV1 {
+    Validated(ValidatedCompilerMultiRootProofInputsV1),
+    #[cfg(feature = "worker-v3-verifier-test-support")]
+    Synthetic,
+}
+
+enum WorkerV3RosterTargetLineageEvidenceV1 {
+    Validated(Box<ValidatedCompilerMultiRootTargetLineageV1>),
+    #[cfg(feature = "worker-v3-verifier-test-support")]
+    Synthetic,
 }
 
 /// External protected authority for one complete roster request.
@@ -1759,8 +1818,8 @@ impl WorkerV3ProtectedRosterVerificationEvidenceV1 {
 /// the exact replay, rather than echoing a host digest. They must additionally inspect every
 /// descriptor and independently selected physical executable, authenticate one ordered entry result
 /// for every marker, and establish each result for all concrete invocations satisfying that
-/// marker's generated contracts. The common V4 proof owner alone is not a compiler-produced
-/// multi-root proof-to-executable theorem.
+/// marker's generated contracts. The common multi-root source and target owners establish exact
+/// compiler custody, but are not by themselves a proof-to-executable theorem.
 pub unsafe trait WorkerV3ProtectedRosterVerifierBackendV1<
     R: CompilerGeneratedKernelExpectationRosterV1,
 >
@@ -1816,6 +1875,7 @@ impl<B> WorkerV3ProtectedRosterVerifierAdapterV1<B> {
             finalizer_derivation: evidence.finalizer_derivation,
             compiler_execution: evidence.compiler_execution,
             proof_inputs: evidence.proof_inputs,
+            target_lineage: evidence.target_lineage,
             verifier_measurement_sha256: evidence.verifier_measurement_sha256,
             verification_transcript_sha256: evidence.verification_transcript_sha256,
             entries: evidence.entries,
@@ -1837,7 +1897,8 @@ pub struct WorkerV3RosterVerificationDecisionV1 {
     code_object_version: CodeObjectVersion,
     finalizer_derivation: RevalidatedProtectedWorkerV3FinalizerDerivationV1,
     compiler_execution: WorkerV3CompilerExecutionVerificationV1,
-    proof_inputs: ValidatedCompilerProofInputsV4,
+    proof_inputs: WorkerV3RosterProofInputEvidenceV1,
+    target_lineage: WorkerV3RosterTargetLineageEvidenceV1,
     verifier_measurement_sha256: [u8; 32],
     verification_transcript_sha256: [u8; 32],
     entries: Vec<WorkerV3ProtectedRosterEntryEvidenceV1>,
@@ -1877,28 +1938,58 @@ impl WorkerV3RosterVerificationDecisionV1 {
         &self.compiler_execution
     }
 
-    /// Returns the one common decoded V4 compiler-proof owner for this artifact.
-    pub const fn validated_compiler_proof_inputs(&self) -> &ValidatedCompilerProofInputsV4 {
-        &self.proof_inputs
+    /// Returns the one common decoded multi-root compiler-proof owner for this artifact.
+    pub const fn validated_compiler_proof_inputs(
+        &self,
+    ) -> Option<&ValidatedCompilerMultiRootProofInputsV1> {
+        match &self.proof_inputs {
+            WorkerV3RosterProofInputEvidenceV1::Validated(inputs) => Some(inputs),
+            #[cfg(feature = "worker-v3-verifier-test-support")]
+            WorkerV3RosterProofInputEvidenceV1::Synthetic => None,
+        }
+    }
+
+    /// Returns exact multi-root target-lineage and KIR-to-LLVM replay custody.
+    pub const fn validated_compiler_target_lineage(
+        &self,
+    ) -> Option<&ValidatedCompilerMultiRootTargetLineageV1> {
+        match &self.target_lineage {
+            WorkerV3RosterTargetLineageEvidenceV1::Validated(lineage) => Some(lineage),
+            #[cfg(feature = "worker-v3-verifier-test-support")]
+            WorkerV3RosterTargetLineageEvidenceV1::Synthetic => None,
+        }
     }
 
     /// Reports common compiler and signed-Verus custody only.
     ///
     /// Per-entry proof-to-executable, layout, and effect authority is retained separately in
     /// [`Self::entries`].
-    pub const fn retains_current_compiler_and_signed_verus_evidence(&self) -> bool {
-        self.proof_inputs
-            .authenticates_signed_verus_receipt_under_embedded_key()
-            && self
-                .compiler_execution
-                .authenticates_signed_currentness_evidence()
+    pub fn retains_current_compiler_and_signed_verus_evidence(&self) -> bool {
+        match (&self.proof_inputs, &self.target_lineage) {
+            (
+                WorkerV3RosterProofInputEvidenceV1::Validated(inputs),
+                WorkerV3RosterTargetLineageEvidenceV1::Validated(target),
+            ) => {
+                inputs.roots().iter().all(|root| {
+                    root.verus_execution()
+                        .authenticates_signed_receipt_under_embedded_key()
+                }) && target.has_exact_receipt_association()
+                    && target.has_exact_kir_to_llvm_replay()
+                    && self
+                        .compiler_execution
+                        .authenticates_signed_currentness_evidence()
+            }
+            #[cfg(feature = "worker-v3-verifier-test-support")]
+            _ => false,
+        }
     }
 }
 
 /// Move-only authenticated custody for one complete recovered roster.
 ///
 /// The owner retains the sole recovered artifact, one current-publication token, one aggregate
-/// decision, and one common V4 proof-input owner. It grants no load or launch authority.
+/// decision, and one common multi-root source/target custody pair. It grants no load or launch
+/// authority.
 pub struct AuthenticatedWorkerV3RosterV1<R> {
     admission: RecoveredWorkerV3PinnedRosterV1<R>,
     current: DurableCurrentLinkPublicationTokenV1,
@@ -2410,14 +2501,21 @@ fn validate_roster_decision<R: CompilerGeneratedKernelExpectationRosterV1>(
             }
         }
     }
-    validate_roster_decision_proof_inputs(request, decision)
+    validate_roster_decision_proof_inputs(request, decision)?;
+    validate_roster_decision_target_lineage(request, decision)
 }
 
 fn validate_roster_decision_proof_inputs<R: CompilerGeneratedKernelExpectationRosterV1>(
     request: &WorkerV3RosterVerificationRequestV1<'_, R>,
     decision: &WorkerV3RosterVerificationDecisionV1,
 ) -> Result<(), WorkerV3RosterVerificationDecisionErrorV1> {
-    let inputs = &decision.proof_inputs;
+    #[cfg(not(feature = "worker-v3-verifier-test-support"))]
+    let WorkerV3RosterProofInputEvidenceV1::Validated(inputs) = &decision.proof_inputs;
+    #[cfg(feature = "worker-v3-verifier-test-support")]
+    let inputs = match &decision.proof_inputs {
+        WorkerV3RosterProofInputEvidenceV1::Validated(inputs) => inputs,
+        WorkerV3RosterProofInputEvidenceV1::Synthetic => return Ok(()),
+    };
     let receipts = request.semantic_compiler_handoff().capsule().receipts();
     for (matches, field) in [
         (
@@ -2425,9 +2523,9 @@ fn validate_roster_decision_proof_inputs<R: CompilerGeneratedKernelExpectationRo
             "proof-binding association",
         ),
         (
-            inputs.verus_execution().canonical_bytes()
+            inputs.verus_roster().canonical_bytes()
                 == inputs.association().verus_execution_evidence(),
-            "aggregate Verus execution",
+            "multi-root Verus roster",
         ),
         (
             inputs.semantic_mir().canonical_encoding()
@@ -2435,22 +2533,23 @@ fn validate_roster_decision_proof_inputs<R: CompilerGeneratedKernelExpectationRo
             "semantic MIR",
         ),
         (
-            inputs.middle_end().canonical_bytes() == receipts.middle_end().canonical_preimage(),
-            "middle-end evidence",
+            inputs.middle_end_roster().canonical_bytes()
+                == receipts.middle_end().canonical_preimage(),
+            "middle-end roster",
         ),
         (
             inputs.kernel_ir().canonical_bytes() == receipts.kernel_ir().canonical_preimage(),
             "Kernel IR",
         ),
         (
-            inputs.correspondence().canonical_bytes()
+            inputs.correspondence_roster().canonical_bytes()
                 == receipts.mir_to_kir_correspondence().canonical_preimage(),
-            "MIR-to-KIR correspondence",
+            "MIR-to-KIR correspondence roster",
         ),
         (
-            inputs.formal_memory().canonical_bytes()
+            inputs.formal_memory_roster().canonical_bytes()
                 == receipts.formal_memory().canonical_preimage(),
-            "formal-memory admission",
+            "formal-memory roster",
         ),
     ] {
         if !matches {
@@ -2463,6 +2562,254 @@ fn validate_roster_decision_proof_inputs<R: CompilerGeneratedKernelExpectationRo
                 "proof-binding receipt identity",
             ),
         );
+    }
+    if inputs.roots().len() != R::ENTRIES.len() {
+        return Err(
+            WorkerV3RosterVerificationDecisionErrorV1::EntryCountMismatch {
+                expected: R::ENTRIES.len(),
+                actual: inputs.roots().len(),
+            },
+        );
+    }
+    let mut matched_roots = vec![false; inputs.roots().len()];
+    for (ordinal, expected) in R::ENTRIES.iter().enumerate() {
+        let descriptor = request
+            .descriptor(ordinal)
+            .expect("admitted roster retains every descriptor");
+        let physical = request
+            .physical_kernel(ordinal)
+            .expect("admitted roster retains every physical kernel");
+        let root_index = inputs
+            .roots()
+            .iter()
+            .position(|root| root.kernel_binding() == &expected.kernel_binding_id())
+            .ok_or(
+                WorkerV3RosterVerificationDecisionErrorV1::EntryIdentityMismatch {
+                    ordinal,
+                    field: "multi-root proof binding",
+                },
+            )?;
+        if matched_roots[root_index] {
+            return Err(
+                WorkerV3RosterVerificationDecisionErrorV1::EntryIdentityMismatch {
+                    ordinal,
+                    field: "unique multi-root proof binding",
+                },
+            );
+        }
+        matched_roots[root_index] = true;
+        let root = &inputs.roots()[root_index];
+        for (matches, field) in [
+            (
+                root.logical_name() == expected.logical_name(),
+                "proof logical name",
+            ),
+            (
+                root.export_symbol() == expected.export_name(),
+                "proof export name",
+            ),
+            (
+                root.kernel_id() == expected.export_name(),
+                "proof kernel ID",
+            ),
+            (
+                descriptor.logical_name().as_str() == root.logical_name(),
+                "descriptor logical name",
+            ),
+            (
+                descriptor.entry_name().as_str() == root.export_symbol(),
+                "descriptor export name",
+            ),
+            (
+                descriptor.kernel_id().as_bytes() == root.kernel_binding(),
+                "descriptor kernel binding",
+            ),
+            (
+                physical.name() == root.export_symbol(),
+                "physical export name",
+            ),
+            (
+                physical.symbol() == descriptor.descriptor_symbol().as_str(),
+                "physical descriptor symbol",
+            ),
+        ] {
+            if !matches {
+                return Err(
+                    WorkerV3RosterVerificationDecisionErrorV1::EntryIdentityMismatch {
+                        ordinal,
+                        field,
+                    },
+                );
+            }
+        }
+    }
+    if matched_roots.iter().any(|matched| !matched) {
+        return Err(
+            WorkerV3RosterVerificationDecisionErrorV1::ProofInputMismatch(
+                "complete multi-root proof roster",
+            ),
+        );
+    }
+    Ok(())
+}
+
+fn validate_roster_decision_target_lineage<R: CompilerGeneratedKernelExpectationRosterV1>(
+    request: &WorkerV3RosterVerificationRequestV1<'_, R>,
+    decision: &WorkerV3RosterVerificationDecisionV1,
+) -> Result<(), WorkerV3RosterVerificationDecisionErrorV1> {
+    #[cfg(not(feature = "worker-v3-verifier-test-support"))]
+    let WorkerV3RosterTargetLineageEvidenceV1::Validated(lineage) = &decision.target_lineage;
+    #[cfg(feature = "worker-v3-verifier-test-support")]
+    let lineage = match &decision.target_lineage {
+        WorkerV3RosterTargetLineageEvidenceV1::Validated(lineage) => lineage,
+        WorkerV3RosterTargetLineageEvidenceV1::Synthetic => return Ok(()),
+    };
+    #[cfg(not(feature = "worker-v3-verifier-test-support"))]
+    let WorkerV3RosterProofInputEvidenceV1::Validated(proof_inputs) = &decision.proof_inputs;
+    #[cfg(feature = "worker-v3-verifier-test-support")]
+    let proof_inputs = match &decision.proof_inputs {
+        WorkerV3RosterProofInputEvidenceV1::Validated(inputs) => inputs,
+        WorkerV3RosterProofInputEvidenceV1::Synthetic => {
+            return Err(
+                WorkerV3RosterVerificationDecisionErrorV1::TargetLineageMismatch(
+                    "source/target custody shape",
+                ),
+            );
+        }
+    };
+    let capsule = request.semantic_compiler_handoff().capsule();
+    let receipts = capsule.receipts();
+    let module = request
+        .semantic_compiler_handoff()
+        .module_handoff()
+        .module_identity();
+    let finalizer_module = request.finalizer_derivation().compiler_module_identity();
+    let final_llvm = lineage.final_llvm_identity();
+    let target_binding = lineage.target_binding_receipt_identity();
+    let data_layout = lineage.data_layout_receipt_identity();
+    let semantic_to_llvm = lineage.semantic_to_llvm_receipt_identity();
+    let final_commitment = lineage.final_compiler_module_commitment_identity();
+    for (matches, field) in [
+        (
+            lineage.target_binding().canonical_bytes()
+                == receipts.target_binding().canonical_preimage(),
+            "target-binding transcript",
+        ),
+        (
+            lineage.data_layout().canonical_bytes() == receipts.data_layout().canonical_preimage(),
+            "data-layout transcript",
+        ),
+        (
+            lineage.semantic_to_llvm().canonical_bytes()
+                == receipts.semantic_to_llvm().canonical_preimage(),
+            "semantic-to-LLVM transcript",
+        ),
+        (
+            target_binding.sha256() == *receipts.target_binding().identity().sha256()
+                && target_binding.byte_len() == receipts.target_binding().identity().byte_len(),
+            "target-binding receipt",
+        ),
+        (
+            data_layout.sha256() == *receipts.data_layout().identity().sha256()
+                && data_layout.byte_len() == receipts.data_layout().identity().byte_len(),
+            "data-layout receipt",
+        ),
+        (
+            semantic_to_llvm.sha256() == *receipts.semantic_to_llvm().identity().sha256()
+                && semantic_to_llvm.byte_len() == receipts.semantic_to_llvm().identity().byte_len(),
+            "semantic-to-LLVM receipt",
+        ),
+        (
+            lineage.replay().kernel_ir_receipt_identity() == receipts.kernel_ir().identity(),
+            "replayed Kernel IR receipt",
+        ),
+        (
+            lineage.replay().amdgpu_lowering_receipt_identity()
+                == receipts.amdgpu_lowering().identity(),
+            "replayed AMDGPU-lowering receipt",
+        ),
+        (
+            final_llvm.sha256() == *module.sha256() && final_llvm.byte_len() == module.byte_len(),
+            "final LLVM module",
+        ),
+        (
+            final_llvm.sha256() == *finalizer_module.sha256()
+                && final_llvm.byte_len() == finalizer_module.byte_len(),
+            "finalizer compiler module",
+        ),
+        (
+            final_commitment.sha256()
+                == *receipts
+                    .final_compiler_module_commitment()
+                    .identity()
+                    .sha256()
+                && final_commitment.byte_len()
+                    == receipts
+                        .final_compiler_module_commitment()
+                        .identity()
+                        .byte_len(),
+            "final compiler-module commitment",
+        ),
+        (
+            lineage.target_binding().code_object_version()
+                == u16::from(request.code_object_version().number()),
+            "code-object version",
+        ),
+        (
+            lineage.target_binding().configured_target() == request.target().to_string(),
+            "configured target",
+        ),
+        (
+            lineage.target_binding().root_count() == R::ENTRIES.len(),
+            "target root count",
+        ),
+    ] {
+        if !matches {
+            return Err(WorkerV3RosterVerificationDecisionErrorV1::TargetLineageMismatch(field));
+        }
+    }
+
+    for (ordinal, expected) in R::ENTRIES.iter().enumerate() {
+        let descriptor = request
+            .descriptor(ordinal)
+            .expect("admitted roster retains every descriptor");
+        let root_index = proof_inputs
+            .roots()
+            .iter()
+            .position(|root| root.kernel_binding() == &expected.kernel_binding_id())
+            .ok_or(
+                WorkerV3RosterVerificationDecisionErrorV1::EntryIdentityMismatch {
+                    ordinal,
+                    field: "target-lineage proof binding",
+                },
+            )?;
+        let root = &proof_inputs.roots()[root_index];
+        let target_root = lineage.target_binding().workgroup(root_index).ok_or(
+            WorkerV3RosterVerificationDecisionErrorV1::TargetLineageMismatch(
+                "per-root target workgroup",
+            ),
+        )?;
+        let descriptor_workgroup = match descriptor.launch().block_size() {
+            BlockSizeV1::Exact(dimensions) => [dimensions.x(), dimensions.y(), dimensions.z()],
+            BlockSizeV1::Any | BlockSizeV1::AtMost(_) => {
+                return Err(
+                    WorkerV3RosterVerificationDecisionErrorV1::TargetLineageMismatch(
+                        "exact descriptor workgroup",
+                    ),
+                );
+            }
+        };
+        if target_root.kernel() != root.kernel_id()
+            || target_root.workgroup() != root.workgroup()
+            || descriptor_workgroup != root.workgroup()
+        {
+            return Err(
+                WorkerV3RosterVerificationDecisionErrorV1::EntryIdentityMismatch {
+                    ordinal,
+                    field: "target workgroup",
+                },
+            );
+        }
     }
     Ok(())
 }
@@ -2504,6 +2851,7 @@ pub enum WorkerV3RosterVerificationDecisionErrorV1 {
         property: WorkerV3SafetyPropertyV1,
     },
     ProofInputMismatch(&'static str),
+    TargetLineageMismatch(&'static str),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -2570,6 +2918,10 @@ impl fmt::Display for WorkerV3RosterVerificationDecisionErrorV1 {
             Self::ProofInputMismatch(field) => write!(
                 formatter,
                 "validated compiler {field} differs from the exact roster request",
+            ),
+            Self::TargetLineageMismatch(field) => write!(
+                formatter,
+                "validated compiler target-lineage {field} differs from the exact roster request",
             ),
         }
     }
