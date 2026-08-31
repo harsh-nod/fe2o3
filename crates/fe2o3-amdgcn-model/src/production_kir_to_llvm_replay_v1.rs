@@ -1,11 +1,10 @@
-use std::error::Error;
-use std::fmt;
+use std::{collections::BTreeSet, error::Error, fmt};
 
 use fe2o3_amd_target::ProductionAmdTargetProfileV1;
 use fe2o3_kernel_ir::{
-    KERNEL_IR_MAGIC_V1, KERNEL_IR_VERSION_V8, KERNEL_IR_VERSION_V9, KernelId, MAX_MODULE_BYTES_V1,
-    MAX_TEXT_BYTES_V1, Module, VerifiedCanonicalKernelIrErrorV8, VerifiedCanonicalKernelIrErrorV9,
-    VerifiedCanonicalKernelIrV8, VerifiedCanonicalKernelIrV9,
+    KERNEL_IR_MAGIC_V1, KERNEL_IR_VERSION_V8, KERNEL_IR_VERSION_V9, KernelId, MAX_KERNELS_V1,
+    MAX_MODULE_BYTES_V1, MAX_TEXT_BYTES_V1, Module, VerifiedCanonicalKernelIrErrorV8,
+    VerifiedCanonicalKernelIrErrorV9, VerifiedCanonicalKernelIrV8, VerifiedCanonicalKernelIrV9,
 };
 use sha2::{Digest, Sha256};
 
@@ -18,6 +17,7 @@ use crate::{
 
 const EVIDENCE_MAGIC_V1: &[u8] = b"FE2O3/KIR-TO-LLVM-REPLAY/V1\0";
 const EVIDENCE_VERSION_V1: u16 = 1;
+const EVIDENCE_VERSION_V2: u16 = 2;
 const EXACT_DETERMINISTIC_REPLAY_CLAIM_V1: u8 = 1;
 const RESERVED_V1: u8 = 0;
 const GFX942_PROFILE_TAG_V1: u8 = 1;
@@ -106,7 +106,7 @@ pub struct CanonicalProductionKirToLlvmReplayEvidenceV1 {
     profile: ProductionAmdTargetProfileV1,
     neutral_kernel_ir: ProductionReplayKernelIrIdentityV1,
     target_bound_kernel_ir: ProductionReplayKernelIrIdentityV1,
-    kernel_id: KernelId,
+    kernel_ids: Box<[KernelId]>,
     pre_descriptor_llvm: Box<str>,
 }
 
@@ -126,7 +126,7 @@ impl CanonicalProductionKirToLlvmReplayEvidenceV1 {
         if target_bound.module() != target_bound_module {
             return Err(ProductionKirToLlvmReplayErrorV1::LiveTargetModuleMismatch);
         }
-        let kernel_id = target_bound.kernel_id().clone();
+        let kernel_ids = target_bound.kernel_ids();
         let (_, target_identity) = canonicalize_target_module(target_bound.module(), version)?;
         let replayed_llvm = replay_llvm(target_bound.module(), profile)?;
         if replayed_llvm.as_bytes() != pre_descriptor_llvm.as_bytes() {
@@ -137,7 +137,7 @@ impl CanonicalProductionKirToLlvmReplayEvidenceV1 {
             profile,
             neutral_identity,
             target_identity,
-            &kernel_id,
+            kernel_ids,
             pre_descriptor_llvm,
         )?;
         let evidence = Self::decode(&canonical_bytes)?;
@@ -154,25 +154,56 @@ impl CanonicalProductionKirToLlvmReplayEvidenceV1 {
             return Err(ProductionKirToLlvmReplayErrorV1::TooLarge);
         }
         let mut reader = Reader::new(bytes);
-        if reader.take(EVIDENCE_MAGIC_V1.len())? != EVIDENCE_MAGIC_V1
-            || reader.u16()? != EVIDENCE_VERSION_V1
+        if reader.take(EVIDENCE_MAGIC_V1.len())? != EVIDENCE_MAGIC_V1 {
+            return Err(ProductionKirToLlvmReplayErrorV1::InvalidHeader);
+        }
+        let version = reader.u16()?;
+        if !matches!(version, EVIDENCE_VERSION_V1 | EVIDENCE_VERSION_V2)
             || reader.u8()? != EXACT_DETERMINISTIC_REPLAY_CLAIM_V1
         {
             return Err(ProductionKirToLlvmReplayErrorV1::InvalidHeader);
         }
         let profile = decode_profile(reader.u8()?)?;
-        let version = ProductionReplayKernelIrVersionV1::from_tag(reader.u8()?)?;
+        let kernel_ir_version = ProductionReplayKernelIrVersionV1::from_tag(reader.u8()?)?;
         if reader.u8()? != RESERVED_V1 {
             return Err(ProductionKirToLlvmReplayErrorV1::InvalidHeader);
         }
-        let neutral_kernel_ir = decode_kernel_ir_identity(&mut reader, version)?;
-        let target_bound_kernel_ir = decode_kernel_ir_identity(&mut reader, version)?;
-        let kernel_id_length = reader.usize_u32()?;
-        if kernel_id_length == 0 || kernel_id_length > MAX_TEXT_BYTES_V1 {
+        let neutral_kernel_ir = decode_kernel_ir_identity(&mut reader, kernel_ir_version)?;
+        let target_bound_kernel_ir = decode_kernel_ir_identity(&mut reader, kernel_ir_version)?;
+        let kernel_count = if version == EVIDENCE_VERSION_V1 {
+            1
+        } else {
+            reader.usize_u32()?
+        };
+        const MIN_KERNEL_ID_FRAME_BYTES_V1: usize = 5;
+        const MIN_TRAILING_LLVM_FRAME_BYTES_V1: usize = 5;
+        let minimum_framing = kernel_count
+            .checked_mul(MIN_KERNEL_ID_FRAME_BYTES_V1)
+            .and_then(|length| length.checked_add(MIN_TRAILING_LLVM_FRAME_BYTES_V1))
+            .ok_or(ProductionKirToLlvmReplayErrorV1::InvalidLength)?;
+        if kernel_count == 0
+            || kernel_count > MAX_KERNELS_V1
+            || minimum_framing > reader.remaining()
+        {
             return Err(ProductionKirToLlvmReplayErrorV1::InvalidLength);
         }
-        let kernel_id = std::str::from_utf8(reader.take(kernel_id_length)?)
-            .map_err(|_| ProductionKirToLlvmReplayErrorV1::InvalidUtf8)?;
+        let mut kernel_ids = Vec::new();
+        kernel_ids
+            .try_reserve_exact(kernel_count)
+            .map_err(|_| ProductionKirToLlvmReplayErrorV1::InvalidLength)?;
+        let mut seen_kernel_ids = BTreeSet::new();
+        for _ in 0..kernel_count {
+            let kernel_id_length = reader.usize_u32()?;
+            if kernel_id_length == 0 || kernel_id_length > MAX_TEXT_BYTES_V1 {
+                return Err(ProductionKirToLlvmReplayErrorV1::InvalidLength);
+            }
+            let kernel_id = std::str::from_utf8(reader.take(kernel_id_length)?)
+                .map_err(|_| ProductionKirToLlvmReplayErrorV1::InvalidUtf8)?;
+            if !seen_kernel_ids.insert(kernel_id) {
+                return Err(ProductionKirToLlvmReplayErrorV1::KernelIdMismatch);
+            }
+            kernel_ids.push(KernelId::new(kernel_id));
+        }
         let llvm_length = reader.usize_u32()?;
         if llvm_length == 0 || llvm_length > MAX_PRODUCTION_PRE_DESCRIPTOR_LLVM_BYTES_V1 {
             return Err(ProductionKirToLlvmReplayErrorV1::InvalidLength);
@@ -188,7 +219,7 @@ impl CanonicalProductionKirToLlvmReplayEvidenceV1 {
             profile,
             neutral_kernel_ir,
             target_bound_kernel_ir,
-            &KernelId::new(kernel_id),
+            &kernel_ids,
             pre_descriptor_llvm,
         )?;
         if canonical_bytes.as_slice() != bytes {
@@ -201,7 +232,7 @@ impl CanonicalProductionKirToLlvmReplayEvidenceV1 {
             profile,
             neutral_kernel_ir,
             target_bound_kernel_ir,
-            kernel_id: KernelId::new(kernel_id),
+            kernel_ids: kernel_ids.into_boxed_slice(),
             pre_descriptor_llvm: pre_descriptor_llvm.to_owned().into_boxed_str(),
         })
     }
@@ -222,7 +253,7 @@ impl CanonicalProductionKirToLlvmReplayEvidenceV1 {
 
         let target_bound = bind_production_target_v1(&neutral_module, self.profile)
             .map_err(ProductionKirToLlvmReplayErrorV1::TargetBinding)?;
-        if target_bound.kernel_id() != &self.kernel_id {
+        if target_bound.kernel_ids() != self.kernel_ids.as_ref() {
             return Err(ProductionKirToLlvmReplayErrorV1::KernelIdMismatch);
         }
         let (target_owner, target_identity) =
@@ -265,8 +296,9 @@ impl CanonicalProductionKirToLlvmReplayEvidenceV1 {
         self.target_bound_kernel_ir
     }
 
-    pub fn kernel_id(&self) -> &KernelId {
-        &self.kernel_id
+    /// Returns every replay-bound kernel identity in canonical module order.
+    pub fn kernel_ids(&self) -> &[KernelId] {
+        &self.kernel_ids
     }
 
     pub fn pre_descriptor_llvm(&self) -> &str {
@@ -447,7 +479,7 @@ fn encode_evidence(
     profile: ProductionAmdTargetProfileV1,
     neutral_kernel_ir: ProductionReplayKernelIrIdentityV1,
     target_bound_kernel_ir: ProductionReplayKernelIrIdentityV1,
-    kernel_id: &KernelId,
+    kernel_ids: &[KernelId],
     pre_descriptor_llvm: &str,
 ) -> Result<Vec<u8>, ProductionKirToLlvmReplayErrorV1> {
     if neutral_kernel_ir.version != target_bound_kernel_ir.version
@@ -457,38 +489,66 @@ fn encode_evidence(
         || target_bound_kernel_ir.byte_len > MAX_MODULE_BYTES_V1 as u64
         || neutral_kernel_ir.sha256 == [0; 32]
         || target_bound_kernel_ir.sha256 == [0; 32]
-        || kernel_id.as_str().is_empty()
-        || kernel_id.as_str().len() > MAX_TEXT_BYTES_V1
+        || kernel_ids.is_empty()
+        || kernel_ids.len() > MAX_KERNELS_V1
+        || kernel_ids.iter().any(|kernel_id| {
+            kernel_id.as_str().is_empty() || kernel_id.as_str().len() > MAX_TEXT_BYTES_V1
+        })
+        || kernel_ids.windows(2).any(|pair| pair[0] == pair[1])
         || pre_descriptor_llvm.is_empty()
         || pre_descriptor_llvm.len() > MAX_PRODUCTION_PRE_DESCRIPTOR_LLVM_BYTES_V1
         || pre_descriptor_llvm.as_bytes().contains(&0)
     {
         return Err(ProductionKirToLlvmReplayErrorV1::InvalidLength);
     }
+    let kernel_bytes = kernel_ids.iter().try_fold(0_usize, |total, kernel_id| {
+        total
+            .checked_add(4)
+            .and_then(|value| value.checked_add(kernel_id.as_str().len()))
+            .ok_or(ProductionKirToLlvmReplayErrorV1::Overflow)
+    })?;
+    let roster_header = usize::from(kernel_ids.len() != 1) * 4;
     let total = EVIDENCE_MAGIC_V1
         .len()
         .checked_add(2 + 4 + 32 + 8 + 32 + 8 + 4 + 4)
-        .and_then(|value| value.checked_add(kernel_id.as_str().len()))
+        .and_then(|value| value.checked_add(roster_header))
+        .and_then(|value| value.checked_add(kernel_bytes.saturating_sub(4)))
         .and_then(|value| value.checked_add(pre_descriptor_llvm.len()))
         .ok_or(ProductionKirToLlvmReplayErrorV1::Overflow)?;
     if total > MAX_PRODUCTION_KIR_TO_LLVM_REPLAY_EVIDENCE_BYTES_V1 {
         return Err(ProductionKirToLlvmReplayErrorV1::TooLarge);
     }
-    let kernel_length = u32::try_from(kernel_id.as_str().len())
-        .map_err(|_| ProductionKirToLlvmReplayErrorV1::Overflow)?;
     let llvm_length = u32::try_from(pre_descriptor_llvm.len())
         .map_err(|_| ProductionKirToLlvmReplayErrorV1::Overflow)?;
     let mut bytes = Vec::with_capacity(total);
     bytes.extend_from_slice(EVIDENCE_MAGIC_V1);
-    bytes.extend_from_slice(&EVIDENCE_VERSION_V1.to_le_bytes());
+    let evidence_version = if kernel_ids.len() == 1 {
+        EVIDENCE_VERSION_V1
+    } else {
+        EVIDENCE_VERSION_V2
+    };
+    bytes.extend_from_slice(&evidence_version.to_le_bytes());
     bytes.push(EXACT_DETERMINISTIC_REPLAY_CLAIM_V1);
     bytes.push(encode_profile(profile));
     bytes.push(neutral_kernel_ir.version.tag());
     bytes.push(RESERVED_V1);
     encode_kernel_ir_identity(&mut bytes, neutral_kernel_ir);
     encode_kernel_ir_identity(&mut bytes, target_bound_kernel_ir);
-    bytes.extend_from_slice(&kernel_length.to_le_bytes());
-    bytes.extend_from_slice(kernel_id.as_str().as_bytes());
+    if evidence_version == EVIDENCE_VERSION_V2 {
+        bytes.extend_from_slice(
+            &u32::try_from(kernel_ids.len())
+                .map_err(|_| ProductionKirToLlvmReplayErrorV1::Overflow)?
+                .to_le_bytes(),
+        );
+    }
+    for kernel_id in kernel_ids {
+        bytes.extend_from_slice(
+            &u32::try_from(kernel_id.as_str().len())
+                .map_err(|_| ProductionKirToLlvmReplayErrorV1::Overflow)?
+                .to_le_bytes(),
+        );
+        bytes.extend_from_slice(kernel_id.as_str().as_bytes());
+    }
     bytes.extend_from_slice(&llvm_length.to_le_bytes());
     bytes.extend_from_slice(pre_descriptor_llvm.as_bytes());
     if bytes.len() != total {
@@ -686,6 +746,10 @@ impl<'a> Reader<'a> {
         usize::try_from(self.u32()?).map_err(|_| ProductionKirToLlvmReplayErrorV1::Overflow)
     }
 
+    fn remaining(&self) -> usize {
+        self.bytes.len().saturating_sub(self.offset)
+    }
+
     fn finish(self) -> Result<(), ProductionKirToLlvmReplayErrorV1> {
         if self.offset == self.bytes.len() {
             Ok(())
@@ -724,6 +788,31 @@ mod tests {
         let mut module = Module::new(name);
         module.functions.push(function);
         module.kernels.push(kernel);
+        module
+    }
+
+    fn multi_neutral_module(name: &str, count: usize) -> Module {
+        let mut module = Module::new(name);
+        for index in 0..count {
+            let mut block = BasicBlock::new(BlockId(0));
+            block.terminator = Some(Terminator::Return { values: vec![] });
+            let entry = format!("{name}_entry_{index}");
+            module.functions.push(Function::kernel_entry(
+                entry.clone(),
+                Signature::new(vec![], vec![]),
+                vec![],
+                vec![block],
+            ));
+            let mut kernel = fe2o3_kernel_ir::Kernel::new(
+                format!("{name}_kernel_{index}"),
+                entry,
+                LaunchDomain::D1 {
+                    x: LaunchExtent::Static(1),
+                },
+            );
+            kernel.workgroup_size = Some(WorkgroupSize::new(64 << index, 1, 1));
+            module.kernels.push(kernel);
+        }
         module
     }
 
@@ -772,6 +861,65 @@ mod tests {
         assert!(validated.has_exact_kir_to_llvm_replay());
         assert!(!validated.establishes_formal_semantic_refinement());
         assert!(!validated.grants_object_or_runtime_authority());
+    }
+
+    #[test]
+    fn two_and_three_root_replay_retains_one_ordered_multi_entry_llvm_module() {
+        for count in [2, 3] {
+            let neutral = VerifiedCanonicalKernelIrV8::from_module(multi_neutral_module(
+                "multi_replay",
+                count,
+            ))
+            .unwrap();
+            let neutral_bytes = neutral.into_canonical_bytes();
+            let (_, neutral_module, _) =
+                decode_exact_kernel_ir(&neutral_bytes, ProductionReplayKernelIrVersionV1::V8)
+                    .unwrap();
+            let target =
+                bind_production_target_v1(&neutral_module, ProductionAmdTargetProfileV1::Gfx942)
+                    .unwrap();
+            let expected_ids = target.kernel_ids().to_vec();
+            let llvm = replay_llvm(target.module(), ProductionAmdTargetProfileV1::Gfx942).unwrap();
+            let evidence = CanonicalProductionKirToLlvmReplayEvidenceV1::from_live_inputs(
+                &neutral_bytes,
+                target.module(),
+                ProductionAmdTargetProfileV1::Gfx942,
+                &llvm,
+            )
+            .unwrap();
+            assert_eq!(evidence.kernel_ids(), expected_ids);
+            assert_eq!(
+                u16::from_le_bytes(
+                    evidence.canonical_bytes()
+                        [EVIDENCE_MAGIC_V1.len()..EVIDENCE_MAGIC_V1.len() + 2]
+                        .try_into()
+                        .unwrap(),
+                ),
+                EVIDENCE_VERSION_V2,
+            );
+            let mut previous = 0;
+            for index in 0..count {
+                let entry = format!("multi_replay_kernel_{index}");
+                let marker = format!("define amdgpu_kernel void @{entry}(");
+                assert_eq!(llvm.matches(&marker).count(), 1);
+                let offset = llvm.find(&marker).unwrap();
+                assert!(offset >= previous);
+                previous = offset;
+            }
+            let decoded =
+                CanonicalProductionKirToLlvmReplayEvidenceV1::decode(evidence.canonical_bytes())
+                    .unwrap();
+            assert_eq!(decoded.kernel_ids(), expected_ids);
+            assert_eq!(
+                decoded
+                    .validate_against_neutral_kernel_ir(&neutral_bytes)
+                    .unwrap()
+                    .target_bound_module()
+                    .kernels
+                    .len(),
+                count,
+            );
+        }
     }
 
     #[test]
@@ -832,6 +980,42 @@ mod tests {
         assert!(matches!(
             CanonicalProductionKirToLlvmReplayEvidenceV1::decode(&oversized),
             Err(ProductionKirToLlvmReplayErrorV1::TooLarge)
+        ));
+    }
+
+    #[test]
+    fn replay_v2_rejects_maximum_kernel_count_without_allocating_or_panicking() {
+        let neutral =
+            VerifiedCanonicalKernelIrV8::from_module(multi_neutral_module("hostile_count", 2))
+                .unwrap();
+        let neutral_bytes = neutral.into_canonical_bytes();
+        let (_, neutral_module, _) =
+            decode_exact_kernel_ir(&neutral_bytes, ProductionReplayKernelIrVersionV1::V8).unwrap();
+        let target =
+            bind_production_target_v1(&neutral_module, ProductionAmdTargetProfileV1::Gfx942)
+                .unwrap();
+        let llvm = replay_llvm(target.module(), ProductionAmdTargetProfileV1::Gfx942).unwrap();
+        let evidence = CanonicalProductionKirToLlvmReplayEvidenceV1::from_live_inputs(
+            &neutral_bytes,
+            target.module(),
+            ProductionAmdTargetProfileV1::Gfx942,
+            &llvm,
+        )
+        .unwrap();
+        let mut hostile = evidence.canonical_bytes().to_vec();
+        let kernel_count_offset = EVIDENCE_MAGIC_V1.len() + 2 + 4 + (32 + 8) * 2;
+        hostile[kernel_count_offset..kernel_count_offset + 4]
+            .copy_from_slice(&u32::MAX.to_le_bytes());
+        let result = std::panic::catch_unwind(|| {
+            CanonicalProductionKirToLlvmReplayEvidenceV1::decode(&hostile)
+        });
+        assert!(
+            result.is_ok(),
+            "hostile kernel count panicked during decode"
+        );
+        assert!(matches!(
+            result.unwrap(),
+            Err(ProductionKirToLlvmReplayErrorV1::InvalidLength)
         ));
     }
 }

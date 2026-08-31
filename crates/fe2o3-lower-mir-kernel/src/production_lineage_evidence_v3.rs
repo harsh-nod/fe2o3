@@ -384,13 +384,18 @@ impl InertCanonicalFormalMemoryAdmissionEvidenceV3 {
             &canonical_kir_v5_identity,
         )?;
 
-        if !owner.obligations().inter_invocation_conflicts().is_empty() {
+        let [kernel] = owner.kernels() else {
+            return Err(ProductionLineageEvidenceErrorV3::InvalidFormalAdmission(
+                "V3 lineage requires one formal kernel",
+            ));
+        };
+        if !kernel.obligations().inter_invocation_conflicts().is_empty() {
             return Err(ProductionLineageEvidenceErrorV3::InvalidFormalAdmission(
                 "live owner retains inter-invocation conflicts",
             ));
         }
         let receipt =
-            InertCanonicalFormalMemoryObligationReceiptV1::from_obligations(owner.obligations())
+            InertCanonicalFormalMemoryObligationReceiptV1::from_obligations(kernel.obligations())
                 .map_err(ProductionLineageEvidenceErrorV3::FormalObligationReceipt)?;
         receipt
             .revalidate()
@@ -404,7 +409,7 @@ impl InertCanonicalFormalMemoryAdmissionEvidenceV3 {
         let canonical_bytes = encode_formal_memory_admission(
             canonical_kir_v5_identity,
             receipt_identity,
-            owner.witness_invocation_count(),
+            kernel.witness_invocation_count(),
             FormalMemoryCompletenessPolicyV3::RequireCompleteConflictFree,
             FormalMemoryCompletenessStatusV3::Complete,
             0,
@@ -1575,7 +1580,7 @@ mod tests {
 
         let formal_owner = ProductionFormalMemoryOwnerV1::try_admit(semantic_kir).unwrap();
         let exact_receipt = InertCanonicalFormalMemoryObligationReceiptV1::from_obligations(
-            formal_owner.obligations(),
+            formal_owner.obligations().unwrap(),
         )
         .unwrap();
         let formal =
@@ -1729,7 +1734,7 @@ mod tests {
         let canonical_kir = semantic_kir.canonical_kernel_ir_identity();
         let formal_owner = ProductionFormalMemoryOwnerV1::try_admit(semantic_kir).unwrap();
         let receipt = InertCanonicalFormalMemoryObligationReceiptV1::from_obligations(
-            formal_owner.obligations(),
+            formal_owner.obligations().unwrap(),
         )
         .unwrap();
         let evidence =
@@ -1746,7 +1751,7 @@ mod tests {
         );
         assert_eq!(
             evidence.witness_invocation_count(),
-            formal_owner.witness_invocation_count()
+            formal_owner.witness_invocation_count().unwrap()
         );
         assert_eq!(
             evidence.completeness_policy(),

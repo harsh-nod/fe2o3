@@ -20,8 +20,10 @@ use fe2o3_compiler_lineage::{
     InertRustcPreflightPlanReceiptV3, InertSemanticToLlvmReceiptV3, InertTargetBindingReceiptV3,
     LineageErrorV3, OrderedInertSemanticLineageReceiptsV3,
 };
+use fe2o3_kernel_descriptor::KernelId as DescriptorKernelId;
 use fe2o3_kernel_ir::{
-    FunctionRole, Module, VerifiedCanonicalKernelIrErrorV8, VerifiedCanonicalKernelIrErrorV9,
+    FunctionRole, InertCanonicalFormalMemoryObligationReceiptV1, Module,
+    VerifiedCanonicalKernelIrErrorV8, VerifiedCanonicalKernelIrErrorV9,
     VerifiedCanonicalKernelIrV8, VerifiedCanonicalKernelIrV9,
 };
 use fe2o3_lower_mir_kernel::{
@@ -30,6 +32,8 @@ use fe2o3_lower_mir_kernel::{
     ProductionCorrespondenceEvidenceErrorV4, ProductionFormalMemoryEvidenceErrorV4,
     ProductionFormalMemoryOwnerV1,
 };
+use fe2o3_mir_model::InertCanonicalSemanticU32InductionEvidenceV1;
+use fe2o3_pliron::InertProductionMiddleEndEvidenceV5;
 use fe2o3_rustc_invocation::{InvocationDigestV3, encode_descriptor_v3};
 use fe2o3_verifier::{
     CanonicalProductionMirPlironVerusExecutionEvidenceV1, CompilerKirToLlvmReplayValidationErrorV1,
@@ -37,7 +41,7 @@ use fe2o3_verifier::{
 };
 use sha2::{Digest, Sha256};
 
-use crate::production_ranked_projection_v1::AuthenticatedRankedVerificationV5;
+use crate::production_ranked_projection_v1::AuthenticatedRankedVerificationRosterV1;
 use crate::production_target_lineage_v3::{
     DataLayoutTranscriptInputsV3, DataLayoutTranscriptV3, ProductionTargetLineageErrorV3,
     SemanticToLlvmAssociationInputsV3, SemanticToLlvmAssociationTranscriptV3,
@@ -76,7 +80,8 @@ pub(crate) struct PreparedProductionSemanticLineageV3 {
     kernel_ir: InertKernelIrReceiptV3,
     mir_to_kir_correspondence: InertMirToKirCorrespondenceReceiptV3,
     formal_memory: InertFormalMemoryReceiptV3,
-    verus_execution: CanonicalProductionMirPlironVerusExecutionEvidenceV1,
+    proof_verus_evidence: Box<[u8]>,
+    roster_custody: PreparedLineageRosterCustodyV1,
     amdgpu_lowering_replay: dialect_amdgcn::CanonicalProductionKirToLlvmReplayEvidenceV1,
     neutral_kir_custody: ProductionCanonicalKernelIrIdentityV1,
     neutral_kir_identity: TargetLineageIdentityV3,
@@ -84,7 +89,910 @@ pub(crate) struct PreparedProductionSemanticLineageV3 {
     semantic_layout_identity: TargetLineageIdentityV3,
     expected_exports: BTreeSet<(CompilerModuleSymbolRoleV1, String)>,
     rustc_layout: crate::semantic_layout_bridge::SemanticLayoutTargetV1,
-    default_workgroup: [u32; 3],
+    workgroups: Box<[(String, [u32; 3])]>,
+}
+
+enum PreparedLineageRosterCustodyV1 {
+    Singleton,
+    MultiRoot {
+        roster_identity: [u8; 32],
+        middle_end_sha256: [u8; 32],
+        correspondence_sha256: [u8; 32],
+        formal_memory_sha256: [u8; 32],
+        verus_sha256: [u8; 32],
+    },
+}
+
+struct PreparedLineageRootV1 {
+    logical_name: String,
+    export_symbol: Box<[u8]>,
+    semantic_root: u32,
+    semantic_root_identity: [u8; 32],
+    kernel_binding: [u8; 32],
+    source_rank: u8,
+    kernel_id: String,
+    workgroup: [u32; 3],
+    middle_end: Box<[u8]>,
+    correspondence: Box<[u8]>,
+    formal_memory: Box<[u8]>,
+    verus_execution: Box<[u8]>,
+}
+
+struct PreparedLineageEvidenceV1 {
+    middle_end: InertMiddleEndReceiptV3,
+    mir_to_kir_correspondence: InertMirToKirCorrespondenceReceiptV3,
+    formal_memory: InertFormalMemoryReceiptV3,
+    proof_verus_evidence: Box<[u8]>,
+    roster_custody: PreparedLineageRosterCustodyV1,
+    workgroups: Box<[(String, [u32; 3])]>,
+}
+
+#[derive(Clone, Copy)]
+enum LineageRosterPayloadV1 {
+    MiddleEnd,
+    Correspondence,
+    FormalMemory,
+    VerusExecution,
+}
+
+#[derive(Clone, Copy)]
+struct LineageNeutralKirIdentityV1 {
+    version: ProductionCanonicalKernelIrVersionV1,
+    canonical_length: u64,
+    digest: [u8; 32],
+}
+
+impl From<ProductionCanonicalKernelIrIdentityV1> for LineageNeutralKirIdentityV1 {
+    fn from(identity: ProductionCanonicalKernelIrIdentityV1) -> Self {
+        Self {
+            version: identity.version(),
+            canonical_length: identity.canonical_length(),
+            digest: *identity.digest(),
+        }
+    }
+}
+
+fn prepare_lineage_evidence_v1(
+    ranked: AuthenticatedRankedVerificationRosterV1,
+    admitted: &ProductionFormalMemoryOwnerV1,
+    target_module: &Module,
+    neutral_kir: ProductionCanonicalKernelIrIdentityV1,
+) -> Result<PreparedLineageEvidenceV1, ProductionSemanticLineageErrorV3> {
+    let semantic = admitted.semantic_kir().semantic().semantic();
+    if ranked.root_count() == 0
+        || ranked.root_count() != semantic.roots().len()
+        || ranked.root_count() != target_module.kernels.len()
+        || ranked.root_count() != admitted.kernels().len()
+        || !ranked.every_functional_verification_is_coherent()
+    {
+        return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
+            "ranked, semantic, KIR, and formal lineage rosters differ",
+        ));
+    }
+
+    let roster_identity = *ranked.canonical_roster_identity().as_bytes();
+    let canonical_kernel_order = ranked.canonical_kernel_order().to_vec().into_boxed_slice();
+    let mut roots = Vec::with_capacity(ranked.root_count());
+    for ((((ranked_root, semantic_root), kernel), formal), ordinal) in ranked
+        .roots()
+        .iter()
+        .zip(semantic.roots())
+        .zip(&target_module.kernels)
+        .zip(admitted.kernels())
+        .zip(0_u32..)
+    {
+        let function = semantic
+            .functions()
+            .get(semantic_root.index() as usize)
+            .ok_or(ProductionSemanticLineageErrorV3::AxisMismatch(
+                "lineage semantic root is out of range",
+            ))?;
+        let entry =
+            function
+                .kernel_entry()
+                .ok_or(ProductionSemanticLineageErrorV3::AxisMismatch(
+                    "lineage semantic root is not an exact kernel export",
+                ))?;
+        let verification = ranked_root.verification();
+        let induction = verification.semantic_u32_induction();
+        let selected = semantic
+            .select_kernel_body_for_root_v1(*semantic_root)
+            .ok_or(ProductionSemanticLineageErrorV3::AxisMismatch(
+                "lineage root has no exact selected semantic body",
+            ))?;
+        let workgroup =
+            kernel
+                .workgroup_size
+                .ok_or(ProductionSemanticLineageErrorV3::AxisMismatch(
+                    "target-bound KIR root has no exact workgroup size",
+                ))?;
+        if ranked_root.semantic_root() != *semantic_root
+            || ranked_root.semantic_root_identity() != function.identity()
+            || ranked_root.export_symbol() != entry.export_symbol().as_bytes()
+            || ranked_root.kernel_binding() != entry.kernel_binding_identity().as_bytes()
+            || ranked_root.source_rank() != kernel.domain.rank()
+            || induction.semantic_mir_sha256() != semantic.semantic_sha256()
+            || induction.function() != selected.body()
+            || induction.function_identity()
+                != semantic.functions()[selected.body().index() as usize].identity()
+            || induction.grants_authority()
+            || induction.authorizes_compiler_transform()
+            || kernel.id.as_str() != std::str::from_utf8(ranked_root.export_symbol()).unwrap_or("")
+            || kernel.entry.as_str() != kernel.id.as_str()
+            || formal.obligations().kernel() != &kernel.id
+            || formal.obligations().entry() != &kernel.entry
+        {
+            return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
+                "cross-wired per-root ranked, semantic, KIR, or formal lineage",
+            ));
+        }
+
+        let verus = verification.aggregate_verus_execution().ok_or(
+            ProductionSemanticLineageErrorV3::AxisMismatch(
+                "every production root requires authenticated MIR-to-PLIRON Verus execution",
+            ),
+        )?;
+        let verus = CanonicalProductionMirPlironVerusExecutionEvidenceV1::from_execution(verus)?;
+        if verus.claims().pliron_evidence_identity().as_bytes()
+            != verification.middle_end_evidence().identity().sha256()
+        {
+            return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
+                "per-root Verus execution names a different middle-end record",
+            ));
+        }
+        let induction =
+            fe2o3_mir_model::InertCanonicalSemanticU32InductionEvidenceV1::from_report(induction)
+                .map_err(|error| ProductionSemanticLineageErrorV3::LiveOwner(error.to_string()))?;
+        let formal_receipt =
+            InertCanonicalFormalMemoryObligationReceiptV1::from_obligations(formal.obligations())
+                .map_err(|error| ProductionSemanticLineageErrorV3::LiveOwner(error.to_string()))?;
+        let correspondence = encode_correspondence_root_payload_v1(
+            admitted.semantic_kir().correspondence(),
+            *semantic_root,
+            ordinal,
+            induction.canonical_bytes(),
+        )?;
+        roots.push(PreparedLineageRootV1 {
+            logical_name: ranked_root.logical_name().to_owned(),
+            export_symbol: ranked_root.export_symbol().to_vec().into_boxed_slice(),
+            semantic_root: semantic_root.index(),
+            semantic_root_identity: *function.identity().as_bytes(),
+            kernel_binding: *ranked_root.kernel_binding(),
+            source_rank: ranked_root.source_rank(),
+            kernel_id: kernel.id.as_str().to_owned(),
+            workgroup: [workgroup.x, workgroup.y, workgroup.z],
+            middle_end: verification
+                .middle_end_evidence()
+                .canonical_bytes()
+                .to_vec()
+                .into_boxed_slice(),
+            correspondence: correspondence.into_boxed_slice(),
+            formal_memory: formal_receipt.canonical_bytes().to_vec().into_boxed_slice(),
+            verus_execution: verus.canonical_bytes().to_vec().into_boxed_slice(),
+        });
+    }
+
+    let workgroups = roots
+        .iter()
+        .map(|root| (root.kernel_id.clone(), root.workgroup))
+        .collect::<Vec<_>>()
+        .into_boxed_slice();
+    if let [root] = roots.as_slice() {
+        let verification = ranked
+            .roots()
+            .iter()
+            .find(|ranked_root| ranked_root.semantic_root().index() == root.semantic_root)
+            .ok_or(ProductionSemanticLineageErrorV3::AxisMismatch(
+                "singleton lineage has no matching ranked root",
+            ))?
+            .verification();
+        let correspondence = InertCanonicalMirToKirCorrespondenceEvidenceV4::from_live_owner(
+            admitted.semantic_kir(),
+            verification.semantic_u32_induction(),
+        )?;
+        let formal = InertCanonicalFormalMemoryAdmissionEvidenceV4::from_live_owner(admitted)?;
+        if correspondence.canonical_kernel_ir_identity() != neutral_kir
+            || formal.canonical_kernel_ir_identity() != neutral_kir
+        {
+            return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
+                "singleton lineage names a different neutral KIR",
+            ));
+        }
+        return Ok(PreparedLineageEvidenceV1 {
+            middle_end: InertMiddleEndReceiptV3::from_canonical_preimage(root.middle_end.to_vec())?,
+            mir_to_kir_correspondence:
+                InertMirToKirCorrespondenceReceiptV3::from_canonical_preimage(
+                    correspondence.canonical_bytes(),
+                )?,
+            formal_memory: InertFormalMemoryReceiptV3::from_canonical_preimage(
+                formal.canonical_bytes(),
+            )?,
+            proof_verus_evidence: root.verus_execution.clone(),
+            roster_custody: PreparedLineageRosterCustodyV1::Singleton,
+            workgroups,
+        });
+    }
+
+    let middle_end = encode_lineage_roster_envelope_v1(
+        *b"F2MRMID2",
+        semantic.semantic_sha256().as_bytes(),
+        neutral_kir.into(),
+        roster_identity,
+        &canonical_kernel_order,
+        &roots,
+        LineageRosterPayloadV1::MiddleEnd,
+    )?;
+    let correspondence = encode_lineage_roster_envelope_v1(
+        *b"F2MRCOR2",
+        semantic.semantic_sha256().as_bytes(),
+        neutral_kir.into(),
+        roster_identity,
+        &canonical_kernel_order,
+        &roots,
+        LineageRosterPayloadV1::Correspondence,
+    )?;
+    let formal_memory = encode_lineage_roster_envelope_v1(
+        *b"F2MRFOR2",
+        semantic.semantic_sha256().as_bytes(),
+        neutral_kir.into(),
+        roster_identity,
+        &canonical_kernel_order,
+        &roots,
+        LineageRosterPayloadV1::FormalMemory,
+    )?;
+    let verus = encode_lineage_roster_envelope_v1(
+        *b"F2MRVER2",
+        semantic.semantic_sha256().as_bytes(),
+        neutral_kir.into(),
+        roster_identity,
+        &canonical_kernel_order,
+        &roots,
+        LineageRosterPayloadV1::VerusExecution,
+    )?;
+    let middle_end_sha256 = Sha256::digest(&middle_end).into();
+    let correspondence_sha256 = Sha256::digest(&correspondence).into();
+    let formal_memory_sha256 = Sha256::digest(&formal_memory).into();
+    let verus_sha256 = Sha256::digest(&verus).into();
+    Ok(PreparedLineageEvidenceV1 {
+        middle_end: InertMiddleEndReceiptV3::from_canonical_preimage(middle_end)?,
+        mir_to_kir_correspondence: InertMirToKirCorrespondenceReceiptV3::from_canonical_preimage(
+            correspondence,
+        )?,
+        formal_memory: InertFormalMemoryReceiptV3::from_canonical_preimage(formal_memory)?,
+        proof_verus_evidence: verus.into_boxed_slice(),
+        roster_custody: PreparedLineageRosterCustodyV1::MultiRoot {
+            roster_identity,
+            middle_end_sha256,
+            correspondence_sha256,
+            formal_memory_sha256,
+            verus_sha256,
+        },
+        workgroups,
+    })
+}
+
+fn encode_correspondence_root_payload_v1(
+    correspondence: &fe2o3_lower_mir_kernel::SemanticKirCorrespondenceV1,
+    owner: fe2o3_mir_model::semantic_mir_v1::SemanticFunctionIdV1,
+    ordinal: u32,
+    induction: &[u8],
+) -> Result<Vec<u8>, ProductionSemanticLineageErrorV3> {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"F2MRCOP2");
+    bytes.extend_from_slice(&2_u16.to_le_bytes());
+    bytes.extend_from_slice(&1_u16.to_le_bytes());
+    bytes.extend_from_slice(&ordinal.to_le_bytes());
+    bytes.extend_from_slice(&owner.index().to_le_bytes());
+    push_lineage_bytes_v1(&mut bytes, induction)?;
+
+    let functions = correspondence
+        .lowered_functions()
+        .iter()
+        .filter(|record| record.correspondence_owner() == owner)
+        .collect::<Vec<_>>();
+    let has_functions = !functions.is_empty();
+    push_lineage_count_v1(&mut bytes, functions.len())?;
+    for record in functions {
+        bytes.extend_from_slice(&record.semantic_function().index().to_le_bytes());
+        bytes.push(match record.role() {
+            fe2o3_lower_mir_kernel::SemanticKirFunctionRoleV1::KernelEntry => 1,
+            fe2o3_lower_mir_kernel::SemanticKirFunctionRoleV1::InternalHelper => 2,
+        });
+        push_lineage_bytes_v1(&mut bytes, record.kernel_ir_function().as_str().as_bytes())?;
+    }
+
+    let blocks = correspondence
+        .blocks()
+        .iter()
+        .copied()
+        .filter(|record| record.correspondence_owner() == owner)
+        .collect::<Vec<_>>();
+    let has_blocks = !blocks.is_empty();
+    push_lineage_count_v1(&mut bytes, blocks.len())?;
+    for record in blocks {
+        bytes.extend_from_slice(&record.semantic_function().index().to_le_bytes());
+        bytes.extend_from_slice(&record.semantic_block().index().to_le_bytes());
+        bytes.extend_from_slice(&record.kernel_ir_block().0.to_le_bytes());
+        bytes.extend_from_slice(&record.source_statement_count().to_le_bytes());
+    }
+
+    let statements = correspondence
+        .statement_operation_spans()
+        .iter()
+        .copied()
+        .filter(|record| record.correspondence_owner() == owner)
+        .collect::<Vec<_>>();
+    push_lineage_count_v1(&mut bytes, statements.len())?;
+    for record in statements {
+        bytes.extend_from_slice(&record.semantic_function().index().to_le_bytes());
+        bytes.extend_from_slice(&record.semantic_block().index().to_le_bytes());
+        bytes.extend_from_slice(&record.statement_ordinal().to_le_bytes());
+        bytes.extend_from_slice(&record.kernel_ir_block().0.to_le_bytes());
+        bytes.extend_from_slice(&record.first_operation_ordinal().to_le_bytes());
+        bytes.extend_from_slice(&record.operation_count().to_le_bytes());
+    }
+
+    let terminators = correspondence
+        .terminator_operation_spans()
+        .iter()
+        .copied()
+        .filter(|record| record.correspondence_owner() == owner)
+        .collect::<Vec<_>>();
+    push_lineage_count_v1(&mut bytes, terminators.len())?;
+    for record in terminators {
+        bytes.extend_from_slice(&record.semantic_function().index().to_le_bytes());
+        bytes.extend_from_slice(&record.semantic_block().index().to_le_bytes());
+        bytes.extend_from_slice(&record.kernel_ir_block().0.to_le_bytes());
+        bytes.extend_from_slice(&record.first_operation_ordinal().to_le_bytes());
+        bytes.extend_from_slice(&record.operation_count().to_le_bytes());
+    }
+
+    let synthetics = correspondence
+        .synthetic_operation_spans()
+        .iter()
+        .copied()
+        .filter(|record| record.correspondence_owner() == owner)
+        .collect::<Vec<_>>();
+    push_lineage_count_v1(&mut bytes, synthetics.len())?;
+    for record in synthetics {
+        bytes.extend_from_slice(&record.semantic_function().index().to_le_bytes());
+        bytes.push(match record.rule() {
+            fe2o3_lower_mir_kernel::SemanticKirSyntheticOperationRuleV1::EnumPayloadStorage => 1,
+            fe2o3_lower_mir_kernel::SemanticKirSyntheticOperationRuleV1::RuntimeAssertFailureTrap => 2,
+        });
+        bytes.extend_from_slice(&record.kernel_ir_block().0.to_le_bytes());
+        bytes.extend_from_slice(&record.first_operation_ordinal().to_le_bytes());
+        bytes.extend_from_slice(&record.operation_count().to_le_bytes());
+    }
+
+    let parameters = correspondence
+        .parameter_bindings()
+        .iter()
+        .copied()
+        .filter(|record| record.correspondence_owner() == owner)
+        .collect::<Vec<_>>();
+    push_lineage_count_v1(&mut bytes, parameters.len())?;
+    for record in parameters {
+        bytes.extend_from_slice(&record.semantic_function().index().to_le_bytes());
+        bytes.extend_from_slice(&record.semantic_local().index().to_le_bytes());
+        bytes.extend_from_slice(&record.kernel_ir_value().0.to_le_bytes());
+    }
+    if !has_blocks || !has_functions {
+        return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
+            "a lineage root has no exact correspondence records",
+        ));
+    }
+    Ok(bytes)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn encode_lineage_roster_envelope_v1(
+    magic: [u8; 8],
+    semantic_sha256: &[u8; 32],
+    neutral_kir: LineageNeutralKirIdentityV1,
+    roster_identity: [u8; 32],
+    canonical_kernel_order: &[usize],
+    roots: &[PreparedLineageRootV1],
+    payload_kind: LineageRosterPayloadV1,
+) -> Result<Vec<u8>, ProductionSemanticLineageErrorV3> {
+    if roots.len() < 2
+        || canonical_kernel_order.len() != roots.len()
+        || semantic_sha256 == &[0; 32]
+        || roster_identity == [0; 32]
+        || neutral_kir.digest == [0; 32]
+        || neutral_kir.canonical_length == 0
+    {
+        return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
+            "invalid multi-root lineage envelope identity",
+        ));
+    }
+    let mut permutation = canonical_kernel_order.to_vec();
+    permutation.sort_unstable();
+    if permutation != (0..roots.len()).collect::<Vec<_>>() {
+        return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
+            "lineage KernelId order is not an exact root permutation",
+        ));
+    }
+    let mut semantic_roots = BTreeSet::new();
+    let mut exports = BTreeSet::new();
+    let mut bindings = BTreeSet::new();
+    let mut kernels = BTreeSet::new();
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&magic);
+    bytes.extend_from_slice(&2_u16.to_le_bytes());
+    bytes.extend_from_slice(&1_u16.to_le_bytes());
+    let total_offset = bytes.len();
+    bytes.extend_from_slice(&0_u32.to_le_bytes());
+    bytes.extend_from_slice(semantic_sha256);
+    bytes.extend_from_slice(
+        &(match neutral_kir.version {
+            ProductionCanonicalKernelIrVersionV1::V8 => 8_u16,
+            ProductionCanonicalKernelIrVersionV1::V9 => 9_u16,
+        })
+        .to_le_bytes(),
+    );
+    bytes.extend_from_slice(&0_u16.to_le_bytes());
+    bytes.extend_from_slice(&neutral_kir.canonical_length.to_le_bytes());
+    bytes.extend_from_slice(&neutral_kir.digest);
+    bytes.extend_from_slice(&roster_identity);
+    push_lineage_count_v1(&mut bytes, canonical_kernel_order.len())?;
+    for index in canonical_kernel_order {
+        bytes.extend_from_slice(
+            &u32::try_from(*index)
+                .map_err(|_| {
+                    ProductionSemanticLineageErrorV3::AxisMismatch("lineage index overflow")
+                })?
+                .to_le_bytes(),
+        );
+    }
+    push_lineage_count_v1(&mut bytes, roots.len())?;
+    for root in roots {
+        if !semantic_roots.insert(root.semantic_root)
+            || !exports.insert(root.export_symbol.as_ref())
+            || !bindings.insert(root.kernel_binding)
+            || !kernels.insert(root.kernel_id.as_str())
+            || root.logical_name.is_empty()
+            || !(1..=3).contains(&root.source_rank)
+            || root.workgroup.contains(&0)
+        {
+            return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
+                "duplicate or invalid multi-root lineage record",
+            ));
+        }
+        bytes.extend_from_slice(&root.semantic_root.to_le_bytes());
+        bytes.extend_from_slice(&root.semantic_root_identity);
+        bytes.extend_from_slice(&root.kernel_binding);
+        bytes.push(root.source_rank);
+        bytes.extend_from_slice(&[0; 3]);
+        for dimension in root.workgroup {
+            bytes.extend_from_slice(&dimension.to_le_bytes());
+        }
+        push_lineage_bytes_v1(&mut bytes, root.logical_name.as_bytes())?;
+        push_lineage_bytes_v1(&mut bytes, &root.export_symbol)?;
+        push_lineage_bytes_v1(&mut bytes, root.kernel_id.as_bytes())?;
+        let payload = match payload_kind {
+            LineageRosterPayloadV1::MiddleEnd => &root.middle_end,
+            LineageRosterPayloadV1::Correspondence => &root.correspondence,
+            LineageRosterPayloadV1::FormalMemory => &root.formal_memory,
+            LineageRosterPayloadV1::VerusExecution => &root.verus_execution,
+        };
+        push_lineage_bytes_v1(&mut bytes, payload)?;
+    }
+    let total = u32::try_from(bytes.len()).map_err(|_| {
+        ProductionSemanticLineageErrorV3::AxisMismatch("multi-root lineage envelope overflow")
+    })?;
+    bytes[total_offset..total_offset + 4].copy_from_slice(&total.to_le_bytes());
+    Ok(bytes)
+}
+
+fn push_lineage_count_v1(
+    bytes: &mut Vec<u8>,
+    count: usize,
+) -> Result<(), ProductionSemanticLineageErrorV3> {
+    bytes.extend_from_slice(
+        &u32::try_from(count)
+            .map_err(|_| ProductionSemanticLineageErrorV3::AxisMismatch("lineage count overflow"))?
+            .to_le_bytes(),
+    );
+    Ok(())
+}
+
+fn push_lineage_bytes_v1(
+    bytes: &mut Vec<u8>,
+    value: &[u8],
+) -> Result<(), ProductionSemanticLineageErrorV3> {
+    if value.is_empty() {
+        return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
+            "empty lineage roster field",
+        ));
+    }
+    push_lineage_count_v1(bytes, value.len())?;
+    bytes.extend_from_slice(value);
+    Ok(())
+}
+
+const MAX_LINEAGE_ROOTS_V1: usize = 4_096;
+
+struct LineageRosterReaderV1<'a> {
+    bytes: &'a [u8],
+    offset: usize,
+}
+
+impl<'a> LineageRosterReaderV1<'a> {
+    const fn new(bytes: &'a [u8]) -> Self {
+        Self { bytes, offset: 0 }
+    }
+
+    fn take(&mut self, length: usize) -> Result<&'a [u8], ProductionSemanticLineageErrorV3> {
+        let end = self.offset.checked_add(length).ok_or(
+            ProductionSemanticLineageErrorV3::AxisMismatch("lineage envelope length overflow"),
+        )?;
+        let value = self.bytes.get(self.offset..end).ok_or(
+            ProductionSemanticLineageErrorV3::AxisMismatch("truncated lineage envelope"),
+        )?;
+        self.offset = end;
+        Ok(value)
+    }
+
+    fn fixed<const N: usize>(&mut self) -> Result<[u8; N], ProductionSemanticLineageErrorV3> {
+        self.take(N)?
+            .try_into()
+            .map_err(|_| ProductionSemanticLineageErrorV3::AxisMismatch("truncated lineage field"))
+    }
+
+    fn u8(&mut self) -> Result<u8, ProductionSemanticLineageErrorV3> {
+        Ok(self.fixed::<1>()?[0])
+    }
+
+    fn u16(&mut self) -> Result<u16, ProductionSemanticLineageErrorV3> {
+        Ok(u16::from_le_bytes(self.fixed()?))
+    }
+
+    fn u32(&mut self) -> Result<u32, ProductionSemanticLineageErrorV3> {
+        Ok(u32::from_le_bytes(self.fixed()?))
+    }
+
+    fn u64(&mut self) -> Result<u64, ProductionSemanticLineageErrorV3> {
+        Ok(u64::from_le_bytes(self.fixed()?))
+    }
+
+    fn count(&mut self) -> Result<usize, ProductionSemanticLineageErrorV3> {
+        usize::try_from(self.u32()?).map_err(|_| {
+            ProductionSemanticLineageErrorV3::AxisMismatch("lineage count does not fit usize")
+        })
+    }
+
+    fn bytes(&mut self) -> Result<&'a [u8], ProductionSemanticLineageErrorV3> {
+        let length = self.count()?;
+        if length == 0 || length > self.bytes.len() {
+            return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
+                "invalid lineage field length",
+            ));
+        }
+        self.take(length)
+    }
+
+    const fn is_finished(&self) -> bool {
+        self.offset == self.bytes.len()
+    }
+}
+
+fn validate_correspondence_root_payload_v1(
+    bytes: &[u8],
+    ordinal: u32,
+    semantic_root: u32,
+    semantic_sha256: &[u8; 32],
+    kernel_id: &str,
+) -> Result<(), ProductionSemanticLineageErrorV3> {
+    let mut reader = LineageRosterReaderV1::new(bytes);
+    if reader.fixed::<8>()? != *b"F2MRCOP2"
+        || reader.u16()? != 2
+        || reader.u16()? != 1
+        || reader.u32()? != ordinal
+        || reader.u32()? != semantic_root
+    {
+        return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
+            "cross-wired correspondence root payload",
+        ));
+    }
+    let induction = InertCanonicalSemanticU32InductionEvidenceV1::decode(reader.bytes()?)
+        .map_err(|error| ProductionSemanticLineageErrorV3::LiveOwner(error.to_string()))?;
+    if induction.semantic_mir_sha256() != semantic_sha256 || induction.grants_authority() {
+        return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
+            "correspondence induction payload changed semantic owner",
+        ));
+    }
+
+    let function_count = reader.count()?;
+    if function_count == 0 || function_count > MAX_LINEAGE_ROOTS_V1 {
+        return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
+            "invalid correspondence function roster",
+        ));
+    }
+    let mut functions = BTreeSet::new();
+    let mut entry_count = 0_usize;
+    for _ in 0..function_count {
+        let semantic_function = reader.u32()?;
+        let role = reader.u8()?;
+        if !matches!(role, 1 | 2) {
+            return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
+                "invalid correspondence function role",
+            ));
+        }
+        let symbol = std::str::from_utf8(reader.bytes()?).map_err(|_| {
+            ProductionSemanticLineageErrorV3::AxisMismatch(
+                "correspondence function symbol is not UTF-8",
+            )
+        })?;
+        if !functions.insert((semantic_function, role, symbol)) {
+            return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
+                "duplicate correspondence function record",
+            ));
+        }
+        if role == 1 {
+            entry_count += 1;
+            if symbol != kernel_id {
+                return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
+                    "correspondence entry names a different kernel",
+                ));
+            }
+        }
+    }
+    if entry_count != 1 {
+        return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
+            "correspondence payload does not contain one exact entry",
+        ));
+    }
+
+    let fixed_records = [16_usize, 24, 20];
+    for (index, record_bytes) in fixed_records.into_iter().enumerate() {
+        let count = reader.count()?;
+        if index == 0 && count == 0 {
+            return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
+                "correspondence payload has no block records",
+            ));
+        }
+        reader.take(count.checked_mul(record_bytes).ok_or(
+            ProductionSemanticLineageErrorV3::AxisMismatch("correspondence record count overflow"),
+        )?)?;
+    }
+    let synthetic_count = reader.count()?;
+    for _ in 0..synthetic_count {
+        reader.u32()?;
+        if !matches!(reader.u8()?, 1 | 2) {
+            return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
+                "invalid synthetic correspondence rule",
+            ));
+        }
+        reader.take(12)?;
+    }
+    let parameter_count = reader.count()?;
+    reader.take(parameter_count.checked_mul(12).ok_or(
+        ProductionSemanticLineageErrorV3::AxisMismatch("correspondence parameter count overflow"),
+    )?)?;
+    if !reader.is_finished() {
+        return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
+            "trailing correspondence root payload bytes",
+        ));
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn validate_lineage_roster_envelope_v1(
+    bytes: &[u8],
+    magic: [u8; 8],
+    expected_sha256: [u8; 32],
+    semantic_sha256: &[u8; 32],
+    neutral_kir: LineageNeutralKirIdentityV1,
+    roster_identity: [u8; 32],
+    expected_workgroups: &[(String, [u32; 3])],
+    payload_kind: LineageRosterPayloadV1,
+) -> Result<(), ProductionSemanticLineageErrorV3> {
+    if <[u8; 32]>::from(Sha256::digest(bytes)) != expected_sha256 {
+        return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
+            "multi-root lineage envelope content identity changed",
+        ));
+    }
+    let mut reader = LineageRosterReaderV1::new(bytes);
+    if reader.fixed::<8>()? != magic
+        || reader.u16()? != 2
+        || reader.u16()? != 1
+        || usize::try_from(reader.u32()?).ok() != Some(bytes.len())
+        || reader.fixed::<32>()? != *semantic_sha256
+        || reader.u16()?
+            != match neutral_kir.version {
+                ProductionCanonicalKernelIrVersionV1::V8 => 8,
+                ProductionCanonicalKernelIrVersionV1::V9 => 9,
+            }
+        || reader.u16()? != 0
+        || reader.u64()? != neutral_kir.canonical_length
+        || reader.fixed::<32>()? != neutral_kir.digest
+        || reader.fixed::<32>()? != roster_identity
+    {
+        return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
+            "multi-root lineage envelope header changed before final handoff",
+        ));
+    }
+
+    let permutation_count = reader.count()?;
+    if !(2..=MAX_LINEAGE_ROOTS_V1).contains(&permutation_count) {
+        return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
+            "invalid lineage KernelId permutation count",
+        ));
+    }
+    let permutation = (0..permutation_count)
+        .map(|_| reader.u32())
+        .collect::<Result<Vec<_>, _>>()?;
+    let root_count = reader.count()?;
+    if root_count != permutation_count || root_count != expected_workgroups.len() {
+        return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
+            "lineage root and permutation counts differ",
+        ));
+    }
+    let mut sorted_permutation = permutation.clone();
+    sorted_permutation.sort_unstable();
+    if sorted_permutation != (0..root_count as u32).collect::<Vec<_>>() {
+        return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
+            "lineage KernelId order is not an exact permutation",
+        ));
+    }
+
+    let mut semantic_roots = BTreeSet::new();
+    let mut semantic_identities = BTreeSet::new();
+    let mut bindings = BTreeSet::new();
+    let mut logical_names = BTreeSet::new();
+    let mut exports = BTreeSet::new();
+    let mut kernels = BTreeSet::new();
+    let mut binding_order = Vec::with_capacity(root_count);
+    let mut previous_root = None;
+    for (ordinal, expected_workgroup) in (0_u32..).zip(expected_workgroups) {
+        let semantic_root = reader.u32()?;
+        let semantic_identity = reader.fixed::<32>()?;
+        let binding = reader.fixed::<32>()?;
+        let rank = reader.u8()?;
+        let reserved = reader.fixed::<3>()?;
+        let workgroup = [reader.u32()?, reader.u32()?, reader.u32()?];
+        let logical_name = std::str::from_utf8(reader.bytes()?).map_err(|_| {
+            ProductionSemanticLineageErrorV3::AxisMismatch("lineage logical name is not UTF-8")
+        })?;
+        let export = std::str::from_utf8(reader.bytes()?).map_err(|_| {
+            ProductionSemanticLineageErrorV3::AxisMismatch("lineage export is not UTF-8")
+        })?;
+        let kernel = std::str::from_utf8(reader.bytes()?).map_err(|_| {
+            ProductionSemanticLineageErrorV3::AxisMismatch("lineage kernel ID is not UTF-8")
+        })?;
+        let payload = reader.bytes()?;
+        if previous_root.is_some_and(|previous| semantic_root <= previous)
+            || semantic_identity == [0; 32]
+            || binding == [0; 32]
+            || !(1..=3).contains(&rank)
+            || reserved != [0; 3]
+            || workgroup.contains(&0)
+            || kernel != export
+            || kernel != expected_workgroup.0
+            || workgroup != expected_workgroup.1
+            || !semantic_roots.insert(semantic_root)
+            || !semantic_identities.insert(semantic_identity)
+            || !bindings.insert(binding)
+            || !logical_names.insert(logical_name)
+            || !exports.insert(export)
+            || !kernels.insert(kernel)
+        {
+            return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
+                "duplicate, reordered, substituted, or invalid lineage root",
+            ));
+        }
+        previous_root = Some(semantic_root);
+        binding_order.push(binding);
+        match payload_kind {
+            LineageRosterPayloadV1::MiddleEnd => {
+                InertProductionMiddleEndEvidenceV5::decode(payload).map_err(|error| {
+                    ProductionSemanticLineageErrorV3::LiveOwner(error.to_string())
+                })?;
+            }
+            LineageRosterPayloadV1::Correspondence => {
+                validate_correspondence_root_payload_v1(
+                    payload,
+                    ordinal,
+                    semantic_root,
+                    semantic_sha256,
+                    kernel,
+                )?;
+            }
+            LineageRosterPayloadV1::FormalMemory => {
+                InertCanonicalFormalMemoryObligationReceiptV1::from_canonical_bytes(
+                    payload.to_vec(),
+                )
+                .map_err(|error| ProductionSemanticLineageErrorV3::LiveOwner(error.to_string()))?;
+            }
+            LineageRosterPayloadV1::VerusExecution => {
+                let _ = CanonicalProductionMirPlironVerusExecutionEvidenceV1::decode(payload)?;
+            }
+        }
+    }
+    if !reader.is_finished() {
+        return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
+            "trailing multi-root lineage envelope bytes",
+        ));
+    }
+    let mut derived_kernel_order = (0..root_count).collect::<Vec<_>>();
+    derived_kernel_order
+        .sort_unstable_by_key(|index| DescriptorKernelId::from_bytes(binding_order[*index]));
+    if permutation
+        != derived_kernel_order
+            .into_iter()
+            .map(|index| index as u32)
+            .collect::<Vec<_>>()
+    {
+        return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
+            "lineage KernelId permutation changed canonical order",
+        ));
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn encode_multi_root_target_binding_v1(
+    protected_rustc_invocation: TargetLineageIdentityV3,
+    semantic_mir: TargetLineageIdentityV3,
+    target_neutral_kir: TargetLineageIdentityV3,
+    target_bound_kir: TargetLineageIdentityV3,
+    configured_target: &str,
+    rustc_llvm_target: &str,
+    target_cpu: &str,
+    target_features: &str,
+    roster_identity: [u8; 32],
+    workgroups: &[(String, [u32; 3])],
+) -> Result<Vec<u8>, ProductionSemanticLineageErrorV3> {
+    if workgroups.len() < 2 || roster_identity == [0; 32] {
+        return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
+            "multi-root target binding has no exact workgroup roster",
+        ));
+    }
+    let mut kernels = BTreeSet::new();
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"F2MRTGT2");
+    bytes.extend_from_slice(&2_u16.to_le_bytes());
+    bytes.extend_from_slice(&1_u16.to_le_bytes());
+    let total_offset = bytes.len();
+    bytes.extend_from_slice(&0_u32.to_le_bytes());
+    for identity in [
+        protected_rustc_invocation,
+        semantic_mir,
+        target_neutral_kir,
+        target_bound_kir,
+    ] {
+        bytes.extend_from_slice(&identity.encode());
+    }
+    bytes.extend_from_slice(&roster_identity);
+    bytes.extend_from_slice(&CODE_OBJECT_VERSION_V3.to_le_bytes());
+    bytes.extend_from_slice(&WAVE_WIDTH_BITS_V3.to_le_bytes());
+    for value in [
+        configured_target,
+        rustc_llvm_target,
+        target_cpu,
+        target_features,
+    ] {
+        push_lineage_bytes_v1(&mut bytes, value.as_bytes())?;
+    }
+    push_lineage_count_v1(&mut bytes, workgroups.len())?;
+    for (kernel, workgroup) in workgroups {
+        if !kernels.insert(kernel.as_str()) || kernel.is_empty() || workgroup.contains(&0) {
+            return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
+                "duplicate or invalid target workgroup lineage",
+            ));
+        }
+        push_lineage_bytes_v1(&mut bytes, kernel.as_bytes())?;
+        for dimension in workgroup {
+            bytes.extend_from_slice(&dimension.to_le_bytes());
+        }
+    }
+    let total = u32::try_from(bytes.len()).map_err(|_| {
+        ProductionSemanticLineageErrorV3::AxisMismatch("target lineage roster overflow")
+    })?;
+    bytes[total_offset..total_offset + 4].copy_from_slice(&total.to_le_bytes());
+    Ok(bytes)
 }
 
 impl PreparedProductionSemanticLineageV3 {
@@ -93,7 +1001,7 @@ impl PreparedProductionSemanticLineageV3 {
         rustc_identity_inventory: &crate::collector::AuthenticatedRustcIdentityInventoryV3,
         rustc_preflight_plan: &crate::collector::AuthenticatedRustcPreflightPlanV3,
         rustc_target: &crate::production_target_v1::AuthenticatedProductionTargetV1,
-        ranked_verification: AuthenticatedRankedVerificationV5,
+        ranked_verification: AuthenticatedRankedVerificationRosterV1,
         admitted: &ProductionFormalMemoryOwnerV1,
         target_module: &Module,
         pre_descriptor_llvm: &str,
@@ -103,22 +1011,6 @@ impl PreparedProductionSemanticLineageV3 {
             .map_err(|error| ProductionSemanticLineageErrorV3::LiveOwner(error.to_string()))?;
 
         let semantic = admitted.semantic_kir().semantic().semantic();
-        let semantic_u32_induction = ranked_verification.semantic_u32_induction();
-        let induction_function = semantic
-            .functions()
-            .get(semantic_u32_induction.function().index() as usize)
-            .ok_or(ProductionSemanticLineageErrorV3::AxisMismatch(
-                "semantic induction report names a function outside canonical semantic MIR",
-            ))?;
-        if semantic_u32_induction.semantic_mir_sha256() != semantic.semantic_sha256()
-            || semantic_u32_induction.function_identity() != induction_function.identity()
-            || semantic_u32_induction.grants_authority()
-            || semantic_u32_induction.authorizes_compiler_transform()
-        {
-            return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
-                "semantic induction report is not an inert exact-custody fact",
-            ));
-        }
         let rustc_identity_inventory =
             InertRustcIdentityInventoryReceiptV3::from_canonical_preimage(
                 rustc_identity_inventory.canonical_transcript(),
@@ -128,9 +1020,6 @@ impl PreparedProductionSemanticLineageV3 {
         )?;
         let semantic_mir = InertCanonicalSemanticMirReceiptV3::from_canonical_preimage(
             semantic.canonical_encoding(),
-        )?;
-        let middle_end = InertMiddleEndReceiptV3::from_canonical_preimage(
-            ranked_verification.middle_end_evidence().canonical_bytes(),
         )?;
 
         let neutral_kir_custody = admitted.semantic_kir().canonical_kernel_ir_identity();
@@ -167,54 +1056,19 @@ impl PreparedProductionSemanticLineageV3 {
                 pre_descriptor_llvm,
             )?;
 
-        let correspondence = InertCanonicalMirToKirCorrespondenceEvidenceV4::from_live_owner(
-            admitted.semantic_kir(),
-            semantic_u32_induction,
+        let PreparedLineageEvidenceV1 {
+            middle_end,
+            mir_to_kir_correspondence,
+            formal_memory,
+            proof_verus_evidence,
+            roster_custody,
+            workgroups,
+        } = prepare_lineage_evidence_v1(
+            ranked_verification,
+            admitted,
+            target_module,
+            neutral_kir_custody,
         )?;
-        if correspondence.canonical_kernel_ir_identity() != neutral_kir_custody {
-            return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
-                "MIR-to-KIR correspondence names a different neutral KIR",
-            ));
-        }
-        let mir_to_kir_correspondence =
-            InertMirToKirCorrespondenceReceiptV3::from_canonical_preimage(
-                correspondence.canonical_bytes(),
-            )?;
-
-        let formal = InertCanonicalFormalMemoryAdmissionEvidenceV4::from_live_owner(admitted)?;
-        if formal.canonical_kernel_ir_identity() != neutral_kir_custody {
-            return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
-                "formal-memory admission names a different neutral KIR",
-            ));
-        }
-        let formal_memory =
-            InertFormalMemoryReceiptV3::from_canonical_preimage(formal.canonical_bytes())?;
-
-        if !ranked_verification.retained_functional_verification_is_coherent() {
-            return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
-                "retained functional verification is incoherent",
-            ));
-        }
-        let aggregate_verus = ranked_verification.aggregate_verus_execution().ok_or(
-            ProductionSemanticLineageErrorV3::AxisMismatch(
-                "production handoff requires an authenticated aggregate MIR-to-PLIRON Verus execution",
-            ),
-        )?;
-        let verus_execution =
-            CanonicalProductionMirPlironVerusExecutionEvidenceV1::from_execution(aggregate_verus)?;
-        if verus_execution
-            .claims()
-            .pliron_evidence_identity()
-            .as_bytes()
-            != ranked_verification
-                .middle_end_evidence()
-                .identity()
-                .sha256()
-        {
-            return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
-                "aggregate Verus execution names a different live middle-end PLIRON record",
-            ));
-        }
 
         let target_layout = crate::rustc_semantic_adapter_v1::canonical_target_layout_transcript_v1(
             rustc_target.rustc_layout(),
@@ -231,14 +1085,6 @@ impl PreparedProductionSemanticLineageV3 {
         validate_final_llvm_layout(pre_descriptor_llvm)?;
 
         let expected_exports = exact_source_and_kir_exports(semantic, target_module)?;
-        let workgroup = target_module
-            .kernels
-            .first()
-            .and_then(|kernel| kernel.workgroup_size)
-            .ok_or(ProductionSemanticLineageErrorV3::AxisMismatch(
-                "target-bound KIR has no exact workgroup size",
-            ))?;
-
         Ok(Self {
             rustc_identity_inventory,
             rustc_preflight_plan,
@@ -247,7 +1093,8 @@ impl PreparedProductionSemanticLineageV3 {
             kernel_ir,
             mir_to_kir_correspondence,
             formal_memory,
-            verus_execution,
+            proof_verus_evidence,
+            roster_custody,
             amdgpu_lowering_replay,
             neutral_kir_custody,
             neutral_kir_identity,
@@ -255,7 +1102,7 @@ impl PreparedProductionSemanticLineageV3 {
             semantic_layout_identity,
             expected_exports,
             rustc_layout: rustc_target.rustc_layout().clone(),
-            default_workgroup: [workgroup.x, workgroup.y, workgroup.z],
+            workgroups,
         })
     }
 
@@ -291,25 +1138,77 @@ impl PreparedProductionSemanticLineageV3 {
             )
         })?;
         validate_final_llvm_layout(final_llvm)?;
-        let correspondence = InertCanonicalMirToKirCorrespondenceEvidenceV4::decode(
-            self.mir_to_kir_correspondence.canonical_preimage(),
-        )?;
-        let formal = InertCanonicalFormalMemoryAdmissionEvidenceV4::decode(
-            self.formal_memory.canonical_preimage(),
-        )?;
-        if correspondence
-            .semantic_u32_induction()
-            .semantic_mir_sha256()
-            != self.semantic_mir.identity().sha256()
-            || correspondence.canonical_kernel_ir_identity() != self.neutral_kir_custody
-            || formal.canonical_kernel_ir_identity() != self.neutral_kir_custody
-            || correspondence.grants_authority()
-            || correspondence.semantic_u32_induction().grants_authority()
-            || formal.grants_authority()
-        {
-            return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
-                "lossless semantic correspondence custody changed before final handoff",
-            ));
+        match &self.roster_custody {
+            PreparedLineageRosterCustodyV1::Singleton => {
+                let correspondence = InertCanonicalMirToKirCorrespondenceEvidenceV4::decode(
+                    self.mir_to_kir_correspondence.canonical_preimage(),
+                )?;
+                let formal = InertCanonicalFormalMemoryAdmissionEvidenceV4::decode(
+                    self.formal_memory.canonical_preimage(),
+                )?;
+                if correspondence
+                    .semantic_u32_induction()
+                    .semantic_mir_sha256()
+                    != self.semantic_mir.identity().sha256()
+                    || correspondence.canonical_kernel_ir_identity() != self.neutral_kir_custody
+                    || formal.canonical_kernel_ir_identity() != self.neutral_kir_custody
+                    || correspondence.grants_authority()
+                    || correspondence.semantic_u32_induction().grants_authority()
+                    || formal.grants_authority()
+                {
+                    return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
+                        "lossless semantic correspondence custody changed before final handoff",
+                    ));
+                }
+            }
+            PreparedLineageRosterCustodyV1::MultiRoot {
+                roster_identity,
+                middle_end_sha256,
+                correspondence_sha256,
+                formal_memory_sha256,
+                verus_sha256,
+            } => {
+                validate_lineage_roster_envelope_v1(
+                    self.middle_end.canonical_preimage(),
+                    *b"F2MRMID2",
+                    *middle_end_sha256,
+                    self.semantic_mir.identity().sha256(),
+                    self.neutral_kir_custody.into(),
+                    *roster_identity,
+                    &self.workgroups,
+                    LineageRosterPayloadV1::MiddleEnd,
+                )?;
+                validate_lineage_roster_envelope_v1(
+                    self.mir_to_kir_correspondence.canonical_preimage(),
+                    *b"F2MRCOR2",
+                    *correspondence_sha256,
+                    self.semantic_mir.identity().sha256(),
+                    self.neutral_kir_custody.into(),
+                    *roster_identity,
+                    &self.workgroups,
+                    LineageRosterPayloadV1::Correspondence,
+                )?;
+                validate_lineage_roster_envelope_v1(
+                    self.formal_memory.canonical_preimage(),
+                    *b"F2MRFOR2",
+                    *formal_memory_sha256,
+                    self.semantic_mir.identity().sha256(),
+                    self.neutral_kir_custody.into(),
+                    *roster_identity,
+                    &self.workgroups,
+                    LineageRosterPayloadV1::FormalMemory,
+                )?;
+                validate_lineage_roster_envelope_v1(
+                    &self.proof_verus_evidence,
+                    *b"F2MRVER2",
+                    *verus_sha256,
+                    self.semantic_mir.identity().sha256(),
+                    self.neutral_kir_custody.into(),
+                    *roster_identity,
+                    &self.workgroups,
+                    LineageRosterPayloadV1::VerusExecution,
+                )?;
+            }
         }
 
         let invocation_bytes = encode_descriptor_v3(&invocation)
@@ -365,7 +1264,7 @@ impl PreparedProductionSemanticLineageV3 {
                     self.formal_memory.identity().byte_len(),
                 )?,
             ),
-            self.verus_execution.canonical_bytes(),
+            &self.proof_verus_evidence,
         )?;
         let proof_binding =
             InertProofBindingReceiptV3::from_canonical_preimage(proof_binding.canonical_bytes())?;
@@ -385,21 +1284,46 @@ impl PreparedProductionSemanticLineageV3 {
             ),
         )?;
         let configured_target = target.to_string();
-        let target_binding = TargetBindingTranscriptV3::new(TargetBindingTranscriptInputsV3 {
-            protected_rustc_invocation: invocation_identity,
-            semantic_mir: semantic_identity,
-            target_neutral_kir: self.neutral_kir_identity,
-            target_bound_kir: self.bound_kir_identity,
-            configured_target: &configured_target,
-            rustc_llvm_target: self.rustc_layout.llvm_target(),
-            target_cpu: rustc_cpu,
-            target_features: rustc_features,
-            code_object_version: CODE_OBJECT_VERSION_V3,
-            wave_width_bits: WAVE_WIDTH_BITS_V3,
-            default_workgroup: self.default_workgroup,
-        })?;
+        let target_binding_bytes = match &self.roster_custody {
+            PreparedLineageRosterCustodyV1::Singleton => {
+                let [(_, workgroup)] = self.workgroups.as_ref() else {
+                    return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
+                        "singleton lineage changed its workgroup roster",
+                    ));
+                };
+                TargetBindingTranscriptV3::new(TargetBindingTranscriptInputsV3 {
+                    protected_rustc_invocation: invocation_identity,
+                    semantic_mir: semantic_identity,
+                    target_neutral_kir: self.neutral_kir_identity,
+                    target_bound_kir: self.bound_kir_identity,
+                    configured_target: &configured_target,
+                    rustc_llvm_target: self.rustc_layout.llvm_target(),
+                    target_cpu: rustc_cpu,
+                    target_features: rustc_features,
+                    code_object_version: CODE_OBJECT_VERSION_V3,
+                    wave_width_bits: WAVE_WIDTH_BITS_V3,
+                    default_workgroup: *workgroup,
+                })?
+                .canonical_bytes()
+                .to_vec()
+            }
+            PreparedLineageRosterCustodyV1::MultiRoot {
+                roster_identity, ..
+            } => encode_multi_root_target_binding_v1(
+                invocation_identity,
+                semantic_identity,
+                self.neutral_kir_identity,
+                self.bound_kir_identity,
+                &configured_target,
+                self.rustc_layout.llvm_target(),
+                rustc_cpu,
+                rustc_features,
+                *roster_identity,
+                &self.workgroups,
+            )?,
+        };
         let target_binding =
-            InertTargetBindingReceiptV3::from_canonical_preimage(target_binding.canonical_bytes())?;
+            InertTargetBindingReceiptV3::from_canonical_preimage(target_binding_bytes)?;
         let target_binding_identity = receipt_identity(
             target_binding.identity().sha256(),
             target_binding.identity().byte_len(),
@@ -808,10 +1732,123 @@ impl From<InertSemanticCompilerModuleHandoffErrorV3> for ProductionSemanticLinea
 #[cfg(test)]
 mod layout_tests {
     use super::*;
+    use fe2o3_kernel_ir::{
+        BasicBlock, BlockId, ExplicitLaunchExtent, FormalIndexWidth, Function, Kernel,
+        LaunchDomain, LaunchExtent, Signature, Terminator, WorkgroupSize,
+        derive_kernel_memory_obligations_for_launch,
+    };
 
     fn llvm_with_layout(layout: &str) -> String {
         format!(
             "target triple = \"amdgcn-amd-amdhsa\"\ntarget datalayout = \"{layout}\"\n\ndefine void @body() {{ ret void }}\n"
+        )
+    }
+
+    fn formal_payload(kernel_name: &str) -> Box<[u8]> {
+        let mut block = BasicBlock::new(BlockId(0));
+        block.terminator = Some(Terminator::Return { values: vec![] });
+        let function = Function::kernel_entry(
+            kernel_name,
+            Signature::new(vec![], vec![]),
+            vec![],
+            vec![block],
+        );
+        let mut kernel = Kernel::new(
+            kernel_name,
+            kernel_name,
+            LaunchDomain::D1 {
+                x: LaunchExtent::Static(64),
+            },
+        );
+        kernel.workgroup_size = Some(WorkgroupSize::new(64, 1, 1));
+        let mut module = Module::new(format!("lineage_{kernel_name}"));
+        module.functions.push(function);
+        module.kernels.push(kernel);
+        let obligations = derive_kernel_memory_obligations_for_launch(
+            &module,
+            &module.kernels[0].id,
+            ExplicitLaunchExtent::Exact {
+                rank: 1,
+                extents: [64, 1, 1],
+            },
+            FormalIndexWidth::Bits64,
+        )
+        .unwrap();
+        InertCanonicalFormalMemoryObligationReceiptV1::from_obligations(obligations.obligations())
+            .unwrap()
+            .into_canonical_bytes()
+            .into_boxed_slice()
+    }
+
+    type FormalRosterFixture = (
+        Vec<u8>,
+        [u8; 32],
+        [u8; 32],
+        LineageNeutralKirIdentityV1,
+        [u8; 32],
+        Vec<(String, [u32; 3])>,
+    );
+
+    fn formal_roster_fixture() -> FormalRosterFixture {
+        let semantic_sha256 = [0x31; 32];
+        let roster_identity = [0x42; 32];
+        let neutral = LineageNeutralKirIdentityV1 {
+            version: ProductionCanonicalKernelIrVersionV1::V8,
+            canonical_length: 4_096,
+            digest: [0x53; 32],
+        };
+        let roots = vec![
+            PreparedLineageRootV1 {
+                logical_name: "zeta".to_owned(),
+                export_symbol: b"zeta_kernel".to_vec().into_boxed_slice(),
+                semantic_root: 3,
+                semantic_root_identity: [0x61; 32],
+                kernel_binding: [0x71; 32],
+                source_rank: 1,
+                kernel_id: "zeta_kernel".to_owned(),
+                workgroup: [64, 1, 1],
+                middle_end: vec![1].into_boxed_slice(),
+                correspondence: vec![1].into_boxed_slice(),
+                formal_memory: formal_payload("zeta_kernel"),
+                verus_execution: vec![1].into_boxed_slice(),
+            },
+            PreparedLineageRootV1 {
+                logical_name: "alpha".to_owned(),
+                export_symbol: b"alpha_kernel".to_vec().into_boxed_slice(),
+                semantic_root: 9,
+                semantic_root_identity: [0x62; 32],
+                kernel_binding: [0x72; 32],
+                source_rank: 1,
+                kernel_id: "alpha_kernel".to_owned(),
+                workgroup: [128, 1, 1],
+                middle_end: vec![2].into_boxed_slice(),
+                correspondence: vec![2].into_boxed_slice(),
+                formal_memory: formal_payload("alpha_kernel"),
+                verus_execution: vec![2].into_boxed_slice(),
+            },
+        ];
+        let workgroups = roots
+            .iter()
+            .map(|root| (root.kernel_id.clone(), root.workgroup))
+            .collect::<Vec<_>>();
+        let bytes = encode_lineage_roster_envelope_v1(
+            *b"F2MRFOR2",
+            &semantic_sha256,
+            neutral,
+            roster_identity,
+            &[0, 1],
+            &roots,
+            LineageRosterPayloadV1::FormalMemory,
+        )
+        .unwrap();
+        let identity = Sha256::digest(&bytes).into();
+        (
+            bytes,
+            identity,
+            semantic_sha256,
+            neutral,
+            roster_identity,
+            workgroups,
         )
     }
 
@@ -841,5 +1878,113 @@ mod layout_tests {
         assert!(source.contains("CanonicalProductionKirToLlvmReplayEvidenceV1::from_live_inputs"));
         assert!(source.contains("validate_compiler_kir_to_llvm_replay_v1"));
         assert!(!source.contains(concat!("AmdgpuLoweringTranscript", "V3::new")));
+    }
+
+    #[test]
+    fn multi_root_lineage_strictly_validates_every_root_field_and_payload_identity() {
+        let (bytes, identity, semantic, neutral, roster, workgroups) = formal_roster_fixture();
+        let mut symbol_order = (0..workgroups.len()).collect::<Vec<_>>();
+        symbol_order.sort_unstable_by_key(|index| workgroups[*index].0.as_str());
+        assert_eq!(symbol_order, vec![1, 0]);
+        assert_eq!(
+            &bytes[128..136],
+            [0_u32.to_le_bytes(), 1_u32.to_le_bytes()].concat(),
+            "descriptor binding order must remain independent of symbol order",
+        );
+        validate_lineage_roster_envelope_v1(
+            &bytes,
+            *b"F2MRFOR2",
+            identity,
+            &semantic,
+            neutral,
+            roster,
+            &workgroups,
+            LineageRosterPayloadV1::FormalMemory,
+        )
+        .unwrap();
+
+        // Every fixed header/root field, every permutation slot, every framed
+        // string, and every nested payload byte remains content-identity bound.
+        let mutation_offsets = [
+            0,
+            8,
+            10,
+            12,
+            16,
+            48,
+            50,
+            52,
+            60,
+            92,
+            124,
+            128,
+            132,
+            136,
+            140,
+            144,
+            176,
+            208,
+            240,
+            241,
+            244,
+            248,
+            252,
+            256,
+            260,
+            264,
+            bytes.len() - 1,
+        ];
+        for offset in mutation_offsets {
+            let mut hostile = bytes.clone();
+            hostile[offset] ^= 1;
+            assert!(
+                validate_lineage_roster_envelope_v1(
+                    &hostile,
+                    *b"F2MRFOR2",
+                    identity,
+                    &semantic,
+                    neutral,
+                    roster,
+                    &workgroups,
+                    LineageRosterPayloadV1::FormalMemory,
+                )
+                .is_err(),
+                "mutation at byte {offset} was accepted",
+            );
+        }
+
+        let mut wrong_permutation = bytes.clone();
+        wrong_permutation[128..132].copy_from_slice(&1_u32.to_le_bytes());
+        wrong_permutation[132..136].copy_from_slice(&0_u32.to_le_bytes());
+        let wrong_identity = Sha256::digest(&wrong_permutation).into();
+        assert!(
+            validate_lineage_roster_envelope_v1(
+                &wrong_permutation,
+                *b"F2MRFOR2",
+                wrong_identity,
+                &semantic,
+                neutral,
+                roster,
+                &workgroups,
+                LineageRosterPayloadV1::FormalMemory,
+            )
+            .is_err()
+        );
+
+        let mut reordered_workgroups = workgroups.clone();
+        reordered_workgroups.swap(0, 1);
+        assert!(
+            validate_lineage_roster_envelope_v1(
+                &bytes,
+                *b"F2MRFOR2",
+                identity,
+                &semantic,
+                neutral,
+                roster,
+                &reordered_workgroups,
+                LineageRosterPayloadV1::FormalMemory,
+            )
+            .is_err()
+        );
     }
 }
