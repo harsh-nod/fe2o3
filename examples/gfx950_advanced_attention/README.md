@@ -26,22 +26,30 @@ tokens, and attention head dimension 128. The suite contains:
   across the chunk boundary;
 - content-indexed sparse attention with top-two block selection, top-three
   token selection, and sparse normalization/value reduction over those tokens;
+- DeepSeek sparse attention whose explicit top-k token list is produced at the
+  Lightning Indexer boundary, masks out-of-range sentinels, and evaluates QK,
+  stable softmax, and PV over only the remaining unique KV rows;
 - compressed hybrid attention combining three compressed global blocks with a
   four-token sliding window;
 - AttnRes four-depth softmax aggregation, four-branch gated residual mixing,
   and a four-stream mHC mixer with three Sinkhorn iterations.
 
 Every output and sparse index is compared against an independently written CPU
-oracle using deterministic inputs. Attention Q, K, and V use non-uniform,
-exactly representable E4M3 values so token-dependent score and transpose errors
-cannot cancel as a common softmax term. The executable rejects non-gfx950 devices.
-The two attention kernels use a gfx950 FP8
+oracle using deterministic inputs. The dense-tile attention profiles use
+non-uniform, exactly representable E4M3 values; the DeepSeek sparse teaching
+profile uses finite FP32 values. The executable rejects non-gfx950 devices.
+The content-selected and compressed-hybrid kernels use a gfx950 FP8
 `v_mfma_f32_16x16x128_f8f6f4` score tile whose K operand is supplied by four
 `ds_read_b64_tr_b8` LDS transpose reads. `check_isa.sh` validates those
 instructions, their exact counts, and transpose-before-MFMA ordering within
 each kernel symbol. At this bounded shape, the score MFMA covers all 16 tokens;
 the sparse kernel applies its selected ragged set to softmax and the value
-reduction. This suite does not claim a production sparse-QK scheduling strategy.
+reduction. The separate DeepSeek kernel instead performs FP32 Wave16 reductions
+for exactly the indexed rows; using the dense MFMA tile there
+would defeat its sparse-compute contract. The current teaching profile repeats
+the selected score reductions in four Wave16 subgroups and gives subgroup zero
+exclusive ownership of the 16 output stores. It does not reproduce the learned
+indexer or claim a production FlashMLA scheduling strategy.
 
 Run the Rust source and independent CPU-reference checks:
 
@@ -55,6 +63,7 @@ Run the production Rust lowering and numerical verification on a gfx950 host:
 ./run-kda-decode-gfx950.sh
 ./run-kda-prefill-gfx950.sh
 ./run-content-sparse-attention-gfx950.sh
+./run-deepseek-sparse-attention-gfx950.sh
 ./run-compressed-hybrid-attention-gfx950.sh
 ./run-attnres-aggregate-gfx950.sh
 ./run-four-branch-residual-gfx950.sh

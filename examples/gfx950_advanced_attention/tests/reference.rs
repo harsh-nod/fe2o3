@@ -1,11 +1,12 @@
 use fe2o3_gfx950_advanced_attention::{
-    ATTENTION_TOKENS_V1, CHANNELS_V1, HEAD_DIMENSION_V1, KDA_TAPS_V1, MIXING_STREAMS_V1,
-    PREFILL_TOKENS_V1,
+    ATTENTION_TOKENS_V1, CHANNELS_V1, DEEPSEEK_INVALID_TOKEN_V1, HEAD_DIMENSION_V1, KDA_TAPS_V1,
+    MIXING_STREAMS_V1, PREFILL_TOKENS_V1,
     reference::{
         ReferenceErrorV1, attnres_aggregate_reference_v1, compressed_hybrid_attention_reference_v1,
-        content_sparse_attention_reference_v1, four_branch_residual_reference_v1,
-        kda_gdn_decode_reference_v1, kda_gdn_prefill_reference_v1,
-        mhc_sinkhorn_matrix_reference_v1, mhc_sinkhorn_mix_reference_v1,
+        content_sparse_attention_reference_v1, deepseek_sparse_attention_reference_v1,
+        four_branch_residual_reference_v1, kda_gdn_decode_reference_v1,
+        kda_gdn_prefill_reference_v1, mhc_sinkhorn_matrix_reference_v1,
+        mhc_sinkhorn_mix_reference_v1,
     },
 };
 
@@ -86,6 +87,36 @@ fn sparse_selection_uses_numeric_signed_zero_ties_and_lower_ids() {
 
     let result = content_sparse_attention_reference_v1(&q, &k, &v, &content_scores).unwrap();
     assert_eq!(result.selected, [0, 1, 4]);
+}
+
+#[test]
+fn deepseek_sparse_attention_consumes_only_valid_indexer_tokens() {
+    let q = deterministic_floats(HEAD_DIMENSION_V1, 1, 0.5);
+    let k = deterministic_floats(ATTENTION_TOKENS_V1 * HEAD_DIMENSION_V1, 2, 0.5);
+    let v = deterministic_floats(ATTENTION_TOKENS_V1 * CHANNELS_V1, 3, 0.5);
+    let result =
+        deepseek_sparse_attention_reference_v1(&q, &k, &v, &[13, DEEPSEEK_INVALID_TOKEN_V1, 2, 9])
+            .unwrap();
+    assert_eq!(result.output.len(), CHANNELS_V1);
+    assert_finite(&result.output);
+    assert!(result.softmax_maximum.is_finite());
+    assert!(result.softmax_normalizer.is_finite());
+    assert!((1.0..=3.0).contains(&result.softmax_normalizer));
+}
+
+#[test]
+fn deepseek_sparse_attention_rejects_duplicate_or_empty_valid_domains() {
+    let q = deterministic_floats(HEAD_DIMENSION_V1, 1, 0.5);
+    let k = deterministic_floats(ATTENTION_TOKENS_V1 * HEAD_DIMENSION_V1, 2, 0.5);
+    let v = deterministic_floats(ATTENTION_TOKENS_V1 * CHANNELS_V1, 3, 0.5);
+    assert_eq!(
+        deepseek_sparse_attention_reference_v1(&q, &k, &v, &[2, 7, 2, 9]),
+        Err(ReferenceErrorV1::InvalidSparseIndices),
+    );
+    assert_eq!(
+        deepseek_sparse_attention_reference_v1(&q, &k, &v, &[DEEPSEEK_INVALID_TOKEN_V1; 4],),
+        Err(ReferenceErrorV1::InvalidSparseIndices),
+    );
 }
 
 #[test]
