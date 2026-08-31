@@ -145,7 +145,11 @@ mountpoint-to-retained-descriptor identity, loop status, qualification-parent
 continuity, and every installed manifest/content file against sealed deployment
 custody. The move-only mounted value still grants no boot or execution
 authority. Cleanup unmounts overlay first, SquashFS second, releases the
-autoclear loop device, and then removes the exact staging tree.
+autoclear loop device, and then preflights and removes the exact staging tree.
+The recursive removal is descriptor-relative, follows no symlink, crosses no
+mount, and enforces the same 64-level and 131,072-entry bounds as interrupted
+worker recovery. This permits later systemd steps to populate only the
+disposable overlay while retaining deterministic fail-closed cleanup.
 
 The fully static `fe2o3-compiler-execution-qualification` image exposes seven
 commands. `probe` observes effective UID, task count, procfs, loop-control

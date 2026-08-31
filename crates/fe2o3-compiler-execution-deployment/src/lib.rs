@@ -2378,6 +2378,31 @@ mod tests {
     }
 
     #[test]
+    fn qualification_staging_cleanup_removes_bounded_disposable_content_only() {
+        let (prepared, qualification_parent, _base_root, _install_parent) = prepared_for_staging();
+        let staged =
+            staging::stage_compiler_execution_qualification_for_test_v1(prepared, current_owner())
+                .unwrap();
+        let root = qualification_parent.path().join(staged.run_name());
+        let nested = root.join("upper/var/lib/fe2o3/compiler-execution");
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(nested.join("state"), b"disposable").unwrap();
+        let non_utf8 = OsString::from_vec(vec![b'e', b'v', 0x80]);
+        fs::write(root.join("evidence").join(non_utf8), b"evidence").unwrap();
+        let outside = qualification_parent.path().join("outside");
+        fs::write(&outside, b"preserved").unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("run/outside-link")).unwrap();
+
+        staged.cleanup().unwrap();
+
+        assert_eq!(fs::read(&outside).unwrap(), b"preserved");
+        assert_eq!(
+            fs::read_dir(qualification_parent.path()).unwrap().count(),
+            1
+        );
+    }
+
+    #[test]
     fn every_qualification_staging_boundary_cleans_to_an_empty_parent() {
         let points = staging::qualification_staging_fault_points_for_test_v1();
         assert_eq!(points.len(), 21);

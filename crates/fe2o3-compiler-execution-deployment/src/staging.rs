@@ -219,14 +219,12 @@ impl StagedCompilerExecutionQualificationV1 {
             return Ok(());
         }
         if let Some(root) = &self.root {
-            for name in self.created_directories.iter().rev() {
-                match unlinkat(root, *name, AtFlags::REMOVEDIR) {
-                    Ok(()) | Err(rustix::io::Errno::NOENT) => {}
-                    Err(source) => {
-                        return Err(io_error("remove qualification staging directory", source));
-                    }
-                }
-            }
+            let root_device = fstat(root)
+                .map_err(|source| {
+                    io_error("inspect qualification staging root for cleanup", source)
+                })?
+                .st_dev;
+            clear_bounded_staging_recovery_tree_v1(root, root_device)?;
         }
         self.directories.clear();
         self.created_directories.clear();
