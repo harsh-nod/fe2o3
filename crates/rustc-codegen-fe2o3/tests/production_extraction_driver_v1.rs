@@ -185,14 +185,18 @@ fn attributed_kernel_is_recollected_inside_a_real_amdgcn_dependency_graph() {
 
 #[test]
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]
-fn two_kernel_collection_reaches_the_explicit_pre_kir_multi_root_boundary() {
-    // The current general typed frontend authenticates only rank-one 64x1x1
-    // or 256x1x1 source launches. This live vertical therefore proves two
-    // independently derived rank-one contracts; heterogeneous rank remains
-    // covered at the source-layout validation boundary until the frontend can
-    // honestly produce another rank.
+fn two_and_three_kernel_collections_reach_one_exact_multi_entry_llvm_module() {
+    for (feature, expected_symbols) in [
+        ("multi-root-ownership", &["alpha", "zeta"][..]),
+        ("three-root-ownership", &["alpha", "omega", "zeta"][..]),
+    ] {
+        assert_multi_root_extraction(feature, expected_symbols);
+    }
+}
+
+fn assert_multi_root_extraction(feature: &str, expected_symbols: &[&str]) {
     let target = ScratchTarget::new();
-    let llvm_output = target.path().join("two-root.ll");
+    let llvm_output = target.path().join(format!("{feature}.ll"));
     let output = Command::new(env!("CARGO"))
         .current_dir(workspace())
         .env(
@@ -222,43 +226,59 @@ fn two_kernel_collection_reaches_the_explicit_pre_kir_multi_root_boundary() {
             "-p",
             "fe2o3-production-extraction-fixture",
             "--features",
-            "multi-root-ownership",
+            feature,
             "--target",
             "amdgcn-amd-amdhsa",
             "--target-dir",
         ])
         .arg(&target.path)
         .output()
-        .expect("run two-kernel AMD extraction fixture");
+        .expect("run multi-kernel AMD extraction fixture");
     let stderr = String::from_utf8(output.stderr).expect("rustc diagnostic is UTF-8");
 
     assert!(
-        !output.status.success(),
-        "two-kernel production extraction unexpectedly cleared the pre-Kernel-IR roster boundary",
-    );
-    let expected = "production compilation retained a verified ranked roster with 2 kernel roots; target-neutral Kernel IR lowering remains fail-closed until it can consume the complete roster";
-    assert_eq!(
-        stderr.matches(expected).count(),
-        1,
-        "two-kernel production extraction did not stop at the exact pre-Kernel-IR roster boundary:\n{stderr}",
+        output.status.success(),
+        "{feature} production extraction failed:\n{stderr}",
     );
     assert!(
-        !llvm_output.exists(),
-        "two-kernel production extraction wrote target LLVM past the pre-Kernel-IR roster boundary",
+        stderr.contains("Rust -> semantic MIR -> ranked PLIRON -> Kernel IR")
+            && stderr.contains("composed formal/ranked memory -> gfx942:xnack- LLVM")
+            && stderr.contains("artifact/launch authority false"),
+        "{feature} extraction omitted its successful lowering receipt:\n{stderr}",
     );
     for forbidden in [
-        "production descriptor evidence has an internal",
-        "production compilation geometry validation failed",
-        "semantic-to-ranked projection rejected a semantic closure that is neither one kernel root",
-        "production extraction found no registered kernel",
-        "one complete typed root",
-        "one semantic root",
+        "error[FE2O3-RACE",
+        "lowering stopped",
+        "panic",
+        "MultiRootTargetNeutralLowering",
     ] {
         assert!(
             !stderr.contains(forbidden),
-            "two-kernel production extraction entered an earlier forbidden path {forbidden:?}:\n{stderr}",
+            "{feature} extraction emitted forbidden diagnostic {forbidden:?}:\n{stderr}",
         );
     }
+
+    let llvm = std::fs::read_to_string(&llvm_output)
+        .unwrap_or_else(|error| panic!("{feature} did not emit LLVM: {error}"));
+    assert_eq!(
+        llvm.matches("define amdgpu_kernel void @").count(),
+        expected_symbols.len(),
+        "{feature} LLVM did not contain exactly one kernel definition per root:\n{llvm}",
+    );
+    let mut offsets = Vec::new();
+    for symbol in expected_symbols {
+        let marker = format!("define amdgpu_kernel void @{symbol}(");
+        assert_eq!(
+            llvm.matches(&marker).count(),
+            1,
+            "{feature} LLVM did not contain {symbol:?} exactly once:\n{llvm}",
+        );
+        offsets.push(llvm.find(&marker).unwrap());
+    }
+    assert!(
+        offsets.windows(2).all(|pair| pair[0] < pair[1]),
+        "{feature} LLVM changed canonical KernelId artifact order: {offsets:?}",
+    );
 }
 
 fn run_extraction(target: &ScratchTarget) -> String {

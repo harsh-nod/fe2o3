@@ -4,6 +4,7 @@ use fe2o3_device::{DisjointSlice, WriteOnlyDisjointSlice, kernel, thread};
 
 #[cfg(not(any(
     feature = "multi-root-ownership",
+    feature = "three-root-ownership",
     feature = "write-only-output",
     feature = "write-only-disjoint-output",
     feature = "reference-positive",
@@ -61,7 +62,7 @@ pub fn fill_write_only_disjoint(mut output: WriteOnlyDisjointSlice<u32>) {
     let _ = output.write_disjoint(index, value);
 }
 
-#[cfg(feature = "multi-root-ownership")]
+#[cfg(any(feature = "multi-root-ownership", feature = "three-root-ownership"))]
 #[kernel(
     typed,
     launch(required = [64, 1, 1], max = [64, 1, 1])
@@ -73,7 +74,7 @@ pub fn alpha(mut output: DisjointSlice<u32>) {
     }
 }
 
-#[cfg(feature = "multi-root-ownership")]
+#[cfg(any(feature = "multi-root-ownership", feature = "three-root-ownership"))]
 #[kernel(
     typed,
     launch(required = [64, 1, 1], max = [64, 1, 1])
@@ -82,6 +83,18 @@ pub fn zeta(mut output: DisjointSlice<u32>) {
     let index = thread::index_1d();
     if let Some(element) = output.get_mut(index) {
         *element = 23;
+    }
+}
+
+#[cfg(feature = "three-root-ownership")]
+#[kernel(
+    typed,
+    launch(required = [64, 1, 1], max = [64, 1, 1])
+)]
+pub fn omega(mut output: DisjointSlice<u32>) {
+    let index = thread::index_1d();
+    if let Some(element) = output.get_mut(index) {
+        *element = 29;
     }
 }
 

@@ -70,7 +70,7 @@ impl TargetLineageIdentityV3 {
         self.byte_len
     }
 
-    fn encode(self) -> [u8; IDENTITY_BYTES_V3] {
+    pub(crate) fn encode(self) -> [u8; IDENTITY_BYTES_V3] {
         let mut encoded = [0_u8; IDENTITY_BYTES_V3];
         encoded[..32].copy_from_slice(&self.sha256);
         encoded[32..].copy_from_slice(&self.byte_len.to_le_bytes());
