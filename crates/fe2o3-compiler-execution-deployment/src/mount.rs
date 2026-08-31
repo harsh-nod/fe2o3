@@ -184,6 +184,17 @@ impl MountedCompilerExecutionQualificationV1 {
         duplicate_exact_mount_descriptor(root, "composed root")
     }
 
+    pub(super) fn inherit_systemd_preflight_root_descriptor(
+        &self,
+    ) -> Result<OwnedFd, DeploymentVerificationErrorV1> {
+        self.revalidate_systemd_preflight_state()?;
+        let root = self
+            .mounted_root
+            .as_ref()
+            .ok_or_else(|| changed("mounted qualification root descriptor was released"))?;
+        duplicate_exact_mount_descriptor(root, "composed root")
+    }
+
     pub(super) fn inherit_systemd_machine_descriptors(
         &self,
     ) -> Result<(OwnedFd, OwnedFd), DeploymentVerificationErrorV1> {

@@ -44,7 +44,7 @@ exec transition. The root-controlled coordinator now establishes the locked
 child profile, retains pidfd/reaping custody, authenticates ready plus exec EOF,
 and admits the live endpoint. The sole root coordinator transfers that admitted
 endpoint into the protected supervisor, retains both child lifecycles, and is
-exposed through one fixed systemd activation contract. Running the authoritative
+exposed through one fixed direct systemd service contract. Running the authoritative
 root-only qualification remains open. Lifecycle custody is three independently
 opened shared-lock descriptions: coordinator ownership, supervisor FD 12, and
 anchor-helper FD 6 transferred to daemon FD 5. The protected children retain
@@ -410,8 +410,10 @@ mandatory EOF, malformed and substituted packets, ancillary descriptors,
 trailing packets, timeout, closed-peer cleanup, and serving typestate custody.
 The root-owned distinct-UID launcher, profile gate, fixed descriptor transfer,
 canonical deployment readiness, and supervisor/anchor lifecycle custody are
-implemented. The fixed systemd socket/service, sysusers, tmpfiles, and 14 named
-activation descriptors are implemented and structurally checked. A canonical
+implemented. The fixed systemd service, sysusers, tmpfiles, and 14 named
+activation descriptors are implemented and structurally checked. Root binds but
+does not listen on the fixed socket; the protected supervisor activates it so
+clients observe the supervisor credentials. A canonical
 caller-pinned install manifest and static musl verifier now admit the complete
 14-file source bundle through retained descriptors and preserve its manifest
 and 13 content files in sealed anonymous custody. A static root-only installer

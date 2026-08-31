@@ -494,6 +494,15 @@ where
         assert!(!proof_inputs.authenticates_compiler_origin());
         assert!(!proof_inputs.establishes_llvm_or_machine_refinement());
         assert!(!proof_inputs.grants_runtime_authority());
+        let target_lineage = request
+            .validate_compiler_target_lineage_v1(&proof_inputs)
+            .unwrap();
+        assert!(target_lineage.has_exact_receipt_association());
+        assert!(target_lineage.has_exact_kir_to_llvm_replay());
+        assert!(!target_lineage.establishes_semantic_refinement());
+        assert!(!target_lineage.establishes_llvm_to_machine_refinement());
+        assert!(!target_lineage.authenticates_producer());
+        assert!(!target_lineage.grants_runtime_authority());
         assert_eq!(
             request
                 .compiler_execution_receipt_carriage()
@@ -669,6 +678,9 @@ where
         let proof_inputs = request
             .validate_compiler_proof_inputs_v4()
             .expect("the integration fixture carries canonical compiler proof inputs");
+        let target_lineage = request
+            .validate_compiler_target_lineage_v1(&proof_inputs)
+            .expect("the integration fixture carries canonical target lineage");
         let finalizer_derivation = self.foreign_finalizer.take().unwrap_or_else(|| {
             request
                 .independently_revalidate_finalizer_derivation()
@@ -682,6 +694,7 @@ where
                 finalizer_derivation,
                 compiler_execution,
                 proof_inputs,
+                target_lineage,
                 [0xc1; 32],
                 verification_transcript,
                 [0xc3; 32],

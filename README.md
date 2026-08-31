@@ -235,8 +235,9 @@ requires independent profile and namespace validation, canonical PID/deployment
 readiness, bootstrap EOF, pidfd liveness, and supervisor-before-anchor teardown.
 One static root entrypoint consumes the fixed 14-descriptor systemd activation
 contract, clears the environment, continuously revalidates both children, and
-performs supervisor-before-anchor shutdown. The checked-in socket, service,
-sysusers, and tmpfiles definitions pin the listener and account policy.
+performs supervisor-before-anchor shutdown. The checked-in service, sysusers,
+and tmpfiles definitions pin the listener and account policy. Root binds the
+fixed socket without listening; only the distinct-UID supervisor activates it.
 Authoritative root-only distinct-UID qualification and the refinement evidence
 join remain open, so the result remains authority-free.
 The issuer's direct transition
@@ -312,7 +313,8 @@ root-coordinator-to-supervisor wiring, lifecycle custody, and exact systemd
 service-account/socket policy are implemented. The fixed root provisioner now
 derives and durably installs the complete canonical record graph from measured
 static images, provisioned identities, and freshly generated or retained key
-seeds. The root coordinator opens three independent shared-service leases on a
+seeds, including the root-owned Cargo client profile derived from that same
+graph. The root coordinator opens three independent shared-service leases on a
 root-only sibling lock file before key admission: one for its own lifecycle,
 one transferred to supervisor FD 12, and one transferred through anchor-helper
 FD 6 to daemon FD 5. Close-only custody keeps exclusive provisioning blocked
@@ -338,16 +340,19 @@ Atomic read-only loop attachment plus detached SquashFS/OverlayFS composition
 is implemented and rechecks the installed projection against sealed custody,
 but has not run under host root. A static qualification harness and read-only
 host probe now drive the sole verify-to-cleanup transaction. Its closed
-22-point fault set covers mount admission, every pinned systemd command and
-subsequent lower revalidation, exact preflight postconditions, isolated machine
-spawn, supervisor-socket readiness, bounded shutdown, post-boot lower
-revalidation, both unmounts, loop release, and staging removal. Normal, fault, and campaign runs share that
+28-point fault set covers mount admission, every pinned systemd command and
+subsequent lower revalidation, exact preflight postconditions, production
+generation-1 provisioning with independent record/key/image admission, isolated machine
+spawn, exact socket metadata admission, a real non-root recover/cancel client
+transaction, bounded shutdown, post-boot lower
+and provisioning revalidation, both unmounts, loop release, and staging removal. Normal, fault, and campaign runs share that
 transaction, and each admitted fault freshly revalidates the bundle, base, and
 complete installed lower after cleanup. One aggregate campaign requires first
-publication, 45 reacquisitions, two normal runs, all 22 faults, and complete
+publication, 57 reacquisitions, two normal runs, all 28 faults, and complete
 parent cleanup. Its root paths remain unexecuted
 because the available SSH identity is not root.
-The descriptor-pinned boot path is implemented, but root/cgroup live evidence
+The descriptor-pinned provision/boot path and supervisor-owned cgroup V2 containment are
+implemented, but root/cgroup live evidence
 and distinct-UID service execution remain absent. The concrete
 protected verifier also remains absent. A fixed
 receipt sidecar and publication ACK now
@@ -714,6 +719,20 @@ Safe ownership of resources used by asynchronous copies is documented in
   establishes exact deterministic KIR-to-LLVM derivation and custody, not a
   formal semantic-preservation proof, LLVM-to-machine refinement, or authority
   to remove the guard, publish, load, or launch.
+- Default Worker V3 singleton decisions now also consume a move-only target
+  lineage owner produced by an independent verifier. The verifier uses the
+  shared strict codec to decode target binding, AMDHSA data layout, and the
+  semantic-to-LLVM association; rederives the semantic target-layout identity;
+  checks every associated compiler receipt; and retains the exact KIR-to-LLVM
+  replay. Final promotion byte-matches those records to the capsule, binds the
+  associated final LLVM identity to both the compiler handoff and independently
+  reconstructed finalizer module, and binds code-object V6 and the exact
+  singleton workgroup to the admitted descriptor. Rehashed target-binding,
+  lowering, and semantic-to-LLVM records from another valid compilation are
+  rejected. This is exact singleton association and replay, not semantic or
+  LLVM-to-machine refinement. The private multi-root target-binding encoding is
+  not yet decoded or retained by this owner and remains an open production
+  verifier join.
 - The same production Worker exchange now retains exact downstream derivation
   custody from linked LLVM module through optimized LLVM module, generated
   object, ordered native-link inputs, the path-independent in-process LLD

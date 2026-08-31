@@ -21,6 +21,7 @@ pub use persisted::{
 pub const MAX_SCHEDULE_DECISIONS_V1: usize = 4 * 1024 * 1024;
 
 const CONTEXT_DOMAIN_V1: &[u8] = b"FE2O3/KIR-SIM/SCHEDULE-CONTEXT/V1\0";
+const CONTEXT_DOMAIN_V2: &[u8] = b"FE2O3/KIR-SIM/SCHEDULE-CONTEXT/V2\0";
 const TRANSCRIPT_DOMAIN_V1: &[u8] = b"FE2O3/KIR-SIM/SCHEDULE-TRANSCRIPT/V1\0";
 const RECORD_INTEGRITY_DOMAIN_V1: &[u8] = b"FE2O3/KIR-SIM/SCHEDULE-RECORD/V1\0";
 
@@ -645,7 +646,19 @@ fn schedule_context_identity(
     limits: SimulationLimitsV1,
 ) -> [u8; 32] {
     let mut hash = Sha256::new();
-    hash.update(CONTEXT_DOMAIN_V1);
+    let write_only = request.arguments.iter().any(|argument| match argument {
+        SimulationArgumentV1::Scalar(_) => false,
+        SimulationArgumentV1::Buffer(buffer) => buffer.access() == AccessMode::WriteOnly,
+        SimulationArgumentV1::BufferView(view) => view.access() == AccessMode::WriteOnly,
+    }) || request
+        .shared_buffers
+        .iter()
+        .any(|shared| shared.buffer.access() == AccessMode::WriteOnly);
+    hash.update(if write_only {
+        CONTEXT_DOMAIN_V2
+    } else {
+        CONTEXT_DOMAIN_V1
+    });
     hash.update(identity.digest());
     hash.update(identity.canonical_length().to_le_bytes());
     hash_bytes(&mut hash, request.kernel.as_str().as_bytes());
@@ -777,6 +790,7 @@ const fn access_tag(access: AccessMode) -> u8 {
     match access {
         AccessMode::ReadOnly => 0,
         AccessMode::ReadWrite => 1,
+        AccessMode::WriteOnly => 2,
     }
 }
 

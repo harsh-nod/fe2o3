@@ -102,6 +102,14 @@ qualification_target="${repo_root}/deployment/qualification/systemd/fe2o3-qualif
 readonly qualification_target
 [[ -f "${qualification_target}" && ! -L "${qualification_target}" ]] ||
   fail 'qualification target is missing'
+qualification_client_service="${repo_root}/deployment/qualification/systemd/fe2o3-qualification-client-check.service"
+readonly qualification_client_service
+[[ -f "${qualification_client_service}" && ! -L "${qualification_client_service}" ]] ||
+  fail 'qualification client-check service is missing'
+qualification_client_sysusers="${repo_root}/deployment/qualification/sysusers.d/fe2o3-qualification-client.conf"
+readonly qualification_client_sysusers
+[[ -f "${qualification_client_sysusers}" && ! -L "${qualification_client_sysusers}" ]] ||
+  fail 'qualification client identity is missing'
 mapfile -t lock_lines <"${package_lock}"
 readonly lock_lines
 [[ "${#lock_lines[@]}" -ge 6 ]] || fail 'package lock is truncated'
@@ -234,7 +242,7 @@ readonly nspawn_version
 
 install -d -m 0755 "${root}/etc" "${root}/etc/systemd/system" \
   "${root}/usr/share/fe2o3/qualification-base" \
-  "${root}/usr/lib/systemd/system"
+  "${root}/usr/lib/systemd/system" "${root}/usr/lib/sysusers.d"
 install -m 0444 "${base_info}" \
   "${root}/usr/share/fe2o3/qualification-base/BASE-INFO"
 printf 'root:x:0:0:root:/root:/bin/bash\n' >"${root}/etc/passwd"
@@ -253,6 +261,10 @@ chmod 0400 "${root}/etc/shadow" "${root}/etc/gshadow"
 
 install -m 0444 "${qualification_target}" \
   "${root}/usr/lib/systemd/system/fe2o3-qualification.target"
+install -m 0444 "${qualification_client_service}" \
+  "${root}/usr/lib/systemd/system/fe2o3-qualification-client-check.service"
+install -m 0444 "${qualification_client_sysusers}" \
+  "${root}/usr/lib/sysusers.d/fe2o3-qualification-client.conf"
 
 unexpected="$(find "${root}" -xdev ! -type d ! -type f ! -type l -print -quit)"
 [[ -z "${unexpected}" ]] || fail "base root contains an unsupported object: ${unexpected}"

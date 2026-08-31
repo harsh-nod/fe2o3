@@ -68,3 +68,21 @@ Cargo supplies one absolute monotonic deadline across child admission,
 supervisor connection and transfer, and readiness. Individual duration-based
 operations remain available, but production does not reset the timeout between
 those transitions.
+
+The `fe2o3-compiler-execution-client-check` executable exercises that exact
+production path as a non-root member of the profile's supervisor group. Its
+parent admits the root-owned production client profile, inherits the sealed
+profile policy into the child at FD 202, creates the child's service endpoint
+at FD 195 through `PendingCompilerExecutionChildChannelV1`, transfers the live
+child to the fixed supervisor, and admits exact readiness under one deadline.
+The child admits both inherited descriptors and performs `recover_only` for one
+fixed domain-derived qualification subject. Success requires canonical absence
+and the terminal cancel response, so a prior record for the same subject makes
+later qualification fail instead of being bypassed by a fresh subject.
+
+The child writes a private bounded report to a captured pipe. Only after the
+parent strictly decodes that report, matches its policy to the retained profile,
+revalidates both capabilities, and reaps the child does it emit the ordered
+`fe2o3-compiler-execution-client-check-report-v1` report. Every identity and
+rollback anchor is lowercase 64-hex, every integer is strict decimal, and the
+terminal line is exactly `complete=true`.

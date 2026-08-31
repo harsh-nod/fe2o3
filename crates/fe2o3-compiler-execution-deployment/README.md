@@ -27,13 +27,23 @@ attachment implementation now uses an
 atomic read-only autoclear loop device and detached upstream Linux mount APIs,
 then rechecks the composed deployment projection against sealed custody. The
 same transaction now launches the exact pinned-base loader and `systemd-nspawn`
-through retained descriptors, waits for canonical supervisor-socket metadata,
-performs bounded pidfd shutdown, proves socket removal, and revalidates the
-installed lower before cleanup. It has not yet run under real host root, so live
-mount, boot, distinct-UID service, and cgroup-teardown qualification remain open.
+through retained descriptors. Before boot it runs the shipped static
+generation-1 provisioner inside the composed root and independently admits
+its exact seven-file inventory, modes, identities, key-to-policy bindings,
+canonical record graph, derived Cargo client profile, sealed runtime
+measurement, and five executable measurements.
+It then opens and retains an exact nonblocking Unix `SOCK_SEQPACKET` connection,
+admits the canonical listener path and root peer credentials, revalidates the
+socket object, performs bounded pidfd shutdown, proves pathname removal, and
+revalidates the installed lower before cleanup. The outer supervisor now attaches the
+lease-blocked worker to one retained writable cgroup V2 child before release,
+kills residual descendants through `cgroup.kill`, boundedly removes nested
+machine cgroups, and withholds output until the scope is empty and removed. It
+has not yet run under real host root, so live mount, boot, distinct-UID service,
+and cgroup-teardown qualification remain open.
 `fe2o3-compiler-execution-qualification probe` reports each host
 prerequisite without mutation; its `run` command is the sole static
-verify/install/prepare/stage/mount/preflight/boot/revalidate/cleanup path. `fault-points`,
+verify/install/prepare/stage/mount/preflight/provision/boot/revalidate/cleanup path. `fault-points`,
 `fault`, and `campaign` expose one closed post-transition interruption set and
 accept success only after exact install/staging-parent inventories are proven.
 The three mutating commands now run in a dedicated parent-death-bound worker

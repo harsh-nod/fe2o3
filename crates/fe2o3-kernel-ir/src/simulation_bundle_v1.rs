@@ -1030,6 +1030,7 @@ const fn access_mode_tag(access: AccessMode) -> u8 {
     match access {
         AccessMode::ReadOnly => 0,
         AccessMode::ReadWrite => 1,
+        AccessMode::WriteOnly => 2,
     }
 }
 

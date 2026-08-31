@@ -1956,7 +1956,9 @@ impl GeneralTypedScalarV1 {
 enum GeneralTypedArgumentKindV1 {
     Scalar(GeneralTypedScalarV1),
     SharedSlice(GeneralTypedScalarV1),
+    WriteOnlyExclusiveSlice(GeneralTypedScalarV1),
     ExclusiveSlice(GeneralTypedScalarV1),
+    MappedWriteOnlyExclusiveSlice(GeneralTypedScalarV1, RustDisjointIndexSpaceV1),
     MappedExclusiveSlice(GeneralTypedScalarV1, RustDisjointIndexSpaceV1),
     GlobalMutPointer(GeneralTypedScalarV1),
 }
@@ -1996,7 +1998,9 @@ fn generated_general_typed_arguments_v1(
             matches!(
                 argument,
                 GeneralTypedArgumentKindV1::SharedSlice(_)
+                    | GeneralTypedArgumentKindV1::WriteOnlyExclusiveSlice(_)
                     | GeneralTypedArgumentKindV1::ExclusiveSlice(_)
+                    | GeneralTypedArgumentKindV1::MappedWriteOnlyExclusiveSlice(_, _)
                     | GeneralTypedArgumentKindV1::MappedExclusiveSlice(_, _)
             )
             .then(|| format_ident!("__Fe2o3MemoryArgument{index}"))
@@ -2008,7 +2012,9 @@ fn generated_general_typed_arguments_v1(
         .map(|(argument, type_parameter)| match argument {
             GeneralTypedArgumentKindV1::Scalar(scalar) => scalar.rust_type_tokens(),
             GeneralTypedArgumentKindV1::SharedSlice(_)
+            | GeneralTypedArgumentKindV1::WriteOnlyExclusiveSlice(_)
             | GeneralTypedArgumentKindV1::ExclusiveSlice(_)
+            | GeneralTypedArgumentKindV1::MappedWriteOnlyExclusiveSlice(_, _)
             | GeneralTypedArgumentKindV1::MappedExclusiveSlice(_, _) => {
                 let type_parameter = type_parameter
                     .as_ref()
@@ -2032,6 +2038,16 @@ fn generated_general_typed_arguments_v1(
                     let scalar = scalar.rust_type_tokens();
                     quote!(
                         __fe2o3_kernel_host::__generated::GeneratedReadDeviceSlice<
+                            'allocation,
+                            #scalar
+                        >
+                    )
+                }
+                GeneralTypedArgumentKindV1::WriteOnlyExclusiveSlice(scalar)
+                | GeneralTypedArgumentKindV1::MappedWriteOnlyExclusiveSlice(scalar, _) => {
+                    let scalar = scalar.rust_type_tokens();
+                    quote!(
+                        __fe2o3_kernel_host::__generated::GeneratedWriteDeviceSlice<
                             'allocation,
                             #scalar
                         >
@@ -2068,7 +2084,9 @@ fn generated_general_typed_arguments_v1(
         matches!(
             argument,
             GeneralTypedArgumentKindV1::SharedSlice(_)
+                | GeneralTypedArgumentKindV1::WriteOnlyExclusiveSlice(_)
                 | GeneralTypedArgumentKindV1::ExclusiveSlice(_)
+                | GeneralTypedArgumentKindV1::MappedWriteOnlyExclusiveSlice(_, _)
                 | GeneralTypedArgumentKindV1::MappedExclusiveSlice(_, _)
                 | GeneralTypedArgumentKindV1::GlobalMutPointer(_)
         )
@@ -2320,6 +2338,7 @@ fn generated_worker_v3_adapter_v1(
             matches!(
                 argument,
                 GeneralTypedArgumentKindV1::SharedSlice(_)
+                    | GeneralTypedArgumentKindV1::WriteOnlyExclusiveSlice(_)
                     | GeneralTypedArgumentKindV1::ExclusiveSlice(_)
             )
         })
@@ -2345,10 +2364,12 @@ fn generated_worker_v3_adapter_v1(
         .enumerate()
         .filter_map(|(index, (argument, field))| match argument {
             GeneralTypedArgumentKindV1::SharedSlice(_)
+            | GeneralTypedArgumentKindV1::WriteOnlyExclusiveSlice(_)
             | GeneralTypedArgumentKindV1::ExclusiveSlice(_) => {
                 Some(quote!(self.#field.bind_argument(plan, #index)?))
             }
-            GeneralTypedArgumentKindV1::MappedExclusiveSlice(_, index_space) => {
+            GeneralTypedArgumentKindV1::MappedWriteOnlyExclusiveSlice(_, index_space)
+            | GeneralTypedArgumentKindV1::MappedExclusiveSlice(_, index_space) => {
                 let index_space = generated_disjoint_index_space_v1(*index_space);
                 Some(quote!(
                     self.#field.bind_mapped_argument(plan, #index, #index_space)?
@@ -2366,6 +2387,16 @@ fn generated_worker_v3_adapter_v1(
                 let scalar = scalar.rust_type_tokens();
                 Some(quote!(
                     __fe2o3_kernel_host::__generated::GeneratedKfdReadSlice<
+                        'allocation,
+                        #scalar
+                    >
+                ))
+            }
+            GeneralTypedArgumentKindV1::WriteOnlyExclusiveSlice(scalar)
+            | GeneralTypedArgumentKindV1::MappedWriteOnlyExclusiveSlice(scalar, _) => {
+                let scalar = scalar.rust_type_tokens();
+                Some(quote!(
+                    __fe2o3_kernel_host::__generated::GeneratedKfdWriteSlice<
                         'allocation,
                         #scalar
                     >
@@ -2389,7 +2420,9 @@ fn generated_worker_v3_adapter_v1(
         matches!(
             argument,
             GeneralTypedArgumentKindV1::SharedSlice(_)
+                | GeneralTypedArgumentKindV1::WriteOnlyExclusiveSlice(_)
                 | GeneralTypedArgumentKindV1::ExclusiveSlice(_)
+                | GeneralTypedArgumentKindV1::MappedWriteOnlyExclusiveSlice(_, _)
                 | GeneralTypedArgumentKindV1::MappedExclusiveSlice(_, _)
         )
     });
@@ -2397,6 +2430,7 @@ fn generated_worker_v3_adapter_v1(
         matches!(
             argument,
             GeneralTypedArgumentKindV1::MappedExclusiveSlice(_, _)
+                | GeneralTypedArgumentKindV1::MappedWriteOnlyExclusiveSlice(_, _)
         )
     });
     let arguments_type = if retains_borrows {
@@ -2553,17 +2587,21 @@ fn generated_worker_v3_layout_v1(model: &GeneralTypedSignatureModelV1) -> proc_m
     let size = model.abi.size();
     let alignment = model.abi.alignment();
 
-    if model
-        .arguments
-        .iter()
-        .any(|kind| matches!(kind, GeneralTypedArgumentKindV1::MappedExclusiveSlice(_, _)))
-    {
+    if model.arguments.iter().any(|kind| {
+        matches!(
+            kind,
+            GeneralTypedArgumentKindV1::MappedWriteOnlyExclusiveSlice(_, _)
+                | GeneralTypedArgumentKindV1::MappedExclusiveSlice(_, _)
+        )
+    }) {
         let disjoint_index_spaces = model
             .arguments
             .iter()
             .map(|kind| match kind {
-                GeneralTypedArgumentKindV1::ExclusiveSlice(_) => quote!(None),
-                GeneralTypedArgumentKindV1::MappedExclusiveSlice(_, index_space) => {
+                GeneralTypedArgumentKindV1::WriteOnlyExclusiveSlice(_)
+                | GeneralTypedArgumentKindV1::ExclusiveSlice(_) => quote!(None),
+                GeneralTypedArgumentKindV1::MappedWriteOnlyExclusiveSlice(_, index_space)
+                | GeneralTypedArgumentKindV1::MappedExclusiveSlice(_, index_space) => {
                     let index_space = generated_disjoint_index_space_v1(*index_space);
                     quote!(Some(#index_space))
                 }
@@ -2602,12 +2640,18 @@ fn generated_worker_v3_field_v1(
     let offset = field.offset();
     let size = field.size();
     let alignment = field.alignment();
-    let (scalar, shared, exclusive, mapped_index_space) = match kind {
-        GeneralTypedArgumentKindV1::Scalar(scalar) => (scalar, false, false, None),
-        GeneralTypedArgumentKindV1::SharedSlice(scalar) => (scalar, true, false, None),
-        GeneralTypedArgumentKindV1::ExclusiveSlice(scalar) => (scalar, false, true, None),
+    let (scalar, shared, write_only, exclusive, mapped_index_space) = match kind {
+        GeneralTypedArgumentKindV1::Scalar(scalar) => (scalar, false, false, false, None),
+        GeneralTypedArgumentKindV1::SharedSlice(scalar) => (scalar, true, false, false, None),
+        GeneralTypedArgumentKindV1::WriteOnlyExclusiveSlice(scalar) => {
+            (scalar, false, true, true, None)
+        }
+        GeneralTypedArgumentKindV1::ExclusiveSlice(scalar) => (scalar, false, false, true, None),
+        GeneralTypedArgumentKindV1::MappedWriteOnlyExclusiveSlice(scalar, index_space) => {
+            (scalar, false, true, true, Some(index_space))
+        }
         GeneralTypedArgumentKindV1::MappedExclusiveSlice(scalar, index_space) => {
-            (scalar, false, true, Some(index_space))
+            (scalar, false, false, true, Some(index_space))
         }
         GeneralTypedArgumentKindV1::GlobalMutPointer(_) => {
             unreachable!("unsupported V3 descriptor kinds do not generate an adapter")
@@ -2659,6 +2703,8 @@ fn generated_worker_v3_field_v1(
                 },
                 if shared {
                     quote!(__fe2o3_kernel_host::__generated::Access::ReadOnly)
+                } else if write_only {
+                    quote!(__fe2o3_kernel_host::__generated::Access::WriteOnly)
                 } else {
                     quote!(__fe2o3_kernel_host::__generated::Access::ReadWrite)
                 },
@@ -2818,7 +2864,7 @@ fn parse_general_typed_argument_v1(
         syn::Error::new_spanned(
             &argument.ty,
             format!(
-                "general typed V1 argument {position} must be a supported scalar, `&[T]`, a supported branded `fe2o3_device::DisjointSlice<T, IndexSpace>`, or `fe2o3_device::DeviceGlobalMutPtr<T>`"
+                "general typed V1 argument {position} must be a supported scalar, `&[T]`, a supported branded `fe2o3_device::DisjointSlice<T, IndexSpace>` or `fe2o3_device::WriteOnlyDisjointSlice<T, IndexSpace>`, or `fe2o3_device::DeviceGlobalMutPtr<T>`"
             ),
         )
     })
@@ -2848,11 +2894,21 @@ fn parse_general_typed_argument_type_v1(ty: &Type) -> Result<GeneralTypedArgumen
     }
     let segments = path.path.segments.iter().collect::<Vec<_>>();
     let (segment, kind) = match segments.as_slice() {
+        [segment] if segment.ident == "WriteOnlyDisjointSlice" => {
+            (*segment, GeneralTypedPointerPathV1::WriteOnlyDisjointSlice)
+        }
         [segment] if segment.ident == "DisjointSlice" => {
             (*segment, GeneralTypedPointerPathV1::DisjointSlice)
         }
         [segment] if segment.ident == "DeviceGlobalMutPtr" => {
             (*segment, GeneralTypedPointerPathV1::DeviceGlobalMutPointer)
+        }
+        [namespace, segment]
+            if namespace.ident == "fe2o3_device"
+                && matches!(namespace.arguments, PathArguments::None)
+                && segment.ident == "WriteOnlyDisjointSlice" =>
+        {
+            (*segment, GeneralTypedPointerPathV1::WriteOnlyDisjointSlice)
         }
         [namespace, segment]
             if namespace.ident == "fe2o3_device"
@@ -2874,7 +2930,8 @@ fn parse_general_typed_argument_type_v1(ty: &Type) -> Result<GeneralTypedArgumen
         return Err(());
     };
     let valid_arity = match kind {
-        GeneralTypedPointerPathV1::DisjointSlice => (1..=2).contains(&arguments.args.len()),
+        GeneralTypedPointerPathV1::WriteOnlyDisjointSlice
+        | GeneralTypedPointerPathV1::DisjointSlice => (1..=2).contains(&arguments.args.len()),
         GeneralTypedPointerPathV1::DeviceGlobalMutPointer => arguments.args.len() == 1,
     };
     if arguments.colon2_token.is_some() || !valid_arity {
@@ -2885,7 +2942,8 @@ fn parse_general_typed_argument_type_v1(ty: &Type) -> Result<GeneralTypedArgumen
     };
     let scalar = parse_general_typed_scalar_v1(element).ok_or(())?;
     match kind {
-        GeneralTypedPointerPathV1::DisjointSlice => {
+        GeneralTypedPointerPathV1::WriteOnlyDisjointSlice
+        | GeneralTypedPointerPathV1::DisjointSlice => {
             let index_space = if let Some(index_space) = arguments.args.iter().nth(1) {
                 let GenericArgument::Type(index_space) = index_space else {
                     return Err(());
@@ -2894,7 +2952,16 @@ fn parse_general_typed_argument_type_v1(ty: &Type) -> Result<GeneralTypedArgumen
             } else {
                 RustDisjointIndexSpaceV1::Index1D
             };
-            if index_space == RustDisjointIndexSpaceV1::Index1D {
+            if kind == GeneralTypedPointerPathV1::WriteOnlyDisjointSlice
+                && index_space == RustDisjointIndexSpaceV1::Index1D
+            {
+                Ok(GeneralTypedArgumentKindV1::WriteOnlyExclusiveSlice(scalar))
+            } else if kind == GeneralTypedPointerPathV1::WriteOnlyDisjointSlice {
+                Ok(GeneralTypedArgumentKindV1::MappedWriteOnlyExclusiveSlice(
+                    scalar,
+                    index_space,
+                ))
+            } else if index_space == RustDisjointIndexSpaceV1::Index1D {
                 Ok(GeneralTypedArgumentKindV1::ExclusiveSlice(scalar))
             } else {
                 Ok(GeneralTypedArgumentKindV1::MappedExclusiveSlice(
@@ -2911,6 +2978,7 @@ fn parse_general_typed_argument_type_v1(ty: &Type) -> Result<GeneralTypedArgumen
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum GeneralTypedPointerPathV1 {
+    WriteOnlyDisjointSlice,
     DisjointSlice,
     DeviceGlobalMutPointer,
 }
@@ -3087,7 +3155,9 @@ fn general_typed_abi_v1(
         let (size, alignment) = match argument {
             GeneralTypedArgumentKindV1::Scalar(scalar) => scalar.size_alignment(),
             GeneralTypedArgumentKindV1::SharedSlice(_)
+            | GeneralTypedArgumentKindV1::WriteOnlyExclusiveSlice(_)
             | GeneralTypedArgumentKindV1::ExclusiveSlice(_)
+            | GeneralTypedArgumentKindV1::MappedWriteOnlyExclusiveSlice(_, _)
             | GeneralTypedArgumentKindV1::MappedExclusiveSlice(_, _) => (
                 GENERAL_TYPED_SLICE_SIZE_V1,
                 GENERAL_TYPED_POINTER_ALIGNMENT_V1,
@@ -3150,6 +3220,17 @@ fn general_typed_abi_field_v1(
                 AddressSpace::Global,
                 ArgumentOwnership::SharedBorrow,
                 AliasClass::SharedReadOnly,
+            ),
+            GeneralTypedArgumentKindV1::WriteOnlyExclusiveSlice(scalar)
+            | GeneralTypedArgumentKindV1::MappedWriteOnlyExclusiveSlice(scalar, _) => (
+                GENERAL_TYPED_SLICE_SIZE_V1,
+                GENERAL_TYPED_POINTER_ALIGNMENT_V1,
+                general_typed_slice_kind_v1(scalar),
+                Mutability::Mutable,
+                Access::WriteOnly,
+                AddressSpace::Global,
+                ArgumentOwnership::UniqueBorrow,
+                AliasClass::Exclusive,
             ),
             GeneralTypedArgumentKindV1::ExclusiveSlice(scalar) => (
                 GENERAL_TYPED_SLICE_SIZE_V1,
@@ -3219,8 +3300,14 @@ fn general_typed_type_identity_v1(argument: GeneralTypedArgumentKindV1) -> TypeI
         GeneralTypedArgumentKindV1::SharedSlice(scalar) => {
             general_typed_slice_type_identity_v1(scalar, false)
         }
+        GeneralTypedArgumentKindV1::WriteOnlyExclusiveSlice(scalar) => {
+            general_typed_slice_type_identity_v1(scalar, true)
+        }
         GeneralTypedArgumentKindV1::ExclusiveSlice(scalar) => {
             general_typed_slice_type_identity_v1(scalar, true)
+        }
+        GeneralTypedArgumentKindV1::MappedWriteOnlyExclusiveSlice(scalar, index_space) => {
+            general_typed_mapped_slice_type_identity_v1(scalar, index_space)
         }
         GeneralTypedArgumentKindV1::MappedExclusiveSlice(scalar, index_space) => {
             general_typed_mapped_slice_type_identity_v1(scalar, index_space)

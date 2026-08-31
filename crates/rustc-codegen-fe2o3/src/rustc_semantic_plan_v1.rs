@@ -47,7 +47,9 @@ use crate::rustc_semantic_adapter_v1::{
 
 #[cfg(test)]
 const PREFLIGHT_PLAN_DOMAIN_V1: &[u8] = b"fe2o3/semantic-mir/rustc-preflight-plan/v1";
+#[cfg(test)]
 const PREFLIGHT_PLAN_DOMAIN_V2: &[u8] = b"fe2o3/semantic-mir/rustc-preflight-plan/v2";
+const PREFLIGHT_PLAN_DOMAIN_V3: &[u8] = b"fe2o3/semantic-mir/rustc-preflight-plan/v3";
 const COMPILER_INTRINSIC_DEFINITION_DOMAIN_V1: &[u8] =
     b"fe2o3/semantic-mir/compiler-intrinsic-definition/v1";
 const MAX_DIAGNOSTIC_COMPONENT_CHARS_V1: usize = 512;
@@ -57,7 +59,9 @@ const MAX_MACRO_EXPANSION_DEPTH_V1: usize = 256;
 enum TerminalIdentitySchemaV1 {
     #[cfg(test)]
     IndependentV1,
+    #[cfg(test)]
     CombinedV2,
+    CombinedV3,
 }
 
 #[derive(Clone, Debug)]
@@ -2842,7 +2846,7 @@ fn preflight_plan_identity_and_transcript_v1<'tcx>(
     tcx: TyCtxt<'tcx>,
 ) -> ([u8; 32], Box<[u8]>) {
     let mut digest =
-        SemanticIdentityDigestV1::new_with_canonical_transcript(PREFLIGHT_PLAN_DOMAIN_V2);
+        SemanticIdentityDigestV1::new_with_canonical_transcript(PREFLIGHT_PLAN_DOMAIN_V3);
     digest.field(target.identity().as_bytes());
     digest.field(&identity_inventory_sha256);
     for cardinality in [
@@ -2903,7 +2907,7 @@ fn preflight_plan_identity_and_transcript_v1<'tcx>(
         digest.field(terminal.identities.const_generic_arguments().as_bytes());
         digest.field(&[terminal_expansion_tag_for_schema_v1(
             terminal.expansion,
-            TerminalIdentitySchemaV1::CombinedV2,
+            TerminalIdentitySchemaV1::CombinedV3,
         )]);
         digest.field(&terminal.abi.rustc_source_signature_sha256);
         digest.field(&terminal.abi.rustc_fn_abi_sha256);
@@ -2952,7 +2956,7 @@ fn preflight_plan_identity_and_transcript_v1<'tcx>(
         digest.field(&recipe.block.to_le_bytes());
         digest.field(&[terminal_expansion_tag_for_schema_v1(
             recipe.expansion,
-            TerminalIdentitySchemaV1::CombinedV2,
+            TerminalIdentitySchemaV1::CombinedV3,
         )]);
         digest.field(&recipe.arguments.to_le_bytes());
         digest.field(recipe.identities.function().as_bytes());
@@ -3184,13 +3188,23 @@ const fn terminal_expansion_tag_for_schema_v1(
         ProductionTerminalExpansionV1::WorkgroupPipelineRead => 97,
         ProductionTerminalExpansionV1::WorkgroupPipelineDiscard => 98,
         ProductionTerminalExpansionV1::WorkgroupPipelineRelease => 99,
-        ProductionTerminalExpansionV1::WorkgroupCollectiveContextCurrent => 104,
-        ProductionTerminalExpansionV1::NeutralWorkgroupReduceSum => 105,
+        ProductionTerminalExpansionV1::WorkgroupCollectiveContextCurrent => match schema {
+            #[cfg(test)]
+            TerminalIdentitySchemaV1::IndependentV1 | TerminalIdentitySchemaV1::CombinedV2 => 104,
+            TerminalIdentitySchemaV1::CombinedV3 => 111,
+        },
+        ProductionTerminalExpansionV1::NeutralWorkgroupReduceSum => match schema {
+            #[cfg(test)]
+            TerminalIdentitySchemaV1::IndependentV1 | TerminalIdentitySchemaV1::CombinedV2 => 105,
+            TerminalIdentitySchemaV1::CombinedV3 => 112,
+        },
         ProductionTerminalExpansionV1::Bf16Conversion(conversion) => {
             let base = match schema {
                 #[cfg(test)]
                 TerminalIdentitySchemaV1::IndependentV1 => 91,
+                #[cfg(test)]
                 TerminalIdentitySchemaV1::CombinedV2 => 100,
+                TerminalIdentitySchemaV1::CombinedV3 => 100,
             };
             base + match conversion {
                 crate::production_semantic_terminal_v1::ProductionBf16ConversionV1::FromBits => 0,
@@ -3199,6 +3213,13 @@ const fn terminal_expansion_tag_for_schema_v1(
                 crate::production_semantic_terminal_v1::ProductionBf16ConversionV1::ToF32 => 3,
             }
         }
+        ProductionTerminalExpansionV1::WriteOnlyDisjointSliceLen => 104,
+        ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWrite => 105,
+        ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteDisjoint => 106,
+        ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteExclusive => 107,
+        ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteBlock => 108,
+        ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteTiled2d => 109,
+        ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteRowStriped2d => 110,
     }
 }
 
@@ -3423,9 +3444,9 @@ mod tests {
             ]
             .map(|expansion| terminal_expansion_tag_for_schema_v1(
                 expansion,
-                TerminalIdentitySchemaV1::CombinedV2,
+                TerminalIdentitySchemaV1::CombinedV3,
             )),
-            [104, 105],
+            [111, 112],
         );
 
         let gfx950 = [
@@ -3510,9 +3531,10 @@ mod tests {
             [91, 92, 93, 94, 95, 96, 97, 98, 99]
         );
 
-        let combined_schema = TerminalIdentitySchemaV1::CombinedV2;
-        assert_eq!(combined_schema, TerminalIdentitySchemaV1::CombinedV2);
+        let combined_schema = TerminalIdentitySchemaV1::CombinedV3;
+        assert_eq!(combined_schema, TerminalIdentitySchemaV1::CombinedV3);
         assert_ne!(PREFLIGHT_PLAN_DOMAIN_V1, PREFLIGHT_PLAN_DOMAIN_V2);
+        assert_ne!(PREFLIGHT_PLAN_DOMAIN_V2, PREFLIGHT_PLAN_DOMAIN_V3);
         assert_eq!(
             pipeline.map(|expansion| {
                 terminal_expansion_tag_for_schema_v1(expansion, combined_schema)
@@ -3531,6 +3553,44 @@ mod tests {
                 combined_schema,
             )),
             [100, 101, 102, 103]
+        );
+        assert_eq!(
+            [
+                ProductionTerminalExpansionV1::Bf16Conversion(
+                    crate::production_semantic_terminal_v1::ProductionBf16ConversionV1::FromBits,
+                ),
+                ProductionTerminalExpansionV1::Bf16Conversion(
+                    crate::production_semantic_terminal_v1::ProductionBf16ConversionV1::ToBits,
+                ),
+                ProductionTerminalExpansionV1::Bf16Conversion(
+                    crate::production_semantic_terminal_v1::ProductionBf16ConversionV1::FromF32RoundTiesEven,
+                ),
+                ProductionTerminalExpansionV1::Bf16Conversion(
+                    crate::production_semantic_terminal_v1::ProductionBf16ConversionV1::ToF32,
+                ),
+                ProductionTerminalExpansionV1::WriteOnlyDisjointSliceLen,
+                ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWrite,
+                ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteDisjoint,
+                ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteExclusive,
+                ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteBlock,
+                ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteTiled2d,
+                ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteRowStriped2d,
+                ProductionTerminalExpansionV1::WorkgroupCollectiveContextCurrent,
+                ProductionTerminalExpansionV1::NeutralWorkgroupReduceSum,
+            ]
+            .map(|expansion| terminal_expansion_tag_for_schema_v1(expansion, combined_schema)),
+            [100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112]
+        );
+        assert_eq!(
+            [
+                ProductionTerminalExpansionV1::WorkgroupCollectiveContextCurrent,
+                ProductionTerminalExpansionV1::NeutralWorkgroupReduceSum,
+            ]
+            .map(|expansion| terminal_expansion_tag_for_schema_v1(
+                expansion,
+                TerminalIdentitySchemaV1::CombinedV2,
+            )),
+            [104, 105],
         );
     }
 

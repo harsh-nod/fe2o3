@@ -175,7 +175,7 @@ impl PublicationObjectRootIdentityV1 {
             stat.st_uid,
             stat.st_gid,
             stat.st_mode,
-            stat.st_nlink as u64,
+            stat.st_nlink,
         )
     }
 
@@ -185,7 +185,7 @@ impl PublicationObjectRootIdentityV1 {
             && self.owner_uid == stat.st_uid
             && self.owner_gid == stat.st_gid
             && self.mode == stat.st_mode
-            && self.link_count == stat.st_nlink as u64
+            && self.link_count == stat.st_nlink
     }
 }
 

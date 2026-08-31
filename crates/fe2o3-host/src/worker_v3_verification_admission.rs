@@ -8,11 +8,12 @@ use fe2o3_hsaco_finalize::{
     RevalidatedProtectedWorkerV3FinalizerDerivationV1, WorkerV3HsacoPublicationErrorV1,
     revalidate_protected_worker_v3_finalizer_derivation_v1,
 };
-use fe2o3_kernel_descriptor::{DeviceDescriptorTableV1, KernelDescriptorV1, KernelId};
+use fe2o3_kernel_descriptor::{BlockSizeV1, DeviceDescriptorTableV1, KernelDescriptorV1, KernelId};
 use fe2o3_runtime_protocol::{CompilerExecutionReceiptCarriageV1, WorkerV3LoadEnvelopeWireV1};
 use fe2o3_verifier::{
-    CompilerProofInputValidationErrorV4, ValidatedCompilerProofInputsV4,
-    validate_compiler_proof_inputs_v4,
+    CompilerProofInputValidationErrorV4, CompilerTargetLineageValidationErrorV1,
+    ValidatedCompilerProofInputsV4, ValidatedCompilerTargetLineageV1,
+    validate_compiler_proof_inputs_v4, validate_compiler_target_lineage_v1,
 };
 use sha2::{Digest, Sha256};
 
@@ -311,6 +312,18 @@ impl<K: CompilerGeneratedKernelExpectationV1> WorkerV3VerificationRequestV1<'_, 
         )
     }
 
+    /// Independently decodes every singleton target-side association and replays KIR-to-LLVM.
+    ///
+    /// The caller must first obtain `proof_inputs` from [`Self::validate_compiler_proof_inputs_v4`].
+    /// The returned move-only owner establishes exact association and deterministic replay only;
+    /// semantic refinement, LLVM-to-machine refinement, and runtime authority remain separate.
+    pub fn validate_compiler_target_lineage_v1(
+        &self,
+        proof_inputs: &ValidatedCompilerProofInputsV4,
+    ) -> Result<ValidatedCompilerTargetLineageV1, CompilerTargetLineageValidationErrorV1> {
+        validate_compiler_target_lineage_v1(self.handoff.capsule(), proof_inputs)
+    }
+
     /// Returns the exact finalized HSACO bytes retained by the current-publication token.
     ///
     /// The host keeps that token alive for the complete verifier call and revalidates it before
@@ -416,6 +429,7 @@ pub struct WorkerV3ProtectedVerificationEvidenceV1 {
     finalizer_derivation: RevalidatedProtectedWorkerV3FinalizerDerivationV1,
     compiler_execution: WorkerV3CompilerExecutionVerificationV1,
     proof_inputs: ValidatedCompilerProofInputsV4,
+    target_lineage: ValidatedCompilerTargetLineageV1,
     verifier_measurement_sha256: [u8; 32],
     verification_transcript_sha256: [u8; 32],
     proof_executable_binding_sha256: [u8; 32],
@@ -438,6 +452,7 @@ impl WorkerV3ProtectedVerificationEvidenceV1 {
         finalizer_derivation: RevalidatedProtectedWorkerV3FinalizerDerivationV1,
         compiler_execution: WorkerV3CompilerExecutionVerificationV1,
         proof_inputs: ValidatedCompilerProofInputsV4,
+        target_lineage: ValidatedCompilerTargetLineageV1,
         verifier_measurement_sha256: [u8; 32],
         verification_transcript_sha256: [u8; 32],
         proof_executable_binding_sha256: [u8; 32],
@@ -449,6 +464,7 @@ impl WorkerV3ProtectedVerificationEvidenceV1 {
             finalizer_derivation,
             compiler_execution,
             proof_inputs,
+            target_lineage,
             verifier_measurement_sha256,
             verification_transcript_sha256,
             proof_executable_binding_sha256,
@@ -543,6 +559,7 @@ where
             evidence.finalizer_derivation,
             evidence.compiler_execution,
             evidence.proof_inputs,
+            evidence.target_lineage,
             evidence.verifier_measurement_sha256,
             evidence.verification_transcript_sha256,
             evidence.proof_executable_binding_sha256,
@@ -974,6 +991,7 @@ pub struct WorkerV3VerificationDecisionV1 {
     finalizer_derivation: RevalidatedProtectedWorkerV3FinalizerDerivationV1,
     compiler_execution: WorkerV3CompilerExecutionVerificationV1,
     proof_inputs: WorkerV3ProofInputEvidenceV1,
+    target_lineage: WorkerV3TargetLineageEvidenceV1,
     verifier_measurement_sha256: [u8; 32],
     verification_transcript_sha256: [u8; 32],
     proof_executable_binding_sha256: [u8; 32],
@@ -985,6 +1003,13 @@ pub struct WorkerV3VerificationDecisionV1 {
 #[derive(Debug)]
 enum WorkerV3ProofInputEvidenceV1 {
     Validated(ValidatedCompilerProofInputsV4),
+    #[cfg(feature = "worker-v3-verifier-test-support")]
+    Synthetic,
+}
+
+#[derive(Debug)]
+enum WorkerV3TargetLineageEvidenceV1 {
+    Validated(Box<ValidatedCompilerTargetLineageV1>),
     #[cfg(feature = "worker-v3-verifier-test-support")]
     Synthetic,
 }
@@ -1011,6 +1036,7 @@ impl WorkerV3VerificationDecisionV1 {
         finalizer_derivation: RevalidatedProtectedWorkerV3FinalizerDerivationV1,
         compiler_execution: WorkerV3CompilerExecutionVerificationV1,
         proof_inputs: ValidatedCompilerProofInputsV4,
+        target_lineage: ValidatedCompilerTargetLineageV1,
         verifier_measurement_sha256: [u8; 32],
         verification_transcript_sha256: [u8; 32],
         proof_executable_binding_sha256: [u8; 32],
@@ -1034,6 +1060,7 @@ impl WorkerV3VerificationDecisionV1 {
             finalizer_derivation,
             compiler_execution,
             WorkerV3ProofInputEvidenceV1::Validated(proof_inputs),
+            WorkerV3TargetLineageEvidenceV1::Validated(Box::new(target_lineage)),
             verifier_measurement_sha256,
             verification_transcript_sha256,
             proof_executable_binding_sha256,
@@ -1060,6 +1087,7 @@ impl WorkerV3VerificationDecisionV1 {
         finalizer_derivation: RevalidatedProtectedWorkerV3FinalizerDerivationV1,
         compiler_execution: WorkerV3CompilerExecutionVerificationV1,
         proof_inputs: WorkerV3ProofInputEvidenceV1,
+        target_lineage: WorkerV3TargetLineageEvidenceV1,
         verifier_measurement_sha256: [u8; 32],
         verification_transcript_sha256: [u8; 32],
         proof_executable_binding_sha256: [u8; 32],
@@ -1083,6 +1111,7 @@ impl WorkerV3VerificationDecisionV1 {
             finalizer_derivation,
             compiler_execution,
             proof_inputs,
+            target_lineage,
             verifier_measurement_sha256,
             verification_transcript_sha256,
             proof_executable_binding_sha256,
@@ -1134,6 +1163,7 @@ impl WorkerV3VerificationDecisionV1 {
             finalizer_derivation,
             compiler_execution,
             WorkerV3ProofInputEvidenceV1::Synthetic,
+            WorkerV3TargetLineageEvidenceV1::Synthetic,
             verifier_measurement_sha256,
             verification_transcript_sha256,
             proof_executable_binding_sha256,
@@ -1184,19 +1214,37 @@ impl WorkerV3VerificationDecisionV1 {
         }
     }
 
+    /// Returns independently decoded singleton target lineage for a production decision.
+    ///
+    /// The explicit synthetic test lane returns `None` and carries no target-lineage claim.
+    pub const fn validated_compiler_target_lineage(
+        &self,
+    ) -> Option<&ValidatedCompilerTargetLineageV1> {
+        match &self.target_lineage {
+            WorkerV3TargetLineageEvidenceV1::Validated(lineage) => Some(lineage),
+            #[cfg(feature = "worker-v3-verifier-test-support")]
+            WorkerV3TargetLineageEvidenceV1::Synthetic => None,
+        }
+    }
+
     /// Reports custody of both current compiler-execution evidence and the independently imported
     /// signed aggregate MIR-to-live-PLIRON receipt. This does not establish LLVM or machine
     /// refinement and grants no runtime authority.
     pub const fn retains_current_compiler_and_signed_verus_evidence(&self) -> bool {
-        match &self.proof_inputs {
-            WorkerV3ProofInputEvidenceV1::Validated(inputs) => {
+        match (&self.proof_inputs, &self.target_lineage) {
+            (
+                WorkerV3ProofInputEvidenceV1::Validated(inputs),
+                WorkerV3TargetLineageEvidenceV1::Validated(target),
+            ) => {
                 inputs.authenticates_signed_verus_receipt_under_embedded_key()
+                    && target.has_exact_receipt_association()
+                    && target.has_exact_kir_to_llvm_replay()
                     && self
                         .compiler_execution
                         .authenticates_signed_currentness_evidence()
             }
             #[cfg(feature = "worker-v3-verifier-test-support")]
-            WorkerV3ProofInputEvidenceV1::Synthetic => false,
+            _ => false,
         }
     }
 }
@@ -2856,6 +2904,7 @@ fn validate_decision<K: CompilerGeneratedKernelExpectationV1>(
         }
     }
     validate_decision_proof_inputs(request, decision)?;
+    validate_decision_target_lineage(request, decision)?;
     Ok(())
 }
 
@@ -2919,6 +2968,118 @@ fn validate_decision_proof_inputs<K: CompilerGeneratedKernelExpectationV1>(
     Ok(())
 }
 
+fn validate_decision_target_lineage<K: CompilerGeneratedKernelExpectationV1>(
+    request: &WorkerV3VerificationRequestV1<'_, K>,
+    decision: &WorkerV3VerificationDecisionV1,
+) -> Result<(), WorkerV3VerificationDecisionErrorV1> {
+    #[cfg(not(feature = "worker-v3-verifier-test-support"))]
+    let WorkerV3TargetLineageEvidenceV1::Validated(lineage) = &decision.target_lineage;
+    #[cfg(feature = "worker-v3-verifier-test-support")]
+    let lineage = match &decision.target_lineage {
+        WorkerV3TargetLineageEvidenceV1::Validated(lineage) => lineage,
+        WorkerV3TargetLineageEvidenceV1::Synthetic => return Ok(()),
+    };
+    let capsule = request.handoff.capsule();
+    let receipts = capsule.receipts();
+    let module = request.handoff.module_handoff().module_identity();
+    let finalizer_module = request.finalizer_derivation.compiler_module_identity();
+    let final_llvm = lineage.final_llvm_identity();
+    let target_binding = lineage.target_binding_receipt_identity();
+    let data_layout = lineage.data_layout_receipt_identity();
+    let semantic_to_llvm = lineage.semantic_to_llvm_receipt_identity();
+    let final_commitment = lineage.final_compiler_module_commitment_identity();
+    let target_inputs = lineage.target_binding().inputs().map_err(|_| {
+        WorkerV3VerificationDecisionErrorV1::TargetLineageMismatch(
+            "target-binding transcript inputs",
+        )
+    })?;
+    let descriptor_workgroup = match request.descriptor().launch().block_size() {
+        BlockSizeV1::Exact(dimensions) => [dimensions.x(), dimensions.y(), dimensions.z()],
+        BlockSizeV1::Any | BlockSizeV1::AtMost(_) => {
+            return Err(WorkerV3VerificationDecisionErrorV1::TargetLineageMismatch(
+                "exact descriptor workgroup",
+            ));
+        }
+    };
+    for (matches, field) in [
+        (
+            lineage.target_binding().canonical_bytes()
+                == receipts.target_binding().canonical_preimage(),
+            "target-binding transcript",
+        ),
+        (
+            lineage.data_layout().canonical_bytes() == receipts.data_layout().canonical_preimage(),
+            "data-layout transcript",
+        ),
+        (
+            lineage.semantic_to_llvm().canonical_bytes()
+                == lineage.semantic_to_llvm_association_bytes(),
+            "semantic-to-LLVM transcript",
+        ),
+        (
+            target_binding.sha256() == *receipts.target_binding().identity().sha256()
+                && target_binding.byte_len() == receipts.target_binding().identity().byte_len(),
+            "target-binding receipt",
+        ),
+        (
+            data_layout.sha256() == *receipts.data_layout().identity().sha256()
+                && data_layout.byte_len() == receipts.data_layout().identity().byte_len(),
+            "data-layout receipt",
+        ),
+        (
+            semantic_to_llvm.sha256() == *receipts.semantic_to_llvm().identity().sha256()
+                && semantic_to_llvm.byte_len() == receipts.semantic_to_llvm().identity().byte_len(),
+            "semantic-to-LLVM receipt",
+        ),
+        (
+            lineage.replay().kernel_ir_receipt_identity() == receipts.kernel_ir().identity(),
+            "replayed Kernel IR receipt",
+        ),
+        (
+            lineage.replay().amdgpu_lowering_receipt_identity()
+                == receipts.amdgpu_lowering().identity(),
+            "replayed AMDGPU-lowering receipt",
+        ),
+        (
+            final_llvm.sha256() == *module.sha256() && final_llvm.byte_len() == module.byte_len(),
+            "final LLVM module",
+        ),
+        (
+            final_llvm.sha256() == *finalizer_module.sha256()
+                && final_llvm.byte_len() == finalizer_module.byte_len(),
+            "finalizer compiler module",
+        ),
+        (
+            final_commitment.sha256()
+                == *receipts
+                    .final_compiler_module_commitment()
+                    .identity()
+                    .sha256()
+                && final_commitment.byte_len()
+                    == receipts
+                        .final_compiler_module_commitment()
+                        .identity()
+                        .byte_len(),
+            "final compiler-module commitment",
+        ),
+        (
+            target_inputs.code_object_version == u16::from(request.code_object_version().number()),
+            "code-object version",
+        ),
+        (
+            target_inputs.default_workgroup == descriptor_workgroup,
+            "default workgroup",
+        ),
+    ] {
+        if !matches {
+            return Err(WorkerV3VerificationDecisionErrorV1::TargetLineageMismatch(
+                field,
+            ));
+        }
+    }
+    Ok(())
+}
+
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum WorkerV3VerificationAuthenticationErrorV1<E> {
@@ -2945,6 +3106,7 @@ pub enum WorkerV3VerificationDecisionErrorV1 {
     ZeroAuthenticatedIdentity(&'static str),
     MissingSafetyProperty(WorkerV3SafetyPropertyV1),
     ProofInputMismatch(&'static str),
+    TargetLineageMismatch(&'static str),
 }
 
 impl<E: fmt::Display> fmt::Display for WorkerV3VerificationAuthenticationErrorV1<E> {
@@ -2979,6 +3141,12 @@ impl fmt::Display for WorkerV3VerificationDecisionErrorV1 {
                 write!(
                     formatter,
                     "validated compiler {field} differs from the exact request"
+                )
+            }
+            Self::TargetLineageMismatch(field) => {
+                write!(
+                    formatter,
+                    "validated compiler {field} differs from the exact target lineage"
                 )
             }
         }

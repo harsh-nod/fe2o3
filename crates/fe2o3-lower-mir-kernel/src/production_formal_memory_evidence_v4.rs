@@ -64,17 +64,24 @@ impl InertCanonicalFormalMemoryAdmissionEvidenceV4 {
         owner
             .verify_equivalence()
             .map_err(|error| ProductionFormalMemoryEvidenceErrorV4::LiveOwner(error.to_string()))?;
-        if !owner.obligations().inter_invocation_conflicts().is_empty() {
+        let [kernel] = owner.kernels() else {
+            return Err(ProductionFormalMemoryEvidenceErrorV4::InvalidAdmission);
+        };
+        if !kernel.obligations().inter_invocation_conflicts().is_empty() {
             return Err(ProductionFormalMemoryEvidenceErrorV4::InvalidAdmission);
         }
         let receipt =
-            InertCanonicalFormalMemoryObligationReceiptV1::from_obligations(owner.obligations())
+            InertCanonicalFormalMemoryObligationReceiptV1::from_obligations(kernel.obligations())
                 .map_err(ProductionFormalMemoryEvidenceErrorV4::FormalReceipt)?;
         receipt
             .revalidate()
             .map_err(ProductionFormalMemoryEvidenceErrorV4::FormalReceipt)?;
-        let witness_invocation_count = owner.witness_invocation_count();
-        if witness_invocation_count == 0 || owner.witness_extents().contains(&0) {
+        let witness_invocation_count = kernel.witness_invocation_count();
+        if witness_invocation_count == 0
+            || kernel
+                .witness_extents(owner.semantic_kir().module())
+                .is_none_or(|extents| extents.contains(&0))
+        {
             return Err(ProductionFormalMemoryEvidenceErrorV4::InvalidAdmission);
         }
         let bytes = encode(

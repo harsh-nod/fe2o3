@@ -413,6 +413,9 @@ impl Operation {
             OperationKind::GuardedLoad { access, .. } => {
                 vec![MemoryEffect::Read(access.address_space)]
             }
+            OperationKind::GuardedStore { access, .. } => {
+                vec![MemoryEffect::Write(access.address_space)]
+            }
             OperationKind::Store { access, .. } => vec![MemoryEffect::Write(access.address_space)],
             OperationKind::Atomic(atomic) => vec![MemoryEffect::Atomic {
                 address_space: atomic.access.address_space,
@@ -616,6 +619,13 @@ pub enum OperationKind {
         fallback: ValueId,
         access: MemoryAccess,
     },
+    /// Stores only when `predicate` is true and has no memory effect otherwise.
+    GuardedStore {
+        pointer: ValueId,
+        predicate: ValueId,
+        value: ValueId,
+        access: MemoryAccess,
+    },
     Store {
         pointer: ValueId,
         value: ValueId,
@@ -683,6 +693,12 @@ impl OperationKind {
                 fallback,
                 ..
             } => vec![*pointer, *predicate, *fallback],
+            Self::GuardedStore {
+                pointer,
+                predicate,
+                value,
+                ..
+            } => vec![*pointer, *predicate, *value],
             Self::Store { pointer, value, .. } => vec![*pointer, *value],
             Self::Atomic(atomic) => atomic.operands(),
             Self::Wave(wave) => wave.operands(),

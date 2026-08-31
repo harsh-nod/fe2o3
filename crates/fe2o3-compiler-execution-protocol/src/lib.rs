@@ -57,7 +57,8 @@ pub use attestation::{
     CompilerExecutionAttestationReceiptV1, CompilerExecutionAttestationRequestIdentityV1,
     CompilerExecutionAttestationRequestV1, CompilerExecutionIssuerMeasurementV1,
     CompilerExecutionIssuerPolicyIdentityV1, CompilerExecutionIssuerPolicyV1,
-    CompilerExecutionSubjectBindingV1, VerifiedCompilerExecutionAttestationV1,
+    CompilerExecutionSubjectBindingV1, SEALED_STATIC_ISSUER_RUNTIME_CLOSURE_V1,
+    VerifiedCompilerExecutionAttestationV1, sealed_static_issuer_runtime_measurement_v1,
 };
 pub use client_profile::{
     COMPILER_EXECUTION_CLIENT_PROFILE_BYTES_V1, CompilerExecutionClientProfileErrorV1,

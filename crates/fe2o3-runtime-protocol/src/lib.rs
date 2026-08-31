@@ -69,8 +69,9 @@ pub use fe2o3_compiler_execution_protocol::{
     CompilerExecutionWorkerAnchorJournalErrorV1, CompilerExecutionWorkerAnchorJournalIdentityV1,
     CompilerExecutionWorkerAnchorJournalStageV1, CompilerExecutionWorkerAnchorJournalV1,
     MAX_COMPILER_EXECUTION_SERVICE_REQUEST_BYTES_V1,
-    MAX_COMPILER_EXECUTION_SERVICE_RESPONSE_BYTES_V1, VerifiedCompilerExecutionAttestationV1,
-    VerifiedCompilerExecutionCurrentRecordV3,
+    MAX_COMPILER_EXECUTION_SERVICE_RESPONSE_BYTES_V1, SEALED_STATIC_ISSUER_RUNTIME_CLOSURE_V1,
+    VerifiedCompilerExecutionAttestationV1, VerifiedCompilerExecutionCurrentRecordV3,
+    sealed_static_issuer_runtime_measurement_v1,
 };
 pub use static_application::{
     SealedStaticApplicationErrorV1, sealed_static_application_identity_v1,

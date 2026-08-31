@@ -9,6 +9,7 @@ description = "Canonical inert semantic-lineage content records for fe2o3 compil
 publish = false
 
 [dependencies]
+fe2o3-amd-target.workspace = true
 fe2o3-build-authority.workspace = true
 fe2o3-kernel-descriptor.workspace = true
 fe2o3-rustc-invocation.workspace = true

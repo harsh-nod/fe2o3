@@ -8,6 +8,8 @@ readonly repo_root
 readonly builder="${repo_root}/scripts/build-compiler-execution-qualification-base.sh"
 readonly package_lock="${repo_root}/scripts/compiler-execution-qualification-base-packages-v1.lock"
 readonly qualification_target="${repo_root}/deployment/qualification/systemd/fe2o3-qualification.target"
+readonly qualification_client_service="${repo_root}/deployment/qualification/systemd/fe2o3-qualification-client-check.service"
+readonly qualification_client_sysusers="${repo_root}/deployment/qualification/sysusers.d/fe2o3-qualification-client.conf"
 
 fail() {
   printf 'compiler-execution qualification-base contract failed: %s\n' "$*" >&2
@@ -76,11 +78,48 @@ PY
 
 for expected in \
   'Requires=basic.target' \
+  'Requires=fe2o3-compiler-execution.service' \
+  'Requires=fe2o3-qualification-client-check.service' \
   'After=basic.target' \
-  'Wants=fe2o3-compiler-execution.socket' \
+  'After=fe2o3-compiler-execution.service' \
+  'After=fe2o3-qualification-client-check.service' \
   'AllowIsolate=yes'; do
   grep -Fqx -- "${expected}" "${qualification_target}" ||
     fail "qualification target is missing ${expected}"
+done
+
+diff -u \
+  <(printf '%s\n' \
+    'u fe2o3-qualification-client 997 "fe2o3 compiler-execution qualification client" /nonexistent /usr/sbin/nologin' \
+    'm fe2o3-qualification-client fe2o3-compiler') \
+  "${qualification_client_sysusers}" >/dev/null ||
+  fail 'qualification client identity is not exact'
+
+for expected in \
+  'Requires=fe2o3-compiler-execution.service' \
+  'After=fe2o3-compiler-execution.service' \
+  'Before=fe2o3-qualification.target' \
+  'Type=oneshot' \
+  'RemainAfterExit=yes' \
+  'User=fe2o3-qualification-client' \
+  'Group=fe2o3-qualification-client' \
+  'SupplementaryGroups=fe2o3-compiler' \
+  'ExecStart=/usr/libexec/fe2o3/fe2o3-compiler-execution-client-check' \
+  'StandardInput=null' \
+  'StandardOutput=truncate:/run/fe2o3/compiler-execution-client-check.report' \
+  'StandardError=journal' \
+  'UMask=0077' \
+  'CapabilityBoundingSet=' \
+  'NoNewPrivileges=yes' \
+  'PrivateDevices=yes' \
+  'PrivateNetwork=yes' \
+  'PrivateTmp=yes' \
+  'ProtectSystem=strict' \
+  'RestrictAddressFamilies=AF_UNIX' \
+  'RestrictNamespaces=yes' \
+  'RestrictSUIDSGID=yes'; do
+  grep -Fqx -- "${expected}" "${qualification_client_service}" ||
+    fail "qualification client-check service is missing ${expected}"
 done
 
 for expected in \
@@ -89,6 +128,8 @@ for expected in \
   "[[ \"\${resolved_packages[*]}\" == \"\${packages[*]}\" ]]" \
   'pinned systemd-nspawn executable is missing' \
   'systemd 255 (255.4-1ubuntu8.17)' \
+  'fe2o3-qualification-client-check.service' \
+  'fe2o3-qualification-client.conf' \
   "sha256sum \"\${deb}\"" \
   '-noappend -all-root -no-xattrs -no-progress -no-exports' \
   '-comp zstd -b 131072 -processors 1 -reproducible' \
@@ -165,6 +206,12 @@ verify_bundle() {
   cmp -s "${qualification_target}" \
     <(unsquashfs -cat "${image}" usr/lib/systemd/system/fe2o3-qualification.target 2>/dev/null) ||
     fail 'embedded qualification target changed'
+  cmp -s "${qualification_client_service}" \
+    <(unsquashfs -cat "${image}" usr/lib/systemd/system/fe2o3-qualification-client-check.service 2>/dev/null) ||
+    fail 'embedded qualification client-check service changed'
+  cmp -s "${qualification_client_sysusers}" \
+    <(unsquashfs -cat "${image}" usr/lib/sysusers.d/fe2o3-qualification-client.conf 2>/dev/null) ||
+    fail 'embedded qualification client identity changed'
   unsquashfs -cat "${image}" usr/bin/systemd-nspawn >/dev/null 2>&1 ||
     fail 'pinned systemd-nspawn is missing from the image'
 }

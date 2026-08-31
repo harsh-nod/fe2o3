@@ -26,6 +26,7 @@ pub struct CompilerExecutionQualificationHostProbeV1 {
     new_mount_api_recognized: bool,
     isolation_namespaces_present: bool,
     cgroup_v2_present: bool,
+    cgroup_v2_scope_writable: bool,
 }
 
 impl CompilerExecutionQualificationHostProbeV1 {
@@ -43,7 +44,10 @@ impl CompilerExecutionQualificationHostProbeV1 {
 
     /// Returns whether the observed host also advertises prerequisites for isolated systemd work.
     pub const fn isolated_systemd_ready(&self) -> bool {
-        self.mount_ready() && self.isolation_namespaces_present && self.cgroup_v2_present
+        self.mount_ready()
+            && self.isolation_namespaces_present
+            && self.cgroup_v2_present
+            && self.cgroup_v2_scope_writable
     }
 
     /// Encodes the observation as one stable newline-terminated key-value report.
@@ -67,6 +71,7 @@ impl CompilerExecutionQualificationHostProbeV1 {
                 self.isolation_namespaces_present,
             ),
             ("cgroup_v2_present", self.cgroup_v2_present),
+            ("cgroup_v2_scope_writable", self.cgroup_v2_scope_writable),
             ("mount_ready", self.mount_ready()),
             ("isolated_systemd_ready", self.isolated_systemd_ready()),
         ] {
@@ -98,6 +103,7 @@ pub fn probe_compiler_execution_qualification_host_v1()
             .iter()
             .all(|name| path_exists(Path::new("/proc/self/ns").join(name))),
         cgroup_v2_present: path_exists("/sys/fs/cgroup/cgroup.controllers"),
+        cgroup_v2_scope_writable: super::cgroup::probe_current_qualification_cgroup_v2_v1(),
     })
 }
 
@@ -166,7 +172,7 @@ mod tests {
         let probe = probe_compiler_execution_qualification_host_v1().unwrap();
         let report = probe.canonical_report();
         assert!(report.ends_with('\n'));
-        assert_eq!(report.lines().count(), 13);
+        assert_eq!(report.lines().count(), 14);
         assert_eq!(
             report.lines().next(),
             Some("probe_schema=fe2o3-compiler-execution-qualification-host-probe-v1")

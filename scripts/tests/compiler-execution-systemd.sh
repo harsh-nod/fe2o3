@@ -4,7 +4,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 readonly REPO_ROOT
 readonly SERVICE="${REPO_ROOT}/deployment/systemd/fe2o3-compiler-execution.service"
-readonly SOCKET="${REPO_ROOT}/deployment/systemd/fe2o3-compiler-execution.socket"
+readonly LEGACY_SOCKET="${REPO_ROOT}/deployment/systemd/fe2o3-compiler-execution.socket"
 readonly SYSUSERS="${REPO_ROOT}/deployment/sysusers.d/fe2o3-compiler-execution.conf"
 readonly TMPFILES="${REPO_ROOT}/deployment/tmpfiles.d/fe2o3-compiler-execution.conf"
 readonly ENTRYPOINT="${REPO_ROOT}/crates/fe2o3-compiler-execution-coordinator/src/entrypoint.rs"
@@ -13,6 +13,7 @@ readonly PROVISIONER="${REPO_ROOT}/crates/fe2o3-compiler-execution-coordinator/s
 readonly COORDINATOR_LIFECYCLE="${REPO_ROOT}/crates/fe2o3-compiler-execution-coordinator/src/lifecycle.rs"
 readonly SERVICE_LIFECYCLE="${REPO_ROOT}/crates/fe2o3-compiler-execution-lifecycle/src/lib.rs"
 readonly SUPERVISOR_DEPLOYMENT="${REPO_ROOT}/crates/fe2o3-compiler-execution-supervisor/src/deployment.rs"
+readonly SUPERVISOR_LISTENER="${REPO_ROOT}/crates/fe2o3-compiler-execution-supervisor/src/listener.rs"
 readonly ANCHOR_HELPER="${REPO_ROOT}/crates/fe2o3-external-anchor-provisioner/src/entrypoint.rs"
 readonly ANCHOR_SERVICE="${REPO_ROOT}/crates/fe2o3-external-anchor-service/src/entrypoint.rs"
 readonly PROTOCOL="${REPO_ROOT}/crates/fe2o3-compiler-execution-protocol/src/lib.rs"
@@ -29,16 +30,11 @@ require_line() {
   grep -Fqx -- "${expected}" "${file}" || fail "missing ${expected} in ${file}"
 }
 
-require_line "${SOCKET}" 'ListenSequentialPacket=/run/fe2o3/compiler-execution-supervisor.sock'
-require_line "${SOCKET}" 'FileDescriptorName=compiler-execution-listener'
-require_line "${SOCKET}" 'SocketUser=root'
-require_line "${SOCKET}" 'SocketGroup=fe2o3-compiler'
-require_line "${SOCKET}" 'SocketMode=0660'
-require_line "${SOCKET}" 'DirectoryMode=0755'
-require_line "${SOCKET}" 'FlushPending=no'
+[[ ! -e "${LEGACY_SOCKET}" ]] || fail 'legacy root-listening socket unit still exists'
 
 mapfile -t open_files < <(sed -n 's/^OpenFile=//p' "${SERVICE}")
 readonly expected_open_files=(
+  '/run/fe2o3:runtime-root:read-only'
   '/var/lib/fe2o3/compiler-execution:supervisor-root:read-only'
   '/var/lib/fe2o3/external-anchor:anchor-root:read-only'
   '/usr/libexec/fe2o3/fe2o3-compiler-execution-supervisor:supervisor:read-only'
@@ -53,18 +49,32 @@ readonly expected_open_files=(
   '/etc/fe2o3/compiler-execution/issuer-signing-key-seed-v1:issuer-key-seed:read-only'
   '/etc/fe2o3/compiler-execution/anchor-signing-key-seed-v1:anchor-key-seed:read-only'
 )
-[[ "${#open_files[@]}" -eq "${#expected_open_files[@]}" ]] || fail 'OpenFile count is not 13'
+[[ "${#open_files[@]}" -eq "${#expected_open_files[@]}" ]] || fail 'OpenFile count is not 14'
 for index in "${!expected_open_files[@]}"; do
   [[ "${open_files[index]}" == "${expected_open_files[index]}" ]] ||
     fail "OpenFile ${index} changed"
 done
 
-activation_names='compiler-execution-listener'
+activation_names=''
 for open_file in "${open_files[@]}"; do
   without_options="${open_file%:read-only}"
-  activation_names+=":${without_options##*:}"
+  [[ -z "${activation_names}" ]] || activation_names+=':'
+  activation_names+="${without_options##*:}"
 done
 grep -Fq -- "${activation_names}" "${ENTRYPOINT}" || fail 'entrypoint activation names changed'
+grep -Fq -- 'ConstructedRuntimeListenerV1::construct(' "${INHERITED}" ||
+  fail 'coordinator bound-listener construction is missing'
+grep -Fq -- 'socket_acceptconn(descriptor)' "${INHERITED}" ||
+  fail 'coordinator non-listening admission is missing'
+if sed '/^#\[cfg(test)\]/,$d' "${INHERITED}" | grep -Fq -- 'listen('; then
+  fail 'root coordinator must not activate the production listener'
+fi
+grep -Fq -- 'listen(&self.socket.descriptor, LISTENER_BACKLOG_V1)' "${SUPERVISOR_LISTENER}" ||
+  fail 'protected supervisor listener activation is missing'
+launch_line="$(grep -n -m1 -F -- 'InheritedCompilerExecutionDeploymentV1::admit()?.launch(' "${ENTRYPOINT}" | cut -d: -f1)"
+ready_line="$(grep -n -m1 -F -- 'readiness.publish()?' "${ENTRYPOINT}" | cut -d: -f1)"
+[[ -n "${launch_line}" && -n "${ready_line}" && "${launch_line}" -lt "${ready_line}" ]] ||
+  fail 'systemd readiness must follow supervisor bootstrap readiness'
 for path in \
   /usr/libexec/fe2o3/fe2o3-compiler-execution-supervisor \
   /usr/libexec/fe2o3/fe2o3-static-preexec-launcher \
@@ -85,11 +95,11 @@ for name in \
     fail "service file ${name} changed"
 done
 grep -Fq -- '"client-profile-v1"' "${PROVISIONER}" ||
-  fail 'provisioner client profile changed'
+  fail 'provisioner client profile is missing'
 grep -Fq -- '"/etc/fe2o3/compiler-execution/client-profile-v1"' "${PROTOCOL}" ||
-  fail 'canonical public client-profile path changed'
+  fail 'canonical client-profile path is missing'
 if grep -Fq -- '/etc/fe2o3/compiler-execution/client-profile-v1:' "${SERVICE}"; then
-  fail 'public client profile must not become a coordinator activation descriptor'
+  fail 'public client profile must not add a coordinator activation descriptor'
 fi
 grep -Fq -- 'name = "fe2o3-compiler-execution-provision"' "${COORDINATOR_MANIFEST}" ||
   fail 'provisioner binary target is missing'
@@ -124,7 +134,13 @@ if sed '/^#\[cfg(test)\]/,$d' "${COORDINATOR_LIFECYCLE}" "${SERVICE_LIFECYCLE}" 
   grep -Fq -- 'FlockOperation::Unlock'; then
   fail 'production lifecycle custody must release only by last close'
 fi
-require_line "${SERVICE}" 'Sockets=fe2o3-compiler-execution.socket'
+require_line "${SERVICE}" 'Type=notify'
+require_line "${SERVICE}" 'NotifyAccess=main'
+require_line "${SERVICE}" 'RuntimeDirectory=fe2o3'
+require_line "${SERVICE}" 'RuntimeDirectoryMode=0755'
+if grep -Eq '^(Requires|After|Sockets)=.*fe2o3-compiler-execution\.socket' "${SERVICE}"; then
+  fail 'service retains a legacy socket-activation dependency'
+fi
 require_line "${SERVICE}" 'StartLimitIntervalSec=0'
 require_line "${SERVICE}" 'KillMode=mixed'
 require_line "${SERVICE}" 'Restart=on-failure'

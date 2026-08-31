@@ -17,6 +17,9 @@ use fe2o3_runtime_protocol::{
     CompilerExecutionIssuerPolicyV1, SealedStaticApplicationErrorV1,
     sealed_static_application_identity_v1,
 };
+pub use fe2o3_runtime_protocol::{
+    SEALED_STATIC_ISSUER_RUNTIME_CLOSURE_V1, sealed_static_issuer_runtime_measurement_v1,
+};
 use rustix::fs::FileType;
 use sha2::{Digest, Sha256};
 use zeroize::Zeroize;
@@ -29,24 +32,10 @@ use crate::{
 /// Maximum admitted byte length of the protected issuer executable.
 pub const MAX_COMPILER_EXECUTION_ISSUER_IMAGE_BYTES_V1: u64 = 256 * 1024 * 1024;
 
-/// Canonical content describing the loader-independent issuer runtime closure.
-pub const SEALED_STATIC_ISSUER_RUNTIME_CLOSURE_V1: &[u8] =
-    b"FE2O3/SEALED-STATIC-X86_64-ISSUER-RUNTIME-CLOSURE/V1\0";
-
 /// This admission establishes only the protected issuer process, executable, and key boundary.
 pub const PROTECTED_COMPILER_EXECUTION_ISSUER_AUTHORITY_V1: &str = "admission-only";
 
 const KEY_BYTES: usize = 32;
-
-/// Returns the only runtime-closure measurement accepted for a sealed-static issuer.
-pub fn sealed_static_issuer_runtime_measurement_v1() -> CompilerExecutionIssuerMeasurementV1 {
-    let digest = Sha256::digest(SEALED_STATIC_ISSUER_RUNTIME_CLOSURE_V1).into();
-    CompilerExecutionIssuerMeasurementV1::new(
-        digest,
-        SEALED_STATIC_ISSUER_RUNTIME_CLOSURE_V1.len() as u64,
-    )
-    .expect("the fixed sealed-static runtime measurement is nonzero")
-}
 
 /// Independently measured current static issuer executable and fixed empty runtime closure.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

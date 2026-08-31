@@ -25,8 +25,29 @@ const QUALIFICATION_WORKER_POLL_INTERVAL_V1: Duration = Duration::from_millis(25
 /// descriptors and releases both advisory locks. All production qualification supervisors and
 /// workers acquire this lease before recovery or transaction mutation.
 pub struct CompilerExecutionQualificationSupervisorLeaseV1 {
-    _install_parent: File,
-    _qualification_parent: File,
+    install_parent: File,
+    qualification_parent: File,
+}
+
+impl CompilerExecutionQualificationSupervisorLeaseV1 {
+    pub(super) fn cgroup_scope_name(&self) -> Result<String, DeploymentVerificationErrorV1> {
+        let install = fstat(&self.install_parent)
+            .map_err(|source| io_error("inspect cgroup-bound install-parent lease", source))?;
+        let qualification = fstat(&self.qualification_parent).map_err(|source| {
+            io_error("inspect cgroup-bound qualification-parent lease", source)
+        })?;
+        Ok(cgroup_scope_name_from_identities(
+            (install.st_dev, install.st_ino),
+            (qualification.st_dev, qualification.st_ino),
+        ))
+    }
+}
+
+fn cgroup_scope_name_from_identities(install: (u64, u64), qualification: (u64, u64)) -> String {
+    format!(
+        "fe2o3-qualification-v1-{:016x}{:016x}-{:016x}{:016x}",
+        install.0, install.1, qualification.0, qualification.1
+    )
 }
 
 /// Acquires the exclusive qualification-parent lease without waiting for another owner.
@@ -105,8 +126,20 @@ fn acquire_supervisor_lease_for_owner(
     };
     flock(first, operation)
         .map_err(|source| io_error("acquire first qualification supervisor lease", source))?;
-    flock(second, operation)
-        .map_err(|source| io_error("acquire second qualification supervisor lease", source))?;
+    if let Err(source) = flock(second, operation) {
+        return match flock(first, FlockOperation::Unlock) {
+            Ok(()) => Err(io_error(
+                "acquire second qualification supervisor lease",
+                source,
+            )),
+            Err(cleanup) => Err(invalid(
+                DeploymentVerificationErrorKindV1::CleanupFailed,
+                format!(
+                    "acquire second qualification supervisor lease failed ({source}); releasing the first lease also failed: {cleanup}"
+                ),
+            )),
+        };
+    }
     verify_install_parent_path(install_parent_path, &install_parent, owner)?;
     revalidate_qualification_parent_path(
         qualification_parent_path,
@@ -115,8 +148,8 @@ fn acquire_supervisor_lease_for_owner(
         owner,
     )?;
     Ok(CompilerExecutionQualificationSupervisorLeaseV1 {
-        _install_parent: install_parent,
-        _qualification_parent: qualification_parent,
+        install_parent,
+        qualification_parent,
     })
 }
 
@@ -326,6 +359,33 @@ mod tests {
         (temporary, install, qualification)
     }
 
+    fn reacquire_lease_after_drop(
+        install: &Path,
+        qualification: &Path,
+    ) -> CompilerExecutionQualificationSupervisorLeaseV1 {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            match acquire_supervisor_lease_for_owner(
+                install,
+                qualification,
+                owner(),
+                FlockOperation::NonBlockingLockExclusive,
+            ) {
+                Ok(lease) => return lease,
+                Err(error)
+                    if error
+                        .source
+                        .as_ref()
+                        .is_some_and(|source| source.kind() == std::io::ErrorKind::WouldBlock)
+                        && Instant::now() < deadline =>
+                {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                Err(error) => panic!("qualification supervisor lease was not released: {error}"),
+            }
+        }
+    }
+
     #[test]
     fn lease_excludes_concurrent_supervisors_and_releases_on_drop() {
         let (_temporary, install, qualification) = lease_parents();
@@ -346,13 +406,7 @@ mod tests {
         .unwrap();
         assert_eq!(error.kind(), DeploymentVerificationErrorKindV1::Io);
         drop(lease);
-        acquire_supervisor_lease_for_owner(
-            &install,
-            &qualification,
-            owner(),
-            FlockOperation::NonBlockingLockExclusive,
-        )
-        .unwrap();
+        reacquire_lease_after_drop(&install, &qualification);
     }
 
     #[test]
@@ -398,6 +452,27 @@ mod tests {
         assert_eq!(
             error.kind(),
             DeploymentVerificationErrorKindV1::InvalidMetadata
+        );
+    }
+
+    #[test]
+    fn cgroup_scope_identity_is_stable_and_role_bound_to_the_exact_lease() {
+        let (_temporary, install, qualification) = lease_parents();
+        let lease = acquire_supervisor_lease_for_owner(
+            &install,
+            &qualification,
+            owner(),
+            FlockOperation::NonBlockingLockExclusive,
+        )
+        .unwrap();
+        let name = lease.cgroup_scope_name().unwrap();
+        assert_eq!(name, lease.cgroup_scope_name().unwrap());
+        assert_eq!(name.len(), "fe2o3-qualification-v1-".len() + 65);
+        assert!(name.starts_with("fe2o3-qualification-v1-"));
+        assert_eq!(name.bytes().filter(|byte| *byte == b'-').count(), 4);
+        assert_ne!(
+            cgroup_scope_name_from_identities((1, 2), (3, 4)),
+            cgroup_scope_name_from_identities((3, 4), (1, 2))
         );
     }
 

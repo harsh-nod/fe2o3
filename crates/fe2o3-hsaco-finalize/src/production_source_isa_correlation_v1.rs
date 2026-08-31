@@ -1582,9 +1582,12 @@ mod tests {
                 .unwrap();
         let target_owner =
             VerifiedCanonicalKernelIrV8::from_module(target.module().clone()).unwrap();
+        let [kernel_id] = target.kernel_ids() else {
+            panic!("source/ISA test fixture must contain one kernel");
+        };
         let dialect = lower_kernel_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1(
             target.module(),
-            target.kernel_id(),
+            kernel_id,
             ProductionSemanticAnchorKirIdentityV1::from_v8(&target_owner),
         )
         .unwrap();

@@ -122,17 +122,17 @@ fn extract_ranked_memory_in_active_session_v1(tcx: TyCtxt<'_>) -> Result<(), Str
     )?
     .verify_general_kernel_checks()
     .map_err(|error| error.to_string())?;
-    if ranked.ranked_root_count() == 1 {
+    if let [root] = ranked.ranked_roots() {
         eprintln!(
             "fe2o3 production extraction: Rust -> semantic MIR -> ranked PLIRON -> safety-verified lowering input for `{}`; {} semantic function(s), {} callable record(s), {} retained identity/transaction binding(s), artifact/launch authority {}, all mandatory kernel checks clean {}, bounds clean {}\n{}",
-            ranked.function_name(),
+            root.function_name(),
             ranked.semantic_function_count(),
             ranked.semantic_callable_count(),
             ranked.retained_identity_and_transaction_binding_count(),
             ranked.grants_artifact_or_launch_authority(),
             ranked.all_kernel_checks_are_clean(),
             ranked.bounds_are_clean(),
-            ranked.ranked_ir(),
+            root.ranked_ir(),
         );
     } else {
         eprintln!(
@@ -229,7 +229,9 @@ fn extract_amdgpu_llvm_in_active_session_v1(
         )
     })?;
     eprintln!(
-        "fe2o3 production extraction: Rust -> semantic MIR -> ranked PLIRON -> Kernel IR -> composed formal/ranked memory -> {} LLVM; {} semantic function(s), {} semantic u32 induction certificate(s) for {} checked addition(s), {} correspondence block(s), {} formal access(es), {} ranked dynamic-index discharge(s), workgroup {:?}, {} LLVM byte(s), artifact/launch authority {}",
+        "fe2o3 production extraction: Rust -> semantic MIR -> ranked PLIRON -> Kernel IR V{} with {} GuardedStore operation(s) -> composed formal/ranked memory -> {} LLVM; {} semantic function(s), {} semantic u32 induction certificate(s) for {} checked addition(s), {} correspondence block(s), {} formal access(es), {} ranked dynamic-index discharge(s), ordered workgroups {:?}, {} LLVM byte(s), artifact/launch authority {}",
+        lowered.canonical_kernel_ir_version(),
+        lowered.guarded_store_count(),
         lowered.target_name(),
         lowered.semantic_function_count(),
         lowered.semantic_u32_induction_certificate_count(),
@@ -237,7 +239,7 @@ fn extract_amdgpu_llvm_in_active_session_v1(
         lowered.correspondence_block_count(),
         lowered.formal_access_count(),
         lowered.ranked_dynamic_index_discharge_count(),
-        lowered.workgroup_size(),
+        lowered.workgroup_sizes(),
         lowered.llvm_ir().len(),
         lowered.grants_artifact_or_launch_authority(),
     );
@@ -268,6 +270,8 @@ fn extract_gfx942_compiler_handoff_in_active_session_v1(
             lowered.target_name()
         ));
     }
+    let canonical_kernel_ir_version = lowered.canonical_kernel_ir_version();
+    let guarded_store_count = lowered.guarded_store_count();
     let handoff = lowered
         .into_inert_worker_handoff_for_extraction()
         .map_err(|error| error.to_string())?;
@@ -278,7 +282,9 @@ fn extract_gfx942_compiler_handoff_in_active_session_v1(
         )
     })?;
     eprintln!(
-        "fe2o3 production extraction: Rust -> semantic MIR -> ranked PLIRON -> Kernel IR -> composed formal/ranked memory -> gfx942 LLVM -> compiler-bound inert handoff; {} handoff byte(s), artifact/launch authority false",
+        "fe2o3 production extraction: Rust -> semantic MIR -> ranked PLIRON -> Kernel IR V{} with {} GuardedStore operation(s) -> composed formal/ranked memory -> gfx942 LLVM -> compiler-bound inert handoff; {} handoff byte(s), artifact/launch authority false",
+        canonical_kernel_ir_version,
+        guarded_store_count,
         handoff.canonical_bytes().len(),
     );
     Ok(())

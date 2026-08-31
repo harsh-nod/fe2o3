@@ -43,9 +43,6 @@ pub(crate) enum ProductionPipelineError {
     SemanticMiddleEnd(fe2o3_pliron::ProductionSemanticMirErrorV1),
     RankedProjection(crate::production_ranked_projection_v1::ProductionRankedProjectionErrorV1),
     RankedVerification(crate::production_ranked_projection_v1::ProductionRankedVerificationErrorV1),
-    MultiRootTargetNeutralLowering {
-        roots: usize,
-    },
     TargetNeutralLowering(fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1),
     MissingMirPlironTranslationValidation,
     SimulationKernelIrV7(fe2o3_kernel_ir::VerifiedCanonicalKernelIrErrorV7),
@@ -100,10 +97,6 @@ impl fmt::Display for ProductionPipelineError {
             Self::RankedVerification(error) => {
                 write!(formatter, "production compilation ranked verification failed: {error}")
             }
-            Self::MultiRootTargetNeutralLowering { roots } => write!(
-                formatter,
-                "production compilation retained a verified ranked roster with {roots} kernel roots; target-neutral Kernel IR lowering remains fail-closed until it can consume the complete roster"
-            ),
             Self::TargetNeutralLowering(error) => {
                 write!(formatter, "production compilation target-neutral lowering failed: {error}")
             }
@@ -247,7 +240,6 @@ impl std::error::Error for ProductionPipelineError {
             Self::CustomLlvmConfiguration
             | Self::EmptyCollectedDeviceClosure
             | Self::MissingMirPlironTranslationValidation
-            | Self::MultiRootTargetNeutralLowering { .. }
             | Self::RustcLineageMismatch
             | Self::SimulationProductionKirV9
             | Self::SimulationDebugMapCorrespondence(_)
@@ -388,7 +380,8 @@ pub(crate) struct RankedVerifiedProductionCompilation {
 /// Kernel IR, correspondence evidence, and the original transaction bindings.
 pub(crate) struct TargetNeutralProductionCompilation {
     lowered: fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1,
-    ranked_verification: crate::production_ranked_projection_v1::AuthenticatedRankedVerificationV5,
+    ranked_verification:
+        crate::production_ranked_projection_v1::AuthenticatedRankedVerificationRosterV1,
     bindings: AuthenticatedProductionBindings,
 }
 
@@ -396,7 +389,8 @@ pub(crate) struct TargetNeutralProductionCompilation {
 /// Kernel IR, composed formal/ranked memory evidence, and transaction bindings.
 pub(crate) struct FormalMemoryAdmittedProductionCompilation {
     admitted: fe2o3_lower_mir_kernel::ProductionFormalMemoryOwnerV1,
-    ranked_verification: crate::production_ranked_projection_v1::AuthenticatedRankedVerificationV5,
+    ranked_verification:
+        crate::production_ranked_projection_v1::AuthenticatedRankedVerificationRosterV1,
     bindings: AuthenticatedProductionBindings,
 }
 
@@ -404,8 +398,10 @@ pub(crate) struct FormalMemoryAdmittedProductionCompilation {
 /// Kernel IR, deterministic exact-target LLVM text, and transaction bindings.
 pub(crate) struct TargetLoweredProductionCompilation {
     admitted: fe2o3_lower_mir_kernel::ProductionFormalMemoryOwnerV1,
-    ranked_verification: crate::production_ranked_projection_v1::AuthenticatedRankedVerificationV5,
+    ranked_verification:
+        crate::production_ranked_projection_v1::AuthenticatedRankedVerificationRosterV1,
     target_module: fe2o3_kernel_ir::Module,
+    workgroups: Box<[(String, fe2o3_kernel_ir::WorkgroupSize)]>,
     llvm_ir: String,
     bindings: AuthenticatedProductionBindings,
 }
@@ -419,6 +415,29 @@ pub(crate) struct AuthenticatedProductionTargetModule {
     llvm_ir: String,
     typed_descriptor_roots: Vec<crate::compiler_descriptor::TypedDescriptorRootV1>,
     compiler_ffi_envelope: Option<fe2o3_compiler_ffi::CompilerFfiEnvelopeV1>,
+}
+
+fn exact_target_workgroup_roster_v1(
+    module: &fe2o3_kernel_ir::Module,
+) -> Result<Box<[(String, fe2o3_kernel_ir::WorkgroupSize)]>, ProductionPipelineError> {
+    if module.kernels.is_empty() {
+        return Err(ProductionPipelineError::Geometry(
+            crate::production_geometry_v1::ProductionGeometryErrorV1::KernelClosure,
+        ));
+    }
+    module
+        .kernels
+        .iter()
+        .map(|kernel| {
+            kernel
+                .workgroup_size
+                .map(|workgroup| (kernel.id.as_str().to_owned(), workgroup))
+                .ok_or(ProductionPipelineError::Geometry(
+                    crate::production_geometry_v1::ProductionGeometryErrorV1::NonExactDescriptorWorkgroup,
+                ))
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(Vec::into_boxed_slice)
 }
 
 struct PreparedProductionWorkerPublication {
@@ -589,41 +608,76 @@ impl FormalMemoryAdmittedProductionCompilation {
         } = self;
         let target_profile = bindings.rustc_target.profile();
         let semantic = admitted.semantic_kir().semantic().semantic();
-        let [semantic_root] = semantic.roots() else {
+        if semantic.roots().is_empty()
+            || semantic.roots().len() != bindings.typed_descriptor_roots.len()
+            || semantic.roots().len() != admitted.semantic_kir().module().kernels.len()
+            || semantic.roots().len() != admitted.kernels().len()
+        {
             return Err(ProductionPipelineError::Geometry(
                 crate::production_geometry_v1::ProductionGeometryErrorV1::KernelClosure,
             ));
-        };
-        let semantic_function = semantic
-            .functions()
-            .get(semantic_root.index() as usize)
-            .ok_or(ProductionPipelineError::Geometry(
-                crate::production_geometry_v1::ProductionGeometryErrorV1::KernelClosure,
-            ))?;
-        let [typed_root] = bindings.typed_descriptor_roots.as_slice() else {
-            return Err(ProductionPipelineError::Geometry(
-                crate::production_geometry_v1::ProductionGeometryErrorV1::KernelClosure,
-            ));
-        };
-        let source_launch = typed_root
-            .source_launch()
-            .ok_or(ProductionPipelineError::Geometry(
-            crate::production_geometry_v1::ProductionGeometryErrorV1::NonExactDescriptorWorkgroup,
-        ))?;
-        crate::production_geometry_v1::derive_production_geometry_v1(
-            admitted.semantic_kir().module(),
-            semantic_function,
-            source_launch,
-            target_profile.device_target(),
-        )
-        .map_err(ProductionPipelineError::Geometry)?;
-
+        }
+        for (((typed_root, semantic_root), kernel), formal) in bindings
+            .typed_descriptor_roots
+            .iter()
+            .zip(semantic.roots())
+            .zip(admitted.semantic_kir().module().kernels.iter())
+            .zip(admitted.kernels())
+        {
+            let semantic_function = semantic
+                .functions()
+                .get(semantic_root.index() as usize)
+                .ok_or(ProductionPipelineError::Geometry(
+                    crate::production_geometry_v1::ProductionGeometryErrorV1::KernelClosure,
+                ))?;
+            let semantic_entry =
+                semantic_function
+                    .kernel_entry()
+                    .ok_or(ProductionPipelineError::Geometry(
+                        crate::production_geometry_v1::ProductionGeometryErrorV1::KernelClosure,
+                    ))?;
+            if semantic_entry.kernel_binding_identity().as_bytes()
+                != &typed_root.kernel_binding_bytes()
+                || semantic_entry.export_symbol().as_bytes() != typed_root.entry_symbol().as_bytes()
+                || kernel.id.as_str() != typed_root.entry_symbol()
+                || kernel.entry.as_str() != typed_root.entry_symbol()
+                || formal.obligations().kernel().as_str() != typed_root.entry_symbol()
+            {
+                return Err(ProductionPipelineError::Geometry(
+                    crate::production_geometry_v1::ProductionGeometryErrorV1::KernelClosure,
+                ));
+            }
+            let source_launch = typed_root.source_launch().ok_or(
+                ProductionPipelineError::Geometry(
+                    crate::production_geometry_v1::ProductionGeometryErrorV1::NonExactDescriptorWorkgroup,
+                ),
+            )?;
+            crate::production_geometry_v1::derive_production_geometry_v1(
+                admitted.semantic_kir().module(),
+                typed_root.entry_symbol(),
+                semantic_function,
+                source_launch,
+                target_profile.device_target(),
+            )
+            .map_err(ProductionPipelineError::Geometry)?;
+        }
         let target_bound = dialect_amdgcn::bind_production_target_v1(
             admitted.semantic_kir().module(),
             target_profile,
         )
         .map_err(ProductionPipelineError::TargetBinding)?;
-        let (target_module, _kernel_id) = target_bound.into_parts();
+        let (target_module, kernel_ids) = target_bound.into_parts();
+        if kernel_ids.len() != target_module.kernels.len()
+            || kernel_ids
+                .iter()
+                .zip(&target_module.kernels)
+                .any(|(kernel_id, kernel)| kernel_id != &kernel.id)
+        {
+            return Err(ProductionPipelineError::Geometry(
+                crate::production_geometry_v1::ProductionGeometryErrorV1::KernelClosure,
+            ));
+        }
+        let workgroups = exact_target_workgroup_roster_v1(&target_module)?;
         let target_kir_identity = match admitted
             .semantic_kir()
             .canonical_kernel_ir_identity()
@@ -665,6 +719,7 @@ impl FormalMemoryAdmittedProductionCompilation {
             admitted,
             ranked_verification,
             target_module,
+            workgroups,
             llvm_ir,
             bindings,
         })
@@ -680,15 +735,40 @@ impl TargetLoweredProductionCompilation {
         self.bindings.rustc_target.profile().device_target()
     }
 
+    pub(crate) fn canonical_kernel_ir_version(&self) -> u16 {
+        match self
+            .admitted
+            .semantic_kir()
+            .canonical_kernel_ir_identity()
+            .version()
+        {
+            fe2o3_lower_mir_kernel::ProductionCanonicalKernelIrVersionV1::V8 => 8,
+            fe2o3_lower_mir_kernel::ProductionCanonicalKernelIrVersionV1::V9 => 9,
+        }
+    }
+
+    pub(crate) fn guarded_store_count(&self) -> usize {
+        self.target_module
+            .functions
+            .iter()
+            .filter_map(|function| function.body.as_ref())
+            .flat_map(|body| &body.blocks)
+            .flat_map(|block| &block.operations)
+            .filter(|operation| {
+                matches!(
+                    operation.kind,
+                    fe2o3_kernel_ir::OperationKind::GuardedStore { .. }
+                )
+            })
+            .count()
+    }
+
     pub(crate) fn llvm_ir(&self) -> &str {
         &self.llvm_ir
     }
 
-    pub(crate) fn workgroup_size(&self) -> Option<fe2o3_kernel_ir::WorkgroupSize> {
-        self.target_module
-            .kernels
-            .first()
-            .and_then(|kernel| kernel.workgroup_size)
+    pub(crate) fn workgroup_sizes(&self) -> &[(String, fe2o3_kernel_ir::WorkgroupSize)] {
+        &self.workgroups
     }
 
     pub(crate) fn semantic_function_count(&self) -> usize {
@@ -701,16 +781,11 @@ impl TargetLoweredProductionCompilation {
     }
 
     pub(crate) fn semantic_u32_induction_checked_addition_count(&self) -> usize {
-        self.ranked_verification
-            .semantic_u32_induction()
-            .checked_additions_examined()
+        self.ranked_verification.checked_additions_examined()
     }
 
     pub(crate) fn semantic_u32_induction_certificate_count(&self) -> usize {
-        self.ranked_verification
-            .semantic_u32_induction()
-            .certificates()
-            .len()
+        self.ranked_verification.induction_certificate_count()
     }
 
     pub(crate) fn correspondence_block_count(&self) -> usize {
@@ -722,33 +797,51 @@ impl TargetLoweredProductionCompilation {
     }
 
     pub(crate) fn formal_allocation_count(&self) -> usize {
-        self.admitted.obligations().allocations().len()
+        self.admitted
+            .kernels()
+            .iter()
+            .map(|kernel| kernel.obligations().allocations().len())
+            .sum()
     }
 
     pub(crate) fn formal_access_count(&self) -> usize {
-        self.admitted.obligations().accesses().len()
+        self.admitted
+            .kernels()
+            .iter()
+            .map(|kernel| kernel.obligations().accesses().len())
+            .sum()
     }
 
     pub(crate) fn ranked_dynamic_index_discharge_count(&self) -> usize {
-        self.admitted.ranked_discharged_reasons().len()
+        self.admitted
+            .kernels()
+            .iter()
+            .map(|kernel| kernel.ranked_discharged_reasons().len())
+            .sum()
     }
 
     pub(crate) fn runtime_bounds_requirement_count(&self) -> usize {
-        self.admitted.obligations().bounds_requirements().len()
+        self.admitted
+            .kernels()
+            .iter()
+            .map(|kernel| kernel.obligations().bounds_requirements().len())
+            .sum()
     }
 
     pub(crate) fn runtime_alias_requirement_count(&self) -> usize {
         self.admitted
-            .obligations()
-            .runtime_alias_requirements()
-            .len()
+            .kernels()
+            .iter()
+            .map(|kernel| kernel.obligations().runtime_alias_requirements().len())
+            .sum()
     }
 
     pub(crate) fn inter_invocation_conflict_count(&self) -> usize {
         self.admitted
-            .obligations()
-            .inter_invocation_conflicts()
-            .len()
+            .kernels()
+            .iter()
+            .map(|kernel| kernel.obligations().inter_invocation_conflicts().len())
+            .sum()
     }
 
     pub(crate) fn retained_identity_and_transaction_binding_count(&self) -> usize {
@@ -778,6 +871,7 @@ impl TargetLoweredProductionCompilation {
             admitted,
             ranked_verification: _,
             target_module,
+            workgroups: _,
             llvm_ir,
             bindings,
         } = self;
@@ -822,7 +916,7 @@ impl TargetLoweredProductionCompilation {
         self,
     ) -> Result<PreparedProductionWorkerPublication, ProductionPipelineError> {
         eprintln!(
-            "[rustc-codegen-fe2o3] production compilation lowered {} admitted semantic function(s) into verified target-neutral Kernel IR module `{}` with {} exact block correspondence record(s), then admitted composed formal/ranked memory evidence for a {}-invocation structural witness with {} allocation(s), {} formal access(es), {} ranked dynamic-index discharge(s), {} runtime bounds requirement(s), {} runtime alias requirement(s), and {} inter-invocation conflict(s), and lowered exact target-bound KIR with compiler-selected-or-retained workgroup {:?} to {} byte(s) of deterministic {} LLVM text while retaining {} identity/transaction binding(s); artifact/launch authority {}; preparing exact compiler-module handoff",
+            "[rustc-codegen-fe2o3] production compilation lowered {} admitted semantic function(s) into verified target-neutral Kernel IR module `{}` with {} exact block correspondence record(s), then admitted composed formal/ranked memory evidence for a {}-invocation structural witness with {} allocation(s), {} formal access(es), {} ranked dynamic-index discharge(s), {} runtime bounds requirement(s), {} runtime alias requirement(s), and {} inter-invocation conflict(s), and lowered exact target-bound KIR with ordered compiler-selected-or-retained workgroups {:?} to {} byte(s) of deterministic {} LLVM text while retaining {} identity/transaction binding(s); artifact/launch authority {}; preparing exact compiler-module handoff",
             self.semantic_function_count(),
             self.module().id,
             self.correspondence_block_count(),
@@ -833,7 +927,7 @@ impl TargetLoweredProductionCompilation {
             self.runtime_bounds_requirement_count(),
             self.runtime_alias_requirement_count(),
             self.inter_invocation_conflict_count(),
-            self.workgroup_size(),
+            self.workgroup_sizes(),
             self.llvm_ir().len(),
             self.bindings.rustc_target.profile().device_target(),
             self.retained_identity_and_transaction_binding_count(),
@@ -843,6 +937,7 @@ impl TargetLoweredProductionCompilation {
             admitted,
             ranked_verification,
             target_module,
+            workgroups: _,
             llvm_ir,
             bindings,
         } = self;
@@ -1650,14 +1745,6 @@ impl RankedVerifiedProductionCompilation {
         self.ranked.root_count()
     }
 
-    pub(crate) fn ranked_ir(&self) -> &str {
-        self.ranked.ranked_ir()
-    }
-
-    pub(crate) fn function_name(&self) -> &str {
-        self.ranked.function_name()
-    }
-
     pub(crate) fn semantic_function_count(&self) -> usize {
         self.ranked.semantic_function_count()
     }
@@ -1808,6 +1895,12 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
             debug_source_capture,
         )
         .map_err(ProductionPipelineError::SemanticImport)?;
+        let typed_descriptor_roots =
+            crate::compiler_descriptor::order_typed_descriptor_roots_by_semantic_v1(
+                typed_descriptor_roots,
+                &semantic_mir,
+            )
+            .map_err(ProductionPipelineError::DescriptorEvidence)?;
         Ok(ProductionCompilation {
             stage: AdmittedSemanticMirStage {
                 semantic_mir,
@@ -2001,41 +2094,29 @@ impl RankedVerifiedProductionCompilation {
             .map_err(ProductionPipelineError::RankedVerification)?;
         debug_assert!(!roster_receipt.grants_artifact_or_launch_authority());
         debug_assert!(roster_receipt.verify_equivalence().is_ok());
-        let root_count = roster_receipt.root_count();
-        if root_count != 1 {
-            drop((roster_receipt, bindings));
-            return Err(ProductionPipelineError::MultiRootTargetNeutralLowering {
-                roots: root_count,
-            });
-        }
-        let source_rank = roster_receipt
-            .source_order_roots()
-            .first()
-            .map(|root| root.source_rank())
-            .ok_or(ProductionPipelineError::MultiRootTargetNeutralLowering { roots: 0 })?;
-        debug_assert_eq!(roster_receipt.canonical_kernel_order(), &[0]);
         debug_assert_ne!(
             roster_receipt.canonical_roster_identity().as_bytes(),
             &[0; 32],
         );
         let (receipt, ranked_verification) = roster_receipt
-            .into_singleton_verified_receipt()
+            .into_module_verified_receipt()
             .map_err(ProductionPipelineError::RankedVerification)?;
-        debug_assert_eq!(
-            ranked_verification.has_authenticated_functional_verification(),
-            receipt
-                .lowering()
-                .has_retained_policy_checked_refinement_staging()
-        );
-        debug_assert!(ranked_verification.retained_functional_verification_is_coherent());
+        debug_assert!(ranked_verification.every_functional_verification_is_coherent());
         let lowered =
-            fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1::try_lower_after_ranked_checks(
+            fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1::try_lower_after_ranked_roster_checks(
                 receipt,
                 fe2o3_lower_mir_kernel::ProductionSemanticKirLimitsV1::default(),
-                source_rank,
             )
             .map_err(ProductionPipelineError::TargetNeutralLowering)?;
-        if lowered.mir_pliron_translation_validation().is_none() {
+        let exact_translation_roster = {
+            let mut translations = lowered.mir_pliron_translation_validations();
+            translations.len() == lowered.module().kernels.len()
+                && translations
+                    .by_ref()
+                    .zip(&lowered.module().kernels)
+                    .all(|((function_name, _), kernel)| function_name == kernel.id.as_str())
+        };
+        if !exact_translation_roster {
             return Err(ProductionPipelineError::MissingMirPlironTranslationValidation);
         }
         Ok(TargetNeutralProductionCompilation {
@@ -2080,6 +2161,46 @@ mod tests {
                 "V1 correspondence does not distinguish multiple KIR function bodies"
             ))
         ));
+    }
+
+    #[test]
+    fn target_workgroup_roster_rejects_empty_and_missing_entries_without_omission() {
+        let empty = fe2o3_kernel_ir::Module::new("empty_workgroups");
+        assert!(exact_target_workgroup_roster_v1(&empty).is_err());
+
+        let mut module = fe2o3_kernel_ir::Module::new("workgroups");
+        let mut first = fe2o3_kernel_ir::Kernel::new(
+            "first",
+            "first",
+            fe2o3_kernel_ir::LaunchDomain::D1 {
+                x: fe2o3_kernel_ir::LaunchExtent::Static(64),
+            },
+        );
+        first.workgroup_size = Some(fe2o3_kernel_ir::WorkgroupSize::new(64, 1, 1));
+        let second = fe2o3_kernel_ir::Kernel::new(
+            "second",
+            "second",
+            fe2o3_kernel_ir::LaunchDomain::D1 {
+                x: fe2o3_kernel_ir::LaunchExtent::Static(64),
+            },
+        );
+        module.kernels.extend([first, second]);
+        assert!(exact_target_workgroup_roster_v1(&module).is_err());
+
+        module.kernels[1].workgroup_size = Some(fe2o3_kernel_ir::WorkgroupSize::new(128, 1, 1));
+        assert_eq!(
+            exact_target_workgroup_roster_v1(&module).unwrap().as_ref(),
+            &[
+                (
+                    "first".to_owned(),
+                    fe2o3_kernel_ir::WorkgroupSize::new(64, 1, 1),
+                ),
+                (
+                    "second".to_owned(),
+                    fe2o3_kernel_ir::WorkgroupSize::new(128, 1, 1),
+                ),
+            ],
+        );
     }
 
     #[test]
@@ -2207,42 +2328,36 @@ mod tests {
         let roster = pipeline
             .find(".into_verified_roster_receipt()")
             .expect("ranked roster verification transition");
-        let singleton = pipeline
-            .find(".into_singleton_verified_receipt()")
-            .expect("singleton ranked receipt transition");
-        let lowering = pipeline
-            .find("ProductionSemanticKirOwnerV1::try_lower_after_ranked_checks")
+        let module = pipeline[roster..]
+            .find(".into_module_verified_receipt()")
+            .map(|offset| roster + offset)
+            .expect("complete ranked module receipt transition");
+        let lowering = pipeline[module..]
+            .find("ProductionSemanticKirOwnerV1::try_lower_after_ranked_roster_checks")
+            .map(|offset| module + offset)
             .expect("KIR lowering transition");
         assert!(
-            roster < singleton && singleton < lowering,
+            roster < module && module < lowering,
             "KIR lowering ran before functional verification"
         );
     }
 
     #[test]
-    fn ranked_roster_receipt_stops_before_singleton_kir_authority() {
+    fn ranked_roster_receipt_reaches_complete_module_kir_authority() {
         let pipeline = include_str!("production_pipeline.rs");
         let roster = pipeline
             .find(".into_verified_roster_receipt()")
             .expect("ranked roster receipt transition");
-        let root_count = pipeline[roster..]
-            .find("let root_count = roster_receipt.root_count()")
+        let module = pipeline[roster..]
+            .find(".into_module_verified_receipt()")
             .map(|offset| roster + offset)
-            .expect("roster cardinality gate");
-        let multi_root_stop = pipeline[root_count..]
-            .find("ProductionPipelineError::MultiRootTargetNeutralLowering")
-            .map(|offset| root_count + offset)
-            .expect("explicit pre-KIR multi-root stop");
-        let singleton = pipeline[multi_root_stop..]
-            .find(".into_singleton_verified_receipt()")
-            .map(|offset| multi_root_stop + offset)
-            .expect("singleton receipt authority");
-        let kir = pipeline[singleton..]
-            .find("ProductionSemanticKirOwnerV1::try_lower_after_ranked_checks")
-            .map(|offset| singleton + offset)
+            .expect("complete module receipt authority");
+        let kir = pipeline[module..]
+            .find("ProductionSemanticKirOwnerV1::try_lower_after_ranked_roster_checks")
+            .map(|offset| module + offset)
             .expect("KIR authority transition");
-        assert!(roster < root_count && root_count < multi_root_stop);
-        assert!(multi_root_stop < singleton && singleton < kir);
+        assert!(roster < module && module < kir);
+        assert!(!pipeline.contains(concat!("MultiRoot", "TargetNeutralLowering")));
     }
 
     #[test]

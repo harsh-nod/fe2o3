@@ -14,6 +14,8 @@ use crate::{
 
 /// Canonical formal-memory obligation receipt version.
 pub const FORMAL_MEMORY_OBLIGATION_RECEIPT_VERSION_V1: u16 = 1;
+/// Additive receipt version admitting compiler-derived write-only allocations.
+pub const FORMAL_MEMORY_OBLIGATION_RECEIPT_VERSION_V2: u16 = 2;
 /// Extraction-policy version committed by every V1 receipt.
 pub const FORMAL_MEMORY_OBLIGATION_POLICY_V1: u16 = 1;
 /// Maximum exact bytes in one formal-memory obligation receipt.
@@ -85,6 +87,16 @@ impl InertCanonicalFormalMemoryObligationReceiptV1 {
         &self.canonical_bytes
     }
 
+    /// Returns the exact kernel identifier retained by this validated receipt.
+    pub fn kernel_id(&self) -> &str {
+        self.binding_names().0
+    }
+
+    /// Returns the exact entry-function identifier retained by this validated receipt.
+    pub fn entry_id(&self) -> &str {
+        self.binding_names().1
+    }
+
     pub const fn identity(&self) -> &InertFormalMemoryObligationReceiptIdentityV1 {
         &self.identity
     }
@@ -108,16 +120,39 @@ impl InertCanonicalFormalMemoryObligationReceiptV1 {
             identity,
         }
     }
+
+    fn binding_names(&self) -> (&str, &str) {
+        let mut reader = Reader::new(&self.canonical_bytes);
+        reader
+            .fixed::<HEADER_BYTES>()
+            .expect("validated formal-memory receipt retains its complete header");
+        let kernel = reader
+            .text("kernel ID")
+            .expect("validated formal-memory receipt retains its kernel ID");
+        let entry = reader
+            .text("entry function ID")
+            .expect("validated formal-memory receipt retains its entry function ID");
+        (kernel, entry)
+    }
 }
 
 fn encode_obligations(
     obligations: &FormalMemoryObligations,
 ) -> Result<Vec<u8>, FormalMemoryReceiptErrorV1> {
     preflight_record_counts(ObligationRecordCountsV1::from_obligations(obligations))?;
+    let version = if obligations
+        .allocations
+        .iter()
+        .any(|allocation| allocation.access == AccessMode::WriteOnly)
+    {
+        FORMAL_MEMORY_OBLIGATION_RECEIPT_VERSION_V2
+    } else {
+        FORMAL_MEMORY_OBLIGATION_RECEIPT_VERSION_V1
+    };
 
     let mut writer = Writer::new();
     writer.bytes(&MAGIC_V1)?;
-    writer.u16(FORMAL_MEMORY_OBLIGATION_RECEIPT_VERSION_V1)?;
+    writer.u16(version)?;
     writer.u16(FORMAL_MEMORY_OBLIGATION_POLICY_V1)?;
     writer.u16(0)?;
     writer.u16(0)?;
@@ -351,7 +386,10 @@ fn validate_receipt(bytes: &[u8]) -> Result<(), FormalMemoryReceiptErrorV1> {
         return Err(FormalMemoryReceiptErrorV1::InvalidMagic);
     }
     let version = reader.u16()?;
-    if version != FORMAL_MEMORY_OBLIGATION_RECEIPT_VERSION_V1 {
+    if !matches!(
+        version,
+        FORMAL_MEMORY_OBLIGATION_RECEIPT_VERSION_V1 | FORMAL_MEMORY_OBLIGATION_RECEIPT_VERSION_V2
+    ) {
         return Err(FormalMemoryReceiptErrorV1::UnknownVersion(version));
     }
     let policy = reader.u16()?;
@@ -402,7 +440,7 @@ fn validate_receipt(bytes: &[u8]) -> Result<(), FormalMemoryReceiptErrorV1> {
     let mut allocation_values =
         allocation_budget.vector::<u32>(allocation_count, "allocation value identities")?;
     for _ in 0..allocation_count {
-        let record = decode_allocation(&mut reader)?;
+        let record = decode_allocation(&mut reader, version)?;
         if previous_key == Some(record.0) {
             return Err(FormalMemoryReceiptErrorV1::SemanticKeyConflict {
                 field: "allocation parameter index",
@@ -424,6 +462,13 @@ fn validate_receipt(bytes: &[u8]) -> Result<(), FormalMemoryReceiptErrorV1> {
         });
     }
     drop(allocation_values);
+    if version == FORMAL_MEMORY_OBLIGATION_RECEIPT_VERSION_V2
+        && !allocations
+            .iter()
+            .any(|allocation| allocation.access_mode == access_mode_tag(AccessMode::WriteOnly))
+    {
+        return Err(FormalMemoryReceiptErrorV1::NonCanonicalVersion { version });
+    }
 
     let access_count = reader.count("accesses")?;
     reader.require_fixed_records(access_count, ACCESS_RECORD_BYTES_V1, "accesses")?;
@@ -451,6 +496,13 @@ fn validate_receipt(bytes: &[u8]) -> Result<(), FormalMemoryReceiptErrorV1> {
         {
             return Err(FormalMemoryReceiptErrorV1::AccessViolation {
                 field: "write through read-only allocation",
+            });
+        }
+        if record.2 == memory_access_kind_tag(FormalMemoryAccessKind::Read)
+            && allocation.access_mode == access_mode_tag(AccessMode::WriteOnly)
+        {
+            return Err(FormalMemoryReceiptErrorV1::AccessViolation {
+                field: "read through write-only allocation",
             });
         }
         if record.5 == 0 {
@@ -714,6 +766,7 @@ impl DecoderAllocationBudgetV1 {
 
 fn decode_allocation(
     reader: &mut Reader<'_>,
+    version: u16,
 ) -> Result<AllocationRecord, FormalMemoryReceiptErrorV1> {
     let parameter_index = reader.u32()?;
     let value = reader.u32()?;
@@ -722,7 +775,7 @@ fn decode_allocation(
     let address_space = reader.u8()?;
     decode_address_space(address_space)?;
     let access = reader.u8()?;
-    decode_access_mode(access)?;
+    decode_access_mode(access, version)?;
     reader.reserved_u8("allocation")?;
     Ok((parameter_index, value, kind, address_space, access))
 }
@@ -924,12 +977,14 @@ const fn access_mode_tag(access: AccessMode) -> u8 {
     match access {
         AccessMode::ReadOnly => 1,
         AccessMode::ReadWrite => 2,
+        AccessMode::WriteOnly => 3,
     }
 }
 
-fn decode_access_mode(tag: u8) -> Result<(), FormalMemoryReceiptErrorV1> {
+fn decode_access_mode(tag: u8, version: u16) -> Result<(), FormalMemoryReceiptErrorV1> {
     match tag {
-        1 | 2 => Ok(()),
+        1..=2 => Ok(()),
+        3 if version >= FORMAL_MEMORY_OBLIGATION_RECEIPT_VERSION_V2 => Ok(()),
         _ => Err(FormalMemoryReceiptErrorV1::UnknownTag {
             kind: "access mode",
             tag,
@@ -973,6 +1028,9 @@ pub enum FormalMemoryReceiptErrorV1 {
     },
     InvalidMagic,
     UnknownVersion(u16),
+    NonCanonicalVersion {
+        version: u16,
+    },
     UnknownPolicy(u16),
     UnsupportedFlags(u16),
     InvalidLength {
@@ -1040,6 +1098,12 @@ impl fmt::Display for FormalMemoryReceiptErrorV1 {
             Self::InvalidMagic => formatter.write_str("invalid formal-memory receipt magic"),
             Self::UnknownVersion(version) => {
                 write!(formatter, "unknown formal-memory receipt version {version}")
+            }
+            Self::NonCanonicalVersion { version } => {
+                write!(
+                    formatter,
+                    "noncanonical formal-memory receipt version {version}"
+                )
             }
             Self::UnknownPolicy(policy) => write!(
                 formatter,
@@ -1433,6 +1497,8 @@ mod tests {
         let second = receipt(&fixture());
         assert_eq!(first.canonical_bytes(), second.canonical_bytes());
         assert_eq!(first.identity(), second.identity());
+        assert_eq!(first.kernel_id(), "kernel");
+        assert_eq!(first.entry_id(), "entry");
         first.revalidate().unwrap();
 
         let recovered = InertCanonicalFormalMemoryObligationReceiptV1::from_canonical_bytes(
@@ -1441,6 +1507,8 @@ mod tests {
         .unwrap();
         assert_eq!(recovered.canonical_bytes(), first.canonical_bytes());
         assert_eq!(recovered.identity(), first.identity());
+        assert_eq!(recovered.kernel_id(), "kernel");
+        assert_eq!(recovered.entry_id(), "entry");
     }
 
     #[test]
@@ -1714,9 +1782,43 @@ mod tests {
                 field: "write through read-only allocation",
             },
         );
+        assert_rejected(
+            |value| value.allocations[1].access = AccessMode::WriteOnly,
+            FormalMemoryReceiptErrorV1::AccessViolation {
+                field: "read through write-only allocation",
+            },
+        );
 
         let valid_self_write = receipt(&fixture());
         valid_self_write.revalidate().unwrap();
+    }
+
+    #[test]
+    fn write_only_allocations_use_additive_v2_and_v1_rejects_tag_three() {
+        let mut obligations = fixture();
+        obligations.allocations[0].access = AccessMode::WriteOnly;
+        let receipt = receipt(&obligations);
+        assert_eq!(
+            &receipt.canonical_bytes()[8..10],
+            &FORMAL_MEMORY_OBLIGATION_RECEIPT_VERSION_V2.to_le_bytes()
+        );
+        receipt.revalidate().unwrap();
+        let recovered = InertCanonicalFormalMemoryObligationReceiptV1::from_canonical_bytes(
+            receipt.canonical_bytes().to_vec(),
+        )
+        .unwrap();
+        assert_eq!(recovered.canonical_bytes(), receipt.canonical_bytes());
+
+        let mut forged_v1 = receipt.into_canonical_bytes();
+        forged_v1[8..10]
+            .copy_from_slice(&FORMAL_MEMORY_OBLIGATION_RECEIPT_VERSION_V1.to_le_bytes());
+        assert_eq!(
+            InertCanonicalFormalMemoryObligationReceiptV1::from_canonical_bytes(forged_v1),
+            Err(FormalMemoryReceiptErrorV1::UnknownTag {
+                kind: "access mode",
+                tag: 3,
+            })
+        );
     }
 
     #[test]
@@ -1983,7 +2085,11 @@ mod tests {
         );
 
         for (offset, mutation, expected) in [
-            (8, 2_u16, FormalMemoryReceiptErrorV1::UnknownVersion(2)),
+            (
+                8,
+                2_u16,
+                FormalMemoryReceiptErrorV1::NonCanonicalVersion { version: 2 },
+            ),
             (10, 2_u16, FormalMemoryReceiptErrorV1::UnknownPolicy(2)),
             (12, 1_u16, FormalMemoryReceiptErrorV1::UnsupportedFlags(1)),
         ] {

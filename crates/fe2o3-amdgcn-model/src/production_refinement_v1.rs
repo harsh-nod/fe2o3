@@ -102,7 +102,7 @@ impl ProductionTargetStructuralBindingV1 {
 pub struct ProductionTargetBoundKernelIrV1 {
     profile: ProductionAmdTargetProfileV1,
     module: Module,
-    kernel_id: KernelId,
+    kernel_ids: Box<[KernelId]>,
 }
 
 impl ProductionTargetBoundKernelIrV1 {
@@ -114,12 +114,14 @@ impl ProductionTargetBoundKernelIrV1 {
         &self.module
     }
 
-    pub fn kernel_id(&self) -> &KernelId {
-        &self.kernel_id
+    /// Returns every exact kernel identity in canonical module order.
+    pub fn kernel_ids(&self) -> &[KernelId] {
+        &self.kernel_ids
     }
 
-    pub fn into_parts(self) -> (Module, KernelId) {
-        (self.module, self.kernel_id)
+    /// Consumes target-bound custody into the module and ordered kernel roster.
+    pub fn into_parts(self) -> (Module, Box<[KernelId]>) {
+        (self.module, self.kernel_ids)
     }
 
     pub(crate) fn admit_exact_structural_binding_v1(
@@ -261,7 +263,7 @@ impl fmt::Display for ProductionTargetBindingErrorV1 {
         match self {
             Self::KernelClosure { observed } => write!(
                 formatter,
-                "production target binding requires exactly one kernel, observed {observed}"
+                "production target binding requires at least one exact kernel, observed {observed}"
             ),
             Self::MissingEntry { entry } => write!(
                 formatter,
@@ -289,7 +291,7 @@ impl Error for ProductionTargetBindingErrorV1 {
 /// Applies the sole production target transform to a target-neutral Kernel IR module.
 ///
 /// The transform adds only the exact processor and Wave64 requirements to the
-/// module, its sole kernel, and that kernel's entry function. It then verifies
+/// module, every kernel, and each kernel's entry function. It then verifies
 /// the complete result before returning target-bound custody.
 pub fn bind_production_target_v1(
     neutral_module: &Module,
@@ -306,29 +308,31 @@ pub fn bind_production_target_v1(
     module.required_capabilities.insert(wave.clone());
 
     let observed = module.kernels.len();
-    let [kernel] = module.kernels.as_mut_slice() else {
+    if module.kernels.is_empty() {
         return Err(ProductionTargetBindingErrorV1::KernelClosure { observed });
-    };
-    kernel.required_capabilities.insert(target.clone());
-    kernel.required_capabilities.insert(wave.clone());
-    let kernel_id = kernel.id.clone();
-    let entry_id = kernel.entry.clone();
-
-    let entry = module
-        .functions
-        .iter_mut()
-        .find(|function| function.id == entry_id)
-        .ok_or_else(|| ProductionTargetBindingErrorV1::MissingEntry {
-            entry: entry_id.clone(),
-        })?;
-    entry.required_capabilities.insert(target);
-    entry.required_capabilities.insert(wave);
+    }
+    let mut kernel_ids = Vec::with_capacity(module.kernels.len());
+    for kernel in &mut module.kernels {
+        kernel.required_capabilities.insert(target.clone());
+        kernel.required_capabilities.insert(wave.clone());
+        kernel_ids.push(kernel.id.clone());
+        let entry_id = kernel.entry.clone();
+        let entry = module
+            .functions
+            .iter_mut()
+            .find(|function| function.id == entry_id)
+            .ok_or_else(|| ProductionTargetBindingErrorV1::MissingEntry {
+                entry: entry_id.clone(),
+            })?;
+        entry.required_capabilities.insert(target.clone());
+        entry.required_capabilities.insert(wave.clone());
+    }
 
     verify_module(&module).map_err(ProductionTargetBindingErrorV1::InvalidTargetBoundModule)?;
     Ok(ProductionTargetBoundKernelIrV1 {
         profile,
         module,
-        kernel_id,
+        kernel_ids: kernel_ids.into_boxed_slice(),
     })
 }
 
@@ -539,7 +543,7 @@ mod tests {
 
         assert!(neutral.required_capabilities.is_empty());
         assert_eq!(bound.profile(), ProductionAmdTargetProfileV1::Gfx942);
-        assert_eq!(bound.kernel_id(), &KernelId::new("kernel"));
+        assert_eq!(bound.kernel_ids(), &[KernelId::new("kernel")]);
         assert!(bound.module().required_capabilities.contains(&target));
         assert!(bound.module().required_capabilities.contains(&wave));
         assert!(
@@ -600,7 +604,7 @@ mod tests {
     }
 
     #[test]
-    fn target_binding_rejects_non_singleton_kernel_closure() {
+    fn target_binding_rejects_empty_and_binds_every_kernel_in_order() {
         let mut neutral = neutral_module();
         neutral.kernels.clear();
         assert!(matches!(
@@ -609,11 +613,34 @@ mod tests {
         ));
 
         let mut neutral = neutral_module();
-        neutral.kernels.push(neutral.kernels[0].clone());
-        assert!(matches!(
-            bind_production_target_v1(&neutral, ProductionAmdTargetProfileV1::Gfx942),
-            Err(ProductionTargetBindingErrorV1::KernelClosure { observed: 2 })
+        let mut block = BasicBlock::new(BlockId(0));
+        block.terminator = Some(Terminator::Return { values: vec![] });
+        neutral.functions.push(Function::kernel_entry(
+            "second_entry",
+            Signature::new(vec![], vec![]),
+            vec![],
+            vec![block],
         ));
+        let mut second = fe2o3_kernel_ir::Kernel::new(
+            "second_kernel",
+            "second_entry",
+            LaunchDomain::D1 {
+                x: LaunchExtent::Static(1),
+            },
+        );
+        second.workgroup_size = Some(WorkgroupSize::new(128, 1, 1));
+        neutral.kernels.push(second);
+        let bound = bind_production_target_v1(&neutral, ProductionAmdTargetProfileV1::Gfx942)
+            .expect("multi-kernel target binding succeeds");
+        assert_eq!(
+            bound.kernel_ids(),
+            &[KernelId::new("kernel"), KernelId::new("second_kernel")]
+        );
+        assert!(bound.module().kernels.iter().all(|kernel| {
+            kernel
+                .required_capabilities
+                .contains(&TargetCapability::WaveWidth(WaveWidth::Wave64))
+        }));
     }
 
     #[test]

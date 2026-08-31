@@ -18,6 +18,7 @@ pub enum AddressSpace {
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum AccessMode {
     ReadOnly,
+    WriteOnly,
     ReadWrite,
 }
 

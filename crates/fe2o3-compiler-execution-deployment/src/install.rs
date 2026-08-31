@@ -34,14 +34,12 @@ const INSTALL_ROOT_CHILDREN_V1: &[&str] = &["usr"];
 const INSTALL_USR_CHILDREN_V1: &[&str] = &["lib", "libexec", "share"];
 const INSTALL_LIB_CHILDREN_V1: &[&str] = &["systemd", "sysusers.d", "tmpfiles.d"];
 const INSTALL_SYSTEMD_CHILDREN_V1: &[&str] = &["system"];
-const INSTALL_SYSTEMD_SYSTEM_CHILDREN_V1: &[&str] = &[
-    "fe2o3-compiler-execution.service",
-    "fe2o3-compiler-execution.socket",
-];
+const INSTALL_SYSTEMD_SYSTEM_CHILDREN_V1: &[&str] = &["fe2o3-compiler-execution.service"];
 const INSTALL_SYSUSERS_CHILDREN_V1: &[&str] = &["fe2o3-compiler-execution.conf"];
 const INSTALL_TMPFILES_CHILDREN_V1: &[&str] = &["fe2o3-compiler-execution.conf"];
 const INSTALL_LIBEXEC_CHILDREN_V1: &[&str] = &["fe2o3"];
 const INSTALL_IMAGE_CHILDREN_V1: &[&str] = &[
+    "fe2o3-compiler-execution-client-check",
     "fe2o3-compiler-execution-coordinator",
     "fe2o3-compiler-execution-issuer",
     "fe2o3-compiler-execution-provision",

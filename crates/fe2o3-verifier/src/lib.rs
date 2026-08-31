@@ -16,7 +16,9 @@ mod artifact_record;
 mod authenticated_execution;
 mod authenticated_proof_binding;
 mod authenticated_verus_execution_v2;
+mod compiler_multi_root_proof_v1;
 mod compiler_proof_binding_v3;
+mod compiler_target_lineage_v1;
 mod control_flow_binding;
 mod executor;
 mod functional_refinement_receipt_v2;
@@ -53,6 +55,11 @@ pub use authenticated_verus_execution_v2::{
     BoundExecutionPayloadV2, ProcessFailureV2, RuntimeClosureMeasurementV2,
     RuntimeExecutableBaselineV2, VerusExecutionRoleV2, execute_authenticated_verus_v2,
 };
+pub use compiler_multi_root_proof_v1::{
+    CompilerMultiRootProofValidationErrorV1, ValidatedCompilerMultiRootKernelIrV1,
+    ValidatedCompilerMultiRootProofInputsV1, ValidatedCompilerMultiRootProofRootV1,
+    validate_compiler_multi_root_proof_inputs_v1,
+};
 pub use compiler_proof_binding_v3::{
     CompilerProofInputValidationErrorV3, CompilerProofInputValidationErrorV4,
     ValidatedCompilerProofInputsV3, ValidatedCompilerProofInputsV4,
@@ -76,6 +83,10 @@ pub use authenticated_proof_binding::{
     PERSISTENT_AUTHENTICATED_PROOF_EXECUTABLE_BINDING_DOMAIN_V1,
     PersistentlyFreshProofExecutableBindingV1, PersistentlyFreshProofExecutableIdentityV1,
     bind_authenticated_proof_executable_persistent_v1, bind_authenticated_proof_executable_v1,
+};
+pub use compiler_target_lineage_v1::{
+    CompilerTargetLineageValidationErrorV1, ValidatedCompilerTargetLineageV1,
+    validate_compiler_target_lineage_v1,
 };
 pub use control_flow_binding::{
     AUTHENTICATED_CONTROL_FLOW_EXECUTABLE_BINDING_DOMAIN_V1,

@@ -1953,12 +1953,12 @@ fn ranked_checks_remain_in_custody_through_kir_and_formal_memory() {
         assert!(formal.semantic_kir().retains_mandatory_generic_checks());
         assert_eq!(
             formal.witness_extents(),
-            match rank {
+            Some(match rank {
                 1 => [2, 1, 1],
                 2 => [2, 2, 1],
                 3 => [2, 2, 2],
                 _ => unreachable!(),
-            }
+            })
         );
         let evidence =
             InertCanonicalFormalMemoryAdmissionEvidenceV3::from_live_owner(&formal).unwrap();
@@ -2219,14 +2219,12 @@ fn formal_memory_admission_retains_exact_kir_without_authority() {
         admitted.witness_extent(),
         PRODUCTION_FORMAL_MEMORY_WITNESS_EXTENT_V1,
     );
-    assert!(admitted.obligations().accesses().is_empty());
-    assert!(admitted.obligations().bounds_requirements().is_empty());
-    assert!(
-        admitted
-            .obligations()
-            .inter_invocation_conflicts()
-            .is_empty()
-    );
+    let obligations = admitted
+        .obligations()
+        .expect("single-root admission retains the singleton obligations view");
+    assert!(obligations.accesses().is_empty());
+    assert!(obligations.bounds_requirements().is_empty());
+    assert!(obligations.inter_invocation_conflicts().is_empty());
     assert!(!admitted.grants_artifact_or_launch_authority());
 }
 

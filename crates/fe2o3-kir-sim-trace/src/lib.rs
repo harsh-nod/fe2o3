@@ -28,6 +28,7 @@ use fe2o3_semantic_trace::{
 use sha2::{Digest, Sha256};
 
 const CONFIGURATION_IDENTITY_DOMAIN_V1: &[u8] = b"fe2o3-kir-sim-trace/configuration/v1\0";
+const CONFIGURATION_IDENTITY_DOMAIN_V2: &[u8] = b"fe2o3-kir-sim-trace/configuration/v2\0";
 
 /// Caller-selected trace visualization and storage profile.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -91,7 +92,9 @@ impl KirSiteCatalogV1 {
                     for operation in &block.operations {
                         let address_space = match &operation.kind {
                             OperationKind::Load { access, .. }
-                            | OperationKind::Store { access, .. } => {
+                            | OperationKind::GuardedLoad { access, .. }
+                            | OperationKind::Store { access, .. }
+                            | OperationKind::GuardedStore { access, .. } => {
                                 Some(map_address_space(access.address_space))
                             }
                             OperationKind::Atomic(atomic) => {
@@ -1380,7 +1383,23 @@ fn configuration_identity(
     target: SimulationTargetV1,
 ) -> Result<OpaqueIdentityV1, TraceAdapterErrorV1> {
     let mut digest = Sha256::new();
-    digest.update(CONFIGURATION_IDENTITY_DOMAIN_V1);
+    let write_only = request.arguments.iter().any(|argument| match argument {
+        SimulationArgumentV1::Scalar(_) => false,
+        SimulationArgumentV1::Buffer(buffer) => {
+            buffer.access() == fe2o3_kernel_ir::AccessMode::WriteOnly
+        }
+        SimulationArgumentV1::BufferView(view) => {
+            view.access() == fe2o3_kernel_ir::AccessMode::WriteOnly
+        }
+    }) || request
+        .shared_buffers
+        .iter()
+        .any(|shared| shared.buffer.access() == fe2o3_kernel_ir::AccessMode::WriteOnly);
+    digest.update(if write_only {
+        CONFIGURATION_IDENTITY_DOMAIN_V2
+    } else {
+        CONFIGURATION_IDENTITY_DOMAIN_V1
+    });
     digest.update(module.identity().digest());
     digest.update(module.identity().canonical_length().to_le_bytes());
     hash_bytes(&mut digest, request.kernel.as_str().as_bytes());
@@ -1459,6 +1478,7 @@ fn access_tag(access: fe2o3_kernel_ir::AccessMode) -> u8 {
     match access {
         fe2o3_kernel_ir::AccessMode::ReadOnly => 0,
         fe2o3_kernel_ir::AccessMode::ReadWrite => 1,
+        fe2o3_kernel_ir::AccessMode::WriteOnly => 2,
     }
 }
 

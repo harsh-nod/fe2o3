@@ -1,6 +1,9 @@
 [Unit]
 Description=fe2o3 compiler-execution disposable qualification
 Requires=basic.target
+Requires=fe2o3-compiler-execution.service
+Requires=fe2o3-qualification-client-check.service
 After=basic.target
-Wants=fe2o3-compiler-execution.socket
+After=fe2o3-compiler-execution.service
+After=fe2o3-qualification-client-check.service
 AllowIsolate=yes

@@ -59,6 +59,10 @@ impl TypedDescriptorRootV1 {
         &self.logical_name
     }
 
+    pub(crate) fn entry_symbol(&self) -> &str {
+        &self.export_name
+    }
+
     pub(crate) const fn kernel_binding_bytes(&self) -> [u8; 32] {
         self.kernel_binding.as_bytes()
     }
@@ -178,6 +182,9 @@ pub(crate) fn typed_descriptor_roots_from_production_collection<'tcx>(
                                     GeneralTypedArgumentKindV3::SharedSlice(_) => {
                                         AccessMode::ReadOnly
                                     }
+                                    GeneralTypedArgumentKindV3::WriteOnlyDisjointSlice(_) => {
+                                        AccessMode::WriteOnly
+                                    }
                                     GeneralTypedArgumentKindV3::DisjointSlice(_)
                                     | GeneralTypedArgumentKindV3::GlobalMutPointer(_) => {
                                         AccessMode::ReadWrite
@@ -223,11 +230,63 @@ pub(crate) fn typed_descriptor_roots_from_production_collection<'tcx>(
         .collect()
 }
 
+pub(crate) fn order_typed_descriptor_roots_by_semantic_v1(
+    typed_roots: Vec<TypedDescriptorRootV1>,
+    semantic: &fe2o3_mir_model::semantic_mir_v1::AdmittedInertSemanticMirV1,
+) -> Result<Vec<TypedDescriptorRootV1>, CompilerDescriptorError> {
+    if typed_roots.is_empty() || typed_roots.len() != semantic.roots().len() {
+        return Err(CompilerDescriptorError::ProductionDescriptorMismatch(
+            "complete typed/semantic root roster",
+        ));
+    }
+    let mut typed_by_binding = BTreeMap::new();
+    for root in typed_roots {
+        if typed_by_binding
+            .insert(root.kernel_binding_bytes(), root)
+            .is_some()
+        {
+            return Err(CompilerDescriptorError::ProductionDescriptorMismatch(
+                "unique typed kernel binding roster",
+            ));
+        }
+    }
+    let mut ordered = Vec::with_capacity(semantic.roots().len());
+    for semantic_root in semantic.roots() {
+        let function = semantic
+            .functions()
+            .get(semantic_root.index() as usize)
+            .ok_or(CompilerDescriptorError::ProductionDescriptorMismatch(
+                "semantic root function",
+            ))?;
+        let binding = *function
+            .kernel_entry()
+            .ok_or(CompilerDescriptorError::ProductionDescriptorMismatch(
+                "semantic kernel entry",
+            ))?
+            .kernel_binding_identity()
+            .as_bytes();
+        ordered.push(typed_by_binding.remove(&binding).ok_or(
+            CompilerDescriptorError::ProductionDescriptorMismatch(
+                "exact typed/semantic kernel binding roster",
+            ),
+        )?);
+    }
+    if !typed_by_binding.is_empty() {
+        return Err(CompilerDescriptorError::ProductionDescriptorMismatch(
+            "exact typed/semantic kernel binding roster",
+        ));
+    }
+    Ok(ordered)
+}
+
 fn descriptor_argument_kind(kind: GeneralTypedArgumentKindV3) -> DescriptorArgumentKindV1 {
     let scalar = descriptor_scalar(kind.scalar());
     match kind {
         GeneralTypedArgumentKindV3::Scalar(_) => DescriptorArgumentKindV1::Scalar(scalar),
         GeneralTypedArgumentKindV3::SharedSlice(_) => DescriptorArgumentKindV1::SharedSlice(scalar),
+        GeneralTypedArgumentKindV3::WriteOnlyDisjointSlice(_) => {
+            DescriptorArgumentKindV1::DisjointSlice(scalar)
+        }
         GeneralTypedArgumentKindV3::DisjointSlice(_) => {
             DescriptorArgumentKindV1::DisjointSlice(scalar)
         }
@@ -302,19 +361,16 @@ pub(crate) fn construct_production_v1_compiler_descriptor_source_v1(
         .verify_equivalence()
         .map_err(CompilerDescriptorError::ProductionFormalMemory)?;
     let target = envelope.target().to_string();
-    let geometry =
+    let geometries =
         validate_production_v1_descriptor_evidence(module, typed_roots, formal, &target)?;
     let producer_version = match envelope.target().as_amd_target_id().processor() {
         "gfx942" => "production-v1-gfx942-cov6-v1",
         "gfx950" => "production-v1-gfx950-cov6-v1",
         _ => "production-v1-unsupported-target-v1",
     };
-    construct_compiler_descriptor_source_with_profile_v1(
-        envelope,
-        module,
-        compiler_module,
-        typed_roots,
-        DescriptorConstructionProfileV1 {
+    let profiles = geometries
+        .into_iter()
+        .map(|geometry| DescriptorConstructionProfileV1 {
             rank: geometry.rank(),
             workgroup: geometry.workgroup(),
             max_grid: geometry.max_grid(),
@@ -323,7 +379,14 @@ pub(crate) fn construct_production_v1_compiler_descriptor_source_v1(
             allow_exact_tiled_matrix: geometry.allow_exact_tiled_matrix(),
             allow_workgroup_memory: geometry.allow_workgroup_memory(),
             producer_version,
-        },
+        })
+        .collect::<Vec<_>>();
+    construct_compiler_descriptor_source_with_profiles_v1(
+        envelope,
+        module,
+        compiler_module,
+        typed_roots,
+        &profiles,
     )?
     .ok_or(CompilerDescriptorError::ProductionDescriptorMismatch(
         "complete typed descriptor closure",
@@ -335,6 +398,65 @@ fn validate_production_v1_descriptor_evidence(
     typed_roots: &[TypedDescriptorRootV1],
     formal: &fe2o3_lower_mir_kernel::ProductionFormalMemoryOwnerV1,
     device_target: &str,
+) -> Result<Vec<crate::production_geometry_v1::ProductionGeometryV1>, CompilerDescriptorError> {
+    let semantic = formal.semantic_kir().semantic().semantic();
+    if typed_roots.is_empty()
+        || typed_roots.len() != semantic.roots().len()
+        || typed_roots.len() != module.kernels.len()
+        || typed_roots.len() != formal.kernels().len()
+    {
+        return Err(CompilerDescriptorError::ProductionDescriptorMismatch(
+            "complete ordered typed/semantic/KIR/formal root roster",
+        ));
+    }
+    let mut geometries = Vec::with_capacity(typed_roots.len());
+    for (((root, semantic_root), kernel), formal_kernel) in typed_roots
+        .iter()
+        .zip(semantic.roots())
+        .zip(&module.kernels)
+        .zip(formal.kernels())
+    {
+        let semantic_function = semantic
+            .functions()
+            .get(semantic_root.index() as usize)
+            .ok_or(CompilerDescriptorError::ProductionDescriptorMismatch(
+                "semantic root function",
+            ))?;
+        let semantic_entry = semantic_function.kernel_entry().ok_or(
+            CompilerDescriptorError::ProductionDescriptorMismatch("semantic root entry"),
+        )?;
+        if semantic_entry.kernel_binding_identity().as_bytes() != &root.kernel_binding_bytes()
+            || std::str::from_utf8(semantic_entry.export_symbol().as_bytes()).ok()
+                != Some(root.entry_symbol())
+            || kernel.id.as_str() != root.entry_symbol()
+            || formal_kernel.obligations().kernel() != &kernel.id
+        {
+            return Err(CompilerDescriptorError::ProductionDescriptorMismatch(
+                "ordered typed/semantic/KIR/formal root identity",
+            ));
+        }
+        geometries.push(validate_production_v1_descriptor_root_evidence(
+            module,
+            root,
+            semantic,
+            semantic_function,
+            kernel,
+            formal_kernel.obligations(),
+            device_target,
+        )?);
+    }
+    Ok(geometries)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn validate_production_v1_descriptor_root_evidence(
+    module: &Module,
+    root: &TypedDescriptorRootV1,
+    semantic: &fe2o3_mir_model::semantic_mir_v1::AdmittedInertSemanticMirV1,
+    semantic_function: &fe2o3_mir_model::semantic_mir_v1::SemanticFunctionDeclV1,
+    kernel: &fe2o3_kernel_ir::Kernel,
+    obligations: &fe2o3_kernel_ir::FormalMemoryObligations,
+    device_target: &str,
 ) -> Result<crate::production_geometry_v1::ProductionGeometryV1, CompilerDescriptorError> {
     use fe2o3_artifacts::{RustDisjointIndexSpaceV1, RustSourceTypeShapeV1};
     use fe2o3_kernel_ir::{
@@ -344,28 +466,6 @@ fn validate_production_v1_descriptor_evidence(
         SemanticCallableDeclV1, SemanticCompilerIntrinsicOperationV1, SemanticDisjointIndexSpaceV1,
     };
 
-    let semantic = formal.semantic_kir().semantic().semantic();
-    let [root] = typed_roots else {
-        return Err(CompilerDescriptorError::ProductionDescriptorMismatch(
-            "one complete typed root",
-        ));
-    };
-    let [semantic_root] = semantic.roots() else {
-        return Err(CompilerDescriptorError::ProductionDescriptorMismatch(
-            "one semantic root",
-        ));
-    };
-    let semantic_function = semantic
-        .functions()
-        .get(semantic_root.index() as usize)
-        .ok_or(CompilerDescriptorError::ProductionDescriptorMismatch(
-            "semantic root function",
-        ))?;
-    let [kernel] = module.kernels.as_slice() else {
-        return Err(CompilerDescriptorError::ProductionDescriptorMismatch(
-            "one target-bound kernel",
-        ));
-    };
     let entry = module
         .functions
         .iter()
@@ -382,8 +482,8 @@ fn validate_production_v1_descriptor_evidence(
     if kernel.id.as_str() != root.export_name
         || entry.signature.parameters.len() != root.arguments.len()
         || body.parameters.len() != root.arguments.len()
-        || formal.obligations().kernel() != &kernel.id
-        || formal.obligations().entry() != &kernel.entry
+        || obligations.kernel() != &kernel.id
+        || obligations.entry() != &kernel.entry
     {
         return Err(CompilerDescriptorError::ProductionDescriptorMismatch(
             "target/formal kernel closure",
@@ -396,6 +496,7 @@ fn validate_production_v1_descriptor_evidence(
             ))?;
     let geometry = crate::production_geometry_v1::derive_production_geometry_v1(
         module,
+        root.entry_symbol(),
         semantic_function,
         source_launch,
         device_target,
@@ -409,8 +510,11 @@ fn validate_production_v1_descriptor_evidence(
         .zip(&entry.signature.parameters)
         .enumerate()
     {
-        let exact_kernel_type =
-            production_descriptor_argument_matches_kernel_type_v1(root_argument.kind, kernel_type);
+        let exact_kernel_type = production_descriptor_argument_matches_kernel_type_v1(
+            root_argument.kind,
+            root_argument.access,
+            kernel_type,
+        );
         if !exact_kernel_type {
             return Err(CompilerDescriptorError::ProductionDescriptorMismatch(
                 "typed descriptor/Kernel IR argument correspondence",
@@ -510,6 +614,21 @@ fn validate_production_v1_descriptor_evidence(
                             index_space,
                             ..
                         } if *disjoint_slice == semantic_type_id => Some(*index_space),
+                        SemanticCompilerIntrinsicOperationV1::DisjointSliceLen {
+                            disjoint_slice,
+                            index_space,
+                            ..
+                        }
+                        | SemanticCompilerIntrinsicOperationV1::WriteOnlyDisjointSliceLen {
+                            disjoint_slice,
+                            index_space,
+                            ..
+                        }
+                        | SemanticCompilerIntrinsicOperationV1::WriteOnlyDisjointSliceWrite {
+                            disjoint_slice,
+                            index_space,
+                            ..
+                        } if *disjoint_slice == semantic_type_id => Some(*index_space),
                         _ => None,
                     },
                     _ => None,
@@ -538,16 +657,15 @@ fn validate_production_v1_descriptor_evidence(
         .enumerate()
         .filter(|(_, argument)| !matches!(argument.kind, DescriptorArgumentKindV1::Scalar(_)))
         .collect::<Vec<_>>();
-    if formal.obligations().allocations().len() != expected_allocations.len()
-        || !formal.obligations().inter_invocation_conflicts().is_empty()
+    if obligations.allocations().len() != expected_allocations.len()
+        || !obligations.inter_invocation_conflicts().is_empty()
     {
         return Err(CompilerDescriptorError::ProductionDescriptorMismatch(
             "closed formal allocation/race obligations",
         ));
     }
     for (index, argument) in expected_allocations {
-        let allocation = formal
-            .obligations()
+        let allocation = obligations
             .allocations()
             .iter()
             .find(|allocation| allocation.identity().parameter_index() as usize == index)
@@ -556,7 +674,15 @@ fn validate_production_v1_descriptor_evidence(
             ))?;
         let expected_access = match argument.kind {
             DescriptorArgumentKindV1::SharedSlice(_) => KirAccessMode::ReadOnly,
-            DescriptorArgumentKindV1::DisjointSlice(_) => KirAccessMode::ReadWrite,
+            DescriptorArgumentKindV1::DisjointSlice(_) => match argument.access {
+                AccessMode::WriteOnly => KirAccessMode::WriteOnly,
+                AccessMode::ReadWrite => KirAccessMode::ReadWrite,
+                _ => {
+                    return Err(CompilerDescriptorError::ProductionDescriptorMismatch(
+                        "disjoint descriptor access",
+                    ));
+                }
+            },
             DescriptorArgumentKindV1::GlobalMutPointer(_) => KirAccessMode::ReadWrite,
             DescriptorArgumentKindV1::Scalar(_) => unreachable!(),
         };
@@ -576,8 +702,7 @@ fn validate_production_v1_descriptor_evidence(
             ));
         }
     }
-    if !formal
-        .obligations()
+    if !obligations
         .runtime_alias_requirements()
         .iter()
         .all(|requirement| {
@@ -592,7 +717,7 @@ fn validate_production_v1_descriptor_evidence(
             "formal alias obligation not discharged by Rust ownership",
         ));
     }
-    for access in formal.obligations().accesses() {
+    for access in obligations.accesses() {
         let index = access.allocation().parameter_index() as usize;
         let Some(argument) = root.arguments.as_slice().get(index) else {
             return Err(CompilerDescriptorError::ProductionDescriptorMismatch(
@@ -602,6 +727,8 @@ fn validate_production_v1_descriptor_evidence(
         if access.address_space() != AddressSpace::Global
             || (access.kind() == FormalMemoryAccessKind::Write
                 && matches!(argument.kind, DescriptorArgumentKindV1::SharedSlice(_)))
+            || (access.kind() == FormalMemoryAccessKind::Read
+                && argument.access == AccessMode::WriteOnly)
         {
             return Err(CompilerDescriptorError::ProductionDescriptorMismatch(
                 "formal access mode",
@@ -613,6 +740,7 @@ fn validate_production_v1_descriptor_evidence(
 
 fn production_descriptor_argument_matches_kernel_type_v1(
     descriptor: DescriptorArgumentKindV1,
+    descriptor_access: AccessMode,
     kernel_type: &fe2o3_kernel_ir::Type,
 ) -> bool {
     use fe2o3_kernel_ir::{AccessMode as KirAccessMode, AddressSpace, Type as KirType};
@@ -628,7 +756,12 @@ fn production_descriptor_argument_matches_kernel_type_v1(
         }
         (DescriptorArgumentKindV1::DisjointSlice(scalar), KirType::Slice(actual)) => {
             actual.address_space == AddressSpace::Global
-                && actual.access == KirAccessMode::ReadWrite
+                && actual.access
+                    == match descriptor_access {
+                        AccessMode::WriteOnly => KirAccessMode::WriteOnly,
+                        AccessMode::ReadWrite => KirAccessMode::ReadWrite,
+                        _ => return false,
+                    }
                 && actual.element.as_scalar() == descriptor_scalar_to_kernel_ir(scalar)
         }
         (DescriptorArgumentKindV1::GlobalMutPointer(scalar), KirType::Pointer(actual)) => {
@@ -705,30 +838,28 @@ fn match_exact_production_root_roster_v1(
         ));
     }
 
-    let mut semantic_indices = BTreeMap::new();
-    for (index, binding) in semantic_bindings.iter().copied().enumerate() {
-        if semantic_indices.insert(binding, index).is_some() {
+    let mut semantic_unique = BTreeSet::new();
+    for binding in semantic_bindings.iter().copied() {
+        if !semantic_unique.insert(binding) {
             return Err(CompilerDescriptorError::ProductionDescriptorMismatch(
                 "unique semantic kernel binding roster",
             ));
         }
     }
-
-    let mut matched = Vec::with_capacity(typed_bindings.len());
-    for binding in typed_bindings {
-        let Some(index) = semantic_indices.remove(binding) else {
+    let mut typed_unique = BTreeSet::new();
+    for binding in typed_bindings.iter().copied() {
+        if !typed_unique.insert(binding) {
             return Err(CompilerDescriptorError::ProductionDescriptorMismatch(
                 "exact typed/semantic kernel binding roster",
             ));
-        };
-        matched.push(index);
+        }
     }
-    if !semantic_indices.is_empty() {
+    if typed_bindings != semantic_bindings {
         return Err(CompilerDescriptorError::ProductionDescriptorMismatch(
-            "exact typed/semantic kernel binding roster",
+            "ordered typed/semantic kernel binding roster",
         ));
     }
-    Ok(matched)
+    Ok((0..typed_bindings.len()).collect())
 }
 
 fn validate_production_v1_semantic_root_ownership_evidence(
@@ -847,6 +978,7 @@ fn descriptor_scalar_to_kernel_ir(scalar: ScalarTypeV1) -> Option<fe2o3_kernel_i
     })
 }
 
+#[derive(Clone, Copy)]
 struct DescriptorConstructionProfileV1 {
     rank: u8,
     workgroup: [u32; 3],
@@ -858,6 +990,7 @@ struct DescriptorConstructionProfileV1 {
     producer_version: &'static str,
 }
 
+#[cfg(test)]
 fn construct_compiler_descriptor_source_with_profile_v1(
     envelope: &CompilerFfiEnvelopeV1,
     module: &Module,
@@ -865,10 +998,27 @@ fn construct_compiler_descriptor_source_with_profile_v1(
     typed_roots: &[TypedDescriptorRootV1],
     profile: DescriptorConstructionProfileV1,
 ) -> Result<Option<CompilerDescriptorSourceV1>, CompilerDescriptorError> {
+    let profiles = vec![profile; typed_roots.len()];
+    construct_compiler_descriptor_source_with_profiles_v1(
+        envelope,
+        module,
+        compiler_module,
+        typed_roots,
+        &profiles,
+    )
+}
+
+fn construct_compiler_descriptor_source_with_profiles_v1(
+    envelope: &CompilerFfiEnvelopeV1,
+    module: &Module,
+    compiler_module: &InertCompilerModuleTextV1,
+    typed_roots: &[TypedDescriptorRootV1],
+    profiles: &[DescriptorConstructionProfileV1],
+) -> Result<Option<CompilerDescriptorSourceV1>, CompilerDescriptorError> {
     if typed_roots.is_empty() {
         return Ok(None);
     }
-    if typed_roots.len() != module.kernels.len() {
+    if typed_roots.len() != module.kernels.len() || typed_roots.len() != profiles.len() {
         return Err(CompilerDescriptorError::IncompleteTypedKernelClosure {
             typed: typed_roots.len(),
             total: module.kernels.len(),
@@ -907,12 +1057,16 @@ fn construct_compiler_descriptor_source_with_profile_v1(
 
     let module_capabilities = descriptor_capabilities(
         module,
-        profile.allow_exact_tiled_matrix,
-        profile.allow_workgroup_memory,
+        profiles
+            .iter()
+            .any(|profile| profile.allow_exact_tiled_matrix),
+        profiles
+            .iter()
+            .any(|profile| profile.allow_workgroup_memory),
     )?;
     let mut seen_exports = BTreeSet::new();
     let mut kernels = Vec::with_capacity(typed_roots.len());
-    for root in typed_roots {
+    for (root, profile) in typed_roots.iter().zip(profiles) {
         if !seen_exports.insert(root.export_name.as_str()) {
             return Err(CompilerDescriptorError::DuplicateTypedKernel(
                 root.export_name.clone(),
@@ -1031,7 +1185,20 @@ fn construct_compiler_descriptor_source_with_profile_v1(
         )?);
     }
 
-    let producer_version = profile.producer_version;
+    let producer_version = profiles
+        .first()
+        .map(|profile| profile.producer_version)
+        .ok_or(CompilerDescriptorError::ProductionDescriptorMismatch(
+            "nonempty descriptor profile roster",
+        ))?;
+    if profiles
+        .iter()
+        .any(|profile| profile.producer_version != producer_version)
+    {
+        return Err(CompilerDescriptorError::ProductionDescriptorMismatch(
+            "uniform descriptor producer version",
+        ));
+    }
     let table = DeviceDescriptorTableV1::new(
         CanonicalCodeObjectDigest::from_bytes([0; 32]),
         CodeObjectVersion::V6,
@@ -1771,7 +1938,9 @@ mod tests {
             KirAccessMode::ReadWrite,
         );
         assert!(production_descriptor_argument_matches_kernel_type_v1(
-            descriptor, &exact
+            descriptor,
+            AccessMode::ReadWrite,
+            &exact
         ));
 
         for hostile in [
@@ -1797,7 +1966,9 @@ mod tests {
             ),
         ] {
             assert!(!production_descriptor_argument_matches_kernel_type_v1(
-                descriptor, &hostile
+                descriptor,
+                AccessMode::ReadWrite,
+                &hostile
             ));
         }
     }
@@ -2327,7 +2498,7 @@ mod tests {
     }
 
     #[test]
-    fn production_semantic_root_roster_matches_by_binding_not_root_order() {
+    fn production_semantic_root_roster_requires_exact_pairwise_binding_order() {
         let alpha = [0xa1; 32];
         let zeta = [0x7a; 32];
 
@@ -2335,10 +2506,12 @@ mod tests {
             match_exact_production_root_roster_v1(&[alpha], &[alpha]).unwrap(),
             vec![0],
         );
-        assert_eq!(
-            match_exact_production_root_roster_v1(&[alpha, zeta], &[zeta, alpha]).unwrap(),
-            vec![1, 0],
-        );
+        assert!(matches!(
+            match_exact_production_root_roster_v1(&[alpha, zeta], &[zeta, alpha]),
+            Err(CompilerDescriptorError::ProductionDescriptorMismatch(
+                "ordered typed/semantic kernel binding roster"
+            ))
+        ));
     }
 
     #[test]
@@ -2368,7 +2541,7 @@ mod tests {
         assert!(matches!(
             match_exact_production_root_roster_v1(&[alpha, substituted], &[alpha, zeta]),
             Err(CompilerDescriptorError::ProductionDescriptorMismatch(
-                "exact typed/semantic kernel binding roster"
+                "ordered typed/semantic kernel binding roster"
             ))
         ));
     }

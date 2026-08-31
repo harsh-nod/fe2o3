@@ -238,10 +238,10 @@ impl Error for CompilerExecutionProvisioningErrorV1 {
             Self::ExternalAnchorServiceIdentity(error) => Some(error),
             Self::AliasedExecutableMeasurements { .. } => None,
             Self::Policy(error) => Some(error),
-            Self::ClientProfile(error) => Some(error),
             Self::SupervisorDeployment(error) => Some(error),
             Self::ExternalAnchorDeployment(error) => Some(error),
             Self::ExternalAnchorProvisioning(error) => Some(error),
+            Self::ClientProfile(error) => Some(error),
         }
     }
 }
@@ -265,9 +265,6 @@ mod tests {
 
         let policy =
             CompilerExecutionIssuerPolicyV1::decode(first.policy().canonical_bytes()).unwrap();
-        let client_profile =
-            CompilerExecutionClientProfileV1::decode(first.client_profile().canonical_bytes())
-                .unwrap();
         let supervisor =
             CompilerExecutionSupervisorDeploymentV1::decode(first.supervisor().canonical_bytes())
                 .unwrap();
@@ -279,6 +276,9 @@ mod tests {
             first.anchor_provisioning().canonical_bytes(),
         )
         .unwrap();
+        let client_profile =
+            CompilerExecutionClientProfileV1::decode(first.client_profile().canonical_bytes())
+                .unwrap();
 
         assert_eq!(client_profile.supervisor_uid(), supervisor.service_uid());
         assert_eq!(client_profile.supervisor_gid(), supervisor.service_gid());
@@ -290,6 +290,13 @@ mod tests {
         assert!(supervisor.matches_policy(&policy));
         assert!(anchor.matches_supervisor_and_policy(&supervisor, &policy));
         assert!(provisioning.matches_deployment(&anchor));
+        assert_eq!(client_profile.policy(), &policy);
+        assert_eq!(client_profile.supervisor_uid(), supervisor.service_uid());
+        assert_eq!(client_profile.supervisor_gid(), supervisor.service_gid());
+        assert_eq!(
+            client_profile.external_anchor_service(),
+            supervisor.external_anchor_service()
+        );
     }
 
     #[test]
@@ -317,6 +324,10 @@ mod tests {
         assert_ne!(
             original.anchor_provisioning().identity(),
             substituted.anchor_provisioning().identity()
+        );
+        assert_ne!(
+            original.client_profile().identity(),
+            substituted.client_profile().identity()
         );
     }
 

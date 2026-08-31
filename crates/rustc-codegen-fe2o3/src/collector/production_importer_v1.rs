@@ -21,6 +21,7 @@ use fe2o3_mir_model::semantic_mir_v1::{
     SemanticTypeIdV1, SemanticTypeLayoutDetailsV1, SemanticTypeShapeV1,
     SemanticUnsafeAssemblyDeclarationV1, SemanticUnsafeAssemblyTargetV1,
     SemanticWorkgroupDimensionsV1, SemanticWorkgroupPipelineEventV1,
+    SemanticWriteOnlyDisjointWriteKindV1,
 };
 use rustc_middle::ty::{FloatTy, GenericArgKind, Instance, IntTy, Ty, TyCtxt, TyKind, UintTy};
 use rustc_span::{Symbol, sym};
@@ -61,14 +62,19 @@ const IDENTITY_INVENTORY_DOMAIN_V1: &[u8] = b"fe2o3/semantic-mir/rustc-identity-
 #[cfg(test)]
 const PRODUCTION_COMPILER_INTRINSIC_DOMAIN_V1: &[u8] =
     b"fe2o3/semantic-mir/production-compiler-intrinsic/v1";
+#[cfg(test)]
 const PRODUCTION_COMPILER_INTRINSIC_DOMAIN_V2: &[u8] =
     b"fe2o3/semantic-mir/production-compiler-intrinsic/v2";
+const PRODUCTION_COMPILER_INTRINSIC_DOMAIN_V3: &[u8] =
+    b"fe2o3/semantic-mir/production-compiler-intrinsic/v3";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum TerminalIdentitySchemaV1 {
     #[cfg(test)]
     IndependentV1,
+    #[cfg(test)]
     CombinedV2,
+    CombinedV3,
 }
 
 #[derive(Debug)]
@@ -459,12 +465,12 @@ fn construct_complete_request_v1<'tcx>(
     {
         let operation =
             terminal_operation_v1(tcx, terminal.instance, terminal.expansion, abi, &types)?;
-        let mut digest = SemanticIdentityDigestV1::new(PRODUCTION_COMPILER_INTRINSIC_DOMAIN_V2);
+        let mut digest = SemanticIdentityDigestV1::new(PRODUCTION_COMPILER_INTRINSIC_DOMAIN_V3);
         digest.field(terminal.identities.function().as_bytes());
         digest.field(abi.identity().as_bytes());
         digest.field(&[terminal_operation_tag_for_schema_v1(
             terminal.expansion,
-            TerminalIdentitySchemaV1::CombinedV2,
+            TerminalIdentitySchemaV1::CombinedV3,
         )]);
         digest.field(
             &u32::try_from(index)
@@ -2234,6 +2240,41 @@ fn terminal_operation_v1<'tcx>(
                 false,
             )
         }
+        ProductionTerminalExpansionV1::WriteOnlyDisjointSliceLen
+            if inputs.len() == 1 && rust_inputs.len() == 1 =>
+        {
+            let (_, index_space) = rust_reference_pointee_v1(rust_inputs[0])
+                .and_then(|ty| rust_write_only_disjoint_slice_v1(tcx, ty))
+                .ok_or_else(|| {
+                    body_owner_table_mismatch_v1("terminal write-only disjoint-slice len")
+                })?;
+            let disjoint_slice = pointer_pointee_v1(types, inputs[0])?;
+            let element_pointer = aggregate_field_v1(types, disjoint_slice, 0)?;
+            let element = pointer_pointee_v1(types, element_pointer)?;
+            Ok(
+                SemanticCompilerIntrinsicOperationV1::WriteOnlyDisjointSliceLen {
+                    disjoint_slice,
+                    element,
+                    raw_index: output,
+                    index_space,
+                },
+            )
+        }
+        expansion @ (ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWrite
+        | ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteDisjoint
+        | ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteExclusive
+        | ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteBlock
+        | ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteTiled2d
+        | ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteRowStriped2d) => {
+            write_only_disjoint_operation_v1(
+                tcx,
+                expansion,
+                inputs,
+                rust_inputs,
+                rust_output,
+                types,
+            )
+        }
         ProductionTerminalExpansionV1::DisjointSliceLen
             if inputs.len() == 1 && rust_inputs.len() == 1 =>
         {
@@ -2457,6 +2498,7 @@ fn terminal_operation_v1<'tcx>(
         | ProductionTerminalExpansionV1::ThreadIndexCheckedShift
         | ProductionTerminalExpansionV1::DisjointIndexGet
         | ProductionTerminalExpansionV1::DisjointIndexCheckedShift
+        | ProductionTerminalExpansionV1::WriteOnlyDisjointSliceLen
         | ProductionTerminalExpansionV1::DisjointSliceLen
         | ProductionTerminalExpansionV1::DisjointSliceGetMut
         | ProductionTerminalExpansionV1::DisjointSliceGetDisjointMut
@@ -2530,6 +2572,180 @@ fn terminal_operation_v1<'tcx>(
             Err(body_owner_table_mismatch_v1("terminal callable ABI"))
         }
     }
+}
+
+fn write_only_disjoint_operation_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    expansion: crate::production_semantic_terminal_v1::ProductionTerminalExpansionV1,
+    inputs: &[SemanticTypeIdV1],
+    rust_inputs: &[Ty<'tcx>],
+    rust_output: Ty<'tcx>,
+    types: &[SemanticTypeDeclV1],
+) -> Result<SemanticCompilerIntrinsicOperationV1, ProductionSemanticImportErrorV1> {
+    use crate::production_semantic_terminal_v1::ProductionTerminalExpansionV1;
+
+    if !matches!(rust_output.kind(), TyKind::Bool) || inputs.is_empty() || rust_inputs.is_empty() {
+        return Err(body_owner_table_mismatch_v1(
+            "write-only disjoint terminal ABI",
+        ));
+    }
+    let (rust_element, index_space) = rust_reference_pointee_v1(rust_inputs[0])
+        .and_then(|ty| rust_write_only_disjoint_slice_v1(tcx, ty))
+        .ok_or_else(|| body_owner_table_mismatch_v1("write-only disjoint receiver"))?;
+    let disjoint_slice = pointer_pointee_v1(types, inputs[0])?;
+    let element_pointer = aggregate_field_v1(types, disjoint_slice, 0)?;
+    let element = pointer_pointee_v1(types, element_pointer)?;
+
+    let (witness, raw_index, kind, value_argument) = match expansion {
+        ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWrite
+        | ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteDisjoint => {
+            if inputs.len() != 3 || rust_inputs.len() != 3 || rust_inputs[2] != rust_element {
+                return Err(body_owner_table_mismatch_v1(
+                    "write-only direct write signature",
+                ));
+            }
+            let disjoint =
+                expansion == ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteDisjoint;
+            let trusted = if disjoint {
+                TrustedDeviceItem::DisjointIndex
+            } else {
+                TrustedDeviceItem::ThreadIndex
+            };
+            if rust_index_witness_space_v1(tcx, rust_inputs[1], trusted) != Some(index_space) {
+                return Err(body_owner_table_mismatch_v1(
+                    "write-only direct write mapping",
+                ));
+            }
+            (
+                inputs[1],
+                aggregate_field_v1(types, inputs[1], 0)?,
+                SemanticWriteOnlyDisjointWriteKindV1::Thread { disjoint },
+                2,
+            )
+        }
+        ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteExclusive => {
+            if inputs.len() != 4 || rust_inputs.len() != 4 || rust_inputs[3] != rust_element {
+                return Err(body_owner_table_mismatch_v1(
+                    "write-only exclusive write signature",
+                ));
+            }
+            let rust_leader = rust_reference_pointee_v1(rust_inputs[1]);
+            if index_space != SemanticDisjointIndexSpaceV1::GridExclusive
+                || rust_leader.is_none_or(|ty| {
+                    !rust_is_trusted_adt_v1(tcx, ty, TrustedDeviceItem::GridLeader)
+                })
+            {
+                return Err(body_owner_table_mismatch_v1("write-only exclusive mapping"));
+            }
+            (
+                pointer_pointee_v1(types, inputs[1])?,
+                inputs[2],
+                SemanticWriteOnlyDisjointWriteKindV1::GridExclusive,
+                3,
+            )
+        }
+        ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteBlock => {
+            if inputs.len() != 4 || rust_inputs.len() != 4 || rust_inputs[3] != rust_element {
+                return Err(body_owner_table_mismatch_v1(
+                    "write-only blocked write signature",
+                ));
+            }
+            let Some((expected, lanes_per_block, elements_per_lane)) =
+                rust_reference_pointee_v1(rust_inputs[1])
+                    .and_then(|ty| rust_disjoint_block_v1(tcx, ty))
+            else {
+                return Err(body_owner_table_mismatch_v1("write-only blocked witness"));
+            };
+            if index_space != expected {
+                return Err(body_owner_table_mismatch_v1("write-only blocked mapping"));
+            }
+            (
+                pointer_pointee_v1(types, inputs[1])?,
+                inputs[2],
+                SemanticWriteOnlyDisjointWriteKindV1::Block {
+                    lanes_per_block,
+                    elements_per_lane,
+                },
+                3,
+            )
+        }
+        ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteTiled2d => {
+            if inputs.len() != 7 || rust_inputs.len() != 7 || rust_inputs[6] != rust_element {
+                return Err(body_owner_table_mismatch_v1(
+                    "write-only tiled write signature",
+                ));
+            }
+            let Some((expected, lanes_per_tile, tile_rows, tile_columns, elements_per_lane)) =
+                rust_reference_pointee_v1(rust_inputs[1])
+                    .and_then(|ty| rust_disjoint_tile_2d_v1(tcx, ty))
+            else {
+                return Err(body_owner_table_mismatch_v1("write-only tiled witness"));
+            };
+            if index_space != expected {
+                return Err(body_owner_table_mismatch_v1("write-only tiled mapping"));
+            }
+            (
+                pointer_pointee_v1(types, inputs[1])?,
+                inputs[2],
+                SemanticWriteOnlyDisjointWriteKindV1::Tiled2d {
+                    lanes_per_tile,
+                    tile_rows,
+                    tile_columns,
+                    elements_per_lane,
+                },
+                6,
+            )
+        }
+        ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteRowStriped2d => {
+            if inputs.len() != 7 || rust_inputs.len() != 7 || rust_inputs[6] != rust_element {
+                return Err(body_owner_table_mismatch_v1(
+                    "write-only row-striped write signature",
+                ));
+            }
+            let Some((expected, lanes_per_row, elements_per_lane)) =
+                rust_reference_pointee_v1(rust_inputs[1])
+                    .and_then(|ty| rust_disjoint_row_stripe_2d_v1(tcx, ty))
+            else {
+                return Err(body_owner_table_mismatch_v1(
+                    "write-only row-striped witness",
+                ));
+            };
+            if index_space != expected {
+                return Err(body_owner_table_mismatch_v1(
+                    "write-only row-striped mapping",
+                ));
+            }
+            (
+                pointer_pointee_v1(types, inputs[1])?,
+                inputs[2],
+                SemanticWriteOnlyDisjointWriteKindV1::RowStriped2d {
+                    lanes_per_row,
+                    elements_per_lane,
+                },
+                6,
+            )
+        }
+        _ => {
+            return Err(body_owner_table_mismatch_v1(
+                "write-only disjoint terminal expansion",
+            ));
+        }
+    };
+    if inputs[value_argument] != element {
+        return Err(body_owner_table_mismatch_v1(
+            "write-only disjoint semantic element",
+        ));
+    }
+    Ok(
+        SemanticCompilerIntrinsicOperationV1::WriteOnlyDisjointSliceWrite {
+            disjoint_slice,
+            witness,
+            element,
+            raw_index,
+            index_space,
+            kind,
+        },
+    )
 }
 
 const fn semantic_f32_math_function_v1(
@@ -3140,6 +3356,25 @@ fn rust_disjoint_slice_v1<'tcx>(
     ))
 }
 
+fn rust_write_only_disjoint_slice_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    ty: Ty<'tcx>,
+) -> Option<(Ty<'tcx>, SemanticDisjointIndexSpaceV1)> {
+    let TyKind::Adt(definition, arguments) = *ty.kind() else {
+        return None;
+    };
+    if trusted_device_items::classify(tcx, definition.did())
+        != Some(TrustedDeviceItem::WriteOnlyDisjointSlice)
+        || arguments.len() != 2
+    {
+        return None;
+    }
+    Some((
+        arguments[0].as_type()?,
+        rust_disjoint_index_space_v1(tcx, arguments[1].as_type()?)?,
+    ))
+}
+
 pub(crate) fn rust_index_witness_space_v1<'tcx>(
     tcx: TyCtxt<'tcx>,
     ty: Ty<'tcx>,
@@ -3604,13 +3839,23 @@ const fn terminal_operation_tag_for_schema_v1(
         ProductionTerminalExpansionV1::WorkgroupPipelineRead => 97,
         ProductionTerminalExpansionV1::WorkgroupPipelineDiscard => 98,
         ProductionTerminalExpansionV1::WorkgroupPipelineRelease => 99,
-        ProductionTerminalExpansionV1::WorkgroupCollectiveContextCurrent => 104,
-        ProductionTerminalExpansionV1::NeutralWorkgroupReduceSum => 105,
+        ProductionTerminalExpansionV1::WorkgroupCollectiveContextCurrent => match schema {
+            #[cfg(test)]
+            TerminalIdentitySchemaV1::IndependentV1 | TerminalIdentitySchemaV1::CombinedV2 => 104,
+            TerminalIdentitySchemaV1::CombinedV3 => 111,
+        },
+        ProductionTerminalExpansionV1::NeutralWorkgroupReduceSum => match schema {
+            #[cfg(test)]
+            TerminalIdentitySchemaV1::IndependentV1 | TerminalIdentitySchemaV1::CombinedV2 => 105,
+            TerminalIdentitySchemaV1::CombinedV3 => 112,
+        },
         ProductionTerminalExpansionV1::Bf16Conversion(conversion) => {
             let base = match schema {
                 #[cfg(test)]
                 TerminalIdentitySchemaV1::IndependentV1 => 91,
+                #[cfg(test)]
                 TerminalIdentitySchemaV1::CombinedV2 => 100,
+                TerminalIdentitySchemaV1::CombinedV3 => 100,
             };
             base + match conversion {
                 crate::production_semantic_terminal_v1::ProductionBf16ConversionV1::FromBits => 0,
@@ -3619,6 +3864,13 @@ const fn terminal_operation_tag_for_schema_v1(
                 crate::production_semantic_terminal_v1::ProductionBf16ConversionV1::ToF32 => 3,
             }
         }
+        ProductionTerminalExpansionV1::WriteOnlyDisjointSliceLen => 104,
+        ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWrite => 105,
+        ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteDisjoint => 106,
+        ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteExclusive => 107,
+        ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteBlock => 108,
+        ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteTiled2d => 109,
+        ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteRowStriped2d => 110,
     }
 }
 
@@ -3857,11 +4109,15 @@ mod tests {
             [91, 92, 93, 94]
         );
 
-        let combined_schema = TerminalIdentitySchemaV1::CombinedV2;
-        assert_eq!(combined_schema, TerminalIdentitySchemaV1::CombinedV2);
+        let combined_schema = TerminalIdentitySchemaV1::CombinedV3;
+        assert_eq!(combined_schema, TerminalIdentitySchemaV1::CombinedV3);
         assert_ne!(
             PRODUCTION_COMPILER_INTRINSIC_DOMAIN_V1,
             PRODUCTION_COMPILER_INTRINSIC_DOMAIN_V2
+        );
+        assert_ne!(
+            PRODUCTION_COMPILER_INTRINSIC_DOMAIN_V2,
+            PRODUCTION_COMPILER_INTRINSIC_DOMAIN_V3
         );
         assert_eq!(
             pipeline.map(|expansion| {
@@ -3882,6 +4138,44 @@ mod tests {
                 ProductionTerminalExpansionV1::NeutralWorkgroupReduceSum,
             ]
             .map(|expansion| terminal_operation_tag_for_schema_v1(expansion, combined_schema)),
+            [111, 112]
+        );
+        assert_eq!(
+            [
+                ProductionTerminalExpansionV1::Bf16Conversion(
+                    ProductionBf16ConversionV1::FromBits,
+                ),
+                ProductionTerminalExpansionV1::Bf16Conversion(
+                    ProductionBf16ConversionV1::ToBits,
+                ),
+                ProductionTerminalExpansionV1::Bf16Conversion(
+                    ProductionBf16ConversionV1::FromF32RoundTiesEven,
+                ),
+                ProductionTerminalExpansionV1::Bf16Conversion(
+                    ProductionBf16ConversionV1::ToF32,
+                ),
+                ProductionTerminalExpansionV1::WriteOnlyDisjointSliceLen,
+                ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWrite,
+                ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteDisjoint,
+                ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteExclusive,
+                ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteBlock,
+                ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteTiled2d,
+                ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteRowStriped2d,
+                ProductionTerminalExpansionV1::WorkgroupCollectiveContextCurrent,
+                ProductionTerminalExpansionV1::NeutralWorkgroupReduceSum,
+            ]
+            .map(|expansion| terminal_operation_tag_for_schema_v1(expansion, combined_schema)),
+            [100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112]
+        );
+        assert_eq!(
+            [
+                ProductionTerminalExpansionV1::WorkgroupCollectiveContextCurrent,
+                ProductionTerminalExpansionV1::NeutralWorkgroupReduceSum,
+            ]
+            .map(|expansion| terminal_operation_tag_for_schema_v1(
+                expansion,
+                TerminalIdentitySchemaV1::CombinedV2,
+            )),
             [104, 105]
         );
         assert_ne!(

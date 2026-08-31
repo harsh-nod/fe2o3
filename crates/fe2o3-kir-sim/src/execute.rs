@@ -560,6 +560,7 @@ pub enum SimulationExecutionErrorKindV1 {
     },
     AddressSpaceMismatch,
     ReadOnlyWrite,
+    WriteOnlyRead,
     MisalignedAccess {
         required: u32,
         offset: usize,
@@ -633,6 +634,7 @@ impl SimulationExecutionErrorKindV1 {
             | Self::DanglingPointer { .. }
             | Self::AddressSpaceMismatch
             | Self::ReadOnlyWrite
+            | Self::WriteOnlyRead
             | Self::MisalignedAccess { .. }
             | Self::OutOfBounds { .. }
             | Self::UninitializedRead { .. }
@@ -1322,11 +1324,24 @@ fn validate_access(
         return Err(SimulationExecutionErrorKindV1::AddressSpaceMismatch);
     }
     if write
-        && (pointer.access != AccessMode::ReadWrite
-            || allocation.access != AccessMode::ReadWrite
-            || pointer.address_space == AddressSpace::Constant)
+        && (!matches!(
+            pointer.access,
+            AccessMode::WriteOnly | AccessMode::ReadWrite
+        ) || !matches!(
+            allocation.access,
+            AccessMode::WriteOnly | AccessMode::ReadWrite
+        ) || pointer.address_space == AddressSpace::Constant)
     {
         return Err(SimulationExecutionErrorKindV1::ReadOnlyWrite);
+    }
+    if !write
+        && (!matches!(pointer.access, AccessMode::ReadOnly | AccessMode::ReadWrite)
+            || !matches!(
+                allocation.access,
+                AccessMode::ReadOnly | AccessMode::ReadWrite
+            ))
+    {
+        return Err(SimulationExecutionErrorKindV1::WriteOnlyRead);
     }
     if access.alignment == 0
         || allocation.alignment < access.alignment
@@ -5634,6 +5649,55 @@ fn execute_operation(
             engine.observe_and_commit_store(&site, pointer_value, stored, bytes)?;
             Ok(SmallResults::None)
         }
+        OperationKind::GuardedStore {
+            pointer,
+            value,
+            predicate,
+            access,
+        } => {
+            let predicate = scalar_value(engine, values, *predicate, &site)?
+                .as_bool()
+                .ok_or_else(|| {
+                    engine.at(
+                        site,
+                        SimulationExecutionErrorKindV1::RuntimeType {
+                            value: Some(*predicate),
+                            expected: "boolean guarded-store predicate",
+                        },
+                    )
+                })?;
+            if !predicate {
+                return Ok(SmallResults::None);
+            }
+            let RuntimeValue::Pointer(pointer_value) =
+                runtime_value(engine, values, *pointer, &site)?
+            else {
+                return Err(engine.at(
+                    site,
+                    SimulationExecutionErrorKindV1::RuntimeType {
+                        value: Some(*pointer),
+                        expected: "pointer",
+                    },
+                ));
+            };
+            let stored = scalar_value(engine, values, *value, &site)?;
+            let bytes = engine
+                .memory
+                .validate_store(pointer_value, *access, stored, engine.target)
+                .map_err(|kind| engine.at(site, kind))?;
+            if pointer_value.address_space == AddressSpace::Global {
+                engine.record_access(
+                    &site,
+                    pointer_value.allocation,
+                    pointer_value.byte_offset,
+                    bytes,
+                    true,
+                    false,
+                )?;
+            }
+            engine.observe_and_commit_store(&site, pointer_value, stored, bytes)?;
+            Ok(SmallResults::None)
+        }
         OperationKind::WorkgroupMemory(memory) => one(RuntimeValue::Pointer(
             engine.workgroup_pointer(site, memory)?,
         )),
@@ -6661,6 +6725,123 @@ fn scalar_nonnegative_usize(
 mod tests {
     use super::*;
 
+    fn execute_guarded_store_for_test(predicate: bool, pointer_allocation: u64) -> Vec<u8> {
+        let mut module = Module::new("guarded-store-execution-test");
+        module.functions.push(Function::declaration(
+            "guarded-store-execution-test-entry",
+            fe2o3_kernel_ir::Signature::new(vec![], vec![]),
+        ));
+        let block = BasicBlock::new(BlockId(0));
+        let operation = Operation::new(
+            vec![],
+            OperationKind::GuardedStore {
+                pointer: ValueId(0),
+                value: ValueId(1),
+                predicate: ValueId(2),
+                access: MemoryAccess::new(AddressSpace::Global, 4),
+            },
+        );
+        let allocation = Allocation {
+            address_space: AddressSpace::Global,
+            access: AccessMode::WriteOnly,
+            alignment: 4,
+            bytes: 0x1122_3344_u32.to_le_bytes().to_vec(),
+            initialized: vec![true; 4],
+            workgroup_published: vec![],
+            workgroup_writer: vec![],
+        };
+        let values = HashMap::from([
+            (
+                ValueId(0),
+                RuntimeValue::Pointer(PointerValue {
+                    allocation: pointer_allocation,
+                    byte_offset: 0,
+                    element: ScalarType::U32,
+                    address_space: AddressSpace::Global,
+                    access: AccessMode::WriteOnly,
+                    lower_bound: 0,
+                    upper_bound: 4,
+                }),
+            ),
+            (
+                ValueId(1),
+                RuntimeValue::Scalar(ScalarBitsV1::u32(0x89ab_cdef)),
+            ),
+            (
+                ValueId(2),
+                RuntimeValue::Scalar(ScalarBitsV1::boolean(predicate)),
+            ),
+        ]);
+        let mut sink = NoopSimulationEventSinkV1;
+        let mut debug_sink = NoopSimulationDebugSinkV1;
+        let mut engine = Engine {
+            module: &module,
+            function_module_indices: vec![0],
+            block_indices: vec![HashMap::new()],
+            function_ssa_values: vec![0],
+            call_targets: vec![vec![]],
+            switch_targets: vec![vec![]],
+            target: SimulationTargetV1::amdgpu_64(),
+            limits: SimulationLimitsV1::default(),
+            policy: EventPolicyV1::Disabled,
+            memory: Memory {
+                allocations: HashMap::from([(7, allocation)]),
+                argument_allocations: vec![],
+                shared_allocations: HashMap::new(),
+                next_allocation: 8,
+                allocations_created: 1,
+                live_bytes: 4,
+            },
+            sink: &mut sink,
+            debug_capture: SimulationDebugCaptureLimitsV1::disabled(),
+            debug_sink: &mut debug_sink,
+            debug_records: 0,
+            debug_delivery_stopped: true,
+            schedule_identity: SimulationScheduleIdentityV1::WorkgroupMajorLocalZyxCooperativeV1,
+            schedule_decision: 0,
+            steps: 0,
+            events: 0,
+            reserved_event_closures: 0,
+            event_delivery_stopped: false,
+            invocation: Some(SimulationInvocationV1 {
+                global: [0, 0, 0],
+                workgroup: [0, 0, 0],
+                local: [0, 0, 0],
+                workgroup_size: [1, 1, 1],
+                workgroup_count: [1, 1, 1],
+                launch_extent: [1, 1, 1],
+            }),
+            accesses: HashMap::new(),
+            conflicting_bytes: 0,
+            first_conflict: None,
+            conflict_incomplete: false,
+            workgroup_happens_before_epoch: 0,
+            unmodeled_atomic_or_fence_happens_before: false,
+            race_trackers: vec![],
+            workgroup_allocations: vec![],
+        };
+        let mut frame_allocations = vec![];
+        assert!(matches!(
+            execute_operation(
+                &mut engine,
+                0,
+                &block,
+                0,
+                &operation,
+                &values,
+                &mut frame_allocations,
+            )
+            .expect("guarded store executes"),
+            SmallResults::None,
+        ));
+        engine
+            .memory
+            .allocations
+            .remove(&7)
+            .expect("seed allocation remains live")
+            .bytes
+    }
+
     #[test]
     fn boolean_zero_extension_preserves_bits_across_index_widths() {
         for target in [
@@ -6715,6 +6896,68 @@ mod tests {
         assert!(
             std::mem::size_of::<SmallResults<RuntimeValue>>()
                 <= 2 * std::mem::size_of::<RuntimeValue>() + std::mem::align_of::<RuntimeValue>()
+        );
+    }
+
+    #[test]
+    fn write_only_simulator_memory_accepts_stores_and_rejects_reads() {
+        let allocation = Allocation {
+            address_space: AddressSpace::Global,
+            access: AccessMode::WriteOnly,
+            alignment: 4,
+            bytes: vec![0; 4],
+            initialized: vec![true; 4],
+            workgroup_published: vec![],
+            workgroup_writer: vec![],
+        };
+        let pointer = PointerValue {
+            allocation: 7,
+            byte_offset: 0,
+            element: ScalarType::U32,
+            address_space: AddressSpace::Global,
+            access: AccessMode::WriteOnly,
+            lower_bound: 0,
+            upper_bound: 4,
+        };
+        let access = MemoryAccess::new(AddressSpace::Global, 4);
+        assert_eq!(
+            validate_access(&allocation, &pointer, access, 4, false),
+            Err(SimulationExecutionErrorKindV1::WriteOnlyRead)
+        );
+        validate_access(&allocation, &pointer, access, 4, true).unwrap();
+
+        let mut memory = Memory {
+            allocations: HashMap::from([(7, allocation)]),
+            argument_allocations: vec![],
+            shared_allocations: HashMap::new(),
+            next_allocation: 8,
+            allocations_created: 1,
+            live_bytes: 4,
+        };
+        let width = memory
+            .validate_store(
+                &pointer,
+                access,
+                ScalarBitsV1::u32(0x89ab_cdef),
+                SimulationTargetV1::amdgpu_64(),
+            )
+            .unwrap();
+        memory
+            .prepare_store(&pointer, width)
+            .unwrap()
+            .commit(ScalarBitsV1::u32(0x89ab_cdef));
+        assert_eq!(memory.allocations[&7].bytes, 0x89ab_cdef_u32.to_le_bytes());
+    }
+
+    #[test]
+    fn guarded_store_executes_true_and_skips_false_before_pointer_validation() {
+        assert_eq!(
+            execute_guarded_store_for_test(false, u64::MAX),
+            0x1122_3344_u32.to_le_bytes(),
+        );
+        assert_eq!(
+            execute_guarded_store_for_test(true, 7),
+            0x89ab_cdef_u32.to_le_bytes(),
         );
     }
 }

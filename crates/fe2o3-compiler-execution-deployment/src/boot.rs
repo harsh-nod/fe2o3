@@ -4,17 +4,24 @@ use std::os::unix::process::{CommandExt as _, ExitStatusExt as _};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
+use fe2o3_compiler_execution_protocol::{
+    COMPILER_EXECUTION_SUPERVISOR_SOCKET_MODE_V1, COMPILER_EXECUTION_SUPERVISOR_SOCKET_PATH_V1,
+};
 use rustix::fs::{FileType, Mode, OFlags, ResolveFlags, fstat, fstatfs, llistxattr, openat2};
 use rustix::io::{FdFlags, fcntl_dupfd_cloexec, fcntl_getfd, fcntl_setfd};
 use rustix::process::{Pid, PidfdFlags, Signal, pidfd_open, pidfd_send_signal};
 
+use super::client_transaction::{
+    CompilerExecutionClientTransactionEvidenceV1, require_client_transaction_report_absent_v1,
+    try_admit_client_transaction_report_v1,
+};
 use super::fault::QualificationFaultHooksV1;
-use super::preflight::CompilerExecutionSystemdPreflightV1;
+use super::provision::CompilerExecutionProvisionedQualificationV1;
 use super::{
     COMPILER_EXECUTION_SYSTEMD_MACHINE_PARENT_PID_ENV_V1,
     COMPILER_EXECUTION_SYSTEMD_MACHINE_TOOL_COMMAND_V1, DeploymentVerificationErrorKindV1,
     DeploymentVerificationErrorV1, QualificationFaultPointV1, changed, invalid, io_error,
-    require_no_xattrs, std_io_error,
+    require_no_xattrs, snapshot, std_io_error,
 };
 
 const QUALIFICATION_STAGING_PREFIX_V1: &str = ".compiler-execution-qualification-v1-";
@@ -31,7 +38,6 @@ const PINNED_LIBRARY_PATHS_V1: &[&str] = &[
     "usr/lib/x86_64-linux-gnu",
     "usr/lib/x86_64-linux-gnu/systemd",
 ];
-const SUPERVISOR_SOCKET_PATH_V1: &str = "run/fe2o3/compiler-execution-supervisor.sock";
 const COMPILER_UID_V1: u32 = 999;
 const READINESS_TIMEOUT_V1: Duration = Duration::from_secs(30);
 const SHUTDOWN_TIMEOUT_V1: Duration = Duration::from_secs(30);
@@ -288,21 +294,31 @@ fn inherit_exec_descriptor(
 }
 
 pub(super) fn boot_and_stop_systemd_machine_v1(
-    preflight: &CompilerExecutionSystemdPreflightV1,
+    provisioned: &CompilerExecutionProvisionedQualificationV1,
     staging_name: &str,
     hooks: &mut impl QualificationFaultHooksV1,
-) -> Result<(), DeploymentVerificationErrorV1> {
+) -> Result<CompilerExecutionClientTransactionEvidenceV1, DeploymentVerificationErrorV1> {
     QualificationMachineIdentityV1::from_staging_name(staging_name)?;
-    let (base, root) = preflight.inherit_systemd_machine_descriptors()?;
+    let (base, root) = provisioned.inherit_systemd_machine_descriptors()?;
     let mut machine = RunningSystemdMachineV1::spawn(&base, &root, staging_name)?;
     hooks.checkpoint(QualificationFaultPointV1::SystemdMachineSpawned)?;
-    await_machine_readiness(&mut machine, &root, READINESS_TIMEOUT_V1)?;
+    let socket = await_machine_socket(&mut machine, &root, READINESS_TIMEOUT_V1)?;
+    hooks.checkpoint(QualificationFaultPointV1::SupervisorSocketMetadataAdmitted)?;
+    let transaction =
+        await_client_transaction(&mut machine, &root, provisioned, READINESS_TIMEOUT_V1)?;
+    hooks.checkpoint(QualificationFaultPointV1::ClientTransactionComplete)?;
+    socket.revalidate(&root)?;
+    transaction.revalidate(&root)?;
+    provisioned.revalidate_systemd_machine_state()?;
+    hooks.checkpoint(QualificationFaultPointV1::ClientTransactionRevalidated)?;
     hooks.checkpoint(QualificationFaultPointV1::SystemdMachineReady)?;
     machine.stop(SHUTDOWN_TIMEOUT_V1)?;
     hooks.checkpoint(QualificationFaultPointV1::SystemdMachineStopped)?;
     require_machine_socket_absent(&root)?;
-    preflight.revalidate_systemd_machine_state()?;
-    hooks.checkpoint(QualificationFaultPointV1::PostBootLowerRevalidated)
+    require_client_transaction_report_absent_v1(&root)?;
+    provisioned.revalidate_systemd_machine_state()?;
+    hooks.checkpoint(QualificationFaultPointV1::PostBootLowerRevalidated)?;
+    Ok(transaction)
 }
 
 struct RunningSystemdMachineV1 {
@@ -416,20 +432,16 @@ impl Drop for RunningSystemdMachineV1 {
     }
 }
 
-fn await_machine_readiness(
+fn await_machine_socket(
     machine: &mut RunningSystemdMachineV1,
     root: &OwnedFd,
     timeout: Duration,
-) -> Result<(), DeploymentVerificationErrorV1> {
+) -> Result<MachineSocketReadinessV1, DeploymentVerificationErrorV1> {
     let deadline = Instant::now() + timeout;
+    let policy = MachineSocketPolicyV1::production();
     loop {
-        match open_machine_socket(root) {
-            Ok(socket) => {
-                validate_machine_socket(root, &socket)?;
-                return Ok(());
-            }
-            Err(source) if source == rustix::io::Errno::NOENT => {}
-            Err(source) => return Err(io_error("open systemd machine readiness socket", source)),
+        if let Some(readiness) = try_admit_machine_socket(root, policy)? {
+            return Ok(readiness);
         }
         if let Some(status) = machine.try_wait()? {
             machine.child.take();
@@ -438,17 +450,100 @@ fn await_machine_readiness(
         if Instant::now() >= deadline {
             return Err(invalid(
                 DeploymentVerificationErrorKindV1::InvalidQualificationBoot,
-                "systemd machine did not publish its socket within the fixed timeout",
+                "systemd machine did not publish the exact supervisor socket within the fixed timeout",
             ));
         }
         std::thread::sleep(POLL_INTERVAL_V1);
     }
 }
 
-fn open_machine_socket(root: &OwnedFd) -> Result<OwnedFd, rustix::io::Errno> {
+#[derive(Debug)]
+struct MachineSocketReadinessV1 {
+    socket: OwnedFd,
+    snapshot: super::ObjectSnapshotV1,
+    policy: MachineSocketPolicyV1<'static>,
+}
+
+impl MachineSocketReadinessV1 {
+    fn revalidate(&self, root: &OwnedFd) -> Result<(), DeploymentVerificationErrorV1> {
+        revalidate_machine_socket(root, &self.socket, self.snapshot, self.policy)
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct MachineSocketPolicyV1<'a> {
+    relative_path: &'a str,
+    socket_owner: (u32, u32),
+}
+
+impl MachineSocketPolicyV1<'static> {
+    fn production() -> Self {
+        Self {
+            relative_path: COMPILER_EXECUTION_SUPERVISOR_SOCKET_PATH_V1
+                .strip_prefix('/')
+                .expect("the fixed production listener path is absolute"),
+            socket_owner: (0, COMPILER_UID_V1),
+        }
+    }
+}
+
+fn try_admit_machine_socket(
+    root: &OwnedFd,
+    policy: MachineSocketPolicyV1<'_>,
+) -> Result<Option<MachineSocketReadinessV1>, DeploymentVerificationErrorV1> {
+    let socket = match open_machine_socket(root, policy.relative_path) {
+        Ok(socket) => socket,
+        Err(rustix::io::Errno::NOENT) => return Ok(None),
+        Err(source) => return Err(io_error("open systemd machine readiness socket", source)),
+    };
+    let before = validate_machine_socket_metadata(root, &socket, policy)?;
+    revalidate_machine_socket(root, &socket, before, policy)?;
+    Ok(Some(MachineSocketReadinessV1 {
+        socket,
+        snapshot: before,
+        policy: MachineSocketPolicyV1::production(),
+    }))
+}
+
+fn await_client_transaction(
+    machine: &mut RunningSystemdMachineV1,
+    root: &OwnedFd,
+    provisioned: &CompilerExecutionProvisionedQualificationV1,
+    timeout: Duration,
+) -> Result<CompilerExecutionClientTransactionEvidenceV1, DeploymentVerificationErrorV1> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Some(transaction) = try_admit_client_transaction_report_v1(
+            root,
+            provisioned.client_profile(),
+            (
+                provisioned.qualification_client_uid(),
+                provisioned.qualification_client_gid(),
+            ),
+        )? {
+            return Ok(transaction);
+        }
+        if let Some(status) = machine.try_wait()? {
+            machine.child.take();
+            return Err(machine_exit_error(
+                "before client transaction completion",
+                status,
+            ));
+        }
+        if Instant::now() >= deadline {
+            return Err(invalid(
+                DeploymentVerificationErrorKindV1::InvalidQualificationBoot,
+                "systemd machine did not complete the canonical non-root client transaction within the fixed timeout",
+            ));
+        }
+        std::thread::sleep(POLL_INTERVAL_V1);
+    }
+}
+
+fn open_machine_socket(root: &OwnedFd, relative_path: &str) -> Result<OwnedFd, rustix::io::Errno> {
     openat2(
         root,
-        SUPERVISOR_SOCKET_PATH_V1,
+        relative_path,
         OFlags::PATH | OFlags::CLOEXEC | OFlags::NOFOLLOW,
         Mode::empty(),
         ResolveFlags::BENEATH
@@ -458,17 +553,20 @@ fn open_machine_socket(root: &OwnedFd) -> Result<OwnedFd, rustix::io::Errno> {
     )
 }
 
-fn validate_machine_socket(
+fn validate_machine_socket_metadata(
     root: &OwnedFd,
     socket: &OwnedFd,
-) -> Result<(), DeploymentVerificationErrorV1> {
-    let before = fstat(socket)
-        .map_err(|source| io_error("inspect systemd machine readiness socket", source))?;
-    if FileType::from_raw_mode(before.st_mode) != FileType::Socket
-        || before.st_mode & 0o7777 != 0o660
-        || (before.st_uid, before.st_gid) != (0, COMPILER_UID_V1)
-        || before.st_nlink != 1
-        || before.st_size != 0
+    policy: MachineSocketPolicyV1<'_>,
+) -> Result<super::ObjectSnapshotV1, DeploymentVerificationErrorV1> {
+    let before = snapshot(
+        &fstat(socket)
+            .map_err(|source| io_error("inspect systemd machine readiness socket", source))?,
+    );
+    if FileType::from_raw_mode(before.mode) != FileType::Socket
+        || before.mode & 0o7777 != COMPILER_EXECUTION_SUPERVISOR_SOCKET_MODE_V1
+        || (before.uid, before.gid) != policy.socket_owner
+        || before.links != 1
+        || before.byte_len != 0
     {
         return Err(invalid(
             DeploymentVerificationErrorKindV1::InvalidQualificationBoot,
@@ -476,8 +574,9 @@ fn validate_machine_socket(
         ));
     }
     let path = format!(
-        "/proc/self/fd/{}/{SUPERVISOR_SOCKET_PATH_V1}",
-        root.as_raw_fd()
+        "/proc/self/fd/{}/{}",
+        root.as_raw_fd(),
+        policy.relative_path
     );
     let mut attributes = [0_u8; 1];
     match llistxattr(path, &mut attributes) {
@@ -495,32 +594,41 @@ fn validate_machine_socket(
             ));
         }
     }
-    let reopened = open_machine_socket(root)
-        .map_err(|source| io_error("reopen systemd machine readiness socket", source))?;
-    let after = fstat(&reopened)
-        .map_err(|source| io_error("reinspect systemd machine readiness socket", source))?;
-    if (
-        before.st_dev,
-        before.st_ino,
-        before.st_mode,
-        before.st_uid,
-        before.st_gid,
-    ) != (
-        after.st_dev,
-        after.st_ino,
-        after.st_mode,
-        after.st_uid,
-        after.st_gid,
-    ) {
+    Ok(before)
+}
+
+fn revalidate_machine_socket(
+    root: &OwnedFd,
+    retained: &OwnedFd,
+    before: super::ObjectSnapshotV1,
+    policy: MachineSocketPolicyV1<'_>,
+) -> Result<(), DeploymentVerificationErrorV1> {
+    let retained_after = snapshot(
+        &fstat(retained)
+            .map_err(|source| io_error("reinspect retained machine readiness socket", source))?,
+    );
+    if retained_after != before {
         return Err(changed(
-            "systemd machine readiness socket changed during admission",
+            "systemd machine readiness socket changed during metadata admission",
+        ));
+    }
+    validate_machine_socket_metadata(root, retained, policy)?;
+    let reopened = open_machine_socket(root, policy.relative_path)
+        .map_err(|source| io_error("reopen systemd machine readiness socket", source))?;
+    let reopened_snapshot = snapshot(
+        &fstat(&reopened)
+            .map_err(|source| io_error("reinspect systemd machine readiness socket", source))?,
+    );
+    if reopened_snapshot != before {
+        return Err(changed(
+            "systemd machine readiness socket pathname changed during metadata admission",
         ));
     }
     Ok(())
 }
 
 fn require_machine_socket_absent(root: &OwnedFd) -> Result<(), DeploymentVerificationErrorV1> {
-    match open_machine_socket(root) {
+    match open_machine_socket(root, MachineSocketPolicyV1::production().relative_path) {
         Err(rustix::io::Errno::NOENT) => Ok(()),
         Ok(_) => Err(invalid(
             DeploymentVerificationErrorKindV1::InvalidQualificationBoot,
@@ -546,7 +654,14 @@ fn machine_exit_error(stage: &'static str, status: ExitStatus) -> DeploymentVeri
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
     use std::os::fd::AsFd as _;
+    use std::os::unix::fs::PermissionsExt as _;
+    use std::path::PathBuf;
+
+    use rustix::net::{
+        AddressFamily, SocketAddrUnix, SocketFlags, SocketType, bind, listen, socket_with,
+    };
 
     use super::*;
 
@@ -659,5 +774,99 @@ mod tests {
             (expected.st_dev, expected.st_ino),
             (observed.st_dev, observed.st_ino)
         );
+    }
+
+    #[test]
+    fn readiness_admits_and_retains_exact_socket_metadata_without_connecting() {
+        let fixture = ListenerFixtureV1::new();
+        let readiness = try_admit_machine_socket(&fixture.root, fixture.policy())
+            .unwrap()
+            .expect("the listening socket metadata is immediately available");
+        assert_eq!(
+            FileType::from_raw_mode(fstat(&readiness.socket).unwrap().st_mode),
+            FileType::Socket
+        );
+    }
+
+    #[test]
+    fn readiness_absence_is_retryable_without_accepting_other_objects() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root: OwnedFd = File::open(temporary.path()).unwrap().into();
+        let missing = temporary.path().join("listener.sock");
+        let policy = policy();
+        assert!(try_admit_machine_socket(&root, policy).unwrap().is_none());
+
+        fs::write(&missing, []).unwrap();
+        fs::set_permissions(
+            &missing,
+            fs::Permissions::from_mode(COMPILER_EXECUTION_SUPERVISOR_SOCKET_MODE_V1),
+        )
+        .unwrap();
+        assert_eq!(
+            try_admit_machine_socket(&root, policy).unwrap_err().kind(),
+            DeploymentVerificationErrorKindV1::InvalidQualificationBoot
+        );
+    }
+
+    #[test]
+    fn readiness_rejects_wrong_mode() {
+        let wrong_mode = ListenerFixtureV1::new();
+        fs::set_permissions(&wrong_mode.path, fs::Permissions::from_mode(0o666)).unwrap();
+        assert_eq!(
+            try_admit_machine_socket(&wrong_mode.root, wrong_mode.policy())
+                .unwrap_err()
+                .kind(),
+            DeploymentVerificationErrorKindV1::InvalidQualificationBoot
+        );
+    }
+
+    struct ListenerFixtureV1 {
+        _temporary: tempfile::TempDir,
+        root: OwnedFd,
+        _listener: OwnedFd,
+        path: PathBuf,
+    }
+
+    impl ListenerFixtureV1 {
+        fn new() -> Self {
+            let temporary = tempfile::tempdir().unwrap();
+            let path = temporary.path().join("listener.sock");
+            let listener = socket_with(
+                AddressFamily::UNIX,
+                SocketType::SEQPACKET,
+                SocketFlags::CLOEXEC | SocketFlags::NONBLOCK,
+                None,
+            )
+            .unwrap();
+            let address = SocketAddrUnix::new(&path).unwrap();
+            bind(&listener, &address).unwrap();
+            listen(&listener, 4).unwrap();
+            fs::set_permissions(
+                &path,
+                fs::Permissions::from_mode(COMPILER_EXECUTION_SUPERVISOR_SOCKET_MODE_V1),
+            )
+            .unwrap();
+            let root: OwnedFd = File::open(temporary.path()).unwrap().into();
+            Self {
+                _temporary: temporary,
+                root,
+                _listener: listener,
+                path,
+            }
+        }
+
+        fn policy(&self) -> MachineSocketPolicyV1<'_> {
+            policy()
+        }
+    }
+
+    fn policy() -> MachineSocketPolicyV1<'static> {
+        MachineSocketPolicyV1 {
+            relative_path: "listener.sock",
+            socket_owner: (
+                rustix::process::geteuid().as_raw(),
+                rustix::process::getegid().as_raw(),
+            ),
+        }
     }
 }

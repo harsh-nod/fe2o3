@@ -3,11 +3,14 @@
 Status: implemented source-bundle admission, atomic offline-root publication,
 fresh installed-root revalidation, sealed disposable-root preparation, and an
 exact fault-cleaned empty staging transaction. Private-namespace mount
-composition, composed-root systemd preflight, and descriptor-pinned isolated
-boot through socket readiness and bounded shutdown are implemented but not yet
-host-root qualified. Distinct-UID systemd execution qualification remains open.
-A static host probe and sole verify-to-boot-to-cleanup harness are implemented.
-One closed 22-point mount/preflight/boot/cleanup fault set and aggregate publication/reacquisition
+composition, composed-root systemd preflight, generation-1 production
+provisioning with independent postcondition admission, and descriptor-pinned
+isolated boot through exact supervisor socket metadata admission, one real
+non-root production-client recover/cancel transaction, and bounded shutdown are implemented but
+not yet host-root qualified. Distinct-UID systemd execution qualification
+remains open. A static host probe and sole
+verify-to-provision-to-boot-to-cleanup harness are implemented. One closed
+28-point mount/preflight/provision/boot/cleanup fault set and aggregate publication/reacquisition
 campaign use that same transaction; every admitted fault freshly revalidates
 the caller-pinned bundle, base, and installed lower after cleanup. Successful
 privileged execution is not yet claimed.
@@ -38,9 +41,9 @@ manifest SHA-256.
 | `BUILD-INFO` | `/usr/share/fe2o3/compiler-execution/BUILD-INFO` | `0444` |
 | `SHA256SUMS` | `/usr/share/fe2o3/compiler-execution/SHA256SUMS` | `0444` |
 | `systemd/fe2o3-compiler-execution.service` | `/usr/lib/systemd/system/fe2o3-compiler-execution.service` | `0444` |
-| `systemd/fe2o3-compiler-execution.socket` | `/usr/lib/systemd/system/fe2o3-compiler-execution.socket` | `0444` |
 | `sysusers.d/fe2o3-compiler-execution.conf` | `/usr/lib/sysusers.d/fe2o3-compiler-execution.conf` | `0444` |
 | `tmpfiles.d/fe2o3-compiler-execution.conf` | `/usr/lib/tmpfiles.d/fe2o3-compiler-execution.conf` | `0444` |
+| `usr/libexec/fe2o3/fe2o3-compiler-execution-client-check` | `/usr/libexec/fe2o3/fe2o3-compiler-execution-client-check` | `0555` |
 | `usr/libexec/fe2o3/fe2o3-compiler-execution-coordinator` | `/usr/libexec/fe2o3/fe2o3-compiler-execution-coordinator` | `0555` |
 | `usr/libexec/fe2o3/fe2o3-compiler-execution-issuer` | `/usr/libexec/fe2o3/fe2o3-compiler-execution-issuer` | `0555` |
 | `usr/libexec/fe2o3/fe2o3-compiler-execution-provision` | `/usr/libexec/fe2o3/fe2o3-compiler-execution-provision` | `0555` |
@@ -135,7 +138,7 @@ manifest_sha256=<64 lowercase hexadecimal characters>
 git_commit=<40 lowercase hexadecimal characters>
 ```
 
-The builder qualifies all seven service images, runs the launcher's CTests,
+The builder qualifies all eight deployment images, runs the launcher's CTests,
 builds loader-independent static musl manifest, verifier, and installer
 executables, generates `SHA256SUMS` and `INSTALL-MANIFEST-V1`, and runs the
 static verifier before publishing the output directory. The final two lines are

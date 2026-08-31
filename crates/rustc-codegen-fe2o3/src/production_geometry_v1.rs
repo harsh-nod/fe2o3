@@ -53,6 +53,7 @@ impl ProductionGeometryV1 {
 
 pub(crate) fn derive_production_geometry_v1(
     module: &Module,
+    kernel_id: &str,
     semantic_function: &SemanticFunctionDeclV1,
     source_launch: &LaunchContract,
     device_target: &str,
@@ -88,6 +89,7 @@ pub(crate) fn derive_production_geometry_v1(
     }
     derive_production_geometry_from_launch_for_target_v1(
         module,
+        kernel_id,
         semantic_launch.required(),
         semantic_launch.maximum(),
         source_launch,
@@ -97,6 +99,7 @@ pub(crate) fn derive_production_geometry_v1(
 
 fn derive_production_geometry_from_launch_for_target_v1(
     module: &Module,
+    kernel_id: &str,
     required: Option<fe2o3_mir_model::semantic_mir_v1::SemanticWorkgroupDimensionsV1>,
     maximum: Option<fe2o3_mir_model::semantic_mir_v1::SemanticWorkgroupDimensionsV1>,
     source_launch: &LaunchContract,
@@ -128,7 +131,11 @@ fn derive_production_geometry_from_launch_for_target_v1(
     let source_grid = source_launch.max_grid();
     let max_grid = [source_grid.x(), source_grid.y(), source_grid.z()];
 
-    let [kernel] = module.kernels.as_slice() else {
+    let Some(kernel) = module
+        .kernels
+        .iter()
+        .find(|kernel| kernel.id.as_str() == kernel_id)
+    else {
         return Err(ProductionGeometryErrorV1::KernelClosure);
     };
     let kir_workgroup = kernel
@@ -161,7 +168,7 @@ fn derive_production_geometry_from_launch_for_target_v1(
         .map_err(|_| ProductionGeometryErrorV1::MissingTargetCapabilities)?;
     validate_target_workgroup(workgroup, target.workgroup_limits())?;
 
-    let static_shared_memory_bytes = static_workgroup_memory_bytes(module)?;
+    let static_shared_memory_bytes = static_workgroup_memory_bytes(module, kernel_id)?;
     if source_launch.static_shared_memory_bytes() != static_shared_memory_bytes {
         return Err(ProductionGeometryErrorV1::StaticWorkgroupMemoryMismatch {
             source: source_launch.static_shared_memory_bytes(),
@@ -175,7 +182,7 @@ fn derive_production_geometry_from_launch_for_target_v1(
             maximum: max_lds,
         });
     }
-    let effective = reachable_effective_capabilities(module)?;
+    let effective = reachable_effective_capabilities(module, kernel_id)?;
     if effective.contains(&TargetCapability::DynamicWorkgroupMemory) {
         return Err(ProductionGeometryErrorV1::DynamicWorkgroupMemory);
     }
@@ -218,6 +225,11 @@ fn derive_production_geometry_from_launch_v1(
 ) -> Result<ProductionGeometryV1, ProductionGeometryErrorV1> {
     derive_production_geometry_from_launch_for_target_v1(
         module,
+        module
+            .kernels
+            .first()
+            .map(|kernel| kernel.id.as_str())
+            .ok_or(ProductionGeometryErrorV1::KernelClosure)?,
         required,
         maximum,
         source_launch,
@@ -266,8 +278,11 @@ fn validate_static_launch_extents(
     Ok(())
 }
 
-fn static_workgroup_memory_bytes(module: &Module) -> Result<u32, ProductionGeometryErrorV1> {
-    let reachable = reachable_function_ids(module)?;
+fn static_workgroup_memory_bytes(
+    module: &Module,
+    kernel_id: &str,
+) -> Result<u32, ProductionGeometryErrorV1> {
+    let reachable = reachable_function_ids(module, kernel_id)?;
     let mut total = 0_u32;
     for operation in module
         .functions
@@ -325,8 +340,13 @@ fn static_workgroup_memory_bytes(module: &Module) -> Result<u32, ProductionGeome
 
 fn reachable_function_ids(
     module: &Module,
+    kernel_id: &str,
 ) -> Result<BTreeSet<FunctionId>, ProductionGeometryErrorV1> {
-    let [kernel] = module.kernels.as_slice() else {
+    let Some(kernel) = module
+        .kernels
+        .iter()
+        .find(|kernel| kernel.id.as_str() == kernel_id)
+    else {
         return Err(ProductionGeometryErrorV1::KernelClosure);
     };
     let functions = module
@@ -361,8 +381,9 @@ fn reachable_function_ids(
 
 fn reachable_effective_capabilities(
     module: &Module,
+    kernel_id: &str,
 ) -> Result<BTreeSet<TargetCapability>, ProductionGeometryErrorV1> {
-    let reachable = reachable_function_ids(module)?;
+    let reachable = reachable_function_ids(module, kernel_id)?;
     Ok(module
         .required_capabilities
         .iter()

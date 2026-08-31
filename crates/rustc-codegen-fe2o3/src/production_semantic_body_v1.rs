@@ -2094,6 +2094,7 @@ const fn terminal_argument_count_v1(expansion: ProductionTerminalExpansionV1) ->
         | ProductionTerminalExpansionV1::DynamicLdsIntoCollectiveRawParts
         | ProductionTerminalExpansionV1::Bf16Conversion(_)
         | ProductionTerminalExpansionV1::WorkgroupPipelineCurrent
+        | ProductionTerminalExpansionV1::WriteOnlyDisjointSliceLen
         | ProductionTerminalExpansionV1::DisjointSliceLen => Some(1),
         ProductionTerminalExpansionV1::SubgroupReduceSumF32
         | ProductionTerminalExpansionV1::SubgroupReduceMaxF32
@@ -2107,14 +2108,18 @@ const fn terminal_argument_count_v1(expansion: ProductionTerminalExpansionV1) ->
         | ProductionTerminalExpansionV1::WorkgroupPipelineRelease => Some(2),
         ProductionTerminalExpansionV1::Gfx950SubgroupBroadcastF32
         | ProductionTerminalExpansionV1::WorkgroupPipelineRead
-        | ProductionTerminalExpansionV1::NeutralWorkgroupReduceSum => Some(3),
+        | ProductionTerminalExpansionV1::NeutralWorkgroupReduceSum
+        | ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWrite
+        | ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteDisjoint => Some(3),
         ProductionTerminalExpansionV1::MathF32(function) => Some(function.arity() + 1),
         ProductionTerminalExpansionV1::MatrixMultiplyAccumulate
         | ProductionTerminalExpansionV1::Gfx950Fp4MultiplyAccumulate
         | ProductionTerminalExpansionV1::Gfx950Fp4Fp8MultiplyAccumulate
         | ProductionTerminalExpansionV1::Gfx950Fp8MultiplyAccumulate
         | ProductionTerminalExpansionV1::WorkgroupReduceSum
-        | ProductionTerminalExpansionV1::WorkgroupPipelineWrite => Some(4),
+        | ProductionTerminalExpansionV1::WorkgroupPipelineWrite
+        | ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteExclusive
+        | ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteBlock => Some(4),
         ProductionTerminalExpansionV1::Gfx950LdsTransposeStageB4
         | ProductionTerminalExpansionV1::Gfx950LdsTransposeStageB8 => Some(4),
         ProductionTerminalExpansionV1::Bf16MatrixALoadZeroFilledV2
@@ -2145,6 +2150,8 @@ const fn terminal_argument_count_v1(expansion: ProductionTerminalExpansionV1) ->
         ProductionTerminalExpansionV1::DisjointSliceGetBlockMut => Some(3),
         ProductionTerminalExpansionV1::DisjointSliceGetTiled2dMut => Some(6),
         ProductionTerminalExpansionV1::DisjointSliceGetRowStriped2dMut => Some(6),
+        ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteTiled2d
+        | ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteRowStriped2d => Some(7),
         ProductionTerminalExpansionV1::WorkgroupBarrier => Some(0),
     }
 }

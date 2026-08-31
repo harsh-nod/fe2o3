@@ -40,7 +40,7 @@ fn format_formal_reasons(
 pub enum ProductionFormalMemoryErrorV1 {
     /// The retained semantic-to-Kernel-IR owner no longer verifies.
     SemanticKir(ProductionSemanticKirErrorV1),
-    /// Formal extraction requires exactly one selected kernel.
+    /// Formal extraction requires a nonempty selected-kernel roster.
     KernelCount {
         /// Number of kernels present in the verified module.
         actual: usize,
@@ -88,7 +88,7 @@ impl fmt::Display for ProductionFormalMemoryErrorV1 {
             Self::SemanticKir(error) => write!(formatter, "verified semantic KIR failed: {error}"),
             Self::KernelCount { actual } => write!(
                 formatter,
-                "formal memory admission requires exactly one kernel; found {actual}",
+                "formal memory admission requires a nonempty kernel roster; found {actual}",
             ),
             Self::Analysis(error) => write!(formatter, "formal memory extraction failed: {error}"),
             Self::Incomplete { reasons } => {
@@ -162,6 +162,12 @@ impl Error for ProductionFormalMemoryErrorV1 {
 #[must_use = "dropping formal admission abandons the target-neutral safety witness"]
 pub struct ProductionFormalMemoryOwnerV1 {
     semantic_kir: ProductionSemanticKirOwnerV1,
+    kernels: Box<[ProductionFormalMemoryKernelV1]>,
+}
+
+/// Exact formal-memory admission retained for one canonical module kernel.
+#[derive(Debug, Eq, PartialEq)]
+pub struct ProductionFormalMemoryKernelV1 {
     obligations: FormalMemoryObligations,
     ranked_discharged_reasons: Box<[FormalMemoryIncompleteReason]>,
     compiler_discharged_reasons: Box<[FormalMemoryIncompleteReason]>,
@@ -171,25 +177,7 @@ impl fmt::Debug for ProductionFormalMemoryOwnerV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("ProductionFormalMemoryOwnerV1")
-            .field("kernel", self.obligations.kernel())
-            .field("allocations", &self.obligations.allocations().len())
-            .field("accesses", &self.obligations.accesses().len())
-            .field(
-                "bounds_requirements",
-                &self.obligations.bounds_requirements().len(),
-            )
-            .field(
-                "runtime_alias_requirements",
-                &self.obligations.runtime_alias_requirements().len(),
-            )
-            .field(
-                "ranked_discharged_reasons",
-                &self.ranked_discharged_reasons.len(),
-            )
-            .field(
-                "compiler_discharged_reasons",
-                &self.compiler_discharged_reasons.len(),
-            )
+            .field("kernels", &self.kernels)
             .finish_non_exhaustive()
     }
 }
@@ -203,13 +191,10 @@ impl ProductionFormalMemoryOwnerV1 {
         semantic_kir
             .verify_equivalence()
             .map_err(ProductionFormalMemoryErrorV1::SemanticKir)?;
-        let (obligations, ranked_discharged_reasons, compiler_discharged_reasons) =
-            derive_admitted_obligations(&semantic_kir)?;
+        let kernels = derive_admitted_obligations(&semantic_kir)?;
         let owner = Self {
             semantic_kir,
-            obligations,
-            ranked_discharged_reasons,
-            compiler_discharged_reasons,
+            kernels,
         };
         owner.verify_equivalence()?;
         Ok(owner)
@@ -221,12 +206,8 @@ impl ProductionFormalMemoryOwnerV1 {
         self.semantic_kir
             .verify_equivalence()
             .map_err(ProductionFormalMemoryErrorV1::SemanticKir)?;
-        let (obligations, ranked_discharged_reasons, compiler_discharged_reasons) =
-            derive_admitted_obligations(&self.semantic_kir)?;
-        if obligations != self.obligations
-            || ranked_discharged_reasons != self.ranked_discharged_reasons
-            || compiler_discharged_reasons != self.compiler_discharged_reasons
-        {
+        let kernels = derive_admitted_obligations(&self.semantic_kir)?;
+        if kernels != self.kernels {
             return Err(ProductionFormalMemoryErrorV1::ObligationMismatch);
         }
         Ok(())
@@ -238,20 +219,42 @@ impl ProductionFormalMemoryOwnerV1 {
     }
 
     /// Borrows complete compiler-derived obligations for the witness extent.
-    pub const fn obligations(&self) -> &FormalMemoryObligations {
-        &self.obligations
+    pub fn obligations(&self) -> Option<&FormalMemoryObligations> {
+        let [kernel] = self.kernels.as_ref() else {
+            return None;
+        };
+        Some(&kernel.obligations)
+    }
+
+    /// Borrows the complete canonical per-kernel formal roster.
+    pub fn kernels(&self) -> &[ProductionFormalMemoryKernelV1] {
+        &self.kernels
+    }
+
+    /// Resolves exact formal obligations for one kernel identity.
+    pub fn obligations_for_kernel(&self, kernel: &str) -> Option<&FormalMemoryObligations> {
+        self.kernels
+            .iter()
+            .find(|evidence| evidence.obligations.kernel().as_str() == kernel)
+            .map(|evidence| &evidence.obligations)
     }
 
     /// Returns dynamic index derivations discharged by the retained, exact
     /// ranked bounds/race receipt rather than the affine formal engine.
-    pub fn ranked_discharged_reasons(&self) -> &[FormalMemoryIncompleteReason] {
-        &self.ranked_discharged_reasons
+    pub fn ranked_discharged_reasons(&self) -> Option<&[FormalMemoryIncompleteReason]> {
+        let [kernel] = self.kernels.as_ref() else {
+            return None;
+        };
+        Some(&kernel.ranked_discharged_reasons)
     }
 
     /// Returns internal LDS effects discharged only by replaying the exact,
     /// compiler-owned collective lowering and its source correspondence.
-    pub fn compiler_discharged_reasons(&self) -> &[FormalMemoryIncompleteReason] {
-        &self.compiler_discharged_reasons
+    pub fn compiler_discharged_reasons(&self) -> Option<&[FormalMemoryIncompleteReason]> {
+        let [kernel] = self.kernels.as_ref() else {
+            return None;
+        };
+        Some(&kernel.compiler_discharged_reasons)
     }
 
     /// Returns the structural fallback extent used for every dynamic axis.
@@ -260,16 +263,20 @@ impl ProductionFormalMemoryOwnerV1 {
     }
 
     /// Returns exact per-axis extents of the admitted structural witness.
-    pub fn witness_extents(&self) -> [u64; 3] {
-        witness_extents(&self.semantic_kir.module().kernels[0].domain)
+    pub fn witness_extents(&self) -> Option<[u64; 3]> {
+        let [kernel] = self.semantic_kir.module().kernels.as_slice() else {
+            return None;
+        };
+        Some(witness_extents(&kernel.domain))
     }
 
     /// Returns the exact flattened invocation count in the structural witness.
-    pub fn witness_invocation_count(&self) -> u64 {
-        let Some(invocations) = self.obligations.invocations() else {
-            return 0;
-        };
-        invocations.end_exclusive() - invocations.start()
+    pub fn witness_invocation_count(&self) -> Option<u64> {
+        self.obligations().map(|obligations| {
+            obligations.invocations().map_or(0, |invocations| {
+                invocations.end_exclusive() - invocations.start()
+            })
+        })
     }
 
     /// Formal admission alone never grants artifact or launch authority.
@@ -278,23 +285,64 @@ impl ProductionFormalMemoryOwnerV1 {
     }
 }
 
+impl ProductionFormalMemoryKernelV1 {
+    /// Borrows this kernel's complete formal obligations.
+    pub const fn obligations(&self) -> &FormalMemoryObligations {
+        &self.obligations
+    }
+
+    /// Returns dynamic-index reasons discharged by this kernel's ranked proof.
+    pub fn ranked_discharged_reasons(&self) -> &[FormalMemoryIncompleteReason] {
+        &self.ranked_discharged_reasons
+    }
+
+    /// Returns compiler-owned LDS reasons discharged for this kernel.
+    pub fn compiler_discharged_reasons(&self) -> &[FormalMemoryIncompleteReason] {
+        &self.compiler_discharged_reasons
+    }
+
+    /// Returns exact structural witness extents for this kernel.
+    pub fn witness_extents(&self, module: &fe2o3_kernel_ir::Module) -> Option<[u64; 3]> {
+        module
+            .kernels
+            .iter()
+            .find(|kernel| kernel.id == *self.obligations.kernel())
+            .map(|kernel| witness_extents(&kernel.domain))
+    }
+
+    /// Returns the flattened structural witness invocation count.
+    pub fn witness_invocation_count(&self) -> u64 {
+        self.obligations.invocations().map_or(0, |invocations| {
+            invocations.end_exclusive() - invocations.start()
+        })
+    }
+}
+
 fn derive_admitted_obligations(
     semantic_kir: &ProductionSemanticKirOwnerV1,
-) -> Result<
-    (
-        FormalMemoryObligations,
-        Box<[FormalMemoryIncompleteReason]>,
-        Box<[FormalMemoryIncompleteReason]>,
-    ),
-    ProductionFormalMemoryErrorV1,
-> {
+) -> Result<Box<[ProductionFormalMemoryKernelV1]>, ProductionFormalMemoryErrorV1> {
     let module = semantic_kir.module();
-    if module.kernels.len() != 1 {
+    if module.kernels.is_empty() {
         return Err(ProductionFormalMemoryErrorV1::KernelCount {
             actual: module.kernels.len(),
         });
     }
-    let domain = &module.kernels[0].domain;
+    let mut admitted = Vec::with_capacity(module.kernels.len());
+    for kernel in &module.kernels {
+        admitted.push(derive_admitted_obligations_for_kernel(
+            semantic_kir,
+            kernel,
+        )?);
+    }
+    Ok(admitted.into_boxed_slice())
+}
+
+fn derive_admitted_obligations_for_kernel(
+    semantic_kir: &ProductionSemanticKirOwnerV1,
+    kernel: &fe2o3_kernel_ir::Kernel,
+) -> Result<ProductionFormalMemoryKernelV1, ProductionFormalMemoryErrorV1> {
+    let module = semantic_kir.module();
+    let domain = &kernel.domain;
     let rank = domain.rank();
     let witness = ExplicitLaunchExtent::Exact {
         rank,
@@ -302,7 +350,7 @@ fn derive_admitted_obligations(
     };
     let analysis = derive_kernel_memory_obligations_for_launch(
         module,
-        &module.kernels[0].id,
+        &kernel.id,
         witness,
         FormalIndexWidth::Bits64,
     )
@@ -329,7 +377,10 @@ fn derive_admitted_obligations(
             }
             if !compiler_reasons.is_empty()
                 && let Err(detail) = semantic_kir
-                    .retained_collective_lowering_discharges_workgroup_memory(&compiler_reasons)
+                    .retained_collective_lowering_discharges_workgroup_memory(
+                        kernel.id.as_str(),
+                        &compiler_reasons,
+                    )
             {
                 return Err(
                     ProductionFormalMemoryErrorV1::CompilerOwnedWorkgroupDischarge {
@@ -361,7 +412,10 @@ fn derive_admitted_obligations(
             }
             if !unsupported_indices.is_empty() {
                 if let Err(detail) = semantic_kir
-                    .retained_generic_checks_discharge_unsupported_indices(&unsupported_indices)
+                    .retained_generic_checks_discharge_unsupported_indices(
+                        kernel.id.as_str(),
+                        &unsupported_indices,
+                    )
                 {
                     return Err(ProductionFormalMemoryErrorV1::UnsupportedIndexDischarge {
                         reasons: unsupported_indices.into_boxed_slice(),
@@ -371,7 +425,10 @@ fn derive_admitted_obligations(
             }
             if !guarded_locations.is_empty() {
                 if let Err(detail) = semantic_kir
-                    .retained_generic_checks_discharge_guarded_accesses(&guarded_locations)
+                    .retained_generic_checks_discharge_guarded_accesses(
+                        kernel.id.as_str(),
+                        &guarded_locations,
+                    )
                 {
                     return Err(ProductionFormalMemoryErrorV1::GuardedAccessDischarge {
                         reasons: guarded_reasons.into_boxed_slice(),
@@ -394,11 +451,11 @@ fn derive_admitted_obligations(
                 .into_boxed_slice(),
         });
     }
-    Ok((
+    Ok(ProductionFormalMemoryKernelV1 {
         obligations,
         ranked_discharged_reasons,
         compiler_discharged_reasons,
-    ))
+    })
 }
 
 fn witness_extents(domain: &LaunchDomain) -> [u64; 3] {

@@ -64,6 +64,8 @@ chmod 0700 -- "${target_root}"
 
 FE2O3_STATIC_COORDINATOR_TARGET_DIR="${target_root}/coordinator" \
   "${repo_root}/scripts/build-static-compiler-execution-coordinator.sh"
+FE2O3_STATIC_CLIENT_CHECK_TARGET_DIR="${target_root}/client-check" \
+  "${repo_root}/scripts/build-static-compiler-execution-client-check.sh"
 FE2O3_STATIC_SUPERVISOR_TARGET_DIR="${target_root}/supervisor" \
   "${repo_root}/scripts/build-static-compiler-execution-supervisor.sh"
 FE2O3_STATIC_ISSUER_TARGET_DIR="${target_root}/issuer" \
@@ -105,6 +107,9 @@ install -m 0555 -- \
   "${target_root}/coordinator/${target}/release/fe2o3-compiler-execution-coordinator" \
   "${image_dir}/fe2o3-compiler-execution-coordinator"
 install -m 0555 -- \
+  "${target_root}/client-check/${target}/release/fe2o3-compiler-execution-client-check" \
+  "${image_dir}/fe2o3-compiler-execution-client-check"
+install -m 0555 -- \
   "${target_root}/supervisor/${target}/release/fe2o3-compiler-execution-supervisor" \
   "${image_dir}/fe2o3-compiler-execution-supervisor"
 install -m 0555 -- \
@@ -126,9 +131,6 @@ install -m 0555 -- \
 install -m 0444 -- \
   "${repo_root}/deployment/systemd/fe2o3-compiler-execution.service" \
   "${systemd_dir}/fe2o3-compiler-execution.service"
-install -m 0444 -- \
-  "${repo_root}/deployment/systemd/fe2o3-compiler-execution.socket" \
-  "${systemd_dir}/fe2o3-compiler-execution.socket"
 install -m 0444 -- \
   "${repo_root}/deployment/sysusers.d/fe2o3-compiler-execution.conf" \
   "${sysusers_dir}/fe2o3-compiler-execution.conf"

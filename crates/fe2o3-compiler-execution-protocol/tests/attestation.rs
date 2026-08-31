@@ -10,6 +10,7 @@ use fe2o3_compiler_execution_protocol::{
     CompilerExecutionAttestationChallengeV1, CompilerExecutionAttestationErrorV1,
     CompilerExecutionAttestationReceiptV1, CompilerExecutionAttestationRequestV1,
     CompilerExecutionIssuerMeasurementV1, CompilerExecutionIssuerPolicyV1,
+    SEALED_STATIC_ISSUER_RUNTIME_CLOSURE_V1, sealed_static_issuer_runtime_measurement_v1,
 };
 use sha2::{Digest, Sha256};
 
@@ -65,6 +66,17 @@ impl Fixture {
             receipt,
         }
     }
+}
+
+#[test]
+fn sealed_static_issuer_runtime_measurement_has_one_canonical_owner() {
+    let measurement = sealed_static_issuer_runtime_measurement_v1();
+    let expected_sha256: [u8; 32] = Sha256::digest(SEALED_STATIC_ISSUER_RUNTIME_CLOSURE_V1).into();
+    assert_eq!(
+        measurement.byte_len(),
+        SEALED_STATIC_ISSUER_RUNTIME_CLOSURE_V1.len() as u64
+    );
+    assert_eq!(measurement.sha256(), expected_sha256);
 }
 
 #[test]

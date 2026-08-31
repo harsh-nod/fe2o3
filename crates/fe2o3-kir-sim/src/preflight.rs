@@ -1558,7 +1558,7 @@ fn scan_operation(
                 );
             }
         }
-        OperationKind::Store { pointer, .. } => {
+        OperationKind::Store { pointer, .. } | OperationKind::GuardedStore { pointer, .. } => {
             if let Some(Type::Pointer(pointer)) = value_types.get(pointer) {
                 scan_memory_type(
                     &pointer.pointee,
@@ -1990,7 +1990,12 @@ fn validate_buffer_access(
     required: AccessMode,
     supplied: AccessMode,
 ) -> Result<(), SimulationPreflightErrorV1> {
-    if required == AccessMode::ReadWrite && supplied != AccessMode::ReadWrite {
+    let compatible = match required {
+        AccessMode::ReadOnly => matches!(supplied, AccessMode::ReadOnly | AccessMode::ReadWrite),
+        AccessMode::WriteOnly => matches!(supplied, AccessMode::WriteOnly | AccessMode::ReadWrite),
+        AccessMode::ReadWrite => supplied == AccessMode::ReadWrite,
+    };
+    if !compatible {
         Err(SimulationPreflightErrorV1::BufferAccess {
             argument,
             required,

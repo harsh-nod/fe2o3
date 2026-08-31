@@ -19,6 +19,7 @@ set -e
 
 for helper in \
   build-static-compiler-execution-coordinator.sh \
+  build-static-compiler-execution-client-check.sh \
   build-static-compiler-execution-supervisor.sh \
   build-static-compiler-execution-issuer.sh \
   build-static-external-anchor-provisioning-helper.sh \
@@ -29,6 +30,7 @@ for helper in \
 done
 
 for image in \
+  fe2o3-compiler-execution-client-check \
   fe2o3-compiler-execution-coordinator \
   fe2o3-compiler-execution-supervisor \
   fe2o3-static-preexec-launcher \
@@ -58,7 +60,10 @@ readonly qualification_source="${repo_root}/crates/fe2o3-compiler-execution-depl
 readonly qualification_supervisor_source="${repo_root}/crates/fe2o3-compiler-execution-deployment/src/supervisor.rs"
 readonly qualification_fault_source="${repo_root}/crates/fe2o3-compiler-execution-deployment/src/fault.rs"
 readonly qualification_preflight_source="${repo_root}/crates/fe2o3-compiler-execution-deployment/src/preflight.rs"
+readonly qualification_provision_source="${repo_root}/crates/fe2o3-compiler-execution-deployment/src/provision.rs"
 readonly qualification_boot_source="${repo_root}/crates/fe2o3-compiler-execution-deployment/src/boot.rs"
+readonly qualification_client_transaction_source="${repo_root}/crates/fe2o3-compiler-execution-deployment/src/client_transaction.rs"
+readonly qualification_cgroup_source="${repo_root}/crates/fe2o3-compiler-execution-deployment/src/cgroup.rs"
 readonly qualification_run_source="${repo_root}/crates/fe2o3-compiler-execution-deployment/src/run.rs"
 bash -n "${verifier_builder}"
 for binary in \
@@ -79,14 +84,49 @@ for boot_contract in \
   'getpgrp' \
   '--private-network' \
   '--bind=+/run/fe2o3:/run/fe2o3:norbind,noidmap' \
-  'compiler-execution-supervisor.sock' \
+  'COMPILER_EXECUTION_SUPERVISOR_SOCKET_PATH_V1' \
+  'MachineSocketReadinessV1' \
+  'try_admit_client_transaction_report_v1' \
+  'await_client_transaction' \
   'boot_and_stop_systemd_machine_v1'; do
   grep -Fq -- "${boot_contract}" "${qualification_boot_source}" ||
     fail "missing isolated systemd boot contract ${boot_contract}"
 done
+if grep -Eq -- 'connect\(|getpeername\(|socket_peercred' "${qualification_boot_source}"; then
+  fail 'host readiness must not consume the production supervisor session'
+fi
+for transaction_contract in \
+  'compiler-execution-client-check.report' \
+  'complete=true' \
+  'profile.identity()' \
+  'profile.policy().identity()' \
+  'client_uid == 0' \
+  'report_identity' \
+  'read_exact_at' \
+  'ResolveFlags::NO_XDEV'; do
+  grep -Fq -- "${transaction_contract}" "${qualification_client_transaction_source}" ||
+    fail "missing client transaction evidence contract ${transaction_contract}"
+done
 if grep -Fq -- '.process_group(0)' "${qualification_boot_source}"; then
   fail 'systemd machine helper escapes the supervised worker process group'
 fi
+for cgroup_contract in \
+  '/proc/self/cgroup' \
+  '/sys/fs/cgroup' \
+  create_compiler_execution_qualification_cgroup_v1 \
+  attach_worker \
+  'cgroup.procs' \
+  'cgroup.events' \
+  'cgroup.kill' \
+  'accessat' \
+  'remove_descendant_cgroups' \
+  'CGROUP_MAX_DEPTH_V1' \
+  'CGROUP_MAX_DESCENDANTS_V1'; do
+  grep -Fq -- "${cgroup_contract}" "${qualification_cgroup_source}" ||
+    fail "missing qualification cgroup contract ${cgroup_contract}"
+done
+grep -Fq -- 'cgroup_v2_scope_writable' "${verifier_builder}" ||
+  fail 'static qualification cgroup-writability probe is missing'
 if grep -Eq -- 'PINNED_NSPAWN_PATH[^=]*=[[:space:]]*"/usr/bin|Command::new\("/usr/bin/systemd-nspawn"' \
   "${qualification_boot_source}"; then
   fail 'systemd machine launcher trusts a host systemd-nspawn path'
@@ -95,6 +135,13 @@ grep -Fq -- 'qualification-host-probe-v1' "${verifier_builder}" ||
   fail 'static qualification prerequisite probe is missing'
 grep -Fq -- 'fault-points' "${verifier_builder}" ||
   fail 'static qualification fault set is missing'
+for verifier_fault_contract in \
+  supervisor-socket-metadata-admitted \
+  client-transaction-complete \
+  client-transaction-revalidated; do
+  grep -Fq -- "${verifier_fault_contract}" "${verifier_builder}" ||
+    fail "static qualification fault set is missing ${verifier_fault_contract}"
+done
 grep -Fq -- 'campaign BUNDLE_ROOT' "${verifier_builder}" ||
   fail 'static qualification campaign is missing'
 grep -Fq -- 'recover QUALIFICATION_PARENT' "${verifier_builder}" ||
@@ -125,6 +172,25 @@ for preflight_contract in \
   grep -Fq -- "${preflight_contract}" "${qualification_preflight_source}" ||
     fail "missing composed-root preflight contract ${preflight_contract}"
 done
+for provision_contract in \
+  '/usr/libexec/fe2o3/fe2o3-compiler-execution-provision' \
+  run_compiler_execution_provisioning_with_hooks_v1 \
+  execute_compiler_execution_provisioning_tool_v1 \
+  admit_provisioned_state \
+  require_current_provisioned_state \
+  CompilerExecutionIssuerPolicyV1::decode \
+  CompilerExecutionClientProfileV1::decode \
+  CompilerExecutionSupervisorDeploymentV1::decode \
+  CompilerExecutionExternalAnchorDeploymentV1::decode \
+  CompilerExecutionExternalAnchorProvisioningV1::decode \
+  sealed_static_issuer_runtime_measurement_v1 \
+  SigningKey::from_bytes \
+  measure_static_image \
+  'rustix::process::chroot' \
+  'Resource::Fsize'; do
+  grep -Fq -- "${provision_contract}" "${qualification_provision_source}" ||
+    fail "missing composed-root provisioning contract ${provision_contract}"
+done
 for fault_contract in \
   QualificationFaultPointV1 \
   SystemdVersionComplete \
@@ -133,7 +199,13 @@ for fault_contract in \
   SystemdUnitVerifyComplete \
   SystemdPostconditionsAdmitted \
   InstalledLowerRevalidated \
+  CompilerExecutionProvisioningComplete \
+  CompilerExecutionProvisioningRevalidated \
+  CompilerExecutionProvisioningAdmitted \
   SystemdMachineSpawned \
+  SupervisorSocketMetadataAdmitted \
+  ClientTransactionComplete \
+  ClientTransactionRevalidated \
   SystemdMachineReady \
   SystemdMachineStopped \
   PostBootLowerRevalidated \
@@ -145,6 +217,8 @@ grep -Fq -- 'run_compiler_execution_qualification_request_v1' "${qualification_r
   fail 'unified qualification run path is missing'
 grep -Fq -- 'execute_staged_qualification_with_hooks' "${qualification_run_source}" ||
   fail 'shared normal/fault qualification transaction is missing'
+grep -Fq -- 'run_compiler_execution_provisioning_with_hooks_v1' "${qualification_run_source}" ||
+  fail 'production provisioning is missing from the unified qualification transaction'
 grep -Fq -- 'revalidate_qualification_inputs_after_fault' "${qualification_run_source}" ||
   fail 'post-fault installed-lower revalidation is missing'
 if grep -Fq -- 'run_compiler_execution_mount_qualification_request_v1' "${qualification_run_source}"; then

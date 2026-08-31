@@ -2279,11 +2279,12 @@ fn buffer_element(element: &str) -> Result<ScalarType, Failure> {
 fn access_mode(access: &str) -> Result<AccessMode, Failure> {
     match access {
         "read_only" => Ok(AccessMode::ReadOnly),
+        "write_only" => Ok(AccessMode::WriteOnly),
         "read_write" => Ok(AccessMode::ReadWrite),
         _ => Err(Failure::new(
             Stage::Request,
             ErrorKind::RequestBufferAccessInvalid,
-            "buffer access must be read_only or read_write",
+            "buffer access must be read_only, write_only, or read_write",
         )),
     }
 }
@@ -2562,6 +2563,7 @@ fn execution_kind(error: &SimulationExecutionErrorKindV1) -> ErrorKind {
             ErrorKind::ExecutionAddressSpaceMismatch
         }
         SimulationExecutionErrorKindV1::ReadOnlyWrite => ErrorKind::ExecutionReadOnlyWrite,
+        SimulationExecutionErrorKindV1::WriteOnlyRead => ErrorKind::ExecutionWriteOnlyRead,
         SimulationExecutionErrorKindV1::MisalignedAccess { .. } => {
             ErrorKind::ExecutionMisalignedAccess
         }
@@ -3368,6 +3370,7 @@ fn write_buffer<W: Write + ?Sized>(writer: &mut W, buffer: &BufferArgumentV1) ->
 const fn access_name(access: AccessMode) -> &'static str {
     match access {
         AccessMode::ReadOnly => "read_only",
+        AccessMode::WriteOnly => "write_only",
         AccessMode::ReadWrite => "read_write",
     }
 }

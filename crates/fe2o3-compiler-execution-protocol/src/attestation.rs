@@ -27,6 +27,20 @@ const RECEIPT_IDENTITY_DOMAIN: &[u8] = b"FE2O3/COMPILER-EXECUTION-RECEIPT/V1\0";
 const RECEIPT_SIGNATURE_DOMAIN: &[u8] = b"FE2O3/COMPILER-EXECUTION-RECEIPT-SIGNATURE/V1\0";
 const ROLLBACK_ANCHOR_DOMAIN: &[u8] = b"FE2O3/COMPILER-EXECUTION-ROLLBACK-ANCHOR/V1\0";
 
+/// Canonical content describing the loader-independent issuer runtime closure.
+pub const SEALED_STATIC_ISSUER_RUNTIME_CLOSURE_V1: &[u8] =
+    b"FE2O3/SEALED-STATIC-X86_64-ISSUER-RUNTIME-CLOSURE/V1\0";
+
+/// Returns the sole runtime-closure measurement for a sealed-static issuer.
+pub fn sealed_static_issuer_runtime_measurement_v1() -> CompilerExecutionIssuerMeasurementV1 {
+    let digest = Sha256::digest(SEALED_STATIC_ISSUER_RUNTIME_CLOSURE_V1).into();
+    CompilerExecutionIssuerMeasurementV1::new(
+        digest,
+        SEALED_STATIC_ISSUER_RUNTIME_CLOSURE_V1.len() as u64,
+    )
+    .expect("the fixed sealed-static runtime measurement is nonzero")
+}
+
 const POLICY_PREIMAGE_BYTES: usize = HEADER_BYTES
     + 8
     + CONTENT_BINDING_BYTES

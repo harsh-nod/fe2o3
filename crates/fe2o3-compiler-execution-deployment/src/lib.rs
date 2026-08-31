@@ -20,17 +20,24 @@ use rustix::fs::{
 use sha2::{Digest, Sha256};
 
 mod boot;
+mod cgroup;
+mod client_transaction;
 mod fault;
 mod host;
 mod install;
 mod mount;
 mod preflight;
+mod provision;
 mod qualification;
 mod run;
 mod staging;
 mod supervisor;
 
 pub use boot::execute_compiler_execution_systemd_machine_tool_v1;
+pub use cgroup::{
+    CompilerExecutionQualificationCgroupCleanupV1, CompilerExecutionQualificationCgroupV1,
+    create_compiler_execution_qualification_cgroup_v1,
+};
 pub use fault::QualificationFaultPointV1;
 pub use host::{
     CompilerExecutionQualificationHostProbeV1, probe_compiler_execution_qualification_host_v1,
@@ -46,6 +53,7 @@ pub use mount::{
     enter_private_qualification_mount_namespace_v1,
 };
 pub use preflight::execute_compiler_execution_systemd_preflight_tool_v1;
+pub use provision::execute_compiler_execution_provisioning_tool_v1;
 pub use qualification::{
     PreparedCompilerExecutionQualificationV1, prepare_compiler_execution_qualification_v1,
 };
@@ -75,6 +83,12 @@ pub const COMPILER_EXECUTION_SYSTEMD_PREFLIGHT_TOOL_COMMAND_V1: &str =
 /// Parent-PID binding passed only from the qualification worker to its systemd helper.
 pub const COMPILER_EXECUTION_SYSTEMD_PREFLIGHT_PARENT_PID_ENV_V1: &str =
     "FE2O3_QUALIFICATION_SYSTEMD_PARENT_PID_V1";
+/// Hidden static-harness command that runs the admitted production provisioner in the composed root.
+pub const COMPILER_EXECUTION_PROVISIONING_TOOL_COMMAND_V1: &str =
+    "__compiler-execution-provisioning-tool-v1";
+/// Parent-PID binding passed only from the qualification worker to its provisioning helper.
+pub const COMPILER_EXECUTION_PROVISIONING_PARENT_PID_ENV_V1: &str =
+    "FE2O3_QUALIFICATION_PROVISIONING_PARENT_PID_V1";
 /// Hidden static-harness command that launches the pinned isolated systemd machine.
 pub const COMPILER_EXECUTION_SYSTEMD_MACHINE_TOOL_COMMAND_V1: &str = "__systemd-machine-tool-v1";
 /// Parent-PID binding passed only from the qualification worker to its machine helper.
@@ -128,12 +142,6 @@ const FILE_SPECS_V1: [FileSpecV1; COMPILER_EXECUTION_INSTALL_FILE_COUNT_V1] = [
         max_bytes: CONFIG_MAX_BYTES_V1,
     },
     FileSpecV1 {
-        source: "systemd/fe2o3-compiler-execution.socket",
-        install: "/usr/lib/systemd/system/fe2o3-compiler-execution.socket",
-        mode: 0o444,
-        max_bytes: CONFIG_MAX_BYTES_V1,
-    },
-    FileSpecV1 {
         source: "sysusers.d/fe2o3-compiler-execution.conf",
         install: "/usr/lib/sysusers.d/fe2o3-compiler-execution.conf",
         mode: 0o444,
@@ -144,6 +152,12 @@ const FILE_SPECS_V1: [FileSpecV1; COMPILER_EXECUTION_INSTALL_FILE_COUNT_V1] = [
         install: "/usr/lib/tmpfiles.d/fe2o3-compiler-execution.conf",
         mode: 0o444,
         max_bytes: CONFIG_MAX_BYTES_V1,
+    },
+    FileSpecV1 {
+        source: "usr/libexec/fe2o3/fe2o3-compiler-execution-client-check",
+        install: "/usr/libexec/fe2o3/fe2o3-compiler-execution-client-check",
+        mode: 0o555,
+        max_bytes: EXECUTABLE_MAX_BYTES_V1,
     },
     FileSpecV1 {
         source: "usr/libexec/fe2o3/fe2o3-compiler-execution-coordinator",
@@ -206,15 +220,13 @@ const ROOT_CHILDREN_WITHOUT_MANIFEST_V1: &[&str] = &[
     "tmpfiles.d",
     "usr",
 ];
-const SYSTEMD_CHILDREN_V1: &[&str] = &[
-    "fe2o3-compiler-execution.service",
-    "fe2o3-compiler-execution.socket",
-];
+const SYSTEMD_CHILDREN_V1: &[&str] = &["fe2o3-compiler-execution.service"];
 const SYSUSERS_CHILDREN_V1: &[&str] = &["fe2o3-compiler-execution.conf"];
 const TMPFILES_CHILDREN_V1: &[&str] = &["fe2o3-compiler-execution.conf"];
 const USR_CHILDREN_V1: &[&str] = &["libexec"];
 const LIBEXEC_CHILDREN_V1: &[&str] = &["fe2o3"];
 const IMAGE_CHILDREN_V1: &[&str] = &[
+    "fe2o3-compiler-execution-client-check",
     "fe2o3-compiler-execution-coordinator",
     "fe2o3-compiler-execution-issuer",
     "fe2o3-compiler-execution-provision",
@@ -1194,6 +1206,8 @@ pub enum DeploymentVerificationErrorKindV1 {
     InvalidQualificationMount,
     /// Composed-root systemd preparation or its exact postconditions failed admission.
     InvalidQualificationPreflight,
+    /// Production provisioning or its independently checked postconditions failed admission.
+    InvalidQualificationProvisioning,
     /// Pinned systemd machine launch, readiness, shutdown, or postcondition admission failed.
     InvalidQualificationBoot,
     /// A production root operation did not run with effective UID 0.
@@ -1279,6 +1293,17 @@ mod tests {
 
     const COMMIT: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const OTHER_COMMIT: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+    #[test]
+    fn manifest_sources_follow_sha256sum_byte_order() {
+        let sources = FILE_SPECS_V1
+            .iter()
+            .map(|spec| spec.source)
+            .collect::<Vec<_>>();
+        let mut sorted = sources.clone();
+        sorted.sort_unstable();
+        assert_eq!(sources, sorted);
+    }
 
     struct Fixture {
         root: tempfile::TempDir,
@@ -1486,7 +1511,7 @@ mod tests {
         fs::set_permissions(&service, fs::Permissions::from_mode(0o600)).unwrap();
         fs::write(&service, b"hostile").unwrap();
         fs::remove_file(&service).unwrap();
-        symlink("fe2o3-compiler-execution.socket", &service).unwrap();
+        symlink("../sysusers.d/fe2o3-compiler-execution.conf", &service).unwrap();
         assert!(fixture.verify(generation.sha256()).is_err());
 
         let fixture = Fixture::new();
@@ -1515,7 +1540,7 @@ mod tests {
     fn same_length_content_and_extended_attribute_substitution_are_rejected() {
         let fixture = Fixture::new();
         let generation = fixture.generate();
-        let path = fixture.path("systemd/fe2o3-compiler-execution.socket");
+        let path = fixture.path("sysusers.d/fe2o3-compiler-execution.conf");
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
         let mut bytes = fs::read(&path).unwrap();
         bytes[0] ^= 1;
@@ -2046,13 +2071,12 @@ mod tests {
         assert_installed_root_mutation_rejected(
             DeploymentVerificationErrorKindV1::InvalidMetadata,
             |root| {
-                let systemd = root.join("usr/lib/systemd/system");
-                let service = systemd.join("fe2o3-compiler-execution.service");
-                let socket = systemd.join("fe2o3-compiler-execution.socket");
+                let service = root.join("usr/lib/systemd/system/fe2o3-compiler-execution.service");
+                let sysusers = root.join("usr/lib/sysusers.d/fe2o3-compiler-execution.conf");
                 fs::remove_file(&service).unwrap();
-                fs::set_permissions(&socket, fs::Permissions::from_mode(0o644)).unwrap();
-                fs::hard_link(&socket, service).unwrap();
-                fs::set_permissions(socket, fs::Permissions::from_mode(0o444)).unwrap();
+                fs::set_permissions(&sysusers, fs::Permissions::from_mode(0o644)).unwrap();
+                fs::hard_link(&sysusers, service).unwrap();
+                fs::set_permissions(sysusers, fs::Permissions::from_mode(0o444)).unwrap();
             },
         );
         assert_installed_root_mutation_rejected(

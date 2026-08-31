@@ -43,6 +43,13 @@ pub(crate) enum ProductionTerminalExpansionV1 {
     DisjointSliceGetBlockMut,
     DisjointSliceGetTiled2dMut,
     DisjointSliceGetRowStriped2dMut,
+    WriteOnlyDisjointSliceLen,
+    WriteOnlyDisjointSliceWrite,
+    WriteOnlyDisjointSliceWriteDisjoint,
+    WriteOnlyDisjointSliceWriteExclusive,
+    WriteOnlyDisjointSliceWriteBlock,
+    WriteOnlyDisjointSliceWriteTiled2d,
+    WriteOnlyDisjointSliceWriteRowStriped2d,
     StridedReadView2DFromSharedSlice,
     StridedReadView2DLoadOr,
     DynamicLdsExactCurrent,
@@ -214,6 +221,27 @@ impl ProductionSemanticTerminalRuleV1 {
             }
             TrustedDeviceItem::DisjointSliceGetRowStriped2DMut => {
                 Self::Expand(ProductionTerminalExpansionV1::DisjointSliceGetRowStriped2dMut)
+            }
+            TrustedDeviceItem::WriteOnlyDisjointSliceLen => {
+                Self::Expand(ProductionTerminalExpansionV1::WriteOnlyDisjointSliceLen)
+            }
+            TrustedDeviceItem::WriteOnlyDisjointSliceWrite => {
+                Self::Expand(ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWrite)
+            }
+            TrustedDeviceItem::WriteOnlyDisjointSliceWriteDisjoint => {
+                Self::Expand(ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteDisjoint)
+            }
+            TrustedDeviceItem::WriteOnlyDisjointSliceWriteExclusive => {
+                Self::Expand(ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteExclusive)
+            }
+            TrustedDeviceItem::WriteOnlyDisjointSliceWriteBlock => {
+                Self::Expand(ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteBlock)
+            }
+            TrustedDeviceItem::WriteOnlyDisjointSliceWriteTiled2D => {
+                Self::Expand(ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteTiled2d)
+            }
+            TrustedDeviceItem::WriteOnlyDisjointSliceWriteRowStriped2D => {
+                Self::Expand(ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteRowStriped2d)
             }
             TrustedDeviceItem::StridedReadView2DFromSharedSlice => {
                 Self::Expand(ProductionTerminalExpansionV1::StridedReadView2DFromSharedSlice)
@@ -503,6 +531,27 @@ impl ProductionSemanticTerminalRuleV1 {
             Self::Expand(ProductionTerminalExpansionV1::DisjointSliceGetRowStriped2dMut) => {
                 TrustedDeviceItem::DisjointSliceGetRowStriped2DMut
             }
+            Self::Expand(ProductionTerminalExpansionV1::WriteOnlyDisjointSliceLen) => {
+                TrustedDeviceItem::WriteOnlyDisjointSliceLen
+            }
+            Self::Expand(ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWrite) => {
+                TrustedDeviceItem::WriteOnlyDisjointSliceWrite
+            }
+            Self::Expand(ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteDisjoint) => {
+                TrustedDeviceItem::WriteOnlyDisjointSliceWriteDisjoint
+            }
+            Self::Expand(ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteExclusive) => {
+                TrustedDeviceItem::WriteOnlyDisjointSliceWriteExclusive
+            }
+            Self::Expand(ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteBlock) => {
+                TrustedDeviceItem::WriteOnlyDisjointSliceWriteBlock
+            }
+            Self::Expand(ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteTiled2d) => {
+                TrustedDeviceItem::WriteOnlyDisjointSliceWriteTiled2D
+            }
+            Self::Expand(
+                ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteRowStriped2d,
+            ) => TrustedDeviceItem::WriteOnlyDisjointSliceWriteRowStriped2D,
             Self::Expand(ProductionTerminalExpansionV1::StridedReadView2DFromSharedSlice) => {
                 TrustedDeviceItem::StridedReadView2DFromSharedSlice
             }

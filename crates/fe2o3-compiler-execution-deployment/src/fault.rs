@@ -1,6 +1,6 @@
 use super::{DeploymentVerificationErrorKindV1, DeploymentVerificationErrorV1, invalid};
 
-const QUALIFICATION_FAULT_POINTS_V1: [QualificationFaultPointV1; 22] = [
+const QUALIFICATION_FAULT_POINTS_V1: [QualificationFaultPointV1; 28] = [
     QualificationFaultPointV1::LoopAttached,
     QualificationFaultPointV1::BaseMounted,
     QualificationFaultPointV1::OverlayMounted,
@@ -15,7 +15,13 @@ const QUALIFICATION_FAULT_POINTS_V1: [QualificationFaultPointV1; 22] = [
     QualificationFaultPointV1::SystemdUnitVerifyRevalidated,
     QualificationFaultPointV1::SystemdPostconditionsAdmitted,
     QualificationFaultPointV1::InstalledLowerRevalidated,
+    QualificationFaultPointV1::CompilerExecutionProvisioningComplete,
+    QualificationFaultPointV1::CompilerExecutionProvisioningRevalidated,
+    QualificationFaultPointV1::CompilerExecutionProvisioningAdmitted,
     QualificationFaultPointV1::SystemdMachineSpawned,
+    QualificationFaultPointV1::SupervisorSocketMetadataAdmitted,
+    QualificationFaultPointV1::ClientTransactionComplete,
+    QualificationFaultPointV1::ClientTransactionRevalidated,
     QualificationFaultPointV1::SystemdMachineReady,
     QualificationFaultPointV1::SystemdMachineStopped,
     QualificationFaultPointV1::PostBootLowerRevalidated,
@@ -56,13 +62,25 @@ pub enum QualificationFaultPointV1 {
     SystemdPostconditionsAdmitted,
     /// Mount custody and the installed lower passed the final preflight revalidation.
     InstalledLowerRevalidated,
+    /// The production compiler-execution provisioner completed with no output.
+    CompilerExecutionProvisioningComplete,
+    /// Mount custody and the installed lower were revalidated after provisioning.
+    CompilerExecutionProvisioningRevalidated,
+    /// Generation, identities, key seeds, records, and executable measurements were admitted.
+    CompilerExecutionProvisioningAdmitted,
     /// The exact pinned machine helper was spawned with retained descriptor custody.
     SystemdMachineSpawned,
-    /// The isolated systemd machine published the admitted supervisor socket.
+    /// The isolated machine published the exact supervisor socket without consuming a session.
+    SupervisorSocketMetadataAdmitted,
+    /// The real distinct-UID client completed Recover followed by the required Cancel.
+    ClientTransactionComplete,
+    /// Client evidence, socket custody, provisioning, and the installed lower were revalidated.
+    ClientTransactionRevalidated,
+    /// The isolated machine completed the authenticated client transaction and revalidation.
     SystemdMachineReady,
     /// The isolated systemd machine completed bounded graceful shutdown.
     SystemdMachineStopped,
-    /// Mount custody and the installed lower passed revalidation after shutdown.
+    /// Provisioning state, mount custody, and the installed lower passed revalidation after shutdown.
     PostBootLowerRevalidated,
     /// The disposable OverlayFS root has been unmounted.
     OverlayUnmounted,
@@ -97,7 +115,19 @@ impl QualificationFaultPointV1 {
             Self::SystemdUnitVerifyRevalidated => "systemd-unit-verify-revalidated",
             Self::SystemdPostconditionsAdmitted => "systemd-postconditions-admitted",
             Self::InstalledLowerRevalidated => "installed-lower-revalidated",
+            Self::CompilerExecutionProvisioningComplete => {
+                "compiler-execution-provisioning-complete"
+            }
+            Self::CompilerExecutionProvisioningRevalidated => {
+                "compiler-execution-provisioning-revalidated"
+            }
+            Self::CompilerExecutionProvisioningAdmitted => {
+                "compiler-execution-provisioning-admitted"
+            }
             Self::SystemdMachineSpawned => "systemd-machine-spawned",
+            Self::SupervisorSocketMetadataAdmitted => "supervisor-socket-metadata-admitted",
+            Self::ClientTransactionComplete => "client-transaction-complete",
+            Self::ClientTransactionRevalidated => "client-transaction-revalidated",
             Self::SystemdMachineReady => "systemd-machine-ready",
             Self::SystemdMachineStopped => "systemd-machine-stopped",
             Self::PostBootLowerRevalidated => "post-boot-lower-revalidated",
@@ -199,7 +229,13 @@ mod tests {
                 "systemd-unit-verify-revalidated",
                 "systemd-postconditions-admitted",
                 "installed-lower-revalidated",
+                "compiler-execution-provisioning-complete",
+                "compiler-execution-provisioning-revalidated",
+                "compiler-execution-provisioning-admitted",
                 "systemd-machine-spawned",
+                "supervisor-socket-metadata-admitted",
+                "client-transaction-complete",
+                "client-transaction-revalidated",
                 "systemd-machine-ready",
                 "systemd-machine-stopped",
                 "post-boot-lower-revalidated",

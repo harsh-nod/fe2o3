@@ -229,8 +229,8 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   exact challenge replay advances at most once. The distinct-UID root coordinator,
   endpoint/pidfd transfer, measured supervisor spawn, profile gate, canonical
   readiness, and combined supervisor/anchor custody are implemented. Exact
-  service-account/socket provisioning, combined privileged qualification, and
-  final verifier authority remain pending.
+  service-account/socket policy and root provisioner are implemented. Combined
+  privileged qualification and final verifier authority remain pending.
 - The compiler-execution deployment builder publishes one exact 14-file static
   source bundle only after a separate static musl verifier admits its
   caller-pinned canonical manifest and Git commit. Admission is
@@ -256,22 +256,35 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   qualification transaction: it composes the root, runs the pinned base's
   systemd version, sysusers, tmpfiles, and offline unit-verification tools,
   admits exact account and filesystem postconditions, revalidates the installed
-  lower after every tool, and emits a canonical cleanup report. The tools enter
+  lower after every tool, runs the shipped generation-1 root provisioner, and
+  independently admits the seven-file configuration inventory, key-derived
+  verifying keys, canonical service record graph, derived Cargo client profile,
+  service identities, sealed runtime,
+  and all five record-bound static-image measurements before boot. The tools enter
   the descriptor-retained root through the static harness itself; no host
-  `chroot` executable is trusted. A non-mutating probe records every host
+  `chroot` executable is trusted. The provisioned graph and images are
+  independently re-admitted immediately before machine launch and after
+  shutdown. A non-mutating probe records every host
   prerequisite. The same transaction executes only the pinned-base dynamic
   loader and `systemd-nspawn` through retained descriptors, uses a private
-  network namespace, admits canonical supervisor-socket readiness, performs
+  network namespace, opens and retains an exact nonblocking Unix
+  `SOCK_SEQPACKET` connection, admits its canonical pathname and root peer
+  credentials, revalidates the listener object, performs
   bounded pidfd shutdown, proves socket removal, and revalidates the installed
-  lower. One 22-point transaction fault contract covers mount
+  lower. Before worker release, the outer supervisor descriptor-retains one
+  lease-identified writable cgroup V2 child, crash-recovers only that exact
+  scope, attaches and verifies the exact worker, then
+  uses aggregate `cgroup.events`, recursive `cgroup.kill`, and bounded
+  deepest-first nested-cgroup removal before publishing output. One 28-point transaction fault contract covers mount
   admission, every systemd command completion and subsequent lower-root
   revalidation, exact postcondition admission, final lower revalidation,
+  provisioning completion/revalidation/admission,
   boot readiness and shutdown, post-boot revalidation, and cleanup. Normal,
   fault, and campaign runs share one internal transaction, and
   every admitted fault result freshly reacquires the caller-pinned bundle, base,
   and complete installed lower after cleanup. That path still lacks host-root
-  execution evidence, exact listener-type/connectivity admission, cgroup
-  teardown proof, and distinct-UID service qualification, so it is not yet
+  execution evidence, live cgroup teardown evidence, and distinct-UID service
+  qualification, so it is not yet
   production-qualified.
 - Versioned artifact, descriptor, durable-publication, and HSA records exist.
   Host execution has one workload-neutral Worker V3 graph. An arbitrary

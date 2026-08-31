@@ -11,10 +11,13 @@ use std::{
 use dialect_amdgcn::{
     CanonicalProductionKirToLlvmReplayEvidenceV1, ProductionReplayKernelIrVersionV1,
     bind_production_llvm22_worker_layout_v1, bind_production_target_v1,
-    lower_kernel_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1,
-    lower_kernel_to_gfx950_xnack_minus_llvm_ir_with_semantic_anchors_v1,
+    lower_compiler_module_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1,
+    lower_compiler_module_to_gfx950_xnack_minus_llvm_ir_with_semantic_anchors_v1,
 };
-use fe2o3_amd_target::ProductionAmdTargetProfileV1;
+use fe2o3_amd_target::{
+    PRODUCTION_AMDHSA_LLVM22_WORKER_DATA_LAYOUT_V1, PRODUCTION_AMDHSA_RUSTC_DATA_LAYOUT_V1,
+    ProductionAmdTargetProfileV1,
+};
 use fe2o3_artifact_transaction::{
     AttemptScopedHsacoPublicationOutcomeV3, BuildInvocation, BuildSession,
     CompilerModuleHandoffReceiptV3, CompilerModuleHandoffSlotV3, ConsumedCompilerModuleHandoffV3,
@@ -33,9 +36,20 @@ use fe2o3_compiler_ffi::{
     InertSemanticCompilerModuleHandoffV3,
 };
 use fe2o3_compiler_lineage::{
-    InertLineageContentIdentityV3, InertProofBindingAssociationInputsV4,
-    InertProofBindingAssociationV4, InertSemanticToLlvmAssociationInputsV3,
-    InertSemanticToLlvmAssociationV3, InertSemanticToLlvmContentIdentityV3,
+    DataLayoutTranscriptInputsV3, DataLayoutTranscriptV3, InertAbiReceiptV3,
+    InertAmdgpuLoweringReceiptV3, InertCanonicalSemanticMirReceiptV3, InertDataLayoutReceiptV3,
+    InertExportManifestReceiptV3, InertFinalCompilerModuleCommitmentReceiptV3,
+    InertFormalMemoryReceiptV3, InertKernelIrReceiptV3, InertLineageContentIdentityV3,
+    InertMiddleEndReceiptV3, InertMirToKirCorrespondenceReceiptV3,
+    InertProductionSemanticCapsuleV3, InertProofBindingAssociationInputsV4,
+    InertProofBindingAssociationV4, InertProofBindingReceiptV3,
+    InertRustcIdentityInventoryReceiptV3, InertRustcPreflightPlanReceiptV3,
+    InertSemanticToLlvmAssociationInputsV3, InertSemanticToLlvmAssociationV3,
+    InertSemanticToLlvmContentIdentityV3, InertSemanticToLlvmReceiptV3,
+    InertTargetBindingReceiptV3, OrderedInertSemanticLineageReceiptsV3,
+    SemanticToLlvmAssociationInputsV3, SemanticToLlvmAssociationTranscriptV3,
+    TargetBindingTranscriptInputsV3, TargetBindingTranscriptV3, TargetLineageIdentityV3,
+    derive_semantic_target_layout_identity_v1,
 };
 use fe2o3_hsaco_finalize::{
     CompilerClosureV2, ContentIdentityV1, FinalizedSemanticDebugMapAdmissionStatusV1,
@@ -72,15 +86,19 @@ use fe2o3_kernel_descriptor::{
 };
 use fe2o3_kernel_ir::{
     DebugSourceMapBindingV1, DebugSourceMapDocumentV2, ProductionSemanticDebugAvailabilityV1,
-    ProductionSemanticDebugCarrierV1, ProductionSemanticDebugFragmentV1,
-    ProductionSemanticDebugProducerCapabilityV1, ProductionSemanticDebugProducerGapV1,
-    ProductionSemanticDebugReceiptExtensionV1, SemanticDebugBoundaryDirectionV1,
-    SemanticDebugBoundaryReasonV1, SemanticDebugBoundaryV1, SemanticDebugContentIdentityV1,
-    SemanticDebugLayerV1, SemanticDebugLocationV1, SemanticDebugMapBindingV1,
-    SemanticDebugMapDocumentV1, SemanticDebugMapErrorV1, SemanticDebugMappingOutputV1,
-    SemanticDebugMappingV1, SemanticDebugNodeV1, SemanticDebugTransformationV1,
-    SemanticDebugUnavailableReasonV1, VerifiedCanonicalKernelIrV7, VerifiedCanonicalKernelIrV8,
-    VerifiedCanonicalKernelIrV9,
+    ProductionSemanticDebugCarrierV1, ProductionSemanticDebugFragmentErrorV1,
+    ProductionSemanticDebugFragmentV1, ProductionSemanticDebugProducerCapabilityV1,
+    ProductionSemanticDebugProducerGapV1, ProductionSemanticDebugReceiptExtensionV1,
+    SemanticDebugBoundaryDirectionV1, SemanticDebugBoundaryReasonV1, SemanticDebugBoundaryV1,
+    SemanticDebugContentIdentityV1, SemanticDebugLayerV1, SemanticDebugLocationV1,
+    SemanticDebugMapBindingV1, SemanticDebugMapDocumentV1, SemanticDebugMapErrorV1,
+    SemanticDebugMappingOutputV1, SemanticDebugMappingV1, SemanticDebugNodeV1,
+    SemanticDebugTransformationV1, SemanticDebugUnavailableReasonV1, VerifiedCanonicalKernelIrV7,
+    VerifiedCanonicalKernelIrV8, VerifiedCanonicalKernelIrV9,
+};
+use fe2o3_verifier::{
+    CompilerTargetLineageValidationErrorV1, ValidatedCompilerTargetLineageV1,
+    validate_compiler_proof_inputs_v4, validate_compiler_target_lineage_v1,
 };
 use object::{Object as _, ObjectSection as _};
 use sha2::{Digest, Sha256};
@@ -1644,23 +1662,24 @@ fn semantic_anchor_handoff_with_version(
     };
     let dialect = match profile {
         ProductionAmdTargetProfileV1::Gfx942 => {
-            lower_kernel_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1(
+            lower_compiler_module_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1(
                 target_bound.module(),
-                target_bound.kernel_id(),
                 anchor_identity,
             )
         }
         ProductionAmdTargetProfileV1::Gfx950 => {
-            lower_kernel_to_gfx950_xnack_minus_llvm_ir_with_semantic_anchors_v1(
+            lower_compiler_module_to_gfx950_xnack_minus_llvm_ir_with_semantic_anchors_v1(
                 target_bound.module(),
-                target_bound.kernel_id(),
                 anchor_identity,
             )
         }
     }
     .unwrap();
     let mut llvm = bind_production_llvm22_worker_layout_v1(&dialect).unwrap();
-    let entry = target_bound.kernel_id().as_str().to_owned();
+    let [kernel_id] = target_bound.kernel_ids() else {
+        panic!("semantic-anchor fixture must contain one kernel");
+    };
+    let entry = kernel_id.as_str().to_owned();
     let target = DeviceTargetV1::parse(profile.device_target()).unwrap();
     let descriptor_source = scalar_descriptor_source_for_target(&entry, target);
     append_descriptor_source_assembly(&mut llvm, descriptor_source.canonical_bytes());
@@ -3412,60 +3431,107 @@ fn capsule_bytes_with_semantic_to_llvm_and_version(
     receipts[4].0 = replay_kernel_ir_bytes(proof_inputs.kernel_ir(), replay_version);
     receipts[5].0 = proof_inputs.correspondence().to_vec();
     receipts[6].0 = proof_inputs.formal_memory().to_vec();
-    if let Some(profile) = replay_profile {
-        let neutral_module = match replay_version {
-            ProductionReplayKernelIrVersionV1::V8 => {
-                VerifiedCanonicalKernelIrV8::from_canonical_bytes_with_module(receipts[4].0.clone())
-                    .unwrap()
-                    .1
-            }
-            ProductionReplayKernelIrVersionV1::V9 => {
-                VerifiedCanonicalKernelIrV9::from_canonical_bytes_with_module(receipts[4].0.clone())
-                    .unwrap()
-                    .1
-            }
-        };
-        let target = bind_production_target_v1(&neutral_module, profile).unwrap();
-        let anchor_identity = match replay_version {
-            ProductionReplayKernelIrVersionV1::V8 => {
-                let owner =
-                    VerifiedCanonicalKernelIrV8::from_module(target.module().clone()).unwrap();
-                dialect_amdgcn::ProductionSemanticAnchorKirIdentityV1::from_v8(&owner)
-            }
-            ProductionReplayKernelIrVersionV1::V9 => {
-                let owner =
-                    VerifiedCanonicalKernelIrV9::from_module(target.module().clone()).unwrap();
-                dialect_amdgcn::ProductionSemanticAnchorKirIdentityV1::from_v9(&owner)
-            }
-        };
-        let dialect = match profile {
-            ProductionAmdTargetProfileV1::Gfx942 => {
-                lower_kernel_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1(
-                    target.module(),
-                    target.kernel_id(),
-                    anchor_identity,
-                )
-            }
-            ProductionAmdTargetProfileV1::Gfx950 => {
-                lower_kernel_to_gfx950_xnack_minus_llvm_ir_with_semantic_anchors_v1(
-                    target.module(),
-                    target.kernel_id(),
-                    anchor_identity,
-                )
-            }
+    let profile = replay_profile.unwrap_or(ProductionAmdTargetProfileV1::Gfx942);
+    let neutral_module = match replay_version {
+        ProductionReplayKernelIrVersionV1::V8 => {
+            VerifiedCanonicalKernelIrV8::from_canonical_bytes_with_module(receipts[4].0.clone())
+                .unwrap()
+                .1
         }
-        .unwrap();
-        let llvm = bind_production_llvm22_worker_layout_v1(&dialect).unwrap();
-        receipts[12].0 = CanonicalProductionKirToLlvmReplayEvidenceV1::from_live_inputs(
-            &receipts[4].0,
-            target.module(),
-            profile,
-            &llvm,
-        )
-        .unwrap()
-        .canonical_bytes()
-        .to_vec();
+        ProductionReplayKernelIrVersionV1::V9 => {
+            VerifiedCanonicalKernelIrV9::from_canonical_bytes_with_module(receipts[4].0.clone())
+                .unwrap()
+                .1
+        }
+    };
+    let target_bound = bind_production_target_v1(&neutral_module, profile).unwrap();
+    let anchor_identity = match replay_version {
+        ProductionReplayKernelIrVersionV1::V8 => {
+            let owner =
+                VerifiedCanonicalKernelIrV8::from_module(target_bound.module().clone()).unwrap();
+            dialect_amdgcn::ProductionSemanticAnchorKirIdentityV1::from_v8(&owner)
+        }
+        ProductionReplayKernelIrVersionV1::V9 => {
+            let owner =
+                VerifiedCanonicalKernelIrV9::from_module(target_bound.module().clone()).unwrap();
+            dialect_amdgcn::ProductionSemanticAnchorKirIdentityV1::from_v9(&owner)
+        }
+    };
+    let dialect_llvm = match profile {
+        ProductionAmdTargetProfileV1::Gfx942 => {
+            lower_compiler_module_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1(
+                target_bound.module(),
+                anchor_identity,
+            )
+        }
+        ProductionAmdTargetProfileV1::Gfx950 => {
+            lower_compiler_module_to_gfx950_xnack_minus_llvm_ir_with_semantic_anchors_v1(
+                target_bound.module(),
+                anchor_identity,
+            )
+        }
     }
+    .unwrap();
+    let pre_descriptor_llvm = bind_production_llvm22_worker_layout_v1(&dialect_llvm).unwrap();
+    let lowering = CanonicalProductionKirToLlvmReplayEvidenceV1::from_live_inputs(
+        &receipts[4].0,
+        target_bound.module(),
+        profile,
+        &pre_descriptor_llvm,
+    )
+    .unwrap();
+    let neutral_kir = TargetLineageIdentityV3::new(
+        lowering.neutral_kernel_ir_identity().sha256(),
+        lowering.neutral_kernel_ir_identity().byte_len(),
+    )
+    .unwrap();
+    let bound_kir = TargetLineageIdentityV3::new(
+        lowering.target_bound_kernel_ir_identity().sha256(),
+        lowering.target_bound_kernel_ir_identity().byte_len(),
+    )
+    .unwrap();
+    receipts[12].0 = lowering.canonical_bytes().to_vec();
+    receipts[8].0 = TargetBindingTranscriptV3::new(TargetBindingTranscriptInputsV3 {
+        protected_rustc_invocation: TargetLineageIdentityV3::new(
+            identity(INVOCATION_DIGEST_DOMAIN_V3, &invocation),
+            invocation.len() as u64,
+        )
+        .unwrap(),
+        semantic_mir: receipt_lineage_identity(&receipts, 2),
+        target_neutral_kir: neutral_kir,
+        target_bound_kir: bound_kir,
+        configured_target: profile.device_target(),
+        rustc_llvm_target: profile.rustc_target(),
+        target_cpu: profile.cpu(),
+        target_features: profile.rustc_features(),
+        code_object_version: 6,
+        wave_width_bits: 64,
+        default_workgroup: [64, 1, 1],
+    })
+    .unwrap()
+    .canonical_bytes()
+    .to_vec();
+    let semantic_layout = derive_semantic_target_layout_identity_v1(
+        profile.rustc_target(),
+        PRODUCTION_AMDHSA_RUSTC_DATA_LAYOUT_V1,
+        64,
+        profile.cpu(),
+        profile.rustc_features(),
+    )
+    .unwrap();
+    receipts[9].0 = DataLayoutTranscriptV3::new(DataLayoutTranscriptInputsV3 {
+        semantic_mir: receipt_lineage_identity(&receipts, 2),
+        target_binding: receipt_lineage_identity(&receipts, 8),
+        semantic_layout,
+        rustc_llvm_target: profile.rustc_target(),
+        live_rustc_data_layout: PRODUCTION_AMDHSA_RUSTC_DATA_LAYOUT_V1,
+        final_llvm_target: profile.rustc_target(),
+        final_llvm_data_layout: PRODUCTION_AMDHSA_LLVM22_WORKER_DATA_LAYOUT_V1,
+        default_pointer_width_bits: 64,
+    })
+    .unwrap()
+    .canonical_bytes()
+    .to_vec();
     let hsaco = handoff
         .module_bytes()
         .windows(RAW_HSACO_MARKER.len())
@@ -3491,9 +3557,6 @@ fn capsule_bytes_with_semantic_to_llvm_and_version(
     let verus_execution = canonical_verus_execution_evidence_v1(&receipts[3].0, seed);
     receipts[7].0 = proof_binding_association_payload(&receipts, &verus_execution);
     receipts[11].0 = handoff.symbol_manifest().canonical_bytes().to_vec();
-    if let Some(semantic_to_llvm) = semantic_to_llvm {
-        receipts[13].0 = semantic_to_llvm.to_vec();
-    }
     match lineage_mutation {
         DescriptorLineageMutation::Exact => {}
         DescriptorLineageMutation::DifferentCanonicalSource => {
@@ -3514,6 +3577,33 @@ fn capsule_bytes_with_semantic_to_llvm_and_version(
         final_commitment.canonical_bytes().to_vec(),
         FINAL_RECEIPT_DOMAIN_V3,
     ));
+    if let Some(semantic_to_llvm) = semantic_to_llvm {
+        receipts[13].0 = semantic_to_llvm.to_vec();
+    } else {
+        receipts[13].0 =
+            SemanticToLlvmAssociationTranscriptV3::new(SemanticToLlvmAssociationInputsV3 {
+                semantic_mir: receipt_lineage_identity(&receipts, 2),
+                middle_end: receipt_lineage_identity(&receipts, 3),
+                kernel_ir: receipt_lineage_identity(&receipts, 4),
+                mir_to_kir_correspondence: receipt_lineage_identity(&receipts, 5),
+                formal_memory: receipt_lineage_identity(&receipts, 6),
+                proof_binding: receipt_lineage_identity(&receipts, 7),
+                target_binding: receipt_lineage_identity(&receipts, 8),
+                data_layout: receipt_lineage_identity(&receipts, 9),
+                abi: receipt_lineage_identity(&receipts, 10),
+                export_manifest: receipt_lineage_identity(&receipts, 11),
+                amdgpu_lowering: receipt_lineage_identity(&receipts, 12),
+                final_llvm: TargetLineageIdentityV3::new(
+                    Sha256::digest(handoff.module_bytes()).into(),
+                    handoff.module_bytes().len() as u64,
+                )
+                .unwrap(),
+                final_compiler_module_commitment: receipt_lineage_identity(&receipts, 14),
+            })
+            .unwrap()
+            .canonical_bytes()
+            .to_vec();
+    }
     let capsule_target = handoff.target().to_string();
     let total_len = 24
         + 4
@@ -3544,6 +3634,291 @@ fn capsule_bytes_with_semantic_to_llvm_and_version(
     capsule.extend_from_slice(&capsule_identity);
     assert_eq!(capsule.len(), total_len);
     capsule
+}
+
+fn receipt_lineage_identity(
+    receipts: &[(Vec<u8>, &[u8])],
+    index: usize,
+) -> TargetLineageIdentityV3 {
+    let (payload, domain) = &receipts[index];
+    TargetLineageIdentityV3::new(identity(domain, payload), payload.len() as u64).unwrap()
+}
+
+#[derive(Clone, Copy)]
+enum TargetLineageSubstitution {
+    TargetBinding,
+    AmdgpuLowering,
+    SemanticToLlvm,
+}
+
+fn capsule_with_target_lineage_substitution(
+    source: &InertProductionSemanticCapsuleV3,
+    replacement: &InertProductionSemanticCapsuleV3,
+    substitution: TargetLineageSubstitution,
+) -> InertProductionSemanticCapsuleV3 {
+    let source_receipts = source.receipts();
+    let replacement_receipts = replacement.receipts();
+    let target_binding = if matches!(substitution, TargetLineageSubstitution::TargetBinding) {
+        replacement_receipts.target_binding()
+    } else {
+        source_receipts.target_binding()
+    };
+    let amdgpu_lowering = if matches!(substitution, TargetLineageSubstitution::AmdgpuLowering) {
+        replacement_receipts.amdgpu_lowering()
+    } else {
+        source_receipts.amdgpu_lowering()
+    };
+    let semantic_to_llvm = if matches!(substitution, TargetLineageSubstitution::SemanticToLlvm) {
+        replacement_receipts.semantic_to_llvm()
+    } else {
+        source_receipts.semantic_to_llvm()
+    };
+    let receipts = OrderedInertSemanticLineageReceiptsV3::new(
+        InertRustcIdentityInventoryReceiptV3::from_canonical_preimage(
+            source_receipts
+                .rustc_identity_inventory()
+                .canonical_preimage()
+                .to_vec(),
+        )
+        .unwrap(),
+        InertRustcPreflightPlanReceiptV3::from_canonical_preimage(
+            source_receipts
+                .rustc_preflight_plan()
+                .canonical_preimage()
+                .to_vec(),
+        )
+        .unwrap(),
+        InertCanonicalSemanticMirReceiptV3::from_canonical_preimage(
+            source_receipts.semantic_mir().canonical_preimage().to_vec(),
+        )
+        .unwrap(),
+        InertMiddleEndReceiptV3::from_canonical_preimage(
+            source_receipts.middle_end().canonical_preimage().to_vec(),
+        )
+        .unwrap(),
+        InertKernelIrReceiptV3::from_canonical_preimage(
+            source_receipts.kernel_ir().canonical_preimage().to_vec(),
+        )
+        .unwrap(),
+        InertMirToKirCorrespondenceReceiptV3::from_canonical_preimage(
+            source_receipts
+                .mir_to_kir_correspondence()
+                .canonical_preimage()
+                .to_vec(),
+        )
+        .unwrap(),
+        InertFormalMemoryReceiptV3::from_canonical_preimage(
+            source_receipts
+                .formal_memory()
+                .canonical_preimage()
+                .to_vec(),
+        )
+        .unwrap(),
+        InertProofBindingReceiptV3::from_canonical_preimage(
+            source_receipts
+                .proof_binding()
+                .canonical_preimage()
+                .to_vec(),
+        )
+        .unwrap(),
+        InertTargetBindingReceiptV3::from_canonical_preimage(
+            target_binding.canonical_preimage().to_vec(),
+        )
+        .unwrap(),
+        InertDataLayoutReceiptV3::from_canonical_preimage(
+            source_receipts.data_layout().canonical_preimage().to_vec(),
+        )
+        .unwrap(),
+        InertAbiReceiptV3::from_canonical_preimage(
+            source_receipts.abi().canonical_preimage().to_vec(),
+        )
+        .unwrap(),
+        InertExportManifestReceiptV3::from_canonical_preimage(
+            source_receipts
+                .export_manifest()
+                .canonical_preimage()
+                .to_vec(),
+        )
+        .unwrap(),
+        InertAmdgpuLoweringReceiptV3::from_canonical_preimage(
+            amdgpu_lowering.canonical_preimage().to_vec(),
+        )
+        .unwrap(),
+        InertSemanticToLlvmReceiptV3::from_canonical_preimage(
+            semantic_to_llvm.canonical_preimage().to_vec(),
+        )
+        .unwrap(),
+        InertFinalCompilerModuleCommitmentReceiptV3::from_canonical_preimage(
+            source_receipts
+                .final_compiler_module_commitment()
+                .canonical_preimage()
+                .to_vec(),
+        )
+        .unwrap(),
+    );
+    InertProductionSemanticCapsuleV3::new(source.invocation().clone(), source.target(), receipts)
+        .unwrap()
+}
+
+fn validate_fixture_target_lineage(
+    capsule: &InertProductionSemanticCapsuleV3,
+) -> Result<ValidatedCompilerTargetLineageV1, CompilerTargetLineageValidationErrorV1> {
+    let receipts = capsule.receipts();
+    let proof_inputs = validate_compiler_proof_inputs_v4(
+        receipts.proof_binding(),
+        receipts.semantic_mir(),
+        receipts.middle_end(),
+        receipts.kernel_ir(),
+        receipts.mir_to_kir_correspondence(),
+        receipts.formal_memory(),
+    )
+    .unwrap();
+    validate_compiler_target_lineage_v1(capsule, &proof_inputs).map(|lineage| {
+        assert!(lineage.has_exact_receipt_association());
+        assert!(lineage.has_exact_kir_to_llvm_replay());
+        assert!(!lineage.establishes_semantic_refinement());
+        assert!(!lineage.establishes_llvm_to_machine_refinement());
+        assert!(!lineage.authenticates_producer());
+        assert!(!lineage.grants_runtime_authority());
+        lineage
+    })
+}
+
+#[test]
+fn singleton_target_lineage_accepts_semantic_debug_receipt_extensions() {
+    for fixture in [
+        OptionalSemanticDebugFixture::Unavailable(
+            ProductionSemanticDebugProducerGapV1::SourceMapUnavailable,
+        ),
+        OptionalSemanticDebugFixture::Available,
+    ] {
+        let outer = outer_for_kernels_with_optional_semantic_debug(
+            0x20,
+            0x11,
+            &[],
+            &[("vecadd", "vecadd.kd")],
+            DescriptorLineageMutation::Exact,
+            fixture,
+        );
+        let capsule = outer.capsule();
+        let receipt = capsule.receipts().semantic_to_llvm();
+        let extension = ProductionSemanticDebugReceiptExtensionV1::from_canonical_bytes(
+            receipt.canonical_preimage(),
+        )
+        .unwrap();
+        let lineage = validate_fixture_target_lineage(capsule).unwrap();
+
+        assert_eq!(
+            lineage.semantic_to_llvm_association_bytes(),
+            extension.association_v3()
+        );
+        assert_eq!(
+            lineage.semantic_to_llvm().canonical_bytes(),
+            extension.association_v3()
+        );
+        assert_eq!(
+            lineage.semantic_to_llvm_receipt_identity().sha256(),
+            *receipt.identity().sha256()
+        );
+        assert_eq!(
+            lineage.semantic_to_llvm_receipt_identity().byte_len(),
+            receipt.identity().byte_len()
+        );
+    }
+}
+
+#[test]
+fn singleton_target_lineage_rejects_malformed_semantic_debug_receipt_extension() {
+    let handoff = module_handoff_for_kernels(0x11, &[], &[("vecadd", "vecadd.kd")]);
+    let base = InertProductionSemanticCapsuleV3::decode(&capsule_bytes_with_semantic_to_llvm(
+        0x20,
+        &handoff,
+        DescriptorLineageMutation::Exact,
+        None,
+        Some(ProductionAmdTargetProfileV1::Gfx942),
+        None,
+    ))
+    .unwrap();
+    let association = SemanticToLlvmAssociationTranscriptV3::decode(
+        base.receipts().semantic_to_llvm().canonical_preimage(),
+    )
+    .unwrap();
+    let carrier = ProductionSemanticDebugCarrierV1::new(
+        association.canonical_bytes(),
+        ProductionSemanticDebugAvailabilityV1::Unavailable(
+            ProductionSemanticDebugProducerGapV1::SourceMapUnavailable,
+        ),
+    )
+    .unwrap();
+    let mut malformed =
+        ProductionSemanticDebugReceiptExtensionV1::new(association.canonical_bytes(), carrier)
+            .unwrap()
+            .canonical_bytes()
+            .to_vec();
+    malformed.push(0);
+    let hostile = InertProductionSemanticCapsuleV3::decode(&capsule_bytes_with_semantic_to_llvm(
+        0x20,
+        &handoff,
+        DescriptorLineageMutation::Exact,
+        Some(&malformed),
+        Some(ProductionAmdTargetProfileV1::Gfx942),
+        None,
+    ))
+    .unwrap();
+
+    assert!(matches!(
+        validate_fixture_target_lineage(&hostile),
+        Err(
+            CompilerTargetLineageValidationErrorV1::SemanticDebugExtension(
+                ProductionSemanticDebugFragmentErrorV1::InvalidEncoding
+            )
+        )
+    ));
+}
+
+#[test]
+fn singleton_target_lineage_rejects_cross_spliced_semantic_debug_receipt_extension() {
+    let outer = outer_for_kernels_with_optional_semantic_debug(
+        0x20,
+        0x11,
+        &[],
+        &[("vecadd", "vecadd.kd")],
+        DescriptorLineageMutation::Exact,
+        OptionalSemanticDebugFixture::UnavailableCrossSpliced,
+    );
+
+    assert!(matches!(
+        validate_fixture_target_lineage(outer.capsule()),
+        Err(CompilerTargetLineageValidationErrorV1::IdentityMismatch {
+            field: "semantic MIR"
+        })
+    ));
+}
+
+#[test]
+fn singleton_target_lineage_rejects_rehashed_cross_compilation_splices() {
+    let handoff = module_handoff_for_kernels(0x11, &[], &[("vecadd", "vecadd.kd")]);
+    let first = InertProductionSemanticCapsuleV3::decode(&capsule_bytes(
+        0x20,
+        &handoff,
+        DescriptorLineageMutation::Exact,
+    ))
+    .unwrap();
+    let second = InertProductionSemanticCapsuleV3::decode(&capsule_bytes(
+        0x40,
+        &handoff,
+        DescriptorLineageMutation::Exact,
+    ))
+    .unwrap();
+    drop(validate_fixture_target_lineage(&first).unwrap());
+    for substitution in [
+        TargetLineageSubstitution::TargetBinding,
+        TargetLineageSubstitution::AmdgpuLowering,
+        TargetLineageSubstitution::SemanticToLlvm,
+    ] {
+        let hostile = capsule_with_target_lineage_substitution(&first, &second, substitution);
+        assert!(validate_fixture_target_lineage(&hostile).is_err());
+    }
 }
 
 fn hex_encode(bytes: &[u8]) -> String {

@@ -968,6 +968,50 @@ fn volatile_and_copy_contracts_retain_effects_and_overlap_obligation() {
 }
 
 #[test]
+fn semantic_memory_reads_reject_write_only_while_stores_accept_it() {
+    let element = MemoryElementType::Scalar(ScalarType::U32);
+    let write_only = Some(pointer(
+        element,
+        AddressSpace::Global,
+        AccessMode::WriteOnly,
+    ));
+    let load = MemoryIntrinsicOperation::VolatileLoad {
+        pointer: ValueId(0),
+        element,
+        address_space: AddressSpace::Global,
+        layout: element.expected_layout(),
+        contract: VolatileAccessContract::rust_allocation_load(),
+    };
+    assert!(
+        load.verify(SemanticOperationVerificationContext {
+            operands: &load.operands(),
+            results: &[ValueDef::new(ValueId(2), element.ir_type())],
+            operand_types: std::slice::from_ref(&write_only),
+        })
+        .iter()
+        .any(|issue| issue.kind == SemanticOperationIssueKind::InvalidOperandType)
+    );
+
+    let store = MemoryIntrinsicOperation::VolatileStore {
+        pointer: ValueId(0),
+        value: ValueId(1),
+        element,
+        address_space: AddressSpace::Global,
+        layout: element.expected_layout(),
+        contract: VolatileAccessContract::rust_allocation_store(),
+    };
+    assert!(
+        store
+            .verify(SemanticOperationVerificationContext {
+                operands: &store.operands(),
+                results: &[],
+                operand_types: &[write_only, Some(element.ir_type())],
+            })
+            .is_empty()
+    );
+}
+
+#[test]
 fn volatile_origins_are_distinct_and_access_obligations_fail_closed() {
     let rust = SemanticOperationInstanceId::volatile_load(
         MemoryElementType::Scalar(ScalarType::U32),
