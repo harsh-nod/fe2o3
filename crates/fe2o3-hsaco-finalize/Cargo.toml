@@ -40,6 +40,7 @@ bench = false
 
 [dev-dependencies]
 ed25519-dalek = { version = "=2.2.0", default-features = false, features = ["fast", "zeroize"] }
+fe2o3-amd-target.workspace = true
 fe2o3-compiler-api.workspace = true
 fe2o3-compiler-lineage.workspace = true
 fe2o3-functional-proof.workspace = true

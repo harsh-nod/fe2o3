@@ -49,6 +49,7 @@ sha2.workspace = true
 syn = { workspace = true, features = ["visit"] }
 
 [dev-dependencies]
+dialect-amdgcn.workspace = true
 ed25519-dalek = { version = "=2.2.0", default-features = false, features = ["fast", "zeroize"] }
 fe2o3-artifact-transaction = { workspace = true, features = ["test-hooks"] }
 fe2o3-compiler-lineage.workspace = true
