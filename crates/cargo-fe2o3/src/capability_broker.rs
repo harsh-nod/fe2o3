@@ -45,7 +45,8 @@ mod platform {
     use fe2o3_artifact_transaction::{
         BROKERED_INVOCATION_ADMITTED_V1, BROKERED_INVOCATION_PREPARED_V1,
         BROKERED_INVOCATION_REQUEST_BYTES_V1, BROKERED_INVOCATION_REQUEST_BYTES_V2,
-        BrokeredInvocationCapabilityRequestV1, BrokeredInvocationCapabilityRequestV2, BuildSession,
+        BrokeredInvocationCapabilityRequestV1, BrokeredInvocationCapabilityRequestV2, BuildAttempt,
+        BuildSession,
     };
     use fe2o3_process_identity::LinuxObjectIdentityV3;
     use rustix::net::{
@@ -1193,6 +1194,7 @@ mod platform {
         stream: UnixStream,
         config_identity: [u8; 32],
         unit_identity: [u8; 32],
+        attempt: BuildAttempt,
     }
 
     impl BrokeredInvocationAuthorityV1 {
@@ -1217,10 +1219,12 @@ mod platform {
             self,
             config_identity: [u8; 32],
             unit_identity: [u8; 32],
+            attempt: BuildAttempt,
         ) -> Result<SourceIsaObservationSinkV1, String> {
             let request = BrokeredInvocationCapabilityRequestV2::release_with_source_isa_observer(
                 config_identity,
                 unit_identity,
+                attempt,
             )
             .map_err(|error| error.to_string())?;
             let mut stream = self.stream;
@@ -1231,6 +1235,7 @@ mod platform {
                 stream,
                 config_identity,
                 unit_identity,
+                attempt,
             })
         }
 
@@ -1257,7 +1262,10 @@ mod platform {
     impl SourceIsaObservationSinkV1 {
         pub(crate) fn submit(mut self, frame: &SourceIsaObservationFrameV1) -> Result<(), String> {
             let context = frame.context();
-            if context.config() != self.config_identity || context.unit() != self.unit_identity {
+            if context.config() != self.config_identity
+                || context.unit() != self.unit_identity
+                || context.attempt() != self.attempt
+            {
                 return Err(
                     "source/ISA observation frame differs from its authenticated sink".to_owned(),
                 );
@@ -1614,17 +1622,18 @@ mod platform {
                         "source/ISA observer request is not bound to the exact configured unit",
                     ));
                 }
+                if request.attempt().session() != self.session {
+                    return Err(io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        "source/ISA observer request is not bound to this build session",
+                    ));
+                }
                 let mut encoded = [0; SOURCE_ISA_OBSERVATION_FRAME_BYTES_V1];
                 liveness.read_frame(stream, &mut encoded)?;
                 liveness.require_eof(stream)?;
                 let frame = SourceIsaObservationFrameV1::decode(&encoded)
                     .map_err(|error| io::Error::new(io::ErrorKind::PermissionDenied, error))?;
-                if frame.context().attempt().session() != self.session {
-                    return Err(io::Error::new(
-                        io::ErrorKind::PermissionDenied,
-                        "source/ISA observation attempt is not bound to this build session",
-                    ));
-                }
+                validate_source_isa_observer_frame_binding(self.session, request, &frame)?;
                 observer.collect(frame)
             })();
             if result.is_err() {
@@ -1632,6 +1641,25 @@ mod platform {
             }
             result
         }
+    }
+
+    fn validate_source_isa_observer_frame_binding(
+        broker_session: BuildSession,
+        request: BrokeredInvocationCapabilityRequestV2,
+        frame: &SourceIsaObservationFrameV1,
+    ) -> io::Result<()> {
+        let context = frame.context();
+        if request.attempt().session() != broker_session
+            || context.config() != request.config_identity()
+            || context.unit() != request.unit_identity()
+            || context.attempt() != request.attempt()
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "source/ISA observation frame differs from its exact authenticated request",
+            ));
+        }
+        Ok(())
     }
 
     enum BrokerInvocationRequest {
@@ -2049,18 +2077,35 @@ mod platform {
             read_invocation_request(liveness(), &reader)
         }
 
+        fn attempt(generation: u64, session: [u8; 16], invocation: [u8; 32]) -> BuildAttempt {
+            BuildAttempt::new(
+                generation,
+                BuildSession::from_bytes(session),
+                BuildInvocation::from_bytes(invocation),
+            )
+            .unwrap()
+        }
+
+        fn frame_with_context(
+            config: [u8; 32],
+            unit: [u8; 32],
+            attempt: BuildAttempt,
+            outcome: SourceIsaObservationOutcomeV1,
+        ) -> SourceIsaObservationFrameV1 {
+            SourceIsaObservationFrameV1::new(
+                SourceIsaObservationContextV1::new(config, unit, attempt, [0x33; 32]).unwrap(),
+                outcome,
+            )
+        }
+
         fn frame(
             unit: [u8; 32],
             outcome: SourceIsaObservationOutcomeV1,
         ) -> SourceIsaObservationFrameV1 {
-            let attempt = BuildAttempt::new(
-                3,
-                BuildSession::from_bytes([0x31; 16]),
-                BuildInvocation::from_bytes([0x32; 32]),
-            )
-            .unwrap();
-            SourceIsaObservationFrameV1::new(
-                SourceIsaObservationContextV1::new([0x30; 32], unit, attempt, [0x33; 32]).unwrap(),
+            frame_with_context(
+                [0x30; 32],
+                unit,
+                attempt(3, [0x31; 16], [0x32; 32]),
                 outcome,
             )
         }
@@ -2074,7 +2119,9 @@ mod platform {
             ));
 
             let expected = BrokeredInvocationCapabilityRequestV2::release_with_source_isa_observer(
-                [0x30; 32], [0x40; 32],
+                [0x30; 32],
+                [0x40; 32],
+                attempt(3, [0x31; 16], [0x32; 32]),
             )
             .unwrap();
             assert!(matches!(
@@ -2091,7 +2138,9 @@ mod platform {
                     .encode()
                     .to_vec(),
                 BrokeredInvocationCapabilityRequestV2::release_with_source_isa_observer(
-                    [0x30; 32], [0x40; 32],
+                    [0x30; 32],
+                    [0x40; 32],
+                    attempt(3, [0x31; 16], [0x32; 32]),
                 )
                 .unwrap()
                 .encode()
@@ -2105,6 +2154,111 @@ mod platform {
                     );
                 }
             }
+        }
+
+        #[test]
+        fn observer_frame_requires_exact_request_config_unit_and_attempt() {
+            let broker_session = BuildSession::from_bytes([0x31; 16]);
+            let exact_attempt = attempt(3, [0x31; 16], [0x32; 32]);
+            let request = BrokeredInvocationCapabilityRequestV2::release_with_source_isa_observer(
+                [0x30; 32],
+                [0x40; 32],
+                exact_attempt,
+            )
+            .unwrap();
+            let selected_units = vec![[0x40; 32], [0x41; 32]];
+            let observer = BrokerSourceIsaObserverV1 {
+                config_identity: [0x30; 32],
+                selected_units: selected_units.clone(),
+                collector: Arc::new(Mutex::new(
+                    SourceIsaObservationCollectorStateV1::with_expected_units(&selected_units)
+                        .unwrap(),
+                )),
+            };
+            assert!(observer.accepts(request));
+            assert!(
+                observer.accepts(
+                    BrokeredInvocationCapabilityRequestV2::release_with_source_isa_observer(
+                        [0x30; 32],
+                        [0x41; 32],
+                        exact_attempt,
+                    )
+                    .unwrap()
+                )
+            );
+            let outcome = SourceIsaObservationOutcomeV1::Unavailable(
+                SourceIsaObservationUnavailableReasonV1::SourceProjectionForKirV9,
+            );
+            let exact_frame = frame_with_context([0x30; 32], [0x40; 32], exact_attempt, outcome);
+            assert!(
+                validate_source_isa_observer_frame_binding(broker_session, request, &exact_frame,)
+                    .is_ok()
+            );
+
+            for substituted in [
+                frame_with_context([0x35; 32], [0x40; 32], exact_attempt, outcome),
+                // A different configured unit must not substitute for the request's exact unit.
+                frame_with_context([0x30; 32], [0x41; 32], exact_attempt, outcome),
+                frame_with_context(
+                    [0x30; 32],
+                    [0x40; 32],
+                    attempt(4, [0x31; 16], [0x32; 32]),
+                    outcome,
+                ),
+                frame_with_context(
+                    [0x30; 32],
+                    [0x40; 32],
+                    attempt(3, [0x31; 16], [0x36; 32]),
+                    outcome,
+                ),
+            ] {
+                assert!(
+                    validate_source_isa_observer_frame_binding(
+                        broker_session,
+                        request,
+                        &substituted,
+                    )
+                    .is_err()
+                );
+            }
+
+            for substituted_attempt in [
+                attempt(4, [0x31; 16], [0x32; 32]),
+                attempt(3, [0x31; 16], [0x36; 32]),
+            ] {
+                let substituted_request =
+                    BrokeredInvocationCapabilityRequestV2::release_with_source_isa_observer(
+                        [0x30; 32],
+                        [0x40; 32],
+                        substituted_attempt,
+                    )
+                    .unwrap();
+                assert!(
+                    validate_source_isa_observer_frame_binding(
+                        broker_session,
+                        substituted_request,
+                        &exact_frame,
+                    )
+                    .is_err()
+                );
+            }
+
+            let wrong_session_attempt = attempt(3, [0x37; 16], [0x32; 32]);
+            let wrong_session_request =
+                BrokeredInvocationCapabilityRequestV2::release_with_source_isa_observer(
+                    [0x30; 32],
+                    [0x40; 32],
+                    wrong_session_attempt,
+                )
+                .unwrap();
+            assert!(
+                validate_source_isa_observer_frame_binding(
+                    broker_session,
+                    wrong_session_request,
+                    &frame_with_context([0x30; 32], [0x40; 32], wrong_session_attempt, outcome,),
+                )
+                .is_err()
+            );
         }
 
         #[test]
@@ -2170,7 +2324,9 @@ pub(crate) use platform::*;
 mod unsupported {
     use std::fmt;
 
-    use fe2o3_artifact_transaction::{BrokeredInvocationCapabilityClaimV1, BuildSession};
+    use fe2o3_artifact_transaction::{
+        BrokeredInvocationCapabilityClaimV1, BuildAttempt, BuildSession,
+    };
 
     use crate::build_config::ProductionSourceIsaObserverPolicyV1;
     use crate::cargo_invocation_boundary::InvocationAuthorizationRegistryV1;
@@ -2300,6 +2456,7 @@ mod unsupported {
             self,
             _config_identity: [u8; 32],
             _unit_identity: [u8; 32],
+            _attempt: BuildAttempt,
         ) -> Result<SourceIsaObservationSinkV1, String> {
             Err("Cargo capability transport requires Linux".to_owned())
         }

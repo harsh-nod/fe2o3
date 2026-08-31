@@ -24,7 +24,7 @@ pub const BROKERED_CODEGEN_BACKEND_PATH_V1: &str = "/proc/./self/fd/198";
 /// Exact byte length of one brokered invocation-capability request.
 pub const BROKERED_INVOCATION_REQUEST_BYTES_V1: usize = HEADER_BYTES_V1 + 8 + 16 + 32 + 32;
 /// Exact byte length of the opt-in source/ISA observer release request.
-pub const BROKERED_INVOCATION_REQUEST_BYTES_V2: usize = HEADER_BYTES_V2 + 32 + 32;
+pub const BROKERED_INVOCATION_REQUEST_BYTES_V2: usize = HEADER_BYTES_V2 + 32 + 32 + 8 + 16 + 32;
 /// Exact response acknowledging that the authenticated wrapper prepared a claim.
 pub const BROKERED_INVOCATION_PREPARED_V1: &[u8; 16] = b"F2IV-PREPARED-V1";
 /// Exact response consuming the wrapper-prepared claim in its rustc child.
@@ -182,6 +182,8 @@ pub enum BrokeredInvocationCapabilityRequestV2 {
         config_identity: [u8; 32],
         /// Exact selected compilation-unit identity derived from that configuration.
         unit_identity: [u8; 32],
+        /// Exact non-direct managed build attempt that will produce the observation.
+        attempt: BuildAttempt,
     },
 }
 
@@ -190,13 +192,18 @@ impl BrokeredInvocationCapabilityRequestV2 {
     pub fn release_with_source_isa_observer(
         config_identity: [u8; 32],
         unit_identity: [u8; 32],
+        attempt: BuildAttempt,
     ) -> Result<Self, BrokeredInvocationCapabilityCodecErrorV2> {
-        if config_identity == [0; 32] || unit_identity == [0; 32] {
+        if config_identity == [0; 32]
+            || unit_identity == [0; 32]
+            || attempt.session() == BuildSession::DIRECT
+        {
             return Err(BrokeredInvocationCapabilityCodecErrorV2::InvalidClaim);
         }
         Ok(Self::ReleaseWithSourceIsaObserver {
             config_identity,
             unit_identity,
+            attempt,
         })
     }
 
@@ -208,9 +215,18 @@ impl BrokeredInvocationCapabilityRequestV2 {
         let Self::ReleaseWithSourceIsaObserver {
             config_identity,
             unit_identity,
+            attempt,
         } = self;
-        encoded[HEADER_BYTES_V2..HEADER_BYTES_V2 + 32].copy_from_slice(&config_identity);
-        encoded[HEADER_BYTES_V2 + 32..].copy_from_slice(&unit_identity);
+        let mut offset = HEADER_BYTES_V2;
+        encoded[offset..offset + 32].copy_from_slice(&config_identity);
+        offset += 32;
+        encoded[offset..offset + 32].copy_from_slice(&unit_identity);
+        offset += 32;
+        encoded[offset..offset + 8].copy_from_slice(&attempt.generation().to_le_bytes());
+        offset += 8;
+        encoded[offset..offset + 16].copy_from_slice(attempt.session().as_bytes());
+        offset += 16;
+        encoded[offset..offset + 32].copy_from_slice(attempt.invocation().as_bytes());
         encoded
     }
 
@@ -225,14 +241,35 @@ impl BrokeredInvocationCapabilityRequestV2 {
         {
             return Err(BrokeredInvocationCapabilityCodecErrorV2::Malformed);
         }
-        Self::release_with_source_isa_observer(
-            encoded[HEADER_BYTES_V2..HEADER_BYTES_V2 + 32]
+        let mut offset = HEADER_BYTES_V2;
+        let config_identity = encoded[offset..offset + 32]
+            .try_into()
+            .expect("fixed config identity field");
+        offset += 32;
+        let unit_identity = encoded[offset..offset + 32]
+            .try_into()
+            .expect("fixed unit identity field");
+        offset += 32;
+        let generation = u64::from_le_bytes(
+            encoded[offset..offset + 8]
                 .try_into()
-                .expect("fixed config identity field"),
-            encoded[HEADER_BYTES_V2 + 32..]
+                .expect("fixed generation field"),
+        );
+        offset += 8;
+        let session = BuildSession::from_bytes(
+            encoded[offset..offset + 16]
                 .try_into()
-                .expect("fixed unit identity field"),
-        )
+                .expect("fixed session field"),
+        );
+        offset += 16;
+        let invocation = BuildInvocation::from_bytes(
+            encoded[offset..offset + 32]
+                .try_into()
+                .expect("fixed invocation field"),
+        );
+        let attempt = BuildAttempt::new(generation, session, invocation)
+            .map_err(|_| BrokeredInvocationCapabilityCodecErrorV2::InvalidClaim)?;
+        Self::release_with_source_isa_observer(config_identity, unit_identity, attempt)
     }
 
     /// Returns the exact configuration identity carried by this request.
@@ -248,6 +285,12 @@ impl BrokeredInvocationCapabilityRequestV2 {
         let Self::ReleaseWithSourceIsaObserver { unit_identity, .. } = self;
         unit_identity
     }
+
+    /// Returns the exact non-direct managed build attempt carried by this request.
+    pub const fn attempt(self) -> BuildAttempt {
+        let Self::ReleaseWithSourceIsaObserver { attempt, .. } = self;
+        attempt
+    }
 }
 
 /// Canonical V2 brokered invocation request failure.
@@ -255,7 +298,7 @@ impl BrokeredInvocationCapabilityRequestV2 {
 pub enum BrokeredInvocationCapabilityCodecErrorV2 {
     /// The request has invalid framing, tags, reserved bytes, or length.
     Malformed,
-    /// The request has a zero configuration or selected-unit identity.
+    /// The request has a zero identity or direct/malformed build attempt.
     InvalidClaim,
 }
 
@@ -326,11 +369,13 @@ mod tests {
         assert!(release[9..].iter().all(|byte| *byte == 0));
 
         let request = BrokeredInvocationCapabilityRequestV2::release_with_source_isa_observer(
-            [0x31; 32], [0x42; 32],
+            [0x31; 32],
+            [0x42; 32],
+            claim().attempt(),
         )
         .unwrap();
         let encoded = request.encode();
-        assert_eq!(BROKERED_INVOCATION_REQUEST_BYTES_V2, 80);
+        assert_eq!(BROKERED_INVOCATION_REQUEST_BYTES_V2, 136);
         assert_eq!(&encoded[..8], b"F2BRKIV2");
         assert_eq!(
             BrokeredInvocationCapabilityRequestV2::decode(&encoded),
@@ -338,24 +383,38 @@ mod tests {
         );
         assert_eq!(request.config_identity(), [0x31; 32]);
         assert_eq!(request.unit_identity(), [0x42; 32]);
+        assert_eq!(request.attempt(), claim().attempt());
     }
 
     #[test]
     fn v2_request_rejects_zero_claims_and_every_single_byte_mutation() {
         assert!(
             BrokeredInvocationCapabilityRequestV2::release_with_source_isa_observer(
-                [0; 32], [1; 32]
+                [0; 32],
+                [1; 32],
+                claim().attempt()
             )
             .is_err()
         );
         assert!(
             BrokeredInvocationCapabilityRequestV2::release_with_source_isa_observer(
-                [1; 32], [0; 32]
+                [1; 32],
+                [0; 32],
+                claim().attempt()
+            )
+            .is_err()
+        );
+        let direct = BuildAttempt::new(1, BuildSession::DIRECT, BuildInvocation::DIRECT).unwrap();
+        assert!(
+            BrokeredInvocationCapabilityRequestV2::release_with_source_isa_observer(
+                [1; 32], [2; 32], direct
             )
             .is_err()
         );
         let request = BrokeredInvocationCapabilityRequestV2::release_with_source_isa_observer(
-            [0x31; 32], [0x42; 32],
+            [0x31; 32],
+            [0x42; 32],
+            claim().attempt(),
         )
         .unwrap();
         let encoded = request.encode();
