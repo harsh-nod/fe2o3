@@ -687,10 +687,13 @@ fn run_bounded_command(command: &mut Command) -> Result<BoundedCommandOutputV1, 
     };
     let pipe_deadline = Instant::now() + PIPE_CLOSE_TIMEOUT;
     while !stderr_closed {
-        let state = drain_nonblocking_stderr(&mut stderr, &mut retained).map_err(|error| {
-            kill_process_group(process_group);
-            error
-        })?;
+        let state = match drain_nonblocking_stderr(&mut stderr, &mut retained) {
+            Ok(state) => state,
+            Err(error) => {
+                kill_process_group(process_group);
+                return Err(error);
+            }
+        };
         match state {
             StderrDrainStateV1::Open => {}
             StderrDrainStateV1::Closed => {
