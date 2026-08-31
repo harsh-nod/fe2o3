@@ -159,6 +159,18 @@ pub fn prepare_compiler_execution_qualification_v1(
     )
 }
 
+pub(super) fn verify_empty_qualification_parent_v1(
+    qualification_parent: &Path,
+) -> Result<(), DeploymentVerificationErrorV1> {
+    if rustix::process::geteuid().as_raw() != 0 {
+        return Err(invalid(
+            DeploymentVerificationErrorKindV1::InsufficientPrivilege,
+            "qualification-parent cleanup verification requires effective UID 0",
+        ));
+    }
+    open_qualification_parent_with_children(qualification_parent, (0, 0), &[]).map(drop)
+}
+
 #[cfg(test)]
 pub(super) fn prepare_compiler_execution_qualification_for_test_v1(
     installed: InstalledCompilerExecutionDeploymentV1,

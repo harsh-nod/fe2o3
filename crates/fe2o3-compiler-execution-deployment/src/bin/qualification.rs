@@ -1,10 +1,12 @@
 use std::path::Path;
 
 use fe2o3_compiler_execution_deployment::{
-    probe_compiler_execution_qualification_host_v1, run_compiler_execution_mount_qualification_v1,
+    CompilerExecutionMountQualificationRequestV1, QualificationMountFaultPointV1,
+    probe_compiler_execution_qualification_host_v1, run_compiler_execution_mount_fault_v1,
+    run_compiler_execution_mount_qualification_request_v1,
 };
 
-const USAGE: &str = "usage: fe2o3-compiler-execution-qualification probe\n       fe2o3-compiler-execution-qualification run BUNDLE_ROOT EXPECTED_MANIFEST_SHA256 EXPECTED_GIT_COMMIT INSTALL_PARENT BASE_IMAGE EXPECTED_BASE_IMAGE_SHA256 QUALIFICATION_PARENT";
+const USAGE: &str = "usage: fe2o3-compiler-execution-qualification probe\n       fe2o3-compiler-execution-qualification fault-points\n       fe2o3-compiler-execution-qualification run BUNDLE_ROOT EXPECTED_MANIFEST_SHA256 EXPECTED_GIT_COMMIT INSTALL_PARENT BASE_IMAGE EXPECTED_BASE_IMAGE_SHA256 QUALIFICATION_PARENT\n       fe2o3-compiler-execution-qualification fault POINT BUNDLE_ROOT EXPECTED_MANIFEST_SHA256 EXPECTED_GIT_COMMIT INSTALL_PARENT BASE_IMAGE EXPECTED_BASE_IMAGE_SHA256 QUALIFICATION_PARENT";
 
 fn main() {
     let arguments: Vec<_> = std::env::args_os().collect();
@@ -14,11 +16,19 @@ fn main() {
     };
     match command {
         "probe" if arguments.len() == 2 => run_probe(),
+        "fault-points" if arguments.len() == 2 => print_fault_points(),
         "run" if arguments.len() == 9 => run_qualification(&arguments),
+        "fault" if arguments.len() == 10 => run_fault(&arguments),
         _ => {
             eprintln!("{USAGE}");
             std::process::exit(2);
         }
+    }
+}
+
+fn print_fault_points() {
+    for point in QualificationMountFaultPointV1::all() {
+        println!("{}", point.canonical_name());
     }
 }
 
@@ -33,31 +43,58 @@ fn run_probe() {
 }
 
 fn run_qualification(arguments: &[std::ffi::OsString]) {
-    let Some(manifest_sha256) = arguments[3].to_str() else {
-        eprintln!("expected manifest SHA-256 must be UTF-8");
-        std::process::exit(2);
-    };
-    let Some(commit) = arguments[4].to_str() else {
-        eprintln!("expected git commit must be UTF-8");
-        std::process::exit(2);
-    };
-    let Some(base_sha256) = arguments[7].to_str() else {
-        eprintln!("expected base-image SHA-256 must be UTF-8");
-        std::process::exit(2);
-    };
-    match run_compiler_execution_mount_qualification_v1(
-        Path::new(&arguments[2]),
-        manifest_sha256,
-        commit,
-        Path::new(&arguments[5]),
-        Path::new(&arguments[6]),
-        base_sha256,
-        Path::new(&arguments[8]),
-    ) {
+    let request = parse_request(arguments, 2);
+    match run_compiler_execution_mount_qualification_request_v1(request) {
         Ok(report) => print!("{}", report.canonical_report()),
         Err(error) => {
             eprintln!("compiler-execution mount qualification failed: {error}");
             std::process::exit(1);
         }
     }
+}
+
+fn run_fault(arguments: &[std::ffi::OsString]) {
+    let Some(point_name) = arguments[2].to_str() else {
+        eprintln!("fault point must be UTF-8");
+        std::process::exit(2);
+    };
+    let Some(point) = QualificationMountFaultPointV1::from_canonical_name(point_name) else {
+        eprintln!("fault point is not one canonical V1 point");
+        std::process::exit(2);
+    };
+    let request = parse_request(arguments, 3);
+    match run_compiler_execution_mount_fault_v1(point, request) {
+        Ok(report) => print!("{}", report.canonical_report()),
+        Err(error) => {
+            eprintln!("compiler-execution mount fault qualification failed: {error}");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn parse_request(
+    arguments: &[std::ffi::OsString],
+    start: usize,
+) -> CompilerExecutionMountQualificationRequestV1<'_> {
+    let Some(manifest_sha256) = arguments[start + 1].to_str() else {
+        eprintln!("expected manifest SHA-256 must be UTF-8");
+        std::process::exit(2);
+    };
+    let Some(commit) = arguments[start + 2].to_str() else {
+        eprintln!("expected git commit must be UTF-8");
+        std::process::exit(2);
+    };
+    let Some(base_sha256) = arguments[start + 5].to_str() else {
+        eprintln!("expected base-image SHA-256 must be UTF-8");
+        std::process::exit(2);
+    };
+    CompilerExecutionMountQualificationRequestV1::new(
+        Path::new(&arguments[start]),
+        manifest_sha256,
+        commit,
+        Path::new(&arguments[start + 3]),
+        Path::new(&arguments[start + 4]),
+        base_sha256,
+        Path::new(&arguments[start + 6]),
+    )
 }

@@ -74,8 +74,15 @@ if [[ ${installer_status} -ne 2 \
   exit 1
 fi
 if [[ ${qualification_status} -ne 2 \
-  || "${qualification_usage}" != 'usage: fe2o3-compiler-execution-qualification probe'$'\n''       fe2o3-compiler-execution-qualification run BUNDLE_ROOT EXPECTED_MANIFEST_SHA256 EXPECTED_GIT_COMMIT INSTALL_PARENT BASE_IMAGE EXPECTED_BASE_IMAGE_SHA256 QUALIFICATION_PARENT' ]]; then
+  || "${qualification_usage}" != 'usage: fe2o3-compiler-execution-qualification probe'$'\n''       fe2o3-compiler-execution-qualification fault-points'$'\n''       fe2o3-compiler-execution-qualification run BUNDLE_ROOT EXPECTED_MANIFEST_SHA256 EXPECTED_GIT_COMMIT INSTALL_PARENT BASE_IMAGE EXPECTED_BASE_IMAGE_SHA256 QUALIFICATION_PARENT'$'\n''       fe2o3-compiler-execution-qualification fault POINT BUNDLE_ROOT EXPECTED_MANIFEST_SHA256 EXPECTED_GIT_COMMIT INSTALL_PARENT BASE_IMAGE EXPECTED_BASE_IMAGE_SHA256 QUALIFICATION_PARENT' ]]; then
   printf 'static qualification harness argument gate changed\n' >&2
+  exit 1
+fi
+
+qualification_fault_points="$(/usr/bin/env -i "${qualification}" fault-points)"
+readonly qualification_fault_points
+if [[ "${qualification_fault_points}" != 'loop-attached'$'\n''base-mounted'$'\n''overlay-mounted'$'\n''projection-revalidated'$'\n''overlay-unmounted'$'\n''base-unmounted'$'\n''loop-released'$'\n''staging-cleaned' ]]; then
+  printf 'static qualification mount fault set changed\n' >&2
   exit 1
 fi
 

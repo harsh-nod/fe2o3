@@ -35,14 +35,17 @@ pub use install::{
 };
 pub use mount::{
     MountedCompilerExecutionQualificationV1, PrivateQualificationMountNamespaceV1,
-    attach_compiler_execution_qualification_mounts_v1,
+    QualificationMountFaultPointV1, attach_compiler_execution_qualification_mounts_v1,
     enter_private_qualification_mount_namespace_v1,
 };
 pub use qualification::{
     PreparedCompilerExecutionQualificationV1, prepare_compiler_execution_qualification_v1,
 };
 pub use run::{
-    CompilerExecutionMountQualificationReportV1, run_compiler_execution_mount_qualification_v1,
+    CompilerExecutionMountFaultReportV1, CompilerExecutionMountQualificationReportV1,
+    CompilerExecutionMountQualificationRequestV1, run_compiler_execution_mount_fault_v1,
+    run_compiler_execution_mount_qualification_request_v1,
+    run_compiler_execution_mount_qualification_v1,
 };
 pub use staging::{
     StagedCompilerExecutionQualificationV1, stage_compiler_execution_qualification_v1,

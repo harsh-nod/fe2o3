@@ -64,6 +64,8 @@ for binary in \
 done
 grep -Fq -- 'qualification-host-probe-v1' "${verifier_builder}" ||
   fail 'static qualification prerequisite probe is missing'
+grep -Fq -- 'fault-points' "${verifier_builder}" ||
+  fail 'static qualification mount fault set is missing'
 grep -Fq -- "--target \"\${target}\"" "${verifier_builder}" ||
   fail 'static verifier target is not pinned'
 grep -Fq -- '-C link-arg=-static' "${verifier_builder}" ||
