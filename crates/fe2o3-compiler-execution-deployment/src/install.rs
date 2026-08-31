@@ -258,6 +258,10 @@ impl InstalledCompilerExecutionDeploymentV1 {
     pub fn revalidate(&self) -> Result<(), DeploymentVerificationErrorV1> {
         revalidate_installed_deployment(self, (0, 0))
     }
+
+    pub(super) fn retained_root(&self) -> &File {
+        &self.root
+    }
 }
 
 /// Derives the sole V1 final-root name from an admitted manifest SHA-256.
@@ -542,6 +546,30 @@ pub(super) fn revalidate_installed_deployment(
     verify_installed_root(&installed.root, owner, &installed.deployment)
 }
 
+pub(super) fn verify_installed_projection(
+    root: &File,
+    installed: &InstalledCompilerExecutionDeploymentV1,
+    owner: (u32, u32),
+) -> Result<(), DeploymentVerificationErrorV1> {
+    revalidate_installed_deployment(installed, owner)?;
+    let root_snapshot = validate_directory_mode(
+        root,
+        Some(owner),
+        INSTALLED_DIRECTORY_MODE_V1,
+        "composed qualification root",
+    )?;
+    verify_installed_files(root, root_snapshot, &installed.deployment)?;
+    if snapshot(
+        &fstat(root).map_err(|source| io_error("reinspect composed qualification root", source))?,
+    ) != root_snapshot
+    {
+        return Err(changed(
+            "composed qualification root changed during deployment projection verification",
+        ));
+    }
+    Ok(())
+}
+
 fn open_install_parent(
     path: &Path,
     owner: (u32, u32),
@@ -690,6 +718,21 @@ fn verify_installed_root(
         }
     }
 
+    verify_installed_files(root, root_snapshot, deployment)?;
+    verify_directory_children(root, INSTALL_ROOT_CHILDREN_V1, "installed root")?;
+    if snapshot(&fstat(root).map_err(|source| io_error("reinspect installed root", source))?)
+        != root_snapshot
+    {
+        return Err(changed("installed root changed during complete admission"));
+    }
+    Ok(())
+}
+
+fn verify_installed_files(
+    root: &File,
+    root_snapshot: ObjectSnapshotV1,
+    deployment: &VerifiedCompilerExecutionDeploymentV1,
+) -> Result<(), DeploymentVerificationErrorV1> {
     let manifest = admit_installed_file(root, root_snapshot, &deployment.manifest.entry)?;
     let parsed = parse_manifest(&manifest.bytes, &deployment.git_commit)?;
     let expected_entries: Vec<_> = deployment
@@ -726,12 +769,6 @@ fn verify_installed_root(
             .expect("V1 inventory contains canonical SHA256SUMS second"),
         &expected_entries,
     )?;
-    verify_directory_children(root, INSTALL_ROOT_CHILDREN_V1, "installed root")?;
-    if snapshot(&fstat(root).map_err(|source| io_error("reinspect installed root", source))?)
-        != root_snapshot
-    {
-        return Err(changed("installed root changed during complete admission"));
-    }
     Ok(())
 }
 

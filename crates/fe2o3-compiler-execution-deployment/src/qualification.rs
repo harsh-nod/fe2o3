@@ -122,6 +122,14 @@ impl PreparedCompilerExecutionQualificationV1 {
     pub(super) fn qualification_parent(&self) -> &File {
         &self.parent
     }
+
+    pub(super) fn installed(&self) -> &InstalledCompilerExecutionDeploymentV1 {
+        &self.installed
+    }
+
+    pub(super) fn sealed_base_image(&self) -> &File {
+        &self.base.file
+    }
 }
 
 /// Prepares one exact installed deployment and pinned base image for disposable qualification.

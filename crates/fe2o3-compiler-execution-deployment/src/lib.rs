@@ -20,12 +20,18 @@ use rustix::fs::{
 use sha2::{Digest, Sha256};
 
 mod install;
+mod mount;
 mod qualification;
 mod staging;
 
 pub use install::{
     CompilerExecutionInstalledRootPublicationV1, InstalledCompilerExecutionDeploymentV1,
     compiler_execution_install_root_name_v1, install_compiler_execution_deployment_v1,
+};
+pub use mount::{
+    MountedCompilerExecutionQualificationV1, PrivateQualificationMountNamespaceV1,
+    attach_compiler_execution_qualification_mounts_v1,
+    enter_private_qualification_mount_namespace_v1,
 };
 pub use qualification::{
     PreparedCompilerExecutionQualificationV1, prepare_compiler_execution_qualification_v1,
@@ -1136,6 +1142,10 @@ pub enum DeploymentVerificationErrorKindV1 {
     Io,
     /// A pinned qualification base image is outside the sole supported V1 profile.
     InvalidQualificationBase,
+    /// The qualification process could not establish or retain its private mount namespace.
+    InvalidQualificationIsolation,
+    /// A read-only base or disposable overlay mount failed admission or cleanup.
+    InvalidQualificationMount,
     /// A production root operation did not run with effective UID 0.
     InsufficientPrivilege,
     /// Atomic publication happened, but its durability result is ambiguous.
@@ -1740,6 +1750,12 @@ mod tests {
             installed.publication(),
             install::CompilerExecutionInstalledRootPublicationV1::Created
         );
+        install::verify_installed_projection(
+            installed.retained_root(),
+            &installed,
+            current_owner(),
+        )
+        .unwrap();
         assert_eq!(installed.root_name(), root_name);
         assert_eq!(installed.file_count(), 14);
         let root = install_parent.path().join(&root_name);

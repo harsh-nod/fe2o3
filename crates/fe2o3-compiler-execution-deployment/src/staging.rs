@@ -162,6 +162,29 @@ impl StagedCompilerExecutionQualificationV1 {
         self.cleanup_internal()
     }
 
+    pub(super) fn prepared(&self) -> &PreparedCompilerExecutionQualificationV1 {
+        &self.prepared
+    }
+
+    pub(super) fn root_descriptor(&self) -> &File {
+        self.root
+            .as_ref()
+            .expect("active qualification staging retains its root descriptor")
+    }
+
+    pub(super) fn directory_descriptor(&self, name: &str) -> &File {
+        &self
+            .directories
+            .iter()
+            .find(|directory| directory.name == name)
+            .expect("V1 staging directory name is fixed")
+            .file
+    }
+
+    pub(super) fn prepared_parent_children(&self) -> [&str; 1] {
+        [self.run_name.as_str()]
+    }
+
     fn cleanup_or(
         &mut self,
         error: DeploymentVerificationErrorV1,
