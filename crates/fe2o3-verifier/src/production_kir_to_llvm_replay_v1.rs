@@ -104,7 +104,7 @@ impl Error for CompilerKirToLlvmReplayValidationErrorV1 {
 mod tests {
     use dialect_amdgcn::{
         bind_production_target_v1, bind_production_upstream_llvm_layout_v1,
-        lower_kernel_to_gfx942_xnack_minus_llvm_ir,
+        lower_compiler_module_to_gfx942_xnack_minus_llvm_ir,
     };
     use fe2o3_amd_target::ProductionAmdTargetProfileV1;
     use fe2o3_compiler_lineage::{InertAmdgpuLoweringReceiptV3, InertKernelIrReceiptV3};
@@ -145,9 +145,7 @@ mod tests {
         let target =
             bind_production_target_v1(&neutral_module, ProductionAmdTargetProfileV1::Gfx942)
                 .unwrap();
-        let dialect =
-            lower_kernel_to_gfx942_xnack_minus_llvm_ir(target.module(), target.kernel_id())
-                .unwrap();
+        let dialect = lower_compiler_module_to_gfx942_xnack_minus_llvm_ir(target.module()).unwrap();
         let llvm = bind_production_upstream_llvm_layout_v1(&dialect).unwrap();
         let evidence = CanonicalProductionKirToLlvmReplayEvidenceV1::from_live_inputs(
             neutral_bytes,

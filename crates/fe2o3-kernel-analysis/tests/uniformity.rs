@@ -5,9 +5,10 @@ use fe2o3_kernel_ir::{
     AccessMode, AddressSpace, AmdGpuDiagnosticOperation, Axis, Barrier, BarrierSemantics,
     BasicBlock, BinaryOp, BlockId, CastKind, CheckedBinaryOperator, ComparePredicate, Constant,
     Convergence, F32MathFunction, FloatOperation, Function, FunctionId, IndexKind, IntrinsicKind,
-    IntrinsicOperation, Kernel, LaunchDomain, LaunchExtent, MemoryAccess, MemoryOrdering, Module,
-    Operation, OperationKind, ScalarType, Signature, SwitchCase, SynchronizationScope, Terminator,
-    Type, ValueDef, ValueId, WaveOperation, WaveOperationKind, WaveWidth, WorkgroupBarrier,
+    IntrinsicOperation, Kernel, LaunchDomain, LaunchExtent,
+    MAX_INTERPROCEDURAL_EFFECT_FUNCTIONS_V1, MemoryAccess, MemoryOrdering, Module, Operation,
+    OperationKind, ScalarType, Signature, SwitchCase, SynchronizationScope, Terminator, Type,
+    ValueDef, ValueId, WaveOperation, WaveOperationKind, WaveWidth, WorkgroupBarrier,
     WorkgroupMemory, WorkgroupMemoryExtent, WorkgroupSize,
 };
 
@@ -1538,6 +1539,749 @@ fn reconverged_loop_preserves_trivial_phi_uniformity() {
     assert!(report.diagnostics().is_empty());
 }
 
+#[derive(Clone, Copy, Debug)]
+enum CheckedRecurrenceCase {
+    Exact,
+    WrongPhi,
+    VaryingStep,
+    UncheckedAdd,
+    MismatchedFlag,
+    InvertedOverflowEdge,
+    DivergentTripCount,
+    DivergentEntry,
+}
+
+fn checked_recurrence(case: CheckedRecurrenceCase) -> Function {
+    let mut entry = BasicBlock::new(BlockId(0));
+    entry.operations.extend([
+        constant(0, Constant::Index(0)),
+        constant(1, Constant::Index(4)),
+        constant(2, Constant::Index(1)),
+        intrinsic(
+            3,
+            IntrinsicKind::InvocationIndex {
+                kind: IndexKind::Local,
+                axis: Axis::X,
+            },
+        ),
+        compare_with(4, ComparePredicate::NotEqual, 3, 0),
+        constant(5, Constant::Bool(false)),
+    ]);
+    entry.terminator = Some(if matches!(case, CheckedRecurrenceCase::DivergentEntry) {
+        Terminator::ConditionalBranch {
+            condition: ValueId(4),
+            then_target: BlockId(1),
+            then_arguments: vec![ValueId(0)],
+            else_target: BlockId(5),
+            else_arguments: vec![ValueId(0)],
+        }
+    } else {
+        Terminator::Branch {
+            target: BlockId(1),
+            arguments: vec![ValueId(0)],
+        }
+    });
+
+    let mut header = BasicBlock::new(BlockId(1));
+    header
+        .parameters
+        .push(ValueDef::new(ValueId(10), Type::INDEX));
+    if !matches!(case, CheckedRecurrenceCase::DivergentTripCount) {
+        header
+            .operations
+            .push(compare_with(11, ComparePredicate::LessThan, 10, 1));
+    }
+    let condition = if matches!(case, CheckedRecurrenceCase::DivergentTripCount) {
+        ValueId(4)
+    } else {
+        ValueId(11)
+    };
+    header.terminator = Some(Terminator::ConditionalBranch {
+        condition,
+        then_target: BlockId(2),
+        then_arguments: vec![],
+        else_target: BlockId(5),
+        else_arguments: vec![ValueId(10)],
+    });
+
+    let mut body = BasicBlock::new(BlockId(2));
+    match case {
+        CheckedRecurrenceCase::UncheckedAdd => body.operations.push(add(12, 10, 3)),
+        CheckedRecurrenceCase::WrongPhi => {
+            body.operations
+                .push(checked_index(12, 13, CheckedBinaryOperator::Add, 3, 2))
+        }
+        CheckedRecurrenceCase::VaryingStep | CheckedRecurrenceCase::InvertedOverflowEdge => {
+            body.operations
+                .push(checked_index(12, 13, CheckedBinaryOperator::Add, 10, 3));
+        }
+        CheckedRecurrenceCase::Exact
+        | CheckedRecurrenceCase::MismatchedFlag
+        | CheckedRecurrenceCase::DivergentTripCount
+        | CheckedRecurrenceCase::DivergentEntry => {
+            body.operations
+                .push(checked_index(12, 13, CheckedBinaryOperator::Add, 10, 2))
+        }
+    }
+    let overflow = match case {
+        CheckedRecurrenceCase::UncheckedAdd | CheckedRecurrenceCase::MismatchedFlag => ValueId(4),
+        _ => ValueId(13),
+    };
+    let (then_target, else_target) = if matches!(case, CheckedRecurrenceCase::InvertedOverflowEdge)
+    {
+        (BlockId(3), BlockId(4))
+    } else {
+        (BlockId(4), BlockId(3))
+    };
+    body.terminator = Some(Terminator::ConditionalBranch {
+        condition: overflow,
+        then_target,
+        then_arguments: vec![],
+        else_target,
+        else_arguments: vec![],
+    });
+
+    let mut latch = BasicBlock::new(BlockId(3));
+    latch.terminator = Some(Terminator::Branch {
+        target: BlockId(1),
+        arguments: vec![ValueId(12)],
+    });
+
+    let mut exit = BasicBlock::new(BlockId(5));
+    exit.parameters
+        .push(ValueDef::new(ValueId(20), Type::INDEX));
+    exit.operations
+        .push(compare_with(21, ComparePredicate::NotEqual, 20, 0));
+    exit.terminator = Some(Terminator::ConditionalBranch {
+        condition: ValueId(21),
+        then_target: BlockId(6),
+        then_arguments: vec![],
+        else_target: BlockId(7),
+        else_arguments: vec![],
+    });
+    let mut barrier = returning(6);
+    barrier.operations.push(workgroup_barrier());
+
+    function(
+        vec![],
+        vec![
+            entry,
+            header,
+            body,
+            latch,
+            returning(4),
+            exit,
+            barrier,
+            returning(7),
+        ],
+    )
+}
+
+#[test]
+fn exact_checked_add_recurrence_preserves_convergence() {
+    let report = analyze_function(&checked_recurrence(CheckedRecurrenceCase::Exact));
+
+    assert_eq!(report.value(ValueId(10)), Variation::GridUniform);
+    assert_eq!(report.value(ValueId(20)), Variation::GridUniform);
+    assert_eq!(report.block_control(BlockId(6)), Variation::GridUniform);
+    assert!(report.diagnostics().is_empty());
+}
+
+#[test]
+fn checked_recurrence_authority_boundaries_fail_closed() {
+    for case in [
+        CheckedRecurrenceCase::WrongPhi,
+        CheckedRecurrenceCase::VaryingStep,
+        CheckedRecurrenceCase::UncheckedAdd,
+        CheckedRecurrenceCase::MismatchedFlag,
+        CheckedRecurrenceCase::InvertedOverflowEdge,
+        CheckedRecurrenceCase::DivergentTripCount,
+        CheckedRecurrenceCase::DivergentEntry,
+    ] {
+        let report = analyze_function(&checked_recurrence(case));
+        assert_eq!(
+            report.value(ValueId(20)),
+            Variation::Varying,
+            "case {case:?} manufactured a uniform post-loop phi"
+        );
+        assert!(
+            report.diagnostics().iter().any(|diagnostic| matches!(
+                diagnostic,
+                Diagnostic::DivergentBarrier {
+                    block: BlockId(6),
+                    ..
+                }
+            )),
+            "case {case:?} manufactured post-loop convergence"
+        );
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum RecurrenceEdgeHostile {
+    NonexclusiveSuccess,
+    NondominatingSuccess,
+    MixedBackedges,
+}
+
+fn recurrence_edge_hostile(case: RecurrenceEdgeHostile) -> Function {
+    let mut entry = BasicBlock::new(BlockId(0));
+    entry.operations.extend([
+        constant(0, Constant::Index(0)),
+        constant(1, Constant::Index(4)),
+        constant(2, Constant::Index(1)),
+        intrinsic(
+            3,
+            IntrinsicKind::InvocationIndex {
+                kind: IndexKind::Local,
+                axis: Axis::X,
+            },
+        ),
+        compare_with(4, ComparePredicate::NotEqual, 3, 0),
+    ]);
+    entry.terminator = Some(Terminator::Branch {
+        target: BlockId(1),
+        arguments: vec![ValueId(0)],
+    });
+
+    let mut header = BasicBlock::new(BlockId(1));
+    header
+        .parameters
+        .push(ValueDef::new(ValueId(10), Type::INDEX));
+    header
+        .operations
+        .push(compare_with(11, ComparePredicate::LessThan, 10, 1));
+    header.terminator = Some(Terminator::ConditionalBranch {
+        condition: ValueId(11),
+        then_target: BlockId(2),
+        then_arguments: vec![],
+        else_target: BlockId(8),
+        else_arguments: vec![ValueId(10)],
+    });
+
+    let mut split = BasicBlock::new(BlockId(2));
+    split.terminator = Some(Terminator::ConditionalBranch {
+        condition: ValueId(4),
+        then_target: BlockId(3),
+        then_arguments: vec![],
+        else_target: BlockId(4),
+        else_arguments: vec![],
+    });
+    let mut checked = BasicBlock::new(BlockId(3));
+    checked
+        .operations
+        .push(checked_index(12, 13, CheckedBinaryOperator::Add, 10, 2));
+    let checked_success = match case {
+        RecurrenceEdgeHostile::NondominatingSuccess => BlockId(6),
+        RecurrenceEdgeHostile::NonexclusiveSuccess | RecurrenceEdgeHostile::MixedBackedges => {
+            BlockId(5)
+        }
+    };
+    checked.terminator = Some(Terminator::ConditionalBranch {
+        condition: ValueId(13),
+        then_target: BlockId(7),
+        then_arguments: vec![],
+        else_target: checked_success,
+        else_arguments: if matches!(case, RecurrenceEdgeHostile::NonexclusiveSuccess) {
+            vec![ValueId(12)]
+        } else {
+            vec![]
+        },
+    });
+
+    let mut alternate = BasicBlock::new(BlockId(4));
+    if matches!(case, RecurrenceEdgeHostile::MixedBackedges) {
+        alternate
+            .operations
+            .push(checked_index(14, 15, CheckedBinaryOperator::Add, 10, 3));
+        alternate.terminator = Some(Terminator::ConditionalBranch {
+            condition: ValueId(15),
+            then_target: BlockId(7),
+            then_arguments: vec![],
+            else_target: BlockId(6),
+            else_arguments: vec![],
+        });
+    } else {
+        alternate.terminator = Some(Terminator::Branch {
+            target: BlockId(5),
+            arguments: vec![ValueId(10)],
+        });
+    }
+
+    let mut latch = BasicBlock::new(BlockId(5));
+    if !matches!(case, RecurrenceEdgeHostile::MixedBackedges) {
+        latch
+            .parameters
+            .push(ValueDef::new(ValueId(20), Type::INDEX));
+    }
+    latch.terminator = Some(Terminator::Branch {
+        target: BlockId(1),
+        arguments: vec![if !matches!(case, RecurrenceEdgeHostile::MixedBackedges) {
+            ValueId(20)
+        } else {
+            ValueId(12)
+        }],
+    });
+
+    let mut second_latch = BasicBlock::new(BlockId(6));
+    second_latch.terminator = Some(Terminator::Branch {
+        target: if matches!(case, RecurrenceEdgeHostile::NondominatingSuccess) {
+            BlockId(5)
+        } else {
+            BlockId(1)
+        },
+        arguments: vec![
+            if matches!(case, RecurrenceEdgeHostile::NondominatingSuccess) {
+                ValueId(12)
+            } else {
+                ValueId(14)
+            },
+        ],
+    });
+
+    let mut exit = BasicBlock::new(BlockId(8));
+    exit.parameters
+        .push(ValueDef::new(ValueId(30), Type::INDEX));
+    exit.operations
+        .push(compare_with(31, ComparePredicate::NotEqual, 30, 0));
+    exit.terminator = Some(Terminator::ConditionalBranch {
+        condition: ValueId(31),
+        then_target: BlockId(9),
+        then_arguments: vec![],
+        else_target: BlockId(10),
+        else_arguments: vec![],
+    });
+    let mut barrier = returning(9);
+    barrier.operations.push(workgroup_barrier());
+
+    function(
+        vec![],
+        vec![
+            entry,
+            header,
+            split,
+            checked,
+            alternate,
+            latch,
+            second_latch,
+            returning(7),
+            exit,
+            barrier,
+            returning(10),
+        ],
+    )
+}
+
+#[test]
+fn checked_recurrence_rejects_edge_authority_substitutions() {
+    for case in [
+        RecurrenceEdgeHostile::NonexclusiveSuccess,
+        RecurrenceEdgeHostile::NondominatingSuccess,
+        RecurrenceEdgeHostile::MixedBackedges,
+    ] {
+        let report = analyze_function(&recurrence_edge_hostile(case));
+        assert_eq!(
+            report.value(ValueId(30)),
+            Variation::Varying,
+            "case {case:?} manufactured a uniform post-loop phi"
+        );
+        assert!(
+            report.diagnostics().iter().any(|diagnostic| matches!(
+                diagnostic,
+                Diagnostic::DivergentBarrier {
+                    block: BlockId(9),
+                    ..
+                }
+            )),
+            "case {case:?} manufactured post-loop convergence"
+        );
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum QuotientProofCase {
+    Exact,
+    MismatchedDivisibilityValue,
+    RejectingDivisibilityEdge,
+    NondominatingDivisibilityEdge,
+    WrongDivisor,
+    WrongScale,
+    WrongMultiple,
+    ZeroDivisor,
+    MissingNumeratorProductSuccess,
+    MissingQuotientProductSuccess,
+    MissingExtraProductSuccess,
+    MissingLhsAddSuccess,
+    MissingSubtractionSuccess,
+    ExhaustedResidualCapacity,
+    DivergentMultiple,
+    MutatedPrivateSlot,
+    EscapedPrivateSlot,
+}
+
+fn quotient_residual(case: QuotientProofCase) -> Function {
+    let mut entry = BasicBlock::new(BlockId(0));
+    entry.operations.extend([
+        intrinsic(
+            33,
+            IntrinsicKind::InvocationIndex {
+                kind: IndexKind::Global,
+                axis: Axis::X,
+            },
+        ),
+        constant(34, Constant::Index(64)),
+        binary(0, BinaryOp::Remainder, 33, 34),
+    ]);
+    if matches!(case, QuotientProofCase::MutatedPrivateSlot) {
+        entry.operations.extend([
+            private_slot(40),
+            private_store(40, 100),
+            private_load(41, 40),
+        ]);
+    }
+    if matches!(case, QuotientProofCase::EscapedPrivateSlot) {
+        entry.operations.extend([
+            constant(39, Constant::Index(0)),
+            private_slot(40),
+            private_store(40, 100),
+            Operation::effect_free(
+                ValueDef::new(
+                    ValueId(41),
+                    Type::pointer(Type::INDEX, AddressSpace::Private, AccessMode::ReadWrite),
+                ),
+                OperationKind::GetElementPointer {
+                    base: ValueId(40),
+                    offset: ValueId(39),
+                },
+            ),
+            private_load(42, 40),
+        ]);
+    }
+    entry.terminator = Some(Terminator::Branch {
+        target: BlockId(1),
+        arguments: vec![],
+    });
+
+    let guarded_multiple = if matches!(case, QuotientProofCase::MutatedPrivateSlot) {
+        41
+    } else {
+        100
+    };
+    let mut bound = BasicBlock::new(BlockId(1));
+    bound.operations.extend([
+        constant(3, Constant::Index(4096)),
+        compare_with(4, ComparePredicate::LessThan, guarded_multiple, 3),
+    ]);
+    bound.terminator = Some(Terminator::ConditionalBranch {
+        condition: ValueId(4),
+        then_target: BlockId(2),
+        then_arguments: vec![],
+        else_target: BlockId(20),
+        else_arguments: vec![],
+    });
+
+    let remainder_numerator = if matches!(case, QuotientProofCase::MismatchedDivisibilityValue) {
+        101
+    } else {
+        guarded_multiple
+    };
+    let mut divisibility = BasicBlock::new(BlockId(2));
+    divisibility.operations.extend([
+        constant(5, Constant::Index(16)),
+        binary(6, BinaryOp::Remainder, remainder_numerator, 5),
+        constant(7, Constant::Index(0)),
+        compare_with(8, ComparePredicate::Equal, 6, 7),
+    ]);
+    let (then_target, else_target) = match case {
+        QuotientProofCase::RejectingDivisibilityEdge => (BlockId(20), BlockId(3)),
+        QuotientProofCase::NondominatingDivisibilityEdge => (BlockId(21), BlockId(22)),
+        _ => (BlockId(3), BlockId(20)),
+    };
+    divisibility.terminator = Some(Terminator::ConditionalBranch {
+        condition: ValueId(8),
+        then_target,
+        then_arguments: vec![],
+        else_target,
+        else_arguments: vec![],
+    });
+
+    let mut guard_then = BasicBlock::new(BlockId(21));
+    guard_then.terminator = Some(Terminator::Branch {
+        target: BlockId(3),
+        arguments: vec![],
+    });
+    let mut guard_bypass = BasicBlock::new(BlockId(22));
+    guard_bypass.terminator = Some(Terminator::Branch {
+        target: BlockId(3),
+        arguments: vec![],
+    });
+
+    let mut divisor = BasicBlock::new(BlockId(3));
+    let multiple = match case {
+        QuotientProofCase::DivergentMultiple => 0,
+        QuotientProofCase::MutatedPrivateSlot => {
+            divisor
+                .operations
+                .extend([private_store(40, 101), private_load(42, 40)]);
+            42
+        }
+        QuotientProofCase::EscapedPrivateSlot => 42,
+        _ => 100,
+    };
+    let divisor_multiple = if matches!(case, QuotientProofCase::WrongDivisor) {
+        101
+    } else {
+        multiple
+    };
+    let divisor_scale = if matches!(case, QuotientProofCase::WrongScale) {
+        divisor.operations.push(constant(35, Constant::Index(8)));
+        35
+    } else {
+        5
+    };
+    divisor.operations.extend([
+        binary(9, BinaryOp::Divide, divisor_multiple, divisor_scale),
+        compare_with(10, ComparePredicate::NotEqual, 9, 7),
+    ]);
+    divisor.terminator = Some(if matches!(case, QuotientProofCase::ZeroDivisor) {
+        Terminator::Branch {
+            target: BlockId(4),
+            arguments: vec![],
+        }
+    } else {
+        Terminator::ConditionalBranch {
+            condition: ValueId(10),
+            then_target: BlockId(4),
+            then_arguments: vec![],
+            else_target: BlockId(20),
+            else_arguments: vec![],
+        }
+    });
+
+    let mut numerator_product = BasicBlock::new(BlockId(4));
+    numerator_product
+        .operations
+        .push(checked_index(11, 12, CheckedBinaryOperator::Multiply, 0, 5));
+    numerator_product.terminator = Some(
+        if matches!(case, QuotientProofCase::MissingNumeratorProductSuccess) {
+            Terminator::Branch {
+                target: BlockId(5),
+                arguments: vec![],
+            }
+        } else {
+            Terminator::ConditionalBranch {
+                condition: ValueId(12),
+                then_target: BlockId(20),
+                then_arguments: vec![],
+                else_target: BlockId(5),
+                else_arguments: vec![],
+            }
+        },
+    );
+
+    let mut quotient_product = BasicBlock::new(BlockId(5));
+    let rhs_multiple = if matches!(case, QuotientProofCase::WrongMultiple) {
+        101
+    } else {
+        multiple
+    };
+    quotient_product.operations.extend([
+        binary(13, BinaryOp::Divide, 0, 9),
+        checked_index(14, 15, CheckedBinaryOperator::Multiply, 13, rhs_multiple),
+    ]);
+    quotient_product.terminator = Some(
+        if matches!(case, QuotientProofCase::MissingQuotientProductSuccess) {
+            Terminator::Branch {
+                target: BlockId(6),
+                arguments: vec![],
+            }
+        } else {
+            Terminator::ConditionalBranch {
+                condition: ValueId(15),
+                then_target: BlockId(20),
+                then_arguments: vec![],
+                else_target: BlockId(6),
+                else_arguments: vec![],
+            }
+        },
+    );
+
+    let mut intra_scale = BasicBlock::new(BlockId(6));
+    let extra_factor = if matches!(case, QuotientProofCase::MissingExtraProductSuccess) {
+        33
+    } else {
+        19
+    };
+    intra_scale.operations.extend([
+        intrinsic(
+            16,
+            IntrinsicKind::InvocationIndex {
+                kind: IndexKind::Local,
+                axis: Axis::X,
+            },
+        ),
+        constant(17, Constant::Index(64)),
+        binary(18, BinaryOp::Remainder, 16, 17),
+        binary(19, BinaryOp::Divide, 18, 5),
+        constant(23, Constant::Index(4)),
+        checked_index(24, 25, CheckedBinaryOperator::Multiply, extra_factor, 23),
+    ]);
+    intra_scale.terminator = Some(
+        if matches!(case, QuotientProofCase::MissingExtraProductSuccess) {
+            Terminator::Branch {
+                target: BlockId(7),
+                arguments: vec![],
+            }
+        } else {
+            Terminator::ConditionalBranch {
+                condition: ValueId(25),
+                then_target: BlockId(20),
+                then_arguments: vec![],
+                else_target: BlockId(7),
+                else_arguments: vec![],
+            }
+        },
+    );
+
+    let mut lhs = BasicBlock::new(BlockId(7));
+    lhs.operations
+        .push(checked_index(26, 27, CheckedBinaryOperator::Add, 11, 24));
+    lhs.terminator = Some(if matches!(case, QuotientProofCase::MissingLhsAddSuccess) {
+        Terminator::Branch {
+            target: BlockId(8),
+            arguments: vec![],
+        }
+    } else {
+        Terminator::ConditionalBranch {
+            condition: ValueId(27),
+            then_target: BlockId(20),
+            then_arguments: vec![],
+            else_target: BlockId(8),
+            else_arguments: vec![],
+        }
+    });
+
+    let mut residual = BasicBlock::new(BlockId(8));
+    residual.operations.push(checked_index(
+        28,
+        29,
+        CheckedBinaryOperator::Subtract,
+        26,
+        14,
+    ));
+    residual.terminator = Some(
+        if matches!(case, QuotientProofCase::MissingSubtractionSuccess) {
+            Terminator::Branch {
+                target: BlockId(9),
+                arguments: vec![],
+            }
+        } else {
+            Terminator::ConditionalBranch {
+                condition: ValueId(29),
+                then_target: BlockId(20),
+                then_arguments: vec![],
+                else_target: BlockId(9),
+                else_arguments: vec![],
+            }
+        },
+    );
+
+    let mut offset = BasicBlock::new(BlockId(9));
+    offset.operations.extend([
+        constant(
+            30,
+            Constant::Index(
+                if matches!(case, QuotientProofCase::ExhaustedResidualCapacity) {
+                    4
+                } else {
+                    3
+                },
+            ),
+        ),
+        checked_index(31, 32, CheckedBinaryOperator::Add, 28, 30),
+    ]);
+    offset.terminator = Some(Terminator::ConditionalBranch {
+        condition: ValueId(32),
+        then_target: BlockId(20),
+        then_arguments: vec![],
+        else_target: BlockId(10),
+        else_arguments: vec![],
+    });
+    let mut success = returning(10);
+    success.operations.push(workgroup_barrier());
+
+    function(
+        vec![ValueId(100), ValueId(101)],
+        vec![
+            entry,
+            bound,
+            divisibility,
+            divisor,
+            numerator_product,
+            quotient_product,
+            intra_scale,
+            lhs,
+            residual,
+            offset,
+            success,
+            returning(20),
+            guard_then,
+            guard_bypass,
+        ],
+    )
+}
+
+#[test]
+fn exact_quotient_residual_guards_authenticate_convergence() {
+    let kernel = quotient_residual(QuotientProofCase::Exact);
+    let report = analyze_as_kernel(&kernel);
+
+    assert_eq!(report.value(ValueId(29)), Variation::GridUniform);
+    assert_eq!(report.value(ValueId(32)), Variation::GridUniform);
+    assert_eq!(report.block_control(BlockId(10)), Variation::GridUniform);
+    assert!(report.diagnostics().is_empty());
+}
+
+#[test]
+fn quotient_residual_authority_substitutions_fail_closed() {
+    for case in [
+        QuotientProofCase::MismatchedDivisibilityValue,
+        QuotientProofCase::RejectingDivisibilityEdge,
+        QuotientProofCase::NondominatingDivisibilityEdge,
+        QuotientProofCase::WrongDivisor,
+        QuotientProofCase::WrongScale,
+        QuotientProofCase::WrongMultiple,
+        QuotientProofCase::ZeroDivisor,
+        QuotientProofCase::MissingNumeratorProductSuccess,
+        QuotientProofCase::MissingQuotientProductSuccess,
+        QuotientProofCase::MissingExtraProductSuccess,
+        QuotientProofCase::MissingLhsAddSuccess,
+        QuotientProofCase::MissingSubtractionSuccess,
+        QuotientProofCase::ExhaustedResidualCapacity,
+        QuotientProofCase::DivergentMultiple,
+        QuotientProofCase::MutatedPrivateSlot,
+        QuotientProofCase::EscapedPrivateSlot,
+    ] {
+        let kernel = quotient_residual(case);
+        let report = analyze_as_kernel(&kernel);
+        assert!(
+            report.value(ValueId(29)) == Variation::Varying
+                || report.value(ValueId(32)) == Variation::Varying,
+            "case {case:?} authenticated unrelated arithmetic"
+        );
+        assert!(
+            report.diagnostics().iter().any(|diagnostic| matches!(
+                diagnostic,
+                Diagnostic::DivergentBarrier {
+                    block: BlockId(10),
+                    ..
+                }
+            )),
+            "case {case:?} manufactured convergence"
+        );
+    }
+}
+
 #[test]
 fn parameters_calls_and_unknown_values_fail_closed() {
     let mut entry = returning(0);
@@ -1615,6 +2359,412 @@ fn closed_float_intrinsics_and_pure_math_helpers_are_summarized() {
     let report = analyze_kernel_entry(&module, &kernel);
     assert_eq!(report.value(ValueId(1)), Variation::GridUniform);
     assert!(report.diagnostics().is_empty());
+}
+
+#[test]
+fn nested_context_free_scalar_helpers_preserve_uniform_actuals() {
+    let mut leaf_block = returning(0);
+    leaf_block
+        .operations
+        .extend([constant(11, Constant::Index(1)), add(12, 10, 11)]);
+    leaf_block.terminator = Some(Terminator::Return {
+        values: vec![ValueId(12)],
+    });
+    let leaf = Function::internal_helper(
+        "uniform_leaf",
+        Signature::new(vec![Type::INDEX], vec![Type::INDEX]),
+        vec![ValueId(10)],
+        vec![leaf_block],
+    );
+
+    let mut outer_block = returning(0);
+    outer_block.operations.push(Operation::effect_free(
+        ValueDef::new(ValueId(21), Type::INDEX),
+        OperationKind::Call {
+            callee: leaf.id.clone(),
+            arguments: vec![ValueId(20)],
+        },
+    ));
+    outer_block.terminator = Some(Terminator::Return {
+        values: vec![ValueId(21)],
+    });
+    let outer = Function::internal_helper(
+        "uniform_outer",
+        Signature::new(vec![Type::INDEX], vec![Type::INDEX]),
+        vec![ValueId(20)],
+        vec![outer_block],
+    );
+
+    let mut entry = returning(0);
+    entry.operations.extend([
+        constant(0, Constant::Index(7)),
+        Operation::effect_free(
+            ValueDef::new(ValueId(1), Type::INDEX),
+            OperationKind::Call {
+                callee: outer.id.clone(),
+                arguments: vec![ValueId(0)],
+            },
+        ),
+    ]);
+    let kernel = function(vec![], vec![entry]);
+    let mut module = Module::new("uniformity_nested_scalar_helpers");
+    module.functions = vec![kernel.clone(), outer, leaf];
+
+    let report = analyze_kernel_entry(&module, &kernel);
+    assert_eq!(report.value(ValueId(1)), Variation::GridUniform);
+    assert!(report.diagnostics().is_empty());
+}
+
+#[test]
+fn pure_helper_with_workitem_source_is_not_a_uniform_call_summary() {
+    let mut helper_block = returning(0);
+    helper_block.operations.push(intrinsic(
+        10,
+        IntrinsicKind::InvocationIndex {
+            kind: IndexKind::Local,
+            axis: Axis::X,
+        },
+    ));
+    helper_block.terminator = Some(Terminator::Return {
+        values: vec![ValueId(10)],
+    });
+    let helper = Function::internal_helper(
+        "lane_dependent_helper",
+        Signature::new(vec![], vec![Type::INDEX]),
+        vec![],
+        vec![helper_block],
+    );
+
+    let mut entry = returning(0);
+    entry.operations.push(Operation::effect_free(
+        ValueDef::new(ValueId(0), Type::INDEX),
+        OperationKind::Call {
+            callee: helper.id.clone(),
+            arguments: vec![],
+        },
+    ));
+    let kernel = function(vec![], vec![entry]);
+    let mut module = Module::new("uniformity_lane_dependent_helper");
+    module.functions = vec![kernel.clone(), helper.clone()];
+
+    let report = analyze_kernel_entry(&module, &kernel);
+    assert_eq!(report.value(ValueId(0)), Variation::Varying);
+    assert!(report.diagnostics().contains(&Diagnostic::Unsupported {
+        block: Some(BlockId(0)),
+        operation_index: Some(0),
+        reason: UnsupportedReason::CallWithoutSummary { callee: helper.id },
+    }));
+}
+
+#[test]
+fn pure_helper_with_workgroup_source_is_not_a_uniform_call_summary() {
+    let mut helper_block = returning(0);
+    helper_block.operations.push(intrinsic(
+        10,
+        IntrinsicKind::InvocationIndex {
+            kind: IndexKind::Workgroup,
+            axis: Axis::X,
+        },
+    ));
+    helper_block.terminator = Some(Terminator::Return {
+        values: vec![ValueId(10)],
+    });
+    let helper = Function::internal_helper(
+        "workgroup_dependent_helper",
+        Signature::new(vec![], vec![Type::INDEX]),
+        vec![],
+        vec![helper_block],
+    );
+    let mut entry = returning(0);
+    entry.operations.push(Operation::effect_free(
+        ValueDef::new(ValueId(0), Type::INDEX),
+        OperationKind::Call {
+            callee: helper.id.clone(),
+            arguments: vec![],
+        },
+    ));
+    let kernel = function(vec![], vec![entry]);
+    let mut module = Module::new("uniformity_workgroup_dependent_helper");
+    module.functions = vec![kernel.clone(), helper.clone()];
+
+    let report = analyze_kernel_entry(&module, &kernel);
+    assert!(report.diagnostics().contains(&Diagnostic::Unsupported {
+        block: Some(BlockId(0)),
+        operation_index: Some(0),
+        reason: UnsupportedReason::CallWithoutSummary { callee: helper.id },
+    }));
+}
+
+#[test]
+fn terminating_helper_summary_requires_grid_uniform_actuals() {
+    let mut dispatch = BasicBlock::new(BlockId(0));
+    dispatch
+        .operations
+        .extend([constant(11, Constant::Index(0)), compare(12, 10, 11)]);
+    dispatch.terminator = Some(Terminator::ConditionalBranch {
+        condition: ValueId(12),
+        then_target: BlockId(1),
+        then_arguments: vec![],
+        else_target: BlockId(2),
+        else_arguments: vec![],
+    });
+    let mut trap = BasicBlock::new(BlockId(1));
+    trap.operations
+        .push(AmdGpuDiagnosticOperation::Trap.operation(None));
+    trap.terminator = Some(Terminator::Unreachable);
+    let mut returned = returning(2);
+    returned.terminator = Some(Terminator::Return {
+        values: vec![ValueId(10)],
+    });
+    let helper = Function::internal_helper(
+        "checked_uniform_helper",
+        Signature::new(vec![Type::INDEX], vec![Type::INDEX]),
+        vec![ValueId(10)],
+        vec![dispatch, trap, returned],
+    );
+
+    let mut uniform_entry = returning(0);
+    uniform_entry.operations.push(Operation::effect_free(
+        ValueDef::new(ValueId(1), Type::INDEX),
+        OperationKind::Call {
+            callee: helper.id.clone(),
+            arguments: vec![ValueId(0)],
+        },
+    ));
+    let uniform_kernel = function(vec![ValueId(0)], vec![uniform_entry]);
+    let mut uniform_module = Module::new("uniformity_checked_helper_uniform_actual");
+    uniform_module.functions = vec![uniform_kernel.clone(), helper.clone()];
+    let uniform_report = analyze_kernel_entry(&uniform_module, &uniform_kernel);
+    assert_eq!(uniform_report.value(ValueId(1)), Variation::GridUniform);
+    assert!(uniform_report.diagnostics().is_empty());
+
+    let mut varying_entry = returning(0);
+    varying_entry.operations.extend([
+        intrinsic(
+            0,
+            IntrinsicKind::InvocationIndex {
+                kind: IndexKind::Local,
+                axis: Axis::X,
+            },
+        ),
+        Operation::effect_free(
+            ValueDef::new(ValueId(1), Type::INDEX),
+            OperationKind::Call {
+                callee: helper.id.clone(),
+                arguments: vec![ValueId(0)],
+            },
+        ),
+    ]);
+    let varying_kernel = function(vec![], vec![varying_entry]);
+    let mut varying_module = Module::new("uniformity_checked_helper_varying_actual");
+    varying_module.functions = vec![varying_kernel.clone(), helper.clone()];
+    let varying_report = analyze_kernel_entry(&varying_module, &varying_kernel);
+    assert!(
+        varying_report
+            .diagnostics()
+            .contains(&Diagnostic::Unsupported {
+                block: Some(BlockId(0)),
+                operation_index: Some(1),
+                reason: UnsupportedReason::CallWithoutSummary {
+                    callee: helper.id.clone(),
+                },
+            })
+    );
+
+    let mut divergent_dispatch = BasicBlock::new(BlockId(0));
+    divergent_dispatch.operations.extend([
+        intrinsic(
+            0,
+            IntrinsicKind::InvocationIndex {
+                kind: IndexKind::Local,
+                axis: Axis::X,
+            },
+        ),
+        constant(1, Constant::Index(0)),
+        compare(2, 0, 1),
+    ]);
+    divergent_dispatch.terminator = Some(Terminator::ConditionalBranch {
+        condition: ValueId(2),
+        then_target: BlockId(1),
+        then_arguments: vec![],
+        else_target: BlockId(2),
+        else_arguments: vec![],
+    });
+    let mut divergent_call = BasicBlock::new(BlockId(1));
+    divergent_call.operations.push(Operation::effect_free(
+        ValueDef::new(ValueId(3), Type::INDEX),
+        OperationKind::Call {
+            callee: helper.id.clone(),
+            arguments: vec![ValueId(1)],
+        },
+    ));
+    divergent_call.terminator = Some(Terminator::Branch {
+        target: BlockId(3),
+        arguments: vec![],
+    });
+    let mut bypass = BasicBlock::new(BlockId(2));
+    bypass.terminator = Some(Terminator::Branch {
+        target: BlockId(3),
+        arguments: vec![],
+    });
+    let control_kernel = function(
+        vec![],
+        vec![divergent_dispatch, divergent_call, bypass, returning(3)],
+    );
+    let mut control_module = Module::new("uniformity_checked_helper_divergent_control");
+    control_module.functions = vec![control_kernel.clone(), helper.clone()];
+    let control_report = analyze_kernel_entry(&control_module, &control_kernel);
+    assert!(
+        control_report
+            .diagnostics()
+            .contains(&Diagnostic::Unsupported {
+                block: Some(BlockId(1)),
+                operation_index: Some(0),
+                reason: UnsupportedReason::CallWithoutSummary { callee: helper.id },
+            })
+    );
+}
+
+#[test]
+fn helper_call_cycle_fails_closed_without_recursive_walk() {
+    let mut first_block = returning(0);
+    first_block.operations.push(Operation::effect_free(
+        ValueDef::new(ValueId(0), Type::INDEX),
+        OperationKind::Call {
+            callee: FunctionId::new("cycle_second"),
+            arguments: vec![],
+        },
+    ));
+    first_block.terminator = Some(Terminator::Return {
+        values: vec![ValueId(0)],
+    });
+    let first = Function::internal_helper(
+        "cycle_first",
+        Signature::new(vec![], vec![Type::INDEX]),
+        vec![],
+        vec![first_block],
+    );
+    let mut second_block = returning(0);
+    second_block.operations.push(Operation::effect_free(
+        ValueDef::new(ValueId(0), Type::INDEX),
+        OperationKind::Call {
+            callee: first.id.clone(),
+            arguments: vec![],
+        },
+    ));
+    second_block.terminator = Some(Terminator::Return {
+        values: vec![ValueId(0)],
+    });
+    let second = Function::internal_helper(
+        "cycle_second",
+        Signature::new(vec![], vec![Type::INDEX]),
+        vec![],
+        vec![second_block],
+    );
+    let mut entry = returning(0);
+    entry.operations.push(Operation::effect_free(
+        ValueDef::new(ValueId(0), Type::INDEX),
+        OperationKind::Call {
+            callee: first.id.clone(),
+            arguments: vec![],
+        },
+    ));
+    let kernel = function(vec![], vec![entry]);
+    let mut module = Module::new("uniformity_helper_call_cycle");
+    module.functions = vec![kernel.clone(), first.clone(), second];
+
+    let report = analyze_kernel_entry(&module, &kernel);
+    assert!(report.diagnostics().contains(&Diagnostic::Unsupported {
+        block: Some(BlockId(0)),
+        operation_index: Some(0),
+        reason: UnsupportedReason::CallWithoutSummary { callee: first.id },
+    }));
+}
+
+#[test]
+fn device_ffi_definition_is_not_admitted_as_a_uniform_helper() {
+    let mut ffi_block = returning(0);
+    ffi_block.operations.push(constant(10, Constant::Index(1)));
+    ffi_block.terminator = Some(Terminator::Return {
+        values: vec![ValueId(10)],
+    });
+    let ffi = Function::device_ffi_export(
+        "device_ffi",
+        Signature::new(vec![], vec![Type::INDEX]),
+        vec![],
+        vec![ffi_block],
+    );
+    let mut entry = returning(0);
+    entry.operations.push(Operation::effect_free(
+        ValueDef::new(ValueId(0), Type::INDEX),
+        OperationKind::Call {
+            callee: ffi.id.clone(),
+            arguments: vec![],
+        },
+    ));
+    let kernel = function(vec![], vec![entry]);
+    let mut module = Module::new("uniformity_device_ffi");
+    module.functions = vec![kernel.clone(), ffi.clone()];
+
+    let report = analyze_kernel_entry(&module, &kernel);
+    assert!(report.diagnostics().contains(&Diagnostic::Unsupported {
+        block: Some(BlockId(0)),
+        operation_index: Some(0),
+        reason: UnsupportedReason::CallWithoutSummary { callee: ffi.id },
+    }));
+}
+
+#[test]
+fn oversized_deep_helper_chain_fails_closed_without_recursive_walk() {
+    let helper_count = MAX_INTERPROCEDURAL_EFFECT_FUNCTIONS_V1;
+    let helper_ids = (0..helper_count)
+        .map(|index| FunctionId::new(format!("deep_helper_{index}")))
+        .collect::<Vec<_>>();
+    let mut helpers = Vec::with_capacity(helper_count);
+    for (index, helper_id) in helper_ids.iter().enumerate() {
+        let mut block = returning(0);
+        if let Some(callee) = helper_ids.get(index + 1) {
+            block.operations.push(Operation::effect_free(
+                ValueDef::new(ValueId(0), Type::INDEX),
+                OperationKind::Call {
+                    callee: callee.clone(),
+                    arguments: vec![],
+                },
+            ));
+        } else {
+            block.operations.push(constant(0, Constant::Index(0)));
+        }
+        block.terminator = Some(Terminator::Return {
+            values: vec![ValueId(0)],
+        });
+        helpers.push(Function::internal_helper(
+            helper_id.clone(),
+            Signature::new(vec![], vec![Type::INDEX]),
+            vec![],
+            vec![block],
+        ));
+    }
+    let mut entry = returning(0);
+    entry.operations.push(Operation::effect_free(
+        ValueDef::new(ValueId(0), Type::INDEX),
+        OperationKind::Call {
+            callee: helper_ids[0].clone(),
+            arguments: vec![],
+        },
+    ));
+    let kernel = function(vec![], vec![entry]);
+    let mut module = Module::new("uniformity_oversized_deep_chain");
+    module.functions.push(kernel.clone());
+    module.functions.extend(helpers);
+
+    let report = analyze_kernel_entry(&module, &kernel);
+    assert!(report.diagnostics().contains(&Diagnostic::Unsupported {
+        block: Some(BlockId(0)),
+        operation_index: Some(0),
+        reason: UnsupportedReason::CallWithoutSummary {
+            callee: helper_ids[0].clone(),
+        },
+    }));
 }
 
 #[test]

@@ -2,8 +2,9 @@ use crate::{AnalysisReport, Diagnostic, UnsupportedReason, Variation};
 use fe2o3_kernel_ir::{
     AddressSpace, AmdGpuDiagnosticOperation, Axis, BasicBlock, BinaryOp, BlockId, CastKind,
     CheckedBinaryOperator, ComparePredicate, Constant, FloatOperation, Function, FunctionBody,
-    IndexKind, IntrinsicKind, Module, Operation, OperationKind, ScalarType, Terminator, Type,
-    UnaryOp, ValueId, WaveOperationKind, WorkgroupSize,
+    FunctionId, FunctionRole, IndexKind, IntrinsicKind, MAX_INTERPROCEDURAL_EFFECT_CALL_EDGES_V1,
+    MAX_INTERPROCEDURAL_EFFECT_FUNCTIONS_V1, Module, Operation, OperationKind, ScalarType,
+    Terminator, Type, UnaryOp, ValueId, WaveOperationKind, WorkgroupSize,
 };
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -24,25 +25,13 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 ///
 /// The returned report is analysis evidence only and grants no assurance.
 pub fn analyze_function(function: &Function) -> AnalysisReport {
-    analyze_function_with_contract(function, &[], &BTreeSet::new(), None)
+    analyze_function_with_contract(function, &[], &BTreeSet::new(), &BTreeSet::new(), None)
 }
 
 /// Classifies one kernel entry using uniform ABI parameters and conservative
 /// summaries for reachable pure helpers.
 pub fn analyze_kernel_entry(module: &Module, function: &Function) -> AnalysisReport {
-    let mut summarized_calls = BTreeSet::new();
-    let mut visiting = BTreeSet::new();
-    if let Some(body) = &function.body {
-        for operation in body.blocks.iter().flat_map(|block| &block.operations) {
-            if let OperationKind::Call { callee, arguments } = &operation.kind {
-                if FloatOperation::from_intrinsic_call(callee, arguments).is_some() {
-                    summarized_calls.insert(callee.clone());
-                } else {
-                    summarize_pure_helper(module, callee, &mut visiting, &mut summarized_calls);
-                }
-            }
-        }
-    }
+    let (summarized_calls, uniform_input_calls) = summarize_uniform_helpers(module, function);
     let parameters = vec![Variation::GridUniform; function.signature.parameters.len()];
     let mut matching_contracts = module
         .kernels
@@ -53,13 +42,20 @@ pub fn analyze_kernel_entry(module: &Module, function: &Function) -> AnalysisRep
         .next()
         .filter(|first| matching_contracts.all(|contract| contract == *first))
         .flatten();
-    analyze_function_with_contract(function, &parameters, &summarized_calls, workgroup_size)
+    analyze_function_with_contract(
+        function,
+        &parameters,
+        &summarized_calls,
+        &uniform_input_calls,
+        workgroup_size,
+    )
 }
 
 fn analyze_function_with_contract(
     function: &Function,
     parameter_variations: &[Variation],
     summarized_calls: &BTreeSet<fe2o3_kernel_ir::FunctionId>,
+    uniform_input_calls: &BTreeSet<fe2o3_kernel_ir::FunctionId>,
     workgroup_size: Option<WorkgroupSize>,
 ) -> AnalysisReport {
     let mut report = AnalysisReport {
@@ -83,60 +79,254 @@ fn analyze_function_with_contract(
         report,
         parameter_variations,
         summarized_calls,
+        uniform_input_calls,
         workgroup_size,
     )
     .run()
 }
 
-fn summarize_pure_helper(
+#[derive(Debug, Default)]
+struct UniformHelperCandidate {
+    callees: BTreeSet<FunctionId>,
+    call_edges: usize,
+    requires_uniform_inputs: bool,
+    structurally_supported: bool,
+}
+
+/// Finds context-free helper calls whose results cannot be more varying than
+/// their actual arguments. Collection and evaluation are iterative so hostile
+/// call depth cannot consume the host stack.
+fn summarize_uniform_helpers(
     module: &Module,
-    function: &fe2o3_kernel_ir::FunctionId,
-    visiting: &mut BTreeSet<fe2o3_kernel_ir::FunctionId>,
-    summarized: &mut BTreeSet<fe2o3_kernel_ir::FunctionId>,
-) -> bool {
-    if summarized.contains(function) {
-        return true;
+    entry: &Function,
+) -> (BTreeSet<FunctionId>, BTreeSet<FunctionId>) {
+    let mut summarized = BTreeSet::new();
+    let mut uniform_inputs_required = BTreeSet::new();
+    let mut pending = BTreeSet::new();
+    let mut call_edges = 0usize;
+    let Some(entry_body) = &entry.body else {
+        return (summarized, uniform_inputs_required);
+    };
+    collect_entry_calls(entry_body, &mut pending, &mut summarized, &mut call_edges);
+    if module.functions.len() > MAX_INTERPROCEDURAL_EFFECT_FUNCTIONS_V1
+        || call_edges > MAX_INTERPROCEDURAL_EFFECT_CALL_EDGES_V1
+    {
+        return (summarized, uniform_inputs_required);
     }
-    if !visiting.insert(function.clone()) {
+
+    let mut candidates = BTreeMap::<FunctionId, UniformHelperCandidate>::new();
+    while let Some(function_id) = pending.pop_first() {
+        if candidates.contains_key(&function_id) {
+            continue;
+        }
+        if candidates.len() == MAX_INTERPROCEDURAL_EFFECT_FUNCTIONS_V1 {
+            return (summarized, uniform_inputs_required);
+        }
+        let candidate = collect_uniform_helper_candidate(module, &function_id, &mut summarized);
+        call_edges = call_edges.saturating_add(candidate.call_edges);
+        if call_edges > MAX_INTERPROCEDURAL_EFFECT_CALL_EDGES_V1 {
+            return (summarized, uniform_inputs_required);
+        }
+        pending.extend(candidate.callees.iter().cloned());
+        candidates.insert(function_id, candidate);
+    }
+
+    let mut callers = candidates
+        .keys()
+        .cloned()
+        .map(|function| (function, BTreeSet::new()))
+        .collect::<BTreeMap<_, _>>();
+    let mut remaining_callees = BTreeMap::new();
+    for (caller, candidate) in &candidates {
+        remaining_callees.insert(caller.clone(), candidate.callees.len());
+        for callee in &candidate.callees {
+            if let Some(dependents) = callers.get_mut(callee) {
+                dependents.insert(caller.clone());
+            }
+        }
+    }
+    let mut ready = remaining_callees
+        .iter()
+        .filter_map(|(function, remaining)| (*remaining == 0).then_some(function.clone()))
+        .collect::<BTreeSet<_>>();
+
+    while let Some(function_id) = ready.pop_first() {
+        let candidate = &candidates[&function_id];
+        if candidate.structurally_supported
+            && candidate
+                .callees
+                .iter()
+                .all(|callee| summarized.contains(callee))
+            && uniform_helper_returns_are_proven(
+                module,
+                &function_id,
+                &summarized,
+                &uniform_inputs_required,
+            )
+        {
+            summarized.insert(function_id.clone());
+            if candidate.requires_uniform_inputs
+                || candidate
+                    .callees
+                    .iter()
+                    .any(|callee| uniform_inputs_required.contains(callee))
+            {
+                uniform_inputs_required.insert(function_id.clone());
+            }
+        }
+        for caller in &callers[&function_id] {
+            let remaining = remaining_callees
+                .get_mut(caller)
+                .expect("candidate caller has dependency accounting");
+            *remaining -= 1;
+            if *remaining == 0 {
+                ready.insert(caller.clone());
+            }
+        }
+    }
+    (summarized, uniform_inputs_required)
+}
+
+fn collect_entry_calls(
+    body: &FunctionBody,
+    pending: &mut BTreeSet<FunctionId>,
+    summarized: &mut BTreeSet<FunctionId>,
+    call_edges: &mut usize,
+) {
+    for operation in body.blocks.iter().flat_map(|block| &block.operations) {
+        let OperationKind::Call { callee, arguments } = &operation.kind else {
+            continue;
+        };
+        *call_edges = call_edges.saturating_add(1);
+        if FloatOperation::from_intrinsic_call(callee, arguments).is_some() {
+            summarized.insert(callee.clone());
+        } else if AmdGpuDiagnosticOperation::from_intrinsic_call(callee, arguments).is_none() {
+            pending.insert(callee.clone());
+        }
+    }
+}
+
+fn collect_uniform_helper_candidate(
+    module: &Module,
+    function_id: &FunctionId,
+    summarized: &mut BTreeSet<FunctionId>,
+) -> UniformHelperCandidate {
+    let mut matches = module
+        .functions
+        .iter()
+        .filter(|function| function.id == *function_id);
+    let Some(function) = matches.next() else {
+        return UniformHelperCandidate::default();
+    };
+    if matches.next().is_some() || function.role != FunctionRole::InternalHelper {
+        return UniformHelperCandidate::default();
+    }
+    let Some(body) = &function.body else {
+        return UniformHelperCandidate::default();
+    };
+
+    let mut candidate = UniformHelperCandidate {
+        callees: BTreeSet::new(),
+        call_edges: 0,
+        requires_uniform_inputs: false,
+        structurally_supported: true,
+    };
+    for block in &body.blocks {
+        if block.terminator.is_none()
+            || matches!(block.terminator, Some(Terminator::Unreachable))
+                && !block.operations.last().is_some_and(|operation| {
+                    let OperationKind::Call { callee, arguments } = &operation.kind else {
+                        return false;
+                    };
+                    AmdGpuDiagnosticOperation::from_intrinsic_call(callee, arguments)
+                        .is_some_and(|diagnostic| diagnostic.is_terminating())
+                })
+        {
+            candidate.structurally_supported = false;
+        }
+        for operation in &block.operations {
+            match &operation.kind {
+                OperationKind::Call { callee, arguments }
+                    if FloatOperation::from_intrinsic_call(callee, arguments).is_some() =>
+                {
+                    candidate.call_edges = candidate.call_edges.saturating_add(1);
+                    summarized.insert(callee.clone());
+                }
+                OperationKind::Call { callee, arguments } => {
+                    candidate.call_edges = candidate.call_edges.saturating_add(1);
+                    if let Some(diagnostic) =
+                        AmdGpuDiagnosticOperation::from_intrinsic_call(callee, arguments)
+                    {
+                        if diagnostic.is_terminating() {
+                            candidate.requires_uniform_inputs = true;
+                        } else {
+                            candidate.structurally_supported = false;
+                        }
+                    } else {
+                        candidate.callees.insert(callee.clone());
+                    }
+                }
+                OperationKind::Intrinsic(intrinsic) => match intrinsic.kind {
+                    IntrinsicKind::LaunchExtent { .. }
+                    | IntrinsicKind::InvocationIndex {
+                        kind: IndexKind::WorkgroupSize | IndexKind::WorkgroupCount,
+                        ..
+                    } => {}
+                    IntrinsicKind::InvocationIndex { .. } => {
+                        candidate.structurally_supported = false;
+                    }
+                },
+                OperationKind::Alloca { .. }
+                | OperationKind::Atomic(_)
+                | OperationKind::Barrier(_)
+                | OperationKind::Fence(_)
+                | OperationKind::Gfx950LdsTranspose(_)
+                | OperationKind::InlineAssembly(_)
+                | OperationKind::Matrix(_)
+                | OperationKind::Wave(_)
+                | OperationKind::WorkgroupBarrier(_)
+                | OperationKind::WorkgroupMemory(_) => {
+                    candidate.structurally_supported = false;
+                }
+                _ if !operation.memory_effects().is_empty() => {
+                    candidate.structurally_supported = false;
+                }
+                _ => {}
+            }
+        }
+    }
+    candidate
+}
+
+fn uniform_helper_returns_are_proven(
+    module: &Module,
+    function_id: &FunctionId,
+    summarized: &BTreeSet<FunctionId>,
+    uniform_inputs_required: &BTreeSet<FunctionId>,
+) -> bool {
+    let Some(function) = module.function(function_id) else {
+        return false;
+    };
+    let parameters = vec![Variation::GridUniform; function.signature.parameters.len()];
+    let report = analyze_function_with_contract(
+        function,
+        &parameters,
+        summarized,
+        uniform_inputs_required,
+        None,
+    );
+    if !report.diagnostics().is_empty() {
         return false;
     }
-    let accepted = module
-        .function(function)
-        .and_then(|function| function.body.as_ref())
-        .is_some_and(|body| {
-            body.blocks.iter().all(|block| {
-                !matches!(block.terminator, Some(Terminator::Unreachable) | None)
-                    && block
-                        .operations
-                        .iter()
-                        .all(|operation| match &operation.kind {
-                            OperationKind::Call { callee, arguments }
-                                if FloatOperation::from_intrinsic_call(callee, arguments)
-                                    .is_some() =>
-                            {
-                                true
-                            }
-                            OperationKind::Call { callee, .. } => {
-                                summarize_pure_helper(module, callee, visiting, summarized)
-                            }
-                            OperationKind::Intrinsic(_)
-                            | OperationKind::Atomic(_)
-                            | OperationKind::Barrier(_)
-                            | OperationKind::Fence(_)
-                            | OperationKind::Matrix(_)
-                            | OperationKind::InlineAssembly(_)
-                            | OperationKind::Wave(_)
-                            | OperationKind::WorkgroupBarrier(_)
-                            | OperationKind::WorkgroupMemory(_) => false,
-                            _ => operation.memory_effects().is_empty(),
-                        })
-            })
-        });
-    visiting.remove(function);
-    if accepted {
-        summarized.insert(function.clone());
-    }
-    accepted
+    function.body.as_ref().is_some_and(|body| {
+        body.blocks.iter().all(|block| match &block.terminator {
+            Some(Terminator::Return { values }) => values
+                .iter()
+                .all(|value| report.value(*value) == Variation::GridUniform),
+            Some(_) => true,
+            None => false,
+        })
+    })
 }
 
 struct Analyzer<'a> {
@@ -148,9 +338,11 @@ struct Analyzer<'a> {
     trivial_phi_representatives: BTreeMap<ValueId, ValueId>,
     private_load_slots: BTreeMap<ValueId, ValueId>,
     private_slot_stores: BTreeMap<ValueId, Vec<PrivateStore>>,
+    uniform_recurrence_edges: BTreeSet<(ValueId, BlockId, ValueId)>,
     proven_no_overflow: BTreeSet<ValueId>,
     parameter_variations: &'a [Variation],
     summarized_calls: &'a BTreeSet<fe2o3_kernel_ir::FunctionId>,
+    uniform_input_calls: &'a BTreeSet<fe2o3_kernel_ir::FunctionId>,
     workgroup_size: Option<WorkgroupSize>,
     value_definitions: BTreeMap<ValueId, &'a Operation>,
     report: AnalysisReport,
@@ -177,6 +369,7 @@ impl<'a> Analyzer<'a> {
         mut report: AnalysisReport,
         parameter_variations: &'a [Variation],
         summarized_calls: &'a BTreeSet<fe2o3_kernel_ir::FunctionId>,
+        uniform_input_calls: &'a BTreeSet<fe2o3_kernel_ir::FunctionId>,
         workgroup_size: Option<WorkgroupSize>,
     ) -> Self {
         let mut blocks = BTreeMap::new();
@@ -231,6 +424,13 @@ impl<'a> Analyzer<'a> {
         };
         let trivial_phi_representatives = trivial_phi_representatives(body, &incoming);
         let dominators = compute_dominators(body, &reachable, &incoming);
+        let uniform_recurrence_edges = uniform_recurrence_edges(
+            function,
+            body,
+            &incoming,
+            &dominators,
+            &trivial_phi_representatives,
+        );
         let (private_load_slots, private_slot_stores) =
             private_storage_facts(body, &reachable, &dominators);
         let known_integer_values = KnownIntegerValueAnalysis::new(
@@ -298,9 +498,11 @@ impl<'a> Analyzer<'a> {
             trivial_phi_representatives,
             private_load_slots,
             private_slot_stores,
+            uniform_recurrence_edges,
             proven_no_overflow,
             parameter_variations,
             summarized_calls,
+            uniform_input_calls,
             workgroup_size,
             value_definitions,
             report,
@@ -311,6 +513,7 @@ impl<'a> Analyzer<'a> {
         self.collect_unsupported_diagnostics();
         self.initialize_facts();
         self.solve();
+        self.diagnose_nonuniform_helper_calls();
         self.diagnose_barriers();
         self.report
     }
@@ -496,22 +699,51 @@ impl<'a> Analyzer<'a> {
                     .unwrap_or(Variation::Varying);
                 variation = variation.join(argument);
                 if control_can_select_value {
-                    let source_control = self
-                        .report
-                        .block_controls
-                        .get(&edge.source)
-                        .copied()
-                        .unwrap_or(Variation::Varying);
                     let edge_control = edge
                         .discriminator
                         .map(|value| self.value(value))
                         .unwrap_or(Variation::GridUniform);
+                    let recurrence_edge = edge.arguments.get(index).is_some_and(|argument| {
+                        self.uniform_recurrence_edges.contains(&(
+                            parameter.id,
+                            edge.source,
+                            *argument,
+                        ))
+                    });
+                    let source_control = if recurrence_edge {
+                        self.direct_control_variation(edge.source)
+                    } else {
+                        self.report
+                            .block_controls
+                            .get(&edge.source)
+                            .copied()
+                            .unwrap_or(Variation::Varying)
+                    };
                     variation = variation.join(source_control).join(edge_control);
                 }
             }
             changed |= raise(&mut self.report.values, parameter.id, variation);
         }
         changed
+    }
+
+    fn direct_control_variation(&self, block: BlockId) -> Variation {
+        if self.control_unknown.contains(&block) {
+            return Variation::Varying;
+        }
+        self.control_regions
+            .iter()
+            .filter(|(_, region)| region.contains(&block))
+            .filter_map(|(source, _)| {
+                self.body
+                    .blocks
+                    .iter()
+                    .find(|candidate| candidate.id == *source)
+                    .and_then(|candidate| candidate.terminator.as_ref())
+                    .and_then(discriminator)
+            })
+            .map(|selector| self.value(selector))
+            .fold(Variation::GridUniform, Variation::join)
     }
 
     fn operation_variation(&self, operation: &Operation) -> Variation {
@@ -781,6 +1013,33 @@ impl<'a> Analyzer<'a> {
         }
     }
 
+    fn diagnose_nonuniform_helper_calls(&mut self) {
+        for block in &self.body.blocks {
+            if !self.reachable.contains(&block.id) {
+                continue;
+            }
+            for (operation_index, operation) in block.operations.iter().enumerate() {
+                let OperationKind::Call { callee, arguments } = &operation.kind else {
+                    continue;
+                };
+                if self.uniform_input_calls.contains(callee)
+                    && (self.report.block_control(block.id) != Variation::GridUniform
+                        || arguments
+                            .iter()
+                            .any(|argument| self.value(*argument) != Variation::GridUniform))
+                {
+                    self.report.diagnostics.push(Diagnostic::Unsupported {
+                        block: Some(block.id),
+                        operation_index: Some(operation_index),
+                        reason: UnsupportedReason::CallWithoutSummary {
+                            callee: callee.clone(),
+                        },
+                    });
+                }
+            }
+        }
+    }
+
     fn value(&self, value: ValueId) -> Variation {
         self.report
             .values
@@ -861,11 +1120,18 @@ impl UnsignedRange {
 
 #[derive(Clone, Copy)]
 struct OperationDefinition<'a> {
+    block: BlockId,
     result_index: usize,
     operation: &'a Operation,
 }
 
 const MAX_KNOWN_INTEGER_VALUES: usize = 32;
+const MAX_RELATIONAL_PROOF_WORK: usize = 65_536;
+
+fn charge_relational_work(work: &mut usize, amount: usize) -> Option<()> {
+    *work = work.checked_add(amount)?;
+    (*work <= MAX_RELATIONAL_PROOF_WORK).then_some(())
+}
 
 struct KnownIntegerValueAnalysis<'a> {
     body: &'a FunctionBody,
@@ -1196,6 +1462,7 @@ impl<'a> UnsignedRangeAnalysis<'a> {
                     operation_definitions.insert(
                         result.id,
                         OperationDefinition {
+                            block: block.id,
                             result_index,
                             operation,
                         },
@@ -1313,10 +1580,530 @@ impl<'a> UnsignedRangeAnalysis<'a> {
         let Some(type_range) = unsigned_type_range(result_type) else {
             return false;
         };
-        let (Some(lhs), Some(rhs)) = (self.range_at(lhs, block), self.range_at(rhs, block)) else {
+        let lhs_value = lhs;
+        let rhs_value = rhs;
+        if let (Some(lhs), Some(rhs)) = (self.range_at(lhs, block), self.range_at(rhs, block))
+            && checked_result_range(operator, lhs, rhs, type_range.max).is_some()
+        {
+            return true;
+        }
+        match operator {
+            CheckedBinaryOperator::Subtract => {
+                self.scaled_quotient_subtraction_is_nonnegative(block, lhs_value, rhs_value)
+            }
+            CheckedBinaryOperator::Add => {
+                self.scaled_quotient_residual_addition_fits(block, lhs_value, rhs_value)
+                    || self.scaled_quotient_residual_addition_fits(block, rhs_value, lhs_value)
+            }
+            CheckedBinaryOperator::Multiply => false,
+        }
+    }
+
+    /// Proves that adding `offset` to an authenticated quotient residual fits
+    /// when the residual's intra-scale term plus `offset` is below `scale`.
+    fn scaled_quotient_residual_addition_fits(
+        &mut self,
+        query_block: BlockId,
+        residual: ValueId,
+        offset: ValueId,
+    ) -> bool {
+        let mut work = 0_usize;
+        let Some(offset_range) = self.range_at(offset, query_block) else {
             return false;
         };
-        checked_result_range(operator, lhs, rhs, type_range.max).is_some()
+        let Some((residual_lhs, residual_rhs)) = self.checked_binary_operands(
+            residual,
+            CheckedBinaryOperator::Subtract,
+            query_block,
+            &mut work,
+        ) else {
+            return false;
+        };
+        let Some(rhs_product) = self.checked_binary_operands(
+            residual_rhs,
+            CheckedBinaryOperator::Multiply,
+            query_block,
+            &mut work,
+        ) else {
+            return false;
+        };
+        let lhs_terms = if let Some((lhs, rhs)) = self.checked_binary_operands(
+            residual_lhs,
+            CheckedBinaryOperator::Add,
+            query_block,
+            &mut work,
+        ) {
+            vec![(lhs, Some(rhs)), (rhs, Some(lhs))]
+        } else {
+            vec![(residual_lhs, None)]
+        };
+
+        for (lhs_base, extra) in lhs_terms {
+            let Some(lhs_product) = self.checked_binary_operands(
+                lhs_base,
+                CheckedBinaryOperator::Multiply,
+                query_block,
+                &mut work,
+            ) else {
+                continue;
+            };
+            for (numerator, scale) in [lhs_product, (lhs_product.1, lhs_product.0)] {
+                let Some(scale_range) = self.range_at(scale, query_block) else {
+                    continue;
+                };
+                let extra_range = match extra {
+                    Some(extra) => self.range_at(extra, query_block),
+                    None => Some(UnsignedRange::exact(0)),
+                };
+                let Some(extra_range) = extra_range else {
+                    continue;
+                };
+                if extra_range
+                    .max
+                    .checked_add(offset_range.max)
+                    .is_none_or(|sum| sum >= scale_range.min)
+                {
+                    continue;
+                }
+                for (quotient, multiple) in [rhs_product, (rhs_product.1, rhs_product.0)] {
+                    let Some((quotient_numerator, divisor)) =
+                        self.binary_operands(quotient, BinaryOp::Divide, query_block, &mut work)
+                    else {
+                        continue;
+                    };
+                    if self.values_equivalent(numerator, quotient_numerator, query_block, &mut work)
+                        && self.value_is_nonzero(divisor, query_block, &mut work)
+                        && self.multiple_is_exact_scaled_divisor(
+                            multiple,
+                            divisor,
+                            scale,
+                            query_block,
+                            &mut work,
+                        )
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    /// Proves the unsigned Euclidean relation
+    ///
+    /// `(numerator * scale + extra) >= (numerator / divisor) * multiple`
+    ///
+    /// only when `multiple == divisor * scale`. The exact product identity may
+    /// be present directly or authenticated by a dominating `multiple % scale
+    /// == 0` edge together with `divisor == multiple / scale`. Every checked
+    /// product/addition must also have its own exact non-overflow edge dominate
+    /// the subtraction. The bounded structural search fails closed.
+    fn scaled_quotient_subtraction_is_nonnegative(
+        &mut self,
+        query_block: BlockId,
+        lhs: ValueId,
+        rhs: ValueId,
+    ) -> bool {
+        let mut work = 0_usize;
+        let Some(lhs_bases) = self.nonnegative_add_bases(lhs, query_block, &mut work) else {
+            return false;
+        };
+        let Some(rhs_product) = self.checked_binary_operands(
+            rhs,
+            CheckedBinaryOperator::Multiply,
+            query_block,
+            &mut work,
+        ) else {
+            return false;
+        };
+
+        for lhs_base in lhs_bases {
+            let Some(lhs_product) = self.checked_binary_operands(
+                lhs_base,
+                CheckedBinaryOperator::Multiply,
+                query_block,
+                &mut work,
+            ) else {
+                continue;
+            };
+            for (numerator, scale) in [lhs_product, (lhs_product.1, lhs_product.0)] {
+                for (quotient, multiple) in [rhs_product, (rhs_product.1, rhs_product.0)] {
+                    let Some((quotient_numerator, divisor)) =
+                        self.binary_operands(quotient, BinaryOp::Divide, query_block, &mut work)
+                    else {
+                        continue;
+                    };
+                    if !self.values_equivalent(
+                        numerator,
+                        quotient_numerator,
+                        query_block,
+                        &mut work,
+                    ) || !self.value_is_nonzero(divisor, query_block, &mut work)
+                    {
+                        continue;
+                    }
+                    if self.multiple_is_exact_scaled_divisor(
+                        multiple,
+                        divisor,
+                        scale,
+                        query_block,
+                        &mut work,
+                    ) {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    fn nonnegative_add_bases(
+        &self,
+        value: ValueId,
+        query_block: BlockId,
+        work: &mut usize,
+    ) -> Option<Vec<ValueId>> {
+        let Some((lhs, rhs)) =
+            self.checked_binary_operands(value, CheckedBinaryOperator::Add, query_block, work)
+        else {
+            charge_relational_work(work, 1)?;
+            return Some(vec![value]);
+        };
+        if self
+            .value_types
+            .get(&lhs)
+            .and_then(unsigned_type_range)
+            .is_none()
+            || self
+                .value_types
+                .get(&rhs)
+                .and_then(unsigned_type_range)
+                .is_none()
+        {
+            return None;
+        }
+        Some(vec![lhs, rhs])
+    }
+
+    fn checked_binary_operands(
+        &self,
+        value: ValueId,
+        operator: CheckedBinaryOperator,
+        query_block: BlockId,
+        work: &mut usize,
+    ) -> Option<(ValueId, ValueId)> {
+        charge_relational_work(work, 1)?;
+        let value = self.normalized_unsigned_value(value, query_block, work)?;
+        let definition = self.operation_definitions.get(&value)?;
+        let OperationKind::Binary {
+            op: BinaryOp::Checked(actual),
+            lhs,
+            rhs,
+        } = &definition.operation.kind
+        else {
+            return None;
+        };
+        (definition.result_index == 0
+            && *actual == operator
+            && self.checked_result_succeeds_before(value, query_block, work))
+        .then_some((*lhs, *rhs))
+    }
+
+    fn binary_operands(
+        &self,
+        value: ValueId,
+        operator: BinaryOp,
+        query_block: BlockId,
+        work: &mut usize,
+    ) -> Option<(ValueId, ValueId)> {
+        charge_relational_work(work, 1)?;
+        let value = self.normalized_unsigned_value(value, query_block, work)?;
+        let definition = self.operation_definitions.get(&value)?;
+        let OperationKind::Binary { op, lhs, rhs } = &definition.operation.kind else {
+            return None;
+        };
+        (definition.result_index == 0 && *op == operator).then_some((*lhs, *rhs))
+    }
+
+    fn checked_result_succeeds_before(
+        &self,
+        value: ValueId,
+        query_block: BlockId,
+        work: &mut usize,
+    ) -> bool {
+        if charge_relational_work(work, 1).is_none() {
+            return false;
+        }
+        let Some(definition) = self.operation_definitions.get(&value) else {
+            return false;
+        };
+        let OperationKind::Binary {
+            op: BinaryOp::Checked(_),
+            ..
+        } = &definition.operation.kind
+        else {
+            return false;
+        };
+        let [result, overflow] = definition.operation.results.as_slice() else {
+            return false;
+        };
+        if definition.result_index != 0 || result.id != value || overflow.ty != Type::BOOL {
+            return false;
+        }
+        let Some(terminator) = self
+            .body
+            .blocks
+            .iter()
+            .find(|block| block.id == definition.block)
+            .and_then(|block| block.terminator.as_ref())
+        else {
+            return false;
+        };
+        match terminator {
+            Terminator::ConditionalBranch {
+                condition,
+                else_target,
+                ..
+            } => {
+                self.values_equivalent(*condition, overflow.id, definition.block, work)
+                    && self.edge_is_exclusive(definition.block, *else_target)
+                    && self.dominates(*else_target, query_block)
+            }
+            Terminator::Switch {
+                selector, cases, ..
+            } => {
+                self.values_equivalent(*selector, overflow.id, definition.block, work)
+                    && cases.iter().any(|case| {
+                        case.value == 0
+                            && self.edge_is_exclusive(definition.block, case.target)
+                            && self.dominates(case.target, query_block)
+                    })
+            }
+            Terminator::IntegerSwitch {
+                selector, cases, ..
+            } => {
+                self.values_equivalent(*selector, overflow.id, definition.block, work)
+                    && cases.iter().any(|case| {
+                        known_u64_constant(&case.value) == Some(0)
+                            && self.edge_is_exclusive(definition.block, case.target)
+                            && self.dominates(case.target, query_block)
+                    })
+            }
+            Terminator::Branch { .. } | Terminator::Return { .. } | Terminator::Unreachable => {
+                false
+            }
+        }
+    }
+
+    fn multiple_is_exact_scaled_divisor(
+        &mut self,
+        multiple: ValueId,
+        divisor: ValueId,
+        scale: ValueId,
+        query_block: BlockId,
+        work: &mut usize,
+    ) -> bool {
+        if let Some(product) = self.checked_binary_operands(
+            multiple,
+            CheckedBinaryOperator::Multiply,
+            query_block,
+            work,
+        ) {
+            for (product_divisor, product_scale) in [product, (product.1, product.0)] {
+                if self.values_equivalent(divisor, product_divisor, query_block, work)
+                    && self.values_equivalent(scale, product_scale, query_block, work)
+                {
+                    return true;
+                }
+            }
+        }
+
+        let Some((base, divisor_scale)) =
+            self.binary_operands(divisor, BinaryOp::Divide, query_block, work)
+        else {
+            return false;
+        };
+        self.values_equivalent(multiple, base, query_block, work)
+            && self.values_equivalent(scale, divisor_scale, query_block, work)
+            && self.value_is_nonzero(scale, query_block, work)
+            && self.remainder_is_zero(base, scale, query_block, work)
+    }
+
+    fn remainder_is_zero(
+        &mut self,
+        numerator: ValueId,
+        divisor: ValueId,
+        query_block: BlockId,
+        work: &mut usize,
+    ) -> bool {
+        let candidates = self
+            .operation_definitions
+            .iter()
+            .filter_map(|(result, definition)| {
+                let OperationKind::Binary {
+                    op: BinaryOp::Remainder,
+                    lhs,
+                    rhs,
+                } = &definition.operation.kind
+                else {
+                    return None;
+                };
+                (definition.result_index == 0).then_some((*result, *lhs, *rhs))
+            })
+            .collect::<Vec<_>>();
+        if charge_relational_work(work, candidates.len()).is_none() {
+            return false;
+        }
+        for (result, lhs, rhs) in candidates {
+            if self.values_equivalent(numerator, lhs, query_block, work)
+                && self.values_equivalent(divisor, rhs, query_block, work)
+                && self.range_at(result, query_block) == Some(UnsignedRange::exact(0))
+            {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn value_is_nonzero(&mut self, value: ValueId, query_block: BlockId, work: &mut usize) -> bool {
+        if self
+            .range_at(value, query_block)
+            .is_some_and(|range| range.min != 0)
+        {
+            return true;
+        }
+        let blocks = self
+            .body
+            .blocks
+            .iter()
+            .filter_map(|block| {
+                block
+                    .terminator
+                    .as_ref()
+                    .map(|terminator| (block.id, terminator))
+            })
+            .collect::<Vec<_>>();
+        if charge_relational_work(work, blocks.len()).is_none() {
+            return false;
+        }
+        for (source, terminator) in blocks {
+            match terminator {
+                Terminator::Switch {
+                    selector,
+                    cases,
+                    default_target,
+                    ..
+                } if self.values_equivalent(*selector, value, source, work)
+                    && cases.iter().any(|case| case.value == 0)
+                    && self.edge_is_exclusive(source, *default_target)
+                    && self.dominates(*default_target, query_block) =>
+                {
+                    return true;
+                }
+                Terminator::IntegerSwitch {
+                    selector,
+                    cases,
+                    default_target,
+                    ..
+                } if self.values_equivalent(*selector, value, source, work)
+                    && cases
+                        .iter()
+                        .any(|case| known_u64_constant(&case.value) == Some(0))
+                    && self.edge_is_exclusive(source, *default_target)
+                    && self.dominates(*default_target, query_block) =>
+                {
+                    return true;
+                }
+                _ => {}
+            }
+        }
+        false
+    }
+
+    fn values_equivalent(
+        &self,
+        lhs: ValueId,
+        rhs: ValueId,
+        query_block: BlockId,
+        work: &mut usize,
+    ) -> bool {
+        let Some(lhs) = self.normalized_unsigned_value(lhs, query_block, work) else {
+            return false;
+        };
+        let Some(rhs) = self.normalized_unsigned_value(rhs, query_block, work) else {
+            return false;
+        };
+        lhs == rhs
+            || self
+                .unsigned_constant_value(lhs)
+                .zip(self.unsigned_constant_value(rhs))
+                .is_some_and(|(lhs, rhs)| lhs == rhs)
+    }
+
+    fn normalized_unsigned_value(
+        &self,
+        mut value: ValueId,
+        query_block: BlockId,
+        work: &mut usize,
+    ) -> Option<ValueId> {
+        let mut seen = BTreeSet::new();
+        while seen.insert(value) {
+            charge_relational_work(work, 1)?;
+            let representative = resolve_representative(self.trivial_phi_representatives, value);
+            if representative != value {
+                value = representative;
+                continue;
+            }
+            if let Some(slot) = self.private_load_slots.get(&value)
+                && let Some([store]) = self.private_slot_stores.get(slot).map(Vec::as_slice)
+                && store.block != query_block
+                && self.dominates(store.block, query_block)
+            {
+                value = store.value;
+                continue;
+            }
+            let Some(definition) = self.operation_definitions.get(&value) else {
+                break;
+            };
+            let OperationKind::Cast {
+                kind,
+                value: source,
+                to,
+            } = &definition.operation.kind
+            else {
+                break;
+            };
+            let source_type = self.value_types.get(source)?;
+            let source_range = unsigned_type_range(source_type)?;
+            let target_range = unsigned_type_range(to)?;
+            let preserves_value = match kind {
+                CastKind::ZeroExtend => source_range.max <= target_range.max,
+                CastKind::Bitcast => source_range.max == target_range.max,
+                CastKind::Truncate
+                | CastKind::SignExtend
+                | CastKind::FloatExtend
+                | CastKind::FloatTruncate
+                | CastKind::IntegerToFloat
+                | CastKind::FloatToInteger => false,
+            };
+            if !preserves_value {
+                break;
+            }
+            value = *source;
+        }
+        self.value_types
+            .get(&value)
+            .and_then(unsigned_type_range)
+            .map(|_| value)
+    }
+
+    fn unsigned_constant_value(&self, value: ValueId) -> Option<u128> {
+        let definition = self.operation_definitions.get(&value)?;
+        let OperationKind::Constant(constant) = &definition.operation.kind else {
+            return None;
+        };
+        unsigned_constant_range(constant)
+            .and_then(|range| (range.min == range.max).then_some(range.min))
     }
 
     fn range_at(&mut self, value: ValueId, query_block: BlockId) -> Option<UnsignedRange> {
@@ -1751,6 +2538,197 @@ fn is_direct_private_slot_access(kind: &OperationKind, slot: ValueId) -> bool {
         } => *pointer == slot && *value != slot && access.address_space == AddressSpace::Private,
         _ => false,
     }
+}
+
+const MAX_UNIFORM_RECURRENCE_PROOF_WORK: usize = 65_536;
+
+/// Authenticates unsigned induction backedges of the form `next = checked_add(phi, step)`.
+///
+/// The returned edges may omit predecessor control when classifying the phi's
+/// value: their argument is determined by the prior phi value and the step,
+/// whose variation is still propagated normally. Reachability control is not
+/// changed, so divergent loop exits continue to make barriers non-convergent.
+/// Every backedge of a proven phi must use an exact checked-add result reached
+/// through that operation's exclusive non-overflow edge.
+fn uniform_recurrence_edges(
+    function: &Function,
+    body: &FunctionBody,
+    incoming: &BTreeMap<BlockId, Vec<Edge>>,
+    dominators: &BTreeMap<BlockId, BTreeSet<BlockId>>,
+    trivial_phi_representatives: &BTreeMap<ValueId, ValueId>,
+) -> BTreeSet<(ValueId, BlockId, ValueId)> {
+    let mut work = 0_usize;
+    let mut blocks = BTreeMap::new();
+    let mut value_types = BTreeMap::new();
+    let mut operation_definitions = BTreeMap::new();
+
+    if body.parameters.len() != function.signature.parameters.len() {
+        return BTreeSet::new();
+    }
+    for (value, ty) in body
+        .parameters
+        .iter()
+        .copied()
+        .zip(function.signature.parameters.iter().cloned())
+    {
+        if value_types.insert(value, ty).is_some() {
+            return BTreeSet::new();
+        }
+    }
+    for block in &body.blocks {
+        if blocks.insert(block.id, block).is_some() {
+            return BTreeSet::new();
+        }
+        for parameter in &block.parameters {
+            if value_types
+                .insert(parameter.id, parameter.ty.clone())
+                .is_some()
+            {
+                return BTreeSet::new();
+            }
+        }
+        for operation in &block.operations {
+            for (result_index, result) in operation.results.iter().enumerate() {
+                if value_types.insert(result.id, result.ty.clone()).is_some()
+                    || operation_definitions
+                        .insert(
+                            result.id,
+                            OperationDefinition {
+                                block: block.id,
+                                result_index,
+                                operation,
+                            },
+                        )
+                        .is_some()
+                {
+                    return BTreeSet::new();
+                }
+            }
+        }
+    }
+
+    let dominates = |dominator, block| {
+        dominators
+            .get(&block)
+            .is_some_and(|set| set.contains(&dominator))
+    };
+    let edge_is_exclusive = |source, target| {
+        incoming
+            .get(&target)
+            .is_some_and(|edges| matches!(edges.as_slice(), [edge] if edge.source == source))
+    };
+    let checked_add_succeeds_before = |value: ValueId,
+                                       query_block: BlockId|
+     -> Option<(ValueId, ValueId)> {
+        let definition = operation_definitions.get(&value)?;
+        let OperationKind::Binary {
+            op: BinaryOp::Checked(CheckedBinaryOperator::Add),
+            lhs,
+            rhs,
+        } = &definition.operation.kind
+        else {
+            return None;
+        };
+        let [result, overflow] = definition.operation.results.as_slice() else {
+            return None;
+        };
+        if definition.result_index != 0
+            || result.id != value
+            || overflow.ty != Type::BOOL
+            || !dominates(definition.block, query_block)
+        {
+            return None;
+        }
+        let terminator = blocks.get(&definition.block)?.terminator.as_ref()?;
+        let exact_overflow = |selector: ValueId| {
+            resolve_representative(trivial_phi_representatives, selector)
+                == resolve_representative(trivial_phi_representatives, overflow.id)
+        };
+        let success_dominates =
+            |target| edge_is_exclusive(definition.block, target) && dominates(target, query_block);
+        let succeeds = match terminator {
+            Terminator::ConditionalBranch {
+                condition,
+                else_target,
+                ..
+            } => exact_overflow(*condition) && success_dominates(*else_target),
+            Terminator::Switch {
+                selector, cases, ..
+            } => {
+                exact_overflow(*selector)
+                    && cases
+                        .iter()
+                        .any(|case| case.value == 0 && success_dominates(case.target))
+            }
+            Terminator::IntegerSwitch {
+                selector, cases, ..
+            } => {
+                exact_overflow(*selector)
+                    && cases.iter().any(|case| {
+                        known_u64_constant(&case.value) == Some(0) && success_dominates(case.target)
+                    })
+            }
+            Terminator::Branch { .. } | Terminator::Return { .. } | Terminator::Unreachable => {
+                false
+            }
+        };
+        succeeds.then_some((*lhs, *rhs))
+    };
+
+    let mut proven = BTreeSet::new();
+    for header in &body.blocks {
+        let Some(edges) = incoming.get(&header.id) else {
+            continue;
+        };
+        work = match work.checked_add(header.parameters.len().saturating_mul(edges.len())) {
+            Some(next) if next <= MAX_UNIFORM_RECURRENCE_PROOF_WORK => next,
+            _ => return BTreeSet::new(),
+        };
+        if edges
+            .iter()
+            .any(|edge| edge.arguments.len() != header.parameters.len())
+        {
+            continue;
+        }
+        let backedges = edges
+            .iter()
+            .filter(|edge| dominates(header.id, edge.source))
+            .collect::<Vec<_>>();
+        if backedges.is_empty() || backedges.len() == edges.len() {
+            continue;
+        }
+
+        for (index, parameter) in header.parameters.iter().enumerate() {
+            if unsigned_type_range(&parameter.ty).is_none() {
+                continue;
+            }
+            let recurrence_edges = backedges
+                .iter()
+                .filter_map(|edge| {
+                    let argument = *edge.arguments.get(index)?;
+                    let recurrence_value =
+                        resolve_representative(trivial_phi_representatives, argument);
+                    let (lhs, rhs) = checked_add_succeeds_before(recurrence_value, edge.source)?;
+                    let lhs_is_phi =
+                        resolve_representative(trivial_phi_representatives, lhs) == parameter.id;
+                    let rhs_is_phi =
+                        resolve_representative(trivial_phi_representatives, rhs) == parameter.id;
+                    let operands_match_type = value_types.get(&lhs) == Some(&parameter.ty)
+                        && value_types.get(&rhs) == Some(&parameter.ty)
+                        && value_types.get(&recurrence_value) == Some(&parameter.ty);
+                    (operands_match_type && (lhs_is_phi || rhs_is_phi)).then_some((
+                        parameter.id,
+                        edge.source,
+                        argument,
+                    ))
+                })
+                .collect::<Vec<_>>();
+            if recurrence_edges.len() == backedges.len() {
+                proven.extend(recurrence_edges);
+            }
+        }
+    }
+    proven
 }
 
 fn compute_dominators(
