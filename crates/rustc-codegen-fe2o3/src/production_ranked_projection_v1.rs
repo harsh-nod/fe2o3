@@ -26301,6 +26301,441 @@ mod tests {
         }
     }
 
+    #[derive(Clone, Copy, Debug)]
+    enum ScaledRemainderHostilityV1 {
+        Exact,
+        WrongNumerator,
+        WrongDivisorExtent,
+        WrongDivisorScale,
+        UnstableNumerator,
+        UnstableExtent,
+        UnstableScale,
+        MissingSumAssertion,
+        MissingHeadAssertion,
+        RejectingDivisibilityEdge,
+        NonDominatingDivisibilityEdge,
+        MismatchedDivisibilityScale,
+        OffsetNotBelowScale,
+        ZeroDivisor,
+    }
+
+    fn checked_overflow_terminator(
+        result: u32,
+        operation: SemanticBinaryOpV1,
+        left: SemanticOperandV1,
+        right: SemanticOperandV1,
+        target: u32,
+    ) -> SemanticTerminatorKindV1 {
+        SemanticTerminatorKindV1::Assert {
+            condition: checked_field_operand(result, 1, BOOL_TYPE),
+            expected: false,
+            message: SemanticAssertMessageV1::Overflow {
+                operation,
+                left,
+                right,
+            },
+            target: cfg_edge(SemanticEdgeRoleV1::AssertSuccess, target),
+            unwind: SemanticUnwindActionV1::Unreachable,
+        }
+    }
+
+    fn scaled_remainder_function(hostility: ScaledRemainderHostilityV1) -> SemanticFunctionDeclV1 {
+        let (extent, scale, offset) =
+            if matches!(hostility, ScaledRemainderHostilityV1::ZeroDivisor) {
+                (1, 2, 0)
+            } else if matches!(hostility, ScaledRemainderHostilityV1::OffsetNotBelowScale) {
+                (8, 2, 2)
+            } else {
+                (8, 2, 1)
+            };
+        let alternate = if matches!(
+            hostility,
+            ScaledRemainderHostilityV1::WrongDivisorScale
+                | ScaledRemainderHostilityV1::MismatchedDivisibilityScale
+        ) {
+            4
+        } else {
+            10
+        };
+        let divisor_extent = if matches!(hostility, ScaledRemainderHostilityV1::WrongDivisorExtent)
+        {
+            17
+        } else {
+            2
+        };
+        let divisor_scale = if matches!(hostility, ScaledRemainderHostilityV1::WrongDivisorScale) {
+            17
+        } else {
+            3
+        };
+        let scaled_numerator = if matches!(hostility, ScaledRemainderHostilityV1::WrongNumerator) {
+            16
+        } else {
+            1
+        };
+
+        let scaled_left = typed_operand(scaled_numerator, U64_TYPE);
+        let scaled_right = typed_operand(3, U64_TYPE);
+        let sum_left = typed_operand(8, U64_TYPE);
+        let sum_right = typed_operand(4, U64_TYPE);
+        let head_left = typed_operand(6, U64_TYPE);
+        let head_right = typed_operand(2, U64_TYPE);
+        let mut guard_statements = vec![typed_assignment(
+            12,
+            U64_TYPE,
+            SemanticRvalueKindV1::Use(checked_field_operand(11, 0, U64_TYPE)),
+        )];
+        match hostility {
+            ScaledRemainderHostilityV1::UnstableNumerator => {
+                guard_statements.push(typed_assignment(
+                    1,
+                    U64_TYPE,
+                    SemanticRvalueKindV1::Use(typed_constant(U64_TYPE, 0, 8)),
+                ))
+            }
+            ScaledRemainderHostilityV1::UnstableExtent => guard_statements.push(typed_assignment(
+                2,
+                U64_TYPE,
+                SemanticRvalueKindV1::Use(typed_constant(U64_TYPE, 9, 8)),
+            )),
+            ScaledRemainderHostilityV1::UnstableScale => guard_statements.push(typed_assignment(
+                3,
+                U64_TYPE,
+                SemanticRvalueKindV1::Use(typed_constant(U64_TYPE, 4, 8)),
+            )),
+            _ => {}
+        }
+        guard_statements.extend([
+            typed_assignment(
+                13,
+                U64_TYPE,
+                SemanticRvalueKindV1::Binary {
+                    operation: SemanticBinaryOpV1::Remainder,
+                    left: typed_operand(2, U64_TYPE),
+                    right: typed_operand(
+                        if matches!(
+                            hostility,
+                            ScaledRemainderHostilityV1::MismatchedDivisibilityScale
+                        ) {
+                            17
+                        } else {
+                            3
+                        },
+                        U64_TYPE,
+                    ),
+                },
+            ),
+            typed_assignment(
+                14,
+                BOOL_TYPE,
+                SemanticRvalueKindV1::Binary {
+                    operation: SemanticBinaryOpV1::Equal,
+                    left: typed_operand(13, U64_TYPE),
+                    right: typed_constant(U64_TYPE, 0, 8),
+                },
+            ),
+        ]);
+        let guard = match hostility {
+            ScaledRemainderHostilityV1::RejectingDivisibilityEdge => {
+                zero_switch(14, BOOL_TYPE, 4, 5)
+            }
+            ScaledRemainderHostilityV1::NonDominatingDivisibilityEdge => {
+                zero_switch(14, BOOL_TYPE, 6, 4)
+            }
+            _ => zero_switch(14, BOOL_TYPE, 5, 4),
+        };
+
+        projection_function_with_locals(
+            vec![
+                block(
+                    217,
+                    vec![
+                        typed_assignment(
+                            2,
+                            U64_TYPE,
+                            SemanticRvalueKindV1::Use(typed_constant(U64_TYPE, extent, 8)),
+                        ),
+                        typed_assignment(
+                            3,
+                            U64_TYPE,
+                            SemanticRvalueKindV1::Use(typed_constant(U64_TYPE, scale, 8)),
+                        ),
+                        typed_assignment(
+                            4,
+                            U64_TYPE,
+                            SemanticRvalueKindV1::Use(typed_constant(U64_TYPE, offset, 8)),
+                        ),
+                        typed_assignment(
+                            17,
+                            U64_TYPE,
+                            SemanticRvalueKindV1::Use(typed_constant(U64_TYPE, alternate, 8)),
+                        ),
+                        typed_assignment(
+                            5,
+                            U64_TYPE,
+                            SemanticRvalueKindV1::Binary {
+                                operation: SemanticBinaryOpV1::Divide,
+                                left: typed_operand(divisor_extent, U64_TYPE),
+                                right: typed_operand(divisor_scale, U64_TYPE),
+                            },
+                        ),
+                        typed_assignment(
+                            6,
+                            U64_TYPE,
+                            SemanticRvalueKindV1::Binary {
+                                operation: SemanticBinaryOpV1::Divide,
+                                left: typed_operand(1, U64_TYPE),
+                                right: typed_operand(5, U64_TYPE),
+                            },
+                        ),
+                        typed_assignment(
+                            7,
+                            CHECKED_U64_TYPE,
+                            SemanticRvalueKindV1::CheckedBinary(
+                                SemanticCheckedBinaryRvalueV1::new(
+                                    SemanticCheckedBinaryOpV1::Multiply,
+                                    scaled_left.clone(),
+                                    scaled_right.clone(),
+                                ),
+                            ),
+                        ),
+                    ],
+                    checked_overflow_terminator(
+                        7,
+                        SemanticBinaryOpV1::Multiply,
+                        scaled_left,
+                        scaled_right,
+                        1,
+                    ),
+                ),
+                block(
+                    218,
+                    vec![
+                        typed_assignment(
+                            8,
+                            U64_TYPE,
+                            SemanticRvalueKindV1::Use(checked_field_operand(7, 0, U64_TYPE)),
+                        ),
+                        typed_assignment(
+                            9,
+                            CHECKED_U64_TYPE,
+                            SemanticRvalueKindV1::CheckedBinary(
+                                SemanticCheckedBinaryRvalueV1::new(
+                                    SemanticCheckedBinaryOpV1::Add,
+                                    sum_left.clone(),
+                                    sum_right.clone(),
+                                ),
+                            ),
+                        ),
+                    ],
+                    if matches!(hostility, ScaledRemainderHostilityV1::MissingSumAssertion) {
+                        SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 2))
+                    } else {
+                        checked_overflow_terminator(
+                            9,
+                            SemanticBinaryOpV1::Add,
+                            sum_left,
+                            sum_right,
+                            2,
+                        )
+                    },
+                ),
+                block(
+                    219,
+                    vec![
+                        typed_assignment(
+                            10,
+                            U64_TYPE,
+                            SemanticRvalueKindV1::Use(checked_field_operand(9, 0, U64_TYPE)),
+                        ),
+                        typed_assignment(
+                            11,
+                            CHECKED_U64_TYPE,
+                            SemanticRvalueKindV1::CheckedBinary(
+                                SemanticCheckedBinaryRvalueV1::new(
+                                    SemanticCheckedBinaryOpV1::Multiply,
+                                    head_left.clone(),
+                                    head_right.clone(),
+                                ),
+                            ),
+                        ),
+                    ],
+                    if matches!(hostility, ScaledRemainderHostilityV1::MissingHeadAssertion) {
+                        SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 3))
+                    } else {
+                        checked_overflow_terminator(
+                            11,
+                            SemanticBinaryOpV1::Multiply,
+                            head_left,
+                            head_right,
+                            3,
+                        )
+                    },
+                ),
+                block(220, guard_statements, guard),
+                block(
+                    221,
+                    vec![typed_assignment(
+                        15,
+                        CHECKED_U64_TYPE,
+                        SemanticRvalueKindV1::CheckedBinary(SemanticCheckedBinaryRvalueV1::new(
+                            SemanticCheckedBinaryOpV1::Subtract,
+                            typed_operand(10, U64_TYPE),
+                            typed_operand(12, U64_TYPE),
+                        )),
+                    )],
+                    checked_overflow_terminator(
+                        15,
+                        SemanticBinaryOpV1::Subtract,
+                        typed_operand(10, U64_TYPE),
+                        typed_operand(12, U64_TYPE),
+                        5,
+                    ),
+                ),
+                block(222, vec![], SemanticTerminatorKindV1::Return),
+                block(
+                    223,
+                    vec![],
+                    SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 4)),
+                ),
+            ],
+            vec![
+                local(217, U64_TYPE, SemanticLocalRoleV1::Return),
+                local(218, U64_TYPE, SemanticLocalRoleV1::Argument(0)),
+                local(219, U64_TYPE, SemanticLocalRoleV1::Temporary),
+                local(220, U64_TYPE, SemanticLocalRoleV1::Temporary),
+                local(221, U64_TYPE, SemanticLocalRoleV1::Temporary),
+                local(222, U64_TYPE, SemanticLocalRoleV1::Temporary),
+                local(223, U64_TYPE, SemanticLocalRoleV1::Temporary),
+                local(224, CHECKED_U64_TYPE, SemanticLocalRoleV1::Temporary),
+                local(225, U64_TYPE, SemanticLocalRoleV1::Temporary),
+                local(226, CHECKED_U64_TYPE, SemanticLocalRoleV1::Temporary),
+                local(227, U64_TYPE, SemanticLocalRoleV1::Temporary),
+                local(228, CHECKED_U64_TYPE, SemanticLocalRoleV1::Temporary),
+                local(229, U64_TYPE, SemanticLocalRoleV1::Temporary),
+                local(230, U64_TYPE, SemanticLocalRoleV1::Temporary),
+                local(231, BOOL_TYPE, SemanticLocalRoleV1::Temporary),
+                local(232, CHECKED_U64_TYPE, SemanticLocalRoleV1::Temporary),
+                local(233, U64_TYPE, SemanticLocalRoleV1::Argument(1)),
+                local(234, U64_TYPE, SemanticLocalRoleV1::Temporary),
+            ],
+        )
+    }
+
+    fn proves_scaled_remainder_subtract_v1(proof: &mut SemanticAssertProofsV1<'_>) -> bool {
+        let (condition, expected, message) = match proof.function.blocks()[4].terminator().kind() {
+            SemanticTerminatorKindV1::Assert {
+                condition,
+                expected,
+                message,
+                ..
+            } => (condition.clone(), *expected, message.clone()),
+            _ => unreachable!("scaled-remainder fixture retains a checked subtraction"),
+        };
+        proof
+            .proves_checked_overflow_assert_v1(&condition, expected, &message, 4)
+            .unwrap()
+    }
+
+    #[test]
+    fn scaled_quotient_remainder_requires_exact_checked_stable_guarded_sources() {
+        let types = assertion_proof_types();
+        let use_site = ScalarAssignmentSiteV1 {
+            block: 4,
+            statement: 0,
+        };
+        let left = typed_operand(10, U64_TYPE);
+        let right = typed_operand(12, U64_TYPE);
+
+        let exact = scaled_remainder_function(ScaledRemainderHostilityV1::Exact);
+        let mut proof = SemanticAssertProofsV1::new(&types, &exact).unwrap();
+        assert!(
+            proof
+                .authenticated_scaled_quotient_remainder_v1(&left, &right, use_site)
+                .unwrap()
+                .is_some()
+        );
+        assert_eq!(
+            proof
+                .scaled_quotient_remainder_upper_range_v1(&left, &right, use_site)
+                .unwrap(),
+            Some(UnsignedRangeProofV1 {
+                minimum: 0,
+                maximum: 7,
+            })
+        );
+        assert!(
+            proof
+                .proves_scaled_quotient_remainder_nonnegative_v1(&left, &right, use_site, 4)
+                .unwrap()
+        );
+        assert!(proves_scaled_remainder_subtract_v1(&mut proof));
+
+        for hostility in [
+            ScaledRemainderHostilityV1::WrongNumerator,
+            ScaledRemainderHostilityV1::WrongDivisorExtent,
+            ScaledRemainderHostilityV1::WrongDivisorScale,
+            ScaledRemainderHostilityV1::UnstableNumerator,
+            ScaledRemainderHostilityV1::UnstableExtent,
+            ScaledRemainderHostilityV1::UnstableScale,
+            ScaledRemainderHostilityV1::MissingSumAssertion,
+            ScaledRemainderHostilityV1::MissingHeadAssertion,
+        ] {
+            let function = scaled_remainder_function(hostility);
+            let mut proof = SemanticAssertProofsV1::new(&types, &function).unwrap();
+            assert!(
+                proof
+                    .authenticated_scaled_quotient_remainder_v1(&left, &right, use_site)
+                    .unwrap()
+                    .is_none(),
+                "{hostility:?} authenticated substituted scaled-remainder sources",
+            );
+            assert!(
+                !proves_scaled_remainder_subtract_v1(&mut proof),
+                "{hostility:?} proved the checked subtraction",
+            );
+        }
+
+        for hostility in [
+            ScaledRemainderHostilityV1::RejectingDivisibilityEdge,
+            ScaledRemainderHostilityV1::NonDominatingDivisibilityEdge,
+            ScaledRemainderHostilityV1::MismatchedDivisibilityScale,
+            ScaledRemainderHostilityV1::ZeroDivisor,
+        ] {
+            let function = scaled_remainder_function(hostility);
+            let mut proof = SemanticAssertProofsV1::new(&types, &function).unwrap();
+            assert!(
+                proof
+                    .authenticated_scaled_quotient_remainder_v1(&left, &right, use_site)
+                    .unwrap()
+                    .is_some(),
+                "{hostility:?} changed the structural arithmetic identity",
+            );
+            assert!(
+                !proof
+                    .proves_scaled_quotient_remainder_nonnegative_v1(&left, &right, use_site, 4)
+                    .unwrap(),
+                "{hostility:?} authenticated a nonnegative subtraction",
+            );
+            assert!(!proves_scaled_remainder_subtract_v1(&mut proof));
+        }
+
+        let offset = scaled_remainder_function(ScaledRemainderHostilityV1::OffsetNotBelowScale);
+        let mut proof = SemanticAssertProofsV1::new(&types, &offset).unwrap();
+        assert_eq!(
+            proof
+                .scaled_quotient_remainder_upper_range_v1(&left, &right, use_site)
+                .unwrap(),
+            None,
+        );
+        assert!(
+            proof
+                .proves_scaled_quotient_remainder_nonnegative_v1(&left, &right, use_site, 4)
+                .unwrap()
+        );
+        assert!(proves_scaled_remainder_subtract_v1(&mut proof));
+    }
+
     fn compared_zero_guard_assertion_function(
         operation: SemanticBinaryOpV1,
         compared_value: u128,
