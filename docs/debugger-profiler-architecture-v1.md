@@ -203,7 +203,7 @@ contract and an unavailable response are both tested here.
 
 | Track | Exit evidence | Current closure gap |
 | --- | --- | --- |
-| T0 baseline/ADR | archived capture queries without a source checkout; pinned feature/task matrix; ownership, threat, completeness, and budget policy | caller-bound machine comparison and candidate policies exist; authenticated overhead observations, approved policies, and usable local Compute Viewer/Mojo task runs are absent |
+| T0 baseline/ADR | archived capture queries without a source checkout; pinned feature/task matrix; ownership, threat, completeness, and budget policy | a caller-pinned, fixed-role evidence archive and isolated fresh-process reference acceptance cover open/query/diagnose/compare/plan without checkout paths; authenticated overhead observations, approved policies, and usable local Compute Viewer/Mojo task runs are absent |
 | T1 semantic map | elementwise, collective, and tiled kernels round-trip source to ISA and ISA to source; optimization shapes and hostile substitution tested | general schedule/LLVM/ISA intervals and optimization-shape round trips are incomplete |
 | T2 debugger | seeded OOB and barrier divergence identify dispatch, site, workgroup, wave/lane scope, region/phase contract, and origin without raw-log parsing | V4 exact KFD publication-to-structured-MI correlation is implemented and the installed ROCgdb path reports typed stopped-state unavailability; authenticated native registers/source/memory and general cooperative live-kernel acceptance remain incomplete |
 | T3 profiler | seeded schedule/resource regression is attributed to semantic/IR/ISA change with exact comparable evidence | strict variant admission and schedule/resource co-observation exist; authenticated semantic/IR/ISA localization, decoded ATT/runtime/copy attribution, and causal end-to-end explanation are incomplete |
@@ -235,7 +235,8 @@ It opens bounded regular evidence once with no-follow semantics, rejects
 symlinks and hard links, revalidates the same descriptor's stable filesystem
 identity and mutation metadata after reading, and spawns fresh debugger/
 profiler children with piped stdin, stdout, and stderr. Simulator
-launch-time inputs are private snapshots; accepted diagnoses must independently
+launch-time inputs are anonymous read-only sealed memfds; accepted diagnoses
+must independently
 return the exact preloaded KIR policy identity and request SHA-256/length. The
 profiler Variant extension instead carries all exact bytes as canonical
 lowercase hex, so a mutable path is never evidence.
@@ -285,12 +286,21 @@ still attempted after a signal error, while Drop cannot repeat the group signal.
 Process-level hostile tests cover these cases, stale and duplicate requests,
 swapped or unrelated Agent envelopes, repeated cursors/pages, wrong capture
 bindings, raw-source and response substitution, malformed terminal input,
-post-preload simulator snapshot substitution, evidence symlinks/hard links,
+sealed-input type/size/seal substitution, evidence symlinks/hard links,
 determinism, and line/response bounds. Separate admission tests cover aggregate
 treatment overflow, and the exact Variant decoder rejects a canonically
 resealed comparison from different retained treatment inputs. A
 descriptor-level hostile test covers executable symlink/hard-link rejection
 plus rename/replacement retention and mutation rejection.
+
+The archive route additionally requires a caller-pinned whole-archive digest,
+canonical ordered member identities, and a persistent same-object archive path
+through admission. It copies admitted producer bytes into read-only executable
+sealed memfds and clears every archive child environment variable. Its KIR and
+request members are never extracted to names. The legacy route intentionally
+keeps its descriptor-bound rename/unlink semantics, producer descriptors, and
+environment behavior; archive hardening does not silently revise that frozen
+contract.
 
 This satisfies the scoped T4 workflow acceptance for the two seeded simulator
 diagnoses, the conservative T3 co-observation, and the ambiguous next-capture

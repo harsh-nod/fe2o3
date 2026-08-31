@@ -16,6 +16,7 @@ pub mod live_kfd_v3;
 mod live_rocgdb_kfd_v4;
 #[cfg(target_os = "linux")]
 mod live_rocgdb_v3;
+pub mod reference_archive_v1;
 #[cfg(target_os = "linux")]
 mod rocgdb_mi_parser_v3;
 #[cfg(target_os = "linux")]
@@ -27,7 +28,13 @@ pub mod rocgdb_mi_v4;
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::ffi::{OsStr, OsString};
+#[cfg(target_os = "linux")]
+use std::fs::File;
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
+#[cfg(target_os = "linux")]
+use std::os::fd::{AsRawFd, BorrowedFd, RawFd};
+#[cfg(target_os = "linux")]
+use std::os::unix::fs::FileExt;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -60,13 +67,16 @@ use fe2o3_kir_sim::{
 use fe2o3_kir_sim_cli::{
     AdmittedSimulationInputV1, SimulationInputErrorV1, load_debug_sidecar_v1,
     load_debug_simulation_bundle_v1, load_debug_simulation_bundle_v2,
-    load_debug_simulation_input_v1, load_debug_simulation_schedule_v1,
+    load_debug_simulation_input_bytes_v1, load_debug_simulation_input_v1,
+    load_debug_simulation_schedule_v1,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-const USAGE: &str = "usage: fe2o3-debug sim (--kir-v7 PATH | --bundle PATH | --bundle-v2 PATH) --request PATH [--replay-schedule PATH] [--source-map PATH --source-bundle-subject ID] [--protocol jsonl] [--wave-width 32|64]\n       fe2o3-debug live-kfd --bundle-v2 PATH --request PATH --hsaco PATH [--protocol jsonl] [--wave-width 32|64] -- PROGRAM [ARG...]\n       fe2o3-debug live-rocgdb --rocgdb PATH --authorization ID [--protocol jsonl] [--wave-width 32|64] [--timeout-ms N] (--attach PID | -- PROGRAM [ARG...])\n       fe2o3-debug live-rocgdb-kfd-v4 --rocgdb PATH --authorization ID --hsaco PATH --load-base 0xHEX --kernel NAME [--device-unique-id DECIMAL] [--protocol jsonl] [--wave-width 32|64] [--timeout-ms N] -- PROGRAM [ARG...]\n       fe2o3-debug hardware -- PROGRAM [ARG...]";
+const USAGE: &str = "usage: fe2o3-debug sim ((--kir-v7 PATH | --bundle PATH | --bundle-v2 PATH) --request PATH | --kir-v7-fd FD --request-fd FD) [--replay-schedule PATH] [--source-map PATH --source-bundle-subject ID] [--protocol jsonl] [--wave-width 32|64]\n       fe2o3-debug live-kfd --bundle-v2 PATH --request PATH --hsaco PATH [--protocol jsonl] [--wave-width 32|64] -- PROGRAM [ARG...]\n       fe2o3-debug live-rocgdb --rocgdb PATH --authorization ID [--protocol jsonl] [--wave-width 32|64] [--timeout-ms N] (--attach PID | -- PROGRAM [ARG...])\n       fe2o3-debug live-rocgdb-kfd-v4 --rocgdb PATH --authorization ID --hsaco PATH --load-base 0xHEX --kernel NAME [--device-unique-id DECIMAL] [--protocol jsonl] [--wave-width 32|64] [--timeout-ms N] -- PROGRAM [ARG...]\n       fe2o3-debug hardware -- PROGRAM [ARG...]";
 const MAX_SESSION_COMMANDS_V1: u64 = 1_000_000;
+#[cfg(target_os = "linux")]
+const MAX_SEALED_DEBUG_INPUT_BYTES_V1: usize = 16 * 1024 * 1024;
 const TRACE_HEADER_SCHEMA_V1: &str = "fe2o3-debug-trace-v1";
 pub const SOURCE_MAP_SCHEMA_V1: &str = fe2o3_kernel_ir::DEBUG_SOURCE_MAP_SCHEMA_V1;
 pub const MAX_SOURCE_MAP_BYTES_V1: usize = fe2o3_kernel_ir::MAX_SIMULATION_DEBUG_MAP_BYTES_V1;
@@ -74,7 +84,7 @@ pub const MAX_SOURCE_MAP_BYTES_V1: usize = fe2o3_kernel_ir::MAX_SIMULATION_DEBUG
 #[derive(Debug)]
 struct OptionsV1 {
     program: ProgramInputV1,
-    request: PathBuf,
+    request: RequestInputV1,
     source_map: Option<PathBuf>,
     source_bundle_subject: Option<OpaqueIdentityV1>,
     replay_schedule: Option<PathBuf>,
@@ -95,8 +105,15 @@ struct LiveKfdOptionsV3 {
 #[derive(Debug)]
 enum ProgramInputV1 {
     KirV7(PathBuf),
+    SealedKirV7Fd(i32),
     Bundle(PathBuf),
     BundleV2(PathBuf),
+}
+
+#[derive(Debug)]
+enum RequestInputV1 {
+    Path(PathBuf),
+    SealedFd(i32),
 }
 
 #[derive(Debug)]
@@ -1981,9 +1998,9 @@ pub fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let (admitted, bundle, bundle_v2) = match &options.program {
-        ProgramInputV1::KirV7(path) => {
-            match load_debug_simulation_input_v1(path, &options.request) {
+    let (admitted, bundle, bundle_v2) = match (&options.program, &options.request) {
+        (ProgramInputV1::KirV7(path), RequestInputV1::Path(request)) => {
+            match load_debug_simulation_input_v1(path, request) {
                 Ok(input) => (input, None, None),
                 Err(error) => {
                     write_input_error(&error);
@@ -1991,8 +2008,41 @@ pub fn main() -> ExitCode {
                 }
             }
         }
-        ProgramInputV1::Bundle(path) => {
-            match load_debug_simulation_bundle_v1(path, &options.request) {
+        (ProgramInputV1::SealedKirV7Fd(kir_fd), RequestInputV1::SealedFd(request_fd)) => {
+            #[cfg(target_os = "linux")]
+            {
+                let (kir, request) = match read_sealed_debug_input_pair_v1(
+                    *kir_fd,
+                    *request_fd,
+                    MAX_SEALED_DEBUG_INPUT_BYTES_V1,
+                ) {
+                    Ok(inputs) => inputs,
+                    Err(message) => {
+                        write_bootstrap_error("input", "sealed_input_rejected", &message);
+                        return ExitCode::FAILURE;
+                    }
+                };
+                match load_debug_simulation_input_bytes_v1(&kir, &request) {
+                    Ok(input) => (input, None, None),
+                    Err(error) => {
+                        write_input_error(&error);
+                        return ExitCode::FAILURE;
+                    }
+                }
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                let _ = (kir_fd, request_fd);
+                write_bootstrap_error(
+                    "input",
+                    "sealed_input_unavailable",
+                    "sealed debugger input descriptors require Linux",
+                );
+                return ExitCode::FAILURE;
+            }
+        }
+        (ProgramInputV1::Bundle(path), RequestInputV1::Path(request)) => {
+            match load_debug_simulation_bundle_v1(path, request) {
                 Ok(admitted) => {
                     let (input, bundle) = admitted.into_parts();
                     (input, Some(bundle), None)
@@ -2003,8 +2053,8 @@ pub fn main() -> ExitCode {
                 }
             }
         }
-        ProgramInputV1::BundleV2(path) => {
-            match load_debug_simulation_bundle_v2(path, &options.request) {
+        (ProgramInputV1::BundleV2(path), RequestInputV1::Path(request)) => {
+            match load_debug_simulation_bundle_v2(path, request) {
                 Ok(admitted) => {
                     let (input, bundle) = admitted.into_parts();
                     (input, None, Some(bundle))
@@ -2015,6 +2065,7 @@ pub fn main() -> ExitCode {
                 }
             }
         }
+        _ => unreachable!("argument parser pairs program and request input custody"),
     };
     let (source_map, caller_source_map_v2) =
         match (&options.source_map, options.source_bundle_subject) {
@@ -2294,9 +2345,11 @@ fn parse_options(arguments: impl Iterator<Item = OsString>) -> Result<OptionsV1,
         return Err(USAGE.to_owned());
     }
     let mut kir_v7 = None;
+    let mut kir_v7_fd = None;
     let mut bundle = None;
     let mut bundle_v2 = None;
     let mut request = None;
+    let mut request_fd = None;
     let mut source_map = None;
     let mut source_bundle_subject = None;
     let mut replay_schedule = None;
@@ -2308,12 +2361,24 @@ fn parse_options(arguments: impl Iterator<Item = OsString>) -> Result<OptionsV1,
             .ok_or_else(|| format!("option {option:?} requires a value; {USAGE}"))?;
         if option == OsStr::new("--kir-v7") {
             set_once(&mut kir_v7, PathBuf::from(value), "--kir-v7")?;
+        } else if option == OsStr::new("--kir-v7-fd") {
+            set_once(
+                &mut kir_v7_fd,
+                parse_sealed_input_fd_v1(&value, "--kir-v7-fd")?,
+                "--kir-v7-fd",
+            )?;
         } else if option == OsStr::new("--bundle") {
             set_once(&mut bundle, PathBuf::from(value), "--bundle")?;
         } else if option == OsStr::new("--bundle-v2") {
             set_once(&mut bundle_v2, PathBuf::from(value), "--bundle-v2")?;
         } else if option == OsStr::new("--request") {
             set_once(&mut request, PathBuf::from(value), "--request")?;
+        } else if option == OsStr::new("--request-fd") {
+            set_once(
+                &mut request_fd,
+                parse_sealed_input_fd_v1(&value, "--request-fd")?,
+                "--request-fd",
+            )?;
         } else if option == OsStr::new("--source-map") {
             set_once(&mut source_map, PathBuf::from(value), "--source-map")?;
         } else if option == OsStr::new("--replay-schedule") {
@@ -2358,11 +2423,12 @@ fn parse_options(arguments: impl Iterator<Item = OsString>) -> Result<OptionsV1,
             "--source-map and --source-bundle-subject must be supplied together; {USAGE}"
         ));
     }
-    let program = match (kir_v7, bundle, bundle_v2) {
-        (Some(path), None, None) => ProgramInputV1::KirV7(path),
-        (None, Some(path), None) => ProgramInputV1::Bundle(path),
-        (None, None, Some(path)) => ProgramInputV1::BundleV2(path),
-        (None, None, None) => {
+    let program = match (kir_v7, kir_v7_fd, bundle, bundle_v2) {
+        (Some(path), None, None, None) => ProgramInputV1::KirV7(path),
+        (None, Some(fd), None, None) => ProgramInputV1::SealedKirV7Fd(fd),
+        (None, None, Some(path), None) => ProgramInputV1::Bundle(path),
+        (None, None, None, Some(path)) => ProgramInputV1::BundleV2(path),
+        (None, None, None, None) => {
             return Err(format!("exactly one program input is required; {USAGE}"));
         }
         _ => {
@@ -2378,13 +2444,158 @@ fn parse_options(arguments: impl Iterator<Item = OsString>) -> Result<OptionsV1,
             "--source-map and --source-bundle-subject cannot override an admitted bundle; {USAGE}"
         ));
     }
+    let request = match (&program, request, request_fd) {
+        (ProgramInputV1::SealedKirV7Fd(kir_fd), None, Some(request_fd))
+            if *kir_fd != request_fd =>
+        {
+            RequestInputV1::SealedFd(request_fd)
+        }
+        (ProgramInputV1::SealedKirV7Fd(_), None, Some(_)) => {
+            return Err(format!(
+                "--kir-v7-fd and --request-fd must name distinct descriptors; {USAGE}"
+            ));
+        }
+        (ProgramInputV1::SealedKirV7Fd(_), _, _) => {
+            return Err(format!(
+                "--kir-v7-fd requires exactly one --request-fd; {USAGE}"
+            ));
+        }
+        (_, Some(path), None) => RequestInputV1::Path(path),
+        (_, _, _) => {
+            return Err(format!(
+                "path program inputs require exactly one --request and no --request-fd; {USAGE}"
+            ));
+        }
+    };
     Ok(OptionsV1 {
         program,
-        request: request.ok_or_else(|| format!("--request is required; {USAGE}"))?,
+        request,
         source_map,
         source_bundle_subject,
         replay_schedule,
         wave_width,
+    })
+}
+
+fn parse_sealed_input_fd_v1(value: &OsStr, option: &str) -> Result<i32, String> {
+    let value = value
+        .to_str()
+        .ok_or_else(|| format!("{option} must be a canonical decimal descriptor; {USAGE}"))?;
+    let descriptor = value
+        .parse::<i32>()
+        .ok()
+        .filter(|descriptor| *descriptor >= 3)
+        .ok_or_else(|| format!("{option} must be a descriptor at least 3; {USAGE}"))?;
+    if descriptor.to_string() != value {
+        return Err(format!(
+            "{option} must be a canonical decimal descriptor; {USAGE}"
+        ));
+    }
+    Ok(descriptor)
+}
+
+#[cfg(target_os = "linux")]
+const REQUIRED_SEALED_DEBUG_INPUT_SEALS_V1: rustix::fs::SealFlags = rustix::fs::SealFlags::WRITE
+    .union(rustix::fs::SealFlags::GROW)
+    .union(rustix::fs::SealFlags::SHRINK)
+    .union(rustix::fs::SealFlags::SEAL);
+
+#[cfg(target_os = "linux")]
+struct AdmittedSealedDebugInputV1 {
+    bytes: Vec<u8>,
+    object: (u64, u64),
+}
+
+#[cfg(target_os = "linux")]
+fn read_sealed_debug_input_pair_v1(
+    kir_descriptor: RawFd,
+    request_descriptor: RawFd,
+    maximum: usize,
+) -> Result<(Vec<u8>, Vec<u8>), String> {
+    let kir = read_sealed_debug_input_fd_v1(kir_descriptor, maximum, "canonical KIR V7")?;
+    let request = read_sealed_debug_input_fd_v1(request_descriptor, maximum, "simulation request")?;
+    if kir.object == request.object {
+        return Err(
+            "canonical KIR V7 and simulation request descriptors alias the same sealed memfd"
+                .to_owned(),
+        );
+    }
+    Ok((kir.bytes, request.bytes))
+}
+
+#[cfg(target_os = "linux")]
+#[allow(unsafe_code)]
+fn read_sealed_debug_input_fd_v1(
+    descriptor: RawFd,
+    maximum: usize,
+    label: &str,
+) -> Result<AdmittedSealedDebugInputV1, String> {
+    // SAFETY: the numeric descriptor is not consumed; every operation first
+    // validates it and the owned duplicate is the only descriptor converted
+    // into `File`.
+    let inherited = unsafe { BorrowedFd::borrow_raw(descriptor) };
+    rustix::io::fcntl_getfd(inherited).map_err(|_| format!("{label} descriptor is unavailable"))?;
+    rustix::io::fcntl_setfd(inherited, rustix::io::FdFlags::CLOEXEC)
+        .map_err(|_| format!("could not protect inherited {label} descriptor"))?;
+    let duplicate = rustix::io::fcntl_dupfd_cloexec(inherited, 3)
+        .map_err(|_| format!("could not duplicate inherited {label} descriptor"))?;
+    let file = File::from(duplicate);
+    let before = rustix::fs::fstat(&file)
+        .map_err(|_| format!("could not inspect inherited {label} descriptor"))?;
+    let status = rustix::fs::fcntl_getfl(&file)
+        .map_err(|_| format!("could not inspect inherited {label} status"))?;
+    let seals = rustix::fs::fcntl_get_seals(&file)
+        .map_err(|_| format!("could not inspect inherited {label} seals"))?;
+    let length = usize::try_from(before.st_size)
+        .ok()
+        .filter(|length| *length > 0 && *length <= maximum)
+        .ok_or_else(|| format!("inherited {label} exceeds its {maximum}-byte bound"))?;
+    if rustix::fs::FileType::from_raw_mode(before.st_mode) != rustix::fs::FileType::RegularFile
+        || before.st_nlink != 0
+        || before.st_mode & 0o7777 != 0o400
+        || status & rustix::fs::OFlags::ACCMODE != rustix::fs::OFlags::RDONLY
+        || status.contains(rustix::fs::OFlags::PATH)
+        || seals != REQUIRED_SEALED_DEBUG_INPUT_SEALS_V1
+    {
+        return Err(format!(
+            "inherited {label} is not an exact immutable read-only input memfd"
+        ));
+    }
+    let proc_link = std::fs::read_link(format!("/proc/self/fd/{}", file.as_raw_fd()))
+        .map_err(|_| format!("could not inspect inherited {label} descriptor link"))?;
+    let proc_link = proc_link.as_os_str().as_encoded_bytes();
+    if !(proc_link.starts_with(b"/memfd:") || proc_link.starts_with(b"memfd:"))
+        || !proc_link.ends_with(b" (deleted)")
+    {
+        return Err(format!("inherited {label} is not a sealed memfd"));
+    }
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(length)
+        .map_err(|_| format!("could not reserve bounded inherited {label}"))?;
+    bytes.resize(length, 0);
+    file.read_exact_at(&mut bytes, 0)
+        .map_err(|_| format!("could not read inherited {label}"))?;
+    let after =
+        rustix::fs::fstat(&file).map_err(|_| format!("could not revalidate inherited {label}"))?;
+    let after_seals = rustix::fs::fcntl_get_seals(&file)
+        .map_err(|_| format!("could not revalidate inherited {label} seals"))?;
+    if before.st_dev != after.st_dev
+        || before.st_ino != after.st_ino
+        || before.st_mode != after.st_mode
+        || before.st_nlink != after.st_nlink
+        || before.st_size != after.st_size
+        || before.st_mtime != after.st_mtime
+        || before.st_mtime_nsec != after.st_mtime_nsec
+        || before.st_ctime != after.st_ctime
+        || before.st_ctime_nsec != after.st_ctime_nsec
+        || seals != after_seals
+    {
+        return Err(format!("inherited {label} changed during admission"));
+    }
+    Ok(AdmittedSealedDebugInputV1 {
+        bytes,
+        object: (before.st_dev, before.st_ino),
     })
 }
 
@@ -7141,8 +7352,28 @@ mod tests {
             options.program,
             ProgramInputV1::KirV7(ref path) if path == &PathBuf::from("kernel.kir")
         ));
-        assert_eq!(options.request, PathBuf::from("request.json"));
+        assert!(matches!(
+            options.request,
+            RequestInputV1::Path(ref path) if path == &PathBuf::from("request.json")
+        ));
         assert_eq!(options.wave_width, DebugWaveWidthV1::Wave32);
+
+        let options = parse_options(
+            [
+                "sim",
+                "--kir-v7-fd",
+                "7",
+                "--request-fd",
+                "8",
+                "--protocol",
+                "jsonl",
+            ]
+            .into_iter()
+            .map(OsString::from),
+        )
+        .unwrap();
+        assert!(matches!(options.program, ProgramInputV1::SealedKirV7Fd(7)));
+        assert!(matches!(options.request, RequestInputV1::SealedFd(8)));
 
         for arguments in [
             vec!["sim", "--kir-v7", "kernel.kir", "--request"],
@@ -7164,9 +7395,86 @@ mod tests {
                 "--request",
                 "request.json",
             ],
+            vec!["sim", "--kir-v7-fd", "7", "--request-fd", "7"],
+            vec!["sim", "--kir-v7-fd", "07", "--request-fd", "8"],
+            vec!["sim", "--kir-v7-fd", "7", "--request", "request.json"],
+            vec!["sim", "--kir-v7", "kernel.kir", "--request-fd", "8"],
         ] {
             assert!(parse_options(arguments.into_iter().map(OsString::from)).is_err());
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn sealed_fd_input_admission_rejects_alias_named_unsealed_and_oversized_objects() {
+        use std::os::unix::fs::OpenOptionsExt;
+
+        fn memfd(bytes: &[u8], seal: bool) -> File {
+            let descriptor = rustix::fs::memfd_create(
+                "fe2o3-debug-cli-fd-test-v1",
+                rustix::fs::MemfdFlags::CLOEXEC | rustix::fs::MemfdFlags::ALLOW_SEALING,
+            )
+            .unwrap();
+            let writable = File::from(descriptor);
+            rustix::fs::fchmod(&writable, rustix::fs::Mode::from_raw_mode(0o400)).unwrap();
+            writable.write_all_at(bytes, 0).unwrap();
+            if seal {
+                rustix::fs::fcntl_add_seals(
+                    &writable,
+                    rustix::fs::SealFlags::WRITE
+                        | rustix::fs::SealFlags::GROW
+                        | rustix::fs::SealFlags::SHRINK,
+                )
+                .unwrap();
+                rustix::fs::fcntl_add_seals(&writable, rustix::fs::SealFlags::SEAL).unwrap();
+            }
+            let path = format!("/proc/self/fd/{}", writable.as_raw_fd());
+            let read_only = rustix::fs::open(
+                path,
+                rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::CLOEXEC,
+                rustix::fs::Mode::empty(),
+            )
+            .map(File::from)
+            .unwrap();
+            drop(writable);
+            read_only
+        }
+
+        let admitted = memfd(b"exact bytes", true);
+        assert_eq!(
+            read_sealed_debug_input_fd_v1(admitted.as_raw_fd(), 1024, "test input")
+                .unwrap()
+                .bytes,
+            b"exact bytes"
+        );
+        let alias = rustix::io::fcntl_dupfd_cloexec(&admitted, 3).unwrap();
+        assert_ne!(admitted.as_raw_fd(), alias.as_raw_fd());
+        assert_eq!(
+            read_sealed_debug_input_pair_v1(admitted.as_raw_fd(), alias.as_raw_fd(), 1024)
+                .unwrap_err(),
+            "canonical KIR V7 and simulation request descriptors alias the same sealed memfd"
+        );
+
+        let unsealed = memfd(b"unsealed", false);
+        assert!(read_sealed_debug_input_fd_v1(unsealed.as_raw_fd(), 1024, "test input").is_err());
+
+        let root =
+            std::env::temp_dir().join(format!("fe2o3-debug-cli-named-fd-{}", std::process::id()));
+        let named = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .read(true)
+            .write(true)
+            .mode(0o400)
+            .open(&root)
+            .unwrap();
+        named.write_all_at(b"named", 0).unwrap();
+        assert!(read_sealed_debug_input_fd_v1(named.as_raw_fd(), 1024, "test input").is_err());
+        drop(named);
+        std::fs::remove_file(root).unwrap();
+
+        let oversized = memfd(b"oversized", true);
+        assert!(read_sealed_debug_input_fd_v1(oversized.as_raw_fd(), 4, "test input").is_err());
     }
 
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]

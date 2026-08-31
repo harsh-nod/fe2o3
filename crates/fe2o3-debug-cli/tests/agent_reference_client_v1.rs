@@ -1,10 +1,9 @@
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::thread;
-use std::time::{Duration, Instant};
+use std::process::Command;
 
+use fe2o3_debug_cli::reference_archive_v1::*;
 use fe2o3_kernel_ir::*;
 use fe2o3_semantic_import::*;
 use fe2o3_semantic_query::*;
@@ -38,6 +37,16 @@ fn write(path: &Path, bytes: &[u8]) {
 fn install_executable(source: &Path, destination: &Path) {
     fs::copy(source, destination).unwrap();
     fs::set_permissions(destination, fs::Permissions::from_mode(0o700)).unwrap();
+}
+
+fn lower_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut encoded = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        encoded.push(HEX[(byte >> 4) as usize] as char);
+        encoded.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    encoded
 }
 
 fn operation(result: u32, ty: Type, kind: OperationKind) -> Operation {
@@ -321,41 +330,12 @@ fn fresh_process_client_completes_three_diagnoses_and_minimum_plan() {
         }))
         .unwrap(),
     );
-    let substituted = Command::new(env!("CARGO_BIN_EXE_fe2o3-agent-reference-client"))
-        .arg("--workflow")
-        .arg(&workflow_path)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    let snapshot =
-        std::env::temp_dir().join(format!("fe2o3-agent-reference-{}-2.json", substituted.id()));
-    let replacement = temp.join("substituted-snapshot.json");
-    let mut changed_request = oob_request_bytes.to_vec();
-    changed_request.push(b'\n');
-    write(&replacement, &changed_request);
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while !snapshot.exists() && Instant::now() < deadline {
-        thread::sleep(Duration::from_millis(1));
-    }
-    assert!(
-        snapshot.exists(),
-        "client did not expose its bounded snapshot"
-    );
-    fs::rename(&replacement, &snapshot).unwrap();
-    let substituted = substituted.wait_with_output().unwrap();
-    assert!(!substituted.status.success());
-    assert!(substituted.stdout.is_empty());
-    assert!(
-        String::from_utf8(substituted.stderr)
-            .unwrap()
-            .contains("debugger did not use the exact loaded request bytes")
-    );
-
+    let forbidden_temp = temp.join("must-not-create-debugger-snapshots");
     let run = || {
         Command::new(env!("CARGO_BIN_EXE_fe2o3-agent-reference-client"))
             .arg("--workflow")
             .arg(&workflow_path)
+            .env("TMPDIR", &forbidden_temp)
             .output()
             .unwrap()
     };
@@ -367,6 +347,7 @@ fn fresh_process_client_completes_three_diagnoses_and_minimum_plan() {
         String::from_utf8_lossy(&first.stderr)
     );
     assert!(first.stderr.is_empty());
+    assert!(!forbidden_temp.exists());
     assert_eq!(first.stdout, second.stdout);
     let report: JsonValue = serde_json::from_slice(&first.stdout).unwrap();
     assert_eq!(report["schema"], "fe2o3-agent-reference-report-v1");
@@ -469,6 +450,356 @@ fn fresh_process_client_completes_three_diagnoses_and_minimum_plan() {
     for forbidden in ["/dev/kfd", "pid", "native_address", "attach_process"] {
         assert!(!text.contains(forbidden));
     }
+    fs::remove_dir_all(temp).unwrap();
+}
+
+#[test]
+fn installed_fresh_process_uses_only_pinned_archive_and_production_binaries() {
+    let temp = temp_root("archive-acceptance");
+    fs::create_dir(&temp).unwrap();
+    let debugger = temp.join("fe2o3-debug");
+    let profiler_service = temp.join("fe2o3-agent-profiler-service");
+    let reference_client = temp.join("fe2o3-agent-reference-client");
+    let archive_path = temp.join("evidence.fe2archive");
+    install_executable(Path::new(env!("CARGO_BIN_EXE_fe2o3-debug")), &debugger);
+    install_executable(
+        Path::new(env!("CARGO_BIN_EXE_fe2o3-agent-profiler-service")),
+        &profiler_service,
+    );
+    install_executable(
+        Path::new(env!("CARGO_BIN_EXE_fe2o3-agent-reference-client")),
+        &reference_client,
+    );
+
+    let oob_kernel = include_bytes!("../../fe2o3-kir-sim-cli/tutorial/fill-v1/kernel.kir");
+    let oob_request = br#"{"schema":"fe2o3-simulation-request-v1","kernel":"fill","grid":[4,1,1],"workgroup":[64,1,1],"arguments":[{"kind":"buffer","element":"u32","access":"read_write","alignment":4,"bytes":"0x00000000"}]}"#;
+    let barrier_kernel = VerifiedCanonicalKernelIrV7::from_module(divergent_barrier_module())
+        .unwrap()
+        .canonical_bytes()
+        .to_vec();
+    let barrier_request = br#"{"schema":"fe2o3-simulation-request-v1","kernel":"divergent_barrier","grid":[2,1,1],"workgroup":[2,1,1],"arguments":[]}"#;
+    let workload = br#"{"kernel":"generic","shape":[256,2,1]}"#;
+    let baseline = treatment(
+        workload,
+        source(140, 260),
+        hsaco(7, 0),
+        1,
+        b"schedule-v1",
+        b"isa-v1",
+    );
+    let candidate = treatment(
+        workload,
+        source(170, 310),
+        hsaco(11, 2),
+        2,
+        b"schedule-v2",
+        b"isa-v2",
+    );
+    let archive = encode_reference_evidence_archive_v1(ReferenceEvidenceArchiveInputV1 {
+        out_of_bounds: ReferenceSimulatorCaseInputV1 {
+            kernel: oob_kernel,
+            request: oob_request,
+        },
+        barrier_divergence: ReferenceSimulatorCaseInputV1 {
+            kernel: &barrier_kernel,
+            request: barrier_request,
+        },
+        baseline: ReferenceTreatmentInputV1 {
+            manifest: &baseline.manifest,
+            semantic_workload: &baseline.workload,
+            raw_profiler_source: &baseline.source,
+            bundle: &baseline.bundle,
+            schedule: &baseline.schedule,
+            artifact: &baseline.artifact,
+            isa_projection: Some(&baseline.isa),
+            counters: None,
+            pc_samples: None,
+        },
+        candidate: ReferenceTreatmentInputV1 {
+            manifest: &candidate.manifest,
+            semantic_workload: &candidate.workload,
+            raw_profiler_source: &candidate.source,
+            bundle: &candidate.bundle,
+            schedule: &candidate.schedule,
+            artifact: &candidate.artifact,
+            isa_projection: Some(&candidate.isa),
+            counters: None,
+            pc_samples: None,
+        },
+    })
+    .unwrap();
+    let digest = lower_hex(&reference_evidence_archive_sha256_v1(&archive));
+    write(&archive_path, &archive);
+
+    let staged = fs::read_dir(&temp)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        staged,
+        [
+            "evidence.fe2archive",
+            "fe2o3-agent-profiler-service",
+            "fe2o3-agent-reference-client",
+            "fe2o3-debug",
+        ]
+        .into_iter()
+        .map(std::ffi::OsString::from)
+        .collect::<std::collections::BTreeSet<_>>()
+    );
+
+    let run = || {
+        Command::new(&reference_client)
+            .args(["--archive", "evidence.fe2archive", "--archive-sha256"])
+            .arg(&digest)
+            .args([
+                "--debugger",
+                "fe2o3-debug",
+                "--profiler-service",
+                "fe2o3-agent-profiler-service",
+            ])
+            .current_dir(&temp)
+            .env_clear()
+            .env("PATH", "/hostile/path")
+            .env("LD_LIBRARY_PATH", "/hostile/loader")
+            .env("LANG", "hostile_LOCALE")
+            .env("TMPDIR", temp.join("must-not-exist"))
+            .env("ROCM_PATH", "/hostile/rocm")
+            .env("ASAN_OPTIONS", "hostile=1")
+            .env("FE2O3_HOSTILE", "1")
+            .output()
+            .unwrap()
+    };
+    let first = run();
+    let second = run();
+    assert!(
+        first.status.success(),
+        "archive client failed: {}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    assert!(first.stderr.is_empty());
+    assert_eq!(first.stdout, second.stdout);
+    assert!(!temp.join("must-not-exist").exists());
+    let report: JsonValue = serde_json::from_slice(&first.stdout).unwrap();
+    assert_eq!(
+        report["schema"],
+        REFERENCE_EVIDENCE_ARCHIVE_REPORT_SCHEMA_V1
+    );
+    assert_eq!(
+        report["archive_schema"],
+        REFERENCE_EVIDENCE_ARCHIVE_SCHEMA_V1
+    );
+    assert_eq!(report["archive"]["sha256"], digest);
+    assert_eq!(report["archive"]["bytes"], archive.len() as u64);
+    assert_eq!(report["members"].as_array().unwrap().len(), 18);
+    let member = |role: &str| {
+        report["members"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|member| member["role"] == role)
+            .unwrap()
+    };
+    for (role, bytes, case) in [
+        (
+            "out-of-bounds/kernel.kir-v7",
+            oob_kernel.as_slice(),
+            "out_of_bounds",
+        ),
+        (
+            "out-of-bounds/request.json",
+            oob_request.as_slice(),
+            "out_of_bounds",
+        ),
+        (
+            "barrier/kernel.kir-v7",
+            barrier_kernel.as_slice(),
+            "barrier_divergence",
+        ),
+        (
+            "barrier/request.json",
+            barrier_request.as_slice(),
+            "barrier_divergence",
+        ),
+    ] {
+        let raw_member_sha256 = lower_hex(&<[u8; 32]>::from(sha2::Sha256::digest(bytes)));
+        assert_eq!(member(role)["sha256"], raw_member_sha256);
+        assert_eq!(member(role)["bytes"], bytes.len() as u64);
+        let (admitted, admitted_sha256) = if role.ends_with("kernel.kir-v7") {
+            let verified = VerifiedCanonicalKernelIrV7::from_canonical_bytes(bytes.to_vec())
+                .expect("archive kernel member is canonical KIR V7");
+            (
+                &report["workflow"][case]["diagnosis"]["input"]["canonical_kir_v7"]["value"],
+                lower_hex(verified.identity().digest()),
+            )
+        } else {
+            (
+                &report["workflow"][case]["diagnosis"]["input"]["dispatch_request"]["value"],
+                raw_member_sha256.clone(),
+            )
+        };
+        if role.ends_with("kernel.kir-v7") {
+            assert_ne!(admitted_sha256, raw_member_sha256);
+        }
+        assert_eq!(admitted["sha256"], admitted_sha256);
+        assert_eq!(admitted["canonical_bytes"], bytes.len() as u64);
+    }
+    assert_eq!(
+        report["authority"],
+        "read_only_no_execution_attach_scheduling_or_collection_authority"
+    );
+    assert_eq!(
+        report["workflow"]["authority"],
+        "read_only_no_execution_attach_scheduling_or_collection_authority"
+    );
+    assert_eq!(
+        report["workflow"]["out_of_bounds"]["class"],
+        "memory_out_of_bounds"
+    );
+    assert_eq!(
+        report["workflow"]["barrier_divergence"]["class"],
+        "workgroup_barrier_divergence"
+    );
+    for case in ["out_of_bounds", "barrier_divergence"] {
+        let diagnosis = &report["workflow"][case];
+        assert_eq!(
+            diagnosis["citations"],
+            diagnosis["diagnosis"]["evidence"]["citations"]
+        );
+        assert!(!diagnosis["citations"].as_array().unwrap().is_empty());
+    }
+    assert!(
+        !report["workflow"]["variant"]["ranked_explanations"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        report["workflow"]["next_capture"]["minimum_additional_captures"],
+        1
+    );
+    let text = String::from_utf8(first.stdout).unwrap();
+    assert!(!text.contains(workspace_root().to_str().unwrap()));
+    for forbidden in ["/dev/kfd", "attach_process", "native_address"] {
+        assert!(!text.contains(forbidden));
+    }
+    for private_transport in [
+        "/proc/self/fd/",
+        "fe2o3-reference-executable-v1",
+        "fe2o3-reference-debug-input-v1",
+    ] {
+        assert!(!text.contains(private_transport));
+    }
+    fs::remove_dir_all(temp).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn archive_path_links_wrong_pin_and_oversize_are_rejected_before_execution() {
+    use std::os::unix::fs::symlink;
+
+    let temp = temp_root("archive-path-hostile");
+    fs::create_dir(&temp).unwrap();
+    let archive = encode_reference_evidence_archive_v1(ReferenceEvidenceArchiveInputV1 {
+        out_of_bounds: ReferenceSimulatorCaseInputV1 {
+            kernel: b"ok",
+            request: b"or",
+        },
+        barrier_divergence: ReferenceSimulatorCaseInputV1 {
+            kernel: b"bk",
+            request: b"br",
+        },
+        baseline: ReferenceTreatmentInputV1 {
+            manifest: b"m",
+            semantic_workload: b"w",
+            raw_profiler_source: b"r",
+            bundle: b"b",
+            schedule: b"s",
+            artifact: b"a",
+            isa_projection: None,
+            counters: None,
+            pc_samples: None,
+        },
+        candidate: ReferenceTreatmentInputV1 {
+            manifest: b"M",
+            semantic_workload: b"W",
+            raw_profiler_source: b"R",
+            bundle: b"B",
+            schedule: b"S",
+            artifact: b"A",
+            isa_projection: None,
+            counters: None,
+            pc_samples: None,
+        },
+    })
+    .unwrap();
+    let target = temp.join("target.fe2archive");
+    write(&target, &archive);
+    let client = env!("CARGO_BIN_EXE_fe2o3-agent-reference-client");
+    let run = |path: &Path, digest: &str| {
+        Command::new(client)
+            .arg("--archive")
+            .arg(path)
+            .args([
+                "--archive-sha256",
+                digest,
+                "--debugger",
+                "must-not-open-debugger",
+                "--profiler-service",
+                "must-not-open-profiler",
+            ])
+            .output()
+            .unwrap()
+    };
+
+    let wrong_pin = run(&target, &"0".repeat(64));
+    assert!(!wrong_pin.status.success());
+    assert!(
+        String::from_utf8(wrong_pin.stderr)
+            .unwrap()
+            .contains("identity mismatch")
+    );
+
+    let link = temp.join("link.fe2archive");
+    symlink(&target, &link).unwrap();
+    let linked = run(
+        &link,
+        &lower_hex(&reference_evidence_archive_sha256_v1(&archive)),
+    );
+    assert!(!linked.status.success());
+    assert!(
+        String::from_utf8(linked.stderr)
+            .unwrap()
+            .contains("securely open reference evidence archive")
+    );
+
+    let hard_link = temp.join("hard.fe2archive");
+    fs::hard_link(&target, &hard_link).unwrap();
+    let linked = run(
+        &hard_link,
+        &lower_hex(&reference_evidence_archive_sha256_v1(&archive)),
+    );
+    assert!(!linked.status.success());
+    assert!(
+        String::from_utf8(linked.stderr)
+            .unwrap()
+            .contains("bounded regular file")
+    );
+    fs::remove_file(&link).unwrap();
+    fs::remove_file(&hard_link).unwrap();
+
+    let oversized = temp.join("oversized.fe2archive");
+    let file = fs::File::create(&oversized).unwrap();
+    file.set_len(MAX_REFERENCE_EVIDENCE_ARCHIVE_BYTES_V1 + 1)
+        .unwrap();
+    drop(file);
+    let oversized = run(&oversized, &"0".repeat(64));
+    assert!(!oversized.status.success());
+    assert!(
+        String::from_utf8(oversized.stderr)
+            .unwrap()
+            .contains("bounded regular file")
+    );
     fs::remove_dir_all(temp).unwrap();
 }
 

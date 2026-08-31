@@ -1033,6 +1033,25 @@ pub(crate) fn load_debug_simulation_input_v1(
     })
 }
 
+pub(crate) fn load_debug_simulation_input_bytes_v1(
+    kir_v7: &[u8],
+    request: &[u8],
+) -> Result<crate::AdmittedSimulationInputV1, crate::SimulationInputErrorV1> {
+    load_admitted_input_bytes(
+        kir_v7,
+        request,
+        None,
+        SimulationTargetV1::amdgpu_64(),
+        None,
+        None,
+    )
+    .map_err(|failure: Failure| crate::SimulationInputErrorV1 {
+        stage: serialized_tag(failure.0.stage),
+        code: serialized_tag(failure.0.kind),
+        message: failure.0.message.clone(),
+    })
+}
+
 pub(crate) fn load_debug_simulation_bundle_v1(
     bundle: OsString,
     request: OsString,
@@ -1519,6 +1538,30 @@ fn load_admitted_input(
     bundle_identity: Option<([u8; 32], [u8; 32])>,
     bundle_evidence: Option<crate::AdmittedSimulationBundleEvidenceV1>,
 ) -> Result<crate::AdmittedSimulationInputV1, Failure> {
+    let request_bytes = secure_read(
+        request,
+        MAX_REQUEST_BYTES,
+        InputCode::Request,
+        "simulation request",
+    )?;
+    load_admitted_input_bytes(
+        kir,
+        &request_bytes,
+        expected_request,
+        target,
+        bundle_identity,
+        bundle_evidence,
+    )
+}
+
+fn load_admitted_input_bytes(
+    kir: &[u8],
+    request_bytes: &[u8],
+    expected_request: Option<crate::SimulationRequestIdentityV1>,
+    target: SimulationTargetV1,
+    bundle_identity: Option<([u8; 32], [u8; 32])>,
+    bundle_evidence: Option<crate::AdmittedSimulationBundleEvidenceV1>,
+) -> Result<crate::AdmittedSimulationInputV1, Failure> {
     if kir.len() > MAX_KIR_BYTES {
         return Err(Failure::input(
             InputCode::KirV7,
@@ -1545,15 +1588,19 @@ fn load_admitted_input(
             bounded_display(&error),
         )
     })?;
-    let request_bytes = secure_read(
-        request,
-        MAX_REQUEST_BYTES,
-        InputCode::Request,
-        "simulation request",
-    )?;
+    if request_bytes.len() > MAX_REQUEST_BYTES {
+        return Err(Failure::input(
+            InputCode::Request,
+            ErrorKind::InputTooLarge,
+            format!(
+                "simulation request input is {} bytes; maximum is {MAX_REQUEST_BYTES}",
+                request_bytes.len()
+            ),
+        ));
+    }
     if expected_request.is_some_and(|expected| {
         expected.length != request_bytes.len()
-            || expected.sha256 != <[u8; 32]>::from(Sha256::digest(&request_bytes))
+            || expected.sha256 != <[u8; 32]>::from(Sha256::digest(request_bytes))
     }) {
         return Err(Failure::input(
             InputCode::Request,
@@ -1561,7 +1608,7 @@ fn load_admitted_input(
             "simulation request changed after its pre-build admission",
         ));
     }
-    let document: RequestDocument = serde_json::from_slice(&request_bytes).map_err(|error| {
+    let document: RequestDocument = serde_json::from_slice(request_bytes).map_err(|error| {
         Failure::new(
             Stage::Request,
             request_json_kind(&error),
@@ -1579,7 +1626,7 @@ fn load_admitted_input(
         });
     Ok(crate::AdmittedSimulationInputV1 {
         kir_sha256: *admitted.identity().digest(),
-        request_sha256: Sha256::digest(&request_bytes).into(),
+        request_sha256: Sha256::digest(request_bytes).into(),
         request_bytes: u64::try_from(request_bytes.len()).map_err(|_| {
             Failure::input(
                 InputCode::Request,

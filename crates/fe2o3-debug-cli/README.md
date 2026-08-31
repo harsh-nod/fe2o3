@@ -6,6 +6,16 @@ arrive on standard input and one `fe2o3-debug-response-v1` line is written for
 each request. `--protocol jsonl` is accepted explicitly and is the only V1
 transport.
 
+On Linux, `--kir-v7-fd FD --request-fd FD` is a paired alternative used for
+already captured inputs. Both descriptors must resolve to distinct underlying
+anonymous mode-0400 regular-file memfd objects, be read-only and bounded, and
+carry the exact immutable seals. Distinct descriptor numbers duplicated from
+one `(device, inode)` object are rejected. The debugger marks the inherited
+descriptors close-on-exec before duplicating and reading them, then uses the
+same KIR/request admission and identity path as the file form. Descriptor
+numbers are transport state, not debug evidence, and JSONL remains on standard
+input/output.
+
 `fe2o3-debug sim --bundle KERNEL.fe2sim --request REQUEST.json` securely
 decodes and revalidates the authority-free compiler simulation bundle, then
 uses only its exact embedded KIR V7 and target. `--bundle` and `--kir-v7` are
@@ -177,9 +187,15 @@ shared with `fe2o3-kir-sim`.
 `fe2o3-agent-reference-client --workflow WORKFLOW.json` is a deterministic,
 LLM-independent acceptance client. It opens each bounded regular evidence file
 once with no-follow semantics, rejects symlinks and hard links, and revalidates
-the same descriptor's device, inode, type, link count, size, modification time,
-and change time after the bounded read. It snapshots simulator inputs privately
-and then communicates with `fe2o3-debug` and the profiler services only through
+the same descriptor's device, inode, type/mode, size, and modification time,
+requires its link count not to increase, and exactly re-reads its content after
+the bounded read. A link-count decrease and change-time update caused by rename
+or unlink are accepted for legacy descriptor custody; the already opened object
+and exact bytes remain authoritative. Archive custody additionally requires
+unchanged link and change-time metadata plus persistent path identity. The
+client copies simulator KIR/request bytes into distinct read-only sealed
+memfds, passes only their explicit descriptor numbers to `fe2o3-debug`, and
+then communicates with the debugger and profiler services only through
 documented JSONL stdin/stdout. The launch-time workflow names trusted installed
 debugger/profiler executables and hostile evidence paths. Each executable is
 also opened once with no-follow/close-on-exec semantics, required to be a
@@ -189,8 +205,39 @@ and content are revalidated around each child, and the exact executable byte
 identities are included in the report. A later path replacement therefore
 cannot select the producer of accepted evidence. Evidence paths never enter
 the protocol or final report. Simulator results must name the exact preloaded
-request and canonical KIR identities, so replacing a snapshot does not yield
-an accepted diagnosis.
+request and canonical KIR identities. No named simulator snapshot or temporary
+directory participates in the workflow.
+
+The production archive route removes the source-checkout and loose evidence
+path requirements:
+
+```text
+fe2o3-agent-reference-client \
+  --archive evidence.fe2archive \
+  --archive-sha256 EXPECTED_LOWER_HEX_SHA256 \
+  --debugger ./fe2o3-debug \
+  --profiler-service ./fe2o3-agent-profiler-service
+```
+
+`fe2o3_debug_cli::reference_archive_v1` encodes and admits this fixed-role
+canonical archive. The client securely reads the singly linked archive and
+requires its path to resolve to the same admitted object after the read,
+requires the caller-pinned digest of its exact bytes, verifies every member
+digest and the canonical complete member set, and then supplies member bytes
+directly to the existing debugger, Bundle V4, Variant V1, diagnosis V2, and
+Agent Profiler V1 admissions. Members are never extracted or interpreted as
+filesystem paths. The archive route therefore has no member symlink, hardlink,
+or traversal surface. The archive report preserves the complete existing V1
+workflow report and adds the archive plus ordered member content identities.
+Before launching, it streams each admitted debugger/profiler executable into
+an executable sealed memfd, verifies the copied byte identity, and executes
+only the immutable descriptor image. Archive-mode children inherit an empty
+environment: loader, locale, path, temporary-directory, ROCm, sanitizer, and
+project variables cannot redirect the selected executable or its inputs. The
+legacy workflow retains its original executable-descriptor and environment
+behavior.
+The SHA-256 pin establishes exact caller-selected content for this invocation;
+it is not a signature or producer identity.
 
 Every child session has one compiled deadline. Dedicated bounded readers drain
 stdout and stderr concurrently, retain at most the documented limit plus one

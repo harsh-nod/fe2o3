@@ -357,6 +357,31 @@ pub fn load_debug_simulation_input_v1(
     }
 }
 
+/// Strictly admits one already captured KIR V7 image and simulation request.
+///
+/// This is the descriptor-neutral form of [`load_debug_simulation_input_v1`].
+/// Callers remain responsible for authenticating how the exact bounded bytes
+/// were captured; admission, identities, and simulation semantics are shared
+/// with the path-based debugger entry point.
+pub fn load_debug_simulation_input_bytes_v1(
+    kir_v7: &[u8],
+    request: &[u8],
+) -> Result<AdmittedSimulationInputV1, SimulationInputErrorV1> {
+    #[cfg(target_os = "linux")]
+    {
+        linux::load_debug_simulation_input_bytes_v1(kir_v7, request)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (kir_v7, request);
+        Err(SimulationInputErrorV1 {
+            stage: "platform".to_owned(),
+            code: "unsupported_platform".to_owned(),
+            message: "fe2o3 debugger simulation byte admission requires Linux".to_owned(),
+        })
+    }
+}
+
 /// Securely captures and strictly admits one complete simulation bundle plus
 /// its separately bounded request. The exact embedded KIR V7 and target are
 /// used directly; this path never lowers, compiles, launches, or falls back.

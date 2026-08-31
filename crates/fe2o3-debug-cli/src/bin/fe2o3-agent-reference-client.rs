@@ -2,15 +2,17 @@
 
 use std::collections::BTreeSet;
 use std::env;
+use std::ffi::OsStr;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Read, Write};
-use std::os::fd::AsRawFd;
+use std::io::{self, Read, Seek, SeekFrom, Write};
+use std::os::fd::{AsRawFd, BorrowedFd};
 use std::os::unix::fs::{FileExt, MetadataExt, OpenOptionsExt};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{
     Child, ChildStderr, ChildStdin, ChildStdout, Command, ExitCode, ExitStatus, Stdio,
 };
+#[cfg(test)]
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, TryRecvError, sync_channel};
 #[cfg(test)]
@@ -18,6 +20,12 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use fe2o3_debug_cli::reference_archive_v1::{
+    MAX_REFERENCE_EVIDENCE_ARCHIVE_BYTES_V1, REFERENCE_EVIDENCE_ARCHIVE_REPORT_SCHEMA_V1,
+    REFERENCE_EVIDENCE_ARCHIVE_SCHEMA_V1, ReferenceArchiveContentIdentityV1,
+    ReferenceArchiveMemberIdentityV1, ReferenceEvidenceArchiveV1,
+    decode_reference_evidence_archive_v1,
+};
 use fe2o3_debug_protocol::{
     CapabilityAvailabilityV1, DebugCapabilityNameV1, DebugOperationNameV1, DebugResponseV1,
     DebugResultV1, DiagnosisClassV2, DiagnosisFactV2, DiagnosisOperationV2, DiagnosisResponseV2,
@@ -66,7 +74,13 @@ const REQUIRED_VARIANT_GAPS_V1: [ProfilerVariantUnavailableKindV1; 6] = [
     ProfilerVariantUnavailableKindV1::CausalRegressionAttribution,
 ];
 
+#[cfg(test)]
 static NEXT_SNAPSHOT_V1: AtomicU64 = AtomicU64::new(1);
+
+const REQUIRED_ARCHIVE_MEMFD_SEALS_V1: rustix::fs::SealFlags = rustix::fs::SealFlags::WRITE
+    .union(rustix::fs::SealFlags::GROW)
+    .union(rustix::fs::SealFlags::SHRINK)
+    .union(rustix::fs::SealFlags::SEAL);
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -136,6 +150,23 @@ struct ReferenceReportV1 {
     barrier_divergence: SimulatorDiagnosisReportV1,
     variant: VariantReportV1,
     next_capture: CapturePlanReportV1,
+}
+
+#[derive(Serialize)]
+#[serde(untagged)]
+enum ReferenceClientOutputV1 {
+    Workflow(ReferenceReportV1),
+    Archive(ArchiveReferenceReportV1),
+}
+
+#[derive(Serialize)]
+struct ArchiveReferenceReportV1 {
+    schema: &'static str,
+    authority: &'static str,
+    archive_schema: &'static str,
+    archive: ReferenceArchiveContentIdentityV1,
+    members: Vec<ReferenceArchiveMemberIdentityV1>,
+    workflow: ReferenceReportV1,
 }
 
 #[derive(Serialize)]
@@ -211,21 +242,56 @@ fn main() -> ExitCode {
     }
 }
 
-fn run() -> Result<ReferenceReportV1, String> {
+fn run() -> Result<ReferenceClientOutputV1, String> {
     let arguments = env::args_os().skip(1).collect::<Vec<_>>();
-    let [flag, workflow_path] = arguments.as_slice() else {
-        return Err("expected --workflow WORKFLOW.json".into());
-    };
-    if flag != "--workflow" {
-        return Err("expected --workflow WORKFLOW.json".into());
+    match arguments.as_slice() {
+        [flag, workflow_path] if flag == "--workflow" => {
+            let workflow_bytes = read_bounded(workflow_path, MAX_WORKFLOW_BYTES_V1, "workflow")?;
+            let workflow: WorkflowV1 = serde_json::from_slice(&workflow_bytes)
+                .map_err(|_| "invalid workflow JSON")?;
+            if workflow.schema != WORKFLOW_SCHEMA_V1 {
+                return Err("invalid workflow schema".into());
+            }
+            Ok(ReferenceClientOutputV1::Workflow(run_loaded(
+                LoadedWorkflowV1::load(workflow)?,
+            )?))
+        }
+        [archive_flag, archive_path, digest_flag, expected_digest, debugger_flag, debugger_path, profiler_flag, profiler_path]
+            if archive_flag == "--archive"
+                && digest_flag == "--archive-sha256"
+                && debugger_flag == "--debugger"
+                && profiler_flag == "--profiler-service" =>
+        {
+            let archive_bytes = read_archive_bounded(
+                archive_path,
+                MAX_REFERENCE_EVIDENCE_ARCHIVE_BYTES_V1,
+                "reference evidence archive",
+            )?;
+            let expected_digest = decode_sha256(expected_digest)?;
+            let archive = decode_reference_evidence_archive_v1(&archive_bytes, expected_digest)
+                .map_err(|error| error.to_string())?;
+            drop(archive_bytes);
+            let identity = archive.identity.clone();
+            let members = archive.members.clone();
+            let workflow = run_loaded(LoadedWorkflowV1::load_archive(
+                debugger_path,
+                profiler_path,
+                archive,
+            )?)?;
+            Ok(ReferenceClientOutputV1::Archive(ArchiveReferenceReportV1 {
+                schema: REFERENCE_EVIDENCE_ARCHIVE_REPORT_SCHEMA_V1,
+                authority: "read_only_no_execution_attach_scheduling_or_collection_authority",
+                archive_schema: REFERENCE_EVIDENCE_ARCHIVE_SCHEMA_V1,
+                archive: identity,
+                members,
+                workflow,
+            }))
+        }
+        _ => Err("expected --workflow WORKFLOW.json or --archive ARCHIVE --archive-sha256 SHA256 --debugger FILE --profiler-service FILE".into()),
     }
-    let workflow_bytes = read_bounded(workflow_path, MAX_WORKFLOW_BYTES_V1, "workflow")?;
-    let workflow: WorkflowV1 =
-        serde_json::from_slice(&workflow_bytes).map_err(|_| "invalid workflow JSON")?;
-    if workflow.schema != WORKFLOW_SCHEMA_V1 {
-        return Err("invalid workflow schema".into());
-    }
-    let loaded = LoadedWorkflowV1::load(workflow)?;
+}
+
+fn run_loaded(loaded: LoadedWorkflowV1) -> Result<ReferenceReportV1, String> {
     let out_of_bounds = diagnose_simulator(
         &loaded.debugger_executable,
         &loaded.out_of_bounds,
@@ -274,6 +340,33 @@ impl LoadedWorkflowV1 {
             barrier_divergence: LoadedSimulatorCaseV1::load(workflow.barrier_divergence)?,
             baseline: LoadedTreatmentV1::load(workflow.baseline)?,
             candidate: LoadedTreatmentV1::load(workflow.candidate)?,
+        })
+    }
+
+    fn load_archive(
+        debugger_path: &OsStr,
+        profiler_service_path: &OsStr,
+        archive: ReferenceEvidenceArchiveV1,
+    ) -> Result<Self, String> {
+        Ok(Self {
+            debugger_executable: PinnedExecutableV1::open_archive(
+                Path::new(debugger_path),
+                "debugger executable",
+            )?,
+            profiler_service_executable: PinnedExecutableV1::open_archive(
+                Path::new(profiler_service_path),
+                "profiler service executable",
+            )?,
+            out_of_bounds: LoadedSimulatorCaseV1 {
+                kernel: archive.out_of_bounds.kernel,
+                request: archive.out_of_bounds.request,
+            },
+            barrier_divergence: LoadedSimulatorCaseV1 {
+                kernel: archive.barrier_divergence.kernel,
+                request: archive.barrier_divergence.request,
+            },
+            baseline: LoadedTreatmentV1::from_archive(archive.baseline),
+            candidate: LoadedTreatmentV1::from_archive(archive.candidate),
         })
     }
 }
@@ -339,6 +432,47 @@ impl LoadedTreatmentV1 {
             pc_samples: self.pc_samples.as_deref(),
         }
     }
+
+    fn from_archive(value: fe2o3_debug_cli::reference_archive_v1::ReferenceTreatmentV1) -> Self {
+        Self {
+            manifest: value.manifest,
+            semantic_workload: value.semantic_workload,
+            raw_profiler_source: value.raw_profiler_source,
+            bundle: value.bundle,
+            schedule: value.schedule,
+            artifact: value.artifact,
+            isa_projection: value.isa_projection,
+            counters: value.counters,
+            pc_samples: value.pc_samples,
+        }
+    }
+}
+
+fn decode_sha256(value: &OsStr) -> Result<[u8; 32], String> {
+    let value = value
+        .to_str()
+        .ok_or("archive SHA-256 is not canonical UTF-8 hexadecimal")?;
+    if value.len() != 64
+        || value
+            .as_bytes()
+            .iter()
+            .any(|byte| !matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+    {
+        return Err("archive SHA-256 is not canonical lowercase hexadecimal".into());
+    }
+    let mut decoded = [0_u8; 32];
+    for (destination, pair) in decoded.iter_mut().zip(value.as_bytes().chunks_exact(2)) {
+        *destination = (hex_nibble(pair[0]) << 4) | hex_nibble(pair[1]);
+    }
+    Ok(decoded)
+}
+
+fn hex_nibble(value: u8) -> u8 {
+    match value {
+        b'0'..=b'9' => value - b'0',
+        b'a'..=b'f' => value - b'a' + 10,
+        _ => unreachable!("decode_sha256 validated each nibble"),
+    }
 }
 
 fn diagnose_simulator(
@@ -347,8 +481,8 @@ fn diagnose_simulator(
     expected_class: DiagnosisClassV2,
     class_wire: &'static str,
 ) -> Result<SimulatorDiagnosisReportV1, String> {
-    let kernel = TempSnapshotV1::new("kir", &case.kernel)?;
-    let request = TempSnapshotV1::new("json", &case.request)?;
+    let kernel = SealedInputV1::new("canonical KIR V7", &case.kernel)?;
+    let request = SealedInputV1::new("simulation request", &case.request)?;
     let limits = ProtocolLimitsV1::default();
     let max_total = limits
         .max_response_line_bytes
@@ -356,11 +490,12 @@ fn diagnose_simulator(
         .ok_or("debugger response bound overflow")?;
     let mut command = Command::new(executable.proc_path());
     command
-        .args(["sim", "--kir-v7"])
-        .arg(kernel.path())
-        .arg("--request")
-        .arg(request.path())
+        .args(["sim", "--kir-v7-fd"])
+        .arg(kernel.file.as_raw_fd().to_string())
+        .arg("--request-fd")
+        .arg(request.file.as_raw_fd().to_string())
         .args(["--protocol", "jsonl"]);
+    inherit_sealed_inputs_v1(&mut command, &kernel, &request)?;
     let mut child = BoundedChildV1::spawn(
         command,
         executable,
@@ -368,6 +503,8 @@ fn diagnose_simulator(
         limits.max_response_line_bytes,
         max_total,
     )?;
+    kernel.revalidate("canonical KIR V7")?;
+    request.revalidate("simulation request")?;
     let requests = [
         json!({"operation":"discover_capabilities","schema":"fe2o3-debug-request-v1","request_id":1,"expected_revision":0}),
         json!({"operation":"continue","schema":"fe2o3-debug-request-v1","request_id":2,"expected_revision":0,"max_events":1_000_000}),
@@ -1668,6 +1805,9 @@ impl<'a> BoundedChildV1<'a> {
             return Err("invalid child deadline".into());
         }
         executable.revalidate(label)?;
+        if executable.is_archive_sealed() {
+            command.env_clear();
+        }
         command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -2117,6 +2257,13 @@ struct PinnedExecutableV1 {
     file: File,
     metadata: StableFileMetadataV1,
     identity: ExecutableContentIdentityV1,
+    custody: ExecutableCustodyV1,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ExecutableCustodyV1 {
+    LegacyDescriptor,
+    ArchiveSealedMemfd,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2145,6 +2292,16 @@ impl StableFileMetadataV1 {
             changed_seconds: metadata.ctime(),
             changed_nanoseconds: metadata.ctime_nsec(),
         }
+    }
+
+    fn same_legacy_descriptor_object(self, other: Self) -> bool {
+        self.device == other.device
+            && self.inode == other.inode
+            && self.mode == other.mode
+            && other.links <= self.links
+            && self.bytes == other.bytes
+            && self.modified_seconds == other.modified_seconds
+            && self.modified_nanoseconds == other.modified_nanoseconds
     }
 }
 
@@ -2178,7 +2335,76 @@ impl PinnedExecutableV1 {
             file,
             metadata,
             identity,
+            custody: ExecutableCustodyV1::LegacyDescriptor,
         })
+    }
+
+    fn open_archive(path: &Path, label: &str) -> Result<Self, String> {
+        let source = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
+            .open(path)
+            .map_err(|_| format!("could not securely open {label}"))?;
+        let before = source
+            .metadata()
+            .map_err(|_| format!("could not inspect opened {label}"))?;
+        if !before.file_type().is_file()
+            || before.nlink() != 1
+            || before.len() == 0
+            || before.len() > MAX_EXECUTABLE_BYTES_V1
+            || before.mode() & 0o111 == 0
+        {
+            return Err(format!("{label} is not a bounded executable regular file"));
+        }
+        let source_metadata = StableFileMetadataV1::from_metadata(&before);
+        let descriptor = rustix::fs::memfd_create(
+            "fe2o3-reference-executable-v1",
+            rustix::fs::MemfdFlags::CLOEXEC | rustix::fs::MemfdFlags::ALLOW_SEALING,
+        )
+        .map_err(|_| format!("could not create immutable {label} image"))?;
+        let mut writable = File::from(descriptor);
+        rustix::fs::fchmod(&writable, rustix::fs::Mode::from_raw_mode(0o500))
+            .map_err(|_| format!("could not protect immutable {label} image mode"))?;
+        let source_identity =
+            copy_executable_to_memfd_v1(&source, &mut writable, source_metadata.bytes, label)?;
+        let after = source
+            .metadata()
+            .map_err(|_| format!("could not revalidate opened {label}"))?;
+        if source_metadata != StableFileMetadataV1::from_metadata(&after) {
+            return Err(format!("{label} changed during immutable capture"));
+        }
+        writable
+            .sync_all()
+            .map_err(|_| format!("could not synchronize immutable {label} image"))?;
+        seal_archive_memfd_v1(&writable, label)?;
+        writable
+            .seek(SeekFrom::Start(0))
+            .map_err(|_| format!("could not rewind immutable {label} image"))?;
+        let writable_path = format!("/proc/self/fd/{}", writable.as_raw_fd());
+        let read_only = rustix::fs::open(
+            writable_path,
+            rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+        )
+        .map(File::from)
+        .map_err(|_| format!("could not bind read-only immutable {label} image"))?;
+        drop(writable);
+        let metadata = read_only
+            .metadata()
+            .map_err(|_| format!("could not inspect immutable {label} image"))?;
+        let metadata = StableFileMetadataV1::from_metadata(&metadata);
+        let identity = executable_content_identity(&read_only, metadata.bytes, label)?;
+        if identity != source_identity {
+            return Err(format!("immutable {label} image identity mismatch"));
+        }
+        let result = Self {
+            file: read_only,
+            metadata,
+            identity,
+            custody: ExecutableCustodyV1::ArchiveSealedMemfd,
+        };
+        result.revalidate(label)?;
+        Ok(result)
     }
 
     fn proc_path(&self) -> String {
@@ -2189,12 +2415,23 @@ impl PinnedExecutableV1 {
         &self.identity
     }
 
+    fn is_archive_sealed(&self) -> bool {
+        self.custody == ExecutableCustodyV1::ArchiveSealedMemfd
+    }
+
     fn revalidate(&self, label: &str) -> Result<(), String> {
         let before = self
             .file
             .metadata()
             .map_err(|_| format!("could not inspect pinned {label}"))?;
-        if self.metadata != StableFileMetadataV1::from_metadata(&before) {
+        let before = StableFileMetadataV1::from_metadata(&before);
+        let metadata_matches = match self.custody {
+            ExecutableCustodyV1::LegacyDescriptor => {
+                self.metadata.same_legacy_descriptor_object(before)
+            }
+            ExecutableCustodyV1::ArchiveSealedMemfd => self.metadata == before,
+        };
+        if !metadata_matches {
             return Err(format!("pinned {label} metadata changed"));
         }
         let identity = executable_content_identity(&self.file, self.metadata.bytes, label)?;
@@ -2202,12 +2439,103 @@ impl PinnedExecutableV1 {
             .file
             .metadata()
             .map_err(|_| format!("could not revalidate pinned {label}"))?;
-        if self.metadata != StableFileMetadataV1::from_metadata(&after) || identity != self.identity
-        {
+        let after = StableFileMetadataV1::from_metadata(&after);
+        let metadata_matches = match self.custody {
+            ExecutableCustodyV1::LegacyDescriptor => {
+                self.metadata.same_legacy_descriptor_object(after)
+            }
+            ExecutableCustodyV1::ArchiveSealedMemfd => self.metadata == after,
+        };
+        if !metadata_matches || identity != self.identity {
             return Err(format!("pinned {label} content changed"));
+        }
+        if self.is_archive_sealed() {
+            validate_archive_executable_memfd_v1(&self.file, self.metadata, label)?;
         }
         Ok(())
     }
+}
+
+fn copy_executable_to_memfd_v1(
+    source: &File,
+    destination: &mut File,
+    bytes: u64,
+    label: &str,
+) -> Result<ExecutableContentIdentityV1, String> {
+    let mut digest = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    let mut offset = 0_u64;
+    while offset < bytes {
+        let remaining = usize::try_from((bytes - offset).min(buffer.len() as u64))
+            .map_err(|_| format!("{label} size conversion failed"))?;
+        let read = source
+            .read_at(&mut buffer[..remaining], offset)
+            .map_err(|_| format!("could not copy admitted {label}"))?;
+        if read == 0 {
+            return Err(format!("admitted {label} was truncated"));
+        }
+        destination
+            .write_all(&buffer[..read])
+            .map_err(|_| format!("could not populate immutable {label} image"))?;
+        digest.update(&buffer[..read]);
+        offset = offset
+            .checked_add(read as u64)
+            .ok_or_else(|| format!("{label} size overflow"))?;
+    }
+    Ok(ExecutableContentIdentityV1 {
+        scheme: "sha256_of_exact_executable_bytes",
+        sha256: lower_hex(&digest.finalize())?,
+        bytes,
+    })
+}
+
+fn seal_archive_memfd_v1(file: &File, label: &str) -> Result<(), String> {
+    rustix::fs::fcntl_add_seals(
+        file,
+        rustix::fs::SealFlags::WRITE | rustix::fs::SealFlags::GROW | rustix::fs::SealFlags::SHRINK,
+    )
+    .and_then(|()| rustix::fs::fcntl_add_seals(file, rustix::fs::SealFlags::SEAL))
+    .map_err(|_| format!("could not seal immutable {label} image"))?;
+    if rustix::fs::fcntl_get_seals(file)
+        .map_err(|_| format!("could not inspect immutable {label} image seals"))?
+        != REQUIRED_ARCHIVE_MEMFD_SEALS_V1
+    {
+        return Err(format!("immutable {label} image has unexpected seals"));
+    }
+    Ok(())
+}
+
+fn validate_archive_executable_memfd_v1(
+    file: &File,
+    expected: StableFileMetadataV1,
+    label: &str,
+) -> Result<(), String> {
+    let metadata = file
+        .metadata()
+        .map_err(|_| format!("could not inspect immutable {label} image"))?;
+    let status = rustix::fs::fcntl_getfl(file)
+        .map_err(|_| format!("could not inspect immutable {label} status"))?;
+    if StableFileMetadataV1::from_metadata(&metadata) != expected
+        || !metadata.file_type().is_file()
+        || metadata.nlink() != 0
+        || metadata.mode() & 0o7777 != 0o500
+        || status & rustix::fs::OFlags::ACCMODE != rustix::fs::OFlags::RDONLY
+        || status.contains(rustix::fs::OFlags::PATH)
+        || rustix::fs::fcntl_get_seals(file)
+            .map_err(|_| format!("could not inspect immutable {label} image seals"))?
+            != REQUIRED_ARCHIVE_MEMFD_SEALS_V1
+    {
+        return Err(format!("immutable {label} image changed"));
+    }
+    let link = fs::read_link(format!("/proc/self/fd/{}", file.as_raw_fd()))
+        .map_err(|_| format!("could not inspect immutable {label} descriptor"))?;
+    let link = link.as_os_str().as_encoded_bytes();
+    if !(link.starts_with(b"/memfd:") || link.starts_with(b"memfd:"))
+        || !link.ends_with(b" (deleted)")
+    {
+        return Err(format!("immutable {label} image is not a memfd"));
+    }
+    Ok(())
 }
 
 fn executable_content_identity(
@@ -2260,10 +2588,43 @@ fn read_budgeted(path: &Path, remaining: &mut u64, label: &str) -> Result<Vec<u8
 }
 
 fn read_bounded(path: impl AsRef<Path>, max: u64, label: &str) -> Result<Vec<u8>, String> {
+    read_bounded_descriptor_with_post_read(path, max, label, || {})
+}
+
+fn read_archive_bounded(path: impl AsRef<Path>, max: u64, label: &str) -> Result<Vec<u8>, String> {
+    read_archive_bounded_with_post_read(path, max, label, || {})
+}
+
+fn read_bounded_descriptor_with_post_read(
+    path: impl AsRef<Path>,
+    max: u64,
+    label: &str,
+    post_read: impl FnOnce(),
+) -> Result<Vec<u8>, String> {
+    read_bounded_impl_v1(path, max, label, post_read, false)
+}
+
+fn read_archive_bounded_with_post_read(
+    path: impl AsRef<Path>,
+    max: u64,
+    label: &str,
+    post_read: impl FnOnce(),
+) -> Result<Vec<u8>, String> {
+    read_bounded_impl_v1(path, max, label, post_read, true)
+}
+
+fn read_bounded_impl_v1(
+    path: impl AsRef<Path>,
+    max: u64,
+    label: &str,
+    post_read: impl FnOnce(),
+    require_persistent_path: bool,
+) -> Result<Vec<u8>, String> {
+    let path = path.as_ref();
     let mut file = OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
-        .open(path.as_ref())
+        .open(path)
         .map_err(|_| format!("could not securely open {label}"))?;
     let before = file
         .metadata()
@@ -2284,22 +2645,60 @@ fn read_bounded(path: impl AsRef<Path>, max: u64, label: &str) -> Result<Vec<u8>
         .take(max.saturating_add(1))
         .read_to_end(&mut bytes)
         .map_err(|_| format!("could not read opened {label}"))?;
+    post_read();
     let after = file
         .metadata()
         .map_err(|_| format!("could not revalidate opened {label}"))?;
-    let stable = before.dev() == after.dev()
-        && before.ino() == after.ino()
-        && before.mode() == after.mode()
-        && before.nlink() == after.nlink()
-        && before.len() == after.len()
-        && before.mtime() == after.mtime()
-        && before.mtime_nsec() == after.mtime_nsec()
-        && before.ctime() == after.ctime()
-        && before.ctime_nsec() == after.ctime_nsec();
-    if !stable || bytes.len() as u64 != before.len() || bytes.len() as u64 > max {
+    let before_metadata = StableFileMetadataV1::from_metadata(&before);
+    let after_metadata = StableFileMetadataV1::from_metadata(&after);
+    let stable = if require_persistent_path {
+        before_metadata == after_metadata
+    } else {
+        before_metadata.same_legacy_descriptor_object(after_metadata)
+    };
+    let content_stable = descriptor_matches_bytes_v1(&file, &bytes, label)?;
+    let persistent = !require_persistent_path
+        || OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
+            .open(path)
+            .and_then(|file| file.metadata())
+            .as_ref()
+            .is_ok_and(|metadata| StableFileMetadataV1::from_metadata(metadata) == before_metadata);
+    if !stable
+        || !content_stable
+        || !persistent
+        || bytes.len() as u64 != before.len()
+        || bytes.len() as u64 > max
+    {
         return Err(format!("{label} changed during admission"));
     }
     Ok(bytes)
+}
+
+fn descriptor_matches_bytes_v1(file: &File, expected: &[u8], label: &str) -> Result<bool, String> {
+    let mut buffer = [0_u8; 64 * 1024];
+    let mut offset = 0_usize;
+    while offset < expected.len() {
+        let count = (expected.len() - offset).min(buffer.len());
+        let file_offset =
+            u64::try_from(offset).map_err(|_| format!("{label} validation offset is too large"))?;
+        let read = file
+            .read_at(&mut buffer[..count], file_offset)
+            .map_err(|_| format!("could not revalidate opened {label} content"))?;
+        if read == 0 || buffer[..read] != expected[offset..offset + read] {
+            return Ok(false);
+        }
+        offset = offset
+            .checked_add(read)
+            .ok_or_else(|| format!("{label} validation offset overflow"))?;
+    }
+    let trailing_offset = u64::try_from(expected.len())
+        .map_err(|_| format!("{label} validation offset is too large"))?;
+    let mut trailing = [0_u8; 1];
+    file.read_at(&mut trailing, trailing_offset)
+        .map(|read| read == 0)
+        .map_err(|_| format!("could not revalidate opened {label} content"))
 }
 
 fn lower_hex(bytes: &[u8]) -> Result<String, String> {
@@ -2315,38 +2714,141 @@ fn lower_hex(bytes: &[u8]) -> Result<String, String> {
     Ok(output)
 }
 
-struct TempSnapshotV1(PathBuf);
+struct SealedInputV1 {
+    file: File,
+    object: (u64, u64, u64),
+    identity: [u8; 32],
+}
 
-impl TempSnapshotV1 {
-    fn new(extension: &str, bytes: &[u8]) -> Result<Self, String> {
-        for _ in 0..32 {
-            let ordinal = NEXT_SNAPSHOT_V1.fetch_add(1, Ordering::Relaxed);
-            let path = env::temp_dir().join(format!(
-                "fe2o3-agent-reference-{}-{ordinal}.{extension}",
-                std::process::id()
-            ));
-            let file = OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o600)
-                .open(&path);
-            let Ok(mut file) = file else { continue };
-            file.write_all(bytes).map_err(|_| "snapshot write failed")?;
-            file.sync_all().map_err(|_| "snapshot sync failed")?;
-            return Ok(Self(path));
+impl SealedInputV1 {
+    fn new(label: &str, bytes: &[u8]) -> Result<Self, String> {
+        if bytes.is_empty() || bytes.len() as u64 > MAX_DEBUG_INPUT_BYTES_V1 {
+            return Err(format!("{label} exceeds its bounded sealed-input contract"));
         }
-        Err("could not create private input snapshot".into())
+        let descriptor = rustix::fs::memfd_create(
+            "fe2o3-reference-debug-input-v1",
+            rustix::fs::MemfdFlags::CLOEXEC | rustix::fs::MemfdFlags::ALLOW_SEALING,
+        )
+        .map_err(|_| format!("could not create sealed {label}"))?;
+        let writable = File::from(descriptor);
+        rustix::fs::fchmod(&writable, rustix::fs::Mode::from_raw_mode(0o400))
+            .map_err(|_| format!("could not protect sealed {label} mode"))?;
+        writable
+            .write_all_at(bytes, 0)
+            .and_then(|()| writable.sync_all())
+            .map_err(|_| format!("could not populate sealed {label}"))?;
+        seal_archive_memfd_v1(&writable, label)?;
+        let writable_path = format!("/proc/self/fd/{}", writable.as_raw_fd());
+        let file = rustix::fs::open(
+            writable_path,
+            rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+        )
+        .map(File::from)
+        .map_err(|_| format!("could not bind read-only sealed {label}"))?;
+        drop(writable);
+        let stat =
+            rustix::fs::fstat(&file).map_err(|_| format!("could not inspect sealed {label}"))?;
+        let object = (
+            stat.st_dev,
+            stat.st_ino,
+            u64::try_from(stat.st_size).map_err(|_| format!("invalid sealed {label} size"))?,
+        );
+        let result = Self {
+            file,
+            object,
+            identity: Sha256::digest(bytes).into(),
+        };
+        result.revalidate(label)?;
+        Ok(result)
     }
 
-    fn path(&self) -> &Path {
-        &self.0
+    fn revalidate(&self, label: &str) -> Result<(), String> {
+        let stat = rustix::fs::fstat(&self.file)
+            .map_err(|_| format!("could not inspect sealed {label}"))?;
+        let length = usize::try_from(stat.st_size)
+            .ok()
+            .filter(|length| *length > 0 && *length as u64 <= MAX_DEBUG_INPUT_BYTES_V1)
+            .ok_or_else(|| format!("sealed {label} has an invalid size"))?;
+        let status = rustix::fs::fcntl_getfl(&self.file)
+            .map_err(|_| format!("could not inspect sealed {label} status"))?;
+        if rustix::fs::FileType::from_raw_mode(stat.st_mode) != rustix::fs::FileType::RegularFile
+            || stat.st_nlink != 0
+            || stat.st_mode & 0o7777 != 0o400
+            || status & rustix::fs::OFlags::ACCMODE != rustix::fs::OFlags::RDONLY
+            || status.contains(rustix::fs::OFlags::PATH)
+            || rustix::fs::fcntl_get_seals(&self.file)
+                .map_err(|_| format!("could not inspect sealed {label} seals"))?
+                != REQUIRED_ARCHIVE_MEMFD_SEALS_V1
+            || self.object != (stat.st_dev, stat.st_ino, stat.st_size as u64)
+        {
+            return Err(format!("sealed {label} changed"));
+        }
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(length)
+            .map_err(|_| format!("could not reserve sealed {label} validation"))?;
+        bytes.resize(length, 0);
+        self.file
+            .read_exact_at(&mut bytes, 0)
+            .map_err(|_| format!("could not validate sealed {label}"))?;
+        if <[u8; 32]>::from(Sha256::digest(&bytes)) != self.identity {
+            return Err(format!("sealed {label} identity changed"));
+        }
+        Ok(())
     }
 }
 
-impl Drop for TempSnapshotV1 {
-    fn drop(&mut self) {
-        let _ = fs::remove_file(&self.0);
+#[allow(unsafe_code)]
+fn inherit_sealed_inputs_v1(
+    command: &mut Command,
+    kernel: &SealedInputV1,
+    request: &SealedInputV1,
+) -> Result<(), String> {
+    kernel.revalidate("canonical KIR V7")?;
+    request.revalidate("simulation request")?;
+    if kernel.file.as_raw_fd() == request.file.as_raw_fd() || kernel.object == request.object {
+        return Err("sealed debugger inputs are not distinct objects".into());
     }
+    let kernel_fd = kernel.file.as_raw_fd();
+    let request_fd = request.file.as_raw_fd();
+    let kernel_object = kernel.object;
+    let request_object = request.object;
+    // SAFETY: both sealed descriptors remain owned by `diagnose_simulator`
+    // through spawn. The callback validates each object and changes only the
+    // child descriptor flags needed for the two explicit debugger fd options.
+    unsafe {
+        command.pre_exec(move || {
+            for (descriptor, expected) in [(kernel_fd, kernel_object), (request_fd, request_object)]
+            {
+                let descriptor = BorrowedFd::borrow_raw(descriptor);
+                let stat = rustix::fs::fstat(descriptor).map_err(io::Error::from)?;
+                let actual = (
+                    stat.st_dev,
+                    stat.st_ino,
+                    u64::try_from(stat.st_size)
+                        .map_err(|_| io::Error::from_raw_os_error(libc::EINVAL))?,
+                );
+                let status = rustix::fs::fcntl_getfl(descriptor).map_err(io::Error::from)?;
+                if actual != expected
+                    || rustix::fs::FileType::from_raw_mode(stat.st_mode)
+                        != rustix::fs::FileType::RegularFile
+                    || stat.st_nlink != 0
+                    || stat.st_mode & 0o7777 != 0o400
+                    || status & rustix::fs::OFlags::ACCMODE != rustix::fs::OFlags::RDONLY
+                    || status.contains(rustix::fs::OFlags::PATH)
+                    || rustix::fs::fcntl_get_seals(descriptor).map_err(io::Error::from)?
+                        != REQUIRED_ARCHIVE_MEMFD_SEALS_V1
+                {
+                    return Err(io::Error::from_raw_os_error(libc::ESTALE));
+                }
+                rustix::io::fcntl_setfd(descriptor, rustix::io::FdFlags::empty())
+                    .map_err(io::Error::from)?;
+            }
+            Ok(())
+        });
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -2372,6 +2874,79 @@ mod tests {
         fs::copy(shell, &installed).unwrap();
         fs::set_permissions(&installed, fs::Permissions::from_mode(0o700)).unwrap();
         PinnedExecutableV1::open(&installed, "test producer").unwrap()
+    }
+
+    fn helper_archive_shell(root: &Path) -> (PinnedExecutableV1, PathBuf) {
+        let shell = fs::canonicalize("/bin/sh").unwrap();
+        let installed = root.join("archive-test-producer");
+        fs::copy(shell, &installed).unwrap();
+        fs::set_permissions(&installed, fs::Permissions::from_mode(0o700)).unwrap();
+        (
+            PinnedExecutableV1::open_archive(&installed, "archive test producer").unwrap(),
+            installed,
+        )
+    }
+
+    fn route_test_workflow(executable: &Path, evidence: &Path) -> WorkflowV1 {
+        let simulator_case = || SimulatorCaseV1 {
+            kernel: evidence.to_owned(),
+            request: evidence.to_owned(),
+        };
+        let treatment = || TreatmentFilesV1 {
+            manifest: evidence.to_owned(),
+            semantic_workload: evidence.to_owned(),
+            raw_profiler_source: evidence.to_owned(),
+            bundle: evidence.to_owned(),
+            schedule: evidence.to_owned(),
+            artifact: evidence.to_owned(),
+            isa_projection: None,
+            counters: None,
+            pc_samples: None,
+        };
+        WorkflowV1 {
+            schema: WORKFLOW_SCHEMA_V1.to_owned(),
+            trusted_debugger_executable: executable.to_owned(),
+            trusted_profiler_service_executable: executable.to_owned(),
+            out_of_bounds: simulator_case(),
+            barrier_divergence: simulator_case(),
+            baseline: treatment(),
+            candidate: treatment(),
+        }
+    }
+
+    fn route_test_archive() -> ReferenceEvidenceArchiveV1 {
+        use fe2o3_debug_cli::reference_archive_v1::{
+            ReferenceEvidenceArchiveInputV1, ReferenceSimulatorCaseInputV1,
+            ReferenceTreatmentInputV1, encode_reference_evidence_archive_v1,
+            reference_evidence_archive_sha256_v1,
+        };
+
+        let treatment = || ReferenceTreatmentInputV1 {
+            manifest: b"manifest",
+            semantic_workload: b"workload",
+            raw_profiler_source: b"profiler",
+            bundle: b"bundle",
+            schedule: b"schedule",
+            artifact: b"artifact",
+            isa_projection: None,
+            counters: None,
+            pc_samples: None,
+        };
+        let bytes = encode_reference_evidence_archive_v1(ReferenceEvidenceArchiveInputV1 {
+            out_of_bounds: ReferenceSimulatorCaseInputV1 {
+                kernel: b"out-of-bounds KIR",
+                request: b"out-of-bounds request",
+            },
+            barrier_divergence: ReferenceSimulatorCaseInputV1 {
+                kernel: b"barrier KIR",
+                request: b"barrier request",
+            },
+            baseline: treatment(),
+            candidate: treatment(),
+        })
+        .unwrap();
+        decode_reference_evidence_archive_v1(&bytes, reference_evidence_archive_sha256_v1(&bytes))
+            .unwrap()
     }
 
     fn helper_session<'a>(
@@ -2551,6 +3126,213 @@ mod tests {
 
         drop(pinned);
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn archive_executable_is_immutable_and_child_environment_is_empty() {
+        let ordinal = NEXT_SNAPSHOT_V1.fetch_add(1, Ordering::Relaxed);
+        let root = env::temp_dir().join(format!(
+            "fe2o3-archive-executable-test-{}-{ordinal}",
+            std::process::id()
+        ));
+        fs::create_dir(&root).unwrap();
+        let (executable, installed) = helper_archive_shell(&root);
+        assert!(executable.is_archive_sealed());
+        assert_eq!(
+            rustix::fs::fcntl_get_seals(&executable.file).unwrap(),
+            REQUIRED_ARCHIVE_MEMFD_SEALS_V1
+        );
+        let retained = root.join("retained-producer");
+        fs::rename(&installed, &retained).unwrap();
+        fs::copy("/bin/false", &installed).unwrap();
+        fs::set_permissions(&installed, fs::Permissions::from_mode(0o700)).unwrap();
+        executable.revalidate("archive test producer").unwrap();
+        let linked = root.join("linked-producer");
+        symlink(&installed, &linked).unwrap();
+        assert!(PinnedExecutableV1::open_archive(&linked, "linked producer").is_err());
+        fs::remove_file(&linked).unwrap();
+        fs::hard_link(&installed, &linked).unwrap();
+        assert!(PinnedExecutableV1::open_archive(&installed, "linked producer").is_err());
+        fs::remove_file(&linked).unwrap();
+
+        let mut command = Command::new(executable.proc_path());
+        command
+            .args([
+                "-c",
+                "IFS= read -r line; environment_bytes=$(/usr/bin/wc -c < /proc/$$/environ); if [ \"$environment_bytes\" -ne 0 ]; then printf 'hostile\\n'; else printf 'ok\\n'; fi",
+            ])
+            .env("LD_PRELOAD", "/hostile/preload.so")
+            .env("LD_LIBRARY_PATH", "/hostile/loader")
+            .env("LANG", "hostile_LOCALE")
+            .env("PATH", "/hostile/path")
+            .env("TMPDIR", "/hostile/tmp")
+            .env("ROCM_PATH", "/hostile/rocm")
+            .env("ASAN_OPTIONS", "hostile=1")
+            .env("FE2O3_HOSTILE", "1");
+        let mut child =
+            BoundedChildV1::spawn(command, &executable, "archive test producer", 32, 64).unwrap();
+        assert_eq!(
+            child
+                .exchange_line(&json!({"request":"test"}), 1024)
+                .unwrap(),
+            b"ok\n"
+        );
+        child.finish().unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn archive_route_seals_exact_executables_and_clears_child_environment() {
+        let ordinal = NEXT_SNAPSHOT_V1.fetch_add(1, Ordering::Relaxed);
+        let root = env::temp_dir().join(format!(
+            "fe2o3-archive-route-test-{}-{ordinal}",
+            std::process::id()
+        ));
+        fs::create_dir(&root).unwrap();
+        let installed = root.join("installed-producer");
+        fs::copy(fs::canonicalize("/bin/sh").unwrap(), &installed).unwrap();
+        fs::set_permissions(&installed, fs::Permissions::from_mode(0o700)).unwrap();
+        let source_bytes = fs::read(&installed).unwrap();
+        let source_digest: [u8; 32] = Sha256::digest(&source_bytes).into();
+
+        let loaded = LoadedWorkflowV1::load_archive(
+            installed.as_os_str(),
+            installed.as_os_str(),
+            route_test_archive(),
+        )
+        .unwrap();
+        for executable in [
+            &loaded.debugger_executable,
+            &loaded.profiler_service_executable,
+        ] {
+            assert_eq!(executable.custody, ExecutableCustodyV1::ArchiveSealedMemfd);
+            assert_eq!(
+                executable.identity().sha256,
+                lower_hex(&source_digest).unwrap()
+            );
+            assert_eq!(fs::read(executable.proc_path()).unwrap(), source_bytes);
+        }
+
+        let retained = root.join("retained-producer");
+        fs::rename(&installed, &retained).unwrap();
+        fs::copy("/bin/false", &installed).unwrap();
+        fs::set_permissions(&installed, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::remove_file(&retained).unwrap();
+        loaded
+            .debugger_executable
+            .revalidate("archive route debugger")
+            .unwrap();
+
+        let mut command = Command::new(loaded.debugger_executable.proc_path());
+        command
+            .args([
+                "-c",
+                "IFS= read -r line; environment_bytes=$(/usr/bin/wc -c < /proc/$$/environ); if [ \"$environment_bytes\" -ne 0 ]; then printf 'hostile\\n'; else printf 'empty\\n'; fi",
+            ])
+            .env("LD_PRELOAD", "/hostile/preload.so")
+            .env("LD_LIBRARY_PATH", "/hostile/loader")
+            .env("PATH", "/hostile/path")
+            .env("TMPDIR", "/hostile/tmp")
+            .env("ROCM_PATH", "/hostile/rocm")
+            .env("FE2O3_HOSTILE", "1");
+        let mut child = BoundedChildV1::spawn(
+            command,
+            &loaded.debugger_executable,
+            "archive route debugger",
+            32,
+            64,
+        )
+        .unwrap();
+        assert_eq!(
+            child
+                .exchange_line(&json!({"request":"test"}), 1024)
+                .unwrap(),
+            b"empty\n"
+        );
+        child.finish().unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn legacy_route_retains_descriptor_environment_and_loaded_loose_inputs() {
+        let ordinal = NEXT_SNAPSHOT_V1.fetch_add(1, Ordering::Relaxed);
+        let root = env::temp_dir().join(format!(
+            "fe2o3-legacy-route-test-{}-{ordinal}",
+            std::process::id()
+        ));
+        fs::create_dir(&root).unwrap();
+        let installed = root.join("installed-producer");
+        fs::copy(fs::canonicalize("/bin/sh").unwrap(), &installed).unwrap();
+        fs::set_permissions(&installed, fs::Permissions::from_mode(0o700)).unwrap();
+        let source_bytes = fs::read(&installed).unwrap();
+        let source_digest: [u8; 32] = Sha256::digest(&source_bytes).into();
+        let evidence = root.join("loose-evidence");
+        fs::write(&evidence, b"legacy evidence bytes").unwrap();
+
+        let loaded = LoadedWorkflowV1::load(route_test_workflow(&installed, &evidence)).unwrap();
+        for executable in [
+            &loaded.debugger_executable,
+            &loaded.profiler_service_executable,
+        ] {
+            assert_eq!(executable.custody, ExecutableCustodyV1::LegacyDescriptor);
+            assert_eq!(
+                executable.identity().sha256,
+                lower_hex(&source_digest).unwrap()
+            );
+        }
+
+        let retained_executable = root.join("retained-producer");
+        fs::rename(&installed, &retained_executable).unwrap();
+        fs::copy("/bin/false", &installed).unwrap();
+        fs::set_permissions(&installed, fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(
+            fs::read(loaded.debugger_executable.proc_path()).unwrap(),
+            source_bytes
+        );
+
+        let retained_evidence = root.join("retained-evidence");
+        fs::rename(&evidence, &retained_evidence).unwrap();
+        fs::write(&evidence, b"replacement evidence").unwrap();
+        fs::remove_file(&evidence).unwrap();
+        fs::remove_file(&retained_evidence).unwrap();
+        assert_eq!(loaded.out_of_bounds.kernel, b"legacy evidence bytes");
+
+        let mut command = Command::new(loaded.debugger_executable.proc_path());
+        command
+            .args([
+                "-c",
+                "IFS= read -r line; printf '%s\\n' \"${FE2O3_LEGACY_MARKER-unset}\"",
+            ])
+            .env("FE2O3_LEGACY_MARKER", "retained");
+        let mut child = BoundedChildV1::spawn(
+            command,
+            &loaded.debugger_executable,
+            "legacy route debugger",
+            32,
+            64,
+        )
+        .unwrap();
+        assert_eq!(
+            child
+                .exchange_line(&json!({"request":"test"}), 1024)
+                .unwrap(),
+            b"retained\n"
+        );
+        child.finish().unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn sealed_debug_input_rejects_alias_and_closes_without_named_cleanup() {
+        let input = SealedInputV1::new("test input", b"exact input bytes").unwrap();
+        let descriptor = input.file.as_raw_fd();
+        assert!(fs::symlink_metadata(format!("/proc/self/fd/{descriptor}")).is_ok());
+        assert!(input.file.write_all_at(b"x", 0).is_err());
+        assert!(input.file.set_len(0).is_err());
+        let mut command = Command::new("/bin/false");
+        assert!(inherit_sealed_inputs_v1(&mut command, &input, &input).is_err());
+        drop(input);
+        assert!(fs::symlink_metadata(format!("/proc/self/fd/{descriptor}")).is_err());
     }
 
     #[test]
@@ -2792,6 +3574,94 @@ mod tests {
             pc_samples: None,
         };
         assert!(LoadedTreatmentV1::load_with_budget(files, 6).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn evidence_reader_rejects_path_rename_and_replacement_during_admission() {
+        let ordinal = NEXT_SNAPSHOT_V1.fetch_add(1, Ordering::Relaxed);
+        let root = env::temp_dir().join(format!(
+            "fe2o3-archive-rename-test-{}-{ordinal}",
+            std::process::id()
+        ));
+        fs::create_dir(&root).unwrap();
+        let selected = root.join("selected.fe2archive");
+        let retained = root.join("retained.fe2archive");
+        let replacement = root.join("replacement.fe2archive");
+        fs::write(&selected, b"selected archive bytes").unwrap();
+        fs::write(&replacement, b"replacement archive bytes").unwrap();
+        let result = read_archive_bounded_with_post_read(
+            &selected,
+            1_024,
+            "reference evidence archive",
+            || {
+                fs::rename(&selected, &retained).unwrap();
+                fs::rename(&replacement, &selected).unwrap();
+            },
+        );
+        assert_eq!(
+            result.unwrap_err(),
+            "reference evidence archive changed during admission"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn legacy_descriptor_reader_retains_renamed_snapshot() {
+        let ordinal = NEXT_SNAPSHOT_V1.fetch_add(1, Ordering::Relaxed);
+        let root = env::temp_dir().join(format!(
+            "fe2o3-legacy-rename-test-{}-{ordinal}",
+            std::process::id()
+        ));
+        fs::create_dir(&root).unwrap();
+        let selected = root.join("selected.json");
+        let retained = root.join("retained.json");
+        let replacement = root.join("replacement.json");
+        fs::write(&selected, b"selected legacy bytes").unwrap();
+        fs::write(&replacement, b"replacement legacy bytes").unwrap();
+        let admitted =
+            read_bounded_descriptor_with_post_read(&selected, 1_024, "legacy descriptor", || {
+                fs::rename(&selected, &retained).unwrap();
+                fs::rename(&replacement, &selected).unwrap();
+            })
+            .unwrap();
+        assert_eq!(admitted, b"selected legacy bytes");
+
+        let unlinked = root.join("unlinked.json");
+        fs::write(&unlinked, b"unlinked legacy bytes").unwrap();
+        let admitted =
+            read_bounded_descriptor_with_post_read(&unlinked, 1_024, "legacy descriptor", || {
+                fs::remove_file(&unlinked).unwrap()
+            })
+            .unwrap();
+        assert_eq!(admitted, b"unlinked legacy bytes");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn archive_reader_rejects_same_inode_mutation_during_admission() {
+        let ordinal = NEXT_SNAPSHOT_V1.fetch_add(1, Ordering::Relaxed);
+        let root = env::temp_dir().join(format!(
+            "fe2o3-archive-mutation-test-{}-{ordinal}",
+            std::process::id()
+        ));
+        fs::create_dir(&root).unwrap();
+        let selected = root.join("selected.fe2archive");
+        fs::write(&selected, b"selected archive bytes").unwrap();
+        let result = read_archive_bounded_with_post_read(
+            &selected,
+            1_024,
+            "reference evidence archive",
+            || {
+                let mut file = OpenOptions::new().write(true).open(&selected).unwrap();
+                file.write_all(b"mutated!").unwrap();
+                file.sync_all().unwrap();
+            },
+        );
+        assert_eq!(
+            result.unwrap_err(),
+            "reference evidence archive changed during admission"
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
