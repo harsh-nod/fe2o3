@@ -80,13 +80,28 @@ target-directory environment variables when validating a copied checkout.
 
 ## Production Rust validation evidence
 
-On 2026-08-27, all seven production Rust wrappers passed on SSH host `mi350`
+On 2026-08-27, the original seven production Rust wrappers passed on SSH host `mi350`
 (`smci350-rck-g03-b19-03`) with ROCm 7.2.1 and eight visible MI350X devices.
 The largest observed absolute errors were `4.172325134e-7` for KDA decode,
 `1.072883606e-6` for KDA prefill, `0` for both attention kernels and AttnRes,
 `0` for four-branch residual, and `4.470348358e-8` for mHC. The harness
 tolerances are `3e-3` for the recurrent and mixing kernels and `5e-3` for the
 FP8 attention kernels. Sparse token IDs were checked exactly.
+
+On 2026-08-31, the eighth wrapper,
+`run-deepseek-sparse-attention-gfx950.sh`, passed on the same host and ROCm
+release using physical GPU 6 (`ROCR_VISIBLE_DEVICES=6`,
+`HIP_VISIBLE_DEVICES` unset). The production kernel returned maximum absolute
+errors of `2.980232239e-8` for both the 16-channel output and softmax maximum,
+and `2.384185791e-7` for the softmax normalizer, against a `5e-3` finite-value
+tolerance. Its portable namespace is
+`62a1ee5804a9926ebb929061195f2229630ebdaf5a13a19d17ce7ddb4fcbbbe3`;
+the LLVM, COV6 HSACO, and symbol-scoped ISA SHA-256 values are respectively
+`0767554b7997f42b4e2fb85271779ca29182ec241b07cc162cb9185cac41362c`,
+`c5f5465c405306d6df944df4f02066f75b94295b7e91b8c8cf73bc16482ed930`,
+and `fa54e785c34d2ec26e94dad04a8f63ef2a68485ad9190a0ca747999216d5237a`.
+The inspected symbol contains no MFMA or transpose instructions, matching its
+selected-only sparse arithmetic contract.
 
 The sparse and hybrid Rust HSACOs each contained exactly four
 `ds_read_b64_tr_b8` instructions before one
