@@ -36,6 +36,10 @@ sha2.workspace = true
 [target.'cfg(target_os = "linux")'.dependencies]
 fe2o3-compiler-execution-client.workspace = true
 
+[target.'cfg(all(target_os = "linux", target_arch = "x86_64"))'.dependencies]
+fe2o3-amdhsa-loader.workspace = true
+fe2o3-service-host.workspace = true
+
 [dev-dependencies]
 ed25519-dalek = { version = "=2.2.0", default-features = false, features = ["fast", "zeroize"] }
 fe2o3-artifact-transaction = { workspace = true, features = ["test-hooks"] }
