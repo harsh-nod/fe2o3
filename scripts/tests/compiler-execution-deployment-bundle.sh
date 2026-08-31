@@ -135,6 +135,13 @@ grep -Fq -- 'qualification-host-probe-v1' "${verifier_builder}" ||
   fail 'static qualification prerequisite probe is missing'
 grep -Fq -- 'fault-points' "${verifier_builder}" ||
   fail 'static qualification fault set is missing'
+for verifier_fault_contract in \
+  supervisor-socket-metadata-admitted \
+  client-transaction-complete \
+  client-transaction-revalidated; do
+  grep -Fq -- "${verifier_fault_contract}" "${verifier_builder}" ||
+    fail "static qualification fault set is missing ${verifier_fault_contract}"
+done
 grep -Fq -- 'campaign BUNDLE_ROOT' "${verifier_builder}" ||
   fail 'static qualification campaign is missing'
 grep -Fq -- 'recover QUALIFICATION_PARENT' "${verifier_builder}" ||
