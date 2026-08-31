@@ -1,9 +1,12 @@
 #![no_std]
 
-use fe2o3_device::{DisjointSlice, WriteOnlyDisjointSlice, kernel, thread};
+#[cfg(any(feature = "write-only-output", feature = "write-only-disjoint-output"))]
+use fe2o3_device::WriteOnlyDisjointSlice;
+use fe2o3_device::{DisjointSlice, kernel, thread};
 
 #[cfg(not(any(
     feature = "multi-root-ownership",
+    feature = "multi-root-target-lineage",
     feature = "three-root-ownership",
     feature = "write-only-output",
     feature = "write-only-disjoint-output",
@@ -95,6 +98,42 @@ pub fn omega(mut output: DisjointSlice<u32>) {
     let index = thread::index_1d();
     if let Some(element) = output.get_mut(index) {
         *element = 29;
+    }
+}
+
+#[cfg(feature = "multi-root-target-lineage")]
+fn alpha_reference(_point: usize, output: &mut u32) {
+    *output = 17;
+}
+
+#[cfg(feature = "multi-root-target-lineage")]
+fn zeta_reference(_point: usize, output: &mut u32) {
+    *output = 23;
+}
+
+#[cfg(feature = "multi-root-target-lineage")]
+#[kernel(
+    typed,
+    reference = alpha_reference,
+    launch(required = [64, 1, 1], max = [64, 1, 1])
+)]
+pub fn alpha(mut output: DisjointSlice<u32>) {
+    let index = thread::index_1d();
+    if let Some(element) = output.get_mut(index) {
+        *element = 17;
+    }
+}
+
+#[cfg(feature = "multi-root-target-lineage")]
+#[kernel(
+    typed,
+    reference = zeta_reference,
+    launch(required = [64, 1, 1], max = [64, 1, 1])
+)]
+pub fn zeta(mut output: DisjointSlice<u32>) {
+    let index = thread::index_1d();
+    if let Some(element) = output.get_mut(index) {
+        *element = 23;
     }
 }
 

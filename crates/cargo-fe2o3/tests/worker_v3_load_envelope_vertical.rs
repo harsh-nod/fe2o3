@@ -779,9 +779,6 @@ where
             [0xd4; 32],
             [0xd5; 32],
         );
-        let proof_inputs = request
-            .validate_compiler_proof_inputs_v4()
-            .expect("the integration fixture carries canonical compiler proof inputs");
         let finalizer_derivation = self.foreign_finalizer.take().unwrap_or_else(|| {
             request
                 .independently_revalidate_finalizer_derivation()
@@ -888,10 +885,9 @@ where
         // SAFETY: this test-only backend deliberately supplies synthetic evidence so the exact
         // aggregate promotion and fail-closed field validation can be exercised.
         Ok(unsafe {
-            WorkerV3ProtectedRosterVerificationEvidenceV1::new(
+            WorkerV3ProtectedRosterVerificationEvidenceV1::synthetic_for_test_only(
                 finalizer_derivation,
                 compiler_execution,
-                proof_inputs,
                 [0xc1; 32],
                 verification_transcript,
                 entries,
@@ -2132,13 +2128,18 @@ fn protected_roster_verifier_authenticates_one_artifact_and_borrowed_typed_entri
         authenticated
             .verification()
             .validated_compiler_proof_inputs()
-            .authenticates_signed_verus_receipt_under_embedded_key()
+            .is_none()
+    );
+    assert!(
+        authenticated
+            .verification()
+            .validated_compiler_target_lineage()
+            .is_none()
     );
     assert!(
         !authenticated
             .verification()
-            .validated_compiler_proof_inputs()
-            .establishes_llvm_or_machine_refinement()
+            .retains_current_compiler_and_signed_verus_evidence()
     );
     assert!(!authenticated.grants_load_authority());
     assert!(!authenticated.grants_launch_authority());

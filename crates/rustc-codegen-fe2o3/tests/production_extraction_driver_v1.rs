@@ -2,6 +2,14 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffV3;
+use fe2o3_verifier::{
+    validate_compiler_multi_root_proof_inputs_v1, validate_compiler_multi_root_target_lineage_v1,
+};
+
+#[path = "support/inert_invocation_v3.rs"]
+mod inert_invocation_v3;
+
 struct ScratchTarget {
     path: PathBuf,
 }
@@ -302,6 +310,97 @@ fn assert_multi_root_extraction(
     assert!(
         offsets.windows(2).all(|pair| pair[0] < pair[1]),
         "{features} LLVM changed canonical KernelId artifact order: {offsets:?}",
+    );
+}
+
+#[test]
+#[ignore = "requires the pinned nightly rust-src component, Verus runtime, and AMD target"]
+fn proof_carrying_two_kernel_collection_reaches_exact_multi_root_target_lineage() {
+    let target = ScratchTarget::new();
+    let handoff_output = target.path().join("multi-root-semantic.handoff");
+    let output = Command::new(env!("CARGO"))
+        .current_dir(workspace())
+        .env(
+            "RUSTC_WORKSPACE_WRAPPER",
+            env!("CARGO_BIN_EXE_fe2o3-rustc-extract"),
+        )
+        .env(
+            "FE2O3_EXTRACT_CRATE_V1",
+            "fe2o3_production_extraction_fixture",
+        )
+        .env(
+            "FE2O3_EXTRACT_GFX942_COMPILER_HANDOFF_PATH_V1",
+            &handoff_output,
+        )
+        .env(
+            "FE2O3_EXTRACT_INERT_RUSTC_INVOCATION_V3_HEX",
+            inert_invocation_v3::canonical_inert_gfx942_invocation_hex(),
+        )
+        .env(
+            "FE2O3_CARGO_METADATA_BUILD_OBSERVATION_V2",
+            "55".repeat(32),
+        )
+        .env("FE2O3_CRATE_BINDING_ID_V1", "77".repeat(32))
+        .env_remove("RUSTFLAGS")
+        .env_remove("CARGO_ENCODED_RUSTFLAGS")
+        .env(
+            "CARGO_TARGET_AMDGCN_AMD_AMDHSA_RUSTFLAGS",
+            "-Zalways-encode-mir -Ctarget-cpu=gfx942 -Ctarget-feature=-xnack,+wavefrontsize64,-wavefrontsize32",
+        )
+        .args([
+            "check",
+            "--locked",
+            "-Zbuild-std=core",
+            "-p",
+            "fe2o3-production-extraction-fixture",
+            "--features",
+            "multi-root-target-lineage",
+            "--target",
+            "amdgcn-amd-amdhsa",
+            "--target-dir",
+        ])
+        .arg(&target.path)
+        .output()
+        .expect("run proof-carrying multi-kernel AMD extraction fixture");
+    let stderr = String::from_utf8(output.stderr).expect("rustc diagnostic is UTF-8");
+    assert!(
+        output.status.success()
+            && stderr.contains("proof-carrying semantic compiler-bound inert handoff")
+            && stderr.contains("artifact/launch authority false"),
+        "proof-carrying multi-root production extraction failed:\n{stderr}",
+    );
+
+    let handoff_bytes = std::fs::read(&handoff_output).expect("read proof-carrying V3 handoff");
+    let handoff = InertSemanticCompilerModuleHandoffV3::decode(&handoff_bytes)
+        .expect("decode proof-carrying V3 handoff");
+    let proof_inputs = validate_compiler_multi_root_proof_inputs_v1(
+        handoff.capsule().receipts().proof_binding(),
+        handoff.capsule().receipts().semantic_mir(),
+        handoff.capsule().receipts().middle_end(),
+        handoff.capsule().receipts().kernel_ir(),
+        handoff.capsule().receipts().mir_to_kir_correspondence(),
+        handoff.capsule().receipts().formal_memory(),
+    )
+    .expect("validate exact multi-root proof inputs");
+    assert_eq!(proof_inputs.roots().len(), 2);
+    let target_lineage =
+        validate_compiler_multi_root_target_lineage_v1(handoff.capsule(), &proof_inputs)
+            .expect("validate exact multi-root target lineage");
+    assert!(target_lineage.has_exact_receipt_association());
+    assert!(target_lineage.has_exact_kir_to_llvm_replay());
+
+    let llvm = std::str::from_utf8(handoff.module_handoff().module_bytes())
+        .expect("proof-carrying module is LLVM text");
+    let alpha = llvm
+        .find("define amdgpu_kernel void @alpha(")
+        .expect("alpha kernel definition");
+    let zeta = llvm
+        .find("define amdgpu_kernel void @zeta(")
+        .expect("zeta kernel definition");
+    assert_eq!(llvm.matches("define amdgpu_kernel void @").count(), 2);
+    assert!(
+        alpha < zeta,
+        "LLVM changed canonical KernelId artifact order"
     );
 }
 
