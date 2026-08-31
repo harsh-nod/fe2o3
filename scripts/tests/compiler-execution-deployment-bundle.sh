@@ -58,6 +58,7 @@ readonly qualification_source="${repo_root}/crates/fe2o3-compiler-execution-depl
 readonly qualification_supervisor_source="${repo_root}/crates/fe2o3-compiler-execution-deployment/src/supervisor.rs"
 readonly qualification_fault_source="${repo_root}/crates/fe2o3-compiler-execution-deployment/src/fault.rs"
 readonly qualification_preflight_source="${repo_root}/crates/fe2o3-compiler-execution-deployment/src/preflight.rs"
+readonly qualification_boot_source="${repo_root}/crates/fe2o3-compiler-execution-deployment/src/boot.rs"
 readonly qualification_run_source="${repo_root}/crates/fe2o3-compiler-execution-deployment/src/run.rs"
 bash -n "${verifier_builder}"
 for binary in \
@@ -67,6 +68,29 @@ for binary in \
   fe2o3-compiler-execution-qualification; do
   grep -Fq -- "${binary}" "${verifier_builder}" || fail "missing static image ${binary}"
 done
+for boot_contract in \
+  '/proc/self/fd/' \
+  'usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2' \
+  'usr/bin/systemd-nspawn' \
+  'inherit_exec_descriptor' \
+  'pidfd_open' \
+  'pidfd_send_signal' \
+  'getpgid' \
+  'getpgrp' \
+  '--private-network' \
+  '--bind=+/run/fe2o3:/run/fe2o3:norbind,noidmap' \
+  'compiler-execution-supervisor.sock' \
+  'boot_and_stop_systemd_machine_v1'; do
+  grep -Fq -- "${boot_contract}" "${qualification_boot_source}" ||
+    fail "missing isolated systemd boot contract ${boot_contract}"
+done
+if grep -Fq -- '.process_group(0)' "${qualification_boot_source}"; then
+  fail 'systemd machine helper escapes the supervised worker process group'
+fi
+if grep -Eq -- 'PINNED_NSPAWN_PATH[^=]*=[[:space:]]*"/usr/bin|Command::new\("/usr/bin/systemd-nspawn"' \
+  "${qualification_boot_source}"; then
+  fail 'systemd machine launcher trusts a host systemd-nspawn path'
+fi
 grep -Fq -- 'qualification-host-probe-v1' "${verifier_builder}" ||
   fail 'static qualification prerequisite probe is missing'
 grep -Fq -- 'fault-points' "${verifier_builder}" ||
@@ -109,6 +133,10 @@ for fault_contract in \
   SystemdUnitVerifyComplete \
   SystemdPostconditionsAdmitted \
   InstalledLowerRevalidated \
+  SystemdMachineSpawned \
+  SystemdMachineReady \
+  SystemdMachineStopped \
+  PostBootLowerRevalidated \
   StagingCleaned; do
   grep -Fq -- "${fault_contract}" "${qualification_fault_source}" ||
     fail "missing unified qualification fault contract ${fault_contract}"

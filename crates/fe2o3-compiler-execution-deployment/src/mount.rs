@@ -181,23 +181,25 @@ impl MountedCompilerExecutionQualificationV1 {
             .mounted_root
             .as_ref()
             .ok_or_else(|| changed("mounted qualification root descriptor was released"))?;
-        let inherited = rustix::io::dup(root)
-            .map_err(|source| io_error("duplicate composed root for child execution", source))?;
-        let inherited_flags = rustix::io::fcntl_getfd(&inherited).map_err(|source| {
-            io_error("inspect inherited composed-root descriptor flags", source)
-        })?;
-        let original =
-            fstat(root).map_err(|source| io_error("inspect retained composed root", source))?;
-        let duplicate = fstat(&inherited)
-            .map_err(|source| io_error("inspect inherited composed root", source))?;
-        if !inherited_flags.is_empty()
-            || (original.st_dev, original.st_ino) != (duplicate.st_dev, duplicate.st_ino)
-        {
-            return Err(changed(
-                "inherited composed-root descriptor does not retain exact executable custody",
-            ));
-        }
-        Ok(inherited)
+        duplicate_exact_mount_descriptor(root, "composed root")
+    }
+
+    pub(super) fn inherit_systemd_machine_descriptors(
+        &self,
+    ) -> Result<(OwnedFd, OwnedFd), DeploymentVerificationErrorV1> {
+        self.revalidate_systemd_preflight_state()?;
+        let base = self
+            .mounted_base
+            .as_ref()
+            .ok_or_else(|| changed("mounted qualification base descriptor was released"))?;
+        let root = self
+            .mounted_root
+            .as_ref()
+            .ok_or_else(|| changed("mounted qualification root descriptor was released"))?;
+        Ok((
+            duplicate_exact_mount_descriptor(base, "pinned base")?,
+            duplicate_exact_mount_descriptor(root, "composed root")?,
+        ))
     }
 
     /// Unmounts overlay then SquashFS, releases the autoclear loop device, and removes staging.
@@ -300,6 +302,29 @@ impl MountedCompilerExecutionQualificationV1 {
             None => Ok(()),
         }
     }
+}
+
+fn duplicate_exact_mount_descriptor(
+    original: &File,
+    name: &'static str,
+) -> Result<OwnedFd, DeploymentVerificationErrorV1> {
+    let inherited = rustix::io::dup(original)
+        .map_err(|source| io_error("duplicate qualification mount for child execution", source))?;
+    let inherited_flags = rustix::io::fcntl_getfd(&inherited)
+        .map_err(|source| io_error("inspect inherited qualification mount flags", source))?;
+    let original_stat = fstat(original)
+        .map_err(|source| io_error("inspect retained qualification mount", source))?;
+    let duplicate_stat = fstat(&inherited)
+        .map_err(|source| io_error("inspect inherited qualification mount", source))?;
+    if !inherited_flags.is_empty()
+        || (original_stat.st_dev, original_stat.st_ino)
+            != (duplicate_stat.st_dev, duplicate_stat.st_ino)
+    {
+        return Err(changed(format!(
+            "inherited {name} descriptor does not retain exact executable custody"
+        )));
+    }
+    Ok(inherited)
 }
 
 fn defer_checkpoint(

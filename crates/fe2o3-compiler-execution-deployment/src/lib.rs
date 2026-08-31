@@ -19,6 +19,7 @@ use rustix::fs::{
 };
 use sha2::{Digest, Sha256};
 
+mod boot;
 mod fault;
 mod host;
 mod install;
@@ -29,6 +30,7 @@ mod run;
 mod staging;
 mod supervisor;
 
+pub use boot::execute_compiler_execution_systemd_machine_tool_v1;
 pub use fault::QualificationFaultPointV1;
 pub use host::{
     CompilerExecutionQualificationHostProbeV1, probe_compiler_execution_qualification_host_v1,
@@ -73,6 +75,11 @@ pub const COMPILER_EXECUTION_SYSTEMD_PREFLIGHT_TOOL_COMMAND_V1: &str =
 /// Parent-PID binding passed only from the qualification worker to its systemd helper.
 pub const COMPILER_EXECUTION_SYSTEMD_PREFLIGHT_PARENT_PID_ENV_V1: &str =
     "FE2O3_QUALIFICATION_SYSTEMD_PARENT_PID_V1";
+/// Hidden static-harness command that launches the pinned isolated systemd machine.
+pub const COMPILER_EXECUTION_SYSTEMD_MACHINE_TOOL_COMMAND_V1: &str = "__systemd-machine-tool-v1";
+/// Parent-PID binding passed only from the qualification worker to its machine helper.
+pub const COMPILER_EXECUTION_SYSTEMD_MACHINE_PARENT_PID_ENV_V1: &str =
+    "FE2O3_QUALIFICATION_SYSTEMD_MACHINE_PARENT_PID_V1";
 /// Canonical install-manifest source name inside a deployment bundle.
 pub const COMPILER_EXECUTION_INSTALL_MANIFEST_NAME_V1: &str = "INSTALL-MANIFEST-V1";
 /// Number of content files bound by the V1 manifest, excluding the manifest itself.
@@ -1187,6 +1194,8 @@ pub enum DeploymentVerificationErrorKindV1 {
     InvalidQualificationMount,
     /// Composed-root systemd preparation or its exact postconditions failed admission.
     InvalidQualificationPreflight,
+    /// Pinned systemd machine launch, readiness, shutdown, or postcondition admission failed.
+    InvalidQualificationBoot,
     /// A production root operation did not run with effective UID 0.
     InsufficientPrivilege,
     /// Atomic publication happened, but its durability result is ambiguous.

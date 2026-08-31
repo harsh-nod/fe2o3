@@ -1,6 +1,6 @@
 use super::{DeploymentVerificationErrorKindV1, DeploymentVerificationErrorV1, invalid};
 
-const QUALIFICATION_FAULT_POINTS_V1: [QualificationFaultPointV1; 18] = [
+const QUALIFICATION_FAULT_POINTS_V1: [QualificationFaultPointV1; 22] = [
     QualificationFaultPointV1::LoopAttached,
     QualificationFaultPointV1::BaseMounted,
     QualificationFaultPointV1::OverlayMounted,
@@ -15,6 +15,10 @@ const QUALIFICATION_FAULT_POINTS_V1: [QualificationFaultPointV1; 18] = [
     QualificationFaultPointV1::SystemdUnitVerifyRevalidated,
     QualificationFaultPointV1::SystemdPostconditionsAdmitted,
     QualificationFaultPointV1::InstalledLowerRevalidated,
+    QualificationFaultPointV1::SystemdMachineSpawned,
+    QualificationFaultPointV1::SystemdMachineReady,
+    QualificationFaultPointV1::SystemdMachineStopped,
+    QualificationFaultPointV1::PostBootLowerRevalidated,
     QualificationFaultPointV1::OverlayUnmounted,
     QualificationFaultPointV1::BaseUnmounted,
     QualificationFaultPointV1::LoopReleased,
@@ -52,6 +56,14 @@ pub enum QualificationFaultPointV1 {
     SystemdPostconditionsAdmitted,
     /// Mount custody and the installed lower passed the final preflight revalidation.
     InstalledLowerRevalidated,
+    /// The exact pinned machine helper was spawned with retained descriptor custody.
+    SystemdMachineSpawned,
+    /// The isolated systemd machine published the admitted supervisor socket.
+    SystemdMachineReady,
+    /// The isolated systemd machine completed bounded graceful shutdown.
+    SystemdMachineStopped,
+    /// Mount custody and the installed lower passed revalidation after shutdown.
+    PostBootLowerRevalidated,
     /// The disposable OverlayFS root has been unmounted.
     OverlayUnmounted,
     /// The read-only SquashFS base has been unmounted.
@@ -85,6 +97,10 @@ impl QualificationFaultPointV1 {
             Self::SystemdUnitVerifyRevalidated => "systemd-unit-verify-revalidated",
             Self::SystemdPostconditionsAdmitted => "systemd-postconditions-admitted",
             Self::InstalledLowerRevalidated => "installed-lower-revalidated",
+            Self::SystemdMachineSpawned => "systemd-machine-spawned",
+            Self::SystemdMachineReady => "systemd-machine-ready",
+            Self::SystemdMachineStopped => "systemd-machine-stopped",
+            Self::PostBootLowerRevalidated => "post-boot-lower-revalidated",
             Self::OverlayUnmounted => "overlay-unmounted",
             Self::BaseUnmounted => "base-unmounted",
             Self::LoopReleased => "loop-released",
@@ -183,6 +199,10 @@ mod tests {
                 "systemd-unit-verify-revalidated",
                 "systemd-postconditions-admitted",
                 "installed-lower-revalidated",
+                "systemd-machine-spawned",
+                "systemd-machine-ready",
+                "systemd-machine-stopped",
+                "post-boot-lower-revalidated",
                 "overlay-unmounted",
                 "base-unmounted",
                 "loop-released",

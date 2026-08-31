@@ -259,14 +259,20 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   lower after every tool, and emits a canonical cleanup report. The tools enter
   the descriptor-retained root through the static harness itself; no host
   `chroot` executable is trusted. A non-mutating probe records every host
-  prerequisite. One 18-point transaction fault contract covers mount
+  prerequisite. The same transaction executes only the pinned-base dynamic
+  loader and `systemd-nspawn` through retained descriptors, uses a private
+  network namespace, admits canonical supervisor-socket readiness, performs
+  bounded pidfd shutdown, proves socket removal, and revalidates the installed
+  lower. One 22-point transaction fault contract covers mount
   admission, every systemd command completion and subsequent lower-root
-  revalidation, exact postcondition admission, final lower revalidation, and
-  cleanup. Normal, fault, and campaign runs share one internal transaction, and
+  revalidation, exact postcondition admission, final lower revalidation,
+  boot readiness and shutdown, post-boot revalidation, and cleanup. Normal,
+  fault, and campaign runs share one internal transaction, and
   every admitted fault result freshly reacquires the caller-pinned bundle, base,
-  and complete installed lower after cleanup. That path still lacks host-root execution
-  evidence, so live mount composition, isolated boot, and distinct-UID service
-  qualification remain open rather than production-qualified.
+  and complete installed lower after cleanup. That path still lacks host-root
+  execution evidence, exact listener-type/connectivity admission, cgroup
+  teardown proof, and distinct-UID service qualification, so it is not yet
+  production-qualified.
 - Versioned artifact, descriptor, durable-publication, and HSA records exist.
   Host execution has one workload-neutral Worker V3 graph. An arbitrary
   manifest cannot manufacture a Rust signature, verifier decision, load

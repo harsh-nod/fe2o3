@@ -22,15 +22,18 @@ profile, and retains an empty root-owned qualification-parent descriptor. This
 preparation grants no mount or execution authority. A second root-only
 transaction creates and descriptor-retains the exact empty base/root,
 upper/work, run/state, and evidence staging tree. Its fault campaign proves
-every interrupted boundary restores an empty parent. Mount attachment, root
-composition, and real root/distinct-UID systemd execution remain separate
-deployment gates. The private-namespace attachment implementation now uses an
+every interrupted boundary restores an empty parent. The private-namespace
+attachment implementation now uses an
 atomic read-only autoclear loop device and detached upstream Linux mount APIs,
-then rechecks the composed deployment projection against sealed custody. It has
-not yet run under real host root, so live mount and systemd qualification remain
-open. `fe2o3-compiler-execution-qualification probe` reports each host
+then rechecks the composed deployment projection against sealed custody. The
+same transaction now launches the exact pinned-base loader and `systemd-nspawn`
+through retained descriptors, waits for canonical supervisor-socket metadata,
+performs bounded pidfd shutdown, proves socket removal, and revalidates the
+installed lower before cleanup. It has not yet run under real host root, so live
+mount, boot, distinct-UID service, and cgroup-teardown qualification remain open.
+`fe2o3-compiler-execution-qualification probe` reports each host
 prerequisite without mutation; its `run` command is the sole static
-verify/install/prepare/stage/mount/revalidate/cleanup path. `fault-points`,
+verify/install/prepare/stage/mount/preflight/boot/revalidate/cleanup path. `fault-points`,
 `fault`, and `campaign` expose one closed post-transition interruption set and
 accept success only after exact install/staging-parent inventories are proven.
 The three mutating commands now run in a dedicated parent-death-bound worker
