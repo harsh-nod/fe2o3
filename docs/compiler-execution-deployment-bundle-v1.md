@@ -6,7 +6,9 @@ exact fault-cleaned empty staging transaction. Mount attachment, root
 composition, and distinct-UID systemd execution qualification remain open. The
 private-namespace mount transaction is implemented but not yet host-root
 qualified. A static host probe and sole verify-to-mount-to-cleanup harness are
-implemented; successful privileged execution is not yet claimed.
+implemented. A closed eight-point mount lifecycle fault set and aggregate
+publication/reacquisition campaign use that same path; successful privileged
+execution is not yet claimed.
 
 ## Boundary
 

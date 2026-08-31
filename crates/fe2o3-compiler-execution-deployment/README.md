@@ -30,5 +30,8 @@ then rechecks the composed deployment projection against sealed custody. It has
 not yet run under real host root, so live mount and systemd qualification remain
 open. `fe2o3-compiler-execution-qualification probe` reports each host
 prerequisite without mutation; its `run` command is the sole static
-verify/install/prepare/stage/mount/revalidate/cleanup path. See the
+verify/install/prepare/stage/mount/revalidate/cleanup path. `fault-points`,
+`fault`, and `campaign` expose one closed post-transition interruption set and
+accept success only after exact install/staging-parent inventories are proven.
+No privileged campaign has run yet. See the
 [disposable-root V1 contract](../../docs/compiler-execution-disposable-root-v1.md).

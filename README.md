@@ -336,7 +336,11 @@ Atomic read-only loop attachment plus detached SquashFS/OverlayFS composition
 is implemented and rechecks the installed projection against sealed custody,
 but has not run under host root. A static mount-qualification harness and
 read-only host probe now drive the sole verify-to-cleanup transaction; its
-`run` path remains unexecuted because the available SSH identity is not root.
+closed eight-point fault set covers loop attachment, both mounts, projection
+revalidation, both unmounts, loop release, and staging removal. One aggregate
+campaign requires first publication, nine reacquisitions, two normal runs, all
+eight faults, and complete parent cleanup. Its root paths remain unexecuted
+because the available SSH identity is not root.
 Combined root/distinct-UID systemd execution remains absent. The concrete
 protected verifier also remains absent. A fixed
 receipt sidecar and publication ACK now
