@@ -311,7 +311,7 @@ fn open_qualification_parent_with_children(
     Ok(parent)
 }
 
-fn open_qualification_parent_metadata(
+pub(super) fn open_qualification_parent_metadata(
     path: &Path,
     owner: (u32, u32),
 ) -> Result<File, DeploymentVerificationErrorV1> {

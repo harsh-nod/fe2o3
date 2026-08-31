@@ -1,12 +1,13 @@
 use std::path::Path;
 
 use fe2o3_compiler_execution_deployment::{
-    CompilerExecutionMountQualificationRequestV1, QualificationMountFaultPointV1,
-    probe_compiler_execution_qualification_host_v1, run_compiler_execution_mount_campaign_v1,
+    CompilerExecutionMountQualificationRequestV1, CompilerExecutionQualificationRecoveryV1,
+    QualificationMountFaultPointV1, probe_compiler_execution_qualification_host_v1,
+    recover_compiler_execution_qualification_parent_v1, run_compiler_execution_mount_campaign_v1,
     run_compiler_execution_mount_fault_v1, run_compiler_execution_mount_qualification_request_v1,
 };
 
-const USAGE: &str = "usage: fe2o3-compiler-execution-qualification probe\n       fe2o3-compiler-execution-qualification fault-points\n       fe2o3-compiler-execution-qualification run BUNDLE_ROOT EXPECTED_MANIFEST_SHA256 EXPECTED_GIT_COMMIT INSTALL_PARENT BASE_IMAGE EXPECTED_BASE_IMAGE_SHA256 QUALIFICATION_PARENT\n       fe2o3-compiler-execution-qualification fault POINT BUNDLE_ROOT EXPECTED_MANIFEST_SHA256 EXPECTED_GIT_COMMIT INSTALL_PARENT BASE_IMAGE EXPECTED_BASE_IMAGE_SHA256 QUALIFICATION_PARENT\n       fe2o3-compiler-execution-qualification campaign BUNDLE_ROOT EXPECTED_MANIFEST_SHA256 EXPECTED_GIT_COMMIT EMPTY_INSTALL_PARENT BASE_IMAGE EXPECTED_BASE_IMAGE_SHA256 QUALIFICATION_PARENT";
+const USAGE: &str = "usage: fe2o3-compiler-execution-qualification probe\n       fe2o3-compiler-execution-qualification fault-points\n       fe2o3-compiler-execution-qualification recover QUALIFICATION_PARENT\n       fe2o3-compiler-execution-qualification run BUNDLE_ROOT EXPECTED_MANIFEST_SHA256 EXPECTED_GIT_COMMIT INSTALL_PARENT BASE_IMAGE EXPECTED_BASE_IMAGE_SHA256 QUALIFICATION_PARENT\n       fe2o3-compiler-execution-qualification fault POINT BUNDLE_ROOT EXPECTED_MANIFEST_SHA256 EXPECTED_GIT_COMMIT INSTALL_PARENT BASE_IMAGE EXPECTED_BASE_IMAGE_SHA256 QUALIFICATION_PARENT\n       fe2o3-compiler-execution-qualification campaign BUNDLE_ROOT EXPECTED_MANIFEST_SHA256 EXPECTED_GIT_COMMIT EMPTY_INSTALL_PARENT BASE_IMAGE EXPECTED_BASE_IMAGE_SHA256 QUALIFICATION_PARENT";
 
 fn main() {
     let arguments: Vec<_> = std::env::args_os().collect();
@@ -17,6 +18,7 @@ fn main() {
     match command {
         "probe" if arguments.len() == 2 => run_probe(),
         "fault-points" if arguments.len() == 2 => print_fault_points(),
+        "recover" if arguments.len() == 3 => run_recovery(&arguments),
         "run" if arguments.len() == 9 => run_qualification(&arguments),
         "fault" if arguments.len() == 10 => run_fault(&arguments),
         "campaign" if arguments.len() == 9 => run_campaign(&arguments),
@@ -38,6 +40,24 @@ fn run_probe() {
         Ok(probe) => print!("{}", probe.canonical_report()),
         Err(error) => {
             eprintln!("compiler-execution qualification host probe failed: {error}");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn run_recovery(arguments: &[std::ffi::OsString]) {
+    match recover_compiler_execution_qualification_parent_v1(Path::new(&arguments[2])) {
+        Ok(recovery) => {
+            let recovery = match recovery {
+                CompilerExecutionQualificationRecoveryV1::AlreadyEmpty => "already-empty",
+                CompilerExecutionQualificationRecoveryV1::Recovered => "recovered",
+            };
+            println!("recovery_schema=fe2o3-compiler-execution-qualification-recovery-v1");
+            println!("recovery={recovery}");
+            println!("cleanup=complete");
+        }
+        Err(error) => {
+            eprintln!("compiler-execution qualification recovery failed: {error}");
             std::process::exit(1);
         }
     }

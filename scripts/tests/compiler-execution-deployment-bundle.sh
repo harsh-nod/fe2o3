@@ -68,6 +68,8 @@ grep -Fq -- 'fault-points' "${verifier_builder}" ||
   fail 'static qualification mount fault set is missing'
 grep -Fq -- 'campaign BUNDLE_ROOT' "${verifier_builder}" ||
   fail 'static qualification mount campaign is missing'
+grep -Fq -- 'recover QUALIFICATION_PARENT' "${verifier_builder}" ||
+  fail 'static qualification recovery command is missing'
 grep -Fq -- "--target \"\${target}\"" "${verifier_builder}" ||
   fail 'static verifier target is not pinned'
 grep -Fq -- '-C link-arg=-static' "${verifier_builder}" ||

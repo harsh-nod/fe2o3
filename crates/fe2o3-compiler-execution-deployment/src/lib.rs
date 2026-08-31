@@ -49,7 +49,8 @@ pub use run::{
     run_compiler_execution_mount_qualification_v1,
 };
 pub use staging::{
-    StagedCompilerExecutionQualificationV1, stage_compiler_execution_qualification_v1,
+    CompilerExecutionQualificationRecoveryV1, StagedCompilerExecutionQualificationV1,
+    recover_compiler_execution_qualification_parent_v1, stage_compiler_execution_qualification_v1,
 };
 
 /// Canonical deployment target admitted by this V1 profile.
@@ -602,6 +603,26 @@ fn verify_directory_children(
     expected: &[&str],
     role: &'static str,
 ) -> Result<(), DeploymentVerificationErrorV1> {
+    let observed = canonical_directory_children(directory, role)?;
+    let expected: Vec<&OsStr> = expected.iter().map(OsStr::new).collect();
+    if observed.len() != expected.len()
+        || observed
+            .iter()
+            .zip(expected)
+            .any(|(observed, expected)| observed != expected)
+    {
+        return Err(invalid(
+            DeploymentVerificationErrorKindV1::InvalidInventory,
+            format!("{role} has an extra, missing, or substituted entry"),
+        ));
+    }
+    Ok(())
+}
+
+fn canonical_directory_children(
+    directory: &File,
+    role: &'static str,
+) -> Result<Vec<OsString>, DeploymentVerificationErrorV1> {
     let scan = openat(
         directory,
         ".",
@@ -627,19 +648,7 @@ fn verify_directory_children(
         observed.push(OsString::from_vec(bytes.to_vec()));
     }
     observed.sort_by(|left, right| left.as_bytes().cmp(right.as_bytes()));
-    let expected: Vec<&OsStr> = expected.iter().map(OsStr::new).collect();
-    if observed.len() != expected.len()
-        || observed
-            .iter()
-            .zip(expected)
-            .any(|(observed, expected)| observed != expected)
-    {
-        return Err(invalid(
-            DeploymentVerificationErrorKindV1::InvalidInventory,
-            format!("{role} has an extra, missing, or substituted entry"),
-        ));
-    }
-    Ok(())
+    Ok(observed)
 }
 
 fn admit_source_file(
