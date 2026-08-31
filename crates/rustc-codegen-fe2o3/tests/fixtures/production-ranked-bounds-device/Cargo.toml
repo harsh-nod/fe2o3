@@ -24,6 +24,7 @@ barrier_divergent = []
 barrier_early_return = []
 barrier_loop = []
 barrier_helper = []
+device_math_sqrt = []
 
 [dependencies]
 fe2o3-device.workspace = true
