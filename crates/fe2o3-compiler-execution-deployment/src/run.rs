@@ -1,6 +1,7 @@
 use std::fmt::Write as _;
 use std::path::Path;
 
+use super::boot::boot_and_stop_systemd_machine_v1;
 use super::fault::{InjectQualificationFaultV1, NoQualificationFaultV1, QualificationFaultHooksV1};
 use super::install::verify_install_parent_children_v1;
 use super::mount::attach_compiler_execution_qualification_mounts_with_hooks_v1;
@@ -70,11 +71,15 @@ impl CompilerExecutionQualificationReportV1 {
                 "systemd_unit_verify_count",
                 self.verified_unit_count.to_string(),
             ),
+            ("systemd_boot", "complete".to_owned()),
+            ("systemd_machine_ready", "true".to_owned()),
+            ("systemd_shutdown", "complete".to_owned()),
             ("compiler_uid", self.compiler_uid.to_string()),
             ("compiler_gid", self.compiler_gid.to_string()),
             ("anchor_uid", self.anchor_uid.to_string()),
             ("anchor_gid", self.anchor_gid.to_string()),
             ("installed_lower_revalidated", "true".to_owned()),
+            ("post_boot_lower_revalidated", "true".to_owned()),
             ("cleanup", "complete".to_owned()),
         ] {
             writeln!(report, "{name}={value}").expect("writing to a String cannot fail");
@@ -176,6 +181,7 @@ impl CompilerExecutionQualificationCampaignReportV1 {
             ("fault_points", fault_points),
             ("normal_run_count", "2".to_owned()),
             ("systemd_preflight_run_count", "2".to_owned()),
+            ("systemd_boot_run_count", "2".to_owned()),
             ("systemd_version", self.systemd_version.clone()),
             ("compiler_uid", self.compiler_uid.to_string()),
             ("compiler_gid", self.compiler_gid.to_string()),
@@ -241,11 +247,12 @@ impl<'a> CompilerExecutionQualificationRequestV1<'a> {
     }
 }
 
-/// Runs and completely cleans one root-only disposable systemd preflight transaction.
+/// Runs and completely cleans one root-only disposable systemd boot transaction.
 ///
 /// This is the sole high-level qualification path through verification, installation, mount
-/// composition, sysusers, tmpfiles, unit verification, exact postcondition admission, and cleanup.
-/// It grants no boot, service, or compiler-execution authority.
+/// composition, sysusers, tmpfiles, unit verification, isolated boot, socket readiness, bounded
+/// shutdown, exact postcondition admission, and cleanup. It grants no persistent service or
+/// compiler-execution authority.
 pub fn run_compiler_execution_qualification_v1(
     bundle_root: &Path,
     expected_manifest_sha256: &str,
@@ -287,6 +294,15 @@ fn execute_staged_qualification_with_hooks(
         hooks,
     )?;
     let preflight = run_compiler_execution_systemd_preflight_with_hooks_v1(mounted, hooks)?;
+    if let Err(error) = boot_and_stop_systemd_machine_v1(&preflight, &staging_name, hooks) {
+        return match preflight.cleanup_with_hooks(hooks) {
+            Ok(()) => Err(error),
+            Err(cleanup) => Err(super::invalid(
+                DeploymentVerificationErrorKindV1::CleanupFailed,
+                format!("systemd machine failed ({error}); cleanup also failed: {cleanup}"),
+            )),
+        };
+    }
     let report = CompilerExecutionQualificationReportV1 {
         git_commit: preflight.git_commit().to_owned(),
         target: transaction.target,
@@ -590,10 +606,12 @@ mod tests {
             anchor_gid: 998,
         };
         let encoded = report.canonical_report();
-        assert_eq!(encoded.lines().count(), 19);
+        assert_eq!(encoded.lines().count(), 23);
         assert!(encoded.contains("systemd_sysusers=complete\n"));
         assert!(encoded.contains("systemd_unit_verify_count=3\n"));
-        assert!(encoded.ends_with("installed_lower_revalidated=true\ncleanup=complete\n"));
+        assert!(encoded.contains("systemd_boot=complete\n"));
+        assert!(encoded.contains("systemd_machine_ready=true\n"));
+        assert!(encoded.ends_with("post_boot_lower_revalidated=true\ncleanup=complete\n"));
         assert!(encoded.contains(&format!(
             "manifest_sha256={}\n",
             encode_sha256_lower_hex_v1([0x23; 32])
@@ -635,11 +653,12 @@ mod tests {
             anchor_gid: 998,
         };
         let encoded = report.canonical_report();
-        assert_eq!(encoded.lines().count(), 19);
+        assert_eq!(encoded.lines().count(), 20);
         assert!(encoded.contains("normal_run_count=2\n"));
         assert!(encoded.contains("systemd_preflight_run_count=2\n"));
-        assert!(encoded.contains("qualification_fault_count=18\n"));
-        assert!(encoded.contains("reacquisition_count=37\n"));
+        assert!(encoded.contains("systemd_boot_run_count=2\n"));
+        assert!(encoded.contains("qualification_fault_count=22\n"));
+        assert!(encoded.contains("reacquisition_count=45\n"));
         assert!(!encoded.contains("staging_name"));
         assert!(encoded.ends_with("qualification_parent_empty=true\ncleanup=complete\n"));
     }

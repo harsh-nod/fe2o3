@@ -1,5 +1,5 @@
 use std::fmt::Write as _;
-use std::os::unix::fs::{FileTypeExt as _, MetadataExt as _, PermissionsExt as _};
+use std::os::unix::fs::{FileTypeExt as _, MetadataExt as _};
 use std::path::Path;
 
 use rustix::fs::{major, minor};
@@ -26,10 +26,6 @@ pub struct CompilerExecutionQualificationHostProbeV1 {
     new_mount_api_recognized: bool,
     isolation_namespaces_present: bool,
     cgroup_v2_present: bool,
-    systemd_analyze_present: bool,
-    systemd_sysusers_present: bool,
-    systemd_tmpfiles_present: bool,
-    systemd_nspawn_present: bool,
 }
 
 impl CompilerExecutionQualificationHostProbeV1 {
@@ -47,13 +43,7 @@ impl CompilerExecutionQualificationHostProbeV1 {
 
     /// Returns whether the observed host also advertises prerequisites for isolated systemd work.
     pub const fn isolated_systemd_ready(&self) -> bool {
-        self.mount_ready()
-            && self.isolation_namespaces_present
-            && self.cgroup_v2_present
-            && self.systemd_analyze_present
-            && self.systemd_sysusers_present
-            && self.systemd_tmpfiles_present
-            && self.systemd_nspawn_present
+        self.mount_ready() && self.isolation_namespaces_present && self.cgroup_v2_present
     }
 
     /// Encodes the observation as one stable newline-terminated key-value report.
@@ -77,10 +67,6 @@ impl CompilerExecutionQualificationHostProbeV1 {
                 self.isolation_namespaces_present,
             ),
             ("cgroup_v2_present", self.cgroup_v2_present),
-            ("systemd_analyze_present", self.systemd_analyze_present),
-            ("systemd_sysusers_present", self.systemd_sysusers_present),
-            ("systemd_tmpfiles_present", self.systemd_tmpfiles_present),
-            ("systemd_nspawn_present", self.systemd_nspawn_present),
             ("mount_ready", self.mount_ready()),
             ("isolated_systemd_ready", self.isolated_systemd_ready()),
         ] {
@@ -112,10 +98,6 @@ pub fn probe_compiler_execution_qualification_host_v1()
             .iter()
             .all(|name| path_exists(Path::new("/proc/self/ns").join(name))),
         cgroup_v2_present: path_exists("/sys/fs/cgroup/cgroup.controllers"),
-        systemd_analyze_present: executable_exists("/usr/bin/systemd-analyze"),
-        systemd_sysusers_present: executable_exists("/usr/bin/systemd-sysusers"),
-        systemd_tmpfiles_present: executable_exists("/usr/bin/systemd-tmpfiles"),
-        systemd_nspawn_present: executable_exists("/usr/bin/systemd-nspawn"),
     })
 }
 
@@ -140,12 +122,6 @@ pub(super) fn process_thread_count() -> Result<usize, DeploymentVerificationErro
 
 fn path_exists(path: impl AsRef<Path>) -> bool {
     std::fs::metadata(path).is_ok()
-}
-
-fn executable_exists(path: impl AsRef<Path>) -> bool {
-    std::fs::metadata(path).is_ok_and(|metadata| {
-        metadata.file_type().is_file() && metadata.permissions().mode() & 0o111 != 0
-    })
 }
 
 fn loop_control_identity() -> bool {
@@ -190,7 +166,7 @@ mod tests {
         let probe = probe_compiler_execution_qualification_host_v1().unwrap();
         let report = probe.canonical_report();
         assert!(report.ends_with('\n'));
-        assert_eq!(report.lines().count(), 17);
+        assert_eq!(report.lines().count(), 13);
         assert_eq!(
             report.lines().next(),
             Some("probe_schema=fe2o3-compiler-execution-qualification-host-probe-v1")

@@ -10,11 +10,14 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use fe2o3_compiler_execution_deployment::{
+    COMPILER_EXECUTION_SYSTEMD_MACHINE_PARENT_PID_ENV_V1,
+    COMPILER_EXECUTION_SYSTEMD_MACHINE_TOOL_COMMAND_V1,
     COMPILER_EXECUTION_SYSTEMD_PREFLIGHT_PARENT_PID_ENV_V1,
     COMPILER_EXECUTION_SYSTEMD_PREFLIGHT_TOOL_COMMAND_V1, CompilerExecutionInstallRecoveryV1,
     CompilerExecutionQualificationRecoveryV1, CompilerExecutionQualificationRequestV1,
     CompilerExecutionQualificationSupervisorLeaseV1, QualificationFaultPointV1,
     QualificationWorkerTerminationV1, acquire_compiler_execution_qualification_supervisor_lease_v1,
+    execute_compiler_execution_systemd_machine_tool_v1,
     execute_compiler_execution_systemd_preflight_tool_v1,
     probe_compiler_execution_qualification_host_v1, recover_compiler_execution_install_parent_v1,
     recover_compiler_execution_qualification_parent_v1,
@@ -75,6 +78,9 @@ fn main() {
         }
         COMPILER_EXECUTION_SYSTEMD_PREFLIGHT_TOOL_COMMAND_V1 if arguments.len() == 3 => {
             run_systemd_preflight_tool(&arguments)
+        }
+        COMPILER_EXECUTION_SYSTEMD_MACHINE_TOOL_COMMAND_V1 if arguments.len() == 3 => {
+            run_systemd_machine_tool(&arguments)
         }
         _ => {
             eprintln!("{USAGE}");
@@ -514,6 +520,26 @@ fn run_systemd_preflight_tool(arguments: &[std::ffi::OsString]) {
         Ok(never) => match never {},
         Err(error) => {
             eprintln!("compiler-execution systemd preflight helper failed: {error}");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn run_systemd_machine_tool(arguments: &[std::ffi::OsString]) {
+    if let Err(error) =
+        establish_exact_parent_boundary(COMPILER_EXECUTION_SYSTEMD_MACHINE_PARENT_PID_ENV_V1)
+    {
+        eprintln!("compiler-execution systemd machine boundary failed: {error}");
+        std::process::exit(1);
+    }
+    let Some(staging_name) = arguments[2].to_str() else {
+        eprintln!("compiler-execution systemd machine identity must be UTF-8");
+        std::process::exit(1);
+    };
+    match execute_compiler_execution_systemd_machine_tool_v1(staging_name) {
+        Ok(never) => match never {},
+        Err(error) => {
+            eprintln!("compiler-execution systemd machine helper failed: {error}");
             std::process::exit(1);
         }
     }

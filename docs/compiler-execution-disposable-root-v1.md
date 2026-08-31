@@ -2,11 +2,11 @@
 
 Status: deterministic base construction, caller-pinned SquashFS admission,
 sealed preparation custody, and the exact empty staging transaction are
-implemented. Private-namespace mount composition is implemented but has not yet
-run under host root. Its static probe, exact high-level qualification harness,
-closed 18-point transaction fault set, and aggregate campaign are implemented. Root execution,
-isolated systemd boot, distinct-UID execution, and lifecycle fault
-qualification remain open.
+implemented. Private-namespace mount composition and descriptor-pinned isolated
+systemd boot are implemented but have not yet run under host root. The static
+probe, exact high-level qualification harness, closed 22-point transaction fault
+set, and aggregate campaign are implemented. Live root execution, distinct-UID
+service execution, and privileged lifecycle fault qualification remain open.
 
 ## Purpose
 
@@ -46,7 +46,7 @@ The mode-`0700` output has exactly three mode-`0444`, single-link files:
 
 The builder resolves the important recursive dependency closure of 12 fixed
 root packages and requires its package-name set to equal the checked-in
-71-record lock. It downloads every exact version, validates package name,
+99-record lock. It downloads every exact version, validates package name,
 architecture, and SHA-256 before extraction, runs no maintainer scripts, and
 replaces account and machine identity files with canonical content. The image
 contains the repository-owned `fe2o3-qualification.target` and binds the Git
@@ -61,7 +61,7 @@ after image-profile and digest checks succeed.
 The lock pins package bytes, not repository availability. The builder fails
 closed if the configured Ubuntu repositories no longer serve an exact version
 or if their dependency closure changes. A release archive must retain or mirror
-the 71 digest-pinned `.deb` inputs to guarantee rebuild availability over the
+the 99 digest-pinned `.deb` inputs to guarantee rebuild availability over the
 release lifetime; accepting a newer package under the old identity is never an
 allowed fallback.
 
@@ -144,7 +144,7 @@ After attachment, the transaction checks SquashFS and OverlayFS magic,
 mountpoint-to-retained-descriptor identity, loop status, qualification-parent
 continuity, and every installed manifest/content file against sealed deployment
 custody. The move-only mounted value still grants no boot or execution
-authority. Cleanup unmounts overlay first, SquashFS second, releases the
+authority by itself. Cleanup unmounts overlay first, SquashFS second, releases the
 autoclear loop device, and then preflights and removes the exact staging tree.
 The recursive removal is descriptor-relative, follows no symlink, crosses no
 mount, and enforces the same 64-level and 131,072-entry bounds as interrupted
@@ -154,12 +154,14 @@ disposable overlay while retaining deterministic fail-closed cleanup.
 The fully static `fe2o3-compiler-execution-qualification` image exposes seven
 commands. `probe` observes effective UID, task count, procfs, loop-control
 identity, filesystem support, new mount API recognition, isolation namespaces,
-cgroup V2, and fixed systemd tool paths without creating a namespace, mount, or
-service. `run` is the sole high-level path through bundle
+cgroup V2, and the namespaces needed by the pinned-base mechanism without
+creating a namespace, mount, or service. `run` is the sole high-level path through bundle
 verification, installation, base preparation, staging, private namespace entry,
 mount attachment, pinned-base `systemd-sysusers`, `systemd-tmpfiles --create`,
-offline `systemd-analyze verify`, exact postcondition admission, explicit
-cleanup, and a canonical completion report. The three tools execute from the
+offline `systemd-analyze verify`, exact postcondition admission, descriptor-pinned
+`systemd-nspawn` boot, supervisor-socket readiness, bounded graceful shutdown,
+post-boot lower revalidation, explicit cleanup, and a canonical completion
+report. The three preflight tools execute from the
 admitted composed root through one inherited descriptor and a cleared
 environment. A hidden instance of the static harness binds itself to the exact
 worker with parent-death `SIGKILL`, enters the root through upstream rustix
@@ -168,19 +170,27 @@ worker with parent-death `SIGKILL`, enters the root through upstream rustix
 every tool. A read-only first stage admits the exact
 `systemd 255 (255.4-1ubuntu8.17)` version line. Every helper has a 64-KiB file
 output limit, and stdout is admitted from a private memfd before the report can
-name that version.
-`fault-points` lists the one closed transaction set. Its 18 ordered points cover
+name that version. The machine helper separately receives retained SquashFS and
+OverlayFS descriptors, validates the exact pinned loader and `systemd-nspawn`
+metadata, and executes them through `/proc/self/fd`; no host systemd executable
+participates. The machine has a private network namespace and a deterministic
+name/UUID derived from the random staging identity. A pidfd binds ordinary
+readiness, shutdown, and reaping to the exact helper process. Exact process-group
+equality keeps the complete machine tree inside the outer qualification
+supervisor's already bounded crash and signal cleanup.
+`fault-points` lists the one closed transaction set. Its 22 ordered points cover
 the four mount-admission transitions, completion and revalidation of every
 systemd command, exact postcondition admission, final installed-lower
+revalidation, machine spawn, socket readiness, clean shutdown, post-boot lower
 revalidation, and all four cleanup transitions. `fault` interrupts one exact
 point and accepts success only after the root-owned qualification parent is
 empty and a fresh caller-pinned bundle/base reacquisition completely
 revalidates the installed lower. `campaign` starts from an empty install parent
-and requires one publication, 37 exact reacquisitions, two complete normal
-preflight runs, all 18 faults, stable identities, one exact installed-root
+and requires one publication, 45 exact reacquisitions, two complete normal
+preflight-and-boot runs, all 22 faults, stable identities, one exact installed-root
 child, and complete staging cleanup. Normal, fault, and campaign execution all
-use the same internal qualification transaction. These commands grant no boot
-or service authority.
+use the same internal qualification transaction. These commands grant no
+persistent service or compiler-execution authority.
 
 `recover` accepts only an empty qualification parent or one canonically named
 qualification transaction. `recover-install` additionally requires the
@@ -226,8 +236,9 @@ This implementation currently has compile, unit, custody-doctest, strict
 Clippy, strict rustdoc, static-musl, ELF loader-independence, and live read-only
 probe evidence. The current `mi300x` SSH identity has effective UID `1002` and
 no mount capabilities, so no successful kernel mount or composed-root systemd
-preflight is claimed yet. The live root harness, live timeout/signal recovery,
-and live execution of the implemented qualification fault campaign remain required
+preflight or boot is claimed yet. The live root harness, live timeout/signal
+recovery, exact listener-type/connectivity admission, cgroup teardown proof, and
+live execution of the implemented qualification fault campaign remain required
 before this boundary is production-qualified.
 
 ## Qualification

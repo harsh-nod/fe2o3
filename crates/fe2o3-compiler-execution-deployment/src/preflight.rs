@@ -308,6 +308,18 @@ impl CompilerExecutionSystemdPreflightV1 {
         self.mounted.base_image_sha256()
     }
 
+    pub(super) fn inherit_systemd_machine_descriptors(
+        &self,
+    ) -> Result<(OwnedFd, OwnedFd), DeploymentVerificationErrorV1> {
+        self.mounted.inherit_systemd_machine_descriptors()
+    }
+
+    pub(super) fn revalidate_systemd_machine_state(
+        &self,
+    ) -> Result<(), DeploymentVerificationErrorV1> {
+        self.mounted.revalidate_systemd_preflight_state()
+    }
+
     pub(super) fn cleanup_with_hooks(
         self,
         hooks: &mut impl QualificationFaultHooksV1,
