@@ -1397,6 +1397,7 @@ mod tests {
         ));
         assert!(!config.join(ISSUER_SEED_FILE_V1).exists());
         assert!(!config.join(ISSUER_POLICY_FILE_V1).exists());
+        flock(&active_service, FlockOperation::Unlock).unwrap();
         drop(active_service);
 
         provision_layout(&layout, 7, compiler, anchor, uid, gid).unwrap();
