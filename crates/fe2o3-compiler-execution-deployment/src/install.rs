@@ -785,7 +785,7 @@ pub(super) fn verify_installed_projection(
     Ok(())
 }
 
-fn open_install_parent(
+pub(super) fn open_install_parent(
     path: &Path,
     owner: (u32, u32),
 ) -> Result<File, DeploymentVerificationErrorV1> {
@@ -837,7 +837,7 @@ pub(super) fn verify_install_parent_children_v1(
     verify_install_parent_path(path, &parent, (0, 0))
 }
 
-fn verify_install_parent_path(
+pub(super) fn verify_install_parent_path(
     path: &Path,
     retained: &File,
     owner: (u32, u32),

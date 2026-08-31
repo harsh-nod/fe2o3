@@ -54,7 +54,12 @@ pub use staging::{
     CompilerExecutionQualificationRecoveryV1, StagedCompilerExecutionQualificationV1,
     recover_compiler_execution_qualification_parent_v1, stage_compiler_execution_qualification_v1,
 };
-pub use supervisor::{QualificationWorkerTerminationV1, wait_for_qualification_worker_v1};
+pub use supervisor::{
+    CompilerExecutionQualificationSupervisorLeaseV1, QualificationWorkerTerminationV1,
+    acquire_compiler_execution_qualification_supervisor_lease_v1,
+    wait_for_compiler_execution_qualification_supervisor_lease_v1,
+    wait_for_qualification_worker_v1,
+};
 
 /// Canonical deployment target admitted by this V1 profile.
 pub const COMPILER_EXECUTION_DEPLOYMENT_TARGET_V1: &str = "x86_64-unknown-linux-musl";
