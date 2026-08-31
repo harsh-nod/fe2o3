@@ -1,10 +1,14 @@
 use std::fs::File;
+use std::os::fd::AsFd as _;
 use std::path::Path;
 use std::process::{Child, ExitStatus};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use rustix::fs::{FlockOperation, flock, fstat};
+use rustix::process::{
+    Pid, PidfdFlags, Signal, WaitId, WaitIdOptions, getpgid, kill_process_group, pidfd_open, waitid,
+};
 
 use super::install::{open_install_parent, verify_install_parent_path};
 use super::qualification::open_qualification_parent_metadata;
@@ -174,18 +178,38 @@ pub enum QualificationWorkerTerminationV1 {
     Signaled(i32),
 }
 
-/// Waits for one qualification worker and guarantees reaping after timeout or signal cancellation.
+/// Waits for one qualification worker and guarantees process-group termination before reaping.
 ///
 /// `registered_signal` must contain zero or one positive operating-system signal number stored by
 /// an async-signal-safe handler. Completion is checked before cancellation on every bounded poll.
+/// The child must be the leader of a dedicated process group. A pidfd observes exit without
+/// reaping the leader, so the group identity cannot be reused before all descendants are killed.
 /// This function owns no namespace or staging cleanup; callers perform recovery only after it
-/// returns and therefore after the worker can no longer mutate deployment state.
+/// returns and therefore after the worker and every descendant can no longer mutate deployment
+/// state.
 pub fn wait_for_qualification_worker_v1(
     child: &mut Child,
     timeout: Duration,
     registered_signal: &AtomicUsize,
 ) -> Result<QualificationWorkerTerminationV1, DeploymentVerificationErrorV1> {
+    let worker_pid = Pid::from_child(child);
+    let worker_pidfd = pidfd_open(worker_pid, PidfdFlags::empty()).map_err(|source| {
+        terminate_single_worker_after_admission_failure(child);
+        io_error("open qualification worker pidfd", source)
+    })?;
+    let process_group = getpgid(Some(worker_pid)).map_err(|source| {
+        terminate_single_worker_after_admission_failure(child);
+        io_error("inspect qualification worker process group", source)
+    })?;
+    if process_group != worker_pid {
+        terminate_single_worker_after_admission_failure(child);
+        return Err(invalid(
+            DeploymentVerificationErrorKindV1::InvalidQualificationIsolation,
+            "qualification worker is not its dedicated process-group leader",
+        ));
+    }
     let deadline = Instant::now().checked_add(timeout).ok_or_else(|| {
+        let _ = terminate_and_reap_worker_group(child, worker_pid);
         invalid(
             DeploymentVerificationErrorKindV1::InvalidMetadata,
             "qualification worker timeout exceeds the monotonic-clock range",
@@ -193,17 +217,32 @@ pub fn wait_for_qualification_worker_v1(
     })?;
 
     loop {
-        if let Some(status) = child
-            .try_wait()
-            .map_err(|source| std_io_error("poll qualification worker", source))?
-        {
+        let exited = waitid(
+            WaitId::PidFd(worker_pidfd.as_fd()),
+            WaitIdOptions::EXITED | WaitIdOptions::NOHANG | WaitIdOptions::NOWAIT,
+        )
+        .map_err(|source| {
+            let cleanup = terminate_and_reap_worker_group(child, worker_pid);
+            match cleanup {
+                Ok(_) => io_error("poll qualification worker pidfd", source),
+                Err(cleanup) => invalid(
+                    DeploymentVerificationErrorKindV1::CleanupFailed,
+                    format!(
+                        "poll qualification worker pidfd failed ({source}); process-group cleanup also failed: {cleanup}"
+                    ),
+                ),
+            }
+        })?
+        .is_some();
+        if exited {
+            let status = terminate_and_reap_worker_group(child, worker_pid)?;
             return Ok(QualificationWorkerTerminationV1::Completed(status));
         }
 
         let raw_signal = registered_signal.load(Ordering::Acquire);
         if raw_signal != 0 {
             let signal = i32::try_from(raw_signal);
-            terminate_and_reap_worker(child)?;
+            terminate_and_reap_worker_group(child, worker_pid)?;
             let signal = signal.map_err(|_| {
                 invalid(
                     DeploymentVerificationErrorKindV1::InvalidMetadata,
@@ -215,7 +254,7 @@ pub fn wait_for_qualification_worker_v1(
 
         let now = Instant::now();
         if now >= deadline {
-            terminate_and_reap_worker(child)?;
+            terminate_and_reap_worker_group(child, worker_pid)?;
             return Ok(QualificationWorkerTerminationV1::TimedOut);
         }
         std::thread::sleep(
@@ -224,37 +263,49 @@ pub fn wait_for_qualification_worker_v1(
     }
 }
 
-fn terminate_and_reap_worker(
+fn terminate_and_reap_worker_group(
     child: &mut Child,
+    worker_pid: Pid,
 ) -> Result<ExitStatus, DeploymentVerificationErrorV1> {
-    match child.kill() {
-        Ok(()) => child
-            .wait()
-            .map_err(|source| std_io_error("reap terminated qualification worker", source)),
+    match kill_process_group(worker_pid, Signal::KILL) {
+        Ok(()) => child.wait().map_err(|source| {
+            std_io_error("reap terminated qualification worker process group", source)
+        }),
         Err(kill_source) => match child.try_wait() {
             Ok(Some(status)) => Ok(status),
-            Ok(None) => Err(std_io_error("terminate qualification worker", kill_source)),
+            Ok(None) => Err(io_error(
+                "terminate qualification worker process group",
+                kill_source,
+            )),
             Err(wait_source) => Err(super::invalid(
                 DeploymentVerificationErrorKindV1::Io,
                 format!(
-                    "qualification worker termination failed ({kill_source}) and exit polling failed ({wait_source})"
+                    "qualification worker process-group termination failed ({kill_source}) and exit polling failed ({wait_source})"
                 ),
             )),
         },
     }
 }
 
+fn terminate_single_worker_after_admission_failure(child: &mut Child) {
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
     use std::os::unix::fs::PermissionsExt as _;
+    use std::os::unix::process::CommandExt as _;
     use std::path::PathBuf;
     use std::process::Command;
 
     use super::*;
 
     fn sleeping_child() -> Child {
-        Command::new("/bin/sleep").arg("30").spawn().unwrap()
+        let mut command = Command::new("/bin/sleep");
+        command.arg("30").process_group(0);
+        command.spawn().unwrap()
     }
 
     fn owner() -> (u32, u32) {
@@ -354,6 +405,7 @@ mod tests {
     fn completed_worker_preserves_its_exact_exit_status() {
         let mut child = Command::new("/bin/sh")
             .args(["-c", "exit 7"])
+            .process_group(0)
             .spawn()
             .unwrap();
         let signal = AtomicUsize::new(0);
@@ -404,5 +456,89 @@ mod tests {
             DeploymentVerificationErrorKindV1::InvalidMetadata
         );
         assert!(child.try_wait().unwrap().is_some());
+    }
+
+    #[test]
+    fn elapsed_deadline_kills_worker_descendants_before_reaping() {
+        let temporary = tempfile::tempdir().unwrap();
+        let descendant = temporary.path().join("descendant");
+        let script = format!("sleep 30 & echo $! > '{}'; wait", descendant.display());
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", &script]).process_group(0);
+        let mut child = command.spawn().unwrap();
+        let descendant_pid = read_descendant_pid(&descendant);
+        let signal = AtomicUsize::new(0);
+
+        assert_eq!(
+            wait_for_qualification_worker_v1(&mut child, Duration::from_millis(10), &signal)
+                .unwrap(),
+            QualificationWorkerTerminationV1::TimedOut
+        );
+        wait_until_process_is_absent(descendant_pid);
+    }
+
+    #[test]
+    fn completed_worker_cannot_leave_a_descendant_group_alive() {
+        let temporary = tempfile::tempdir().unwrap();
+        let descendant = temporary.path().join("descendant");
+        let script = format!("sleep 30 & echo $! > '{}'; exit 7", descendant.display());
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", &script]).process_group(0);
+        let mut child = command.spawn().unwrap();
+        let signal = AtomicUsize::new(0);
+
+        let outcome =
+            wait_for_qualification_worker_v1(&mut child, Duration::from_secs(5), &signal).unwrap();
+        let QualificationWorkerTerminationV1::Completed(status) = outcome else {
+            panic!("worker did not report normal completion");
+        };
+        assert_eq!(status.code(), Some(7));
+        let descendant_pid = read_descendant_pid(&descendant);
+        wait_until_process_is_absent(descendant_pid);
+    }
+
+    #[test]
+    fn worker_without_dedicated_process_group_is_rejected_and_reaped() {
+        let mut child = Command::new("/bin/sleep").arg("30").spawn().unwrap();
+        let signal = AtomicUsize::new(0);
+
+        assert_eq!(
+            wait_for_qualification_worker_v1(&mut child, Duration::from_secs(5), &signal)
+                .unwrap_err()
+                .kind(),
+            DeploymentVerificationErrorKindV1::InvalidQualificationIsolation
+        );
+        assert!(child.try_wait().unwrap().is_some());
+    }
+
+    fn wait_until_process_is_absent(raw_pid: i32) {
+        let pid = Pid::from_raw(raw_pid).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            match rustix::process::test_kill_process(pid) {
+                Err(rustix::io::Errno::SRCH) => return,
+                Err(error) => panic!("cannot inspect descendant process: {error}"),
+                Ok(()) if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                Ok(()) => panic!("qualification worker descendant remained alive"),
+            }
+        }
+    }
+
+    fn read_descendant_pid(path: &Path) -> i32 {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            if let Ok(contents) = fs::read_to_string(path)
+                && let Ok(pid) = contents.trim().parse::<i32>()
+            {
+                return pid;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "qualification descendant did not publish its PID"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
     }
 }

@@ -178,11 +178,16 @@ install- and qualification-parent descriptors in stable device/inode order.
 The hidden single-threaded worker binds itself to the exact parent PID with
 Linux parent-death `SIGKILL`, waits for the same dual-parent lease, repeats
 recovery under that custody, and holds it throughout namespace and transaction
-mutation. `run` and `fault` have 120-second deadlines; `campaign` has a
+mutation. Every worker is the leader of a dedicated process group. The parent
+retains a pidfd and observes exit with `waitid(..., WNOWAIT)`, then kills the
+entire group before reaping the still-unreused leader PID. This closes both
+timeout and apparently successful exits over descendants introduced by later
+systemd tooling. `run` and `fault` have 120-second deadlines; `campaign` has a
 20-minute deadline. `SIGTERM`, `SIGINT`, `SIGHUP`, and `SIGQUIT` are recorded by
-async-signal-safe handlers. Timeout or signal handling kills and reaps the
-worker before reacquiring the lease and recovering both parents. Worker stdout
-and stderr are captured independently in anonymous memfds under one-MiB bounds.
+async-signal-safe handlers. Timeout or signal handling kills the group and
+reaps the worker before reacquiring the lease and recovering both parents.
+Worker stdout and stderr are captured independently in anonymous memfds under
+one-MiB bounds.
 Success evidence reaches caller stdout only after the worker exits zero, emits
 no stderr, and post-worker recovery reports that no staging was present. A
 successful worker that leaves recoverable staging is still a failed

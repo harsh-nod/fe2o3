@@ -1,6 +1,7 @@
 use std::fs::File;
 use std::io::Write as _;
 use std::os::unix::fs::FileExt as _;
+use std::os::unix::process::CommandExt as _;
 use std::os::unix::process::ExitStatusExt as _;
 use std::path::Path;
 use std::process::{Child, Command, ExitStatus, Stdio};
@@ -332,7 +333,8 @@ fn spawn_qualification_worker(
         .env(WORKER_PARENT_PID_ENV_V1, std::process::id().to_string())
         .stdin(Stdio::null())
         .stdout(output.stdout_stdio()?)
-        .stderr(output.stderr_stdio()?);
+        .stderr(output.stderr_stdio()?)
+        .process_group(0);
     command
         .spawn()
         .map_err(|error| format!("cannot execute /proc/self/exe: {error}"))

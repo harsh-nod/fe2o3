@@ -55,6 +55,7 @@ grep -Fq -- 'manifest_sha256=%s' "${builder}" ||
 
 readonly verifier_builder="${repo_root}/scripts/build-static-compiler-execution-deployment-verifier.sh"
 readonly qualification_source="${repo_root}/crates/fe2o3-compiler-execution-deployment/src/bin/qualification.rs"
+readonly qualification_supervisor_source="${repo_root}/crates/fe2o3-compiler-execution-deployment/src/supervisor.rs"
 bash -n "${verifier_builder}"
 for binary in \
   fe2o3-compiler-execution-manifest \
@@ -82,6 +83,15 @@ for supervisor_contract in \
   WorkerOutputCaptureV1; do
   grep -Fq -- "${supervisor_contract}" "${qualification_source}" ||
     fail "missing qualification supervisor contract ${supervisor_contract}"
+done
+grep -Fq -- '.process_group(0)' "${qualification_source}" ||
+  fail 'qualification worker process-group isolation is missing'
+for process_tree_contract in \
+  pidfd_open \
+  'WaitIdOptions::NOWAIT' \
+  kill_process_group; do
+  grep -Fq -- "${process_tree_contract}" "${qualification_supervisor_source}" ||
+    fail "missing qualification process-tree contract ${process_tree_contract}"
 done
 grep -Fq -- "--target \"\${target}\"" "${verifier_builder}" ||
   fail 'static verifier target is not pinned'
