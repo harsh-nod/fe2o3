@@ -114,10 +114,11 @@ fi
 
 qualification_probe="$(/usr/bin/env -i "${qualification}" probe)"
 readonly qualification_probe
-if [[ "$(printf '%s\n' "${qualification_probe}" | /usr/bin/awk 'END { print NR }')" -ne 13 ]] \
+if [[ "$(printf '%s\n' "${qualification_probe}" | /usr/bin/awk 'END { print NR }')" -ne 14 ]] \
   || ! /usr/bin/grep -Eq '^probe_schema=fe2o3-compiler-execution-qualification-host-probe-v1$' <<<"${qualification_probe}" \
   || ! /usr/bin/grep -Eq '^effective_uid=[0-9]+$' <<<"${qualification_probe}" \
   || ! /usr/bin/grep -Eq '^task_count=[1-9][0-9]*$' <<<"${qualification_probe}" \
+  || ! /usr/bin/grep -Eq '^cgroup_v2_scope_writable=(true|false)$' <<<"${qualification_probe}" \
   || ! /usr/bin/grep -Eq '^mount_ready=(true|false)$' <<<"${qualification_probe}" \
   || ! /usr/bin/grep -Eq '^isolated_systemd_ready=(true|false)$' <<<"${qualification_probe}"; then
   printf 'static qualification host probe report changed\n' >&2

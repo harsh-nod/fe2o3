@@ -263,15 +263,19 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   loader and `systemd-nspawn` through retained descriptors, uses a private
   network namespace, admits canonical supervisor-socket readiness, performs
   bounded pidfd shutdown, proves socket removal, and revalidates the installed
-  lower. One 22-point transaction fault contract covers mount
+  lower. Before worker release, the outer supervisor descriptor-retains one
+  lease-identified writable cgroup V2 child, crash-recovers only that exact
+  scope, attaches and verifies the exact worker, then
+  uses aggregate `cgroup.events`, recursive `cgroup.kill`, and bounded
+  deepest-first nested-cgroup removal before publishing output. One 22-point transaction fault contract covers mount
   admission, every systemd command completion and subsequent lower-root
   revalidation, exact postcondition admission, final lower revalidation,
   boot readiness and shutdown, post-boot revalidation, and cleanup. Normal,
   fault, and campaign runs share one internal transaction, and
   every admitted fault result freshly reacquires the caller-pinned bundle, base,
   and complete installed lower after cleanup. That path still lacks host-root
-  execution evidence, exact listener-type/connectivity admission, cgroup
-  teardown proof, and distinct-UID service qualification, so it is not yet
+  execution evidence, exact listener-type/connectivity admission, live cgroup
+  teardown evidence, and distinct-UID service qualification, so it is not yet
   production-qualified.
 - Versioned artifact, descriptor, durable-publication, and HSA records exist.
   Host execution has one workload-neutral Worker V3 graph. An arbitrary

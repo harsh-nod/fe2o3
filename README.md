@@ -345,7 +345,8 @@ complete installed lower after cleanup. One aggregate campaign requires first
 publication, 45 reacquisitions, two normal runs, all 22 faults, and complete
 parent cleanup. Its root paths remain unexecuted
 because the available SSH identity is not root.
-The descriptor-pinned boot path is implemented, but root/cgroup live evidence
+The descriptor-pinned boot path and supervisor-owned cgroup V2 containment are
+implemented, but root/cgroup live evidence
 and distinct-UID service execution remain absent. The concrete
 protected verifier also remains absent. A fixed
 receipt sidecar and publication ACK now

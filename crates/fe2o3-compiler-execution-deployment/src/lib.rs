@@ -20,6 +20,7 @@ use rustix::fs::{
 use sha2::{Digest, Sha256};
 
 mod boot;
+mod cgroup;
 mod fault;
 mod host;
 mod install;
@@ -31,6 +32,10 @@ mod staging;
 mod supervisor;
 
 pub use boot::execute_compiler_execution_systemd_machine_tool_v1;
+pub use cgroup::{
+    CompilerExecutionQualificationCgroupCleanupV1, CompilerExecutionQualificationCgroupV1,
+    create_compiler_execution_qualification_cgroup_v1,
+};
 pub use fault::QualificationFaultPointV1;
 pub use host::{
     CompilerExecutionQualificationHostProbeV1, probe_compiler_execution_qualification_host_v1,

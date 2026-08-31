@@ -17,6 +17,7 @@ use fe2o3_compiler_execution_deployment::{
     CompilerExecutionQualificationRecoveryV1, CompilerExecutionQualificationRequestV1,
     CompilerExecutionQualificationSupervisorLeaseV1, QualificationFaultPointV1,
     QualificationWorkerTerminationV1, acquire_compiler_execution_qualification_supervisor_lease_v1,
+    create_compiler_execution_qualification_cgroup_v1,
     execute_compiler_execution_systemd_machine_tool_v1,
     execute_compiler_execution_systemd_preflight_tool_v1,
     probe_compiler_execution_qualification_host_v1, recover_compiler_execution_install_parent_v1,
@@ -132,7 +133,6 @@ fn supervise_qualification(
         eprintln!("compiler-execution qualification interrupted by signal {signal} before launch");
         exit_for_signal(signal);
     }
-
     let output = match WorkerOutputCaptureV1::new() {
         Ok(output) => output,
         Err(error) => {
@@ -140,12 +140,23 @@ fn supervise_qualification(
             std::process::exit(1);
         }
     };
+    let cgroup = match create_compiler_execution_qualification_cgroup_v1(&lease) {
+        Ok(cgroup) => cgroup,
+        Err(error) => {
+            eprintln!("compiler-execution qualification cgroup creation failed: {error}");
+            std::process::exit(1);
+        }
+    };
     let mut child = match spawn_qualification_worker(arguments, worker_command, &output) {
         Ok(child) => child,
         Err(error) => {
+            let cgroup_cleanup = cgroup.cleanup();
             let recovery =
                 recover_supervised_state(install_parent, manifest_sha256, qualification_parent);
             eprintln!("compiler-execution qualification worker launch failed: {error}");
+            if let Err(cleanup) = cgroup_cleanup {
+                eprintln!("compiler-execution qualification cgroup cleanup failed: {cleanup}");
+            }
             if let Err(recovery) = recovery {
                 eprintln!(
                     "compiler-execution qualification post-launch recovery failed: {recovery}"
@@ -154,20 +165,55 @@ fn supervise_qualification(
             std::process::exit(1);
         }
     };
+    if let Err(error) = cgroup.attach_worker(&child) {
+        eprintln!("compiler-execution qualification cgroup attachment failed: {error}");
+        if let Err(termination) = force_terminate_and_reap(&mut child) {
+            eprintln!("compiler-execution qualification worker termination failed: {termination}");
+            std::process::exit(1);
+        }
+        if let Err(cleanup) = cgroup.cleanup() {
+            eprintln!("compiler-execution qualification cgroup cleanup failed: {cleanup}");
+            std::process::exit(1);
+        }
+        if let Err(recovery) =
+            recover_supervised_state(install_parent, manifest_sha256, qualification_parent)
+        {
+            eprintln!("compiler-execution qualification recovery failed: {recovery}");
+        }
+        std::process::exit(1);
+    }
     drop(lease);
 
     let outcome = match wait_for_qualification_worker_v1(&mut child, timeout, &registered_signal) {
         Ok(outcome) => Ok(outcome),
         Err(error) => match force_terminate_and_reap(&mut child) {
             Ok(()) => Err(error.to_string()),
-            Err(termination) => {
-                eprintln!("compiler-execution qualification supervision failed: {error}");
-                eprintln!(
-                    "compiler-execution qualification worker remains unconfirmed: {termination}"
-                );
-                std::process::exit(1);
-            }
+            Err(termination) => Err(format!(
+                "qualification supervision failed ({error}); process cleanup requires cgroup fallback ({termination})"
+            )),
         },
+    };
+    let completed_worker = matches!(outcome, Ok(QualificationWorkerTerminationV1::Completed(_)));
+    let cgroup_cleanup = match cgroup.cleanup() {
+        Ok(cleanup) => cleanup,
+        Err(error) => {
+            eprintln!("compiler-execution qualification cgroup cleanup failed: {error}");
+            if let Err(termination) = force_terminate_and_reap(&mut child) {
+                eprintln!(
+                    "compiler-execution qualification worker reap also failed: {termination}"
+                );
+            }
+            std::process::exit(1);
+        }
+    };
+    if let Err(error) = force_terminate_and_reap(&mut child) {
+        eprintln!("compiler-execution qualification post-cgroup reap failed: {error}");
+        std::process::exit(1);
+    }
+    let outcome = if completed_worker && cgroup_cleanup.residual_processes_killed() {
+        Err("completed qualification worker left residual cgroup processes".to_owned())
+    } else {
+        outcome
     };
     let post_worker_lease = match acquire_compiler_execution_qualification_supervisor_lease_v1(
         install_parent,

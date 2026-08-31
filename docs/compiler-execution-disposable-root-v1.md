@@ -154,7 +154,7 @@ disposable overlay while retaining deterministic fail-closed cleanup.
 The fully static `fe2o3-compiler-execution-qualification` image exposes seven
 commands. `probe` observes effective UID, task count, procfs, loop-control
 identity, filesystem support, new mount API recognition, isolation namespaces,
-cgroup V2, and the namespaces needed by the pinned-base mechanism without
+cgroup V2, writable current-scope delegation, and the namespaces needed by the pinned-base mechanism without
 creating a namespace, mount, or service. `run` is the sole high-level path through bundle
 verification, installation, base preparation, staging, private namespace entry,
 mount attachment, pinned-base `systemd-sysusers`, `systemd-tmpfiles --create`,
@@ -175,9 +175,18 @@ OverlayFS descriptors, validates the exact pinned loader and `systemd-nspawn`
 metadata, and executes them through `/proc/self/fd`; no host systemd executable
 participates. The machine has a private network namespace and a deterministic
 name/UUID derived from the random staging identity. A pidfd binds ordinary
-readiness, shutdown, and reaping to the exact helper process. Exact process-group
-equality keeps the complete machine tree inside the outer qualification
-supervisor's already bounded crash and signal cleanup.
+readiness, shutdown, and reaping to the exact helper process. Before releasing
+the lease-blocked worker, the outer supervisor creates one deterministic child
+of its current writable cgroup V2 domain. Its name binds the retained install-
+and qualification-parent device/inode pairs, so a successor holding the same
+exclusive lease can kill, drain, and remove only that exact stale scope after a
+supervisor crash. The supervisor moves the exact worker into it and verifies
+both `/proc/<pid>/cgroup` and the scope's sole `cgroup.procs` member. Exact
+process-group equality supplies the first cleanup boundary. After the worker is
+reaped, aggregate `cgroup.events` supplies the stronger boundary: any escaped
+session is killed through `cgroup.kill`, nested machine cgroups are removed
+deepest-first under fixed 64-level/4,096-entry bounds, and caller-visible
+evidence remains withheld until the retained scope itself is removed.
 `fault-points` lists the one closed transaction set. Its 22 ordered points cover
 the four mount-admission transitions, completion and revalidation of every
 systemd command, exact postcondition admission, final installed-lower
@@ -237,7 +246,7 @@ Clippy, strict rustdoc, static-musl, ELF loader-independence, and live read-only
 probe evidence. The current `mi300x` SSH identity has effective UID `1002` and
 no mount capabilities, so no successful kernel mount or composed-root systemd
 preflight or boot is claimed yet. The live root harness, live timeout/signal
-recovery, exact listener-type/connectivity admission, cgroup teardown proof, and
+recovery, exact listener-type/connectivity admission, live cgroup teardown evidence, and
 live execution of the implemented qualification fault campaign remain required
 before this boundary is production-qualified.
 

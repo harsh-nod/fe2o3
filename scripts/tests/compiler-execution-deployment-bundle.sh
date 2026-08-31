@@ -59,6 +59,7 @@ readonly qualification_supervisor_source="${repo_root}/crates/fe2o3-compiler-exe
 readonly qualification_fault_source="${repo_root}/crates/fe2o3-compiler-execution-deployment/src/fault.rs"
 readonly qualification_preflight_source="${repo_root}/crates/fe2o3-compiler-execution-deployment/src/preflight.rs"
 readonly qualification_boot_source="${repo_root}/crates/fe2o3-compiler-execution-deployment/src/boot.rs"
+readonly qualification_cgroup_source="${repo_root}/crates/fe2o3-compiler-execution-deployment/src/cgroup.rs"
 readonly qualification_run_source="${repo_root}/crates/fe2o3-compiler-execution-deployment/src/run.rs"
 bash -n "${verifier_builder}"
 for binary in \
@@ -87,6 +88,23 @@ done
 if grep -Fq -- '.process_group(0)' "${qualification_boot_source}"; then
   fail 'systemd machine helper escapes the supervised worker process group'
 fi
+for cgroup_contract in \
+  '/proc/self/cgroup' \
+  '/sys/fs/cgroup' \
+  create_compiler_execution_qualification_cgroup_v1 \
+  attach_worker \
+  'cgroup.procs' \
+  'cgroup.events' \
+  'cgroup.kill' \
+  'accessat' \
+  'remove_descendant_cgroups' \
+  'CGROUP_MAX_DEPTH_V1' \
+  'CGROUP_MAX_DESCENDANTS_V1'; do
+  grep -Fq -- "${cgroup_contract}" "${qualification_cgroup_source}" ||
+    fail "missing qualification cgroup contract ${cgroup_contract}"
+done
+grep -Fq -- 'cgroup_v2_scope_writable' "${verifier_builder}" ||
+  fail 'static qualification cgroup-writability probe is missing'
 if grep -Eq -- 'PINNED_NSPAWN_PATH[^=]*=[[:space:]]*"/usr/bin|Command::new\("/usr/bin/systemd-nspawn"' \
   "${qualification_boot_source}"; then
   fail 'systemd machine launcher trusts a host systemd-nspawn path'
