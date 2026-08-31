@@ -2,6 +2,9 @@
 
 use core::{fmt, time::Duration};
 
+#[cfg(test)]
+use std::{net::Shutdown, os::unix::net::UnixStream};
+
 use fe2o3_kfd::{
     CheckedGfx942XnackMinusDevice, HOST_VISIBLE_MEMORY_PAGE_BYTES_V1,
     KfdCooperativeTargetTelemetryEndpointV1, KfdCooperativeTargetTelemetryEndpointV2,
@@ -1184,6 +1187,31 @@ mod tests {
         )
     }
 
+    fn telemetry_session_with_shutdown_for_test() -> (
+        KfdDebuggerTelemetryEndpointV1,
+        AuthorizedRuntimeDebugTelemetrySessionV1,
+        UnixStream,
+    ) {
+        let nonce = KfdTargetDebugSessionNonceV1::from_bytes([11; 32]).unwrap();
+        let process = KfdTargetDebugTelemetryProcessV1::capture(std::process::id()).unwrap();
+        let (debugger_fd, target_fd) = create_kfd_target_debug_telemetry_channel_v1().unwrap();
+        let shutdown = UnixStream::from(debugger_fd.try_clone().unwrap());
+        let debugger = KfdDebuggerTelemetryEndpointV1::admit(debugger_fd, nonce, process).unwrap();
+        let target =
+            KfdCooperativeTargetTelemetryEndpointV1::admit(target_fd, nonce, process).unwrap();
+        let executable =
+            KfdTargetDebugArtifactIdentityV1::new(telemetry_digest_for_test(12), 8_192).unwrap();
+        (
+            debugger,
+            AuthorizedRuntimeDebugTelemetrySessionV1::new(
+                target,
+                telemetry_digest_for_test(13),
+                executable,
+            ),
+            shutdown,
+        )
+    }
+
     fn telemetry_facts_for_test() -> DebugTelemetryFactsV1 {
         let code_object =
             KfdTargetDebugArtifactIdentityV1::new(telemetry_digest_for_test(14), 4_096).unwrap();
@@ -1442,7 +1470,8 @@ mod tests {
 
     #[test]
     fn pre_native_telemetry_failure_is_returned_and_poisoned() {
-        let (debugger, mut session) = telemetry_session_for_test();
+        let (debugger, mut session, shutdown) = telemetry_session_with_shutdown_for_test();
+        shutdown.shutdown(Shutdown::Both).unwrap();
         drop(debugger);
         assert!(
             session
