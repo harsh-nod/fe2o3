@@ -27,8 +27,8 @@ const MAX_SOURCE_TREE_FILES: usize = 100_000;
 const CRATES_IO_SOURCE: &str = "registry+https://github.com/rust-lang/crates.io-index";
 const TRUSTED_FE2O3_EXTERNAL_SOURCE: &str = concat!(
     "git+https://github.com/harsh-nod/fe2o3.git?rev=",
-    "06c74c64506f15883d64c5ab2ca476561909181d#",
-    "06c74c64506f15883d64c5ab2ca476561909181d",
+    "d955209099c7b434dfceb69e1152d948dab76b22#",
+    "d955209099c7b434dfceb69e1152d948dab76b22",
 );
 const TRUSTED_REGISTRY_BUILD_SCRIPTS: [(&str, &str, &str); 25] = [
     (
@@ -157,11 +157,16 @@ const TRUSTED_REGISTRY_BUILD_SCRIPTS: [(&str, &str, &str); 25] = [
         "ee4ed4bdafb98dc92c5a51095290212137f81ffc6cdfae77e9cb540373fb4c11",
     ),
 ];
-const TRUSTED_REGISTRY_PROC_MACROS: [(&str, &str, &str); 8] = [
+const TRUSTED_REGISTRY_PROC_MACROS: [(&str, &str, &str); 9] = [
     (
         "awint_macros",
         "0.18.1",
         "a48c5475a5c4adf80066644a0cbbc3ed565e38eb5a9dd061cf8953450ba8e3b5",
+    ),
+    (
+        "awint_macros",
+        "0.19.0",
+        "ee1c3c771747ccebec28a74521447163a7d3088d68b64f64b26241a6e32b8725",
     ),
     (
         "const_fn",
@@ -210,7 +215,7 @@ const TRUSTED_FE2O3_MACROS_TREE: &str =
 // This digest belongs to TRUSTED_FE2O3_EXTERNAL_SOURCE and is intentionally
 // independent of the workspace-local macros tree.
 const TRUSTED_FE2O3_EXTERNAL_MACROS_TREE: &str =
-    "d641d46fd0342ed09057fda4604c6d7feed0437f8bf026af5b0dd08957b87052";
+    "a6ae6e79c48ee48389411aee2db6b438599e525009e45f5773d5e0d3ba57efcc";
 const TRUSTED_FE2O3_HIP_SYS_TREE: &str =
     "fc950a51041eeb74fd756624e3c981fe24d52a6e8b4868da613e5b9a8c499429";
 
@@ -1514,6 +1519,46 @@ mod tests {
     }
 
     #[test]
+    fn reviewed_awint_macros_0_19_requires_exact_registry_identity() {
+        let package = serde_json::json!({
+            "name": "awint_macros",
+            "version": "0.19.0",
+            "source": CRATES_IO_SOURCE,
+            "manifest_path": "/cargo/registry/awint_macros-0.19.0/Cargo.toml",
+        });
+        let reviewed =
+            decode_digest("ee1c3c771747ccebec28a74521447163a7d3088d68b64f64b26241a6e32b8725");
+        assert!(
+            validate_registry_proc_macro_against(
+                &package,
+                &reviewed,
+                &TRUSTED_REGISTRY_PROC_MACROS,
+            )
+            .unwrap()
+        );
+
+        let mut wrong_version = package.clone();
+        wrong_version["version"] = Value::String("0.19.1".into());
+        assert!(
+            !validate_registry_proc_macro_against(
+                &wrong_version,
+                &reviewed,
+                &TRUSTED_REGISTRY_PROC_MACROS,
+            )
+            .unwrap()
+        );
+        assert!(
+            validate_registry_proc_macro_against(
+                &package,
+                &[0_u8; 32],
+                &TRUSTED_REGISTRY_PROC_MACROS,
+            )
+            .unwrap_err()
+            .contains("registry proc-macro closure content changed")
+        );
+    }
+
+    #[test]
     fn reviewed_workspace_host_code_requires_exact_local_or_git_revision_identity() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
@@ -1568,9 +1613,9 @@ mod tests {
         }
 
         for source in [
-            "git+https://github.com/harsh-nod/fe2o3.git?rev=06c74c64506f15883d64c5ab2ca476561909181d#ffffffffffffffffffffffffffffffffffffffff",
-            "git+https://example.invalid/fe2o3.git?rev=06c74c64506f15883d64c5ab2ca476561909181d#06c74c64506f15883d64c5ab2ca476561909181d",
-            "git+https://github.com/harsh-nod/fe2o3.git?branch=main#06c74c64506f15883d64c5ab2ca476561909181d",
+            "git+https://github.com/harsh-nod/fe2o3.git?rev=d955209099c7b434dfceb69e1152d948dab76b22#ffffffffffffffffffffffffffffffffffffffff",
+            "git+https://example.invalid/fe2o3.git?rev=d955209099c7b434dfceb69e1152d948dab76b22#d955209099c7b434dfceb69e1152d948dab76b22",
+            "git+https://github.com/harsh-nod/fe2o3.git?branch=main#d955209099c7b434dfceb69e1152d948dab76b22",
             "git+https://github.com/harsh-nod/fe2o3.git?rev=0123456789abcdef0123456789abcdef01234567#0123456789abcdef0123456789abcdef01234567",
         ] {
             for (package, package_digest) in [(&git, &external_macro_digest), (&hip, &hip_digest)] {
@@ -1640,13 +1685,9 @@ mod tests {
             let root = crates.join(name);
             assert_eq!(hex(&canonical_tree_digest(&root, None).unwrap()), expected);
         }
-        assert_ne!(
-            TRUSTED_FE2O3_EXTERNAL_MACROS_TREE,
-            TRUSTED_FE2O3_MACROS_TREE
-        );
         assert_eq!(
             TRUSTED_FE2O3_EXTERNAL_MACROS_TREE,
-            "d641d46fd0342ed09057fda4604c6d7feed0437f8bf026af5b0dd08957b87052"
+            "a6ae6e79c48ee48389411aee2db6b438599e525009e45f5773d5e0d3ba57efcc"
         );
     }
 
