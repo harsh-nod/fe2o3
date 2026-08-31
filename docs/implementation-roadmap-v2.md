@@ -490,7 +490,14 @@ earlier authority transition.
    already requires and owns the exact V4 compiler proof inputs: five decoded
    stage preimages plus an independently imported signed aggregate
    MIR-to-live-PLIRON receipt. Protected compiler-currentness evidence is
-   retained alongside it through load and dispatch, while LLVM/machine and
+   retained alongside it through load and dispatch. The 2026-08-31 singleton
+   continuation adds a second move-only owner that strictly decodes target
+   binding, AMDHSA data layout, and semantic-to-LLVM association, rederives the
+   semantic layout identity, checks every receipt coordinate, replays exact
+   KIR-to-LLVM lowering, and cross-binds final LLVM to both compiler handoff and
+   independently reconstructed finalizer state. Promotion also binds COV6 and
+   exact workgroup dimensions to the admitted descriptor. Multi-root target
+   lineage, semantic preservation, LLVM-to-machine refinement, and
    dynamic-launch refinement remain separate open joins.
 8. **Implemented bounded foundation: authenticated physical-machine bundle.**
    The sole supported `gfx942` LLVM Object/MC analysis path runs from a sealed
@@ -511,7 +518,12 @@ earlier authority transition.
    generated-object, ordered native-input, path-independent LLD-invocation, and
    final-HSACO identities, independently recomputes the evidence identity and
    request/output-derived relations, and requires bootstrap/replay equality for
-   every measured stage. It must still establish formal KIR-to-LLVM semantic
+   every measured stage. Singleton Worker V3 admission now independently
+   decodes target, data-layout, and semantic association records, checks every
+   capsule receipt coordinate, owns exact KIR-to-LLVM replay, binds final LLVM
+   to handoff and finalizer state, and rejects valid-but-foreign target-side
+   splices. Multi-root target-binding custody remains open. It must still
+   establish formal KIR-to-LLVM semantic
    preservation and LLVM-to-machine semantic
    refinement, then bind the machine receipt into Worker V3 runtime authority.
    Hardware success remains an independent evidence class.

@@ -711,6 +711,20 @@ Safe ownership of resources used by asynchronous copies is documented in
   establishes exact deterministic KIR-to-LLVM derivation and custody, not a
   formal semantic-preservation proof, LLVM-to-machine refinement, or authority
   to remove the guard, publish, load, or launch.
+- Default Worker V3 singleton decisions now also consume a move-only target
+  lineage owner produced by an independent verifier. The verifier uses the
+  shared strict codec to decode target binding, AMDHSA data layout, and the
+  semantic-to-LLVM association; rederives the semantic target-layout identity;
+  checks every associated compiler receipt; and retains the exact KIR-to-LLVM
+  replay. Final promotion byte-matches those records to the capsule, binds the
+  associated final LLVM identity to both the compiler handoff and independently
+  reconstructed finalizer module, and binds code-object V6 and the exact
+  singleton workgroup to the admitted descriptor. Rehashed target-binding,
+  lowering, and semantic-to-LLVM records from another valid compilation are
+  rejected. This is exact singleton association and replay, not semantic or
+  LLVM-to-machine refinement. The private multi-root target-binding encoding is
+  not yet decoded or retained by this owner and remains an open production
+  verifier join.
 - The same production Worker exchange now retains exact downstream derivation
   custody from linked LLVM module through optimized LLVM module, generated
   object, ordered native-link inputs, the path-independent in-process LLD
