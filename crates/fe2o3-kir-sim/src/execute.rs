@@ -6761,6 +6761,7 @@ mod tests {
                     access: AccessMode::WriteOnly,
                     lower_bound: 0,
                     upper_bound: 4,
+                    abi_argument_ordinal: NO_ABI_ARGUMENT_V1,
                 }),
             ),
             (
@@ -6918,7 +6919,9 @@ mod tests {
             access: AccessMode::WriteOnly,
             lower_bound: 0,
             upper_bound: 4,
+            abi_argument_ordinal: NO_ABI_ARGUMENT_V1,
         };
+        assert!(out_of_bounds_detail_v2(&pointer, 8, 4).abi_view.is_none());
         let access = MemoryAccess::new(AddressSpace::Global, 4);
         assert_eq!(
             validate_access(&allocation, &pointer, access, 4, false),
