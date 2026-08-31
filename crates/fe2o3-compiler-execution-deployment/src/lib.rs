@@ -154,14 +154,14 @@ const FILE_SPECS_V1: [FileSpecV1; COMPILER_EXECUTION_INSTALL_FILE_COUNT_V1] = [
         max_bytes: CONFIG_MAX_BYTES_V1,
     },
     FileSpecV1 {
-        source: "usr/libexec/fe2o3/fe2o3-compiler-execution-coordinator",
-        install: "/usr/libexec/fe2o3/fe2o3-compiler-execution-coordinator",
+        source: "usr/libexec/fe2o3/fe2o3-compiler-execution-client-check",
+        install: "/usr/libexec/fe2o3/fe2o3-compiler-execution-client-check",
         mode: 0o555,
         max_bytes: EXECUTABLE_MAX_BYTES_V1,
     },
     FileSpecV1 {
-        source: "usr/libexec/fe2o3/fe2o3-compiler-execution-client-check",
-        install: "/usr/libexec/fe2o3/fe2o3-compiler-execution-client-check",
+        source: "usr/libexec/fe2o3/fe2o3-compiler-execution-coordinator",
+        install: "/usr/libexec/fe2o3/fe2o3-compiler-execution-coordinator",
         mode: 0o555,
         max_bytes: EXECUTABLE_MAX_BYTES_V1,
     },
@@ -1293,6 +1293,17 @@ mod tests {
 
     const COMMIT: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const OTHER_COMMIT: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+    #[test]
+    fn manifest_sources_follow_sha256sum_byte_order() {
+        let sources = FILE_SPECS_V1
+            .iter()
+            .map(|spec| spec.source)
+            .collect::<Vec<_>>();
+        let mut sorted = sources.clone();
+        sorted.sort_unstable();
+        assert_eq!(sources, sorted);
+    }
 
     struct Fixture {
         root: tempfile::TempDir,
