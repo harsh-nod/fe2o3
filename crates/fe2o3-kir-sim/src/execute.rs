@@ -6755,7 +6755,6 @@ mod tests {
                 ValueId(0),
                 RuntimeValue::Pointer(PointerValue {
                     allocation: pointer_allocation,
-                    abi_argument_ordinal: NO_ABI_ARGUMENT_V1,
                     byte_offset: 0,
                     element: ScalarType::U32,
                     address_space: AddressSpace::Global,
@@ -6914,7 +6913,6 @@ mod tests {
         };
         let pointer = PointerValue {
             allocation: 7,
-            abi_argument_ordinal: NO_ABI_ARGUMENT_V1,
             byte_offset: 0,
             element: ScalarType::U32,
             address_space: AddressSpace::Global,
