@@ -1,8 +1,8 @@
 //! Neutral rustc-derived identity primitives for canonical semantic MIR.
 
-use fe2o3_compiler_lineage::canonical_semantic_target_layout_transcript_v1;
 #[cfg(test)]
 use fe2o3_compiler_lineage::MAX_PRODUCTION_TARGET_LINEAGE_TRANSCRIPT_BYTES_V3;
+use fe2o3_compiler_lineage::canonical_semantic_target_layout_transcript_v1;
 use fe2o3_kernel_ir::DebugSourceMapFileV1;
 use fe2o3_mir_model::semantic_mir_v1::{
     SemanticAbiIdentityV1, SemanticBlockIdentityV1, SemanticConstGenericArgumentsIdentityV1,

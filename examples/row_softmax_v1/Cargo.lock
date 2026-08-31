@@ -440,13 +440,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe2o3-compiler-closure-capability"
+version = "0.1.0"
+dependencies = [
+ "ed25519-dalek",
+ "fe2o3-build-authority",
+ "fe2o3-compiler-execution-protocol",
+ "fe2o3-rustc-invocation",
+ "libc",
+ "rustix",
+ "sha2 0.11.0",
+ "zeroize",
+]
+
+[[package]]
 name = "fe2o3-compiler-execution-client"
 version = "0.1.0"
 dependencies = [
  "fe2o3-artifact-transaction",
+ "fe2o3-compiler-closure-capability",
  "fe2o3-compiler-execution-protocol",
  "libc",
  "rustix",
+ "sha2 0.11.0",
 ]
 
 [[package]]
@@ -474,6 +490,7 @@ dependencies = [
 name = "fe2o3-compiler-lineage"
 version = "0.1.0"
 dependencies = [
+ "fe2o3-amd-target",
  "fe2o3-build-authority",
  "fe2o3-kernel-descriptor",
  "fe2o3-rustc-invocation",
@@ -789,6 +806,7 @@ dependencies = [
  "fe2o3-pliron",
  "fe2o3-proof-contracts",
  "fe2o3-rustc-front",
+ "fe2o3-rustc-invocation",
  "rand_core",
  "rustix",
  "sha2 0.11.0",
