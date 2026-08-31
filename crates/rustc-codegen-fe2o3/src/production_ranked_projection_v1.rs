@@ -45,6 +45,7 @@ use fe2o3_mir_model::semantic_mir_v1::{
     SemanticSwitchTargetsV1, SemanticTargetArchitectureV1, SemanticTerminatorKindV1,
     SemanticTypeDeclV1, SemanticTypeIdV1, SemanticTypeShapeV1, SemanticUnaryOpV1,
     SemanticUncheckedBinaryOpV1, SemanticUnwindActionV1, SemanticWorkgroupPipelineEventV1,
+    SemanticWriteOnlyDisjointWriteKindV1,
 };
 use fe2o3_mir_model::{
     SemanticEnumPayloadAvailabilityV1, SemanticEnumPayloadDominanceV1,
@@ -250,6 +251,7 @@ struct IntrinsicProjectionV1 {
     capability_read_effects: Vec<Option<ProjectedCapabilityReadEffectV1>>,
     transpose_workgroup_effects: Vec<Option<ProjectedTransposeWorkgroupEffectV1>>,
     read_view_effects: Vec<Option<GuardedRankedAccessV1>>,
+    direct_write_effects: Vec<Option<GuardedRankedAccessV1>>,
     pipeline_effects: Vec<Option<ProjectedPipelineEffectV1>>,
     extent_argument_count: usize,
 }
@@ -2719,6 +2721,22 @@ fn project_and_verify_ranked_root_v1(
             guarded_sites.try_reserve(1).map_err(|_| {
                 ProductionRankedProjectionErrorV1::Unsupported(
                     "strided read access-site storage cannot be reserved",
+                )
+            })?;
+            guarded_sites.push(GuardedAccessSiteV1 {
+                insertion_operation: operations.len(),
+                access,
+            });
+        }
+        if let Some(access) = intrinsic
+            .direct_write_effects
+            .get(block_index)
+            .cloned()
+            .flatten()
+        {
+            guarded_sites.try_reserve(1).map_err(|_| {
+                ProductionRankedProjectionErrorV1::Unsupported(
+                    "write-only access-site storage cannot be reserved",
                 )
             })?;
             guarded_sites.push(GuardedAccessSiteV1 {
@@ -6746,6 +6764,7 @@ fn project_intrinsic_contracts(
 
     let mut views_by_origin: Vec<Option<ProjectedViewV1>> = vec![None; function.locals().len()];
     let mut guarded_accesses = Vec::new();
+    let mut direct_write_effects = vec![None; function.blocks().len()];
     for (block_index, block) in function.blocks().iter().enumerate() {
         let SemanticTerminatorKindV1::Call(call) = block.terminator().kind() else {
             continue;
@@ -6755,7 +6774,11 @@ fn project_intrinsic_contracts(
         else {
             continue;
         };
-        let (element, index, precondition, checked_success) = match operation {
+        let write_only_effect = matches!(
+            operation,
+            SemanticCompilerIntrinsicOperationV1::WriteOnlyDisjointSliceWrite { .. }
+        );
+        let (element, index, precondition, checked_success, direct_write) = match operation {
             SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMut { element, .. } => {
                 let projected = projected_disjoint_operand_v1(
                     call,
@@ -6770,7 +6793,13 @@ fn project_intrinsic_contracts(
                         "identity accessor received a non-identity mapping",
                     ));
                 }
-                (*element, projected.value, projected.precondition, None)
+                (
+                    *element,
+                    projected.value,
+                    projected.precondition,
+                    None,
+                    false,
+                )
             }
             SemanticCompilerIntrinsicOperationV1::DisjointSliceGetDisjointMut {
                 element,
@@ -6790,11 +6819,55 @@ fn project_intrinsic_contracts(
                         "disjoint accessor mapping identity changed",
                     ));
                 }
-                (*element, projected.value, projected.precondition, None)
+                (
+                    *element,
+                    projected.value,
+                    projected.precondition,
+                    None,
+                    false,
+                )
+            }
+            SemanticCompilerIntrinsicOperationV1::WriteOnlyDisjointSliceWrite {
+                element,
+                index_space,
+                kind: SemanticWriteOnlyDisjointWriteKindV1::Thread { disjoint },
+                ..
+            } => {
+                let projected = projected_disjoint_operand_v1(
+                    call,
+                    1,
+                    &index_values,
+                    &option_dominance,
+                    &enum_payload_dominance,
+                    block_index,
+                )?;
+                if projected.mapping != *index_space {
+                    return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                        "write-only direct mapping identity changed",
+                    ));
+                }
+                if *disjoint && projected.mapping == SemanticDisjointIndexSpaceV1::GridExclusive {
+                    return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                        "write-only direct disjoint mapping is grid-exclusive",
+                    ));
+                }
+                (
+                    *element,
+                    projected.value,
+                    projected.precondition,
+                    None,
+                    write_only_effect,
+                )
             }
             SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMutExclusive {
                 element,
                 grid_leader,
+                ..
+            }
+            | SemanticCompilerIntrinsicOperationV1::WriteOnlyDisjointSliceWrite {
+                element,
+                witness: grid_leader,
+                kind: SemanticWriteOnlyDisjointWriteKindV1::GridExclusive,
                 ..
             } => {
                 let leader_local = call
@@ -6868,6 +6941,7 @@ fn project_intrinsic_contracts(
                     ProductionRankedValueV1::Local(index),
                     Some(leader.precondition),
                     None,
+                    write_only_effect,
                 )
             }
             SemanticCompilerIntrinsicOperationV1::DisjointSliceGetBlockMut {
@@ -6875,6 +6949,16 @@ fn project_intrinsic_contracts(
                 index_space,
                 lanes_per_block,
                 elements_per_lane,
+                ..
+            }
+            | SemanticCompilerIntrinsicOperationV1::WriteOnlyDisjointSliceWrite {
+                element,
+                index_space,
+                kind:
+                    SemanticWriteOnlyDisjointWriteKindV1::Block {
+                        lanes_per_block,
+                        elements_per_lane,
+                    },
                 ..
             } => {
                 let projected = projected_disjoint_operand_v1(
@@ -7056,6 +7140,7 @@ fn project_intrinsic_contracts(
                     ProductionRankedValueV1::Local(index),
                     projected.precondition,
                     None,
+                    write_only_effect,
                 )
             }
             SemanticCompilerIntrinsicOperationV1::DisjointSliceGetTiled2dMut {
@@ -7065,6 +7150,18 @@ fn project_intrinsic_contracts(
                 tile_rows,
                 tile_columns,
                 elements_per_lane,
+                ..
+            }
+            | SemanticCompilerIntrinsicOperationV1::WriteOnlyDisjointSliceWrite {
+                element,
+                index_space,
+                kind:
+                    SemanticWriteOnlyDisjointWriteKindV1::Tiled2d {
+                        lanes_per_tile,
+                        tile_rows,
+                        tile_columns,
+                        elements_per_lane,
+                    },
                 ..
             } => {
                 let projected = projected_disjoint_operand_v1(
@@ -7152,6 +7249,7 @@ fn project_intrinsic_contracts(
                     ProductionRankedValueV1::Local(index),
                     projected.precondition,
                     Some(ProductionRankedValueV1::Local(success)),
+                    write_only_effect,
                 )
             }
             SemanticCompilerIntrinsicOperationV1::DisjointSliceGetRowStriped2dMut {
@@ -7159,6 +7257,16 @@ fn project_intrinsic_contracts(
                 index_space,
                 lanes_per_row,
                 elements_per_lane,
+                ..
+            }
+            | SemanticCompilerIntrinsicOperationV1::WriteOnlyDisjointSliceWrite {
+                element,
+                index_space,
+                kind:
+                    SemanticWriteOnlyDisjointWriteKindV1::RowStriped2d {
+                        lanes_per_row,
+                        elements_per_lane,
+                    },
                 ..
             } => {
                 let projected = projected_disjoint_operand_v1(
@@ -7239,6 +7347,7 @@ fn project_intrinsic_contracts(
                     ProductionRankedValueV1::Local(index),
                     projected.precondition,
                     Some(ProductionRankedValueV1::Local(success)),
+                    write_only_effect,
                 )
             }
             _ => continue,
@@ -7338,6 +7447,19 @@ fn project_intrinsic_contracts(
             source: block.terminator().source(),
             semantic_site: None,
         };
+        if direct_write {
+            let slot = direct_write_effects.get_mut(block_index).ok_or(
+                ProductionRankedProjectionErrorV1::Unsupported(
+                    "a write-only access block outside the semantic CFG",
+                ),
+            )?;
+            if slot.replace(access).is_some() {
+                return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                    "multiple write-only effects occupy one semantic block",
+                ));
+            }
+            continue;
+        }
         let destination = simple_call_destination(call)?.index() as usize;
         let predicate = option_predicates.get_mut(destination).ok_or(
             ProductionRankedProjectionErrorV1::Unsupported(
@@ -7484,7 +7606,10 @@ fn project_intrinsic_contracts(
     Ok(IntrinsicProjectionV1 {
         index_values,
         local_contracts,
-        extent_argument_count: if guarded_accesses.is_empty() && next_runtime_argument == 1 {
+        extent_argument_count: if guarded_accesses.is_empty()
+            && direct_write_effects.iter().all(Option::is_none)
+            && next_runtime_argument == 1
+        {
             0
         } else {
             next_runtime_argument
@@ -7498,6 +7623,7 @@ fn project_intrinsic_contracts(
         capability_read_effects,
         transpose_workgroup_effects,
         read_view_effects,
+        direct_write_effects,
         pipeline_effects,
     })
 }

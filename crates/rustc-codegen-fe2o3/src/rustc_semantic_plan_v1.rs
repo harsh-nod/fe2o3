@@ -3002,6 +3002,13 @@ const fn terminal_expansion_tag_for_schema_v1(
                 crate::production_semantic_terminal_v1::ProductionBf16ConversionV1::ToF32 => 3,
             }
         }
+        ProductionTerminalExpansionV1::WriteOnlyDisjointSliceLen => 104,
+        ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWrite => 105,
+        ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteDisjoint => 106,
+        ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteExclusive => 107,
+        ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteBlock => 108,
+        ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteTiled2d => 109,
+        ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteRowStriped2d => 110,
     }
 }
 

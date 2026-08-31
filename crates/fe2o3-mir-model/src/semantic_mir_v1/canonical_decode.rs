@@ -1537,7 +1537,7 @@ impl<'a> CanonicalDecoderV1<'a> {
         &mut self,
     ) -> Result<SemanticCompilerIntrinsicOperationV1, SemanticMirDecodeErrorV1> {
         let maximum_tag = if self.wire_version == SemanticMirWireVersionV1::V9 {
-            59
+            61
         } else if self.wire_version == SemanticMirWireVersionV1::V8 {
             55
         } else if self.wire_version >= SemanticMirWireVersionV1::V6 {
@@ -1888,6 +1888,47 @@ impl<'a> CanonicalDecoderV1<'a> {
                 element: SemanticTypeIdV1(self.u32()?),
             },
             59 => self.bf16_conversion()?,
+            60 => {
+                let disjoint_slice = SemanticTypeIdV1(self.u32()?);
+                let witness = SemanticTypeIdV1(self.u32()?);
+                let element = SemanticTypeIdV1(self.u32()?);
+                let raw_index = SemanticTypeIdV1(self.u32()?);
+                let index_space = self.disjoint_index_space()?;
+                let kind = match self.tagged("write-only disjoint-slice write kind", 5)? {
+                    0 => SemanticWriteOnlyDisjointWriteKindV1::Thread { disjoint: false },
+                    1 => SemanticWriteOnlyDisjointWriteKindV1::Thread { disjoint: true },
+                    2 => SemanticWriteOnlyDisjointWriteKindV1::GridExclusive,
+                    3 => SemanticWriteOnlyDisjointWriteKindV1::Block {
+                        lanes_per_block: self.u64()?,
+                        elements_per_lane: self.u64()?,
+                    },
+                    4 => SemanticWriteOnlyDisjointWriteKindV1::Tiled2d {
+                        lanes_per_tile: self.u64()?,
+                        tile_rows: self.u64()?,
+                        tile_columns: self.u64()?,
+                        elements_per_lane: self.u64()?,
+                    },
+                    5 => SemanticWriteOnlyDisjointWriteKindV1::RowStriped2d {
+                        lanes_per_row: self.u64()?,
+                        elements_per_lane: self.u64()?,
+                    },
+                    _ => unreachable!(),
+                };
+                SemanticCompilerIntrinsicOperationV1::WriteOnlyDisjointSliceWrite {
+                    disjoint_slice,
+                    witness,
+                    element,
+                    raw_index,
+                    index_space,
+                    kind,
+                }
+            }
+            61 => SemanticCompilerIntrinsicOperationV1::WriteOnlyDisjointSliceLen {
+                disjoint_slice: SemanticTypeIdV1(self.u32()?),
+                element: SemanticTypeIdV1(self.u32()?),
+                raw_index: SemanticTypeIdV1(self.u32()?),
+                index_space: self.disjoint_index_space()?,
+            },
             _ => unreachable!(),
         })
     }

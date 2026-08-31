@@ -845,6 +845,7 @@ impl<'a> Analyzer<'a> {
                 }
             },
             OperationKind::Store { .. }
+            | OperationKind::GuardedStore { .. }
             | OperationKind::Barrier(_)
             | OperationKind::Fence(_)
             | OperationKind::WorkgroupBarrier(_) => Variation::Varying,

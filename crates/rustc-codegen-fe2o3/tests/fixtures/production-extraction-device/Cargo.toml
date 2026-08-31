@@ -9,6 +9,8 @@ publish = false
 
 [features]
 multi-root-ownership = []
+write-only-output = []
+write-only-disjoint-output = []
 reference-positive = []
 reference-mutated = []
 reference-unsafe = []

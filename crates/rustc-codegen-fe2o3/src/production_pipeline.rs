@@ -629,6 +629,34 @@ impl TargetLoweredProductionCompilation {
         self.bindings.rustc_target.profile().device_target()
     }
 
+    pub(crate) fn canonical_kernel_ir_version(&self) -> u16 {
+        match self
+            .admitted
+            .semantic_kir()
+            .canonical_kernel_ir_identity()
+            .version()
+        {
+            fe2o3_lower_mir_kernel::ProductionCanonicalKernelIrVersionV1::V8 => 8,
+            fe2o3_lower_mir_kernel::ProductionCanonicalKernelIrVersionV1::V9 => 9,
+        }
+    }
+
+    pub(crate) fn guarded_store_count(&self) -> usize {
+        self.target_module
+            .functions
+            .iter()
+            .filter_map(|function| function.body.as_ref())
+            .flat_map(|body| &body.blocks)
+            .flat_map(|block| &block.operations)
+            .filter(|operation| {
+                matches!(
+                    operation.kind,
+                    fe2o3_kernel_ir::OperationKind::GuardedStore { .. }
+                )
+            })
+            .count()
+    }
+
     pub(crate) fn llvm_ir(&self) -> &str {
         &self.llvm_ir
     }

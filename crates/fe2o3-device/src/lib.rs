@@ -488,12 +488,178 @@ impl<T, IndexSpace, const LANES_PER_ROW: usize, const ELEMENTS_PER_LANE: usize>
     }
 }
 
+/// Compiler-issued, exclusively owned device output with no readable element surface.
+///
+/// Unlike [`DisjointSlice`], this capability grants only write authority regardless of the
+/// storage's prior initialization state. Safe methods consume a value and report whether the exact
+/// ownership witness selected an in-bounds element; they never return a reference, pointer, or
+/// prior value. `IndexSpace` is part of the type so authority for one invocation mapping cannot be
+/// used with another.
+#[derive(Debug)]
+#[repr(C)]
+#[rustc_diagnostic_item = "fe2o3_device_write_only_disjoint_slice_v1"]
+pub struct WriteOnlyDisjointSlice<T, IndexSpace = Index1D> {
+    ptr: *mut T,
+    len: usize,
+    _index_space: PhantomData<fn() -> IndexSpace>,
+}
+
+impl<T: Copy, IndexSpace> WriteOnlyDisjointSlice<T, IndexSpace> {
+    /// Returns host-rustc layout facts used by generated ABI evidence.
+    #[doc(hidden)]
+    pub const fn __fe2o3_rust_layout_v1() -> (usize, usize, usize, usize) {
+        (
+            core::mem::size_of::<Self>(),
+            core::mem::align_of::<Self>(),
+            core::mem::offset_of!(Self, ptr),
+            core::mem::offset_of!(Self, len),
+        )
+    }
+
+    /// Constructs write-only storage from its raw representation.
+    ///
+    /// # Safety
+    ///
+    /// `ptr` must be aligned and valid for writes of `len` consecutive `T` values for every use of
+    /// the returned capability. No incompatible alias may access an element while this capability
+    /// is used. If the storage is not already initialized, the caller remains responsible for
+    /// preventing every later read of an element that was not successfully written. `IndexSpace`
+    /// must describe every invocation-to-element mapping used by safe writes.
+    pub unsafe fn from_raw_parts(ptr: *mut T, len: usize) -> Self {
+        Self {
+            ptr,
+            len,
+            _index_space: PhantomData,
+        }
+    }
+
+    #[inline(never)]
+    #[rustc_diagnostic_item = "fe2o3_device_write_only_disjoint_slice_len_v1"]
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// Writes one element selected by the current invocation's exact index-space witness.
+    #[inline(never)]
+    #[rustc_diagnostic_item = "fe2o3_device_write_only_disjoint_slice_write_v1"]
+    pub fn write(&mut self, index: ThreadIndex<IndexSpace>, value: T) -> bool {
+        self.write_at(index.get(), value)
+    }
+
+    /// Writes one element selected by a mapping-matched disjoint witness.
+    #[inline(never)]
+    #[rustc_diagnostic_item = "fe2o3_device_write_only_disjoint_slice_write_disjoint_v1"]
+    pub fn write_disjoint(&mut self, index: DisjointIndex<IndexSpace>, value: T) -> bool {
+        self.write_at(index.get(), value)
+    }
+
+    fn write_at(&mut self, index: usize, value: T) -> bool {
+        if index >= self.len {
+            return false;
+        }
+        // SAFETY: construction establishes the writable allocation. The checked, mapping-matched
+        // witness selects an in-bounds element owned by this invocation.
+        unsafe { self.ptr.add(index).write(value) };
+        true
+    }
+}
+
+impl<T: Copy> WriteOnlyDisjointSlice<T, GridExclusive> {
+    /// Writes an arbitrary checked element for the unique grid leader.
+    #[inline(never)]
+    #[rustc_diagnostic_item = "fe2o3_device_write_only_disjoint_slice_write_exclusive_v1"]
+    pub fn write_exclusive(&mut self, _leader: &GridLeader, index: usize, value: T) -> bool {
+        self.write_at(index, value)
+    }
+}
+
+impl<T: Copy, IndexSpace, const LANES_PER_BLOCK: usize, const ELEMENTS_PER_LANE: usize>
+    WriteOnlyDisjointSlice<T, Blocked<IndexSpace, LANES_PER_BLOCK, ELEMENTS_PER_LANE>>
+{
+    /// Writes one component owned by an exact blocked witness.
+    #[inline(never)]
+    #[rustc_diagnostic_item = "fe2o3_device_write_only_disjoint_slice_write_block_v1"]
+    pub fn write_block(
+        &mut self,
+        block: &DisjointBlock<IndexSpace, LANES_PER_BLOCK, ELEMENTS_PER_LANE>,
+        component: usize,
+        value: T,
+    ) -> bool {
+        block
+            .component_index(component)
+            .is_some_and(|index| self.write_at(index, value))
+    }
+}
+
+impl<
+    T: Copy,
+    IndexSpace,
+    const LANES_PER_TILE: usize,
+    const TILE_ROWS: usize,
+    const TILE_COLUMNS: usize,
+    const ELEMENTS_PER_LANE: usize,
+>
+    WriteOnlyDisjointSlice<
+        T,
+        Tiled2D<IndexSpace, LANES_PER_TILE, TILE_ROWS, TILE_COLUMNS, ELEMENTS_PER_LANE>,
+    >
+{
+    /// Writes one checked row-major tile component.
+    #[inline(never)]
+    #[rustc_diagnostic_item = "fe2o3_device_write_only_disjoint_slice_write_tiled_2d_v1"]
+    #[allow(clippy::too_many_arguments)]
+    pub fn write_tiled_2d(
+        &mut self,
+        tile: &DisjointTile2D<
+            IndexSpace,
+            LANES_PER_TILE,
+            TILE_ROWS,
+            TILE_COLUMNS,
+            ELEMENTS_PER_LANE,
+        >,
+        component: usize,
+        rows: usize,
+        columns: usize,
+        row_stride: usize,
+        value: T,
+    ) -> bool {
+        tile.component_index(component, rows, columns, row_stride)
+            .is_some_and(|index| self.write_at(index, value))
+    }
+}
+
+impl<T: Copy, IndexSpace, const LANES_PER_ROW: usize, const ELEMENTS_PER_LANE: usize>
+    WriteOnlyDisjointSlice<T, RowStriped2D<IndexSpace, LANES_PER_ROW, ELEMENTS_PER_LANE>>
+{
+    /// Writes one checked component of an output row.
+    #[inline(never)]
+    #[rustc_diagnostic_item = "fe2o3_device_write_only_disjoint_slice_write_row_striped_2d_v1"]
+    #[allow(clippy::too_many_arguments)]
+    pub fn write_row_striped_2d(
+        &mut self,
+        stripe: &DisjointRowStripe2D<IndexSpace, LANES_PER_ROW, ELEMENTS_PER_LANE>,
+        component: usize,
+        rows: usize,
+        columns: usize,
+        row_stride: usize,
+        value: T,
+    ) -> bool {
+        stripe
+            .component_index(component, rows, columns, row_stride)
+            .is_some_and(|index| self.write_at(index, value))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         Blocked, DisjointBlock, DisjointIndex, DisjointRowStripe2D, DisjointSlice, DisjointTile2D,
         GridExclusive, GridLeader, Index1D, Index2D, KERNEL_MARKER_CONTRACT_VERSION_V1,
-        RowStriped2D, Shifted, StaticIndex, StaticViewError, Tiled2D,
+        RowStriped2D, Shifted, StaticIndex, StaticViewError, Tiled2D, WriteOnlyDisjointSlice,
     };
     use core::mem::{align_of, size_of};
 
@@ -688,6 +854,81 @@ mod tests {
         assert!(slice.get_row_striped_2d_mut(&valid, 0, 2, 8, 7).is_none());
         let outside = DisjointRowStripe2D::<Index1D, 4, 2>::from_model_index(8).unwrap();
         assert!(slice.get_row_striped_2d_mut(&outside, 0, 2, 8, 8).is_none());
+    }
+
+    #[test]
+    fn write_only_mappings_preserve_exact_indices_and_false_predicates_store_nothing() {
+        let mut direct_storage = [10_u32, 20, 30];
+        let mut direct = unsafe {
+            WriteOnlyDisjointSlice::<u32>::from_raw_parts(
+                direct_storage.as_mut_ptr(),
+                direct_storage.len(),
+            )
+        };
+        assert!(direct.write_disjoint(DisjointIndex::from_model_index(1), 91));
+        assert!(!direct.write_disjoint(DisjointIndex::from_model_index(3), 99));
+        assert_eq!(direct_storage, [10, 91, 30]);
+
+        let leader = GridLeader::for_host_test();
+        let mut exclusive_storage = [10_u32, 20, 30];
+        let mut exclusive = unsafe {
+            WriteOnlyDisjointSlice::<u32, GridExclusive>::from_raw_parts(
+                exclusive_storage.as_mut_ptr(),
+                exclusive_storage.len(),
+            )
+        };
+        assert!(exclusive.write_exclusive(&leader, 2, 92));
+        assert!(!exclusive.write_exclusive(&leader, 3, 99));
+        assert_eq!(exclusive_storage, [10, 20, 92]);
+
+        type BlockLayout = Blocked<Index1D, 2, 2>;
+        let mut blocked_storage = [10_u32; 4];
+        let mut blocked = unsafe {
+            WriteOnlyDisjointSlice::<u32, BlockLayout>::from_raw_parts(
+                blocked_storage.as_mut_ptr(),
+                blocked_storage.len(),
+            )
+        };
+        let block = DisjointBlock::<Index1D, 2, 2>::from_model_index(1).unwrap();
+        assert!(blocked.write_block(&block, 1, 93));
+        assert!(!blocked.write_block(&block, 2, 99));
+        let outside = DisjointBlock::<Index1D, 2, 2>::from_model_index(2).unwrap();
+        assert!(!blocked.write_block(&outside, 0, 99));
+        assert_eq!(blocked_storage, [10, 10, 10, 93]);
+
+        type TileLayout = Tiled2D<Index1D, 4, 2, 4, 2>;
+        let mut tiled_storage = [10_u32; 8];
+        let mut tiled = unsafe {
+            WriteOnlyDisjointSlice::<u32, TileLayout>::from_raw_parts(
+                tiled_storage.as_mut_ptr(),
+                tiled_storage.len(),
+            )
+        };
+        let tile = DisjointTile2D::<Index1D, 4, 2, 4, 2>::from_model_index(0).unwrap();
+        assert!(tiled.write_tiled_2d(&tile, 1, 2, 4, 4, 94));
+        assert!(!tiled.write_tiled_2d(&tile, 2, 2, 4, 4, 99));
+        assert!(!tiled.write_tiled_2d(&tile, 0, 2, 4, 3, 99));
+        assert_eq!(tiled_storage, [10, 10, 10, 10, 94, 10, 10, 10]);
+
+        type RowLayout = RowStriped2D<Index1D, 4, 2>;
+        let mut row_storage = [10_u32; 16];
+        let mut row = unsafe {
+            WriteOnlyDisjointSlice::<u32, RowLayout>::from_raw_parts(
+                row_storage.as_mut_ptr(),
+                row_storage.len(),
+            )
+        };
+        let stripe = DisjointRowStripe2D::<Index1D, 4, 2>::from_model_index(3).unwrap();
+        assert!(row.write_row_striped_2d(&stripe, 1, 2, 8, 8, 95));
+        assert!(!row.write_row_striped_2d(&stripe, 2, 2, 8, 8, 99));
+        assert!(!row.write_row_striped_2d(&stripe, 0, 2, 8, 7, 99));
+        assert_eq!(row_storage[7], 95);
+        assert!(
+            row_storage
+                .iter()
+                .enumerate()
+                .all(|(index, value)| index == 7 || *value == 10)
+        );
     }
 
     #[test]

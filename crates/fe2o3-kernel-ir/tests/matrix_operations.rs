@@ -90,6 +90,32 @@ fn matrix_module() -> Module {
     module
 }
 
+#[test]
+fn matrix_lds_load_rejects_write_only_while_store_accepts_it() {
+    let load = MatrixOperation::lds_load(ValueId(0), MatrixElement::F32);
+    let write_only = Some(pointer(Type::F32, AccessMode::WriteOnly));
+    let load_results = load
+        .result_types()
+        .into_iter()
+        .enumerate()
+        .map(|(index, ty)| ValueDef::new(ValueId(index as u32 + 1), ty))
+        .collect::<Vec<_>>();
+    let load_issues = load.verify(std::slice::from_ref(&write_only), &load_results);
+    assert!(load_issues.iter().any(|issue| {
+        issue.kind == MatrixVerificationIssueKind::InvalidOperandType
+            && issue.message.contains("writable false")
+    }));
+
+    let store = MatrixOperation::lds_store(
+        ValueId(0),
+        [ValueId(1), ValueId(2), ValueId(3), ValueId(4)],
+        MatrixElement::F32,
+    );
+    let mut store_types = vec![write_only];
+    store_types.extend(std::iter::repeat_n(Some(Type::F32), 4));
+    assert!(store.verify(&store_types, &[]).is_empty());
+}
+
 fn gfx950_fp8_matrix_module() -> Module {
     let mut parameters = vec![Type::Scalar(ScalarType::U32); 16];
     parameters.extend([Type::F32; 4]);

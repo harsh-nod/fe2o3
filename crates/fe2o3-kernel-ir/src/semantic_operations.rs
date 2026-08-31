@@ -2101,7 +2101,12 @@ fn verify_pointer_operand(
     };
     if pointer.pointee.as_ref() != &element.ir_type()
         || pointer.address_space != address_space
-        || (writable && pointer.access != AccessMode::ReadWrite)
+        || (writable
+            && !matches!(
+                pointer.access,
+                AccessMode::WriteOnly | AccessMode::ReadWrite
+            ))
+        || (!writable && !matches!(pointer.access, AccessMode::ReadOnly | AccessMode::ReadWrite))
     {
         issues.push(SemanticOperationIssue::new(
             SemanticOperationIssueKind::InvalidOperandType,

@@ -94,6 +94,7 @@ pub use argument_alias::{
 #[doc(hidden)]
 pub use argument_alias::{
     GeneratedReadDeviceSlice, GeneratedReadWriteDeviceSlice, GeneratedSliceArgumentPairV1,
+    GeneratedWriteDeviceSlice,
 };
 pub use artifact_binding::{
     ARTIFACT_KERNEL_IDENTITY_VERSION, ArtifactBindingError, ArtifactKernelIdentityV1,
@@ -130,7 +131,7 @@ pub use generated_kfd_arguments::{
     CompilerGeneratedKfdArguments, GeneratedKfdArgumentBinding, GeneratedKfdArgumentError,
     GeneratedKfdCompletion, GeneratedKfdCompletionError, GeneratedKfdPackedArguments,
     GeneratedKfdPrepareError, GeneratedKfdReadSlice, GeneratedKfdReadWriteSlice,
-    GeneratedKfdSliceBinding,
+    GeneratedKfdSliceBinding, GeneratedKfdWriteSlice,
 };
 pub use generated_kfd_invocation::{
     GeneratedWorkerV3KfdExecutionError, GeneratedWorkerV3KfdInvocation,
@@ -228,13 +229,14 @@ pub mod __generated {
         GeneratedKfdArgumentBinding, GeneratedKfdArgumentError, GeneratedKfdCompletion,
         GeneratedKfdCompletionError, GeneratedKfdPackedArguments, GeneratedKfdPrepareError,
         GeneratedKfdReadSlice, GeneratedKfdReadWriteSlice, GeneratedKfdSliceBinding,
-        GeneratedPackingComponentKindV1, GeneratedPackingComponentV1, GeneratedReadDeviceSlice,
-        GeneratedReadWriteDeviceSlice, GeneratedSliceArgumentPairV1,
+        GeneratedKfdWriteSlice, GeneratedPackingComponentKindV1, GeneratedPackingComponentV1,
+        GeneratedReadDeviceSlice, GeneratedReadWriteDeviceSlice, GeneratedSliceArgumentPairV1,
         GeneratedWorkerV3ArgumentBindingV1, GeneratedWorkerV3ArgumentErrorV1,
         GeneratedWorkerV3KfdExecutionError, GeneratedWorkerV3KfdInvocation,
         GeneratedWorkerV3KfdInvocationError, GeneratedWorkerV3PrepareErrorV1,
-        GeneratedWorkerV3PreparedInvocationV1, ValidatedCompilerGeneratedSemanticWitnessV1,
-        semantic_witness_from_backend_v1, validate_compiler_generated_semantic_witness_v1,
+        GeneratedWorkerV3PreparedInvocationV1, GeneratedWriteDeviceSlice,
+        ValidatedCompilerGeneratedSemanticWitnessV1, semantic_witness_from_backend_v1,
+        validate_compiler_generated_semantic_witness_v1,
     };
     pub use fe2o3_artifacts::{
         AbiField, AbiKind, Access, AddressSpace, AliasClass, ArgumentOwnership, Mutability, Name,

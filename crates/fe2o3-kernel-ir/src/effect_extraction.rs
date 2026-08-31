@@ -418,6 +418,12 @@ impl MemoryOperation {
                 pointer,
                 value,
                 access,
+            }
+            | OperationKind::GuardedStore {
+                pointer,
+                value,
+                access,
+                ..
             } => Some(Self {
                 pointer: *pointer,
                 access: *access,

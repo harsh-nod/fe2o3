@@ -187,7 +187,9 @@ fn extract_amdgpu_llvm_in_active_session_v1(
         )
     })?;
     eprintln!(
-        "fe2o3 production extraction: Rust -> semantic MIR -> ranked PLIRON -> Kernel IR -> composed formal/ranked memory -> {} LLVM; {} semantic function(s), {} semantic u32 induction certificate(s) for {} checked addition(s), {} correspondence block(s), {} formal access(es), {} ranked dynamic-index discharge(s), workgroup {:?}, {} LLVM byte(s), artifact/launch authority {}",
+        "fe2o3 production extraction: Rust -> semantic MIR -> ranked PLIRON -> Kernel IR V{} with {} GuardedStore operation(s) -> composed formal/ranked memory -> {} LLVM; {} semantic function(s), {} semantic u32 induction certificate(s) for {} checked addition(s), {} correspondence block(s), {} formal access(es), {} ranked dynamic-index discharge(s), workgroup {:?}, {} LLVM byte(s), artifact/launch authority {}",
+        lowered.canonical_kernel_ir_version(),
+        lowered.guarded_store_count(),
         lowered.target_name(),
         lowered.semantic_function_count(),
         lowered.semantic_u32_induction_certificate_count(),
@@ -219,6 +221,8 @@ fn extract_gfx942_compiler_handoff_in_active_session_v1(
             lowered.target_name()
         ));
     }
+    let canonical_kernel_ir_version = lowered.canonical_kernel_ir_version();
+    let guarded_store_count = lowered.guarded_store_count();
     let handoff = lowered
         .into_inert_worker_handoff_for_extraction()
         .map_err(|error| error.to_string())?;
@@ -229,7 +233,9 @@ fn extract_gfx942_compiler_handoff_in_active_session_v1(
         )
     })?;
     eprintln!(
-        "fe2o3 production extraction: Rust -> semantic MIR -> ranked PLIRON -> Kernel IR -> composed formal/ranked memory -> gfx942 LLVM -> compiler-bound inert handoff; {} handoff byte(s), artifact/launch authority false",
+        "fe2o3 production extraction: Rust -> semantic MIR -> ranked PLIRON -> Kernel IR V{} with {} GuardedStore operation(s) -> composed formal/ranked memory -> gfx942 LLVM -> compiler-bound inert handoff; {} handoff byte(s), artifact/launch authority false",
+        canonical_kernel_ir_version,
+        guarded_store_count,
         handoff.canonical_bytes().len(),
     );
     Ok(())

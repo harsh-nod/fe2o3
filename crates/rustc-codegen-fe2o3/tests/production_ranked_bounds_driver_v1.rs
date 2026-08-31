@@ -210,6 +210,54 @@ fn optimized_blocked_accessor_retains_its_checked_terminal() {
 
 #[test]
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]
+fn write_only_witness_mappings_retain_exact_ranked_predicates() {
+    let target = ScratchTarget::new();
+    for (feature, required) in [
+        (
+            "write_only_grid_exclusive",
+            ["kernel.index_constant 7", "kernel.cond_br"].as_slice(),
+        ),
+        (
+            "write_only_blocked",
+            ["kernel.index_binary", "kernel.index_constant 192"].as_slice(),
+        ),
+        (
+            "write_only_tiled",
+            ["kernel.checked_tiled_index_2d", "kernel.cond_br"].as_slice(),
+        ),
+        (
+            "write_only_row_striped",
+            ["kernel.checked_row_striped_index_2d", "kernel.cond_br"].as_slice(),
+        ),
+    ] {
+        let output = run_feature_extraction(&target, feature);
+        assert!(
+            output.status.success()
+                && output
+                    .stderr
+                    .contains("all mandatory kernel checks clean true")
+                && output.stderr.contains("Write")
+                && required
+                    .iter()
+                    .all(|fragment| output.stderr.contains(fragment)),
+            "{feature} did not retain its exact write-only mapping and predicate:\n{}",
+            output.stderr,
+        );
+    }
+
+    let wrong_geometry = run_feature_extraction(&target, "write_only_blocked_dynamic_grid");
+    assert!(
+        !wrong_geometry.status.success()
+            && wrong_geometry.stderr.contains(
+                "a multi-lane blocked mapping requires an authenticated finite rank-1 launch extent"
+            ),
+        "write-only blocked dynamic geometry did not fail closed:\n{}",
+        wrong_geometry.stderr,
+    );
+}
+
+#[test]
+#[ignore = "requires the pinned nightly rust-src component and AMD target"]
 fn production_barrier_cfg_preserves_order_and_fails_closed() {
     for feature in ["barrier_after_access", "barrier_before_access"] {
         let output = run_feature_extraction(&ScratchTarget::new(), feature);

@@ -648,6 +648,9 @@ pub fn derive_kernel_memory_obligations_from_verified_for_launch(
                     if access.address_space == AddressSpace::Private => {}
                 OperationKind::Store {
                     pointer, access, ..
+                }
+                | OperationKind::GuardedStore {
+                    pointer, access, ..
                 } => {
                     if direct_private_alloca_access_is_internal(*pointer, *access, &definitions) {
                         continue;

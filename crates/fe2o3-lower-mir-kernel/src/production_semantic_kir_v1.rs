@@ -45,8 +45,8 @@ use fe2o3_mir_model::semantic_mir_v1::{
     SemanticSourceArgumentOwnershipV1, SemanticStatementKindV1, SemanticSubgroupReductionKindV1,
     SemanticTerminatorKindV1, SemanticTypeDeclV1, SemanticTypeIdV1, SemanticTypeLayoutDetailsV1,
     SemanticTypeShapeV1, SemanticUnaryOpV1, SemanticUncheckedBinaryOpV1, SemanticUnwindActionV1,
-    SemanticVolatilityV1, SemanticWorkgroupPipelineEventV1, semantic_direct_enum_variant_v1,
-    semantic_scalar_enum_variant_v1,
+    SemanticVolatilityV1, SemanticWorkgroupPipelineEventV1, SemanticWriteOnlyDisjointWriteKindV1,
+    semantic_direct_enum_variant_v1, semantic_scalar_enum_variant_v1,
 };
 use fe2o3_mir_model::{
     SemanticEnumPayloadDominanceV1, SemanticOptionAvailabilityV1, SemanticOptionDominanceV1,
@@ -1175,7 +1175,7 @@ impl ProductionCanonicalKernelIrIdentityV1 {
 
 impl ProductionCanonicalKernelIrV1 {
     fn from_module(module: Module) -> Result<Self, ProductionSemanticKirErrorV1> {
-        if module_requires_kernel_ir_v9_collective_or_lds_transpose_v1(&module) {
+        if module_requires_kernel_ir_v9_v1(&module) {
             VerifiedCanonicalKernelIrV9::from_module(module)
                 .map(Self::V9)
                 .map_err(ProductionSemanticKirErrorV1::CanonicalKernelIrV9)
@@ -1220,24 +1220,54 @@ impl ProductionCanonicalKernelIrV1 {
     }
 }
 
-fn module_requires_kernel_ir_v9_collective_or_lds_transpose_v1(module: &Module) -> bool {
+fn module_requires_kernel_ir_v9_v1(module: &Module) -> bool {
     module.functions.iter().any(|function| {
-        function.body.as_ref().is_some_and(|body| {
-            body.blocks.iter().any(|block| {
-                block.operations.iter().any(|operation| {
-                    matches!(
-                        operation.kind,
-                        OperationKind::Gfx950LdsTranspose(_)
-                            | OperationKind::Wave(WaveOperation {
-                                kind: WaveOperationKind::ReduceF32 { .. }
-                                    | WaveOperationKind::BroadcastF32 { .. },
-                                ..
-                            })
+        function
+            .signature
+            .parameters
+            .iter()
+            .chain(&function.signature.results)
+            .any(type_requires_kernel_ir_v9_v1)
+            || function.body.as_ref().is_some_and(|body| {
+                body.blocks
+                    .iter()
+                    .flat_map(|block| &block.parameters)
+                    .chain(
+                        body.blocks
+                            .iter()
+                            .flat_map(|block| &block.operations)
+                            .flat_map(|operation| &operation.results),
                     )
-                })
+                    .any(|value| type_requires_kernel_ir_v9_v1(&value.ty))
+                    || body.blocks.iter().any(|block| {
+                        block.operations.iter().any(|operation| {
+                            matches!(
+                                operation.kind,
+                                OperationKind::Gfx950LdsTranspose(_)
+                                    | OperationKind::GuardedStore { .. }
+                                    | OperationKind::Wave(WaveOperation {
+                                        kind: WaveOperationKind::ReduceF32 { .. }
+                                            | WaveOperationKind::BroadcastF32 { .. },
+                                        ..
+                                    })
+                            )
+                        })
+                    })
             })
-        })
     })
+}
+
+fn type_requires_kernel_ir_v9_v1(ty: &Type) -> bool {
+    match ty {
+        Type::Pointer(pointer) => {
+            pointer.access == AccessMode::WriteOnly
+                || type_requires_kernel_ir_v9_v1(&pointer.pointee)
+        }
+        Type::Slice(slice) => {
+            slice.access == AccessMode::WriteOnly || type_requires_kernel_ir_v9_v1(&slice.element)
+        }
+        Type::Unit | Type::Scalar(_) => false,
+    }
 }
 
 struct RetainedGenericKernelChecksV1 {
@@ -1439,6 +1469,11 @@ impl ProductionSemanticKirOwnerV1 {
     /// Returns the exact version-bound identity of the retained canonical KIR.
     pub fn canonical_kernel_ir_identity(&self) -> ProductionCanonicalKernelIrIdentityV1 {
         self.canonical_kernel_ir.identity()
+    }
+
+    /// Borrows the exact canonical bytes for the retained version-bound Kernel IR.
+    pub fn canonical_kernel_ir_bytes(&self) -> &[u8] {
+        self.canonical_kernel_ir.canonical_bytes()
     }
 
     /// Borrows pointer-independent source correspondence evidence.
@@ -2353,6 +2388,9 @@ fn kir_memory_accesses_v1(
             None,
         ),
         OperationKind::Store {
+            pointer, access, ..
+        }
+        | OperationKind::GuardedStore {
             pointer, access, ..
         } => one(
             *pointer,
@@ -3781,7 +3819,9 @@ fn compiler_owned_enum_payload_access_v1(
 
 fn kir_written_value_v1(operation: &Operation) -> Option<ValueId> {
     match &operation.kind {
-        OperationKind::Store { value, .. } => Some(*value),
+        OperationKind::Store { value, .. } | OperationKind::GuardedStore { value, .. } => {
+            Some(*value)
+        }
         OperationKind::Atomic(atomic)
             if matches!(atomic.kind, AtomicKind::Store | AtomicKind::Exchange) =>
         {
@@ -4452,6 +4492,7 @@ fn guarded_accesses_have_structural_bounds_result(
             if matches!(
                 &operation.kind,
                 OperationKind::GuardedLoad { access, .. }
+                    | OperationKind::GuardedStore { access, .. }
                     if access.address_space != AddressSpace::Private
             ) {
                 let location = FunctionOperationLocation::new(block.id, ordinal);
@@ -4543,14 +4584,17 @@ fn guarded_load_bound_subject(
     operation: &Operation,
     definitions: &BTreeMap<ValueId, GuardedAddressDefinitionV1<'_>>,
 ) -> Option<(ValueId, ValueId, ValueId)> {
-    let OperationKind::GuardedLoad {
-        pointer, predicate, ..
-    } = &operation.kind
-    else {
-        return None;
+    let (pointer, predicate) = match &operation.kind {
+        OperationKind::GuardedLoad {
+            pointer, predicate, ..
+        }
+        | OperationKind::GuardedStore {
+            pointer, predicate, ..
+        } => (*pointer, *predicate),
+        _ => return None,
     };
     let Some(OperationKind::GetElementPointer { base, offset }) =
-        operation_definition(definitions, *pointer).map(|operation| &operation.kind)
+        operation_definition(definitions, pointer).map(|operation| &operation.kind)
     else {
         return None;
     };
@@ -4567,7 +4611,7 @@ fn guarded_load_bound_subject(
     else {
         return None;
     };
-    if *condition != *predicate
+    if *condition != predicate
         || !matches!(
             operation_definition(definitions, *false_value).map(|operation| &operation.kind),
             Some(OperationKind::Constant(Constant::Index(0)))
@@ -4575,7 +4619,7 @@ fn guarded_load_bound_subject(
     {
         return None;
     }
-    Some((*predicate, *index, *slice))
+    Some((predicate, *index, *slice))
 }
 
 fn operation_definition<'module>(
@@ -13255,7 +13299,8 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             SemanticCompilerIntrinsicOperationV1::GridDimension(axis) => {
                 self.emit_launch_index_v1(operations, IndexKind::WorkgroupCount, lower_axis(*axis))?
             }
-            SemanticCompilerIntrinsicOperationV1::DisjointSliceLen { .. } => {
+            SemanticCompilerIntrinsicOperationV1::DisjointSliceLen { .. }
+            | SemanticCompilerIntrinsicOperationV1::WriteOnlyDisjointSliceLen { .. } => {
                 self.require_call_argument_count(block, call, 1)?;
                 let (slice, slice_ty) = self
                     .lower_operand(block, None, &call.arguments()[0], operations)?
@@ -13596,6 +13641,17 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     Some(present),
                 )?
             }
+            SemanticCompilerIntrinsicOperationV1::WriteOnlyDisjointSliceWrite {
+                index_space,
+                kind,
+                ..
+            } => self.lower_write_only_disjoint_slice_write(
+                block,
+                call,
+                operations,
+                *index_space,
+                *kind,
+            )?,
             SemanticCompilerIntrinsicOperationV1::WorkgroupBarrier => {
                 self.require_call_argument_count(block, call, 0)?;
                 self.push_operation(operations, || {
@@ -16062,6 +16118,259 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         )
     }
 
+    fn lower_write_only_disjoint_slice_write(
+        &mut self,
+        block: SemanticBlockIdV1,
+        call: &SemanticDirectCallV1,
+        operations: &mut Vec<Operation>,
+        index_space: SemanticDisjointIndexSpaceV1,
+        kind: SemanticWriteOnlyDisjointWriteKindV1,
+    ) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
+        let (index, precondition, value_argument) = match kind {
+            SemanticWriteOnlyDisjointWriteKindV1::Thread { disjoint } => {
+                self.require_call_argument_count(block, call, 3)?;
+                let witness = self.lower_operand(block, None, &call.arguments()[1], operations)?;
+                let SemanticValueBindingV1::IndexWitness {
+                    id,
+                    index_space: actual,
+                    disjoint: actual_disjoint,
+                    availability: None,
+                } = witness
+                else {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        None,
+                        "write-only slice write lacks exact index authority",
+                    ));
+                };
+                if actual != index_space || actual_disjoint != disjoint {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        None,
+                        "write-only slice write mapping identity changed",
+                    ));
+                }
+                (
+                    SemanticValueBindingV1::Value {
+                        id,
+                        ty: Type::INDEX,
+                    },
+                    None,
+                    2,
+                )
+            }
+            SemanticWriteOnlyDisjointWriteKindV1::GridExclusive => {
+                self.require_call_argument_count(block, call, 4)?;
+                let leader = self.lower_operand(block, None, &call.arguments()[1], operations)?;
+                if !matches!(leader, SemanticValueBindingV1::GridLeader { .. })
+                    || index_space != SemanticDisjointIndexSpaceV1::GridExclusive
+                {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        None,
+                        "write-only exclusive write lacks grid-leader authority",
+                    ));
+                }
+                let index = self.lower_operand(block, None, &call.arguments()[2], operations)?;
+                (self.coerce_index(block, operations, index)?, None, 3)
+            }
+            SemanticWriteOnlyDisjointWriteKindV1::Block {
+                lanes_per_block,
+                elements_per_lane,
+            } => {
+                self.require_call_argument_count(block, call, 4)?;
+                let witness = self.lower_operand(block, None, &call.arguments()[1], operations)?;
+                let SemanticValueBindingV1::ComponentWitness {
+                    raw,
+                    index_space: actual,
+                    ..
+                } = witness
+                else {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        None,
+                        "write-only blocked write lacks component authority",
+                    ));
+                };
+                let expected = SemanticDisjointIndexSpaceV1::BlockedIndex1d {
+                    lanes_per_block,
+                    elements_per_lane,
+                };
+                if actual != expected || index_space != expected {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        None,
+                        "write-only blocked write mapping identity changed",
+                    ));
+                }
+                let component =
+                    self.lower_operand(block, None, &call.arguments()[2], operations)?;
+                let component = self.coerce_index(block, operations, component)?;
+                let (component, _) = component
+                    .value()
+                    .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
+                let (index, present) = self.lower_block_component_index(
+                    block,
+                    operations,
+                    raw,
+                    component,
+                    lanes_per_block,
+                    elements_per_lane,
+                )?;
+                (
+                    SemanticValueBindingV1::Value {
+                        id: index,
+                        ty: Type::INDEX,
+                    },
+                    Some(present),
+                    3,
+                )
+            }
+            SemanticWriteOnlyDisjointWriteKindV1::Tiled2d {
+                lanes_per_tile,
+                tile_rows,
+                tile_columns,
+                elements_per_lane,
+            } => {
+                self.require_call_argument_count(block, call, 7)?;
+                let witness = self.lower_operand(block, None, &call.arguments()[1], operations)?;
+                let SemanticValueBindingV1::ComponentWitness {
+                    raw,
+                    index_space: actual,
+                    ..
+                } = witness
+                else {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        None,
+                        "write-only tiled write lacks component authority",
+                    ));
+                };
+                let expected = SemanticDisjointIndexSpaceV1::Tiled2dIndex1d {
+                    lanes_per_tile,
+                    tile_rows,
+                    tile_columns,
+                    elements_per_lane,
+                };
+                if actual != expected || index_space != expected {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        None,
+                        "write-only tiled write mapping identity changed",
+                    ));
+                }
+                let mut indices = Vec::with_capacity(4);
+                for argument in &call.arguments()[2..6] {
+                    let value = self.lower_operand(block, None, argument, operations)?;
+                    let value = self.coerce_index(block, operations, value)?;
+                    indices.push(
+                        value
+                            .value()
+                            .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?
+                            .0,
+                    );
+                }
+                let [component, rows, columns, row_stride] = indices
+                    .try_into()
+                    .expect("four checked tiled write index operands");
+                let (index, present) = self.lower_tiled_2d_component_index(
+                    block,
+                    operations,
+                    raw,
+                    component,
+                    rows,
+                    columns,
+                    row_stride,
+                    lanes_per_tile,
+                    tile_rows,
+                    tile_columns,
+                    elements_per_lane,
+                )?;
+                (
+                    SemanticValueBindingV1::Value {
+                        id: index,
+                        ty: Type::INDEX,
+                    },
+                    Some(present),
+                    6,
+                )
+            }
+            SemanticWriteOnlyDisjointWriteKindV1::RowStriped2d {
+                lanes_per_row,
+                elements_per_lane,
+            } => {
+                self.require_call_argument_count(block, call, 7)?;
+                let witness = self.lower_operand(block, None, &call.arguments()[1], operations)?;
+                let SemanticValueBindingV1::ComponentWitness {
+                    raw,
+                    index_space: actual,
+                    ..
+                } = witness
+                else {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        None,
+                        "write-only row-striped write lacks component authority",
+                    ));
+                };
+                let expected = SemanticDisjointIndexSpaceV1::RowStriped2dIndex1d {
+                    lanes_per_row,
+                    elements_per_lane,
+                };
+                if actual != expected || index_space != expected {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        None,
+                        "write-only row-striped write mapping identity changed",
+                    ));
+                }
+                let mut indices = Vec::with_capacity(4);
+                for argument in &call.arguments()[2..6] {
+                    let value = self.lower_operand(block, None, argument, operations)?;
+                    let value = self.coerce_index(block, operations, value)?;
+                    indices.push(
+                        value
+                            .value()
+                            .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?
+                            .0,
+                    );
+                }
+                let [component, rows, columns, row_stride] = indices
+                    .try_into()
+                    .expect("four checked row-striped write index operands");
+                let (index, present) = self.lower_row_striped_2d_component_index(
+                    block,
+                    operations,
+                    raw,
+                    component,
+                    rows,
+                    columns,
+                    row_stride,
+                    lanes_per_row,
+                    elements_per_lane,
+                )?;
+                (
+                    SemanticValueBindingV1::Value {
+                        id: index,
+                        ty: Type::INDEX,
+                    },
+                    Some(present),
+                    6,
+                )
+            }
+        };
+        self.lower_checked_slice_write(block, call, operations, index, precondition, value_argument)
+    }
+
     fn lower_checked_slice_access(
         &mut self,
         block: SemanticBlockIdV1,
@@ -16158,6 +16467,123 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             present,
             pointer,
             pointer_ty,
+        })
+    }
+
+    fn lower_checked_slice_write(
+        &mut self,
+        block: SemanticBlockIdV1,
+        call: &SemanticDirectCallV1,
+        operations: &mut Vec<Operation>,
+        index: SemanticValueBindingV1,
+        precondition: Option<ValueId>,
+        value_argument: usize,
+    ) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
+        let (slice, slice_ty) = self
+            .lower_operand(block, None, &call.arguments()[0], operations)?
+            .value()
+            .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
+        let (index, index_ty) = index
+            .value()
+            .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
+        let Type::Slice(slice_type) = slice_ty else {
+            return Err(unsupported(
+                0,
+                Some(block.index()),
+                None,
+                "write-only disjoint receiver is not a lowered slice",
+            ));
+        };
+        if index_ty != Type::INDEX || slice_type.access != AccessMode::WriteOnly {
+            return Err(unsupported(
+                0,
+                Some(block.index()),
+                None,
+                "write-only disjoint receiver or index changed access contract",
+            ));
+        }
+        let value =
+            self.lower_operand(block, None, &call.arguments()[value_argument], operations)?;
+        let (value, value_ty) = value
+            .value()
+            .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
+        if value_ty != *slice_type.element {
+            return Err(unsupported(
+                0,
+                Some(block.index()),
+                None,
+                "write-only disjoint value type changed",
+            ));
+        }
+        let length = self.emit_id(
+            operations,
+            Type::INDEX,
+            OperationKind::SliceLength { slice },
+        )?;
+        let extent_present = self.emit_id(
+            operations,
+            Type::BOOL,
+            OperationKind::Compare {
+                predicate: ComparePredicate::LessThan,
+                lhs: index,
+                rhs: length,
+            },
+        )?;
+        let present = if let Some(precondition) = precondition {
+            self.emit_id(
+                operations,
+                Type::BOOL,
+                OperationKind::Binary {
+                    op: BinaryOp::BitAnd,
+                    lhs: precondition,
+                    rhs: extent_present,
+                },
+            )?
+        } else {
+            extent_present
+        };
+        let zero = self.emit_index_constant(operations, 0)?;
+        let guarded_index = self.emit_select_index(operations, present, index, zero)?;
+        let pointer_ty = Type::pointer(
+            (*slice_type.element).clone(),
+            slice_type.address_space,
+            slice_type.access,
+        );
+        let base = self.emit_id(
+            operations,
+            pointer_ty.clone(),
+            OperationKind::SliceData { slice },
+        )?;
+        let pointer = self.emit_id(
+            operations,
+            pointer_ty,
+            OperationKind::GetElementPointer {
+                base,
+                offset: guarded_index,
+            },
+        )?;
+        let alignment = strided_read_scalar_alignment_v1(&value_ty).ok_or_else(|| {
+            unsupported(
+                0,
+                Some(block.index()),
+                None,
+                "write-only disjoint element has no exact scalar alignment",
+            )
+        })?;
+        self.push_operation(operations, || {
+            Operation::new(
+                Vec::new(),
+                OperationKind::GuardedStore {
+                    pointer,
+                    predicate: present,
+                    value,
+                    access: MemoryAccess::new(slice_type.address_space, alignment),
+                },
+            )
+        })?;
+        Ok(SemanticValueBindingV1::Value {
+            id: present,
+            ty: Type::BOOL,
         })
     }
 
@@ -17629,11 +18055,11 @@ fn lower_parameter_type(
         .get(usize::try_from(ty.index()).unwrap_or(usize::MAX))
         .ok_or_else(|| unsupported(0, None, None, "kernel argument type is missing"))?
         .shape();
-    if let Some((element, _)) = disjoint_slice_descriptor(callables, ty) {
+    if let Some((element, _, access)) = disjoint_slice_descriptor(callables, ty) {
         return Ok(Type::slice(
             lower_scalar_type(types, element)?,
             AddressSpace::Global,
-            AccessMode::ReadWrite,
+            access,
         ));
     }
     match shape {
@@ -17892,7 +18318,7 @@ fn authenticated_disjoint_slice_parameter(
     argument: u32,
     ty: SemanticTypeIdV1,
 ) -> Option<Type> {
-    let (element, raw_index) = disjoint_slice_descriptor(callables, ty)?;
+    let (element, raw_index, access) = disjoint_slice_descriptor(callables, ty)?;
     let argument = usize::try_from(argument).ok()?;
     let abi = function.abi();
     if abi.source_input_types().get(argument) != Some(&ty)
@@ -17979,7 +18405,7 @@ fn authenticated_disjoint_slice_parameter(
     Some(Type::slice(
         lower_scalar_type(types, element).ok()?,
         AddressSpace::Global,
-        AccessMode::ReadWrite,
+        access,
     ))
 }
 
@@ -19014,7 +19440,7 @@ fn lower_scalar_kind(scalar: SemanticScalarTypeV1) -> Result<Type, ProductionSem
 fn disjoint_slice_descriptor(
     callables: &[SemanticCallableDeclV1],
     ty: SemanticTypeIdV1,
-) -> Option<(SemanticTypeIdV1, SemanticTypeIdV1)> {
+) -> Option<(SemanticTypeIdV1, SemanticTypeIdV1, AccessMode)> {
     let mut descriptor = None;
     for callable in callables {
         let candidate = match callable {
@@ -19063,7 +19489,27 @@ fn disjoint_slice_descriptor(
                         ..
                     },
                 ..
-            } if *disjoint_slice == ty => Some((*element, *raw_index)),
+            } if *disjoint_slice == ty => Some((*element, *raw_index, AccessMode::ReadWrite)),
+            SemanticCallableDeclV1::CompilerIntrinsic {
+                operation:
+                    SemanticCompilerIntrinsicOperationV1::WriteOnlyDisjointSliceLen {
+                        disjoint_slice,
+                        element,
+                        raw_index,
+                        ..
+                    },
+                ..
+            } if *disjoint_slice == ty => Some((*element, *raw_index, AccessMode::WriteOnly)),
+            SemanticCallableDeclV1::CompilerIntrinsic {
+                operation:
+                    SemanticCompilerIntrinsicOperationV1::WriteOnlyDisjointSliceWrite {
+                        disjoint_slice,
+                        element,
+                        raw_index,
+                        ..
+                    },
+                ..
+            } if *disjoint_slice == ty => Some((*element, *raw_index, AccessMode::WriteOnly)),
             SemanticCallableDeclV1::Defined { .. }
             | SemanticCallableDeclV1::DeviceFfiImport { .. }
             | SemanticCallableDeclV1::CompilerIntrinsic { .. } => None,
@@ -24270,6 +24716,22 @@ mod resource_tests {
     }
 
     #[test]
+    fn mir_pliron_translation_classifies_guarded_store_written_value() {
+        let value = ValueId(3);
+        let guarded_store = Operation::new(
+            vec![],
+            OperationKind::GuardedStore {
+                pointer: ValueId(1),
+                predicate: ValueId(2),
+                value,
+                access: MemoryAccess::new(AddressSpace::Global, 4),
+            },
+        );
+
+        assert_eq!(kir_written_value_v1(&guarded_store), Some(value));
+    }
+
+    #[test]
     fn mir_pliron_translation_validation_rejects_operator_and_constant_drift() {
         for fixture in [
             value_translation_fixture(
@@ -24465,6 +24927,27 @@ mod resource_tests {
         assert!(!index_and_u64_are_transport_equivalent(
             &Type::Scalar(ScalarType::U64),
             &Type::Scalar(ScalarType::I64),
+        ));
+    }
+
+    #[test]
+    fn write_only_signature_requires_v9_without_any_store_operation() {
+        let mut module = Module::new("write_only_signature");
+        module.functions.push(Function::declaration(
+            "write_only_signature",
+            Signature::new(
+                vec![Type::slice(
+                    Type::Scalar(ScalarType::U32),
+                    AddressSpace::Global,
+                    AccessMode::WriteOnly,
+                )],
+                vec![],
+            ),
+        ));
+        assert!(module_requires_kernel_ir_v9_v1(&module));
+        assert!(matches!(
+            ProductionCanonicalKernelIrV1::from_module(module),
+            Ok(ProductionCanonicalKernelIrV1::V9(_))
         ));
     }
 }

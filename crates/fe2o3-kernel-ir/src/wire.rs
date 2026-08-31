@@ -776,6 +776,19 @@ fn encode_operation_kind(
             writer.u32(fallback.0)?;
             encode_memory_access(writer, *access)?;
         }
+        OperationKind::GuardedStore {
+            pointer,
+            predicate,
+            value,
+            access,
+        } => {
+            require_v9(writer, "guarded store")?;
+            writer.u8(25)?;
+            writer.u32(pointer.0)?;
+            writer.u32(predicate.0)?;
+            writer.u32(value.0)?;
+            encode_memory_access(writer, *access)?;
+        }
         OperationKind::Store {
             pointer,
             value,
@@ -920,6 +933,12 @@ fn decode_operation_kind(reader: &mut Reader<'_>) -> Result<OperationKind, Kerne
         24 if reader.version >= KERNEL_IR_VERSION_V9 => {
             OperationKind::Gfx950LdsTranspose(decode_gfx950_lds_transpose_operation(reader)?)
         }
+        25 if reader.version >= KERNEL_IR_VERSION_V9 => OperationKind::GuardedStore {
+            pointer: ValueId(reader.u32()?),
+            predicate: ValueId(reader.u32()?),
+            value: ValueId(reader.u32()?),
+            access: decode_memory_access(reader)?,
+        },
         tag => {
             return Err(KernelIrDecodeError::UnknownTag {
                 kind: "operation",
@@ -1133,13 +1152,13 @@ fn encode_type(writer: &mut Writer, ty: &Type, depth: usize) -> Result<(), Kerne
         Type::Pointer(pointer) => {
             writer.u8(3)?;
             writer.u8(address_space_tag(pointer.address_space))?;
-            writer.u8(access_mode_tag(pointer.access))?;
+            encode_access_mode(writer, pointer.access)?;
             encode_type(writer, &pointer.pointee, depth + 1)?;
         }
         Type::Slice(slice) => {
             writer.u8(4)?;
             writer.u8(address_space_tag(slice.address_space))?;
-            writer.u8(access_mode_tag(slice.access))?;
+            encode_access_mode(writer, slice.access)?;
             encode_type(writer, &slice.element, depth + 1)?;
         }
     }
@@ -1166,13 +1185,15 @@ fn decode_type(reader: &mut Reader<'_>, depth: usize) -> Result<Type, KernelIrDe
         }
         3 => {
             let address_space = decode_address_space(reader.u8()?)?;
-            let access = decode_access_mode(reader.u8()?)?;
+            let access_tag = reader.u8()?;
+            let access = decode_access_mode_for_version(reader, access_tag)?;
             let pointee = decode_type(reader, depth + 1)?;
             Type::Pointer(PointerType::new(pointee, address_space, access))
         }
         4 => {
             let address_space = decode_address_space(reader.u8()?)?;
-            let access = decode_access_mode(reader.u8()?)?;
+            let access_tag = reader.u8()?;
+            let access = decode_access_mode_for_version(reader, access_tag)?;
             let element = decode_type(reader, depth + 1)?;
             Type::Slice(SliceType::new(element, address_space, access))
         }
@@ -2631,7 +2652,28 @@ enum_codec!(address_space_tag, decode_address_space, AddressSpace, "address spac
 enum_codec!(access_mode_tag, decode_access_mode, AccessMode, "access mode", {
     AccessMode::ReadOnly => 1,
     AccessMode::ReadWrite => 2,
+    AccessMode::WriteOnly => 3,
 });
+
+fn encode_access_mode(writer: &mut Writer, access: AccessMode) -> Result<(), KernelIrEncodeError> {
+    if access == AccessMode::WriteOnly {
+        require_v9(writer, "write-only pointer and slice types")?;
+    }
+    writer.u8(access_mode_tag(access))
+}
+
+fn decode_access_mode_for_version(
+    reader: &Reader<'_>,
+    tag: u8,
+) -> Result<AccessMode, KernelIrDecodeError> {
+    if tag == access_mode_tag(AccessMode::WriteOnly) && reader.version < KERNEL_IR_VERSION_V9 {
+        return Err(KernelIrDecodeError::UnknownTag {
+            kind: "access mode",
+            tag,
+        });
+    }
+    decode_access_mode(tag)
+}
 enum_codec!(scalar_type_tag, decode_scalar_type, ScalarType, "scalar type", {
     ScalarType::Bool => 1,
     ScalarType::I8 => 2,

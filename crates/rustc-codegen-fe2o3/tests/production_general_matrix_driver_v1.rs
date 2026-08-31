@@ -2,6 +2,11 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use fe2o3_compiler_ffi::{
+    COMPILER_DESCRIPTOR_SECTION_NAME_V1, CompilerDescriptorSourceV1, CompilerModuleHandoffV2,
+};
+use fe2o3_kernel_descriptor::AccessMode;
+
 struct ScratchDirectory {
     path: PathBuf,
 }
@@ -135,6 +140,110 @@ fn scalar_gemm_kernel_reaches_gfx942_llvm() {
     let binding = std::fs::read_to_string(&binding_path).expect("crate binding handoff");
     assert_eq!(binding.trim().len(), 64);
     assert!(binding.trim().bytes().all(|byte| byte.is_ascii_hexdigit()));
+}
+
+#[test]
+#[ignore = "requires the pinned nightly rust-src component and AMD target"]
+fn write_only_disjoint_kernel_reaches_v9_guarded_store_llvm_and_descriptor() {
+    let scratch = ScratchDirectory::new("write-only-disjoint");
+    let handoff_path = scratch.path.join("kernel.handoff");
+    let output = Command::new(env!("CARGO"))
+        .current_dir(workspace())
+        .env(
+            "RUSTC_WORKSPACE_WRAPPER",
+            env!("CARGO_BIN_EXE_fe2o3-rustc-extract"),
+        )
+        .env(
+            "FE2O3_EXTRACT_CRATE_V1",
+            "fe2o3_production_extraction_fixture",
+        )
+        .env(
+            "FE2O3_EXTRACT_GFX942_COMPILER_HANDOFF_PATH_V1",
+            &handoff_path,
+        )
+        .env_remove("RUSTFLAGS")
+        .env_remove("CARGO_ENCODED_RUSTFLAGS")
+        .env(
+            "CARGO_TARGET_AMDGCN_AMD_AMDHSA_RUSTFLAGS",
+            "-Zalways-encode-mir -Ctarget-cpu=gfx942 -Ctarget-feature=-xnack,+wavefrontsize64,-wavefrontsize32",
+        )
+        .args([
+            "check",
+            "--locked",
+            "-Zbuild-std=core",
+            "-p",
+            "fe2o3-production-extraction-fixture",
+            "--features",
+            "write-only-disjoint-output",
+            "--target",
+            "amdgcn-amd-amdhsa",
+            "--target-dir",
+        ])
+        .arg(scratch.path.join("cargo"))
+        .output()
+        .expect("run write-only disjoint production extraction");
+    let stderr = String::from_utf8(output.stderr).expect("rustc diagnostic is UTF-8");
+    assert!(
+        output.status.success()
+            && stderr.contains("Kernel IR V9 with 1 GuardedStore operation(s)")
+            && stderr.contains("artifact/launch authority false"),
+        "write-only disjoint extraction omitted its V9 custody:\n{stderr}",
+    );
+
+    let handoff_bytes =
+        std::fs::read(&handoff_path).expect("production extraction emitted handoff");
+    let handoff =
+        CompilerModuleHandoffV2::decode(&handoff_bytes).expect("canonical compiler module handoff");
+    let llvm = std::str::from_utf8(handoff.module_bytes()).expect("compiler module is LLVM text");
+    let true_label = llvm
+        .find("guarded_store_bb")
+        .expect("guarded-store true label");
+    let store = llvm[true_label..]
+        .find("store i32")
+        .map(|offset| true_label + offset)
+        .expect("guarded-store body");
+    let merge = llvm[store..]
+        .find("guarded_store_bb")
+        .map(|offset| store + offset)
+        .expect("guarded-store merge branch");
+    assert!(
+        llvm.contains("br i1 ")
+            && llvm.contains("label %guarded_store_bb")
+            && true_label < store
+            && store < merge,
+        "the predicate-false edge did not bypass the guarded store:\n{llvm}",
+    );
+
+    let descriptor = CompilerDescriptorSourceV1::decode(&descriptor_bytes(llvm))
+        .expect("embedded compiler descriptor source");
+    let [kernel] = descriptor.table().kernels() else {
+        panic!("expected one compiler-derived descriptor kernel")
+    };
+    let [output] = kernel.arguments() else {
+        panic!("expected one write-only output argument")
+    };
+    assert_eq!(output.access(), AccessMode::WriteOnly);
+}
+
+fn descriptor_bytes(llvm: &str) -> Vec<u8> {
+    let marker = format!(".section {COMPILER_DESCRIPTOR_SECTION_NAME_V1}");
+    let section = llvm
+        .split_once(&marker)
+        .expect("compiler descriptor section")
+        .1;
+    section
+        .lines()
+        .filter_map(|line| {
+            line.trim()
+                .strip_prefix("module asm \".byte ")
+                .and_then(|bytes| bytes.strip_suffix('"'))
+        })
+        .flat_map(|line| line.split(','))
+        .map(|byte| {
+            u8::from_str_radix(byte.trim().trim_start_matches("0x"), 16)
+                .expect("canonical module-asm byte")
+        })
+        .collect()
 }
 
 fn assert_workgroup_pipeline_reaches_gfx942_llvm(

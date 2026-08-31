@@ -3886,6 +3886,16 @@ impl<'a> FunctionLowerer<'a> {
                     self.target,
                 )?;
             }
+            OperationKind::GuardedStore {
+                pointer, access, ..
+            } => {
+                validate_memory_access(
+                    self.value_type(*pointer),
+                    access.address_space,
+                    &location,
+                    self.target,
+                )?;
+            }
             OperationKind::Store {
                 pointer, access, ..
             } => {
@@ -4486,6 +4496,9 @@ impl<'a> FunctionLowerer<'a> {
                     .filter_map(|(operation_index, operation)| match &operation.kind {
                         OperationKind::GuardedLoad { .. } => {
                             Some(guarded_load_merge_label(block.id, operation_index))
+                        }
+                        OperationKind::GuardedStore { .. } => {
+                            Some(guarded_store_merge_label(block.id, operation_index))
                         }
                         OperationKind::Gfx950LdsTranspose(transpose)
                             if matches!(
@@ -5531,6 +5544,38 @@ impl<'a> FunctionLowerer<'a> {
                     llvm_type(fallback_ty),
                 )
                 .unwrap();
+            }
+            OperationKind::GuardedStore {
+                pointer,
+                predicate,
+                value,
+                access,
+            } => {
+                let (pointer_name, pointer_ty) = self.value(*pointer);
+                let (predicate_name, _) = self.value(*predicate);
+                let (value_name, _) = self.value(*value);
+                let Type::Pointer(pointer_ty) = pointer_ty else {
+                    unreachable!()
+                };
+                let address_space = llvm_address_space(pointer_ty.address_space);
+                let volatile = if access.volatile { " volatile" } else { "" };
+                let true_label = guarded_store_true_label(block, operation_index);
+                let merge_label = guarded_store_merge_label(block, operation_index);
+                writeln!(
+                    output,
+                    "  br i1 {predicate_name}, label %{true_label}, label %{merge_label}"
+                )
+                .unwrap();
+                writeln!(output, "{true_label}:").unwrap();
+                writeln!(
+                    output,
+                    "  store{volatile} {} {value_name}, ptr addrspace({address_space}) {pointer_name}, align {}",
+                    llvm_type(&pointer_ty.pointee),
+                    access.alignment,
+                )
+                .unwrap();
+                writeln!(output, "  br label %{merge_label}").unwrap();
+                writeln!(output, "{merge_label}:").unwrap();
             }
             OperationKind::Store {
                 pointer,
@@ -7963,6 +8008,14 @@ fn guarded_load_false_label(block: BlockId, operation: usize) -> String {
 
 fn guarded_load_merge_label(block: BlockId, operation: usize) -> String {
     format!("guarded_load_bb{}_op{}_merge", block.0, operation)
+}
+
+fn guarded_store_true_label(block: BlockId, operation: usize) -> String {
+    format!("guarded_store_bb{}_op{}_true", block.0, operation)
+}
+
+fn guarded_store_merge_label(block: BlockId, operation: usize) -> String {
+    format!("guarded_store_bb{}_op{}_merge", block.0, operation)
 }
 
 fn gfx950_stage_load_true_label(prefix: &str, ordinal: u32) -> String {

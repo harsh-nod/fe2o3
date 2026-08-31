@@ -1,0 +1,5 @@
+error[E0616]: field `ptr` of struct `WriteOnlyDisjointSlice` is private
+ --> tests/ui/fail/write_only_pointer_cannot_escape.rs:4:12
+  |
+4 |     output.ptr
+  |            ^^^ private field

@@ -178,6 +178,9 @@ pub(crate) fn typed_descriptor_roots_from_production_collection<'tcx>(
                                     GeneralTypedArgumentKindV3::SharedSlice(_) => {
                                         AccessMode::ReadOnly
                                     }
+                                    GeneralTypedArgumentKindV3::WriteOnlyDisjointSlice(_) => {
+                                        AccessMode::WriteOnly
+                                    }
                                     GeneralTypedArgumentKindV3::DisjointSlice(_)
                                     | GeneralTypedArgumentKindV3::GlobalMutPointer(_) => {
                                         AccessMode::ReadWrite
@@ -228,6 +231,9 @@ fn descriptor_argument_kind(kind: GeneralTypedArgumentKindV3) -> DescriptorArgum
     match kind {
         GeneralTypedArgumentKindV3::Scalar(_) => DescriptorArgumentKindV1::Scalar(scalar),
         GeneralTypedArgumentKindV3::SharedSlice(_) => DescriptorArgumentKindV1::SharedSlice(scalar),
+        GeneralTypedArgumentKindV3::WriteOnlyDisjointSlice(_) => {
+            DescriptorArgumentKindV1::DisjointSlice(scalar)
+        }
         GeneralTypedArgumentKindV3::DisjointSlice(_) => {
             DescriptorArgumentKindV1::DisjointSlice(scalar)
         }
@@ -409,8 +415,11 @@ fn validate_production_v1_descriptor_evidence(
         .zip(&entry.signature.parameters)
         .enumerate()
     {
-        let exact_kernel_type =
-            production_descriptor_argument_matches_kernel_type_v1(root_argument.kind, kernel_type);
+        let exact_kernel_type = production_descriptor_argument_matches_kernel_type_v1(
+            root_argument.kind,
+            root_argument.access,
+            kernel_type,
+        );
         if !exact_kernel_type {
             return Err(CompilerDescriptorError::ProductionDescriptorMismatch(
                 "typed descriptor/Kernel IR argument correspondence",
@@ -510,6 +519,21 @@ fn validate_production_v1_descriptor_evidence(
                             index_space,
                             ..
                         } if *disjoint_slice == semantic_type_id => Some(*index_space),
+                        SemanticCompilerIntrinsicOperationV1::DisjointSliceLen {
+                            disjoint_slice,
+                            index_space,
+                            ..
+                        }
+                        | SemanticCompilerIntrinsicOperationV1::WriteOnlyDisjointSliceLen {
+                            disjoint_slice,
+                            index_space,
+                            ..
+                        }
+                        | SemanticCompilerIntrinsicOperationV1::WriteOnlyDisjointSliceWrite {
+                            disjoint_slice,
+                            index_space,
+                            ..
+                        } if *disjoint_slice == semantic_type_id => Some(*index_space),
                         _ => None,
                     },
                     _ => None,
@@ -556,7 +580,15 @@ fn validate_production_v1_descriptor_evidence(
             ))?;
         let expected_access = match argument.kind {
             DescriptorArgumentKindV1::SharedSlice(_) => KirAccessMode::ReadOnly,
-            DescriptorArgumentKindV1::DisjointSlice(_) => KirAccessMode::ReadWrite,
+            DescriptorArgumentKindV1::DisjointSlice(_) => match argument.access {
+                AccessMode::WriteOnly => KirAccessMode::WriteOnly,
+                AccessMode::ReadWrite => KirAccessMode::ReadWrite,
+                _ => {
+                    return Err(CompilerDescriptorError::ProductionDescriptorMismatch(
+                        "disjoint descriptor access",
+                    ));
+                }
+            },
             DescriptorArgumentKindV1::GlobalMutPointer(_) => KirAccessMode::ReadWrite,
             DescriptorArgumentKindV1::Scalar(_) => unreachable!(),
         };
@@ -602,6 +634,8 @@ fn validate_production_v1_descriptor_evidence(
         if access.address_space() != AddressSpace::Global
             || (access.kind() == FormalMemoryAccessKind::Write
                 && matches!(argument.kind, DescriptorArgumentKindV1::SharedSlice(_)))
+            || (access.kind() == FormalMemoryAccessKind::Read
+                && argument.access == AccessMode::WriteOnly)
         {
             return Err(CompilerDescriptorError::ProductionDescriptorMismatch(
                 "formal access mode",
@@ -613,6 +647,7 @@ fn validate_production_v1_descriptor_evidence(
 
 fn production_descriptor_argument_matches_kernel_type_v1(
     descriptor: DescriptorArgumentKindV1,
+    descriptor_access: AccessMode,
     kernel_type: &fe2o3_kernel_ir::Type,
 ) -> bool {
     use fe2o3_kernel_ir::{AccessMode as KirAccessMode, AddressSpace, Type as KirType};
@@ -628,7 +663,12 @@ fn production_descriptor_argument_matches_kernel_type_v1(
         }
         (DescriptorArgumentKindV1::DisjointSlice(scalar), KirType::Slice(actual)) => {
             actual.address_space == AddressSpace::Global
-                && actual.access == KirAccessMode::ReadWrite
+                && actual.access
+                    == match descriptor_access {
+                        AccessMode::WriteOnly => KirAccessMode::WriteOnly,
+                        AccessMode::ReadWrite => KirAccessMode::ReadWrite,
+                        _ => return false,
+                    }
                 && actual.element.as_scalar() == descriptor_scalar_to_kernel_ir(scalar)
         }
         (DescriptorArgumentKindV1::GlobalMutPointer(scalar), KirType::Pointer(actual)) => {
@@ -1771,7 +1811,9 @@ mod tests {
             KirAccessMode::ReadWrite,
         );
         assert!(production_descriptor_argument_matches_kernel_type_v1(
-            descriptor, &exact
+            descriptor,
+            AccessMode::ReadWrite,
+            &exact
         ));
 
         for hostile in [
@@ -1797,7 +1839,9 @@ mod tests {
             ),
         ] {
             assert!(!production_descriptor_argument_matches_kernel_type_v1(
-                descriptor, &hostile
+                descriptor,
+                AccessMode::ReadWrite,
+                &hostile
             ));
         }
     }
