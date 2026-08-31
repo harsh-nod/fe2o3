@@ -196,3 +196,14 @@ live-PC ownership, or runtime authority. Non-anchor and unaligned PCs remain typ
 V9 replay with the exact current V7 source-projection producer gap is also typed unavailable; the
 finalizer does not infer a V9 source projection. `ExactInputsAndArtifact` means the declared byte
 axes and available V4 semantic members were joined to the identical finalized artifact.
+
+`ProductionSourceIsaCatalogV1` is the bounded durable projection for later name-free diagnoses. It
+retains every admitted record in canonical order together with the correlation, finalized semantic
+map, raw Source Map V2, artifact, and target-structural identities. Its canonical decoder rebuilds
+only an inert claim; query access requires reconstructing the complete catalog from an independently
+admitted correlation and byte-for-byte equality. The admitted catalog indexes source-node,
+source-span, MIR-node, MIR-coordinate, neutral-KIR-node, neutral-KIR-coordinate, target-KIR,
+semantic-operation, compiler-handoff LLVM, and sparse-ISA axes. Unknown or ambiguous sites are never
+replaced with a seeded best match. V9 wire claims remain typed unavailable. The catalog remains
+observation-only and grants no debugger, profiler, publication, or runtime authority. The complete
+wire and query contract is documented in `../../docs/production-source-isa-catalog-v1.md`.

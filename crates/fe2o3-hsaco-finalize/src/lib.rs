@@ -24,6 +24,7 @@ mod first_build_worker_engine;
 mod first_build_worker_v3;
 mod link_plan;
 mod production_semantic_anchor_v1;
+mod production_source_isa_catalog_v1;
 mod production_source_isa_correlation_v1;
 mod request_construction;
 mod semantic_debug_map_v1;
@@ -90,6 +91,21 @@ pub use production_semantic_anchor_v1::{
     AdmittedProductionSemanticAnchorV1, AdmittedProductionSemanticAnchorsV1,
     ProductionSemanticAnchorAdmissionV1, ProductionSemanticAnchorErrorV1,
     ProductionSemanticAnchorTransformationV1, ProductionSemanticAnchorUnavailableV1,
+};
+pub use production_source_isa_catalog_v1::{
+    InertProductionSourceIsaCatalogV1, MAX_PRODUCTION_SOURCE_ISA_CATALOG_BYTES_V1,
+    MAX_PRODUCTION_SOURCE_ISA_CATALOG_ISA_INTERVALS_V1,
+    MAX_PRODUCTION_SOURCE_ISA_CATALOG_RECORDS_V1, PRODUCTION_SOURCE_ISA_CATALOG_MAGIC_V1,
+    PRODUCTION_SOURCE_ISA_CATALOG_VERSION_V1, ProductionSourceIsaCatalogAdmissionV1,
+    ProductionSourceIsaCatalogContentIdentityV1, ProductionSourceIsaCatalogErrorV1,
+    ProductionSourceIsaCatalogIntervalV1, ProductionSourceIsaCatalogKirVersionV1,
+    ProductionSourceIsaCatalogMatchesV1, ProductionSourceIsaCatalogPointV1,
+    ProductionSourceIsaCatalogQueryUnavailableV1, ProductionSourceIsaCatalogRecordKindV1,
+    ProductionSourceIsaCatalogRecordV1, ProductionSourceIsaCatalogStructuralBindingV1,
+    ProductionSourceIsaCatalogStructuralCountsV1, ProductionSourceIsaCatalogTargetV1,
+    ProductionSourceIsaCatalogTransformationV1, ProductionSourceIsaCatalogV1,
+    ProductionSourceIsaKirCoordinateV1, ProductionSourceIsaLlvmCoordinateV1,
+    ProductionSourceIsaMirCoordinateV1,
 };
 pub use production_source_isa_correlation_v1::{
     AdmittedProductionSourceIsaCorrelationV1, AdmittedProductionSourceIsaRecordV1,

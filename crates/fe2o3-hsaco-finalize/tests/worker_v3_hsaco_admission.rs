@@ -39,18 +39,20 @@ use fe2o3_compiler_lineage::{
 };
 use fe2o3_hsaco_finalize::{
     CompilerClosureV2, ContentIdentityV1, FinalizedSemanticDebugMapAdmissionStatusV1,
-    FinalizedSemanticDebugMapErrorV1, InertProtectedFirstBuildWorkerV3EvidenceV1,
-    InspectedProtectedWorkerV3HsacoV1, LinkOptionV1, PinnedWorkerV1,
-    ProductionFinalizedSemanticDebugAdmissionV1, ProductionIsaPointV1,
+    FinalizedSemanticDebugMapErrorV1, InertProductionSourceIsaCatalogV1,
+    InertProtectedFirstBuildWorkerV3EvidenceV1, InspectedProtectedWorkerV3HsacoV1, LinkOptionV1,
+    PinnedWorkerV1, ProductionFinalizedSemanticDebugAdmissionV1, ProductionIsaPointV1,
     ProductionSemanticAnchorAdmissionV1, ProductionSemanticAnchorErrorV1,
-    ProductionSourceIsaAcceptanceSummaryAdmissionV1, ProductionSourceIsaCorrelationAdmissionV1,
-    ProductionSourceIsaCorrelationErrorV1, ProductionSourceIsaCorrelationUnavailableV1,
-    ProductionSourceIsaRecordKindV1, ProtectedWorkerV3CompactFinalizerReplayV2,
-    WorkerExecutionLimitsV1, WorkerInputKindV1, WorkerInputV1, WorkerMeasurementV1,
-    WorkerOutputConstraintsV1, WorkerV3HsacoFinalizationError, WorkerV3HsacoInspectionError,
-    WorkerV3HsacoPublicationErrorV1, execute_protected_reproducible_first_build_worker_v3,
-    finalize_protected_worker_v3_hsaco_v1, inspect_protected_worker_v3_hsaco_v1,
-    inspect_unfinalized, persist_prepared_protected_worker_v3_hsaco_publication_v1,
+    ProductionSourceIsaAcceptanceSummaryAdmissionV1, ProductionSourceIsaCatalogAdmissionV1,
+    ProductionSourceIsaCatalogPointV1, ProductionSourceIsaCatalogRecordKindV1,
+    ProductionSourceIsaCorrelationAdmissionV1, ProductionSourceIsaCorrelationErrorV1,
+    ProductionSourceIsaCorrelationUnavailableV1, ProductionSourceIsaRecordKindV1,
+    ProtectedWorkerV3CompactFinalizerReplayV2, WorkerExecutionLimitsV1, WorkerInputKindV1,
+    WorkerInputV1, WorkerMeasurementV1, WorkerOutputConstraintsV1, WorkerV3HsacoFinalizationError,
+    WorkerV3HsacoInspectionError, WorkerV3HsacoPublicationErrorV1,
+    execute_protected_reproducible_first_build_worker_v3, finalize_protected_worker_v3_hsaco_v1,
+    inspect_protected_worker_v3_hsaco_v1, inspect_unfinalized,
+    persist_prepared_protected_worker_v3_hsaco_publication_v1,
     prepare_protected_worker_v3_compact_finalizer_replay_v2,
     prepare_protected_worker_v3_hsaco_publication_v1,
     publish_recovered_protected_worker_v3_hsaco_v1,
@@ -2151,6 +2153,64 @@ fn production_semantic_anchors_admit_real_worker_gfx942_and_gfx950() {
         assert!(!correlation.proves_live_program_counter_ownership());
         assert!(!correlation.grants_runtime_authority());
 
+        let catalog = match finalized.admit_production_source_isa_catalog_v1().unwrap() {
+            ProductionSourceIsaCatalogAdmissionV1::Admitted(catalog) => catalog,
+            ProductionSourceIsaCatalogAdmissionV1::Unavailable(reason) => {
+                panic!("real Worker source/ISA catalog unexpectedly unavailable: {reason:?}")
+            }
+        };
+        assert_eq!(catalog.correlation_identity(), correlation.identity());
+        assert_eq!(
+            catalog.semantic_map_identity(),
+            correlation.semantic_map_identity()
+        );
+        assert_eq!(
+            catalog.source_map_v2_identity().sha256(),
+            correlation.source_map_v2_identity().sha256()
+        );
+        assert_eq!(
+            catalog.source_map_v2_identity().byte_len(),
+            correlation.source_map_v2_identity().byte_len()
+        );
+        assert_eq!(catalog.artifact_identity(), correlation.artifact_identity());
+        assert_eq!(catalog.records().len(), correlation.records().len());
+        let catalog_sourceful = catalog
+            .records()
+            .iter()
+            .find(|record| {
+                record.kind() == ProductionSourceIsaCatalogRecordKindV1::SourceAnchored
+                    && !record.isa().is_empty()
+            })
+            .unwrap();
+        assert!(
+            catalog
+                .query_semantic_operation(catalog_sourceful.semantic_operation_id().unwrap())
+                .unwrap()
+                .any(|record| record.source_node_identity()
+                    == catalog_sourceful.source_node_identity())
+        );
+        let catalog_interval = catalog_sourceful.isa()[0];
+        assert!(
+            catalog
+                .query_isa_pc(ProductionSourceIsaCatalogPointV1::new(
+                    catalog_interval.kernel_ordinal(),
+                    catalog_interval.byte_start(),
+                ))
+                .unwrap()
+                .any(|record| record.semantic_operation_id()
+                    == catalog_sourceful.semantic_operation_id())
+        );
+        let catalog_bytes = catalog.to_canonical_bytes().unwrap();
+        let decoded_catalog =
+            InertProductionSourceIsaCatalogV1::from_canonical_bytes(&catalog_bytes)
+                .unwrap()
+                .admit_exact_projection_v1(&correlation)
+                .unwrap();
+        assert_eq!(decoded_catalog.identity(), catalog.identity());
+        assert_eq!(decoded_catalog.records(), catalog.records());
+        assert!(!decoded_catalog.grants_debugger_authority());
+        assert!(!decoded_catalog.grants_profiler_authority());
+
         let summary = match finalized
             .admit_production_source_isa_acceptance_summary_v1()
             .unwrap()
@@ -2302,6 +2362,14 @@ fn production_semantic_anchors_admit_real_worker_gfx942_and_gfx950() {
                 .admit_production_source_isa_acceptance_summary_v1()
                 .unwrap(),
             ProductionSourceIsaAcceptanceSummaryAdmissionV1::Unavailable(
+                ProductionSourceIsaCorrelationUnavailableV1::SourceProjectionForKirV9
+            )
+        ));
+        assert!(matches!(
+            v9_finalized
+                .admit_production_source_isa_catalog_v1()
+                .unwrap(),
+            ProductionSourceIsaCatalogAdmissionV1::Unavailable(
                 ProductionSourceIsaCorrelationUnavailableV1::SourceProjectionForKirV9
             )
         ));

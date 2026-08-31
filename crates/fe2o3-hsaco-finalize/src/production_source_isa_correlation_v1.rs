@@ -13,7 +13,8 @@ use dialect_amdgcn::{
 };
 use fe2o3_kernel_ir::{
     DebugSourceMapSpanV1, MAX_SEMANTIC_DEBUG_MAPPING_REFERENCES_V1, MAX_SEMANTIC_DEBUG_NODES_V1,
-    ProductionSemanticDebugProducerGapV1, SemanticDebugLayerV1, SemanticDebugLocationV1,
+    ProductionSemanticDebugProducerGapV1, SemanticDebugContentIdentityV1, SemanticDebugLayerV1,
+    SemanticDebugLocationV1,
 };
 use sha2::{Digest, Sha256};
 
@@ -48,7 +49,7 @@ pub enum ProductionSourceIsaCorrelationAdmissionV1 {
 
 // Inline success lets the fallible summary path avoid an infallible allocation.
 #[allow(clippy::large_enum_variant)]
-enum UnboxedProductionSourceIsaCorrelationAdmissionV1 {
+pub(crate) enum UnboxedProductionSourceIsaCorrelationAdmissionV1 {
     Admitted(AdmittedProductionSourceIsaCorrelationV1),
     Unavailable(ProductionSourceIsaCorrelationUnavailableV1),
 }
@@ -436,6 +437,8 @@ impl ExactSizeIterator for ProductionSourceIsaMatchesV1<'_> {}
 #[derive(Debug)]
 pub struct AdmittedProductionSourceIsaCorrelationV1 {
     identity: [u8; 32],
+    semantic_map_identity: [u8; 32],
+    source_map_v2_identity: SemanticDebugContentIdentityV1,
     artifact_identity: ContentIdentityV1,
     structural_binding: ProductionTargetStructuralBindingV1,
     records: Vec<AdmittedProductionSourceIsaRecordV1>,
@@ -451,6 +454,16 @@ impl AdmittedProductionSourceIsaCorrelationV1 {
 
     pub const fn artifact_identity(&self) -> ContentIdentityV1 {
         self.artifact_identity
+    }
+
+    /// Exact identity of the finalized semantic-map bytes admitted by this correlation.
+    pub const fn semantic_map_identity(&self) -> &[u8; 32] {
+        &self.semantic_map_identity
+    }
+
+    /// Exact raw Source Map V2 identity named by the admitted semantic-map binding.
+    pub const fn source_map_v2_identity(&self) -> SemanticDebugContentIdentityV1 {
+        self.source_map_v2_identity
     }
 
     pub const fn structural_binding(&self) -> ProductionTargetStructuralBindingV1 {
@@ -580,7 +593,7 @@ impl PreparedFinalizedProtectedWorkerV3HsacoV1 {
     }
 
     #[allow(clippy::too_many_lines)]
-    fn admit_unboxed_production_source_isa_correlation_v1(
+    pub(crate) fn admit_unboxed_production_source_isa_correlation_v1(
         &self,
     ) -> Result<
         UnboxedProductionSourceIsaCorrelationAdmissionV1,
@@ -820,6 +833,7 @@ impl PreparedFinalizedProtectedWorkerV3HsacoV1 {
             return Err(ProductionSourceIsaCorrelationErrorV1::InvalidSourceGraph);
         }
         let semantic_map_identity = *semantic_map.identity().as_bytes();
+        let source_map_v2_identity = semantic_map.document().binding().source_map_v2();
         let artifact_identity = semantic_map.artifact_identity();
         drop(semantic_map);
         drop(anchors);
@@ -834,6 +848,8 @@ impl PreparedFinalizedProtectedWorkerV3HsacoV1 {
         Ok(UnboxedProductionSourceIsaCorrelationAdmissionV1::Admitted(
             AdmittedProductionSourceIsaCorrelationV1 {
                 identity,
+                semantic_map_identity,
+                source_map_v2_identity,
                 artifact_identity,
                 structural_binding,
                 records,
@@ -1446,6 +1462,11 @@ mod tests {
         operation: u64,
         isa: Vec<SemanticDebugLocationV1>,
     ) -> AdmittedProductionSourceIsaRecordV1 {
+        let transformation = if isa.is_empty() {
+            ProductionSemanticAnchorTransformationV1::Eliminated
+        } else {
+            ProductionSemanticAnchorTransformationV1::Preserved
+        };
         AdmittedProductionSourceIsaRecordV1 {
             kind: ProductionSourceIsaRecordKindV1::SourceAnchored,
             source_node_identity: Some([source; 32]),
@@ -1474,7 +1495,7 @@ mod tests {
                 instruction_ordinal: operation,
             }),
             isa,
-            anchor_transformation: Some(ProductionSemanticAnchorTransformationV1::Preserved),
+            anchor_transformation: Some(transformation),
         }
     }
 
@@ -1586,6 +1607,8 @@ mod tests {
         let (source_node_index, source_span_index, isa_index) = build_indices(&records).unwrap();
         AdmittedProductionSourceIsaCorrelationV1 {
             identity: [9; 32],
+            semantic_map_identity: [8; 32],
+            source_map_v2_identity: SemanticDebugContentIdentityV1::new([7; 32], 7).unwrap(),
             artifact_identity: ContentIdentityV1::calculate(b"artifact"),
             structural_binding: structural_binding(),
             records,
@@ -1777,6 +1800,69 @@ mod tests {
     }
 
     #[test]
+    fn catalog_constructor_preserves_all_admitted_records_and_join_identities() {
+        let admitted = indexed_fixture();
+        let catalog =
+            crate::ProductionSourceIsaCatalogV1::from_admitted_correlation_v1(&admitted).unwrap();
+        assert_eq!(catalog.correlation_identity(), admitted.identity());
+        assert_eq!(
+            catalog.semantic_map_identity(),
+            admitted.semantic_map_identity()
+        );
+        assert_eq!(
+            catalog.source_map_v2_identity().sha256(),
+            admitted.source_map_v2_identity().sha256()
+        );
+        assert_eq!(
+            catalog.source_map_v2_identity().byte_len(),
+            admitted.source_map_v2_identity().byte_len()
+        );
+        assert_eq!(catalog.artifact_identity(), admitted.artifact_identity());
+        assert_eq!(catalog.records().len(), admitted.records().len());
+        let encoded = catalog.to_canonical_bytes().unwrap();
+        let decoded = crate::InertProductionSourceIsaCatalogV1::from_canonical_bytes(&encoded)
+            .unwrap()
+            .admit_exact_projection_v1(&admitted)
+            .unwrap();
+        assert_eq!(decoded.records(), catalog.records());
+        assert_eq!(decoded.identity(), catalog.identity());
+
+        let mut omitted_records = admitted.records.clone();
+        omitted_records.pop();
+        let omitted = fixture_from_records(omitted_records);
+        let omitted_bytes =
+            crate::ProductionSourceIsaCatalogV1::from_admitted_correlation_v1(&omitted)
+                .unwrap()
+                .to_canonical_bytes()
+                .unwrap();
+        assert!(matches!(
+            crate::InertProductionSourceIsaCatalogV1::from_canonical_bytes(&omitted_bytes)
+                .unwrap()
+                .admit_exact_projection_v1(&admitted),
+            Err(crate::ProductionSourceIsaCatalogErrorV1::ExactProjectionMismatch)
+        ));
+
+        let mut substituted_records = admitted.records.clone();
+        substituted_records
+            .iter_mut()
+            .find(|record| record.semantic_operation_id.is_some())
+            .unwrap()
+            .semantic_operation_id = Some([99; 32]);
+        let substituted = fixture_from_records(substituted_records);
+        let substituted_bytes =
+            crate::ProductionSourceIsaCatalogV1::from_admitted_correlation_v1(&substituted)
+                .unwrap()
+                .to_canonical_bytes()
+                .unwrap();
+        assert!(matches!(
+            crate::InertProductionSourceIsaCatalogV1::from_canonical_bytes(&substituted_bytes)
+                .unwrap()
+                .admit_exact_projection_v1(&admitted),
+            Err(crate::ProductionSourceIsaCatalogErrorV1::ExactProjectionMismatch)
+        ));
+    }
+
+    #[test]
     fn acceptance_summary_selects_the_same_lowest_witness_after_record_reordering() {
         let admitted = indexed_fixture();
         let expected = summarize_correlation(&admitted)
@@ -1800,6 +1886,8 @@ mod tests {
         let admitted = indexed_fixture();
         let empty = AdmittedProductionSourceIsaCorrelationV1 {
             identity: admitted.identity,
+            semantic_map_identity: admitted.semantic_map_identity,
+            source_map_v2_identity: admitted.source_map_v2_identity,
             artifact_identity: admitted.artifact_identity,
             structural_binding: admitted.structural_binding,
             records: Vec::new(),
@@ -1920,6 +2008,8 @@ mod tests {
         );
         let admitted = AdmittedProductionSourceIsaCorrelationV1 {
             identity: [8; 32],
+            semantic_map_identity: [7; 32],
+            source_map_v2_identity: SemanticDebugContentIdentityV1::new([6; 32], 6).unwrap(),
             artifact_identity: ContentIdentityV1::calculate(b"maximum-isa-summary"),
             structural_binding: structural_binding(),
             records,
