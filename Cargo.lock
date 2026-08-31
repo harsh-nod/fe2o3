@@ -934,6 +934,7 @@ dependencies = [
 name = "fe2o3-compiler-lineage"
 version = "0.1.0"
 dependencies = [
+ "fe2o3-amd-target",
  "fe2o3-build-authority",
  "fe2o3-kernel-descriptor",
  "fe2o3-rustc-invocation",

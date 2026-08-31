@@ -7,6 +7,7 @@ mod error;
 mod proof_binding;
 mod proof_binding_v4;
 mod receipt;
+mod target_lineage_v3;
 
 pub use capsule::{
     INERT_PRODUCTION_SEMANTIC_CAPSULE_MAGIC_V3, INERT_PRODUCTION_SEMANTIC_CAPSULE_VERSION_V3,
@@ -43,4 +44,11 @@ pub use receipt::{
     InertSemanticToLlvmReceiptIdentityV3, InertSemanticToLlvmReceiptV3,
     InertTargetBindingReceiptIdentityV3, InertTargetBindingReceiptV3,
     MAX_CANONICAL_SEMANTIC_MIR_BYTES_V3, MAX_LINEAGE_RECEIPT_PREIMAGE_BYTES_V3,
+};
+pub use target_lineage_v3::{
+    ASSOCIATION_ONLY_NO_REFINEMENT_PROOF_POLICY_V3, DataLayoutTranscriptInputsV3,
+    DataLayoutTranscriptV3, MAX_PRODUCTION_TARGET_LINEAGE_TRANSCRIPT_BYTES_V3,
+    ProductionTargetLineageErrorV3, SemanticToLlvmAssociationInputsV3,
+    SemanticToLlvmAssociationTranscriptV3, TargetBindingTranscriptInputsV3,
+    TargetBindingTranscriptV3, TargetLineageClaimV3, TargetLineageIdentityV3,
 };

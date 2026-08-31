@@ -12,6 +12,8 @@
 
 use std::{error::Error, fmt, str};
 
+use fe2o3_amd_target::PRODUCTION_AMDHSA_LLVM_DATA_LAYOUT_V1;
+
 const TRANSCRIPT_MAGIC_V3: [u8; 8] = *b"F2O3TLV3";
 const TRANSCRIPT_VERSION_V3: u16 = 3;
 const TRANSCRIPT_HEADER_BYTES_V3: usize = 24;
@@ -19,7 +21,7 @@ const FIELD_HEADER_BYTES_V3: usize = 8;
 const IDENTITY_BYTES_V3: usize = 32 + 8;
 
 /// Maximum canonical size accepted for any one target-lineage receipt preimage.
-pub(crate) const MAX_PRODUCTION_TARGET_LINEAGE_TRANSCRIPT_BYTES_V3: usize = 4 * 1024 * 1024;
+pub const MAX_PRODUCTION_TARGET_LINEAGE_TRANSCRIPT_BYTES_V3: usize = 4 * 1024 * 1024;
 
 const MAX_TARGET_TEXT_BYTES_V3: usize = 256;
 const MAX_TARGET_FEATURES_BYTES_V3: usize = 4 * 1024;
@@ -29,7 +31,7 @@ const DATA_LAYOUT_KIND_V3: u16 = 2;
 const SEMANTIC_TO_LLVM_KIND_V3: u16 = 5;
 
 /// Exact-input association policy. It intentionally makes no refinement claim.
-pub(crate) const ASSOCIATION_ONLY_NO_REFINEMENT_PROOF_POLICY_V3: u16 = 1;
+pub const ASSOCIATION_ONLY_NO_REFINEMENT_PROOF_POLICY_V3: u16 = 1;
 
 const ASSOCIATION_ONLY_CLAIM_V3: &[u8] = b"association-only/no-refinement-proof";
 const TARGET_BINDING_DOMAIN_V3: &[u8] = b"FE2O3/PRODUCTION-TARGET-BINDING-TRANSCRIPT/V3\0";
@@ -46,38 +48,37 @@ const EXACT_CODE_OBJECT_VERSION_V3: u16 = 6;
 const EXACT_WAVE_WIDTH_BITS_V3: u16 = 64;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub(crate) struct TargetLineageIdentityV3 {
+/// SHA-256 and byte-length coordinates used by target-side association records.
+pub struct TargetLineageIdentityV3 {
     sha256: [u8; 32],
     byte_len: u64,
 }
 
 impl TargetLineageIdentityV3 {
-    pub(crate) fn new(
-        sha256: [u8; 32],
-        byte_len: u64,
-    ) -> Result<Self, ProductionTargetLineageErrorV3> {
+    /// Validates and constructs nonzero content-identity coordinates.
+    pub fn new(sha256: [u8; 32], byte_len: u64) -> Result<Self, ProductionTargetLineageErrorV3> {
         validate_identity("lineage identity", sha256, byte_len)?;
         Ok(Self { sha256, byte_len })
     }
 
-    #[cfg(test)]
-    pub(crate) const fn sha256(self) -> [u8; 32] {
+    /// Returns the retained SHA-256 digest.
+    pub const fn sha256(self) -> [u8; 32] {
         self.sha256
     }
 
-    #[cfg(test)]
-    pub(crate) const fn byte_len(self) -> u64 {
+    /// Returns the retained byte length.
+    pub const fn byte_len(self) -> u64 {
         self.byte_len
     }
 
-    pub(crate) fn encode(self) -> [u8; IDENTITY_BYTES_V3] {
+    /// Encodes the identity as digest followed by little-endian byte length.
+    pub fn encode(self) -> [u8; IDENTITY_BYTES_V3] {
         let mut encoded = [0_u8; IDENTITY_BYTES_V3];
         encoded[..32].copy_from_slice(&self.sha256);
         encoded[32..].copy_from_slice(&self.byte_len.to_le_bytes());
         encoded
     }
 
-    #[cfg(test)]
     fn decode(field: &'static str, encoded: &[u8]) -> Result<Self, ProductionTargetLineageErrorV3> {
         if encoded.len() != IDENTITY_BYTES_V3 {
             return Err(ProductionTargetLineageErrorV3::InvalidFieldLength {
@@ -97,9 +98,9 @@ impl TargetLineageIdentityV3 {
 }
 
 /// The strongest semantic statement made by records in this module.
-#[cfg(test)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum TargetLineageClaimV3 {
+pub enum TargetLineageClaimV3 {
+    /// The record associates exact identities and establishes no semantic refinement.
     AssociationOnlyNoRefinementProof,
 }
 
@@ -208,7 +209,6 @@ const SEMANTIC_TO_LLVM_SCHEMA_V3: RecordSchemaV3 = RecordSchemaV3 {
     fields: SEMANTIC_TO_LLVM_FIELDS_V3,
 };
 
-#[cfg(test)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct FieldRangeV3 {
     start: u32,
@@ -218,7 +218,6 @@ struct FieldRangeV3 {
 #[derive(Eq, PartialEq)]
 struct CanonicalRecordV3 {
     canonical_bytes: Box<[u8]>,
-    #[cfg(test)]
     fields: Box<[FieldRangeV3]>,
 }
 
@@ -256,9 +255,7 @@ impl CanonicalRecordV3 {
         canonical_bytes.extend_from_slice(&total_len_u32.to_le_bytes());
         canonical_bytes.extend_from_slice(&0_u32.to_le_bytes());
 
-        #[cfg(test)]
         let mut ranges = Vec::new();
-        #[cfg(test)]
         ranges
             .try_reserve_exact(fields.len())
             .map_err(|_| ProductionTargetLineageErrorV3::AllocationFailed)?;
@@ -270,26 +267,20 @@ impl CanonicalRecordV3 {
             canonical_bytes.extend_from_slice(&tag.to_le_bytes());
             canonical_bytes.extend_from_slice(&0_u16.to_le_bytes());
             canonical_bytes.extend_from_slice(&field_len.to_le_bytes());
-            #[cfg(test)]
             let start = u32::try_from(canonical_bytes.len())
                 .map_err(|_| ProductionTargetLineageErrorV3::LengthOverflow)?;
             canonical_bytes.extend_from_slice(field);
-            #[cfg(test)]
-            {
-                let end = u32::try_from(canonical_bytes.len())
-                    .map_err(|_| ProductionTargetLineageErrorV3::LengthOverflow)?;
-                ranges.push(FieldRangeV3 { start, end });
-            }
+            let end = u32::try_from(canonical_bytes.len())
+                .map_err(|_| ProductionTargetLineageErrorV3::LengthOverflow)?;
+            ranges.push(FieldRangeV3 { start, end });
         }
         debug_assert_eq!(canonical_bytes.len(), total_len);
         Ok(Self {
             canonical_bytes: canonical_bytes.into_boxed_slice(),
-            #[cfg(test)]
             fields: ranges.into_boxed_slice(),
         })
     }
 
-    #[cfg(test)]
     fn decode(
         schema: &'static RecordSchemaV3,
         bytes: &[u8],
@@ -303,20 +294,17 @@ impl CanonicalRecordV3 {
         &self.canonical_bytes
     }
 
-    #[cfg(test)]
     fn field(&self, index: usize) -> &[u8] {
         let range = self.fields[index];
         &self.canonical_bytes[range.start as usize..range.end as usize]
     }
 }
 
-#[cfg(test)]
 struct ParsedRecordV3<'a> {
     bytes: &'a [u8],
     ranges: Vec<FieldRangeV3>,
 }
 
-#[cfg(test)]
 impl<'a> ParsedRecordV3<'a> {
     fn parse(
         schema: &'static RecordSchemaV3,
@@ -532,7 +520,6 @@ fn preflight_encoded_len(
     Ok(total)
 }
 
-#[cfg(test)]
 fn read_u16(bytes: &[u8], offset: usize) -> Result<u16, ProductionTargetLineageErrorV3> {
     let end = offset
         .checked_add(2)
@@ -543,7 +530,6 @@ fn read_u16(bytes: &[u8], offset: usize) -> Result<u16, ProductionTargetLineageE
     Ok(u16::from_le_bytes([encoded[0], encoded[1]]))
 }
 
-#[cfg(test)]
 fn read_u32(bytes: &[u8], offset: usize) -> Result<u32, ProductionTargetLineageErrorV3> {
     let end = offset
         .checked_add(4)
@@ -556,7 +542,6 @@ fn read_u32(bytes: &[u8], offset: usize) -> Result<u32, ProductionTargetLineageE
     ]))
 }
 
-#[cfg(test)]
 fn decode_u16(field: &'static str, bytes: &[u8]) -> Result<u16, ProductionTargetLineageErrorV3> {
     if bytes.len() != 2 {
         return Err(ProductionTargetLineageErrorV3::InvalidFieldLength {
@@ -612,27 +597,31 @@ fn require_exact_text(
 }
 
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct TargetBindingTranscriptInputsV3<'a> {
-    pub(crate) protected_rustc_invocation: TargetLineageIdentityV3,
-    pub(crate) semantic_mir: TargetLineageIdentityV3,
-    pub(crate) target_neutral_kir: TargetLineageIdentityV3,
-    pub(crate) target_bound_kir: TargetLineageIdentityV3,
-    pub(crate) configured_target: &'a str,
-    pub(crate) rustc_llvm_target: &'a str,
-    pub(crate) target_cpu: &'a str,
-    pub(crate) target_features: &'a str,
-    pub(crate) code_object_version: u16,
-    pub(crate) wave_width_bits: u16,
-    pub(crate) default_workgroup: [u32; 3],
+/// Borrowed exact inputs for a singleton target-binding transcript.
+#[allow(missing_docs)]
+pub struct TargetBindingTranscriptInputsV3<'a> {
+    pub protected_rustc_invocation: TargetLineageIdentityV3,
+    pub semantic_mir: TargetLineageIdentityV3,
+    pub target_neutral_kir: TargetLineageIdentityV3,
+    pub target_bound_kir: TargetLineageIdentityV3,
+    pub configured_target: &'a str,
+    pub rustc_llvm_target: &'a str,
+    pub target_cpu: &'a str,
+    pub target_features: &'a str,
+    pub code_object_version: u16,
+    pub wave_width_bits: u16,
+    pub default_workgroup: [u32; 3],
 }
 
 #[derive(Debug, Eq, PartialEq)]
-pub(crate) struct TargetBindingTranscriptV3 {
+/// Canonical singleton target-binding association transcript.
+pub struct TargetBindingTranscriptV3 {
     record: CanonicalRecordV3,
 }
 
 impl TargetBindingTranscriptV3 {
-    pub(crate) fn new(
+    /// Builds and validates a canonical target-binding transcript.
+    pub fn new(
         inputs: TargetBindingTranscriptInputsV3<'_>,
     ) -> Result<Self, ProductionTargetLineageErrorV3> {
         validate_target_binding_inputs_v3(&inputs)?;
@@ -668,30 +657,31 @@ impl TargetBindingTranscriptV3 {
         })
     }
 
-    #[cfg(test)]
-    pub(crate) fn decode(bytes: &[u8]) -> Result<Self, ProductionTargetLineageErrorV3> {
+    /// Strictly decodes and revalidates a canonical target-binding transcript.
+    pub fn decode(bytes: &[u8]) -> Result<Self, ProductionTargetLineageErrorV3> {
         let record = CanonicalRecordV3::decode(&TARGET_BINDING_SCHEMA_V3, bytes)?;
         let value = Self { record };
         validate_target_binding_inputs_v3(&value.inputs()?)?;
         Ok(value)
     }
 
-    pub(crate) fn canonical_bytes(&self) -> &[u8] {
+    /// Returns the exact canonical transcript bytes.
+    pub fn canonical_bytes(&self) -> &[u8] {
         self.record.canonical_bytes()
     }
 
-    #[cfg(test)]
-    pub(crate) const fn claim(&self) -> TargetLineageClaimV3 {
+    /// Returns the deliberately limited semantic claim carried by this record.
+    pub const fn claim(&self) -> TargetLineageClaimV3 {
         TargetLineageClaimV3::AssociationOnlyNoRefinementProof
     }
 
-    #[cfg(test)]
-    pub(crate) const fn establishes_refinement_proof(&self) -> bool {
+    /// Reports that this association transcript is not a refinement proof.
+    pub const fn establishes_refinement_proof(&self) -> bool {
         false
     }
 
-    #[cfg(test)]
-    pub(crate) fn inputs(
+    /// Returns all strictly decoded transcript inputs.
+    pub fn inputs(
         &self,
     ) -> Result<TargetBindingTranscriptInputsV3<'_>, ProductionTargetLineageErrorV3> {
         let mut default_workgroup = [0_u32; 3];
@@ -780,24 +770,28 @@ fn validate_target_binding_inputs_v3(
 }
 
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct DataLayoutTranscriptInputsV3<'a> {
-    pub(crate) semantic_mir: TargetLineageIdentityV3,
-    pub(crate) target_binding: TargetLineageIdentityV3,
-    pub(crate) semantic_layout: TargetLineageIdentityV3,
-    pub(crate) rustc_llvm_target: &'a str,
-    pub(crate) live_rustc_data_layout: &'a str,
-    pub(crate) final_llvm_target: &'a str,
-    pub(crate) final_llvm_data_layout: &'a str,
-    pub(crate) default_pointer_width_bits: u16,
+/// Borrowed exact inputs for a production AMDHSA data-layout transcript.
+#[allow(missing_docs)]
+pub struct DataLayoutTranscriptInputsV3<'a> {
+    pub semantic_mir: TargetLineageIdentityV3,
+    pub target_binding: TargetLineageIdentityV3,
+    pub semantic_layout: TargetLineageIdentityV3,
+    pub rustc_llvm_target: &'a str,
+    pub live_rustc_data_layout: &'a str,
+    pub final_llvm_target: &'a str,
+    pub final_llvm_data_layout: &'a str,
+    pub default_pointer_width_bits: u16,
 }
 
 #[derive(Debug, Eq, PartialEq)]
-pub(crate) struct DataLayoutTranscriptV3 {
+/// Canonical production AMDHSA data-layout association transcript.
+pub struct DataLayoutTranscriptV3 {
     record: CanonicalRecordV3,
 }
 
 impl DataLayoutTranscriptV3 {
-    pub(crate) fn new(
+    /// Builds and validates a canonical data-layout transcript.
+    pub fn new(
         inputs: DataLayoutTranscriptInputsV3<'_>,
     ) -> Result<Self, ProductionTargetLineageErrorV3> {
         validate_data_layout_inputs_v3(&inputs)?;
@@ -823,30 +817,31 @@ impl DataLayoutTranscriptV3 {
         })
     }
 
-    #[cfg(test)]
-    pub(crate) fn decode(bytes: &[u8]) -> Result<Self, ProductionTargetLineageErrorV3> {
+    /// Strictly decodes and revalidates a canonical data-layout transcript.
+    pub fn decode(bytes: &[u8]) -> Result<Self, ProductionTargetLineageErrorV3> {
         let record = CanonicalRecordV3::decode(&DATA_LAYOUT_SCHEMA_V3, bytes)?;
         let value = Self { record };
         validate_data_layout_inputs_v3(&value.inputs()?)?;
         Ok(value)
     }
 
-    pub(crate) fn canonical_bytes(&self) -> &[u8] {
+    /// Returns the exact canonical transcript bytes.
+    pub fn canonical_bytes(&self) -> &[u8] {
         self.record.canonical_bytes()
     }
 
-    #[cfg(test)]
-    pub(crate) const fn claim(&self) -> TargetLineageClaimV3 {
+    /// Returns the deliberately limited semantic claim carried by this record.
+    pub const fn claim(&self) -> TargetLineageClaimV3 {
         TargetLineageClaimV3::AssociationOnlyNoRefinementProof
     }
 
-    #[cfg(test)]
-    pub(crate) const fn establishes_refinement_proof(&self) -> bool {
+    /// Reports that this association transcript is not a refinement proof.
+    pub const fn establishes_refinement_proof(&self) -> bool {
         false
     }
 
-    #[cfg(test)]
-    pub(crate) fn inputs(
+    /// Returns all strictly decoded transcript inputs.
+    pub fn inputs(
         &self,
     ) -> Result<DataLayoutTranscriptInputsV3<'_>, ProductionTargetLineageErrorV3> {
         Ok(DataLayoutTranscriptInputsV3 {
@@ -905,12 +900,12 @@ fn validate_data_layout_inputs_v3(
     require_exact_text(
         "live rustc data layout",
         live_layout,
-        crate::production_target_v1::PRODUCTION_RUSTC_DATA_LAYOUT_V1,
+        PRODUCTION_AMDHSA_LLVM_DATA_LAYOUT_V1,
     )?;
     require_exact_text(
         "final LLVM data layout",
         final_layout,
-        crate::production_target_v1::PRODUCTION_WORKER_DATA_LAYOUT_V1,
+        PRODUCTION_AMDHSA_LLVM_DATA_LAYOUT_V1,
     )?;
     if inputs.default_pointer_width_bits != 64 {
         return Err(ProductionTargetLineageErrorV3::InvalidInteger {
@@ -922,29 +917,33 @@ fn validate_data_layout_inputs_v3(
 }
 
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct SemanticToLlvmAssociationInputsV3 {
-    pub(crate) semantic_mir: TargetLineageIdentityV3,
-    pub(crate) middle_end: TargetLineageIdentityV3,
-    pub(crate) kernel_ir: TargetLineageIdentityV3,
-    pub(crate) mir_to_kir_correspondence: TargetLineageIdentityV3,
-    pub(crate) formal_memory: TargetLineageIdentityV3,
-    pub(crate) proof_binding: TargetLineageIdentityV3,
-    pub(crate) target_binding: TargetLineageIdentityV3,
-    pub(crate) data_layout: TargetLineageIdentityV3,
-    pub(crate) abi: TargetLineageIdentityV3,
-    pub(crate) export_manifest: TargetLineageIdentityV3,
-    pub(crate) amdgpu_lowering: TargetLineageIdentityV3,
-    pub(crate) final_llvm: TargetLineageIdentityV3,
-    pub(crate) final_compiler_module_commitment: TargetLineageIdentityV3,
+/// Exact receipt and LLVM identities in a semantic-to-LLVM association.
+#[allow(missing_docs)]
+pub struct SemanticToLlvmAssociationInputsV3 {
+    pub semantic_mir: TargetLineageIdentityV3,
+    pub middle_end: TargetLineageIdentityV3,
+    pub kernel_ir: TargetLineageIdentityV3,
+    pub mir_to_kir_correspondence: TargetLineageIdentityV3,
+    pub formal_memory: TargetLineageIdentityV3,
+    pub proof_binding: TargetLineageIdentityV3,
+    pub target_binding: TargetLineageIdentityV3,
+    pub data_layout: TargetLineageIdentityV3,
+    pub abi: TargetLineageIdentityV3,
+    pub export_manifest: TargetLineageIdentityV3,
+    pub amdgpu_lowering: TargetLineageIdentityV3,
+    pub final_llvm: TargetLineageIdentityV3,
+    pub final_compiler_module_commitment: TargetLineageIdentityV3,
 }
 
 #[derive(Debug, Eq, PartialEq)]
-pub(crate) struct SemanticToLlvmAssociationTranscriptV3 {
+/// Canonical association between semantic receipts and one final LLVM module.
+pub struct SemanticToLlvmAssociationTranscriptV3 {
     record: CanonicalRecordV3,
 }
 
 impl SemanticToLlvmAssociationTranscriptV3 {
-    pub(crate) fn new(
+    /// Builds a canonical semantic-to-LLVM association transcript.
+    pub fn new(
         inputs: SemanticToLlvmAssociationInputsV3,
     ) -> Result<Self, ProductionTargetLineageErrorV3> {
         let identities = [
@@ -984,40 +983,41 @@ impl SemanticToLlvmAssociationTranscriptV3 {
         })
     }
 
-    #[cfg(test)]
-    pub(crate) fn decode(bytes: &[u8]) -> Result<Self, ProductionTargetLineageErrorV3> {
+    /// Strictly decodes a canonical semantic-to-LLVM association transcript.
+    pub fn decode(bytes: &[u8]) -> Result<Self, ProductionTargetLineageErrorV3> {
         let record = CanonicalRecordV3::decode(&SEMANTIC_TO_LLVM_SCHEMA_V3, bytes)?;
         let value = Self { record };
         let _ = value.inputs()?;
         Ok(value)
     }
 
-    pub(crate) fn canonical_bytes(&self) -> &[u8] {
+    /// Returns the exact canonical transcript bytes.
+    pub fn canonical_bytes(&self) -> &[u8] {
         self.record.canonical_bytes()
     }
 
-    #[cfg(test)]
-    pub(crate) const fn claim(&self) -> TargetLineageClaimV3 {
+    /// Returns the deliberately limited semantic claim carried by this record.
+    pub const fn claim(&self) -> TargetLineageClaimV3 {
         TargetLineageClaimV3::AssociationOnlyNoRefinementProof
     }
 
-    #[cfg(test)]
-    pub(crate) const fn establishes_refinement_proof(&self) -> bool {
+    /// Reports that this association transcript is not a refinement proof.
+    pub const fn establishes_refinement_proof(&self) -> bool {
         false
     }
 
-    #[cfg(test)]
-    pub(crate) const fn authenticates_producer(&self) -> bool {
+    /// Reports that this inert transcript does not authenticate its producer.
+    pub const fn authenticates_producer(&self) -> bool {
         false
     }
 
-    #[cfg(test)]
-    pub(crate) const fn grants_publication_authority(&self) -> bool {
+    /// Reports that this inert transcript grants no publication authority.
+    pub const fn grants_publication_authority(&self) -> bool {
         false
     }
 
-    #[cfg(test)]
-    pub(crate) fn inputs(
+    /// Returns all strictly decoded association inputs.
+    pub fn inputs(
         &self,
     ) -> Result<SemanticToLlvmAssociationInputsV3, ProductionTargetLineageErrorV3> {
         Ok(SemanticToLlvmAssociationInputsV3 {
@@ -1039,7 +1039,6 @@ impl SemanticToLlvmAssociationTranscriptV3 {
         })
     }
 
-    #[cfg(test)]
     fn identity_field(
         &self,
         index: usize,
@@ -1051,12 +1050,13 @@ impl SemanticToLlvmAssociationTranscriptV3 {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
-pub(crate) enum ProductionTargetLineageErrorV3 {
+/// Failure while constructing or strictly decoding production target lineage.
+#[allow(missing_docs)]
+pub enum ProductionTargetLineageErrorV3 {
     AllocationFailed,
     AssociationInvariant {
         detail: &'static str,
     },
-    #[cfg(test)]
     DeclaredLengthMismatch {
         declared: usize,
         actual: usize,
@@ -1081,19 +1081,15 @@ pub(crate) enum ProductionTargetLineageErrorV3 {
         field: &'static str,
         observed: u64,
     },
-    #[cfg(test)]
     InvalidMagic,
     InvalidText {
         field: &'static str,
     },
     LengthOverflow,
-    #[cfg(test)]
     NonZeroFieldFlags {
         field: &'static str,
     },
-    #[cfg(test)]
     NonZeroReserved,
-    #[cfg(test)]
     TrailingBytes {
         trailing: usize,
     },
@@ -1101,9 +1097,7 @@ pub(crate) enum ProductionTargetLineageErrorV3 {
         actual: usize,
         max: usize,
     },
-    #[cfg(test)]
     Truncated,
-    #[cfg(test)]
     UnsupportedVersion {
         observed: u16,
     },
@@ -1118,18 +1112,15 @@ pub(crate) enum ProductionTargetLineageErrorV3 {
         expected: usize,
         observed: usize,
     },
-    #[cfg(test)]
     WrongFieldTag {
         field: &'static str,
         expected: u16,
         observed: u16,
     },
-    #[cfg(test)]
     WrongPolicy {
         expected: u16,
         observed: u16,
     },
-    #[cfg(test)]
     WrongRecordKind {
         expected: u16,
         observed: u16,
@@ -1149,7 +1140,6 @@ impl fmt::Display for ProductionTargetLineageErrorV3 {
             Self::AssociationInvariant { detail } => {
                 write!(formatter, "target lineage association failed: {detail}")
             }
-            #[cfg(test)]
             Self::DeclaredLengthMismatch { declared, actual } => write!(
                 formatter,
                 "target lineage declared {declared} bytes but received {actual}"
@@ -1179,21 +1169,17 @@ impl fmt::Display for ProductionTargetLineageErrorV3 {
                     "target lineage {field} has invalid value {observed}"
                 )
             }
-            #[cfg(test)]
             Self::InvalidMagic => formatter.write_str("invalid target lineage magic"),
             Self::InvalidText { field } => {
                 write!(formatter, "target lineage {field} is not canonical text")
             }
             Self::LengthOverflow => formatter.write_str("target lineage length overflow"),
-            #[cfg(test)]
             Self::NonZeroFieldFlags { field } => {
                 write!(formatter, "target lineage {field} has nonzero field flags")
             }
-            #[cfg(test)]
             Self::NonZeroReserved => {
                 formatter.write_str("target lineage header has nonzero reserved bytes")
             }
-            #[cfg(test)]
             Self::TrailingBytes { trailing } => {
                 write!(formatter, "target lineage has {trailing} trailing bytes")
             }
@@ -1201,9 +1187,7 @@ impl fmt::Display for ProductionTargetLineageErrorV3 {
                 formatter,
                 "target lineage transcript has {actual} bytes; maximum is {max}"
             ),
-            #[cfg(test)]
             Self::Truncated => formatter.write_str("truncated target lineage transcript"),
-            #[cfg(test)]
             Self::UnsupportedVersion { observed } => {
                 write!(formatter, "unsupported target lineage version {observed}")
             }
@@ -1222,7 +1206,6 @@ impl fmt::Display for ProductionTargetLineageErrorV3 {
                 formatter,
                 "{record} has {observed} fields; expected {expected}"
             ),
-            #[cfg(test)]
             Self::WrongFieldTag {
                 field,
                 expected,
@@ -1231,12 +1214,10 @@ impl fmt::Display for ProductionTargetLineageErrorV3 {
                 formatter,
                 "target lineage {field} has tag {observed}; expected {expected}"
             ),
-            #[cfg(test)]
             Self::WrongPolicy { expected, observed } => write!(
                 formatter,
                 "target lineage policy {observed} is unsupported; expected {expected}"
             ),
-            #[cfg(test)]
             Self::WrongRecordKind { expected, observed } => write!(
                 formatter,
                 "target lineage kind {observed} does not match expected kind {expected}"
@@ -1259,8 +1240,8 @@ mod tests {
 
     type DecoderV3 = fn(&[u8]) -> bool;
 
-    const DATA_LAYOUT: &str = crate::production_target_v1::PRODUCTION_RUSTC_DATA_LAYOUT_V1;
-    const WORKER_DATA_LAYOUT: &str = crate::production_target_v1::PRODUCTION_WORKER_DATA_LAYOUT_V1;
+    const DATA_LAYOUT: &str = PRODUCTION_AMDHSA_LLVM_DATA_LAYOUT_V1;
+    const WORKER_DATA_LAYOUT: &str = PRODUCTION_AMDHSA_LLVM_DATA_LAYOUT_V1;
 
     fn identity(seed: u8) -> TargetLineageIdentityV3 {
         TargetLineageIdentityV3::new([seed; 32], u64::from(seed) + 1).unwrap()

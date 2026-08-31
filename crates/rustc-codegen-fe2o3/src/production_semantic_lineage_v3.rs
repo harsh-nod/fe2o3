@@ -9,16 +9,19 @@ use fe2o3_compiler_ffi::{
     InertSemanticCompilerModuleHandoffErrorV3, InertSemanticCompilerModuleHandoffV3,
 };
 use fe2o3_compiler_lineage::{
-    InertAbiReceiptV3, InertAmdgpuLoweringReceiptV3, InertCanonicalSemanticMirReceiptV3,
-    InertDataLayoutReceiptV3, InertExportManifestReceiptV3,
-    InertFinalCompilerModuleCommitmentReceiptV3, InertFormalMemoryReceiptV3,
-    InertKernelIrReceiptV3, InertLineageContentIdentityV3, InertMiddleEndReceiptV3,
-    InertMirToKirCorrespondenceReceiptV3, InertProductionSemanticCapsuleV3,
-    InertProofBindingAssociationErrorV3, InertProofBindingAssociationErrorV4,
-    InertProofBindingAssociationInputsV4, InertProofBindingAssociationV4,
-    InertProofBindingReceiptV3, InertRustcIdentityInventoryReceiptV3,
-    InertRustcPreflightPlanReceiptV3, InertSemanticToLlvmReceiptV3, InertTargetBindingReceiptV3,
-    LineageErrorV3, OrderedInertSemanticLineageReceiptsV3,
+    DataLayoutTranscriptInputsV3, DataLayoutTranscriptV3, InertAbiReceiptV3,
+    InertAmdgpuLoweringReceiptV3, InertCanonicalSemanticMirReceiptV3, InertDataLayoutReceiptV3,
+    InertExportManifestReceiptV3, InertFinalCompilerModuleCommitmentReceiptV3,
+    InertFormalMemoryReceiptV3, InertKernelIrReceiptV3, InertLineageContentIdentityV3,
+    InertMiddleEndReceiptV3, InertMirToKirCorrespondenceReceiptV3,
+    InertProductionSemanticCapsuleV3, InertProofBindingAssociationErrorV3,
+    InertProofBindingAssociationErrorV4, InertProofBindingAssociationInputsV4,
+    InertProofBindingAssociationV4, InertProofBindingReceiptV3,
+    InertRustcIdentityInventoryReceiptV3, InertRustcPreflightPlanReceiptV3,
+    InertSemanticToLlvmReceiptV3, InertTargetBindingReceiptV3, LineageErrorV3,
+    OrderedInertSemanticLineageReceiptsV3, ProductionTargetLineageErrorV3,
+    SemanticToLlvmAssociationInputsV3, SemanticToLlvmAssociationTranscriptV3,
+    TargetBindingTranscriptInputsV3, TargetBindingTranscriptV3, TargetLineageIdentityV3,
 };
 use fe2o3_kernel_descriptor::KernelId as DescriptorKernelId;
 use fe2o3_kernel_ir::{
@@ -42,11 +45,6 @@ use fe2o3_verifier::{
 use sha2::{Digest, Sha256};
 
 use crate::production_ranked_projection_v1::AuthenticatedRankedVerificationRosterV1;
-use crate::production_target_lineage_v3::{
-    DataLayoutTranscriptInputsV3, DataLayoutTranscriptV3, ProductionTargetLineageErrorV3,
-    SemanticToLlvmAssociationInputsV3, SemanticToLlvmAssociationTranscriptV3,
-    TargetBindingTranscriptInputsV3, TargetBindingTranscriptV3, TargetLineageIdentityV3,
-};
 use crate::production_target_v1::PRODUCTION_WORKER_DATA_LAYOUT_V1;
 use crate::protected_rustc_invocation::{
     FinishedProtectedRustcInvocationV3, ProtectedRustcInvocationErrorV1,
