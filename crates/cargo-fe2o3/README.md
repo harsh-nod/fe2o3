@@ -503,10 +503,11 @@ out of scope and require a separate identity-bound broker design.
 ## Inspection and tool plans
 
 `cargo fe2o3 inspect` performs bounded, read-only decoding of fe2o3 v1
-manifests, artifact containers, bundle indexes, and AMDGPU HSACO metadata. Its
-output is descriptive only: inspection neither loads code nor grants launch
-authority. Auto-detection uses validated wire magic, and `--format` can require
-one exact decoder.
+manifests, artifact containers, bundle indexes, AMDGPU HSACO metadata, and
+Source/ISA observation collections. Its output is descriptive only: inspection
+neither loads code nor grants compiler, proof, artifact, launch, runtime, or
+hardware-observation authority. Auto-detection uses validated wire magic, and
+`--format` can require one exact decoder.
 
 Without `--execute`, `cargo fe2o3 sanitize -- <program>` and
 `cargo fe2o3 debug -- <program>` print normalized ROCgdb invocation plans.

@@ -458,6 +458,50 @@ pub(crate) enum SourceIsaObservationUnavailableReasonV1 {
 }
 
 impl SourceIsaObservationUnavailableReasonV1 {
+    pub(crate) const fn label(self) -> &'static str {
+        match self {
+            Self::CarrierMultipleKirFunctionBodies => "carrier-multiple-kir-function-bodies",
+            Self::CarrierNoStatementCorrespondence => "carrier-no-statement-correspondence",
+            Self::CarrierSourceMapUnavailable => "carrier-source-map-unavailable",
+            Self::CarrierResourceLimit => "carrier-resource-limit",
+            Self::CarrierCanonicalKirV7ProjectionUnavailable => {
+                "carrier-canonical-kir-v7-projection-unavailable"
+            }
+            Self::CarrierSourceObservationUnrepresentable => {
+                "carrier-source-observation-unrepresentable"
+            }
+            Self::CarrierSemanticMapConstructionUnavailable => {
+                "carrier-semantic-map-construction-unavailable"
+            }
+            Self::CarrierSemanticMapEncodingUnavailable => {
+                "carrier-semantic-map-encoding-unavailable"
+            }
+            Self::CarrierFragmentConstructionUnavailable => {
+                "carrier-fragment-construction-unavailable"
+            }
+            Self::CarrierConstructionUnavailable => "carrier-construction-unavailable",
+            Self::CarrierReceiptExtensionConstructionUnavailable => {
+                "carrier-receipt-extension-construction-unavailable"
+            }
+            Self::CarrierCorrespondenceValidationUnavailable => {
+                "carrier-correspondence-validation-unavailable"
+            }
+            Self::CarrierCanonicalKirModuleMismatch => "carrier-canonical-kir-module-mismatch",
+            Self::CarrierLegacyBareAssociationNoAttachment => {
+                "carrier-legacy-bare-association-no-attachment"
+            }
+            Self::AnchorLegacySemanticAttachment => "anchor-legacy-semantic-attachment",
+            Self::AnchorLegacyUninstrumentedReplay => "anchor-legacy-uninstrumented-replay",
+            Self::AnchorNoOperations => "anchor-no-operations",
+            Self::AnchorMultipleDefinedBodies => "anchor-multiple-defined-bodies",
+            Self::AnchorCompilerInstrumentationAbsent => "anchor-compiler-instrumentation-absent",
+            Self::SourceProjectionForKirV9 => "source-projection-for-kir-v9",
+            Self::FinalizedEvidenceUnavailableFromReadyState => {
+                "finalized-evidence-unavailable-from-ready-state"
+            }
+        }
+    }
+
     fn decode(value: u16) -> Result<Self, SourceIsaObservationFrameErrorV1> {
         match value {
             1 => Ok(Self::CarrierMultipleKirFunctionBodies),
@@ -572,6 +616,129 @@ pub(crate) enum SourceIsaObservationErrorCodeV1 {
 }
 
 impl SourceIsaObservationErrorCodeV1 {
+    pub(crate) const fn label(self) -> &'static str {
+        match self {
+            Self::InvalidKirToLlvmReplay => "invalid-kir-to-llvm-replay",
+            Self::NonExactSemanticMap => "non-exact-semantic-map",
+            Self::ArtifactIdentityMismatch => "artifact-identity-mismatch",
+            Self::TargetKirIdentityMismatch => "target-kir-identity-mismatch",
+            Self::CoordinateShapeMismatch => "coordinate-shape-mismatch",
+            Self::InvalidSourceGraph => "invalid-source-graph",
+            Self::ResourceLimit => "resource-limit",
+            Self::AllocationFailure => "allocation-failure",
+            Self::FinalizedMapProductionAssociation => "finalized-map-production-association",
+            Self::FinalizedMapProductionAssociationMismatch => {
+                "finalized-map-production-association-mismatch"
+            }
+            Self::FinalizedMapInvalidKirToLlvmReplay => "finalized-map-invalid-kir-to-llvm-replay",
+            Self::FinalizedMapKirToLlvmReplayTargetMismatch => {
+                "finalized-map-kir-to-llvm-replay-target-mismatch"
+            }
+            Self::FinalizedMapInvalidLlvmToHsacoCustody => {
+                "finalized-map-invalid-llvm-to-hsaco-custody"
+            }
+            Self::FinalizedMapInvalidBoundSourceMap => "finalized-map-invalid-bound-source-map",
+            Self::FinalizedMapInvalidBoundSemanticMir => "finalized-map-invalid-bound-semantic-mir",
+            Self::FinalizedMapInvalidBoundCorrespondenceV4 => {
+                "finalized-map-invalid-bound-correspondence-v4"
+            }
+            Self::FinalizedMapInvalidBoundCanonicalKirV8 => {
+                "finalized-map-invalid-bound-canonical-kir-v8"
+            }
+            Self::FinalizedMapInvalidBoundCanonicalKirV7 => {
+                "finalized-map-invalid-bound-canonical-kir-v7"
+            }
+            Self::FinalizedMapCanonicalKirProjectionMismatch => {
+                "finalized-map-canonical-kir-projection-mismatch"
+            }
+            Self::FinalizedMapCorrespondenceIdentityMismatch => {
+                "finalized-map-correspondence-identity-mismatch"
+            }
+            Self::FinalizedMapInvalidSemanticCorrespondence => {
+                "finalized-map-invalid-semantic-correspondence"
+            }
+            Self::FinalizedMapArtifactInspection => "finalized-map-artifact-inspection",
+            Self::FinalizedMapAllocationFailure => "finalized-map-allocation-failure",
+            Self::SemanticMapInvalidLength => "semantic-map-invalid-length",
+            Self::SemanticMapInvalidJson => "semantic-map-invalid-json",
+            Self::SemanticMapNonCanonicalEncoding => "semantic-map-noncanonical-encoding",
+            Self::SemanticMapEncoding => "semantic-map-encoding",
+            Self::SemanticMapInvalidBinding => "semantic-map-invalid-binding",
+            Self::SemanticMapInvalidKernelOrdinalBasis => {
+                "semantic-map-invalid-kernel-ordinal-basis"
+            }
+            Self::SemanticMapInvalidNode => "semantic-map-invalid-node",
+            Self::SemanticMapInvalidMapping => "semantic-map-invalid-mapping",
+            Self::SemanticMapDuplicateNode => "semantic-map-duplicate-node",
+            Self::SemanticMapDuplicateMapping => "semantic-map-duplicate-mapping",
+            Self::SemanticMapDuplicateReference => "semantic-map-duplicate-reference",
+            Self::SemanticMapUnknownNode => "semantic-map-unknown-node",
+            Self::SemanticMapLayerMismatch => "semantic-map-layer-mismatch",
+            Self::SemanticMapContradictoryMapping => "semantic-map-contradictory-mapping",
+            Self::SemanticMapOrphanNode => "semantic-map-orphan-node",
+            Self::SemanticMapInvalidBoundary => "semantic-map-invalid-boundary",
+            Self::SemanticMapUntypedBoundary => "semantic-map-untyped-boundary",
+            Self::SemanticMapResourceLimit => "semantic-map-resource-limit",
+            Self::SemanticMapAllocationFailure => "semantic-map-allocation-failure",
+            Self::SemanticMapContentBindingMismatch => "semantic-map-content-binding-mismatch",
+            Self::SemanticMapArtifactBindingMismatch => "semantic-map-artifact-binding-mismatch",
+            Self::SemanticMapInvalidBoundSourceMap => "semantic-map-invalid-bound-source-map",
+            Self::SemanticMapInvalidBoundCanonicalKir => "semantic-map-invalid-bound-canonical-kir",
+            Self::SemanticMapSourceMapKirBindingMismatch => {
+                "semantic-map-source-map-kir-binding-mismatch"
+            }
+            Self::SemanticMapInvalidSourceLocation => "semantic-map-invalid-source-location",
+            Self::SemanticMapInvalidMirLocation => "semantic-map-invalid-mir-location",
+            Self::SemanticMapInvalidKirLocation => "semantic-map-invalid-kir-location",
+            Self::SemanticMapInvalidIsaInterval => "semantic-map-invalid-isa-interval",
+            Self::ProductionFragmentInvalidEncoding => "production-fragment-invalid-encoding",
+            Self::ProductionFragmentInvalidAssociation => "production-fragment-invalid-association",
+            Self::ProductionFragmentInvalidGap => "production-fragment-invalid-gap",
+            Self::ProductionFragmentInvalidScheduleStatus => {
+                "production-fragment-invalid-schedule-status"
+            }
+            Self::ProductionFragmentInvalidSourceMap => "production-fragment-invalid-source-map",
+            Self::ProductionFragmentInvalidCanonicalKir => {
+                "production-fragment-invalid-canonical-kir"
+            }
+            Self::ProductionFragmentInvalidSemanticMap => {
+                "production-fragment-invalid-semantic-map"
+            }
+            Self::ProductionFragmentAxisMismatch => "production-fragment-axis-mismatch",
+            Self::ProductionFragmentResourceLimit => "production-fragment-resource-limit",
+            Self::ProductionFragmentAllocationFailure => "production-fragment-allocation-failure",
+            Self::SemanticAnchorInvalidCompilerAttachment => {
+                "semantic-anchor-invalid-compiler-attachment"
+            }
+            Self::SemanticAnchorInvalidProductionAssociation => {
+                "semantic-anchor-invalid-production-association"
+            }
+            Self::SemanticAnchorInvalidKirToLlvmReplay => {
+                "semantic-anchor-invalid-kir-to-llvm-replay"
+            }
+            Self::SemanticAnchorTargetMismatch => "semantic-anchor-target-mismatch",
+            Self::SemanticAnchorInvalidLlvm => "semantic-anchor-invalid-llvm",
+            Self::SemanticAnchorContradictoryLlvm => "semantic-anchor-contradictory-llvm",
+            Self::SemanticAnchorBindingMismatch => "semantic-anchor-binding-mismatch",
+            Self::SemanticAnchorKirCoordinateMismatch => "semantic-anchor-kir-coordinate-mismatch",
+            Self::SemanticAnchorKirToLlvmAnchorMismatch => {
+                "semantic-anchor-kir-to-llvm-anchor-mismatch"
+            }
+            Self::SemanticAnchorInvalidArtifact => "semantic-anchor-invalid-artifact",
+            Self::SemanticAnchorMissingProbeSection => "semantic-anchor-missing-probe-section",
+            Self::SemanticAnchorAmbiguousProbeSection => "semantic-anchor-ambiguous-probe-section",
+            Self::SemanticAnchorInvalidProbeEncoding => "semantic-anchor-invalid-probe-encoding",
+            Self::SemanticAnchorProbeDescriptorMismatch => {
+                "semantic-anchor-probe-descriptor-mismatch"
+            }
+            Self::SemanticAnchorAmbiguousEntrySymbol => "semantic-anchor-ambiguous-entry-symbol",
+            Self::SemanticAnchorUnexpectedProbe => "semantic-anchor-unexpected-probe",
+            Self::SemanticAnchorProbeOutsideKernel => "semantic-anchor-probe-outside-kernel",
+            Self::SemanticAnchorResourceLimit => "semantic-anchor-resource-limit",
+            Self::SemanticAnchorAllocationFailure => "semantic-anchor-allocation-failure",
+        }
+    }
+
     fn decode(value: u16) -> Result<Self, SourceIsaObservationFrameErrorV1> {
         match value {
             3 => Ok(Self::InvalidKirToLlvmReplay),

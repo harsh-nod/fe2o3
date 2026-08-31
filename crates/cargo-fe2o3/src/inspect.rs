@@ -9,8 +9,14 @@ use fe2o3_artifacts::{
     MAX_CONTAINER_BYTES, ManifestV1, PointerWidth, TargetIdentity,
 };
 
-const USAGE: &str =
-    "usage: cargo fe2o3 inspect [--format auto|container|manifest|bundle|hsaco] <path>";
+use crate::capability_broker::SourceIsaObservationCollectionV1;
+use crate::source_isa_observation::{
+    AdmittedSourceIsaObservationV1, SourceIsaObservationErrorCodeV1,
+    SourceIsaObservationKirVersionV1, SourceIsaObservationOutcomeV1,
+    SourceIsaObservationTargetProfileV1, SourceIsaObservationUnavailableReasonV1,
+};
+
+const USAGE: &str = "usage: cargo fe2o3 inspect [--format auto|container|manifest|bundle|hsaco|source-isa-observation] <path>";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum InspectFormat {
@@ -19,6 +25,7 @@ enum InspectFormat {
     Manifest,
     Bundle,
     Hsaco,
+    SourceIsaObservation,
 }
 
 impl InspectFormat {
@@ -29,8 +36,9 @@ impl InspectFormat {
             "manifest" => Ok(Self::Manifest),
             "bundle" => Ok(Self::Bundle),
             "hsaco" => Ok(Self::Hsaco),
+            "source-isa-observation" => Ok(Self::SourceIsaObservation),
             _ => Err(format!(
-                "unknown inspect format `{value}`; expected auto, container, manifest, bundle, or hsaco"
+                "unknown inspect format `{value}`; expected auto, container, manifest, bundle, hsaco, or source-isa-observation"
             )),
         }
     }
@@ -140,6 +148,11 @@ fn inspect_bytes(format: InspectFormat, bytes: &[u8]) -> Result<String, String> 
         InspectFormat::Hsaco => fe2o3_hsaco::inspect(bytes)
             .map(|hsaco| render_hsaco(&hsaco))
             .map_err(|error| format!("invalid HSACO: {error}")),
+        InspectFormat::SourceIsaObservation => {
+            SourceIsaObservationCollectionV1::decode_canonical(bytes)
+                .map(|collection| render_source_isa_observation(&collection))
+                .map_err(|error| format!("invalid source/ISA observation collection: {error}"))
+        }
     }
 }
 
@@ -152,9 +165,223 @@ fn detect_format(bytes: &[u8]) -> Result<InspectFormat, String> {
         Ok(InspectFormat::Bundle)
     } else if bytes.starts_with(b"\x7fELF") {
         Ok(InspectFormat::Hsaco)
+    } else if bytes.starts_with(b"F2SICOL1") {
+        Ok(InspectFormat::SourceIsaObservation)
     } else {
         Err("unrecognized input magic; use --format only when the input is one of the supported bounded formats".to_string())
     }
+}
+
+fn render_source_isa_observation(collection: &SourceIsaObservationCollectionV1) -> String {
+    let mut output = String::new();
+    writeln!(output, "format: fe2o3-source-isa-observation-collection-v1")
+        .expect("write to String");
+    writeln!(output, "authority: observation-only").expect("write to String");
+    writeln!(output, "compiler-authority: false").expect("write to String");
+    writeln!(output, "proof-authority: false").expect("write to String");
+    writeln!(output, "artifact-authority: false").expect("write to String");
+    writeln!(output, "runtime-authority: false").expect("write to String");
+    writeln!(output, "hardware-execution-observed: false").expect("write to String");
+    writeln!(output, "complete-machine-coverage-proved: false").expect("write to String");
+    writeln!(output, "semantic-refinement-proved: false").expect("write to String");
+    writeln!(
+        output,
+        "configuration: {}",
+        hex_bytes(&collection.config_identity())
+    )
+    .expect("write to String");
+    writeln!(output, "session: {}", collection.session()).expect("write to String");
+    writeln!(output, "frames: {}", collection.frames().len()).expect("write to String");
+    writeln!(
+        output,
+        "missing-units: {}",
+        collection.missing_units().len()
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "transport-failure: {}",
+        collection.failure().map_or(0, |failure| failure.code())
+    )
+    .expect("write to String");
+
+    for (index, frame) in collection.frames().enumerate() {
+        let context = frame.context();
+        writeln!(
+            output,
+            "frame[{index}].identity: {}",
+            hex_bytes(&frame.identity())
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "frame[{index}].unit: {}",
+            hex_bytes(&context.unit())
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "frame[{index}].attempt: {}",
+            context.attempt().to_env_value()
+        )
+        .expect("write to String");
+        writeln!(
+            output,
+            "frame[{index}].finalization: {}",
+            hex_bytes(&context.finalization())
+        )
+        .expect("write to String");
+        match frame.outcome() {
+            SourceIsaObservationOutcomeV1::Admitted(admitted) => {
+                render_admitted_source_isa_observation(&mut output, index, admitted);
+            }
+            SourceIsaObservationOutcomeV1::Unavailable(reason) => {
+                writeln!(output, "frame[{index}].outcome: unavailable").expect("write to String");
+                writeln!(output, "frame[{index}].reason-code: {}", reason as u16)
+                    .expect("write to String");
+                writeln!(
+                    output,
+                    "frame[{index}].reason: {}",
+                    source_isa_unavailable_reason(reason)
+                )
+                .expect("write to String");
+            }
+            SourceIsaObservationOutcomeV1::Error(code) => {
+                writeln!(output, "frame[{index}].outcome: error").expect("write to String");
+                writeln!(output, "frame[{index}].error-code: {}", code as u16)
+                    .expect("write to String");
+                writeln!(output, "frame[{index}].error: {}", source_isa_error(code))
+                    .expect("write to String");
+            }
+        }
+    }
+    for (index, unit) in collection.missing_units().iter().enumerate() {
+        writeln!(output, "missing-unit[{index}]: {}", hex_bytes(unit)).expect("write to String");
+    }
+    trim_final_newline(output)
+}
+
+fn render_admitted_source_isa_observation(
+    output: &mut String,
+    index: usize,
+    admitted: AdmittedSourceIsaObservationV1,
+) {
+    let artifact = admitted.artifact();
+    let structural = admitted.structural();
+    let structural_counts = structural.counts();
+    let records = admitted.counts().records();
+    let queries = admitted.counts().queries();
+    writeln!(output, "frame[{index}].outcome: admitted").expect("write to String");
+    writeln!(
+        output,
+        "frame[{index}].correlation: {}",
+        hex_bytes(&admitted.correlation())
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "frame[{index}].artifact: sha256={} bytes={}",
+        hex_bytes(&artifact.sha256()),
+        artifact.byte_len()
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "frame[{index}].target: {}",
+        source_isa_target(structural.target_profile())
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "frame[{index}].kir-version: {}",
+        source_isa_kir_version(structural.kir_version())
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "frame[{index}].structural: identity={} functions={} defined-bodies={} blocks={} operations={} neutral-kir-sha256={} neutral-kir-bytes={} target-kir-sha256={} target-kir-bytes={}",
+        hex_bytes(&structural.identity()),
+        structural_counts.functions,
+        structural_counts.defined_bodies,
+        structural_counts.blocks,
+        structural_counts.operations,
+        hex_bytes(&structural.neutral_kir().sha256()),
+        structural.neutral_kir().byte_len(),
+        hex_bytes(&structural.target_kir().sha256()),
+        structural.target_kir().byte_len(),
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "frame[{index}].records: total={} source-anchored={} eliminated={} no-source={} source-anchored-without-isa={} isa-references={}",
+        records.records,
+        records.source_anchored,
+        records.eliminated,
+        records.no_source,
+        records.source_anchored_without_isa,
+        records.isa_references,
+    )
+    .expect("write to String");
+    writeln!(
+        output,
+        "frame[{index}].queries: source-nodes={} source-spans={} isa-points={} max-source-node-cardinality={} max-source-span-cardinality={} max-exact-pc-cardinality={}",
+        queries.distinct_source_nodes,
+        queries.distinct_source_spans,
+        queries.distinct_isa_points,
+        queries.max_source_node_cardinality,
+        queries.max_source_span_cardinality,
+        queries.max_exact_pc_cardinality,
+    )
+    .expect("write to String");
+    match admitted.round_trip_witness() {
+        Some(witness) => {
+            let span = witness.source_span();
+            let isa = witness.isa_point();
+            writeln!(
+                output,
+                "frame[{index}].round-trip: source-node={} file={} byte-start={} byte-end={} line={} column={} kernel-ordinal={} symbol-relative-pc={} source-node-matches={} source-span-matches={} isa-point-matches={}",
+                hex_bytes(&witness.source_node_identity()),
+                hex_bytes(&span.file_identity()),
+                span.byte_start(),
+                span.byte_end(),
+                span.line(),
+                span.column(),
+                isa.kernel_ordinal(),
+                isa.symbol_relative_pc(),
+                witness.source_node_query_matches(),
+                witness.source_span_query_matches(),
+                witness.isa_point_query_matches(),
+            )
+            .expect("write to String");
+        }
+        None => {
+            writeln!(output, "frame[{index}].round-trip: unavailable").expect("write to String");
+        }
+    }
+}
+
+const fn source_isa_target(target: SourceIsaObservationTargetProfileV1) -> &'static str {
+    match target {
+        SourceIsaObservationTargetProfileV1::Gfx942 => "gfx942:xnack-",
+        SourceIsaObservationTargetProfileV1::Gfx950 => "gfx950:xnack-",
+    }
+}
+
+const fn source_isa_kir_version(version: SourceIsaObservationKirVersionV1) -> u16 {
+    match version {
+        SourceIsaObservationKirVersionV1::V8 => 8,
+        SourceIsaObservationKirVersionV1::V9 => 9,
+    }
+}
+
+const fn source_isa_unavailable_reason(
+    reason: SourceIsaObservationUnavailableReasonV1,
+) -> &'static str {
+    reason.label()
+}
+
+const fn source_isa_error(code: SourceIsaObservationErrorCodeV1) -> &'static str {
+    code.label()
 }
 
 fn render_container(container: &ArtifactContainerV1) -> String {
@@ -381,9 +608,13 @@ const fn capability_name(value: Capability) -> &'static str {
 }
 
 fn hex(value: DigestBytes) -> String {
+    hex_bytes(value.as_bytes())
+}
+
+fn hex_bytes(value: &[u8]) -> String {
     const DIGITS: &[u8; 16] = b"0123456789abcdef";
-    let mut output = String::with_capacity(64);
-    for byte in value.as_bytes() {
+    let mut output = String::with_capacity(value.len().saturating_mul(2));
+    for byte in value {
         output.push(char::from(DIGITS[usize::from(byte >> 4)]));
         output.push(char::from(DIGITS[usize::from(byte & 0x0f)]));
     }
@@ -400,8 +631,140 @@ fn trim_final_newline(mut output: String) -> String {
 #[cfg(test)]
 mod tests {
     use super::{InspectFormat, Options, detect_format, inspect_bytes, parse_options};
+    use crate::source_isa_observation::{
+        AdmittedSourceIsaObservationV1, SourceIsaObservationContentIdentityV1,
+        SourceIsaObservationContextV1, SourceIsaObservationCountsV1,
+        SourceIsaObservationErrorCodeV1, SourceIsaObservationFrameV1,
+        SourceIsaObservationIsaPointV1, SourceIsaObservationKirVersionV1,
+        SourceIsaObservationOutcomeV1, SourceIsaObservationQueryCountsV1,
+        SourceIsaObservationRecordCountsV1, SourceIsaObservationRoundTripWitnessV1,
+        SourceIsaObservationSourceSpanV1, SourceIsaObservationStructuralBindingV1,
+        SourceIsaObservationStructuralCountsV1, SourceIsaObservationTargetProfileV1,
+        SourceIsaObservationUnavailableReasonV1,
+    };
+    use fe2o3_artifact_transaction::{BuildAttempt, BuildInvocation, BuildSession};
     use fe2o3_artifacts::{BUNDLE_INDEX_MAGIC, CONTAINER_MAGIC, MANIFEST_MAGIC};
+    use sha2::{Digest, Sha256};
     use std::path::PathBuf;
+
+    const CONFIG: [u8; 32] = [0x11; 32];
+    const SESSION: [u8; 16] = [0x12; 16];
+
+    fn attempt(generation: u64, invocation: u8) -> BuildAttempt {
+        BuildAttempt::from_env_value(&format!(
+            "{generation}:{}:{}",
+            BuildSession::from_bytes(SESSION),
+            BuildInvocation::from_bytes([invocation; 32])
+        ))
+        .expect("valid observer test attempt")
+    }
+
+    fn admitted_frame(
+        unit: u8,
+        target: SourceIsaObservationTargetProfileV1,
+        operations: u64,
+    ) -> SourceIsaObservationFrameV1 {
+        let content = |byte, length| {
+            SourceIsaObservationContentIdentityV1::new([byte; 32], length)
+                .expect("valid observer content identity")
+        };
+        let structural = SourceIsaObservationStructuralBindingV1::new(
+            [unit.wrapping_add(0x20); 32],
+            target,
+            SourceIsaObservationKirVersionV1::V8,
+            content(unit.wrapping_add(0x30), 100 + operations),
+            content(unit.wrapping_add(0x40), 200 + operations),
+            SourceIsaObservationStructuralCountsV1 {
+                functions: 1,
+                defined_bodies: 1,
+                blocks: operations,
+                operations,
+            },
+        )
+        .expect("valid observer structural binding");
+        let counts = SourceIsaObservationCountsV1::new(
+            SourceIsaObservationRecordCountsV1 {
+                records: operations,
+                source_anchored: operations,
+                eliminated: 0,
+                no_source: 0,
+                source_anchored_without_isa: 0,
+                isa_references: operations,
+            },
+            SourceIsaObservationQueryCountsV1 {
+                distinct_source_nodes: operations,
+                distinct_source_spans: operations,
+                distinct_isa_points: operations,
+                max_source_node_cardinality: 1,
+                max_source_span_cardinality: 1,
+                max_exact_pc_cardinality: 1,
+            },
+        )
+        .expect("valid observer counts");
+        let witness = SourceIsaObservationRoundTripWitnessV1::new(
+            [unit.wrapping_add(0x50); 32],
+            SourceIsaObservationSourceSpanV1::new([unit.wrapping_add(0x60); 32], 10, 14, 2, 3)
+                .expect("valid observer source span"),
+            SourceIsaObservationIsaPointV1::new(0, 16).expect("valid observer ISA point"),
+            1,
+            1,
+            1,
+        )
+        .expect("valid observer round trip");
+        let admitted = AdmittedSourceIsaObservationV1::new(
+            [unit.wrapping_add(0x10); 32],
+            content(unit.wrapping_add(0x70), 4096 + operations),
+            structural,
+            counts,
+            Some(witness),
+        )
+        .expect("valid admitted observer result");
+        observer_frame(unit, SourceIsaObservationOutcomeV1::Admitted(admitted))
+    }
+
+    fn observer_frame(
+        unit: u8,
+        outcome: SourceIsaObservationOutcomeV1,
+    ) -> SourceIsaObservationFrameV1 {
+        SourceIsaObservationFrameV1::new(
+            SourceIsaObservationContextV1::new(
+                CONFIG,
+                [unit; 32],
+                attempt(u64::from(unit), unit.wrapping_add(1)),
+                [unit.wrapping_add(2); 32],
+            )
+            .expect("valid observer context"),
+            outcome,
+        )
+    }
+
+    fn collection(frames: &[SourceIsaObservationFrameV1]) -> Vec<u8> {
+        const HEADER_BYTES: usize = 80;
+        const IDENTITY_BYTES: usize = 32;
+        const DOMAIN: &[u8] = b"FE2O3/SOURCE-ISA-OBSERVATION-COLLECTION/V1\0";
+        let total = HEADER_BYTES + frames.len() * 680 + IDENTITY_BYTES;
+        let mut bytes = Vec::with_capacity(total);
+        bytes.extend_from_slice(b"F2SICOL1");
+        bytes.extend_from_slice(&1_u16.to_le_bytes());
+        bytes.extend_from_slice(&(HEADER_BYTES as u16).to_le_bytes());
+        bytes.extend_from_slice(&(total as u32).to_le_bytes());
+        bytes.extend_from_slice(&(frames.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&0_u32.to_le_bytes());
+        bytes.extend_from_slice(&0_u16.to_le_bytes());
+        bytes.extend_from_slice(&0_u16.to_le_bytes());
+        bytes.extend_from_slice(&0_u32.to_le_bytes());
+        bytes.extend_from_slice(&CONFIG);
+        bytes.extend_from_slice(&SESSION);
+        for frame in frames {
+            bytes.extend_from_slice(&frame.encode());
+        }
+        let mut digest = Sha256::new();
+        digest.update(DOMAIN);
+        digest.update(&bytes);
+        bytes.extend_from_slice(&digest.finalize());
+        assert_eq!(bytes.len(), total);
+        bytes
+    }
 
     #[test]
     fn parses_strict_inspect_options() {
@@ -410,6 +773,16 @@ mod tests {
             Ok(Options {
                 format: InspectFormat::Manifest,
                 path: PathBuf::from("artifact.bin"),
+            })
+        );
+        assert_eq!(
+            parse_options(&[
+                "--format=source-isa-observation".into(),
+                "observations.bin".into(),
+            ]),
+            Ok(Options {
+                format: InspectFormat::SourceIsaObservation,
+                path: PathBuf::from("observations.bin"),
             })
         );
         assert_eq!(
@@ -451,7 +824,125 @@ mod tests {
             Ok(InspectFormat::Bundle)
         );
         assert_eq!(detect_format(b"\x7fELF"), Ok(InspectFormat::Hsaco));
+        assert_eq!(
+            detect_format(b"F2SICOL1"),
+            Ok(InspectFormat::SourceIsaObservation)
+        );
         assert!(detect_format(b"unknown").is_err());
+    }
+
+    #[test]
+    fn source_isa_observer_matrix_preserves_targets_structures_and_non_authority() {
+        let frames = [
+            admitted_frame(0x10, SourceIsaObservationTargetProfileV1::Gfx942, 4),
+            admitted_frame(0x11, SourceIsaObservationTargetProfileV1::Gfx950, 4),
+            admitted_frame(0x20, SourceIsaObservationTargetProfileV1::Gfx942, 16),
+            admitted_frame(0x21, SourceIsaObservationTargetProfileV1::Gfx950, 16),
+            admitted_frame(0x30, SourceIsaObservationTargetProfileV1::Gfx942, 64),
+            admitted_frame(0x31, SourceIsaObservationTargetProfileV1::Gfx950, 64),
+        ];
+        let bytes = collection(&frames);
+        let output = inspect_bytes(InspectFormat::Auto, &bytes).expect("inspect observer matrix");
+        for required in [
+            "format: fe2o3-source-isa-observation-collection-v1",
+            "authority: observation-only",
+            "compiler-authority: false",
+            "proof-authority: false",
+            "artifact-authority: false",
+            "runtime-authority: false",
+            "hardware-execution-observed: false",
+            "complete-machine-coverage-proved: false",
+            "semantic-refinement-proved: false",
+            "frames: 6",
+            "frame[0].target: gfx942:xnack-",
+            "frame[1].target: gfx950:xnack-",
+            "frame[2].structural:",
+            "operations=16",
+            "frame[4].structural:",
+            "operations=64",
+            "frame[5].round-trip:",
+        ] {
+            assert!(
+                output.contains(required),
+                "observer matrix omitted {required:?}:\n{output}"
+            );
+        }
+        assert_eq!(output.matches(".outcome: admitted").count(), 6);
+        assert_eq!(output.matches("target: gfx942:xnack-").count(), 3);
+        assert_eq!(output.matches("target: gfx950:xnack-").count(), 3);
+    }
+
+    #[test]
+    fn source_isa_inspection_preserves_missing_extension_as_unavailable() {
+        let frame = observer_frame(
+            0x40,
+            SourceIsaObservationOutcomeV1::Unavailable(
+                SourceIsaObservationUnavailableReasonV1::CarrierReceiptExtensionConstructionUnavailable,
+            ),
+        );
+        let output = inspect_bytes(InspectFormat::SourceIsaObservation, &collection(&[frame]))
+            .expect("inspect unavailable observer result");
+        assert!(output.contains("frame[0].outcome: unavailable"));
+        assert!(output.contains("frame[0].reason-code: 11"));
+        assert!(
+            output.contains("frame[0].reason: carrier-receipt-extension-construction-unavailable")
+        );
+        assert!(!output.contains("frame[0].target:"));
+        assert!(!output.contains("frame[0].round-trip:"));
+    }
+
+    #[test]
+    fn source_isa_inspection_preserves_typed_error_without_admitted_payload() {
+        let frame = observer_frame(
+            0x41,
+            SourceIsaObservationOutcomeV1::Error(
+                SourceIsaObservationErrorCodeV1::SemanticAnchorInvalidArtifact,
+            ),
+        );
+        let output = inspect_bytes(InspectFormat::SourceIsaObservation, &collection(&[frame]))
+            .expect("inspect observer error result");
+        assert!(output.contains("frame[0].outcome: error"));
+        assert!(output.contains("frame[0].error-code: 8202"));
+        assert!(output.contains("frame[0].error: semantic-anchor-invalid-artifact"));
+        assert!(!output.contains("frame[0].target:"));
+        assert!(!output.contains("frame[0].round-trip:"));
+    }
+
+    #[test]
+    fn source_isa_inspection_rejects_corruption_and_trailing_bytes() {
+        let exact = collection(&[admitted_frame(
+            0x10,
+            SourceIsaObservationTargetProfileV1::Gfx942,
+            4,
+        )]);
+        let mut corrupted = exact.clone();
+        let last = corrupted.len() - 1;
+        corrupted[last] ^= 1;
+        assert!(
+            inspect_bytes(InspectFormat::SourceIsaObservation, &corrupted)
+                .unwrap_err()
+                .contains("identity differs from its bytes")
+        );
+
+        let mut trailing = exact;
+        trailing.push(0);
+        assert!(
+            inspect_bytes(InspectFormat::SourceIsaObservation, &trailing)
+                .unwrap_err()
+                .contains("malformed framing")
+        );
+
+        let mut unknown_version = collection(&[admitted_frame(
+            0x10,
+            SourceIsaObservationTargetProfileV1::Gfx942,
+            4,
+        )]);
+        unknown_version[8..10].copy_from_slice(&2_u16.to_le_bytes());
+        assert!(
+            inspect_bytes(InspectFormat::SourceIsaObservation, &unknown_version)
+                .unwrap_err()
+                .contains("malformed framing")
+        );
     }
 
     #[test]

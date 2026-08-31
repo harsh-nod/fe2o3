@@ -38,6 +38,20 @@ non-authoritative observer file to the generation directory would include it
 in the authoritative artifact snapshot and make a nonfatal telemetry failure
 change or stale that snapshot.
 
+The decoded binary payload can be inspected without a source checkout:
+
+```text
+cargo fe2o3 inspect --format source-isa-observation observations.bin
+```
+
+Auto-detection also recognizes the `F2SICOL1` magic. Inspection uses the same
+strict, versioned decoder as collection admission and reports the exact target,
+KIR version, structural and query counts, optional sparse round-trip witness,
+and typed unavailable or error outcome. It does not infer an elementwise,
+collective, or tiled label from counts, and it grants no compiler, proof,
+artifact, runtime, hardware-execution, complete-coverage, or semantic-
+refinement authority.
+
 ## Binary schema
 
 All integers are little-endian. The fixed header is 80 bytes:
