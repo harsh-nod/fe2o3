@@ -663,10 +663,6 @@ pub(crate) struct ProductionRankedRootProgramV1 {
 }
 
 impl ProductionRankedRootProgramV1 {
-    pub(crate) fn logical_name(&self) -> &str {
-        &self.logical_name
-    }
-
     pub(crate) fn export_symbol(&self) -> &[u8] {
         &self.export_symbol
     }
@@ -1457,6 +1453,10 @@ impl ProductionRankedSemanticProgramV1 {
         Ok(receipt)
     }
 
+    #[allow(
+        dead_code,
+        reason = "retained as the fail-closed singleton compatibility boundary"
+    )]
     pub(crate) fn into_verified_receipt(
         self,
     ) -> Result<
@@ -14387,6 +14387,7 @@ fn checked_global_extent_v1(
         ))
 }
 
+#[cfg(test)]
 fn local_provenance_v1(
     types: &[fe2o3_mir_model::semantic_mir_v1::SemanticTypeDeclV1],
     function: &SemanticFunctionDeclV1,
