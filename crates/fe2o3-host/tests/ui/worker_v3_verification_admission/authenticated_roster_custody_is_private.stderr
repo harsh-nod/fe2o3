@@ -1,0 +1,13 @@
+error[E0451]: fields `admission`, `current`, `verification` and `_roster` of struct `AuthenticatedWorkerV3RosterV1` are private
+ --> tests/ui/worker_v3_verification_admission/authenticated_roster_custody_is_private.rs:5:9
+  |
+4 |     let AuthenticatedWorkerV3RosterV1 {
+  |         ----------------------------- in this type
+5 |         admission,
+  |         ^^^^^^^^^ private field
+6 |         current,
+  |         ^^^^^^^ private field
+7 |         verification,
+  |         ^^^^^^^^^^^^ private field
+8 |         _roster,
+  |         ^^^^^^^ private field

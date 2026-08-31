@@ -12,6 +12,8 @@ pub const MAX_MEMORY_ALLOCATIONS_V1: usize = 512;
 pub const MAX_MEMORY_MAPPINGS_V1: usize = 1_024;
 pub const MAX_MEMORY_PUBLICATIONS_V1: usize = 2_048;
 pub const MAX_MEMORY_MAPPING_DEVICES_V1: usize = 16;
+pub const MAX_MEMORY_ISSUED_ID_HIGH_WATERMARKS_V1: usize =
+    MAX_MEMORY_VMS_V1 * 2 + MAX_MEMORY_ALLOCATIONS_V1 + MAX_MEMORY_MAPPINGS_V1;
 
 /// Untrusted process-local VM handle observation. It is not durable identity.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -209,6 +211,33 @@ pub struct MemoryPublicationRecordV1 {
     pub state: MemoryPublicationStateV1,
 }
 
+/// Identity policy for one memory lifecycle state.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MemoryIdentityDisciplineV1 {
+    /// Allocation generations can reuse a released allocation ID. History is
+    /// retained and checkpointing is unavailable.
+    ReusableGenerations,
+    /// Every hierarchical ID must exceed the issued high-watermark in its
+    /// scope. Fully released history can therefore be checkpointed safely.
+    MonotonicNonReusable,
+}
+
+/// Hierarchical identity scope retained by the monotonic identity discipline.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum MemoryIssuedIdScopeV1 {
+    VaReservation(VmKeyV1),
+    Allocation(VmKeyV1),
+    Mapping(MemoryAllocationKeyV1),
+    Publication(MemoryMappingKeyV1),
+}
+
+/// Canonical issued-ID high-watermark for one monotonic identity scope.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MemoryIssuedIdHighWatermarkV1 {
+    pub scope: MemoryIssuedIdScopeV1,
+    pub last_id: u64,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MemoryRecordKindV1 {
     Vm,
@@ -216,6 +245,7 @@ pub enum MemoryRecordKindV1 {
     Allocation,
     Mapping,
     Publication,
+    IssuedIdHighWatermark,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -243,6 +273,7 @@ pub enum MemoryInvariantViolationV1 {
     AddressOverlap(VaReservationKeyV1, VaReservationKeyV1),
     InvalidState(MemoryRecordRefV1),
     EarlyRelease(MemoryRecordRefV1),
+    InvalidIssuedIdHighWatermark(MemoryIssuedIdHighWatermarkV1),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -263,9 +294,11 @@ pub enum MemoryTransitionErrorV1 {
     DeviceSetMismatch(MemoryRecordRefV1),
     HandleCollision(MemoryRecordRefV1),
     StaleGeneration(MemoryAllocationKeyV1),
+    NonMonotonicIdentity(MemoryRecordRefV1),
     AddressConflict(VaReservationKeyV1),
     IllegalState(MemoryRecordRefV1),
     ResourceInUse(MemoryRecordRefV1),
+    CheckpointRequiresMonotonicIdentities,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -323,7 +356,7 @@ pub enum MemoryTransitionV1 {
     },
 }
 
-/// Append-only process-domain memory history.
+/// Bounded process-domain memory history.
 ///
 /// All inputs and receipts remain model-only. External adapters must translate
 /// every possibly side-effecting malformed/unknown result to `Indeterminate`;
@@ -331,22 +364,41 @@ pub enum MemoryTransitionV1 {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MemoryLifecycleStateV1 {
     domain_id: DeviceObservationDomainIdV1,
+    identity_discipline: MemoryIdentityDisciplineV1,
     vms: Vec<MemoryVmRecordV1>,
     reservations: Vec<VaReservationRecordV1>,
     allocations: Vec<MemoryAllocationRecordV1>,
     mappings: Vec<MemoryMappingRecordV1>,
     publications: Vec<MemoryPublicationRecordV1>,
+    issued_id_high_watermarks: Vec<MemoryIssuedIdHighWatermarkV1>,
 }
 
 impl MemoryLifecycleStateV1 {
     pub const fn new(domain_id: DeviceObservationDomainIdV1) -> Self {
         Self {
             domain_id,
+            identity_discipline: MemoryIdentityDisciplineV1::ReusableGenerations,
             vms: Vec::new(),
             reservations: Vec::new(),
             allocations: Vec::new(),
             mappings: Vec::new(),
             publications: Vec::new(),
+            issued_id_high_watermarks: Vec::new(),
+        }
+    }
+
+    /// Creates a state whose process-local memory identities can never be
+    /// reused. This is the discipline required by bounded checkpointing.
+    pub const fn new_monotonic_non_reusable(domain_id: DeviceObservationDomainIdV1) -> Self {
+        Self {
+            domain_id,
+            identity_discipline: MemoryIdentityDisciplineV1::MonotonicNonReusable,
+            vms: Vec::new(),
+            reservations: Vec::new(),
+            allocations: Vec::new(),
+            mappings: Vec::new(),
+            publications: Vec::new(),
+            issued_id_high_watermarks: Vec::new(),
         }
     }
 
@@ -356,6 +408,10 @@ impl MemoryLifecycleStateV1 {
 
     pub const fn domain_id(&self) -> DeviceObservationDomainIdV1 {
         self.domain_id
+    }
+
+    pub const fn identity_discipline(&self) -> MemoryIdentityDisciplineV1 {
+        self.identity_discipline
     }
 
     pub fn vms(&self) -> &[MemoryVmRecordV1] {
@@ -376,6 +432,79 @@ impl MemoryLifecycleStateV1 {
 
     pub fn publications(&self) -> &[MemoryPublicationRecordV1] {
         &self.publications
+    }
+
+    /// Returns canonical authenticated issued-ID high-watermarks.
+    pub fn issued_id_high_watermarks(&self) -> &[MemoryIssuedIdHighWatermarkV1] {
+        &self.issued_id_high_watermarks
+    }
+
+    /// Removes fully released journal records without making their identities
+    /// reusable. Retired parent identities subsume all descendant history.
+    pub fn checkpoint_released(&self) -> Result<Self, MemoryTransitionErrorV1> {
+        self.validate_global_invariants()
+            .map_err(MemoryTransitionErrorV1::SourceInvariant)?;
+        if self.identity_discipline != MemoryIdentityDisciplineV1::MonotonicNonReusable {
+            return Err(MemoryTransitionErrorV1::CheckpointRequiresMonotonicIdentities);
+        }
+
+        let compact_allocations: Vec<_> = self
+            .allocations
+            .iter()
+            .filter(|record| record.state == MemoryAllocationStateV1::Released)
+            .map(|record| record.key)
+            .collect();
+        let compact_mappings: Vec<_> = self
+            .mappings
+            .iter()
+            .filter(|record| record.state == MemoryMappingStateV1::Released)
+            .map(|record| record.key)
+            .collect();
+        let compact_publications: Vec<_> = self
+            .publications
+            .iter()
+            .filter(|record| record.state == MemoryPublicationStateV1::Released)
+            .map(|record| record.key)
+            .collect();
+        let compact_reservations: Vec<_> = self
+            .reservations
+            .iter()
+            .filter(|record| {
+                record.state == VaReservationStateV1::Released
+                    && self.allocations.iter().all(|allocation| {
+                        allocation.reservation != record.key
+                            || compact_allocations.contains(&allocation.key)
+                    })
+            })
+            .map(|record| record.key)
+            .collect();
+
+        let mut next = self.clone();
+        next.publications
+            .retain(|record| !compact_publications.contains(&record.key));
+        next.mappings
+            .retain(|record| !compact_mappings.contains(&record.key));
+        next.allocations
+            .retain(|record| !compact_allocations.contains(&record.key));
+        next.reservations
+            .retain(|record| !compact_reservations.contains(&record.key));
+
+        let retained_allocations: Vec<_> =
+            next.allocations.iter().map(|record| record.key).collect();
+        let retained_mappings: Vec<_> = next.mappings.iter().map(|record| record.key).collect();
+        next.issued_id_high_watermarks
+            .retain(|watermark| match watermark.scope {
+                MemoryIssuedIdScopeV1::Mapping(allocation) => {
+                    retained_allocations.contains(&allocation)
+                }
+                MemoryIssuedIdScopeV1::Publication(mapping) => retained_mappings.contains(&mapping),
+                MemoryIssuedIdScopeV1::VaReservation(_) | MemoryIssuedIdScopeV1::Allocation(_) => {
+                    true
+                }
+            });
+        next.validate_global_invariants()
+            .map_err(MemoryTransitionErrorV1::NextInvariant)?;
+        Ok(next)
     }
 
     #[cfg(test)]
@@ -445,6 +574,7 @@ impl MemoryLifecycleStateV1 {
         self.validate_mappings()?;
         self.validate_publications()?;
         self.validate_release_order()?;
+        self.validate_issued_id_high_watermarks()?;
         Ok(())
     }
 
@@ -581,6 +711,11 @@ impl MemoryLifecycleStateV1 {
         if self.reservations.iter().any(|record| record.key == key) {
             return Err(MemoryTransitionErrorV1::AlreadyExists(reference));
         }
+        self.require_next_issued_id(
+            MemoryIssuedIdScopeV1::VaReservation(key.vm),
+            key.id.0,
+            reference,
+        )?;
         if !valid_alignment(alignment) || !range.base.is_multiple_of(alignment) {
             return Err(MemoryTransitionErrorV1::InvalidAlignment(reference));
         }
@@ -600,6 +735,7 @@ impl MemoryLifecycleStateV1 {
             alignment,
             state: VaReservationStateV1::Reserved,
         });
+        self.record_issued_id(MemoryIssuedIdScopeV1::VaReservation(key.vm), key.id.0);
         Ok(())
     }
 
@@ -643,6 +779,11 @@ impl MemoryLifecycleStateV1 {
         if self.allocations.iter().any(|record| record.key == key) {
             return Err(MemoryTransitionErrorV1::AlreadyExists(reference));
         }
+        self.require_next_issued_id(
+            MemoryIssuedIdScopeV1::Allocation(key.vm),
+            key.id.0,
+            reference,
+        )?;
         let reservation_record = self.reservation(reservation)?;
         if reservation_record.state != VaReservationStateV1::Reserved {
             return Err(MemoryTransitionErrorV1::IllegalState(
@@ -685,6 +826,7 @@ impl MemoryLifecycleStateV1 {
             spec,
             state: MemoryAllocationStateV1::Live,
         });
+        self.record_issued_id(MemoryIssuedIdScopeV1::Allocation(key.vm), key.id.0);
         Ok(())
     }
 
@@ -727,6 +869,11 @@ impl MemoryLifecycleStateV1 {
         if self.mappings.iter().any(|record| record.key == key) {
             return Err(MemoryTransitionErrorV1::AlreadyExists(reference));
         }
+        self.require_next_issued_id(
+            MemoryIssuedIdScopeV1::Mapping(key.allocation),
+            key.id.0,
+            reference,
+        )?;
         if self.allocation(key.allocation)?.state != MemoryAllocationStateV1::Live {
             return Err(MemoryTransitionErrorV1::IllegalState(
                 MemoryRecordRefV1::Allocation(key.allocation),
@@ -744,6 +891,7 @@ impl MemoryLifecycleStateV1 {
             mapped_end: 0,
             state: MemoryMappingStateV1::MapPending,
         });
+        self.record_issued_id(MemoryIssuedIdScopeV1::Mapping(key.allocation), key.id.0);
         Ok(())
     }
 
@@ -869,6 +1017,11 @@ impl MemoryLifecycleStateV1 {
         if self.publications.iter().any(|record| record.key == key) {
             return Err(MemoryTransitionErrorV1::AlreadyExists(reference));
         }
+        self.require_next_issued_id(
+            MemoryIssuedIdScopeV1::Publication(key.mapping),
+            key.id.0,
+            reference,
+        )?;
         if self.mapping(key.mapping)?.state != MemoryMappingStateV1::Mapped {
             return Err(MemoryTransitionErrorV1::IllegalState(
                 MemoryRecordRefV1::Mapping(key.mapping),
@@ -884,6 +1037,7 @@ impl MemoryLifecycleStateV1 {
             owner,
             state: MemoryPublicationStateV1::Live,
         });
+        self.record_issued_id(MemoryIssuedIdScopeV1::Publication(key.mapping), key.id.0);
         Ok(())
     }
 
@@ -943,6 +1097,11 @@ impl MemoryLifecycleStateV1 {
                 self.publications.len(),
                 MAX_MEMORY_PUBLICATIONS_V1,
                 MemoryRecordKindV1::Publication,
+            ),
+            (
+                self.issued_id_high_watermarks.len(),
+                MAX_MEMORY_ISSUED_ID_HIGH_WATERMARKS_V1,
+                MemoryRecordKindV1::IssuedIdHighWatermark,
             ),
         ] {
             if actual > maximum {
@@ -1212,6 +1371,120 @@ impl MemoryLifecycleStateV1 {
             }
         }
         Ok(())
+    }
+
+    fn validate_issued_id_high_watermarks(&self) -> Result<(), MemoryInvariantViolationV1> {
+        if self.identity_discipline == MemoryIdentityDisciplineV1::ReusableGenerations {
+            if let Some(watermark) = self.issued_id_high_watermarks.first() {
+                return Err(MemoryInvariantViolationV1::InvalidIssuedIdHighWatermark(
+                    *watermark,
+                ));
+            }
+            return Ok(());
+        }
+
+        for (index, watermark) in self.issued_id_high_watermarks.iter().enumerate() {
+            if watermark.last_id == 0
+                || self.issued_id_high_watermarks[..index]
+                    .iter()
+                    .any(|old| old.scope >= watermark.scope)
+            {
+                return Err(MemoryInvariantViolationV1::InvalidIssuedIdHighWatermark(
+                    *watermark,
+                ));
+            }
+            let parent_exists = match watermark.scope {
+                MemoryIssuedIdScopeV1::VaReservation(vm)
+                | MemoryIssuedIdScopeV1::Allocation(vm) => self.vm_opt(vm).is_some(),
+                MemoryIssuedIdScopeV1::Mapping(allocation) => {
+                    self.allocation_opt(allocation).is_some()
+                }
+                MemoryIssuedIdScopeV1::Publication(mapping) => self.mapping_opt(mapping).is_some(),
+            };
+            if !parent_exists {
+                return Err(MemoryInvariantViolationV1::InvalidIssuedIdHighWatermark(
+                    *watermark,
+                ));
+            }
+        }
+
+        for reservation in &self.reservations {
+            self.validate_issued_id(
+                MemoryIssuedIdScopeV1::VaReservation(reservation.key.vm),
+                reservation.key.id.0,
+            )?;
+        }
+        for allocation in &self.allocations {
+            self.validate_issued_id(
+                MemoryIssuedIdScopeV1::Allocation(allocation.key.vm),
+                allocation.key.id.0,
+            )?;
+        }
+        for mapping in &self.mappings {
+            self.validate_issued_id(
+                MemoryIssuedIdScopeV1::Mapping(mapping.key.allocation),
+                mapping.key.id.0,
+            )?;
+        }
+        for publication in &self.publications {
+            self.validate_issued_id(
+                MemoryIssuedIdScopeV1::Publication(publication.key.mapping),
+                publication.key.id.0,
+            )?;
+        }
+        Ok(())
+    }
+
+    fn validate_issued_id(
+        &self,
+        scope: MemoryIssuedIdScopeV1,
+        id: u64,
+    ) -> Result<(), MemoryInvariantViolationV1> {
+        if self
+            .issued_id_high_watermarks
+            .iter()
+            .any(|watermark| watermark.scope == scope && watermark.last_id >= id)
+        {
+            return Ok(());
+        }
+        Err(MemoryInvariantViolationV1::InvalidIssuedIdHighWatermark(
+            MemoryIssuedIdHighWatermarkV1 { scope, last_id: id },
+        ))
+    }
+
+    fn require_next_issued_id(
+        &self,
+        scope: MemoryIssuedIdScopeV1,
+        id: u64,
+        reference: MemoryRecordRefV1,
+    ) -> Result<(), MemoryTransitionErrorV1> {
+        if self.identity_discipline == MemoryIdentityDisciplineV1::MonotonicNonReusable
+            && self
+                .issued_id_high_watermarks
+                .iter()
+                .any(|watermark| watermark.scope == scope && watermark.last_id >= id)
+        {
+            return Err(MemoryTransitionErrorV1::NonMonotonicIdentity(reference));
+        }
+        Ok(())
+    }
+
+    fn record_issued_id(&mut self, scope: MemoryIssuedIdScopeV1, id: u64) {
+        if self.identity_discipline != MemoryIdentityDisciplineV1::MonotonicNonReusable {
+            return;
+        }
+        if let Some(watermark) = self
+            .issued_id_high_watermarks
+            .iter_mut()
+            .find(|watermark| watermark.scope == scope)
+        {
+            watermark.last_id = id;
+        } else {
+            self.issued_id_high_watermarks
+                .push(MemoryIssuedIdHighWatermarkV1 { scope, last_id: id });
+            self.issued_id_high_watermarks
+                .sort_by_key(|watermark| watermark.scope);
+        }
     }
 
     fn require_vm_active(&self, key: VmKeyV1) -> Result<(), MemoryTransitionErrorV1> {

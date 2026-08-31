@@ -432,6 +432,45 @@ fn rejects_type_invalid_memory_operations() {
 }
 
 #[test]
+fn accepts_mixed_width_integer_shift_operands() {
+    for shift in [BinaryOp::ShiftLeft, BinaryOp::ShiftRight] {
+        let module = one_block_module(
+            vec![Type::Scalar(ScalarType::U64), Type::Scalar(ScalarType::U32)],
+            vec![op(
+                2,
+                Type::Scalar(ScalarType::U64),
+                OperationKind::Binary {
+                    op: shift,
+                    lhs: ValueId(0),
+                    rhs: ValueId(1),
+                },
+            )],
+        );
+        verify_module(&module).expect("shift counts may use a different integer type");
+    }
+}
+
+#[test]
+fn rejects_non_integer_shift_rhs() {
+    for shift in [BinaryOp::ShiftLeft, BinaryOp::ShiftRight] {
+        let module = one_block_module(
+            vec![Type::Scalar(ScalarType::U64), Type::F32],
+            vec![op(
+                2,
+                Type::Scalar(ScalarType::U64),
+                OperationKind::Binary {
+                    op: shift,
+                    lhs: ValueId(0),
+                    rhs: ValueId(1),
+                },
+            )],
+        );
+        let errors = verify_module(&module).unwrap_err();
+        assert!(errors.contains(DiagnosticCode::InvalidOperandType));
+    }
+}
+
+#[test]
 fn rejects_obviously_invalid_barrier_and_atomic_metadata() {
     let barrier = Operation::new(
         vec![],

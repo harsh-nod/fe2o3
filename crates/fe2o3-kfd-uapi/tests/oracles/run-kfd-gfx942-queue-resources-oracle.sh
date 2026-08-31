@@ -32,6 +32,7 @@ check 4376e4bc6980299efc0fb79cfa497d5758171980ce80b04632882537866e977a "$rocr_so
 check f957d592df9541bef7d0e21b507c95f5046f2fb380da3d64525bc4770a5a1b93 "$rocr_source/projects/rocr-runtime/libhsakmt/src/libhsakmt.h"
 check fd9e3e9a0874614e70e518ee420aacd2d171452c2755d05b2cf54b55144ec78e "$rocr_source/projects/rocr-runtime/libhsakmt/include/hsakmt/hsakmttypes.h"
 check 291f2521e2a4758e852ed20c578aca79e379d1effe4dfd83c62e11347eef2b14 "$rocr_source/projects/rocr-runtime/runtime/hsa-runtime/core/runtime/amd_aql_queue.cpp"
+check 1f45345473ea2a02200748106a43f8aaf97568e11c8182a789684320008592e3 "$rocr_source/projects/rocr-runtime/runtime/hsa-runtime/inc/amd_hsa_queue.h"
 check c39d5f922e855ce57d3c1903beef325e6004431c2ee66ae000aac72a0e5999da "$rocr_source/projects/rocr-runtime/runtime/hsa-runtime/core/runtime/amd_gpu_agent.cpp"
 check c6f961251ebc0ceb3da5107964fa34bb5dacf0d3973a0e179fcb06cf5ca98cb3 "$rocr_source/projects/rocr-runtime/runtime/hsa-runtime/core/driver/kfd/amd_kfd_driver.cpp"
 check d54a0e36a3403c13f4af0b0fc6552dfcf24a2d42df7e36d23752cb1e00c11469 "$rocr_source/projects/rocr-runtime/runtime/hsa-runtime/core/runtime/runtime.cpp"
@@ -41,5 +42,6 @@ check 7a28a882fc7b391079601b1ce78b612599440e52c1b0f6bba7ac38214c68b2e9 "$rocr_so
 
 cc -std=c11 -Wall -Wextra -Werror \
     -I"$kernel_source/include/uapi" \
+    -I"$rocr_source/projects/rocr-runtime/runtime/hsa-runtime/inc" \
     "$here/kfd_gfx942_queue_resources_1_18.c" -o "$binary"
 "$binary"

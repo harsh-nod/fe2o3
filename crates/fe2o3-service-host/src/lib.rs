@@ -120,10 +120,21 @@ pub use queue::{
     ServiceCompletedQueueSessionV1, ServiceCompletedReadRequestV1, ServiceCompletedReadbackV1,
     ServiceCompletedSnapshotRequestV1, ServicePublishedQueueSessionV1, ServiceQueueBindFailureV1,
     ServiceQueueCreateFailureV1, ServiceQueueDataUpdateFailureV1, ServiceQueueErrorV1,
-    ServiceQueueOperationFailureV1, ServiceQueuePartitionedDataUpdateV1, ServiceQueuePollV1,
-    ServiceQueuePollWithProgressV1, ServiceQueueProgressV1, ServiceQueueReleaseFailureV1,
-    ServiceQueueReleaseObservationV1, ServiceQueueSessionV1, ServiceQueueUnboundSessionV1,
-    ServiceRecycledQueueSessionV1,
+    ServiceQueueHostDataUpdateV1, ServiceQueueOperationFailureV1,
+    ServiceQueuePartitionedDataUpdateV1, ServiceQueuePollV1, ServiceQueuePollWithProgressV1,
+    ServiceQueueProgressV1, ServiceQueueReleaseFailureV1, ServiceQueueReleaseObservationV1,
+    ServiceQueueRolloverFailureV1, ServiceQueueRolloverSuccessV1, ServiceQueueSessionV1,
+    ServiceQueueUnboundSessionV1, ServiceRecycledQueueSessionV1,
+};
+#[cfg(all(
+    target_os = "linux",
+    target_arch = "x86_64",
+    feature = "qualification-fault-injection"
+))]
+pub use queue::{
+    SERVICE_QUALIFICATION_QUEUE_FAULT_CONTRACT_SHA256_V1,
+    SERVICE_QUALIFICATION_QUEUE_FAULT_CONTRACT_V1, ServiceQualificationFaultedQueueSessionV1,
+    ServiceQualificationQueueFaultPointV1,
 };
 
 pub use binding::{QueueSlotBindingV1, ServiceContractV1, ServiceKeyV1};

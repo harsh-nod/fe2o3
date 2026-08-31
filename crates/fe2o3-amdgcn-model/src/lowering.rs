@@ -72,7 +72,11 @@ impl LoweringTarget {
         !matches!(self, Self::Baseline | Self::Gfx950XnackMinusV1)
     }
 
-    const fn supports_gfx942_matrix(self) -> bool {
+    const fn supports_bf16_matrix_mfma(self) -> bool {
+        !matches!(self, Self::Baseline)
+    }
+
+    const fn supports_gfx942_matrix_lds(self) -> bool {
         !matches!(self, Self::Baseline | Self::Gfx950XnackMinusV1)
     }
 
@@ -682,96 +686,12 @@ fn lower_kernel_to_llvm_ir_for_target(
         ));
     }
 
-    let semantic_anchor_emission = match semantic_anchor_identity {
-        None => SemanticAnchorEmissionV1::Disabled,
-        Some(identity) => {
-            validate_semantic_anchor_identity_v1(module, identity)?;
-            let target = target
-                .exact_target_binding()
-                .expect("semantic anchors require an exact production target");
-            let definition_count = module
-                .functions
-                .iter()
-                .filter(|function| function.body.is_some())
-                .count();
-            let context = SemanticAnchorContextV1 { identity, target };
-            if definition_count != 1 {
-                SemanticAnchorEmissionV1::MultipleDefinedBodies(context)
-            } else {
-                let function_ordinal = u64::try_from(
-                    module
-                        .functions
-                        .iter()
-                        .position(|candidate| std::ptr::eq(candidate, entry))
-                        .expect("the entry belongs to the verified module"),
-                )
-                .map_err(|_| {
-                    LoweringErrors::one(
-                        LoweringLocation::function(module, kernel, entry),
-                        LoweringDiagnosticCode::ResourceLimit,
-                        "semantic anchor function ordinal exceeds u64",
-                    )
-                })?;
-                let body = entry.body.as_ref().expect("entry definition checked above");
-                let block_count = u64::try_from(body.blocks.len()).map_err(|_| {
-                    LoweringErrors::one(
-                        LoweringLocation::function(module, kernel, entry),
-                        LoweringDiagnosticCode::ResourceLimit,
-                        "semantic anchor block count exceeds u64",
-                    )
-                })?;
-                let operation_count = body.blocks.iter().try_fold(0_u64, |total, block| {
-                    u64::try_from(block.operations.len())
-                        .ok()
-                        .and_then(|count| total.checked_add(count))
-                        .ok_or_else(|| {
-                            LoweringErrors::one(
-                                LoweringLocation::function(module, kernel, entry),
-                                LoweringDiagnosticCode::ResourceLimit,
-                                "semantic anchor operation count exceeds u64",
-                            )
-                        })
-                })?;
-                if operation_count == 0 {
-                    SemanticAnchorEmissionV1::NoOperations(context)
-                } else {
-                    if !semantic_anchor_manifest_counts_within_limit_v1(
-                        block_count,
-                        operation_count,
-                    ) {
-                        return Err(LoweringErrors::one(
-                            LoweringLocation::function(module, kernel, entry),
-                            LoweringDiagnosticCode::ResourceLimit,
-                            format!(
-                                "semantic anchor manifest has {block_count} blocks and {operation_count} operations; maximum for each is {}",
-                                MAX_PRODUCTION_SEMANTIC_ANCHORS_V1
-                            ),
-                        ));
-                    }
-                    SemanticAnchorEmissionV1::Active(SemanticAnchorPlanV1 {
-                        context,
-                        function_ordinal,
-                        block_count,
-                        operation_count,
-                        guid: semantic_anchor_digest_v1(
-                            SEMANTIC_ANCHOR_GUID_DOMAIN_V1,
-                            context,
-                            function_ordinal,
-                            block_count,
-                            operation_count,
-                        ),
-                        function_hash: semantic_anchor_digest_v1(
-                            SEMANTIC_ANCHOR_HASH_DOMAIN_V1,
-                            context,
-                            function_ordinal,
-                            block_count,
-                            operation_count,
-                        ),
-                    })
-                }
-            }
-        }
-    };
+    let semantic_anchor_emission = semantic_anchor_identity
+        .map(|identity| {
+            prepare_semantic_anchor_emission_v1(module, kernel, entry, target, identity)
+        })
+        .transpose()?
+        .unwrap_or(SemanticAnchorEmissionV1::Disabled);
     let mut lowerer = FunctionLowerer::new(
         module,
         kernel,
@@ -791,6 +711,96 @@ const fn semantic_anchor_manifest_counts_within_limit_v1(
 ) -> bool {
     block_count <= MAX_PRODUCTION_SEMANTIC_ANCHORS_V1 as u64
         && operation_count <= MAX_PRODUCTION_SEMANTIC_ANCHORS_V1 as u64
+}
+
+fn prepare_semantic_anchor_emission_v1(
+    module: &Module,
+    kernel: &Kernel,
+    entry: &Function,
+    target: LoweringTarget,
+    identity: ProductionSemanticAnchorKirIdentityV1,
+) -> Result<SemanticAnchorEmissionV1, LoweringErrors> {
+    validate_semantic_anchor_identity_v1(module, identity)?;
+    let target = target
+        .exact_target_binding()
+        .expect("semantic anchors require an exact production target");
+    let definition_count = module
+        .functions
+        .iter()
+        .filter(|function| function.body.is_some())
+        .count();
+    let context = SemanticAnchorContextV1 { identity, target };
+    if definition_count != 1 {
+        return Ok(SemanticAnchorEmissionV1::MultipleDefinedBodies(context));
+    }
+    let location = LoweringLocation::function(module, kernel, entry);
+    let function_ordinal = u64::try_from(
+        module
+            .functions
+            .iter()
+            .position(|candidate| std::ptr::eq(candidate, entry))
+            .expect("the entry belongs to the verified module"),
+    )
+    .map_err(|_| {
+        LoweringErrors::one(
+            location.clone(),
+            LoweringDiagnosticCode::ResourceLimit,
+            "semantic anchor function ordinal exceeds u64",
+        )
+    })?;
+    let body = entry.body.as_ref().expect("entry definition checked above");
+    let block_count = u64::try_from(body.blocks.len()).map_err(|_| {
+        LoweringErrors::one(
+            location.clone(),
+            LoweringDiagnosticCode::ResourceLimit,
+            "semantic anchor block count exceeds u64",
+        )
+    })?;
+    let operation_count = body.blocks.iter().try_fold(0_u64, |total, block| {
+        u64::try_from(block.operations.len())
+            .ok()
+            .and_then(|count| total.checked_add(count))
+            .ok_or_else(|| {
+                LoweringErrors::one(
+                    location.clone(),
+                    LoweringDiagnosticCode::ResourceLimit,
+                    "semantic anchor operation count exceeds u64",
+                )
+            })
+    })?;
+    if operation_count == 0 {
+        return Ok(SemanticAnchorEmissionV1::NoOperations(context));
+    }
+    if !semantic_anchor_manifest_counts_within_limit_v1(block_count, operation_count) {
+        return Err(LoweringErrors::one(
+            location,
+            LoweringDiagnosticCode::ResourceLimit,
+            format!(
+                "semantic anchor manifest has {block_count} blocks and {operation_count} operations; maximum for each is {}",
+                MAX_PRODUCTION_SEMANTIC_ANCHORS_V1
+            ),
+        ));
+    }
+    Ok(SemanticAnchorEmissionV1::Active(SemanticAnchorPlanV1 {
+        context,
+        function_ordinal,
+        block_count,
+        operation_count,
+        guid: semantic_anchor_digest_v1(
+            SEMANTIC_ANCHOR_GUID_DOMAIN_V1,
+            context,
+            function_ordinal,
+            block_count,
+            operation_count,
+        ),
+        function_hash: semantic_anchor_digest_v1(
+            SEMANTIC_ANCHOR_HASH_DOMAIN_V1,
+            context,
+            function_ordinal,
+            block_count,
+            operation_count,
+        ),
+    }))
 }
 
 fn validate_semantic_anchor_identity_v1(
@@ -830,7 +840,7 @@ fn validate_semantic_anchor_identity_v1(
 /// The text binds the AMDGPU target triple only. Target data layout, processor identity, and code
 /// object version are deliberately absent and remain blockers for artifact construction.
 pub fn lower_compiler_module_to_llvm_ir(module: &Module) -> Result<String, LoweringErrors> {
-    lower_compiler_module_to_llvm_ir_for_target(module, LoweringTarget::Baseline, None, true)
+    lower_compiler_module_to_llvm_ir_for_target(module, LoweringTarget::Baseline, None, None, true)
 }
 
 /// Lowers a complete compiler module for the strict gfx942 floating-point profile.
@@ -839,6 +849,41 @@ pub fn lower_compiler_module_to_gfx942_llvm_ir(module: &Module) -> Result<String
         module,
         LoweringTarget::Gfx942StrictFloatV1,
         None,
+        None,
+        true,
+    )
+}
+
+/// Lowers a complete compiler module for the exact gfx942:xnack- profile.
+///
+/// Unlike the kernel-only exact entry point, this retains every verified
+/// internal helper and call edge in the emitted LLVM module.
+pub fn lower_compiler_module_to_gfx942_xnack_minus_llvm_ir(
+    module: &Module,
+) -> Result<String, LoweringErrors> {
+    lower_compiler_module_to_llvm_ir_for_target(
+        module,
+        LoweringTarget::Gfx942XnackMinusV1,
+        None,
+        None,
+        true,
+    )
+}
+
+/// Lowers a complete exact gfx942:xnack- compiler module with production semantic anchors.
+///
+/// The module path retains helpers and call edges. V1 emits exact anchors only for the admitted
+/// single-definition shape; larger definition sets carry a typed absence record instead of a
+/// partial source/ISA claim.
+pub fn lower_compiler_module_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1(
+    module: &Module,
+    target_kir_identity: ProductionSemanticAnchorKirIdentityV1,
+) -> Result<String, LoweringErrors> {
+    lower_compiler_module_to_llvm_ir_for_target(
+        module,
+        LoweringTarget::Gfx942XnackMinusV1,
+        None,
+        Some(target_kir_identity),
         true,
     )
 }
@@ -851,6 +896,22 @@ pub fn lower_compiler_module_to_gfx950_xnack_minus_llvm_ir(
         module,
         LoweringTarget::Gfx950XnackMinusV1,
         None,
+        None,
+        true,
+    )
+}
+
+/// Gfx950 counterpart of
+/// [`lower_compiler_module_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1`].
+pub fn lower_compiler_module_to_gfx950_xnack_minus_llvm_ir_with_semantic_anchors_v1(
+    module: &Module,
+    target_kir_identity: ProductionSemanticAnchorKirIdentityV1,
+) -> Result<String, LoweringErrors> {
+    lower_compiler_module_to_llvm_ir_for_target(
+        module,
+        LoweringTarget::Gfx950XnackMinusV1,
+        None,
+        Some(target_kir_identity),
         true,
     )
 }
@@ -864,6 +925,7 @@ pub fn lower_device_module_to_gfx942_llvm_ir(module: &Module) -> Result<String, 
     lower_compiler_module_to_llvm_ir_for_target(
         module,
         LoweringTarget::Gfx942StrictFloatV1,
+        None,
         None,
         false,
     )
@@ -880,6 +942,7 @@ pub fn lower_device_module_to_gfx942_xnack_minus_llvm_ir(
     lower_compiler_module_to_llvm_ir_for_target(
         module,
         LoweringTarget::Gfx942XnackMinusV1,
+        None,
         None,
         false,
     )
@@ -919,6 +982,7 @@ pub fn lower_compiler_module_to_gfx942_llvm_ir_with_launch_policies(
         module,
         LoweringTarget::Gfx942StrictFloatV1,
         Some(launch_policies),
+        None,
         true,
     )
 }
@@ -927,6 +991,7 @@ fn lower_compiler_module_to_llvm_ir_for_target(
     module: &Module,
     target: LoweringTarget,
     launch_policies: Option<&[Gfx942KernelLaunchPolicyV1]>,
+    semantic_anchor_identity: Option<ProductionSemanticAnchorKirIdentityV1>,
     require_kernel: bool,
 ) -> Result<String, LoweringErrors> {
     if require_kernel && module.kernels.is_empty() {
@@ -959,6 +1024,23 @@ fn lower_compiler_module_to_llvm_ir_for_target(
     kernels.sort_by(|lhs, rhs| lhs.id.cmp(&rhs.id));
     let mut functions = module.functions.iter().collect::<Vec<_>>();
     functions.sort_by(|lhs, rhs| lhs.id.cmp(&rhs.id));
+    let semantic_anchor_owner = semantic_anchor_identity
+        .map(|identity| {
+            let kernel = *kernels.first().ok_or_else(|| {
+                LoweringErrors::one(
+                    LoweringLocation::module(module),
+                    LoweringDiagnosticCode::MissingKernel,
+                    "semantic-anchor compiler-module lowering requires a kernel entry",
+                )
+            })?;
+            let entry = module
+                .function(&kernel.entry)
+                .expect("verify_module established the semantic-anchor kernel entry");
+            let emission =
+                prepare_semantic_anchor_emission_v1(module, kernel, entry, target, identity)?;
+            Ok::<_, LoweringErrors>((kernel.id.clone(), emission))
+        })
+        .transpose()?;
     for kernel in &kernels {
         let entry = module
             .function(&kernel.entry)
@@ -1130,6 +1212,12 @@ fn lower_compiler_module_to_llvm_ir_for_target(
             &call_symbols,
             target,
             launch_bounds,
+            semantic_anchor_owner
+                .as_ref()
+                .filter(|(owner, _)| owner == &kernel.id)
+                .map_or(SemanticAnchorEmissionV1::Disabled, |(_, emission)| {
+                    *emission
+                }),
         );
         preflight_function(&mut lowerer)?;
         kernel_lowerers.push(lowerer);
@@ -2343,6 +2431,12 @@ fn emit_compiler_module(
     let memcpy_address_spaces = collect_memcpy_declarations(kernels.iter().chain(helpers));
     let float_requirements = FloatRequirements::collect(kernels.iter().chain(helpers));
     let diagnostic_requirements = DiagnosticRequirements::collect(kernels.iter().chain(helpers));
+    let has_semantic_anchors = kernels.iter().any(|lowerer| {
+        matches!(
+            lowerer.semantic_anchor_emission,
+            SemanticAnchorEmissionV1::Active(_)
+        )
+    });
     let has_readnone = intrinsics
         .values()
         .any(|declaration| declaration.attribute == IntrinsicAttribute::ReadNone);
@@ -2367,6 +2461,9 @@ fn emit_compiler_module(
         writeln!(output).unwrap();
     }
 
+    if has_semantic_anchors {
+        writeln!(output, "declare void @llvm.pseudoprobe(i64, i64, i32, i64)").unwrap();
+    }
     for (symbol, declaration) in &intrinsics {
         let attribute = match declaration.attribute {
             IntrinsicAttribute::ReadNone => readnone_attribute.expect("readnone attribute"),
@@ -2400,7 +2497,8 @@ fn emit_compiler_module(
         )
         .unwrap();
     }
-    if !intrinsics.is_empty()
+    if has_semantic_anchors
+        || !intrinsics.is_empty()
         || !memcpy_address_spaces.is_empty()
         || !declarations.is_empty()
         || !float_requirements.is_empty()
@@ -2469,6 +2567,17 @@ fn emit_compiler_module(
             workgroup_size.x, workgroup_size.y, workgroup_size.z
         )
         .unwrap();
+    }
+    if let Some(lowerer) = kernels.iter().find(|lowerer| {
+        !matches!(
+            lowerer.semantic_anchor_emission,
+            SemanticAnchorEmissionV1::Disabled
+        )
+    }) {
+        lowerer.emit_semantic_anchor_metadata_v1(
+            &mut output,
+            u64::try_from(kernels.len()).expect("kernel count is bounded"),
+        );
     }
     output.finish(module)
 }
@@ -2904,12 +3013,13 @@ fn validate_capabilities(
                     && namespace == AMDGPU_GFX942_INLINE_ASSEMBLY_CAPABILITY_NAMESPACE
                     && name == AMDGPU_GFX942_INLINE_ASSEMBLY_CAPABILITY_NAME => {}
             TargetCapability::Extension { namespace, name }
-                if target.supports_gfx942_matrix()
+                if target.supports_bf16_matrix_mfma()
                     && namespace == MATRIX_CAPABILITY_NAMESPACE
-                    && matches!(
-                        name.as_str(),
-                        BF16_F32_M16N16K16_CAPABILITY | LDS_TILE_16X16_XOR4_CAPABILITY
-                    ) => {}
+                    && name == BF16_F32_M16N16K16_CAPABILITY => {}
+            TargetCapability::Extension { namespace, name }
+                if target.supports_gfx942_matrix_lds()
+                    && namespace == MATRIX_CAPABILITY_NAMESPACE
+                    && name == LDS_TILE_16X16_XOR4_CAPABILITY => {}
             TargetCapability::Extension { namespace, name }
                 if target.supports_gfx950_scaled_matrix()
                     && namespace == MATRIX_CAPABILITY_NAMESPACE
@@ -3262,13 +3372,18 @@ enum SemanticAnchorEmissionV1 {
 
 fn emit_semantic_anchor_absence_v1(
     output: &mut dyn fmt::Write,
+    metadata_index: u64,
     reason: &str,
     context: SemanticAnchorContextV1,
 ) {
-    writeln!(output, "!fe2o3.semantic_anchor.absence.v1 = !{{!1}}").unwrap();
     writeln!(
         output,
-        "!1 = !{{!\"{reason}\", !\"sha256:{}\", !\"kir-version:{}\", i64 {}, !\"target:{}\"}}",
+        "!fe2o3.semantic_anchor.absence.v1 = !{{!{metadata_index}}}"
+    )
+    .unwrap();
+    writeln!(
+        output,
+        "!{metadata_index} = !{{!\"{reason}\", !\"sha256:{}\", !\"kir-version:{}\", i64 {}, !\"target:{}\"}}",
         lower_hex(&context.identity.sha256()),
         context.identity.version(),
         context.identity.byte_len(),
@@ -3554,6 +3669,7 @@ impl<'a> FunctionLowerer<'a> {
         call_symbols: &'a BTreeMap<FunctionId, String>,
         target: LoweringTarget,
         launch_bounds: Option<Gfx942LaunchBoundsV1>,
+        semantic_anchor_emission: SemanticAnchorEmissionV1,
     ) -> Self {
         let (control_flow, split_edges) = control_flow_emission_plan(function);
         Self {
@@ -3569,7 +3685,7 @@ impl<'a> FunctionLowerer<'a> {
             bindings: BTreeMap::new(),
             control_flow,
             split_edges,
-            semantic_anchor_emission: SemanticAnchorEmissionV1::Disabled,
+            semantic_anchor_emission,
         }
     }
 
@@ -4115,7 +4231,7 @@ impl<'a> FunctionLowerer<'a> {
             OperationKind::MemoryIntrinsic(intrinsic) => {
                 validate_memory_intrinsic(intrinsic, &location, self.target)?;
             }
-            OperationKind::Binary { op, lhs, .. } => {
+            OperationKind::Binary { op, lhs, rhs } => {
                 let ty = self.value_type(*lhs);
                 if matches!(op, BinaryOp::Checked(_)) {
                     if !ty.as_scalar().is_some_and(ScalarType::is_integer) {
@@ -4126,6 +4242,16 @@ impl<'a> FunctionLowerer<'a> {
                         ));
                     }
                     return Ok(());
+                }
+                let rhs_ty = self.value_type(*rhs);
+                if matches!(op, BinaryOp::ShiftLeft | BinaryOp::ShiftRight) && ty != rhs_ty {
+                    return Err(LoweringErrors::one(
+                        location,
+                        LoweringDiagnosticCode::UnsupportedOperation,
+                        format!(
+                            "G1 requires matching operand types for {op:?}, found {ty:?} and {rhs_ty:?}"
+                        ),
+                    ));
                 }
                 if !supported_binary(*op, ty, self.target) {
                     return Err(LoweringErrors::one(
@@ -4383,7 +4509,8 @@ impl<'a> FunctionLowerer<'a> {
         }
         let supported = match &matrix.kind {
             MatrixOperationKind::MultiplyAccumulate { profile, .. } => {
-                self.target.supports_gfx942_matrix() && profile.is_supported_v1()
+                self.target.supports_bf16_matrix_mfma()
+                    && *profile == MatrixMultiplyProfile::bf16_f32_m16n16k16_wave64()
             }
             MatrixOperationKind::ScaledMultiplyAccumulate { profile, .. } => {
                 self.target.supports_gfx950_scaled_matrix()
@@ -4397,7 +4524,7 @@ impl<'a> FunctionLowerer<'a> {
             }
             MatrixOperationKind::LdsLoad { profile, .. }
             | MatrixOperationKind::LdsStore { profile, .. } => {
-                self.target.supports_gfx942_matrix() && profile.is_supported_v1()
+                self.target.supports_gfx942_matrix_lds() && profile.is_supported_v1()
             }
         };
         if !supported || matrix.active_lanes != 64 {
@@ -4901,37 +5028,35 @@ impl<'a> FunctionLowerer<'a> {
         location: &LoweringLocation,
     ) -> Result<(), LoweringErrors> {
         match wave.kind {
-            WaveOperationKind::ReduceF32 { tile_width, .. } => {
+            WaveOperationKind::ReduceF32 { tile_width, .. }
                 if !self.target.supports_gfx950_collectives_and_lds_transpose()
                     || self.kernel.is_none()
                     || wave.width != WaveWidth::Wave64
                     || wave.active_lanes != 64
                     || tile_width == 0
                     || !tile_width.is_power_of_two()
-                    || tile_width > 64
-                {
-                    return Err(LoweringErrors::one(
-                        location.clone(),
-                        LoweringDiagnosticCode::UnsupportedWaveOperation,
-                        "gfx950 f32 reduction requires the exact gfx950:xnack- kernel profile, one fully active Wave64, and a power-of-two tile width no larger than 64",
-                    ));
-                }
+                    || tile_width > 64 =>
+            {
+                return Err(LoweringErrors::one(
+                    location.clone(),
+                    LoweringDiagnosticCode::UnsupportedWaveOperation,
+                    "gfx950 f32 reduction requires the exact gfx950:xnack- kernel profile, one fully active Wave64, and a power-of-two tile width no larger than 64",
+                ));
             }
-            WaveOperationKind::BroadcastF32 { tile_width, .. } => {
+            WaveOperationKind::BroadcastF32 { tile_width, .. }
                 if !self.target.supports_gfx950_collectives_and_lds_transpose()
                     || self.kernel.is_none()
                     || wave.width != WaveWidth::Wave64
                     || wave.active_lanes != 64
                     || tile_width == 0
                     || !tile_width.is_power_of_two()
-                    || tile_width > 64
-                {
-                    return Err(LoweringErrors::one(
-                        location.clone(),
-                        LoweringDiagnosticCode::UnsupportedWaveOperation,
-                        "gfx950 f32 broadcast requires the exact gfx950:xnack- kernel profile, one fully active Wave64, and a power-of-two tile width no larger than 64",
-                    ));
-                }
+                    || tile_width > 64 =>
+            {
+                return Err(LoweringErrors::one(
+                    location.clone(),
+                    LoweringDiagnosticCode::UnsupportedWaveOperation,
+                    "gfx950 f32 broadcast requires the exact gfx950:xnack- kernel profile, one fully active Wave64, and a power-of-two tile width no larger than 64",
+                ));
             }
             _ => {}
         }
@@ -5255,7 +5380,7 @@ impl<'a> FunctionLowerer<'a> {
             workgroup_size.x, workgroup_size.y, workgroup_size.z
         )
         .unwrap();
-        self.emit_semantic_anchor_metadata_v1(&mut output);
+        self.emit_semantic_anchor_metadata_v1(&mut output, 1);
         output.finish(self.module)
     }
 
@@ -5353,29 +5478,47 @@ impl<'a> FunctionLowerer<'a> {
         .unwrap();
     }
 
-    fn emit_semantic_anchor_metadata_v1(&self, output: &mut dyn fmt::Write) {
+    fn emit_semantic_anchor_metadata_v1(
+        &self,
+        output: &mut dyn fmt::Write,
+        first_metadata_index: u64,
+    ) {
         let plan = match self.semantic_anchor_emission {
             SemanticAnchorEmissionV1::Disabled => return,
             SemanticAnchorEmissionV1::NoOperations(context) => {
-                emit_semantic_anchor_absence_v1(output, "no_operations", context);
+                emit_semantic_anchor_absence_v1(
+                    output,
+                    first_metadata_index,
+                    "no_operations",
+                    context,
+                );
                 return;
             }
             SemanticAnchorEmissionV1::MultipleDefinedBodies(context) => {
-                emit_semantic_anchor_absence_v1(output, "multiple_defined_bodies", context);
+                emit_semantic_anchor_absence_v1(
+                    output,
+                    first_metadata_index,
+                    "multiple_defined_bodies",
+                    context,
+                );
                 return;
             }
             SemanticAnchorEmissionV1::Active(plan) => plan,
         };
         let body = self.function.body.as_ref().expect("definition required");
-        writeln!(output, "!llvm.pseudo_probe_desc = !{{!1}}").unwrap();
         writeln!(
             output,
-            "!1 = !{{i64 {}, i64 {}, !\"{}\"}}",
+            "!llvm.pseudo_probe_desc = !{{!{first_metadata_index}}}"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "!{first_metadata_index} = !{{i64 {}, i64 {}, !\"{}\"}}",
             plan.guid, plan.function_hash, self.symbol
         )
         .unwrap();
-        let binding_index = 2_u64;
-        let record_start = 3_u64;
+        let binding_index = first_metadata_index + 1;
+        let record_start = first_metadata_index + 2;
         write!(output, "!fe2o3.semantic_anchor.v1 = !{{!{binding_index}").unwrap();
         for index in 0..plan.operation_count {
             write!(output, ", !{}", record_start + index).unwrap();

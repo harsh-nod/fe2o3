@@ -826,6 +826,41 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe2o3-compiler-execution-coordinator"
+version = "0.1.0"
+dependencies = [
+ "ed25519-dalek",
+ "fe2o3-artifact-transaction",
+ "fe2o3-broker-authority-service",
+ "fe2o3-compiler-closure-capability",
+ "fe2o3-compiler-execution-lifecycle",
+ "fe2o3-compiler-execution-protocol",
+ "fe2o3-compiler-execution-supervisor",
+ "fe2o3-external-anchor-coordinator",
+ "fe2o3-protected-service-profile",
+ "fe2o3-protected-service-spawn",
+ "fe2o3-protected-static-executable",
+ "fe2o3-runtime-protocol",
+ "libc",
+ "rustix",
+ "sha2 0.11.0",
+ "subtle",
+ "tempfile",
+ "zeroize",
+]
+
+[[package]]
+name = "fe2o3-compiler-execution-deployment"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-loop-device",
+ "rustix",
+ "sha2 0.11.0",
+ "signal-hook",
+ "tempfile",
+]
+
+[[package]]
 name = "fe2o3-compiler-execution-issuer"
 version = "0.1.0"
 dependencies = [
@@ -836,6 +871,15 @@ dependencies = [
  "fe2o3-protected-service-profile",
  "fe2o3-runtime-protocol",
  "libc",
+]
+
+[[package]]
+name = "fe2o3-compiler-execution-lifecycle"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-compiler-execution-protocol",
+ "rustix",
+ "tempfile",
 ]
 
 [[package]]
@@ -858,6 +902,7 @@ dependencies = [
  "fe2o3-compiler-closure-capability",
  "fe2o3-compiler-execution-client",
  "fe2o3-compiler-execution-issuer",
+ "fe2o3-compiler-execution-lifecycle",
  "fe2o3-compiler-execution-protocol",
  "fe2o3-protected-service-profile",
  "fe2o3-protected-static-executable",
@@ -987,6 +1032,7 @@ dependencies = [
  "fe2o3-artifact-transaction",
  "fe2o3-broker-authority-service",
  "fe2o3-compiler-closure-capability",
+ "fe2o3-compiler-execution-lifecycle",
  "fe2o3-compiler-execution-protocol",
  "fe2o3-external-anchor-protocol",
  "fe2o3-external-anchor-provisioner",
@@ -1013,6 +1059,7 @@ version = "0.1.0"
 dependencies = [
  "ed25519-dalek",
  "fe2o3-compiler-closure-capability",
+ "fe2o3-compiler-execution-lifecycle",
  "fe2o3-compiler-execution-protocol",
  "fe2o3-external-anchor-service",
  "fe2o3-protected-service-profile",
@@ -1031,6 +1078,7 @@ dependencies = [
  "ed25519-dalek",
  "fe2o3-broker-authority-service",
  "fe2o3-compiler-closure-capability",
+ "fe2o3-compiler-execution-lifecycle",
  "fe2o3-compiler-execution-protocol",
  "fe2o3-external-anchor-protocol",
  "fe2o3-protected-service-profile",
@@ -1302,6 +1350,14 @@ version = "0.1.0"
 dependencies = [
  "fe2o3-llvm-handoff",
  "sha2 0.11.0",
+]
+
+[[package]]
+name = "fe2o3-loop-device"
+version = "0.1.0"
+dependencies = [
+ "rustix",
+ "tempfile",
 ]
 
 [[package]]
@@ -3062,6 +3118,16 @@ name = "shlex"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
+
+[[package]]
+name = "signal-hook"
+version = "0.4.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b2a0c28ca5908dbdbcd52e6fdaa00358ab88637f8ab33e1f188dd510eb44b53d"
+dependencies = [
+ "libc",
+ "signal-hook-registry",
+]
 
 [[package]]
 name = "signal-hook-registry"

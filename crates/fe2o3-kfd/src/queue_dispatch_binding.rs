@@ -39,7 +39,9 @@ use crate::shared_memory::{
     SharedGttQueueResourceAuthorityV1,
 };
 
-pub(crate) const MAX_DISPATCH_DATA_LEASES_V1: usize = 16;
+/// Maximum retained data allocations in one fixed-dispatch queue owner.
+pub const GFX942_MAX_FIXED_DISPATCH_DATA_V1: usize = 16;
+pub(crate) const MAX_DISPATCH_DATA_LEASES_V1: usize = GFX942_MAX_FIXED_DISPATCH_DATA_V1;
 pub(crate) const MAX_DISPATCH_KERNARG_BYTES_V1: usize = 65_536;
 pub const GFX942_MAX_FIXED_DISPATCH_PROGRAMS_V1: usize = 32;
 pub const GFX942_MAX_FIXED_DISPATCH_PACKETS_V1: usize = AQL_MAX_FIXED_BATCH_PACKETS_V2 as usize;
@@ -571,14 +573,14 @@ impl Gfx942CompletedDispatchReadbackV1 {
 
 /// Frozen claim boundary for the addressless fixed-dispatch binding slice.
 pub const GFX942_AQL_DISPATCH_BINDING_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-gfx942-aql-dispatch-binding-r11-v1\n",
+    "profile=fe2o3-mi300x-gfx942-aql-dispatch-binding-r12-v1\n",
     "target=gfx942:xnack-,COV6,one-selected-current-device-vm-and-queue-generation\n",
     "code=1-through-32-validated-amdhsa-kernel-envelopes,content-and-selected-descriptor-identity,exact-zero-then-copy-materialization-into-owned-gtt,read-only-seal-before-map,per-packet-program-selection,unused-inspected-programs-retained-without-publication,descriptor-resolution-with-checked-relative-arithmetic\n",
     "kernarg=public-inert-complete-byte-images,exact-inspected-size-and-power-of-two-alignment,optional-exact-trailing-256-byte-COV6-implicit-suffix-must-be-caller-zero,metadata-declared-block-count-group-size-remainder-zero-global-offset-grid-dimensions-and-dynamic-lds-only,queue-pointer-and-runtime-service-or-address-fields-rejected,all-global-buffer-fields-zero,checked-nonoverlapping-8-byte-internal-device-pointer-patches,one-owned-kernarg-gtt-arena-with-N-distinct-checked-aligned-slices,private-initialization-before-map\n",
     "geometry=block-count-floor-grid-div-workgroup,remainder-grid-mod-workgroup,inactive-dimensions-count-and-group-one-remainder-zero,uniform-workgroup-rejects-any-nonzero-remainder\n",
     "data=1-through-16-actual-linear-mapped-device-local-or-host-visible-coherent-authorities,exact-device-vm-and-allocation-generation,complete-device-local-live-set,all-authorities-retained-even-when-no-packet-references-them,checked-bounded-referenced-subranges,inspected-actual-access-derived-internally-only-for-referenced-authorities,read-or-readwrite-requires-sealed-full-extent-initialization,write-only-admits-uninitialized-exclusive-storage,optional-enclosing-snapshot-requires-coherent-full-initialization\n",
     "batch=1-through-8192,aql-fixed-batch-v2,minimum-ring-packet-capacity-checked,all-program-code-owners,N-distinct-kernarg-slices,conservative-wait-for-prior-default-with-explicit-independent-opt-in,one-generation-bound-template-retaining-the-final-header-per-packet,one-reservation-one-write-counter-fetch-add-one-final-doorbell-and-one-signal-per-packet-composition\n",
-    "retention=queue-owns-all-code-kernarg-and-data-authorities-through-exact-ready-and-recycle,unreferenced-data-has-no-inspected-effect-or-readback-authority,ordinary-destroy-releases-all,returning-destroy-requires-one-exact-recycled-generation-and-returns-actual-mapped-authorities-with-owning-memory-session,fully-initialized-state-preserved-without-stale-current-content-digest,initially-uninitialized-remains-uninitialized\n",
+    "retention=queue-owns-all-code-kernarg-and-data-authorities-through-exact-ready-and-recycle,unreferenced-data-has-no-inspected-effect-or-readback-authority,ordinary-destroy-releases-all,returning-destroy-requires-one-exact-recycled-generation-and-returns-actual-mapped-authorities-with-owning-memory-session,replacement-owner-seeded-from-exact-recycled-predecessor-and-strictly-advances-before-publication,fully-initialized-state-preserved-without-stale-current-content-digest,initially-uninitialized-remains-uninitialized\n",
     "readback=owned-byte-copy-only-after-exact-completion-and-signal-recycle,exact-dispatch-generation-and-retained-host-visible-allocation-authority,ordinary-request-must-be-contained-in-exactly-one-metadata-inspected-write-or-readwrite-binding;optional-snapshot-request-must-exactly-match-one-retained-strictly-enclosing-initialized-range-with-one-isolated-inspected-writable-interior;device-local-readonly-unwritten-out-of-range-overlapping-subrange-and-stale-requests-rejected,no-initialization-promotion\n",
     "queue-transfer=ordinary-path-still-rejects-device-memory,dispatch-path-requires-exact-complete-distinct-set-of-every-live-mapped-c3-lease-before-model-mutation\n",
     "failure=all-layout-and-identity-validation-before-native-preparation;post-side-effect-failure,currentness,publication,completion,timeout,recycle-or-release-ambiguity-poisons-and-requires-teardown\n",
@@ -590,7 +592,7 @@ pub const GFX942_AQL_DISPATCH_BINDING_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`GFX942_AQL_DISPATCH_BINDING_MANIFEST_V1`].
 pub const GFX942_AQL_DISPATCH_BINDING_MANIFEST_SHA256_V1: &str =
-    "4307f4e7aedd1a1b8582fd150966fb5d8b9a4c95955759abcf5d755faa113da4";
+    "0a8d45c4050b754bda7591889ee3ae5cf83ffde1d83ec9cce750f12576bac188";
 
 type CodeAuthority = SharedGttQueueResourceAuthorityV1<
     AqlDispatchCodeResourceRoleV1,
@@ -829,6 +831,21 @@ impl DispatchGenerationOwnerV1 {
             phase: DispatchOwnerPhaseV1::Prepared,
             recycled_generation: None,
         }
+    }
+
+    fn after_recycled(predecessor: u64) -> Result<Self, Gfx942DispatchBindingErrorV1> {
+        if predecessor == 0 {
+            return Err(Gfx942DispatchBindingErrorV1::StaleDispatchGeneration);
+        }
+        let next_generation = predecessor
+            .checked_add(1)
+            .filter(|generation| generation.checked_add(1).is_some())
+            .ok_or(Gfx942DispatchBindingErrorV1::GenerationExhausted)?;
+        Ok(Self {
+            next_generation,
+            phase: DispatchOwnerPhaseV1::Prepared,
+            recycled_generation: None,
+        })
     }
 
     fn next(&self) -> Result<u64, Gfx942DispatchBindingErrorV1> {
@@ -1836,13 +1853,19 @@ struct FixedDispatchProgramPlanV1 {
 }
 
 struct FixedDispatchPacketPlanV1 {
-    input: Gfx942FixedDispatchPacketV1,
     patches: Box<[DevicePointerPatchV1]>,
     implicit_kernarg: Option<Cov6ImplicitKernargValuesV1>,
     kernarg_offset: usize,
     kernarg_alignment: usize,
     private_segment_size: u32,
     group_segment_size: u32,
+}
+
+struct FixedDispatchPreparationPlanV1 {
+    programs: Vec<FixedDispatchProgramPlanV1>,
+    packets: Vec<FixedDispatchPacketPlanV1>,
+    data: Vec<PublicRetainedDataPlanV1>,
+    kernarg_arena_bytes: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1891,14 +1914,12 @@ fn validate_packet_program_indices<const N: usize>(
     Ok(())
 }
 
-/// Consumes inspected executable custody and exact mapped data authorities,
-/// then prepares one addressless fixed batch without publishing it.
-pub(super) fn prepare_public_fixed_dispatch_resources<const N: usize>(
-    memory: &mut SharedGttMemorySessionV1,
-    programs: Vec<ValidatedKernelEnvelope<'_>>,
-    packets: [Gfx942FixedDispatchPacketV1; N],
-    data: Vec<Gfx942FixedDispatchDataV1>,
-) -> Result<DispatchResourceOwnerV1, Gfx942DispatchBindingErrorV1> {
+fn plan_public_fixed_dispatch_resources<const N: usize>(
+    programs: &[ValidatedKernelEnvelope<'_>],
+    packets: &[Gfx942FixedDispatchPacketV1; N],
+    data_layouts: &[Gfx942FixedDispatchDataLayoutV1],
+    data_initialized: &[bool],
+) -> Result<FixedDispatchPreparationPlanV1, Gfx942DispatchBindingErrorV1> {
     validate_packet_count::<N>()?;
     if programs.is_empty() || programs.len() > GFX942_MAX_FIXED_DISPATCH_PROGRAMS_V1 {
         return Err(Gfx942DispatchBindingErrorV1::ProgramCount {
@@ -1906,20 +1927,22 @@ pub(super) fn prepare_public_fixed_dispatch_resources<const N: usize>(
             maximum: GFX942_MAX_FIXED_DISPATCH_PROGRAMS_V1,
         });
     }
-    if data.is_empty() || data.len() > MAX_DISPATCH_DATA_LEASES_V1 {
+    if data_layouts.is_empty() || data_layouts.len() > MAX_DISPATCH_DATA_LEASES_V1 {
         return Err(Gfx942DispatchBindingErrorV1::DataLeaseCount {
-            requested: data.len(),
+            requested: data_layouts.len(),
             maximum: MAX_DISPATCH_DATA_LEASES_V1,
         });
     }
-    validate_packet_program_indices(programs.len(), &packets)?;
-    let data_layouts: Vec<_> = data.iter().map(Gfx942FixedDispatchDataV1::layout).collect();
-    let data_initialized: Vec<_> = data
-        .iter()
-        .map(Gfx942FixedDispatchDataV1::is_fully_initialized)
-        .collect();
+    if data_layouts.len() != data_initialized.len() {
+        return Err(Gfx942DispatchBindingErrorV1::InvalidData {
+            index: data_layouts.len().min(data_initialized.len()),
+            detail: "initialization/layout cardinality",
+        });
+    }
+    validate_packet_program_indices(programs.len(), packets)?;
+
     let mut program_plans = Vec::with_capacity(programs.len());
-    for kernel in &programs {
+    for kernel in programs {
         let resources = kernel.resources();
         let plan = *kernel.envelope().plan();
         let image_len_u64 = plan
@@ -1955,12 +1978,12 @@ pub(super) fn prepare_public_fixed_dispatch_resources<const N: usize>(
         });
     }
 
-    let mut data_effects = vec![None; data.len()];
-    let mut data_writable_ranges = vec![Vec::new(); data.len()];
-    let mut data_completed_snapshots = vec![Vec::new(); data.len()];
+    let mut data_effects = vec![None; data_layouts.len()];
+    let mut data_writable_ranges = vec![Vec::new(); data_layouts.len()];
+    let mut data_completed_snapshots = vec![Vec::new(); data_layouts.len()];
     let mut packet_plans = Vec::with_capacity(N);
     let mut kernarg_arena_bytes = 0usize;
-    for (packet_index, input) in packets.into_iter().enumerate() {
+    for (packet_index, input) in packets.iter().enumerate() {
         let program_plan = program_plans.get(input.program_index).ok_or(
             Gfx942DispatchBindingErrorV1::InvalidKernarg {
                 packet: packet_index,
@@ -1995,8 +2018,8 @@ pub(super) fn prepare_public_fixed_dispatch_resources<const N: usize>(
         let patches = validate_public_packet_bindings(
             packet_index,
             kernel,
-            &input,
-            &data_layouts,
+            input,
+            data_layouts,
             PublicDataBindingStateV1 {
                 effects: &mut data_effects,
                 writable_ranges: &mut data_writable_ranges,
@@ -2012,7 +2035,7 @@ pub(super) fn prepare_public_fixed_dispatch_resources<const N: usize>(
         let implicit_kernarg = validate_and_derive_cov6_implicit_kernarg(
             packet_index,
             kernel.selected_kernel(),
-            &input,
+            input,
             program_plan.implicit_kernarg.as_ref(),
         )?;
         let private_segment_size =
@@ -2026,7 +2049,6 @@ pub(super) fn prepare_public_fixed_dispatch_resources<const N: usize>(
                 detail: "group segment size",
             })?;
         packet_plans.push(FixedDispatchPacketPlanV1 {
-            input,
             patches,
             implicit_kernarg,
             kernarg_offset,
@@ -2035,12 +2057,99 @@ pub(super) fn prepare_public_fixed_dispatch_resources<const N: usize>(
             group_segment_size,
         });
     }
-    let data_plans = plan_public_retained_data(
-        &data_layouts,
-        &data_initialized,
+    let data = plan_public_retained_data(
+        data_layouts,
+        data_initialized,
         data_effects,
         data_writable_ranges,
         data_completed_snapshots,
+    )?;
+
+    Ok(FixedDispatchPreparationPlanV1 {
+        programs: program_plans,
+        packets: packet_plans,
+        data,
+        kernarg_arena_bytes,
+    })
+}
+
+/// Validates every deterministic replacement fixed-dispatch property without
+/// consuming allocation, executable, packet, or queue custody.
+///
+/// The returned generation is the first generation the replacement queue will
+/// publish. Success reserves one further counter value so a later begin cannot
+/// fail immediately after confirmed predecessor destruction.
+pub fn preflight_gfx942_fixed_dispatch_replacement<const N: usize>(
+    ring_bytes: u32,
+    programs: &[ValidatedKernelEnvelope<'_>],
+    packets: &[Gfx942FixedDispatchPacketV1; N],
+    data: &[Gfx942FixedDispatchDataV1],
+    predecessor_generation: u64,
+) -> Result<u64, Gfx942DispatchBindingErrorV1> {
+    validate_fixed_batch_ring::<N>(ring_bytes)?;
+    DispatchGenerationOwnerV1::after_recycled(predecessor_generation)?;
+    let data_layouts: Vec<_> = data.iter().map(Gfx942FixedDispatchDataV1::layout).collect();
+    let data_initialized: Vec<_> = data
+        .iter()
+        .map(Gfx942FixedDispatchDataV1::is_fully_initialized)
+        .collect();
+    let _ =
+        plan_public_fixed_dispatch_resources(programs, packets, &data_layouts, &data_initialized)?;
+    Ok(predecessor_generation + 1)
+}
+
+/// Consumes inspected executable custody and exact mapped data authorities,
+/// then prepares one addressless fixed batch without publishing it.
+pub(super) fn prepare_public_fixed_dispatch_resources<const N: usize>(
+    memory: &mut SharedGttMemorySessionV1,
+    programs: Vec<ValidatedKernelEnvelope<'_>>,
+    packets: [Gfx942FixedDispatchPacketV1; N],
+    data: Vec<Gfx942FixedDispatchDataV1>,
+) -> Result<DispatchResourceOwnerV1, Gfx942DispatchBindingErrorV1> {
+    prepare_public_fixed_dispatch_resources_with_generation(
+        memory,
+        programs,
+        packets,
+        data,
+        DispatchGenerationOwnerV1::new(),
+    )
+}
+
+pub(super) fn prepare_public_fixed_dispatch_resources_after_recycle<const N: usize>(
+    memory: &mut SharedGttMemorySessionV1,
+    programs: Vec<ValidatedKernelEnvelope<'_>>,
+    packets: [Gfx942FixedDispatchPacketV1; N],
+    data: Vec<Gfx942FixedDispatchDataV1>,
+    predecessor_generation: u64,
+) -> Result<DispatchResourceOwnerV1, Gfx942DispatchBindingErrorV1> {
+    let generation = DispatchGenerationOwnerV1::after_recycled(predecessor_generation)?;
+    prepare_public_fixed_dispatch_resources_with_generation(
+        memory, programs, packets, data, generation,
+    )
+}
+
+fn prepare_public_fixed_dispatch_resources_with_generation<const N: usize>(
+    memory: &mut SharedGttMemorySessionV1,
+    programs: Vec<ValidatedKernelEnvelope<'_>>,
+    packets: [Gfx942FixedDispatchPacketV1; N],
+    data: Vec<Gfx942FixedDispatchDataV1>,
+    generation: DispatchGenerationOwnerV1,
+) -> Result<DispatchResourceOwnerV1, Gfx942DispatchBindingErrorV1> {
+    let data_layouts: Vec<_> = data.iter().map(Gfx942FixedDispatchDataV1::layout).collect();
+    let data_initialized: Vec<_> = data
+        .iter()
+        .map(Gfx942FixedDispatchDataV1::is_fully_initialized)
+        .collect();
+    let FixedDispatchPreparationPlanV1 {
+        programs: program_plans,
+        packets: packet_plans,
+        data: data_plans,
+        kernarg_arena_bytes,
+    } = plan_public_fixed_dispatch_resources(
+        &programs,
+        &packets,
+        &data_layouts,
+        &data_initialized,
     )?;
 
     let mut data_authorities = Vec::with_capacity(data.len());
@@ -2112,11 +2221,11 @@ pub(super) fn prepare_public_fixed_dispatch_resources<const N: usize>(
     let mut kernarg = memory.allocate_kernarg(kernarg_arena_bytes)?;
     memory.with_bytes_mut(&mut kernarg, |bytes| {
         bytes.fill(0);
-        for packet in &packet_plans {
+        for (input, packet) in packets.iter().zip(&packet_plans) {
             let start = packet.kernarg_offset;
-            let end = start + packet.input.kernarg_bytes.len();
+            let end = start + input.kernarg_bytes.len();
             let packet_bytes = &mut bytes[start..end];
-            packet_bytes.copy_from_slice(&packet.input.kernarg_bytes);
+            packet_bytes.copy_from_slice(&input.kernarg_bytes);
             for patch in &packet.patches {
                 let address = data_authorities[patch.data_index]
                     .checked_gpu_subrange(
@@ -2129,9 +2238,7 @@ pub(super) fn prepare_public_fixed_dispatch_resources<const N: usize>(
                     .copy_from_slice(&address.to_le_bytes());
             }
             match (
-                program_plans[packet.input.program_index]
-                    .implicit_kernarg
-                    .as_ref(),
+                program_plans[input.program_index].implicit_kernarg.as_ref(),
                 packet.implicit_kernarg,
             ) {
                 (Some(plan), Some(values)) => {
@@ -2145,12 +2252,12 @@ pub(super) fn prepare_public_fixed_dispatch_resources<const N: usize>(
     let kernarg = memory.map_to_gpu(kernarg)?;
     let kernarg = memory.retain_aql_dispatch_kernarg_resource(kernarg)?;
     let mut prepared_packets = Vec::with_capacity(N);
-    for packet in packet_plans {
+    for (input, packet) in packets.iter().zip(packet_plans) {
         let kernarg_address = kernarg
             .facts()
             .checked_gpu_subrange(
                 packet.kernarg_offset as u64,
-                packet.input.kernarg_bytes.len() as u64,
+                input.kernarg_bytes.len() as u64,
                 packet.kernarg_alignment as u64,
             )
             .and_then(|address| ObservedGpuAddressV1::new(address).ok())
@@ -2159,17 +2266,16 @@ pub(super) fn prepare_public_fixed_dispatch_resources<const N: usize>(
                 detail: "mapped kernarg address",
             })?;
         prepared_packets.push(PreparedDispatchPacketV1 {
-            geometry: packet.input.geometry,
-            ordering: packet.input.ordering,
+            geometry: input.geometry,
+            ordering: input.ordering,
             private_segment_size: packet.private_segment_size,
             group_segment_size: packet.group_segment_size,
             kernarg_address,
             kernarg_alignment: packet.kernarg_alignment as u64,
             kernarg_mapping: kernarg.facts().mapping(),
-            kernarg_layout_identity: code_identity[packet.input.program_index]
-                .dispatch_abi_identity,
+            kernarg_layout_identity: code_identity[input.program_index].dispatch_abi_identity,
             code_bound_kernarg_layout: true,
-            code_index: packet.input.program_index,
+            code_index: input.program_index,
         });
     }
 
@@ -2180,7 +2286,7 @@ pub(super) fn prepare_public_fixed_dispatch_resources<const N: usize>(
         packets: prepared_packets,
         data: data_authorities,
         data_premises,
-        generation: DispatchGenerationOwnerV1::new(),
+        generation,
     })
 }
 
@@ -3972,6 +4078,54 @@ mod tests {
     }
 
     #[test]
+    fn replacement_owner_advances_from_exact_recycled_generation() {
+        let mut first = DispatchGenerationOwnerV1::new();
+        let first_generation = first.next().unwrap();
+        first.commit_begin(first_generation);
+        first.complete(first_generation).unwrap();
+        first.recycle(first_generation).unwrap();
+
+        let mut second =
+            DispatchGenerationOwnerV1::after_recycled(first.returned_generation().unwrap())
+                .unwrap();
+        let second_generation = second.next().unwrap();
+        assert_eq!(first_generation, 1);
+        assert_eq!(second_generation, 2);
+        second.commit_begin(second_generation);
+        second.complete(second_generation).unwrap();
+        second.recycle(second_generation).unwrap();
+        let writable = readback_premise(
+            Gfx942FixedDispatchDataKindV1::HostVisibleCoherent,
+            DeviceDataEffectV1::WriteOnly,
+            &[(64, 64)],
+        );
+        let stale = Gfx942CompletedDispatchReadRequestV1::new(first_generation, 0, 64, 64);
+        assert!(validate_completed_read_request(&second, &[writable], stale).is_err());
+
+        let third =
+            DispatchGenerationOwnerV1::after_recycled(second.returned_generation().unwrap())
+                .unwrap();
+        assert_eq!(third.next().unwrap(), 3);
+        assert!(matches!(
+            DispatchGenerationOwnerV1::after_recycled(0),
+            Err(Gfx942DispatchBindingErrorV1::StaleDispatchGeneration)
+        ));
+        for exhausted in [u64::MAX - 1, u64::MAX] {
+            assert!(matches!(
+                DispatchGenerationOwnerV1::after_recycled(exhausted),
+                Err(Gfx942DispatchBindingErrorV1::GenerationExhausted)
+            ));
+        }
+        assert_eq!(
+            DispatchGenerationOwnerV1::after_recycled(u64::MAX - 2)
+                .unwrap()
+                .next()
+                .unwrap(),
+            u64::MAX - 1
+        );
+    }
+
+    #[test]
     fn fixed_batch_may_select_one_program_from_a_larger_inspected_roster() {
         let packets = [Gfx942FixedDispatchPacketV1::new(
             11,
@@ -3987,6 +4141,29 @@ mod tests {
                 packet: 0,
                 detail: "program index",
             })
+        ));
+    }
+
+    #[test]
+    fn replacement_preflight_rejects_empty_programs_and_exhausted_generation_before_mutation() {
+        let packets = [Gfx942FixedDispatchPacketV1::new(
+            0,
+            AqlDispatchGeometryV1::new([64, 1, 1], [64, 1, 1]).unwrap(),
+            0,
+            Vec::new().into_boxed_slice(),
+            Vec::new().into_boxed_slice(),
+        )];
+        assert!(matches!(
+            plan_public_fixed_dispatch_resources(&[], &packets, &[], &[]),
+            Err(Gfx942DispatchBindingErrorV1::ProgramCount { requested: 0, .. })
+        ));
+        assert!(matches!(
+            preflight_gfx942_fixed_dispatch_replacement(4_096, &[], &packets, &[], u64::MAX - 1,),
+            Err(Gfx942DispatchBindingErrorV1::GenerationExhausted)
+        ));
+        assert!(matches!(
+            preflight_gfx942_fixed_dispatch_replacement(4_096, &[], &packets, &[], u64::MAX - 2,),
+            Err(Gfx942DispatchBindingErrorV1::ProgramCount { requested: 0, .. })
         ));
     }
 

@@ -281,6 +281,10 @@ dispatch path can transfer model ownership only when it consumes an exact,
 complete, distinct set representing every live mapped C3 lease. That bridge
 retains the real lease and keeps its address facts private. It does not turn an
 initialization declaration into copy evidence or expose a numeric address.
+While a native queue remains live, every detach, rebind, allocation,
+initialization, or release mutation temporarily restores that same model
+foundation to the shared session and reclaims the updated foundation before
+returning to queue operation.
 The dedicated bounded lease journal is not projected into the runtime memory
 model and has no Verus-to-Rust or syscall refinement. Ordinary C3 leases still
 grant no CPU mapping, initialization, sync or async copy, alias, quiescence,
@@ -373,8 +377,9 @@ no-Drop-call behavior.
 
 The first production composition consumes one checked gfx942:xnack- device and
 creates a redacted, non-Clone queue session. It allocates one exact 4 KiB AQL
-ring with the required doubled GPUVA, one exact 4 KiB control mapping with
-distinct aligned write/read counters in the same page, a 4 KiB EOP mapping,
+ring with the required doubled GPUVA, one exact 4 KiB control mapping with the
+AMD AQL write/read counters at `+0x38`/`+0x80` in distinct cache lines and the
+`0x80` read-base-offset field at `+0x88`, a 4 KiB EOP mapping,
 and the exact 0xb167000-byte CWSR mapping. EOP and CWSR use the separately named
 fe2o3 executable-GTT policy; this is not ROCr policy equivalence. All four
 linear role authorities and the shared model owner transfer into the queue
@@ -385,7 +390,7 @@ adapter maps the exact complete 8192-byte KFD process doorbell slice. It checks
 the encoded returned offset, installs MADV_DONTFORK before enabling the VMA,
 and exposes neither an address, pointer, fd, handle, nor public MMIO store. The
 internal submission foundation initializes every ring header to exact INVALID
-type 1 and the two control counters as atomics before GPU mapping. It uses the
+type 1 and the reviewed AMD AQL control prefix before GPU mapping. It uses the
 canonical `fe2o3-aql` single-producer model, the actual acquire/read counters,
 and the additive V2 fixed-batch bound of one through 8192 packets. A maximum
 batch requires a ring of at least 512 KiB. One batch performs one
@@ -518,7 +523,10 @@ kernarg while keeping the same native queue, ring, completion arena, event,
 runtime, and doorbell alive. Its exact detached-lease ledger must be consumed by
 a later `bind_fixed_dispatch` or explicit release. The later batch may have a
 different program count, packet count, geometry, scalar bytes, and dispatch-data
-set. It is still published by one reservation and one final doorbell store.
+set. Live memory mutations run only while the authoritative memory model is
+restored to the shared session; the queue engine reclaims it before any later
+lifecycle operation. The later batch is still published by one reservation and
+one final doorbell store.
 
 Storage that entered fully initialized remains fully initialized across generic
 completion and can be rebound without another upload. Exact pre-publication
@@ -707,8 +715,8 @@ and does not depend on the semantic-trace crate. An authenticated dispatch plus
 completion observation and exact artifact/KIR binding are required before that
 adapter can be added without fabricating execution history.
 
-`KFD_SEMANTIC_OBSERVATION_MANIFEST_V1` binds these inputs, output bounds,
-redactions, availability claims, and authority exclusions. Reports and
-capability queries are fixed-size and allocation-free. Hostile tests use only
-crate-private detached-fact constructors; they perform no KFD, DRM, HIP, HSA,
-or ROCm runtime discovery.
+`KFD_SEMANTIC_OBSERVATION_MANIFEST_V1` binds the source-profile identities,
+inputs, output bounds, redactions, availability claims, and authority
+exclusions. Reports and capability queries are fixed-size and allocation-free.
+Hostile tests use only crate-private detached-fact constructors; they perform
+no KFD, DRM, HIP, HSA, or ROCm runtime discovery.

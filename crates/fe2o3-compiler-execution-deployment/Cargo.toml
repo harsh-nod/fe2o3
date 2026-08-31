@@ -1,0 +1,44 @@
+[package]
+name = "fe2o3-compiler-execution-deployment"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Pinned manifest and sealed source custody for compiler-execution deployment."
+publish = false
+
+[dependencies]
+fe2o3-loop-device.workspace = true
+rustix = { workspace = true, features = ["mount", "process", "rand", "thread"] }
+sha2.workspace = true
+signal-hook.workspace = true
+
+[dev-dependencies]
+tempfile = "=3.21.0"
+
+[lints.rust]
+unsafe_code = "deny"
+
+[[bin]]
+name = "fe2o3-compiler-execution-manifest"
+path = "src/bin/manifest.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "fe2o3-compiler-execution-deployment-verify"
+path = "src/bin/verify.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "fe2o3-compiler-execution-deployment-install"
+path = "src/bin/install.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "fe2o3-compiler-execution-qualification"
+path = "src/bin/qualification.rs"
+bench = false

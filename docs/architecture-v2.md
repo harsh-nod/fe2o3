@@ -20,6 +20,7 @@ Related documents:
 - [GPU safety contract v1](gpu-safety-contract-v1.md)
 - [implementation roadmap](implementation-roadmap-v2.md)
 - [general typed dispatch V1](general-typed-dispatch-v1.md)
+- [compiler-execution deployment bundle V1](compiler-execution-deployment-bundle-v1.md)
 
 ## One Executable Architecture
 
@@ -225,9 +226,47 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   production persistence and packet paths have exhaustive injected-crash coverage
   around cleanup, create, write, file sync, rename, directory sync, receive,
   exchange, and send. Restart admits only the exact prior or proposed state and
-  exact challenge replay advances at most once. The distinct-UID root coordinator
-  and its endpoint/pidfd transfer are implemented; deployed supervisor wiring,
-  combined privileged qualification, and final verifier authority remain pending.
+  exact challenge replay advances at most once. The distinct-UID root coordinator,
+  endpoint/pidfd transfer, measured supervisor spawn, profile gate, canonical
+  readiness, and combined supervisor/anchor custody are implemented. Exact
+  service-account/socket provisioning, combined privileged qualification, and
+  final verifier authority remain pending.
+- The compiler-execution deployment builder publishes one exact 14-file static
+  source bundle only after a separate static musl verifier admits its
+  caller-pinned canonical manifest and Git commit. Admission is
+  descriptor-relative, rejects alternate inventory and metadata, double-reads
+  every bounded file, cross-checks `BUILD-INFO` and `SHA256SUMS`, and retains
+  the manifest and 13 content files in sealed anonymous custody. A root-only
+  static installer consumes only that custody, constructs and verifies one
+  exact 12-directory/14-file offline root, synchronizes it bottom-up, and
+  publishes the complete content-addressed root with one durable no-replace
+  rename. Exact existing roots are revalidated and reacquired; conflicting
+  roots are never replaced. The installed value retains its sealed evidence for
+  fresh revalidation. A deterministic 99-package Ubuntu 24.04 systemd-container base is
+  independently digest-pinned, copied into a sealed memfd after two identical
+  reads, checked for the exact SquashFS V4 profile, and retained with an empty
+  root-owned qualification-parent descriptor. A root-only transaction then
+  creates and descriptor-retains the exact empty base/root mount points and
+  disposable upper/work/run/state/evidence directories; its 21-checkpoint fault
+  campaign always restores an empty parent. This closes disposable-root
+  preparation and staging. A private single-thread mount namespace, atomic
+  read-only/autoclear loop handle, detached SquashFS and OverlayFS mounts, fixed
+  installed-root-over-base lower order, and sealed deployment-projection
+  revalidation are implemented. One static harness now drives the complete
+  qualification transaction: it composes the root, runs the pinned base's
+  systemd version, sysusers, tmpfiles, and offline unit-verification tools,
+  admits exact account and filesystem postconditions, revalidates the installed
+  lower after every tool, and emits a canonical cleanup report. The tools enter
+  the descriptor-retained root through the static harness itself; no host
+  `chroot` executable is trusted. A non-mutating probe records every host
+  prerequisite. One 18-point transaction fault contract covers mount
+  admission, every systemd command completion and subsequent lower-root
+  revalidation, exact postcondition admission, final lower revalidation, and
+  cleanup. Normal, fault, and campaign runs share one internal transaction, and
+  every admitted fault result freshly reacquires the caller-pinned bundle, base,
+  and complete installed lower after cleanup. That path still lacks host-root execution
+  evidence, so live mount composition, isolated boot, and distinct-UID service
+  qualification remain open rather than production-qualified.
 - Versioned artifact, descriptor, durable-publication, and HSA records exist.
   Host execution has one workload-neutral Worker V3 graph. An arbitrary
   manifest cannot manufacture a Rust signature, verifier decision, load

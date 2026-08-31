@@ -3,8 +3,10 @@ use std::time::{Duration, Instant};
 
 use ed25519_dalek::SigningKey;
 use fe2o3_compiler_closure_capability::CompilerExecutionExternalAnchorSigningKeyCapabilityV1;
+use fe2o3_compiler_execution_lifecycle::CompilerExecutionServiceLifecycleLeaseV1;
 use fe2o3_compiler_execution_protocol::{
-    CompilerExecutionExternalAnchorDeploymentV1, CompilerExecutionExternalAnchorProvisioningV1,
+    COMPILER_EXECUTION_LIFECYCLE_LOCK_PATH_V1, CompilerExecutionExternalAnchorDeploymentV1,
+    CompilerExecutionExternalAnchorProvisioningV1,
     CompilerExecutionExternalAnchorServiceIdentityV1, CompilerExecutionIssuerMeasurementV1,
     CompilerExecutionIssuerPolicyV1, CompilerExecutionSupervisorDeploymentV1,
 };
@@ -30,16 +32,34 @@ fn real_distinct_uid_helper_daemon_exchange_and_restart() {
     let service_gid = parse_id("FE2O3_ROOT_ANCHOR_GID");
     let helper_measurement = measurement(&fs::read(&helper_path).unwrap());
     let daemon_measurement = measurement(&fs::read(&daemon_path).unwrap());
-    let state_root = tempfile::tempdir().unwrap();
+    let lifecycle_root = tempfile::tempdir().unwrap();
     fs::set_permissions(
-        state_root.path(),
+        lifecycle_root.path(),
+        std::os::unix::fs::PermissionsExt::from_mode(0o755),
+    )
+    .unwrap();
+    let state_root = lifecycle_root.path().join("external-anchor");
+    fs::create_dir(&state_root).unwrap();
+    fs::set_permissions(
+        &state_root,
         std::os::unix::fs::PermissionsExt::from_mode(0o700),
     )
     .unwrap();
     rustix::fs::chown(
-        state_root.path(),
+        &state_root,
         Some(Uid::from_raw(service_uid)),
         Some(Gid::from_raw(service_gid)),
+    )
+    .unwrap();
+    let lifecycle_path = lifecycle_root.path().join(
+        std::path::Path::new(COMPILER_EXECUTION_LIFECYCLE_LOCK_PATH_V1)
+            .file_name()
+            .unwrap(),
+    );
+    fs::write(&lifecycle_path, []).unwrap();
+    fs::set_permissions(
+        &lifecycle_path,
+        std::os::unix::fs::PermissionsExt::from_mode(0o400),
     )
     .unwrap();
 
@@ -52,7 +72,8 @@ fn real_distinct_uid_helper_daemon_exchange_and_restart() {
     let first = PreparedExternalAnchorOccurrenceV1::prepare(
         File::open(&helper_path).unwrap(),
         File::open(&daemon_path).unwrap(),
-        File::open(state_root.path()).unwrap(),
+        File::open(&state_root).unwrap(),
+        CompilerExecutionServiceLifecycleLeaseV1::open(&File::open(&state_root).unwrap()).unwrap(),
         deployment.clone(),
         provisioning.clone(),
         key_template,
@@ -85,7 +106,7 @@ fn real_distinct_uid_helper_daemon_exchange_and_restart() {
     drop(endpoint);
     drop(pidfd);
     first.shutdown().unwrap();
-    assert!(state_root.path().join("anchor-state-v1").is_file());
+    assert!(state_root.join("anchor-state-v1").is_file());
 
     let (_, _, second_key_template, _, _, _) = manifests(
         service_uid,
@@ -96,7 +117,8 @@ fn real_distinct_uid_helper_daemon_exchange_and_restart() {
     let second = PreparedExternalAnchorOccurrenceV1::prepare(
         File::open(helper_path).unwrap(),
         File::open(daemon_path).unwrap(),
-        File::open(state_root.path()).unwrap(),
+        File::open(&state_root).unwrap(),
+        CompilerExecutionServiceLifecycleLeaseV1::open(&File::open(&state_root).unwrap()).unwrap(),
         deployment,
         provisioning,
         second_key_template,

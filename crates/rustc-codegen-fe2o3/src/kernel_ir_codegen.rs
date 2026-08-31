@@ -187,7 +187,7 @@ pub(crate) fn construct_inert_compiler_module_text_for_target_v1(
         .expect("exact gfx942 target binding is canonical");
     let llvm_ir = match (has_float_contracts, has_exact_target_binding, target) {
         (_, true, Some(target)) if target == exact_target => {
-            dialect_amdgcn::lower_device_module_to_gfx942_xnack_minus_llvm_ir(module)
+            dialect_amdgcn::lower_compiler_module_to_gfx942_xnack_minus_llvm_ir(module)
         }
         (_, true, Some(target)) => {
             return Err(CompilerModuleConstructionError::UnsupportedTargetBinding(

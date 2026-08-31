@@ -2157,8 +2157,8 @@ fn semantic_binary_operation(operation: BinOp) -> Option<SemanticBinaryOpV1> {
         BinOp::BitXor => Some(SemanticBinaryOpV1::BitXor),
         BinOp::BitAnd => Some(SemanticBinaryOpV1::BitAnd),
         BinOp::BitOr => Some(SemanticBinaryOpV1::BitOr),
-        BinOp::Shl => Some(SemanticBinaryOpV1::ShiftLeft),
-        BinOp::Shr => Some(SemanticBinaryOpV1::ShiftRight),
+        BinOp::Shl | BinOp::ShlUnchecked => Some(SemanticBinaryOpV1::ShiftLeft),
+        BinOp::Shr | BinOp::ShrUnchecked => Some(SemanticBinaryOpV1::ShiftRight),
         BinOp::Eq => Some(SemanticBinaryOpV1::Equal),
         BinOp::Lt => Some(SemanticBinaryOpV1::LessThan),
         BinOp::Le => Some(SemanticBinaryOpV1::LessOrEqual),
@@ -2172,9 +2172,7 @@ fn semantic_binary_operation(operation: BinOp) -> Option<SemanticBinaryOpV1> {
         | BinOp::MulWithOverflow
         | BinOp::AddUnchecked
         | BinOp::SubUnchecked
-        | BinOp::MulUnchecked
-        | BinOp::ShlUnchecked
-        | BinOp::ShrUnchecked => None,
+        | BinOp::MulUnchecked => None,
     }
 }
 
@@ -2417,6 +2415,18 @@ mod tests {
             BinOp::MulUnchecked,
         ] {
             assert_eq!(semantic_checked_binary_operation(operation), None);
+        }
+    }
+
+    #[test]
+    fn unchecked_raw_mir_shifts_are_admitted_with_their_exact_direction() {
+        for (operation, expected) in [
+            (BinOp::ShlUnchecked, SemanticBinaryOpV1::ShiftLeft),
+            (BinOp::ShrUnchecked, SemanticBinaryOpV1::ShiftRight),
+        ] {
+            assert_eq!(semantic_binary_operation(operation), Some(expected));
+            assert_eq!(semantic_checked_binary_operation(operation), None);
+            assert_eq!(semantic_unchecked_binary_operation(operation), None);
         }
     }
 }

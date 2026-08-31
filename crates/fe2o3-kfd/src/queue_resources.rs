@@ -14,6 +14,10 @@ pub const GFX942_MIN_ROCR_RING_BYTES_V1: u32 = 4096;
 pub const GFX942_MAX_ADMITTED_RING_BYTES_V1: u32 = 1 << 31;
 pub const GFX942_EOP_BYTES_V1: u64 = 4096;
 pub const GFX942_COUNTER_BYTES_V1: u64 = 8;
+pub(crate) const AMD_AQL_WRITE_DISPATCH_ID_OFFSET_V1: usize = 0x38;
+pub(crate) const AMD_AQL_READ_DISPATCH_ID_OFFSET_V1: usize = 0x80;
+pub(crate) const AMD_AQL_READ_BASE_OFFSET_FIELD_V1: usize = 0x88;
+pub(crate) const AMD_AQL_READ_BASE_OFFSET_VALUE_V1: u32 = 0x80;
 pub const GFX942_CONTROL_STACK_BYTES_PER_XCC_V1: u32 = 0x3000;
 pub const GFX942_WORKGROUP_CONTEXT_BYTES_PER_XCC_V1: u32 = 0x161e000;
 pub const GFX942_CONTEXT_SAVE_BYTES_PER_XCC_V1: u32 = 0x1621000;
@@ -32,7 +36,7 @@ const EXPECTED_COMPUTE_QUEUE_COUNT: u32 = 24;
 
 /// Canonical contract for read-only gfx942 queue-resource planning.
 pub const GFX942_QUEUE_RESOURCE_PROFILE_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-gfx942-spx-nps1-topology-queue-resources-r6-v1\n",
+    "profile=fe2o3-mi300x-gfx942-spx-nps1-topology-queue-resources-r7-v1\n",
     "device_profile_sha256=e12ea33b259666e7928612403109640b03b0d637b893a2c15b87d17a4211c8de\n",
     "device_profile_digest_role=compositional-prerequisite-identifier-only,no-device-token-or-xnack-evidence\n",
     "kfd_queue_output_schema_sha256=8ff2ac20f6001d6f5405423d78e8ad6cec109ac3370fe86d7691c5c4782c1803\n",
@@ -57,6 +61,7 @@ pub const GFX942_QUEUE_RESOURCE_PROFILE_MANIFEST_V1: &str = concat!(
     "source.rocr.libhsakmt.h=f957d592df9541bef7d0e21b507c95f5046f2fb380da3d64525bc4770a5a1b93\n",
     "source.rocr.hsakamttypes.h=fd9e3e9a0874614e70e518ee420aacd2d171452c2755d05b2cf54b55144ec78e\n",
     "source.rocr.amd_aql_queue.cpp=291f2521e2a4758e852ed20c578aca79e379d1effe4dfd83c62e11347eef2b14\n",
+    "source.rocr.amd_hsa_queue.h=1f45345473ea2a02200748106a43f8aaf97568e11c8182a789684320008592e3\n",
     "source.rocr.amd_gpu_agent.cpp=c39d5f922e855ce57d3c1903beef325e6004431c2ee66ae000aac72a0e5999da\n",
     "source.rocr.amd_kfd_driver.cpp=c6f961251ebc0ceb3da5107964fa34bb5dacf0d3973a0e179fcb06cf5ca98cb3\n",
     "source.rocr.runtime.cpp=d54a0e36a3403c13f4af0b0fc6552dfcf24a2d42df7e36d23752cb1e00c11469\n",
@@ -66,7 +71,7 @@ pub const GFX942_QUEUE_RESOURCE_PROFILE_MANIFEST_V1: &str = concat!(
     "target=gfx942:90402,SPX/NPS1,simd:1216,simd-per-cu:4,xcc:8,array:32,arrays-per-engine:1,lds-kib:64,max-waves-per-simd:8,cp-queues:24\n",
     "later_queue_authority_requirement=pair-with-live-checked-device-token-including-xnack-disabled-currentness\n",
     "ring=power-of-two:4096..2147483648,alignment:4096,packet:64,exact-mapping\n",
-    "control=counter-width:8,counter-alignment:8,exact-page-mapping-per-pointer:4096\n",
+    "control=counter-width:8,counter-alignment:8,write-dispatch-id-offset:0x38,read-dispatch-id-offset:0x80,read-base-offset-field:0x88,read-base-offset-value:0x80,exact-page-mapping-per-pointer:4096\n",
     "eop=size:4096,alignment:4096,exact-mapping\n",
     "cwsr=ctl-per-xcc:12288,wg-per-xcc:23191552,ctx-per-xcc:23203840,debug-per-xcc:48640,xcc:8,mapping:186019840,kfd-min-align:4096,rocr-primary-svm-align:2097152,rocr-fallback-align:4096\n",
     "doorbell=width:8,process-slice:8192,exact-whole-slice-mmap-required,encoded-base-mask:8191-not-page-mask\n",
@@ -79,12 +84,12 @@ pub const GFX942_QUEUE_RESOURCE_PROFILE_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of GFX942_QUEUE_RESOURCE_PROFILE_MANIFEST_V1.
 pub const GFX942_QUEUE_RESOURCE_PROFILE_SHA256_V1: &str =
-    "822d8b9c60a74bc9905a0e3d9a5518e657def0c40406c1d5978c485650477b9d";
+    "37d45132916d2ecefdec8f53ecab817cbdbaa9b9863440353163bd460626ab02";
 
 /// Typed digest bytes of GFX942_QUEUE_RESOURCE_PROFILE_MANIFEST_V1.
 pub const GFX942_QUEUE_RESOURCE_PROFILE_SHA256_BYTES_V1: [u8; 32] = [
-    0x82, 0x2d, 0x8b, 0x9c, 0x60, 0xa7, 0x4b, 0xc9, 0x90, 0x5a, 0x0e, 0x3d, 0x9a, 0x55, 0x18, 0xe6,
-    0x57, 0xde, 0xf0, 0xc4, 0x04, 0x06, 0xc1, 0xd5, 0x97, 0x8c, 0x48, 0x56, 0x50, 0x47, 0x7b, 0x9d,
+    0x37, 0xd4, 0x51, 0x32, 0x91, 0x6d, 0x2e, 0xce, 0xfd, 0xec, 0x8f, 0x53, 0xec, 0xab, 0x81, 0x7c,
+    0xbd, 0xba, 0xa9, 0xb9, 0x86, 0x34, 0x40, 0x35, 0x31, 0x63, 0xbd, 0x46, 0x06, 0x26, 0xab, 0x02,
 ];
 
 /// Resource role names shared with the abstract queue lifecycle model.
@@ -213,6 +218,22 @@ impl ControlResourcePlanV1 {
 
     pub const fn counter_alignment_bytes(self) -> u64 {
         GFX942_COUNTER_BYTES_V1
+    }
+
+    pub const fn write_dispatch_id_offset_bytes(self) -> u64 {
+        AMD_AQL_WRITE_DISPATCH_ID_OFFSET_V1 as u64
+    }
+
+    pub const fn read_dispatch_id_offset_bytes(self) -> u64 {
+        AMD_AQL_READ_DISPATCH_ID_OFFSET_V1 as u64
+    }
+
+    pub const fn read_base_offset_field_bytes(self) -> u64 {
+        AMD_AQL_READ_BASE_OFFSET_FIELD_V1 as u64
+    }
+
+    pub const fn read_base_offset_value(self) -> u32 {
+        AMD_AQL_READ_BASE_OFFSET_VALUE_V1
     }
 
     pub const fn rocr_backing_policy(self) -> RocrQueueBackingPolicyV1 {
@@ -596,6 +617,22 @@ mod tests {
         assert_eq!(plan.ring().packet_bytes(), 64);
         assert_eq!(plan.control().exact_mapping_bytes_per_pointer(), 4096);
         assert_eq!(plan.control().counter_bytes(), 8);
+        assert_eq!(plan.control().write_dispatch_id_offset_bytes(), 0x38);
+        assert_eq!(plan.control().read_dispatch_id_offset_bytes(), 0x80);
+        assert_eq!(plan.control().read_base_offset_field_bytes(), 0x88);
+        assert_eq!(plan.control().read_base_offset_value(), 0x80);
+        assert!(
+            plan.control().write_dispatch_id_offset_bytes() + plan.control().counter_bytes()
+                <= plan.control().read_dispatch_id_offset_bytes()
+        );
+        assert_ne!(
+            plan.control().write_dispatch_id_offset_bytes() / 64,
+            plan.control().read_dispatch_id_offset_bytes() / 64
+        );
+        assert!(
+            plan.control().read_base_offset_field_bytes() + core::mem::size_of::<u32>() as u64
+                <= plan.control().exact_mapping_bytes_per_pointer()
+        );
         assert_eq!(plan.end_of_pipe().mapping_bytes(), 4096);
         assert_eq!(plan.context_save().control_stack_bytes_per_xcc(), 0x3000);
         assert_eq!(plan.context_save().context_save_bytes_per_xcc(), 0x1621000);

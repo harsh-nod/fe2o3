@@ -64,6 +64,7 @@ mod durable_link_publication;
 mod durable_published_claim;
 mod link_publication;
 mod managed_invocation_capability;
+mod publication_object_inventory_v1;
 mod retained_durable_directory;
 mod worker_v3_load_readiness;
 mod worker_v3_publication_binding;
@@ -192,6 +193,13 @@ pub use managed_invocation_capability::{
     BROKERED_INVOCATION_REQUEST_BYTES_V2, BrokeredInvocationCapabilityClaimV1,
     BrokeredInvocationCapabilityCodecErrorV1, BrokeredInvocationCapabilityCodecErrorV2,
     BrokeredInvocationCapabilityRequestV1, BrokeredInvocationCapabilityRequestV2,
+};
+pub use publication_object_inventory_v1::{
+    COMPILER_MODULE_HANDOFF_PUBLICATION_OBJECT_FDS_V1,
+    CompilerModuleHandoffPublicationObjectErrorV1, CompilerModuleHandoffPublicationObjectExportV1,
+    CompilerModuleHandoffPublicationObjectInventoryV1, PublicationObjectRoleV1,
+    PublicationObjectRootIdentityV1, export_compiler_module_handoff_publication_objects_v1,
+    import_compiler_module_handoff_publication_objects_v1,
 };
 pub use retained_durable_directory::{
     NoRetainedDurableDirectoryHooksV1, RetainedDurableArtifactBoundaryV1,

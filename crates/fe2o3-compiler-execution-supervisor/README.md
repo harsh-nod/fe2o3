@@ -98,7 +98,10 @@ production listener at
 `/run/fe2o3/compiler-execution-supervisor.sock`. Admission requires an exact
 nonblocking close-on-exec listening Unix `SOCK_SEQPACKET`, no connected peer,
 no pending socket error, and stable descriptor plus filesystem-socket
-identities. Each accept operation waits under one absolute bound and uses
+identities. The retained pathname policy additionally requires a root-owned
+mode-`0755` `/run/fe2o3` without POSIX ACLs or file capabilities and a
+root-owned, deployment-service-GID, mode-`0660` socket with the same metadata
+exclusions. Each accept operation waits under one absolute bound and uses
 `CLOEXEC | NONBLOCK`, repeats listener and supervisor validation around the
 accept, and dispatches the control descriptor directly into `run_session`.
 Alternate production paths and caller-visible accepted descriptors do not
@@ -125,13 +128,32 @@ and matching live pidfd; neither Cargo nor rustc can select or replace them.
 The descriptor-only deployed entrypoint is implemented and accepts no arguments
 or environment. It consumes the canonical deployment manifest at FD 220 plus
 fixed inherited listener, root, launcher, issuer, policy, root-owned signing-key
-template, and external-anchor descriptors; validates the complete locked service
+template, external-anchor descriptors, and an independent shared lifecycle
+lease at FD 12; validates the complete locked service
 profile; reissues the exact policy-bound key template into a fresh anonymous
 service-owned sealed image only after the deployment UID/GID and policy agree;
 requires that manifest to pin the exact protected-supervisor executable as a
 role distinct from the issuer pre-exec launcher; and enters only the existing
-fixed-worker service loop. System provisioning of
-the distinct service accounts, independently administered external anchor,
-and root/socket policy remains pending. The reviewed supervisor image is built
+fixed-worker service loop. The systemd, sysusers, tmpfiles, and reference anchor
+definitions exist; installed root/distinct-UID qualification remains pending.
+The reviewed supervisor image is built
 and checked as a loader-independent static executable by
 `scripts/build-static-compiler-execution-supervisor.sh`.
+
+The same private root bootstrap is inherited at FD 11 and must be an unnamed,
+connected, nonblocking Unix `SOCK_SEQPACKET` whose exact direct parent has root
+credentials. After all deployment inputs and service authority bind, the
+supervisor publishes the canonical PID/deployment readiness record under a
+fixed bound, closes the bootstrap, and only then enters the worker loop.
+
+The lifecycle lease is bound descriptor-relatively to the canonical root-owned
+sibling of the retained service root and is revalidated before readiness. It is
+held through the fixed-worker loop and released only by process descriptor
+close, preserving provisioning exclusion if the root coordinator is killed.
+
+Root-side provisioning reuses the same listener and durable-root validators
+through one move-only `ProvisionedProtectedIssuerServiceInputsV1`. It admits the
+fixed listener pathname and exact target-service ownership without changing the
+root coordinator's identity, retains descriptor and filesystem snapshots, and
+permits only one consuming ordered listener/root transfer. The deployed process
+independently repeats those checks after entering the locked service profile.

@@ -42,8 +42,15 @@ admits that exact profile and its fixed descriptor set before serving, and the
 measured helper now performs the service-owned key, state, socket, and daemon
 exec transition. The root-controlled coordinator now establishes the locked
 child profile, retains pidfd/reaping custody, authenticates ready plus exec EOF,
-and admits the live endpoint. Wiring its transfer into supervisor construction
-and running the authoritative root-only qualification remain open. Cargo now
+and admits the live endpoint. The sole root coordinator transfers that admitted
+endpoint into the protected supervisor, retains both child lifecycles, and is
+exposed through one fixed systemd activation contract. Running the authoritative
+root-only qualification remains open. Lifecycle custody is three independently
+opened shared-lock descriptions: coordinator ownership, supervisor FD 12, and
+anchor-helper FD 6 transferred to daemon FD 5. The protected children retain
+their leases through their service loops and release only by last descriptor
+close, so abrupt coordinator death cannot overlap exclusive provisioning with a
+surviving child. Cargo now
 admits the fixed root-owned client profile and connects only to the fixed
 authenticated listener path.
 The complete receipt carriage, subject-bound current-record recovery operation,
@@ -73,8 +80,8 @@ subject, carriage, policy, occurrence, Worker-ledger record, sequence, and
 rollback anchors, and fail closed without independent protected-policy, ledger,
 and external rollback verification identities. The concrete protected verifier,
 independently deployed monotonic rollback process, hardened key use,
-root-coordinator-to-supervisor wiring and qualification, and exact Cargo-to-KFD
-run remain open.
+privileged root-coordinator qualification, and exact Cargo-to-KFD run remain
+open.
 
 The caller-pinned policy, service launch manifest, external-anchor deployment,
 and service-owned Ed25519 keys have reusable immutable memfd capabilities in
@@ -130,8 +137,9 @@ descriptor set and an empty environment. The remaining privileged coordinator
 now prepares those exact inputs, launches the helper under the dedicated
 UID/GID, retains pidfd and reaping custody, requires both the canonical ready
 transfer and bootstrap close-on-exec EOF, and admits the endpoint against the
-same live process. Its root-only qualification and concrete descriptor transfer
-into the protected supervisor remain unfinished.
+same live process. The sole root coordinator transfers that exact live endpoint
+into the protected supervisor and retains anchor-after-supervisor teardown
+custody. Its installed root-only qualification remains unfinished.
 
 ## Transport And Ownership
 
@@ -400,6 +408,33 @@ admits exact readiness from the resulting pidfd occurrence. The client and
 supervisor suites also qualify exact descriptor-free Cargo publication,
 mandatory EOF, malformed and substituted packets, ancillary descriptors,
 trailing packets, timeout, closed-peer cleanup, and serving typestate custody.
-A deployed distinct-UID service-profile fixture remains pending. Cargo's fixed
-listener acquisition, child-channel transfer, and readiness gate are covered by
-unit suites; they have not yet been qualified against that deployed fixture.
+The root-owned distinct-UID launcher, profile gate, fixed descriptor transfer,
+canonical deployment readiness, and supervisor/anchor lifecycle custody are
+implemented. The fixed systemd socket/service, sysusers, tmpfiles, and 14 named
+activation descriptors are implemented and structurally checked. A canonical
+caller-pinned install manifest and static musl verifier now admit the complete
+14-file source bundle through retained descriptors and preserve its manifest
+and 13 content files in sealed anonymous custody. A static root-only installer
+consumes only those sealed sources, creates and fully verifies one exact offline
+filesystem root, synchronizes it bottom-up, and atomically publishes or exactly
+reacquires its content-addressed final name. Disposable-root qualification and
+execution under the provisioned root/distinct-UID accounts remain pending.
+The fixed static reference provisioner now resolves those accounts, validates
+and measures all five installed service images, creates or verifies both key
+seeds, constructs all four cross-bound records, and publishes them durably
+without replacement. It owns an exclusive lease on a dedicated root-only file
+through a retained root-owned parent. Service admission derives the same sibling
+from existing state-root FD 4 and takes all three corresponding shared leases
+before key material is read. Supervisor FD 12 and anchor helper FD 6 carry
+independent child open file descriptions; the helper installs its lease at
+daemon FD 5, where the daemon privately retains the lock and canonical parent
+at FDs 258 and 259. Non-root subprocess tests kill the coordinator holder and
+prove exclusive admission remains blocked until both service holders exit in
+either order. The lock
+therefore adds no activation descriptor and does not conflict with the issuer's
+independent state-root singleton. Idempotence, partial-publication recovery,
+generation substitution, listener, mutual exclusion, mode, static-image,
+lock/parent replacement, and retained-path failures are covered by the
+coordinator suite.
+Cargo's fixed listener acquisition, child-channel transfer, and readiness gate
+are covered by unit suites; they have not yet been qualified against that fixture.

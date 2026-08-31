@@ -14115,12 +14115,27 @@ fn validate_assert_message(
                 return invalid_type_operation(SemanticTypeOperationV1::Binary, location);
             }
         }
-        SemanticAssertMessageV1::Overflow { left, right, .. } => {
+        SemanticAssertMessageV1::Overflow {
+            operation,
+            left,
+            right,
+        } => {
             validate_operand(context, function, location, left)?;
             validate_operand(context, function, location, right)?;
-            require_type(left.ty(), right.ty(), location)?;
-            if !is_numeric_type(context.request, left.ty()) {
-                return invalid_type_operation(SemanticTypeOperationV1::Binary, location);
+            match operation {
+                SemanticBinaryOpV1::ShiftLeft | SemanticBinaryOpV1::ShiftRight => {
+                    if !is_integer_type(context.request, left.ty())
+                        || !is_integer_type(context.request, right.ty())
+                    {
+                        return invalid_type_operation(SemanticTypeOperationV1::Binary, location);
+                    }
+                }
+                _ => {
+                    require_type(left.ty(), right.ty(), location)?;
+                    if !is_numeric_type(context.request, left.ty()) {
+                        return invalid_type_operation(SemanticTypeOperationV1::Binary, location);
+                    }
+                }
             }
         }
         SemanticAssertMessageV1::DivisionByZero(operand)

@@ -74,6 +74,23 @@ fn u32_type(identity: u8) -> SemanticTypeDeclV1 {
     )
 }
 
+fn u64_type(identity: u8) -> SemanticTypeDeclV1 {
+    SemanticTypeDeclV1::new(
+        type_identity(identity),
+        layout_identity(64),
+        scalar_layout(
+            8,
+            8,
+            SemanticBackendPrimitiveV1::integer(false, 64, 8),
+            SemanticScalarValidityRangeV1::new(0, u64::MAX.into()),
+        ),
+        SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
+            signed: false,
+            bits: 64,
+        }),
+    )
+}
+
 fn i32_type(identity: u8) -> SemanticTypeDeclV1 {
     SemanticTypeDeclV1::new(
         type_identity(identity),
@@ -5245,6 +5262,108 @@ fn rvalues_retain_and_validate_operation_specific_types() {
             operation: SemanticTypeOperationV1::Binary,
             ..
         })
+    ));
+}
+
+fn overflow_shift_assert_request(
+    operation: SemanticBinaryOpV1,
+    left_type: SemanticTypeIdV1,
+    right_type: SemanticTypeIdV1,
+) -> InertSemanticMirRequestV1 {
+    let u64_id = SemanticTypeIdV1::from_index(0);
+    let usize_id = SemanticTypeIdV1::from_index(1);
+    let f32_id = SemanticTypeIdV1::from_index(2);
+    let bool_id = SemanticTypeIdV1::from_index(3);
+    let place = |local_index, ty| {
+        SemanticPlaceV1::new(SemanticLocalIdV1::from_index(local_index), vec![], ty).unwrap()
+    };
+    request(
+        vec![u64_type(1), u64_type(2), f32_type(3), bool_type(4)],
+        vec![],
+        vec![function(
+            1,
+            abi(1, vec![], u64_id),
+            vec![
+                local(1, u64_id, SemanticLocalRoleV1::Return),
+                local(2, bool_id, SemanticLocalRoleV1::Temporary),
+                local(3, u64_id, SemanticLocalRoleV1::Temporary),
+                local(4, usize_id, SemanticLocalRoleV1::Temporary),
+                local(5, f32_id, SemanticLocalRoleV1::Temporary),
+            ],
+            vec![
+                block(
+                    1,
+                    vec![],
+                    SemanticTerminatorKindV1::Assert {
+                        condition: SemanticOperandV1::Copy(place(1, bool_id)),
+                        expected: true,
+                        message: SemanticAssertMessageV1::Overflow {
+                            operation,
+                            left: SemanticOperandV1::Copy(match left_type {
+                                ty if ty == u64_id => place(2, u64_id),
+                                ty if ty == f32_id => place(4, f32_id),
+                                _ => panic!("unsupported test left type"),
+                            }),
+                            right: SemanticOperandV1::Copy(match right_type {
+                                ty if ty == usize_id => place(3, usize_id),
+                                ty if ty == f32_id => place(4, f32_id),
+                                _ => panic!("unsupported test right type"),
+                            }),
+                        },
+                        target: SemanticControlFlowEdgeV1::new(
+                            SemanticEdgeRoleV1::AssertSuccess,
+                            SemanticBlockIdV1::from_index(1),
+                        ),
+                        unwind: SemanticUnwindActionV1::Unreachable,
+                    },
+                ),
+                block(2, vec![], SemanticTerminatorKindV1::Return),
+            ],
+        )],
+    )
+}
+
+#[test]
+fn overflow_shift_asserts_allow_heterogeneous_integer_rhs_only() {
+    let u64_id = SemanticTypeIdV1::from_index(0);
+    let usize_id = SemanticTypeIdV1::from_index(1);
+    let f32_id = SemanticTypeIdV1::from_index(2);
+    for operation in [
+        SemanticBinaryOpV1::ShiftLeft,
+        SemanticBinaryOpV1::ShiftRight,
+    ] {
+        let admitted = overflow_shift_assert_request(operation, u64_id, usize_id)
+            .admit(SemanticMirLimitsV1::default())
+            .unwrap();
+        let decoded = AdmittedInertSemanticMirV1::decode_canonical(
+            admitted.canonical_encoding(),
+            SemanticMirLimitsV1::default(),
+        )
+        .unwrap();
+        assert_eq!(decoded.canonical_encoding(), admitted.canonical_encoding());
+
+        assert!(matches!(
+            overflow_shift_assert_request(operation, u64_id, f32_id)
+                .admit(SemanticMirLimitsV1::default()),
+            Err(SemanticMirErrorV1::InvalidTypeOperation {
+                operation: SemanticTypeOperationV1::Binary,
+                ..
+            })
+        ));
+        assert!(matches!(
+            overflow_shift_assert_request(operation, f32_id, usize_id)
+                .admit(SemanticMirLimitsV1::default()),
+            Err(SemanticMirErrorV1::InvalidTypeOperation {
+                operation: SemanticTypeOperationV1::Binary,
+                ..
+            })
+        ));
+    }
+
+    assert!(matches!(
+        overflow_shift_assert_request(SemanticBinaryOpV1::Add, u64_id, usize_id)
+            .admit(SemanticMirLimitsV1::default()),
+        Err(SemanticMirErrorV1::TypeMismatch { .. })
     ));
 }
 

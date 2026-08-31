@@ -16,14 +16,17 @@ use fe2o3_compiler_closure_capability::{
     CompilerExecutionExternalAnchorProvisioningCapabilityV1,
     CompilerExecutionExternalAnchorSigningKeyCapabilityV1,
 };
+use fe2o3_compiler_execution_lifecycle::{
+    CompilerExecutionServiceLifecycleLeaseV1, LifecycleLeaseErrorV1,
+};
 use fe2o3_compiler_execution_protocol::{
     CompilerExecutionExternalAnchorDeploymentV1, CompilerExecutionExternalAnchorProvisioningV1,
     MAX_COMPILER_EXECUTION_EXTERNAL_ANCHOR_EXECUTABLE_BYTES_V1,
 };
 use fe2o3_external_anchor_service::{
     DurableExternalAnchorOpenDispositionV1, DurableExternalAnchorV1,
-    EXTERNAL_ANCHOR_SERVICE_PEER_FD_V1, EXTERNAL_ANCHOR_SERVICE_ROOT_FD_V1,
-    ExternalAnchorServiceErrorV1,
+    EXTERNAL_ANCHOR_SERVICE_LIFECYCLE_FD_V1, EXTERNAL_ANCHOR_SERVICE_PEER_FD_V1,
+    EXTERNAL_ANCHOR_SERVICE_ROOT_FD_V1, ExternalAnchorServiceErrorV1,
 };
 use fe2o3_protected_service_profile::{
     ProtectedServiceCredentialProfileErrorV1, ProtectedServiceCredentialProfileV1,
@@ -48,6 +51,8 @@ pub const EXTERNAL_ANCHOR_HELPER_BOOTSTRAP_FD_V1: RawFd = 3;
 pub const EXTERNAL_ANCHOR_HELPER_ROOT_FD_V1: RawFd = 4;
 /// Exact service-owned sealed daemon executable.
 pub const EXTERNAL_ANCHOR_HELPER_DAEMON_EXECUTABLE_FD_V1: RawFd = 5;
+/// Independent shared lifecycle lease transferred into the external-anchor daemon.
+pub const EXTERNAL_ANCHOR_HELPER_LIFECYCLE_FD_V1: RawFd = 6;
 
 const STAGED_DESCRIPTOR_FLOOR_V1: RawFd = 300;
 const CLOSE_RANGE_CLOEXEC_V1: u32 = 1 << 2;
@@ -55,6 +60,7 @@ const EXEC_FAILURE_STAGE_BASE_V1: u8 = 0xe0;
 
 const _: () = assert!(EXTERNAL_ANCHOR_SERVICE_PEER_FD_V1 == 3);
 const _: () = assert!(EXTERNAL_ANCHOR_SERVICE_ROOT_FD_V1 == 4);
+const _: () = assert!(EXTERNAL_ANCHOR_SERVICE_LIFECYCLE_FD_V1 == 5);
 const _: () = assert!(COMPILER_EXECUTION_EXTERNAL_ANCHOR_DEPLOYMENT_FD_V1 == 221);
 const _: () = assert!(COMPILER_EXECUTION_EXTERNAL_ANCHOR_SIGNING_KEY_FD_V1 == 222);
 const _: () = assert!(COMPILER_EXECUTION_EXTERNAL_ANCHOR_PROVISIONING_FD_V1 == 223);
@@ -147,6 +153,7 @@ struct StagedDaemonExecV1 {
     daemon: OwnedFd,
     peer: OwnedFd,
     root: OwnedFd,
+    lifecycle: OwnedFd,
     deployment: OwnedFd,
     key: OwnedFd,
     bootstrap: OwnedFd,
@@ -159,6 +166,7 @@ pub fn run_inherited_external_anchor_provisioning_helper_v1()
     run_inherited_with_admission_v1::<true>(
         AdmittedProvisioningHelperProfileV1::admit,
         RetainedProvisioningHelperExecutableV1::admit,
+        CompilerExecutionServiceLifecycleLeaseV1::admit,
         CompilerExecutionExternalAnchorSigningKeyCapabilityV1::reissue_root_template_for_current_service,
     )
 }
@@ -176,6 +184,13 @@ fn run_inherited_with_admission_v1<const REQUIRE_ROOT_BOOTSTRAP: bool>(
     ) -> Result<
         RetainedProvisioningHelperExecutableV1,
         ProtectedStaticExecutableErrorV1,
+    >,
+    admit_lifecycle: impl FnOnce(
+        File,
+        &File,
+    ) -> Result<
+        CompilerExecutionServiceLifecycleLeaseV1,
+        LifecycleLeaseErrorV1,
     >,
     reissue_key: impl FnOnce(
         File,
@@ -215,6 +230,14 @@ fn run_inherited_with_admission_v1<const REQUIRE_ROOT_BOOTSTRAP: bool>(
         EXTERNAL_ANCHOR_HELPER_ROOT_FD_V1,
         "durable root",
     )?);
+    let lifecycle = admit_lifecycle(
+        File::from(take_fixed(
+            EXTERNAL_ANCHOR_HELPER_LIFECYCLE_FD_V1,
+            "lifecycle lease",
+        )?),
+        &root,
+    )
+    .map_err(ExternalAnchorProvisioningHelperErrorV1::Lifecycle)?;
     let daemon_source = File::from(take_fixed(
         EXTERNAL_ANCHOR_HELPER_DAEMON_EXECUTABLE_FD_V1,
         "daemon executable",
@@ -242,6 +265,9 @@ fn run_inherited_with_admission_v1<const REQUIRE_ROOT_BOOTSTRAP: bool>(
         .map_err(ExternalAnchorProvisioningHelperErrorV1::SigningKeyCapability)?;
     key.revalidate(&manifest)
         .map_err(ExternalAnchorProvisioningHelperErrorV1::SigningKeyCapability)?;
+    lifecycle
+        .revalidate()
+        .map_err(ExternalAnchorProvisioningHelperErrorV1::Lifecycle)?;
 
     let state_key = CompilerExecutionExternalAnchorSigningKeyCapabilityV1::from_file(
         key.try_clone_for_transfer()
@@ -300,6 +326,7 @@ fn run_inherited_with_admission_v1<const REQUIRE_ROOT_BOOTSTRAP: bool>(
         )?,
         peer: stage_above(&daemon_peer, &mut next, "daemon peer")?,
         root: stage_above(&root, &mut next, "durable root")?,
+        lifecycle: stage_above(&lifecycle, &mut next, "lifecycle lease")?,
         deployment: stage_above(
             &deployment
                 .try_clone_for_transfer()
@@ -346,6 +373,9 @@ fn run_inherited_with_admission_v1<const REQUIRE_ROOT_BOOTSTRAP: bool>(
         .map_err(ExternalAnchorProvisioningHelperErrorV1::DaemonExecutable)?;
     key.revalidate(&manifest)
         .map_err(ExternalAnchorProvisioningHelperErrorV1::SigningKeyCapability)?;
+    lifecycle
+        .revalidate()
+        .map_err(ExternalAnchorProvisioningHelperErrorV1::Lifecycle)?;
     let _retain_atomic_state_lock_across_exec = anchor;
 
     // SAFETY: all inputs are privately owned staged descriptors. Success replaces this process;
@@ -517,14 +547,19 @@ unsafe fn exec_daemon(staged: &StagedDaemonExecV1) -> ! {
                 3,
             ),
             (
+                staged.lifecycle.as_raw_fd(),
+                EXTERNAL_ANCHOR_SERVICE_LIFECYCLE_FD_V1,
+                4,
+            ),
+            (
                 staged.deployment.as_raw_fd(),
                 COMPILER_EXECUTION_EXTERNAL_ANCHOR_DEPLOYMENT_FD_V1,
-                4,
+                5,
             ),
             (
                 staged.key.as_raw_fd(),
                 COMPILER_EXECUTION_EXTERNAL_ANCHOR_SIGNING_KEY_FD_V1,
-                5,
+                6,
             ),
         ] {
             if libc::dup3(source, target, 0) != target {
@@ -542,7 +577,7 @@ unsafe fn exec_daemon(staged: &StagedDaemonExecV1) -> ! {
             environment.as_ptr(),
             libc::AT_EMPTY_PATH,
         );
-        exec_fail(staged.bootstrap.as_raw_fd(), 6)
+        exec_fail(staged.bootstrap.as_raw_fd(), 7)
     }
 }
 
@@ -585,6 +620,8 @@ pub enum ExternalAnchorProvisioningHelperErrorV1 {
     Credentials(ProtectedServiceCredentialProfileErrorV1),
     /// The helper process profile is not exact or changed.
     Profile(ProtectedServiceProfileErrorV1),
+    /// The crash-retained lifecycle lease is invalid or changed.
+    Lifecycle(LifecycleLeaseErrorV1),
     /// The running measured helper image is invalid or changed.
     HelperExecutable(ProtectedStaticExecutableErrorV1),
     /// The measured daemon image is invalid or changed.
@@ -632,6 +669,7 @@ impl fmt::Display for ExternalAnchorProvisioningHelperErrorV1 {
             }
             Self::Credentials(error) => write!(formatter, "invalid helper credentials: {error}"),
             Self::Profile(error) => write!(formatter, "invalid helper process profile: {error}"),
+            Self::Lifecycle(error) => write!(formatter, "invalid helper lifecycle: {error}"),
             Self::HelperExecutable(error) => {
                 write!(formatter, "invalid helper executable: {error}")
             }
@@ -666,6 +704,7 @@ impl Error for ExternalAnchorProvisioningHelperErrorV1 {
         match self {
             Self::Credentials(error) => Some(error),
             Self::Profile(error) => Some(error),
+            Self::Lifecycle(error) => Some(error),
             Self::HelperExecutable(error) | Self::DaemonExecutable(error) => Some(error),
             Self::DurableState(error) => Some(error),
             Self::Io { source, .. } => Some(source),
@@ -742,7 +781,7 @@ mod tests {
                     .contains(rustix::io::FdFlags::CLOEXEC)
             );
             pidfd_send_signal(&pidfd, Signal::CONT).unwrap();
-            assert!(fixture.root.path().join("anchor-state-v1").is_file());
+            assert!(fixture.root.join("anchor-state-v1").is_file());
 
             pidfd_send_signal(&pidfd, Signal::KILL).unwrap();
             let status = child.wait().unwrap();
@@ -758,6 +797,7 @@ mod tests {
         let result = run_inherited_with_admission_v1::<false>(
             |_| Ok(AdmittedProvisioningHelperProfileV1::for_test()),
             |_, _| Ok(RetainedProvisioningHelperExecutableV1::for_test()),
+            CompilerExecutionServiceLifecycleLeaseV1::admit_non_authoritative_same_owner_test,
             |image, deployment| {
                 let admitted = CompilerExecutionExternalAnchorSigningKeyCapabilityV1::from_file(
                     image, deployment,
@@ -772,7 +812,9 @@ mod tests {
     }
 
     struct Fixture {
-        root: tempfile::TempDir,
+        _lifecycle_root: tempfile::TempDir,
+        root: std::path::PathBuf,
+        lifecycle_path: std::path::PathBuf,
         daemon: ProtectedStaticExecutableV1,
         deployment: CompilerExecutionExternalAnchorDeploymentCapabilityV1,
         provisioning: CompilerExecutionExternalAnchorProvisioningCapabilityV1,
@@ -781,8 +823,20 @@ mod tests {
 
     impl Fixture {
         fn new() -> Self {
-            let root = tempfile::tempdir().unwrap();
-            fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+            let lifecycle_root = tempfile::tempdir().unwrap();
+            fs::set_permissions(lifecycle_root.path(), fs::Permissions::from_mode(0o755)).unwrap();
+            let root = lifecycle_root.path().join("external-anchor");
+            fs::create_dir(&root).unwrap();
+            fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+            let lifecycle_path = lifecycle_root.path().join(
+                std::path::Path::new(
+                    fe2o3_compiler_execution_protocol::COMPILER_EXECUTION_LIFECYCLE_LOCK_PATH_V1,
+                )
+                .file_name()
+                .unwrap(),
+            );
+            fs::write(&lifecycle_path, []).unwrap();
+            fs::set_permissions(&lifecycle_path, fs::Permissions::from_mode(0o400)).unwrap();
             let daemon_bytes = static_pause_elf();
             let digest = <[u8; 32]>::from(Sha256::digest(&daemon_bytes));
             let daemon_measurement =
@@ -846,7 +900,9 @@ mod tests {
                 )
                 .unwrap();
             Self {
+                _lifecycle_root: lifecycle_root,
                 root,
+                lifecycle_path,
                 daemon,
                 deployment: CompilerExecutionExternalAnchorDeploymentCapabilityV1::create(
                     deployment,
@@ -868,10 +924,17 @@ mod tests {
                 None,
             )
             .unwrap();
+            let lifecycle = File::open(&self.lifecycle_path).unwrap();
+            rustix::fs::flock(
+                &lifecycle,
+                rustix::fs::FlockOperation::NonBlockingLockShared,
+            )
+            .unwrap();
             let sources = [
                 duplicate_high(&helper_bootstrap),
-                duplicate_high(&File::open(self.root.path()).unwrap()),
+                duplicate_high(&File::open(&self.root).unwrap()),
                 duplicate_high(&self.daemon.try_clone_for_exec().unwrap()),
+                duplicate_high(&lifecycle),
                 duplicate_high(&self.deployment.try_clone_for_transfer().unwrap()),
                 duplicate_high(&self.key_template.try_clone_for_transfer().unwrap()),
                 duplicate_high(&self.provisioning.try_clone_for_transfer().unwrap()),
@@ -894,6 +957,7 @@ mod tests {
                         EXTERNAL_ANCHOR_HELPER_BOOTSTRAP_FD_V1,
                         EXTERNAL_ANCHOR_HELPER_ROOT_FD_V1,
                         EXTERNAL_ANCHOR_HELPER_DAEMON_EXECUTABLE_FD_V1,
+                        EXTERNAL_ANCHOR_HELPER_LIFECYCLE_FD_V1,
                         COMPILER_EXECUTION_EXTERNAL_ANCHOR_DEPLOYMENT_FD_V1,
                         COMPILER_EXECUTION_EXTERNAL_ANCHOR_SIGNING_KEY_FD_V1,
                         COMPILER_EXECUTION_EXTERNAL_ANCHOR_PROVISIONING_FD_V1,

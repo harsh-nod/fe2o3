@@ -228,9 +228,17 @@ one retained lock, creates the service socketpair, transfers one exact endpoint,
 and crosses into the daemon through `execveat` with an empty environment. The
 privileged coordinator now implements measured preparation, atomic pidfd launch,
 profile gating, endpoint admission, transfer cloning, and exact kill/reap custody.
-Its supervisor-construction wiring, authoritative root-only distinct-UID
-qualification, and refinement evidence join remain open, so the result remains
-authority-free.
+The root-owned supervisor coordinator now composes that anchor with the exact
+listener, service root, three measured static images, policy, root key template,
+and deployment manifest through the shared protected-service spawn path. It
+requires independent profile and namespace validation, canonical PID/deployment
+readiness, bootstrap EOF, pidfd liveness, and supervisor-before-anchor teardown.
+One static root entrypoint consumes the fixed 14-descriptor systemd activation
+contract, clears the environment, continuously revalidates both children, and
+performs supervisor-before-anchor shutdown. The checked-in socket, service,
+sysusers, and tmpfiles definitions pin the listener and account policy.
+Authoritative root-only distinct-UID qualification and the refinement evidence
+join remain open, so the result remains authority-free.
 The issuer's direct transition
 methods are private. One shared bounded
 client now recovers first and resumes Ready, Prepared, or Issued under one
@@ -300,8 +308,46 @@ The durable external monotonic service, measured distinct-UID launcher, and
 root-owned coordinator exist, and their persistence plus packet loops now
 converge to only the exact prior or proposed state across every injected
 create/write/fsync/rename and receive/exchange/send interruption. Deployed
-root-coordinator-to-supervisor wiring, the combined privileged qualification,
-and the concrete protected verifier remain absent. A fixed
+root-coordinator-to-supervisor wiring, lifecycle custody, and exact systemd
+service-account/socket policy are implemented. The fixed root provisioner now
+derives and durably installs the complete canonical record graph from measured
+static images, provisioned identities, and freshly generated or retained key
+seeds. The root coordinator opens three independent shared-service leases on a
+root-only sibling lock file before key admission: one for its own lifecycle,
+one transferred to supervisor FD 12, and one transferred through anchor-helper
+FD 6 to daemon FD 5. Close-only custody keeps exclusive provisioning blocked
+after coordinator death until both protected children exit, without adding a
+systemd activation descriptor or conflicting with the issuer's state-root
+singleton. Non-root process tests cover coordinator `SIGKILL` and both child
+exit orders. The clean-checkout deployment builder now emits one canonical
+14-file static bundle plus out-of-band manifest and commit pins. A separate
+static musl verifier admits the exact descriptor-relative inventory and retains
+the manifest and all 13 content files in sealed anonymous custody before bundle
+publication. A static root-only installer now consumes only that custody,
+constructs and verifies one exact offline filesystem root, and publishes it
+with one durable content-addressed no-replace rename. Its exhaustive fault
+campaign proves every pre-publication failure leaves no staging state and every
+post-publication failure leaves a complete reacquirable root. The installed
+value retains its sealed evidence for fresh revalidation. A deterministic
+99-package Ubuntu 24.04 systemd-container base builder and caller-pinned SquashFS admission
+now prepare that installed root, sealed base image, and empty root-owned parent
+as one move-only, authority-free qualification value. A root-only staging
+transaction descriptor-retains the exact empty base/root, upper/work,
+run/state, and evidence tree and cleans all 21 interrupted boundaries.
+Atomic read-only loop attachment plus detached SquashFS/OverlayFS composition
+is implemented and rechecks the installed projection against sealed custody,
+but has not run under host root. A static qualification harness and read-only
+host probe now drive the sole verify-to-cleanup transaction. Its closed
+18-point fault set covers mount admission, every pinned systemd command and
+subsequent lower revalidation, exact preflight postconditions, both unmounts,
+loop release, and staging removal. Normal, fault, and campaign runs share that
+transaction, and each admitted fault freshly revalidates the bundle, base, and
+complete installed lower after cleanup. One aggregate campaign requires first
+publication, 37 reacquisitions, two normal runs, all 18 faults, and complete
+parent cleanup. Its root paths remain unexecuted
+because the available SSH identity is not root.
+Combined root/distinct-UID systemd execution remains absent. The concrete
+protected verifier also remains absent. A fixed
 receipt sidecar and publication ACK now
 carry the exact journal, occurrence, receipt, Worker record, sequence, and
 advanced rollback anchor without granting authority from wire bytes. The

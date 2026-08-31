@@ -1,0 +1,6 @@
+[Unit]
+Description=fe2o3 compiler-execution disposable qualification
+Requires=basic.target
+After=basic.target
+Wants=fe2o3-compiler-execution.socket
+AllowIsolate=yes

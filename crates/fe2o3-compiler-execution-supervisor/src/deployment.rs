@@ -5,7 +5,7 @@ use std::fmt;
 use std::fs::File;
 use std::io;
 use std::os::fd::{FromRawFd, OwnedFd, RawFd};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use fe2o3_broker_authority_service::{
     ProtectedExternalAnchorServiceAdmissionV1, ProtectedServiceAdmissionErrorV1,
@@ -14,6 +14,14 @@ use fe2o3_compiler_closure_capability::{
     COMPILER_EXECUTION_SUPERVISOR_DEPLOYMENT_FD_V1, CompilerExecutionPolicyCapabilityV1,
     CompilerExecutionSigningKeyCapabilityV1, CompilerExecutionSupervisorDeploymentCapabilityV1,
 };
+use fe2o3_compiler_execution_lifecycle::{
+    CompilerExecutionServiceLifecycleLeaseV1, LifecycleLeaseErrorV1,
+};
+use fe2o3_compiler_execution_protocol::{
+    CompilerExecutionSupervisorReadyErrorV1, CompilerExecutionSupervisorReadyV1,
+};
+use rustix::fs::OFlags;
+use rustix::net::{AddressFamily, SendFlags, SocketAddrAny, SocketAddrUnix, SocketType};
 
 use crate::{
     AdmittedIssuerProgramV1, IssuerProgramAdmissionErrorV1, IssuerServiceCredentialProfileErrorV1,
@@ -40,6 +48,10 @@ pub const COMPILER_EXECUTION_SUPERVISOR_SIGNING_KEY_FD_V1: RawFd = 8;
 pub const COMPILER_EXECUTION_SUPERVISOR_EXTERNAL_ANCHOR_PEER_FD_V1: RawFd = 9;
 /// Pidfd retaining the exact live external-anchor service process.
 pub const COMPILER_EXECUTION_SUPERVISOR_EXTERNAL_ANCHOR_PIDFD_V1: RawFd = 10;
+/// Private root bootstrap carrying exact deployment readiness.
+pub const COMPILER_EXECUTION_SUPERVISOR_BOOTSTRAP_FD_V1: RawFd = 11;
+/// Independent shared lifecycle lease retained through protected-supervisor process death.
+pub const COMPILER_EXECUTION_SUPERVISOR_LIFECYCLE_FD_V1: RawFd = 12;
 
 const PRIVATE_DESCRIPTOR_FLOOR_V1: RawFd = 256;
 const CLOSE_RANGE_CLOEXEC: i32 = 1 << 2;
@@ -49,6 +61,8 @@ const LAUNCH_TIMEOUT_V1: Duration = Duration::from_secs(30);
 const READINESS_TIMEOUT_V1: Duration = Duration::from_secs(30);
 const PUBLICATION_TIMEOUT_V1: Duration = Duration::from_secs(30);
 const SESSION_TIMEOUT_V1: Duration = Duration::from_secs(300);
+const BOOTSTRAP_TIMEOUT_V1: Duration = Duration::from_secs(30);
+const BOOTSTRAP_RETRY_INTERVAL_V1: Duration = Duration::from_millis(1);
 
 const _: () = assert!(COMPILER_EXECUTION_SUPERVISOR_LISTENER_FD_V1 > libc::STDERR_FILENO);
 const _: () = assert!(
@@ -76,7 +90,13 @@ const _: () = assert!(
 );
 const _: () = assert!(
     COMPILER_EXECUTION_SUPERVISOR_EXTERNAL_ANCHOR_PIDFD_V1
-        < COMPILER_EXECUTION_SUPERVISOR_DEPLOYMENT_FD_V1
+        < COMPILER_EXECUTION_SUPERVISOR_BOOTSTRAP_FD_V1
+);
+const _: () = assert!(
+    COMPILER_EXECUTION_SUPERVISOR_BOOTSTRAP_FD_V1 < COMPILER_EXECUTION_SUPERVISOR_LIFECYCLE_FD_V1
+);
+const _: () = assert!(
+    COMPILER_EXECUTION_SUPERVISOR_LIFECYCLE_FD_V1 < COMPILER_EXECUTION_SUPERVISOR_DEPLOYMENT_FD_V1
 );
 const _: () = assert!(COMPILER_EXECUTION_SUPERVISOR_DEPLOYMENT_FD_V1 < PRIVATE_DESCRIPTOR_FLOOR_V1);
 
@@ -123,6 +143,13 @@ pub fn run_inherited_protected_issuer_service_v1()
 
     let listener = take_inherited(COMPILER_EXECUTION_SUPERVISOR_LISTENER_FD_V1)?;
     let root = File::from(take_inherited(COMPILER_EXECUTION_SUPERVISOR_ROOT_FD_V1)?);
+    let lifecycle = CompilerExecutionServiceLifecycleLeaseV1::admit(
+        File::from(take_inherited(
+            COMPILER_EXECUTION_SUPERVISOR_LIFECYCLE_FD_V1,
+        )?),
+        &root,
+    )
+    .map_err(ProtectedIssuerDeploymentErrorV1::Lifecycle)?;
     let launcher = File::from(take_inherited(
         COMPILER_EXECUTION_SUPERVISOR_LAUNCHER_FD_V1,
     )?);
@@ -131,7 +158,12 @@ pub fn run_inherited_protected_issuer_service_v1()
         take_inherited(COMPILER_EXECUTION_SUPERVISOR_EXTERNAL_ANCHOR_PEER_FD_V1)?;
     let external_anchor_pidfd =
         take_inherited(COMPILER_EXECUTION_SUPERVISOR_EXTERNAL_ANCHOR_PIDFD_V1)?;
+    let bootstrap = take_inherited(COMPILER_EXECUTION_SUPERVISOR_BOOTSTRAP_FD_V1)?;
+    validate_bootstrap::<true>(&bootstrap, rustix::process::getppid())?;
     protect_unrelated_descriptors_v1()?;
+    lifecycle
+        .revalidate()
+        .map_err(ProtectedIssuerDeploymentErrorV1::Lifecycle)?;
 
     let launcher_measurement = ProvisionedStaticExecutableMeasurementV1::new(
         manifest.launcher().sha256(),
@@ -162,9 +194,110 @@ pub fn run_inherited_protected_issuer_service_v1()
         .map_err(ProtectedIssuerDeploymentErrorV1::Service)?;
     let workers = ProtectedIssuerServiceWorkerCountV1::new(WORKER_COUNT_V1)
         .map_err(ProtectedIssuerDeploymentErrorV1::Service)?;
+    lifecycle
+        .revalidate()
+        .map_err(ProtectedIssuerDeploymentErrorV1::Lifecycle)?;
+    publish_ready(&bootstrap, manifest)?;
+    drop(bootstrap);
     service
         .run(workers, |_| {})
         .map_err(ProtectedIssuerDeploymentErrorV1::Service)
+}
+
+fn validate_bootstrap<const REQUIRE_ROOT: bool>(
+    bootstrap: &OwnedFd,
+    expected_parent: Option<rustix::process::Pid>,
+) -> Result<(), ProtectedIssuerDeploymentErrorV1> {
+    let descriptor_flags = rustix::io::fcntl_getfd(bootstrap)
+        .map_err(|source| descriptor_error("inspect supervisor bootstrap descriptor", source))?;
+    let status = rustix::fs::fcntl_getfl(bootstrap)
+        .map_err(|source| descriptor_error("inspect supervisor bootstrap status", source))?;
+    let forbidden = OFlags::APPEND | OFlags::ASYNC | OFlags::DIRECT | OFlags::PATH;
+    if descriptor_flags != rustix::io::FdFlags::CLOEXEC
+        || status & OFlags::ACCMODE != OFlags::RDWR
+        || !status.contains(OFlags::NONBLOCK)
+        || status.intersects(forbidden)
+        || rustix::net::sockopt::socket_domain(bootstrap)
+            .map_err(|source| descriptor_error("inspect supervisor bootstrap domain", source))?
+            != AddressFamily::UNIX
+        || rustix::net::sockopt::socket_type(bootstrap)
+            .map_err(|source| descriptor_error("inspect supervisor bootstrap type", source))?
+            != SocketType::SEQPACKET
+        || rustix::net::sockopt::socket_acceptconn(bootstrap).map_err(|source| {
+            descriptor_error("inspect supervisor bootstrap listener state", source)
+        })?
+    {
+        return Err(ProtectedIssuerDeploymentErrorV1::InvalidBootstrap);
+    }
+    let unnamed = SocketAddrAny::from(SocketAddrUnix::new_unnamed());
+    let local = rustix::net::getsockname(bootstrap)
+        .map_err(|source| descriptor_error("inspect supervisor bootstrap local address", source))?;
+    let remote = rustix::net::getpeername(bootstrap).map_err(|source| {
+        descriptor_error("inspect supervisor bootstrap remote address", source)
+    })?;
+    if local != unnamed || remote.as_ref() != Some(&unnamed) {
+        return Err(ProtectedIssuerDeploymentErrorV1::InvalidBootstrap);
+    }
+    match rustix::net::sockopt::socket_error(bootstrap)
+        .map_err(|source| descriptor_error("inspect supervisor bootstrap socket error", source))?
+    {
+        Ok(()) => {}
+        Err(_) => return Err(ProtectedIssuerDeploymentErrorV1::InvalidBootstrap),
+    }
+    let peer = rustix::net::sockopt::socket_peercred(bootstrap).map_err(|source| {
+        descriptor_error("inspect supervisor bootstrap peer credentials", source)
+    })?;
+    if Some(peer.pid) != expected_parent
+        || (REQUIRE_ROOT && (!peer.uid.is_root() || !peer.gid.is_root()))
+    {
+        return Err(ProtectedIssuerDeploymentErrorV1::InvalidBootstrap);
+    }
+    Ok(())
+}
+
+fn publish_ready(
+    bootstrap: &OwnedFd,
+    deployment: &fe2o3_compiler_execution_protocol::CompilerExecutionSupervisorDeploymentV1,
+) -> Result<(), ProtectedIssuerDeploymentErrorV1> {
+    let pid = u32::try_from(rustix::process::getpid().as_raw_pid())
+        .map_err(|_| ProtectedIssuerDeploymentErrorV1::ReadyPid)?;
+    let ready = CompilerExecutionSupervisorReadyV1::new(pid, deployment)
+        .map_err(ProtectedIssuerDeploymentErrorV1::ReadyProtocol)?;
+    let deadline = Instant::now()
+        .checked_add(BOOTSTRAP_TIMEOUT_V1)
+        .ok_or(ProtectedIssuerDeploymentErrorV1::ReadyTimeout)?;
+    loop {
+        match rustix::net::send(
+            bootstrap,
+            ready.canonical_bytes(),
+            SendFlags::DONTWAIT | SendFlags::NOSIGNAL,
+        ) {
+            Ok(count) if count == ready.canonical_bytes().len() => return Ok(()),
+            Ok(_) => return Err(ProtectedIssuerDeploymentErrorV1::ReadyPartial),
+            Err(rustix::io::Errno::AGAIN | rustix::io::Errno::INTR) => {
+                if Instant::now() >= deadline {
+                    return Err(ProtectedIssuerDeploymentErrorV1::ReadyTimeout);
+                }
+                std::thread::sleep(BOOTSTRAP_RETRY_INTERVAL_V1);
+            }
+            Err(source) => {
+                return Err(descriptor_error(
+                    "publish supervisor deployment readiness",
+                    source,
+                ));
+            }
+        }
+    }
+}
+
+fn descriptor_error(
+    operation: &'static str,
+    source: rustix::io::Errno,
+) -> ProtectedIssuerDeploymentErrorV1 {
+    ProtectedIssuerDeploymentErrorV1::Descriptor {
+        operation,
+        source: source.into(),
+    }
 }
 
 fn require_descriptor_only_invocation_v1() -> Result<(), ProtectedIssuerDeploymentErrorV1> {
@@ -252,6 +385,16 @@ pub enum ProtectedIssuerDeploymentErrorV1 {
     },
     /// One inherited fixed descriptor was unexpectedly close-on-exec.
     UnexpectedCloseOnExec(RawFd),
+    /// The inherited root-bootstrap channel has the wrong shape or peer.
+    InvalidBootstrap,
+    /// The current supervisor PID cannot be represented by the readiness protocol.
+    ReadyPid,
+    /// Canonical supervisor readiness construction failed.
+    ReadyProtocol(CompilerExecutionSupervisorReadyErrorV1),
+    /// The complete readiness packet could not be published within the fixed bound.
+    ReadyTimeout,
+    /// The seqpacket transport reported an impossible partial readiness publication.
+    ReadyPartial,
     /// The sealed deployment capability was invalid.
     DeploymentCapability(String),
     /// The sealed issuer-policy capability was invalid.
@@ -264,6 +407,8 @@ pub enum ProtectedIssuerDeploymentErrorV1 {
     Credentials(IssuerServiceCredentialProfileErrorV1),
     /// The current process does not have the exact locked service profile.
     ProcessProfile(ProtectedIssuerLaunchErrorV1),
+    /// The inherited crash-retained lifecycle lease is invalid or changed.
+    Lifecycle(LifecycleLeaseErrorV1),
     /// The trusted launcher measurement was invalid.
     LauncherMeasurement(IssuerProgramAdmissionErrorV1),
     /// Static launcher or issuer program admission failed.
@@ -288,6 +433,17 @@ impl fmt::Display for ProtectedIssuerDeploymentErrorV1 {
                 formatter,
                 "inherited supervisor descriptor {descriptor} is unexpectedly close-on-exec"
             ),
+            Self::InvalidBootstrap => {
+                formatter.write_str("invalid root-to-supervisor bootstrap channel")
+            }
+            Self::ReadyPid => formatter.write_str("invalid protected supervisor PID"),
+            Self::ReadyProtocol(error) => {
+                write!(formatter, "supervisor readiness failed: {error}")
+            }
+            Self::ReadyTimeout => formatter.write_str("supervisor readiness publication timed out"),
+            Self::ReadyPartial => {
+                formatter.write_str("supervisor readiness publication was partial")
+            }
             Self::DeploymentCapability(error) => {
                 write!(
                     formatter,
@@ -313,6 +469,7 @@ impl fmt::Display for ProtectedIssuerDeploymentErrorV1 {
             Self::ProcessProfile(error) => {
                 write!(formatter, "supervisor process profile failed: {error}")
             }
+            Self::Lifecycle(error) => write!(formatter, "supervisor lifecycle failed: {error}"),
             Self::LauncherMeasurement(error) => {
                 write!(formatter, "supervisor launcher measurement failed: {error}")
             }
@@ -338,13 +495,19 @@ impl Error for ProtectedIssuerDeploymentErrorV1 {
             Self::Descriptor { source, .. } => Some(source),
             Self::Credentials(error) => Some(error),
             Self::ProcessProfile(error) => Some(error),
+            Self::Lifecycle(error) => Some(error),
             Self::LauncherMeasurement(error) | Self::Program(error) => Some(error),
             Self::ExternalAnchor(error) => Some(error),
             Self::Supervisor(error) => Some(error),
             Self::Timeouts(error) => Some(error),
             Self::Service(error) => Some(error),
+            Self::ReadyProtocol(error) => Some(error),
             Self::RuntimeConfiguration
             | Self::UnexpectedCloseOnExec(_)
+            | Self::InvalidBootstrap
+            | Self::ReadyPid
+            | Self::ReadyTimeout
+            | Self::ReadyPartial
             | Self::DeploymentCapability(_)
             | Self::PolicyCapability(_)
             | Self::PolicyMismatch
@@ -357,6 +520,13 @@ impl Error for ProtectedIssuerDeploymentErrorV1 {
 mod tests {
     use std::os::fd::{AsRawFd, IntoRawFd};
 
+    use ed25519_dalek::SigningKey;
+    use fe2o3_compiler_execution_protocol::{
+        COMPILER_EXECUTION_SUPERVISOR_READY_BYTES_V1,
+        CompilerExecutionExternalAnchorServiceIdentityV1, CompilerExecutionIssuerMeasurementV1,
+        CompilerExecutionIssuerPolicyV1, CompilerExecutionSupervisorDeploymentV1,
+    };
+    use rustix::net::{AddressFamily, RecvFlags, SocketFlags, SocketType, recv, socketpair};
     use rustix::pipe::{PipeFlags, pipe_with};
 
     use super::*;
@@ -365,6 +535,8 @@ mod tests {
     fn descriptor_contract_is_ordered_and_outside_static_child_staging() {
         assert_eq!(COMPILER_EXECUTION_SUPERVISOR_LISTENER_FD_V1, 3);
         assert_eq!(COMPILER_EXECUTION_SUPERVISOR_EXTERNAL_ANCHOR_PIDFD_V1, 10);
+        assert_eq!(COMPILER_EXECUTION_SUPERVISOR_BOOTSTRAP_FD_V1, 11);
+        assert_eq!(COMPILER_EXECUTION_SUPERVISOR_LIFECYCLE_FD_V1, 12);
         assert_eq!(COMPILER_EXECUTION_SUPERVISOR_DEPLOYMENT_FD_V1, 220);
         assert_eq!(WORKER_COUNT_V1, 4);
     }
@@ -408,5 +580,98 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn bootstrap_requires_exact_unnamed_nonblocking_seqpacket_parent() {
+        let (_parent, child) = socketpair(
+            AddressFamily::UNIX,
+            SocketType::SEQPACKET,
+            SocketFlags::CLOEXEC | SocketFlags::NONBLOCK,
+            None,
+        )
+        .unwrap();
+        validate_bootstrap::<false>(&child, Some(rustix::process::getpid())).unwrap();
+        assert!(matches!(
+            validate_bootstrap::<false>(&child, rustix::process::getppid()),
+            Err(ProtectedIssuerDeploymentErrorV1::InvalidBootstrap)
+        ));
+        if !rustix::process::geteuid().is_root() || !rustix::process::getegid().is_root() {
+            assert!(matches!(
+                validate_bootstrap::<true>(&child, Some(rustix::process::getpid())),
+                Err(ProtectedIssuerDeploymentErrorV1::InvalidBootstrap)
+            ));
+        }
+
+        let (_parent, blocking) = socketpair(
+            AddressFamily::UNIX,
+            SocketType::SEQPACKET,
+            SocketFlags::CLOEXEC,
+            None,
+        )
+        .unwrap();
+        assert!(matches!(
+            validate_bootstrap::<false>(&blocking, Some(rustix::process::getpid())),
+            Err(ProtectedIssuerDeploymentErrorV1::InvalidBootstrap)
+        ));
+    }
+
+    #[test]
+    fn bootstrap_publishes_exact_pid_and_deployment_then_closes() {
+        let (receiver, writer) = socketpair(
+            AddressFamily::UNIX,
+            SocketType::SEQPACKET,
+            SocketFlags::CLOEXEC | SocketFlags::NONBLOCK,
+            None,
+        )
+        .unwrap();
+        let deployment = deployment();
+        publish_ready(&writer, &deployment).unwrap();
+        drop(writer);
+
+        let mut bytes = [0_u8; COMPILER_EXECUTION_SUPERVISOR_READY_BYTES_V1];
+        assert_eq!(
+            recv(&receiver, &mut bytes, RecvFlags::empty()).unwrap().0,
+            bytes.len()
+        );
+        let ready = CompilerExecutionSupervisorReadyV1::decode(&bytes).unwrap();
+        let pid = u32::try_from(rustix::process::getpid().as_raw_pid()).unwrap();
+        assert!(ready.matches_deployment(pid, &deployment));
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            match recv(&receiver, &mut bytes, RecvFlags::empty()) {
+                Ok((0, _)) => break,
+                Err(rustix::io::Errno::AGAIN | rustix::io::Errno::INTR)
+                    if Instant::now() < deadline =>
+                {
+                    std::thread::sleep(BOOTSTRAP_RETRY_INTERVAL_V1);
+                }
+                result => panic!("bootstrap did not reach exact EOF: {result:?}"),
+            }
+        }
+    }
+
+    fn deployment() -> CompilerExecutionSupervisorDeploymentV1 {
+        let policy = CompilerExecutionIssuerPolicyV1::new(
+            7,
+            CompilerExecutionIssuerMeasurementV1::new([0x11; 32], 4_096).unwrap(),
+            CompilerExecutionIssuerMeasurementV1::new([0x22; 32], 8_192).unwrap(),
+            SigningKey::from_bytes(&[0x33; 32])
+                .verifying_key()
+                .to_bytes(),
+            SigningKey::from_bytes(&[0x44; 32])
+                .verifying_key()
+                .to_bytes(),
+        )
+        .unwrap();
+        CompilerExecutionSupervisorDeploymentV1::new(
+            1_001,
+            1_002,
+            CompilerExecutionExternalAnchorServiceIdentityV1::new(2_001, 2_002).unwrap(),
+            CompilerExecutionIssuerMeasurementV1::new([0x55; 32], 12_288).unwrap(),
+            CompilerExecutionIssuerMeasurementV1::new([0x66; 32], 16_384).unwrap(),
+            &policy,
+        )
+        .unwrap()
     }
 }

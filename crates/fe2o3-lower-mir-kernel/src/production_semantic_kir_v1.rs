@@ -24,7 +24,8 @@ use fe2o3_kernel_ir::{
     VerifiedCanonicalKernelIrIdentityV8, VerifiedCanonicalKernelIrIdentityV9,
     VerifiedCanonicalKernelIrV8, VerifiedCanonicalKernelIrV9, WaveF32ReductionKindV1,
     WaveOperation, WaveOperationKind, WaveWidth, WorkgroupBarrier, WorkgroupMemory,
-    WorkgroupMemoryExtent, WorkgroupSize, plan_integer_cast_v1, verify_module,
+    WorkgroupMemoryExtent, WorkgroupSize, analyze_interprocedural_effects_v1, plan_integer_cast_v1,
+    verify_module,
 };
 use fe2o3_mir_model::semantic_mir_v1::{
     SemanticAbiPassModeV1, SemanticAbiPointeeKindV1, SemanticAggregateKindV1,
@@ -34,7 +35,7 @@ use fe2o3_mir_model::semantic_mir_v1::{
     SemanticCastKindV1, SemanticCheckedBinaryOpV1, SemanticCompilerIntrinsicOperationV1,
     SemanticConstantValueV1, SemanticDirectCallV1, SemanticDisjointIndexSpaceV1,
     SemanticEnumEncodingV1, SemanticEnumVariantV1, SemanticF32MathFunctionV1,
-    SemanticFieldsShapeV1, SemanticFunctionDeclV1, SemanticFunctionIdV1,
+    SemanticFieldsShapeV1, SemanticFunctionDeclV1, SemanticFunctionIdV1, SemanticFunctionRoleV1,
     SemanticGfx950LdsTransposeFormatV1, SemanticLocalIdV1, SemanticLocalRoleV1,
     SemanticMfmaAccumulatorContractV1, SemanticMfmaOperandContractV1, SemanticMfmaOperandRoleV1,
     SemanticMfmaProfileV1, SemanticMfmaRegisterDistributionV1, SemanticMfmaStorageLayoutV1,
@@ -143,6 +144,40 @@ pub struct SemanticKirParameterBindingV1 {
     semantic_function: SemanticFunctionIdV1,
     semantic_local: SemanticLocalIdV1,
     kernel_ir_value: ValueId,
+}
+
+/// Closed role of one semantic function materialized in the Kernel IR module.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum SemanticKirFunctionRoleV1 {
+    /// The selected semantic body backing the sole kernel entry.
+    KernelEntry,
+    /// A reachable, deterministic scalar helper with an ordinary device ABI.
+    InternalHelper,
+}
+
+/// Exact semantic-function to Kernel-IR-function correspondence.
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct SemanticKirFunctionCorrespondenceV1 {
+    semantic_function: SemanticFunctionIdV1,
+    kernel_ir_function: FunctionId,
+    role: SemanticKirFunctionRoleV1,
+}
+
+impl SemanticKirFunctionCorrespondenceV1 {
+    /// Returns the retained semantic function identity.
+    pub const fn semantic_function(&self) -> SemanticFunctionIdV1 {
+        self.semantic_function
+    }
+
+    /// Returns the exact Kernel IR function identity emitted for the function.
+    pub const fn kernel_ir_function(&self) -> &FunctionId {
+        &self.kernel_ir_function
+    }
+
+    /// Returns whether this is the kernel entry or an internal helper.
+    pub const fn role(&self) -> SemanticKirFunctionRoleV1 {
+        self.role
+    }
 }
 
 impl SemanticKirParameterBindingV1 {
@@ -276,6 +311,7 @@ pub enum SemanticKirSyntheticOperationRuleV1 {
 /// Exact Kernel IR operation span emitted by one typed synthetic lowering rule.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SemanticKirSyntheticOperationSpanV1 {
+    semantic_function: SemanticFunctionIdV1,
     rule: SemanticKirSyntheticOperationRuleV1,
     kernel_ir_block: BlockId,
     first_operation_ordinal: u32,
@@ -283,6 +319,11 @@ pub struct SemanticKirSyntheticOperationSpanV1 {
 }
 
 impl SemanticKirSyntheticOperationSpanV1 {
+    /// Returns the semantic function owning the synthetic operation.
+    pub const fn semantic_function(self) -> SemanticFunctionIdV1 {
+        self.semantic_function
+    }
+
     /// Returns the closed synthetic lowering rule.
     pub const fn rule(self) -> SemanticKirSyntheticOperationRuleV1 {
         self.rule
@@ -315,6 +356,7 @@ impl SemanticKirSyntheticOperationSpanV1 {
 pub struct SemanticKirCorrespondenceV1 {
     semantic_sha256: [u8; 32],
     function_count: usize,
+    lowered_functions: Box<[SemanticKirFunctionCorrespondenceV1]>,
     blocks: Box<[SemanticKirBlockCorrespondenceV1]>,
     statement_operation_spans: Box<[SemanticKirStatementOperationSpanV1]>,
     terminator_operation_spans: Box<[SemanticKirTerminatorOperationSpanV1]>,
@@ -335,6 +377,11 @@ impl SemanticKirCorrespondenceV1 {
     /// Kernel IR operations.
     pub const fn function_count(&self) -> usize {
         self.function_count
+    }
+
+    /// Returns the exact, ordered set of semantic functions materialized in KIR.
+    pub fn lowered_functions(&self) -> &[SemanticKirFunctionCorrespondenceV1] {
+        &self.lowered_functions
     }
 
     /// Returns source-to-Kernel-IR block evidence in lowering order.
@@ -369,9 +416,8 @@ impl SemanticKirCorrespondenceV1 {
         &self,
         semantic_owner: &ProductionSemanticMirOwnerV1,
         module: &Module,
-        has_runtime_assert: bool,
     ) -> Result<(), ProductionSemanticKirErrorV1> {
-        validate_semantic_kir_correspondence(semantic_owner, module, self, has_runtime_assert)
+        validate_semantic_kir_correspondence(semantic_owner, module, self)
     }
 }
 
@@ -1786,6 +1832,13 @@ struct KirCorrelationIndexV1<'module> {
 struct RankedViewDefinitionV1 {
     allocation_origin: u64,
     memory_space: dialect_kernel::MemorySpaceAttr,
+    noalias_class: u64,
+}
+
+#[derive(Clone, Copy)]
+enum IndexedRankedAllocationV1 {
+    View(ProductionRankedValueV1),
+    Direct(RankedViewDefinitionV1),
 }
 
 #[derive(Clone, Copy)]
@@ -1793,14 +1846,14 @@ struct IndexedRankedAccessSourceV1 {
     ranked_block: u32,
     ranked_operation: u32,
     access: dialect_kernel::AccessKindAttr,
-    view: Option<ProductionRankedValueV1>,
-    allocation: Option<RankedViewDefinitionV1>,
+    allocation: IndexedRankedAllocationV1,
     value: Option<ProductionRankedValueV1>,
     atomic: Option<NormalizedAtomicContractV1>,
 }
 
 struct RankedCorrelationIndexV1 {
     sources_by_site: BTreeMap<SemanticAccessSiteV1, IndexedRankedAccessSourceV1>,
+    conservative_sources_by_statement: BTreeMap<(u32, Option<u32>), IndexedRankedAccessSourceV1>,
     sites_by_ranked_location: BTreeMap<(u32, u32), SemanticAccessSiteV1>,
     view_definitions: BTreeMap<ProductionRankedValueIdV1, RankedViewDefinitionV1>,
     semantic_expressions: BTreeMap<
@@ -2048,7 +2101,8 @@ fn unsupported_indices_match_ranked_sources_result(
             };
             let first_logical_use =
                 used_ranked_locations.insert((source.ranked_block, source.ranked_operation));
-            if (!first_logical_use && source.allocation.is_none())
+            if (!first_logical_use
+                && !matches!(source.allocation, IndexedRankedAllocationV1::Direct(_)))
                 || !indexed_ranked_source_matches_allocation(
                     &ranked,
                     source,
@@ -2467,7 +2521,18 @@ fn index_semantic_access_sites(
     budget: &mut UnsupportedIndexCorrelationBudgetV1,
 ) -> Option<BTreeMap<(FunctionOperationLocation, u32), SemanticAccessSiteV1>> {
     let mut sites = BTreeMap::new();
-    for span in correspondence.statement_operation_spans() {
+    let kernel_semantic_function = correspondence
+        .lowered_functions()
+        .iter()
+        .find(|function| function.role() == SemanticKirFunctionRoleV1::KernelEntry)
+        .map(SemanticKirFunctionCorrespondenceV1::semantic_function);
+    for span in correspondence
+        .statement_operation_spans()
+        .iter()
+        .filter(|span| {
+            kernel_semantic_function.is_none_or(|function| span.semantic_function() == function)
+        })
+    {
         budget.charge()?;
         index_semantic_access_span(
             kir,
@@ -2480,7 +2545,13 @@ fn index_semantic_access_sites(
             budget,
         )?;
     }
-    for span in correspondence.terminator_operation_spans() {
+    for span in correspondence
+        .terminator_operation_spans()
+        .iter()
+        .filter(|span| {
+            kernel_semantic_function.is_none_or(|function| span.semantic_function() == function)
+        })
+    {
         budget.charge()?;
         index_semantic_access_span(
             kir,
@@ -2566,6 +2637,7 @@ fn index_ranked_correlation(
                     RankedViewDefinitionV1 {
                         allocation_origin: *allocation_origin,
                         memory_space: dialect_kernel::MemorySpaceAttr::Global,
+                        noalias_class: 0,
                     },
                 )),
                 ProductionRankedOperationV1::ViewInSpace {
@@ -2578,6 +2650,7 @@ fn index_ranked_correlation(
                     RankedViewDefinitionV1 {
                         allocation_origin: *allocation_origin,
                         memory_space: *memory_space,
+                        noalias_class: 0,
                     },
                 )),
                 _ => None,
@@ -2609,6 +2682,8 @@ fn index_ranked_correlation(
     let mut sites_by_ranked_location = BTreeMap::new();
     let mut source_ordinals = BTreeMap::<(u32, Option<u32>), BTreeSet<u32>>::new();
     let mut sources_by_site = BTreeMap::new();
+    let mut conservative_sources_by_statement = BTreeMap::new();
+    let mut ambiguous_conservative_statements = BTreeSet::new();
     for source in sources {
         budget.charge()?;
         let operation = lowering
@@ -2617,16 +2692,21 @@ fn index_ranked_correlation(
             .get(source.ranked_block as usize)?
             .operations()
             .get(source.ranked_operation as usize)?;
-        let (access, view, allocation, value, atomic) = match operation {
+        let (access, allocation, value, atomic) = match operation {
             ProductionRankedOperationV1::Access { kind, view, .. } => {
-                (*kind, Some(*view), None, None, None)
+                (*kind, IndexedRankedAllocationV1::View(*view), None, None)
             }
             ProductionRankedOperationV1::PredicatedAccess { kind, view, .. } => {
-                (*kind, Some(*view), None, None, None)
+                (*kind, IndexedRankedAllocationV1::View(*view), None, None)
             }
             ProductionRankedOperationV1::ValueAccess {
                 kind, view, value, ..
-            } => (*kind, Some(*view), None, Some(*value), None),
+            } => (
+                *kind,
+                IndexedRankedAllocationV1::View(*view),
+                Some(*value),
+                None,
+            ),
             ProductionRankedOperationV1::AtomicAccess {
                 kind,
                 ordering,
@@ -2635,8 +2715,7 @@ fn index_ranked_correlation(
                 ..
             } => (
                 *kind,
-                Some(*view),
-                None,
+                IndexedRankedAllocationV1::View(*view),
                 None,
                 Some(normalize_ranked_atomic_contract_v1(*ordering, *scope)),
             ),
@@ -2649,8 +2728,7 @@ fn index_ranked_correlation(
                 ..
             } => (
                 *kind,
-                Some(*view),
-                None,
+                IndexedRankedAllocationV1::View(*view),
                 Some(*value),
                 Some(normalize_ranked_atomic_contract_v1(*ordering, *scope)),
             ),
@@ -2658,13 +2736,13 @@ fn index_ranked_correlation(
                 kind,
                 memory_space,
                 allocation_origin,
-                ..
+                noalias_class,
             } => (
                 *kind,
-                None,
-                Some(RankedViewDefinitionV1 {
+                IndexedRankedAllocationV1::Direct(RankedViewDefinitionV1 {
                     allocation_origin: *allocation_origin,
                     memory_space: *memory_space,
+                    noalias_class: *noalias_class,
                 }),
                 None,
                 None,
@@ -2690,21 +2768,26 @@ fn index_ranked_correlation(
         {
             return None;
         }
-        if sources_by_site
-            .insert(
-                site,
-                IndexedRankedAccessSourceV1 {
-                    ranked_block: source.ranked_block,
-                    ranked_operation: source.ranked_operation,
-                    access,
-                    view,
-                    allocation,
-                    value,
-                    atomic,
-                },
-            )
-            .is_some()
-        {
+        let indexed = IndexedRankedAccessSourceV1 {
+            ranked_block: source.ranked_block,
+            ranked_operation: source.ranked_operation,
+            access,
+            allocation,
+            value,
+            atomic,
+        };
+        if matches!(allocation, IndexedRankedAllocationV1::Direct(_)) {
+            let key = (site.block, site.statement);
+            if !ambiguous_conservative_statements.contains(&key)
+                && conservative_sources_by_statement
+                    .insert(key, indexed)
+                    .is_some()
+            {
+                conservative_sources_by_statement.remove(&key);
+                ambiguous_conservative_statements.insert(key);
+            }
+        }
+        if sources_by_site.insert(site, indexed).is_some() {
             return None;
         }
     }
@@ -2720,6 +2803,7 @@ fn index_ranked_correlation(
     }
     Some(RankedCorrelationIndexV1 {
         sources_by_site,
+        conservative_sources_by_statement,
         sites_by_ranked_location,
         view_definitions,
         semantic_expressions,
@@ -2802,12 +2886,16 @@ fn normalize_ranked_expression_v1(
                 .sites_by_ranked_location
                 .get(&(load.block, load.operation))?;
             let source = ranked.sources_by_site.get(&site)?;
-            if source.access != dialect_kernel::AccessKindAttr::Read
-                || source.view != Some(load.view)
-            {
+            if source.access != dialect_kernel::AccessKindAttr::Read {
                 return None;
             }
-            let Some(ProductionRankedValueV1::Local(view)) = source.view else {
+            let IndexedRankedAllocationV1::View(source_view) = source.allocation else {
+                return None;
+            };
+            if source_view != load.view {
+                return None;
+            }
+            let ProductionRankedValueV1::Local(view) = source_view else {
                 return None;
             };
             let definition = ranked.view_definitions.get(&view)?;
@@ -3263,6 +3351,33 @@ fn normalize_kir_cast_v1(
     }
 }
 
+fn expected_gfx950_workgroup_allocation_identity_v1(
+    operation: &Operation,
+    operation_access_ordinal: u32,
+) -> Option<(u64, u64)> {
+    let format = match &operation.kind {
+        OperationKind::Gfx950LdsTranspose(Gfx950LdsTransposeOperationV1 {
+            kind: Gfx950LdsTransposeOperationKindV1::Stage { format, .. },
+            ..
+        }) if operation_access_ordinal == 1 => *format,
+        OperationKind::Gfx950LdsTranspose(Gfx950LdsTransposeOperationV1 {
+            kind: Gfx950LdsTransposeOperationKindV1::Read { format, .. },
+            ..
+        }) if operation_access_ordinal == 0 => *format,
+        _ => return None,
+    };
+    Some(match format {
+        Gfx950LdsTransposeFormatV1::Fp4E2M1 => (
+            dialect_kernel::GFX950_TRANSPOSE_FP4_WORKGROUP_ALLOCATION_ORIGIN_V1,
+            dialect_kernel::GFX950_TRANSPOSE_FP4_WORKGROUP_NOALIAS_CLASS_V1,
+        ),
+        Gfx950LdsTransposeFormatV1::Fp8E4M3 => (
+            dialect_kernel::GFX950_TRANSPOSE_FP8_WORKGROUP_ALLOCATION_ORIGIN_V1,
+            dialect_kernel::GFX950_TRANSPOSE_FP8_WORKGROUP_NOALIAS_CLASS_V1,
+        ),
+    })
+}
+
 fn validate_mir_pliron_translation_v1(
     module: &Module,
     correspondence: &SemanticKirCorrespondenceV1,
@@ -3353,27 +3468,46 @@ fn validate_mir_pliron_translation_v1(
                 },
             );
         }
-        let definition = match (source.view, source.allocation) {
-            (Some(ProductionRankedValueV1::Local(view)), None) => {
-                ranked.view_definitions.get(&view).copied().ok_or(
-                    ProductionMirPlironTranslationErrorV1::AllocationOriginMismatch {
-                        location: consumer.location,
-                    },
-                )?
+        let definition = match source.allocation {
+            IndexedRankedAllocationV1::View(ProductionRankedValueV1::Local(view)) => {
+                ranked.view_definitions.get(&view).copied()
             }
-            (None, Some(allocation)) => allocation,
-            _ => {
-                return Err(
-                    ProductionMirPlironTranslationErrorV1::AllocationOriginMismatch {
-                        location: consumer.location,
-                    },
-                );
-            }
+            IndexedRankedAllocationV1::View(_) => None,
+            IndexedRankedAllocationV1::Direct(definition) => Some(definition),
         };
+        let definition = definition.ok_or(
+            ProductionMirPlironTranslationErrorV1::AllocationOriginMismatch {
+                location: consumer.location,
+            },
+        )?;
         if definition.memory_space != consumer.memory_space {
             return Err(ProductionMirPlironTranslationErrorV1::MemorySpaceMismatch {
                 location: consumer.location,
             });
+        }
+        if consumer.memory_space == dialect_kernel::MemorySpaceAttr::Workgroup {
+            let operation = kir.operations.get(&consumer.location).ok_or(
+                ProductionMirPlironTranslationErrorV1::AllocationOriginMismatch {
+                    location: consumer.location,
+                },
+            )?;
+            let expected = expected_gfx950_workgroup_allocation_identity_v1(
+                operation,
+                consumer.operation_access_ordinal,
+            );
+            match (source.allocation, expected) {
+                (IndexedRankedAllocationV1::View(_), None) => {}
+                (IndexedRankedAllocationV1::Direct(definition), Some((origin, class)))
+                    if definition.allocation_origin == origin
+                        && definition.noalias_class == class => {}
+                _ => {
+                    return Err(
+                        ProductionMirPlironTranslationErrorV1::AllocationOriginMismatch {
+                            location: consumer.location,
+                        },
+                    );
+                }
+            }
         }
         if consumer.memory_space == dialect_kernel::MemorySpaceAttr::Global {
             let parameter = external_allocation_parameter_v1(
@@ -3403,7 +3537,8 @@ fn validate_mir_pliron_translation_v1(
         }
         let first_logical_use =
             used_ranked_locations.insert((source.ranked_block, source.ranked_operation));
-        if !first_logical_use && source.allocation.is_none() {
+        if !first_logical_use && !matches!(source.allocation, IndexedRankedAllocationV1::Direct(_))
+        {
             return Err(ProductionMirPlironTranslationErrorV1::ExtraRankedEffect {
                 ranked_block: source.ranked_block,
                 ranked_operation: source.ranked_operation,
@@ -3495,7 +3630,21 @@ fn validate_mir_pliron_translation_v1(
         budget
             .charge()
             .ok_or(ProductionMirPlironTranslationErrorV1::ResourceLimit)?;
-        if !used_ranked_locations.contains(&(source.ranked_block, source.ranked_operation)) {
+        let is_private = match source.allocation {
+            IndexedRankedAllocationV1::View(ProductionRankedValueV1::Local(view)) => ranked
+                .view_definitions
+                .get(&view)
+                .is_some_and(|definition| {
+                    definition.memory_space == dialect_kernel::MemorySpaceAttr::Private
+                }),
+            IndexedRankedAllocationV1::View(_) => false,
+            IndexedRankedAllocationV1::Direct(definition) => {
+                definition.memory_space == dialect_kernel::MemorySpaceAttr::Private
+            }
+        };
+        if !used_ranked_locations.contains(&(source.ranked_block, source.ranked_operation))
+            && !is_private
+        {
             return Err(ProductionMirPlironTranslationErrorV1::ExtraRankedEffect {
                 ranked_block: source.ranked_block,
                 ranked_operation: source.ranked_operation,
@@ -3543,12 +3692,14 @@ fn ranked_source_for_semantic_effect_v1<'index>(
     if let Some(source) = ranked.sources_by_site.get(&site) {
         return Some((site, source));
     }
-    let logical_site = SemanticAccessSiteV1 { ordinal: 0, ..site };
-    let source = ranked.sources_by_site.get(&logical_site)?;
-    source
-        .allocation
-        .is_some()
-        .then_some((logical_site, source))
+    let source = ranked
+        .conservative_sources_by_statement
+        .get(&(site.block, site.statement))?;
+    let source_site = ranked
+        .sites_by_ranked_location
+        .get(&(source.ranked_block, source.ranked_operation))
+        .copied()?;
+    Some((source_site, source))
 }
 
 fn compiler_owned_enum_payload_access_v1(
@@ -3659,10 +3810,23 @@ fn validate_effect_control_flow_v1(
 ) -> Result<(), ProductionMirPlironTranslationErrorV1> {
     let mut kir_events = BTreeMap::<u32, Vec<(u64, SemanticAccessSiteV1)>>::new();
     let mut ranked_events = BTreeMap::<u32, Vec<(u64, SemanticAccessSiteV1)>>::new();
+    let mut seen_ranked_effects = BTreeMap::<(u32, u32), SemanticAccessSiteV1>::new();
     for (site, kir, operation_access_ordinal, ranked) in locations {
         budget
             .charge()
             .ok_or(ProductionMirPlironTranslationErrorV1::ResourceLimit)?;
+        if let Some(first) = seen_ranked_effects.get(ranked) {
+            if (first.block, first.statement) != (site.block, site.statement) {
+                return Err(ProductionMirPlironTranslationErrorV1::ControlFlowMismatch {
+                    first_semantic_block: first.block,
+                    first_semantic_statement: first.statement,
+                    second_semantic_block: site.block,
+                    second_semantic_statement: site.statement,
+                });
+            }
+            continue;
+        }
+        seen_ranked_effects.insert(*ranked, *site);
         kir_events.entry(kir.block.0).or_default().push((
             (u64::try_from(kir.operation_index)
                 .map_err(|_| ProductionMirPlironTranslationErrorV1::ResourceLimit)?
@@ -4182,15 +4346,15 @@ fn indexed_ranked_source_matches_allocation(
     expected_memory_space: dialect_kernel::MemorySpaceAttr,
     parameter_index: u32,
 ) -> bool {
-    let definition = match (source.view, source.allocation) {
-        (Some(ProductionRankedValueV1::Local(view)), None) => {
-            let Some(definition) = ranked.view_definitions.get(&view).copied() else {
-                return false;
-            };
-            definition
+    let definition = match source.allocation {
+        IndexedRankedAllocationV1::View(ProductionRankedValueV1::Local(view)) => {
+            ranked.view_definitions.get(&view).copied()
         }
-        (None, Some(allocation)) => allocation,
-        _ => return false,
+        IndexedRankedAllocationV1::View(_) => None,
+        IndexedRankedAllocationV1::Direct(definition) => Some(definition),
+    };
+    let Some(definition) = definition else {
+        return false;
     };
     source.access == expected_access
         && definition.memory_space == expected_memory_space
@@ -4507,7 +4671,6 @@ fn validate_semantic_kir_correspondence(
     owner: &ProductionSemanticMirOwnerV1,
     module: &Module,
     correspondence: &SemanticKirCorrespondenceV1,
-    has_runtime_assert: bool,
 ) -> Result<(), ProductionSemanticKirErrorV1> {
     let semantic = owner.semantic();
     if correspondence.semantic_sha256 != *semantic.semantic_sha256().as_bytes()
@@ -4518,61 +4681,175 @@ fn validate_semantic_kir_correspondence(
     let selection = semantic
         .select_kernel_body_v1()
         .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
-    let function = semantic
+    let root = semantic
         .functions()
-        .get(selection.body().index() as usize)
+        .get(selection.root().index() as usize)
+        .and_then(SemanticFunctionDeclV1::kernel_entry)
         .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
-    let runtime_assert_rule =
-        has_runtime_assert.then_some(SemanticKirSyntheticOperationRuleV1::RuntimeAssertFailureTrap);
-    let order = semantic_cfg_reverse_postorder(function)
+    let symbol = std::str::from_utf8(root.export_symbol().as_bytes())
         .map_err(|_| ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
-    let expected = order
-        .into_iter()
-        .map(|semantic_block| {
-            let block_index = usize::try_from(semantic_block.index())
-                .map_err(|_| ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
-            let source = function
-                .blocks()
-                .get(block_index)
+    let closure =
+        reachable_defined_closure_v1(semantic, selection.body(), correspondence.function_count)
+            .map_err(|_| ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+    let expected_functions = closure
+        .iter()
+        .enumerate()
+        .map(|(ordinal, function_id)| {
+            let function = semantic
+                .functions()
+                .get(function_id.index() as usize)
                 .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
-            Ok(ExpectedSemanticKirBlockCoverageV1 {
-                semantic_function: selection.body(),
-                semantic_block,
-                kernel_ir_block: BlockId(semantic_block.index()),
-                source_statement_count: u32::try_from(source.statements().len())
-                    .map_err(|_| ProductionSemanticKirErrorV1::CorrespondenceMismatch)?,
+            Ok(SemanticKirFunctionCorrespondenceV1 {
+                semantic_function: *function_id,
+                kernel_ir_function: if ordinal == 0 {
+                    FunctionId::new(symbol)
+                } else {
+                    helper_function_id_v1(*function_id, function)
+                },
+                role: if ordinal == 0 {
+                    SemanticKirFunctionRoleV1::KernelEntry
+                } else {
+                    SemanticKirFunctionRoleV1::InternalHelper
+                },
             })
         })
         .collect::<Result<Vec<_>, ProductionSemanticKirErrorV1>>()?;
-    let mut function_bodies = module
-        .functions
-        .iter()
-        .filter_map(|function| function.body.as_ref());
-    let target_body = function_bodies
-        .next()
-        .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
-    let target_blocks = target_body.blocks.as_slice();
-    if function_bodies.next().is_some() {
+    if correspondence.lowered_functions.as_ref() != expected_functions.as_slice()
+        || module
+            .functions
+            .iter()
+            .filter(|function| function.body.is_some())
+            .count()
+            != expected_functions.len()
+    {
         return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
     }
-    if validate_operation_correspondence_layout(
-        &expected,
-        target_blocks,
-        &correspondence.blocks,
-        &correspondence.statement_operation_spans,
-        &correspondence.terminator_operation_spans,
-        &correspondence.synthetic_operation_spans,
-        runtime_assert_rule,
-    ) && validate_parameter_correspondence_v1(
-        selection.body(),
-        function,
-        target_body,
-        &correspondence.parameter_bindings,
-    ) {
-        Ok(())
-    } else {
-        Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch)
+
+    let mut block_offset = 0_usize;
+    let mut statement_offset = 0_usize;
+    let mut terminator_offset = 0_usize;
+    let mut used_synthetic = 0_usize;
+    let mut parameter_offset = 0_usize;
+    for expected_function in &expected_functions {
+        let semantic_function = semantic
+            .functions()
+            .get(expected_function.semantic_function.index() as usize)
+            .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+        let target = module
+            .function(&expected_function.kernel_ir_function)
+            .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+        if target.role
+            != match expected_function.role {
+                SemanticKirFunctionRoleV1::KernelEntry => {
+                    fe2o3_kernel_ir::FunctionRole::KernelEntry
+                }
+                SemanticKirFunctionRoleV1::InternalHelper => {
+                    fe2o3_kernel_ir::FunctionRole::InternalHelper
+                }
+            }
+        {
+            return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+        }
+        let target_body = target
+            .body
+            .as_ref()
+            .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+        let order = semantic_cfg_reverse_postorder(semantic_function)
+            .map_err(|_| ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+        let expected_blocks = order
+            .into_iter()
+            .map(|semantic_block| {
+                let source = semantic_function
+                    .blocks()
+                    .get(semantic_block.index() as usize)
+                    .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+                Ok(ExpectedSemanticKirBlockCoverageV1 {
+                    semantic_function: expected_function.semantic_function,
+                    semantic_block,
+                    kernel_ir_block: BlockId(semantic_block.index()),
+                    source_statement_count: u32::try_from(source.statements().len())
+                        .map_err(|_| ProductionSemanticKirErrorV1::CorrespondenceMismatch)?,
+                })
+            })
+            .collect::<Result<Vec<_>, ProductionSemanticKirErrorV1>>()?;
+        let statement_count = expected_blocks
+            .iter()
+            .try_fold(0_usize, |count, block| {
+                count.checked_add(block.source_statement_count as usize)
+            })
+            .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+        let block_end = block_offset
+            .checked_add(expected_blocks.len())
+            .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+        let statement_end = statement_offset
+            .checked_add(statement_count)
+            .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+        let terminator_end = terminator_offset
+            .checked_add(expected_blocks.len())
+            .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+        let synthetic = correspondence
+            .synthetic_operation_spans
+            .iter()
+            .filter(|span| span.semantic_function == expected_function.semantic_function)
+            .cloned()
+            .collect::<Vec<_>>();
+        used_synthetic = used_synthetic
+            .checked_add(synthetic.len())
+            .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+        let runtime_assert_rule = synthetic
+            .iter()
+            .any(|span| span.rule == SemanticKirSyntheticOperationRuleV1::RuntimeAssertFailureTrap)
+            .then_some(SemanticKirSyntheticOperationRuleV1::RuntimeAssertFailureTrap);
+        let parameter_count = semantic_function
+            .locals()
+            .iter()
+            .filter(|local| matches!(local.role(), SemanticLocalRoleV1::Argument(_)))
+            .count();
+        let parameter_end = parameter_offset
+            .checked_add(parameter_count)
+            .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+        if !validate_operation_correspondence_layout(
+            &expected_blocks,
+            &target_body.blocks,
+            correspondence
+                .blocks
+                .get(block_offset..block_end)
+                .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?,
+            correspondence
+                .statement_operation_spans
+                .get(statement_offset..statement_end)
+                .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?,
+            correspondence
+                .terminator_operation_spans
+                .get(terminator_offset..terminator_end)
+                .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?,
+            &synthetic,
+            runtime_assert_rule,
+        ) || !validate_parameter_correspondence_v1(
+            expected_function.semantic_function,
+            semantic_function,
+            target_body,
+            correspondence
+                .parameter_bindings
+                .get(parameter_offset..parameter_end)
+                .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?,
+        ) {
+            return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+        }
+        block_offset = block_end;
+        statement_offset = statement_end;
+        terminator_offset = terminator_end;
+        parameter_offset = parameter_end;
     }
+    if block_offset != correspondence.blocks.len()
+        || statement_offset != correspondence.statement_operation_spans.len()
+        || terminator_offset != correspondence.terminator_operation_spans.len()
+        || used_synthetic != correspondence.synthetic_operation_spans.len()
+        || parameter_offset != correspondence.parameter_bindings.len()
+    {
+        return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+    }
+    Ok(())
 }
 
 fn validate_parameter_correspondence_v1(
@@ -4645,6 +4922,7 @@ fn validate_operation_correspondence_layout(
 
         let mut next_operation = 0_usize;
         if let Some(span) = synthetic.get(synthetic_index)
+            && span.semantic_function == expected_block.semantic_function
             && span.rule == SemanticKirSyntheticOperationRuleV1::EnumPayloadStorage
             && span.kernel_ir_block == expected_block.kernel_ir_block
         {
@@ -4735,6 +5013,7 @@ fn validate_operation_correspondence_layout(
         };
         let canonical_trap = AmdGpuDiagnosticOperation::Trap.operation(None);
         if span.rule != runtime_assert_rule
+            || span.semantic_function != expected[0].semantic_function
             || span.kernel_ir_block != target.id
             || span.first_operation_ordinal != 0
             || span.operation_count != 1
@@ -5609,6 +5888,511 @@ fn whole_semantic_operand_local_v1(operand: &SemanticOperandV1) -> Option<usize>
     }
 }
 
+fn semantic_unsigned_integer_bits_v1(
+    types: &[SemanticTypeDeclV1],
+    ty: SemanticTypeIdV1,
+) -> Option<u16> {
+    match types.get(ty.index() as usize)?.shape() {
+        SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
+            signed: false,
+            bits,
+        }) if (1..=128).contains(bits) => Some(*bits),
+        _ => None,
+    }
+}
+
+fn exact_unsigned_semantic_constant_v1(
+    types: &[SemanticTypeDeclV1],
+    operand: &SemanticOperandV1,
+    expected_type: SemanticTypeIdV1,
+) -> Option<u128> {
+    let SemanticOperandV1::Constant(constant) = operand else {
+        return None;
+    };
+    let SemanticConstantValueV1::Scalar(value) = constant.value() else {
+        return None;
+    };
+    let bits = semantic_unsigned_integer_bits_v1(types, expected_type)?;
+    if constant.ty() != expected_type || u16::from(value.size_bytes()) * 8 != bits {
+        return None;
+    }
+    let value = value.bits();
+    ((bits == 128) || value < (1_u128 << bits)).then_some(value)
+}
+
+fn semantic_unsigned_type_contains_exclusive_bound_v1(
+    types: &[SemanticTypeDeclV1],
+    ty: SemanticTypeIdV1,
+    exclusive_bound: u128,
+) -> bool {
+    let Some(bits) = semantic_unsigned_integer_bits_v1(types, ty) else {
+        return false;
+    };
+    exclusive_bound == 0 || bits == 128 || exclusive_bound - 1 < (1_u128 << bits)
+}
+
+fn resolve_semantic_header_copy_alias_v1(
+    block: &fe2o3_mir_model::semantic_mir_v1::SemanticBasicBlockV1,
+    before_statement: usize,
+    operand: &SemanticOperandV1,
+) -> Option<u32> {
+    let mut current = u32::try_from(whole_semantic_operand_local_v1(operand)?).ok()?;
+    let mut visited = BTreeSet::new();
+    for _ in 0..=before_statement {
+        if !visited.insert(current) {
+            return None;
+        }
+        let definitions = block.statements()[..before_statement]
+            .iter()
+            .filter_map(|statement| {
+                let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
+                    return None;
+                };
+                (semantic_definition_local_v1(assignment.destination())
+                    == usize::try_from(current).ok())
+                .then_some(assignment)
+            })
+            .collect::<Vec<_>>();
+        if definitions.is_empty() {
+            return Some(current);
+        }
+        if definitions.len() != 1 || !definitions[0].destination().projections().is_empty() {
+            return None;
+        }
+        let SemanticRvalueKindV1::Use(source) = definitions[0].value().kind() else {
+            return None;
+        };
+        if definitions[0].destination().ty() != source.ty() {
+            return None;
+        }
+        current = u32::try_from(whole_semantic_operand_local_v1(source)?).ok()?;
+    }
+    None
+}
+
+fn semantic_cfg_graph_v1(
+    function: &SemanticFunctionDeclV1,
+) -> Result<(Vec<Vec<usize>>, Vec<Vec<usize>>, Vec<bool>), ProductionSemanticKirErrorV1> {
+    let mut successors = vec![Vec::new(); function.blocks().len()];
+    let mut predecessors = vec![Vec::new(); function.blocks().len()];
+    for (source, block) in function.blocks().iter().enumerate() {
+        block
+            .terminator()
+            .kind()
+            .try_for_each_edge::<ProductionSemanticKirErrorV1>(|edge| {
+                let target = edge.target().index() as usize;
+                if target >= function.blocks().len() {
+                    return Err(unsupported(
+                        0,
+                        Some(source as u32),
+                        None,
+                        "authenticated induction proof references a missing CFG successor",
+                    ));
+                }
+                successors[source].push(target);
+                Ok(())
+            })?;
+        successors[source].sort_unstable();
+        successors[source].dedup();
+        for target in successors[source].iter().copied() {
+            predecessors[target].push(source);
+        }
+    }
+    let reachable =
+        semantic_reachable_blocks_v1(&successors, function.entry().index() as usize, None)?;
+    Ok((successors, predecessors, reachable))
+}
+
+fn authenticated_natural_loop_topology_v1(
+    function: &SemanticFunctionDeclV1,
+    successors: &[Vec<usize>],
+    predecessors: &[Vec<usize>],
+    reachable: &[bool],
+    header: usize,
+    body_entry: usize,
+    exit: usize,
+) -> Option<(usize, usize, Vec<usize>)> {
+    if !reachable.get(header).copied().unwrap_or(false)
+        || body_entry >= successors.len()
+        || exit >= successors.len()
+        || body_entry == exit
+    {
+        return None;
+    }
+    let mut reachable_without_header = vec![false; successors.len()];
+    let entry = function.entry().index() as usize;
+    let mut pending = (entry != header)
+        .then_some(entry)
+        .into_iter()
+        .collect::<Vec<_>>();
+    while let Some(block) = pending.pop() {
+        if block == header || reachable_without_header[block] {
+            continue;
+        }
+        reachable_without_header[block] = true;
+        pending.extend(successors[block].iter().copied());
+    }
+    let header_predecessors = predecessors[header]
+        .iter()
+        .copied()
+        .filter(|predecessor| reachable[*predecessor])
+        .collect::<Vec<_>>();
+    let backedges = header_predecessors
+        .iter()
+        .copied()
+        .filter(|predecessor| !reachable_without_header[*predecessor])
+        .collect::<Vec<_>>();
+    let preheaders = header_predecessors
+        .iter()
+        .copied()
+        .filter(|predecessor| reachable_without_header[*predecessor])
+        .collect::<Vec<_>>();
+    if backedges.len() != 1 || preheaders.len() != 1 {
+        return None;
+    }
+    let latch = backedges[0];
+    let preheader = preheaders[0];
+    if !matches!(
+        function.blocks()[preheader].terminator().kind(),
+        SemanticTerminatorKindV1::Goto(edge) if edge.target().index() as usize == header
+    ) || !matches!(
+        function.blocks()[latch].terminator().kind(),
+        SemanticTerminatorKindV1::Goto(edge) if edge.target().index() as usize == header
+    ) {
+        return None;
+    }
+
+    let mut in_loop = vec![false; successors.len()];
+    in_loop[header] = true;
+    in_loop[latch] = true;
+    let mut pending = vec![latch];
+    while let Some(block) = pending.pop() {
+        if block == header {
+            continue;
+        }
+        for predecessor in predecessors[block].iter().copied() {
+            if reachable[predecessor] && !in_loop[predecessor] {
+                in_loop[predecessor] = true;
+                pending.push(predecessor);
+            }
+        }
+    }
+    if !in_loop[body_entry] || in_loop[exit] {
+        return None;
+    }
+    for (block, inside) in in_loop.iter().copied().enumerate() {
+        if !inside || reachable_without_header[block] {
+            if inside && reachable_without_header[block] {
+                return None;
+            }
+            continue;
+        }
+        if predecessors[block].iter().copied().any(|predecessor| {
+            reachable[predecessor]
+                && !in_loop[predecessor]
+                && !(block == header && predecessor == preheader)
+        }) {
+            return None;
+        }
+    }
+    let mut exits = Vec::new();
+    for (source, inside) in in_loop.iter().copied().enumerate() {
+        if !inside {
+            continue;
+        }
+        for target in successors[source].iter().copied() {
+            if !in_loop[target] {
+                exits.push((source, target));
+            }
+        }
+    }
+    if exits.as_slice() != [(header, exit)] {
+        return None;
+    }
+    Some((
+        preheader,
+        latch,
+        in_loop
+            .iter()
+            .copied()
+            .enumerate()
+            .filter_map(|(block, inside)| inside.then_some(block))
+            .collect(),
+    ))
+}
+
+fn authenticated_loop_induction_shape_v1(
+    types: &[SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1,
+    induction: u32,
+    preheader: usize,
+    latch: usize,
+    exclusive_bound: u128,
+) -> Option<()> {
+    let induction_index = induction as usize;
+    let induction_type = function.locals().get(induction_index)?.ty();
+    let bits = semantic_unsigned_integer_bits_v1(types, induction_type)?;
+    let mut initial = None;
+    let mut step = None;
+    let mut definitions = 0_u8;
+    for (block_index, block) in function.blocks().iter().enumerate() {
+        for statement in block.statements() {
+            match statement.kind() {
+                SemanticStatementKindV1::Assign(assignment) => {
+                    if let SemanticRvalueKindV1::Borrow { place, .. }
+                    | SemanticRvalueKindV1::AddressOf { place, .. } = assignment.value().kind()
+                        && semantic_definition_local_v1(place) == Some(induction_index)
+                    {
+                        return None;
+                    }
+                    if semantic_definition_local_v1(assignment.destination())
+                        != Some(induction_index)
+                    {
+                        continue;
+                    }
+                    if !assignment.destination().projections().is_empty() {
+                        return None;
+                    }
+                    definitions = definitions.checked_add(1)?;
+                    if block_index == preheader {
+                        let SemanticRvalueKindV1::Use(value) = assignment.value().kind() else {
+                            return None;
+                        };
+                        initial = Some(exact_unsigned_semantic_constant_v1(
+                            types,
+                            value,
+                            induction_type,
+                        )?);
+                    } else if block_index == latch {
+                        let SemanticRvalueKindV1::Binary {
+                            operation: SemanticBinaryOpV1::Add,
+                            left,
+                            right,
+                        } = assignment.value().kind()
+                        else {
+                            return None;
+                        };
+                        let constant = if whole_semantic_operand_local_v1(left)
+                            == Some(induction_index)
+                        {
+                            right
+                        } else if whole_semantic_operand_local_v1(right) == Some(induction_index) {
+                            left
+                        } else {
+                            return None;
+                        };
+                        step = Some(exact_unsigned_semantic_constant_v1(
+                            types,
+                            constant,
+                            induction_type,
+                        )?);
+                    } else {
+                        return None;
+                    }
+                }
+                SemanticStatementKindV1::Store(store)
+                    if semantic_definition_local_v1(store.destination())
+                        == Some(induction_index) =>
+                {
+                    return None;
+                }
+                SemanticStatementKindV1::AtomicRmw(atomic)
+                    if semantic_definition_local_v1(atomic.destination())
+                        == Some(induction_index)
+                        || semantic_definition_local_v1(atomic.address())
+                            == Some(induction_index) =>
+                {
+                    return None;
+                }
+                SemanticStatementKindV1::AtomicCompareExchange(atomic)
+                    if semantic_definition_local_v1(atomic.destination())
+                        == Some(induction_index)
+                        || semantic_definition_local_v1(atomic.address())
+                            == Some(induction_index) =>
+                {
+                    return None;
+                }
+                SemanticStatementKindV1::SetDiscriminant { place, .. }
+                | SemanticStatementKindV1::Deinitialize(place)
+                    if semantic_definition_local_v1(place) == Some(induction_index) =>
+                {
+                    return None;
+                }
+                _ => {}
+            }
+        }
+        if let SemanticTerminatorKindV1::Call(call) = block.terminator().kind()
+            && call.destination().is_some_and(|destination| {
+                semantic_definition_local_v1(destination.place()) == Some(induction_index)
+            })
+        {
+            return None;
+        }
+    }
+    let step = step?;
+    if definitions != 2 || initial != Some(0) || step == 0 || exclusive_bound == 0 {
+        return None;
+    }
+    let maximum = if bits == 128 {
+        u128::MAX
+    } else {
+        (1_u128 << bits) - 1
+    };
+    (exclusive_bound - 1)
+        .checked_add(step)
+        .filter(|next| *next <= maximum)
+        .map(|_| ())
+}
+
+fn authenticated_loop_induction_bounds_v1(
+    types: &[SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1,
+) -> Result<BTreeMap<(u32, u32), u128>, ProductionSemanticKirErrorV1> {
+    let (successors, predecessors, reachable) = semantic_cfg_graph_v1(function)?;
+    let mut bounds = BTreeMap::new();
+    for (header, block) in function.blocks().iter().enumerate() {
+        let SemanticTerminatorKindV1::SwitchInt {
+            discriminant,
+            targets,
+        } = block.terminator().kind()
+        else {
+            continue;
+        };
+        if targets.values().len() != 1 || targets.values()[0].value() != 0 {
+            continue;
+        }
+        let Some(discriminant_local) = whole_semantic_operand_local_v1(discriminant) else {
+            continue;
+        };
+        let comparisons = block
+            .statements()
+            .iter()
+            .enumerate()
+            .filter_map(|(statement, source)| {
+                let SemanticStatementKindV1::Assign(assignment) = source.kind() else {
+                    return None;
+                };
+                (semantic_definition_local_v1(assignment.destination()) == Some(discriminant_local))
+                    .then_some((statement, assignment))
+            })
+            .collect::<Vec<_>>();
+        let [(comparison_statement, comparison)] = comparisons.as_slice() else {
+            continue;
+        };
+        if !comparison.destination().projections().is_empty() {
+            continue;
+        }
+        let SemanticRvalueKindV1::Binary {
+            operation: SemanticBinaryOpV1::LessThan,
+            left,
+            right,
+        } = comparison.value().kind()
+        else {
+            continue;
+        };
+        let Some(induction) =
+            resolve_semantic_header_copy_alias_v1(block, *comparison_statement, left)
+        else {
+            continue;
+        };
+        let Some(induction_type) = function
+            .locals()
+            .get(induction as usize)
+            .map(|local| local.ty())
+        else {
+            continue;
+        };
+        let Some(exclusive_bound) =
+            exact_unsigned_semantic_constant_v1(types, right, induction_type)
+        else {
+            continue;
+        };
+        let body_entry = targets.otherwise().target().index() as usize;
+        let exit = targets.values()[0].edge().target().index() as usize;
+        let Some((preheader, latch, loop_blocks)) = authenticated_natural_loop_topology_v1(
+            function,
+            &successors,
+            &predecessors,
+            &reachable,
+            header,
+            body_entry,
+            exit,
+        ) else {
+            continue;
+        };
+        if authenticated_loop_induction_shape_v1(
+            types,
+            function,
+            induction,
+            preheader,
+            latch,
+            exclusive_bound,
+        )
+        .is_none()
+        {
+            continue;
+        }
+        for body_block in loop_blocks.into_iter().filter(|body| *body != header) {
+            bounds.insert((body_block as u32, induction), exclusive_bound);
+        }
+    }
+    Ok(bounds)
+}
+
+fn authenticated_unsigned_operand_exclusive_bound_v1(
+    types: &[SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1,
+    bounds: &BTreeMap<(u32, u32), u128>,
+    block: SemanticBlockIdV1,
+    operand: &SemanticOperandV1,
+) -> Option<u128> {
+    let source_block = function.blocks().get(block.index() as usize)?;
+    let mut current = u32::try_from(whole_semantic_operand_local_v1(operand)?).ok()?;
+    let mut traversed_types = vec![operand.ty()];
+    let mut visited = BTreeSet::new();
+    for _ in 0..=source_block.statements().len() {
+        if !visited.insert(current) {
+            return None;
+        }
+        if let Some(bound) = bounds.get(&(block.index(), current)).copied() {
+            return traversed_types
+                .iter()
+                .all(|ty| semantic_unsigned_type_contains_exclusive_bound_v1(types, *ty, bound))
+                .then_some(bound);
+        }
+        let definitions = source_block
+            .statements()
+            .iter()
+            .filter_map(|statement| {
+                let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
+                    return None;
+                };
+                (semantic_definition_local_v1(assignment.destination()) == Some(current as usize))
+                    .then_some(assignment)
+            })
+            .collect::<Vec<_>>();
+        let [definition] = definitions.as_slice() else {
+            return None;
+        };
+        if !definition.destination().projections().is_empty()
+            || definition.destination().ty() != *traversed_types.last()?
+        {
+            return None;
+        }
+        let source = match definition.value().kind() {
+            SemanticRvalueKindV1::Use(source) => source,
+            SemanticRvalueKindV1::Cast {
+                kind: SemanticCastKindV1::Integer,
+                operand: source,
+            } => source,
+            _ => return None,
+        };
+        current = u32::try_from(whole_semantic_operand_local_v1(source)?).ok()?;
+        traversed_types.push(source.ty());
+    }
+    None
+}
+
 fn semantic_reachable_blocks_v1(
     successors: &[Vec<usize>],
     entry: usize,
@@ -5685,6 +6469,609 @@ fn semantic_requires_runtime_assert_failure(
         })
 }
 
+#[derive(Clone)]
+struct LoweredFunctionPlanV1 {
+    semantic_function: SemanticFunctionIdV1,
+    kernel_ir_function: FunctionId,
+    role: SemanticKirFunctionRoleV1,
+    parameter_declarations: Vec<(u32, usize, SemanticTypeIdV1)>,
+    parameter_types: Vec<Type>,
+    parameter_values: Vec<ValueId>,
+    result_types: Vec<Type>,
+}
+
+struct LoweredFunctionResultV1 {
+    function: Function,
+    operation_capabilities: BTreeSet<fe2o3_kernel_ir::TargetCapability>,
+    diagnostic_declarations: BTreeMap<FunctionId, Function>,
+    float_declarations: BTreeMap<FunctionId, Function>,
+    blocks: Vec<SemanticKirBlockCorrespondenceV1>,
+    statement_operation_spans: Vec<SemanticKirStatementOperationSpanV1>,
+    terminator_operation_spans: Vec<SemanticKirTerminatorOperationSpanV1>,
+    synthetic_operation_spans: Vec<SemanticKirSyntheticOperationSpanV1>,
+    parameter_bindings: Vec<SemanticKirParameterBindingV1>,
+    emitted_operations: usize,
+}
+
+fn direct_defined_callees_v1(
+    semantic: &fe2o3_mir_model::semantic_mir_v1::AdmittedInertSemanticMirV1,
+    function_id: SemanticFunctionIdV1,
+) -> Result<Vec<SemanticFunctionIdV1>, ProductionSemanticKirErrorV1> {
+    let function = semantic
+        .functions()
+        .get(function_id.index() as usize)
+        .ok_or_else(|| {
+            unsupported(
+                function_id.index(),
+                None,
+                None,
+                "reachable function is missing",
+            )
+        })?;
+    let mut callees = BTreeSet::new();
+    for block in function.blocks() {
+        let callable = match block.terminator().kind() {
+            SemanticTerminatorKindV1::Call(call) => Some(call.callee()),
+            SemanticTerminatorKindV1::TailCall(_) => {
+                return Err(unsupported(
+                    function_id.index(),
+                    None,
+                    None,
+                    "semantic tail calls remain closed in deterministic helper lowering",
+                ));
+            }
+            _ => None,
+        };
+        let Some(callable) = callable else {
+            continue;
+        };
+        match semantic.callables().get(callable.index() as usize) {
+            Some(SemanticCallableDeclV1::Defined { function }) => {
+                if semantic
+                    .functions()
+                    .get(function.index() as usize)
+                    .is_none()
+                {
+                    return Err(unsupported(
+                        function_id.index(),
+                        None,
+                        None,
+                        "defined call references a missing semantic function",
+                    ));
+                }
+                callees.insert(function.to_owned());
+            }
+            Some(SemanticCallableDeclV1::DeviceFfiImport { .. }) => {
+                return Err(unsupported(
+                    function_id.index(),
+                    None,
+                    None,
+                    "device-FFI calls remain closed in deterministic helper lowering",
+                ));
+            }
+            Some(SemanticCallableDeclV1::CompilerIntrinsic { .. }) => {}
+            None => {
+                return Err(unsupported(
+                    function_id.index(),
+                    None,
+                    None,
+                    "call references a callable outside the admitted roster",
+                ));
+            }
+        }
+    }
+    Ok(callees.into_iter().collect())
+}
+
+fn reachable_defined_closure_v1(
+    semantic: &fe2o3_mir_model::semantic_mir_v1::AdmittedInertSemanticMirV1,
+    entry: SemanticFunctionIdV1,
+    limit: usize,
+) -> Result<Vec<SemanticFunctionIdV1>, ProductionSemanticKirErrorV1> {
+    let mut reachable = BTreeSet::from([entry]);
+    let mut pending = VecDeque::from([entry]);
+    let mut adjacency = BTreeMap::<SemanticFunctionIdV1, Vec<SemanticFunctionIdV1>>::new();
+    while let Some(function) = pending.pop_front() {
+        let callees = direct_defined_callees_v1(semantic, function)?;
+        for callee in &callees {
+            if *callee != entry
+                && semantic.functions()[callee.index() as usize].role()
+                    != SemanticFunctionRoleV1::InternalHelper
+            {
+                return Err(unsupported(
+                    function.index(),
+                    None,
+                    None,
+                    "defined call target is not an admitted internal helper",
+                ));
+            }
+            if reachable.insert(*callee) {
+                if reachable.len() > limit {
+                    return Err(ProductionSemanticKirErrorV1::ResourceLimit {
+                        resource: ProductionSemanticKirResourceV1::Functions,
+                        actual: reachable.len(),
+                        limit,
+                    });
+                }
+                pending.push_back(*callee);
+            }
+        }
+        adjacency.insert(function, callees);
+    }
+
+    let mut indegree = reachable
+        .iter()
+        .copied()
+        .map(|function| (function, 0_usize))
+        .collect::<BTreeMap<_, _>>();
+    for callees in adjacency.values() {
+        for callee in callees {
+            let degree = indegree.get_mut(callee).ok_or_else(|| {
+                unsupported(
+                    entry.index(),
+                    None,
+                    None,
+                    "call graph escaped its reachable closure",
+                )
+            })?;
+            *degree = degree.checked_add(1).ok_or_else(|| {
+                unsupported(entry.index(), None, None, "call graph indegree overflowed")
+            })?;
+        }
+    }
+    let mut ready = indegree
+        .iter()
+        .filter_map(|(function, degree)| (*degree == 0).then_some(*function))
+        .collect::<BTreeSet<_>>();
+    let mut visited = 0_usize;
+    while let Some(function) = ready.pop_first() {
+        visited += 1;
+        for callee in adjacency.get(&function).into_iter().flatten() {
+            let degree = indegree
+                .get_mut(callee)
+                .expect("reachable callee has indegree");
+            *degree -= 1;
+            if *degree == 0 {
+                ready.insert(*callee);
+            }
+        }
+    }
+    if visited != reachable.len() {
+        return Err(unsupported(
+            entry.index(),
+            None,
+            None,
+            "recursive deterministic helper call graph is unsupported",
+        ));
+    }
+
+    let mut ordered = Vec::with_capacity(reachable.len());
+    ordered.push(entry);
+    ordered.extend(reachable.into_iter().filter(|function| *function != entry));
+    Ok(ordered)
+}
+
+fn semantic_function_parameters_v1(
+    function_id: SemanticFunctionIdV1,
+    function: &SemanticFunctionDeclV1,
+) -> Result<Vec<(u32, usize, SemanticTypeIdV1)>, ProductionSemanticKirErrorV1> {
+    let mut parameters = function
+        .locals()
+        .iter()
+        .enumerate()
+        .filter_map(|(local, declaration)| match declaration.role() {
+            SemanticLocalRoleV1::Argument(argument) => Some((argument, local, declaration.ty())),
+            SemanticLocalRoleV1::Return | SemanticLocalRoleV1::Temporary => None,
+        })
+        .collect::<Vec<_>>();
+    parameters.sort_by_key(|(argument, _, _)| *argument);
+    if parameters
+        .iter()
+        .enumerate()
+        .any(|(expected, (actual, _, _))| usize::try_from(*actual) != Ok(expected))
+    {
+        return Err(unsupported(
+            function_id.index(),
+            None,
+            None,
+            "function argument locals are not contiguous",
+        ));
+    }
+    Ok(parameters)
+}
+
+fn direct_scalar_helper_plan_v1(
+    types: &[SemanticTypeDeclV1],
+    function_id: SemanticFunctionIdV1,
+    function: &SemanticFunctionDeclV1,
+    kernel_ir_function: FunctionId,
+) -> Result<LoweredFunctionPlanV1, ProductionSemanticKirErrorV1> {
+    if function.role() != SemanticFunctionRoleV1::InternalHelper || function.export().is_some() {
+        return Err(unsupported(
+            function_id.index(),
+            None,
+            None,
+            "reachable helper has an exported or non-helper semantic role",
+        ));
+    }
+    let abi = function.abi();
+    let parameters = semantic_function_parameters_v1(function_id, function)?;
+    if abi.can_unwind()
+        || abi.c_variadic()
+        || !abi.hidden_arguments().is_empty()
+        || abi.adjusted_arguments().len() != parameters.len()
+        || abi.source_input_types().len() != parameters.len()
+        || usize::try_from(abi.fixed_count()) != Ok(parameters.len())
+    {
+        return Err(unsupported(
+            function_id.index(),
+            None,
+            None,
+            "helper does not have an exact non-unwinding direct scalar ABI",
+        ));
+    }
+    let parameter_types = parameters
+        .iter()
+        .zip(abi.adjusted_arguments())
+        .zip(abi.source_input_types())
+        .map(|(((_, _, local_ty), argument), source_ty)| {
+            if local_ty != source_ty
+                || argument.ty() != *source_ty
+                || argument.value().adjusted().is_some()
+                || !matches!(argument.mode(), SemanticAbiPassModeV1::Direct(_))
+            {
+                return Err(unsupported(
+                    function_id.index(),
+                    None,
+                    None,
+                    "helper parameter is not an exact direct scalar",
+                ));
+            }
+            lower_scalar_type(types, *source_ty)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let parameter_values = parameters
+        .iter()
+        .map(|(_, local, _)| {
+            u32::try_from(*local).map(ValueId).map_err(|_| {
+                unsupported(
+                    function_id.index(),
+                    None,
+                    None,
+                    "helper local identity exceeds Kernel IR",
+                )
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let return_locals = function
+        .locals()
+        .iter()
+        .enumerate()
+        .filter(|(_, local)| local.role() == SemanticLocalRoleV1::Return)
+        .collect::<Vec<_>>();
+    let [(_, return_declaration)] = return_locals.as_slice() else {
+        return Err(unsupported(
+            function_id.index(),
+            None,
+            None,
+            "helper must have one return local",
+        ));
+    };
+    if return_declaration.ty() != abi.source_output_type()
+        || abi.return_value().ty() != abi.source_output_type()
+        || abi.return_value().adjusted().is_some()
+    {
+        return Err(unsupported(
+            function_id.index(),
+            None,
+            None,
+            "helper return ABI type changed",
+        ));
+    }
+    let result_types = match abi.return_value().mode() {
+        SemanticAbiPassModeV1::Ignore
+            if matches!(
+                types[abi.source_output_type().index() as usize].shape(),
+                SemanticTypeShapeV1::Unit
+            ) =>
+        {
+            Vec::new()
+        }
+        SemanticAbiPassModeV1::Direct(_) => {
+            vec![lower_scalar_type(types, abi.source_output_type())?]
+        }
+        _ => {
+            return Err(unsupported(
+                function_id.index(),
+                None,
+                None,
+                "helper return is not unit or one direct scalar",
+            ));
+        }
+    };
+    Ok(LoweredFunctionPlanV1 {
+        semantic_function: function_id,
+        kernel_ir_function,
+        role: SemanticKirFunctionRoleV1::InternalHelper,
+        parameter_declarations: parameters,
+        parameter_types,
+        parameter_values,
+        result_types,
+    })
+}
+
+fn helper_function_id_v1(
+    function_id: SemanticFunctionIdV1,
+    function: &SemanticFunctionDeclV1,
+) -> FunctionId {
+    FunctionId::new(format!(
+        "__fe2o3_internal_helper_v1_f{}_{}",
+        function_id.index(),
+        hex_identity(function.identity().as_bytes())
+    ))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn lower_one_semantic_function_v1(
+    semantic: &fe2o3_mir_model::semantic_mir_v1::AdmittedInertSemanticMirV1,
+    plan: &LoweredFunctionPlanV1,
+    defined_function_ids: &BTreeMap<SemanticFunctionIdV1, FunctionId>,
+    defined_function_signatures: &BTreeMap<SemanticFunctionIdV1, (Vec<Type>, Vec<Type>)>,
+    required_workgroup: Option<[u32; 3]>,
+    infallible_asserts: BTreeSet<u32>,
+    launch_rank: u8,
+    authenticated_ranked_control: bool,
+    max_operations: usize,
+) -> Result<LoweredFunctionResultV1, ProductionSemanticKirErrorV1> {
+    let function = semantic
+        .functions()
+        .get(plan.semantic_function.index() as usize)
+        .ok_or_else(|| {
+            unsupported(
+                plan.semantic_function.index(),
+                None,
+                None,
+                "lowered semantic function is missing",
+            )
+        })?;
+    let has_runtime_assert =
+        semantic_requires_runtime_assert_failure(function, &infallible_asserts);
+    let statement_count = function
+        .blocks()
+        .iter()
+        .try_fold(0_usize, |count, block| {
+            count.checked_add(block.statements().len())
+        })
+        .ok_or(ProductionSemanticKirErrorV1::ResourceLimit {
+            resource: ProductionSemanticKirResourceV1::Statements,
+            actual: usize::MAX,
+            limit: usize::MAX,
+        })?;
+    let mut parameter_bindings = Vec::new();
+    parameter_bindings
+        .try_reserve_exact(plan.parameter_declarations.len())
+        .map_err(|_| ProductionSemanticKirErrorV1::AllocationFailure {
+            resource: ProductionSemanticKirResourceV1::DebugBindings,
+        })?;
+    parameter_bindings.extend(
+        plan.parameter_declarations
+            .iter()
+            .zip(&plan.parameter_values)
+            .map(|((_, local, _), value)| SemanticKirParameterBindingV1 {
+                semantic_function: plan.semantic_function,
+                semantic_local: SemanticLocalIdV1::from_index(*local as u32),
+                kernel_ir_value: *value,
+            }),
+    );
+    let failure_block = has_runtime_assert.then(|| BlockId(function.blocks().len() as u32));
+    let mut lowering = SemanticFunctionLoweringV1::new_interprocedural(
+        semantic.types(),
+        semantic.callables(),
+        function,
+        plan.semantic_function,
+        defined_function_ids.clone(),
+        defined_function_signatures.clone(),
+        plan.result_types.clone(),
+        SemanticParameterBindingsV1 {
+            declarations: &plan.parameter_declarations,
+            values: &plan.parameter_values,
+            types: &plan.parameter_types,
+        },
+        failure_block,
+        required_workgroup,
+        infallible_asserts,
+        launch_rank,
+        authenticated_ranked_control,
+        max_operations,
+    )?;
+
+    let order = semantic_cfg_reverse_postorder(function)?;
+    let mut target_blocks = Vec::with_capacity(order.len() + usize::from(has_runtime_assert));
+    let mut blocks = Vec::with_capacity(order.len());
+    let mut statement_operation_spans = Vec::with_capacity(statement_count);
+    let mut terminator_operation_spans = Vec::with_capacity(order.len());
+    let mut synthetic_operation_spans = Vec::with_capacity(usize::from(has_runtime_assert));
+    for semantic_block in order {
+        let index = usize::try_from(semantic_block.index()).map_err(|_| {
+            unsupported(
+                plan.semantic_function.index(),
+                None,
+                None,
+                "block identity does not fit this host",
+            )
+        })?;
+        let source = function.blocks().get(index).ok_or_else(|| {
+            unsupported(
+                plan.semantic_function.index(),
+                Some(semantic_block.index()),
+                None,
+                "block is missing",
+            )
+        })?;
+        let mut target = BasicBlock::new(BlockId(semantic_block.index()));
+        let prologue_first = target.operations.len();
+        lowering.begin_block(semantic_block, &mut target)?;
+        let (first_operation_ordinal, operation_count) =
+            measured_operation_span(prologue_first, target.operations.len(), target.id, None)?;
+        if operation_count != 0 {
+            synthetic_operation_spans.push(SemanticKirSyntheticOperationSpanV1 {
+                semantic_function: plan.semantic_function,
+                rule: SemanticKirSyntheticOperationRuleV1::EnumPayloadStorage,
+                kernel_ir_block: target.id,
+                first_operation_ordinal,
+                operation_count,
+            });
+        }
+        for (statement, operation) in source.statements().iter().enumerate() {
+            let statement = u32::try_from(statement).map_err(|_| {
+                unsupported(
+                    plan.semantic_function.index(),
+                    Some(semantic_block.index()),
+                    None,
+                    "statement ordinal is too large",
+                )
+            })?;
+            let first = target.operations.len();
+            lowering.lower_statement(
+                semantic_block,
+                Some(statement),
+                operation.kind(),
+                &mut target.operations,
+            )?;
+            let (first_operation_ordinal, operation_count) = measured_operation_span(
+                first,
+                target.operations.len(),
+                target.id,
+                Some(statement),
+            )?;
+            statement_operation_spans.push(SemanticKirStatementOperationSpanV1 {
+                semantic_function: plan.semantic_function,
+                semantic_block,
+                statement_ordinal: statement,
+                kernel_ir_block: target.id,
+                first_operation_ordinal,
+                operation_count,
+            });
+        }
+        let terminator_first = target.operations.len();
+        target.terminator = Some(lowering.lower_terminator(
+            semantic_block,
+            source.terminator().kind(),
+            &mut target.operations,
+        )?);
+        let (first_operation_ordinal, operation_count) =
+            measured_operation_span(terminator_first, target.operations.len(), target.id, None)?;
+        terminator_operation_spans.push(SemanticKirTerminatorOperationSpanV1 {
+            semantic_function: plan.semantic_function,
+            semantic_block,
+            kernel_ir_block: target.id,
+            first_operation_ordinal,
+            operation_count,
+        });
+        target_blocks.push(target);
+        blocks.push(SemanticKirBlockCorrespondenceV1 {
+            semantic_function: plan.semantic_function,
+            semantic_block,
+            kernel_ir_block: BlockId(semantic_block.index()),
+            source_statement_count: u32::try_from(source.statements().len()).map_err(|_| {
+                unsupported(
+                    plan.semantic_function.index(),
+                    Some(semantic_block.index()),
+                    None,
+                    "statement count is too large",
+                )
+            })?,
+        });
+    }
+    if let Some(failure_block) = lowering.assert_failure_block {
+        let mut block = BasicBlock::new(failure_block);
+        let first = block.operations.len();
+        lowering.push_operation(&mut block.operations, || {
+            AmdGpuDiagnosticOperation::Trap.operation(None)
+        })?;
+        let (first_operation_ordinal, operation_count) =
+            measured_operation_span(first, block.operations.len(), failure_block, None)?;
+        synthetic_operation_spans.push(SemanticKirSyntheticOperationSpanV1 {
+            semantic_function: plan.semantic_function,
+            rule: SemanticKirSyntheticOperationRuleV1::RuntimeAssertFailureTrap,
+            kernel_ir_block: failure_block,
+            first_operation_ordinal,
+            operation_count,
+        });
+        block.terminator = Some(Terminator::Unreachable);
+        target_blocks.push(block);
+    }
+    let emitted_operations = lowering.emitted_operations;
+    let operation_capabilities = target_blocks
+        .iter()
+        .flat_map(|block| block.operations.iter())
+        .flat_map(Operation::required_capabilities)
+        .collect::<BTreeSet<_>>();
+    let diagnostic_declarations = target_blocks
+        .iter()
+        .flat_map(|block| block.operations.iter())
+        .filter_map(|operation| match &operation.kind {
+            OperationKind::Call { callee, arguments } => {
+                AmdGpuDiagnosticOperation::from_intrinsic_call(callee, arguments)
+            }
+            _ => None,
+        })
+        .map(|operation| {
+            let declaration = operation.declaration();
+            (declaration.id.clone(), declaration)
+        })
+        .collect::<BTreeMap<_, _>>();
+    let float_declarations = target_blocks
+        .iter()
+        .flat_map(|block| block.operations.iter())
+        .filter_map(|operation| match &operation.kind {
+            OperationKind::Call { callee, arguments } => {
+                FloatOperation::from_intrinsic_call(callee, arguments)
+            }
+            _ => None,
+        })
+        .map(|operation| {
+            let declaration = operation.declaration();
+            (declaration.id.clone(), declaration)
+        })
+        .collect::<BTreeMap<_, _>>();
+    let mut lowered = match plan.role {
+        SemanticKirFunctionRoleV1::KernelEntry => Function::kernel_entry(
+            plan.kernel_ir_function.clone(),
+            Signature::new(plan.parameter_types.clone(), plan.result_types.clone()),
+            plan.parameter_values.clone(),
+            target_blocks,
+        ),
+        SemanticKirFunctionRoleV1::InternalHelper => Function::internal_helper(
+            plan.kernel_ir_function.clone(),
+            Signature::new(plan.parameter_types.clone(), plan.result_types.clone()),
+            plan.parameter_values.clone(),
+            target_blocks,
+        ),
+    };
+    if has_runtime_assert {
+        lowered
+            .required_capabilities
+            .extend(AmdGpuDiagnosticOperation::Trap.required_capabilities());
+    }
+    lowered
+        .required_capabilities
+        .extend(operation_capabilities.iter().cloned());
+    Ok(LoweredFunctionResultV1 {
+        function: lowered,
+        operation_capabilities,
+        diagnostic_declarations,
+        float_declarations,
+        blocks,
+        statement_operation_spans,
+        terminator_operation_spans,
+        synthetic_operation_spans,
+        parameter_bindings,
+        emitted_operations,
+    })
+}
+
 fn lower_module(
     owner: &ProductionSemanticMirOwnerV1,
     limits: ProductionSemanticKirLimitsV1,
@@ -5728,308 +7115,220 @@ fn lower_module(
         .functions()
         .get(selection.root().index() as usize)
         .ok_or_else(|| unsupported(0, None, None, "the selected kernel root is missing"))?;
-    let function = semantic
-        .functions()
-        .get(selection.body().index() as usize)
-        .ok_or_else(|| unsupported(0, None, None, "the selected kernel body is missing"))?;
     let entry = root
         .kernel_entry()
         .ok_or_else(|| unsupported(0, None, None, "kernel export metadata is missing"))?;
     let symbol = std::str::from_utf8(entry.export_symbol().as_bytes())
         .map_err(|_| unsupported(0, None, None, "kernel export symbol is not UTF-8"))?;
-    let required_workgroup = entry
-        .source_contract()
-        .launch()
-        .and_then(|launch| launch.required())
-        .map(|required| required.as_array());
-    let infallible_asserts = match (authenticated_launch_rank, required_workgroup) {
-        (Some(_), Some(required_workgroup)) => InfallibleBoundsAssertAnalysisV1::analyze(
-            semantic.types(),
-            semantic.callables(),
-            function,
-            required_workgroup,
-        )?,
-        (None, _) | (_, None) => BTreeSet::new(),
-    };
-    let has_runtime_assert =
-        semantic_requires_runtime_assert_failure(function, &infallible_asserts);
-    let lowered_block_count = function
-        .blocks()
-        .len()
-        .checked_add(usize::from(has_runtime_assert))
-        .ok_or(ProductionSemanticKirErrorV1::ResourceLimit {
-            resource: ProductionSemanticKirResourceV1::Blocks,
-            actual: usize::MAX,
-            limit: limits.max_blocks,
-        })?;
-    enforce_limit(
-        ProductionSemanticKirResourceV1::Blocks,
-        lowered_block_count,
-        limits.max_blocks,
-    )?;
-    let statement_count = function
-        .blocks()
-        .iter()
-        .try_fold(0_usize, |count, block| {
-            count.checked_add(block.statements().len())
-        })
-        .ok_or(ProductionSemanticKirErrorV1::ResourceLimit {
-            resource: ProductionSemanticKirResourceV1::Statements,
-            actual: usize::MAX,
-            limit: limits.max_statements,
-        })?;
-    enforce_limit(
-        ProductionSemanticKirResourceV1::Statements,
-        statement_count,
-        limits.max_statements,
-    )?;
-
-    let mut parameters = function
-        .locals()
-        .iter()
-        .enumerate()
-        .filter_map(|(local, declaration)| match declaration.role() {
-            SemanticLocalRoleV1::Argument(argument) => Some((argument, local, declaration.ty())),
-            SemanticLocalRoleV1::Return | SemanticLocalRoleV1::Temporary => None,
-        })
-        .collect::<Vec<_>>();
-    parameters.sort_by_key(|(argument, _, _)| *argument);
-    if parameters
-        .iter()
-        .enumerate()
-        .any(|(expected, (actual, _, _))| usize::try_from(*actual) != Ok(expected))
-    {
+    let closure = reachable_defined_closure_v1(semantic, selection.body(), limits.max_functions)?;
+    let body = semantic
+        .functions()
+        .get(selection.body().index() as usize)
+        .ok_or_else(|| unsupported(0, None, None, "the selected kernel body is missing"))?;
+    let mut defined_function_ids = BTreeMap::new();
+    defined_function_ids.insert(selection.body(), FunctionId::new(symbol));
+    for function_id in closure.iter().copied().skip(1) {
+        let function = semantic
+            .functions()
+            .get(function_id.index() as usize)
+            .ok_or_else(|| unsupported(function_id.index(), None, None, "helper is missing"))?;
+        defined_function_ids.insert(function_id, helper_function_id_v1(function_id, function));
+    }
+    if defined_function_ids.values().collect::<BTreeSet<_>>().len() != defined_function_ids.len() {
         return Err(unsupported(
-            0,
+            selection.body().index(),
             None,
             None,
-            "kernel argument locals are not contiguous",
+            "deterministic helper symbol construction collided",
         ));
     }
-    let parameter_types = parameters
+
+    let entry_parameters = semantic_function_parameters_v1(selection.body(), body)?;
+    let entry_parameter_types = entry_parameters
         .iter()
         .map(|(argument, _, ty)| {
             lower_kernel_parameter_type(
                 semantic.types(),
                 semantic.callables(),
-                function,
+                body,
                 *argument,
                 *ty,
             )
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let parameter_values = parameters
+    let entry_parameter_values = entry_parameters
         .iter()
         .map(|(_, local, _)| {
-            u32::try_from(*local)
-                .map(ValueId)
-                .map_err(|_| unsupported(0, None, None, "local identity does not fit Kernel IR"))
+            u32::try_from(*local).map(ValueId).map_err(|_| {
+                unsupported(
+                    selection.body().index(),
+                    None,
+                    None,
+                    "local identity does not fit Kernel IR",
+                )
+            })
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let mut parameter_bindings = Vec::new();
-    parameter_bindings
-        .try_reserve_exact(parameters.len())
-        .map_err(|_| ProductionSemanticKirErrorV1::AllocationFailure {
-            resource: ProductionSemanticKirResourceV1::DebugBindings,
-        })?;
-    parameter_bindings.extend(parameters.iter().zip(&parameter_values).map(
-        |((_, _, _), value)| SemanticKirParameterBindingV1 {
-            semantic_function: selection.body(),
-            semantic_local: SemanticLocalIdV1::from_index(value.0),
-            kernel_ir_value: *value,
-        },
-    ));
-    let mut lowering = SemanticFunctionLoweringV1::new(
-        semantic.types(),
-        semantic.callables(),
-        function,
-        SemanticParameterBindingsV1 {
-            declarations: &parameters,
-            values: &parameter_values,
-            types: &parameter_types,
-        },
-        has_runtime_assert.then(|| BlockId(function.blocks().len() as u32)),
-        required_workgroup,
-        infallible_asserts,
-        launch_rank,
-        limits.max_operations,
+    let mut plans = Vec::with_capacity(closure.len());
+    plans.push(LoweredFunctionPlanV1 {
+        semantic_function: selection.body(),
+        kernel_ir_function: FunctionId::new(symbol),
+        role: SemanticKirFunctionRoleV1::KernelEntry,
+        parameter_declarations: entry_parameters,
+        parameter_types: entry_parameter_types,
+        parameter_values: entry_parameter_values,
+        result_types: Vec::new(),
+    });
+    for function_id in closure.iter().copied().skip(1) {
+        let function = &semantic.functions()[function_id.index() as usize];
+        plans.push(direct_scalar_helper_plan_v1(
+            semantic.types(),
+            function_id,
+            function,
+            defined_function_ids[&function_id].clone(),
+        )?);
+    }
+    let defined_function_signatures = plans
+        .iter()
+        .map(|plan| {
+            (
+                plan.semantic_function,
+                (plan.parameter_types.clone(), plan.result_types.clone()),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    let required_workgroup = entry
+        .source_contract()
+        .launch()
+        .and_then(|launch| launch.required())
+        .map(|required| required.as_array());
+    let entry_infallible_asserts = match (authenticated_launch_rank, required_workgroup) {
+        (Some(_), Some(required_workgroup)) => InfallibleBoundsAssertAnalysisV1::analyze(
+            semantic.types(),
+            semantic.callables(),
+            body,
+            required_workgroup,
+        )?,
+        (None, _) | (_, None) => BTreeSet::new(),
+    };
+    let mut total_blocks = 0_usize;
+    let mut total_statements = 0_usize;
+    for (index, plan) in plans.iter().enumerate() {
+        let function = &semantic.functions()[plan.semantic_function.index() as usize];
+        let infallible = if index == 0 {
+            &entry_infallible_asserts
+        } else {
+            &BTreeSet::new()
+        };
+        total_blocks = total_blocks
+            .checked_add(function.blocks().len())
+            .and_then(|count| {
+                count.checked_add(usize::from(semantic_requires_runtime_assert_failure(
+                    function, infallible,
+                )))
+            })
+            .ok_or(ProductionSemanticKirErrorV1::ResourceLimit {
+                resource: ProductionSemanticKirResourceV1::Blocks,
+                actual: usize::MAX,
+                limit: limits.max_blocks,
+            })?;
+        total_statements = function
+            .blocks()
+            .iter()
+            .try_fold(total_statements, |count, block| {
+                count.checked_add(block.statements().len())
+            })
+            .ok_or(ProductionSemanticKirErrorV1::ResourceLimit {
+                resource: ProductionSemanticKirResourceV1::Statements,
+                actual: usize::MAX,
+                limit: limits.max_statements,
+            })?;
+    }
+    enforce_limit(
+        ProductionSemanticKirResourceV1::Blocks,
+        total_blocks,
+        limits.max_blocks,
+    )?;
+    enforce_limit(
+        ProductionSemanticKirResourceV1::Statements,
+        total_statements,
+        limits.max_statements,
     )?;
 
-    let order = semantic_cfg_reverse_postorder(function)?;
-    let mut blocks = Vec::with_capacity(order.len());
-    let mut correspondence = Vec::with_capacity(order.len());
-    let mut statement_operation_spans = Vec::with_capacity(statement_count);
-    let mut terminator_operation_spans = Vec::with_capacity(order.len());
-    let mut synthetic_operation_spans = Vec::with_capacity(usize::from(has_runtime_assert));
-    for semantic_block in order {
-        let index = usize::try_from(semantic_block.index())
-            .map_err(|_| unsupported(0, None, None, "block identity does not fit this host"))?;
-        let source = function.blocks().get(index).ok_or_else(|| {
-            unsupported(0, Some(semantic_block.index()), None, "block is missing")
-        })?;
-        let mut target = BasicBlock::new(BlockId(semantic_block.index()));
-        let prologue_first = target.operations.len();
-        lowering.begin_block(semantic_block, &mut target)?;
-        let (first_operation_ordinal, operation_count) =
-            measured_operation_span(prologue_first, target.operations.len(), target.id, None)?;
-        if operation_count != 0 {
-            synthetic_operation_spans.push(SemanticKirSyntheticOperationSpanV1 {
-                rule: SemanticKirSyntheticOperationRuleV1::EnumPayloadStorage,
-                kernel_ir_block: target.id,
-                first_operation_ordinal,
-                operation_count,
-            });
-        }
-        for (statement, operation) in source.statements().iter().enumerate() {
-            let statement = u32::try_from(statement).map_err(|_| {
-                unsupported(
-                    0,
-                    Some(semantic_block.index()),
-                    None,
-                    "statement ordinal is too large",
-                )
-            })?;
-            let first = target.operations.len();
-            lowering.lower_statement(
-                semantic_block,
-                Some(statement),
-                operation.kind(),
-                &mut target.operations,
-            )?;
-            let (first_operation_ordinal, operation_count) = measured_operation_span(
-                first,
-                target.operations.len(),
-                target.id,
-                Some(statement),
-            )?;
-            statement_operation_spans.push(SemanticKirStatementOperationSpanV1 {
-                semantic_function: selection.body(),
-                semantic_block,
-                statement_ordinal: statement,
-                kernel_ir_block: target.id,
-                first_operation_ordinal,
-                operation_count,
-            });
-        }
-        let terminator_first = target.operations.len();
-        target.terminator = Some(lowering.lower_terminator(
-            semantic_block,
-            source.terminator().kind(),
-            &mut target.operations,
-        )?);
-        let (first_operation_ordinal, operation_count) =
-            measured_operation_span(terminator_first, target.operations.len(), target.id, None)?;
-        terminator_operation_spans.push(SemanticKirTerminatorOperationSpanV1 {
-            semantic_function: selection.body(),
-            semantic_block,
-            kernel_ir_block: target.id,
-            first_operation_ordinal,
-            operation_count,
-        });
-        blocks.push(target);
-        correspondence.push(SemanticKirBlockCorrespondenceV1 {
-            semantic_function: selection.body(),
-            semantic_block,
-            kernel_ir_block: BlockId(semantic_block.index()),
-            source_statement_count: u32::try_from(source.statements().len()).map_err(|_| {
-                unsupported(
-                    0,
-                    Some(semantic_block.index()),
-                    None,
-                    "statement count is too large",
-                )
-            })?,
-        });
-    }
-    if let Some(failure_block) = lowering.assert_failure_block {
-        let mut block = BasicBlock::new(failure_block);
-        let first = block.operations.len();
-        lowering.push_operation(&mut block.operations, || {
-            AmdGpuDiagnosticOperation::Trap.operation(None)
-        })?;
-        let (first_operation_ordinal, operation_count) =
-            measured_operation_span(first, block.operations.len(), failure_block, None)?;
-        synthetic_operation_spans.push(SemanticKirSyntheticOperationSpanV1 {
-            rule: SemanticKirSyntheticOperationRuleV1::RuntimeAssertFailureTrap,
-            kernel_ir_block: failure_block,
-            first_operation_ordinal,
-            operation_count,
-        });
-        block.terminator = Some(Terminator::Unreachable);
-        blocks.push(block);
-    }
-    let operation_capabilities = blocks
-        .iter()
-        .flat_map(|block| block.operations.iter())
-        .flat_map(Operation::required_capabilities)
-        .collect::<BTreeSet<_>>();
-    let diagnostic_declarations = blocks
-        .iter()
-        .flat_map(|block| block.operations.iter())
-        .filter_map(|operation| match &operation.kind {
-            OperationKind::Call { callee, arguments } => {
-                AmdGpuDiagnosticOperation::from_intrinsic_call(callee, arguments)
-            }
-            _ => None,
-        })
-        .map(|operation| {
-            let declaration = operation.declaration();
-            (declaration.id.clone(), declaration)
-        })
-        .collect::<BTreeMap<_, _>>();
-    let float_declarations = blocks
-        .iter()
-        .flat_map(|block| block.operations.iter())
-        .filter_map(|operation| match &operation.kind {
-            OperationKind::Call { callee, arguments } => {
-                FloatOperation::from_intrinsic_call(callee, arguments)
-            }
-            _ => None,
-        })
-        .map(|operation| {
-            let declaration = operation.declaration();
-            (declaration.id.clone(), declaration)
-        })
-        .collect::<BTreeMap<_, _>>();
-
-    let function_id = FunctionId::new(symbol);
     let mut module = Module::new(format!(
         "fe2o3::semantic::{}",
         hex_identity(semantic.semantic_sha256().as_bytes())
     ));
-    let trap = AmdGpuDiagnosticOperation::Trap;
-    if has_runtime_assert {
+    let mut lowered_functions = Vec::with_capacity(plans.len());
+    let mut correspondence_blocks = Vec::new();
+    let mut statement_operation_spans = Vec::new();
+    let mut terminator_operation_spans = Vec::new();
+    let mut synthetic_operation_spans = Vec::new();
+    let mut parameter_bindings = Vec::new();
+    let mut diagnostic_declarations = BTreeMap::new();
+    let mut float_declarations = BTreeMap::new();
+    let mut remaining_operations = limits.max_operations;
+    for (index, plan) in plans.iter().enumerate() {
+        let lowered = lower_one_semantic_function_v1(
+            semantic,
+            plan,
+            &defined_function_ids,
+            &defined_function_signatures,
+            (index == 0).then_some(required_workgroup).flatten(),
+            if index == 0 {
+                entry_infallible_asserts.clone()
+            } else {
+                BTreeSet::new()
+            },
+            launch_rank,
+            authenticated_launch_rank.is_some() && index == 0,
+            remaining_operations,
+        )?;
+        remaining_operations = remaining_operations
+            .checked_sub(lowered.emitted_operations)
+            .ok_or(ProductionSemanticKirErrorV1::ResourceLimit {
+                resource: ProductionSemanticKirResourceV1::Operations,
+                actual: limits.max_operations.saturating_add(1),
+                limit: limits.max_operations,
+            })?;
         module
             .required_capabilities
-            .extend(trap.required_capabilities());
+            .extend(lowered.operation_capabilities.iter().cloned());
+        diagnostic_declarations.extend(lowered.diagnostic_declarations);
+        float_declarations.extend(lowered.float_declarations);
+        correspondence_blocks.extend(lowered.blocks);
+        statement_operation_spans.extend(lowered.statement_operation_spans);
+        terminator_operation_spans.extend(lowered.terminator_operation_spans);
+        synthetic_operation_spans.extend(lowered.synthetic_operation_spans);
+        parameter_bindings.extend(lowered.parameter_bindings);
+        lowered_functions.push(SemanticKirFunctionCorrespondenceV1 {
+            semantic_function: plan.semantic_function,
+            kernel_ir_function: plan.kernel_ir_function.clone(),
+            role: plan.role,
+        });
+        module.functions.push(lowered.function);
     }
-    module
-        .required_capabilities
-        .extend(operation_capabilities.iter().cloned());
-    let mut entry_function = Function::kernel_entry(
-        function_id.clone(),
-        Signature::new(parameter_types, vec![]),
-        parameter_values,
-        blocks,
-    );
-    if has_runtime_assert {
-        entry_function
-            .required_capabilities
-            .extend(trap.required_capabilities());
+    for declaration in diagnostic_declarations
+        .into_values()
+        .chain(float_declarations.into_values())
+    {
+        if module
+            .functions
+            .iter()
+            .any(|function| function.id == declaration.id)
+        {
+            return Err(unsupported(
+                selection.body().index(),
+                None,
+                None,
+                "helper identity collides with a compiler intrinsic declaration",
+            ));
+        }
+        module.functions.push(declaration);
     }
-    entry_function
-        .required_capabilities
-        .extend(operation_capabilities.iter().cloned());
-    module.functions.push(entry_function);
-    module
-        .functions
-        .extend(diagnostic_declarations.into_values());
-    module.functions.extend(float_declarations.into_values());
-    let required_workgroup = entry
-        .source_contract()
-        .launch()
-        .and_then(|launch| launch.required());
-    let dimensions = required_workgroup.map(|required| required.as_array());
+
+    let dimensions = required_workgroup;
     let launch = match (launch_rank, dimensions) {
         (1, Some([_, 1, 1]) | None) => LaunchDomain::D1 {
             x: LaunchExtent::Dynamic,
@@ -6052,29 +7351,46 @@ fn lower_module(
             ));
         }
     };
-    let mut kernel = Kernel::new(symbol, function_id, launch);
-    if let Some(required) = required_workgroup {
-        let [x, y, z] = required.as_array();
+    let entry_function_id = FunctionId::new(symbol);
+    let mut kernel = Kernel::new(symbol, entry_function_id.clone(), launch);
+    if let Some([x, y, z]) = required_workgroup {
         kernel.workgroup_size = Some(WorkgroupSize::new(x, y, z));
     }
-    if has_runtime_assert {
-        kernel
-            .required_capabilities
-            .extend(trap.required_capabilities());
-    }
-    kernel.required_capabilities.extend(operation_capabilities);
+    let entry_function = module
+        .function(&entry_function_id)
+        .expect("lowered entry function is retained");
+    kernel
+        .required_capabilities
+        .extend(entry_function.required_capabilities.iter().cloned());
     module.kernels.push(kernel);
+
+    let effects = analyze_interprocedural_effects_v1(&module)
+        .map_err(ProductionSemanticKirErrorV1::InvalidKernelIr)?;
+    for plan in plans.iter().skip(1) {
+        if !effects
+            .function(&plan.kernel_ir_function)
+            .is_some_and(|decision| decision.is_complete_and_pure())
+        {
+            return Err(unsupported(
+                plan.semantic_function.index(),
+                None,
+                None,
+                "reachable deterministic scalar helper is not interprocedurally complete and pure",
+            ));
+        }
+    }
 
     let correspondence = SemanticKirCorrespondenceV1 {
         semantic_sha256: *semantic.semantic_sha256().as_bytes(),
         function_count: semantic.functions().len(),
-        blocks: correspondence.into_boxed_slice(),
+        lowered_functions: lowered_functions.into_boxed_slice(),
+        blocks: correspondence_blocks.into_boxed_slice(),
         statement_operation_spans: statement_operation_spans.into_boxed_slice(),
         terminator_operation_spans: terminator_operation_spans.into_boxed_slice(),
         synthetic_operation_spans: synthetic_operation_spans.into_boxed_slice(),
         parameter_bindings: parameter_bindings.into_boxed_slice(),
     };
-    correspondence.validate_layout_against(owner, &module, has_runtime_assert)?;
+    correspondence.validate_layout_against(owner, &module)?;
     Ok((module, correspondence))
 }
 
@@ -6913,6 +8229,11 @@ impl SemanticControlFlowSsaPlanV1 {
         let mut uses = BTreeMap::<u32, BTreeSet<u32>>::new();
         let mut defs = BTreeMap::<u32, BTreeSet<u32>>::new();
         let mut successors = BTreeMap::<u32, Vec<u32>>::new();
+        let return_local = function
+            .locals()
+            .iter()
+            .position(|local| local.role() == SemanticLocalRoleV1::Return)
+            .and_then(|local| u32::try_from(local).ok());
         for (block_index, block) in function.blocks().iter().enumerate() {
             let block_id = block_index as u32;
             let mut block_uses = BTreeSet::new();
@@ -6933,6 +8254,7 @@ impl SemanticControlFlowSsaPlanV1 {
             }
             collect_terminator_uses_v1(
                 block.terminator().kind(),
+                return_local,
                 &promoted,
                 &block_defs,
                 &mut block_uses,
@@ -7334,6 +8656,7 @@ fn collect_rvalue_uses_v1(
 
 fn collect_terminator_uses_v1(
     terminator: &SemanticTerminatorKindV1,
+    return_local: Option<u32>,
     promoted: &BTreeMap<u32, SemanticPromotedLocalV1>,
     defs: &BTreeSet<u32>,
     uses: &mut BTreeSet<u32>,
@@ -7375,6 +8698,14 @@ fn collect_terminator_uses_v1(
                 SemanticAssertMessageV1::NullPointerDereference
                 | SemanticAssertMessageV1::ResumedAfterReturn
                 | SemanticAssertMessageV1::ResumedAfterPanic => {}
+            }
+        }
+        SemanticTerminatorKindV1::Return => {
+            if let Some(local) = return_local
+                && promoted.contains_key(&local)
+                && !defs.contains(&local)
+            {
+                uses.insert(local);
             }
         }
         _ => {}
@@ -7841,6 +9172,10 @@ struct SemanticFunctionLoweringV1<'a> {
     types: &'a [SemanticTypeDeclV1],
     callables: &'a [SemanticCallableDeclV1],
     function: &'a SemanticFunctionDeclV1,
+    semantic_function: SemanticFunctionIdV1,
+    defined_function_ids: BTreeMap<SemanticFunctionIdV1, FunctionId>,
+    defined_function_signatures: BTreeMap<SemanticFunctionIdV1, (Vec<Type>, Vec<Type>)>,
+    result_types: Vec<Type>,
     locals: Vec<Option<SemanticValueBindingV1>>,
     option_dominance: SemanticOptionDominanceV1,
     enum_payload_dominance: SemanticEnumPayloadDominanceV1,
@@ -7863,6 +9198,8 @@ struct SemanticFunctionLoweringV1<'a> {
     emitted_operations: usize,
     emitted_u32_constants: BTreeMap<ValueId, u32>,
     emitted_u32_bitand_masks: BTreeMap<ValueId, u32>,
+    authenticated_loop_induction_bounds: BTreeMap<(u32, u32), u128>,
+    emitted_unsigned_exclusive_bounds: BTreeMap<ValueId, u128>,
 }
 
 struct SemanticParameterBindingsV1<'a> {
@@ -7872,6 +9209,7 @@ struct SemanticParameterBindingsV1<'a> {
 }
 
 impl<'a> SemanticFunctionLoweringV1<'a> {
+    #[cfg(test)]
     fn new(
         types: &'a [SemanticTypeDeclV1],
         callables: &'a [SemanticCallableDeclV1],
@@ -7881,6 +9219,42 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         required_workgroup: Option<[u32; 3]>,
         infallible_asserts: BTreeSet<u32>,
         launch_rank: u8,
+        authenticated_ranked_control: bool,
+        max_operations: usize,
+    ) -> Result<Self, ProductionSemanticKirErrorV1> {
+        Self::new_interprocedural(
+            types,
+            callables,
+            function,
+            SemanticFunctionIdV1::from_index(0),
+            BTreeMap::new(),
+            BTreeMap::new(),
+            Vec::new(),
+            parameters,
+            assert_failure_block,
+            required_workgroup,
+            infallible_asserts,
+            launch_rank,
+            authenticated_ranked_control,
+            max_operations,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn new_interprocedural(
+        types: &'a [SemanticTypeDeclV1],
+        callables: &'a [SemanticCallableDeclV1],
+        function: &'a SemanticFunctionDeclV1,
+        semantic_function: SemanticFunctionIdV1,
+        defined_function_ids: BTreeMap<SemanticFunctionIdV1, FunctionId>,
+        defined_function_signatures: BTreeMap<SemanticFunctionIdV1, (Vec<Type>, Vec<Type>)>,
+        result_types: Vec<Type>,
+        parameters: SemanticParameterBindingsV1<'_>,
+        assert_failure_block: Option<BlockId>,
+        required_workgroup: Option<[u32; 3]>,
+        infallible_asserts: BTreeSet<u32>,
+        launch_rank: u8,
+        authenticated_ranked_control: bool,
         max_operations: usize,
     ) -> Result<Self, ProductionSemanticKirErrorV1> {
         let mut locals = vec![None; function.locals().len()];
@@ -7908,6 +9282,11 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             callables,
             &control_flow_ssa.compiler_issued_bindings,
         )?;
+        let authenticated_loop_induction_bounds = if authenticated_ranked_control {
+            authenticated_loop_induction_bounds_v1(types, function)?
+        } else {
+            BTreeMap::new()
+        };
         let promoted_enum_variant_by_block =
             analyze_promoted_enum_variants_v1(types, function, &control_flow_ssa)?;
         let mut block_parameters = BTreeMap::new();
@@ -7945,6 +9324,10 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             types,
             callables,
             function,
+            semantic_function,
+            defined_function_ids,
+            defined_function_signatures,
+            result_types,
             locals,
             option_dominance,
             enum_payload_dominance,
@@ -7966,6 +9349,8 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             emitted_operations: 0,
             emitted_u32_constants: BTreeMap::new(),
             emitted_u32_bitand_masks: BTreeMap::new(),
+            authenticated_loop_induction_bounds,
+            emitted_unsigned_exclusive_bounds: BTreeMap::new(),
         })
     }
 
@@ -8721,24 +10106,99 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                         right_ty = converted_ty;
                     }
                 }
+                let is_shift = matches!(
+                    operation,
+                    SemanticBinaryOpV1::ShiftLeft | SemanticBinaryOpV1::ShiftRight
+                );
+                if is_shift {
+                    let (Some(left_scalar), Some(right_scalar)) =
+                        (left_ty.as_scalar(), right_ty.as_scalar())
+                    else {
+                        return Err(unsupported(
+                            0,
+                            Some(block.index()),
+                            statement,
+                            "semantic shift operands are not integral scalars",
+                        ));
+                    };
+                    if !left_scalar.is_integer() || !right_scalar.is_integer() {
+                        return Err(unsupported(
+                            0,
+                            Some(block.index()),
+                            statement,
+                            "semantic shift operands are not integral scalars",
+                        ));
+                    }
+                    let cast_path =
+                        plan_integer_cast_v1(right_scalar, left_scalar).ok_or_else(|| {
+                            unsupported(
+                                0,
+                                Some(block.index()),
+                                statement,
+                                "semantic shift count has no exact Kernel IR cast rule",
+                            )
+                        })?;
+                    for (kind, target_scalar) in cast_path.into_iter().flatten() {
+                        let target = Type::Scalar(target_scalar);
+                        let converted = self.emit(
+                            operations,
+                            target.clone(),
+                            OperationKind::Cast {
+                                kind,
+                                value: right,
+                                to: target,
+                            },
+                        )?;
+                        right = converted
+                            .value()
+                            .map_err(|detail| {
+                                unsupported(0, Some(block.index()), statement, detail)
+                            })?
+                            .0;
+                    }
+                    let width = match left_scalar {
+                        ScalarType::Index => 64,
+                        scalar => scalar.bit_width().ok_or_else(|| {
+                            unsupported(
+                                0,
+                                Some(block.index()),
+                                statement,
+                                "semantic shift left operand has no fixed integer width",
+                            )
+                        })?,
+                    };
+                    let mask = integer_constant(&left_ty, u128::from(width - 1)).map_err(|_| {
+                        unsupported(
+                            0,
+                            Some(block.index()),
+                            statement,
+                            "semantic shift mask has no Kernel IR constant representation",
+                        )
+                    })?;
+                    let mask =
+                        self.emit(operations, left_ty.clone(), OperationKind::Constant(mask))?;
+                    let (mask, _) = mask
+                        .value()
+                        .map_err(|detail| unsupported(0, Some(block.index()), statement, detail))?;
+                    let normalized = self.emit(
+                        operations,
+                        left_ty.clone(),
+                        OperationKind::Binary {
+                            op: BinaryOp::BitAnd,
+                            lhs: right,
+                            rhs: mask,
+                        },
+                    )?;
+                    (right, right_ty) = normalized
+                        .value()
+                        .map_err(|detail| unsupported(0, Some(block.index()), statement, detail))?;
+                }
                 if left_ty != right_ty {
                     return Err(unsupported(
                         0,
                         Some(block.index()),
                         statement,
                         "semantic binary operand types differ",
-                    ));
-                }
-                if matches!(
-                    operation,
-                    SemanticBinaryOpV1::ShiftLeft | SemanticBinaryOpV1::ShiftRight
-                ) && !left_ty.as_scalar().is_some_and(ScalarType::is_integer)
-                {
-                    return Err(unsupported(
-                        0,
-                        Some(block.index()),
-                        statement,
-                        "semantic shift operands are not integral scalars",
                     ));
                 }
                 if let Some(predicate) = lower_compare(*operation) {
@@ -9905,13 +11365,72 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     arguments: vec![],
                 })
             }
-            SemanticTerminatorKindV1::Return => Ok(Terminator::Return { values: vec![] }),
+            SemanticTerminatorKindV1::Return => self.lower_return(block),
             SemanticTerminatorKindV1::Unreachable => Ok(Terminator::Unreachable),
             _ => Err(unsupported(
                 0,
                 Some(block.index()),
                 None,
                 unsupported_terminator_detail(terminator),
+            )),
+        }
+    }
+
+    fn lower_return(
+        &self,
+        block: SemanticBlockIdV1,
+    ) -> Result<Terminator, ProductionSemanticKirErrorV1> {
+        let return_local = self
+            .function
+            .locals()
+            .iter()
+            .position(|local| local.role() == SemanticLocalRoleV1::Return)
+            .ok_or_else(|| {
+                unsupported(
+                    self.semantic_function.index(),
+                    Some(block.index()),
+                    None,
+                    "function return local is missing",
+                )
+            })?;
+        match self.result_types.as_slice() {
+            [] => Ok(Terminator::Return { values: Vec::new() }),
+            [expected] => {
+                let binding = self
+                    .locals
+                    .get(return_local)
+                    .and_then(Option::as_ref)
+                    .ok_or(ProductionSemanticKirErrorV1::MissingLocalDefinition {
+                        function: self.semantic_function.index(),
+                        block: block.index(),
+                        statement: None,
+                        local: return_local as u32,
+                    })?;
+                let (value, actual) = binding.clone().value().map_err(|detail| {
+                    unsupported(
+                        self.semantic_function.index(),
+                        Some(block.index()),
+                        None,
+                        detail,
+                    )
+                })?;
+                if &actual != expected {
+                    return Err(unsupported(
+                        self.semantic_function.index(),
+                        Some(block.index()),
+                        None,
+                        "helper return local type changed",
+                    ));
+                }
+                Ok(Terminator::Return {
+                    values: vec![value],
+                })
+            }
+            _ => Err(unsupported(
+                self.semantic_function.index(),
+                Some(block.index()),
+                None,
+                "helper has more than one lowered return value",
             )),
         }
     }
@@ -10235,13 +11754,19 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             .callables
             .get(call.callee().index() as usize)
             .ok_or_else(|| unsupported(0, Some(block.index()), None, "callable is missing"))?;
-        let SemanticCallableDeclV1::CompilerIntrinsic { operation, .. } = callable else {
-            return Err(unsupported(
-                0,
-                Some(block.index()),
-                None,
-                "defined and device-FFI calls require interprocedural lowering",
-            ));
+        let operation = match callable {
+            SemanticCallableDeclV1::Defined { function } => {
+                return self.lower_defined_call(block, call, *function, operations);
+            }
+            SemanticCallableDeclV1::DeviceFfiImport { .. } => {
+                return Err(unsupported(
+                    self.semantic_function.index(),
+                    Some(block.index()),
+                    None,
+                    "device-FFI calls remain closed in deterministic helper lowering",
+                ));
+            }
+            SemanticCallableDeclV1::CompilerIntrinsic { operation, .. } => operation,
         };
         require_current_production_intrinsic_v1(operation)?;
         if matches!(operation, SemanticCompilerIntrinsicOperationV1::Trap) {
@@ -11012,10 +12537,50 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     .lower_operand(block, None, &call.arguments()[1], operations)?
                     .value()
                     .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
+                let authenticated_source_bound = authenticated_unsigned_operand_exclusive_bound_v1(
+                    self.types,
+                    self.function,
+                    &self.authenticated_loop_induction_bounds,
+                    block,
+                    &call.arguments()[2],
+                );
                 let (source_lane, source_ty) = self
                     .lower_operand(block, None, &call.arguments()[2], operations)?
                     .value()
                     .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
+                let authenticated_source_bound = authenticated_source_bound.filter(|bound| {
+                    source_ty == Type::Scalar(ScalarType::U32)
+                        && authenticated_subgroup_broadcast_source_is_bounded(*bound, *width)
+                });
+                let source_lane = if authenticated_source_bound.is_some() {
+                    let mask = self
+                        .emit(
+                            operations,
+                            Type::Scalar(ScalarType::U32),
+                            OperationKind::Constant(Constant::U32(*width - 1)),
+                        )?
+                        .value()
+                        .expect("authenticated subgroup mask has one value")
+                        .0;
+                    self.emit(
+                        operations,
+                        Type::Scalar(ScalarType::U32),
+                        OperationKind::Binary {
+                            op: BinaryOp::BitAnd,
+                            lhs: source_lane,
+                            rhs: mask,
+                        },
+                    )?
+                    .value()
+                    .expect("authenticated subgroup source mask has one value")
+                    .0
+                } else {
+                    source_lane
+                };
+                if let Some(bound) = authenticated_source_bound {
+                    self.emitted_unsigned_exclusive_bounds
+                        .insert(source_lane, bound);
+                }
                 let bounded_source = subgroup_broadcast_source_is_statically_bounded(
                     operations,
                     source_lane,
@@ -11027,7 +12592,13 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     || self
                         .emitted_u32_bitand_masks
                         .get(&source_lane)
-                        .is_some_and(|mask| *mask < *width);
+                        .is_some_and(|mask| *mask < *width)
+                    || self
+                        .emitted_unsigned_exclusive_bounds
+                        .get(&source_lane)
+                        .is_some_and(|bound| {
+                            authenticated_subgroup_broadcast_source_is_bounded(*bound, *width)
+                        });
                 if value_ty != Type::Scalar(ScalarType::F32)
                     || source_ty != Type::Scalar(ScalarType::U32)
                     || *width == 0
@@ -12066,6 +13637,114 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             &binding,
             operations,
         )?;
+        self.bind_destination(block, None, destination.place(), binding)?;
+        Ok(Terminator::Branch {
+            target: BlockId(destination.edge().target().index()),
+            arguments: self.edge_arguments(block, destination.edge().target(), operations)?,
+        })
+    }
+
+    fn lower_defined_call(
+        &mut self,
+        block: SemanticBlockIdV1,
+        call: &SemanticDirectCallV1,
+        callee: SemanticFunctionIdV1,
+        operations: &mut Vec<Operation>,
+    ) -> Result<Terminator, ProductionSemanticKirErrorV1> {
+        if !matches!(call.unwind(), SemanticUnwindActionV1::Unreachable) {
+            return Err(unsupported(
+                self.semantic_function.index(),
+                Some(block.index()),
+                None,
+                "defined scalar call does not have an unreachable unwind edge",
+            ));
+        }
+        let callee_id = self
+            .defined_function_ids
+            .get(&callee)
+            .cloned()
+            .ok_or_else(|| {
+                unsupported(
+                    self.semantic_function.index(),
+                    Some(block.index()),
+                    None,
+                    "defined call target is outside the lowered helper closure",
+                )
+            })?;
+        let (parameter_types, result_types) = self
+            .defined_function_signatures
+            .get(&callee)
+            .cloned()
+            .ok_or_else(|| {
+                unsupported(
+                    self.semantic_function.index(),
+                    Some(block.index()),
+                    None,
+                    "defined call target has no exact KIR signature",
+                )
+            })?;
+        if call.arguments().len() != parameter_types.len() || result_types.len() > 1 {
+            return Err(unsupported(
+                self.semantic_function.index(),
+                Some(block.index()),
+                None,
+                "defined call argument or result arity changed",
+            ));
+        }
+        let mut arguments = Vec::with_capacity(call.arguments().len());
+        for (argument, expected) in call.arguments().iter().zip(&parameter_types) {
+            let (value, actual) = self
+                .lower_operand(block, None, argument, operations)?
+                .value()
+                .map_err(|detail| {
+                    unsupported(
+                        self.semantic_function.index(),
+                        Some(block.index()),
+                        None,
+                        detail,
+                    )
+                })?;
+            if &actual != expected {
+                return Err(unsupported(
+                    self.semantic_function.index(),
+                    Some(block.index()),
+                    None,
+                    "defined call argument type changed",
+                ));
+            }
+            arguments.push(value);
+        }
+        let destination = call.destination().ok_or_else(|| {
+            unsupported(
+                self.semantic_function.index(),
+                Some(block.index()),
+                None,
+                "returning defined call has no continuation destination",
+            )
+        })?;
+        let binding = match result_types.as_slice() {
+            [] => {
+                self.push_operation(operations, || {
+                    Operation::new(
+                        Vec::new(),
+                        OperationKind::Call {
+                            callee: callee_id,
+                            arguments,
+                        },
+                    )
+                })?;
+                SemanticValueBindingV1::Unit
+            }
+            [result] => self.emit(
+                operations,
+                result.clone(),
+                OperationKind::Call {
+                    callee: callee_id,
+                    arguments,
+                },
+            )?,
+            _ => unreachable!("bounded helper plan admits at most one result"),
+        };
         self.bind_destination(block, None, destination.place(), binding)?;
         Ok(Terminator::Branch {
             target: BlockId(destination.edge().target().index()),
@@ -18010,6 +19689,10 @@ fn enforce_limit(
     }
 }
 
+fn authenticated_subgroup_broadcast_source_is_bounded(exclusive_bound: u128, width: u32) -> bool {
+    width != 0 && width.is_power_of_two() && width <= 64 && exclusive_bound <= u128::from(width)
+}
+
 fn subgroup_broadcast_source_is_statically_bounded(
     operations: &[Operation],
     source_lane: ValueId,
@@ -18170,6 +19853,265 @@ mod resource_tests {
             masked,
             64,
         ));
+    }
+
+    #[derive(Clone, Copy)]
+    struct AuthenticatedInductionFixtureV1 {
+        bits: u16,
+        bound: u128,
+        step: u128,
+        extra_write: bool,
+        bypass_guard: bool,
+    }
+
+    impl Default for AuthenticatedInductionFixtureV1 {
+        fn default() -> Self {
+            Self {
+                bits: 64,
+                bound: 64,
+                step: 1,
+                extra_write: false,
+                bypass_guard: false,
+            }
+        }
+    }
+
+    fn authenticated_induction_fixture_v1(
+        options: AuthenticatedInductionFixtureV1,
+    ) -> (Vec<SemanticTypeDeclV1>, SemanticFunctionDeclV1) {
+        let unit = SemanticTypeIdV1::from_index(0);
+        let induction_ty = SemanticTypeIdV1::from_index(1);
+        let bool_ty = SemanticTypeIdV1::from_index(2);
+        let u32_ty = SemanticTypeIdV1::from_index(3);
+        let source = SemanticSourceProvenanceV1::unavailable();
+        let size = u8::try_from(options.bits / 8).unwrap();
+        let place = |local, ty| {
+            SemanticPlaceV1::new(SemanticLocalIdV1::from_index(local), vec![], ty).unwrap()
+        };
+        let operand = |local, ty| SemanticOperandV1::Copy(place(local, ty));
+        let constant = |ty, value| {
+            SemanticOperandV1::Constant(SemanticConstantV1::new(
+                ty,
+                SemanticConstantValueV1::Scalar(SemanticScalarValueV1::new(value, size).unwrap()),
+            ))
+        };
+        let assign = |local, ty, value| {
+            SemanticStatementV1::new(
+                source,
+                SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+                    place(local, ty),
+                    SemanticRvalueV1::new(ty, value),
+                )),
+            )
+        };
+        let edge = |role, target| {
+            SemanticControlFlowEdgeV1::new(role, SemanticBlockIdV1::from_index(target))
+        };
+        let block = |tag, statements, terminator| {
+            SemanticBasicBlockV1::new(
+                SemanticBlockIdentityV1::from_sha256([tag; 32]),
+                source,
+                statements,
+                SemanticTerminatorV1::new(source, terminator),
+            )
+            .unwrap()
+        };
+        let entry = block(
+            210,
+            vec![assign(
+                1,
+                induction_ty,
+                SemanticRvalueKindV1::Use(constant(induction_ty, 0)),
+            )],
+            SemanticTerminatorKindV1::Goto(edge(SemanticEdgeRoleV1::Goto, 1)),
+        );
+        let header = block(
+            211,
+            vec![assign(
+                2,
+                bool_ty,
+                SemanticRvalueKindV1::Binary {
+                    operation: SemanticBinaryOpV1::LessThan,
+                    left: operand(1, induction_ty),
+                    right: constant(induction_ty, options.bound),
+                },
+            )],
+            SemanticTerminatorKindV1::SwitchInt {
+                discriminant: operand(2, bool_ty),
+                targets: SemanticSwitchTargetsV1::new(
+                    vec![SemanticSwitchTargetV1::new(
+                        0,
+                        edge(SemanticEdgeRoleV1::SwitchValue, 4),
+                    )],
+                    edge(SemanticEdgeRoleV1::SwitchOtherwise, 2),
+                )
+                .unwrap(),
+            },
+        );
+        let mut body_statements = vec![assign(
+            3,
+            u32_ty,
+            SemanticRvalueKindV1::Cast {
+                kind: SemanticCastKindV1::Integer,
+                operand: operand(1, induction_ty),
+            },
+        )];
+        if options.extra_write {
+            body_statements.push(assign(
+                1,
+                induction_ty,
+                SemanticRvalueKindV1::Use(constant(induction_ty, 0)),
+            ));
+        }
+        let body = block(
+            212,
+            body_statements,
+            SemanticTerminatorKindV1::Goto(edge(SemanticEdgeRoleV1::Goto, 3)),
+        );
+        let latch = block(
+            213,
+            vec![assign(
+                1,
+                induction_ty,
+                SemanticRvalueKindV1::Binary {
+                    operation: SemanticBinaryOpV1::Add,
+                    left: operand(1, induction_ty),
+                    right: constant(induction_ty, options.step),
+                },
+            )],
+            SemanticTerminatorKindV1::Goto(edge(SemanticEdgeRoleV1::Goto, 1)),
+        );
+        let exit = block(
+            214,
+            vec![],
+            if options.bypass_guard {
+                SemanticTerminatorKindV1::Goto(edge(SemanticEdgeRoleV1::Goto, 2))
+            } else {
+                SemanticTerminatorKindV1::Return
+            },
+        );
+        let abi = SemanticFunctionAbiV1::from_rustc(
+            SemanticAbiIdentityV1::from_sha256([215; 32]),
+            SemanticLayoutIdentityV1::from_sha256([216; 32]),
+            SemanticCanonAbiV1::GpuKernel,
+            SemanticExternAbiV1::GpuKernel,
+            false,
+            false,
+            0,
+            vec![],
+            SemanticAbiValueV1::new(unit, SemanticAbiPassModeV1::Ignore),
+        )
+        .unwrap();
+        let locals: Vec<SemanticLocalDeclV1> = [
+            (unit, SemanticLocalRoleV1::Return),
+            (induction_ty, SemanticLocalRoleV1::Temporary),
+            (bool_ty, SemanticLocalRoleV1::Temporary),
+            (u32_ty, SemanticLocalRoleV1::Temporary),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(local, (ty, role))| {
+            SemanticLocalDeclV1::new(
+                SemanticLocalIdentityV1::from_sha256([217 + local as u8; 32]),
+                ty,
+                role,
+                source,
+            )
+        })
+        .collect();
+        let function = SemanticFunctionDeclV1::new(
+            SemanticFunctionIdentityV1::from_sha256([221; 32]),
+            SemanticFunctionRoleV1::InternalHelper,
+            SemanticItemDefinitionIdentityV1::from_sha256([222; 32]),
+            SemanticMonomorphizationIdentityV1::from_sha256([223; 32]),
+            SemanticGenericTypeArgumentsIdentityV1::from_sha256([224; 32]),
+            SemanticConstGenericArgumentsIdentityV1::from_sha256([225; 32]),
+            source,
+            abi,
+            locals,
+            SemanticBlockIdV1::from_index(0),
+            vec![entry, header, body, latch, exit],
+        )
+        .unwrap();
+        (
+            vec![
+                unit_type(),
+                unsigned_scalar_type(226, options.bits),
+                bool_type(),
+                unsigned_scalar_type(228, 32),
+            ],
+            function,
+        )
+    }
+
+    #[test]
+    fn ranked_canonical_induction_bound_survives_exact_u64_to_u32_cast() {
+        let (types, function) =
+            authenticated_induction_fixture_v1(AuthenticatedInductionFixtureV1::default());
+        let bounds = authenticated_loop_induction_bounds_v1(&types, &function).unwrap();
+        assert_eq!(bounds.get(&(2, 1)), Some(&64));
+        let alias = SemanticOperandV1::Copy(
+            SemanticPlaceV1::new(
+                SemanticLocalIdV1::from_index(3),
+                vec![],
+                SemanticTypeIdV1::from_index(3),
+            )
+            .unwrap(),
+        );
+        assert_eq!(
+            authenticated_unsigned_operand_exclusive_bound_v1(
+                &types,
+                &function,
+                &bounds,
+                SemanticBlockIdV1::from_index(2),
+                &alias,
+            ),
+            Some(64),
+        );
+    }
+
+    #[test]
+    fn authenticated_induction_bound_rejects_width_overrun_and_hostile_loops() {
+        let (types, function) =
+            authenticated_induction_fixture_v1(AuthenticatedInductionFixtureV1 {
+                bound: 65,
+                ..AuthenticatedInductionFixtureV1::default()
+            });
+        let bounds = authenticated_loop_induction_bounds_v1(&types, &function).unwrap();
+        assert_eq!(bounds.get(&(2, 1)), Some(&65));
+        assert!(!authenticated_subgroup_broadcast_source_is_bounded(
+            *bounds.get(&(2, 1)).unwrap(),
+            64,
+        ));
+        assert!(!authenticated_subgroup_broadcast_source_is_bounded(0, 0));
+
+        for options in [
+            AuthenticatedInductionFixtureV1 {
+                extra_write: true,
+                ..AuthenticatedInductionFixtureV1::default()
+            },
+            AuthenticatedInductionFixtureV1 {
+                step: 0,
+                ..AuthenticatedInductionFixtureV1::default()
+            },
+            AuthenticatedInductionFixtureV1 {
+                bits: 8,
+                bound: 255,
+                step: 2,
+                ..AuthenticatedInductionFixtureV1::default()
+            },
+            AuthenticatedInductionFixtureV1 {
+                bypass_guard: true,
+                ..AuthenticatedInductionFixtureV1::default()
+            },
+        ] {
+            let (types, function) = authenticated_induction_fixture_v1(options);
+            assert!(
+                authenticated_loop_induction_bounds_v1(&types, &function)
+                    .unwrap()
+                    .is_empty()
+            );
+        }
     }
 
     #[test]
@@ -18427,6 +20369,7 @@ mod resource_tests {
                 None,
                 BTreeSet::new(),
                 1,
+                false,
                 max_operations,
             )
             .unwrap();
@@ -18520,6 +20463,7 @@ mod resource_tests {
     }
 
     fn lower_heterogeneous_u8_shift(
+        operation: SemanticBinaryOpV1,
         right: SemanticOperandV1,
         max_operations: usize,
     ) -> Result<Vec<Operation>, ProductionSemanticKirErrorV1> {
@@ -18597,6 +20541,7 @@ mod resource_tests {
             None,
             BTreeSet::new(),
             1,
+            false,
             max_operations,
         )
         .unwrap();
@@ -18618,7 +20563,7 @@ mod resource_tests {
             Some(0),
             u8_ty,
             &SemanticRvalueKindV1::Binary {
-                operation: SemanticBinaryOpV1::ShiftRight,
+                operation,
                 left,
                 right,
             },
@@ -18634,8 +20579,9 @@ mod resource_tests {
             i32_ty,
             SemanticConstantValueV1::Scalar(SemanticScalarValueV1::new(3, 4).unwrap()),
         ));
-        let operations = lower_heterogeneous_u8_shift(right, 2).unwrap();
-        assert_eq!(operations.len(), 2);
+        let operations =
+            lower_heterogeneous_u8_shift(SemanticBinaryOpV1::ShiftRight, right, 4).unwrap();
+        assert_eq!(operations.len(), 4);
         assert!(matches!(
             &operations[0].kind,
             OperationKind::Constant(Constant::U8(3))
@@ -18644,13 +20590,33 @@ mod resource_tests {
             &operations[1],
             Operation {
                 results,
+                kind: OperationKind::Constant(Constant::U8(7)),
+                ..
+            } if results == &[ValueDef::new(ValueId(3), Type::Scalar(ScalarType::U8))]
+        ));
+        assert!(matches!(
+            &operations[2],
+            Operation {
+                results,
+                kind: OperationKind::Binary {
+                    op: BinaryOp::BitAnd,
+                    lhs: ValueId(2),
+                    rhs: ValueId(3),
+                },
+                ..
+            } if results == &[ValueDef::new(ValueId(4), Type::Scalar(ScalarType::U8))]
+        ));
+        assert!(matches!(
+            &operations[3],
+            Operation {
+                results,
                 kind: OperationKind::Binary {
                     op: BinaryOp::ShiftRight,
                     lhs: ValueId(0),
-                    rhs: ValueId(2),
+                    rhs: ValueId(4),
                 },
                 ..
-            } if results == &[ValueDef::new(ValueId(3), Type::Scalar(ScalarType::U8))]
+            } if results == &[ValueDef::new(ValueId(5), Type::Scalar(ScalarType::U8))]
         ));
         assert!(!operations.iter().any(|operation| matches!(
             operation.kind,
@@ -18659,18 +20625,58 @@ mod resource_tests {
     }
 
     #[test]
-    fn heterogeneous_shift_count_rejects_nonconstant_and_unrepresentable_values() {
+    fn heterogeneous_shift_count_is_cast_masked_and_well_typed() {
         let i32_ty = SemanticTypeIdV1::from_index(2);
         let dynamic = SemanticOperandV1::Copy(
             SemanticPlaceV1::new(SemanticLocalIdV1::from_index(2), vec![], i32_ty).unwrap(),
         );
-        assert!(matches!(
-            lower_heterogeneous_u8_shift(dynamic, 2),
-            Err(ProductionSemanticKirErrorV1::Unsupported {
-                detail: "semantic binary operand types differ",
-                ..
-            })
-        ));
+        for (semantic, lowered) in [
+            (SemanticBinaryOpV1::ShiftLeft, BinaryOp::ShiftLeft),
+            (SemanticBinaryOpV1::ShiftRight, BinaryOp::ShiftRight),
+        ] {
+            let operations = lower_heterogeneous_u8_shift(semantic, dynamic.clone(), 4).unwrap();
+            assert!(matches!(
+                operations.as_slice(),
+                [
+                    Operation {
+                        results: cast_results,
+                        kind: OperationKind::Cast {
+                            kind: CastKind::Truncate,
+                            value: ValueId(1),
+                            to: Type::Scalar(ScalarType::U8),
+                        },
+                        ..
+                    },
+                    Operation {
+                        results: mask_results,
+                        kind: OperationKind::Constant(Constant::U8(7)),
+                        ..
+                    },
+                    Operation {
+                        results: and_results,
+                        kind: OperationKind::Binary {
+                            op: BinaryOp::BitAnd,
+                            lhs: ValueId(2),
+                            rhs: ValueId(3),
+                        },
+                        ..
+                    },
+                    Operation {
+                        results: shift_results,
+                        kind: OperationKind::Binary {
+                            op,
+                            lhs: ValueId(0),
+                            rhs: ValueId(4),
+                        },
+                        ..
+                    }
+                ] if *op == lowered
+                    && cast_results == &[ValueDef::new(ValueId(2), Type::Scalar(ScalarType::U8))]
+                    && mask_results == &[ValueDef::new(ValueId(3), Type::Scalar(ScalarType::U8))]
+                    && and_results == &[ValueDef::new(ValueId(4), Type::Scalar(ScalarType::U8))]
+                    && shift_results == &[ValueDef::new(ValueId(5), Type::Scalar(ScalarType::U8))]
+            ));
+        }
 
         let constant = |bits| {
             SemanticOperandV1::Constant(SemanticConstantV1::new(
@@ -18679,10 +20685,24 @@ mod resource_tests {
             ))
         };
         for hostile in [constant(u128::from(u32::MAX)), constant(256)] {
+            let operations =
+                lower_heterogeneous_u8_shift(SemanticBinaryOpV1::ShiftRight, hostile, 5).unwrap();
+            assert!(operations.iter().any(|operation| matches!(
+                operation.kind,
+                OperationKind::Cast {
+                    kind: CastKind::Truncate,
+                    to: Type::Scalar(ScalarType::U8),
+                    ..
+                }
+            )));
+            assert!(operations.iter().any(|operation| matches!(
+                operation.kind,
+                OperationKind::Constant(Constant::U8(7))
+            )));
             assert!(matches!(
-                lower_heterogeneous_u8_shift(hostile, 2),
-                Err(ProductionSemanticKirErrorV1::Unsupported {
-                    detail: "semantic binary operand types differ",
+                operations.last().map(|operation| &operation.kind),
+                Some(OperationKind::Binary {
+                    op: BinaryOp::ShiftRight,
                     ..
                 })
             ));
@@ -18949,6 +20969,7 @@ mod resource_tests {
             None,
             BTreeSet::new(),
             1,
+            false,
             16,
         )
         .unwrap();
@@ -20123,6 +22144,7 @@ mod resource_tests {
         synthetic_block.terminator = Some(Terminator::Unreachable);
         let target = [source, synthetic_block];
         let synthetic = [SemanticKirSyntheticOperationSpanV1 {
+            semantic_function: SemanticFunctionIdV1::from_index(0),
             rule: SemanticKirSyntheticOperationRuleV1::RuntimeAssertFailureTrap,
             kernel_ir_block: BlockId(1),
             first_operation_ordinal: 0,
@@ -20255,6 +22277,7 @@ mod resource_tests {
             None,
             BTreeSet::new(),
             1,
+            false,
             16,
         )
         .unwrap();
@@ -20709,6 +22732,7 @@ mod resource_tests {
         let correspondence = SemanticKirCorrespondenceV1 {
             semantic_sha256: [7; 32],
             function_count: 1,
+            lowered_functions: Box::new([]),
             blocks: vec![SemanticKirBlockCorrespondenceV1 {
                 semantic_function: SemanticFunctionIdV1::from_index(0),
                 semantic_block: SemanticBlockIdV1::from_index(0),
@@ -21190,6 +23214,107 @@ mod resource_tests {
     }
 
     #[test]
+    fn mir_pliron_translation_validation_accepts_exact_conservative_allocation_effect() {
+        let mut fixture = unsupported_index_correlation_fixture();
+        fixture.module.functions[0].body.as_mut().unwrap().blocks[0]
+            .operations
+            .push(Operation::effect_free(
+                ValueDef::new(ValueId(6), Type::Scalar(ScalarType::F32)),
+                OperationKind::Load {
+                    pointer: ValueId(4),
+                    access: MemoryAccess::new(AddressSpace::Global, 4),
+                },
+            ));
+        verify_module(&fixture.module).expect("multi-load summary fixture remains valid");
+        fixture.correspondence.statement_operation_spans[0].operation_count = 6;
+        fixture.correspondence.terminator_operation_spans[0].first_operation_ordinal = 6;
+        let lowering = ranked_correlation_input_for_effects(
+            vec![ProductionRankedOperationV1::AllocationEffect {
+                kind: AccessKindAttr::Read,
+                memory_space: dialect_kernel::MemorySpaceAttr::Global,
+                allocation_origin: 1,
+                noalias_class: 1,
+            }],
+            1,
+        );
+        let report = validate_translation_fixture(&fixture, &lowering, &[fixture.source], 16)
+            .expect("the exact conservative allocation effect must reconcile");
+
+        assert_eq!(report.memory_effects(), 2);
+        assert_eq!(report.conservative_ranked_effects(), 1);
+
+        let wrong_allocation = ranked_correlation_input_for_effects(
+            vec![ProductionRankedOperationV1::AllocationEffect {
+                kind: AccessKindAttr::Read,
+                memory_space: dialect_kernel::MemorySpaceAttr::Global,
+                allocation_origin: 2,
+                noalias_class: 2,
+            }],
+            1,
+        );
+        assert!(matches!(
+            validate_translation_fixture(&fixture, &wrong_allocation, &[fixture.source], 16),
+            Err(ProductionMirPlironTranslationErrorV1::AllocationOriginMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn ambiguous_conservative_effects_do_not_fall_back_to_ordinal_zero() {
+        let statement = (7, Some(3));
+        let first_site = SemanticAccessSiteV1 {
+            block: statement.0,
+            statement: statement.1,
+            ordinal: 0,
+        };
+        let second_site = SemanticAccessSiteV1 {
+            ordinal: 1,
+            ..first_site
+        };
+        let direct = |ranked_operation| IndexedRankedAccessSourceV1 {
+            ranked_block: 0,
+            ranked_operation,
+            access: dialect_kernel::AccessKindAttr::Read,
+            allocation: IndexedRankedAllocationV1::Direct(RankedViewDefinitionV1 {
+                allocation_origin: u64::from(ranked_operation) + 1,
+                memory_space: dialect_kernel::MemorySpaceAttr::Global,
+                noalias_class: u64::from(ranked_operation) + 1,
+            }),
+            value: None,
+            atomic: None,
+        };
+        let first = direct(0);
+        let second = direct(1);
+        let ranked = RankedCorrelationIndexV1 {
+            sources_by_site: BTreeMap::from([(first_site, first), (second_site, second)]),
+            // The indexer removes this entry once a second direct summary makes
+            // statement-level fallback ambiguous.
+            conservative_sources_by_statement: BTreeMap::new(),
+            sites_by_ranked_location: BTreeMap::from([
+                ((first.ranked_block, first.ranked_operation), first_site),
+                ((second.ranked_block, second.ranked_operation), second_site),
+            ]),
+            view_definitions: BTreeMap::new(),
+            semantic_expressions: BTreeMap::new(),
+        };
+
+        assert!(
+            ranked_source_for_semantic_effect_v1(&ranked, first_site).is_some(),
+            "an exact ordinal must retain its exact direct summary"
+        );
+        assert!(
+            ranked_source_for_semantic_effect_v1(
+                &ranked,
+                SemanticAccessSiteV1 {
+                    ordinal: 2,
+                    ..first_site
+                },
+            )
+            .is_none(),
+            "a missing ordinal must not reuse an ambiguous ordinal-zero summary"
+        );
+    }
+
+    #[test]
     fn mir_pliron_translation_validation_rejects_missing_and_extra_effects() {
         let fixture = unsupported_index_correlation_fixture();
         let one = ranked_correlation_input(AccessKindAttr::Read, 1);
@@ -21495,6 +23620,172 @@ mod resource_tests {
         );
     }
 
+    fn workgroup_translation_fixture(
+        operation: Operation,
+    ) -> (Module, SemanticKirCorrespondenceV1) {
+        let mut block = BasicBlock::new(BlockId(0));
+        block.operations.push(operation);
+        block.terminator = Some(Terminator::Return { values: vec![] });
+        let mut module = Module::new("workgroup-translation");
+        module.functions.push(Function::kernel_entry(
+            "workgroup_translation",
+            Signature::new(vec![gfx950_lds_transpose_pointer_type_v1()], vec![]),
+            vec![ValueId(0)],
+            vec![block],
+        ));
+        module.kernels.push(Kernel::new(
+            "workgroup-translation",
+            "workgroup_translation",
+            LaunchDomain::D1 {
+                x: LaunchExtent::Static(64),
+            },
+        ));
+        let correspondence = SemanticKirCorrespondenceV1 {
+            semantic_sha256: [10; 32],
+            function_count: 1,
+            lowered_functions: Box::new([]),
+            blocks: vec![SemanticKirBlockCorrespondenceV1 {
+                semantic_function: SemanticFunctionIdV1::from_index(0),
+                semantic_block: SemanticBlockIdV1::from_index(0),
+                kernel_ir_block: BlockId(0),
+                source_statement_count: 1,
+            }]
+            .into_boxed_slice(),
+            statement_operation_spans: vec![SemanticKirStatementOperationSpanV1 {
+                semantic_function: SemanticFunctionIdV1::from_index(0),
+                semantic_block: SemanticBlockIdV1::from_index(0),
+                statement_ordinal: 0,
+                kernel_ir_block: BlockId(0),
+                first_operation_ordinal: 0,
+                operation_count: 1,
+            }]
+            .into_boxed_slice(),
+            terminator_operation_spans: vec![SemanticKirTerminatorOperationSpanV1 {
+                semantic_function: SemanticFunctionIdV1::from_index(0),
+                semantic_block: SemanticBlockIdV1::from_index(0),
+                kernel_ir_block: BlockId(0),
+                first_operation_ordinal: 1,
+                operation_count: 0,
+            }]
+            .into_boxed_slice(),
+            synthetic_operation_spans: Box::new([]),
+            parameter_bindings: Box::new([]),
+        };
+        (module, correspondence)
+    }
+
+    fn ranked_gfx950_transpose_lifecycle(fp8: bool) -> ProductionRankedKernelLoweringInputV1 {
+        let (allocation_origin, noalias_class) = if fp8 {
+            (
+                dialect_kernel::GFX950_TRANSPOSE_FP8_WORKGROUP_ALLOCATION_ORIGIN_V1,
+                dialect_kernel::GFX950_TRANSPOSE_FP8_WORKGROUP_NOALIAS_CLASS_V1,
+            )
+        } else {
+            (
+                dialect_kernel::GFX950_TRANSPOSE_FP4_WORKGROUP_ALLOCATION_ORIGIN_V1,
+                dialect_kernel::GFX950_TRANSPOSE_FP4_WORKGROUP_NOALIAS_CLASS_V1,
+            )
+        };
+        let effect = |kind| ProductionRankedOperationV1::AllocationEffect {
+            kind,
+            memory_space: dialect_kernel::MemorySpaceAttr::Workgroup,
+            allocation_origin,
+            noalias_class,
+        };
+        let kernel = ProductionRankedKernelV1::new(
+            "workgroup_translation",
+            0,
+            vec![ProductionRankedBlockV1::new(
+                vec![
+                    ProductionRankedOperationV1::ExecutionLayout {
+                        grid_identity: 10,
+                        global_extents: [64, 1, 1],
+                        workgroup_extents: [64, 1, 1],
+                        subgroup_size: 64,
+                        full_physical_workgroups: true,
+                    },
+                    effect(AccessKindAttr::Write),
+                    ProductionRankedOperationV1::Barrier {
+                        execution_scope: dialect_gpu::HierarchyAttr::Workgroup,
+                        memory_scope: dialect_gpu::MemoryScopeAttr::Workgroup,
+                        address_space: dialect_gpu::AddressSpaceAttr::Workgroup,
+                        order: dialect_gpu::MemoryOrderAttr::AcquireRelease,
+                    },
+                    effect(AccessKindAttr::Read),
+                ],
+                ProductionRankedTerminatorV1::Return,
+            )],
+        )
+        .expect("exact reserved transpose lifecycle");
+        compile_ranked_kernel_for_lowering_v1(
+            ProductionConstructionV1::ranked_kernel("workgroup_translation", kernel).unwrap(),
+            ProductionSessionLimitsV1::default(),
+        )
+        .expect("exact reserved transpose lifecycle reaches lowering")
+    }
+
+    #[test]
+    fn mir_pliron_translation_binds_reserved_workgroup_effects_to_format_and_operation() {
+        let read_fp8 = Operation::new(
+            vec![],
+            OperationKind::Gfx950LdsTranspose(Gfx950LdsTransposeOperationV1::full(
+                Gfx950LdsTransposeOperationKindV1::Read {
+                    format: Gfx950LdsTransposeFormatV1::Fp8E4M3,
+                    storage: ValueId(0),
+                },
+            )),
+        );
+        assert_eq!(
+            expected_gfx950_workgroup_allocation_identity_v1(&read_fp8, 0),
+            Some((
+                dialect_kernel::GFX950_TRANSPOSE_FP8_WORKGROUP_ALLOCATION_ORIGIN_V1,
+                dialect_kernel::GFX950_TRANSPOSE_FP8_WORKGROUP_NOALIAS_CLASS_V1,
+            ))
+        );
+        assert_eq!(
+            expected_gfx950_workgroup_allocation_identity_v1(&read_fp8, 1),
+            None
+        );
+
+        let (module, correspondence) = workgroup_translation_fixture(read_fp8);
+        let fp4_lowering = ranked_gfx950_transpose_lifecycle(false);
+        let read_source = ProductionRankedAccessSourceV1::new(0, Some(0), 0, 0, 3);
+        assert!(matches!(
+            validate_mir_pliron_translation_v1(
+                &module,
+                &correspondence,
+                &fp4_lowering,
+                &[read_source],
+                8,
+            ),
+            Err(ProductionMirPlironTranslationErrorV1::AllocationOriginMismatch { .. })
+        ));
+
+        let ordinary_lds = Operation::new(
+            vec![],
+            OperationKind::Matrix(MatrixOperation::lds_load(
+                ValueId(0),
+                fe2o3_kernel_ir::MatrixElement::Bf16,
+            )),
+        );
+        assert_eq!(
+            expected_gfx950_workgroup_allocation_identity_v1(&ordinary_lds, 0),
+            None
+        );
+        let (module, correspondence) = workgroup_translation_fixture(ordinary_lds);
+        let fp8_lowering = ranked_gfx950_transpose_lifecycle(true);
+        assert!(matches!(
+            validate_mir_pliron_translation_v1(
+                &module,
+                &correspondence,
+                &fp8_lowering,
+                &[read_source],
+                8,
+            ),
+            Err(ProductionMirPlironTranslationErrorV1::AllocationOriginMismatch { .. })
+        ));
+    }
+
     #[test]
     fn translation_synchronization_classifier_covers_implicit_publish_barriers() {
         let publish = Operation::new(
@@ -21575,6 +23866,7 @@ mod resource_tests {
         let correspondence = SemanticKirCorrespondenceV1 {
             semantic_sha256: [9; 32],
             function_count: 1,
+            lowered_functions: Box::new([]),
             blocks: vec![SemanticKirBlockCorrespondenceV1 {
                 semantic_function: SemanticFunctionIdV1::from_index(0),
                 semantic_block: SemanticBlockIdV1::from_index(0),
@@ -21844,6 +24136,7 @@ mod resource_tests {
         let correspondence = SemanticKirCorrespondenceV1 {
             semantic_sha256: [8; 32],
             function_count: 1,
+            lowered_functions: Box::new([]),
             blocks: vec![SemanticKirBlockCorrespondenceV1 {
                 semantic_function: SemanticFunctionIdV1::from_index(0),
                 semantic_block: SemanticBlockIdV1::from_index(0),

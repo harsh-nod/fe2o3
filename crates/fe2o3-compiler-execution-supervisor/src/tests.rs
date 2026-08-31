@@ -910,6 +910,13 @@ fn named_seqpacket_listener(path: &Path) -> OwnedFd {
     .unwrap();
     let address = rustix::net::SocketAddrUnix::new(path).unwrap();
     bind(&listener, &address).unwrap();
+    fs::set_permissions(
+        path,
+        fs::Permissions::from_mode(
+            fe2o3_compiler_execution_protocol::COMPILER_EXECUTION_SUPERVISOR_SOCKET_MODE_V1,
+        ),
+    )
+    .unwrap();
     listen(&listener, 16).unwrap();
     listener
 }
@@ -924,6 +931,133 @@ fn connect_seqpacket(path: &Path) -> OwnedFd {
     .unwrap();
     connect(&control, &rustix::net::SocketAddrUnix::new(path).unwrap()).unwrap();
     control
+}
+
+#[test]
+fn provisioned_service_inputs_retain_exact_listener_and_root_objects() {
+    let fixture = Fixture::new("provisioned-service-inputs");
+    let listener_path = fixture.root.join("supervisor.sock");
+    let listener = named_seqpacket_listener(&listener_path);
+    let listener_stat = rustix::fs::fstat(&listener).unwrap();
+    let root = File::open(&fixture.root).unwrap();
+    let root_stat = rustix::fs::fstat(&root).unwrap();
+    let credentials = IssuerServiceCredentialProfileV1::new(
+        rustix::process::geteuid().as_raw(),
+        rustix::process::getegid().as_raw(),
+    )
+    .unwrap();
+
+    let admitted = ProvisionedProtectedIssuerServiceInputsV1::admit_at(
+        listener,
+        root,
+        credentials,
+        &listener_path,
+    )
+    .unwrap();
+    assert_eq!(admitted.credentials(), credentials);
+    admitted.revalidate().unwrap();
+    assert!(!format!("{admitted:?}").contains("fd:"));
+
+    let transfer = admitted.into_deployment_transfer().unwrap();
+    assert!(!format!("{transfer:?}").contains("fd:"));
+    assert_eq!(transfer.credentials(), credentials);
+    transfer.revalidate().unwrap();
+    let (listener, root) = transfer.try_clone_ordered_for_spawn().unwrap();
+    let transferred_listener = rustix::fs::fstat(&listener).unwrap();
+    let transferred_root = rustix::fs::fstat(&root).unwrap();
+    assert_eq!(
+        (transferred_listener.st_dev, transferred_listener.st_ino),
+        (listener_stat.st_dev, listener_stat.st_ino)
+    );
+    assert_eq!(
+        (transferred_root.st_dev, transferred_root.st_ino),
+        (root_stat.st_dev, root_stat.st_ino)
+    );
+}
+
+#[test]
+fn provisioned_service_inputs_reject_root_and_listener_substitution() {
+    let root_fixture = Fixture::new("provisioned-root-substitution");
+    let root_listener_path = root_fixture.root.join("supervisor.sock");
+    let root_listener = named_seqpacket_listener(&root_listener_path);
+    let credentials = IssuerServiceCredentialProfileV1::new(
+        rustix::process::geteuid().as_raw(),
+        rustix::process::getegid().as_raw(),
+    )
+    .unwrap();
+    let admitted = ProvisionedProtectedIssuerServiceInputsV1::admit_at(
+        root_listener,
+        File::open(&root_fixture.root).unwrap(),
+        credentials,
+        &root_listener_path,
+    )
+    .unwrap();
+    fs::set_permissions(&root_fixture.root, fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(matches!(
+        admitted.revalidate(),
+        Err(ProtectedIssuerServiceProvisioningErrorV1::Root(_))
+    ));
+
+    let listener_fixture = Fixture::new("provisioned-listener-substitution");
+    let listener_path = listener_fixture.root.join("supervisor.sock");
+    let listener = named_seqpacket_listener(&listener_path);
+    let admitted = ProvisionedProtectedIssuerServiceInputsV1::admit_at(
+        listener,
+        File::open(&listener_fixture.root).unwrap(),
+        credentials,
+        &listener_path,
+    )
+    .unwrap();
+    fs::remove_file(&listener_path).unwrap();
+    assert!(matches!(
+        admitted.revalidate(),
+        Err(ProtectedIssuerServiceProvisioningErrorV1::Listener(_))
+    ));
+}
+
+#[test]
+fn provisioned_service_inputs_reject_listener_mode_and_parent_mutation() {
+    let fixture = Fixture::new("provisioned-listener-policy");
+    let listener_path = fixture.root.join("supervisor.sock");
+    let listener = named_seqpacket_listener(&listener_path);
+    let credentials = IssuerServiceCredentialProfileV1::new(
+        rustix::process::geteuid().as_raw(),
+        rustix::process::getegid().as_raw(),
+    )
+    .unwrap();
+    fs::set_permissions(&listener_path, fs::Permissions::from_mode(0o600)).unwrap();
+    assert!(matches!(
+        ProvisionedProtectedIssuerServiceInputsV1::admit_at(
+            listener,
+            File::open(&fixture.root).unwrap(),
+            credentials,
+            &listener_path,
+        ),
+        Err(ProtectedIssuerServiceProvisioningErrorV1::Listener(
+            ProtectedIssuerServiceErrorV1::InvalidListener(
+                "listener pathname has the wrong type, owner, group, mode, or link count"
+            )
+        ))
+    ));
+
+    fs::remove_file(&listener_path).unwrap();
+    let listener = named_seqpacket_listener(&listener_path);
+    let admitted = ProvisionedProtectedIssuerServiceInputsV1::admit_at(
+        listener,
+        File::open(&fixture.root).unwrap(),
+        credentials,
+        &listener_path,
+    )
+    .unwrap();
+    fs::set_permissions(&listener_path, fs::Permissions::from_mode(0o666)).unwrap();
+    assert!(matches!(
+        admitted.revalidate(),
+        Err(ProtectedIssuerServiceProvisioningErrorV1::Listener(
+            ProtectedIssuerServiceErrorV1::InvalidListener(
+                "listener pathname has the wrong type, owner, group, mode, or link count"
+            )
+        ))
+    ));
 }
 
 #[test]
@@ -1654,6 +1788,7 @@ fn production_listener_rejects_alternate_and_blocking_endpoints() {
         &rustix::net::SocketAddrUnix::new(&blocking_path).unwrap(),
     )
     .unwrap();
+    fs::set_permissions(&blocking_path, fs::Permissions::from_mode(0o660)).unwrap();
     listen(&blocking, 1).unwrap();
     let Some(supervisor) = bound_supervisor(&blocking_fixture) else {
         return;

@@ -41,6 +41,16 @@ executable measurement, static pre-exec launcher measurement, and issuer-policy
 identity supplied by trusted service provisioning. The two executable roles must
 have distinct measurements. The manifest carries no path, descriptor, secret,
 timeout, or authority.
+The private root bootstrap carries one fixed 88-byte supervisor-readiness record.
+It binds the exact deployed child PID and supervisor-deployment identity under a
+domain-separated terminal identity. The record is authority-free: the root
+coordinator must independently establish private-channel provenance and exact
+pidfd liveness.
+The deployment constants also pin the sole runtime socket and mode-`0700`
+service-owned durable-root path plus a distinct root-only lifecycle-lock file.
+The root coordinator and provisioner use the dedicated file as their
+shared/exclusive lock domain, leaving the issuer's state-root singleton lock
+independent. Neither pathname grants authority.
 The 168-byte external-anchor deployment manifest derives the anchor verification
 key from that exact issuer policy and binds the dedicated anchor UID/GID, key,
 exact supervisor deployment identity, and bounded SHA-256 executable
@@ -69,7 +79,11 @@ Worker record or ACK. No descriptor is serialized in these records, and none
 of them grants process or signing authority.
 The sole production supervisor endpoint is the named Unix `SOCK_SEQPACKET`
 socket `/run/fe2o3/compiler-execution-supervisor.sock`; alternate paths are not
-part of the production protocol.
+part of the production protocol. Its runtime directory is root-owned mode
+`0755`; the socket pathname is root-owned, owned by the deployment supervisor
+GID, and exactly mode `0660`. This keeps replacement authority out of the
+unprivileged supervisor while allowing explicitly enrolled group members to
+connect.
 The sole production profile source is
 `/etc/fe2o3/compiler-execution/client-profile-v1`. Admission walks that fixed
 tree without following symlinks, requires root-owned non-writable directories,

@@ -33,6 +33,7 @@ use crate::{
 };
 
 const WORKER_V3_HOST_LINEAGE_DOMAIN_V1: &[u8] = b"fe2o3.host.worker-v3-lineage.v1\0";
+const WORKER_V3_HOST_ROSTER_LINEAGE_DOMAIN_V1: &[u8] = b"fe2o3.host.worker-v3-roster-lineage.v1\0";
 
 /// Canonical identity of every V3 compiler, publication, descriptor, and selected-kernel axis
 /// independently retained by host admission.
@@ -243,6 +244,7 @@ impl fmt::Debug for RecoveredWorkerV3EntrypointV1 {
 pub struct RecoveredWorkerV3PinnedRosterV1<R> {
     artifact: RecoveredWorkerV3ArtifactStateV1,
     entrypoints: Vec<RecoveredWorkerV3EntrypointV1>,
+    lineage: WorkerV3HostLineageEvidenceV1,
     _roster: PhantomData<fn() -> R>,
 }
 
@@ -252,6 +254,7 @@ impl<R> fmt::Debug for RecoveredWorkerV3PinnedRosterV1<R> {
             .debug_struct("RecoveredWorkerV3PinnedRosterV1")
             .field("published", &self.published())
             .field("entrypoint_count", &self.entrypoints.len())
+            .field("lineage", &self.lineage.identity)
             .field("target", &self.target())
             .field("code_object_version", &self.code_object_version())
             .finish_non_exhaustive()
@@ -267,6 +270,10 @@ impl<R> RecoveredWorkerV3PinnedRosterV1<R> {
 
     pub fn published(&self) -> PublishedLinkArtifactV1 {
         self.artifact.published()
+    }
+
+    pub const fn lineage_identity(&self) -> WorkerV3HostLineageIdentityV1 {
+        self.lineage.identity
     }
 
     pub fn entrypoints(&self) -> &[RecoveredWorkerV3EntrypointV1] {
@@ -307,6 +314,51 @@ impl<R> RecoveredWorkerV3PinnedRosterV1<R> {
 
     pub fn code_object_version(&self) -> CodeObjectVersion {
         self.artifact.code_object_version()
+    }
+
+    pub(crate) fn acquire_retained_currentness_token(
+        &self,
+    ) -> Result<DurableCurrentLinkPublicationTokenV1, RecoveredWorkerV3AdmissionErrorV1> {
+        self.artifact.acquire_retained_currentness_token()
+    }
+
+    pub(crate) fn revalidate_retained_currentness_token(
+        &self,
+        current: &DurableCurrentLinkPublicationTokenV1,
+    ) -> Result<(), RecoveredWorkerV3AdmissionErrorV1> {
+        self.artifact.revalidate_retained_currentness_token(current)
+    }
+
+    pub(crate) fn descriptor_table(&self) -> &DeviceDescriptorTableV1 {
+        self.artifact.descriptor_table()
+    }
+
+    pub(crate) const fn lineage_evidence(&self) -> WorkerV3HostLineageEvidenceV1 {
+        self.lineage
+    }
+
+    pub(crate) const fn outer_handoff(&self) -> &InertSemanticCompilerModuleHandoffV3 {
+        self.artifact.outer_handoff()
+    }
+
+    pub(crate) const fn compiler_execution_subject(&self) -> &InertCompilerExecutionSubjectV1 {
+        self.artifact.compiler_execution_subject()
+    }
+
+    pub(crate) const fn compiler_execution_receipt(&self) -> &CompilerExecutionReceiptCarriageV1 {
+        self.artifact.compiler_execution_receipt()
+    }
+
+    pub(crate) const fn finalizer_derivation(
+        &self,
+    ) -> &RevalidatedProtectedWorkerV3FinalizerDerivationV1 {
+        self.artifact.finalizer_derivation()
+    }
+
+    pub(crate) const fn finalizer_replay(
+        &self,
+    ) -> &fe2o3_runtime_protocol::WorkerV3LoadEnvelopeWireV1 {
+        self.artifact.finalizer_replay()
     }
 
     /// Exact descriptor-source association was independently checked during construction.
@@ -511,12 +563,46 @@ where
         }
         entrypoints.push(entrypoint);
     }
+    let lineage = derive_roster_host_lineage_identity(entrypoints.as_slice());
     drop(current);
     Ok(RecoveredWorkerV3PinnedRosterV1 {
         artifact,
         entrypoints,
+        lineage,
         _roster: PhantomData,
     })
+}
+
+fn derive_roster_host_lineage_identity(
+    entrypoints: &[RecoveredWorkerV3EntrypointV1],
+) -> WorkerV3HostLineageEvidenceV1 {
+    let first = entrypoints
+        .first()
+        .expect("exact roster admission rejects an empty roster")
+        .lineage;
+    debug_assert!(entrypoints.iter().all(|entrypoint| {
+        entrypoint.lineage.finalizer_derivation_sha256 == first.finalizer_derivation_sha256
+            && entrypoint.lineage.capsule_sha256 == first.capsule_sha256
+            && entrypoint.lineage.formal_memory_sha256 == first.formal_memory_sha256
+            && entrypoint.lineage.proof_binding_sha256 == first.proof_binding_sha256
+            && entrypoint.lineage.finalized_sha256 == first.finalized_sha256
+            && entrypoint.lineage.finalized_length == first.finalized_length
+    }));
+
+    let mut digest = Sha256::new();
+    digest.update(WORKER_V3_HOST_ROSTER_LINEAGE_DOMAIN_V1);
+    digest.update(
+        u64::try_from(entrypoints.len())
+            .expect("admitted roster length fits u64")
+            .to_le_bytes(),
+    );
+    for entrypoint in entrypoints {
+        digest.update(entrypoint.lineage.identity.as_bytes());
+    }
+    WorkerV3HostLineageEvidenceV1 {
+        identity: WorkerV3HostLineageIdentityV1(digest.finalize().into()),
+        ..first
+    }
 }
 
 fn admit_recovered_worker_v3_artifact_v1(

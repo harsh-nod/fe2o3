@@ -69,7 +69,10 @@ fe2o3-completion = { path = "crates/fe2o3-completion" }
 fe2o3-compiler-api = { path = "crates/fe2o3-compiler-api" }
 fe2o3-compiler-closure-capability = { path = "crates/fe2o3-compiler-closure-capability" }
 fe2o3-compiler-execution-client = { path = "crates/fe2o3-compiler-execution-client" }
+fe2o3-compiler-execution-coordinator = { path = "crates/fe2o3-compiler-execution-coordinator" }
+fe2o3-compiler-execution-deployment = { path = "crates/fe2o3-compiler-execution-deployment" }
 fe2o3-compiler-execution-issuer = { path = "crates/fe2o3-compiler-execution-issuer" }
+fe2o3-compiler-execution-lifecycle = { path = "crates/fe2o3-compiler-execution-lifecycle" }
 fe2o3-compiler-execution-protocol = { path = "crates/fe2o3-compiler-execution-protocol" }
 fe2o3-compiler-execution-supervisor = { path = "crates/fe2o3-compiler-execution-supervisor" }
 fe2o3-compiler-ffi = { path = "crates/fe2o3-compiler-ffi" }
@@ -103,6 +106,7 @@ fe2o3-kir-sim-cli = { path = "crates/fe2o3-kir-sim-cli" }
 fe2o3-kir-sim-trace = { path = "crates/fe2o3-kir-sim-trace" }
 fe2o3-llvm-handoff = { path = "crates/fe2o3-llvm-handoff" }
 fe2o3-llvm-text = { path = "crates/fe2o3-llvm-text" }
+fe2o3-loop-device = { path = "crates/fe2o3-loop-device" }
 fe2o3-lower-mir-kernel = { path = "crates/fe2o3-lower-mir-kernel" }
 fe2o3-macros = { path = "crates/fe2o3-macros" }
 fe2o3-mir-model = { path = "crates/fe2o3-mir-model" }
@@ -130,6 +134,7 @@ rustc-codegen-fe2o3 = { path = "crates/rustc-codegen-fe2o3" }
 libc = "0.2.189"
 rustix = { version = "1.1.4", features = ["fs", "net"] }
 serde = { version = "1", features = ["derive"] }
+signal-hook = { version = "=0.4.4", default-features = false }
 
 proc-macro2 = "1"
 proc-macro-crate = "3"

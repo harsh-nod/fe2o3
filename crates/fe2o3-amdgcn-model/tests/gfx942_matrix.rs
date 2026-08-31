@@ -5,8 +5,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use fe2o3_amdgcn_model::{
     GFX942_XNACK_MINUS_DATA_LAYOUT, LoweringDiagnosticCode,
-    lower_compiler_module_to_gfx942_llvm_ir, lower_kernel_to_gfx942_llvm_ir,
-    lower_kernel_to_gfx942_xnack_minus_llvm_ir,
+    lower_compiler_module_to_gfx942_llvm_ir, lower_compiler_module_to_gfx942_xnack_minus_llvm_ir,
+    lower_compiler_module_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1,
+    lower_kernel_to_gfx942_llvm_ir, lower_kernel_to_gfx942_xnack_minus_llvm_ir,
     lower_kernel_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1, lower_kernel_to_llvm_ir,
 };
 use fe2o3_kernel_ir::*;
@@ -268,6 +269,31 @@ fn exact_xnack_minus_kernel_api_requires_and_emits_the_retained_target_identity(
         anchored.matches("call void @llvm.pseudoprobe(").count(),
         operations
     );
+    let compiler_module = lower_compiler_module_to_gfx942_xnack_minus_llvm_ir(&module).unwrap();
+    assert!(compiler_module.contains(GFX942_XNACK_MINUS_DATA_LAYOUT));
+    assert!(compiler_module.contains("-wavefrontsize32,+wavefrontsize64,-xnack"));
+    assert_eq!(compiler_module.matches("define amdgpu_kernel").count(), 1);
+    let anchored_compiler_module =
+        lower_compiler_module_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1(
+            &module,
+            fe2o3_amdgcn_model::ProductionSemanticAnchorKirIdentityV1::from_v8(
+                &VerifiedCanonicalKernelIrV8::from_module(module.clone()).unwrap(),
+            ),
+        )
+        .unwrap();
+    assert_eq!(
+        anchored_compiler_module
+            .matches("call void @llvm.pseudoprobe(")
+            .count(),
+        operations
+    );
+    assert_eq!(
+        anchored_compiler_module
+            .matches("declare void @llvm.pseudoprobe(i64, i64, i32, i64)")
+            .count(),
+        1
+    );
+    assert!(anchored_compiler_module.contains("!fe2o3.semantic_anchor.v1 = "));
 
     for owner in 0..3 {
         let mut mutated = module.clone();
@@ -504,4 +530,47 @@ fn rocm_compiles_and_inspects_gfx942_matrix_workgroup_shapes() {
             "missing gfx942 MFMA instruction for {name}:\n{disassembly}"
         );
     }
+}
+
+#[test]
+#[ignore = "requires ROCm LLVM tools with gfx942 support"]
+fn rocm_compiles_active_complete_module_semantic_anchors() {
+    let directory = TemporaryDirectory::new();
+    let input = directory.join("matrix-anchored.ll");
+    let object = directory.join("matrix-anchored.o");
+    let mut module = matrix_module();
+    let target = gfx942_xnack_minus_target_capability();
+    module.required_capabilities.insert(target.clone());
+    module.functions[0]
+        .required_capabilities
+        .insert(target.clone());
+    module.kernels[0].required_capabilities.insert(target);
+    let owner = VerifiedCanonicalKernelIrV8::from_module(module.clone()).unwrap();
+    let llvm = lower_compiler_module_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1(
+        &module,
+        fe2o3_amdgcn_model::ProductionSemanticAnchorKirIdentityV1::from_v8(&owner),
+    )
+    .unwrap();
+    fs::write(&input, llvm).unwrap();
+
+    let compile = Command::new("/opt/rocm/llvm/bin/clang")
+        .args([
+            "-x",
+            "ir",
+            "--target=amdgcn-amd-amdhsa",
+            "-mcpu=gfx942",
+            "-mcode-object-version=6",
+            "-nogpulib",
+            "-c",
+        ])
+        .arg(&input)
+        .arg("-o")
+        .arg(&object)
+        .output()
+        .unwrap();
+    assert!(
+        compile.status.success(),
+        "clang rejected active complete-module semantic anchors:\n{}",
+        String::from_utf8_lossy(&compile.stderr)
+    );
 }

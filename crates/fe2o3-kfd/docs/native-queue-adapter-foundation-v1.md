@@ -106,8 +106,9 @@ one internal, non-`Clone` single-producer submission owner. Before CREATE,
 every logical 64-byte ring slot contains the exact little-endian `u32` INVALID
 header value `1`; an all-zero slot would encode VENDOR_SPECIFIC and is rejected
 by the initialization contract. Each slot header is explicitly initialized as
-an `AtomicU32`, and both control counters are explicitly initialized as
-`AtomicU64`, before GPU mapping.
+an `AtomicU32`. The AMD AQL write/read counters are initialized as `AtomicU64`
+at `+0x38`/`+0x80`, and the `0x80` read-base-offset field is written at `+0x88`,
+before GPU mapping.
 
 Submission acquire-loads the actual shared write and read counters, requires
 the write observation to equal the retained model, and applies
@@ -192,9 +193,12 @@ After one exact dispatch generation reaches completion and signal recycle, a
 detach transition releases code and kernarg while keeping the queue, ring,
 completion arena, event, runtime, and doorbell live. A later fixed batch may use
 a different packet/program cardinality, geometry, scalar kernarg bytes, and
-device-data set. The detached-lease ledger forbids queue destruction until all
-data is rebound or explicitly released. Fully initialized state survives this
-transition, but no pre-publication content digest is restored as current.
+device-data set. Its first publication is seeded from the exact detached
+predecessor and strictly advances the dispatch generation, so old read requests
+cannot alias the replacement batch. The detached-lease ledger forbids queue
+destruction until all data is rebound or explicitly released. Fully initialized
+state survives this transition, but no pre-publication content digest is
+restored as current.
 
 After DESTROY is confirmed, return is all-or-terminal. Any later
 event/runtime/doorbell/CWSR/queue/code/kernarg/completion release or model

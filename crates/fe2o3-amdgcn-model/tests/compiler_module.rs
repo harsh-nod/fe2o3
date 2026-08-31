@@ -1,12 +1,14 @@
 use fe2o3_amdgcn_model::{
-    GFX942_XNACK_MINUS_DATA_LAYOUT, LoweringDiagnosticCode, lower_compiler_module_to_llvm_ir,
-    lower_device_module_to_gfx942_llvm_ir, lower_device_module_to_gfx942_xnack_minus_llvm_ir,
+    GFX942_XNACK_MINUS_DATA_LAYOUT, LoweringDiagnosticCode, ProductionSemanticAnchorKirIdentityV1,
+    lower_compiler_module_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1,
+    lower_compiler_module_to_llvm_ir, lower_device_module_to_gfx942_llvm_ir,
+    lower_device_module_to_gfx942_xnack_minus_llvm_ir,
 };
 use fe2o3_kernel_ir::{
-    AccessMode, AddressSpace, BasicBlock, BinaryOp, BlockId, Function, FunctionId,
+    AccessMode, AddressSpace, BasicBlock, BinaryOp, BlockId, Function, FunctionId, FunctionRole,
     IntrinsicOperation, Kernel, LaunchDomain, LaunchExtent, Module, Operation, OperationKind,
-    Signature, TargetCapability, Terminator, Type, ValueDef, ValueId, WaveWidth, WorkgroupMemory,
-    WorkgroupMemoryExtent, WorkgroupSize,
+    Signature, TargetCapability, Terminator, Type, ValueDef, ValueId, VerifiedCanonicalKernelIrV9,
+    WaveWidth, WorkgroupMemory, WorkgroupMemoryExtent, WorkgroupSize,
 };
 
 fn returning_block(operations: Vec<Operation>, values: Vec<ValueId>) -> BasicBlock {
@@ -170,6 +172,20 @@ fn compiler_module() -> Module {
     module
 }
 
+fn exact_gfx942_xnack_minus_compiler_module(mut module: Module) -> Module {
+    let target = fe2o3_kernel_ir::gfx942_xnack_minus_target_capability();
+    module.required_capabilities.insert(target.clone());
+    for kernel in &mut module.kernels {
+        kernel.required_capabilities.insert(target.clone());
+    }
+    for function in &mut module.functions {
+        if function.role != FunctionRole::ExternalImport {
+            function.required_capabilities.insert(target.clone());
+        }
+    }
+    module
+}
+
 #[test]
 fn multi_entry_module_matches_exact_golden() {
     let actual = lower_compiler_module_to_llvm_ir(&compiler_module()).expect("supported module");
@@ -194,6 +210,41 @@ fn canonical_order_is_independent_of_module_vector_order() {
         lower_compiler_module_to_llvm_ir(&permuted).unwrap(),
         baseline
     );
+}
+
+#[test]
+fn anchored_complete_modules_retain_helpers_and_report_exact_typed_absence() {
+    let mut module = compiler_module();
+    module
+        .functions
+        .iter_mut()
+        .find(|function| function.id == FunctionId::new("public_adjust"))
+        .unwrap()
+        .role = FunctionRole::InternalHelper;
+    let module = exact_gfx942_xnack_minus_compiler_module(module);
+    let owner = VerifiedCanonicalKernelIrV9::from_module(module.clone()).unwrap();
+    let llvm = lower_compiler_module_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1(
+        &module,
+        ProductionSemanticAnchorKirIdentityV1::from_v9(&owner),
+    )
+    .unwrap();
+
+    assert_eq!(llvm.matches("define amdgpu_kernel").count(), 2);
+    assert_eq!(llvm.matches("define internal i32 @scale").count(), 1);
+    assert_eq!(
+        llvm.matches("define internal i32 @public_adjust").count(),
+        1
+    );
+    assert_eq!(llvm.matches("declare i32 @external_bias").count(), 1);
+    assert!(llvm.contains("call i32 @scale"));
+    assert!(llvm.contains("call i32 @public_adjust"));
+    assert_eq!(
+        llvm.matches("!fe2o3.semantic_anchor.absence.v1 = ").count(),
+        1
+    );
+    assert_eq!(llvm.matches("multiple_defined_bodies").count(), 1);
+    assert!(!llvm.contains("llvm.pseudoprobe"));
+    assert!(!llvm.contains("!fe2o3.semantic_anchor.v1 = "));
 }
 
 #[test]

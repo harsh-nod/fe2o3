@@ -35,7 +35,10 @@ durable transition, and sends one exact 288-byte signed observation. The anchor
 daemon has a descriptor-only entrypoint with no arguments or environment. It
 admits the sealed deployment and complete locked service profile before reading
 the deployment-bound signing-key capability, opens only existing durable state,
-retains only its private root and peer, and closes every other descriptor. The
+retains its private root, peer, lifecycle lock, and canonical lifecycle parent
+at FDs 256 through 259, and closes every other descriptor. The shared lease
+arrives at fixed FD 5, is revalidated before service, and is released only by
+last close. The
 deployment also pins the exact daemon SHA-256 measurement. `/proc/self/exe` must
 be the same anonymous service-owned mode-`0555` executable under complete
 content, execution-mode, and further-seal prevention. The shared protected

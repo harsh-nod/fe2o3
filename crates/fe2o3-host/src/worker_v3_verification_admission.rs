@@ -3,12 +3,12 @@ use std::{error::Error, fmt, marker::PhantomData};
 use fe2o3_artifact_transaction::{
     DurableCurrentLinkPublicationTokenV1, InertCompilerExecutionSubjectV1,
 };
-use fe2o3_hsaco::CodeObjectVersion;
+use fe2o3_hsaco::{CodeObjectVersion, InspectedKernel, KernelDescriptorBinding};
 use fe2o3_hsaco_finalize::{
     RevalidatedProtectedWorkerV3FinalizerDerivationV1, WorkerV3HsacoPublicationErrorV1,
     revalidate_protected_worker_v3_finalizer_derivation_v1,
 };
-use fe2o3_kernel_descriptor::{KernelDescriptorV1, KernelId};
+use fe2o3_kernel_descriptor::{DeviceDescriptorTableV1, KernelDescriptorV1, KernelId};
 use fe2o3_runtime_protocol::{CompilerExecutionReceiptCarriageV1, WorkerV3LoadEnvelopeWireV1};
 use fe2o3_verifier::{
     CompilerProofInputValidationErrorV4, ValidatedCompilerProofInputsV4,
@@ -20,12 +20,17 @@ use sha2::{Digest, Sha256};
 use crate::compiler_execution_current_record_audit::WorkerV3CompilerCurrentRecordAuditV1;
 use crate::recovered_worker_v3_admission::WorkerV3HostLineageEvidenceV1;
 use crate::{
+    CompilerGeneratedKernelExpectationRosterEntryV1, CompilerGeneratedKernelExpectationRosterV1,
     CompilerGeneratedKernelExpectationV1, RecoveredWorkerV3AdmissionErrorV1,
-    RecoveredWorkerV3PinnedDescriptorV1, WorkerV3HostLineageIdentityV1,
+    RecoveredWorkerV3PinnedDescriptorV1, RecoveredWorkerV3PinnedRosterV1,
+    WorkerV3HostLineageIdentityV1,
 };
 
 const WORKER_V3_VERIFICATION_CHALLENGE_DOMAIN_V1: &[u8] =
     b"fe2o3.host.worker-v3-verification-challenge.v1\0";
+const WORKER_V3_ROSTER_IDENTITY_DOMAIN_V1: &[u8] = b"fe2o3.host.worker-v3-verification-roster.v1\0";
+const WORKER_V3_ROSTER_VERIFICATION_CHALLENGE_DOMAIN_V1: &[u8] =
+    b"fe2o3.host.worker-v3-roster-verification-challenge.v1\0";
 
 mod verifier_seal {
     pub trait Sealed<K> {}
@@ -1300,6 +1305,1261 @@ impl<K: CompilerGeneratedKernelExpectationV1> AuthenticatedWorkerV3ExecutableV1<
         &self.current
     }
 }
+
+/// Canonical identity of one complete generated marker roster.
+///
+/// The identity covers exact descriptor-table order, names, marker bindings, and generated host
+/// contracts. Physical ELF kernel order is deliberately outside this identity.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct WorkerV3VerificationRosterIdentityV1([u8; 32]);
+
+impl WorkerV3VerificationRosterIdentityV1 {
+    pub const fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+/// One aggregate challenge over a complete admitted artifact and marker roster.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct WorkerV3RosterVerificationChallengeIdentityV1([u8; 32]);
+
+impl WorkerV3RosterVerificationChallengeIdentityV1 {
+    pub const fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+/// Borrowed aggregate request presented once for one complete recovered artifact.
+///
+/// V4 compiler proof inputs are common capsule evidence. They do not independently establish a
+/// proof-to-executable, Rust layout, or Rust effect theorem for each roster entry. The protected
+/// aggregate backend must establish those per-entry joins separately. It must also independently
+/// reconstruct the finalizer derivation from the exact replay; a host-projected digest is not
+/// finalizer custody.
+pub struct WorkerV3RosterVerificationRequestV1<'admission, R> {
+    challenge: WorkerV3RosterVerificationChallengeIdentityV1,
+    roster_identity: WorkerV3VerificationRosterIdentityV1,
+    admission: &'admission RecoveredWorkerV3PinnedRosterV1<R>,
+    current: &'admission DurableCurrentLinkPublicationTokenV1,
+    _roster: PhantomData<fn() -> R>,
+}
+
+impl<R: CompilerGeneratedKernelExpectationRosterV1> WorkerV3RosterVerificationRequestV1<'_, R> {
+    pub const fn challenge_identity(&self) -> WorkerV3RosterVerificationChallengeIdentityV1 {
+        self.challenge
+    }
+
+    pub const fn roster_identity(&self) -> WorkerV3VerificationRosterIdentityV1 {
+        self.roster_identity
+    }
+
+    pub const fn lineage_identity(&self) -> WorkerV3HostLineageIdentityV1 {
+        self.admission.lineage_identity()
+    }
+
+    /// Returns the derivation independently reconstructed by host roster admission.
+    pub const fn finalizer_derivation(&self) -> &RevalidatedProtectedWorkerV3FinalizerDerivationV1 {
+        self.admission.finalizer_derivation()
+    }
+
+    /// Reconstructs a second move-only finalizer owner from the exact borrowed envelope replay.
+    ///
+    /// Protected aggregate backends use this operation instead of echoing host projections. The
+    /// returned owner remains authority-free and is compared again during decision promotion.
+    pub fn independently_revalidate_finalizer_derivation(
+        &self,
+    ) -> Result<RevalidatedProtectedWorkerV3FinalizerDerivationV1, WorkerV3HsacoPublicationErrorV1>
+    {
+        let replay = self.admission.finalizer_replay();
+        revalidate_protected_worker_v3_finalizer_derivation_v1(
+            replay.publication_intent_record().attempt(),
+            replay.outer_handoff(),
+            replay.external_provider_payloads(),
+            replay.transcript(),
+            self.finalized_hsaco_bytes(),
+        )
+    }
+
+    /// Returns the finalizer identity bound into every entry lineage and the roster lineage.
+    pub const fn finalizer_derivation_sha256(&self) -> [u8; 32] {
+        self.admission
+            .lineage_evidence()
+            .finalizer_derivation_sha256()
+    }
+
+    pub fn marker_entries(&self) -> &'static [CompilerGeneratedKernelExpectationRosterEntryV1] {
+        R::ENTRIES
+    }
+
+    pub fn descriptor_table(&self) -> &DeviceDescriptorTableV1 {
+        self.admission.descriptor_table()
+    }
+
+    pub fn descriptor(&self, ordinal: usize) -> Option<&KernelDescriptorV1> {
+        self.admission.descriptor(ordinal)
+    }
+
+    pub fn physical_kernel(&self, ordinal: usize) -> Option<&InspectedKernel> {
+        self.admission.physical_kernel(ordinal)
+    }
+
+    pub fn descriptor_binding(&self, ordinal: usize) -> Option<KernelDescriptorBinding> {
+        self.admission.descriptor_binding(ordinal)
+    }
+
+    pub fn entry_lineage_identity(&self, ordinal: usize) -> Option<WorkerV3HostLineageIdentityV1> {
+        self.admission
+            .entrypoints()
+            .get(ordinal)
+            .map(|entrypoint| entrypoint.lineage_identity())
+    }
+
+    pub const fn compiler_execution_subject(&self) -> &InertCompilerExecutionSubjectV1 {
+        self.admission.compiler_execution_subject()
+    }
+
+    pub const fn compiler_execution_subject_bytes(&self) -> &[u8] {
+        self.compiler_execution_subject().canonical_bytes()
+    }
+
+    pub const fn compiler_execution_receipt_carriage(&self) -> &CompilerExecutionReceiptCarriageV1 {
+        self.admission.compiler_execution_receipt()
+    }
+
+    pub const fn compiler_execution_receipt_bytes(&self) -> &[u8] {
+        self.compiler_execution_receipt_carriage().canonical_bytes()
+    }
+
+    pub const fn compiler_execution_subject_sha256(&self) -> [u8; 32] {
+        *self.compiler_execution_subject().identity().sha256()
+    }
+
+    pub const fn compiler_execution_carriage_sha256(&self) -> [u8; 32] {
+        *self
+            .compiler_execution_receipt_carriage()
+            .identity()
+            .as_bytes()
+    }
+
+    pub const fn compiler_execution_policy_sha256(&self) -> [u8; 32] {
+        *self
+            .compiler_execution_receipt_carriage()
+            .policy()
+            .identity()
+            .as_bytes()
+    }
+
+    pub const fn compiler_execution_issuer_journal_sha256(&self) -> [u8; 32] {
+        self.compiler_execution_receipt_carriage()
+            .acknowledgment()
+            .issuer_journal_identity()
+    }
+
+    pub const fn compiler_occurrence_sha256(&self) -> [u8; 32] {
+        self.compiler_execution_receipt_carriage()
+            .acknowledgment()
+            .compiler_occurrence_identity()
+    }
+
+    pub const fn compiler_execution_receipt_sha256(&self) -> [u8; 32] {
+        *self
+            .compiler_execution_receipt_carriage()
+            .acknowledgment()
+            .receipt_identity()
+            .as_bytes()
+    }
+
+    pub const fn compiler_execution_publication_sha256(&self) -> [u8; 32] {
+        *self
+            .compiler_execution_receipt_carriage()
+            .acknowledgment()
+            .publication_identity()
+            .as_bytes()
+    }
+
+    pub const fn compiler_execution_acknowledgment_sha256(&self) -> [u8; 32] {
+        *self
+            .compiler_execution_receipt_carriage()
+            .acknowledgment()
+            .identity()
+            .as_bytes()
+    }
+
+    pub const fn compiler_execution_worker_ledger_record_sha256(&self) -> [u8; 32] {
+        self.compiler_execution_receipt_carriage()
+            .acknowledgment()
+            .worker_ledger_record_identity()
+    }
+
+    pub const fn compiler_execution_sequence(&self) -> u64 {
+        self.compiler_execution_receipt_carriage()
+            .acknowledgment()
+            .sequence()
+    }
+
+    pub const fn compiler_execution_prior_rollback_anchor(&self) -> [u8; 32] {
+        self.compiler_execution_receipt_carriage()
+            .publication()
+            .receipt()
+            .prior_rollback_anchor()
+    }
+
+    pub const fn compiler_execution_current_rollback_anchor(&self) -> [u8; 32] {
+        self.compiler_execution_receipt_carriage()
+            .acknowledgment()
+            .current_rollback_anchor()
+    }
+
+    pub const fn semantic_compiler_handoff(
+        &self,
+    ) -> &fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffV3 {
+        self.admission.outer_handoff()
+    }
+
+    pub fn semantic_capsule_bytes(&self) -> &[u8] {
+        self.semantic_compiler_handoff().capsule().canonical_bytes()
+    }
+
+    pub fn formal_memory_receipt_bytes(&self) -> &[u8] {
+        self.semantic_compiler_handoff()
+            .capsule()
+            .receipts()
+            .formal_memory()
+            .canonical_preimage()
+    }
+
+    pub fn proof_binding_receipt_bytes(&self) -> &[u8] {
+        self.semantic_compiler_handoff()
+            .capsule()
+            .receipts()
+            .proof_binding()
+            .canonical_preimage()
+    }
+
+    /// Decodes the one common V4 compiler-proof owner for the complete capsule.
+    ///
+    /// This custody does not establish the per-entry proof-to-executable, layout, or effect joins
+    /// returned separately by the protected aggregate backend.
+    pub fn validate_compiler_proof_inputs_v4(
+        &self,
+    ) -> Result<ValidatedCompilerProofInputsV4, CompilerProofInputValidationErrorV4> {
+        let receipts = self.semantic_compiler_handoff().capsule().receipts();
+        validate_compiler_proof_inputs_v4(
+            receipts.proof_binding(),
+            receipts.semantic_mir(),
+            receipts.middle_end(),
+            receipts.kernel_ir(),
+            receipts.mir_to_kir_correspondence(),
+            receipts.formal_memory(),
+        )
+    }
+
+    pub fn finalized_hsaco_bytes(&self) -> &[u8] {
+        self.current.exact_artifact_bytes()
+    }
+
+    pub const fn capsule_sha256(&self) -> [u8; 32] {
+        self.admission.lineage_evidence().capsule_sha256()
+    }
+
+    pub const fn formal_memory_receipt_sha256(&self) -> [u8; 32] {
+        self.admission.lineage_evidence().formal_memory_sha256()
+    }
+
+    pub const fn proof_binding_receipt_sha256(&self) -> [u8; 32] {
+        self.admission.lineage_evidence().proof_binding_sha256()
+    }
+
+    pub const fn finalized_hsaco_sha256(&self) -> [u8; 32] {
+        self.admission.lineage_evidence().finalized_sha256()
+    }
+
+    pub const fn finalized_hsaco_length(&self) -> u64 {
+        self.admission.lineage_evidence().finalized_length()
+    }
+
+    pub fn target(&self) -> fe2o3_amd_target::AmdTargetId {
+        self.admission.target()
+    }
+
+    pub fn code_object_version(&self) -> CodeObjectVersion {
+        self.admission.code_object_version()
+    }
+}
+
+/// Protected theorem evidence for one marker at one canonical descriptor ordinal.
+///
+/// The marker and generated-host coordinates are rechecked by host promotion. The remaining
+/// identities must come from protected verification of this exact physical executable and all
+/// invocations satisfying the marker's generated ABI, layout, effect, alias, initialization, and
+/// launch contracts.
+pub struct WorkerV3ProtectedRosterEntryEvidenceV1 {
+    lineage: WorkerV3HostLineageIdentityV1,
+    marker_binding: [u8; 32],
+    generated_host_contract: [u8; 32],
+    proof_executable_binding_sha256: [u8; 32],
+    rust_type_layout_contract_sha256: [u8; 32],
+    rust_effect_contract_sha256: [u8; 32],
+    safety_properties: WorkerV3SafetyPropertiesV1,
+}
+
+impl WorkerV3ProtectedRosterEntryEvidenceV1 {
+    /// Constructs one entry result from independently authenticated protected state.
+    ///
+    /// # Safety
+    ///
+    /// Every identity and property must cover the exact request entry named by `lineage` and
+    /// `marker_binding`; request echoes or nonzero placeholders do not satisfy this contract.
+    #[allow(clippy::too_many_arguments)]
+    pub const unsafe fn new(
+        lineage: WorkerV3HostLineageIdentityV1,
+        marker_binding: [u8; 32],
+        generated_host_contract: [u8; 32],
+        proof_executable_binding_sha256: [u8; 32],
+        rust_type_layout_contract_sha256: [u8; 32],
+        rust_effect_contract_sha256: [u8; 32],
+        safety_properties: WorkerV3SafetyPropertiesV1,
+    ) -> Self {
+        Self {
+            lineage,
+            marker_binding,
+            generated_host_contract,
+            proof_executable_binding_sha256,
+            rust_type_layout_contract_sha256,
+            rust_effect_contract_sha256,
+            safety_properties,
+        }
+    }
+
+    pub const fn lineage_identity(&self) -> WorkerV3HostLineageIdentityV1 {
+        self.lineage
+    }
+
+    pub const fn marker_binding_identity(&self) -> [u8; 32] {
+        self.marker_binding
+    }
+
+    pub const fn generated_host_contract_identity(&self) -> [u8; 32] {
+        self.generated_host_contract
+    }
+
+    pub const fn proof_executable_binding_sha256(&self) -> [u8; 32] {
+        self.proof_executable_binding_sha256
+    }
+
+    pub const fn rust_type_layout_contract_sha256(&self) -> [u8; 32] {
+        self.rust_type_layout_contract_sha256
+    }
+
+    pub const fn rust_effect_contract_sha256(&self) -> [u8; 32] {
+        self.rust_effect_contract_sha256
+    }
+
+    pub const fn safety_properties(&self) -> WorkerV3SafetyPropertiesV1 {
+        self.safety_properties
+    }
+}
+
+/// One protected result for a complete marker roster.
+///
+/// The finalizer derivation and V4 proof owner are common artifact custody. `entries` separately
+/// supplies the protected proof-to-executable, layout, effect, and universal-safety join for every
+/// canonical marker.
+pub struct WorkerV3ProtectedRosterVerificationEvidenceV1 {
+    finalizer_derivation: RevalidatedProtectedWorkerV3FinalizerDerivationV1,
+    compiler_execution: WorkerV3CompilerExecutionVerificationV1,
+    proof_inputs: ValidatedCompilerProofInputsV4,
+    verifier_measurement_sha256: [u8; 32],
+    verification_transcript_sha256: [u8; 32],
+    entries: Vec<WorkerV3ProtectedRosterEntryEvidenceV1>,
+}
+
+impl WorkerV3ProtectedRosterVerificationEvidenceV1 {
+    /// Constructs aggregate evidence produced by one reviewed protected backend execution.
+    ///
+    /// # Safety
+    ///
+    /// `finalizer_derivation` must be independently reconstructed from the exact request replay,
+    /// the common coordinates must bind the exact aggregate request, and `entries` must cover
+    /// every request entry exactly once in canonical descriptor order.
+    pub unsafe fn new(
+        finalizer_derivation: RevalidatedProtectedWorkerV3FinalizerDerivationV1,
+        compiler_execution: WorkerV3CompilerExecutionVerificationV1,
+        proof_inputs: ValidatedCompilerProofInputsV4,
+        verifier_measurement_sha256: [u8; 32],
+        verification_transcript_sha256: [u8; 32],
+        entries: Vec<WorkerV3ProtectedRosterEntryEvidenceV1>,
+    ) -> Self {
+        Self {
+            finalizer_derivation,
+            compiler_execution,
+            proof_inputs,
+            verifier_measurement_sha256,
+            verification_transcript_sha256,
+            entries,
+        }
+    }
+}
+
+/// External protected authority for one complete roster request.
+///
+/// # Safety
+///
+/// Implementations must satisfy the compiler-policy, protected Worker-ledger, and external
+/// rollback obligations of [`WorkerV3ProtectedVerifierBackendV1`] once for the exact common
+/// artifact. They must independently reconstruct and retain the move-only finalizer derivation from
+/// the exact replay, rather than echoing a host digest. They must additionally inspect every
+/// descriptor and independently selected physical executable, authenticate one ordered entry result
+/// for every marker, and establish each result for all concrete invocations satisfying that
+/// marker's generated contracts. The common V4 proof owner alone is not a compiler-produced
+/// multi-root proof-to-executable theorem.
+pub unsafe trait WorkerV3ProtectedRosterVerifierBackendV1<
+    R: CompilerGeneratedKernelExpectationRosterV1,
+>
+{
+    type Error;
+
+    /// Authenticates the complete pinned roster through one protected call.
+    ///
+    /// # Safety
+    ///
+    /// The implementation obligations are those of the unsafe trait.
+    unsafe fn verify_protected_roster(
+        &mut self,
+        request: &WorkerV3RosterVerificationRequestV1<'_, R>,
+    ) -> Result<WorkerV3ProtectedRosterVerificationEvidenceV1, Self::Error>;
+}
+
+/// Crate-owned aggregate adapter around one reviewed protected backend.
+pub struct WorkerV3ProtectedRosterVerifierAdapterV1<B> {
+    backend: B,
+}
+
+impl<B> WorkerV3ProtectedRosterVerifierAdapterV1<B> {
+    pub const fn new(backend: B) -> Self {
+        Self { backend }
+    }
+
+    pub fn into_inner(self) -> B {
+        self.backend
+    }
+
+    unsafe fn verify<R>(
+        &mut self,
+        request: &WorkerV3RosterVerificationRequestV1<'_, R>,
+    ) -> Result<WorkerV3RosterVerificationDecisionV1, B::Error>
+    where
+        R: CompilerGeneratedKernelExpectationRosterV1,
+        B: WorkerV3ProtectedRosterVerifierBackendV1<R>,
+    {
+        // SAFETY: `B` owns the independent protected checks required by its unsafe trait.
+        let evidence = unsafe { self.backend.verify_protected_roster(request)? };
+        Ok(WorkerV3RosterVerificationDecisionV1 {
+            challenge: request.challenge_identity(),
+            lineage: request.lineage_identity(),
+            roster_identity: request.roster_identity(),
+            capsule_sha256: request.capsule_sha256(),
+            formal_memory_sha256: request.formal_memory_receipt_sha256(),
+            proof_binding_sha256: request.proof_binding_receipt_sha256(),
+            finalized_sha256: request.finalized_hsaco_sha256(),
+            finalized_length: request.finalized_hsaco_length(),
+            target: request.target(),
+            code_object_version: request.code_object_version(),
+            finalizer_derivation: evidence.finalizer_derivation,
+            compiler_execution: evidence.compiler_execution,
+            proof_inputs: evidence.proof_inputs,
+            verifier_measurement_sha256: evidence.verifier_measurement_sha256,
+            verification_transcript_sha256: evidence.verification_transcript_sha256,
+            entries: evidence.entries,
+        })
+    }
+}
+
+/// Authenticated aggregate result for one exact roster and artifact.
+pub struct WorkerV3RosterVerificationDecisionV1 {
+    challenge: WorkerV3RosterVerificationChallengeIdentityV1,
+    lineage: WorkerV3HostLineageIdentityV1,
+    roster_identity: WorkerV3VerificationRosterIdentityV1,
+    capsule_sha256: [u8; 32],
+    formal_memory_sha256: [u8; 32],
+    proof_binding_sha256: [u8; 32],
+    finalized_sha256: [u8; 32],
+    finalized_length: u64,
+    target: fe2o3_amd_target::AmdTargetId,
+    code_object_version: CodeObjectVersion,
+    finalizer_derivation: RevalidatedProtectedWorkerV3FinalizerDerivationV1,
+    compiler_execution: WorkerV3CompilerExecutionVerificationV1,
+    proof_inputs: ValidatedCompilerProofInputsV4,
+    verifier_measurement_sha256: [u8; 32],
+    verification_transcript_sha256: [u8; 32],
+    entries: Vec<WorkerV3ProtectedRosterEntryEvidenceV1>,
+}
+
+impl WorkerV3RosterVerificationDecisionV1 {
+    pub const fn challenge_identity(&self) -> WorkerV3RosterVerificationChallengeIdentityV1 {
+        self.challenge
+    }
+
+    pub const fn lineage_identity(&self) -> WorkerV3HostLineageIdentityV1 {
+        self.lineage
+    }
+
+    pub const fn roster_identity(&self) -> WorkerV3VerificationRosterIdentityV1 {
+        self.roster_identity
+    }
+
+    pub fn entries(&self) -> &[WorkerV3ProtectedRosterEntryEvidenceV1] {
+        &self.entries
+    }
+
+    pub const fn finalized_hsaco_sha256(&self) -> [u8; 32] {
+        self.finalized_sha256
+    }
+
+    pub const fn finalized_hsaco_length(&self) -> u64 {
+        self.finalized_length
+    }
+
+    /// Returns protected finalizer custody independently reconstructed from the exact roster replay.
+    pub const fn finalizer_derivation(&self) -> &RevalidatedProtectedWorkerV3FinalizerDerivationV1 {
+        &self.finalizer_derivation
+    }
+
+    pub const fn compiler_execution(&self) -> &WorkerV3CompilerExecutionVerificationV1 {
+        &self.compiler_execution
+    }
+
+    /// Returns the one common decoded V4 compiler-proof owner for this artifact.
+    pub const fn validated_compiler_proof_inputs(&self) -> &ValidatedCompilerProofInputsV4 {
+        &self.proof_inputs
+    }
+
+    /// Reports common compiler and signed-Verus custody only.
+    ///
+    /// Per-entry proof-to-executable, layout, and effect authority is retained separately in
+    /// [`Self::entries`].
+    pub const fn retains_current_compiler_and_signed_verus_evidence(&self) -> bool {
+        self.proof_inputs
+            .authenticates_signed_verus_receipt_under_embedded_key()
+            && self
+                .compiler_execution
+                .authenticates_signed_currentness_evidence()
+    }
+}
+
+/// Move-only authenticated custody for one complete recovered roster.
+///
+/// The owner retains the sole recovered artifact, one current-publication token, one aggregate
+/// decision, and one common V4 proof-input owner. It grants no load or launch authority.
+pub struct AuthenticatedWorkerV3RosterV1<R> {
+    admission: RecoveredWorkerV3PinnedRosterV1<R>,
+    current: DurableCurrentLinkPublicationTokenV1,
+    verification: WorkerV3RosterVerificationDecisionV1,
+    _roster: PhantomData<fn() -> R>,
+}
+
+impl<R> fmt::Debug for AuthenticatedWorkerV3RosterV1<R> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AuthenticatedWorkerV3RosterV1")
+            .field("lineage", &self.verification.lineage)
+            .field("roster", &self.verification.roster_identity)
+            .field("entry_count", &self.verification.entries.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl<R: CompilerGeneratedKernelExpectationRosterV1> AuthenticatedWorkerV3RosterV1<R> {
+    pub fn authenticate<B>(
+        admission: RecoveredWorkerV3PinnedRosterV1<R>,
+        verifier: &mut WorkerV3ProtectedRosterVerifierAdapterV1<B>,
+    ) -> Result<Self, WorkerV3RosterVerificationAuthenticationErrorV1<B::Error>>
+    where
+        B: WorkerV3ProtectedRosterVerifierBackendV1<R>,
+    {
+        let current = admission
+            .acquire_retained_currentness_token()
+            .map_err(WorkerV3RosterVerificationAuthenticationErrorV1::CurrentPublication)?;
+        let request =
+            prepare_roster_request::<R>(&admission, &current).map_err(|error| {
+                match error {
+            WorkerV3RosterVerificationRequestPreparationErrorV1::Marker { ordinal, field } => {
+                WorkerV3RosterVerificationAuthenticationErrorV1::Marker { ordinal, field }
+            }
+            WorkerV3RosterVerificationRequestPreparationErrorV1::UnsupportedGeneratedProfile {
+                ordinal,
+            } => WorkerV3RosterVerificationAuthenticationErrorV1::UnsupportedGeneratedProfile {
+                ordinal,
+            },
+        }
+            })?;
+        // SAFETY: callers cannot bypass the crate-owned adapter. The unsafe backend owns all
+        // protected aggregate obligations and the result is fully revalidated below.
+        let verification = unsafe { verifier.verify(&request) };
+        admission
+            .revalidate_retained_currentness_token(&current)
+            .map_err(WorkerV3RosterVerificationAuthenticationErrorV1::CurrentPublication)?;
+        let verification =
+            verification.map_err(WorkerV3RosterVerificationAuthenticationErrorV1::Verifier)?;
+        validate_roster_decision::<R>(&request, &verification)
+            .map_err(WorkerV3RosterVerificationAuthenticationErrorV1::Decision)?;
+        Ok(Self {
+            admission,
+            current,
+            verification,
+            _roster: PhantomData,
+        })
+    }
+
+    pub const fn verification(&self) -> &WorkerV3RosterVerificationDecisionV1 {
+        &self.verification
+    }
+
+    pub fn entry_count(&self) -> usize {
+        self.verification.entries.len()
+    }
+
+    pub fn entry<K: CompilerGeneratedKernelExpectationV1>(
+        &self,
+    ) -> Result<AuthenticatedWorkerV3RosterEntryV1<'_, R, K>, WorkerV3RosterEntryErrorV1> {
+        let ordinal = R::ENTRIES
+            .iter()
+            .position(|entry| entry.kernel_binding_id() == K::KERNEL_BINDING_ID_V1)
+            .ok_or(WorkerV3RosterEntryErrorV1::MarkerNotInRoster)?;
+        let expected = &R::ENTRIES[ordinal];
+        for (matches, field) in [
+            (expected.logical_name() == K::LOGICAL_NAME, "logical name"),
+            (expected.export_name() == K::EXPORT_NAME, "export name"),
+            (
+                expected.generated_host_contract_identity()
+                    == K::PROFILE.generated_host_contract_identity(),
+                "generated host contract",
+            ),
+        ] {
+            if !matches {
+                return Err(WorkerV3RosterEntryErrorV1::MarkerMismatch { ordinal, field });
+            }
+        }
+        validate_marker::<K>(
+            self.admission
+                .descriptor(ordinal)
+                .expect("authenticated roster retains every descriptor"),
+        )
+        .map_err(|field| WorkerV3RosterEntryErrorV1::MarkerMismatch { ordinal, field })?;
+        Ok(AuthenticatedWorkerV3RosterEntryV1 {
+            roster: self,
+            ordinal,
+            _marker: PhantomData,
+        })
+    }
+
+    pub fn target(&self) -> fe2o3_amd_target::AmdTargetId {
+        self.admission.target()
+    }
+
+    pub fn revalidate_currentness(&self) -> Result<(), RecoveredWorkerV3AdmissionErrorV1> {
+        self.admission
+            .revalidate_retained_currentness_token(&self.current)
+    }
+
+    pub const fn authenticates_verification_authority(&self) -> bool {
+        true
+    }
+
+    pub const fn grants_load_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_launch_authority(&self) -> bool {
+        false
+    }
+}
+
+/// Non-Clone typed borrow of one authenticated roster entry.
+///
+/// This handle cannot outlive its aggregate owner and owns no artifact, proof, currentness, load,
+/// or launch custody.
+pub struct AuthenticatedWorkerV3RosterEntryV1<'roster, R, K> {
+    roster: &'roster AuthenticatedWorkerV3RosterV1<R>,
+    ordinal: usize,
+    _marker: PhantomData<fn() -> K>,
+}
+
+impl<R, K> fmt::Debug for AuthenticatedWorkerV3RosterEntryV1<'_, R, K> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AuthenticatedWorkerV3RosterEntryV1")
+            .field("ordinal", &self.ordinal)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<R, K> AuthenticatedWorkerV3RosterEntryV1<'_, R, K>
+where
+    R: CompilerGeneratedKernelExpectationRosterV1,
+    K: CompilerGeneratedKernelExpectationV1,
+{
+    pub const fn ordinal(&self) -> usize {
+        self.ordinal
+    }
+
+    pub fn descriptor(&self) -> &KernelDescriptorV1 {
+        self.roster
+            .admission
+            .descriptor(self.ordinal)
+            .expect("authenticated roster retains every descriptor")
+    }
+
+    pub fn physical_kernel(&self) -> &InspectedKernel {
+        self.roster
+            .admission
+            .physical_kernel(self.ordinal)
+            .expect("authenticated roster retains every physical kernel")
+    }
+
+    pub fn descriptor_binding(&self) -> KernelDescriptorBinding {
+        self.roster
+            .admission
+            .descriptor_binding(self.ordinal)
+            .expect("authenticated roster retains every descriptor binding")
+    }
+
+    pub fn entry_verification(&self) -> &WorkerV3ProtectedRosterEntryEvidenceV1 {
+        &self.roster.verification.entries[self.ordinal]
+    }
+
+    pub const fn aggregate_verification(&self) -> &WorkerV3RosterVerificationDecisionV1 {
+        &self.roster.verification
+    }
+
+    pub const fn authenticates_verification_authority(&self) -> bool {
+        true
+    }
+
+    pub const fn grants_load_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_launch_authority(&self) -> bool {
+        false
+    }
+}
+
+fn prepare_roster_request<'admission, R: CompilerGeneratedKernelExpectationRosterV1>(
+    admission: &'admission RecoveredWorkerV3PinnedRosterV1<R>,
+    current: &'admission DurableCurrentLinkPublicationTokenV1,
+) -> Result<
+    WorkerV3RosterVerificationRequestV1<'admission, R>,
+    WorkerV3RosterVerificationRequestPreparationErrorV1,
+> {
+    for (ordinal, expected) in R::ENTRIES.iter().enumerate() {
+        let descriptor = admission.descriptor(ordinal).ok_or(
+            WorkerV3RosterVerificationRequestPreparationErrorV1::Marker {
+                ordinal,
+                field: "descriptor",
+            },
+        )?;
+        for (matches, field) in [
+            (
+                descriptor.logical_name().as_str() == expected.logical_name(),
+                "logical name",
+            ),
+            (
+                descriptor.entry_name().as_str() == expected.export_name(),
+                "export name",
+            ),
+            (
+                descriptor.kernel_id().as_bytes() == &expected.kernel_binding_id(),
+                "binding identity",
+            ),
+        ] {
+            if !matches {
+                return Err(
+                    WorkerV3RosterVerificationRequestPreparationErrorV1::Marker { ordinal, field },
+                );
+            }
+        }
+        if expected.generated_host_contract_identity() == [0; 32] {
+            return Err(
+                WorkerV3RosterVerificationRequestPreparationErrorV1::UnsupportedGeneratedProfile {
+                    ordinal,
+                },
+            );
+        }
+    }
+    let roster_identity = derive_roster_identity::<R>();
+    let challenge = derive_roster_challenge(admission.lineage_identity(), roster_identity);
+    Ok(WorkerV3RosterVerificationRequestV1 {
+        challenge,
+        roster_identity,
+        admission,
+        current,
+        _roster: PhantomData,
+    })
+}
+
+fn derive_roster_identity<R: CompilerGeneratedKernelExpectationRosterV1>()
+-> WorkerV3VerificationRosterIdentityV1 {
+    let mut digest = Sha256::new();
+    digest.update(WORKER_V3_ROSTER_IDENTITY_DOMAIN_V1);
+    digest.update(
+        u64::try_from(R::ENTRIES.len())
+            .expect("generated roster length fits u64")
+            .to_le_bytes(),
+    );
+    for entry in R::ENTRIES {
+        for bytes in [
+            entry.logical_name().as_bytes(),
+            entry.export_name().as_bytes(),
+        ] {
+            digest.update(
+                u64::try_from(bytes.len())
+                    .expect("generated roster name length fits u64")
+                    .to_le_bytes(),
+            );
+            digest.update(bytes);
+        }
+        digest.update(entry.kernel_binding_id());
+        digest.update(entry.generated_host_contract_identity());
+    }
+    WorkerV3VerificationRosterIdentityV1(digest.finalize().into())
+}
+
+fn derive_roster_challenge(
+    lineage: WorkerV3HostLineageIdentityV1,
+    roster: WorkerV3VerificationRosterIdentityV1,
+) -> WorkerV3RosterVerificationChallengeIdentityV1 {
+    let mut digest = Sha256::new();
+    digest.update(WORKER_V3_ROSTER_VERIFICATION_CHALLENGE_DOMAIN_V1);
+    digest.update(lineage.as_bytes());
+    digest.update(roster.as_bytes());
+    WorkerV3RosterVerificationChallengeIdentityV1(digest.finalize().into())
+}
+
+fn validate_roster_decision<R: CompilerGeneratedKernelExpectationRosterV1>(
+    request: &WorkerV3RosterVerificationRequestV1<'_, R>,
+    decision: &WorkerV3RosterVerificationDecisionV1,
+) -> Result<(), WorkerV3RosterVerificationDecisionErrorV1> {
+    for (matches, field) in [
+        (
+            decision.challenge == request.challenge_identity(),
+            "verification challenge",
+        ),
+        (
+            decision.lineage == request.lineage_identity(),
+            "host roster lineage",
+        ),
+        (
+            decision.roster_identity == request.roster_identity(),
+            "generated marker roster",
+        ),
+        (
+            decision.capsule_sha256 == request.capsule_sha256(),
+            "semantic capsule",
+        ),
+        (
+            decision.formal_memory_sha256 == request.formal_memory_receipt_sha256(),
+            "formal memory receipt",
+        ),
+        (
+            decision.proof_binding_sha256 == request.proof_binding_receipt_sha256(),
+            "proof binding receipt",
+        ),
+        (
+            decision.finalized_sha256 == request.finalized_hsaco_sha256(),
+            "finalized HSACO",
+        ),
+        (
+            decision.finalized_length == request.finalized_hsaco_length(),
+            "finalized HSACO length",
+        ),
+        (
+            decision.finalizer_derivation.identity() == request.finalizer_derivation().identity(),
+            "finalizer derivation",
+        ),
+        (decision.target == request.target(), "target"),
+        (
+            decision.code_object_version == request.code_object_version(),
+            "code-object version",
+        ),
+        (
+            decision.compiler_execution.subject_sha256
+                == request.compiler_execution_subject_sha256(),
+            "compiler-execution subject",
+        ),
+        (
+            decision.compiler_execution.carriage_sha256
+                == request.compiler_execution_carriage_sha256(),
+            "compiler-execution carriage",
+        ),
+        (
+            decision.compiler_execution.policy_sha256 == request.compiler_execution_policy_sha256(),
+            "compiler-execution policy",
+        ),
+        (
+            decision.compiler_execution.issuer_journal_sha256
+                == request.compiler_execution_issuer_journal_sha256(),
+            "compiler-execution issuer journal",
+        ),
+        (
+            decision.compiler_execution.compiler_occurrence_sha256
+                == request.compiler_occurrence_sha256(),
+            "compiler occurrence",
+        ),
+        (
+            decision.compiler_execution.receipt_sha256
+                == request.compiler_execution_receipt_sha256(),
+            "compiler-execution receipt",
+        ),
+        (
+            decision.compiler_execution.publication_sha256
+                == request.compiler_execution_publication_sha256(),
+            "compiler-execution receipt publication",
+        ),
+        (
+            decision.compiler_execution.acknowledgment_sha256
+                == request.compiler_execution_acknowledgment_sha256(),
+            "compiler-execution publication acknowledgment",
+        ),
+        (
+            decision.compiler_execution.worker_ledger_record_sha256
+                == request.compiler_execution_worker_ledger_record_sha256(),
+            "compiler-execution Worker ledger record",
+        ),
+        (
+            decision.compiler_execution.sequence == request.compiler_execution_sequence(),
+            "compiler-execution rollback sequence",
+        ),
+        (
+            decision.compiler_execution.prior_rollback_anchor
+                == request.compiler_execution_prior_rollback_anchor(),
+            "compiler-execution prior rollback anchor",
+        ),
+        (
+            decision.compiler_execution.current_rollback_anchor
+                == request.compiler_execution_current_rollback_anchor(),
+            "compiler-execution current rollback anchor",
+        ),
+    ] {
+        if !matches {
+            return Err(WorkerV3RosterVerificationDecisionErrorV1::IdentityMismatch(
+                field,
+            ));
+        }
+    }
+    for (identity, field) in [
+        (decision.verifier_measurement_sha256, "verifier measurement"),
+        (
+            decision.verification_transcript_sha256,
+            "verification transcript",
+        ),
+        (
+            decision
+                .compiler_execution
+                .current_record_verification_sha256,
+            "compiler current-record verification",
+        ),
+        (
+            decision
+                .compiler_execution
+                .current_record_attestation_sha256,
+            "compiler current-record attestation",
+        ),
+        (
+            decision
+                .compiler_execution
+                .protected_policy_verification_sha256,
+            "protected compiler policy verification",
+        ),
+        (
+            decision
+                .compiler_execution
+                .protected_worker_ledger_verification_sha256,
+            "protected Worker ledger verification",
+        ),
+        (
+            decision
+                .compiler_execution
+                .external_rollback_verification_sha256,
+            "external rollback verification",
+        ),
+    ] {
+        if identity == [0; 32] {
+            return Err(
+                WorkerV3RosterVerificationDecisionErrorV1::ZeroAuthenticatedIdentity(field),
+            );
+        }
+    }
+    if decision.entries.len() != R::ENTRIES.len() {
+        return Err(
+            WorkerV3RosterVerificationDecisionErrorV1::EntryCountMismatch {
+                expected: R::ENTRIES.len(),
+                actual: decision.entries.len(),
+            },
+        );
+    }
+    for (ordinal, (expected, actual)) in R::ENTRIES.iter().zip(&decision.entries).enumerate() {
+        let expected_lineage = request
+            .entry_lineage_identity(ordinal)
+            .expect("admitted roster retains every entry lineage");
+        for (matches, field) in [
+            (actual.lineage == expected_lineage, "entry lineage"),
+            (
+                actual.marker_binding == expected.kernel_binding_id(),
+                "marker binding",
+            ),
+            (
+                actual.generated_host_contract == expected.generated_host_contract_identity(),
+                "generated host contract",
+            ),
+        ] {
+            if !matches {
+                return Err(
+                    WorkerV3RosterVerificationDecisionErrorV1::EntryIdentityMismatch {
+                        ordinal,
+                        field,
+                    },
+                );
+            }
+        }
+        for (identity, field) in [
+            (
+                actual.proof_executable_binding_sha256,
+                "proof/executable binding",
+            ),
+            (
+                actual.rust_type_layout_contract_sha256,
+                "Rust type/layout contract",
+            ),
+            (actual.rust_effect_contract_sha256, "Rust effect contract"),
+        ] {
+            if identity == [0; 32] {
+                return Err(
+                    WorkerV3RosterVerificationDecisionErrorV1::ZeroEntryAuthenticatedIdentity {
+                        ordinal,
+                        field,
+                    },
+                );
+            }
+        }
+        for property in [
+            WorkerV3SafetyPropertyV1::Bounds,
+            WorkerV3SafetyPropertyV1::AddressOverflowFreedom,
+            WorkerV3SafetyPropertyV1::MemorySafety,
+            WorkerV3SafetyPropertyV1::Initialization,
+            WorkerV3SafetyPropertyV1::RaceFreedom,
+            WorkerV3SafetyPropertyV1::LaunchValidity,
+            WorkerV3SafetyPropertyV1::Synchronization,
+            WorkerV3SafetyPropertyV1::SemanticRefinement,
+        ] {
+            if !actual.safety_properties.contains(property) {
+                return Err(
+                    WorkerV3RosterVerificationDecisionErrorV1::MissingEntrySafetyProperty {
+                        ordinal,
+                        property,
+                    },
+                );
+            }
+        }
+    }
+    validate_roster_decision_proof_inputs(request, decision)
+}
+
+fn validate_roster_decision_proof_inputs<R: CompilerGeneratedKernelExpectationRosterV1>(
+    request: &WorkerV3RosterVerificationRequestV1<'_, R>,
+    decision: &WorkerV3RosterVerificationDecisionV1,
+) -> Result<(), WorkerV3RosterVerificationDecisionErrorV1> {
+    let inputs = &decision.proof_inputs;
+    let receipts = request.semantic_compiler_handoff().capsule().receipts();
+    for (matches, field) in [
+        (
+            inputs.association().canonical_bytes() == receipts.proof_binding().canonical_preimage(),
+            "proof-binding association",
+        ),
+        (
+            inputs.verus_execution().canonical_bytes()
+                == inputs.association().verus_execution_evidence(),
+            "aggregate Verus execution",
+        ),
+        (
+            inputs.semantic_mir().canonical_encoding()
+                == receipts.semantic_mir().canonical_preimage(),
+            "semantic MIR",
+        ),
+        (
+            inputs.middle_end().canonical_bytes() == receipts.middle_end().canonical_preimage(),
+            "middle-end evidence",
+        ),
+        (
+            inputs.kernel_ir().canonical_bytes() == receipts.kernel_ir().canonical_preimage(),
+            "Kernel IR",
+        ),
+        (
+            inputs.correspondence().canonical_bytes()
+                == receipts.mir_to_kir_correspondence().canonical_preimage(),
+            "MIR-to-KIR correspondence",
+        ),
+        (
+            inputs.formal_memory().canonical_bytes()
+                == receipts.formal_memory().canonical_preimage(),
+            "formal-memory admission",
+        ),
+    ] {
+        if !matches {
+            return Err(WorkerV3RosterVerificationDecisionErrorV1::ProofInputMismatch(field));
+        }
+    }
+    if inputs.receipt_identity() != receipts.proof_binding().identity() {
+        return Err(
+            WorkerV3RosterVerificationDecisionErrorV1::ProofInputMismatch(
+                "proof-binding receipt identity",
+            ),
+        );
+    }
+    Ok(())
+}
+
+enum WorkerV3RosterVerificationRequestPreparationErrorV1 {
+    Marker { ordinal: usize, field: &'static str },
+    UnsupportedGeneratedProfile { ordinal: usize },
+}
+
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum WorkerV3RosterVerificationAuthenticationErrorV1<E> {
+    Marker { ordinal: usize, field: &'static str },
+    UnsupportedGeneratedProfile { ordinal: usize },
+    CurrentPublication(RecoveredWorkerV3AdmissionErrorV1),
+    Verifier(E),
+    Decision(WorkerV3RosterVerificationDecisionErrorV1),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum WorkerV3RosterVerificationDecisionErrorV1 {
+    IdentityMismatch(&'static str),
+    ZeroAuthenticatedIdentity(&'static str),
+    EntryCountMismatch {
+        expected: usize,
+        actual: usize,
+    },
+    EntryIdentityMismatch {
+        ordinal: usize,
+        field: &'static str,
+    },
+    ZeroEntryAuthenticatedIdentity {
+        ordinal: usize,
+        field: &'static str,
+    },
+    MissingEntrySafetyProperty {
+        ordinal: usize,
+        property: WorkerV3SafetyPropertyV1,
+    },
+    ProofInputMismatch(&'static str),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum WorkerV3RosterEntryErrorV1 {
+    MarkerNotInRoster,
+    MarkerMismatch { ordinal: usize, field: &'static str },
+}
+
+impl<E: fmt::Display> fmt::Display for WorkerV3RosterVerificationAuthenticationErrorV1<E> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Marker { ordinal, field } => {
+                write!(
+                    formatter,
+                    "generated roster marker {ordinal} {field} mismatch"
+                )
+            }
+            Self::UnsupportedGeneratedProfile { ordinal } => write!(
+                formatter,
+                "Worker V3 roster verification requires generated host-contract identity at ordinal {ordinal}",
+            ),
+            Self::CurrentPublication(error) => {
+                write!(
+                    formatter,
+                    "Worker V3 roster publication revalidation failed: {error}"
+                )
+            }
+            Self::Verifier(error) => {
+                write!(formatter, "reviewed V3 roster verifier failed: {error}")
+            }
+            Self::Decision(error) => {
+                write!(formatter, "invalid V3 roster verifier decision: {error}")
+            }
+        }
+    }
+}
+
+impl fmt::Display for WorkerV3RosterVerificationDecisionErrorV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::IdentityMismatch(field) => write!(formatter, "{field} identity mismatch"),
+            Self::ZeroAuthenticatedIdentity(field) => {
+                write!(formatter, "{field} identity is zero")
+            }
+            Self::EntryCountMismatch { expected, actual } => write!(
+                formatter,
+                "protected roster entry count {actual} differs from expected {expected}",
+            ),
+            Self::EntryIdentityMismatch { ordinal, field } => {
+                write!(
+                    formatter,
+                    "protected roster entry {ordinal} {field} mismatch"
+                )
+            }
+            Self::ZeroEntryAuthenticatedIdentity { ordinal, field } => write!(
+                formatter,
+                "protected roster entry {ordinal} {field} identity is zero",
+            ),
+            Self::MissingEntrySafetyProperty { ordinal, property } => write!(
+                formatter,
+                "protected roster entry {ordinal} is missing safety property {property:?}",
+            ),
+            Self::ProofInputMismatch(field) => write!(
+                formatter,
+                "validated compiler {field} differs from the exact roster request",
+            ),
+        }
+    }
+}
+
+impl fmt::Display for WorkerV3RosterEntryErrorV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MarkerNotInRoster => {
+                formatter.write_str("generated marker is not in the authenticated roster")
+            }
+            Self::MarkerMismatch { ordinal, field } => {
+                write!(
+                    formatter,
+                    "authenticated roster marker {ordinal} {field} mismatch"
+                )
+            }
+        }
+    }
+}
+
+impl<E> Error for WorkerV3RosterVerificationAuthenticationErrorV1<E>
+where
+    E: Error + 'static,
+{
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::CurrentPublication(error) => Some(error),
+            Self::Verifier(error) => Some(error),
+            Self::Decision(error) => Some(error),
+            Self::Marker { .. } | Self::UnsupportedGeneratedProfile { .. } => None,
+        }
+    }
+}
+
+impl Error for WorkerV3RosterVerificationDecisionErrorV1 {}
+
+impl Error for WorkerV3RosterEntryErrorV1 {}
 
 /// Borrows one admitted V3 artifact for non-authoritative compiler/proof auditing.
 ///

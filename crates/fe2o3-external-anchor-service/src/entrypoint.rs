@@ -2,6 +2,7 @@
 
 use std::error::Error;
 use std::fmt;
+use std::fs::File;
 use std::io;
 use std::os::fd::{FromRawFd, OwnedFd, RawFd};
 
@@ -10,6 +11,9 @@ use fe2o3_compiler_closure_capability::{
     COMPILER_EXECUTION_EXTERNAL_ANCHOR_SIGNING_KEY_FD_V1,
     CompilerExecutionExternalAnchorDeploymentCapabilityV1,
     CompilerExecutionExternalAnchorSigningKeyCapabilityV1,
+};
+use fe2o3_compiler_execution_lifecycle::{
+    CompilerExecutionServiceLifecycleLeaseV1, LifecycleLeaseErrorV1,
 };
 use fe2o3_compiler_execution_protocol::{
     CompilerExecutionExternalAnchorDeploymentV1,
@@ -35,16 +39,22 @@ use crate::{
 pub const EXTERNAL_ANCHOR_SERVICE_PEER_FD_V1: RawFd = 3;
 /// Existing private mode-0700 durable state directory supplied to the anchor daemon.
 pub const EXTERNAL_ANCHOR_SERVICE_ROOT_FD_V1: RawFd = 4;
+/// Independent shared lifecycle lease retained until the external-anchor daemon exits.
+pub const EXTERNAL_ANCHOR_SERVICE_LIFECYCLE_FD_V1: RawFd = 5;
 
 const PRIVATE_ROOT_FD_V1: RawFd = 256;
 const PRIVATE_PEER_FD_V1: RawFd = 257;
+const PRIVATE_LIFECYCLE_FD_V1: RawFd = 258;
+const PRIVATE_LIFECYCLE_PARENT_FD_V1: RawFd = 259;
 const CLOSE_RANGE_CEILING_BEFORE_PRIVATE_V1: u32 = PRIVATE_ROOT_FD_V1 as u32 - 1;
-const CLOSE_RANGE_FLOOR_AFTER_PRIVATE_V1: u32 = PRIVATE_PEER_FD_V1 as u32 + 1;
+const CLOSE_RANGE_FLOOR_AFTER_PRIVATE_V1: u32 = PRIVATE_LIFECYCLE_PARENT_FD_V1 as u32 + 1;
 
 const _: () = assert!(COMPILER_EXECUTION_EXTERNAL_ANCHOR_DEPLOYMENT_FD_V1 == 221);
 const _: () = assert!(COMPILER_EXECUTION_EXTERNAL_ANCHOR_SIGNING_KEY_FD_V1 == 222);
 const _: () = assert!(PRIVATE_ROOT_FD_V1 > COMPILER_EXECUTION_EXTERNAL_ANCHOR_SIGNING_KEY_FD_V1);
 const _: () = assert!(PRIVATE_PEER_FD_V1 == PRIVATE_ROOT_FD_V1 + 1);
+const _: () = assert!(PRIVATE_LIFECYCLE_FD_V1 == PRIVATE_PEER_FD_V1 + 1);
+const _: () = assert!(PRIVATE_LIFECYCLE_PARENT_FD_V1 == PRIVATE_LIFECYCLE_FD_V1 + 1);
 
 struct AdmittedExternalAnchorProfileV1 {
     process: Option<ProtectedServiceProcessProfileV1>,
@@ -157,7 +167,17 @@ fn run_inherited_with_profile_v1(
         ProtectedServiceProfileErrorV1,
     >,
 ) -> Result<ExternalAnchorServiceReportV1, ExternalAnchorEntrypointErrorV1> {
-    run_inherited_with_admission_v1(admit_profile, RetainedExternalAnchorExecutableV1::admit)
+    run_inherited_with_admission_v1(
+        admit_profile,
+        RetainedExternalAnchorExecutableV1::admit,
+        |file, root| {
+            CompilerExecutionServiceLifecycleLeaseV1::admit_with_parent_at(
+                file,
+                root,
+                PRIVATE_LIFECYCLE_PARENT_FD_V1,
+            )
+        },
+    )
 }
 
 fn run_inherited_with_admission_v1(
@@ -172,6 +192,13 @@ fn run_inherited_with_admission_v1(
     ) -> Result<
         RetainedExternalAnchorExecutableV1,
         ExternalAnchorExecutableErrorV1,
+    >,
+    admit_lifecycle: impl FnOnce(
+        File,
+        &OwnedFd,
+    ) -> Result<
+        CompilerExecutionServiceLifecycleLeaseV1,
+        LifecycleLeaseErrorV1,
     >,
 ) -> Result<ExternalAnchorServiceReportV1, ExternalAnchorEntrypointErrorV1> {
     let deployment = CompilerExecutionExternalAnchorDeploymentCapabilityV1::from_inherited()
@@ -210,6 +237,15 @@ fn run_inherited_with_admission_v1(
         PRIVATE_PEER_FD_V1,
         "connected peer",
     )?;
+    let lifecycle = admit_lifecycle(
+        File::from(take_inherited_at(
+            EXTERNAL_ANCHOR_SERVICE_LIFECYCLE_FD_V1,
+            PRIVATE_LIFECYCLE_FD_V1,
+            "lifecycle lease",
+        )?),
+        &root,
+    )
+    .map_err(ExternalAnchorEntrypointErrorV1::Lifecycle)?;
     profile
         .revalidate()
         .map_err(ExternalAnchorEntrypointErrorV1::Profile)?;
@@ -228,6 +264,9 @@ fn run_inherited_with_admission_v1(
     profile
         .revalidate()
         .map_err(ExternalAnchorEntrypointErrorV1::Profile)?;
+    lifecycle
+        .revalidate()
+        .map_err(ExternalAnchorEntrypointErrorV1::Lifecycle)?;
 
     let mut anchor = DurableExternalAnchorV1::open(root, signing_key)
         .map_err(ExternalAnchorEntrypointErrorV1::Anchor)?;
@@ -237,6 +276,9 @@ fn run_inherited_with_admission_v1(
     profile
         .revalidate()
         .map_err(ExternalAnchorEntrypointErrorV1::Profile)?;
+    lifecycle
+        .revalidate()
+        .map_err(ExternalAnchorEntrypointErrorV1::Lifecycle)?;
     serve_connected_peer_v1(&mut anchor, peer).map_err(ExternalAnchorEntrypointErrorV1::Daemon)
 }
 
@@ -369,6 +411,7 @@ pub enum ExternalAnchorEntrypointErrorV1 {
     DeploymentCapability(String),
     Credentials(ProtectedServiceCredentialProfileErrorV1),
     Profile(ProtectedServiceProfileErrorV1),
+    Lifecycle(LifecycleLeaseErrorV1),
     Executable(ExternalAnchorExecutableErrorV1),
     SigningKeyCapability(String),
     UnexpectedCloseOnExec {
@@ -402,6 +445,7 @@ impl fmt::Display for ExternalAnchorEntrypointErrorV1 {
             }
             Self::Credentials(error) => write!(formatter, "invalid anchor credentials: {error}"),
             Self::Profile(error) => write!(formatter, "invalid anchor process profile: {error}"),
+            Self::Lifecycle(error) => write!(formatter, "invalid anchor lifecycle: {error}"),
             Self::Executable(error) => {
                 write!(formatter, "invalid anchor executable image: {error}")
             }
@@ -434,6 +478,7 @@ impl Error for ExternalAnchorEntrypointErrorV1 {
         match self {
             Self::Credentials(error) => Some(error),
             Self::Profile(error) => Some(error),
+            Self::Lifecycle(error) => Some(error),
             Self::Executable(error) => Some(error),
             Self::Descriptor { source, .. } => Some(source),
             Self::Anchor(error) => Some(error),
@@ -527,9 +572,12 @@ mod tests {
     fn descriptor_contract_is_fixed_and_disjoint() {
         assert_eq!(EXTERNAL_ANCHOR_SERVICE_PEER_FD_V1, 3);
         assert_eq!(EXTERNAL_ANCHOR_SERVICE_ROOT_FD_V1, 4);
+        assert_eq!(EXTERNAL_ANCHOR_SERVICE_LIFECYCLE_FD_V1, 5);
         assert_eq!(COMPILER_EXECUTION_EXTERNAL_ANCHOR_DEPLOYMENT_FD_V1, 221);
         assert_eq!(COMPILER_EXECUTION_EXTERNAL_ANCHOR_SIGNING_KEY_FD_V1, 222);
         assert_eq!(PRIVATE_PEER_FD_V1, PRIVATE_ROOT_FD_V1 + 1);
+        assert_eq!(PRIVATE_LIFECYCLE_FD_V1, PRIVATE_PEER_FD_V1 + 1);
+        assert_eq!(PRIVATE_LIFECYCLE_PARENT_FD_V1, PRIVATE_LIFECYCLE_FD_V1 + 1);
     }
 
     #[test]
@@ -598,8 +646,20 @@ mod tests {
             )
             .unwrap();
         let directory = tempfile::tempdir().unwrap();
-        fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700)).unwrap();
-        let root = File::open(directory.path()).unwrap();
+        fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o755)).unwrap();
+        let state_root = directory.path().join("external-anchor");
+        fs::create_dir(&state_root).unwrap();
+        fs::set_permissions(&state_root, fs::Permissions::from_mode(0o700)).unwrap();
+        let lifecycle_path = directory.path().join(
+            std::path::Path::new(
+                fe2o3_compiler_execution_protocol::COMPILER_EXECUTION_LIFECYCLE_LOCK_PATH_V1,
+            )
+            .file_name()
+            .unwrap(),
+        );
+        fs::write(&lifecycle_path, []).unwrap();
+        fs::set_permissions(&lifecycle_path, fs::Permissions::from_mode(0o400)).unwrap();
+        let root = File::open(&state_root).unwrap();
         DurableExternalAnchorV1::initialize(
             root.try_clone().unwrap().into(),
             SigningKey::from_bytes(&[17; 32]),
@@ -618,6 +678,7 @@ mod tests {
             deployment_capability.try_clone_for_transfer().unwrap(),
             key_capability.try_clone_for_transfer().unwrap(),
             root,
+            File::open(lifecycle_path).unwrap(),
             service_peer,
         );
 
@@ -654,6 +715,14 @@ mod tests {
         loop {
             match rustix::net::recv(&client_peer, &mut response, rustix::net::RecvFlags::empty()) {
                 Ok((count, message_length)) => {
+                    if count == 0 {
+                        let output = child.wait_with_output().unwrap();
+                        panic!(
+                            "anchor closed before its observation; child status: {}; child stderr: {}",
+                            output.status,
+                            String::from_utf8_lossy(&output.stderr)
+                        );
+                    }
                     assert_eq!(count, response.len());
                     assert_eq!(message_length, response.len());
                     break;
@@ -693,6 +762,7 @@ mod tests {
         deployment: File,
         key: File,
         root: File,
+        lifecycle: File,
         peer: OwnedFd,
     ) -> std::process::Child {
         use std::os::unix::process::CommandExt;
@@ -702,6 +772,7 @@ mod tests {
         let sources = [
             duplicate_high(&peer),
             duplicate_high(&root),
+            duplicate_high(&lifecycle),
             duplicate_high(&deployment),
             duplicate_high(&key),
         ];
@@ -723,6 +794,7 @@ mod tests {
                 for (source, target) in sources.iter().zip([
                     EXTERNAL_ANCHOR_SERVICE_PEER_FD_V1,
                     EXTERNAL_ANCHOR_SERVICE_ROOT_FD_V1,
+                    EXTERNAL_ANCHOR_SERVICE_LIFECYCLE_FD_V1,
                     COMPILER_EXECUTION_EXTERNAL_ANCHOR_DEPLOYMENT_FD_V1,
                     COMPILER_EXECUTION_EXTERNAL_ANCHOR_SIGNING_KEY_FD_V1,
                 ]) {
@@ -803,6 +875,13 @@ mod tests {
         let result = run_inherited_with_admission_v1(
             |_| Ok(AdmittedExternalAnchorProfileV1::for_test()),
             |_| Ok(RetainedExternalAnchorExecutableV1::for_test()),
+            |file, root| {
+                CompilerExecutionServiceLifecycleLeaseV1::admit_non_authoritative_same_owner_test_with_parent_at(
+                    file,
+                    root,
+                    PRIVATE_LIFECYCLE_PARENT_FD_V1,
+                )
+            },
         );
         std::process::exit(match result {
             Ok(report) if report.exchanges() == 1 => 0,

@@ -14,11 +14,35 @@ mod service;
 mod service_ready;
 mod supervisor_deployment;
 mod supervisor_handoff;
+mod supervisor_ready;
 mod worker_anchor_journal;
+
+/// Sole production runtime directory for the protected compiler-execution supervisor.
+pub const COMPILER_EXECUTION_SUPERVISOR_RUNTIME_DIRECTORY_V1: &str = "/run/fe2o3";
+
+/// Exact root-owned production runtime-directory mode.
+pub const COMPILER_EXECUTION_SUPERVISOR_RUNTIME_DIRECTORY_MODE_V1: u32 = 0o755;
+
+/// Exact root-owned, service-group-accessible production socket mode.
+pub const COMPILER_EXECUTION_SUPERVISOR_SOCKET_MODE_V1: u32 = 0o660;
 
 /// Sole production Unix socket pathname for the protected compiler-execution supervisor.
 pub const COMPILER_EXECUTION_SUPERVISOR_SOCKET_PATH_V1: &str =
     "/run/fe2o3/compiler-execution-supervisor.sock";
+
+/// Sole production durable-root pathname for the protected compiler-execution supervisor.
+pub const COMPILER_EXECUTION_SUPERVISOR_STATE_ROOT_PATH_V1: &str =
+    "/var/lib/fe2o3/compiler-execution";
+
+/// Exact dedicated-service-owned production durable-root mode.
+pub const COMPILER_EXECUTION_SUPERVISOR_STATE_ROOT_MODE_V1: u32 = 0o700;
+
+/// Sole root-owned deployment lifecycle-lock pathname.
+pub const COMPILER_EXECUTION_LIFECYCLE_LOCK_PATH_V1: &str =
+    "/var/lib/fe2o3/compiler-execution-lifecycle-v1";
+
+/// Exact root-only deployment lifecycle-lock mode.
+pub const COMPILER_EXECUTION_LIFECYCLE_LOCK_MODE_V1: u32 = 0o400;
 
 /// Sole production public client-profile pathname.
 pub const COMPILER_EXECUTION_CLIENT_PROFILE_PATH_V1: &str =
@@ -116,6 +140,10 @@ pub use supervisor_deployment::{
 pub use supervisor_handoff::{
     COMPILER_EXECUTION_SUPERVISOR_HANDOFF_BYTES_V1, CompilerExecutionSupervisorHandoffErrorV1,
     CompilerExecutionSupervisorHandoffIdentityV1, CompilerExecutionSupervisorHandoffV1,
+};
+pub use supervisor_ready::{
+    COMPILER_EXECUTION_SUPERVISOR_READY_BYTES_V1, CompilerExecutionSupervisorReadyErrorV1,
+    CompilerExecutionSupervisorReadyIdentityV1, CompilerExecutionSupervisorReadyV1,
 };
 pub use worker_anchor_journal::{
     COMPILER_EXECUTION_WORKER_ANCHOR_JOURNAL_BYTES_V1, CompilerExecutionWorkerAnchorJournalErrorV1,
