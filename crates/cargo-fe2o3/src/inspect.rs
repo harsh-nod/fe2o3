@@ -9,11 +9,11 @@ use fe2o3_artifacts::{
     MAX_CONTAINER_BYTES, ManifestV1, PointerWidth, TargetIdentity,
 };
 
-use crate::capability_broker::SourceIsaObservationCollectionV1;
 use crate::source_isa_observation::{
-    AdmittedSourceIsaObservationV1, SourceIsaObservationErrorCodeV1,
-    SourceIsaObservationKirVersionV1, SourceIsaObservationOutcomeV1,
-    SourceIsaObservationTargetProfileV1, SourceIsaObservationUnavailableReasonV1,
+    AdmittedSourceIsaObservationV1, SourceIsaObservationCollectionV1,
+    SourceIsaObservationErrorCodeV1, SourceIsaObservationKirVersionV1,
+    SourceIsaObservationOutcomeV1, SourceIsaObservationTargetProfileV1,
+    SourceIsaObservationUnavailableReasonV1,
 };
 
 const USAGE: &str = "usage: cargo fe2o3 inspect [--format auto|container|manifest|bundle|hsaco|source-isa-observation] <path>";

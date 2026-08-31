@@ -28,7 +28,6 @@
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 mod platform {
     use std::collections::BTreeMap;
-    use std::fmt;
     use std::fs::{self, File};
     use std::io::{self, IoSlice, IoSliceMut, Read, Write};
     use std::mem::MaybeUninit;
@@ -61,7 +60,8 @@ mod platform {
     use crate::pinned_executable::{PinExecutableError, PinnedExecutable};
     use crate::project::PinnedDirectory;
     use crate::source_isa_observation::{
-        SOURCE_ISA_OBSERVATION_FRAME_BYTES_V1, SourceIsaObservationFrameV1,
+        SOURCE_ISA_OBSERVATION_FRAME_BYTES_V1, SourceIsaObservationCollectionV1,
+        SourceIsaObservationFrameV1, SourceIsaObservationTransportFailureV1,
     };
     use fe2o3_compiler_closure_capability::{
         CompilerClosureCapabilityV1, CompilerExecutionClientProfileCapabilityV1,
@@ -107,20 +107,8 @@ mod platform {
     const MAX_CONCURRENT_AUTHENTICATIONS: usize = 8;
     const MAX_SOURCE_ISA_OBSERVATION_UNITS_V1: usize = 1024;
     const MAX_SOURCE_ISA_OBSERVATION_AGGREGATE_BYTES_V1: usize = 4 * 1024 * 1024;
-    const SOURCE_ISA_COLLECTION_MAGIC_V1: &[u8; 8] = b"F2SICOL1";
-    const SOURCE_ISA_COLLECTION_VERSION_V1: u16 = 1;
-    const SOURCE_ISA_COLLECTION_HEADER_BYTES_V1: usize = 80;
-    const SOURCE_ISA_COLLECTION_IDENTITY_BYTES_V1: usize = 32;
-    const SOURCE_ISA_COLLECTION_IDENTITY_DOMAIN_V1: &[u8] =
-        b"FE2O3/SOURCE-ISA-OBSERVATION-COLLECTION/V1\0";
-    pub(crate) const MAX_SOURCE_ISA_OBSERVATION_COLLECTION_BYTES_V1: usize =
-        SOURCE_ISA_COLLECTION_HEADER_BYTES_V1
-            + MAX_SOURCE_ISA_OBSERVATION_UNITS_V1 * SOURCE_ISA_OBSERVATION_FRAME_BYTES_V1
-            + SOURCE_ISA_COLLECTION_IDENTITY_BYTES_V1;
-    pub(crate) const MAX_SOURCE_ISA_OBSERVATION_COLLECTION_HEX_BYTES_V1: usize =
-        MAX_SOURCE_ISA_OBSERVATION_COLLECTION_BYTES_V1 * 2;
     const _: () = assert!(
-        MAX_SOURCE_ISA_OBSERVATION_COLLECTION_BYTES_V1
+        crate::source_isa_observation::MAX_SOURCE_ISA_OBSERVATION_COLLECTION_BYTES_V1
             <= MAX_SOURCE_ISA_OBSERVATION_AGGREGATE_BYTES_V1
     );
     const BROKERED_INVOCATION_REQUEST_MAGIC_V1: &[u8; 8] = b"F2BRKIV1";
@@ -321,305 +309,14 @@ mod platform {
             if !self.expected_units.is_empty() && self.failure.is_none() {
                 self.failure = Some(SourceIsaObservationTransportFailureV1::MissingSelectedUnits);
             }
-            SourceIsaObservationCollectionV1 {
-                config_identity: self.config_identity,
-                session: self.session,
-                frames: self.frames,
-                missing_units: self.expected_units,
-                failure: self.failure,
-            }
-        }
-    }
-
-    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-    #[repr(u16)]
-    pub(crate) enum SourceIsaObservationTransportFailureV1 {
-        #[allow(dead_code)] // Frozen B transport code; collectors now preserve later valid frames.
-        CollectorAlreadyFailed = 1,
-        UnitBound = 2,
-        AggregateByteBound = 3,
-        ConflictingDuplicate = 4,
-        RejectedFrame = 5,
-        MissingSelectedUnits = 6,
-        BrokerWorkerPanic = 7,
-    }
-
-    impl fmt::Display for SourceIsaObservationTransportFailureV1 {
-        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            write!(
-                formatter,
-                "source/ISA observation transport failure code {}",
-                *self as u16
+            SourceIsaObservationCollectionV1::from_collected(
+                self.config_identity,
+                self.session,
+                self.frames,
+                self.expected_units,
+                self.failure,
             )
         }
-    }
-
-    impl std::error::Error for SourceIsaObservationTransportFailureV1 {}
-
-    impl SourceIsaObservationTransportFailureV1 {
-        pub(crate) const fn code(self) -> u16 {
-            self as u16
-        }
-
-        fn from_code(code: u16) -> Result<Option<Self>, String> {
-            match code {
-                0 => Ok(None),
-                1 => Ok(Some(Self::CollectorAlreadyFailed)),
-                2 => Ok(Some(Self::UnitBound)),
-                3 => Ok(Some(Self::AggregateByteBound)),
-                4 => Ok(Some(Self::ConflictingDuplicate)),
-                5 => Ok(Some(Self::RejectedFrame)),
-                6 => Ok(Some(Self::MissingSelectedUnits)),
-                7 => Ok(Some(Self::BrokerWorkerPanic)),
-                _ => Err("source/ISA collection has an unknown failure code".to_owned()),
-            }
-        }
-    }
-
-    #[derive(Clone, Debug, Eq, PartialEq)]
-    pub(crate) struct SourceIsaObservationCollectionV1 {
-        config_identity: [u8; 32],
-        session: BuildSession,
-        frames: Vec<([u8; 32], SourceIsaObservationFrameV1)>,
-        missing_units: Vec<[u8; 32]>,
-        failure: Option<SourceIsaObservationTransportFailureV1>,
-    }
-
-    impl SourceIsaObservationCollectionV1 {
-        pub(crate) const fn config_identity(&self) -> [u8; 32] {
-            self.config_identity
-        }
-
-        pub(crate) const fn session(&self) -> BuildSession {
-            self.session
-        }
-
-        pub(crate) fn frames(&self) -> impl ExactSizeIterator<Item = &SourceIsaObservationFrameV1> {
-            self.frames.iter().map(|(_, frame)| frame)
-        }
-
-        pub(crate) fn missing_units(&self) -> &[[u8; 32]] {
-            &self.missing_units
-        }
-
-        pub(crate) const fn failure(&self) -> Option<SourceIsaObservationTransportFailureV1> {
-            self.failure
-        }
-
-        pub(crate) fn encode_canonical(&self) -> Result<Vec<u8>, String> {
-            self.validate_canonical()?;
-            let total =
-                source_isa_collection_encoded_length(self.frames.len(), self.missing_units.len())?;
-            let total_u32 = u32::try_from(total)
-                .map_err(|_| "source/ISA collection length is not representable".to_owned())?;
-            let frame_count = u32::try_from(self.frames.len())
-                .map_err(|_| "source/ISA collection frame count is not representable".to_owned())?;
-            let missing_count = u32::try_from(self.missing_units.len()).map_err(|_| {
-                "source/ISA collection missing-unit count is not representable".to_owned()
-            })?;
-            let mut encoded = Vec::new();
-            encoded
-                .try_reserve_exact(total)
-                .map_err(|_| "cannot allocate bounded source/ISA collection bytes".to_owned())?;
-            encoded.extend_from_slice(SOURCE_ISA_COLLECTION_MAGIC_V1);
-            encoded.extend_from_slice(&SOURCE_ISA_COLLECTION_VERSION_V1.to_le_bytes());
-            encoded
-                .extend_from_slice(&(SOURCE_ISA_COLLECTION_HEADER_BYTES_V1 as u16).to_le_bytes());
-            encoded.extend_from_slice(&total_u32.to_le_bytes());
-            encoded.extend_from_slice(&frame_count.to_le_bytes());
-            encoded.extend_from_slice(&missing_count.to_le_bytes());
-            encoded.extend_from_slice(
-                &self
-                    .failure
-                    .map_or(0, |failure| failure.code())
-                    .to_le_bytes(),
-            );
-            encoded.extend_from_slice(&0_u16.to_le_bytes());
-            // Reserved truth claims are fixed at zero; the collection is inert telemetry.
-            encoded.extend_from_slice(&0_u32.to_le_bytes());
-            encoded.extend_from_slice(&self.config_identity());
-            encoded.extend_from_slice(self.session().as_bytes());
-            for (_, frame) in &self.frames {
-                encoded.extend_from_slice(&frame.encode());
-            }
-            for unit in &self.missing_units {
-                encoded.extend_from_slice(unit);
-            }
-            let mut digest = Sha256::new();
-            digest.update(SOURCE_ISA_COLLECTION_IDENTITY_DOMAIN_V1);
-            digest.update(&encoded);
-            encoded.extend_from_slice(&digest.finalize());
-            debug_assert_eq!(encoded.len(), total);
-            Ok(encoded)
-        }
-
-        pub(crate) fn decode_canonical(encoded: &[u8]) -> Result<Self, String> {
-            let minimum =
-                SOURCE_ISA_COLLECTION_HEADER_BYTES_V1 + SOURCE_ISA_COLLECTION_IDENTITY_BYTES_V1;
-            if encoded.len() < minimum
-                || encoded.len() > MAX_SOURCE_ISA_OBSERVATION_COLLECTION_BYTES_V1
-                || &encoded[..8] != SOURCE_ISA_COLLECTION_MAGIC_V1
-                || u16::from_le_bytes(
-                    encoded[8..10]
-                        .try_into()
-                        .expect("fixed collection version field"),
-                ) != SOURCE_ISA_COLLECTION_VERSION_V1
-                || usize::from(u16::from_le_bytes(
-                    encoded[10..12]
-                        .try_into()
-                        .expect("fixed collection header field"),
-                )) != SOURCE_ISA_COLLECTION_HEADER_BYTES_V1
-                || usize::try_from(u32::from_le_bytes(
-                    encoded[12..16]
-                        .try_into()
-                        .expect("fixed collection length field"),
-                ))
-                .ok()
-                    != Some(encoded.len())
-            {
-                return Err("source/ISA collection has malformed framing".to_owned());
-            }
-            let frame_count = usize::try_from(u32::from_le_bytes(
-                encoded[16..20]
-                    .try_into()
-                    .expect("fixed collection frame-count field"),
-            ))
-            .map_err(|_| "source/ISA collection frame count is not representable".to_owned())?;
-            let missing_count = usize::try_from(u32::from_le_bytes(
-                encoded[20..24]
-                    .try_into()
-                    .expect("fixed collection missing-count field"),
-            ))
-            .map_err(|_| "source/ISA collection missing count is not representable".to_owned())?;
-            let expected = source_isa_collection_encoded_length(frame_count, missing_count)?;
-            if expected != encoded.len() || encoded[26..32].iter().any(|byte| *byte != 0) {
-                return Err(
-                    "source/ISA collection has noncanonical bounds or truth claims".to_owned(),
-                );
-            }
-            let failure = SourceIsaObservationTransportFailureV1::from_code(u16::from_le_bytes(
-                encoded[24..26]
-                    .try_into()
-                    .expect("fixed collection failure field"),
-            ))?;
-            let config_identity: [u8; 32] = encoded[32..64]
-                .try_into()
-                .expect("fixed collection config field");
-            let session = BuildSession::from_bytes(
-                encoded[64..80]
-                    .try_into()
-                    .expect("fixed collection session field"),
-            );
-            let identity_start = encoded.len() - SOURCE_ISA_COLLECTION_IDENTITY_BYTES_V1;
-            let mut digest = Sha256::new();
-            digest.update(SOURCE_ISA_COLLECTION_IDENTITY_DOMAIN_V1);
-            digest.update(&encoded[..identity_start]);
-            let identity: [u8; 32] = digest.finalize().into();
-            let retained_identity: [u8; 32] = encoded[identity_start..]
-                .try_into()
-                .expect("fixed collection identity field");
-            if retained_identity == [0; 32] || identity != retained_identity {
-                return Err("source/ISA collection identity differs from its bytes".to_owned());
-            }
-
-            let mut frames = Vec::new();
-            frames
-                .try_reserve_exact(frame_count)
-                .map_err(|_| "cannot allocate decoded source/ISA frames".to_owned())?;
-            let mut cursor = SOURCE_ISA_COLLECTION_HEADER_BYTES_V1;
-            for _ in 0..frame_count {
-                let end = cursor + SOURCE_ISA_OBSERVATION_FRAME_BYTES_V1;
-                let frame = SourceIsaObservationFrameV1::decode(&encoded[cursor..end])
-                    .map_err(|error| format!("invalid source/ISA collection frame: {error}"))?;
-                frames.push((frame.context().unit(), frame));
-                cursor = end;
-            }
-            let mut missing_units = Vec::new();
-            missing_units
-                .try_reserve_exact(missing_count)
-                .map_err(|_| "cannot allocate decoded source/ISA missing units".to_owned())?;
-            for _ in 0..missing_count {
-                let end = cursor + 32;
-                missing_units.push(
-                    encoded[cursor..end]
-                        .try_into()
-                        .expect("bounded missing-unit field"),
-                );
-                cursor = end;
-            }
-            if cursor != identity_start {
-                return Err("source/ISA collection has trailing payload bytes".to_owned());
-            }
-            let collection = Self {
-                config_identity,
-                session,
-                frames,
-                missing_units,
-                failure,
-            };
-            collection.validate_canonical()?;
-            Ok(collection)
-        }
-
-        fn validate_canonical(&self) -> Result<(), String> {
-            if self.config_identity == [0; 32]
-                || self.session == BuildSession::DIRECT
-                || self.frames.windows(2).any(|pair| pair[0].0 >= pair[1].0)
-                || self.frames.iter().any(|(unit, frame)| {
-                    *unit != frame.context().unit()
-                        || frame.context().config() != self.config_identity
-                        || frame.context().attempt().session() != self.session
-                })
-                || self.missing_units.contains(&[0; 32])
-                || self.missing_units.windows(2).any(|pair| pair[0] >= pair[1])
-                || self.missing_units.iter().any(|unit| {
-                    self.frames
-                        .binary_search_by_key(unit, |(observed, _)| *observed)
-                        .is_ok()
-                })
-                || (!self.missing_units.is_empty() && self.failure.is_none())
-            {
-                return Err("source/ISA collection is not canonical".to_owned());
-            }
-            source_isa_collection_encoded_length(self.frames.len(), self.missing_units.len())?;
-            Ok(())
-        }
-
-        pub(crate) const fn grants_compiler_authority(&self) -> bool {
-            false
-        }
-
-        pub(crate) const fn grants_publication_authority(&self) -> bool {
-            false
-        }
-
-        pub(crate) const fn grants_runtime_authority(&self) -> bool {
-            false
-        }
-    }
-
-    fn source_isa_collection_encoded_length(
-        frame_count: usize,
-        missing_count: usize,
-    ) -> Result<usize, String> {
-        let unit_count = frame_count
-            .checked_add(missing_count)
-            .ok_or_else(|| "source/ISA collection unit count overflowed".to_owned())?;
-        if unit_count > MAX_SOURCE_ISA_OBSERVATION_UNITS_V1 {
-            return Err("source/ISA collection exceeds its unit bound".to_owned());
-        }
-        let frame_bytes = frame_count
-            .checked_mul(SOURCE_ISA_OBSERVATION_FRAME_BYTES_V1)
-            .ok_or_else(|| "source/ISA collection frame length overflowed".to_owned())?;
-        let missing_bytes = missing_count
-            .checked_mul(32)
-            .ok_or_else(|| "source/ISA collection missing-unit length overflowed".to_owned())?;
-        SOURCE_ISA_COLLECTION_HEADER_BYTES_V1
-            .checked_add(frame_bytes)
-            .and_then(|bytes| bytes.checked_add(missing_bytes))
-            .and_then(|bytes| bytes.checked_add(SOURCE_ISA_COLLECTION_IDENTITY_BYTES_V1))
-            .filter(|bytes| *bytes <= MAX_SOURCE_ISA_OBSERVATION_COLLECTION_BYTES_V1)
-            .ok_or_else(|| "source/ISA collection exceeds its canonical bound".to_owned())
     }
 
     impl<'profile> BrokerCompilerCapabilities<'profile> {
@@ -2367,9 +2064,13 @@ mod platform {
     mod tests {
         use super::*;
         use crate::source_isa_observation::{
+            MAX_SOURCE_ISA_OBSERVATION_COLLECTION_BYTES_V1,
+            MAX_SOURCE_ISA_OBSERVATION_COLLECTION_HEX_BYTES_V1,
+            SOURCE_ISA_COLLECTION_HEADER_BYTES_V1, SOURCE_ISA_COLLECTION_IDENTITY_BYTES_V1,
+            SOURCE_ISA_COLLECTION_IDENTITY_DOMAIN_V1, SOURCE_ISA_COLLECTION_MAGIC_V1,
             SourceIsaObservationContextV1, SourceIsaObservationErrorCodeV1,
             SourceIsaObservationFrameV1, SourceIsaObservationOutcomeV1,
-            SourceIsaObservationUnavailableReasonV1,
+            SourceIsaObservationUnavailableReasonV1, source_isa_collection_encoded_length,
         };
         use fe2o3_artifact_transaction::{BuildAttempt, BuildInvocation};
 
@@ -2987,8 +2688,6 @@ pub(crate) use platform::*;
 
 #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
 mod unsupported {
-    use std::fmt;
-
     use fe2o3_artifact_transaction::{
         BrokeredInvocationCapabilityClaimV1, BuildAttempt, BuildSession,
     };
@@ -2998,13 +2697,14 @@ mod unsupported {
     use crate::pinned_codegen_backend::PinnedCodegenBackend;
     use crate::pinned_executable::PinnedExecutable;
     use crate::project::PinnedDirectory;
-    use crate::source_isa_observation::SourceIsaObservationFrameV1;
+    use crate::source_isa_observation::{
+        SourceIsaObservationCollectionV1, SourceIsaObservationFrameV1,
+    };
     use fe2o3_compiler_closure_capability::{
         CompilerClosureCapabilityV1, CompilerExecutionClientProfileCapabilityV1,
     };
 
     pub(crate) const CAPABILITY_BROKER_ENV: &str = "FE2O3_CAPABILITY_BROKER_V1";
-    pub(crate) const MAX_SOURCE_ISA_OBSERVATION_COLLECTION_HEX_BYTES_V1: usize = 1_392_864;
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     pub(crate) enum CapabilityProfileV1 {
@@ -3140,91 +2840,6 @@ mod unsupported {
     impl SourceIsaObservationSinkV1 {
         pub(crate) fn submit(self, _frame: &SourceIsaObservationFrameV1) -> Result<(), String> {
             Err("Cargo capability transport requires Linux".to_owned())
-        }
-    }
-
-    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-    #[repr(u16)]
-    pub(crate) enum SourceIsaObservationTransportFailureV1 {
-        #[allow(dead_code)]
-        CollectorAlreadyFailed = 1,
-        UnitBound = 2,
-        AggregateByteBound = 3,
-        ConflictingDuplicate = 4,
-        RejectedFrame = 5,
-        MissingSelectedUnits = 6,
-        BrokerWorkerPanic = 7,
-    }
-
-    impl fmt::Display for SourceIsaObservationTransportFailureV1 {
-        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            write!(
-                formatter,
-                "source/ISA observation transport failure code {}",
-                *self as u16
-            )
-        }
-    }
-
-    impl std::error::Error for SourceIsaObservationTransportFailureV1 {}
-
-    impl SourceIsaObservationTransportFailureV1 {
-        pub(crate) const fn code(self) -> u16 {
-            self as u16
-        }
-    }
-
-    pub(crate) struct SourceIsaObservationCollectionV1 {
-        config_identity: [u8; 32],
-        session: BuildSession,
-        frames: Vec<SourceIsaObservationFrameV1>,
-        missing_units: Vec<[u8; 32]>,
-        failure: Option<SourceIsaObservationTransportFailureV1>,
-    }
-
-    impl SourceIsaObservationCollectionV1 {
-        // Kept API-parallel with Linux collection decoding.
-        #[allow(dead_code)]
-        pub(crate) const fn config_identity(&self) -> [u8; 32] {
-            self.config_identity
-        }
-
-        // Kept API-parallel with Linux collection decoding.
-        #[allow(dead_code)]
-        pub(crate) const fn session(&self) -> BuildSession {
-            self.session
-        }
-
-        pub(crate) fn frames(&self) -> impl ExactSizeIterator<Item = &SourceIsaObservationFrameV1> {
-            self.frames.iter()
-        }
-
-        pub(crate) fn missing_units(&self) -> &[[u8; 32]] {
-            &self.missing_units
-        }
-
-        pub(crate) const fn failure(&self) -> Option<SourceIsaObservationTransportFailureV1> {
-            self.failure
-        }
-
-        pub(crate) fn encode_canonical(&self) -> Result<Vec<u8>, String> {
-            Err("Cargo capability transport requires Linux".to_owned())
-        }
-
-        pub(crate) fn decode_canonical(_encoded: &[u8]) -> Result<Self, String> {
-            Err("Cargo capability transport requires Linux".to_owned())
-        }
-
-        pub(crate) const fn grants_compiler_authority(&self) -> bool {
-            false
-        }
-
-        pub(crate) const fn grants_publication_authority(&self) -> bool {
-            false
-        }
-
-        pub(crate) const fn grants_runtime_authority(&self) -> bool {
-            false
         }
     }
 
