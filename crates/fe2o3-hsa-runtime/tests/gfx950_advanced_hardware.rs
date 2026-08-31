@@ -47,6 +47,8 @@ const SELECTED_BLOCKS_V1: usize = 2;
 #[cfg(feature = "hardware-test-hooks")]
 const SELECTED_TOKENS_V1: usize = 3;
 #[cfg(feature = "hardware-test-hooks")]
+const DEEPSEEK_SPARSE_TOP_K_V1: usize = 4;
+#[cfg(feature = "hardware-test-hooks")]
 const MIXING_STREAMS_V1: usize = 4;
 #[cfg(feature = "hardware-test-hooks")]
 const SINKHORN_ITERATIONS_V1: usize = 3;
@@ -304,6 +306,19 @@ const THREE_SLICES: &[AbiArg] = &[AbiArg::Slice; 3];
 #[cfg(feature = "hardware-test-hooks")]
 const TWO_SLICES: &[AbiArg] = &[AbiArg::Slice; 2];
 #[cfg(feature = "hardware-test-hooks")]
+const DEEPSEEK_SPARSE_ARGS: &[AbiArg] = &[
+    AbiArg::Slice,
+    AbiArg::Slice,
+    AbiArg::Slice,
+    AbiArg::U32,
+    AbiArg::U32,
+    AbiArg::U32,
+    AbiArg::U32,
+    AbiArg::Slice,
+    AbiArg::Slice,
+    AbiArg::Slice,
+];
+#[cfg(feature = "hardware-test-hooks")]
 const EXPERT_RANK_ARGS: &[AbiArg] = &[
     AbiArg::Slice,
     AbiArg::Slice,
@@ -361,6 +376,15 @@ const SPARSE_ATTENTION: AdvancedCase = AdvancedCase {
     workgroup_x: 64,
     static_lds_bytes: 2048,
     args: SIX_SLICES,
+};
+#[cfg(feature = "hardware-test-hooks")]
+const DEEPSEEK_SPARSE_ATTENTION: AdvancedCase = AdvancedCase {
+    label: "gfx950 DeepSeek sparse attention",
+    export: "gfx950_deepseek_sparse_attention",
+    descriptor: "gfx950_deepseek_sparse_attention.kd",
+    workgroup_x: 64,
+    static_lds_bytes: 0,
+    args: DEEPSEEK_SPARSE_ARGS,
 };
 #[cfg(feature = "hardware-test-hooks")]
 const HYBRID_ATTENTION: AdvancedCase = AdvancedCase {
@@ -918,6 +942,69 @@ fn attention_plans(case: AdvancedCase) -> Result<Vec<LaunchPlan>, BoxError> {
                         elements: lengths[buffer],
                     })
                     .collect(),
+            }
+        }
+        "gfx950_deepseek_sparse_attention" => {
+            let query = deterministic_floats(HEAD_DIMENSION_V1, 1, 0.5);
+            let key = deterministic_floats(ATTENTION_TOKENS_V1 * HEAD_DIMENSION_V1, 2, 0.5);
+            let value = deterministic_floats(ATTENTION_TOKENS_V1 * CHANNELS_V1, 3, 0.5);
+            let indices = vec![13_u32, u32::MAX, 2, 9];
+            require(
+                indices.len() == DEEPSEEK_SPARSE_TOP_K_V1,
+                "DeepSeek sparse fixture must provide exactly top-k indices",
+            )?;
+            let expected = attention_reference::deepseek_sparse_attention_reference_v1(
+                &query, &key, &value, &indices,
+            )
+            .map_err(|error| format!("DeepSeek sparse reference failed: {error:?}"))?;
+            LaunchPlan {
+                label: case.label.into(),
+                buffers: vec![
+                    input("q", &query),
+                    input("k", &key),
+                    input("v", &value),
+                    f32_output("output", expected.output, 5.0e-3),
+                    f32_output(
+                        "softmax_maximum_output",
+                        vec![expected.softmax_maximum],
+                        5.0e-3,
+                    ),
+                    f32_output(
+                        "softmax_normalizer_output",
+                        vec![expected.softmax_normalizer],
+                        5.0e-3,
+                    ),
+                ],
+                args: vec![
+                    PlannedArg::Slice {
+                        buffer: 0,
+                        elements: query.len(),
+                    },
+                    PlannedArg::Slice {
+                        buffer: 1,
+                        elements: key.len(),
+                    },
+                    PlannedArg::Slice {
+                        buffer: 2,
+                        elements: value.len(),
+                    },
+                    PlannedArg::U32(indices[0]),
+                    PlannedArg::U32(indices[1]),
+                    PlannedArg::U32(indices[2]),
+                    PlannedArg::U32(indices[3]),
+                    PlannedArg::Slice {
+                        buffer: 3,
+                        elements: CHANNELS_V1,
+                    },
+                    PlannedArg::Slice {
+                        buffer: 4,
+                        elements: 1,
+                    },
+                    PlannedArg::Slice {
+                        buffer: 5,
+                        elements: 1,
+                    },
+                ],
             }
         }
         "gfx950_content_sparse_attention" | "gfx950_compressed_hybrid_attention" => {
@@ -1619,6 +1706,7 @@ fn plans_for(case: AdvancedCase) -> Result<Vec<LaunchPlan>, BoxError> {
         KDA_DECODE,
         KDA_PREFILL,
         SPARSE_ATTENTION,
+        DEEPSEEK_SPARSE_ATTENTION,
         HYBRID_ATTENTION,
         ATTNRES,
         FOUR_BRANCH,
@@ -2455,6 +2543,11 @@ hardware_case!(
 hardware_case!(
     gfx950_content_sparse_attention_rust_cov6_matches_cpu_reference,
     SPARSE_ATTENTION
+);
+#[cfg(feature = "hardware-test-hooks")]
+hardware_case!(
+    gfx950_deepseek_sparse_attention_rust_cov6_matches_cpu_reference,
+    DEEPSEEK_SPARSE_ATTENTION
 );
 #[cfg(feature = "hardware-test-hooks")]
 hardware_case!(

@@ -26,22 +26,30 @@ tokens, and attention head dimension 128. The suite contains:
   across the chunk boundary;
 - content-indexed sparse attention with top-two block selection, top-three
   token selection, and sparse normalization/value reduction over those tokens;
+- DeepSeek sparse attention whose explicit top-k token list is produced at the
+  Lightning Indexer boundary, masks out-of-range sentinels, and evaluates QK,
+  stable softmax, and PV over only the remaining unique KV rows;
 - compressed hybrid attention combining three compressed global blocks with a
   four-token sliding window;
 - AttnRes four-depth softmax aggregation, four-branch gated residual mixing,
   and a four-stream mHC mixer with three Sinkhorn iterations.
 
 Every output and sparse index is compared against an independently written CPU
-oracle using deterministic inputs. Attention Q, K, and V use non-uniform,
-exactly representable E4M3 values so token-dependent score and transpose errors
-cannot cancel as a common softmax term. The executable rejects non-gfx950 devices.
-The two attention kernels use a gfx950 FP8
+oracle using deterministic inputs. The dense-tile attention profiles use
+non-uniform, exactly representable E4M3 values; the DeepSeek sparse teaching
+profile uses finite FP32 values. The executable rejects non-gfx950 devices.
+The content-selected and compressed-hybrid kernels use a gfx950 FP8
 `v_mfma_f32_16x16x128_f8f6f4` score tile whose K operand is supplied by four
 `ds_read_b64_tr_b8` LDS transpose reads. `check_isa.sh` validates those
 instructions, their exact counts, and transpose-before-MFMA ordering within
 each kernel symbol. At this bounded shape, the score MFMA covers all 16 tokens;
 the sparse kernel applies its selected ragged set to softmax and the value
-reduction. This suite does not claim a production sparse-QK scheduling strategy.
+reduction. The separate DeepSeek kernel instead performs FP32 Wave16 reductions
+for exactly the indexed rows; using the dense MFMA tile there
+would defeat its sparse-compute contract. The current teaching profile repeats
+the selected score reductions in four Wave16 subgroups and gives subgroup zero
+exclusive ownership of the 16 output stores. It does not reproduce the learned
+indexer or claim a production FlashMLA scheduling strategy.
 
 Run the Rust source and independent CPU-reference checks:
 
@@ -55,6 +63,7 @@ Run the production Rust lowering and numerical verification on a gfx950 host:
 ./run-kda-decode-gfx950.sh
 ./run-kda-prefill-gfx950.sh
 ./run-content-sparse-attention-gfx950.sh
+./run-deepseek-sparse-attention-gfx950.sh
 ./run-compressed-hybrid-attention-gfx950.sh
 ./run-attnres-aggregate-gfx950.sh
 ./run-four-branch-residual-gfx950.sh
@@ -71,13 +80,28 @@ target-directory environment variables when validating a copied checkout.
 
 ## Production Rust validation evidence
 
-On 2026-08-27, all seven production Rust wrappers passed on SSH host `mi350`
+On 2026-08-27, the original seven production Rust wrappers passed on SSH host `mi350`
 (`smci350-rck-g03-b19-03`) with ROCm 7.2.1 and eight visible MI350X devices.
 The largest observed absolute errors were `4.172325134e-7` for KDA decode,
 `1.072883606e-6` for KDA prefill, `0` for both attention kernels and AttnRes,
 `0` for four-branch residual, and `4.470348358e-8` for mHC. The harness
 tolerances are `3e-3` for the recurrent and mixing kernels and `5e-3` for the
 FP8 attention kernels. Sparse token IDs were checked exactly.
+
+On 2026-08-31, the eighth wrapper,
+`run-deepseek-sparse-attention-gfx950.sh`, passed on the same host and ROCm
+release using physical GPU 6 (`ROCR_VISIBLE_DEVICES=6`,
+`HIP_VISIBLE_DEVICES` unset). The production kernel returned maximum absolute
+errors of `2.980232239e-8` for both the 16-channel output and softmax maximum,
+and `2.384185791e-7` for the softmax normalizer, against a `5e-3` finite-value
+tolerance. Its portable namespace is
+`62a1ee5804a9926ebb929061195f2229630ebdaf5a13a19d17ce7ddb4fcbbbe3`;
+the LLVM, COV6 HSACO, and symbol-scoped ISA SHA-256 values are respectively
+`0767554b7997f42b4e2fb85271779ca29182ec241b07cc162cb9185cac41362c`,
+`c5f5465c405306d6df944df4f02066f75b94295b7e91b8c8cf73bc16482ed930`,
+and `fa54e785c34d2ec26e94dad04a8f63ef2a68485ad9190a0ca747999216d5237a`.
+The inspected symbol contains no MFMA or transpose instructions, matching its
+selected-only sparse arithmetic contract.
 
 The sparse and hybrid Rust HSACOs each contained exactly four
 `ds_read_b64_tr_b8` instructions before one
