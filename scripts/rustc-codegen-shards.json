@@ -10,6 +10,7 @@
     {
       "id": "02-production-drivers",
       "tests": [
+        "production_device_math_sqrt_v1",
         "production_extraction_driver_v1",
         "production_general_matrix_driver_v1",
         "production_ranked_bounds_driver_v1"

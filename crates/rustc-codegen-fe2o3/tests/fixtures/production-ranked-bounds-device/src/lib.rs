@@ -1,5 +1,7 @@
 #![no_std]
 
+#[cfg(feature = "device_math_sqrt")]
+use fe2o3_device::DeviceMath;
 #[cfg(any(
     feature = "grid_exclusive",
     feature = "barrier_divergent",
@@ -51,13 +53,27 @@ use fe2o3_device::{DisjointSlice, kernel, thread};
     feature = "barrier_divergent",
     feature = "barrier_early_return",
     feature = "barrier_loop",
-    feature = "barrier_helper"
+    feature = "barrier_helper",
+    feature = "device_math_sqrt"
 )))]
 pub fn copy_static(value: f32, mut output: DisjointSlice<f32>) {
     let input = [value; 64];
     let selected = input[63];
     if let Some(element) = output.get_mut(thread::index_1d()) {
         *element = selected;
+    }
+}
+
+#[kernel(
+    typed,
+    launch(required = [64, 1, 1], max = [64, 1, 1]),
+)]
+#[cfg(feature = "device_math_sqrt")]
+pub fn device_math_sqrt(value: f32, mut output: DisjointSlice<f32>) {
+    let math = DeviceMath::current();
+    let root = math.sqrt_f32(value);
+    if let Some(element) = output.get_mut(thread::index_1d()) {
+        *element = root;
     }
 }
 
