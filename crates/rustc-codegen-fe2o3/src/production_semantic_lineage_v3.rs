@@ -19,10 +19,11 @@ use fe2o3_compiler_lineage::{
     InertProofBindingAssociationV4, InertProofBindingReceiptV3,
     InertRustcIdentityInventoryReceiptV3, InertRustcPreflightPlanReceiptV3,
     InertSemanticToLlvmReceiptV3, InertTargetBindingReceiptV3, LineageErrorV3,
-    OrderedInertSemanticLineageReceiptsV3, ProductionTargetLineageErrorV3,
-    SemanticToLlvmAssociationInputsV3, SemanticToLlvmAssociationTranscriptV3,
-    TargetBindingTranscriptInputsV3, TargetBindingTranscriptV3, TargetLineageIdentityV3,
-    derive_semantic_target_layout_identity_v1,
+    MultiRootTargetBindingInputsV2, MultiRootTargetBindingTranscriptV2,
+    MultiRootTargetWorkgroupInputV2, OrderedInertSemanticLineageReceiptsV3,
+    ProductionTargetLineageErrorV3, SemanticToLlvmAssociationInputsV3,
+    SemanticToLlvmAssociationTranscriptV3, TargetBindingTranscriptInputsV3,
+    TargetBindingTranscriptV3, TargetLineageIdentityV3, derive_semantic_target_layout_identity_v1,
 };
 use fe2o3_kernel_descriptor::KernelId as DescriptorKernelId;
 use fe2o3_kernel_ir::{
@@ -931,69 +932,6 @@ fn validate_lineage_roster_envelope_v1(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
-fn encode_multi_root_target_binding_v1(
-    protected_rustc_invocation: TargetLineageIdentityV3,
-    semantic_mir: TargetLineageIdentityV3,
-    target_neutral_kir: TargetLineageIdentityV3,
-    target_bound_kir: TargetLineageIdentityV3,
-    configured_target: &str,
-    rustc_llvm_target: &str,
-    target_cpu: &str,
-    target_features: &str,
-    roster_identity: [u8; 32],
-    workgroups: &[(String, [u32; 3])],
-) -> Result<Vec<u8>, ProductionSemanticLineageErrorV3> {
-    if workgroups.len() < 2 || roster_identity == [0; 32] {
-        return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
-            "multi-root target binding has no exact workgroup roster",
-        ));
-    }
-    let mut kernels = BTreeSet::new();
-    let mut bytes = Vec::new();
-    bytes.extend_from_slice(b"F2MRTGT2");
-    bytes.extend_from_slice(&2_u16.to_le_bytes());
-    bytes.extend_from_slice(&1_u16.to_le_bytes());
-    let total_offset = bytes.len();
-    bytes.extend_from_slice(&0_u32.to_le_bytes());
-    for identity in [
-        protected_rustc_invocation,
-        semantic_mir,
-        target_neutral_kir,
-        target_bound_kir,
-    ] {
-        bytes.extend_from_slice(&identity.encode());
-    }
-    bytes.extend_from_slice(&roster_identity);
-    bytes.extend_from_slice(&CODE_OBJECT_VERSION_V3.to_le_bytes());
-    bytes.extend_from_slice(&WAVE_WIDTH_BITS_V3.to_le_bytes());
-    for value in [
-        configured_target,
-        rustc_llvm_target,
-        target_cpu,
-        target_features,
-    ] {
-        push_lineage_bytes_v1(&mut bytes, value.as_bytes())?;
-    }
-    push_lineage_count_v1(&mut bytes, workgroups.len())?;
-    for (kernel, workgroup) in workgroups {
-        if !kernels.insert(kernel.as_str()) || kernel.is_empty() || workgroup.contains(&0) {
-            return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
-                "duplicate or invalid target workgroup lineage",
-            ));
-        }
-        push_lineage_bytes_v1(&mut bytes, kernel.as_bytes())?;
-        for dimension in workgroup {
-            bytes.extend_from_slice(&dimension.to_le_bytes());
-        }
-    }
-    let total = u32::try_from(bytes.len()).map_err(|_| {
-        ProductionSemanticLineageErrorV3::AxisMismatch("target lineage roster overflow")
-    })?;
-    bytes[total_offset..total_offset + 4].copy_from_slice(&total.to_le_bytes());
-    Ok(bytes)
-}
-
 impl PreparedProductionSemanticLineageV3 {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn try_prepare(
@@ -1312,18 +1250,31 @@ impl PreparedProductionSemanticLineageV3 {
             }
             PreparedLineageRosterCustodyV1::MultiRoot {
                 roster_identity, ..
-            } => encode_multi_root_target_binding_v1(
-                invocation_identity,
-                semantic_identity,
-                self.neutral_kir_identity,
-                self.bound_kir_identity,
-                &configured_target,
-                self.rustc_layout.llvm_target(),
-                rustc_cpu,
-                rustc_features,
-                *roster_identity,
-                &self.workgroups,
-            )?,
+            } => {
+                let workgroups = self
+                    .workgroups
+                    .iter()
+                    .map(|(kernel, workgroup)| MultiRootTargetWorkgroupInputV2 {
+                        kernel,
+                        workgroup: *workgroup,
+                    })
+                    .collect::<Vec<_>>();
+                MultiRootTargetBindingTranscriptV2::new(MultiRootTargetBindingInputsV2 {
+                    protected_rustc_invocation: invocation_identity,
+                    semantic_mir: semantic_identity,
+                    target_neutral_kir: self.neutral_kir_identity,
+                    target_bound_kir: self.bound_kir_identity,
+                    configured_target: &configured_target,
+                    rustc_llvm_target: self.rustc_layout.llvm_target(),
+                    target_cpu: rustc_cpu,
+                    target_features: rustc_features,
+                    roster_identity: *roster_identity,
+                    code_object_version: CODE_OBJECT_VERSION_V3,
+                    wave_width_bits: WAVE_WIDTH_BITS_V3,
+                    workgroups: &workgroups,
+                })?
+                .into_canonical_bytes()
+            }
         };
         let target_binding =
             InertTargetBindingReceiptV3::from_canonical_preimage(target_binding_bytes)?;
@@ -1880,7 +1831,10 @@ mod layout_tests {
         let source = include_str!("production_semantic_lineage_v3.rs");
         assert!(source.contains("CanonicalProductionKirToLlvmReplayEvidenceV1::from_live_inputs"));
         assert!(source.contains("validate_compiler_kir_to_llvm_replay_v1"));
+        assert!(source.contains("MultiRootTargetBindingTranscriptV2::new"));
         assert!(!source.contains(concat!("AmdgpuLoweringTranscript", "V3::new")));
+        assert!(!source.contains(concat!("fn encode_", "multi_root_target_binding")));
+        assert!(!source.contains(concat!("F2MR", "TGT2")));
     }
 
     #[test]
