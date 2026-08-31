@@ -2,6 +2,8 @@
 mod application_descriptor_handoff;
 mod argument_alias;
 mod artifact_binding;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+mod authenticated_service_queue;
 #[cfg(target_os = "linux")]
 mod compiler_execution_current_record_audit;
 mod generated_argument_plan;
@@ -106,6 +108,22 @@ pub use artifact_binding::{
     CompilerGeneratedKernelExpectationV1, CompilerGeneratedKernelProfileV1,
     CompilerGeneratedSemanticWitnessErrorV1, ValidatedCompilerGeneratedSemanticWitnessV1,
     semantic_witness_from_backend_v1, validate_compiler_generated_semantic_witness_v1,
+};
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub use authenticated_service_queue::{
+    AuthenticatedQuarantinedServiceQueueV1, AuthenticatedServiceCompletedQueueSessionV1,
+    AuthenticatedServiceCurrentnessFailureV1, AuthenticatedServicePublishedQueueSessionV1,
+    AuthenticatedServiceQueueBindFailureV1, AuthenticatedServiceQueueCreateFailureV1,
+    AuthenticatedServiceQueueOperationFailureV1, AuthenticatedServiceQueuePollV1,
+    AuthenticatedServiceQueuePollWithProgressV1, AuthenticatedServiceQueueReleaseFailureV1,
+    AuthenticatedServiceQueueReleaseV1, AuthenticatedServiceQueueRolloverFailureV1,
+    AuthenticatedServiceQueueRolloverSuccessV1, AuthenticatedServiceQueueSessionV1,
+    AuthenticatedServiceQueueSubmitFailureV1, AuthenticatedServiceQueueUnboundSessionV1,
+    AuthenticatedServiceRecycledQueueSessionV1, AuthenticatedServiceTerminalProgramCustodyV1,
+    AuthenticatedWorkerV3ProgramLookupErrorV1, AuthenticatedWorkerV3ProgramMaterializationErrorV1,
+    AuthenticatedWorkerV3ProgramSetAdmissionErrorV1,
+    AuthenticatedWorkerV3ProgramSetAppendFailureV1,
+    AuthenticatedWorkerV3ProgramSetInitialFailureV1, AuthenticatedWorkerV3ProgramSetV1,
 };
 #[cfg(target_os = "linux")]
 pub use compiler_execution_current_record_audit::{
