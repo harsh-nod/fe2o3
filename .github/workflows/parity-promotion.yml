@@ -19,6 +19,7 @@ on:
       - .github/workflows/ci.yml
       - .github/workflows/parity-promotion.yml
       - .github/workflows/parity-publisher-gate.yml
+      - .github/workflows/source-isa-unit-matrix.yml
       - .github/CODEOWNERS
       - .github/parity-trust-reviewers.txt
   pull_request_review:

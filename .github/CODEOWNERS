@@ -9,5 +9,6 @@
 /.github/workflows/ci.yml @powderluv
 /.github/workflows/parity-promotion.yml @powderluv
 /.github/workflows/parity-publisher-gate.yml @powderluv
+/.github/workflows/source-isa-unit-matrix.yml @powderluv
 /.github/CODEOWNERS @powderluv
 /.github/parity-trust-reviewers.txt @powderluv

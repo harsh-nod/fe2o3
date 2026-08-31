@@ -343,7 +343,7 @@ assert_no_codegen_test_driver() {
     'selector-free codegen tests unexpectedly built a shared driver'
 }
 
-assert_source_isa_family_matrix_gate() {
+assert_source_isa_unit_matrix_gate() {
   local omitted name
   local -a required_environment=(
     FE2O3_TEST_CARGO_FE2O3_BIN
@@ -359,31 +359,31 @@ assert_source_isa_family_matrix_gate() {
     FE2O3_BACKEND
   )
 
-  if (unset FE2O3_RUN_SOURCE_ISA_FAMILY_MATRIX; run_source_isa_family_matrix) \
+  if (unset FE2O3_RUN_SOURCE_ISA_UNIT_MATRIX; run_source_isa_unit_matrix) \
     >/dev/null 2>&1; then
-    printf '%s\n' 'source/ISA matrix ran without its explicit opt-in' >&2
+    printf '%s\n' 'source/ISA unit matrix ran without its explicit opt-in' >&2
     exit 1
   fi
-  export FE2O3_RUN_SOURCE_ISA_FAMILY_MATRIX=1
+  export FE2O3_RUN_SOURCE_ISA_UNIT_MATRIX=1
   for name in "${required_environment[@]}"; do
     printf -v "${name}" '%s' fixture
     export "${name}"
   done
   for omitted in "${required_environment[@]}"; do
-    if (unset "${omitted}"; run_source_isa_family_matrix) >/dev/null 2>&1; then
-      printf 'source/ISA matrix ran without %s\n' "${omitted}" >&2
+    if (unset "${omitted}"; run_source_isa_unit_matrix) >/dev/null 2>&1; then
+      printf 'source/ISA unit matrix ran without %s\n' "${omitted}" >&2
       exit 1
     fi
   done
 
   STEP_NAMES=()
   STEP_COMMANDS=()
-  run_source_isa_family_matrix
+  run_source_isa_unit_matrix
   assert_equals \
-    'cargo test --locked -p cargo-fe2o3 --bin cargo-fe2o3 production_source_isa_family_matrix_v1::ordinary_source_families_round_trip_through_the_production_observer_on_both_targets -- --ignored --exact --test-threads=1 --nocapture' \
-    "$(step_command source-isa-family-matrix)" \
-    'protected source/ISA matrix did not retain its exact serial ignored-test command'
-  unset FE2O3_RUN_SOURCE_ISA_FAMILY_MATRIX
+    'cargo test --locked -p cargo-fe2o3 --bin cargo-fe2o3 production_source_isa_unit_matrix_v1::ordinary_source_units_round_trip_through_the_production_observer_on_both_targets -- --ignored --exact --test-threads=1 --nocapture' \
+    "$(step_command source-isa-unit-matrix)" \
+    'protected source/ISA unit matrix did not retain its exact serial ignored-test command'
+  unset FE2O3_RUN_SOURCE_ISA_UNIT_MATRIX
   for name in "${required_environment[@]}"; do
     unset "${name}"
   done
@@ -425,7 +425,7 @@ assert_all_codegen_targets_once() {
     'codegen integration target count differs from the manifest'
 }
 
-assert_source_isa_family_matrix_gate
+assert_source_isa_unit_matrix_gate
 run_tests
 assert_no_codegen_test_driver
 assert_equals \
@@ -547,8 +547,8 @@ STEP_NAMES=()
 STEP_COMMANDS=()
 retire_cargo_fe2o3_driver
 run_generic_core
-assert_step_count source-isa-family-matrix 0 \
-  'generic core unexpectedly ran the protected source/ISA matrix'
+assert_step_count source-isa-unit-matrix 0 \
+  'generic core unexpectedly ran the protected source/ISA unit matrix'
 for core_step in \
   workspace-dependency-policy-tests \
   workspace-dependency-policy \
