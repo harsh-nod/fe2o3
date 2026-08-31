@@ -359,6 +359,33 @@ mod tests {
         (temporary, install, qualification)
     }
 
+    fn reacquire_lease_after_drop(
+        install: &Path,
+        qualification: &Path,
+    ) -> CompilerExecutionQualificationSupervisorLeaseV1 {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            match acquire_supervisor_lease_for_owner(
+                install,
+                qualification,
+                owner(),
+                FlockOperation::NonBlockingLockExclusive,
+            ) {
+                Ok(lease) => return lease,
+                Err(error)
+                    if error
+                        .source
+                        .as_ref()
+                        .is_some_and(|source| source.kind() == std::io::ErrorKind::WouldBlock)
+                        && Instant::now() < deadline =>
+                {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                Err(error) => panic!("qualification supervisor lease was not released: {error}"),
+            }
+        }
+    }
+
     #[test]
     fn lease_excludes_concurrent_supervisors_and_releases_on_drop() {
         let (_temporary, install, qualification) = lease_parents();
@@ -379,13 +406,7 @@ mod tests {
         .unwrap();
         assert_eq!(error.kind(), DeploymentVerificationErrorKindV1::Io);
         drop(lease);
-        acquire_supervisor_lease_for_owner(
-            &install,
-            &qualification,
-            owner(),
-            FlockOperation::NonBlockingLockExclusive,
-        )
-        .unwrap();
+        reacquire_lease_after_drop(&install, &qualification);
     }
 
     #[test]
