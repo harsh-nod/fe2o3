@@ -137,6 +137,7 @@ Commands:
   rustc-codegen-test  Run backend library and integration tests without dylib replacement
   backend         Build the rustc codegen backend dylib
   authority-launcher  Run bounded protected build-authority launcher tests
+  source-isa-family-matrix  Run the opt-in protected source/ISA six-cell matrix
   rustc-trampoline    Run non-integrated static rustc trampoline tests
   parity-evidence Run parity, signed-attestation, and queue shell tests
   parity-production-immutable  Run opt-in root ext4/XFS ingestion test
@@ -922,6 +923,38 @@ run_authority_launcher_tests() {
     bash scripts/tests/cargo-fe2o3-authority-launcher.sh
 }
 
+run_source_isa_family_matrix() {
+  if [[ "${FE2O3_RUN_SOURCE_ISA_FAMILY_MATRIX:-}" != "1" ]]; then
+    printf '%s\n' \
+      'protected source/ISA matrix requires FE2O3_RUN_SOURCE_ISA_FAMILY_MATRIX=1' >&2
+    return 2
+  fi
+  local name
+  local -a required_environment=(
+    FE2O3_TEST_CARGO_FE2O3_BIN
+    FE2O3_TEST_CARGO_FE2O3_SHA256
+    FE2O3_PRODUCTION_BUILD_CONFIG_V2
+    FE2O3_AUTHORITY_BACKEND_SHA256_V1
+    FE2O3_AUTHORITY_CARGO_SHA256_V1
+    FE2O3_AUTHORITY_CARGO_BINDING_TRAMPOLINE_PATH_V1
+    FE2O3_AUTHORITY_CARGO_BINDING_TRAMPOLINE_SHA256_V1
+    FE2O3_AUTHORITY_RUSTC_PATH_V1
+    FE2O3_AUTHORITY_RUSTC_RUNTIME_SHA256_V1
+    FE2O3_AUTHORITY_RUSTC_SHA256_V1
+    FE2O3_BACKEND
+  )
+  for name in "${required_environment[@]}"; do
+    if [[ -z "${!name:-}" ]]; then
+      printf 'protected source/ISA matrix requires %s\n' "${name}" >&2
+      return 2
+    fi
+  done
+  run_step source-isa-family-matrix \
+    cargo test --locked -p cargo-fe2o3 --bin cargo-fe2o3 \
+      production_source_isa_family_matrix_v1::ordinary_source_families_round_trip_through_the_production_observer_on_both_targets -- \
+      --ignored --exact --test-threads=1 --nocapture
+}
+
 run_rustc_trampoline_tests() {
   run_step rustc-trampoline-tests \
     bash scripts/tests/fe2o3-rustc-trampoline.sh
@@ -1166,6 +1199,7 @@ main() {
     rustc-codegen-test) run_rustc_codegen_tests ;;
     backend) run_backend_build ;;
     authority-launcher) run_authority_launcher_tests ;;
+    source-isa-family-matrix) run_source_isa_family_matrix ;;
     rustc-trampoline) run_rustc_trampoline_tests ;;
     parity-evidence) run_parity_matrix_checks ;;
     parity-production-immutable) run_parity_production_immutable ;;

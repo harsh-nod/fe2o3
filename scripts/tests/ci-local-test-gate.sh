@@ -343,6 +343,54 @@ assert_no_codegen_test_driver() {
     'selector-free codegen tests unexpectedly built a shared driver'
 }
 
+assert_source_isa_family_matrix_gate() {
+  local omitted name
+  local -a required_environment=(
+    FE2O3_TEST_CARGO_FE2O3_BIN
+    FE2O3_TEST_CARGO_FE2O3_SHA256
+    FE2O3_PRODUCTION_BUILD_CONFIG_V2
+    FE2O3_AUTHORITY_BACKEND_SHA256_V1
+    FE2O3_AUTHORITY_CARGO_SHA256_V1
+    FE2O3_AUTHORITY_CARGO_BINDING_TRAMPOLINE_PATH_V1
+    FE2O3_AUTHORITY_CARGO_BINDING_TRAMPOLINE_SHA256_V1
+    FE2O3_AUTHORITY_RUSTC_PATH_V1
+    FE2O3_AUTHORITY_RUSTC_RUNTIME_SHA256_V1
+    FE2O3_AUTHORITY_RUSTC_SHA256_V1
+    FE2O3_BACKEND
+  )
+
+  if (unset FE2O3_RUN_SOURCE_ISA_FAMILY_MATRIX; run_source_isa_family_matrix) \
+    >/dev/null 2>&1; then
+    printf '%s\n' 'source/ISA matrix ran without its explicit opt-in' >&2
+    exit 1
+  fi
+  export FE2O3_RUN_SOURCE_ISA_FAMILY_MATRIX=1
+  for name in "${required_environment[@]}"; do
+    printf -v "${name}" '%s' fixture
+    export "${name}"
+  done
+  for omitted in "${required_environment[@]}"; do
+    if (unset "${omitted}"; run_source_isa_family_matrix) >/dev/null 2>&1; then
+      printf 'source/ISA matrix ran without %s\n' "${omitted}" >&2
+      exit 1
+    fi
+  done
+
+  STEP_NAMES=()
+  STEP_COMMANDS=()
+  run_source_isa_family_matrix
+  assert_equals \
+    'cargo test --locked -p cargo-fe2o3 --bin cargo-fe2o3 production_source_isa_family_matrix_v1::ordinary_source_families_round_trip_through_the_production_observer_on_both_targets -- --ignored --exact --test-threads=1 --nocapture' \
+    "$(step_command source-isa-family-matrix)" \
+    'protected source/ISA matrix did not retain its exact serial ignored-test command'
+  unset FE2O3_RUN_SOURCE_ISA_FAMILY_MATRIX
+  for name in "${required_environment[@]}"; do
+    unset "${name}"
+  done
+  STEP_NAMES=()
+  STEP_COMMANDS=()
+}
+
 codegen_target_prefix() {
   printf 'env CARGO_PROFILE_DEV_DEBUG=1 cargo test --locked -p %s --test ' \
     "${RUSTC_CODEGEN_TEST_PACKAGE}"
@@ -377,6 +425,7 @@ assert_all_codegen_targets_once() {
     'codegen integration target count differs from the manifest'
 }
 
+assert_source_isa_family_matrix_gate
 run_tests
 assert_no_codegen_test_driver
 assert_equals \
@@ -498,6 +547,8 @@ STEP_NAMES=()
 STEP_COMMANDS=()
 retire_cargo_fe2o3_driver
 run_generic_core
+assert_step_count source-isa-family-matrix 0 \
+  'generic core unexpectedly ran the protected source/ISA matrix'
 for core_step in \
   workspace-dependency-policy-tests \
   workspace-dependency-policy \

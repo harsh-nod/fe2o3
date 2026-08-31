@@ -3755,6 +3755,10 @@ fn print_help() {
 }
 
 #[cfg(test)]
+#[path = "tests/production_source_isa_family_matrix_v1.rs"]
+mod production_source_isa_family_matrix_v1;
+
+#[cfg(test)]
 mod tests {
     use super::{
         BindingHostMode, MAX_SOURCE_ISA_COLLECTION_STDERR_LINE_BYTES_V1, ObserverFinishOnDropV1,

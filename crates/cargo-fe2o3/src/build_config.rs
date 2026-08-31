@@ -218,6 +218,11 @@ impl PreparedProductionBuildConfig {
         prepare_production_manifest_v2(path)
     }
 
+    #[cfg(test)]
+    pub(crate) fn from_v2_manifest_for_test(path: &Path) -> Result<Self, BuildConfigError> {
+        Self::from_manifest_v2(path)
+    }
+
     pub(crate) const fn identity(&self) -> BuildConfigIdentity {
         self.link.identity
     }
