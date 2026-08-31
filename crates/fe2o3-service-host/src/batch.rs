@@ -325,6 +325,20 @@ impl<'a, const N: usize> ServiceFixedBatchV1<'a, N> {
         self.programs.len()
     }
 
+    /// Returns the structural inspected programs and inert packet descriptions.
+    ///
+    /// This is an authority-free recovery boundary for higher layers that own
+    /// an independent authenticated program source. The returned loader
+    /// envelopes remain descriptive and cannot load or launch code.
+    pub fn into_parts(
+        self,
+    ) -> (
+        Vec<ValidatedKernelEnvelope<'a>>,
+        [ServiceFixedDispatchPacketV1; N],
+    ) {
+        (self.programs, self.packets)
+    }
+
     pub(crate) fn validate(
         &self,
         ledger: &ServiceQueueAllocationLedgerV1,

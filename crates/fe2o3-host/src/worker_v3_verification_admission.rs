@@ -2102,6 +2102,14 @@ impl<R: CompilerGeneratedKernelExpectationRosterV1> AuthenticatedWorkerV3RosterV
             .revalidate_retained_currentness_token(&self.current)
     }
 
+    pub(crate) fn exact_current_hsaco_bytes(&self) -> &[u8] {
+        self.current.exact_artifact_bytes()
+    }
+
+    pub(crate) const fn admitted_roster(&self) -> &RecoveredWorkerV3PinnedRosterV1<R> {
+        &self.admission
+    }
+
     pub const fn authenticates_verification_authority(&self) -> bool {
         true
     }
