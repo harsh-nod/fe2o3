@@ -2997,7 +2997,7 @@ struct SimulatorBackendV1 {
     configuration_identity: OpaqueIdentityV1,
     diagnosis_dispatch: DiagnosisDispatchV2,
     diagnosis_input: DiagnosisInputEvidenceV2,
-    diagnosis_allocations: BTreeMap<u64, DiagnosisAllocationContractV2>,
+    diagnosis_allocations: BTreeMap<u64, Option<DiagnosisAllocationContractV2>>,
     diagnosis_source_members: Vec<AdmittedDiagnosisSourceMemberV2>,
     source_map_identity: Option<OpaqueIdentityV1>,
     source_map_provenance: Option<SourceMapProvenanceV1>,
@@ -5594,12 +5594,11 @@ impl SimulatorBackendV1 {
             } => {
                 let memory_region = self
                     .terminal_oob_detail_v2(*allocation, *offset, *bytes, *allocation_bytes)
-                    .and_then(|detail| self.diagnosis_oob_region_v2(detail))
                     .map_or(
                         DiagnosisFactV2::Unavailable {
                             reason: DiagnosisUnavailableReasonV2::NotRepresentable,
                         },
-                        |value| DiagnosisFactV2::Observed { value },
+                        |detail| self.diagnosis_oob_region_fact_v2(detail),
                     );
                 (
                     DiagnosisClassV2::MemoryOutOfBounds,
@@ -6082,7 +6081,10 @@ impl SimulatorBackendV1 {
         detail: &fe2o3_kir_sim::SimulationOutOfBoundsV2,
     ) -> Option<DiagnosisMemoryRegionV2> {
         let abi_view = detail.abi_view?;
-        let stored_contract = self.diagnosis_allocations.get(&detail.allocation)?;
+        let stored_contract = self
+            .diagnosis_allocations
+            .get(&detail.allocation)?
+            .as_ref()?;
         let mut abi_arguments = Vec::new();
         abi_arguments
             .try_reserve_exact(stored_contract.abi_arguments.len())
@@ -6169,6 +6171,18 @@ impl SimulatorBackendV1 {
                 basis: DiagnosisInferenceBasisV2::AbiViewBounds,
             },
         })
+    }
+
+    fn diagnosis_oob_region_fact_v2(
+        &self,
+        detail: &fe2o3_kir_sim::SimulationOutOfBoundsV2,
+    ) -> DiagnosisFactV2<DiagnosisMemoryRegionV2> {
+        self.diagnosis_oob_region_v2(detail).map_or(
+            DiagnosisFactV2::Unavailable {
+                reason: DiagnosisUnavailableReasonV2::NotRepresentable,
+            },
+            |value| DiagnosisFactV2::Observed { value },
+        )
     }
 
     fn diagnosis_barrier_semantics_v2(
@@ -6682,15 +6696,15 @@ fn active_workgroup_extent_v2(invocation: SimulationInvocationV1) -> Option<[u32
 #[derive(Debug)]
 struct PendingDiagnosisAllocationV2 {
     address_space: AddressSpaceV1,
-    access: DiagnosisAccessModeV2,
+    access: AccessMode,
     alignment: u32,
     allocation_bytes: u64,
-    abi_arguments: Vec<DiagnosisAbiArgumentV2>,
+    abi_arguments: Option<Vec<DiagnosisAbiArgumentV2>>,
 }
 
 fn diagnosis_initial_allocations_v2(
     input: &AdmittedSimulationInputV1,
-) -> Result<BTreeMap<u64, DiagnosisAllocationContractV2>, String> {
+) -> Result<BTreeMap<u64, Option<DiagnosisAllocationContractV2>>, String> {
     let module = input.module.module();
     let kernel = module
         .kernels
@@ -6719,11 +6733,11 @@ fn diagnosis_initial_allocations_v2(
             allocation,
             PendingDiagnosisAllocationV2 {
                 address_space: AddressSpaceV1::Global,
-                access: diagnosis_access_v2(shared.buffer.access()),
+                access: shared.buffer.access(),
                 alignment: shared.buffer.alignment(),
                 allocation_bytes: u64::try_from(shared.buffer.bytes().len())
                     .map_err(|_| "diagnosis allocation length does not fit u64".to_owned())?,
-                abi_arguments: Vec::new(),
+                abi_arguments: Some(Vec::new()),
             },
         );
     }
@@ -6749,10 +6763,10 @@ fn diagnosis_initial_allocations_v2(
                         allocation,
                         PendingDiagnosisAllocationV2 {
                             address_space: AddressSpaceV1::Global,
-                            access: diagnosis_access_v2(buffer.access()),
+                            access: buffer.access(),
                             alignment: buffer.alignment(),
                             allocation_bytes: bytes,
-                            abi_arguments: Vec::new(),
+                            abi_arguments: Some(Vec::new()),
                         },
                     );
                     (
@@ -6807,48 +6821,52 @@ fn diagnosis_initial_allocations_v2(
         let allocation_contract = pending
             .get_mut(&allocation)
             .ok_or_else(|| "diagnosis allocation contract is missing".to_owned())?;
-        let required_access = diagnosis_access_v2(abi_access);
-        let supplied_access = diagnosis_access_v2(argument_access);
-        if !diagnosis_access_satisfies_v2(required_access, supplied_access)
-            || (backing.is_none() && supplied_access != allocation_contract.access)
+        if !kernel_access_satisfies_v2(abi_access, argument_access)
+            || (backing.is_none() && argument_access != allocation_contract.access)
             || (backing.is_some()
-                && !diagnosis_access_satisfies_v2(supplied_access, allocation_contract.access))
+                && !kernel_access_satisfies_v2(argument_access, allocation_contract.access))
         {
             return Err("admitted diagnosis buffer access contract changed".to_owned());
         }
-        allocation_contract
-            .abi_arguments
+        let (Some(required_access), Some(supplied_access), Some(abi_arguments)) = (
+            diagnosis_access_v2(abi_access),
+            diagnosis_access_v2(argument_access),
+            allocation_contract.abi_arguments.as_mut(),
+        ) else {
+            allocation_contract.abi_arguments = None;
+            continue;
+        };
+        abi_arguments
             .try_reserve_exact(1)
             .map_err(|_| "diagnosis ABI argument allocation failed".to_owned())?;
-        allocation_contract
-            .abi_arguments
-            .push(DiagnosisAbiArgumentV2 {
-                ordinal: u32::try_from(ordinal)
-                    .map_err(|_| "diagnosis ABI ordinal does not fit u32".to_owned())?,
-                backing,
-                kind,
-                element: diagnosis_scalar_type_v2(element, input.simulation_target()),
-                address_space: diagnosis_address_space_v2(address_space),
-                access: required_access,
-                supplied_access,
-                view_offset,
-                view_bytes,
-            });
+        abi_arguments.push(DiagnosisAbiArgumentV2 {
+            ordinal: u32::try_from(ordinal)
+                .map_err(|_| "diagnosis ABI ordinal does not fit u32".to_owned())?,
+            backing,
+            kind,
+            element: diagnosis_scalar_type_v2(element, input.simulation_target()),
+            address_space: diagnosis_address_space_v2(address_space),
+            access: required_access,
+            supplied_access,
+            view_offset,
+            view_bytes,
+        });
     }
 
     pending
         .into_iter()
         .map(|(allocation, pending)| {
-            Ok((
-                allocation,
-                DiagnosisAllocationContractV2 {
+            let contract = match (diagnosis_access_v2(pending.access), pending.abi_arguments) {
+                (Some(access), Some(abi_arguments)) => Some(DiagnosisAllocationContractV2 {
                     address_space: pending.address_space,
-                    access: pending.access,
+                    access,
                     alignment: pending.alignment,
                     allocation_bytes: pending.allocation_bytes,
-                    abi_arguments: pending.abi_arguments,
-                },
-            ))
+                    abi_arguments,
+                }),
+                _ => None,
+            };
+            Ok((allocation, contract))
         })
         .collect()
 }
@@ -6916,10 +6934,21 @@ const fn diagnosis_scalar_type_v2(
     }
 }
 
-const fn diagnosis_access_v2(access: AccessMode) -> DiagnosisAccessModeV2 {
+const fn diagnosis_access_v2(access: AccessMode) -> Option<DiagnosisAccessModeV2> {
     match access {
-        AccessMode::ReadOnly => DiagnosisAccessModeV2::ReadOnly,
-        AccessMode::ReadWrite => DiagnosisAccessModeV2::ReadWrite,
+        AccessMode::ReadOnly => Some(DiagnosisAccessModeV2::ReadOnly),
+        AccessMode::WriteOnly => None,
+        AccessMode::ReadWrite => Some(DiagnosisAccessModeV2::ReadWrite),
+    }
+}
+
+const fn kernel_access_satisfies_v2(required: AccessMode, supplied: AccessMode) -> bool {
+    match required {
+        AccessMode::ReadOnly => matches!(supplied, AccessMode::ReadOnly | AccessMode::ReadWrite),
+        AccessMode::WriteOnly => {
+            matches!(supplied, AccessMode::WriteOnly | AccessMode::ReadWrite)
+        }
+        AccessMode::ReadWrite => matches!(supplied, AccessMode::ReadWrite),
     }
 }
 
@@ -7097,6 +7126,92 @@ fn bounded_message(message: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn diagnosis_access_projection_and_admission_preserve_capabilities() {
+        for (source, projected) in [
+            (AccessMode::ReadOnly, Some(DiagnosisAccessModeV2::ReadOnly)),
+            (AccessMode::WriteOnly, None),
+            (
+                AccessMode::ReadWrite,
+                Some(DiagnosisAccessModeV2::ReadWrite),
+            ),
+        ] {
+            assert_eq!(diagnosis_access_v2(source), projected);
+        }
+
+        for (required, supplied, expected) in [
+            (AccessMode::ReadOnly, AccessMode::ReadOnly, true),
+            (AccessMode::ReadOnly, AccessMode::WriteOnly, false),
+            (AccessMode::WriteOnly, AccessMode::ReadOnly, false),
+            (AccessMode::WriteOnly, AccessMode::WriteOnly, true),
+            (AccessMode::ReadOnly, AccessMode::ReadWrite, true),
+            (AccessMode::WriteOnly, AccessMode::ReadWrite, true),
+            (AccessMode::ReadWrite, AccessMode::ReadOnly, false),
+            (AccessMode::ReadWrite, AccessMode::WriteOnly, false),
+            (AccessMode::ReadWrite, AccessMode::ReadWrite, true),
+        ] {
+            assert_eq!(
+                kernel_access_satisfies_v2(required, supplied),
+                expected,
+                "required {required:?}, supplied {supplied:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn diagnosis_v2_marks_write_only_v9_access_unavailable_at_the_v7_v2_boundary() {
+        let mut input = fill_input();
+        let buffer = fe2o3_kir_sim::BufferArgumentV1::new(
+            ScalarType::U32,
+            AccessMode::WriteOnly,
+            4,
+            vec![0; 4],
+            vec![true; 4],
+            input.simulation_target(),
+        )
+        .unwrap();
+        input
+            .request
+            .shared_buffers
+            .push(fe2o3_kir_sim::SharedBufferV1 {
+                id: fe2o3_kir_sim::BufferBackingIdV1(17),
+                buffer,
+            });
+
+        let backend = SimulatorBackendV1::new(input, DebugWaveWidthV1::Wave64).unwrap();
+        assert!(matches!(backend.diagnosis_allocations.get(&1), Some(None)));
+        assert!(matches!(
+            backend.diagnosis_allocations.get(&2),
+            Some(Some(_))
+        ));
+
+        let fact = backend.diagnosis_oob_region_fact_v2(&fe2o3_kir_sim::SimulationOutOfBoundsV2 {
+            allocation: 1,
+            offset: 4,
+            bytes: 4,
+            allocation_bytes: 4,
+            legal_lower_bound: 0,
+            legal_upper_bound: 4,
+            abi_view: Some(fe2o3_kir_sim::SimulationAbiViewV1 {
+                argument_ordinal: 0,
+                byte_offset: 0,
+                byte_len: 4,
+            }),
+        });
+        assert!(matches!(
+            fact,
+            DiagnosisFactV2::Unavailable {
+                reason: DiagnosisUnavailableReasonV2::NotRepresentable
+            }
+        ));
+        let encoded = serde_json::to_string(&fact).unwrap();
+        assert_eq!(
+            encoded,
+            r#"{"origin":"unavailable","reason":"not_representable"}"#
+        );
+        assert!(!encoded.contains("read_write"));
+    }
 
     #[test]
     fn simulator_float_values_project_as_exact_protocol_float_bits() {
