@@ -10377,7 +10377,7 @@ enum AssertionRangeOperandTaskV1 {
     CheckedResult {
         local: usize,
     },
-    Unsupported,
+    ProjectedPlace(SemanticPlaceV1),
 }
 
 enum AssertionRangeExpressionTaskV1 {
@@ -10387,6 +10387,8 @@ enum AssertionRangeExpressionTaskV1 {
         destination_maximum: Option<u128>,
         left: AssertionRangeOperandTaskV1,
         right: AssertionRangeOperandTaskV1,
+        left_source: SemanticOperandV1,
+        right_source: SemanticOperandV1,
     },
     Unsupported,
 }
@@ -10411,8 +10413,15 @@ enum AssertionRangeFrameV1 {
     FinishBinary {
         operation: SemanticBinaryOpV1,
         destination_maximum: Option<u128>,
+        left_source: SemanticOperandV1,
+        right_source: SemanticOperandV1,
+        use_site: ScalarAssignmentSiteV1,
     },
     FinishCheckedResult {
+        local: usize,
+        relational_range: Option<UnsignedRangeProofV1>,
+    },
+    FinishProjectedPlace {
         local: usize,
     },
     FinishLocalDefinition {
@@ -10470,6 +10479,25 @@ struct AuthenticatedCheckedBinaryValueV1 {
     definition: ScalarAssignmentSiteV1,
     assertion_block: usize,
     checked: SemanticCheckedBinaryRvalueV1,
+}
+
+#[derive(Clone, Debug)]
+struct AuthenticatedScaledQuotientRemainderV1 {
+    divisor: SemanticOperandV1,
+    divisor_use: ScalarAssignmentSiteV1,
+    extent: SemanticOperandV1,
+    extent_use: ScalarAssignmentSiteV1,
+    scale: SemanticOperandV1,
+    scale_use: ScalarAssignmentSiteV1,
+    offset: SemanticOperandV1,
+    offset_use: ScalarAssignmentSiteV1,
+}
+
+#[derive(Clone, Debug)]
+struct AuthenticatedQuotientStrictBoundV1 {
+    maximum: u128,
+    factor: SemanticOperandV1,
+    factor_use: ScalarAssignmentSiteV1,
 }
 
 struct AssertionDefinitionInventoryV1 {
@@ -10660,6 +10688,16 @@ impl<'a> SemanticAssertProofsV1<'a> {
         {
             return Ok(false);
         }
+        if checked.operation() == SemanticCheckedBinaryOpV1::Subtract
+            && self.proves_scaled_quotient_remainder_nonnegative_v1(
+                checked.left(),
+                checked.right(),
+                site,
+                block,
+            )?
+        {
+            return Ok(true);
+        }
         let left = self.range_at_operand(checked.left(), site.block, site.statement)?;
         let right = self.range_at_operand(checked.right(), site.block, site.statement)?;
         let maximum = self.scalar_unsigned_maximum(checked.left().ty());
@@ -10676,6 +10714,19 @@ impl<'a> SemanticAssertProofsV1<'a> {
             return Ok(None);
         };
         let local = result_local.index() as usize;
+        let value =
+            self.authenticated_checked_binary_local_value_v1(local, use_block, use_statement)?;
+        Ok(value.filter(|value| {
+            value.checked.left().ty() == operand.ty() && value.checked.right().ty() == operand.ty()
+        }))
+    }
+
+    fn authenticated_checked_binary_local_value_v1(
+        &mut self,
+        local: usize,
+        use_block: usize,
+        use_statement: usize,
+    ) -> Result<Option<AuthenticatedCheckedBinaryValueV1>, ProductionRankedProjectionErrorV1> {
         if self.definition_counts.get(local).copied() != Some(1)
             || self.address_escaped.get(local).copied() != Some(false)
         {
@@ -10695,9 +10746,6 @@ impl<'a> SemanticAssertProofsV1<'a> {
         let SemanticRvalueKindV1::CheckedBinary(checked) = assignment.value().kind() else {
             return Ok(None);
         };
-        if checked.left().ty() != operand.ty() || checked.right().ty() != operand.ty() {
-            return Ok(None);
-        }
         let checked_operation = match checked.operation() {
             SemanticCheckedBinaryOpV1::Add => SemanticBinaryOpV1::Add,
             SemanticCheckedBinaryOpV1::Subtract => SemanticBinaryOpV1::Subtract,
@@ -10730,7 +10778,8 @@ impl<'a> SemanticAssertProofsV1<'a> {
                         && same_semantic_operand_value_v1(left, checked.left())
                         && same_semantic_operand_value_v1(right, checked.right())
             );
-            if tuple_field_operand_local_v1(condition, 1) != Some(result_local)
+            if tuple_field_operand_local_v1(condition, 1).map(|result| result.index() as usize)
+                != Some(local)
                 || *expected
                 || !exact_message
                 || target.role() != SemanticEdgeRoleV1::AssertSuccess
@@ -10921,7 +10970,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
                 } else if place.projections().is_empty() {
                     AssertionRangeOperandTaskV1::Local(place.local().index() as usize)
                 } else {
-                    AssertionRangeOperandTaskV1::Unsupported
+                    AssertionRangeOperandTaskV1::ProjectedPlace(place.clone())
                 }
             }
         }
@@ -10957,6 +11006,8 @@ impl<'a> SemanticAssertProofsV1<'a> {
                 destination_maximum,
                 left: Self::assertion_range_operand_task_v1(left),
                 right: Self::assertion_range_operand_task_v1(right),
+                left_source: left.clone(),
+                right_source: right.clone(),
             },
             _ => AssertionRangeExpressionTaskV1::Unsupported,
         }
@@ -10985,12 +11036,17 @@ impl<'a> SemanticAssertProofsV1<'a> {
                 destination_maximum,
                 left,
                 right,
+                left_source,
+                right_source,
             } => {
                 push_assertion_range_frame_v1(
                     frames,
                     AssertionRangeFrameV1::FinishBinary {
                         operation,
                         destination_maximum,
+                        left_source,
+                        right_source,
+                        use_site,
                     },
                 )?;
                 Self::schedule_assertion_range_operand_v1(frames, right, use_site)?;
@@ -11102,8 +11158,93 @@ impl<'a> SemanticAssertProofsV1<'a> {
                                 ))?;
                             push_assertion_range_value_v1(&mut values, Some(value))?;
                         }
-                        AssertionRangeOperandTaskV1::Unsupported => {
-                            push_assertion_range_value_v1(&mut values, None)?;
+                        AssertionRangeOperandTaskV1::ProjectedPlace(place) => {
+                            self.charge(1)?;
+                            let local = place.local().index() as usize;
+                            if self.address_escaped.get(local).copied() != Some(false)
+                                || visiting.contains(&local)
+                            {
+                                push_assertion_range_value_v1(&mut values, None)?;
+                                continue;
+                            }
+                            let Some(site) = self.exact_reaching_assignment_v1(local, use_site)?
+                            else {
+                                push_assertion_range_value_v1(&mut values, None)?;
+                                continue;
+                            };
+                            let SemanticStatementKindV1::Assign(assignment) =
+                                self.function.blocks()[site.block].statements()[site.statement]
+                                    .kind()
+                            else {
+                                push_assertion_range_value_v1(&mut values, None)?;
+                                continue;
+                            };
+                            let projected = match place.projections() {
+                                [downcast, field] => {
+                                    let (
+                                        SemanticProjectionKindV1::Downcast(projected_variant),
+                                        SemanticProjectionKindV1::Field(projected_field),
+                                        SemanticRvalueKindV1::Aggregate(aggregate),
+                                    ) = (downcast.kind(), field.kind(), assignment.value().kind())
+                                    else {
+                                        push_assertion_range_value_v1(&mut values, None)?;
+                                        continue;
+                                    };
+                                    let SemanticAggregateKindV1::EnumVariant(actual_variant) =
+                                        aggregate.kind()
+                                    else {
+                                        push_assertion_range_value_v1(&mut values, None)?;
+                                        continue;
+                                    };
+                                    if projected_variant != *actual_variant {
+                                        push_assertion_range_value_v1(&mut values, None)?;
+                                        continue;
+                                    }
+                                    aggregate.operands().get(projected_field as usize)
+                                }
+                                [field] => {
+                                    let (
+                                        SemanticProjectionKindV1::Field(projected_field),
+                                        SemanticRvalueKindV1::Aggregate(aggregate),
+                                    ) = (field.kind(), assignment.value().kind())
+                                    else {
+                                        push_assertion_range_value_v1(&mut values, None)?;
+                                        continue;
+                                    };
+                                    if !matches!(
+                                        aggregate.kind(),
+                                        SemanticAggregateKindV1::Array
+                                            | SemanticAggregateKindV1::Tuple
+                                            | SemanticAggregateKindV1::Aggregate
+                                    ) {
+                                        push_assertion_range_value_v1(&mut values, None)?;
+                                        continue;
+                                    }
+                                    aggregate.operands().get(projected_field as usize)
+                                }
+                                _ => None,
+                            };
+                            let Some(projected) =
+                                projected.filter(|value| value.ty() == place.ty()).cloned()
+                            else {
+                                push_assertion_range_value_v1(&mut values, None)?;
+                                continue;
+                            };
+                            visiting.try_reserve(1).map_err(|_| {
+                                ProductionRankedProjectionErrorV1::Unsupported(
+                                    "assertion range evaluator path storage cannot be reserved",
+                                )
+                            })?;
+                            visiting.insert(local);
+                            push_assertion_range_frame_v1(
+                                &mut frames,
+                                AssertionRangeFrameV1::FinishProjectedPlace { local },
+                            )?;
+                            Self::schedule_assertion_range_operand_v1(
+                                &mut frames,
+                                Self::assertion_range_operand_task_v1(&projected),
+                                site,
+                            )?;
                         }
                         AssertionRangeOperandTaskV1::Local(local) => {
                             self.charge(1)?;
@@ -11276,10 +11417,37 @@ impl<'a> SemanticAssertProofsV1<'a> {
                                     .scalar_unsigned_maximum(checked.left().ty()),
                                 left: Self::assertion_range_operand_task_v1(checked.left()),
                                 right: Self::assertion_range_operand_task_v1(checked.right()),
+                                left_source: checked.left().clone(),
+                                right_source: checked.right().clone(),
+                            };
+                            let authenticated = self
+                                .authenticated_checked_binary_local_value_v1(
+                                    local,
+                                    use_site.block,
+                                    use_site.statement,
+                                )?
+                                .is_some();
+                            let relational_range = match checked.operation() {
+                                SemanticCheckedBinaryOpV1::Subtract if authenticated => self
+                                    .scaled_quotient_remainder_upper_range_v1(
+                                        checked.left(),
+                                        checked.right(),
+                                        site,
+                                    )?,
+                                SemanticCheckedBinaryOpV1::Multiply if authenticated => self
+                                    .bounded_quotient_product_upper_range_v1(
+                                        checked.left(),
+                                        checked.right(),
+                                        site,
+                                    )?,
+                                _ => None,
                             };
                             push_assertion_range_frame_v1(
                                 &mut frames,
-                                AssertionRangeFrameV1::FinishCheckedResult { local },
+                                AssertionRangeFrameV1::FinishCheckedResult {
+                                    local,
+                                    relational_range,
+                                },
                             )?;
                             Self::schedule_assertion_range_expression_v1(
                                 &mut frames,
@@ -11293,14 +11461,54 @@ impl<'a> SemanticAssertProofsV1<'a> {
                 AssertionRangeFrameV1::FinishBinary {
                     operation,
                     destination_maximum,
+                    left_source,
+                    right_source,
+                    use_site,
                 } => {
                     let right = pop_assertion_range_value_v1(&mut values)?;
                     let left = pop_assertion_range_value_v1(&mut values)?;
-                    let result =
+                    let mut result =
                         Self::range_of_binary(operation, left, right, destination_maximum)?;
+                    if operation == SemanticBinaryOpV1::Divide
+                        && let Some(bound) = self.quotient_strict_product_upper_bound_v1(
+                            &left_source,
+                            &right_source,
+                            use_site,
+                        )?
+                    {
+                        let upper_bound = bound.maximum;
+                        result = Some(match result {
+                            Some(mut range) => {
+                                range.maximum = range.maximum.min(upper_bound);
+                                range
+                            }
+                            None => UnsignedRangeProofV1 {
+                                minimum: 0,
+                                maximum: upper_bound,
+                            },
+                        });
+                    }
                     push_assertion_range_value_v1(&mut values, result)?;
                 }
-                AssertionRangeFrameV1::FinishCheckedResult { local } => {
+                AssertionRangeFrameV1::FinishCheckedResult {
+                    local,
+                    relational_range,
+                } => {
+                    let result = pop_assertion_range_value_v1(&mut values)?;
+                    visiting.remove(&local);
+                    let result = match (result, relational_range) {
+                        (Some(left), Some(right)) => {
+                            let minimum = left.minimum.max(right.minimum);
+                            let maximum = left.maximum.min(right.maximum);
+                            (minimum <= maximum)
+                                .then_some(UnsignedRangeProofV1 { minimum, maximum })
+                        }
+                        (Some(range), None) | (None, Some(range)) => Some(range),
+                        (None, None) => None,
+                    };
+                    push_assertion_range_value_v1(&mut values, result)?;
+                }
+                AssertionRangeFrameV1::FinishProjectedPlace { local } => {
                     visiting.remove(&local);
                 }
                 AssertionRangeFrameV1::FinishLocalDefinition {
@@ -11603,6 +11811,990 @@ impl<'a> SemanticAssertProofsV1<'a> {
         Ok(range)
     }
 
+    fn authenticated_checked_binary_source_v1(
+        &mut self,
+        operand: &SemanticOperandV1,
+        use_site: ScalarAssignmentSiteV1,
+    ) -> Result<Option<AuthenticatedCheckedBinaryValueV1>, ProductionRankedProjectionErrorV1> {
+        let mut operand = operand.clone();
+        let mut use_site = use_site;
+        let mut visited = HashSet::new();
+        loop {
+            self.charge(1)?;
+            if tuple_field_operand_local_v1(&operand, 0).is_some()
+                && let Some(value) = self.authenticated_checked_binary_value_v1(
+                    &operand,
+                    use_site.block,
+                    use_site.statement,
+                )?
+            {
+                return Ok(Some(value));
+            }
+            let Some(place) = raw_operand_place(&operand) else {
+                return Ok(None);
+            };
+            if !place.projections().is_empty() {
+                return Ok(None);
+            }
+            let local = place.local().index() as usize;
+            if !visited.insert(local) {
+                return Ok(None);
+            }
+            let Some(site) = self.exact_reaching_assignment_v1(local, use_site)? else {
+                return Ok(None);
+            };
+            let SemanticStatementKindV1::Assign(assignment) =
+                self.function.blocks()[site.block].statements()[site.statement].kind()
+            else {
+                return Ok(None);
+            };
+            let next = match assignment.value().kind() {
+                SemanticRvalueKindV1::Use(next) => next,
+                SemanticRvalueKindV1::Cast {
+                    kind: SemanticCastKindV1::Integer,
+                    operand: next,
+                } if self
+                    .unsigned_integer_bits(assignment.value().result_type())
+                    .zip(self.unsigned_integer_bits(next.ty()))
+                    .is_some_and(|(destination, source)| destination >= source) =>
+                {
+                    next
+                }
+                _ => return Ok(None),
+            };
+            operand = next.clone();
+            use_site = site;
+        }
+    }
+
+    fn exact_binary_source_v1(
+        &mut self,
+        operand: &SemanticOperandV1,
+        use_site: ScalarAssignmentSiteV1,
+        expected_operation: SemanticBinaryOpV1,
+    ) -> Result<
+        Option<(ScalarAssignmentSiteV1, SemanticOperandV1, SemanticOperandV1)>,
+        ProductionRankedProjectionErrorV1,
+    > {
+        let mut operand = operand.clone();
+        let mut use_site = use_site;
+        let mut visited = HashSet::new();
+        loop {
+            self.charge(1)?;
+            let Some(place) = raw_operand_place(&operand) else {
+                return Ok(None);
+            };
+            let local = place.local().index() as usize;
+            if !visited.insert(local) {
+                return Ok(None);
+            }
+            let Some(site) = self.exact_reaching_assignment_v1(local, use_site)? else {
+                return Ok(None);
+            };
+            let SemanticStatementKindV1::Assign(assignment) =
+                self.function.blocks()[site.block].statements()[site.statement].kind()
+            else {
+                return Ok(None);
+            };
+            if place.projections().is_empty() {
+                match assignment.value().kind() {
+                    SemanticRvalueKindV1::Binary {
+                        operation,
+                        left,
+                        right,
+                    } if *operation == expected_operation => {
+                        return Ok(Some((site, left.clone(), right.clone())));
+                    }
+                    SemanticRvalueKindV1::Use(next) if next.ty() == place.ty() => {
+                        operand = next.clone();
+                        use_site = site;
+                        continue;
+                    }
+                    SemanticRvalueKindV1::Cast {
+                        kind: SemanticCastKindV1::Integer,
+                        operand: next,
+                    } if self
+                        .unsigned_integer_bits(assignment.value().result_type())
+                        .zip(self.unsigned_integer_bits(next.ty()))
+                        .is_some_and(|(destination, source)| destination >= source) =>
+                    {
+                        operand = next.clone();
+                        use_site = site;
+                        continue;
+                    }
+                    _ => return Ok(None),
+                }
+            }
+            let projected = match place.projections() {
+                [downcast, field] => {
+                    let (
+                        SemanticProjectionKindV1::Downcast(projected_variant),
+                        SemanticProjectionKindV1::Field(projected_field),
+                        SemanticRvalueKindV1::Aggregate(aggregate),
+                    ) = (downcast.kind(), field.kind(), assignment.value().kind())
+                    else {
+                        return Ok(None);
+                    };
+                    let SemanticAggregateKindV1::EnumVariant(actual_variant) = aggregate.kind()
+                    else {
+                        return Ok(None);
+                    };
+                    if projected_variant != *actual_variant {
+                        return Ok(None);
+                    }
+                    aggregate.operands().get(projected_field as usize)
+                }
+                [field] => {
+                    let (
+                        SemanticProjectionKindV1::Field(projected_field),
+                        SemanticRvalueKindV1::Aggregate(aggregate),
+                    ) = (field.kind(), assignment.value().kind())
+                    else {
+                        return Ok(None);
+                    };
+                    if !matches!(
+                        aggregate.kind(),
+                        SemanticAggregateKindV1::Array
+                            | SemanticAggregateKindV1::Tuple
+                            | SemanticAggregateKindV1::Aggregate
+                    ) {
+                        return Ok(None);
+                    }
+                    aggregate.operands().get(projected_field as usize)
+                }
+                _ => None,
+            };
+            let Some(projected) = projected.filter(|projected| projected.ty() == place.ty()) else {
+                return Ok(None);
+            };
+            operand = projected.clone();
+            use_site = site;
+        }
+    }
+
+    fn authenticated_scaled_quotient_remainder_v1(
+        &mut self,
+        left: &SemanticOperandV1,
+        right: &SemanticOperandV1,
+        use_site: ScalarAssignmentSiteV1,
+    ) -> Result<Option<AuthenticatedScaledQuotientRemainderV1>, ProductionRankedProjectionErrorV1>
+    {
+        let Some(sum) = self.authenticated_checked_binary_source_v1(left, use_site)? else {
+            return Ok(None);
+        };
+        let Some(head_extent) = self.authenticated_checked_binary_source_v1(right, use_site)?
+        else {
+            return Ok(None);
+        };
+        if sum.checked.operation() != SemanticCheckedBinaryOpV1::Add
+            || head_extent.checked.operation() != SemanticCheckedBinaryOpV1::Multiply
+        {
+            return Ok(None);
+        }
+
+        for (scaled_operand, offset) in [
+            (sum.checked.left(), sum.checked.right()),
+            (sum.checked.right(), sum.checked.left()),
+        ] {
+            let Some(scaled) =
+                self.authenticated_checked_binary_source_v1(scaled_operand, sum.definition)?
+            else {
+                continue;
+            };
+            if scaled.checked.operation() != SemanticCheckedBinaryOpV1::Multiply {
+                continue;
+            }
+            for (quotient_operand, extent) in [
+                (head_extent.checked.left(), head_extent.checked.right()),
+                (head_extent.checked.right(), head_extent.checked.left()),
+            ] {
+                let Some((quotient_site, quotient_numerator, quotient_divisor)) = self
+                    .exact_binary_source_v1(
+                        quotient_operand,
+                        head_extent.definition,
+                        SemanticBinaryOpV1::Divide,
+                    )?
+                else {
+                    continue;
+                };
+                for (scaled_numerator, scale) in [
+                    (scaled.checked.left(), scaled.checked.right()),
+                    (scaled.checked.right(), scaled.checked.left()),
+                ] {
+                    if !same_semantic_operand_value_v1(scaled_numerator, &quotient_numerator) {
+                        continue;
+                    }
+                    let Some((divisor_site, divisor_extent, divisor_scale)) = self
+                        .exact_binary_source_v1(
+                            &quotient_divisor,
+                            quotient_site,
+                            SemanticBinaryOpV1::Divide,
+                        )?
+                    else {
+                        continue;
+                    };
+                    if !same_semantic_operand_value_v1(&divisor_extent, extent)
+                        || !same_semantic_operand_value_v1(&divisor_scale, scale)
+                        || !self.operand_has_globally_stable_value_at_v1(
+                            &quotient_numerator,
+                            quotient_site,
+                        )?
+                        || !self.operand_has_globally_stable_value_at_v1(extent, divisor_site)?
+                        || !self.operand_has_globally_stable_value_at_v1(scale, divisor_site)?
+                        || !self.operand_has_globally_stable_value_at_v1(
+                            &quotient_divisor,
+                            quotient_site,
+                        )?
+                    {
+                        continue;
+                    }
+                    return Ok(Some(AuthenticatedScaledQuotientRemainderV1 {
+                        divisor: quotient_divisor,
+                        divisor_use: quotient_site,
+                        extent: extent.clone(),
+                        extent_use: head_extent.definition,
+                        scale: scale.clone(),
+                        scale_use: scaled.definition,
+                        offset: offset.clone(),
+                        offset_use: sum.definition,
+                    }));
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    fn scaled_quotient_remainder_upper_range_v1(
+        &mut self,
+        left: &SemanticOperandV1,
+        right: &SemanticOperandV1,
+        use_site: ScalarAssignmentSiteV1,
+    ) -> Result<Option<UnsignedRangeProofV1>, ProductionRankedProjectionErrorV1> {
+        let Some(remainder) =
+            self.authenticated_scaled_quotient_remainder_v1(left, right, use_site)?
+        else {
+            return Ok(None);
+        };
+        let Some(scale) = self.range_at_operand(
+            &remainder.scale,
+            remainder.scale_use.block,
+            remainder.scale_use.statement,
+        )?
+        else {
+            return Ok(None);
+        };
+        let Some(offset) = self.range_at_operand(
+            &remainder.offset,
+            remainder.offset_use.block,
+            remainder.offset_use.statement,
+        )?
+        else {
+            return Ok(None);
+        };
+        let Some(divisor) = self.range_at_operand(
+            &remainder.divisor,
+            remainder.divisor_use.block,
+            remainder.divisor_use.statement,
+        )?
+        else {
+            return Ok(None);
+        };
+        let Some(extent) = self.range_at_operand(
+            &remainder.extent,
+            remainder.extent_use.block,
+            remainder.extent_use.statement,
+        )?
+        else {
+            return Ok(None);
+        };
+        if scale.minimum == 0
+            || scale.minimum != scale.maximum
+            || divisor.minimum == 0
+            || offset.maximum >= scale.minimum
+        {
+            return Ok(None);
+        }
+        // For d=floor(extent/scale), q=floor(x/d), and offset<scale, the
+        // authenticated subtraction result is at most (d-1)*scale+offset.
+        Ok(extent
+            .maximum
+            .checked_sub(1)
+            .map(|maximum| UnsignedRangeProofV1 {
+                minimum: 0,
+                maximum,
+            }))
+    }
+
+    fn proves_scaled_quotient_remainder_nonnegative_v1(
+        &mut self,
+        left: &SemanticOperandV1,
+        right: &SemanticOperandV1,
+        use_site: ScalarAssignmentSiteV1,
+        use_block: usize,
+    ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+        let Some(remainder) =
+            self.authenticated_scaled_quotient_remainder_v1(left, right, use_site)?
+        else {
+            return Ok(false);
+        };
+        if self
+            .range_at_operand(
+                &remainder.divisor,
+                remainder.divisor_use.block,
+                remainder.divisor_use.statement,
+            )?
+            .is_none_or(|range| range.minimum == 0)
+            || self
+                .range_at_operand(
+                    &remainder.scale,
+                    remainder.scale_use.block,
+                    remainder.scale_use.statement,
+                )?
+                .is_none_or(|range| range.minimum == 0)
+        {
+            return Ok(false);
+        }
+
+        for (switch_block, block) in self.function.blocks().iter().enumerate() {
+            self.charge(1)?;
+            let SemanticTerminatorKindV1::SwitchInt {
+                discriminant,
+                targets,
+            } = block.terminator().kind()
+            else {
+                continue;
+            };
+            let [zero_target] = targets.values() else {
+                continue;
+            };
+            if zero_target.value() != 0
+                || zero_target.edge().role() != SemanticEdgeRoleV1::SwitchValue
+                || targets.otherwise().role() != SemanticEdgeRoleV1::SwitchOtherwise
+            {
+                continue;
+            }
+            let false_target = zero_target.edge().target().index() as usize;
+            let true_target = targets.otherwise().target().index() as usize;
+            if false_target == true_target {
+                continue;
+            }
+            let Some(condition_local) = simple_operand_local(discriminant) else {
+                continue;
+            };
+            let condition_use = ScalarAssignmentSiteV1 {
+                block: switch_block,
+                statement: block.statements().len(),
+            };
+            let Some(condition_site) =
+                self.exact_reaching_assignment_v1(condition_local.index() as usize, condition_use)?
+            else {
+                continue;
+            };
+            let SemanticStatementKindV1::Assign(condition) =
+                self.function.blocks()[condition_site.block].statements()[condition_site.statement]
+                    .kind()
+            else {
+                continue;
+            };
+            let SemanticRvalueKindV1::Binary {
+                operation,
+                left: condition_left,
+                right: condition_right,
+            } = condition.value().kind()
+            else {
+                continue;
+            };
+            let (tested_remainder, success_target) = match operation {
+                SemanticBinaryOpV1::Equal
+                    if self.operand_is_exact_unsigned_zero(condition_right) =>
+                {
+                    (condition_left, true_target)
+                }
+                SemanticBinaryOpV1::Equal
+                    if self.operand_is_exact_unsigned_zero(condition_left) =>
+                {
+                    (condition_right, true_target)
+                }
+                SemanticBinaryOpV1::NotEqual
+                    if self.operand_is_exact_unsigned_zero(condition_right) =>
+                {
+                    (condition_left, false_target)
+                }
+                SemanticBinaryOpV1::NotEqual
+                    if self.operand_is_exact_unsigned_zero(condition_left) =>
+                {
+                    (condition_right, false_target)
+                }
+                _ => continue,
+            };
+            let Some((remainder_site, guarded_extent, guarded_scale)) = self
+                .exact_binary_source_v1(
+                    tested_remainder,
+                    condition_site,
+                    SemanticBinaryOpV1::Remainder,
+                )?
+            else {
+                continue;
+            };
+            if !self.same_exact_unsigned_value_v1(
+                &guarded_extent,
+                remainder_site,
+                &remainder.extent,
+                remainder.extent_use,
+            )? || !self.same_exact_unsigned_value_v1(
+                &guarded_scale,
+                remainder_site,
+                &remainder.scale,
+                remainder.scale_use,
+            )? {
+                continue;
+            }
+            // The exact remainder-zero edge makes extent=d*scale, so
+            // q*d<=x implies q*extent<=x*scale<=x*scale+offset.
+            let mut success_edge = HashSet::new();
+            success_edge.try_reserve(1).map_err(|_| {
+                ProductionRankedProjectionErrorV1::Unsupported(
+                    "divisibility proof edge storage cannot be reserved",
+                )
+            })?;
+            success_edge.insert((switch_block, success_target));
+            if self.edge_set_dominates(&success_edge, use_block)? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    fn same_exact_unsigned_value_v1(
+        &mut self,
+        left: &SemanticOperandV1,
+        left_use: ScalarAssignmentSiteV1,
+        right: &SemanticOperandV1,
+        right_use: ScalarAssignmentSiteV1,
+    ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+        let Some((left, left_use)) = self.exact_unsigned_value_origin_v1(left, left_use)? else {
+            return Ok(false);
+        };
+        let Some((right, right_use)) = self.exact_unsigned_value_origin_v1(right, right_use)?
+        else {
+            return Ok(false);
+        };
+        match (&left, &right) {
+            (SemanticOperandV1::Constant(left), SemanticOperandV1::Constant(right)) => {
+                let (
+                    SemanticConstantValueV1::Scalar(left_value),
+                    SemanticConstantValueV1::Scalar(right_value),
+                ) = (left.value(), right.value())
+                else {
+                    return Ok(false);
+                };
+                Ok(self
+                    .scalar_unsigned_maximum(left.ty())
+                    .is_some_and(|maximum| left_value.bits() <= maximum)
+                    && self
+                        .scalar_unsigned_maximum(right.ty())
+                        .is_some_and(|maximum| right_value.bits() <= maximum)
+                    && left_value.bits() == right_value.bits())
+            }
+            _ => {
+                let (Some(left_local), Some(right_local)) =
+                    (simple_operand_local(&left), simple_operand_local(&right))
+                else {
+                    return Ok(false);
+                };
+                let local = left_local.index() as usize;
+                Ok(left_local == right_local
+                    && self.local_has_globally_stable_value_at(local, left_use)?
+                    && self.local_has_globally_stable_value_at(local, right_use)?)
+            }
+        }
+    }
+
+    fn exact_unsigned_value_origin_v1(
+        &mut self,
+        operand: &SemanticOperandV1,
+        use_site: ScalarAssignmentSiteV1,
+    ) -> Result<
+        Option<(SemanticOperandV1, ScalarAssignmentSiteV1)>,
+        ProductionRankedProjectionErrorV1,
+    > {
+        let mut operand = operand.clone();
+        let mut use_site = use_site;
+        let mut visited = HashSet::new();
+        loop {
+            self.charge(1)?;
+            match &operand {
+                SemanticOperandV1::Constant(constant)
+                    if self.scalar_unsigned_maximum(constant.ty()).is_some() =>
+                {
+                    return Ok(Some((operand, use_site)));
+                }
+                SemanticOperandV1::Constant(_) => return Ok(None),
+                SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place)
+                    if place.projections().is_empty()
+                        && self.scalar_unsigned_maximum(place.ty()).is_some() =>
+                {
+                    let local = place.local().index() as usize;
+                    if !visited.insert(local)
+                        || self.address_escaped.get(local).copied() != Some(false)
+                    {
+                        return Ok(None);
+                    }
+                    let Some(site) = self.exact_reaching_assignment_v1(local, use_site)? else {
+                        return Ok(self
+                            .local_has_globally_stable_value_at(local, use_site)?
+                            .then_some((operand, use_site)));
+                    };
+                    let SemanticStatementKindV1::Assign(assignment) =
+                        self.function.blocks()[site.block].statements()[site.statement].kind()
+                    else {
+                        return Ok(None);
+                    };
+                    let next = match assignment.value().kind() {
+                        SemanticRvalueKindV1::Use(next) if next.ty() == place.ty() => next,
+                        SemanticRvalueKindV1::Cast {
+                            kind: SemanticCastKindV1::Integer,
+                            operand: next,
+                        } if self
+                            .unsigned_integer_bits(assignment.value().result_type())
+                            .zip(self.unsigned_integer_bits(next.ty()))
+                            .is_some_and(|(destination, source)| destination >= source) =>
+                        {
+                            next
+                        }
+                        _ => return Ok(Some((operand, use_site))),
+                    };
+                    operand = next.clone();
+                    use_site = site;
+                }
+                _ => return Ok(None),
+            }
+        }
+    }
+
+    fn bounded_quotient_product_upper_range_v1(
+        &mut self,
+        left: &SemanticOperandV1,
+        right: &SemanticOperandV1,
+        use_site: ScalarAssignmentSiteV1,
+    ) -> Result<Option<UnsignedRangeProofV1>, ProductionRankedProjectionErrorV1> {
+        for (quotient, extent) in [(left, right), (right, left)] {
+            let Some((quotient_site, numerator, divisor)) =
+                self.exact_binary_source_v1(quotient, use_site, SemanticBinaryOpV1::Divide)?
+            else {
+                continue;
+            };
+            let Some(bound) =
+                self.quotient_strict_product_upper_bound_v1(&numerator, &divisor, quotient_site)?
+            else {
+                continue;
+            };
+            if self
+                .range_at_operand(extent, use_site.block, use_site.statement)?
+                .is_none_or(|range| range.minimum == 0)
+            {
+                continue;
+            }
+            let Some(total_maximum) = self.explicit_checked_product_maximum_v1(
+                &bound.factor,
+                bound.factor_use,
+                extent,
+                use_site,
+                use_site,
+            )?
+            else {
+                continue;
+            };
+            // q<factor and extent>0 make q*extent strictly smaller than the
+            // authenticated total product factor*extent.
+            let Some(maximum) = total_maximum.checked_sub(1) else {
+                continue;
+            };
+            return Ok(Some(UnsignedRangeProofV1 {
+                minimum: 0,
+                maximum,
+            }));
+        }
+        Ok(None)
+    }
+
+    fn explicit_checked_product_maximum_v1(
+        &mut self,
+        left: &SemanticOperandV1,
+        left_use: ScalarAssignmentSiteV1,
+        right: &SemanticOperandV1,
+        right_use: ScalarAssignmentSiteV1,
+        use_site: ScalarAssignmentSiteV1,
+    ) -> Result<Option<u128>, ProductionRankedProjectionErrorV1> {
+        let assignment_count = self.assignments.len();
+        for local in 0..assignment_count {
+            self.charge(1)?;
+            if self.definition_counts.get(local).copied() != Some(1)
+                || self.address_escaped.get(local).copied() != Some(false)
+            {
+                continue;
+            }
+            let Some(definition) = self.assignments[local] else {
+                continue;
+            };
+            let SemanticStatementKindV1::Assign(assignment) =
+                self.function.blocks()[definition.block].statements()[definition.statement].kind()
+            else {
+                continue;
+            };
+            let SemanticRvalueKindV1::CheckedBinary(checked) = assignment.value().kind() else {
+                continue;
+            };
+            if checked.operation() != SemanticCheckedBinaryOpV1::Multiply {
+                continue;
+            }
+            let operands_match =
+                self.same_exact_unsigned_value_v1(checked.left(), definition, left, left_use)?
+                    && self.same_exact_unsigned_value_v1(
+                        checked.right(),
+                        definition,
+                        right,
+                        right_use,
+                    )?
+                    || self.same_exact_unsigned_value_v1(
+                        checked.left(),
+                        definition,
+                        right,
+                        right_use,
+                    )? && self.same_exact_unsigned_value_v1(
+                        checked.right(),
+                        definition,
+                        left,
+                        left_use,
+                    )?;
+            if !operands_match {
+                continue;
+            }
+            let Some(maximum) = self.scalar_unsigned_maximum(checked.left().ty()) else {
+                continue;
+            };
+            if checked.right().ty() != checked.left().ty() {
+                continue;
+            }
+            for (switch_block, block) in self.function.blocks().iter().enumerate() {
+                self.charge(1)?;
+                let SemanticTerminatorKindV1::SwitchInt {
+                    discriminant,
+                    targets,
+                } = block.terminator().kind()
+                else {
+                    continue;
+                };
+                let [zero_target] = targets.values() else {
+                    continue;
+                };
+                if zero_target.value() != 0
+                    || zero_target.edge().role() != SemanticEdgeRoleV1::SwitchValue
+                    || targets.otherwise().role() != SemanticEdgeRoleV1::SwitchOtherwise
+                    || zero_target.edge().target() == targets.otherwise().target()
+                {
+                    continue;
+                }
+                let switch_use = ScalarAssignmentSiteV1 {
+                    block: switch_block,
+                    statement: block.statements().len(),
+                };
+                if self.exact_checked_overflow_flag_source_local_v1(discriminant, switch_use)?
+                    != Some(local)
+                    || !self.assignment_dominates_use(
+                        definition,
+                        switch_block,
+                        block.statements().len(),
+                    )?
+                {
+                    continue;
+                }
+                let success_target = zero_target.edge().target().index() as usize;
+                let mut success_edge = HashSet::new();
+                success_edge.try_reserve(1).map_err(|_| {
+                    ProductionRankedProjectionErrorV1::Unsupported(
+                        "explicit checked product edge storage cannot be reserved",
+                    )
+                })?;
+                success_edge.insert((switch_block, success_target));
+                if self.edge_set_dominates(&success_edge, use_site.block)? {
+                    return Ok(Some(maximum));
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    fn exact_checked_overflow_flag_source_local_v1(
+        &mut self,
+        operand: &SemanticOperandV1,
+        use_site: ScalarAssignmentSiteV1,
+    ) -> Result<Option<usize>, ProductionRankedProjectionErrorV1> {
+        let mut operand = operand.clone();
+        let mut use_site = use_site;
+        let mut visited = HashSet::new();
+        loop {
+            self.charge(1)?;
+            let Some(place) = raw_operand_place(&operand) else {
+                return Ok(None);
+            };
+            let local = place.local().index() as usize;
+            if !visited.insert(local) {
+                return Ok(None);
+            }
+            if let [field] = place.projections()
+                && matches!(field.kind(), SemanticProjectionKindV1::Field(1))
+                && self.scalar_unsigned_maximum(place.ty()) == Some(1)
+            {
+                return Ok(Some(local));
+            }
+            if !place.projections().is_empty() {
+                return Ok(None);
+            }
+            let Some(site) = self.exact_reaching_assignment_v1(local, use_site)? else {
+                return Ok(None);
+            };
+            let SemanticStatementKindV1::Assign(assignment) =
+                self.function.blocks()[site.block].statements()[site.statement].kind()
+            else {
+                return Ok(None);
+            };
+            let SemanticRvalueKindV1::Use(next) = assignment.value().kind() else {
+                return Ok(None);
+            };
+            operand = next.clone();
+            use_site = site;
+        }
+    }
+
+    fn operand_has_globally_stable_value_at_v1(
+        &mut self,
+        operand: &SemanticOperandV1,
+        use_site: ScalarAssignmentSiteV1,
+    ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+        match operand {
+            SemanticOperandV1::Constant(_) => Ok(true),
+            SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place)
+                if place.projections().is_empty() =>
+            {
+                self.local_has_globally_stable_value_at(place.local().index() as usize, use_site)
+            }
+            _ => Ok(false),
+        }
+    }
+
+    fn quotient_strict_product_upper_bound_v1(
+        &mut self,
+        numerator: &SemanticOperandV1,
+        divisor: &SemanticOperandV1,
+        use_site: ScalarAssignmentSiteV1,
+    ) -> Result<Option<AuthenticatedQuotientStrictBoundV1>, ProductionRankedProjectionErrorV1> {
+        let (Some(numerator_local), Some(divisor_local)) = (
+            simple_operand_local(numerator).map(|local| local.index() as usize),
+            simple_operand_local(divisor).map(|local| local.index() as usize),
+        ) else {
+            return Ok(None);
+        };
+        if self.address_escaped.get(numerator_local).copied() != Some(false)
+            || self.address_escaped.get(divisor_local).copied() != Some(false)
+            || self.definition_counts.get(divisor_local).copied() != Some(1)
+            || self
+                .range_at_operand(divisor, use_site.block, use_site.statement)?
+                .is_none_or(|range| range.minimum == 0)
+        {
+            return Ok(None);
+        }
+
+        let block_count = self.function.blocks().len();
+        let can_reach_use = self.blocks_reaching(use_site.block)?;
+        let mut stability_visited = Vec::new();
+        stability_visited
+            .try_reserve_exact(block_count)
+            .map_err(|_| {
+                ProductionRankedProjectionErrorV1::Unsupported(
+                    "quotient-bound stability storage cannot be reserved",
+                )
+            })?;
+        stability_visited.resize(block_count, 0_usize);
+        let mut stability_pending = VecDeque::new();
+        stability_pending.try_reserve(block_count).map_err(|_| {
+            ProductionRankedProjectionErrorV1::Unsupported(
+                "quotient-bound stability worklist cannot be reserved",
+            )
+        })?;
+        let mut stability_generation = 0_usize;
+        let mut proven_bound: Option<AuthenticatedQuotientStrictBoundV1> = None;
+
+        for (switch_block, block) in self.function.blocks().iter().enumerate() {
+            self.charge(1)?;
+            let SemanticTerminatorKindV1::SwitchInt {
+                discriminant,
+                targets,
+            } = block.terminator().kind()
+            else {
+                continue;
+            };
+            let [zero_target] = targets.values() else {
+                continue;
+            };
+            if zero_target.value() != 0
+                || zero_target.edge().role() != SemanticEdgeRoleV1::SwitchValue
+                || targets.otherwise().role() != SemanticEdgeRoleV1::SwitchOtherwise
+            {
+                continue;
+            }
+            let false_target = zero_target.edge().target().index() as usize;
+            let true_target = targets.otherwise().target().index() as usize;
+            if false_target == true_target {
+                continue;
+            }
+            let Some(condition_local) = simple_operand_local(discriminant) else {
+                continue;
+            };
+            let condition_local = condition_local.index() as usize;
+            if self.definition_counts.get(condition_local).copied() != Some(1)
+                || self.address_escaped.get(condition_local).copied() != Some(false)
+            {
+                continue;
+            }
+            let Some(condition_site) = self.assignments.get(condition_local).copied().flatten()
+            else {
+                continue;
+            };
+            if condition_site.block != switch_block
+                || !self.assignment_dominates_use(
+                    condition_site,
+                    switch_block,
+                    block.statements().len(),
+                )?
+            {
+                continue;
+            }
+            let SemanticStatementKindV1::Assign(condition) =
+                block.statements()[condition_site.statement].kind()
+            else {
+                continue;
+            };
+            let SemanticRvalueKindV1::Binary {
+                operation,
+                left,
+                right,
+            } = condition.value().kind()
+            else {
+                continue;
+            };
+            let (tested, bound, success_target) = match operation {
+                SemanticBinaryOpV1::LessThan => (left, right, true_target),
+                SemanticBinaryOpV1::GreaterOrEqual => (left, right, false_target),
+                SemanticBinaryOpV1::GreaterThan => (right, left, true_target),
+                SemanticBinaryOpV1::LessOrEqual => (right, left, false_target),
+                _ => continue,
+            };
+            let Some(tested_local) = simple_operand_local(tested) else {
+                continue;
+            };
+            if !self.local_is_value_preserving_alias_of(
+                tested_local.index() as usize,
+                numerator_local,
+                condition_site.block,
+                condition_site.statement,
+            )? || self.block_defines_local(switch_block, numerator_local)
+            {
+                continue;
+            }
+            let Some(product) =
+                self.authenticated_checked_binary_source_v1(bound, condition_site)?
+            else {
+                continue;
+            };
+            if product.checked.operation() != SemanticCheckedBinaryOpV1::Multiply {
+                continue;
+            }
+            let factor = if same_semantic_operand_value_v1(product.checked.left(), divisor) {
+                product.checked.right()
+            } else if same_semantic_operand_value_v1(product.checked.right(), divisor) {
+                product.checked.left()
+            } else {
+                continue;
+            };
+            let Some(factor_range) = self.range_at_operand(
+                factor,
+                product.definition.block,
+                product.definition.statement,
+            )?
+            else {
+                continue;
+            };
+            let Some(candidate) = factor_range.maximum.checked_sub(1) else {
+                continue;
+            };
+            let SemanticTerminatorKindV1::Assert { target, .. } = self.function.blocks()
+                [product.assertion_block]
+                .terminator()
+                .kind()
+            else {
+                continue;
+            };
+            if target.role() != SemanticEdgeRoleV1::AssertSuccess {
+                continue;
+            }
+            let product_success = target.target().index() as usize;
+            stability_generation = stability_generation.checked_add(1).ok_or(
+                ProductionRankedProjectionErrorV1::Unsupported(
+                    "quotient-bound stability generation overflowed",
+                ),
+            )?;
+            if !self.local_is_stable_between_edge_and_use(
+                numerator_local,
+                success_target,
+                use_site.block,
+                &can_reach_use,
+                &mut stability_visited,
+                &mut stability_pending,
+                stability_generation,
+            )? {
+                continue;
+            }
+            stability_generation = stability_generation.checked_add(1).ok_or(
+                ProductionRankedProjectionErrorV1::Unsupported(
+                    "quotient-bound stability generation overflowed",
+                ),
+            )?;
+            if !self.local_is_stable_between_edge_and_use(
+                divisor_local,
+                product_success,
+                use_site.block,
+                &can_reach_use,
+                &mut stability_visited,
+                &mut stability_pending,
+                stability_generation,
+            )? {
+                continue;
+            }
+            let mut edge = HashSet::new();
+            edge.try_reserve(1).map_err(|_| {
+                ProductionRankedProjectionErrorV1::Unsupported(
+                    "quotient-bound edge storage cannot be reserved",
+                )
+            })?;
+            edge.insert((switch_block, success_target));
+            if !self.edge_set_dominates(&edge, use_site.block)? {
+                continue;
+            }
+            if proven_bound
+                .as_ref()
+                .is_none_or(|current| candidate < current.maximum)
+            {
+                proven_bound = Some(AuthenticatedQuotientStrictBoundV1 {
+                    maximum: candidate,
+                    factor: factor.clone(),
+                    factor_use: product.definition,
+                });
+            }
+        }
+        Ok(proven_bound)
+    }
+
     fn assignment_dominates_use(
         &mut self,
         definition: ScalarAssignmentSiteV1,
@@ -11613,6 +12805,48 @@ impl<'a> SemanticAssertProofsV1<'a> {
             return Ok(definition.statement < use_statement);
         }
         self.block_dominates(definition.block, use_block)
+    }
+
+    fn exact_reaching_assignment_v1(
+        &mut self,
+        local: usize,
+        use_site: ScalarAssignmentSiteV1,
+    ) -> Result<Option<ScalarAssignmentSiteV1>, ProductionRankedProjectionErrorV1> {
+        if self.address_escaped.get(local).copied() != Some(false) {
+            return Ok(None);
+        }
+        let Some(block) = self.function.blocks().get(use_site.block) else {
+            return Ok(None);
+        };
+        if use_site.statement > block.statements().len() {
+            return Ok(None);
+        }
+        for statement in (0..use_site.statement).rev() {
+            self.charge(1)?;
+            let kind = block.statements()[statement].kind();
+            let mut defines_local = false;
+            visit_statement_definition_places(kind, &mut |place| {
+                defines_local |= local_definition_index(place) == Some(local);
+            });
+            if !defines_local {
+                continue;
+            }
+            return Ok(matches!(kind, SemanticStatementKindV1::Assign(assignment)
+                    if assignment.destination().projections().is_empty()
+                        && assignment.destination().local().index() as usize == local)
+            .then_some(ScalarAssignmentSiteV1 {
+                block: use_site.block,
+                statement,
+            }));
+        }
+        if self.definition_counts.get(local).copied() != Some(1) {
+            return Ok(None);
+        }
+        let Some(site) = self.assignments.get(local).copied().flatten() else {
+            return Ok(None);
+        };
+        self.assignment_dominates_use(site, use_site.block, use_site.statement)
+            .map(|dominates| dominates.then_some(site))
     }
 
     fn zero_excluding_edge_dominates(
@@ -11806,22 +13040,22 @@ impl<'a> SemanticAssertProofsV1<'a> {
         false_target: usize,
         true_target: usize,
     ) -> Result<Option<usize>, ProductionRankedProjectionErrorV1> {
-        if self.definition_counts.get(condition_local).copied() != Some(1)
-            || self.address_escaped.get(condition_local).copied() != Some(false)
-        {
-            return Ok(None);
-        }
-        let Some(site) = self.assignments.get(condition_local).copied().flatten() else {
+        let switch_use = ScalarAssignmentSiteV1 {
+            block: switch_block,
+            statement: self.function.blocks()[switch_block].statements().len(),
+        };
+        let Some(site) = self.exact_reaching_assignment_v1(condition_local, switch_use)? else {
             return Ok(None);
         };
-        if site.block != switch_block {
-            return Ok(None);
-        }
-        if !self.assignment_dominates_use(
-            site,
-            switch_block,
-            self.function.blocks()[switch_block].statements().len(),
-        )? {
+        if site.block != switch_block
+            && !self.local_has_globally_stable_value_at(
+                tested_local,
+                ScalarAssignmentSiteV1 {
+                    block: site.block,
+                    statement: site.statement,
+                },
+            )?
+        {
             return Ok(None);
         }
         let SemanticStatementKindV1::Assign(assignment) =
@@ -11865,7 +13099,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
         if !compares_tested_local_to_zero {
             return Ok(None);
         }
-        if self.block_defines_local(switch_block, tested_local) {
+        if site.block == switch_block && self.block_defines_local(switch_block, tested_local) {
             return Ok(None);
         }
         Ok(match operation {
@@ -11884,6 +13118,26 @@ impl<'a> SemanticAssertProofsV1<'a> {
                 constant.value(),
                 SemanticConstantValueV1::Scalar(value) if value.bits() == 0
             )
+    }
+
+    fn local_has_globally_stable_value_at(
+        &mut self,
+        local: usize,
+        use_site: ScalarAssignmentSiteV1,
+    ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+        if self.address_escaped.get(local).copied() != Some(false) {
+            return Ok(false);
+        }
+        match self.definition_counts.get(local).copied() {
+            Some(0) => Ok(true),
+            Some(1) => {
+                let Some(definition) = self.assignments.get(local).copied().flatten() else {
+                    return Ok(false);
+                };
+                self.assignment_dominates_use(definition, use_site.block, use_site.statement)
+            }
+            _ => Ok(false),
+        }
     }
 
     fn block_defines_local(&self, block: usize, local: usize) -> bool {
@@ -24735,6 +25989,316 @@ mod tests {
                 .unwrap(),
             vec![false, true, false],
         );
+    }
+
+    #[test]
+    fn projected_enum_ranges_require_the_exact_variant_and_field() {
+        let mut types = assertion_proof_types();
+        let payload_enum = SemanticTypeIdV1::from_index(types.len() as u32);
+        types.push(SemanticTypeDeclV1::new(
+            SemanticTypeIdentityV1::from_sha256(bytes(51)),
+            SemanticLayoutIdentityV1::from_sha256(bytes(51)),
+            SemanticTypeLayoutV1::new(Some(16), 8).unwrap(),
+            SemanticTypeShapeV1::enum_type(
+                SCALAR_TYPE,
+                vec![
+                    SemanticEnumVariantV1::new(
+                        0,
+                        SemanticAggregateTypeV1::new(vec![U64_TYPE]).unwrap(),
+                    ),
+                    SemanticEnumVariantV1::new(
+                        1,
+                        SemanticAggregateTypeV1::new(vec![U64_TYPE]).unwrap(),
+                    ),
+                ],
+            )
+            .unwrap(),
+        ));
+        let function = projection_function_with_locals(
+            vec![block(
+                204,
+                vec![typed_assignment(
+                    1,
+                    payload_enum,
+                    SemanticRvalueKindV1::Aggregate(
+                        SemanticAggregateRvalueV1::new(
+                            SemanticAggregateKindV1::EnumVariant(1),
+                            vec![typed_constant(U64_TYPE, 7, 8)],
+                        )
+                        .unwrap(),
+                    ),
+                )],
+                SemanticTerminatorKindV1::Return,
+            )],
+            vec![
+                local(204, U64_TYPE, SemanticLocalRoleV1::Return),
+                local(205, payload_enum, SemanticLocalRoleV1::Temporary),
+            ],
+        );
+        let projected = |variant, field| {
+            SemanticOperandV1::Copy(
+                SemanticPlaceV1::new(
+                    SemanticLocalIdV1::from_index(1),
+                    vec![
+                        SemanticProjectionV1::new(
+                            SemanticProjectionKindV1::Downcast(variant),
+                            payload_enum,
+                        )
+                        .unwrap(),
+                        SemanticProjectionV1::new(SemanticProjectionKindV1::Field(field), U64_TYPE)
+                            .unwrap(),
+                    ],
+                    U64_TYPE,
+                )
+                .unwrap(),
+            )
+        };
+
+        let mut proof = SemanticAssertProofsV1::new(&types, &function).unwrap();
+        assert_eq!(
+            proof.range_at_operand(&projected(1, 0), 0, 1).unwrap(),
+            Some(UnsignedRangeProofV1::exact(7)),
+        );
+        for hostile in [projected(0, 0), projected(1, 1)] {
+            let mut proof = SemanticAssertProofsV1::new(&types, &function).unwrap();
+            assert_eq!(proof.range_at_operand(&hostile, 0, 1).unwrap(), None);
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    enum QuotientBoundHostilityV1 {
+        Exact,
+        RejectingEdge,
+        NonDominating,
+        AliasedNumeratorMutation,
+        UnstableDivisor,
+        MismatchedProduct,
+        OverflowableProduct,
+    }
+
+    fn checked_field_operand(local: u32, field: u32, ty: SemanticTypeIdV1) -> SemanticOperandV1 {
+        SemanticOperandV1::Copy(
+            SemanticPlaceV1::new(
+                SemanticLocalIdV1::from_index(local),
+                vec![
+                    SemanticProjectionV1::new(SemanticProjectionKindV1::Field(field), ty).unwrap(),
+                ],
+                ty,
+            )
+            .unwrap(),
+        )
+    }
+
+    fn quotient_bound_function(hostility: QuotientBoundHostilityV1) -> SemanticFunctionDeclV1 {
+        let divisor = typed_assignment(
+            2,
+            U64_TYPE,
+            SemanticRvalueKindV1::Use(typed_constant(U64_TYPE, 4, 8)),
+        );
+        let other_divisor = typed_assignment(
+            9,
+            U64_TYPE,
+            SemanticRvalueKindV1::Use(typed_constant(U64_TYPE, 3, 8)),
+        );
+        let checked_product = typed_assignment(
+            4,
+            CHECKED_U64_TYPE,
+            SemanticRvalueKindV1::CheckedBinary(SemanticCheckedBinaryRvalueV1::new(
+                SemanticCheckedBinaryOpV1::Multiply,
+                typed_operand(3, U64_TYPE),
+                typed_operand(
+                    if matches!(hostility, QuotientBoundHostilityV1::MismatchedProduct) {
+                        9
+                    } else {
+                        2
+                    },
+                    U64_TYPE,
+                ),
+            )),
+        );
+        let unprotected_product = typed_assignment(
+            5,
+            U64_TYPE,
+            SemanticRvalueKindV1::Binary {
+                operation: SemanticBinaryOpV1::Multiply,
+                left: typed_operand(3, U64_TYPE),
+                right: typed_operand(2, U64_TYPE),
+            },
+        );
+        let product_result = typed_assignment(
+            5,
+            U64_TYPE,
+            SemanticRvalueKindV1::Use(checked_field_operand(4, 0, U64_TYPE)),
+        );
+        let mut guard_statements =
+            vec![
+                if matches!(hostility, QuotientBoundHostilityV1::OverflowableProduct) {
+                    unprotected_product
+                } else {
+                    product_result
+                },
+            ];
+        let tested_numerator = if matches!(
+            hostility,
+            QuotientBoundHostilityV1::AliasedNumeratorMutation
+        ) {
+            guard_statements.extend([
+                typed_assignment(
+                    10,
+                    U64_TYPE,
+                    SemanticRvalueKindV1::Use(typed_operand(1, U64_TYPE)),
+                ),
+                typed_assignment(
+                    1,
+                    U64_TYPE,
+                    SemanticRvalueKindV1::Use(typed_constant(U64_TYPE, 0, 8)),
+                ),
+            ]);
+            10
+        } else {
+            1
+        };
+        guard_statements.push(typed_assignment(
+            6,
+            BOOL_TYPE,
+            SemanticRvalueKindV1::Binary {
+                operation: SemanticBinaryOpV1::LessThan,
+                left: typed_operand(tested_numerator, U64_TYPE),
+                right: typed_operand(5, U64_TYPE),
+            },
+        ));
+        let (false_target, true_target) =
+            if matches!(hostility, QuotientBoundHostilityV1::RejectingEdge) {
+                (3, 4)
+            } else {
+                (4, 3)
+            };
+        let mut quotient_statements = Vec::new();
+        if matches!(hostility, QuotientBoundHostilityV1::UnstableDivisor) {
+            quotient_statements.push(typed_assignment(
+                2,
+                U64_TYPE,
+                SemanticRvalueKindV1::Use(typed_constant(U64_TYPE, 5, 8)),
+            ));
+        }
+        quotient_statements.push(typed_assignment(
+            7,
+            U64_TYPE,
+            SemanticRvalueKindV1::Binary {
+                operation: SemanticBinaryOpV1::Divide,
+                left: typed_operand(1, U64_TYPE),
+                right: typed_operand(2, U64_TYPE),
+            },
+        ));
+        let entry = if matches!(hostility, QuotientBoundHostilityV1::NonDominating) {
+            zero_switch(8, BOOL_TYPE, 1, 3)
+        } else {
+            SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 1))
+        };
+        let product_terminator =
+            if matches!(hostility, QuotientBoundHostilityV1::OverflowableProduct) {
+                SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 2))
+            } else {
+                SemanticTerminatorKindV1::Assert {
+                    condition: checked_field_operand(4, 1, BOOL_TYPE),
+                    expected: false,
+                    message: SemanticAssertMessageV1::Overflow {
+                        operation: SemanticBinaryOpV1::Multiply,
+                        left: typed_operand(3, U64_TYPE),
+                        right: typed_operand(
+                            if matches!(hostility, QuotientBoundHostilityV1::MismatchedProduct) {
+                                9
+                            } else {
+                                2
+                            },
+                            U64_TYPE,
+                        ),
+                    },
+                    target: cfg_edge(SemanticEdgeRoleV1::AssertSuccess, 2),
+                    unwind: SemanticUnwindActionV1::Unreachable,
+                }
+            };
+        projection_function_with_locals(
+            vec![
+                block(206, vec![divisor, other_divisor], entry),
+                block(
+                    207,
+                    if matches!(hostility, QuotientBoundHostilityV1::OverflowableProduct) {
+                        vec![]
+                    } else {
+                        vec![checked_product]
+                    },
+                    product_terminator,
+                ),
+                block(
+                    208,
+                    guard_statements,
+                    zero_switch(6, BOOL_TYPE, false_target, true_target),
+                ),
+                block(209, quotient_statements, SemanticTerminatorKindV1::Return),
+                block(210, vec![], SemanticTerminatorKindV1::Return),
+            ],
+            vec![
+                local(206, U64_TYPE, SemanticLocalRoleV1::Return),
+                local(207, U64_TYPE, SemanticLocalRoleV1::Argument(0)),
+                local(208, U64_TYPE, SemanticLocalRoleV1::Temporary),
+                local(209, U64_TYPE, SemanticLocalRoleV1::Argument(1)),
+                local(210, CHECKED_U64_TYPE, SemanticLocalRoleV1::Temporary),
+                local(211, U64_TYPE, SemanticLocalRoleV1::Temporary),
+                local(212, BOOL_TYPE, SemanticLocalRoleV1::Temporary),
+                local(213, U64_TYPE, SemanticLocalRoleV1::Temporary),
+                local(214, BOOL_TYPE, SemanticLocalRoleV1::Argument(2)),
+                local(215, U64_TYPE, SemanticLocalRoleV1::Temporary),
+                local(216, U64_TYPE, SemanticLocalRoleV1::Temporary),
+            ],
+        )
+    }
+
+    #[test]
+    fn quotient_product_bounds_require_exact_total_dominating_stable_sources() {
+        let types = assertion_proof_types();
+        let exact = quotient_bound_function(QuotientBoundHostilityV1::Exact);
+        let mut proof = SemanticAssertProofsV1::new(&types, &exact).unwrap();
+        assert_eq!(
+            proof
+                .quotient_strict_product_upper_bound_v1(
+                    &typed_operand(1, U64_TYPE),
+                    &typed_operand(2, U64_TYPE),
+                    ScalarAssignmentSiteV1 {
+                        block: 3,
+                        statement: 0,
+                    },
+                )
+                .unwrap()
+                .map(|bound| bound.maximum),
+            Some(u128::from(u64::MAX) - 1),
+        );
+
+        for hostility in [
+            QuotientBoundHostilityV1::RejectingEdge,
+            QuotientBoundHostilityV1::NonDominating,
+            QuotientBoundHostilityV1::AliasedNumeratorMutation,
+            QuotientBoundHostilityV1::UnstableDivisor,
+            QuotientBoundHostilityV1::MismatchedProduct,
+            QuotientBoundHostilityV1::OverflowableProduct,
+        ] {
+            let function = quotient_bound_function(hostility);
+            let quotient_statement = function.blocks()[3].statements().len() - 1;
+            let mut proof = SemanticAssertProofsV1::new(&types, &function).unwrap();
+            assert!(
+                proof
+                    .quotient_strict_product_upper_bound_v1(
+                        &typed_operand(1, U64_TYPE),
+                        &typed_operand(2, U64_TYPE),
+                        ScalarAssignmentSiteV1 {
+                            block: 3,
+                            statement: quotient_statement,
+                        },
+                    )
+                    .unwrap()
+                    .is_none(),
+            );
+        }
     }
 
     fn compared_zero_guard_assertion_function(
