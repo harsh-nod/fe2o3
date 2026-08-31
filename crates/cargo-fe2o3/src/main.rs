@@ -33,6 +33,7 @@ mod project;
 mod protected_compiler_handoff_v3;
 #[path = "rustc_runtime.rs"]
 mod rustc_lib_tree;
+mod source_isa_observation;
 mod tool_commands;
 
 use std::env;
@@ -1611,14 +1612,15 @@ fn run_cargo_with_backend_inner(
     cargo
         .as_command_mut()
         .env_remove(build_config::PRODUCTION_BUILD_EXPECTED_ID_ENV)
+        .env_remove(build_config::PRODUCTION_BUILD_EXPECTED_ID_V2_ENV)
         .env_remove(build_config::WORKER_V2_EXPECTED_ID_ENV);
     match (
         context.build_config_identity,
         context._build_config.as_ref(),
     ) {
-        (Some(identity), Some(_)) => {
+        (Some(identity), Some(config)) => {
             cargo.as_command_mut().env(
-                build_config::PRODUCTION_BUILD_EXPECTED_ID_ENV,
+                config.expected_identity_environment_name(),
                 identity.to_hex(),
             );
         }
@@ -1746,7 +1748,9 @@ fn run_production_host_cargo(
         .env_remove(fe2o3_amd_target::PRODUCTION_GFX942_CARGO_RUSTFLAGS_ENV_V1)
         .env_remove(fe2o3_amd_target::PRODUCTION_GFX950_CARGO_RUSTFLAGS_ENV_V1)
         .env_remove(build_config::PRODUCTION_BUILD_EXPECTED_ID_ENV)
+        .env_remove(build_config::PRODUCTION_BUILD_EXPECTED_ID_V2_ENV)
         .env_remove(build_config::PRODUCTION_BUILD_CONFIG_ENV)
+        .env_remove(build_config::PRODUCTION_BUILD_CONFIG_V2_ENV)
         .env_remove(build_config::WORKER_V2_EXPECTED_ID_ENV)
         .env_remove(build_config::WORKER_V2_CONFIG_ENV)
         .env_remove(build_config::QUALIFICATION_ORACLE_ENV)
@@ -2952,7 +2956,9 @@ fn find_or_build_backend(
         OBSOLETE_CODEGEN_PIPELINE_ENV,
         build_config::QUALIFICATION_ORACLE_ENV,
         build_config::PRODUCTION_BUILD_CONFIG_ENV,
+        build_config::PRODUCTION_BUILD_CONFIG_V2_ENV,
         build_config::PRODUCTION_BUILD_EXPECTED_ID_ENV,
+        build_config::PRODUCTION_BUILD_EXPECTED_ID_V2_ENV,
         build_config::WORKER_V2_CONFIG_ENV,
         build_config::WORKER_V2_EXPECTED_ID_ENV,
         AUTHORITY_CARGO_SHA256_ENV,

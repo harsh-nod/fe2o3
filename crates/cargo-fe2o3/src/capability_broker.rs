@@ -28,6 +28,7 @@
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 mod platform {
     use std::collections::BTreeMap;
+    use std::fmt;
     use std::fs::{self, File};
     use std::io::{self, IoSlice, IoSliceMut, Read, Write};
     use std::mem::MaybeUninit;
@@ -43,7 +44,8 @@ mod platform {
 
     use fe2o3_artifact_transaction::{
         BROKERED_INVOCATION_ADMITTED_V1, BROKERED_INVOCATION_PREPARED_V1,
-        BROKERED_INVOCATION_REQUEST_BYTES_V1, BrokeredInvocationCapabilityRequestV1, BuildSession,
+        BROKERED_INVOCATION_REQUEST_BYTES_V1, BROKERED_INVOCATION_REQUEST_BYTES_V2,
+        BrokeredInvocationCapabilityRequestV1, BrokeredInvocationCapabilityRequestV2, BuildSession,
     };
     use fe2o3_process_identity::LinuxObjectIdentityV3;
     use rustix::net::{
@@ -52,10 +54,14 @@ mod platform {
     };
     use sha2::{Digest, Sha256};
 
+    use crate::build_config::ProductionSourceIsaObserverPolicyV1;
     use crate::cargo_invocation_boundary::{InvocationAuthorizationRegistryV1, ProcessIdentityV1};
     use crate::pinned_codegen_backend::PinnedCodegenBackend;
     use crate::pinned_executable::{PinExecutableError, PinnedExecutable};
     use crate::project::PinnedDirectory;
+    use crate::source_isa_observation::{
+        SOURCE_ISA_OBSERVATION_FRAME_BYTES_V1, SourceIsaObservationFrameV1,
+    };
     use fe2o3_compiler_closure_capability::{
         CompilerClosureCapabilityV1, CompilerExecutionClientProfileCapabilityV1,
     };
@@ -98,6 +104,10 @@ mod platform {
     const BROKER_INVOCATION_LIFETIME: Duration = Duration::from_secs(6 * 60 * 60);
     const MAX_ACTIVE_CONNECTIONS: usize = 64;
     const MAX_CONCURRENT_AUTHENTICATIONS: usize = 8;
+    const MAX_SOURCE_ISA_OBSERVATION_UNITS_V1: usize = 1024;
+    const MAX_SOURCE_ISA_OBSERVATION_AGGREGATE_BYTES_V1: usize = 4 * 1024 * 1024;
+    const BROKERED_INVOCATION_REQUEST_MAGIC_V1: &[u8; 8] = b"F2BRKIV1";
+    const BROKERED_INVOCATION_REQUEST_MAGIC_V2: &[u8; 8] = b"F2BRKIV2";
 
     #[derive(Clone, Copy)]
     struct BrokerLimits {
@@ -118,6 +128,210 @@ mod platform {
     struct BrokerCompilerCapabilities<'profile> {
         closure: Option<fe2o3_build_authority::CompilerClosureV2>,
         execution_profile: Option<&'profile CompilerExecutionClientProfileCapabilityV1>,
+    }
+
+    #[derive(Clone)]
+    struct BrokerSourceIsaObserverV1 {
+        config_identity: [u8; 32],
+        selected_units: Vec<[u8; 32]>,
+        collector: Arc<Mutex<SourceIsaObservationCollectorStateV1>>,
+    }
+
+    impl BrokerSourceIsaObserverV1 {
+        fn from_policy(policy: &ProductionSourceIsaObserverPolicyV1) -> Result<Self, String> {
+            let unit_count = policy.selected_units().len();
+            if unit_count == 0 || unit_count > MAX_SOURCE_ISA_OBSERVATION_UNITS_V1 {
+                return Err(format!(
+                    "source/ISA observer requires 1..={MAX_SOURCE_ISA_OBSERVATION_UNITS_V1} exact units"
+                ));
+            }
+            let mut selected_units = Vec::new();
+            selected_units.try_reserve_exact(unit_count).map_err(|_| {
+                "cannot allocate the bounded source/ISA observer broker policy".to_owned()
+            })?;
+            selected_units.extend(
+                policy
+                    .selected_units()
+                    .iter()
+                    .map(|identity| *identity.as_bytes()),
+            );
+            if selected_units.iter().any(|identity| *identity == [0; 32])
+                || selected_units.windows(2).any(|pair| pair[0] >= pair[1])
+            {
+                return Err("source/ISA observer broker policy is not canonical".to_owned());
+            }
+            let collector =
+                SourceIsaObservationCollectorStateV1::with_expected_units(&selected_units)?;
+            Ok(Self {
+                config_identity: *policy.config_identity().as_bytes(),
+                selected_units,
+                collector: Arc::new(Mutex::new(collector)),
+            })
+        }
+
+        fn accepts(&self, request: BrokeredInvocationCapabilityRequestV2) -> bool {
+            request.config_identity() == self.config_identity
+                && self
+                    .selected_units
+                    .binary_search(&request.unit_identity())
+                    .is_ok()
+        }
+
+        fn collect(&self, frame: SourceIsaObservationFrameV1) -> io::Result<()> {
+            let context = frame.context();
+            if context.config() != self.config_identity
+                || self.selected_units.binary_search(&context.unit()).is_err()
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "source/ISA observation frame is not bound to the configured unit",
+                ));
+            }
+            self.collector
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .insert(frame)
+                .map_err(io::Error::other)
+        }
+
+        fn fail(&self, reason: SourceIsaObservationTransportFailureV1) {
+            self.collector
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .fail(reason);
+        }
+    }
+
+    struct SourceIsaObservationCollectorStateV1 {
+        frames: Vec<([u8; 32], SourceIsaObservationFrameV1)>,
+        expected_units: Vec<[u8; 32]>,
+        aggregate_bytes: usize,
+        failure: Option<SourceIsaObservationTransportFailureV1>,
+    }
+
+    impl SourceIsaObservationCollectorStateV1 {
+        fn with_expected_units(expected: &[[u8; 32]]) -> Result<Self, String> {
+            let mut frames = Vec::new();
+            frames.try_reserve_exact(expected.len()).map_err(|_| {
+                "cannot allocate the bounded source/ISA observation collector".to_owned()
+            })?;
+            let mut expected_units = Vec::new();
+            expected_units
+                .try_reserve_exact(expected.len())
+                .map_err(|_| {
+                    "cannot allocate the bounded source/ISA expected-unit set".to_owned()
+                })?;
+            expected_units.extend_from_slice(expected);
+            Ok(Self {
+                frames,
+                expected_units,
+                aggregate_bytes: 0,
+                failure: None,
+            })
+        }
+
+        fn insert(
+            &mut self,
+            frame: SourceIsaObservationFrameV1,
+        ) -> Result<(), SourceIsaObservationTransportFailureV1> {
+            if self.failure.is_some() {
+                return Err(SourceIsaObservationTransportFailureV1::CollectorAlreadyFailed);
+            }
+            if self.frames.len() >= MAX_SOURCE_ISA_OBSERVATION_UNITS_V1 {
+                self.fail(SourceIsaObservationTransportFailureV1::UnitBound);
+                return Err(SourceIsaObservationTransportFailureV1::UnitBound);
+            }
+            let unit = frame.context().unit();
+            let insertion = match self.frames.binary_search_by_key(&unit, |(unit, _)| *unit) {
+                Ok(index) if self.frames[index].1 == frame => return Ok(()),
+                Ok(_) => {
+                    self.fail(SourceIsaObservationTransportFailureV1::ConflictingDuplicate);
+                    return Err(SourceIsaObservationTransportFailureV1::ConflictingDuplicate);
+                }
+                Err(insertion) => insertion,
+            };
+            let Some(aggregate_bytes) = self
+                .aggregate_bytes
+                .checked_add(SOURCE_ISA_OBSERVATION_FRAME_BYTES_V1)
+                .filter(|bytes| *bytes <= MAX_SOURCE_ISA_OBSERVATION_AGGREGATE_BYTES_V1)
+            else {
+                self.fail(SourceIsaObservationTransportFailureV1::AggregateByteBound);
+                return Err(SourceIsaObservationTransportFailureV1::AggregateByteBound);
+            };
+            self.frames.insert(insertion, (unit, frame));
+            self.aggregate_bytes = aggregate_bytes;
+            Ok(())
+        }
+
+        fn fail(&mut self, reason: SourceIsaObservationTransportFailureV1) {
+            self.failure.get_or_insert(reason);
+        }
+
+        fn finish(mut self) -> SourceIsaObservationCollectionV1 {
+            self.expected_units.retain(|unit| {
+                self.frames
+                    .binary_search_by_key(unit, |(observed, _)| *observed)
+                    .is_err()
+            });
+            if !self.expected_units.is_empty() && self.failure.is_none() {
+                self.failure = Some(SourceIsaObservationTransportFailureV1::MissingSelectedUnits);
+            }
+            SourceIsaObservationCollectionV1 {
+                frames: self.frames,
+                missing_units: self.expected_units,
+                failure: self.failure,
+            }
+        }
+    }
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    #[repr(u16)]
+    pub(crate) enum SourceIsaObservationTransportFailureV1 {
+        CollectorAlreadyFailed = 1,
+        UnitBound = 2,
+        AggregateByteBound = 3,
+        ConflictingDuplicate = 4,
+        RejectedFrame = 5,
+        MissingSelectedUnits = 6,
+        BrokerWorkerPanic = 7,
+    }
+
+    impl fmt::Display for SourceIsaObservationTransportFailureV1 {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(
+                formatter,
+                "source/ISA observation transport failure code {}",
+                *self as u16
+            )
+        }
+    }
+
+    impl std::error::Error for SourceIsaObservationTransportFailureV1 {}
+
+    impl SourceIsaObservationTransportFailureV1 {
+        pub(crate) const fn code(self) -> u16 {
+            self as u16
+        }
+    }
+
+    pub(crate) struct SourceIsaObservationCollectionV1 {
+        frames: Vec<([u8; 32], SourceIsaObservationFrameV1)>,
+        missing_units: Vec<[u8; 32]>,
+        failure: Option<SourceIsaObservationTransportFailureV1>,
+    }
+
+    impl SourceIsaObservationCollectionV1 {
+        pub(crate) fn frames(&self) -> impl ExactSizeIterator<Item = &SourceIsaObservationFrameV1> {
+            self.frames.iter().map(|(_, frame)| frame)
+        }
+
+        pub(crate) fn missing_units(&self) -> &[[u8; 32]] {
+            &self.missing_units
+        }
+
+        pub(crate) const fn failure(&self) -> Option<SourceIsaObservationTransportFailureV1> {
+            self.failure
+        }
     }
 
     impl<'profile> BrokerCompilerCapabilities<'profile> {
@@ -524,6 +738,7 @@ mod platform {
     pub(crate) struct CapabilityBroker {
         route: String,
         invocation_authorization: InvocationAuthorizationRegistryV1,
+        source_isa_observer: Option<Arc<Mutex<SourceIsaObservationCollectorStateV1>>>,
         shutdown: Arc<BrokerShutdown>,
         worker: Option<JoinHandle<()>>,
     }
@@ -745,6 +960,29 @@ mod platform {
                 backend,
                 artifact,
                 pinned_cargo_image,
+                None,
+                PRODUCTION_BROKER_LIMITS,
+            )
+        }
+
+        pub(crate) fn start_protected_with_source_isa_observer(
+            session: BuildSession,
+            binding: CapabilityBindingV3,
+            compiler_closure: fe2o3_build_authority::CompilerClosureV2,
+            compiler_execution_profile: &CompilerExecutionClientProfileCapabilityV1,
+            backend: &PinnedCodegenBackend,
+            artifact: &PinnedDirectory,
+            pinned_cargo_image: &PinnedExecutable,
+            observer_policy: &ProductionSourceIsaObserverPolicyV1,
+        ) -> Result<Self, String> {
+            Self::start_with_compiler_capabilities(
+                session,
+                binding,
+                BrokerCompilerCapabilities::protected(compiler_closure, compiler_execution_profile),
+                backend,
+                artifact,
+                pinned_cargo_image,
+                Some(observer_policy),
                 PRODUCTION_BROKER_LIMITS,
             )
         }
@@ -764,6 +1002,7 @@ mod platform {
                 backend,
                 artifact,
                 pinned_cargo_image,
+                None,
                 limits,
             )
         }
@@ -775,6 +1014,7 @@ mod platform {
             backend: &PinnedCodegenBackend,
             artifact: &PinnedDirectory,
             pinned_cargo_image: &PinnedExecutable,
+            observer_policy: Option<&ProductionSourceIsaObserverPolicyV1>,
             limits: BrokerLimits,
         ) -> Result<Self, String> {
             if limits.max_active_connections == 0
@@ -791,6 +1031,19 @@ mod platform {
                     "capability binding and protected compiler capability presence differ"
                         .to_owned(),
                 );
+            }
+            let source_isa_observer = observer_policy
+                .map(BrokerSourceIsaObserverV1::from_policy)
+                .transpose()?;
+            if let Some(observer) = &source_isa_observer {
+                if !binding.requires_compiler_closure_v2()
+                    || binding.config_identity != Some(observer.config_identity)
+                {
+                    return Err(
+                        "source/ISA observer policy requires the exact protected V2 config binding"
+                            .to_owned(),
+                    );
+                }
             }
             let compiler_closure = compiler
                 .closure
@@ -848,6 +1101,9 @@ mod platform {
             let invocation_authorization = InvocationAuthorizationRegistryV1::new();
             let worker_invocation_authorization = invocation_authorization.clone();
             let worker_shutdown = Arc::clone(&shutdown);
+            let returned_source_isa_observer = source_isa_observer
+                .as_ref()
+                .map(|observer| Arc::clone(&observer.collector));
             let worker = thread::Builder::new()
                 .name("fe2o3-capability-broker".to_string())
                 .spawn(move || {
@@ -861,6 +1117,7 @@ mod platform {
                         artifact,
                         compiler_closure,
                         compiler_execution_profile,
+                        source_isa_observer,
                         authentication_timeout: limits.authentication_timeout,
                         invocation_frame_timeout: limits.invocation_frame_timeout,
                         invocation_lifetime: limits.invocation_lifetime,
@@ -873,6 +1130,7 @@ mod platform {
             Ok(Self {
                 route,
                 invocation_authorization,
+                source_isa_observer: returned_source_isa_observer,
                 shutdown,
                 worker: Some(worker),
             })
@@ -884,6 +1142,29 @@ mod platform {
 
         pub(crate) fn invocation_authorization(&self) -> InvocationAuthorizationRegistryV1 {
             self.invocation_authorization.clone()
+        }
+
+        pub(crate) fn finish_source_isa_observations(
+            mut self,
+        ) -> Result<SourceIsaObservationCollectionV1, String> {
+            let collector = self.source_isa_observer.take().ok_or_else(|| {
+                "capability broker has no source/ISA observer collector".to_owned()
+            })?;
+            self.shutdown.begin();
+            let worker_panicked = self
+                .worker
+                .take()
+                .is_some_and(|worker| worker.join().is_err());
+            let collector = Arc::try_unwrap(collector).map_err(|_| {
+                "source/ISA observer collector still has a live broker owner".to_owned()
+            })?;
+            let mut collector = collector
+                .into_inner()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if worker_panicked {
+                collector.fail(SourceIsaObservationTransportFailureV1::BrokerWorkerPanic);
+            }
+            Ok(collector.finish())
         }
     }
 
@@ -908,6 +1189,12 @@ mod platform {
         stream: UnixStream,
     }
 
+    pub(crate) struct SourceIsaObservationSinkV1 {
+        stream: UnixStream,
+        config_identity: [u8; 32],
+        unit_identity: [u8; 32],
+    }
+
     impl BrokeredInvocationAuthorityV1 {
         fn from_authenticated_stream(stream: UnixStream) -> Result<Self, String> {
             let normalized = rustix::io::fcntl_dupfd_cloexec(&stream, RECEIVED_DESCRIPTOR_FLOOR)
@@ -924,6 +1211,27 @@ mod platform {
                 BrokeredInvocationCapabilityRequestV1::Release,
                 BROKERED_INVOCATION_PREPARED_V1,
             )
+        }
+
+        pub(crate) fn release_with_source_isa_observer(
+            self,
+            config_identity: [u8; 32],
+            unit_identity: [u8; 32],
+        ) -> Result<SourceIsaObservationSinkV1, String> {
+            let request = BrokeredInvocationCapabilityRequestV2::release_with_source_isa_observer(
+                config_identity,
+                unit_identity,
+            )
+            .map_err(|error| error.to_string())?;
+            let mut stream = self.stream;
+            stream.write_all(&request.encode()).map_err(|error| {
+                format!("failed to write observer invocation capability: {error}")
+            })?;
+            Ok(SourceIsaObservationSinkV1 {
+                stream,
+                config_identity,
+                unit_identity,
+            })
         }
 
         fn exchange(
@@ -943,6 +1251,23 @@ mod platform {
                 return Err("invocation capability returned a malformed response".to_owned());
             }
             Ok(())
+        }
+    }
+
+    impl SourceIsaObservationSinkV1 {
+        pub(crate) fn submit(mut self, frame: &SourceIsaObservationFrameV1) -> Result<(), String> {
+            let context = frame.context();
+            if context.config() != self.config_identity || context.unit() != self.unit_identity {
+                return Err(
+                    "source/ISA observation frame differs from its authenticated sink".to_owned(),
+                );
+            }
+            self.stream.write_all(&frame.encode()).map_err(|error| {
+                format!("failed to write source/ISA observation frame: {error}")
+            })?;
+            self.stream
+                .shutdown(Shutdown::Write)
+                .map_err(|error| format!("failed to close source/ISA observation frame: {error}"))
         }
     }
 
@@ -1100,6 +1425,7 @@ mod platform {
         artifact: File,
         compiler_closure: Option<CompilerClosureCapabilityV1>,
         compiler_execution_profile: Option<CompilerExecutionClientProfileCapabilityV1>,
+        source_isa_observer: Option<BrokerSourceIsaObserverV1>,
         authentication_timeout: Duration,
         invocation_frame_timeout: Duration,
         invocation_lifetime: Duration,
@@ -1227,10 +1553,13 @@ mod platform {
                 frame_timeout: self.invocation_frame_timeout,
                 lifetime: self.invocation_lifetime,
             };
-            let mut encoded = [0_u8; BROKERED_INVOCATION_REQUEST_BYTES_V1];
-            liveness.read_frame(stream, &mut encoded)?;
-            let request = BrokeredInvocationCapabilityRequestV1::decode(&encoded)
-                .map_err(|error| io::Error::new(io::ErrorKind::PermissionDenied, error))?;
+            let request = read_invocation_request(liveness, stream)?;
+            if let BrokerInvocationRequest::V2(request) = request {
+                return self.receive_source_isa_observation(stream, liveness, request);
+            }
+            let BrokerInvocationRequest::V1(request) = request else {
+                unreachable!("V2 observer request returned above")
+            };
             let claim = match request {
                 BrokeredInvocationCapabilityRequestV1::Release => {
                     let mut stream = stream;
@@ -1265,6 +1594,77 @@ mod platform {
             }
             stream.write_all(BROKERED_INVOCATION_ADMITTED_V1)
         }
+
+        fn receive_source_isa_observation(
+            &self,
+            stream: &UnixStream,
+            liveness: InvocationLiveness,
+            request: BrokeredInvocationCapabilityRequestV2,
+        ) -> io::Result<()> {
+            let observer = self.source_isa_observer.as_ref().ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "source/ISA observer request is unavailable for this broker",
+                )
+            })?;
+            let result = (|| {
+                if !observer.accepts(request) {
+                    return Err(io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        "source/ISA observer request is not bound to the exact configured unit",
+                    ));
+                }
+                let mut encoded = [0; SOURCE_ISA_OBSERVATION_FRAME_BYTES_V1];
+                liveness.read_frame(stream, &mut encoded)?;
+                liveness.require_eof(stream)?;
+                let frame = SourceIsaObservationFrameV1::decode(&encoded)
+                    .map_err(|error| io::Error::new(io::ErrorKind::PermissionDenied, error))?;
+                if frame.context().attempt().session() != self.session {
+                    return Err(io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        "source/ISA observation attempt is not bound to this build session",
+                    ));
+                }
+                observer.collect(frame)
+            })();
+            if result.is_err() {
+                observer.fail(SourceIsaObservationTransportFailureV1::RejectedFrame);
+            }
+            result
+        }
+    }
+
+    enum BrokerInvocationRequest {
+        V1(BrokeredInvocationCapabilityRequestV1),
+        V2(BrokeredInvocationCapabilityRequestV2),
+    }
+
+    fn read_invocation_request(
+        liveness: InvocationLiveness,
+        stream: &UnixStream,
+    ) -> io::Result<BrokerInvocationRequest> {
+        let mut magic = [0; 8];
+        liveness.read_frame(stream, &mut magic)?;
+        if &magic == BROKERED_INVOCATION_REQUEST_MAGIC_V1 {
+            let mut encoded = [0; BROKERED_INVOCATION_REQUEST_BYTES_V1];
+            encoded[..magic.len()].copy_from_slice(&magic);
+            liveness.read_frame(stream, &mut encoded[magic.len()..])?;
+            return BrokeredInvocationCapabilityRequestV1::decode(&encoded)
+                .map(BrokerInvocationRequest::V1)
+                .map_err(|error| io::Error::new(io::ErrorKind::PermissionDenied, error));
+        }
+        if &magic == BROKERED_INVOCATION_REQUEST_MAGIC_V2 {
+            let mut encoded = [0; BROKERED_INVOCATION_REQUEST_BYTES_V2];
+            encoded[..magic.len()].copy_from_slice(&magic);
+            liveness.read_frame(stream, &mut encoded[magic.len()..])?;
+            return BrokeredInvocationCapabilityRequestV2::decode(&encoded)
+                .map(BrokerInvocationRequest::V2)
+                .map_err(|error| io::Error::new(io::ErrorKind::PermissionDenied, error));
+        }
+        Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "brokered invocation request has an unknown version",
+        ))
     }
 
     #[derive(Clone, Copy)]
@@ -1332,6 +1732,35 @@ mod platform {
                 }
             }
             Ok(())
+        }
+
+        fn require_eof(self, stream: &UnixStream) -> io::Result<()> {
+            let mut trailing = [0; 1];
+            let mut stream = stream;
+            loop {
+                let remaining = self
+                    .lifetime
+                    .checked_sub(self.started_at.elapsed())
+                    .filter(|remaining| !remaining.is_zero())
+                    .ok_or_else(|| {
+                        io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            "invocation capability exceeded its total lifetime",
+                        )
+                    })?;
+                stream.set_read_timeout(Some(self.frame_timeout.min(remaining)))?;
+                match stream.read(&mut trailing) {
+                    Ok(0) => return Ok(()),
+                    Ok(_) => {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "source/ISA observation contains trailing bytes",
+                        ));
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                    Err(error) => return Err(error),
+                }
+            }
         }
     }
 
@@ -1593,6 +2022,145 @@ mod platform {
         }
         endpoint
     }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use crate::source_isa_observation::{
+            SourceIsaObservationContextV1, SourceIsaObservationErrorCodeV1,
+            SourceIsaObservationFrameV1, SourceIsaObservationOutcomeV1,
+            SourceIsaObservationUnavailableReasonV1,
+        };
+        use fe2o3_artifact_transaction::{BuildAttempt, BuildInvocation};
+
+        fn liveness() -> InvocationLiveness {
+            InvocationLiveness {
+                client: ProcessIdentityV1::observe(std::process::id()).unwrap(),
+                started_at: Instant::now(),
+                frame_timeout: Duration::from_millis(100),
+                lifetime: Duration::from_secs(1),
+            }
+        }
+
+        fn read_request(encoded: &[u8]) -> io::Result<BrokerInvocationRequest> {
+            let (mut writer, reader) = UnixStream::pair().unwrap();
+            writer.write_all(encoded).unwrap();
+            writer.shutdown(Shutdown::Write).unwrap();
+            read_invocation_request(liveness(), &reader)
+        }
+
+        fn frame(
+            unit: [u8; 32],
+            outcome: SourceIsaObservationOutcomeV1,
+        ) -> SourceIsaObservationFrameV1 {
+            let attempt = BuildAttempt::new(
+                3,
+                BuildSession::from_bytes([0x31; 16]),
+                BuildInvocation::from_bytes([0x32; 32]),
+            )
+            .unwrap();
+            SourceIsaObservationFrameV1::new(
+                SourceIsaObservationContextV1::new([0x30; 32], unit, attempt, [0x33; 32]).unwrap(),
+                outcome,
+            )
+        }
+
+        #[test]
+        fn invocation_request_dispatch_preserves_v1_and_accepts_exact_v2_width() {
+            let v1 = BrokeredInvocationCapabilityRequestV1::Release.encode();
+            assert!(matches!(
+                read_request(&v1).unwrap(),
+                BrokerInvocationRequest::V1(BrokeredInvocationCapabilityRequestV1::Release)
+            ));
+
+            let expected = BrokeredInvocationCapabilityRequestV2::release_with_source_isa_observer(
+                [0x30; 32], [0x40; 32],
+            )
+            .unwrap();
+            assert!(matches!(
+                read_request(&expected.encode()).unwrap(),
+                BrokerInvocationRequest::V2(actual) if actual == expected
+            ));
+        }
+
+        #[test]
+        fn invocation_request_dispatch_rejects_unknown_and_every_truncated_width() {
+            assert!(read_request(b"UNKNOWN!").is_err());
+            let requests = [
+                BrokeredInvocationCapabilityRequestV1::Release
+                    .encode()
+                    .to_vec(),
+                BrokeredInvocationCapabilityRequestV2::release_with_source_isa_observer(
+                    [0x30; 32], [0x40; 32],
+                )
+                .unwrap()
+                .encode()
+                .to_vec(),
+            ];
+            for request in requests {
+                for length in 0..request.len() {
+                    assert!(
+                        read_request(&request[..length]).is_err(),
+                        "truncated request length {length} was accepted"
+                    );
+                }
+            }
+        }
+
+        #[test]
+        fn collector_deduplicates_exact_recovery_and_preserves_partial_failure() {
+            let units = [[0x40; 32], [0x41; 32]];
+            let mut collector =
+                SourceIsaObservationCollectorStateV1::with_expected_units(&units).unwrap();
+            let accepted = frame(
+                units[0],
+                SourceIsaObservationOutcomeV1::Unavailable(
+                    SourceIsaObservationUnavailableReasonV1::SourceProjectionForKirV9,
+                ),
+            );
+            assert!(collector.insert(accepted.clone()).is_ok());
+            assert!(collector.insert(accepted).is_ok());
+            let conflicting = frame(
+                units[0],
+                SourceIsaObservationOutcomeV1::Error(
+                    SourceIsaObservationErrorCodeV1::ResourceLimit,
+                ),
+            );
+            assert_eq!(
+                collector.insert(conflicting),
+                Err(SourceIsaObservationTransportFailureV1::ConflictingDuplicate)
+            );
+            let collection = collector.finish();
+            assert_eq!(collection.frames().len(), 1);
+            assert_eq!(collection.missing_units(), &[units[1]]);
+            assert_eq!(
+                collection.failure(),
+                Some(SourceIsaObservationTransportFailureV1::ConflictingDuplicate)
+            );
+        }
+
+        #[test]
+        fn collector_reports_missing_selected_units_without_discarding_frames() {
+            let units = [[0x40; 32], [0x41; 32]];
+            let mut collector =
+                SourceIsaObservationCollectorStateV1::with_expected_units(&units).unwrap();
+            collector
+                .insert(frame(
+                    units[1],
+                    SourceIsaObservationOutcomeV1::Unavailable(
+                        SourceIsaObservationUnavailableReasonV1::AnchorNoOperations,
+                    ),
+                ))
+                .unwrap();
+            let collection = collector.finish();
+            assert_eq!(collection.frames().len(), 1);
+            assert_eq!(collection.missing_units(), &[units[0]]);
+            assert_eq!(
+                collection.failure(),
+                Some(SourceIsaObservationTransportFailureV1::MissingSelectedUnits)
+            );
+        }
+    }
 }
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
@@ -1600,13 +2168,16 @@ pub(crate) use platform::*;
 
 #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
 mod unsupported {
+    use std::fmt;
 
-    use fe2o3_artifact_transaction::BuildSession;
+    use fe2o3_artifact_transaction::{BrokeredInvocationCapabilityClaimV1, BuildSession};
 
+    use crate::build_config::ProductionSourceIsaObserverPolicyV1;
     use crate::cargo_invocation_boundary::InvocationAuthorizationRegistryV1;
     use crate::pinned_codegen_backend::PinnedCodegenBackend;
     use crate::pinned_executable::PinnedExecutable;
     use crate::project::PinnedDirectory;
+    use crate::source_isa_observation::SourceIsaObservationFrameV1;
     use fe2o3_compiler_closure_capability::{
         CompilerClosureCapabilityV1, CompilerExecutionClientProfileCapabilityV1,
     };
@@ -1690,12 +2261,31 @@ mod unsupported {
             Err("Cargo capability transport requires Linux".to_string())
         }
 
+        pub(crate) fn start_protected_with_source_isa_observer(
+            _session: BuildSession,
+            _binding: CapabilityBindingV3,
+            _compiler_closure: fe2o3_build_authority::CompilerClosureV2,
+            _compiler_execution_profile: &CompilerExecutionClientProfileCapabilityV1,
+            _backend: &PinnedCodegenBackend,
+            _artifact: &PinnedDirectory,
+            _pinned_cargo_image: &PinnedExecutable,
+            _observer_policy: &ProductionSourceIsaObserverPolicyV1,
+        ) -> Result<Self, String> {
+            Err("Cargo capability transport requires Linux".to_string())
+        }
+
         pub(crate) fn route(&self) -> &str {
             ""
         }
 
         pub(crate) fn invocation_authorization(&self) -> InvocationAuthorizationRegistryV1 {
             InvocationAuthorizationRegistryV1::new()
+        }
+
+        pub(crate) fn finish_source_isa_observations(
+            self,
+        ) -> Result<SourceIsaObservationCollectionV1, String> {
+            Err("Cargo capability transport requires Linux".to_string())
         }
     }
 
@@ -1706,11 +2296,77 @@ mod unsupported {
             Err("Cargo capability transport requires Linux".to_owned())
         }
 
+        pub(crate) fn release_with_source_isa_observer(
+            self,
+            _config_identity: [u8; 32],
+            _unit_identity: [u8; 32],
+        ) -> Result<SourceIsaObservationSinkV1, String> {
+            Err("Cargo capability transport requires Linux".to_owned())
+        }
+
         pub(crate) fn prepare(
             &self,
             _claim: BrokeredInvocationCapabilityClaimV1,
         ) -> Result<(), String> {
             Err("Cargo capability transport requires Linux".to_owned())
+        }
+    }
+
+    pub(crate) struct SourceIsaObservationSinkV1;
+
+    impl SourceIsaObservationSinkV1 {
+        pub(crate) fn submit(self, _frame: &SourceIsaObservationFrameV1) -> Result<(), String> {
+            Err("Cargo capability transport requires Linux".to_owned())
+        }
+    }
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    #[repr(u16)]
+    pub(crate) enum SourceIsaObservationTransportFailureV1 {
+        CollectorAlreadyFailed = 1,
+        UnitBound = 2,
+        AggregateByteBound = 3,
+        ConflictingDuplicate = 4,
+        RejectedFrame = 5,
+        MissingSelectedUnits = 6,
+        BrokerWorkerPanic = 7,
+    }
+
+    impl fmt::Display for SourceIsaObservationTransportFailureV1 {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(
+                formatter,
+                "source/ISA observation transport failure code {}",
+                *self as u16
+            )
+        }
+    }
+
+    impl std::error::Error for SourceIsaObservationTransportFailureV1 {}
+
+    impl SourceIsaObservationTransportFailureV1 {
+        pub(crate) const fn code(self) -> u16 {
+            self as u16
+        }
+    }
+
+    pub(crate) struct SourceIsaObservationCollectionV1 {
+        frames: Vec<SourceIsaObservationFrameV1>,
+        missing_units: Vec<[u8; 32]>,
+        failure: Option<SourceIsaObservationTransportFailureV1>,
+    }
+
+    impl SourceIsaObservationCollectionV1 {
+        pub(crate) fn frames(&self) -> impl ExactSizeIterator<Item = &SourceIsaObservationFrameV1> {
+            self.frames.iter()
+        }
+
+        pub(crate) fn missing_units(&self) -> &[[u8; 32]] {
+            &self.missing_units
+        }
+
+        pub(crate) const fn failure(&self) -> Option<SourceIsaObservationTransportFailureV1> {
+            self.failure
         }
     }
 

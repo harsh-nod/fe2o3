@@ -335,6 +335,9 @@ fn ordinary_host_phase_has_no_device_compiler_controls() {
         ".env_remove(BACKEND_ENV)",
         ".env_remove(TARGET_ENV)",
         ".env_remove(build_config::PRODUCTION_BUILD_CONFIG_ENV)",
+        ".env_remove(build_config::PRODUCTION_BUILD_CONFIG_V2_ENV)",
+        ".env_remove(build_config::PRODUCTION_BUILD_EXPECTED_ID_ENV)",
+        ".env_remove(build_config::PRODUCTION_BUILD_EXPECTED_ID_V2_ENV)",
         ".env_remove(build_config::QUALIFICATION_ORACLE_ENV)",
         ".env_remove(capability_broker::CAPABILITY_BROKER_ENV)",
     ] {
@@ -434,6 +437,61 @@ fn production_manifest_rejects_qualification_envelope_fields() {
 }
 
 #[test]
+fn production_config_versions_are_mutually_exclusive_before_either_manifest_is_read() {
+    let output = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"))
+        .env_clear()
+        .env("FE2O3_TARGET", "gfx942")
+        .env(
+            "FE2O3_PRODUCTION_BUILD_CONFIG_V1",
+            "/does/not/exist/production-v1.json",
+        )
+        .env(
+            "FE2O3_PRODUCTION_BUILD_CONFIG_V2",
+            "/does/not/exist/production-v2.json",
+        )
+        .arg("build")
+        .output()
+        .expect("run cargo-fe2o3");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("FE2O3_PRODUCTION_BUILD_CONFIG_V1")
+            && stderr.contains("FE2O3_PRODUCTION_BUILD_CONFIG_V2")
+            && stderr.contains("mutually exclusive"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("does/not/exist"), "{stderr}");
+}
+
+#[test]
+fn production_v2_manifest_requires_the_exact_source_isa_observation() {
+    let scratch = ScratchDirectory::new();
+    let manifest = scratch.0.join("build-config-v2.json");
+    fs::write(
+        &manifest,
+        br#"{"candidate_output_max_bytes":1,"format":"fe2o3-production-build-config-v2","limits":{},"link_options":[],"observation":{"kind":"source-isa-summary-v2"},"providers":[],"units":[],"worker":{}}"#,
+    )
+    .expect("write manifest");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"))
+        .env_clear()
+        .env("FE2O3_TARGET", "gfx942")
+        .env("FE2O3_PRODUCTION_BUILD_CONFIG_V2", &manifest)
+        .arg("build")
+        .output()
+        .expect("run cargo-fe2o3");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("observation.kind must be exactly \"source-isa-summary-v1\""),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("worker.path"), "{stderr}");
+}
+
+#[test]
 fn production_rejects_worker_v2_namespace_before_reading_its_manifest() {
     let output = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"))
         .env_clear()
@@ -450,7 +508,8 @@ fn production_rejects_worker_v2_namespace_before_reading_its_manifest() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("FE2O3_WORKER_V2_CONFIG_V2 is qualification-only")
-            && stderr.contains("FE2O3_PRODUCTION_BUILD_CONFIG_V1"),
+            && stderr.contains("FE2O3_PRODUCTION_BUILD_CONFIG_V1")
+            && stderr.contains("FE2O3_PRODUCTION_BUILD_CONFIG_V2"),
         "{stderr}"
     );
     assert!(!stderr.contains("does/not/exist"), "{stderr}");

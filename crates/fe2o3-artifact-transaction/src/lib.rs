@@ -189,8 +189,9 @@ pub use managed_invocation_capability::{
     BROKERED_CODEGEN_BACKEND_CHILD_FD_V1, BROKERED_CODEGEN_BACKEND_PATH_V1,
     BROKERED_INVOCATION_ADMITTED_V1, BROKERED_INVOCATION_AUTHORITY_CHILD_FD_V1,
     BROKERED_INVOCATION_PREPARED_V1, BROKERED_INVOCATION_REQUEST_BYTES_V1,
-    BrokeredInvocationCapabilityClaimV1, BrokeredInvocationCapabilityCodecErrorV1,
-    BrokeredInvocationCapabilityRequestV1,
+    BROKERED_INVOCATION_REQUEST_BYTES_V2, BrokeredInvocationCapabilityClaimV1,
+    BrokeredInvocationCapabilityCodecErrorV1, BrokeredInvocationCapabilityCodecErrorV2,
+    BrokeredInvocationCapabilityRequestV1, BrokeredInvocationCapabilityRequestV2,
 };
 pub use retained_durable_directory::{
     NoRetainedDurableDirectoryHooksV1, RetainedDurableArtifactBoundaryV1,

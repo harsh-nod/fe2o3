@@ -4,6 +4,7 @@
 //! qualification manifests are rejected before the production manifest is read.
 
 use std::error::Error;
+use std::ffi::OsStr;
 use std::fmt;
 use std::fs::OpenOptions;
 use std::io::Read;
@@ -30,16 +31,25 @@ pub(crate) const QUALIFICATION_ORACLE_ENV: &str = "FE2O3_QUALIFICATION_ORACLE_V1
 const OBSOLETE_CODEGEN_PIPELINE_ENV: &str = "FE2O3_CODEGEN_PIPELINE";
 pub(crate) const PRODUCTION_BUILD_CONFIG_ENV: &str = "FE2O3_PRODUCTION_BUILD_CONFIG_V1";
 pub(crate) const PRODUCTION_BUILD_EXPECTED_ID_ENV: &str = "FE2O3_PRODUCTION_BUILD_EXPECTED_ID_V1";
+pub(crate) const PRODUCTION_BUILD_CONFIG_V2_ENV: &str = "FE2O3_PRODUCTION_BUILD_CONFIG_V2";
+pub(crate) const PRODUCTION_BUILD_EXPECTED_ID_V2_ENV: &str =
+    "FE2O3_PRODUCTION_BUILD_EXPECTED_ID_V2";
 pub(crate) const WORKER_V2_CONFIG_ENV: &str = "FE2O3_WORKER_V2_CONFIG_V2";
 pub(crate) const WORKER_V2_EXPECTED_ID_ENV: &str = "FE2O3_WORKER_V2_EXPECTED_ID_V1";
 pub(crate) const WORKER_V2_SOURCE_DEBUG_PROFILE_ENV: &str =
     "FE2O3_WORKER_V2_SOURCE_DEBUG_PROFILE_V1";
 const PRODUCTION_CONFIG_PROFILE_ID_V1: &str = "production-v1";
-const PRODUCTION_BUILD_CONFIG_FORMAT: &str = "fe2o3-production-build-config-v1";
+const PRODUCTION_CONFIG_PROFILE_ID_V2: &str = "production-v2";
+const PRODUCTION_CONFIG_IDENTITY_DOMAIN_V1: &[u8] = b"fe2o3-build-config-transitive-v1";
+const PRODUCTION_CONFIG_IDENTITY_DOMAIN_V2: &[u8] = b"fe2o3-build-config-transitive-v2";
+const PRODUCTION_BUILD_CONFIG_FORMAT_V1: &str = "fe2o3-production-build-config-v1";
+const PRODUCTION_BUILD_CONFIG_FORMAT_V2: &str = "fe2o3-production-build-config-v2";
+const SOURCE_ISA_OBSERVATION_KIND_V1: &str = "source-isa-summary-v1";
+const SOURCE_ISA_UNIT_IDENTITY_DOMAIN_V1: &[u8] = b"FE2O3/PRODUCTION-SOURCE-ISA-UNIT/V1\0";
 const MAX_CONFIG_BYTES: usize = 1024 * 1024;
 const MAX_CONFIG_PATH_BYTES: usize = 4096;
 
-const ROOT_KEYS: &[&str] = &[
+const ROOT_KEYS_V1: &[&str] = &[
     "candidate_output_max_bytes",
     "format",
     "limits",
@@ -48,6 +58,17 @@ const ROOT_KEYS: &[&str] = &[
     "units",
     "worker",
 ];
+const ROOT_KEYS_V2: &[&str] = &[
+    "candidate_output_max_bytes",
+    "format",
+    "limits",
+    "link_options",
+    "observation",
+    "providers",
+    "units",
+    "worker",
+];
+const OBSERVATION_KEYS_V1: &[&str] = &["kind"];
 const WORKER_KEYS: &[&str] = &[
     "byte_len",
     "llvm_build_identity",
@@ -79,6 +100,31 @@ impl BuildConfigIdentity {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub(crate) struct ProductionSourceIsaUnitIdentityV1([u8; 32]);
+
+impl ProductionSourceIsaUnitIdentityV1 {
+    pub(crate) const fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ProductionSourceIsaObserverPolicyV1 {
+    config_identity: BuildConfigIdentity,
+    selected_units: Vec<ProductionSourceIsaUnitIdentityV1>,
+}
+
+impl ProductionSourceIsaObserverPolicyV1 {
+    pub(crate) const fn config_identity(&self) -> BuildConfigIdentity {
+        self.config_identity
+    }
+
+    pub(crate) fn selected_units(&self) -> &[ProductionSourceIsaUnitIdentityV1] {
+        &self.selected_units
+    }
+}
+
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 struct ConfiguredUnit {
     crate_name: String,
@@ -99,6 +145,19 @@ struct PreparedLinkBuildConfig {
 /// Production-only ownership of one pinned, workload-neutral link recipe.
 pub(crate) struct PreparedProductionBuildConfig {
     link: PreparedLinkBuildConfig,
+    version: ProductionBuildConfigVersion,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ProductionBuildConfigVersion {
+    V1,
+    V2SourceIsaSummaryV1,
+}
+
+impl ProductionBuildConfigVersion {
+    const fn source_isa_summary_enabled(self) -> bool {
+        matches!(self, Self::V2SourceIsaSummaryV1)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -120,16 +179,31 @@ impl PreparedProductionBuildConfig {
         }
         if std::env::var_os(WORKER_V2_CONFIG_ENV).is_some() {
             return Err(BuildConfigError::Invalid(format!(
-                "{WORKER_V2_CONFIG_ENV} is qualification-only; production requires {PRODUCTION_BUILD_CONFIG_ENV}"
+                "{WORKER_V2_CONFIG_ENV} is qualification-only; production requires {PRODUCTION_BUILD_CONFIG_ENV} or {PRODUCTION_BUILD_CONFIG_V2_ENV}"
             )));
         }
-        let Some(path) = std::env::var_os(PRODUCTION_BUILD_CONFIG_ENV) else {
-            return Err(BuildConfigError::MissingConfiguration);
+        let v1 = std::env::var_os(PRODUCTION_BUILD_CONFIG_ENV);
+        let v2 = std::env::var_os(PRODUCTION_BUILD_CONFIG_V2_ENV);
+        let (path, version) = match (v1, v2) {
+            (Some(_), Some(_)) => {
+                return Err(BuildConfigError::Invalid(format!(
+                    "{PRODUCTION_BUILD_CONFIG_ENV} and {PRODUCTION_BUILD_CONFIG_V2_ENV} are mutually exclusive"
+                )));
+            }
+            (Some(path), None) => (path, ProductionBuildConfigVersion::V1),
+            (None, Some(path)) => (path, ProductionBuildConfigVersion::V2SourceIsaSummaryV1),
+            (None, None) => return Err(BuildConfigError::MissingConfiguration),
         };
         if path.is_empty() {
             return Err(BuildConfigError::MissingConfiguration);
         }
-        Self::from_manifest(Path::new(&path)).map(Some)
+        match version {
+            ProductionBuildConfigVersion::V1 => Self::from_manifest(Path::new(&path)),
+            ProductionBuildConfigVersion::V2SourceIsaSummaryV1 => {
+                Self::from_manifest_v2(Path::new(&path))
+            }
+        }
+        .map(Some)
     }
 
     pub(crate) fn from_environment_for_cargo_setup() -> Result<Option<Self>, BuildConfigError> {
@@ -137,11 +211,73 @@ impl PreparedProductionBuildConfig {
     }
 
     fn from_manifest(path: &Path) -> Result<Self, BuildConfigError> {
-        prepare_production_manifest(path)
+        prepare_production_manifest_v1(path)
+    }
+
+    fn from_manifest_v2(path: &Path) -> Result<Self, BuildConfigError> {
+        prepare_production_manifest_v2(path)
     }
 
     pub(crate) const fn identity(&self) -> BuildConfigIdentity {
         self.link.identity
+    }
+
+    pub(crate) const fn config_environment_name(&self) -> &'static str {
+        match self.version {
+            ProductionBuildConfigVersion::V1 => PRODUCTION_BUILD_CONFIG_ENV,
+            ProductionBuildConfigVersion::V2SourceIsaSummaryV1 => PRODUCTION_BUILD_CONFIG_V2_ENV,
+        }
+    }
+
+    pub(crate) const fn expected_identity_environment_name(&self) -> &'static str {
+        match self.version {
+            ProductionBuildConfigVersion::V1 => PRODUCTION_BUILD_EXPECTED_ID_ENV,
+            ProductionBuildConfigVersion::V2SourceIsaSummaryV1 => {
+                PRODUCTION_BUILD_EXPECTED_ID_V2_ENV
+            }
+        }
+    }
+
+    fn validate_expected_identity_values(
+        &self,
+        v1: Option<&OsStr>,
+        v2: Option<&OsStr>,
+    ) -> Result<(), BuildConfigError> {
+        let expected = match (self.version, v1, v2) {
+            (ProductionBuildConfigVersion::V1, Some(expected), None)
+            | (ProductionBuildConfigVersion::V2SourceIsaSummaryV1, None, Some(expected)) => {
+                expected
+            }
+            (ProductionBuildConfigVersion::V1, None, None) => {
+                return Err(BuildConfigError::Invalid(format!(
+                    "production build configuration requires {PRODUCTION_BUILD_EXPECTED_ID_ENV}"
+                )));
+            }
+            (ProductionBuildConfigVersion::V2SourceIsaSummaryV1, None, None) => {
+                return Err(BuildConfigError::Invalid(format!(
+                    "production build configuration requires {PRODUCTION_BUILD_EXPECTED_ID_V2_ENV}"
+                )));
+            }
+            _ => {
+                return Err(BuildConfigError::Invalid(
+                    "production build configuration and expected-identity namespaces must match exactly"
+                        .to_owned(),
+                ));
+            }
+        };
+        let expected = expected.to_str().ok_or_else(|| {
+            BuildConfigError::Invalid(format!(
+                "{} must be lowercase hexadecimal",
+                self.expected_identity_environment_name()
+            ))
+        })?;
+        if self.identity().to_hex() != expected {
+            return Err(BuildConfigError::Invalid(
+                "production build configuration inputs changed after Cargo generation preparation"
+                    .to_owned(),
+            ));
+        }
+        Ok(())
     }
 
     pub(crate) fn compile_environment_profile(
@@ -178,9 +314,78 @@ impl PreparedProductionBuildConfig {
             })
             .is_ok()
     }
+
+    pub(crate) fn source_isa_unit_identity(
+        &self,
+        crate_name: &str,
+        source: &Path,
+        working_directory: &Path,
+    ) -> Option<ProductionSourceIsaUnitIdentityV1> {
+        (self.version.source_isa_summary_enabled()
+            && self.selects(crate_name, source, working_directory))
+        .then(|| {
+            source_isa_unit_identity(
+                self.identity(),
+                crate_name,
+                source.to_str().expect("selected source path is UTF-8"),
+                working_directory
+                    .to_str()
+                    .expect("selected working directory is UTF-8"),
+            )
+        })
+    }
+
+    pub(crate) fn source_isa_observer_policy(
+        &self,
+    ) -> Result<Option<ProductionSourceIsaObserverPolicyV1>, BuildConfigError> {
+        if !self.version.source_isa_summary_enabled() {
+            return Ok(None);
+        }
+        let mut selected_units = Vec::new();
+        selected_units
+            .try_reserve_exact(self.link.units.len())
+            .map_err(|_| {
+                BuildConfigError::Invalid(
+                    "cannot allocate the bounded source/ISA observer unit policy".to_owned(),
+                )
+            })?;
+        selected_units.extend(self.link.units.iter().map(|unit| {
+            source_isa_unit_identity(
+                self.identity(),
+                &unit.crate_name,
+                &unit.source,
+                &unit.working_directory,
+            )
+        }));
+        selected_units.sort_unstable();
+        if selected_units.windows(2).any(|pair| pair[0] == pair[1]) {
+            return Err(BuildConfigError::Invalid(
+                "source/ISA observer unit identity collision".to_owned(),
+            ));
+        }
+        Ok(Some(ProductionSourceIsaObserverPolicyV1 {
+            config_identity: self.identity(),
+            selected_units,
+        }))
+    }
 }
 
-fn prepare_production_manifest(
+pub(crate) fn validate_expected_build_config_identity_values(
+    config: Option<&PreparedProductionBuildConfig>,
+    v1: Option<&OsStr>,
+    v2: Option<&OsStr>,
+) -> Result<(), BuildConfigError> {
+    match config {
+        None if v1.is_none() && v2.is_none() => Ok(()),
+        None => Err(BuildConfigError::Invalid(
+            "production build configuration identity is present without a production build configuration"
+                .to_owned(),
+        )),
+        Some(config) => config.validate_expected_identity_values(v1, v2),
+    }
+}
+
+fn prepare_production_manifest_v1(
     path: &Path,
 ) -> Result<PreparedProductionBuildConfig, BuildConfigError> {
     require_absolute_path(path, "configuration")?;
@@ -197,9 +402,9 @@ fn prepare_production_manifest(
     }
 
     let root = exact_production_root_object(&value)?;
-    if required_string(root, "format", "configuration")? != PRODUCTION_BUILD_CONFIG_FORMAT {
+    if required_string(root, "format", "configuration")? != PRODUCTION_BUILD_CONFIG_FORMAT_V1 {
         return Err(BuildConfigError::Invalid(format!(
-            "configuration format must be exactly {PRODUCTION_BUILD_CONFIG_FORMAT:?}"
+            "configuration format must be exactly {PRODUCTION_BUILD_CONFIG_FORMAT_V1:?}"
         )));
     }
     let worker = prepare_worker(required_value(root, "worker", "configuration")?)?;
@@ -225,6 +430,56 @@ fn prepare_production_manifest(
             limits,
             units,
         },
+        version: ProductionBuildConfigVersion::V1,
+    })
+}
+
+fn prepare_production_manifest_v2(
+    path: &Path,
+) -> Result<PreparedProductionBuildConfig, BuildConfigError> {
+    require_absolute_path(path, "configuration")?;
+    let bytes = read_bounded(path, MAX_CONFIG_BYTES, "configuration")?;
+    let value: Value = serde_json::from_slice(&bytes)
+        .map_err(|error| BuildConfigError::Json(error.to_string()))?;
+    let canonical =
+        serde_json::to_vec(&value).map_err(|error| BuildConfigError::Json(error.to_string()))?;
+    if canonical != bytes {
+        return Err(BuildConfigError::Invalid(
+            "configuration must be compact canonical JSON with lexicographically ordered object keys"
+                .to_owned(),
+        ));
+    }
+
+    let root = exact_production_v2_root_object(&value)?;
+    if required_string(root, "format", "configuration")? != PRODUCTION_BUILD_CONFIG_FORMAT_V2 {
+        return Err(BuildConfigError::Invalid(format!(
+            "configuration format must be exactly {PRODUCTION_BUILD_CONFIG_FORMAT_V2:?}"
+        )));
+    }
+    parse_source_isa_observation(required_value(root, "observation", "configuration")?)?;
+    let worker = prepare_worker(required_value(root, "worker", "configuration")?)?;
+    let providers = prepare_providers(required_value(root, "providers", "configuration")?)?;
+    let link_options = parse_link_options(required_value(root, "link_options", "configuration")?)?;
+    let candidate_output = WorkerOutputConstraintsV1::new(required_u64(
+        root,
+        "candidate_output_max_bytes",
+        "configuration",
+    )?)
+    .map_err(BuildConfigError::Protocol)?;
+    let limits = parse_limits(required_value(root, "limits", "configuration")?)?;
+    let units = parse_units(required_value(root, "units", "configuration")?)?;
+    let identity = transitive_identity_v2(&bytes, &worker, &providers);
+    Ok(PreparedProductionBuildConfig {
+        link: PreparedLinkBuildConfig {
+            identity,
+            worker,
+            providers,
+            link_options,
+            candidate_output,
+            limits,
+            units,
+        },
+        version: ProductionBuildConfigVersion::V2SourceIsaSummaryV1,
     })
 }
 
@@ -275,11 +530,50 @@ fn transitive_identity(
     worker: &PinnedWorkerV1,
     providers: &[WorkerInputV1],
 ) -> BuildConfigIdentity {
+    transitive_identity_with_domain(
+        PRODUCTION_CONFIG_IDENTITY_DOMAIN_V1,
+        profile,
+        manifest,
+        worker,
+        providers,
+    )
+}
+
+fn transitive_identity_v2(
+    manifest: &[u8],
+    worker: &PinnedWorkerV1,
+    providers: &[WorkerInputV1],
+) -> BuildConfigIdentity {
+    transitive_identity_with_domain(
+        PRODUCTION_CONFIG_IDENTITY_DOMAIN_V2,
+        PRODUCTION_CONFIG_PROFILE_ID_V2,
+        manifest,
+        worker,
+        providers,
+    )
+}
+
+fn transitive_identity_with_domain(
+    domain: &[u8],
+    profile: &str,
+    manifest: &[u8],
+    worker: &PinnedWorkerV1,
+    providers: &[WorkerInputV1],
+) -> BuildConfigIdentity {
+    transitive_identity_from_measurement(domain, profile, manifest, worker.measurement(), providers)
+}
+
+fn transitive_identity_from_measurement(
+    domain: &[u8],
+    profile: &str,
+    manifest: &[u8],
+    measurement: &WorkerMeasurementV1,
+    providers: &[WorkerInputV1],
+) -> BuildConfigIdentity {
     let mut hash = Sha256::new();
-    update_identity(&mut hash, b"fe2o3-build-config-transitive-v1");
+    update_identity(&mut hash, domain);
     update_identity(&mut hash, profile.as_bytes());
     update_identity(&mut hash, manifest);
-    let measurement = worker.measurement();
     update_identity(&mut hash, measurement.executable().sha256());
     update_identity(
         &mut hash,
@@ -295,6 +589,21 @@ fn transitive_identity(
         update_identity(&mut hash, provider.bytes());
     }
     BuildConfigIdentity(hash.finalize().into())
+}
+
+fn source_isa_unit_identity(
+    config_identity: BuildConfigIdentity,
+    crate_name: &str,
+    source: &str,
+    working_directory: &str,
+) -> ProductionSourceIsaUnitIdentityV1 {
+    let mut hash = Sha256::new();
+    update_identity(&mut hash, SOURCE_ISA_UNIT_IDENTITY_DOMAIN_V1);
+    update_identity(&mut hash, config_identity.as_bytes());
+    update_identity(&mut hash, crate_name.as_bytes());
+    update_identity(&mut hash, source.as_bytes());
+    update_identity(&mut hash, working_directory.as_bytes());
+    ProductionSourceIsaUnitIdentityV1(hash.finalize().into())
 }
 
 fn update_identity(hash: &mut Sha256, bytes: &[u8]) {
@@ -333,7 +642,7 @@ impl fmt::Display for BuildConfigError {
             Self::MissingConfiguration => {
                 write!(
                     formatter,
-                    "production requires {PRODUCTION_BUILD_CONFIG_ENV}"
+                    "production requires {PRODUCTION_BUILD_CONFIG_ENV} or {PRODUCTION_BUILD_CONFIG_V2_ENV}"
                 )
             }
             Self::Io { kind, path, error } => {
@@ -545,12 +854,36 @@ fn exact_production_root_object(value: &Value) -> Result<&Map<String, Value>, Bu
         .as_object()
         .ok_or_else(|| BuildConfigError::Invalid("configuration must be an object".to_owned()))?;
     let keys = object.keys().map(String::as_str).collect::<Vec<_>>();
-    if keys != ROOT_KEYS {
+    if keys != ROOT_KEYS_V1 {
         return Err(BuildConfigError::Invalid(format!(
-            "production configuration must contain exactly the fields {ROOT_KEYS:?}; found {keys:?}"
+            "production configuration must contain exactly the fields {ROOT_KEYS_V1:?}; found {keys:?}"
         )));
     }
     Ok(object)
+}
+
+fn exact_production_v2_root_object(value: &Value) -> Result<&Map<String, Value>, BuildConfigError> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| BuildConfigError::Invalid("configuration must be an object".to_owned()))?;
+    let keys = object.keys().map(String::as_str).collect::<Vec<_>>();
+    if keys != ROOT_KEYS_V2 {
+        return Err(BuildConfigError::Invalid(format!(
+            "production V2 configuration must contain exactly the fields {ROOT_KEYS_V2:?}; found {keys:?}"
+        )));
+    }
+    Ok(object)
+}
+
+fn parse_source_isa_observation(value: &Value) -> Result<(), BuildConfigError> {
+    let observation = exact_object(value, OBSERVATION_KEYS_V1, "observation")?;
+    let kind = required_string(observation, "kind", "observation")?;
+    if kind != SOURCE_ISA_OBSERVATION_KIND_V1 {
+        return Err(BuildConfigError::Invalid(format!(
+            "observation.kind must be exactly {SOURCE_ISA_OBSERVATION_KIND_V1:?}"
+        )));
+    }
+    Ok(())
 }
 
 fn required_value<'a>(
@@ -703,4 +1036,346 @@ fn valid_selector_text(value: &str) -> bool {
         && value.len() <= MAX_CONFIG_PATH_BYTES
         && value.is_ascii()
         && !value.bytes().any(|byte| byte.is_ascii_control())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    use super::*;
+
+    static SCRATCH_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    struct ScratchDirectory(PathBuf);
+
+    impl ScratchDirectory {
+        fn new() -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "cargo-fe2o3-build-config-v2-{}-{}",
+                std::process::id(),
+                SCRATCH_COUNTER.fetch_add(1, Ordering::Relaxed)
+            ));
+            fs::create_dir(&path).unwrap();
+            Self(path)
+        }
+
+        fn write_manifest(&self, name: &str, value: &Value) -> PathBuf {
+            let path = self.0.join(name);
+            fs::write(&path, serde_json::to_vec(value).unwrap()).unwrap();
+            path
+        }
+    }
+
+    impl Drop for ScratchDirectory {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn executable_measurement() -> (PathBuf, [u8; 32], u64) {
+        let path = std::env::current_exe().unwrap();
+        let bytes = fs::read(&path).unwrap();
+        let byte_len = bytes.len() as u64;
+        let sha256 = Sha256::digest(bytes).into();
+        (path, sha256, byte_len)
+    }
+
+    fn complete_manifest(scratch: &ScratchDirectory, version: u8) -> Value {
+        let (worker, sha256, byte_len) = executable_measurement();
+        let mut root = serde_json::json!({
+            "candidate_output_max_bytes": 1048576,
+            "format": if version == 1 {
+                PRODUCTION_BUILD_CONFIG_FORMAT_V1
+            } else {
+                PRODUCTION_BUILD_CONFIG_FORMAT_V2
+            },
+            "limits": {
+                "stderr_bytes": 4096,
+                "stdout_bytes": 4096,
+                "timeout_ms": 1000
+            },
+            "link_options": [
+                {"name": "code-object-version", "value": "5"},
+                {"name": "opt-level", "value": "2"},
+                {"name": "strip-debug", "value": "false"},
+                {"name": "verify-each", "value": "true"}
+            ],
+            "providers": [],
+            "units": [{
+                "crate_name": "kernel",
+                "source": "src/lib.rs",
+                "working_directory": scratch.0.to_str().unwrap()
+            }],
+            "worker": {
+                "byte_len": byte_len,
+                "llvm_build_identity": "llvm-build-v1",
+                "path": worker.to_str().unwrap(),
+                "sha256": hex(&sha256),
+                "worker_build_identity": "worker-build-v1"
+            }
+        });
+        if version == 2 {
+            root.as_object_mut().unwrap().insert(
+                "observation".to_owned(),
+                serde_json::json!({"kind": SOURCE_ISA_OBSERVATION_KIND_V1}),
+            );
+        }
+        root
+    }
+
+    #[test]
+    fn production_v1_schema_identity_and_inert_observer_behavior_are_frozen() {
+        assert_eq!(
+            PRODUCTION_BUILD_CONFIG_FORMAT_V1,
+            "fe2o3-production-build-config-v1"
+        );
+        assert_eq!(PRODUCTION_CONFIG_PROFILE_ID_V1, "production-v1");
+        assert_eq!(
+            PRODUCTION_CONFIG_IDENTITY_DOMAIN_V1,
+            b"fe2o3-build-config-transitive-v1"
+        );
+        assert_eq!(
+            ROOT_KEYS_V1,
+            [
+                "candidate_output_max_bytes",
+                "format",
+                "limits",
+                "link_options",
+                "providers",
+                "units",
+                "worker",
+            ]
+        );
+        assert!(!ProductionBuildConfigVersion::V1.source_isa_summary_enabled());
+
+        let measurement = WorkerMeasurementV1::new(
+            ContentIdentityV1::from_parts([0x11; 32], 123),
+            "worker-build-v1",
+            "llvm-build-v1",
+        )
+        .unwrap();
+        let identity = transitive_identity_from_measurement(
+            PRODUCTION_CONFIG_IDENTITY_DOMAIN_V1,
+            PRODUCTION_CONFIG_PROFILE_ID_V1,
+            br#"{"format":"frozen-v1"}"#,
+            &measurement,
+            &[],
+        );
+        assert_eq!(
+            identity.to_hex(),
+            "6a8e515a9a85bc48b67ce8cc8af892c8325aab699457ea5d1c2fea2459e8213c"
+        );
+    }
+
+    #[test]
+    fn production_v2_observation_is_exact_and_has_a_distinct_identity_domain() {
+        assert_ne!(
+            PRODUCTION_CONFIG_IDENTITY_DOMAIN_V1,
+            PRODUCTION_CONFIG_IDENTITY_DOMAIN_V2
+        );
+        assert!(ProductionBuildConfigVersion::V2SourceIsaSummaryV1.source_isa_summary_enabled());
+        assert!(
+            parse_source_isa_observation(&serde_json::json!({"kind": "source-isa-summary-v1"}))
+                .is_ok()
+        );
+        for rejected in [
+            serde_json::json!({"kind": "source-isa-summary-v2"}),
+            serde_json::json!({"kind": "source-isa-summary-v1", "output": "stderr"}),
+            serde_json::json!({}),
+        ] {
+            assert!(parse_source_isa_observation(&rejected).is_err());
+        }
+    }
+
+    #[test]
+    fn complete_v2_manifest_binds_identity_units_and_observer_policy() {
+        let scratch = ScratchDirectory::new();
+        let path = scratch.write_manifest("v2.json", &complete_manifest(&scratch, 2));
+        let config = prepare_production_manifest_v2(&path).unwrap();
+        assert_eq!(
+            config.config_environment_name(),
+            PRODUCTION_BUILD_CONFIG_V2_ENV
+        );
+        assert_eq!(
+            config.expected_identity_environment_name(),
+            PRODUCTION_BUILD_EXPECTED_ID_V2_ENV
+        );
+
+        let source = Path::new("src/lib.rs");
+        let expected = config
+            .source_isa_unit_identity("kernel", source, &scratch.0)
+            .unwrap();
+        let policy = config.source_isa_observer_policy().unwrap().unwrap();
+        assert_eq!(policy.config_identity(), config.identity());
+        assert_eq!(policy.selected_units(), &[expected]);
+        assert_eq!(
+            expected,
+            source_isa_unit_identity(
+                config.identity(),
+                "kernel",
+                "src/lib.rs",
+                scratch.0.to_str().unwrap()
+            )
+        );
+        assert_ne!(
+            expected,
+            source_isa_unit_identity(
+                config.identity(),
+                "kernel-mutated",
+                "src/lib.rs",
+                scratch.0.to_str().unwrap()
+            )
+        );
+        assert_ne!(
+            expected,
+            source_isa_unit_identity(
+                config.identity(),
+                "kernel",
+                "src/other.rs",
+                scratch.0.to_str().unwrap()
+            )
+        );
+        assert_ne!(
+            expected,
+            source_isa_unit_identity(config.identity(), "kernel", "src/lib.rs", "/other")
+        );
+        assert!(
+            config
+                .source_isa_unit_identity("kernel-mutated", source, &scratch.0)
+                .is_none()
+        );
+        assert!(
+            config
+                .source_isa_unit_identity("kernel", Path::new("src/other.rs"), &scratch.0)
+                .is_none()
+        );
+        assert!(
+            config
+                .source_isa_unit_identity("kernel", source, Path::new("/other"))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn v1_manifest_retains_no_observer_policy() {
+        let scratch = ScratchDirectory::new();
+        let path = scratch.write_manifest("v1.json", &complete_manifest(&scratch, 1));
+        let config = prepare_production_manifest_v1(&path).unwrap();
+        assert_eq!(
+            config.config_environment_name(),
+            PRODUCTION_BUILD_CONFIG_ENV
+        );
+        assert!(config.source_isa_observer_policy().unwrap().is_none());
+        assert!(
+            config
+                .source_isa_unit_identity("kernel", Path::new("src/lib.rs"), &scratch.0)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn expected_identity_namespaces_reject_orphans_wrong_versions_and_dual_values() {
+        let scratch = ScratchDirectory::new();
+        let v2_path = scratch.write_manifest("v2.json", &complete_manifest(&scratch, 2));
+        let v1_path = scratch.write_manifest("v1.json", &complete_manifest(&scratch, 1));
+        let v2 = prepare_production_manifest_v2(&v2_path).unwrap();
+        let v1 = prepare_production_manifest_v1(&v1_path).unwrap();
+        let v2_identity = v2.identity().to_hex();
+        let v1_identity = v1.identity().to_hex();
+        assert_ne!(v1_identity, v2_identity);
+        let wrong = OsStr::new("0000000000000000000000000000000000000000000000000000000000000000");
+
+        assert!(
+            validate_expected_build_config_identity_values(
+                Some(&v2),
+                None,
+                Some(OsStr::new(&v2_identity))
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_expected_build_config_identity_values(
+                Some(&v1),
+                Some(OsStr::new(&v1_identity)),
+                None
+            )
+            .is_ok()
+        );
+        for result in [
+            validate_expected_build_config_identity_values(Some(&v2), None, None),
+            validate_expected_build_config_identity_values(Some(&v2), Some(wrong), None),
+            validate_expected_build_config_identity_values(Some(&v2), None, Some(wrong)),
+            validate_expected_build_config_identity_values(
+                Some(&v2),
+                Some(OsStr::new(&v1_identity)),
+                Some(OsStr::new(&v2_identity)),
+            ),
+            validate_expected_build_config_identity_values(Some(&v1), None, None),
+            validate_expected_build_config_identity_values(Some(&v1), None, Some(wrong)),
+            validate_expected_build_config_identity_values(Some(&v1), Some(wrong), None),
+            validate_expected_build_config_identity_values(
+                Some(&v1),
+                Some(OsStr::new(&v1_identity)),
+                Some(OsStr::new(&v2_identity)),
+            ),
+            validate_expected_build_config_identity_values(None, Some(wrong), None),
+            validate_expected_build_config_identity_values(None, None, Some(wrong)),
+            validate_expected_build_config_identity_values(None, Some(wrong), Some(wrong)),
+        ] {
+            assert!(result.is_err());
+        }
+        assert!(validate_expected_build_config_identity_values(None, None, None).is_ok());
+    }
+
+    #[test]
+    fn v2_hostile_schema_matrix_is_rejected_before_worker_admission() {
+        let scratch = ScratchDirectory::new();
+        let valid = complete_manifest(&scratch, 2);
+        let mut hostile = Vec::new();
+
+        let mut missing_observation = valid.clone();
+        missing_observation
+            .as_object_mut()
+            .unwrap()
+            .remove("observation");
+        hostile.push(missing_observation);
+
+        let mut extra_root = valid.clone();
+        extra_root
+            .as_object_mut()
+            .unwrap()
+            .insert("output".to_owned(), Value::Null);
+        hostile.push(extra_root);
+
+        for observation in [
+            Value::Null,
+            serde_json::json!({}),
+            serde_json::json!({"kind": "source-isa-summary-v2"}),
+            serde_json::json!({"kind": SOURCE_ISA_OBSERVATION_KIND_V1, "output": "stderr"}),
+        ] {
+            let mut value = valid.clone();
+            value
+                .as_object_mut()
+                .unwrap()
+                .insert("observation".to_owned(), observation);
+            hostile.push(value);
+        }
+
+        for (index, value) in hostile.iter().enumerate() {
+            let path = scratch.write_manifest(&format!("hostile-{index}.json"), value);
+            assert!(
+                prepare_production_manifest_v2(&path).is_err(),
+                "case {index}"
+            );
+        }
+
+        let mut v1_with_observation = complete_manifest(&scratch, 1);
+        v1_with_observation.as_object_mut().unwrap().insert(
+            "observation".to_owned(),
+            serde_json::json!({"kind": SOURCE_ISA_OBSERVATION_KIND_V1}),
+        );
+        let path = scratch.write_manifest("v1-with-observation.json", &v1_with_observation);
+        assert!(prepare_production_manifest_v1(&path).is_err());
+    }
 }

@@ -8,6 +8,9 @@ const RELEASE_TAG_V1: u8 = 0;
 const PREPARE_TAG_V1: u8 = 1;
 const CONSUME_TAG_V1: u8 = 2;
 const HEADER_BYTES_V1: usize = REQUEST_MAGIC_V1.len() + 1 + 7;
+const REQUEST_MAGIC_V2: &[u8; 8] = b"F2BRKIV2";
+const RELEASE_WITH_SOURCE_ISA_OBSERVER_TAG_V2: u8 = 3;
+const HEADER_BYTES_V2: usize = REQUEST_MAGIC_V2.len() + 1 + 7;
 /// Reserved child descriptor carrying the live brokered invocation authority.
 pub const BROKERED_INVOCATION_AUTHORITY_CHILD_FD_V1: i32 = 195;
 /// Reserved child descriptor carrying the brokered artifact directory.
@@ -20,6 +23,8 @@ pub const BROKERED_ARTIFACT_DIRECTORY_PATH_V1: &str = "/proc/self/fd/197";
 pub const BROKERED_CODEGEN_BACKEND_PATH_V1: &str = "/proc/./self/fd/198";
 /// Exact byte length of one brokered invocation-capability request.
 pub const BROKERED_INVOCATION_REQUEST_BYTES_V1: usize = HEADER_BYTES_V1 + 8 + 16 + 32 + 32;
+/// Exact byte length of the opt-in source/ISA observer release request.
+pub const BROKERED_INVOCATION_REQUEST_BYTES_V2: usize = HEADER_BYTES_V2 + 32 + 32;
 /// Exact response acknowledging that the authenticated wrapper prepared a claim.
 pub const BROKERED_INVOCATION_PREPARED_V1: &[u8; 16] = b"F2IV-PREPARED-V1";
 /// Exact response consuming the wrapper-prepared claim in its rustc child.
@@ -168,6 +173,105 @@ impl fmt::Display for BrokeredInvocationCapabilityCodecErrorV1 {
 
 impl Error for BrokeredInvocationCapabilityCodecErrorV1 {}
 
+/// One fixed-width opt-in request on the already authenticated broker connection.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BrokeredInvocationCapabilityRequestV2 {
+    /// Releases invocation authority and turns the same stream into a one-shot observation sink.
+    ReleaseWithSourceIsaObserver {
+        /// Exact V2 production configuration identity authenticated by the broker route.
+        config_identity: [u8; 32],
+        /// Exact selected compilation-unit identity derived from that configuration.
+        unit_identity: [u8; 32],
+    },
+}
+
+impl BrokeredInvocationCapabilityRequestV2 {
+    /// Constructs the observer request only from nonzero exact identities.
+    pub fn release_with_source_isa_observer(
+        config_identity: [u8; 32],
+        unit_identity: [u8; 32],
+    ) -> Result<Self, BrokeredInvocationCapabilityCodecErrorV2> {
+        if config_identity == [0; 32] || unit_identity == [0; 32] {
+            return Err(BrokeredInvocationCapabilityCodecErrorV2::InvalidClaim);
+        }
+        Ok(Self::ReleaseWithSourceIsaObserver {
+            config_identity,
+            unit_identity,
+        })
+    }
+
+    /// Encodes one canonical fixed-width V2 request.
+    pub fn encode(self) -> [u8; BROKERED_INVOCATION_REQUEST_BYTES_V2] {
+        let mut encoded = [0_u8; BROKERED_INVOCATION_REQUEST_BYTES_V2];
+        encoded[..REQUEST_MAGIC_V2.len()].copy_from_slice(REQUEST_MAGIC_V2);
+        encoded[REQUEST_MAGIC_V2.len()] = RELEASE_WITH_SOURCE_ISA_OBSERVER_TAG_V2;
+        let Self::ReleaseWithSourceIsaObserver {
+            config_identity,
+            unit_identity,
+        } = self;
+        encoded[HEADER_BYTES_V2..HEADER_BYTES_V2 + 32].copy_from_slice(&config_identity);
+        encoded[HEADER_BYTES_V2 + 32..].copy_from_slice(&unit_identity);
+        encoded
+    }
+
+    /// Decodes one canonical fixed-width V2 request.
+    pub fn decode(encoded: &[u8]) -> Result<Self, BrokeredInvocationCapabilityCodecErrorV2> {
+        if encoded.len() != BROKERED_INVOCATION_REQUEST_BYTES_V2
+            || &encoded[..REQUEST_MAGIC_V2.len()] != REQUEST_MAGIC_V2
+            || encoded[REQUEST_MAGIC_V2.len()] != RELEASE_WITH_SOURCE_ISA_OBSERVER_TAG_V2
+            || encoded[REQUEST_MAGIC_V2.len() + 1..HEADER_BYTES_V2]
+                .iter()
+                .any(|byte| *byte != 0)
+        {
+            return Err(BrokeredInvocationCapabilityCodecErrorV2::Malformed);
+        }
+        Self::release_with_source_isa_observer(
+            encoded[HEADER_BYTES_V2..HEADER_BYTES_V2 + 32]
+                .try_into()
+                .expect("fixed config identity field"),
+            encoded[HEADER_BYTES_V2 + 32..]
+                .try_into()
+                .expect("fixed unit identity field"),
+        )
+    }
+
+    /// Returns the exact configuration identity carried by this request.
+    pub const fn config_identity(self) -> [u8; 32] {
+        let Self::ReleaseWithSourceIsaObserver {
+            config_identity, ..
+        } = self;
+        config_identity
+    }
+
+    /// Returns the exact selected-unit identity carried by this request.
+    pub const fn unit_identity(self) -> [u8; 32] {
+        let Self::ReleaseWithSourceIsaObserver { unit_identity, .. } = self;
+        unit_identity
+    }
+}
+
+/// Canonical V2 brokered invocation request failure.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BrokeredInvocationCapabilityCodecErrorV2 {
+    /// The request has invalid framing, tags, reserved bytes, or length.
+    Malformed,
+    /// The request has a zero configuration or selected-unit identity.
+    InvalidClaim,
+}
+
+impl fmt::Display for BrokeredInvocationCapabilityCodecErrorV2 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Malformed => formatter.write_str("malformed V2 brokered invocation request"),
+            Self::InvalidClaim => {
+                formatter.write_str("invalid V2 brokered invocation observer claim")
+            }
+        }
+    }
+}
+
+impl Error for BrokeredInvocationCapabilityCodecErrorV2 {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -207,6 +311,59 @@ mod tests {
             changed[index] ^= 1;
             assert_ne!(
                 BrokeredInvocationCapabilityRequestV1::decode(&changed),
+                Ok(request),
+                "byte {index} was not bound"
+            );
+        }
+    }
+
+    #[test]
+    fn v1_wire_vectors_are_frozen_and_v2_is_a_distinct_fixed_width_request() {
+        assert_eq!(BROKERED_INVOCATION_REQUEST_BYTES_V1, 104);
+        let release = BrokeredInvocationCapabilityRequestV1::Release.encode();
+        assert_eq!(&release[..8], b"F2BRKIV1");
+        assert_eq!(release[8], RELEASE_TAG_V1);
+        assert!(release[9..].iter().all(|byte| *byte == 0));
+
+        let request = BrokeredInvocationCapabilityRequestV2::release_with_source_isa_observer(
+            [0x31; 32], [0x42; 32],
+        )
+        .unwrap();
+        let encoded = request.encode();
+        assert_eq!(BROKERED_INVOCATION_REQUEST_BYTES_V2, 80);
+        assert_eq!(&encoded[..8], b"F2BRKIV2");
+        assert_eq!(
+            BrokeredInvocationCapabilityRequestV2::decode(&encoded),
+            Ok(request)
+        );
+        assert_eq!(request.config_identity(), [0x31; 32]);
+        assert_eq!(request.unit_identity(), [0x42; 32]);
+    }
+
+    #[test]
+    fn v2_request_rejects_zero_claims_and_every_single_byte_mutation() {
+        assert!(
+            BrokeredInvocationCapabilityRequestV2::release_with_source_isa_observer(
+                [0; 32], [1; 32]
+            )
+            .is_err()
+        );
+        assert!(
+            BrokeredInvocationCapabilityRequestV2::release_with_source_isa_observer(
+                [1; 32], [0; 32]
+            )
+            .is_err()
+        );
+        let request = BrokeredInvocationCapabilityRequestV2::release_with_source_isa_observer(
+            [0x31; 32], [0x42; 32],
+        )
+        .unwrap();
+        let encoded = request.encode();
+        for index in 0..encoded.len() {
+            let mut changed = encoded;
+            changed[index] ^= 1;
+            assert_ne!(
+                BrokeredInvocationCapabilityRequestV2::decode(&changed),
                 Ok(request),
                 "byte {index} was not bound"
             );

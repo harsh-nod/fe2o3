@@ -44,8 +44,10 @@ use sha2::{Digest, Sha256};
 
 use crate::build_config::{
     BuildCompileEnvironmentProfileV1, BuildConfigError, BuildConfigIdentity,
-    PRODUCTION_BUILD_CONFIG_ENV, PRODUCTION_BUILD_EXPECTED_ID_ENV, PreparedProductionBuildConfig,
-    WORKER_V2_CONFIG_ENV, WORKER_V2_EXPECTED_ID_ENV, WORKER_V2_SOURCE_DEBUG_PROFILE_ENV,
+    PRODUCTION_BUILD_CONFIG_ENV, PRODUCTION_BUILD_CONFIG_V2_ENV, PRODUCTION_BUILD_EXPECTED_ID_ENV,
+    PRODUCTION_BUILD_EXPECTED_ID_V2_ENV, PreparedProductionBuildConfig, WORKER_V2_CONFIG_ENV,
+    WORKER_V2_EXPECTED_ID_ENV, WORKER_V2_SOURCE_DEBUG_PROFILE_ENV,
+    validate_expected_build_config_identity_values,
 };
 use crate::capability_broker;
 use crate::compiler_execution_boundary::{
@@ -381,7 +383,7 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
             } else {
                 let build_config = build_config.ok_or_else(|| {
                     BindingWrapperError::BuildConfiguration(BuildConfigError::Invalid(format!(
-                        "selected production kernel root requires {PRODUCTION_BUILD_CONFIG_ENV}"
+                        "selected production kernel root requires {PRODUCTION_BUILD_CONFIG_ENV} or {PRODUCTION_BUILD_CONFIG_V2_ENV}"
                     )))
                 })?;
                 Some(prepare_production_managed_attempt(
@@ -738,6 +740,7 @@ fn configure_build_observation_environment(
 fn reject_dynamic_loader_environment() -> Result<(), BindingWrapperError> {
     let authority_sensitive = std::env::var_os("FE2O3_QUALIFICATION_ORACLE_V1").is_some()
         || std::env::var_os(PRODUCTION_BUILD_CONFIG_ENV).is_some()
+        || std::env::var_os(PRODUCTION_BUILD_CONFIG_V2_ENV).is_some()
         || std::env::var_os(crate::build_config::WORKER_V2_CONFIG_ENV).is_some();
     let unprotected_validation = cfg!(debug_assertions)
         && std::env::var_os(crate::NON_PRODUCTION_AUTHORITY_VALIDATION_ENV).as_deref()
@@ -1282,37 +1285,10 @@ fn validate_expected_build_config_identity(
             )),
         ));
     }
-    let expected = std::env::var_os(PRODUCTION_BUILD_EXPECTED_ID_ENV);
-    match (config, expected) {
-        (None, None) => Ok(()),
-        (None, Some(_)) => Err(BindingWrapperError::BuildConfiguration(
-            BuildConfigError::Invalid(
-                "production build configuration identity is present without a production build configuration"
-                    .to_owned(),
-            ),
-        )),
-        (Some(_), None) => Err(BindingWrapperError::BuildConfiguration(
-            BuildConfigError::Invalid(format!(
-                "production build configuration requires {PRODUCTION_BUILD_EXPECTED_ID_ENV}"
-            )),
-        )),
-        (Some(config), Some(expected)) => {
-            let expected = expected.to_str().ok_or_else(|| {
-                BindingWrapperError::BuildConfiguration(BuildConfigError::Invalid(format!(
-                    "{PRODUCTION_BUILD_EXPECTED_ID_ENV} must be lowercase hexadecimal"
-                )))
-            })?;
-            if config.identity().to_hex() != expected {
-                return Err(BindingWrapperError::BuildConfiguration(
-                    BuildConfigError::Invalid(
-                        "production build configuration inputs changed after Cargo generation preparation"
-                            .to_owned(),
-                    ),
-                ));
-            }
-            Ok(())
-        }
-    }
+    let v1 = std::env::var_os(PRODUCTION_BUILD_EXPECTED_ID_ENV);
+    let v2 = std::env::var_os(PRODUCTION_BUILD_EXPECTED_ID_V2_ENV);
+    validate_expected_build_config_identity_values(config, v1.as_deref(), v2.as_deref())
+        .map_err(BindingWrapperError::BuildConfiguration)
 }
 
 struct CompilerCapabilities {
@@ -1525,7 +1501,9 @@ fn scope_host_dependency_environment(command: &mut Command) {
         crate::EXPECTED_COMPILER_CLOSURE_SHA256_ENV,
         crate::NON_PRODUCTION_AUTHORITY_VALIDATION_ENV,
         PRODUCTION_BUILD_CONFIG_ENV,
+        PRODUCTION_BUILD_CONFIG_V2_ENV,
         PRODUCTION_BUILD_EXPECTED_ID_ENV,
+        PRODUCTION_BUILD_EXPECTED_ID_V2_ENV,
         WORKER_V2_CONFIG_ENV,
         WORKER_V2_EXPECTED_ID_ENV,
         QUALIFICATION_RELEASE_ACTION_ENV,
