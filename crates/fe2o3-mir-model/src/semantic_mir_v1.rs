@@ -5117,6 +5117,29 @@ pub enum SemanticWorkgroupPipelineEventV1 {
     Release,
 }
 
+/// Compiler-authenticated indexing contract for one store-only disjoint-slice write.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum SemanticWriteOnlyDisjointWriteKindV1 {
+    Thread {
+        disjoint: bool,
+    },
+    GridExclusive,
+    Block {
+        lanes_per_block: u64,
+        elements_per_lane: u64,
+    },
+    Tiled2d {
+        lanes_per_tile: u64,
+        tile_rows: u64,
+        tile_columns: u64,
+        elements_per_lane: u64,
+    },
+    RowStriped2d {
+        lanes_per_row: u64,
+        elements_per_lane: u64,
+    },
+}
+
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum SemanticCompilerIntrinsicOperationV1 {
     ThreadIndex(SemanticAxisV1),
@@ -5416,6 +5439,13 @@ pub enum SemanticCompilerIntrinsicOperationV1 {
         raw_index: SemanticTypeIdV1,
         index_space: SemanticDisjointIndexSpaceV1,
     },
+    /// Returns the runtime extent of a compiler-authenticated store-only slice.
+    WriteOnlyDisjointSliceLen {
+        disjoint_slice: SemanticTypeIdV1,
+        element: SemanticTypeIdV1,
+        raw_index: SemanticTypeIdV1,
+        index_space: SemanticDisjointIndexSpaceV1,
+    },
     /// Bounds-checks one witness-indexed mutable access to `element`.
     DisjointSliceGetMut {
         disjoint_slice: SemanticTypeIdV1,
@@ -5467,6 +5497,15 @@ pub enum SemanticCompilerIntrinsicOperationV1 {
         index_space: SemanticDisjointIndexSpaceV1,
         lanes_per_row: u64,
         elements_per_lane: u64,
+    },
+    /// Performs one bounds-checked store without creating a readable element reference.
+    WriteOnlyDisjointSliceWrite {
+        disjoint_slice: SemanticTypeIdV1,
+        witness: SemanticTypeIdV1,
+        element: SemanticTypeIdV1,
+        raw_index: SemanticTypeIdV1,
+        index_space: SemanticDisjointIndexSpaceV1,
+        kind: SemanticWriteOnlyDisjointWriteKindV1,
     },
     /// Effect-free compiler hint that the current control-flow path is cold.
     ColdPath,
@@ -7344,6 +7383,11 @@ fn record_intrinsic_capability_claims(
             disjoint_slice,
             index_space,
             ..
+        }
+        | SemanticCompilerIntrinsicOperationV1::WriteOnlyDisjointSliceLen {
+            disjoint_slice,
+            index_space,
+            ..
         } => claims.claim_mapping(disjoint_slice, index_space),
         SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMut {
             disjoint_slice,
@@ -7432,6 +7476,73 @@ fn record_intrinsic_capability_claims(
                 && claims.claim_mapping(disjoint_slice, expected)
                 && claims.claim_mapping(stripe_witness, expected)
         }
+        SemanticCompilerIntrinsicOperationV1::WriteOnlyDisjointSliceWrite {
+            disjoint_slice,
+            witness,
+            index_space,
+            kind,
+            ..
+        } => match kind {
+            SemanticWriteOnlyDisjointWriteKindV1::Thread { .. } => {
+                claims.claim_mapping(disjoint_slice, index_space)
+                    && claims.claim_mapping(witness, index_space)
+            }
+            SemanticWriteOnlyDisjointWriteKindV1::GridExclusive => {
+                index_space == SemanticDisjointIndexSpaceV1::GridExclusive
+                    && claims.claim_mapping(disjoint_slice, index_space)
+                    && claims.claim_grid_leader(witness)
+            }
+            SemanticWriteOnlyDisjointWriteKindV1::Block {
+                lanes_per_block,
+                elements_per_lane,
+            } => {
+                let expected = SemanticDisjointIndexSpaceV1::BlockedIndex1d {
+                    lanes_per_block,
+                    elements_per_lane,
+                };
+                index_space == expected
+                    && lanes_per_block != 0
+                    && elements_per_lane != 0
+                    && lanes_per_block.checked_mul(elements_per_lane).is_some()
+                    && claims.claim_mapping(disjoint_slice, expected)
+                    && claims.claim_mapping(witness, expected)
+            }
+            SemanticWriteOnlyDisjointWriteKindV1::Tiled2d {
+                lanes_per_tile,
+                tile_rows,
+                tile_columns,
+                elements_per_lane,
+            } => {
+                let expected = SemanticDisjointIndexSpaceV1::Tiled2dIndex1d {
+                    lanes_per_tile,
+                    tile_rows,
+                    tile_columns,
+                    elements_per_lane,
+                };
+                index_space == expected
+                    && tiled_2d_geometry_valid(
+                        lanes_per_tile,
+                        tile_rows,
+                        tile_columns,
+                        elements_per_lane,
+                    )
+                    && claims.claim_mapping(disjoint_slice, expected)
+                    && claims.claim_mapping(witness, expected)
+            }
+            SemanticWriteOnlyDisjointWriteKindV1::RowStriped2d {
+                lanes_per_row,
+                elements_per_lane,
+            } => {
+                let expected = SemanticDisjointIndexSpaceV1::RowStriped2dIndex1d {
+                    lanes_per_row,
+                    elements_per_lane,
+                };
+                index_space == expected
+                    && row_striped_2d_geometry_valid(lanes_per_row, elements_per_lane)
+                    && claims.claim_mapping(disjoint_slice, expected)
+                    && claims.claim_mapping(witness, expected)
+            }
+        },
         SemanticCompilerIntrinsicOperationV1::GridLeaderCurrent { grid_leader } => {
             claims.claim_grid_leader(grid_leader)
         }
@@ -8198,7 +8309,99 @@ fn compiler_intrinsic_signature_matches(
                 )
                 && checked_mutable_access_result_matches(request, output, element)
         }
+        SemanticCompilerIntrinsicOperationV1::WriteOnlyDisjointSliceWrite {
+            disjoint_slice,
+            witness,
+            element,
+            raw_index,
+            index_space,
+            kind,
+        } => {
+            let common = !inputs.is_empty()
+                && mutable_reference_to(request, inputs[0], disjoint_slice)
+                && exclusive_disjoint_slice_type_matches(
+                    request,
+                    disjoint_slice,
+                    element,
+                    raw_index,
+                )
+                && is_bool_type(request, output);
+            common
+                && match kind {
+                    SemanticWriteOnlyDisjointWriteKindV1::Thread { disjoint } => {
+                        inputs.len() == 3
+                            && inputs[1] == witness
+                            && inputs[2] == element
+                            && transparent_index_witness_matches(request, witness, raw_index)
+                            && (!disjoint
+                                || index_space != SemanticDisjointIndexSpaceV1::GridExclusive)
+                    }
+                    SemanticWriteOnlyDisjointWriteKindV1::GridExclusive => {
+                        inputs.len() == 4
+                            && shared_reference_to(request, inputs[1], witness)
+                            && inputs[2] == raw_index
+                            && inputs[3] == element
+                            && is_unsigned_integer_with_bits(request, raw_index, 64)
+                            && index_space == SemanticDisjointIndexSpaceV1::GridExclusive
+                    }
+                    SemanticWriteOnlyDisjointWriteKindV1::Block {
+                        lanes_per_block,
+                        elements_per_lane,
+                    } => {
+                        inputs.len() == 4
+                            && shared_reference_to(request, inputs[1], witness)
+                            && inputs[2] == raw_index
+                            && inputs[3] == element
+                            && disjoint_block_witness_matches(request, witness, raw_index)
+                            && index_space
+                                == SemanticDisjointIndexSpaceV1::BlockedIndex1d {
+                                    lanes_per_block,
+                                    elements_per_lane,
+                                }
+                    }
+                    SemanticWriteOnlyDisjointWriteKindV1::Tiled2d {
+                        lanes_per_tile,
+                        tile_rows,
+                        tile_columns,
+                        elements_per_lane,
+                    } => {
+                        inputs.len() == 7
+                            && shared_reference_to(request, inputs[1], witness)
+                            && inputs[2..6].iter().all(|input| *input == raw_index)
+                            && inputs[6] == element
+                            && transparent_index_witness_matches(request, witness, raw_index)
+                            && index_space
+                                == SemanticDisjointIndexSpaceV1::Tiled2dIndex1d {
+                                    lanes_per_tile,
+                                    tile_rows,
+                                    tile_columns,
+                                    elements_per_lane,
+                                }
+                    }
+                    SemanticWriteOnlyDisjointWriteKindV1::RowStriped2d {
+                        lanes_per_row,
+                        elements_per_lane,
+                    } => {
+                        inputs.len() == 7
+                            && shared_reference_to(request, inputs[1], witness)
+                            && inputs[2..6].iter().all(|input| *input == raw_index)
+                            && inputs[6] == element
+                            && transparent_index_witness_matches(request, witness, raw_index)
+                            && index_space
+                                == SemanticDisjointIndexSpaceV1::RowStriped2dIndex1d {
+                                    lanes_per_row,
+                                    elements_per_lane,
+                                }
+                    }
+                }
+        }
         SemanticCompilerIntrinsicOperationV1::DisjointSliceLen {
+            disjoint_slice,
+            element,
+            raw_index,
+            ..
+        }
+        | SemanticCompilerIntrinsicOperationV1::WriteOnlyDisjointSliceLen {
             disjoint_slice,
             element,
             raw_index,
@@ -14701,6 +14904,18 @@ fn enqueue_compiler_intrinsic_type_references(
             pending.push_back(index_witness);
             pending.push_back(raw_index);
         }
+        SemanticCompilerIntrinsicOperationV1::WriteOnlyDisjointSliceWrite {
+            disjoint_slice,
+            witness,
+            element,
+            raw_index,
+            ..
+        } => {
+            pending.push_back(disjoint_slice);
+            pending.push_back(witness);
+            pending.push_back(element);
+            pending.push_back(raw_index);
+        }
         SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedRowStriped2d {
             input_witness,
             output_stripe,
@@ -14773,6 +14988,12 @@ fn enqueue_compiler_intrinsic_type_references(
             pending.push_back(raw_index);
         }
         SemanticCompilerIntrinsicOperationV1::DisjointSliceLen {
+            disjoint_slice,
+            element,
+            raw_index,
+            ..
+        }
+        | SemanticCompilerIntrinsicOperationV1::WriteOnlyDisjointSliceLen {
             disjoint_slice,
             element,
             raw_index,
@@ -15295,6 +15516,19 @@ fn minimum_wire_version(request: &InertSemanticMirRequestV1) -> SemanticMirWireV
     let uses_pipeline = uses_workgroup_pipeline(request);
     let uses_bf16 = uses_bf16_conversion(request);
     let mut required = SemanticMirWireVersionV1::V2;
+
+    if request.callables.iter().any(|callable| {
+        matches!(
+            callable,
+            SemanticCallableDeclV1::CompilerIntrinsic {
+                operation: SemanticCompilerIntrinsicOperationV1::WriteOnlyDisjointSliceWrite { .. }
+                    | SemanticCompilerIntrinsicOperationV1::WriteOnlyDisjointSliceLen { .. },
+                ..
+            }
+        )
+    }) {
+        required = SemanticMirWireVersionV1::V9;
+    }
 
     if request.functions.iter().any(|function| {
         matches!(
@@ -16832,6 +17066,79 @@ fn encode_compiler_intrinsic_operation(
             index_space,
         } => {
             writer.u8(19)?;
+            writer.u32(disjoint_slice.0)?;
+            writer.u32(element.0)?;
+            writer.u32(raw_index.0)?;
+            encode_disjoint_index_space(writer, index_space)
+        }
+        SemanticCompilerIntrinsicOperationV1::WriteOnlyDisjointSliceWrite {
+            disjoint_slice,
+            witness,
+            element,
+            raw_index,
+            index_space,
+            kind,
+        } => {
+            if wire_version < SemanticMirWireVersionV1::V9 {
+                return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
+                    requested: wire_version,
+                    required: SemanticMirWireVersionV1::V9,
+                });
+            }
+            writer.u8(60)?;
+            writer.u32(disjoint_slice.0)?;
+            writer.u32(witness.0)?;
+            writer.u32(element.0)?;
+            writer.u32(raw_index.0)?;
+            encode_disjoint_index_space(writer, index_space)?;
+            match kind {
+                SemanticWriteOnlyDisjointWriteKindV1::Thread { disjoint } => {
+                    writer.u8(if disjoint { 1 } else { 0 })
+                }
+                SemanticWriteOnlyDisjointWriteKindV1::GridExclusive => writer.u8(2),
+                SemanticWriteOnlyDisjointWriteKindV1::Block {
+                    lanes_per_block,
+                    elements_per_lane,
+                } => {
+                    writer.u8(3)?;
+                    writer.u64(lanes_per_block)?;
+                    writer.u64(elements_per_lane)
+                }
+                SemanticWriteOnlyDisjointWriteKindV1::Tiled2d {
+                    lanes_per_tile,
+                    tile_rows,
+                    tile_columns,
+                    elements_per_lane,
+                } => {
+                    writer.u8(4)?;
+                    writer.u64(lanes_per_tile)?;
+                    writer.u64(tile_rows)?;
+                    writer.u64(tile_columns)?;
+                    writer.u64(elements_per_lane)
+                }
+                SemanticWriteOnlyDisjointWriteKindV1::RowStriped2d {
+                    lanes_per_row,
+                    elements_per_lane,
+                } => {
+                    writer.u8(5)?;
+                    writer.u64(lanes_per_row)?;
+                    writer.u64(elements_per_lane)
+                }
+            }
+        }
+        SemanticCompilerIntrinsicOperationV1::WriteOnlyDisjointSliceLen {
+            disjoint_slice,
+            element,
+            raw_index,
+            index_space,
+        } => {
+            if wire_version < SemanticMirWireVersionV1::V9 {
+                return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
+                    requested: wire_version,
+                    required: SemanticMirWireVersionV1::V9,
+                });
+            }
+            writer.u8(61)?;
             writer.u32(disjoint_slice.0)?;
             writer.u32(element.0)?;
             writer.u32(raw_index.0)?;

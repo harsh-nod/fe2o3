@@ -266,7 +266,11 @@ fn source_argument_ownership_v1(
         TyKind::Adt(definition, _)
             if matches!(
                 trusted_device_items::classify(tcx, definition.did()),
-                Some(TrustedDeviceItem::DisjointSlice | TrustedDeviceItem::DeviceGlobalMutPtr)
+                Some(
+                    TrustedDeviceItem::DisjointSlice
+                        | TrustedDeviceItem::WriteOnlyDisjointSlice
+                        | TrustedDeviceItem::DeviceGlobalMutPtr,
+                )
             ) =>
         {
             SemanticSourceArgumentOwnershipV1::ExclusiveOwner

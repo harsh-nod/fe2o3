@@ -1098,6 +1098,20 @@ impl<'a, 'module> FunctionVerifier<'a, 'module> {
                 self.expect_type(*fallback, &pointee, location.clone());
                 self.expect_results(operation, &[pointee], location);
             }
+            OperationKind::GuardedStore {
+                pointer,
+                predicate,
+                value,
+                access,
+            } => {
+                self.expect_results(operation, &[], location.clone());
+                let Some(pointee) = self.verify_pointer_access(*pointer, *access, true, &location)
+                else {
+                    return;
+                };
+                self.expect_type(*predicate, &Type::BOOL, location.clone());
+                self.expect_type(*value, &pointee, location);
+            }
             OperationKind::Store {
                 pointer,
                 value,
@@ -1891,13 +1905,22 @@ impl<'a, 'module> FunctionVerifier<'a, 'module> {
             );
         }
         if write
-            && (pointer_ty.access != AccessMode::ReadWrite
-                || pointer_ty.address_space == AddressSpace::Constant)
+            && (!matches!(
+                pointer_ty.access,
+                AccessMode::WriteOnly | AccessMode::ReadWrite
+            ) || pointer_ty.address_space == AddressSpace::Constant)
         {
             self.emit(
                 location.clone(),
                 DiagnosticCode::InvalidMemoryAccess,
                 "write requires a writable pointer outside constant memory",
+            );
+        }
+        if !write && pointer_ty.access == AccessMode::WriteOnly {
+            self.emit(
+                location.clone(),
+                DiagnosticCode::InvalidMemoryAccess,
+                "read requires a readable pointer",
             );
         }
         if !pointer_ty.pointee.is_storable() {

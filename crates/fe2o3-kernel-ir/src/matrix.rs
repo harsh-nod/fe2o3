@@ -1482,7 +1482,12 @@ fn verify_lds_profile(
     };
     if pointer.address_space != AddressSpace::Workgroup
         || pointer.pointee.as_ref() != &profile.element.ty()
-        || (writable && pointer.access != AccessMode::ReadWrite)
+        || (writable
+            && !matches!(
+                pointer.access,
+                AccessMode::WriteOnly | AccessMode::ReadWrite
+            ))
+        || (!writable && !matches!(pointer.access, AccessMode::ReadOnly | AccessMode::ReadWrite))
     {
         issues.push(MatrixVerificationIssue::operand(format!(
             "matrix LDS base {pointer:?} does not match element {:?}, workgroup address space, writable {writable}",

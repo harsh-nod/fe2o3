@@ -370,12 +370,18 @@ fn ensure_supported_type(ty: &Type) -> Result<(), IntegerSemanticOracleErrorV1> 
         Type::Slice(slice) => {
             slice.element.as_ref() == &Type::F32
                 && slice.address_space == AddressSpace::Global
-                && matches!(slice.access, AccessMode::ReadOnly | AccessMode::ReadWrite)
+                && matches!(
+                    slice.access,
+                    AccessMode::ReadOnly | AccessMode::WriteOnly | AccessMode::ReadWrite
+                )
         }
         Type::Pointer(pointer) => {
             pointer.pointee.as_ref() == &Type::F32
                 && pointer.address_space == AddressSpace::Global
-                && matches!(pointer.access, AccessMode::ReadOnly | AccessMode::ReadWrite)
+                && matches!(
+                    pointer.access,
+                    AccessMode::ReadOnly | AccessMode::WriteOnly | AccessMode::ReadWrite
+                )
         }
         _ => false,
     };
@@ -419,14 +425,18 @@ fn preflight_operation(
         | OperationKind::GetElementPointer { .. } => true,
         OperationKind::Load { access, .. }
         | OperationKind::GuardedLoad { access, .. }
-        | OperationKind::Store { access, .. } => {
+        | OperationKind::Store { access, .. }
+        | OperationKind::GuardedStore { access, .. } => {
             access.address_space == AddressSpace::Global
                 && access.alignment == 4
                 && !access.volatile
         }
         _ => false,
     };
-    let expected_results = if matches!(operation.kind, OperationKind::Store { .. }) {
+    let expected_results = if matches!(
+        operation.kind,
+        OperationKind::Store { .. } | OperationKind::GuardedStore { .. }
+    ) {
         0
     } else {
         1
@@ -474,6 +484,7 @@ fn operation_name(kind: &OperationKind) -> &'static str {
         OperationKind::GetElementPointer { .. } => "get-element-pointer",
         OperationKind::Load { .. } => "load",
         OperationKind::GuardedLoad { .. } => "guarded-load",
+        OperationKind::GuardedStore { .. } => "guarded-store",
         OperationKind::Store { .. } => "store",
         OperationKind::Barrier(_) => "barrier",
         OperationKind::Atomic(_) => "atomic",
@@ -920,42 +931,19 @@ fn execute_operation(
             value: stored,
             access: memory_access,
         } => {
-            let RuntimeValue::Pointer {
-                argument,
-                element,
-                address_space,
-                access,
-                offset,
-            } = value(values, *pointer)?
-            else {
-                return Err(IntegerSemanticOracleErrorV1::RuntimeTypeMismatch {
-                    value: *pointer,
-                    expected: "pointer",
-                });
-            };
-            ensure_memory_access(*address_space, memory_access.address_space, *pointer)?;
-            if *access != AccessMode::ReadWrite {
-                return Err(IntegerSemanticOracleErrorV1::WriteThroughReadOnlyPointer {
-                    value: *pointer,
-                });
+            execute_store(*pointer, *stored, *memory_access, arguments, values)?;
+            Ok(Vec::new())
+        }
+        OperationKind::GuardedStore {
+            pointer,
+            value: stored,
+            predicate,
+            access: memory_access,
+        } => {
+            let execute = value(values, *predicate)?.boolean(*predicate)?;
+            if execute {
+                execute_store(*pointer, *stored, *memory_access, arguments, values)?;
             }
-            let (stored_value, stored_ty) = value(values, *stored)?.integer(*stored)?;
-            if &Type::Scalar(stored_ty) != element {
-                return Err(IntegerSemanticOracleErrorV1::RuntimeTypeMismatch {
-                    value: *stored,
-                    expected: "pointer element type",
-                });
-            }
-            let elements = buffer_mut(arguments, *argument)?;
-            let length = elements.len();
-            let slot = elements.get_mut(*offset).ok_or(
-                IntegerSemanticOracleErrorV1::MemoryOutOfBounds {
-                    argument: *argument,
-                    index: *offset,
-                    length,
-                },
-            )?;
-            *slot = stored_value;
             Ok(Vec::new())
         }
         _ => Err(IntegerSemanticOracleErrorV1::UnsupportedOperation {
@@ -992,8 +980,8 @@ fn execute_load(
         argument,
         element,
         address_space,
+        access: pointer_access,
         offset,
-        ..
     } = value(values, pointer)?
     else {
         return Err(IntegerSemanticOracleErrorV1::RuntimeTypeMismatch {
@@ -1002,6 +990,12 @@ fn execute_load(
         });
     };
     ensure_memory_access(*address_space, access.address_space, pointer)?;
+    if !matches!(
+        *pointer_access,
+        AccessMode::ReadOnly | AccessMode::ReadWrite
+    ) {
+        return Err(IntegerSemanticOracleErrorV1::ReadThroughWriteOnlyPointer { value: pointer });
+    }
     let elements = buffer(arguments, *argument)?;
     let loaded = *elements
         .get(*offset)
@@ -1017,6 +1011,51 @@ fn execute_load(
         });
     };
     checked_integer(loaded, *scalar)
+}
+
+fn execute_store(
+    pointer: ValueId,
+    stored: ValueId,
+    memory_access: crate::MemoryAccess,
+    arguments: &mut [IntegerSemanticOracleArgumentV1],
+    values: &BTreeMap<ValueId, RuntimeValue>,
+) -> Result<(), IntegerSemanticOracleErrorV1> {
+    let RuntimeValue::Pointer {
+        argument,
+        element,
+        address_space,
+        access,
+        offset,
+    } = value(values, pointer)?
+    else {
+        return Err(IntegerSemanticOracleErrorV1::RuntimeTypeMismatch {
+            value: pointer,
+            expected: "pointer",
+        });
+    };
+    ensure_memory_access(*address_space, memory_access.address_space, pointer)?;
+    if !matches!(*access, AccessMode::WriteOnly | AccessMode::ReadWrite) {
+        return Err(IntegerSemanticOracleErrorV1::WriteThroughReadOnlyPointer { value: pointer });
+    }
+    let (stored_value, stored_ty) = value(values, stored)?.integer(stored)?;
+    if &Type::Scalar(stored_ty) != element {
+        return Err(IntegerSemanticOracleErrorV1::RuntimeTypeMismatch {
+            value: stored,
+            expected: "pointer element type",
+        });
+    }
+    let elements = buffer_mut(arguments, *argument)?;
+    let length = elements.len();
+    let slot =
+        elements
+            .get_mut(*offset)
+            .ok_or(IntegerSemanticOracleErrorV1::MemoryOutOfBounds {
+                argument: *argument,
+                index: *offset,
+                length,
+            })?;
+    *slot = stored_value;
+    Ok(())
 }
 
 fn ensure_memory_access(
@@ -1179,6 +1218,9 @@ pub enum IntegerSemanticOracleErrorV1 {
     WriteThroughReadOnlyPointer {
         value: ValueId,
     },
+    ReadThroughWriteOnlyPointer {
+        value: ValueId,
+    },
     InternalResultShape,
 }
 
@@ -1302,6 +1344,9 @@ impl fmt::Display for IntegerSemanticOracleErrorV1 {
             Self::WriteThroughReadOnlyPointer { value } => {
                 write!(formatter, "cannot write through read-only pointer {value}")
             }
+            Self::ReadThroughWriteOnlyPointer { value } => {
+                write!(formatter, "cannot read through write-only pointer {value}")
+            }
             Self::InternalResultShape => {
                 formatter.write_str("oracle produced an invalid result shape")
             }
@@ -1397,6 +1442,93 @@ mod guarded_load_tests {
                 value: 42,
                 ty: ScalarType::U32,
             }]
+        );
+    }
+
+    fn guarded_store_operation(predicate: ValueId, pointer: ValueId, stored: ValueId) -> Operation {
+        Operation::new(
+            vec![],
+            OperationKind::GuardedStore {
+                pointer,
+                value: stored,
+                predicate,
+                access: crate::MemoryAccess::new(AddressSpace::Global, 4),
+            },
+        )
+    }
+
+    fn store_values(predicate: bool, offset: usize) -> BTreeMap<ValueId, RuntimeValue> {
+        BTreeMap::from([
+            (
+                ValueId(0),
+                RuntimeValue::Pointer {
+                    argument: 0,
+                    element: Type::Scalar(ScalarType::U32),
+                    address_space: AddressSpace::Global,
+                    access: AccessMode::WriteOnly,
+                    offset,
+                },
+            ),
+            (ValueId(1), RuntimeValue::Bool(predicate)),
+            (
+                ValueId(2),
+                RuntimeValue::Integer {
+                    value: 99,
+                    ty: ScalarType::U32,
+                },
+            ),
+        ])
+    }
+
+    #[test]
+    fn false_guarded_store_does_not_touch_an_invalid_pointer() {
+        let mut arguments = [IntegerSemanticOracleArgumentV1::Buffer(vec![7])];
+        let result = execute_operation(
+            &guarded_store_operation(ValueId(1), ValueId(0), ValueId(2)),
+            &mut arguments,
+            &store_values(false, usize::MAX),
+            0,
+            BlockId(0),
+            0,
+        )
+        .unwrap();
+        assert!(result.is_empty());
+        assert_eq!(
+            arguments[0],
+            IntegerSemanticOracleArgumentV1::Buffer(vec![7])
+        );
+    }
+
+    #[test]
+    fn true_guarded_store_writes_through_write_only_pointer() {
+        let mut arguments = [IntegerSemanticOracleArgumentV1::Buffer(vec![7])];
+        let result = execute_operation(
+            &guarded_store_operation(ValueId(1), ValueId(0), ValueId(2)),
+            &mut arguments,
+            &store_values(true, 0),
+            0,
+            BlockId(0),
+            0,
+        )
+        .unwrap();
+        assert!(result.is_empty());
+        assert_eq!(
+            arguments[0],
+            IntegerSemanticOracleArgumentV1::Buffer(vec![99])
+        );
+    }
+
+    #[test]
+    fn load_rejects_write_only_pointer() {
+        let arguments = [IntegerSemanticOracleArgumentV1::Buffer(vec![7])];
+        assert_eq!(
+            execute_load(
+                ValueId(0),
+                crate::MemoryAccess::new(AddressSpace::Global, 4),
+                &arguments,
+                &store_values(true, 0),
+            ),
+            Err(IntegerSemanticOracleErrorV1::ReadThroughWriteOnlyPointer { value: ValueId(0) })
         );
     }
 }

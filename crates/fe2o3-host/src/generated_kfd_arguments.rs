@@ -158,10 +158,12 @@ impl<'allocation, T: GeneratedDeviceScalarV1> GeneratedKfdReadSlice<'allocation,
 
 /// Exclusively borrowed host output for a compiler-authenticated write-only slice.
 ///
-/// The runtime buffer has the requested extent but does not encode the destination's current
-/// values. The exclusive borrow is retained until checked completion writes the device result back
-/// to the host slice. This capability is move-only and can bind only a descriptor field whose
-/// authenticated access is exactly write-only.
+/// The runtime buffer is initialized from the destination before dispatch so a short launch or a
+/// false store predicate preserves every untouched element. Kernel access remains exactly
+/// write-only: the seed is initialization custody, not device read authority. The exclusive borrow
+/// is retained until checked completion writes the device result back to the host slice. This
+/// capability is move-only and can bind only a descriptor field whose authenticated access is
+/// exactly write-only.
 #[doc(hidden)]
 pub struct GeneratedKfdWriteSlice<'allocation, T: GeneratedDeviceScalarV1> {
     values: &'allocation mut [T],
@@ -233,12 +235,14 @@ impl<'allocation, T: GeneratedDeviceScalarV1> GeneratedKfdWriteSlice<'allocation
             .len()
             .checked_mul(size_of::<T>())
             .ok_or(GeneratedKfdArgumentError::BufferByteLength { argument_index })?;
+        let initial_bytes = encode_values(self.values);
+        debug_assert_eq!(initial_bytes.len(), byte_len);
+        let writeback = GeneratedKfdWriteback::new(self.values);
         let buffer = Gfx942RuntimeDispatchBufferV1::new(
-            vec![0; byte_len],
+            initial_bytes,
             Gfx942RuntimeBufferAccessV1::WriteOnly,
         )
         .map_err(GeneratedKfdArgumentError::Buffer)?;
-        let writeback = GeneratedKfdWriteback::new(self.values);
         Ok(GeneratedKfdSliceBinding {
             argument_index,
             input,
@@ -495,31 +499,43 @@ impl GeneratedKfdCompletion<'_> {
         self,
         result: Gfx942AuthorizedRuntimeDispatchResultV1,
     ) -> Result<Gfx942AuthorizedRuntimeDispatchResultV1, GeneratedKfdCompletionError> {
-        if self.buffers.len() != result.buffers().len() {
+        let completed = result
+            .buffers()
+            .iter()
+            .map(|buffer| (buffer.access(), buffer.bytes()))
+            .collect::<Vec<_>>();
+        self.apply_completed_buffers(&completed)?;
+        Ok(result)
+    }
+
+    fn apply_completed_buffers(
+        self,
+        completed: &[(Gfx942RuntimeBufferAccessV1, &[u8])],
+    ) -> Result<(), GeneratedKfdCompletionError> {
+        if self.buffers.len() != completed.len() {
             return Err(GeneratedKfdCompletionError::BufferCount {
                 expected: self.buffers.len(),
-                actual: result.buffers().len(),
+                actual: completed.len(),
             });
         }
-        for (index, (expected, completed)) in self.buffers.iter().zip(result.buffers()).enumerate()
-        {
-            if expected.access != completed.access() {
+        for (index, (expected, (access, bytes))) in self.buffers.iter().zip(completed).enumerate() {
+            if expected.access != *access {
                 return Err(GeneratedKfdCompletionError::Access { index });
             }
-            if expected.byte_len != completed.bytes().len() {
+            if expected.byte_len != bytes.len() {
                 return Err(GeneratedKfdCompletionError::ByteLength {
                     index,
                     expected: expected.byte_len,
-                    actual: completed.bytes().len(),
+                    actual: bytes.len(),
                 });
             }
         }
-        for (expected, completed) in self.buffers.into_iter().zip(result.buffers()) {
+        for (expected, (_, bytes)) in self.buffers.into_iter().zip(completed) {
             if let Some(writeback) = expected.writeback {
-                writeback.apply(completed.bytes());
+                writeback.apply(bytes);
             }
         }
-        Ok(result)
+        Ok(())
     }
 }
 
@@ -907,7 +923,7 @@ mod tests {
     }
 
     #[test]
-    fn write_only_binding_omits_host_initial_values_and_retains_completion_writeback() {
+    fn write_only_binding_seeds_initialized_values_and_retains_completion_writeback() {
         let plan = write_only_plan(None);
         let mut output = [0x1122_3344_i32, 0x5566_7788];
         let binding = GeneratedKfdWriteSlice::new(&mut output)
@@ -925,7 +941,10 @@ mod tests {
             packed.buffers()[0].access(),
             Gfx942RuntimeBufferAccessV1::WriteOnly
         );
-        assert_eq!(packed.buffers()[0].bytes(), &[0; 8]);
+        assert_eq!(
+            packed.buffers()[0].bytes(),
+            encode_values(&[0x1122_3344_i32, 0x5566_7788])
+        );
         assert_eq!(
             packed.pointer_fixups(),
             [Gfx942KfdDispatchPointerFixupV1::new(0, 0, 0, 4)]
@@ -936,13 +955,67 @@ mod tests {
         let mut binding = GeneratedKfdWriteSlice::new(&mut output)
             .bind_argument(&plan, 0)
             .unwrap();
+        // A partial launch that stores only element zero returns the initialized seed for element
+        // one, so whole-buffer successful completion never invents an uninitialized value.
         binding
             .writeback
             .take()
             .unwrap()
-            .apply(&[7, 0, 0, 0, 9, 0, 0, 0]);
+            .apply(&[7, 0, 0, 0, 0x88, 0x77, 0x66, 0x55]);
         drop(binding);
-        assert_eq!(output, [7, 9]);
+        assert_eq!(output, [7, 0x5566_7788]);
+
+        // Dropped/abandoned completion retains no device bytes in host-visible storage.
+        let binding = GeneratedKfdWriteSlice::new(&mut output)
+            .bind_argument(&plan, 0)
+            .unwrap();
+        drop(binding);
+        assert_eq!(output, [7, 0x5566_7788]);
+    }
+
+    #[test]
+    fn write_only_completion_preserves_seed_on_no_store_and_failure_or_drop_exposes_nothing() {
+        let plan = write_only_plan(None);
+        let mut output = [11_i32, 22];
+
+        let binding = GeneratedKfdWriteSlice::new(&mut output)
+            .bind_argument(&plan, 0)
+            .unwrap();
+        let packed =
+            GeneratedKfdArgumentBinding::from_compiler_generated_parts(Vec::new(), vec![binding])
+                .pack(&plan)
+                .unwrap();
+        let seed = packed.buffers()[0].bytes().to_vec();
+        let completion = packed.completion;
+        completion
+            .apply_completed_buffers(&[(Gfx942RuntimeBufferAccessV1::WriteOnly, &seed)])
+            .unwrap();
+        assert_eq!(output, [11, 22]);
+
+        let binding = GeneratedKfdWriteSlice::new(&mut output)
+            .bind_argument(&plan, 0)
+            .unwrap();
+        let packed =
+            GeneratedKfdArgumentBinding::from_compiler_generated_parts(Vec::new(), vec![binding])
+                .pack(&plan)
+                .unwrap();
+        let completion = packed.completion;
+        assert!(matches!(
+            completion
+                .apply_completed_buffers(&[(Gfx942RuntimeBufferAccessV1::ReadWrite, &[9; 8])]),
+            Err(GeneratedKfdCompletionError::Access { index: 0 })
+        ));
+        assert_eq!(output, [11, 22]);
+
+        let binding = GeneratedKfdWriteSlice::new(&mut output)
+            .bind_argument(&plan, 0)
+            .unwrap();
+        let packed =
+            GeneratedKfdArgumentBinding::from_compiler_generated_parts(Vec::new(), vec![binding])
+                .pack(&plan)
+                .unwrap();
+        drop(packed.completion);
+        assert_eq!(output, [11, 22]);
     }
 
     #[test]
@@ -1004,7 +1077,7 @@ mod tests {
             GeneratedKfdArgumentBinding::from_compiler_generated_parts(Vec::new(), vec![binding])
                 .pack(&plan)
                 .unwrap();
-        assert_eq!(packed.buffers()[0].bytes(), &[0; 8]);
+        assert_eq!(packed.buffers()[0].bytes(), encode_values(&[17_i32, 19]));
         assert_eq!(
             packed.buffers()[0].access(),
             Gfx942RuntimeBufferAccessV1::WriteOnly

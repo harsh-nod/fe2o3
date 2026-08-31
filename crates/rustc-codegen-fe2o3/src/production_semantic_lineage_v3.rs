@@ -21,7 +21,8 @@ use fe2o3_compiler_lineage::{
     LineageErrorV3, OrderedInertSemanticLineageReceiptsV3,
 };
 use fe2o3_kernel_ir::{
-    FunctionRole, Module, VerifiedCanonicalKernelIrErrorV8, VerifiedCanonicalKernelIrV8,
+    FunctionRole, Module, VerifiedCanonicalKernelIrErrorV8, VerifiedCanonicalKernelIrErrorV9,
+    VerifiedCanonicalKernelIrV8, VerifiedCanonicalKernelIrV9,
 };
 use fe2o3_lower_mir_kernel::{
     InertCanonicalFormalMemoryAdmissionEvidenceV4, InertCanonicalMirToKirCorrespondenceEvidenceV4,
@@ -133,28 +134,34 @@ impl PreparedProductionSemanticLineageV3 {
         )?;
 
         let neutral_kir_custody = admitted.semantic_kir().canonical_kernel_ir_identity();
-        if neutral_kir_custody.version() != ProductionCanonicalKernelIrVersionV1::V8 {
-            return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
-                "gfx942 production lineage requires canonical Kernel IR V8",
-            ));
-        }
-        let neutral_kir = admitted.semantic_kir().canonical_kernel_ir_v8();
-        neutral_kir.revalidate()?;
-        let bound_kir = VerifiedCanonicalKernelIrV8::from_module(target_module.clone())?;
-        bound_kir.revalidate()?;
+        let neutral_kir = admitted.semantic_kir().canonical_kernel_ir_bytes();
+        let (bound_kir_digest, bound_kir_length) = match neutral_kir_custody.version() {
+            ProductionCanonicalKernelIrVersionV1::V8 => {
+                let bound_kir = VerifiedCanonicalKernelIrV8::from_module(target_module.clone())?;
+                bound_kir.revalidate()?;
+                (
+                    *bound_kir.identity().digest(),
+                    bound_kir.canonical_bytes().len() as u64,
+                )
+            }
+            ProductionCanonicalKernelIrVersionV1::V9 => {
+                let bound_kir = VerifiedCanonicalKernelIrV9::from_module(target_module.clone())?;
+                bound_kir.revalidate()?;
+                (
+                    *bound_kir.identity().digest(),
+                    bound_kir.canonical_bytes().len() as u64,
+                )
+            }
+        };
         let neutral_kir_identity = TargetLineageIdentityV3::new(
             *neutral_kir_custody.digest(),
             neutral_kir_custody.canonical_length(),
         )?;
-        let bound_kir_identity = TargetLineageIdentityV3::new(
-            *bound_kir.identity().digest(),
-            bound_kir.canonical_bytes().len() as u64,
-        )?;
-        let kernel_ir =
-            InertKernelIrReceiptV3::from_canonical_preimage(neutral_kir.canonical_bytes())?;
+        let bound_kir_identity = TargetLineageIdentityV3::new(bound_kir_digest, bound_kir_length)?;
+        let kernel_ir = InertKernelIrReceiptV3::from_canonical_preimage(neutral_kir)?;
         let amdgpu_lowering_replay =
             dialect_amdgcn::CanonicalProductionKirToLlvmReplayEvidenceV1::from_live_inputs(
-                neutral_kir.canonical_bytes(),
+                neutral_kir,
                 target_module,
                 rustc_target.profile(),
                 pre_descriptor_llvm,
@@ -639,6 +646,7 @@ pub(crate) enum ProductionSemanticLineageErrorV3 {
     ProtectedRustcInvocation(ProtectedRustcInvocationErrorV1),
     LiveOwner(String),
     CanonicalKir(VerifiedCanonicalKernelIrErrorV8),
+    CanonicalKirV9(VerifiedCanonicalKernelIrErrorV9),
     Correspondence(ProductionCorrespondenceEvidenceErrorV4),
     FormalMemory(ProductionFormalMemoryEvidenceErrorV4),
     VerusEvidence(ProductionMirPlironVerusExecutionEvidenceErrorV1),
@@ -670,6 +678,9 @@ impl fmt::Display for ProductionSemanticLineageErrorV3 {
             }
             Self::CanonicalKir(error) => {
                 write!(formatter, "production V3 canonical KIR failed: {error}")
+            }
+            Self::CanonicalKirV9(error) => {
+                write!(formatter, "production V3 canonical KIR V9 failed: {error}")
             }
             Self::Correspondence(error) => {
                 write!(
@@ -719,6 +730,12 @@ impl Error for ProductionSemanticLineageErrorV3 {}
 impl From<VerifiedCanonicalKernelIrErrorV8> for ProductionSemanticLineageErrorV3 {
     fn from(error: VerifiedCanonicalKernelIrErrorV8) -> Self {
         Self::CanonicalKir(error)
+    }
+}
+
+impl From<VerifiedCanonicalKernelIrErrorV9> for ProductionSemanticLineageErrorV3 {
+    fn from(error: VerifiedCanonicalKernelIrErrorV9) -> Self {
+        Self::CanonicalKirV9(error)
     }
 }
 

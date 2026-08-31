@@ -104,6 +104,7 @@ pub(crate) enum ErrorKind {
     ExecutionDanglingPointer,
     ExecutionAddressSpaceMismatch,
     ExecutionReadOnlyWrite,
+    ExecutionWriteOnlyRead,
     ExecutionMisalignedAccess,
     ExecutionOutOfBounds,
     ExecutionUninitializedRead,

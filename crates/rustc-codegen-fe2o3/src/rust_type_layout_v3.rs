@@ -28,6 +28,7 @@ const SLICE_BYTES: u64 = 16;
 pub(crate) enum GeneralTypedArgumentKindV3 {
     Scalar(RustScalarElementTypeV1),
     SharedSlice(RustScalarElementTypeV1),
+    WriteOnlyDisjointSlice(RustScalarElementTypeV1),
     DisjointSlice(RustScalarElementTypeV1),
     GlobalMutPointer(RustScalarElementTypeV1),
 }
@@ -37,6 +38,7 @@ impl GeneralTypedArgumentKindV3 {
         match self {
             Self::Scalar(scalar)
             | Self::SharedSlice(scalar)
+            | Self::WriteOnlyDisjointSlice(scalar)
             | Self::DisjointSlice(scalar)
             | Self::GlobalMutPointer(scalar) => scalar,
         }
@@ -269,7 +271,8 @@ fn extract_argument<'tcx>(
                 layout,
             });
         }
-        if trusted != Some(TrustedDeviceItem::DisjointSlice) {
+        let write_only = trusted == Some(TrustedDeviceItem::WriteOnlyDisjointSlice);
+        if !write_only && trusted != Some(TrustedDeviceItem::DisjointSlice) {
             return Err(GeneralTypedExtractError::new(format!(
                 "{} uses untrusted or unsupported aggregate type `{ty}`",
                 argument()
@@ -280,20 +283,20 @@ fn extract_argument<'tcx>(
             args.get(1).and_then(|arg| arg.as_type()),
         ] else {
             return Err(GeneralTypedExtractError::new(format!(
-                "{} has malformed genuine DisjointSlice arguments",
+                "{} has malformed genuine disjoint-slice arguments",
                 argument()
             )));
         };
         if args.len() != 2 {
             return Err(GeneralTypedExtractError::new(format!(
-                "{} has malformed genuine DisjointSlice arguments",
+                "{} has malformed genuine disjoint-slice arguments",
                 argument()
             )));
         }
         let index_space = disjoint_index_space_v1(tcx, index_space, trusted_index, &argument())?;
         let scalar = scalar_type(element).ok_or_else(|| {
             GeneralTypedExtractError::new(format!(
-                "{} has unsupported DisjointSlice element type `{element}`",
+                "{} has unsupported disjoint-slice element type `{element}`",
                 argument()
             ))
         })?;
@@ -306,13 +309,17 @@ fn extract_argument<'tcx>(
             &argument(),
         )?;
         return Ok(GeneralTypedArgumentV3 {
-            kind: GeneralTypedArgumentKindV3::DisjointSlice(scalar),
+            kind: if write_only {
+                GeneralTypedArgumentKindV3::WriteOnlyDisjointSlice(scalar)
+            } else {
+                GeneralTypedArgumentKindV3::DisjointSlice(scalar)
+            },
             layout,
         });
     }
 
     Err(GeneralTypedExtractError::new(format!(
-        "{} has unsupported type `{ty}`; only bounded scalars, shared slices, genuine DisjointSlice values, and genuine DeviceGlobalMutPtr values are accepted",
+        "{} has unsupported type `{ty}`; only bounded scalars, shared slices, genuine DisjointSlice or WriteOnlyDisjointSlice values, and genuine DeviceGlobalMutPtr values are accepted",
         argument()
     )))
 }
@@ -725,6 +732,19 @@ fn build_abi_field(
                 ArgumentOwnership::SharedBorrow,
                 AliasClass::SharedReadOnly,
             ),
+            GeneralTypedArgumentKindV3::WriteOnlyDisjointSlice(_) => (
+                SLICE_BYTES,
+                POINTER_ALIGNMENT,
+                AbiKind::Slice {
+                    element_size: scalar.size_bytes(),
+                    element_alignment: scalar.size_bytes() as u32,
+                },
+                Mutability::Mutable,
+                Access::WriteOnly,
+                AddressSpace::Global,
+                ArgumentOwnership::UniqueBorrow,
+                AliasClass::Exclusive,
+            ),
             GeneralTypedArgumentKindV3::DisjointSlice(_) => (
                 SLICE_BYTES,
                 POINTER_ALIGNMENT,
@@ -791,6 +811,7 @@ fn argument_size_alignment(kind: GeneralTypedArgumentKindV3) -> (u64, u32) {
             (scalar.size_bytes(), scalar.size_bytes() as u32)
         }
         GeneralTypedArgumentKindV3::SharedSlice(_)
+        | GeneralTypedArgumentKindV3::WriteOnlyDisjointSlice(_)
         | GeneralTypedArgumentKindV3::DisjointSlice(_) => (SLICE_BYTES, POINTER_ALIGNMENT),
         GeneralTypedArgumentKindV3::GlobalMutPointer(_) => (POINTER_BYTES, POINTER_ALIGNMENT),
     }
@@ -907,7 +928,8 @@ mod tests {
                 8,
                 slice_components(scalar, RustPointerMutabilityV1::Const),
             ),
-            GeneralTypedArgumentKindV3::DisjointSlice(_) => (
+            GeneralTypedArgumentKindV3::WriteOnlyDisjointSlice(_)
+            | GeneralTypedArgumentKindV3::DisjointSlice(_) => (
                 RustSourceTypeShapeV1::disjoint_slice(scalar, RustDisjointIndexSpaceV1::Index1D),
                 RustcAbiClassV1::ScalarPair,
                 16,

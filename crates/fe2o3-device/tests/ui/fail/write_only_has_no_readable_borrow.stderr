@@ -1,0 +1,5 @@
+error[E0599]: no method named `get_mut` found for mutable reference `&mut WriteOnlyDisjointSlice<u32>` in the current scope
+ --> tests/ui/fail/write_only_has_no_readable_borrow.rs:4:13
+  |
+4 |     *output.get_mut(index).unwrap()
+  |             ^^^^^^^ method not found in `&mut WriteOnlyDisjointSlice<u32>`

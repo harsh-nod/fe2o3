@@ -32,8 +32,8 @@ const WORKGROUP_SYNC_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1: &[u8] =
 const WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1: &[u8] =
     b"FE2O3/WORKGROUP-SYNC-PROVIDER-SOURCE-CLOSURE/V1\0";
 const REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1: [u8; 32] = [
-    0x58, 0xc0, 0x89, 0x1b, 0xdd, 0x97, 0xd5, 0xa4, 0x61, 0x7a, 0xab, 0x51, 0x6f, 0x11, 0xb1, 0x0c,
-    0x1d, 0xea, 0xca, 0x42, 0x47, 0xbc, 0x43, 0x77, 0xfa, 0x22, 0x20, 0xf3, 0x27, 0x93, 0x8b, 0x3d,
+    0xdc, 0x3e, 0x5f, 0x17, 0xf8, 0x99, 0x7e, 0x5b, 0xd0, 0x5f, 0xbe, 0xb2, 0xb1, 0xac, 0x4e, 0xfd,
+    0x72, 0x94, 0x70, 0x82, 0x4d, 0xd3, 0xf0, 0xc1, 0x63, 0xd0, 0x8f, 0x98, 0x76, 0x51, 0xcf, 0x3b,
 ];
 
 const PROVIDER_SEMANTIC_DEFINITION_TRANSCRIPT_DOMAIN_V1: &[u8] =
@@ -177,6 +177,7 @@ pub(crate) enum TrustedAmdGpuDiagnosticOperation {
 pub(crate) enum TrustedDeviceItem {
     KernelError,
     DisjointSlice,
+    WriteOnlyDisjointSlice,
     DeviceGlobalMutPtr,
     WorkgroupLdsScope,
     WorkgroupLdsScopeCurrent,
@@ -240,6 +241,13 @@ pub(crate) enum TrustedDeviceItem {
     DisjointSliceGetRowStriped2DMut,
     DisjointSliceGetMutAt,
     DisjointSliceLen,
+    WriteOnlyDisjointSliceLen,
+    WriteOnlyDisjointSliceWrite,
+    WriteOnlyDisjointSliceWriteDisjoint,
+    WriteOnlyDisjointSliceWriteExclusive,
+    WriteOnlyDisjointSliceWriteBlock,
+    WriteOnlyDisjointSliceWriteTiled2D,
+    WriteOnlyDisjointSliceWriteRowStriped2D,
     StridedReadView2D,
     StridedReadView2DError,
     StridedReadView2DFromSharedSlice,
@@ -349,6 +357,11 @@ const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
         TrustedDeviceItem::DisjointSlice,
         "fe2o3_device_disjoint_slice",
         "fe2o3_device::DisjointSlice",
+    ),
+    (
+        TrustedDeviceItem::WriteOnlyDisjointSlice,
+        "fe2o3_device_write_only_disjoint_slice_v1",
+        "fe2o3_device::WriteOnlyDisjointSlice",
     ),
     (
         TrustedDeviceItem::StridedReadView2D,
@@ -684,6 +697,41 @@ const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
         TrustedDeviceItem::DisjointSliceLen,
         "fe2o3_device_disjoint_slice_len",
         "fe2o3_device::DisjointSlice::<T>::len",
+    ),
+    (
+        TrustedDeviceItem::WriteOnlyDisjointSliceLen,
+        "fe2o3_device_write_only_disjoint_slice_len_v1",
+        "fe2o3_device::WriteOnlyDisjointSlice::<T>::len",
+    ),
+    (
+        TrustedDeviceItem::WriteOnlyDisjointSliceWrite,
+        "fe2o3_device_write_only_disjoint_slice_write_v1",
+        "fe2o3_device::WriteOnlyDisjointSlice::<T>::write",
+    ),
+    (
+        TrustedDeviceItem::WriteOnlyDisjointSliceWriteDisjoint,
+        "fe2o3_device_write_only_disjoint_slice_write_disjoint_v1",
+        "fe2o3_device::WriteOnlyDisjointSlice::<T>::write_disjoint",
+    ),
+    (
+        TrustedDeviceItem::WriteOnlyDisjointSliceWriteExclusive,
+        "fe2o3_device_write_only_disjoint_slice_write_exclusive_v1",
+        "fe2o3_device::WriteOnlyDisjointSlice::<T, GridExclusive>::write_exclusive",
+    ),
+    (
+        TrustedDeviceItem::WriteOnlyDisjointSliceWriteBlock,
+        "fe2o3_device_write_only_disjoint_slice_write_block_v1",
+        "fe2o3_device::WriteOnlyDisjointSlice::<T, Blocked<IndexSpace, LANES_PER_BLOCK, ELEMENTS_PER_LANE>>::write_block",
+    ),
+    (
+        TrustedDeviceItem::WriteOnlyDisjointSliceWriteTiled2D,
+        "fe2o3_device_write_only_disjoint_slice_write_tiled_2d_v1",
+        "fe2o3_device::WriteOnlyDisjointSlice::<T, Tiled2D<IndexSpace, LANES_PER_TILE, TILE_ROWS, TILE_COLUMNS, ELEMENTS_PER_LANE>>::write_tiled_2d",
+    ),
+    (
+        TrustedDeviceItem::WriteOnlyDisjointSliceWriteRowStriped2D,
+        "fe2o3_device_write_only_disjoint_slice_write_row_striped_2d_v1",
+        "fe2o3_device::WriteOnlyDisjointSlice::<T, RowStriped2D<IndexSpace, LANES_PER_ROW, ELEMENTS_PER_LANE>>::write_row_striped_2d",
     ),
     (
         TrustedDeviceItem::DeviceGlobalMutPtrU32AsAtomic,
@@ -1391,6 +1439,7 @@ fn exact_provider_compiler_definition_path_v1(item: TrustedDeviceItem) -> Option
     match item {
         TrustedDeviceItem::KernelError => Some("fe2o3_device::kernel_result::KernelError"),
         TrustedDeviceItem::DisjointSlice => Some("fe2o3_device::DisjointSlice"),
+        TrustedDeviceItem::WriteOnlyDisjointSlice => Some("fe2o3_device::WriteOnlyDisjointSlice"),
         TrustedDeviceItem::StridedReadView2D => Some("fe2o3_device::views::StridedReadView2D"),
         TrustedDeviceItem::StridedReadView2DError => {
             Some("fe2o3_device::views::StridedReadView2DError")
@@ -1429,12 +1478,12 @@ fn exact_provider_compiler_definition_path_v1(item: TrustedDeviceItem) -> Option
         TrustedDeviceItem::ThreadIndexCheckedRowStriped2D => {
             Some("fe2o3_device::thread::{impl#7}::checked_row_striped_2d")
         }
-        TrustedDeviceItem::DisjointIndexGet => Some("fe2o3_device::thread::{impl#8}::get"),
+        TrustedDeviceItem::DisjointIndexGet => Some("fe2o3_device::thread::{impl#9}::get"),
         TrustedDeviceItem::DisjointIndexCheckedShift => {
-            Some("fe2o3_device::thread::{impl#8}::checked_shift")
+            Some("fe2o3_device::thread::{impl#9}::checked_shift")
         }
         TrustedDeviceItem::DisjointBlockComponentIndex => {
-            Some("fe2o3_device::thread::{impl#10}::component_index")
+            Some("fe2o3_device::thread::{impl#11}::component_index")
         }
         TrustedDeviceItem::GridLeaderCurrent => Some("fe2o3_device::thread::grid_leader"),
         TrustedDeviceItem::DisjointSliceGetMut => Some("fe2o3_device::{impl#0}::get_mut"),
@@ -1452,6 +1501,23 @@ fn exact_provider_compiler_definition_path_v1(item: TrustedDeviceItem) -> Option
         }
         TrustedDeviceItem::DisjointSliceGetRowStriped2DMut => {
             Some("fe2o3_device::{impl#4}::get_row_striped_2d_mut")
+        }
+        TrustedDeviceItem::WriteOnlyDisjointSliceLen => Some("fe2o3_device::{impl#5}::len"),
+        TrustedDeviceItem::WriteOnlyDisjointSliceWrite => Some("fe2o3_device::{impl#5}::write"),
+        TrustedDeviceItem::WriteOnlyDisjointSliceWriteDisjoint => {
+            Some("fe2o3_device::{impl#5}::write_disjoint")
+        }
+        TrustedDeviceItem::WriteOnlyDisjointSliceWriteExclusive => {
+            Some("fe2o3_device::{impl#6}::write_exclusive")
+        }
+        TrustedDeviceItem::WriteOnlyDisjointSliceWriteBlock => {
+            Some("fe2o3_device::{impl#7}::write_block")
+        }
+        TrustedDeviceItem::WriteOnlyDisjointSliceWriteTiled2D => {
+            Some("fe2o3_device::{impl#8}::write_tiled_2d")
+        }
+        TrustedDeviceItem::WriteOnlyDisjointSliceWriteRowStriped2D => {
+            Some("fe2o3_device::{impl#9}::write_row_striped_2d")
         }
         TrustedDeviceItem::DeviceGlobalMutPtrU32AsAtomic => {
             Some("fe2o3_device::atomic::{impl#0}::as_atomic")
@@ -2667,6 +2733,7 @@ mod tests {
     fn every_production_safety_terminal_has_an_exact_structural_path() {
         for item in [
             TrustedDeviceItem::DisjointSlice,
+            TrustedDeviceItem::WriteOnlyDisjointSlice,
             TrustedDeviceItem::StridedReadView2D,
             TrustedDeviceItem::StridedReadView2DError,
             TrustedDeviceItem::StridedReadView2DFromSharedSlice,
@@ -2699,6 +2766,13 @@ mod tests {
             TrustedDeviceItem::DisjointSliceGetBlockMut,
             TrustedDeviceItem::DisjointSliceGetTiled2DMut,
             TrustedDeviceItem::DisjointSliceGetRowStriped2DMut,
+            TrustedDeviceItem::WriteOnlyDisjointSliceLen,
+            TrustedDeviceItem::WriteOnlyDisjointSliceWrite,
+            TrustedDeviceItem::WriteOnlyDisjointSliceWriteDisjoint,
+            TrustedDeviceItem::WriteOnlyDisjointSliceWriteExclusive,
+            TrustedDeviceItem::WriteOnlyDisjointSliceWriteBlock,
+            TrustedDeviceItem::WriteOnlyDisjointSliceWriteTiled2D,
+            TrustedDeviceItem::WriteOnlyDisjointSliceWriteRowStriped2D,
             TrustedDeviceItem::DeviceGlobalMutPtrU32AsAtomic,
             TrustedDeviceItem::DeviceGlobalMutPtrI32AsAtomic,
             TrustedDeviceItem::DeviceGlobalMutPtrU64AsAtomic,
@@ -2762,7 +2836,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             closure,
-            digest("58c0891bdd97d5a4617aab516f11b10c1deaca4247bc4377fa2220f327938b3d")
+            digest("dc3e5f17f8997e5bd05fbeb2b1ac4efd729470824dd3f0c163d08f987651cf3b")
         );
         assert_eq!(closure, super::REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1);
     }
@@ -3169,6 +3243,7 @@ mod tests {
         let items = [
             TrustedDeviceItem::KernelError,
             TrustedDeviceItem::DisjointSlice,
+            TrustedDeviceItem::WriteOnlyDisjointSlice,
             TrustedDeviceItem::StridedReadView2D,
             TrustedDeviceItem::StridedReadView2DError,
             TrustedDeviceItem::StridedReadView2DFromSharedSlice,
@@ -3236,6 +3311,13 @@ mod tests {
             TrustedDeviceItem::DisjointSliceGetRowStriped2DMut,
             TrustedDeviceItem::DisjointSliceGetMutAt,
             TrustedDeviceItem::DisjointSliceLen,
+            TrustedDeviceItem::WriteOnlyDisjointSliceLen,
+            TrustedDeviceItem::WriteOnlyDisjointSliceWrite,
+            TrustedDeviceItem::WriteOnlyDisjointSliceWriteDisjoint,
+            TrustedDeviceItem::WriteOnlyDisjointSliceWriteExclusive,
+            TrustedDeviceItem::WriteOnlyDisjointSliceWriteBlock,
+            TrustedDeviceItem::WriteOnlyDisjointSliceWriteTiled2D,
+            TrustedDeviceItem::WriteOnlyDisjointSliceWriteRowStriped2D,
             TrustedDeviceItem::DeviceGlobalMutPtrU32AsAtomic,
             TrustedDeviceItem::DeviceGlobalMutPtrI32AsAtomic,
             TrustedDeviceItem::DeviceGlobalMutPtrU64AsAtomic,
