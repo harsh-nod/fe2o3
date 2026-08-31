@@ -44,7 +44,8 @@ use fe2o3_pliron::InertProductionMiddleEndEvidenceV5;
 use fe2o3_rustc_invocation::{InvocationDigestV3, encode_descriptor_v3};
 use fe2o3_verifier::{
     CanonicalProductionMirPlironVerusExecutionEvidenceV1, CompilerKirToLlvmReplayValidationErrorV1,
-    ProductionMirPlironVerusExecutionEvidenceErrorV1,
+    CompilerMultiRootProofValidationErrorV1, ProductionMirPlironVerusExecutionEvidenceErrorV1,
+    validate_compiler_multi_root_proof_inputs_v1,
 };
 use sha2::{Digest, Sha256};
 
@@ -1100,6 +1101,27 @@ impl PreparedProductionSemanticLineageV3 {
             proof_binding.identity().sha256(),
             proof_binding.identity().byte_len(),
         )?;
+        if matches!(
+            &self.roster_custody,
+            PreparedLineageRosterCustodyV1::MultiRoot { .. }
+        ) {
+            let independently_validated = validate_compiler_multi_root_proof_inputs_v1(
+                &proof_binding,
+                &self.semantic_mir,
+                &self.middle_end,
+                &self.kernel_ir,
+                &self.mir_to_kir_correspondence,
+                &self.formal_memory,
+            )?;
+            if independently_validated.authenticates_compiler_origin()
+                || independently_validated.establishes_llvm_or_machine_refinement()
+                || independently_validated.grants_runtime_authority()
+            {
+                return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
+                    "independent multi-root proof owner broadened source-side authority",
+                ));
+            }
+        }
 
         let rustc_cpu = self.rustc_layout.active_cpu().ok_or(
             ProductionSemanticLineageErrorV3::AxisMismatch(
@@ -1417,6 +1439,7 @@ pub(crate) enum ProductionSemanticLineageErrorV3 {
     VerusEvidence(ProductionMirPlironVerusExecutionEvidenceErrorV1),
     KirToLlvmReplay(dialect_amdgcn::ProductionKirToLlvmReplayErrorV1),
     KirToLlvmReplayValidation(CompilerKirToLlvmReplayValidationErrorV1),
+    MultiRootProofValidation(CompilerMultiRootProofValidationErrorV1),
     Receipt(LineageErrorV3),
     ProofIdentity(InertProofBindingAssociationErrorV3),
     ProofBinding(InertProofBindingAssociationErrorV4),
@@ -1472,6 +1495,10 @@ impl fmt::Display for ProductionSemanticLineageErrorV3 {
             Self::KirToLlvmReplayValidation(error) => write!(
                 formatter,
                 "production independent KIR-to-LLVM validation failed: {error}"
+            ),
+            Self::MultiRootProofValidation(error) => write!(
+                formatter,
+                "production independent multi-root proof validation failed: {error}"
             ),
             Self::Receipt(error) => write!(formatter, "production V3 receipt failed: {error}"),
             Self::ProofIdentity(error) => {
@@ -1544,6 +1571,12 @@ impl From<dialect_amdgcn::ProductionKirToLlvmReplayErrorV1> for ProductionSemant
 impl From<CompilerKirToLlvmReplayValidationErrorV1> for ProductionSemanticLineageErrorV3 {
     fn from(error: CompilerKirToLlvmReplayValidationErrorV1) -> Self {
         Self::KirToLlvmReplayValidation(error)
+    }
+}
+
+impl From<CompilerMultiRootProofValidationErrorV1> for ProductionSemanticLineageErrorV3 {
+    fn from(error: CompilerMultiRootProofValidationErrorV1) -> Self {
+        Self::MultiRootProofValidation(error)
     }
 }
 
@@ -1732,6 +1765,7 @@ mod layout_tests {
         assert!(source.contains("validate_compiler_kir_to_llvm_replay_v1"));
         assert!(source.contains("MultiRootProofRosterTranscriptV2::new"));
         assert!(source.contains("MultiRootProofRosterTranscriptV2::decode"));
+        assert!(source.contains("validate_compiler_multi_root_proof_inputs_v1"));
         assert!(source.contains("MultiRootTargetBindingTranscriptV2::new"));
         assert!(!source.contains(concat!("AmdgpuLoweringTranscript", "V3::new")));
         for suffix in ["MID2", "COR2", "FOR2", "VER2"] {
