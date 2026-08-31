@@ -6761,6 +6761,7 @@ mod tests {
                     access: AccessMode::WriteOnly,
                     lower_bound: 0,
                     upper_bound: 4,
+                    abi_argument_ordinal: NO_ABI_ARGUMENT_V1,
                 }),
             ),
             (
@@ -6918,6 +6919,7 @@ mod tests {
             access: AccessMode::WriteOnly,
             lower_bound: 0,
             upper_bound: 4,
+            abi_argument_ordinal: NO_ABI_ARGUMENT_V1,
         };
         let access = MemoryAccess::new(AddressSpace::Global, 4);
         assert_eq!(

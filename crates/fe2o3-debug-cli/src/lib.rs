@@ -6719,7 +6719,7 @@ fn diagnosis_initial_allocations_v2(
             allocation,
             PendingDiagnosisAllocationV2 {
                 address_space: AddressSpaceV1::Global,
-                access: diagnosis_access_v2(shared.buffer.access()),
+                access: diagnosis_access_v2(shared.buffer.access())?,
                 alignment: shared.buffer.alignment(),
                 allocation_bytes: u64::try_from(shared.buffer.bytes().len())
                     .map_err(|_| "diagnosis allocation length does not fit u64".to_owned())?,
@@ -6749,7 +6749,7 @@ fn diagnosis_initial_allocations_v2(
                         allocation,
                         PendingDiagnosisAllocationV2 {
                             address_space: AddressSpaceV1::Global,
-                            access: diagnosis_access_v2(buffer.access()),
+                            access: diagnosis_access_v2(buffer.access())?,
                             alignment: buffer.alignment(),
                             allocation_bytes: bytes,
                             abi_arguments: Vec::new(),
@@ -6807,8 +6807,8 @@ fn diagnosis_initial_allocations_v2(
         let allocation_contract = pending
             .get_mut(&allocation)
             .ok_or_else(|| "diagnosis allocation contract is missing".to_owned())?;
-        let required_access = diagnosis_access_v2(abi_access);
-        let supplied_access = diagnosis_access_v2(argument_access);
+        let required_access = diagnosis_access_v2(abi_access)?;
+        let supplied_access = diagnosis_access_v2(argument_access)?;
         if !diagnosis_access_satisfies_v2(required_access, supplied_access)
             || (backing.is_none() && supplied_access != allocation_contract.access)
             || (backing.is_some()
@@ -6916,10 +6916,14 @@ const fn diagnosis_scalar_type_v2(
     }
 }
 
-const fn diagnosis_access_v2(access: AccessMode) -> DiagnosisAccessModeV2 {
+fn diagnosis_access_v2(access: AccessMode) -> Result<DiagnosisAccessModeV2, String> {
     match access {
-        AccessMode::ReadOnly => DiagnosisAccessModeV2::ReadOnly,
-        AccessMode::ReadWrite => DiagnosisAccessModeV2::ReadWrite,
+        AccessMode::ReadOnly => Ok(DiagnosisAccessModeV2::ReadOnly),
+        AccessMode::ReadWrite => Ok(DiagnosisAccessModeV2::ReadWrite),
+        AccessMode::WriteOnly => Err(
+            "diagnosis V2 cannot represent write-only buffer access; a newer diagnosis schema is required"
+                .to_owned(),
+        ),
     }
 }
 
@@ -7097,6 +7101,19 @@ fn bounded_message(message: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn diagnosis_v2_access_conversion_rejects_unrepresentable_write_only_access() {
+        assert_eq!(
+            diagnosis_access_v2(AccessMode::ReadOnly),
+            Ok(DiagnosisAccessModeV2::ReadOnly)
+        );
+        assert_eq!(
+            diagnosis_access_v2(AccessMode::ReadWrite),
+            Ok(DiagnosisAccessModeV2::ReadWrite)
+        );
+        assert!(diagnosis_access_v2(AccessMode::WriteOnly).is_err());
+    }
 
     #[test]
     fn simulator_float_values_project_as_exact_protocol_float_bits() {
