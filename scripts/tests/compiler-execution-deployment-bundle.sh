@@ -81,7 +81,12 @@ for boot_contract in \
   'getpgrp' \
   '--private-network' \
   '--bind=+/run/fe2o3:/run/fe2o3:norbind,noidmap' \
-  'compiler-execution-supervisor.sock' \
+  'COMPILER_EXECUTION_SUPERVISOR_SOCKET_PATH_V1' \
+  'SocketType::SEQPACKET' \
+  'connect(' \
+  'getpeername(' \
+  'socket_peercred' \
+  'MachineSocketReadinessV1' \
   'boot_and_stop_systemd_machine_v1'; do
   grep -Fq -- "${boot_contract}" "${qualification_boot_source}" ||
     fail "missing isolated systemd boot contract ${boot_contract}"

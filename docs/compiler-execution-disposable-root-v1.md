@@ -162,7 +162,8 @@ offline `systemd-analyze verify`, exact postcondition admission, execution of th
 shipped generation-1 production provisioner, independent admission of its six
 files, two seed-derived keys, four-record graph, service identities, sealed
 runtime, and five executable measurements, descriptor-pinned
-`systemd-nspawn` boot, supervisor-socket readiness, bounded graceful shutdown,
+`systemd-nspawn` boot, exact authenticated Unix `SOCK_SEQPACKET` connection
+admission, bounded graceful shutdown,
 post-boot provisioning and lower revalidation, explicit cleanup, and a canonical completion
 report. The three preflight tools execute from the
 admitted composed root through one inherited descriptor and a cleared
@@ -194,7 +195,7 @@ evidence remains withheld until the retained scope itself is removed.
 the four mount-admission transitions, completion and revalidation of every
 systemd command, exact postcondition admission, final installed-lower
 revalidation, provisioning completion/revalidation/admission, machine spawn,
-socket readiness, clean shutdown, post-boot lower
+exact listener connectivity, clean shutdown, post-boot lower
 revalidation, and all four cleanup transitions. `fault` interrupts one exact
 point and accepts success only after the root-owned qualification parent is
 empty and a fresh caller-pinned bundle/base reacquisition completely
@@ -252,7 +253,7 @@ Clippy, strict rustdoc, static-musl, ELF loader-independence, and live read-only
 probe evidence. The current `mi300x` SSH identity has effective UID `1002` and
 no mount capabilities, so no successful kernel mount or composed-root systemd
 preflight, provisioning, or boot is claimed yet. The live root harness, live timeout/signal
-recovery, exact listener-type/connectivity admission, live cgroup teardown evidence, and
+recovery, live cgroup teardown evidence, and
 live execution of the implemented qualification fault campaign remain required
 before this boundary is production-qualified.
 

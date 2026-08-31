@@ -31,9 +31,10 @@ through retained descriptors. Before boot it runs the shipped static
 generation-1 provisioner inside the composed root and independently admits
 its exact inventory, modes, identities, key-to-policy bindings, canonical
 record graph, sealed runtime measurement, and five executable measurements.
-It then waits for canonical supervisor-socket metadata,
-performs bounded pidfd shutdown, proves socket removal, and revalidates the
-installed lower before cleanup. The outer supervisor now attaches the
+It then opens and retains an exact nonblocking Unix `SOCK_SEQPACKET` connection,
+admits the canonical listener path and root peer credentials, revalidates the
+socket object, performs bounded pidfd shutdown, proves pathname removal, and
+revalidates the installed lower before cleanup. The outer supervisor now attaches the
 lease-blocked worker to one retained writable cgroup V2 child before release,
 kills residual descendants through `cgroup.kill`, boundedly removes nested
 machine cgroups, and withholds output until the scope is empty and removed. It

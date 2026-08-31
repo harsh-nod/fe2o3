@@ -1,11 +1,19 @@
 use std::fs::File;
 use std::os::fd::{AsRawFd as _, OwnedFd, RawFd};
 use std::os::unix::process::{CommandExt as _, ExitStatusExt as _};
+use std::path::Path;
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
+use fe2o3_compiler_execution_protocol::{
+    COMPILER_EXECUTION_SUPERVISOR_SOCKET_MODE_V1, COMPILER_EXECUTION_SUPERVISOR_SOCKET_PATH_V1,
+};
 use rustix::fs::{FileType, Mode, OFlags, ResolveFlags, fstat, fstatfs, llistxattr, openat2};
 use rustix::io::{FdFlags, fcntl_dupfd_cloexec, fcntl_getfd, fcntl_setfd};
+use rustix::net::{
+    AddressFamily, SocketAddrUnix, SocketFlags, SocketType, connect, getpeername, getsockname,
+    socket_with,
+};
 use rustix::process::{Pid, PidfdFlags, Signal, pidfd_open, pidfd_send_signal};
 
 use super::fault::QualificationFaultHooksV1;
@@ -14,7 +22,7 @@ use super::{
     COMPILER_EXECUTION_SYSTEMD_MACHINE_PARENT_PID_ENV_V1,
     COMPILER_EXECUTION_SYSTEMD_MACHINE_TOOL_COMMAND_V1, DeploymentVerificationErrorKindV1,
     DeploymentVerificationErrorV1, QualificationFaultPointV1, changed, invalid, io_error,
-    require_no_xattrs, std_io_error,
+    require_no_xattrs, snapshot, std_io_error,
 };
 
 const QUALIFICATION_STAGING_PREFIX_V1: &str = ".compiler-execution-qualification-v1-";
@@ -31,7 +39,6 @@ const PINNED_LIBRARY_PATHS_V1: &[&str] = &[
     "usr/lib/x86_64-linux-gnu",
     "usr/lib/x86_64-linux-gnu/systemd",
 ];
-const SUPERVISOR_SOCKET_PATH_V1: &str = "run/fe2o3/compiler-execution-supervisor.sock";
 const COMPILER_UID_V1: u32 = 999;
 const READINESS_TIMEOUT_V1: Duration = Duration::from_secs(30);
 const SHUTDOWN_TIMEOUT_V1: Duration = Duration::from_secs(30);
@@ -296,7 +303,7 @@ pub(super) fn boot_and_stop_systemd_machine_v1(
     let (base, root) = provisioned.inherit_systemd_machine_descriptors()?;
     let mut machine = RunningSystemdMachineV1::spawn(&base, &root, staging_name)?;
     hooks.checkpoint(QualificationFaultPointV1::SystemdMachineSpawned)?;
-    await_machine_readiness(&mut machine, &root, READINESS_TIMEOUT_V1)?;
+    let _readiness = await_machine_readiness(&mut machine, &root, READINESS_TIMEOUT_V1)?;
     hooks.checkpoint(QualificationFaultPointV1::SystemdMachineReady)?;
     machine.stop(SHUTDOWN_TIMEOUT_V1)?;
     hooks.checkpoint(QualificationFaultPointV1::SystemdMachineStopped)?;
@@ -420,16 +427,12 @@ fn await_machine_readiness(
     machine: &mut RunningSystemdMachineV1,
     root: &OwnedFd,
     timeout: Duration,
-) -> Result<(), DeploymentVerificationErrorV1> {
+) -> Result<MachineSocketReadinessV1, DeploymentVerificationErrorV1> {
     let deadline = Instant::now() + timeout;
+    let policy = MachineSocketPolicyV1::production();
     loop {
-        match open_machine_socket(root) {
-            Ok(socket) => {
-                validate_machine_socket(root, &socket)?;
-                return Ok(());
-            }
-            Err(source) if source == rustix::io::Errno::NOENT => {}
-            Err(source) => return Err(io_error("open systemd machine readiness socket", source)),
+        if let Some(readiness) = try_admit_machine_socket(root, policy)? {
+            return Ok(readiness);
         }
         if let Some(status) = machine.try_wait()? {
             machine.child.take();
@@ -438,17 +441,75 @@ fn await_machine_readiness(
         if Instant::now() >= deadline {
             return Err(invalid(
                 DeploymentVerificationErrorKindV1::InvalidQualificationBoot,
-                "systemd machine did not publish its socket within the fixed timeout",
+                "systemd machine did not publish an exact connectable SOCK_SEQPACKET listener within the fixed timeout",
             ));
         }
         std::thread::sleep(POLL_INTERVAL_V1);
     }
 }
 
-fn open_machine_socket(root: &OwnedFd) -> Result<OwnedFd, rustix::io::Errno> {
+#[derive(Debug)]
+struct MachineSocketReadinessV1 {
+    _control: OwnedFd,
+}
+
+#[derive(Clone, Copy)]
+struct MachineSocketPolicyV1<'a> {
+    relative_path: &'a str,
+    peer_path: &'a Path,
+    socket_owner: (u32, u32),
+    peer_owner: (u32, u32),
+}
+
+impl MachineSocketPolicyV1<'static> {
+    fn production() -> Self {
+        Self {
+            relative_path: COMPILER_EXECUTION_SUPERVISOR_SOCKET_PATH_V1
+                .strip_prefix('/')
+                .expect("the fixed production listener path is absolute"),
+            peer_path: Path::new(COMPILER_EXECUTION_SUPERVISOR_SOCKET_PATH_V1),
+            socket_owner: (0, COMPILER_UID_V1),
+            peer_owner: (0, 0),
+        }
+    }
+}
+
+fn try_admit_machine_socket(
+    root: &OwnedFd,
+    policy: MachineSocketPolicyV1<'_>,
+) -> Result<Option<MachineSocketReadinessV1>, DeploymentVerificationErrorV1> {
+    let socket = match open_machine_socket(root, policy.relative_path) {
+        Ok(socket) => socket,
+        Err(rustix::io::Errno::NOENT) => return Ok(None),
+        Err(source) => return Err(io_error("open systemd machine readiness socket", source)),
+    };
+    let before = validate_machine_socket_metadata(root, &socket, policy)?;
+    let control = match connect_machine_socket(root, policy.relative_path) {
+        Ok(control) => control,
+        Err(
+            rustix::io::Errno::NOENT
+            | rustix::io::Errno::CONNREFUSED
+            | rustix::io::Errno::AGAIN
+            | rustix::io::Errno::INPROGRESS
+            | rustix::io::Errno::ALREADY
+            | rustix::io::Errno::INTR,
+        ) => return Ok(None),
+        Err(source) => {
+            return Err(io_error(
+                "connect to systemd machine SOCK_SEQPACKET listener",
+                source,
+            ));
+        }
+    };
+    validate_connected_machine_socket(&control, policy)?;
+    revalidate_machine_socket(root, &socket, before, policy)?;
+    Ok(Some(MachineSocketReadinessV1 { _control: control }))
+}
+
+fn open_machine_socket(root: &OwnedFd, relative_path: &str) -> Result<OwnedFd, rustix::io::Errno> {
     openat2(
         root,
-        SUPERVISOR_SOCKET_PATH_V1,
+        relative_path,
         OFlags::PATH | OFlags::CLOEXEC | OFlags::NOFOLLOW,
         Mode::empty(),
         ResolveFlags::BENEATH
@@ -458,17 +519,20 @@ fn open_machine_socket(root: &OwnedFd) -> Result<OwnedFd, rustix::io::Errno> {
     )
 }
 
-fn validate_machine_socket(
+fn validate_machine_socket_metadata(
     root: &OwnedFd,
     socket: &OwnedFd,
-) -> Result<(), DeploymentVerificationErrorV1> {
-    let before = fstat(socket)
-        .map_err(|source| io_error("inspect systemd machine readiness socket", source))?;
-    if FileType::from_raw_mode(before.st_mode) != FileType::Socket
-        || before.st_mode & 0o7777 != 0o660
-        || (before.st_uid, before.st_gid) != (0, COMPILER_UID_V1)
-        || before.st_nlink != 1
-        || before.st_size != 0
+    policy: MachineSocketPolicyV1<'_>,
+) -> Result<super::ObjectSnapshotV1, DeploymentVerificationErrorV1> {
+    let before = snapshot(
+        &fstat(socket)
+            .map_err(|source| io_error("inspect systemd machine readiness socket", source))?,
+    );
+    if FileType::from_raw_mode(before.mode) != FileType::Socket
+        || before.mode & 0o7777 != COMPILER_EXECUTION_SUPERVISOR_SOCKET_MODE_V1
+        || (before.uid, before.gid) != policy.socket_owner
+        || before.links != 1
+        || before.byte_len != 0
     {
         return Err(invalid(
             DeploymentVerificationErrorKindV1::InvalidQualificationBoot,
@@ -476,8 +540,9 @@ fn validate_machine_socket(
         ));
     }
     let path = format!(
-        "/proc/self/fd/{}/{SUPERVISOR_SOCKET_PATH_V1}",
-        root.as_raw_fd()
+        "/proc/self/fd/{}/{}",
+        root.as_raw_fd(),
+        policy.relative_path
     );
     let mut attributes = [0_u8; 1];
     match llistxattr(path, &mut attributes) {
@@ -495,32 +560,122 @@ fn validate_machine_socket(
             ));
         }
     }
-    let reopened = open_machine_socket(root)
-        .map_err(|source| io_error("reopen systemd machine readiness socket", source))?;
-    let after = fstat(&reopened)
-        .map_err(|source| io_error("reinspect systemd machine readiness socket", source))?;
-    if (
-        before.st_dev,
-        before.st_ino,
-        before.st_mode,
-        before.st_uid,
-        before.st_gid,
-    ) != (
-        after.st_dev,
-        after.st_ino,
-        after.st_mode,
-        after.st_uid,
-        after.st_gid,
-    ) {
+    Ok(before)
+}
+
+fn connect_machine_socket(
+    root: &OwnedFd,
+    relative_path: &str,
+) -> Result<OwnedFd, rustix::io::Errno> {
+    let path = format!("/proc/self/fd/{}/{relative_path}", root.as_raw_fd());
+    let address = SocketAddrUnix::new(path)?;
+    let control = socket_with(
+        AddressFamily::UNIX,
+        SocketType::SEQPACKET,
+        SocketFlags::CLOEXEC | SocketFlags::NONBLOCK,
+        None,
+    )?;
+    match connect(&control, &address) {
+        Ok(()) | Err(rustix::io::Errno::ISCONN) => Ok(control),
+        Err(source) => Err(source),
+    }
+}
+
+fn validate_connected_machine_socket(
+    control: &OwnedFd,
+    policy: MachineSocketPolicyV1<'_>,
+) -> Result<(), DeploymentVerificationErrorV1> {
+    let descriptor_flags = fcntl_getfd(control)
+        .map_err(|source| io_error("inspect readiness connection descriptor flags", source))?;
+    let status_flags = rustix::fs::fcntl_getfl(control)
+        .map_err(|source| io_error("inspect readiness connection status flags", source))?;
+    let domain = rustix::net::sockopt::socket_domain(control)
+        .map_err(|source| io_error("inspect readiness connection domain", source))?;
+    let socket_type = rustix::net::sockopt::socket_type(control)
+        .map_err(|source| io_error("inspect readiness connection type", source))?;
+    let protocol = rustix::net::sockopt::socket_protocol(control)
+        .map_err(|source| io_error("inspect readiness connection protocol", source))?;
+    if descriptor_flags != FdFlags::CLOEXEC
+        || !status_flags.contains(OFlags::NONBLOCK)
+        || domain != AddressFamily::UNIX
+        || socket_type != SocketType::SEQPACKET
+        || protocol.is_some()
+    {
+        return Err(invalid(
+            DeploymentVerificationErrorKindV1::InvalidQualificationBoot,
+            "systemd machine readiness connection is not exact nonblocking Unix SOCK_SEQPACKET",
+        ));
+    }
+
+    let local = getsockname(control)
+        .map_err(|source| io_error("inspect readiness connection local address", source))?;
+    let local = SocketAddrUnix::try_from(local)
+        .map_err(|source| io_error("decode readiness connection local Unix address", source))?;
+    let remote = getpeername(control)
+        .map_err(|source| io_error("inspect readiness connection peer address", source))?
+        .ok_or_else(|| {
+            invalid(
+                DeploymentVerificationErrorKindV1::InvalidQualificationBoot,
+                "systemd machine readiness connection has no peer address",
+            )
+        })?;
+    let remote = SocketAddrUnix::try_from(remote)
+        .map_err(|source| io_error("decode readiness connection peer Unix address", source))?;
+    let expected_remote = SocketAddrUnix::new(policy.peer_path)
+        .map_err(|source| io_error("construct canonical readiness peer address", source))?;
+    if local.abstract_name() != Some(&[][..]) || remote.path_bytes() != expected_remote.path_bytes()
+    {
+        return Err(invalid(
+            DeploymentVerificationErrorKindV1::InvalidQualificationBoot,
+            "systemd machine readiness connection address is not canonical",
+        ));
+    }
+
+    let credentials = rustix::net::sockopt::socket_peercred(control)
+        .map_err(|source| io_error("inspect readiness connection peer credentials", source))?;
+    if credentials.pid.as_raw_pid() <= 0
+        || (credentials.uid.as_raw(), credentials.gid.as_raw()) != policy.peer_owner
+    {
+        return Err(invalid(
+            DeploymentVerificationErrorKindV1::InvalidQualificationBoot,
+            "systemd machine readiness peer credentials are not canonical",
+        ));
+    }
+    Ok(())
+}
+
+fn revalidate_machine_socket(
+    root: &OwnedFd,
+    retained: &OwnedFd,
+    before: super::ObjectSnapshotV1,
+    policy: MachineSocketPolicyV1<'_>,
+) -> Result<(), DeploymentVerificationErrorV1> {
+    let retained_after = snapshot(
+        &fstat(retained)
+            .map_err(|source| io_error("reinspect retained machine readiness socket", source))?,
+    );
+    if retained_after != before {
         return Err(changed(
-            "systemd machine readiness socket changed during admission",
+            "systemd machine readiness socket changed during connection admission",
+        ));
+    }
+    validate_machine_socket_metadata(root, retained, policy)?;
+    let reopened = open_machine_socket(root, policy.relative_path)
+        .map_err(|source| io_error("reopen systemd machine readiness socket", source))?;
+    let reopened_snapshot = snapshot(
+        &fstat(&reopened)
+            .map_err(|source| io_error("reinspect systemd machine readiness socket", source))?,
+    );
+    if reopened_snapshot != before {
+        return Err(changed(
+            "systemd machine readiness socket pathname changed during connection admission",
         ));
     }
     Ok(())
 }
 
 fn require_machine_socket_absent(root: &OwnedFd) -> Result<(), DeploymentVerificationErrorV1> {
-    match open_machine_socket(root) {
+    match open_machine_socket(root, MachineSocketPolicyV1::production().relative_path) {
         Err(rustix::io::Errno::NOENT) => Ok(()),
         Ok(_) => Err(invalid(
             DeploymentVerificationErrorKindV1::InvalidQualificationBoot,
@@ -546,7 +701,12 @@ fn machine_exit_error(stage: &'static str, status: ExitStatus) -> DeploymentVeri
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
     use std::os::fd::AsFd as _;
+    use std::os::unix::fs::PermissionsExt as _;
+    use std::path::PathBuf;
+
+    use rustix::net::{bind, listen};
 
     use super::*;
 
@@ -659,5 +819,130 @@ mod tests {
             (expected.st_dev, expected.st_ino),
             (observed.st_dev, observed.st_ino)
         );
+    }
+
+    #[test]
+    fn readiness_admits_one_exact_connected_seqpacket_listener() {
+        let fixture = ListenerFixtureV1::new(SocketType::SEQPACKET);
+        let readiness = try_admit_machine_socket(&fixture.root, fixture.policy())
+            .unwrap()
+            .expect("the listening socket is immediately connectable");
+        assert_eq!(
+            rustix::net::sockopt::socket_type(&readiness._control).unwrap(),
+            SocketType::SEQPACKET
+        );
+        assert!(getpeername(&readiness._control).unwrap().is_some());
+    }
+
+    #[test]
+    fn readiness_absence_is_retryable_without_accepting_other_objects() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root: OwnedFd = File::open(temporary.path()).unwrap().into();
+        let missing = temporary.path().join("listener.sock");
+        let policy = policy(&missing);
+        assert!(try_admit_machine_socket(&root, policy).unwrap().is_none());
+
+        fs::write(&missing, []).unwrap();
+        fs::set_permissions(
+            &missing,
+            fs::Permissions::from_mode(COMPILER_EXECUTION_SUPERVISOR_SOCKET_MODE_V1),
+        )
+        .unwrap();
+        assert_eq!(
+            try_admit_machine_socket(&root, policy).unwrap_err().kind(),
+            DeploymentVerificationErrorKindV1::InvalidQualificationBoot
+        );
+    }
+
+    #[test]
+    fn readiness_rejects_wrong_mode_type_path_and_peer_credentials() {
+        let wrong_mode = ListenerFixtureV1::new(SocketType::SEQPACKET);
+        fs::set_permissions(&wrong_mode.path, fs::Permissions::from_mode(0o666)).unwrap();
+        assert_eq!(
+            try_admit_machine_socket(&wrong_mode.root, wrong_mode.policy())
+                .unwrap_err()
+                .kind(),
+            DeploymentVerificationErrorKindV1::InvalidQualificationBoot
+        );
+
+        let wrong_type = ListenerFixtureV1::new(SocketType::STREAM);
+        assert!(try_admit_machine_socket(&wrong_type.root, wrong_type.policy()).is_err());
+
+        let wrong_path = ListenerFixtureV1::new(SocketType::SEQPACKET);
+        let other_path = wrong_path._temporary.path().join("other.sock");
+        let mut wrong_path_policy = wrong_path.policy();
+        wrong_path_policy.peer_path = &other_path;
+        assert_eq!(
+            try_admit_machine_socket(&wrong_path.root, wrong_path_policy)
+                .unwrap_err()
+                .kind(),
+            DeploymentVerificationErrorKindV1::InvalidQualificationBoot
+        );
+
+        let wrong_credentials = ListenerFixtureV1::new(SocketType::SEQPACKET);
+        let mut wrong_credentials_policy = wrong_credentials.policy();
+        wrong_credentials_policy.peer_owner.0 =
+            wrong_credentials_policy.peer_owner.0.wrapping_add(1);
+        assert_eq!(
+            try_admit_machine_socket(&wrong_credentials.root, wrong_credentials_policy)
+                .unwrap_err()
+                .kind(),
+            DeploymentVerificationErrorKindV1::InvalidQualificationBoot
+        );
+    }
+
+    struct ListenerFixtureV1 {
+        _temporary: tempfile::TempDir,
+        root: OwnedFd,
+        _listener: OwnedFd,
+        path: PathBuf,
+    }
+
+    impl ListenerFixtureV1 {
+        fn new(socket_type: SocketType) -> Self {
+            let temporary = tempfile::tempdir().unwrap();
+            let path = temporary.path().join("listener.sock");
+            let listener = socket_with(
+                AddressFamily::UNIX,
+                socket_type,
+                SocketFlags::CLOEXEC | SocketFlags::NONBLOCK,
+                None,
+            )
+            .unwrap();
+            let address = SocketAddrUnix::new(&path).unwrap();
+            bind(&listener, &address).unwrap();
+            listen(&listener, 4).unwrap();
+            fs::set_permissions(
+                &path,
+                fs::Permissions::from_mode(COMPILER_EXECUTION_SUPERVISOR_SOCKET_MODE_V1),
+            )
+            .unwrap();
+            let root: OwnedFd = File::open(temporary.path()).unwrap().into();
+            Self {
+                _temporary: temporary,
+                root,
+                _listener: listener,
+                path,
+            }
+        }
+
+        fn policy(&self) -> MachineSocketPolicyV1<'_> {
+            policy(&self.path)
+        }
+    }
+
+    fn policy(peer_path: &Path) -> MachineSocketPolicyV1<'_> {
+        MachineSocketPolicyV1 {
+            relative_path: "listener.sock",
+            peer_path,
+            socket_owner: (
+                rustix::process::geteuid().as_raw(),
+                rustix::process::getegid().as_raw(),
+            ),
+            peer_owner: (
+                rustix::process::geteuid().as_raw(),
+                rustix::process::getegid().as_raw(),
+            ),
+        }
     }
 }

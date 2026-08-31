@@ -339,7 +339,7 @@ host probe now drive the sole verify-to-cleanup transaction. Its closed
 25-point fault set covers mount admission, every pinned systemd command and
 subsequent lower revalidation, exact preflight postconditions, production
 generation-1 provisioning with independent record/key/image admission, isolated machine
-spawn, supervisor-socket readiness, bounded shutdown, post-boot lower
+spawn, exact authenticated Unix `SOCK_SEQPACKET` connection admission, bounded shutdown, post-boot lower
 and provisioning revalidation, both unmounts, loop release, and staging removal. Normal, fault, and campaign runs share that
 transaction, and each admitted fault freshly revalidates the bundle, base, and
 complete installed lower after cleanup. One aggregate campaign requires first

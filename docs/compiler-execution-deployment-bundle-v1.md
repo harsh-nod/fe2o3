@@ -5,7 +5,8 @@ fresh installed-root revalidation, sealed disposable-root preparation, and an
 exact fault-cleaned empty staging transaction. Private-namespace mount
 composition, composed-root systemd preflight, generation-1 production
 provisioning with independent postcondition admission, and descriptor-pinned
-isolated boot through socket readiness and bounded shutdown are implemented but
+isolated boot through exact authenticated Unix `SOCK_SEQPACKET` connection
+admission and bounded shutdown are implemented but
 not yet host-root qualified. Distinct-UID systemd execution qualification
 remains open. A static host probe and sole
 verify-to-provision-to-boot-to-cleanup harness are implemented. One closed

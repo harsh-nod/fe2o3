@@ -12,7 +12,7 @@ publish = false
 ed25519-dalek = { version = "=2.2.0", default-features = false, features = ["fast", "zeroize"] }
 fe2o3-compiler-execution-protocol.workspace = true
 fe2o3-loop-device.workspace = true
-rustix = { workspace = true, features = ["mount", "process", "rand", "thread"] }
+rustix = { workspace = true, features = ["mount", "net", "process", "rand", "thread"] }
 sha2.workspace = true
 signal-hook.workspace = true
 zeroize = "=1.9.0"

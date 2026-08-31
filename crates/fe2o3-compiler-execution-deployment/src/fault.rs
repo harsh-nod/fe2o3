@@ -67,7 +67,7 @@ pub enum QualificationFaultPointV1 {
     CompilerExecutionProvisioningAdmitted,
     /// The exact pinned machine helper was spawned with retained descriptor custody.
     SystemdMachineSpawned,
-    /// The isolated systemd machine published the admitted supervisor socket.
+    /// The isolated machine exposed and accepted an exact authenticated supervisor connection.
     SystemdMachineReady,
     /// The isolated systemd machine completed bounded graceful shutdown.
     SystemdMachineStopped,

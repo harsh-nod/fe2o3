@@ -75,6 +75,8 @@ impl CompilerExecutionQualificationReportV1 {
             ),
             ("systemd_boot", "complete".to_owned()),
             ("systemd_machine_ready", "true".to_owned()),
+            ("supervisor_socket_type", "unix-seqpacket".to_owned()),
+            ("supervisor_socket_connected", "true".to_owned()),
             ("systemd_shutdown", "complete".to_owned()),
             ("compiler_uid", self.compiler_uid.to_string()),
             ("compiler_gid", self.compiler_gid.to_string()),
@@ -189,6 +191,7 @@ impl CompilerExecutionQualificationCampaignReportV1 {
             ("systemd_preflight_run_count", "2".to_owned()),
             ("compiler_execution_provisioning_run_count", "2".to_owned()),
             ("systemd_boot_run_count", "2".to_owned()),
+            ("supervisor_socket_connectivity_run_count", "2".to_owned()),
             ("systemd_version", self.systemd_version.clone()),
             ("compiler_uid", self.compiler_uid.to_string()),
             ("compiler_gid", self.compiler_gid.to_string()),
@@ -258,9 +261,9 @@ impl<'a> CompilerExecutionQualificationRequestV1<'a> {
 /// Runs and completely cleans one root-only disposable systemd boot transaction.
 ///
 /// This is the sole high-level qualification path through verification, installation, mount
-/// composition, sysusers, tmpfiles, unit verification, isolated boot, socket readiness, bounded
-/// shutdown, exact postcondition admission, and cleanup. It grants no persistent service or
-/// compiler-execution authority.
+/// composition, sysusers, tmpfiles, unit verification, isolated boot, exact supervisor-socket
+/// connection admission, bounded shutdown, exact postcondition admission, and cleanup. It grants
+/// no persistent service or compiler-execution authority.
 pub fn run_compiler_execution_qualification_v1(
     bundle_root: &Path,
     expected_manifest_sha256: &str,
@@ -619,12 +622,14 @@ mod tests {
             policy_generation: 1,
         };
         let encoded = report.canonical_report();
-        assert_eq!(encoded.lines().count(), 26);
+        assert_eq!(encoded.lines().count(), 28);
         assert!(encoded.contains("systemd_sysusers=complete\n"));
         assert!(encoded.contains("systemd_unit_verify_count=3\n"));
         assert!(encoded.contains("systemd_boot=complete\n"));
         assert!(encoded.contains("post_boot_provisioning_revalidated=true\n"));
         assert!(encoded.contains("systemd_machine_ready=true\n"));
+        assert!(encoded.contains("supervisor_socket_type=unix-seqpacket\n"));
+        assert!(encoded.contains("supervisor_socket_connected=true\n"));
         assert!(encoded.ends_with("post_boot_lower_revalidated=true\ncleanup=complete\n"));
         assert!(encoded.contains(&format!(
             "manifest_sha256={}\n",
@@ -668,11 +673,12 @@ mod tests {
             policy_generation: 1,
         };
         let encoded = report.canonical_report();
-        assert_eq!(encoded.lines().count(), 22);
+        assert_eq!(encoded.lines().count(), 23);
         assert!(encoded.contains("normal_run_count=2\n"));
         assert!(encoded.contains("systemd_preflight_run_count=2\n"));
         assert!(encoded.contains("compiler_execution_provisioning_run_count=2\n"));
         assert!(encoded.contains("systemd_boot_run_count=2\n"));
+        assert!(encoded.contains("supervisor_socket_connectivity_run_count=2\n"));
         assert!(encoded.contains("qualification_fault_count=25\n"));
         assert!(encoded.contains("reacquisition_count=51\n"));
         assert!(!encoded.contains("staging_name"));
