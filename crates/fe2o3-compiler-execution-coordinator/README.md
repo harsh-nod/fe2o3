@@ -70,8 +70,12 @@ RPATH, RUNPATH, undefined symbol, or executable stack.
 provisioning command. It takes one nonzero canonical decimal policy generation
 and otherwise uses only fixed service names, image paths, output names, and
 filesystem policy. It creates missing signing seeds, derives the complete
-policy/supervisor/anchor/provisioning record graph, and uses durable no-replace
-publication. Before reading or publishing mutable deployment state it retains an
+policy/client-profile/supervisor/anchor/provisioning record graph, and uses
+durable no-replace publication. The public profile is derived from the exact
+supervisor and external-anchor service identities and policy in that graph and
+is published root-owned, single-link, and mode `0444` at
+`/etc/fe2o3/compiler-execution/client-profile-v1`. Before reading or publishing
+mutable deployment state it retains an
 exclusive lease on the dedicated root-only lifecycle file and its root-owned
 parent pathname. The production coordinator derives that sibling from its
 existing state-root descriptor, takes the corresponding shared lease before key

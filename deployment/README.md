@@ -100,7 +100,7 @@ exited. Provisioning and activation therefore
 cannot overlap without adding another activation descriptor or conflicting with
 the issuer's independent state-root singleton lock. The provisioner then
 measures every fixed static image twice, creates missing 32-byte key seeds from
-the kernel random source, derives the complete four-record graph, and publishes
+the kernel random source, derives the complete five-record graph, and publishes
 each file with no-replace rename plus file and directory durability.
 The lifecycle parent must reside on a local Linux filesystem with native
 `flock(2)` open-file-description semantics; NFS and SMB/CIFS are not supported

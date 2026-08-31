@@ -9,6 +9,8 @@ use std::os::unix::fs::FileExt;
 use std::path::{Path, PathBuf};
 
 use ed25519_dalek::SigningKey;
+#[cfg(test)]
+use fe2o3_compiler_execution_protocol::COMPILER_EXECUTION_CLIENT_PROFILE_PATH_V1;
 use fe2o3_compiler_execution_protocol::{
     COMPILER_EXECUTION_LIFECYCLE_LOCK_PATH_V1, COMPILER_EXECUTION_SUPERVISOR_SOCKET_PATH_V1,
     CompilerExecutionIssuerMeasurementV1,
@@ -44,6 +46,7 @@ const ANCHOR_DAEMON_PATH_V1: &str = "/usr/libexec/fe2o3/fe2o3-external-anchor-se
 
 const SUPERVISOR_DEPLOYMENT_FILE_V1: &str = "supervisor-deployment-v1";
 const ISSUER_POLICY_FILE_V1: &str = "issuer-policy-v1";
+const CLIENT_PROFILE_FILE_V1: &str = "client-profile-v1";
 const ANCHOR_DEPLOYMENT_FILE_V1: &str = "anchor-deployment-v1";
 const ANCHOR_PROVISIONING_FILE_V1: &str = "anchor-provisioning-v1";
 const ISSUER_SEED_FILE_V1: &str = "issuer-signing-key-seed-v1";
@@ -367,6 +370,14 @@ fn provision_layout(
         ISSUER_POLICY_FILE_V1,
         "issuer policy",
         bundle.policy().canonical_bytes(),
+        expected_file_uid,
+        expected_file_gid,
+    )?;
+    publish_or_verify(
+        &directory,
+        CLIENT_PROFILE_FILE_V1,
+        "client profile",
+        bundle.client_profile().canonical_bytes(),
         expected_file_uid,
         expected_file_gid,
     )?;
@@ -1289,10 +1300,11 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
 
     use fe2o3_compiler_execution_protocol::{
+        COMPILER_EXECUTION_CLIENT_PROFILE_BYTES_V1,
         COMPILER_EXECUTION_EXTERNAL_ANCHOR_DEPLOYMENT_BYTES_V1,
         COMPILER_EXECUTION_EXTERNAL_ANCHOR_PROVISIONING_BYTES_V1,
         COMPILER_EXECUTION_ISSUER_POLICY_BYTES_V1, COMPILER_EXECUTION_LIFECYCLE_LOCK_MODE_V1,
-        COMPILER_EXECUTION_SUPERVISOR_DEPLOYMENT_BYTES_V1,
+        COMPILER_EXECUTION_SUPERVISOR_DEPLOYMENT_BYTES_V1, CompilerExecutionClientProfileV1,
         CompilerExecutionExternalAnchorDeploymentV1, CompilerExecutionExternalAnchorProvisioningV1,
         CompilerExecutionIssuerPolicyV1, CompilerExecutionSupervisorDeploymentV1,
     };
@@ -1318,6 +1330,14 @@ mod tests {
         ] {
             assert!(parse_generation(OsStr::new(value)).is_err(), "{value:?}");
         }
+    }
+
+    #[test]
+    fn client_profile_publication_path_matches_protocol() {
+        assert_eq!(
+            Path::new(CONFIG_DIRECTORY_V1).join(CLIENT_PROFILE_FILE_V1),
+            Path::new(COMPILER_EXECUTION_CLIENT_PROFILE_PATH_V1),
+        );
     }
 
     #[test]
@@ -1387,6 +1407,7 @@ mod tests {
         ));
         assert!(!config.join(ISSUER_SEED_FILE_V1).exists());
         assert!(!config.join(ISSUER_POLICY_FILE_V1).exists());
+        assert!(!config.join(CLIENT_PROFILE_FILE_V1).exists());
         drop(active_service);
 
         provision_layout(&layout, 7, compiler, anchor, uid, gid).unwrap();
@@ -1395,6 +1416,33 @@ mod tests {
         assert_eq!(read_records(&config), before);
 
         std::fs::remove_file(config.join(ANCHOR_PROVISIONING_FILE_V1)).unwrap();
+        provision_layout(&layout, 7, compiler, anchor, uid, gid).unwrap();
+        assert_eq!(read_records(&config), before);
+
+        std::fs::remove_file(config.join(CLIENT_PROFILE_FILE_V1)).unwrap();
+        provision_layout(&layout, 7, compiler, anchor, uid, gid).unwrap();
+        assert_eq!(read_records(&config), before);
+
+        let profile_path = config.join(CLIENT_PROFILE_FILE_V1);
+        let mut substituted_profile = before[1].clone();
+        substituted_profile[COMPILER_EXECUTION_CLIENT_PROFILE_BYTES_V1 - 1] ^= 1;
+        std::fs::set_permissions(&profile_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::fs::write(&profile_path, &substituted_profile).unwrap();
+        std::fs::set_permissions(
+            &profile_path,
+            std::fs::Permissions::from_mode(PUBLIC_RECORD_MODE_V1),
+        )
+        .unwrap();
+        assert!(matches!(
+            provision_layout(&layout, 7, compiler, anchor, uid, gid),
+            Err(
+                CompilerExecutionProvisioningInstallErrorV1::ExistingFileMismatch {
+                    role: "client profile"
+                }
+            )
+        ));
+        assert_eq!(std::fs::read(&profile_path).unwrap(), substituted_profile);
+        std::fs::remove_file(&profile_path).unwrap();
         provision_layout(&layout, 7, compiler, anchor, uid, gid).unwrap();
         assert_eq!(read_records(&config), before);
 
@@ -1435,10 +1483,18 @@ mod tests {
         assert_eq!(read_records(&config), before);
 
         let policy = CompilerExecutionIssuerPolicyV1::decode(&before[0]).unwrap();
-        let supervisor = CompilerExecutionSupervisorDeploymentV1::decode(&before[1]).unwrap();
-        let anchor = CompilerExecutionExternalAnchorDeploymentV1::decode(&before[2]).unwrap();
+        let profile = CompilerExecutionClientProfileV1::decode(&before[1]).unwrap();
+        let supervisor = CompilerExecutionSupervisorDeploymentV1::decode(&before[2]).unwrap();
+        let anchor = CompilerExecutionExternalAnchorDeploymentV1::decode(&before[3]).unwrap();
         let provisioning =
-            CompilerExecutionExternalAnchorProvisioningV1::decode(&before[3]).unwrap();
+            CompilerExecutionExternalAnchorProvisioningV1::decode(&before[4]).unwrap();
+        assert_eq!(profile.supervisor_uid(), supervisor.service_uid());
+        assert_eq!(profile.supervisor_gid(), supervisor.service_gid());
+        assert_eq!(
+            profile.external_anchor_service(),
+            supervisor.external_anchor_service()
+        );
+        assert_eq!(profile.policy(), &policy);
         assert!(supervisor.matches_policy(&policy));
         assert!(anchor.matches_supervisor_and_policy(&supervisor, &policy));
         assert!(provisioning.matches_deployment(&anchor));
@@ -1449,6 +1505,11 @@ mod tests {
                 ISSUER_POLICY_FILE_V1,
                 PUBLIC_RECORD_MODE_V1,
                 COMPILER_EXECUTION_ISSUER_POLICY_BYTES_V1,
+            ),
+            (
+                CLIENT_PROFILE_FILE_V1,
+                PUBLIC_RECORD_MODE_V1,
+                COMPILER_EXECUTION_CLIENT_PROFILE_BYTES_V1,
             ),
             (
                 SUPERVISOR_DEPLOYMENT_FILE_V1,
@@ -1610,9 +1671,10 @@ mod tests {
         ));
     }
 
-    fn read_records(directory: &Path) -> [Vec<u8>; 4] {
+    fn read_records(directory: &Path) -> [Vec<u8>; 5] {
         [
             std::fs::read(directory.join(ISSUER_POLICY_FILE_V1)).unwrap(),
+            std::fs::read(directory.join(CLIENT_PROFILE_FILE_V1)).unwrap(),
             std::fs::read(directory.join(SUPERVISOR_DEPLOYMENT_FILE_V1)).unwrap(),
             std::fs::read(directory.join(ANCHOR_DEPLOYMENT_FILE_V1)).unwrap(),
             std::fs::read(directory.join(ANCHOR_PROVISIONING_FILE_V1)).unwrap(),
