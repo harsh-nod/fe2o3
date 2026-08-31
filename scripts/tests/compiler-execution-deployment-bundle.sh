@@ -58,6 +58,7 @@ readonly qualification_source="${repo_root}/crates/fe2o3-compiler-execution-depl
 readonly qualification_supervisor_source="${repo_root}/crates/fe2o3-compiler-execution-deployment/src/supervisor.rs"
 readonly qualification_fault_source="${repo_root}/crates/fe2o3-compiler-execution-deployment/src/fault.rs"
 readonly qualification_preflight_source="${repo_root}/crates/fe2o3-compiler-execution-deployment/src/preflight.rs"
+readonly qualification_provision_source="${repo_root}/crates/fe2o3-compiler-execution-deployment/src/provision.rs"
 readonly qualification_boot_source="${repo_root}/crates/fe2o3-compiler-execution-deployment/src/boot.rs"
 readonly qualification_cgroup_source="${repo_root}/crates/fe2o3-compiler-execution-deployment/src/cgroup.rs"
 readonly qualification_run_source="${repo_root}/crates/fe2o3-compiler-execution-deployment/src/run.rs"
@@ -143,6 +144,24 @@ for preflight_contract in \
   grep -Fq -- "${preflight_contract}" "${qualification_preflight_source}" ||
     fail "missing composed-root preflight contract ${preflight_contract}"
 done
+for provision_contract in \
+  '/usr/libexec/fe2o3/fe2o3-compiler-execution-provision' \
+  run_compiler_execution_provisioning_with_hooks_v1 \
+  execute_compiler_execution_provisioning_tool_v1 \
+  admit_provisioned_state \
+  require_current_provisioned_state \
+  CompilerExecutionIssuerPolicyV1::decode \
+  CompilerExecutionSupervisorDeploymentV1::decode \
+  CompilerExecutionExternalAnchorDeploymentV1::decode \
+  CompilerExecutionExternalAnchorProvisioningV1::decode \
+  sealed_static_issuer_runtime_measurement_v1 \
+  SigningKey::from_bytes \
+  measure_static_image \
+  'rustix::process::chroot' \
+  'Resource::Fsize'; do
+  grep -Fq -- "${provision_contract}" "${qualification_provision_source}" ||
+    fail "missing composed-root provisioning contract ${provision_contract}"
+done
 for fault_contract in \
   QualificationFaultPointV1 \
   SystemdVersionComplete \
@@ -151,6 +170,9 @@ for fault_contract in \
   SystemdUnitVerifyComplete \
   SystemdPostconditionsAdmitted \
   InstalledLowerRevalidated \
+  CompilerExecutionProvisioningComplete \
+  CompilerExecutionProvisioningRevalidated \
+  CompilerExecutionProvisioningAdmitted \
   SystemdMachineSpawned \
   SystemdMachineReady \
   SystemdMachineStopped \
@@ -163,6 +185,8 @@ grep -Fq -- 'run_compiler_execution_qualification_request_v1' "${qualification_r
   fail 'unified qualification run path is missing'
 grep -Fq -- 'execute_staged_qualification_with_hooks' "${qualification_run_source}" ||
   fail 'shared normal/fault qualification transaction is missing'
+grep -Fq -- 'run_compiler_execution_provisioning_with_hooks_v1' "${qualification_run_source}" ||
+  fail 'production provisioning is missing from the unified qualification transaction'
 grep -Fq -- 'revalidate_qualification_inputs_after_fault' "${qualification_run_source}" ||
   fail 'post-fault installed-lower revalidation is missing'
 if grep -Fq -- 'run_compiler_execution_mount_qualification_request_v1' "${qualification_run_source}"; then

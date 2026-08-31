@@ -4,7 +4,7 @@ Status: deterministic base construction, caller-pinned SquashFS admission,
 sealed preparation custody, and the exact empty staging transaction are
 implemented. Private-namespace mount composition and descriptor-pinned isolated
 systemd boot are implemented but have not yet run under host root. The static
-probe, exact high-level qualification harness, closed 22-point transaction fault
+probe, exact high-level qualification harness, closed 25-point transaction fault
 set, and aggregate campaign are implemented. Live root execution, distinct-UID
 service execution, and privileged lifecycle fault qualification remain open.
 
@@ -158,9 +158,12 @@ cgroup V2, writable current-scope delegation, and the namespaces needed by the p
 creating a namespace, mount, or service. `run` is the sole high-level path through bundle
 verification, installation, base preparation, staging, private namespace entry,
 mount attachment, pinned-base `systemd-sysusers`, `systemd-tmpfiles --create`,
-offline `systemd-analyze verify`, exact postcondition admission, descriptor-pinned
+offline `systemd-analyze verify`, exact postcondition admission, execution of the
+shipped generation-1 production provisioner, independent admission of its six
+files, two seed-derived keys, four-record graph, service identities, sealed
+runtime, and five executable measurements, descriptor-pinned
 `systemd-nspawn` boot, supervisor-socket readiness, bounded graceful shutdown,
-post-boot lower revalidation, explicit cleanup, and a canonical completion
+post-boot provisioning and lower revalidation, explicit cleanup, and a canonical completion
 report. The three preflight tools execute from the
 admitted composed root through one inherited descriptor and a cleared
 environment. A hidden instance of the static harness binds itself to the exact
@@ -187,16 +190,17 @@ reaped, aggregate `cgroup.events` supplies the stronger boundary: any escaped
 session is killed through `cgroup.kill`, nested machine cgroups are removed
 deepest-first under fixed 64-level/4,096-entry bounds, and caller-visible
 evidence remains withheld until the retained scope itself is removed.
-`fault-points` lists the one closed transaction set. Its 22 ordered points cover
+`fault-points` lists the one closed transaction set. Its 25 ordered points cover
 the four mount-admission transitions, completion and revalidation of every
 systemd command, exact postcondition admission, final installed-lower
-revalidation, machine spawn, socket readiness, clean shutdown, post-boot lower
+revalidation, provisioning completion/revalidation/admission, machine spawn,
+socket readiness, clean shutdown, post-boot lower
 revalidation, and all four cleanup transitions. `fault` interrupts one exact
 point and accepts success only after the root-owned qualification parent is
 empty and a fresh caller-pinned bundle/base reacquisition completely
 revalidates the installed lower. `campaign` starts from an empty install parent
-and requires one publication, 45 exact reacquisitions, two complete normal
-preflight-and-boot runs, all 22 faults, stable identities, one exact installed-root
+and requires one publication, 51 exact reacquisitions, two complete normal
+preflight/provision/boot runs, all 25 faults, stable identities, one exact installed-root
 child, and complete staging cleanup. Normal, fault, and campaign execution all
 use the same internal qualification transaction. These commands grant no
 persistent service or compiler-execution authority.
@@ -234,10 +238,12 @@ successful worker that leaves recoverable staging is still a failed
 qualification. The standalone recovery commands do not terminate workers and
 must not be used concurrently with a supervised command.
 
-The preflight admits the deterministic V1 users and groups
+The preflight and provisioning admission retain the deterministic V1 users and groups
 `fe2o3-compiler:999:999` and `fe2o3-anchor:998:998`, exact account database
 bytes, all tmpfiles-owned directories and modes, the root-owned lifecycle file,
-and all three deployment/qualification units. The writable overlay may change,
+and all three deployment/qualification units. Provisioning must complete before
+socket activation because connecting to the listener starts the coordinator.
+The writable overlay may change,
 but the installed deployment lower remains independently retained and
 completely revalidated before successful evidence.
 
@@ -245,7 +251,7 @@ This implementation currently has compile, unit, custody-doctest, strict
 Clippy, strict rustdoc, static-musl, ELF loader-independence, and live read-only
 probe evidence. The current `mi300x` SSH identity has effective UID `1002` and
 no mount capabilities, so no successful kernel mount or composed-root systemd
-preflight or boot is claimed yet. The live root harness, live timeout/signal
+preflight, provisioning, or boot is claimed yet. The live root harness, live timeout/signal
 recovery, exact listener-type/connectivity admission, live cgroup teardown evidence, and
 live execution of the implemented qualification fault campaign remain required
 before this boundary is production-qualified.

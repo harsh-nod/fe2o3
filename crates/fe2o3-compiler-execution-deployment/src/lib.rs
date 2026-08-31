@@ -26,6 +26,7 @@ mod host;
 mod install;
 mod mount;
 mod preflight;
+mod provision;
 mod qualification;
 mod run;
 mod staging;
@@ -51,6 +52,7 @@ pub use mount::{
     enter_private_qualification_mount_namespace_v1,
 };
 pub use preflight::execute_compiler_execution_systemd_preflight_tool_v1;
+pub use provision::execute_compiler_execution_provisioning_tool_v1;
 pub use qualification::{
     PreparedCompilerExecutionQualificationV1, prepare_compiler_execution_qualification_v1,
 };
@@ -80,6 +82,12 @@ pub const COMPILER_EXECUTION_SYSTEMD_PREFLIGHT_TOOL_COMMAND_V1: &str =
 /// Parent-PID binding passed only from the qualification worker to its systemd helper.
 pub const COMPILER_EXECUTION_SYSTEMD_PREFLIGHT_PARENT_PID_ENV_V1: &str =
     "FE2O3_QUALIFICATION_SYSTEMD_PARENT_PID_V1";
+/// Hidden static-harness command that runs the admitted production provisioner in the composed root.
+pub const COMPILER_EXECUTION_PROVISIONING_TOOL_COMMAND_V1: &str =
+    "__compiler-execution-provisioning-tool-v1";
+/// Parent-PID binding passed only from the qualification worker to its provisioning helper.
+pub const COMPILER_EXECUTION_PROVISIONING_PARENT_PID_ENV_V1: &str =
+    "FE2O3_QUALIFICATION_PROVISIONING_PARENT_PID_V1";
 /// Hidden static-harness command that launches the pinned isolated systemd machine.
 pub const COMPILER_EXECUTION_SYSTEMD_MACHINE_TOOL_COMMAND_V1: &str = "__systemd-machine-tool-v1";
 /// Parent-PID binding passed only from the qualification worker to its machine helper.
@@ -1199,6 +1207,8 @@ pub enum DeploymentVerificationErrorKindV1 {
     InvalidQualificationMount,
     /// Composed-root systemd preparation or its exact postconditions failed admission.
     InvalidQualificationPreflight,
+    /// Production provisioning or its independently checked postconditions failed admission.
+    InvalidQualificationProvisioning,
     /// Pinned systemd machine launch, readiness, shutdown, or postcondition admission failed.
     InvalidQualificationBoot,
     /// A production root operation did not run with effective UID 0.

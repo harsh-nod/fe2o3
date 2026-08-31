@@ -6,6 +6,7 @@ use super::fault::{InjectQualificationFaultV1, NoQualificationFaultV1, Qualifica
 use super::install::verify_install_parent_children_v1;
 use super::mount::attach_compiler_execution_qualification_mounts_with_hooks_v1;
 use super::preflight::run_compiler_execution_systemd_preflight_with_hooks_v1;
+use super::provision::run_compiler_execution_provisioning_with_hooks_v1;
 use super::qualification::verify_empty_qualification_parent_v1;
 use super::{
     CompilerExecutionInstalledRootPublicationV1, DeploymentVerificationErrorKindV1,
@@ -22,7 +23,7 @@ const QUALIFICATION_FAULT_REPORT_SCHEMA_V1: &str =
 const QUALIFICATION_CAMPAIGN_REPORT_SCHEMA_V1: &str =
     "fe2o3-compiler-execution-qualification-campaign-report-v1";
 
-/// Inert report from one fully cleaned composed-root systemd preflight transaction.
+/// Inert report from one fully cleaned provisioned systemd-machine transaction.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CompilerExecutionQualificationReportV1 {
     git_commit: String,
@@ -38,6 +39,7 @@ pub struct CompilerExecutionQualificationReportV1 {
     compiler_gid: u32,
     anchor_uid: u32,
     anchor_gid: u32,
+    policy_generation: u64,
 }
 
 impl CompilerExecutionQualificationReportV1 {
@@ -78,7 +80,10 @@ impl CompilerExecutionQualificationReportV1 {
             ("compiler_gid", self.compiler_gid.to_string()),
             ("anchor_uid", self.anchor_uid.to_string()),
             ("anchor_gid", self.anchor_gid.to_string()),
+            ("policy_generation", self.policy_generation.to_string()),
+            ("compiler_execution_provisioning", "complete".to_owned()),
             ("installed_lower_revalidated", "true".to_owned()),
+            ("post_boot_provisioning_revalidated", "true".to_owned()),
             ("post_boot_lower_revalidated", "true".to_owned()),
             ("cleanup", "complete".to_owned()),
         ] {
@@ -151,6 +156,7 @@ pub struct CompilerExecutionQualificationCampaignReportV1 {
     compiler_gid: u32,
     anchor_uid: u32,
     anchor_gid: u32,
+    policy_generation: u64,
 }
 
 impl CompilerExecutionQualificationCampaignReportV1 {
@@ -181,12 +187,14 @@ impl CompilerExecutionQualificationCampaignReportV1 {
             ("fault_points", fault_points),
             ("normal_run_count", "2".to_owned()),
             ("systemd_preflight_run_count", "2".to_owned()),
+            ("compiler_execution_provisioning_run_count", "2".to_owned()),
             ("systemd_boot_run_count", "2".to_owned()),
             ("systemd_version", self.systemd_version.clone()),
             ("compiler_uid", self.compiler_uid.to_string()),
             ("compiler_gid", self.compiler_gid.to_string()),
             ("anchor_uid", self.anchor_uid.to_string()),
             ("anchor_gid", self.anchor_gid.to_string()),
+            ("policy_generation", self.policy_generation.to_string()),
             (
                 "qualification_fault_count",
                 QualificationFaultPointV1::all().len().to_string(),
@@ -294,8 +302,9 @@ fn execute_staged_qualification_with_hooks(
         hooks,
     )?;
     let preflight = run_compiler_execution_systemd_preflight_with_hooks_v1(mounted, hooks)?;
-    if let Err(error) = boot_and_stop_systemd_machine_v1(&preflight, &staging_name, hooks) {
-        return match preflight.cleanup_with_hooks(hooks) {
+    let provisioned = run_compiler_execution_provisioning_with_hooks_v1(preflight, hooks)?;
+    if let Err(error) = boot_and_stop_systemd_machine_v1(&provisioned, &staging_name, hooks) {
+        return match provisioned.cleanup_with_hooks(hooks) {
             Ok(()) => Err(error),
             Err(cleanup) => Err(super::invalid(
                 DeploymentVerificationErrorKindV1::CleanupFailed,
@@ -304,21 +313,22 @@ fn execute_staged_qualification_with_hooks(
         };
     }
     let report = CompilerExecutionQualificationReportV1 {
-        git_commit: preflight.git_commit().to_owned(),
+        git_commit: provisioned.git_commit().to_owned(),
         target: transaction.target,
-        manifest_sha256: preflight.manifest_sha256(),
-        base_image_sha256: preflight.base_image_sha256(),
+        manifest_sha256: provisioned.manifest_sha256(),
+        base_image_sha256: provisioned.base_image_sha256(),
         installed_root_name: transaction.installed_root_name,
         installed_publication: transaction.installed_publication,
         staging_name,
-        systemd_version: preflight.systemd_version().to_owned(),
-        verified_unit_count: preflight.verified_unit_count(),
-        compiler_uid: preflight.compiler_uid(),
-        compiler_gid: preflight.compiler_gid(),
-        anchor_uid: preflight.anchor_uid(),
-        anchor_gid: preflight.anchor_gid(),
+        systemd_version: provisioned.systemd_version().to_owned(),
+        verified_unit_count: provisioned.verified_unit_count(),
+        compiler_uid: provisioned.compiler_uid(),
+        compiler_gid: provisioned.compiler_gid(),
+        anchor_uid: provisioned.anchor_uid(),
+        anchor_gid: provisioned.anchor_gid(),
+        policy_generation: provisioned.policy_generation(),
     };
-    preflight.cleanup_with_hooks(hooks)?;
+    provisioned.cleanup_with_hooks(hooks)?;
     Ok(report)
 }
 
@@ -484,6 +494,7 @@ pub fn run_compiler_execution_qualification_campaign_v1(
         compiler_gid: first.compiler_gid,
         anchor_uid: first.anchor_uid,
         anchor_gid: first.anchor_gid,
+        policy_generation: first.policy_generation,
     })
 }
 
@@ -548,10 +559,11 @@ fn require_systemd_identity(
         || expected.compiler_gid != observed.compiler_gid
         || expected.anchor_uid != observed.anchor_uid
         || expected.anchor_gid != observed.anchor_gid
+        || expected.policy_generation != observed.policy_generation
     {
         return Err(super::invalid(
             DeploymentVerificationErrorKindV1::InputChanged,
-            "systemd preflight identity changed between qualification runs",
+            "systemd or provisioning identity changed between qualification runs",
         ));
     }
     Ok(())
@@ -604,12 +616,14 @@ mod tests {
             compiler_gid: 999,
             anchor_uid: 998,
             anchor_gid: 998,
+            policy_generation: 1,
         };
         let encoded = report.canonical_report();
-        assert_eq!(encoded.lines().count(), 23);
+        assert_eq!(encoded.lines().count(), 26);
         assert!(encoded.contains("systemd_sysusers=complete\n"));
         assert!(encoded.contains("systemd_unit_verify_count=3\n"));
         assert!(encoded.contains("systemd_boot=complete\n"));
+        assert!(encoded.contains("post_boot_provisioning_revalidated=true\n"));
         assert!(encoded.contains("systemd_machine_ready=true\n"));
         assert!(encoded.ends_with("post_boot_lower_revalidated=true\ncleanup=complete\n"));
         assert!(encoded.contains(&format!(
@@ -651,14 +665,16 @@ mod tests {
             compiler_gid: 999,
             anchor_uid: 998,
             anchor_gid: 998,
+            policy_generation: 1,
         };
         let encoded = report.canonical_report();
-        assert_eq!(encoded.lines().count(), 20);
+        assert_eq!(encoded.lines().count(), 22);
         assert!(encoded.contains("normal_run_count=2\n"));
         assert!(encoded.contains("systemd_preflight_run_count=2\n"));
+        assert!(encoded.contains("compiler_execution_provisioning_run_count=2\n"));
         assert!(encoded.contains("systemd_boot_run_count=2\n"));
-        assert!(encoded.contains("qualification_fault_count=22\n"));
-        assert!(encoded.contains("reacquisition_count=45\n"));
+        assert!(encoded.contains("qualification_fault_count=25\n"));
+        assert!(encoded.contains("reacquisition_count=51\n"));
         assert!(!encoded.contains("staging_name"));
         assert!(encoded.ends_with("qualification_parent_empty=true\ncleanup=complete\n"));
     }

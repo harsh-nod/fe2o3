@@ -10,6 +10,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use fe2o3_compiler_execution_deployment::{
+    COMPILER_EXECUTION_PROVISIONING_PARENT_PID_ENV_V1,
+    COMPILER_EXECUTION_PROVISIONING_TOOL_COMMAND_V1,
     COMPILER_EXECUTION_SYSTEMD_MACHINE_PARENT_PID_ENV_V1,
     COMPILER_EXECUTION_SYSTEMD_MACHINE_TOOL_COMMAND_V1,
     COMPILER_EXECUTION_SYSTEMD_PREFLIGHT_PARENT_PID_ENV_V1,
@@ -18,6 +20,7 @@ use fe2o3_compiler_execution_deployment::{
     CompilerExecutionQualificationSupervisorLeaseV1, QualificationFaultPointV1,
     QualificationWorkerTerminationV1, acquire_compiler_execution_qualification_supervisor_lease_v1,
     create_compiler_execution_qualification_cgroup_v1,
+    execute_compiler_execution_provisioning_tool_v1,
     execute_compiler_execution_systemd_machine_tool_v1,
     execute_compiler_execution_systemd_preflight_tool_v1,
     probe_compiler_execution_qualification_host_v1, recover_compiler_execution_install_parent_v1,
@@ -79,6 +82,9 @@ fn main() {
         }
         COMPILER_EXECUTION_SYSTEMD_PREFLIGHT_TOOL_COMMAND_V1 if arguments.len() == 3 => {
             run_systemd_preflight_tool(&arguments)
+        }
+        COMPILER_EXECUTION_PROVISIONING_TOOL_COMMAND_V1 if arguments.len() == 2 => {
+            run_provisioning_tool()
         }
         COMPILER_EXECUTION_SYSTEMD_MACHINE_TOOL_COMMAND_V1 if arguments.len() == 3 => {
             run_systemd_machine_tool(&arguments)
@@ -586,6 +592,22 @@ fn run_systemd_machine_tool(arguments: &[std::ffi::OsString]) {
         Ok(never) => match never {},
         Err(error) => {
             eprintln!("compiler-execution systemd machine helper failed: {error}");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn run_provisioning_tool() {
+    if let Err(error) =
+        establish_exact_parent_boundary(COMPILER_EXECUTION_PROVISIONING_PARENT_PID_ENV_V1)
+    {
+        eprintln!("compiler-execution provisioning boundary failed: {error}");
+        std::process::exit(1);
+    }
+    match execute_compiler_execution_provisioning_tool_v1() {
+        Ok(never) => match never {},
+        Err(error) => {
+            eprintln!("compiler-execution provisioning helper failed: {error}");
             std::process::exit(1);
         }
     }

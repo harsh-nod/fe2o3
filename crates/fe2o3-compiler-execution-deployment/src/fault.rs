@@ -1,6 +1,6 @@
 use super::{DeploymentVerificationErrorKindV1, DeploymentVerificationErrorV1, invalid};
 
-const QUALIFICATION_FAULT_POINTS_V1: [QualificationFaultPointV1; 22] = [
+const QUALIFICATION_FAULT_POINTS_V1: [QualificationFaultPointV1; 25] = [
     QualificationFaultPointV1::LoopAttached,
     QualificationFaultPointV1::BaseMounted,
     QualificationFaultPointV1::OverlayMounted,
@@ -15,6 +15,9 @@ const QUALIFICATION_FAULT_POINTS_V1: [QualificationFaultPointV1; 22] = [
     QualificationFaultPointV1::SystemdUnitVerifyRevalidated,
     QualificationFaultPointV1::SystemdPostconditionsAdmitted,
     QualificationFaultPointV1::InstalledLowerRevalidated,
+    QualificationFaultPointV1::CompilerExecutionProvisioningComplete,
+    QualificationFaultPointV1::CompilerExecutionProvisioningRevalidated,
+    QualificationFaultPointV1::CompilerExecutionProvisioningAdmitted,
     QualificationFaultPointV1::SystemdMachineSpawned,
     QualificationFaultPointV1::SystemdMachineReady,
     QualificationFaultPointV1::SystemdMachineStopped,
@@ -56,13 +59,19 @@ pub enum QualificationFaultPointV1 {
     SystemdPostconditionsAdmitted,
     /// Mount custody and the installed lower passed the final preflight revalidation.
     InstalledLowerRevalidated,
+    /// The production compiler-execution provisioner completed with no output.
+    CompilerExecutionProvisioningComplete,
+    /// Mount custody and the installed lower were revalidated after provisioning.
+    CompilerExecutionProvisioningRevalidated,
+    /// Generation, identities, key seeds, records, and executable measurements were admitted.
+    CompilerExecutionProvisioningAdmitted,
     /// The exact pinned machine helper was spawned with retained descriptor custody.
     SystemdMachineSpawned,
     /// The isolated systemd machine published the admitted supervisor socket.
     SystemdMachineReady,
     /// The isolated systemd machine completed bounded graceful shutdown.
     SystemdMachineStopped,
-    /// Mount custody and the installed lower passed revalidation after shutdown.
+    /// Provisioning state, mount custody, and the installed lower passed revalidation after shutdown.
     PostBootLowerRevalidated,
     /// The disposable OverlayFS root has been unmounted.
     OverlayUnmounted,
@@ -97,6 +106,15 @@ impl QualificationFaultPointV1 {
             Self::SystemdUnitVerifyRevalidated => "systemd-unit-verify-revalidated",
             Self::SystemdPostconditionsAdmitted => "systemd-postconditions-admitted",
             Self::InstalledLowerRevalidated => "installed-lower-revalidated",
+            Self::CompilerExecutionProvisioningComplete => {
+                "compiler-execution-provisioning-complete"
+            }
+            Self::CompilerExecutionProvisioningRevalidated => {
+                "compiler-execution-provisioning-revalidated"
+            }
+            Self::CompilerExecutionProvisioningAdmitted => {
+                "compiler-execution-provisioning-admitted"
+            }
             Self::SystemdMachineSpawned => "systemd-machine-spawned",
             Self::SystemdMachineReady => "systemd-machine-ready",
             Self::SystemdMachineStopped => "systemd-machine-stopped",
@@ -199,6 +217,9 @@ mod tests {
                 "systemd-unit-verify-revalidated",
                 "systemd-postconditions-admitted",
                 "installed-lower-revalidated",
+                "compiler-execution-provisioning-complete",
+                "compiler-execution-provisioning-revalidated",
+                "compiler-execution-provisioning-admitted",
                 "systemd-machine-spawned",
                 "systemd-machine-ready",
                 "systemd-machine-stopped",

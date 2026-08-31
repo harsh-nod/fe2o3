@@ -9,7 +9,7 @@ use rustix::io::{FdFlags, fcntl_dupfd_cloexec, fcntl_getfd, fcntl_setfd};
 use rustix::process::{Pid, PidfdFlags, Signal, pidfd_open, pidfd_send_signal};
 
 use super::fault::QualificationFaultHooksV1;
-use super::preflight::CompilerExecutionSystemdPreflightV1;
+use super::provision::CompilerExecutionProvisionedQualificationV1;
 use super::{
     COMPILER_EXECUTION_SYSTEMD_MACHINE_PARENT_PID_ENV_V1,
     COMPILER_EXECUTION_SYSTEMD_MACHINE_TOOL_COMMAND_V1, DeploymentVerificationErrorKindV1,
@@ -288,12 +288,12 @@ fn inherit_exec_descriptor(
 }
 
 pub(super) fn boot_and_stop_systemd_machine_v1(
-    preflight: &CompilerExecutionSystemdPreflightV1,
+    provisioned: &CompilerExecutionProvisionedQualificationV1,
     staging_name: &str,
     hooks: &mut impl QualificationFaultHooksV1,
 ) -> Result<(), DeploymentVerificationErrorV1> {
     QualificationMachineIdentityV1::from_staging_name(staging_name)?;
-    let (base, root) = preflight.inherit_systemd_machine_descriptors()?;
+    let (base, root) = provisioned.inherit_systemd_machine_descriptors()?;
     let mut machine = RunningSystemdMachineV1::spawn(&base, &root, staging_name)?;
     hooks.checkpoint(QualificationFaultPointV1::SystemdMachineSpawned)?;
     await_machine_readiness(&mut machine, &root, READINESS_TIMEOUT_V1)?;
@@ -301,7 +301,7 @@ pub(super) fn boot_and_stop_systemd_machine_v1(
     machine.stop(SHUTDOWN_TIMEOUT_V1)?;
     hooks.checkpoint(QualificationFaultPointV1::SystemdMachineStopped)?;
     require_machine_socket_absent(&root)?;
-    preflight.revalidate_systemd_machine_state()?;
+    provisioned.revalidate_systemd_machine_state()?;
     hooks.checkpoint(QualificationFaultPointV1::PostBootLowerRevalidated)
 }
 

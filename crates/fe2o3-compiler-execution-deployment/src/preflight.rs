@@ -314,6 +314,12 @@ impl CompilerExecutionSystemdPreflightV1 {
         self.mounted.inherit_systemd_machine_descriptors()
     }
 
+    pub(super) fn inherit_provisioning_root_descriptor(
+        &self,
+    ) -> Result<OwnedFd, DeploymentVerificationErrorV1> {
+        self.mounted.inherit_systemd_preflight_root_descriptor()
+    }
+
     pub(super) fn revalidate_systemd_machine_state(
         &self,
     ) -> Result<(), DeploymentVerificationErrorV1> {

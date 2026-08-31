@@ -336,16 +336,17 @@ Atomic read-only loop attachment plus detached SquashFS/OverlayFS composition
 is implemented and rechecks the installed projection against sealed custody,
 but has not run under host root. A static qualification harness and read-only
 host probe now drive the sole verify-to-cleanup transaction. Its closed
-22-point fault set covers mount admission, every pinned systemd command and
-subsequent lower revalidation, exact preflight postconditions, isolated machine
+25-point fault set covers mount admission, every pinned systemd command and
+subsequent lower revalidation, exact preflight postconditions, production
+generation-1 provisioning with independent record/key/image admission, isolated machine
 spawn, supervisor-socket readiness, bounded shutdown, post-boot lower
-revalidation, both unmounts, loop release, and staging removal. Normal, fault, and campaign runs share that
+and provisioning revalidation, both unmounts, loop release, and staging removal. Normal, fault, and campaign runs share that
 transaction, and each admitted fault freshly revalidates the bundle, base, and
 complete installed lower after cleanup. One aggregate campaign requires first
-publication, 45 reacquisitions, two normal runs, all 22 faults, and complete
+publication, 51 reacquisitions, two normal runs, all 25 faults, and complete
 parent cleanup. Its root paths remain unexecuted
 because the available SSH identity is not root.
-The descriptor-pinned boot path and supervisor-owned cgroup V2 containment are
+The descriptor-pinned provision/boot path and supervisor-owned cgroup V2 containment are
 implemented, but root/cgroup live evidence
 and distinct-UID service execution remain absent. The concrete
 protected verifier also remains absent. A fixed

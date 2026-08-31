@@ -3,11 +3,13 @@
 Status: implemented source-bundle admission, atomic offline-root publication,
 fresh installed-root revalidation, sealed disposable-root preparation, and an
 exact fault-cleaned empty staging transaction. Private-namespace mount
-composition, composed-root systemd preflight, and descriptor-pinned isolated
-boot through socket readiness and bounded shutdown are implemented but not yet
-host-root qualified. Distinct-UID systemd execution qualification remains open.
-A static host probe and sole verify-to-boot-to-cleanup harness are implemented.
-One closed 22-point mount/preflight/boot/cleanup fault set and aggregate publication/reacquisition
+composition, composed-root systemd preflight, generation-1 production
+provisioning with independent postcondition admission, and descriptor-pinned
+isolated boot through socket readiness and bounded shutdown are implemented but
+not yet host-root qualified. Distinct-UID systemd execution qualification
+remains open. A static host probe and sole
+verify-to-provision-to-boot-to-cleanup harness are implemented. One closed
+25-point mount/preflight/provision/boot/cleanup fault set and aggregate publication/reacquisition
 campaign use that same transaction; every admitted fault freshly revalidates
 the caller-pinned bundle, base, and installed lower after cleanup. Successful
 privileged execution is not yet claimed.

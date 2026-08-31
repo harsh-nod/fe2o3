@@ -92,6 +92,18 @@ if [[ ${preflight_helper_status} -ne 1 \
 fi
 
 set +e
+provisioning_helper_failure="$(/usr/bin/env -i "${qualification}" \
+  __compiler-execution-provisioning-tool-v1 </dev/null 2>&1)"
+provisioning_helper_status=$?
+set -e
+if [[ ${provisioning_helper_status} -ne 1 \
+  || "${provisioning_helper_failure}" != \
+    'compiler-execution provisioning boundary failed: expected parent PID is missing' ]]; then
+  printf 'static compiler-execution provisioning helper parent boundary changed\n' >&2
+  exit 1
+fi
+
+set +e
 machine_helper_failure="$(/usr/bin/env -i "${qualification}" \
   __systemd-machine-tool-v1 \
   .compiler-execution-qualification-v1-0123456789abcdef0123456789abcdef \
@@ -107,7 +119,7 @@ fi
 
 qualification_fault_points="$(/usr/bin/env -i "${qualification}" fault-points)"
 readonly qualification_fault_points
-if [[ "${qualification_fault_points}" != 'loop-attached'$'\n''base-mounted'$'\n''overlay-mounted'$'\n''projection-revalidated'$'\n''systemd-version-complete'$'\n''systemd-version-revalidated'$'\n''systemd-sysusers-complete'$'\n''systemd-sysusers-revalidated'$'\n''systemd-tmpfiles-complete'$'\n''systemd-tmpfiles-revalidated'$'\n''systemd-unit-verify-complete'$'\n''systemd-unit-verify-revalidated'$'\n''systemd-postconditions-admitted'$'\n''installed-lower-revalidated'$'\n''systemd-machine-spawned'$'\n''systemd-machine-ready'$'\n''systemd-machine-stopped'$'\n''post-boot-lower-revalidated'$'\n''overlay-unmounted'$'\n''base-unmounted'$'\n''loop-released'$'\n''staging-cleaned' ]]; then
+if [[ "${qualification_fault_points}" != 'loop-attached'$'\n''base-mounted'$'\n''overlay-mounted'$'\n''projection-revalidated'$'\n''systemd-version-complete'$'\n''systemd-version-revalidated'$'\n''systemd-sysusers-complete'$'\n''systemd-sysusers-revalidated'$'\n''systemd-tmpfiles-complete'$'\n''systemd-tmpfiles-revalidated'$'\n''systemd-unit-verify-complete'$'\n''systemd-unit-verify-revalidated'$'\n''systemd-postconditions-admitted'$'\n''installed-lower-revalidated'$'\n''compiler-execution-provisioning-complete'$'\n''compiler-execution-provisioning-revalidated'$'\n''compiler-execution-provisioning-admitted'$'\n''systemd-machine-spawned'$'\n''systemd-machine-ready'$'\n''systemd-machine-stopped'$'\n''post-boot-lower-revalidated'$'\n''overlay-unmounted'$'\n''base-unmounted'$'\n''loop-released'$'\n''staging-cleaned' ]]; then
   printf 'static qualification fault set changed\n' >&2
   exit 1
 fi
