@@ -214,7 +214,7 @@ fn write_only_disjoint_kernel_reaches_v9_guarded_store_llvm_and_descriptor() {
         "the predicate-false edge did not bypass the guarded store:\n{llvm}",
     );
 
-    let descriptor = CompilerDescriptorSourceV1::decode(&descriptor_bytes(&llvm))
+    let descriptor = CompilerDescriptorSourceV1::decode(&descriptor_bytes(llvm))
         .expect("embedded compiler descriptor source");
     let [kernel] = descriptor.table().kernels() else {
         panic!("expected one compiler-derived descriptor kernel")

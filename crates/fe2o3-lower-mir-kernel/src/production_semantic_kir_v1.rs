@@ -3819,7 +3819,9 @@ fn compiler_owned_enum_payload_access_v1(
 
 fn kir_written_value_v1(operation: &Operation) -> Option<ValueId> {
     match &operation.kind {
-        OperationKind::Store { value, .. } => Some(*value),
+        OperationKind::Store { value, .. } | OperationKind::GuardedStore { value, .. } => {
+            Some(*value)
+        }
         OperationKind::Atomic(atomic)
             if matches!(atomic.kind, AtomicKind::Store | AtomicKind::Exchange) =>
         {
@@ -24711,6 +24713,22 @@ mod resource_tests {
         .expect("the independently reconstructed write expression must agree");
         assert_eq!(report.memory_effects(), 2);
         assert_eq!(report.value_expressions(), 1);
+    }
+
+    #[test]
+    fn mir_pliron_translation_classifies_guarded_store_written_value() {
+        let value = ValueId(3);
+        let guarded_store = Operation::new(
+            vec![],
+            OperationKind::GuardedStore {
+                pointer: ValueId(1),
+                predicate: ValueId(2),
+                value,
+                access: MemoryAccess::new(AddressSpace::Global, 4),
+            },
+        );
+
+        assert_eq!(kir_written_value_v1(&guarded_store), Some(value));
     }
 
     #[test]
