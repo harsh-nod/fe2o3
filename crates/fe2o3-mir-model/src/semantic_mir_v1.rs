@@ -7834,7 +7834,7 @@ fn compiler_intrinsic_signature_matches(
             input,
             output: intrinsic_output,
         } => {
-            inputs.as_ref() == [input]
+            inputs == [input]
                 && output == intrinsic_output
                 && match kind {
                     SemanticBf16ConversionKindV1::FromBits => {
@@ -7967,14 +7967,14 @@ fn compiler_intrinsic_signature_matches(
             input_tile,
             output_tile,
             ..
-        } => inputs.as_ref() == [input_tile] && output == output_tile,
+        } => inputs == [input_tile] && output == output_tile,
         SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposeRead {
             tile,
             fragment,
             contract,
             format,
         } => {
-            inputs.as_ref() == [tile]
+            inputs == [tile]
                 && output == fragment
                 && contract.role == SemanticMfmaOperandRoleV1::B
                 && contract.register_distribution
@@ -14447,9 +14447,7 @@ fn enum_scalar_constant_variant(
     let SemanticBackendReprV1::Scalar(outer_scalar) = layout.backend_repr else {
         return None;
     };
-    let Some(tag_width) = outer_scalar.primitive().size_bytes() else {
-        return None;
-    };
+    let tag_width = outer_scalar.primitive().size_bytes()?;
     if tag_width != u64::from(value.size_bytes)
         || layout.size_bytes != Some(tag_width)
         || variants.len() != enum_layout.variants.len()
@@ -14457,12 +14455,9 @@ fn enum_scalar_constant_variant(
     {
         return None;
     }
-    let Some(logical) = types
+    let logical = types
         .get(discriminant.0 as usize)
-        .and_then(|ty| scalar_shape(&ty.shape))
-    else {
-        return None;
-    };
+        .and_then(|ty| scalar_shape(&ty.shape))?;
     match &enum_layout.encoding {
         SemanticEnumEncodingV1::Direct(direct) => {
             (direct.tag_field == 0
@@ -14519,12 +14514,9 @@ fn niche_scalar_constant_variant(
             .unwrap_or(u32::MAX),
     );
     if relative <= niche_variant_count {
-        let Some(index) = u128::from(niche.niche_variants_start)
+        let index = u128::from(niche.niche_variants_start)
             .checked_add(relative)
-            .and_then(|index| usize::try_from(index).ok())
-        else {
-            return None;
-        };
+            .and_then(|index| usize::try_from(index).ok())?;
         return variants.get(index).and_then(|variant| {
             (!variant.uninhabited
                 && variant
