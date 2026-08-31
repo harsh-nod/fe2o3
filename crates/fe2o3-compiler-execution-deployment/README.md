@@ -24,5 +24,9 @@ transaction creates and descriptor-retains the exact empty base/root,
 upper/work, run/state, and evidence staging tree. Its fault campaign proves
 every interrupted boundary restores an empty parent. Mount attachment, root
 composition, and real root/distinct-UID systemd execution remain separate
-deployment gates. See the
+deployment gates. The private-namespace attachment implementation now uses an
+atomic read-only autoclear loop device and detached upstream Linux mount APIs,
+then rechecks the composed deployment projection against sealed custody. It has
+not yet run under real host root, so live mount and systemd qualification remain
+open. See the
 [disposable-root V1 contract](../../docs/compiler-execution-disposable-root-v1.md).

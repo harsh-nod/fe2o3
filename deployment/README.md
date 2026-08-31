@@ -66,7 +66,10 @@ revalidate the installed tree and seal an independently digest-pinned base
 image together with an empty root-owned qualification parent. It then creates
 one exact descriptor-retained empty staging tree for base/root mounts and
 disposable upper/work/run/state/evidence. Mount attachment, root composition,
-and real systemd execution still remain qualification gates. See
+and real systemd execution still remain qualification gates. The mount
+transaction is implemented with atomic loop configuration and upstream Linux
+detached-mount APIs, but the current unprivileged `mi300x` session cannot
+execute its root-only integration path. See
 [disposable-root V1](../docs/compiler-execution-disposable-root-v1.md).
 
 With both the service and socket stopped, provision one nonzero policy

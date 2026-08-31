@@ -3,7 +3,9 @@
 Status: implemented source-bundle admission, atomic offline-root publication,
 fresh installed-root revalidation, sealed disposable-root preparation, and an
 exact fault-cleaned empty staging transaction. Mount attachment, root
-composition, and distinct-UID systemd execution qualification remain open.
+composition, and distinct-UID systemd execution qualification remain open. The
+private-namespace mount transaction is implemented but not yet host-root
+qualified.
 
 ## Boundary
 

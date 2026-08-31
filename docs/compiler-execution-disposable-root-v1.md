@@ -2,8 +2,9 @@
 
 Status: deterministic base construction, caller-pinned SquashFS admission,
 sealed preparation custody, and the exact empty staging transaction are
-implemented. Mount attachment, root composition, isolated systemd boot,
-distinct-UID execution, and lifecycle fault qualification remain open.
+implemented. Private-namespace mount composition is implemented but has not yet
+run under host root. Root execution, isolated systemd boot, distinct-UID
+execution, and lifecycle fault qualification remain open.
 
 ## Purpose
 
@@ -114,6 +115,42 @@ parent-path verification, and parent sync. Every injected failure restores the
 qualification parent to empty. Separate tests reject metadata/content
 insertion and parent-path replacement.
 
+## Mount composition
+
+The root-only mount transaction runs only after entering a new mount namespace
+from a dedicated single-threaded process and making `/` recursively private.
+The namespace identity is retained and rechecked before every operation.
+
+The sealed base memfd is attached with atomic Linux `LOOP_CONFIGURE`; legacy
+partial loop setup is not used. A separate narrow crate validates loop-control
+and major-7 device identities, requires a completely sealed mode-`0444`
+backing file, requests only read-only plus autoclear flags, and rechecks the
+complete kernel `loop_info64`. The deployment crate itself continues to deny
+unsafe Rust.
+
+Mount creation uses upstream kernel `fsopen`, `fsconfig`, `fsmount`, and
+`move_mount` APIs. SquashFS is detached-created read-only, nodev, and nosuid,
+then attached to the exact retained `base` mount point. OverlayFS is
+detached-created nodev and nosuid with this fixed lower order:
+
+```text
+installed deployment root : sealed SquashFS base
+```
+
+Only the staged `upper` and `work` descriptors provide writable overlay state.
+After attachment, the transaction checks SquashFS and OverlayFS magic,
+mountpoint-to-retained-descriptor identity, loop status, qualification-parent
+continuity, and every installed manifest/content file against sealed deployment
+custody. The move-only mounted value still grants no boot or execution
+authority. Cleanup unmounts overlay first, SquashFS second, releases the
+autoclear loop device, and then removes the exact staging tree.
+
+This implementation currently has compile, unit, custody-doctest, strict
+Clippy, and strict rustdoc evidence only. The current `mi300x` SSH identity has
+neither effective UID zero nor mount capabilities, so no successful kernel
+mount is claimed yet. The static root harness and live fault campaign remain
+required before this boundary is production-qualified.
+
 ## Qualification
 
 The source-only contract runs on any generic CI host:
@@ -136,10 +173,9 @@ The full check validates exact inventory, modes, links, `SHA256SUMS`, checkout
 commit and epoch, all package records, SquashFS profile, embedded metadata and
 target bytes, and byte equality of every published file.
 
-The remaining production gate must consume only retained staged descriptors,
-attach the sealed base read-only, layer the installed root without reopening
-admitted content, and boot `fe2o3-qualification.target` in an isolated
-namespace. It must then exercise
+The remaining production gate must drive the implemented mount transaction
+under real host root and boot `fe2o3-qualification.target` in isolated PID,
+network, IPC, UTS, cgroup, and mount namespaces. It must then exercise
 sysusers/tmpfiles, socket activation, distinct service and client identities,
 provisioning exclusion, successful compiler execution, restart and crash
 recovery, mount-crossing and hostile-parent cases, and complete cleanup.
