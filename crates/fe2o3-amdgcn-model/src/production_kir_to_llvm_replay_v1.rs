@@ -1,11 +1,10 @@
-use std::error::Error;
-use std::fmt;
+use std::{collections::BTreeSet, error::Error, fmt};
 
 use fe2o3_amd_target::ProductionAmdTargetProfileV1;
 use fe2o3_kernel_ir::{
-    KERNEL_IR_MAGIC_V1, KERNEL_IR_VERSION_V8, KERNEL_IR_VERSION_V9, KernelId, MAX_MODULE_BYTES_V1,
-    MAX_TEXT_BYTES_V1, Module, VerifiedCanonicalKernelIrErrorV8, VerifiedCanonicalKernelIrErrorV9,
-    VerifiedCanonicalKernelIrV8, VerifiedCanonicalKernelIrV9,
+    KERNEL_IR_MAGIC_V1, KERNEL_IR_VERSION_V8, KERNEL_IR_VERSION_V9, KernelId, MAX_KERNELS_V1,
+    MAX_MODULE_BYTES_V1, MAX_TEXT_BYTES_V1, Module, VerifiedCanonicalKernelIrErrorV8,
+    VerifiedCanonicalKernelIrErrorV9, VerifiedCanonicalKernelIrV8, VerifiedCanonicalKernelIrV9,
 };
 use sha2::{Digest, Sha256};
 
@@ -176,10 +175,23 @@ impl CanonicalProductionKirToLlvmReplayEvidenceV1 {
         } else {
             reader.usize_u32()?
         };
-        if kernel_count == 0 {
+        const MIN_KERNEL_ID_FRAME_BYTES_V1: usize = 5;
+        const MIN_TRAILING_LLVM_FRAME_BYTES_V1: usize = 5;
+        let minimum_framing = kernel_count
+            .checked_mul(MIN_KERNEL_ID_FRAME_BYTES_V1)
+            .and_then(|length| length.checked_add(MIN_TRAILING_LLVM_FRAME_BYTES_V1))
+            .ok_or(ProductionKirToLlvmReplayErrorV1::InvalidLength)?;
+        if kernel_count == 0
+            || kernel_count > MAX_KERNELS_V1
+            || minimum_framing > reader.remaining()
+        {
             return Err(ProductionKirToLlvmReplayErrorV1::InvalidLength);
         }
-        let mut kernel_ids = Vec::with_capacity(kernel_count);
+        let mut kernel_ids = Vec::new();
+        kernel_ids
+            .try_reserve_exact(kernel_count)
+            .map_err(|_| ProductionKirToLlvmReplayErrorV1::InvalidLength)?;
+        let mut seen_kernel_ids = BTreeSet::new();
         for _ in 0..kernel_count {
             let kernel_id_length = reader.usize_u32()?;
             if kernel_id_length == 0 || kernel_id_length > MAX_TEXT_BYTES_V1 {
@@ -187,10 +199,7 @@ impl CanonicalProductionKirToLlvmReplayEvidenceV1 {
             }
             let kernel_id = std::str::from_utf8(reader.take(kernel_id_length)?)
                 .map_err(|_| ProductionKirToLlvmReplayErrorV1::InvalidUtf8)?;
-            if kernel_ids
-                .iter()
-                .any(|existing: &KernelId| existing.as_str() == kernel_id)
-            {
+            if !seen_kernel_ids.insert(kernel_id) {
                 return Err(ProductionKirToLlvmReplayErrorV1::KernelIdMismatch);
             }
             kernel_ids.push(KernelId::new(kernel_id));
@@ -481,6 +490,7 @@ fn encode_evidence(
         || neutral_kernel_ir.sha256 == [0; 32]
         || target_bound_kernel_ir.sha256 == [0; 32]
         || kernel_ids.is_empty()
+        || kernel_ids.len() > MAX_KERNELS_V1
         || kernel_ids.iter().any(|kernel_id| {
             kernel_id.as_str().is_empty() || kernel_id.as_str().len() > MAX_TEXT_BYTES_V1
         })
@@ -736,6 +746,10 @@ impl<'a> Reader<'a> {
         usize::try_from(self.u32()?).map_err(|_| ProductionKirToLlvmReplayErrorV1::Overflow)
     }
 
+    fn remaining(&self) -> usize {
+        self.bytes.len().saturating_sub(self.offset)
+    }
+
     fn finish(self) -> Result<(), ProductionKirToLlvmReplayErrorV1> {
         if self.offset == self.bytes.len() {
             Ok(())
@@ -966,6 +980,42 @@ mod tests {
         assert!(matches!(
             CanonicalProductionKirToLlvmReplayEvidenceV1::decode(&oversized),
             Err(ProductionKirToLlvmReplayErrorV1::TooLarge)
+        ));
+    }
+
+    #[test]
+    fn replay_v2_rejects_maximum_kernel_count_without_allocating_or_panicking() {
+        let neutral =
+            VerifiedCanonicalKernelIrV8::from_module(multi_neutral_module("hostile_count", 2))
+                .unwrap();
+        let neutral_bytes = neutral.into_canonical_bytes();
+        let (_, neutral_module, _) =
+            decode_exact_kernel_ir(&neutral_bytes, ProductionReplayKernelIrVersionV1::V8).unwrap();
+        let target =
+            bind_production_target_v1(&neutral_module, ProductionAmdTargetProfileV1::Gfx942)
+                .unwrap();
+        let llvm = replay_llvm(target.module(), ProductionAmdTargetProfileV1::Gfx942).unwrap();
+        let evidence = CanonicalProductionKirToLlvmReplayEvidenceV1::from_live_inputs(
+            &neutral_bytes,
+            target.module(),
+            ProductionAmdTargetProfileV1::Gfx942,
+            &llvm,
+        )
+        .unwrap();
+        let mut hostile = evidence.canonical_bytes().to_vec();
+        let kernel_count_offset = EVIDENCE_MAGIC_V1.len() + 2 + 4 + (32 + 8) * 2;
+        hostile[kernel_count_offset..kernel_count_offset + 4]
+            .copy_from_slice(&u32::MAX.to_le_bytes());
+        let result = std::panic::catch_unwind(|| {
+            CanonicalProductionKirToLlvmReplayEvidenceV1::decode(&hostile)
+        });
+        assert!(
+            result.is_ok(),
+            "hostile kernel count panicked during decode"
+        );
+        assert!(matches!(
+            result.unwrap(),
+            Err(ProductionKirToLlvmReplayErrorV1::InvalidLength)
         ));
     }
 }

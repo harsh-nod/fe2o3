@@ -186,17 +186,38 @@ fn attributed_kernel_is_recollected_inside_a_real_amdgcn_dependency_graph() {
 #[test]
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]
 fn two_and_three_kernel_collections_reach_one_exact_multi_entry_llvm_module() {
-    for (feature, expected_symbols) in [
-        ("multi-root-ownership", &["alpha", "zeta"][..]),
-        ("three-root-ownership", &["alpha", "omega", "zeta"][..]),
+    for (features, expected_symbols, expected_kir_version, expected_guarded_stores) in [
+        ("multi-root-ownership", &["alpha", "zeta"][..], 8, 0),
+        (
+            "three-root-ownership",
+            &["alpha", "omega", "zeta"][..],
+            8,
+            0,
+        ),
+        (
+            "multi-root-ownership,write-only-disjoint-output",
+            &["alpha", "fill_write_only_disjoint", "zeta"][..],
+            9,
+            1,
+        ),
     ] {
-        assert_multi_root_extraction(feature, expected_symbols);
+        assert_multi_root_extraction(
+            features,
+            expected_symbols,
+            expected_kir_version,
+            expected_guarded_stores,
+        );
     }
 }
 
-fn assert_multi_root_extraction(feature: &str, expected_symbols: &[&str]) {
+fn assert_multi_root_extraction(
+    features: &str,
+    expected_symbols: &[&str],
+    expected_kir_version: u8,
+    expected_guarded_stores: usize,
+) {
     let target = ScratchTarget::new();
-    let llvm_output = target.path().join(format!("{feature}.ll"));
+    let llvm_output = target.path().join("multi-root.ll");
     let output = Command::new(env!("CARGO"))
         .current_dir(workspace())
         .env(
@@ -226,7 +247,7 @@ fn assert_multi_root_extraction(feature: &str, expected_symbols: &[&str]) {
             "-p",
             "fe2o3-production-extraction-fixture",
             "--features",
-            feature,
+            features,
             "--target",
             "amdgcn-amd-amdhsa",
             "--target-dir",
@@ -238,13 +259,16 @@ fn assert_multi_root_extraction(feature: &str, expected_symbols: &[&str]) {
 
     assert!(
         output.status.success(),
-        "{feature} production extraction failed:\n{stderr}",
+        "{features} production extraction failed:\n{stderr}",
+    );
+    let expected_kir_custody = format!(
+        "Kernel IR V{expected_kir_version} with {expected_guarded_stores} GuardedStore operation(s)"
     );
     assert!(
-        stderr.contains("Rust -> semantic MIR -> ranked PLIRON -> Kernel IR")
+        stderr.contains(&expected_kir_custody)
             && stderr.contains("composed formal/ranked memory -> gfx942:xnack- LLVM")
             && stderr.contains("artifact/launch authority false"),
-        "{feature} extraction omitted its successful lowering receipt:\n{stderr}",
+        "{features} extraction omitted its successful lowering receipt:\n{stderr}",
     );
     for forbidden in [
         "error[FE2O3-RACE",
@@ -254,16 +278,16 @@ fn assert_multi_root_extraction(feature: &str, expected_symbols: &[&str]) {
     ] {
         assert!(
             !stderr.contains(forbidden),
-            "{feature} extraction emitted forbidden diagnostic {forbidden:?}:\n{stderr}",
+            "{features} extraction emitted forbidden diagnostic {forbidden:?}:\n{stderr}",
         );
     }
 
     let llvm = std::fs::read_to_string(&llvm_output)
-        .unwrap_or_else(|error| panic!("{feature} did not emit LLVM: {error}"));
+        .unwrap_or_else(|error| panic!("{features} did not emit LLVM: {error}"));
     assert_eq!(
         llvm.matches("define amdgpu_kernel void @").count(),
         expected_symbols.len(),
-        "{feature} LLVM did not contain exactly one kernel definition per root:\n{llvm}",
+        "{features} LLVM did not contain exactly one kernel definition per root:\n{llvm}",
     );
     let mut offsets = Vec::new();
     for symbol in expected_symbols {
@@ -271,13 +295,13 @@ fn assert_multi_root_extraction(feature: &str, expected_symbols: &[&str]) {
         assert_eq!(
             llvm.matches(&marker).count(),
             1,
-            "{feature} LLVM did not contain {symbol:?} exactly once:\n{llvm}",
+            "{features} LLVM did not contain {symbol:?} exactly once:\n{llvm}",
         );
         offsets.push(llvm.find(&marker).unwrap());
     }
     assert!(
         offsets.windows(2).all(|pair| pair[0] < pair[1]),
-        "{feature} LLVM changed canonical KernelId artifact order: {offsets:?}",
+        "{features} LLVM changed canonical KernelId artifact order: {offsets:?}",
     );
 }
 

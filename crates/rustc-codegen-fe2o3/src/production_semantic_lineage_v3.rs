@@ -20,10 +20,11 @@ use fe2o3_compiler_lineage::{
     InertRustcPreflightPlanReceiptV3, InertSemanticToLlvmReceiptV3, InertTargetBindingReceiptV3,
     LineageErrorV3, OrderedInertSemanticLineageReceiptsV3,
 };
+use fe2o3_kernel_descriptor::KernelId as DescriptorKernelId;
 use fe2o3_kernel_ir::{
     FunctionRole, InertCanonicalFormalMemoryObligationReceiptV1, Module,
-    VerifiedCanonicalKernelIrErrorV8, VerifiedCanonicalKernelIrV8,
-    VerifiedCanonicalKernelIrErrorV9, VerifiedCanonicalKernelIrV9,
+    VerifiedCanonicalKernelIrErrorV8, VerifiedCanonicalKernelIrErrorV9,
+    VerifiedCanonicalKernelIrV8, VerifiedCanonicalKernelIrV9,
 };
 use fe2o3_lower_mir_kernel::{
     InertCanonicalFormalMemoryAdmissionEvidenceV4, InertCanonicalMirToKirCorrespondenceEvidenceV4,
@@ -843,7 +844,7 @@ fn validate_lineage_roster_envelope_v1(
     let mut logical_names = BTreeSet::new();
     let mut exports = BTreeSet::new();
     let mut kernels = BTreeSet::new();
-    let mut kernel_order = Vec::with_capacity(root_count);
+    let mut binding_order = Vec::with_capacity(root_count);
     let mut previous_root = None;
     for (ordinal, expected_workgroup) in (0_u32..).zip(expected_workgroups) {
         let semantic_root = reader.u32()?;
@@ -883,7 +884,7 @@ fn validate_lineage_roster_envelope_v1(
             ));
         }
         previous_root = Some(semantic_root);
-        kernel_order.push(kernel);
+        binding_order.push(binding);
         match payload_kind {
             LineageRosterPayloadV1::MiddleEnd => {
                 InertProductionMiddleEndEvidenceV5::decode(payload).map_err(|error| {
@@ -916,7 +917,8 @@ fn validate_lineage_roster_envelope_v1(
         ));
     }
     let mut derived_kernel_order = (0..root_count).collect::<Vec<_>>();
-    derived_kernel_order.sort_unstable_by_key(|index| kernel_order[*index]);
+    derived_kernel_order
+        .sort_unstable_by_key(|index| DescriptorKernelId::from_bytes(binding_order[*index]));
     if permutation
         != derived_kernel_order
             .into_iter()
@@ -1778,14 +1780,16 @@ mod layout_tests {
             .into_boxed_slice()
     }
 
-    fn formal_roster_fixture() -> (
+    type FormalRosterFixture = (
         Vec<u8>,
         [u8; 32],
         [u8; 32],
         LineageNeutralKirIdentityV1,
         [u8; 32],
         Vec<(String, [u32; 3])>,
-    ) {
+    );
+
+    fn formal_roster_fixture() -> FormalRosterFixture {
         let semantic_sha256 = [0x31; 32];
         let roster_identity = [0x42; 32];
         let neutral = LineageNeutralKirIdentityV1 {
@@ -1832,7 +1836,7 @@ mod layout_tests {
             &semantic_sha256,
             neutral,
             roster_identity,
-            &[1, 0],
+            &[0, 1],
             &roots,
             LineageRosterPayloadV1::FormalMemory,
         )
@@ -1879,6 +1883,14 @@ mod layout_tests {
     #[test]
     fn multi_root_lineage_strictly_validates_every_root_field_and_payload_identity() {
         let (bytes, identity, semantic, neutral, roster, workgroups) = formal_roster_fixture();
+        let mut symbol_order = (0..workgroups.len()).collect::<Vec<_>>();
+        symbol_order.sort_unstable_by_key(|index| workgroups[*index].0.as_str());
+        assert_eq!(symbol_order, vec![1, 0]);
+        assert_eq!(
+            &bytes[128..136],
+            [0_u32.to_le_bytes(), 1_u32.to_le_bytes()].concat(),
+            "descriptor binding order must remain independent of symbol order",
+        );
         validate_lineage_roster_envelope_v1(
             &bytes,
             *b"F2MRFOR2",
@@ -1942,8 +1954,8 @@ mod layout_tests {
         }
 
         let mut wrong_permutation = bytes.clone();
-        wrong_permutation[128..132].copy_from_slice(&0_u32.to_le_bytes());
-        wrong_permutation[132..136].copy_from_slice(&1_u32.to_le_bytes());
+        wrong_permutation[128..132].copy_from_slice(&1_u32.to_le_bytes());
+        wrong_permutation[132..136].copy_from_slice(&0_u32.to_le_bytes());
         let wrong_identity = Sha256::digest(&wrong_permutation).into();
         assert!(
             validate_lineage_roster_envelope_v1(

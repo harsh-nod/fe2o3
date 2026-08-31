@@ -7665,14 +7665,21 @@ fn lower_module(
                 auxiliary_functions.push(function);
             }
         }
+        let mut root_function_keys = BTreeSet::new();
         for function in root_correspondence.lowered_functions.into_vec() {
+            if function.correspondence_owner != selected_root
+                || !root_function_keys
+                    .insert((function.correspondence_owner, function.semantic_function))
+            {
+                return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+            }
             let key = (
                 function.correspondence_owner,
                 function.semantic_function,
                 function.kernel_ir_function.clone(),
             );
             if !correspondence_functions.insert(key) {
-                continue;
+                return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
             }
             if function.role == SemanticKirFunctionRoleV1::KernelEntry {
                 entry_correspondence.push(function);
@@ -7680,23 +7687,67 @@ fn lower_module(
                 auxiliary_correspondence.push(function);
             }
         }
-        extend_unique_v1(&mut blocks, root_correspondence.blocks.into_vec());
-        extend_unique_v1(
+        let exact_root_record = |owner, function| {
+            owner == selected_root && root_function_keys.contains(&(owner, function))
+        };
+        if root_correspondence
+            .blocks
+            .iter()
+            .any(|record| !exact_root_record(record.correspondence_owner, record.semantic_function))
+            || root_correspondence
+                .statement_operation_spans
+                .iter()
+                .any(|record| {
+                    !exact_root_record(record.correspondence_owner, record.semantic_function)
+                })
+            || root_correspondence
+                .terminator_operation_spans
+                .iter()
+                .any(|record| {
+                    !exact_root_record(record.correspondence_owner, record.semantic_function)
+                })
+            || root_correspondence
+                .synthetic_operation_spans
+                .iter()
+                .any(|record| {
+                    !exact_root_record(record.correspondence_owner, record.semantic_function)
+                })
+            || root_correspondence.parameter_bindings.iter().any(|record| {
+                !exact_root_record(record.correspondence_owner, record.semantic_function)
+            })
+        {
+            return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+        }
+        append_correspondence_records_v1(
+            &mut blocks,
+            root_correspondence.blocks.into_vec(),
+            ProductionSemanticKirResourceV1::Blocks,
+            limits.max_blocks,
+        )?;
+        append_correspondence_records_v1(
             &mut statement_spans,
             root_correspondence.statement_operation_spans.into_vec(),
-        );
-        extend_unique_v1(
+            ProductionSemanticKirResourceV1::Statements,
+            limits.max_statements,
+        )?;
+        append_correspondence_records_v1(
             &mut terminator_spans,
             root_correspondence.terminator_operation_spans.into_vec(),
-        );
-        extend_unique_v1(
+            ProductionSemanticKirResourceV1::Blocks,
+            limits.max_blocks,
+        )?;
+        append_correspondence_records_v1(
             &mut synthetic_spans,
             root_correspondence.synthetic_operation_spans.into_vec(),
-        );
-        extend_unique_v1(
+            ProductionSemanticKirResourceV1::Blocks,
+            limits.max_blocks,
+        )?;
+        append_correspondence_records_v1(
             &mut parameter_bindings,
             root_correspondence.parameter_bindings.into_vec(),
-        );
+            ProductionSemanticKirResourceV1::Operations,
+            limits.max_operations,
+        )?;
     }
     merged.functions.extend(entry_functions);
     merged.functions.extend(auxiliary_functions);
@@ -7750,50 +7801,37 @@ fn lower_module(
     )?;
     let mut lowered_functions = entry_correspondence;
     lowered_functions.extend(auxiliary_correspondence);
-    let function_order = lowered_functions
-        .iter()
-        .map(|function| (function.correspondence_owner, function.semantic_function))
-        .collect::<Vec<_>>();
-    blocks.sort_by_key(|record| {
-        function_order
-            .iter()
-            .position(|function| {
-                *function == (record.correspondence_owner, record.semantic_function)
-            })
-            .unwrap_or(usize::MAX)
-    });
-    statement_spans.sort_by_key(|record| {
-        function_order
-            .iter()
-            .position(|function| {
-                *function == (record.correspondence_owner, record.semantic_function)
-            })
-            .unwrap_or(usize::MAX)
-    });
-    terminator_spans.sort_by_key(|record| {
-        function_order
-            .iter()
-            .position(|function| {
-                *function == (record.correspondence_owner, record.semantic_function)
-            })
-            .unwrap_or(usize::MAX)
-    });
-    synthetic_spans.sort_by_key(|record| {
-        function_order
-            .iter()
-            .position(|function| {
-                *function == (record.correspondence_owner, record.semantic_function)
-            })
-            .unwrap_or(usize::MAX)
-    });
-    parameter_bindings.sort_by_key(|record| {
-        function_order
-            .iter()
-            .position(|function| {
-                *function == (record.correspondence_owner, record.semantic_function)
-            })
-            .unwrap_or(usize::MAX)
-    });
+    let mut function_ordinals = BTreeMap::new();
+    for (ordinal, function) in lowered_functions.iter().enumerate() {
+        if function_ordinals
+            .insert(
+                (function.correspondence_owner, function.semantic_function),
+                ordinal,
+            )
+            .is_some()
+        {
+            return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+        }
+    }
+    blocks = order_correspondence_records_v1(blocks, &function_ordinals, |record| {
+        (record.correspondence_owner, record.semantic_function)
+    })?;
+    statement_spans =
+        order_correspondence_records_v1(statement_spans, &function_ordinals, |record| {
+            (record.correspondence_owner, record.semantic_function)
+        })?;
+    terminator_spans =
+        order_correspondence_records_v1(terminator_spans, &function_ordinals, |record| {
+            (record.correspondence_owner, record.semantic_function)
+        })?;
+    synthetic_spans =
+        order_correspondence_records_v1(synthetic_spans, &function_ordinals, |record| {
+            (record.correspondence_owner, record.semantic_function)
+        })?;
+    parameter_bindings =
+        order_correspondence_records_v1(parameter_bindings, &function_ordinals, |record| {
+            (record.correspondence_owner, record.semantic_function)
+        })?;
     let correspondence = SemanticKirCorrespondenceV1 {
         semantic_sha256: *semantic.semantic_sha256().as_bytes(),
         function_count: semantic.functions().len(),
@@ -7808,12 +7846,48 @@ fn lower_module(
     Ok((merged, correspondence))
 }
 
-fn extend_unique_v1<T: PartialEq>(destination: &mut Vec<T>, source: Vec<T>) {
-    for value in source {
-        if !destination.contains(&value) {
-            destination.push(value);
-        }
+fn append_correspondence_records_v1<T>(
+    destination: &mut Vec<T>,
+    mut source: Vec<T>,
+    resource: ProductionSemanticKirResourceV1,
+    limit: usize,
+) -> Result<(), ProductionSemanticKirErrorV1> {
+    let total = destination
+        .len()
+        .checked_add(source.len())
+        .unwrap_or(usize::MAX);
+    enforce_limit(resource, total, limit)?;
+    destination.append(&mut source);
+    Ok(())
+}
+
+fn order_correspondence_records_v1<T, F>(
+    records: Vec<T>,
+    function_ordinals: &BTreeMap<(SemanticFunctionIdV1, SemanticFunctionIdV1), usize>,
+    mut function_key: F,
+) -> Result<Vec<T>, ProductionSemanticKirErrorV1>
+where
+    F: FnMut(&T) -> (SemanticFunctionIdV1, SemanticFunctionIdV1),
+{
+    let record_count = records.len();
+    let mut buckets = (0..function_ordinals.len())
+        .map(|_| Vec::new())
+        .collect::<Vec<_>>();
+    for record in records {
+        let ordinal = function_ordinals
+            .get(&function_key(&record))
+            .copied()
+            .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+        let bucket = buckets
+            .get_mut(ordinal)
+            .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+        bucket.push(record);
     }
+    let mut ordered = Vec::with_capacity(record_count);
+    for mut bucket in buckets {
+        ordered.append(&mut bucket);
+    }
+    Ok(ordered)
 }
 
 fn lower_single_root_module(
@@ -26145,5 +26219,57 @@ mod resource_tests {
                 limit: 2,
             })
         ));
+    }
+
+    #[test]
+    fn correspondence_bucket_ordering_resolves_each_large_record_once_and_stably() {
+        const FUNCTION_COUNT: usize = 257;
+        const RECORD_COUNT: usize = 256 * 1024;
+        #[derive(Debug, Eq, PartialEq)]
+        struct InstrumentedRecordV1 {
+            function: SemanticFunctionIdV1,
+            sequence: usize,
+        }
+
+        let owner = SemanticFunctionIdV1::from_index(0);
+        let function_ordinals = (0..FUNCTION_COUNT)
+            .map(|ordinal| {
+                (
+                    (
+                        owner,
+                        SemanticFunctionIdV1::from_index(u32::try_from(ordinal).unwrap()),
+                    ),
+                    ordinal,
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        let records = (0..RECORD_COUNT)
+            .map(|record| InstrumentedRecordV1 {
+                function: SemanticFunctionIdV1::from_index(
+                    u32::try_from(record % FUNCTION_COUNT).unwrap(),
+                ),
+                sequence: record / FUNCTION_COUNT,
+            })
+            .collect::<Vec<_>>();
+        let key_resolutions = std::cell::Cell::new(0_usize);
+        let ordered = order_correspondence_records_v1(
+            records,
+            &function_ordinals,
+            |record: &InstrumentedRecordV1| {
+                key_resolutions.set(key_resolutions.get() + 1);
+                (owner, record.function)
+            },
+        )
+        .unwrap();
+        assert_eq!(key_resolutions.get(), RECORD_COUNT);
+        assert_eq!(ordered.len(), RECORD_COUNT);
+        for window in ordered.windows(2) {
+            assert!(
+                window[0].function < window[1].function
+                    || (window[0].function == window[1].function
+                        && window[0].sequence < window[1].sequence),
+                "function buckets or stable per-function record order changed",
+            );
+        }
     }
 }
