@@ -23,6 +23,7 @@ mod compiler_ffi_observation;
 mod first_build_worker_engine;
 mod first_build_worker_v3;
 mod link_plan;
+mod production_kir_v7_structural_bridge_v1;
 mod production_semantic_anchor_v1;
 mod production_source_isa_catalog_v1;
 mod production_source_isa_correlation_v1;
@@ -86,6 +87,17 @@ pub use link_plan::{
     ContentIdentityV1, LinkInputV1, LinkOptionV1, LinkOutputV1, LinkPlanError, LinkPlanIdentityV1,
     MAX_LINK_INPUTS, MAX_LINK_OPTION_NAME_BYTES, MAX_LINK_OPTION_VALUE_BYTES, MAX_LINK_OPTIONS,
     MAX_LINK_PROVENANCE_EDGES, MAX_LINK_PROVENANCE_NODES, MultiInputLinkPlanV1, ProvenanceNodeV1,
+};
+pub use production_kir_v7_structural_bridge_v1::{
+    InertProductionKirV7StructuralBridgeV1, MAX_PRODUCTION_KIR_V7_BRIDGE_BYTES_V1,
+    MAX_PRODUCTION_KIR_V7_BRIDGE_RECORDS_V1, PRODUCTION_KIR_V7_BRIDGE_MAGIC_V1,
+    PRODUCTION_KIR_V7_BRIDGE_VERSION_V1, ProductionKirV7BridgeAdmissionV1,
+    ProductionKirV7BridgeCatalogQueryUnavailableV1, ProductionKirV7BridgeContentIdentityV1,
+    ProductionKirV7BridgeErrorV1, ProductionKirV7BridgeKirVersionV1,
+    ProductionKirV7BridgeMappingV1, ProductionKirV7BridgePointV1,
+    ProductionKirV7BridgeQueryUnavailableV1, ProductionKirV7BridgeRecordV1,
+    ProductionKirV7BridgeSiteV1, ProductionKirV7BridgeTargetV1, ProductionKirV7BridgeUnavailableV1,
+    ProductionKirV7StructuralBridgeV1, admit_production_kir_v7_structural_bridge_v1,
 };
 pub use production_semantic_anchor_v1::{
     AdmittedProductionSemanticAnchorV1, AdmittedProductionSemanticAnchorsV1,

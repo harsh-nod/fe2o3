@@ -141,6 +141,20 @@ pub struct ProductionSourceIsaCatalogStructuralCountsV1 {
 }
 
 impl ProductionSourceIsaCatalogStructuralCountsV1 {
+    pub(crate) const fn new_for_bridge_v1(
+        functions: u64,
+        defined_bodies: u64,
+        blocks: u64,
+        operations: u64,
+    ) -> Self {
+        Self {
+            functions,
+            defined_bodies,
+            blocks,
+            operations,
+        }
+    }
+
     pub const fn functions(self) -> u64 {
         self.functions
     }

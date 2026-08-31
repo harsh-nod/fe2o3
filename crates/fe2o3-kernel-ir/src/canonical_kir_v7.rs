@@ -92,9 +92,20 @@ impl VerifiedCanonicalKernelIrV7 {
     pub fn from_canonical_bytes(
         canonical_bytes: Vec<u8>,
     ) -> Result<Self, VerifiedCanonicalKernelIrErrorV7> {
+        Self::from_canonical_bytes_with_module(canonical_bytes).map(|(owner, _)| owner)
+    }
+
+    /// Takes ownership of exact canonical V7 bytes and returns both their owner and the same
+    /// semantically verified decoded module.
+    ///
+    /// This avoids a second full decode for consumers that inspect the verified module while
+    /// retaining custody of its exact canonical bytes.
+    pub fn from_canonical_bytes_with_module(
+        canonical_bytes: Vec<u8>,
+    ) -> Result<(Self, Module), VerifiedCanonicalKernelIrErrorV7> {
         let decoded = decode_exact_v7(&canonical_bytes)?;
         verify_module(&decoded).map_err(VerifiedCanonicalKernelIrErrorV7::Verification)?;
-        Ok(Self::from_validated_bytes(canonical_bytes))
+        Ok((Self::from_validated_bytes(canonical_bytes), decoded))
     }
 
     /// Borrows the complete exact canonical V7 bytes.
@@ -298,6 +309,44 @@ mod tests {
         assert_eq!(
             owner.revalidate(),
             Err(VerifiedCanonicalKernelIrErrorV7::IdentityMismatch)
+        );
+    }
+
+    #[test]
+    fn exact_decode_returns_one_owner_and_the_same_verified_module() {
+        let v6 = from_hex(include_str!("../tests/fixtures/checked_add_i128_v6.hex"));
+        let expected = crate::decode_module_v6(&v6).unwrap();
+        let bytes = encode_module_v7(&expected).unwrap();
+        let (owner, decoded) =
+            VerifiedCanonicalKernelIrV7::from_canonical_bytes_with_module(bytes.clone()).unwrap();
+
+        assert_eq!(decoded, expected);
+        assert_eq!(owner.canonical_bytes(), bytes);
+        owner.revalidate().unwrap();
+    }
+
+    #[test]
+    fn exact_decode_rejects_truncated_bytes() {
+        let v6 = from_hex(include_str!("../tests/fixtures/checked_add_i128_v6.hex"));
+        let module = crate::decode_module_v6(&v6).unwrap();
+        let mut bytes = encode_module_v7(&module).unwrap();
+        bytes.truncate(VERSION_END - 1);
+
+        assert_eq!(
+            VerifiedCanonicalKernelIrV7::from_canonical_bytes_with_module(bytes).unwrap_err(),
+            VerifiedCanonicalKernelIrErrorV7::Decode(KernelIrDecodeError::Truncated)
+        );
+    }
+
+    #[test]
+    fn exact_decode_rejects_bytes_above_the_hard_bound() {
+        let bytes = vec![0_u8; MAX_MODULE_BYTES_V1 + 1];
+
+        assert_eq!(
+            VerifiedCanonicalKernelIrV7::from_canonical_bytes_with_module(bytes).unwrap_err(),
+            VerifiedCanonicalKernelIrErrorV7::Decode(KernelIrDecodeError::TooLarge {
+                max: MAX_MODULE_BYTES_V1,
+            })
         );
     }
 }

@@ -39,17 +39,20 @@ use fe2o3_compiler_lineage::{
 };
 use fe2o3_hsaco_finalize::{
     CompilerClosureV2, ContentIdentityV1, FinalizedSemanticDebugMapAdmissionStatusV1,
-    FinalizedSemanticDebugMapErrorV1, InertProductionSourceIsaCatalogV1,
-    InertProtectedFirstBuildWorkerV3EvidenceV1, InspectedProtectedWorkerV3HsacoV1, LinkOptionV1,
-    PinnedWorkerV1, ProductionFinalizedSemanticDebugAdmissionV1, ProductionIsaPointV1,
-    ProductionSemanticAnchorAdmissionV1, ProductionSemanticAnchorErrorV1,
-    ProductionSourceIsaAcceptanceSummaryAdmissionV1, ProductionSourceIsaCatalogAdmissionV1,
-    ProductionSourceIsaCatalogPointV1, ProductionSourceIsaCatalogRecordKindV1,
-    ProductionSourceIsaCorrelationAdmissionV1, ProductionSourceIsaCorrelationErrorV1,
-    ProductionSourceIsaCorrelationUnavailableV1, ProductionSourceIsaRecordKindV1,
-    ProtectedWorkerV3CompactFinalizerReplayV2, WorkerExecutionLimitsV1, WorkerInputKindV1,
-    WorkerInputV1, WorkerMeasurementV1, WorkerOutputConstraintsV1, WorkerV3HsacoFinalizationError,
-    WorkerV3HsacoInspectionError, WorkerV3HsacoPublicationErrorV1,
+    FinalizedSemanticDebugMapErrorV1, InertProductionKirV7StructuralBridgeV1,
+    InertProductionSourceIsaCatalogV1, InertProtectedFirstBuildWorkerV3EvidenceV1,
+    InspectedProtectedWorkerV3HsacoV1, LinkOptionV1, PinnedWorkerV1,
+    ProductionFinalizedSemanticDebugAdmissionV1, ProductionIsaPointV1,
+    ProductionKirV7BridgeAdmissionV1, ProductionKirV7BridgeCatalogQueryUnavailableV1,
+    ProductionKirV7BridgeErrorV1, ProductionKirV7BridgeSiteV1, ProductionSemanticAnchorAdmissionV1,
+    ProductionSemanticAnchorErrorV1, ProductionSourceIsaAcceptanceSummaryAdmissionV1,
+    ProductionSourceIsaCatalogAdmissionV1, ProductionSourceIsaCatalogPointV1,
+    ProductionSourceIsaCatalogRecordKindV1, ProductionSourceIsaCorrelationAdmissionV1,
+    ProductionSourceIsaCorrelationErrorV1, ProductionSourceIsaCorrelationUnavailableV1,
+    ProductionSourceIsaRecordKindV1, ProtectedWorkerV3CompactFinalizerReplayV2,
+    WorkerExecutionLimitsV1, WorkerInputKindV1, WorkerInputV1, WorkerMeasurementV1,
+    WorkerOutputConstraintsV1, WorkerV3HsacoFinalizationError, WorkerV3HsacoInspectionError,
+    WorkerV3HsacoPublicationErrorV1, admit_production_kir_v7_structural_bridge_v1,
     execute_protected_reproducible_first_build_worker_v3, finalize_protected_worker_v3_hsaco_v1,
     inspect_protected_worker_v3_hsaco_v1, inspect_unfinalized,
     persist_prepared_protected_worker_v3_hsaco_publication_v1,
@@ -68,15 +71,16 @@ use fe2o3_kernel_descriptor::{
     SourceTypeRecordV1, Text, ValidName, encode_device_descriptor_table_v1,
 };
 use fe2o3_kernel_ir::{
-    ProductionSemanticDebugAvailabilityV1, ProductionSemanticDebugCarrierV1,
-    ProductionSemanticDebugFragmentV1, ProductionSemanticDebugProducerCapabilityV1,
-    ProductionSemanticDebugProducerGapV1, ProductionSemanticDebugReceiptExtensionV1,
-    SemanticDebugBoundaryDirectionV1, SemanticDebugBoundaryReasonV1, SemanticDebugBoundaryV1,
-    SemanticDebugContentIdentityV1, SemanticDebugLayerV1, SemanticDebugLocationV1,
-    SemanticDebugMapBindingV1, SemanticDebugMapDocumentV1, SemanticDebugMapErrorV1,
-    SemanticDebugMappingOutputV1, SemanticDebugMappingV1, SemanticDebugNodeV1,
-    SemanticDebugTransformationV1, SemanticDebugUnavailableReasonV1, VerifiedCanonicalKernelIrV7,
-    VerifiedCanonicalKernelIrV8, VerifiedCanonicalKernelIrV9,
+    DebugSourceMapBindingV1, DebugSourceMapDocumentV2, ProductionSemanticDebugAvailabilityV1,
+    ProductionSemanticDebugCarrierV1, ProductionSemanticDebugFragmentV1,
+    ProductionSemanticDebugProducerCapabilityV1, ProductionSemanticDebugProducerGapV1,
+    ProductionSemanticDebugReceiptExtensionV1, SemanticDebugBoundaryDirectionV1,
+    SemanticDebugBoundaryReasonV1, SemanticDebugBoundaryV1, SemanticDebugContentIdentityV1,
+    SemanticDebugLayerV1, SemanticDebugLocationV1, SemanticDebugMapBindingV1,
+    SemanticDebugMapDocumentV1, SemanticDebugMapErrorV1, SemanticDebugMappingOutputV1,
+    SemanticDebugMappingV1, SemanticDebugNodeV1, SemanticDebugTransformationV1,
+    SemanticDebugUnavailableReasonV1, VerifiedCanonicalKernelIrV7, VerifiedCanonicalKernelIrV8,
+    VerifiedCanonicalKernelIrV9,
 };
 use object::{Object as _, ObjectSection as _};
 use sha2::{Digest, Sha256};
@@ -2053,6 +2057,46 @@ fn source_isa_correlation_preserves_exact_source_carrier_unavailability() {
     ));
 }
 
+fn production_bridge_inputs(
+    finalized: &fe2o3_hsaco_finalize::PreparedFinalizedProtectedWorkerV3HsacoV1,
+) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+    let extension = ProductionSemanticDebugReceiptExtensionV1::from_canonical_bytes(
+        finalized
+            .outer_handoff()
+            .capsule()
+            .receipts()
+            .semantic_to_llvm()
+            .canonical_preimage(),
+    )
+    .unwrap();
+    let ProductionSemanticDebugAvailabilityV1::Available(fragment) =
+        extension.carrier_v1().availability()
+    else {
+        panic!("production bridge fixture requires an available exact source carrier")
+    };
+    (
+        fragment.canonical_kir_v7().to_vec(),
+        finalized
+            .outer_handoff()
+            .capsule()
+            .receipts()
+            .kernel_ir()
+            .canonical_preimage()
+            .to_vec(),
+        fragment.source_map_v2().to_vec(),
+    )
+}
+
+fn reseal_bridge_claim(bytes: &mut [u8]) {
+    const DOMAIN: &[u8] = b"FE2O3/PRODUCTION-KIR-V7-STRUCTURAL-BRIDGE/V1\0";
+    let identity_offset = bytes.len() - 32;
+    let mut digest = Sha256::new();
+    digest.update(u32::try_from(DOMAIN.len()).unwrap().to_le_bytes());
+    digest.update(DOMAIN);
+    digest.update(&bytes[..identity_offset]);
+    bytes[identity_offset..].copy_from_slice(&digest.finalize());
+}
+
 #[test]
 #[ignore = "requires FE2O3_TEST_REAL_WORKER, FE2O3_TEST_REAL_WORKER_BUILD_ID, and FE2O3_TEST_REAL_LLVM_BUILD_ID"]
 fn production_semantic_anchors_admit_real_worker_gfx942_and_gfx950() {
@@ -2063,6 +2107,7 @@ fn production_semantic_anchors_admit_real_worker_gfx942_and_gfx950() {
             .unwrap()
             .into_boxed_str(),
     );
+    let mut prior_catalog = None;
     for profile in [
         ProductionAmdTargetProfileV1::Gfx942,
         ProductionAmdTargetProfileV1::Gfx950,
@@ -2210,6 +2255,252 @@ fn production_semantic_anchors_admit_real_worker_gfx942_and_gfx950() {
         assert_eq!(decoded_catalog.records(), catalog.records());
         assert!(!decoded_catalog.grants_debugger_authority());
         assert!(!decoded_catalog.grants_profiler_authority());
+
+        let (canonical_v7, canonical_v8, source_map_v2) = production_bridge_inputs(&finalized);
+        let bridge = match admit_production_kir_v7_structural_bridge_v1(
+            &canonical_v7,
+            &canonical_v8,
+            &source_map_v2,
+            finalized.exact_finalized_bytes(),
+            &catalog,
+        )
+        .unwrap()
+        {
+            ProductionKirV7BridgeAdmissionV1::Admitted(bridge) => bridge,
+            ProductionKirV7BridgeAdmissionV1::Unavailable(reason) => {
+                panic!("exact real-Worker V7/V8 bridge unexpectedly unavailable: {reason:?}")
+            }
+        };
+        assert_eq!(bridge.catalog_identity(), catalog.identity());
+        assert_eq!(
+            bridge.correlation_identity(),
+            catalog.correlation_identity()
+        );
+        assert_eq!(
+            bridge.semantic_map_identity(),
+            catalog.semantic_map_identity()
+        );
+        assert_eq!(
+            bridge.structural_identity(),
+            &catalog.structural_binding().identity()
+        );
+        assert_eq!(
+            bridge.artifact_identity().sha256(),
+            *catalog.artifact_identity().sha256()
+        );
+        assert_eq!(
+            bridge.artifact_identity().byte_len(),
+            catalog.artifact_identity().byte_len()
+        );
+        for record in bridge.records() {
+            assert_eq!(
+                bridge.query_simulator_v7(record.simulator_v7()).unwrap(),
+                *record
+            );
+            assert_eq!(
+                bridge
+                    .query_neutral_production(record.neutral_production())
+                    .unwrap(),
+                *record
+            );
+            assert_eq!(
+                bridge
+                    .query_target_production(record.target_production())
+                    .unwrap(),
+                *record
+            );
+        }
+        let no_source = catalog
+            .records()
+            .iter()
+            .find(|record| {
+                record.kind() == ProductionSourceIsaCatalogRecordKindV1::NoSourceProvenance
+                    && record.target_kir().is_some()
+            })
+            .expect("real Worker catalog retains one exact no-source target operation");
+        let no_source_coordinate = no_source.target_kir().unwrap();
+        let no_source_site = ProductionKirV7BridgeSiteV1::operation(
+            no_source_coordinate.function_ordinal(),
+            no_source_coordinate.block_ordinal(),
+            no_source_coordinate.operation_ordinal(),
+        );
+        assert!(
+            bridge
+                .query_target_catalog(&catalog, no_source_site)
+                .unwrap()
+                .any(|record| {
+                    record.kind() == ProductionSourceIsaCatalogRecordKindV1::NoSourceProvenance
+                        && record.target_kir() == Some(no_source_coordinate)
+                })
+        );
+        if let Some(stale_catalog) = prior_catalog.as_ref() {
+            assert_eq!(
+                bridge
+                    .query_target_catalog(stale_catalog, no_source_site)
+                    .unwrap_err(),
+                ProductionKirV7BridgeCatalogQueryUnavailableV1::CatalogIdentityMismatch
+            );
+        }
+        let block_entry = ProductionKirV7BridgeSiteV1::block_entry(
+            no_source_coordinate.function_ordinal(),
+            no_source_coordinate.block_ordinal(),
+        );
+        assert_eq!(
+            bridge.query_target_catalog(&catalog, block_entry).unwrap_err(),
+            ProductionKirV7BridgeCatalogQueryUnavailableV1::BlockEntryHasNoCatalogOperationCoordinate
+        );
+        let terminator = ProductionKirV7BridgeSiteV1::terminator(
+            no_source_coordinate.function_ordinal(),
+            no_source_coordinate.block_ordinal(),
+        );
+        assert_eq!(
+            bridge.query_target_catalog(&catalog, terminator).unwrap_err(),
+            ProductionKirV7BridgeCatalogQueryUnavailableV1::TerminatorHasNoCatalogOperationCoordinate
+        );
+        assert!(!bridge.proves_source_attribution_for_every_site());
+        assert!(!bridge.proves_semantic_refinement());
+        assert!(!bridge.grants_runtime_authority());
+
+        let bridge_bytes = bridge.to_canonical_bytes().unwrap();
+        let replayed = InertProductionKirV7StructuralBridgeV1::from_canonical_bytes(&bridge_bytes)
+            .unwrap()
+            .admit_exact_projection_v1(
+                &canonical_v7,
+                &canonical_v8,
+                &source_map_v2,
+                finalized.exact_finalized_bytes(),
+                &catalog,
+            )
+            .unwrap();
+        assert_eq!(replayed.identity(), bridge.identity());
+        assert_eq!(replayed.records(), bridge.records());
+
+        let (_, mut stale_module) =
+            VerifiedCanonicalKernelIrV8::from_canonical_bytes_with_module(canonical_v8.clone())
+                .unwrap();
+        stale_module.id = "stale-production-bridge-module".into();
+        let stale_v7 = VerifiedCanonicalKernelIrV7::from_module(stale_module.clone())
+            .unwrap()
+            .into_canonical_bytes();
+        let stale_v8 = VerifiedCanonicalKernelIrV8::from_module(stale_module)
+            .unwrap()
+            .into_canonical_bytes();
+        assert_eq!(
+            InertProductionKirV7StructuralBridgeV1::from_canonical_bytes(&bridge_bytes)
+                .unwrap()
+                .admit_exact_projection_v1(
+                    &stale_v7,
+                    &canonical_v8,
+                    &source_map_v2,
+                    finalized.exact_finalized_bytes(),
+                    &catalog,
+                )
+                .unwrap_err(),
+            ProductionKirV7BridgeErrorV1::SourceMapV7IdentityMismatch
+        );
+        assert_eq!(
+            InertProductionKirV7StructuralBridgeV1::from_canonical_bytes(&bridge_bytes)
+                .unwrap()
+                .admit_exact_projection_v1(
+                    &canonical_v7,
+                    &stale_v8,
+                    &source_map_v2,
+                    finalized.exact_finalized_bytes(),
+                    &catalog,
+                )
+                .unwrap_err(),
+            ProductionKirV7BridgeErrorV1::ProductionKirCatalogIdentityMismatch
+        );
+
+        let exact_source_map =
+            DebugSourceMapDocumentV2::from_canonical_json_bytes(&source_map_v2).unwrap();
+        let stale_source_map = DebugSourceMapDocumentV2::new(
+            DebugSourceMapBindingV1::new(
+                [0x91; 32],
+                exact_source_map.binding().canonical_kir().digest(),
+                exact_source_map.binding().canonical_kir().canonical_bytes(),
+            )
+            .unwrap(),
+            exact_source_map.files().to_vec(),
+            exact_source_map.sites().to_vec(),
+            exact_source_map.eliminated().to_vec(),
+            exact_source_map.scopes().to_vec(),
+            exact_source_map.variables().to_vec(),
+        )
+        .unwrap()
+        .to_canonical_json_bytes()
+        .unwrap();
+        assert_eq!(
+            InertProductionKirV7StructuralBridgeV1::from_canonical_bytes(&bridge_bytes)
+                .unwrap()
+                .admit_exact_projection_v1(
+                    &canonical_v7,
+                    &canonical_v8,
+                    &stale_source_map,
+                    finalized.exact_finalized_bytes(),
+                    &catalog,
+                )
+                .unwrap_err(),
+            ProductionKirV7BridgeErrorV1::SourceMapCatalogIdentityMismatch
+        );
+        let mut stale_artifact = finalized.exact_finalized_bytes().to_vec();
+        let stale_artifact_last = stale_artifact.len() - 1;
+        stale_artifact[stale_artifact_last] ^= 1;
+        assert_eq!(
+            InertProductionKirV7StructuralBridgeV1::from_canonical_bytes(&bridge_bytes)
+                .unwrap()
+                .admit_exact_projection_v1(
+                    &canonical_v7,
+                    &canonical_v8,
+                    &source_map_v2,
+                    &stale_artifact,
+                    &catalog,
+                )
+                .unwrap_err(),
+            ProductionKirV7BridgeErrorV1::ArtifactCatalogIdentityMismatch
+        );
+
+        let mut substituted_target = bridge_bytes.clone();
+        substituted_target[73] = match substituted_target[73] {
+            1 => 2,
+            2 => 1,
+            _ => unreachable!("admitted bridge has one closed target tag"),
+        };
+        reseal_bridge_claim(&mut substituted_target);
+        assert_eq!(
+            InertProductionKirV7StructuralBridgeV1::from_canonical_bytes(&substituted_target)
+                .unwrap()
+                .admit_exact_projection_v1(
+                    &canonical_v7,
+                    &canonical_v8,
+                    &source_map_v2,
+                    finalized.exact_finalized_bytes(),
+                    &catalog,
+                )
+                .unwrap_err(),
+            ProductionKirV7BridgeErrorV1::ExactProjectionMismatch
+        );
+        for identity_offset in [32_usize, 80, 120, 160, 192, 232, 272, 304, 336] {
+            let mut substituted_claim = bridge_bytes.clone();
+            substituted_claim[identity_offset] ^= 1;
+            reseal_bridge_claim(&mut substituted_claim);
+            let inert =
+                InertProductionKirV7StructuralBridgeV1::from_canonical_bytes(&substituted_claim)
+                    .unwrap();
+            assert_eq!(
+                inert
+                    .admit_exact_projection_v1(
+                        &canonical_v7,
+                        &canonical_v8,
+                        &source_map_v2,
+                        finalized.exact_finalized_bytes(),
+                        &catalog,
+                    )
+                    .unwrap_err(),
+                ProductionKirV7BridgeErrorV1::ExactProjectionMismatch
+            );
+        }
+        prior_catalog = Some(catalog);
 
         let summary = match finalized
             .admit_production_source_isa_acceptance_summary_v1()

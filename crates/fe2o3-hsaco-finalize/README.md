@@ -207,3 +207,25 @@ semantic-operation, compiler-handoff LLVM, and sparse-ISA axes. Unknown or ambig
 replaced with a seeded best match. V9 wire claims remain typed unavailable. The catalog remains
 observation-only and grants no debugger, profiler, publication, or runtime authority. The complete
 wire and query contract is documented in `../../docs/production-source-isa-catalog-v1.md`.
+
+`ProductionKirV7StructuralBridgeV1` is the separate bounded bridge from simulator/Diagnosis KIR
+V7 coordinates into this production catalog. Admission independently verifies exact canonical V7
+and production V8 bytes, the canonical Source Map V2 subject and content identity, exact finalized
+artifact bytes, and every catalog and target-structural identity. The current compiler projection
+decodes V7 and V8 to the identical `Module`, so the bridge explicitly catalogs block-entry,
+operation, and terminator coordinates as one-to-one identities. An exact catalog-handoff query is
+available only for operation coordinates: a workgroup-barrier operation can therefore retain the
+catalog's `NoSourceProvenance` result, while a following `Return` remains a typed structural-only
+terminator. Source/MIR duplication, coalescing, and elimination remain in the Source/ISA catalog
+rather than being recast as KIR-version migration.
+
+Canonical bridge bytes decode to inert claims. Query access requires exact reconstruction against
+the admitted catalog. Reordered, duplicated, substituted, over-limit, or non-identity records fail
+closed. V1 accepts only an already-admitted V8 Source/ISA catalog; V9 unavailability is reported by
+the upstream finalizer/catalog admission and is not re-labeled as a reachable bridge result. The
+bridge proves structural coordinate identity only; it proves no semantic refinement, schedule,
+complete ISA coverage, source attribution for every site, live PC, GPU observation, or debugger,
+profiler, publication, load, launch, or runtime authority.
+
+The frozen bridge wire, admission, query, and nonauthority contract is documented in
+`../../docs/production-kir-v7-structural-bridge-v1.md`.
