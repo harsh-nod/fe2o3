@@ -1,6 +1,7 @@
 #![cfg(target_os = "linux")]
 
 use std::{
+    collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
@@ -42,14 +43,14 @@ use fe2o3_hsaco_finalize::{
     InspectedProtectedWorkerV3HsacoV1, LinkOptionV1, PinnedWorkerV1,
     ProductionFinalizedSemanticDebugAdmissionV1, ProductionIsaPointV1,
     ProductionSemanticAnchorAdmissionV1, ProductionSemanticAnchorErrorV1,
-    ProductionSourceIsaCorrelationAdmissionV1, ProductionSourceIsaCorrelationErrorV1,
-    ProductionSourceIsaCorrelationUnavailableV1, ProductionSourceIsaRecordKindV1,
-    ProtectedWorkerV3CompactFinalizerReplayV2, WorkerExecutionLimitsV1, WorkerInputKindV1,
-    WorkerInputV1, WorkerMeasurementV1, WorkerOutputConstraintsV1, WorkerV3HsacoFinalizationError,
-    WorkerV3HsacoInspectionError, WorkerV3HsacoPublicationErrorV1,
-    execute_protected_reproducible_first_build_worker_v3, finalize_protected_worker_v3_hsaco_v1,
-    inspect_protected_worker_v3_hsaco_v1, inspect_unfinalized,
-    persist_prepared_protected_worker_v3_hsaco_publication_v1,
+    ProductionSourceIsaAcceptanceSummaryAdmissionV1, ProductionSourceIsaCorrelationAdmissionV1,
+    ProductionSourceIsaCorrelationErrorV1, ProductionSourceIsaCorrelationUnavailableV1,
+    ProductionSourceIsaRecordKindV1, ProtectedWorkerV3CompactFinalizerReplayV2,
+    WorkerExecutionLimitsV1, WorkerInputKindV1, WorkerInputV1, WorkerMeasurementV1,
+    WorkerOutputConstraintsV1, WorkerV3HsacoFinalizationError, WorkerV3HsacoInspectionError,
+    WorkerV3HsacoPublicationErrorV1, execute_protected_reproducible_first_build_worker_v3,
+    finalize_protected_worker_v3_hsaco_v1, inspect_protected_worker_v3_hsaco_v1,
+    inspect_unfinalized, persist_prepared_protected_worker_v3_hsaco_publication_v1,
     prepare_protected_worker_v3_compact_finalizer_replay_v2,
     prepare_protected_worker_v3_hsaco_publication_v1,
     publish_recovered_protected_worker_v3_hsaco_v1,
@@ -2036,6 +2037,16 @@ fn source_isa_correlation_preserves_exact_source_carrier_unavailability() {
             )
         )
     ));
+    assert!(matches!(
+        finalized
+            .admit_production_source_isa_acceptance_summary_v1()
+            .unwrap(),
+        ProductionSourceIsaAcceptanceSummaryAdmissionV1::Unavailable(
+            ProductionSourceIsaCorrelationUnavailableV1::SemanticDebugCarrier(
+                ProductionSemanticDebugProducerGapV1::SourceMapUnavailable
+            )
+        )
+    ));
 }
 
 #[test]
@@ -2138,6 +2149,123 @@ fn production_semantic_anchors_admit_real_worker_gfx942_and_gfx950() {
         assert!(!correlation.proves_live_program_counter_ownership());
         assert!(!correlation.grants_runtime_authority());
 
+        let summary = match finalized
+            .admit_production_source_isa_acceptance_summary_v1()
+            .unwrap()
+        {
+            ProductionSourceIsaAcceptanceSummaryAdmissionV1::Admitted(summary) => summary,
+            ProductionSourceIsaAcceptanceSummaryAdmissionV1::Unavailable(reason) => {
+                panic!("real Worker source/ISA summary unexpectedly unavailable: {reason:?}")
+            }
+        };
+        assert_eq!(summary.artifact_identity(), correlation.artifact_identity());
+        assert_eq!(summary.correlation_identity(), correlation.identity());
+        assert_eq!(
+            summary.structural_binding(),
+            correlation.structural_binding()
+        );
+        assert_eq!(summary.structural_binding().profile(), profile);
+        assert_eq!(
+            summary.structural_binding().version(),
+            ProductionReplayKernelIrVersionV1::V8
+        );
+        let mut expected_source_nodes = BTreeMap::new();
+        let mut expected_source_spans = BTreeMap::new();
+        let mut expected_isa_points = BTreeMap::new();
+        let mut expected_source_anchored = 0_u64;
+        let mut expected_eliminated = 0_u64;
+        let mut expected_no_source = 0_u64;
+        let mut expected_source_without_isa = 0_u64;
+        let mut expected_isa_references = 0_u64;
+        for record in correlation.records() {
+            match record.kind() {
+                ProductionSourceIsaRecordKindV1::SourceAnchored => {
+                    expected_source_anchored += 1;
+                    expected_source_without_isa += u64::from(record.isa().is_empty());
+                }
+                ProductionSourceIsaRecordKindV1::EliminatedBeforeKir => expected_eliminated += 1,
+                ProductionSourceIsaRecordKindV1::NoSourceProvenance => expected_no_source += 1,
+            }
+            if let Some(identity) = record.source_node_identity() {
+                *expected_source_nodes.entry(identity).or_insert(0_u64) += 1;
+            }
+            if let Some(span) = record.source_span() {
+                *expected_source_spans.entry(span).or_insert(0_u64) += 1;
+            }
+            for location in record.isa() {
+                let SemanticDebugLocationV1::Isa {
+                    kernel_ordinal,
+                    byte_start,
+                    ..
+                } = *location
+                else {
+                    unreachable!()
+                };
+                *expected_isa_points
+                    .entry(ProductionIsaPointV1::new(kernel_ordinal, byte_start))
+                    .or_insert(0_u64) += 1;
+                expected_isa_references += 1;
+            }
+        }
+        fn maximum<K: Ord>(counts: &BTreeMap<K, u64>) -> u64 {
+            counts.values().copied().max().unwrap_or(0)
+        }
+        let counts = summary.counts();
+        assert_eq!(
+            counts.records(),
+            u64::try_from(correlation.records().len()).unwrap()
+        );
+        assert_eq!(counts.source_anchored_records(), expected_source_anchored);
+        assert_eq!(counts.eliminated_before_kir_records(), expected_eliminated);
+        assert_eq!(counts.no_source_provenance_records(), expected_no_source);
+        assert_eq!(
+            counts.source_anchored_without_isa_records(),
+            expected_source_without_isa
+        );
+        assert_eq!(counts.isa_references(), expected_isa_references);
+        assert_eq!(
+            counts.distinct_source_node_queries(),
+            u64::try_from(expected_source_nodes.len()).unwrap()
+        );
+        assert_eq!(
+            counts.distinct_source_span_queries(),
+            u64::try_from(expected_source_spans.len()).unwrap()
+        );
+        assert_eq!(
+            counts.distinct_isa_point_queries(),
+            u64::try_from(expected_isa_points.len()).unwrap()
+        );
+        assert_eq!(
+            counts.maximum_source_node_query_matches(),
+            maximum(&expected_source_nodes)
+        );
+        assert_eq!(
+            counts.maximum_source_span_query_matches(),
+            maximum(&expected_source_spans)
+        );
+        assert_eq!(
+            counts.maximum_isa_point_query_matches(),
+            maximum(&expected_isa_points)
+        );
+        assert!(counts.source_anchored_records() > 0);
+        assert!(counts.isa_references() > 0);
+        let witness = summary
+            .round_trip_witness()
+            .expect("real Worker source/ISA summary has one exact round-trip witness");
+        assert_eq!(witness.isa_point().kernel_ordinal(), 0);
+        assert!(witness.isa_point().symbol_relative_pc().is_multiple_of(4));
+        assert!(witness.source_node_query_matches() > 0);
+        assert!(witness.source_span_query_matches() > 0);
+        assert!(witness.isa_point_query_matches() > 0);
+        assert!(!summary.proves_complete_machine_instruction_coverage());
+        assert!(!summary.proves_a_schedule());
+        assert!(!summary.proves_semantic_refinement());
+        assert!(!summary.proves_optimized_or_final_llvm_custody());
+        assert!(!summary.proves_live_program_counter_ownership());
+        assert!(!summary.retains_correlation_records());
+        assert!(!summary.grants_publication_authority());
+        assert!(!summary.grants_runtime_authority());
+
         let (v9_handoff, v9_descriptor_source, _) =
             semantic_anchor_handoff_with_version(profile, ProductionReplayKernelIrVersionV1::V9);
         let v9_outer = semantic_anchor_outer_v9(
@@ -2164,6 +2292,14 @@ fn production_semantic_anchors_admit_real_worker_gfx942_and_gfx950() {
                 .admit_production_source_isa_correlation_v1()
                 .unwrap(),
             ProductionSourceIsaCorrelationAdmissionV1::Unavailable(
+                ProductionSourceIsaCorrelationUnavailableV1::SourceProjectionForKirV9
+            )
+        ));
+        assert!(matches!(
+            v9_finalized
+                .admit_production_source_isa_acceptance_summary_v1()
+                .unwrap(),
+            ProductionSourceIsaAcceptanceSummaryAdmissionV1::Unavailable(
                 ProductionSourceIsaCorrelationUnavailableV1::SourceProjectionForKirV9
             )
         ));

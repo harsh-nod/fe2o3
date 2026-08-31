@@ -93,10 +93,12 @@ pub use production_semantic_anchor_v1::{
 };
 pub use production_source_isa_correlation_v1::{
     AdmittedProductionSourceIsaCorrelationV1, AdmittedProductionSourceIsaRecordV1,
-    ProductionIsaPointV1, ProductionSourceIsaCorrelationAdmissionV1,
-    ProductionSourceIsaCorrelationErrorV1, ProductionSourceIsaCorrelationUnavailableV1,
-    ProductionSourceIsaMatchesV1, ProductionSourceIsaQueryUnavailableV1,
-    ProductionSourceIsaRecordKindV1,
+    ProductionIsaPointV1, ProductionSourceIsaAcceptanceCountsV1,
+    ProductionSourceIsaAcceptanceSummaryAdmissionV1, ProductionSourceIsaAcceptanceSummaryV1,
+    ProductionSourceIsaCorrelationAdmissionV1, ProductionSourceIsaCorrelationErrorV1,
+    ProductionSourceIsaCorrelationUnavailableV1, ProductionSourceIsaMatchesV1,
+    ProductionSourceIsaQueryUnavailableV1, ProductionSourceIsaRecordKindV1,
+    ProductionSourceIsaRoundTripWitnessV1,
 };
 pub use request_construction::{
     LinkInputKindClosureIdentityV1, LinkInputKindClosureV1, LinkSymbolClosureIdentityV1,

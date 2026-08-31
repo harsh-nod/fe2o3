@@ -46,6 +46,18 @@ pub enum ProductionSourceIsaCorrelationAdmissionV1 {
     Unavailable(ProductionSourceIsaCorrelationUnavailableV1),
 }
 
+enum UnboxedProductionSourceIsaCorrelationAdmissionV1 {
+    Admitted(AdmittedProductionSourceIsaCorrelationV1),
+    Unavailable(ProductionSourceIsaCorrelationUnavailableV1),
+}
+
+/// Bounded result of reducing one exact joint correlation to authority-free acceptance evidence.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProductionSourceIsaAcceptanceSummaryAdmissionV1 {
+    Admitted(ProductionSourceIsaAcceptanceSummaryV1),
+    Unavailable(ProductionSourceIsaCorrelationUnavailableV1),
+}
+
 /// Closed failures while joining independently admitted source and sparse-ISA evidence.
 #[derive(Debug)]
 pub enum ProductionSourceIsaCorrelationErrorV1 {
@@ -90,6 +102,187 @@ pub enum ProductionSourceIsaRecordKindV1 {
     SourceAnchored,
     /// The target KIR operation has a compiler anchor but no source node in the exact carrier.
     NoSourceProvenance,
+}
+
+/// Checked cardinalities retained by one authority-free acceptance summary.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProductionSourceIsaAcceptanceCountsV1 {
+    records: u64,
+    source_anchored_records: u64,
+    eliminated_before_kir_records: u64,
+    no_source_provenance_records: u64,
+    source_anchored_without_isa_records: u64,
+    isa_references: u64,
+    distinct_source_node_queries: u64,
+    distinct_source_span_queries: u64,
+    distinct_isa_point_queries: u64,
+    maximum_source_node_query_matches: u64,
+    maximum_source_span_query_matches: u64,
+    maximum_isa_point_query_matches: u64,
+}
+
+impl ProductionSourceIsaAcceptanceCountsV1 {
+    pub const fn records(self) -> u64 {
+        self.records
+    }
+
+    pub const fn source_anchored_records(self) -> u64 {
+        self.source_anchored_records
+    }
+
+    pub const fn eliminated_before_kir_records(self) -> u64 {
+        self.eliminated_before_kir_records
+    }
+
+    pub const fn no_source_provenance_records(self) -> u64 {
+        self.no_source_provenance_records
+    }
+
+    /// Source-anchored records whose exact compiler pseudo-probe was eliminated.
+    pub const fn source_anchored_without_isa_records(self) -> u64 {
+        self.source_anchored_without_isa_records
+    }
+
+    /// Total sparse four-byte ISA references. Duplicate and coalesced references are preserved.
+    pub const fn isa_references(self) -> u64 {
+        self.isa_references
+    }
+
+    pub const fn distinct_source_node_queries(self) -> u64 {
+        self.distinct_source_node_queries
+    }
+
+    pub const fn distinct_source_span_queries(self) -> u64 {
+        self.distinct_source_span_queries
+    }
+
+    pub const fn distinct_isa_point_queries(self) -> u64 {
+        self.distinct_isa_point_queries
+    }
+
+    pub const fn maximum_source_node_query_matches(self) -> u64 {
+        self.maximum_source_node_query_matches
+    }
+
+    pub const fn maximum_source_span_query_matches(self) -> u64 {
+        self.maximum_source_span_query_matches
+    }
+
+    pub const fn maximum_isa_point_query_matches(self) -> u64 {
+        self.maximum_isa_point_query_matches
+    }
+}
+
+/// One canonical, exact forward/span/reverse query witness retained without record custody.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProductionSourceIsaRoundTripWitnessV1 {
+    source_node_identity: [u8; 32],
+    source_span: DebugSourceMapSpanV1,
+    isa_point: ProductionIsaPointV1,
+    source_node_query_matches: u64,
+    source_span_query_matches: u64,
+    isa_point_query_matches: u64,
+}
+
+impl ProductionSourceIsaRoundTripWitnessV1 {
+    pub const fn source_node_identity(&self) -> &[u8; 32] {
+        &self.source_node_identity
+    }
+
+    pub const fn source_span(&self) -> DebugSourceMapSpanV1 {
+        self.source_span
+    }
+
+    pub const fn isa_point(&self) -> ProductionIsaPointV1 {
+        self.isa_point
+    }
+
+    pub const fn source_node_query_matches(&self) -> u64 {
+        self.source_node_query_matches
+    }
+
+    pub const fn source_span_query_matches(&self) -> u64 {
+        self.source_span_query_matches
+    }
+
+    pub const fn isa_point_query_matches(&self) -> u64 {
+        self.isa_point_query_matches
+    }
+}
+
+/// Inert, fixed-size acceptance evidence derived from one admitted joint correlation.
+///
+/// The summary retains identities, checked cardinalities, and at most one exact query witness. It
+/// does not retain correlation records, compiler or publication custody, an HSACO image, or a
+/// claim about unanchored machine instructions. The exact target profile and KIR version are
+/// available from
+/// [`Self::structural_binding`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProductionSourceIsaAcceptanceSummaryV1 {
+    correlation_identity: [u8; 32],
+    artifact_identity: ContentIdentityV1,
+    structural_binding: ProductionTargetStructuralBindingV1,
+    counts: ProductionSourceIsaAcceptanceCountsV1,
+    round_trip_witness: Option<ProductionSourceIsaRoundTripWitnessV1>,
+}
+
+impl ProductionSourceIsaAcceptanceSummaryV1 {
+    pub const fn format_version(&self) -> u16 {
+        1
+    }
+
+    pub const fn correlation_identity(&self) -> &[u8; 32] {
+        &self.correlation_identity
+    }
+
+    pub const fn artifact_identity(&self) -> ContentIdentityV1 {
+        self.artifact_identity
+    }
+
+    pub const fn structural_binding(&self) -> ProductionTargetStructuralBindingV1 {
+        self.structural_binding
+    }
+
+    pub const fn counts(&self) -> ProductionSourceIsaAcceptanceCountsV1 {
+        self.counts
+    }
+
+    /// Canonical lowest exact witness, or `None` when no source-anchored ISA interval exists.
+    pub const fn round_trip_witness(&self) -> Option<ProductionSourceIsaRoundTripWitnessV1> {
+        self.round_trip_witness
+    }
+
+    pub const fn proves_complete_machine_instruction_coverage(&self) -> bool {
+        false
+    }
+
+    pub const fn proves_a_schedule(&self) -> bool {
+        false
+    }
+
+    pub const fn proves_semantic_refinement(&self) -> bool {
+        false
+    }
+
+    pub const fn proves_optimized_or_final_llvm_custody(&self) -> bool {
+        false
+    }
+
+    pub const fn proves_live_program_counter_ownership(&self) -> bool {
+        false
+    }
+
+    pub const fn retains_correlation_records(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_publication_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_runtime_authority(&self) -> bool {
+        false
+    }
 }
 
 /// One name-independent, admitted relationship. Optional fields are controlled by `kind()`.
@@ -343,13 +536,52 @@ impl AdmittedProductionSourceIsaCorrelationV1 {
 }
 
 impl PreparedFinalizedProtectedWorkerV3HsacoV1 {
+    /// Reduces exact joint admission to fixed-size, authority-free acceptance evidence.
+    ///
+    /// This performs the same bounded admission as
+    /// [`Self::admit_production_source_isa_correlation_v1`] and immediately drops its record and
+    /// query indices after deriving checked cardinalities. It performs no I/O or publication.
+    pub fn admit_production_source_isa_acceptance_summary_v1(
+        &self,
+    ) -> Result<
+        ProductionSourceIsaAcceptanceSummaryAdmissionV1,
+        ProductionSourceIsaCorrelationErrorV1,
+    > {
+        match self.admit_unboxed_production_source_isa_correlation_v1()? {
+            UnboxedProductionSourceIsaCorrelationAdmissionV1::Admitted(correlation) => {
+                Ok(ProductionSourceIsaAcceptanceSummaryAdmissionV1::Admitted(
+                    summarize_correlation(&correlation)?,
+                ))
+            }
+            UnboxedProductionSourceIsaCorrelationAdmissionV1::Unavailable(reason) => {
+                Ok(ProductionSourceIsaAcceptanceSummaryAdmissionV1::Unavailable(reason))
+            }
+        }
+    }
+
     /// Admits and joins exact Source/MIR/KIR V7 projection, deterministic neutral-to-target KIR
     /// V8 binding, Worker-input LLVM anchors, and final-HSACO sparse pseudo-probe intervals.
-    #[allow(clippy::too_many_lines)]
     pub fn admit_production_source_isa_correlation_v1(
         &self,
     ) -> Result<ProductionSourceIsaCorrelationAdmissionV1, ProductionSourceIsaCorrelationErrorV1>
     {
+        match self.admit_unboxed_production_source_isa_correlation_v1()? {
+            UnboxedProductionSourceIsaCorrelationAdmissionV1::Admitted(correlation) => Ok(
+                ProductionSourceIsaCorrelationAdmissionV1::Admitted(Box::new(correlation)),
+            ),
+            UnboxedProductionSourceIsaCorrelationAdmissionV1::Unavailable(reason) => Ok(
+                ProductionSourceIsaCorrelationAdmissionV1::Unavailable(reason),
+            ),
+        }
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn admit_unboxed_production_source_isa_correlation_v1(
+        &self,
+    ) -> Result<
+        UnboxedProductionSourceIsaCorrelationAdmissionV1,
+        ProductionSourceIsaCorrelationErrorV1,
+    > {
         let receipts = self.outer_handoff().capsule().receipts();
         let replay = CanonicalProductionKirToLlvmReplayEvidenceV1::decode(
             receipts.amdgpu_lowering().canonical_preimage(),
@@ -369,18 +601,18 @@ impl PreparedFinalizedProtectedWorkerV3HsacoV1 {
                     .map_err(ProductionSourceIsaCorrelationErrorV1::SemanticAnchors)?
                 {
                     ProductionSemanticAnchorAdmissionV1::Admitted(_) => {
-                        Ok(ProductionSourceIsaCorrelationAdmissionV1::Unavailable(
+                        Ok(UnboxedProductionSourceIsaCorrelationAdmissionV1::Unavailable(
                             ProductionSourceIsaCorrelationUnavailableV1::SourceProjectionForKirV9,
                         ))
                     }
                     ProductionSemanticAnchorAdmissionV1::Unavailable(reason) => {
-                        Ok(ProductionSourceIsaCorrelationAdmissionV1::Unavailable(
+                        Ok(UnboxedProductionSourceIsaCorrelationAdmissionV1::Unavailable(
                             ProductionSourceIsaCorrelationUnavailableV1::SemanticAnchors(reason),
                         ))
                     }
                 },
                 ProductionFinalizedSemanticDebugAdmissionV1::Unavailable(reason) => {
-                    Ok(ProductionSourceIsaCorrelationAdmissionV1::Unavailable(
+                    Ok(UnboxedProductionSourceIsaCorrelationAdmissionV1::Unavailable(
                         ProductionSourceIsaCorrelationUnavailableV1::SemanticDebugCarrier(reason),
                     ))
                 }
@@ -392,9 +624,11 @@ impl PreparedFinalizedProtectedWorkerV3HsacoV1 {
         let semantic_map = match semantic_admission {
             ProductionFinalizedSemanticDebugAdmissionV1::Admitted(map) => map,
             ProductionFinalizedSemanticDebugAdmissionV1::Unavailable(reason) => {
-                return Ok(ProductionSourceIsaCorrelationAdmissionV1::Unavailable(
-                    ProductionSourceIsaCorrelationUnavailableV1::SemanticDebugCarrier(reason),
-                ));
+                return Ok(
+                    UnboxedProductionSourceIsaCorrelationAdmissionV1::Unavailable(
+                        ProductionSourceIsaCorrelationUnavailableV1::SemanticDebugCarrier(reason),
+                    ),
+                );
             }
         };
         let anchors = match self
@@ -403,9 +637,11 @@ impl PreparedFinalizedProtectedWorkerV3HsacoV1 {
         {
             ProductionSemanticAnchorAdmissionV1::Admitted(anchors) => anchors,
             ProductionSemanticAnchorAdmissionV1::Unavailable(reason) => {
-                return Ok(ProductionSourceIsaCorrelationAdmissionV1::Unavailable(
-                    ProductionSourceIsaCorrelationUnavailableV1::SemanticAnchors(reason),
-                ));
+                return Ok(
+                    UnboxedProductionSourceIsaCorrelationAdmissionV1::Unavailable(
+                        ProductionSourceIsaCorrelationUnavailableV1::SemanticAnchors(reason),
+                    ),
+                );
             }
         };
         if semantic_map.admission_status()
@@ -591,8 +827,8 @@ impl PreparedFinalizedProtectedWorkerV3HsacoV1 {
             structural_binding,
             &records,
         )?;
-        Ok(ProductionSourceIsaCorrelationAdmissionV1::Admitted(
-            Box::new(AdmittedProductionSourceIsaCorrelationV1 {
+        Ok(UnboxedProductionSourceIsaCorrelationAdmissionV1::Admitted(
+            AdmittedProductionSourceIsaCorrelationV1 {
                 identity,
                 artifact_identity,
                 structural_binding,
@@ -600,9 +836,290 @@ impl PreparedFinalizedProtectedWorkerV3HsacoV1 {
                 source_node_index,
                 source_span_index,
                 isa_index,
-            }),
+            },
         ))
     }
+}
+
+fn summarize_correlation(
+    correlation: &AdmittedProductionSourceIsaCorrelationV1,
+) -> Result<ProductionSourceIsaAcceptanceSummaryV1, ProductionSourceIsaCorrelationErrorV1> {
+    let mut source_anchored_records = 0_u64;
+    let mut eliminated_before_kir_records = 0_u64;
+    let mut no_source_provenance_records = 0_u64;
+    let mut source_anchored_without_isa_records = 0_u64;
+    let mut isa_references = 0_u64;
+    for record in &correlation.records {
+        if !has_exact_record_shape(record) {
+            return Err(ProductionSourceIsaCorrelationErrorV1::CoordinateShapeMismatch);
+        }
+        let count = match record.kind {
+            ProductionSourceIsaRecordKindV1::SourceAnchored => &mut source_anchored_records,
+            ProductionSourceIsaRecordKindV1::EliminatedBeforeKir => {
+                &mut eliminated_before_kir_records
+            }
+            ProductionSourceIsaRecordKindV1::NoSourceProvenance => {
+                &mut no_source_provenance_records
+            }
+        };
+        *count = count
+            .checked_add(1)
+            .ok_or(ProductionSourceIsaCorrelationErrorV1::ResourceLimit)?;
+        if record.kind == ProductionSourceIsaRecordKindV1::SourceAnchored && record.isa.is_empty() {
+            source_anchored_without_isa_records = source_anchored_without_isa_records
+                .checked_add(1)
+                .ok_or(ProductionSourceIsaCorrelationErrorV1::ResourceLimit)?;
+        }
+        isa_references = isa_references
+            .checked_add(checked_len(record.isa.len())?)
+            .ok_or(ProductionSourceIsaCorrelationErrorV1::ResourceLimit)?;
+    }
+    if isa_references
+        > u64::try_from(MAX_SEMANTIC_DEBUG_MAPPING_REFERENCES_V1)
+            .map_err(|_| ProductionSourceIsaCorrelationErrorV1::ResourceLimit)?
+    {
+        return Err(ProductionSourceIsaCorrelationErrorV1::ResourceLimit);
+    }
+
+    let records = checked_len(correlation.records.len())?;
+    let classified_records = source_anchored_records
+        .checked_add(eliminated_before_kir_records)
+        .and_then(|count| count.checked_add(no_source_provenance_records))
+        .ok_or(ProductionSourceIsaCorrelationErrorV1::ResourceLimit)?;
+    let source_records = source_anchored_records
+        .checked_add(eliminated_before_kir_records)
+        .ok_or(ProductionSourceIsaCorrelationErrorV1::ResourceLimit)?;
+    if records
+        > u64::try_from(MAX_CORRELATION_RECORDS_V1)
+            .map_err(|_| ProductionSourceIsaCorrelationErrorV1::ResourceLimit)?
+    {
+        return Err(ProductionSourceIsaCorrelationErrorV1::ResourceLimit);
+    }
+    if records != classified_records
+        || checked_len(correlation.source_node_index.len())? != source_records
+        || checked_len(correlation.source_span_index.len())? != source_records
+        || checked_len(correlation.isa_index.len())? != isa_references
+    {
+        return Err(ProductionSourceIsaCorrelationErrorV1::CoordinateShapeMismatch);
+    }
+    let (exact_source_node_index, exact_source_span_index, exact_isa_index) =
+        build_indices(&correlation.records)?;
+    if exact_source_node_index != correlation.source_node_index
+        || exact_source_span_index != correlation.source_span_index
+        || exact_isa_index != correlation.isa_index
+    {
+        return Err(ProductionSourceIsaCorrelationErrorV1::CoordinateShapeMismatch);
+    }
+    drop(exact_source_node_index);
+    drop(exact_source_span_index);
+    drop(exact_isa_index);
+
+    let (distinct_source_node_queries, maximum_source_node_query_matches) =
+        sorted_query_cardinalities(&correlation.source_node_index, |entry| &entry.0)?;
+    let (distinct_source_span_queries, maximum_source_span_query_matches) =
+        sorted_query_cardinalities(&correlation.source_span_index, |entry| &entry.0)?;
+    let (distinct_isa_point_queries, maximum_isa_point_query_matches) =
+        sorted_query_cardinalities(&correlation.isa_index, |entry| &entry.0)?;
+    let round_trip_witness = canonical_round_trip_witness(correlation)?;
+
+    Ok(ProductionSourceIsaAcceptanceSummaryV1 {
+        correlation_identity: correlation.identity,
+        artifact_identity: correlation.artifact_identity,
+        structural_binding: correlation.structural_binding,
+        counts: ProductionSourceIsaAcceptanceCountsV1 {
+            records,
+            source_anchored_records,
+            eliminated_before_kir_records,
+            no_source_provenance_records,
+            source_anchored_without_isa_records,
+            isa_references,
+            distinct_source_node_queries,
+            distinct_source_span_queries,
+            distinct_isa_point_queries,
+            maximum_source_node_query_matches,
+            maximum_source_span_query_matches,
+            maximum_isa_point_query_matches,
+        },
+        round_trip_witness,
+    })
+}
+
+fn canonical_round_trip_witness(
+    correlation: &AdmittedProductionSourceIsaCorrelationV1,
+) -> Result<Option<ProductionSourceIsaRoundTripWitnessV1>, ProductionSourceIsaCorrelationErrorV1> {
+    let mut selected = None;
+    for (record_index, record) in correlation.records.iter().enumerate() {
+        if record.kind != ProductionSourceIsaRecordKindV1::SourceAnchored {
+            continue;
+        }
+        let (Some(source_node_identity), Some(source_span)) =
+            (record.source_node_identity, record.source_span)
+        else {
+            return Err(ProductionSourceIsaCorrelationErrorV1::CoordinateShapeMismatch);
+        };
+        for location in &record.isa {
+            let SemanticDebugLocationV1::Isa {
+                kernel_ordinal,
+                byte_start,
+                byte_end,
+            } = *location
+            else {
+                return Err(ProductionSourceIsaCorrelationErrorV1::CoordinateShapeMismatch);
+            };
+            if kernel_ordinal != 0 || byte_start.checked_add(4) != Some(byte_end) {
+                return Err(ProductionSourceIsaCorrelationErrorV1::CoordinateShapeMismatch);
+            }
+            let point = ProductionIsaPointV1::new(kernel_ordinal, byte_start);
+            let candidate = (source_node_identity, source_span, point, record_index);
+            if selected.is_none_or(|current| candidate < current) {
+                selected = Some(candidate);
+            }
+        }
+    }
+    let Some((source_node_identity, source_span, isa_point, record_index)) = selected else {
+        return Ok(None);
+    };
+    let record = correlation
+        .records
+        .get(record_index)
+        .ok_or(ProductionSourceIsaCorrelationErrorV1::CoordinateShapeMismatch)?;
+    let source_node_query_matches = checked_query_contains_record(
+        correlation
+            .query_source_node(source_node_identity)
+            .map_err(|_| ProductionSourceIsaCorrelationErrorV1::CoordinateShapeMismatch)?,
+        record,
+    )?;
+    let source_span_query_matches = checked_query_contains_record(
+        correlation
+            .query_source_span(source_span)
+            .map_err(|_| ProductionSourceIsaCorrelationErrorV1::CoordinateShapeMismatch)?,
+        record,
+    )?;
+    let isa_point_query_matches = checked_query_contains_record(
+        correlation
+            .query_isa_pc(isa_point)
+            .map_err(|_| ProductionSourceIsaCorrelationErrorV1::CoordinateShapeMismatch)?,
+        record,
+    )?;
+    Ok(Some(ProductionSourceIsaRoundTripWitnessV1 {
+        source_node_identity,
+        source_span,
+        isa_point,
+        source_node_query_matches,
+        source_span_query_matches,
+        isa_point_query_matches,
+    }))
+}
+
+fn checked_query_contains_record(
+    matches: ProductionSourceIsaMatchesV1<'_>,
+    expected: &AdmittedProductionSourceIsaRecordV1,
+) -> Result<u64, ProductionSourceIsaCorrelationErrorV1> {
+    let mut count = 0_u64;
+    let mut contains = false;
+    for record in matches {
+        count = count
+            .checked_add(1)
+            .ok_or(ProductionSourceIsaCorrelationErrorV1::ResourceLimit)?;
+        contains |= std::ptr::eq(record, expected);
+    }
+    if !contains {
+        return Err(ProductionSourceIsaCorrelationErrorV1::CoordinateShapeMismatch);
+    }
+    Ok(count)
+}
+
+fn has_exact_record_shape(record: &AdmittedProductionSourceIsaRecordV1) -> bool {
+    let source_coordinates = record.source_node_identity.is_some()
+        && record.source_span.is_some()
+        && record.mir_node_identity.is_some()
+        && record
+            .mir
+            .is_some_and(|location| location.layer() == SemanticDebugLayerV1::Mir);
+    let neutral_coordinates = record.neutral_kir_node_identity.is_some()
+        && record
+            .neutral_kir
+            .is_some_and(|location| location.layer() == SemanticDebugLayerV1::Kir);
+    let target_coordinates = record
+        .target_kir
+        .is_some_and(|location| location.layer() == SemanticDebugLayerV1::Kir)
+        && record.semantic_operation_id.is_some()
+        && record
+            .compiler_handoff_llvm
+            .is_some_and(|location| location.layer() == SemanticDebugLayerV1::Llvm)
+        && record.anchor_transformation.is_some();
+    let isa_coordinates = record.isa.iter().all(|location| {
+        matches!(
+            *location,
+            SemanticDebugLocationV1::Isa {
+                kernel_ordinal: 0,
+                byte_start,
+                byte_end,
+            } if byte_start.checked_add(4) == Some(byte_end)
+        )
+    });
+    match record.kind {
+        ProductionSourceIsaRecordKindV1::EliminatedBeforeKir => {
+            source_coordinates
+                && !neutral_coordinates
+                && record.neutral_kir_node_identity.is_none()
+                && record.neutral_kir.is_none()
+                && record.target_kir.is_none()
+                && record.semantic_operation_id.is_none()
+                && record.compiler_handoff_llvm.is_none()
+                && record.isa.is_empty()
+                && record.anchor_transformation.is_none()
+        }
+        ProductionSourceIsaRecordKindV1::SourceAnchored => {
+            source_coordinates && neutral_coordinates && target_coordinates && isa_coordinates
+        }
+        ProductionSourceIsaRecordKindV1::NoSourceProvenance => {
+            record.source_node_identity.is_none()
+                && record.source_span.is_none()
+                && record.mir_node_identity.is_none()
+                && record.mir.is_none()
+                && record.neutral_kir_node_identity.is_none()
+                && record.neutral_kir.is_none()
+                && target_coordinates
+                && isa_coordinates
+        }
+    }
+}
+
+fn checked_len(length: usize) -> Result<u64, ProductionSourceIsaCorrelationErrorV1> {
+    u64::try_from(length).map_err(|_| ProductionSourceIsaCorrelationErrorV1::ResourceLimit)
+}
+
+fn sorted_query_cardinalities<T, K: Ord, F: Fn(&T) -> &K>(
+    values: &[T],
+    key: F,
+) -> Result<(u64, u64), ProductionSourceIsaCorrelationErrorV1> {
+    if values.is_empty() {
+        return Ok((0, 0));
+    }
+    let mut distinct = 1_u64;
+    let mut run = 1_u64;
+    let mut maximum = 1_u64;
+    for pair in values.windows(2) {
+        match key(&pair[0]).cmp(key(&pair[1])) {
+            std::cmp::Ordering::Greater => {
+                return Err(ProductionSourceIsaCorrelationErrorV1::CoordinateShapeMismatch);
+            }
+            std::cmp::Ordering::Equal => {
+                run = run
+                    .checked_add(1)
+                    .ok_or(ProductionSourceIsaCorrelationErrorV1::ResourceLimit)?;
+                maximum = maximum.max(run);
+            }
+            std::cmp::Ordering::Less => {
+                distinct = distinct
+                    .checked_add(1)
+                    .ok_or(ProductionSourceIsaCorrelationErrorV1::ResourceLimit)?;
+                run = 1;
+            }
+        }
+    }
+    Ok((distinct, maximum))
 }
 
 const fn is_exact_v9_source_projection_gap(reason: ProductionSemanticDebugProducerGapV1) -> bool {
@@ -1059,9 +1576,24 @@ mod tests {
         .structural_binding()
     }
 
+    fn fixture_from_records(
+        records: Vec<AdmittedProductionSourceIsaRecordV1>,
+    ) -> AdmittedProductionSourceIsaCorrelationV1 {
+        let (source_node_index, source_span_index, isa_index) = build_indices(&records).unwrap();
+        AdmittedProductionSourceIsaCorrelationV1 {
+            identity: [9; 32],
+            artifact_identity: ContentIdentityV1::calculate(b"artifact"),
+            structural_binding: structural_binding(),
+            records,
+            source_node_index,
+            source_span_index,
+            isa_index,
+        }
+    }
+
     fn indexed_fixture() -> AdmittedProductionSourceIsaCorrelationV1 {
         let shared_span = span(1, 0);
-        let records = vec![
+        fixture_from_records(vec![
             source_record(
                 1,
                 shared_span,
@@ -1092,17 +1624,7 @@ mod tests {
             ),
             eliminated_record(3, span(2, 16)),
             synthetic_record(),
-        ];
-        let (source_node_index, source_span_index, isa_index) = build_indices(&records).unwrap();
-        AdmittedProductionSourceIsaCorrelationV1 {
-            identity: [9; 32],
-            artifact_identity: ContentIdentityV1::calculate(b"artifact"),
-            structural_binding: structural_binding(),
-            records,
-            source_node_index,
-            source_span_index,
-            isa_index,
-        }
+        ])
     }
 
     #[test]
@@ -1197,6 +1719,178 @@ mod tests {
     }
 
     #[test]
+    fn acceptance_summary_preserves_exact_identities_and_query_cardinalities() {
+        let admitted = indexed_fixture();
+        let summary = summarize_correlation(&admitted).unwrap();
+        assert_eq!(summary.format_version(), 1);
+        assert_eq!(summary.correlation_identity(), admitted.identity());
+        assert_eq!(summary.artifact_identity(), admitted.artifact_identity());
+        assert_eq!(summary.structural_binding(), admitted.structural_binding());
+        assert_eq!(
+            summary.structural_binding().profile(),
+            ProductionAmdTargetProfileV1::Gfx942
+        );
+        assert_eq!(
+            summary.structural_binding().version(),
+            ProductionReplayKernelIrVersionV1::V8
+        );
+
+        let counts = summary.counts();
+        assert_eq!(counts.records(), 5);
+        assert_eq!(counts.source_anchored_records(), 3);
+        assert_eq!(counts.eliminated_before_kir_records(), 1);
+        assert_eq!(counts.no_source_provenance_records(), 1);
+        assert_eq!(counts.source_anchored_without_isa_records(), 1);
+        assert_eq!(counts.isa_references(), 4);
+        assert_eq!(counts.distinct_source_node_queries(), 3);
+        assert_eq!(counts.distinct_source_span_queries(), 2);
+        assert_eq!(counts.distinct_isa_point_queries(), 3);
+        assert_eq!(counts.maximum_source_node_query_matches(), 2);
+        assert_eq!(counts.maximum_source_span_query_matches(), 3);
+        assert_eq!(counts.maximum_isa_point_query_matches(), 2);
+        let witness = summary
+            .round_trip_witness()
+            .expect("sourceful ISA fixture has an exact round-trip witness");
+        assert_eq!(witness.source_node_identity(), &[1; 32]);
+        assert_eq!(witness.source_span(), span(1, 0));
+        assert_eq!(witness.isa_point(), ProductionIsaPointV1::new(0, 0));
+        assert_eq!(witness.source_node_query_matches(), 2);
+        assert_eq!(witness.source_span_query_matches(), 3);
+        assert_eq!(witness.isa_point_query_matches(), 2);
+
+        assert!(!summary.proves_complete_machine_instruction_coverage());
+        assert!(!summary.proves_a_schedule());
+        assert!(!summary.proves_semantic_refinement());
+        assert!(!summary.proves_optimized_or_final_llvm_custody());
+        assert!(!summary.proves_live_program_counter_ownership());
+        assert!(!summary.retains_correlation_records());
+        assert!(!summary.grants_publication_authority());
+        assert!(!summary.grants_runtime_authority());
+        assert!(std::mem::size_of::<ProductionSourceIsaAcceptanceSummaryV1>() <= 512);
+        assert!(!std::mem::needs_drop::<
+            ProductionSourceIsaAcceptanceSummaryV1,
+        >());
+    }
+
+    #[test]
+    fn acceptance_summary_selects_the_same_lowest_witness_after_record_reordering() {
+        let admitted = indexed_fixture();
+        let expected = summarize_correlation(&admitted)
+            .unwrap()
+            .round_trip_witness()
+            .unwrap();
+        let mut records = admitted.records.clone();
+        records.swap(0, 2);
+        records.swap(1, 4);
+        let reordered = fixture_from_records(records);
+        assert_eq!(
+            summarize_correlation(&reordered)
+                .unwrap()
+                .round_trip_witness(),
+            Some(expected)
+        );
+    }
+
+    #[test]
+    fn acceptance_summary_handles_empty_exact_indices_without_sentinels() {
+        let admitted = indexed_fixture();
+        let empty = AdmittedProductionSourceIsaCorrelationV1 {
+            identity: admitted.identity,
+            artifact_identity: admitted.artifact_identity,
+            structural_binding: admitted.structural_binding,
+            records: Vec::new(),
+            source_node_index: Vec::new(),
+            source_span_index: Vec::new(),
+            isa_index: Vec::new(),
+        };
+        let counts = summarize_correlation(&empty).unwrap().counts();
+        assert_eq!(counts.records(), 0);
+        assert_eq!(counts.isa_references(), 0);
+        assert_eq!(counts.distinct_source_node_queries(), 0);
+        assert_eq!(counts.distinct_source_span_queries(), 0);
+        assert_eq!(counts.distinct_isa_point_queries(), 0);
+        assert_eq!(counts.maximum_source_node_query_matches(), 0);
+        assert_eq!(counts.maximum_source_span_query_matches(), 0);
+        assert_eq!(counts.maximum_isa_point_query_matches(), 0);
+        assert!(
+            summarize_correlation(&empty)
+                .unwrap()
+                .round_trip_witness()
+                .is_none()
+        );
+
+        let eliminated = fixture_from_records(vec![eliminated_record(4, span(4, 0))]);
+        assert!(
+            summarize_correlation(&eliminated)
+                .unwrap()
+                .round_trip_witness()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn acceptance_summary_rejects_corrupt_record_shapes_and_indices() {
+        let mut bad_record = indexed_fixture();
+        bad_record.records[0].kind = ProductionSourceIsaRecordKindV1::EliminatedBeforeKir;
+        assert!(matches!(
+            summarize_correlation(&bad_record),
+            Err(ProductionSourceIsaCorrelationErrorV1::CoordinateShapeMismatch)
+        ));
+
+        let mut bad_source_index = indexed_fixture();
+        bad_source_index.source_node_index[0].1 = 2;
+        assert!(matches!(
+            summarize_correlation(&bad_source_index),
+            Err(ProductionSourceIsaCorrelationErrorV1::CoordinateShapeMismatch)
+        ));
+
+        let mut duplicated_source_index = indexed_fixture();
+        duplicated_source_index.source_node_index[2] = duplicated_source_index.source_node_index[1];
+        assert!(matches!(
+            summarize_correlation(&duplicated_source_index),
+            Err(ProductionSourceIsaCorrelationErrorV1::CoordinateShapeMismatch)
+        ));
+
+        let mut duplicated_span_index = indexed_fixture();
+        let last = duplicated_span_index.source_span_index.len() - 1;
+        duplicated_span_index.source_span_index[last] = duplicated_span_index.source_span_index[2];
+        assert!(matches!(
+            summarize_correlation(&duplicated_span_index),
+            Err(ProductionSourceIsaCorrelationErrorV1::CoordinateShapeMismatch)
+        ));
+
+        let mut unsorted_span_index = indexed_fixture();
+        let last = unsorted_span_index.source_span_index.len() - 1;
+        unsorted_span_index.source_span_index.swap(0, last);
+        assert!(matches!(
+            summarize_correlation(&unsorted_span_index),
+            Err(ProductionSourceIsaCorrelationErrorV1::CoordinateShapeMismatch)
+        ));
+
+        let mut wrong_isa_index = indexed_fixture();
+        wrong_isa_index.isa_index[0].0 = ProductionIsaPointV1::new(1, 0);
+        assert!(matches!(
+            summarize_correlation(&wrong_isa_index),
+            Err(ProductionSourceIsaCorrelationErrorV1::CoordinateShapeMismatch)
+        ));
+
+        let mut aligned_substituted_isa_index = indexed_fixture();
+        aligned_substituted_isa_index.isa_index[2].0 = ProductionIsaPointV1::new(0, 4);
+        assert!(matches!(
+            summarize_correlation(&aligned_substituted_isa_index),
+            Err(ProductionSourceIsaCorrelationErrorV1::CoordinateShapeMismatch)
+        ));
+
+        let mut duplicated_isa_index = indexed_fixture();
+        duplicated_isa_index.isa_index[2] = duplicated_isa_index.isa_index[0];
+        duplicated_isa_index.isa_index.sort_unstable();
+        assert!(matches!(
+            summarize_correlation(&duplicated_isa_index),
+            Err(ProductionSourceIsaCorrelationErrorV1::CoordinateShapeMismatch)
+        ));
+    }
+
+    #[test]
     fn isa_index_at_the_wire_limit_retains_no_kernel_ordinal_heap_and_rejects_wrong_ordinal() {
         let mut isa = Vec::new();
         isa.try_reserve_exact(MAX_SEMANTIC_DEBUG_MAPPING_REFERENCES_V1)
@@ -1212,7 +1906,7 @@ mod tests {
             }),
         );
         let records = vec![source_record(1, span(1, 0), 0, isa)];
-        let (_, _, isa_index) = build_indices(&records).unwrap();
+        let (source_node_index, source_span_index, isa_index) = build_indices(&records).unwrap();
         assert_eq!(isa_index.len(), MAX_SEMANTIC_DEBUG_MAPPING_REFERENCES_V1);
         assert!(
             isa_index.capacity()
@@ -1220,13 +1914,33 @@ mod tests {
                     .checked_mul(2)
                     .unwrap()
         );
-
-        let mut wrong_ordinal = records;
-        wrong_ordinal[0].isa[0] = SemanticDebugLocationV1::Isa {
-            kernel_ordinal: 1,
-            byte_start: 0,
-            byte_end: 4,
+        let admitted = AdmittedProductionSourceIsaCorrelationV1 {
+            identity: [8; 32],
+            artifact_identity: ContentIdentityV1::calculate(b"maximum-isa-summary"),
+            structural_binding: structural_binding(),
+            records,
+            source_node_index,
+            source_span_index,
+            isa_index,
         };
+        let counts = summarize_correlation(&admitted).unwrap().counts();
+        assert_eq!(
+            counts.isa_references(),
+            u64::try_from(MAX_SEMANTIC_DEBUG_MAPPING_REFERENCES_V1).unwrap()
+        );
+        assert_eq!(counts.distinct_isa_point_queries(), counts.isa_references());
+        assert_eq!(counts.maximum_isa_point_query_matches(), 1);
+
+        let wrong_ordinal = vec![source_record(
+            1,
+            span(1, 0),
+            0,
+            vec![SemanticDebugLocationV1::Isa {
+                kernel_ordinal: 1,
+                byte_start: 0,
+                byte_end: 4,
+            }],
+        )];
         assert!(matches!(
             build_indices(&wrong_ordinal),
             Err(ProductionSourceIsaCorrelationErrorV1::CoordinateShapeMismatch)
