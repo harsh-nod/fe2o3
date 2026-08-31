@@ -231,7 +231,7 @@ fn hsaco_payload(input: &[u8]) -> Vec<u8> {
 }
 
 fn hex_decode(encoded: &[u8]) -> Option<Vec<u8>> {
-    if encoded.len() % 2 != 0 {
+    if !encoded.len().is_multiple_of(2) {
         return None;
     }
     encoded

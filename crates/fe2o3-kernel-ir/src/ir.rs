@@ -552,6 +552,10 @@ fn add_synchronized_memory_capabilities(
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "boxing a public IR operation would change its established ownership and API shape"
+)]
 pub enum OperationKind {
     Constant(Constant),
     Intrinsic(IntrinsicOperation),

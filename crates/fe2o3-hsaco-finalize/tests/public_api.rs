@@ -1357,6 +1357,10 @@ fn general_v3_fixture_for_identity(
     fixture
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the fixture exposes each independently mutated descriptor axis"
+)]
 fn general_v3_table(
     profile: GeneralV3Kernel,
     explicit_size: u32,
