@@ -19,13 +19,15 @@ use fe2o3_compiler_lineage::{
     InertProofBindingAssociationV4, InertProofBindingReceiptV3,
     InertRustcIdentityInventoryReceiptV3, InertRustcPreflightPlanReceiptV3,
     InertSemanticToLlvmReceiptV3, InertTargetBindingReceiptV3, LineageErrorV3,
-    MultiRootTargetBindingInputsV2, MultiRootTargetBindingTranscriptV2,
-    MultiRootTargetWorkgroupInputV2, OrderedInertSemanticLineageReceiptsV3,
-    ProductionTargetLineageErrorV3, SemanticToLlvmAssociationInputsV3,
-    SemanticToLlvmAssociationTranscriptV3, TargetBindingTranscriptInputsV3,
-    TargetBindingTranscriptV3, TargetLineageIdentityV3, derive_semantic_target_layout_identity_v1,
+    MultiRootCanonicalKirVersionV2, MultiRootNeutralKirIdentityV2, MultiRootProofRosterErrorV2,
+    MultiRootProofRosterInputsV2, MultiRootProofRosterKindV2, MultiRootProofRosterRootInputV2,
+    MultiRootProofRosterTranscriptV2, MultiRootTargetBindingInputsV2,
+    MultiRootTargetBindingTranscriptV2, MultiRootTargetWorkgroupInputV2,
+    OrderedInertSemanticLineageReceiptsV3, ProductionTargetLineageErrorV3,
+    SemanticToLlvmAssociationInputsV3, SemanticToLlvmAssociationTranscriptV3,
+    TargetBindingTranscriptInputsV3, TargetBindingTranscriptV3, TargetLineageIdentityV3,
+    derive_semantic_target_layout_identity_v1,
 };
-use fe2o3_kernel_descriptor::KernelId as DescriptorKernelId;
 use fe2o3_kernel_ir::{
     FunctionRole, InertCanonicalFormalMemoryObligationReceiptV1, Module,
     VerifiedCanonicalKernelIrErrorV8, VerifiedCanonicalKernelIrErrorV9,
@@ -135,6 +137,17 @@ enum LineageRosterPayloadV1 {
     VerusExecution,
 }
 
+impl LineageRosterPayloadV1 {
+    const fn shared_kind(self) -> MultiRootProofRosterKindV2 {
+        match self {
+            Self::MiddleEnd => MultiRootProofRosterKindV2::MiddleEnd,
+            Self::Correspondence => MultiRootProofRosterKindV2::Correspondence,
+            Self::FormalMemory => MultiRootProofRosterKindV2::FormalMemory,
+            Self::VerusExecution => MultiRootProofRosterKindV2::VerusExecution,
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 struct LineageNeutralKirIdentityV1 {
     version: ProductionCanonicalKernelIrVersionV1,
@@ -149,6 +162,19 @@ impl From<ProductionCanonicalKernelIrIdentityV1> for LineageNeutralKirIdentityV1
             canonical_length: identity.canonical_length(),
             digest: *identity.digest(),
         }
+    }
+}
+
+impl LineageNeutralKirIdentityV1 {
+    fn shared(self) -> Result<MultiRootNeutralKirIdentityV2, MultiRootProofRosterErrorV2> {
+        MultiRootNeutralKirIdentityV2::new(
+            match self.version {
+                ProductionCanonicalKernelIrVersionV1::V8 => MultiRootCanonicalKirVersionV2::V8,
+                ProductionCanonicalKernelIrVersionV1::V9 => MultiRootCanonicalKirVersionV2::V9,
+            },
+            self.canonical_length,
+            self.digest,
+        )
     }
 }
 
@@ -313,8 +339,7 @@ fn prepare_lineage_evidence_v1(
         });
     }
 
-    let middle_end = encode_lineage_roster_envelope_v1(
-        *b"F2MRMID2",
+    let middle_end = build_lineage_roster_v2(
         semantic.semantic_sha256().as_bytes(),
         neutral_kir.into(),
         roster_identity,
@@ -322,8 +347,7 @@ fn prepare_lineage_evidence_v1(
         &roots,
         LineageRosterPayloadV1::MiddleEnd,
     )?;
-    let correspondence = encode_lineage_roster_envelope_v1(
-        *b"F2MRCOR2",
+    let correspondence = build_lineage_roster_v2(
         semantic.semantic_sha256().as_bytes(),
         neutral_kir.into(),
         roster_identity,
@@ -331,8 +355,7 @@ fn prepare_lineage_evidence_v1(
         &roots,
         LineageRosterPayloadV1::Correspondence,
     )?;
-    let formal_memory = encode_lineage_roster_envelope_v1(
-        *b"F2MRFOR2",
+    let formal_memory = build_lineage_roster_v2(
         semantic.semantic_sha256().as_bytes(),
         neutral_kir.into(),
         roster_identity,
@@ -340,8 +363,7 @@ fn prepare_lineage_evidence_v1(
         &roots,
         LineageRosterPayloadV1::FormalMemory,
     )?;
-    let verus = encode_lineage_roster_envelope_v1(
-        *b"F2MRVER2",
+    let verus = build_lineage_roster_v2(
         semantic.semantic_sha256().as_bytes(),
         neutral_kir.into(),
         roster_identity,
@@ -486,8 +508,7 @@ fn encode_correspondence_root_payload_v1(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn encode_lineage_roster_envelope_v1(
-    magic: [u8; 8],
+fn build_lineage_roster_v2(
     semantic_sha256: &[u8; 32],
     neutral_kir: LineageNeutralKirIdentityV1,
     roster_identity: [u8; 32],
@@ -495,94 +516,50 @@ fn encode_lineage_roster_envelope_v1(
     roots: &[PreparedLineageRootV1],
     payload_kind: LineageRosterPayloadV1,
 ) -> Result<Vec<u8>, ProductionSemanticLineageErrorV3> {
-    if roots.len() < 2
-        || canonical_kernel_order.len() != roots.len()
-        || semantic_sha256 == &[0; 32]
-        || roster_identity == [0; 32]
-        || neutral_kir.digest == [0; 32]
-        || neutral_kir.canonical_length == 0
-    {
-        return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
-            "invalid multi-root lineage envelope identity",
-        ));
-    }
-    let mut permutation = canonical_kernel_order.to_vec();
-    permutation.sort_unstable();
-    if permutation != (0..roots.len()).collect::<Vec<_>>() {
-        return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
-            "lineage KernelId order is not an exact root permutation",
-        ));
-    }
-    let mut semantic_roots = BTreeSet::new();
-    let mut exports = BTreeSet::new();
-    let mut bindings = BTreeSet::new();
-    let mut kernels = BTreeSet::new();
-    let mut bytes = Vec::new();
-    bytes.extend_from_slice(&magic);
-    bytes.extend_from_slice(&2_u16.to_le_bytes());
-    bytes.extend_from_slice(&1_u16.to_le_bytes());
-    let total_offset = bytes.len();
-    bytes.extend_from_slice(&0_u32.to_le_bytes());
-    bytes.extend_from_slice(semantic_sha256);
-    bytes.extend_from_slice(
-        &(match neutral_kir.version {
-            ProductionCanonicalKernelIrVersionV1::V8 => 8_u16,
-            ProductionCanonicalKernelIrVersionV1::V9 => 9_u16,
+    let canonical_kernel_order = canonical_kernel_order
+        .iter()
+        .copied()
+        .map(|index| {
+            u32::try_from(index).map_err(|_| {
+                ProductionSemanticLineageErrorV3::AxisMismatch("lineage index overflow")
+            })
         })
-        .to_le_bytes(),
-    );
-    bytes.extend_from_slice(&0_u16.to_le_bytes());
-    bytes.extend_from_slice(&neutral_kir.canonical_length.to_le_bytes());
-    bytes.extend_from_slice(&neutral_kir.digest);
-    bytes.extend_from_slice(&roster_identity);
-    push_lineage_count_v1(&mut bytes, canonical_kernel_order.len())?;
-    for index in canonical_kernel_order {
-        bytes.extend_from_slice(
-            &u32::try_from(*index)
-                .map_err(|_| {
-                    ProductionSemanticLineageErrorV3::AxisMismatch("lineage index overflow")
-                })?
-                .to_le_bytes(),
-        );
-    }
-    push_lineage_count_v1(&mut bytes, roots.len())?;
-    for root in roots {
-        if !semantic_roots.insert(root.semantic_root)
-            || !exports.insert(root.export_symbol.as_ref())
-            || !bindings.insert(root.kernel_binding)
-            || !kernels.insert(root.kernel_id.as_str())
-            || root.logical_name.is_empty()
-            || !(1..=3).contains(&root.source_rank)
-            || root.workgroup.contains(&0)
-        {
-            return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
-                "duplicate or invalid multi-root lineage record",
-            ));
-        }
-        bytes.extend_from_slice(&root.semantic_root.to_le_bytes());
-        bytes.extend_from_slice(&root.semantic_root_identity);
-        bytes.extend_from_slice(&root.kernel_binding);
-        bytes.push(root.source_rank);
-        bytes.extend_from_slice(&[0; 3]);
-        for dimension in root.workgroup {
-            bytes.extend_from_slice(&dimension.to_le_bytes());
-        }
-        push_lineage_bytes_v1(&mut bytes, root.logical_name.as_bytes())?;
-        push_lineage_bytes_v1(&mut bytes, &root.export_symbol)?;
-        push_lineage_bytes_v1(&mut bytes, root.kernel_id.as_bytes())?;
-        let payload = match payload_kind {
-            LineageRosterPayloadV1::MiddleEnd => &root.middle_end,
-            LineageRosterPayloadV1::Correspondence => &root.correspondence,
-            LineageRosterPayloadV1::FormalMemory => &root.formal_memory,
-            LineageRosterPayloadV1::VerusExecution => &root.verus_execution,
-        };
-        push_lineage_bytes_v1(&mut bytes, payload)?;
-    }
-    let total = u32::try_from(bytes.len()).map_err(|_| {
-        ProductionSemanticLineageErrorV3::AxisMismatch("multi-root lineage envelope overflow")
-    })?;
-    bytes[total_offset..total_offset + 4].copy_from_slice(&total.to_le_bytes());
-    Ok(bytes)
+        .collect::<Result<Vec<_>, _>>()?;
+    let roots = roots
+        .iter()
+        .map(|root| {
+            let export_symbol = std::str::from_utf8(&root.export_symbol).map_err(|_| {
+                ProductionSemanticLineageErrorV3::AxisMismatch("lineage export symbol is not UTF-8")
+            })?;
+            let payload = match payload_kind {
+                LineageRosterPayloadV1::MiddleEnd => root.middle_end.as_ref(),
+                LineageRosterPayloadV1::Correspondence => root.correspondence.as_ref(),
+                LineageRosterPayloadV1::FormalMemory => root.formal_memory.as_ref(),
+                LineageRosterPayloadV1::VerusExecution => root.verus_execution.as_ref(),
+            };
+            Ok(MultiRootProofRosterRootInputV2 {
+                semantic_root: root.semantic_root,
+                semantic_root_identity: root.semantic_root_identity,
+                kernel_binding: root.kernel_binding,
+                source_rank: root.source_rank,
+                workgroup: root.workgroup,
+                logical_name: &root.logical_name,
+                export_symbol,
+                kernel_id: &root.kernel_id,
+                payload,
+            })
+        })
+        .collect::<Result<Vec<_>, ProductionSemanticLineageErrorV3>>()?;
+    MultiRootProofRosterTranscriptV2::new(MultiRootProofRosterInputsV2 {
+        kind: payload_kind.shared_kind(),
+        semantic_mir_sha256: *semantic_sha256,
+        neutral_kir: neutral_kir.shared()?,
+        roster_identity,
+        canonical_kernel_order: &canonical_kernel_order,
+        roots: &roots,
+    })
+    .map(MultiRootProofRosterTranscriptV2::into_canonical_bytes)
+    .map_err(Into::into)
 }
 
 fn push_lineage_count_v1(
@@ -650,10 +627,6 @@ impl<'a> LineageRosterReaderV1<'a> {
 
     fn u32(&mut self) -> Result<u32, ProductionSemanticLineageErrorV3> {
         Ok(u32::from_le_bytes(self.fixed()?))
-    }
-
-    fn u64(&mut self) -> Result<u64, ProductionSemanticLineageErrorV3> {
-        Ok(u64::from_le_bytes(self.fixed()?))
     }
 
     fn count(&mut self) -> Result<usize, ProductionSemanticLineageErrorV3> {
@@ -781,7 +754,6 @@ fn validate_correspondence_root_payload_v1(
 #[allow(clippy::too_many_arguments)]
 fn validate_lineage_roster_envelope_v1(
     bytes: &[u8],
-    magic: [u8; 8],
     expected_sha256: [u8; 32],
     semantic_sha256: &[u8; 32],
     neutral_kir: LineageNeutralKirIdentityV1,
@@ -794,140 +766,59 @@ fn validate_lineage_roster_envelope_v1(
             "multi-root lineage envelope content identity changed",
         ));
     }
-    let mut reader = LineageRosterReaderV1::new(bytes);
-    if reader.fixed::<8>()? != magic
-        || reader.u16()? != 2
-        || reader.u16()? != 1
-        || usize::try_from(reader.u32()?).ok() != Some(bytes.len())
-        || reader.fixed::<32>()? != *semantic_sha256
-        || reader.u16()?
-            != match neutral_kir.version {
-                ProductionCanonicalKernelIrVersionV1::V8 => 8,
-                ProductionCanonicalKernelIrVersionV1::V9 => 9,
-            }
-        || reader.u16()? != 0
-        || reader.u64()? != neutral_kir.canonical_length
-        || reader.fixed::<32>()? != neutral_kir.digest
-        || reader.fixed::<32>()? != roster_identity
+    let roster = MultiRootProofRosterTranscriptV2::decode(bytes)?;
+    if roster.kind() != payload_kind.shared_kind()
+        || roster.semantic_mir_sha256() != *semantic_sha256
+        || roster.neutral_kir() != neutral_kir.shared()?
+        || roster.roster_identity() != roster_identity
     {
         return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
             "multi-root lineage envelope header changed before final handoff",
         ));
     }
-
-    let permutation_count = reader.count()?;
-    if !(2..=MAX_LINEAGE_ROOTS_V1).contains(&permutation_count) {
+    if roster.root_count() != expected_workgroups.len() {
         return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
-            "invalid lineage KernelId permutation count",
+            "lineage root and expected workgroup counts differ",
         ));
     }
-    let permutation = (0..permutation_count)
-        .map(|_| reader.u32())
-        .collect::<Result<Vec<_>, _>>()?;
-    let root_count = reader.count()?;
-    if root_count != permutation_count || root_count != expected_workgroups.len() {
-        return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
-            "lineage root and permutation counts differ",
-        ));
-    }
-    let mut sorted_permutation = permutation.clone();
-    sorted_permutation.sort_unstable();
-    if sorted_permutation != (0..root_count as u32).collect::<Vec<_>>() {
-        return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
-            "lineage KernelId order is not an exact permutation",
-        ));
-    }
-
-    let mut semantic_roots = BTreeSet::new();
-    let mut semantic_identities = BTreeSet::new();
-    let mut bindings = BTreeSet::new();
-    let mut logical_names = BTreeSet::new();
-    let mut exports = BTreeSet::new();
-    let mut kernels = BTreeSet::new();
-    let mut binding_order = Vec::with_capacity(root_count);
-    let mut previous_root = None;
     for (ordinal, expected_workgroup) in (0_u32..).zip(expected_workgroups) {
-        let semantic_root = reader.u32()?;
-        let semantic_identity = reader.fixed::<32>()?;
-        let binding = reader.fixed::<32>()?;
-        let rank = reader.u8()?;
-        let reserved = reader.fixed::<3>()?;
-        let workgroup = [reader.u32()?, reader.u32()?, reader.u32()?];
-        let logical_name = std::str::from_utf8(reader.bytes()?).map_err(|_| {
-            ProductionSemanticLineageErrorV3::AxisMismatch("lineage logical name is not UTF-8")
-        })?;
-        let export = std::str::from_utf8(reader.bytes()?).map_err(|_| {
-            ProductionSemanticLineageErrorV3::AxisMismatch("lineage export is not UTF-8")
-        })?;
-        let kernel = std::str::from_utf8(reader.bytes()?).map_err(|_| {
-            ProductionSemanticLineageErrorV3::AxisMismatch("lineage kernel ID is not UTF-8")
-        })?;
-        let payload = reader.bytes()?;
-        if previous_root.is_some_and(|previous| semantic_root <= previous)
-            || semantic_identity == [0; 32]
-            || binding == [0; 32]
-            || !(1..=3).contains(&rank)
-            || reserved != [0; 3]
-            || workgroup.contains(&0)
-            || kernel != export
-            || kernel != expected_workgroup.0
-            || workgroup != expected_workgroup.1
-            || !semantic_roots.insert(semantic_root)
-            || !semantic_identities.insert(semantic_identity)
-            || !bindings.insert(binding)
-            || !logical_names.insert(logical_name)
-            || !exports.insert(export)
-            || !kernels.insert(kernel)
-        {
+        let root =
+            roster
+                .root(ordinal as usize)
+                .ok_or(ProductionSemanticLineageErrorV3::AxisMismatch(
+                    "lineage root disappeared",
+                ))?;
+        if root.kernel_id() != expected_workgroup.0 || root.workgroup() != expected_workgroup.1 {
             return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
-                "duplicate, reordered, substituted, or invalid lineage root",
+                "reordered or substituted lineage workgroup root",
             ));
         }
-        previous_root = Some(semantic_root);
-        binding_order.push(binding);
         match payload_kind {
             LineageRosterPayloadV1::MiddleEnd => {
-                InertProductionMiddleEndEvidenceV5::decode(payload).map_err(|error| {
+                InertProductionMiddleEndEvidenceV5::decode(root.payload()).map_err(|error| {
                     ProductionSemanticLineageErrorV3::LiveOwner(error.to_string())
                 })?;
             }
             LineageRosterPayloadV1::Correspondence => {
                 validate_correspondence_root_payload_v1(
-                    payload,
+                    root.payload(),
                     ordinal,
-                    semantic_root,
+                    root.semantic_root(),
                     semantic_sha256,
-                    kernel,
+                    root.kernel_id(),
                 )?;
             }
             LineageRosterPayloadV1::FormalMemory => {
                 InertCanonicalFormalMemoryObligationReceiptV1::from_canonical_bytes(
-                    payload.to_vec(),
+                    root.payload().to_vec(),
                 )
                 .map_err(|error| ProductionSemanticLineageErrorV3::LiveOwner(error.to_string()))?;
             }
             LineageRosterPayloadV1::VerusExecution => {
-                let _ = CanonicalProductionMirPlironVerusExecutionEvidenceV1::decode(payload)?;
+                let _ =
+                    CanonicalProductionMirPlironVerusExecutionEvidenceV1::decode(root.payload())?;
             }
         }
-    }
-    if !reader.is_finished() {
-        return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
-            "trailing multi-root lineage envelope bytes",
-        ));
-    }
-    let mut derived_kernel_order = (0..root_count).collect::<Vec<_>>();
-    derived_kernel_order
-        .sort_unstable_by_key(|index| DescriptorKernelId::from_bytes(binding_order[*index]));
-    if permutation
-        != derived_kernel_order
-            .into_iter()
-            .map(|index| index as u32)
-            .collect::<Vec<_>>()
-    {
-        return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
-            "lineage KernelId permutation changed canonical order",
-        ));
     }
     Ok(())
 }
@@ -1111,7 +1002,6 @@ impl PreparedProductionSemanticLineageV3 {
             } => {
                 validate_lineage_roster_envelope_v1(
                     self.middle_end.canonical_preimage(),
-                    *b"F2MRMID2",
                     *middle_end_sha256,
                     self.semantic_mir.identity().sha256(),
                     self.neutral_kir_custody.into(),
@@ -1121,7 +1011,6 @@ impl PreparedProductionSemanticLineageV3 {
                 )?;
                 validate_lineage_roster_envelope_v1(
                     self.mir_to_kir_correspondence.canonical_preimage(),
-                    *b"F2MRCOR2",
                     *correspondence_sha256,
                     self.semantic_mir.identity().sha256(),
                     self.neutral_kir_custody.into(),
@@ -1131,7 +1020,6 @@ impl PreparedProductionSemanticLineageV3 {
                 )?;
                 validate_lineage_roster_envelope_v1(
                     self.formal_memory.canonical_preimage(),
-                    *b"F2MRFOR2",
                     *formal_memory_sha256,
                     self.semantic_mir.identity().sha256(),
                     self.neutral_kir_custody.into(),
@@ -1141,7 +1029,6 @@ impl PreparedProductionSemanticLineageV3 {
                 )?;
                 validate_lineage_roster_envelope_v1(
                     &self.proof_verus_evidence,
-                    *b"F2MRVER2",
                     *verus_sha256,
                     self.semantic_mir.identity().sha256(),
                     self.neutral_kir_custody.into(),
@@ -1533,6 +1420,7 @@ pub(crate) enum ProductionSemanticLineageErrorV3 {
     Receipt(LineageErrorV3),
     ProofIdentity(InertProofBindingAssociationErrorV3),
     ProofBinding(InertProofBindingAssociationErrorV4),
+    MultiRootRoster(MultiRootProofRosterErrorV2),
     Transcript(ProductionTargetLineageErrorV3),
     FinalCommitment(FinalCompilerModuleCommitmentErrorV3),
     Capsule(InertSemanticCompilerModuleHandoffErrorV3),
@@ -1591,6 +1479,12 @@ impl fmt::Display for ProductionSemanticLineageErrorV3 {
             }
             Self::ProofBinding(error) => {
                 write!(formatter, "production V3 proof binding failed: {error}")
+            }
+            Self::MultiRootRoster(error) => {
+                write!(
+                    formatter,
+                    "production multi-root proof roster failed: {error}"
+                )
             }
             Self::Transcript(error) => {
                 write!(formatter, "production V3 transcript failed: {error}")
@@ -1662,6 +1556,12 @@ impl From<InertProofBindingAssociationErrorV3> for ProductionSemanticLineageErro
 impl From<InertProofBindingAssociationErrorV4> for ProductionSemanticLineageErrorV3 {
     fn from(error: InertProofBindingAssociationErrorV4) -> Self {
         Self::ProofBinding(error)
+    }
+}
+
+impl From<MultiRootProofRosterErrorV2> for ProductionSemanticLineageErrorV3 {
+    fn from(error: MultiRootProofRosterErrorV2) -> Self {
+        Self::MultiRootRoster(error)
     }
 }
 
@@ -1785,8 +1685,7 @@ mod layout_tests {
             .iter()
             .map(|root| (root.kernel_id.clone(), root.workgroup))
             .collect::<Vec<_>>();
-        let bytes = encode_lineage_roster_envelope_v1(
-            *b"F2MRFOR2",
+        let bytes = build_lineage_roster_v2(
             &semantic_sha256,
             neutral,
             roster_identity,
@@ -1831,8 +1730,13 @@ mod layout_tests {
         let source = include_str!("production_semantic_lineage_v3.rs");
         assert!(source.contains("CanonicalProductionKirToLlvmReplayEvidenceV1::from_live_inputs"));
         assert!(source.contains("validate_compiler_kir_to_llvm_replay_v1"));
+        assert!(source.contains("MultiRootProofRosterTranscriptV2::new"));
+        assert!(source.contains("MultiRootProofRosterTranscriptV2::decode"));
         assert!(source.contains("MultiRootTargetBindingTranscriptV2::new"));
         assert!(!source.contains(concat!("AmdgpuLoweringTranscript", "V3::new")));
+        for suffix in ["MID2", "COR2", "FOR2", "VER2"] {
+            assert!(!source.contains(&format!("{}{}", "F2MR", suffix)));
+        }
         assert!(!source.contains(concat!("fn encode_", "multi_root_target_binding")));
         assert!(!source.contains(concat!("F2MR", "TGT2")));
     }
@@ -1850,7 +1754,6 @@ mod layout_tests {
         );
         validate_lineage_roster_envelope_v1(
             &bytes,
-            *b"F2MRFOR2",
             identity,
             &semantic,
             neutral,
@@ -1897,7 +1800,6 @@ mod layout_tests {
             assert!(
                 validate_lineage_roster_envelope_v1(
                     &hostile,
-                    *b"F2MRFOR2",
                     identity,
                     &semantic,
                     neutral,
@@ -1917,7 +1819,6 @@ mod layout_tests {
         assert!(
             validate_lineage_roster_envelope_v1(
                 &wrong_permutation,
-                *b"F2MRFOR2",
                 wrong_identity,
                 &semantic,
                 neutral,
@@ -1933,7 +1834,6 @@ mod layout_tests {
         assert!(
             validate_lineage_roster_envelope_v1(
                 &bytes,
-                *b"F2MRFOR2",
                 identity,
                 &semantic,
                 neutral,
