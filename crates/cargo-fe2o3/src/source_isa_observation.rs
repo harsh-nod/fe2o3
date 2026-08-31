@@ -3,7 +3,19 @@
 use std::error::Error;
 use std::fmt;
 
+use dialect_amdgcn::ProductionReplayKernelIrVersionV1;
+use fe2o3_amd_target::ProductionAmdTargetProfileV1;
 use fe2o3_artifact_transaction::{BuildAttempt, BuildInvocation, BuildSession};
+use fe2o3_hsaco_finalize::{
+    FinalizedSemanticDebugMapErrorV1, PreparedFinalizedProtectedWorkerV3HsacoV1,
+    ProductionSemanticAnchorErrorV1, ProductionSemanticAnchorUnavailableV1,
+    ProductionSourceIsaAcceptanceSummaryAdmissionV1, ProductionSourceIsaAcceptanceSummaryV1,
+    ProductionSourceIsaCorrelationErrorV1, ProductionSourceIsaCorrelationUnavailableV1,
+};
+use fe2o3_kernel_ir::{
+    MAX_FUNCTIONS_V1, ProductionSemanticDebugFragmentErrorV1, ProductionSemanticDebugProducerGapV1,
+    SemanticDebugMapErrorV1,
+};
 use sha2::{Digest, Sha256};
 
 const FRAME_MAGIC_V1: &[u8; 8] = b"F2SISUM1";
@@ -95,10 +107,11 @@ pub(crate) struct SourceIsaObservationStructuralCountsV1 {
 impl SourceIsaObservationStructuralCountsV1 {
     fn validate(self) -> Result<(), SourceIsaObservationFrameErrorV1> {
         if self.functions == 0
+            || self.functions > MAX_FUNCTIONS_V1 as u64
             || self.defined_bodies != 1
             || self.blocks == 0
             || self.blocks > MAX_PRODUCTION_STRUCTURAL_OPERATIONS_V1
-            || self.operations < self.blocks
+            || self.operations == 0
             || self.operations > MAX_PRODUCTION_STRUCTURAL_OPERATIONS_V1
         {
             return Err(SourceIsaObservationFrameErrorV1::InvalidClaim);
@@ -252,7 +265,7 @@ impl SourceIsaObservationIsaPointV1 {
         kernel_ordinal: u64,
         symbol_relative_pc: u64,
     ) -> Result<Self, SourceIsaObservationFrameErrorV1> {
-        if kernel_ordinal != 0 || symbol_relative_pc % 4 != 0 {
+        if kernel_ordinal != 0 || !symbol_relative_pc.is_multiple_of(4) {
             return Err(SourceIsaObservationFrameErrorV1::InvalidClaim);
         }
         Ok(Self {
@@ -441,6 +454,7 @@ pub(crate) enum SourceIsaObservationUnavailableReasonV1 {
     AnchorMultipleDefinedBodies = 104,
     AnchorCompilerInstrumentationAbsent = 105,
     SourceProjectionForKirV9 = 201,
+    FinalizedEvidenceUnavailableFromReadyState = 202,
 }
 
 impl SourceIsaObservationUnavailableReasonV1 {
@@ -466,6 +480,7 @@ impl SourceIsaObservationUnavailableReasonV1 {
             104 => Ok(Self::AnchorMultipleDefinedBodies),
             105 => Ok(Self::AnchorCompilerInstrumentationAbsent),
             201 => Ok(Self::SourceProjectionForKirV9),
+            202 => Ok(Self::FinalizedEvidenceUnavailableFromReadyState),
             _ => Err(SourceIsaObservationFrameErrorV1::InvalidTag),
         }
     }
@@ -474,8 +489,6 @@ impl SourceIsaObservationUnavailableReasonV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u16)]
 pub(crate) enum SourceIsaObservationErrorCodeV1 {
-    SemanticDebugMap = 1,
-    SemanticAnchors = 2,
     InvalidKirToLlvmReplay = 3,
     NonExactSemanticMap = 4,
     ArtifactIdentityMismatch = 5,
@@ -484,13 +497,83 @@ pub(crate) enum SourceIsaObservationErrorCodeV1 {
     InvalidSourceGraph = 8,
     ResourceLimit = 9,
     AllocationFailure = 10,
+    FinalizedMapProductionAssociation = 0x1001,
+    FinalizedMapProductionAssociationMismatch = 0x1002,
+    FinalizedMapInvalidKirToLlvmReplay = 0x1003,
+    FinalizedMapKirToLlvmReplayTargetMismatch = 0x1004,
+    FinalizedMapInvalidLlvmToHsacoCustody = 0x1005,
+    FinalizedMapInvalidBoundSourceMap = 0x1006,
+    FinalizedMapInvalidBoundSemanticMir = 0x1007,
+    FinalizedMapInvalidBoundCorrespondenceV4 = 0x1008,
+    FinalizedMapInvalidBoundCanonicalKirV8 = 0x1009,
+    FinalizedMapInvalidBoundCanonicalKirV7 = 0x100a,
+    FinalizedMapCanonicalKirProjectionMismatch = 0x100b,
+    FinalizedMapCorrespondenceIdentityMismatch = 0x100c,
+    FinalizedMapInvalidSemanticCorrespondence = 0x100d,
+    FinalizedMapArtifactInspection = 0x100e,
+    FinalizedMapAllocationFailure = 0x100f,
+    SemanticMapInvalidLength = 0x1101,
+    SemanticMapInvalidJson = 0x1102,
+    SemanticMapNonCanonicalEncoding = 0x1103,
+    SemanticMapEncoding = 0x1104,
+    SemanticMapInvalidBinding = 0x1105,
+    SemanticMapInvalidKernelOrdinalBasis = 0x1106,
+    SemanticMapInvalidNode = 0x1107,
+    SemanticMapInvalidMapping = 0x1108,
+    SemanticMapDuplicateNode = 0x1109,
+    SemanticMapDuplicateMapping = 0x110a,
+    SemanticMapDuplicateReference = 0x110b,
+    SemanticMapUnknownNode = 0x110c,
+    SemanticMapLayerMismatch = 0x110d,
+    SemanticMapContradictoryMapping = 0x110e,
+    SemanticMapOrphanNode = 0x110f,
+    SemanticMapInvalidBoundary = 0x1110,
+    SemanticMapUntypedBoundary = 0x1111,
+    SemanticMapResourceLimit = 0x1112,
+    SemanticMapAllocationFailure = 0x1113,
+    SemanticMapContentBindingMismatch = 0x1114,
+    SemanticMapArtifactBindingMismatch = 0x1115,
+    SemanticMapInvalidBoundSourceMap = 0x1116,
+    SemanticMapInvalidBoundCanonicalKir = 0x1117,
+    SemanticMapSourceMapKirBindingMismatch = 0x1118,
+    SemanticMapInvalidSourceLocation = 0x1119,
+    SemanticMapInvalidMirLocation = 0x111a,
+    SemanticMapInvalidKirLocation = 0x111b,
+    SemanticMapInvalidIsaInterval = 0x111c,
+    ProductionFragmentInvalidEncoding = 0x1201,
+    ProductionFragmentInvalidAssociation = 0x1202,
+    ProductionFragmentInvalidGap = 0x1203,
+    ProductionFragmentInvalidScheduleStatus = 0x1204,
+    ProductionFragmentInvalidSourceMap = 0x1205,
+    ProductionFragmentInvalidCanonicalKir = 0x1206,
+    ProductionFragmentInvalidSemanticMap = 0x1207,
+    ProductionFragmentAxisMismatch = 0x1208,
+    ProductionFragmentResourceLimit = 0x1209,
+    ProductionFragmentAllocationFailure = 0x120a,
+    SemanticAnchorInvalidCompilerAttachment = 0x2001,
+    SemanticAnchorInvalidProductionAssociation = 0x2002,
+    SemanticAnchorInvalidKirToLlvmReplay = 0x2003,
+    SemanticAnchorTargetMismatch = 0x2004,
+    SemanticAnchorInvalidLlvm = 0x2005,
+    SemanticAnchorContradictoryLlvm = 0x2006,
+    SemanticAnchorBindingMismatch = 0x2007,
+    SemanticAnchorKirCoordinateMismatch = 0x2008,
+    SemanticAnchorKirToLlvmAnchorMismatch = 0x2009,
+    SemanticAnchorInvalidArtifact = 0x200a,
+    SemanticAnchorMissingProbeSection = 0x200b,
+    SemanticAnchorAmbiguousProbeSection = 0x200c,
+    SemanticAnchorInvalidProbeEncoding = 0x200d,
+    SemanticAnchorProbeDescriptorMismatch = 0x200e,
+    SemanticAnchorAmbiguousEntrySymbol = 0x200f,
+    SemanticAnchorUnexpectedProbe = 0x2010,
+    SemanticAnchorProbeOutsideKernel = 0x2011,
+    SemanticAnchorResourceLimit = 0x2012,
+    SemanticAnchorAllocationFailure = 0x2013,
 }
 
 impl SourceIsaObservationErrorCodeV1 {
     fn decode(value: u16) -> Result<Self, SourceIsaObservationFrameErrorV1> {
         match value {
-            1 => Ok(Self::SemanticDebugMap),
-            2 => Ok(Self::SemanticAnchors),
             3 => Ok(Self::InvalidKirToLlvmReplay),
             4 => Ok(Self::NonExactSemanticMap),
             5 => Ok(Self::ArtifactIdentityMismatch),
@@ -499,6 +582,78 @@ impl SourceIsaObservationErrorCodeV1 {
             8 => Ok(Self::InvalidSourceGraph),
             9 => Ok(Self::ResourceLimit),
             10 => Ok(Self::AllocationFailure),
+            0x1001 => Ok(Self::FinalizedMapProductionAssociation),
+            0x1002 => Ok(Self::FinalizedMapProductionAssociationMismatch),
+            0x1003 => Ok(Self::FinalizedMapInvalidKirToLlvmReplay),
+            0x1004 => Ok(Self::FinalizedMapKirToLlvmReplayTargetMismatch),
+            0x1005 => Ok(Self::FinalizedMapInvalidLlvmToHsacoCustody),
+            0x1006 => Ok(Self::FinalizedMapInvalidBoundSourceMap),
+            0x1007 => Ok(Self::FinalizedMapInvalidBoundSemanticMir),
+            0x1008 => Ok(Self::FinalizedMapInvalidBoundCorrespondenceV4),
+            0x1009 => Ok(Self::FinalizedMapInvalidBoundCanonicalKirV8),
+            0x100a => Ok(Self::FinalizedMapInvalidBoundCanonicalKirV7),
+            0x100b => Ok(Self::FinalizedMapCanonicalKirProjectionMismatch),
+            0x100c => Ok(Self::FinalizedMapCorrespondenceIdentityMismatch),
+            0x100d => Ok(Self::FinalizedMapInvalidSemanticCorrespondence),
+            0x100e => Ok(Self::FinalizedMapArtifactInspection),
+            0x100f => Ok(Self::FinalizedMapAllocationFailure),
+            0x1101 => Ok(Self::SemanticMapInvalidLength),
+            0x1102 => Ok(Self::SemanticMapInvalidJson),
+            0x1103 => Ok(Self::SemanticMapNonCanonicalEncoding),
+            0x1104 => Ok(Self::SemanticMapEncoding),
+            0x1105 => Ok(Self::SemanticMapInvalidBinding),
+            0x1106 => Ok(Self::SemanticMapInvalidKernelOrdinalBasis),
+            0x1107 => Ok(Self::SemanticMapInvalidNode),
+            0x1108 => Ok(Self::SemanticMapInvalidMapping),
+            0x1109 => Ok(Self::SemanticMapDuplicateNode),
+            0x110a => Ok(Self::SemanticMapDuplicateMapping),
+            0x110b => Ok(Self::SemanticMapDuplicateReference),
+            0x110c => Ok(Self::SemanticMapUnknownNode),
+            0x110d => Ok(Self::SemanticMapLayerMismatch),
+            0x110e => Ok(Self::SemanticMapContradictoryMapping),
+            0x110f => Ok(Self::SemanticMapOrphanNode),
+            0x1110 => Ok(Self::SemanticMapInvalidBoundary),
+            0x1111 => Ok(Self::SemanticMapUntypedBoundary),
+            0x1112 => Ok(Self::SemanticMapResourceLimit),
+            0x1113 => Ok(Self::SemanticMapAllocationFailure),
+            0x1114 => Ok(Self::SemanticMapContentBindingMismatch),
+            0x1115 => Ok(Self::SemanticMapArtifactBindingMismatch),
+            0x1116 => Ok(Self::SemanticMapInvalidBoundSourceMap),
+            0x1117 => Ok(Self::SemanticMapInvalidBoundCanonicalKir),
+            0x1118 => Ok(Self::SemanticMapSourceMapKirBindingMismatch),
+            0x1119 => Ok(Self::SemanticMapInvalidSourceLocation),
+            0x111a => Ok(Self::SemanticMapInvalidMirLocation),
+            0x111b => Ok(Self::SemanticMapInvalidKirLocation),
+            0x111c => Ok(Self::SemanticMapInvalidIsaInterval),
+            0x1201 => Ok(Self::ProductionFragmentInvalidEncoding),
+            0x1202 => Ok(Self::ProductionFragmentInvalidAssociation),
+            0x1203 => Ok(Self::ProductionFragmentInvalidGap),
+            0x1204 => Ok(Self::ProductionFragmentInvalidScheduleStatus),
+            0x1205 => Ok(Self::ProductionFragmentInvalidSourceMap),
+            0x1206 => Ok(Self::ProductionFragmentInvalidCanonicalKir),
+            0x1207 => Ok(Self::ProductionFragmentInvalidSemanticMap),
+            0x1208 => Ok(Self::ProductionFragmentAxisMismatch),
+            0x1209 => Ok(Self::ProductionFragmentResourceLimit),
+            0x120a => Ok(Self::ProductionFragmentAllocationFailure),
+            0x2001 => Ok(Self::SemanticAnchorInvalidCompilerAttachment),
+            0x2002 => Ok(Self::SemanticAnchorInvalidProductionAssociation),
+            0x2003 => Ok(Self::SemanticAnchorInvalidKirToLlvmReplay),
+            0x2004 => Ok(Self::SemanticAnchorTargetMismatch),
+            0x2005 => Ok(Self::SemanticAnchorInvalidLlvm),
+            0x2006 => Ok(Self::SemanticAnchorContradictoryLlvm),
+            0x2007 => Ok(Self::SemanticAnchorBindingMismatch),
+            0x2008 => Ok(Self::SemanticAnchorKirCoordinateMismatch),
+            0x2009 => Ok(Self::SemanticAnchorKirToLlvmAnchorMismatch),
+            0x200a => Ok(Self::SemanticAnchorInvalidArtifact),
+            0x200b => Ok(Self::SemanticAnchorMissingProbeSection),
+            0x200c => Ok(Self::SemanticAnchorAmbiguousProbeSection),
+            0x200d => Ok(Self::SemanticAnchorInvalidProbeEncoding),
+            0x200e => Ok(Self::SemanticAnchorProbeDescriptorMismatch),
+            0x200f => Ok(Self::SemanticAnchorAmbiguousEntrySymbol),
+            0x2010 => Ok(Self::SemanticAnchorUnexpectedProbe),
+            0x2011 => Ok(Self::SemanticAnchorProbeOutsideKernel),
+            0x2012 => Ok(Self::SemanticAnchorResourceLimit),
+            0x2013 => Ok(Self::SemanticAnchorAllocationFailure),
             _ => Err(SourceIsaObservationFrameErrorV1::InvalidTag),
         }
     }
@@ -527,7 +682,15 @@ impl AdmittedSourceIsaObservationV1 {
             .source_anchored
             .checked_sub(records.source_anchored_without_isa)
             .ok_or(SourceIsaObservationFrameErrorV1::InvalidClaim)?;
+        let uncovered_operations = records.no_source;
+        let covered_operations = structural
+            .counts()
+            .operations
+            .checked_sub(uncovered_operations)
+            .ok_or(SourceIsaObservationFrameErrorV1::InvalidClaim)?;
         if correlation == [0; 32]
+            || (covered_operations == 0) != (records.source_anchored == 0)
+            || records.source_anchored < covered_operations
             || round_trip_witness.is_some() != (source_anchored_with_isa != 0)
             || round_trip_witness.is_some_and(|witness| {
                 witness.source_node_query_matches > queries.max_source_node_cardinality
@@ -568,6 +731,8 @@ impl AdmittedSourceIsaObservationV1 {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+// The admitted payload is intentionally allocation-free inside the fixed 680-byte wire frame.
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum SourceIsaObservationOutcomeV1 {
     Admitted(AdmittedSourceIsaObservationV1),
     Unavailable(SourceIsaObservationUnavailableReasonV1),
@@ -658,7 +823,7 @@ impl SourceIsaObservationFrameV1 {
         let prefix = self.encode_prefix();
         let mut encoded = [0; SOURCE_ISA_OBSERVATION_FRAME_BYTES_V1];
         encoded[..FRAME_PREFIX_BYTES_V1].copy_from_slice(&prefix);
-        encoded[FRAME_PREFIX_BYTES_V1..].copy_from_slice(&self.identity);
+        encoded[FRAME_PREFIX_BYTES_V1..].copy_from_slice(&self.identity());
         encoded
     }
 
@@ -691,7 +856,7 @@ impl SourceIsaObservationFrameV1 {
         let generation = decoder.u64()?;
         let session = BuildSession::from_bytes(decoder.array()?);
         let invocation = BuildInvocation::from_bytes(decoder.array()?);
-        let attempt = BuildAttempt::new(generation, session, invocation)
+        let attempt = BuildAttempt::from_env_value(&format!("{generation}:{session}:{invocation}"))
             .map_err(|_| SourceIsaObservationFrameErrorV1::InvalidClaim)?;
         let finalization = decoder.array()?;
         let context = SourceIsaObservationContextV1::new(config, unit, attempt, finalization)?;
@@ -738,8 +903,8 @@ impl SourceIsaObservationFrameV1 {
         encoder.u64(self.context.attempt.generation());
         encoder.bytes(self.context.attempt.session().as_bytes());
         encoder.bytes(self.context.attempt.invocation().as_bytes());
-        encoder.bytes(&self.context.finalization);
-        match self.outcome {
+        encoder.bytes(&self.context.finalization());
+        match self.outcome() {
             SourceIsaObservationOutcomeV1::Admitted(admitted) => {
                 encoder.u8(1);
                 encoder.u16(0);
@@ -763,46 +928,531 @@ impl SourceIsaObservationFrameV1 {
     }
 }
 
+pub(crate) fn finalized_source_isa_observation_frame_v1(
+    config: [u8; 32],
+    unit: [u8; 32],
+    finalized: &PreparedFinalizedProtectedWorkerV3HsacoV1,
+) -> Result<SourceIsaObservationFrameV1, SourceIsaObservationFrameErrorV1> {
+    let context = SourceIsaObservationContextV1::new(
+        config,
+        unit,
+        finalized.attempt(),
+        *finalized.identity().as_bytes(),
+    )?;
+    let outcome = match finalized.admit_production_source_isa_acceptance_summary_v1() {
+        Ok(ProductionSourceIsaAcceptanceSummaryAdmissionV1::Admitted(summary)) => {
+            SourceIsaObservationOutcomeV1::Admitted(map_acceptance_summary(summary)?)
+        }
+        Ok(ProductionSourceIsaAcceptanceSummaryAdmissionV1::Unavailable(reason)) => {
+            SourceIsaObservationOutcomeV1::Unavailable(map_unavailable_reason(reason))
+        }
+        Err(error) => SourceIsaObservationOutcomeV1::Error(map_correlation_error(error)),
+    };
+    Ok(SourceIsaObservationFrameV1::new(context, outcome))
+}
+
+pub(crate) fn ready_source_isa_observation_frame_v1(
+    config: [u8; 32],
+    unit: [u8; 32],
+    attempt: BuildAttempt,
+    finalization: [u8; 32],
+) -> Result<SourceIsaObservationFrameV1, SourceIsaObservationFrameErrorV1> {
+    let context = SourceIsaObservationContextV1::new(config, unit, attempt, finalization)?;
+    Ok(SourceIsaObservationFrameV1::new(
+        context,
+        SourceIsaObservationOutcomeV1::Unavailable(
+            SourceIsaObservationUnavailableReasonV1::FinalizedEvidenceUnavailableFromReadyState,
+        ),
+    ))
+}
+
+fn map_acceptance_summary(
+    summary: ProductionSourceIsaAcceptanceSummaryV1,
+) -> Result<AdmittedSourceIsaObservationV1, SourceIsaObservationFrameErrorV1> {
+    if summary.format_version() != 1
+        || summary.proves_complete_machine_instruction_coverage()
+        || summary.proves_a_schedule()
+        || summary.proves_semantic_refinement()
+        || summary.proves_optimized_or_final_llvm_custody()
+        || summary.proves_live_program_counter_ownership()
+        || summary.retains_correlation_records()
+        || summary.grants_publication_authority()
+        || summary.grants_runtime_authority()
+    {
+        return Err(SourceIsaObservationFrameErrorV1::TruthClaim);
+    }
+    let artifact = summary.artifact_identity();
+    let structural = summary.structural_binding();
+    let neutral = structural.neutral_kernel_ir();
+    let target = structural.target_bound_kernel_ir();
+    let structural_counts = structural.counts();
+    let counts = summary.counts();
+    let witness = summary
+        .round_trip_witness()
+        .map(|witness| {
+            let span = witness.source_span();
+            let point = witness.isa_point();
+            SourceIsaObservationRoundTripWitnessV1::new(
+                *witness.source_node_identity(),
+                SourceIsaObservationSourceSpanV1::new(
+                    span.file_identity(),
+                    span.byte_start(),
+                    span.byte_end(),
+                    span.line(),
+                    span.column(),
+                )?,
+                SourceIsaObservationIsaPointV1::new(
+                    point.kernel_ordinal(),
+                    point.symbol_relative_pc(),
+                )?,
+                witness.source_node_query_matches(),
+                witness.source_span_query_matches(),
+                witness.isa_point_query_matches(),
+            )
+        })
+        .transpose()?;
+    AdmittedSourceIsaObservationV1::new(
+        *summary.correlation_identity(),
+        SourceIsaObservationContentIdentityV1::new(*artifact.sha256(), artifact.byte_len())?,
+        SourceIsaObservationStructuralBindingV1::new(
+            structural.identity(),
+            match structural.profile() {
+                ProductionAmdTargetProfileV1::Gfx942 => SourceIsaObservationTargetProfileV1::Gfx942,
+                ProductionAmdTargetProfileV1::Gfx950 => SourceIsaObservationTargetProfileV1::Gfx950,
+            },
+            match structural.version() {
+                ProductionReplayKernelIrVersionV1::V8 => SourceIsaObservationKirVersionV1::V8,
+                ProductionReplayKernelIrVersionV1::V9 => SourceIsaObservationKirVersionV1::V9,
+            },
+            SourceIsaObservationContentIdentityV1::new(neutral.sha256(), neutral.byte_len())?,
+            SourceIsaObservationContentIdentityV1::new(target.sha256(), target.byte_len())?,
+            SourceIsaObservationStructuralCountsV1 {
+                functions: structural_counts.functions(),
+                defined_bodies: structural_counts.defined_bodies(),
+                blocks: structural_counts.blocks(),
+                operations: structural_counts.operations(),
+            },
+        )?,
+        SourceIsaObservationCountsV1::new(
+            SourceIsaObservationRecordCountsV1 {
+                records: counts.records(),
+                source_anchored: counts.source_anchored_records(),
+                eliminated: counts.eliminated_before_kir_records(),
+                no_source: counts.no_source_provenance_records(),
+                source_anchored_without_isa: counts.source_anchored_without_isa_records(),
+                isa_references: counts.isa_references(),
+            },
+            SourceIsaObservationQueryCountsV1 {
+                distinct_source_nodes: counts.distinct_source_node_queries(),
+                distinct_source_spans: counts.distinct_source_span_queries(),
+                distinct_isa_points: counts.distinct_isa_point_queries(),
+                max_source_node_cardinality: counts.maximum_source_node_query_matches(),
+                max_source_span_cardinality: counts.maximum_source_span_query_matches(),
+                max_exact_pc_cardinality: counts.maximum_isa_point_query_matches(),
+            },
+        )?,
+        witness,
+    )
+}
+
+const fn map_unavailable_reason(
+    reason: ProductionSourceIsaCorrelationUnavailableV1,
+) -> SourceIsaObservationUnavailableReasonV1 {
+    match reason {
+        ProductionSourceIsaCorrelationUnavailableV1::SemanticDebugCarrier(reason) => match reason {
+            ProductionSemanticDebugProducerGapV1::MultipleKirFunctionBodies => {
+                SourceIsaObservationUnavailableReasonV1::CarrierMultipleKirFunctionBodies
+            }
+            ProductionSemanticDebugProducerGapV1::NoStatementCorrespondence => {
+                SourceIsaObservationUnavailableReasonV1::CarrierNoStatementCorrespondence
+            }
+            ProductionSemanticDebugProducerGapV1::SourceMapUnavailable => {
+                SourceIsaObservationUnavailableReasonV1::CarrierSourceMapUnavailable
+            }
+            ProductionSemanticDebugProducerGapV1::ResourceLimit => {
+                SourceIsaObservationUnavailableReasonV1::CarrierResourceLimit
+            }
+            ProductionSemanticDebugProducerGapV1::CanonicalKirV7ProjectionUnavailable => {
+                SourceIsaObservationUnavailableReasonV1::CarrierCanonicalKirV7ProjectionUnavailable
+            }
+            ProductionSemanticDebugProducerGapV1::SourceObservationUnrepresentable => {
+                SourceIsaObservationUnavailableReasonV1::CarrierSourceObservationUnrepresentable
+            }
+            ProductionSemanticDebugProducerGapV1::SemanticMapConstructionUnavailable => {
+                SourceIsaObservationUnavailableReasonV1::CarrierSemanticMapConstructionUnavailable
+            }
+            ProductionSemanticDebugProducerGapV1::SemanticMapEncodingUnavailable => {
+                SourceIsaObservationUnavailableReasonV1::CarrierSemanticMapEncodingUnavailable
+            }
+            ProductionSemanticDebugProducerGapV1::FragmentConstructionUnavailable => {
+                SourceIsaObservationUnavailableReasonV1::CarrierFragmentConstructionUnavailable
+            }
+            ProductionSemanticDebugProducerGapV1::CarrierConstructionUnavailable => {
+                SourceIsaObservationUnavailableReasonV1::CarrierConstructionUnavailable
+            }
+            ProductionSemanticDebugProducerGapV1::ReceiptExtensionConstructionUnavailable => {
+                SourceIsaObservationUnavailableReasonV1::CarrierReceiptExtensionConstructionUnavailable
+            }
+            ProductionSemanticDebugProducerGapV1::CorrespondenceValidationUnavailable => {
+                SourceIsaObservationUnavailableReasonV1::CarrierCorrespondenceValidationUnavailable
+            }
+            ProductionSemanticDebugProducerGapV1::CanonicalKirModuleMismatch => {
+                SourceIsaObservationUnavailableReasonV1::CarrierCanonicalKirModuleMismatch
+            }
+            ProductionSemanticDebugProducerGapV1::LegacyBareAssociationNoAttachment => {
+                SourceIsaObservationUnavailableReasonV1::CarrierLegacyBareAssociationNoAttachment
+            }
+        },
+        ProductionSourceIsaCorrelationUnavailableV1::SemanticAnchors(reason) => match reason {
+            ProductionSemanticAnchorUnavailableV1::LegacySemanticAttachment => {
+                SourceIsaObservationUnavailableReasonV1::AnchorLegacySemanticAttachment
+            }
+            ProductionSemanticAnchorUnavailableV1::LegacyUninstrumentedReplay => {
+                SourceIsaObservationUnavailableReasonV1::AnchorLegacyUninstrumentedReplay
+            }
+            ProductionSemanticAnchorUnavailableV1::NoOperations => {
+                SourceIsaObservationUnavailableReasonV1::AnchorNoOperations
+            }
+            ProductionSemanticAnchorUnavailableV1::MultipleDefinedBodies => {
+                SourceIsaObservationUnavailableReasonV1::AnchorMultipleDefinedBodies
+            }
+            ProductionSemanticAnchorUnavailableV1::CompilerInstrumentationAbsent => {
+                SourceIsaObservationUnavailableReasonV1::AnchorCompilerInstrumentationAbsent
+            }
+        },
+        ProductionSourceIsaCorrelationUnavailableV1::SourceProjectionForKirV9 => {
+            SourceIsaObservationUnavailableReasonV1::SourceProjectionForKirV9
+        }
+    }
+}
+
+fn map_correlation_error(
+    error: ProductionSourceIsaCorrelationErrorV1,
+) -> SourceIsaObservationErrorCodeV1 {
+    match error {
+        ProductionSourceIsaCorrelationErrorV1::SemanticDebugMap(error) => {
+            map_semantic_debug_map_error(error)
+        }
+        ProductionSourceIsaCorrelationErrorV1::SemanticAnchors(error) => {
+            map_semantic_anchor_error(error)
+        }
+        ProductionSourceIsaCorrelationErrorV1::InvalidKirToLlvmReplay => {
+            SourceIsaObservationErrorCodeV1::InvalidKirToLlvmReplay
+        }
+        ProductionSourceIsaCorrelationErrorV1::NonExactSemanticMap => {
+            SourceIsaObservationErrorCodeV1::NonExactSemanticMap
+        }
+        ProductionSourceIsaCorrelationErrorV1::ArtifactIdentityMismatch => {
+            SourceIsaObservationErrorCodeV1::ArtifactIdentityMismatch
+        }
+        ProductionSourceIsaCorrelationErrorV1::TargetKirIdentityMismatch => {
+            SourceIsaObservationErrorCodeV1::TargetKirIdentityMismatch
+        }
+        ProductionSourceIsaCorrelationErrorV1::CoordinateShapeMismatch => {
+            SourceIsaObservationErrorCodeV1::CoordinateShapeMismatch
+        }
+        ProductionSourceIsaCorrelationErrorV1::InvalidSourceGraph => {
+            SourceIsaObservationErrorCodeV1::InvalidSourceGraph
+        }
+        ProductionSourceIsaCorrelationErrorV1::ResourceLimit => {
+            SourceIsaObservationErrorCodeV1::ResourceLimit
+        }
+        ProductionSourceIsaCorrelationErrorV1::AllocationFailure => {
+            SourceIsaObservationErrorCodeV1::AllocationFailure
+        }
+    }
+}
+
+const fn map_semantic_debug_map_error(
+    error: FinalizedSemanticDebugMapErrorV1,
+) -> SourceIsaObservationErrorCodeV1 {
+    match error {
+        FinalizedSemanticDebugMapErrorV1::SemanticMap(error) => map_semantic_map_error(error),
+        FinalizedSemanticDebugMapErrorV1::ProductionFragment(error) => {
+            map_production_fragment_error(error)
+        }
+        FinalizedSemanticDebugMapErrorV1::ProductionAssociation => {
+            SourceIsaObservationErrorCodeV1::FinalizedMapProductionAssociation
+        }
+        FinalizedSemanticDebugMapErrorV1::ProductionAssociationMismatch => {
+            SourceIsaObservationErrorCodeV1::FinalizedMapProductionAssociationMismatch
+        }
+        FinalizedSemanticDebugMapErrorV1::InvalidKirToLlvmReplay => {
+            SourceIsaObservationErrorCodeV1::FinalizedMapInvalidKirToLlvmReplay
+        }
+        FinalizedSemanticDebugMapErrorV1::KirToLlvmReplayTargetMismatch => {
+            SourceIsaObservationErrorCodeV1::FinalizedMapKirToLlvmReplayTargetMismatch
+        }
+        FinalizedSemanticDebugMapErrorV1::InvalidLlvmToHsacoCustody => {
+            SourceIsaObservationErrorCodeV1::FinalizedMapInvalidLlvmToHsacoCustody
+        }
+        FinalizedSemanticDebugMapErrorV1::InvalidBoundSourceMap => {
+            SourceIsaObservationErrorCodeV1::FinalizedMapInvalidBoundSourceMap
+        }
+        FinalizedSemanticDebugMapErrorV1::InvalidBoundSemanticMir => {
+            SourceIsaObservationErrorCodeV1::FinalizedMapInvalidBoundSemanticMir
+        }
+        FinalizedSemanticDebugMapErrorV1::InvalidBoundCorrespondenceV4 => {
+            SourceIsaObservationErrorCodeV1::FinalizedMapInvalidBoundCorrespondenceV4
+        }
+        FinalizedSemanticDebugMapErrorV1::InvalidBoundCanonicalKirV8 => {
+            SourceIsaObservationErrorCodeV1::FinalizedMapInvalidBoundCanonicalKirV8
+        }
+        FinalizedSemanticDebugMapErrorV1::InvalidBoundCanonicalKirV7 => {
+            SourceIsaObservationErrorCodeV1::FinalizedMapInvalidBoundCanonicalKirV7
+        }
+        FinalizedSemanticDebugMapErrorV1::CanonicalKirProjectionMismatch => {
+            SourceIsaObservationErrorCodeV1::FinalizedMapCanonicalKirProjectionMismatch
+        }
+        FinalizedSemanticDebugMapErrorV1::CorrespondenceIdentityMismatch => {
+            SourceIsaObservationErrorCodeV1::FinalizedMapCorrespondenceIdentityMismatch
+        }
+        FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence => {
+            SourceIsaObservationErrorCodeV1::FinalizedMapInvalidSemanticCorrespondence
+        }
+        FinalizedSemanticDebugMapErrorV1::ArtifactInspection => {
+            SourceIsaObservationErrorCodeV1::FinalizedMapArtifactInspection
+        }
+        FinalizedSemanticDebugMapErrorV1::AllocationFailure => {
+            SourceIsaObservationErrorCodeV1::FinalizedMapAllocationFailure
+        }
+    }
+}
+
+const fn map_semantic_map_error(error: SemanticDebugMapErrorV1) -> SourceIsaObservationErrorCodeV1 {
+    match error {
+        SemanticDebugMapErrorV1::InvalidLength => {
+            SourceIsaObservationErrorCodeV1::SemanticMapInvalidLength
+        }
+        SemanticDebugMapErrorV1::InvalidJson => {
+            SourceIsaObservationErrorCodeV1::SemanticMapInvalidJson
+        }
+        SemanticDebugMapErrorV1::NonCanonicalEncoding => {
+            SourceIsaObservationErrorCodeV1::SemanticMapNonCanonicalEncoding
+        }
+        SemanticDebugMapErrorV1::Encoding => SourceIsaObservationErrorCodeV1::SemanticMapEncoding,
+        SemanticDebugMapErrorV1::InvalidBinding => {
+            SourceIsaObservationErrorCodeV1::SemanticMapInvalidBinding
+        }
+        SemanticDebugMapErrorV1::InvalidKernelOrdinalBasis => {
+            SourceIsaObservationErrorCodeV1::SemanticMapInvalidKernelOrdinalBasis
+        }
+        SemanticDebugMapErrorV1::InvalidNode => {
+            SourceIsaObservationErrorCodeV1::SemanticMapInvalidNode
+        }
+        SemanticDebugMapErrorV1::InvalidMapping => {
+            SourceIsaObservationErrorCodeV1::SemanticMapInvalidMapping
+        }
+        SemanticDebugMapErrorV1::DuplicateNode => {
+            SourceIsaObservationErrorCodeV1::SemanticMapDuplicateNode
+        }
+        SemanticDebugMapErrorV1::DuplicateMapping => {
+            SourceIsaObservationErrorCodeV1::SemanticMapDuplicateMapping
+        }
+        SemanticDebugMapErrorV1::DuplicateReference => {
+            SourceIsaObservationErrorCodeV1::SemanticMapDuplicateReference
+        }
+        SemanticDebugMapErrorV1::UnknownNode => {
+            SourceIsaObservationErrorCodeV1::SemanticMapUnknownNode
+        }
+        SemanticDebugMapErrorV1::LayerMismatch => {
+            SourceIsaObservationErrorCodeV1::SemanticMapLayerMismatch
+        }
+        SemanticDebugMapErrorV1::ContradictoryMapping => {
+            SourceIsaObservationErrorCodeV1::SemanticMapContradictoryMapping
+        }
+        SemanticDebugMapErrorV1::OrphanNode => {
+            SourceIsaObservationErrorCodeV1::SemanticMapOrphanNode
+        }
+        SemanticDebugMapErrorV1::InvalidBoundary => {
+            SourceIsaObservationErrorCodeV1::SemanticMapInvalidBoundary
+        }
+        SemanticDebugMapErrorV1::UntypedBoundary => {
+            SourceIsaObservationErrorCodeV1::SemanticMapUntypedBoundary
+        }
+        SemanticDebugMapErrorV1::ResourceLimit => {
+            SourceIsaObservationErrorCodeV1::SemanticMapResourceLimit
+        }
+        SemanticDebugMapErrorV1::AllocationFailure => {
+            SourceIsaObservationErrorCodeV1::SemanticMapAllocationFailure
+        }
+        SemanticDebugMapErrorV1::ContentBindingMismatch => {
+            SourceIsaObservationErrorCodeV1::SemanticMapContentBindingMismatch
+        }
+        SemanticDebugMapErrorV1::ArtifactBindingMismatch => {
+            SourceIsaObservationErrorCodeV1::SemanticMapArtifactBindingMismatch
+        }
+        SemanticDebugMapErrorV1::InvalidBoundSourceMap => {
+            SourceIsaObservationErrorCodeV1::SemanticMapInvalidBoundSourceMap
+        }
+        SemanticDebugMapErrorV1::InvalidBoundCanonicalKir => {
+            SourceIsaObservationErrorCodeV1::SemanticMapInvalidBoundCanonicalKir
+        }
+        SemanticDebugMapErrorV1::SourceMapKirBindingMismatch => {
+            SourceIsaObservationErrorCodeV1::SemanticMapSourceMapKirBindingMismatch
+        }
+        SemanticDebugMapErrorV1::InvalidSourceLocation => {
+            SourceIsaObservationErrorCodeV1::SemanticMapInvalidSourceLocation
+        }
+        SemanticDebugMapErrorV1::InvalidMirLocation => {
+            SourceIsaObservationErrorCodeV1::SemanticMapInvalidMirLocation
+        }
+        SemanticDebugMapErrorV1::InvalidKirLocation => {
+            SourceIsaObservationErrorCodeV1::SemanticMapInvalidKirLocation
+        }
+        SemanticDebugMapErrorV1::InvalidIsaInterval => {
+            SourceIsaObservationErrorCodeV1::SemanticMapInvalidIsaInterval
+        }
+    }
+}
+
+const fn map_production_fragment_error(
+    error: ProductionSemanticDebugFragmentErrorV1,
+) -> SourceIsaObservationErrorCodeV1 {
+    match error {
+        ProductionSemanticDebugFragmentErrorV1::InvalidEncoding => {
+            SourceIsaObservationErrorCodeV1::ProductionFragmentInvalidEncoding
+        }
+        ProductionSemanticDebugFragmentErrorV1::InvalidAssociation => {
+            SourceIsaObservationErrorCodeV1::ProductionFragmentInvalidAssociation
+        }
+        ProductionSemanticDebugFragmentErrorV1::InvalidGap => {
+            SourceIsaObservationErrorCodeV1::ProductionFragmentInvalidGap
+        }
+        ProductionSemanticDebugFragmentErrorV1::InvalidScheduleStatus => {
+            SourceIsaObservationErrorCodeV1::ProductionFragmentInvalidScheduleStatus
+        }
+        ProductionSemanticDebugFragmentErrorV1::InvalidSourceMap => {
+            SourceIsaObservationErrorCodeV1::ProductionFragmentInvalidSourceMap
+        }
+        ProductionSemanticDebugFragmentErrorV1::InvalidCanonicalKir => {
+            SourceIsaObservationErrorCodeV1::ProductionFragmentInvalidCanonicalKir
+        }
+        ProductionSemanticDebugFragmentErrorV1::InvalidSemanticMap => {
+            SourceIsaObservationErrorCodeV1::ProductionFragmentInvalidSemanticMap
+        }
+        ProductionSemanticDebugFragmentErrorV1::AxisMismatch => {
+            SourceIsaObservationErrorCodeV1::ProductionFragmentAxisMismatch
+        }
+        ProductionSemanticDebugFragmentErrorV1::ResourceLimit => {
+            SourceIsaObservationErrorCodeV1::ProductionFragmentResourceLimit
+        }
+        ProductionSemanticDebugFragmentErrorV1::AllocationFailure => {
+            SourceIsaObservationErrorCodeV1::ProductionFragmentAllocationFailure
+        }
+    }
+}
+
+const fn map_semantic_anchor_error(
+    error: ProductionSemanticAnchorErrorV1,
+) -> SourceIsaObservationErrorCodeV1 {
+    match error {
+        ProductionSemanticAnchorErrorV1::InvalidCompilerAttachment => {
+            SourceIsaObservationErrorCodeV1::SemanticAnchorInvalidCompilerAttachment
+        }
+        ProductionSemanticAnchorErrorV1::InvalidProductionAssociation => {
+            SourceIsaObservationErrorCodeV1::SemanticAnchorInvalidProductionAssociation
+        }
+        ProductionSemanticAnchorErrorV1::InvalidKirToLlvmReplay => {
+            SourceIsaObservationErrorCodeV1::SemanticAnchorInvalidKirToLlvmReplay
+        }
+        ProductionSemanticAnchorErrorV1::TargetMismatch => {
+            SourceIsaObservationErrorCodeV1::SemanticAnchorTargetMismatch
+        }
+        ProductionSemanticAnchorErrorV1::InvalidLlvm => {
+            SourceIsaObservationErrorCodeV1::SemanticAnchorInvalidLlvm
+        }
+        ProductionSemanticAnchorErrorV1::ContradictoryLlvm => {
+            SourceIsaObservationErrorCodeV1::SemanticAnchorContradictoryLlvm
+        }
+        ProductionSemanticAnchorErrorV1::BindingMismatch => {
+            SourceIsaObservationErrorCodeV1::SemanticAnchorBindingMismatch
+        }
+        ProductionSemanticAnchorErrorV1::KirCoordinateMismatch => {
+            SourceIsaObservationErrorCodeV1::SemanticAnchorKirCoordinateMismatch
+        }
+        ProductionSemanticAnchorErrorV1::KirToLlvmAnchorMismatch => {
+            SourceIsaObservationErrorCodeV1::SemanticAnchorKirToLlvmAnchorMismatch
+        }
+        ProductionSemanticAnchorErrorV1::InvalidArtifact => {
+            SourceIsaObservationErrorCodeV1::SemanticAnchorInvalidArtifact
+        }
+        ProductionSemanticAnchorErrorV1::MissingProbeSection => {
+            SourceIsaObservationErrorCodeV1::SemanticAnchorMissingProbeSection
+        }
+        ProductionSemanticAnchorErrorV1::AmbiguousProbeSection => {
+            SourceIsaObservationErrorCodeV1::SemanticAnchorAmbiguousProbeSection
+        }
+        ProductionSemanticAnchorErrorV1::InvalidProbeEncoding => {
+            SourceIsaObservationErrorCodeV1::SemanticAnchorInvalidProbeEncoding
+        }
+        ProductionSemanticAnchorErrorV1::ProbeDescriptorMismatch => {
+            SourceIsaObservationErrorCodeV1::SemanticAnchorProbeDescriptorMismatch
+        }
+        ProductionSemanticAnchorErrorV1::AmbiguousEntrySymbol => {
+            SourceIsaObservationErrorCodeV1::SemanticAnchorAmbiguousEntrySymbol
+        }
+        ProductionSemanticAnchorErrorV1::UnexpectedProbe => {
+            SourceIsaObservationErrorCodeV1::SemanticAnchorUnexpectedProbe
+        }
+        ProductionSemanticAnchorErrorV1::ProbeOutsideKernel => {
+            SourceIsaObservationErrorCodeV1::SemanticAnchorProbeOutsideKernel
+        }
+        ProductionSemanticAnchorErrorV1::ResourceLimit => {
+            SourceIsaObservationErrorCodeV1::SemanticAnchorResourceLimit
+        }
+        ProductionSemanticAnchorErrorV1::AllocationFailure => {
+            SourceIsaObservationErrorCodeV1::SemanticAnchorAllocationFailure
+        }
+    }
+}
+
 fn encode_admitted(encoder: &mut FrameEncoder<'_>, admitted: AdmittedSourceIsaObservationV1) {
-    encoder.bytes(&admitted.correlation);
-    encoder.bytes(&admitted.artifact.sha256);
-    encoder.u64(admitted.artifact.byte_len);
-    let structural = admitted.structural;
-    encoder.bytes(&structural.identity);
-    encoder.u8(structural.target_profile as u8);
+    encoder.bytes(&admitted.correlation());
+    let artifact = admitted.artifact();
+    encoder.bytes(&artifact.sha256());
+    encoder.u64(artifact.byte_len());
+    let structural = admitted.structural();
+    encoder.bytes(&structural.identity());
+    encoder.u8(structural.target_profile() as u8);
     encoder.zeros(7);
-    encoder.u16(structural.kir_version as u16);
+    encoder.u16(structural.kir_version() as u16);
     encoder.zeros(6);
-    encoder.bytes(&structural.neutral_kir.sha256);
-    encoder.u64(structural.neutral_kir.byte_len);
-    encoder.bytes(&structural.target_kir.sha256);
-    encoder.u64(structural.target_kir.byte_len);
+    let neutral_kir = structural.neutral_kir();
+    encoder.bytes(&neutral_kir.sha256());
+    encoder.u64(neutral_kir.byte_len());
+    let target_kir = structural.target_kir();
+    encoder.bytes(&target_kir.sha256());
+    encoder.u64(target_kir.byte_len());
+    let structural_counts = structural.counts();
     for count in [
-        structural.counts.functions,
-        structural.counts.defined_bodies,
-        structural.counts.blocks,
-        structural.counts.operations,
+        structural_counts.functions,
+        structural_counts.defined_bodies,
+        structural_counts.blocks,
+        structural_counts.operations,
     ] {
         encoder.u64(count);
     }
-    for count in admitted.counts.values() {
+    for count in admitted.counts().values() {
         encoder.u64(count);
     }
-    match admitted.round_trip_witness {
+    match admitted.round_trip_witness() {
         Some(witness) => {
             encoder.u8(1);
             encoder.zeros(7);
-            encoder.bytes(&witness.source_node_identity);
-            encoder.bytes(&witness.source_span.file_identity);
-            encoder.u64(witness.source_span.byte_start);
-            encoder.u64(witness.source_span.byte_end);
-            encoder.u32(witness.source_span.line);
-            encoder.u32(witness.source_span.column);
-            encoder.u64(witness.isa_point.kernel_ordinal);
-            encoder.u64(witness.isa_point.symbol_relative_pc);
-            encoder.u64(witness.source_node_query_matches);
-            encoder.u64(witness.source_span_query_matches);
-            encoder.u64(witness.isa_point_query_matches);
+            encoder.bytes(&witness.source_node_identity());
+            let source_span = witness.source_span();
+            encoder.bytes(&source_span.file_identity());
+            encoder.u64(source_span.byte_start());
+            encoder.u64(source_span.byte_end());
+            encoder.u32(source_span.line());
+            encoder.u32(source_span.column());
+            let isa_point = witness.isa_point();
+            encoder.u64(isa_point.kernel_ordinal());
+            encoder.u64(isa_point.symbol_relative_pc());
+            encoder.u64(witness.source_node_query_matches());
+            encoder.u64(witness.source_span_query_matches());
+            encoder.u64(witness.isa_point_query_matches());
         }
         None => encoder.zeros(136),
     }
@@ -1025,16 +1675,20 @@ impl<'encoded> FrameDecoder<'encoded> {
 mod tests {
     use super::*;
 
+    fn attempt(generation: u64, session: [u8; 16], invocation: [u8; 32]) -> BuildAttempt {
+        BuildAttempt::from_env_value(&format!(
+            "{generation}:{}:{}",
+            BuildSession::from_bytes(session),
+            BuildInvocation::from_bytes(invocation)
+        ))
+        .unwrap()
+    }
+
     fn context() -> SourceIsaObservationContextV1 {
         SourceIsaObservationContextV1::new(
             [0x11; 32],
             [0x12; 32],
-            BuildAttempt::new(
-                7,
-                BuildSession::from_bytes([0x13; 16]),
-                BuildInvocation::from_bytes([0x14; 32]),
-            )
-            .unwrap(),
+            attempt(7, [0x13; 16], [0x14; 32]),
             [0x15; 32],
         )
         .unwrap()
@@ -1053,7 +1707,7 @@ mod tests {
                 functions: 2,
                 defined_bodies: 1,
                 blocks: 3,
-                operations: 8,
+                operations: 6,
             },
         )
         .unwrap();
@@ -1099,6 +1753,52 @@ mod tests {
         SourceIsaObservationFrameV1::new(context(), outcome)
     }
 
+    fn admitted_shape(
+        operations: u64,
+        source_anchored: u64,
+        eliminated: u64,
+        no_source: u64,
+    ) -> Result<AdmittedSourceIsaObservationV1, SourceIsaObservationFrameErrorV1> {
+        let base = admitted();
+        let structural = SourceIsaObservationStructuralBindingV1::new(
+            [0x39; 32],
+            SourceIsaObservationTargetProfileV1::Gfx942,
+            SourceIsaObservationKirVersionV1::V8,
+            base.structural().neutral_kir(),
+            base.structural().target_kir(),
+            SourceIsaObservationStructuralCountsV1 {
+                functions: 1,
+                defined_bodies: 1,
+                blocks: 3,
+                operations,
+            },
+        )?;
+        let source_records = source_anchored
+            .checked_add(eliminated)
+            .ok_or(SourceIsaObservationFrameErrorV1::InvalidClaim)?;
+        let counts = SourceIsaObservationCountsV1::new(
+            SourceIsaObservationRecordCountsV1 {
+                records: source_records
+                    .checked_add(no_source)
+                    .ok_or(SourceIsaObservationFrameErrorV1::InvalidClaim)?,
+                source_anchored,
+                eliminated,
+                no_source,
+                source_anchored_without_isa: source_anchored,
+                isa_references: 0,
+            },
+            SourceIsaObservationQueryCountsV1 {
+                distinct_source_nodes: u64::from(source_records != 0),
+                distinct_source_spans: u64::from(source_records != 0),
+                distinct_isa_points: 0,
+                max_source_node_cardinality: source_records,
+                max_source_span_cardinality: source_records,
+                max_exact_pc_cardinality: 0,
+            },
+        )?;
+        AdmittedSourceIsaObservationV1::new([0x38; 32], base.artifact(), structural, counts, None)
+    }
+
     #[test]
     fn all_typed_outcomes_round_trip_with_canonical_zeroing() {
         for expected in [
@@ -1125,6 +1825,547 @@ mod tests {
     }
 
     #[test]
+    fn all_correlation_errors_map_to_distinct_canonical_codes() {
+        fn assert_code(
+            error: ProductionSourceIsaCorrelationErrorV1,
+            expected: SourceIsaObservationErrorCodeV1,
+        ) {
+            let actual = map_correlation_error(error);
+            assert_eq!(actual, expected);
+            assert_eq!(
+                SourceIsaObservationErrorCodeV1::decode(actual as u16),
+                Ok(actual)
+            );
+            let expected = frame(SourceIsaObservationOutcomeV1::Error(actual));
+            let encoded = expected.encode();
+            assert_eq!(
+                u16::from_le_bytes(encoded[169..171].try_into().unwrap()),
+                actual as u16
+            );
+            assert!(encoded[176..648].iter().all(|byte| *byte == 0));
+            assert_eq!(SourceIsaObservationFrameV1::decode(&encoded), Ok(expected));
+        }
+
+        for (error, code) in [
+            (
+                ProductionSourceIsaCorrelationErrorV1::InvalidKirToLlvmReplay,
+                SourceIsaObservationErrorCodeV1::InvalidKirToLlvmReplay,
+            ),
+            (
+                ProductionSourceIsaCorrelationErrorV1::NonExactSemanticMap,
+                SourceIsaObservationErrorCodeV1::NonExactSemanticMap,
+            ),
+            (
+                ProductionSourceIsaCorrelationErrorV1::ArtifactIdentityMismatch,
+                SourceIsaObservationErrorCodeV1::ArtifactIdentityMismatch,
+            ),
+            (
+                ProductionSourceIsaCorrelationErrorV1::TargetKirIdentityMismatch,
+                SourceIsaObservationErrorCodeV1::TargetKirIdentityMismatch,
+            ),
+            (
+                ProductionSourceIsaCorrelationErrorV1::CoordinateShapeMismatch,
+                SourceIsaObservationErrorCodeV1::CoordinateShapeMismatch,
+            ),
+            (
+                ProductionSourceIsaCorrelationErrorV1::InvalidSourceGraph,
+                SourceIsaObservationErrorCodeV1::InvalidSourceGraph,
+            ),
+            (
+                ProductionSourceIsaCorrelationErrorV1::ResourceLimit,
+                SourceIsaObservationErrorCodeV1::ResourceLimit,
+            ),
+            (
+                ProductionSourceIsaCorrelationErrorV1::AllocationFailure,
+                SourceIsaObservationErrorCodeV1::AllocationFailure,
+            ),
+        ] {
+            assert_code(error, code);
+        }
+
+        for (error, code) in [
+            (
+                FinalizedSemanticDebugMapErrorV1::ProductionAssociation,
+                SourceIsaObservationErrorCodeV1::FinalizedMapProductionAssociation,
+            ),
+            (
+                FinalizedSemanticDebugMapErrorV1::ProductionAssociationMismatch,
+                SourceIsaObservationErrorCodeV1::FinalizedMapProductionAssociationMismatch,
+            ),
+            (
+                FinalizedSemanticDebugMapErrorV1::InvalidKirToLlvmReplay,
+                SourceIsaObservationErrorCodeV1::FinalizedMapInvalidKirToLlvmReplay,
+            ),
+            (
+                FinalizedSemanticDebugMapErrorV1::KirToLlvmReplayTargetMismatch,
+                SourceIsaObservationErrorCodeV1::FinalizedMapKirToLlvmReplayTargetMismatch,
+            ),
+            (
+                FinalizedSemanticDebugMapErrorV1::InvalidLlvmToHsacoCustody,
+                SourceIsaObservationErrorCodeV1::FinalizedMapInvalidLlvmToHsacoCustody,
+            ),
+            (
+                FinalizedSemanticDebugMapErrorV1::InvalidBoundSourceMap,
+                SourceIsaObservationErrorCodeV1::FinalizedMapInvalidBoundSourceMap,
+            ),
+            (
+                FinalizedSemanticDebugMapErrorV1::InvalidBoundSemanticMir,
+                SourceIsaObservationErrorCodeV1::FinalizedMapInvalidBoundSemanticMir,
+            ),
+            (
+                FinalizedSemanticDebugMapErrorV1::InvalidBoundCorrespondenceV4,
+                SourceIsaObservationErrorCodeV1::FinalizedMapInvalidBoundCorrespondenceV4,
+            ),
+            (
+                FinalizedSemanticDebugMapErrorV1::InvalidBoundCanonicalKirV8,
+                SourceIsaObservationErrorCodeV1::FinalizedMapInvalidBoundCanonicalKirV8,
+            ),
+            (
+                FinalizedSemanticDebugMapErrorV1::InvalidBoundCanonicalKirV7,
+                SourceIsaObservationErrorCodeV1::FinalizedMapInvalidBoundCanonicalKirV7,
+            ),
+            (
+                FinalizedSemanticDebugMapErrorV1::CanonicalKirProjectionMismatch,
+                SourceIsaObservationErrorCodeV1::FinalizedMapCanonicalKirProjectionMismatch,
+            ),
+            (
+                FinalizedSemanticDebugMapErrorV1::CorrespondenceIdentityMismatch,
+                SourceIsaObservationErrorCodeV1::FinalizedMapCorrespondenceIdentityMismatch,
+            ),
+            (
+                FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence,
+                SourceIsaObservationErrorCodeV1::FinalizedMapInvalidSemanticCorrespondence,
+            ),
+            (
+                FinalizedSemanticDebugMapErrorV1::ArtifactInspection,
+                SourceIsaObservationErrorCodeV1::FinalizedMapArtifactInspection,
+            ),
+            (
+                FinalizedSemanticDebugMapErrorV1::AllocationFailure,
+                SourceIsaObservationErrorCodeV1::FinalizedMapAllocationFailure,
+            ),
+        ] {
+            assert_code(
+                ProductionSourceIsaCorrelationErrorV1::SemanticDebugMap(error),
+                code,
+            );
+        }
+
+        for (error, code) in [
+            (
+                SemanticDebugMapErrorV1::InvalidLength,
+                SourceIsaObservationErrorCodeV1::SemanticMapInvalidLength,
+            ),
+            (
+                SemanticDebugMapErrorV1::InvalidJson,
+                SourceIsaObservationErrorCodeV1::SemanticMapInvalidJson,
+            ),
+            (
+                SemanticDebugMapErrorV1::NonCanonicalEncoding,
+                SourceIsaObservationErrorCodeV1::SemanticMapNonCanonicalEncoding,
+            ),
+            (
+                SemanticDebugMapErrorV1::Encoding,
+                SourceIsaObservationErrorCodeV1::SemanticMapEncoding,
+            ),
+            (
+                SemanticDebugMapErrorV1::InvalidBinding,
+                SourceIsaObservationErrorCodeV1::SemanticMapInvalidBinding,
+            ),
+            (
+                SemanticDebugMapErrorV1::InvalidKernelOrdinalBasis,
+                SourceIsaObservationErrorCodeV1::SemanticMapInvalidKernelOrdinalBasis,
+            ),
+            (
+                SemanticDebugMapErrorV1::InvalidNode,
+                SourceIsaObservationErrorCodeV1::SemanticMapInvalidNode,
+            ),
+            (
+                SemanticDebugMapErrorV1::InvalidMapping,
+                SourceIsaObservationErrorCodeV1::SemanticMapInvalidMapping,
+            ),
+            (
+                SemanticDebugMapErrorV1::DuplicateNode,
+                SourceIsaObservationErrorCodeV1::SemanticMapDuplicateNode,
+            ),
+            (
+                SemanticDebugMapErrorV1::DuplicateMapping,
+                SourceIsaObservationErrorCodeV1::SemanticMapDuplicateMapping,
+            ),
+            (
+                SemanticDebugMapErrorV1::DuplicateReference,
+                SourceIsaObservationErrorCodeV1::SemanticMapDuplicateReference,
+            ),
+            (
+                SemanticDebugMapErrorV1::UnknownNode,
+                SourceIsaObservationErrorCodeV1::SemanticMapUnknownNode,
+            ),
+            (
+                SemanticDebugMapErrorV1::LayerMismatch,
+                SourceIsaObservationErrorCodeV1::SemanticMapLayerMismatch,
+            ),
+            (
+                SemanticDebugMapErrorV1::ContradictoryMapping,
+                SourceIsaObservationErrorCodeV1::SemanticMapContradictoryMapping,
+            ),
+            (
+                SemanticDebugMapErrorV1::OrphanNode,
+                SourceIsaObservationErrorCodeV1::SemanticMapOrphanNode,
+            ),
+            (
+                SemanticDebugMapErrorV1::InvalidBoundary,
+                SourceIsaObservationErrorCodeV1::SemanticMapInvalidBoundary,
+            ),
+            (
+                SemanticDebugMapErrorV1::UntypedBoundary,
+                SourceIsaObservationErrorCodeV1::SemanticMapUntypedBoundary,
+            ),
+            (
+                SemanticDebugMapErrorV1::ResourceLimit,
+                SourceIsaObservationErrorCodeV1::SemanticMapResourceLimit,
+            ),
+            (
+                SemanticDebugMapErrorV1::AllocationFailure,
+                SourceIsaObservationErrorCodeV1::SemanticMapAllocationFailure,
+            ),
+            (
+                SemanticDebugMapErrorV1::ContentBindingMismatch,
+                SourceIsaObservationErrorCodeV1::SemanticMapContentBindingMismatch,
+            ),
+            (
+                SemanticDebugMapErrorV1::ArtifactBindingMismatch,
+                SourceIsaObservationErrorCodeV1::SemanticMapArtifactBindingMismatch,
+            ),
+            (
+                SemanticDebugMapErrorV1::InvalidBoundSourceMap,
+                SourceIsaObservationErrorCodeV1::SemanticMapInvalidBoundSourceMap,
+            ),
+            (
+                SemanticDebugMapErrorV1::InvalidBoundCanonicalKir,
+                SourceIsaObservationErrorCodeV1::SemanticMapInvalidBoundCanonicalKir,
+            ),
+            (
+                SemanticDebugMapErrorV1::SourceMapKirBindingMismatch,
+                SourceIsaObservationErrorCodeV1::SemanticMapSourceMapKirBindingMismatch,
+            ),
+            (
+                SemanticDebugMapErrorV1::InvalidSourceLocation,
+                SourceIsaObservationErrorCodeV1::SemanticMapInvalidSourceLocation,
+            ),
+            (
+                SemanticDebugMapErrorV1::InvalidMirLocation,
+                SourceIsaObservationErrorCodeV1::SemanticMapInvalidMirLocation,
+            ),
+            (
+                SemanticDebugMapErrorV1::InvalidKirLocation,
+                SourceIsaObservationErrorCodeV1::SemanticMapInvalidKirLocation,
+            ),
+            (
+                SemanticDebugMapErrorV1::InvalidIsaInterval,
+                SourceIsaObservationErrorCodeV1::SemanticMapInvalidIsaInterval,
+            ),
+        ] {
+            assert_code(
+                ProductionSourceIsaCorrelationErrorV1::SemanticDebugMap(
+                    FinalizedSemanticDebugMapErrorV1::SemanticMap(error),
+                ),
+                code,
+            );
+        }
+
+        for (error, code) in [
+            (
+                ProductionSemanticDebugFragmentErrorV1::InvalidEncoding,
+                SourceIsaObservationErrorCodeV1::ProductionFragmentInvalidEncoding,
+            ),
+            (
+                ProductionSemanticDebugFragmentErrorV1::InvalidAssociation,
+                SourceIsaObservationErrorCodeV1::ProductionFragmentInvalidAssociation,
+            ),
+            (
+                ProductionSemanticDebugFragmentErrorV1::InvalidGap,
+                SourceIsaObservationErrorCodeV1::ProductionFragmentInvalidGap,
+            ),
+            (
+                ProductionSemanticDebugFragmentErrorV1::InvalidScheduleStatus,
+                SourceIsaObservationErrorCodeV1::ProductionFragmentInvalidScheduleStatus,
+            ),
+            (
+                ProductionSemanticDebugFragmentErrorV1::InvalidSourceMap,
+                SourceIsaObservationErrorCodeV1::ProductionFragmentInvalidSourceMap,
+            ),
+            (
+                ProductionSemanticDebugFragmentErrorV1::InvalidCanonicalKir,
+                SourceIsaObservationErrorCodeV1::ProductionFragmentInvalidCanonicalKir,
+            ),
+            (
+                ProductionSemanticDebugFragmentErrorV1::InvalidSemanticMap,
+                SourceIsaObservationErrorCodeV1::ProductionFragmentInvalidSemanticMap,
+            ),
+            (
+                ProductionSemanticDebugFragmentErrorV1::AxisMismatch,
+                SourceIsaObservationErrorCodeV1::ProductionFragmentAxisMismatch,
+            ),
+            (
+                ProductionSemanticDebugFragmentErrorV1::ResourceLimit,
+                SourceIsaObservationErrorCodeV1::ProductionFragmentResourceLimit,
+            ),
+            (
+                ProductionSemanticDebugFragmentErrorV1::AllocationFailure,
+                SourceIsaObservationErrorCodeV1::ProductionFragmentAllocationFailure,
+            ),
+        ] {
+            assert_code(
+                ProductionSourceIsaCorrelationErrorV1::SemanticDebugMap(
+                    FinalizedSemanticDebugMapErrorV1::ProductionFragment(error),
+                ),
+                code,
+            );
+        }
+
+        for (error, code) in [
+            (
+                ProductionSemanticAnchorErrorV1::InvalidCompilerAttachment,
+                SourceIsaObservationErrorCodeV1::SemanticAnchorInvalidCompilerAttachment,
+            ),
+            (
+                ProductionSemanticAnchorErrorV1::InvalidProductionAssociation,
+                SourceIsaObservationErrorCodeV1::SemanticAnchorInvalidProductionAssociation,
+            ),
+            (
+                ProductionSemanticAnchorErrorV1::InvalidKirToLlvmReplay,
+                SourceIsaObservationErrorCodeV1::SemanticAnchorInvalidKirToLlvmReplay,
+            ),
+            (
+                ProductionSemanticAnchorErrorV1::TargetMismatch,
+                SourceIsaObservationErrorCodeV1::SemanticAnchorTargetMismatch,
+            ),
+            (
+                ProductionSemanticAnchorErrorV1::InvalidLlvm,
+                SourceIsaObservationErrorCodeV1::SemanticAnchorInvalidLlvm,
+            ),
+            (
+                ProductionSemanticAnchorErrorV1::ContradictoryLlvm,
+                SourceIsaObservationErrorCodeV1::SemanticAnchorContradictoryLlvm,
+            ),
+            (
+                ProductionSemanticAnchorErrorV1::BindingMismatch,
+                SourceIsaObservationErrorCodeV1::SemanticAnchorBindingMismatch,
+            ),
+            (
+                ProductionSemanticAnchorErrorV1::KirCoordinateMismatch,
+                SourceIsaObservationErrorCodeV1::SemanticAnchorKirCoordinateMismatch,
+            ),
+            (
+                ProductionSemanticAnchorErrorV1::KirToLlvmAnchorMismatch,
+                SourceIsaObservationErrorCodeV1::SemanticAnchorKirToLlvmAnchorMismatch,
+            ),
+            (
+                ProductionSemanticAnchorErrorV1::InvalidArtifact,
+                SourceIsaObservationErrorCodeV1::SemanticAnchorInvalidArtifact,
+            ),
+            (
+                ProductionSemanticAnchorErrorV1::MissingProbeSection,
+                SourceIsaObservationErrorCodeV1::SemanticAnchorMissingProbeSection,
+            ),
+            (
+                ProductionSemanticAnchorErrorV1::AmbiguousProbeSection,
+                SourceIsaObservationErrorCodeV1::SemanticAnchorAmbiguousProbeSection,
+            ),
+            (
+                ProductionSemanticAnchorErrorV1::InvalidProbeEncoding,
+                SourceIsaObservationErrorCodeV1::SemanticAnchorInvalidProbeEncoding,
+            ),
+            (
+                ProductionSemanticAnchorErrorV1::ProbeDescriptorMismatch,
+                SourceIsaObservationErrorCodeV1::SemanticAnchorProbeDescriptorMismatch,
+            ),
+            (
+                ProductionSemanticAnchorErrorV1::AmbiguousEntrySymbol,
+                SourceIsaObservationErrorCodeV1::SemanticAnchorAmbiguousEntrySymbol,
+            ),
+            (
+                ProductionSemanticAnchorErrorV1::UnexpectedProbe,
+                SourceIsaObservationErrorCodeV1::SemanticAnchorUnexpectedProbe,
+            ),
+            (
+                ProductionSemanticAnchorErrorV1::ProbeOutsideKernel,
+                SourceIsaObservationErrorCodeV1::SemanticAnchorProbeOutsideKernel,
+            ),
+            (
+                ProductionSemanticAnchorErrorV1::ResourceLimit,
+                SourceIsaObservationErrorCodeV1::SemanticAnchorResourceLimit,
+            ),
+            (
+                ProductionSemanticAnchorErrorV1::AllocationFailure,
+                SourceIsaObservationErrorCodeV1::SemanticAnchorAllocationFailure,
+            ),
+        ] {
+            assert_code(
+                ProductionSourceIsaCorrelationErrorV1::SemanticAnchors(error),
+                code,
+            );
+        }
+    }
+
+    #[test]
+    fn lossy_and_unassigned_error_codes_are_rejected() {
+        let encoded = frame(SourceIsaObservationOutcomeV1::Error(
+            SourceIsaObservationErrorCodeV1::InvalidKirToLlvmReplay,
+        ))
+        .encode();
+        for code in [
+            0,
+            1,
+            2,
+            0x1000,
+            0x1010,
+            0x1100,
+            0x111d,
+            0x1200,
+            0x120b,
+            0x2000,
+            0x2014,
+            u16::MAX,
+        ] {
+            let mut changed = encoded;
+            changed[169..171].copy_from_slice(&code.to_le_bytes());
+            let identity = frame_identity(&changed[..FRAME_PREFIX_BYTES_V1]);
+            changed[FRAME_PREFIX_BYTES_V1..].copy_from_slice(&identity);
+            assert_eq!(
+                SourceIsaObservationFrameV1::decode(&changed),
+                Err(SourceIsaObservationFrameErrorV1::InvalidTag),
+                "reserved error code {code:#06x} was accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn admitted_structure_round_trips_with_empty_blocks() {
+        let base = admitted();
+        let structural = SourceIsaObservationStructuralBindingV1::new(
+            [0x29; 32],
+            SourceIsaObservationTargetProfileV1::Gfx942,
+            SourceIsaObservationKirVersionV1::V8,
+            base.structural().neutral_kir(),
+            base.structural().target_kir(),
+            SourceIsaObservationStructuralCountsV1 {
+                functions: 2,
+                defined_bodies: 1,
+                blocks: 4,
+                operations: 2,
+            },
+        )
+        .unwrap();
+        let counts = SourceIsaObservationCountsV1::new(
+            SourceIsaObservationRecordCountsV1 {
+                records: 2,
+                source_anchored: 0,
+                eliminated: 0,
+                no_source: 2,
+                source_anchored_without_isa: 0,
+                isa_references: 0,
+            },
+            SourceIsaObservationQueryCountsV1 {
+                distinct_source_nodes: 0,
+                distinct_source_spans: 0,
+                distinct_isa_points: 0,
+                max_source_node_cardinality: 0,
+                max_source_span_cardinality: 0,
+                max_exact_pc_cardinality: 0,
+            },
+        )
+        .unwrap();
+        let admitted = AdmittedSourceIsaObservationV1::new(
+            base.correlation(),
+            base.artifact(),
+            structural,
+            counts,
+            None,
+        )
+        .unwrap();
+        let expected = frame(SourceIsaObservationOutcomeV1::Admitted(admitted));
+        let decoded = SourceIsaObservationFrameV1::decode(&expected.encode()).unwrap();
+        assert_eq!(decoded, expected);
+        let SourceIsaObservationOutcomeV1::Admitted(decoded) = decoded.outcome() else {
+            panic!("expected admitted observation");
+        };
+        assert_eq!(decoded.structural().counts().blocks, 4);
+        assert_eq!(decoded.structural().counts().operations, 2);
+    }
+
+    #[test]
+    fn admitted_record_classes_cover_structural_operations_exactly() {
+        for admitted in [
+            admitted_shape(1, 1, 0, 0).unwrap(),
+            admitted_shape(2, 0, 0, 2).unwrap(),
+            admitted_shape(1, 2, 0, 0).unwrap(),
+            admitted_shape(1, 0, 2, 1).unwrap(),
+        ] {
+            let expected = frame(SourceIsaObservationOutcomeV1::Admitted(admitted));
+            assert_eq!(
+                SourceIsaObservationFrameV1::decode(&expected.encode()),
+                Ok(expected)
+            );
+        }
+
+        for rejected in [
+            admitted_shape(1, 0, 0, 2),
+            admitted_shape(1, 0, 0, 0),
+            admitted_shape(1, 0, 2, 0),
+            admitted_shape(1, 1, 0, 1),
+            admitted_shape(2, 1, 0, 0),
+            admitted_shape(0, 0, 0, 0),
+        ] {
+            assert_eq!(
+                rejected,
+                Err(SourceIsaObservationFrameErrorV1::InvalidClaim)
+            );
+        }
+    }
+
+    #[test]
+    fn structural_function_bound_matches_canonical_kir() {
+        let base = admitted().structural();
+        for functions in [1, MAX_FUNCTIONS_V1 as u64] {
+            assert!(
+                SourceIsaObservationStructuralBindingV1::new(
+                    [0x49; 32],
+                    base.target_profile(),
+                    base.kir_version(),
+                    base.neutral_kir(),
+                    base.target_kir(),
+                    SourceIsaObservationStructuralCountsV1 {
+                        functions,
+                        defined_bodies: 1,
+                        blocks: 1,
+                        operations: 1,
+                    },
+                )
+                .is_ok()
+            );
+        }
+        for functions in [0, MAX_FUNCTIONS_V1 as u64 + 1, u64::MAX] {
+            assert!(
+                SourceIsaObservationStructuralBindingV1::new(
+                    [0x49; 32],
+                    base.target_profile(),
+                    base.kir_version(),
+                    base.neutral_kir(),
+                    base.target_kir(),
+                    SourceIsaObservationStructuralCountsV1 {
+                        functions,
+                        defined_bodies: 1,
+                        blocks: 1,
+                        operations: 1,
+                    },
+                )
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
     fn valid_zero_population_and_eliminated_only_summaries_are_representable() {
         for records in [
             SourceIsaObservationRecordCountsV1 {
@@ -1136,10 +2377,10 @@ mod tests {
                 isa_references: 0,
             },
             SourceIsaObservationRecordCountsV1 {
-                records: 2,
+                records: 8,
                 source_anchored: 0,
                 eliminated: 2,
-                no_source: 0,
+                no_source: 6,
                 source_anchored_without_isa: 0,
                 isa_references: 0,
             },
@@ -1188,14 +2429,15 @@ mod tests {
     }
 
     #[test]
-    fn admitted_eliminated_only_summary_has_a_canonical_absent_witness() {
+    fn admitted_eliminated_source_records_have_a_canonical_absent_witness() {
         let base = admitted();
+        let operations = base.structural().counts().operations;
         let counts = SourceIsaObservationCountsV1::new(
             SourceIsaObservationRecordCountsV1 {
-                records: 2,
+                records: operations.checked_add(2).unwrap(),
                 source_anchored: 0,
                 eliminated: 2,
-                no_source: 0,
+                no_source: operations,
                 source_anchored_without_isa: 0,
                 isa_references: 0,
             },
@@ -1228,16 +2470,16 @@ mod tests {
         let base = admitted();
         let counts = SourceIsaObservationCountsV1::new(
             SourceIsaObservationRecordCountsV1 {
-                records: 2,
-                source_anchored: 2,
+                records: 6,
+                source_anchored: 6,
                 eliminated: 0,
                 no_source: 0,
-                source_anchored_without_isa: 2,
+                source_anchored_without_isa: 6,
                 isa_references: 0,
             },
             SourceIsaObservationQueryCountsV1 {
-                distinct_source_nodes: 2,
-                distinct_source_spans: 2,
+                distinct_source_nodes: 6,
+                distinct_source_spans: 6,
                 distinct_isa_points: 0,
                 max_source_node_cardinality: 1,
                 max_source_span_cardinality: 1,
@@ -1329,6 +2571,88 @@ mod tests {
     }
 
     #[test]
+    fn ready_state_has_a_typed_canonical_unavailable_frame() {
+        let attempt = attempt(7, [0x31; 16], [0x32; 32]);
+        let expected =
+            ready_source_isa_observation_frame_v1([0x30; 32], [0x40; 32], attempt, [0x33; 32])
+                .unwrap();
+        assert_eq!(
+            expected.outcome(),
+            SourceIsaObservationOutcomeV1::Unavailable(
+                SourceIsaObservationUnavailableReasonV1::FinalizedEvidenceUnavailableFromReadyState
+            )
+        );
+        let encoded = expected.encode();
+        assert_eq!(encoded.len(), SOURCE_ISA_OBSERVATION_FRAME_BYTES_V1);
+        assert!(encoded[176..640].iter().all(|byte| *byte == 0));
+        assert_eq!(SourceIsaObservationFrameV1::decode(&encoded), Ok(expected));
+    }
+
+    #[test]
+    fn unavailable_mapping_is_exact_and_exhaustive() {
+        let carrier = [
+            (ProductionSemanticDebugProducerGapV1::MultipleKirFunctionBodies, SourceIsaObservationUnavailableReasonV1::CarrierMultipleKirFunctionBodies),
+            (ProductionSemanticDebugProducerGapV1::NoStatementCorrespondence, SourceIsaObservationUnavailableReasonV1::CarrierNoStatementCorrespondence),
+            (ProductionSemanticDebugProducerGapV1::SourceMapUnavailable, SourceIsaObservationUnavailableReasonV1::CarrierSourceMapUnavailable),
+            (ProductionSemanticDebugProducerGapV1::ResourceLimit, SourceIsaObservationUnavailableReasonV1::CarrierResourceLimit),
+            (ProductionSemanticDebugProducerGapV1::CanonicalKirV7ProjectionUnavailable, SourceIsaObservationUnavailableReasonV1::CarrierCanonicalKirV7ProjectionUnavailable),
+            (ProductionSemanticDebugProducerGapV1::SourceObservationUnrepresentable, SourceIsaObservationUnavailableReasonV1::CarrierSourceObservationUnrepresentable),
+            (ProductionSemanticDebugProducerGapV1::SemanticMapConstructionUnavailable, SourceIsaObservationUnavailableReasonV1::CarrierSemanticMapConstructionUnavailable),
+            (ProductionSemanticDebugProducerGapV1::SemanticMapEncodingUnavailable, SourceIsaObservationUnavailableReasonV1::CarrierSemanticMapEncodingUnavailable),
+            (ProductionSemanticDebugProducerGapV1::FragmentConstructionUnavailable, SourceIsaObservationUnavailableReasonV1::CarrierFragmentConstructionUnavailable),
+            (ProductionSemanticDebugProducerGapV1::CarrierConstructionUnavailable, SourceIsaObservationUnavailableReasonV1::CarrierConstructionUnavailable),
+            (ProductionSemanticDebugProducerGapV1::ReceiptExtensionConstructionUnavailable, SourceIsaObservationUnavailableReasonV1::CarrierReceiptExtensionConstructionUnavailable),
+            (ProductionSemanticDebugProducerGapV1::CorrespondenceValidationUnavailable, SourceIsaObservationUnavailableReasonV1::CarrierCorrespondenceValidationUnavailable),
+            (ProductionSemanticDebugProducerGapV1::CanonicalKirModuleMismatch, SourceIsaObservationUnavailableReasonV1::CarrierCanonicalKirModuleMismatch),
+            (ProductionSemanticDebugProducerGapV1::LegacyBareAssociationNoAttachment, SourceIsaObservationUnavailableReasonV1::CarrierLegacyBareAssociationNoAttachment),
+        ];
+        for (input, expected) in carrier {
+            assert_eq!(
+                map_unavailable_reason(
+                    ProductionSourceIsaCorrelationUnavailableV1::SemanticDebugCarrier(input)
+                ),
+                expected
+            );
+        }
+        let anchors = [
+            (
+                ProductionSemanticAnchorUnavailableV1::LegacySemanticAttachment,
+                SourceIsaObservationUnavailableReasonV1::AnchorLegacySemanticAttachment,
+            ),
+            (
+                ProductionSemanticAnchorUnavailableV1::LegacyUninstrumentedReplay,
+                SourceIsaObservationUnavailableReasonV1::AnchorLegacyUninstrumentedReplay,
+            ),
+            (
+                ProductionSemanticAnchorUnavailableV1::NoOperations,
+                SourceIsaObservationUnavailableReasonV1::AnchorNoOperations,
+            ),
+            (
+                ProductionSemanticAnchorUnavailableV1::MultipleDefinedBodies,
+                SourceIsaObservationUnavailableReasonV1::AnchorMultipleDefinedBodies,
+            ),
+            (
+                ProductionSemanticAnchorUnavailableV1::CompilerInstrumentationAbsent,
+                SourceIsaObservationUnavailableReasonV1::AnchorCompilerInstrumentationAbsent,
+            ),
+        ];
+        for (input, expected) in anchors {
+            assert_eq!(
+                map_unavailable_reason(
+                    ProductionSourceIsaCorrelationUnavailableV1::SemanticAnchors(input)
+                ),
+                expected
+            );
+        }
+        assert_eq!(
+            map_unavailable_reason(
+                ProductionSourceIsaCorrelationUnavailableV1::SourceProjectionForKirV9
+            ),
+            SourceIsaObservationUnavailableReasonV1::SourceProjectionForKirV9
+        );
+    }
+
+    #[test]
     fn witness_presence_and_cardinalities_are_bound_to_counts() {
         let admitted = admitted();
         let encoded = frame(SourceIsaObservationOutcomeV1::Admitted(admitted)).encode();
@@ -1362,7 +2686,7 @@ mod tests {
     #[test]
     fn impossible_structural_and_count_claims_fail_after_rehashing() {
         let encoded = frame(SourceIsaObservationOutcomeV1::Admitted(admitted())).encode();
-        for (offset, value) in [(384, 2_u64), (408, 9_u64)] {
+        for (offset, value) in [(376, u64::MAX), (384, 2_u64), (400, 7_u64), (408, 9_u64)] {
             let mut changed = encoded;
             changed[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
             let identity = frame_identity(&changed[..FRAME_PREFIX_BYTES_V1]);
@@ -1372,5 +2696,14 @@ mod tests {
                 Err(SourceIsaObservationFrameErrorV1::InvalidClaim)
             );
         }
+
+        let mut zero_records = encoded;
+        zero_records[408..640].fill(0);
+        let identity = frame_identity(&zero_records[..FRAME_PREFIX_BYTES_V1]);
+        zero_records[FRAME_PREFIX_BYTES_V1..].copy_from_slice(&identity);
+        assert_eq!(
+            SourceIsaObservationFrameV1::decode(&zero_records),
+            Err(SourceIsaObservationFrameErrorV1::InvalidClaim)
+        );
     }
 }

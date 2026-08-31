@@ -222,6 +222,11 @@ impl PreparedProductionBuildConfig {
         self.link.identity
     }
 
+    pub(crate) const fn source_isa_summary_enabled(&self) -> bool {
+        self.version.source_isa_summary_enabled()
+    }
+
+    #[cfg(test)]
     pub(crate) const fn config_environment_name(&self) -> &'static str {
         match self.version {
             ProductionBuildConfigVersion::V1 => PRODUCTION_BUILD_CONFIG_ENV,

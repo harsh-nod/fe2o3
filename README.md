@@ -539,6 +539,12 @@ target lowering, and host execution into explicit ownership boundaries:
   claim, compile a kernel, execute a service, or grant artifact/runtime
   authority.
 - Compiler composition: `cargo-fe2o3` drives the sole production rustc backend through one managed Worker V3 transaction. The production backend has no selector or fallback slot; inspection remains an observation of that transaction, not another compiler implementation. `FE2O3_QUALIFICATION_ORACLE_V1` is only a rejected legacy sentinel; no workload oracle is compiled.
+- Source-to-ISA acceptance telemetry: production build-config V2 requests one
+  attempt-bound, authority-free summary for each selected ordinary Rust kernel
+  unit. Fresh and exact recovered finalized evidence use the same bounded
+  correlation reducer; load-ready recovery reports a typed evidence gap. Cargo
+  exposes the sorted collection through a canonical bounded stderr record and
+  keeps it outside artifact, publication, and pure-KFD runtime authority.
 - General kernel checks: `fe2o3-kernel-analysis` owns the fixed pre-lowering
   Kernel IR sequence for structure, control flow, bounds obligations, race
   freedom, barrier convergence, and workgroup-memory initialization/reuse.

@@ -53,14 +53,42 @@ The Cargo package has no qualification feature, simulation command, Worker V2
 compiler dependency, or feature-selected compiler behavior. Backend-only
 differential oracles must remain outside this executable transaction.
 
-Production requires `FE2O3_PRODUCTION_BUILD_CONFIG_V1` to name a canonical
-`fe2o3-production-build-config-v1` JSON recipe. The recipe pins the selected
-Rust compilation units, upstream-LLVM worker image, typed link providers,
-link options, output bound, and execution limits. Cargo authenticates its
-transitive identity and passes only `FE2O3_PRODUCTION_BUILD_EXPECTED_ID_V1` to
-the wrapper. Production rejects the retired Worker V2 config and expected-identity
-variables. Envelope, source-debug, exact-workload, and restart-oracle fields
-are not part of the production schema.
+Production accepts exactly one versioned configuration namespace. The existing
+`FE2O3_PRODUCTION_BUILD_CONFIG_V1` names a canonical
+`fe2o3-production-build-config-v1` recipe and retains its original behavior.
+`FE2O3_PRODUCTION_BUILD_CONFIG_V2` names the same workload-neutral link recipe
+with the required field `"observation":{"kind":"source-isa-summary-v1"}`.
+The matching expected-identity variable is
+`FE2O3_PRODUCTION_BUILD_EXPECTED_ID_V1` or
+`FE2O3_PRODUCTION_BUILD_EXPECTED_ID_V2`; versions and namespaces cannot be
+mixed. Both recipes pin selected Rust compilation units, the upstream-LLVM
+worker image, typed link providers, link options, output bound, and execution
+limits. Production rejects the retired Worker V2 namespace. Envelope,
+exact-workload, and restart-oracle fields are not part of either schema.
+
+V2 adds authority-free Source/MIR/KIR-to-sparse-ISA acceptance telemetry to
+the same protected Worker V3 transaction. The wrapper releases ordinary V1
+broker authority for dependencies and V1 units. For a selected V2 unit it
+binds the observer release to the exact configuration, selected-unit identity,
+and managed build attempt, and waits for a distinct prepared ACK on the same
+authenticated stream before treating the authority as released. The broker
+validates policy membership and its non-DIRECT session before that ACK; the
+trusted wrapper supplies attempt legitimacy, and the submitted frame must match
+the ACKed request exactly. Fresh finalized evidence is reduced once before
+publication preparation. A genuine restart recomputes from the exact recovered
+finalized evidence. A load-ready restart emits typed unavailable reason `202`
+because its durable envelope does not retain finalized correlation evidence.
+Observer reduction, framing, submission, and collection failures never grant
+or revoke compiler, publication, load, launch, or runtime authority and do not
+change Cargo success after the authenticated V2 release succeeds.
+
+After every wrapper has exited, Cargo emits one bounded canonical collection on
+stderr with prefix `source-isa-observation-collection-v1`, explicit
+`frames`, `missing`, and `failure` counts, lowercase `encoding=hex:...`, and
+`authority=observation-only`. The collection is deliberately not written into
+the generated artifact directory because every file there participates in the
+authoritative generation snapshot. See
+[the frozen collection schema](../../docs/source-isa-observation-collection-v1.md).
 
 The rustc wrapper owns all device work directly as a mandatory
 `ManagedProductionBuild` transaction. No route enum, optional work slot, or

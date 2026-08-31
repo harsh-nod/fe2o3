@@ -63,6 +63,9 @@ use crate::project::PinnedDirectory;
 use crate::protected_compiler_handoff_v3::{
     ParentRustcInvocationCustody, ProductionCompilerModuleHandoffIntake,
 };
+use crate::source_isa_observation::{
+    finalized_source_isa_observation_frame_v1, ready_source_isa_observation_frame_v1,
+};
 use crate::{
     ARTIFACT_CHILD_FD, BACKEND_CHILD_FD, MANAGED_RUSTC_ARGS_ENV, RUSTC_CHILD_FD,
     RUSTC_INVOCATION_CHILD_FD, RUSTC_LIBRARY_CHILD_FD,
@@ -357,6 +360,35 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
             let build_config = PreparedProductionBuildConfig::from_environment()
                 .map_err(BindingWrapperError::BuildConfiguration)?;
             validate_expected_build_config_identity(build_config.as_ref())?;
+            let source_isa_selection = if build_config
+                .as_ref()
+                .is_some_and(PreparedProductionBuildConfig::source_isa_summary_enabled)
+            {
+                let current_dir =
+                    std::env::current_dir().map_err(BindingWrapperError::CurrentDirectory)?;
+                let selected_kernel_root = selected_kernel_root(
+                    build_config.as_ref().map(|config| {
+                        config.selects(compile.crate_name(), compile.source_path(), &current_dir)
+                    }),
+                    std::env::var_os(crate::CARGO_PRIMARY_PACKAGE_ENV).as_deref(),
+                )?;
+                let source_isa_binding = if selected_kernel_root {
+                    build_config.as_ref().and_then(|config| {
+                        config
+                            .source_isa_unit_identity(
+                                compile.crate_name(),
+                                compile.source_path(),
+                                &current_dir,
+                            )
+                            .map(|unit| (*config.identity().as_bytes(), *unit.as_bytes()))
+                    })
+                } else {
+                    None
+                };
+                Some((current_dir, selected_kernel_root, source_isa_binding))
+            } else {
+                None
+            };
             let capability_profile = capability_broker::CapabilityProfileV1::Ordinary;
             let capability_binding =
                 capability_broker::CapabilityBindingV3::from_environment_for_client(
@@ -368,17 +400,39 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
                 .map_err(BindingWrapperError::CapabilityBroker)?;
             authenticate_pinned_rustc(&pinned_rustc, capability_binding.rustc_executable_sha256())?;
             validate_rustc_lib_tree_descriptor(capability_binding)?;
-            let compiler_capabilities =
-                CompilerCapabilities::from_production_environment(capability_binding)?;
-            let current_dir =
-                std::env::current_dir().map_err(BindingWrapperError::CurrentDirectory)?;
-            let selected_kernel_root = selected_kernel_root(
-                build_config.as_ref().map(|config| {
-                    config.selects(compile.crate_name(), compile.source_path(), &current_dir)
-                }),
-                std::env::var_os(crate::CARGO_PRIMARY_PACKAGE_ENV).as_deref(),
-            )?;
-            let managed = if !selected_kernel_root {
+            let retain_source_isa_observer =
+                source_isa_selection
+                    .as_ref()
+                    .is_some_and(|(_, selected, binding)| {
+                        retain_source_isa_observer(*selected, *binding)
+                    });
+            let mut compiler_capabilities = if retain_source_isa_observer {
+                CompilerCapabilities::from_production_environment_with_source_isa_observer(
+                    capability_binding,
+                )?
+            } else {
+                CompilerCapabilities::from_production_environment(capability_binding)?
+            };
+            let (current_dir, selected_kernel_root, source_isa_binding) = match source_isa_selection
+            {
+                Some(selection) => selection,
+                None => {
+                    let current_dir =
+                        std::env::current_dir().map_err(BindingWrapperError::CurrentDirectory)?;
+                    let selected_kernel_root = selected_kernel_root(
+                        build_config.as_ref().map(|config| {
+                            config.selects(
+                                compile.crate_name(),
+                                compile.source_path(),
+                                &current_dir,
+                            )
+                        }),
+                        std::env::var_os(crate::CARGO_PRIMARY_PACKAGE_ENV).as_deref(),
+                    )?;
+                    (current_dir, selected_kernel_root, None)
+                }
+            };
+            let mut managed = if !selected_kernel_root {
                 None
             } else {
                 let build_config = build_config.ok_or_else(|| {
@@ -394,6 +448,30 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
                     &compiler_capabilities,
                 )?)
             };
+            let mut release_guard = managed.as_ref().map(ManagedAttemptRevocationGuard::arm);
+            let source_isa_observer = match (managed.as_ref(), source_isa_binding) {
+                (Some(managed), Some((config, unit))) => compiler_capabilities
+                    .release_invocation_with_source_isa_observer(config, unit, managed.attempt)
+                    .map(Some),
+                _ => Ok(None),
+            };
+            let source_isa_observer = match source_isa_observer {
+                Ok(observer) => observer,
+                Err(primary) => {
+                    return Err(pre_spawn_failure(release_guard.as_mut(), primary));
+                }
+            };
+            if let Some(guard) = release_guard.as_mut() {
+                guard.disarm();
+            }
+            if let (Some(managed), Some(observer)) = (&mut managed, source_isa_observer) {
+                managed.source_isa_observer = Some(SourceIsaObservationEmitterV1 {
+                    config: source_isa_binding.expect("V2 observer binding exists").0,
+                    unit: source_isa_binding.expect("V2 observer binding exists").1,
+                    attempt: managed.attempt,
+                    sink: Some(observer),
+                });
+            }
             scope_managed_rustc_arguments(&mut managed_rustc_args, managed.is_some());
             (
                 Some(build_observation),
@@ -1298,6 +1376,7 @@ struct CompilerCapabilities {
     compiler_closure: Option<fe2o3_compiler_closure_capability::CompilerClosureCapabilityV1>,
     compiler_execution_profile:
         Option<fe2o3_compiler_closure_capability::CompilerExecutionClientProfileCapabilityV1>,
+    invocation_authority: Option<capability_broker::BrokeredInvocationAuthorityV1>,
     output_dir: PathBuf,
 }
 
@@ -1346,25 +1425,74 @@ impl CompilerCapabilities {
         binding: capability_broker::CapabilityBindingV3,
     ) -> Result<Self, BindingWrapperError> {
         let mut transferred = receive_validated_compiler_capabilities(binding)?;
-        transferred
-            .invocation_authority
-            .take()
-            .ok_or_else(|| {
-                BindingWrapperError::CapabilityBroker(
-                    "capability broker omitted invocation authority".to_owned(),
-                )
-            })?
-            .release()
-            .map_err(BindingWrapperError::CapabilityBroker)?;
+        let invocation_authority = release_or_retain_invocation_authority(
+            transferred.invocation_authority.take(),
+            false,
+            capability_broker::BrokeredInvocationAuthorityV1::release,
+        )?;
+        Ok(Self::from_transferred(
+            binding,
+            transferred,
+            invocation_authority,
+        ))
+    }
+
+    fn from_production_environment_with_source_isa_observer(
+        binding: capability_broker::CapabilityBindingV3,
+    ) -> Result<Self, BindingWrapperError> {
+        let mut transferred = receive_validated_compiler_capabilities(binding)?;
+        let invocation_authority = release_or_retain_invocation_authority(
+            transferred.invocation_authority.take(),
+            true,
+            capability_broker::BrokeredInvocationAuthorityV1::release,
+        )?;
+        Ok(Self::from_transferred(
+            binding,
+            transferred,
+            invocation_authority,
+        ))
+    }
+
+    fn from_transferred(
+        binding: capability_broker::CapabilityBindingV3,
+        transferred: capability_broker::BrokeredCapabilities,
+        invocation_authority: Option<capability_broker::BrokeredInvocationAuthorityV1>,
+    ) -> Self {
         let output_dir = transferred.artifact.child_path();
-        Ok(Self {
+        Self {
             binding,
             backend: transferred.backend,
             artifact: transferred.artifact,
             compiler_closure: transferred.compiler_closure,
             compiler_execution_profile: transferred.compiler_execution_profile,
+            invocation_authority,
             output_dir,
+        }
+    }
+
+    fn take_invocation_authority(
+        &mut self,
+    ) -> Result<capability_broker::BrokeredInvocationAuthorityV1, BindingWrapperError> {
+        self.invocation_authority.take().ok_or_else(|| {
+            BindingWrapperError::CapabilityBroker(
+                "capability broker omitted or already consumed invocation authority".to_owned(),
+            )
         })
+    }
+
+    fn release_invocation_with_source_isa_observer(
+        &mut self,
+        config: [u8; 32],
+        unit: [u8; 32],
+        attempt: BuildAttempt,
+    ) -> Result<capability_broker::SourceIsaObservationSinkV1, BindingWrapperError> {
+        release_selected_source_isa_invocation_authority(
+            self.take_invocation_authority()?,
+            config,
+            unit,
+            attempt,
+            capability_broker::BrokeredInvocationAuthorityV1::release_with_source_isa_observer,
+        )
     }
 
     fn output_dir(&self) -> &Path {
@@ -1488,6 +1616,40 @@ impl CompilerCapabilities {
     }
 }
 
+fn release_or_retain_invocation_authority<Authority>(
+    authority: Option<Authority>,
+    retain_for_selected_source_isa_observer: bool,
+    release: impl FnOnce(Authority) -> Result<(), String>,
+) -> Result<Option<Authority>, BindingWrapperError> {
+    let authority = authority.ok_or_else(|| {
+        BindingWrapperError::CapabilityBroker(
+            "capability broker omitted invocation authority".to_owned(),
+        )
+    })?;
+    if retain_for_selected_source_isa_observer {
+        return Ok(Some(authority));
+    }
+    release(authority).map_err(BindingWrapperError::CapabilityBroker)?;
+    Ok(None)
+}
+
+fn retain_source_isa_observer(
+    selected_kernel_root: bool,
+    source_isa_binding: Option<([u8; 32], [u8; 32])>,
+) -> bool {
+    selected_kernel_root && source_isa_binding.is_some()
+}
+
+fn release_selected_source_isa_invocation_authority<Authority, Sink>(
+    authority: Authority,
+    config: [u8; 32],
+    unit: [u8; 32],
+    attempt: BuildAttempt,
+    release: impl FnOnce(Authority, [u8; 32], [u8; 32], BuildAttempt) -> Result<Sink, String>,
+) -> Result<Sink, BindingWrapperError> {
+    release(authority, config, unit, attempt).map_err(BindingWrapperError::CapabilityBroker)
+}
+
 fn scope_host_dependency_environment(command: &mut Command) {
     // Host-only dependencies use rustc's built-in LLVM backend. They are not a
     // device compilation route and receive no fe2o3 backend or artifact custody.
@@ -1525,6 +1687,7 @@ struct ManagedAttempt {
     producer: ProducerIdentity,
     attempt: BuildAttempt,
     compile_environment_profile: Option<BuildCompileEnvironmentProfileV1>,
+    source_isa_observer: Option<SourceIsaObservationEmitterV1>,
     production_build: ManagedProductionBuild,
 }
 
@@ -1532,14 +1695,118 @@ struct ManagedProductionAttempt {
     output_dir: PathBuf,
     producer: ProducerIdentity,
     attempt: BuildAttempt,
+    source_isa_observer: Option<SourceIsaObservationEmitterV1>,
 }
 
-impl From<&ManagedAttempt> for ManagedProductionAttempt {
-    fn from(managed: &ManagedAttempt) -> Self {
-        Self {
-            output_dir: managed.output_dir.clone(),
-            producer: managed.producer.clone(),
-            attempt: managed.attempt,
+struct SourceIsaObservationEmitterV1 {
+    config: [u8; 32],
+    unit: [u8; 32],
+    attempt: BuildAttempt,
+    sink: Option<capability_broker::SourceIsaObservationSinkV1>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+enum SourceIsaObservationEmissionTelemetryV1 {
+    AlreadyConsumed,
+    AttemptMismatch,
+    MappingFailed(String),
+    SubmissionFailed(String),
+    Submitted,
+}
+
+fn emit_source_isa_observation_once<Sink, MappingError, SubmissionError>(
+    sink: &mut Option<Sink>,
+    expected_attempt: BuildAttempt,
+    observed_attempt: BuildAttempt,
+    map: impl FnOnce()
+        -> Result<crate::source_isa_observation::SourceIsaObservationFrameV1, MappingError>,
+    submit: impl FnOnce(
+        Sink,
+        &crate::source_isa_observation::SourceIsaObservationFrameV1,
+    ) -> Result<(), SubmissionError>,
+) -> SourceIsaObservationEmissionTelemetryV1
+where
+    MappingError: fmt::Display,
+    SubmissionError: fmt::Display,
+{
+    let Some(sink) = sink.take() else {
+        return SourceIsaObservationEmissionTelemetryV1::AlreadyConsumed;
+    };
+    if observed_attempt != expected_attempt {
+        return SourceIsaObservationEmissionTelemetryV1::AttemptMismatch;
+    }
+    let frame = match map() {
+        Ok(frame) => frame,
+        Err(error) => {
+            return SourceIsaObservationEmissionTelemetryV1::MappingFailed(error.to_string());
+        }
+    };
+    match submit(sink, &frame) {
+        Ok(()) => SourceIsaObservationEmissionTelemetryV1::Submitted,
+        Err(error) => SourceIsaObservationEmissionTelemetryV1::SubmissionFailed(error.to_string()),
+    }
+}
+
+fn report_source_isa_observation_emission(status: SourceIsaObservationEmissionTelemetryV1) {
+    match status {
+        SourceIsaObservationEmissionTelemetryV1::AlreadyConsumed
+        | SourceIsaObservationEmissionTelemetryV1::Submitted => {}
+        SourceIsaObservationEmissionTelemetryV1::AttemptMismatch => {
+            crate::observer_telemetry::write_line(format_args!(
+                "[cargo-fe2o3] source/ISA observer skipped evidence with a different build attempt"
+            ));
+        }
+        SourceIsaObservationEmissionTelemetryV1::MappingFailed(error) => {
+            crate::observer_telemetry::write_line(format_args!(
+                "[cargo-fe2o3] source/ISA observer mapping failed: {error}"
+            ));
+        }
+        SourceIsaObservationEmissionTelemetryV1::SubmissionFailed(error) => {
+            crate::observer_telemetry::write_line(format_args!(
+                "[cargo-fe2o3] source/ISA observer submission failed: {error}"
+            ));
+        }
+    }
+}
+
+impl SourceIsaObservationEmitterV1 {
+    fn emit_finalized(
+        &mut self,
+        finalized: &fe2o3_hsaco_finalize::PreparedFinalizedProtectedWorkerV3HsacoV1,
+    ) {
+        report_source_isa_observation_emission(emit_source_isa_observation_once(
+            &mut self.sink,
+            self.attempt,
+            finalized.attempt(),
+            || finalized_source_isa_observation_frame_v1(self.config, self.unit, finalized),
+            capability_broker::SourceIsaObservationSinkV1::submit,
+        ));
+    }
+
+    fn emit_ready(&mut self, attempt: BuildAttempt, finalization: [u8; 32]) {
+        report_source_isa_observation_emission(emit_source_isa_observation_once(
+            &mut self.sink,
+            self.attempt,
+            attempt,
+            || ready_source_isa_observation_frame_v1(self.config, self.unit, attempt, finalization),
+            capability_broker::SourceIsaObservationSinkV1::submit,
+        ));
+    }
+}
+
+impl ManagedProductionAttempt {
+    fn emit_finalized_source_isa_observation(
+        &mut self,
+        finalized: &fe2o3_hsaco_finalize::PreparedFinalizedProtectedWorkerV3HsacoV1,
+    ) {
+        if let Some(observer) = self.source_isa_observer.as_mut() {
+            observer.emit_finalized(finalized);
+        }
+    }
+
+    fn emit_ready_source_isa_observation(&mut self, attempt: BuildAttempt, finalization: [u8; 32]) {
+        if let Some(observer) = self.source_isa_observer.as_mut() {
+            observer.emit_ready(attempt, finalization);
         }
     }
 }
@@ -1576,9 +1843,9 @@ impl Drop for ManagedAttemptRevocationGuard {
         if self.armed
             && let Err(error) = fail_build_attempt(&self.output_dir, &self.producer, self.attempt)
         {
-            eprintln!(
+            crate::observer_telemetry::write_line(format_args!(
                 "[cargo-fe2o3] failed to revoke managed build attempt after pre-spawn error: {error}"
-            );
+            ));
         }
     }
 }
@@ -1794,6 +2061,7 @@ fn prepare_production_managed_attempt(
         producer,
         attempt,
         compile_environment_profile,
+        source_isa_observer: None,
         production_build,
     };
     if let Some(guard) = begin_attempt_guard.as_mut() {
@@ -1878,17 +2146,30 @@ fn complete_managed_attempt_inner(
     parent_invocation: Option<&ParentRustcInvocationCustody>,
     execution_readiness: Option<&ParentCompilerExecutionReadinessCustodyV1>,
 ) -> Result<(), CompletionFailure> {
-    let transaction = ManagedProductionAttempt::from(&managed);
+    let ManagedAttempt {
+        output_dir,
+        producer,
+        attempt,
+        source_isa_observer,
+        production_build,
+        ..
+    } = managed;
+    let mut transaction = ManagedProductionAttempt {
+        output_dir,
+        producer,
+        attempt,
+        source_isa_observer,
+    };
     complete_managed_production_build(
-        &transaction,
-        managed.production_build,
+        &mut transaction,
+        production_build,
         parent_invocation,
         execution_readiness,
     )
 }
 
 fn complete_managed_production_build(
-    managed: &ManagedProductionAttempt,
+    managed: &mut ManagedProductionAttempt,
     build: ManagedProductionBuild,
     parent_invocation: Option<&ParentRustcInvocationCustody>,
     execution_readiness: Option<&ParentCompilerExecutionReadinessCustodyV1>,
@@ -1941,7 +2222,7 @@ fn complete_managed_production_build(
 }
 
 fn complete_fresh_production_artifact(
-    managed: &ManagedProductionAttempt,
+    managed: &mut ManagedProductionAttempt,
     worker: &PreparedProductionBuildConfig,
     compiler_closure: CompilerClosureV2,
     parent_invocation: &ParentRustcInvocationCustody,
@@ -1999,6 +2280,7 @@ fn complete_fresh_production_artifact(
             "strict V3 canonical HSACO finalization failed: {error}"
         ))
     })?;
+    managed.emit_finalized_source_isa_observation(&finalized);
     let prepared = prepare_protected_worker_v3_hsaco_publication_v1(&managed.producer, finalized)
         .map_err(|error| {
         CompletionFailure::Uncommitted(format!(
@@ -2019,11 +2301,12 @@ fn complete_fresh_production_artifact(
 }
 
 fn complete_recovered_production_artifact(
-    managed: &ManagedProductionAttempt,
+    managed: &mut ManagedProductionAttempt,
     recovered: RecoveredProtectedWorkerV3HsacoPublicationV1,
     compiler_closure: CompilerClosureV2,
     compiler_execution: CompilerExecutionReceiptCarriageV1,
 ) -> Result<(), CompletionFailure> {
+    managed.emit_finalized_source_isa_observation(recovered.finalized_evidence());
     let published = publish_recovered_protected_worker_v3_hsaco_v1(
         &managed.output_dir,
         &managed.producer,
@@ -2078,14 +2361,15 @@ fn complete_published_production_artifact(
 }
 
 fn complete_ready_production_artifact(
-    managed: &ManagedProductionAttempt,
+    managed: &mut ManagedProductionAttempt,
     envelope: RecoveredWorkerV3LoadEnvelopeV2,
 ) -> Result<(), CompletionFailure> {
-    let intent_identity = envelope
-        .wire()
-        .replay()
-        .publication_intent_record()
-        .identity();
+    let record = envelope.wire().replay().publication_intent_record();
+    let intent_identity = record.identity();
+    managed.emit_ready_source_isa_observation(
+        record.attempt(),
+        *record.plan().finalization().as_bytes(),
+    );
     match retire_worker_v3_publication_intent_after_load_readiness_v1(
         &managed.output_dir,
         &managed.producer,
@@ -2205,6 +2489,49 @@ pub(crate) fn exit_code(status: ExitStatus) -> u8 {
 #[cfg(test)]
 mod lifecycle_tests {
     use super::*;
+    use std::cell::Cell;
+    use std::fs;
+    use std::io;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_TEST_DIRECTORY: AtomicU64 = AtomicU64::new(0);
+
+    struct TestDirectory(PathBuf);
+
+    impl TestDirectory {
+        fn new() -> Self {
+            fe2o3_artifact_transaction::enable_same_mount_namespace_artifact_path_guard_v1();
+            loop {
+                let id = NEXT_TEST_DIRECTORY.fetch_add(1, Ordering::Relaxed);
+                let path = std::env::temp_dir().join(format!(
+                    "cargo-fe2o3-observer-lifecycle-{}-{id}",
+                    std::process::id()
+                ));
+                match fs::create_dir(&path) {
+                    Ok(()) => return Self(path),
+                    Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+                    Err(error) => panic!("failed to create observer lifecycle fixture: {error}"),
+                }
+            }
+        }
+    }
+
+    impl Drop for TestDirectory {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn attempt(discriminator: u8) -> BuildAttempt {
+        let mut session = [0; 16];
+        session[15] = discriminator;
+        BuildAttempt::from_env_value(&format!(
+            "7:{}:{}",
+            BuildSession::from_bytes(session),
+            BuildInvocation::from_bytes([discriminator; 32])
+        ))
+        .unwrap()
+    }
 
     #[test]
     fn spawned_rustc_cleanup_kills_and_reaps_the_child() {
@@ -2213,5 +2540,226 @@ mod lifecycle_tests {
         assert!(terminate_spawned_rustc(&mut child).is_none());
         assert!(started.elapsed() <= RUSTC_TERMINATION_REAP_TIMEOUT + Duration::from_secs(1));
         assert!(child.try_wait().unwrap().is_some());
+    }
+
+    #[test]
+    fn release_lifecycle_preserves_v1_and_nonselected_v2_ordering() {
+        let released = Cell::new(0);
+        let ordinary = release_or_retain_invocation_authority(Some(7_u8), false, |authority| {
+            assert_eq!(authority, 7);
+            released.set(released.get() + 1);
+            Ok(())
+        })
+        .unwrap();
+        assert!(ordinary.is_none());
+        assert_eq!(released.get(), 1);
+
+        let selection_after_release = || -> Result<(), BindingWrapperError> {
+            assert_eq!(released.get(), 1);
+            Err(BindingWrapperError::CurrentDirectory(io::Error::new(
+                io::ErrorKind::NotFound,
+                "injected cwd failure",
+            )))
+        };
+        assert!(selection_after_release().is_err());
+
+        assert!(!retain_source_isa_observer(
+            false,
+            Some(([0x11; 32], [0x12; 32]))
+        ));
+        let nonselected = release_or_retain_invocation_authority(Some(8_u8), false, |authority| {
+            assert_eq!(authority, 8);
+            released.set(released.get() + 1);
+            Ok(())
+        })
+        .unwrap();
+        assert!(nonselected.is_none());
+        assert_eq!(released.get(), 2);
+    }
+
+    #[test]
+    fn selected_v2_release_is_deferred_and_exact_attempt_bound() {
+        let expected_attempt = attempt(3);
+        let config = [0x21; 32];
+        let unit = [0x22; 32];
+        assert!(retain_source_isa_observer(true, Some((config, unit))));
+        let retained = release_or_retain_invocation_authority(
+            Some(9_u8),
+            true,
+            |_authority| -> Result<(), String> { panic!("selected V2 authority released early") },
+        )
+        .unwrap()
+        .unwrap();
+        let sink = release_selected_source_isa_invocation_authority(
+            retained,
+            config,
+            unit,
+            expected_attempt,
+            |authority, actual_config, actual_unit, actual_attempt| {
+                assert_eq!(authority, 9);
+                assert_eq!(actual_config, config);
+                assert_eq!(actual_unit, unit);
+                assert_eq!(actual_attempt, expected_attempt);
+                Ok::<_, String>("acknowledged sink")
+            },
+        )
+        .unwrap();
+        assert_eq!(sink, "acknowledged sink");
+    }
+
+    #[test]
+    fn selected_v2_release_failure_revokes_the_real_managed_attempt() {
+        let temp = TestDirectory::new();
+        let output = temp.0.join("output");
+        let producer = ProducerIdentity::from_codegen(
+            "observer_release_failure",
+            Some(Path::new("/workspace/src/lib.rs")),
+        )
+        .unwrap();
+        let session = BuildSession::from_bytes([0x31; 16]);
+        let invocation = BuildInvocation::from_bytes([0x32; 32]);
+        let attempt = begin_build_attempt(&output, &producer, invocation, session).unwrap();
+        let mut guard = ManagedAttemptRevocationGuard {
+            output_dir: output.clone(),
+            producer: producer.clone(),
+            attempt,
+            armed: true,
+        };
+        let release_failure = release_selected_source_isa_invocation_authority(
+            (),
+            [0x41; 32],
+            [0x42; 32],
+            attempt,
+            |_authority, _config, _unit, _attempt| -> Result<(), String> {
+                Err("injected V2 ACK failure".to_owned())
+            },
+        )
+        .unwrap_err();
+        let failure = pre_spawn_failure(Some(&mut guard), release_failure);
+        assert!(matches!(
+            failure,
+            BindingWrapperError::ManagedCompletion { .. }
+        ));
+        assert!(!guard.armed);
+        assert!(begin_build_attempt(&output, &producer, invocation, session).is_err());
+        assert!(fs::read_dir(&output).unwrap().all(|entry| {
+            entry
+                .unwrap()
+                .path()
+                .extension()
+                .is_none_or(|ext| ext != "hsaco")
+        }));
+    }
+
+    #[test]
+    fn observation_emission_is_one_shot_for_repeated_lifecycle_entries() {
+        let expected_attempt = attempt(4);
+        let map_calls = Cell::new(0);
+        let submit_calls = Cell::new(0);
+        let mut sink = Some(17_u8);
+        let first = emit_source_isa_observation_once(
+            &mut sink,
+            expected_attempt,
+            expected_attempt,
+            || {
+                map_calls.set(map_calls.get() + 1);
+                ready_source_isa_observation_frame_v1(
+                    [0x41; 32],
+                    [0x42; 32],
+                    expected_attempt,
+                    [0x43; 32],
+                )
+            },
+            |actual_sink, frame| {
+                assert_eq!(actual_sink, 17);
+                assert_eq!(frame.context().attempt(), expected_attempt);
+                assert_eq!(
+                    frame.outcome(),
+                    crate::source_isa_observation::SourceIsaObservationOutcomeV1::Unavailable(
+                        crate::source_isa_observation::SourceIsaObservationUnavailableReasonV1::FinalizedEvidenceUnavailableFromReadyState
+                    )
+                );
+                submit_calls.set(submit_calls.get() + 1);
+                Ok::<(), String>(())
+            },
+        );
+        assert_eq!(first, SourceIsaObservationEmissionTelemetryV1::Submitted);
+        let second = emit_source_isa_observation_once(
+            &mut sink,
+            expected_attempt,
+            expected_attempt,
+            || {
+                map_calls.set(map_calls.get() + 1);
+                ready_source_isa_observation_frame_v1(
+                    [0x41; 32],
+                    [0x42; 32],
+                    expected_attempt,
+                    [0x43; 32],
+                )
+            },
+            |_sink, _frame| {
+                submit_calls.set(submit_calls.get() + 1);
+                Ok::<(), String>(())
+            },
+        );
+        assert_eq!(
+            second,
+            SourceIsaObservationEmissionTelemetryV1::AlreadyConsumed
+        );
+        assert_eq!(map_calls.get(), 1);
+        assert_eq!(submit_calls.get(), 1);
+    }
+
+    #[test]
+    fn observation_emission_failures_are_nonfatal_and_still_consume_the_sink() {
+        let expected_attempt = attempt(5);
+
+        let mut mismatch_sink = Some(());
+        assert_eq!(
+            emit_source_isa_observation_once(
+                &mut mismatch_sink,
+                expected_attempt,
+                attempt(6),
+                || -> Result<_, String> { panic!("mismatched attempt must not map") },
+                |_sink, _frame| -> Result<(), String> {
+                    panic!("mismatched attempt must not submit")
+                },
+            ),
+            SourceIsaObservationEmissionTelemetryV1::AttemptMismatch
+        );
+        assert!(mismatch_sink.is_none());
+
+        let mut mapping_sink = Some(());
+        assert_eq!(
+            emit_source_isa_observation_once(
+                &mut mapping_sink,
+                expected_attempt,
+                expected_attempt,
+                || Err::<crate::source_isa_observation::SourceIsaObservationFrameV1, _>("map"),
+                |_sink, _frame| Ok::<(), String>(()),
+            ),
+            SourceIsaObservationEmissionTelemetryV1::MappingFailed("map".to_owned())
+        );
+        assert!(mapping_sink.is_none());
+
+        let mut submission_sink = Some(());
+        assert_eq!(
+            emit_source_isa_observation_once(
+                &mut submission_sink,
+                expected_attempt,
+                expected_attempt,
+                || {
+                    ready_source_isa_observation_frame_v1(
+                        [0x51; 32],
+                        [0x52; 32],
+                        expected_attempt,
+                        [0x53; 32],
+                    )
+                },
+                |_sink, _frame| Err::<(), _>("submit"),
+            ),
+            SourceIsaObservationEmissionTelemetryV1::SubmissionFailed("submit".to_owned())
+        );
+        assert!(submission_sink.is_none());
     }
 }

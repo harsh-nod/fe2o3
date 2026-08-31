@@ -19,6 +19,7 @@ mod generation;
 mod inert_rustc_invocation_capture;
 mod inspect;
 mod non_production_reproduction;
+mod observer_telemetry;
 #[allow(dead_code)]
 #[path = "rustc_wrapper/pinned_codegen_backend.rs"]
 mod pinned_codegen_backend;
@@ -68,6 +69,11 @@ const AUTHORITY_CARGO_BINDING_TRAMPOLINE_PATH_ENV: &str =
     "FE2O3_AUTHORITY_CARGO_BINDING_TRAMPOLINE_PATH_V1";
 const AUTHORITY_CARGO_BINDING_TRAMPOLINE_SHA256_ENV: &str =
     "FE2O3_AUTHORITY_CARGO_BINDING_TRAMPOLINE_SHA256_V1";
+const SOURCE_ISA_COLLECTION_STDERR_PREFIX_V1: &str =
+    "[cargo-fe2o3] source-isa-observation-collection-v1";
+const MAX_SOURCE_ISA_COLLECTION_STDERR_LINE_BYTES_V1: usize =
+    capability_broker::MAX_SOURCE_ISA_OBSERVATION_COLLECTION_HEX_BYTES_V1 + 256;
+const _: () = assert!(MAX_SOURCE_ISA_COLLECTION_STDERR_LINE_BYTES_V1 <= 2 * 1024 * 1024);
 const NON_PRODUCTION_AUTHORITY_VALIDATION_ENV: &str =
     "FE2O3_NON_PRODUCTION_UNPROTECTED_AUTHORITY_VALIDATION_V1";
 const INTERNAL_RUNNER_ARG: &str = "__fe2o3-runner-v1";
@@ -1248,7 +1254,7 @@ struct BackendRunContext {
     pinned_backend: pinned_codegen_backend::PinnedCodegenBackend,
     pinned_cargo: pinned_executable::PinnedExecutable,
     pinned_rustc: PinnedRustc,
-    _build_config: Option<build_config::PreparedProductionBuildConfig>,
+    build_config: Option<build_config::PreparedProductionBuildConfig>,
     build_config_identity: Option<build_config::BuildConfigIdentity>,
     compiler_closure_sha256: [u8; 32],
     protected_compiler_closure: Option<fe2o3_build_authority::CompilerClosureV2>,
@@ -1403,7 +1409,7 @@ impl BackendRunContext {
             pinned_backend,
             pinned_cargo,
             pinned_rustc,
-            _build_config: build_config,
+            build_config,
             build_config_identity,
             compiler_closure_sha256,
             protected_compiler_closure: protected_closure,
@@ -1509,6 +1515,14 @@ fn run_cargo_with_backend_inner(
     let config_identity = context
         .build_config_identity
         .map(|identity| *identity.as_bytes());
+    let source_isa_observer_policy = context
+        .build_config
+        .as_ref()
+        .map(build_config::PreparedProductionBuildConfig::source_isa_observer_policy)
+        .transpose()
+        .map_err(|error| format!("source/ISA observer policy setup failed: {error}"))?
+        .flatten();
+    let source_isa_observer_enabled = source_isa_observer_policy.is_some();
     let capability_broker = if let Some(compiler_closure) = context.protected_compiler_closure {
         let protected_release = protected_release.ok_or_else(|| {
             "protected compiler closure has no retained authority release".to_owned()
@@ -1525,16 +1539,35 @@ fn run_cargo_with_backend_inner(
             compiler_closure,
             retained_object_binding_sha256,
         )?;
-        capability_broker::CapabilityBroker::start_protected(
-            context.build_session,
-            binding,
-            compiler_closure,
-            protected_release.compiler_execution_profile_capability(),
-            &context.pinned_backend,
-            artifact_dir,
-            &context.pinned_cargo,
-        )?
+        match source_isa_observer_policy.as_ref() {
+            Some(policy) => {
+                capability_broker::CapabilityBroker::start_protected_with_source_isa_observer(
+                    context.build_session,
+                    binding,
+                    compiler_closure,
+                    protected_release.compiler_execution_profile_capability(),
+                    &context.pinned_backend,
+                    artifact_dir,
+                    &context.pinned_cargo,
+                    policy,
+                )?
+            }
+            None => capability_broker::CapabilityBroker::start_protected(
+                context.build_session,
+                binding,
+                compiler_closure,
+                protected_release.compiler_execution_profile_capability(),
+                &context.pinned_backend,
+                artifact_dir,
+                &context.pinned_cargo,
+            )?,
+        }
     } else {
+        if source_isa_observer_enabled {
+            return Err(
+                "source/ISA observation requires the protected compiler closure".to_owned(),
+            );
+        }
         let binding = capability_broker::CapabilityBindingV3::new(
             capability_profile,
             config_identity,
@@ -1550,7 +1583,9 @@ fn run_cargo_with_backend_inner(
             &context.pinned_cargo,
         )?
     };
-    let invocation_authorization = capability_broker.invocation_authorization();
+    let capability_broker =
+        CapabilityBrokerCompletionV1::new(capability_broker, source_isa_observer_enabled);
+    let invocation_authorization = capability_broker.broker().invocation_authorization();
     let pending_invocation_boundary =
         cargo_invocation_boundary::PendingCargoInvocationBoundary::start(
             &context.pinned_cargo,
@@ -1566,7 +1601,7 @@ fn run_cargo_with_backend_inner(
         .env_remove(HSACO_DIR_ENV)
         .env(
             capability_broker::CAPABILITY_BROKER_ENV,
-            capability_broker.route(),
+            capability_broker.broker().route(),
         )
         .env(TARGET_ENV, &context.target)
         .env("RUSTC_WRAPPER", "")
@@ -1614,10 +1649,7 @@ fn run_cargo_with_backend_inner(
         .env_remove(build_config::PRODUCTION_BUILD_EXPECTED_ID_ENV)
         .env_remove(build_config::PRODUCTION_BUILD_EXPECTED_ID_V2_ENV)
         .env_remove(build_config::WORKER_V2_EXPECTED_ID_ENV);
-    match (
-        context.build_config_identity,
-        context._build_config.as_ref(),
-    ) {
+    match (context.build_config_identity, context.build_config.as_ref()) {
         (Some(identity), Some(config)) => {
             cargo.as_command_mut().env(
                 config.expected_identity_environment_name(),
@@ -1643,7 +1675,7 @@ fn run_cargo_with_backend_inner(
                     .wait()
                     .map(|_| ())
                     .map_err(|cleanup| format!("failed to reap rejected Cargo child: {cleanup}"));
-                drop(capability_broker);
+                capability_broker.finish();
                 let lib_tree_result = context.pinned_rustc.revalidate_lib_tree();
                 let closure_result = context
                     .authorized_closure
@@ -1661,7 +1693,7 @@ fn run_cargo_with_backend_inner(
         };
     let status = cargo_child.wait();
     let boundary_result = invocation_boundary.finish();
-    drop(capability_broker);
+    capability_broker.finish();
     let lib_tree_result = context.pinned_rustc.revalidate_lib_tree();
     let closure_result = context
         .authorized_closure
@@ -1704,6 +1736,170 @@ fn run_cargo_with_backend_inner(
     }
     run_production_host_cargo(context, production_plan.host(), protected_release)?;
     Ok(())
+}
+
+struct CapabilityBrokerCompletionV1 {
+    broker: ObserverFinishOnDropV1<capability_broker::CapabilityBroker>,
+}
+
+impl CapabilityBrokerCompletionV1 {
+    fn new(broker: capability_broker::CapabilityBroker, observer_enabled: bool) -> Self {
+        Self {
+            broker: ObserverFinishOnDropV1::new(
+                broker,
+                observer_enabled,
+                finish_capability_broker_observations,
+            ),
+        }
+    }
+
+    fn broker(&self) -> &capability_broker::CapabilityBroker {
+        self.broker.get()
+    }
+
+    fn finish(self) {
+        self.broker.finish();
+    }
+}
+
+struct ObserverFinishOnDropV1<Value> {
+    value: Option<Value>,
+    observer_enabled: bool,
+    finish: fn(Value, bool),
+}
+
+impl<Value> ObserverFinishOnDropV1<Value> {
+    fn new(value: Value, observer_enabled: bool, finish: fn(Value, bool)) -> Self {
+        Self {
+            value: Some(value),
+            observer_enabled,
+            finish,
+        }
+    }
+
+    fn get(&self) -> &Value {
+        self.value
+            .as_ref()
+            .expect("observer completion value is live before completion")
+    }
+
+    fn finish(mut self) {
+        let value = self
+            .value
+            .take()
+            .expect("observer completion runs exactly once");
+        (self.finish)(value, self.observer_enabled);
+    }
+}
+
+impl<Value> Drop for ObserverFinishOnDropV1<Value> {
+    fn drop(&mut self) {
+        if let Some(value) = self.value.take() {
+            (self.finish)(value, self.observer_enabled);
+        }
+    }
+}
+
+fn finish_capability_broker_observations(
+    broker: capability_broker::CapabilityBroker,
+    observer_enabled: bool,
+) {
+    let stderr = std::io::stderr();
+    let mut stderr = stderr.lock();
+    finish_capability_broker_observations_to(broker, observer_enabled, &mut stderr);
+}
+
+fn finish_capability_broker_observations_to(
+    broker: capability_broker::CapabilityBroker,
+    observer_enabled: bool,
+    output: &mut (impl std::io::Write + ?Sized),
+) {
+    if !observer_enabled {
+        drop(broker);
+        return;
+    }
+    let collection = match broker.finish_source_isa_observations() {
+        Ok(collection) => collection,
+        Err(error) => {
+            let _ = observer_telemetry::write_line_to(
+                output,
+                format_args!("[cargo-fe2o3] source/ISA observer collection failed: {error}"),
+            );
+            return;
+        }
+    };
+    debug_assert!(!collection.grants_compiler_authority());
+    debug_assert!(!collection.grants_publication_authority());
+    debug_assert!(!collection.grants_runtime_authority());
+    match collection.encode_canonical() {
+        Ok(encoded) => {
+            let decoded =
+                match capability_broker::SourceIsaObservationCollectionV1::decode_canonical(
+                    &encoded,
+                ) {
+                    Ok(decoded) => decoded,
+                    Err(error) => {
+                        let _ = observer_telemetry::write_line_to(
+                            output,
+                            format_args!(
+                                "[cargo-fe2o3] source/ISA observer self-validation failed: {error}"
+                            ),
+                        );
+                        return;
+                    }
+                };
+            let frames = decoded.frames().len();
+            let missing = decoded.missing_units().len();
+            let failure = decoded.failure().map_or(0, |failure| failure.code());
+            match source_isa_collection_hex(&encoded) {
+                Ok(encoded) => {
+                    let _ = observer_telemetry::write_line_to(
+                        output,
+                        format_args!(
+                            "{SOURCE_ISA_COLLECTION_STDERR_PREFIX_V1} frames={frames} missing={missing} failure={failure} encoding=hex:{encoded} authority=observation-only"
+                        ),
+                    );
+                }
+                Err(error) => {
+                    let _ = observer_telemetry::write_line_to(
+                        output,
+                        format_args!(
+                            "[cargo-fe2o3] source/ISA observer hex encoding failed: {error}"
+                        ),
+                    );
+                }
+            }
+        }
+        Err(error) => {
+            let _ = observer_telemetry::write_line_to(
+                output,
+                format_args!("[cargo-fe2o3] source/ISA observer encoding failed: {error}"),
+            );
+        }
+    }
+}
+
+fn source_isa_collection_hex(bytes: &[u8]) -> Result<String, String> {
+    let encoded_len = source_isa_collection_hex_length(bytes.len())?;
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut encoded = String::new();
+    encoded
+        .try_reserve_exact(encoded_len)
+        .map_err(|_| "cannot allocate bounded source/ISA collection hex".to_owned())?;
+    for byte in bytes {
+        encoded.push(HEX[(byte >> 4) as usize] as char);
+        encoded.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    Ok(encoded)
+}
+
+fn source_isa_collection_hex_length(binary_len: usize) -> Result<usize, String> {
+    binary_len
+        .checked_mul(2)
+        .filter(|bytes| {
+            *bytes <= capability_broker::MAX_SOURCE_ISA_OBSERVATION_COLLECTION_HEX_BYTES_V1
+        })
+        .ok_or_else(|| "source/ISA collection hex exceeds its canonical bound".to_owned())
 }
 
 fn run_production_host_cargo(
@@ -3561,19 +3757,59 @@ fn print_help() {
 #[cfg(test)]
 mod tests {
     use super::{
-        BindingHostMode, TARGET_ENV, aggregate_post_spawn_results,
+        BindingHostMode, MAX_SOURCE_ISA_COLLECTION_STDERR_LINE_BYTES_V1, ObserverFinishOnDropV1,
+        TARGET_ENV, aggregate_post_spawn_results,
         append_compiler_execution_profile_semantic_configuration, binding_host_target_key,
         clear_cargo_unit_identity_names, configure_production_cargo_tool_environment,
         configure_production_target_environment, inject_binding_host_test_custody,
         is_cargo_target_runner_environment_name, normalize_invocation, parse_rocminfo_target,
         parse_rustup_tool_path, reject_authority_configured_environment,
         reject_authority_rustup_proxy, reject_binding_test_invocation_config,
-        reject_obsolete_codegen_pipeline, selected_run_target, validate_production_cargo_inputs,
+        reject_obsolete_codegen_pipeline, selected_run_target, source_isa_collection_hex,
+        source_isa_collection_hex_length, validate_production_cargo_inputs,
         validate_production_compilation_environment,
     };
     use crate::pinned_executable_test_directory::TestDirectory;
+    use crate::{capability_broker, observer_telemetry};
     use std::ffi::{OsStr, OsString};
+    use std::io::{self, Write};
     use std::process::Command;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static OBSERVER_FINISH_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+    struct FailingWriter {
+        bytes_before_failure: usize,
+        bytes_written: usize,
+    }
+
+    impl Write for FailingWriter {
+        fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+            if self.bytes_before_failure == 0 {
+                return Err(io::Error::new(io::ErrorKind::BrokenPipe, "injected"));
+            }
+            let written = self.bytes_before_failure.min(buffer.len());
+            self.bytes_before_failure -= written;
+            self.bytes_written += written;
+            Ok(written)
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Err(io::Error::new(io::ErrorKind::BrokenPipe, "injected"))
+        }
+    }
+
+    fn finish_with_failing_observer_writer(_value: u8, _observer_enabled: bool) {
+        OBSERVER_FINISH_CALLS.fetch_add(1, Ordering::SeqCst);
+        let mut writer = FailingWriter {
+            bytes_before_failure: 3,
+            bytes_written: 0,
+        };
+        let _ = observer_telemetry::write_line_to(
+            &mut writer,
+            format_args!("source-isa-observation-collection-v1"),
+        );
+    }
 
     fn command_environment<'command>(
         command: &'command Command,
@@ -4059,5 +4295,54 @@ Agent 2
             error,
             "boundary failed; runtime also failed: runtime changed"
         );
+    }
+
+    #[test]
+    fn source_isa_collection_hex_is_lowercase_bounded_and_fallible() {
+        assert_eq!(
+            source_isa_collection_hex(&[0x00, 0xab, 0xff]).unwrap(),
+            "00abff"
+        );
+        assert_eq!(
+            source_isa_collection_hex_length(
+                capability_broker::MAX_SOURCE_ISA_OBSERVATION_COLLECTION_HEX_BYTES_V1 / 2
+            ),
+            Ok(capability_broker::MAX_SOURCE_ISA_OBSERVATION_COLLECTION_HEX_BYTES_V1)
+        );
+        assert!(
+            source_isa_collection_hex_length(
+                capability_broker::MAX_SOURCE_ISA_OBSERVATION_COLLECTION_HEX_BYTES_V1 / 2 + 1
+            )
+            .is_err()
+        );
+        assert!(source_isa_collection_hex_length(usize::MAX).is_err());
+    }
+
+    #[test]
+    fn max_observer_line_and_raii_finish_ignore_zero_and_partial_writer_failures() {
+        let payload = "x".repeat(MAX_SOURCE_ISA_COLLECTION_STDERR_LINE_BYTES_V1 - 1);
+        for bytes_before_failure in [0, 31] {
+            let mut writer = FailingWriter {
+                bytes_before_failure,
+                bytes_written: 0,
+            };
+            assert!(
+                observer_telemetry::write_line_to(&mut writer, format_args!("{payload}")).is_err()
+            );
+            assert_eq!(writer.bytes_written, bytes_before_failure);
+        }
+
+        OBSERVER_FINISH_CALLS.store(0, Ordering::SeqCst);
+        let primary = std::panic::catch_unwind(|| {
+            let _completion =
+                ObserverFinishOnDropV1::new(1_u8, true, finish_with_failing_observer_writer);
+            Err::<(), _>("authoritative primary failure")
+        })
+        .expect("observer Drop must not panic");
+        assert_eq!(primary, Err("authoritative primary failure"));
+        assert_eq!(OBSERVER_FINISH_CALLS.load(Ordering::SeqCst), 1);
+
+        ObserverFinishOnDropV1::new(2_u8, true, finish_with_failing_observer_writer).finish();
+        assert_eq!(OBSERVER_FINISH_CALLS.load(Ordering::SeqCst), 2);
     }
 }

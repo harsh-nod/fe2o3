@@ -107,8 +107,25 @@ mod platform {
     const MAX_CONCURRENT_AUTHENTICATIONS: usize = 8;
     const MAX_SOURCE_ISA_OBSERVATION_UNITS_V1: usize = 1024;
     const MAX_SOURCE_ISA_OBSERVATION_AGGREGATE_BYTES_V1: usize = 4 * 1024 * 1024;
+    const SOURCE_ISA_COLLECTION_MAGIC_V1: &[u8; 8] = b"F2SICOL1";
+    const SOURCE_ISA_COLLECTION_VERSION_V1: u16 = 1;
+    const SOURCE_ISA_COLLECTION_HEADER_BYTES_V1: usize = 80;
+    const SOURCE_ISA_COLLECTION_IDENTITY_BYTES_V1: usize = 32;
+    const SOURCE_ISA_COLLECTION_IDENTITY_DOMAIN_V1: &[u8] =
+        b"FE2O3/SOURCE-ISA-OBSERVATION-COLLECTION/V1\0";
+    pub(crate) const MAX_SOURCE_ISA_OBSERVATION_COLLECTION_BYTES_V1: usize =
+        SOURCE_ISA_COLLECTION_HEADER_BYTES_V1
+            + MAX_SOURCE_ISA_OBSERVATION_UNITS_V1 * SOURCE_ISA_OBSERVATION_FRAME_BYTES_V1
+            + SOURCE_ISA_COLLECTION_IDENTITY_BYTES_V1;
+    pub(crate) const MAX_SOURCE_ISA_OBSERVATION_COLLECTION_HEX_BYTES_V1: usize =
+        MAX_SOURCE_ISA_OBSERVATION_COLLECTION_BYTES_V1 * 2;
+    const _: () = assert!(
+        MAX_SOURCE_ISA_OBSERVATION_COLLECTION_BYTES_V1
+            <= MAX_SOURCE_ISA_OBSERVATION_AGGREGATE_BYTES_V1
+    );
     const BROKERED_INVOCATION_REQUEST_MAGIC_V1: &[u8; 8] = b"F2BRKIV1";
     const BROKERED_INVOCATION_REQUEST_MAGIC_V2: &[u8; 8] = b"F2BRKIV2";
+    const BROKERED_SOURCE_ISA_PREPARED_V1: &[u8; 16] = b"F2SI-PREPARED-V1";
 
     #[derive(Clone, Copy)]
     struct BrokerLimits {
@@ -134,12 +151,19 @@ mod platform {
     #[derive(Clone)]
     struct BrokerSourceIsaObserverV1 {
         config_identity: [u8; 32],
+        session: BuildSession,
         selected_units: Vec<[u8; 32]>,
         collector: Arc<Mutex<SourceIsaObservationCollectorStateV1>>,
     }
 
     impl BrokerSourceIsaObserverV1 {
-        fn from_policy(policy: &ProductionSourceIsaObserverPolicyV1) -> Result<Self, String> {
+        fn from_policy(
+            policy: &ProductionSourceIsaObserverPolicyV1,
+            session: BuildSession,
+        ) -> Result<Self, String> {
+            if session == BuildSession::DIRECT {
+                return Err("source/ISA observer requires a managed build session".to_owned());
+            }
             let unit_count = policy.selected_units().len();
             if unit_count == 0 || unit_count > MAX_SOURCE_ISA_OBSERVATION_UNITS_V1 {
                 return Err(format!(
@@ -156,15 +180,20 @@ mod platform {
                     .iter()
                     .map(|identity| *identity.as_bytes()),
             );
-            if selected_units.iter().any(|identity| *identity == [0; 32])
+            if selected_units.contains(&[0; 32])
                 || selected_units.windows(2).any(|pair| pair[0] >= pair[1])
             {
                 return Err("source/ISA observer broker policy is not canonical".to_owned());
             }
-            let collector =
-                SourceIsaObservationCollectorStateV1::with_expected_units(&selected_units)?;
+            let config_identity = *policy.config_identity().as_bytes();
+            let collector = SourceIsaObservationCollectorStateV1::with_expected_context(
+                config_identity,
+                session,
+                &selected_units,
+            )?;
             Ok(Self {
-                config_identity: *policy.config_identity().as_bytes(),
+                config_identity,
+                session,
                 selected_units,
                 collector: Arc::new(Mutex::new(collector)),
             })
@@ -181,6 +210,7 @@ mod platform {
         fn collect(&self, frame: SourceIsaObservationFrameV1) -> io::Result<()> {
             let context = frame.context();
             if context.config() != self.config_identity
+                || context.attempt().session() != self.session
                 || self.selected_units.binary_search(&context.unit()).is_err()
             {
                 return Err(io::Error::new(
@@ -204,6 +234,8 @@ mod platform {
     }
 
     struct SourceIsaObservationCollectorStateV1 {
+        config_identity: [u8; 32],
+        session: BuildSession,
         frames: Vec<([u8; 32], SourceIsaObservationFrameV1)>,
         expected_units: Vec<[u8; 32]>,
         aggregate_bytes: usize,
@@ -211,7 +243,14 @@ mod platform {
     }
 
     impl SourceIsaObservationCollectorStateV1 {
-        fn with_expected_units(expected: &[[u8; 32]]) -> Result<Self, String> {
+        fn with_expected_context(
+            config_identity: [u8; 32],
+            session: BuildSession,
+            expected: &[[u8; 32]],
+        ) -> Result<Self, String> {
+            if config_identity == [0; 32] || session == BuildSession::DIRECT {
+                return Err("source/ISA collector requires exact nonzero context".to_owned());
+            }
             let mut frames = Vec::new();
             frames.try_reserve_exact(expected.len()).map_err(|_| {
                 "cannot allocate the bounded source/ISA observation collector".to_owned()
@@ -224,6 +263,8 @@ mod platform {
                 })?;
             expected_units.extend_from_slice(expected);
             Ok(Self {
+                config_identity,
+                session,
                 frames,
                 expected_units,
                 aggregate_bytes: 0,
@@ -235,12 +276,11 @@ mod platform {
             &mut self,
             frame: SourceIsaObservationFrameV1,
         ) -> Result<(), SourceIsaObservationTransportFailureV1> {
-            if self.failure.is_some() {
-                return Err(SourceIsaObservationTransportFailureV1::CollectorAlreadyFailed);
-            }
-            if self.frames.len() >= MAX_SOURCE_ISA_OBSERVATION_UNITS_V1 {
-                self.fail(SourceIsaObservationTransportFailureV1::UnitBound);
-                return Err(SourceIsaObservationTransportFailureV1::UnitBound);
+            if frame.context().config() != self.config_identity
+                || frame.context().attempt().session() != self.session
+            {
+                self.fail(SourceIsaObservationTransportFailureV1::RejectedFrame);
+                return Err(SourceIsaObservationTransportFailureV1::RejectedFrame);
             }
             let unit = frame.context().unit();
             let insertion = match self.frames.binary_search_by_key(&unit, |(unit, _)| *unit) {
@@ -251,6 +291,10 @@ mod platform {
                 }
                 Err(insertion) => insertion,
             };
+            if self.frames.len() >= MAX_SOURCE_ISA_OBSERVATION_UNITS_V1 {
+                self.fail(SourceIsaObservationTransportFailureV1::UnitBound);
+                return Err(SourceIsaObservationTransportFailureV1::UnitBound);
+            }
             let Some(aggregate_bytes) = self
                 .aggregate_bytes
                 .checked_add(SOURCE_ISA_OBSERVATION_FRAME_BYTES_V1)
@@ -278,6 +322,8 @@ mod platform {
                 self.failure = Some(SourceIsaObservationTransportFailureV1::MissingSelectedUnits);
             }
             SourceIsaObservationCollectionV1 {
+                config_identity: self.config_identity,
+                session: self.session,
                 frames: self.frames,
                 missing_units: self.expected_units,
                 failure: self.failure,
@@ -288,6 +334,7 @@ mod platform {
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     #[repr(u16)]
     pub(crate) enum SourceIsaObservationTransportFailureV1 {
+        #[allow(dead_code)] // Frozen B transport code; collectors now preserve later valid frames.
         CollectorAlreadyFailed = 1,
         UnitBound = 2,
         AggregateByteBound = 3,
@@ -313,15 +360,40 @@ mod platform {
         pub(crate) const fn code(self) -> u16 {
             self as u16
         }
+
+        fn from_code(code: u16) -> Result<Option<Self>, String> {
+            match code {
+                0 => Ok(None),
+                1 => Ok(Some(Self::CollectorAlreadyFailed)),
+                2 => Ok(Some(Self::UnitBound)),
+                3 => Ok(Some(Self::AggregateByteBound)),
+                4 => Ok(Some(Self::ConflictingDuplicate)),
+                5 => Ok(Some(Self::RejectedFrame)),
+                6 => Ok(Some(Self::MissingSelectedUnits)),
+                7 => Ok(Some(Self::BrokerWorkerPanic)),
+                _ => Err("source/ISA collection has an unknown failure code".to_owned()),
+            }
+        }
     }
 
+    #[derive(Clone, Debug, Eq, PartialEq)]
     pub(crate) struct SourceIsaObservationCollectionV1 {
+        config_identity: [u8; 32],
+        session: BuildSession,
         frames: Vec<([u8; 32], SourceIsaObservationFrameV1)>,
         missing_units: Vec<[u8; 32]>,
         failure: Option<SourceIsaObservationTransportFailureV1>,
     }
 
     impl SourceIsaObservationCollectionV1 {
+        pub(crate) const fn config_identity(&self) -> [u8; 32] {
+            self.config_identity
+        }
+
+        pub(crate) const fn session(&self) -> BuildSession {
+            self.session
+        }
+
         pub(crate) fn frames(&self) -> impl ExactSizeIterator<Item = &SourceIsaObservationFrameV1> {
             self.frames.iter().map(|(_, frame)| frame)
         }
@@ -333,6 +405,221 @@ mod platform {
         pub(crate) const fn failure(&self) -> Option<SourceIsaObservationTransportFailureV1> {
             self.failure
         }
+
+        pub(crate) fn encode_canonical(&self) -> Result<Vec<u8>, String> {
+            self.validate_canonical()?;
+            let total =
+                source_isa_collection_encoded_length(self.frames.len(), self.missing_units.len())?;
+            let total_u32 = u32::try_from(total)
+                .map_err(|_| "source/ISA collection length is not representable".to_owned())?;
+            let frame_count = u32::try_from(self.frames.len())
+                .map_err(|_| "source/ISA collection frame count is not representable".to_owned())?;
+            let missing_count = u32::try_from(self.missing_units.len()).map_err(|_| {
+                "source/ISA collection missing-unit count is not representable".to_owned()
+            })?;
+            let mut encoded = Vec::new();
+            encoded
+                .try_reserve_exact(total)
+                .map_err(|_| "cannot allocate bounded source/ISA collection bytes".to_owned())?;
+            encoded.extend_from_slice(SOURCE_ISA_COLLECTION_MAGIC_V1);
+            encoded.extend_from_slice(&SOURCE_ISA_COLLECTION_VERSION_V1.to_le_bytes());
+            encoded
+                .extend_from_slice(&(SOURCE_ISA_COLLECTION_HEADER_BYTES_V1 as u16).to_le_bytes());
+            encoded.extend_from_slice(&total_u32.to_le_bytes());
+            encoded.extend_from_slice(&frame_count.to_le_bytes());
+            encoded.extend_from_slice(&missing_count.to_le_bytes());
+            encoded.extend_from_slice(
+                &self
+                    .failure
+                    .map_or(0, |failure| failure.code())
+                    .to_le_bytes(),
+            );
+            encoded.extend_from_slice(&0_u16.to_le_bytes());
+            // Reserved truth claims are fixed at zero; the collection is inert telemetry.
+            encoded.extend_from_slice(&0_u32.to_le_bytes());
+            encoded.extend_from_slice(&self.config_identity());
+            encoded.extend_from_slice(self.session().as_bytes());
+            for (_, frame) in &self.frames {
+                encoded.extend_from_slice(&frame.encode());
+            }
+            for unit in &self.missing_units {
+                encoded.extend_from_slice(unit);
+            }
+            let mut digest = Sha256::new();
+            digest.update(SOURCE_ISA_COLLECTION_IDENTITY_DOMAIN_V1);
+            digest.update(&encoded);
+            encoded.extend_from_slice(&digest.finalize());
+            debug_assert_eq!(encoded.len(), total);
+            Ok(encoded)
+        }
+
+        pub(crate) fn decode_canonical(encoded: &[u8]) -> Result<Self, String> {
+            let minimum =
+                SOURCE_ISA_COLLECTION_HEADER_BYTES_V1 + SOURCE_ISA_COLLECTION_IDENTITY_BYTES_V1;
+            if encoded.len() < minimum
+                || encoded.len() > MAX_SOURCE_ISA_OBSERVATION_COLLECTION_BYTES_V1
+                || &encoded[..8] != SOURCE_ISA_COLLECTION_MAGIC_V1
+                || u16::from_le_bytes(
+                    encoded[8..10]
+                        .try_into()
+                        .expect("fixed collection version field"),
+                ) != SOURCE_ISA_COLLECTION_VERSION_V1
+                || usize::from(u16::from_le_bytes(
+                    encoded[10..12]
+                        .try_into()
+                        .expect("fixed collection header field"),
+                )) != SOURCE_ISA_COLLECTION_HEADER_BYTES_V1
+                || usize::try_from(u32::from_le_bytes(
+                    encoded[12..16]
+                        .try_into()
+                        .expect("fixed collection length field"),
+                ))
+                .ok()
+                    != Some(encoded.len())
+            {
+                return Err("source/ISA collection has malformed framing".to_owned());
+            }
+            let frame_count = usize::try_from(u32::from_le_bytes(
+                encoded[16..20]
+                    .try_into()
+                    .expect("fixed collection frame-count field"),
+            ))
+            .map_err(|_| "source/ISA collection frame count is not representable".to_owned())?;
+            let missing_count = usize::try_from(u32::from_le_bytes(
+                encoded[20..24]
+                    .try_into()
+                    .expect("fixed collection missing-count field"),
+            ))
+            .map_err(|_| "source/ISA collection missing count is not representable".to_owned())?;
+            let expected = source_isa_collection_encoded_length(frame_count, missing_count)?;
+            if expected != encoded.len() || encoded[26..32].iter().any(|byte| *byte != 0) {
+                return Err(
+                    "source/ISA collection has noncanonical bounds or truth claims".to_owned(),
+                );
+            }
+            let failure = SourceIsaObservationTransportFailureV1::from_code(u16::from_le_bytes(
+                encoded[24..26]
+                    .try_into()
+                    .expect("fixed collection failure field"),
+            ))?;
+            let config_identity: [u8; 32] = encoded[32..64]
+                .try_into()
+                .expect("fixed collection config field");
+            let session = BuildSession::from_bytes(
+                encoded[64..80]
+                    .try_into()
+                    .expect("fixed collection session field"),
+            );
+            let identity_start = encoded.len() - SOURCE_ISA_COLLECTION_IDENTITY_BYTES_V1;
+            let mut digest = Sha256::new();
+            digest.update(SOURCE_ISA_COLLECTION_IDENTITY_DOMAIN_V1);
+            digest.update(&encoded[..identity_start]);
+            let identity: [u8; 32] = digest.finalize().into();
+            let retained_identity: [u8; 32] = encoded[identity_start..]
+                .try_into()
+                .expect("fixed collection identity field");
+            if retained_identity == [0; 32] || identity != retained_identity {
+                return Err("source/ISA collection identity differs from its bytes".to_owned());
+            }
+
+            let mut frames = Vec::new();
+            frames
+                .try_reserve_exact(frame_count)
+                .map_err(|_| "cannot allocate decoded source/ISA frames".to_owned())?;
+            let mut cursor = SOURCE_ISA_COLLECTION_HEADER_BYTES_V1;
+            for _ in 0..frame_count {
+                let end = cursor + SOURCE_ISA_OBSERVATION_FRAME_BYTES_V1;
+                let frame = SourceIsaObservationFrameV1::decode(&encoded[cursor..end])
+                    .map_err(|error| format!("invalid source/ISA collection frame: {error}"))?;
+                frames.push((frame.context().unit(), frame));
+                cursor = end;
+            }
+            let mut missing_units = Vec::new();
+            missing_units
+                .try_reserve_exact(missing_count)
+                .map_err(|_| "cannot allocate decoded source/ISA missing units".to_owned())?;
+            for _ in 0..missing_count {
+                let end = cursor + 32;
+                missing_units.push(
+                    encoded[cursor..end]
+                        .try_into()
+                        .expect("bounded missing-unit field"),
+                );
+                cursor = end;
+            }
+            if cursor != identity_start {
+                return Err("source/ISA collection has trailing payload bytes".to_owned());
+            }
+            let collection = Self {
+                config_identity,
+                session,
+                frames,
+                missing_units,
+                failure,
+            };
+            collection.validate_canonical()?;
+            Ok(collection)
+        }
+
+        fn validate_canonical(&self) -> Result<(), String> {
+            if self.config_identity == [0; 32]
+                || self.session == BuildSession::DIRECT
+                || self.frames.windows(2).any(|pair| pair[0].0 >= pair[1].0)
+                || self.frames.iter().any(|(unit, frame)| {
+                    *unit != frame.context().unit()
+                        || frame.context().config() != self.config_identity
+                        || frame.context().attempt().session() != self.session
+                })
+                || self.missing_units.contains(&[0; 32])
+                || self.missing_units.windows(2).any(|pair| pair[0] >= pair[1])
+                || self.missing_units.iter().any(|unit| {
+                    self.frames
+                        .binary_search_by_key(unit, |(observed, _)| *observed)
+                        .is_ok()
+                })
+                || (!self.missing_units.is_empty() && self.failure.is_none())
+            {
+                return Err("source/ISA collection is not canonical".to_owned());
+            }
+            source_isa_collection_encoded_length(self.frames.len(), self.missing_units.len())?;
+            Ok(())
+        }
+
+        pub(crate) const fn grants_compiler_authority(&self) -> bool {
+            false
+        }
+
+        pub(crate) const fn grants_publication_authority(&self) -> bool {
+            false
+        }
+
+        pub(crate) const fn grants_runtime_authority(&self) -> bool {
+            false
+        }
+    }
+
+    fn source_isa_collection_encoded_length(
+        frame_count: usize,
+        missing_count: usize,
+    ) -> Result<usize, String> {
+        let unit_count = frame_count
+            .checked_add(missing_count)
+            .ok_or_else(|| "source/ISA collection unit count overflowed".to_owned())?;
+        if unit_count > MAX_SOURCE_ISA_OBSERVATION_UNITS_V1 {
+            return Err("source/ISA collection exceeds its unit bound".to_owned());
+        }
+        let frame_bytes = frame_count
+            .checked_mul(SOURCE_ISA_OBSERVATION_FRAME_BYTES_V1)
+            .ok_or_else(|| "source/ISA collection frame length overflowed".to_owned())?;
+        let missing_bytes = missing_count
+            .checked_mul(32)
+            .ok_or_else(|| "source/ISA collection missing-unit length overflowed".to_owned())?;
+        SOURCE_ISA_COLLECTION_HEADER_BYTES_V1
+            .checked_add(frame_bytes)
+            .and_then(|bytes| bytes.checked_add(missing_bytes))
+            .and_then(|bytes| bytes.checked_add(SOURCE_ISA_COLLECTION_IDENTITY_BYTES_V1))
+            .filter(|bytes| *bytes <= MAX_SOURCE_ISA_OBSERVATION_COLLECTION_BYTES_V1)
+            .ok_or_else(|| "source/ISA collection exceeds its canonical bound".to_owned())
     }
 
     impl<'profile> BrokerCompilerCapabilities<'profile> {
@@ -966,6 +1253,8 @@ mod platform {
             )
         }
 
+        // Keep each retained authority and observer policy explicit at this security boundary.
+        #[allow(clippy::too_many_arguments)]
         pub(crate) fn start_protected_with_source_isa_observer(
             session: BuildSession,
             binding: CapabilityBindingV3,
@@ -1008,6 +1297,8 @@ mod platform {
             )
         }
 
+        // Keep each retained authority, policy, and test-injected limit explicit.
+        #[allow(clippy::too_many_arguments)]
         fn start_with_compiler_capabilities(
             session: BuildSession,
             binding: CapabilityBindingV3,
@@ -1034,17 +1325,16 @@ mod platform {
                 );
             }
             let source_isa_observer = observer_policy
-                .map(BrokerSourceIsaObserverV1::from_policy)
+                .map(|policy| BrokerSourceIsaObserverV1::from_policy(policy, session))
                 .transpose()?;
-            if let Some(observer) = &source_isa_observer {
-                if !binding.requires_compiler_closure_v2()
-                    || binding.config_identity != Some(observer.config_identity)
-                {
-                    return Err(
-                        "source/ISA observer policy requires the exact protected V2 config binding"
-                            .to_owned(),
-                    );
-                }
+            if let Some(observer) = &source_isa_observer
+                && (!binding.requires_compiler_closure_v2()
+                    || binding.config_identity != Some(observer.config_identity))
+            {
+                return Err(
+                    "source/ISA observer policy requires the exact protected V2 config binding"
+                        .to_owned(),
+                );
             }
             let compiler_closure = compiler
                 .closure
@@ -1231,6 +1521,15 @@ mod platform {
             stream.write_all(&request.encode()).map_err(|error| {
                 format!("failed to write observer invocation capability: {error}")
             })?;
+            let mut response = [0; BROKERED_SOURCE_ISA_PREPARED_V1.len()];
+            stream.read_exact(&mut response).map_err(|error| {
+                format!("failed to read observer invocation preparation: {error}")
+            })?;
+            if &response != BROKERED_SOURCE_ISA_PREPARED_V1 {
+                return Err(
+                    "observer invocation capability returned a malformed response".to_owned(),
+                );
+            }
             Ok(SourceIsaObservationSinkV1 {
                 stream,
                 config_identity,
@@ -1616,18 +1915,7 @@ mod platform {
                 )
             })?;
             let result = (|| {
-                if !observer.accepts(request) {
-                    return Err(io::Error::new(
-                        io::ErrorKind::PermissionDenied,
-                        "source/ISA observer request is not bound to the exact configured unit",
-                    ));
-                }
-                if request.attempt().session() != self.session {
-                    return Err(io::Error::new(
-                        io::ErrorKind::PermissionDenied,
-                        "source/ISA observer request is not bound to this build session",
-                    ));
-                }
+                prepare_source_isa_observer_request(observer, self.session, stream, request)?;
                 let mut encoded = [0; SOURCE_ISA_OBSERVATION_FRAME_BYTES_V1];
                 liveness.read_frame(stream, &mut encoded)?;
                 liveness.require_eof(stream)?;
@@ -1641,6 +1929,30 @@ mod platform {
             }
             result
         }
+    }
+
+    fn prepare_source_isa_observer_request(
+        observer: &BrokerSourceIsaObserverV1,
+        broker_session: BuildSession,
+        stream: &UnixStream,
+        request: BrokeredInvocationCapabilityRequestV2,
+    ) -> io::Result<()> {
+        if !observer.accepts(request) {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "source/ISA observer request is not bound to the exact configured unit",
+            ));
+        }
+        if request.attempt().session() == BuildSession::DIRECT
+            || request.attempt().session() != broker_session
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "source/ISA observer request is not bound to this build session",
+            ));
+        }
+        let mut stream = stream;
+        stream.write_all(BROKERED_SOURCE_ISA_PREPARED_V1)
     }
 
     fn validate_source_isa_observer_frame_binding(
@@ -2078,11 +2390,11 @@ mod platform {
         }
 
         fn attempt(generation: u64, session: [u8; 16], invocation: [u8; 32]) -> BuildAttempt {
-            BuildAttempt::new(
-                generation,
+            BuildAttempt::from_env_value(&format!(
+                "{generation}:{}:{}",
                 BuildSession::from_bytes(session),
-                BuildInvocation::from_bytes(invocation),
-            )
+                BuildInvocation::from_bytes(invocation)
+            ))
             .unwrap()
         }
 
@@ -2108,6 +2420,24 @@ mod platform {
                 attempt(3, [0x31; 16], [0x32; 32]),
                 outcome,
             )
+        }
+
+        fn collector(units: &[[u8; 32]]) -> SourceIsaObservationCollectorStateV1 {
+            SourceIsaObservationCollectorStateV1::with_expected_context(
+                [0x30; 32],
+                BuildSession::from_bytes([0x31; 16]),
+                units,
+            )
+            .unwrap()
+        }
+
+        fn observer(units: &[[u8; 32]]) -> BrokerSourceIsaObserverV1 {
+            BrokerSourceIsaObserverV1 {
+                config_identity: [0x30; 32],
+                session: BuildSession::from_bytes([0x31; 16]),
+                selected_units: units.to_vec(),
+                collector: Arc::new(Mutex::new(collector(units))),
+            }
         }
 
         #[test]
@@ -2157,6 +2487,52 @@ mod platform {
         }
 
         #[test]
+        fn v1_release_waits_for_the_frozen_prepared_ack_and_rejects_substitution() {
+            let (client, mut server) = UnixStream::pair().unwrap();
+            let (result_sender, result_receiver) = std::sync::mpsc::channel();
+            let worker = std::thread::spawn(move || {
+                result_sender
+                    .send(BrokeredInvocationAuthorityV1 { stream: client }.release())
+                    .unwrap();
+            });
+            let mut request = [0; BROKERED_INVOCATION_REQUEST_BYTES_V1];
+            server.read_exact(&mut request).unwrap();
+            assert_eq!(
+                BrokeredInvocationCapabilityRequestV1::decode(&request),
+                Ok(BrokeredInvocationCapabilityRequestV1::Release)
+            );
+            assert!(matches!(
+                result_receiver.recv_timeout(Duration::from_millis(25)),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+            ));
+            server.write_all(BROKERED_INVOCATION_PREPARED_V1).unwrap();
+            assert!(
+                result_receiver
+                    .recv_timeout(Duration::from_secs(1))
+                    .unwrap()
+                    .is_ok()
+            );
+            worker.join().unwrap();
+
+            for response in [Some([0xa5; 16]), None] {
+                let (client, mut server) = UnixStream::pair().unwrap();
+                let worker = std::thread::spawn(move || {
+                    let mut request = [0; BROKERED_INVOCATION_REQUEST_BYTES_V1];
+                    server.read_exact(&mut request).unwrap();
+                    if let Some(response) = response {
+                        server.write_all(&response).unwrap();
+                    }
+                });
+                assert!(
+                    BrokeredInvocationAuthorityV1 { stream: client }
+                        .release()
+                        .is_err()
+                );
+                worker.join().unwrap();
+            }
+        }
+
+        #[test]
         fn observer_frame_requires_exact_request_config_unit_and_attempt() {
             let broker_session = BuildSession::from_bytes([0x31; 16]);
             let exact_attempt = attempt(3, [0x31; 16], [0x32; 32]);
@@ -2167,14 +2543,7 @@ mod platform {
             )
             .unwrap();
             let selected_units = vec![[0x40; 32], [0x41; 32]];
-            let observer = BrokerSourceIsaObserverV1 {
-                config_identity: [0x30; 32],
-                selected_units: selected_units.clone(),
-                collector: Arc::new(Mutex::new(
-                    SourceIsaObservationCollectorStateV1::with_expected_units(&selected_units)
-                        .unwrap(),
-                )),
-            };
+            let observer = observer(&selected_units);
             assert!(observer.accepts(request));
             assert!(
                 observer.accepts(
@@ -2262,10 +2631,111 @@ mod platform {
         }
 
         #[test]
+        fn observer_sink_is_returned_only_after_exact_server_preparation() {
+            fn release(
+                observer: BrokerSourceIsaObserverV1,
+                config: [u8; 32],
+                unit: [u8; 32],
+                request_attempt: BuildAttempt,
+            ) -> Result<SourceIsaObservationSinkV1, String> {
+                let (client, server) = UnixStream::pair().unwrap();
+                let worker = std::thread::spawn(move || {
+                    let BrokerInvocationRequest::V2(request) =
+                        read_invocation_request(liveness(), &server).unwrap()
+                    else {
+                        panic!("expected V2 observer request");
+                    };
+                    prepare_source_isa_observer_request(
+                        &observer,
+                        BuildSession::from_bytes([0x31; 16]),
+                        &server,
+                        request,
+                    )
+                });
+                let result = BrokeredInvocationAuthorityV1 { stream: client }
+                    .release_with_source_isa_observer(config, unit, request_attempt);
+                let server_result = worker.join().unwrap();
+                assert_eq!(result.is_ok(), server_result.is_ok());
+                result
+            }
+
+            let units = [[0x40; 32], [0x41; 32]];
+            let exact_attempt = attempt(3, [0x31; 16], [0x32; 32]);
+
+            let (client, mut server) = UnixStream::pair().unwrap();
+            let (result_sender, result_receiver) = std::sync::mpsc::channel();
+            let worker = std::thread::spawn(move || {
+                let result = BrokeredInvocationAuthorityV1 { stream: client }
+                    .release_with_source_isa_observer([0x30; 32], [0x40; 32], exact_attempt)
+                    .map(drop);
+                result_sender.send(result).unwrap();
+            });
+            let mut request = [0; BROKERED_INVOCATION_REQUEST_BYTES_V2];
+            server.read_exact(&mut request).unwrap();
+            assert!(BrokeredInvocationCapabilityRequestV2::decode(&request).is_ok());
+            assert!(matches!(
+                result_receiver.recv_timeout(Duration::from_millis(25)),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+            ));
+            server.write_all(BROKERED_SOURCE_ISA_PREPARED_V1).unwrap();
+            assert!(
+                result_receiver
+                    .recv_timeout(Duration::from_secs(1))
+                    .unwrap()
+                    .is_ok()
+            );
+            worker.join().unwrap();
+
+            assert!(release(observer(&units), [0x30; 32], units[0], exact_attempt).is_ok());
+            assert!(release(observer(&units), [0x35; 32], units[0], exact_attempt).is_err());
+            assert!(release(observer(&units), [0x30; 32], [0x45; 32], exact_attempt).is_err());
+            assert!(
+                release(
+                    observer(&units),
+                    [0x30; 32],
+                    units[0],
+                    attempt(3, [0x37; 16], [0x32; 32]),
+                )
+                .is_err()
+            );
+
+            let (client, mut server) = UnixStream::pair().unwrap();
+            let worker = std::thread::spawn(move || {
+                let mut request = [0; BROKERED_INVOCATION_REQUEST_BYTES_V2];
+                server.read_exact(&mut request).unwrap();
+                server.write_all(&[0xa5; 16]).unwrap();
+            });
+            assert!(
+                BrokeredInvocationAuthorityV1 { stream: client }
+                    .release_with_source_isa_observer([0x30; 32], units[0], exact_attempt,)
+                    .is_err()
+            );
+            worker.join().unwrap();
+
+            let mut direct =
+                BrokeredInvocationCapabilityRequestV2::release_with_source_isa_observer(
+                    [0x30; 32],
+                    units[0],
+                    exact_attempt,
+                )
+                .unwrap()
+                .encode();
+            direct[88..136].fill(0);
+            assert!(read_request(&direct).is_err());
+            assert!(
+                BrokeredInvocationCapabilityRequestV2::release_with_source_isa_observer(
+                    [0x30; 32],
+                    units[0],
+                    attempt(3, [0; 16], [0; 32]),
+                )
+                .is_err()
+            );
+        }
+
+        #[test]
         fn collector_deduplicates_exact_recovery_and_preserves_partial_failure() {
             let units = [[0x40; 32], [0x41; 32]];
-            let mut collector =
-                SourceIsaObservationCollectorStateV1::with_expected_units(&units).unwrap();
+            let mut collector = collector(&units);
             let accepted = frame(
                 units[0],
                 SourceIsaObservationOutcomeV1::Unavailable(
@@ -2274,6 +2744,7 @@ mod platform {
             );
             assert!(collector.insert(accepted.clone()).is_ok());
             assert!(collector.insert(accepted).is_ok());
+            collector.fail(SourceIsaObservationTransportFailureV1::RejectedFrame);
             let conflicting = frame(
                 units[0],
                 SourceIsaObservationOutcomeV1::Error(
@@ -2284,20 +2755,84 @@ mod platform {
                 collector.insert(conflicting),
                 Err(SourceIsaObservationTransportFailureV1::ConflictingDuplicate)
             );
+            collector
+                .insert(frame(
+                    units[1],
+                    SourceIsaObservationOutcomeV1::Unavailable(
+                        SourceIsaObservationUnavailableReasonV1::AnchorNoOperations,
+                    ),
+                ))
+                .unwrap();
+            collector.fail(SourceIsaObservationTransportFailureV1::AggregateByteBound);
             let collection = collector.finish();
-            assert_eq!(collection.frames().len(), 1);
-            assert_eq!(collection.missing_units(), &[units[1]]);
+            assert_eq!(collection.frames().len(), 2);
+            assert!(collection.missing_units().is_empty());
             assert_eq!(
                 collection.failure(),
-                Some(SourceIsaObservationTransportFailureV1::ConflictingDuplicate)
+                Some(SourceIsaObservationTransportFailureV1::RejectedFrame)
             );
+            let encoded = collection.encode_canonical().unwrap();
+            assert_eq!(&encoded[..8], SOURCE_ISA_COLLECTION_MAGIC_V1);
+            assert_eq!(&encoded[32..64], &[0x30; 32]);
+            assert_eq!(&encoded[64..80], &[0x31; 16]);
+            assert_eq!(u32::from_le_bytes(encoded[16..20].try_into().unwrap()), 2);
+            assert_eq!(
+                u16::from_le_bytes(encoded[24..26].try_into().unwrap()),
+                SourceIsaObservationTransportFailureV1::RejectedFrame.code()
+            );
+            assert!(!collection.grants_compiler_authority());
+            assert!(!collection.grants_publication_authority());
+            assert!(!collection.grants_runtime_authority());
+            assert_eq!(
+                SourceIsaObservationCollectionV1::decode_canonical(&encoded),
+                Ok(collection)
+            );
+        }
+
+        #[test]
+        fn collector_deduplicates_exact_recovery_at_the_unit_bound() {
+            let units = (0..MAX_SOURCE_ISA_OBSERVATION_UNITS_V1)
+                .map(|index| {
+                    let mut unit = [0x40; 32];
+                    unit[..8].copy_from_slice(&(index as u64).to_le_bytes());
+                    unit
+                })
+                .collect::<Vec<_>>();
+            let mut collector = collector(&units);
+            for &unit in &units {
+                collector
+                    .insert(frame(
+                        unit,
+                        SourceIsaObservationOutcomeV1::Unavailable(
+                            SourceIsaObservationUnavailableReasonV1::AnchorNoOperations,
+                        ),
+                    ))
+                    .unwrap();
+            }
+
+            assert!(
+                collector
+                    .insert(frame(
+                        units[MAX_SOURCE_ISA_OBSERVATION_UNITS_V1 - 1],
+                        SourceIsaObservationOutcomeV1::Unavailable(
+                            SourceIsaObservationUnavailableReasonV1::AnchorNoOperations,
+                        ),
+                    ))
+                    .is_ok()
+            );
+            let collection = collector.finish();
+            assert_eq!(
+                collection.frames().len(),
+                MAX_SOURCE_ISA_OBSERVATION_UNITS_V1
+            );
+            assert!(collection.missing_units().is_empty());
+            assert_eq!(collection.failure(), None);
         }
 
         #[test]
         fn collector_reports_missing_selected_units_without_discarding_frames() {
             let units = [[0x40; 32], [0x41; 32]];
-            let mut collector =
-                SourceIsaObservationCollectorStateV1::with_expected_units(&units).unwrap();
+            let mut collector = collector(&units);
             collector
                 .insert(frame(
                     units[1],
@@ -2313,6 +2848,136 @@ mod platform {
                 collection.failure(),
                 Some(SourceIsaObservationTransportFailureV1::MissingSelectedUnits)
             );
+        }
+
+        #[test]
+        fn all_missing_collection_retains_exact_config_and_session() {
+            let collection = collector(&[[0x40; 32], [0x41; 32]]).finish();
+            assert_eq!(collection.config_identity(), [0x30; 32]);
+            assert_eq!(collection.session(), BuildSession::from_bytes([0x31; 16]));
+            assert_eq!(collection.frames().len(), 0);
+            assert_eq!(collection.missing_units(), &[[0x40; 32], [0x41; 32]]);
+            assert_eq!(
+                SourceIsaObservationCollectionV1::decode_canonical(
+                    &collection.encode_canonical().unwrap()
+                ),
+                Ok(collection)
+            );
+        }
+
+        #[test]
+        fn canonical_collection_length_is_bounded_and_fallible() {
+            assert_eq!(
+                source_isa_collection_encoded_length(MAX_SOURCE_ISA_OBSERVATION_UNITS_V1, 0,),
+                Ok(MAX_SOURCE_ISA_OBSERVATION_COLLECTION_BYTES_V1)
+            );
+            assert_eq!(MAX_SOURCE_ISA_OBSERVATION_COLLECTION_BYTES_V1, 696_432);
+            assert!(
+                source_isa_collection_encoded_length(MAX_SOURCE_ISA_OBSERVATION_UNITS_V1, 1,)
+                    .is_err()
+            );
+            assert!(
+                source_isa_collection_encoded_length(MAX_SOURCE_ISA_OBSERVATION_UNITS_V1 + 1, 0,)
+                    .is_err()
+            );
+            assert!(source_isa_collection_encoded_length(usize::MAX, usize::MAX).is_err());
+            assert_eq!(
+                MAX_SOURCE_ISA_OBSERVATION_COLLECTION_HEX_BYTES_V1,
+                MAX_SOURCE_ISA_OBSERVATION_COLLECTION_BYTES_V1 * 2
+            );
+            assert_eq!(
+                MAX_SOURCE_ISA_OBSERVATION_COLLECTION_HEX_BYTES_V1,
+                1_392_864
+            );
+        }
+
+        #[test]
+        fn canonical_collection_decoder_rejects_hostile_framing_and_payloads() {
+            fn rehash(encoded: &mut [u8]) {
+                let identity_start = encoded.len() - SOURCE_ISA_COLLECTION_IDENTITY_BYTES_V1;
+                let mut digest = Sha256::new();
+                digest.update(SOURCE_ISA_COLLECTION_IDENTITY_DOMAIN_V1);
+                digest.update(&encoded[..identity_start]);
+                encoded[identity_start..].copy_from_slice(&digest.finalize());
+            }
+
+            let units = [[0x40; 32], [0x41; 32]];
+            let mut collector = collector(&units);
+            collector
+                .insert(frame(
+                    units[0],
+                    SourceIsaObservationOutcomeV1::Unavailable(
+                        SourceIsaObservationUnavailableReasonV1::AnchorNoOperations,
+                    ),
+                ))
+                .unwrap();
+            let encoded = collector.finish().encode_canonical().unwrap();
+
+            let mut truncated = encoded.clone();
+            truncated.pop();
+            assert!(SourceIsaObservationCollectionV1::decode_canonical(&truncated).is_err());
+            let mut trailing = encoded.clone();
+            trailing.push(0);
+            assert!(SourceIsaObservationCollectionV1::decode_canonical(&trailing).is_err());
+            let oversized = vec![0; MAX_SOURCE_ISA_OBSERVATION_COLLECTION_BYTES_V1 + 1];
+            assert!(SourceIsaObservationCollectionV1::decode_canonical(&oversized).is_err());
+
+            let mut over_combined_count = encoded.clone();
+            over_combined_count[16..20]
+                .copy_from_slice(&(MAX_SOURCE_ISA_OBSERVATION_UNITS_V1 as u32).to_le_bytes());
+            over_combined_count[20..24].copy_from_slice(&1_u32.to_le_bytes());
+            rehash(&mut over_combined_count);
+            assert!(
+                SourceIsaObservationCollectionV1::decode_canonical(&over_combined_count).is_err()
+            );
+
+            for substituted in [
+                frame_with_context(
+                    [0x35; 32],
+                    units[0],
+                    attempt(3, [0x31; 16], [0x32; 32]),
+                    SourceIsaObservationOutcomeV1::Unavailable(
+                        SourceIsaObservationUnavailableReasonV1::AnchorNoOperations,
+                    ),
+                ),
+                frame_with_context(
+                    [0x30; 32],
+                    units[0],
+                    attempt(3, [0x36; 16], [0x32; 32]),
+                    SourceIsaObservationOutcomeV1::Unavailable(
+                        SourceIsaObservationUnavailableReasonV1::AnchorNoOperations,
+                    ),
+                ),
+            ] {
+                let mut mixed_context = encoded.clone();
+                mixed_context[SOURCE_ISA_COLLECTION_HEADER_BYTES_V1
+                    ..SOURCE_ISA_COLLECTION_HEADER_BYTES_V1
+                        + SOURCE_ISA_OBSERVATION_FRAME_BYTES_V1]
+                    .copy_from_slice(&substituted.encode());
+                rehash(&mut mixed_context);
+                assert!(
+                    SourceIsaObservationCollectionV1::decode_canonical(&mixed_context).is_err()
+                );
+            }
+
+            for offset in [0, 8, 12, 16, 20, 24, 28, 32, 64, 80, encoded.len() - 1] {
+                let mut changed = encoded.clone();
+                changed[offset] ^= 1;
+                assert!(
+                    SourceIsaObservationCollectionV1::decode_canonical(&changed).is_err(),
+                    "hostile byte {offset} was accepted"
+                );
+            }
+
+            let mut unknown_failure = encoded.clone();
+            unknown_failure[24..26].copy_from_slice(&99_u16.to_le_bytes());
+            rehash(&mut unknown_failure);
+            assert!(SourceIsaObservationCollectionV1::decode_canonical(&unknown_failure).is_err());
+
+            let mut nonzero_truth = encoded;
+            nonzero_truth[28] = 1;
+            rehash(&mut nonzero_truth);
+            assert!(SourceIsaObservationCollectionV1::decode_canonical(&nonzero_truth).is_err());
         }
     }
 }
@@ -2339,6 +3004,7 @@ mod unsupported {
     };
 
     pub(crate) const CAPABILITY_BROKER_ENV: &str = "FE2O3_CAPABILITY_BROKER_V1";
+    pub(crate) const MAX_SOURCE_ISA_OBSERVATION_COLLECTION_HEX_BYTES_V1: usize = 1_392_864;
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     pub(crate) enum CapabilityProfileV1 {
@@ -2480,6 +3146,7 @@ mod unsupported {
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     #[repr(u16)]
     pub(crate) enum SourceIsaObservationTransportFailureV1 {
+        #[allow(dead_code)]
         CollectorAlreadyFailed = 1,
         UnitBound = 2,
         AggregateByteBound = 3,
@@ -2508,12 +3175,26 @@ mod unsupported {
     }
 
     pub(crate) struct SourceIsaObservationCollectionV1 {
+        config_identity: [u8; 32],
+        session: BuildSession,
         frames: Vec<SourceIsaObservationFrameV1>,
         missing_units: Vec<[u8; 32]>,
         failure: Option<SourceIsaObservationTransportFailureV1>,
     }
 
     impl SourceIsaObservationCollectionV1 {
+        // Kept API-parallel with Linux collection decoding.
+        #[allow(dead_code)]
+        pub(crate) const fn config_identity(&self) -> [u8; 32] {
+            self.config_identity
+        }
+
+        // Kept API-parallel with Linux collection decoding.
+        #[allow(dead_code)]
+        pub(crate) const fn session(&self) -> BuildSession {
+            self.session
+        }
+
         pub(crate) fn frames(&self) -> impl ExactSizeIterator<Item = &SourceIsaObservationFrameV1> {
             self.frames.iter()
         }
@@ -2524,6 +3205,26 @@ mod unsupported {
 
         pub(crate) const fn failure(&self) -> Option<SourceIsaObservationTransportFailureV1> {
             self.failure
+        }
+
+        pub(crate) fn encode_canonical(&self) -> Result<Vec<u8>, String> {
+            Err("Cargo capability transport requires Linux".to_owned())
+        }
+
+        pub(crate) fn decode_canonical(_encoded: &[u8]) -> Result<Self, String> {
+            Err("Cargo capability transport requires Linux".to_owned())
+        }
+
+        pub(crate) const fn grants_compiler_authority(&self) -> bool {
+            false
+        }
+
+        pub(crate) const fn grants_publication_authority(&self) -> bool {
+            false
+        }
+
+        pub(crate) const fn grants_runtime_authority(&self) -> bool {
+            false
         }
     }
 

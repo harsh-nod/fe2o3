@@ -134,7 +134,8 @@ fn production_managed_transaction_has_no_qualification_dispatch() {
         .expect("production build completion follows transaction dispatch");
     assert!(!completion.contains("finish_build_attempt"));
     assert!(!completion.contains("qualification_work"));
-    assert!(completion.contains("managed.production_build"));
+    assert!(completion.contains("production_build"));
+    assert!(completion.contains("source_isa_observer"));
     assert!(!completion.contains("production_build.take()"));
     assert!(completion.contains("complete_managed_production_build"));
 
@@ -151,7 +152,7 @@ fn production_managed_transaction_has_no_qualification_dispatch() {
 }
 
 #[test]
-fn production_capability_intake_releases_oracle_authority_immediately() {
+fn production_capability_release_preserves_v1_and_defers_only_selected_v2() {
     let source = include_str!("../src/binding_wrapper.rs");
     let broker = include_str!("../src/capability_broker.rs");
     let intake = source
@@ -161,11 +162,22 @@ fn production_capability_intake_releases_oracle_authority_immediately() {
         .split("fn output_dir(&self)")
         .next()
         .expect("production capability API follows capability intake");
-    assert!(intake.contains(".invocation_authority"));
-    assert!(intake.contains(".release()"));
+    assert!(intake.contains("release_or_retain_invocation_authority"));
+    assert!(intake.contains("false"));
+    assert!(intake.contains("from_production_environment_with_source_isa_observer"));
     assert!(!intake.contains("ROW_SOFTMAX"));
     assert!(!intake.contains("FE2O3_QUALIFICATION"));
-    assert!(!intake.contains("Some(invocation_authority)"));
+    let selection = source
+        .split("let source_isa_selection =")
+        .nth(1)
+        .expect("source/ISA unit selection exists")
+        .split("scope_managed_rustc_arguments")
+        .next()
+        .expect("managed argument scoping follows capability release");
+    assert!(selection.contains("prepare_production_managed_attempt"));
+    assert!(selection.contains("release_invocation_with_source_isa_observer"));
+    assert!(selection.contains("config, unit, managed.attempt"));
+    assert!(selection.contains("retain_source_isa_observer"));
 
     assert!(!source.contains("from_qualification_environment"));
     assert!(!source.contains("ManagedQualificationWork"));
@@ -173,6 +185,92 @@ fn production_capability_intake_releases_oracle_authority_immediately() {
     assert!(!broker.contains("S09"));
     assert!(!broker.contains("fn inherit_for_child("));
     assert!(!broker.contains("pinned_cargo_image: File"));
+}
+
+#[test]
+fn source_isa_observer_lifecycle_is_one_shot_and_prepublication() {
+    let source = include_str!("../src/binding_wrapper.rs");
+    assert_eq!(
+        source
+            .matches("admit_production_source_isa_acceptance_summary_v1")
+            .count(),
+        0,
+        "summary mapping belongs exclusively to source_isa_observation.rs"
+    );
+    let mapping = include_str!("../src/source_isa_observation.rs");
+    assert_eq!(
+        mapping
+            .matches(".admit_production_source_isa_acceptance_summary_v1()")
+            .count(),
+        1,
+        "there is one summary computation entry point"
+    );
+
+    let fresh = source
+        .split("fn complete_fresh_production_artifact(")
+        .nth(1)
+        .expect("fresh completion exists")
+        .split("fn complete_recovered_production_artifact(")
+        .next()
+        .expect("recovered completion follows fresh completion");
+    let finalization = fresh
+        .find("finalize_protected_worker_v3_hsaco_v1")
+        .expect("fresh finalization exists");
+    let observation = fresh
+        .find("emit_finalized_source_isa_observation(&finalized)")
+        .expect("fresh observation exists");
+    let preparation = fresh
+        .find("prepare_protected_worker_v3_hsaco_publication_v1")
+        .expect("publication preparation exists");
+    assert!(finalization < observation && observation < preparation);
+
+    let recovered = source
+        .split("fn complete_recovered_production_artifact(")
+        .nth(1)
+        .expect("recovered completion exists")
+        .split("fn complete_published_production_artifact(")
+        .next()
+        .expect("published completion follows recovered completion");
+    assert!(
+        recovered.contains("emit_finalized_source_isa_observation(recovered.finalized_evidence())")
+    );
+    assert!(source.contains("let Some(sink) = sink.take() else"));
+
+    let ready = source
+        .split("fn complete_ready_production_artifact(")
+        .nth(1)
+        .expect("Ready completion exists")
+        .split("fn derive_build_attempt_input_with_config_identity(")
+        .next()
+        .expect("Ready completion has a bounded body");
+    assert!(ready.contains("record.attempt()"));
+    assert!(ready.contains("record.plan().finalization().as_bytes()"));
+    assert!(ready.contains("emit_ready_source_isa_observation"));
+    assert!(!ready.contains("admit_production_source_isa_acceptance_summary_v1"));
+}
+
+#[test]
+fn cargo_finishes_and_exposes_observer_collection_nonfatally() {
+    let source = include_str!("../src/main.rs");
+    let run = source
+        .split("fn run_cargo_with_backend_inner(")
+        .nth(1)
+        .expect("Cargo backend route exists")
+        .split("struct CapabilityBrokerCompletionV1")
+        .next()
+        .expect("capability completion follows the device route");
+    assert!(run.contains("start_protected_with_source_isa_observer"));
+    assert!(run.contains("CapabilityBrokerCompletionV1::new"));
+    assert!(source.contains("impl<Value> Drop for ObserverFinishOnDropV1<Value>"));
+    assert!(run.contains("capability_broker.finish()"));
+    assert!(source.contains("finish_capability_broker_observations"));
+    assert!(source.contains("source-isa-observation-collection-v1"));
+    assert!(source.contains("authority=observation-only"));
+    let aggregate = run
+        .split("aggregate_post_spawn_results(")
+        .last()
+        .expect("post-spawn aggregation exists");
+    assert!(!aggregate.contains("source/ISA observer collection"));
 }
 
 #[test]
