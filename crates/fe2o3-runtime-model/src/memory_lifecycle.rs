@@ -67,9 +67,15 @@ impl GpuVaRangeV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MemoryKindV1 {
     HostVisibleCoherent,
+    /// Device-local storage whose host/device visibility is established only
+    /// by an explicit completed transfer.
+    DeviceLocal,
     QueueStorage,
     Kernarg,
     Executable,
+    /// Queue-owned private-segment or context-save backing. This is never an
+    /// ordinary application buffer.
+    ScratchContextSave,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

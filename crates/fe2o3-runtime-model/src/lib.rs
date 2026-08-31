@@ -17,6 +17,7 @@ extern crate alloc;
 
 mod async_queue;
 mod device_identity;
+mod device_local;
 mod device_projection;
 mod identity;
 mod memory_lifecycle;
@@ -25,6 +26,7 @@ mod queue_lifecycle;
 
 pub use async_queue::*;
 pub use device_identity::*;
+pub use device_local::*;
 pub use device_projection::*;
 pub use identity::*;
 pub use memory_lifecycle::*;
@@ -35,6 +37,8 @@ pub use queue_lifecycle::*;
 mod async_queue_tests;
 #[cfg(test)]
 mod device_identity_tests;
+#[cfg(test)]
+mod device_local_tests;
 #[cfg(test)]
 mod device_projection_tests;
 #[cfg(test)]
