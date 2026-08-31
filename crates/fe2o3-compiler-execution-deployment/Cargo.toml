@@ -36,3 +36,9 @@ name = "fe2o3-compiler-execution-deployment-install"
 path = "src/bin/install.rs"
 test = false
 bench = false
+
+[[bin]]
+name = "fe2o3-compiler-execution-qualification"
+path = "src/bin/qualification.rs"
+test = false
+bench = false

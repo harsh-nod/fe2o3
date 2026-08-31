@@ -19,11 +19,16 @@ use rustix::fs::{
 };
 use sha2::{Digest, Sha256};
 
+mod host;
 mod install;
 mod mount;
 mod qualification;
+mod run;
 mod staging;
 
+pub use host::{
+    CompilerExecutionQualificationHostProbeV1, probe_compiler_execution_qualification_host_v1,
+};
 pub use install::{
     CompilerExecutionInstalledRootPublicationV1, InstalledCompilerExecutionDeploymentV1,
     compiler_execution_install_root_name_v1, install_compiler_execution_deployment_v1,
@@ -35,6 +40,9 @@ pub use mount::{
 };
 pub use qualification::{
     PreparedCompilerExecutionQualificationV1, prepare_compiler_execution_qualification_v1,
+};
+pub use run::{
+    CompilerExecutionMountQualificationReportV1, run_compiler_execution_mount_qualification_v1,
 };
 pub use staging::{
     StagedCompilerExecutionQualificationV1, stage_compiler_execution_qualification_v1,

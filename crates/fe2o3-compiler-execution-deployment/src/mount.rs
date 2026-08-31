@@ -9,6 +9,7 @@ use rustix::mount::{
     fsconfig_create, fsconfig_set_string, fsmount, fsopen, mount_change, move_mount, unmount,
 };
 
+use super::host::process_thread_count;
 use super::install::verify_installed_projection;
 use super::qualification::revalidate_prepared_qualification_with_parent_children;
 use super::staging::StagedCompilerExecutionQualificationV1;
@@ -485,25 +486,6 @@ fn revalidate_mounted_qualification(
 fn open_mount_namespace() -> Result<File, DeploymentVerificationErrorV1> {
     File::open("/proc/self/ns/mnt")
         .map_err(|source| std_io_error("open current qualification mount namespace", source))
-}
-
-fn process_thread_count() -> Result<usize, DeploymentVerificationErrorV1> {
-    let mut count = 0_usize;
-    for entry in std::fs::read_dir("/proc/self/task")
-        .map_err(|source| std_io_error("enumerate qualification process tasks", source))?
-    {
-        entry.map_err(|source| std_io_error("read qualification process task", source))?;
-        count = count.checked_add(1).ok_or_else(|| {
-            super::invalid(
-                DeploymentVerificationErrorKindV1::InvalidQualificationIsolation,
-                "qualification process task count overflowed",
-            )
-        })?;
-        if count > 1 {
-            break;
-        }
-    }
-    Ok(count)
 }
 
 fn descriptor_path(file: &File) -> String {

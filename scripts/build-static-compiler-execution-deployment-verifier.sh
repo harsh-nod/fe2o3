@@ -8,6 +8,7 @@ readonly target="x86_64-unknown-linux-musl"
 readonly manifest="${target_dir}/${target}/release/fe2o3-compiler-execution-manifest"
 readonly verifier="${target_dir}/${target}/release/fe2o3-compiler-execution-deployment-verify"
 readonly installer="${target_dir}/${target}/release/fe2o3-compiler-execution-deployment-install"
+readonly qualification="${target_dir}/${target}/release/fe2o3-compiler-execution-qualification"
 
 cd -- "${repo_root}"
 CARGO_TARGET_DIR="${target_dir}/profile-test" \
@@ -16,7 +17,8 @@ CARGO_TARGET_DIR="${target_dir}/profile-test" \
 for binary in \
   fe2o3-compiler-execution-manifest \
   fe2o3-compiler-execution-deployment-verify \
-  fe2o3-compiler-execution-deployment-install; do
+  fe2o3-compiler-execution-deployment-install \
+  fe2o3-compiler-execution-qualification; do
   CARGO_TARGET_DIR="${target_dir}" cargo rustc \
     --locked \
     --release \
@@ -53,6 +55,8 @@ verifier_usage="$(/usr/bin/env -i "${verifier}" 2>&1)"
 verifier_status=$?
 installer_usage="$(/usr/bin/env -i "${installer}" 2>&1)"
 installer_status=$?
+qualification_usage="$(/usr/bin/env -i "${qualification}" 2>&1)"
+qualification_status=$?
 set -e
 if [[ ${manifest_status} -ne 2 \
   || "${manifest_usage}" != 'usage: fe2o3-compiler-execution-manifest BUNDLE_ROOT GIT_COMMIT TARGET' ]]; then
@@ -69,7 +73,25 @@ if [[ ${installer_status} -ne 2 \
   printf 'static deployment installer argument gate changed\n' >&2
   exit 1
 fi
+if [[ ${qualification_status} -ne 2 \
+  || "${qualification_usage}" != 'usage: fe2o3-compiler-execution-qualification probe'$'\n''       fe2o3-compiler-execution-qualification run BUNDLE_ROOT EXPECTED_MANIFEST_SHA256 EXPECTED_GIT_COMMIT INSTALL_PARENT BASE_IMAGE EXPECTED_BASE_IMAGE_SHA256 QUALIFICATION_PARENT' ]]; then
+  printf 'static qualification harness argument gate changed\n' >&2
+  exit 1
+fi
+
+qualification_probe="$(/usr/bin/env -i "${qualification}" probe)"
+readonly qualification_probe
+if [[ "$(printf '%s\n' "${qualification_probe}" | /usr/bin/awk 'END { print NR }')" -ne 17 ]] \
+  || ! /usr/bin/grep -Eq '^probe_schema=fe2o3-compiler-execution-qualification-host-probe-v1$' <<<"${qualification_probe}" \
+  || ! /usr/bin/grep -Eq '^effective_uid=[0-9]+$' <<<"${qualification_probe}" \
+  || ! /usr/bin/grep -Eq '^task_count=[1-9][0-9]*$' <<<"${qualification_probe}" \
+  || ! /usr/bin/grep -Eq '^mount_ready=(true|false)$' <<<"${qualification_probe}" \
+  || ! /usr/bin/grep -Eq '^isolated_systemd_ready=(true|false)$' <<<"${qualification_probe}"; then
+  printf 'static qualification host probe report changed\n' >&2
+  exit 1
+fi
 
 printf 'manifest_generator=%s\n' "${manifest}"
 printf 'deployment_verifier=%s\n' "${verifier}"
 printf 'deployment_installer=%s\n' "${installer}"
+printf 'qualification_harness=%s\n' "${qualification}"

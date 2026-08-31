@@ -58,9 +58,12 @@ bash -n "${verifier_builder}"
 for binary in \
   fe2o3-compiler-execution-manifest \
   fe2o3-compiler-execution-deployment-verify \
-  fe2o3-compiler-execution-deployment-install; do
+  fe2o3-compiler-execution-deployment-install \
+  fe2o3-compiler-execution-qualification; do
   grep -Fq -- "${binary}" "${verifier_builder}" || fail "missing static image ${binary}"
 done
+grep -Fq -- 'qualification-host-probe-v1' "${verifier_builder}" ||
+  fail 'static qualification prerequisite probe is missing'
 grep -Fq -- "--target \"\${target}\"" "${verifier_builder}" ||
   fail 'static verifier target is not pinned'
 grep -Fq -- '-C link-arg=-static' "${verifier_builder}" ||
