@@ -3184,6 +3184,8 @@ const fn terminal_expansion_tag_for_schema_v1(
         ProductionTerminalExpansionV1::WorkgroupPipelineRead => 97,
         ProductionTerminalExpansionV1::WorkgroupPipelineDiscard => 98,
         ProductionTerminalExpansionV1::WorkgroupPipelineRelease => 99,
+        ProductionTerminalExpansionV1::WorkgroupCollectiveContextCurrent => 104,
+        ProductionTerminalExpansionV1::NeutralWorkgroupReduceSum => 105,
         ProductionTerminalExpansionV1::Bf16Conversion(conversion) => {
             let base = match schema {
                 #[cfg(test)]
@@ -3414,6 +3416,17 @@ mod tests {
             terminal_expansion_tag_v1(ProductionTerminalExpansionV1::Trap),
         ];
         assert_eq!(tags, [0, 1, 2, 86]);
+        assert_eq!(
+            [
+                ProductionTerminalExpansionV1::WorkgroupCollectiveContextCurrent,
+                ProductionTerminalExpansionV1::NeutralWorkgroupReduceSum,
+            ]
+            .map(|expansion| terminal_expansion_tag_for_schema_v1(
+                expansion,
+                TerminalIdentitySchemaV1::CombinedV2,
+            )),
+            [104, 105],
+        );
 
         let gfx950 = [
             terminal_expansion_tag_v1(ProductionTerminalExpansionV1::Gfx950MatrixContextCurrent),

@@ -24,6 +24,7 @@ help: the following other types implement trait `Gfx942CollectiveElement`
   | |     "fe2o3_device_gfx942_lds_load_u32_v1"
   | | );
   | |_- in this macro invocation
+...
   | / collective_element!(
   | |     i32,
   | |     0,

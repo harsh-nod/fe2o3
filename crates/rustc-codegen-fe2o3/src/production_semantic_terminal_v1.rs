@@ -60,6 +60,8 @@ pub(crate) enum ProductionTerminalExpansionV1 {
     MathContextCurrent,
     MathF32(F32MathFunction),
     Bf16Conversion(ProductionBf16ConversionV1),
+    WorkgroupCollectiveContextCurrent,
+    NeutralWorkgroupReduceSum,
     CollectiveContextCurrent,
     WorkgroupReduceSum,
     SubgroupReduceSumF32,
@@ -283,6 +285,12 @@ impl ProductionSemanticTerminalRuleV1 {
             )),
             TrustedDeviceItem::Gfx942CollectivesCurrent => {
                 Self::Expand(ProductionTerminalExpansionV1::CollectiveContextCurrent)
+            }
+            TrustedDeviceItem::WorkgroupCollectivesCurrent => {
+                Self::Expand(ProductionTerminalExpansionV1::WorkgroupCollectiveContextCurrent)
+            }
+            TrustedDeviceItem::WorkgroupReduceSum => {
+                Self::Expand(ProductionTerminalExpansionV1::NeutralWorkgroupReduceSum)
             }
             TrustedDeviceItem::Gfx942WorkgroupReduceSum => {
                 Self::Expand(ProductionTerminalExpansionV1::WorkgroupReduceSum)
@@ -561,6 +569,12 @@ impl ProductionSemanticTerminalRuleV1 {
             }
             Self::Expand(ProductionTerminalExpansionV1::CollectiveContextCurrent) => {
                 TrustedDeviceItem::Gfx942CollectivesCurrent
+            }
+            Self::Expand(ProductionTerminalExpansionV1::WorkgroupCollectiveContextCurrent) => {
+                TrustedDeviceItem::WorkgroupCollectivesCurrent
+            }
+            Self::Expand(ProductionTerminalExpansionV1::NeutralWorkgroupReduceSum) => {
+                TrustedDeviceItem::WorkgroupReduceSum
             }
             Self::Expand(ProductionTerminalExpansionV1::WorkgroupReduceSum) => {
                 TrustedDeviceItem::Gfx942WorkgroupReduceSum
@@ -841,6 +855,14 @@ mod tests {
             (
                 TrustedDeviceItem::Gfx942CollectivesCurrent,
                 ProductionTerminalExpansionV1::CollectiveContextCurrent,
+            ),
+            (
+                TrustedDeviceItem::WorkgroupCollectivesCurrent,
+                ProductionTerminalExpansionV1::WorkgroupCollectiveContextCurrent,
+            ),
+            (
+                TrustedDeviceItem::WorkgroupReduceSum,
+                ProductionTerminalExpansionV1::NeutralWorkgroupReduceSum,
             ),
             (
                 TrustedDeviceItem::Gfx942SubgroupReduceSumF32,

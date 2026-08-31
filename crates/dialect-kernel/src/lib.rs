@@ -58,7 +58,8 @@ pub use ranked_memory::{
     MAX_RANKED_MEMORY_RANK, MemorySpaceAttr, NoAliasClassAttr, OwnershipContractOp,
     OwnershipCoverageAttr, OwnershipPartitionAttr, RankedAccessOp, RankedMemoryError, RankedViewOp,
     RankedViewType, ReturnOp, SUPPORTED_ELEMENT_WIDTHS, TrapOp, is_checked_access_capability_type,
-    is_index_type, is_supported_allocation_effect_contract_v1, ranked_view_type,
+    is_index_type, is_supported_allocation_effect_contract_v1,
+    neutral_workgroup_allocation_contract_v1, ranked_view_type,
 };
 pub use semantic_contract::{
     RequireEquivalentOp, SemanticBinaryKindAttr, SemanticBinaryOp, SemanticConstantAttr,

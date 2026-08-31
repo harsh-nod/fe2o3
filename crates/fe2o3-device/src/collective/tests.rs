@@ -2,8 +2,9 @@ use super::{
     GFX942_COLLECTIVE_CONTRACT_VERSION_V1, GFX942_STATIC_LDS_U32X256_ALIGNMENT,
     GFX942_STATIC_LDS_U32X256_BYTES, GFX942_STATIC_LDS_U32X256_SLOTS,
     GFX942_WAVE_LDS_VERTICAL_SLICE_VERSION_V1, Gfx942CollectiveElement, Gfx942Collectives,
-    MAX_GFX942_WORKGROUP_COLLECTIVE_SIZE, WorkgroupCollectiveScratch,
-    WorkgroupCollectiveScratchError,
+    MAX_GFX942_WORKGROUP_COLLECTIVE_SIZE, MAX_WORKGROUP_COLLECTIVE_SIZE,
+    WORKGROUP_COLLECTIVE_CONTRACT_VERSION_V1, WorkgroupCollectiveElement,
+    WorkgroupCollectiveScratch, WorkgroupCollectiveScratchError, WorkgroupCollectives,
 };
 use crate::group::SubgroupTile;
 use crate::thread::{GridSize, Invocation3D, WorkgroupId, WorkgroupSize, WorkitemId};
@@ -90,16 +91,22 @@ fn invocation(size: u32, rank: u32) -> Invocation3D {
 #[test]
 fn contract_and_type_matrix_are_exact() {
     fn admitted<T: Gfx942CollectiveElement>() {}
+    fn admitted_workgroup<T: WorkgroupCollectiveElement>() {}
 
     assert_eq!(GFX942_COLLECTIVE_CONTRACT_VERSION_V1, 1);
+    assert_eq!(WORKGROUP_COLLECTIVE_CONTRACT_VERSION_V1, 1);
     assert_eq!(GFX942_WAVE_LDS_VERTICAL_SLICE_VERSION_V1, 1);
     assert_eq!(MAX_GFX942_WORKGROUP_COLLECTIVE_SIZE, 256);
+    assert_eq!(MAX_WORKGROUP_COLLECTIVE_SIZE, 256);
     assert_eq!(GFX942_STATIC_LDS_U32X256_SLOTS, 256);
     assert_eq!(GFX942_STATIC_LDS_U32X256_BYTES, 1_024);
     assert_eq!(GFX942_STATIC_LDS_U32X256_ALIGNMENT, 4);
     admitted::<u32>();
     admitted::<i32>();
     admitted::<f32>();
+    admitted_workgroup::<u32>();
+    admitted_workgroup::<i32>();
+    admitted_workgroup::<f32>();
     assert_eq!(add(u32::MAX, 1), 0);
     assert_eq!(add(i32::MAX, 1), i32::MIN);
     assert_eq!(add(1.25_f32, 2.5), 3.75);
@@ -278,6 +285,7 @@ fn typed_lds_capability_is_consumed_by_collective_scratch() {
 #[test]
 fn compiler_authority_and_collective_hooks_panic_closed_on_host() {
     assert!(catch_unwind(Gfx942Collectives::current).is_err());
+    assert!(catch_unwind(WorkgroupCollectives::current).is_err());
 
     let context = Gfx942Collectives::for_host_test();
     assert!(catch_unwind(|| context.static_lds_u32x256()).is_err());
@@ -287,4 +295,17 @@ fn compiler_authority_and_collective_hooks_panic_closed_on_host() {
     let lane = WaveLane::<Wave64>::from_model_snapshot(7).unwrap();
     let tile = SubgroupTile::<64>::from_wave64_snapshot(&lane);
     assert!(catch_unwind(AssertUnwindSafe(|| tile.reduce_sum(&context, 7_u32))).is_err());
+
+    let mut slots = [core::mem::MaybeUninit::<u32>::uninit(); 8];
+    let mut scope = WorkgroupLdsScope::for_host_test();
+    let lds = unsafe {
+        DynamicLds::<u32>::from_host_parts_for_test(
+            &mut scope,
+            slots.as_mut_ptr().cast::<u8>(),
+            core::mem::size_of_val(&slots),
+        )
+    }
+    .unwrap();
+    let neutral = WorkgroupCollectives::for_host_test();
+    assert!(catch_unwind(AssertUnwindSafe(|| neutral.reduce_sum_portable(lds, 7_u32))).is_err());
 }

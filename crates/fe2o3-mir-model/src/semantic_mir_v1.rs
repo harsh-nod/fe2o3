@@ -5184,11 +5184,25 @@ pub enum SemanticCompilerIntrinsicOperationV1 {
     CollectiveContextCurrent {
         context: SemanticTypeIdV1,
     },
-    /// Reduces one scalar sum across the current gfx942 workgroup through authenticated LDS.
+    /// Reduces one scalar sum across the current workgroup through authenticated LDS.
+    ///
+    /// V1 admits `u32`, `i32`, and `f32` for an exact one-dimensional,
+    /// power-of-two workgroup no larger than 256. Every invocation participates
+    /// in the same compiler-owned LDS and uniform acquire-release barrier
+    /// phases. Target binding selects an admitted backend only after this
+    /// target-neutral semantic operation has been validated.
     WorkgroupReduceSum {
         workgroup: SemanticTypeIdV1,
         context: SemanticTypeIdV1,
         scratch: SemanticTypeIdV1,
+        element: SemanticTypeIdV1,
+    },
+    /// Reduces one scalar sum across the current workgroup by consuming the
+    /// exact compiler-issued dynamic-LDS allocation directly.
+    NeutralWorkgroupReduceSum {
+        context: SemanticTypeIdV1,
+        dynamic_lds: SemanticTypeIdV1,
+        element_storage: SemanticTypeIdV1,
         element: SemanticTypeIdV1,
     },
     /// Reduces one scalar across each contiguous subgroup of `width` lanes.
@@ -5899,9 +5913,10 @@ impl InertSemanticMirRequestV1 {
         self.admit_for_wire_version(SemanticMirWireVersionV1::V8, limits)
     }
 
-    /// Admits under the exact closed V9 schema that combines authenticated
-    /// BF16 conversions with workgroup-pipeline operations without changing
-    /// either feature's prior V6/V7 or V8 encoding.
+    /// Admits under the exact closed V9 schema that adds target-neutral
+    /// workgroup reduction and also permits authenticated BF16 conversions
+    /// with workgroup-pipeline operations without changing those features'
+    /// prior V6/V7 or V8 encoding.
     pub fn admit_exact_v9(
         self,
         limits: SemanticMirLimitsV1,
@@ -5911,7 +5926,8 @@ impl InertSemanticMirRequestV1 {
 
     /// Selects V5 for the baseline production surface, V6/V7 for their typed
     /// extensions, V8 when authenticated BF16 conversions are present, and V9
-    /// when BF16 conversions and workgroup pipelines occur together.
+    /// for target-neutral workgroup reduction or when BF16 conversions and
+    /// workgroup pipelines occur together.
     pub fn admit_current_production(
         self,
         limits: SemanticMirLimitsV1,
@@ -6355,6 +6371,7 @@ pub enum SemanticTypeOperationV1 {
     Atomic,
     SetDiscriminant,
     Assume,
+    LinearCapability,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -7455,6 +7472,7 @@ fn record_intrinsic_capability_claims(
         | SemanticCompilerIntrinsicOperationV1::Bf16Conversion { .. }
         | SemanticCompilerIntrinsicOperationV1::CollectiveContextCurrent { .. }
         | SemanticCompilerIntrinsicOperationV1::WorkgroupReduceSum { .. }
+        | SemanticCompilerIntrinsicOperationV1::NeutralWorkgroupReduceSum { .. }
         | SemanticCompilerIntrinsicOperationV1::SubgroupReduceF32 { .. }
         | SemanticCompilerIntrinsicOperationV1::Gfx950SubgroupContextCurrent { .. }
         | SemanticCompilerIntrinsicOperationV1::Gfx950SubgroupReduceF32 { .. }
@@ -7754,6 +7772,20 @@ fn compiler_intrinsic_signature_matches(
                     )
                 )
                 && workgroup_collective_scratch_type_matches(request, scratch, element)
+        }
+        SemanticCompilerIntrinsicOperationV1::NeutralWorkgroupReduceSum {
+            context,
+            dynamic_lds,
+            element_storage,
+            element,
+        } => {
+            inputs.len() == 3
+                && shared_reference_to(request, inputs[0], context)
+                && inputs[1] == dynamic_lds
+                && inputs[2] == element
+                && output == element
+                && dynamic_lds_storage_type_matches(request, dynamic_lds, element_storage)
+                && dynamic_lds_element_storage_matches(request, element_storage, element)
         }
         SemanticCompilerIntrinsicOperationV1::SubgroupReduceF32 { context, width, .. } => {
             inputs.len() == 2
@@ -11538,6 +11570,7 @@ fn validate_function(
         };
         validate_terminator(context, id, function, location, &block.terminator.kind)?;
     }
+    validate_dynamic_lds_linearity(context, id, function)?;
     let unchecked_operation = first_unchecked_operation(function);
     let violation = match unchecked_operation {
         Some(operation) => {
@@ -11558,6 +11591,668 @@ fn validate_function(
                 statement: violation.statement(),
             },
         });
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DynamicLdsCallRoleV1 {
+    None,
+    Producer(SemanticTypeIdV1),
+    Consumer(SemanticTypeIdV1),
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct DynamicLdsOwnerV1 {
+    ty: SemanticTypeIdV1,
+    producer: SemanticMirLocationV1,
+}
+
+type DynamicLdsStateV1 = BTreeMap<SemanticLocalIdV1, DynamicLdsOwnerV1>;
+type DynamicLdsOutgoingStatesV1 = Vec<(SemanticControlFlowEdgeV1, DynamicLdsStateV1)>;
+
+fn dynamic_lds_call_role_v1(
+    request: &InertSemanticMirRequestV1,
+    callable: SemanticCallableIdV1,
+) -> DynamicLdsCallRoleV1 {
+    let Some(SemanticCallableDeclV1::CompilerIntrinsic { operation, .. }) =
+        request.callables.get(callable.0 as usize)
+    else {
+        return DynamicLdsCallRoleV1::None;
+    };
+    match operation {
+        SemanticCompilerIntrinsicOperationV1::DynamicLdsExactCurrent { dynamic_lds, .. } => {
+            DynamicLdsCallRoleV1::Producer(*dynamic_lds)
+        }
+        SemanticCompilerIntrinsicOperationV1::DynamicLdsIntoCollectiveRawParts {
+            dynamic_lds,
+            ..
+        }
+        | SemanticCompilerIntrinsicOperationV1::NeutralWorkgroupReduceSum { dynamic_lds, .. } => {
+            DynamicLdsCallRoleV1::Consumer(*dynamic_lds)
+        }
+        _ => DynamicLdsCallRoleV1::None,
+    }
+}
+
+fn invalid_dynamic_lds_linearity<T>(
+    location: SemanticMirLocationV1,
+) -> Result<T, SemanticMirErrorV1> {
+    invalid_type_operation(SemanticTypeOperationV1::LinearCapability, location)
+}
+
+fn dynamic_lds_local_type_v1(
+    function: &SemanticFunctionDeclV1,
+    dynamic_lds_types: &BTreeSet<SemanticTypeIdV1>,
+    local: SemanticLocalIdV1,
+) -> Option<SemanticTypeIdV1> {
+    function
+        .locals
+        .get(local.0 as usize)
+        .map(|declaration| declaration.ty)
+        .filter(|ty| dynamic_lds_types.contains(ty))
+}
+
+fn dynamic_lds_place_v1(
+    function: &SemanticFunctionDeclV1,
+    dynamic_lds_types: &BTreeSet<SemanticTypeIdV1>,
+    place: &SemanticPlaceV1,
+) -> Option<(SemanticLocalIdV1, SemanticTypeIdV1, bool)> {
+    dynamic_lds_local_type_v1(function, dynamic_lds_types, place.local).map(|ty| {
+        (
+            place.local,
+            ty,
+            place.projections.is_empty() && place.ty == ty,
+        )
+    })
+}
+
+fn reject_dynamic_lds_place_v1(
+    function: &SemanticFunctionDeclV1,
+    dynamic_lds_types: &BTreeSet<SemanticTypeIdV1>,
+    place: &SemanticPlaceV1,
+    location: SemanticMirLocationV1,
+) -> Result<(), SemanticMirErrorV1> {
+    if dynamic_lds_place_v1(function, dynamic_lds_types, place).is_some() {
+        invalid_dynamic_lds_linearity(location)
+    } else {
+        Ok(())
+    }
+}
+
+fn reject_dynamic_lds_operand_v1(
+    function: &SemanticFunctionDeclV1,
+    dynamic_lds_types: &BTreeSet<SemanticTypeIdV1>,
+    operand: &SemanticOperandV1,
+    location: SemanticMirLocationV1,
+) -> Result<(), SemanticMirErrorV1> {
+    match operand {
+        SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place) => {
+            reject_dynamic_lds_place_v1(function, dynamic_lds_types, place, location)
+        }
+        SemanticOperandV1::Constant(_) => Ok(()),
+    }
+}
+
+fn consume_dynamic_lds_operand_v1(
+    function: &SemanticFunctionDeclV1,
+    dynamic_lds_types: &BTreeSet<SemanticTypeIdV1>,
+    live: &mut BTreeMap<SemanticLocalIdV1, DynamicLdsOwnerV1>,
+    operand: &SemanticOperandV1,
+    location: SemanticMirLocationV1,
+) -> Result<Option<DynamicLdsOwnerV1>, SemanticMirErrorV1> {
+    match operand {
+        SemanticOperandV1::Copy(place) => {
+            if dynamic_lds_place_v1(function, dynamic_lds_types, place).is_some() {
+                invalid_dynamic_lds_linearity(location)
+            } else {
+                Ok(None)
+            }
+        }
+        SemanticOperandV1::Move(place) => {
+            let Some((local, ty, is_whole)) =
+                dynamic_lds_place_v1(function, dynamic_lds_types, place)
+            else {
+                return Ok(None);
+            };
+            let Some(owner) = live.remove(&local) else {
+                return invalid_dynamic_lds_linearity(location);
+            };
+            if !is_whole || owner.ty != ty {
+                return invalid_dynamic_lds_linearity(location);
+            }
+            Ok(Some(owner))
+        }
+        SemanticOperandV1::Constant(_) => Ok(None),
+    }
+}
+
+fn reject_dynamic_lds_rvalue_v1(
+    function: &SemanticFunctionDeclV1,
+    dynamic_lds_types: &BTreeSet<SemanticTypeIdV1>,
+    rvalue: &SemanticRvalueV1,
+    location: SemanticMirLocationV1,
+) -> Result<(), SemanticMirErrorV1> {
+    rvalue.kind.try_visit_operands(|operand| {
+        reject_dynamic_lds_operand_v1(function, dynamic_lds_types, operand, location)
+    })?;
+    match &rvalue.kind {
+        SemanticRvalueKindV1::Borrow { place, .. }
+        | SemanticRvalueKindV1::AddressOf { place, .. }
+        | SemanticRvalueKindV1::Length(place)
+        | SemanticRvalueKindV1::Discriminant(place) => {
+            reject_dynamic_lds_place_v1(function, dynamic_lds_types, place, location)
+        }
+        SemanticRvalueKindV1::Load(load) => {
+            reject_dynamic_lds_place_v1(function, dynamic_lds_types, &load.source, location)
+        }
+        SemanticRvalueKindV1::Use(_)
+        | SemanticRvalueKindV1::Unary { .. }
+        | SemanticRvalueKindV1::Binary { .. }
+        | SemanticRvalueKindV1::CheckedBinary(_)
+        | SemanticRvalueKindV1::UncheckedBinary(_)
+        | SemanticRvalueKindV1::Cast { .. }
+        | SemanticRvalueKindV1::Aggregate(_) => Ok(()),
+    }
+}
+
+fn transfer_dynamic_lds_statement_v1(
+    function: &SemanticFunctionDeclV1,
+    dynamic_lds_types: &BTreeSet<SemanticTypeIdV1>,
+    live: &mut BTreeMap<SemanticLocalIdV1, DynamicLdsOwnerV1>,
+    statement: &SemanticStatementKindV1,
+    location: SemanticMirLocationV1,
+) -> Result<(), SemanticMirErrorV1> {
+    match statement {
+        SemanticStatementKindV1::Assign(assignment) => {
+            if let Some((destination, destination_ty, is_whole)) =
+                dynamic_lds_place_v1(function, dynamic_lds_types, &assignment.destination)
+            {
+                let SemanticRvalueKindV1::Use(source) = &assignment.value.kind else {
+                    return invalid_dynamic_lds_linearity(location);
+                };
+                let Some(owner) = consume_dynamic_lds_operand_v1(
+                    function,
+                    dynamic_lds_types,
+                    live,
+                    source,
+                    location,
+                )?
+                else {
+                    return invalid_dynamic_lds_linearity(location);
+                };
+                let source_local = match source {
+                    SemanticOperandV1::Move(place) => place.local,
+                    SemanticOperandV1::Copy(_) | SemanticOperandV1::Constant(_) => unreachable!(),
+                };
+                if !is_whole
+                    || owner.ty != destination_ty
+                    || source_local == destination
+                    || live.insert(destination, owner).is_some()
+                {
+                    return invalid_dynamic_lds_linearity(location);
+                }
+                Ok(())
+            } else {
+                reject_dynamic_lds_place_v1(
+                    function,
+                    dynamic_lds_types,
+                    &assignment.destination,
+                    location,
+                )?;
+                reject_dynamic_lds_rvalue_v1(
+                    function,
+                    dynamic_lds_types,
+                    &assignment.value,
+                    location,
+                )
+            }
+        }
+        SemanticStatementKindV1::Store(store) => {
+            reject_dynamic_lds_place_v1(function, dynamic_lds_types, &store.destination, location)?;
+            reject_dynamic_lds_operand_v1(function, dynamic_lds_types, &store.value, location)
+        }
+        SemanticStatementKindV1::AtomicRmw(operation) => {
+            reject_dynamic_lds_place_v1(
+                function,
+                dynamic_lds_types,
+                &operation.destination,
+                location,
+            )?;
+            reject_dynamic_lds_place_v1(function, dynamic_lds_types, &operation.address, location)?;
+            reject_dynamic_lds_operand_v1(function, dynamic_lds_types, &operation.value, location)
+        }
+        SemanticStatementKindV1::AtomicCompareExchange(operation) => {
+            reject_dynamic_lds_place_v1(
+                function,
+                dynamic_lds_types,
+                &operation.destination,
+                location,
+            )?;
+            reject_dynamic_lds_place_v1(function, dynamic_lds_types, &operation.address, location)?;
+            reject_dynamic_lds_operand_v1(
+                function,
+                dynamic_lds_types,
+                &operation.expected,
+                location,
+            )?;
+            reject_dynamic_lds_operand_v1(
+                function,
+                dynamic_lds_types,
+                &operation.replacement,
+                location,
+            )
+        }
+        SemanticStatementKindV1::SetDiscriminant { place, .. }
+        | SemanticStatementKindV1::Deinitialize(place) => {
+            reject_dynamic_lds_place_v1(function, dynamic_lds_types, place, location)
+        }
+        SemanticStatementKindV1::StorageLive(local)
+        | SemanticStatementKindV1::StorageDead(local) => {
+            if dynamic_lds_local_type_v1(function, dynamic_lds_types, *local).is_some()
+                && live.contains_key(local)
+            {
+                invalid_dynamic_lds_linearity(location)
+            } else {
+                Ok(())
+            }
+        }
+        SemanticStatementKindV1::Assume(condition) => {
+            reject_dynamic_lds_operand_v1(function, dynamic_lds_types, condition, location)
+        }
+        SemanticStatementKindV1::Nop => Ok(()),
+    }
+}
+
+fn reject_dynamic_lds_assert_message_v1(
+    function: &SemanticFunctionDeclV1,
+    dynamic_lds_types: &BTreeSet<SemanticTypeIdV1>,
+    message: &SemanticAssertMessageV1,
+    location: SemanticMirLocationV1,
+) -> Result<(), SemanticMirErrorV1> {
+    match message {
+        SemanticAssertMessageV1::BoundsCheck { length, index }
+        | SemanticAssertMessageV1::Overflow {
+            left: length,
+            right: index,
+            ..
+        } => {
+            reject_dynamic_lds_operand_v1(function, dynamic_lds_types, length, location)?;
+            reject_dynamic_lds_operand_v1(function, dynamic_lds_types, index, location)
+        }
+        SemanticAssertMessageV1::DivisionByZero(operand)
+        | SemanticAssertMessageV1::RemainderByZero(operand) => {
+            reject_dynamic_lds_operand_v1(function, dynamic_lds_types, operand, location)
+        }
+        SemanticAssertMessageV1::MisalignedPointerDereference {
+            required_alignment,
+            found_alignment,
+        } => {
+            reject_dynamic_lds_operand_v1(
+                function,
+                dynamic_lds_types,
+                required_alignment,
+                location,
+            )?;
+            reject_dynamic_lds_operand_v1(function, dynamic_lds_types, found_alignment, location)
+        }
+        SemanticAssertMessageV1::NullPointerDereference
+        | SemanticAssertMessageV1::ResumedAfterReturn
+        | SemanticAssertMessageV1::ResumedAfterPanic => Ok(()),
+    }
+}
+
+fn transfer_dynamic_lds_terminator_v1(
+    request: &InertSemanticMirRequestV1,
+    function: &SemanticFunctionDeclV1,
+    dynamic_lds_types: &BTreeSet<SemanticTypeIdV1>,
+    live: &DynamicLdsStateV1,
+    terminator: &SemanticTerminatorKindV1,
+    location: SemanticMirLocationV1,
+) -> Result<DynamicLdsOutgoingStatesV1, SemanticMirErrorV1> {
+    let mut state = live.clone();
+    match terminator {
+        SemanticTerminatorKindV1::Call(call) => {
+            let role = dynamic_lds_call_role_v1(request, call.callee);
+            match role {
+                DynamicLdsCallRoleV1::Producer(dynamic_lds) => {
+                    for argument in &call.arguments {
+                        reject_dynamic_lds_operand_v1(
+                            function,
+                            dynamic_lds_types,
+                            argument,
+                            location,
+                        )?;
+                    }
+                    let Some(destination) = &call.destination else {
+                        return invalid_dynamic_lds_linearity(location);
+                    };
+                    let Some((local, destination_ty, is_whole)) =
+                        dynamic_lds_place_v1(function, dynamic_lds_types, &destination.place)
+                    else {
+                        return invalid_dynamic_lds_linearity(location);
+                    };
+                    if !is_whole || destination_ty != dynamic_lds || state.contains_key(&local) {
+                        return invalid_dynamic_lds_linearity(location);
+                    }
+                    let mut outgoing = Vec::with_capacity(terminator.edge_count());
+                    terminator.try_for_each_edge(|edge| {
+                        let mut edge_state = state.clone();
+                        if edge.role == SemanticEdgeRoleV1::CallReturn {
+                            edge_state.insert(
+                                local,
+                                DynamicLdsOwnerV1 {
+                                    ty: dynamic_lds,
+                                    producer: location,
+                                },
+                            );
+                        }
+                        outgoing.push((edge, edge_state));
+                        Ok::<(), SemanticMirErrorV1>(())
+                    })?;
+                    return Ok(outgoing);
+                }
+                DynamicLdsCallRoleV1::Consumer(expected_ty) => {
+                    let mut consumed = None;
+                    for argument in &call.arguments {
+                        if consume_dynamic_lds_operand_v1(
+                            function,
+                            dynamic_lds_types,
+                            &mut state,
+                            argument,
+                            location,
+                        )?
+                        .is_some_and(|owner| consumed.replace(owner).is_some())
+                        {
+                            return invalid_dynamic_lds_linearity(location);
+                        }
+                    }
+                    if consumed.is_none_or(|owner| owner.ty != expected_ty) {
+                        return invalid_dynamic_lds_linearity(location);
+                    }
+                }
+                DynamicLdsCallRoleV1::None => {
+                    for argument in &call.arguments {
+                        reject_dynamic_lds_operand_v1(
+                            function,
+                            dynamic_lds_types,
+                            argument,
+                            location,
+                        )?;
+                    }
+                }
+            }
+            if let Some(destination) = &call.destination {
+                reject_dynamic_lds_place_v1(
+                    function,
+                    dynamic_lds_types,
+                    &destination.place,
+                    location,
+                )?;
+            }
+        }
+        SemanticTerminatorKindV1::TailCall(call) => {
+            for argument in &call.arguments {
+                reject_dynamic_lds_operand_v1(function, dynamic_lds_types, argument, location)?;
+            }
+        }
+        SemanticTerminatorKindV1::SwitchInt { discriminant, .. } => {
+            reject_dynamic_lds_operand_v1(function, dynamic_lds_types, discriminant, location)?;
+        }
+        SemanticTerminatorKindV1::Drop { place, .. } => {
+            reject_dynamic_lds_place_v1(function, dynamic_lds_types, place, location)?;
+        }
+        SemanticTerminatorKindV1::Assert {
+            condition, message, ..
+        } => {
+            reject_dynamic_lds_operand_v1(function, dynamic_lds_types, condition, location)?;
+            reject_dynamic_lds_assert_message_v1(function, dynamic_lds_types, message, location)?;
+        }
+        SemanticTerminatorKindV1::Goto(_) | SemanticTerminatorKindV1::FalseEdge { .. } => {}
+        SemanticTerminatorKindV1::Return
+        | SemanticTerminatorKindV1::UnwindResume
+        | SemanticTerminatorKindV1::UnwindTerminate
+        | SemanticTerminatorKindV1::Abort
+        | SemanticTerminatorKindV1::Unreachable => {
+            if !state.is_empty() {
+                return invalid_dynamic_lds_linearity(location);
+            }
+        }
+    }
+    let mut outgoing = Vec::with_capacity(terminator.edge_count());
+    terminator.try_for_each_edge(|edge| {
+        outgoing.push((edge, state.clone()));
+        Ok::<(), SemanticMirErrorV1>(())
+    })?;
+    Ok(outgoing)
+}
+
+fn block_mentions_dynamic_lds_v1(
+    request: &InertSemanticMirRequestV1,
+    function: &SemanticFunctionDeclV1,
+    dynamic_lds_types: &BTreeSet<SemanticTypeIdV1>,
+    block: &SemanticBasicBlockV1,
+) -> bool {
+    fn place_mentions(
+        function: &SemanticFunctionDeclV1,
+        dynamic_lds_types: &BTreeSet<SemanticTypeIdV1>,
+        place: &SemanticPlaceV1,
+    ) -> bool {
+        dynamic_lds_place_v1(function, dynamic_lds_types, place).is_some()
+    }
+    fn operand_mentions(
+        function: &SemanticFunctionDeclV1,
+        dynamic_lds_types: &BTreeSet<SemanticTypeIdV1>,
+        operand: &SemanticOperandV1,
+    ) -> bool {
+        matches!(operand, SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place) if place_mentions(function, dynamic_lds_types, place))
+    }
+    for statement in &block.statements {
+        let mentions = match &statement.kind {
+            SemanticStatementKindV1::Assign(assignment) => {
+                let mut operand_mentions_dynamic_lds = false;
+                assignment
+                    .value
+                    .kind
+                    .try_visit_operands::<std::convert::Infallible>(|operand| {
+                        operand_mentions_dynamic_lds |=
+                            operand_mentions(function, dynamic_lds_types, operand);
+                        Ok(())
+                    })
+                    .expect("infallible semantic operand visitor");
+                place_mentions(function, dynamic_lds_types, &assignment.destination)
+                    || operand_mentions_dynamic_lds
+                    || match &assignment.value.kind {
+                        SemanticRvalueKindV1::Borrow { place, .. }
+                        | SemanticRvalueKindV1::AddressOf { place, .. }
+                        | SemanticRvalueKindV1::Length(place)
+                        | SemanticRvalueKindV1::Discriminant(place) => {
+                            place_mentions(function, dynamic_lds_types, place)
+                        }
+                        SemanticRvalueKindV1::Load(load) => {
+                            place_mentions(function, dynamic_lds_types, &load.source)
+                        }
+                        _ => false,
+                    }
+            }
+            SemanticStatementKindV1::Store(store) => {
+                place_mentions(function, dynamic_lds_types, &store.destination)
+                    || operand_mentions(function, dynamic_lds_types, &store.value)
+            }
+            SemanticStatementKindV1::AtomicRmw(operation) => {
+                place_mentions(function, dynamic_lds_types, &operation.destination)
+                    || place_mentions(function, dynamic_lds_types, &operation.address)
+                    || operand_mentions(function, dynamic_lds_types, &operation.value)
+            }
+            SemanticStatementKindV1::AtomicCompareExchange(operation) => {
+                place_mentions(function, dynamic_lds_types, &operation.destination)
+                    || place_mentions(function, dynamic_lds_types, &operation.address)
+                    || operand_mentions(function, dynamic_lds_types, &operation.expected)
+                    || operand_mentions(function, dynamic_lds_types, &operation.replacement)
+            }
+            SemanticStatementKindV1::SetDiscriminant { place, .. }
+            | SemanticStatementKindV1::Deinitialize(place) => {
+                place_mentions(function, dynamic_lds_types, place)
+            }
+            SemanticStatementKindV1::StorageLive(local)
+            | SemanticStatementKindV1::StorageDead(local) => {
+                dynamic_lds_local_type_v1(function, dynamic_lds_types, *local).is_some()
+            }
+            SemanticStatementKindV1::Assume(operand) => {
+                operand_mentions(function, dynamic_lds_types, operand)
+            }
+            SemanticStatementKindV1::Nop => false,
+        };
+        if mentions {
+            return true;
+        }
+    }
+    match &block.terminator.kind {
+        SemanticTerminatorKindV1::Call(call) => {
+            dynamic_lds_call_role_v1(request, call.callee) != DynamicLdsCallRoleV1::None
+                || call
+                    .arguments
+                    .iter()
+                    .any(|operand| operand_mentions(function, dynamic_lds_types, operand))
+                || call.destination.as_ref().is_some_and(|destination| {
+                    place_mentions(function, dynamic_lds_types, &destination.place)
+                })
+        }
+        SemanticTerminatorKindV1::TailCall(call) => call
+            .arguments
+            .iter()
+            .any(|operand| operand_mentions(function, dynamic_lds_types, operand)),
+        SemanticTerminatorKindV1::SwitchInt { discriminant, .. } => {
+            operand_mentions(function, dynamic_lds_types, discriminant)
+        }
+        SemanticTerminatorKindV1::Drop { place, .. } => {
+            place_mentions(function, dynamic_lds_types, place)
+        }
+        SemanticTerminatorKindV1::Assert { condition, .. } => {
+            operand_mentions(function, dynamic_lds_types, condition)
+        }
+        SemanticTerminatorKindV1::Goto(_)
+        | SemanticTerminatorKindV1::FalseEdge { .. }
+        | SemanticTerminatorKindV1::Return
+        | SemanticTerminatorKindV1::UnwindResume
+        | SemanticTerminatorKindV1::UnwindTerminate
+        | SemanticTerminatorKindV1::Abort
+        | SemanticTerminatorKindV1::Unreachable => false,
+    }
+}
+
+fn validate_dynamic_lds_linearity(
+    context: &mut ValidationContextV1<'_>,
+    function_id: SemanticFunctionIdV1,
+    function: &SemanticFunctionDeclV1,
+) -> Result<(), SemanticMirErrorV1> {
+    let dynamic_lds_types =
+        context
+            .request
+            .callables
+            .iter()
+            .filter_map(|callable| match callable {
+                SemanticCallableDeclV1::CompilerIntrinsic {
+                    operation:
+                        SemanticCompilerIntrinsicOperationV1::DynamicLdsExactCurrent {
+                            dynamic_lds, ..
+                        },
+                    ..
+                } => Some(*dynamic_lds),
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>();
+    if dynamic_lds_types.is_empty()
+        || !function
+            .locals
+            .iter()
+            .any(|local| dynamic_lds_types.contains(&local.ty))
+    {
+        return Ok(());
+    }
+    if function
+        .abi
+        .source_input_types()
+        .iter()
+        .chain(std::iter::once(&function.abi.return_value.source_ty))
+        .any(|ty| dynamic_lds_types.contains(ty))
+        || function.locals.iter().any(|local| {
+            dynamic_lds_types.contains(&local.ty)
+                && !matches!(local.role, SemanticLocalRoleV1::Temporary)
+        })
+    {
+        return invalid_dynamic_lds_linearity(SemanticMirLocationV1::Function(function_id));
+    }
+
+    let mut incoming = vec![None; function.blocks.len()];
+    incoming[function.entry.0 as usize] = Some(BTreeMap::new());
+    let mut pending = VecDeque::from([function.entry]);
+    while let Some(block_id) = pending.pop_front() {
+        charge_validation_work(
+            context,
+            function
+                .locals
+                .len()
+                .checked_add(1)
+                .ok_or(SemanticMirErrorV1::ArithmeticOverflow {
+                    resource: SemanticMirResourceV1::ValidationWork,
+                })?,
+        )?;
+        let block = &function.blocks[block_id.0 as usize];
+        let mut state = incoming[block_id.0 as usize]
+            .as_ref()
+            .expect("queued semantic block has an incoming linear state")
+            .clone();
+        for (statement_index, statement) in block.statements.iter().enumerate() {
+            transfer_dynamic_lds_statement_v1(
+                function,
+                &dynamic_lds_types,
+                &mut state,
+                &statement.kind,
+                SemanticMirLocationV1::Statement {
+                    function: function_id,
+                    block: block_id,
+                    statement: statement_index as u32,
+                },
+            )?;
+        }
+        let terminator_location = SemanticMirLocationV1::Terminator {
+            function: function_id,
+            block: block_id,
+        };
+        for (edge, edge_state) in transfer_dynamic_lds_terminator_v1(
+            context.request,
+            function,
+            &dynamic_lds_types,
+            &state,
+            &block.terminator.kind,
+            terminator_location,
+        )? {
+            let target = edge.target.0 as usize;
+            match &incoming[target] {
+                None => {
+                    incoming[target] = Some(edge_state);
+                    pending.push_back(edge.target);
+                }
+                Some(previous) if previous == &edge_state => {}
+                Some(_) => {
+                    return invalid_dynamic_lds_linearity(SemanticMirLocationV1::Block {
+                        function: function_id,
+                        block: edge.target,
+                    });
+                }
+            }
+        }
+    }
+    for (block_index, (block, state)) in function.blocks.iter().zip(&incoming).enumerate() {
+        if state.is_none()
+            && block_mentions_dynamic_lds_v1(context.request, function, &dynamic_lds_types, block)
+        {
+            return invalid_dynamic_lds_linearity(SemanticMirLocationV1::Block {
+                function: function_id,
+                block: SemanticBlockIdV1(block_index as u32),
+            });
+        }
     }
     Ok(())
 }
@@ -14554,6 +15249,17 @@ fn enqueue_compiler_intrinsic_type_references(
             pending.push_back(scratch);
             pending.push_back(element);
         }
+        SemanticCompilerIntrinsicOperationV1::NeutralWorkgroupReduceSum {
+            context,
+            dynamic_lds,
+            element_storage,
+            element,
+        } => {
+            pending.push_back(context);
+            pending.push_back(dynamic_lds);
+            pending.push_back(element_storage);
+            pending.push_back(element);
+        }
         SemanticCompilerIntrinsicOperationV1::MatrixContextCurrent { context } => {
             pending.push_back(context);
         }
@@ -15295,6 +16001,17 @@ fn minimum_wire_version(request: &InertSemanticMirRequestV1) -> SemanticMirWireV
     let uses_pipeline = uses_workgroup_pipeline(request);
     let uses_bf16 = uses_bf16_conversion(request);
     let mut required = SemanticMirWireVersionV1::V2;
+    if request.callables.iter().any(|callable| {
+        matches!(
+            callable,
+            SemanticCallableDeclV1::CompilerIntrinsic {
+                operation: SemanticCompilerIntrinsicOperationV1::NeutralWorkgroupReduceSum { .. },
+                ..
+            }
+        )
+    }) {
+        required = SemanticMirWireVersionV1::V9;
+    }
 
     if request.functions.iter().any(|function| {
         matches!(
@@ -16541,6 +17258,24 @@ fn encode_compiler_intrinsic_operation(
             writer.u32(workgroup.0)?;
             writer.u32(context.0)?;
             writer.u32(scratch.0)?;
+            writer.u32(element.0)
+        }
+        SemanticCompilerIntrinsicOperationV1::NeutralWorkgroupReduceSum {
+            context,
+            dynamic_lds,
+            element_storage,
+            element,
+        } => {
+            if wire_version != SemanticMirWireVersionV1::V9 {
+                return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
+                    requested: wire_version,
+                    required: SemanticMirWireVersionV1::V9,
+                });
+            }
+            writer.u8(60)?;
+            writer.u32(context.0)?;
+            writer.u32(dynamic_lds.0)?;
+            writer.u32(element_storage.0)?;
             writer.u32(element.0)
         }
         SemanticCompilerIntrinsicOperationV1::SubgroupReduceF32 {
@@ -18429,6 +19164,423 @@ mod private_tests {
             SemanticAtomicOrderingV1::AcquireRelease,
             SemanticAtomicOrderingV1::Acquire,
         ));
+    }
+
+    const LINEAR_ORDINARY_TY: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(0);
+    const LINEAR_DYNAMIC_LDS_TY: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(1);
+    const LINEAR_PRODUCER: SemanticCallableIdV1 = SemanticCallableIdV1::from_index(0);
+    const LINEAR_CONSUMER: SemanticCallableIdV1 = SemanticCallableIdV1::from_index(1);
+
+    fn linear_abi(
+        tag: u8,
+        inputs: Vec<SemanticTypeIdV1>,
+        output: SemanticTypeIdV1,
+    ) -> SemanticFunctionAbiV1 {
+        SemanticFunctionAbiV1::new(
+            SemanticAbiIdentityV1::from_sha256([tag; 32]),
+            SemanticLayoutIdentityV1::from_sha256([tag.wrapping_add(1); 32]),
+            SemanticCanonAbiV1::Rust,
+            false,
+            false,
+            inputs
+                .into_iter()
+                .map(|ty| SemanticAbiValueV1::new(ty, SemanticAbiPassModeV1::Ignore))
+                .collect(),
+            SemanticAbiValueV1::new(output, SemanticAbiPassModeV1::Ignore),
+        )
+        .unwrap()
+    }
+
+    fn linear_binding(tag: u8, abi: SemanticFunctionAbiV1) -> SemanticNonBodyCallableBindingV1 {
+        SemanticNonBodyCallableBindingV1::new(
+            SemanticFunctionIdentityV1::from_sha256([tag; 32]),
+            SemanticItemDefinitionIdentityV1::from_sha256([tag.wrapping_add(1); 32]),
+            SemanticMonomorphizationIdentityV1::from_sha256([tag.wrapping_add(2); 32]),
+            SemanticGenericTypeArgumentsIdentityV1::from_sha256([tag.wrapping_add(3); 32]),
+            SemanticConstGenericArgumentsIdentityV1::from_sha256([tag.wrapping_add(4); 32]),
+            SemanticSourceProvenanceV1::unavailable(),
+            abi,
+        )
+    }
+
+    fn linear_request() -> InertSemanticMirRequestV1 {
+        InertSemanticMirRequestV1::new_with_callables(
+            SemanticTargetDataLayoutV1::gfx942(SemanticLayoutIdentityV1::from_sha256([210; 32])),
+            vec![
+                test_type(
+                    211,
+                    SemanticTypeLayoutV1::new(Some(4), 4).unwrap(),
+                    SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
+                        signed: false,
+                        bits: 32,
+                    }),
+                ),
+                test_type(
+                    212,
+                    SemanticTypeLayoutV1::new(Some(0), 1).unwrap(),
+                    SemanticTypeShapeV1::Opaque,
+                ),
+            ],
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            vec![
+                SemanticCallableDeclV1::CompilerIntrinsic {
+                    binding: linear_binding(213, linear_abi(214, vec![], LINEAR_DYNAMIC_LDS_TY)),
+                    operation: SemanticCompilerIntrinsicOperationV1::DynamicLdsExactCurrent {
+                        scope: LINEAR_ORDINARY_TY,
+                        dynamic_lds: LINEAR_DYNAMIC_LDS_TY,
+                        element_storage: LINEAR_ORDINARY_TY,
+                        elements: 64,
+                    },
+                    operation_identity: SemanticCompilerIntrinsicIdentityV1::from_sha256([215; 32]),
+                },
+                SemanticCallableDeclV1::CompilerIntrinsic {
+                    binding: linear_binding(
+                        216,
+                        linear_abi(217, vec![LINEAR_DYNAMIC_LDS_TY], LINEAR_ORDINARY_TY),
+                    ),
+                    operation:
+                        SemanticCompilerIntrinsicOperationV1::DynamicLdsIntoCollectiveRawParts {
+                            dynamic_lds: LINEAR_DYNAMIC_LDS_TY,
+                            raw_parts: LINEAR_ORDINARY_TY,
+                            element_storage: LINEAR_ORDINARY_TY,
+                            element: LINEAR_ORDINARY_TY,
+                        },
+                    operation_identity: SemanticCompilerIntrinsicIdentityV1::from_sha256([218; 32]),
+                },
+            ],
+            vec![],
+        )
+        .unwrap()
+    }
+
+    fn linear_place(local: u32, ty: SemanticTypeIdV1) -> SemanticPlaceV1 {
+        SemanticPlaceV1::new(SemanticLocalIdV1::from_index(local), vec![], ty).unwrap()
+    }
+
+    fn linear_block(
+        tag: u8,
+        statements: Vec<SemanticStatementV1>,
+        terminator: SemanticTerminatorKindV1,
+    ) -> SemanticBasicBlockV1 {
+        SemanticBasicBlockV1::new(
+            SemanticBlockIdentityV1::from_sha256([tag; 32]),
+            SemanticSourceProvenanceV1::unavailable(),
+            statements,
+            SemanticTerminatorV1::new(SemanticSourceProvenanceV1::unavailable(), terminator),
+        )
+        .unwrap()
+    }
+
+    fn linear_producer_block(tag: u8, target: u32) -> SemanticBasicBlockV1 {
+        linear_block(
+            tag,
+            vec![],
+            SemanticTerminatorKindV1::Call(
+                SemanticDirectCallV1::new_callable(
+                    LINEAR_PRODUCER,
+                    vec![],
+                    Some(SemanticCallDestinationV1::new(
+                        linear_place(1, LINEAR_DYNAMIC_LDS_TY),
+                        SemanticControlFlowEdgeV1::new(
+                            SemanticEdgeRoleV1::CallReturn,
+                            SemanticBlockIdV1::from_index(target),
+                        ),
+                    )),
+                    SemanticUnwindActionV1::Unreachable,
+                )
+                .unwrap(),
+            ),
+        )
+    }
+
+    fn linear_consumer_block(
+        tag: u8,
+        arguments: Vec<SemanticOperandV1>,
+        target: u32,
+    ) -> SemanticBasicBlockV1 {
+        linear_block(
+            tag,
+            vec![],
+            SemanticTerminatorKindV1::Call(
+                SemanticDirectCallV1::new_callable(
+                    LINEAR_CONSUMER,
+                    arguments,
+                    Some(SemanticCallDestinationV1::new(
+                        linear_place(0, LINEAR_ORDINARY_TY),
+                        SemanticControlFlowEdgeV1::new(
+                            SemanticEdgeRoleV1::CallReturn,
+                            SemanticBlockIdV1::from_index(target),
+                        ),
+                    )),
+                    SemanticUnwindActionV1::Unreachable,
+                )
+                .unwrap(),
+            ),
+        )
+    }
+
+    fn linear_move(local: u32) -> SemanticOperandV1 {
+        SemanticOperandV1::Move(linear_place(local, LINEAR_DYNAMIC_LDS_TY))
+    }
+
+    fn linear_goto_block(tag: u8, target: u32) -> SemanticBasicBlockV1 {
+        linear_block(
+            tag,
+            vec![],
+            SemanticTerminatorKindV1::Goto(SemanticControlFlowEdgeV1::new(
+                SemanticEdgeRoleV1::Goto,
+                SemanticBlockIdV1::from_index(target),
+            )),
+        )
+    }
+
+    fn linear_return_block(tag: u8) -> SemanticBasicBlockV1 {
+        linear_block(tag, vec![], SemanticTerminatorKindV1::Return)
+    }
+
+    fn linear_switch_block(tag: u8, first: u32, otherwise: u32) -> SemanticBasicBlockV1 {
+        linear_block(
+            tag,
+            vec![],
+            SemanticTerminatorKindV1::SwitchInt {
+                discriminant: SemanticOperandV1::Constant(SemanticConstantV1::new(
+                    LINEAR_ORDINARY_TY,
+                    SemanticConstantValueV1::Scalar(SemanticScalarValueV1::new(0, 4).unwrap()),
+                )),
+                targets: SemanticSwitchTargetsV1::new(
+                    vec![SemanticSwitchTargetV1::new(
+                        0,
+                        SemanticControlFlowEdgeV1::new(
+                            SemanticEdgeRoleV1::SwitchValue,
+                            SemanticBlockIdV1::from_index(first),
+                        ),
+                    )],
+                    SemanticControlFlowEdgeV1::new(
+                        SemanticEdgeRoleV1::SwitchOtherwise,
+                        SemanticBlockIdV1::from_index(otherwise),
+                    ),
+                )
+                .unwrap(),
+            },
+        )
+    }
+
+    fn linear_function(
+        blocks: Vec<SemanticBasicBlockV1>,
+        dynamic_locals: u32,
+    ) -> SemanticFunctionDeclV1 {
+        let mut locals = vec![SemanticLocalDeclV1::new(
+            SemanticLocalIdentityV1::from_sha256([220; 32]),
+            LINEAR_ORDINARY_TY,
+            SemanticLocalRoleV1::Return,
+            SemanticSourceProvenanceV1::unavailable(),
+        )];
+        locals.extend((0..dynamic_locals).map(|index| {
+            SemanticLocalDeclV1::new(
+                SemanticLocalIdentityV1::from_sha256([221_u8.wrapping_add(index as u8); 32]),
+                LINEAR_DYNAMIC_LDS_TY,
+                SemanticLocalRoleV1::Temporary,
+                SemanticSourceProvenanceV1::unavailable(),
+            )
+        }));
+        SemanticFunctionDeclV1::new(
+            SemanticFunctionIdentityV1::from_sha256([230; 32]),
+            SemanticFunctionRoleV1::KernelRoot,
+            SemanticItemDefinitionIdentityV1::from_sha256([231; 32]),
+            SemanticMonomorphizationIdentityV1::from_sha256([232; 32]),
+            SemanticGenericTypeArgumentsIdentityV1::from_sha256([233; 32]),
+            SemanticConstGenericArgumentsIdentityV1::from_sha256([234; 32]),
+            SemanticSourceProvenanceV1::unavailable(),
+            linear_abi(235, vec![], LINEAR_ORDINARY_TY),
+            locals,
+            SemanticBlockIdV1::from_index(0),
+            blocks,
+        )
+        .unwrap()
+    }
+
+    fn validate_linear_function(
+        request: &InertSemanticMirRequestV1,
+        function: &SemanticFunctionDeclV1,
+    ) -> Result<(), SemanticMirErrorV1> {
+        let mut context = ValidationContextV1 {
+            request,
+            limits: SemanticMirLimitsV1::default(),
+            totals: ValidationTotalsV1::default(),
+            work: 0,
+        };
+        validate_dynamic_lds_linearity(&mut context, SemanticFunctionIdV1::from_index(0), function)
+    }
+
+    fn assert_linear_capability_error(error: SemanticMirErrorV1) {
+        assert!(matches!(
+            error,
+            SemanticMirErrorV1::InvalidTypeOperation {
+                operation: SemanticTypeOperationV1::LinearCapability,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn dynamic_lds_move_survives_continuations_until_exact_consumption() {
+        let request = linear_request();
+        let function = linear_function(
+            vec![
+                linear_producer_block(1, 1),
+                linear_goto_block(2, 2),
+                linear_goto_block(3, 3),
+                linear_consumer_block(4, vec![linear_move(1)], 4),
+                linear_return_block(5),
+            ],
+            1,
+        );
+        assert_eq!(validate_linear_function(&request, &function), Ok(()));
+    }
+
+    #[test]
+    fn dynamic_lds_equal_branch_states_merge_and_consume_once() {
+        let request = linear_request();
+        let function = linear_function(
+            vec![
+                linear_producer_block(10, 1),
+                linear_switch_block(11, 2, 3),
+                linear_goto_block(12, 4),
+                linear_goto_block(13, 4),
+                linear_consumer_block(14, vec![linear_move(1)], 5),
+                linear_return_block(15),
+            ],
+            1,
+        );
+        assert_eq!(validate_linear_function(&request, &function), Ok(()));
+    }
+
+    #[test]
+    fn dynamic_lds_balanced_branch_consumption_is_path_linear() {
+        let request = linear_request();
+        let function = linear_function(
+            vec![
+                linear_producer_block(20, 1),
+                linear_switch_block(21, 2, 3),
+                linear_consumer_block(22, vec![linear_move(1)], 4),
+                linear_consumer_block(23, vec![linear_move(1)], 4),
+                linear_return_block(24),
+            ],
+            1,
+        );
+        assert_eq!(validate_linear_function(&request, &function), Ok(()));
+    }
+
+    #[test]
+    fn dynamic_lds_copy_is_rejected() {
+        let request = linear_request();
+        let function = linear_function(
+            vec![
+                linear_producer_block(30, 1),
+                linear_consumer_block(
+                    31,
+                    vec![SemanticOperandV1::Copy(linear_place(
+                        1,
+                        LINEAR_DYNAMIC_LDS_TY,
+                    ))],
+                    2,
+                ),
+                linear_return_block(32),
+            ],
+            1,
+        );
+        assert_linear_capability_error(validate_linear_function(&request, &function).unwrap_err());
+    }
+
+    #[test]
+    fn dynamic_lds_two_moves_in_one_call_are_rejected() {
+        let request = linear_request();
+        let function = linear_function(
+            vec![
+                linear_producer_block(40, 1),
+                linear_consumer_block(41, vec![linear_move(1), linear_move(1)], 2),
+                linear_return_block(42),
+            ],
+            1,
+        );
+        assert_linear_capability_error(validate_linear_function(&request, &function).unwrap_err());
+    }
+
+    #[test]
+    fn dynamic_lds_use_after_move_is_rejected() {
+        let request = linear_request();
+        let transfer = SemanticStatementV1::new(
+            SemanticSourceProvenanceV1::unavailable(),
+            SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+                linear_place(2, LINEAR_DYNAMIC_LDS_TY),
+                SemanticRvalueV1::new(
+                    LINEAR_DYNAMIC_LDS_TY,
+                    SemanticRvalueKindV1::Use(linear_move(1)),
+                ),
+            )),
+        );
+        let function = linear_function(
+            vec![
+                linear_producer_block(50, 1),
+                linear_block(
+                    51,
+                    vec![transfer],
+                    SemanticTerminatorKindV1::Call(
+                        SemanticDirectCallV1::new_callable(
+                            LINEAR_CONSUMER,
+                            vec![linear_move(1)],
+                            Some(SemanticCallDestinationV1::new(
+                                linear_place(0, LINEAR_ORDINARY_TY),
+                                SemanticControlFlowEdgeV1::new(
+                                    SemanticEdgeRoleV1::CallReturn,
+                                    SemanticBlockIdV1::from_index(2),
+                                ),
+                            )),
+                            SemanticUnwindActionV1::Unreachable,
+                        )
+                        .unwrap(),
+                    ),
+                ),
+                linear_return_block(52),
+            ],
+            2,
+        );
+        assert_linear_capability_error(validate_linear_function(&request, &function).unwrap_err());
+    }
+
+    #[test]
+    fn dynamic_lds_unequal_branch_merge_is_rejected() {
+        let request = linear_request();
+        let function = linear_function(
+            vec![
+                linear_producer_block(60, 1),
+                linear_switch_block(61, 2, 3),
+                linear_consumer_block(62, vec![linear_move(1)], 4),
+                linear_goto_block(63, 4),
+                linear_return_block(64),
+            ],
+            1,
+        );
+        assert_linear_capability_error(validate_linear_function(&request, &function).unwrap_err());
+    }
+
+    #[test]
+    fn dynamic_lds_distinct_producer_origins_cannot_merge() {
+        let request = linear_request();
+        let function = linear_function(
+            vec![
+                linear_switch_block(70, 1, 2),
+                linear_producer_block(71, 3),
+                linear_producer_block(72, 3),
+                linear_consumer_block(73, vec![linear_move(1)], 4),
+                linear_return_block(74),
+            ],
+            1,
+        );
+        assert_linear_capability_error(validate_linear_function(&request, &function).unwrap_err());
     }
 
     #[test]

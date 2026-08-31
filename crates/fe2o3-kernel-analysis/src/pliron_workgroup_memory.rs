@@ -11,14 +11,12 @@ use dialect_gpu::{
 };
 use dialect_kernel::{
     AccessKindAttr, AllocationEffectOp, AnalysisSplitOp, BranchArgsOp, BranchOp,
-    IndexEqualBranchArgsOp, IndexEqualBranchOp, IndexLessThanBranchArgsOp, IndexLessThanBranchOp,
-    MemorySpaceAttr, PipelineCreateOp, RankedAccessOp, RankedViewOp, ReturnOp, TrapOp,
-    is_supported_allocation_effect_contract_v1,
-};
-#[cfg(test)]
-use dialect_kernel::{
     GFX950_TRANSPOSE_FP4_WORKGROUP_ALLOCATION_ORIGIN_V1,
     GFX950_TRANSPOSE_FP4_WORKGROUP_NOALIAS_CLASS_V1,
+    GFX950_TRANSPOSE_FP8_WORKGROUP_ALLOCATION_ORIGIN_V1,
+    GFX950_TRANSPOSE_FP8_WORKGROUP_NOALIAS_CLASS_V1, IndexEqualBranchArgsOp, IndexEqualBranchOp,
+    IndexLessThanBranchArgsOp, IndexLessThanBranchOp, MemorySpaceAttr, PipelineCreateOp,
+    RankedAccessOp, RankedViewOp, ReturnOp, TrapOp, is_supported_allocation_effect_contract_v1,
 };
 use pliron::{
     basic_block::BasicBlock,
@@ -40,6 +38,19 @@ use crate::pliron_ranked_bounds::run_pliron_ranked_bounds_check_with_analyses_v1
 use crate::{KernelCheckPassKindV1, KernelCheckStatusV1, trace_failure_detail};
 
 pub const MAX_PLIRON_WORKGROUP_FINDINGS_V1: usize = 4_096;
+
+const fn is_reserved_collective_transpose_identity_v1(origin: u64, class: u64) -> bool {
+    matches!(
+        (origin, class),
+        (
+            GFX950_TRANSPOSE_FP4_WORKGROUP_ALLOCATION_ORIGIN_V1,
+            GFX950_TRANSPOSE_FP4_WORKGROUP_NOALIAS_CLASS_V1,
+        ) | (
+            GFX950_TRANSPOSE_FP8_WORKGROUP_ALLOCATION_ORIGIN_V1,
+            GFX950_TRANSPOSE_FP8_WORKGROUP_NOALIAS_CLASS_V1,
+        )
+    )
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PlironWorkgroupMemoryFindingV1 {
@@ -246,6 +257,12 @@ pub(crate) fn run_pliron_workgroup_memory_check_with_analyses_v1(
                     .downcast_ref::<AllocationEffectOp>()
                     .is_some_and(|effect| {
                         effect.memory_space(context) == Some(MemorySpaceAttr::Workgroup)
+                            && effect
+                                .allocation_origin(context)
+                                .zip(effect.noalias_class(context))
+                                .is_some_and(|(origin, class)| {
+                                    is_reserved_collective_transpose_identity_v1(origin, class)
+                                })
                     })
                 {
                     collective_effects.insert(PlironTraceLocationV1 {
@@ -508,6 +525,9 @@ fn collective_block_events_v1(
                     "block {block} op {} uses a non-reserved collective transpose identity",
                     site.operation()
                 ));
+            }
+            if !is_reserved_collective_transpose_identity_v1(allocation_origin, noalias_class) {
+                continue;
             }
             if events.len() == MAX_COLLECTIVE_TRANSPOSE_PATH_EVENTS_V1 {
                 return Err(format!(
@@ -856,6 +876,16 @@ mod status_tests {
         };
         let error = prepend_collective_path_v1(&[event; 4], summary).unwrap_err();
         assert!(error.contains("more than 3 events"));
+    }
+
+    #[test]
+    fn neutral_workgroup_effects_do_not_claim_the_reserved_transpose_lifecycle() {
+        let (origin, class) = dialect_kernel::neutral_workgroup_allocation_contract_v1([29; 32]);
+        assert!(!is_reserved_collective_transpose_identity_v1(origin, class));
+        assert!(is_reserved_collective_transpose_identity_v1(
+            GFX950_TRANSPOSE_FP4_WORKGROUP_ALLOCATION_ORIGIN_V1,
+            GFX950_TRANSPOSE_FP4_WORKGROUP_NOALIAS_CLASS_V1,
+        ));
     }
 
     #[test]

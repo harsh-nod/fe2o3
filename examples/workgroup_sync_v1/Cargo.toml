@@ -14,6 +14,8 @@ publish = false
 [features]
 default = ["lds-kernel", "scoped-atomic-kernel"]
 lds-kernel = []
+lds-u32-kernel = []
+lds-f32-kernel = []
 scoped-atomic-kernel = []
 
 [dependencies]
@@ -23,6 +25,7 @@ fe2o3-device = { path = "../../crates/fe2o3-device" }
 fe2o3-host = { path = "../../crates/fe2o3-host" }
 
 [dev-dependencies]
+fe2o3-hsaco = { path = "../../crates/fe2o3-hsaco" }
 syn = { version = "2", features = ["full", "visit"] }
 
 [lib]

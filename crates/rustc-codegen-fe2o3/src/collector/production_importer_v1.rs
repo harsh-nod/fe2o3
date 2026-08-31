@@ -1169,10 +1169,56 @@ fn terminal_operation_v1<'tcx>(
         {
             Ok(SemanticCompilerIntrinsicOperationV1::CollectiveContextCurrent { context: output })
         }
+        ProductionTerminalExpansionV1::WorkgroupCollectiveContextCurrent
+            if inputs.is_empty()
+                && rust_inputs.is_empty()
+                && rust_is_trusted_adt_v1(
+                    tcx,
+                    rust_output,
+                    TrustedDeviceItem::WorkgroupCollectivesContext,
+                ) =>
+        {
+            Ok(SemanticCompilerIntrinsicOperationV1::CollectiveContextCurrent { context: output })
+        }
+        ProductionTerminalExpansionV1::NeutralWorkgroupReduceSum
+            if inputs.len() == 3
+                && rust_inputs.len() == 3
+                && rust_reference_pointee_v1(rust_inputs[0]).is_some_and(|ty| {
+                    rust_is_trusted_adt_v1(tcx, ty, TrustedDeviceItem::WorkgroupCollectivesContext)
+                })
+                && rust_dynamic_lds_uninitialized_scalar_element_v1(tcx, rust_inputs[1])
+                    == Some(rust_output)
+                && rust_inputs[2] == rust_output
+                && matches!(
+                    rust_output.kind(),
+                    TyKind::Int(IntTy::I32)
+                        | TyKind::Uint(UintTy::U32)
+                        | TyKind::Float(FloatTy::F32)
+                ) =>
+        {
+            let context = pointer_pointee_v1(types, inputs[0])?;
+            let dynamic_lds = inputs[1];
+            let element_storage = dynamic_lds_element_storage_v1(types, dynamic_lds)?;
+            if inputs[2] != output {
+                return Err(body_owner_table_mismatch_v1(
+                    "target-neutral workgroup reduction element",
+                ));
+            }
+            Ok(
+                SemanticCompilerIntrinsicOperationV1::NeutralWorkgroupReduceSum {
+                    context,
+                    dynamic_lds,
+                    element_storage,
+                    element: output,
+                },
+            )
+        }
         ProductionTerminalExpansionV1::WorkgroupReduceSum
             if inputs.len() == 4
                 && rust_inputs.len() == 4
-                && matches!(rust_inputs[0].kind(), TyKind::Ref(_, _, _))
+                && rust_reference_pointee_v1(rust_inputs[0]).is_some_and(|ty| {
+                    rust_is_trusted_adt_v1(tcx, ty, TrustedDeviceItem::WorkgroupGroup)
+                })
                 && rust_reference_pointee_v1(rust_inputs[1]).is_some_and(|ty| {
                     rust_is_trusted_adt_v1(tcx, ty, TrustedDeviceItem::Gfx942CollectivesContext)
                 })
@@ -1180,6 +1226,9 @@ fn terminal_operation_v1<'tcx>(
                     rust_inputs[2].kind(),
                     TyKind::Ref(_, _, rustc_hir::Mutability::Mut)
                 )
+                && rust_reference_pointee_v1(rust_inputs[2])
+                    .and_then(|ty| rust_workgroup_collective_scratch_element_v1(tcx, ty))
+                    == Some(rust_output)
                 && rust_inputs[3] == rust_output
                 && matches!(
                     rust_output.kind(),
@@ -2421,6 +2470,8 @@ fn terminal_operation_v1<'tcx>(
         | ProductionTerminalExpansionV1::DisjointSliceGetRowStriped2dMut
         | ProductionTerminalExpansionV1::MathContextCurrent
         | ProductionTerminalExpansionV1::MathF32(_)
+        | ProductionTerminalExpansionV1::WorkgroupCollectiveContextCurrent
+        | ProductionTerminalExpansionV1::NeutralWorkgroupReduceSum
         | ProductionTerminalExpansionV1::CollectiveContextCurrent
         | ProductionTerminalExpansionV1::WorkgroupReduceSum
         | ProductionTerminalExpansionV1::SubgroupReduceSumF32
@@ -2626,6 +2677,31 @@ fn rust_dynamic_lds_scalar_element_v1<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> 
     .then_some(*element)
 }
 
+fn rust_dynamic_lds_uninitialized_scalar_element_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    ty: Ty<'tcx>,
+) -> Option<Ty<'tcx>> {
+    let TyKind::Adt(definition, arguments) = *ty.kind() else {
+        return None;
+    };
+    if !tcx.is_diagnostic_item(Symbol::intern("fe2o3_device_dynamic_lds"), definition.did()) {
+        return None;
+    }
+    let arguments = arguments.types().collect::<Vec<_>>();
+    let [element, state] = arguments.as_slice() else {
+        return None;
+    };
+    if !rust_is_trusted_adt_v1(tcx, *state, TrustedDeviceItem::LdsUninitialized)
+        || !matches!(
+            element.kind(),
+            TyKind::Int(IntTy::I32) | TyKind::Uint(UintTy::U32) | TyKind::Float(FloatTy::F32)
+        )
+    {
+        return None;
+    }
+    Some(*element)
+}
+
 fn rust_dynamic_lds_raw_parts_v1<'tcx>(output: Ty<'tcx>, element: Ty<'tcx>) -> bool {
     let TyKind::Tuple(fields) = output.kind() else {
         return false;
@@ -2695,6 +2771,25 @@ fn rust_reference_pointee_v1(ty: Ty<'_>) -> Option<Ty<'_>> {
         TyKind::Ref(_, pointee, _) => Some(pointee),
         _ => None,
     }
+}
+
+fn rust_workgroup_collective_scratch_element_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    ty: Ty<'tcx>,
+) -> Option<Ty<'tcx>> {
+    let TyKind::Adt(definition, arguments) = *ty.kind() else {
+        return None;
+    };
+    if trusted_device_items::classify(tcx, definition.did())
+        != Some(TrustedDeviceItem::WorkgroupCollectiveScratch)
+    {
+        return None;
+    }
+    let type_arguments = arguments.types().collect::<Vec<_>>();
+    let [element] = type_arguments.as_slice() else {
+        return None;
+    };
+    Some(*element)
 }
 
 fn rust_shared_u16_slice_v1(ty: Ty<'_>) -> bool {
@@ -3509,6 +3604,8 @@ const fn terminal_operation_tag_for_schema_v1(
         ProductionTerminalExpansionV1::WorkgroupPipelineRead => 97,
         ProductionTerminalExpansionV1::WorkgroupPipelineDiscard => 98,
         ProductionTerminalExpansionV1::WorkgroupPipelineRelease => 99,
+        ProductionTerminalExpansionV1::WorkgroupCollectiveContextCurrent => 104,
+        ProductionTerminalExpansionV1::NeutralWorkgroupReduceSum => 105,
         ProductionTerminalExpansionV1::Bf16Conversion(conversion) => {
             let base = match schema {
                 #[cfg(test)]
@@ -3778,6 +3875,24 @@ mod tests {
                 combined_schema,
             )),
             [100, 101, 102, 103]
+        );
+        assert_eq!(
+            [
+                ProductionTerminalExpansionV1::WorkgroupCollectiveContextCurrent,
+                ProductionTerminalExpansionV1::NeutralWorkgroupReduceSum,
+            ]
+            .map(|expansion| terminal_operation_tag_for_schema_v1(expansion, combined_schema)),
+            [104, 105]
+        );
+        assert_ne!(
+            terminal_operation_tag_for_schema_v1(
+                ProductionTerminalExpansionV1::NeutralWorkgroupReduceSum,
+                combined_schema,
+            ),
+            terminal_operation_tag_for_schema_v1(
+                ProductionTerminalExpansionV1::WorkgroupReduceSum,
+                combined_schema,
+            )
         );
     }
 }

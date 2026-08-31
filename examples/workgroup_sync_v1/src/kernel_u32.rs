@@ -1,21 +1,11 @@
-//! Attributed source profiles with compiler-derived registration identity.
-
-#![allow(missing_docs)] // Generated typed-kernel modules do not carry rustdoc in V1.
+//! Ordinary-Rust `u32` acceptance entry for the neutral reduction contract.
 
 use fe2o3_device::{
     DisjointSlice, DynamicLds, GridExclusive, WorkgroupCollectives, WorkgroupLdsScope, kernel,
     thread,
 };
 
-/// Exact workgroup dimensions for both synchronization profiles.
-pub const LDS_REDUCTION_WORKGROUP_V1: [u32; 3] = [64, 1, 1];
-
-/// Reduces one exact 64-element `i32` row through LDS and writes from lane zero.
-///
-/// Admitted inputs have a mathematical sum representable by `i32`, making the
-/// device collective's wrapping additions equal to the exact host oracle. The
-/// public collective implementation performs one unique LDS publish per lane,
-/// uniform publish/read barriers, and a final barrier before scratch reuse.
+/// Reduces one exact 64-element `u32` row through target-neutral LDS lowering.
 #[kernel(
     typed,
     launch(
@@ -24,9 +14,9 @@ pub const LDS_REDUCTION_WORKGROUP_V1: [u32; 3] = [64, 1, 1];
         static_shared_memory_bytes = 256
     )
 )]
-pub fn lds_publish_read_reduce_i32_v1(
-    values: &[i32],
-    mut output: DisjointSlice<i32, GridExclusive>,
+pub fn lds_publish_read_reduce_u32_v1(
+    values: &[u32],
+    mut output: DisjointSlice<u32, GridExclusive>,
 ) {
     let lane = thread::thread_idx_x();
     let launch_extent = thread::launch_extent_1d();
@@ -44,13 +34,10 @@ pub fn lds_publish_read_reduce_i32_v1(
     {
         fe2o3_device::trap();
     }
-
     let mut lds_scope = WorkgroupLdsScope::current();
-    let lds = DynamicLds::<i32>::exact_current::<64>(&mut lds_scope);
+    let lds = DynamicLds::<u32>::exact_current::<64>(&mut lds_scope);
     let context = WorkgroupCollectives::current();
-    let value = values[lane as usize];
-    let sum = context.reduce_sum_portable(lds, value);
-
+    let sum = context.reduce_sum_portable(lds, values[lane as usize]);
     if lane == 0 {
         let Some(leader) = thread::grid_leader() else {
             fe2o3_device::trap();

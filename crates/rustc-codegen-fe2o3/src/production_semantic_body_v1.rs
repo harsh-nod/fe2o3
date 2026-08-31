@@ -2071,6 +2071,7 @@ const fn terminal_argument_count_v1(expansion: ProductionTerminalExpansionV1) ->
         | ProductionTerminalExpansionV1::GridDimension(_)
         | ProductionTerminalExpansionV1::MathContextCurrent
         | ProductionTerminalExpansionV1::CollectiveContextCurrent
+        | ProductionTerminalExpansionV1::WorkgroupCollectiveContextCurrent
         | ProductionTerminalExpansionV1::WaveLaneCurrent
         | ProductionTerminalExpansionV1::MatrixContextCurrent
         | ProductionTerminalExpansionV1::Gfx950MatrixContextCurrent
@@ -2105,7 +2106,8 @@ const fn terminal_argument_count_v1(expansion: ProductionTerminalExpansionV1) ->
         | ProductionTerminalExpansionV1::WorkgroupPipelineDiscard
         | ProductionTerminalExpansionV1::WorkgroupPipelineRelease => Some(2),
         ProductionTerminalExpansionV1::Gfx950SubgroupBroadcastF32
-        | ProductionTerminalExpansionV1::WorkgroupPipelineRead => Some(3),
+        | ProductionTerminalExpansionV1::WorkgroupPipelineRead
+        | ProductionTerminalExpansionV1::NeutralWorkgroupReduceSum => Some(3),
         ProductionTerminalExpansionV1::MathF32(function) => Some(function.arity() + 1),
         ProductionTerminalExpansionV1::MatrixMultiplyAccumulate
         | ProductionTerminalExpansionV1::Gfx950Fp4MultiplyAccumulate

@@ -11,6 +11,10 @@
 pub mod contract;
 #[cfg(feature = "lds-kernel")]
 pub mod kernel;
+#[cfg(feature = "lds-u32-kernel")]
+mod kernel_u32;
+#[cfg(feature = "lds-f32-kernel")]
+mod kernel_f32;
 #[cfg(feature = "scoped-atomic-kernel")]
 pub mod scoped_atomic;
 #[cfg(not(target_arch = "amdgpu"))]

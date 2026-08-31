@@ -1,10 +1,13 @@
-//! Bounded gfx942 wave64 and workgroup sum collectives.
+//! Bounded target-neutral workgroup and gfx942 wave64 collectives.
 //!
 //! The public algorithms expose their exact shuffle, LDS, and barrier shape,
 //! while target operations remain compiler-recognized hooks that panic closed
-//! on a host or unsupported compilation path. The initial profile admits only
-//! `u32`, `i32`, and `f32`, a full wave64, and power-of-two workgroups no larger
-//! than 256 invocations.
+//! on a host or unsupported compilation path. The target-neutral workgroup
+//! profile admits only sum over `u32`, `i32`, and `f32` in one-dimensional,
+//! power-of-two workgroups no larger than 256 invocations. Its compiler
+//! expansion uses shared LDS state and a uniform acquire-release barrier phase
+//! before and after every reduction update. gfx942 retains its additional
+//! wave64-only operations as a separate compatibility contract.
 //! The bounded V1 compiler path recognizes the authenticated operations in this
 //! module. Producing and launching a code object remains a separate compiler and
 //! runtime admission boundary.
@@ -18,11 +21,17 @@ use crate::{DynamicLds, Group, LdsUninitialized, SubgroupTile, Workgroup};
 /// Version of the bounded gfx942 collective contract.
 pub const GFX942_COLLECTIVE_CONTRACT_VERSION_V1: u16 = 1;
 
+/// Version of the target-neutral LDS workgroup collective contract.
+pub const WORKGROUP_COLLECTIVE_CONTRACT_VERSION_V1: u16 = 1;
+
 /// Version of the exact wave64/static-LDS vertical-slice contract.
 pub const GFX942_WAVE_LDS_VERTICAL_SLICE_VERSION_V1: u16 = 1;
 
 /// Largest workgroup admitted by the first LDS collective profile.
 pub const MAX_GFX942_WORKGROUP_COLLECTIVE_SIZE: u32 = 256;
+
+/// Largest workgroup admitted by the target-neutral LDS collective profile.
+pub const MAX_WORKGROUP_COLLECTIVE_SIZE: u32 = 256;
 
 /// Number of `u32` slots in the first compiler-created static-LDS capability.
 pub const GFX942_STATIC_LDS_U32X256_SLOTS: u32 = 256;
@@ -34,7 +43,7 @@ pub const GFX942_STATIC_LDS_U32X256_BYTES: u32 = GFX942_STATIC_LDS_U32X256_SLOTS
 pub const GFX942_STATIC_LDS_U32X256_ALIGNMENT: u32 = 4;
 
 const fn supported_workgroup_collective_size(size: u64) -> bool {
-    if size == 0 || size > MAX_GFX942_WORKGROUP_COLLECTIVE_SIZE as u64 {
+    if size == 0 || size > MAX_WORKGROUP_COLLECTIVE_SIZE as u64 {
         return false;
     }
     size & (size - 1) == 0
@@ -44,12 +53,25 @@ mod sealed {
     pub trait CollectiveElement {}
 }
 
+/// A scalar admitted by the target-neutral workgroup sum contract.
+///
+/// This trait is sealed to `u32`, `i32`, and `f32`. Integer addition wraps at
+/// 32 bits. Floating-point addition follows the authenticated target's strict
+/// scalar-add policy. The deterministic tree is not a sequential left fold.
+///
+/// ```compile_fail
+/// use fe2o3_device::WorkgroupCollectiveElement;
+/// fn admitted<T: WorkgroupCollectiveElement>() {}
+/// admitted::<u64>();
+/// ```
+pub trait WorkgroupCollectiveElement: sealed::CollectiveElement + crate::LdsElement + Copy {}
+
 /// A 32-bit value supported by the first gfx942 sum-collective profile.
 ///
 /// This trait is sealed. Integer addition wraps modulo 2^32; floating-point
 /// addition follows the compiler-authenticated strict gfx942 policy. The
 /// reduction tree is deterministic but is not a sequential left fold.
-pub trait Gfx942CollectiveElement: sealed::CollectiveElement + crate::LdsElement + Copy {
+pub trait Gfx942CollectiveElement: WorkgroupCollectiveElement {
     #[doc(hidden)]
     const ZERO: Self;
 
@@ -85,6 +107,8 @@ macro_rules! collective_element {
         $load_marker:literal
     ) => {
         impl sealed::CollectiveElement for $ty {}
+
+        impl WorkgroupCollectiveElement for $ty {}
 
         impl Gfx942CollectiveElement for $ty {
             const ZERO: Self = $zero;
@@ -138,6 +162,18 @@ collective_element!(
     "fe2o3_device_gfx942_lds_store_u32_v1",
     "fe2o3_device_gfx942_lds_load_u32_v1"
 );
+
+/// Compiler-created authority for the target-neutral LDS workgroup profile.
+///
+/// The capability is neither `Copy`, `Clone`, `Send`, nor `Sync`. It carries no
+/// caller-selected target or execution identity. Production lowering binds it
+/// to the authenticated current workgroup and to one of the closed gfx942 or
+/// gfx950 target profiles.
+#[rustc_diagnostic_item = "fe2o3_device_workgroup_collectives_context_v1"]
+pub struct WorkgroupCollectives {
+    _private: (),
+    _not_send_sync: PhantomData<*mut ()>,
+}
 collective_element!(
     i32,
     0,
@@ -320,14 +356,15 @@ pub enum WorkgroupCollectiveScratchError {
 /// value is neither `Copy`, `Clone`, `Send`, nor `Sync`, and its pointer is not
 /// exposed as a Rust reference because every work-item names the shared LDS
 /// allocation concurrently.
-pub struct WorkgroupCollectiveScratch<'group, T: Gfx942CollectiveElement> {
+#[rustc_diagnostic_item = "fe2o3_device_workgroup_collective_scratch_v1"]
+pub struct WorkgroupCollectiveScratch<'group, T: WorkgroupCollectiveElement> {
     base: *mut T,
     slots: u32,
     _group: PhantomData<&'group Workgroup<'group>>,
     _not_send_sync: PhantomData<*mut ()>,
 }
 
-impl<'group, T: Gfx942CollectiveElement> WorkgroupCollectiveScratch<'group, T> {
+impl<'group, T: WorkgroupCollectiveElement> WorkgroupCollectiveScratch<'group, T> {
     /// Consumes one typed LDS root capability as collective scratch.
     ///
     /// The dynamic allocation must contain exactly one slot per invocation in
@@ -344,18 +381,14 @@ impl<'group, T: Gfx942CollectiveElement> WorkgroupCollectiveScratch<'group, T> {
         }
         let required = size as u32;
         let slots = lds.len();
-        let provided = if slots > u32::MAX as usize {
-            u32::MAX
-        } else {
-            slots as u32
-        };
-        if provided != required || slots != required as usize {
+        if slots != required as usize {
+            let provided = u32::try_from(slots).unwrap_or(u32::MAX);
             return Err(WorkgroupCollectiveScratchError::SlotCountMismatch { required, provided });
         }
         let (base, _) = lds.into_collective_raw_parts();
         Ok(Self {
             base,
-            slots: required,
+            slots: slots as u32,
             _group: PhantomData,
             _not_send_sync: PhantomData,
         })
@@ -369,7 +402,8 @@ impl<'group, T: Gfx942CollectiveElement> WorkgroupCollectiveScratch<'group, T> {
     /// current workgroup's LDS allocation. Every invocation in `group` must
     /// construct an equivalent binding and use it only in the same uniform
     /// collective sequence. No other operation may access the slots until the
-    /// collective returns. `group` must describe the current gfx942 workgroup.
+    /// collective returns. `group` must describe the current authenticated
+    /// workgroup.
     /// Invalid null, alignment, size, and slot-count inputs may be supplied for
     /// validation and return `Err` without requiring pointer validity.
     pub unsafe fn from_raw_parts(
@@ -409,7 +443,7 @@ impl<'group, T: Gfx942CollectiveElement> WorkgroupCollectiveScratch<'group, T> {
     }
 }
 
-impl<T: Gfx942CollectiveElement> fmt::Debug for WorkgroupCollectiveScratch<'_, T> {
+impl<T: WorkgroupCollectiveElement> fmt::Debug for WorkgroupCollectiveScratch<'_, T> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("WorkgroupCollectiveScratch")
@@ -565,6 +599,53 @@ impl Workgroup<'_> {
         self.synchronize();
         let _ = inclusive;
         result
+    }
+}
+
+impl WorkgroupCollectives {
+    /// Returns the target-neutral workgroup sum to every invocation.
+    ///
+    /// The only admitted operation is sum over `u32`, `i32`, or `f32`. The
+    /// source launch must require an exact `[N, 1, 1]` workgroup where `N` is a
+    /// power of two in `1..=256`, and `scratch` must be the matching
+    /// compiler-owned LDS allocation with exactly one scalar slot per
+    /// invocation. Every invocation must execute this call uniformly.
+    ///
+    /// Lowering writes each invocation's value to its LDS slot, executes a
+    /// uniform acquire-release workgroup barrier, and uses a deterministic
+    /// binary tree. Every read/update phase is separated by uniform
+    /// acquire-release barriers, followed by a final barrier before scratch
+    /// reuse. The result is returned to every invocation. Production target
+    /// binding selects gfx942 or gfx950 only after this neutral contract has
+    /// been admitted.
+    #[inline(never)]
+    #[rustc_diagnostic_item = "fe2o3_device_workgroup_reduce_sum_v1"]
+    pub fn reduce_sum_portable<T: WorkgroupCollectiveElement>(
+        &self,
+        scratch: DynamicLds<'_, T, LdsUninitialized>,
+        value: T,
+    ) -> T {
+        let _ = (scratch, value);
+        unreachable!("workgroup sum must be lowered by the authenticated fe2o3 backend")
+    }
+
+    /// Returns compiler-authenticated authority for the current workgroup.
+    ///
+    /// The compiler proves the exact launch geometry, target support, uniform
+    /// execution, LDS ownership, scalar type, and reduction operation. Host
+    /// execution and unsupported lowering trap.
+    #[inline(never)]
+    #[rustc_diagnostic_item = "fe2o3_device_workgroup_collectives_current_v1"]
+    pub fn current() -> Self {
+        unreachable!("workgroup collective authority requires authenticated lowering")
+    }
+
+    #[cfg(test)]
+    fn for_host_test() -> Self {
+        Self {
+            _private: (),
+            _not_send_sync: PhantomData,
+        }
     }
 }
 

@@ -449,8 +449,11 @@ fn bind_exact_llvm_layout_v1(
 #[cfg(test)]
 mod tests {
     use fe2o3_kernel_ir::{
-        BasicBlock, BlockId, Function, LaunchDomain, LaunchExtent, Module, Signature, Terminator,
-        WorkgroupSize, gfx942_xnack_minus_target_capability,
+        AddressSpace, BarrierSemantics, BasicBlock, BlockId, Convergence, Function, LaunchDomain,
+        LaunchExtent, MemoryOrdering, Module, Operation, OperationKind, ScalarType, Signature,
+        SynchronizationScope, Terminator, Type, ValueDef, ValueId, WorkgroupBarrier,
+        WorkgroupMemory, WorkgroupMemoryExtent, WorkgroupSize,
+        gfx942_xnack_minus_target_capability,
     };
 
     use super::*;
@@ -469,6 +472,58 @@ mod tests {
         );
         kernel.workgroup_size = Some(WorkgroupSize::new(64, 1, 1));
         let mut module = Module::new("production-refinement-test");
+        module.functions.push(function);
+        module.kernels.push(kernel);
+        module
+    }
+
+    fn neutral_workgroup_collective_module() -> Module {
+        let pointer = Type::pointer(
+            Type::Scalar(ScalarType::U32),
+            AddressSpace::Workgroup,
+            fe2o3_kernel_ir::AccessMode::ReadWrite,
+        );
+        let mut block = BasicBlock::new(BlockId(0));
+        block.operations = vec![
+            Operation::new(
+                vec![ValueDef::new(ValueId(0), pointer)],
+                OperationKind::WorkgroupMemory(WorkgroupMemory {
+                    element: Type::Scalar(ScalarType::U32),
+                    extent: WorkgroupMemoryExtent::Static(64),
+                    alignment: 4,
+                }),
+            ),
+            Operation::new(
+                vec![],
+                OperationKind::WorkgroupBarrier(WorkgroupBarrier {
+                    memory_scope: SynchronizationScope::Workgroup,
+                    semantics: BarrierSemantics::new(
+                        MemoryOrdering::AcquireRelease,
+                        [AddressSpace::Workgroup],
+                    ),
+                    convergence: Convergence::uniform(SynchronizationScope::Workgroup),
+                }),
+            ),
+        ];
+        block.terminator = Some(Terminator::Return { values: vec![] });
+        let mut function = Function::kernel_entry(
+            "workgroup_collective_entry",
+            Signature::new(vec![], vec![]),
+            vec![],
+            vec![block],
+        );
+        function.required_capabilities = function.derived_capabilities();
+        let mut kernel = fe2o3_kernel_ir::Kernel::new(
+            "workgroup_collective",
+            "workgroup_collective_entry",
+            LaunchDomain::D1 {
+                x: LaunchExtent::Static(64),
+            },
+        );
+        kernel.workgroup_size = Some(WorkgroupSize::new(64, 1, 1));
+        kernel.required_capabilities = function.required_capabilities.clone();
+        let mut module = Module::new("production-neutral-workgroup-collective");
+        module.required_capabilities = function.required_capabilities.clone();
         module.functions.push(function);
         module.kernels.push(kernel);
         module
@@ -506,6 +561,41 @@ mod tests {
             bound.module().functions[0]
                 .required_capabilities
                 .contains(&wave)
+        );
+    }
+
+    #[test]
+    fn neutral_workgroup_memory_and_uniform_barriers_bind_and_lower_for_both_targets() {
+        let neutral = neutral_workgroup_collective_module();
+        for profile in [
+            ProductionAmdTargetProfileV1::Gfx942,
+            ProductionAmdTargetProfileV1::Gfx950,
+        ] {
+            let bound = bind_production_target_v1(&neutral, profile).unwrap();
+            let llvm = match profile {
+                ProductionAmdTargetProfileV1::Gfx942 => {
+                    crate::lower_compiler_module_to_gfx942_xnack_minus_llvm_ir(bound.module())
+                }
+                ProductionAmdTargetProfileV1::Gfx950 => {
+                    crate::lower_compiler_module_to_gfx950_xnack_minus_llvm_ir(bound.module())
+                }
+            }
+            .unwrap();
+            assert!(llvm.contains("internal addrspace(3) global [64 x i32] undef, align 4"));
+            assert!(llvm.contains("fence syncscope(\"workgroup\") release"));
+            assert!(llvm.contains("call void asm sideeffect \"s_barrier\", \"\"()"));
+            assert!(llvm.contains("fence syncscope(\"workgroup\") acquire"));
+        }
+
+        let gfx942 =
+            bind_production_target_v1(&neutral, ProductionAmdTargetProfileV1::Gfx942).unwrap();
+        assert!(
+            crate::lower_compiler_module_to_gfx950_xnack_minus_llvm_ir(gfx942.module()).is_err()
+        );
+        let gfx950 =
+            bind_production_target_v1(&neutral, ProductionAmdTargetProfileV1::Gfx950).unwrap();
+        assert!(
+            crate::lower_compiler_module_to_gfx942_xnack_minus_llvm_ir(gfx950.module()).is_err()
         );
     }
 

@@ -242,8 +242,9 @@ impl AdmittedInertSemanticMirV1 {
         )
     }
 
-    /// Decodes bytes canonical specifically under the closed V9 combined
-    /// workgroup-pipeline and BF16-conversion schema.
+    /// Decodes bytes canonical specifically under the closed V9 schema for
+    /// target-neutral workgroup reduction and the combined workgroup-pipeline
+    /// plus BF16-conversion surface.
     pub fn decode_exact_v9_canonical(
         bytes: &[u8],
         limits: SemanticMirLimitsV1,
@@ -1537,7 +1538,7 @@ impl<'a> CanonicalDecoderV1<'a> {
         &mut self,
     ) -> Result<SemanticCompilerIntrinsicOperationV1, SemanticMirDecodeErrorV1> {
         let maximum_tag = if self.wire_version == SemanticMirWireVersionV1::V9 {
-            59
+            60
         } else if self.wire_version == SemanticMirWireVersionV1::V8 {
             55
         } else if self.wire_version >= SemanticMirWireVersionV1::V6 {
@@ -1888,6 +1889,12 @@ impl<'a> CanonicalDecoderV1<'a> {
                 element: SemanticTypeIdV1(self.u32()?),
             },
             59 => self.bf16_conversion()?,
+            60 => SemanticCompilerIntrinsicOperationV1::NeutralWorkgroupReduceSum {
+                context: SemanticTypeIdV1(self.u32()?),
+                dynamic_lds: SemanticTypeIdV1(self.u32()?),
+                element_storage: SemanticTypeIdV1(self.u32()?),
+                element: SemanticTypeIdV1(self.u32()?),
+            },
             _ => unreachable!(),
         })
     }
@@ -3599,6 +3606,37 @@ mod tests {
                 |decoder| decoder.compiler_intrinsic(),
             );
         }
+    }
+
+    #[test]
+    fn neutral_workgroup_reduce_round_trips_only_under_v9() {
+        let operation = SemanticCompilerIntrinsicOperationV1::NeutralWorkgroupReduceSum {
+            context: SemanticTypeIdV1::from_index(0),
+            dynamic_lds: SemanticTypeIdV1::from_index(1),
+            element_storage: SemanticTypeIdV1::from_index(2),
+            element: SemanticTypeIdV1::from_index(3),
+        };
+        let encoded = compiler_intrinsic_round_trip(operation, SemanticMirWireVersionV1::V9);
+        assert_eq!(encoded[0], 60);
+
+        for wire_version in [
+            SemanticMirWireVersionV1::V6,
+            SemanticMirWireVersionV1::V7,
+            SemanticMirWireVersionV1::V8,
+        ] {
+            let mut writer = CanonicalWriterV1::new(128);
+            assert!(matches!(
+                encode_compiler_intrinsic_operation(&mut writer, operation, wire_version),
+                Err(SemanticMirErrorV1::WireVersionCannotRepresent {
+                    required: SemanticMirWireVersionV1::V9,
+                    ..
+                })
+            ));
+        }
+
+        let mut decoder = CanonicalDecoderV1::new(&[61], SemanticMirLimitsV1::default());
+        decoder.wire_version = SemanticMirWireVersionV1::V9;
+        assert!(decoder.compiler_intrinsic().is_err());
     }
 
     #[test]

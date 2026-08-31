@@ -2741,6 +2741,38 @@ pub const GFX950_TRANSPOSE_FP4_WORKGROUP_ALLOCATION_ORIGIN_V1: u64 = 0x5452_4e53
 pub const GFX950_TRANSPOSE_FP4_WORKGROUP_NOALIAS_CLASS_V1: u64 = 0x5452_4e53_8000_0001;
 pub const GFX950_TRANSPOSE_FP8_WORKGROUP_ALLOCATION_ORIGIN_V1: u64 = 0x5452_4e53_0000_0002;
 pub const GFX950_TRANSPOSE_FP8_WORKGROUP_NOALIAS_CLASS_V1: u64 = 0x5452_4e53_8000_0002;
+const NEUTRAL_WORKGROUP_ALLOCATION_PAYLOAD_MASK_V1: u64 = 0x0000_ffff_ffff_ffff;
+const NEUTRAL_WORKGROUP_ALLOCATION_ORIGIN_PREFIX_V1: u64 = 0x4e57_0000_0000_0000;
+const NEUTRAL_WORKGROUP_NOALIAS_CLASS_PREFIX_V1: u64 = 0x4e58_0000_0000_0000;
+
+/// Derives the inert ranked-memory identity for one compiler-generated neutral
+/// workgroup recipe. Exact semantic replay remains responsible for authenticating
+/// the complete recipe identity.
+pub const fn neutral_workgroup_allocation_contract_v1(recipe_identity: [u8; 32]) -> (u64, u64) {
+    let raw = u64::from_le_bytes([
+        recipe_identity[0],
+        recipe_identity[1],
+        recipe_identity[2],
+        recipe_identity[3],
+        recipe_identity[4],
+        recipe_identity[5],
+        recipe_identity[6],
+        recipe_identity[7],
+    ]);
+    let payload = raw & NEUTRAL_WORKGROUP_ALLOCATION_PAYLOAD_MASK_V1;
+    let payload = if payload == 0 { 1 } else { payload };
+    (
+        NEUTRAL_WORKGROUP_ALLOCATION_ORIGIN_PREFIX_V1 | payload,
+        NEUTRAL_WORKGROUP_NOALIAS_CLASS_PREFIX_V1 | payload,
+    )
+}
+
+const fn is_neutral_workgroup_allocation_contract_v1(origin: u64, class: u64) -> bool {
+    let payload = origin & NEUTRAL_WORKGROUP_ALLOCATION_PAYLOAD_MASK_V1;
+    payload != 0
+        && origin == NEUTRAL_WORKGROUP_ALLOCATION_ORIGIN_PREFIX_V1 | payload
+        && class == NEUTRAL_WORKGROUP_NOALIAS_CLASS_PREFIX_V1 | payload
+}
 
 pub const fn is_supported_allocation_effect_contract_v1(
     kind: AccessKindAttr,
@@ -2762,6 +2794,12 @@ pub const fn is_supported_allocation_effect_contract_v1(
             GFX950_TRANSPOSE_FP8_WORKGROUP_ALLOCATION_ORIGIN_V1,
             GFX950_TRANSPOSE_FP8_WORKGROUP_NOALIAS_CLASS_V1,
         ) => true,
+        (
+            AccessKindAttr::Read | AccessKindAttr::Write,
+            MemorySpaceAttr::Workgroup,
+            origin,
+            class,
+        ) => is_neutral_workgroup_allocation_contract_v1(origin, class),
         _ => false,
     }
 }

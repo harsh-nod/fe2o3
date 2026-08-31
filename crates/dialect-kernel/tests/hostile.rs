@@ -503,6 +503,24 @@ fn allocation_effect_is_global_non_atomic_and_authenticated() {
         }
     }
 
+    let (origin, noalias) = dialect_kernel::neutral_workgroup_allocation_contract_v1([37; 32]);
+    for kind in [AccessKindAttr::Read, AccessKindAttr::Write] {
+        let neutral =
+            AllocationEffectOp::new(context, kind, MemorySpaceAttr::Workgroup, origin, noalias)
+                .expect("domain-tagged neutral workgroup effect");
+        verify_op(&neutral, context).expect("neutral workgroup effect verifies");
+    }
+    assert!(
+        AllocationEffectOp::new(
+            context,
+            AccessKindAttr::Read,
+            MemorySpaceAttr::Workgroup,
+            origin,
+            noalias ^ 1,
+        )
+        .is_err()
+    );
+
     assert!(
         AllocationEffectOp::new(
             context,

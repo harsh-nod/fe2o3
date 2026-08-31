@@ -24,7 +24,8 @@ use fe2o3_kernel_analysis::{
     MAX_RANKED_BOUNDS_BLOCKS, MAX_RANKED_BOUNDS_EDGES, MAX_RANKED_BOUNDS_OPERATIONS,
 };
 use fe2o3_lower_mir_kernel::{
-    ProductionRankedAccessSourceV1, ProductionRankedSemanticProjectionReceiptV1,
+    ProductionRankedAccessSourceV1, ProductionRankedExecutableEffectOriginV1,
+    ProductionRankedExecutableEffectSourceV1, ProductionRankedSemanticProjectionReceiptV1,
 };
 use fe2o3_mir_model::semantic_mir_v1::{
     AdmittedInertSemanticMirV1, SemanticAbiPassModeV1, SemanticAbiPointeeKindV1,
@@ -39,7 +40,8 @@ use fe2o3_mir_model::semantic_mir_v1::{
     SemanticLocalIdV1, SemanticLocalRoleV1, SemanticMfmaAccumulatorContractV1,
     SemanticMfmaAccumulatorDistributionV1, SemanticMfmaOperandContractV1,
     SemanticMfmaOperandRoleV1, SemanticMfmaProfileV1, SemanticMfmaRegisterDistributionV1,
-    SemanticMfmaStorageLayoutV1, SemanticOperandV1, SemanticPlaceV1, SemanticProjectionKindV1,
+    SemanticMfmaStorageLayoutV1, SemanticMutabilityV1, SemanticOperandV1, SemanticPlaceV1,
+    SemanticPointerKindV1, SemanticPointerMetadataV1, SemanticProjectionKindV1,
     SemanticRvalueKindV1, SemanticRvalueV1, SemanticScalarTypeV1,
     SemanticSourceArgumentOwnershipV1, SemanticSourceProvenanceV1, SemanticStatementKindV1,
     SemanticSwitchTargetsV1, SemanticTargetArchitectureV1, SemanticTerminatorKindV1,
@@ -251,6 +253,7 @@ struct IntrinsicProjectionV1 {
     transpose_workgroup_effects: Vec<Option<ProjectedTransposeWorkgroupEffectV1>>,
     read_view_effects: Vec<Option<GuardedRankedAccessV1>>,
     pipeline_effects: Vec<Option<ProjectedPipelineEffectV1>>,
+    generated_terminator_effects: Vec<Option<Vec<ProjectedGeneratedExecutableEffectV1>>>,
     extent_argument_count: usize,
 }
 
@@ -573,6 +576,21 @@ struct ProjectedEffectSourceV1 {
     semantic_site: Option<ProjectedSemanticAccessSiteV1>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ProjectedExecutableEffectOriginV1 {
+    /// Compiler-generated executable work whose source span is only its
+    /// lowering parent. This does not make the generated event source-backed.
+    GeneratedFromSemanticTerminator { parent: SemanticSourceProvenanceV1 },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ProjectedGeneratedExecutableEffectV1 {
+    operation: ProductionRankedOperationV1,
+    semantic_effect_ordinal: u32,
+    origin: ProjectedExecutableEffectOriginV1,
+    recipe_identity: [u8; 32],
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum ProjectedBlockItemV1 {
     Effect {
@@ -581,6 +599,7 @@ enum ProjectedBlockItemV1 {
     },
     Guarded(GuardedRankedAccessV1),
     Pipeline(ProjectedPipelineEffectV1),
+    GeneratedFromSemanticTerminator(ProjectedGeneratedExecutableEffectV1),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -601,6 +620,14 @@ impl ProjectedSemanticBlockV1 {
             | ProjectedBlockItemV1::Guarded(_) => true,
             ProjectedBlockItemV1::Pipeline(ProjectedPipelineEffectV1::Access { .. }) => true,
             ProjectedBlockItemV1::Pipeline(_) => false,
+            ProjectedBlockItemV1::GeneratedFromSemanticTerminator(effect) => {
+                matches!(
+                    &effect.operation,
+                    ProductionRankedOperationV1::Access { .. }
+                        | ProductionRankedOperationV1::AtomicAccess { .. }
+                        | ProductionRankedOperationV1::AllocationEffect { .. }
+                )
+            }
             ProjectedBlockItemV1::Effect { .. } => false,
         })
     }
@@ -620,6 +647,7 @@ impl ProjectedSemanticBlockV1 {
             ProjectedBlockItemV1::Guarded(_) => true,
             ProjectedBlockItemV1::Pipeline(ProjectedPipelineEffectV1::Access { .. }) => true,
             ProjectedBlockItemV1::Pipeline(_) => false,
+            ProjectedBlockItemV1::GeneratedFromSemanticTerminator(_) => false,
             ProjectedBlockItemV1::Effect { source: None, .. } => false,
         })
     }
@@ -660,6 +688,7 @@ pub(crate) struct ProductionRankedRootProgramV1 {
     lowering: ProductionRankedKernelLoweringInputV1,
     ranked_ir: String,
     access_sources: Vec<ProductionRankedAccessSourceV1>,
+    executable_effect_sources: Vec<ProductionRankedExecutableEffectSourceV1>,
 }
 
 impl ProductionRankedRootProgramV1 {
@@ -730,6 +759,7 @@ pub(crate) struct ProductionRankedVerifiedRootCandidateV1 {
     lowering: ProductionRankedKernelLoweringInputV1,
     ranked_ir: String,
     access_sources: Vec<ProductionRankedAccessSourceV1>,
+    executable_effect_sources: Vec<ProductionRankedExecutableEffectSourceV1>,
     verification: AuthenticatedRankedVerificationV5,
 }
 
@@ -1238,12 +1268,13 @@ impl ProductionRankedSemanticProjectionRosterReceiptV1 {
             .collect::<Vec<_>>();
         validate_ranked_roster_semantic_bindings_v1(&self.semantic_owner, &semantic_bindings)?;
         for root in &self.source_order_roots {
-            fe2o3_lower_mir_kernel::validate_borrowed_ranked_semantic_projection_candidate_v1(
+            fe2o3_lower_mir_kernel::validate_borrowed_ranked_semantic_projection_candidate_with_generated_effects_v1(
                 &self.semantic_owner,
                 root.semantic_root,
                 &root.lowering,
                 &root.ranked_ir,
                 &root.access_sources,
+                &root.executable_effect_sources,
             )
             .map_err(ProductionRankedVerificationErrorV1::Custody)?;
             let revalidated = fe2o3_pliron::ProductionMiddleEndEvidenceV5::try_new(
@@ -1307,11 +1338,12 @@ impl ProductionRankedSemanticProjectionRosterReceiptV1 {
             .next()
             .ok_or(ProductionRankedVerificationErrorV1::RootRoster(0))?;
         let receipt =
-            ProductionRankedSemanticProjectionReceiptV1::from_unvalidated_projection_candidate(
+            ProductionRankedSemanticProjectionReceiptV1::from_unvalidated_projection_candidate_with_generated_effects(
                 semantic_owner,
                 root.lowering,
                 root.ranked_ir,
                 root.access_sources,
+                root.executable_effect_sources,
             )
             .map_err(ProductionRankedVerificationErrorV1::Custody)?;
         let singleton_evidence = fe2o3_pliron::ProductionMiddleEndEvidenceV5::try_new(
@@ -1400,12 +1432,13 @@ impl ProductionRankedSemanticProgramV1 {
 
         let mut verified_roots = Vec::with_capacity(roots.len());
         for root in roots.into_vec() {
-            fe2o3_lower_mir_kernel::validate_borrowed_ranked_semantic_projection_candidate_v1(
+            fe2o3_lower_mir_kernel::validate_borrowed_ranked_semantic_projection_candidate_with_generated_effects_v1(
                 &semantic_owner,
                 root.semantic_root,
                 &root.lowering,
                 &root.ranked_ir,
                 &root.access_sources,
+                &root.executable_effect_sources,
             )
             .map_err(ProductionRankedVerificationErrorV1::Custody)?;
             let ProductionRankedRootProgramV1 {
@@ -1419,6 +1452,7 @@ impl ProductionRankedSemanticProgramV1 {
                 lowering,
                 ranked_ir,
                 access_sources,
+                executable_effect_sources,
             } = root;
             let verification = authenticate_ranked_root_v5(
                 &semantic_owner,
@@ -1436,6 +1470,7 @@ impl ProductionRankedSemanticProgramV1 {
                 lowering,
                 ranked_ir,
                 access_sources,
+                executable_effect_sources,
                 verification,
             });
         }
@@ -2399,12 +2434,13 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
                 "a projected ranked root with a substituted kernel binding",
             ));
         }
-        fe2o3_lower_mir_kernel::validate_borrowed_ranked_semantic_projection_candidate_v1(
+        fe2o3_lower_mir_kernel::validate_borrowed_ranked_semantic_projection_candidate_with_generated_effects_v1(
             &semantic_owner,
             semantic_root,
             &root.lowering,
             &root.ranked_ir,
             &root.access_sources,
+            &root.executable_effect_sources,
         )
         .map_err(ProductionRankedProjectionErrorV1::StructuralValidation)?;
         roots.push(root);
@@ -2748,6 +2784,18 @@ fn project_and_verify_ranked_root_v1(
         {
             projected.items.push(ProjectedBlockItemV1::Pipeline(effect));
         }
+        if let Some(effects) = intrinsic
+            .generated_terminator_effects
+            .get(block_index)
+            .cloned()
+            .flatten()
+        {
+            projected.items.extend(
+                effects
+                    .into_iter()
+                    .map(ProjectedBlockItemV1::GeneratedFromSemanticTerminator),
+            );
+        }
         projected_effect_count = projected_effect_count
             .checked_add(projected.items.len())
             .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
@@ -2798,7 +2846,7 @@ fn project_and_verify_ranked_root_v1(
             "a concurrent memory effect before exact invocation-index projection is available",
         );
     }
-    let (blocks, sources) = build_ranked_cfg(
+    let (blocks, sources, executable_effect_sources) = build_ranked_cfg(
         semantic.types(),
         function,
         semantic.callables(),
@@ -2877,6 +2925,7 @@ fn project_and_verify_ranked_root_v1(
         lowering,
         ranked_ir,
         access_sources,
+        executable_effect_sources,
     })
 }
 
@@ -5970,6 +6019,256 @@ fn blocked_mapping_fits_launch_v1(
         .is_some()
 }
 
+const NEUTRAL_WORKGROUP_ALLOCATION_IDENTITY_DOMAIN_V1: &[u8] =
+    b"FE2O3/NEUTRAL-WORKGROUP-ALLOCATION/V1\0";
+
+#[derive(Clone, Copy)]
+struct NeutralWorkgroupRecipeIdentityInputV1 {
+    producer_block: usize,
+    consumer_block: usize,
+    dynamic_lds: SemanticTypeIdV1,
+    element_storage: SemanticTypeIdV1,
+    element: SemanticTypeIdV1,
+    elements: u32,
+    scalar_tag: u8,
+}
+
+fn neutral_workgroup_recipe_identity_v1(
+    function: &SemanticFunctionDeclV1,
+    input: NeutralWorkgroupRecipeIdentityInputV1,
+) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(NEUTRAL_WORKGROUP_ALLOCATION_IDENTITY_DOMAIN_V1);
+    hasher.update(b"recipe-v1\0");
+    hasher.update(function.identity().as_bytes());
+    for value in [
+        input.producer_block as u64,
+        input.consumer_block as u64,
+        u64::from(input.dynamic_lds.index()),
+        u64::from(input.element_storage.index()),
+        u64::from(input.element.index()),
+        u64::from(input.elements),
+        u64::from(input.scalar_tag),
+    ] {
+        hasher.update(value.to_le_bytes());
+    }
+    hasher.finalize().into()
+}
+
+fn is_exact_shared_reference_to_v1(
+    types: &[SemanticTypeDeclV1],
+    reference: SemanticTypeIdV1,
+    pointee: SemanticTypeIdV1,
+) -> bool {
+    matches!(
+        types.get(reference.index() as usize).map(SemanticTypeDeclV1::shape),
+        Some(SemanticTypeShapeV1::Pointer(pointer))
+            if pointer.pointee() == pointee
+                && pointer.kind() == SemanticPointerKindV1::Reference
+                && pointer.mutability() == SemanticMutabilityV1::Immutable
+                && pointer.address_space() == 0
+                && pointer.pointer_width_bits() == 64
+                && pointer.metadata() == SemanticPointerMetadataV1::None
+    )
+}
+
+fn project_generated_terminator_effects_v1(
+    types: &[SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1,
+    callables: &[SemanticCallableDeclV1],
+) -> Result<Vec<Option<Vec<ProjectedGeneratedExecutableEffectV1>>>, ProductionRankedProjectionErrorV1>
+{
+    let mut projected = vec![None; function.blocks().len()];
+    let mut dominance = SemanticAssertProofsV1::new(types, function)?;
+    for (consumer_block, block) in function.blocks().iter().enumerate() {
+        let SemanticTerminatorKindV1::Call(call) = block.terminator().kind() else {
+            continue;
+        };
+        let Some(SemanticCallableDeclV1::CompilerIntrinsic {
+            operation:
+                SemanticCompilerIntrinsicOperationV1::NeutralWorkgroupReduceSum {
+                    context,
+                    dynamic_lds,
+                    element_storage,
+                    element,
+                },
+            ..
+        }) = callables.get(call.callee().index() as usize)
+        else {
+            continue;
+        };
+        let [context_argument, dynamic_argument, value_argument] = call.arguments() else {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "target-neutral reduction argument arity changed",
+            ));
+        };
+        let SemanticOperandV1::Move(dynamic_place) = dynamic_argument else {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "target-neutral reduction must move its affine DynamicLds authority",
+            ));
+        };
+        if !is_exact_shared_reference_to_v1(types, context_argument.ty(), *context)
+            || dynamic_place.ty() != *dynamic_lds
+            || !dynamic_place.projections().is_empty()
+            || value_argument.ty() != *element
+            || call
+                .destination()
+                .is_none_or(|destination| destination.place().ty() != *element)
+        {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "target-neutral reduction operand or result contract changed",
+            ));
+        }
+        let dynamic_local = dynamic_place.local();
+        let producers = function
+            .blocks()
+            .iter()
+            .enumerate()
+            .filter_map(|(producer_block, producer)| {
+                let SemanticTerminatorKindV1::Call(producer_call) = producer.terminator().kind()
+                else {
+                    return None;
+                };
+                let destination = producer_call.destination()?.place();
+                if !destination.projections().is_empty() || destination.local() != dynamic_local {
+                    return None;
+                }
+                let SemanticCallableDeclV1::CompilerIntrinsic { operation, .. } =
+                    callables.get(producer_call.callee().index() as usize)?
+                else {
+                    return None;
+                };
+                Some((producer_block, producer_call, operation))
+            })
+            .collect::<Vec<_>>();
+        let [(producer_block, producer_call, producer_operation)] = producers.as_slice() else {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "target-neutral reduction lacks one exact DynamicLds producer",
+            ));
+        };
+        let SemanticCompilerIntrinsicOperationV1::DynamicLdsExactCurrent {
+            dynamic_lds: producer_dynamic_lds,
+            element_storage: producer_element_storage,
+            elements,
+            ..
+        } = producer_operation
+        else {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "target-neutral reduction DynamicLds local has a substituted producer",
+            ));
+        };
+        let elements = u32::try_from(*elements).map_err(|_| {
+            ProductionRankedProjectionErrorV1::Unsupported(
+                "target-neutral reduction extent exceeds the ranked domain",
+            )
+        })?;
+        let scalar_tag = match types
+            .get(element.index() as usize)
+            .map(SemanticTypeDeclV1::shape)
+        {
+            Some(SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
+                signed: false,
+                bits: 32,
+            })) => 1,
+            Some(SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
+                signed: true,
+                bits: 32,
+            })) => 2,
+            Some(SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Float { bits: 32 })) => 3,
+            _ => 0,
+        };
+        if *producer_dynamic_lds != *dynamic_lds
+            || *producer_element_storage != *element_storage
+            || !matches!(
+                producer_call.arguments(),
+                [SemanticOperandV1::Move(place)] if place.projections().is_empty()
+            )
+            || *producer_block == consumer_block
+            || !dominance.block_dominates(*producer_block, consumer_block)?
+            || elements == 0
+            || elements > 256
+            || !elements.is_power_of_two()
+            || type_width(types, *element_storage)? != 32
+            || type_width(types, *element)? != 32
+            || scalar_tag == 0
+        {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "target-neutral reduction producer, scalar, extent, or dominance contract changed",
+            ));
+        }
+        let recipe_identity = neutral_workgroup_recipe_identity_v1(
+            function,
+            NeutralWorkgroupRecipeIdentityInputV1 {
+                producer_block: *producer_block,
+                consumer_block,
+                dynamic_lds: *dynamic_lds,
+                element_storage: *element_storage,
+                element: *element,
+                elements,
+                scalar_tag,
+            },
+        );
+        let (allocation_origin, noalias_class) =
+            dialect_kernel::neutral_workgroup_allocation_contract_v1(recipe_identity);
+        let parent = block.terminator().source();
+        let mut effects = Vec::new();
+        let mut push = |operation| {
+            let semantic_effect_ordinal = u32::try_from(effects.len()).map_err(|_| {
+                ProductionRankedProjectionErrorV1::Unsupported(
+                    "generated terminator effect ordinal exceeds u32",
+                )
+            })?;
+            if effects.len() == MAX_PROJECTED_OPERATIONS_V1 {
+                return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                    "generated terminator effects exceed the ranked operation limit",
+                ));
+            }
+            effects.try_reserve(1).map_err(|_| {
+                ProductionRankedProjectionErrorV1::Unsupported(
+                    "generated terminator effect storage cannot be reserved",
+                )
+            })?;
+            effects.push(ProjectedGeneratedExecutableEffectV1 {
+                operation,
+                semantic_effect_ordinal,
+                origin: ProjectedExecutableEffectOriginV1::GeneratedFromSemanticTerminator {
+                    parent,
+                },
+                recipe_identity,
+            });
+            Ok(())
+        };
+        let memory = |kind| ProductionRankedOperationV1::AllocationEffect {
+            kind,
+            memory_space: MemorySpaceAttr::Workgroup,
+            allocation_origin,
+            noalias_class,
+        };
+        let barrier = || ProductionRankedOperationV1::Barrier {
+            execution_scope: HierarchyAttr::Workgroup,
+            memory_scope: MemoryScopeAttr::Workgroup,
+            address_space: AddressSpaceAttr::Workgroup,
+            order: MemoryOrderAttr::AcquireRelease,
+        };
+        push(memory(AccessKindAttr::Write))?;
+        push(barrier())?;
+        let mut offset = elements >> 1;
+        while offset != 0 {
+            for access in [AccessKindAttr::Read, AccessKindAttr::Read] {
+                push(memory(access))?;
+            }
+            push(barrier())?;
+            push(memory(AccessKindAttr::Write))?;
+            push(barrier())?;
+            offset >>= 1;
+        }
+        push(memory(AccessKindAttr::Read))?;
+        push(barrier())?;
+        projected[consumer_block] = Some(effects);
+    }
+    Ok(projected)
+}
+
 fn project_intrinsic_contracts(
     callables: &[SemanticCallableDeclV1],
     callable_effects: &DefinedCallableEmptyEffectSummariesV1,
@@ -7481,6 +7780,8 @@ fn project_intrinsic_contracts(
         allocations: local_allocations,
         allocation_provenance,
     };
+    let generated_terminator_effects =
+        project_generated_terminator_effects_v1(types, function, callables)?;
     Ok(IntrinsicProjectionV1 {
         index_values,
         local_contracts,
@@ -7499,6 +7800,7 @@ fn project_intrinsic_contracts(
         transpose_workgroup_effects,
         read_view_effects,
         pipeline_effects,
+        generated_terminator_effects,
     })
 }
 
@@ -15372,7 +15674,11 @@ fn build_ranked_cfg(
     entry_operations: Vec<ProductionRankedOperationV1>,
     mut projected_blocks: Vec<ProjectedSemanticBlockV1>,
 ) -> Result<
-    (Vec<ProductionRankedBlockV1>, Vec<ProjectedAccessSourceV1>),
+    (
+        Vec<ProductionRankedBlockV1>,
+        Vec<ProjectedAccessSourceV1>,
+        Vec<ProductionRankedExecutableEffectSourceV1>,
+    ),
     ProductionRankedProjectionErrorV1,
 > {
     if projected_blocks.len() != function.blocks().len() {
@@ -15468,6 +15774,7 @@ fn build_ranked_cfg(
         },
     ));
     let mut sources = Vec::new();
+    let mut executable_effect_sources = Vec::new();
     for (semantic_index, (projected, terminator)) in
         projected_blocks.into_iter().zip(terminators).enumerate()
     {
@@ -15476,6 +15783,7 @@ fn build_ranked_cfg(
         };
         let live = &live_inductions[semantic_index];
         let mut operations = Vec::new();
+        let mut generated_effect_ordinal = 0_u32;
         for item in projected.items {
             match item {
                 ProjectedBlockItemV1::Effect { operation, source } => {
@@ -15619,6 +15927,42 @@ fn build_ranked_cfg(
                             }),
                         });
                     }
+                }
+                ProjectedBlockItemV1::GeneratedFromSemanticTerminator(effect) => {
+                    if effect.semantic_effect_ordinal != generated_effect_ordinal {
+                        return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                            "generated terminator effects are not in canonical ordinal order",
+                        ));
+                    }
+                    generated_effect_ordinal = generated_effect_ordinal.checked_add(1).ok_or(
+                        ProductionRankedProjectionErrorV1::Unsupported(
+                            "generated terminator effect ordinal overflow",
+                        ),
+                    )?;
+                    let ProjectedExecutableEffectOriginV1::GeneratedFromSemanticTerminator {
+                        parent: _,
+                    } = effect.origin;
+                    executable_effect_sources.push(ProductionRankedExecutableEffectSourceV1::new(
+                        u32::try_from(semantic_index).map_err(|_| {
+                            ProductionRankedProjectionErrorV1::Unsupported(
+                                "generated semantic block does not fit u32",
+                            )
+                        })?,
+                        effect.semantic_effect_ordinal,
+                        u32::try_from(current).map_err(|_| {
+                            ProductionRankedProjectionErrorV1::Unsupported(
+                                "generated ranked block does not fit u32",
+                            )
+                        })?,
+                        u32::try_from(operations.len()).map_err(|_| {
+                            ProductionRankedProjectionErrorV1::Unsupported(
+                                "generated ranked operation does not fit u32",
+                            )
+                        })?,
+                        ProductionRankedExecutableEffectOriginV1::GeneratedFromSemanticTerminator,
+                        effect.recipe_identity,
+                    ));
+                    operations.push(effect.operation);
                 }
             }
         }
@@ -15917,7 +16261,7 @@ fn build_ranked_cfg(
             "semantic CFG projection produced a non-canonical block inventory",
         ));
     }
-    Ok((blocks, sources))
+    Ok((blocks, sources, executable_effect_sources))
 }
 
 fn ranked_operation_last_result_v1(
@@ -17533,6 +17877,7 @@ fn projected_block_uses_bounds_check(
                 && access.comparisons.contains(&(check.index, check.extent))
         }
         ProjectedBlockItemV1::Pipeline(_) => false,
+        ProjectedBlockItemV1::GeneratedFromSemanticTerminator(_) => false,
         ProjectedBlockItemV1::Effect { .. } => false,
     })
 }
@@ -18013,6 +18358,18 @@ fn project_direct_call_accesses(
     next_value: &mut u32,
     ranked_ir: &mut String,
 ) -> Result<(), ProductionRankedProjectionErrorV1> {
+    if matches!(
+        callables.get(call.callee().index() as usize),
+        Some(SemanticCallableDeclV1::CompilerIntrinsic {
+            operation: SemanticCompilerIntrinsicOperationV1::NeutralWorkgroupReduceSum { .. },
+            ..
+        })
+    ) {
+        // The compiler-generated LDS accesses and synchronization are emitted
+        // as one ordered, no-source terminator stream by
+        // `project_generated_terminator_effects_v1`.
+        return Ok(());
+    }
     if callables
         .get(call.callee().index() as usize)
         .is_some_and(|callable| {
@@ -19629,6 +19986,621 @@ mod tests {
         ProductionRankedRootInputV1::new(name, bytes(binding), &launch)
     }
 
+    const NEUTRAL_UNIT_TYPE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(0);
+    const NEUTRAL_LDS_SCOPE_TYPE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(1);
+    const NEUTRAL_LDS_SCOPE_REFERENCE_TYPE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(2);
+    const NEUTRAL_ELEMENT_TYPE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(3);
+    const NEUTRAL_ELEMENT_POINTER_TYPE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(4);
+    const NEUTRAL_U64_TYPE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(5);
+    const NEUTRAL_DYNAMIC_LDS_TYPE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(6);
+    const NEUTRAL_CONTEXT_TYPE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(7);
+    const NEUTRAL_CONTEXT_REFERENCE_TYPE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(8);
+
+    fn neutral_scalar_backend_v1(
+        primitive: SemanticBackendPrimitiveV1,
+        maximum: u128,
+    ) -> SemanticBackendReprV1 {
+        SemanticBackendReprV1::scalar(SemanticBackendScalarV1::initialized(
+            primitive,
+            SemanticScalarValidityRangeV1::new(0, maximum),
+        ))
+    }
+
+    fn neutral_pointer_type_v1(
+        tag: u8,
+        pointee: SemanticTypeIdV1,
+        kind: SemanticPointerKindV1,
+        mutability: SemanticMutabilityV1,
+        validity_start: u128,
+    ) -> SemanticTypeDeclV1 {
+        SemanticTypeDeclV1::new(
+            SemanticTypeIdentityV1::from_sha256(bytes(tag)),
+            SemanticLayoutIdentityV1::from_sha256(bytes(tag)),
+            SemanticTypeLayoutV1::new_with_backend_repr(
+                Some(8),
+                8,
+                SemanticBackendReprV1::scalar(SemanticBackendScalarV1::initialized(
+                    SemanticBackendPrimitiveV1::pointer(0, 8, 8),
+                    SemanticScalarValidityRangeV1::new(validity_start, u64::MAX.into()),
+                )),
+                false,
+            )
+            .unwrap(),
+            SemanticTypeShapeV1::Pointer(
+                SemanticPointerTypeV1::new_with_kind(
+                    pointee,
+                    kind,
+                    mutability,
+                    0,
+                    64,
+                    SemanticPointerMetadataV1::None,
+                )
+                .unwrap(),
+            ),
+        )
+    }
+
+    fn neutral_reference_type_v1(
+        tag: u8,
+        pointee: SemanticTypeIdV1,
+        mutability: SemanticMutabilityV1,
+        pointee_kind: SemanticAbiPointeeKindV1,
+    ) -> SemanticTypeDeclV1 {
+        neutral_pointer_type_v1(
+            tag,
+            pointee,
+            SemanticPointerKindV1::Reference,
+            mutability,
+            1,
+        )
+        .with_rustc_abi_properties(
+            SemanticTypeAbiPropertiesV1::new(false, false).with_scalar_pointee_info(
+                Some(SemanticAbiPointeeInfoV1::new(pointee_kind, 0, 1).unwrap()),
+                None,
+            ),
+        )
+    }
+
+    fn neutral_semantic_types_v1() -> Vec<SemanticTypeDeclV1> {
+        let unit = SemanticTypeDeclV1::new(
+            SemanticTypeIdentityV1::from_sha256(bytes(220)),
+            SemanticLayoutIdentityV1::from_sha256(bytes(220)),
+            SemanticTypeLayoutV1::with_exact_rustc_layout(
+                0,
+                1,
+                SemanticFieldsShapeV1::arbitrary(Vec::new(), Vec::new()).unwrap(),
+                SemanticRustcVariantsV1::Single { index: 0 },
+                SemanticBackendReprV1::memory(true),
+                None,
+                false,
+                None,
+                1,
+                0,
+                SemanticTypeLayoutDetailsV1::None,
+            )
+            .unwrap(),
+            SemanticTypeShapeV1::Unit,
+        );
+        let scope = SemanticTypeDeclV1::new(
+            SemanticTypeIdentityV1::from_sha256(bytes(221)),
+            SemanticLayoutIdentityV1::from_sha256(bytes(221)),
+            SemanticTypeLayoutV1::aggregate(
+                Some(0),
+                1,
+                SemanticAggregateLayoutV1::new(vec![0], Vec::new()).unwrap(),
+            )
+            .unwrap(),
+            SemanticTypeShapeV1::Aggregate(
+                SemanticAggregateTypeV1::new(vec![NEUTRAL_UNIT_TYPE]).unwrap(),
+            ),
+        );
+        let scope_reference = neutral_reference_type_v1(
+            222,
+            NEUTRAL_LDS_SCOPE_TYPE,
+            SemanticMutabilityV1::Mutable,
+            SemanticAbiPointeeKindV1::MutableReference { unpin: true },
+        );
+        let element = SemanticTypeDeclV1::new(
+            SemanticTypeIdentityV1::from_sha256(bytes(223)),
+            SemanticLayoutIdentityV1::from_sha256(bytes(223)),
+            SemanticTypeLayoutV1::new_with_backend_repr(
+                Some(4),
+                4,
+                neutral_scalar_backend_v1(
+                    SemanticBackendPrimitiveV1::integer(false, 32, 4),
+                    u32::MAX.into(),
+                ),
+                false,
+            )
+            .unwrap(),
+            SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
+                signed: false,
+                bits: 32,
+            }),
+        );
+        let element_pointer = neutral_pointer_type_v1(
+            224,
+            NEUTRAL_ELEMENT_TYPE,
+            SemanticPointerKindV1::Raw,
+            SemanticMutabilityV1::Mutable,
+            0,
+        );
+        let u64_type = SemanticTypeDeclV1::new(
+            SemanticTypeIdentityV1::from_sha256(bytes(225)),
+            SemanticLayoutIdentityV1::from_sha256(bytes(225)),
+            SemanticTypeLayoutV1::new_with_backend_repr(
+                Some(8),
+                8,
+                neutral_scalar_backend_v1(
+                    SemanticBackendPrimitiveV1::integer(false, 64, 8),
+                    u64::MAX.into(),
+                ),
+                false,
+            )
+            .unwrap(),
+            SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
+                signed: false,
+                bits: 64,
+            }),
+        );
+        let dynamic_lds = SemanticTypeDeclV1::new(
+            SemanticTypeIdentityV1::from_sha256(bytes(226)),
+            SemanticLayoutIdentityV1::from_sha256(bytes(226)),
+            SemanticTypeLayoutV1::aggregate(
+                Some(24),
+                8,
+                SemanticAggregateLayoutV1::new(vec![0, 8, 16, 24, 24, 24], Vec::new()).unwrap(),
+            )
+            .unwrap(),
+            SemanticTypeShapeV1::Aggregate(
+                SemanticAggregateTypeV1::new(vec![
+                    NEUTRAL_ELEMENT_POINTER_TYPE,
+                    NEUTRAL_U64_TYPE,
+                    NEUTRAL_U64_TYPE,
+                    NEUTRAL_UNIT_TYPE,
+                    NEUTRAL_UNIT_TYPE,
+                    NEUTRAL_UNIT_TYPE,
+                ])
+                .unwrap(),
+            ),
+        );
+        let context = SemanticTypeDeclV1::new(
+            SemanticTypeIdentityV1::from_sha256(bytes(227)),
+            SemanticLayoutIdentityV1::from_sha256(bytes(227)),
+            SemanticTypeLayoutV1::new_with_backend_repr(
+                Some(0),
+                1,
+                SemanticBackendReprV1::memory(true),
+                false,
+            )
+            .unwrap(),
+            SemanticTypeShapeV1::Opaque,
+        );
+        let context_reference = neutral_reference_type_v1(
+            228,
+            NEUTRAL_CONTEXT_TYPE,
+            SemanticMutabilityV1::Immutable,
+            SemanticAbiPointeeKindV1::SharedReference { frozen: true },
+        );
+        vec![
+            unit,
+            scope,
+            scope_reference,
+            element,
+            element_pointer,
+            u64_type,
+            dynamic_lds,
+            context,
+            context_reference,
+        ]
+    }
+
+    fn neutral_plain_direct_abi_value_v1(ty: SemanticTypeIdV1) -> SemanticAbiValueV1 {
+        SemanticAbiValueV1::new(
+            ty,
+            SemanticAbiPassModeV1::Direct(
+                SemanticAbiValueAttributesV1::new(
+                    SemanticAbiRegularAttributesV1::new(false, None, false, false, false, true),
+                    SemanticAbiExtensionV1::None,
+                    0,
+                    None,
+                )
+                .unwrap(),
+            ),
+        )
+    }
+
+    fn neutral_reference_abi_value_v1(ty: SemanticTypeIdV1, shared: bool) -> SemanticAbiValueV1 {
+        SemanticAbiValueV1::new(
+            ty,
+            SemanticAbiPassModeV1::Direct(
+                SemanticAbiValueAttributesV1::new(
+                    SemanticAbiRegularAttributesV1::new(
+                        true,
+                        shared.then_some(SemanticAbiPointerCaptureV1::CapturesReadOnly),
+                        true,
+                        shared,
+                        false,
+                        true,
+                    ),
+                    SemanticAbiExtensionV1::None,
+                    0,
+                    None,
+                )
+                .unwrap(),
+            ),
+        )
+    }
+
+    fn neutral_dynamic_lds_abi_value_v1() -> SemanticAbiValueV1 {
+        SemanticAbiValueV1::new(
+            NEUTRAL_DYNAMIC_LDS_TYPE,
+            SemanticAbiPassModeV1::Indirect {
+                attributes: SemanticAbiValueAttributesV1::new(
+                    SemanticAbiRegularAttributesV1::new(
+                        true,
+                        Some(SemanticAbiPointerCaptureV1::CapturesNone),
+                        true,
+                        false,
+                        false,
+                        true,
+                    ),
+                    SemanticAbiExtensionV1::None,
+                    24,
+                    Some(8),
+                )
+                .unwrap(),
+                metadata_attributes: None,
+                on_stack: false,
+            },
+        )
+    }
+
+    fn neutral_compiler_intrinsic_callable_v1(
+        tag: u8,
+        inputs: Vec<SemanticAbiValueV1>,
+        output: SemanticAbiValueV1,
+        operation: SemanticCompilerIntrinsicOperationV1,
+    ) -> SemanticCallableDeclV1 {
+        let arguments = inputs
+            .into_iter()
+            .map(SemanticAbiArgumentV1::source)
+            .collect::<Vec<_>>();
+        let abi = SemanticFunctionAbiV1::from_rustc(
+            SemanticAbiIdentityV1::from_sha256(bytes(tag)),
+            SemanticLayoutIdentityV1::from_sha256(bytes(250)),
+            SemanticCanonAbiV1::Rust,
+            SemanticExternAbiV1::Rust,
+            false,
+            false,
+            u32::try_from(arguments.len()).unwrap(),
+            arguments,
+            output,
+        )
+        .unwrap();
+        SemanticCallableDeclV1::CompilerIntrinsic {
+            binding: SemanticNonBodyCallableBindingV1::new(
+                SemanticFunctionIdentityV1::from_sha256(bytes(tag)),
+                SemanticItemDefinitionIdentityV1::from_sha256(bytes(tag)),
+                SemanticMonomorphizationIdentityV1::from_sha256(bytes(tag)),
+                SemanticGenericTypeArgumentsIdentityV1::from_sha256(bytes(tag)),
+                SemanticConstGenericArgumentsIdentityV1::from_sha256(bytes(tag)),
+                SemanticSourceProvenanceV1::unavailable(),
+                abi,
+            ),
+            operation,
+            operation_identity: SemanticCompilerIntrinsicIdentityV1::from_sha256(bytes(tag)),
+        }
+    }
+
+    fn neutral_test_place_v1(local: u32, ty: SemanticTypeIdV1) -> SemanticPlaceV1 {
+        SemanticPlaceV1::new(SemanticLocalIdV1::from_index(local), Vec::new(), ty).unwrap()
+    }
+
+    fn neutral_test_call_v1(
+        callee: u32,
+        arguments: Vec<SemanticOperandV1>,
+        destination_local: u32,
+        destination_ty: SemanticTypeIdV1,
+        target: u32,
+    ) -> SemanticTerminatorKindV1 {
+        SemanticTerminatorKindV1::Call(
+            SemanticDirectCallV1::new_callable(
+                SemanticCallableIdV1::from_index(callee),
+                arguments,
+                Some(SemanticCallDestinationV1::new(
+                    neutral_test_place_v1(destination_local, destination_ty),
+                    cfg_edge(SemanticEdgeRoleV1::CallReturn, target),
+                )),
+                SemanticUnwindActionV1::Unreachable,
+            )
+            .unwrap(),
+        )
+    }
+
+    fn neutral_ranked_program_v1() -> ProductionRankedSemanticProgramV1 {
+        let scope_borrow = statement(SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+            neutral_test_place_v1(2, NEUTRAL_LDS_SCOPE_REFERENCE_TYPE),
+            SemanticRvalueV1::new(
+                NEUTRAL_LDS_SCOPE_REFERENCE_TYPE,
+                SemanticRvalueKindV1::Borrow {
+                    kind: SemanticBorrowKindV1::Mutable,
+                    place: neutral_test_place_v1(1, NEUTRAL_LDS_SCOPE_TYPE),
+                },
+            ),
+        )));
+        let context_borrow = statement(SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+            neutral_test_place_v1(5, NEUTRAL_CONTEXT_REFERENCE_TYPE),
+            SemanticRvalueV1::new(
+                NEUTRAL_CONTEXT_REFERENCE_TYPE,
+                SemanticRvalueKindV1::Borrow {
+                    kind: SemanticBorrowKindV1::Shared,
+                    place: neutral_test_place_v1(4, NEUTRAL_CONTEXT_TYPE),
+                },
+            ),
+        )));
+        let blocks = vec![
+            block(
+                230,
+                vec![scope_borrow],
+                neutral_test_call_v1(
+                    1,
+                    vec![SemanticOperandV1::Move(neutral_test_place_v1(
+                        2,
+                        NEUTRAL_LDS_SCOPE_REFERENCE_TYPE,
+                    ))],
+                    3,
+                    NEUTRAL_DYNAMIC_LDS_TYPE,
+                    1,
+                ),
+            ),
+            block(
+                231,
+                Vec::new(),
+                neutral_test_call_v1(2, Vec::new(), 4, NEUTRAL_CONTEXT_TYPE, 2),
+            ),
+            block(
+                232,
+                vec![context_borrow],
+                neutral_test_call_v1(
+                    3,
+                    vec![
+                        SemanticOperandV1::Copy(neutral_test_place_v1(
+                            5,
+                            NEUTRAL_CONTEXT_REFERENCE_TYPE,
+                        )),
+                        SemanticOperandV1::Move(neutral_test_place_v1(3, NEUTRAL_DYNAMIC_LDS_TYPE)),
+                        SemanticOperandV1::Constant(SemanticConstantV1::new(
+                            NEUTRAL_ELEMENT_TYPE,
+                            SemanticConstantValueV1::Scalar(
+                                SemanticScalarValueV1::new(7, 4).unwrap(),
+                            ),
+                        )),
+                    ],
+                    6,
+                    NEUTRAL_ELEMENT_TYPE,
+                    3,
+                ),
+            ),
+            block(233, Vec::new(), SemanticTerminatorKindV1::Return),
+        ];
+        let root_abi = SemanticFunctionAbiV1::from_rustc(
+            SemanticAbiIdentityV1::from_sha256(bytes(234)),
+            SemanticLayoutIdentityV1::from_sha256(bytes(250)),
+            SemanticCanonAbiV1::GpuKernel,
+            SemanticExternAbiV1::GpuKernel,
+            false,
+            false,
+            0,
+            Vec::new(),
+            SemanticAbiValueV1::new(NEUTRAL_UNIT_TYPE, SemanticAbiPassModeV1::Ignore),
+        )
+        .unwrap();
+        let locals = [
+            (NEUTRAL_UNIT_TYPE, SemanticLocalRoleV1::Return),
+            (NEUTRAL_LDS_SCOPE_TYPE, SemanticLocalRoleV1::Temporary),
+            (
+                NEUTRAL_LDS_SCOPE_REFERENCE_TYPE,
+                SemanticLocalRoleV1::Temporary,
+            ),
+            (NEUTRAL_DYNAMIC_LDS_TYPE, SemanticLocalRoleV1::Temporary),
+            (NEUTRAL_CONTEXT_TYPE, SemanticLocalRoleV1::Temporary),
+            (
+                NEUTRAL_CONTEXT_REFERENCE_TYPE,
+                SemanticLocalRoleV1::Temporary,
+            ),
+            (NEUTRAL_ELEMENT_TYPE, SemanticLocalRoleV1::Temporary),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, (ty, role))| local(235 + index as u8, ty, role))
+        .collect::<Vec<_>>();
+        let dimensions = SemanticWorkgroupDimensionsV1::new([64, 1, 1]).unwrap();
+        let source_contract = SemanticKernelSourceContractV1::new(
+            Some(
+                SemanticKernelLaunchBoundsV1::new(Some(dimensions), Some(dimensions), None)
+                    .unwrap(),
+            ),
+            None,
+            None,
+        )
+        .unwrap();
+        let function = SemanticFunctionDeclV1::new(
+            SemanticFunctionIdentityV1::from_sha256(bytes(242)),
+            SemanticFunctionRoleV1::KernelRoot,
+            SemanticItemDefinitionIdentityV1::from_sha256(bytes(243)),
+            SemanticMonomorphizationIdentityV1::from_sha256(bytes(244)),
+            SemanticGenericTypeArgumentsIdentityV1::from_sha256(bytes(245)),
+            SemanticConstGenericArgumentsIdentityV1::from_sha256(bytes(246)),
+            SemanticSourceProvenanceV1::unavailable(),
+            root_abi,
+            locals,
+            SemanticBlockIdV1::from_index(0),
+            blocks,
+        )
+        .unwrap()
+        .with_kernel_entry(SemanticKernelEntryV1::new(
+            SemanticLinkSymbolV1::new(b"neutral_generated_hostile".to_vec()).unwrap(),
+            SemanticKernelBindingIdentityV1::from_sha256(bytes(247)),
+            source_contract,
+        ));
+        let callables = vec![
+            SemanticCallableDeclV1::defined(SemanticFunctionIdV1::from_index(0)),
+            neutral_compiler_intrinsic_callable_v1(
+                248,
+                vec![neutral_reference_abi_value_v1(
+                    NEUTRAL_LDS_SCOPE_REFERENCE_TYPE,
+                    false,
+                )],
+                neutral_dynamic_lds_abi_value_v1(),
+                SemanticCompilerIntrinsicOperationV1::DynamicLdsExactCurrent {
+                    scope: NEUTRAL_LDS_SCOPE_TYPE,
+                    dynamic_lds: NEUTRAL_DYNAMIC_LDS_TYPE,
+                    element_storage: NEUTRAL_ELEMENT_TYPE,
+                    elements: 64,
+                },
+            ),
+            neutral_compiler_intrinsic_callable_v1(
+                249,
+                Vec::new(),
+                SemanticAbiValueV1::new(NEUTRAL_CONTEXT_TYPE, SemanticAbiPassModeV1::Ignore),
+                SemanticCompilerIntrinsicOperationV1::CollectiveContextCurrent {
+                    context: NEUTRAL_CONTEXT_TYPE,
+                },
+            ),
+            neutral_compiler_intrinsic_callable_v1(
+                250,
+                vec![
+                    neutral_reference_abi_value_v1(NEUTRAL_CONTEXT_REFERENCE_TYPE, true),
+                    neutral_dynamic_lds_abi_value_v1(),
+                    neutral_plain_direct_abi_value_v1(NEUTRAL_ELEMENT_TYPE),
+                ],
+                neutral_plain_direct_abi_value_v1(NEUTRAL_ELEMENT_TYPE),
+                SemanticCompilerIntrinsicOperationV1::NeutralWorkgroupReduceSum {
+                    context: NEUTRAL_CONTEXT_TYPE,
+                    dynamic_lds: NEUTRAL_DYNAMIC_LDS_TYPE,
+                    element_storage: NEUTRAL_ELEMENT_TYPE,
+                    element: NEUTRAL_ELEMENT_TYPE,
+                },
+            ),
+        ];
+        let admitted = InertSemanticMirRequestV1::new_with_callables(
+            SemanticTargetDataLayoutV1::gfx942(SemanticLayoutIdentityV1::from_sha256(bytes(250))),
+            neutral_semantic_types_v1(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            vec![function],
+            callables,
+            vec![SemanticFunctionIdV1::from_index(0)],
+        )
+        .unwrap()
+        .admit_current_production(SemanticMirLimitsV1::default())
+        .unwrap();
+        let owner = ProductionSemanticMirOwnerV1::try_new(
+            admitted,
+            fe2o3_pliron::ProductionSemanticMirLimitsV1::default(),
+        )
+        .unwrap();
+        project_and_verify_ranked_semantic_mir_v1(
+            owner,
+            &[ranked_root_input("neutral_generated_hostile", 247, 1)],
+            &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1::default(),
+        )
+        .unwrap()
+    }
+
+    fn neutral_mutated_projection_receipt_v1(
+        mutate: impl FnOnce(&mut Vec<ProductionRankedExecutableEffectSourceV1>),
+    ) -> ProductionRankedSemanticProjectionReceiptV1 {
+        let ProductionRankedSemanticProgramV1 {
+            semantic_owner,
+            roots,
+        } = neutral_ranked_program_v1();
+        let mut root = roots
+            .into_vec()
+            .into_iter()
+            .next()
+            .expect("neutral fixture has one projected root");
+        mutate(&mut root.executable_effect_sources);
+        ProductionRankedSemanticProjectionReceiptV1::from_unvalidated_projection_candidate_with_generated_effects(
+            semantic_owner,
+            root.lowering,
+            root.ranked_ir,
+            root.access_sources,
+            root.executable_effect_sources,
+        )
+        .expect("the hostile relation remains structurally inert")
+    }
+
+    fn assert_neutral_mutated_projection_rejected_v1(
+        receipt: ProductionRankedSemanticProjectionReceiptV1,
+    ) {
+        assert!(matches!(
+            fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1::try_lower_after_ranked_checks(
+                receipt,
+                fe2o3_lower_mir_kernel::ProductionSemanticKirLimitsV1::default(),
+                1,
+            ),
+            Err(fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1::MirPlironTranslation(
+                fe2o3_lower_mir_kernel::ProductionMirPlironTranslationErrorV1::GeneratedEffectRecipeMismatch { .. }
+            ))
+        ));
+    }
+
+    #[test]
+    fn neutral_full_path_rejects_nonzero_recipe_identity_substitution() {
+        let receipt = neutral_mutated_projection_receipt_v1(|sources| {
+            let source = sources[0];
+            let mut recipe = source.recipe_identity();
+            recipe[0] ^= 0x80;
+            sources[0] = ProductionRankedExecutableEffectSourceV1::new(
+                source.semantic_block(),
+                source.semantic_effect_ordinal(),
+                source.ranked_block(),
+                source.ranked_operation(),
+                source.origin(),
+                recipe,
+            );
+        });
+        assert_neutral_mutated_projection_rejected_v1(receipt);
+    }
+
+    #[test]
+    fn neutral_full_path_rejects_missing_final_ranked_generated_effect_receipt() {
+        let receipt = neutral_mutated_projection_receipt_v1(|sources| {
+            sources
+                .pop()
+                .expect("neutral fixture has generated effects");
+        });
+        assert_neutral_mutated_projection_rejected_v1(receipt);
+    }
+
+    #[test]
+    fn neutral_full_path_rejects_ranked_generated_effect_reordering() {
+        let receipt = neutral_mutated_projection_receipt_v1(|sources| {
+            let first = sources[0];
+            let second = sources[1];
+            sources[0] = ProductionRankedExecutableEffectSourceV1::new(
+                first.semantic_block(),
+                first.semantic_effect_ordinal(),
+                second.ranked_block(),
+                second.ranked_operation(),
+                first.origin(),
+                first.recipe_identity(),
+            );
+            sources[1] = ProductionRankedExecutableEffectSourceV1::new(
+                second.semantic_block(),
+                second.semantic_effect_ordinal(),
+                first.ranked_block(),
+                first.ranked_operation(),
+                second.origin(),
+                second.recipe_identity(),
+            );
+        });
+        assert_neutral_mutated_projection_rejected_v1(receipt);
+    }
+
     fn ranked_roster_identity_record(
         logical_name: &'static str,
         export_symbol: &'static [u8],
@@ -20802,7 +21774,7 @@ mod tests {
     ) {
         let function =
             projection_function(vec![block(29, vec![], SemanticTerminatorKindV1::Return)]);
-        let (blocks, sources) = build_ranked_cfg(
+        let (blocks, sources, _) = build_ranked_cfg(
             &projection_types(),
             &function,
             &[],
@@ -21254,6 +22226,14 @@ mod tests {
         assert!(requires_ranked_workgroup_barrier_v1(
             &SemanticCompilerIntrinsicOperationV1::WorkgroupBarrier,
         ));
+        assert!(!requires_ranked_workgroup_barrier_v1(
+            &SemanticCompilerIntrinsicOperationV1::WorkgroupReduceSum {
+                workgroup: SCALAR_TYPE,
+                context: SCALAR_TYPE,
+                scratch: SCALAR_TYPE,
+                element: SCALAR_TYPE,
+            },
+        ));
         assert!(requires_ranked_workgroup_barrier_v1(
             &SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposePublish {
                 input_tile: SCALAR_TYPE,
@@ -21308,7 +22288,7 @@ mod tests {
             block(71, vec![], SemanticTerminatorKindV1::Return),
         ]);
 
-        let (after_blocks, _) = build_ranked_cfg(
+        let (after_blocks, _, _) = build_ranked_cfg(
             &projection_types(),
             &function,
             &[],
@@ -21333,7 +22313,7 @@ mod tests {
             [ProductionRankedOperationV1::Barrier { .. }]
         ));
 
-        let (before_blocks, _) = build_ranked_cfg(
+        let (before_blocks, _, _) = build_ranked_cfg(
             &projection_types(),
             &function,
             &[],
@@ -28271,7 +29251,7 @@ mod tests {
         assert!(constant_values.contains(&7));
         assert!(constant_values.contains(&16));
 
-        let (blocks, _) = build_ranked_cfg(
+        let (blocks, _, _) = build_ranked_cfg(
             &projection_types(),
             &function,
             &[],
@@ -31176,7 +32156,7 @@ mod tests {
         .unwrap();
         assert_eq!(inductions.len(), 1);
 
-        let (blocks, _) = build_ranked_cfg(
+        let (blocks, _, _) = build_ranked_cfg(
             &projection_types(),
             &function,
             &[],
@@ -31274,7 +32254,7 @@ mod tests {
             "the generic scalar range proof must retain the exact stable loop guard fact",
         );
 
-        let (blocks, _) = build_ranked_cfg(
+        let (blocks, _, _) = build_ranked_cfg(
             &types,
             &function,
             &[],
@@ -32497,7 +33477,7 @@ mod tests {
             operation: barrier.clone(),
             source: None,
         });
-        let (blocks, _) = build_ranked_cfg(
+        let (blocks, _, _) = build_ranked_cfg(
             &projection_types(),
             &function,
             &[],
@@ -32541,7 +33521,7 @@ mod tests {
         assert_eq!(inductions.len(), 1);
         assert_eq!(inductions[0].loop_blocks, vec![1, 2, 3, 4]);
 
-        let (blocks, _) = build_ranked_cfg(
+        let (blocks, _, _) = build_ranked_cfg(
             &projection_types(),
             &function,
             &[],
@@ -33346,7 +34326,7 @@ mod tests {
         };
         let mut predicates = vec![None; function.locals().len()];
         predicates[4] = Some(predicate);
-        let (blocks, _) = build_ranked_cfg(
+        let (blocks, _, _) = build_ranked_cfg(
             &projection_types(),
             &function,
             &[],
@@ -33394,7 +34374,7 @@ mod tests {
             targets: vec![(zero, 3)],
             otherwise: 4,
         });
-        let (blocks, _) = build_ranked_cfg(
+        let (blocks, _, _) = build_ranked_cfg(
             &projection_types(),
             &function,
             &[],
@@ -33473,7 +34453,7 @@ mod tests {
         assert_eq!(inductions.len(), 1);
         assert_eq!(inductions[0].loop_blocks, vec![1, 2, 3]);
 
-        let (blocks, _) = build_ranked_cfg(
+        let (blocks, _, _) = build_ranked_cfg(
             &projection_types(),
             &function,
             &callables,
@@ -33720,7 +34700,7 @@ mod tests {
             1,
         );
         let (inductions, entry_operations, _) = project_test_inductions(&function).unwrap();
-        let (blocks, _) = build_ranked_cfg(
+        let (blocks, _, _) = build_ranked_cfg(
             &projection_types(),
             &function,
             &[],
@@ -33769,7 +34749,7 @@ mod tests {
                 source: SemanticSourceProvenanceV1::unavailable(),
                 semantic_site: None,
             }));
-        let (blocks, _) = build_ranked_cfg(
+        let (blocks, _, _) = build_ranked_cfg(
             &projection_types(),
             &function,
             &[],

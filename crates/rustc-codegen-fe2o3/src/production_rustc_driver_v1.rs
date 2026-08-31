@@ -165,6 +165,48 @@ fn extract_amdgpu_llvm_in_active_session_v1(
     output: &Path,
     expected_target: Option<&str>,
 ) -> Result<(), String> {
+    let neutral_provider_observation = match (
+        crate::trusted_device_items::definition(
+            tcx,
+            crate::trusted_device_items::TrustedDeviceItem::WorkgroupCollectivesCurrent,
+        ),
+        crate::trusted_device_items::definition(
+            tcx,
+            crate::trusted_device_items::TrustedDeviceItem::WorkgroupReduceSum,
+        ),
+    ) {
+        (None, None) => None,
+        (Some(_), Some(_)) => {
+            let (collectives_current, provider_closure) =
+                crate::trusted_device_items::authenticated_compiler_definition_observation_v1(
+                    tcx,
+                    crate::trusted_device_items::TrustedDeviceItem::WorkgroupCollectivesCurrent,
+                )
+                .map_err(|error| {
+                    format!("neutral workgroup provider observation failed: {error}")
+                })?;
+            let (reduce_sum, reduce_provider_closure) =
+                crate::trusted_device_items::authenticated_compiler_definition_observation_v1(
+                    tcx,
+                    crate::trusted_device_items::TrustedDeviceItem::WorkgroupReduceSum,
+                )
+                .map_err(|error| {
+                    format!("neutral workgroup provider observation failed: {error}")
+                })?;
+            if provider_closure != reduce_provider_closure {
+                return Err(
+                    "neutral workgroup provider observations name different source closures".into(),
+                );
+            }
+            Some((collectives_current, reduce_sum, provider_closure))
+        }
+        _ => {
+            return Err(
+                "neutral workgroup provider observation found an incomplete authenticated pair"
+                    .into(),
+            );
+        }
+    };
     let lowered = transaction_in_active_session_v1(
         tcx,
         crate::rustc_semantic_plan_v1::DebugSourceCaptureRequestV2::Disabled,
@@ -199,6 +241,13 @@ fn extract_amdgpu_llvm_in_active_session_v1(
         lowered.llvm_ir().len(),
         lowered.grants_artifact_or_launch_authority(),
     );
+    if let Some((collectives_current, reduce_sum, provider_closure)) = neutral_provider_observation
+    {
+        eprintln!(
+            "fe2o3 production extraction: authenticated rustc provider definitions `{collectives_current}` and `{reduce_sum}` in source closure {}; this is a compiler build observation, not package or runtime authority",
+            lower_hex_v1(&provider_closure),
+        );
+    }
     Ok(())
 }
 

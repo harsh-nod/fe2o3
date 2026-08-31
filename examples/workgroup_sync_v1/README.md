@@ -1,24 +1,33 @@
 # Workgroup synchronization V1
 
-This standalone package defines two fixed `64x1x1` gfx942 kernels with CPU
-oracles and formal contracts.
+This standalone package defines two fixed `64x1x1` kernels with CPU oracles
+and formal contracts. The LDS reduction is target-neutral through semantic MIR
+and Kernel IR, then binds independently to the production gfx942 or gfx950
+profile.
 
 ## LDS publish/read reduction
 
 `lds_publish_read_reduce_i32_v1` is ordinary attributed Rust source. Every
 admitted lane publishes one `i32` to its same-index LDS slot. The public
-`fe2o3-device` workgroup reduction supplies the uniform publish barrier,
-deterministic reduction barriers, and final reuse barrier. Lane zero is the
-only global output writer. Admission rejects mathematical sums outside `i32`,
-so the device's wrapping tree computes the exact mathematical sum.
+`fe2o3-device` target-neutral workgroup reduction supplies the uniform publish
+barrier, deterministic reduction barriers, and final reuse barrier. Lane zero
+is the only global output writer. Admission rejects mathematical sums outside
+`i32`, so the device's wrapping tree computes the exact mathematical sum.
 
-The source now requests `DynamicLds::<i32>::exact_current::<64>` and
-consumes that linear capability directly into collective scratch. It cannot
-substitute a host/global raw pointer or expose the LDS pointer. The production
-importer authenticates this source, its launch-resource sidecar, and its
-complete reachable portable-MIR closure. The generic semantic lowerer creates
-one aligned, epoch-branded workgroup allocation shared by all lanes; no
-workload profile or prebuilt Kernel IR is selected.
+The source now requests `DynamicLds::<i32>::exact_current::<64>` and passes
+that linear capability directly to the collective terminal. It obtains
+`WorkgroupCollectives::current()` and calls
+`WorkgroupCollectives::reduce_sum_portable`; neither operation names or selects a GPU
+family. It cannot substitute a host/global raw pointer or expose the LDS
+pointer. The production importer authenticates this source, its
+launch-resource sidecar, and its complete reachable portable-MIR closure. The
+generic semantic lowerer creates one aligned, epoch-branded workgroup
+allocation shared by all lanes; no workload profile or prebuilt Kernel IR is
+selected. V1 admits only sum over `u32`, `i32`, and `f32`, with an exact
+one-dimensional power-of-two workgroup in `1..=256`. Every lane participates
+in every acquire-release barrier phase. Unsupported scalar types, operations,
+geometry, provider identity, and target profiles fail before target-bound
+Kernel IR is created.
 
 ## Scoped atomic add
 
@@ -47,22 +56,31 @@ exact integer sums, and atomic eligibility, with expected-negative mutations.
 Both kernels are ordinary attributed Rust modules with source-level typed ABIs.
 They enter the same feature-independent production transaction: authenticated
 rustc collection, semantic MIR, ranked PLIRON, verified Kernel IR, composed
-formal/ranked memory checks, gfx942 LLVM, compiler-bound handoff, measured
-upstream LLVM target APIs plus in-process LLD, and COV6 inspection. There is no
-workload-profile selector on this route, and the compiler handoff grants no
-load or launch authority.
+formal/ranked memory checks, target-bound gfx942 or gfx950 LLVM,
+compiler-bound handoff, measured upstream LLVM target APIs plus in-process LLD,
+and COV6 inspection. There is no workload-profile selector on this route, and
+the compiler handoff grants no load or launch authority.
 
-The ignored production driver tests require the pinned nightly plus measured
-worker and LLVM build identities. The LDS test checks the exact 256-byte static
-group segment, 288-byte complete kernarg ABI, required `64x1x1` workgroup, and
-deterministic two-run HSACO. The scoped-atomic test exercises the same compiler,
-worker, and descriptor-inspection boundaries.
+The ignored neutral-reduction production drivers require the pinned nightly,
+protected authority launcher, and measured Worker V3 and LLVM build
+identities. The rustc driver authenticates the compiler-observed provider
+definition identities and recomputed complete source-closure pin, then checks
+the semantic MIR, ranked PLIRON, generic LDS/tree/barrier KIR, target binding,
+and LLVM route for `u32`, `i32`, and `f32` on both targets. The protected
+driver starts again from the immutable sources for all three scalar profiles
+and checks real Worker/finalizer output for the exact
+256-byte static group segment, 288-byte complete kernarg ABI, required
+`64x1x1` workgroup, COV6 descriptor, and deterministic two-run HSACO. It does
+not dispatch the code object or grant load/launch authority. The scoped-atomic
+profile is outside this neutral-reduction driver.
 
 This is bounded source-to-code-object evidence, not a compiler-refinement proof
-or a claim of generalized memory safety, race freedom, reduction coverage, GPU
-execution, or GPU-family support. Current execution must enter through Worker
-V3 and the pure-Rust KFD runtime. The finalizer uses no COMGR and no shell
-linker; it does not shell out to `clang`, `llc`, or `ld.lld`.
+or a claim of generalized memory safety, race freedom, reduction coverage, or
+GPU execution. The closed target-neutral V1 reduction contract is supported
+only on the pinned gfx942 and gfx950 production profiles. Current execution
+must enter through Worker V3 and the pure-Rust KFD runtime. The finalizer uses
+no COMGR and no shell linker; it does not shell out to `clang`, `llc`, or
+`ld.lld`.
 
 ## Validation
 

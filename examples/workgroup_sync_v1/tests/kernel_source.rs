@@ -5,7 +5,7 @@ const ATOMIC_SOURCE: &str = include_str!("../src/scoped_atomic.rs");
 const README: &str = include_str!("../README.md");
 
 #[test]
-fn reduction_is_ordinary_attributed_rust_with_fixed_wave64_contract() {
+fn reduction_is_ordinary_attributed_rust_with_neutral_workgroup_contract() {
     syn::parse_file(REDUCTION_SOURCE).expect("reduction source parses as Rust");
     assert_eq!(LDS_REDUCTION_WORKGROUP_V1, [64, 1, 1]);
     for marker in [
@@ -16,8 +16,8 @@ fn reduction_is_ordinary_attributed_rust_with_fixed_wave64_contract() {
         "static_shared_memory_bytes = 256",
         "pub fn lds_publish_read_reduce_i32_v1",
         "DynamicLds::<i32>::exact_current::<64>",
-        "WorkgroupCollectiveScratch::from_dynamic_lds",
-        "group.reduce_sum",
+        "WorkgroupCollectives::current()",
+        "context.reduce_sum_portable(lds, value)",
         "if lane == 0",
     ] {
         assert!(REDUCTION_SOURCE.contains(marker), "missing {marker}");
@@ -25,8 +25,12 @@ fn reduction_is_ordinary_attributed_rust_with_fixed_wave64_contract() {
     assert!(!REDUCTION_SOURCE.contains("macro_rules!"));
     assert!(!REDUCTION_SOURCE.contains("namespace"));
     assert!(!REDUCTION_SOURCE.contains("from_raw_parts(&group"));
+    assert!(!REDUCTION_SOURCE.contains("Invocation3D"));
+    assert!(!REDUCTION_SOURCE.contains("WorkgroupCollectiveScratch"));
     assert!(!REDUCTION_SOURCE.contains("*mut i32"));
     assert!(!REDUCTION_SOURCE.contains("unsafe"));
+    assert!(!REDUCTION_SOURCE.contains("Gfx942Collectives"));
+    assert!(!REDUCTION_SOURCE.contains("Gfx950"));
 }
 
 #[test]
@@ -66,9 +70,9 @@ fn documentation_is_explicit_about_later_evidence_phases() {
         "upstream LLVM target APIs",
         "in-process LLD",
         "COV6 inspection",
-        "HSA execution",
+        "load/launch authority",
         "no workload-profile selector",
-        "source-to-machine execution evidence",
+        "source-to-code-object evidence",
         "compiler-refinement",
         "no COMGR",
         "no shell linker",

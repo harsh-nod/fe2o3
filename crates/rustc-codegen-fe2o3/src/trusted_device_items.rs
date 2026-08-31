@@ -32,8 +32,8 @@ const WORKGROUP_SYNC_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1: &[u8] =
 const WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1: &[u8] =
     b"FE2O3/WORKGROUP-SYNC-PROVIDER-SOURCE-CLOSURE/V1\0";
 const REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1: [u8; 32] = [
-    0x58, 0xc0, 0x89, 0x1b, 0xdd, 0x97, 0xd5, 0xa4, 0x61, 0x7a, 0xab, 0x51, 0x6f, 0x11, 0xb1, 0x0c,
-    0x1d, 0xea, 0xca, 0x42, 0x47, 0xbc, 0x43, 0x77, 0xfa, 0x22, 0x20, 0xf3, 0x27, 0x93, 0x8b, 0x3d,
+    0x57, 0x58, 0x7e, 0x49, 0x80, 0x98, 0xe2, 0x53, 0xd0, 0xc0, 0x4e, 0x26, 0x04, 0x99, 0x7a, 0xc8,
+    0xdc, 0x48, 0x39, 0x6b, 0x75, 0x0a, 0x59, 0x1b, 0xcb, 0xf9, 0x70, 0x88, 0xa6, 0xba, 0x8a, 0xa7,
 ];
 
 const PROVIDER_SEMANTIC_DEFINITION_TRANSCRIPT_DOMAIN_V1: &[u8] =
@@ -182,6 +182,7 @@ pub(crate) enum TrustedDeviceItem {
     WorkgroupLdsScopeCurrent,
     DynamicLdsExactCurrent,
     DynamicLdsIntoCollectiveRawParts,
+    LdsUninitialized,
     WorkgroupPipeline,
     WorkgroupPipelineCurrent,
     WorkgroupPipelineStage,
@@ -253,6 +254,11 @@ pub(crate) enum TrustedDeviceItem {
     MemoryVolatileStore,
     MemoryCopyNonOverlapping,
     MemoryCopyOneNonOverlapping,
+    WorkgroupGroup,
+    WorkgroupCollectiveScratch,
+    WorkgroupCollectivesContext,
+    WorkgroupCollectivesCurrent,
+    WorkgroupReduceSum,
     Gfx942CollectivesContext,
     Gfx942CollectivesCurrent,
     Gfx942SubgroupReduceSumF32,
@@ -394,6 +400,11 @@ const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
         TrustedDeviceItem::DynamicLdsIntoCollectiveRawParts,
         "fe2o3_device_dynamic_lds_into_collective_raw_parts_v1",
         "fe2o3_device::DynamicLds::<T>::into_collective_raw_parts",
+    ),
+    (
+        TrustedDeviceItem::LdsUninitialized,
+        "fe2o3_device_lds_uninitialized_v1",
+        "fe2o3_device::LdsUninitialized",
     ),
     (
         TrustedDeviceItem::WorkgroupPipeline,
@@ -729,6 +740,31 @@ const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
         TrustedDeviceItem::MemoryCopyOneNonOverlapping,
         "fe2o3_device_memory_copy_one_nonoverlapping_v1",
         "fe2o3_device::memory::copy_one_nonoverlapping",
+    ),
+    (
+        TrustedDeviceItem::WorkgroupGroup,
+        "fe2o3_device_workgroup_group_v1",
+        "fe2o3_device::Workgroup",
+    ),
+    (
+        TrustedDeviceItem::WorkgroupCollectiveScratch,
+        "fe2o3_device_workgroup_collective_scratch_v1",
+        "fe2o3_device::WorkgroupCollectiveScratch",
+    ),
+    (
+        TrustedDeviceItem::WorkgroupCollectivesContext,
+        "fe2o3_device_workgroup_collectives_context_v1",
+        "fe2o3_device::WorkgroupCollectives",
+    ),
+    (
+        TrustedDeviceItem::WorkgroupCollectivesCurrent,
+        "fe2o3_device_workgroup_collectives_current_v1",
+        "fe2o3_device::WorkgroupCollectives::current",
+    ),
+    (
+        TrustedDeviceItem::WorkgroupReduceSum,
+        "fe2o3_device_workgroup_reduce_sum_v1",
+        "fe2o3_device::WorkgroupCollectives::reduce_sum_portable",
     ),
     (
         TrustedDeviceItem::Gfx942CollectivesContext,
@@ -1307,6 +1343,24 @@ pub(crate) fn definition(tcx: TyCtxt<'_>, item: TrustedDeviceItem) -> Option<Def
     (classify(tcx, def_id) == Some(item)).then_some(def_id)
 }
 
+pub(crate) fn authenticated_compiler_definition_observation_v1(
+    tcx: TyCtxt<'_>,
+    item: TrustedDeviceItem,
+) -> Result<(String, [u8; 32]), String> {
+    let definition = definition(tcx, item).ok_or_else(|| {
+        format!(
+            "trusted provider item `{}` is unavailable",
+            item.canonical_path()
+        )
+    })?;
+    let observation = reviewed_provider_semantic_definition_v1(tcx, definition)?;
+    validate_reviewed_fe2o3_device_provider_definition_v1(item, &observation)?;
+    Ok((
+        observation.canonical_definition_path,
+        observation.source_closure_identity,
+    ))
+}
+
 pub(crate) fn classify(tcx: TyCtxt<'_>, def_id: DefId) -> Option<TrustedDeviceItem> {
     let direct = TRUSTED_ITEMS
         .iter()
@@ -1492,6 +1546,7 @@ fn safe_execution_compiler_definition_path(item: TrustedDeviceItem) -> &'static 
         TrustedDeviceItem::DynamicLdsIntoCollectiveRawParts => {
             "fe2o3_device::lds::{impl#4}::into_collective_raw_parts"
         }
+        TrustedDeviceItem::LdsUninitialized => "fe2o3_device::lds::LdsUninitialized",
         TrustedDeviceItem::WorkgroupPipeline => "fe2o3_device::lds::WorkgroupPipeline",
         TrustedDeviceItem::WorkgroupPipelineCurrent => "fe2o3_device::lds::{impl#10}::current",
         TrustedDeviceItem::WorkgroupPipelineStage => "fe2o3_device::lds::{impl#10}::stage",
@@ -1504,8 +1559,21 @@ fn safe_execution_compiler_definition_path(item: TrustedDeviceItem) -> &'static 
         TrustedDeviceItem::WorkgroupPipelineRelease => "fe2o3_device::lds::{impl#10}::release",
         TrustedDeviceItem::Invocation3D => "fe2o3_device::thread::Invocation3D",
         TrustedDeviceItem::Invocation3DCurrent => "fe2o3_device::thread::{impl#6}::current",
+        TrustedDeviceItem::WorkgroupGroup => "fe2o3_device::group::Workgroup",
+        TrustedDeviceItem::WorkgroupCollectiveScratch => {
+            "fe2o3_device::collective::WorkgroupCollectiveScratch"
+        }
         TrustedDeviceItem::Gfx942CollectivesContext => {
             "fe2o3_device::collective::Gfx942Collectives"
+        }
+        TrustedDeviceItem::WorkgroupCollectivesContext => {
+            "fe2o3_device::collective::WorkgroupCollectives"
+        }
+        TrustedDeviceItem::WorkgroupCollectivesCurrent => {
+            "fe2o3_device::collective::{impl#7}::current"
+        }
+        TrustedDeviceItem::WorkgroupReduceSum => {
+            "fe2o3_device::collective::{impl#7}::reduce_sum_portable"
         }
         TrustedDeviceItem::Gfx942CollectivesCurrent => {
             "fe2o3_device::collective::{impl#0}::current"
@@ -1684,6 +1752,7 @@ const fn safe_execution_provider_bound_item(item: TrustedDeviceItem) -> bool {
             | TrustedDeviceItem::WorkgroupLdsScopeCurrent
             | TrustedDeviceItem::DynamicLdsExactCurrent
             | TrustedDeviceItem::DynamicLdsIntoCollectiveRawParts
+            | TrustedDeviceItem::LdsUninitialized
             | TrustedDeviceItem::WorkgroupPipeline
             | TrustedDeviceItem::WorkgroupPipelineCurrent
             | TrustedDeviceItem::WorkgroupPipelineStage
@@ -1708,6 +1777,11 @@ const fn safe_execution_provider_bound_item(item: TrustedDeviceItem) -> bool {
             | TrustedDeviceItem::GridDimensionX
             | TrustedDeviceItem::GridDimensionY
             | TrustedDeviceItem::GridDimensionZ
+            | TrustedDeviceItem::WorkgroupGroup
+            | TrustedDeviceItem::WorkgroupCollectiveScratch
+            | TrustedDeviceItem::WorkgroupCollectivesContext
+            | TrustedDeviceItem::WorkgroupCollectivesCurrent
+            | TrustedDeviceItem::WorkgroupReduceSum
             | TrustedDeviceItem::Gfx942CollectivesContext
             | TrustedDeviceItem::Gfx942CollectivesCurrent
             | TrustedDeviceItem::Gfx942SubgroupReduceSumF32
@@ -2621,6 +2695,38 @@ mod tests {
     }
 
     #[test]
+    fn neutral_workgroup_terminals_reject_legacy_and_stale_provider_identities() {
+        let neutral = [
+            TrustedDeviceItem::WorkgroupGroup,
+            TrustedDeviceItem::WorkgroupCollectiveScratch,
+            TrustedDeviceItem::WorkgroupCollectivesContext,
+            TrustedDeviceItem::WorkgroupCollectivesCurrent,
+            TrustedDeviceItem::WorkgroupReduceSum,
+        ];
+        for item in neutral {
+            let structural = exact_provider_compiler_definition_path_v1(item).unwrap();
+            let local = structural.strip_prefix("fe2o3_device::").unwrap();
+            let exact = semantic_definition(
+                local,
+                super::REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1,
+                [6; 32],
+            );
+            validate_reviewed_fe2o3_device_provider_definition_v1(item, &exact).unwrap();
+
+            let legacy = semantic_definition(
+                "collective::{impl#6}::reduce_sum",
+                super::REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1,
+                [6; 32],
+            );
+            assert!(validate_reviewed_fe2o3_device_provider_definition_v1(item, &legacy).is_err());
+
+            let mut stale = exact.clone();
+            stale.source_closure_identity[0] ^= 1;
+            assert!(validate_reviewed_fe2o3_device_provider_definition_v1(item, &stale).is_err());
+        }
+    }
+
+    #[test]
     fn checked_view_capabilities_reject_type_constructor_and_load_lookalikes() {
         for item in [
             TrustedDeviceItem::StridedReadView2D,
@@ -2762,7 +2868,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             closure,
-            digest("58c0891bdd97d5a4617aab516f11b10c1deaca4247bc4377fa2220f327938b3d")
+            digest("57587e498098e253d0c04e2604997ac8dc48396b750a591bcbf97088a6ba8aa7")
         );
         assert_eq!(closure, super::REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1);
     }
@@ -3178,6 +3284,7 @@ mod tests {
             TrustedDeviceItem::WorkgroupLdsScopeCurrent,
             TrustedDeviceItem::DynamicLdsExactCurrent,
             TrustedDeviceItem::DynamicLdsIntoCollectiveRawParts,
+            TrustedDeviceItem::LdsUninitialized,
             TrustedDeviceItem::WorkgroupPipeline,
             TrustedDeviceItem::WorkgroupPipelineCurrent,
             TrustedDeviceItem::WorkgroupPipelineStage,
@@ -3245,6 +3352,11 @@ mod tests {
             TrustedDeviceItem::MemoryVolatileStore,
             TrustedDeviceItem::MemoryCopyNonOverlapping,
             TrustedDeviceItem::MemoryCopyOneNonOverlapping,
+            TrustedDeviceItem::WorkgroupGroup,
+            TrustedDeviceItem::WorkgroupCollectiveScratch,
+            TrustedDeviceItem::WorkgroupCollectivesContext,
+            TrustedDeviceItem::WorkgroupCollectivesCurrent,
+            TrustedDeviceItem::WorkgroupReduceSum,
             TrustedDeviceItem::Gfx942CollectivesContext,
             TrustedDeviceItem::Gfx942CollectivesCurrent,
             TrustedDeviceItem::Gfx942SubgroupReduceSumF32,
@@ -3405,6 +3517,7 @@ mod tests {
             TrustedDeviceItem::WorkgroupLdsScopeCurrent,
             TrustedDeviceItem::DynamicLdsExactCurrent,
             TrustedDeviceItem::DynamicLdsIntoCollectiveRawParts,
+            TrustedDeviceItem::LdsUninitialized,
             TrustedDeviceItem::WorkgroupPipeline,
             TrustedDeviceItem::WorkgroupPipelineCurrent,
             TrustedDeviceItem::WorkgroupPipelineStage,
@@ -3417,6 +3530,11 @@ mod tests {
             TrustedDeviceItem::WorkgroupPipelineRelease,
             TrustedDeviceItem::Invocation3D,
             TrustedDeviceItem::Invocation3DCurrent,
+            TrustedDeviceItem::WorkgroupGroup,
+            TrustedDeviceItem::WorkgroupCollectiveScratch,
+            TrustedDeviceItem::WorkgroupCollectivesContext,
+            TrustedDeviceItem::WorkgroupCollectivesCurrent,
+            TrustedDeviceItem::WorkgroupReduceSum,
             TrustedDeviceItem::Gfx942CollectivesContext,
             TrustedDeviceItem::Gfx942CollectivesCurrent,
             TrustedDeviceItem::Gfx942SubgroupReduceSumF32,
@@ -3481,6 +3599,7 @@ mod tests {
             assert!(path.starts_with("fe2o3_device::"));
             assert!(
                 path.contains("::collective::")
+                    || path.contains("::group::")
                     || path.contains("::lds::")
                     || path.contains("::gfx950::")
                     || path.contains("::sync::")

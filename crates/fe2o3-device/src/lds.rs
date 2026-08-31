@@ -137,6 +137,7 @@ impl fmt::Debug for WorkgroupLdsScope<'_> {
 
 /// Typestate for a dynamic LDS region whose elements may be uninitialized.
 #[derive(Debug)]
+#[rustc_diagnostic_item = "fe2o3_device_lds_uninitialized_v1"]
 pub enum LdsUninitialized {}
 
 /// Typestate for a dynamic LDS region whose elements are all initialized.
