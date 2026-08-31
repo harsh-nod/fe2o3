@@ -95,6 +95,20 @@ fn ordinary_rust_bounds_and_production_pliron_pipeline_fail_closed() {
         exclusive.stderr,
     );
 
+    let dynamic_exclusive = run_feature_extraction(&ScratchTarget::new(), "grid_exclusive_dynamic");
+    assert!(
+        dynamic_exclusive.status.success()
+            && dynamic_exclusive
+                .stderr
+                .contains("all mandatory kernel checks clean true")
+            && dynamic_exclusive.stderr.contains("kernel.index_binary Add")
+            && dynamic_exclusive.stderr.contains("%arg1")
+            && dynamic_exclusive.stderr.contains("kernel.cond_br")
+            && dynamic_exclusive.stderr.contains("kernel.access Write"),
+        "safe dynamic grid-exclusive access did not pass production extraction:\n{}",
+        dynamic_exclusive.stderr,
+    );
+
     let blocked = run_feature_extraction(&ScratchTarget::new(), "blocked");
     assert!(
         blocked.status.success()

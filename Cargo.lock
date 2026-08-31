@@ -299,6 +299,7 @@ name = "cargo-fe2o3"
 version = "0.1.0"
 dependencies = [
  "cap-primitives",
+ "dialect-amdgcn",
  "ed25519-dalek",
  "fe2o3-amd-target",
  "fe2o3-artifact-transaction",
@@ -1216,6 +1217,7 @@ version = "0.1.0"
 dependencies = [
  "dialect-amdgcn",
  "ed25519-dalek",
+ "fe2o3-amd-target",
  "fe2o3-artifact-transaction",
  "fe2o3-build-authority",
  "fe2o3-compiler-api",

@@ -4,6 +4,7 @@
 use fe2o3_device::DeviceMath;
 #[cfg(any(
     feature = "grid_exclusive",
+    feature = "grid_exclusive_dynamic",
     feature = "write_only_grid_exclusive",
     feature = "barrier_divergent",
     feature = "barrier_early_return"
@@ -61,6 +62,7 @@ use fe2o3_device::{DisjointSlice, kernel, thread};
     feature = "debug_mutated_argument",
     feature = "shifted",
     feature = "grid_exclusive",
+    feature = "grid_exclusive_dynamic",
     feature = "blocked",
     feature = "blocked_multi_lane",
     feature = "blocked_multi_block",
@@ -171,6 +173,19 @@ pub fn checked_shifted(mut output: DisjointSlice<f32, Shifted<Index1D, 4>>) {
 pub fn grid_exclusive(mut output: DisjointSlice<f32, GridExclusive>) {
     if let Some(leader) = thread::grid_leader() {
         if let Some(element) = output.get_mut_exclusive(&leader, 7) {
+            *element = 1.0;
+        }
+    }
+}
+
+#[kernel(
+    typed,
+    launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1]),
+)]
+#[cfg(feature = "grid_exclusive_dynamic")]
+pub fn grid_exclusive_dynamic(mut output: DisjointSlice<f32, GridExclusive>, index: u32) {
+    if let Some(leader) = thread::grid_leader() {
+        if let Some(element) = output.get_mut_exclusive(&leader, index as usize) {
             *element = 1.0;
         }
     }

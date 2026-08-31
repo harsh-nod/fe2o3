@@ -3,12 +3,12 @@
 #![allow(missing_docs)]
 
 use fe2o3_device::{
-    DisjointSlice, Index1D, KernelError, KernelResult, Math, RowStriped2D, StridedReadView2D,
-    Subgroup, kernel, thread,
+    GridExclusive, KernelError, KernelResult, Math, WriteOnlyDisjointSlice, kernel, thread,
 };
 
 pub const ROW_SOFTMAX_WORKGROUP_V1: [u32; 3] = [64, 1, 1];
-pub const ROW_SOFTMAX_MAX_COLUMNS_V1: usize = 4096;
+pub const ROW_SOFTMAX_MAX_ROWS_V1: u32 = 1024;
+pub const ROW_SOFTMAX_MAX_COLUMNS_V1: usize = 192;
 
 fn accessed_extent(rows: u32, columns: u32, stride: u32) -> usize {
     if rows == 0 || columns == 0 {
@@ -17,88 +17,79 @@ fn accessed_extent(rows: u32, columns: u32, stride: u32) -> usize {
     (rows - 1) as usize * stride as usize + columns as usize
 }
 
-/// Computes independent softmax rows with dynamic dimensions and strides.
+/// Computes independent softmax rows with dynamic row count, column count, and input stride.
 ///
-/// One wave owns each row. Lane `l` processes columns `l + 64 * iteration`.
-/// Logical edges are zero-work lanes. The row-striped output capability proves
-/// disjoint compact stores for arbitrary checked row padding.
+/// This qualification kernel intentionally uses grid-exclusive write authority:
+/// one compiler-authenticated grid leader serializes compact output rows while
+/// the production wave-parallel row-striped proof catches up.
 #[kernel(
     typed,
-    launch(required = [64, 1, 1], max = [64, 1, 1]),
-    control_flow(loop_bounds(64, 64, 64))
+    launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1]),
+    control_flow(loop_bounds(1024, 192, 192, 192))
 )]
 pub fn row_softmax_general_v1(
     input: &[f32],
-    mut output: DisjointSlice<f32, RowStriped2D<Index1D, 64, 64>>,
+    mut output: WriteOnlyDisjointSlice<f32, GridExclusive>,
     rows: u32,
     columns: u32,
     input_stride: u32,
     output_stride: u32,
 ) -> KernelResult {
     if columns == 0
+        || rows == 0
+        || rows > ROW_SOFTMAX_MAX_ROWS_V1
         || columns as usize > ROW_SOFTMAX_MAX_COLUMNS_V1
         || input_stride < columns
-        || output_stride < columns
-        || rows > u32::MAX / 64
-        || input.len() < accessed_extent(rows, columns, input_stride)
+        || output_stride != columns
+    {
+        return Err(KernelError::InvalidArgument);
+    }
+    if input.len() < accessed_extent(rows, columns, input_stride)
         || output.len() < accessed_extent(rows, columns, output_stride)
     {
         return Err(KernelError::InvalidArgument);
     }
-    let input = StridedReadView2D::from_shared_slice(
-        input,
-        0,
-        rows as usize,
-        columns as usize,
-        input_stride as usize,
-    )?;
 
-    let thread_index = thread::index_1d();
-    let raw = thread_index.get();
-    let row = raw / 64;
-    let lane = raw % 64;
-    let output_stripe = thread_index
-        .checked_row_striped_2d::<64, 64>()
-        .ok_or(KernelError::OutOfBounds)?;
+    if let Some(leader) = thread::grid_leader() {
+        let math = Math::current();
+        let input_stride = input_stride as usize;
+        let rows = rows as usize;
+        let columns = columns as usize;
 
-    let subgroup = Subgroup::current();
-    let math = Math::current();
+        let mut input_row_base = 0_usize;
+        let mut output_index = 0_usize;
+        let mut row = 0_usize;
+        while row < rows {
+            let mut maximum = f32::NEG_INFINITY;
+            let mut column = 0_usize;
+            while column < columns {
+                let input_index = input_row_base.wrapping_add(column);
+                let value = input[input_index];
+                if value > maximum {
+                    maximum = value;
+                }
+                column += 1;
+            }
 
-    let mut local_max = f32::NEG_INFINITY;
-    let mut component = 0;
-    while component < 64 {
-        let column = lane + component * 64;
-        let value = input.load_or(row, column, f32::NEG_INFINITY);
-        if value > local_max {
-            local_max = value;
+            let mut denominator = 0.0_f32;
+            column = 0;
+            while column < columns {
+                let input_index = input_row_base.wrapping_add(column);
+                denominator += math.exp_f32(input[input_index] - maximum);
+                column += 1;
+            }
+
+            column = 0;
+            while column < columns {
+                let input_index = input_row_base.wrapping_add(column);
+                let probability = math.exp_f32(input[input_index] - maximum) / denominator;
+                let _ = output.write_exclusive(&leader, output_index, probability);
+                output_index = output_index.wrapping_add(1);
+                column += 1;
+            }
+            input_row_base = input_row_base.wrapping_add(input_stride);
+            row += 1;
         }
-        component += 1;
-    }
-    let maximum = subgroup.subgroup_reduce_max_f32::<64>(local_max);
-
-    let mut local_sum = 0.0_f32;
-    component = 0;
-    while component < 64 {
-        let column = lane + component * 64;
-        local_sum += math.exp_f32(input.load_or(row, column, f32::NEG_INFINITY) - maximum);
-        component += 1;
-    }
-    let denominator = subgroup.subgroup_reduce_sum_f32::<64>(local_sum);
-
-    component = 0;
-    while component < 64 {
-        if let Some(element) = output.get_row_striped_2d_mut(
-            &output_stripe,
-            component,
-            rows as usize,
-            columns as usize,
-            output_stride as usize,
-        ) {
-            *element = math
-                .exp_f32(input.load_or(row, lane + component * 64, f32::NEG_INFINITY) - maximum)
-                / denominator;
-        }
-        component += 1;
     }
     Ok(())
 }

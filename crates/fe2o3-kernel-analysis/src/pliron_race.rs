@@ -622,6 +622,13 @@ pub(crate) fn run_pliron_ranked_race_check_with_analyses_v1(
     };
 
     let invocation_bounds = invocation_upper_bounds_by_block(context, function, &inventory);
+    if effects_are_confined_to_single_invocation(
+        &effects,
+        &launch_extents,
+        invocation_bounds.as_deref(),
+    ) {
+        return clean();
+    }
     if symbolically_proves_disjoint(
         context,
         function,
@@ -1355,6 +1362,33 @@ fn effect_affine_map_is_injective(
     affine_map_is_injective(&effect.indices, sparse, &effective_extents)
 }
 
+fn effects_are_confined_to_single_invocation(
+    effects: &[EffectV1],
+    launch_extents: &[u64],
+    invocation_bounds: Option<&[[Option<u64>; MAX_RANKED_MEMORY_RANK]]>,
+) -> bool {
+    effects.iter().all(|effect| {
+        effect_invocation_upper_bound(effect, launch_extents, invocation_bounds)
+            .is_some_and(|count| count <= 1)
+    })
+}
+
+fn effect_invocation_upper_bound(
+    effect: &EffectV1,
+    launch_extents: &[u64],
+    invocation_bounds: Option<&[[Option<u64>; MAX_RANKED_MEMORY_RANK]]>,
+) -> Option<u64> {
+    effective_launch_extents(effect, launch_extents, invocation_bounds)
+        .into_iter()
+        .try_fold(1_u64, |count, extent| {
+            if extent == 0 {
+                None
+            } else {
+                count.checked_mul(extent)
+            }
+        })
+}
+
 fn effective_launch_extents(
     effect: &EffectV1,
     launch_extents: &[u64],
@@ -1363,10 +1397,12 @@ fn effective_launch_extents(
     let mut effective_extents = launch_extents.to_vec();
     if let Some(bounds) = invocation_bounds.and_then(|bounds| bounds.get(effect.location.block)) {
         for (dimension, extent) in effective_extents.iter_mut().enumerate() {
-            if *extent == 0
-                && let Some(bound) = bounds.get(dimension).copied().flatten()
-            {
-                *extent = bound;
+            if let Some(bound) = bounds.get(dimension).copied().flatten() {
+                *extent = if *extent == 0 {
+                    bound
+                } else {
+                    (*extent).min(bound)
+                };
             }
         }
     }

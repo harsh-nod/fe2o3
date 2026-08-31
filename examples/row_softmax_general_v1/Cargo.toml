@@ -14,6 +14,10 @@ resolver = "3"
 [dependencies]
 fe2o3-device = { path = "../../crates/fe2o3-device" }
 
+[target."cfg(not(target_arch = \"amdgpu\"))".dependencies]
+fe2o3-core = { path = "../../crates/fe2o3-core", features = ["qualification-unsafe-launch"] }
+fe2o3-host = { path = "../../crates/fe2o3-host" }
+
 [[bin]]
 name = "fe2o3-row-softmax-general-v1"
 path = "src/main.rs"

@@ -6960,42 +6960,51 @@ fn project_intrinsic_contracts(
                         "grid-leader authority is used outside its authenticated Some edge",
                     ));
                 }
-                let value = call
-                    .arguments()
-                    .get(2)
-                    .and_then(|operand| constant_operand_value(operand, constants))
-                    .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
-                        "a dynamic grid-exclusive index requires a deliberate ranked argument projection",
-                    ))?;
-                reserve_operation(operations)?;
-                let constant_index = next_value_id(next_value)?;
-                operations.push(ProductionRankedOperationV1::IndexConstant {
-                    result: constant_index,
-                    value,
-                });
-                push_ranked_ir(
-                    ranked_ir,
-                    &format!(
-                        "  %{} = kernel.index_constant {}\n",
-                        constant_index.get(),
+                let index_operand = call.arguments().get(2);
+                let offset = if let Some(value) =
+                    index_operand.and_then(|operand| constant_operand_value(operand, constants))
+                {
+                    reserve_operation(operations)?;
+                    let constant_index = next_value_id(next_value)?;
+                    operations.push(ProductionRankedOperationV1::IndexConstant {
+                        result: constant_index,
                         value,
-                    ),
-                )?;
+                    });
+                    push_ranked_ir(
+                        ranked_ir,
+                        &format!(
+                            "  %{} = kernel.index_constant {}\n",
+                            constant_index.get(),
+                            value,
+                        ),
+                    )?;
+                    ProductionRankedValueV1::Local(constant_index)
+                } else {
+                    project_runtime_index_operand_v1(
+                        index_operand,
+                        constants,
+                        &stable_argument_origins,
+                        &mut runtime_index_arguments,
+                        &mut next_runtime_argument,
+                        operations,
+                        next_value,
+                    )?
+                };
                 reserve_operation(operations)?;
                 let index = next_value_id(next_value)?;
                 operations.push(ProductionRankedOperationV1::IndexBinary {
                     result: index,
                     kind: IndexBinaryKindAttr::Add,
                     lhs: leader.precondition.0,
-                    rhs: ProductionRankedValueV1::Local(constant_index),
+                    rhs: offset,
                 });
                 push_ranked_ir(
                     ranked_ir,
                     &format!(
-                        "  %{} = kernel.index_binary Add {}, %{}\n",
+                        "  %{} = kernel.index_binary Add {}, {}\n",
                         index.get(),
                         ranked_value_text_v1(leader.precondition.0),
-                        constant_index.get(),
+                        ranked_value_text_v1(offset),
                     ),
                 )?;
                 (
@@ -14326,7 +14335,7 @@ fn project_runtime_index_operand_v1(
     next_value: &mut u32,
 ) -> Result<ProductionRankedValueV1, ProductionRankedProjectionErrorV1> {
     let operand = operand.ok_or(ProductionRankedProjectionErrorV1::Unsupported(
-        "a tiled-2d index operand is missing",
+        "a runtime index operand is missing",
     ))?;
     if let Some(value) = constant_operand_value(operand, constants) {
         reserve_operation(operations)?;
@@ -14336,7 +14345,7 @@ fn project_runtime_index_operand_v1(
     }
     let local =
         simple_operand_local(operand).ok_or(ProductionRankedProjectionErrorV1::Incomplete(
-            "a tiled-2d runtime index is not a constant or one exact kernel argument",
+            "a runtime index is not a constant or one exact kernel argument",
         ))?;
     let local_index = local.index() as usize;
     // Preserve stable kernel-argument aliases when available. Other exact MIR
@@ -14351,17 +14360,17 @@ fn project_runtime_index_operand_v1(
     let slot = arguments
         .get_mut(origin)
         .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
-            "a tiled-2d runtime argument origin is outside the semantic local table",
+            "a runtime argument origin is outside the semantic local table",
         ))?;
     let argument = match *slot {
         Some(argument) => argument,
         None => {
             let argument = u32::try_from(*next_argument).map_err(|_| {
-                ProductionRankedProjectionErrorV1::Unsupported("too many tiled-2d ranked arguments")
+                ProductionRankedProjectionErrorV1::Unsupported("too many runtime ranked arguments")
             })?;
             *next_argument = next_argument.checked_add(1).ok_or(
                 ProductionRankedProjectionErrorV1::Unsupported(
-                    "tiled-2d ranked argument count overflow",
+                    "runtime ranked argument count overflow",
                 ),
             )?;
             *slot = Some(argument);
