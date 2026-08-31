@@ -127,6 +127,37 @@ distributions, not instruction counts, time attribution, or complete wave
 timelines. Memory-counter payloads and host-trap records are not admitted by
 this slice.
 
+`SemanticPcSampleCodeObjectRelationV1` is a separate canonical sidecar, so the
+closed Capture V3 JSON and API remain unchanged. Its admission replays the
+exact V3 import against the content-bound rocprof source, verifies the capture's
+declared raw SHA-256 artifact identity against the supplied HSACO bytes, and
+matches structured rocprof code-object loads and kernel symbols to inspected
+AMDHSA descriptor/entry coordinates and the exact non-empty ELF `PT_LOAD`
+virtual span. Every capture dispatch wave width must equal the wave width
+jointly declared by the inspected AMDHSA metadata and kernel descriptor. Names
+and `uri` are not join authority.
+The sidecar retains only capture-local identities, loaded byte counts, and
+code-object-relative kernel intervals; raw profiler IDs and native load,
+descriptor, and entry addresses are discarded. Missing or ambiguous structured
+records remain typed unavailable. Overlapping loads, stale capture/source
+associations, artifact substitution, and process/device contradictions are
+rejected.
+Device matching means exact equality of the structured rocprof agent identifier
+with the sampled dispatch's capture-local agent; it is not a new hardware-model
+or target-profile attestation.
+
+This relation does not turn stochastic samples into complete execution
+history. It grants no load, launch, debugger, or execution-control authority;
+does not identify a live PC; and makes no schedule, source, KIR, or complete
+coverage claim. Authenticated consumers replay admission from the exact source,
+capture, and artifact bytes rather than treating the inert sidecar alone as an
+attestation.
+Because rocprof does not emit a loaded-byte digest, the relation explicitly
+does not claim that it observed runtime bytes equal to the supplied artifact or
+that the structured catalog is a complete load/unload lifetime. It proves an
+exact content-addressed declared-artifact structural relation within the
+captured evidence.
+
 The audited MI300X ROCm 7.2.4 installation advertised ATT collection but did
 not include `librocprofiler-trace-decoder`, so a live decoded ATT export could
 not be produced there. Decoder availability is a collection-host/toolchain

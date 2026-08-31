@@ -15,6 +15,8 @@ mod counter_query;
 pub use counter_query::*;
 mod pc_sample_query;
 pub use pc_sample_query::*;
+mod pc_sample_code_object_query;
+pub use pc_sample_code_object_query::*;
 mod profiler_query;
 pub use profiler_query::*;
 mod profiler_variant_v1;

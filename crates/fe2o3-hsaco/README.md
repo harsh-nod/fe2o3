@@ -29,6 +29,11 @@ including zero-fill ranges and ranges with inappropriate permissions, reject.
 `SHT_DYNSYM` is deliberately not identity evidence: a name that also occurs
 there does not create a second static-symbol binding.
 
+For kernel-bearing artifacts the result also exposes the lowest non-empty
+`PT_LOAD` virtual address and the checked contiguous memory span through the
+highest loaded byte. This is file-layout evidence for address-domain
+correlation; it is not a native load address or a loading capability.
+
 The static symbol scan is capped at 32,768 records. Symbol tables must use the
 ELF64 24-byte record layout, have integral bounded counts, link to a bounded
 `SHT_STRTAB`, contain a valid null symbol and local partition, and give every

@@ -11,7 +11,7 @@ use fe2o3_amd_target::AmdTargetId;
 
 pub use error::{InspectionError, KernelBindingError, MessagePackLimit};
 pub use kernel_binding::{
-    AmdhsaKernelDescriptor, InspectedKernelBindings, KernelDescriptorBinding,
+    AmdhsaKernelDescriptor, CodeObjectLoadLayout, InspectedKernelBindings, KernelDescriptorBinding,
 };
 
 /// Maximum accepted HSACO size (64 MiB).

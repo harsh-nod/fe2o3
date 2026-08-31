@@ -140,6 +140,19 @@ decoded ATT wave timelines unavailable. ATT decoder availability is a
 collection-host/toolchain property; PC Capture V3 neither invokes nor replaces
 the SDK decoder.
 
+`PcSampleCodeObjectQuerySessionV1` optionally opens Capture V3 together with
+its V1 code-object relation sidecar. Opening replays exact relation admission
+from the original bounded rocprof JSON and HSACO bytes and rejects a stale or
+substituted sidecar. Forward sample lookup and reverse capture-local
+code-object-offset lookup can then return an exact metadata-kernel ordinal and
+symbol-relative PC. Unknown, unaligned, outside-symbol, unresolved-load, and
+overlapping-symbol answers are typed unavailable rather than guessed. Outputs
+always retain exact process and device identity; sampled lookups also retain
+sample and dispatch identity, while reverse lookups leave those two fields
+unavailable. Outputs contain no native address or profiler handle and retain the
+stochastic/incomplete, no-authority, no-schedule, and no-source-attribution
+limits.
+
 ## Capture comparison
 
 `compare_dispatch_captures_v1` and `compare_counter_captures_v2` perform a

@@ -1316,6 +1316,9 @@ fn explicitly_binds_metadata_to_descriptor_and_entry_symbols() {
     let bound = inspect_and_bind_kernel_descriptors(&fixture.bytes).unwrap();
     assert_eq!(bound.inspection(), &inspected);
     assert_eq!(bound.bindings().len(), 1);
+    let load_layout = bound.load_layout().unwrap();
+    assert_eq!(load_layout.virtual_base(), 0);
+    assert_eq!(load_layout.memory_size(), fixture.entry_address + 64);
     let binding = bound.bindings()[0];
     assert_eq!(binding.kernel_index(), 0);
     assert_eq!(binding.descriptor_address(), fixture.descriptor_address);

@@ -121,6 +121,26 @@ pub struct KernelDescriptorBinding {
     descriptor: AmdhsaKernelDescriptor,
 }
 
+/// Lowest ELF `PT_LOAD` virtual address and the complete loaded memory span.
+///
+/// This is descriptive file-layout evidence. It contains no runtime address,
+/// module handle, load token, or launch authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CodeObjectLoadLayout {
+    virtual_base: u64,
+    memory_size: u64,
+}
+
+impl CodeObjectLoadLayout {
+    pub const fn virtual_base(self) -> u64 {
+        self.virtual_base
+    }
+
+    pub const fn memory_size(self) -> u64 {
+        self.memory_size
+    }
+}
+
 impl KernelDescriptorBinding {
     pub const fn kernel_index(self) -> usize {
         self.kernel_index
@@ -160,6 +180,7 @@ impl KernelDescriptorBinding {
 pub struct InspectedKernelBindings {
     inspection: InspectedHsaco,
     bindings: Vec<KernelDescriptorBinding>,
+    load_layout: Option<CodeObjectLoadLayout>,
 }
 
 impl InspectedKernelBindings {
@@ -169,6 +190,13 @@ impl InspectedKernelBindings {
 
     pub fn bindings(&self) -> &[KernelDescriptorBinding] {
         &self.bindings
+    }
+
+    /// Returns the exact ELF load span when kernel binding inspected the
+    /// program table. Kernel-free artifacts preserve the historical `None`
+    /// result without broadening their admission behavior.
+    pub const fn load_layout(&self) -> Option<CodeObjectLoadLayout> {
+        self.load_layout
     }
 }
 
@@ -214,12 +242,14 @@ pub(crate) fn bind(
         return Ok(InspectedKernelBindings {
             inspection,
             bindings: Vec::new(),
+            load_layout: None,
         });
     }
 
     let sections = parse_sections(bytes)?;
     let symbols = parse_symbols(bytes, &sections)?;
     let loads = parse_load_segments(bytes)?;
+    let load_layout = code_object_load_layout(&loads)?;
     let mut bindings = Vec::with_capacity(inspection.kernels().len());
 
     for (kernel_index, kernel) in inspection.kernels().iter().enumerate() {
@@ -238,6 +268,40 @@ pub(crate) fn bind(
     Ok(InspectedKernelBindings {
         inspection,
         bindings,
+        load_layout: Some(load_layout),
+    })
+}
+
+fn code_object_load_layout(
+    loads: &[LoadSegment],
+) -> Result<CodeObjectLoadLayout, KernelBindingError> {
+    let mut loaded = loads.iter().filter(|segment| segment.memory_size != 0);
+    let virtual_base = loaded.clone().map(|segment| segment.address).min().ok_or(
+        KernelBindingError::InvalidLoadMapping("non-empty PT_LOAD segment is missing"),
+    )?;
+    let virtual_end = loaded.try_fold(virtual_base, |end, segment| {
+        segment
+            .address
+            .checked_add(segment.memory_size)
+            .map(|segment_end| end.max(segment_end))
+            .ok_or(KernelBindingError::InvalidLoadMapping(
+                "PT_LOAD address range overflows",
+            ))
+    })?;
+    let memory_size =
+        virtual_end
+            .checked_sub(virtual_base)
+            .ok_or(KernelBindingError::InvalidLoadMapping(
+                "PT_LOAD memory span underflows",
+            ))?;
+    if memory_size == 0 {
+        return Err(KernelBindingError::InvalidLoadMapping(
+            "PT_LOAD memory span is empty",
+        ));
+    }
+    Ok(CodeObjectLoadLayout {
+        virtual_base,
+        memory_size,
     })
 }
 

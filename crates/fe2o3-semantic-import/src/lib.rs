@@ -23,6 +23,8 @@ mod pc_sample_capture;
 pub use pc_sample_capture::*;
 mod raw_source_relation;
 pub use raw_source_relation::*;
+mod pc_sample_code_object_relation;
+pub use pc_sample_code_object_relation::*;
 
 pub const MAX_IMPORT_SOURCE_BYTES_V1: u64 = 8 * 1024 * 1024;
 pub const MAX_IMPORT_OUTPUT_BYTES_V1: u64 = 64 * 1024;
