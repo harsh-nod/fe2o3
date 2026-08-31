@@ -12,6 +12,7 @@ members = []
 resolver = "3"
 
 [features]
+kernel-kimi-k3-kda-decode = []
 kernel-kda-decode = []
 kernel-kda-decode-wave-tiled-v1 = ["kernel-kda-decode"]
 kernel-kda-prefill = []

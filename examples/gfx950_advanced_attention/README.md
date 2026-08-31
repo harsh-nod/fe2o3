@@ -17,9 +17,12 @@ This directory is a bounded educational validation suite for AMD CDNA 4
 (`gfx950`). It is not a production implementation, performance claim, model
 reproduction, or general-purpose operator library.
 
-The fixed shapes are 16 channels, eight recurrence tokens, 16 attention
-tokens, and attention head dimension 128. The suite contains:
+The fixed teaching shapes are 16 channels, eight recurrence tokens, 16
+attention tokens, and attention head dimension 128. The suite contains:
 
+- a Kimi K3-shaped single-head fused-recurrent KDA core decode slice with
+  K=V=128, q/k L2 normalization, safe-gate decay, beta sigmoid, V-first state
+  reads, 128 core output values, and a first-row recurrent-state tile;
 - single-token KDA/GDN-style decode with a three-tap causal convolution,
   gated recurrent state update, and RMS normalization;
 - two-chunk KDA/GDN-style prefill with four tokens per chunk and state carried
@@ -52,6 +55,7 @@ cargo test --offline
 Run the production Rust lowering and numerical verification on a gfx950 host:
 
 ```bash
+./run-kimi-k3-kda-decode-gfx950.sh
 ./run-kda-decode-gfx950.sh
 ./run-kda-prefill-gfx950.sh
 ./run-content-sparse-attention-gfx950.sh
@@ -69,9 +73,39 @@ square root lowers to its target-native LLVM intrinsic. Set
 `FE2O3_REPO_ROOT`, `ROCM_PATH`, `RUSTUP`, `CARGO`, or the documented tool and
 target-directory environment variables when validating a copied checkout.
 
+## Kimi K3 KDA decode-core boundary
+
+Kimi K3's public configuration uses 96 KDA heads with key/query dimension 128,
+value dimension 128, four-tap short convolution before KDA, 69 KDA layers, 24
+gated-MLA layers, safe-gate lower bound `-5`, and 1M context. The Kimi model
+selects `fused_recurrent_kda` for cached single-token decode and `chunk_kda`
+otherwise. FLA applies q/k L2 normalization when requested, computes beta from
+the raw beta logit with sigmoid, applies the default `1 / sqrt(K)` scale, and
+with lower-bound gating computes log decay as
+`lower_bound * sigmoid(exp(A_log) * (g + dt_bias))`.
+
+`gfx950_kimi_k3_kda_decode_v1` is the first Rust gfx950 slice of that operator.
+It implements the core one-token recurrence for one sequence and one KDA value
+head in f32:
+
+```text
+H_t = H_{t-1} * exp(g_t)
+v_delta = sigmoid(beta_t) * (v_t - H_t k_t)
+H_t = H_t + v_delta k_t^T
+o_t = H_t (q_t / ||q_t||_2 * 1/sqrt(128))
+```
+
+The source and hardware tests validate the 128-value KDA core output as two
+64-value output tiles and the first 64 entries of the V-first recurrent-state
+row zero against the independent CPU reference. This does not yet claim full
+Kimi K3 serving readiness: remaining work is full-state publication, all 96
+heads and batching, BF16/MX formats, the four-tap q/k/v short-convolution
+fusion, output RMS gate, `chunk_kda` prefill, and KDA-aware prefix-cache
+integration.
+
 ## Production Rust validation evidence
 
-On 2026-08-27, all seven production Rust wrappers passed on SSH host `mi350`
+On 2026-08-27, all seven original production Rust wrappers passed on SSH host `mi350`
 (`smci350-rck-g03-b19-03`) with ROCm 7.2.1 and eight visible MI350X devices.
 The largest observed absolute errors were `4.172325134e-7` for KDA decode,
 `1.072883606e-6` for KDA prefill, `0` for both attention kernels and AttnRes,

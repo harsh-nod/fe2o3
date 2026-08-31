@@ -1,9 +1,11 @@
 //! Independent safe CPU references for the fixed teaching profiles.
 
 use crate::{
-    ATTENTION_TOKENS_V1, CHANNELS_V1, HEAD_DIMENSION_V1, KDA_TAPS_V1, MIXING_STREAMS_V1,
-    PREFILL_TOKENS_V1, SELECTED_BLOCKS_V1, SELECTED_TOKENS_V1, SINKHORN_ITERATIONS_V1,
-    TOKENS_PER_BLOCK_V1,
+    ATTENTION_TOKENS_V1, CHANNELS_V1, HEAD_DIMENSION_V1, KDA_TAPS_V1,
+    KIMI_K3_DECODE_STATE_ELEMENTS_V1, KIMI_K3_GATE_LOWER_BOUND_V1, KIMI_K3_HEAD_DIMENSION_V1,
+    KIMI_K3_KDA_ATTENTION_SCALE_V1, KIMI_K3_QK_NORM_EPSILON_V1, KIMI_K3_VALUE_DIMENSION_V1,
+    MIXING_STREAMS_V1, PREFILL_TOKENS_V1, SELECTED_BLOCKS_V1, SELECTED_TOKENS_V1,
+    SINKHORN_ITERATIONS_V1, TOKENS_PER_BLOCK_V1,
 };
 
 const ATTENTION_SCALE_V1: f32 = 0.088_388_346;
@@ -38,6 +40,15 @@ pub struct KdaPrefillOutputV1 {
     pub normalized: Vec<f32>,
 }
 
+/// Core Kimi K3 KDA decode output for one sequence, value head, and token.
+#[derive(Clone, Debug, PartialEq)]
+pub struct KimiK3KdaDecodeOutputV1 {
+    /// Updated recurrent state in V-first `[128][128]` row-major layout.
+    pub final_state: Vec<f32>,
+    /// Core KDA output before the model's output RMS gate and output projection.
+    pub output: Vec<f32>,
+}
+
 /// Selected token IDs and output from indexed sparse attention.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SparseAttentionOutputV1 {
@@ -63,6 +74,96 @@ fn sigmoid_reference_v1(value: f32) -> Result<f32, ReferenceErrorV1> {
         .is_finite()
         .then_some(result)
         .ok_or(ReferenceErrorV1::NonFinite)
+}
+
+fn l2_norm_reference_v1(values: &[f32], expected: usize) -> Result<f32, ReferenceErrorV1> {
+    validate_finite_v1(values, expected)?;
+    let square_sum = values.iter().map(|value| value * value).sum::<f32>();
+    let norm = (square_sum + KIMI_K3_QK_NORM_EPSILON_V1).sqrt();
+    if !norm.is_finite() || norm <= 0.0 {
+        return Err(ReferenceErrorV1::DegenerateNormalization);
+    }
+    Ok(norm)
+}
+
+fn kimi_k3_log_decay_reference_v1(
+    gate: f32,
+    a_log: f32,
+    dt_bias: f32,
+) -> Result<f32, ReferenceErrorV1> {
+    let result =
+        KIMI_K3_GATE_LOWER_BOUND_V1 * sigmoid_reference_v1(a_log.exp() * (gate + dt_bias))?;
+    result
+        .is_finite()
+        .then_some(result)
+        .ok_or(ReferenceErrorV1::NonFinite)
+}
+
+/// Evaluates one single-head Kimi K3 fused-recurrent KDA core decode step.
+///
+/// This mirrors the FLA decode contract used by Kimi K3 for the core KDA op:
+/// q/k L2 normalization, beta sigmoid, default `1 / sqrt(K)` scale, safe-gate
+/// log decay with `lower_bound = -5`, and V-first state layout. The model's
+/// short convolution, output RMS gate, output projection, and multi-head/cache
+/// batching are outside this reference.
+pub fn kimi_k3_kda_decode_reference_v1(
+    q: &[f32],
+    k: &[f32],
+    v: &[f32],
+    gate: &[f32],
+    beta_logit: &[f32],
+    a_log: &[f32],
+    dt_bias: &[f32],
+    initial_state: &[f32],
+) -> Result<KimiK3KdaDecodeOutputV1, ReferenceErrorV1> {
+    validate_finite_v1(q, KIMI_K3_HEAD_DIMENSION_V1)?;
+    validate_finite_v1(k, KIMI_K3_HEAD_DIMENSION_V1)?;
+    validate_finite_v1(v, KIMI_K3_VALUE_DIMENSION_V1)?;
+    validate_finite_v1(gate, KIMI_K3_HEAD_DIMENSION_V1)?;
+    validate_finite_v1(beta_logit, 1)?;
+    validate_finite_v1(a_log, 1)?;
+    validate_finite_v1(dt_bias, KIMI_K3_HEAD_DIMENSION_V1)?;
+    validate_finite_v1(initial_state, KIMI_K3_DECODE_STATE_ELEMENTS_V1)?;
+
+    let q_norm = l2_norm_reference_v1(q, KIMI_K3_HEAD_DIMENSION_V1)?;
+    let k_norm = l2_norm_reference_v1(k, KIMI_K3_HEAD_DIMENSION_V1)?;
+    let beta = sigmoid_reference_v1(beta_logit[0])?;
+    let mut retention = vec![0.0_f32; KIMI_K3_HEAD_DIMENSION_V1];
+    let mut q_scaled = vec![0.0_f32; KIMI_K3_HEAD_DIMENSION_V1];
+    let mut k_normalized = vec![0.0_f32; KIMI_K3_HEAD_DIMENSION_V1];
+    for key in 0..KIMI_K3_HEAD_DIMENSION_V1 {
+        let log_decay = kimi_k3_log_decay_reference_v1(gate[key], a_log[0], dt_bias[key])?;
+        retention[key] = log_decay.exp();
+        q_scaled[key] = q[key] / q_norm * KIMI_K3_KDA_ATTENTION_SCALE_V1;
+        k_normalized[key] = k[key] / k_norm;
+    }
+
+    let mut final_state = vec![0.0_f32; KIMI_K3_DECODE_STATE_ELEMENTS_V1];
+    let mut output = vec![0.0_f32; KIMI_K3_VALUE_DIMENSION_V1];
+    for value in 0..KIMI_K3_VALUE_DIMENSION_V1 {
+        let row_base = value * KIMI_K3_HEAD_DIMENSION_V1;
+        let mut projection = 0.0_f32;
+        for key in 0..KIMI_K3_HEAD_DIMENSION_V1 {
+            projection += initial_state[row_base + key] * retention[key] * k_normalized[key];
+        }
+        let correction = beta * (v[value] - projection);
+        for key in 0..KIMI_K3_HEAD_DIMENSION_V1 {
+            let updated =
+                initial_state[row_base + key] * retention[key] + correction * k_normalized[key];
+            if !updated.is_finite() {
+                return Err(ReferenceErrorV1::NonFinite);
+            }
+            final_state[row_base + key] = updated;
+            output[value] += updated * q_scaled[key];
+        }
+        if !output[value].is_finite() {
+            return Err(ReferenceErrorV1::NonFinite);
+        }
+    }
+    Ok(KimiK3KdaDecodeOutputV1 {
+        final_state,
+        output,
+    })
 }
 
 fn kda_step_reference_v1(

@@ -40,6 +40,9 @@ fi
 BUILD_FEATURES=$FEATURE${EXTRA_FEATURE:+,$EXTRA_FEATURE}
 
 case "$SUITE:$FEATURE" in
+    attention:kernel-kimi-k3-kda-decode)
+        SYMBOL=gfx950_kimi_k3_kda_decode_v1; KERNARG=176; WG=64; LDS=0; OCML=1
+        TEST=gfx950_kimi_k3_kda_decode_rust_cov6_matches_cpu_reference; ISA=scalar ;;
     attention:kernel-kda-decode)
         SYMBOL=gfx950_kda_gdn_decode; KERNARG=96; WG=64; LDS=0; OCML=1
         TEST=gfx950_kda_gdn_decode_rust_cov6_matches_cpu_reference; ISA=scalar ;;

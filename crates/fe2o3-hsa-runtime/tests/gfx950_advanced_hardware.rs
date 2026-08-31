@@ -41,6 +41,21 @@ const ATTENTION_TOKENS_V1: usize = 16;
 #[cfg(feature = "hardware-test-hooks")]
 const HEAD_DIMENSION_V1: usize = 128;
 #[cfg(feature = "hardware-test-hooks")]
+const KIMI_K3_HEAD_DIMENSION_V1: usize = 128;
+#[cfg(feature = "hardware-test-hooks")]
+const KIMI_K3_VALUE_DIMENSION_V1: usize = 128;
+#[cfg(feature = "hardware-test-hooks")]
+const KIMI_K3_DECODE_STATE_ELEMENTS_V1: usize =
+    KIMI_K3_VALUE_DIMENSION_V1 * KIMI_K3_HEAD_DIMENSION_V1;
+#[cfg(feature = "hardware-test-hooks")]
+const KIMI_K3_DECODE_STATE_ROW0_COLUMNS_V1: usize = 64;
+#[cfg(feature = "hardware-test-hooks")]
+const KIMI_K3_GATE_LOWER_BOUND_V1: f32 = -5.0;
+#[cfg(feature = "hardware-test-hooks")]
+const KIMI_K3_KDA_ATTENTION_SCALE_V1: f32 = 0.088_388_346;
+#[cfg(feature = "hardware-test-hooks")]
+const KIMI_K3_QK_NORM_EPSILON_V1: f32 = 1.0e-6;
+#[cfg(feature = "hardware-test-hooks")]
 const TOKENS_PER_BLOCK_V1: usize = 4;
 #[cfg(feature = "hardware-test-hooks")]
 const SELECTED_BLOCKS_V1: usize = 2;
@@ -316,6 +331,8 @@ const EXPERT_RANK_ARGS: &[AbiArg] = &[
 #[cfg(feature = "hardware-test-hooks")]
 const NINE_SLICES: &[AbiArg] = &[AbiArg::Slice; 9];
 #[cfg(feature = "hardware-test-hooks")]
+const ELEVEN_SLICES: &[AbiArg] = &[AbiArg::Slice; 11];
+#[cfg(feature = "hardware-test-hooks")]
 const THIRTEEN_SLICES: &[AbiArg] = &[AbiArg::Slice; 13];
 #[cfg(feature = "hardware-test-hooks")]
 const THREE_POINTERS: &[AbiArg] = &[AbiArg::Pointer; 3];
@@ -352,6 +369,15 @@ const KDA_PREFILL: AdvancedCase = AdvancedCase {
     workgroup_x: 64,
     static_lds_bytes: 0,
     args: SEVEN_SLICES,
+};
+#[cfg(feature = "hardware-test-hooks")]
+const KIMI_K3_KDA_DECODE: AdvancedCase = AdvancedCase {
+    label: "gfx950 Kimi K3 KDA decode core",
+    export: "gfx950_kimi_k3_kda_decode_v1",
+    descriptor: "gfx950_kimi_k3_kda_decode_v1.kd",
+    workgroup_x: 64,
+    static_lds_bytes: 0,
+    args: ELEVEN_SLICES,
 };
 #[cfg(feature = "hardware-test-hooks")]
 const SPARSE_ATTENTION: AdvancedCase = AdvancedCase {
@@ -847,6 +873,66 @@ fn repeated_attention_query() -> (Vec<u8>, Vec<u8>) {
 #[cfg(feature = "hardware-test-hooks")]
 fn attention_plans(case: AdvancedCase) -> Result<Vec<LaunchPlan>, BoxError> {
     let plan = match case.export {
+        "gfx950_kimi_k3_kda_decode_v1" => {
+            let q = deterministic_floats(KIMI_K3_HEAD_DIMENSION_V1, 17, 0.7);
+            let k = deterministic_floats(KIMI_K3_HEAD_DIMENSION_V1, 18, 0.5);
+            let v = deterministic_floats(KIMI_K3_VALUE_DIMENSION_V1, 19, 0.4);
+            let gate = deterministic_floats(KIMI_K3_HEAD_DIMENSION_V1, 20, 0.6);
+            let beta = vec![0.125_f32];
+            let a_log = vec![0.25_f32];
+            let dt_bias = deterministic_floats(KIMI_K3_HEAD_DIMENSION_V1, 21, 0.3);
+            let initial_state = deterministic_floats(KIMI_K3_DECODE_STATE_ELEMENTS_V1, 22, 0.05);
+            let expected = attention_reference::kimi_k3_kda_decode_reference_v1(
+                &q,
+                &k,
+                &v,
+                &gate,
+                &beta,
+                &a_log,
+                &dt_bias,
+                &initial_state,
+            )
+            .map_err(|error| format!("Kimi K3 KDA decode reference failed: {error:?}"))?;
+            let output_first64 = expected.output[..KIMI_K3_DECODE_STATE_ROW0_COLUMNS_V1].to_vec();
+            let output_second64 = expected.output[KIMI_K3_DECODE_STATE_ROW0_COLUMNS_V1..].to_vec();
+            let state_row0_first64 =
+                expected.final_state[..KIMI_K3_DECODE_STATE_ROW0_COLUMNS_V1].to_vec();
+            let lengths = [
+                q.len(),
+                k.len(),
+                v.len(),
+                gate.len(),
+                beta.len(),
+                a_log.len(),
+                dt_bias.len(),
+                initial_state.len(),
+                output_first64.len(),
+                output_second64.len(),
+                state_row0_first64.len(),
+            ];
+            LaunchPlan {
+                label: case.label.into(),
+                buffers: vec![
+                    input("q", &q),
+                    input("k", &k),
+                    input("v", &v),
+                    input("gate", &gate),
+                    input("beta_logit", &beta),
+                    input("a_log", &a_log),
+                    input("dt_bias", &dt_bias),
+                    input("initial_state", &initial_state),
+                    f32_output("output_first64", output_first64, 4.0e-3),
+                    f32_output("output_second64", output_second64, 4.0e-3),
+                    f32_output("state_row0_first64", state_row0_first64, 4.0e-3),
+                ],
+                args: (0..11)
+                    .map(|buffer| PlannedArg::Slice {
+                        buffer,
+                        elements: lengths[buffer],
+                    })
+                    .collect(),
+            }
+        }
         "gfx950_kda_gdn_decode" => {
             let history = deterministic_floats(KDA_TAPS_V1 * CHANNELS_V1, 1, 0.6);
             let gates = deterministic_floats(CHANNELS_V1, 2, 0.8);
@@ -1618,6 +1704,7 @@ fn plans_for(case: AdvancedCase) -> Result<Vec<LaunchPlan>, BoxError> {
     if [
         KDA_DECODE,
         KDA_PREFILL,
+        KIMI_K3_KDA_DECODE,
         SPARSE_ATTENTION,
         HYBRID_ATTENTION,
         ATTNRES,
@@ -2441,6 +2528,11 @@ macro_rules! hardware_case {
     };
 }
 
+#[cfg(feature = "hardware-test-hooks")]
+hardware_case!(
+    gfx950_kimi_k3_kda_decode_rust_cov6_matches_cpu_reference,
+    KIMI_K3_KDA_DECODE
+);
 #[cfg(feature = "hardware-test-hooks")]
 hardware_case!(
     gfx950_kda_gdn_decode_rust_cov6_matches_cpu_reference,

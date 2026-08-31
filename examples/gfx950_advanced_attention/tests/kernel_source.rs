@@ -3,6 +3,9 @@ use std::collections::BTreeSet;
 use fe2o3_gfx950_advanced_attention::{
     GFX950_ADVANCED_ATTENTION_GRID_V1, GFX950_ADVANCED_ATTENTION_SOURCE_BLOCKER_V1,
     GFX950_ADVANCED_ATTENTION_SOURCE_LOWERING_SUPPORTED_V1, GFX950_ADVANCED_ATTENTION_WORKGROUP_V1,
+    KIMI_K3_ATTENTION_HEADS_V1, KIMI_K3_GATED_MLA_LAYERS_V1, KIMI_K3_HEAD_DIMENSION_V1,
+    KIMI_K3_KDA_LAYERS_V1, KIMI_K3_KDA_SOURCE_BOUNDARY_V1, KIMI_K3_SHORT_CONV_KERNEL_V1,
+    KIMI_K3_VALUE_DIMENSION_V1,
 };
 use syn::{Item, Visibility};
 
@@ -14,7 +17,7 @@ const ABLATION_REGISTRY: &str = include_str!("../ablation-variants-v1.json");
 const RUNNER_SOURCE: &str = include_str!("../run-gfx950.sh");
 
 #[test]
-fn source_contains_the_seven_expected_typed_kernels() {
+fn source_contains_the_eight_expected_typed_kernels() {
     let file = syn::parse_file(SOURCE).expect("kernel source parses as ordinary Rust");
     let kernels: Vec<_> = file
         .items
@@ -48,10 +51,11 @@ fn source_contains_the_seven_expected_typed_kernels() {
             "gfx950_four_branch_residual".to_string(),
             "gfx950_kda_gdn_decode".to_string(),
             "gfx950_kda_gdn_prefill".to_string(),
+            "gfx950_kimi_k3_kda_decode_v1".to_string(),
             "gfx950_mhc_sinkhorn_mix".to_string(),
         ])
     );
-    assert_eq!(kernels.len(), 7);
+    assert_eq!(kernels.len(), 8);
     for function in kernels {
         assert!(matches!(function.vis, Visibility::Public(_)));
         assert!(function.sig.unsafety.is_none());
@@ -130,6 +134,11 @@ fn source_is_safe_fixed_shape_rust_without_hip_escape_hatches() {
     assert!(!lowercase.contains("std::process"));
     for marker in [
         "KDA_TAPS_V1",
+        "KIMI_K3_HEAD_DIMENSION_V1",
+        "KIMI_K3_VALUE_DIMENSION_V1",
+        "KIMI_K3_GATE_LOWER_BOUND_V1",
+        "KIMI_K3_KDA_ATTENTION_SCALE_V1",
+        "KIMI_K3_QK_NORM_EPSILON_V1",
         "PREFILL_TOKENS_V1",
         "ATTENTION_TOKENS_V1",
         "HEAD_DIMENSION_V1",
@@ -157,14 +166,23 @@ fn source_is_safe_fixed_shape_rust_without_hip_escape_hatches() {
 fn package_states_the_production_source_and_evidence_boundary() {
     assert_eq!(GFX950_ADVANCED_ATTENTION_WORKGROUP_V1, [64, 1, 1]);
     assert_eq!(GFX950_ADVANCED_ATTENTION_GRID_V1, [1, 1, 1]);
+    assert_eq!(KIMI_K3_ATTENTION_HEADS_V1, 96);
+    assert_eq!(KIMI_K3_HEAD_DIMENSION_V1, 128);
+    assert_eq!(KIMI_K3_VALUE_DIMENSION_V1, 128);
+    assert_eq!(KIMI_K3_SHORT_CONV_KERNEL_V1, 4);
+    assert_eq!(KIMI_K3_KDA_LAYERS_V1, 69);
+    assert_eq!(KIMI_K3_GATED_MLA_LAYERS_V1, 24);
     assert!(GFX950_ADVANCED_ATTENTION_SOURCE_LOWERING_SUPPORTED_V1);
     assert!(
         LIB_SOURCE.contains("GFX950_ADVANCED_ATTENTION_SOURCE_LOWERING_SUPPORTED_V1: bool = true")
     );
     assert!(GFX950_ADVANCED_ATTENTION_SOURCE_BLOCKER_V1.contains("formal compiler refinement"));
     assert!(GFX950_ADVANCED_ATTENTION_SOURCE_BLOCKER_V1.contains("protected publication"));
+    assert!(KIMI_K3_KDA_SOURCE_BOUNDARY_V1.contains("single-head f32 fused-recurrent"));
+    assert!(KIMI_K3_KDA_SOURCE_BOUNDARY_V1.contains("full-state publication"));
 
     for feature in [
+        "kernel-kimi-k3-kda-decode",
         "kernel-kda-decode",
         "kernel-kda-prefill",
         "kernel-content-sparse-attention",

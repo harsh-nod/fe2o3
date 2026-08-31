@@ -6,16 +6,23 @@ use fe2o3_device::{DeviceMath, DisjointSlice, thread};
 #[cfg(target_arch = "amdgpu")]
 use fe2o3_device::{
     Gfx950F32AccumulatorFragment, Gfx950Fp8E4M3, Gfx950Fp8MfmaAMatrix, Gfx950LdsTransposeTile,
-    Gfx950Matrix, Gfx950Subgroup, Gfx950TransposeUninitialized, Index1D, KernelError, KernelResult,
-    StridedReadView2D, Wave64, WaveLane, kernel,
+    Gfx950Matrix, Gfx950Subgroup, Gfx950TransposeUninitialized, Index1D, KernelError,
+    KernelResult, StridedReadView2D, Wave64, WaveLane, kernel,
 };
 #[cfg(not(target_arch = "amdgpu"))]
 use fe2o3_device::{GridExclusive, GridLeader};
 
 use crate::{
-    ATTENTION_TOKENS_V1, CHANNELS_V1, HEAD_DIMENSION_V1, KDA_TAPS_V1, MIXING_STREAMS_V1,
-    PREFILL_TOKENS_V1, SELECTED_BLOCKS_V1, SELECTED_TOKENS_V1, SINKHORN_ITERATIONS_V1,
-    SPARSE_BLOCKS_V1, TOKENS_PER_BLOCK_V1,
+    ATTENTION_TOKENS_V1, CHANNELS_V1, HEAD_DIMENSION_V1, KDA_TAPS_V1,
+    KIMI_K3_DECODE_STATE_ROW0_COLUMNS_V1, MIXING_STREAMS_V1, PREFILL_TOKENS_V1,
+    SELECTED_BLOCKS_V1, SELECTED_TOKENS_V1, SINKHORN_ITERATIONS_V1, SPARSE_BLOCKS_V1,
+    TOKENS_PER_BLOCK_V1,
+};
+#[cfg(target_arch = "amdgpu")]
+use crate::{
+    KIMI_K3_DECODE_STATE_ELEMENTS_V1, KIMI_K3_GATE_LOWER_BOUND_V1,
+    KIMI_K3_HEAD_DIMENSION_V1, KIMI_K3_KDA_ATTENTION_SCALE_V1, KIMI_K3_QK_NORM_EPSILON_V1,
+    KIMI_K3_VALUE_DIMENSION_V1,
 };
 
 const ATTENTION_SCALE_V1: f32 = 0.088_388_346;
@@ -214,6 +221,277 @@ fn kda_update_v1(
         channel += 1;
     }
     Some((next, normalized))
+}
+
+/// Computes a single-head Kimi K3 fused-recurrent KDA core decode step.
+///
+/// This validation root consumes Kimi K3's K=V=128 shape, V-first recurrent
+/// state layout, FLA q/k L2 normalization, safe-gate decay, beta sigmoid, and
+/// default KDA scale. It emits the 128-value core KDA output as two 64-element
+/// tiles plus the first 64 entries of state row zero. The full production
+/// serving backend still needs all-head batching, BF16/MX formats, conv fusion,
+/// output RMS gating, and full state publication.
+#[cfg(all(target_arch = "amdgpu", feature = "kernel-kimi-k3-kda-decode"))]
+#[kernel(
+    typed,
+    namespace = "dae392bc52815e05989ef1981969b6f601468612bbde93861b4a058c61df6b84",
+    launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1]),
+    control_flow(loop_bounds(128, 128, 128, 128, 128, 128))
+)]
+pub fn gfx950_kimi_k3_kda_decode_v1(
+    q: &[f32],
+    k: &[f32],
+    v: &[f32],
+    gate: &[f32],
+    beta_logit: &[f32],
+    a_log: &[f32],
+    dt_bias: &[f32],
+    initial_state: &[f32],
+    mut output_first64: DisjointSlice<f32, Index1D>,
+    mut output_second64: DisjointSlice<f32, Index1D>,
+    mut state_row0_first64: DisjointSlice<f32, Index1D>,
+) {
+    if q.len() != KIMI_K3_HEAD_DIMENSION_V1
+        || k.len() != KIMI_K3_HEAD_DIMENSION_V1
+        || v.len() != KIMI_K3_VALUE_DIMENSION_V1
+        || gate.len() != KIMI_K3_HEAD_DIMENSION_V1
+        || beta_logit.len() != 1
+        || a_log.len() != 1
+        || dt_bias.len() != KIMI_K3_HEAD_DIMENSION_V1
+        || initial_state.len() != KIMI_K3_DECODE_STATE_ELEMENTS_V1
+        || output_first64.len() != KIMI_K3_DECODE_STATE_ROW0_COLUMNS_V1
+        || output_second64.len() != KIMI_K3_DECODE_STATE_ROW0_COLUMNS_V1
+        || state_row0_first64.len() != KIMI_K3_DECODE_STATE_ROW0_COLUMNS_V1
+    {
+        return;
+    }
+    let Ok(q) = StridedReadView2D::from_shared_slice(
+        q,
+        0,
+        1,
+        KIMI_K3_HEAD_DIMENSION_V1,
+        KIMI_K3_HEAD_DIMENSION_V1,
+    ) else {
+        return;
+    };
+    let Ok(k) = StridedReadView2D::from_shared_slice(
+        k,
+        0,
+        1,
+        KIMI_K3_HEAD_DIMENSION_V1,
+        KIMI_K3_HEAD_DIMENSION_V1,
+    ) else {
+        return;
+    };
+    let Ok(v) = StridedReadView2D::from_shared_slice(
+        v,
+        0,
+        1,
+        KIMI_K3_VALUE_DIMENSION_V1,
+        KIMI_K3_VALUE_DIMENSION_V1,
+    ) else {
+        return;
+    };
+    let Ok(gate) = StridedReadView2D::from_shared_slice(
+        gate,
+        0,
+        1,
+        KIMI_K3_HEAD_DIMENSION_V1,
+        KIMI_K3_HEAD_DIMENSION_V1,
+    ) else {
+        return;
+    };
+    let Ok(beta_logit) = StridedReadView2D::from_shared_slice(beta_logit, 0, 1, 1, 1) else {
+        return;
+    };
+    let Ok(a_log) = StridedReadView2D::from_shared_slice(a_log, 0, 1, 1, 1) else {
+        return;
+    };
+    let Ok(dt_bias) = StridedReadView2D::from_shared_slice(
+        dt_bias,
+        0,
+        1,
+        KIMI_K3_HEAD_DIMENSION_V1,
+        KIMI_K3_HEAD_DIMENSION_V1,
+    ) else {
+        return;
+    };
+    let Ok(initial_state) = StridedReadView2D::from_shared_slice(
+        initial_state,
+        0,
+        KIMI_K3_VALUE_DIMENSION_V1,
+        KIMI_K3_HEAD_DIMENSION_V1,
+        KIMI_K3_HEAD_DIMENSION_V1,
+    ) else {
+        return;
+    };
+
+    let lane_index = thread::index_1d();
+    let lane = lane_index.get();
+    let math = DeviceMath::current();
+    let mut q_square_sum = 0.0_f32;
+    let mut k_square_sum = 0.0_f32;
+    let mut key = 0;
+    while key < KIMI_K3_HEAD_DIMENSION_V1 {
+        let q_value = q.load_or(0, key, 0.0);
+        let k_value = k.load_or(0, key, 0.0);
+        q_square_sum += q_value * q_value;
+        k_square_sum += k_value * k_value;
+        key += 1;
+    }
+    let q_norm = math.sqrt_f32(q_square_sum + KIMI_K3_QK_NORM_EPSILON_V1);
+    let k_norm = math.sqrt_f32(k_square_sum + KIMI_K3_QK_NORM_EPSILON_V1);
+    if q_norm <= 0.0 || k_norm <= 0.0 {
+        return;
+    }
+    let beta = 1.0 / (1.0 + math.exp_f32(-beta_logit.load_or(0, 0, 0.0)));
+    let a_scale = math.exp_f32(a_log.load_or(0, 0, 0.0));
+
+    let value_index = lane;
+    let token_value = v.load_or(0, value_index, 0.0);
+    let mut projection = 0.0_f32;
+    key = 0;
+    while key < KIMI_K3_HEAD_DIMENSION_V1 {
+        let gate_input = gate.load_or(0, key, 0.0) + dt_bias.load_or(0, key, 0.0);
+        let gate_sigmoid = 1.0 / (1.0 + math.exp_f32(-(a_scale * gate_input)));
+        let log_decay = KIMI_K3_GATE_LOWER_BOUND_V1 * gate_sigmoid;
+        let retention = math.exp_f32(log_decay);
+        let key_value = k.load_or(0, key, 0.0) / k_norm;
+        projection += initial_state.load_or(value_index, key, 0.0) * retention * key_value;
+        key += 1;
+    }
+    let correction = beta * (token_value - projection);
+    let mut core_output = 0.0_f32;
+    key = 0;
+    while key < KIMI_K3_HEAD_DIMENSION_V1 {
+        let gate_input = gate.load_or(0, key, 0.0) + dt_bias.load_or(0, key, 0.0);
+        let gate_sigmoid = 1.0 / (1.0 + math.exp_f32(-(a_scale * gate_input)));
+        let log_decay = KIMI_K3_GATE_LOWER_BOUND_V1 * gate_sigmoid;
+        let retention = math.exp_f32(log_decay);
+        let key_value = k.load_or(0, key, 0.0) / k_norm;
+        let query_value = q.load_or(0, key, 0.0) / q_norm * KIMI_K3_KDA_ATTENTION_SCALE_V1;
+        let updated_state =
+            initial_state.load_or(value_index, key, 0.0) * retention + correction * key_value;
+        core_output += updated_state * query_value;
+        key += 1;
+    }
+    if let Some(slot) = output_first64.get_mut(thread::index_1d()) {
+        *slot = core_output;
+    }
+
+    let value_index = lane | KIMI_K3_DECODE_STATE_ROW0_COLUMNS_V1;
+    let token_value = v.load_or(0, value_index, 0.0);
+    let mut projection = 0.0_f32;
+    key = 0;
+    while key < KIMI_K3_HEAD_DIMENSION_V1 {
+        let gate_input = gate.load_or(0, key, 0.0) + dt_bias.load_or(0, key, 0.0);
+        let gate_sigmoid = 1.0 / (1.0 + math.exp_f32(-(a_scale * gate_input)));
+        let log_decay = KIMI_K3_GATE_LOWER_BOUND_V1 * gate_sigmoid;
+        let retention = math.exp_f32(log_decay);
+        let key_value = k.load_or(0, key, 0.0) / k_norm;
+        projection += initial_state.load_or(value_index, key, 0.0) * retention * key_value;
+        key += 1;
+    }
+    let correction = beta * (token_value - projection);
+    let mut core_output = 0.0_f32;
+    key = 0;
+    while key < KIMI_K3_HEAD_DIMENSION_V1 {
+        let gate_input = gate.load_or(0, key, 0.0) + dt_bias.load_or(0, key, 0.0);
+        let gate_sigmoid = 1.0 / (1.0 + math.exp_f32(-(a_scale * gate_input)));
+        let log_decay = KIMI_K3_GATE_LOWER_BOUND_V1 * gate_sigmoid;
+        let retention = math.exp_f32(log_decay);
+        let key_value = k.load_or(0, key, 0.0) / k_norm;
+        let query_value = q.load_or(0, key, 0.0) / q_norm * KIMI_K3_KDA_ATTENTION_SCALE_V1;
+        let updated_state =
+            initial_state.load_or(value_index, key, 0.0) * retention + correction * key_value;
+        core_output += updated_state * query_value;
+        key += 1;
+    }
+    if let Some(slot) = output_second64.get_mut(thread::index_1d()) {
+        *slot = core_output;
+    }
+
+    let row0_token_value = v.load_or(0, 0, 0.0);
+    let mut row0_projection = 0.0_f32;
+    key = 0;
+    while key < KIMI_K3_HEAD_DIMENSION_V1 {
+        let gate_input = gate.load_or(0, key, 0.0) + dt_bias.load_or(0, key, 0.0);
+        let gate_sigmoid = 1.0 / (1.0 + math.exp_f32(-(a_scale * gate_input)));
+        let log_decay = KIMI_K3_GATE_LOWER_BOUND_V1 * gate_sigmoid;
+        let retention = math.exp_f32(log_decay);
+        let key_value = k.load_or(0, key, 0.0) / k_norm;
+        row0_projection += initial_state.load_or(0, key, 0.0) * retention * key_value;
+        key += 1;
+    }
+    let lane_key = lane;
+    let gate_input = gate.load_or(0, lane_key, 0.0) + dt_bias.load_or(0, lane_key, 0.0);
+    let gate_sigmoid = 1.0 / (1.0 + math.exp_f32(-(a_scale * gate_input)));
+    let log_decay = KIMI_K3_GATE_LOWER_BOUND_V1 * gate_sigmoid;
+    let retention = math.exp_f32(log_decay);
+    let key_value = k.load_or(0, lane_key, 0.0) / k_norm;
+    let row0_updated = initial_state.load_or(0, lane_key, 0.0) * retention
+        + beta * (row0_token_value - row0_projection) * key_value;
+    if let Some(slot) = state_row0_first64.get_mut(thread::index_1d()) {
+        *slot = row0_updated;
+    }
+}
+
+#[cfg(not(target_arch = "amdgpu"))]
+pub fn gfx950_kimi_k3_kda_decode_v1(
+    q: &[f32],
+    k: &[f32],
+    v: &[f32],
+    gate: &[f32],
+    beta_logit: &[f32],
+    a_log: &[f32],
+    dt_bias: &[f32],
+    initial_state: &[f32],
+    mut output_first64: DisjointSlice<f32, GridExclusive>,
+    mut output_second64: DisjointSlice<f32, GridExclusive>,
+    mut state_row0_first64: DisjointSlice<f32, GridExclusive>,
+) {
+    let Some(leader) = thread::grid_leader() else {
+        return;
+    };
+    let Ok(expected) = crate::reference::kimi_k3_kda_decode_reference_v1(
+        q,
+        k,
+        v,
+        gate,
+        beta_logit,
+        a_log,
+        dt_bias,
+        initial_state,
+    ) else {
+        fe2o3_device::trap();
+    };
+    if output_first64.len() != KIMI_K3_DECODE_STATE_ROW0_COLUMNS_V1
+        || output_second64.len() != KIMI_K3_DECODE_STATE_ROW0_COLUMNS_V1
+        || state_row0_first64.len() != KIMI_K3_DECODE_STATE_ROW0_COLUMNS_V1
+    {
+        fe2o3_device::trap();
+    }
+    let mut value = 0;
+    while value < KIMI_K3_DECODE_STATE_ROW0_COLUMNS_V1 {
+        write_f32_v1(&mut output_first64, &leader, value, expected.output[value]);
+        write_f32_v1(
+            &mut output_second64,
+            &leader,
+            value,
+            expected.output[value + KIMI_K3_DECODE_STATE_ROW0_COLUMNS_V1],
+        );
+        value += 1;
+    }
+    let mut key = 0;
+    while key < KIMI_K3_DECODE_STATE_ROW0_COLUMNS_V1 {
+        write_f32_v1(
+            &mut state_row0_first64,
+            &leader,
+            key,
+            expected.final_state[key],
+        );
+        key += 1;
+    }
 }
 
 /// Applies one three-tap gated recurrence and RMS-normalizes its 16-channel state.

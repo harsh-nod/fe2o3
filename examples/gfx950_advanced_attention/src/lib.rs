@@ -10,6 +10,7 @@
     target_arch = "amdgpu",
     not(any(
         feature = "kernel-kda-decode",
+        feature = "kernel-kimi-k3-kda-decode",
         feature = "kernel-kda-prefill",
         feature = "kernel-content-sparse-attention",
         feature = "kernel-compressed-hybrid-attention",
@@ -23,6 +24,34 @@ compile_error!("an AMDGPU build must select exactly one advanced-attention kerne
 #[cfg(all(
     target_arch = "amdgpu",
     any(
+        all(
+            feature = "kernel-kimi-k3-kda-decode",
+            feature = "kernel-kda-decode"
+        ),
+        all(
+            feature = "kernel-kimi-k3-kda-decode",
+            feature = "kernel-kda-prefill"
+        ),
+        all(
+            feature = "kernel-kimi-k3-kda-decode",
+            feature = "kernel-content-sparse-attention"
+        ),
+        all(
+            feature = "kernel-kimi-k3-kda-decode",
+            feature = "kernel-compressed-hybrid-attention"
+        ),
+        all(
+            feature = "kernel-kimi-k3-kda-decode",
+            feature = "kernel-attnres-aggregate"
+        ),
+        all(
+            feature = "kernel-kimi-k3-kda-decode",
+            feature = "kernel-four-branch-residual"
+        ),
+        all(
+            feature = "kernel-kimi-k3-kda-decode",
+            feature = "kernel-mhc-sinkhorn-mix"
+        ),
         all(feature = "kernel-kda-decode", feature = "kernel-kda-prefill"),
         all(
             feature = "kernel-kda-decode",
@@ -132,6 +161,37 @@ pub const SELECTED_TOKENS_V1: usize = 3;
 pub const MIXING_STREAMS_V1: usize = 4;
 /// Sinkhorn row/column normalization iterations.
 pub const SINKHORN_ITERATIONS_V1: usize = 3;
+
+/// Kimi K3 linear-attention heads in the public model configuration.
+pub const KIMI_K3_ATTENTION_HEADS_V1: usize = 96;
+/// Kimi K3 KDA key/query head dimension.
+pub const KIMI_K3_HEAD_DIMENSION_V1: usize = 128;
+/// Kimi K3 KDA value dimension.
+pub const KIMI_K3_VALUE_DIMENSION_V1: usize = 128;
+/// Kimi K3 short-convolution kernel size before KDA.
+pub const KIMI_K3_SHORT_CONV_KERNEL_V1: usize = 4;
+/// Kimi K3 safe-gate lower bound in log space.
+pub const KIMI_K3_GATE_LOWER_BOUND_V1: f32 = -5.0;
+/// Default KDA attention scale used when FLA receives no explicit scale.
+pub const KIMI_K3_KDA_ATTENTION_SCALE_V1: f32 = 0.088_388_346;
+/// Epsilon used by FLA's in-kernel q/k L2 normalization.
+pub const KIMI_K3_QK_NORM_EPSILON_V1: f32 = 1.0e-6;
+/// Number of KDA layers in Kimi K3.
+pub const KIMI_K3_KDA_LAYERS_V1: usize = 69;
+/// Number of gated-MLA layers in Kimi K3.
+pub const KIMI_K3_GATED_MLA_LAYERS_V1: usize = 24;
+/// Kimi K3 published context length.
+pub const KIMI_K3_CONTEXT_TOKENS_V1: usize = 1_048_576;
+/// Single-head recurrent-state elements in Kimi K3 V-first `[V][K]` layout.
+pub const KIMI_K3_DECODE_STATE_ELEMENTS_V1: usize =
+    KIMI_K3_VALUE_DIMENSION_V1 * KIMI_K3_HEAD_DIMENSION_V1;
+/// First state-row tile emitted by the current K3 decode-core validation root.
+pub const KIMI_K3_DECODE_STATE_ROW0_COLUMNS_V1: usize = 64;
+/// Output elements in each K3 decode-core publication tile.
+pub const KIMI_K3_DECODE_OUTPUT_TILE_ELEMENTS_V1: usize =
+    KIMI_K3_DECODE_STATE_ROW0_COLUMNS_V1;
+/// Boundary for the current Kimi K3 KDA implementation slice.
+pub const KIMI_K3_KDA_SOURCE_BOUNDARY_V1: &str = "single-head f32 fused-recurrent KDA core decode: q/k L2 normalization, safe-gate decay, beta sigmoid, V-first state read, 128-value output split into two 64-value tiles, and first-row state tile; full 96-head batching, BF16/MX formats, short-convolution fusion, output RMS gate, full-state publication, prefill chunking, and KDA-aware cache plumbing remain outside this slice";
 
 /// Exact workgroup dimensions declared by every teaching kernel.
 pub const GFX950_ADVANCED_ATTENTION_WORKGROUP_V1: [u32; 3] = [64, 1, 1];

@@ -1,10 +1,12 @@
 use fe2o3_gfx950_advanced_attention::{
     ATTENTION_TOKENS_V1, CHANNELS_V1, HEAD_DIMENSION_V1, KDA_TAPS_V1, MIXING_STREAMS_V1,
-    PREFILL_TOKENS_V1,
+    KIMI_K3_DECODE_STATE_ELEMENTS_V1, KIMI_K3_DECODE_STATE_ROW0_COLUMNS_V1,
+    KIMI_K3_HEAD_DIMENSION_V1, KIMI_K3_VALUE_DIMENSION_V1, PREFILL_TOKENS_V1,
     reference::{
         ReferenceErrorV1, attnres_aggregate_reference_v1, compressed_hybrid_attention_reference_v1,
         content_sparse_attention_reference_v1, four_branch_residual_reference_v1,
         kda_gdn_decode_reference_v1, kda_gdn_prefill_reference_v1,
+        kimi_k3_kda_decode_reference_v1,
         mhc_sinkhorn_matrix_reference_v1, mhc_sinkhorn_mix_reference_v1,
     },
 };
@@ -27,6 +29,38 @@ fn deterministic_fp8(count: usize, salt: usize) -> Vec<u8> {
 
 fn assert_finite(values: &[f32]) {
     assert!(values.iter().all(|value| value.is_finite()));
+}
+
+#[test]
+fn kimi_k3_kda_decode_matches_the_public_core_shape() {
+    let q = deterministic_floats(KIMI_K3_HEAD_DIMENSION_V1, 17, 0.7);
+    let k = deterministic_floats(KIMI_K3_HEAD_DIMENSION_V1, 18, 0.5);
+    let v = deterministic_floats(KIMI_K3_VALUE_DIMENSION_V1, 19, 0.4);
+    let gate = deterministic_floats(KIMI_K3_HEAD_DIMENSION_V1, 20, 0.6);
+    let beta = vec![0.125_f32];
+    let a_log = vec![0.25_f32];
+    let dt_bias = deterministic_floats(KIMI_K3_HEAD_DIMENSION_V1, 21, 0.3);
+    let initial_state = deterministic_floats(KIMI_K3_DECODE_STATE_ELEMENTS_V1, 22, 0.05);
+
+    let result = kimi_k3_kda_decode_reference_v1(
+        &q,
+        &k,
+        &v,
+        &gate,
+        &beta,
+        &a_log,
+        &dt_bias,
+        &initial_state,
+    )
+    .unwrap();
+    assert_eq!(result.output.len(), KIMI_K3_VALUE_DIMENSION_V1);
+    assert_eq!(result.final_state.len(), KIMI_K3_DECODE_STATE_ELEMENTS_V1);
+    assert_finite(&result.output);
+    assert_finite(&result.final_state);
+    assert_ne!(
+        &result.final_state[..KIMI_K3_DECODE_STATE_ROW0_COLUMNS_V1],
+        &initial_state[..KIMI_K3_DECODE_STATE_ROW0_COLUMNS_V1]
+    );
 }
 
 #[test]
