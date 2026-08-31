@@ -25,6 +25,7 @@ mod mount;
 mod qualification;
 mod run;
 mod staging;
+mod supervisor;
 
 pub use host::{
     CompilerExecutionQualificationHostProbeV1, probe_compiler_execution_qualification_host_v1,
@@ -53,6 +54,7 @@ pub use staging::{
     CompilerExecutionQualificationRecoveryV1, StagedCompilerExecutionQualificationV1,
     recover_compiler_execution_qualification_parent_v1, stage_compiler_execution_qualification_v1,
 };
+pub use supervisor::{QualificationWorkerTerminationV1, wait_for_qualification_worker_v1};
 
 /// Canonical deployment target admitted by this V1 profile.
 pub const COMPILER_EXECUTION_DEPLOYMENT_TARGET_V1: &str = "x86_64-unknown-linux-musl";
