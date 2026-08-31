@@ -1,6 +1,11 @@
 #![no_std]
 
-#[cfg(any(feature = "write-only-output", feature = "write-only-disjoint-output"))]
+#[cfg(any(
+    feature = "write-only-output",
+    feature = "write-only-disjoint-output",
+    feature = "volatile-load",
+    feature = "volatile-load-lookalike",
+))]
 use fe2o3_device::WriteOnlyDisjointSlice;
 use fe2o3_device::{DisjointSlice, kernel, thread};
 

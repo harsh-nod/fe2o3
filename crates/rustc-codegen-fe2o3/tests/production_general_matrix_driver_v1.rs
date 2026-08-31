@@ -305,14 +305,42 @@ fn volatile_slice_load_reaches_guarded_volatile_llvm_and_read_only_descriptor() 
         .find("_merge:")
         .map(|offset| false_label + offset)
         .expect("guarded-load merge label");
-    let trap_branch = llvm[merge_label..]
-        .find("br i1 %v11, label %bb3, label %bb5")
-        .map(|offset| merge_label + offset)
+    let bound_line_start = llvm[..bound].rfind('\n').map_or(0, |offset| offset + 1);
+    let bound_line = llvm[bound_line_start..]
+        .lines()
+        .next()
+        .expect("slice bound comparison line");
+    let bound_predicate = bound_line
+        .split_once(" = icmp ult i64")
+        .map(|(predicate, _)| predicate.trim())
+        .expect("slice bound predicate value");
+    let trap_branch_line = llvm[merge_label..]
+        .lines()
+        .find(|line| line.trim_start().starts_with("br i1 "))
         .expect("bounds predicate branch after guarded-load merge");
+    let mut branch_parts = trap_branch_line
+        .trim()
+        .strip_prefix("br i1 ")
+        .expect("conditional branch")
+        .split(", label %");
+    assert_eq!(branch_parts.next(), Some(bound_predicate));
+    let _in_bounds_label = branch_parts.next().expect("in-bounds successor");
+    let trap_label = branch_parts.next().expect("out-of-bounds successor");
+    assert!(branch_parts.next().is_none(), "closed conditional branch");
+    let trap_branch = llvm[merge_label..]
+        .find(trap_branch_line)
+        .map(|offset| merge_label + offset)
+        .expect("conditional branch offset");
+    let trap_block_pattern = format!("{trap_label}:\n");
     let trap_block = llvm[trap_branch..]
-        .find("bb5:\n  call void @llvm.trap()")
+        .find(&trap_block_pattern)
         .map(|offset| trap_branch + offset)
         .expect("direct out-of-bounds trap successor");
+    let trap_call = llvm[trap_block + trap_block_pattern.len()..]
+        .find("call void @llvm.trap()")
+        .map(|offset| trap_block + trap_block_pattern.len() + offset)
+        .expect("out-of-bounds successor traps");
+    let trap_prefix = &llvm[trap_block + trap_block_pattern.len()..trap_call];
     assert!(
         bound < safe_index
             && safe_index < pointer
@@ -327,7 +355,10 @@ fn volatile_slice_load_reaches_guarded_volatile_llvm_and_read_only_descriptor() 
             && !llvm[false_label..merge_label].contains(" load ")
             && merge_label < trap_branch
             && trap_branch < trap_block
-            && trap_block <= trap,
+            && trap_call == trap
+            && !trap_prefix
+                .lines()
+                .any(|line| line.trim_end().ends_with(':')),
         "volatile-load lowering lost its checked index, non-speculative load, or OOB trap:\n{llvm}",
     );
 
