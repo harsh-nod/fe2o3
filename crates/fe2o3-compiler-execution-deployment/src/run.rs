@@ -1,6 +1,7 @@
 use std::fmt::Write as _;
 use std::path::Path;
 
+use super::install::verify_install_parent_children_v1;
 use super::mount::{
     InjectQualificationMountFaultV1, QualificationMountFaultPointV1,
     attach_compiler_execution_qualification_mounts_with_hooks_v1,
@@ -18,6 +19,7 @@ use super::{
 const MOUNT_QUALIFICATION_REPORT_SCHEMA_V1: &str =
     "fe2o3-compiler-execution-mount-qualification-report-v1";
 const MOUNT_FAULT_REPORT_SCHEMA_V1: &str = "fe2o3-compiler-execution-mount-fault-report-v1";
+const MOUNT_CAMPAIGN_REPORT_SCHEMA_V1: &str = "fe2o3-compiler-execution-mount-campaign-report-v1";
 
 /// Inert report from one fully cleaned mount-only qualification transaction.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -104,6 +106,58 @@ impl CompilerExecutionMountFaultReportV1 {
             ("installed_publication", publication.to_owned()),
             ("staging_name", self.staging_name.clone()),
             ("injected_failure_observed", "true".to_owned()),
+            ("cleanup", "complete".to_owned()),
+        ] {
+            writeln!(report, "{name}={value}").expect("writing to a String cannot fail");
+        }
+        report
+    }
+}
+
+/// Stable aggregate evidence from two mount runs and every V1 lifecycle interruption.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CompilerExecutionMountCampaignReportV1 {
+    git_commit: String,
+    target: String,
+    manifest_sha256: [u8; 32],
+    base_image_sha256: [u8; 32],
+    installed_root_name: String,
+}
+
+impl CompilerExecutionMountCampaignReportV1 {
+    /// Encodes the complete campaign as one newline-terminated key-value report.
+    pub fn canonical_report(&self) -> String {
+        let fault_points = QualificationMountFaultPointV1::all()
+            .iter()
+            .map(|point| point.canonical_name())
+            .collect::<Vec<_>>()
+            .join(",");
+        let mut report = String::new();
+        for (name, value) in [
+            ("report_schema", MOUNT_CAMPAIGN_REPORT_SCHEMA_V1.to_owned()),
+            ("git_commit", self.git_commit.clone()),
+            ("target", self.target.clone()),
+            (
+                "manifest_sha256",
+                encode_sha256_lower_hex_v1(self.manifest_sha256),
+            ),
+            (
+                "base_image_sha256",
+                encode_sha256_lower_hex_v1(self.base_image_sha256),
+            ),
+            ("installed_root_name", self.installed_root_name.clone()),
+            ("fault_points", fault_points),
+            ("normal_run_count", "2".to_owned()),
+            (
+                "mount_fault_count",
+                QualificationMountFaultPointV1::all().len().to_string(),
+            ),
+            (
+                "reacquisition_count",
+                (QualificationMountFaultPointV1::all().len() + 1).to_string(),
+            ),
+            ("first_publication", "created".to_owned()),
+            ("qualification_parent_empty", "true".to_owned()),
             ("cleanup", "complete".to_owned()),
         ] {
             writeln!(report, "{name}={value}").expect("writing to a String cannot fail");
@@ -262,6 +316,116 @@ pub fn run_compiler_execution_mount_fault_v1(
     })
 }
 
+/// Runs two normal transactions and every fixed fault from one initially empty install parent.
+pub fn run_compiler_execution_mount_campaign_v1(
+    request: CompilerExecutionMountQualificationRequestV1<'_>,
+) -> Result<CompilerExecutionMountCampaignReportV1, DeploymentVerificationErrorV1> {
+    verify_install_parent_children_v1(request.install_parent, &[])?;
+    verify_empty_qualification_parent_v1(request.qualification_parent)?;
+
+    let first = run_compiler_execution_mount_qualification_request_v1(request)?;
+    verify_empty_qualification_parent_v1(request.qualification_parent)?;
+    if first.installed_publication != CompilerExecutionInstalledRootPublicationV1::Created {
+        return Err(super::invalid(
+            DeploymentVerificationErrorKindV1::InputChanged,
+            "mount campaign did not perform the first installed-root publication",
+        ));
+    }
+    verify_install_parent_children_v1(
+        request.install_parent,
+        &[first.installed_root_name.as_str()],
+    )?;
+
+    for point in QualificationMountFaultPointV1::all() {
+        let fault = run_compiler_execution_mount_fault_v1(*point, request)?;
+        require_fault_identity(&first, &fault)?;
+        if fault.installed_publication != CompilerExecutionInstalledRootPublicationV1::Reacquired {
+            return Err(super::invalid(
+                DeploymentVerificationErrorKindV1::InputChanged,
+                format!(
+                    "mount fault {} did not reacquire the exact installed root",
+                    point.canonical_name()
+                ),
+            ));
+        }
+        verify_install_parent_children_v1(
+            request.install_parent,
+            &[first.installed_root_name.as_str()],
+        )?;
+    }
+
+    let second = run_compiler_execution_mount_qualification_request_v1(request)?;
+    verify_empty_qualification_parent_v1(request.qualification_parent)?;
+    require_normal_identity(&first, &second)?;
+    if second.installed_publication != CompilerExecutionInstalledRootPublicationV1::Reacquired {
+        return Err(super::invalid(
+            DeploymentVerificationErrorKindV1::InputChanged,
+            "second normal mount run did not reacquire the exact installed root",
+        ));
+    }
+    verify_install_parent_children_v1(
+        request.install_parent,
+        &[first.installed_root_name.as_str()],
+    )?;
+    Ok(CompilerExecutionMountCampaignReportV1 {
+        git_commit: first.git_commit,
+        target: first.target,
+        manifest_sha256: first.manifest_sha256,
+        base_image_sha256: first.base_image_sha256,
+        installed_root_name: first.installed_root_name,
+    })
+}
+
+fn require_fault_identity(
+    expected: &CompilerExecutionMountQualificationReportV1,
+    observed: &CompilerExecutionMountFaultReportV1,
+) -> Result<(), DeploymentVerificationErrorV1> {
+    require_identity(
+        expected,
+        &observed.git_commit,
+        &observed.target,
+        observed.manifest_sha256,
+        observed.base_image_sha256,
+        &observed.installed_root_name,
+    )
+}
+
+fn require_normal_identity(
+    expected: &CompilerExecutionMountQualificationReportV1,
+    observed: &CompilerExecutionMountQualificationReportV1,
+) -> Result<(), DeploymentVerificationErrorV1> {
+    require_identity(
+        expected,
+        &observed.git_commit,
+        &observed.target,
+        observed.manifest_sha256,
+        observed.base_image_sha256,
+        &observed.installed_root_name,
+    )
+}
+
+fn require_identity(
+    expected: &CompilerExecutionMountQualificationReportV1,
+    git_commit: &str,
+    target: &str,
+    manifest_sha256: [u8; 32],
+    base_image_sha256: [u8; 32],
+    installed_root_name: &str,
+) -> Result<(), DeploymentVerificationErrorV1> {
+    if expected.git_commit != git_commit
+        || expected.target != target
+        || expected.manifest_sha256 != manifest_sha256
+        || expected.base_image_sha256 != base_image_sha256
+        || expected.installed_root_name != installed_root_name
+    {
+        return Err(super::invalid(
+            DeploymentVerificationErrorKindV1::InputChanged,
+            "mount campaign identity changed between transactions",
+        ));
+    }
+    Ok(())
+}
+
 fn stage_mount_qualification(
     request: &CompilerExecutionMountQualificationRequestV1<'_>,
 ) -> Result<StagedMountQualificationV1, DeploymentVerificationErrorV1> {
@@ -331,5 +495,23 @@ mod tests {
         assert!(encoded.contains("fault_point=overlay-unmounted\n"));
         assert!(encoded.contains("installed_publication=created\n"));
         assert!(encoded.ends_with("injected_failure_observed=true\ncleanup=complete\n"));
+    }
+
+    #[test]
+    fn mount_campaign_report_excludes_runtime_staging_identities() {
+        let report = CompilerExecutionMountCampaignReportV1 {
+            git_commit: "cd".repeat(20),
+            target: "x86_64-unknown-linux-musl".to_owned(),
+            manifest_sha256: [0xef; 32],
+            base_image_sha256: [0x12; 32],
+            installed_root_name: "compiler-execution-v1-campaign".to_owned(),
+        };
+        let encoded = report.canonical_report();
+        assert_eq!(encoded.lines().count(), 13);
+        assert!(encoded.contains("normal_run_count=2\n"));
+        assert!(encoded.contains("mount_fault_count=8\n"));
+        assert!(encoded.contains("reacquisition_count=9\n"));
+        assert!(!encoded.contains("staging_name"));
+        assert!(encoded.ends_with("qualification_parent_empty=true\ncleanup=complete\n"));
     }
 }

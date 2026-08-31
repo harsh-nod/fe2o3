@@ -2,11 +2,11 @@ use std::path::Path;
 
 use fe2o3_compiler_execution_deployment::{
     CompilerExecutionMountQualificationRequestV1, QualificationMountFaultPointV1,
-    probe_compiler_execution_qualification_host_v1, run_compiler_execution_mount_fault_v1,
-    run_compiler_execution_mount_qualification_request_v1,
+    probe_compiler_execution_qualification_host_v1, run_compiler_execution_mount_campaign_v1,
+    run_compiler_execution_mount_fault_v1, run_compiler_execution_mount_qualification_request_v1,
 };
 
-const USAGE: &str = "usage: fe2o3-compiler-execution-qualification probe\n       fe2o3-compiler-execution-qualification fault-points\n       fe2o3-compiler-execution-qualification run BUNDLE_ROOT EXPECTED_MANIFEST_SHA256 EXPECTED_GIT_COMMIT INSTALL_PARENT BASE_IMAGE EXPECTED_BASE_IMAGE_SHA256 QUALIFICATION_PARENT\n       fe2o3-compiler-execution-qualification fault POINT BUNDLE_ROOT EXPECTED_MANIFEST_SHA256 EXPECTED_GIT_COMMIT INSTALL_PARENT BASE_IMAGE EXPECTED_BASE_IMAGE_SHA256 QUALIFICATION_PARENT";
+const USAGE: &str = "usage: fe2o3-compiler-execution-qualification probe\n       fe2o3-compiler-execution-qualification fault-points\n       fe2o3-compiler-execution-qualification run BUNDLE_ROOT EXPECTED_MANIFEST_SHA256 EXPECTED_GIT_COMMIT INSTALL_PARENT BASE_IMAGE EXPECTED_BASE_IMAGE_SHA256 QUALIFICATION_PARENT\n       fe2o3-compiler-execution-qualification fault POINT BUNDLE_ROOT EXPECTED_MANIFEST_SHA256 EXPECTED_GIT_COMMIT INSTALL_PARENT BASE_IMAGE EXPECTED_BASE_IMAGE_SHA256 QUALIFICATION_PARENT\n       fe2o3-compiler-execution-qualification campaign BUNDLE_ROOT EXPECTED_MANIFEST_SHA256 EXPECTED_GIT_COMMIT EMPTY_INSTALL_PARENT BASE_IMAGE EXPECTED_BASE_IMAGE_SHA256 QUALIFICATION_PARENT";
 
 fn main() {
     let arguments: Vec<_> = std::env::args_os().collect();
@@ -19,6 +19,7 @@ fn main() {
         "fault-points" if arguments.len() == 2 => print_fault_points(),
         "run" if arguments.len() == 9 => run_qualification(&arguments),
         "fault" if arguments.len() == 10 => run_fault(&arguments),
+        "campaign" if arguments.len() == 9 => run_campaign(&arguments),
         _ => {
             eprintln!("{USAGE}");
             std::process::exit(2);
@@ -67,6 +68,17 @@ fn run_fault(arguments: &[std::ffi::OsString]) {
         Ok(report) => print!("{}", report.canonical_report()),
         Err(error) => {
             eprintln!("compiler-execution mount fault qualification failed: {error}");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn run_campaign(arguments: &[std::ffi::OsString]) {
+    let request = parse_request(arguments, 2);
+    match run_compiler_execution_mount_campaign_v1(request) {
+        Ok(report) => print!("{}", report.canonical_report()),
+        Err(error) => {
+            eprintln!("compiler-execution mount campaign failed: {error}");
             std::process::exit(1);
         }
     }

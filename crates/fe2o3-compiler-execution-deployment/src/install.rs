@@ -592,6 +592,36 @@ fn open_install_parent(
     Ok(parent)
 }
 
+pub(super) fn verify_install_parent_children_v1(
+    path: &Path,
+    expected_children: &[&str],
+) -> Result<(), DeploymentVerificationErrorV1> {
+    if rustix::process::geteuid().as_raw() != 0 {
+        return Err(super::invalid(
+            DeploymentVerificationErrorKindV1::InsufficientPrivilege,
+            "install-parent inventory verification requires effective UID 0",
+        ));
+    }
+    let parent = open_install_parent(path, (0, 0))?;
+    let before = snapshot(
+        &fstat(&parent).map_err(|source| io_error("inspect retained install parent", source))?,
+    );
+    verify_directory_children(
+        &parent,
+        expected_children,
+        "compiler-execution install parent",
+    )?;
+    let after = snapshot(
+        &fstat(&parent).map_err(|source| io_error("reinspect retained install parent", source))?,
+    );
+    if before != after {
+        return Err(changed(
+            "compiler-execution install parent changed during inventory verification",
+        ));
+    }
+    verify_install_parent_path(path, &parent, (0, 0))
+}
+
 fn verify_install_parent_path(
     path: &Path,
     retained: &File,

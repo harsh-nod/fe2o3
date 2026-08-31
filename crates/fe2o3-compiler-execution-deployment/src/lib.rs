@@ -42,8 +42,9 @@ pub use qualification::{
     PreparedCompilerExecutionQualificationV1, prepare_compiler_execution_qualification_v1,
 };
 pub use run::{
-    CompilerExecutionMountFaultReportV1, CompilerExecutionMountQualificationReportV1,
-    CompilerExecutionMountQualificationRequestV1, run_compiler_execution_mount_fault_v1,
+    CompilerExecutionMountCampaignReportV1, CompilerExecutionMountFaultReportV1,
+    CompilerExecutionMountQualificationReportV1, CompilerExecutionMountQualificationRequestV1,
+    run_compiler_execution_mount_campaign_v1, run_compiler_execution_mount_fault_v1,
     run_compiler_execution_mount_qualification_request_v1,
     run_compiler_execution_mount_qualification_v1,
 };
