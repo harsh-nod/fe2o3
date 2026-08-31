@@ -66,14 +66,15 @@ revalidate the installed tree and seal an independently digest-pinned base
 image together with an empty root-owned qualification parent. It then creates
 one exact descriptor-retained empty staging tree for base/root mounts and
 disposable upper/work/run/state/evidence. Mount attachment, root composition,
-and real systemd execution still remain qualification gates. The mount
-transaction is implemented with atomic loop configuration and upstream Linux
-detached-mount APIs, but the current unprivileged `mi300x` session cannot
-execute its root-only integration path. The fully static
+and composed-root systemd preflight are implemented; isolated systemd boot and
+service execution remain qualification gates. The transaction uses atomic loop
+configuration and upstream Linux detached-mount APIs, but the current
+unprivileged `mi300x` session cannot execute its root-only integration path. The fully static
 `fe2o3-compiler-execution-qualification` image provides a read-only host probe
-and the single exact mount transaction for a privileged runner. Its aggregate
-campaign requires one publication, nine reacquisitions, two normal runs, all
-eight fixed mount lifecycle faults, and an empty qualification parent. See
+and the single exact qualification transaction for a privileged runner. Its
+aggregate campaign requires one publication, 37 reacquisitions, two normal
+runs, all 18 fixed mount/preflight/cleanup faults, post-fault bundle/base/lower
+revalidation, and an empty qualification parent. See
 [disposable-root V1](../docs/compiler-execution-disposable-root-v1.md).
 
 With both the service and socket stopped, provision one nonzero policy

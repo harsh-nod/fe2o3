@@ -56,6 +56,7 @@ grep -Fq -- 'manifest_sha256=%s' "${builder}" ||
 readonly verifier_builder="${repo_root}/scripts/build-static-compiler-execution-deployment-verifier.sh"
 readonly qualification_source="${repo_root}/crates/fe2o3-compiler-execution-deployment/src/bin/qualification.rs"
 readonly qualification_supervisor_source="${repo_root}/crates/fe2o3-compiler-execution-deployment/src/supervisor.rs"
+readonly qualification_fault_source="${repo_root}/crates/fe2o3-compiler-execution-deployment/src/fault.rs"
 readonly qualification_preflight_source="${repo_root}/crates/fe2o3-compiler-execution-deployment/src/preflight.rs"
 readonly qualification_run_source="${repo_root}/crates/fe2o3-compiler-execution-deployment/src/run.rs"
 bash -n "${verifier_builder}"
@@ -69,9 +70,9 @@ done
 grep -Fq -- 'qualification-host-probe-v1' "${verifier_builder}" ||
   fail 'static qualification prerequisite probe is missing'
 grep -Fq -- 'fault-points' "${verifier_builder}" ||
-  fail 'static qualification mount fault set is missing'
+  fail 'static qualification fault set is missing'
 grep -Fq -- 'campaign BUNDLE_ROOT' "${verifier_builder}" ||
-  fail 'static qualification mount campaign is missing'
+  fail 'static qualification campaign is missing'
 grep -Fq -- 'recover QUALIFICATION_PARENT' "${verifier_builder}" ||
   fail 'static qualification recovery command is missing'
 grep -Fq -- 'recover-install EXPECTED_MANIFEST_SHA256 INSTALL_PARENT' "${verifier_builder}" ||
@@ -91,7 +92,7 @@ for preflight_contract in \
   '/usr/bin/systemd-sysusers' \
   '/usr/bin/systemd-tmpfiles' \
   '/usr/bin/systemd-analyze' \
-  run_compiler_execution_systemd_preflight_v1 \
+  run_compiler_execution_systemd_preflight_with_hooks_v1 \
   'rustix::process::chroot' \
   'Resource::Fsize' \
   admit_systemd_version \
@@ -100,10 +101,30 @@ for preflight_contract in \
   grep -Fq -- "${preflight_contract}" "${qualification_preflight_source}" ||
     fail "missing composed-root preflight contract ${preflight_contract}"
 done
+for fault_contract in \
+  QualificationFaultPointV1 \
+  SystemdVersionComplete \
+  SystemdSysusersComplete \
+  SystemdTmpfilesComplete \
+  SystemdUnitVerifyComplete \
+  SystemdPostconditionsAdmitted \
+  InstalledLowerRevalidated \
+  StagingCleaned; do
+  grep -Fq -- "${fault_contract}" "${qualification_fault_source}" ||
+    fail "missing unified qualification fault contract ${fault_contract}"
+done
 grep -Fq -- 'run_compiler_execution_qualification_request_v1' "${qualification_run_source}" ||
   fail 'unified qualification run path is missing'
+grep -Fq -- 'execute_staged_qualification_with_hooks' "${qualification_run_source}" ||
+  fail 'shared normal/fault qualification transaction is missing'
+grep -Fq -- 'revalidate_qualification_inputs_after_fault' "${qualification_run_source}" ||
+  fail 'post-fault installed-lower revalidation is missing'
 if grep -Fq -- 'run_compiler_execution_mount_qualification_request_v1' "${qualification_run_source}"; then
   fail 'legacy mount-only qualification run path remains'
+fi
+if grep -Eq -- 'run_compiler_execution_mount_(fault|campaign)_v1|QualificationMountFaultPointV1' \
+  "${qualification_run_source}" "${qualification_source}"; then
+  fail 'legacy mount-only fault path remains'
 fi
 grep -Fq -- '.process_group(0)' "${qualification_source}" ||
   fail 'qualification worker process-group isolation is missing'

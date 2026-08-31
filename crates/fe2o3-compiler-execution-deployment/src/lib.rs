@@ -19,6 +19,7 @@ use rustix::fs::{
 };
 use sha2::{Digest, Sha256};
 
+mod fault;
 mod host;
 mod install;
 mod mount;
@@ -28,6 +29,7 @@ mod run;
 mod staging;
 mod supervisor;
 
+pub use fault::QualificationFaultPointV1;
 pub use host::{
     CompilerExecutionQualificationHostProbeV1, probe_compiler_execution_qualification_host_v1,
 };
@@ -38,7 +40,7 @@ pub use install::{
 };
 pub use mount::{
     MountedCompilerExecutionQualificationV1, PrivateQualificationMountNamespaceV1,
-    QualificationMountFaultPointV1, attach_compiler_execution_qualification_mounts_v1,
+    attach_compiler_execution_qualification_mounts_v1,
     enter_private_qualification_mount_namespace_v1,
 };
 pub use preflight::execute_compiler_execution_systemd_preflight_tool_v1;
@@ -46,10 +48,11 @@ pub use qualification::{
     PreparedCompilerExecutionQualificationV1, prepare_compiler_execution_qualification_v1,
 };
 pub use run::{
-    CompilerExecutionMountCampaignReportV1, CompilerExecutionMountFaultReportV1,
+    CompilerExecutionQualificationCampaignReportV1, CompilerExecutionQualificationFaultReportV1,
     CompilerExecutionQualificationReportV1, CompilerExecutionQualificationRequestV1,
-    run_compiler_execution_mount_campaign_v1, run_compiler_execution_mount_fault_v1,
-    run_compiler_execution_qualification_request_v1, run_compiler_execution_qualification_v1,
+    run_compiler_execution_qualification_campaign_v1,
+    run_compiler_execution_qualification_fault_v1, run_compiler_execution_qualification_request_v1,
+    run_compiler_execution_qualification_v1,
 };
 pub use staging::{
     CompilerExecutionQualificationRecoveryV1, StagedCompilerExecutionQualificationV1,

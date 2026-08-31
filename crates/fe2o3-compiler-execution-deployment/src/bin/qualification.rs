@@ -13,12 +13,13 @@ use fe2o3_compiler_execution_deployment::{
     COMPILER_EXECUTION_SYSTEMD_PREFLIGHT_PARENT_PID_ENV_V1,
     COMPILER_EXECUTION_SYSTEMD_PREFLIGHT_TOOL_COMMAND_V1, CompilerExecutionInstallRecoveryV1,
     CompilerExecutionQualificationRecoveryV1, CompilerExecutionQualificationRequestV1,
-    CompilerExecutionQualificationSupervisorLeaseV1, QualificationMountFaultPointV1,
+    CompilerExecutionQualificationSupervisorLeaseV1, QualificationFaultPointV1,
     QualificationWorkerTerminationV1, acquire_compiler_execution_qualification_supervisor_lease_v1,
     execute_compiler_execution_systemd_preflight_tool_v1,
     probe_compiler_execution_qualification_host_v1, recover_compiler_execution_install_parent_v1,
-    recover_compiler_execution_qualification_parent_v1, run_compiler_execution_mount_campaign_v1,
-    run_compiler_execution_mount_fault_v1, run_compiler_execution_qualification_request_v1,
+    recover_compiler_execution_qualification_parent_v1,
+    run_compiler_execution_qualification_campaign_v1,
+    run_compiler_execution_qualification_fault_v1, run_compiler_execution_qualification_request_v1,
     wait_for_compiler_execution_qualification_supervisor_lease_v1,
     wait_for_qualification_worker_v1,
 };
@@ -545,7 +546,7 @@ fn run_install_recovery(arguments: &[std::ffi::OsString]) {
 }
 
 fn print_fault_points() {
-    for point in QualificationMountFaultPointV1::all() {
+    for point in QualificationFaultPointV1::all() {
         println!("{}", point.canonical_name());
     }
 }
@@ -594,15 +595,15 @@ fn run_fault(arguments: &[std::ffi::OsString]) {
         eprintln!("fault point must be UTF-8");
         std::process::exit(2);
     };
-    let Some(point) = QualificationMountFaultPointV1::from_canonical_name(point_name) else {
+    let Some(point) = QualificationFaultPointV1::from_canonical_name(point_name) else {
         eprintln!("fault point is not one canonical V1 point");
         std::process::exit(2);
     };
     let request = parse_request(arguments, 3);
-    match run_compiler_execution_mount_fault_v1(point, request) {
+    match run_compiler_execution_qualification_fault_v1(point, request) {
         Ok(report) => print!("{}", report.canonical_report()),
         Err(error) => {
-            eprintln!("compiler-execution mount fault qualification failed: {error}");
+            eprintln!("compiler-execution fault qualification failed: {error}");
             std::process::exit(1);
         }
     }
@@ -610,10 +611,10 @@ fn run_fault(arguments: &[std::ffi::OsString]) {
 
 fn run_campaign(arguments: &[std::ffi::OsString]) {
     let request = parse_request(arguments, 2);
-    match run_compiler_execution_mount_campaign_v1(request) {
+    match run_compiler_execution_qualification_campaign_v1(request) {
         Ok(report) => print!("{}", report.canonical_report()),
         Err(error) => {
-            eprintln!("compiler-execution mount campaign failed: {error}");
+            eprintln!("compiler-execution qualification campaign failed: {error}");
             std::process::exit(1);
         }
     }

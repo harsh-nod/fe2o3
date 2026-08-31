@@ -9,11 +9,12 @@ use std::process::{Command, Stdio};
 use rustix::fs::{FileType, MemfdFlags, Mode, OFlags, ResolveFlags, fstat, memfd_create, openat2};
 use rustix::process::{Resource, Rlimit, setrlimit};
 
+use super::fault::QualificationFaultHooksV1;
 use super::{
     COMPILER_EXECUTION_SYSTEMD_PREFLIGHT_PARENT_PID_ENV_V1,
     COMPILER_EXECUTION_SYSTEMD_PREFLIGHT_TOOL_COMMAND_V1, DeploymentVerificationErrorKindV1,
-    DeploymentVerificationErrorV1, MountedCompilerExecutionQualificationV1, changed, io_error,
-    require_no_xattrs, snapshot, std_io_error,
+    DeploymentVerificationErrorV1, MountedCompilerExecutionQualificationV1,
+    QualificationFaultPointV1, changed, io_error, require_no_xattrs, snapshot, std_io_error,
 };
 
 const COMPOSED_ROOT_STDIN_PATH_V1: &str = "/proc/self/fd/0";
@@ -81,6 +82,24 @@ impl SystemdPreflightStageV1 {
             Self::Sysusers => "systemd-sysusers",
             Self::Tmpfiles => "systemd-tmpfiles",
             Self::UnitVerify => "systemd-analyze-verify",
+        }
+    }
+
+    const fn complete_fault_point(self) -> QualificationFaultPointV1 {
+        match self {
+            Self::Version => QualificationFaultPointV1::SystemdVersionComplete,
+            Self::Sysusers => QualificationFaultPointV1::SystemdSysusersComplete,
+            Self::Tmpfiles => QualificationFaultPointV1::SystemdTmpfilesComplete,
+            Self::UnitVerify => QualificationFaultPointV1::SystemdUnitVerifyComplete,
+        }
+    }
+
+    const fn revalidated_fault_point(self) -> QualificationFaultPointV1 {
+        match self {
+            Self::Version => QualificationFaultPointV1::SystemdVersionRevalidated,
+            Self::Sysusers => QualificationFaultPointV1::SystemdSysusersRevalidated,
+            Self::Tmpfiles => QualificationFaultPointV1::SystemdTmpfilesRevalidated,
+            Self::UnitVerify => QualificationFaultPointV1::SystemdUnitVerifyRevalidated,
         }
     }
 }
@@ -289,20 +308,24 @@ impl CompilerExecutionSystemdPreflightV1 {
         self.mounted.base_image_sha256()
     }
 
-    pub(super) fn cleanup(self) -> Result<(), DeploymentVerificationErrorV1> {
-        self.mounted.cleanup()
+    pub(super) fn cleanup_with_hooks(
+        self,
+        hooks: &mut impl QualificationFaultHooksV1,
+    ) -> Result<(), DeploymentVerificationErrorV1> {
+        self.mounted.cleanup_with_hooks(hooks)
     }
 }
 
-pub(super) fn run_compiler_execution_systemd_preflight_v1(
+pub(super) fn run_compiler_execution_systemd_preflight_with_hooks_v1(
     mounted: MountedCompilerExecutionQualificationV1,
+    hooks: &mut impl QualificationFaultHooksV1,
 ) -> Result<CompilerExecutionSystemdPreflightV1, DeploymentVerificationErrorV1> {
-    match run_systemd_preflight_inner(&mounted) {
+    match run_systemd_preflight_inner(&mounted, hooks) {
         Ok(systemd_version) => Ok(CompilerExecutionSystemdPreflightV1 {
             mounted,
             systemd_version,
         }),
-        Err(error) => match mounted.cleanup() {
+        Err(error) => match mounted.cleanup_with_hooks(hooks) {
             Ok(()) => Err(error),
             Err(cleanup) => Err(super::invalid(
                 DeploymentVerificationErrorKindV1::CleanupFailed,
@@ -314,19 +337,23 @@ pub(super) fn run_compiler_execution_systemd_preflight_v1(
 
 fn run_systemd_preflight_inner(
     mounted: &MountedCompilerExecutionQualificationV1,
+    hooks: &mut impl QualificationFaultHooksV1,
 ) -> Result<String, DeploymentVerificationErrorV1> {
     let root = mounted.inherit_composed_root_descriptor()?;
     let systemd_version = execute_preflight_commands(
         &root,
         &mut ProductionSystemdPreflightCommandRunnerV1,
         || mounted.revalidate_systemd_preflight_state(),
+        hooks,
     )?;
     validate_account_databases(
         &read_exact_root_file(&root, "etc/passwd", 0o644)?,
         &read_exact_root_file(&root, "etc/group", 0o644)?,
     )?;
     validate_tmpfiles_projection(&root)?;
+    hooks.checkpoint(QualificationFaultPointV1::SystemdPostconditionsAdmitted)?;
     mounted.revalidate_systemd_preflight_state()?;
+    hooks.checkpoint(QualificationFaultPointV1::InstalledLowerRevalidated)?;
     Ok(systemd_version)
 }
 
@@ -334,6 +361,7 @@ fn execute_preflight_commands(
     root: &OwnedFd,
     runner: &mut impl SystemdPreflightCommandRunnerV1,
     mut revalidate: impl FnMut() -> Result<(), DeploymentVerificationErrorV1>,
+    hooks: &mut impl QualificationFaultHooksV1,
 ) -> Result<String, DeploymentVerificationErrorV1> {
     let mut systemd_version = None;
     for command in PREFLIGHT_COMMANDS_V1 {
@@ -353,7 +381,9 @@ fn execute_preflight_commands(
             }
             _ => {}
         }
+        hooks.checkpoint(command.stage.complete_fault_point())?;
         revalidate()?;
+        hooks.checkpoint(command.stage.revalidated_fault_point())?;
     }
     systemd_version.ok_or_else(|| {
         super::invalid(
@@ -518,15 +548,34 @@ mod tests {
         let root = rustix::io::dup(directory.as_fd()).unwrap();
         let mut runner = RecordingRunnerV1::default();
         let mut revalidations = 0;
+        let mut hooks = RecordingFaultHooksV1::default();
 
-        execute_preflight_commands(&root, &mut runner, || {
-            revalidations += 1;
-            Ok(())
-        })
+        execute_preflight_commands(
+            &root,
+            &mut runner,
+            || {
+                revalidations += 1;
+                Ok(())
+            },
+            &mut hooks,
+        )
         .unwrap();
 
         assert_eq!(runner.observed, PREFLIGHT_COMMANDS_V1);
         assert_eq!(revalidations, PREFLIGHT_COMMANDS_V1.len());
+        assert_eq!(
+            hooks.observed,
+            vec![
+                QualificationFaultPointV1::SystemdVersionComplete,
+                QualificationFaultPointV1::SystemdVersionRevalidated,
+                QualificationFaultPointV1::SystemdSysusersComplete,
+                QualificationFaultPointV1::SystemdSysusersRevalidated,
+                QualificationFaultPointV1::SystemdTmpfilesComplete,
+                QualificationFaultPointV1::SystemdTmpfilesRevalidated,
+                QualificationFaultPointV1::SystemdUnitVerifyComplete,
+                QualificationFaultPointV1::SystemdUnitVerifyRevalidated,
+            ]
+        );
         assert_eq!(ANALYZE_ARGS_V1.len(), 9);
         assert_eq!(VERIFIED_SYSTEMD_UNIT_COUNT_V1, 3);
     }
@@ -541,18 +590,85 @@ mod tests {
             ..RecordingRunnerV1::default()
         };
         let mut revalidations = 0;
+        let mut hooks = RecordingFaultHooksV1::default();
 
         assert_eq!(
-            execute_preflight_commands(&root, &mut runner, || {
-                revalidations += 1;
-                Ok(())
-            })
+            execute_preflight_commands(
+                &root,
+                &mut runner,
+                || {
+                    revalidations += 1;
+                    Ok(())
+                },
+                &mut hooks
+            )
             .unwrap_err()
             .kind(),
             DeploymentVerificationErrorKindV1::InvalidQualificationPreflight
         );
         assert_eq!(runner.observed, PREFLIGHT_COMMANDS_V1[..=2].to_vec());
         assert_eq!(revalidations, 2);
+        assert_eq!(hooks.observed.len(), 4);
+    }
+
+    #[test]
+    fn injected_completion_stops_before_revalidation_and_later_commands() {
+        let temporary = tempfile::tempdir().unwrap();
+        let directory = File::open(temporary.path()).unwrap();
+        let root = rustix::io::dup(directory.as_fd()).unwrap();
+        let mut runner = RecordingRunnerV1::default();
+        let mut revalidations = 0;
+        let mut hooks = crate::fault::InjectQualificationFaultV1::new(
+            QualificationFaultPointV1::SystemdTmpfilesComplete,
+        );
+
+        assert_eq!(
+            execute_preflight_commands(
+                &root,
+                &mut runner,
+                || {
+                    revalidations += 1;
+                    Ok(())
+                },
+                &mut hooks
+            )
+            .unwrap_err()
+            .kind(),
+            DeploymentVerificationErrorKindV1::InjectedFailure
+        );
+        assert_eq!(runner.observed, PREFLIGHT_COMMANDS_V1[..=2].to_vec());
+        assert_eq!(revalidations, 2);
+        assert!(hooks.fired());
+    }
+
+    #[test]
+    fn injected_revalidation_stops_after_exact_revalidation() {
+        let temporary = tempfile::tempdir().unwrap();
+        let directory = File::open(temporary.path()).unwrap();
+        let root = rustix::io::dup(directory.as_fd()).unwrap();
+        let mut runner = RecordingRunnerV1::default();
+        let mut revalidations = 0;
+        let mut hooks = crate::fault::InjectQualificationFaultV1::new(
+            QualificationFaultPointV1::SystemdSysusersRevalidated,
+        );
+
+        assert_eq!(
+            execute_preflight_commands(
+                &root,
+                &mut runner,
+                || {
+                    revalidations += 1;
+                    Ok(())
+                },
+                &mut hooks
+            )
+            .unwrap_err()
+            .kind(),
+            DeploymentVerificationErrorKindV1::InjectedFailure
+        );
+        assert_eq!(runner.observed, PREFLIGHT_COMMANDS_V1[..=1].to_vec());
+        assert_eq!(revalidations, 2);
+        assert!(hooks.fired());
     }
 
     #[test]
@@ -596,6 +712,21 @@ mod tests {
     struct RecordingRunnerV1 {
         observed: Vec<SystemdPreflightCommandV1>,
         fail_at: Option<SystemdPreflightStageV1>,
+    }
+
+    #[derive(Default)]
+    struct RecordingFaultHooksV1 {
+        observed: Vec<QualificationFaultPointV1>,
+    }
+
+    impl QualificationFaultHooksV1 for RecordingFaultHooksV1 {
+        fn checkpoint(
+            &mut self,
+            point: QualificationFaultPointV1,
+        ) -> Result<(), DeploymentVerificationErrorV1> {
+            self.observed.push(point);
+            Ok(())
+        }
     }
 
     impl SystemdPreflightCommandRunnerV1 for RecordingRunnerV1 {

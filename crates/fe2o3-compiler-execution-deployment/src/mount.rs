@@ -9,13 +9,15 @@ use rustix::mount::{
     fsconfig_create, fsconfig_set_string, fsmount, fsopen, mount_change, move_mount, unmount,
 };
 
+use super::fault::{NoQualificationFaultV1, QualificationFaultHooksV1};
 use super::host::process_thread_count;
 use super::install::verify_installed_projection;
 use super::qualification::revalidate_prepared_qualification_with_parent_children;
 use super::staging::StagedCompilerExecutionQualificationV1;
 use super::{
-    DeploymentVerificationErrorKindV1, DeploymentVerificationErrorV1, changed, io_error, lower_hex,
-    snapshot, std_io_error, validate_directory_mode, verify_directory_children,
+    DeploymentVerificationErrorKindV1, DeploymentVerificationErrorV1, QualificationFaultPointV1,
+    changed, io_error, lower_hex, snapshot, std_io_error, validate_directory_mode,
+    verify_directory_children,
 };
 
 const SQUASHFS_MAGIC_V1: i64 = 0x7371_7368;
@@ -26,122 +28,6 @@ const MOUNTED_STAGING_CHILDREN_V1: &[&str] =
     &["base", "evidence", "root", "run", "state", "upper", "work"];
 const UNMOUNTED_STAGING_CHILDREN_V1: &[&str] = &["evidence", "run", "state", "upper", "work"];
 const PREFLIGHT_EMPTY_STAGING_CHILDREN_V1: &[&str] = &["evidence", "run", "state"];
-const QUALIFICATION_MOUNT_FAULT_POINTS_V1: [QualificationMountFaultPointV1; 8] = [
-    QualificationMountFaultPointV1::LoopAttached,
-    QualificationMountFaultPointV1::BaseMounted,
-    QualificationMountFaultPointV1::OverlayMounted,
-    QualificationMountFaultPointV1::ProjectionRevalidated,
-    QualificationMountFaultPointV1::OverlayUnmounted,
-    QualificationMountFaultPointV1::BaseUnmounted,
-    QualificationMountFaultPointV1::LoopReleased,
-    QualificationMountFaultPointV1::StagingCleaned,
-];
-
-/// Fixed post-transition interruption point in the disposable mount transaction.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum QualificationMountFaultPointV1 {
-    /// The sealed base has been atomically attached to a read-only autoclear loop device.
-    LoopAttached,
-    /// The detached SquashFS mount has been attached to the retained base mount point.
-    BaseMounted,
-    /// The detached OverlayFS mount has been attached to the retained root mount point.
-    OverlayMounted,
-    /// Both mounts and the complete installed deployment projection have been revalidated.
-    ProjectionRevalidated,
-    /// The disposable OverlayFS root has been unmounted.
-    OverlayUnmounted,
-    /// The read-only SquashFS base has been unmounted.
-    BaseUnmounted,
-    /// Loop-device custody has been released after both mounts were removed.
-    LoopReleased,
-    /// The exact staging tree has been removed and its parent synchronized.
-    StagingCleaned,
-}
-
-impl QualificationMountFaultPointV1 {
-    /// Returns all V1 points in exact transaction order.
-    pub const fn all() -> &'static [Self] {
-        &QUALIFICATION_MOUNT_FAULT_POINTS_V1
-    }
-
-    /// Returns the stable command-line and evidence spelling.
-    pub const fn canonical_name(self) -> &'static str {
-        match self {
-            Self::LoopAttached => "loop-attached",
-            Self::BaseMounted => "base-mounted",
-            Self::OverlayMounted => "overlay-mounted",
-            Self::ProjectionRevalidated => "projection-revalidated",
-            Self::OverlayUnmounted => "overlay-unmounted",
-            Self::BaseUnmounted => "base-unmounted",
-            Self::LoopReleased => "loop-released",
-            Self::StagingCleaned => "staging-cleaned",
-        }
-    }
-
-    /// Parses one exact canonical name and rejects aliases.
-    pub fn from_canonical_name(name: &str) -> Option<Self> {
-        Self::all()
-            .iter()
-            .copied()
-            .find(|point| point.canonical_name() == name)
-    }
-}
-
-pub(super) trait QualificationMountHooksV1 {
-    fn checkpoint(
-        &mut self,
-        point: QualificationMountFaultPointV1,
-    ) -> Result<(), DeploymentVerificationErrorV1>;
-}
-
-struct NoQualificationMountFaultV1;
-
-impl QualificationMountHooksV1 for NoQualificationMountFaultV1 {
-    fn checkpoint(
-        &mut self,
-        _point: QualificationMountFaultPointV1,
-    ) -> Result<(), DeploymentVerificationErrorV1> {
-        Ok(())
-    }
-}
-
-pub(super) struct InjectQualificationMountFaultV1 {
-    point: QualificationMountFaultPointV1,
-    fired: bool,
-}
-
-impl InjectQualificationMountFaultV1 {
-    pub(super) const fn new(point: QualificationMountFaultPointV1) -> Self {
-        Self {
-            point,
-            fired: false,
-        }
-    }
-
-    pub(super) const fn fired(&self) -> bool {
-        self.fired
-    }
-}
-
-impl QualificationMountHooksV1 for InjectQualificationMountFaultV1 {
-    fn checkpoint(
-        &mut self,
-        point: QualificationMountFaultPointV1,
-    ) -> Result<(), DeploymentVerificationErrorV1> {
-        if !self.fired && point == self.point {
-            self.fired = true;
-            return Err(super::invalid(
-                DeploymentVerificationErrorKindV1::InjectedFailure,
-                format!(
-                    "injected qualification mount interruption at {}",
-                    point.canonical_name()
-                ),
-            ));
-        }
-        Ok(())
-    }
-}
-
 /// Move-only evidence that this dedicated process entered a private mount namespace.
 ///
 /// Creating this value irreversibly changes the calling process mount namespace. The caller must
@@ -321,7 +207,7 @@ impl MountedCompilerExecutionQualificationV1 {
 
     pub(super) fn cleanup_with_hooks(
         mut self,
-        hooks: &mut impl QualificationMountHooksV1,
+        hooks: &mut impl QualificationFaultHooksV1,
     ) -> Result<(), DeploymentVerificationErrorV1> {
         self.cleanup_internal_with_hooks(hooks)
     }
@@ -340,12 +226,12 @@ impl MountedCompilerExecutionQualificationV1 {
     }
 
     fn cleanup_internal(&mut self) -> Result<(), DeploymentVerificationErrorV1> {
-        self.cleanup_internal_with_hooks(&mut NoQualificationMountFaultV1)
+        self.cleanup_internal_with_hooks(&mut NoQualificationFaultV1)
     }
 
     fn cleanup_internal_with_hooks(
         &mut self,
-        hooks: &mut impl QualificationMountHooksV1,
+        hooks: &mut impl QualificationFaultHooksV1,
     ) -> Result<(), DeploymentVerificationErrorV1> {
         if self.staged.is_none() {
             return Ok(());
@@ -369,7 +255,7 @@ impl MountedCompilerExecutionQualificationV1 {
             self.mounted_root.take();
             defer_checkpoint(
                 &mut deferred,
-                hooks.checkpoint(QualificationMountFaultPointV1::OverlayUnmounted),
+                hooks.checkpoint(QualificationFaultPointV1::OverlayUnmounted),
             );
         }
         if self.base_attached {
@@ -389,13 +275,13 @@ impl MountedCompilerExecutionQualificationV1 {
             self.mounted_base.take();
             defer_checkpoint(
                 &mut deferred,
-                hooks.checkpoint(QualificationMountFaultPointV1::BaseUnmounted),
+                hooks.checkpoint(QualificationFaultPointV1::BaseUnmounted),
             );
         }
         self.loop_device.take();
         defer_checkpoint(
             &mut deferred,
-            hooks.checkpoint(QualificationMountFaultPointV1::LoopReleased),
+            hooks.checkpoint(QualificationFaultPointV1::LoopReleased),
         );
         let cleanup = self
             .staged
@@ -407,7 +293,7 @@ impl MountedCompilerExecutionQualificationV1 {
         }
         defer_checkpoint(
             &mut deferred,
-            hooks.checkpoint(QualificationMountFaultPointV1::StagingCleaned),
+            hooks.checkpoint(QualificationFaultPointV1::StagingCleaned),
         );
         match deferred {
             Some(error) => Err(error),
@@ -507,14 +393,14 @@ pub fn attach_compiler_execution_qualification_mounts_v1(
     attach_compiler_execution_qualification_mounts_with_hooks_v1(
         namespace,
         staged,
-        &mut NoQualificationMountFaultV1,
+        &mut NoQualificationFaultV1,
     )
 }
 
 pub(super) fn attach_compiler_execution_qualification_mounts_with_hooks_v1(
     namespace: PrivateQualificationMountNamespaceV1,
     staged: StagedCompilerExecutionQualificationV1,
-    hooks: &mut impl QualificationMountHooksV1,
+    hooks: &mut impl QualificationFaultHooksV1,
 ) -> Result<MountedCompilerExecutionQualificationV1, DeploymentVerificationErrorV1> {
     namespace.revalidate()?;
     staged.revalidate()?;
@@ -534,7 +420,7 @@ pub(super) fn attach_compiler_execution_qualification_mounts_with_hooks_v1(
         base_attached: false,
         root_attached: false,
     };
-    if let Err(error) = hooks.checkpoint(QualificationMountFaultPointV1::LoopAttached) {
+    if let Err(error) = hooks.checkpoint(QualificationFaultPointV1::LoopAttached) {
         return Err(mounted.cleanup_or(error));
     }
     if let Err(error) = attach_base(&mut mounted, hooks) {
@@ -548,7 +434,7 @@ pub(super) fn attach_compiler_execution_qualification_mounts_with_hooks_v1(
     {
         return Err(mounted.cleanup_or(error));
     }
-    if let Err(error) = hooks.checkpoint(QualificationMountFaultPointV1::ProjectionRevalidated) {
+    if let Err(error) = hooks.checkpoint(QualificationFaultPointV1::ProjectionRevalidated) {
         return Err(mounted.cleanup_or(error));
     }
     Ok(mounted)
@@ -556,7 +442,7 @@ pub(super) fn attach_compiler_execution_qualification_mounts_with_hooks_v1(
 
 fn attach_base(
     mounted: &mut MountedCompilerExecutionQualificationV1,
-    hooks: &mut impl QualificationMountHooksV1,
+    hooks: &mut impl QualificationFaultHooksV1,
 ) -> Result<(), DeploymentVerificationErrorV1> {
     let loop_device = mounted
         .loop_device
@@ -595,7 +481,7 @@ fn attach_base(
     )
     .map_err(|source| io_error("attach qualification SquashFS mount", source))?;
     mounted.base_attached = true;
-    hooks.checkpoint(QualificationMountFaultPointV1::BaseMounted)?;
+    hooks.checkpoint(QualificationFaultPointV1::BaseMounted)?;
     let base = open_mounted_child(staged.root_descriptor(), "base")?;
     require_filesystem(&base, SQUASHFS_MAGIC_V1, "qualification SquashFS base")?;
     mounted.mounted_base = Some(base);
@@ -604,7 +490,7 @@ fn attach_base(
 
 fn attach_overlay(
     mounted: &mut MountedCompilerExecutionQualificationV1,
-    hooks: &mut impl QualificationMountHooksV1,
+    hooks: &mut impl QualificationFaultHooksV1,
 ) -> Result<(), DeploymentVerificationErrorV1> {
     let staged = mounted
         .staged
@@ -648,7 +534,7 @@ fn attach_overlay(
     )
     .map_err(|source| io_error("attach qualification overlay root", source))?;
     mounted.root_attached = true;
-    hooks.checkpoint(QualificationMountFaultPointV1::OverlayMounted)?;
+    hooks.checkpoint(QualificationFaultPointV1::OverlayMounted)?;
     let root = open_mounted_child(staged.root_descriptor(), "root")?;
     require_filesystem(&root, OVERLAYFS_MAGIC_V1, "qualification overlay root")?;
     mounted.mounted_root = Some(root);
@@ -840,49 +726,5 @@ mod tests {
                 .kind(),
             DeploymentVerificationErrorKindV1::InsufficientPrivilege
         );
-    }
-
-    #[test]
-    fn mount_fault_points_are_closed_canonical_and_single_shot() {
-        let names: Vec<_> = QualificationMountFaultPointV1::all()
-            .iter()
-            .map(|point| point.canonical_name())
-            .collect();
-        assert_eq!(
-            names,
-            [
-                "loop-attached",
-                "base-mounted",
-                "overlay-mounted",
-                "projection-revalidated",
-                "overlay-unmounted",
-                "base-unmounted",
-                "loop-released",
-                "staging-cleaned",
-            ]
-        );
-        assert_eq!(
-            QualificationMountFaultPointV1::from_canonical_name("base-mounted"),
-            Some(QualificationMountFaultPointV1::BaseMounted)
-        );
-        assert_eq!(
-            QualificationMountFaultPointV1::from_canonical_name("BASE-MOUNTED"),
-            None
-        );
-        for selected in QualificationMountFaultPointV1::all() {
-            let mut hooks = InjectQualificationMountFaultV1::new(*selected);
-            let mut failures = 0;
-            for observed in QualificationMountFaultPointV1::all() {
-                if let Err(error) = hooks.checkpoint(*observed) {
-                    assert_eq!(
-                        error.kind(),
-                        DeploymentVerificationErrorKindV1::InjectedFailure
-                    );
-                    failures += 1;
-                }
-            }
-            assert!(hooks.fired());
-            assert_eq!(failures, 1);
-        }
     }
 }

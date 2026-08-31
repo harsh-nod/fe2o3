@@ -259,9 +259,12 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   lower after every tool, and emits a canonical cleanup report. The tools enter
   the descriptor-retained root through the static harness itself; no host
   `chroot` executable is trusted. A non-mutating probe records every host
-  prerequisite. The transaction retains eight fixed mount-transition fault
-  points and one aggregate first-publication, reacquisition, normal-run, fault,
-  and parent-cleanup campaign. That path still lacks host-root execution
+  prerequisite. One 18-point transaction fault contract covers mount
+  admission, every systemd command completion and subsequent lower-root
+  revalidation, exact postcondition admission, final lower revalidation, and
+  cleanup. Normal, fault, and campaign runs share one internal transaction, and
+  every admitted fault result freshly reacquires the caller-pinned bundle, base,
+  and complete installed lower after cleanup. That path still lacks host-root execution
   evidence, so live mount composition, isolated boot, and distinct-UID service
   qualification remain open rather than production-qualified.
 - Versioned artifact, descriptor, durable-publication, and HSA records exist.

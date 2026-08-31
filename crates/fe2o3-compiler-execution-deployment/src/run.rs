@@ -1,25 +1,25 @@
 use std::fmt::Write as _;
 use std::path::Path;
 
+use super::fault::{InjectQualificationFaultV1, NoQualificationFaultV1, QualificationFaultHooksV1};
 use super::install::verify_install_parent_children_v1;
-use super::mount::{
-    InjectQualificationMountFaultV1, QualificationMountFaultPointV1,
-    attach_compiler_execution_qualification_mounts_with_hooks_v1,
-};
-use super::preflight::run_compiler_execution_systemd_preflight_v1;
+use super::mount::attach_compiler_execution_qualification_mounts_with_hooks_v1;
+use super::preflight::run_compiler_execution_systemd_preflight_with_hooks_v1;
 use super::qualification::verify_empty_qualification_parent_v1;
 use super::{
     CompilerExecutionInstalledRootPublicationV1, DeploymentVerificationErrorKindV1,
-    DeploymentVerificationErrorV1, StagedCompilerExecutionQualificationV1,
-    attach_compiler_execution_qualification_mounts_v1, encode_sha256_lower_hex_v1,
+    DeploymentVerificationErrorV1, QualificationFaultPointV1,
+    StagedCompilerExecutionQualificationV1, encode_sha256_lower_hex_v1,
     enter_private_qualification_mount_namespace_v1, install_compiler_execution_deployment_v1,
     prepare_compiler_execution_qualification_v1, stage_compiler_execution_qualification_v1,
     verify_compiler_execution_deployment_v1,
 };
 
 const QUALIFICATION_REPORT_SCHEMA_V1: &str = "fe2o3-compiler-execution-qualification-report-v1";
-const MOUNT_FAULT_REPORT_SCHEMA_V1: &str = "fe2o3-compiler-execution-mount-fault-report-v1";
-const MOUNT_CAMPAIGN_REPORT_SCHEMA_V1: &str = "fe2o3-compiler-execution-mount-campaign-report-v1";
+const QUALIFICATION_FAULT_REPORT_SCHEMA_V1: &str =
+    "fe2o3-compiler-execution-qualification-fault-report-v1";
+const QUALIFICATION_CAMPAIGN_REPORT_SCHEMA_V1: &str =
+    "fe2o3-compiler-execution-qualification-campaign-report-v1";
 
 /// Inert report from one fully cleaned composed-root systemd preflight transaction.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -85,8 +85,8 @@ impl CompilerExecutionQualificationReportV1 {
 
 /// Inert evidence that one fixed post-transition fault was observed and fully cleaned.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CompilerExecutionMountFaultReportV1 {
-    fault_point: QualificationMountFaultPointV1,
+pub struct CompilerExecutionQualificationFaultReportV1 {
+    fault_point: QualificationFaultPointV1,
     git_commit: String,
     target: String,
     manifest_sha256: [u8; 32],
@@ -96,7 +96,7 @@ pub struct CompilerExecutionMountFaultReportV1 {
     staging_name: String,
 }
 
-impl CompilerExecutionMountFaultReportV1 {
+impl CompilerExecutionQualificationFaultReportV1 {
     /// Encodes the successful interruption-and-cleanup result as stable key-value evidence.
     pub fn canonical_report(&self) -> String {
         let publication = match self.installed_publication {
@@ -105,7 +105,10 @@ impl CompilerExecutionMountFaultReportV1 {
         };
         let mut report = String::new();
         for (name, value) in [
-            ("report_schema", MOUNT_FAULT_REPORT_SCHEMA_V1.to_owned()),
+            (
+                "report_schema",
+                QUALIFICATION_FAULT_REPORT_SCHEMA_V1.to_owned(),
+            ),
             ("fault_point", self.fault_point.canonical_name().to_owned()),
             ("git_commit", self.git_commit.clone()),
             ("target", self.target.clone()),
@@ -121,6 +124,7 @@ impl CompilerExecutionMountFaultReportV1 {
             ("installed_publication", publication.to_owned()),
             ("staging_name", self.staging_name.clone()),
             ("injected_failure_observed", "true".to_owned()),
+            ("installed_lower_revalidated", "true".to_owned()),
             ("cleanup", "complete".to_owned()),
         ] {
             writeln!(report, "{name}={value}").expect("writing to a String cannot fail");
@@ -129,9 +133,9 @@ impl CompilerExecutionMountFaultReportV1 {
     }
 }
 
-/// Stable aggregate evidence from two mount runs and every V1 lifecycle interruption.
+/// Stable aggregate evidence from two normal runs and every V1 qualification interruption.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CompilerExecutionMountCampaignReportV1 {
+pub struct CompilerExecutionQualificationCampaignReportV1 {
     git_commit: String,
     target: String,
     manifest_sha256: [u8; 32],
@@ -144,17 +148,20 @@ pub struct CompilerExecutionMountCampaignReportV1 {
     anchor_gid: u32,
 }
 
-impl CompilerExecutionMountCampaignReportV1 {
+impl CompilerExecutionQualificationCampaignReportV1 {
     /// Encodes the complete campaign as one newline-terminated key-value report.
     pub fn canonical_report(&self) -> String {
-        let fault_points = QualificationMountFaultPointV1::all()
+        let fault_points = QualificationFaultPointV1::all()
             .iter()
             .map(|point| point.canonical_name())
             .collect::<Vec<_>>()
             .join(",");
         let mut report = String::new();
         for (name, value) in [
-            ("report_schema", MOUNT_CAMPAIGN_REPORT_SCHEMA_V1.to_owned()),
+            (
+                "report_schema",
+                QUALIFICATION_CAMPAIGN_REPORT_SCHEMA_V1.to_owned(),
+            ),
             ("git_commit", self.git_commit.clone()),
             ("target", self.target.clone()),
             (
@@ -175,12 +182,12 @@ impl CompilerExecutionMountCampaignReportV1 {
             ("anchor_uid", self.anchor_uid.to_string()),
             ("anchor_gid", self.anchor_gid.to_string()),
             (
-                "mount_fault_count",
-                QualificationMountFaultPointV1::all().len().to_string(),
+                "qualification_fault_count",
+                QualificationFaultPointV1::all().len().to_string(),
             ),
             (
                 "reacquisition_count",
-                (QualificationMountFaultPointV1::all().len() + 1).to_string(),
+                (QualificationFaultPointV1::all().len() * 2 + 1).to_string(),
             ),
             ("first_publication", "created".to_owned()),
             ("qualification_parent_empty", "true".to_owned()),
@@ -192,7 +199,7 @@ impl CompilerExecutionMountCampaignReportV1 {
     }
 }
 
-struct StagedMountQualificationV1 {
+struct StagedQualificationTransactionV1 {
     target: String,
     installed_root_name: String,
     installed_publication: CompilerExecutionInstalledRootPublicationV1,
@@ -264,11 +271,22 @@ pub fn run_compiler_execution_qualification_v1(
 pub fn run_compiler_execution_qualification_request_v1(
     request: CompilerExecutionQualificationRequestV1<'_>,
 ) -> Result<CompilerExecutionQualificationReportV1, DeploymentVerificationErrorV1> {
-    let transaction = stage_mount_qualification(&request)?;
+    let transaction = stage_qualification_transaction(&request)?;
+    execute_staged_qualification_with_hooks(transaction, &mut NoQualificationFaultV1)
+}
+
+fn execute_staged_qualification_with_hooks(
+    transaction: StagedQualificationTransactionV1,
+    hooks: &mut impl QualificationFaultHooksV1,
+) -> Result<CompilerExecutionQualificationReportV1, DeploymentVerificationErrorV1> {
     let staging_name = transaction.staged.run_name().to_owned();
     let namespace = enter_private_qualification_mount_namespace_v1()?;
-    let mounted = attach_compiler_execution_qualification_mounts_v1(namespace, transaction.staged)?;
-    let preflight = run_compiler_execution_systemd_preflight_v1(mounted)?;
+    let mounted = attach_compiler_execution_qualification_mounts_with_hooks_v1(
+        namespace,
+        transaction.staged,
+        hooks,
+    )?;
+    let preflight = run_compiler_execution_systemd_preflight_with_hooks_v1(mounted, hooks)?;
     let report = CompilerExecutionQualificationReportV1 {
         git_commit: preflight.git_commit().to_owned(),
         target: transaction.target,
@@ -284,36 +302,30 @@ pub fn run_compiler_execution_qualification_request_v1(
         anchor_uid: preflight.anchor_uid(),
         anchor_gid: preflight.anchor_gid(),
     };
-    preflight.cleanup()?;
+    preflight.cleanup_with_hooks(hooks)?;
     Ok(report)
 }
 
-/// Injects one fixed root-only mount fault and succeeds only after complete cleanup is proven.
-pub fn run_compiler_execution_mount_fault_v1(
-    fault_point: QualificationMountFaultPointV1,
+/// Injects one fixed root-only qualification fault and admits only complete cleanup and recovery.
+pub fn run_compiler_execution_qualification_fault_v1(
+    fault_point: QualificationFaultPointV1,
     request: CompilerExecutionQualificationRequestV1<'_>,
-) -> Result<CompilerExecutionMountFaultReportV1, DeploymentVerificationErrorV1> {
-    let transaction = stage_mount_qualification(&request)?;
+) -> Result<CompilerExecutionQualificationFaultReportV1, DeploymentVerificationErrorV1> {
+    let transaction = stage_qualification_transaction(&request)?;
     let git_commit = transaction.staged.git_commit().to_owned();
+    let target = transaction.target.clone();
     let manifest_sha256 = transaction.staged.manifest_sha256();
     let base_image_sha256 = transaction.staged.base_image_sha256();
+    let installed_root_name = transaction.installed_root_name.clone();
+    let installed_publication = transaction.installed_publication;
     let staging_name = transaction.staged.run_name().to_owned();
-    let namespace = enter_private_qualification_mount_namespace_v1()?;
-    let mut hooks = InjectQualificationMountFaultV1::new(fault_point);
-    let interrupted = match attach_compiler_execution_qualification_mounts_with_hooks_v1(
-        namespace,
-        transaction.staged,
-        &mut hooks,
-    ) {
-        Ok(mounted) => mounted.cleanup_with_hooks(&mut hooks),
-        Err(error) => Err(error),
-    };
-    let error = match interrupted {
-        Ok(()) => {
+    let mut hooks = InjectQualificationFaultV1::new(fault_point);
+    let error = match execute_staged_qualification_with_hooks(transaction, &mut hooks) {
+        Ok(_) => {
             return Err(super::invalid(
-                DeploymentVerificationErrorKindV1::InvalidQualificationMount,
+                DeploymentVerificationErrorKindV1::InvalidQualificationPreflight,
                 format!(
-                    "qualification mount fault point {} was not reached",
+                    "qualification fault point {} was not reached",
                     fault_point.canonical_name()
                 ),
             ));
@@ -327,22 +339,77 @@ pub fn run_compiler_execution_mount_fault_v1(
         return Err(error);
     }
     verify_empty_qualification_parent_v1(request.qualification_parent)?;
-    Ok(CompilerExecutionMountFaultReportV1 {
-        fault_point,
-        git_commit,
-        target: transaction.target,
+    revalidate_qualification_inputs_after_fault(
+        &request,
+        &git_commit,
+        &target,
         manifest_sha256,
         base_image_sha256,
-        installed_root_name: transaction.installed_root_name,
-        installed_publication: transaction.installed_publication,
+        &installed_root_name,
+    )?;
+    Ok(CompilerExecutionQualificationFaultReportV1 {
+        fault_point,
+        git_commit,
+        target,
+        manifest_sha256,
+        base_image_sha256,
+        installed_root_name,
+        installed_publication,
         staging_name,
     })
 }
 
+fn revalidate_qualification_inputs_after_fault(
+    request: &CompilerExecutionQualificationRequestV1<'_>,
+    expected_git_commit: &str,
+    expected_target: &str,
+    expected_manifest_sha256: [u8; 32],
+    expected_base_image_sha256: [u8; 32],
+    expected_installed_root_name: &str,
+) -> Result<(), DeploymentVerificationErrorV1> {
+    let verified = verify_compiler_execution_deployment_v1(
+        request.bundle_root,
+        request.expected_manifest_sha256,
+        request.expected_git_commit,
+    )?;
+    let installed = install_compiler_execution_deployment_v1(verified, request.install_parent)?;
+    if installed.publication() != CompilerExecutionInstalledRootPublicationV1::Reacquired
+        || installed.git_commit() != expected_git_commit
+        || installed.target() != expected_target
+        || installed.manifest_sha256() != expected_manifest_sha256
+        || installed.root_name() != expected_installed_root_name
+    {
+        return Err(super::invalid(
+            DeploymentVerificationErrorKindV1::InputChanged,
+            "installed lower identity changed after qualification fault cleanup",
+        ));
+    }
+    let prepared = prepare_compiler_execution_qualification_v1(
+        installed,
+        request.base_image_path,
+        request.expected_base_image_sha256,
+        request.qualification_parent,
+    )?;
+    if prepared.git_commit() != expected_git_commit
+        || prepared.manifest_sha256() != expected_manifest_sha256
+        || prepared.installed_root_name() != expected_installed_root_name
+        || prepared.base_image_sha256() != expected_base_image_sha256
+    {
+        return Err(super::invalid(
+            DeploymentVerificationErrorKindV1::InputChanged,
+            "qualification input identity changed after injected failure",
+        ));
+    }
+    prepared.revalidate()?;
+    drop(prepared);
+    verify_empty_qualification_parent_v1(request.qualification_parent)?;
+    verify_install_parent_children_v1(request.install_parent, &[expected_installed_root_name])
+}
+
 /// Runs two normal transactions and every fixed fault from one initially empty install parent.
-pub fn run_compiler_execution_mount_campaign_v1(
+pub fn run_compiler_execution_qualification_campaign_v1(
     request: CompilerExecutionQualificationRequestV1<'_>,
-) -> Result<CompilerExecutionMountCampaignReportV1, DeploymentVerificationErrorV1> {
+) -> Result<CompilerExecutionQualificationCampaignReportV1, DeploymentVerificationErrorV1> {
     verify_install_parent_children_v1(request.install_parent, &[])?;
     verify_empty_qualification_parent_v1(request.qualification_parent)?;
 
@@ -351,7 +418,7 @@ pub fn run_compiler_execution_mount_campaign_v1(
     if first.installed_publication != CompilerExecutionInstalledRootPublicationV1::Created {
         return Err(super::invalid(
             DeploymentVerificationErrorKindV1::InputChanged,
-            "mount campaign did not perform the first installed-root publication",
+            "qualification campaign did not perform the first installed-root publication",
         ));
     }
     verify_install_parent_children_v1(
@@ -359,14 +426,14 @@ pub fn run_compiler_execution_mount_campaign_v1(
         &[first.installed_root_name.as_str()],
     )?;
 
-    for point in QualificationMountFaultPointV1::all() {
-        let fault = run_compiler_execution_mount_fault_v1(*point, request)?;
+    for point in QualificationFaultPointV1::all() {
+        let fault = run_compiler_execution_qualification_fault_v1(*point, request)?;
         require_fault_identity(&first, &fault)?;
         if fault.installed_publication != CompilerExecutionInstalledRootPublicationV1::Reacquired {
             return Err(super::invalid(
                 DeploymentVerificationErrorKindV1::InputChanged,
                 format!(
-                    "mount fault {} did not reacquire the exact installed root",
+                    "qualification fault {} did not reacquire the exact installed root",
                     point.canonical_name()
                 ),
             ));
@@ -383,14 +450,14 @@ pub fn run_compiler_execution_mount_campaign_v1(
     if second.installed_publication != CompilerExecutionInstalledRootPublicationV1::Reacquired {
         return Err(super::invalid(
             DeploymentVerificationErrorKindV1::InputChanged,
-            "second normal mount run did not reacquire the exact installed root",
+            "second normal qualification run did not reacquire the exact installed root",
         ));
     }
     verify_install_parent_children_v1(
         request.install_parent,
         &[first.installed_root_name.as_str()],
     )?;
-    Ok(CompilerExecutionMountCampaignReportV1 {
+    Ok(CompilerExecutionQualificationCampaignReportV1 {
         git_commit: first.git_commit,
         target: first.target,
         manifest_sha256: first.manifest_sha256,
@@ -406,7 +473,7 @@ pub fn run_compiler_execution_mount_campaign_v1(
 
 fn require_fault_identity(
     expected: &CompilerExecutionQualificationReportV1,
-    observed: &CompilerExecutionMountFaultReportV1,
+    observed: &CompilerExecutionQualificationFaultReportV1,
 ) -> Result<(), DeploymentVerificationErrorV1> {
     require_identity(
         expected,
@@ -449,7 +516,7 @@ fn require_identity(
     {
         return Err(super::invalid(
             DeploymentVerificationErrorKindV1::InputChanged,
-            "mount campaign identity changed between transactions",
+            "qualification campaign identity changed between transactions",
         ));
     }
     Ok(())
@@ -474,9 +541,9 @@ fn require_systemd_identity(
     Ok(())
 }
 
-fn stage_mount_qualification(
+fn stage_qualification_transaction(
     request: &CompilerExecutionQualificationRequestV1<'_>,
-) -> Result<StagedMountQualificationV1, DeploymentVerificationErrorV1> {
+) -> Result<StagedQualificationTransactionV1, DeploymentVerificationErrorV1> {
     let verified = verify_compiler_execution_deployment_v1(
         request.bundle_root,
         request.expected_manifest_sha256,
@@ -493,7 +560,7 @@ fn stage_mount_qualification(
         request.qualification_parent,
     )?;
     let staged = stage_compiler_execution_qualification_v1(prepared)?;
-    Ok(StagedMountQualificationV1 {
+    Ok(StagedQualificationTransactionV1 {
         target,
         installed_root_name,
         installed_publication,
@@ -535,9 +602,9 @@ mod tests {
     }
 
     #[test]
-    fn mount_fault_report_binds_the_point_and_complete_cleanup() {
-        let report = CompilerExecutionMountFaultReportV1 {
-            fault_point: QualificationMountFaultPointV1::OverlayUnmounted,
+    fn qualification_fault_report_binds_the_point_lower_and_cleanup() {
+        let report = CompilerExecutionQualificationFaultReportV1 {
+            fault_point: QualificationFaultPointV1::SystemdTmpfilesComplete,
             git_commit: "67".repeat(20),
             target: "x86_64-unknown-linux-musl".to_owned(),
             manifest_sha256: [0x89; 32],
@@ -547,15 +614,15 @@ mod tests {
             staging_name: ".compiler-execution-qualification-v1-fault".to_owned(),
         };
         let encoded = report.canonical_report();
-        assert_eq!(encoded.lines().count(), 11);
-        assert!(encoded.contains("fault_point=overlay-unmounted\n"));
+        assert_eq!(encoded.lines().count(), 12);
+        assert!(encoded.contains("fault_point=systemd-tmpfiles-complete\n"));
         assert!(encoded.contains("installed_publication=created\n"));
-        assert!(encoded.ends_with("injected_failure_observed=true\ncleanup=complete\n"));
+        assert!(encoded.ends_with("installed_lower_revalidated=true\ncleanup=complete\n"));
     }
 
     #[test]
-    fn mount_campaign_report_excludes_runtime_staging_identities() {
-        let report = CompilerExecutionMountCampaignReportV1 {
+    fn qualification_campaign_report_excludes_runtime_staging_identities() {
+        let report = CompilerExecutionQualificationCampaignReportV1 {
             git_commit: "cd".repeat(20),
             target: "x86_64-unknown-linux-musl".to_owned(),
             manifest_sha256: [0xef; 32],
@@ -571,8 +638,8 @@ mod tests {
         assert_eq!(encoded.lines().count(), 19);
         assert!(encoded.contains("normal_run_count=2\n"));
         assert!(encoded.contains("systemd_preflight_run_count=2\n"));
-        assert!(encoded.contains("mount_fault_count=8\n"));
-        assert!(encoded.contains("reacquisition_count=9\n"));
+        assert!(encoded.contains("qualification_fault_count=18\n"));
+        assert!(encoded.contains("reacquisition_count=37\n"));
         assert!(!encoded.contains("staging_name"));
         assert!(encoded.ends_with("qualification_parent_empty=true\ncleanup=complete\n"));
     }

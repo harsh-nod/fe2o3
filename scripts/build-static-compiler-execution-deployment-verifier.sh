@@ -93,8 +93,8 @@ fi
 
 qualification_fault_points="$(/usr/bin/env -i "${qualification}" fault-points)"
 readonly qualification_fault_points
-if [[ "${qualification_fault_points}" != 'loop-attached'$'\n''base-mounted'$'\n''overlay-mounted'$'\n''projection-revalidated'$'\n''overlay-unmounted'$'\n''base-unmounted'$'\n''loop-released'$'\n''staging-cleaned' ]]; then
-  printf 'static qualification mount fault set changed\n' >&2
+if [[ "${qualification_fault_points}" != 'loop-attached'$'\n''base-mounted'$'\n''overlay-mounted'$'\n''projection-revalidated'$'\n''systemd-version-complete'$'\n''systemd-version-revalidated'$'\n''systemd-sysusers-complete'$'\n''systemd-sysusers-revalidated'$'\n''systemd-tmpfiles-complete'$'\n''systemd-tmpfiles-revalidated'$'\n''systemd-unit-verify-complete'$'\n''systemd-unit-verify-revalidated'$'\n''systemd-postconditions-admitted'$'\n''installed-lower-revalidated'$'\n''overlay-unmounted'$'\n''base-unmounted'$'\n''loop-released'$'\n''staging-cleaned' ]]; then
+  printf 'static qualification fault set changed\n' >&2
   exit 1
 fi
 

@@ -3,8 +3,8 @@
 Status: deterministic base construction, caller-pinned SquashFS admission,
 sealed preparation custody, and the exact empty staging transaction are
 implemented. Private-namespace mount composition is implemented but has not yet
-run under host root. Its static probe, exact high-level mount harness, closed
-mount fault set, and aggregate campaign are implemented. Root execution,
+run under host root. Its static probe, exact high-level qualification harness,
+closed 18-point transaction fault set, and aggregate campaign are implemented. Root execution,
 isolated systemd boot, distinct-UID execution, and lifecycle fault
 qualification remain open.
 
@@ -169,12 +169,18 @@ every tool. A read-only first stage admits the exact
 `systemd 255 (255.4-1ubuntu8.17)` version line. Every helper has a 64-KiB file
 output limit, and stdout is admitted from a private memfd before the report can
 name that version.
-`fault-points` lists the closed mount set. `fault` interrupts one exact mount
+`fault-points` lists the one closed transaction set. Its 18 ordered points cover
+the four mount-admission transitions, completion and revalidation of every
+systemd command, exact postcondition admission, final installed-lower
+revalidation, and all four cleanup transitions. `fault` interrupts one exact
 point and accepts success only after the root-owned qualification parent is
-empty. `campaign` starts from an empty install parent and requires one
-publication, nine exact reacquisitions, two complete preflight runs, all eight
-mount faults, stable identities, one exact installed-root child, and complete
-staging cleanup. These commands grant no boot or service authority.
+empty and a fresh caller-pinned bundle/base reacquisition completely
+revalidates the installed lower. `campaign` starts from an empty install parent
+and requires one publication, 37 exact reacquisitions, two complete normal
+preflight runs, all 18 faults, stable identities, one exact installed-root
+child, and complete staging cleanup. Normal, fault, and campaign execution all
+use the same internal qualification transaction. These commands grant no boot
+or service authority.
 
 `recover` accepts only an empty qualification parent or one canonically named
 qualification transaction. `recover-install` additionally requires the
@@ -221,7 +227,7 @@ Clippy, strict rustdoc, static-musl, ELF loader-independence, and live read-only
 probe evidence. The current `mi300x` SSH identity has effective UID `1002` and
 no mount capabilities, so no successful kernel mount or composed-root systemd
 preflight is claimed yet. The live root harness, live timeout/signal recovery,
-and live execution of the implemented mount fault campaign remain required
+and live execution of the implemented qualification fault campaign remain required
 before this boundary is production-qualified.
 
 ## Qualification
