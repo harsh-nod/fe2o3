@@ -22,6 +22,7 @@ use sha2::{Digest, Sha256};
 mod host;
 mod install;
 mod mount;
+mod preflight;
 mod qualification;
 mod run;
 mod staging;
@@ -40,15 +41,15 @@ pub use mount::{
     QualificationMountFaultPointV1, attach_compiler_execution_qualification_mounts_v1,
     enter_private_qualification_mount_namespace_v1,
 };
+pub use preflight::execute_compiler_execution_systemd_preflight_tool_v1;
 pub use qualification::{
     PreparedCompilerExecutionQualificationV1, prepare_compiler_execution_qualification_v1,
 };
 pub use run::{
     CompilerExecutionMountCampaignReportV1, CompilerExecutionMountFaultReportV1,
-    CompilerExecutionMountQualificationReportV1, CompilerExecutionMountQualificationRequestV1,
+    CompilerExecutionQualificationReportV1, CompilerExecutionQualificationRequestV1,
     run_compiler_execution_mount_campaign_v1, run_compiler_execution_mount_fault_v1,
-    run_compiler_execution_mount_qualification_request_v1,
-    run_compiler_execution_mount_qualification_v1,
+    run_compiler_execution_qualification_request_v1, run_compiler_execution_qualification_v1,
 };
 pub use staging::{
     CompilerExecutionQualificationRecoveryV1, StagedCompilerExecutionQualificationV1,
@@ -63,6 +64,12 @@ pub use supervisor::{
 
 /// Canonical deployment target admitted by this V1 profile.
 pub const COMPILER_EXECUTION_DEPLOYMENT_TARGET_V1: &str = "x86_64-unknown-linux-musl";
+/// Hidden static-harness command that enters the inherited composed root and executes one tool.
+pub const COMPILER_EXECUTION_SYSTEMD_PREFLIGHT_TOOL_COMMAND_V1: &str =
+    "__systemd-preflight-tool-v1";
+/// Parent-PID binding passed only from the qualification worker to its systemd helper.
+pub const COMPILER_EXECUTION_SYSTEMD_PREFLIGHT_PARENT_PID_ENV_V1: &str =
+    "FE2O3_QUALIFICATION_SYSTEMD_PARENT_PID_V1";
 /// Canonical install-manifest source name inside a deployment bundle.
 pub const COMPILER_EXECUTION_INSTALL_MANIFEST_NAME_V1: &str = "INSTALL-MANIFEST-V1";
 /// Number of content files bound by the V1 manifest, excluding the manifest itself.
@@ -1175,6 +1182,8 @@ pub enum DeploymentVerificationErrorKindV1 {
     InvalidQualificationIsolation,
     /// A read-only base or disposable overlay mount failed admission or cleanup.
     InvalidQualificationMount,
+    /// Composed-root systemd preparation or its exact postconditions failed admission.
+    InvalidQualificationPreflight,
     /// A production root operation did not run with effective UID 0.
     InsufficientPrivilege,
     /// Atomic publication happened, but its durability result is ambiguous.

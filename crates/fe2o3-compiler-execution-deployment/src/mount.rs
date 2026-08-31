@@ -1,6 +1,6 @@
 use std::fmt;
 use std::fs::File;
-use std::os::fd::AsRawFd as _;
+use std::os::fd::{AsRawFd as _, OwnedFd};
 
 use fe2o3_loop_device::{ReadOnlyAutoclearLoopDeviceV1, attach_sealed_read_only_loop_device_v1};
 use rustix::fs::{Mode, OFlags, ResolveFlags, fstat, fstatfs, openat2};
@@ -25,6 +25,7 @@ const COMPOSED_ROOT_MODE_V1: u32 = 0o755;
 const MOUNTED_STAGING_CHILDREN_V1: &[&str] =
     &["base", "evidence", "root", "run", "state", "upper", "work"];
 const UNMOUNTED_STAGING_CHILDREN_V1: &[&str] = &["evidence", "run", "state", "upper", "work"];
+const PREFLIGHT_EMPTY_STAGING_CHILDREN_V1: &[&str] = &["evidence", "run", "state"];
 const QUALIFICATION_MOUNT_FAULT_POINTS_V1: [QualificationMountFaultPointV1; 8] = [
     QualificationMountFaultPointV1::LoopAttached,
     QualificationMountFaultPointV1::BaseMounted,
@@ -277,7 +278,40 @@ impl MountedCompilerExecutionQualificationV1 {
 
     /// Revalidates namespace custody, both mount identities, and every installed deployment file.
     pub fn revalidate(&self) -> Result<(), DeploymentVerificationErrorV1> {
-        revalidate_mounted_qualification(self, (0, 0))
+        revalidate_mounted_qualification(self, (0, 0), MountedRootStateV1::Pristine)
+    }
+
+    pub(super) fn revalidate_systemd_preflight_state(
+        &self,
+    ) -> Result<(), DeploymentVerificationErrorV1> {
+        revalidate_mounted_qualification(self, (0, 0), MountedRootStateV1::SystemdPreflight)
+    }
+
+    pub(super) fn inherit_composed_root_descriptor(
+        &self,
+    ) -> Result<OwnedFd, DeploymentVerificationErrorV1> {
+        self.revalidate()?;
+        let root = self
+            .mounted_root
+            .as_ref()
+            .ok_or_else(|| changed("mounted qualification root descriptor was released"))?;
+        let inherited = rustix::io::dup(root)
+            .map_err(|source| io_error("duplicate composed root for child execution", source))?;
+        let inherited_flags = rustix::io::fcntl_getfd(&inherited).map_err(|source| {
+            io_error("inspect inherited composed-root descriptor flags", source)
+        })?;
+        let original =
+            fstat(root).map_err(|source| io_error("inspect retained composed root", source))?;
+        let duplicate = fstat(&inherited)
+            .map_err(|source| io_error("inspect inherited composed root", source))?;
+        if !inherited_flags.is_empty()
+            || (original.st_dev, original.st_ino) != (duplicate.st_dev, duplicate.st_ino)
+        {
+            return Err(changed(
+                "inherited composed-root descriptor does not retain exact executable custody",
+            ));
+        }
+        Ok(inherited)
     }
 
     /// Unmounts overlay then SquashFS, releases the autoclear loop device, and removes staging.
@@ -509,7 +543,9 @@ pub(super) fn attach_compiler_execution_qualification_mounts_with_hooks_v1(
     if let Err(error) = attach_overlay(&mut mounted, hooks) {
         return Err(mounted.cleanup_or(error));
     }
-    if let Err(error) = revalidate_mounted_qualification(&mounted, (0, 0)) {
+    if let Err(error) =
+        revalidate_mounted_qualification(&mounted, (0, 0), MountedRootStateV1::Pristine)
+    {
         return Err(mounted.cleanup_or(error));
     }
     if let Err(error) = hooks.checkpoint(QualificationMountFaultPointV1::ProjectionRevalidated) {
@@ -619,9 +655,16 @@ fn attach_overlay(
     Ok(())
 }
 
+#[derive(Clone, Copy)]
+enum MountedRootStateV1 {
+    Pristine,
+    SystemdPreflight,
+}
+
 fn revalidate_mounted_qualification(
     mounted: &MountedCompilerExecutionQualificationV1,
     owner: (u32, u32),
+    state: MountedRootStateV1,
 ) -> Result<(), DeploymentVerificationErrorV1> {
     mounted.namespace.revalidate()?;
     if !mounted.base_attached || !mounted.root_attached {
@@ -657,7 +700,11 @@ fn revalidate_mounted_qualification(
             QUALIFICATION_STAGING_MODE_V1,
             "unmounted qualification staging directory",
         )?;
-        verify_directory_children(directory, &[], "unmounted qualification staging directory")?;
+        if matches!(state, MountedRootStateV1::Pristine)
+            || PREFLIGHT_EMPTY_STAGING_CHILDREN_V1.contains(name)
+        {
+            verify_directory_children(directory, &[], "unmounted qualification staging directory")?;
+        }
     }
     let base = mounted
         .mounted_base

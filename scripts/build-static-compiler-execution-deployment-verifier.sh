@@ -79,6 +79,18 @@ if [[ ${qualification_status} -ne 2 \
   exit 1
 fi
 
+set +e
+preflight_helper_failure="$(/usr/bin/env -i "${qualification}" \
+  __systemd-preflight-tool-v1 systemd-sysusers </dev/null 2>&1)"
+preflight_helper_status=$?
+set -e
+if [[ ${preflight_helper_status} -ne 1 \
+  || "${preflight_helper_failure}" != \
+    'compiler-execution systemd preflight boundary failed: expected parent PID is missing' ]]; then
+  printf 'static systemd preflight helper parent boundary changed\n' >&2
+  exit 1
+fi
+
 qualification_fault_points="$(/usr/bin/env -i "${qualification}" fault-points)"
 readonly qualification_fault_points
 if [[ "${qualification_fault_points}" != 'loop-attached'$'\n''base-mounted'$'\n''overlay-mounted'$'\n''projection-revalidated'$'\n''overlay-unmounted'$'\n''base-unmounted'$'\n''loop-released'$'\n''staging-cleaned' ]]; then

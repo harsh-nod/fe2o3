@@ -10,13 +10,15 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use fe2o3_compiler_execution_deployment::{
-    CompilerExecutionInstallRecoveryV1, CompilerExecutionMountQualificationRequestV1,
-    CompilerExecutionQualificationRecoveryV1, CompilerExecutionQualificationSupervisorLeaseV1,
-    QualificationMountFaultPointV1, QualificationWorkerTerminationV1,
-    acquire_compiler_execution_qualification_supervisor_lease_v1,
+    COMPILER_EXECUTION_SYSTEMD_PREFLIGHT_PARENT_PID_ENV_V1,
+    COMPILER_EXECUTION_SYSTEMD_PREFLIGHT_TOOL_COMMAND_V1, CompilerExecutionInstallRecoveryV1,
+    CompilerExecutionQualificationRecoveryV1, CompilerExecutionQualificationRequestV1,
+    CompilerExecutionQualificationSupervisorLeaseV1, QualificationMountFaultPointV1,
+    QualificationWorkerTerminationV1, acquire_compiler_execution_qualification_supervisor_lease_v1,
+    execute_compiler_execution_systemd_preflight_tool_v1,
     probe_compiler_execution_qualification_host_v1, recover_compiler_execution_install_parent_v1,
     recover_compiler_execution_qualification_parent_v1, run_compiler_execution_mount_campaign_v1,
-    run_compiler_execution_mount_fault_v1, run_compiler_execution_mount_qualification_request_v1,
+    run_compiler_execution_mount_fault_v1, run_compiler_execution_qualification_request_v1,
     wait_for_compiler_execution_qualification_supervisor_lease_v1,
     wait_for_qualification_worker_v1,
 };
@@ -69,6 +71,9 @@ fn main() {
         WORKER_CAMPAIGN_COMMAND_V1 if arguments.len() == 9 => {
             let _lease = prepare_qualification_worker(&arguments, 2);
             run_campaign(&arguments);
+        }
+        COMPILER_EXECUTION_SYSTEMD_PREFLIGHT_TOOL_COMMAND_V1 if arguments.len() == 3 => {
+            run_systemd_preflight_tool(&arguments)
         }
         _ => {
             eprintln!("{USAGE}");
@@ -464,7 +469,11 @@ fn prepare_qualification_worker(
 }
 
 fn establish_worker_parent_boundary_inner() -> Result<(), String> {
-    let expected = std::env::var_os(WORKER_PARENT_PID_ENV_V1)
+    establish_exact_parent_boundary(WORKER_PARENT_PID_ENV_V1)
+}
+
+fn establish_exact_parent_boundary(environment_name: &str) -> Result<(), String> {
+    let expected = std::env::var_os(environment_name)
         .ok_or_else(|| "expected parent PID is missing".to_owned())?;
     let expected = expected
         .to_str()
@@ -487,6 +496,26 @@ fn establish_worker_parent_boundary_inner() -> Result<(), String> {
         return Err("qualification worker parent identity changed while binding".to_owned());
     }
     Ok(())
+}
+
+fn run_systemd_preflight_tool(arguments: &[std::ffi::OsString]) {
+    if let Err(error) =
+        establish_exact_parent_boundary(COMPILER_EXECUTION_SYSTEMD_PREFLIGHT_PARENT_PID_ENV_V1)
+    {
+        eprintln!("compiler-execution systemd preflight boundary failed: {error}");
+        std::process::exit(1);
+    }
+    let Some(stage) = arguments[2].to_str() else {
+        eprintln!("compiler-execution systemd preflight stage must be UTF-8");
+        std::process::exit(1);
+    };
+    match execute_compiler_execution_systemd_preflight_tool_v1(stage) {
+        Ok(never) => match never {},
+        Err(error) => {
+            eprintln!("compiler-execution systemd preflight helper failed: {error}");
+            std::process::exit(1);
+        }
+    }
 }
 
 fn observed_parent_pid() -> i32 {
@@ -551,10 +580,10 @@ fn run_recovery(arguments: &[std::ffi::OsString]) {
 
 fn run_qualification(arguments: &[std::ffi::OsString]) {
     let request = parse_request(arguments, 2);
-    match run_compiler_execution_mount_qualification_request_v1(request) {
+    match run_compiler_execution_qualification_request_v1(request) {
         Ok(report) => print!("{}", report.canonical_report()),
         Err(error) => {
-            eprintln!("compiler-execution mount qualification failed: {error}");
+            eprintln!("compiler-execution qualification failed: {error}");
             std::process::exit(1);
         }
     }
@@ -593,7 +622,7 @@ fn run_campaign(arguments: &[std::ffi::OsString]) {
 fn parse_request(
     arguments: &[std::ffi::OsString],
     start: usize,
-) -> CompilerExecutionMountQualificationRequestV1<'_> {
+) -> CompilerExecutionQualificationRequestV1<'_> {
     let Some(manifest_sha256) = arguments[start + 1].to_str() else {
         eprintln!("expected manifest SHA-256 must be UTF-8");
         std::process::exit(2);
@@ -606,7 +635,7 @@ fn parse_request(
         eprintln!("expected base-image SHA-256 must be UTF-8");
         std::process::exit(2);
     };
-    CompilerExecutionMountQualificationRequestV1::new(
+    CompilerExecutionQualificationRequestV1::new(
         Path::new(&arguments[start]),
         manifest_sha256,
         commit,

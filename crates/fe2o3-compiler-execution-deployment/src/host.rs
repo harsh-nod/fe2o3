@@ -33,7 +33,7 @@ pub struct CompilerExecutionQualificationHostProbeV1 {
 }
 
 impl CompilerExecutionQualificationHostProbeV1 {
-    /// Returns whether the observed host satisfies the prerequisites for the mount-only harness.
+    /// Returns whether the observed host satisfies the prerequisites for root composition.
     pub const fn mount_ready(&self) -> bool {
         self.effective_uid == 0
             && self.task_count == 1

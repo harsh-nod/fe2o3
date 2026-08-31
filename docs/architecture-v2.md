@@ -253,13 +253,17 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   read-only/autoclear loop handle, detached SquashFS and OverlayFS mounts, fixed
   installed-root-over-base lower order, and sealed deployment-projection
   revalidation are implemented. One static harness now drives the complete
-  mount-only transaction and emits a canonical cleanup report, while a
-  non-mutating probe records every host prerequisite. The same transaction has
-  eight fixed post-transition fault points and one aggregate first-publication,
-  reacquisition, normal-run, fault, and parent-cleanup campaign. That path still
-  lacks host-root execution evidence, so mount composition, isolated boot, and
-  root/distinct-UID systemd qualification remain open rather than
-  production-qualified.
+  qualification transaction: it composes the root, runs the pinned base's
+  systemd version, sysusers, tmpfiles, and offline unit-verification tools,
+  admits exact account and filesystem postconditions, revalidates the installed
+  lower after every tool, and emits a canonical cleanup report. The tools enter
+  the descriptor-retained root through the static harness itself; no host
+  `chroot` executable is trusted. A non-mutating probe records every host
+  prerequisite. The transaction retains eight fixed mount-transition fault
+  points and one aggregate first-publication, reacquisition, normal-run, fault,
+  and parent-cleanup campaign. That path still lacks host-root execution
+  evidence, so live mount composition, isolated boot, and distinct-UID service
+  qualification remain open rather than production-qualified.
 - Versioned artifact, descriptor, durable-publication, and HSA records exist.
   Host execution has one workload-neutral Worker V3 graph. An arbitrary
   manifest cannot manufacture a Rust signature, verifier decision, load

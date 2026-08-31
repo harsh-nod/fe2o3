@@ -155,15 +155,26 @@ The fully static `fe2o3-compiler-execution-qualification` image exposes seven
 commands. `probe` observes effective UID, task count, procfs, loop-control
 identity, filesystem support, new mount API recognition, isolation namespaces,
 cgroup V2, and fixed systemd tool paths without creating a namespace, mount, or
-service. `run` is the sole high-level path through bundle verification,
-installation, base preparation, staging, private namespace entry, mount
-attachment, revalidation, explicit cleanup, and a canonical completion report.
-`fault-points` lists the closed set. `fault` interrupts one exact point and
-accepts success only after the root-owned qualification parent is empty.
-`campaign` starts from an empty install parent and requires one publication,
-nine exact reacquisitions, two normal runs, all eight faults, stable identities,
-one exact installed-root child, and complete staging cleanup. These commands
-grant no boot or service authority.
+service. `run` is the sole high-level path through bundle
+verification, installation, base preparation, staging, private namespace entry,
+mount attachment, pinned-base `systemd-sysusers`, `systemd-tmpfiles --create`,
+offline `systemd-analyze verify`, exact postcondition admission, explicit
+cleanup, and a canonical completion report. The three tools execute from the
+admitted composed root through one inherited descriptor and a cleared
+environment. A hidden instance of the static harness binds itself to the exact
+worker with parent-death `SIGKILL`, enters the root through upstream rustix
+`chroot`, and replaces itself with the selected pinned-base tool. No host
+`chroot` executable participates. The installed projection is revalidated after
+every tool. A read-only first stage admits the exact
+`systemd 255 (255.4-1ubuntu8.17)` version line. Every helper has a 64-KiB file
+output limit, and stdout is admitted from a private memfd before the report can
+name that version.
+`fault-points` lists the closed mount set. `fault` interrupts one exact mount
+point and accepts success only after the root-owned qualification parent is
+empty. `campaign` starts from an empty install parent and requires one
+publication, nine exact reacquisitions, two complete preflight runs, all eight
+mount faults, stable identities, one exact installed-root child, and complete
+staging cleanup. These commands grant no boot or service authority.
 
 `recover` accepts only an empty qualification parent or one canonically named
 qualification transaction. `recover-install` additionally requires the
@@ -198,13 +209,20 @@ successful worker that leaves recoverable staging is still a failed
 qualification. The standalone recovery commands do not terminate workers and
 must not be used concurrently with a supervised command.
 
+The preflight admits the deterministic V1 users and groups
+`fe2o3-compiler:999:999` and `fe2o3-anchor:998:998`, exact account database
+bytes, all tmpfiles-owned directories and modes, the root-owned lifecycle file,
+and all three deployment/qualification units. The writable overlay may change,
+but the installed deployment lower remains independently retained and
+completely revalidated before successful evidence.
+
 This implementation currently has compile, unit, custody-doctest, strict
 Clippy, strict rustdoc, static-musl, ELF loader-independence, and live read-only
 probe evidence. The current `mi300x` SSH identity has effective UID `1002` and
-no mount capabilities, so no successful kernel mount is claimed yet. The live
-root harness, live timeout/signal recovery, and live execution of the implemented
-mount fault campaign remain required before this boundary is
-production-qualified.
+no mount capabilities, so no successful kernel mount or composed-root systemd
+preflight is claimed yet. The live root harness, live timeout/signal recovery,
+and live execution of the implemented mount fault campaign remain required
+before this boundary is production-qualified.
 
 ## Qualification
 
@@ -231,7 +249,7 @@ target bytes, and byte equality of every published file.
 The remaining production gate must execute the static harness and its complete
 fault campaign under real host root, then boot `fe2o3-qualification.target` in
 isolated PID, network, IPC, UTS, cgroup, and mount namespaces. It must then
-exercise
-sysusers/tmpfiles, socket activation, distinct service and client identities,
+exercise the implemented preflight against the live composed root, socket
+activation, distinct service and client identities,
 provisioning exclusion, successful compiler execution, restart and crash
 recovery, mount-crossing and hostile-parent cases, and complete cleanup.

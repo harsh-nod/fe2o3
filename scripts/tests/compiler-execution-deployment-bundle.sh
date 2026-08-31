@@ -56,6 +56,8 @@ grep -Fq -- 'manifest_sha256=%s' "${builder}" ||
 readonly verifier_builder="${repo_root}/scripts/build-static-compiler-execution-deployment-verifier.sh"
 readonly qualification_source="${repo_root}/crates/fe2o3-compiler-execution-deployment/src/bin/qualification.rs"
 readonly qualification_supervisor_source="${repo_root}/crates/fe2o3-compiler-execution-deployment/src/supervisor.rs"
+readonly qualification_preflight_source="${repo_root}/crates/fe2o3-compiler-execution-deployment/src/preflight.rs"
+readonly qualification_run_source="${repo_root}/crates/fe2o3-compiler-execution-deployment/src/run.rs"
 bash -n "${verifier_builder}"
 for binary in \
   fe2o3-compiler-execution-manifest \
@@ -84,6 +86,25 @@ for supervisor_contract in \
   grep -Fq -- "${supervisor_contract}" "${qualification_source}" ||
     fail "missing qualification supervisor contract ${supervisor_contract}"
 done
+for preflight_contract in \
+  '/proc/self/exe' \
+  '/usr/bin/systemd-sysusers' \
+  '/usr/bin/systemd-tmpfiles' \
+  '/usr/bin/systemd-analyze' \
+  run_compiler_execution_systemd_preflight_v1 \
+  'rustix::process::chroot' \
+  'Resource::Fsize' \
+  admit_systemd_version \
+  validate_account_databases \
+  validate_tmpfiles_projection; do
+  grep -Fq -- "${preflight_contract}" "${qualification_preflight_source}" ||
+    fail "missing composed-root preflight contract ${preflight_contract}"
+done
+grep -Fq -- 'run_compiler_execution_qualification_request_v1' "${qualification_run_source}" ||
+  fail 'unified qualification run path is missing'
+if grep -Fq -- 'run_compiler_execution_mount_qualification_request_v1' "${qualification_run_source}"; then
+  fail 'legacy mount-only qualification run path remains'
+fi
 grep -Fq -- '.process_group(0)' "${qualification_source}" ||
   fail 'qualification worker process-group isolation is missing'
 for process_tree_contract in \
