@@ -1345,6 +1345,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe2o3-loop-device"
+version = "0.1.0"
+dependencies = [
+ "rustix",
+ "tempfile",
+]
+
+[[package]]
 name = "fe2o3-lower-mir-kernel"
 version = "0.1.0"
 dependencies = [

@@ -98,6 +98,7 @@ readonly CPU_TEST_PACKAGES=(
   fe2o3-kir-sim
   fe2o3-kir-sim-cli
   fe2o3-kir-sim-trace
+  fe2o3-loop-device
   fe2o3-lower-mir-kernel
   fe2o3-macros
   fe2o3-mir-model

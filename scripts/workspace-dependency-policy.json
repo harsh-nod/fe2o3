@@ -28,6 +28,7 @@
         "fe2o3-kernel-descriptor",
         "fe2o3-kernel-ir",
         "fe2o3-llvm-handoff",
+        "fe2o3-loop-device",
         "fe2o3-mir-model",
         "fe2o3-process-identity",
         "fe2o3-proof-contracts",
