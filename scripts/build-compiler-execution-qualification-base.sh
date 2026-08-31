@@ -76,6 +76,7 @@ readonly package_roots=(
   mount
   passwd
   systemd
+  systemd-container
   systemd-sysv
   util-linux
 )
@@ -210,6 +211,26 @@ readonly base_info
 for package in "${packages[@]}"; do
   dpkg-deb --extract "${deb_paths[${package}]}" "${root}"
 done
+
+nspawn="${root}/usr/bin/systemd-nspawn"
+loader="${root}/lib64/ld-linux-x86-64.so.2"
+readonly nspawn loader
+[[ -f "${nspawn}" && ! -L "${nspawn}" && -x "${nspawn}" ]] ||
+  fail 'pinned systemd-nspawn executable is missing'
+[[ -L "${root}/lib64" && "$(readlink "${root}/lib64")" == usr/lib64 ]] ||
+  fail 'pinned dynamic-loader root link changed'
+[[ -L "${root}/usr/lib64/ld-linux-x86-64.so.2" ]] ||
+  fail 'pinned dynamic-loader link changed'
+[[ "$(readlink "${root}/usr/lib64/ld-linux-x86-64.so.2")" == \
+  ../lib/x86_64-linux-gnu/ld-linux-x86-64.so.2 ]] ||
+  fail 'pinned dynamic-loader link changed'
+nspawn_version="$(${loader} \
+  --library-path \
+  "${root}/usr/lib/x86_64-linux-gnu:${root}/usr/lib/x86_64-linux-gnu/systemd" \
+  "${nspawn}" --version | sed -n '1p')"
+readonly nspawn_version
+[[ "${nspawn_version}" == 'systemd 255 (255.4-1ubuntu8.17)' ]] ||
+  fail 'pinned systemd-nspawn version changed'
 
 install -d -m 0755 "${root}/etc" "${root}/etc/systemd/system" \
   "${root}/usr/share/fe2o3/qualification-base" \

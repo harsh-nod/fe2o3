@@ -59,9 +59,12 @@ Build the pinned minimal systemd base used to qualify that offline root:
 $ scripts/build-compiler-execution-qualification-base.sh /tmp/fe2o3-base
 ```
 
-The non-root builder admits exactly 71 package identities from the checked-in
+The non-root builder admits exactly 99 package identities from the checked-in
 version/architecture/SHA-256 lock and emits a deterministic SquashFS image plus
-matching `BASE-INFO` and `SHA256SUMS`. The deployment crate can freshly
+matching `BASE-INFO` and `SHA256SUMS`. The closure includes the exact
+`systemd-container` build used by the isolated boot harness; the builder
+executes its `systemd-nspawn` through the extracted loader and libraries before
+publication. The deployment crate can freshly
 revalidate the installed tree and seal an independently digest-pinned base
 image together with an empty root-owned qualification parent. It then creates
 one exact descriptor-retained empty staging tree for base/root mounts and

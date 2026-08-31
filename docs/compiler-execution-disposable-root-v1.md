@@ -35,7 +35,7 @@ base_image_sha256=<64 lowercase hexadecimal characters>
 base_image_bytes=<positive decimal length>
 git_commit=<40 lowercase hexadecimal characters>
 source_date_epoch=<commit timestamp>
-package_count=71
+package_count=99
 ```
 
 The mode-`0700` output has exactly three mode-`0444`, single-link files:

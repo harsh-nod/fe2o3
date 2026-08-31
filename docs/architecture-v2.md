@@ -242,7 +242,7 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   publishes the complete content-addressed root with one durable no-replace
   rename. Exact existing roots are revalidated and reacquired; conflicting
   roots are never replaced. The installed value retains its sealed evidence for
-  fresh revalidation. A deterministic 71-package Ubuntu 24.04 systemd base is
+  fresh revalidation. A deterministic 99-package Ubuntu 24.04 systemd-container base is
   independently digest-pinned, copied into a sealed memfd after two identical
   reads, checked for the exact SquashFS V4 profile, and retained with an empty
   root-owned qualification-parent descriptor. A root-only transaction then

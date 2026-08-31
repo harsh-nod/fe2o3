@@ -327,7 +327,7 @@ with one durable content-addressed no-replace rename. Its exhaustive fault
 campaign proves every pre-publication failure leaves no staging state and every
 post-publication failure leaves a complete reacquirable root. The installed
 value retains its sealed evidence for fresh revalidation. A deterministic
-71-package Ubuntu 24.04 systemd base builder and caller-pinned SquashFS admission
+99-package Ubuntu 24.04 systemd-container base builder and caller-pinned SquashFS admission
 now prepare that installed root, sealed base image, and empty root-owned parent
 as one move-only, authority-free qualification value. A root-only staging
 transaction descriptor-retains the exact empty base/root, upper/work,

@@ -68,7 +68,7 @@ if names != sorted(set(names)):
 required = {
     "base-files", "base-passwd", "bash", "coreutils", "dbus-broker",
     "init-system-helpers", "libnss-systemd", "mount", "passwd", "systemd",
-    "systemd-sysv", "util-linux",
+    "systemd-container", "systemd-sysv", "util-linux",
 }
 if not required.issubset(names):
     raise SystemExit("package lock omits a fixed root package")
@@ -87,6 +87,8 @@ for expected in \
   "[[ \"\$(dpkg --print-architecture)\" == amd64 ]]" \
   "== 4.6.1" \
   "[[ \"\${resolved_packages[*]}\" == \"\${packages[*]}\" ]]" \
+  'pinned systemd-nspawn executable is missing' \
+  'systemd 255 (255.4-1ubuntu8.17)' \
   "sha256sum \"\${deb}\"" \
   '-noappend -all-root -no-xattrs -no-progress -no-exports' \
   '-comp zstd -b 131072 -processors 1 -reproducible' \
@@ -146,7 +148,7 @@ verify_bundle() {
   grep -Fqx -- $'architecture\tamd64' "${info}" || fail 'base architecture changed'
   grep -Fqx -- $'mksquashfs_version\t4.6.1' "${info}" ||
     fail 'base SquashFS tool version changed'
-  grep -Fqx -- $'package_count\t71' "${info}" || fail 'base package count changed'
+  grep -Fqx -- $'package_count\t99' "${info}" || fail 'base package count changed'
   diff -u <(tail -n +6 "${package_lock}") <(tail -n +9 "${info}") >/dev/null ||
     fail 'embedded package identities differ from the package lock'
 
@@ -163,6 +165,8 @@ verify_bundle() {
   cmp -s "${qualification_target}" \
     <(unsquashfs -cat "${image}" usr/lib/systemd/system/fe2o3-qualification.target 2>/dev/null) ||
     fail 'embedded qualification target changed'
+  unsquashfs -cat "${image}" usr/bin/systemd-nspawn >/dev/null 2>&1 ||
+    fail 'pinned systemd-nspawn is missing from the image'
 }
 
 verify_bundle "$1"
