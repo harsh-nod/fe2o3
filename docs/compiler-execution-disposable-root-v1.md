@@ -2,9 +2,10 @@
 
 Status: deterministic base construction, caller-pinned SquashFS admission,
 sealed preparation custody, and the exact empty staging transaction are
-implemented. Private-namespace mount composition and descriptor-pinned isolated
-systemd boot are implemented but have not yet run under host root. The static
-probe, exact high-level qualification harness, closed 25-point transaction fault
+implemented. Private-namespace mount composition, descriptor-pinned isolated
+systemd boot, and the non-root production-client transaction are implemented
+but have not yet run under host root. The static probe, exact high-level
+qualification harness, closed 28-point transaction fault
 set, and aggregate campaign are implemented. Live root execution, distinct-UID
 service execution, and privileged lifecycle fault qualification remain open.
 
@@ -163,8 +164,8 @@ shipped generation-1 production provisioner, independent admission of its seven
 files, two seed-derived keys, four-record service graph, derived Cargo client
 profile, service identities, sealed
 runtime, and five executable measurements, descriptor-pinned
-`systemd-nspawn` boot, exact authenticated Unix `SOCK_SEQPACKET` connection
-admission, bounded graceful shutdown,
+`systemd-nspawn` boot, exact supervisor socket metadata admission, a real
+non-root production-client recover/cancel transaction, bounded graceful shutdown,
 post-boot provisioning and lower revalidation, explicit cleanup, and a canonical completion
 report. The three preflight tools execute from the
 admitted composed root through one inherited descriptor and a cleared
@@ -192,17 +193,18 @@ reaped, aggregate `cgroup.events` supplies the stronger boundary: any escaped
 session is killed through `cgroup.kill`, nested machine cgroups are removed
 deepest-first under fixed 64-level/4,096-entry bounds, and caller-visible
 evidence remains withheld until the retained scope itself is removed.
-`fault-points` lists the one closed transaction set. Its 25 ordered points cover
+`fault-points` lists the one closed transaction set. Its 28 ordered points cover
 the four mount-admission transitions, completion and revalidation of every
 systemd command, exact postcondition admission, final installed-lower
 revalidation, provisioning completion/revalidation/admission, machine spawn,
-exact listener connectivity, clean shutdown, post-boot lower
+exact listener metadata admission, client-transaction completion and
+revalidation, clean shutdown, post-boot lower
 revalidation, and all four cleanup transitions. `fault` interrupts one exact
 point and accepts success only after the root-owned qualification parent is
 empty and a fresh caller-pinned bundle/base reacquisition completely
 revalidates the installed lower. `campaign` starts from an empty install parent
-and requires one publication, 51 exact reacquisitions, two complete normal
-preflight/provision/boot runs, all 25 faults, stable identities, one exact installed-root
+and requires one publication, 57 exact reacquisitions, two complete normal
+preflight/provision/boot runs, all 28 faults, stable identities, one exact installed-root
 child, and complete staging cleanup. Normal, fault, and campaign execution all
 use the same internal qualification transaction. These commands grant no
 persistent service or compiler-execution authority.
@@ -241,10 +243,13 @@ qualification. The standalone recovery commands do not terminate workers and
 must not be used concurrently with a supervised command.
 
 The preflight and provisioning admission retain the deterministic V1 users and groups
-`fe2o3-compiler:999:999` and `fe2o3-anchor:998:998`, exact account database
+`fe2o3-compiler:999:999`, `fe2o3-anchor:998:998`, and the qualification-only
+client `fe2o3-qualification-client:997:997`, exact account database
 bytes, all tmpfiles-owned directories and modes, the root-owned lifecycle file,
 and all three deployment/qualification units. Provisioning must complete before
-socket activation because connecting to the listener starts the coordinator.
+the direct coordinator service starts. Root binds the fixed socket, the
+distinct-UID supervisor calls `listen(2)`, and systemd readiness follows the
+supervisor bootstrap barrier; no socket-activation unit remains.
 The writable overlay may change,
 but the installed deployment lower remains independently retained and
 completely revalidated before successful evidence.

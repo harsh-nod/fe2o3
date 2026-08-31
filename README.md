@@ -233,8 +233,9 @@ requires independent profile and namespace validation, canonical PID/deployment
 readiness, bootstrap EOF, pidfd liveness, and supervisor-before-anchor teardown.
 One static root entrypoint consumes the fixed 14-descriptor systemd activation
 contract, clears the environment, continuously revalidates both children, and
-performs supervisor-before-anchor shutdown. The checked-in socket, service,
-sysusers, and tmpfiles definitions pin the listener and account policy.
+performs supervisor-before-anchor shutdown. The checked-in service, sysusers,
+and tmpfiles definitions pin the listener and account policy. Root binds the
+fixed socket without listening; only the distinct-UID supervisor activates it.
 Authoritative root-only distinct-UID qualification and the refinement evidence
 join remain open, so the result remains authority-free.
 The issuer's direct transition
@@ -337,14 +338,15 @@ Atomic read-only loop attachment plus detached SquashFS/OverlayFS composition
 is implemented and rechecks the installed projection against sealed custody,
 but has not run under host root. A static qualification harness and read-only
 host probe now drive the sole verify-to-cleanup transaction. Its closed
-25-point fault set covers mount admission, every pinned systemd command and
+28-point fault set covers mount admission, every pinned systemd command and
 subsequent lower revalidation, exact preflight postconditions, production
 generation-1 provisioning with independent record/key/image admission, isolated machine
-spawn, exact authenticated Unix `SOCK_SEQPACKET` connection admission, bounded shutdown, post-boot lower
+spawn, exact socket metadata admission, a real non-root recover/cancel client
+transaction, bounded shutdown, post-boot lower
 and provisioning revalidation, both unmounts, loop release, and staging removal. Normal, fault, and campaign runs share that
 transaction, and each admitted fault freshly revalidates the bundle, base, and
 complete installed lower after cleanup. One aggregate campaign requires first
-publication, 51 reacquisitions, two normal runs, all 25 faults, and complete
+publication, 57 reacquisitions, two normal runs, all 28 faults, and complete
 parent cleanup. Its root paths remain unexecuted
 because the available SSH identity is not root.
 The descriptor-pinned provision/boot path and supervisor-owned cgroup V2 containment are

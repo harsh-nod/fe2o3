@@ -275,7 +275,7 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   lease-identified writable cgroup V2 child, crash-recovers only that exact
   scope, attaches and verifies the exact worker, then
   uses aggregate `cgroup.events`, recursive `cgroup.kill`, and bounded
-  deepest-first nested-cgroup removal before publishing output. One 25-point transaction fault contract covers mount
+  deepest-first nested-cgroup removal before publishing output. One 28-point transaction fault contract covers mount
   admission, every systemd command completion and subsequent lower-root
   revalidation, exact postcondition admission, final lower revalidation,
   provisioning completion/revalidation/admission,

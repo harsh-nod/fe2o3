@@ -60,9 +60,11 @@ protected child remains alive.
 
 `fe2o3-compiler-execution-coordinator` is the sole root process entrypoint. It
 accepts no arguments, requires exact systemd activation metadata for the dense
-descriptor table, clears its environment, and synchronously handles termination
-while revalidating service continuity. `deployment/` defines the matching
-socket, service, account, and directory policy. The release build gate emits a
+descriptor table, clears its environment, binds the fixed Unix socket without
+calling `listen(2)`, and synchronously handles termination while revalidating
+service continuity. The bound descriptor is transferred to the protected
+supervisor, whose distinct UID activates it. `deployment/` defines the matching
+service, account, and directory policy; no socket unit exists. The release build gate emits a
 static `ET_EXEC` image with no interpreter, dynamic section, runtime dependency,
 RPATH, RUNPATH, undefined symbol, or executable stack.
 

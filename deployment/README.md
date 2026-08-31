@@ -6,11 +6,11 @@ protected supervisor, and local reference external anchor. They require systemd
 
 Install the files under their matching system directories:
 
-- `systemd/*.service` and `systemd/*.socket` under the system unit directory;
+- `systemd/*.service` under the system unit directory;
 - `sysusers.d/*.conf` under the system sysusers directory; and
 - `tmpfiles.d/*.conf` under the system tmpfiles directory.
 
-Run `systemd-sysusers` and `systemd-tmpfiles --create`, then install all seven
+Run `systemd-sysusers` and `systemd-tmpfiles --create`, then install all eight
 qualified static executables as root-owned, root-group, single-link mode `0555` files
 at the paths named by the service unit. None may carry a file capability or
 POSIX ACL. Build and install the root provisioning command with
@@ -24,7 +24,7 @@ checkout:
 $ scripts/build-static-compiler-execution-deployment.sh /tmp/fe2o3-deployment
 ```
 
-The bundle contains all seven executables under `usr/libexec/fe2o3`, the exact
+The bundle contains all eight executables under `usr/libexec/fe2o3`, the exact
 systemd, sysusers, and tmpfiles inputs, `BUILD-INFO`, a strict `SHA256SUMS`, and
 `INSTALL-MANIFEST-V1`. The builder prints `bundle_path`, `manifest_sha256`, and
 `git_commit`; the latter two are independent admission pins and must be
@@ -69,19 +69,20 @@ revalidate the installed tree and seal an independently digest-pinned base
 image together with an empty root-owned qualification parent. It then creates
 one exact descriptor-retained empty staging tree for base/root mounts and
 disposable upper/work/run/state/evidence. Mount attachment, root composition,
-composed-root systemd preflight, generation-1 provisioning, and isolated systemd
-boot are implemented; real client/service execution remains a qualification gate. The transaction uses atomic loop
+composed-root systemd preflight, generation-1 provisioning, isolated systemd
+boot, and the exact non-root production client recover/cancel transaction are
+implemented. Privileged execution of that complete transaction remains a
+qualification gate. The transaction uses atomic loop
 configuration and upstream Linux detached-mount APIs, but the current
 unprivileged `mi300x` session cannot execute its root-only integration path. The fully static
 `fe2o3-compiler-execution-qualification` image provides a read-only host probe
 and the single exact qualification transaction for a privileged runner. Its
-aggregate campaign requires one publication, 51 reacquisitions, two normal
-runs, all 25 fixed mount/preflight/provision/boot/cleanup faults, post-fault bundle/base/lower
+aggregate campaign requires one publication, 57 reacquisitions, two normal
+runs, all 28 fixed mount/preflight/provision/boot/cleanup faults, post-fault bundle/base/lower
 revalidation, and an empty qualification parent. See
 [disposable-root V1](../docs/compiler-execution-disposable-root-v1.md).
 
-With both the service and socket stopped, provision one nonzero policy
-generation:
+With the service stopped, provision one nonzero policy generation:
 
 ```console
 # /usr/libexec/fe2o3/fe2o3-compiler-execution-provision 1
@@ -114,16 +115,18 @@ and are never replaced. Lifecycle parent and lock-file replacement also fail
 closed. Seeds use mode `0400`; all five public records use mode `0444`. A partial first
 publication can be resumed with the same command and inputs.
 
-Add only authorized Cargo users to the `fe2o3-compiler` group. Enabling
-`fe2o3-compiler-execution.socket` starts the coordinator on first connection.
-The coordinator independently validates the complete activation environment,
-all 14 descriptors, every record relationship, both service identities, and
-all filesystem policy before either child is released.
+Add only authorized Cargo users to the `fe2o3-compiler` group, then start
+`fe2o3-compiler-execution.service`. Systemd passes the root-owned runtime
+directory and the other 13 exact inputs as named `OpenFile=` descriptors. The
+coordinator validates all 14 descriptors, binds but does not listen on the
+fixed socket, and transfers it to the protected supervisor. Only the
+`fe2o3-compiler` UID invokes `listen(2)`, preserving the supervisor identity
+observed by production clients through `SO_PEERCRED`. `Type=notify` readiness is
+published only after the supervisor bootstrap barrier. No socket-activation
+unit or alternate root listener exists.
 
 `StartLimitIntervalSec=0` keeps lifecycle-contention retries from exhausting
-systemd start limits, while `FlushPending=no` retains queued socket traffic.
-Readiness is still `Type=simple`; notification after a true worker-start barrier
-and installed privileged crash qualification remain pending.
+systemd start limits. Installed privileged crash qualification remains pending.
 
 The bundled same-host external anchor remains qualification-only and carries no
 production rollback authority. Production deployment still requires an

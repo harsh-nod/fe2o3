@@ -95,10 +95,12 @@ custody.
 
 `ProtectedIssuerServiceV1` consumes that supervisor together with the sole
 production listener at
-`/run/fe2o3/compiler-execution-supervisor.sock`. Admission requires an exact
-nonblocking close-on-exec listening Unix `SOCK_SEQPACKET`, no connected peer,
-no pending socket error, and stable descriptor plus filesystem-socket
-identities. The retained pathname policy additionally requires a root-owned
+`/run/fe2o3/compiler-execution-supervisor.sock`. Root provisioning admits an
+exact bound, non-listening, nonblocking close-on-exec Unix `SOCK_SEQPACKET` with
+no connected peer or pending socket error. Service binding performs the sole
+`listen(2)` call after the supervisor has entered its protected identity, then
+revalidates the stable descriptor and filesystem-socket identities. The
+retained pathname policy additionally requires a root-owned
 mode-`0755` `/run/fe2o3` without POSIX ACLs or file capabilities and a
 root-owned, deployment-service-GID, mode-`0660` socket with the same metadata
 exclusions. Each accept operation waits under one absolute bound and uses
@@ -127,10 +129,11 @@ also provision the supervisor with the already connected external-anchor peer
 and matching live pidfd; neither Cargo nor rustc can select or replace them.
 The descriptor-only deployed entrypoint is implemented and accepts no arguments
 or environment. It consumes the canonical deployment manifest at FD 220 plus
-fixed inherited listener, root, launcher, issuer, policy, root-owned signing-key
+fixed inherited bound socket, root, launcher, issuer, policy, root-owned signing-key
 template, external-anchor descriptors, and an independent shared lifecycle
 lease at FD 12; validates the complete locked service
-profile; reissues the exact policy-bound key template into a fresh anonymous
+profile; invokes `listen(2)` only after entering the protected supervisor UID,
+reissues the exact policy-bound key template into a fresh anonymous
 service-owned sealed image only after the deployment UID/GID and policy agree;
 requires that manifest to pin the exact protected-supervisor executable as a
 role distinct from the issuer pre-exec launcher; and enters only the existing
