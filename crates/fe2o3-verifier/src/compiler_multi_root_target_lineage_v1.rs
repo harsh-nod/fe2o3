@@ -1,43 +1,35 @@
-//! Independent validation of singleton target-side compiler lineage.
+//! Independent validation of multi-root target-side compiler lineage.
 
-use std::{error::Error, fmt};
-
-use fe2o3_amd_target::{
-    PRODUCTION_AMDHSA_LLVM22_WORKER_DATA_LAYOUT_V1, PRODUCTION_AMDHSA_RUSTC_DATA_LAYOUT_V1,
-};
 use fe2o3_compiler_lineage::{
-    DataLayoutTranscriptV3, InertProductionSemanticCapsuleV3, ProductionTargetLineageErrorV3,
-    SemanticToLlvmAssociationTranscriptV3, TargetBindingTranscriptV3, TargetLineageIdentityV3,
+    DataLayoutTranscriptV3, InertProductionSemanticCapsuleV3, MultiRootTargetBindingTranscriptV2,
+    SemanticToLlvmAssociationTranscriptV3, TargetLineageIdentityV3,
     derive_semantic_target_layout_identity_v1,
 };
-use fe2o3_kernel_ir::{
-    ProductionSemanticDebugFragmentErrorV1, ProductionSemanticDebugReceiptExtensionV1,
-};
-use fe2o3_rustc_invocation::{ValidationError, encode_descriptor_v3};
+use fe2o3_rustc_invocation::encode_descriptor_v3;
 
+use crate::compiler_target_lineage_v1::{receipt_identity, require_identity_match};
 use crate::{
-    CompilerKirToLlvmReplayValidationErrorV1, ValidatedCompilerKirToLlvmReplayV1,
-    ValidatedCompilerProofInputsV4, validate_compiler_kir_to_llvm_replay_v1,
+    CompilerTargetLineageValidationErrorV1, ValidatedCompilerKirToLlvmReplayV1,
+    ValidatedCompilerMultiRootProofInputsV1, validate_compiler_kir_to_llvm_replay_v1,
 };
 
-/// Move-only ownership of independently decoded target lineage and exact KIR-to-LLVM replay.
+/// Move-only ownership of independently decoded multi-root target lineage and exact LLVM replay.
 ///
-/// The owner establishes exact content association and deterministic replay through the
+/// This owner establishes exact content association and deterministic replay through the
 /// pre-descriptor LLVM module. It does not prove semantic refinement, LLVM-to-machine refinement,
 /// producer authenticity, publication authority, or runtime safety.
 ///
 /// ```compile_fail
-/// use fe2o3_verifier::ValidatedCompilerTargetLineageV1;
+/// use fe2o3_verifier::ValidatedCompilerMultiRootTargetLineageV1;
 /// fn requires_clone<T: Clone>() {}
-/// requires_clone::<ValidatedCompilerTargetLineageV1>();
+/// requires_clone::<ValidatedCompilerMultiRootTargetLineageV1>();
 /// ```
 #[derive(Debug)]
-#[must_use = "dropping validated target lineage abandons exact target-side compiler custody"]
-pub struct ValidatedCompilerTargetLineageV1 {
-    target_binding: TargetBindingTranscriptV3,
+#[must_use = "dropping validated multi-root target lineage abandons exact target-side custody"]
+pub struct ValidatedCompilerMultiRootTargetLineageV1 {
+    target_binding: MultiRootTargetBindingTranscriptV2,
     data_layout: DataLayoutTranscriptV3,
     semantic_to_llvm: SemanticToLlvmAssociationTranscriptV3,
-    semantic_to_llvm_association_bytes: Box<[u8]>,
     replay: ValidatedCompilerKirToLlvmReplayV1,
     target_binding_receipt: TargetLineageIdentityV3,
     data_layout_receipt: TargetLineageIdentityV3,
@@ -46,9 +38,9 @@ pub struct ValidatedCompilerTargetLineageV1 {
     final_compiler_module_commitment: TargetLineageIdentityV3,
 }
 
-impl ValidatedCompilerTargetLineageV1 {
-    /// Returns the strictly decoded singleton target-binding transcript.
-    pub const fn target_binding(&self) -> &TargetBindingTranscriptV3 {
+impl ValidatedCompilerMultiRootTargetLineageV1 {
+    /// Returns the strictly decoded multi-root target-binding transcript.
+    pub const fn target_binding(&self) -> &MultiRootTargetBindingTranscriptV2 {
         &self.target_binding
     }
 
@@ -60,11 +52,6 @@ impl ValidatedCompilerTargetLineageV1 {
     /// Returns the strictly decoded semantic-to-LLVM association transcript.
     pub const fn semantic_to_llvm(&self) -> &SemanticToLlvmAssociationTranscriptV3 {
         &self.semantic_to_llvm
-    }
-
-    /// Returns the exact inner V3 association bytes, excluding any optional debug extension.
-    pub fn semantic_to_llvm_association_bytes(&self) -> &[u8] {
-        &self.semantic_to_llvm_association_bytes
     }
 
     /// Returns the independently replayed exact KIR-to-LLVM owner.
@@ -87,17 +74,17 @@ impl ValidatedCompilerTargetLineageV1 {
         self.semantic_to_llvm_receipt
     }
 
-    /// Returns the exact final LLVM content coordinates associated by the compiler capsule.
+    /// Returns the exact final LLVM content coordinates associated by the capsule.
     pub const fn final_llvm_identity(&self) -> TargetLineageIdentityV3 {
         self.final_llvm
     }
 
-    /// Returns the exact final-module commitment receipt coordinates in the association.
+    /// Returns the final-module commitment receipt coordinates in the association.
     pub const fn final_compiler_module_commitment_identity(&self) -> TargetLineageIdentityV3 {
         self.final_compiler_module_commitment
     }
 
-    /// Reports that every target-side receipt coordinate was checked against the exact capsule.
+    /// Reports that every target-side receipt and per-root workgroup was cross-bound.
     pub const fn has_exact_receipt_association(&self) -> bool {
         true
     }
@@ -107,7 +94,7 @@ impl ValidatedCompilerTargetLineageV1 {
         self.replay.has_exact_target_binding_replay() && self.replay.has_exact_kir_to_llvm_replay()
     }
 
-    /// Reports that association and deterministic replay are not a semantic-refinement proof.
+    /// Reports that association and replay are not a semantic-refinement proof.
     pub const fn establishes_semantic_refinement(&self) -> bool {
         false
     }
@@ -128,14 +115,11 @@ impl ValidatedCompilerTargetLineageV1 {
     }
 }
 
-/// Independently decodes and cross-checks one singleton capsule's complete target-side lineage.
-///
-/// `proof_inputs` supplies the independently decoded semantic-MIR owner used to rederive the exact
-/// semantic target-layout identity. The returned owner remains non-authoritative.
-pub fn validate_compiler_target_lineage_v1(
+/// Independently decodes and cross-checks one multi-root capsule's complete target-side lineage.
+pub fn validate_compiler_multi_root_target_lineage_v1(
     capsule: &InertProductionSemanticCapsuleV3,
-    proof_inputs: &ValidatedCompilerProofInputsV4,
-) -> Result<ValidatedCompilerTargetLineageV1, CompilerTargetLineageValidationErrorV1> {
+    proof_inputs: &ValidatedCompilerMultiRootProofInputsV1,
+) -> Result<ValidatedCompilerMultiRootTargetLineageV1, CompilerTargetLineageValidationErrorV1> {
     let receipts = capsule.receipts();
     if proof_inputs.receipt_identity() != receipts.proof_binding().identity()
         || proof_inputs.semantic_mir().canonical_encoding()
@@ -146,28 +130,14 @@ pub fn validate_compiler_target_lineage_v1(
     }
 
     let target_binding =
-        TargetBindingTranscriptV3::decode(receipts.target_binding().canonical_preimage())
+        MultiRootTargetBindingTranscriptV2::decode(receipts.target_binding().canonical_preimage())
             .map_err(CompilerTargetLineageValidationErrorV1::TargetLineage)?;
     let data_layout = DataLayoutTranscriptV3::decode(receipts.data_layout().canonical_preimage())
         .map_err(CompilerTargetLineageValidationErrorV1::TargetLineage)?;
-    let semantic_to_llvm_preimage = receipts.semantic_to_llvm().canonical_preimage();
-    let (semantic_to_llvm, semantic_to_llvm_association_bytes) =
-        match SemanticToLlvmAssociationTranscriptV3::decode(semantic_to_llvm_preimage) {
-            Ok(association) => (
-                association,
-                semantic_to_llvm_preimage.to_vec().into_boxed_slice(),
-            ),
-            Err(_) => {
-                let extension = ProductionSemanticDebugReceiptExtensionV1::from_canonical_bytes(
-                    semantic_to_llvm_preimage,
-                )
-                .map_err(CompilerTargetLineageValidationErrorV1::SemanticDebugExtension)?;
-                let association_bytes = extension.association_v3().to_vec().into_boxed_slice();
-                let association = SemanticToLlvmAssociationTranscriptV3::decode(&association_bytes)
-                    .map_err(CompilerTargetLineageValidationErrorV1::TargetLineage)?;
-                (association, association_bytes)
-            }
-        };
+    let semantic_to_llvm = SemanticToLlvmAssociationTranscriptV3::decode(
+        receipts.semantic_to_llvm().canonical_preimage(),
+    )
+    .map_err(CompilerTargetLineageValidationErrorV1::TargetLineage)?;
     let replay =
         validate_compiler_kir_to_llvm_replay_v1(receipts.kernel_ir(), receipts.amdgpu_lowering())
             .map_err(CompilerTargetLineageValidationErrorV1::Replay)?;
@@ -181,9 +151,6 @@ pub fn validate_compiler_target_lineage_v1(
     )
     .map_err(CompilerTargetLineageValidationErrorV1::TargetLineage)?;
 
-    let target_inputs = target_binding
-        .inputs()
-        .map_err(CompilerTargetLineageValidationErrorV1::TargetLineage)?;
     let data_layout_inputs = data_layout
         .inputs()
         .map_err(CompilerTargetLineageValidationErrorV1::TargetLineage)?;
@@ -222,36 +189,78 @@ pub fn validate_compiler_target_lineage_v1(
     let configured_target = capsule.target().to_string();
     for (matches, field) in [
         (
-            target_inputs.protected_rustc_invocation == protected_invocation,
+            target_binding.protected_rustc_invocation() == protected_invocation,
             "protected rustc invocation",
         ),
-        (target_inputs.semantic_mir == semantic_mir, "semantic MIR"),
         (
-            target_inputs.target_neutral_kir == neutral_kir,
+            target_binding.semantic_mir() == semantic_mir,
+            "semantic MIR",
+        ),
+        (
+            target_binding.target_neutral_kir() == neutral_kir,
             "target-neutral Kernel IR",
         ),
         (
-            target_inputs.target_bound_kir == target_kir,
+            target_binding.target_bound_kir() == target_kir,
             "target-bound Kernel IR",
         ),
         (
-            target_inputs.configured_target == configured_target,
+            target_binding.configured_target() == configured_target,
             "configured target",
         ),
         (
             replay_evidence.profile().device_target() == configured_target,
             "replayed target profile",
         ),
+        (
+            target_binding.roster_identity() == proof_inputs.middle_end_roster().roster_identity(),
+            "compiler roster",
+        ),
+        (
+            target_binding.root_count() == proof_inputs.roots().len(),
+            "target root count",
+        ),
     ] {
         require_identity_match(matches, field)?;
     }
+    let target_bound_module = replay.replay().target_bound_module();
+    require_identity_match(
+        target_bound_module.kernels.len() == proof_inputs.roots().len(),
+        "replayed target-bound root count",
+    )?;
+    for (index, root) in proof_inputs.roots().iter().enumerate() {
+        let target = target_binding.workgroup(index).ok_or(
+            CompilerTargetLineageValidationErrorV1::IdentityMismatch {
+                field: "target workgroup root",
+            },
+        )?;
+        let kernel = target_bound_module.kernels.get(index).ok_or(
+            CompilerTargetLineageValidationErrorV1::IdentityMismatch {
+                field: "replayed target-bound root",
+            },
+        )?;
+        let workgroup = kernel.workgroup_size.ok_or(
+            CompilerTargetLineageValidationErrorV1::IdentityMismatch {
+                field: "replayed target-bound workgroup",
+            },
+        )?;
+        require_identity_match(
+            target.kernel() == root.kernel_id()
+                && target.workgroup() == root.workgroup()
+                && kernel.id.as_str() == root.kernel_id()
+                && kernel.entry.as_str() == root.kernel_id()
+                && kernel.domain.rank() == root.source_rank()
+                && [workgroup.x, workgroup.y, workgroup.z] == target.workgroup(),
+            "per-root target workgroup",
+        )?;
+    }
 
     let semantic_layout = derive_semantic_target_layout_identity_v1(
-        target_inputs.rustc_llvm_target,
+        target_binding.rustc_llvm_target(),
         data_layout_inputs.live_rustc_data_layout,
         data_layout_inputs.default_pointer_width_bits,
-        target_inputs.target_cpu,
-        target_inputs.target_features,
+        target_binding.target_cpu(),
+        target_binding.target_features(),
     )
     .map_err(CompilerTargetLineageValidationErrorV1::TargetLineage)?;
     for (matches, field) in [
@@ -266,15 +275,6 @@ pub fn validate_compiler_target_lineage_v1(
         (
             data_layout_inputs.semantic_layout == semantic_layout,
             "semantic target layout",
-        ),
-        (
-            data_layout_inputs.live_rustc_data_layout == PRODUCTION_AMDHSA_RUSTC_DATA_LAYOUT_V1,
-            "live rustc data layout",
-        ),
-        (
-            data_layout_inputs.final_llvm_data_layout
-                == PRODUCTION_AMDHSA_LLVM22_WORKER_DATA_LAYOUT_V1,
-            "final LLVM Worker data layout",
         ),
         (
             proof_inputs
@@ -387,11 +387,10 @@ pub fn validate_compiler_target_lineage_v1(
         require_identity_match(actual == associated, field)?;
     }
 
-    Ok(ValidatedCompilerTargetLineageV1 {
+    Ok(ValidatedCompilerMultiRootTargetLineageV1 {
         target_binding,
         data_layout,
         semantic_to_llvm,
-        semantic_to_llvm_association_bytes,
         replay,
         target_binding_receipt,
         data_layout_receipt,
@@ -399,87 +398,4 @@ pub fn validate_compiler_target_lineage_v1(
         final_llvm: association_inputs.final_llvm,
         final_compiler_module_commitment: association_inputs.final_compiler_module_commitment,
     })
-}
-
-pub(crate) fn receipt_identity(
-    sha256: &[u8; 32],
-    byte_len: u64,
-) -> Result<TargetLineageIdentityV3, CompilerTargetLineageValidationErrorV1> {
-    TargetLineageIdentityV3::new(*sha256, byte_len)
-        .map_err(CompilerTargetLineageValidationErrorV1::TargetLineage)
-}
-
-pub(crate) fn require_identity_match(
-    matches: bool,
-    field: &'static str,
-) -> Result<(), CompilerTargetLineageValidationErrorV1> {
-    if matches {
-        Ok(())
-    } else {
-        Err(CompilerTargetLineageValidationErrorV1::IdentityMismatch { field })
-    }
-}
-
-/// Failure while independently reconstructing target-side compiler lineage.
-#[derive(Debug)]
-#[non_exhaustive]
-pub enum CompilerTargetLineageValidationErrorV1 {
-    /// A canonical target-lineage record failed strict construction or decoding.
-    TargetLineage(ProductionTargetLineageErrorV3),
-    /// The optional semantic-debug receipt extension was malformed.
-    SemanticDebugExtension(ProductionSemanticDebugFragmentErrorV1),
-    /// Exact target-bound KIR or pre-descriptor LLVM replay failed.
-    Replay(CompilerKirToLlvmReplayValidationErrorV1),
-    /// The retained rustc invocation could not be canonically re-encoded.
-    Invocation(ValidationError),
-    /// A host length could not be represented by the canonical wire coordinate.
-    LengthOverflow,
-    /// The independently decoded proof owner does not belong to this capsule.
-    ProofInputMismatch,
-    /// An association names content other than the exact independently retained input.
-    IdentityMismatch {
-        /// Human-readable association field.
-        field: &'static str,
-    },
-}
-
-impl fmt::Display for CompilerTargetLineageValidationErrorV1 {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::TargetLineage(error) => {
-                write!(formatter, "target-lineage decoding failed: {error}")
-            }
-            Self::SemanticDebugExtension(error) => {
-                write!(
-                    formatter,
-                    "semantic-debug receipt extension decoding failed: {error}"
-                )
-            }
-            Self::Replay(error) => write!(formatter, "target-lineage replay failed: {error}"),
-            Self::Invocation(error) => {
-                write!(
-                    formatter,
-                    "target-lineage invocation encoding failed: {error}"
-                )
-            }
-            Self::LengthOverflow => formatter.write_str("target-lineage length overflow"),
-            Self::ProofInputMismatch => formatter
-                .write_str("target-lineage proof owner does not match the exact compiler capsule"),
-            Self::IdentityMismatch { field } => {
-                write!(formatter, "target-lineage {field} identity mismatch")
-            }
-        }
-    }
-}
-
-impl Error for CompilerTargetLineageValidationErrorV1 {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::TargetLineage(error) => Some(error),
-            Self::SemanticDebugExtension(error) => Some(error),
-            Self::Replay(error) => Some(error),
-            Self::Invocation(error) => Some(error),
-            Self::LengthOverflow | Self::ProofInputMismatch | Self::IdentityMismatch { .. } => None,
-        }
-    }
 }

@@ -1238,7 +1238,10 @@ mod tests {
     use std::fs;
     use std::os::fd::AsFd;
     use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
+    use std::process::Command;
+    use std::sync::Barrier;
     use std::sync::atomic::{AtomicU64, Ordering};
+    use std::thread;
 
     use super::ManifestV2;
     use super::*;
@@ -1517,6 +1520,51 @@ mod tests {
             retained.revalidate().unwrap_err().kind(),
             RetainedFunctionalRefinementRuntimeErrorKindV1::ClosureChanged
         );
+    }
+
+    #[test]
+    fn repeated_parallel_setup_is_clean_and_post_lease_same_byte_writes_are_recorded() {
+        const REPETITIONS: usize = 64;
+
+        let start = Barrier::new(2);
+        thread::scope(|scope| {
+            scope.spawn(|| {
+                start.wait();
+                for _ in 0..REPETITIONS {
+                    let _process_guard = RUNTIME_CLOSURE_PROCESS_TEST_LOCK
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    let mut command = Command::new("/bin/true");
+                    assert!(
+                        crate::executor::status_artifact_coordinated_child(&mut command)
+                            .unwrap()
+                            .success()
+                    );
+                }
+            });
+
+            start.wait();
+            for _ in 0..REPETITIONS {
+                let tree = TestClosure::new();
+                let retained = tree.open().unwrap();
+                retained.journal.ensure_clean().unwrap();
+
+                let path = tree.root.join("lib/data");
+                fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+                fs::write(&path, b"vstd-data-v2").unwrap();
+                fs::set_permissions(&path, fs::Permissions::from_mode(0o444)).unwrap();
+                let error = retained.journal.ensure_clean().unwrap_err();
+                assert_eq!(
+                    error.kind(),
+                    RetainedFunctionalRefinementRuntimeErrorKindV1::ClosureChanged
+                );
+                assert!(
+                    error
+                        .to_string()
+                        .contains("runtime mutation journal recorded")
+                );
+            }
+        });
     }
 
     #[test]

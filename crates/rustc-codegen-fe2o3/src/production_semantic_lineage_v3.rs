@@ -46,8 +46,9 @@ use fe2o3_pliron::InertProductionMiddleEndEvidenceV5;
 use fe2o3_rustc_invocation::{InvocationDigestV3, encode_descriptor_v3};
 use fe2o3_verifier::{
     CanonicalProductionMirPlironVerusExecutionEvidenceV1, CompilerKirToLlvmReplayValidationErrorV1,
-    CompilerMultiRootProofValidationErrorV1, ProductionMirPlironVerusExecutionEvidenceErrorV1,
-    validate_compiler_multi_root_proof_inputs_v1,
+    CompilerMultiRootProofValidationErrorV1, CompilerTargetLineageValidationErrorV1,
+    ProductionMirPlironVerusExecutionEvidenceErrorV1, validate_compiler_multi_root_proof_inputs_v1,
+    validate_compiler_multi_root_target_lineage_v1,
 };
 use sha2::{Digest, Sha256};
 
@@ -1140,7 +1141,7 @@ impl PreparedProductionSemanticLineageV3 {
             proof_binding.identity().sha256(),
             proof_binding.identity().byte_len(),
         )?;
-        if matches!(
+        let independently_validated_multi_root = if matches!(
             &self.roster_custody,
             PreparedLineageRosterCustodyV1::MultiRoot { .. }
         ) {
@@ -1160,7 +1161,10 @@ impl PreparedProductionSemanticLineageV3 {
                     "independent multi-root proof owner broadened source-side authority",
                 ));
             }
-        }
+            Some(independently_validated)
+        } else {
+            None
+        };
 
         let rustc_cpu = self.rustc_layout.active_cpu().ok_or(
             ProductionSemanticLineageErrorV3::AxisMismatch(
@@ -1347,6 +1351,21 @@ impl PreparedProductionSemanticLineageV3 {
             final_compiler_module_commitment,
         );
         let capsule = InertProductionSemanticCapsuleV3::new(invocation, target, receipts)?;
+        if let Some(proof_inputs) = independently_validated_multi_root {
+            let independently_validated =
+                validate_compiler_multi_root_target_lineage_v1(&capsule, &proof_inputs)?;
+            if !independently_validated.has_exact_receipt_association()
+                || !independently_validated.has_exact_kir_to_llvm_replay()
+                || independently_validated.establishes_semantic_refinement()
+                || independently_validated.establishes_llvm_to_machine_refinement()
+                || independently_validated.authenticates_producer()
+                || independently_validated.grants_runtime_authority()
+            {
+                return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
+                    "independent multi-root target owner changed its exact non-authority contract",
+                ));
+            }
+        }
         InertSemanticCompilerModuleHandoffV3::new(capsule, module_handoff).map_err(Into::into)
     }
 }
@@ -1626,6 +1645,7 @@ pub(crate) enum ProductionSemanticLineageErrorV3 {
     KirToLlvmReplay(dialect_amdgcn::ProductionKirToLlvmReplayErrorV1),
     KirToLlvmReplayValidation(CompilerKirToLlvmReplayValidationErrorV1),
     MultiRootProofValidation(CompilerMultiRootProofValidationErrorV1),
+    MultiRootTargetLineageValidation(CompilerTargetLineageValidationErrorV1),
     Receipt(LineageErrorV3),
     ProofIdentity(InertProofBindingAssociationErrorV3),
     ProofBinding(InertProofBindingAssociationErrorV4),
@@ -1685,6 +1705,10 @@ impl fmt::Display for ProductionSemanticLineageErrorV3 {
             Self::MultiRootProofValidation(error) => write!(
                 formatter,
                 "production independent multi-root proof validation failed: {error}"
+            ),
+            Self::MultiRootTargetLineageValidation(error) => write!(
+                formatter,
+                "production independent multi-root target-lineage validation failed: {error}"
             ),
             Self::Receipt(error) => write!(formatter, "production V3 receipt failed: {error}"),
             Self::ProofIdentity(error) => {
@@ -1763,6 +1787,12 @@ impl From<CompilerKirToLlvmReplayValidationErrorV1> for ProductionSemanticLineag
 impl From<CompilerMultiRootProofValidationErrorV1> for ProductionSemanticLineageErrorV3 {
     fn from(error: CompilerMultiRootProofValidationErrorV1) -> Self {
         Self::MultiRootProofValidation(error)
+    }
+}
+
+impl From<CompilerTargetLineageValidationErrorV1> for ProductionSemanticLineageErrorV3 {
+    fn from(error: CompilerTargetLineageValidationErrorV1) -> Self {
+        Self::MultiRootTargetLineageValidation(error)
     }
 }
 
@@ -1947,6 +1977,7 @@ mod layout_tests {
         assert!(source.contains("MultiRootProofRosterTranscriptV2::new"));
         assert!(source.contains("MultiRootProofRosterTranscriptV2::decode"));
         assert!(source.contains("validate_compiler_multi_root_proof_inputs_v1"));
+        assert!(source.contains("validate_compiler_multi_root_target_lineage_v1"));
         assert!(source.contains("MultiRootTargetBindingTranscriptV2::new"));
         assert!(!source.contains(concat!("AmdgpuLoweringTranscript", "V3::new")));
         for suffix in ["MID2", "COR2", "FOR2", "VER2"] {
