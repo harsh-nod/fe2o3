@@ -87,6 +87,16 @@ impl InertCanonicalFormalMemoryObligationReceiptV1 {
         &self.canonical_bytes
     }
 
+    /// Returns the exact kernel identifier retained by this validated receipt.
+    pub fn kernel_id(&self) -> &str {
+        self.binding_names().0
+    }
+
+    /// Returns the exact entry-function identifier retained by this validated receipt.
+    pub fn entry_id(&self) -> &str {
+        self.binding_names().1
+    }
+
     pub const fn identity(&self) -> &InertFormalMemoryObligationReceiptIdentityV1 {
         &self.identity
     }
@@ -109,6 +119,20 @@ impl InertCanonicalFormalMemoryObligationReceiptV1 {
             canonical_bytes,
             identity,
         }
+    }
+
+    fn binding_names(&self) -> (&str, &str) {
+        let mut reader = Reader::new(&self.canonical_bytes);
+        reader
+            .fixed::<HEADER_BYTES>()
+            .expect("validated formal-memory receipt retains its complete header");
+        let kernel = reader
+            .text("kernel ID")
+            .expect("validated formal-memory receipt retains its kernel ID");
+        let entry = reader
+            .text("entry function ID")
+            .expect("validated formal-memory receipt retains its entry function ID");
+        (kernel, entry)
     }
 }
 
@@ -1473,6 +1497,8 @@ mod tests {
         let second = receipt(&fixture());
         assert_eq!(first.canonical_bytes(), second.canonical_bytes());
         assert_eq!(first.identity(), second.identity());
+        assert_eq!(first.kernel_id(), "kernel");
+        assert_eq!(first.entry_id(), "entry");
         first.revalidate().unwrap();
 
         let recovered = InertCanonicalFormalMemoryObligationReceiptV1::from_canonical_bytes(
@@ -1481,6 +1507,8 @@ mod tests {
         .unwrap();
         assert_eq!(recovered.canonical_bytes(), first.canonical_bytes());
         assert_eq!(recovered.identity(), first.identity());
+        assert_eq!(recovered.kernel_id(), "kernel");
+        assert_eq!(recovered.entry_id(), "entry");
     }
 
     #[test]
