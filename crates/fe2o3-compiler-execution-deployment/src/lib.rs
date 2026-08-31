@@ -30,8 +30,9 @@ pub use host::{
     CompilerExecutionQualificationHostProbeV1, probe_compiler_execution_qualification_host_v1,
 };
 pub use install::{
-    CompilerExecutionInstalledRootPublicationV1, InstalledCompilerExecutionDeploymentV1,
-    compiler_execution_install_root_name_v1, install_compiler_execution_deployment_v1,
+    CompilerExecutionInstallRecoveryV1, CompilerExecutionInstalledRootPublicationV1,
+    InstalledCompilerExecutionDeploymentV1, compiler_execution_install_root_name_v1,
+    install_compiler_execution_deployment_v1, recover_compiler_execution_install_parent_v1,
 };
 pub use mount::{
     MountedCompilerExecutionQualificationV1, PrivateQualificationMountNamespaceV1,

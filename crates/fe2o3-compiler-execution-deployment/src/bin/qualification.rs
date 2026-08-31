@@ -1,13 +1,14 @@
 use std::path::Path;
 
 use fe2o3_compiler_execution_deployment::{
-    CompilerExecutionMountQualificationRequestV1, CompilerExecutionQualificationRecoveryV1,
-    QualificationMountFaultPointV1, probe_compiler_execution_qualification_host_v1,
+    CompilerExecutionInstallRecoveryV1, CompilerExecutionMountQualificationRequestV1,
+    CompilerExecutionQualificationRecoveryV1, QualificationMountFaultPointV1,
+    probe_compiler_execution_qualification_host_v1, recover_compiler_execution_install_parent_v1,
     recover_compiler_execution_qualification_parent_v1, run_compiler_execution_mount_campaign_v1,
     run_compiler_execution_mount_fault_v1, run_compiler_execution_mount_qualification_request_v1,
 };
 
-const USAGE: &str = "usage: fe2o3-compiler-execution-qualification probe\n       fe2o3-compiler-execution-qualification fault-points\n       fe2o3-compiler-execution-qualification recover QUALIFICATION_PARENT\n       fe2o3-compiler-execution-qualification run BUNDLE_ROOT EXPECTED_MANIFEST_SHA256 EXPECTED_GIT_COMMIT INSTALL_PARENT BASE_IMAGE EXPECTED_BASE_IMAGE_SHA256 QUALIFICATION_PARENT\n       fe2o3-compiler-execution-qualification fault POINT BUNDLE_ROOT EXPECTED_MANIFEST_SHA256 EXPECTED_GIT_COMMIT INSTALL_PARENT BASE_IMAGE EXPECTED_BASE_IMAGE_SHA256 QUALIFICATION_PARENT\n       fe2o3-compiler-execution-qualification campaign BUNDLE_ROOT EXPECTED_MANIFEST_SHA256 EXPECTED_GIT_COMMIT EMPTY_INSTALL_PARENT BASE_IMAGE EXPECTED_BASE_IMAGE_SHA256 QUALIFICATION_PARENT";
+const USAGE: &str = "usage: fe2o3-compiler-execution-qualification probe\n       fe2o3-compiler-execution-qualification fault-points\n       fe2o3-compiler-execution-qualification recover QUALIFICATION_PARENT\n       fe2o3-compiler-execution-qualification recover-install EXPECTED_MANIFEST_SHA256 INSTALL_PARENT\n       fe2o3-compiler-execution-qualification run BUNDLE_ROOT EXPECTED_MANIFEST_SHA256 EXPECTED_GIT_COMMIT INSTALL_PARENT BASE_IMAGE EXPECTED_BASE_IMAGE_SHA256 QUALIFICATION_PARENT\n       fe2o3-compiler-execution-qualification fault POINT BUNDLE_ROOT EXPECTED_MANIFEST_SHA256 EXPECTED_GIT_COMMIT INSTALL_PARENT BASE_IMAGE EXPECTED_BASE_IMAGE_SHA256 QUALIFICATION_PARENT\n       fe2o3-compiler-execution-qualification campaign BUNDLE_ROOT EXPECTED_MANIFEST_SHA256 EXPECTED_GIT_COMMIT EMPTY_INSTALL_PARENT BASE_IMAGE EXPECTED_BASE_IMAGE_SHA256 QUALIFICATION_PARENT";
 
 fn main() {
     let arguments: Vec<_> = std::env::args_os().collect();
@@ -19,12 +20,35 @@ fn main() {
         "probe" if arguments.len() == 2 => run_probe(),
         "fault-points" if arguments.len() == 2 => print_fault_points(),
         "recover" if arguments.len() == 3 => run_recovery(&arguments),
+        "recover-install" if arguments.len() == 4 => run_install_recovery(&arguments),
         "run" if arguments.len() == 9 => run_qualification(&arguments),
         "fault" if arguments.len() == 10 => run_fault(&arguments),
         "campaign" if arguments.len() == 9 => run_campaign(&arguments),
         _ => {
             eprintln!("{USAGE}");
             std::process::exit(2);
+        }
+    }
+}
+
+fn run_install_recovery(arguments: &[std::ffi::OsString]) {
+    let Some(manifest_sha256) = arguments[2].to_str() else {
+        eprintln!("expected manifest SHA-256 must be UTF-8");
+        std::process::exit(2);
+    };
+    match recover_compiler_execution_install_parent_v1(Path::new(&arguments[3]), manifest_sha256) {
+        Ok(recovery) => {
+            let recovery = match recovery {
+                CompilerExecutionInstallRecoveryV1::AlreadyClean => "already-clean",
+                CompilerExecutionInstallRecoveryV1::Recovered => "recovered",
+            };
+            println!("recovery_schema=fe2o3-compiler-execution-install-recovery-v1");
+            println!("recovery={recovery}");
+            println!("cleanup=complete");
+        }
+        Err(error) => {
+            eprintln!("compiler-execution installer recovery failed: {error}");
+            std::process::exit(1);
         }
     }
 }

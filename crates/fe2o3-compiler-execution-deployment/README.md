@@ -33,5 +33,9 @@ prerequisite without mutation; its `run` command is the sole static
 verify/install/prepare/stage/mount/revalidate/cleanup path. `fault-points`,
 `fault`, and `campaign` expose one closed post-transition interruption set and
 accept success only after exact install/staging-parent inventories are proven.
-No privileged campaign has run yet. See the
+`recover` removes zero or one bounded canonical qualification transaction.
+`recover-install` separately admits an externally SHA-pinned final-root name,
+preserves that root, and removes at most one bounded canonical installer staging
+tree while rejecting every ambiguous sibling inventory. No privileged campaign
+has run yet. See the
 [disposable-root V1 contract](../../docs/compiler-execution-disposable-root-v1.md).

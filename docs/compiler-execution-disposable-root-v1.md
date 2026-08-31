@@ -147,7 +147,7 @@ custody. The move-only mounted value still grants no boot or execution
 authority. Cleanup unmounts overlay first, SquashFS second, releases the
 autoclear loop device, and then removes the exact staging tree.
 
-The fully static `fe2o3-compiler-execution-qualification` image exposes five
+The fully static `fe2o3-compiler-execution-qualification` image exposes seven
 commands. `probe` observes effective UID, task count, procfs, loop-control
 identity, filesystem support, new mount API recognition, isolation namespaces,
 cgroup V2, and fixed systemd tool paths without creating a namespace, mount, or
@@ -160,6 +160,19 @@ accepts success only after the root-owned qualification parent is empty.
 nine exact reacquisitions, two normal runs, all eight faults, stable identities,
 one exact installed-root child, and complete staging cleanup. These commands
 grant no boot or service authority.
+
+`recover` accepts only an empty qualification parent or one canonically named
+qualification transaction. `recover-install` additionally requires the
+out-of-band expected manifest SHA-256. It admits only that digest's deterministic
+final-root name plus at most one canonical installer transaction. It validates
+the final-root metadata without changing it, preflights the entire staging tree
+under fixed depth and entry bounds, removes only staging through retained
+descriptors without following symlinks or crossing mounts, syncs the parent, and
+revalidates both pathname identity and exact final inventory. Unknown siblings,
+multiple transactions, noncanonical digests, and substituted roots fail before
+deletion. These recovery commands are the cleanup primitives for a later
+timeout- and signal-aware process supervisor; they do not themselves terminate
+or supervise workers.
 
 This implementation currently has compile, unit, custody-doctest, strict
 Clippy, strict rustdoc, static-musl, ELF loader-independence, and live read-only

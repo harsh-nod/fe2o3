@@ -1,3 +1,4 @@
+use std::ffi::OsStr;
 use std::fmt;
 use std::fs::File;
 use std::io::Write as _;
@@ -10,13 +11,17 @@ use rustix::fs::{
 };
 use sha2::{Digest as _, Sha256};
 
+use super::staging::{
+    canonical_staging_recovery_name_v1, clear_bounded_staging_recovery_tree_v1,
+    open_recovery_directory, validate_staging_recovery_root_v1,
+};
 use super::{
     AdmittedSourceV1, DeploymentVerificationErrorKindV1, DeploymentVerificationErrorV1,
     ManifestEntryV1, ObjectSnapshotV1, SealedDeploymentFileV1,
     VerifiedCompilerExecutionDeploymentV1, admit_source_file, changed, io_error, lower_hex,
-    open_beneath, parse_manifest, random_staging_name, snapshot, std_io_error, validate_build_info,
-    validate_directory_mode, validate_sealed_file, validate_sealed_files, validate_sha256sums,
-    verify_directory_children,
+    open_beneath, parse_lower_hex_exact, parse_manifest, random_staging_name, snapshot,
+    std_io_error, validate_build_info, validate_directory_mode, validate_sealed_file,
+    validate_sealed_files, validate_sha256sums, verify_directory_children,
 };
 
 const INSTALL_PARENT_MODE_V1: u32 = 0o700;
@@ -179,6 +184,15 @@ pub enum CompilerExecutionInstalledRootPublicationV1 {
     Reacquired,
 }
 
+/// Outcome of recovering interrupted installer staging beneath one exact install parent.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CompilerExecutionInstallRecoveryV1 {
+    /// No interrupted installer staging was present.
+    AlreadyClean,
+    /// One canonical interrupted installer staging tree was removed.
+    Recovered,
+}
+
 /// Move-only, authority-free custody of one completely verified installed root.
 ///
 /// The retained root descriptor is private. This value grants no service, compiler, signing,
@@ -267,6 +281,207 @@ impl InstalledCompilerExecutionDeploymentV1 {
 /// Derives the sole V1 final-root name from an admitted manifest SHA-256.
 pub fn compiler_execution_install_root_name_v1(manifest_sha256: [u8; 32]) -> String {
     format!("{INSTALL_ROOT_PREFIX_V1}{}", lower_hex(&manifest_sha256))
+}
+
+/// Recovers installer staging left by a terminated root worker.
+///
+/// The process must have effective UID 0. `install_parent` must retain its root-owned mode-`0700`
+/// policy. The expected manifest digest admits the only final-root name that recovery will
+/// preserve. Recovery rejects all other siblings and multiple staging transactions before
+/// deleting anything, follows no symlink, crosses no mount, and bounds tree depth and entry count.
+pub fn recover_compiler_execution_install_parent_v1(
+    install_parent: &Path,
+    expected_manifest_sha256: &str,
+) -> Result<CompilerExecutionInstallRecoveryV1, DeploymentVerificationErrorV1> {
+    if rustix::process::geteuid().as_raw() != 0 {
+        return Err(super::invalid(
+            DeploymentVerificationErrorKindV1::InsufficientPrivilege,
+            "compiler-execution installer recovery requires effective UID 0",
+        ));
+    }
+    recover_install_parent_for_owner(install_parent, expected_manifest_sha256, (0, 0))
+}
+
+#[cfg(test)]
+fn recover_install_parent_for_test_v1(
+    install_parent: &Path,
+    expected_manifest_sha256: &str,
+    owner: (u32, u32),
+) -> Result<CompilerExecutionInstallRecoveryV1, DeploymentVerificationErrorV1> {
+    recover_install_parent_for_owner(install_parent, expected_manifest_sha256, owner)
+}
+
+fn recover_install_parent_for_owner(
+    install_parent: &Path,
+    expected_manifest_sha256: &str,
+    owner: (u32, u32),
+) -> Result<CompilerExecutionInstallRecoveryV1, DeploymentVerificationErrorV1> {
+    let manifest_sha256: [u8; 32] = parse_lower_hex_exact(
+        expected_manifest_sha256,
+        32,
+        "expected install-recovery manifest SHA-256",
+    )?
+    .try_into()
+    .expect("an exact 32-byte digest was parsed");
+    let expected_root_name = compiler_execution_install_root_name_v1(manifest_sha256);
+    let parent = open_install_parent(install_parent, owner)?;
+    let parent_snapshot = snapshot(
+        &fstat(&parent).map_err(|source| io_error("inspect install recovery parent", source))?,
+    );
+    let children = super::canonical_directory_children(&parent, "install recovery parent")?;
+
+    let mut final_root_present = false;
+    let mut staging_name = None;
+    for child in &children {
+        if child == OsStr::new(&expected_root_name) {
+            if final_root_present {
+                return Err(super::invalid(
+                    DeploymentVerificationErrorKindV1::InvalidInventory,
+                    "install recovery parent contains a duplicate expected final root",
+                ));
+            }
+            final_root_present = true;
+        } else if canonical_staging_recovery_name_v1(child, STAGING_PREFIX_V1) {
+            if staging_name.replace(child).is_some() {
+                return Err(super::invalid(
+                    DeploymentVerificationErrorKindV1::InvalidInventory,
+                    "install recovery parent contains multiple staging transactions",
+                ));
+            }
+        } else {
+            return Err(super::invalid(
+                DeploymentVerificationErrorKindV1::InvalidInventory,
+                "install recovery parent contains an unadmitted sibling",
+            ));
+        }
+    }
+
+    if final_root_present {
+        let final_root = open_named_root(&parent, &expected_root_name)?
+            .ok_or_else(|| changed("expected final root disappeared during installer recovery"))?;
+        let final_snapshot = validate_directory_mode(
+            &final_root,
+            Some(owner),
+            INSTALLED_DIRECTORY_MODE_V1,
+            "preserved installed root",
+        )?;
+        if final_snapshot.device != parent_snapshot.device {
+            return Err(super::invalid(
+                DeploymentVerificationErrorKindV1::InvalidMetadata,
+                "preserved installed root crosses a filesystem boundary",
+            ));
+        }
+    }
+
+    verify_install_parent_path(install_parent, &parent, owner)?;
+    let recovery = if let Some(staging_name) = staging_name {
+        let staging = open_recovery_directory(&parent, staging_name)?;
+        let staging_snapshot = validate_staging_recovery_root_v1(&staging, owner)?;
+        if staging_snapshot.device != parent_snapshot.device {
+            return Err(super::invalid(
+                DeploymentVerificationErrorKindV1::InvalidMetadata,
+                "install recovery staging root crosses a filesystem boundary",
+            ));
+        }
+        clear_bounded_staging_recovery_tree_v1(&staging, parent_snapshot.device)?;
+        drop(staging);
+        unlinkat(&parent, staging_name, AtFlags::REMOVEDIR)
+            .map_err(|source| io_error("remove recovered install staging root", source))?;
+        parent
+            .sync_all()
+            .map_err(|source| std_io_error("sync install parent after recovery", source))?;
+        CompilerExecutionInstallRecoveryV1::Recovered
+    } else {
+        CompilerExecutionInstallRecoveryV1::AlreadyClean
+    };
+
+    revalidate_recovered_install_parent(
+        install_parent,
+        &parent,
+        parent_snapshot,
+        owner,
+        final_root_present,
+        &expected_root_name,
+    )?;
+    Ok(recovery)
+}
+
+fn revalidate_recovered_install_parent(
+    path: &Path,
+    retained: &File,
+    expected: ObjectSnapshotV1,
+    owner: (u32, u32),
+    final_root_present: bool,
+    expected_root_name: &str,
+) -> Result<(), DeploymentVerificationErrorV1> {
+    let expected_children: &[&str] = if final_root_present {
+        &[expected_root_name]
+    } else {
+        &[]
+    };
+    let observed = super::canonical_directory_children(retained, "recovered install parent")?;
+    if observed.len() != expected_children.len()
+        || observed
+            .iter()
+            .zip(expected_children)
+            .any(|(observed, expected)| observed != OsStr::new(expected))
+    {
+        return Err(super::invalid(
+            DeploymentVerificationErrorKindV1::InvalidInventory,
+            "recovered install parent has an extra, missing, or substituted entry",
+        ));
+    }
+    let observed = snapshot(
+        &fstat(retained).map_err(|source| io_error("reinspect retained install parent", source))?,
+    );
+    let reopened = open_install_parent(path, owner)?;
+    let reopened_children =
+        super::canonical_directory_children(&reopened, "canonical recovered install parent")?;
+    if reopened_children.len() != expected_children.len()
+        || reopened_children
+            .iter()
+            .zip(expected_children)
+            .any(|(observed, expected)| observed != OsStr::new(expected))
+    {
+        return Err(super::invalid(
+            DeploymentVerificationErrorKindV1::InvalidInventory,
+            "canonical recovered install parent has an extra, missing, or substituted entry",
+        ));
+    }
+    let reopened = snapshot(
+        &fstat(&reopened)
+            .map_err(|source| io_error("reinspect canonical install parent", source))?,
+    );
+    if (
+        observed.device,
+        observed.inode,
+        observed.mode,
+        observed.uid,
+        observed.gid,
+    ) != (
+        expected.device,
+        expected.inode,
+        expected.mode,
+        expected.uid,
+        expected.gid,
+    ) || (
+        reopened.device,
+        reopened.inode,
+        reopened.mode,
+        reopened.uid,
+        reopened.gid,
+    ) != (
+        expected.device,
+        expected.inode,
+        expected.mode,
+        expected.uid,
+        expected.gid,
+    ) {
+        return Err(changed(
+            "install-parent identity changed during installer recovery",
+        ));
+    }
+    Ok(())
 }
 
 /// Installs one verified deployment into a root-owned offline-root parent.
@@ -1129,4 +1344,130 @@ fn copy_exact_source(
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod recovery_tests {
+    use std::ffi::OsString;
+    use std::fs;
+    use std::os::unix::ffi::OsStringExt as _;
+    use std::os::unix::fs::{PermissionsExt as _, symlink};
+    use std::path::{Path, PathBuf};
+
+    use super::*;
+
+    const MANIFEST_A: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    const MANIFEST_B: &str = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";
+    const STAGING_A: &str = ".compiler-execution-v1-staging-0123456789abcdef0123456789abcdef";
+    const STAGING_B: &str = ".compiler-execution-v1-staging-fedcba9876543210fedcba9876543210";
+
+    fn owner() -> (u32, u32) {
+        (
+            rustix::process::geteuid().as_raw(),
+            rustix::process::getegid().as_raw(),
+        )
+    }
+
+    fn install_parent() -> (tempfile::TempDir, PathBuf) {
+        let temporary = tempfile::tempdir().unwrap();
+        let parent = temporary.path().join("install");
+        fs::create_dir(&parent).unwrap();
+        fs::set_permissions(&parent, fs::Permissions::from_mode(0o700)).unwrap();
+        (temporary, parent)
+    }
+
+    fn staging_root(parent: &Path, name: &str) -> PathBuf {
+        let root = parent.join(name);
+        fs::create_dir(&root).unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+        root
+    }
+
+    fn final_root(parent: &Path, manifest: &str) -> PathBuf {
+        let root = parent.join(format!("{INSTALL_ROOT_PREFIX_V1}{manifest}"));
+        fs::create_dir(&root).unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o755)).unwrap();
+        root
+    }
+
+    #[test]
+    fn recovery_removes_nested_staging_and_preserves_expected_final_root() {
+        let (_temporary, parent) = install_parent();
+        let final_root = final_root(&parent, MANIFEST_A);
+        let final_marker = final_root.join("preserved");
+        fs::write(&final_marker, b"published").unwrap();
+        let staging = staging_root(&parent, STAGING_A);
+        fs::create_dir_all(staging.join("usr/libexec/fe2o3")).unwrap();
+        fs::write(staging.join("usr/libexec/fe2o3/partial"), b"disposable").unwrap();
+        symlink("/must-not-be-followed", staging.join("link")).unwrap();
+        let non_utf8 = staging.join(OsString::from_vec(vec![0xff, 0xfe]));
+        fs::write(non_utf8, b"disposable").unwrap();
+
+        assert_eq!(
+            recover_install_parent_for_test_v1(&parent, MANIFEST_A, owner()).unwrap(),
+            CompilerExecutionInstallRecoveryV1::Recovered
+        );
+        assert_eq!(fs::read(&final_marker).unwrap(), b"published");
+        assert!(!parent.join(STAGING_A).exists());
+        assert_eq!(
+            recover_install_parent_for_test_v1(&parent, MANIFEST_A, owner()).unwrap(),
+            CompilerExecutionInstallRecoveryV1::AlreadyClean
+        );
+    }
+
+    #[test]
+    fn recovery_rejects_unknown_siblings_without_deleting_staging() {
+        let (_temporary, parent) = install_parent();
+        let staging = staging_root(&parent, STAGING_A);
+        fs::write(staging.join("partial"), b"disposable").unwrap();
+        fs::create_dir(parent.join("unknown")).unwrap();
+
+        assert_eq!(
+            recover_install_parent_for_test_v1(&parent, MANIFEST_A, owner())
+                .unwrap_err()
+                .kind(),
+            DeploymentVerificationErrorKindV1::InvalidInventory
+        );
+        assert!(staging.join("partial").is_file());
+
+        fs::remove_dir(parent.join("unknown")).unwrap();
+        final_root(&parent, MANIFEST_B);
+        assert_eq!(
+            recover_install_parent_for_test_v1(&parent, MANIFEST_A, owner())
+                .unwrap_err()
+                .kind(),
+            DeploymentVerificationErrorKindV1::InvalidInventory
+        );
+        assert!(staging.join("partial").is_file());
+    }
+
+    #[test]
+    fn recovery_rejects_multiple_staging_transactions_without_deleting_them() {
+        let (_temporary, parent) = install_parent();
+        let first = staging_root(&parent, STAGING_A);
+        let second = staging_root(&parent, STAGING_B);
+
+        assert_eq!(
+            recover_install_parent_for_test_v1(&parent, MANIFEST_A, owner())
+                .unwrap_err()
+                .kind(),
+            DeploymentVerificationErrorKindV1::InvalidInventory
+        );
+        assert!(first.is_dir());
+        assert!(second.is_dir());
+    }
+
+    #[test]
+    fn recovery_rejects_noncanonical_manifest_digest_before_deletion() {
+        let (_temporary, parent) = install_parent();
+        let staging = staging_root(&parent, STAGING_A);
+
+        assert_eq!(
+            recover_install_parent_for_test_v1(&parent, "ABC", owner())
+                .unwrap_err()
+                .kind(),
+            DeploymentVerificationErrorKindV1::InvalidDigest
+        );
+        assert!(staging.is_dir());
+    }
 }

@@ -310,7 +310,9 @@ fn recover_qualification_parent_for_owner(
         revalidate_recovery_parent(qualification_parent, &parent, parent_snapshot, owner)?;
         return Ok(CompilerExecutionQualificationRecoveryV1::AlreadyEmpty);
     }
-    if children.len() != 1 || !canonical_recovery_name(&children[0]) {
+    if children.len() != 1
+        || !canonical_staging_recovery_name_v1(&children[0], QUALIFICATION_STAGING_PREFIX_V1)
+    {
         return Err(super::invalid(
             DeploymentVerificationErrorKindV1::InvalidInventory,
             "qualification recovery parent does not contain exactly one canonical transaction",
@@ -318,7 +320,7 @@ fn recover_qualification_parent_for_owner(
     }
     let run_name = &children[0];
     let root = open_recovery_directory(&parent, run_name)?;
-    let root_snapshot = validate_recovery_root(&root, owner)?;
+    let root_snapshot = validate_staging_recovery_root_v1(&root, owner)?;
     if root_snapshot.device != parent_snapshot.device {
         return Err(super::invalid(
             DeploymentVerificationErrorKindV1::InvalidMetadata,
@@ -337,28 +339,12 @@ fn recover_qualification_parent_for_owner(
             "qualification recovery staging root contains an unknown top-level entry",
         ));
     }
-
-    let mut preflight_budget = 0_usize;
     for name in &staging_children {
         let directory = open_recovery_directory(&root, name)?;
         require_recovery_device(&directory, parent_snapshot.device)?;
-        validate_recovery_tree(&directory, parent_snapshot.device, 0, &mut preflight_budget)?;
     }
 
-    let mut removal_budget = 0_usize;
-    for name in staging_children.iter().rev() {
-        let directory = open_recovery_directory(&root, name)?;
-        require_recovery_device(&directory, parent_snapshot.device)?;
-        remove_recovery_tree(&directory, parent_snapshot.device, 0, &mut removal_budget)?;
-        directory
-            .sync_all()
-            .map_err(|source| std_io_error("sync recovered staging directory", source))?;
-        drop(directory);
-        unlinkat(&root, name, AtFlags::REMOVEDIR)
-            .map_err(|source| io_error("remove recovered staging directory", source))?;
-    }
-    root.sync_all()
-        .map_err(|source| std_io_error("sync recovered staging root", source))?;
+    clear_bounded_staging_recovery_tree_v1(&root, parent_snapshot.device)?;
     drop(root);
     unlinkat(&parent, run_name, AtFlags::REMOVEDIR)
         .map_err(|source| io_error("remove recovered staging root", source))?;
@@ -369,19 +355,17 @@ fn recover_qualification_parent_for_owner(
     Ok(CompilerExecutionQualificationRecoveryV1::Recovered)
 }
 
-fn canonical_recovery_name(name: &OsStr) -> bool {
+pub(super) fn canonical_staging_recovery_name_v1(name: &OsStr, prefix: &str) -> bool {
     let bytes = name.as_bytes();
-    bytes
-        .strip_prefix(QUALIFICATION_STAGING_PREFIX_V1.as_bytes())
-        .is_some_and(|suffix| {
-            suffix.len() == 32
-                && suffix
-                    .iter()
-                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
-        })
+    bytes.strip_prefix(prefix.as_bytes()).is_some_and(|suffix| {
+        suffix.len() == 32
+            && suffix
+                .iter()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
+    })
 }
 
-fn validate_recovery_root(
+pub(super) fn validate_staging_recovery_root_v1(
     root: &File,
     owner: (u32, u32),
 ) -> Result<ObjectSnapshotV1, DeploymentVerificationErrorV1> {
@@ -389,9 +373,8 @@ fn validate_recovery_root(
         .map_err(|source| io_error("inspect recovery-root descriptor flags", source))?;
     let status = rustix::fs::fcntl_getfl(root)
         .map_err(|source| io_error("inspect recovery-root status flags", source))?;
-    let observed = snapshot(
-        &fstat(root).map_err(|source| io_error("inspect qualification recovery root", source))?,
-    );
+    let observed =
+        snapshot(&fstat(root).map_err(|source| io_error("inspect staging recovery root", source))?);
     if descriptor_flags != rustix::io::FdFlags::CLOEXEC
         || status & OFlags::ACCMODE != OFlags::RDONLY
         || status.contains(OFlags::PATH)
@@ -402,10 +385,10 @@ fn validate_recovery_root(
     {
         return Err(super::invalid(
             DeploymentVerificationErrorKindV1::InvalidMetadata,
-            "qualification recovery root is not one root-owned staging-mode subset",
+            "staging recovery root is not one root-owned staging-mode subset",
         ));
     }
-    require_no_xattrs(root, "qualification recovery root")?;
+    require_no_xattrs(root, "staging recovery root")?;
     Ok(observed)
 }
 
@@ -463,13 +446,13 @@ fn require_recovery_device(
     expected_device: u64,
 ) -> Result<(), DeploymentVerificationErrorV1> {
     let stat = fstat(directory)
-        .map_err(|source| io_error("inspect qualification recovery directory", source))?;
+        .map_err(|source| io_error("inspect staging recovery directory", source))?;
     if FileType::from_raw_mode(stat.st_mode) != FileType::Directory
         || stat.st_dev != expected_device
     {
         return Err(super::invalid(
             DeploymentVerificationErrorKindV1::InvalidMetadata,
-            "qualification recovery directory crosses a filesystem boundary",
+            "staging recovery directory crosses a filesystem boundary",
         ));
     }
     Ok(())
@@ -485,7 +468,7 @@ fn validate_recovery_tree(
     consume_recovery_budget(depth, children.len(), budget)?;
     for name in children {
         let stat = statat(directory, &name, AtFlags::SYMLINK_NOFOLLOW)
-            .map_err(|source| io_error("inspect qualification recovery entry", source))?;
+            .map_err(|source| io_error("inspect staging recovery entry", source))?;
         if FileType::from_raw_mode(stat.st_mode) == FileType::Directory {
             let child = open_recovery_directory(directory, &name)?;
             require_recovery_device(&child, expected_device)?;
@@ -505,11 +488,14 @@ fn remove_recovery_tree(
     consume_recovery_budget(depth, children.len(), budget)?;
     for name in children {
         let stat = statat(directory, &name, AtFlags::SYMLINK_NOFOLLOW)
-            .map_err(|source| io_error("reinspect qualification recovery entry", source))?;
+            .map_err(|source| io_error("reinspect staging recovery entry", source))?;
         if FileType::from_raw_mode(stat.st_mode) == FileType::Directory {
             let child = open_recovery_directory(directory, &name)?;
             require_recovery_device(&child, expected_device)?;
             remove_recovery_tree(&child, expected_device, depth + 1, budget)?;
+            child
+                .sync_all()
+                .map_err(|source| std_io_error("sync recovered staging directory", source))?;
             drop(child);
             unlinkat(directory, &name, AtFlags::REMOVEDIR)
                 .map_err(|source| io_error("remove recovered nested directory", source))?;
@@ -521,6 +507,19 @@ fn remove_recovery_tree(
     Ok(())
 }
 
+pub(super) fn clear_bounded_staging_recovery_tree_v1(
+    root: &File,
+    expected_device: u64,
+) -> Result<(), DeploymentVerificationErrorV1> {
+    require_recovery_device(root, expected_device)?;
+    let mut preflight_budget = 0_usize;
+    validate_recovery_tree(root, expected_device, 0, &mut preflight_budget)?;
+    let mut removal_budget = 0_usize;
+    remove_recovery_tree(root, expected_device, 0, &mut removal_budget)?;
+    root.sync_all()
+        .map_err(|source| std_io_error("sync recovered staging root", source))
+}
+
 fn consume_recovery_budget(
     depth: usize,
     entries: usize,
@@ -529,19 +528,19 @@ fn consume_recovery_budget(
     if depth >= QUALIFICATION_RECOVERY_MAX_DEPTH_V1 {
         return Err(super::invalid(
             DeploymentVerificationErrorKindV1::CleanupFailed,
-            "qualification recovery tree exceeds the depth bound",
+            "staging recovery tree exceeds the depth bound",
         ));
     }
     *budget = budget.checked_add(entries).ok_or_else(|| {
         super::invalid(
             DeploymentVerificationErrorKindV1::CleanupFailed,
-            "qualification recovery entry count overflowed",
+            "staging recovery entry count overflowed",
         )
     })?;
     if *budget > QUALIFICATION_RECOVERY_MAX_ENTRIES_V1 {
         return Err(super::invalid(
             DeploymentVerificationErrorKindV1::CleanupFailed,
-            "qualification recovery tree exceeds the entry bound",
+            "staging recovery tree exceeds the entry bound",
         ));
     }
     Ok(())
@@ -556,13 +555,12 @@ fn raw_directory_children(
         OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC | OFlags::NOFOLLOW,
         Mode::empty(),
     )
-    .map_err(|source| io_error("retain qualification recovery directory", source))?;
+    .map_err(|source| io_error("retain staging recovery directory", source))?;
     let mut entries = rustix::fs::Dir::read_from(&scan)
-        .map_err(|source| io_error("enumerate qualification recovery directory", source))?;
+        .map_err(|source| io_error("enumerate staging recovery directory", source))?;
     let mut observed = Vec::new();
     for entry in &mut entries {
-        let entry =
-            entry.map_err(|source| io_error("read qualification recovery entry", source))?;
+        let entry = entry.map_err(|source| io_error("read staging recovery entry", source))?;
         let bytes = entry.file_name().to_bytes();
         if matches!(bytes, b"." | b"..") {
             continue;
@@ -570,7 +568,7 @@ fn raw_directory_children(
         if bytes.is_empty() || bytes.contains(&0) {
             return Err(super::invalid(
                 DeploymentVerificationErrorKindV1::InvalidInventory,
-                "qualification recovery contains an invalid entry name",
+                "staging recovery contains an invalid entry name",
             ));
         }
         observed.push(OsString::from_vec(bytes.to_vec()));
@@ -579,7 +577,7 @@ fn raw_directory_children(
     Ok(observed)
 }
 
-fn open_recovery_directory(
+pub(super) fn open_recovery_directory(
     parent: &File,
     name: &OsStr,
 ) -> Result<File, DeploymentVerificationErrorV1> {
@@ -594,7 +592,7 @@ fn open_recovery_directory(
             | ResolveFlags::NO_XDEV,
     )
     .map(File::from)
-    .map_err(|source| io_error("open qualification recovery directory", source))
+    .map_err(|source| io_error("open staging recovery directory", source))
 }
 
 #[cfg(test)]
@@ -1046,13 +1044,26 @@ mod recovery_tests {
     }
 
     #[test]
+    fn recovery_rejects_substituted_known_staging_directory_before_deletion() {
+        let (_temporary, parent) = qualification_parent();
+        let root = staging_root(&parent, RUN_A);
+        fs::write(root.join("upper"), b"substituted").unwrap();
+
+        assert!(recover_qualification_parent_for_test_v1(&parent, owner()).is_err());
+        assert_eq!(fs::read(root.join("upper")).unwrap(), b"substituted");
+    }
+
+    #[test]
     fn recovery_identity_accepts_a_pre_metadata_mode_subset() {
         let (_temporary, parent) = qualification_parent();
         let root = staging_root(&parent, RUN_A);
         fs::set_permissions(&root, fs::Permissions::from_mode(0o500)).unwrap();
         let retained = File::open(&root).unwrap();
         assert_eq!(
-            validate_recovery_root(&retained, owner()).unwrap().mode & 0o7777,
+            validate_staging_recovery_root_v1(&retained, owner())
+                .unwrap()
+                .mode
+                & 0o7777,
             0o500
         );
     }
