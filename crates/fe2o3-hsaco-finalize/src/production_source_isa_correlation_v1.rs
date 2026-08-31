@@ -46,6 +46,8 @@ pub enum ProductionSourceIsaCorrelationAdmissionV1 {
     Unavailable(ProductionSourceIsaCorrelationUnavailableV1),
 }
 
+// Inline success lets the fallible summary path avoid an infallible allocation.
+#[allow(clippy::large_enum_variant)]
 enum UnboxedProductionSourceIsaCorrelationAdmissionV1 {
     Admitted(AdmittedProductionSourceIsaCorrelationV1),
     Unavailable(ProductionSourceIsaCorrelationUnavailableV1),
@@ -53,6 +55,8 @@ enum UnboxedProductionSourceIsaCorrelationAdmissionV1 {
 
 /// Bounded result of reducing one exact joint correlation to authority-free acceptance evidence.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+// Inline success preserves this fixed-size, allocation-free Copy admission contract.
+#[allow(clippy::large_enum_variant)]
 pub enum ProductionSourceIsaAcceptanceSummaryAdmissionV1 {
     Admitted(ProductionSourceIsaAcceptanceSummaryV1),
     Unavailable(ProductionSourceIsaCorrelationUnavailableV1),
