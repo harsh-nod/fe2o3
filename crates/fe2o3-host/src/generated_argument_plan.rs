@@ -313,7 +313,7 @@ impl CompilerGeneratedArgumentLayoutV1 {
             if index_space.is_some()
                 && !(matches!(field.kind(), AbiKind::Slice { .. })
                     && field.mutability() == Mutability::Mutable
-                    && field.access() == Access::ReadWrite
+                    && matches!(field.access(), Access::WriteOnly | Access::ReadWrite)
                     && field.address_space() == AddressSpace::Global
                     && field.ownership() == ArgumentOwnership::UniqueBorrow
                     && field.alias_class() == AliasClass::Exclusive)
@@ -765,6 +765,22 @@ impl GeneratedArgumentPackingPlanV1 {
         )
     }
 
+    pub(crate) fn bind_generated_write_slice_v1<'allocation, T: GeneratedDeviceScalarV1>(
+        &self,
+        argument_index: usize,
+        address: usize,
+        length: usize,
+        borrow: GeneratedArgumentBorrowV1<'allocation>,
+    ) -> Result<GeneratedArgumentInputV1<'allocation>, GeneratedArgumentPackError> {
+        self.bind_generated_slice_v1::<T>(
+            argument_index,
+            address,
+            length,
+            GeneratedSliceEffectV1::ExclusiveWrite,
+            borrow,
+        )
+    }
+
     pub(crate) fn bind_generated_address_free_read_slice_v1<
         'allocation,
         T: GeneratedDeviceScalarV1,
@@ -799,6 +815,23 @@ impl GeneratedArgumentPackingPlanV1 {
         )
     }
 
+    pub(crate) fn bind_generated_address_free_write_slice_v1<
+        'allocation,
+        T: GeneratedDeviceScalarV1,
+    >(
+        &self,
+        argument_index: usize,
+        length: usize,
+        borrow: GeneratedArgumentBorrowV1<'allocation>,
+    ) -> Result<GeneratedArgumentInputV1<'allocation>, GeneratedArgumentPackError> {
+        self.bind_generated_address_free_slice_v1::<T>(
+            argument_index,
+            length,
+            GeneratedSliceEffectV1::ExclusiveWrite,
+            borrow,
+        )
+    }
+
     pub(crate) fn bind_generated_address_free_mapped_read_write_slice_v1<
         'allocation,
         T: GeneratedDeviceScalarV1,
@@ -813,6 +846,24 @@ impl GeneratedArgumentPackingPlanV1 {
             argument_index,
             length,
             GeneratedSliceEffectV1::MappedExclusiveReadWrite(index_space),
+            borrow,
+        )
+    }
+
+    pub(crate) fn bind_generated_address_free_mapped_write_slice_v1<
+        'allocation,
+        T: GeneratedDeviceScalarV1,
+    >(
+        &self,
+        argument_index: usize,
+        length: usize,
+        index_space: RustDisjointIndexSpaceV1,
+        borrow: GeneratedArgumentBorrowV1<'allocation>,
+    ) -> Result<GeneratedArgumentInputV1<'allocation>, GeneratedArgumentPackError> {
+        self.bind_generated_address_free_slice_v1::<T>(
+            argument_index,
+            length,
+            GeneratedSliceEffectV1::MappedExclusiveWrite(index_space),
             borrow,
         )
     }
@@ -840,10 +891,24 @@ impl GeneratedArgumentPackingPlanV1 {
                 ArgumentOwnership::UniqueBorrow,
                 AliasClass::Exclusive,
             ),
+            GeneratedSliceEffectV1::ExclusiveWrite => (
+                T::disjoint_slice_type_identity_v1(self.pointer_width),
+                Mutability::Mutable,
+                Access::WriteOnly,
+                ArgumentOwnership::UniqueBorrow,
+                AliasClass::Exclusive,
+            ),
             GeneratedSliceEffectV1::MappedExclusiveReadWrite(index_space) => (
                 T::disjoint_slice_type_identity_for_index_space_v1(self.pointer_width, index_space),
                 Mutability::Mutable,
                 Access::ReadWrite,
+                ArgumentOwnership::UniqueBorrow,
+                AliasClass::Exclusive,
+            ),
+            GeneratedSliceEffectV1::MappedExclusiveWrite(index_space) => (
+                T::disjoint_slice_type_identity_for_index_space_v1(self.pointer_width, index_space),
+                Mutability::Mutable,
+                Access::WriteOnly,
                 ArgumentOwnership::UniqueBorrow,
                 AliasClass::Exclusive,
             ),
@@ -918,10 +983,24 @@ impl GeneratedArgumentPackingPlanV1 {
                 ArgumentOwnership::UniqueBorrow,
                 AliasClass::Exclusive,
             ),
+            GeneratedSliceEffectV1::ExclusiveWrite => (
+                T::disjoint_slice_type_identity_v1(self.pointer_width),
+                Mutability::Mutable,
+                Access::WriteOnly,
+                ArgumentOwnership::UniqueBorrow,
+                AliasClass::Exclusive,
+            ),
             GeneratedSliceEffectV1::MappedExclusiveReadWrite(index_space) => (
                 T::disjoint_slice_type_identity_for_index_space_v1(self.pointer_width, index_space),
                 Mutability::Mutable,
                 Access::ReadWrite,
+                ArgumentOwnership::UniqueBorrow,
+                AliasClass::Exclusive,
+            ),
+            GeneratedSliceEffectV1::MappedExclusiveWrite(index_space) => (
+                T::disjoint_slice_type_identity_for_index_space_v1(self.pointer_width, index_space),
+                Mutability::Mutable,
+                Access::WriteOnly,
                 ArgumentOwnership::UniqueBorrow,
                 AliasClass::Exclusive,
             ),
@@ -1030,7 +1109,9 @@ impl GeneratedArgumentPackingPlanV1 {
 #[derive(Clone, Copy)]
 enum GeneratedSliceEffectV1 {
     SharedRead,
+    ExclusiveWrite,
     ExclusiveReadWrite,
+    MappedExclusiveWrite(RustDisjointIndexSpaceV1),
     MappedExclusiveReadWrite(RustDisjointIndexSpaceV1),
 }
 

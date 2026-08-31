@@ -275,6 +275,170 @@ pub unsafe trait CrossCrateDeviceExportV1 {
     const FUNCTION: Self::Function;
 }
 
+/// Compiler-issued, exclusively owned device output with no readable element surface.
+///
+/// Unlike [`DisjointSlice`], this capability represents uninitialized write-only storage. Safe
+/// methods consume a value and report whether the exact ownership witness selected an in-bounds
+/// element; they never return a reference, pointer, or prior value. `IndexSpace` is part of the
+/// type so authority for one invocation mapping cannot be used with another.
+#[derive(Debug)]
+#[repr(C)]
+#[rustc_diagnostic_item = "fe2o3_device_write_only_disjoint_slice_v1"]
+pub struct WriteOnlyDisjointSlice<T, IndexSpace = Index1D> {
+    ptr: *mut T,
+    len: usize,
+    _index_space: PhantomData<fn() -> IndexSpace>,
+}
+
+impl<T: Copy, IndexSpace> WriteOnlyDisjointSlice<T, IndexSpace> {
+    /// Returns host-rustc layout facts used by generated ABI evidence.
+    #[doc(hidden)]
+    pub const fn __fe2o3_rust_layout_v1() -> (usize, usize, usize, usize) {
+        (
+            core::mem::size_of::<Self>(),
+            core::mem::align_of::<Self>(),
+            core::mem::offset_of!(Self, ptr),
+            core::mem::offset_of!(Self, len),
+        )
+    }
+
+    /// Constructs write-only storage from its raw representation.
+    ///
+    /// # Safety
+    ///
+    /// `ptr` must be aligned and valid for writes of `len` consecutive `T` values for every use of
+    /// the returned capability. No alias may read an element before it is initialized, and no
+    /// incompatible alias may access an element while this capability is used. `IndexSpace` must
+    /// describe every invocation-to-element mapping used by safe writes.
+    pub unsafe fn from_raw_parts(ptr: *mut T, len: usize) -> Self {
+        Self {
+            ptr,
+            len,
+            _index_space: PhantomData,
+        }
+    }
+
+    #[inline(never)]
+    #[rustc_diagnostic_item = "fe2o3_device_write_only_disjoint_slice_len_v1"]
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// Writes one element selected by the current invocation's exact index-space witness.
+    #[inline(never)]
+    #[rustc_diagnostic_item = "fe2o3_device_write_only_disjoint_slice_write_v1"]
+    pub fn write(&mut self, index: ThreadIndex<IndexSpace>, value: T) -> bool {
+        self.write_at(index.get(), value)
+    }
+
+    /// Writes one element selected by a mapping-matched disjoint witness.
+    #[inline(never)]
+    #[rustc_diagnostic_item = "fe2o3_device_write_only_disjoint_slice_write_disjoint_v1"]
+    pub fn write_disjoint(&mut self, index: DisjointIndex<IndexSpace>, value: T) -> bool {
+        self.write_at(index.get(), value)
+    }
+
+    fn write_at(&mut self, index: usize, value: T) -> bool {
+        if index >= self.len {
+            return false;
+        }
+        // SAFETY: construction establishes the writable allocation. The checked, mapping-matched
+        // witness selects an in-bounds element owned by this invocation.
+        unsafe { self.ptr.add(index).write(value) };
+        true
+    }
+}
+
+impl<T: Copy> WriteOnlyDisjointSlice<T, GridExclusive> {
+    /// Writes an arbitrary checked element for the unique grid leader.
+    #[inline(never)]
+    #[rustc_diagnostic_item = "fe2o3_device_write_only_disjoint_slice_write_exclusive_v1"]
+    pub fn write_exclusive(&mut self, _leader: &GridLeader, index: usize, value: T) -> bool {
+        self.write_at(index, value)
+    }
+}
+
+impl<T: Copy, IndexSpace, const LANES_PER_BLOCK: usize, const ELEMENTS_PER_LANE: usize>
+    WriteOnlyDisjointSlice<T, Blocked<IndexSpace, LANES_PER_BLOCK, ELEMENTS_PER_LANE>>
+{
+    /// Writes one component owned by an exact blocked witness.
+    #[inline(never)]
+    #[rustc_diagnostic_item = "fe2o3_device_write_only_disjoint_slice_write_block_v1"]
+    pub fn write_block(
+        &mut self,
+        block: &DisjointBlock<IndexSpace, LANES_PER_BLOCK, ELEMENTS_PER_LANE>,
+        component: usize,
+        value: T,
+    ) -> bool {
+        block
+            .component_index(component)
+            .is_some_and(|index| self.write_at(index, value))
+    }
+}
+
+impl<
+    T: Copy,
+    IndexSpace,
+    const LANES_PER_TILE: usize,
+    const TILE_ROWS: usize,
+    const TILE_COLUMNS: usize,
+    const ELEMENTS_PER_LANE: usize,
+>
+    WriteOnlyDisjointSlice<
+        T,
+        Tiled2D<IndexSpace, LANES_PER_TILE, TILE_ROWS, TILE_COLUMNS, ELEMENTS_PER_LANE>,
+    >
+{
+    /// Writes one checked row-major tile component.
+    #[inline(never)]
+    #[rustc_diagnostic_item = "fe2o3_device_write_only_disjoint_slice_write_tiled_2d_v1"]
+    #[allow(clippy::too_many_arguments)]
+    pub fn write_tiled_2d(
+        &mut self,
+        tile: &DisjointTile2D<
+            IndexSpace,
+            LANES_PER_TILE,
+            TILE_ROWS,
+            TILE_COLUMNS,
+            ELEMENTS_PER_LANE,
+        >,
+        component: usize,
+        rows: usize,
+        columns: usize,
+        row_stride: usize,
+        value: T,
+    ) -> bool {
+        tile.component_index(component, rows, columns, row_stride)
+            .is_some_and(|index| self.write_at(index, value))
+    }
+}
+
+impl<T: Copy, IndexSpace, const LANES_PER_ROW: usize, const ELEMENTS_PER_LANE: usize>
+    WriteOnlyDisjointSlice<T, RowStriped2D<IndexSpace, LANES_PER_ROW, ELEMENTS_PER_LANE>>
+{
+    /// Writes one checked component of an output row.
+    #[inline(never)]
+    #[rustc_diagnostic_item = "fe2o3_device_write_only_disjoint_slice_write_row_striped_2d_v1"]
+    #[allow(clippy::too_many_arguments)]
+    pub fn write_row_striped_2d(
+        &mut self,
+        stripe: &DisjointRowStripe2D<IndexSpace, LANES_PER_ROW, ELEMENTS_PER_LANE>,
+        component: usize,
+        rows: usize,
+        columns: usize,
+        row_stride: usize,
+        value: T,
+    ) -> bool {
+        stripe
+            .component_index(component, rows, columns, row_stride)
+            .is_some_and(|index| self.write_at(index, value))
+    }
+}
+
 #[derive(Debug)]
 #[repr(C)]
 #[rustc_diagnostic_item = "fe2o3_device_disjoint_slice"]

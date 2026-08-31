@@ -466,6 +466,93 @@ impl<'allocation, T: DeviceCopy> GeneratedReadDeviceSlice<'allocation, T> {
     }
 }
 
+/// Generated write-only capability for one exclusive typed device region.
+///
+/// The compiler-authenticated descriptor, generated packing plan, and retained access record must
+/// all agree that the source argument is write-only. This move-only capability exposes neither its
+/// pointer nor an initialized-input route.
+#[doc(hidden)]
+pub struct GeneratedWriteDeviceSlice<'allocation, T: DeviceCopy> {
+    pointer: DevicePtr<T>,
+    len: usize,
+    metadata: GeneratedDeviceSliceMetadata,
+    marker: PhantomData<&'allocation mut T>,
+}
+
+impl<'allocation, T: DeviceCopy> GeneratedWriteDeviceSlice<'allocation, T> {
+    pub fn new(
+        observed: &ObservedContext,
+        buffer: &'allocation mut DeviceBuffer<T>,
+    ) -> Result<Self, RegionError> {
+        let metadata = GeneratedDeviceSliceMetadata::from_region(observed, buffer)?;
+        Ok(Self {
+            pointer: buffer.region_device_ptr(),
+            len: buffer.region_len(),
+            metadata,
+            marker: PhantomData,
+        })
+    }
+
+    pub fn from_view_mut(
+        observed: &ObservedContext,
+        view: DeviceBufferViewMut<'allocation, T>,
+    ) -> Result<Self, RegionError> {
+        let metadata = GeneratedDeviceSliceMetadata::from_region(observed, &view)?;
+        Ok(Self {
+            pointer: view.region_device_ptr(),
+            len: view.region_len(),
+            metadata,
+            marker: PhantomData,
+        })
+    }
+
+    pub fn argument_access(&self) -> ArgumentAccess<'allocation> {
+        ArgumentAccess::new(
+            self.metadata.checked_region(),
+            ArgumentAccessMode::ExclusiveWrite,
+        )
+    }
+
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    pub fn bind_argument(
+        &self,
+        plan: &GeneratedArgumentPackingPlanV1,
+        argument_index: usize,
+    ) -> Result<GeneratedArgumentInputV1<'allocation>, GeneratedArgumentPackError>
+    where
+        T: GeneratedDeviceScalarV1,
+    {
+        plan.bind_generated_write_slice_v1::<T>(
+            argument_index,
+            self.pointer.as_raw().addr(),
+            self.len,
+            GeneratedArgumentBorrowV1::new(),
+        )
+    }
+
+    #[doc(hidden)]
+    pub fn bind_argument_pair(
+        &self,
+        plan: &GeneratedArgumentPackingPlanV1,
+        argument_index: usize,
+    ) -> Result<GeneratedSliceArgumentPairV1<'allocation>, GeneratedArgumentPackError>
+    where
+        T: GeneratedDeviceScalarV1,
+    {
+        Ok(GeneratedSliceArgumentPairV1 {
+            input: self.bind_argument(plan, argument_index)?,
+            access: self.argument_access(),
+        })
+    }
+}
+
 /// Generated initialized read-write capability for one exclusive typed region.
 ///
 /// This doc-hidden SPI owns the actual exclusive buffer borrow. Its admission

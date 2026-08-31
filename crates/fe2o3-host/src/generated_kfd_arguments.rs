@@ -156,6 +156,99 @@ impl<'allocation, T: GeneratedDeviceScalarV1> GeneratedKfdReadSlice<'allocation,
     }
 }
 
+/// Exclusively borrowed host output for a compiler-authenticated write-only slice.
+///
+/// The runtime buffer has the requested extent but does not encode the destination's current
+/// values. The exclusive borrow is retained until checked completion writes the device result back
+/// to the host slice. This capability is move-only and can bind only a descriptor field whose
+/// authenticated access is exactly write-only.
+#[doc(hidden)]
+pub struct GeneratedKfdWriteSlice<'allocation, T: GeneratedDeviceScalarV1> {
+    values: &'allocation mut [T],
+}
+
+impl<'allocation, T: GeneratedDeviceScalarV1> GeneratedKfdWriteSlice<'allocation, T> {
+    pub fn new(values: &'allocation mut [T]) -> Self {
+        Self { values }
+    }
+
+    pub const fn len(&self) -> usize {
+        self.values.len()
+    }
+
+    pub const fn is_empty(&self) -> bool {
+        self.values.is_empty()
+    }
+
+    pub fn bind_argument(
+        self,
+        plan: &GeneratedArgumentPackingPlanV1,
+        argument_index: usize,
+    ) -> Result<GeneratedKfdSliceBinding<'allocation>, GeneratedKfdArgumentError> {
+        self.bind_argument_with_index_space(plan, argument_index, None)
+    }
+
+    /// Binds this capability with the exact compiler-retained disjoint mapping.
+    #[doc(hidden)]
+    pub fn bind_mapped_argument(
+        self,
+        plan: &GeneratedArgumentPackingPlanV1,
+        argument_index: usize,
+        index_space: RustDisjointIndexSpaceV1,
+    ) -> Result<GeneratedKfdSliceBinding<'allocation>, GeneratedKfdArgumentError> {
+        self.bind_argument_with_index_space(plan, argument_index, Some(index_space))
+    }
+
+    fn bind_argument_with_index_space(
+        self,
+        plan: &GeneratedArgumentPackingPlanV1,
+        argument_index: usize,
+        index_space: Option<RustDisjointIndexSpaceV1>,
+    ) -> Result<GeneratedKfdSliceBinding<'allocation>, GeneratedKfdArgumentError> {
+        let input = match index_space {
+            Some(index_space) => plan.bind_generated_address_free_mapped_write_slice_v1::<T>(
+                argument_index,
+                self.values.len(),
+                index_space,
+                GeneratedArgumentBorrowV1::new(),
+            ),
+            None => plan.bind_generated_address_free_write_slice_v1::<T>(
+                argument_index,
+                self.values.len(),
+                GeneratedArgumentBorrowV1::new(),
+            ),
+        }
+        .map_err(GeneratedKfdArgumentError::Pack)?;
+        if self.values.is_empty() {
+            return Ok(GeneratedKfdSliceBinding {
+                argument_index,
+                input,
+                buffer: None,
+                required_alignment: T::RUST_SCALAR_TYPE.size_bytes(),
+                writeback: None,
+            });
+        }
+        let byte_len = self
+            .values
+            .len()
+            .checked_mul(size_of::<T>())
+            .ok_or(GeneratedKfdArgumentError::BufferByteLength { argument_index })?;
+        let buffer = Gfx942RuntimeDispatchBufferV1::new(
+            vec![0; byte_len],
+            Gfx942RuntimeBufferAccessV1::WriteOnly,
+        )
+        .map_err(GeneratedKfdArgumentError::Buffer)?;
+        let writeback = GeneratedKfdWriteback::new(self.values);
+        Ok(GeneratedKfdSliceBinding {
+            argument_index,
+            input,
+            buffer: Some(buffer),
+            required_alignment: T::RUST_SCALAR_TYPE.size_bytes(),
+            writeback: Some(writeback),
+        })
+    }
+}
+
 /// Exclusively borrowed initialized host input/output for the permanent KFD path.
 #[doc(hidden)]
 pub struct GeneratedKfdReadWriteSlice<'allocation, T: GeneratedDeviceScalarV1> {
@@ -507,6 +600,7 @@ unsafe fn apply_values<T: GeneratedDeviceScalarV1>(destination: NonNull<u8>, byt
 pub enum GeneratedKfdArgumentError {
     Pack(GeneratedArgumentPackError),
     Buffer(Gfx942KfdDispatchRequestErrorV1),
+    BufferByteLength { argument_index: usize },
     AddressBearingInput { argument_index: usize },
     WritebackWithoutBuffer { argument_index: usize },
     PointerOffset { argument_index: usize, offset: u64 },
@@ -517,6 +611,10 @@ impl fmt::Display for GeneratedKfdArgumentError {
         match self {
             Self::Pack(error) => write!(formatter, "generated argument packing failed: {error}"),
             Self::Buffer(error) => write!(formatter, "generated KFD buffer failed: {error:?}"),
+            Self::BufferByteLength { argument_index } => write!(
+                formatter,
+                "generated KFD argument {argument_index} buffer byte length overflows usize"
+            ),
             Self::AddressBearingInput { argument_index } => write!(
                 formatter,
                 "generated KFD argument {argument_index} contains a host or device address"
@@ -707,6 +805,54 @@ mod tests {
         validate_argument_packing(KernelId::from_bytes([0x42; 32]), &manifest, &generated).unwrap()
     }
 
+    fn write_only_plan(
+        index_space: Option<RustDisjointIndexSpaceV1>,
+    ) -> GeneratedArgumentPackingPlanV1 {
+        let type_identity = index_space.map_or_else(
+            || i32::disjoint_slice_type_identity_v1(PointerWidth::Bits64),
+            |index_space| {
+                i32::disjoint_slice_type_identity_for_index_space_v1(
+                    PointerWidth::Bits64,
+                    index_space,
+                )
+            },
+        );
+        let field = AbiField::new(
+            Name::new("output").unwrap(),
+            0,
+            16,
+            8,
+            AbiKind::Slice {
+                element_size: 4,
+                element_alignment: 4,
+            },
+            Mutability::Mutable,
+            Access::WriteOnly,
+            AddressSpace::Global,
+            type_identity,
+            ArgumentOwnership::UniqueBorrow,
+            AliasClass::Exclusive,
+        )
+        .unwrap();
+        let manifest = AbiLayout::new(16, 8, PointerWidth::Bits64, vec![field.clone()]).unwrap();
+        let generated = match index_space {
+            Some(index_space) => {
+                CompilerGeneratedArgumentLayoutV1::new_with_disjoint_index_spaces_v1(
+                    16,
+                    8,
+                    PointerWidth::Bits64,
+                    vec![field],
+                    vec![Some(index_space)],
+                )
+            }
+            None => {
+                CompilerGeneratedArgumentLayoutV1::new(16, 8, PointerWidth::Bits64, vec![field])
+            }
+        }
+        .unwrap();
+        validate_argument_packing(KernelId::from_bytes([0x44; 32]), &manifest, &generated).unwrap()
+    }
+
     #[test]
     fn packing_is_address_free_and_binds_exact_buffers_and_fixups() {
         let plan = plan();
@@ -758,6 +904,113 @@ mod tests {
         );
         drop(packed);
         assert_eq!(output, [i32::MIN, i32::MIN]);
+    }
+
+    #[test]
+    fn write_only_binding_omits_host_initial_values_and_retains_completion_writeback() {
+        let plan = write_only_plan(None);
+        let mut output = [0x1122_3344_i32, 0x5566_7788];
+        let binding = GeneratedKfdWriteSlice::new(&mut output)
+            .bind_argument(&plan, 0)
+            .unwrap();
+        let packed =
+            GeneratedKfdArgumentBinding::from_compiler_generated_parts(Vec::new(), vec![binding])
+                .pack(&plan)
+                .unwrap();
+
+        assert_eq!(&packed.explicit_kernarg()[0..8], &[0; 8]);
+        assert_eq!(&packed.explicit_kernarg()[8..16], &2_u64.to_le_bytes());
+        assert_eq!(packed.buffers().len(), 1);
+        assert_eq!(
+            packed.buffers()[0].access(),
+            Gfx942RuntimeBufferAccessV1::WriteOnly
+        );
+        assert_eq!(packed.buffers()[0].bytes(), &[0; 8]);
+        assert_eq!(
+            packed.pointer_fixups(),
+            [Gfx942KfdDispatchPointerFixupV1::new(0, 0, 0, 4)]
+        );
+        drop(packed);
+        assert_eq!(output, [0x1122_3344, 0x5566_7788]);
+
+        let mut binding = GeneratedKfdWriteSlice::new(&mut output)
+            .bind_argument(&plan, 0)
+            .unwrap();
+        binding
+            .writeback
+            .take()
+            .unwrap()
+            .apply(&[7, 0, 0, 0, 9, 0, 0, 0]);
+        drop(binding);
+        assert_eq!(output, [7, 9]);
+    }
+
+    #[test]
+    fn write_only_and_read_write_descriptor_disagreement_fails_closed() {
+        let write_only = write_only_plan(None);
+        let read_write = plan();
+        let mut output = [0_i32; 2];
+
+        assert!(matches!(
+            GeneratedKfdReadWriteSlice::new(&mut output).bind_argument(&write_only, 0),
+            Err(GeneratedKfdArgumentError::Pack(
+                GeneratedArgumentPackError::FieldMismatch {
+                    argument_index: 0,
+                    property: crate::GeneratedArgumentFieldProperty::Access,
+                }
+            ))
+        ));
+        assert!(matches!(
+            GeneratedKfdWriteSlice::new(&mut output).bind_argument(&read_write, 1),
+            Err(GeneratedKfdArgumentError::Pack(
+                GeneratedArgumentPackError::FieldMismatch {
+                    argument_index: 1,
+                    property: crate::GeneratedArgumentFieldProperty::Access,
+                }
+            ))
+        ));
+    }
+
+    #[test]
+    fn mapped_write_only_binding_requires_the_exact_compiler_index_space() {
+        let blocked = RustDisjointIndexSpaceV1::blocked_index_1d(1, 8).unwrap();
+        let plan = write_only_plan(Some(blocked));
+
+        for substituted in [
+            RustDisjointIndexSpaceV1::Index1D,
+            RustDisjointIndexSpaceV1::blocked_index_1d(1, 4).unwrap(),
+        ] {
+            let mut rejected = [0_i32; 2];
+            assert!(matches!(
+                GeneratedKfdWriteSlice::new(&mut rejected).bind_mapped_argument(
+                    &plan,
+                    0,
+                    substituted,
+                ),
+                Err(GeneratedKfdArgumentError::Pack(
+                    GeneratedArgumentPackError::FieldMismatch {
+                        argument_index: 0,
+                        property: crate::GeneratedArgumentFieldProperty::TypeIdentity,
+                    }
+                ))
+            ));
+        }
+
+        let mut output = [17_i32, 19];
+        let binding = GeneratedKfdWriteSlice::new(&mut output)
+            .bind_mapped_argument(&plan, 0, blocked)
+            .unwrap();
+        let packed =
+            GeneratedKfdArgumentBinding::from_compiler_generated_parts(Vec::new(), vec![binding])
+                .pack(&plan)
+                .unwrap();
+        assert_eq!(packed.buffers()[0].bytes(), &[0; 8]);
+        assert_eq!(
+            packed.buffers()[0].access(),
+            Gfx942RuntimeBufferAccessV1::WriteOnly
+        );
+        drop(packed);
+        assert_eq!(output, [17, 19]);
     }
 
     #[test]
