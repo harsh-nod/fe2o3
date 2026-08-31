@@ -900,8 +900,8 @@ fn session_timeouts() -> ProtectedIssuerSessionTimeoutsV1 {
     .unwrap()
 }
 
-fn named_seqpacket_listener(path: &Path) -> OwnedFd {
-    let listener = socket_with(
+fn bound_named_seqpacket_socket(path: &Path) -> OwnedFd {
+    let socket = socket_with(
         AddressFamily::UNIX,
         SocketType::SEQPACKET,
         SocketFlags::CLOEXEC | SocketFlags::NONBLOCK,
@@ -909,7 +909,7 @@ fn named_seqpacket_listener(path: &Path) -> OwnedFd {
     )
     .unwrap();
     let address = rustix::net::SocketAddrUnix::new(path).unwrap();
-    bind(&listener, &address).unwrap();
+    bind(&socket, &address).unwrap();
     fs::set_permissions(
         path,
         fs::Permissions::from_mode(
@@ -917,8 +917,7 @@ fn named_seqpacket_listener(path: &Path) -> OwnedFd {
         ),
     )
     .unwrap();
-    listen(&listener, 16).unwrap();
-    listener
+    socket
 }
 
 fn connect_seqpacket(path: &Path) -> OwnedFd {
@@ -937,7 +936,8 @@ fn connect_seqpacket(path: &Path) -> OwnedFd {
 fn provisioned_service_inputs_retain_exact_listener_and_root_objects() {
     let fixture = Fixture::new("provisioned-service-inputs");
     let listener_path = fixture.root.join("supervisor.sock");
-    let listener = named_seqpacket_listener(&listener_path);
+    let listener = bound_named_seqpacket_socket(&listener_path);
+    assert!(!rustix::net::sockopt::socket_acceptconn(&listener).unwrap());
     let listener_stat = rustix::fs::fstat(&listener).unwrap();
     let root = File::open(&fixture.root).unwrap();
     let root_stat = rustix::fs::fstat(&root).unwrap();
@@ -963,6 +963,7 @@ fn provisioned_service_inputs_retain_exact_listener_and_root_objects() {
     assert_eq!(transfer.credentials(), credentials);
     transfer.revalidate().unwrap();
     let (listener, root) = transfer.try_clone_ordered_for_spawn().unwrap();
+    assert!(!rustix::net::sockopt::socket_acceptconn(&listener).unwrap());
     let transferred_listener = rustix::fs::fstat(&listener).unwrap();
     let transferred_root = rustix::fs::fstat(&root).unwrap();
     assert_eq!(
@@ -973,13 +974,51 @@ fn provisioned_service_inputs_retain_exact_listener_and_root_objects() {
         (transferred_root.st_dev, transferred_root.st_ino),
         (root_stat.st_dev, root_stat.st_ino)
     );
+    listen(&listener, 16).unwrap();
+    transfer.revalidate().unwrap();
+    transfer.revalidate().unwrap();
+    assert!(matches!(
+        transfer.try_clone_ordered_for_spawn(),
+        Err(ProtectedIssuerServiceProvisioningErrorV1::Listener(
+            ProtectedIssuerServiceErrorV1::InvalidListener(
+                "endpoint is not a bound, non-listening Unix SOCK_SEQPACKET socket"
+            )
+        ))
+    ));
+}
+
+#[test]
+fn provisioned_service_inputs_reject_already_listening_root_input() {
+    let fixture = Fixture::new("provisioned-listening-input");
+    let listener_path = fixture.root.join("supervisor.sock");
+    let listener = bound_named_seqpacket_socket(&listener_path);
+    listen(&listener, 16).unwrap();
+    let credentials = IssuerServiceCredentialProfileV1::new(
+        rustix::process::geteuid().as_raw(),
+        rustix::process::getegid().as_raw(),
+    )
+    .unwrap();
+
+    assert!(matches!(
+        ProvisionedProtectedIssuerServiceInputsV1::admit_at(
+            listener,
+            File::open(&fixture.root).unwrap(),
+            credentials,
+            &listener_path,
+        ),
+        Err(ProtectedIssuerServiceProvisioningErrorV1::Listener(
+            ProtectedIssuerServiceErrorV1::InvalidListener(
+                "endpoint is not a bound, non-listening Unix SOCK_SEQPACKET socket"
+            )
+        ))
+    ));
 }
 
 #[test]
 fn provisioned_service_inputs_reject_root_and_listener_substitution() {
     let root_fixture = Fixture::new("provisioned-root-substitution");
     let root_listener_path = root_fixture.root.join("supervisor.sock");
-    let root_listener = named_seqpacket_listener(&root_listener_path);
+    let root_listener = bound_named_seqpacket_socket(&root_listener_path);
     let credentials = IssuerServiceCredentialProfileV1::new(
         rustix::process::geteuid().as_raw(),
         rustix::process::getegid().as_raw(),
@@ -1000,7 +1039,7 @@ fn provisioned_service_inputs_reject_root_and_listener_substitution() {
 
     let listener_fixture = Fixture::new("provisioned-listener-substitution");
     let listener_path = listener_fixture.root.join("supervisor.sock");
-    let listener = named_seqpacket_listener(&listener_path);
+    let listener = bound_named_seqpacket_socket(&listener_path);
     let admitted = ProvisionedProtectedIssuerServiceInputsV1::admit_at(
         listener,
         File::open(&listener_fixture.root).unwrap(),
@@ -1019,7 +1058,7 @@ fn provisioned_service_inputs_reject_root_and_listener_substitution() {
 fn provisioned_service_inputs_reject_listener_mode_and_parent_mutation() {
     let fixture = Fixture::new("provisioned-listener-policy");
     let listener_path = fixture.root.join("supervisor.sock");
-    let listener = named_seqpacket_listener(&listener_path);
+    let listener = bound_named_seqpacket_socket(&listener_path);
     let credentials = IssuerServiceCredentialProfileV1::new(
         rustix::process::geteuid().as_raw(),
         rustix::process::getegid().as_raw(),
@@ -1041,7 +1080,7 @@ fn provisioned_service_inputs_reject_listener_mode_and_parent_mutation() {
     ));
 
     fs::remove_file(&listener_path).unwrap();
-    let listener = named_seqpacket_listener(&listener_path);
+    let listener = bound_named_seqpacket_socket(&listener_path);
     let admitted = ProvisionedProtectedIssuerServiceInputsV1::admit_at(
         listener,
         File::open(&fixture.root).unwrap(),
@@ -1706,12 +1745,20 @@ fn session_policy_and_stage_errors_fail_before_later_authority() {
 fn fixed_named_listener_dispatches_one_complete_session() {
     let fixture = Fixture::with_code("named-listener", &naturally_exiting_probe_code(0));
     let listener_path = fixture.root.join("supervisor.sock");
-    let listener = named_seqpacket_listener(&listener_path);
-    let cargo_control = connect_seqpacket(&listener_path);
+    let listener = bound_named_seqpacket_socket(&listener_path);
     let Some(supervisor) = bound_supervisor(&fixture) else {
         return;
     };
     let policy = supervisor.policy().clone();
+    let service = ProtectedIssuerServiceV1::bind_inner(
+        supervisor,
+        listener,
+        session_timeouts(),
+        &listener_path,
+    )
+    .unwrap();
+    assert!(!format!("{service:?}").contains("fd:"));
+    let cargo_control = connect_seqpacket(&listener_path);
     let (_reserved_fd_guard, mut rustc_child, launch) = live_launch();
     let handoff = CompilerExecutionSupervisorHandoffV1::new(
         launch.submitter(),
@@ -1728,14 +1775,6 @@ fn fixed_named_listener_dispatches_one_complete_session() {
         &handoff,
         &[service_peer.as_fd(), pidfd.as_fd()],
     );
-    let service = ProtectedIssuerServiceV1::bind_inner(
-        supervisor,
-        listener,
-        session_timeouts(),
-        &listener_path,
-    )
-    .unwrap();
-    assert!(!format!("{service:?}").contains("fd:"));
     let exited = service
         .serve_one_inner(
             Duration::from_secs(2),
@@ -1765,10 +1804,59 @@ fn fixed_named_listener_dispatches_one_complete_session() {
 }
 
 #[test]
+fn service_bind_activates_bound_socket_once_and_readmits_listening_state() {
+    let fixture = Fixture::new("listener-activation-transition");
+    let listener_path = fixture.root.join("supervisor.sock");
+    let listener = bound_named_seqpacket_socket(&listener_path);
+    let observation = rustix::io::fcntl_dupfd_cloexec(&listener, 0).unwrap();
+    let descriptor_before = rustix::fs::fstat(&observation).unwrap();
+    let path_before = rustix::fs::lstat(&listener_path).unwrap();
+    assert!(!rustix::net::sockopt::socket_acceptconn(&observation).unwrap());
+    let Some(supervisor) = bound_supervisor(&fixture) else {
+        return;
+    };
+
+    let service = ProtectedIssuerServiceV1::bind_inner(
+        supervisor,
+        listener,
+        session_timeouts(),
+        &listener_path,
+    )
+    .unwrap();
+    let states = [
+        false,
+        rustix::net::sockopt::socket_acceptconn(&observation).unwrap(),
+        {
+            assert!(matches!(
+                service.serve_one_inner(
+                    Duration::from_millis(1),
+                    |_| (),
+                    |(), _| panic!("session launched without a connection"),
+                ),
+                Err(ProtectedIssuerServiceErrorV1::AcceptTimeout)
+            ));
+            rustix::net::sockopt::socket_acceptconn(&observation).unwrap()
+        },
+    ];
+    assert_eq!(states, [false, true, true]);
+
+    let descriptor_after = rustix::fs::fstat(&observation).unwrap();
+    let path_after = rustix::fs::lstat(&listener_path).unwrap();
+    assert_eq!(
+        (descriptor_after.st_dev, descriptor_after.st_ino),
+        (descriptor_before.st_dev, descriptor_before.st_ino)
+    );
+    assert_eq!(
+        (path_after.st_dev, path_after.st_ino),
+        (path_before.st_dev, path_before.st_ino)
+    );
+}
+
+#[test]
 fn production_listener_rejects_alternate_and_blocking_endpoints() {
     let alternate_fixture = Fixture::new("alternate-listener");
     let alternate_path = alternate_fixture.root.join("alternate.sock");
-    let alternate = named_seqpacket_listener(&alternate_path);
+    let alternate = bound_named_seqpacket_socket(&alternate_path);
     let Some(supervisor) = bound_supervisor(&alternate_fixture) else {
         return;
     };
@@ -1810,7 +1898,7 @@ fn production_listener_rejects_alternate_and_blocking_endpoints() {
 fn admitted_listener_rejects_filesystem_identity_removal() {
     let fixture = Fixture::new("listener-path-removal");
     let listener_path = fixture.root.join("supervisor.sock");
-    let listener = named_seqpacket_listener(&listener_path);
+    let listener = bound_named_seqpacket_socket(&listener_path);
     let Some(supervisor) = bound_supervisor(&fixture) else {
         return;
     };
@@ -1849,8 +1937,7 @@ fn fixed_worker_pool_reports_rejection_and_stops_gracefully() {
 
     let fixture = Fixture::new("fixed-worker-pool");
     let listener_path = fixture.root.join("supervisor.sock");
-    let listener = named_seqpacket_listener(&listener_path);
-    let _cargo_control = connect_seqpacket(&listener_path);
+    let listener = bound_named_seqpacket_socket(&listener_path);
     let Some(supervisor) = bound_supervisor(&fixture) else {
         return;
     };
@@ -1861,6 +1948,7 @@ fn fixed_worker_pool_reports_rejection_and_stops_gracefully() {
         &listener_path,
     )
     .unwrap();
+    let _cargo_control = connect_seqpacket(&listener_path);
     let shutdown = service.shutdown_handle();
     let mut observed = 0_u64;
     let report = service
@@ -1885,7 +1973,7 @@ fn fixed_worker_pool_reports_rejection_and_stops_gracefully() {
 fn pre_requested_shutdown_starts_and_joins_every_fixed_worker() {
     let fixture = Fixture::new("pre-requested-worker-stop");
     let listener_path = fixture.root.join("supervisor.sock");
-    let listener = named_seqpacket_listener(&listener_path);
+    let listener = bound_named_seqpacket_socket(&listener_path);
     let Some(supervisor) = bound_supervisor(&fixture) else {
         return;
     };

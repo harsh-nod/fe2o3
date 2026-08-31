@@ -24,28 +24,30 @@ const SYSTEMD_VERSION_LINE_V1: &str = "systemd 255 (255.4-1ubuntu8.17)";
 const SYSTEMD_TOOL_OUTPUT_MAX_BYTES_V1: u64 = 64 * 1024;
 const COMPILER_UID_V1: u32 = 999;
 const ANCHOR_UID_V1: u32 = 998;
+const QUALIFICATION_CLIENT_UID_V1: u32 = 997;
 const ACCOUNT_DATABASE_MAX_BYTES_V1: u64 = 16 * 1024;
 const VERIFIED_SYSTEMD_UNIT_COUNT_V1: usize = 3;
 const EXPECTED_PASSWD_V1: &[u8] = b"root:x:0:0:root:/root:/bin/bash\n\
 fe2o3-compiler:x:999:999:fe2o3 compiler-execution supervisor:/var/lib/fe2o3/compiler-execution:/usr/sbin/nologin\n\
-fe2o3-anchor:x:998:998:fe2o3 external monotonic anchor:/var/lib/fe2o3/external-anchor:/usr/sbin/nologin\n";
+fe2o3-anchor:x:998:998:fe2o3 external monotonic anchor:/var/lib/fe2o3/external-anchor:/usr/sbin/nologin\n\
+fe2o3-qualification-client:x:997:997:fe2o3 compiler-execution qualification client:/nonexistent:/usr/sbin/nologin\n";
 const EXPECTED_GROUP_V1: &[u8] = b"root:x:0:\n\
-fe2o3-compiler:x:999:\n\
-fe2o3-anchor:x:998:\n";
+fe2o3-compiler:x:999:fe2o3-qualification-client\n\
+fe2o3-anchor:x:998:\n\
+fe2o3-qualification-client:x:997:\n";
 
 const VERSION_ARGS_V1: &[&str] = &["/usr/bin/systemd-analyze", "--version"];
 const SYSUSERS_ARGS_V1: &[&str] = &["/usr/bin/systemd-sysusers", "--no-pager"];
 const TMPFILES_ARGS_V1: &[&str] = &["/usr/bin/systemd-tmpfiles", "--create", "--no-pager"];
 const ANALYZE_ARGS_V1: &[&str] = &[
     "/usr/bin/systemd-analyze",
-    "--offline=yes",
     "--man=no",
     "--generators=no",
     "--no-pager",
     "verify",
     "fe2o3-qualification.target",
-    "fe2o3-compiler-execution.socket",
     "fe2o3-compiler-execution.service",
+    "fe2o3-qualification-client-check.service",
 ];
 
 const PREFLIGHT_COMMANDS_V1: [SystemdPreflightCommandV1; 4] = [
@@ -296,6 +298,14 @@ impl CompilerExecutionSystemdPreflightV1 {
         ANCHOR_UID_V1
     }
 
+    pub(super) const fn qualification_client_uid(&self) -> u32 {
+        QUALIFICATION_CLIENT_UID_V1
+    }
+
+    pub(super) const fn qualification_client_gid(&self) -> u32 {
+        QUALIFICATION_CLIENT_UID_V1
+    }
+
     pub(super) fn git_commit(&self) -> &str {
         self.mounted.git_commit()
     }
@@ -501,7 +511,27 @@ fn validate_tmpfiles_projection(root: &OwnedFd) -> Result<(), DeploymentVerifica
         0o400,
         (0, 0),
         Some(0),
-    )
+    )?;
+    match openat2(
+        root,
+        super::client_transaction::CLIENT_TRANSACTION_REPORT_PATH_V1,
+        OFlags::PATH | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+        Mode::empty(),
+        ResolveFlags::BENEATH
+            | ResolveFlags::NO_SYMLINKS
+            | ResolveFlags::NO_MAGICLINKS
+            | ResolveFlags::NO_XDEV,
+    ) {
+        Err(rustix::io::Errno::NOENT) => Ok(()),
+        Ok(_) => Err(super::invalid(
+            DeploymentVerificationErrorKindV1::InvalidQualificationPreflight,
+            "client transaction report exists before machine boot",
+        )),
+        Err(source) => Err(io_error(
+            "verify client transaction report absence before machine boot",
+            source,
+        )),
+    }
 }
 
 fn validate_root_object(
@@ -594,7 +624,19 @@ mod tests {
                 QualificationFaultPointV1::SystemdUnitVerifyRevalidated,
             ]
         );
-        assert_eq!(ANALYZE_ARGS_V1.len(), 9);
+        assert_eq!(
+            ANALYZE_ARGS_V1,
+            [
+                "/usr/bin/systemd-analyze",
+                "--man=no",
+                "--generators=no",
+                "--no-pager",
+                "verify",
+                "fe2o3-qualification.target",
+                "fe2o3-compiler-execution.service",
+                "fe2o3-qualification-client-check.service",
+            ]
+        );
         assert_eq!(VERIFIED_SYSTEMD_UNIT_COUNT_V1, 3);
     }
 

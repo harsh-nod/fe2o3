@@ -21,6 +21,7 @@ use sha2::{Digest, Sha256};
 
 mod boot;
 mod cgroup;
+mod client_transaction;
 mod fault;
 mod host;
 mod install;
@@ -141,12 +142,6 @@ const FILE_SPECS_V1: [FileSpecV1; COMPILER_EXECUTION_INSTALL_FILE_COUNT_V1] = [
         max_bytes: CONFIG_MAX_BYTES_V1,
     },
     FileSpecV1 {
-        source: "systemd/fe2o3-compiler-execution.socket",
-        install: "/usr/lib/systemd/system/fe2o3-compiler-execution.socket",
-        mode: 0o444,
-        max_bytes: CONFIG_MAX_BYTES_V1,
-    },
-    FileSpecV1 {
         source: "sysusers.d/fe2o3-compiler-execution.conf",
         install: "/usr/lib/sysusers.d/fe2o3-compiler-execution.conf",
         mode: 0o444,
@@ -161,6 +156,12 @@ const FILE_SPECS_V1: [FileSpecV1; COMPILER_EXECUTION_INSTALL_FILE_COUNT_V1] = [
     FileSpecV1 {
         source: "usr/libexec/fe2o3/fe2o3-compiler-execution-coordinator",
         install: "/usr/libexec/fe2o3/fe2o3-compiler-execution-coordinator",
+        mode: 0o555,
+        max_bytes: EXECUTABLE_MAX_BYTES_V1,
+    },
+    FileSpecV1 {
+        source: "usr/libexec/fe2o3/fe2o3-compiler-execution-client-check",
+        install: "/usr/libexec/fe2o3/fe2o3-compiler-execution-client-check",
         mode: 0o555,
         max_bytes: EXECUTABLE_MAX_BYTES_V1,
     },
@@ -219,15 +220,13 @@ const ROOT_CHILDREN_WITHOUT_MANIFEST_V1: &[&str] = &[
     "tmpfiles.d",
     "usr",
 ];
-const SYSTEMD_CHILDREN_V1: &[&str] = &[
-    "fe2o3-compiler-execution.service",
-    "fe2o3-compiler-execution.socket",
-];
+const SYSTEMD_CHILDREN_V1: &[&str] = &["fe2o3-compiler-execution.service"];
 const SYSUSERS_CHILDREN_V1: &[&str] = &["fe2o3-compiler-execution.conf"];
 const TMPFILES_CHILDREN_V1: &[&str] = &["fe2o3-compiler-execution.conf"];
 const USR_CHILDREN_V1: &[&str] = &["libexec"];
 const LIBEXEC_CHILDREN_V1: &[&str] = &["fe2o3"];
 const IMAGE_CHILDREN_V1: &[&str] = &[
+    "fe2o3-compiler-execution-client-check",
     "fe2o3-compiler-execution-coordinator",
     "fe2o3-compiler-execution-issuer",
     "fe2o3-compiler-execution-provision",
@@ -1501,7 +1500,7 @@ mod tests {
         fs::set_permissions(&service, fs::Permissions::from_mode(0o600)).unwrap();
         fs::write(&service, b"hostile").unwrap();
         fs::remove_file(&service).unwrap();
-        symlink("fe2o3-compiler-execution.socket", &service).unwrap();
+        symlink("../sysusers.d/fe2o3-compiler-execution.conf", &service).unwrap();
         assert!(fixture.verify(generation.sha256()).is_err());
 
         let fixture = Fixture::new();
@@ -1530,7 +1529,7 @@ mod tests {
     fn same_length_content_and_extended_attribute_substitution_are_rejected() {
         let fixture = Fixture::new();
         let generation = fixture.generate();
-        let path = fixture.path("systemd/fe2o3-compiler-execution.socket");
+        let path = fixture.path("sysusers.d/fe2o3-compiler-execution.conf");
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
         let mut bytes = fs::read(&path).unwrap();
         bytes[0] ^= 1;
@@ -2061,13 +2060,12 @@ mod tests {
         assert_installed_root_mutation_rejected(
             DeploymentVerificationErrorKindV1::InvalidMetadata,
             |root| {
-                let systemd = root.join("usr/lib/systemd/system");
-                let service = systemd.join("fe2o3-compiler-execution.service");
-                let socket = systemd.join("fe2o3-compiler-execution.socket");
+                let service = root.join("usr/lib/systemd/system/fe2o3-compiler-execution.service");
+                let sysusers = root.join("usr/lib/sysusers.d/fe2o3-compiler-execution.conf");
                 fs::remove_file(&service).unwrap();
-                fs::set_permissions(&socket, fs::Permissions::from_mode(0o644)).unwrap();
-                fs::hard_link(&socket, service).unwrap();
-                fs::set_permissions(socket, fs::Permissions::from_mode(0o444)).unwrap();
+                fs::set_permissions(&sysusers, fs::Permissions::from_mode(0o644)).unwrap();
+                fs::hard_link(&sysusers, service).unwrap();
+                fs::set_permissions(sysusers, fs::Permissions::from_mode(0o444)).unwrap();
             },
         );
         assert_installed_root_mutation_rejected(

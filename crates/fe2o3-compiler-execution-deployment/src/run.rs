@@ -41,6 +41,17 @@ pub struct CompilerExecutionQualificationReportV1 {
     anchor_gid: u32,
     policy_generation: u64,
     client_profile_identity: [u8; 32],
+    client_transaction_identity: [u8; 32],
+    launch_manifest_identity: [u8; 32],
+    service_ready_identity: [u8; 32],
+    submitter_pid: u32,
+    client_pid: u32,
+    client_uid: u32,
+    client_gid: u32,
+    issuer_pid: u32,
+    subject_identity: [u8; 32],
+    recovery_sequence: u64,
+    recovery_rollback_anchor: [u8; 32],
 }
 
 impl CompilerExecutionQualificationReportV1 {
@@ -92,6 +103,41 @@ impl CompilerExecutionQualificationReportV1 {
                 "compiler_execution_client_profile_admitted",
                 "true".to_owned(),
             ),
+            (
+                "compiler_execution_client_transaction_identity",
+                encode_sha256_lower_hex_v1(self.client_transaction_identity),
+            ),
+            (
+                "compiler_execution_launch_manifest_identity",
+                encode_sha256_lower_hex_v1(self.launch_manifest_identity),
+            ),
+            (
+                "compiler_execution_service_ready_identity",
+                encode_sha256_lower_hex_v1(self.service_ready_identity),
+            ),
+            (
+                "compiler_execution_submitter_pid",
+                self.submitter_pid.to_string(),
+            ),
+            ("compiler_execution_client_pid", self.client_pid.to_string()),
+            ("compiler_execution_client_uid", self.client_uid.to_string()),
+            ("compiler_execution_client_gid", self.client_gid.to_string()),
+            ("compiler_execution_issuer_pid", self.issuer_pid.to_string()),
+            (
+                "compiler_execution_subject_identity",
+                encode_sha256_lower_hex_v1(self.subject_identity),
+            ),
+            (
+                "compiler_execution_recovery_sequence",
+                self.recovery_sequence.to_string(),
+            ),
+            (
+                "compiler_execution_recovery_rollback_anchor",
+                encode_sha256_lower_hex_v1(self.recovery_rollback_anchor),
+            ),
+            ("compiler_execution_handoff", "admitted".to_owned()),
+            ("compiler_execution_recover", "complete".to_owned()),
+            ("compiler_execution_cancel", "complete".to_owned()),
             ("compiler_execution_provisioning", "complete".to_owned()),
             ("installed_lower_revalidated", "true".to_owned()),
             ("post_boot_provisioning_revalidated", "true".to_owned()),
@@ -169,6 +215,11 @@ pub struct CompilerExecutionQualificationCampaignReportV1 {
     anchor_gid: u32,
     policy_generation: u64,
     client_profile_identity: [u8; 32],
+    client_uid: u32,
+    client_gid: u32,
+    subject_identity: [u8; 32],
+    recovery_sequence: u64,
+    recovery_rollback_anchor: [u8; 32],
 }
 
 impl CompilerExecutionQualificationCampaignReportV1 {
@@ -205,7 +256,10 @@ impl CompilerExecutionQualificationCampaignReportV1 {
                 "2".to_owned(),
             ),
             ("systemd_boot_run_count", "2".to_owned()),
-            ("supervisor_socket_connectivity_run_count", "2".to_owned()),
+            (
+                "compiler_execution_client_transaction_run_count",
+                "2".to_owned(),
+            ),
             ("systemd_version", self.systemd_version.clone()),
             ("compiler_uid", self.compiler_uid.to_string()),
             ("compiler_gid", self.compiler_gid.to_string()),
@@ -216,6 +270,22 @@ impl CompilerExecutionQualificationCampaignReportV1 {
                 "compiler_execution_client_profile_identity",
                 encode_sha256_lower_hex_v1(self.client_profile_identity),
             ),
+            ("compiler_execution_client_uid", self.client_uid.to_string()),
+            ("compiler_execution_client_gid", self.client_gid.to_string()),
+            (
+                "compiler_execution_subject_identity",
+                encode_sha256_lower_hex_v1(self.subject_identity),
+            ),
+            (
+                "compiler_execution_recovery_sequence",
+                self.recovery_sequence.to_string(),
+            ),
+            (
+                "compiler_execution_recovery_rollback_anchor",
+                encode_sha256_lower_hex_v1(self.recovery_rollback_anchor),
+            ),
+            ("compiler_execution_recover_run_count", "2".to_owned()),
+            ("compiler_execution_cancel_run_count", "2".to_owned()),
             (
                 "qualification_fault_count",
                 QualificationFaultPointV1::all().len().to_string(),
@@ -279,9 +349,9 @@ impl<'a> CompilerExecutionQualificationRequestV1<'a> {
 /// Runs and completely cleans one root-only disposable systemd boot transaction.
 ///
 /// This is the sole high-level qualification path through verification, installation, mount
-/// composition, sysusers, tmpfiles, unit verification, isolated boot, exact supervisor-socket
-/// connection admission, bounded shutdown, exact postcondition admission, and cleanup. It grants
-/// no persistent service or compiler-execution authority.
+/// composition, sysusers, tmpfiles, unit verification, isolated boot, exact non-root client
+/// transaction admission, bounded shutdown, exact postcondition admission, and cleanup. It
+/// grants no persistent service or compiler-execution authority.
 pub fn run_compiler_execution_qualification_v1(
     bundle_root: &Path,
     expected_manifest_sha256: &str,
@@ -324,15 +394,19 @@ fn execute_staged_qualification_with_hooks(
     )?;
     let preflight = run_compiler_execution_systemd_preflight_with_hooks_v1(mounted, hooks)?;
     let provisioned = run_compiler_execution_provisioning_with_hooks_v1(preflight, hooks)?;
-    if let Err(error) = boot_and_stop_systemd_machine_v1(&provisioned, &staging_name, hooks) {
-        return match provisioned.cleanup_with_hooks(hooks) {
-            Ok(()) => Err(error),
-            Err(cleanup) => Err(super::invalid(
-                DeploymentVerificationErrorKindV1::CleanupFailed,
-                format!("systemd machine failed ({error}); cleanup also failed: {cleanup}"),
-            )),
+    let client_transaction =
+        match boot_and_stop_systemd_machine_v1(&provisioned, &staging_name, hooks) {
+            Ok(client_transaction) => client_transaction,
+            Err(error) => {
+                return match provisioned.cleanup_with_hooks(hooks) {
+                    Ok(()) => Err(error),
+                    Err(cleanup) => Err(super::invalid(
+                        DeploymentVerificationErrorKindV1::CleanupFailed,
+                        format!("systemd machine failed ({error}); cleanup also failed: {cleanup}"),
+                    )),
+                };
+            }
         };
-    }
     let report = CompilerExecutionQualificationReportV1 {
         git_commit: provisioned.git_commit().to_owned(),
         target: transaction.target,
@@ -349,6 +423,17 @@ fn execute_staged_qualification_with_hooks(
         anchor_gid: provisioned.anchor_gid(),
         policy_generation: provisioned.policy_generation(),
         client_profile_identity: *provisioned.client_profile().identity().as_bytes(),
+        client_transaction_identity: client_transaction.identity(),
+        launch_manifest_identity: client_transaction.launch_manifest_identity(),
+        service_ready_identity: client_transaction.service_ready_identity(),
+        submitter_pid: client_transaction.submitter_pid(),
+        client_pid: client_transaction.client_pid(),
+        client_uid: client_transaction.client_uid(),
+        client_gid: client_transaction.client_gid(),
+        issuer_pid: client_transaction.issuer_pid(),
+        subject_identity: client_transaction.subject_identity(),
+        recovery_sequence: client_transaction.sequence(),
+        recovery_rollback_anchor: client_transaction.rollback_anchor(),
     };
     provisioned.cleanup_with_hooks(hooks)?;
     Ok(report)
@@ -518,6 +603,11 @@ pub fn run_compiler_execution_qualification_campaign_v1(
         anchor_gid: first.anchor_gid,
         policy_generation: first.policy_generation,
         client_profile_identity: first.client_profile_identity,
+        client_uid: first.client_uid,
+        client_gid: first.client_gid,
+        subject_identity: first.subject_identity,
+        recovery_sequence: first.recovery_sequence,
+        recovery_rollback_anchor: first.recovery_rollback_anchor,
     })
 }
 
@@ -584,6 +674,11 @@ fn require_systemd_identity(
         || expected.anchor_gid != observed.anchor_gid
         || expected.policy_generation != observed.policy_generation
         || expected.client_profile_identity != observed.client_profile_identity
+        || expected.client_uid != observed.client_uid
+        || expected.client_gid != observed.client_gid
+        || expected.subject_identity != observed.subject_identity
+        || expected.recovery_sequence != observed.recovery_sequence
+        || expected.recovery_rollback_anchor != observed.recovery_rollback_anchor
     {
         return Err(super::invalid(
             DeploymentVerificationErrorKindV1::InputChanged,
@@ -642,9 +737,20 @@ mod tests {
             anchor_gid: 998,
             policy_generation: 1,
             client_profile_identity: [0x67; 32],
+            client_transaction_identity: [0x68; 32],
+            launch_manifest_identity: [0x69; 32],
+            service_ready_identity: [0x6a; 32],
+            submitter_pid: 41,
+            client_pid: 42,
+            client_uid: 997,
+            client_gid: 997,
+            issuer_pid: 43,
+            subject_identity: [0x6b; 32],
+            recovery_sequence: 0,
+            recovery_rollback_anchor: [0x6c; 32],
         };
         let encoded = report.canonical_report();
-        assert_eq!(encoded.lines().count(), 30);
+        assert_eq!(encoded.lines().count(), 44);
         assert!(encoded.contains("systemd_sysusers=complete\n"));
         assert!(encoded.contains("systemd_unit_verify_count=3\n"));
         assert!(encoded.contains("systemd_boot=complete\n"));
@@ -653,6 +759,10 @@ mod tests {
         assert!(encoded.contains("supervisor_socket_type=unix-seqpacket\n"));
         assert!(encoded.contains("supervisor_socket_connected=true\n"));
         assert!(encoded.contains("compiler_execution_client_profile_admitted=true\n"));
+        assert!(encoded.contains("compiler_execution_client_uid=997\n"));
+        assert!(encoded.contains("compiler_execution_handoff=admitted\n"));
+        assert!(encoded.contains("compiler_execution_recover=complete\n"));
+        assert!(encoded.contains("compiler_execution_cancel=complete\n"));
         assert!(encoded.contains(&format!(
             "compiler_execution_client_profile_identity={}\n",
             encode_sha256_lower_hex_v1([0x67; 32])
@@ -699,9 +809,14 @@ mod tests {
             anchor_gid: 998,
             policy_generation: 1,
             client_profile_identity: [0x34; 32],
+            client_uid: 997,
+            client_gid: 997,
+            subject_identity: [0x35; 32],
+            recovery_sequence: 0,
+            recovery_rollback_anchor: [0x36; 32],
         };
         let encoded = report.canonical_report();
-        assert_eq!(encoded.lines().count(), 25);
+        assert_eq!(encoded.lines().count(), 32);
         assert!(encoded.contains("normal_run_count=2\n"));
         assert!(encoded.contains("systemd_preflight_run_count=2\n"));
         assert!(encoded.contains("compiler_execution_provisioning_run_count=2\n"));
@@ -711,9 +826,11 @@ mod tests {
             encode_sha256_lower_hex_v1([0x34; 32])
         )));
         assert!(encoded.contains("systemd_boot_run_count=2\n"));
-        assert!(encoded.contains("supervisor_socket_connectivity_run_count=2\n"));
-        assert!(encoded.contains("qualification_fault_count=25\n"));
-        assert!(encoded.contains("reacquisition_count=51\n"));
+        assert!(encoded.contains("compiler_execution_client_transaction_run_count=2\n"));
+        assert!(encoded.contains("compiler_execution_recover_run_count=2\n"));
+        assert!(encoded.contains("compiler_execution_cancel_run_count=2\n"));
+        assert!(encoded.contains("qualification_fault_count=28\n"));
+        assert!(encoded.contains("reacquisition_count=57\n"));
         assert!(!encoded.contains("staging_name"));
         assert!(encoded.ends_with("qualification_parent_empty=true\ncleanup=complete\n"));
     }

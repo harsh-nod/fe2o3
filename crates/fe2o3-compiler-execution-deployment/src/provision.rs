@@ -109,6 +109,14 @@ impl CompilerExecutionProvisionedQualificationV1 {
         self.preflight.anchor_gid()
     }
 
+    pub(super) const fn qualification_client_uid(&self) -> u32 {
+        self.preflight.qualification_client_uid()
+    }
+
+    pub(super) const fn qualification_client_gid(&self) -> u32 {
+        self.preflight.qualification_client_gid()
+    }
+
     pub(super) fn git_commit(&self) -> &str {
         self.preflight.git_commit()
     }

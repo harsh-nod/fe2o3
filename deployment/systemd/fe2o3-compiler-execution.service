@@ -1,17 +1,18 @@
 [Unit]
 Description=fe2o3 protected compiler-execution coordinator
 Documentation=https://github.com/harsh-nod/fe2o3/blob/main/docs/compiler-execution-service-v1.md
-Requires=fe2o3-compiler-execution.socket
-After=fe2o3-compiler-execution.socket
 StartLimitIntervalSec=0
 
 [Service]
-Type=simple
+Type=notify
+NotifyAccess=main
 ExecStart=/usr/libexec/fe2o3/fe2o3-compiler-execution-coordinator
 User=root
 Group=root
-Sockets=fe2o3-compiler-execution.socket
+RuntimeDirectory=fe2o3
+RuntimeDirectoryMode=0755
 
+OpenFile=/run/fe2o3:runtime-root:read-only
 OpenFile=/var/lib/fe2o3/compiler-execution:supervisor-root:read-only
 OpenFile=/var/lib/fe2o3/external-anchor:anchor-root:read-only
 OpenFile=/usr/libexec/fe2o3/fe2o3-compiler-execution-supervisor:supervisor:read-only

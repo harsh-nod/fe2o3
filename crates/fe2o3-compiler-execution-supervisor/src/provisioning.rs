@@ -9,7 +9,7 @@ use std::path::Path;
 use fe2o3_compiler_execution_protocol::COMPILER_EXECUTION_SUPERVISOR_SOCKET_PATH_V1;
 
 use crate::authority::ProtectedIssuerRootV1;
-use crate::listener::{ListenerFilesystemPolicyV1, ProtectedIssuerListenerV1};
+use crate::listener::{ListenerFilesystemPolicyV1, ProvisionedProtectedIssuerSocketV1};
 use crate::{
     IssuerServiceCredentialProfileV1, ProtectedIssuerServiceErrorV1,
     ProtectedIssuerSupervisorErrorV1,
@@ -34,7 +34,7 @@ use crate::{
 /// ```
 pub struct ProvisionedProtectedIssuerServiceInputsV1 {
     credentials: IssuerServiceCredentialProfileV1,
-    listener: ProtectedIssuerListenerV1,
+    listener: ProvisionedProtectedIssuerSocketV1,
     root: ProtectedIssuerRootV1,
 }
 
@@ -91,8 +91,9 @@ impl ProvisionedProtectedIssuerServiceInputsV1 {
     ) -> Result<Self, ProtectedIssuerServiceProvisioningErrorV1> {
         let root = ProtectedIssuerRootV1::admit(root, credentials)
             .map_err(ProtectedIssuerServiceProvisioningErrorV1::Root)?;
-        let listener = ProtectedIssuerListenerV1::admit(listener, expected_path, filesystem_policy)
-            .map_err(ProtectedIssuerServiceProvisioningErrorV1::Listener)?;
+        let listener =
+            ProvisionedProtectedIssuerSocketV1::admit(listener, expected_path, filesystem_policy)
+                .map_err(ProtectedIssuerServiceProvisioningErrorV1::Listener)?;
         let admitted = Self {
             credentials,
             listener,
@@ -147,7 +148,7 @@ impl ProvisionedProtectedIssuerServiceInputsV1 {
 /// ```
 pub struct ProtectedIssuerServiceDeploymentInputsV1 {
     credentials: IssuerServiceCredentialProfileV1,
-    listener: ProtectedIssuerListenerV1,
+    listener: ProvisionedProtectedIssuerSocketV1,
     root: ProtectedIssuerRootV1,
 }
 

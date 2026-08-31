@@ -19,6 +19,7 @@ set -e
 
 for helper in \
   build-static-compiler-execution-coordinator.sh \
+  build-static-compiler-execution-client-check.sh \
   build-static-compiler-execution-supervisor.sh \
   build-static-compiler-execution-issuer.sh \
   build-static-external-anchor-provisioning-helper.sh \
@@ -29,6 +30,7 @@ for helper in \
 done
 
 for image in \
+  fe2o3-compiler-execution-client-check \
   fe2o3-compiler-execution-coordinator \
   fe2o3-compiler-execution-supervisor \
   fe2o3-static-preexec-launcher \
@@ -60,6 +62,7 @@ readonly qualification_fault_source="${repo_root}/crates/fe2o3-compiler-executio
 readonly qualification_preflight_source="${repo_root}/crates/fe2o3-compiler-execution-deployment/src/preflight.rs"
 readonly qualification_provision_source="${repo_root}/crates/fe2o3-compiler-execution-deployment/src/provision.rs"
 readonly qualification_boot_source="${repo_root}/crates/fe2o3-compiler-execution-deployment/src/boot.rs"
+readonly qualification_client_transaction_source="${repo_root}/crates/fe2o3-compiler-execution-deployment/src/client_transaction.rs"
 readonly qualification_cgroup_source="${repo_root}/crates/fe2o3-compiler-execution-deployment/src/cgroup.rs"
 readonly qualification_run_source="${repo_root}/crates/fe2o3-compiler-execution-deployment/src/run.rs"
 bash -n "${verifier_builder}"
@@ -82,14 +85,27 @@ for boot_contract in \
   '--private-network' \
   '--bind=+/run/fe2o3:/run/fe2o3:norbind,noidmap' \
   'COMPILER_EXECUTION_SUPERVISOR_SOCKET_PATH_V1' \
-  'SocketType::SEQPACKET' \
-  'connect(' \
-  'getpeername(' \
-  'socket_peercred' \
   'MachineSocketReadinessV1' \
+  'try_admit_client_transaction_report_v1' \
+  'await_client_transaction' \
   'boot_and_stop_systemd_machine_v1'; do
   grep -Fq -- "${boot_contract}" "${qualification_boot_source}" ||
     fail "missing isolated systemd boot contract ${boot_contract}"
+done
+if grep -Eq -- 'connect\(|getpeername\(|socket_peercred' "${qualification_boot_source}"; then
+  fail 'host readiness must not consume the production supervisor session'
+fi
+for transaction_contract in \
+  'compiler-execution-client-check.report' \
+  'complete=true' \
+  'profile.identity()' \
+  'profile.policy().identity()' \
+  'client_uid == 0' \
+  'report_identity' \
+  'read_exact_at' \
+  'ResolveFlags::NO_XDEV'; do
+  grep -Fq -- "${transaction_contract}" "${qualification_client_transaction_source}" ||
+    fail "missing client transaction evidence contract ${transaction_contract}"
 done
 if grep -Fq -- '.process_group(0)' "${qualification_boot_source}"; then
   fail 'systemd machine helper escapes the supervised worker process group'
@@ -180,6 +196,9 @@ for fault_contract in \
   CompilerExecutionProvisioningRevalidated \
   CompilerExecutionProvisioningAdmitted \
   SystemdMachineSpawned \
+  SupervisorSocketMetadataAdmitted \
+  ClientTransactionComplete \
+  ClientTransactionRevalidated \
   SystemdMachineReady \
   SystemdMachineStopped \
   PostBootLowerRevalidated \

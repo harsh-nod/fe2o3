@@ -7,20 +7,26 @@ repository.workspace = true
 rust-version.workspace = true
 description = "Bounded protected compiler-execution service client for fe2o3."
 publish = false
+autobins = false
 
 [features]
 test-support = []
 
 [dependencies]
 fe2o3-artifact-transaction.workspace = true
+fe2o3-compiler-closure-capability.workspace = true
 fe2o3-compiler-execution-protocol.workspace = true
 libc.workspace = true
 rustix = { workspace = true, features = ["pipe", "process"] }
+sha2.workspace = true
 
 [dev-dependencies]
 ed25519-dalek = { version = "=2.2.0", default-features = false, features = ["fast", "zeroize"] }
 fe2o3-external-anchor-protocol.workspace = true
-sha2.workspace = true
 
 [lib]
 name = "fe2o3_compiler_execution_client"
+
+[[bin]]
+name = "fe2o3-compiler-execution-client-check"
+path = "src/bin/compiler-execution-client-check.rs"
