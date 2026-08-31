@@ -205,6 +205,7 @@ fn fixture() -> QueueFixture {
         control: bindings[1],
         eop: bindings[2],
         context_save: bindings[3],
+        private_scratch: None,
     };
     let plan = ComputeAqlQueuePlanV1 {
         schema_version: QUEUE_LIFECYCLE_SCHEMA_VERSION_V1,
@@ -311,6 +312,7 @@ fn append_resource_set(
             control: bindings[1],
             eop: bindings[2],
             context_save: bindings[3],
+            private_scratch: None,
         },
     )
 }
@@ -865,6 +867,42 @@ fn retaining_queue_plans_cannot_share_any_mapped_resource() {
     }
     assert!(matches!(
         queue.admit_compute_aql_plan(&fixture.identity, &memory, shared),
+        Err(QueueTransitionErrorV1::InvalidPlan(
+            QueueInvariantViolationV1::ResourceAlias(_)
+        ))
+    ));
+
+    let (mut memory, mut resources) = append_resource_set(memory, &fixture, 1_000, 0x8_0000);
+    let allocation_alias = MemoryMappingKeyV1 {
+        allocation: fixture.plan.resources.ring.mapping.allocation,
+        id: MappingIdV1(50_000),
+    };
+    memory = memory_advance(
+        memory,
+        MemoryTransitionV1::BeginMap {
+            key: allocation_alias,
+            target_devices: vec![fixture.device.model_key()],
+            access: MemoryAccessV1::ReadWrite,
+        },
+    );
+    memory = memory_advance(
+        memory,
+        MemoryTransitionV1::ObserveMap {
+            key: allocation_alias,
+            progress: PartialProgressObservationV1 {
+                n_success: 1,
+                status: PartialOperationStatusV1::Succeeded,
+            },
+        },
+    );
+    resources.ring.mapping = allocation_alias;
+    resources.ring.publication = MemoryPublicationKeyV1 {
+        mapping: allocation_alias,
+        id: MemoryPublicationIdV1(50_001),
+    };
+    let allocation_aliased = distinct_plan(&fixture, resources, 702, 1, 22);
+    assert!(matches!(
+        queue.admit_compute_aql_plan(&fixture.identity, &memory, allocation_aliased),
         Err(QueueTransitionErrorV1::InvalidPlan(
             QueueInvariantViolationV1::ResourceAlias(_)
         ))

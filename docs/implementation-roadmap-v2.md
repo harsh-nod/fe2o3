@@ -848,6 +848,22 @@ types exist only behind explicit qualification features. Production execution
 still fails closed until the Worker V3 application verifier and runtime
 authorization join are complete.
 
+Runtime groundwork now also includes bounded model-only registries for
+multiple in-flight queue operations and host-visible/device-local transfers.
+They retain exact queue, dispatch, completion, executable, and mapping
+identities through completion or quarantine; reject allocation aliases and
+cross-queue conflicts; and release storage only after explicit visibility
+consumption. A gfx942 private-segment admission model binds post-link metadata
+and launch geometry to queue-owned scratch storage. Its capacity values remain
+explicit policy inputs rather than authenticated hardware facts, and native
+allocation, copy, submission, polling, and currentness refinement remain open.
+
+The debugger/profiler inspection lane can now decode a bounded canonical
+source-to-ISA observation collection through `cargo fe2o3 inspect`, including
+typed missing and unavailable outcomes. This is deterministic evidence
+inspection only; live debugger control, profiler collection, and semantic
+source/ISA authority remain separate qualification gates.
+
 ### Safety tests
 
 Compile-fail tests must cover:

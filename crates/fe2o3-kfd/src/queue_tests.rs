@@ -228,6 +228,7 @@ impl Fixture {
                     control: bindings[1],
                     eop: bindings[2],
                     context_save: bindings[3],
+                    private_scratch: None,
                 },
             },
             buffers: KfdAqlComputeQueueBuffers {

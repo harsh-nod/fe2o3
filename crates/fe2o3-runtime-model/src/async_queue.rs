@@ -94,6 +94,7 @@ impl AsyncOperationResourcesV1 {
 /// Exact reusable slot incarnation assigned to one modeled operation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AsyncOperationBindingV1 {
+    registry_incarnation: IdentityDigestV1,
     queue: QueueKeyV1,
     slot_index: u16,
     slot_generation: u64,
@@ -102,6 +103,10 @@ pub struct AsyncOperationBindingV1 {
 }
 
 impl AsyncOperationBindingV1 {
+    pub const fn registry_incarnation(self) -> IdentityDigestV1 {
+        self.registry_incarnation
+    }
+
     pub const fn queue(self) -> QueueKeyV1 {
         self.queue
     }
@@ -241,6 +246,7 @@ impl<T: core::fmt::Debug> core::fmt::Debug for AsyncTokenTransitionFailureV1<T> 
 /// cannot release a slot or any modeled resource.
 pub struct AsyncQueueRegistryV1 {
     runtime: RuntimeStateV1,
+    registry_incarnation: IdentityDigestV1,
     queue: QueueKeyV1,
     slots: Vec<AsyncQueueSlotRecordV1>,
 }
@@ -249,6 +255,7 @@ impl core::fmt::Debug for AsyncQueueRegistryV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
             .debug_struct("AsyncQueueRegistryV1")
+            .field("registry_incarnation", &self.registry_incarnation)
             .field("queue", &self.queue)
             .field("slots", &self.slots)
             .finish_non_exhaustive()
@@ -258,10 +265,11 @@ impl core::fmt::Debug for AsyncQueueRegistryV1 {
 impl AsyncQueueRegistryV1 {
     pub fn new_model_only(
         runtime: RuntimeStateV1,
+        registry_incarnation: IdentityDigestV1,
         queue: QueueKeyV1,
         max_in_flight: usize,
     ) -> Result<Self, AsyncQueueCreateFailureV1> {
-        let result = Self::validate_creation(&runtime, queue, max_in_flight);
+        let result = Self::validate_creation(&runtime, registry_incarnation, queue, max_in_flight);
         if let Err(error) = result {
             return Err(AsyncQueueCreateFailureV1 {
                 error: Box::new(error),
@@ -281,6 +289,7 @@ impl AsyncQueueRegistryV1 {
             .collect();
         Ok(Self {
             runtime,
+            registry_incarnation,
             queue,
             slots,
         })
@@ -292,6 +301,15 @@ impl AsyncQueueRegistryV1 {
 
     pub const fn queue(&self) -> QueueKeyV1 {
         self.queue
+    }
+
+    /// Caller-selected model incarnation used to reject tokens from a distinct
+    /// declared registry incarnation.
+    ///
+    /// This identity is not authenticated and grants no runtime authority. A
+    /// native adapter must allocate and seal a unique incarnation itself.
+    pub const fn registry_incarnation(&self) -> IdentityDigestV1 {
+        self.registry_incarnation
     }
 
     pub fn runtime_state(&self) -> &RuntimeStateV1 {
@@ -360,6 +378,7 @@ impl AsyncQueueRegistryV1 {
             })
             .map_err(AsyncQueueErrorV1::Runtime)?;
         let binding = AsyncOperationBindingV1 {
+            registry_incarnation: self.registry_incarnation,
             queue: self.queue,
             slot_index: slot_index as u16,
             slot_generation,
@@ -382,6 +401,9 @@ impl AsyncQueueRegistryV1 {
             .map_err(AsyncQueueInvariantViolationV1::Runtime)?;
         if self.slots.is_empty() || self.slots.len() > MAX_ASYNC_QUEUE_IN_FLIGHT_V1 {
             return Err(AsyncQueueInvariantViolationV1::InvalidCapacity);
+        }
+        if self.registry_incarnation.as_bytes() == &[0; IDENTITY_DIGEST_BYTES_V1] {
+            return Err(AsyncQueueInvariantViolationV1::InvalidRegistryIncarnation);
         }
         let queue = self
             .runtime
@@ -409,6 +431,35 @@ impl AsyncQueueRegistryV1 {
                 phase => self.validate_retained_slot(index, phase, slot)?,
             }
         }
+        for slot in self
+            .slots
+            .iter()
+            .filter(|slot| slot.phase.retains_operation())
+        {
+            let resources =
+                slot.resources
+                    .as_ref()
+                    .ok_or(AsyncQueueInvariantViolationV1::InvalidSlot(
+                        slot.index as usize,
+                    ))?;
+            if self.resource_roles_overlap(resources)
+                || self.resources_overlap_live_queue_ring(resources)
+                || self.resources_write_live_executable(resources)
+            {
+                return Err(AsyncQueueInvariantViolationV1::ResourceConflict);
+            }
+            if self.runtime.dispatches().iter().any(|dispatch| {
+                dispatch.state.retains_resources()
+                    && !self.slot_owns_dispatch(dispatch.key)
+                    && (dispatch_resources_conflict(
+                        &self.runtime,
+                        &dispatch.resources,
+                        &resources.runtime_resources(),
+                    ) || self.dispatch_writes_candidate_executable(dispatch, resources))
+            }) {
+                return Err(AsyncQueueInvariantViolationV1::ResourceConflict);
+            }
+        }
         for left in 0..self.slots.len() {
             let Some(left_resources) = self.slots[left].resources.as_ref() else {
                 continue;
@@ -417,7 +468,7 @@ impl AsyncQueueRegistryV1 {
                 let Some(right_resources) = self.slots[right].resources.as_ref() else {
                     continue;
                 };
-                if resource_sets_conflict(left_resources, right_resources) {
+                if resource_sets_conflict(&self.runtime, left_resources, right_resources) {
                     return Err(AsyncQueueInvariantViolationV1::ResourceConflict);
                 }
             }
@@ -427,12 +478,16 @@ impl AsyncQueueRegistryV1 {
 
     fn validate_creation(
         runtime: &RuntimeStateV1,
+        registry_incarnation: IdentityDigestV1,
         queue: QueueKeyV1,
         max_in_flight: usize,
     ) -> Result<(), AsyncQueueErrorV1> {
         runtime
             .validate_global_invariants()
             .map_err(AsyncQueueErrorV1::RuntimeInvariant)?;
+        if registry_incarnation.as_bytes() == &[0; IDENTITY_DIGEST_BYTES_V1] {
+            return Err(AsyncQueueErrorV1::InvalidRegistryIncarnation);
+        }
         let record = runtime
             .queues()
             .iter()
@@ -479,15 +534,99 @@ impl AsyncQueueRegistryV1 {
         &self,
         candidate: &AsyncOperationResourcesV1,
     ) -> Result<(), AsyncQueueErrorV1> {
+        if self.resource_roles_overlap(candidate) {
+            return Err(AsyncQueueErrorV1::ResourceRoleCollision);
+        }
+        if self.resources_overlap_live_queue_ring(candidate) {
+            return Err(AsyncQueueErrorV1::QueueInfrastructureCollision);
+        }
+        if self.resources_write_live_executable(candidate) {
+            return Err(AsyncQueueErrorV1::ExecutableStorageCollision);
+        }
         if self
             .slots
             .iter()
             .filter_map(|slot| slot.resources.as_ref())
-            .any(|active| resource_sets_conflict(active, candidate))
+            .any(|active| resource_sets_conflict(&self.runtime, active, candidate))
+            || self.runtime.dispatches().iter().any(|dispatch| {
+                dispatch.state.retains_resources()
+                    && !self.slot_owns_dispatch(dispatch.key)
+                    && (dispatch_resources_conflict(
+                        &self.runtime,
+                        &dispatch.resources,
+                        &candidate.runtime_resources(),
+                    ) || self.dispatch_writes_candidate_executable(dispatch, candidate))
+            })
         {
             return Err(AsyncQueueErrorV1::ResourceConflict);
         }
         Ok(())
+    }
+
+    fn resource_roles_overlap(&self, resources: &AsyncOperationResourcesV1) -> bool {
+        let resources = resources.runtime_resources();
+        resources.iter().enumerate().any(|(index, left)| {
+            resources[index + 1..]
+                .iter()
+                .any(|right| mappings_overlap(&self.runtime, left.mapping, right.mapping))
+        })
+    }
+
+    fn resources_overlap_live_queue_ring(&self, resources: &AsyncOperationResourcesV1) -> bool {
+        let resources = resources.runtime_resources();
+        self.runtime
+            .queues()
+            .iter()
+            .filter(|queue| queue.state != QueueStateV1::Released)
+            .any(|queue| {
+                resources.iter().any(|resource| {
+                    mappings_overlap(&self.runtime, queue.ring_mapping, resource.mapping)
+                })
+            })
+    }
+
+    fn resources_write_live_executable(&self, resources: &AsyncOperationResourcesV1) -> bool {
+        let resources = resources.runtime_resources();
+        self.runtime
+            .loaded_code()
+            .iter()
+            .filter(|code| code.state == ResourceStateV1::Live)
+            .any(|code| {
+                resources.iter().any(|resource| {
+                    resource.required_access == MemoryAccessV1::ReadWrite
+                        && mappings_overlap(
+                            &self.runtime,
+                            code.executable_mapping,
+                            resource.mapping,
+                        )
+                })
+            })
+    }
+
+    fn dispatch_writes_candidate_executable(
+        &self,
+        dispatch: &DispatchRecordV1,
+        candidate: &AsyncOperationResourcesV1,
+    ) -> bool {
+        let Some(code) = self
+            .runtime
+            .loaded_code()
+            .iter()
+            .find(|code| code.key == candidate.code && code.state == ResourceStateV1::Live)
+        else {
+            return false;
+        };
+        dispatch.resources.iter().any(|resource| {
+            resource.required_access == MemoryAccessV1::ReadWrite
+                && mappings_overlap(&self.runtime, resource.mapping, code.executable_mapping)
+        })
+    }
+
+    fn slot_owns_dispatch(&self, dispatch: DispatchKeyV1) -> bool {
+        self.slots.iter().any(|slot| {
+            slot.binding
+                .is_some_and(|binding| binding.dispatch == dispatch)
+        })
     }
 
     fn validate_retained_slot(
@@ -503,7 +642,8 @@ impl AsyncQueueRegistryV1 {
             .resources
             .as_ref()
             .ok_or(AsyncQueueInvariantViolationV1::InvalidSlot(index))?;
-        if binding.queue != self.queue
+        if binding.registry_incarnation != self.registry_incarnation
+            || binding.queue != self.queue
             || binding.slot_index as usize != index
             || binding.slot_generation != slot.generation
             || binding.completion.dispatch != binding.dispatch
@@ -559,6 +699,9 @@ impl AsyncQueueRegistryV1 {
         binding: AsyncOperationBindingV1,
         phase: AsyncQueueSlotPhaseV1,
     ) -> Result<usize, AsyncQueueErrorV1> {
+        if binding.registry_incarnation != self.registry_incarnation {
+            return Err(AsyncQueueErrorV1::TokenMismatch);
+        }
         if binding.queue != self.queue {
             return Err(AsyncQueueErrorV1::QueueMismatch);
         }
@@ -700,6 +843,7 @@ impl AsyncQueueRegistryV1 {
 /// Model rejection or invariant failure.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AsyncQueueErrorV1 {
+    InvalidRegistryIncarnation,
     InvalidCapacity,
     QueueNotFound,
     QueueNotReady,
@@ -711,6 +855,8 @@ pub enum AsyncQueueErrorV1 {
     NonCanonicalResources,
     InvalidDataAccess,
     ResourceRoleCollision,
+    QueueInfrastructureCollision,
+    ExecutableStorageCollision,
     ResourceConflict,
     TokenMismatch,
     SlotGenerationExhausted,
@@ -723,6 +869,7 @@ pub enum AsyncQueueErrorV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AsyncQueueInvariantViolationV1 {
     Runtime(InvariantViolationV1),
+    InvalidRegistryIncarnation,
     InvalidCapacity,
     QueueMissing,
     QueueUnavailable,
@@ -1018,16 +1165,47 @@ pub enum AsyncReleasedOperationOutcomeV1 {
 }
 
 fn resource_sets_conflict(
+    runtime: &RuntimeStateV1,
     left: &AsyncOperationResourcesV1,
     right: &AsyncOperationResourcesV1,
 ) -> bool {
     let left_resources = left.runtime_resources();
     let right_resources = right.runtime_resources();
+    dispatch_resources_conflict(runtime, &left_resources, &right_resources)
+}
+
+fn dispatch_resources_conflict(
+    runtime: &RuntimeStateV1,
+    left_resources: &[DispatchResourceV1],
+    right_resources: &[DispatchResourceV1],
+) -> bool {
     left_resources.iter().any(|left| {
         right_resources.iter().any(|right| {
-            left.mapping == right.mapping
+            mappings_overlap(runtime, left.mapping, right.mapping)
                 && !(left.required_access == MemoryAccessV1::Read
                     && right.required_access == MemoryAccessV1::Read)
         })
     })
+}
+
+fn mappings_overlap(runtime: &RuntimeStateV1, left: MappingKeyV1, right: MappingKeyV1) -> bool {
+    if left == right {
+        return true;
+    }
+    if left.allocation != right.allocation {
+        return false;
+    }
+    let Some(left) = runtime.mappings().iter().find(|record| record.key == left) else {
+        return false;
+    };
+    let Some(right) = runtime.mappings().iter().find(|record| record.key == right) else {
+        return false;
+    };
+    let Some(left_end) = left.allocation_offset.checked_add(left.byte_len) else {
+        return true;
+    };
+    let Some(right_end) = right.allocation_offset.checked_add(right.byte_len) else {
+        return true;
+    };
+    left.allocation_offset < right_end && right.allocation_offset < left_end
 }

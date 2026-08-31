@@ -5,6 +5,8 @@ use super::*;
 #[derive(Clone, Copy)]
 struct Fixture {
     queue: QueueKeyV1,
+    ring: MappingKeyV1,
+    executable: MappingKeyV1,
     code: LoadedCodeKeyV1,
     kernargs: [MappingKeyV1; 3],
     signals: [MappingKeyV1; 3],
@@ -100,6 +102,8 @@ fn live_fixture() -> (RuntimeStateV1, Fixture) {
         state,
         Fixture {
             queue,
+            ring: mappings[1],
+            executable: mappings[0],
             code,
             kernargs: [mappings[2], mappings[5], mappings[8]],
             signals: [mappings[3], mappings[6], mappings[9]],
@@ -126,6 +130,22 @@ fn resources(
     .unwrap()
 }
 
+fn runtime_resources(resources: &AsyncOperationResourcesV1) -> Vec<DispatchResourceV1> {
+    let mut result = vec![
+        DispatchResourceV1 {
+            mapping: resources.kernarg(),
+            required_access: MemoryAccessV1::ReadWrite,
+        },
+        DispatchResourceV1 {
+            mapping: resources.completion_signal(),
+            required_access: MemoryAccessV1::ReadWrite,
+        },
+    ];
+    result.extend_from_slice(resources.data());
+    result.sort_unstable_by_key(|resource| resource.mapping);
+    result
+}
+
 fn identity(queue: QueueKeyV1, id: u64) -> (DispatchKeyV1, CompletionKeyV1) {
     let dispatch = DispatchKeyV1 {
         queue,
@@ -138,6 +158,16 @@ fn identity(queue: QueueKeyV1, id: u64) -> (DispatchKeyV1, CompletionKeyV1) {
             id: CompletionIdV1(id + 1_000),
         },
     )
+}
+
+fn registry(
+    state: RuntimeStateV1,
+    fixture: Fixture,
+    max_in_flight: usize,
+    incarnation: u8,
+) -> AsyncQueueRegistryV1 {
+    AsyncQueueRegistryV1::new_model_only(state, digest(incarnation), fixture.queue, max_in_flight)
+        .unwrap()
 }
 
 fn reserve(
@@ -164,7 +194,7 @@ fn reserve(
 #[test]
 fn submitted_operations_complete_out_of_order_and_slots_reuse_by_generation() {
     let (state, fixture) = live_fixture();
-    let mut registry = AsyncQueueRegistryV1::new_model_only(state, fixture.queue, 2).unwrap();
+    let mut registry = registry(state, fixture, 2, 0x80);
     let first = reserve(&mut registry, fixture, 0, 10)
         .publish_model_only(&mut registry)
         .unwrap();
@@ -215,7 +245,7 @@ fn submitted_operations_complete_out_of_order_and_slots_reuse_by_generation() {
 #[test]
 fn timeout_and_post_publication_cancellation_retain_submitted_custody() {
     let (state, fixture) = live_fixture();
-    let mut registry = AsyncQueueRegistryV1::new_model_only(state, fixture.queue, 1).unwrap();
+    let mut registry = registry(state, fixture, 1, 0x81);
     let submitted = reserve(&mut registry, fixture, 0, 20)
         .publish_model_only(&mut registry)
         .unwrap();
@@ -246,7 +276,7 @@ fn timeout_and_post_publication_cancellation_retain_submitted_custody() {
 #[test]
 fn indeterminate_observation_quarantines_without_release_or_reuse() {
     let (state, fixture) = live_fixture();
-    let mut registry = AsyncQueueRegistryV1::new_model_only(state, fixture.queue, 1).unwrap();
+    let mut registry = registry(state, fixture, 1, 0x82);
     let submitted = reserve(&mut registry, fixture, 0, 30)
         .publish_model_only(&mut registry)
         .unwrap();
@@ -277,7 +307,7 @@ fn indeterminate_observation_quarantines_without_release_or_reuse() {
 #[test]
 fn resource_conflicts_reject_but_shared_reads_are_compatible() {
     let (state, fixture) = live_fixture();
-    let mut registry = AsyncQueueRegistryV1::new_model_only(state, fixture.queue, 3).unwrap();
+    let mut registry = registry(state, fixture, 3, 0x83);
     let (first_dispatch, first_completion) = identity(fixture.queue, 40);
     let _first = registry
         .reserve_model_only(
@@ -338,15 +368,319 @@ fn operation_resources_reject_executable_data_and_role_collisions() {
 }
 
 #[test]
-fn token_from_another_registry_is_rejected_with_custody_returned() {
+fn distinct_declared_registry_incarnations_reject_token_replay() {
     let (state, fixture) = live_fixture();
-    let mut first = AsyncQueueRegistryV1::new_model_only(state.clone(), fixture.queue, 1).unwrap();
-    let mut second = AsyncQueueRegistryV1::new_model_only(state, fixture.queue, 1).unwrap();
+    let mut first = registry(state.clone(), fixture, 1, 0x84);
+    let mut second = registry(state, fixture, 1, 0x85);
     let token = reserve(&mut first, fixture, 0, 50);
+    let second_token = reserve(&mut second, fixture, 0, 50);
     let failure = token.publish_model_only(&mut second).unwrap_err();
     assert_eq!(failure.error(), &AsyncQueueErrorV1::TokenMismatch);
     let token = failure.into_retained();
     token
         .cancel_before_publication_model_only(&mut first)
         .unwrap();
+    second_token
+        .cancel_before_publication_model_only(&mut second)
+        .unwrap();
+}
+
+#[test]
+fn queue_ring_is_rejected_in_every_operation_role() {
+    let (state, fixture) = live_fixture();
+    let mut registry = registry(state, fixture, 1, 0x86);
+    let cases = [
+        AsyncOperationResourcesV1::new(
+            fixture.code,
+            fixture.ring,
+            fixture.signals[0],
+            vec![DispatchResourceV1 {
+                mapping: fixture.data[0],
+                required_access: MemoryAccessV1::Read,
+            }],
+        )
+        .unwrap(),
+        AsyncOperationResourcesV1::new(
+            fixture.code,
+            fixture.kernargs[0],
+            fixture.ring,
+            vec![DispatchResourceV1 {
+                mapping: fixture.data[0],
+                required_access: MemoryAccessV1::Read,
+            }],
+        )
+        .unwrap(),
+        AsyncOperationResourcesV1::new(
+            fixture.code,
+            fixture.kernargs[0],
+            fixture.signals[0],
+            vec![DispatchResourceV1 {
+                mapping: fixture.ring,
+                required_access: MemoryAccessV1::ReadWrite,
+            }],
+        )
+        .unwrap(),
+    ];
+    for (offset, resources) in cases.into_iter().enumerate() {
+        let (dispatch, completion) = identity(fixture.queue, 60 + offset as u64);
+        assert_eq!(
+            registry
+                .reserve_model_only(dispatch, completion, resources)
+                .unwrap_err(),
+            AsyncQueueErrorV1::QueueInfrastructureCollision
+        );
+    }
+}
+
+#[test]
+fn retained_dispatch_on_another_queue_blocks_conflicting_resources() {
+    let (mut state, fixture) = live_fixture();
+    let ring_allocation = AllocationKeyV1 {
+        vm: fixture.queue.vm,
+        id: AllocationIdV1(100),
+    };
+    let ring_mapping = MappingKeyV1 {
+        allocation: ring_allocation,
+        id: MappingIdV1(100),
+    };
+    state = advance(
+        state,
+        RuntimeTransitionV1::Allocate {
+            key: ring_allocation,
+            byte_len: 4_096,
+        },
+    );
+    state = advance(
+        state,
+        RuntimeTransitionV1::Map {
+            key: ring_mapping,
+            allocation_offset: 0,
+            gpu_va: 0x80_0000,
+            byte_len: 4_096,
+            access: MemoryAccessV1::ReadWrite,
+        },
+    );
+    let other_queue = QueueKeyV1 {
+        vm: fixture.queue.vm,
+        id: QueueInstanceIdV1(2),
+        generation: QueueGenerationV1(1),
+    };
+    state = advance(
+        state,
+        RuntimeTransitionV1::CreateQueue {
+            key: other_queue,
+            plan_id: QueuePlanIdV1::from_untrusted_digest(digest(0x40)),
+            ring_mapping,
+            capacity: 4,
+        },
+    );
+    let (dispatch, completion) = identity(other_queue, 70);
+    state = advance(
+        state,
+        RuntimeTransitionV1::PrepareDispatch {
+            key: dispatch,
+            code: fixture.code,
+            completion,
+            resources: runtime_resources(&resources(
+                fixture,
+                0,
+                fixture.data[0],
+                MemoryAccessV1::ReadWrite,
+            )),
+        },
+    );
+    state = advance(state, RuntimeTransitionV1::PublishDispatch { completion });
+
+    let mut registry = registry(state, fixture, 1, 0x87);
+    let (candidate, candidate_completion) = identity(fixture.queue, 71);
+    assert_eq!(
+        registry
+            .reserve_model_only(
+                candidate,
+                candidate_completion,
+                resources(fixture, 1, fixture.data[0], MemoryAccessV1::ReadWrite,),
+            )
+            .unwrap_err(),
+        AsyncQueueErrorV1::ResourceConflict
+    );
+}
+
+#[test]
+fn retained_cross_queue_writer_cannot_alias_candidate_executable() {
+    let (mut state, fixture) = live_fixture();
+    let executable_alias = MappingKeyV1 {
+        allocation: fixture.executable.allocation,
+        id: MappingIdV1(97),
+    };
+    state = advance(
+        state,
+        RuntimeTransitionV1::Map {
+            key: executable_alias,
+            allocation_offset: 0,
+            gpu_va: 0xb0_0000,
+            byte_len: 4_096,
+            access: MemoryAccessV1::ReadWrite,
+        },
+    );
+    let ring_allocation = AllocationKeyV1 {
+        vm: fixture.queue.vm,
+        id: AllocationIdV1(101),
+    };
+    let ring_mapping = MappingKeyV1 {
+        allocation: ring_allocation,
+        id: MappingIdV1(101),
+    };
+    state = advance(
+        state,
+        RuntimeTransitionV1::Allocate {
+            key: ring_allocation,
+            byte_len: 4_096,
+        },
+    );
+    state = advance(
+        state,
+        RuntimeTransitionV1::Map {
+            key: ring_mapping,
+            allocation_offset: 0,
+            gpu_va: 0xc0_0000,
+            byte_len: 4_096,
+            access: MemoryAccessV1::ReadWrite,
+        },
+    );
+    let other_queue = QueueKeyV1 {
+        vm: fixture.queue.vm,
+        id: QueueInstanceIdV1(3),
+        generation: QueueGenerationV1(1),
+    };
+    state = advance(
+        state,
+        RuntimeTransitionV1::CreateQueue {
+            key: other_queue,
+            plan_id: QueuePlanIdV1::from_untrusted_digest(digest(0x41)),
+            ring_mapping,
+            capacity: 4,
+        },
+    );
+    let (dispatch, completion) = identity(other_queue, 75);
+    let external = AsyncOperationResourcesV1::new(
+        fixture.code,
+        fixture.kernargs[0],
+        fixture.signals[0],
+        vec![DispatchResourceV1 {
+            mapping: executable_alias,
+            required_access: MemoryAccessV1::ReadWrite,
+        }],
+    )
+    .unwrap();
+    state = advance(
+        state,
+        RuntimeTransitionV1::PrepareDispatch {
+            key: dispatch,
+            code: fixture.code,
+            completion,
+            resources: runtime_resources(&external),
+        },
+    );
+    state = advance(state, RuntimeTransitionV1::PublishDispatch { completion });
+
+    let mut registry = registry(state, fixture, 1, 0x8a);
+    let (candidate, candidate_completion) = identity(fixture.queue, 76);
+    assert_eq!(
+        registry
+            .reserve_model_only(
+                candidate,
+                candidate_completion,
+                resources(fixture, 1, fixture.data[1], MemoryAccessV1::Read),
+            )
+            .unwrap_err(),
+        AsyncQueueErrorV1::ResourceConflict
+    );
+}
+
+#[test]
+fn overlapping_mappings_cannot_bypass_roles_or_write_conflicts() {
+    let (mut state, fixture) = live_fixture();
+    let alias = MappingKeyV1 {
+        allocation: fixture.data[0].allocation,
+        id: MappingIdV1(99),
+    };
+    state = advance(
+        state,
+        RuntimeTransitionV1::Map {
+            key: alias,
+            allocation_offset: 0,
+            gpu_va: 0x90_0000,
+            byte_len: 4_096,
+            access: MemoryAccessV1::ReadWrite,
+        },
+    );
+    let mut registry = registry(state, fixture, 2, 0x88);
+    let (role_dispatch, role_completion) = identity(fixture.queue, 80);
+    let aliased_roles = AsyncOperationResourcesV1::new(
+        fixture.code,
+        fixture.data[0],
+        fixture.signals[0],
+        vec![DispatchResourceV1 {
+            mapping: alias,
+            required_access: MemoryAccessV1::Read,
+        }],
+    )
+    .unwrap();
+    assert_eq!(
+        registry
+            .reserve_model_only(role_dispatch, role_completion, aliased_roles)
+            .unwrap_err(),
+        AsyncQueueErrorV1::ResourceRoleCollision
+    );
+
+    let (first_dispatch, first_completion) = identity(fixture.queue, 81);
+    let _first = registry
+        .reserve_model_only(
+            first_dispatch,
+            first_completion,
+            resources(fixture, 0, fixture.data[0], MemoryAccessV1::ReadWrite),
+        )
+        .unwrap();
+    let (second_dispatch, second_completion) = identity(fixture.queue, 82);
+    assert_eq!(
+        registry
+            .reserve_model_only(
+                second_dispatch,
+                second_completion,
+                resources(fixture, 1, alias, MemoryAccessV1::Read),
+            )
+            .unwrap_err(),
+        AsyncQueueErrorV1::ResourceConflict
+    );
+}
+
+#[test]
+fn writable_alias_of_live_executable_storage_is_rejected() {
+    let (mut state, fixture) = live_fixture();
+    let alias = MappingKeyV1 {
+        allocation: fixture.executable.allocation,
+        id: MappingIdV1(98),
+    };
+    state = advance(
+        state,
+        RuntimeTransitionV1::Map {
+            key: alias,
+            allocation_offset: 0,
+            gpu_va: 0xa0_0000,
+            byte_len: 4_096,
+            access: MemoryAccessV1::ReadWrite,
+        },
+    );
+    let mut registry = registry(state, fixture, 1, 0x89);
+    let (dispatch, completion) = identity(fixture.queue, 90);
+    assert_eq!(
+        registry
+            .reserve_model_only(
+                dispatch,
+                completion,
+                resources(fixture, 0, alias, MemoryAccessV1::ReadWrite),
+            )
+            .unwrap_err(),
+        AsyncQueueErrorV1::ExecutableStorageCollision
+    );
 }
