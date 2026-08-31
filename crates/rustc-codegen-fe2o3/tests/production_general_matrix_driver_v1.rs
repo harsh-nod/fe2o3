@@ -225,6 +225,175 @@ fn write_only_disjoint_kernel_reaches_v9_guarded_store_llvm_and_descriptor() {
     assert_eq!(output.access(), AccessMode::WriteOnly);
 }
 
+#[test]
+#[ignore = "requires the pinned nightly rust-src component and AMD target"]
+fn volatile_slice_load_reaches_guarded_volatile_llvm_and_read_only_descriptor() {
+    let scratch = ScratchDirectory::new("volatile-load");
+    let handoff_path = scratch.path.join("kernel.handoff");
+    let output = Command::new(env!("CARGO"))
+        .current_dir(workspace())
+        .env(
+            "RUSTC_WORKSPACE_WRAPPER",
+            env!("CARGO_BIN_EXE_fe2o3-rustc-extract"),
+        )
+        .env(
+            "FE2O3_EXTRACT_CRATE_V1",
+            "fe2o3_production_extraction_fixture",
+        )
+        .env(
+            "FE2O3_EXTRACT_GFX942_COMPILER_HANDOFF_PATH_V1",
+            &handoff_path,
+        )
+        .env_remove("RUSTFLAGS")
+        .env_remove("CARGO_ENCODED_RUSTFLAGS")
+        .env(
+            "CARGO_TARGET_AMDGCN_AMD_AMDHSA_RUSTFLAGS",
+            "-Zalways-encode-mir -Ctarget-cpu=gfx942 -Ctarget-feature=-xnack,+wavefrontsize64,-wavefrontsize32",
+        )
+        .args([
+            "check",
+            "--locked",
+            "-Zbuild-std=core",
+            "-p",
+            "fe2o3-production-extraction-fixture",
+            "--features",
+            "volatile-load",
+            "--target",
+            "amdgcn-amd-amdhsa",
+            "--target-dir",
+        ])
+        .arg(scratch.path.join("cargo"))
+        .output()
+        .expect("run volatile-load production extraction");
+    let stderr = String::from_utf8(output.stderr).expect("rustc diagnostic is UTF-8");
+    assert!(
+        output.status.success()
+            && stderr.contains("Rust -> semantic MIR -> ranked PLIRON -> Kernel IR")
+            && stderr.contains("artifact/launch authority false"),
+        "volatile-load extraction omitted production custody:\n{stderr}",
+    );
+
+    let handoff_bytes =
+        std::fs::read(&handoff_path).expect("production extraction emitted handoff");
+    let handoff =
+        CompilerModuleHandoffV2::decode(&handoff_bytes).expect("canonical compiler module handoff");
+    let llvm = std::str::from_utf8(handoff.module_bytes()).expect("compiler module is LLVM text");
+    let bound = llvm.find("icmp ult i64").expect("slice bound comparison");
+    let safe_index = llvm[bound..]
+        .find("select i1 ")
+        .map(|offset| bound + offset)
+        .expect("zero-substituting safe index");
+    let pointer = llvm[safe_index..]
+        .find("getelementptr i32, ptr addrspace(1)")
+        .map(|offset| safe_index + offset)
+        .expect("non-inbounds volatile-load pointer");
+    let guarded = llvm
+        .find("guarded_load_bb")
+        .expect("guarded-load true label");
+    let load = llvm[guarded..]
+        .find("load volatile i32")
+        .map(|offset| guarded + offset)
+        .expect("volatile guarded-load body");
+    let trap = llvm
+        .find("call void @llvm.trap()")
+        .expect("out-of-bounds trap");
+    let false_label = llvm[load..]
+        .find("_false:")
+        .map(|offset| load + offset)
+        .expect("guarded-load false label");
+    let merge_label = llvm[false_label..]
+        .find("_merge:")
+        .map(|offset| false_label + offset)
+        .expect("guarded-load merge label");
+    let trap_branch = llvm[merge_label..]
+        .find("br i1 %v11, label %bb3, label %bb5")
+        .map(|offset| merge_label + offset)
+        .expect("bounds predicate branch after guarded-load merge");
+    let trap_block = llvm[trap_branch..]
+        .find("bb5:\n  call void @llvm.trap()")
+        .map(|offset| trap_branch + offset)
+        .expect("direct out-of-bounds trap successor");
+    assert!(
+        bound < safe_index
+            && safe_index < pointer
+            && pointer < guarded
+            && llvm[safe_index..pointer].contains(", i64 0")
+            && !llvm.contains("getelementptr inbounds")
+            && llvm.matches("load volatile i32").count() == 1
+            && llvm.contains("br i1 ")
+            && llvm.contains("label %guarded_load_bb")
+            && guarded < load
+            && load < false_label
+            && !llvm[false_label..merge_label].contains(" load ")
+            && merge_label < trap_branch
+            && trap_branch < trap_block
+            && trap_block <= trap,
+        "volatile-load lowering lost its checked index, non-speculative load, or OOB trap:\n{llvm}",
+    );
+
+    let descriptor = CompilerDescriptorSourceV1::decode(&descriptor_bytes(llvm))
+        .expect("embedded compiler descriptor source");
+    let [kernel] = descriptor.table().kernels() else {
+        panic!("expected one compiler-derived descriptor kernel")
+    };
+    let [input, output] = kernel.arguments() else {
+        panic!("expected one input and one write-only output argument")
+    };
+    assert_eq!(input.access(), AccessMode::ReadOnly);
+    assert_eq!(output.access(), AccessMode::WriteOnly);
+}
+
+#[test]
+#[ignore = "requires the pinned nightly rust-src component and AMD target"]
+fn same_named_local_load_cannot_forge_volatile_terminal_semantics() {
+    let scratch = ScratchDirectory::new("volatile-load-lookalike");
+    let llvm_path = scratch.path.join("kernel.ll");
+    let output = Command::new(env!("CARGO"))
+        .current_dir(workspace())
+        .env(
+            "RUSTC_WORKSPACE_WRAPPER",
+            env!("CARGO_BIN_EXE_fe2o3-rustc-extract"),
+        )
+        .env(
+            "FE2O3_EXTRACT_CRATE_V1",
+            "fe2o3_production_extraction_fixture",
+        )
+        .env("FE2O3_EXTRACT_GFX942_LLVM_PATH_V1", &llvm_path)
+        .env_remove("RUSTFLAGS")
+        .env_remove("CARGO_ENCODED_RUSTFLAGS")
+        .env(
+            "CARGO_TARGET_AMDGCN_AMD_AMDHSA_RUSTFLAGS",
+            "-Zalways-encode-mir -Ctarget-cpu=gfx942 -Ctarget-feature=-xnack,+wavefrontsize64,-wavefrontsize32",
+        )
+        .args([
+            "check",
+            "--locked",
+            "-Zbuild-std=core",
+            "-p",
+            "fe2o3-production-extraction-fixture",
+            "--features",
+            "volatile-load-lookalike",
+            "--target",
+            "amdgcn-amd-amdhsa",
+            "--target-dir",
+        ])
+        .arg(scratch.path.join("cargo"))
+        .output()
+        .expect("run volatile-load lookalike extraction");
+    let stderr = String::from_utf8(output.stderr).expect("rustc diagnostic is UTF-8");
+    assert!(
+        !output.status.success()
+            && stderr.contains(
+                "a call terminator before exact callable memory-effect summaries are available"
+            ),
+        "same-named local load gained compiler-terminal semantics:\n{stderr}",
+    );
+    assert!(
+        !llvm_path.exists(),
+        "a forged terminal call reached artifact emission"
+    );
+}
+
 fn descriptor_bytes(llvm: &str) -> Vec<u8> {
     let marker = format!(".section {COMPILER_DESCRIPTOR_SECTION_NAME_V1}");
     let section = llvm

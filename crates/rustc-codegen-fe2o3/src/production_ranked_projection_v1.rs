@@ -255,6 +255,7 @@ struct IntrinsicProjectionV1 {
     capability_read_effects: Vec<Option<ProjectedCapabilityReadEffectV1>>,
     transpose_workgroup_effects: Vec<Option<ProjectedTransposeWorkgroupEffectV1>>,
     read_view_effects: Vec<Option<GuardedRankedAccessV1>>,
+    direct_read_effects: Vec<Option<GuardedRankedAccessV1>>,
     direct_write_effects: Vec<Option<GuardedRankedAccessV1>>,
     pipeline_effects: Vec<Option<ProjectedPipelineEffectV1>>,
     generated_terminator_effects: Vec<Option<Vec<ProjectedGeneratedExecutableEffectV1>>>,
@@ -2824,6 +2825,22 @@ fn project_and_verify_ranked_root_v1(
             guarded_sites.try_reserve(1).map_err(|_| {
                 ProductionRankedProjectionErrorV1::Unsupported(
                     "strided read access-site storage cannot be reserved",
+                )
+            })?;
+            guarded_sites.push(GuardedAccessSiteV1 {
+                insertion_operation: operations.len(),
+                access,
+            });
+        }
+        if let Some(access) = intrinsic
+            .direct_read_effects
+            .get(block_index)
+            .cloned()
+            .flatten()
+        {
+            guarded_sites.try_reserve(1).map_err(|_| {
+                ProductionRankedProjectionErrorV1::Unsupported(
+                    "volatile-load access-site storage cannot be reserved",
                 )
             })?;
             guarded_sites.push(GuardedAccessSiteV1 {
@@ -7130,6 +7147,7 @@ fn project_intrinsic_contracts(
 
     let mut views_by_origin: Vec<Option<ProjectedViewV1>> = vec![None; function.locals().len()];
     let mut guarded_accesses = Vec::new();
+    let mut direct_read_effects = vec![None; function.blocks().len()];
     let mut direct_write_effects = vec![None; function.blocks().len()];
     for (block_index, block) in function.blocks().iter().enumerate() {
         let SemanticTerminatorKindV1::Call(call) = block.terminator().kind() else {
@@ -7140,6 +7158,111 @@ fn project_intrinsic_contracts(
         else {
             continue;
         };
+        if let SemanticCompilerIntrinsicOperationV1::VolatileLoad { element } = operation {
+            if call.arguments().len() != 2 {
+                return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                    "a volatile load has the wrong argument count",
+                ));
+            }
+            let receiver = call
+                .arguments()
+                .first()
+                .and_then(simple_operand_local)
+                .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                    "a volatile-load receiver without one exact local",
+                ))?
+                .index() as usize;
+            let allocation_contract = local_allocations.get(receiver).copied().flatten().ok_or(
+                ProductionRankedProjectionErrorV1::Incomplete(
+                    "a volatile-load receiver without one authenticated kernel-argument origin",
+                ),
+            )?;
+            let allocation_contract =
+                volatile_load_read_allocation_contract_v1(types, *element, allocation_contract)?;
+            let index = project_runtime_index_operand_v1(
+                call.arguments().get(1),
+                constants,
+                &stable_argument_origins,
+                &mut runtime_index_arguments,
+                &mut next_runtime_argument,
+                operations,
+                next_value,
+            )?;
+            let origin_index = allocation_contract.allocation_origin as usize;
+            let element_width = type_width(types, *element)?;
+            let view = match views_by_origin
+                .get(origin_index)
+                .and_then(|view| view.as_ref())
+            {
+                Some(view)
+                    if view.element_width == element_width
+                        && !view.writable
+                        && view.shape == [DYNAMIC_EXTENT]
+                        && view.dynamic_extents == [ProductionRankedValueV1::Argument(0)]
+                        && view.memory_space == MemorySpaceAttr::Global
+                        && view.allocation_origin == allocation_contract.allocation_origin
+                        && view.noalias_class == allocation_contract.noalias_class =>
+                {
+                    view.result
+                }
+                Some(_) => {
+                    return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                        "one volatile-load allocation origin has conflicting ranked types",
+                    ));
+                }
+                None => {
+                    reserve_operation(operations)?;
+                    let view = next_value_id(next_value)?;
+                    operations.push(ProductionRankedOperationV1::ViewInSpace {
+                        result: view,
+                        element_width,
+                        writable: false,
+                        shape: vec![DYNAMIC_EXTENT],
+                        dynamic_extents: vec![ProductionRankedValueV1::Argument(0)],
+                        memory_space: MemorySpaceAttr::Global,
+                        allocation_origin: allocation_contract.allocation_origin,
+                        noalias_class: allocation_contract.noalias_class,
+                    });
+                    let slot = views_by_origin.get_mut(origin_index).ok_or(
+                        ProductionRankedProjectionErrorV1::Unsupported(
+                            "a volatile-load origin is outside the semantic local table",
+                        ),
+                    )?;
+                    *slot = Some(ProjectedViewV1 {
+                        result: view,
+                        element_width,
+                        writable: false,
+                        shape: vec![DYNAMIC_EXTENT],
+                        dynamic_extents: vec![ProductionRankedValueV1::Argument(0)],
+                        memory_space: MemorySpaceAttr::Global,
+                        allocation_origin: allocation_contract.allocation_origin,
+                        noalias_class: allocation_contract.noalias_class,
+                    });
+                    view
+                }
+            };
+            let access = GuardedRankedAccessV1 {
+                view,
+                indices: vec![index],
+                checked_success: None,
+                comparisons: vec![(index, ProductionRankedValueV1::Argument(0))],
+                access: AccessKindAttr::Read,
+                memory_space: MemorySpaceAttr::Global,
+                source: block.terminator().source(),
+                semantic_site: None,
+            };
+            let slot = direct_read_effects.get_mut(block_index).ok_or(
+                ProductionRankedProjectionErrorV1::Unsupported(
+                    "a volatile-load block is outside the semantic CFG",
+                ),
+            )?;
+            if slot.replace(access).is_some() {
+                return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                    "multiple direct read effects occupy one semantic block",
+                ));
+            }
+            continue;
+        }
         let write_only_effect = matches!(
             operation,
             SemanticCompilerIntrinsicOperationV1::WriteOnlyDisjointSliceWrite { .. }
@@ -7975,6 +8098,7 @@ fn project_intrinsic_contracts(
         index_values,
         local_contracts,
         extent_argument_count: if guarded_accesses.is_empty()
+            && direct_read_effects.iter().all(Option::is_none)
             && direct_write_effects.iter().all(Option::is_none)
             && next_runtime_argument == 1
         {
@@ -7991,6 +8115,7 @@ fn project_intrinsic_contracts(
         capability_read_effects,
         transpose_workgroup_effects,
         read_view_effects,
+        direct_read_effects,
         direct_write_effects,
         pipeline_effects,
         generated_terminator_effects,
@@ -15345,6 +15470,40 @@ fn allocation_contract_from_pointee(
     }
 }
 
+fn volatile_load_read_allocation_contract_v1(
+    types: &[fe2o3_mir_model::semantic_mir_v1::SemanticTypeDeclV1],
+    element: SemanticTypeIdV1,
+    allocation: AllocationContractV1,
+) -> Result<AllocationContractV1, ProductionRankedProjectionErrorV1> {
+    let supported_scalar = matches!(
+        types
+            .get(element.index() as usize)
+            .map(SemanticTypeDeclV1::shape),
+        Some(SemanticTypeShapeV1::Scalar(
+            SemanticScalarTypeV1::Bool | SemanticScalarTypeV1::Char
+        )) | Some(SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
+            bits: 8 | 16 | 32 | 64,
+            ..
+        })) | Some(SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Float {
+            bits: 32 | 64
+        }))
+    );
+    if !supported_scalar {
+        return Err(ProductionRankedProjectionErrorV1::Unsupported(
+            "a volatile load does not have one closed readable scalar element",
+        ));
+    }
+
+    // At opt-level 0 rustc deliberately reports every shared-reference PointeeInfo as
+    // `frozen: false` to avoid optimization-only alias attributes. The compiler-authenticated
+    // terminal signature independently requires an immutable slice of this closed scalar set,
+    // so the call exposes read authority only even when the ABI optimization fact is conservative.
+    Ok(AllocationContractV1 {
+        writable: false,
+        ..allocation
+    })
+}
+
 fn projected_disjoint_operand_v1(
     call: &SemanticDirectCallV1,
     argument: usize,
@@ -18590,6 +18749,7 @@ fn project_direct_call_accesses(
         callables.get(call.callee().index() as usize),
         Some(SemanticCallableDeclV1::CompilerIntrinsic {
             operation: SemanticCompilerIntrinsicOperationV1::ThreadIndex1d { .. }
+                | SemanticCompilerIntrinsicOperationV1::VolatileLoad { .. }
                 | SemanticCompilerIntrinsicOperationV1::ThreadIndexIntoDisjoint { .. }
                 | SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedShift { .. }
                 | SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedBlock { .. }
@@ -23164,6 +23324,38 @@ mod tests {
         assert!(unique.writable);
         assert_eq!(unqualified.noalias_class, 0);
         assert!(unqualified.writable);
+    }
+
+    #[test]
+    fn volatile_scalar_terminal_refines_debug_shared_abi_to_read_only() {
+        let types = projection_types();
+        let conservative = allocation_contract_from_pointee(
+            SemanticAbiPointeeKindV1::SharedReference { frozen: false },
+            false,
+            5,
+        );
+        assert!(conservative.writable);
+
+        let read_only = volatile_load_read_allocation_contract_v1(
+            &types,
+            SemanticTypeIdV1::from_index(0),
+            conservative,
+        )
+        .unwrap();
+        assert!(!read_only.writable);
+        assert_eq!(read_only.allocation_origin, conservative.allocation_origin);
+        assert_eq!(read_only.noalias_class, conservative.noalias_class);
+
+        assert!(matches!(
+            volatile_load_read_allocation_contract_v1(
+                &types,
+                SemanticTypeIdV1::from_index(1),
+                conservative,
+            ),
+            Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "a volatile load does not have one closed readable scalar element"
+            ))
+        ));
     }
 
     #[test]

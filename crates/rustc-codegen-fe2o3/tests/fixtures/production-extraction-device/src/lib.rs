@@ -4,12 +4,17 @@
 use fe2o3_device::WriteOnlyDisjointSlice;
 use fe2o3_device::{DisjointSlice, kernel, thread};
 
+#[cfg(feature = "volatile-load")]
+use fe2o3_device::memory;
+
 #[cfg(not(any(
     feature = "multi-root-ownership",
     feature = "multi-root-target-lineage",
     feature = "three-root-ownership",
     feature = "write-only-output",
     feature = "write-only-disjoint-output",
+    feature = "volatile-load",
+    feature = "volatile-load-lookalike",
     feature = "reference-positive",
     feature = "reference-mutated",
     feature = "reference-unsafe",
@@ -63,6 +68,33 @@ pub fn fill_write_only_disjoint(mut output: WriteOnlyDisjointSlice<u32>) {
     let value = index.get() as u32;
     let index = index.into_disjoint();
     let _ = output.write_disjoint(index, value);
+}
+
+#[cfg(feature = "volatile-load")]
+#[kernel(
+    typed,
+    launch(required = [64, 1, 1], max = [64, 1, 1])
+)]
+pub fn copy_volatile(input: &[u32], mut output: WriteOnlyDisjointSlice<u32>) {
+    let index = thread::index_1d();
+    let value = memory::volatile_load(input, index.get() as usize);
+    let _ = output.write(index, value);
+}
+
+#[cfg(feature = "volatile-load-lookalike")]
+fn volatile_load(input: &[u32], index: usize) -> u32 {
+    input[index]
+}
+
+#[cfg(feature = "volatile-load-lookalike")]
+#[kernel(
+    typed,
+    launch(required = [64, 1, 1], max = [64, 1, 1])
+)]
+pub fn copy_volatile_lookalike(input: &[u32], mut output: WriteOnlyDisjointSlice<u32>) {
+    let index = thread::index_1d();
+    let value = volatile_load(input, index.get() as usize);
+    let _ = output.write(index, value);
 }
 
 #[cfg(any(feature = "multi-root-ownership", feature = "three-root-ownership"))]

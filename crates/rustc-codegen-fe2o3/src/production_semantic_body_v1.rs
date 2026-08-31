@@ -2106,6 +2106,7 @@ const fn terminal_argument_count_v1(expansion: ProductionTerminalExpansionV1) ->
         | ProductionTerminalExpansionV1::WorkgroupPipelineConsume
         | ProductionTerminalExpansionV1::WorkgroupPipelineDiscard
         | ProductionTerminalExpansionV1::WorkgroupPipelineRelease => Some(2),
+        ProductionTerminalExpansionV1::MemoryVolatileLoad => Some(2),
         ProductionTerminalExpansionV1::Gfx950SubgroupBroadcastF32
         | ProductionTerminalExpansionV1::WorkgroupPipelineRead
         | ProductionTerminalExpansionV1::NeutralWorkgroupReduceSum

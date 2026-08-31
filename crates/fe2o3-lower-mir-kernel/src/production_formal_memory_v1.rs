@@ -3,10 +3,10 @@
 use std::{error::Error, fmt};
 
 use fe2o3_kernel_ir::{
-    ExplicitLaunchExtent, FormalIndexWidth, FormalMemoryIncompleteReason,
+    AddressSpace, ExplicitLaunchExtent, FormalIndexWidth, FormalMemoryIncompleteReason,
     FormalMemoryObligationAnalysis, FormalMemoryObligationError, FormalMemoryObligations,
-    InterInvocationConflictRequirement, LaunchDomain, LaunchExtent,
-    derive_kernel_memory_obligations_for_launch,
+    FunctionOperationLocation, InterInvocationConflictRequirement, LaunchDomain, LaunchExtent,
+    OperationKind, derive_kernel_memory_obligations_for_launch,
 };
 
 use crate::{
@@ -355,12 +355,27 @@ fn derive_admitted_obligations_for_kernel(
         FormalIndexWidth::Bits64,
     )
     .map_err(ProductionFormalMemoryErrorV1::Analysis)?;
+    let guarded_store_locations = retained_guarded_store_locations(module, kernel);
     let (obligations, ranked_discharged_reasons, compiler_discharged_reasons) = match analysis {
-        FormalMemoryObligationAnalysis::Complete(obligations) => (
-            obligations,
-            Vec::new().into_boxed_slice(),
-            Vec::new().into_boxed_slice(),
-        ),
+        FormalMemoryObligationAnalysis::Complete(obligations) => {
+            if !guarded_store_locations.is_empty()
+                && let Err(detail) = semantic_kir
+                    .retained_generic_checks_discharge_guarded_accesses(
+                        kernel.id.as_str(),
+                        &guarded_store_locations,
+                    )
+            {
+                return Err(ProductionFormalMemoryErrorV1::GuardedAccessDischarge {
+                    reasons: Vec::new().into_boxed_slice(),
+                    detail,
+                });
+            }
+            (
+                obligations,
+                Vec::new().into_boxed_slice(),
+                Vec::new().into_boxed_slice(),
+            )
+        }
         FormalMemoryObligationAnalysis::Incomplete { partial, reasons } => {
             let mut compiler_reasons = Vec::new();
             let mut remaining_reasons = Vec::new();
@@ -405,6 +420,7 @@ fn derive_admitted_obligations_for_kernel(
                     _ => reasons_are_ranked_dischargeable = false,
                 }
             }
+            guarded_locations.extend_from_slice(&guarded_store_locations);
             if !reasons_are_ranked_dischargeable {
                 return Err(ProductionFormalMemoryErrorV1::Incomplete {
                     reasons: remaining_reasons.into_boxed_slice(),
@@ -456,6 +472,36 @@ fn derive_admitted_obligations_for_kernel(
         ranked_discharged_reasons,
         compiler_discharged_reasons,
     })
+}
+
+fn retained_guarded_store_locations(
+    module: &fe2o3_kernel_ir::Module,
+    kernel: &fe2o3_kernel_ir::Kernel,
+) -> Vec<FunctionOperationLocation> {
+    let Some(function) = module.function(&kernel.entry) else {
+        return Vec::new();
+    };
+    let Some(body) = function.body.as_ref() else {
+        return Vec::new();
+    };
+    body.blocks
+        .iter()
+        .flat_map(|block| {
+            block
+                .operations
+                .iter()
+                .enumerate()
+                .filter_map(|(ordinal, operation)| {
+                    let OperationKind::GuardedStore { access, .. } = &operation.kind else {
+                        return None;
+                    };
+                    if access.address_space == AddressSpace::Private {
+                        return None;
+                    }
+                    Some(FunctionOperationLocation::new(block.id, ordinal))
+                })
+        })
+        .collect()
 }
 
 fn witness_extents(domain: &LaunchDomain) -> [u64; 3] {

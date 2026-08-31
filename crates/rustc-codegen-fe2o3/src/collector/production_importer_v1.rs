@@ -902,6 +902,38 @@ fn terminal_operation_v1<'tcx>(
         {
             Ok(SemanticCompilerIntrinsicOperationV1::GridDimension(axis))
         }
+        ProductionTerminalExpansionV1::MemoryVolatileLoad
+            if inputs.len() == 2
+                && rust_inputs.len() == 2
+                && matches!(rust_inputs[1].kind(), TyKind::Uint(UintTy::Usize))
+                && rust_shared_slice_element_v1(rust_inputs[0]) == Some(rust_output)
+                && rust_supported_read_view_scalar_v1(rust_output) =>
+        {
+            let slice = pointer_pointee_v1(types, inputs[0])?;
+            let SemanticTypeShapeV1::Slice { element } = types
+                .get(slice.index() as usize)
+                .ok_or_else(|| body_owner_table_mismatch_v1("volatile-load slice"))?
+                .shape()
+            else {
+                return Err(body_owner_table_mismatch_v1("volatile-load slice"));
+            };
+            if *element != output
+                || !matches!(
+                    types
+                        .get(inputs[1].index() as usize)
+                        .map(SemanticTypeDeclV1::shape),
+                    Some(SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
+                        signed: false,
+                        bits: 64,
+                    }))
+                )
+            {
+                return Err(body_owner_table_mismatch_v1(
+                    "volatile-load element or index",
+                ));
+            }
+            Ok(SemanticCompilerIntrinsicOperationV1::VolatileLoad { element: *element })
+        }
         ProductionTerminalExpansionV1::DynamicLdsExactCurrent
             if inputs.len() == 1
                 && rust_inputs.len() == 1
@@ -2492,6 +2524,7 @@ fn terminal_operation_v1<'tcx>(
         | ProductionTerminalExpansionV1::WorkgroupIndex(_)
         | ProductionTerminalExpansionV1::WorkgroupDimension(_)
         | ProductionTerminalExpansionV1::GridDimension(_)
+        | ProductionTerminalExpansionV1::MemoryVolatileLoad
         | ProductionTerminalExpansionV1::ThreadIndex1d
         | ProductionTerminalExpansionV1::ThreadIndexGet
         | ProductionTerminalExpansionV1::ThreadIndexIntoDisjoint
@@ -3871,6 +3904,7 @@ const fn terminal_operation_tag_for_schema_v1(
         ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteBlock => 108,
         ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteTiled2d => 109,
         ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteRowStriped2d => 110,
+        ProductionTerminalExpansionV1::MemoryVolatileLoad => 111,
     }
 }
 

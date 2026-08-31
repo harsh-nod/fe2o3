@@ -1782,6 +1782,253 @@ fn strided_read_view_v5_is_closed_canonical_and_requires_exact_six_field_layout(
     );
 }
 
+fn volatile_load_slice_reference_type(
+    mutability: SemanticMutabilityV1,
+    address_space: u32,
+) -> SemanticTypeDeclV1 {
+    let data = SemanticBackendScalarV1::initialized(
+        SemanticBackendPrimitiveV1::pointer(address_space, 8, 8),
+        SemanticScalarValidityRangeV1::new(1, u64::MAX.into()),
+    );
+    let length = SemanticBackendScalarV1::initialized(
+        SemanticBackendPrimitiveV1::integer(false, 64, 8),
+        SemanticScalarValidityRangeV1::new(0, u64::MAX.into()),
+    );
+    let pointee_kind = match mutability {
+        SemanticMutabilityV1::Immutable => {
+            SemanticAbiPointeeKindV1::SharedReference { frozen: true }
+        }
+        SemanticMutabilityV1::Mutable => SemanticAbiPointeeKindV1::MutableReference { unpin: true },
+    };
+    SemanticTypeDeclV1::new(
+        type_identity(53),
+        layout_identity(53),
+        SemanticTypeLayoutV1::new_with_backend_repr(
+            Some(16),
+            8,
+            SemanticBackendReprV1::scalar_pair(data, length),
+            false,
+        )
+        .unwrap(),
+        SemanticTypeShapeV1::Pointer(
+            SemanticPointerTypeV1::new_with_kind(
+                READ_VIEW_SLICE,
+                SemanticPointerKindV1::Reference,
+                mutability,
+                address_space,
+                64,
+                SemanticPointerMetadataV1::SliceLength,
+            )
+            .unwrap(),
+        ),
+    )
+    .with_rustc_abi_properties(
+        SemanticTypeAbiPropertiesV1::new(false, false).with_scalar_pointee_info(
+            Some(SemanticAbiPointeeInfoV1::new(pointee_kind, 0, 4).unwrap()),
+            None,
+        ),
+    )
+}
+
+fn volatile_load_abi(
+    identity: u8,
+    reference: SemanticTypeIdV1,
+    index: SemanticTypeIdV1,
+    output: SemanticTypeIdV1,
+) -> SemanticFunctionAbiV1 {
+    let reference = SemanticAbiValueV1::new(
+        reference,
+        SemanticAbiPassModeV1::Pair {
+            first: SemanticAbiValueAttributesV1::new(
+                SemanticAbiRegularAttributesV1::new(
+                    true,
+                    Some(SemanticAbiPointerCaptureV1::CapturesReadOnly),
+                    true,
+                    true,
+                    false,
+                    true,
+                ),
+                SemanticAbiExtensionV1::None,
+                0,
+                Some(4),
+            )
+            .unwrap(),
+            second: noundef_attributes(SemanticAbiExtensionV1::None),
+        },
+    );
+    SemanticFunctionAbiV1::new(
+        SemanticAbiIdentityV1::from_sha256(bytes(identity)),
+        layout_identity(identity),
+        SemanticCanonAbiV1::Rust,
+        false,
+        false,
+        vec![reference, direct_value(index)],
+        direct_value(output),
+    )
+    .unwrap()
+}
+
+fn volatile_load_request(
+    mutability: SemanticMutabilityV1,
+    address_space: u32,
+    index: SemanticTypeIdV1,
+    output: SemanticTypeIdV1,
+    element: SemanticTypeIdV1,
+) -> InertSemanticMirRequestV1 {
+    let reference = READ_VIEW_SLICE_REF;
+    let root = function(
+        53,
+        volatile_load_abi(53, reference, index, output),
+        vec![
+            local(53, output, SemanticLocalRoleV1::Return),
+            local(54, reference, SemanticLocalRoleV1::Argument(0)),
+            local(55, index, SemanticLocalRoleV1::Argument(1)),
+        ],
+        vec![
+            block(
+                53,
+                vec![],
+                SemanticTerminatorKindV1::Call(
+                    SemanticDirectCallV1::new_callable(
+                        SemanticCallableIdV1::from_index(1),
+                        vec![
+                            SemanticOperandV1::Copy(
+                                SemanticPlaceV1::new(
+                                    SemanticLocalIdV1::from_index(1),
+                                    vec![],
+                                    reference,
+                                )
+                                .unwrap(),
+                            ),
+                            SemanticOperandV1::Copy(
+                                SemanticPlaceV1::new(
+                                    SemanticLocalIdV1::from_index(2),
+                                    vec![],
+                                    index,
+                                )
+                                .unwrap(),
+                            ),
+                        ],
+                        Some(SemanticCallDestinationV1::new(
+                            SemanticPlaceV1::new(SemanticLocalIdV1::from_index(0), vec![], output)
+                                .unwrap(),
+                            SemanticControlFlowEdgeV1::new(
+                                SemanticEdgeRoleV1::CallReturn,
+                                SemanticBlockIdV1::from_index(1),
+                            ),
+                        )),
+                        SemanticUnwindActionV1::Unreachable,
+                    )
+                    .unwrap(),
+                ),
+            ),
+            block(54, vec![], SemanticTerminatorKindV1::Return),
+        ],
+    )
+    .with_role(SemanticFunctionRoleV1::KernelRoot);
+    let binding = SemanticNonBodyCallableBindingV1::new(
+        function_identity(54),
+        item_identity(54),
+        monomorphization_identity(54),
+        generic_types_identity(54),
+        const_generics_identity(54),
+        SemanticSourceProvenanceV1::unavailable(),
+        volatile_load_abi(54, reference, index, output),
+    );
+    InertSemanticMirRequestV1::new_with_callables(
+        SemanticTargetDataLayoutV1::gfx942(layout_identity(250)),
+        vec![
+            u32_type(40),
+            read_view_usize_type(),
+            read_view_slice_type(),
+            volatile_load_slice_reference_type(mutability, address_space),
+        ],
+        vec![],
+        vec![],
+        vec![],
+        vec![root],
+        vec![
+            SemanticCallableDeclV1::defined(SemanticFunctionIdV1::from_index(0)),
+            SemanticCallableDeclV1::CompilerIntrinsic {
+                binding,
+                operation: SemanticCompilerIntrinsicOperationV1::VolatileLoad { element },
+                operation_identity: SemanticCompilerIntrinsicIdentityV1::from_sha256(bytes(54)),
+            },
+        ],
+        vec![SemanticFunctionIdV1::from_index(0)],
+    )
+    .unwrap()
+}
+
+#[test]
+fn volatile_load_v10_is_closed_and_rejects_forged_source_contracts() {
+    let limits = SemanticMirLimitsV1::default();
+    let valid = volatile_load_request(
+        SemanticMutabilityV1::Immutable,
+        0,
+        READ_VIEW_USIZE,
+        READ_VIEW_ELEMENT,
+        READ_VIEW_ELEMENT,
+    );
+    let admitted = valid.clone().admit_exact_v10(limits).unwrap();
+    let decoded = AdmittedInertSemanticMirV1::decode_exact_v10_canonical(
+        admitted.canonical_encoding(),
+        limits,
+    )
+    .unwrap();
+    assert_eq!(decoded.canonical_encoding(), admitted.canonical_encoding());
+    assert!(matches!(
+        valid.admit_exact_v9(limits),
+        Err(SemanticMirErrorV1::WireVersionCannotRepresent {
+            requested: SemanticMirWireVersionV1::V9,
+            required: SemanticMirWireVersionV1::V10,
+        })
+    ));
+
+    for hostile in [
+        volatile_load_request(
+            SemanticMutabilityV1::Mutable,
+            0,
+            READ_VIEW_USIZE,
+            READ_VIEW_ELEMENT,
+            READ_VIEW_ELEMENT,
+        ),
+        volatile_load_request(
+            SemanticMutabilityV1::Immutable,
+            1,
+            READ_VIEW_USIZE,
+            READ_VIEW_ELEMENT,
+            READ_VIEW_ELEMENT,
+        ),
+        volatile_load_request(
+            SemanticMutabilityV1::Immutable,
+            0,
+            READ_VIEW_ELEMENT,
+            READ_VIEW_ELEMENT,
+            READ_VIEW_ELEMENT,
+        ),
+        volatile_load_request(
+            SemanticMutabilityV1::Immutable,
+            0,
+            READ_VIEW_USIZE,
+            READ_VIEW_USIZE,
+            READ_VIEW_ELEMENT,
+        ),
+        volatile_load_request(
+            SemanticMutabilityV1::Immutable,
+            0,
+            READ_VIEW_USIZE,
+            READ_VIEW_ELEMENT,
+            READ_VIEW_USIZE,
+        ),
+    ] {
+        assert!(matches!(
+            hostile.admit_exact_v10(limits),
+            Err(SemanticMirErrorV1::InvalidFunctionAbi)
+        ));
+    }
+}
+
 const FILL_ELEMENT: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(0);
 const FILL_RAW_INDEX: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(1);
 const FILL_UNIT: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(2);

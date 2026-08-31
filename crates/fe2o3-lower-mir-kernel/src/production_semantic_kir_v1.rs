@@ -8184,6 +8184,7 @@ fn semantic_reachable_blocks_avoiding_node_v1(
 
 fn semantic_requires_runtime_assert_failure(
     function: &SemanticFunctionDeclV1,
+    callables: &[SemanticCallableDeclV1],
     infallible_asserts: &BTreeSet<u32>,
 ) -> bool {
     function
@@ -8195,6 +8196,13 @@ fn semantic_requires_runtime_assert_failure(
                 !infallible_asserts.contains(&(block_index as u32))
             }
             SemanticTerminatorKindV1::Abort | SemanticTerminatorKindV1::UnwindTerminate => true,
+            SemanticTerminatorKindV1::Call(call) => matches!(
+                callables.get(call.callee().index() as usize),
+                Some(SemanticCallableDeclV1::CompilerIntrinsic {
+                    operation: SemanticCompilerIntrinsicOperationV1::VolatileLoad { .. },
+                    ..
+                })
+            ),
             _ => false,
         })
 }
@@ -8596,8 +8604,11 @@ fn lower_one_semantic_function_v1(
                 "lowered semantic function is missing",
             )
         })?;
-    let has_runtime_assert =
-        semantic_requires_runtime_assert_failure(function, &infallible_asserts);
+    let has_runtime_assert = semantic_requires_runtime_assert_failure(
+        function,
+        semantic.callables(),
+        &infallible_asserts,
+    );
     let statement_count = function
         .blocks()
         .iter()
@@ -9363,7 +9374,9 @@ fn lower_single_root_module(
             .checked_add(function.blocks().len())
             .and_then(|count| {
                 count.checked_add(usize::from(semantic_requires_runtime_assert_failure(
-                    function, infallible,
+                    function,
+                    semantic.callables(),
+                    infallible,
                 )))
             })
             .ok_or(ProductionSemanticKirErrorV1::ResourceLimit {
@@ -14203,6 +14216,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 "compiler intrinsic call has no destination",
             )
         })?;
+        let mut volatile_load_predicate = None;
         let binding = match operation {
             SemanticCompilerIntrinsicOperationV1::DynamicLdsExactCurrent {
                 dynamic_lds,
@@ -15736,6 +15750,12 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             SemanticCompilerIntrinsicOperationV1::GridDimension(axis) => {
                 self.emit_launch_index_v1(operations, IndexKind::WorkgroupCount, lower_axis(*axis))?
             }
+            SemanticCompilerIntrinsicOperationV1::VolatileLoad { element } => {
+                let (binding, predicate) =
+                    self.lower_volatile_slice_load(block, call, operations, *element)?;
+                volatile_load_predicate = Some(predicate);
+                binding
+            }
             SemanticCompilerIntrinsicOperationV1::DisjointSliceLen { .. }
             | SemanticCompilerIntrinsicOperationV1::WriteOnlyDisjointSliceLen { .. } => {
                 self.require_call_argument_count(block, call, 1)?;
@@ -16131,6 +16151,27 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             operations,
         )?;
         self.bind_destination(block, None, destination.place(), binding)?;
+        if let Some(condition) = volatile_load_predicate {
+            let failure = self.assert_failure_block.ok_or_else(|| {
+                unsupported(
+                    0,
+                    Some(block.index()),
+                    None,
+                    "volatile load has no retained out-of-bounds trap block",
+                )
+            })?;
+            return Ok(Terminator::ConditionalBranch {
+                condition,
+                then_target: BlockId(destination.edge().target().index()),
+                then_arguments: self.edge_arguments(
+                    block,
+                    destination.edge().target(),
+                    operations,
+                )?,
+                else_target: failure,
+                else_arguments: Vec::new(),
+            });
+        }
         Ok(Terminator::Branch {
             target: BlockId(destination.edge().target().index()),
             arguments: self.edge_arguments(block, destination.edge().target(), operations)?,
@@ -16716,6 +16757,124 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             variant: None,
             payloads: BTreeMap::from([(ok_variant, vec![view]), (error_variant, vec![error])]),
         })
+    }
+
+    fn lower_volatile_slice_load(
+        &mut self,
+        block: SemanticBlockIdV1,
+        call: &SemanticDirectCallV1,
+        operations: &mut Vec<Operation>,
+        element: SemanticTypeIdV1,
+    ) -> Result<(SemanticValueBindingV1, ValueId), ProductionSemanticKirErrorV1> {
+        self.require_call_argument_count(block, call, 2)?;
+        let element_type = lower_scalar_type(self.types, element)?;
+        let (slice, slice_ty) = self
+            .lower_operand(block, None, &call.arguments()[0], operations)?
+            .value()
+            .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
+        let Type::Slice(slice_type) = slice_ty else {
+            return Err(unsupported(
+                0,
+                Some(block.index()),
+                None,
+                "volatile-load source is not a lowered slice",
+            ));
+        };
+        if slice_type.address_space != AddressSpace::Global
+            || slice_type.access != AccessMode::ReadOnly
+            || *slice_type.element != element_type
+        {
+            return Err(unsupported(
+                0,
+                Some(block.index()),
+                None,
+                "volatile-load source type, address space, or access changed",
+            ));
+        }
+        let index = self.lower_operand(block, None, &call.arguments()[1], operations)?;
+        let (index, index_ty) = self
+            .coerce_index(block, operations, index)?
+            .value()
+            .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
+        if index_ty != Type::INDEX {
+            return Err(unsupported(
+                0,
+                Some(block.index()),
+                None,
+                "volatile-load index is not the target index type",
+            ));
+        }
+        let length = self.emit_id(
+            operations,
+            Type::INDEX,
+            OperationKind::SliceLength { slice },
+        )?;
+        let predicate = self.emit_compare(operations, ComparePredicate::LessThan, index, length)?;
+        let zero_index = self.emit_index_constant(operations, 0)?;
+        let safe_index = self.emit_select_index(operations, predicate, index, zero_index)?;
+        let pointer_type = Type::pointer(
+            element_type.clone(),
+            slice_type.address_space,
+            slice_type.access,
+        );
+        let base = self.emit_id(
+            operations,
+            pointer_type.clone(),
+            OperationKind::SliceData { slice },
+        )?;
+        let pointer = self.emit_id(
+            operations,
+            pointer_type,
+            OperationKind::GetElementPointer {
+                base,
+                offset: safe_index,
+            },
+        )?;
+        let fallback = match element_type.as_scalar() {
+            Some(ScalarType::F32) => Constant::F32Bits(0),
+            Some(ScalarType::F64) => Constant::F64Bits(0),
+            Some(_) => integer_constant(&element_type, 0)?,
+            None => {
+                return Err(unsupported(
+                    0,
+                    Some(block.index()),
+                    None,
+                    "volatile-load element is not a supported scalar",
+                ));
+            }
+        };
+        let fallback = self.emit_id(
+            operations,
+            element_type.clone(),
+            OperationKind::Constant(fallback),
+        )?;
+        let alignment = strided_read_scalar_alignment_v1(&element_type).ok_or_else(|| {
+            unsupported(
+                0,
+                Some(block.index()),
+                None,
+                "volatile-load element has no supported scalar alignment",
+            )
+        })?;
+        let mut access = MemoryAccess::new(slice_type.address_space, alignment);
+        access.volatile = true;
+        let value = self.emit_id(
+            operations,
+            element_type.clone(),
+            OperationKind::GuardedLoad {
+                pointer,
+                predicate,
+                fallback,
+                access,
+            },
+        )?;
+        Ok((
+            SemanticValueBindingV1::Value {
+                id: value,
+                ty: element_type,
+            },
+            predicate,
+        ))
     }
 
     fn lower_strided_read_view_load_or(
@@ -25711,6 +25870,103 @@ mod resource_tests {
         ));
     }
 
+    fn append_guarded_store(fixture: &mut GuardedAddressFixture) -> FunctionOperationLocation {
+        let output_slice = Type::slice(
+            Type::Scalar(ScalarType::U16),
+            AddressSpace::Global,
+            AccessMode::ReadWrite,
+        );
+        let output_pointer = Type::pointer(
+            Type::Scalar(ScalarType::U16),
+            AddressSpace::Global,
+            AccessMode::ReadWrite,
+        );
+        fixture.module.functions[0].signature.parameters[1] = output_slice;
+        let operations = guarded_fixture_operations_mut(fixture);
+        operations.push(Operation::effect_free(
+            ValueDef::new(ValueId(15), output_pointer.clone()),
+            OperationKind::SliceData { slice: ValueId(1) },
+        ));
+        operations.push(Operation::effect_free(
+            ValueDef::new(ValueId(16), Type::INDEX),
+            OperationKind::SliceLength { slice: ValueId(1) },
+        ));
+        operations.push(Operation::effect_free(
+            ValueDef::new(ValueId(17), Type::BOOL),
+            OperationKind::Compare {
+                predicate: ComparePredicate::LessThan,
+                lhs: ValueId(9),
+                rhs: ValueId(16),
+            },
+        ));
+        operations.push(Operation::effect_free(
+            ValueDef::new(ValueId(18), Type::BOOL),
+            OperationKind::Binary {
+                op: BinaryOp::BitAnd,
+                lhs: ValueId(11),
+                rhs: ValueId(17),
+            },
+        ));
+        operations.push(Operation::effect_free(
+            ValueDef::new(ValueId(19), Type::INDEX),
+            OperationKind::Select {
+                condition: ValueId(18),
+                true_value: ValueId(9),
+                false_value: ValueId(5),
+            },
+        ));
+        operations.push(Operation::effect_free(
+            ValueDef::new(ValueId(20), output_pointer),
+            OperationKind::GetElementPointer {
+                base: ValueId(15),
+                offset: ValueId(19),
+            },
+        ));
+        let location = FunctionOperationLocation::new(BlockId(0), operations.len());
+        operations.push(Operation::new(
+            vec![],
+            OperationKind::GuardedStore {
+                pointer: ValueId(20),
+                predicate: ValueId(18),
+                value: ValueId(14),
+                access: MemoryAccess::new(AddressSpace::Global, 2),
+            },
+        ));
+        verify_module(&fixture.module).expect("mixed guarded fixture must remain valid Kernel IR");
+        location
+    }
+
+    #[test]
+    fn guarded_address_proof_requires_and_checks_every_guarded_store() {
+        let mut fixture = generated_matrix_tail_fixture(1);
+        let store = append_guarded_store(&mut fixture);
+        assert!(!guarded_accesses_have_structural_bounds(
+            &fixture.module,
+            &fixture.locations,
+            19,
+        ));
+
+        fixture.locations.push(store);
+        assert!(guarded_accesses_have_structural_bounds(
+            &fixture.module,
+            &fixture.locations,
+            19,
+        ));
+
+        let OperationKind::GuardedStore { predicate, .. } =
+            &mut guarded_fixture_operations_mut(&mut fixture)[18].kind
+        else {
+            panic!("fixture guarded store changed");
+        };
+        *predicate = ValueId(6);
+        verify_module(&fixture.module).expect("hostile predicate remains valid Kernel IR");
+        assert!(!guarded_accesses_have_structural_bounds(
+            &fixture.module,
+            &fixture.locations,
+            19,
+        ));
+    }
+
     #[test]
     fn guarded_address_proof_audits_unreported_structural_loads() {
         let mut fixture = generated_matrix_tail_fixture(2);
@@ -25734,7 +25990,7 @@ mod resource_tests {
     }
 
     #[test]
-    fn guarded_address_proof_rejects_true_predicate_with_unsafe_index() {
+    fn guarded_address_proof_rejects_true_predicate_with_unsafe_volatile_index() {
         let mut fixture = generated_matrix_tail_fixture(1);
         let operations = guarded_fixture_operations_mut(&mut fixture);
         let always_true = operations[3].results[0].id;
@@ -25742,10 +25998,14 @@ mod resource_tests {
             panic!("fixture select changed");
         };
         *condition = always_true;
-        let OperationKind::GuardedLoad { predicate, .. } = &mut operations[11].kind else {
+        let OperationKind::GuardedLoad {
+            predicate, access, ..
+        } = &mut operations[11].kind
+        else {
             panic!("fixture guarded load changed");
         };
         *predicate = always_true;
+        access.volatile = true;
         verify_module(&fixture.module).expect("hostile true predicate remains structurally valid");
         assert!(!guarded_accesses_have_structural_bounds(
             &fixture.module,

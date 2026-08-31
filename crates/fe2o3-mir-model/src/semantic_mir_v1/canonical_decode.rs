@@ -256,6 +256,18 @@ impl AdmittedInertSemanticMirV1 {
         )
     }
 
+    /// Decodes bytes canonical specifically under the closed V10 volatile-load schema.
+    pub fn decode_exact_v10_canonical(
+        bytes: &[u8],
+        limits: SemanticMirLimitsV1,
+    ) -> Result<Self, SemanticMirDecodeErrorV1> {
+        Self::decode_with_policy(
+            bytes,
+            limits,
+            CanonicalDecodePolicyV1::Exact(SemanticMirWireVersionV1::V10),
+        )
+    }
+
     fn decode_with_policy(
         bytes: &[u8],
         limits: SemanticMirLimitsV1,
@@ -290,6 +302,7 @@ impl AdmittedInertSemanticMirV1 {
                         | SemanticMirWireVersionV1::V7
                         | SemanticMirWireVersionV1::V8
                         | SemanticMirWireVersionV1::V9
+                        | SemanticMirWireVersionV1::V10
                 ) {
                     return Err(SemanticMirDecodeErrorV1::UnsupportedProductionWireVersion(
                         wire_version,
@@ -1537,7 +1550,9 @@ impl<'a> CanonicalDecoderV1<'a> {
     fn compiler_intrinsic(
         &mut self,
     ) -> Result<SemanticCompilerIntrinsicOperationV1, SemanticMirDecodeErrorV1> {
-        let maximum_tag = if self.wire_version == SemanticMirWireVersionV1::V9 {
+        let maximum_tag = if self.wire_version == SemanticMirWireVersionV1::V10 {
+            63
+        } else if self.wire_version == SemanticMirWireVersionV1::V9 {
             62
         } else if self.wire_version == SemanticMirWireVersionV1::V8 {
             55
@@ -1936,6 +1951,11 @@ impl<'a> CanonicalDecoderV1<'a> {
                 element_storage: SemanticTypeIdV1(self.u32()?),
                 element: SemanticTypeIdV1(self.u32()?),
             },
+            63 if self.wire_version == SemanticMirWireVersionV1::V10 => {
+                SemanticCompilerIntrinsicOperationV1::VolatileLoad {
+                    element: SemanticTypeIdV1(self.u32()?),
+                }
+            }
             _ => unreachable!(),
         })
     }
@@ -2725,7 +2745,7 @@ mod tests {
     }
 
     #[test]
-    fn current_production_decoder_preserves_exact_v5_through_v9_custody() {
+    fn current_production_decoder_preserves_exact_v5_through_v10_custody() {
         let limits = SemanticMirLimitsV1::default();
         let admitted = [
             minimal_request().admit_exact_v5(limits).unwrap(),
@@ -2733,6 +2753,7 @@ mod tests {
             minimal_request().admit_exact_v7(limits).unwrap(),
             minimal_request().admit_exact_v8(limits).unwrap(),
             minimal_request().admit_exact_v9(limits).unwrap(),
+            minimal_request().admit_exact_v10(limits).unwrap(),
         ];
         for original in admitted {
             let decoded = AdmittedInertSemanticMirV1::decode_current_production_canonical(
@@ -3650,15 +3671,17 @@ mod tests {
     }
 
     #[test]
-    fn neutral_workgroup_reduce_round_trips_only_under_v9() {
+    fn neutral_workgroup_reduce_round_trips_under_v9_and_v10() {
         let operation = SemanticCompilerIntrinsicOperationV1::NeutralWorkgroupReduceSum {
             context: SemanticTypeIdV1::from_index(0),
             dynamic_lds: SemanticTypeIdV1::from_index(1),
             element_storage: SemanticTypeIdV1::from_index(2),
             element: SemanticTypeIdV1::from_index(3),
         };
-        let encoded = compiler_intrinsic_round_trip(operation, SemanticMirWireVersionV1::V9);
-        assert_eq!(encoded[0], 62);
+        for wire_version in [SemanticMirWireVersionV1::V9, SemanticMirWireVersionV1::V10] {
+            let encoded = compiler_intrinsic_round_trip(operation, wire_version);
+            assert_eq!(encoded[0], 62);
+        }
 
         for wire_version in [
             SemanticMirWireVersionV1::V6,
@@ -3762,6 +3785,43 @@ mod tests {
     }
 
     #[test]
+    fn volatile_load_has_one_v10_tag_and_is_hostile_under_v9() {
+        let operation = SemanticCompilerIntrinsicOperationV1::VolatileLoad {
+            element: SemanticTypeIdV1::from_index(7),
+        };
+        assert_eq!(
+            compiler_intrinsic_round_trip(operation, SemanticMirWireVersionV1::V10),
+            [63, 7, 0, 0, 0],
+        );
+
+        let mut writer = CanonicalWriterV1::new(HARD_MAX_CANONICAL_BYTES_V1);
+        assert_eq!(
+            encode_compiler_intrinsic_operation(
+                &mut writer,
+                operation,
+                SemanticMirWireVersionV1::V9,
+            ),
+            Err(SemanticMirErrorV1::WireVersionCannotRepresent {
+                requested: SemanticMirWireVersionV1::V9,
+                required: SemanticMirWireVersionV1::V10,
+            })
+        );
+        assert!(writer.finish().is_empty());
+
+        let mut decoder =
+            CanonicalDecoderV1::new(&[63, 7, 0, 0, 0], SemanticMirLimitsV1::default());
+        decoder.wire_version = SemanticMirWireVersionV1::V9;
+        assert!(matches!(
+            decoder.compiler_intrinsic(),
+            Err(SemanticMirDecodeErrorV1::InvalidTag {
+                context: "compiler intrinsic",
+                offset: 0,
+                value: 63,
+            })
+        ));
+    }
+
+    #[test]
     fn minimum_wire_version_is_feature_compositional_at_the_v8_collision() {
         let pipeline = SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineCreate {
             scope: SemanticTypeIdV1::from_index(0),
@@ -3803,6 +3863,17 @@ mod tests {
         assert_eq!(
             minimum_wire_version(&version_selection_request([pipeline, bf16])),
             SemanticMirWireVersionV1::V9
+        );
+        let volatile = SemanticCompilerIntrinsicOperationV1::VolatileLoad {
+            element: SemanticTypeIdV1::from_index(0),
+        };
+        assert_eq!(
+            minimum_wire_version(&version_selection_request([volatile])),
+            SemanticMirWireVersionV1::V10
+        );
+        assert_eq!(
+            minimum_wire_version(&version_selection_request([pipeline, bf16, volatile])),
+            SemanticMirWireVersionV1::V10
         );
     }
 
