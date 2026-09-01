@@ -1,0 +1,5 @@
+error[E0432]: unresolved import `fe2o3_host::admit_worker_v3_compiler_current_record_evidence_v1`
+ --> tests/ui/worker_v3_verification_admission/compiler_execution_canonical_bridge_is_unavailable.rs:1:5
+  |
+1 | use fe2o3_host::admit_worker_v3_compiler_current_record_evidence_v1;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `admit_worker_v3_compiler_current_record_evidence_v1` in the root
