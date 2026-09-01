@@ -26,6 +26,7 @@ mod link_plan;
 mod production_kir_v7_structural_bridge_v1;
 mod production_semantic_anchor_v1;
 mod production_source_isa_catalog_v1;
+mod production_source_isa_characteristic_v1;
 mod production_source_isa_correlation_v1;
 mod request_construction;
 mod semantic_debug_map_v1;
@@ -118,6 +119,17 @@ pub use production_source_isa_catalog_v1::{
     ProductionSourceIsaCatalogTransformationV1, ProductionSourceIsaCatalogV1,
     ProductionSourceIsaKirCoordinateV1, ProductionSourceIsaLlvmCoordinateV1,
     ProductionSourceIsaMirCoordinateV1,
+};
+pub use production_source_isa_characteristic_v1::{
+    MAX_PRODUCTION_SOURCE_ISA_CHARACTERISTIC_CORRELATIONS_PER_WITNESS_V1,
+    MAX_PRODUCTION_SOURCE_ISA_CHARACTERISTIC_CORRELATIONS_V1,
+    MAX_PRODUCTION_SOURCE_ISA_CHARACTERISTIC_ELIMINATIONS_V1,
+    MAX_PRODUCTION_SOURCE_ISA_CHARACTERISTICS_V1, ProductionSourceIsaCharacteristicAdmissionV1,
+    ProductionSourceIsaCharacteristicAttributionV1, ProductionSourceIsaCharacteristicCollectionV1,
+    ProductionSourceIsaCharacteristicCorrelationV1, ProductionSourceIsaCharacteristicErrorV1,
+    ProductionSourceIsaCharacteristicKindV1, ProductionSourceIsaCharacteristicMemoryFormV1,
+    ProductionSourceIsaCharacteristicUnavailableV1, ProductionSourceIsaCharacteristicWitnessV1,
+    admit_production_source_isa_characteristics_v1,
 };
 pub use production_source_isa_correlation_v1::{
     AdmittedProductionSourceIsaCorrelationV1, AdmittedProductionSourceIsaRecordV1,

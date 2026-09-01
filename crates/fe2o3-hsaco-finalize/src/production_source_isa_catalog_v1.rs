@@ -477,6 +477,120 @@ impl ProductionSourceIsaCatalogRecordV1 {
     pub const fn transformation(&self) -> Option<ProductionSourceIsaCatalogTransformationV1> {
         self.transformation
     }
+
+    pub(crate) fn try_clone_bounded(&self) -> Result<Self, ProductionSourceIsaCatalogErrorV1> {
+        let mut isa = Vec::new();
+        isa.try_reserve_exact(self.isa.len())
+            .map_err(|_| ProductionSourceIsaCatalogErrorV1::AllocationFailure)?;
+        isa.extend_from_slice(&self.isa);
+        Ok(Self {
+            kind: self.kind,
+            source_node_identity: self.source_node_identity,
+            source_span: self.source_span,
+            mir_node_identity: self.mir_node_identity,
+            mir: self.mir,
+            neutral_kir_node_identity: self.neutral_kir_node_identity,
+            neutral_kir: self.neutral_kir,
+            target_kir: self.target_kir,
+            semantic_operation_id: self.semantic_operation_id,
+            compiler_handoff_llvm: self.compiler_handoff_llvm,
+            isa,
+            transformation: self.transformation,
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn characteristic_fixture_v1(
+        source_node_identity: Option<[u8; 32]>,
+        target_kir: Option<ProductionSourceIsaKirCoordinateV1>,
+        transformation: Option<ProductionSourceIsaCatalogTransformationV1>,
+    ) -> Self {
+        let operation = target_kir.map_or(0, ProductionSourceIsaKirCoordinateV1::operation_ordinal);
+        let source_span = source_node_identity.map(|identity| {
+            DebugSourceMapSpanV1::new(identity, operation * 4, operation * 4 + 4, 1, 1)
+                .expect("bounded characteristic fixture span")
+        });
+        let has_source = source_node_identity.is_some();
+        let neutral_shape = has_source && target_kir.is_some();
+        let isa = if target_kir.is_some()
+            && !matches!(
+                transformation,
+                Some(ProductionSourceIsaCatalogTransformationV1::Eliminated)
+            ) {
+            vec![
+                ProductionSourceIsaCatalogIntervalV1::new(0, operation * 4, operation * 4 + 4)
+                    .expect("bounded characteristic fixture interval"),
+            ]
+        } else {
+            Vec::new()
+        };
+        Self {
+            kind: if target_kir.is_none() {
+                ProductionSourceIsaCatalogRecordKindV1::EliminatedBeforeKir
+            } else if source_node_identity.is_some() {
+                ProductionSourceIsaCatalogRecordKindV1::SourceAnchored
+            } else {
+                ProductionSourceIsaCatalogRecordKindV1::NoSourceProvenance
+            },
+            source_node_identity,
+            source_span,
+            mir_node_identity: has_source.then_some([0x31; 32]),
+            mir: has_source
+                .then(|| ProductionSourceIsaMirCoordinateV1::new(0, 0, operation).unwrap()),
+            neutral_kir_node_identity: neutral_shape.then_some([0x32; 32]),
+            neutral_kir: neutral_shape.then_some(target_kir).flatten(),
+            target_kir,
+            semantic_operation_id: target_kir.map(|_| [0x33; 32]),
+            compiler_handoff_llvm: target_kir
+                .map(|_| ProductionSourceIsaLlvmCoordinateV1::new(0, 0, operation).unwrap()),
+            isa,
+            transformation,
+        }
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn characteristic_catalog_fixture_v1(
+    target_kir_sha256: [u8; 32],
+    target_kir_byte_len: u64,
+    counts: ProductionSourceIsaCatalogStructuralCountsV1,
+    mut records: Vec<ProductionSourceIsaCatalogRecordV1>,
+) -> ProductionSourceIsaCatalogV1 {
+    records.sort_unstable();
+    validate_record_collection(&records).expect("valid characteristic catalog fixture");
+    let indices = build_catalog_indices(&records).expect("bounded characteristic indices");
+    let mut catalog = ProductionSourceIsaCatalogV1 {
+        identity: [0; 32],
+        correlation_identity: [0x41; 32],
+        semantic_map_identity: [0x42; 32],
+        source_map_v2_identity: ProductionSourceIsaCatalogContentIdentityV1 {
+            sha256: [0x43; 32],
+            byte_len: 101,
+        },
+        artifact_identity: ContentIdentityV1::from_parts([0x44; 32], 103),
+        structural_binding: ProductionSourceIsaCatalogStructuralBindingV1 {
+            identity: [0x45; 32],
+            target: ProductionSourceIsaCatalogTargetV1::Gfx942,
+            kir_version: ProductionSourceIsaCatalogKirVersionV1::V8,
+            neutral_kernel_ir: ProductionSourceIsaCatalogContentIdentityV1 {
+                sha256: [0x46; 32],
+                byte_len: 107,
+            },
+            target_bound_kernel_ir: ProductionSourceIsaCatalogContentIdentityV1 {
+                sha256: target_kir_sha256,
+                byte_len: target_kir_byte_len,
+            },
+            counts,
+        },
+        records,
+        indices,
+    };
+    catalog.identity = catalog_identity(
+        &catalog
+            .canonical_preimage()
+            .expect("bounded characteristic catalog preimage"),
+    );
+    catalog
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -540,18 +654,7 @@ impl<'a> Iterator for ProductionSourceIsaCatalogMatchesV1<'a> {
     type Item = &'a ProductionSourceIsaCatalogRecordV1;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let index = match &self.index {
-            CatalogMatchIndexSliceV1::Identity(entries) => {
-                entries.get(self.next).map(|entry| entry.1)
-            }
-            CatalogMatchIndexSliceV1::Span(entries) => entries.get(self.next).map(|entry| entry.1),
-            CatalogMatchIndexSliceV1::Mir(entries) => entries.get(self.next).map(|entry| entry.1),
-            CatalogMatchIndexSliceV1::Kir(entries) => entries.get(self.next).map(|entry| entry.1),
-            CatalogMatchIndexSliceV1::Llvm(entries) => entries.get(self.next).map(|entry| entry.1),
-            CatalogMatchIndexSliceV1::Isa(entries) => entries.get(self.next).map(|entry| entry.1),
-        }?;
-        self.next += 1;
-        self.records.get(index)
+        self.next_with_ordinal().map(|(_, record)| record)
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
@@ -565,6 +668,25 @@ impl<'a> Iterator for ProductionSourceIsaCatalogMatchesV1<'a> {
         };
         let remaining = length.saturating_sub(self.next);
         (remaining, Some(remaining))
+    }
+}
+
+impl<'a> ProductionSourceIsaCatalogMatchesV1<'a> {
+    pub(crate) fn next_with_ordinal(
+        &mut self,
+    ) -> Option<(usize, &'a ProductionSourceIsaCatalogRecordV1)> {
+        let index = match &self.index {
+            CatalogMatchIndexSliceV1::Identity(entries) => {
+                entries.get(self.next).map(|entry| entry.1)
+            }
+            CatalogMatchIndexSliceV1::Span(entries) => entries.get(self.next).map(|entry| entry.1),
+            CatalogMatchIndexSliceV1::Mir(entries) => entries.get(self.next).map(|entry| entry.1),
+            CatalogMatchIndexSliceV1::Kir(entries) => entries.get(self.next).map(|entry| entry.1),
+            CatalogMatchIndexSliceV1::Llvm(entries) => entries.get(self.next).map(|entry| entry.1),
+            CatalogMatchIndexSliceV1::Isa(entries) => entries.get(self.next).map(|entry| entry.1),
+        }?;
+        self.next += 1;
+        self.records.get(index).map(|record| (index, record))
     }
 }
 
@@ -771,6 +893,11 @@ impl ProductionSourceIsaCatalogV1 {
 
     pub fn records(&self) -> &[ProductionSourceIsaCatalogRecordV1] {
         &self.records
+    }
+
+    pub fn canonical_byte_len(&self) -> Result<u64, ProductionSourceIsaCatalogErrorV1> {
+        u64::try_from(catalog_encoded_len(&self.records)?)
+            .map_err(|_| ProductionSourceIsaCatalogErrorV1::ResourceLimit)
     }
 
     pub fn query_source_node(
@@ -2318,6 +2445,27 @@ mod tests {
             ProductionSourceIsaCatalogIntervalV1::new(1, 0, 4),
             Err(ProductionSourceIsaCatalogErrorV1::InvalidRecord)
         ));
+    }
+
+    #[test]
+    fn canonical_length_and_query_ordinals_are_exact() {
+        let catalog = fixture_catalog();
+        let encoded = catalog.to_canonical_bytes().unwrap();
+        assert_eq!(catalog.canonical_byte_len().unwrap(), encoded.len() as u64);
+
+        let mut matches = catalog.query_source_node([1; 32]).unwrap();
+        assert_eq!(matches.len(), 2);
+        let (first_ordinal, first) = matches.next_with_ordinal().unwrap();
+        assert_eq!(first, &catalog.records()[first_ordinal]);
+        assert_eq!(matches.len(), 1);
+        let second = matches.next().unwrap();
+        let second_ordinal = catalog
+            .records()
+            .iter()
+            .position(|record| std::ptr::eq(record, second))
+            .unwrap();
+        assert_ne!(first_ordinal, second_ordinal);
+        assert_eq!(matches.len(), 0);
     }
 
     #[test]

@@ -361,6 +361,20 @@ impl ProductionKirV7StructuralBridgeV1 {
         &self.records
     }
 
+    pub fn canonical_byte_len(&self) -> Result<u64, ProductionKirV7BridgeErrorV1> {
+        let record_bytes = self
+            .records
+            .len()
+            .checked_mul(BRIDGE_RECORD_BYTES_V1)
+            .ok_or(ProductionKirV7BridgeErrorV1::SizeOverflow)?;
+        let total = BRIDGE_HEADER_BYTES_V1
+            .checked_add(record_bytes)
+            .and_then(|bytes| bytes.checked_add(BRIDGE_IDENTITY_BYTES_V1))
+            .filter(|bytes| *bytes <= MAX_PRODUCTION_KIR_V7_BRIDGE_BYTES_V1)
+            .ok_or(ProductionKirV7BridgeErrorV1::ResourceLimit)?;
+        u64::try_from(total).map_err(|_| ProductionKirV7BridgeErrorV1::ResourceLimit)
+    }
+
     pub fn query_simulator_v7(
         &self,
         site: ProductionKirV7BridgeSiteV1,
@@ -798,6 +812,48 @@ fn preflight_kir(bytes: &[u8]) -> Result<(), ProductionKirV7BridgeErrorV1> {
         return Err(ProductionKirV7BridgeErrorV1::InvalidLength);
     }
     Ok(())
+}
+
+#[cfg(test)]
+pub(crate) fn characteristic_bridge_fixture_v1(
+    canonical_target_kir: &[u8],
+    catalog: &ProductionSourceIsaCatalogV1,
+) -> Result<ProductionKirV7StructuralBridgeV1, ProductionKirV7BridgeErrorV1> {
+    preflight_kir(canonical_target_kir)?;
+    let (_, module) = VerifiedCanonicalKernelIrV8::from_canonical_bytes_with_module(copy_bytes(
+        canonical_target_kir,
+    )?)
+    .map_err(|_| ProductionKirV7BridgeErrorV1::InvalidCanonicalProductionKir)?;
+    let structural = catalog.structural_binding();
+    let records =
+        exact_site_records(&module)?.ok_or(ProductionKirV7BridgeErrorV1::ResourceLimit)?;
+    let binding = BridgeBindingV1 {
+        target: match structural.target() {
+            ProductionSourceIsaCatalogTargetV1::Gfx942 => ProductionKirV7BridgeTargetV1::Gfx942,
+            ProductionSourceIsaCatalogTargetV1::Gfx950 => ProductionKirV7BridgeTargetV1::Gfx950,
+        },
+        production_version: ProductionKirV7BridgeKirVersionV1::V8,
+        simulator_v7: content_from_catalog(structural.neutral_kernel_ir()),
+        neutral_production: content_from_catalog(structural.neutral_kernel_ir()),
+        target_production: content_from_catalog(structural.target_bound_kernel_ir()),
+        structural_identity: structural.identity(),
+        source_map_v2: content_from_catalog(catalog.source_map_v2_identity()),
+        artifact: ProductionKirV7BridgeContentIdentityV1 {
+            sha256: *catalog.artifact_identity().sha256(),
+            byte_len: catalog.artifact_identity().byte_len(),
+        },
+        catalog_identity: *catalog.identity(),
+        correlation_identity: *catalog.correlation_identity(),
+        semantic_map_identity: *catalog.semantic_map_identity(),
+        counts: structural.counts(),
+    };
+    let mut bridge = ProductionKirV7StructuralBridgeV1 {
+        identity: [0; 32],
+        binding,
+        records,
+    };
+    bridge.identity = bridge_identity(&bridge.canonical_preimage()?);
+    Ok(bridge)
 }
 
 fn exact_site_records(
@@ -1308,6 +1364,10 @@ mod tests {
     #[test]
     fn exact_bridge_round_trips_block_operation_barrier_and_return_coordinates() {
         let fixture = fixture();
+        assert_eq!(
+            fixture.bridge.canonical_byte_len().unwrap(),
+            fixture.bridge.to_canonical_bytes().unwrap().len() as u64
+        );
         let block_entry = ProductionKirV7BridgeSiteV1::block_entry(0, 0);
         let operation = ProductionKirV7BridgeSiteV1::operation(0, 0, 0);
         let barrier = ProductionKirV7BridgeSiteV1::operation(0, 0, 1);
