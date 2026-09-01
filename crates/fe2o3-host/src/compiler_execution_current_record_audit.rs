@@ -14,8 +14,9 @@ use fe2o3_runtime_protocol::{
 };
 
 use crate::{
-    CompilerGeneratedKernelExpectationV1, WorkerV3AuditorV1,
-    WorkerV3CompilerExecutionEvidenceErrorV1, WorkerV3CompilerExecutionVerificationV1,
+    CompilerGeneratedKernelExpectationRosterV1, CompilerGeneratedKernelExpectationV1,
+    WorkerV3AuditorV1, WorkerV3CompilerExecutionEvidenceErrorV1,
+    WorkerV3CompilerExecutionVerificationV1, WorkerV3RosterVerificationRequestV1,
     WorkerV3VerificationRequestV1,
 };
 
@@ -297,6 +298,24 @@ impl InheritedWorkerV3CompilerCurrentRecordAuditorV1 {
         Self {
             client: Some(client),
         }
+    }
+
+    /// Audits the exact compiler current record retained by one aggregate roster request.
+    ///
+    /// The inherited endpoint remains one-use and is consumed on every success or failure. The
+    /// returned move-only audit authenticates the signed current-record response but grants no
+    /// protected-key, verification, load, or launch authority.
+    pub fn audit_roster<R>(
+        &mut self,
+        request: &WorkerV3RosterVerificationRequestV1<'_, R>,
+    ) -> Result<WorkerV3CompilerCurrentRecordAuditV1, WorkerV3CompilerCurrentRecordAuditErrorV1>
+    where
+        R: CompilerGeneratedKernelExpectationRosterV1,
+    {
+        self.audit_exact(
+            request.compiler_execution_subject(),
+            request.compiler_execution_receipt_carriage(),
+        )
     }
 
     fn audit_exact(
