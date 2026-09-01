@@ -1734,9 +1734,7 @@ const fn observation_error(error: SourceIsaObservationErrorCodeV1) -> &'static s
     error.label()
 }
 
-fn transport_failure(
-    failure: SourceIsaObservationTransportFailureV1,
-) -> SourceIsaTypedCodeV1 {
+fn transport_failure(failure: SourceIsaObservationTransportFailureV1) -> SourceIsaTypedCodeV1 {
     let label = match failure {
         SourceIsaObservationTransportFailureV1::CollectorAlreadyFailed => {
             "collector_already_failed"
