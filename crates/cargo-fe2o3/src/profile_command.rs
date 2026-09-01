@@ -3334,7 +3334,7 @@ fn capture_thread_spawn_test_control_v1(
         return Ok(None);
     };
     if injection.stream == stream {
-        for _ in 0..500 {
+        for _ in 0..800 {
             if injection.collector_ready.is_file() {
                 return Err(io::Error::other(format!(
                     "injected {} capture worker creation failure",
@@ -5381,17 +5381,345 @@ mod tests {
         );
     }
 
-    fn assert_test_descendant_is_gone(pid: i32) {
-        let process = PathBuf::from(format!("/proc/{pid}"));
-        for _ in 0..100 {
-            if !process.exists() {
-                return;
-            }
-            thread::sleep(Duration::from_millis(10));
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    struct TestProcessIdentityV1 {
+        pid: i32,
+        start_time: u64,
+        process_group: i32,
+        session: i32,
+    }
+
+    #[derive(Debug)]
+    struct TestProcessStatV1 {
+        state: char,
+        process_group: i32,
+        session: i32,
+        start_time: u64,
+    }
+
+    struct PinnedTestProcessV1 {
+        identity: TestProcessIdentityV1,
+        descriptor: rustix::fd::OwnedFd,
+    }
+
+    impl Drop for PinnedTestProcessV1 {
+        fn drop(&mut self) {
+            let _ =
+                rustix::process::pidfd_send_signal(&self.descriptor, rustix::process::Signal::KILL);
         }
-        // SAFETY: this is a final cleanup attempt for the test-only descendant.
-        let _ = unsafe { libc::kill(pid, libc::SIGKILL) };
-        panic!("collector descendant {pid} survived process-group revoke");
+    }
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    struct TestProcessPublicationV1 {
+        leader: TestProcessIdentityV1,
+        descendant: TestProcessIdentityV1,
+    }
+
+    #[derive(Clone, Copy)]
+    enum ExpectedTestTopologyV1 {
+        CollectorGroup { expected_session: i32 },
+        EscapedSession { expected_leader_session: i32 },
+    }
+
+    fn parse_test_process_identity_fields_v1(
+        fields: &[&str],
+    ) -> Result<TestProcessIdentityV1, String> {
+        if fields.len() != 4 {
+            return Err("unexpected test process identity width".to_owned());
+        }
+        Ok(TestProcessIdentityV1 {
+            pid: fields[0]
+                .parse()
+                .map_err(|_| "invalid published test PID".to_owned())?,
+            start_time: fields[1]
+                .parse()
+                .map_err(|_| "invalid published test start time".to_owned())?,
+            process_group: fields[2]
+                .parse()
+                .map_err(|_| "invalid published test process group".to_owned())?,
+            session: fields[3]
+                .parse()
+                .map_err(|_| "invalid published test session".to_owned())?,
+        })
+    }
+
+    fn parse_test_process_publication_v1(source: &str) -> Result<TestProcessPublicationV1, String> {
+        let fields: Vec<_> = source.split_whitespace().collect();
+        if fields.len() != 8 {
+            return Err("unexpected test process publication width".to_owned());
+        }
+        Ok(TestProcessPublicationV1 {
+            leader: parse_test_process_identity_fields_v1(&fields[..4])?,
+            descendant: parse_test_process_identity_fields_v1(&fields[4..])?,
+        })
+    }
+
+    fn read_test_process_stat_v1(pid: i32) -> Result<Option<TestProcessStatV1>, String> {
+        let source = match fs::read_to_string(format!("/proc/{pid}/stat")) {
+            Ok(source) => source,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(format!("failed to read test process {pid} stat: {error}")),
+        };
+        let (identity, fields) = source
+            .trim_end()
+            .rsplit_once(") ")
+            .ok_or_else(|| format!("test process {pid} stat has no final command delimiter"))?;
+        let observed_pid = identity
+            .split_once(" (")
+            .ok_or_else(|| format!("test process {pid} stat has no command prefix"))?
+            .0
+            .parse::<i32>()
+            .map_err(|_| format!("test process {pid} stat has an invalid PID"))?;
+        if observed_pid != pid {
+            return Err(format!(
+                "test process {pid} stat reported PID {observed_pid}"
+            ));
+        }
+        let fields: Vec<_> = fields.split_whitespace().collect();
+        if fields.len() < 20 {
+            return Err(format!("test process {pid} stat is truncated"));
+        }
+        let parse_i32 = |index: usize, label: &str| {
+            fields[index]
+                .parse::<i32>()
+                .map_err(|_| format!("test process {pid} stat has an invalid {label}"))
+        };
+        Ok(Some(TestProcessStatV1 {
+            state: fields[0]
+                .parse::<char>()
+                .map_err(|_| format!("test process {pid} stat has an invalid state"))?,
+            process_group: parse_i32(2, "process group")?,
+            session: parse_i32(3, "session")?,
+            start_time: fields[19]
+                .parse::<u64>()
+                .map_err(|_| format!("test process {pid} stat has an invalid start time"))?,
+        }))
+    }
+
+    fn test_process_is_terminal_v1(stat: &TestProcessStatV1) -> bool {
+        matches!(stat.state, 'Z' | 'X' | 'x')
+    }
+
+    fn validate_live_test_process_v1(
+        identity: TestProcessIdentityV1,
+    ) -> Result<TestProcessStatV1, String> {
+        let Some(before) = read_test_process_stat_v1(identity.pid)? else {
+            return Err(format!(
+                "test process {} disappeared before pinning",
+                identity.pid
+            ));
+        };
+        if before.start_time != identity.start_time
+            || before.process_group != identity.process_group
+            || before.session != identity.session
+        {
+            return Err(format!(
+                "test process {} changed identity before pinning: {before:?}",
+                identity.pid
+            ));
+        }
+        if test_process_is_terminal_v1(&before) {
+            return Err(format!(
+                "test process {} was already terminal before pinning: {before:?}",
+                identity.pid
+            ));
+        }
+        Ok(before)
+    }
+
+    fn pin_live_test_process_v1(
+        identity: TestProcessIdentityV1,
+    ) -> Result<PinnedTestProcessV1, String> {
+        validate_live_test_process_v1(identity)?;
+        let pid = rustix::process::Pid::from_raw(identity.pid)
+            .ok_or_else(|| format!("invalid test process PID {}", identity.pid))?;
+        let descriptor = rustix::process::pidfd_open(pid, rustix::process::PidfdFlags::empty())
+            .map_err(|error| {
+                format!("failed to pin live test process {}: {error}", identity.pid)
+            })?;
+        validate_live_test_process_v1(identity)?;
+        Ok(PinnedTestProcessV1 {
+            identity,
+            descriptor,
+        })
+    }
+
+    fn current_test_session_v1() -> i32 {
+        // SAFETY: getsid with zero reads the calling process's session without mutation.
+        let session = unsafe { libc::getsid(0) };
+        assert!(session > 0, "failed to read the test process session");
+        session
+    }
+
+    fn pin_published_test_descendant_v1(
+        publication: TestProcessPublicationV1,
+        expected: ExpectedTestTopologyV1,
+    ) -> Result<PinnedTestProcessV1, String> {
+        let leader = validate_live_test_process_v1(publication.leader)?;
+        if publication.leader.process_group != publication.leader.pid {
+            return Err(format!(
+                "collector leader did not own its fresh process group: {publication:?}"
+            ));
+        }
+        let process = pin_live_test_process_v1(publication.descendant)?;
+        let valid = match expected {
+            ExpectedTestTopologyV1::CollectorGroup { expected_session } => {
+                publication.leader.session == expected_session
+                    && publication.descendant.process_group == publication.leader.pid
+                    && publication.descendant.session == expected_session
+                    && publication.descendant.pid != publication.leader.pid
+            }
+            ExpectedTestTopologyV1::EscapedSession {
+                expected_leader_session,
+            } => {
+                publication.leader.session == expected_leader_session
+                    && publication.descendant.pid == publication.descendant.process_group
+                    && publication.descendant.pid == publication.descendant.session
+                    && publication.descendant.session != publication.leader.session
+            }
+        };
+        if !valid {
+            return Err(format!(
+                "published process topology did not match the fixture contract: publication={publication:?} leader={leader:?}"
+            ));
+        }
+        Ok(process)
+    }
+
+    fn monitor_test_process_publication_v1(
+        publication_path: PathBuf,
+        release_path: PathBuf,
+        expected: ExpectedTestTopologyV1,
+    ) -> thread::JoinHandle<Result<PinnedTestProcessV1, String>> {
+        thread::Builder::new()
+            .name("fe2o3-test-descendant-pin-v1".to_owned())
+            .spawn(move || {
+                let deadline = Instant::now()
+                    .checked_add(Duration::from_secs(2))
+                    .ok_or("test publication deadline overflow".to_owned())?;
+                let result = loop {
+                    match fs::read_to_string(&publication_path) {
+                        Ok(source) => {
+                            break parse_test_process_publication_v1(&source).and_then(
+                                |publication| {
+                                    pin_published_test_descendant_v1(publication, expected)
+                                },
+                            );
+                        }
+                        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                            if Instant::now() >= deadline {
+                                break Err(format!(
+                                    "test process publication {} was not created",
+                                    publication_path.display()
+                                ));
+                            }
+                            thread::sleep(Duration::from_millis(5));
+                        }
+                        Err(error) => {
+                            break Err(format!(
+                                "failed to read test process publication {}: {error}",
+                                publication_path.display()
+                            ));
+                        }
+                    }
+                };
+                match result {
+                    Ok(process) => {
+                        fs::write(&release_path, b"release").map_err(|error| {
+                            format!(
+                                "failed to release test collector through {}: {error}",
+                                release_path.display()
+                            )
+                        })?;
+                        Ok(process)
+                    }
+                    Err(error) => Err(error),
+                }
+            })
+            .unwrap()
+    }
+
+    fn join_test_process_monitor_v1(
+        monitor: thread::JoinHandle<Result<PinnedTestProcessV1, String>>,
+    ) -> PinnedTestProcessV1 {
+        monitor
+            .join()
+            .expect("test process monitor panicked")
+            .expect("test process publication failed validation")
+    }
+
+    fn wait_for_test_process_terminal_v1(
+        process: &PinnedTestProcessV1,
+        timeout: Duration,
+    ) -> Result<bool, String> {
+        let deadline = Instant::now()
+            .checked_add(timeout)
+            .ok_or("test process wait deadline overflow")?;
+        loop {
+            let now = Instant::now();
+            if now >= deadline {
+                return Ok(false);
+            }
+            let remaining = deadline.duration_since(now);
+            let milliseconds = remaining
+                .as_millis()
+                .saturating_add(u128::from(remaining.subsec_nanos() % 1_000_000 != 0))
+                .min(i32::MAX as u128) as i32;
+            let mut poll = libc::pollfd {
+                fd: process.descriptor.as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            // SAFETY: `poll` points to one initialized pollfd and the timeout is bounded above.
+            let result = unsafe { libc::poll(&mut poll, 1, milliseconds) };
+            if result > 0 {
+                let terminal = libc::POLLIN | libc::POLLHUP;
+                let rejected = libc::POLLERR | libc::POLLNVAL;
+                if poll.revents & rejected == 0
+                    && poll.revents != 0
+                    && poll.revents & !terminal == 0
+                {
+                    return Ok(true);
+                }
+                return Err(format!(
+                    "test process {} pidfd returned unexpected poll events {:#x}",
+                    process.identity.pid, poll.revents
+                ));
+            }
+            if result == 0 {
+                return Ok(false);
+            }
+            let error = io::Error::last_os_error();
+            if error.kind() != io::ErrorKind::Interrupted {
+                return Err(format!(
+                    "failed to poll test process {} pidfd: {error}",
+                    process.identity.pid
+                ));
+            }
+        }
+    }
+
+    fn assert_test_descendant_is_terminated(process: &PinnedTestProcessV1) {
+        if wait_for_test_process_terminal_v1(process, Duration::from_secs(1)).unwrap() {
+            return;
+        }
+        let state = read_test_process_stat_v1(process.identity.pid).unwrap();
+        let cleanup =
+            rustix::process::pidfd_send_signal(&process.descriptor, rustix::process::Signal::KILL);
+        panic!(
+            "live collector descendant survived process-group revoke: identity={:?} state={state:?} cleanup={cleanup:?}",
+            process.identity
+        );
+    }
+
+    fn terminate_escaped_test_process_v1(process: &PinnedTestProcessV1) {
+        rustix::process::pidfd_send_signal(&process.descriptor, rustix::process::Signal::KILL)
+            .unwrap();
+        assert!(
+            wait_for_test_process_terminal_v1(process, Duration::from_secs(1)).unwrap(),
+            "escaped test process did not reach a terminal state: {:?}",
+            process.identity
+        );
     }
 
     fn capture_worker_spawn_failure_collection_case(stream: CaptureStreamV1, mode: &str) {
@@ -5403,11 +5731,12 @@ mod tests {
         fs::create_dir(&root).unwrap();
         let descendant_file = root.join(format!("{}-descendant.pid", stream.name()));
         let descendant_literal = serde_json::to_string(&descendant_file.to_string_lossy()).unwrap();
+        let pin_gate = root.join(format!("{}-descendant.pinned", stream.name()));
         let tool = root.join("rocprofv3");
         fs::write(
             &tool,
             format!(
-                "#!/usr/bin/env python3\n# --kernel-trace --advanced-thread-trace\nimport os,subprocess,time\nchild=subprocess.Popen(['/bin/sleep','30'])\nwith open({descendant_literal},'w',encoding='utf-8') as stream:\n stream.write(str(child.pid))\nwhile True:\n time.sleep(1)\n"
+                "#!/usr/bin/env python3\n# --kernel-trace --advanced-thread-trace\nimport os,subprocess,time\ndef identity(pid):\n stat=open(f'/proc/{{pid}}/stat',encoding='utf-8').read().rsplit(') ',1)[1].split()\n return f'{{pid}} {{stat[19]}} {{stat[2]}} {{stat[3]}}'\nchild=subprocess.Popen(['/bin/sleep','30'])\npublication=identity(os.getpid())+' '+identity(child.pid)\ntemporary={descendant_literal}+'.tmp'\nwith open(temporary,'w',encoding='utf-8') as stream:\n stream.write(publication)\nos.replace(temporary,{descendant_literal})\nwhile True:\n time.sleep(1)\n"
             ),
         )
         .unwrap();
@@ -5427,13 +5756,20 @@ mod tests {
             "/bin/true".to_owned(),
         ];
         let plan = prepare_plan(parse_options(&args).unwrap()).unwrap();
+        let monitor = monitor_test_process_publication_v1(
+            descendant_file.clone(),
+            pin_gate.clone(),
+            ExpectedTestTopologyV1::CollectorGroup {
+                expected_session: current_test_session_v1(),
+            },
+        );
         let active_workers = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         CAPTURE_THREAD_SPAWN_FAILURE_INJECTION_V1.with(|current| {
             assert!(
                 current
                     .replace(Some(CaptureThreadSpawnFailureInjectionV1 {
                         stream,
-                        collector_ready: descendant_file.clone(),
+                        collector_ready: pin_gate,
                         active_workers: Arc::clone(&active_workers),
                     }))
                     .is_none(),
@@ -5444,6 +5780,7 @@ mod tests {
         CAPTURE_THREAD_SPAWN_FAILURE_INJECTION_V1.with(|current| {
             assert!(current.replace(None).is_some());
         });
+        let descendant = join_test_process_monitor_v1(monitor);
         let error = result.unwrap_err();
         assert!(
             error.contains(&format!(
@@ -5457,11 +5794,7 @@ mod tests {
             !output.exists(),
             "capture worker setup failure left publication custody behind"
         );
-        let descendant = fs::read_to_string(&descendant_file)
-            .unwrap()
-            .parse::<i32>()
-            .unwrap();
-        assert_test_descendant_is_gone(descendant);
+        assert_test_descendant_is_terminated(&descendant);
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -5521,11 +5854,28 @@ mod tests {
         let restored = inspect_sigchld_for_test();
         assert_sigchld_action_restored(&restored, &hostile);
 
+        let id = NEXT_TOPOLOGY_FIXTURE.fetch_add(1, AtomicOrdering::Relaxed);
+        let normal_root = env::temp_dir().join(format!(
+            "cargo-fe2o3-profile-sigchld-normal-{mode}-{}-{id}",
+            std::process::id()
+        ));
+        fs::create_dir(&normal_root).unwrap();
+        let normal_publication = normal_root.join("descendant.identity");
+        let normal_release = normal_root.join("descendant.release");
+        let normal_monitor = monitor_test_process_publication_v1(
+            normal_publication.clone(),
+            normal_release.clone(),
+            ExpectedTestTopologyV1::CollectorGroup {
+                expected_session: current_test_session_v1(),
+            },
+        );
         let mut normal = Command::new("/usr/bin/python3");
         normal
             .args([
                 "-c",
-                "import os,subprocess\nchild=subprocess.Popen(['/bin/sleep','30'])\nprint(child.pid,flush=True)\nos._exit(0)\n",
+                "import os,subprocess,sys,time\ndef identity(pid):\n stat=open(f'/proc/{pid}/stat',encoding='utf-8').read().rsplit(') ',1)[1].split()\n return f'{pid} {stat[19]} {stat[2]} {stat[3]}'\nchild=subprocess.Popen(['/bin/sleep','30'])\ntemporary=sys.argv[1]+'.tmp'\nwith open(temporary,'w',encoding='utf-8') as stream:\n stream.write(identity(os.getpid())+' '+identity(child.pid))\nos.replace(temporary,sys.argv[1])\ndeadline=time.monotonic()+5\nwhile not os.path.exists(sys.argv[2]) and time.monotonic()<deadline:\n time.sleep(0.005)\nif not os.path.exists(sys.argv[2]):\n raise SystemExit(98)\nos._exit(0)\n",
+                normal_publication.to_str().unwrap(),
+                normal_release.to_str().unwrap(),
             ])
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -5534,22 +5884,36 @@ mod tests {
         let supervised =
             spawn_and_supervise_collector_v1(&mut normal, Duration::from_secs(5), 1024, 1024)
                 .unwrap();
+        let normal_descendant = join_test_process_monitor_v1(normal_monitor);
         assert_eq!(supervised.reason, StopReason::Exited);
         assert!(supervised.status.is_some_and(|status| status.success()));
-        let descendant = std::str::from_utf8(&supervised.stdout.bytes)
-            .unwrap()
-            .trim()
-            .parse::<i32>()
-            .unwrap();
-        assert_test_descendant_is_gone(descendant);
+        assert_test_descendant_is_terminated(&normal_descendant);
         let restored = inspect_sigchld_for_test();
         assert_sigchld_action_restored(&restored, &hostile);
+        fs::remove_dir_all(normal_root).unwrap();
 
+        let id = NEXT_TOPOLOGY_FIXTURE.fetch_add(1, AtomicOrdering::Relaxed);
+        let overflow_root = env::temp_dir().join(format!(
+            "cargo-fe2o3-profile-sigchld-overflow-{mode}-{}-{id}",
+            std::process::id()
+        ));
+        fs::create_dir(&overflow_root).unwrap();
+        let overflow_publication = overflow_root.join("descendant.identity");
+        let overflow_release = overflow_root.join("descendant.release");
+        let overflow_monitor = monitor_test_process_publication_v1(
+            overflow_publication.clone(),
+            overflow_release.clone(),
+            ExpectedTestTopologyV1::CollectorGroup {
+                expected_session: current_test_session_v1(),
+            },
+        );
         let mut overflow = Command::new("/usr/bin/python3");
         overflow
             .args([
                 "-c",
-                "import os,subprocess,sys\nchild=subprocess.Popen(['/bin/sleep','30'])\nprint(child.pid,file=sys.stderr,flush=True)\nos.write(1,b'x'*65536)\nos._exit(0)\n",
+                "import os,subprocess,sys,time\ndef identity(pid):\n stat=open(f'/proc/{pid}/stat',encoding='utf-8').read().rsplit(') ',1)[1].split()\n return f'{pid} {stat[19]} {stat[2]} {stat[3]}'\nchild=subprocess.Popen(['/bin/sleep','30'])\ntemporary=sys.argv[1]+'.tmp'\nwith open(temporary,'w',encoding='utf-8') as stream:\n stream.write(identity(os.getpid())+' '+identity(child.pid))\nos.replace(temporary,sys.argv[1])\ndeadline=time.monotonic()+5\nwhile not os.path.exists(sys.argv[2]) and time.monotonic()<deadline:\n time.sleep(0.005)\nif not os.path.exists(sys.argv[2]):\n raise SystemExit(98)\nos.write(1,b'x'*65536)\nos._exit(0)\n",
+                overflow_publication.to_str().unwrap(),
+                overflow_release.to_str().unwrap(),
             ])
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -5558,17 +5922,14 @@ mod tests {
         let supervised =
             spawn_and_supervise_collector_v1(&mut overflow, Duration::from_secs(5), 1024, 1024)
                 .unwrap();
+        let overflow_descendant = join_test_process_monitor_v1(overflow_monitor);
         assert_eq!(supervised.reason, StopReason::OutputOverflow);
         assert!(supervised.stdout.overflow);
         assert_eq!(supervised.stdout.bytes.len(), 1024);
-        let descendant = std::str::from_utf8(&supervised.stderr.bytes)
-            .unwrap()
-            .trim()
-            .parse::<i32>()
-            .unwrap();
-        assert_test_descendant_is_gone(descendant);
+        assert_test_descendant_is_terminated(&overflow_descendant);
         let restored = inspect_sigchld_for_test();
         assert_sigchld_action_restored(&restored, &hostile);
+        fs::remove_dir_all(overflow_root).unwrap();
 
         for stream in [CaptureStreamV1::Stdout, CaptureStreamV1::Stderr] {
             capture_worker_spawn_failure_collection_case(stream, mode);
@@ -5742,6 +6103,21 @@ mod tests {
 
     #[test]
     fn escaped_pipe_holder_cannot_block_capture_completion() {
+        let id = NEXT_TOPOLOGY_FIXTURE.fetch_add(1, AtomicOrdering::Relaxed);
+        let root = env::temp_dir().join(format!(
+            "cargo-fe2o3-profile-escaped-pipe-{}-{id}",
+            std::process::id()
+        ));
+        fs::create_dir(&root).unwrap();
+        let publication = root.join("descendant.identity");
+        let release = root.join("descendant.release");
+        let monitor = monitor_test_process_publication_v1(
+            publication.clone(),
+            release.clone(),
+            ExpectedTestTopologyV1::EscapedSession {
+                expected_leader_session: current_test_session_v1(),
+            },
+        );
         let python_path = discover_python().expect("test requires the reviewed native Python");
         let python = FilePin::open(
             &python_path,
@@ -5754,7 +6130,9 @@ mod tests {
             .arg0(&python.canonical_path)
             .args([
                 "-c",
-                "import os,time\npid=os.fork()\nif pid == 0:\n os.setsid()\n time.sleep(30)\n os._exit(0)\nprint(pid, flush=True)\n",
+                "import os,sys,time\ndef identity(pid):\n stat=open(f'/proc/{pid}/stat',encoding='utf-8').read().rsplit(') ',1)[1].split()\n return f'{pid} {stat[19]} {stat[2]} {stat[3]}'\npid=os.fork()\nif pid == 0:\n os.setsid()\n temporary=sys.argv[1]+'.tmp'\n with open(temporary,'w',encoding='utf-8') as stream:\n  stream.write(identity(os.getppid())+' '+identity(os.getpid()))\n os.replace(temporary,sys.argv[1])\n deadline=time.monotonic()+5\n while not os.path.exists(sys.argv[2]) and time.monotonic()<deadline:\n  time.sleep(0.005)\n if not os.path.exists(sys.argv[2]):\n  os._exit(98)\n time.sleep(30)\n os._exit(0)\ndeadline=time.monotonic()+5\nwhile not os.path.exists(sys.argv[2]) and time.monotonic()<deadline:\n time.sleep(0.005)\nif not os.path.exists(sys.argv[2]):\n os._exit(98)\nos._exit(0)\n",
+                publication.to_str().unwrap(),
+                release.to_str().unwrap(),
             ])
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -5765,29 +6143,14 @@ mod tests {
         let started = Instant::now();
         let supervised = supervise(&mut child, Duration::from_secs(5), 1024, 1024).unwrap();
         let elapsed = started.elapsed();
-        let escaped_pid = std::str::from_utf8(&supervised.stdout.bytes)
-            .unwrap()
-            .trim()
-            .parse::<i32>()
-            .unwrap();
-        // SAFETY: the reported pid belongs to the test-only forked descendant.
-        let _ = unsafe { libc::kill(escaped_pid, libc::SIGKILL) };
-        let escaped_process = PathBuf::from(format!("/proc/{escaped_pid}"));
-        for _ in 0..100 {
-            if !escaped_process.exists() {
-                break;
-            }
-            thread::sleep(Duration::from_millis(10));
-        }
+        let escaped = join_test_process_monitor_v1(monitor);
+        terminate_escaped_test_process_v1(&escaped);
         assert_eq!(supervised.reason, StopReason::Exited);
         assert!(
-            elapsed < Duration::from_secs(1),
+            elapsed < Duration::from_secs(4),
             "capture waited for escaped pipe holder for {elapsed:?}"
         );
-        assert!(
-            !escaped_process.exists(),
-            "escaped test descendant survived cleanup"
-        );
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
