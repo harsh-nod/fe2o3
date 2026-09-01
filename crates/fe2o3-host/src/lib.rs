@@ -28,9 +28,20 @@ pub mod __hardware_test {
     use fe2o3_artifacts::{Access, AddressSpace, PointerWidth};
 
     use crate::{
-        AllocationProvenance, ArgumentAccess, ArgumentAccessMode, GeneratedSliceArgumentPairV1,
-        ObservedContext,
+        AllocationProvenance, ArgumentAccess, ArgumentAccessMode,
+        CompilerGeneratedKernelExpectationRosterEntryV1,
+        CompilerGeneratedKernelExpectationRosterV1, GeneratedSliceArgumentPairV1, ObservedContext,
     };
+
+    /// Inert one-entry roster for Cargo's strict inherited-handoff integration fixture.
+    pub struct ApplicationHandoffVecAddRosterFixtureV1;
+
+    impl CompilerGeneratedKernelExpectationRosterV1 for ApplicationHandoffVecAddRosterFixtureV1 {
+        const ENTRIES: &'static [CompilerGeneratedKernelExpectationRosterEntryV1] =
+            &[CompilerGeneratedKernelExpectationRosterEntryV1::from_parts(
+                "vecadd", "vecadd", [0xa1; 32], [0xb2; 32],
+            )];
+    }
 
     /// Constructs inert device facts for a descriptor-handoff integration fixture.
     pub fn application_handoff_observed_context_fixture_v1(target: &str) -> ObservedContext {
@@ -81,11 +92,14 @@ pub mod __hardware_test {
 }
 
 #[cfg(target_os = "linux")]
-#[doc(hidden)]
-pub use application_descriptor_handoff::consume_inherited_worker_v3_application_handoff_v1;
-#[cfg(target_os = "linux")]
 pub use application_descriptor_handoff::{
     ApplicationDescriptorHandoffErrorV1, WorkerV3ApplicationDescriptorHandoffErrorV1,
+};
+#[cfg(target_os = "linux")]
+#[doc(hidden)]
+pub use application_descriptor_handoff::{
+    consume_inherited_worker_v3_application_handoff_v1,
+    consume_inherited_worker_v3_application_roster_handoff_v1,
 };
 pub use argument_alias::{
     AliasAdmissionError, AllocationIdentity, AllocationProvenance, ArgumentAccess,
