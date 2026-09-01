@@ -27,6 +27,9 @@ mod memory;
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 mod shared_memory;
 
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+mod wait;
+
 #[cfg(target_os = "linux")]
 mod queue_resources;
 

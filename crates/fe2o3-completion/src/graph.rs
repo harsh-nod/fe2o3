@@ -1,4 +1,5 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::cmp::Reverse;
+use std::collections::{BTreeMap, BTreeSet, BinaryHeap};
 use std::error::Error;
 use std::fmt;
 
@@ -279,6 +280,10 @@ pub struct CompletionGraphV1 {
     pub(crate) streams: Vec<StreamIdentityV1>,
     pub(crate) nodes: Vec<CompletionNodeV1>,
     pub(crate) topological_order: Vec<CompletionNodeIdV1>,
+    dependency_indices: Vec<Vec<usize>>,
+    successor_offsets: Vec<usize>,
+    successor_indices: Vec<usize>,
+    topological_ranks: Vec<usize>,
 }
 
 impl CompletionGraphV1 {
@@ -428,21 +433,39 @@ impl CompletionGraphV1 {
             }
         }
 
-        let dependencies = dependencies(&nodes);
-        let edge_count: usize = dependencies.iter().map(Vec::len).sum();
+        let dependency_indices = dependency_indices(&nodes, &node_indices);
+        let edge_count: usize = dependency_indices.iter().map(Vec::len).sum();
         if edge_count > MAX_COMPLETION_GRAPH_EDGES_V1 {
             return Err(CompletionGraphErrorV1::TooManyEdges {
                 actual: edge_count,
                 maximum: MAX_COMPLETION_GRAPH_EDGES_V1,
             });
         }
-        let topological_order = deterministic_topological_order(&nodes, &dependencies)?;
+        let (successor_offsets, successor_indices) = successor_index(&dependency_indices);
+        let topological_indices = deterministic_topological_order(
+            &nodes,
+            &dependency_indices,
+            &successor_offsets,
+            &successor_indices,
+        )?;
+        let topological_order = topological_indices
+            .iter()
+            .map(|&index| nodes[index].id())
+            .collect();
+        let mut topological_ranks = vec![0; nodes.len()];
+        for (rank, index) in topological_indices.into_iter().enumerate() {
+            topological_ranks[index] = rank;
+        }
 
         Ok(Self {
             context,
             streams,
             nodes,
             topological_order,
+            dependency_indices,
+            successor_offsets,
+            successor_indices,
+            topological_ranks,
         })
     }
 
@@ -482,6 +505,18 @@ impl CompletionGraphV1 {
         self.nodes
             .binary_search_by_key(&id, CompletionNodeV1::id)
             .ok()
+    }
+
+    fn dependencies(&self, index: usize) -> &[usize] {
+        &self.dependency_indices[index]
+    }
+
+    fn successors(&self, index: usize) -> &[usize] {
+        &self.successor_indices[self.successor_offsets[index]..self.successor_offsets[index + 1]]
+    }
+
+    fn topological_rank(&self, index: usize) -> usize {
+        self.topological_ranks[index]
     }
 }
 
@@ -579,22 +614,32 @@ impl CompletionNodeStateV1 {
 pub struct CompletionAuthorityV1 {
     graph: CompletionGraphV1,
     states: Vec<CompletionNodeStateV1>,
+    remaining_dependencies: Vec<usize>,
+    terminal_nodes: usize,
+    propagation_queue: BinaryHeap<Reverse<(usize, usize)>>,
 }
 
 impl CompletionAuthorityV1 {
     fn new(graph: CompletionGraphV1) -> Self {
-        let dependencies = dependencies(&graph.nodes);
-        let states = dependencies
+        let remaining_dependencies: Vec<_> =
+            graph.dependency_indices.iter().map(Vec::len).collect();
+        let states = remaining_dependencies
             .iter()
-            .map(|dependencies| {
-                if dependencies.is_empty() {
+            .map(|&remaining| {
+                if remaining == 0 {
                     CompletionNodeStateV1::Ready
                 } else {
                     CompletionNodeStateV1::Blocked
                 }
             })
             .collect();
-        Self { graph, states }
+        Self {
+            graph,
+            states,
+            remaining_dependencies,
+            terminal_nodes: 0,
+            propagation_queue: BinaryHeap::new(),
+        }
     }
 
     pub const fn graph(&self) -> &CompletionGraphV1 {
@@ -661,7 +706,8 @@ impl CompletionAuthorityV1 {
                     origin: node,
                     reason,
                 };
-                self.propagate_terminal_causes();
+                self.terminal_nodes += 1;
+                self.propagate_terminal_cause_from(index);
                 Ok(())
             }
             state if state.is_terminal() => {
@@ -687,7 +733,8 @@ impl CompletionAuthorityV1 {
         match self.states[index] {
             CompletionNodeStateV1::Ready | CompletionNodeStateV1::CancelRequested(_) => {
                 self.states[index] = CompletionNodeStateV1::Succeeded;
-                self.refresh_blocked_nodes();
+                self.terminal_nodes += 1;
+                self.release_successors(index);
                 Ok(())
             }
             state if state.is_terminal() => {
@@ -715,7 +762,8 @@ impl CompletionAuthorityV1 {
                     origin: node,
                     error,
                 };
-                self.propagate_terminal_causes();
+                self.terminal_nodes += 1;
+                self.propagate_terminal_cause_from(index);
                 Ok(())
             }
             state if state.is_terminal() => {
@@ -742,7 +790,8 @@ impl CompletionAuthorityV1 {
                     origin: node,
                     reason,
                 };
-                self.propagate_terminal_causes();
+                self.terminal_nodes += 1;
+                self.propagate_terminal_cause_from(index);
                 Ok(())
             }
             state if state.is_terminal() => {
@@ -753,7 +802,7 @@ impl CompletionAuthorityV1 {
     }
 
     pub fn is_terminal(&self) -> bool {
-        self.states.iter().all(|state| state.is_terminal())
+        self.terminal_nodes == self.states.len()
     }
 
     /// Converts a fully terminal authority into a descriptive report.
@@ -794,47 +843,49 @@ impl CompletionAuthorityV1 {
             .ok_or(CompletionTransitionErrorV1::UnknownNode(node))
     }
 
-    fn refresh_blocked_nodes(&mut self) {
-        let dependencies = dependencies(&self.graph.nodes);
-        for node in &self.graph.topological_order {
-            let index = self
-                .graph
-                .node_index(*node)
-                .expect("validated topological node exists");
-            if self.states[index] == CompletionNodeStateV1::Blocked
-                && dependencies[index].iter().all(|dependency| {
-                    self.state_unchecked(*dependency) == CompletionNodeStateV1::Succeeded
-                })
-            {
-                self.states[index] = CompletionNodeStateV1::Ready;
+    fn release_successors(&mut self, completed_index: usize) {
+        for &successor in self.graph.successors(completed_index) {
+            if self.states[successor] != CompletionNodeStateV1::Blocked {
+                continue;
+            }
+            let remaining = &mut self.remaining_dependencies[successor];
+            debug_assert!(
+                *remaining > 0,
+                "blocked successor has unresolved dependencies"
+            );
+            *remaining -= 1;
+            if *remaining == 0 {
+                self.states[successor] = CompletionNodeStateV1::Ready;
             }
         }
     }
 
-    fn propagate_terminal_causes(&mut self) {
-        let dependencies = dependencies(&self.graph.nodes);
-        for node in &self.graph.topological_order {
-            let index = self
-                .graph
-                .node_index(*node)
-                .expect("validated topological node exists");
+    fn propagate_terminal_cause_from(&mut self, terminal_index: usize) {
+        debug_assert!(self.propagation_queue.is_empty());
+        self.enqueue_successors(terminal_index);
+        // Topological priority resolves every causal predecessor before a join.
+        while let Some(Reverse((_, index))) = self.propagation_queue.pop() {
             if self.states[index] != CompletionNodeStateV1::Blocked {
                 continue;
             }
-            let cause = dependencies[index]
+            let cause = self
+                .graph
+                .dependencies(index)
                 .iter()
-                .find_map(|dependency| dependency_cause(self.state_unchecked(*dependency)));
+                .find_map(|&dependency| dependency_cause(self.states[dependency]));
             if let Some(cause) = cause {
                 self.states[index] = cause;
+                self.terminal_nodes += 1;
+                self.enqueue_successors(index);
             }
         }
     }
 
-    fn state_unchecked(&self, node: CompletionNodeIdV1) -> CompletionNodeStateV1 {
-        self.states[self
-            .graph
-            .node_index(node)
-            .expect("validated dependency node exists")]
+    fn enqueue_successors(&mut self, index: usize) {
+        for &successor in self.graph.successors(index) {
+            self.propagation_queue
+                .push(Reverse((self.graph.topological_rank(successor), successor)));
+        }
     }
 }
 
@@ -1105,60 +1156,72 @@ fn adjacent_duplicate<T: Eq>(values: &[T]) -> Option<&T> {
         .map(|pair| &pair[0])
 }
 
-pub(crate) fn dependencies(nodes: &[CompletionNodeV1]) -> Vec<Vec<CompletionNodeIdV1>> {
+fn dependency_indices(
+    nodes: &[CompletionNodeV1],
+    node_indices: &BTreeMap<CompletionNodeIdV1, usize>,
+) -> Vec<Vec<usize>> {
     nodes
         .iter()
         .map(|node| {
             let mut dependencies = Vec::with_capacity(2);
             if let Some(predecessor) = node.stream_predecessor() {
-                dependencies.push(predecessor);
+                dependencies.push(node_indices[&predecessor]);
             }
             if let CompletionNodeKindV1::EventWait { recorded_by, .. } = node.kind()
-                && !dependencies.contains(recorded_by)
+                && !dependencies.contains(&node_indices[recorded_by])
             {
-                dependencies.push(*recorded_by);
+                dependencies.push(node_indices[recorded_by]);
             }
-            dependencies.sort_unstable();
+            dependencies.sort_unstable_by_key(|&index| nodes[index].id());
             dependencies
         })
         .collect()
 }
 
-fn deterministic_topological_order(
-    nodes: &[CompletionNodeV1],
-    dependencies: &[Vec<CompletionNodeIdV1>],
-) -> Result<Vec<CompletionNodeIdV1>, CompletionGraphErrorV1> {
-    let node_indices: BTreeMap<_, _> = nodes
-        .iter()
-        .enumerate()
-        .map(|(index, node)| (node.id(), index))
-        .collect();
-    let mut indegrees: Vec<_> = dependencies.iter().map(Vec::len).collect();
-    let mut successors = vec![Vec::new(); nodes.len()];
-    for (node_index, predecessors) in dependencies.iter().enumerate() {
-        for predecessor in predecessors {
-            let predecessor_index = node_indices[predecessor];
-            successors[predecessor_index].push(node_index);
+fn successor_index(dependencies: &[Vec<usize>]) -> (Vec<usize>, Vec<usize>) {
+    let mut offsets = vec![0; dependencies.len() + 1];
+    for predecessors in dependencies {
+        for &predecessor in predecessors {
+            offsets[predecessor + 1] += 1;
         }
     }
-    for successor_list in &mut successors {
-        successor_list.sort_unstable_by_key(|index| nodes[*index].id());
+    for index in 1..offsets.len() {
+        offsets[index] += offsets[index - 1];
     }
 
+    let mut cursors = offsets[..dependencies.len()].to_vec();
+    let mut successors = vec![0; offsets[dependencies.len()]];
+    for (successor, predecessors) in dependencies.iter().enumerate() {
+        for &predecessor in predecessors {
+            successors[cursors[predecessor]] = successor;
+            cursors[predecessor] += 1;
+        }
+    }
+    (offsets, successors)
+}
+
+fn deterministic_topological_order(
+    nodes: &[CompletionNodeV1],
+    dependencies: &[Vec<usize>],
+    successor_offsets: &[usize],
+    successor_indices: &[usize],
+) -> Result<Vec<usize>, CompletionGraphErrorV1> {
+    let mut indegrees: Vec<_> = dependencies.iter().map(Vec::len).collect();
     let mut ready: BTreeSet<_> = nodes
         .iter()
         .enumerate()
         .filter(|(index, _)| indegrees[*index] == 0)
-        .map(|(_, node)| node.id())
+        .map(|(index, node)| (node.id(), index))
         .collect();
     let mut order = Vec::with_capacity(nodes.len());
-    while let Some(node) = ready.pop_first() {
-        order.push(node);
-        let node_index = node_indices[&node];
-        for successor in &successors[node_index] {
-            indegrees[*successor] -= 1;
-            if indegrees[*successor] == 0 {
-                ready.insert(nodes[*successor].id());
+    while let Some((_, node_index)) = ready.pop_first() {
+        order.push(node_index);
+        for &successor in
+            &successor_indices[successor_offsets[node_index]..successor_offsets[node_index + 1]]
+        {
+            indegrees[successor] -= 1;
+            if indegrees[successor] == 0 {
+                ready.insert((nodes[successor].id(), successor));
             }
         }
     }

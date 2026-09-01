@@ -13,6 +13,7 @@ artifact, runtime, and proof boundaries described below. See the
 [compiler execution attestation protocol V1](docs/compiler-execution-attestation-v1.md),
 [receipt-bearing Worker V3 load envelope V2](docs/worker-v3-receipt-bearing-load-envelope-v2.md),
 [gfx942 production LDS reduction](docs/gfx942-production-lds-reduction-v1.md),
+[runtime community architecture V1](docs/runtime-community-architecture-v1.md),
 [workspace ownership policy](docs/workspace-layers-and-ownership.md),
 [Pliron Wave 0 architecture](docs/pliron-wave0-architecture.md),
 [cuda-oxide parity matrix](docs/cuda-oxide-parity-matrix.md),

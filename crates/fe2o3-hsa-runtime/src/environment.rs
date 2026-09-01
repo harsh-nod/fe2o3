@@ -56,7 +56,7 @@ impl ReviewedHsaRuntimeAdapterV1 {
         )
     }
 
-    fn with_api_for_processor(
+    pub(crate) fn with_api_for_processor(
         context: Arc<GpuContext>,
         mut api: DirectRuntimeApi,
         required_processor: &'static str,

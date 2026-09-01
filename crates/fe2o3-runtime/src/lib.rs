@@ -3,6 +3,10 @@
 
 #[allow(unsafe_code)]
 mod authorized_execution;
+mod context;
+#[allow(unsafe_code)]
+mod kfd_backend;
+mod worker;
 
 pub use authorized_execution::{
     AuthorizedRuntimeDebugTelemetrySessionV1, AuthorizedRuntimeDebugTelemetrySessionV2,
@@ -12,6 +16,10 @@ pub use authorized_execution::{
     execute_authorized_gfx942_runtime_debug_target_dispatch_v2,
     execute_authorized_gfx942_runtime_dispatch_v1,
 };
+pub use context::*;
+pub use fe2o3_host_api as contract;
+pub use kfd_backend::*;
+pub use worker::*;
 
 use core::fmt;
 

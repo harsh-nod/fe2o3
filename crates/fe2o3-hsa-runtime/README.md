@@ -1,13 +1,79 @@
 # fe2o3-hsa-runtime
 
-This crate is the reviewed production adapter between fe2o3's linear Worker V2
-authority types and the AMD HSA runtime. It loads already-finalized AMDHSA code
-objects and submits AQL directly. It does not compile or link code and has no
-COMGR or command-line tool path.
+This crate contains two reviewed surfaces over the AMD HSA runtime: the public
+`RuntimeBackendV1` implementation and the legacy profile-specific Worker V2
+adapter. Both load already-finalized AMDHSA code objects and submit AQL directly.
+They do not compile or link code and have no COMGR or command-line tool path.
 
-The production backend is enabled only when matching HSA and HIP headers and
-runtime libraries are found under `ROCM_PATH`, `HIP_PATH`, or a known ROCm
-installation. Builds without that ABI fail closed at adapter construction.
+## Public Runtime Backend
+
+The default build is a deterministic stub backend. It never probes the build
+host for ROCm and fails closed at adapter construction. Native HSA support must
+be selected explicitly with Cargo feature `native-hsa`:
+
+```text
+cargo build -p fe2o3-hsa-runtime --features native-hsa
+```
+
+When selected, the build requires matching HSA and HIP headers plus
+`libhsa-runtime64` and `libamdhip64`. The ROCm root is taken from `ROCM_PATH`,
+then `HIP_PATH`, and otherwise the unversioned `/opt/rocm` location. Both `lib`
+and `lib64` layouts are accepted. An incomplete explicitly selected backend is
+a build error that identifies the missing prerequisites; it never silently
+falls back to the stub. Feature `hardware-test-hooks` implies `native-hsa`.
+
+`ReviewedHsaRuntimeBackendV1` implements the backend SPI from `fe2o3-runtime`
+for the one HIP-correlated reviewed HSA device. It exposes multiple persistent
+streams, host-visible allocations, sealed module and kernel identities, typed
+address-free pointer patching, nonblocking submission and polling, deadline
+waits, and cross-stream events. Device-local allocation, peer access,
+multi-device operation, and backend-owned atomics or collectives are reported
+as unsupported rather than emulated. Queue admission is nonblocking: a full
+ring or competing producer is rejected before packet reservation.
+
+Constructing this direct in-process backend is `unsafe`. The caller must ensure
+for its complete lifetime that every subsequently loaded code object is trusted
+for execution in the application GPU VM, every typed signature matches the
+exact kernarg ABI, and declared binding regions conservatively cover all memory
+effects. Worker supervision contains backend aborts and timeouts, but its public
+handshake does not authenticate an executable or make untrusted code safe;
+callers still own worker selection, artifact authority, and OS isolation.
+Completion signals and kernarg allocations remain owned by sealed submission
+records until explicit submission release. Event dependencies retain their
+source signal; cross-stream conflicting regions are rejected unless ordered by
+a transitive event dependency. Host reads and writes are rejected while they
+conflict with pending device access.
+
+The feature-gated native packet tests exercise the exact production reservation
+and AQL materialization helpers against an aligned fake ring:
+
+```text
+cargo test -p fe2o3-hsa-runtime --features hardware-test-hooks --lib native_packet
+```
+
+This lane requires the ROCm HSA/HIP development headers and shared libraries
+described above, but it does not require a GPU or initialize HSA. It verifies
+barrier-AND fan-in above five signals, ring wrap, bounded capacity rejection,
+competing-producer rejection, and pre-publication no-mutation behavior. It is
+not kernel-execution evidence. The repository has no owned, trusted HSACO
+fixture for `ReviewedHsaRuntimeBackendV1`; the existing ignored hardware lanes
+consume caller-supplied digest-pinned artifacts through profile-specific raw
+adapters. Real cross-stream dependency execution through this backend therefore
+remains an explicitly external hardware-test obligation.
+
+Facade waits use nonblocking acquire polls with a monotonic caller deadline:
+32 short spins, 8 scheduler yields, then exponential sleeps starting at 50
+microseconds and capped at 1 millisecond. Deadline expiry returns `Pending` and
+retains all submission authority. A live queue fault is terminal, while a fault
+observed only after exact-zero completion is reported as a failed quiescent
+submission and seals that stream against further publication.
+
+Release events retaining a completed submission before releasing its submission
+record, then destroy streams and explicitly shut down the owning runtime
+context. Dropping this direct backend with live or ambiguous custody aborts.
+
+## Legacy Worker V2 Adapter
+
 Construction locates the HSA and HIP runtime images through `/proc/self/maps`,
 opens those paths, verifies that each opened file has the mapped device and
 inode, checks stable metadata around hashing, and binds both file digests into

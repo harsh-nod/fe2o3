@@ -7,6 +7,7 @@
 //! completion has been observed and explicitly recycled.
 
 use core::fmt;
+use std::time::Instant;
 
 use fe2o3_aql::{
     AMD_SIGNAL_ALIGNMENT_V1, AMD_SIGNAL_BYTES_V1, AQL_MAX_FIXED_BATCH_PACKETS_V2,
@@ -18,6 +19,7 @@ use fe2o3_aql::{
 use fe2o3_runtime_model::{MemoryMappingKeyV1, QueueKeyV1};
 
 use crate::shared_memory::SharedGttMappedResourceFactsV1;
+use crate::wait::MonotonicWaitV1;
 
 pub(crate) const COMPLETION_SIGNAL_CAPACITY_V1: usize = AQL_MAX_FIXED_BATCH_PACKETS_V2 as usize;
 pub(crate) const COMPLETION_SIGNAL_ARENA_BYTES_V1: usize =
@@ -26,7 +28,7 @@ pub(super) const MAX_COMPLETION_POLL_ATTEMPTS_V1: u32 = 1_000_000;
 
 /// Canonical claim boundary for the private completion-signal slice.
 pub const GFX942_AQL_COMPLETION_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-gfx942-aql-completion-r7-v1\n",
+    "profile=fe2o3-mi300x-gfx942-aql-completion-r8-v1\n",
     "aql_dispatch_schema_sha256=82fbd7cf0b6c8647dce3f9b11e4f13a2dadfe3423509f769a4bc6cc87bb7acd0\n",
     "aql_barrier_and_schema_sha256=bdca900cd5c6eaccbddfc5a854e956382a08ce87bec4ccd5284baacf932cdfb5\n",
     "aql_fixed_batch_schema_sha256=a3c74fe4aa26a62772253de267812f2fb1626247685d8c4e8ed8bbb2a5a9e34a\n",
@@ -34,7 +36,7 @@ pub const GFX942_AQL_COMPLETION_MANIFEST_V1: &str = concat!(
     "batch=1-through-8192,heap-owned-fixed-cardinality-state,one-unique-signal-per-packet,no-aggregate-alias\n",
     "initialization=typed-amd-busy-signal-construction,kind-user-1,value-pending-1,event-fields-zero,before-gpu-map\n",
     "fixed-batch-binding=crate-private-packet-construction,per-packet-independent-or-wait-for-prior-ordering-retained,no-public-signal-address,exact-queue-vm-signal-code-kernarg-and-nonzero-dispatch-generations-retained,actual-resource-lifetimes-owned-by-private-c5-queue-owner\n",
-    "observation=bounded-busy-poll,one-pre-post-currentness-envelope-around-one-exact-retained-signal-set-of-atomic-i64-acquire-loads,same-scan-redacted-packet-completed-pending-and-first-pending-index-progress,all-retained-signals-zero-before-ready,unexpected-value-is-fault,timeout-retains-linear-operation-privately-until-addressless-counter-first-retained-packet-first-retained-signal-exception-currentness-snapshot\n",
+    "observation=monotonic-deadline-or-legacy-bounded-poll,short-spin-then-yield-and-bounded-exponential-sleep,one-pre-post-currentness-envelope-around-one-exact-retained-signal-set-of-atomic-i64-acquire-loads,same-scan-redacted-packet-completed-pending-and-first-pending-index-progress,all-retained-signals-zero-before-ready,unexpected-value-is-fault,timeout-retains-linear-operation-privately-until-addressless-counter-first-retained-packet-first-retained-signal-exception-currentness-snapshot\n",
     "recycle=fixed-batch-only-after-exact-all-signal-completion-or-barrier-probe-only-after-exact-one-signal-completion,atomic-i64-release-reset-to-pending,checked-slot-generation-increment\n",
     "barrier-probe=isolated-owner-phase,exact-one-slot,queue-and-signal-generations-only,no-code-kernarg-or-dispatch-generation,bound-published-completed-recycled-linear-custody,zero-dependency-system-scope-header-0x1403\n",
     "failure=currentness-native-observation-unexpected-value-timeout-invalid-poll-bound-generation-exhaustion-or-reset-ambiguity-poisons-owner-and-queue;timeout-snapshot-precedes-poison-and-grants-no-native-authority;teardown-required\n",
@@ -45,7 +47,7 @@ pub const GFX942_AQL_COMPLETION_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`GFX942_AQL_COMPLETION_MANIFEST_V1`].
 pub const GFX942_AQL_COMPLETION_MANIFEST_SHA256_V1: &str =
-    "56c7fb38daeffda945cffeb287ed61f26ee9446dbf8edbbd5337dd008309bd0f";
+    "4b7e1090eccbae41ea09ce7d5147470eb665ee295cb0f4526f5584225c86369a";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CompletionOwnerPhaseV1 {
@@ -827,7 +829,8 @@ impl CompletionSignalArenaOwnerV1 {
             },
         )
         .map_err(Gfx942BarrierProbeWaitFailureV1::Terminal)?;
-        for _ in 0..polls {
+        let mut wait = MonotonicWaitV1::without_deadline();
+        for poll in 0..polls {
             match self
                 .observe_barrier_probe_once(probe, backend)
                 .map_err(Gfx942BarrierProbeWaitFailureV1::Terminal)?
@@ -839,6 +842,9 @@ impl CompletionSignalArenaOwnerV1 {
                     debug_assert_eq!(progress.packet_count(), 1);
                     debug_assert_eq!(progress.signal(), Gfx942TimeoutSignalObservationV1::Pending);
                     probe = pending;
+                    if poll + 1 < polls {
+                        wait.pause();
+                    }
                 }
                 Gfx942BarrierProbePollV1::Ready {
                     completed,
@@ -1135,12 +1141,18 @@ impl CompletionSignalArenaOwnerV1 {
                 polls,
             });
         }
-        for _ in 0..polls {
+        let mut wait = MonotonicWaitV1::without_deadline();
+        for poll in 0..polls {
             match self
                 .observe_once(batch, backend)
                 .map_err(Gfx942CompletionWaitFailureV1::Terminal)?
             {
-                Gfx942CompletionPollV1::Pending(pending) => batch = pending,
+                Gfx942CompletionPollV1::Pending(pending) => {
+                    batch = pending;
+                    if poll + 1 < polls {
+                        wait.pause();
+                    }
+                }
                 Gfx942CompletionPollV1::Ready(ready) => return Ok(ready),
             }
         }
@@ -1148,6 +1160,36 @@ impl CompletionSignalArenaOwnerV1 {
             batch: Box::new(batch),
             polls,
         })
+    }
+
+    pub(super) fn wait_until<const N: usize, B: NativeCompletionSignalBackendV1>(
+        &mut self,
+        mut batch: Gfx942CompletionBatchV1<N>,
+        deadline: Instant,
+        backend: &mut B,
+    ) -> Result<Gfx942CompletedBatchV1<N>, Gfx942CompletionWaitFailureV1<N>> {
+        self.require_ready()
+            .and_then(|()| self.validate_published(&batch.retention))
+            .map_err(Gfx942CompletionWaitFailureV1::Terminal)?;
+        let mut wait = MonotonicWaitV1::until(deadline);
+        let mut polls = 0_u32;
+        loop {
+            if wait.expired() || polls == u32::MAX {
+                return Err(Gfx942CompletionWaitFailureV1::Timeout {
+                    batch: Box::new(batch),
+                    polls,
+                });
+            }
+            polls += 1;
+            match self
+                .observe_once(batch, backend)
+                .map_err(Gfx942CompletionWaitFailureV1::Terminal)?
+            {
+                Gfx942CompletionPollV1::Pending(pending) => batch = pending,
+                Gfx942CompletionPollV1::Ready(ready) => return Ok(ready),
+            }
+            wait.pause();
+        }
     }
 
     pub(super) fn recycle<const N: usize, B: NativeCompletionSignalBackendV1>(
@@ -2015,6 +2057,23 @@ mod tests {
         assert_eq!(polls, 0);
         assert_eq!(batch.first_packet_and_signal_slot().unwrap(), (97, 0));
         assert_eq!(backend.observe_calls, scans_before);
+        owner.poison_owner();
+    }
+
+    #[test]
+    fn expired_deadline_preserves_custody_without_scanning_signals() {
+        let mut owner = owner();
+        let batch = publish(&mut owner, [template(0)]);
+        let mut backend = MockBackend::pending();
+        let timeout = owner
+            .wait_until(batch, Instant::now(), &mut backend)
+            .unwrap_err();
+        let Gfx942CompletionWaitFailureV1::Timeout { batch, polls } = timeout else {
+            panic!("expired deadline did not retain timeout custody")
+        };
+        assert_eq!(polls, 0);
+        assert_eq!(backend.observe_calls, 0);
+        assert_eq!(batch.first_packet_and_signal_slot().unwrap(), (99, 0));
         owner.poison_owner();
     }
 

@@ -25,6 +25,7 @@ use crate::shared_memory::{
     HostVisibleCoherentGttV1, KernargGttV1, SharedGttAllocationV1, SharedGttMappedResourceFactsV1,
     SharedGttMemorySessionV1,
 };
+use crate::wait::MonotonicWaitV1;
 use crate::{
     CheckedGfx942XnackMinusDevice, KfdNativeDispatchTelemetrySinkV2, KfdNativeDispatchTerminalV2,
     KfdTargetDebugTelemetryDigestV1, KfdTargetDebugTelemetryTransportErrorV2,
@@ -43,13 +44,13 @@ const MAX_TIMEOUT_MILLISECONDS_V1: u32 = 60_000;
 
 /// Canonical claim boundary for the first one-shot direct-KFD dispatch.
 pub const GFX942_KFD_DISPATCH_TRANSACTION_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-gfx942-one-shot-direct-kfd-dispatch-r3-v1\n",
+    "profile=fe2o3-gfx942-one-shot-direct-kfd-dispatch-r4-v1\n",
     "target=gfx942:xnack-,KFD-1.18,linux-x86_64,little-endian\n",
     "input=owned-materialized-no-relocation-image,checked-image-relative-descriptor-offset,owned-kernarg-template,owned-host-visible-buffers,checked-pointer-fixups,checked-aql-geometry,zero-private-segment,bounded-total-static-plus-dynamic-group-segment,bounded-timeout\n",
     "addresses=private-same-vm-bindings-only,all-bo-cpu-vmas-identical-to-gpu-vas,no-fd-handle-mapping-pointer-or-gpu-address-export\n",
     "allocation=image:executable-gtt,kernarg:kernarg-gtt,signal-and-buffers:host-visible-coherent-gtt\n",
     "publication=one-private-single-producer-aql-packet,body-before-release-header,release-fenced-doorbell\n",
-    "completion=exact-64-byte-user-signal,pending-1,acquire-poll,complete-0,unexpected-or-timeout-terminal;timeout-observes-aql-write-read-acquire-before-one-shot-zero-timeout-queue-exception-wait\n",
+    "completion=exact-64-byte-user-signal,pending-1,monotonic-deadline-acquire-poll-with-short-spin-yield-and-bounded-exponential-sleep,complete-0,unexpected-or-timeout-terminal;timeout-observes-aql-write-read-acquire-before-one-shot-zero-timeout-queue-exception-wait\n",
     "teardown=confirmed-queue-event-runtime-doorbell-and-queue-resource-destroy-before-output-readback,then-explicit-execution-unmap-and-release\n",
     "failure=post-vm-or-post-publication-error-requires-process-termination,no-drop-native-cleanup-or-retry\n",
     "authority=unsafe-mechanics-only,caller-must-supply-exact-Worker-V3-artifact-abi-effect-alias-bounds-geometry-and-quiescence-authority\n",
@@ -58,7 +59,7 @@ pub const GFX942_KFD_DISPATCH_TRANSACTION_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`GFX942_KFD_DISPATCH_TRANSACTION_MANIFEST_V1`].
 pub const GFX942_KFD_DISPATCH_TRANSACTION_MANIFEST_SHA256_V1: &str =
-    "d98a09d37b1d49ae878a146078d1fd05ed38fceb55bb2d866e6e7f3fba3a25ae";
+    "575869c4458997dd57ce5776d79cf9d358de9d2620ce1460ff5a908748bf74f4";
 
 /// One owned host-visible allocation supplied to a direct dispatch.
 ///
@@ -562,7 +563,7 @@ fn execute_prepared_dispatch(
         }
     };
     let timeout = Duration::from_millis(u64::from(timeout_milliseconds));
-    let mut polls = 0_u32;
+    let mut wait = MonotonicWaitV1::until(started + timeout);
     let completion_elapsed = loop {
         let value = match session.observe_dispatch_completion(&mut resources.signal) {
             Ok(value) => value,
@@ -579,7 +580,7 @@ fn execute_prepared_dispatch(
             }
             AqlCompletionObservationV1::Pending => {}
         }
-        if started.elapsed() >= timeout {
+        if wait.expired() {
             let queue_counters = session.observe_dispatch_counters().ok();
             let queue_exception = session
                 .observe_queue_exception(0)
@@ -592,12 +593,7 @@ fn execute_prepared_dispatch(
                 queue_exception,
             });
         }
-        polls = polls.wrapping_add(1);
-        if polls.is_multiple_of(4096) {
-            std::thread::yield_now();
-        } else {
-            core::hint::spin_loop();
-        }
+        wait.pause();
     };
 
     let (destroyed, buffers) =
@@ -658,7 +654,7 @@ fn execute_prepared_dispatch_v2(
         )));
     }
     let timeout = Duration::from_millis(u64::from(timeout_milliseconds));
-    let mut polls = 0_u32;
+    let mut wait = MonotonicWaitV1::until(started + timeout);
     let completion_elapsed = loop {
         let value = match session.observe_dispatch_completion(&mut resources.signal) {
             Ok(value) => value,
@@ -681,7 +677,7 @@ fn execute_prepared_dispatch_v2(
             }
             AqlCompletionObservationV1::Pending => {}
         }
-        if started.elapsed() >= timeout {
+        if wait.expired() {
             let queue_counters = session.observe_dispatch_counters().ok();
             let queue_exception = session
                 .observe_queue_exception(0)
@@ -697,12 +693,7 @@ fn execute_prepared_dispatch_v2(
                 },
             ));
         }
-        polls = polls.wrapping_add(1);
-        if polls.is_multiple_of(4096) {
-            std::thread::yield_now();
-        } else {
-            core::hint::spin_loop();
-        }
+        wait.pause();
     };
     let (destroyed, buffers) = match teardown(session, resources) {
         Ok(value) => value,

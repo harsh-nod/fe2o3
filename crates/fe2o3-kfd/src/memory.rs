@@ -1,6 +1,7 @@
 //! Owned, fail-closed host-visible KFD memory transactions.
 
 use core::fmt;
+use std::collections::BTreeMap;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -187,7 +188,7 @@ impl fmt::Display for MemorySessionError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::ProcessVmAlreadyConsumed => formatter.write_str(
-                "this process has already attempted its one admitted KFD VM acquisition",
+                "this process has already attempted KFD VM acquisition for the selected GPU",
             ),
             Self::ProcessVmStatePoisoned => {
                 formatter.write_str("the process KFD VM state is permanently quarantined")
@@ -958,42 +959,80 @@ fn commit_model_projection<B: MemoryBackend>(
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct ProcessVmKeyV1 {
+    pid: u32,
+    gpu_id: u32,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ProcessVmState {
-    Fresh,
-    Attempting { pid: u32, gpu_id: u32 },
-    Acquired { pid: u32, gpu_id: u32 },
+enum ProcessVmDeviceStateV1 {
+    Attempting,
+    Acquired,
     Poisoned,
 }
 
-static PROCESS_VM_STATE: Mutex<ProcessVmState> = Mutex::new(ProcessVmState::Fresh);
+#[derive(Debug, Default)]
+struct ProcessVmRegistryV1 {
+    devices: BTreeMap<ProcessVmKeyV1, ProcessVmDeviceStateV1>,
+    poisoned: bool,
+}
+
+impl ProcessVmRegistryV1 {
+    fn begin(&mut self, pid: u32, gpu_id: u32) -> Result<(), MemorySessionError> {
+        if self.poisoned {
+            return Err(MemorySessionError::ProcessVmStatePoisoned);
+        }
+        let key = ProcessVmKeyV1 { pid, gpu_id };
+        match self.devices.entry(key) {
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                entry.insert(ProcessVmDeviceStateV1::Attempting);
+                Ok(())
+            }
+            std::collections::btree_map::Entry::Occupied(entry)
+                if *entry.get() == ProcessVmDeviceStateV1::Poisoned =>
+            {
+                Err(MemorySessionError::ProcessVmStatePoisoned)
+            }
+            std::collections::btree_map::Entry::Occupied(_) => {
+                Err(MemorySessionError::ProcessVmAlreadyConsumed)
+            }
+        }
+    }
+
+    fn finish(&mut self, success: bool, pid: u32, gpu_id: u32) {
+        let key = ProcessVmKeyV1 { pid, gpu_id };
+        match self.devices.get_mut(&key) {
+            Some(state @ ProcessVmDeviceStateV1::Attempting) => {
+                *state = if success {
+                    ProcessVmDeviceStateV1::Acquired
+                } else {
+                    ProcessVmDeviceStateV1::Poisoned
+                };
+            }
+            Some(_) | None => self.poisoned = true,
+        }
+    }
+}
+
+static PROCESS_VM_STATE: Mutex<ProcessVmRegistryV1> = Mutex::new(ProcessVmRegistryV1 {
+    devices: BTreeMap::new(),
+    poisoned: false,
+});
 pub(super) static NEXT_MODEL_VM_ID: AtomicU64 = AtomicU64::new(1);
 
 pub(super) fn begin_process_vm_attempt(pid: u32, gpu_id: u32) -> Result<(), MemorySessionError> {
     let mut state = PROCESS_VM_STATE
         .lock()
         .map_err(|_| MemorySessionError::ProcessVmStatePoisoned)?;
-    match *state {
-        ProcessVmState::Fresh => {
-            *state = ProcessVmState::Attempting { pid, gpu_id };
-            Ok(())
-        }
-        ProcessVmState::Attempting { .. } | ProcessVmState::Acquired { .. } => {
-            Err(MemorySessionError::ProcessVmAlreadyConsumed)
-        }
-        ProcessVmState::Poisoned => Err(MemorySessionError::ProcessVmStatePoisoned),
-    }
+    state.begin(pid, gpu_id)
 }
 
 pub(super) fn finish_process_vm_attempt(success: bool, pid: u32, gpu_id: u32) {
     let Ok(mut state) = PROCESS_VM_STATE.lock() else {
         return;
     };
-    *state = if success {
-        ProcessVmState::Acquired { pid, gpu_id }
-    } else {
-        ProcessVmState::Poisoned
-    };
+    state.finish(success, pid, gpu_id);
 }
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
@@ -1010,7 +1049,8 @@ pub struct HostVisibleMemorySession {
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 impl CheckedGfx942XnackMinusDevice {
     /// Irreversibly binds this process's admitted KFD VM to the retained render
-    /// file. The attempt is permitted exactly once for the selected GPU.
+    /// file. The attempt is permitted exactly once per selected GPU; other
+    /// admitted GPUs retain independent fail-closed acquisition state.
     pub fn acquire_host_visible_memory_session(
         self,
     ) -> Result<HostVisibleMemorySession, MemorySessionError> {
@@ -1225,6 +1265,44 @@ mod memory_model_tests;
 mod tests {
     use super::*;
     use sha2::{Digest, Sha256};
+
+    #[test]
+    fn process_vm_registry_admits_distinct_devices_independently() {
+        let mut registry = ProcessVmRegistryV1::default();
+        registry.begin(7, 41).unwrap();
+        registry.begin(7, 42).unwrap();
+        registry.finish(true, 7, 41);
+        registry.finish(false, 7, 42);
+
+        assert_eq!(
+            registry.devices.get(&ProcessVmKeyV1 { pid: 7, gpu_id: 41 }),
+            Some(&ProcessVmDeviceStateV1::Acquired)
+        );
+        assert_eq!(
+            registry.devices.get(&ProcessVmKeyV1 { pid: 7, gpu_id: 42 }),
+            Some(&ProcessVmDeviceStateV1::Poisoned)
+        );
+        assert!(matches!(
+            registry.begin(7, 42),
+            Err(MemorySessionError::ProcessVmStatePoisoned)
+        ));
+        assert!(matches!(
+            registry.begin(7, 41),
+            Err(MemorySessionError::ProcessVmAlreadyConsumed)
+        ));
+        registry.begin(7, 43).unwrap();
+    }
+
+    #[test]
+    fn process_vm_registry_poison_is_fail_closed_on_mismatched_finish() {
+        let mut registry = ProcessVmRegistryV1::default();
+        registry.begin(9, 51).unwrap();
+        registry.finish(true, 9, 52);
+        assert!(matches!(
+            registry.begin(9, 53),
+            Err(MemorySessionError::ProcessVmStatePoisoned)
+        ));
+    }
 
     #[derive(Debug)]
     struct ScriptedMapping {

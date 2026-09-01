@@ -6,6 +6,7 @@
 
 use alloc::vec::Vec;
 
+use crate::memory_lifecycle::{IndexedJournalV1, SharedJournalV1};
 use crate::*;
 
 pub const QUEUE_LIFECYCLE_SCHEMA_VERSION_V1: u16 = 1;
@@ -316,8 +317,12 @@ pub enum QueueTransitionErrorV1 {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct QueueLifecycleStateV1 {
     domain_id: DeviceObservationDomainIdV1,
-    queues: Vec<ComputeAqlQueueRecordV1>,
-    history: Vec<QueueHistoryEntryV1>,
+    queues: IndexedJournalV1<QueueKeyV1, ComputeAqlQueueRecordV1>,
+    history: SharedJournalV1<QueueHistoryEntryV1>,
+}
+
+const fn queue_record_key_v1(record: &ComputeAqlQueueRecordV1) -> QueueKeyV1 {
+    record.plan.queue
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -348,8 +353,8 @@ impl QueueLifecycleStateV1 {
     pub const fn new(domain_id: DeviceObservationDomainIdV1) -> Self {
         Self {
             domain_id,
-            queues: Vec::new(),
-            history: Vec::new(),
+            queues: IndexedJournalV1::new(queue_record_key_v1),
+            history: SharedJournalV1::new(),
         }
     }
 
@@ -362,11 +367,11 @@ impl QueueLifecycleStateV1 {
     }
 
     pub fn queues(&self) -> &[ComputeAqlQueueRecordV1] {
-        &self.queues
+        self.queues.as_slice()
     }
 
     pub fn history(&self) -> &[QueueHistoryEntryV1] {
-        &self.history
+        self.history.as_slice()
     }
 
     pub fn admit_compute_aql_plan(
@@ -375,7 +380,7 @@ impl QueueLifecycleStateV1 {
         memory: &MemoryLifecycleStateV1,
         plan: ComputeAqlQueuePlanV1,
     ) -> Result<QueuePlanAdmissionV1, QueueTransitionErrorV1> {
-        self.validate_global_invariants(identity, memory)
+        self.validate_external_contexts(identity, memory)
             .map_err(QueueTransitionErrorV1::SourceInvariant)?;
         ensure_queue_room(
             self.queues.len(),
@@ -390,12 +395,15 @@ impl QueueLifecycleStateV1 {
         self.validate_new_plan(identity, memory, plan)
             .map_err(QueueTransitionErrorV1::InvalidPlan)?;
 
-        let mut next_memory = memory.clone();
-        for (_, resource) in plan.resources.ordered() {
-            next_memory = next_memory
-                .publish_compute_aql_queue_mapping(resource.publication, plan.queue)
-                .map_err(QueueTransitionErrorV1::Memory)?;
-        }
+        let next_memory = memory
+            .publish_compute_aql_queue_mappings(
+                plan.resources
+                    .ordered()
+                    .into_iter()
+                    .map(|(_, resource)| resource.publication),
+                plan.queue,
+            )
+            .map_err(QueueTransitionErrorV1::Memory)?;
 
         let mut next = self.clone();
         let record = ComputeAqlQueueRecordV1 {
@@ -412,8 +420,6 @@ impl QueueLifecycleStateV1 {
             QueueHistoryEventKindV1::PlanAdmitted,
             ComputeAqlQueuePhaseV1::Planned,
         )?;
-        next.validate_global_invariants(identity, &next_memory)
-            .map_err(QueueTransitionErrorV1::NextInvariant)?;
         Ok(QueuePlanAdmissionV1 {
             queue_state: next,
             memory_state: next_memory,
@@ -426,7 +432,10 @@ impl QueueLifecycleStateV1 {
         memory: &MemoryLifecycleStateV1,
         transition: QueueTransitionV1,
     ) -> Result<Self, QueueTransitionErrorV1> {
-        self.validate_global_invariants(identity, memory)
+        // Internal invariants are inductive because state fields are sealed and
+        // `apply` validates each changed edge. External currentness is not
+        // inductive, so revalidate it without rescanning immutable history.
+        self.validate_external_contexts(identity, memory)
             .map_err(QueueTransitionErrorV1::SourceInvariant)?;
         ensure_queue_room(
             self.history.len(),
@@ -435,8 +444,6 @@ impl QueueLifecycleStateV1 {
         )?;
         let mut next = self.clone();
         next.apply(transition)?;
-        next.validate_global_invariants(identity, memory)
-            .map_err(QueueTransitionErrorV1::NextInvariant)?;
         Ok(next)
     }
 
@@ -453,8 +460,6 @@ impl QueueLifecycleStateV1 {
         )?;
         let mut next = self.clone();
         next.apply(QueueTransitionV1::ObserveCurrentnessLost { queue })?;
-        next.validate_internal_invariants()
-            .map_err(QueueTransitionErrorV1::NextInvariant)?;
         Ok(next)
     }
 
@@ -472,13 +477,17 @@ impl QueueLifecycleStateV1 {
                 phase: record.phase,
             });
         }
-        let mut next = memory.clone();
-        for (_, resource) in record.plan.resources.ordered() {
-            next = next
-                .release_compute_aql_queue_publication(resource.publication, queue)
-                .map_err(QueueTransitionErrorV1::Memory)?;
-        }
-        Ok(next)
+        memory
+            .release_compute_aql_queue_publications(
+                record
+                    .plan
+                    .resources
+                    .ordered()
+                    .into_iter()
+                    .map(|(_, resource)| resource.publication),
+                queue,
+            )
+            .map_err(QueueTransitionErrorV1::Memory)
     }
 
     pub fn can_release_mapping(&self, mapping: MemoryMappingKeyV1) -> bool {
@@ -493,6 +502,14 @@ impl QueueLifecycleStateV1 {
         memory: &MemoryLifecycleStateV1,
     ) -> Result<(), QueueInvariantViolationV1> {
         self.validate_internal_invariants()?;
+        self.validate_external_contexts(identity, memory)
+    }
+
+    fn validate_external_contexts(
+        &self,
+        identity: &DeviceIdentityStateV1,
+        memory: &MemoryLifecycleStateV1,
+    ) -> Result<(), QueueInvariantViolationV1> {
         for record in &self.queues {
             if record.phase.retains_resources() {
                 self.validate_context(identity, memory, record, true)?;
@@ -514,13 +531,15 @@ impl QueueLifecycleStateV1 {
         }
         for (index, record) in self.queues.iter().enumerate() {
             self.validate_plan_shape(record.plan)?;
-            if self.queues[..index]
+            if self
+                .queues
                 .iter()
+                .take(index)
                 .any(|other| other.plan.queue == record.plan.queue)
             {
                 return Err(QueueInvariantViolationV1::DuplicateQueue(record.plan.queue));
             }
-            for older in self.queues[..index].iter().filter(|older| {
+            for older in self.queues.iter().take(index).filter(|older| {
                 older.plan.queue.vm == record.plan.queue.vm
                     && older.plan.queue.id == record.plan.queue.id
             }) {
@@ -534,7 +553,7 @@ impl QueueLifecycleStateV1 {
             }
             self.validate_phase(record)?;
             if record.phase.retains_resources()
-                && self.queues[..index].iter().any(|other| {
+                && self.queues.iter().take(index).any(|other| {
                     other.phase.retains_resources()
                         && other
                             .plan
@@ -545,8 +564,10 @@ impl QueueLifecycleStateV1 {
                 return Err(QueueInvariantViolationV1::ResourceAlias(record.plan.queue));
             }
             if record.phase == ComputeAqlQueuePhaseV1::CreatePending
-                && self.queues[..index]
+                && self
+                    .queues
                     .iter()
+                    .take(index)
                     .any(|other| other.phase == ComputeAqlQueuePhaseV1::CreatePending)
             {
                 return Err(QueueInvariantViolationV1::ConcurrentCreatePending(
@@ -556,8 +577,10 @@ impl QueueLifecycleStateV1 {
             if let Some(queue_id) = record.queue_id
                 && (record.phase.has_exclusive_native_queue_id()
                     || record.phase == ComputeAqlQueuePhaseV1::Ambiguous)
-                && self.queues[..index]
+                && self
+                    .queues
                     .iter()
+                    .take(index)
                     .any(|other| other.reserves_known_queue_id(queue_id))
             {
                 return Err(QueueInvariantViolationV1::QueueIdCollision(
@@ -806,10 +829,12 @@ impl QueueLifecycleStateV1 {
             if entry.sequence != index as u64 + 1 || !history_edge_is_valid(*entry) {
                 return Err(QueueInvariantViolationV1::InvalidHistory(entry.queue));
             }
-            let previous = self.history[..index]
+            let previous = self
+                .history
                 .iter()
-                .rev()
-                .find(|candidate| candidate.queue == entry.queue);
+                .take(index)
+                .filter(|candidate| candidate.queue == entry.queue)
+                .last();
             let linked = match (entry.event, previous) {
                 (QueueHistoryEventKindV1::PlanAdmitted, None) => true,
                 (QueueHistoryEventKindV1::PlanAdmitted, Some(_)) | (_, None) => false,
@@ -823,8 +848,8 @@ impl QueueLifecycleStateV1 {
             let last = self
                 .history
                 .iter()
-                .rev()
-                .find(|entry| entry.queue == record.plan.queue)
+                .filter(|entry| entry.queue == record.plan.queue)
+                .last()
                 .ok_or(QueueInvariantViolationV1::InvalidHistory(record.plan.queue))?;
             if last.to != record.phase
                 || last.queue_id != record.queue_id
@@ -838,16 +863,15 @@ impl QueueLifecycleStateV1 {
 
     fn apply(&mut self, transition: QueueTransitionV1) -> Result<(), QueueTransitionErrorV1> {
         let key = transition.queue();
-        let index = self
+        let before = *self
             .queues
-            .iter()
-            .position(|record| record.plan.queue == key)
+            .get(key)
             .ok_or(QueueTransitionErrorV1::NotFound(key))?;
-        let before = self.queues[index];
+        let mut after = before;
         let event = match transition {
             QueueTransitionV1::CancelPlan { .. } => {
                 require_queue_phase(before, &[ComputeAqlQueuePhaseV1::Planned])?;
-                self.queues[index].phase = ComputeAqlQueuePhaseV1::CancelledBeforeCreate;
+                after.phase = ComputeAqlQueuePhaseV1::CancelledBeforeCreate;
                 QueueHistoryEventKindV1::PlanCancelled
             }
             QueueTransitionV1::BeginCreate { .. } => {
@@ -857,12 +881,14 @@ impl QueueLifecycleStateV1 {
                 }) {
                     return Err(QueueTransitionErrorV1::QueueCreationPoisoned(key));
                 }
-                self.queues[index].phase = ComputeAqlQueuePhaseV1::CreatePending;
+                after.phase = ComputeAqlQueuePhaseV1::CreatePending;
                 QueueHistoryEventKindV1::CreateBegan
             }
             QueueTransitionV1::ObserveCreate { observation, .. } => {
                 require_queue_phase(before, &[ComputeAqlQueuePhaseV1::CreatePending])?;
-                self.observe_create(index, observation)
+                let (observed, event) = self.observe_create(key, before, observation);
+                after = observed;
+                event
             }
             QueueTransitionV1::BeginUpdate { configuration, .. } => {
                 require_queue_phase(
@@ -875,58 +901,58 @@ impl QueueLifecycleStateV1 {
                 if digest_is_zero(configuration.digest()) || configuration == before.configuration {
                     return Err(QueueTransitionErrorV1::InvalidConfiguration(key));
                 }
-                self.queues[index].pending_configuration = Some(configuration);
-                self.queues[index].resume_phase = Some(before.phase);
-                self.queues[index].phase = ComputeAqlQueuePhaseV1::UpdatePending;
+                after.pending_configuration = Some(configuration);
+                after.resume_phase = Some(before.phase);
+                after.phase = ComputeAqlQueuePhaseV1::UpdatePending;
                 QueueHistoryEventKindV1::UpdateBegan
             }
             QueueTransitionV1::ObserveUpdate { status, .. } => {
                 require_queue_phase(before, &[ComputeAqlQueuePhaseV1::UpdatePending])?;
                 match status {
                     QueueSyscallStatusV1::Succeeded => {
-                        self.queues[index].configuration = before
+                        after.configuration = before
                             .pending_configuration
                             .ok_or(QueueTransitionErrorV1::InvalidConfiguration(key))?;
-                        self.queues[index].pending_configuration = None;
-                        self.queues[index].resume_phase = None;
-                        self.queues[index].phase = ComputeAqlQueuePhaseV1::Active;
+                        after.pending_configuration = None;
+                        after.resume_phase = None;
+                        after.phase = ComputeAqlQueuePhaseV1::Active;
                         QueueHistoryEventKindV1::UpdateSucceeded
                     }
                     QueueSyscallStatusV1::FailedNoEffect => {
-                        self.queues[index].pending_configuration = None;
-                        self.queues[index].phase = before
+                        after.pending_configuration = None;
+                        after.phase = before
                             .resume_phase
                             .ok_or(QueueTransitionErrorV1::InvalidConfiguration(key))?;
-                        self.queues[index].resume_phase = None;
+                        after.resume_phase = None;
                         QueueHistoryEventKindV1::UpdateFailedNoEffect
                     }
                     QueueSyscallStatusV1::Indeterminate => {
-                        self.queues[index].phase = ComputeAqlQueuePhaseV1::Ambiguous;
+                        after.phase = ComputeAqlQueuePhaseV1::Ambiguous;
                         QueueHistoryEventKindV1::UpdateAmbiguous
                     }
                 }
             }
             QueueTransitionV1::BeginDisable { .. } => {
                 require_queue_phase(before, &[ComputeAqlQueuePhaseV1::Active])?;
-                self.queues[index].resume_phase = Some(before.phase);
-                self.queues[index].phase = ComputeAqlQueuePhaseV1::DisablePending;
+                after.resume_phase = Some(before.phase);
+                after.phase = ComputeAqlQueuePhaseV1::DisablePending;
                 QueueHistoryEventKindV1::DisableBegan
             }
             QueueTransitionV1::ObserveDisable { status, .. } => {
                 require_queue_phase(before, &[ComputeAqlQueuePhaseV1::DisablePending])?;
                 match status {
                     QueueSyscallStatusV1::Succeeded => {
-                        self.queues[index].resume_phase = None;
-                        self.queues[index].phase = ComputeAqlQueuePhaseV1::Disabled;
+                        after.resume_phase = None;
+                        after.phase = ComputeAqlQueuePhaseV1::Disabled;
                         QueueHistoryEventKindV1::DisableSucceeded
                     }
                     QueueSyscallStatusV1::FailedNoEffect => {
-                        self.queues[index].resume_phase = None;
-                        self.queues[index].phase = ComputeAqlQueuePhaseV1::Active;
+                        after.resume_phase = None;
+                        after.phase = ComputeAqlQueuePhaseV1::Active;
                         QueueHistoryEventKindV1::DisableFailedNoEffect
                     }
                     QueueSyscallStatusV1::Indeterminate => {
-                        self.queues[index].phase = ComputeAqlQueuePhaseV1::Ambiguous;
+                        after.phase = ComputeAqlQueuePhaseV1::Ambiguous;
                         QueueHistoryEventKindV1::DisableAmbiguous
                     }
                 }
@@ -939,21 +965,21 @@ impl QueueLifecycleStateV1 {
                         ComputeAqlQueuePhaseV1::Disabled,
                     ],
                 )?;
-                self.queues[index].resume_phase = Some(before.phase);
-                self.queues[index].phase = ComputeAqlQueuePhaseV1::DestroyPending;
+                after.resume_phase = Some(before.phase);
+                after.phase = ComputeAqlQueuePhaseV1::DestroyPending;
                 QueueHistoryEventKindV1::DestroyBegan
             }
             QueueTransitionV1::ObserveDestroy { status, .. } => {
                 require_queue_phase(before, &[ComputeAqlQueuePhaseV1::DestroyPending])?;
                 match status {
                     QueueSyscallStatusV1::Succeeded => {
-                        self.queues[index].resume_phase = None;
-                        self.queues[index].phase = ComputeAqlQueuePhaseV1::Destroyed;
+                        after.resume_phase = None;
+                        after.phase = ComputeAqlQueuePhaseV1::Destroyed;
                         QueueHistoryEventKindV1::DestroySucceeded
                     }
                     QueueSyscallStatusV1::FailedNoEffect => {
-                        self.queues[index].resume_phase = None;
-                        self.queues[index].phase =
+                        after.resume_phase = None;
+                        after.phase =
                             before
                                 .resume_phase
                                 .ok_or(QueueTransitionErrorV1::IllegalState {
@@ -963,7 +989,7 @@ impl QueueLifecycleStateV1 {
                         QueueHistoryEventKindV1::DestroyFailedNoEffect
                     }
                     QueueSyscallStatusV1::Indeterminate => {
-                        self.queues[index].phase = ComputeAqlQueuePhaseV1::Ambiguous;
+                        after.phase = ComputeAqlQueuePhaseV1::Ambiguous;
                         QueueHistoryEventKindV1::DestroyAmbiguous
                     }
                 }
@@ -975,18 +1001,24 @@ impl QueueLifecycleStateV1 {
                         phase: before.phase,
                     });
                 }
-                self.queues[index].phase = ComputeAqlQueuePhaseV1::Ambiguous;
+                after.phase = ComputeAqlQueuePhaseV1::Ambiguous;
                 QueueHistoryEventKindV1::CurrentnessLost
             }
         };
-        self.push_history(self.queues[index], event, before.phase)
+        *self
+            .queues
+            .get_mut(key)
+            .expect("queue key came from journal") = after;
+        self.push_history(after, event, before.phase)
     }
 
     fn observe_create(
-        &mut self,
-        index: usize,
+        &self,
+        key: QueueKeyV1,
+        before: ComputeAqlQueueRecordV1,
         observation: QueueCreateObservationV1,
-    ) -> QueueHistoryEventKindV1 {
+    ) -> (ComputeAqlQueueRecordV1, QueueHistoryEventKindV1) {
+        let mut after = before;
         let queue_id = match observation.queue_id_field {
             CreateQueueIdFieldObservationV1::SentinelUnchanged => None,
             CreateQueueIdFieldObservationV1::Returned(queue_id)
@@ -1001,35 +1033,36 @@ impl QueueLifecycleStateV1 {
             CreateQueueIdFieldObservationV1::SentinelUnchanged
         );
         let collision = queue_id.is_some_and(|candidate| {
-            self.queues.iter().enumerate().any(|(other_index, other)| {
-                other_index != index && other.reserves_known_queue_id(candidate)
-            })
+            self.queues
+                .iter()
+                .any(|other| other.plan.queue != key && other.reserves_known_queue_id(candidate))
         });
-        let unresolved_other = self.queues.iter().enumerate().any(|(other_index, other)| {
-            other_index != index && other.has_unresolved_possibly_native_identity()
+        let unresolved_other = self.queues.iter().any(|other| {
+            other.plan.queue != key && other.has_unresolved_possibly_native_identity()
         });
-        match observation.status {
+        let event = match observation.status {
             QueueSyscallStatusV1::Succeeded
                 if queue_id.is_some() && !collision && !unresolved_other =>
             {
-                self.queues[index].queue_id = queue_id;
-                self.queues[index].phase = ComputeAqlQueuePhaseV1::Active;
+                after.queue_id = queue_id;
+                after.phase = ComputeAqlQueuePhaseV1::Active;
                 QueueHistoryEventKindV1::CreateSucceeded
             }
             QueueSyscallStatusV1::FailedNoEffect if unchanged_sentinel => {
-                self.queues[index].phase = ComputeAqlQueuePhaseV1::Planned;
+                after.phase = ComputeAqlQueuePhaseV1::Planned;
                 QueueHistoryEventKindV1::CreateFailedNoEffect
             }
             _ => {
-                self.queues[index].queue_id = if collision || unresolved_other {
+                after.queue_id = if collision || unresolved_other {
                     None
                 } else {
                     queue_id
                 };
-                self.queues[index].phase = ComputeAqlQueuePhaseV1::Ambiguous;
+                after.phase = ComputeAqlQueuePhaseV1::Ambiguous;
                 QueueHistoryEventKindV1::CreateAmbiguous
             }
-        }
+        };
+        (after, event)
     }
 
     fn push_history(
@@ -1064,8 +1097,7 @@ impl QueueLifecycleStateV1 {
 
     fn queue(&self, key: QueueKeyV1) -> Result<&ComputeAqlQueueRecordV1, QueueTransitionErrorV1> {
         self.queues
-            .iter()
-            .find(|record| record.plan.queue == key)
+            .get(key)
             .ok_or(QueueTransitionErrorV1::NotFound(key))
     }
 }

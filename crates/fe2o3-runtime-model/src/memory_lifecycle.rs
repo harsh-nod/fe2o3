@@ -1,6 +1,11 @@
 //! Bounded, syscall-free VM and GPU-memory lifecycle model.
 
-use alloc::vec::Vec;
+use alloc::{sync::Arc, vec::Vec};
+use core::{fmt, ops::Deref};
+use spin::Once;
+
+#[cfg(test)]
+use core::cell::Cell;
 
 use crate::*;
 
@@ -14,6 +19,688 @@ pub const MAX_MEMORY_PUBLICATIONS_V1: usize = 2_048;
 pub const MAX_MEMORY_MAPPING_DEVICES_V1: usize = 16;
 pub const MAX_MEMORY_ISSUED_ID_HIGH_WATERMARKS_V1: usize =
     MAX_MEMORY_VMS_V1 * 2 + MAX_MEMORY_ALLOCATIONS_V1 + MAX_MEMORY_MAPPINGS_V1;
+
+#[cfg(test)]
+std::thread_local! {
+    static JOURNAL_COPIED_RECORDS_V1: Cell<usize> = const { Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn reset_journal_copied_records_for_test() {
+    JOURNAL_COPIED_RECORDS_V1.set(0);
+}
+
+#[cfg(test)]
+pub(crate) fn journal_copied_records_for_test() -> usize {
+    JOURNAL_COPIED_RECORDS_V1.get()
+}
+
+fn note_journal_record_copy_v1() {
+    #[cfg(test)]
+    JOURNAL_COPIED_RECORDS_V1.set(JOURNAL_COPIED_RECORDS_V1.get() + 1);
+}
+
+fn clone_journal_record_v1<T: Clone>(record: &T) -> T {
+    note_journal_record_copy_v1();
+    record.clone()
+}
+
+struct JournalNodeV1<T> {
+    left: Option<Arc<Self>>,
+    value: T,
+    right: Option<Arc<Self>>,
+    height: u8,
+    len: usize,
+}
+
+impl<T> JournalNodeV1<T> {
+    fn new(left: Option<Arc<Self>>, value: T, right: Option<Arc<Self>>) -> Self {
+        Self {
+            height: 1 + node_height_v1(&left).max(node_height_v1(&right)),
+            len: 1 + node_len_v1(&left) + node_len_v1(&right),
+            left,
+            value,
+            right,
+        }
+    }
+}
+
+impl<T: Clone> Clone for JournalNodeV1<T> {
+    fn clone(&self) -> Self {
+        Self {
+            left: self.left.clone(),
+            value: clone_journal_record_v1(&self.value),
+            right: self.right.clone(),
+            height: self.height,
+            len: self.len,
+        }
+    }
+}
+
+fn node_height_v1<T>(node: &Option<Arc<JournalNodeV1<T>>>) -> u8 {
+    node.as_ref().map_or(0, |node| node.height)
+}
+
+fn node_len_v1<T>(node: &Option<Arc<JournalNodeV1<T>>>) -> usize {
+    node.as_ref().map_or(0, |node| node.len)
+}
+
+fn rotate_journal_left_v1<T: Clone>(root: &Arc<JournalNodeV1<T>>) -> Arc<JournalNodeV1<T>> {
+    let pivot = root.right.as_ref().expect("right-heavy journal node");
+    let left = Arc::new(JournalNodeV1::new(
+        root.left.clone(),
+        clone_journal_record_v1(&root.value),
+        pivot.left.clone(),
+    ));
+    Arc::new(JournalNodeV1::new(
+        Some(left),
+        clone_journal_record_v1(&pivot.value),
+        pivot.right.clone(),
+    ))
+}
+
+fn rotate_journal_right_v1<T: Clone>(root: &Arc<JournalNodeV1<T>>) -> Arc<JournalNodeV1<T>> {
+    let pivot = root.left.as_ref().expect("left-heavy journal node");
+    let right = Arc::new(JournalNodeV1::new(
+        pivot.right.clone(),
+        clone_journal_record_v1(&root.value),
+        root.right.clone(),
+    ));
+    Arc::new(JournalNodeV1::new(
+        pivot.left.clone(),
+        clone_journal_record_v1(&pivot.value),
+        Some(right),
+    ))
+}
+
+fn balance_journal_node_v1<T: Clone>(mut root: Arc<JournalNodeV1<T>>) -> Arc<JournalNodeV1<T>> {
+    let balance = i16::from(node_height_v1(&root.left)) - i16::from(node_height_v1(&root.right));
+    if balance > 1 {
+        let left = root.left.as_ref().expect("left-heavy journal node");
+        if node_height_v1(&left.right) > node_height_v1(&left.left) {
+            root = Arc::new(JournalNodeV1::new(
+                Some(rotate_journal_left_v1(left)),
+                clone_journal_record_v1(&root.value),
+                root.right.clone(),
+            ));
+        }
+        rotate_journal_right_v1(&root)
+    } else if balance < -1 {
+        let right = root.right.as_ref().expect("right-heavy journal node");
+        if node_height_v1(&right.left) > node_height_v1(&right.right) {
+            root = Arc::new(JournalNodeV1::new(
+                root.left.clone(),
+                clone_journal_record_v1(&root.value),
+                Some(rotate_journal_right_v1(right)),
+            ));
+        }
+        rotate_journal_left_v1(&root)
+    } else {
+        root
+    }
+}
+
+fn insert_journal_record_v1<T: Clone>(
+    root: Option<&Arc<JournalNodeV1<T>>>,
+    index: usize,
+    value: T,
+) -> Arc<JournalNodeV1<T>> {
+    let Some(root) = root else {
+        debug_assert_eq!(index, 0);
+        return Arc::new(JournalNodeV1::new(None, value, None));
+    };
+    let left_len = node_len_v1(&root.left);
+    let rebuilt = if index <= left_len {
+        Arc::new(JournalNodeV1::new(
+            Some(insert_journal_record_v1(root.left.as_ref(), index, value)),
+            clone_journal_record_v1(&root.value),
+            root.right.clone(),
+        ))
+    } else {
+        Arc::new(JournalNodeV1::new(
+            root.left.clone(),
+            clone_journal_record_v1(&root.value),
+            Some(insert_journal_record_v1(
+                root.right.as_ref(),
+                index - left_len - 1,
+                value,
+            )),
+        ))
+    };
+    balance_journal_node_v1(rebuilt)
+}
+
+fn build_balanced_journal_v1<T>(
+    records: &mut alloc::vec::IntoIter<T>,
+    len: usize,
+) -> Option<Arc<JournalNodeV1<T>>> {
+    if len == 0 {
+        return None;
+    }
+    let left_len = len / 2;
+    let left = build_balanced_journal_v1(records, left_len);
+    let value = records.next().expect("journal length matches iterator");
+    let right = build_balanced_journal_v1(records, len - left_len - 1);
+    Some(Arc::new(JournalNodeV1::new(left, value, right)))
+}
+
+/// Immutable balanced journal with a lazily materialized canonical slice.
+pub(crate) struct SharedJournalV1<T> {
+    root: Option<Arc<JournalNodeV1<T>>>,
+    len: usize,
+    flat: Option<Arc<Once<Vec<T>>>>,
+}
+
+impl<T> SharedJournalV1<T> {
+    pub(crate) const fn new() -> Self {
+        Self {
+            root: None,
+            len: 0,
+            flat: None,
+        }
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.len
+    }
+
+    pub(crate) fn iter(&self) -> SharedJournalIterV1<'_, T> {
+        SharedJournalIterV1::new(self.root.as_deref(), self.len)
+    }
+
+    pub(crate) fn get(&self, mut index: usize) -> Option<&T> {
+        let mut node = self.root.as_deref();
+        while let Some(current) = node {
+            let left_len = node_len_v1(&current.left);
+            if index < left_len {
+                node = current.left.as_deref();
+            } else if index == left_len {
+                return Some(&current.value);
+            } else {
+                index -= left_len + 1;
+                node = current.right.as_deref();
+            }
+        }
+        None
+    }
+
+    pub(crate) fn binary_search_by(
+        &self,
+        mut compare: impl FnMut(&T) -> core::cmp::Ordering,
+    ) -> Result<usize, usize> {
+        let mut left = 0;
+        let mut right = self.len;
+        while left < right {
+            let middle = left + (right - left) / 2;
+            let record = self.get(middle).expect("journal binary-search index");
+            match compare(record) {
+                core::cmp::Ordering::Less => left = middle + 1,
+                core::cmp::Ordering::Greater => right = middle,
+                core::cmp::Ordering::Equal => return Ok(middle),
+            }
+        }
+        Err(left)
+    }
+
+    pub(crate) fn push(&mut self, value: T)
+    where
+        T: Clone,
+    {
+        self.insert(self.len, value);
+    }
+
+    pub(crate) fn insert(&mut self, index: usize, value: T)
+    where
+        T: Clone,
+    {
+        assert!(index <= self.len, "journal insertion index is in bounds");
+        self.root = Some(insert_journal_record_v1(self.root.as_ref(), index, value));
+        self.len += 1;
+        self.flat = Some(Arc::new(Once::new()));
+    }
+
+    pub(crate) fn get_mut(&mut self, mut index: usize) -> Option<&mut T>
+    where
+        T: Clone,
+    {
+        self.flat = Some(Arc::new(Once::new()));
+        let mut node = self.root.as_mut()?;
+        loop {
+            let current = Arc::make_mut(node);
+            let left_len = node_len_v1(&current.left);
+            if index < left_len {
+                node = current.left.as_mut().expect("journal left index");
+            } else if index == left_len {
+                return Some(&mut current.value);
+            } else {
+                index -= left_len + 1;
+                node = current.right.as_mut().expect("journal right index");
+            }
+        }
+    }
+
+    pub(crate) fn retain(&mut self, mut keep: impl FnMut(&T) -> bool)
+    where
+        T: Clone,
+    {
+        let records: Vec<_> = self
+            .iter()
+            .filter(|record| keep(record))
+            .map(clone_journal_record_v1)
+            .collect();
+        *self = Self::from_vec(records);
+    }
+
+    fn from_vec(records: Vec<T>) -> Self {
+        let len = records.len();
+        let mut records = records.into_iter();
+        Self {
+            root: build_balanced_journal_v1(&mut records, len),
+            len,
+            flat: if len == 0 {
+                None
+            } else {
+                Some(Arc::new(Once::new()))
+            },
+        }
+    }
+
+    pub(crate) fn as_slice(&self) -> &[T]
+    where
+        T: Clone,
+    {
+        let Some(flat) = &self.flat else {
+            return &[];
+        };
+        flat.call_once(|| self.iter().map(clone_journal_record_v1).collect())
+    }
+
+    #[cfg(test)]
+    fn shares_storage_with(&self, other: &Self) -> bool {
+        match (&self.root, &other.root) {
+            (None, None) => true,
+            (Some(left), Some(right)) => Arc::ptr_eq(left, right),
+            (None, Some(_)) | (Some(_), None) => false,
+        }
+    }
+}
+
+impl<T> Clone for SharedJournalV1<T> {
+    fn clone(&self) -> Self {
+        Self {
+            root: self.root.clone(),
+            len: self.len,
+            flat: self.flat.clone(),
+        }
+    }
+}
+
+impl<T: Clone + fmt::Debug> fmt::Debug for SharedJournalV1<T> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.as_slice().fmt(formatter)
+    }
+}
+
+impl<T: Clone + PartialEq> PartialEq for SharedJournalV1<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_slice() == other.as_slice()
+    }
+}
+
+impl<T: Clone + Eq> Eq for SharedJournalV1<T> {}
+
+impl<T: Clone> Deref for SharedJournalV1<T> {
+    type Target = [T];
+
+    fn deref(&self) -> &Self::Target {
+        self.as_slice()
+    }
+}
+
+impl<'a, T> IntoIterator for &'a SharedJournalV1<T> {
+    type Item = &'a T;
+    type IntoIter = SharedJournalIterV1<'a, T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+pub(crate) struct SharedJournalIterV1<'a, T> {
+    stack: Vec<&'a JournalNodeV1<T>>,
+    remaining: usize,
+}
+
+impl<'a, T> SharedJournalIterV1<'a, T> {
+    fn new(root: Option<&'a JournalNodeV1<T>>, remaining: usize) -> Self {
+        let mut iter = Self {
+            stack: Vec::new(),
+            remaining,
+        };
+        iter.push_left(root);
+        iter
+    }
+
+    fn push_left(&mut self, mut node: Option<&'a JournalNodeV1<T>>) {
+        while let Some(current) = node {
+            self.stack.push(current);
+            node = current.left.as_deref();
+        }
+    }
+}
+
+impl<'a, T> Iterator for SharedJournalIterV1<'a, T> {
+    type Item = &'a T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let node = self.stack.pop()?;
+        self.push_left(node.right.as_deref());
+        self.remaining -= 1;
+        Some(&node.value)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.remaining, Some(self.remaining))
+    }
+}
+
+impl<T> ExactSizeIterator for SharedJournalIterV1<'_, T> {}
+
+struct JournalIndexNodeV1<K> {
+    left: Option<Arc<Self>>,
+    key: K,
+    index: usize,
+    right: Option<Arc<Self>>,
+    height: u8,
+}
+
+impl<K: Copy> Clone for JournalIndexNodeV1<K> {
+    fn clone(&self) -> Self {
+        note_journal_record_copy_v1();
+        Self {
+            left: self.left.clone(),
+            key: self.key,
+            index: self.index,
+            right: self.right.clone(),
+            height: self.height,
+        }
+    }
+}
+
+impl<K> JournalIndexNodeV1<K> {
+    fn new(left: Option<Arc<Self>>, key: K, index: usize, right: Option<Arc<Self>>) -> Self {
+        Self {
+            height: 1 + index_height_v1(&left).max(index_height_v1(&right)),
+            left,
+            key,
+            index,
+            right,
+        }
+    }
+}
+
+fn index_height_v1<K>(node: &Option<Arc<JournalIndexNodeV1<K>>>) -> u8 {
+    node.as_ref().map_or(0, |node| node.height)
+}
+
+fn rotate_index_left_v1<K: Copy>(root: &Arc<JournalIndexNodeV1<K>>) -> Arc<JournalIndexNodeV1<K>> {
+    let pivot = root.right.as_ref().expect("right-heavy journal index");
+    note_journal_record_copy_v1();
+    let left = Arc::new(JournalIndexNodeV1::new(
+        root.left.clone(),
+        root.key,
+        root.index,
+        pivot.left.clone(),
+    ));
+    note_journal_record_copy_v1();
+    Arc::new(JournalIndexNodeV1::new(
+        Some(left),
+        pivot.key,
+        pivot.index,
+        pivot.right.clone(),
+    ))
+}
+
+fn rotate_index_right_v1<K: Copy>(root: &Arc<JournalIndexNodeV1<K>>) -> Arc<JournalIndexNodeV1<K>> {
+    let pivot = root.left.as_ref().expect("left-heavy journal index");
+    note_journal_record_copy_v1();
+    let right = Arc::new(JournalIndexNodeV1::new(
+        pivot.right.clone(),
+        root.key,
+        root.index,
+        root.right.clone(),
+    ));
+    note_journal_record_copy_v1();
+    Arc::new(JournalIndexNodeV1::new(
+        pivot.left.clone(),
+        pivot.key,
+        pivot.index,
+        Some(right),
+    ))
+}
+
+fn balance_index_node_v1<K: Copy>(
+    mut root: Arc<JournalIndexNodeV1<K>>,
+) -> Arc<JournalIndexNodeV1<K>> {
+    let balance = i16::from(index_height_v1(&root.left)) - i16::from(index_height_v1(&root.right));
+    if balance > 1 {
+        let left = root.left.as_ref().expect("left-heavy journal index");
+        if index_height_v1(&left.right) > index_height_v1(&left.left) {
+            note_journal_record_copy_v1();
+            root = Arc::new(JournalIndexNodeV1::new(
+                Some(rotate_index_left_v1(left)),
+                root.key,
+                root.index,
+                root.right.clone(),
+            ));
+        }
+        rotate_index_right_v1(&root)
+    } else if balance < -1 {
+        let right = root.right.as_ref().expect("right-heavy journal index");
+        if index_height_v1(&right.left) > index_height_v1(&right.right) {
+            note_journal_record_copy_v1();
+            root = Arc::new(JournalIndexNodeV1::new(
+                root.left.clone(),
+                root.key,
+                root.index,
+                Some(rotate_index_right_v1(right)),
+            ));
+        }
+        rotate_index_left_v1(&root)
+    } else {
+        root
+    }
+}
+
+fn insert_index_entry_v1<K: Copy + Ord>(
+    root: Option<&Arc<JournalIndexNodeV1<K>>>,
+    key: K,
+    index: usize,
+) -> (Arc<JournalIndexNodeV1<K>>, bool) {
+    let Some(root) = root else {
+        return (
+            Arc::new(JournalIndexNodeV1::new(None, key, index, None)),
+            true,
+        );
+    };
+    let (rebuilt, inserted) = match key.cmp(&root.key) {
+        core::cmp::Ordering::Less => {
+            let (left, inserted) = insert_index_entry_v1(root.left.as_ref(), key, index);
+            note_journal_record_copy_v1();
+            (
+                Arc::new(JournalIndexNodeV1::new(
+                    Some(left),
+                    root.key,
+                    root.index,
+                    root.right.clone(),
+                )),
+                inserted,
+            )
+        }
+        core::cmp::Ordering::Greater => {
+            let (right, inserted) = insert_index_entry_v1(root.right.as_ref(), key, index);
+            note_journal_record_copy_v1();
+            (
+                Arc::new(JournalIndexNodeV1::new(
+                    root.left.clone(),
+                    root.key,
+                    root.index,
+                    Some(right),
+                )),
+                inserted,
+            )
+        }
+        core::cmp::Ordering::Equal => (root.clone(), false),
+    };
+    (balance_index_node_v1(rebuilt), inserted)
+}
+
+struct PersistentJournalIndexV1<K> {
+    root: Option<Arc<JournalIndexNodeV1<K>>>,
+}
+
+impl<K> Clone for PersistentJournalIndexV1<K> {
+    fn clone(&self) -> Self {
+        Self {
+            root: self.root.clone(),
+        }
+    }
+}
+
+impl<K> PersistentJournalIndexV1<K> {
+    const fn new() -> Self {
+        Self { root: None }
+    }
+}
+
+impl<K: Copy + Ord> PersistentJournalIndexV1<K> {
+    fn get(&self, key: K) -> Option<usize> {
+        let mut node = self.root.as_deref();
+        while let Some(current) = node {
+            match key.cmp(&current.key) {
+                core::cmp::Ordering::Less => node = current.left.as_deref(),
+                core::cmp::Ordering::Greater => node = current.right.as_deref(),
+                core::cmp::Ordering::Equal => return Some(current.index),
+            }
+        }
+        None
+    }
+
+    fn insert(&mut self, key: K, index: usize) -> bool {
+        let (root, inserted) = insert_index_entry_v1(self.root.as_ref(), key, index);
+        self.root = Some(root);
+        inserted
+    }
+}
+
+/// Append-ordered persistent journal with a separately key-ordered index.
+pub(crate) struct IndexedJournalV1<K, T> {
+    records: SharedJournalV1<T>,
+    index: PersistentJournalIndexV1<K>,
+    key_of: fn(&T) -> K,
+}
+
+impl<K, T> IndexedJournalV1<K, T> {
+    pub(crate) const fn new(key_of: fn(&T) -> K) -> Self {
+        Self {
+            records: SharedJournalV1::new(),
+            index: PersistentJournalIndexV1::new(),
+            key_of,
+        }
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.records.len()
+    }
+
+    pub(crate) fn iter(&self) -> SharedJournalIterV1<'_, T> {
+        self.records.iter()
+    }
+
+    pub(crate) fn as_slice(&self) -> &[T]
+    where
+        T: Clone,
+    {
+        self.records.as_slice()
+    }
+
+    #[cfg(test)]
+    fn shares_storage_with(&self, other: &Self) -> bool {
+        self.records.shares_storage_with(&other.records)
+    }
+}
+
+impl<K: Copy + Ord, T: Clone> IndexedJournalV1<K, T> {
+    pub(crate) fn push(&mut self, record: T) {
+        let key = (self.key_of)(&record);
+        let index = self.records.len();
+        assert!(self.index.insert(key, index), "journal keys are unique");
+        self.records.push(record);
+    }
+
+    pub(crate) fn get(&self, key: K) -> Option<&T> {
+        self.index
+            .get(key)
+            .and_then(|index| self.records.get(index))
+    }
+
+    pub(crate) fn get_mut(&mut self, key: K) -> Option<&mut T> {
+        let index = self.index.get(key)?;
+        self.records.get_mut(index)
+    }
+
+    pub(crate) fn retain(&mut self, mut keep: impl FnMut(&T) -> bool) {
+        self.records.retain(|record| keep(record));
+        self.index = PersistentJournalIndexV1::new();
+        for (index, record) in self.records.iter().enumerate() {
+            assert!(
+                self.index.insert((self.key_of)(record), index),
+                "retained journal keys are unique"
+            );
+        }
+    }
+}
+
+impl<K, T> Clone for IndexedJournalV1<K, T> {
+    fn clone(&self) -> Self {
+        Self {
+            records: self.records.clone(),
+            index: self.index.clone(),
+            key_of: self.key_of,
+        }
+    }
+}
+
+impl<K, T: Clone + fmt::Debug> fmt::Debug for IndexedJournalV1<K, T> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.records.fmt(formatter)
+    }
+}
+
+impl<K, T: Clone + PartialEq> PartialEq for IndexedJournalV1<K, T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.records == other.records
+    }
+}
+
+impl<K, T: Clone + Eq> Eq for IndexedJournalV1<K, T> {}
+
+impl<K, T: Clone> Deref for IndexedJournalV1<K, T> {
+    type Target = [T];
+
+    fn deref(&self) -> &Self::Target {
+        self.as_slice()
+    }
+}
+
+impl<'a, K, T> IntoIterator for &'a IndexedJournalV1<K, T> {
+    type Item = &'a T;
+    type IntoIter = SharedJournalIterV1<'a, T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
 
 /// Untrusted process-local VM handle observation. It is not durable identity.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -363,6 +1050,26 @@ pub enum MemoryTransitionV1 {
     },
 }
 
+fn vm_record_key_v1(record: &MemoryVmRecordV1) -> VmKeyV1 {
+    record.admission.model_key()
+}
+
+const fn reservation_record_key_v1(record: &VaReservationRecordV1) -> VaReservationKeyV1 {
+    record.key
+}
+
+const fn allocation_record_key_v1(record: &MemoryAllocationRecordV1) -> MemoryAllocationKeyV1 {
+    record.key
+}
+
+const fn mapping_record_key_v1(record: &MemoryMappingRecordV1) -> MemoryMappingKeyV1 {
+    record.key
+}
+
+const fn publication_record_key_v1(record: &MemoryPublicationRecordV1) -> MemoryPublicationKeyV1 {
+    record.key
+}
+
 /// Bounded process-domain memory history.
 ///
 /// All inputs and receipts remain model-only. External adapters must translate
@@ -372,12 +1079,12 @@ pub enum MemoryTransitionV1 {
 pub struct MemoryLifecycleStateV1 {
     domain_id: DeviceObservationDomainIdV1,
     identity_discipline: MemoryIdentityDisciplineV1,
-    vms: Vec<MemoryVmRecordV1>,
-    reservations: Vec<VaReservationRecordV1>,
-    allocations: Vec<MemoryAllocationRecordV1>,
-    mappings: Vec<MemoryMappingRecordV1>,
-    publications: Vec<MemoryPublicationRecordV1>,
-    issued_id_high_watermarks: Vec<MemoryIssuedIdHighWatermarkV1>,
+    vms: IndexedJournalV1<VmKeyV1, MemoryVmRecordV1>,
+    reservations: IndexedJournalV1<VaReservationKeyV1, VaReservationRecordV1>,
+    allocations: IndexedJournalV1<MemoryAllocationKeyV1, MemoryAllocationRecordV1>,
+    mappings: IndexedJournalV1<MemoryMappingKeyV1, MemoryMappingRecordV1>,
+    publications: IndexedJournalV1<MemoryPublicationKeyV1, MemoryPublicationRecordV1>,
+    issued_id_high_watermarks: SharedJournalV1<MemoryIssuedIdHighWatermarkV1>,
 }
 
 impl MemoryLifecycleStateV1 {
@@ -385,12 +1092,12 @@ impl MemoryLifecycleStateV1 {
         Self {
             domain_id,
             identity_discipline: MemoryIdentityDisciplineV1::ReusableGenerations,
-            vms: Vec::new(),
-            reservations: Vec::new(),
-            allocations: Vec::new(),
-            mappings: Vec::new(),
-            publications: Vec::new(),
-            issued_id_high_watermarks: Vec::new(),
+            vms: IndexedJournalV1::new(vm_record_key_v1),
+            reservations: IndexedJournalV1::new(reservation_record_key_v1),
+            allocations: IndexedJournalV1::new(allocation_record_key_v1),
+            mappings: IndexedJournalV1::new(mapping_record_key_v1),
+            publications: IndexedJournalV1::new(publication_record_key_v1),
+            issued_id_high_watermarks: SharedJournalV1::new(),
         }
     }
 
@@ -400,12 +1107,12 @@ impl MemoryLifecycleStateV1 {
         Self {
             domain_id,
             identity_discipline: MemoryIdentityDisciplineV1::MonotonicNonReusable,
-            vms: Vec::new(),
-            reservations: Vec::new(),
-            allocations: Vec::new(),
-            mappings: Vec::new(),
-            publications: Vec::new(),
-            issued_id_high_watermarks: Vec::new(),
+            vms: IndexedJournalV1::new(vm_record_key_v1),
+            reservations: IndexedJournalV1::new(reservation_record_key_v1),
+            allocations: IndexedJournalV1::new(allocation_record_key_v1),
+            mappings: IndexedJournalV1::new(mapping_record_key_v1),
+            publications: IndexedJournalV1::new(publication_record_key_v1),
+            issued_id_high_watermarks: SharedJournalV1::new(),
         }
     }
 
@@ -422,28 +1129,28 @@ impl MemoryLifecycleStateV1 {
     }
 
     pub fn vms(&self) -> &[MemoryVmRecordV1] {
-        &self.vms
+        self.vms.as_slice()
     }
 
     pub fn reservations(&self) -> &[VaReservationRecordV1] {
-        &self.reservations
+        self.reservations.as_slice()
     }
 
     pub fn allocations(&self) -> &[MemoryAllocationRecordV1] {
-        &self.allocations
+        self.allocations.as_slice()
     }
 
     pub fn mappings(&self) -> &[MemoryMappingRecordV1] {
-        &self.mappings
+        self.mappings.as_slice()
     }
 
     pub fn publications(&self) -> &[MemoryPublicationRecordV1] {
-        &self.publications
+        self.publications.as_slice()
     }
 
     /// Returns canonical authenticated issued-ID high-watermarks.
     pub fn issued_id_high_watermarks(&self) -> &[MemoryIssuedIdHighWatermarkV1] {
-        &self.issued_id_high_watermarks
+        self.issued_id_high_watermarks.as_slice()
     }
 
     /// Removes fully released journal records without making their identities
@@ -535,41 +1242,52 @@ impl MemoryLifecycleStateV1 {
         next
     }
 
+    #[cfg(test)]
+    pub(crate) fn shared_journals_for_test(&self, other: &Self) -> [bool; 6] {
+        [
+            self.vms.shares_storage_with(&other.vms),
+            self.reservations.shares_storage_with(&other.reservations),
+            self.allocations.shares_storage_with(&other.allocations),
+            self.mappings.shares_storage_with(&other.mappings),
+            self.publications.shares_storage_with(&other.publications),
+            self.issued_id_high_watermarks
+                .shares_storage_with(&other.issued_id_high_watermarks),
+        ]
+    }
+
+    /// Applies one locally checked transition to a copy-on-write snapshot.
+    ///
+    /// State fields are sealed and every mutation is admitted by `apply`, so
+    /// the global invariants are inductive. Call `validate_global_invariants`
+    /// explicitly at trust boundaries and in model-checking tests; repeating
+    /// the whole-journal scan here would make a trace quadratic.
     pub fn next(&self, transition: MemoryTransitionV1) -> Result<Self, MemoryTransitionErrorV1> {
-        self.validate_global_invariants()
-            .map_err(MemoryTransitionErrorV1::SourceInvariant)?;
         let mut next = self.clone();
         next.apply(transition)?;
-        next.validate_global_invariants()
-            .map_err(MemoryTransitionErrorV1::NextInvariant)?;
         Ok(next)
     }
 
-    pub(crate) fn publish_compute_aql_queue_mapping(
+    pub(crate) fn publish_compute_aql_queue_mappings(
         &self,
-        key: MemoryPublicationKeyV1,
+        keys: impl IntoIterator<Item = MemoryPublicationKeyV1>,
         queue: QueueKeyV1,
     ) -> Result<Self, MemoryTransitionErrorV1> {
-        self.validate_global_invariants()
-            .map_err(MemoryTransitionErrorV1::SourceInvariant)?;
         let mut next = self.clone();
-        next.publish_mapping(key, MemoryPublicationOwnerV1::ComputeAqlQueue(queue))?;
-        next.validate_global_invariants()
-            .map_err(MemoryTransitionErrorV1::NextInvariant)?;
+        for key in keys {
+            next.publish_mapping(key, MemoryPublicationOwnerV1::ComputeAqlQueue(queue))?;
+        }
         Ok(next)
     }
 
-    pub(crate) fn release_compute_aql_queue_publication(
+    pub(crate) fn release_compute_aql_queue_publications(
         &self,
-        key: MemoryPublicationKeyV1,
+        keys: impl IntoIterator<Item = MemoryPublicationKeyV1>,
         queue: QueueKeyV1,
     ) -> Result<Self, MemoryTransitionErrorV1> {
-        self.validate_global_invariants()
-            .map_err(MemoryTransitionErrorV1::SourceInvariant)?;
         let mut next = self.clone();
-        next.release_queue_publication(key, queue)?;
-        next.validate_global_invariants()
-            .map_err(MemoryTransitionErrorV1::NextInvariant)?;
+        for key in keys {
+            next.release_queue_publication(key, queue)?;
+        }
         Ok(next)
     }
 
@@ -578,8 +1296,6 @@ impl MemoryLifecycleStateV1 {
         key: MemoryPublicationKeyV1,
         binding: PeerTransferBindingV1,
     ) -> Result<Self, MemoryTransitionErrorV1> {
-        self.validate_global_invariants()
-            .map_err(MemoryTransitionErrorV1::SourceInvariant)?;
         if !binding.retains_publication(key) {
             return Err(MemoryTransitionErrorV1::BindingMismatch(
                 MemoryRecordRefV1::Publication(key),
@@ -590,8 +1306,6 @@ impl MemoryLifecycleStateV1 {
             key,
             MemoryPublicationOwnerV1::PeerTransfer(binding.publication_owner()),
         )?;
-        next.validate_global_invariants()
-            .map_err(MemoryTransitionErrorV1::NextInvariant)?;
         Ok(next)
     }
 
@@ -600,8 +1314,6 @@ impl MemoryLifecycleStateV1 {
         key: MemoryPublicationKeyV1,
         binding: PeerTransferBindingV1,
     ) -> Result<Self, MemoryTransitionErrorV1> {
-        self.validate_global_invariants()
-            .map_err(MemoryTransitionErrorV1::SourceInvariant)?;
         if !binding.retains_publication(key) {
             return Err(MemoryTransitionErrorV1::BindingMismatch(
                 MemoryRecordRefV1::Publication(key),
@@ -609,8 +1321,6 @@ impl MemoryLifecycleStateV1 {
         }
         let mut next = self.clone();
         next.release_peer_publication(key, binding)?;
-        next.validate_global_invariants()
-            .map_err(MemoryTransitionErrorV1::NextInvariant)?;
         Ok(next)
     }
 
@@ -1516,8 +2226,10 @@ impl MemoryLifecycleStateV1 {
     ) -> Result<(), MemoryInvariantViolationV1> {
         if self
             .issued_id_high_watermarks
-            .iter()
-            .any(|watermark| watermark.scope == scope && watermark.last_id >= id)
+            .binary_search_by(|watermark| watermark.scope.cmp(&scope))
+            .ok()
+            .and_then(|index| self.issued_id_high_watermarks.get(index))
+            .is_some_and(|watermark| watermark.last_id >= id)
         {
             return Ok(());
         }
@@ -1535,8 +2247,10 @@ impl MemoryLifecycleStateV1 {
         if self.identity_discipline == MemoryIdentityDisciplineV1::MonotonicNonReusable
             && self
                 .issued_id_high_watermarks
-                .iter()
-                .any(|watermark| watermark.scope == scope && watermark.last_id >= id)
+                .binary_search_by(|watermark| watermark.scope.cmp(&scope))
+                .ok()
+                .and_then(|index| self.issued_id_high_watermarks.get(index))
+                .is_some_and(|watermark| watermark.last_id >= id)
         {
             return Err(MemoryTransitionErrorV1::NonMonotonicIdentity(reference));
         }
@@ -1547,17 +2261,19 @@ impl MemoryLifecycleStateV1 {
         if self.identity_discipline != MemoryIdentityDisciplineV1::MonotonicNonReusable {
             return;
         }
-        if let Some(watermark) = self
+        match self
             .issued_id_high_watermarks
-            .iter_mut()
-            .find(|watermark| watermark.scope == scope)
+            .binary_search_by(|watermark| watermark.scope.cmp(&scope))
         {
-            watermark.last_id = id;
-        } else {
-            self.issued_id_high_watermarks
-                .push(MemoryIssuedIdHighWatermarkV1 { scope, last_id: id });
-            self.issued_id_high_watermarks
-                .sort_by_key(|watermark| watermark.scope);
+            Ok(index) => {
+                self.issued_id_high_watermarks
+                    .get_mut(index)
+                    .expect("watermark index came from journal")
+                    .last_id = id;
+            }
+            Err(index) => self
+                .issued_id_high_watermarks
+                .insert(index, MemoryIssuedIdHighWatermarkV1 { scope, last_id: id }),
         }
     }
 
@@ -1571,9 +2287,7 @@ impl MemoryLifecycleStateV1 {
     }
 
     fn vm_opt(&self, key: VmKeyV1) -> Option<&MemoryVmRecordV1> {
-        self.vms
-            .iter()
-            .find(|record| record.admission.model_key() == key)
+        self.vms.get(key)
     }
 
     fn vm(&self, key: VmKeyV1) -> Result<&MemoryVmRecordV1, MemoryTransitionErrorV1> {
@@ -1585,15 +2299,14 @@ impl MemoryLifecycleStateV1 {
 
     fn vm_mut(&mut self, key: VmKeyV1) -> Result<&mut MemoryVmRecordV1, MemoryTransitionErrorV1> {
         self.vms
-            .iter_mut()
-            .find(|record| record.admission.model_key() == key)
+            .get_mut(key)
             .ok_or(MemoryTransitionErrorV1::NotFound(MemoryRecordRefV1::Vm(
                 key,
             )))
     }
 
     fn reservation_opt(&self, key: VaReservationKeyV1) -> Option<&VaReservationRecordV1> {
-        self.reservations.iter().find(|record| record.key == key)
+        self.reservations.get(key)
     }
 
     fn reservation(
@@ -1611,15 +2324,14 @@ impl MemoryLifecycleStateV1 {
         key: VaReservationKeyV1,
     ) -> Result<&mut VaReservationRecordV1, MemoryTransitionErrorV1> {
         self.reservations
-            .iter_mut()
-            .find(|record| record.key == key)
+            .get_mut(key)
             .ok_or(MemoryTransitionErrorV1::NotFound(
                 MemoryRecordRefV1::VaReservation(key),
             ))
     }
 
     fn allocation_opt(&self, key: MemoryAllocationKeyV1) -> Option<&MemoryAllocationRecordV1> {
-        self.allocations.iter().find(|record| record.key == key)
+        self.allocations.get(key)
     }
 
     fn allocation(
@@ -1637,15 +2349,14 @@ impl MemoryLifecycleStateV1 {
         key: MemoryAllocationKeyV1,
     ) -> Result<&mut MemoryAllocationRecordV1, MemoryTransitionErrorV1> {
         self.allocations
-            .iter_mut()
-            .find(|record| record.key == key)
+            .get_mut(key)
             .ok_or(MemoryTransitionErrorV1::NotFound(
                 MemoryRecordRefV1::Allocation(key),
             ))
     }
 
     fn mapping_opt(&self, key: MemoryMappingKeyV1) -> Option<&MemoryMappingRecordV1> {
-        self.mappings.iter().find(|record| record.key == key)
+        self.mappings.get(key)
     }
 
     fn mapping(
@@ -1663,8 +2374,7 @@ impl MemoryLifecycleStateV1 {
         key: MemoryMappingKeyV1,
     ) -> Result<&mut MemoryMappingRecordV1, MemoryTransitionErrorV1> {
         self.mappings
-            .iter_mut()
-            .find(|record| record.key == key)
+            .get_mut(key)
             .ok_or(MemoryTransitionErrorV1::NotFound(
                 MemoryRecordRefV1::Mapping(key),
             ))
@@ -1675,8 +2385,7 @@ impl MemoryLifecycleStateV1 {
         key: MemoryPublicationKeyV1,
     ) -> Result<&mut MemoryPublicationRecordV1, MemoryTransitionErrorV1> {
         self.publications
-            .iter_mut()
-            .find(|record| record.key == key)
+            .get_mut(key)
             .ok_or(MemoryTransitionErrorV1::NotFound(
                 MemoryRecordRefV1::Publication(key),
             ))
@@ -1687,8 +2396,7 @@ impl MemoryLifecycleStateV1 {
         key: MemoryPublicationKeyV1,
     ) -> Result<&MemoryPublicationRecordV1, MemoryTransitionErrorV1> {
         self.publications
-            .iter()
-            .find(|record| record.key == key)
+            .get(key)
             .ok_or(MemoryTransitionErrorV1::NotFound(
                 MemoryRecordRefV1::Publication(key),
             ))
