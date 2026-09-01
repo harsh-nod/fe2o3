@@ -15,6 +15,7 @@ const BUNDLE_RELATION_IDENTITY_DOMAIN_V1: &[u8] =
 #[derive(Debug)]
 pub enum RocprofRawSourceRelationErrorV1 {
     Source(ImportErrorV1),
+    ProfilerBundle(ProfilerBundleErrorV4),
     RelationMismatch,
 }
 
@@ -22,6 +23,12 @@ impl fmt::Display for RocprofRawSourceRelationErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Source(error) => write!(formatter, "rocprofv3 source admission failed: {error}"),
+            Self::ProfilerBundle(error) => {
+                write!(
+                    formatter,
+                    "rocprofv3 profiler bundle admission failed: {error}"
+                )
+            }
             Self::RelationMismatch => formatter
                 .write_str("valid rocprofv3 JSON does not exactly relate the normalized evidence"),
         }
@@ -32,6 +39,7 @@ impl Error for RocprofRawSourceRelationErrorV1 {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Source(error) => Some(error),
+            Self::ProfilerBundle(error) => Some(error),
             Self::RelationMismatch => None,
         }
     }
@@ -111,8 +119,8 @@ pub fn validate_rocprofv3_bundle_raw_source_relation_v1(
     if bundle.source_kind != ProfilerSourceKindV4::Rocprofv3KernelDispatchJson {
         return Err(RocprofRawSourceRelationErrorV1::RelationMismatch);
     }
-    let document: RocprofDocument = serde_json::from_slice(source)
-        .map_err(|_| RocprofRawSourceRelationErrorV1::Source(ImportErrorV1::InvalidRocprofJson))?;
+    let projection = project_rocprofv3_json_dispatch_agents_v4(source)
+        .map_err(RocprofRawSourceRelationErrorV1::ProfilerBundle)?;
     let capture = bundle
         .dispatch_capture
         .as_ref()
@@ -122,18 +130,29 @@ pub fn validate_rocprofv3_bundle_raw_source_relation_v1(
         .first()
         .ok_or(RocprofRawSourceRelationErrorV1::RelationMismatch)?;
     let source_identity = rocprofv3_json_source_content_identity_v1(source, limits)?;
+    let bundle_source_identity = rocprofv3_json_profiler_source_content_identity_v4(source)
+        .map_err(RocprofRawSourceRelationErrorV1::ProfilerBundle)?;
     if capture.runs.len() != 1
-        || capture.runs[0].source != source_identity
-        || bundle.source.value != Some(source_identity)
+        || bundle.source.value != Some(bundle_source_identity)
+        || bundle.normalized_projection.value != Some(capture.runs[0].source)
+        || bundle.normalized_projection.value == bundle.source.value
     {
         return Err(RocprofRawSourceRelationErrorV1::RelationMismatch);
     }
 
-    let source_agent_ids = source_agent_ids(&document)?;
-    if source_agent_ids.len() > bundle.devices.len() {
+    let mut seen_nodes = BTreeSet::new();
+    let projected_node_ids = projection
+        .agent_bindings()
+        .iter()
+        .filter_map(|binding| {
+            let node_id = u64::from(binding.node_id);
+            seen_nodes.insert(node_id).then_some(node_id)
+        })
+        .collect::<Vec<_>>();
+    if projected_node_ids.len() > bundle.devices.len() {
         return Err(RocprofRawSourceRelationErrorV1::RelationMismatch);
     }
-    let stable_device_bindings = source_agent_ids
+    let stable_device_bindings = projected_node_ids
         .into_iter()
         .zip(&bundle.devices)
         .map(|(source_agent_id, device)| {
@@ -158,8 +177,9 @@ pub fn validate_rocprofv3_bundle_raw_source_relation_v1(
         source_map: content_claim(first.source_map)?,
         wave_width: wave_width(first.launch.wave_width)?,
     };
-    let normalized = import_rocprofv3_json_profiler_bundle_v4(source, binding)
-        .map_err(|_| RocprofRawSourceRelationErrorV1::RelationMismatch)?;
+    let normalized =
+        import_projected_rocprofv3_json_profiler_bundle_v4(source, &projection, binding)
+            .map_err(RocprofRawSourceRelationErrorV1::ProfilerBundle)?;
     if !bundle_matches_allowing_trailing_unused_devices(&normalized, bundle) {
         return Err(RocprofRawSourceRelationErrorV1::RelationMismatch);
     }
@@ -241,8 +261,10 @@ pub fn validate_rocprofv3_counter_bundle_relation_v1(
         return Err(RocprofRawSourceRelationErrorV1::RelationMismatch);
     }
 
-    let document: RocprofDocument = serde_json::from_slice(source)
-        .map_err(|_| RocprofRawSourceRelationErrorV1::Source(ImportErrorV1::InvalidRocprofJson))?;
+    let document: RocprofDocument = parse_rocprof_json_document_v1(source)?;
+    let projection = project_rocprofv3_json_dispatch_agents_v4(source)
+        .map_err(RocprofRawSourceRelationErrorV1::ProfilerBundle)?;
+    validate_counter_bundle_projection_axes(&document, &projection, bundle)?;
     let mut mapping = Vec::new();
     let mut flattened_base = 0_u32;
     for process in document.processes.iter() {
@@ -337,8 +359,10 @@ pub fn validate_rocprofv3_pc_bundle_relation_v1(
         return Err(RocprofRawSourceRelationErrorV1::RelationMismatch);
     }
 
-    let document: RocprofPcDocument = serde_json::from_slice(source)
-        .map_err(|_| RocprofRawSourceRelationErrorV1::Source(ImportErrorV1::InvalidRocprofJson))?;
+    let document: RocprofPcDocument = parse_rocprof_json_document_v1(source)?;
+    let projection = project_rocprofv3_json_dispatch_agents_v4(source)
+        .map_err(RocprofRawSourceRelationErrorV1::ProfilerBundle)?;
+    validate_pc_bundle_projection_axes(&document, &projection, bundle)?;
     let mut mapping = Vec::new();
     let mut flattened = 0_u32;
     for process in document.processes.iter() {
@@ -384,26 +408,6 @@ fn bundle_relation_identity(
         .map_err(RocprofRawSourceRelationErrorV1::Source)
 }
 
-fn source_agent_ids(
-    document: &RocprofDocument,
-) -> Result<Vec<u64>, RocprofRawSourceRelationErrorV1> {
-    let mut seen = BTreeSet::new();
-    let mut output = Vec::new();
-    for process in document.processes.iter() {
-        for dispatch in process.buffer_records.kernel_dispatch.iter() {
-            let agent = dispatch
-                .dispatch_info
-                .agent_id
-                .ok_or(ImportErrorV1::MissingCaptureDeviceIdentity)?
-                .handle;
-            if seen.insert(agent) {
-                output.push(agent);
-            }
-        }
-    }
-    Ok(output)
-}
-
 fn same_raw_dispatch(counter: RocprofCounterDispatchData, dispatch: RocprofDispatchRecord) -> bool {
     counter.start_timestamp == dispatch.start_timestamp
         && counter.end_timestamp == dispatch.end_timestamp
@@ -413,6 +417,154 @@ fn same_raw_dispatch(counter: RocprofCounterDispatchData, dispatch: RocprofDispa
         && counter.dispatch_info.workgroup_size.array()
             == dispatch.dispatch_info.workgroup_size.array()
         && counter.dispatch_info.grid_size.array() == dispatch.dispatch_info.grid_size.array()
+}
+
+fn projection_node_catalog(
+    projection: &RocprofJsonDispatchProjectionV4,
+) -> Result<BTreeMap<(u32, u64), u32>, RocprofRawSourceRelationErrorV1> {
+    let mut catalog = BTreeMap::new();
+    for binding in projection.agent_bindings() {
+        if catalog
+            .insert(
+                (binding.process_index, binding.source_agent_id),
+                binding.node_id,
+            )
+            .is_some()
+        {
+            return Err(RocprofRawSourceRelationErrorV1::RelationMismatch);
+        }
+    }
+    Ok(catalog)
+}
+
+fn validate_projected_dispatch_device(
+    node_id: u32,
+    dispatch: &CaptureDispatchV1,
+    node_devices: &mut BTreeMap<u32, CaptureIdentityV1>,
+    device_nodes: &mut BTreeMap<CaptureIdentityV1, u32>,
+) -> Result<(), RocprofRawSourceRelationErrorV1> {
+    if node_devices
+        .insert(node_id, dispatch.device_identity)
+        .is_some_and(|identity| identity != dispatch.device_identity)
+        || device_nodes
+            .insert(dispatch.device_identity, node_id)
+            .is_some_and(|node| node != node_id)
+    {
+        return Err(RocprofRawSourceRelationErrorV1::RelationMismatch);
+    }
+    Ok(())
+}
+
+fn validate_counter_bundle_projection_axes(
+    document: &RocprofDocument,
+    projection: &RocprofJsonDispatchProjectionV4,
+    bundle: &SemanticProfilerBundleV4,
+) -> Result<(), RocprofRawSourceRelationErrorV1> {
+    let dispatches = &bundle
+        .dispatch_capture
+        .as_ref()
+        .ok_or(RocprofRawSourceRelationErrorV1::RelationMismatch)?
+        .dispatches;
+    let agents = projection_node_catalog(projection)?;
+    let mut node_devices = BTreeMap::new();
+    let mut device_nodes = BTreeMap::new();
+    let mut flattened = 0_usize;
+    for (process_index, process) in document.processes.iter().enumerate() {
+        for (dispatch_index, source_dispatch) in
+            process.buffer_records.kernel_dispatch.iter().enumerate()
+        {
+            let dispatch = dispatches
+                .get(flattened)
+                .ok_or(RocprofRawSourceRelationErrorV1::RelationMismatch)?;
+            let process_index_u32 =
+                u32::try_from(process_index).map_err(|_| ImportErrorV1::SizeOverflow)?;
+            let source_agent_id = source_dispatch
+                .dispatch_info
+                .agent_id
+                .ok_or(ImportErrorV1::MissingCaptureDeviceIdentity)?
+                .handle;
+            let node_id = *agents
+                .get(&(process_index_u32, source_agent_id))
+                .ok_or(RocprofRawSourceRelationErrorV1::RelationMismatch)?;
+            if dispatch.process_index != process_index_u32
+                || dispatch.dispatch_index
+                    != u32::try_from(dispatch_index).map_err(|_| ImportErrorV1::SizeOverflow)?
+                || dispatch.source_record_ordinal
+                    != u64::try_from(flattened).map_err(|_| ImportErrorV1::SizeOverflow)?
+            {
+                return Err(RocprofRawSourceRelationErrorV1::RelationMismatch);
+            }
+            validate_projected_dispatch_device(
+                node_id,
+                dispatch,
+                &mut node_devices,
+                &mut device_nodes,
+            )?;
+            flattened = flattened
+                .checked_add(1)
+                .ok_or(ImportErrorV1::SizeOverflow)?;
+        }
+    }
+    if flattened != dispatches.len() {
+        return Err(RocprofRawSourceRelationErrorV1::RelationMismatch);
+    }
+    Ok(())
+}
+
+fn validate_pc_bundle_projection_axes(
+    document: &RocprofPcDocument,
+    projection: &RocprofJsonDispatchProjectionV4,
+    bundle: &SemanticProfilerBundleV4,
+) -> Result<(), RocprofRawSourceRelationErrorV1> {
+    let dispatches = &bundle
+        .dispatch_capture
+        .as_ref()
+        .ok_or(RocprofRawSourceRelationErrorV1::RelationMismatch)?
+        .dispatches;
+    let agents = projection_node_catalog(projection)?;
+    let mut node_devices = BTreeMap::new();
+    let mut device_nodes = BTreeMap::new();
+    let mut flattened = 0_usize;
+    for (process_index, process) in document.processes.iter().enumerate() {
+        for (dispatch_index, source_dispatch) in
+            process.buffer_records.kernel_dispatch.iter().enumerate()
+        {
+            let dispatch = dispatches
+                .get(flattened)
+                .ok_or(RocprofRawSourceRelationErrorV1::RelationMismatch)?;
+            let process_index_u32 =
+                u32::try_from(process_index).map_err(|_| ImportErrorV1::SizeOverflow)?;
+            let source_agent_id = source_dispatch
+                .dispatch_info
+                .agent_id
+                .ok_or(ImportErrorV1::MissingCaptureDeviceIdentity)?
+                .handle;
+            let node_id = *agents
+                .get(&(process_index_u32, source_agent_id))
+                .ok_or(RocprofRawSourceRelationErrorV1::RelationMismatch)?;
+            if dispatch.process_index != process_index_u32
+                || dispatch.dispatch_index
+                    != u32::try_from(dispatch_index).map_err(|_| ImportErrorV1::SizeOverflow)?
+                || dispatch.source_record_ordinal
+                    != u64::try_from(flattened).map_err(|_| ImportErrorV1::SizeOverflow)?
+            {
+                return Err(RocprofRawSourceRelationErrorV1::RelationMismatch);
+            }
+            validate_projected_dispatch_device(
+                node_id,
+                dispatch,
+                &mut node_devices,
+                &mut device_nodes,
+            )?;
+            flattened = flattened
+                .checked_add(1)
+                .ok_or(ImportErrorV1::SizeOverflow)?;
+        }
+    }
+    if flattened != dispatches.len() {
+        return Err(RocprofRawSourceRelationErrorV1::RelationMismatch);
+    }
+    Ok(())
 }
 
 fn verify_counter_bundle_axes(
@@ -431,7 +583,6 @@ fn verify_counter_bundle_axes(
             .ok_or(RocprofRawSourceRelationErrorV1::RelationMismatch)?;
         if counter.kernel_ir != dispatch.kernel_ir
             || counter.process_index != dispatch.process_index
-            || counter.device_identity != dispatch.device_identity
             || counter.artifact != dispatch.artifact
             || counter.source_map != dispatch.source_map
             || counter.launch != dispatch.launch
@@ -462,7 +613,6 @@ fn verify_pc_bundle_axes(
         if sample.process_index != dispatch.process_index
             || sample.dispatch_index != dispatch.dispatch_index
             || sample.source_dispatch_ordinal != dispatch.source_record_ordinal
-            || sample.device_identity != dispatch.device_identity
             || sample.kernel_ir != dispatch.kernel_ir
             || sample.artifact != dispatch.artifact
             || sample.source_map != dispatch.source_map

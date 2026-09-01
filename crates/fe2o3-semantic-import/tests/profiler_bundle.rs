@@ -95,6 +95,26 @@ fn dispatch_binding(devices: &[u8]) -> ProfilerDispatchBindingV4 {
     }
 }
 
+fn json_dispatch_binding(devices: &[u8]) -> ProfilerDispatchBindingV4 {
+    let mut binding = dispatch_binding(devices);
+    for (device, node_id) in binding
+        .environment
+        .stable_device_bindings
+        .iter_mut()
+        .zip([7_u64, 8])
+    {
+        device.source_agent_id = node_id;
+    }
+    binding
+}
+
+fn import_json_bundle(
+    source: &[u8],
+    binding: ProfilerDispatchBindingV4,
+) -> Result<SemanticProfilerBundleV4, ProfilerBundleErrorV4> {
+    import_rocprofv3_json_profiler_bundle_v4(source, binding)
+}
+
 fn complete_installed_process(process: &mut serde_json::Value) {
     process["metadata"]["node"] = serde_json::json!({
         "id": 0, "hash": 0, "machine_id": "fixture", "system_name": "Linux",
@@ -223,14 +243,20 @@ fn json_source() -> &'static [u8] {
                 br#"{"rocprofiler-sdk-tool":[{"metadata":{"node":{},"pid":1,"init_time":1,"fini_time":2,"command":[],"config":{}},"buffer_records":{"kernel_dispatch":[{"size":184,"kind":11,"operation":2,"thread_id":100,"correlation_id":{"internal":1,"external":0},"start_timestamp":100,"end_timestamp":180,"dispatch_info":{"size":72,"agent_id":{"handle":17},"queue_id":{"handle":1},"kernel_id":10,"dispatch_id":1,"private_segment_size":0,"group_segment_size":0,"workgroup_size":{"x":64,"y":1,"z":1},"grid_size":{"x":256,"y":1,"z":1}},"stream_id":{"handle":0}}]}},{"metadata":{"node":{},"pid":2,"init_time":1,"fini_time":2,"command":[],"config":{}},"buffer_records":{"kernel_dispatch":[{"size":184,"kind":11,"operation":2,"thread_id":101,"correlation_id":{"internal":2,"external":0},"start_timestamp":200,"end_timestamp":260,"dispatch_info":{"size":72,"agent_id":{"handle":19},"queue_id":{"handle":2},"kernel_id":11,"dispatch_id":2,"private_segment_size":0,"group_segment_size":0,"workgroup_size":{"x":32,"y":2,"z":1},"grid_size":{"x":128,"y":2,"z":1}},"stream_id":{"handle":0}}]}}]}"#,
             )
             .unwrap();
-            for process in value["rocprofiler-sdk-tool"].as_array_mut().unwrap() {
+            for (process_index, process) in value["rocprofiler-sdk-tool"]
+                .as_array_mut()
+                .unwrap()
+                .iter_mut()
+                .enumerate()
+            {
                 let handle = process["buffer_records"]["kernel_dispatch"][0]["dispatch_info"]
                     ["agent_id"]["handle"]
                     .as_u64()
                     .unwrap();
+                let node_id = [7_u64, 8][process_index];
                 let mut agent = serde_json::json!({
-                    "id": {"handle": handle}, "node_id": handle, "simd_count": 304,
-                    "gpu_id": handle, "vendor_id": 4098, "device_id": 29857,
+                    "id": {"handle": handle}, "node_id": node_id, "simd_count": 304,
+                    "gpu_id": 42 + node_id, "vendor_id": 4098, "device_id": 29857,
                     "location_id": 1, "domain": 0, "gfx_target_version": 90402,
                     "wave_front_size": 64, "num_xcc": 8
                 });
@@ -290,14 +316,113 @@ fn json_source_with_agent_catalog() -> Vec<u8> {
     serde_json::to_vec(&value).unwrap()
 }
 
+fn strict_side_capture_source(fixture: &[u8], counter: bool) -> Vec<u8> {
+    let mut value: serde_json::Value = serde_json::from_slice(fixture).unwrap();
+    let process = &mut value["rocprofiler-sdk-tool"][0];
+    let original_buffers = process["buffer_records"].clone();
+    let raw_dispatches = if counter {
+        process["callback_records"]["counter_collection"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|collection| collection["dispatch_data"].clone())
+            .collect::<Vec<_>>()
+    } else {
+        original_buffers["kernel_dispatch"]
+            .as_array()
+            .unwrap()
+            .clone()
+    };
+    let mut dispatches = Vec::new();
+    for (ordinal, mut dispatch) in raw_dispatches.into_iter().enumerate() {
+        let object = dispatch.as_object_mut().unwrap();
+        object.insert("size".to_owned(), serde_json::json!(184));
+        object.insert("kind".to_owned(), serde_json::json!(11));
+        object.insert("operation".to_owned(), serde_json::json!(2));
+        object.insert("thread_id".to_owned(), serde_json::json!(100 + ordinal));
+        object
+            .entry("correlation_id".to_owned())
+            .or_insert_with(|| serde_json::json!({"internal": ordinal + 1, "external": 0}));
+        object.insert("stream_id".to_owned(), serde_json::json!({"handle": 0}));
+        let dispatch_info = object["dispatch_info"].as_object_mut().unwrap();
+        dispatch_info
+            .entry("size".to_owned())
+            .or_insert_with(|| serde_json::json!(72));
+        dispatch_info
+            .entry("queue_id".to_owned())
+            .or_insert_with(|| serde_json::json!({"handle": 1}));
+        dispatch_info
+            .entry("kernel_id".to_owned())
+            .or_insert_with(|| serde_json::json!(10 + ordinal));
+        dispatch_info
+            .entry("private_segment_size".to_owned())
+            .or_insert_with(|| serde_json::json!(0));
+        dispatch_info
+            .entry("group_segment_size".to_owned())
+            .or_insert_with(|| serde_json::json!(0));
+        dispatches.push(dispatch);
+    }
+    let source_agent_id = dispatches[0]["dispatch_info"]["agent_id"]["handle"]
+        .as_u64()
+        .unwrap();
+    process["metadata"] = serde_json::json!({
+        "node": {}, "pid": 41052, "init_time": 1, "fini_time": 2,
+        "command": [], "config": {}
+    });
+    process["buffer_records"] = serde_json::json!({"kernel_dispatch": dispatches});
+    let mut agent = serde_json::json!({
+        "id": {"handle": source_agent_id}, "node_id": 7, "simd_count": 304,
+        "gpu_id": 42, "vendor_id": 4098, "device_id": 29857,
+        "location_id": 1, "domain": 0, "gfx_target_version": 90402,
+        "wave_front_size": 64, "num_xcc": 8
+    });
+    complete_installed_agent(&mut agent);
+    process["agents"] = serde_json::json!([agent]);
+    let original_counters = process["counters"].clone();
+    let original_callbacks = process["callback_records"].clone();
+    complete_installed_process(process);
+    if counter {
+        process["counters"] = original_counters;
+        process["callback_records"] = original_callbacks;
+    } else {
+        process["buffer_records"]["pc_sample_host_trap"] = original_buffers
+            .get("pc_sample_host_trap")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!([]));
+        process["buffer_records"]["pc_sample_stochastic"] =
+            original_buffers["pc_sample_stochastic"].clone();
+    }
+    serde_json::to_vec(&value).unwrap()
+}
+
+fn side_capture_binding() -> RocprofCaptureBindingV1 {
+    RocprofCaptureBindingV1 {
+        kernel_ir_claim: KernelIrIdentityClaimV1::canonical_v7_claim(opaque(1), 97).unwrap(),
+        artifact: Some(ArtifactClaimV1 {
+            identity: opaque(2),
+            canonical_len: 4_096,
+            format_version: 1,
+        }),
+        source_map: Some(
+            ContentIdentityV1::new(
+                ContentIdentitySchemeV1::RawCanonicalSha256,
+                1,
+                opaque(3),
+                777,
+            )
+            .unwrap(),
+        ),
+        wave_width: WaveWidthV1::Wave64,
+    }
+}
+
 fn csv_source() -> &'static [u8] {
     include_bytes!("fixtures/rocprofv3-current-kernel-dispatch.csv")
 }
 
 #[test]
 fn json_and_csv_bundles_are_canonical_bounded_and_identity_bound() {
-    let json = import_rocprofv3_json_profiler_bundle_v4(json_source(), dispatch_binding(&[20, 21]))
-        .unwrap();
+    let json = import_json_bundle(json_source(), json_dispatch_binding(&[20, 21])).unwrap();
     let csv =
         import_rocprofv3_csv_profiler_bundle_v4(csv_source(), dispatch_binding(&[20, 21])).unwrap();
 
@@ -324,10 +449,212 @@ fn json_and_csv_bundles_are_canonical_bounded_and_identity_bound() {
                 .contains(&ProfilerUnavailableFactV4::DecodedAttEvents)
         );
     }
+    let projection = project_rocprofv3_json_dispatch_agents_v4(json_source()).unwrap();
+    assert_eq!(
+        projection
+            .agent_bindings()
+            .iter()
+            .map(|binding| binding.source_agent_id)
+            .collect::<Vec<_>>(),
+        [17, 19]
+    );
+    assert_eq!(
+        projection
+            .agent_bindings()
+            .iter()
+            .map(|binding| binding.node_id)
+            .collect::<Vec<_>>(),
+        [7, 8]
+    );
+    assert_ne!(json.source.value, json.normalized_projection.value);
+    assert_eq!(
+        json.normalized_projection.value,
+        Some(json.dispatch_capture.as_ref().unwrap().runs[0].source)
+    );
     assert_ne!(csv.source.value, csv.normalized_projection.value);
     assert_eq!(
         csv.normalized_projection.value,
         Some(csv.dispatch_capture.as_ref().unwrap().runs[0].source)
+    );
+}
+
+#[test]
+fn json_import_requires_the_exact_projection_and_absolute_node_bindings() {
+    let source = json_source();
+    let projection = project_rocprofv3_json_dispatch_agents_v4(source).unwrap();
+
+    assert!(matches!(
+        import_projected_rocprofv3_json_profiler_bundle_v4(
+            source,
+            &projection,
+            dispatch_binding(&[20, 21]),
+        ),
+        Err(ProfilerBundleErrorV4::MissingDeviceBinding)
+    ));
+
+    let mut substituted_source: serde_json::Value = serde_json::from_slice(source).unwrap();
+    substituted_source["rocprofiler-sdk-tool"][0]["agents"][0]["gpu_id"] = serde_json::json!(9_999);
+    let substituted_source = serde_json::to_vec(&substituted_source).unwrap();
+    assert!(matches!(
+        import_projected_rocprofv3_json_profiler_bundle_v4(
+            &substituted_source,
+            &projection,
+            json_dispatch_binding(&[20, 21]),
+        ),
+        Err(ProfilerBundleErrorV4::StaleReference)
+    ));
+}
+
+#[test]
+fn raw_source_relation_replays_projected_bundle_and_rejects_identity_domain_substitution() {
+    let source = json_source();
+    let bundle = import_json_bundle(source, json_dispatch_binding(&[20, 21])).unwrap();
+    let relation = validate_rocprofv3_bundle_raw_source_relation_v1(
+        source,
+        &bundle,
+        ImportLimitsV1::default(),
+    )
+    .unwrap();
+    let v1_source =
+        rocprofv3_json_source_content_identity_v1(source, ImportLimitsV1::default()).unwrap();
+    let v4_source = rocprofv3_json_profiler_source_content_identity_v4(source).unwrap();
+    assert_eq!(relation.source(), v1_source);
+    assert_eq!(bundle.source.value, Some(v4_source));
+    assert_ne!(v1_source, v4_source);
+    assert_ne!(bundle.source.value, bundle.normalized_projection.value);
+
+    let mut substituted = bundle;
+    substituted.source.value = Some(v1_source);
+    assert!(
+        validate_rocprofv3_bundle_raw_source_relation_v1(
+            source,
+            &substituted,
+            ImportLimitsV1::default(),
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn counter_relation_crosses_exact_raw_handle_to_projected_node_domains() {
+    let source = strict_side_capture_source(
+        include_bytes!("fixtures/rocprofv3-1.1-counter-collection.json"),
+        true,
+    );
+    let bundle = import_json_bundle(&source, json_dispatch_binding(&[20])).unwrap();
+    let admitted = validate_rocprofv3_bundle_raw_source_relation_v1(
+        &source,
+        &bundle,
+        ImportLimitsV1::default(),
+    )
+    .unwrap();
+    let counters = import_rocprofv3_counter_capture_v2(
+        &source,
+        side_capture_binding(),
+        ImportLimitsV1::default(),
+    )
+    .unwrap();
+    let relation = validate_rocprofv3_counter_bundle_relation_v1(
+        &source,
+        &bundle,
+        admitted,
+        &counters,
+        ImportLimitsV1::default(),
+    )
+    .unwrap();
+    assert_eq!(relation.bundle_dispatch_ordinals(), [0, 1]);
+    assert_ne!(
+        counters.dispatches[0].device_identity,
+        bundle.dispatch_capture.as_ref().unwrap().dispatches[0].device_identity
+    );
+
+    let mut catalog_substitution: serde_json::Value = serde_json::from_slice(&source).unwrap();
+    catalog_substitution["rocprofiler-sdk-tool"][0]["agents"][0]["node_id"] = serde_json::json!(8);
+    assert!(
+        validate_rocprofv3_counter_bundle_relation_v1(
+            &serde_json::to_vec(&catalog_substitution).unwrap(),
+            &bundle,
+            admitted,
+            &counters,
+            ImportLimitsV1::default(),
+        )
+        .is_err()
+    );
+
+    let mut ordinal_substitution = counters;
+    ordinal_substitution.dispatches.swap(0, 1);
+    assert!(
+        validate_rocprofv3_counter_bundle_relation_v1(
+            &source,
+            &bundle,
+            admitted,
+            &ordinal_substitution,
+            ImportLimitsV1::default(),
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn pc_relation_crosses_exact_raw_handle_to_projected_node_domains() {
+    let source = strict_side_capture_source(
+        include_bytes!("fixtures/rocprofv3-1.1-stochastic-pc-sampling.json"),
+        false,
+    );
+    let bundle = import_json_bundle(&source, json_dispatch_binding(&[20])).unwrap();
+    let admitted = validate_rocprofv3_bundle_raw_source_relation_v1(
+        &source,
+        &bundle,
+        ImportLimitsV1::default(),
+    )
+    .unwrap();
+    let pc = import_rocprofv3_pc_sample_capture_v3(
+        &source,
+        RocprofPcSampleCaptureBindingV3 {
+            capture: side_capture_binding(),
+            sampling_interval_cycles: 1_048_576,
+        },
+        ImportLimitsV1::default(),
+    )
+    .unwrap();
+    let relation = validate_rocprofv3_pc_bundle_relation_v1(
+        &source,
+        &bundle,
+        admitted,
+        &pc,
+        ImportLimitsV1::default(),
+    )
+    .unwrap();
+    assert_eq!(relation.bundle_dispatch_ordinals(), [0, 1]);
+    assert_ne!(
+        pc.dispatches[0].device_identity,
+        bundle.dispatch_capture.as_ref().unwrap().dispatches[0].device_identity
+    );
+
+    let mut catalog_substitution: serde_json::Value = serde_json::from_slice(&source).unwrap();
+    catalog_substitution["rocprofiler-sdk-tool"][0]["agents"][0]["node_id"] = serde_json::json!(8);
+    assert!(
+        validate_rocprofv3_pc_bundle_relation_v1(
+            &serde_json::to_vec(&catalog_substitution).unwrap(),
+            &bundle,
+            admitted,
+            &pc,
+            ImportLimitsV1::default(),
+        )
+        .is_err()
+    );
+
+    let mut ordinal_substitution = pc;
+    ordinal_substitution.dispatches.swap(0, 1);
+    assert!(
+        validate_rocprofv3_pc_bundle_relation_v1(
+            &source,
+            &bundle,
+            admitted,
+            &ordinal_substitution,
+            ImportLimitsV1::default(),
+        )
+        .is_err()
     );
 }
 
@@ -352,9 +679,9 @@ fn json_dispatch_protocol_rejects_unknown_duplicate_and_trailing_input() {
             .unwrap()
             .insert(field.to_owned(), serde_json::json!(1));
         assert!(matches!(
-            import_rocprofv3_json_profiler_bundle_v4(
+            import_json_bundle(
                 &serde_json::to_vec(&hostile).unwrap(),
-                dispatch_binding(&[20, 21])
+                json_dispatch_binding(&[20, 21])
             ),
             Err(ProfilerBundleErrorV4::InvalidRocprofJson)
         ));
@@ -383,9 +710,9 @@ fn json_dispatch_protocol_rejects_unknown_duplicate_and_trailing_input() {
             .unwrap()
             .remove(field);
         assert!(matches!(
-            import_rocprofv3_json_profiler_bundle_v4(
+            import_json_bundle(
                 &serde_json::to_vec(&hostile).unwrap(),
-                dispatch_binding(&[20, 21])
+                json_dispatch_binding(&[20, 21])
             ),
             Err(ProfilerBundleErrorV4::InvalidRocprofJson)
         ));
@@ -399,21 +726,21 @@ fn json_dispatch_protocol_rejects_unknown_duplicate_and_trailing_input() {
         .chain(br#",\"rocprofiler-sdk-tool\":[]}"#.iter().copied())
         .collect::<Vec<_>>();
     assert!(matches!(
-        import_rocprofv3_json_profiler_bundle_v4(&duplicate, dispatch_binding(&[20, 21])),
+        import_json_bundle(&duplicate, json_dispatch_binding(&[20, 21])),
         Err(ProfilerBundleErrorV4::InvalidRocprofJson)
     ));
 
     let mut trailing = json_source().to_vec();
     trailing.extend_from_slice(b"false");
     assert!(matches!(
-        import_rocprofv3_json_profiler_bundle_v4(&trailing, dispatch_binding(&[20, 21])),
+        import_json_bundle(&trailing, json_dispatch_binding(&[20, 21])),
         Err(ProfilerBundleErrorV4::InvalidRocprofJson)
     ));
 }
 
 #[test]
-fn device_bindings_join_by_absolute_agent_id_not_position() {
-    let mut binding = dispatch_binding(&[20, 21]);
+fn device_bindings_join_by_absolute_kfd_node_not_position() {
+    let mut binding = json_dispatch_binding(&[20, 21]);
     binding.environment.stable_device_bindings.reverse();
     binding
         .environment
@@ -422,7 +749,7 @@ fn device_bindings_join_by_absolute_agent_id_not_position() {
             source_agent_id: 99,
             stable_identity: content(22, 64),
         });
-    let bundle = import_rocprofv3_json_profiler_bundle_v4(json_source(), binding).unwrap();
+    let bundle = import_json_bundle(json_source(), binding).unwrap();
     assert_eq!(
         bundle.devices[0].stable_identity.value,
         Some(content(20, 64))
@@ -434,18 +761,18 @@ fn device_bindings_join_by_absolute_agent_id_not_position() {
     assert_eq!(bundle.devices.len(), 2);
 
     let missing = ProfilerDispatchBindingV4 {
-        environment: environment(&[20]),
-        ..dispatch_binding(&[20, 21])
+        environment: json_dispatch_binding(&[20]).environment,
+        ..json_dispatch_binding(&[20, 21])
     };
     assert!(matches!(
-        import_rocprofv3_json_profiler_bundle_v4(json_source(), missing),
+        import_json_bundle(json_source(), missing),
         Err(ProfilerBundleErrorV4::MissingDeviceBinding)
     ));
 
-    let mut duplicate = dispatch_binding(&[20, 21]);
-    duplicate.environment.stable_device_bindings[1].source_agent_id = 17;
+    let mut duplicate = json_dispatch_binding(&[20, 21]);
+    duplicate.environment.stable_device_bindings[1].source_agent_id = 7;
     assert!(matches!(
-        import_rocprofv3_json_profiler_bundle_v4(json_source(), duplicate),
+        import_json_bundle(json_source(), duplicate),
         Err(ProfilerBundleErrorV4::DuplicateSourceAgentBinding)
     ));
 }
@@ -645,6 +972,51 @@ fn reviewed_json_dialects_are_distinct_and_remain_synthetic() {
     );
 
     let installed_value: serde_json::Value = serde_json::from_slice(installed).unwrap();
+    for (parent, field) in [
+        (
+            "/rocprofiler-sdk-tool/0/callback_records",
+            "spm_counter_collection",
+        ),
+        ("/rocprofiler-sdk-tool/0/buffer_records", "kfd"),
+        ("/rocprofiler-sdk-tool/0/buffer_records", "hip_graph"),
+        ("/rocprofiler-sdk-tool/0/buffer_records", "hipfile_api"),
+        ("/rocprofiler-sdk-tool/0/buffer_records", "rocshmem_api"),
+        (
+            "/rocprofiler-sdk-tool/0/buffer_records/kernel_dispatch/0",
+            "graph_exec_id",
+        ),
+        (
+            "/rocprofiler-sdk-tool/0/buffer_records/kernel_dispatch/0",
+            "graph_node_id",
+        ),
+    ] {
+        let mut hostile = installed_value.clone();
+        hostile
+            .pointer_mut(parent)
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .insert(field.to_owned(), serde_json::Value::Null);
+        assert!(matches!(
+            project_rocprofv3_json_dispatch_agents_v4(&serde_json::to_vec(&hostile).unwrap()),
+            Err(ProfilerBundleErrorV4::InvalidRocprofJson)
+        ));
+    }
+    let oversized = "x".repeat(64 * 1024 + 1);
+    let mut oversized_command = installed_value.clone();
+    oversized_command["rocprofiler-sdk-tool"][0]["metadata"]["command"] =
+        serde_json::json!([oversized.clone()]);
+    assert!(matches!(
+        project_rocprofv3_json_dispatch_agents_v4(&serde_json::to_vec(&oversized_command).unwrap()),
+        Err(ProfilerBundleErrorV4::InvalidRocprofJson)
+    ));
+    let mut oversized_key = installed_value.clone();
+    oversized_key["rocprofiler-sdk-tool"][0]["metadata"]["config"] =
+        serde_json::json!({(oversized): 1});
+    assert!(matches!(
+        project_rocprofv3_json_dispatch_agents_v4(&serde_json::to_vec(&oversized_key).unwrap()),
+        Err(ProfilerBundleErrorV4::InvalidRocprofJson)
+    ));
     for (pointer, replacement) in [
         (
             "/rocprofiler-sdk-tool/0/agents/0/gpu_index",
@@ -1307,9 +1679,7 @@ fn att_import_rejects_unsafe_duplicate_and_unrecognized_evidence() {
 
 #[test]
 fn decoder_rejects_noncanonical_and_stale_bundle_claims() {
-    let bundle =
-        import_rocprofv3_json_profiler_bundle_v4(json_source(), dispatch_binding(&[20, 21]))
-            .unwrap();
+    let bundle = import_json_bundle(json_source(), json_dispatch_binding(&[20, 21])).unwrap();
     let mut bytes = encode_profiler_bundle_v4(&bundle).unwrap();
     bytes.push(b'\n');
     assert!(matches!(
@@ -1331,8 +1701,7 @@ fn decoder_rejects_noncanonical_and_stale_bundle_claims() {
         "collector_configuration",
     ] {
         let mut substituted =
-            import_rocprofv3_json_profiler_bundle_v4(json_source(), dispatch_binding(&[20, 21]))
-                .unwrap();
+            import_json_bundle(json_source(), json_dispatch_binding(&[20, 21])).unwrap();
         let fact = match role {
             "source" => &mut substituted.source,
             "environment" => &mut substituted.environment,
@@ -1353,9 +1722,7 @@ fn decoder_rejects_noncanonical_and_stale_bundle_claims() {
 
 #[test]
 fn decoder_rejects_inexact_launches_and_hostile_multi_device_joins() {
-    let bundle =
-        import_rocprofv3_json_profiler_bundle_v4(json_source(), dispatch_binding(&[20, 21]))
-            .unwrap();
+    let bundle = import_json_bundle(json_source(), json_dispatch_binding(&[20, 21])).unwrap();
 
     let mut inconsistent = bundle.clone();
     inconsistent.dispatch_capture.as_mut().unwrap().dispatches[0]
@@ -1459,6 +1826,58 @@ fn profiler_import_cli_emits_canonical_v4_without_paths_or_native_handles() {
     let encoded = String::from_utf8(output.stdout).unwrap();
     assert!(!encoded.contains("generic,kernel"));
     assert!(!encoded.contains("Queue_Id"));
+}
+
+#[test]
+fn profiler_import_json_cli_keys_device_bindings_by_projected_kfd_node() {
+    let id = |byte: u8, len: u64| format!("domain:1:{}:{len}", format!("{byte:02x}").repeat(32));
+    let arguments = |first: u64, second: u64| {
+        vec![
+            "dispatch-json-v4".to_owned(),
+            "--environment".to_owned(),
+            id(10, 200),
+            "--tool".to_owned(),
+            id(11, 50),
+            "--config".to_owned(),
+            id(12, 80),
+            "--device-binding".to_owned(),
+            format!("{first}={}", id(20, 64)),
+            "--device-binding".to_owned(),
+            format!("{second}={}", id(21, 64)),
+            "--kir-sha256".to_owned(),
+            "01".repeat(32),
+            "--kir-len".to_owned(),
+            "97".to_owned(),
+            "--wave-width".to_owned(),
+            "64".to_owned(),
+        ]
+    };
+
+    for (bindings, succeeds) in [(arguments(7, 8), true), (arguments(17, 19), false)] {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_fe2o3-profiler-import"))
+            .args(bindings)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(json_source())
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert_eq!(output.status.success(), succeeds);
+        if succeeds {
+            let bundle = decode_profiler_bundle_v4(&output.stdout).unwrap();
+            assert_ne!(bundle.source.value, bundle.normalized_projection.value);
+            assert_eq!(
+                bundle.devices[0].stable_identity.value,
+                Some(content(20, 64))
+            );
+        }
+    }
 }
 
 #[test]

@@ -43,9 +43,9 @@ fn run() -> Result<Vec<u8>, CliErrorV1> {
         };
         if request.command == CommandV1::CounterCapture {
             let capture =
-                import_rocprofv3_counter_capture_v2(&input, binding, limits).map_err(|_| {
-                    CliErrorV1::new(
-                        "import",
+                import_rocprofv3_counter_capture_v2(&input, binding, limits).map_err(|error| {
+                    map_import_error(
+                        error,
                         "source evidence failed bounded counter capture validation",
                     )
                 })?;
@@ -68,9 +68,9 @@ fn run() -> Result<Vec<u8>, CliErrorV1> {
                 },
                 limits,
             )
-            .map_err(|_| {
-                CliErrorV1::new(
-                    "import",
+            .map_err(|error| {
+                map_import_error(
+                    error,
                     "source evidence failed bounded PC sample capture validation",
                 )
             })?;
@@ -82,11 +82,8 @@ fn run() -> Result<Vec<u8>, CliErrorV1> {
                 )
             });
         }
-        let capture = import_rocprofv3_capture_v1(&input, binding, limits).map_err(|_| {
-            CliErrorV1::new(
-                "import",
-                "source evidence failed bounded capture validation",
-            )
+        let capture = import_rocprofv3_capture_v1(&input, binding, limits).map_err(|error| {
+            map_import_error(error, "source evidence failed bounded capture validation")
         })?;
         drop(input);
         return encode_capture_v1(&capture).map_err(|_| {
@@ -124,7 +121,7 @@ fn run() -> Result<Vec<u8>, CliErrorV1> {
             unreachable!("PC sample capture returned before trace import")
         }
     }
-    .map_err(|_| CliErrorV1::new("import", "source evidence failed bounded import validation"))?;
+    .map_err(|error| map_import_error(error, "source evidence failed bounded import validation"))?;
     drop(input);
     let output = encode_trace_v1(imported.trace())
         .map_err(|_| CliErrorV1::new("encode", "could not encode canonical Semantic Trace V1"))?;
@@ -566,6 +563,16 @@ impl CliErrorV1 {
     }
 }
 
+fn map_import_error(error: ImportErrorV1, message: &'static str) -> CliErrorV1 {
+    match error {
+        ImportErrorV1::AllocationFailure => CliErrorV1::new(
+            "allocation",
+            "source evidence import could not reserve bounded resident resources",
+        ),
+        _ => CliErrorV1::new("import", message),
+    }
+}
+
 #[derive(Serialize)]
 struct CliErrorResponseV1<'a> {
     error: &'a str,
@@ -582,4 +589,21 @@ fn emit_error(code: &'static str, message: impl AsRef<str>) -> ExitCode {
     let _ = serde_json::to_writer(&mut stderr, &response);
     let _ = stderr.write_all(b"\n");
     ExitCode::FAILURE
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn allocation_error_has_a_stable_distinct_cli_code() {
+        assert_eq!(
+            map_import_error(ImportErrorV1::AllocationFailure, "import").code,
+            "allocation"
+        );
+        assert_eq!(
+            map_import_error(ImportErrorV1::InvalidRocprofJson, "import").code,
+            "import"
+        );
+    }
 }

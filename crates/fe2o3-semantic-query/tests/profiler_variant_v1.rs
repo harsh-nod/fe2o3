@@ -11,6 +11,12 @@ const COUNTERS: &[u8] = include_bytes!(
 const PC_SAMPLES: &[u8] = include_bytes!(
     "../../fe2o3-semantic-import/tests/fixtures/rocprofv3-1.1-stochastic-pc-sampling.json"
 );
+const STRICT_ROCPROF_DISPATCH_JSON: &[u8] = include_bytes!(
+    "../../fe2o3-semantic-import/tests/fixtures/rocprofv3-installed-97f5574-kernel-dispatch-schema.json"
+);
+const TEST_OPAQUE_AGENT_HANDLE: u64 = 7_001;
+const TEST_SECOND_OPAQUE_AGENT_HANDLE: u64 = 7_002;
+const TEST_ABSOLUTE_KFD_NODE: u64 = 17;
 
 const ELF_HEADER_BYTES: usize = 64;
 const SECTION_HEADER_BYTES: usize = 64;
@@ -40,12 +46,12 @@ fn content(byte: u8) -> ContentIdentityRecordV1 {
     }
 }
 
-fn environment(agent: u64) -> ProfilerEnvironmentBindingV4 {
+fn environment(absolute_node: u64) -> ProfilerEnvironmentBindingV4 {
     environment_with_claims(
         content(10),
         content(11),
         content(12),
-        vec![(agent, content(13))],
+        vec![(absolute_node, content(13))],
     )
 }
 
@@ -74,7 +80,7 @@ fn environment_with_claims(
 fn binding(
     artifact: &[u8],
     kernel_ir: u8,
-    agent: u64,
+    absolute_node: u64,
 ) -> (ProfilerDispatchBindingV4, RocprofCaptureBindingV1) {
     let capture = RocprofCaptureBindingV1 {
         kernel_ir_claim: KernelIrIdentityClaimV1::canonical_v7_claim(opaque(kernel_ir), 97)
@@ -89,7 +95,7 @@ fn binding(
     };
     (
         ProfilerDispatchBindingV4 {
-            environment: environment(agent),
+            environment: environment(absolute_node),
             kernel_ir_claim: capture.kernel_ir_claim,
             artifact: capture.artifact,
             source_map: capture.source_map,
@@ -99,86 +105,126 @@ fn binding(
     )
 }
 
+fn strict_dispatch_document(
+    first_end: u64,
+    second_end: u64,
+    opaque_handle: u64,
+    absolute_node: u64,
+) -> JsonValue {
+    assert_ne!(opaque_handle, absolute_node);
+    let mut document: JsonValue = serde_json::from_slice(STRICT_ROCPROF_DISPATCH_JSON).unwrap();
+    let process = &mut document["rocprofiler-sdk-tool"][0];
+    process["metadata"]["pid"] = 7.into();
+    process["agents"][0]["id"]["handle"] = opaque_handle.into();
+    process["agents"][0]["node_id"] = absolute_node.into();
+    let mut first = process["buffer_records"]["kernel_dispatch"][0].clone();
+    first["start_timestamp"] = 100.into();
+    first["end_timestamp"] = first_end.into();
+    first["dispatch_info"]["agent_id"]["handle"] = opaque_handle.into();
+    first["dispatch_info"]["dispatch_id"] = 1.into();
+    first["dispatch_info"]["workgroup_size"] = serde_json::json!({"x": 64, "y": 1, "z": 1});
+    first["dispatch_info"]["grid_size"] = serde_json::json!({"x": 256, "y": 1, "z": 1});
+    let mut second = first.clone();
+    second["start_timestamp"] = 200.into();
+    second["end_timestamp"] = second_end.into();
+    second["dispatch_info"]["dispatch_id"] = 2.into();
+    second["dispatch_info"]["workgroup_size"] = serde_json::json!({"x": 32, "y": 1, "z": 1});
+    second["dispatch_info"]["grid_size"] = serde_json::json!({"x": 128, "y": 1, "z": 1});
+    process["buffer_records"]["kernel_dispatch"] = JsonValue::Array(vec![first, second]);
+    document
+}
+
 fn dispatch_source(first_end: u64, second_end: u64) -> Vec<u8> {
-    serde_json::to_vec(&serde_json::json!({
-        "rocprofiler-sdk-tool": [{
-            "metadata": {"pid": 7},
-            "buffer_records": {
-                "kernel_dispatch": [
-                    {
-                        "start_timestamp": 100,
-                        "end_timestamp": first_end,
-                        "dispatch_info": {
-                            "agent_id": {"handle": 17},
-                            "dispatch_id": 1,
-                            "workgroup_size": {"x": 64, "y": 1, "z": 1},
-                            "grid_size": {"x": 256, "y": 1, "z": 1}
-                        }
-                    },
-                    {
-                        "start_timestamp": 200,
-                        "end_timestamp": second_end,
-                        "dispatch_info": {
-                            "agent_id": {"handle": 17},
-                            "dispatch_id": 2,
-                            "workgroup_size": {"x": 32, "y": 1, "z": 1},
-                            "grid_size": {"x": 128, "y": 1, "z": 1}
-                        }
-                    }
-                ]
-            },
-            "callback_records": {},
-            "counters": []
-        }]
-    }))
+    serde_json::to_vec(&strict_dispatch_document(
+        first_end,
+        second_end,
+        TEST_OPAQUE_AGENT_HANDLE,
+        TEST_ABSOLUTE_KFD_NODE,
+    ))
     .unwrap()
 }
 
-fn dispatch_source_agents(first_agent: u64, second_agent: u64) -> Vec<u8> {
-    let mut source: JsonValue = serde_json::from_slice(&dispatch_source(140, 260)).unwrap();
-    let dispatches = source["rocprofiler-sdk-tool"][0]["buffer_records"]["kernel_dispatch"]
+fn dispatch_source_agents(first_node: u64, second_node: u64) -> Vec<u8> {
+    let mut source = strict_dispatch_document(140, 260, TEST_OPAQUE_AGENT_HANDLE, first_node);
+    let process = &mut source["rocprofiler-sdk-tool"][0];
+    let mut second_agent = process["agents"][0].clone();
+    second_agent["id"]["handle"] = TEST_SECOND_OPAQUE_AGENT_HANDLE.into();
+    second_agent["node_id"] = second_node.into();
+    second_agent["gpu_id"] = 43.into();
+    process["agents"] = JsonValue::Array(vec![process["agents"][0].clone(), second_agent]);
+    let dispatches = process["buffer_records"]["kernel_dispatch"]
         .as_array_mut()
         .unwrap();
-    dispatches[0]["dispatch_info"]["agent_id"]["handle"] = first_agent.into();
-    dispatches[1]["dispatch_info"]["agent_id"]["handle"] = second_agent.into();
+    dispatches[0]["dispatch_info"]["agent_id"]["handle"] = TEST_OPAQUE_AGENT_HANDLE.into();
+    dispatches[1]["dispatch_info"]["agent_id"]["handle"] = TEST_SECOND_OPAQUE_AGENT_HANDLE.into();
     serde_json::to_vec(&source).unwrap()
 }
 
 fn selector_mismatch_source() -> Vec<u8> {
     let mut source: JsonValue = serde_json::from_slice(&dispatch_source(140, 260)).unwrap();
-    let second = source["rocprofiler-sdk-tool"][0]["buffer_records"]["kernel_dispatch"]
+    let mut second_process = source["rocprofiler-sdk-tool"][0].clone();
+    let second = second_process["buffer_records"]["kernel_dispatch"]
         .as_array_mut()
         .unwrap()
         .pop()
         .unwrap();
+    source["rocprofiler-sdk-tool"][0]["buffer_records"]["kernel_dispatch"]
+        .as_array_mut()
+        .unwrap()
+        .pop();
+    second_process["metadata"]["pid"] = 8.into();
+    second_process["buffer_records"]["kernel_dispatch"] = JsonValue::Array(vec![second]);
     source["rocprofiler-sdk-tool"]
         .as_array_mut()
         .unwrap()
-        .push(serde_json::json!({
-            "metadata": {"pid": 8},
-            "buffer_records": {"kernel_dispatch": [second]},
-            "callback_records": {},
-            "counters": []
-        }));
+        .push(second_process);
     serde_json::to_vec(&source).unwrap()
 }
 
 fn combined_counter_source(first_end: u64, second_end: u64, last_value: f64) -> Vec<u8> {
-    let mut source: JsonValue = serde_json::from_slice(COUNTERS).unwrap();
-    attach_dispatch_records(&mut source, first_end, second_end);
+    combined_counter_source_for_agent(
+        first_end,
+        second_end,
+        last_value,
+        TEST_OPAQUE_AGENT_HANDLE,
+        TEST_ABSOLUTE_KFD_NODE,
+    )
+}
+
+fn combined_counter_source_for_agent(
+    first_end: u64,
+    second_end: u64,
+    last_value: f64,
+    opaque_handle: u64,
+    absolute_node: u64,
+) -> Vec<u8> {
+    let counters: JsonValue = serde_json::from_slice(COUNTERS).unwrap();
+    let mut source = strict_dispatch_document(first_end, second_end, opaque_handle, absolute_node);
+    source["rocprofiler-sdk-tool"][0]["callback_records"]["counter_collection"] =
+        counters["rocprofiler-sdk-tool"][0]["callback_records"]["counter_collection"].clone();
+    source["rocprofiler-sdk-tool"][0]["counters"] =
+        counters["rocprofiler-sdk-tool"][0]["counters"].clone();
+    for counter in source["rocprofiler-sdk-tool"][0]["counters"]
+        .as_array_mut()
+        .unwrap()
+    {
+        counter["agent_id"]["handle"] = opaque_handle.into();
+    }
     let collections = source["rocprofiler-sdk-tool"][0]["callback_records"]["counter_collection"]
         .as_array_mut()
         .unwrap();
-    collections[0]["dispatch_data"]["end_timestamp"] = first_end.into();
-    collections[1]["dispatch_data"]["end_timestamp"] = second_end.into();
+    for (collection, end_timestamp) in collections.iter_mut().zip([first_end, second_end]) {
+        collection["dispatch_data"]["end_timestamp"] = end_timestamp.into();
+        collection["dispatch_data"]["dispatch_info"]["agent_id"]["handle"] = opaque_handle.into();
+    }
     collections[1]["records"][0]["value"] = JsonValue::from(last_value);
     serde_json::to_vec(&source).unwrap()
 }
 
 fn combined_counter_source_with_count(count: usize, value: f64) -> Vec<u8> {
     assert!(count >= 2);
-    let mut source: JsonValue = serde_json::from_slice(COUNTERS).unwrap();
-    attach_dispatch_records(&mut source, 140, 260);
+    let mut source: JsonValue =
+        serde_json::from_slice(&combined_counter_source(140, 260, value)).unwrap();
     let collections = source["rocprofiler-sdk-tool"][0]["callback_records"]["counter_collection"]
         .as_array_mut()
         .unwrap();
@@ -205,11 +251,31 @@ fn with_counter_name(source: Vec<u8>, name: &str) -> Vec<u8> {
     serde_json::to_vec(&source).unwrap()
 }
 
-fn attach_dispatch_records(source: &mut JsonValue, first_end: u64, second_end: u64) {
-    let dispatch: JsonValue =
-        serde_json::from_slice(&dispatch_source(first_end, second_end)).unwrap();
-    source["rocprofiler-sdk-tool"][0]["buffer_records"]["kernel_dispatch"] =
-        dispatch["rocprofiler-sdk-tool"][0]["buffer_records"]["kernel_dispatch"].clone();
+fn pc_source(absolute_node: u64) -> Vec<u8> {
+    let opaque_handle = absolute_node.checked_add(1_000_000).unwrap();
+    let samples: JsonValue = serde_json::from_slice(PC_SAMPLES).unwrap();
+    let sample_process = &samples["rocprofiler-sdk-tool"][0];
+    let sample_dispatches = sample_process["buffer_records"]["kernel_dispatch"]
+        .as_array()
+        .unwrap();
+    assert_eq!(sample_dispatches.len(), 2);
+    let mut source = strict_dispatch_document(1, 2, opaque_handle, absolute_node);
+    let process = &mut source["rocprofiler-sdk-tool"][0];
+    let dispatches = process["buffer_records"]["kernel_dispatch"]
+        .as_array_mut()
+        .unwrap();
+    for (dispatch, sample) in dispatches.iter_mut().zip(sample_dispatches) {
+        dispatch["start_timestamp"] = sample["start_timestamp"].clone();
+        dispatch["end_timestamp"] = sample["end_timestamp"].clone();
+        dispatch["dispatch_info"]["agent_id"]["handle"] = opaque_handle.into();
+        for field in ["dispatch_id", "workgroup_size", "grid_size"] {
+            dispatch["dispatch_info"][field] = sample["dispatch_info"][field].clone();
+        }
+    }
+    for field in ["pc_sample_host_trap", "pc_sample_stochastic"] {
+        process["buffer_records"][field] = sample_process["buffer_records"][field].clone();
+    }
+    serde_json::to_vec(&source).unwrap()
 }
 
 fn duplicate_envelope_counter_source(reverse_collections: bool) -> Vec<u8> {
@@ -255,8 +321,8 @@ fn counter_dispatch_id_source(collection_ids: [u64; 2], kernel_ids: [u64; 2]) ->
     serde_json::to_vec(&source).unwrap()
 }
 
-fn bundle(source: &[u8], artifact: &[u8], kernel_ir: u8, agent: u64) -> Vec<u8> {
-    let (binding, _) = binding(artifact, kernel_ir, agent);
+fn bundle(source: &[u8], artifact: &[u8], kernel_ir: u8, absolute_node: u64) -> Vec<u8> {
+    let (binding, _) = binding(artifact, kernel_ir, absolute_node);
     bundle_with_binding(source, binding)
 }
 
@@ -266,7 +332,7 @@ fn bundle_with_environment(
     kernel_ir: u8,
     environment: ProfilerEnvironmentBindingV4,
 ) -> Vec<u8> {
-    let (mut binding, _) = binding(artifact, kernel_ir, 17);
+    let (mut binding, _) = binding(artifact, kernel_ir, TEST_ABSOLUTE_KFD_NODE);
     binding.environment = environment;
     bundle_with_binding(source, binding)
 }
@@ -277,7 +343,7 @@ fn bundle_with_binding(source: &[u8], binding: ProfilerDispatchBindingV4) -> Vec
 }
 
 fn counters(source: &[u8], artifact: &[u8], kernel_ir: u8) -> Vec<u8> {
-    let (_, binding) = binding(artifact, kernel_ir, 17);
+    let (_, binding) = binding(artifact, kernel_ir, TEST_ABSOLUTE_KFD_NODE);
     encode_counter_capture_v2(
         &import_rocprofv3_counter_capture_v2(source, binding, ImportLimitsV1::default()).unwrap(),
     )
@@ -651,8 +717,8 @@ fn resealed_normalized_or_raw_source_substitution_fails_admission() {
             &changed_bundle,
             ImportLimitsV1::default(),
         ),
-        Err(RocprofRawSourceRelationErrorV1::Source(
-            ImportErrorV1::InvalidRocprofJson
+        Err(RocprofRawSourceRelationErrorV1::ProfilerBundle(
+            ProfilerBundleErrorV4::InvalidRocprofJson
         ))
     ));
     treatment.bundle = encode_profiler_bundle_v4(&changed_bundle).unwrap();
@@ -1055,13 +1121,14 @@ fn missing_stable_device_identity_is_rejected_before_compatibility_classificatio
 fn pc_evidence_is_rebound_but_cross_artifact_localization_stays_unavailable() {
     let artifact = hsaco(9, 0);
     let (profiler_binding, capture_binding) = binding(&artifact, 4, 18_217);
+    let source = pc_source(18_217);
     let bundle = encode_profiler_bundle_v4(
-        &import_rocprofv3_json_profiler_bundle_v4(PC_SAMPLES, profiler_binding.clone()).unwrap(),
+        &import_rocprofv3_json_profiler_bundle_v4(&source, profiler_binding.clone()).unwrap(),
     )
     .unwrap();
     let pc = encode_pc_sample_capture_v3(
         &import_rocprofv3_pc_sample_capture_v3(
-            PC_SAMPLES,
+            &source,
             RocprofPcSampleCaptureBindingV3 {
                 capture: capture_binding,
                 sampling_interval_cycles: 1_048_576,
@@ -1073,7 +1140,7 @@ fn pc_evidence_is_rebound_but_cross_artifact_localization_stays_unavailable() {
     .unwrap();
     let manifest = build_profiler_variant_manifest_v1(ProfilerVariantManifestInputV1 {
         semantic_workload: b"pc-workload",
-        raw_profiler_source: PC_SAMPLES,
+        raw_profiler_source: &source,
         bundle: &bundle,
         schedule: b"schedule",
         artifact: &artifact,
@@ -1086,7 +1153,7 @@ fn pc_evidence_is_rebound_but_cross_artifact_localization_stays_unavailable() {
     let treatment = ProfilerVariantTreatmentInputV1 {
         manifest: &manifest,
         semantic_workload: b"pc-workload",
-        raw_profiler_source: PC_SAMPLES,
+        raw_profiler_source: &source,
         bundle: &bundle,
         schedule: b"schedule",
         artifact: &artifact,
@@ -1104,18 +1171,17 @@ fn pc_evidence_is_rebound_but_cross_artifact_localization_stays_unavailable() {
     assert_eq!(unavailable.origin, TruthOriginV1::Unavailable);
     assert_eq!(unavailable.evidence.len(), 2);
 
-    let changed_source = String::from_utf8(PC_SAMPLES.to_vec()).unwrap().replace(
-        "\"workgroup_size\":{\"x\":256,\"y\":1,\"z\":1}",
-        "\"workgroup_size\":{\"x\":128,\"y\":1,\"z\":1}",
-    );
+    let mut changed_source: JsonValue = serde_json::from_slice(&source).unwrap();
+    changed_source["rocprofiler-sdk-tool"][0]["buffer_records"]["kernel_dispatch"][0]["dispatch_info"]
+        ["workgroup_size"]["x"] = 128.into();
+    let changed_source = serde_json::to_vec(&changed_source).unwrap();
     let changed_bundle = encode_profiler_bundle_v4(
-        &import_rocprofv3_json_profiler_bundle_v4(changed_source.as_bytes(), profiler_binding)
-            .unwrap(),
+        &import_rocprofv3_json_profiler_bundle_v4(&changed_source, profiler_binding).unwrap(),
     )
     .unwrap();
     let changed_manifest = build_profiler_variant_manifest_v1(ProfilerVariantManifestInputV1 {
         semantic_workload: b"pc-workload",
-        raw_profiler_source: changed_source.as_bytes(),
+        raw_profiler_source: &changed_source,
         bundle: &changed_bundle,
         schedule: b"schedule",
         artifact: &artifact,
@@ -1127,7 +1193,7 @@ fn pc_evidence_is_rebound_but_cross_artifact_localization_stays_unavailable() {
     .unwrap();
     let hostile = ProfilerVariantTreatmentInputV1 {
         manifest: &changed_manifest,
-        raw_profiler_source: changed_source.as_bytes(),
+        raw_profiler_source: &changed_source,
         bundle: &changed_bundle,
         ..treatment
     };
@@ -1145,10 +1211,8 @@ fn same_device_ordinal_with_changed_agent_cannot_bind_counter_or_pc_evidence() {
     let artifact = hsaco(9, 0);
     let counter_source = combined_counter_source(140, 260, 9.0);
     let counter_capture = counters(&counter_source, &artifact, 4);
-    let changed_counter_source = String::from_utf8(counter_source)
-        .unwrap()
-        .replace("\"handle\":17", "\"handle\":19")
-        .into_bytes();
+    let changed_counter_source =
+        combined_counter_source_for_agent(140, 260, 9.0, TEST_SECOND_OPAQUE_AGENT_HANDLE, 19);
     let counter_bundle = bundle(&changed_counter_source, &artifact, 4, 19);
     let counter_manifest = build_profiler_variant_manifest_v1(ProfilerVariantManifestInputV1 {
         semantic_workload: b"changed-counter-agent",
@@ -1188,9 +1252,10 @@ fn same_device_ordinal_with_changed_agent_cannot_bind_counter_or_pc_evidence() {
     }));
 
     let (_, capture_binding) = binding(&artifact, 4, 18_217);
+    let original_pc_source = pc_source(18_217);
     let pc_capture = encode_pc_sample_capture_v3(
         &import_rocprofv3_pc_sample_capture_v3(
-            PC_SAMPLES,
+            &original_pc_source,
             RocprofPcSampleCaptureBindingV3 {
                 capture: capture_binding,
                 sampling_interval_cycles: 1_048_576,
@@ -1200,10 +1265,7 @@ fn same_device_ordinal_with_changed_agent_cannot_bind_counter_or_pc_evidence() {
         .unwrap(),
     )
     .unwrap();
-    let changed_pc_source = String::from_utf8(PC_SAMPLES.to_vec())
-        .unwrap()
-        .replace("\"handle\":18217", "\"handle\":18219")
-        .into_bytes();
+    let changed_pc_source = pc_source(18_219);
     let pc_bundle = bundle(&changed_pc_source, &artifact, 4, 18_219);
     let pc_manifest = build_profiler_variant_manifest_v1(ProfilerVariantManifestInputV1 {
         semantic_workload: b"changed-pc-agent",

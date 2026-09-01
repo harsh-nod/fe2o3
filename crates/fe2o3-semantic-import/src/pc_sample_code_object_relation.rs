@@ -12,10 +12,11 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     ArtifactClaimV1, BoundedVec, CaptureIdentityV1, ContentIdentityRecordV1, ContentSchemeV1,
-    IdentityFactV1, ImportLimitsV1, MAX_ROCPROF_PROCESSES_V1, PcSampleCaptureErrorV3,
-    RocprofCaptureBindingV1, RocprofPcBufferRecords, RocprofPcSampleCaptureBindingV3,
-    SemanticPcSampleCaptureV3, TruthOriginV1, decode_pc_sample_capture_v3,
-    encode_pc_sample_capture_v3, import_rocprofv3_pc_sample_capture_v3,
+    IdentityFactV1, ImportErrorV1, ImportLimitsV1, MAX_ROCPROF_PROCESSES_V1,
+    PcSampleCaptureErrorV3, RocprofCaptureBindingV1, RocprofPcBufferRecords,
+    RocprofPcSampleCaptureBindingV3, SemanticPcSampleCaptureV3, TruthOriginV1,
+    decode_pc_sample_capture_v3, encode_pc_sample_capture_v3,
+    import_rocprofv3_pc_sample_capture_v3, parse_rocprof_json_document_v1,
     pc_sample_capture_content_identity_v3,
 };
 
@@ -549,8 +550,7 @@ pub fn admit_rocprofv3_pc_sample_code_object_relation_v1(
         return Err(PcSampleCodeObjectRelationErrorV1::InvalidHsacoArtifact);
     }
     validate_capture_artifact_wave_widths(&capture, &inspected)?;
-    let document: RocprofRelationDocumentV1 = serde_json::from_slice(source)
-        .map_err(|_| PcSampleCodeObjectRelationErrorV1::InvalidRocprofJson)?;
+    let document = parse_relation_document_v1(source)?;
     reject_overlapping_loads(&document)?;
 
     let keys = capture_code_object_keys(&document, &capture)?;
@@ -697,8 +697,7 @@ pub fn admit_rocprofv3_pc_sample_code_object_relation_v1(
 fn validate_relation_source_catalogs(
     source: &[u8],
 ) -> Result<(), PcSampleCodeObjectRelationErrorV1> {
-    let catalog: RocprofRelationCatalogDocumentV1 = serde_json::from_slice(source)
-        .map_err(|_| PcSampleCodeObjectRelationErrorV1::InvalidRocprofJson)?;
+    let catalog = parse_relation_catalog_document_v1(source)?;
     let (loads, symbols) = catalog
         .processes
         .iter()
@@ -716,6 +715,22 @@ fn validate_relation_source_catalogs(
         return Err(PcSampleCodeObjectRelationErrorV1::TooManyKernelSymbols);
     }
     Ok(())
+}
+
+fn parse_relation_document_v1(
+    source: &[u8],
+) -> Result<RocprofRelationDocumentV1, PcSampleCodeObjectRelationErrorV1> {
+    parse_rocprof_json_document_v1(source).map_err(|error| {
+        map_rocprof_json_error_v1(error, PcSampleCodeObjectRelationErrorV1::InvalidRocprofJson)
+    })
+}
+
+fn parse_relation_catalog_document_v1(
+    source: &[u8],
+) -> Result<RocprofRelationCatalogDocumentV1, PcSampleCodeObjectRelationErrorV1> {
+    parse_rocprof_json_document_v1(source).map_err(|error| {
+        map_rocprof_json_error_v1(error, PcSampleCodeObjectRelationErrorV1::InvalidRocprofJson)
+    })
 }
 
 fn replay_exact_capture(
@@ -795,7 +810,12 @@ fn replay_exact_capture(
         },
         limits,
     )
-    .map_err(|_| PcSampleCodeObjectRelationErrorV1::CaptureSourceMismatch)?;
+    .map_err(|error| {
+        map_rocprof_json_error_v1(
+            error,
+            PcSampleCodeObjectRelationErrorV1::CaptureSourceMismatch,
+        )
+    })?;
     let replay_bytes =
         encode_pc_sample_capture_v3(&replay).map_err(PcSampleCodeObjectRelationErrorV1::Capture)?;
     if replay_bytes != capture_bytes {
@@ -1349,8 +1369,10 @@ pub fn decode_pc_sample_code_object_relation_v1(
     if bytes.is_empty() || len > MAX_PC_SAMPLE_CODE_OBJECT_RELATION_BYTES_V1 {
         return Err(PcSampleCodeObjectRelationErrorV1::RelationTooLarge);
     }
-    let relation: SemanticPcSampleCodeObjectRelationV1 =
-        serde_json::from_slice(bytes).map_err(|_| PcSampleCodeObjectRelationErrorV1::JsonDecode)?;
+    let relation: SemanticPcSampleCodeObjectRelationV1 = parse_rocprof_json_document_v1(bytes)
+        .map_err(|error| {
+            map_rocprof_json_error_v1(error, PcSampleCodeObjectRelationErrorV1::JsonDecode)
+        })?;
     relation.validate_against_capture(capture_bytes)?;
     if serde_json::to_vec(&relation).map_err(|_| PcSampleCodeObjectRelationErrorV1::JsonEncode)?
         != bytes
@@ -1358,6 +1380,16 @@ pub fn decode_pc_sample_code_object_relation_v1(
         return Err(PcSampleCodeObjectRelationErrorV1::NonCanonicalEncoding);
     }
     Ok(relation)
+}
+
+fn map_rocprof_json_error_v1(
+    error: ImportErrorV1,
+    invalid: PcSampleCodeObjectRelationErrorV1,
+) -> PcSampleCodeObjectRelationErrorV1 {
+    match error {
+        ImportErrorV1::AllocationFailure => PcSampleCodeObjectRelationErrorV1::AllocationFailure,
+        _ => invalid,
+    }
 }
 
 pub fn pc_sample_code_object_relation_content_identity_v1(
@@ -1427,6 +1459,66 @@ mod tests {
     use super::*;
     const SOURCE: &[u8] =
         include_bytes!("../tests/fixtures/rocprofv3-1.1-stochastic-pc-sampling.json");
+
+    fn with_injected_rocprof_json_allocation_failure_v1<T>(operation: impl FnOnce() -> T) -> T {
+        crate::INJECT_ROCPROF_JSON_ALLOCATION_FAILURE_V1.with(|inject| {
+            assert!(
+                inject
+                    .replace(Some(crate::RocprofJsonAllocationInjectionSiteV1::Any))
+                    .is_none(),
+                "nested allocation injection"
+            );
+        });
+        let result = operation();
+        crate::INJECT_ROCPROF_JSON_ALLOCATION_FAILURE_V1.with(|inject| inject.set(None));
+        result
+    }
+
+    fn allocation_test_capture(source: &[u8], artifact: &[u8]) -> Vec<u8> {
+        let artifact_digest: [u8; 32] = Sha256::digest(artifact).into();
+        let capture = import_rocprofv3_pc_sample_capture_v3(
+            source,
+            RocprofPcSampleCaptureBindingV3 {
+                capture: RocprofCaptureBindingV1 {
+                    kernel_ir_claim: KernelIrIdentityClaimV1::canonical_v7_claim(
+                        OpaqueIdentityV1::new([1; 32]).unwrap(),
+                        97,
+                    )
+                    .unwrap(),
+                    artifact: Some(ArtifactClaimV1 {
+                        identity: OpaqueIdentityV1::new(artifact_digest).unwrap(),
+                        canonical_len: artifact.len() as u64,
+                        format_version: 1,
+                    }),
+                    source_map: None,
+                    wave_width: WaveWidthV1::Wave64,
+                },
+                sampling_interval_cycles: 1_048_576,
+            },
+            ImportLimitsV1::default(),
+        )
+        .unwrap();
+        encode_pc_sample_capture_v3(&capture).unwrap()
+    }
+
+    fn unsupported_relation_bytes() -> Vec<u8> {
+        let identity = ContentIdentityRecordV1 {
+            scheme: ContentSchemeV1::DomainSeparatedSha256,
+            format_version: 1,
+            digest: CaptureIdentityV1::new([1; 32]).unwrap(),
+            canonical_len: 1,
+        };
+        serde_json::to_vec(&SemanticPcSampleCodeObjectRelationV1 {
+            schema_version: PC_SAMPLE_CODE_OBJECT_RELATION_SCHEMA_VERSION_V1 + 1,
+            source_identity: identity,
+            capture_identity: identity,
+            artifact_identity: identity,
+            records: Vec::new(),
+            symbol_domains: Vec::new(),
+            claims: PcSampleCodeObjectRelationClaimsV1::NONE,
+        })
+        .unwrap()
+    }
 
     fn structured_source() -> Vec<u8> {
         let mut value: serde_json::Value = serde_json::from_slice(SOURCE).unwrap();
@@ -1528,6 +1620,76 @@ mod tests {
         assert!(matches!(
             validate_relation_source_catalogs(&source),
             Err(PcSampleCodeObjectRelationErrorV1::TooManyKernelSymbols)
+        ));
+    }
+
+    #[test]
+    fn public_raw_source_admission_preserves_allocation_failure_and_recovers_same_thread() {
+        let source = structured_source();
+        let artifact = b"not an ELF code object";
+        let capture_bytes = allocation_test_capture(&source, artifact);
+
+        assert!(matches!(
+            with_injected_rocprof_json_allocation_failure_v1(|| {
+                admit_rocprofv3_pc_sample_code_object_relation_v1(
+                    &source,
+                    &capture_bytes,
+                    artifact,
+                    ImportLimitsV1::default(),
+                )
+            }),
+            Err(PcSampleCodeObjectRelationErrorV1::AllocationFailure)
+        ));
+        crate::ROCPROF_JSON_PARSE_FAILURE_V1.with(|state| assert_eq!(state.get(), None));
+        assert!(matches!(
+            admit_rocprofv3_pc_sample_code_object_relation_v1(
+                &source,
+                &capture_bytes,
+                artifact,
+                ImportLimitsV1::default(),
+            ),
+            Err(PcSampleCodeObjectRelationErrorV1::InvalidHsacoArtifact)
+        ));
+    }
+
+    #[test]
+    fn direct_relation_source_parsers_clear_allocation_failure_for_same_thread_reuse() {
+        let source = structured_source();
+
+        assert!(matches!(
+            with_injected_rocprof_json_allocation_failure_v1(|| {
+                validate_relation_source_catalogs(&source)
+            }),
+            Err(PcSampleCodeObjectRelationErrorV1::AllocationFailure)
+        ));
+        crate::ROCPROF_JSON_PARSE_FAILURE_V1.with(|state| assert_eq!(state.get(), None));
+        validate_relation_source_catalogs(&source).unwrap();
+
+        assert!(matches!(
+            with_injected_rocprof_json_allocation_failure_v1(|| {
+                parse_relation_document_v1(&source)
+            }),
+            Err(PcSampleCodeObjectRelationErrorV1::AllocationFailure)
+        ));
+        crate::ROCPROF_JSON_PARSE_FAILURE_V1.with(|state| assert_eq!(state.get(), None));
+        parse_relation_document_v1(&source).unwrap();
+    }
+
+    #[test]
+    fn public_relation_decode_preserves_allocation_failure_and_recovers_same_thread() {
+        let bytes = unsupported_relation_bytes();
+
+        assert!(matches!(
+            with_injected_rocprof_json_allocation_failure_v1(|| {
+                decode_pc_sample_code_object_relation_v1(&bytes, b"unused capture")
+            }),
+            Err(PcSampleCodeObjectRelationErrorV1::AllocationFailure)
+        ));
+        crate::ROCPROF_JSON_PARSE_FAILURE_V1.with(|state| assert_eq!(state.get(), None));
+        assert!(matches!(
+            decode_pc_sample_code_object_relation_v1(&bytes, b"unused capture"),
+            Err(PcSampleCodeObjectRelationErrorV1::UnsupportedVersion(version))
+                if version == PC_SAMPLE_CODE_OBJECT_RELATION_SCHEMA_VERSION_V1 + 1
         ));
     }
 }

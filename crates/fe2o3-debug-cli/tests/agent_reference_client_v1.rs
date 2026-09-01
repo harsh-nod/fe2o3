@@ -14,6 +14,11 @@ use sha2::{Digest, Sha256};
 
 const ELF_HEADER_BYTES: usize = 64;
 const SECTION_HEADER_BYTES: usize = 64;
+const STRICT_ROCPROF_DISPATCH_JSON: &[u8] = include_bytes!(
+    "../../fe2o3-semantic-import/tests/fixtures/rocprofv3-installed-97f5574-kernel-dispatch-schema.json"
+);
+const TEST_OPAQUE_AGENT_HANDLE: u64 = 7_001;
+const TEST_ABSOLUTE_KFD_NODE: u64 = 17;
 
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -135,36 +140,27 @@ fn opaque(byte: u8) -> OpaqueIdentityV1 {
 }
 
 fn source(first_end: u64, second_end: u64) -> Vec<u8> {
-    serde_json::to_vec(&json!({
-        "rocprofiler-sdk-tool": [{
-            "metadata": {"pid": 7},
-            "buffer_records": {"kernel_dispatch": [
-                {
-                    "start_timestamp": 100,
-                    "end_timestamp": first_end,
-                    "dispatch_info": {
-                        "agent_id": {"handle": 17},
-                        "dispatch_id": 1,
-                        "workgroup_size": {"x": 64, "y": 1, "z": 1},
-                        "grid_size": {"x": 256, "y": 1, "z": 1}
-                    }
-                },
-                {
-                    "start_timestamp": 200,
-                    "end_timestamp": second_end,
-                    "dispatch_info": {
-                        "agent_id": {"handle": 17},
-                        "dispatch_id": 2,
-                        "workgroup_size": {"x": 32, "y": 1, "z": 1},
-                        "grid_size": {"x": 128, "y": 1, "z": 1}
-                    }
-                }
-            ]},
-            "callback_records": {},
-            "counters": []
-        }]
-    }))
-    .unwrap()
+    assert_ne!(TEST_OPAQUE_AGENT_HANDLE, TEST_ABSOLUTE_KFD_NODE);
+    let mut document: JsonValue = serde_json::from_slice(STRICT_ROCPROF_DISPATCH_JSON).unwrap();
+    let process = &mut document["rocprofiler-sdk-tool"][0];
+    process["metadata"]["pid"] = 7.into();
+    process["agents"][0]["id"]["handle"] = TEST_OPAQUE_AGENT_HANDLE.into();
+    process["agents"][0]["node_id"] = TEST_ABSOLUTE_KFD_NODE.into();
+    let mut first = process["buffer_records"]["kernel_dispatch"][0].clone();
+    first["start_timestamp"] = 100.into();
+    first["end_timestamp"] = first_end.into();
+    first["dispatch_info"]["agent_id"]["handle"] = TEST_OPAQUE_AGENT_HANDLE.into();
+    first["dispatch_info"]["dispatch_id"] = 1.into();
+    first["dispatch_info"]["workgroup_size"] = json!({"x": 64, "y": 1, "z": 1});
+    first["dispatch_info"]["grid_size"] = json!({"x": 256, "y": 1, "z": 1});
+    let mut second = first.clone();
+    second["start_timestamp"] = 200.into();
+    second["end_timestamp"] = second_end.into();
+    second["dispatch_info"]["dispatch_id"] = 2.into();
+    second["dispatch_info"]["workgroup_size"] = json!({"x": 32, "y": 1, "z": 1});
+    second["dispatch_info"]["grid_size"] = json!({"x": 128, "y": 1, "z": 1});
+    process["buffer_records"]["kernel_dispatch"] = JsonValue::Array(vec![first, second]);
+    serde_json::to_vec(&document).unwrap()
 }
 
 fn profiler_binding(artifact: &[u8], kernel_ir: u8) -> ProfilerDispatchBindingV4 {
@@ -174,7 +170,7 @@ fn profiler_binding(artifact: &[u8], kernel_ir: u8) -> ProfilerDispatchBindingV4
             collector_tool: content(11),
             collector_configuration: content(12),
             stable_device_bindings: vec![ProfilerDeviceBindingV4 {
-                source_agent_id: 17,
+                source_agent_id: TEST_ABSOLUTE_KFD_NODE,
                 stable_identity: content(13),
             }],
         },

@@ -55,13 +55,15 @@ fn run() -> Result<Vec<u8>, &'static str> {
                 wave_width: request.wave_width.ok_or("wave_width")?,
             };
             if request.command == CommandV4::DispatchJson {
-                import_rocprofv3_json_profiler_bundle_v4(&source, binding)
+                let projection = project_rocprofv3_json_dispatch_agents_v4(&source)
+                    .map_err(map_projection_error)?;
+                import_projected_rocprofv3_json_profiler_bundle_v4(&source, &projection, binding)
             } else {
                 import_rocprofv3_csv_profiler_bundle_v4(&source, binding)
             }
         }
     }
-    .map_err(|_| "import")?;
+    .map_err(map_import_error)?;
     encode_profiler_bundle_v4(&bundle).map_err(|_| "encode")
 }
 
@@ -343,4 +345,39 @@ fn read_bounded() -> Result<Vec<u8>, &'static str> {
 fn fail(code: &'static str) -> ExitCode {
     let _ = writeln!(std::io::stderr().lock(), "{{\"error\":\"{code}\"}}");
     ExitCode::FAILURE
+}
+
+fn map_projection_error(error: ProfilerBundleErrorV4) -> &'static str {
+    match error {
+        ProfilerBundleErrorV4::AllocationFailure => "allocation",
+        _ => "projection",
+    }
+}
+
+fn map_import_error(error: ProfilerBundleErrorV4) -> &'static str {
+    match error {
+        ProfilerBundleErrorV4::AllocationFailure => "allocation",
+        _ => "import",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn allocation_error_has_a_stable_distinct_cli_code() {
+        assert_eq!(
+            map_projection_error(ProfilerBundleErrorV4::AllocationFailure),
+            "allocation"
+        );
+        assert_eq!(
+            map_import_error(ProfilerBundleErrorV4::AllocationFailure),
+            "allocation"
+        );
+        assert_eq!(
+            map_import_error(ProfilerBundleErrorV4::InvalidRocprofJson),
+            "import"
+        );
+    }
 }

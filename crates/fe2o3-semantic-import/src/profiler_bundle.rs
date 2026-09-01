@@ -4,6 +4,7 @@
 //! exact environment and collector claims. It references ATT/Compute Viewer
 //! artifacts but deliberately does not decode thread-trace payloads.
 
+use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
@@ -450,38 +451,21 @@ impl SemanticProfilerBundleV4 {
     }
 }
 
+/// Imports a raw rocprof JSON document through exact per-process agent
+/// projection. Stable-device bindings are keyed by projected absolute KFD node
+/// ID, never by an opaque process-local rocprof agent handle. The Bundle keeps
+/// raw source and normalized projection as distinct observed identities.
 pub fn import_rocprofv3_json_profiler_bundle_v4(
     source: &[u8],
     binding: ProfilerDispatchBindingV4,
 ) -> Result<SemanticProfilerBundleV4, ProfilerBundleErrorV4> {
-    validate_source(source)?;
-    validate_dispatch_json_protocol_v4(source)?;
-    validate_environment(&binding.environment)?;
-    let imported = import_rocprofv3_capture_with_agents_v1(
-        source,
-        RocprofCaptureBindingV1 {
-            kernel_ir_claim: binding.kernel_ir_claim,
-            artifact: binding.artifact,
-            source_map: binding.source_map,
-            wave_width: binding.wave_width,
-        },
-        ImportLimitsV1::default(),
-    )
-    .map_err(|_| ProfilerBundleErrorV4::InvalidRocprofJson)?;
-    let source = imported.capture.runs[0].source;
-    finish_dispatch_bundle(
-        ProfilerSourceKindV4::Rocprofv3KernelDispatchJson,
-        source,
-        source,
-        imported.capture,
-        imported.source_agent_ids,
-        binding.environment,
-    )
+    let projection = project_rocprofv3_json_dispatch_agents_v4(source)?;
+    import_projected_rocprofv3_json_profiler_bundle_v4(source, &projection, binding)
 }
 
-/// Imports a raw rocprof JSON document after exact per-process agent projection.
-/// The Bundle keeps the raw source and normalized projection as distinct
-/// observed identities and never treats the process-local handle as a KFD node.
+/// Imports raw rocprof JSON with a retained exact projection. The projection
+/// is rederived from `source` before use. Stable-device bindings are keyed by
+/// projected absolute KFD node ID, never by an opaque process-local handle.
 pub fn import_projected_rocprofv3_json_profiler_bundle_v4(
     source: &[u8],
     projection: &RocprofJsonDispatchProjectionV4,
@@ -503,11 +487,11 @@ pub fn import_projected_rocprofv3_json_profiler_bundle_v4(
         },
         ImportLimitsV1::default(),
     )
-    .map_err(|_| ProfilerBundleErrorV4::InvalidRocprofJson)?;
+    .map_err(map_dispatch_import_error_v4)?;
     let projection_identity = imported.capture.runs[0].source;
     finish_dispatch_bundle(
         ProfilerSourceKindV4::Rocprofv3KernelDispatchJson,
-        content_identity(PROFILER_SOURCE_JSON_DOMAIN_V4, 1, source)?,
+        rocprofv3_json_profiler_source_content_identity_v4(source)?,
         projection_identity,
         imported.capture,
         imported.source_agent_ids,
@@ -515,22 +499,21 @@ pub fn import_projected_rocprofv3_json_profiler_bundle_v4(
     )
 }
 
-fn validate_dispatch_json_protocol_v4(source: &[u8]) -> Result<(), ProfilerBundleErrorV4> {
-    let document: DispatchJsonDocumentV4 =
-        serde_json::from_slice(source).map_err(|_| ProfilerBundleErrorV4::InvalidRocprofJson)?;
-    if document.processes.is_empty() || document.processes.len() > MAX_ROCPROF_PROCESSES_V1 {
-        return Err(ProfilerBundleErrorV4::InvalidRocprofJson);
-    }
-    let _ = document.dialect()?;
-    Ok(())
+/// Exact Bundle V4 raw-source identity. This is intentionally distinct from
+/// the V1 rocprof source identity retained by Counter Capture V2 and PC Sample
+/// Capture V3 relations.
+pub fn rocprofv3_json_profiler_source_content_identity_v4(
+    source: &[u8],
+) -> Result<ContentIdentityRecordV1, ProfilerBundleErrorV4> {
+    validate_source(source)?;
+    content_identity(PROFILER_SOURCE_JSON_DOMAIN_V4, 1, source)
 }
 
 pub fn project_rocprofv3_json_dispatch_agents_v4(
     source: &[u8],
 ) -> Result<RocprofJsonDispatchProjectionV4, ProfilerBundleErrorV4> {
     validate_source(source)?;
-    let document: DispatchJsonDocumentV4 =
-        serde_json::from_slice(source).map_err(|_| ProfilerBundleErrorV4::InvalidRocprofJson)?;
+    let document = parse_dispatch_json_document_v4(source)?;
     if document.processes.is_empty() || document.processes.len() > MAX_ROCPROF_PROCESSES_V1 {
         return Err(ProfilerBundleErrorV4::InvalidRocprofJson);
     }
@@ -538,10 +521,10 @@ pub fn project_rocprofv3_json_dispatch_agents_v4(
     let mut projected_processes = Vec::new();
     bindings
         .try_reserve(document.processes.len())
-        .map_err(|_| ProfilerBundleErrorV4::SizeOverflow)?;
+        .map_err(|_| ProfilerBundleErrorV4::AllocationFailure)?;
     projected_processes
         .try_reserve(document.processes.len())
-        .map_err(|_| ProfilerBundleErrorV4::SizeOverflow)?;
+        .map_err(|_| ProfilerBundleErrorV4::AllocationFailure)?;
     let dialect = document.dialect()?;
     let mut process_ids = BTreeSet::new();
     for (process_index, process) in document.processes.into_iter().enumerate() {
@@ -591,7 +574,7 @@ pub fn project_rocprofv3_json_dispatch_agents_v4(
         let mut projected_dispatches = Vec::new();
         projected_dispatches
             .try_reserve(process.buffer_records.kernel_dispatch.len())
-            .map_err(|_| ProfilerBundleErrorV4::SizeOverflow)?;
+            .map_err(|_| ProfilerBundleErrorV4::AllocationFailure)?;
         for record in process.buffer_records.kernel_dispatch {
             let source_agent_id = record.dispatch_info.agent_id.handle;
             let binding = process_agents
@@ -685,6 +668,144 @@ struct DispatchJsonProjectionDimensionsV4 {
     z: u64,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DispatchJsonParseFailureV4 {
+    Allocation,
+}
+
+thread_local! {
+    static DISPATCH_JSON_PARSE_FAILURE_V4: Cell<Option<DispatchJsonParseFailureV4>> = const { Cell::new(None) };
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DispatchJsonAllocationInjectionSiteV4 {
+    Any,
+    StringArrayElement,
+    ObjectKey,
+}
+
+#[cfg(test)]
+thread_local! {
+    static INJECT_DISPATCH_JSON_ALLOCATION_FAILURE_V4: Cell<Option<DispatchJsonAllocationInjectionSiteV4>> = const { Cell::new(None) };
+}
+
+fn parse_dispatch_json_document_v4(
+    source: &[u8],
+) -> Result<DispatchJsonDocumentV4, ProfilerBundleErrorV4> {
+    DISPATCH_JSON_PARSE_FAILURE_V4.with(|state| {
+        let prior = state.replace(None);
+        let parsed = serde_json::from_slice(source);
+        let failure = state.replace(prior);
+        match (parsed, failure) {
+            (_, Some(DispatchJsonParseFailureV4::Allocation)) => {
+                Err(ProfilerBundleErrorV4::AllocationFailure)
+            }
+            (Ok(document), None) => Ok(document),
+            (Err(_), None) => Err(ProfilerBundleErrorV4::InvalidRocprofJson),
+        }
+    })
+}
+
+fn dispatch_json_allocation_error_v4<E: serde::de::Error>() -> E {
+    DISPATCH_JSON_PARSE_FAILURE_V4.with(|state| {
+        state.set(Some(DispatchJsonParseFailureV4::Allocation));
+    });
+    E::custom("rocprof dispatch JSON allocation failed")
+}
+
+fn reserve_dispatch_json_vec_v4<T, E: serde::de::Error>(
+    output: &mut Vec<T>,
+    additional: usize,
+) -> Result<(), E> {
+    #[cfg(test)]
+    if take_dispatch_json_allocation_injection_v4(DispatchJsonAllocationInjectionSiteV4::Any) {
+        return Err(dispatch_json_allocation_error_v4());
+    }
+    output
+        .try_reserve(additional)
+        .map_err(|_| dispatch_json_allocation_error_v4())
+}
+
+fn reserve_dispatch_json_string_v4<E: serde::de::Error>(
+    output: &mut String,
+    additional: usize,
+) -> Result<(), E> {
+    output
+        .try_reserve(additional)
+        .map_err(|_| dispatch_json_allocation_error_v4())
+}
+
+#[cfg(test)]
+fn take_dispatch_json_allocation_injection_v4(site: DispatchJsonAllocationInjectionSiteV4) -> bool {
+    INJECT_DISPATCH_JSON_ALLOCATION_FAILURE_V4.with(|inject| match inject.get() {
+        Some(DispatchJsonAllocationInjectionSiteV4::Any) => {
+            inject.set(None);
+            true
+        }
+        Some(expected) if expected == site => {
+            inject.set(None);
+            true
+        }
+        _ => false,
+    })
+}
+
+fn reserve_dispatch_json_string_array_element_v4<E: serde::de::Error>(
+    output: &mut String,
+    additional: usize,
+) -> Result<(), E> {
+    #[cfg(test)]
+    if take_dispatch_json_allocation_injection_v4(
+        DispatchJsonAllocationInjectionSiteV4::StringArrayElement,
+    ) {
+        return Err(dispatch_json_allocation_error_v4());
+    }
+    reserve_dispatch_json_string_v4(output, additional)
+}
+
+fn reserve_dispatch_json_object_key_v4<E: serde::de::Error>(
+    output: &mut String,
+    additional: usize,
+) -> Result<(), E> {
+    #[cfg(test)]
+    if take_dispatch_json_allocation_injection_v4(DispatchJsonAllocationInjectionSiteV4::ObjectKey)
+    {
+        return Err(dispatch_json_allocation_error_v4());
+    }
+    reserve_dispatch_json_string_v4(output, additional)
+}
+
+#[allow(dead_code)]
+enum PresentFieldV4<T> {
+    Absent,
+    Present(T),
+}
+
+impl<T> PresentFieldV4<T> {
+    const fn is_present(&self) -> bool {
+        matches!(self, Self::Present(_))
+    }
+}
+
+impl<T> Default for PresentFieldV4<T> {
+    fn default() -> Self {
+        Self::Absent
+    }
+}
+
+impl<'de, T> Deserialize<'de> for PresentFieldV4<T>
+where
+    T: Deserialize<'de>,
+{
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        T::deserialize(deserializer).map(Self::Present)
+    }
+}
+
 // This is the closed rocprofv3 dispatch protocol admitted by Bundle V4. Fields
 // emitted by the reviewed rocprofv3 schema but not projected into the bundle
 // are named explicitly and discarded. A new field therefore requires an
@@ -705,28 +826,28 @@ impl DispatchJsonDocumentV4 {
         let forward = self
             .processes
             .first()
-            .is_some_and(|process| process.buffer_records.hipfile_api.is_some());
+            .is_some_and(|process| process.buffer_records.hipfile_api.is_present());
         for process in &self.processes {
             if process.agents.iter().any(|agent| !agent.has_valid_shape()) {
                 return Err(ProfilerBundleErrorV4::InvalidRocprofJson);
             }
-            let buffer_is_forward = process.buffer_records.hipfile_api.is_some()
-                && process.buffer_records.kfd.is_some()
-                && process.buffer_records.hip_graph.is_some()
-                && process.buffer_records.rocshmem_api.is_some();
-            let buffer_is_installed = process.buffer_records.hipfile_api.is_none()
-                && process.buffer_records.kfd.is_none()
-                && process.buffer_records.hip_graph.is_none()
-                && process.buffer_records.rocshmem_api.is_none();
+            let buffer_is_forward = process.buffer_records.hipfile_api.is_present()
+                && process.buffer_records.kfd.is_present()
+                && process.buffer_records.hip_graph.is_present()
+                && process.buffer_records.rocshmem_api.is_present();
+            let buffer_is_installed = !process.buffer_records.hipfile_api.is_present()
+                && !process.buffer_records.kfd.is_present()
+                && !process.buffer_records.hip_graph.is_present()
+                && !process.buffer_records.rocshmem_api.is_present();
             if (forward && !buffer_is_forward) || (!forward && !buffer_is_installed) {
                 return Err(ProfilerBundleErrorV4::InvalidRocprofJson);
             }
-            if process.callback_records.spm_counter_collection.is_some() != forward {
+            if process.callback_records.spm_counter_collection.is_present() != forward {
                 return Err(ProfilerBundleErrorV4::InvalidRocprofJson);
             }
             if process.buffer_records.kernel_dispatch.iter().any(|record| {
-                record.graph_exec_id.is_some() != forward
-                    || record.graph_node_id.is_some() != forward
+                record.graph_exec_id.is_present() != forward
+                    || record.graph_node_id.is_present() != forward
             }) {
                 return Err(ProfilerBundleErrorV4::InvalidRocprofJson);
             }
@@ -762,7 +883,7 @@ struct DispatchJsonProcessV4 {
 struct DispatchJsonCallbackRecordsV4 {
     counter_collection: BoundedIgnoredArrayV4,
     #[serde(default)]
-    spm_counter_collection: Option<BoundedIgnoredArrayV4>,
+    spm_counter_collection: PresentFieldV4<BoundedIgnoredArrayV4>,
 }
 
 #[derive(Deserialize)]
@@ -874,10 +995,93 @@ struct DispatchJsonNodeMetadataV4 {
 }
 
 #[allow(dead_code)]
-struct BoundedStringArrayV4(Vec<String>);
+struct BoundedStringArrayV4(Vec<BoundedStringArrayElementV4>);
 
 #[allow(dead_code)]
 struct BoundedIgnoredObjectV4(Vec<String>);
+
+#[allow(dead_code)]
+struct BoundedStringArrayElementV4(String);
+
+struct BoundedObjectKeyV4(String);
+
+impl<'de> Deserialize<'de> for BoundedStringArrayElementV4 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct ElementVisitorV4;
+
+        impl<'de> serde::de::Visitor<'de> for ElementVisitorV4 {
+            type Value = BoundedStringArrayElementV4;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("a rocprof string of at most 65536 bytes")
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                if value.len() > 64 * 1024 {
+                    return Err(E::custom("rocprof string exceeds limit"));
+                }
+                let mut output = String::new();
+                reserve_dispatch_json_string_array_element_v4(&mut output, value.len())?;
+                output.push_str(value);
+                Ok(BoundedStringArrayElementV4(output))
+            }
+
+            fn visit_borrowed_str<E>(self, value: &'de str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                self.visit_str(value)
+            }
+        }
+
+        deserializer.deserialize_str(ElementVisitorV4)
+    }
+}
+
+impl<'de> Deserialize<'de> for BoundedObjectKeyV4 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct KeyVisitorV4;
+
+        impl<'de> serde::de::Visitor<'de> for KeyVisitorV4 {
+            type Value = BoundedObjectKeyV4;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("a rocprof object key of at most 65536 bytes")
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                if value.len() > 64 * 1024 {
+                    return Err(E::custom("rocprof object key exceeds limit"));
+                }
+                let mut output = String::new();
+                reserve_dispatch_json_object_key_v4(&mut output, value.len())?;
+                output.push_str(value);
+                Ok(BoundedObjectKeyV4(output))
+            }
+
+            fn visit_borrowed_str<E>(self, value: &'de str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                self.visit_str(value)
+            }
+        }
+
+        deserializer.deserialize_identifier(KeyVisitorV4)
+    }
+}
 
 impl<'de> Deserialize<'de> for BoundedIgnoredObjectV4 {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
@@ -903,14 +1107,12 @@ impl<'de> Deserialize<'de> for BoundedIgnoredObjectV4 {
                     ));
                 }
                 let mut keys = Vec::new();
-                while let Some(key) = map.next_key::<String>()? {
+                while let Some(BoundedObjectKeyV4(key)) = map.next_key()? {
                     if keys.len() == 4_096 || key.len() > 64 * 1024 || keys.contains(&key) {
                         return Err(serde::de::Error::custom("invalid rocprof object key"));
                     }
                     map.next_value::<IgnoredAny>()?;
-                    keys.try_reserve(1).map_err(|_| {
-                        serde::de::Error::custom("rocprof object allocation failed")
-                    })?;
+                    reserve_dispatch_json_vec_v4(&mut keys, 1)?;
                     keys.push(key);
                 }
                 Ok(BoundedIgnoredObjectV4(keys))
@@ -942,9 +1144,7 @@ where
                 return Err(E::custom("rocprof string exceeds limit"));
             }
             let mut output = String::new();
-            output
-                .try_reserve(value.len())
-                .map_err(|_| E::custom("rocprof string allocation failed"))?;
+            reserve_dispatch_json_string_v4(&mut output, value.len())?;
             output.push_str(value);
             Ok(output)
         }
@@ -965,11 +1165,7 @@ impl<'de> Deserialize<'de> for BoundedStringArrayV4 {
     where
         D: Deserializer<'de>,
     {
-        let values = deserialize_bounded_vec_v4(deserializer, 4_096, "rocprof string")?;
-        if values.iter().any(|value: &String| value.len() > 64 * 1024) {
-            return Err(serde::de::Error::custom("rocprof string exceeds limit"));
-        }
-        Ok(Self(values))
+        deserialize_bounded_vec_v4(deserializer, 4_096, "rocprof string").map(Self)
     }
 }
 
@@ -1205,15 +1401,15 @@ struct DispatchJsonBufferRecordsV4 {
     hsa_api: BoundedIgnoredArrayV4,
     rccl_api: BoundedIgnoredArrayV4,
     #[serde(default)]
-    kfd: Option<BoundedIgnoredArrayV4>,
+    kfd: PresentFieldV4<BoundedIgnoredArrayV4>,
     rocdecode_api: BoundedIgnoredArrayV4,
     rocjpeg_api: BoundedIgnoredArrayV4,
     #[serde(default)]
-    hip_graph: Option<BoundedIgnoredArrayV4>,
+    hip_graph: PresentFieldV4<BoundedIgnoredArrayV4>,
     #[serde(default)]
-    hipfile_api: Option<BoundedIgnoredArrayV4>,
+    hipfile_api: PresentFieldV4<BoundedIgnoredArrayV4>,
     #[serde(default)]
-    rocshmem_api: Option<BoundedIgnoredArrayV4>,
+    rocshmem_api: PresentFieldV4<BoundedIgnoredArrayV4>,
     marker_api: BoundedIgnoredArrayV4,
     memory_copy: BoundedIgnoredArrayV4,
     memory_allocation: BoundedIgnoredArrayV4,
@@ -1236,9 +1432,9 @@ struct DispatchJsonRecordV4 {
     dispatch_info: DispatchJsonInfoV4,
     stream_id: DispatchJsonHandleV4,
     #[serde(default)]
-    graph_exec_id: Option<u64>,
+    graph_exec_id: PresentFieldV4<u64>,
     #[serde(default)]
-    graph_node_id: Option<u64>,
+    graph_node_id: PresentFieldV4<u64>,
 }
 
 #[derive(Deserialize)]
@@ -1326,9 +1522,7 @@ where
                 if agent_count > MAX_PROFILER_SOURCE_AGENT_MAPPINGS_V4 {
                     return Err(serde::de::Error::custom("rocprof agent limit exceeded"));
                 }
-                output
-                    .try_reserve(1)
-                    .map_err(|_| serde::de::Error::custom("rocprof process allocation failed"))?;
+                reserve_dispatch_json_vec_v4(&mut output, 1)?;
                 output.push(process);
             }
             Ok(output)
@@ -1426,9 +1620,7 @@ where
                 if output.len() == self.maximum {
                     return Err(serde::de::Error::custom("bounded sequence exceeds limit"));
                 }
-                output
-                    .try_reserve(1)
-                    .map_err(|_| serde::de::Error::custom("bounded sequence allocation failed"))?;
+                reserve_dispatch_json_vec_v4(&mut output, 1)?;
                 output.push(value);
             }
             Ok(output)
@@ -1459,7 +1651,10 @@ pub fn import_rocprofv3_csv_profiler_bundle_v4(
         },
         ImportLimitsV1::default(),
     )
-    .map_err(|_| ProfilerBundleErrorV4::InvalidRocprofCsv)?;
+    .map_err(|error| match error {
+        crate::ImportErrorV1::AllocationFailure => ProfilerBundleErrorV4::AllocationFailure,
+        _ => ProfilerBundleErrorV4::InvalidRocprofCsv,
+    })?;
     let projection = imported.capture.runs[0].source;
     finish_dispatch_bundle(
         ProfilerSourceKindV4::Rocprofv3KernelDispatchCsv,
@@ -2072,6 +2267,13 @@ fn validate_source(source: &[u8]) -> Result<(), ProfilerBundleErrorV4> {
     Ok(())
 }
 
+fn map_dispatch_import_error_v4(error: crate::ImportErrorV1) -> ProfilerBundleErrorV4 {
+    match error {
+        crate::ImportErrorV1::AllocationFailure => ProfilerBundleErrorV4::AllocationFailure,
+        _ => ProfilerBundleErrorV4::InvalidRocprofJson,
+    }
+}
+
 fn validate_environment(
     environment: &ProfilerEnvironmentBindingV4,
 ) -> Result<(), ProfilerBundleErrorV4> {
@@ -2228,3 +2430,152 @@ impl fmt::Display for ProfilerBundleErrorV4 {
 }
 
 impl Error for ProfilerBundleErrorV4 {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use fe2o3_semantic_trace::OpaqueIdentityV1;
+    use std::sync::{Arc, Barrier};
+
+    fn content(byte: u8) -> ContentIdentityRecordV1 {
+        ContentIdentityRecordV1 {
+            scheme: ContentSchemeV1::DomainSeparatedSha256,
+            format_version: 1,
+            digest: CaptureIdentityV1::new([byte; 32]).expect("nonzero test identity"),
+            canonical_len: 1,
+        }
+    }
+
+    fn binding(node_id: u32) -> ProfilerDispatchBindingV4 {
+        ProfilerDispatchBindingV4 {
+            environment: ProfilerEnvironmentBindingV4 {
+                environment: content(1),
+                collector_tool: content(2),
+                collector_configuration: content(3),
+                stable_device_bindings: vec![ProfilerDeviceBindingV4 {
+                    source_agent_id: u64::from(node_id),
+                    stable_identity: content(4),
+                }],
+            },
+            kernel_ir_claim: KernelIrIdentityClaimV1::canonical_v7_claim(
+                OpaqueIdentityV1::new([5; 32]).expect("nonzero test identity"),
+                1,
+            )
+            .expect("valid KIR claim"),
+            artifact: None,
+            source_map: None,
+            wave_width: WaveWidthV1::Wave64,
+        }
+    }
+
+    fn with_injected_dispatch_json_allocation_failure<T>(
+        site: DispatchJsonAllocationInjectionSiteV4,
+        operation: impl FnOnce() -> T,
+    ) -> T {
+        INJECT_DISPATCH_JSON_ALLOCATION_FAILURE_V4.with(|inject| {
+            assert!(
+                inject.replace(Some(site)).is_none(),
+                "nested allocation injection"
+            );
+        });
+        let result = operation();
+        INJECT_DISPATCH_JSON_ALLOCATION_FAILURE_V4.with(|inject| {
+            inject.set(None);
+        });
+        result
+    }
+
+    #[test]
+    fn dispatch_json_public_boundaries_preserve_typed_allocation_failure() {
+        let fixture = include_bytes!(
+            "../tests/fixtures/rocprofv3-installed-97f5574-kernel-dispatch-schema.json"
+        );
+        let mut source: serde_json::Value = serde_json::from_slice(fixture).expect("fixture JSON");
+        source["rocprofiler-sdk-tool"][0]["metadata"]["command"] = serde_json::json!(["command"]);
+        source["rocprofiler-sdk-tool"][0]["metadata"]["config"] = serde_json::json!({"key": 1});
+        let source = serde_json::to_vec(&source).expect("test source");
+        let projection =
+            project_rocprofv3_json_dispatch_agents_v4(&source).expect("reviewed source projects");
+        let node_id = projection.agent_bindings()[0].node_id;
+
+        assert!(matches!(
+            with_injected_dispatch_json_allocation_failure(
+                DispatchJsonAllocationInjectionSiteV4::Any,
+                || { project_rocprofv3_json_dispatch_agents_v4(&source) },
+            ),
+            Err(ProfilerBundleErrorV4::AllocationFailure)
+        ));
+        assert!(matches!(
+            with_injected_dispatch_json_allocation_failure(
+                DispatchJsonAllocationInjectionSiteV4::Any,
+                || { import_rocprofv3_json_profiler_bundle_v4(&source, binding(node_id),) },
+            ),
+            Err(ProfilerBundleErrorV4::AllocationFailure)
+        ));
+        let alias_result = with_injected_dispatch_json_allocation_failure(
+            DispatchJsonAllocationInjectionSiteV4::Any,
+            || {
+                import_projected_rocprofv3_json_profiler_bundle_v4(
+                    &source,
+                    &projection,
+                    binding(node_id),
+                )
+            },
+        );
+        assert!(matches!(
+            alias_result,
+            Err(ProfilerBundleErrorV4::AllocationFailure)
+        ));
+    }
+
+    #[test]
+    fn string_array_and_object_key_allocations_are_typed_at_public_boundary() {
+        let fixture = include_bytes!(
+            "../tests/fixtures/rocprofv3-installed-97f5574-kernel-dispatch-schema.json"
+        );
+        let mut source: serde_json::Value = serde_json::from_slice(fixture).expect("fixture JSON");
+        source["rocprofiler-sdk-tool"][0]["metadata"]["command"] = serde_json::json!(["command"]);
+        source["rocprofiler-sdk-tool"][0]["metadata"]["config"] = serde_json::json!({"key": 1});
+        let source = serde_json::to_vec(&source).expect("test source");
+        for site in [
+            DispatchJsonAllocationInjectionSiteV4::StringArrayElement,
+            DispatchJsonAllocationInjectionSiteV4::ObjectKey,
+        ] {
+            assert!(matches!(
+                with_injected_dispatch_json_allocation_failure(site, || {
+                    project_rocprofv3_json_dispatch_agents_v4(&source)
+                }),
+                Err(ProfilerBundleErrorV4::AllocationFailure)
+            ));
+        }
+    }
+
+    #[test]
+    fn dispatch_json_allocation_marker_is_thread_local() {
+        let source: &'static [u8] = include_bytes!(
+            "../tests/fixtures/rocprofv3-installed-97f5574-kernel-dispatch-schema.json"
+        );
+        let barrier = Arc::new(Barrier::new(2));
+        let failing_barrier = Arc::clone(&barrier);
+        let failing = std::thread::spawn(move || {
+            INJECT_DISPATCH_JSON_ALLOCATION_FAILURE_V4
+                .with(|inject| inject.set(Some(DispatchJsonAllocationInjectionSiteV4::Any)));
+            failing_barrier.wait();
+            project_rocprofv3_json_dispatch_agents_v4(source)
+        });
+        let succeeding = std::thread::spawn(move || {
+            barrier.wait();
+            project_rocprofv3_json_dispatch_agents_v4(source)
+        });
+        assert!(matches!(
+            failing.join().expect("failing projector thread"),
+            Err(ProfilerBundleErrorV4::AllocationFailure)
+        ));
+        assert!(
+            succeeding
+                .join()
+                .expect("independent projector thread")
+                .is_ok()
+        );
+    }
+}
