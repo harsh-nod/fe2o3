@@ -20,6 +20,16 @@ pub const MIR_KIR_SCALAR_REFINEMENT_MODEL_VERSION_V1: u16 = 1;
 pub const MIR_KIR_SCALAR_REFINEMENT_POLICY_V1: u16 = 1;
 /// Stable name of the Verus theorem checked by the proof lane.
 pub const MIR_KIR_SCALAR_REFINEMENT_THEOREM_V1: &str = "fe2o3_mir_kir_u32_element_refines_v1";
+/// SHA-256 of the exact Verus theorem source accepted by the proof lane.
+pub const MIR_KIR_SCALAR_REFINEMENT_PROOF_SHA256_V1: [u8; 32] = [
+    0xc5, 0xdb, 0xf8, 0xbe, 0xde, 0x7b, 0xfe, 0x3b, 0x42, 0x25, 0xac, 0x38, 0x1c, 0x44, 0x88, 0xfe,
+    0x77, 0xca, 0x98, 0x7b, 0xa2, 0xb4, 0xa7, 0x6d, 0x16, 0xf3, 0xd7, 0x46, 0x16, 0xfd, 0xd2, 0xbe,
+];
+/// SHA-256 of the pinned Verus executable accepted by the compiler proof lane.
+pub const MIR_KIR_SCALAR_REFINEMENT_VERUS_SHA256_V1: [u8; 32] = [
+    0xad, 0x26, 0x69, 0xf5, 0x79, 0xd8, 0x98, 0xed, 0xe5, 0x3f, 0x2b, 0xf8, 0x4e, 0x80, 0xa1, 0xda,
+    0xf4, 0xe3, 0x57, 0x87, 0x39, 0xb0, 0xf5, 0x80, 0x7e, 0xf2, 0x09, 0xa0, 0xc9, 0xf3, 0x82, 0xdd,
+];
 
 const MODEL_DOMAIN_V1: &[u8] = b"FE2O3/MIR-TO-KIR/U32-ELEMENT-REFINEMENT-MODEL/V1\0";
 const EVIDENCE_DOMAIN_V1: &[u8] = b"FE2O3/MIR-TO-KIR/U32-ELEMENT-REFINEMENT-EVIDENCE/V1\0";
@@ -553,6 +563,8 @@ fn model_identity_v1() -> [u8; 32] {
     hash.update(MIR_KIR_SCALAR_REFINEMENT_MODEL_VERSION_V1.to_le_bytes());
     hash.update(MIR_KIR_SCALAR_REFINEMENT_POLICY_V1.to_le_bytes());
     hash.update(MIR_KIR_SCALAR_REFINEMENT_THEOREM_V1.as_bytes());
+    hash.update(MIR_KIR_SCALAR_REFINEMENT_PROOF_SHA256_V1);
+    hash.update(MIR_KIR_SCALAR_REFINEMENT_VERUS_SHA256_V1);
     hash.finalize().into()
 }
 
@@ -609,6 +621,14 @@ fn encode_evidence_v1(
 mod tests {
     use super::*;
     use fe2o3_kernel_ir::ValueDef;
+
+    #[test]
+    fn model_identity_binds_the_exact_theorem_source() {
+        let actual: [u8; 32] =
+            Sha256::digest(include_bytes!("../verus/mir_kir_scalar_refinement_v1.rs")).into();
+        assert_eq!(actual, MIR_KIR_SCALAR_REFINEMENT_PROOF_SHA256_V1);
+        assert_ne!(model_identity_v1(), [0; 32]);
+    }
 
     #[test]
     fn executable_mir_and_kir_semantics_refine_at_wrapping_boundaries() {

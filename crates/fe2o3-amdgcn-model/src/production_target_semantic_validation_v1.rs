@@ -8,6 +8,12 @@ use fe2o3_kernel_ir::{
 
 use crate::ProductionTargetBoundKernelIrV1;
 
+/// SHA-256 of `verus/target_binding_refinement_v1.rs`, enforced by the proof runner.
+pub const TARGET_BINDING_REFINEMENT_MODEL_SHA256_V1: [u8; 32] = [
+    0x9b, 0x7f, 0xb3, 0x7f, 0x7e, 0xe4, 0x2c, 0x4c, 0x46, 0xb6, 0x6b, 0xd7, 0x31, 0x86, 0xe7, 0x98,
+    0xfa, 0x8a, 0xad, 0x13, 0xee, 0xe5, 0xfa, 0x56, 0x93, 0xea, 0x9d, 0x27, 0xd4, 0x29, 0xf4, 0xff,
+];
+
 /// Independent validation of the semantic boundary crossed by production target binding.
 ///
 /// The target binder may add the selected processor capability and the Wave64 requirement to
@@ -26,6 +32,10 @@ impl ValidatedProductionTargetSemanticBindingV1 {
 
     pub const fn kernel_count(&self) -> usize {
         self.kernel_count
+    }
+
+    pub const fn formal_model_sha256(&self) -> [u8; 32] {
+        TARGET_BINDING_REFINEMENT_MODEL_SHA256_V1
     }
 
     /// The checked relation matches the input relation of the pinned Verus V1 theorem.
@@ -147,6 +157,7 @@ mod tests {
 
     use super::*;
     use crate::bind_production_target_v1;
+    use sha2::{Digest, Sha256};
 
     fn neutral_module() -> Module {
         let mut block = BasicBlock::new(BlockId(0));
@@ -179,8 +190,19 @@ mod tests {
         )
         .expect("semantic validation");
         assert_eq!(validated.kernel_count(), 1);
+        assert_eq!(
+            validated.formal_model_sha256(),
+            TARGET_BINDING_REFINEMENT_MODEL_SHA256_V1
+        );
         assert!(validated.matches_formal_target_binding_relation_v1());
         assert!(!validated.grants_later_stage_authority());
+    }
+
+    #[test]
+    fn formal_model_identity_matches_the_pinned_theorem_source() {
+        let actual: [u8; 32] =
+            Sha256::digest(include_bytes!("../verus/target_binding_refinement_v1.rs")).into();
+        assert_eq!(actual, TARGET_BINDING_REFINEMENT_MODEL_SHA256_V1);
     }
 
     #[test]
