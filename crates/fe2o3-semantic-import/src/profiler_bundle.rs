@@ -10,13 +10,13 @@ use std::fmt;
 
 use fe2o3_semantic_trace::{ContentIdentityV1, KernelIrIdentityClaimV1, WaveWidthV1};
 use serde::de::IgnoredAny;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::{
     ArtifactClaimV1, CaptureIdentityV1, CaptureUnavailableReasonV1, ContentIdentityRecordV1,
-    ContentSchemeV1, ImportLimitsV1, LossStateV1, LossStatusV1, RocprofCaptureBindingV1,
-    SemanticCaptureV1, TruthOriginV1, MAX_ROCPROF_PROCESSES_V1,
+    ContentSchemeV1, ImportLimitsV1, LossStateV1, LossStatusV1, MAX_ROCPROF_PROCESSES_V1,
+    RocprofCaptureBindingV1, SemanticCaptureV1, TruthOriginV1,
     import_rocprofv3_capture_with_agents_v1,
 };
 
@@ -25,13 +25,21 @@ pub const MAX_PROFILER_BUNDLE_BYTES_V4: u64 = 16 * 1024 * 1024;
 pub const MAX_PROFILER_SOURCE_BYTES_V4: u64 = 8 * 1024 * 1024;
 pub const MAX_PROFILER_DISPATCHES_V4: usize = 16_384;
 pub const MAX_PROFILER_DEVICE_BINDINGS_V4: usize = 256;
+/// Maximum process-local agent occurrences retained by JSON projection. One
+/// physical KFD device may appear under different opaque handles in different
+/// traced processes, so this is intentionally distinct from the device bound.
+pub const MAX_PROFILER_SOURCE_AGENT_MAPPINGS_V4: usize = MAX_PROFILER_DISPATCHES_V4;
 pub const MAX_PROFILER_ATT_REFERENCES_V4: usize = 512;
 pub const MAX_PROFILER_REFERENCE_BYTES_V4: usize = 256;
 pub const MAX_PROFILER_CSV_COLUMNS_V4: usize = 32;
 pub const MAX_PROFILER_CSV_FIELD_BYTES_V4: usize = 256;
+/// Kernel names can contain long Rust demanglings. This remains subordinate to
+/// the 8 MiB source bound while fixed and numeric fields retain the tight cap.
+pub const MAX_PROFILER_CSV_KERNEL_NAME_BYTES_V4: usize = 64 * 1024;
 pub const PROFILER_BUNDLE_IDENTITY_DOMAIN_V4: &[u8] = b"fe2o3.semantic-profiler-bundle.v4\0";
 
 const PROFILER_SOURCE_CSV_DOMAIN_V4: &[u8] = b"fe2o3.profiler.rocprof-csv.v4\0";
+const PROFILER_SOURCE_JSON_DOMAIN_V4: &[u8] = b"fe2o3.profiler.rocprof-json.v4\0";
 const PROFILER_SOURCE_ATT_DOMAIN_V4: &[u8] = b"fe2o3.profiler.rocprof-att-manifest.v4\0";
 const PROFILER_RUN_IDENTITY_DOMAIN_V4: &[u8] = b"fe2o3.profiler.run.v4\0";
 
@@ -129,6 +137,8 @@ pub struct ProfilerDeviceBindingV4 {
 /// compare every hardware field with an independently observed KFD owner.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct RocprofJsonGpuAgentBindingV4 {
+    pub process_index: u32,
+    pub process_id: u64,
     pub source_agent_id: u64,
     pub node_id: u32,
     pub gpu_id: u64,
@@ -140,6 +150,44 @@ pub struct RocprofJsonGpuAgentBindingV4 {
     pub gfx_target_version: u64,
     pub wave_front_size: u64,
     pub num_xcc: u64,
+}
+
+/// Bounded canonical projection that replaces each process-local rocprofiler
+/// agent handle with the absolute KFD node admitted through that process's
+/// `agents[]` catalog. The raw source remains a separate observed object.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RocprofJsonDispatchProjectionV4 {
+    dialect: RocprofDispatchSchemaDialectV4,
+    canonical_json: Vec<u8>,
+    agent_bindings: Vec<RocprofJsonGpuAgentBindingV4>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct RocprofCsvSourceAgentBindingV4 {
+    pub process_index: u32,
+    pub process_id: Option<u64>,
+    pub node_id: u32,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RocprofDispatchSchemaDialectV4 {
+    InstalledRocprofv3_1_1_97f5574,
+    ForwardRocprofv3_848868,
+}
+
+impl RocprofJsonDispatchProjectionV4 {
+    pub const fn dialect(&self) -> RocprofDispatchSchemaDialectV4 {
+        self.dialect
+    }
+
+    pub fn canonical_json(&self) -> &[u8] {
+        &self.canonical_json
+    }
+
+    pub fn agent_bindings(&self) -> &[RocprofJsonGpuAgentBindingV4] {
+        &self.agent_bindings
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -289,7 +337,7 @@ impl SemanticProfilerBundleV4 {
         {
             return Err(ProfilerBundleErrorV4::StaleRunIdentity);
         }
-        if self.devices.is_empty() || self.devices.len() > MAX_PROFILER_DISPATCHES_V4 {
+        if self.devices.is_empty() || self.devices.len() > MAX_PROFILER_DEVICE_BINDINGS_V4 {
             return Err(ProfilerBundleErrorV4::DeviceCountOutOfRange);
         }
         let mut stable = BTreeSet::new();
@@ -348,8 +396,8 @@ impl SemanticProfilerBundleV4 {
                     }
                 }
                 let expected_source = match self.source_kind {
-                    ProfilerSourceKindV4::Rocprofv3KernelDispatchJson => self.source.value,
-                    ProfilerSourceKindV4::Rocprofv3KernelDispatchCsv => {
+                    ProfilerSourceKindV4::Rocprofv3KernelDispatchJson
+                    | ProfilerSourceKindV4::Rocprofv3KernelDispatchCsv => {
                         self.normalized_projection.value
                     }
                     _ => unreachable!(),
@@ -431,50 +479,91 @@ pub fn import_rocprofv3_json_profiler_bundle_v4(
     )
 }
 
+/// Imports a raw rocprof JSON document after exact per-process agent projection.
+/// The Bundle keeps the raw source and normalized projection as distinct
+/// observed identities and never treats the process-local handle as a KFD node.
+pub fn import_projected_rocprofv3_json_profiler_bundle_v4(
+    source: &[u8],
+    projection: &RocprofJsonDispatchProjectionV4,
+    binding: ProfilerDispatchBindingV4,
+) -> Result<SemanticProfilerBundleV4, ProfilerBundleErrorV4> {
+    validate_source(source)?;
+    let expected = project_rocprofv3_json_dispatch_agents_v4(source)?;
+    if &expected != projection {
+        return Err(ProfilerBundleErrorV4::StaleReference);
+    }
+    validate_environment(&binding.environment)?;
+    let imported = import_rocprofv3_capture_with_agents_v1(
+        projection.canonical_json(),
+        RocprofCaptureBindingV1 {
+            kernel_ir_claim: binding.kernel_ir_claim,
+            artifact: binding.artifact,
+            source_map: binding.source_map,
+            wave_width: binding.wave_width,
+        },
+        ImportLimitsV1::default(),
+    )
+    .map_err(|_| ProfilerBundleErrorV4::InvalidRocprofJson)?;
+    let projection_identity = imported.capture.runs[0].source;
+    finish_dispatch_bundle(
+        ProfilerSourceKindV4::Rocprofv3KernelDispatchJson,
+        content_identity(PROFILER_SOURCE_JSON_DOMAIN_V4, 1, source)?,
+        projection_identity,
+        imported.capture,
+        imported.source_agent_ids,
+        binding.environment,
+    )
+}
+
 fn validate_dispatch_json_protocol_v4(source: &[u8]) -> Result<(), ProfilerBundleErrorV4> {
     let document: DispatchJsonDocumentV4 =
         serde_json::from_slice(source).map_err(|_| ProfilerBundleErrorV4::InvalidRocprofJson)?;
     if document.processes.is_empty() || document.processes.len() > MAX_ROCPROF_PROCESSES_V1 {
         return Err(ProfilerBundleErrorV4::InvalidRocprofJson);
     }
+    let _ = document.dialect()?;
     Ok(())
 }
 
-pub fn rocprofv3_json_gpu_agent_bindings_v4(
+pub fn project_rocprofv3_json_dispatch_agents_v4(
     source: &[u8],
-) -> Result<Vec<RocprofJsonGpuAgentBindingV4>, ProfilerBundleErrorV4> {
+) -> Result<RocprofJsonDispatchProjectionV4, ProfilerBundleErrorV4> {
     validate_source(source)?;
     let document: DispatchJsonDocumentV4 =
         serde_json::from_slice(source).map_err(|_| ProfilerBundleErrorV4::InvalidRocprofJson)?;
     if document.processes.is_empty() || document.processes.len() > MAX_ROCPROF_PROCESSES_V1 {
         return Err(ProfilerBundleErrorV4::InvalidRocprofJson);
     }
-    let mut by_handle = BTreeMap::new();
-    let mut by_node = BTreeMap::new();
-    for process in document.processes {
-        let dispatch_handles = process
-            .buffer_records
-            .kernel_dispatch
-            .iter()
-            .map(|record| {
-                record
-                    .dispatch_info
-                    .agent_id
-                    .as_ref()
-                    .map(|agent| agent.handle)
-                    .ok_or(ProfilerBundleErrorV4::MissingDeviceBinding)
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let agents = process
-            .agents
-            .ok_or(ProfilerBundleErrorV4::MissingDeviceBinding)?;
-        let mut process_handles = BTreeSet::new();
+    let mut bindings = Vec::new();
+    let mut projected_processes = Vec::new();
+    bindings
+        .try_reserve(document.processes.len())
+        .map_err(|_| ProfilerBundleErrorV4::SizeOverflow)?;
+    projected_processes
+        .try_reserve(document.processes.len())
+        .map_err(|_| ProfilerBundleErrorV4::SizeOverflow)?;
+    let dialect = document.dialect()?;
+    let mut process_ids = BTreeSet::new();
+    for (process_index, process) in document.processes.into_iter().enumerate() {
+        let process_index =
+            u32::try_from(process_index).map_err(|_| ProfilerBundleErrorV4::SizeOverflow)?;
+        if process.metadata.pid == 0 || !process_ids.insert(process.metadata.pid) {
+            return Err(ProfilerBundleErrorV4::InvalidRocprofJson);
+        }
+        let agents = process.agents;
+        let mut process_agents = BTreeMap::new();
         let mut process_nodes = BTreeSet::new();
+        let mut catalog_handles = BTreeSet::new();
         for agent in agents {
-            if agent.simd_count == 0 {
+            if agent.id.handle == 0 || !catalog_handles.insert(agent.id.handle) {
+                return Err(ProfilerBundleErrorV4::InvalidDevice);
+            }
+            if agent.agent_type != 2 || agent.simd_count == 0 {
                 continue;
             }
             let binding = RocprofJsonGpuAgentBindingV4 {
+                process_index,
+                process_id: process.metadata.pid,
                 source_agent_id: agent.id.handle,
                 node_id: u32::try_from(agent.node_id)
                     .map_err(|_| ProfilerBundleErrorV4::InvalidDevice)?,
@@ -488,32 +577,112 @@ pub fn rocprofv3_json_gpu_agent_bindings_v4(
                 wave_front_size: agent.wave_front_size,
                 num_xcc: agent.num_xcc,
             };
-            if binding.source_agent_id == 0
-                || binding.gpu_id == 0
+            if binding.gpu_id == 0
                 || binding.wave_front_size == 0
-                || !process_handles.insert(binding.source_agent_id)
                 || !process_nodes.insert(binding.node_id)
-                || by_handle
+                || process_agents
                     .insert(binding.source_agent_id, binding)
-                    .is_some_and(|prior| prior != binding)
-                || by_node
-                    .insert(binding.node_id, binding.source_agent_id)
-                    .is_some_and(|prior| prior != binding.source_agent_id)
+                    .is_some()
             {
                 return Err(ProfilerBundleErrorV4::InvalidDevice);
             }
         }
-        if dispatch_handles
-            .iter()
-            .any(|handle| !process_handles.contains(handle))
-        {
-            return Err(ProfilerBundleErrorV4::MissingDeviceBinding);
+        let mut used = BTreeSet::new();
+        let mut projected_dispatches = Vec::new();
+        projected_dispatches
+            .try_reserve(process.buffer_records.kernel_dispatch.len())
+            .map_err(|_| ProfilerBundleErrorV4::SizeOverflow)?;
+        for record in process.buffer_records.kernel_dispatch {
+            let source_agent_id = record.dispatch_info.agent_id.handle;
+            let binding = process_agents
+                .get(&source_agent_id)
+                .copied()
+                .ok_or(ProfilerBundleErrorV4::MissingDeviceBinding)?;
+            if used.insert(source_agent_id) {
+                if bindings.len() == MAX_PROFILER_SOURCE_AGENT_MAPPINGS_V4 {
+                    return Err(ProfilerBundleErrorV4::SourceAgentMappingCountOutOfRange);
+                }
+                bindings.push(binding);
+            }
+            projected_dispatches.push(DispatchJsonProjectionRecordV4 {
+                start_timestamp: record.start_timestamp,
+                end_timestamp: record.end_timestamp,
+                dispatch_info: DispatchJsonProjectionInfoV4 {
+                    agent_id: DispatchJsonHandleV4 {
+                        handle: u64::from(binding.node_id),
+                    },
+                    dispatch_id: Some(record.dispatch_info.dispatch_id),
+                    workgroup_size: DispatchJsonProjectionDimensionsV4 {
+                        x: u64::from(record.dispatch_info.workgroup_size.x),
+                        y: u64::from(record.dispatch_info.workgroup_size.y),
+                        z: u64::from(record.dispatch_info.workgroup_size.z),
+                    },
+                    grid_size: DispatchJsonProjectionDimensionsV4 {
+                        x: u64::from(record.dispatch_info.grid_size.x),
+                        y: u64::from(record.dispatch_info.grid_size.y),
+                        z: u64::from(record.dispatch_info.grid_size.z),
+                    },
+                },
+            });
         }
+        projected_processes.push(DispatchJsonProjectionProcessV4 {
+            buffer_records: DispatchJsonProjectionBufferRecordsV4 {
+                kernel_dispatch: projected_dispatches,
+            },
+        });
     }
-    if by_handle.is_empty() || by_handle.len() > MAX_PROFILER_DEVICE_BINDINGS_V4 {
+    if bindings.is_empty() {
         return Err(ProfilerBundleErrorV4::DeviceCountOutOfRange);
     }
-    Ok(by_handle.into_values().collect())
+    let canonical_json = serde_json::to_vec(&DispatchJsonProjectionDocumentV4 {
+        processes: projected_processes,
+    })
+    .map_err(|_| ProfilerBundleErrorV4::JsonEncode)?;
+    validate_source(&canonical_json)?;
+    Ok(RocprofJsonDispatchProjectionV4 {
+        dialect,
+        canonical_json,
+        agent_bindings: bindings,
+    })
+}
+
+#[derive(Serialize)]
+struct DispatchJsonProjectionDocumentV4 {
+    #[serde(rename = "rocprofiler-sdk-tool")]
+    processes: Vec<DispatchJsonProjectionProcessV4>,
+}
+
+#[derive(Serialize)]
+struct DispatchJsonProjectionProcessV4 {
+    buffer_records: DispatchJsonProjectionBufferRecordsV4,
+}
+
+#[derive(Serialize)]
+struct DispatchJsonProjectionBufferRecordsV4 {
+    kernel_dispatch: Vec<DispatchJsonProjectionRecordV4>,
+}
+
+#[derive(Serialize)]
+struct DispatchJsonProjectionRecordV4 {
+    start_timestamp: u64,
+    end_timestamp: u64,
+    dispatch_info: DispatchJsonProjectionInfoV4,
+}
+
+#[derive(Serialize)]
+struct DispatchJsonProjectionInfoV4 {
+    agent_id: DispatchJsonHandleV4,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    dispatch_id: Option<u64>,
+    workgroup_size: DispatchJsonProjectionDimensionsV4,
+    grid_size: DispatchJsonProjectionDimensionsV4,
+}
+
+#[derive(Serialize)]
+struct DispatchJsonProjectionDimensionsV4 {
+    x: u64,
+    y: u64,
+    z: u64,
 }
 
 // This is the closed rocprofv3 dispatch protocol admitted by Bundle V4. Fields
@@ -524,32 +693,289 @@ pub fn rocprofv3_json_gpu_agent_bindings_v4(
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct DispatchJsonDocumentV4 {
-    #[serde(rename = "rocprofiler-sdk-tool")]
+    #[serde(
+        rename = "rocprofiler-sdk-tool",
+        deserialize_with = "deserialize_bounded_processes_v4"
+    )]
     processes: Vec<DispatchJsonProcessV4>,
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct DispatchJsonProcessV4 {
-    buffer_records: DispatchJsonBufferRecordsV4,
-    #[serde(default)]
-    metadata: Option<IgnoredAny>,
-    #[serde(default)]
-    agents: Option<Vec<DispatchJsonAgentV4>>,
-    #[serde(default)]
-    callback_records: Option<IgnoredAny>,
-    #[serde(default)]
-    counters: Option<IgnoredAny>,
-    #[serde(default)]
-    code_objects: Option<IgnoredAny>,
-    #[serde(default)]
-    kernel_symbols: Option<IgnoredAny>,
-    #[serde(default)]
-    strings: Option<IgnoredAny>,
+impl DispatchJsonDocumentV4 {
+    fn dialect(&self) -> Result<RocprofDispatchSchemaDialectV4, ProfilerBundleErrorV4> {
+        let forward = self
+            .processes
+            .first()
+            .is_some_and(|process| process.buffer_records.hipfile_api.is_some());
+        for process in &self.processes {
+            if process.agents.iter().any(|agent| !agent.has_valid_shape()) {
+                return Err(ProfilerBundleErrorV4::InvalidRocprofJson);
+            }
+            let buffer_is_forward = process.buffer_records.hipfile_api.is_some()
+                && process.buffer_records.kfd.is_some()
+                && process.buffer_records.hip_graph.is_some()
+                && process.buffer_records.rocshmem_api.is_some();
+            let buffer_is_installed = process.buffer_records.hipfile_api.is_none()
+                && process.buffer_records.kfd.is_none()
+                && process.buffer_records.hip_graph.is_none()
+                && process.buffer_records.rocshmem_api.is_none();
+            if (forward && !buffer_is_forward) || (!forward && !buffer_is_installed) {
+                return Err(ProfilerBundleErrorV4::InvalidRocprofJson);
+            }
+            if process.callback_records.spm_counter_collection.is_some() != forward {
+                return Err(ProfilerBundleErrorV4::InvalidRocprofJson);
+            }
+            if process.buffer_records.kernel_dispatch.iter().any(|record| {
+                record.graph_exec_id.is_some() != forward
+                    || record.graph_node_id.is_some() != forward
+            }) {
+                return Err(ProfilerBundleErrorV4::InvalidRocprofJson);
+            }
+        }
+        Ok(if forward {
+            RocprofDispatchSchemaDialectV4::ForwardRocprofv3_848868
+        } else {
+            RocprofDispatchSchemaDialectV4::InstalledRocprofv3_1_1_97f5574
+        })
+    }
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+#[allow(dead_code)]
+struct DispatchJsonProcessV4 {
+    buffer_records: DispatchJsonBufferRecordsV4,
+    metadata: DispatchJsonMetadataV4,
+    #[serde(deserialize_with = "deserialize_bounded_agents_v4")]
+    agents: Vec<DispatchJsonAgentV4>,
+    callback_records: DispatchJsonCallbackRecordsV4,
+    counters: BoundedIgnoredArrayV4,
+    code_objects: BoundedIgnoredArrayV4,
+    kernel_symbols: BoundedIgnoredArrayV4,
+    strings: DispatchJsonStringsV4,
+    summary: BoundedIgnoredArrayV4,
+    host_functions: BoundedIgnoredArrayV4,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+#[allow(dead_code)]
+struct DispatchJsonCallbackRecordsV4 {
+    counter_collection: BoundedIgnoredArrayV4,
+    #[serde(default)]
+    spm_counter_collection: Option<BoundedIgnoredArrayV4>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+#[allow(dead_code)]
+struct DispatchJsonStringsV4 {
+    callback_records: BoundedIgnoredArrayV4,
+    buffer_records: BoundedIgnoredArrayV4,
+    marker_api: BoundedIgnoredArrayV4,
+    correlation_id: DispatchJsonCorrelationStringsV4,
+    counters: DispatchJsonCounterStringsV4,
+    pc_sample_instructions: BoundedIgnoredArrayV4,
+    pc_sample_comments: BoundedIgnoredArrayV4,
+    att_filenames: BoundedIgnoredArrayV4,
+    code_object_snapshot_filenames: BoundedIgnoredArrayV4,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+#[allow(dead_code)]
+struct DispatchJsonCorrelationStringsV4 {
+    external: BoundedExternalCorrelationStringsV4,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+#[allow(dead_code)]
+struct DispatchJsonCounterStringsV4 {
+    dimension_ids: BoundedCounterDimensionStringsV4,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+#[allow(dead_code)]
+struct DispatchJsonExternalCorrelationStringV4 {
+    key: u64,
+    #[serde(deserialize_with = "deserialize_bounded_string_v4")]
+    value: String,
+}
+
+#[allow(dead_code)]
+struct BoundedExternalCorrelationStringsV4(Vec<DispatchJsonExternalCorrelationStringV4>);
+
+impl<'de> Deserialize<'de> for BoundedExternalCorrelationStringsV4 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserialize_bounded_vec_v4(deserializer, 4_096, "rocprof external correlation string")
+            .map(Self)
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+#[allow(dead_code)]
+struct DispatchJsonCounterDimensionStringV4 {
+    id: u64,
+    instance_size: u64,
+    #[serde(deserialize_with = "deserialize_bounded_string_v4")]
+    name: String,
+}
+
+#[allow(dead_code)]
+struct BoundedCounterDimensionStringsV4(Vec<DispatchJsonCounterDimensionStringV4>);
+
+impl<'de> Deserialize<'de> for BoundedCounterDimensionStringsV4 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserialize_bounded_vec_v4(deserializer, 4_096, "rocprof counter dimension string")
+            .map(Self)
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+#[allow(dead_code)]
+struct DispatchJsonMetadataV4 {
+    node: DispatchJsonNodeMetadataV4,
+    pid: u64,
+    init_time: u64,
+    fini_time: u64,
+    command: BoundedStringArrayV4,
+    config: BoundedIgnoredObjectV4,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+#[allow(dead_code)]
+struct DispatchJsonNodeMetadataV4 {
+    id: u64,
+    hash: u64,
+    #[serde(deserialize_with = "deserialize_bounded_string_v4")]
+    machine_id: String,
+    #[serde(deserialize_with = "deserialize_bounded_string_v4")]
+    system_name: String,
+    #[serde(deserialize_with = "deserialize_bounded_string_v4")]
+    hostname: String,
+    #[serde(deserialize_with = "deserialize_bounded_string_v4")]
+    release: String,
+    #[serde(deserialize_with = "deserialize_bounded_string_v4")]
+    version: String,
+    #[serde(deserialize_with = "deserialize_bounded_string_v4")]
+    hardware_name: String,
+    #[serde(deserialize_with = "deserialize_bounded_string_v4")]
+    domain_name: String,
+}
+
+#[allow(dead_code)]
+struct BoundedStringArrayV4(Vec<String>);
+
+#[allow(dead_code)]
+struct BoundedIgnoredObjectV4(Vec<String>);
+
+impl<'de> Deserialize<'de> for BoundedIgnoredObjectV4 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct ObjectVisitorV4;
+
+        impl<'de> serde::de::Visitor<'de> for ObjectVisitorV4 {
+            type Value = BoundedIgnoredObjectV4;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(formatter, "a rocprof object with at most 4096 fields")
+            }
+
+            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+            where
+                A: serde::de::MapAccess<'de>,
+            {
+                if map.size_hint().is_some_and(|hint| hint > 4_096) {
+                    return Err(serde::de::Error::custom(
+                        "rocprof object field limit exceeded",
+                    ));
+                }
+                let mut keys = Vec::new();
+                while let Some(key) = map.next_key::<String>()? {
+                    if keys.len() == 4_096 || key.len() > 64 * 1024 || keys.contains(&key) {
+                        return Err(serde::de::Error::custom("invalid rocprof object key"));
+                    }
+                    map.next_value::<IgnoredAny>()?;
+                    keys.try_reserve(1).map_err(|_| {
+                        serde::de::Error::custom("rocprof object allocation failed")
+                    })?;
+                    keys.push(key);
+                }
+                Ok(BoundedIgnoredObjectV4(keys))
+            }
+        }
+
+        deserializer.deserialize_map(ObjectVisitorV4)
+    }
+}
+
+fn deserialize_bounded_string_v4<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct StringVisitorV4;
+
+    impl<'de> serde::de::Visitor<'de> for StringVisitorV4 {
+        type Value = String;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(formatter, "a rocprof string of at most 65536 bytes")
+        }
+
+        fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            if value.len() > 64 * 1024 {
+                return Err(E::custom("rocprof string exceeds limit"));
+            }
+            let mut output = String::new();
+            output
+                .try_reserve(value.len())
+                .map_err(|_| E::custom("rocprof string allocation failed"))?;
+            output.push_str(value);
+            Ok(output)
+        }
+
+        fn visit_borrowed_str<E>(self, value: &'de str) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            self.visit_str(value)
+        }
+    }
+
+    deserializer.deserialize_str(StringVisitorV4)
+}
+
+impl<'de> Deserialize<'de> for BoundedStringArrayV4 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let values = deserialize_bounded_vec_v4(deserializer, 4_096, "rocprof string")?;
+        if values.iter().any(|value: &String| value.len() > 64 * 1024) {
+            return Err(serde::de::Error::custom("rocprof string exceeds limit"));
+        }
+        Ok(Self(values))
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+#[allow(dead_code)]
 struct DispatchJsonAgentV4 {
     id: DispatchJsonHandleV4,
     node_id: u64,
@@ -562,163 +988,283 @@ struct DispatchJsonAgentV4 {
     gfx_target_version: u64,
     wave_front_size: u64,
     num_xcc: u64,
-    #[serde(default)]
-    size: Option<IgnoredAny>,
-    #[serde(default, rename = "type")]
-    agent_type: Option<IgnoredAny>,
-    #[serde(default)]
-    logical_node_id: Option<IgnoredAny>,
-    #[serde(default)]
-    logical_node_type_id: Option<IgnoredAny>,
-    #[serde(default)]
-    cpu_cores_count: Option<IgnoredAny>,
-    #[serde(default)]
-    cpu_core_id_base: Option<IgnoredAny>,
-    #[serde(default)]
-    simd_id_base: Option<IgnoredAny>,
-    #[serde(default)]
-    max_waves_per_simd: Option<IgnoredAny>,
-    #[serde(default)]
-    lds_size_in_kb: Option<IgnoredAny>,
-    #[serde(default)]
-    gds_size_in_kb: Option<IgnoredAny>,
-    #[serde(default)]
-    num_gws: Option<IgnoredAny>,
-    #[serde(default)]
-    cu_count: Option<IgnoredAny>,
-    #[serde(default)]
-    array_count: Option<IgnoredAny>,
-    #[serde(default)]
-    num_shader_banks: Option<IgnoredAny>,
-    #[serde(default)]
-    simd_arrays_per_engine: Option<IgnoredAny>,
-    #[serde(default)]
-    cu_per_simd_array: Option<IgnoredAny>,
-    #[serde(default)]
-    simd_per_cu: Option<IgnoredAny>,
-    #[serde(default)]
-    max_slots_scratch_cu: Option<IgnoredAny>,
-    #[serde(default)]
-    drm_render_minor: Option<IgnoredAny>,
-    #[serde(default)]
-    num_sdma_engines: Option<IgnoredAny>,
-    #[serde(default)]
-    num_sdma_xgmi_engines: Option<IgnoredAny>,
-    #[serde(default)]
-    num_sdma_queues_per_engine: Option<IgnoredAny>,
-    #[serde(default)]
-    num_cp_queues: Option<IgnoredAny>,
-    #[serde(default)]
-    max_engine_clk_ccompute: Option<IgnoredAny>,
-    #[serde(default)]
-    max_engine_clk_fcompute: Option<IgnoredAny>,
-    #[serde(default)]
-    sdma_fw_version: Option<IgnoredAny>,
-    #[serde(default)]
-    fw_version: Option<IgnoredAny>,
-    #[serde(default)]
-    capability: Option<IgnoredAny>,
-    #[serde(default)]
-    cu_per_engine: Option<IgnoredAny>,
-    #[serde(default)]
-    max_waves_per_cu: Option<IgnoredAny>,
-    #[serde(default)]
-    family_id: Option<IgnoredAny>,
-    #[serde(default)]
-    workgroup_max_size: Option<IgnoredAny>,
-    #[serde(default)]
-    grid_max_size: Option<IgnoredAny>,
-    #[serde(default)]
-    local_mem_size: Option<IgnoredAny>,
-    #[serde(default)]
-    hive_id: Option<IgnoredAny>,
-    #[serde(default)]
-    workgroup_max_dim: Option<IgnoredAny>,
-    #[serde(default)]
-    grid_max_dim: Option<IgnoredAny>,
-    #[serde(default)]
-    name: Option<IgnoredAny>,
-    #[serde(default)]
-    vendor_name: Option<IgnoredAny>,
-    #[serde(default)]
-    product_name: Option<IgnoredAny>,
-    #[serde(default)]
-    model_name: Option<IgnoredAny>,
-    #[serde(default)]
-    uuid: Option<IgnoredAny>,
-    #[serde(default)]
-    mem_banks: Option<IgnoredAny>,
-    #[serde(default)]
-    caches: Option<IgnoredAny>,
-    #[serde(default)]
-    io_links: Option<IgnoredAny>,
+    size: u64,
+    #[serde(rename = "type")]
+    agent_type: u32,
+    logical_node_id: i32,
+    logical_node_type_id: i32,
+    cpu_cores_count: u64,
+    cpu_core_id_base: u64,
+    simd_id_base: u64,
+    max_waves_per_simd: u64,
+    lds_size_in_kb: u64,
+    gds_size_in_kb: u64,
+    num_gws: u64,
+    cu_count: u64,
+    array_count: u64,
+    num_shader_banks: u64,
+    simd_arrays_per_engine: u64,
+    cu_per_simd_array: u64,
+    simd_per_cu: u64,
+    max_slots_scratch_cu: u64,
+    drm_render_minor: u64,
+    num_sdma_engines: u64,
+    num_sdma_xgmi_engines: u64,
+    num_sdma_queues_per_engine: u64,
+    num_cp_queues: u64,
+    max_engine_clk_ccompute: u64,
+    max_engine_clk_fcompute: u64,
+    sdma_fw_version: DispatchJsonSdmaFirmwareV4,
+    fw_version: DispatchJsonFirmwareV4,
+    capability: DispatchJsonCapabilityV4,
+    cu_per_engine: u64,
+    max_waves_per_cu: u64,
+    family_id: u64,
+    workgroup_max_size: u64,
+    grid_max_size: u64,
+    local_mem_size: u64,
+    hive_id: u64,
+    workgroup_max_dim: DispatchJsonDimensionsV4,
+    grid_max_dim: DispatchJsonDimensionsV4,
+    #[serde(deserialize_with = "deserialize_bounded_string_v4")]
+    name: String,
+    #[serde(deserialize_with = "deserialize_bounded_string_v4")]
+    vendor_name: String,
+    #[serde(deserialize_with = "deserialize_bounded_string_v4")]
+    product_name: String,
+    #[serde(deserialize_with = "deserialize_bounded_string_v4")]
+    model_name: String,
+    uuid: DispatchJsonUuidV4,
+    mem_banks: BoundedIgnoredArrayV4,
+    mem_banks_count: u32,
+    caches: BoundedIgnoredArrayV4,
+    caches_count: u32,
+    io_links: BoundedIgnoredArrayV4,
+    io_links_count: u32,
+    runtime_visibility: DispatchJsonRuntimeVisibilityV4,
+    gpu_index: i64,
+}
+
+impl DispatchJsonAgentV4 {
+    fn has_valid_shape(&self) -> bool {
+        self.sdma_fw_version.has_valid_shape()
+            && self.fw_version.has_valid_shape()
+            && self.capability.has_valid_shape()
+            && self.runtime_visibility.has_valid_shape()
+            && usize::try_from(self.mem_banks_count).ok() == Some(self.mem_banks.0.len())
+            && usize::try_from(self.caches_count).ok() == Some(self.caches.0.len())
+            && usize::try_from(self.io_links_count).ok() == Some(self.io_links.0.len())
+    }
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+#[allow(dead_code, non_snake_case)]
+struct DispatchJsonSdmaFirmwareV4 {
+    uCodeSDMA: u16,
+    uCodeRes: u16,
+}
+
+impl DispatchJsonSdmaFirmwareV4 {
+    fn has_valid_shape(&self) -> bool {
+        self.uCodeSDMA <= 0x03ff && self.uCodeRes <= 0x03ff
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+#[allow(dead_code, non_snake_case)]
+struct DispatchJsonFirmwareV4 {
+    uCode: u16,
+    Major: u8,
+    Minor: u8,
+    Stepping: u8,
+}
+
+impl DispatchJsonFirmwareV4 {
+    fn has_valid_shape(&self) -> bool {
+        self.uCode <= 0x03ff && self.Major <= 0x3f
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+#[allow(dead_code, non_snake_case)]
+struct DispatchJsonCapabilityV4 {
+    HotPluggable: u8,
+    HSAMMUPresent: u8,
+    SharedWithGraphics: u8,
+    QueueSizePowerOfTwo: u8,
+    QueueSize32bit: u8,
+    QueueIdleEvent: u8,
+    VALimit: u8,
+    WatchPointsSupported: u8,
+    WatchPointsTotalBits: u8,
+    DoorbellType: u8,
+    AQLQueueDoubleMap: u8,
+    DebugTrapSupported: u8,
+    WaveLaunchTrapOverrideSupported: u8,
+    WaveLaunchModeSupported: u8,
+    PreciseMemoryOperationsSupported: u8,
+    DEPRECATED_SRAM_EDCSupport: u8,
+    Mem_EDCSupport: u8,
+    RASEventNotify: u8,
+    ASICRevision: u8,
+    SRAM_EDCSupport: u8,
+    SVMAPISupported: u8,
+    CoherentHostAccess: u8,
+    DebugSupportedFirmware: u8,
+}
+
+impl DispatchJsonCapabilityV4 {
+    fn has_valid_shape(&self) -> bool {
+        [
+            self.HotPluggable,
+            self.HSAMMUPresent,
+            self.SharedWithGraphics,
+            self.QueueSizePowerOfTwo,
+            self.QueueSize32bit,
+            self.QueueIdleEvent,
+            self.VALimit,
+            self.WatchPointsSupported,
+            self.AQLQueueDoubleMap,
+            self.DebugTrapSupported,
+            self.WaveLaunchTrapOverrideSupported,
+            self.WaveLaunchModeSupported,
+            self.PreciseMemoryOperationsSupported,
+            self.DEPRECATED_SRAM_EDCSupport,
+            self.Mem_EDCSupport,
+            self.RASEventNotify,
+            self.SRAM_EDCSupport,
+            self.SVMAPISupported,
+            self.CoherentHostAccess,
+            self.DebugSupportedFirmware,
+        ]
+        .into_iter()
+        .all(|value| value <= 1)
+            && self.WatchPointsTotalBits <= 0x0f
+            && self.DoorbellType <= 0x03
+            && self.ASICRevision <= 0x0f
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+#[allow(dead_code)]
+struct DispatchJsonUuidV4 {
+    bytes: DispatchJsonUuidBytesV4,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+#[allow(dead_code)]
+struct DispatchJsonUuidBytesV4 {
+    value0: u8,
+    value1: u8,
+    value2: u8,
+    value3: u8,
+    value4: u8,
+    value5: u8,
+    value6: u8,
+    value7: u8,
+    value8: u8,
+    value9: u8,
+    value10: u8,
+    value11: u8,
+    value12: u8,
+    value13: u8,
+    value14: u8,
+    value15: u8,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+#[allow(dead_code)]
+struct DispatchJsonRuntimeVisibilityV4 {
+    hsa: u8,
+    hip: u8,
+    rccl: u8,
+    rocdecode: u8,
+}
+
+impl DispatchJsonRuntimeVisibilityV4 {
+    fn has_valid_shape(&self) -> bool {
+        [self.hsa, self.hip, self.rccl, self.rocdecode]
+            .into_iter()
+            .all(|value| value <= 1)
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+#[allow(dead_code)]
 struct DispatchJsonBufferRecordsV4 {
-    #[serde(default)]
+    #[serde(deserialize_with = "deserialize_bounded_dispatches_v4")]
     kernel_dispatch: Vec<DispatchJsonRecordV4>,
+    hip_api: BoundedIgnoredArrayV4,
+    hsa_api: BoundedIgnoredArrayV4,
+    rccl_api: BoundedIgnoredArrayV4,
     #[serde(default)]
-    hip_api: Option<IgnoredAny>,
+    kfd: Option<BoundedIgnoredArrayV4>,
+    rocdecode_api: BoundedIgnoredArrayV4,
+    rocjpeg_api: BoundedIgnoredArrayV4,
     #[serde(default)]
-    hsa_api: Option<IgnoredAny>,
+    hip_graph: Option<BoundedIgnoredArrayV4>,
     #[serde(default)]
-    marker_api: Option<IgnoredAny>,
+    hipfile_api: Option<BoundedIgnoredArrayV4>,
     #[serde(default)]
-    memory_copy: Option<IgnoredAny>,
-    #[serde(default)]
-    memory_allocation: Option<IgnoredAny>,
-    #[serde(default)]
-    scratch_memory: Option<IgnoredAny>,
-    #[serde(default)]
-    page_migration: Option<IgnoredAny>,
-    #[serde(default)]
-    pc_sample_host_trap: Option<IgnoredAny>,
-    #[serde(default)]
-    pc_sample_stochastic: Option<IgnoredAny>,
+    rocshmem_api: Option<BoundedIgnoredArrayV4>,
+    marker_api: BoundedIgnoredArrayV4,
+    memory_copy: BoundedIgnoredArrayV4,
+    memory_allocation: BoundedIgnoredArrayV4,
+    scratch_memory: BoundedIgnoredArrayV4,
+    pc_sample_host_trap: BoundedIgnoredArrayV4,
+    pc_sample_stochastic: BoundedIgnoredArrayV4,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+#[allow(dead_code)]
 struct DispatchJsonRecordV4 {
+    size: u64,
+    kind: u64,
+    operation: u64,
+    thread_id: u64,
+    correlation_id: DispatchJsonCorrelationV4,
     start_timestamp: u64,
     end_timestamp: u64,
     dispatch_info: DispatchJsonInfoV4,
+    stream_id: DispatchJsonHandleV4,
     #[serde(default)]
-    size: Option<IgnoredAny>,
+    graph_exec_id: Option<u64>,
     #[serde(default)]
-    kind: Option<IgnoredAny>,
-    #[serde(default)]
-    operation: Option<IgnoredAny>,
-    #[serde(default)]
-    thread_id: Option<IgnoredAny>,
-    #[serde(default)]
-    correlation_id: Option<IgnoredAny>,
+    graph_node_id: Option<u64>,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+#[allow(dead_code)]
 struct DispatchJsonInfoV4 {
-    #[serde(default)]
-    agent_id: Option<DispatchJsonHandleV4>,
-    #[serde(default)]
-    dispatch_id: Option<u64>,
+    size: u64,
+    agent_id: DispatchJsonHandleV4,
+    queue_id: DispatchJsonHandleV4,
+    kernel_id: u64,
+    dispatch_id: u64,
+    private_segment_size: u64,
+    group_segment_size: u64,
     workgroup_size: DispatchJsonDimensionsV4,
     grid_size: DispatchJsonDimensionsV4,
-    #[serde(default)]
-    size: Option<IgnoredAny>,
-    #[serde(default)]
-    queue_id: Option<IgnoredAny>,
-    #[serde(default)]
-    kernel_id: Option<IgnoredAny>,
-    #[serde(default)]
-    private_segment_size: Option<IgnoredAny>,
-    #[serde(default)]
-    group_segment_size: Option<IgnoredAny>,
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+#[allow(dead_code)]
+struct DispatchJsonCorrelationV4 {
+    internal: u64,
+    external: u64,
+}
+
+#[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct DispatchJsonHandleV4 {
     handle: u64,
@@ -726,10 +1272,174 @@ struct DispatchJsonHandleV4 {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+#[allow(dead_code)]
 struct DispatchJsonDimensionsV4 {
-    x: u64,
-    y: u64,
-    z: u64,
+    x: u32,
+    y: u32,
+    z: u32,
+}
+
+fn deserialize_bounded_processes_v4<'de, D>(
+    deserializer: D,
+) -> Result<Vec<DispatchJsonProcessV4>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct ProcessVisitorV4;
+
+    impl<'de> serde::de::Visitor<'de> for ProcessVisitorV4 {
+        type Value = Vec<DispatchJsonProcessV4>;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(
+                formatter,
+                "at most {MAX_ROCPROF_PROCESSES_V1} rocprof processes containing at most {MAX_PROFILER_DISPATCHES_V4} total dispatches"
+            )
+        }
+
+        fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
+        where
+            A: serde::de::SeqAccess<'de>,
+        {
+            if sequence
+                .size_hint()
+                .is_some_and(|hint| hint > MAX_ROCPROF_PROCESSES_V1)
+            {
+                return Err(serde::de::Error::custom("rocprof process limit exceeded"));
+            }
+            let mut output = Vec::new();
+            let mut dispatch_count = 0_usize;
+            let mut agent_count = 0_usize;
+            while let Some(process) = sequence.next_element::<DispatchJsonProcessV4>()? {
+                if output.len() == MAX_ROCPROF_PROCESSES_V1 {
+                    return Err(serde::de::Error::custom("rocprof process limit exceeded"));
+                }
+                dispatch_count = dispatch_count
+                    .checked_add(process.buffer_records.kernel_dispatch.len())
+                    .ok_or_else(|| serde::de::Error::custom("rocprof dispatch count overflow"))?;
+                if dispatch_count > MAX_PROFILER_DISPATCHES_V4 {
+                    return Err(serde::de::Error::custom("rocprof dispatch limit exceeded"));
+                }
+                agent_count = agent_count
+                    .checked_add(process.agents.len())
+                    .ok_or_else(|| serde::de::Error::custom("rocprof agent count overflow"))?;
+                if agent_count > MAX_PROFILER_SOURCE_AGENT_MAPPINGS_V4 {
+                    return Err(serde::de::Error::custom("rocprof agent limit exceeded"));
+                }
+                output
+                    .try_reserve(1)
+                    .map_err(|_| serde::de::Error::custom("rocprof process allocation failed"))?;
+                output.push(process);
+            }
+            Ok(output)
+        }
+    }
+
+    deserializer.deserialize_seq(ProcessVisitorV4)
+}
+
+fn deserialize_bounded_agents_v4<'de, D>(
+    deserializer: D,
+) -> Result<Vec<DispatchJsonAgentV4>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    BoundedAgentVecV4::deserialize(deserializer).map(|value| value.0)
+}
+
+struct BoundedAgentVecV4(Vec<DispatchJsonAgentV4>);
+
+impl<'de> Deserialize<'de> for BoundedAgentVecV4 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserialize_bounded_vec_v4(
+            deserializer,
+            MAX_PROFILER_DEVICE_BINDINGS_V4,
+            "rocprof agent",
+        )
+        .map(Self)
+    }
+}
+
+#[allow(dead_code)]
+struct BoundedIgnoredArrayV4(Vec<IgnoredAny>);
+
+impl<'de> Deserialize<'de> for BoundedIgnoredArrayV4 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserialize_bounded_vec_v4(
+            deserializer,
+            MAX_PROFILER_DISPATCHES_V4,
+            "rocprof ignored buffer",
+        )
+        .map(Self)
+    }
+}
+
+fn deserialize_bounded_dispatches_v4<'de, D>(
+    deserializer: D,
+) -> Result<Vec<DispatchJsonRecordV4>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    deserialize_bounded_vec_v4(deserializer, MAX_PROFILER_DISPATCHES_V4, "rocprof dispatch")
+}
+
+fn deserialize_bounded_vec_v4<'de, D, T>(
+    deserializer: D,
+    maximum: usize,
+    label: &'static str,
+) -> Result<Vec<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    struct BoundedVisitor<T> {
+        maximum: usize,
+        label: &'static str,
+        marker: std::marker::PhantomData<T>,
+    }
+
+    impl<'de, T> serde::de::Visitor<'de> for BoundedVisitor<T>
+    where
+        T: Deserialize<'de>,
+    {
+        type Value = Vec<T>;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(formatter, "at most {} {} records", self.maximum, self.label)
+        }
+
+        fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
+        where
+            A: serde::de::SeqAccess<'de>,
+        {
+            if sequence.size_hint().is_some_and(|hint| hint > self.maximum) {
+                return Err(serde::de::Error::custom("bounded sequence exceeds limit"));
+            }
+            let mut output = Vec::new();
+            while let Some(value) = sequence.next_element()? {
+                if output.len() == self.maximum {
+                    return Err(serde::de::Error::custom("bounded sequence exceeds limit"));
+                }
+                output
+                    .try_reserve(1)
+                    .map_err(|_| serde::de::Error::custom("bounded sequence allocation failed"))?;
+                output.push(value);
+            }
+            Ok(output)
+        }
+    }
+
+    deserializer.deserialize_seq(BoundedVisitor {
+        maximum,
+        label,
+        marker: std::marker::PhantomData,
+    })
 }
 
 pub fn import_rocprofv3_csv_profiler_bundle_v4(
@@ -999,6 +1709,19 @@ pub fn profiler_bundle_content_identity_v4(
 }
 
 fn csv_to_rocprof_json(source: &[u8]) -> Result<Vec<u8>, ProfilerBundleErrorV4> {
+    csv_projection_v4(source).map(|projection| projection.0)
+}
+
+pub fn rocprofv3_csv_source_agent_bindings_v4(
+    source: &[u8],
+) -> Result<Vec<RocprofCsvSourceAgentBindingV4>, ProfilerBundleErrorV4> {
+    validate_source(source)?;
+    csv_projection_v4(source).map(|projection| projection.1)
+}
+
+fn csv_projection_v4(
+    source: &[u8],
+) -> Result<(Vec<u8>, Vec<RocprofCsvSourceAgentBindingV4>), ProfilerBundleErrorV4> {
     let mut reader = csv::ReaderBuilder::new()
         .has_headers(true)
         .flexible(false)
@@ -1013,25 +1736,26 @@ fn csv_to_rocprof_json(source: &[u8]) -> Result<Vec<u8>, ProfilerBundleErrorV4> 
     }
     let mut positions = BTreeMap::new();
     for (index, header) in headers.iter().enumerate() {
-        if !CSV_ALLOWED_HEADERS.contains(&header)
-            || positions.insert(header.to_owned(), index).is_some()
-        {
+        if positions.insert(header.to_owned(), index).is_some() {
             return Err(ProfilerBundleErrorV4::InvalidRocprofCsv);
         }
     }
-    for required in CSV_REQUIRED_HEADERS {
-        if !positions.contains_key(*required) {
-            return Err(ProfilerBundleErrorV4::InvalidRocprofCsv);
-        }
+    if !headers.iter().eq(CSV_CURRENT_HEADERS_V4.iter().copied()) {
+        return Err(ProfilerBundleErrorV4::InvalidRocprofCsv);
     }
-    let mut processes: BTreeMap<u64, Vec<serde_json::Value>> = BTreeMap::new();
+    let mut processes: BTreeMap<Option<u64>, Vec<serde_json::Value>> = BTreeMap::new();
+    let mut used_agents: BTreeMap<Option<u64>, BTreeSet<u32>> = BTreeMap::new();
     let mut count = 0_usize;
     for row in reader.records() {
         let row = row.map_err(|_| ProfilerBundleErrorV4::InvalidRocprofCsv)?;
-        if row
-            .iter()
-            .any(|field| field.len() > MAX_PROFILER_CSV_FIELD_BYTES_V4)
-        {
+        if row.iter().enumerate().any(|(index, field)| {
+            let limit = if headers.get(index) == Some("Kernel_Name") {
+                MAX_PROFILER_CSV_KERNEL_NAME_BYTES_V4
+            } else {
+                MAX_PROFILER_CSV_FIELD_BYTES_V4
+            };
+            field.len() > limit
+        }) {
             return Err(ProfilerBundleErrorV4::InvalidRocprofCsv);
         }
         count = count
@@ -1042,10 +1766,23 @@ fn csv_to_rocprof_json(source: &[u8]) -> Result<Vec<u8>, ProfilerBundleErrorV4> 
         {
             return Err(ProfilerBundleErrorV4::InvalidRocprofCsv);
         }
-        let process = parse_integer(field(&row, &positions, "Process_Id")?)?;
+        for (name, index) in &positions {
+            if !matches!(name.as_str(), "Kind" | "Agent_Id" | "Kernel_Name") {
+                parse_integer(
+                    row.get(*index)
+                        .ok_or(ProfilerBundleErrorV4::InvalidRocprofCsv)?,
+                )?;
+            }
+        }
+        parse_integer(field(&row, &positions, "Stream_Id")?)?;
+        let process = None;
         let agent = parse_agent_id(field(&row, &positions, "Agent_Id")?)?;
+        let agent_node =
+            u32::try_from(agent).map_err(|_| ProfilerBundleErrorV4::InvalidRocprofCsv)?;
+        used_agents.entry(process).or_default().insert(agent_node);
         let start = parse_integer(field(&row, &positions, "Start_Timestamp")?)?;
         let end = parse_integer(field(&row, &positions, "End_Timestamp")?)?;
+        let dispatch_id = parse_integer(field(&row, &positions, "Dispatch_Id")?)?;
         let dimension = |prefix: &str, axis: &str| {
             parse_integer(field(&row, &positions, &format!("{prefix}_{axis}"))?)
         };
@@ -1067,6 +1804,7 @@ fn csv_to_rocprof_json(source: &[u8]) -> Result<Vec<u8>, ProfilerBundleErrorV4> 
                 "end_timestamp": end,
                 "dispatch_info": {
                     "agent_id": {"handle": agent},
+                    "dispatch_id": dispatch_id,
                     "workgroup_size": {"x": workgroup[0], "y": workgroup[1], "z": workgroup[2]},
                     "grid_size": {"x": grid[0], "y": grid[1], "z": grid[2]}
                 }
@@ -1079,8 +1817,24 @@ fn csv_to_rocprof_json(source: &[u8]) -> Result<Vec<u8>, ProfilerBundleErrorV4> 
         .into_values()
         .map(|kernel_dispatch| serde_json::json!({"buffer_records":{"kernel_dispatch":kernel_dispatch}}))
         .collect::<Vec<_>>();
-    serde_json::to_vec(&serde_json::json!({"rocprofiler-sdk-tool":processes}))
-        .map_err(|_| ProfilerBundleErrorV4::JsonEncode)
+    let projection = serde_json::to_vec(&serde_json::json!({"rocprofiler-sdk-tool":processes}))
+        .map_err(|_| ProfilerBundleErrorV4::JsonEncode)?;
+    let mut bindings = Vec::new();
+    for (process_index, (process_id, agents)) in used_agents.into_iter().enumerate() {
+        let process_index =
+            u32::try_from(process_index).map_err(|_| ProfilerBundleErrorV4::SizeOverflow)?;
+        for node_id in agents {
+            if bindings.len() == MAX_PROFILER_SOURCE_AGENT_MAPPINGS_V4 {
+                return Err(ProfilerBundleErrorV4::SourceAgentMappingCountOutOfRange);
+            }
+            bindings.push(RocprofCsvSourceAgentBindingV4 {
+                process_index,
+                process_id,
+                node_id,
+            });
+        }
+    }
+    Ok((projection, bindings))
 }
 
 fn field<'a>(
@@ -1097,22 +1851,6 @@ fn field<'a>(
 }
 
 fn parse_integer(value: &str) -> Result<u64, ProfilerBundleErrorV4> {
-    if let Some(digits) = value.strip_prefix("0x") {
-        if digits.is_empty()
-            || (digits.len() > 1 && digits.starts_with('0'))
-            || !digits
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-        {
-            return Err(ProfilerBundleErrorV4::InvalidRocprofCsv);
-        }
-        let parsed = u64::from_str_radix(digits, 16)
-            .map_err(|_| ProfilerBundleErrorV4::InvalidRocprofCsv)?;
-        if format!("{parsed:x}") != digits {
-            return Err(ProfilerBundleErrorV4::InvalidRocprofCsv);
-        }
-        return Ok(parsed);
-    }
     if value.is_empty()
         || (value.len() > 1 && value.starts_with('0'))
         || !value.bytes().all(|byte| byte.is_ascii_digit())
@@ -1130,7 +1868,7 @@ fn parse_integer(value: &str) -> Result<u64, ProfilerBundleErrorV4> {
 
 fn parse_agent_id(value: &str) -> Result<u64, ProfilerBundleErrorV4> {
     let Some(agent) = value.strip_prefix("Agent ") else {
-        return parse_integer(value);
+        return Err(ProfilerBundleErrorV4::InvalidRocprofCsv);
     };
     let parsed = agent
         .parse::<u64>()
@@ -1141,30 +1879,18 @@ fn parse_agent_id(value: &str) -> Result<u64, ProfilerBundleErrorV4> {
     Ok(parsed)
 }
 
-const CSV_REQUIRED_HEADERS: &[&str] = &[
-    "Kind",
-    "Agent_Id",
-    "Process_Id",
-    "Workgroup_Size_X",
-    "Workgroup_Size_Y",
-    "Workgroup_Size_Z",
-    "Grid_Size_X",
-    "Grid_Size_Y",
-    "Grid_Size_Z",
-    "Start_Timestamp",
-    "End_Timestamp",
-];
-
-const CSV_ALLOWED_HEADERS: &[&str] = &[
+const CSV_CURRENT_HEADERS_V4: &[&str] = &[
     "Kind",
     "Agent_Id",
     "Queue_Id",
-    "Process_Id",
+    "Stream_Id",
     "Thread_Id",
-    "Correlation_Id",
-    "Kernel_Id",
     "Dispatch_Id",
+    "Kernel_Id",
     "Kernel_Name",
+    "Correlation_Id",
+    "Start_Timestamp",
+    "End_Timestamp",
     "LDS_Block_Size",
     "Scratch_Size",
     "VGPR_Count",
@@ -1176,8 +1902,6 @@ const CSV_ALLOWED_HEADERS: &[&str] = &[
     "Grid_Size_X",
     "Grid_Size_Y",
     "Grid_Size_Z",
-    "Start_Timestamp",
-    "End_Timestamp",
 ];
 
 #[derive(Deserialize)]
@@ -1445,6 +2169,7 @@ pub enum ProfilerBundleErrorV4 {
     DuplicateStableDevice,
     DuplicateSourceAgentBinding,
     DeviceCountOutOfRange,
+    SourceAgentMappingCountOutOfRange,
     DeviceCountMismatch,
     MissingDeviceBinding,
     InvalidDevice,

@@ -7,25 +7,24 @@
 //! as proof that a direct-KFD dispatch or ATT record was observed; Bundle V4 import is the separate
 //! validation boundary.
 
-use sha2::{Digest, Sha256};
+use crate::profile_dispatch_import_v1::{
+    DispatchImportBindingV1, DispatchImportProductV1, DispatchImportSourceKindV1,
+    DispatchImportTargetBindingV1, ObservedTargetFamilyV1, PROFILE_DISPATCH_BUNDLE_FILE_V1,
+    PROFILE_DISPATCH_RECEIPT_FILE_V1, import_dispatch_v1, readmit_dispatch_import_tuple_v1,
+};
+use fe2o3_artifact_transaction::{NoRetainedDurableDirectoryHooksV1, RetainedDurableDirectoryV1};
 use fe2o3_kernel_ir::{
     AMDGPU_EXACT_TARGET_CAPABILITY_NAMESPACE, AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME,
     AMDGPU_GFX950_XNACK_MINUS_TARGET_CAPABILITY_NAME, MAX_MODULE_BYTES_V1, Module,
     TargetCapability, VerifiedCanonicalKernelIrV7, WaveWidth,
 };
-use fe2o3_artifact_transaction::{
-    NoRetainedDurableDirectoryHooksV1, RetainedDurableDirectoryV1,
-};
 use fe2o3_semantic_import::{
-    CaptureIdentityV1, ContentIdentityRecordV1, ContentSchemeV1,
-    RocprofJsonGpuAgentBindingV4, rocprofv3_json_gpu_agent_bindings_v4,
+    CaptureIdentityV1, ContentIdentityRecordV1, ContentSchemeV1, ProfilerBundleErrorV4,
+    RocprofJsonGpuAgentBindingV4, project_rocprofv3_json_dispatch_agents_v4,
+    rocprofv3_csv_source_agent_bindings_v4,
 };
 use fe2o3_semantic_trace::WaveWidthV1;
-use crate::profile_dispatch_import_v1::{
-    DispatchImportBindingV1, DispatchImportProductV1, DispatchImportSourceKindV1,
-    DispatchImportTargetBindingV1, ObservedTargetFamilyV1, PROFILE_DISPATCH_BUNDLE_FILE_V1,
-    PROFILE_DISPATCH_RECEIPT_FILE_V1, import_dispatch_v1,
-};
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::ffi::{OsStr, OsString};
@@ -54,6 +53,8 @@ const MAX_COLLECTOR_LIBRARY_BYTES: u64 = 128 * 1024 * 1024;
 const MAX_TARGET_BYTES: u64 = 1024 * 1024 * 1024;
 const MAX_INSPECTION_PREFIX: usize = 128 * 1024;
 const MAX_TOPOLOGY_BYTES: u64 = 64 * 1024;
+const MAX_KFD_SCALAR_BACKING_BYTES: u64 = 4 * 1024;
+const MAX_KFD_SCALAR_CONTENT_BYTES: u64 = 32;
 const MAX_DEVICES: usize = 64;
 const MAX_ARTIFACTS: usize = 4096;
 const MAX_ARTIFACT_DEPTH: usize = 8;
@@ -1037,7 +1038,9 @@ fn prepare_plan(options: Options) -> Result<Plan, String> {
 }
 
 fn admit_kir_v7(path: &Path, devices: &[DeviceIdentity]) -> Result<VerifiedKirInputV1, String> {
-    require_absolute_named(path, "--kir-v7", "canonical Kernel IR V7")?;
+    if !path.is_absolute() {
+        return Err("--kir-v7 must be an absolute path".to_owned());
+    }
     let pin = FilePin::open(
         path,
         "canonical Kernel IR V7",
@@ -1062,6 +1065,11 @@ fn kir_target_compatibility_v1(
     module: &Module,
     devices: &[DeviceIdentity],
 ) -> KirTargetCompatibilityV1 {
+    if devices.is_empty() {
+        return KirTargetCompatibilityV1::Unavailable(
+            KirTargetUnavailableReasonV1::KfdProfileUnavailable,
+        );
+    }
     let capabilities = module
         .effective_capabilities()
         .into_iter()
@@ -1098,7 +1106,10 @@ fn kir_target_compatibility_v1(
                         );
                     }
                 };
-                if exact_target.replace(target).is_some_and(|prior| prior != target) {
+                if exact_target
+                    .replace(target)
+                    .is_some_and(|prior| prior != target)
+                {
                     return KirTargetCompatibilityV1::Unavailable(
                         KirTargetUnavailableReasonV1::ConflictingExactTargets,
                     );
@@ -1425,17 +1436,31 @@ fn read_kfd_scalar(path: &Path, node: u32, field: &'static str) -> io::Result<u6
             format!("failed to inspect KFD node {node} {field}: {error}"),
         )
     })?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() > 32 {
+    if metadata.file_type().is_symlink()
+        || !metadata.is_file()
+        || metadata.len() > MAX_KFD_SCALAR_BACKING_BYTES
+    {
         return Err(invalid_data(format!(
             "KFD node {node} {field} is not a bounded regular file"
         )));
     }
-    let bytes = fs::read(path).map_err(|error| {
-        io::Error::new(
-            error.kind(),
-            format!("failed to read KFD node {node} {field}: {error}"),
-        )
-    })?;
+    let mut bytes = Vec::new();
+    File::open(path)
+        .and_then(|file| {
+            file.take(MAX_KFD_SCALAR_CONTENT_BYTES + 1)
+                .read_to_end(&mut bytes)
+        })
+        .map_err(|error| {
+            io::Error::new(
+                error.kind(),
+                format!("failed to read KFD node {node} {field}: {error}"),
+            )
+        })?;
+    if bytes.len() as u64 > MAX_KFD_SCALAR_CONTENT_BYTES {
+        return Err(invalid_data(format!(
+            "KFD node {node} {field} exceeds the content bound"
+        )));
+    }
     let after = fs::symlink_metadata(path).map_err(|error| {
         io::Error::new(
             error.kind(),
@@ -1647,6 +1672,7 @@ fn authorization_digest(input: AuthorizationInputs<'_>) -> [u8; 32] {
         &(options.timeout.as_millis() as u64).to_le_bytes(),
     );
     hash_field(&mut hasher, &(options.stdout_limit as u64).to_le_bytes());
+    hash_field(&mut hasher, &(options.stderr_limit as u64).to_le_bytes());
     hash_field(&mut hasher, &options.storage_limit.to_le_bytes());
     hash_field(&mut hasher, options.program.as_bytes());
     for argument in &options.program_arguments {
@@ -2057,11 +2083,7 @@ fn render_dispatch_import_plan(
             "next-import-status",
             "unavailable-kir-v7-target-compatibility",
         );
-        line(
-            output,
-            "next-import-unavailable-reason",
-            reason.name(),
-        );
+        line(output, "next-import-unavailable-reason", reason.name());
         line(
             output,
             "next-query-status",
@@ -2114,6 +2136,16 @@ fn render_dispatch_import_plan(
 }
 
 fn collect(plan: Plan) -> Result<CommandReport, String> {
+    collect_with_device_revalidator(plan, validate_device_bindings)
+}
+
+fn collect_with_device_revalidator<F>(
+    plan: Plan,
+    device_revalidator: F,
+) -> Result<CommandReport, String>
+where
+    F: Fn(&[DeviceIdentity]) -> Result<(), String>,
+{
     plan.tool.validate("rocprofv3 script")?;
     plan.interpreter.validate("rocprofv3 Python interpreter")?;
     if let Some(libraries) = &plan.collector_libraries {
@@ -2123,7 +2155,7 @@ fn collect(plan: Plan) -> Result<CommandReport, String> {
     if let Some(kir) = &plan.verified_kir_v7 {
         kir.revalidate()?;
     }
-    validate_device_bindings(&plan.devices)?;
+    device_revalidator(&plan.devices)?;
     let custody = OutputCustody::create(&plan.output_directory, &plan.authorization)?;
     let result = run_collector(&plan);
     let supervised = match result {
@@ -2146,7 +2178,7 @@ fn collect(plan: Plan) -> Result<CommandReport, String> {
             Some(kir) => kir.revalidate(),
             None => Ok(()),
         })
-        .and_then(|()| validate_device_bindings(&plan.devices))
+        .and_then(|()| device_revalidator(&plan.devices))
         .err();
     if supervised.reason != StopReason::Exited
         || !supervised.status.is_some_and(|status| status.success())
@@ -2160,7 +2192,7 @@ fn collect(plan: Plan) -> Result<CommandReport, String> {
             cleanup_error,
         ));
     }
-    let artifacts = match scan_artifacts(&plan.output_directory, plan.options.storage_limit) {
+    let artifacts = match scan_artifacts(&custody, plan.options.storage_limit) {
         Ok(artifacts) => artifacts,
         Err(error) => {
             custody.cleanup()?;
@@ -2171,13 +2203,52 @@ fn collect(plan: Plan) -> Result<CommandReport, String> {
         Ok(outcome) => outcome,
         Err(error) => {
             custody.cleanup()?;
-            return Err(format!("dispatch import custody failed and was cleaned: {error}"));
+            return Err(format!(
+                "dispatch import custody failed and was cleaned: {error}"
+            ));
         }
     };
-    if let DispatchImportOutcomeV1::Imported { source, product } = &dispatch_import {
+    let manifest = render_manifest(&plan, &artifacts, &dispatch_import);
+    let artifact_bytes = artifacts
+        .iter()
+        .try_fold(0_u64, |total, artifact| total.checked_add(artifact.length));
+    let generated_bytes = match &dispatch_import {
+        DispatchImportOutcomeV1::Unavailable(_) => Some(0_u64),
+        DispatchImportOutcomeV1::Imported { product, .. } => product
+            .bundle_bytes
+            .len()
+            .checked_add(product.receipt_bytes.len())
+            .and_then(|length| u64::try_from(length).ok()),
+    };
+    let total_publication_bytes = artifact_bytes
+        .and_then(|total| total.checked_add(generated_bytes?))
+        .and_then(|total| total.checked_add(u64::try_from(manifest.len()).ok()?));
+    if total_publication_bytes.is_none_or(|total| total > plan.options.storage_limit) {
+        custody.cleanup()?;
+        return Err(
+            "collector and generated transaction would exceed the storage limit; output was cleaned"
+                .to_owned(),
+        );
+    }
+    if let DispatchImportOutcomeV1::Imported {
+        source,
+        source_kind,
+        binding,
+        product,
+    } = &dispatch_import
+    {
         let persistence = (|| {
             source.revalidate(&custody)?;
-            revalidate_collection_inputs_v1(&plan)?;
+            revalidate_collection_inputs_v1(&plan, &device_revalidator)?;
+            readmit_dispatch_import_tuple_v1(
+                *source_kind,
+                &source.bytes,
+                binding.clone(),
+                &product.bundle_bytes,
+                &product.capture_bytes,
+                &product.receipt_bytes,
+            )
+            .map_err(|error| format!("pre-publication tuple readmission failed: {error}"))?;
             custody.commit_record(
                 PROFILE_DISPATCH_BUNDLE_FILE_V1,
                 PROFILE_DISPATCH_BUNDLE_REDO_FILE_V1,
@@ -2185,15 +2256,30 @@ fn collect(plan: Plan) -> Result<CommandReport, String> {
                 product.bundle_bytes.len(),
             )?;
             source.revalidate(&custody)?;
-            revalidate_collection_inputs_v1(&plan)?;
+            revalidate_collection_inputs_v1(&plan, &device_revalidator)?;
             custody.commit_record(
                 PROFILE_DISPATCH_RECEIPT_FILE_V1,
                 PROFILE_DISPATCH_RECEIPT_REDO_FILE_V1,
                 &product.receipt_bytes,
                 product.receipt_bytes.len(),
             )?;
+            let durable_bundle =
+                custody.read_record(PROFILE_DISPATCH_BUNDLE_FILE_V1, product.bundle_bytes.len())?;
+            let durable_receipt = custody.read_record(
+                PROFILE_DISPATCH_RECEIPT_FILE_V1,
+                product.receipt_bytes.len(),
+            )?;
+            readmit_dispatch_import_tuple_v1(
+                *source_kind,
+                &source.bytes,
+                binding.clone(),
+                &durable_bundle,
+                &product.capture_bytes,
+                &durable_receipt,
+            )
+            .map_err(|error| format!("durable tuple readmission failed: {error}"))?;
             source.revalidate(&custody)?;
-            revalidate_collection_inputs_v1(&plan)
+            revalidate_collection_inputs_v1(&plan, &device_revalidator)
         })();
         if let Err(error) = persistence {
             let cleanup = custody.cleanup().err();
@@ -2205,26 +2291,22 @@ fn collect(plan: Plan) -> Result<CommandReport, String> {
             });
         }
     }
-    let manifest = render_manifest(&plan, &artifacts, &dispatch_import);
-    let generated_bytes = match &dispatch_import {
-        DispatchImportOutcomeV1::Unavailable(_) => 0,
-        DispatchImportOutcomeV1::Imported { product, .. } => product
-            .bundle_bytes
-            .len()
-            .checked_add(product.receipt_bytes.len())
-            .ok_or("generated dispatch import byte count overflow")?,
-    };
-    if manifest.len() as u64
-        > plan
-            .options
-            .storage_limit
-            .saturating_sub(artifacts.iter().map(|artifact| artifact.length).sum())
-            .saturating_sub(generated_bytes as u64)
-    {
-        custody.cleanup()?;
-        return Err(
-            "collector manifest would exceed the storage limit; output was cleaned".to_owned(),
-        );
+    let final_revalidation = (|| {
+        if let DispatchImportOutcomeV1::Imported { source, .. } = &dispatch_import {
+            source.revalidate(&custody)?;
+        }
+        revalidate_collection_inputs_v1(&plan, &device_revalidator)
+    })();
+    if let Err(error) = final_revalidation {
+        let cleanup = custody.cleanup().err();
+        return Err(match cleanup {
+            Some(cleanup) => {
+                format!(
+                    "manifest-last revalidation failed: {error}; cleanup also failed: {cleanup}"
+                )
+            }
+            None => format!("manifest-last revalidation failed and was cleaned: {error}"),
+        });
     }
     if let Err(error) = custody.write_manifest(manifest.as_bytes()) {
         let cleanup = custody.cleanup().err();
@@ -2243,10 +2325,12 @@ fn collect(plan: Plan) -> Result<CommandReport, String> {
     ))
 }
 
-fn revalidate_collection_inputs_v1(plan: &Plan) -> Result<(), String> {
+fn revalidate_collection_inputs_v1<F>(plan: &Plan, device_revalidator: &F) -> Result<(), String>
+where
+    F: Fn(&[DeviceIdentity]) -> Result<(), String>,
+{
     plan.tool.validate("rocprofv3 script")?;
-    plan.interpreter
-        .validate("rocprofv3 Python interpreter")?;
+    plan.interpreter.validate("rocprofv3 Python interpreter")?;
     if let Some(libraries) = &plan.collector_libraries {
         libraries.validate()?;
     }
@@ -2254,7 +2338,7 @@ fn revalidate_collection_inputs_v1(plan: &Plan) -> Result<(), String> {
     if let Some(kir) = &plan.verified_kir_v7 {
         kir.revalidate()?;
     }
-    validate_device_bindings(&plan.devices)
+    device_revalidator(&plan.devices)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2446,21 +2530,33 @@ impl OutputCustody {
             let _ = fs::remove_dir_all(path);
             return Err(format!("failed to persist output ownership guard: {error}"));
         }
-        let root = rustix::fs::open(
-            path,
-            rustix::fs::OFlags::RDONLY
-                | rustix::fs::OFlags::DIRECTORY
-                | rustix::fs::OFlags::NOFOLLOW
-                | rustix::fs::OFlags::CLOEXEC,
-            rustix::fs::Mode::empty(),
-        )
-        .map_err(|error| format!("failed to retain output directory: {error}"))?;
-        rustix::fs::fsync(&root)
-            .map_err(|error| format!("failed to persist output directory custody: {error}"))?;
-        let durable_root = rustix::io::fcntl_dupfd_cloexec(&root, 0)
-            .map_err(|error| format!("failed to duplicate output directory custody: {error}"))?;
-        let durable = RetainedDurableDirectoryV1::admit_service_owned(durable_root)
-            .map_err(|error| format!("failed to admit durable output custody: {error}"))?;
+        let admitted = (|| {
+            let root = rustix::fs::open(
+                path,
+                rustix::fs::OFlags::RDONLY
+                    | rustix::fs::OFlags::DIRECTORY
+                    | rustix::fs::OFlags::NOFOLLOW
+                    | rustix::fs::OFlags::CLOEXEC,
+                rustix::fs::Mode::empty(),
+            )
+            .map_err(|error| format!("failed to retain output directory: {error}"))?;
+            rustix::fs::fsync(&root)
+                .map_err(|error| format!("failed to persist output directory custody: {error}"))?;
+            let durable_root = rustix::io::fcntl_dupfd_cloexec(&root, 0).map_err(|error| {
+                format!("failed to duplicate output directory custody: {error}")
+            })?;
+            let durable = RetainedDurableDirectoryV1::admit_service_owned(durable_root)
+                .map_err(|error| format!("failed to admit durable output custody: {error}"))?;
+            Ok::<_, String>((root, durable))
+        })();
+        let (root, durable) = match admitted {
+            Ok(admitted) => admitted,
+            Err(error) => {
+                drop(file);
+                let _ = fs::remove_dir_all(path);
+                return Err(error);
+            }
+        };
         Ok(Self {
             path: path.to_path_buf(),
             identity: ObjectIdentity::from_metadata(&metadata),
@@ -2513,6 +2609,43 @@ impl OutputCustody {
         self.durable
             .commit_record(canonical, redo, bytes, maximum, &mut hooks)
             .map_err(|error| format!("failed to durably commit {canonical}: {error}"))
+    }
+
+    fn read_record(&self, name: &str, maximum: usize) -> Result<Vec<u8>, String> {
+        self.validate()?;
+        validate_relative(name)?;
+        let descriptor = rustix::fs::openat2(
+            &self.root,
+            name,
+            rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+            rustix::fs::ResolveFlags::BENEATH
+                | rustix::fs::ResolveFlags::NO_SYMLINKS
+                | rustix::fs::ResolveFlags::NO_MAGICLINKS
+                | rustix::fs::ResolveFlags::NO_XDEV,
+        )
+        .map(File::from)
+        .map_err(|error| format!("failed to reopen durable {name}: {error}"))?;
+        let metadata = descriptor
+            .metadata()
+            .map_err(|error| format!("failed to inspect durable {name}: {error}"))?;
+        if !metadata.is_file() || metadata.nlink() != 1 {
+            return Err(format!("durable {name} is not a private regular file"));
+        }
+        let limit =
+            u64::try_from(maximum).map_err(|_| format!("durable {name} bound does not fit u64"))?;
+        let read_limit = limit
+            .checked_add(1)
+            .ok_or_else(|| format!("durable {name} bound overflow"))?;
+        let mut bytes = Vec::new();
+        descriptor
+            .take(read_limit)
+            .read_to_end(&mut bytes)
+            .map_err(|error| format!("failed to read durable {name}: {error}"))?;
+        if bytes.len() > maximum {
+            return Err(format!("durable {name} exceeds its byte bound"));
+        }
+        Ok(bytes)
     }
 }
 
@@ -2573,7 +2706,7 @@ impl RetainedDispatchSourceV1 {
                     .map_err(|_| "dispatch source length does not fit memory".to_owned())?,
             )
             .map_err(|_| "failed to reserve dispatch source bytes".to_owned())?;
-        file.by_ref()
+        Read::by_ref(&mut file)
             .take(MAX_PROFILER_IMPORT_SOURCE_BYTES + 1)
             .read_to_end(&mut bytes)
             .map_err(|error| format!("failed to read retained dispatch source: {error}"))?;
@@ -2606,9 +2739,7 @@ impl RetainedDispatchSourceV1 {
         let reopened = rustix::fs::openat2(
             &custody.root,
             self.relative.as_str(),
-            rustix::fs::OFlags::RDONLY
-                | rustix::fs::OFlags::NOFOLLOW
-                | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::CLOEXEC,
             rustix::fs::Mode::empty(),
             rustix::fs::ResolveFlags::BENEATH
                 | rustix::fs::ResolveFlags::NO_SYMLINKS
@@ -2641,6 +2772,8 @@ enum DispatchImportOutcomeV1 {
     Unavailable(&'static str),
     Imported {
         source: RetainedDispatchSourceV1,
+        source_kind: DispatchImportSourceKindV1,
+        binding: DispatchImportBindingV1,
         product: DispatchImportProductV1,
     },
 }
@@ -2678,69 +2811,118 @@ fn select_dispatch_import_v1(
             ));
         }
     };
-    let mut selected = None;
-    for artifact in artifacts
-        .iter()
-        .filter(|artifact| artifact.length > 0 && artifact.length <= MAX_PROFILER_IMPORT_SOURCE_BYTES)
-    {
+    let mut selected_source = None;
+    for artifact in artifacts.iter().filter(|artifact| {
+        artifact.length > 0 && artifact.length <= MAX_PROFILER_IMPORT_SOURCE_BYTES
+    }) {
         let source = RetainedDispatchSourceV1::open(custody, artifact)?;
-        let targets = match source_kind {
+        let admission = match source_kind {
             DispatchImportSourceKindV1::Rocprofv3KernelDispatchJson => {
-                let catalog = match rocprofv3_json_gpu_agent_bindings_v4(&source.bytes) {
-                    Ok(catalog) => catalog,
-                    Err(_) => continue,
-                };
-                match json_dispatch_targets_v1(&catalog, &plan.devices) {
-                    Ok(targets) => targets,
-                    Err(_) => continue,
-                }
+                project_rocprofv3_json_dispatch_agents_v4(&source.bytes).map(|_| ())
             }
             DispatchImportSourceKindV1::Rocprofv3KernelDispatchCsv => {
-                csv_dispatch_targets_v1(&plan.devices)?
+                rocprofv3_csv_source_agent_bindings_v4(&source.bytes).map(|_| ())
             }
         };
-        let binding = DispatchImportBindingV1 {
-            collection_authorization: CaptureIdentityV1::new(plan.authorization)
-                .map_err(|_| "collection authorization identity is invalid".to_owned())?,
-            source_relative: source.relative.clone(),
-            source_artifact: raw_content_identity_v1(source.digest, artifact.length)?,
-            kernel_ir: ContentIdentityRecordV1 {
-                scheme: ContentSchemeV1::DomainSeparatedSha256,
-                format_version: 1,
-                digest: CaptureIdentityV1::new(*kir.owner.identity().digest())
-                    .map_err(|_| "canonical KIR V7 identity is invalid".to_owned())?,
-                canonical_len: kir.owner.identity().canonical_length(),
-            },
-            environment: raw_content_identity_v1(
-                plan.environment_digest,
-                plan.environment_bytes.len() as u64,
-            )?,
-            collector_tool: raw_content_identity_v1(
-                plan.collector_tool_digest,
-                plan.collector_tool_bytes.len() as u64,
-            )?,
-            collector_configuration: raw_content_identity_v1(
-                plan.configuration_digest,
-                plan.configuration.len() as u64,
-            )?,
-            targets,
-            wave_width: WaveWidthV1::Wave64,
-        };
-        let product = match import_dispatch_v1(source_kind, &source.bytes, binding) {
-            Ok(product) => product,
-            Err(_) => continue,
-        };
-        if selected.is_some() {
+        let schema_valid = classify_dispatch_source_admission_v1(admission)?;
+        if !schema_valid {
+            continue;
+        }
+        if selected_source.is_some() {
             return Ok(DispatchImportOutcomeV1::Unavailable(
                 "multiple-schema-valid-dispatch-sources",
             ));
         }
-        selected = Some((source, product));
+        selected_source = Some(source);
     }
-    Ok(match selected {
-        Some((source, product)) => DispatchImportOutcomeV1::Imported { source, product },
-        None => DispatchImportOutcomeV1::Unavailable("no-schema-valid-dispatch-source"),
+    let Some(source) = selected_source else {
+        return Ok(DispatchImportOutcomeV1::Unavailable(
+            "no-schema-valid-dispatch-source",
+        ));
+    };
+    let targets = match source_kind {
+        DispatchImportSourceKindV1::Rocprofv3KernelDispatchJson => {
+            let projection = project_rocprofv3_json_dispatch_agents_v4(&source.bytes)
+                .map_err(|_| "selected rocprof JSON source failed exact re-admission".to_owned())?;
+            match json_dispatch_targets_v1(projection.agent_bindings(), &plan.devices) {
+                Ok(targets) => targets,
+                Err(_) => {
+                    return Ok(DispatchImportOutcomeV1::Unavailable(
+                        "schema-valid-dispatch-source-target-incompatible",
+                    ));
+                }
+            }
+        }
+        DispatchImportSourceKindV1::Rocprofv3KernelDispatchCsv => {
+            match csv_dispatch_targets_v1(&source.bytes, &plan.devices) {
+                Ok(targets) => targets,
+                Err(_) => {
+                    return Ok(DispatchImportOutcomeV1::Unavailable(
+                        "schema-valid-dispatch-source-target-incompatible",
+                    ));
+                }
+            }
+        }
+    };
+    let binding = DispatchImportBindingV1 {
+        collection_authorization: CaptureIdentityV1::new(plan.authorization)
+            .map_err(|_| "collection authorization identity is invalid".to_owned())?,
+        source_relative: source.relative.clone(),
+        source_artifact: raw_content_identity_v1(source.digest, source.bytes.len() as u64)?,
+        kernel_ir: ContentIdentityRecordV1 {
+            scheme: ContentSchemeV1::DomainSeparatedSha256,
+            format_version: 1,
+            digest: CaptureIdentityV1::new(*kir.owner.identity().digest())
+                .map_err(|_| "canonical KIR V7 identity is invalid".to_owned())?,
+            canonical_len: kir.owner.identity().canonical_length(),
+        },
+        environment: raw_content_identity_v1(
+            plan.environment_digest,
+            plan.environment_bytes.len() as u64,
+        )?,
+        collector_tool: raw_content_identity_v1(
+            plan.collector_tool_digest,
+            plan.collector_tool_bytes.len() as u64,
+        )?,
+        collector_configuration: raw_content_identity_v1(
+            plan.configuration_digest,
+            plan.configuration.len() as u64,
+        )?,
+        targets,
+        wave_width: WaveWidthV1::Wave64,
+    };
+    let product = import_dispatch_v1(source_kind, &source.bytes, binding.clone())
+        .map_err(|error| format!("selected dispatch source import failed: {error}"))?;
+    readmit_dispatch_import_tuple_v1(
+        source_kind,
+        &source.bytes,
+        binding.clone(),
+        &product.bundle_bytes,
+        &product.capture_bytes,
+        &product.receipt_bytes,
+    )
+    .map_err(|error| format!("dispatch import tuple readmission failed: {error}"))?;
+    Ok(DispatchImportOutcomeV1::Imported {
+        source,
+        source_kind,
+        binding,
+        product,
     })
+}
+
+fn classify_dispatch_source_admission_v1(
+    admission: Result<(), ProfilerBundleErrorV4>,
+) -> Result<bool, String> {
+    match admission {
+        Ok(()) => Ok(true),
+        Err(
+            ProfilerBundleErrorV4::SizeOverflow
+            | ProfilerBundleErrorV4::AllocationFailure
+            | ProfilerBundleErrorV4::JsonEncode
+            | ProfilerBundleErrorV4::IdentityFailure,
+        ) => Err("dispatch source admission failed internally".to_owned()),
+        Err(_) => Ok(false),
+    }
 }
 
 fn json_dispatch_targets_v1(
@@ -2768,21 +2950,41 @@ fn json_dispatch_targets_v1(
         {
             return Err("rocprof JSON agent contradicts direct KFD hardware fields".to_owned());
         }
-        targets.push(dispatch_target_v1(agent.source_agent_id, device)?);
+        targets.push(dispatch_target_v1(
+            agent.process_index,
+            Some(agent.process_id),
+            agent.source_agent_id,
+            device,
+        )?);
     }
     Ok(targets)
 }
 
 fn csv_dispatch_targets_v1(
+    source: &[u8],
     devices: &[DeviceIdentity],
 ) -> Result<Vec<DispatchImportTargetBindingV1>, String> {
-    devices
-        .iter()
-        .map(|device| dispatch_target_v1(u64::from(device.node), device))
+    rocprofv3_csv_source_agent_bindings_v4(source)
+        .map_err(|_| "rocprof CSV process/agent relation is invalid".to_owned())?
+        .into_iter()
+        .map(|binding| {
+            let device = devices
+                .iter()
+                .find(|device| device.node == binding.node_id)
+                .ok_or_else(|| "rocprof CSV agent node is absent from direct KFD".to_owned())?;
+            dispatch_target_v1(
+                binding.process_index,
+                binding.process_id,
+                u64::from(binding.node_id),
+                device,
+            )
+        })
         .collect()
 }
 
 fn dispatch_target_v1(
+    process_index: u32,
+    source_process_id: Option<u64>,
     source_agent_id: u64,
     device: &DeviceIdentity,
 ) -> Result<DispatchImportTargetBindingV1, String> {
@@ -2799,6 +3001,8 @@ fn dispatch_target_v1(
     };
     let record = device.target_profile_record();
     Ok(DispatchImportTargetBindingV1 {
+        process_index,
+        source_process_id,
         source_agent_id,
         kfd_node: device.node,
         stable_identity: raw_content_identity_v1(device.digest, device.bytes.len() as u64)?,
@@ -2843,7 +3047,8 @@ fn domain_content_identity_v1(
     })
 }
 
-fn scan_artifacts(root: &Path, storage_limit: u64) -> Result<Vec<Artifact>, String> {
+fn scan_artifacts(custody: &OutputCustody, storage_limit: u64) -> Result<Vec<Artifact>, String> {
+    let root = &custody.path;
     let mut pending = vec![(root.to_path_buf(), 0_usize)];
     let mut artifacts = Vec::new();
     let mut total = 0_u64;
@@ -2914,7 +3119,7 @@ fn scan_artifacts(root: &Path, storage_limit: u64) -> Result<Vec<Artifact>, Stri
             if artifacts.len() == MAX_ARTIFACTS {
                 return Err("collector output exceeds the artifact-count bound".to_owned());
             }
-            let (digest, length) = hash_file(&path, &metadata)?;
+            let (digest, length) = hash_file(custody, &relative, &metadata)?;
             artifacts.push(Artifact {
                 relative,
                 length,
@@ -2941,14 +3146,23 @@ fn validate_relative(path: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn hash_file(path: &Path, expected: &Metadata) -> Result<([u8; 32], u64), String> {
-    let fd = rustix::fs::open(
-        path,
+fn hash_file(
+    custody: &OutputCustody,
+    relative: &str,
+    expected: &Metadata,
+) -> Result<([u8; 32], u64), String> {
+    let fd = rustix::fs::openat2(
+        &custody.root,
+        relative,
         rustix::fs::OFlags::RDONLY
             | rustix::fs::OFlags::NOFOLLOW
             | rustix::fs::OFlags::NONBLOCK
             | rustix::fs::OFlags::CLOEXEC,
         rustix::fs::Mode::empty(),
+        rustix::fs::ResolveFlags::BENEATH
+            | rustix::fs::ResolveFlags::NO_SYMLINKS
+            | rustix::fs::ResolveFlags::NO_MAGICLINKS
+            | rustix::fs::ResolveFlags::NO_XDEV,
     )
     .map_err(|error| format!("failed to retain collector artifact: {error}"))?;
     let mut file = File::from(fd);
@@ -2986,8 +3200,23 @@ fn hash_file(path: &Path, expected: &Metadata) -> Result<([u8; 32], u64), String
                 .map_err(|error| format!("failed to re-inspect collector artifact: {error}"))?,
         ) != expected_identity
         || ObjectIdentity::from_metadata(
-            &fs::symlink_metadata(path)
+            &File::from(
+                rustix::fs::openat2(
+                    &custody.root,
+                    relative,
+                    rustix::fs::OFlags::RDONLY
+                        | rustix::fs::OFlags::NOFOLLOW
+                        | rustix::fs::OFlags::CLOEXEC,
+                    rustix::fs::Mode::empty(),
+                    rustix::fs::ResolveFlags::BENEATH
+                        | rustix::fs::ResolveFlags::NO_SYMLINKS
+                        | rustix::fs::ResolveFlags::NO_MAGICLINKS
+                        | rustix::fs::ResolveFlags::NO_XDEV,
+                )
                 .map_err(|error| format!("collector artifact path changed: {error}"))?,
+            )
+            .metadata()
+            .map_err(|error| format!("collector artifact path changed: {error}"))?,
         ) != expected_identity
     {
         return Err("collector artifact changed while hashing".to_owned());
@@ -3038,10 +3267,7 @@ fn render_manifest(
             ),
         );
     }
-    for (index, artifact) in artifacts
-        .iter()
-        .enumerate()
-    {
+    for (index, artifact) in artifacts.iter().enumerate() {
         line(
             &mut output,
             &format!("import-source-candidate[{index}]"),
@@ -3127,24 +3353,31 @@ fn render_successful_collection(
     }
 }
 
-fn render_dispatch_import_outcome_v1(
-    output: &mut String,
-    outcome: &DispatchImportOutcomeV1,
-) {
+fn render_dispatch_import_outcome_v1(output: &mut String, outcome: &DispatchImportOutcomeV1) {
     match outcome {
         DispatchImportOutcomeV1::Unavailable(reason) => {
             line(output, "dispatch-observation-origin", "unavailable");
             line(output, "dispatch-observation-reason", reason);
         }
-        DispatchImportOutcomeV1::Imported { source, product } => {
-            line(output, "dispatch-observation-origin", "observed-rocprof-source");
+        DispatchImportOutcomeV1::Imported {
+            source, product, ..
+        } => {
+            line(
+                output,
+                "dispatch-observation-origin",
+                "observed-rocprof-source",
+            );
             line_debug(output, "dispatch-import-source", &source.relative);
             line(
                 output,
                 "dispatch-import-source-identity",
                 content_identity(&source.digest, source.bytes.len() as u64),
             );
-            line(output, "dispatch-import-bundle", PROFILE_DISPATCH_BUNDLE_FILE_V1);
+            line(
+                output,
+                "dispatch-import-bundle",
+                PROFILE_DISPATCH_BUNDLE_FILE_V1,
+            );
             line(
                 output,
                 "dispatch-import-bundle-identity",
@@ -3168,7 +3401,7 @@ fn render_dispatch_import_outcome_v1(
             line(
                 output,
                 "dispatch-import-run-identity",
-                hex(product.bundle.run_identity.as_bytes()),
+                hex(&product.bundle.run_identity.as_bytes()),
             );
             line(
                 output,
@@ -3301,7 +3534,7 @@ fn content_record(identity: &ContentIdentityRecordV1) -> String {
             ContentSchemeV1::DomainSeparatedSha256 => "domain",
         },
         identity.format_version,
-        hex(identity.digest.as_bytes()),
+        hex(&identity.digest.as_bytes()),
         identity.canonical_len,
     )
 }
@@ -3325,6 +3558,8 @@ fn line_debug(output: &mut String, name: &str, value: impl std::fmt::Debug) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fe2o3_semantic_import::decode_profiler_bundle_v4;
+    use std::cell::Cell;
     use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 
     static NEXT_TOPOLOGY_FIXTURE: AtomicU64 = AtomicU64::new(0);
@@ -3342,8 +3577,11 @@ mod tests {
             ));
             let node_root = root.join(node.to_string());
             fs::create_dir_all(&node_root).expect("create topology fixture");
-            fs::write(node_root.join("gpu_id"), format!("{}\n", u64::from(node) + 1_000))
-                .expect("write topology gpu id");
+            fs::write(
+                node_root.join("gpu_id"),
+                format!("{}\n", u64::from(node) + 1_000),
+            )
+            .expect("write topology gpu id");
             fs::write(node_root.join("properties"), properties).expect("write topology properties");
             Self { root }
         }
@@ -3396,29 +3634,18 @@ mod tests {
         }
     }
 
-    fn dispatch_import_output(devices: &[DeviceIdentity], kir_wave: Option<u8>) -> String {
-        let kir = kir_wave.map(|wave_width| KirBinding {
-            digest: [3; 32],
-            length: 17,
-            wave_width,
-        });
-        let mut output = String::new();
-        let _ = render_dispatch_import_plan(
-            &mut output,
-            ProfileKind::DispatchJson,
-            devices,
-            kir.as_ref(),
-            "environment".to_owned(),
-            "tool".to_owned(),
-            "configuration".to_owned(),
-        );
-        output
-    }
-
-    fn assert_no_dispatch_import_command(output: &str) {
-        assert!(!output.contains("next-import-program:"));
-        assert!(!output.contains("next-import-arg["));
-        assert!(!output.contains("ready-after-collector"));
+    fn target_module(target: &str, wave: WaveWidth) -> Module {
+        let mut module = Module::new("profile-test");
+        module
+            .required_capabilities
+            .insert(TargetCapability::Extension {
+                namespace: AMDGPU_EXACT_TARGET_CAPABILITY_NAMESPACE.to_owned(),
+                name: target.to_owned(),
+            });
+        module
+            .required_capabilities
+            .insert(TargetCapability::WaveWidth(wave));
+        module
     }
 
     #[test]
@@ -3468,6 +3695,140 @@ mod tests {
         for args in hostile {
             assert!(parse_options(&args).is_err());
         }
+    }
+
+    #[test]
+    fn dispatch_source_admission_propagates_internal_failures() {
+        assert_eq!(classify_dispatch_source_admission_v1(Ok(())).unwrap(), true);
+        assert_eq!(
+            classify_dispatch_source_admission_v1(Err(ProfilerBundleErrorV4::InvalidRocprofJson))
+                .unwrap(),
+            false
+        );
+        for error in [
+            ProfilerBundleErrorV4::SizeOverflow,
+            ProfilerBundleErrorV4::AllocationFailure,
+            ProfilerBundleErrorV4::JsonEncode,
+            ProfilerBundleErrorV4::IdentityFailure,
+        ] {
+            assert!(classify_dispatch_source_admission_v1(Err(error)).is_err());
+        }
+    }
+
+    #[test]
+    fn generic_core_collects_imports_and_publishes_without_host_kfd() {
+        let id = NEXT_TOPOLOGY_FIXTURE.fetch_add(1, AtomicOrdering::Relaxed);
+        let root = env::temp_dir().join(format!(
+            "cargo-fe2o3-profile-generic-core-{}-{id}",
+            std::process::id()
+        ));
+        fs::create_dir(&root).unwrap();
+        let tool = root.join("rocprofv3");
+        let source = include_bytes!(
+            "../../fe2o3-semantic-import/tests/fixtures/rocprofv3-installed-97f5574-kernel-dispatch-schema.json"
+        );
+        let source_literal =
+            serde_json::to_string(&String::from_utf8(source.to_vec()).unwrap()).unwrap();
+        fs::write(
+            &tool,
+            format!(
+                "#!/usr/bin/env python3\n# --kernel-trace --advanced-thread-trace\nimport os, subprocess, sys\nargs=sys.argv[1:]\nout=args[args.index('--output-directory')+1]\nwith open(os.path.join(out, 'dispatch.json'), 'w', encoding='utf-8') as stream:\n    stream.write({source_literal})\ntarget=args[args.index('--')+1:]\nraise SystemExit(subprocess.run(target, check=False).returncode)\n"
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let module = target_module(
+            AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME,
+            WaveWidth::Wave64,
+        );
+        let kir = VerifiedCanonicalKernelIrV7::from_module(module).unwrap();
+        let kir_path = root.join("generic.kir");
+        fs::write(&kir_path, kir.canonical_bytes()).unwrap();
+        let output = root.join("capture");
+        let python = discover_python().expect("test requires the reviewed native Python");
+        let args = [
+            "--kind".to_owned(),
+            "dispatch-json".to_owned(),
+            "--tool".to_owned(),
+            tool.to_string_lossy().into_owned(),
+            "--python".to_owned(),
+            python.to_string_lossy().into_owned(),
+            "--output-dir".to_owned(),
+            output.to_string_lossy().into_owned(),
+            "--kir-v7".to_owned(),
+            kir_path.to_string_lossy().into_owned(),
+            "--".to_owned(),
+            "/bin/true".to_owned(),
+        ];
+        let mut plan = prepare_plan(parse_options(&args).unwrap()).unwrap();
+        let device_bytes = b"generic-core-stable-kfd-device".to_vec();
+        let device = DeviceIdentity {
+            node: 7,
+            hardware: KfdGpuHardwareV1 {
+                gpu_id: 42,
+                simd_count: 304,
+                vendor_id: EXPECTED_AMD_VENDOR_ID,
+                device_id: 29_857,
+                location_id: 1,
+                domain: 0,
+                gfx_target_version: GFX942_TARGET_VERSION,
+                wave_front_size: PRODUCTION_WAVE_WIDTH,
+                num_xcc: 8,
+            },
+            digest: Sha256::digest(&device_bytes).into(),
+            bytes: device_bytes,
+            target_profile: ObservedGpuTargetProfileRecordV1::from_direct_kfd_properties(
+                EXPECTED_AMD_VENDOR_ID,
+                GFX942_TARGET_VERSION,
+                PRODUCTION_WAVE_WIDTH,
+            ),
+        };
+        plan.devices = vec![device.clone()];
+        plan.verified_kir_v7.as_mut().unwrap().compatibility =
+            KirTargetCompatibilityV1::Ready(ObservedGpuTargetProfileV1::Gfx942);
+        plan.configuration = canonical_configuration(plan.options.kind, &plan.devices);
+        plan.configuration_digest = Sha256::digest(&plan.configuration).into();
+        plan.authorization = authorization_digest(AuthorizationInputs {
+            options: &plan.options,
+            working_directory: &plan.working_directory,
+            output_directory: &plan.output_directory,
+            tool: &plan.tool,
+            interpreter: &plan.interpreter,
+            target: &plan.target,
+            environment: &plan.environment_digest,
+            devices: &plan.devices,
+            configuration: &plan.configuration_digest,
+            collector_tool: &plan.collector_tool_digest,
+            verified_kir_v7: plan.verified_kir_v7.as_ref(),
+        });
+
+        let revalidations = Cell::new(0_u8);
+        let report = collect_with_device_revalidator(plan, |devices| {
+            revalidations.set(revalidations.get().checked_add(1).unwrap());
+            if devices == [device.clone()] {
+                Ok(())
+            } else {
+                Err("synthetic KFD device binding changed".to_owned())
+            }
+        })
+        .unwrap();
+        assert_eq!(revalidations.get(), 6);
+        assert!(report.succeeded, "{}", report.output);
+        let bundle = output.join(PROFILE_DISPATCH_BUNDLE_FILE_V1);
+        let receipt = output.join(PROFILE_DISPATCH_RECEIPT_FILE_V1);
+        let manifest = output.join(MANIFEST_FILE);
+        assert!(bundle.is_file() && receipt.is_file() && manifest.is_file());
+        assert!(decode_profiler_bundle_v4(&fs::read(bundle).unwrap()).is_ok());
+        assert!(
+            fs::read_to_string(manifest)
+                .unwrap()
+                .contains("dispatch-observation-origin: observed-rocprof-source")
+        );
+        assert!(!output.join(PROFILE_DISPATCH_BUNDLE_REDO_FILE_V1).exists());
+        assert!(!output.join(PROFILE_DISPATCH_RECEIPT_REDO_FILE_V1).exists());
+        assert!(!output.join(MANIFEST_REDO_FILE).exists());
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -3617,80 +3978,87 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_import_rejects_every_typed_unavailable_target_profile() {
-        for (device, reason) in [
-            (
-                profile_device(1, EXPECTED_AMD_VENDOR_ID, 90_401, PRODUCTION_WAVE_WIDTH),
-                "unknown-gfx-target-version",
-            ),
-            (
-                profile_device(2, 0, GFX942_TARGET_VERSION, PRODUCTION_WAVE_WIDTH),
-                "vendor-contradicts-amd-target",
-            ),
-            (
-                profile_device(3, EXPECTED_AMD_VENDOR_ID, GFX950_TARGET_VERSION, 32),
-                "wave-width-contradicts-target",
-            ),
+    fn kir_compatibility_rejects_every_unavailable_kfd_profile() {
+        for device in [
+            profile_device(1, EXPECTED_AMD_VENDOR_ID, 90_401, PRODUCTION_WAVE_WIDTH),
+            profile_device(2, 0, GFX942_TARGET_VERSION, PRODUCTION_WAVE_WIDTH),
+            profile_device(3, EXPECTED_AMD_VENDOR_ID, GFX950_TARGET_VERSION, 32),
         ] {
-            let output = dispatch_import_output(&[device], Some(64));
-            assert!(output.contains("next-import-status: unavailable-observed-gpu-target-profile"));
-            assert!(output.contains(&format!("reason={reason}")));
-            assert_no_dispatch_import_command(&output);
+            assert_eq!(
+                kir_target_compatibility_v1(
+                    &target_module(
+                        AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME,
+                        WaveWidth::Wave64,
+                    ),
+                    &[device],
+                ),
+                KirTargetCompatibilityV1::Unavailable(
+                    KirTargetUnavailableReasonV1::KfdProfileUnavailable
+                )
+            );
         }
     }
 
     #[test]
-    fn dispatch_import_rejects_caller_wave_mismatch_without_emitting_arguments() {
-        let devices = [
-            profile_device(
-                1,
-                EXPECTED_AMD_VENDOR_ID,
-                GFX942_TARGET_VERSION,
-                PRODUCTION_WAVE_WIDTH,
+    fn kir_compatibility_rejects_empty_mixed_and_wave_mismatch() {
+        let gfx942 = profile_device(
+            1,
+            EXPECTED_AMD_VENDOR_ID,
+            GFX942_TARGET_VERSION,
+            PRODUCTION_WAVE_WIDTH,
+        );
+        let gfx950 = profile_device(
+            2,
+            EXPECTED_AMD_VENDOR_ID,
+            GFX950_TARGET_VERSION,
+            PRODUCTION_WAVE_WIDTH,
+        );
+        let module = target_module(
+            AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME,
+            WaveWidth::Wave64,
+        );
+        assert_eq!(
+            kir_target_compatibility_v1(&module, &[]),
+            KirTargetCompatibilityV1::Unavailable(
+                KirTargetUnavailableReasonV1::KfdProfileUnavailable
+            )
+        );
+        assert_eq!(
+            kir_target_compatibility_v1(&module, &[gfx942.clone(), gfx950]),
+            KirTargetCompatibilityV1::Unavailable(KirTargetUnavailableReasonV1::KfdFamilyMismatch)
+        );
+        assert_eq!(
+            kir_target_compatibility_v1(
+                &target_module(
+                    AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME,
+                    WaveWidth::Wave32,
+                ),
+                &[gfx942],
             ),
-            profile_device(
-                2,
-                EXPECTED_AMD_VENDOR_ID,
-                GFX950_TARGET_VERSION,
-                PRODUCTION_WAVE_WIDTH,
-            ),
-        ];
-        let output = dispatch_import_output(&devices, Some(32));
-        assert!(output.contains("next-import-status: unavailable-kir-wave-width-mismatch"));
-        assert!(output.contains("node=1;observed-wave-width=64;kir-wave-width=32"));
-        assert!(output.contains("node=2;observed-wave-width=64;kir-wave-width=32"));
-        assert_no_dispatch_import_command(&output);
-
-        let missing = dispatch_import_output(&devices, None);
-        assert!(missing.contains(
-            "next-import-status: unavailable-missing-kir-identity-length-and-wave-width"
-        ));
-        assert_no_dispatch_import_command(&missing);
+            KirTargetCompatibilityV1::Unavailable(
+                KirTargetUnavailableReasonV1::ConflictingWaveWidth
+            )
+        );
     }
 
     #[test]
-    fn dispatch_import_is_ready_only_for_observed_wave_compatible_devices() {
-        let devices = [
-            profile_device(
-                1,
-                EXPECTED_AMD_VENDOR_ID,
-                GFX942_TARGET_VERSION,
-                PRODUCTION_WAVE_WIDTH,
+    fn kir_compatibility_is_ready_only_for_one_matching_family_and_wave64() {
+        let devices = [profile_device(
+            1,
+            EXPECTED_AMD_VENDOR_ID,
+            GFX942_TARGET_VERSION,
+            PRODUCTION_WAVE_WIDTH,
+        )];
+        assert_eq!(
+            kir_target_compatibility_v1(
+                &target_module(
+                    AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME,
+                    WaveWidth::Wave64,
+                ),
+                &devices,
             ),
-            profile_device(
-                2,
-                EXPECTED_AMD_VENDOR_ID,
-                GFX950_TARGET_VERSION,
-                PRODUCTION_WAVE_WIDTH,
-            ),
-        ];
-        let output = dispatch_import_output(&devices, Some(64));
-        assert!(output.contains("next-import-program: fe2o3-profiler-import"));
-        assert!(output.contains(
-            "next-import-status: ready-after-collector-artifact-and-source-size-validation"
-        ));
-        assert!(output.contains("\"--device-binding\""));
-        assert!(output.contains("\"--wave-width\""));
+            KirTargetCompatibilityV1::Ready(ObservedGpuTargetProfileV1::Gfx942)
+        );
     }
 
     #[test]
@@ -3763,12 +4131,7 @@ mod tests {
         );
         let device = |target| DeviceIdentity {
             node: 1,
-            hardware: test_hardware(
-                1,
-                EXPECTED_AMD_VENDOR_ID,
-                target,
-                PRODUCTION_WAVE_WIDTH,
-            ),
+            hardware: test_hardware(1, EXPECTED_AMD_VENDOR_ID, target, PRODUCTION_WAVE_WIDTH),
             bytes: b"stable-device".to_vec(),
             digest: [1; 32],
             target_profile: ObservedGpuTargetProfileRecordV1::from_direct_kfd_properties(

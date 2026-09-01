@@ -1,3 +1,15 @@
+#![recursion_limit = "256"]
+
+use fe2o3_kernel_ir::{
+    AMDGPU_EXACT_TARGET_CAPABILITY_NAMESPACE, AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME,
+    Module, TargetCapability, VerifiedCanonicalKernelIrV7, WaveWidth,
+};
+use fe2o3_semantic_import::{
+    CaptureUnavailableReasonV1, ProfilerSourceKindV4, ProfilerUnavailableFactV4, TruthOriginV1,
+    decode_profiler_bundle_v4,
+};
+
+use std::collections::BTreeMap;
 use std::env;
 use std::ffi::OsString;
 use std::fs;
@@ -113,6 +125,174 @@ fn field(output: &Output, name: &str) -> String {
         .to_owned()
 }
 
+fn discover_gfx942_kfd_agent() -> Option<serde_json::Value> {
+    let root = Path::new("/sys/class/kfd/kfd/topology/nodes");
+    let mut entries = fs::read_dir(root)
+        .ok()?
+        .collect::<Result<Vec<_>, _>>()
+        .ok()?;
+    entries.sort_by_key(|entry| entry.file_name());
+    for entry in entries {
+        let node = entry.file_name().to_str()?.parse::<u32>().ok()?;
+        let gpu_id = fs::read_to_string(entry.path().join("gpu_id"))
+            .ok()?
+            .trim_end()
+            .parse::<u64>()
+            .ok()?;
+        if gpu_id == 0 {
+            continue;
+        }
+        let properties = fs::read_to_string(entry.path().join("properties")).ok()?;
+        let mut values = BTreeMap::new();
+        for line in properties.lines() {
+            let (name, value) = line.split_once(' ')?;
+            if values.insert(name, value.parse::<u64>().ok()?).is_some() {
+                return None;
+            }
+        }
+        if values.get("gfx_target_version") != Some(&90_402)
+            || values.get("vendor_id") != Some(&4_098)
+            || values.get("wave_front_size") != Some(&64)
+        {
+            continue;
+        }
+        return Some(serde_json::json!({
+            "id": {"handle": 7001},
+            "type": 2,
+            "gpu_index": 0,
+            "size": 312,
+            "node_id": node,
+            "simd_count": *values.get("simd_count")?,
+            "gpu_id": gpu_id,
+            "vendor_id": *values.get("vendor_id")?,
+            "device_id": *values.get("device_id")?,
+            "location_id": *values.get("location_id")?,
+            "domain": *values.get("domain")?,
+            "gfx_target_version": *values.get("gfx_target_version")?,
+            "wave_front_size": *values.get("wave_front_size")?,
+            "num_xcc": *values.get("num_xcc")?,
+            "logical_node_id": node, "logical_node_type_id": 2,
+            "cpu_cores_count": 0, "cpu_core_id_base": 0, "simd_id_base": 0,
+            "max_waves_per_simd": 8, "lds_size_in_kb": 64, "gds_size_in_kb": 0,
+            "num_gws": 64, "cu_count": *values.get("simd_count")?, "array_count": 8,
+            "num_shader_banks": 4, "simd_arrays_per_engine": 2,
+            "cu_per_simd_array": 19, "simd_per_cu": 4, "max_slots_scratch_cu": 32,
+            "drm_render_minor": 128, "num_sdma_engines": 4,
+            "num_sdma_xgmi_engines": 0, "num_sdma_queues_per_engine": 8,
+            "num_cp_queues": 8, "max_engine_clk_ccompute": 2100,
+            "max_engine_clk_fcompute": 2100,
+            "sdma_fw_version": {"uCodeSDMA":1,"uCodeRes":0},
+            "fw_version": {"uCode":1,"Major":0,"Minor":0,"Stepping":0},
+            "capability": {"HotPluggable":0,"HSAMMUPresent":0,"SharedWithGraphics":0,"QueueSizePowerOfTwo":0,"QueueSize32bit":0,"QueueIdleEvent":0,"VALimit":0,"WatchPointsSupported":1,"WatchPointsTotalBits":2,"DoorbellType":2,"AQLQueueDoubleMap":0,"DebugTrapSupported":1,"WaveLaunchTrapOverrideSupported":1,"WaveLaunchModeSupported":1,"PreciseMemoryOperationsSupported":1,"DEPRECATED_SRAM_EDCSupport":0,"Mem_EDCSupport":1,"RASEventNotify":1,"ASICRevision":1,"SRAM_EDCSupport":1,"SVMAPISupported":1,"CoherentHostAccess":0,"DebugSupportedFirmware":1},
+            "cu_per_engine": 38, "max_waves_per_cu": 32,
+            "family_id": 145, "workgroup_max_size": 1024,
+            "grid_max_size": 4294967295_u64, "local_mem_size": 65536, "hive_id": 1,
+            "workgroup_max_dim": {"x":1024,"y":1024,"z":1024},
+            "grid_max_dim": {"x":2147483647_u64,"y":65535,"z":65535},
+            "name": "gfx942", "vendor_name": "AMD", "product_name": "MI300X",
+            "model_name": "MI300X", "uuid": {"bytes":{"value0":1,"value1":2,"value2":3,"value3":4,"value4":5,"value5":6,"value6":7,"value7":8,"value8":0,"value9":0,"value10":0,"value11":0,"value12":0,"value13":0,"value14":0,"value15":0}}, "mem_banks": [],
+            "mem_banks_count": 0, "caches": [], "caches_count": 0,
+            "io_links": [], "io_links_count": 0,
+            "runtime_visibility": {"hsa":1,"hip":1,"rccl":1,"rocdecode":1}
+        }));
+    }
+    None
+}
+
+fn gfx942_kfd_agent() -> Option<serde_json::Value> {
+    let agent = discover_gfx942_kfd_agent();
+    let required = env::var("FE2O3_REQUIRE_GFX942_PROFILE_TEST")
+        .ok()
+        .as_deref()
+        == Some("1");
+    assert!(
+        !required || agent.is_some(),
+        "FE2O3_REQUIRE_GFX942_PROFILE_TEST=1 requires a directly observed gfx942 Wave64 KFD node"
+    );
+    agent
+}
+
+fn exact_gfx942_kir(fixture: &Fixture) -> PathBuf {
+    let mut module = Module::new("profile-cli-gfx942-v1");
+    module
+        .required_capabilities
+        .insert(TargetCapability::Extension {
+            namespace: AMDGPU_EXACT_TARGET_CAPABILITY_NAMESPACE.to_owned(),
+            name: AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME.to_owned(),
+        });
+    module
+        .required_capabilities
+        .insert(TargetCapability::WaveWidth(WaveWidth::Wave64));
+    let owner = VerifiedCanonicalKernelIrV7::from_module(module).unwrap();
+    let path = fixture.output("profile.kir");
+    fs::write(&path, owner.canonical_bytes()).unwrap();
+    path
+}
+
+fn current_dispatch_json(agent: serde_json::Value) -> Vec<u8> {
+    let value = serde_json::json!({
+        "rocprofiler-sdk-tool": [{
+            "metadata": {"node": {"id":0,"hash":0,"machine_id":"fixture","system_name":"Linux","hostname":"fixture","release":"fixture","version":"fixture","hardware_name":"x86_64","domain_name":"(none)"}, "pid": 100, "init_time": 1, "fini_time": 2, "command": [], "config": {}},
+            "agents": [agent],
+            "buffer_records": {"kernel_dispatch": [{
+                "size": 184,
+                "kind": 11,
+                "operation": 2,
+                "thread_id": 100,
+                "correlation_id": {"internal": 1, "external": 0},
+                "start_timestamp": 100,
+                "end_timestamp": 180,
+                "dispatch_info": {
+                    "size": 72,
+                    "agent_id": {"handle": 7001},
+                    "queue_id": {"handle": 1},
+                    "kernel_id": 10,
+                    "dispatch_id": 1,
+                    "private_segment_size": 0,
+                    "group_segment_size": 0,
+                    "workgroup_size": {"x": 64, "y": 1, "z": 1},
+                    "grid_size": {"x": 256, "y": 1, "z": 1}
+                },
+                "stream_id": {"handle": 0}
+            }],
+            "hip_api": [], "hsa_api": [], "rccl_api": [],
+            "rocdecode_api": [], "rocjpeg_api": [], "marker_api": [],
+            "memory_copy": [], "memory_allocation": [], "scratch_memory": [],
+            "pc_sample_host_trap": [], "pc_sample_stochastic": []},
+            "callback_records": {"counter_collection": []},
+            "counters": [], "code_objects": [], "kernel_symbols": [],
+            "strings": {"callback_records": [], "buffer_records": [], "marker_api": [],
+                "correlation_id": {"external": []},
+                "counters": {"dimension_ids": []}, "pc_sample_instructions": [],
+                "pc_sample_comments": [], "att_filenames": [],
+                "code_object_snapshot_filenames": []},
+            "summary": [], "host_functions": []
+        }]
+    });
+    serde_json::to_vec(&value).unwrap()
+}
+
+fn current_dispatch_csv(node: u64) -> Vec<u8> {
+    format!(
+        "\"Kind\",\"Agent_Id\",\"Queue_Id\",\"Stream_Id\",\"Thread_Id\",\"Dispatch_Id\",\"Kernel_Id\",\"Kernel_Name\",\"Correlation_Id\",\"Start_Timestamp\",\"End_Timestamp\",\"LDS_Block_Size\",\"Scratch_Size\",\"VGPR_Count\",\"Accum_VGPR_Count\",\"SGPR_Count\",\"Workgroup_Size_X\",\"Workgroup_Size_Y\",\"Workgroup_Size_Z\",\"Grid_Size_X\",\"Grid_Size_Y\",\"Grid_Size_Z\"\n\"KERNEL_DISPATCH\",\"Agent {node}\",1,0,100,1,10,\"fixture\",1,100,180,0,0,12,4,48,64,1,1,256,1,1\n"
+    )
+    .into_bytes()
+}
+
+fn install_dispatch_behavior(fixture: &Fixture, name: &str, source: &[u8], copies: usize) {
+    let source = String::from_utf8(source.to_vec()).unwrap();
+    let literal = serde_json::to_string(&source).unwrap();
+    let mut writes = String::new();
+    for ordinal in 0..copies {
+        writes.push_str(&format!(
+            "with open(os.path.join(out, {name:?} + str({ordinal})), \"w\", encoding=\"utf-8\") as stream:\n    stream.write({literal})\n"
+        ));
+    }
+    fixture.replace_behavior(&format!(
+        "out = args[args.index(\"--output-directory\") + 1]\nos.makedirs(out, exist_ok=True)\n{writes}target = args[args.index(\"--\") + 1:]\nraise SystemExit(subprocess.run(target, check=False).returncode)\n"
+    ));
+}
+
 fn collect(fixture: &Fixture, output: &Path, auth: &str, target_args: &[&str]) -> Output {
     collect_with_options(fixture, output, auth, &[], target_args)
 }
@@ -177,13 +357,13 @@ fn exact_authorization_collects_without_a_shell_and_writes_a_bounded_manifest() 
     );
     let evidence = String::from_utf8(output.stdout).unwrap();
     assert!(evidence.contains("outcome: collector-completed-artifacts-unvalidated"));
-    assert!(evidence.contains("dispatch-observability-origin: unavailable"));
+    assert!(evidence.contains("dispatch-observation-origin: unavailable"));
     assert!(!marker.exists());
     let manifest =
         fs::read_to_string(output_directory.join("fe2o3-profile-manifest-v1.txt")).unwrap();
     assert!(manifest.contains("schema: fe2o3-profile-artifact-manifest-v1"));
     assert!(manifest.contains("capture_results.json"));
-    assert!(manifest.contains("status=size-eligible-requires-schema-validation"));
+    assert!(manifest.contains("status=content-schema-eligible-requires-admission"));
     assert_eq!(
         fs::metadata(&output_directory)
             .unwrap()
@@ -195,7 +375,277 @@ fn exact_authorization_collects_without_a_shell_and_writes_a_bounded_manifest() 
 }
 
 #[test]
-fn import_recipe_binds_absolute_agent_ids_instead_of_device_order() {
+fn in_process_json_and_csv_import_publish_bundle_receipt_then_manifest() {
+    let Some(agent) = gfx942_kfd_agent() else {
+        return;
+    };
+    let node = agent["node_id"].as_u64().unwrap();
+    for (kind, suffix, source) in [
+        (
+            "dispatch-json",
+            "json",
+            current_dispatch_json(agent.clone()),
+        ),
+        ("dispatch-csv", "csv", current_dispatch_csv(node)),
+    ] {
+        let fixture = Fixture::new(false);
+        install_dispatch_behavior(&fixture, "dispatch.", &source, 1);
+        let kir = exact_gfx942_kir(&fixture);
+        let output_directory = fixture.output(&format!("capture-{suffix}"));
+        let options = ["--kind", kind, "--kir-v7", kir.to_str().unwrap()];
+        let plan = fixture.plan_with_options(&output_directory, &options, &[]);
+        assert!(
+            plan.status.success(),
+            "{}",
+            String::from_utf8_lossy(&plan.stderr)
+        );
+        let output = collect_with_options(
+            &fixture,
+            &output_directory,
+            &authorization(&plan),
+            &options,
+            &[],
+        );
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let bundle_path = output_directory.join("fe2o3-semantic-profiler-bundle-v4.json");
+        let receipt_path = output_directory.join("fe2o3-profile-dispatch-import-receipt-v1.json");
+        let manifest_path = output_directory.join("fe2o3-profile-manifest-v1.txt");
+        let bundle = decode_profiler_bundle_v4(&fs::read(&bundle_path).unwrap()).unwrap();
+        assert_eq!(
+            bundle.source_kind,
+            if kind == "dispatch-json" {
+                ProfilerSourceKindV4::Rocprofv3KernelDispatchJson
+            } else {
+                ProfilerSourceKindV4::Rocprofv3KernelDispatchCsv
+            }
+        );
+        assert_eq!(bundle.source.origin, TruthOriginV1::Observed);
+        assert_eq!(bundle.normalized_projection.origin, TruthOriginV1::Observed);
+        assert_eq!(bundle.environment.origin, TruthOriginV1::Declared);
+        assert_eq!(bundle.collector_tool.origin, TruthOriginV1::Declared);
+        assert_eq!(
+            bundle.collector_configuration.origin,
+            TruthOriginV1::Declared
+        );
+        assert_eq!(bundle.devices.len(), 1);
+        assert_eq!(
+            bundle.devices[0].stable_identity.origin,
+            TruthOriginV1::Declared
+        );
+        assert_eq!(
+            bundle.devices[0].source_bound_origin,
+            TruthOriginV1::Observed
+        );
+        assert!(
+            bundle
+                .unavailable
+                .contains(&ProfilerUnavailableFactV4::SourceIrIsaCorrelation)
+        );
+        let capture = bundle.dispatch_capture.as_ref().unwrap();
+        assert_eq!(capture.runs.len(), 1);
+        assert_eq!(capture.devices.len(), 1);
+        assert_eq!(capture.dispatches.len(), 1);
+        let dispatch = &capture.dispatches[0];
+        assert_eq!(dispatch.kernel_ir.origin, TruthOriginV1::Declared);
+        assert_eq!(dispatch.artifact.origin, TruthOriginV1::Unavailable);
+        assert_eq!(
+            dispatch.artifact.unavailable_reason,
+            Some(CaptureUnavailableReasonV1::NotProvided)
+        );
+        assert_eq!(dispatch.source_map.origin, TruthOriginV1::Unavailable);
+        assert_eq!(
+            dispatch.source_map.unavailable_reason,
+            Some(CaptureUnavailableReasonV1::NotProvided)
+        );
+        let receipt: serde_json::Value =
+            serde_json::from_slice(&fs::read(&receipt_path).unwrap()).unwrap();
+        assert!(
+            receipt["authority"]
+                .as_object()
+                .unwrap()
+                .values()
+                .all(|value| value == false)
+        );
+        assert_eq!(
+            receipt["source_kind"],
+            if kind == "dispatch-json" {
+                "rocprofv3_kernel_dispatch_json"
+            } else {
+                "rocprofv3_kernel_dispatch_csv"
+            }
+        );
+        assert_eq!(
+            receipt["source_schema_dialect"],
+            if kind == "dispatch-json" {
+                "rocprofv3_json_installed1_1_97f5574"
+            } else {
+                "rocprofv3_csv_current22_column_stream_id"
+            }
+        );
+        assert_eq!(receipt["run_count"], 1);
+        assert_eq!(receipt["device_count"], 1);
+        assert_eq!(receipt["dispatch_count"], 1);
+        assert_eq!(receipt["devices"][0]["kfd_node"], node);
+        assert_eq!(receipt["devices"][0]["family"], "gfx942");
+        assert_eq!(receipt["devices"][0]["gfx_target_version"], 90_402);
+        assert_eq!(receipt["devices"][0]["wave_width"], 64);
+        assert_eq!(receipt["devices"][0]["exact_xnack_origin"], "unavailable");
+        assert_eq!(
+            receipt["devices"][0]["exact_xnack_unavailable_reason"],
+            "not_represented"
+        );
+        assert_eq!(
+            receipt["source_agent_mappings"].as_array().unwrap().len(),
+            1
+        );
+        let mapping = &receipt["source_agent_mappings"][0];
+        assert_eq!(mapping["process_index"], 0);
+        assert_eq!(mapping["kfd_node"], node);
+        if kind == "dispatch-json" {
+            assert_eq!(mapping["source_process_id"], 100);
+            assert_eq!(mapping["opaque_agent_handle"], 7001);
+        } else {
+            assert!(mapping["source_process_id"].is_null());
+            assert_eq!(mapping["opaque_agent_handle"], node);
+        }
+        for identity in ["artifact", "source_map"] {
+            assert_eq!(receipt[identity]["origin"], "unavailable");
+            assert_eq!(receipt[identity]["reason"], "not_provided");
+        }
+        let manifest = fs::read_to_string(&manifest_path).unwrap();
+        assert!(manifest.contains("dispatch-observation-origin: observed-rocprof-source"));
+        assert!(manifest.contains("fe2o3-semantic-profiler-bundle-v4.json"));
+        assert!(manifest.contains("fe2o3-profile-dispatch-import-receipt-v1.json"));
+    }
+}
+
+#[test]
+fn schema_source_ambiguity_is_not_resolved_by_kfd_compatibility() {
+    let Some(agent) = gfx942_kfd_agent() else {
+        return;
+    };
+    let fixture = Fixture::new(false);
+    let mut source =
+        serde_json::from_slice::<serde_json::Value>(&current_dispatch_json(agent)).unwrap();
+    let valid_but_foreign = source.clone();
+    source["rocprofiler-sdk-tool"][0]["agents"][0]["node_id"] = serde_json::json!(u32::MAX);
+    source["rocprofiler-sdk-tool"][0]["agents"][0]["gpu_id"] = serde_json::json!(u64::MAX);
+    let first = serde_json::to_vec(&source).unwrap();
+    let second = serde_json::to_vec(&valid_but_foreign).unwrap();
+    let first_literal = serde_json::to_string(&String::from_utf8(first).unwrap()).unwrap();
+    let second_literal = serde_json::to_string(&String::from_utf8(second).unwrap()).unwrap();
+    fixture.replace_behavior(&format!(
+        "out = args[args.index(\"--output-directory\") + 1]\nos.makedirs(out, exist_ok=True)\nwith open(os.path.join(out, \"a.json\"), \"w\", encoding=\"utf-8\") as stream:\n    stream.write({first_literal})\nwith open(os.path.join(out, \"b.json\"), \"w\", encoding=\"utf-8\") as stream:\n    stream.write({second_literal})\ntarget = args[args.index(\"--\") + 1:]\nraise SystemExit(subprocess.run(target, check=False).returncode)\n"
+    ));
+    let kir = exact_gfx942_kir(&fixture);
+    let output_directory = fixture.output("ambiguous");
+    let options = ["--kind", "dispatch-json", "--kir-v7", kir.to_str().unwrap()];
+    let plan = fixture.plan_with_options(&output_directory, &options, &[]);
+    assert!(plan.status.success());
+    let output = collect_with_options(
+        &fixture,
+        &output_directory,
+        &authorization(&plan),
+        &options,
+        &[],
+    );
+    assert!(output.status.success());
+    assert!(
+        !output_directory
+            .join("fe2o3-semantic-profiler-bundle-v4.json")
+            .exists()
+    );
+    let manifest =
+        fs::read_to_string(output_directory.join("fe2o3-profile-manifest-v1.txt")).unwrap();
+    assert!(manifest.contains("multiple-schema-valid-dispatch-sources"));
+}
+
+#[test]
+fn malformed_source_is_unavailable_and_generated_budget_failure_cleans() {
+    let Some(agent) = gfx942_kfd_agent() else {
+        return;
+    };
+
+    let malformed = Fixture::new(false);
+    install_dispatch_behavior(&malformed, "malformed.", b"{}", 1);
+    let kir = exact_gfx942_kir(&malformed);
+    let output_directory = malformed.output("malformed");
+    let options = ["--kind", "dispatch-json", "--kir-v7", kir.to_str().unwrap()];
+    let plan = malformed.plan_with_options(&output_directory, &options, &[]);
+    assert!(plan.status.success());
+    let output = collect_with_options(
+        &malformed,
+        &output_directory,
+        &authorization(&plan),
+        &options,
+        &[],
+    );
+    assert!(output.status.success());
+    let manifest =
+        fs::read_to_string(output_directory.join("fe2o3-profile-manifest-v1.txt")).unwrap();
+    assert!(manifest.contains("dispatch-observation-reason: no-schema-valid-dispatch-source"));
+    assert!(
+        !output_directory
+            .join("fe2o3-semantic-profiler-bundle-v4.json")
+            .exists()
+    );
+
+    let budget = Fixture::new(false);
+    let source = current_dispatch_json(agent);
+    install_dispatch_behavior(&budget, "dispatch.", &source, 1);
+    let kir = exact_gfx942_kir(&budget);
+    let output_directory = budget.output("budget");
+    let options = [
+        "--kind",
+        "dispatch-json",
+        "--kir-v7",
+        kir.to_str().unwrap(),
+        "--storage-limit",
+        "1024",
+    ];
+    let plan = budget.plan_with_options(&output_directory, &options, &[]);
+    assert!(plan.status.success());
+    let output = collect_with_options(
+        &budget,
+        &output_directory,
+        &authorization(&plan),
+        &options,
+        &[],
+    );
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("storage limit"));
+    assert!(!output_directory.exists());
+}
+
+#[test]
+fn reserved_generated_names_are_rejected_and_cleaned() {
+    for name in [
+        "fe2o3-semantic-profiler-bundle-v4.json",
+        ".fe2o3-semantic-profiler-bundle-v4.redo",
+        "fe2o3-profile-dispatch-import-receipt-v1.json",
+        ".fe2o3-profile-dispatch-import-receipt-v1.redo",
+        "fe2o3-profile-manifest-v1.txt",
+        ".fe2o3-profile-manifest-v1.redo",
+    ] {
+        let fixture = Fixture::new(false);
+        fixture.replace_behavior(&format!(
+            "out = args[args.index(\"--output-directory\") + 1]\nwith open(os.path.join(out, {name:?}), \"w\", encoding=\"utf-8\") as stream:\n    stream.write(\"reserved\")\n"
+        ));
+        let output_directory = fixture.output("reserved");
+        let plan = fixture.plan(&output_directory, &[]);
+        assert!(plan.status.success());
+        let output = collect(&fixture, &output_directory, &authorization(&plan), &[]);
+        assert!(!output.status.success());
+        assert!(!output_directory.exists());
+    }
+}
+
+#[test]
+fn legacy_kir_declaration_never_emits_an_import_recipe() {
     let fixture = Fixture::new(false);
     let output = fixture.plan_with_options(
         &fixture.output("capture"),
@@ -211,26 +661,15 @@ fn import_recipe_binds_absolute_agent_ids_instead_of_device_order() {
     );
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    if !stdout.contains("device[0]:") {
-        assert!(stdout.contains("unavailable-no-stable-direct-kfd-device-identity"));
-    } else if stdout
-        .contains("next-import-status: ready-after-collector-artifact-and-source-size-validation")
-    {
-        assert!(stdout.contains("\"--device-binding\""));
-        assert!(
-            stdout
-                .lines()
-                .any(|line| { line.starts_with("next-import-arg[") && line.contains("=raw:1:") })
-        );
-    } else {
-        assert!(stdout.contains("next-import-status: unavailable-observed-gpu-target-profile"));
-        assert!(!stdout.contains("next-import-program:"));
-        assert!(!stdout.contains("next-import-arg["));
-    }
+    assert!(stdout.contains(
+        "next-import-status: unavailable-legacy-kir-declaration-is-not-admitted-canonical-kir"
+    ));
+    assert!(!stdout.contains("next-import-program:"));
+    assert!(!stdout.contains("next-import-arg["));
 }
 
 #[test]
-fn dispatch_import_recipe_withholds_commands_for_incompatible_caller_wave() {
+fn legacy_wave_declaration_cannot_bypass_canonical_kir_admission() {
     let fixture = Fixture::new(false);
     let output = fixture.plan_with_options(
         &fixture.output("capture"),
@@ -249,12 +688,9 @@ fn dispatch_import_recipe_withholds_commands_for_incompatible_caller_wave() {
     assert!(!stdout.contains("next-import-program:"));
     assert!(!stdout.contains("next-import-arg["));
     assert!(!stdout.contains("ready-after-collector-artifact"));
-    if stdout.contains("device[0]:") {
-        assert!(
-            stdout.contains("next-import-status: unavailable-kir-wave-width-mismatch")
-                || stdout.contains("next-import-status: unavailable-observed-gpu-target-profile")
-        );
-    }
+    assert!(stdout.contains(
+        "next-import-status: unavailable-legacy-kir-declaration-is-not-admitted-canonical-kir"
+    ));
 }
 
 #[test]
@@ -365,6 +801,48 @@ time.sleep(30)
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
     panic!("collector descendant survived process-group timeout");
+}
+
+#[test]
+fn successful_collector_exit_kills_descendants_and_completes_publication() {
+    let fixture = Fixture::new(false);
+    let pid_file = fixture.output("normal-exit-descendant-pid");
+    fixture.replace_behavior(&format!(
+        r#"
+child = subprocess.Popen(["/bin/sleep", "30"])
+with open({:?}, "w", encoding="utf-8") as stream:
+    stream.write(str(child.pid))
+    stream.flush()
+out = args[args.index("--output-directory") + 1]
+with open(os.path.join(out, "capture_results.json"), "w", encoding="utf-8") as stream:
+    stream.write("{{}}")
+raise SystemExit(0)
+"#,
+        pid_file
+    ));
+    let output_directory = fixture.output("normal-exit-capture");
+    let plan = fixture.plan(&output_directory, &[]);
+    assert!(plan.status.success());
+    let output = collect(&fixture, &output_directory, &authorization(&plan), &[]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        output_directory
+            .join("fe2o3-profile-manifest-v1.txt")
+            .is_file()
+    );
+    let pid = fs::read_to_string(&pid_file).unwrap();
+    let process_path = PathBuf::from(format!("/proc/{}", pid.trim()));
+    for _ in 0..100 {
+        if !process_path.exists() {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    panic!("collector descendant survived normal leader exit");
 }
 
 #[test]

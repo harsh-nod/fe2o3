@@ -24,6 +24,23 @@ source-bound observations.
   domain-separated redacted device identities from recorded agent handles, and
   source-and-ordinal-derived dispatch identities. Raw process, device, queue,
   kernel, and dispatch handles never enter the capture.
+- Semantic Profiler Bundle V4 adds a closed dispatch-import surface. Current
+  rocprof JSON uses bounded process, agent, and dispatch sequences. Each opaque
+  dispatch agent handle is resolved only through the `agents[]` catalog in the
+  same process and projected to its absolute KFD `node_id`; handles are never
+  joined globally across processes, and unused visible agents do not become
+  device requirements. Raw source and canonical node projection retain
+  separate content identities. Fields used for dialect selection, device
+  binding, and dispatch projection are decoded as exact typed values. Required
+  but unused evolving record collections are bounded and shape-checked as
+  arrays; their nested values are not represented as semantic evidence.
+- Bundle V4 CSV import accepts only the exact reviewed current 22-column
+  kernel-dispatch header with `Stream_Id` and `Agent N` absolute agent syntax.
+  Header additions, omissions, reordering, `Process_Id` dialects, hybrid
+  headers, bare agent numbers, and noncanonical numeric spellings are rejected.
+  The checked-in JSON and CSV files are deterministic synthetic vocabulary
+  fixtures, not collector runs, hardware execution, or authenticated
+  observations; their manifest pins exact bytes and reviewed serializer files.
 - `rocprofv3-counter-capture` accepts the rocprofiler-sdk 1.1 dispatch-counter
   JSON shape. This contract was checked against ROCm 7.2.4 SDK revision
   `97f5574fe2fdc7bef44fb01545347912ee9f1779`, its installed
@@ -57,6 +74,12 @@ The CLI publishes only the canonical Trace V1 byte stream. Opaque dispatch and c
 hashes of that identity and the selected record ordinal. KIR, artifact, and
 source identities remain untrusted content claims; importing does not resolve
 or authenticate them.
+
+Bundle V4 dispatch import likewise leaves artifact, source-map,
+executed-code-object, kernel-symbol, characteristic, source/ISA, decoded ATT,
+runtime, and performance authority unavailable. Canonical hashes make the
+relations recomputable and detect substitution; they are not signatures or
+external provenance authentication.
 
 The report explicitly lists unavailable dispatch timing, invocation,
 workgroup, wave, lane, KIR-site, memory, and register/value facts as applicable.

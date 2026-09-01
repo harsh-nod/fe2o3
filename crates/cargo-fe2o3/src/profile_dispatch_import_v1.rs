@@ -1,30 +1,30 @@
 //! Inert, canonical custody receipt for one in-process dispatch import.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
 
 use fe2o3_semantic_import::{
     CaptureIdentityV1, CaptureUnavailableReasonV1, ContentIdentityRecordV1, ContentSchemeV1,
-    ProfilerDeviceBindingV4, ProfilerDispatchBindingV4, ProfilerEnvironmentBindingV4,
-    ProfilerSourceKindV4, ProfilerUnavailableFactV4, SemanticProfilerBundleV4, TruthOriginV1,
-    capture_content_identity_v1, decode_capture_v1, encode_capture_v1,
-    encode_profiler_bundle_v4, import_rocprofv3_csv_profiler_bundle_v4,
-    import_rocprofv3_json_profiler_bundle_v4, profiler_bundle_content_identity_v4,
+    MAX_PROFILER_DEVICE_BINDINGS_V4, MAX_ROCPROF_PROCESSES_V1, ProfilerDeviceBindingV4,
+    ProfilerDispatchBindingV4, ProfilerEnvironmentBindingV4, ProfilerUnavailableFactV4,
+    RocprofDispatchSchemaDialectV4, SemanticProfilerBundleV4, TruthOriginV1,
+    capture_content_identity_v1, encode_capture_v1, encode_profiler_bundle_v4,
+    import_projected_rocprofv3_json_profiler_bundle_v4, import_rocprofv3_csv_profiler_bundle_v4,
+    profiler_bundle_content_identity_v4, project_rocprofv3_json_dispatch_agents_v4,
 };
 use fe2o3_semantic_trace::{KernelIrIdentityClaimV1, OpaqueIdentityV1, WaveWidthV1};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
 
-pub(crate) const PROFILE_DISPATCH_BUNDLE_FILE_V1: &str =
-    "fe2o3-semantic-profiler-bundle-v4.json";
+pub(crate) const PROFILE_DISPATCH_BUNDLE_FILE_V1: &str = "fe2o3-semantic-profiler-bundle-v4.json";
 pub(crate) const PROFILE_DISPATCH_RECEIPT_FILE_V1: &str =
     "fe2o3-profile-dispatch-import-receipt-v1.json";
-pub(crate) const MAX_PROFILE_DISPATCH_RECEIPT_BYTES_V1: u64 = 2 * 1024 * 1024;
+pub(crate) const MAX_PROFILE_DISPATCH_RECEIPT_BYTES_V1: u64 = 16 * 1024 * 1024;
+pub(crate) const MAX_PROFILE_SOURCE_AGENT_MAPPINGS_V1: usize = 16_384;
 
 const PROFILE_DISPATCH_RECEIPT_SCHEMA_VERSION_V1: u16 = 1;
-const PROFILE_DISPATCH_IMPORT_IDENTITY_DOMAIN_V1: &[u8] =
-    b"fe2o3.profile-dispatch-import.v1\0";
+const PROFILE_DISPATCH_IMPORT_IDENTITY_DOMAIN_V1: &[u8] = b"fe2o3.profile-dispatch-import.v1\0";
 const PROFILE_DISPATCH_RECEIPT_IDENTITY_DOMAIN_V1: &[u8] =
     b"fe2o3.profile-dispatch-import-receipt.v1\0";
 
@@ -35,7 +35,15 @@ pub(crate) enum DispatchImportSourceKindV1 {
     Rocprofv3KernelDispatchCsv,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum ReceiptSourceSchemaDialectV1 {
+    Rocprofv3JsonInstalled1_1_97f5574,
+    Rocprofv3JsonForward848868,
+    Rocprofv3CsvCurrent22ColumnStreamId,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum ObservedTargetFamilyV1 {
     Gfx942,
@@ -44,6 +52,8 @@ pub(crate) enum ObservedTargetFamilyV1 {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct DispatchImportTargetBindingV1 {
+    pub(crate) process_index: u32,
+    pub(crate) source_process_id: Option<u64>,
     pub(crate) source_agent_id: u64,
     pub(crate) kfd_node: u32,
     pub(crate) stable_identity: ContentIdentityRecordV1,
@@ -71,6 +81,7 @@ pub(crate) struct DispatchImportProductV1 {
     pub(crate) bundle: SemanticProfilerBundleV4,
     pub(crate) bundle_bytes: Vec<u8>,
     pub(crate) bundle_identity: ContentIdentityRecordV1,
+    #[allow(dead_code)]
     pub(crate) capture_bytes: Vec<u8>,
     pub(crate) capture_identity: ContentIdentityRecordV1,
     pub(crate) receipt_bytes: Vec<u8>,
@@ -90,18 +101,28 @@ pub(crate) fn import_dispatch_v1(
         binding.kernel_ir.canonical_len,
     )
     .map_err(|_| ProfileDispatchImportErrorV1::InvalidBinding)?;
+    let mut stable_device_bindings = Vec::new();
+    let mut stable_nodes = BTreeSet::new();
+    stable_device_bindings
+        .try_reserve(binding.targets.len())
+        .map_err(|_| ProfileDispatchImportErrorV1::SizeOverflow)?;
+    for target in &binding.targets {
+        let source_agent_id = match source_kind {
+            DispatchImportSourceKindV1::Rocprofv3KernelDispatchJson => u64::from(target.kfd_node),
+            DispatchImportSourceKindV1::Rocprofv3KernelDispatchCsv => target.source_agent_id,
+        };
+        if stable_nodes.insert(source_agent_id) {
+            stable_device_bindings.push(ProfilerDeviceBindingV4 {
+                source_agent_id,
+                stable_identity: target.stable_identity,
+            });
+        }
+    }
     let environment = ProfilerEnvironmentBindingV4 {
         environment: binding.environment,
         collector_tool: binding.collector_tool,
         collector_configuration: binding.collector_configuration,
-        stable_device_bindings: binding
-            .targets
-            .iter()
-            .map(|target| ProfilerDeviceBindingV4 {
-                source_agent_id: target.source_agent_id,
-                stable_identity: target.stable_identity,
-            })
-            .collect(),
+        stable_device_bindings,
     };
     let bundle_binding = ProfilerDispatchBindingV4 {
         environment,
@@ -110,23 +131,41 @@ pub(crate) fn import_dispatch_v1(
         source_map: None,
         wave_width: binding.wave_width,
     };
-    let bundle = match source_kind {
+    let (source_schema_dialect, bundle) = match source_kind {
         DispatchImportSourceKindV1::Rocprofv3KernelDispatchJson => {
-            import_rocprofv3_json_profiler_bundle_v4(source, bundle_binding)
+            let projection = project_rocprofv3_json_dispatch_agents_v4(source)
+                .map_err(|_| ProfileDispatchImportErrorV1::ImportRejected)?;
+            let dialect = match projection.dialect() {
+                RocprofDispatchSchemaDialectV4::InstalledRocprofv3_1_1_97f5574 => {
+                    ReceiptSourceSchemaDialectV1::Rocprofv3JsonInstalled1_1_97f5574
+                }
+                RocprofDispatchSchemaDialectV4::ForwardRocprofv3_848868 => {
+                    ReceiptSourceSchemaDialectV1::Rocprofv3JsonForward848868
+                }
+            };
+            (
+                dialect,
+                import_projected_rocprofv3_json_profiler_bundle_v4(
+                    source,
+                    &projection,
+                    bundle_binding,
+                ),
+            )
         }
-        DispatchImportSourceKindV1::Rocprofv3KernelDispatchCsv => {
-            import_rocprofv3_csv_profiler_bundle_v4(source, bundle_binding)
-        }
-    }
-    .map_err(|_| ProfileDispatchImportErrorV1::ImportRejected)?;
+        DispatchImportSourceKindV1::Rocprofv3KernelDispatchCsv => (
+            ReceiptSourceSchemaDialectV1::Rocprofv3CsvCurrent22ColumnStreamId,
+            import_rocprofv3_csv_profiler_bundle_v4(source, bundle_binding),
+        ),
+    };
+    let bundle = bundle.map_err(|_| ProfileDispatchImportErrorV1::ImportRejected)?;
     validate_nonclaims(&bundle, binding.kernel_ir)?;
 
     let capture = bundle
         .dispatch_capture
         .as_ref()
         .ok_or(ProfileDispatchImportErrorV1::MissingCapture)?;
-    let capture_bytes = encode_capture_v1(capture)
-        .map_err(|_| ProfileDispatchImportErrorV1::CaptureEncode)?;
+    let capture_bytes =
+        encode_capture_v1(capture).map_err(|_| ProfileDispatchImportErrorV1::CaptureEncode)?;
     let capture_identity = capture_content_identity_v1(&capture_bytes)
         .map_err(|_| ProfileDispatchImportErrorV1::CaptureEncode)?;
     let bundle_bytes = encode_profiler_bundle_v4(&bundle)
@@ -135,6 +174,7 @@ pub(crate) fn import_dispatch_v1(
         .map_err(|_| ProfileDispatchImportErrorV1::BundleEncode)?;
     let receipt = ProfileDispatchImportReceiptV1::new(
         source_kind,
+        source_schema_dialect,
         &binding,
         &bundle,
         bundle_identity,
@@ -153,12 +193,32 @@ pub(crate) fn import_dispatch_v1(
     })
 }
 
+/// Re-admits the complete source-to-publication tuple and requires every
+/// canonical output byte to equal an independently regenerated product.
+pub(crate) fn readmit_dispatch_import_tuple_v1(
+    source_kind: DispatchImportSourceKindV1,
+    source: &[u8],
+    binding: DispatchImportBindingV1,
+    bundle_bytes: &[u8],
+    capture_bytes: &[u8],
+    receipt_bytes: &[u8],
+) -> Result<(), ProfileDispatchImportErrorV1> {
+    let regenerated = import_dispatch_v1(source_kind, source, binding)?;
+    if regenerated.bundle_bytes != bundle_bytes
+        || regenerated.capture_bytes != capture_bytes
+        || regenerated.receipt_bytes != receipt_bytes
+    {
+        return Err(ProfileDispatchImportErrorV1::TupleMismatch);
+    }
+    Ok(())
+}
+
 fn validate_raw_source(
     source: &[u8],
     identity: ContentIdentityRecordV1,
 ) -> Result<(), ProfileDispatchImportErrorV1> {
-    let length = u64::try_from(source.len())
-        .map_err(|_| ProfileDispatchImportErrorV1::SizeOverflow)?;
+    let length =
+        u64::try_from(source.len()).map_err(|_| ProfileDispatchImportErrorV1::SizeOverflow)?;
     if source.is_empty()
         || identity.scheme != ContentSchemeV1::RawCanonicalSha256
         || identity.format_version != 1
@@ -170,38 +230,59 @@ fn validate_raw_source(
     Ok(())
 }
 
-fn validate_binding(
-    binding: &DispatchImportBindingV1,
-) -> Result<(), ProfileDispatchImportErrorV1> {
+fn validate_binding(binding: &DispatchImportBindingV1) -> Result<(), ProfileDispatchImportErrorV1> {
     if binding.kernel_ir.scheme != ContentSchemeV1::DomainSeparatedSha256
         || binding.kernel_ir.format_version != 1
         || binding.kernel_ir.canonical_len == 0
         || binding.targets.is_empty()
-        || binding.targets.len() > 64
+        || binding.targets.len() > MAX_PROFILE_SOURCE_AGENT_MAPPINGS_V1
         || binding.wave_width != WaveWidthV1::Wave64
     {
         return Err(ProfileDispatchImportErrorV1::InvalidBinding);
     }
     let mut agents = BTreeSet::new();
-    let mut nodes = BTreeSet::new();
-    let mut stable = BTreeSet::new();
+    let mut nodes = std::collections::BTreeMap::new();
     for target in &binding.targets {
         if target.wave_width != binding.wave_width.lanes()
-            || !agents.insert(target.source_agent_id)
-            || !nodes.insert(target.kfd_node)
-            || !stable.insert(target.stable_identity.digest)
+            || !agents.insert((
+                target.process_index,
+                target.source_process_id,
+                target.source_agent_id,
+            ))
             || target.stable_identity.scheme != ContentSchemeV1::RawCanonicalSha256
             || target.stable_identity.format_version != 1
             || target.stable_identity.canonical_len == 0
-            || target.target_profile_record.scheme
-                != ContentSchemeV1::DomainSeparatedSha256
+            || target.target_profile_record.scheme != ContentSchemeV1::DomainSeparatedSha256
             || target.target_profile_record.format_version != 1
             || target.target_profile_record.canonical_len == 0
             || !matches!(
                 (target.family, target.gfx_target_version),
-                (ObservedTargetFamilyV1::Gfx942, 90_402)
-                    | (ObservedTargetFamilyV1::Gfx950, 90_500)
+                (ObservedTargetFamilyV1::Gfx942, 90_402) | (ObservedTargetFamilyV1::Gfx950, 90_500)
             )
+        {
+            return Err(ProfileDispatchImportErrorV1::InvalidBinding);
+        }
+        if nodes
+            .insert(
+                target.kfd_node,
+                (
+                    target.stable_identity,
+                    target.target_profile_record,
+                    target.family,
+                    target.gfx_target_version,
+                    target.wave_width,
+                ),
+            )
+            .is_some_and(|prior| {
+                prior
+                    != (
+                        target.stable_identity,
+                        target.target_profile_record,
+                        target.family,
+                        target.gfx_target_version,
+                        target.wave_width,
+                    )
+            })
         {
             return Err(ProfileDispatchImportErrorV1::InvalidBinding);
         }
@@ -232,8 +313,7 @@ fn validate_nonclaims(
             || dispatch.kernel_ir.canonical_len != kernel_ir.canonical_len
             || dispatch.artifact.origin != TruthOriginV1::Unavailable
             || dispatch.artifact.value.is_some()
-            || dispatch.artifact.unavailable_reason
-                != Some(CaptureUnavailableReasonV1::NotProvided)
+            || dispatch.artifact.unavailable_reason != Some(CaptureUnavailableReasonV1::NotProvided)
             || dispatch.source_map.origin != TruthOriginV1::Unavailable
             || dispatch.source_map.value.is_some()
             || dispatch.source_map.unavailable_reason
@@ -305,8 +385,7 @@ impl UnavailableIdentityV1 {
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-struct ReceiptTargetBindingV1 {
-    source_agent_id: u64,
+struct ReceiptDeviceBindingV1 {
     kfd_node: u32,
     stable_identity: ContentIdentityRecordV1,
     target_profile_record: ContentIdentityRecordV1,
@@ -314,6 +393,16 @@ struct ReceiptTargetBindingV1 {
     gfx_target_version: u64,
     wave_width: u16,
     exact_xnack_origin: TruthOriginV1,
+    exact_xnack_unavailable_reason: CaptureUnavailableReasonV1,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ReceiptSourceAgentMappingV1 {
+    process_index: u32,
+    source_process_id: Option<u64>,
+    opaque_agent_handle: u64,
+    kfd_node: u32,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -322,7 +411,9 @@ struct ProfileDispatchImportReceiptV1 {
     schema_version: u16,
     authority: ImportAuthorityNonclaimsV1,
     source_kind: DispatchImportSourceKindV1,
+    source_schema_dialect: ReceiptSourceSchemaDialectV1,
     collection_authorization: CaptureIdentityV1,
+    #[serde(deserialize_with = "deserialize_source_relative_v1")]
     source_relative: String,
     source_artifact: ContentIdentityRecordV1,
     source_evidence: ContentIdentityRecordV1,
@@ -338,16 +429,151 @@ struct ProfileDispatchImportReceiptV1 {
     run_count: u64,
     device_count: u64,
     dispatch_count: u64,
-    targets: Vec<ReceiptTargetBindingV1>,
+    #[serde(deserialize_with = "deserialize_receipt_devices_v1")]
+    devices: Vec<ReceiptDeviceBindingV1>,
+    #[serde(deserialize_with = "deserialize_receipt_mappings_v1")]
+    source_agent_mappings: Vec<ReceiptSourceAgentMappingV1>,
+    #[serde(deserialize_with = "deserialize_receipt_dispatches_v1")]
     dispatch_identities: Vec<CaptureIdentityV1>,
     artifact: UnavailableIdentityV1,
     source_map: UnavailableIdentityV1,
     characteristic_correlation: UnavailableIdentityV1,
 }
 
+fn deserialize_receipt_devices_v1<'de, D>(
+    deserializer: D,
+) -> Result<Vec<ReceiptDeviceBindingV1>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    deserialize_bounded_receipt_vec_v1(
+        deserializer,
+        MAX_PROFILER_DEVICE_BINDINGS_V4,
+        "receipt device",
+    )
+}
+
+fn deserialize_source_relative_v1<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct Visitor;
+
+    impl<'de> serde::de::Visitor<'de> for Visitor {
+        type Value = String;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str("a relative source path of at most 4096 bytes")
+        }
+
+        fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            if value.is_empty() || value.len() > 4_096 {
+                return Err(E::custom("relative source path exceeds bound"));
+            }
+            let mut output = String::new();
+            output
+                .try_reserve_exact(value.len())
+                .map_err(|_| E::custom("relative source path allocation failed"))?;
+            output.push_str(value);
+            Ok(output)
+        }
+
+        fn visit_string<E>(self, value: String) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            if value.is_empty() || value.len() > 4_096 {
+                return Err(E::custom("relative source path exceeds bound"));
+            }
+            Ok(value)
+        }
+    }
+
+    deserializer.deserialize_string(Visitor)
+}
+
+fn deserialize_receipt_mappings_v1<'de, D>(
+    deserializer: D,
+) -> Result<Vec<ReceiptSourceAgentMappingV1>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    deserialize_bounded_receipt_vec_v1(
+        deserializer,
+        MAX_PROFILE_SOURCE_AGENT_MAPPINGS_V1,
+        "receipt source-agent mapping",
+    )
+}
+
+fn deserialize_receipt_dispatches_v1<'de, D>(
+    deserializer: D,
+) -> Result<Vec<CaptureIdentityV1>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    deserialize_bounded_receipt_vec_v1(deserializer, 16_384, "receipt dispatch identity")
+}
+
+fn deserialize_bounded_receipt_vec_v1<'de, D, T>(
+    deserializer: D,
+    maximum: usize,
+    label: &'static str,
+) -> Result<Vec<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    struct Visitor<T> {
+        maximum: usize,
+        label: &'static str,
+        marker: std::marker::PhantomData<T>,
+    }
+
+    impl<'de, T> serde::de::Visitor<'de> for Visitor<T>
+    where
+        T: Deserialize<'de>,
+    {
+        type Value = Vec<T>;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(formatter, "at most {} {} records", self.maximum, self.label)
+        }
+
+        fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
+        where
+            A: serde::de::SeqAccess<'de>,
+        {
+            if sequence.size_hint().is_some_and(|hint| hint > self.maximum) {
+                return Err(serde::de::Error::custom("receipt sequence exceeds limit"));
+            }
+            let mut output = Vec::new();
+            while let Some(value) = sequence.next_element()? {
+                if output.len() == self.maximum {
+                    return Err(serde::de::Error::custom("receipt sequence exceeds limit"));
+                }
+                output
+                    .try_reserve(1)
+                    .map_err(|_| serde::de::Error::custom("receipt allocation failed"))?;
+                output.push(value);
+            }
+            Ok(output)
+        }
+    }
+
+    deserializer.deserialize_seq(Visitor {
+        maximum,
+        label,
+        marker: std::marker::PhantomData,
+    })
+}
+
 impl ProfileDispatchImportReceiptV1 {
     fn new(
         source_kind: DispatchImportSourceKindV1,
+        source_schema_dialect: ReceiptSourceSchemaDialectV1,
         binding: &DispatchImportBindingV1,
         bundle: &SemanticProfilerBundleV4,
         bundle_identity: ContentIdentityRecordV1,
@@ -365,8 +591,8 @@ impl ProfileDispatchImportReceiptV1 {
             .normalized_projection
             .value
             .ok_or(ProfileDispatchImportErrorV1::InvalidBundle)?;
-        let mut targets = Vec::new();
-        targets
+        let mut devices = Vec::new();
+        devices
             .try_reserve(bundle.devices.len())
             .map_err(|_| ProfileDispatchImportErrorV1::SizeOverflow)?;
         for device in &bundle.devices {
@@ -379,8 +605,7 @@ impl ProfileDispatchImportReceiptV1 {
                 .iter()
                 .find(|target| target.stable_identity == stable)
                 .ok_or(ProfileDispatchImportErrorV1::InvalidBundle)?;
-            targets.push(ReceiptTargetBindingV1 {
-                source_agent_id: target.source_agent_id,
+            devices.push(ReceiptDeviceBindingV1 {
                 kfd_node: target.kfd_node,
                 stable_identity: target.stable_identity,
                 target_profile_record: target.target_profile_record,
@@ -388,8 +613,24 @@ impl ProfileDispatchImportReceiptV1 {
                 gfx_target_version: target.gfx_target_version,
                 wave_width: target.wave_width,
                 exact_xnack_origin: TruthOriginV1::Unavailable,
+                exact_xnack_unavailable_reason: CaptureUnavailableReasonV1::NotRepresented,
             });
         }
+        let used_stable = devices
+            .iter()
+            .map(|device| device.stable_identity)
+            .collect::<Vec<_>>();
+        let source_agent_mappings = binding
+            .targets
+            .iter()
+            .filter(|target| used_stable.contains(&target.stable_identity))
+            .map(|target| ReceiptSourceAgentMappingV1 {
+                process_index: target.process_index,
+                source_process_id: target.source_process_id,
+                opaque_agent_handle: target.source_agent_id,
+                kfd_node: target.kfd_node,
+            })
+            .collect::<Vec<_>>();
         let run_count = u64::try_from(capture.runs.len())
             .map_err(|_| ProfileDispatchImportErrorV1::SizeOverflow)?;
         let device_count = u64::try_from(capture.devices.len())
@@ -400,6 +641,7 @@ impl ProfileDispatchImportReceiptV1 {
             schema_version: PROFILE_DISPATCH_RECEIPT_SCHEMA_VERSION_V1,
             authority: ImportAuthorityNonclaimsV1::none(),
             source_kind,
+            source_schema_dialect,
             collection_authorization: binding.collection_authorization,
             source_relative: binding.source_relative.clone(),
             source_artifact: binding.source_artifact,
@@ -416,7 +658,8 @@ impl ProfileDispatchImportReceiptV1 {
             run_count,
             device_count,
             dispatch_count,
-            targets,
+            devices,
+            source_agent_mappings,
             dispatch_identities: capture
                 .dispatches
                 .iter()
@@ -438,35 +681,163 @@ impl ProfileDispatchImportReceiptV1 {
         if self.schema_version != PROFILE_DISPATCH_RECEIPT_SCHEMA_VERSION_V1
             || !self.authority.is_none()
             || !valid_relative_source(&self.source_relative)
-            || self.targets.is_empty()
-            || self.targets.len() > 64
+            || self.devices.is_empty()
+            || self.devices.len() > MAX_PROFILER_DEVICE_BINDINGS_V4
+            || self.source_agent_mappings.is_empty()
+            || self.source_agent_mappings.len() > MAX_PROFILE_SOURCE_AGENT_MAPPINGS_V1
             || self.dispatch_identities.is_empty()
             || self.dispatch_identities.len() > 16_384
             || self.run_count != 1
-            || self.device_count != self.targets.len() as u64
+            || self.device_count != self.devices.len() as u64
             || self.dispatch_count != self.dispatch_identities.len() as u64
+            || self.devices.len() > self.source_agent_mappings.len()
+            || self.source_agent_mappings.len() > self.dispatch_identities.len()
+            || !matches!(
+                (self.source_kind, self.source_schema_dialect),
+                (
+                    DispatchImportSourceKindV1::Rocprofv3KernelDispatchJson,
+                    ReceiptSourceSchemaDialectV1::Rocprofv3JsonInstalled1_1_97f5574
+                        | ReceiptSourceSchemaDialectV1::Rocprofv3JsonForward848868
+                ) | (
+                    DispatchImportSourceKindV1::Rocprofv3KernelDispatchCsv,
+                    ReceiptSourceSchemaDialectV1::Rocprofv3CsvCurrent22ColumnStreamId
+                )
+            )
+            || !valid_content_identity_with_scheme(
+                self.source_artifact,
+                ContentSchemeV1::RawCanonicalSha256,
+                1,
+            )
+            || !valid_content_identity_with_scheme(
+                self.source_evidence,
+                ContentSchemeV1::DomainSeparatedSha256,
+                1,
+            )
+            || !valid_content_identity_with_scheme(
+                self.normalized_projection,
+                ContentSchemeV1::DomainSeparatedSha256,
+                1,
+            )
+            || !valid_content_identity_with_scheme(
+                self.kernel_ir,
+                ContentSchemeV1::DomainSeparatedSha256,
+                1,
+            )
+            || !valid_content_identity_with_scheme(
+                self.environment,
+                ContentSchemeV1::RawCanonicalSha256,
+                1,
+            )
+            || !valid_content_identity_with_scheme(
+                self.collector_tool,
+                ContentSchemeV1::RawCanonicalSha256,
+                1,
+            )
+            || !valid_content_identity_with_scheme(
+                self.collector_configuration,
+                ContentSchemeV1::RawCanonicalSha256,
+                1,
+            )
+            || !valid_content_identity_with_scheme(
+                self.bundle,
+                ContentSchemeV1::DomainSeparatedSha256,
+                4,
+            )
+            || !valid_content_identity_with_scheme(
+                self.capture,
+                ContentSchemeV1::DomainSeparatedSha256,
+                1,
+            )
             || self.artifact != UnavailableIdentityV1::not_provided()
             || self.source_map != UnavailableIdentityV1::not_provided()
             || self.characteristic_correlation.origin != TruthOriginV1::Unavailable
-            || self.characteristic_correlation.reason
-                != CaptureUnavailableReasonV1::NotRepresented
+            || self.characteristic_correlation.reason != CaptureUnavailableReasonV1::NotRepresented
             || self.import_identity != self.derive_import_identity()?
         {
             return Err(ProfileDispatchImportErrorV1::InvalidReceipt);
         }
-        let mut agents = BTreeSet::new();
         let mut nodes = BTreeSet::new();
         let mut stable = BTreeSet::new();
         let mut dispatches = BTreeSet::new();
-        for target in &self.targets {
-            if target.wave_width != 64
-                || target.exact_xnack_origin != TruthOriginV1::Unavailable
-                || !agents.insert(target.source_agent_id)
-                || !nodes.insert(target.kfd_node)
-                || !stable.insert(target.stable_identity.digest)
+        for device in &self.devices {
+            if device.wave_width != 64
+                || device.exact_xnack_origin != TruthOriginV1::Unavailable
+                || device.exact_xnack_unavailable_reason
+                    != CaptureUnavailableReasonV1::NotRepresented
+                || !nodes.insert(device.kfd_node)
+                || !stable.insert(device.stable_identity.digest)
+                || !valid_content_identity_with_scheme(
+                    device.stable_identity,
+                    ContentSchemeV1::RawCanonicalSha256,
+                    1,
+                )
+                || !valid_content_identity_with_scheme(
+                    device.target_profile_record,
+                    ContentSchemeV1::DomainSeparatedSha256,
+                    1,
+                )
+                || !matches!(
+                    (device.family, device.gfx_target_version),
+                    (ObservedTargetFamilyV1::Gfx942, 90_402)
+                        | (ObservedTargetFamilyV1::Gfx950, 90_500)
+                )
             {
                 return Err(ProfileDispatchImportErrorV1::InvalidReceipt);
             }
+        }
+        let mut mappings = BTreeSet::new();
+        let mut process_nodes = BTreeSet::new();
+        let mut process_pids = BTreeMap::new();
+        let mut pid_processes = BTreeMap::new();
+        let mut mapped_nodes = BTreeSet::new();
+        for mapping in &self.source_agent_mappings {
+            if mapping.process_index as usize >= MAX_ROCPROF_PROCESSES_V1
+                || !nodes.contains(&mapping.kfd_node)
+                || !matches!(
+                    (
+                        self.source_kind,
+                        mapping.process_index,
+                        mapping.source_process_id,
+                    ),
+                    (
+                        DispatchImportSourceKindV1::Rocprofv3KernelDispatchJson,
+                        _,
+                        Some(_)
+                    ) | (
+                        DispatchImportSourceKindV1::Rocprofv3KernelDispatchCsv,
+                        0,
+                        None
+                    )
+                )
+                || !mappings.insert((
+                    mapping.process_index,
+                    mapping.source_process_id,
+                    mapping.opaque_agent_handle,
+                ))
+                || (self.source_kind == DispatchImportSourceKindV1::Rocprofv3KernelDispatchJson
+                    && (mapping.opaque_agent_handle == 0
+                        || mapping.source_process_id == Some(0)
+                        || !process_nodes.insert((mapping.process_index, mapping.kfd_node))))
+                || (self.source_kind == DispatchImportSourceKindV1::Rocprofv3KernelDispatchCsv
+                    && mapping.opaque_agent_handle != u64::from(mapping.kfd_node))
+            {
+                return Err(ProfileDispatchImportErrorV1::InvalidReceipt);
+            }
+            if let Some(pid) = mapping.source_process_id {
+                if process_pids
+                    .insert(mapping.process_index, pid)
+                    .is_some_and(|prior| prior != pid)
+                    || pid_processes
+                        .insert(pid, mapping.process_index)
+                        .is_some_and(|prior| prior != mapping.process_index)
+                {
+                    return Err(ProfileDispatchImportErrorV1::InvalidReceipt);
+                }
+            }
+            mapped_nodes.insert(mapping.kfd_node);
+        }
+        if mapped_nodes != nodes {
+            return Err(ProfileDispatchImportErrorV1::InvalidReceipt);
         }
         if self
             .dispatch_identities
@@ -481,9 +852,26 @@ impl ProfileDispatchImportReceiptV1 {
     fn derive_import_identity(&self) -> Result<CaptureIdentityV1, ProfileDispatchImportErrorV1> {
         let mut digest = Sha256::new();
         digest.update(PROFILE_DISPATCH_IMPORT_IDENTITY_DOMAIN_V1);
+        digest.update(self.schema_version.to_le_bytes());
+        digest.update([
+            self.authority.compiler_authority as u8,
+            self.authority.runtime_authority as u8,
+            self.authority.executed_artifact_identity as u8,
+            self.authority.source_map_identity as u8,
+            self.authority.kernel_symbol_association as u8,
+            self.authority.source_ir_isa_correlation as u8,
+            self.authority.exact_target_xnack_observation as u8,
+            self.authority.decoded_att_events as u8,
+            self.authority.performance_authority as u8,
+        ]);
         digest.update([match self.source_kind {
             DispatchImportSourceKindV1::Rocprofv3KernelDispatchJson => 1,
             DispatchImportSourceKindV1::Rocprofv3KernelDispatchCsv => 2,
+        }]);
+        digest.update([match self.source_schema_dialect {
+            ReceiptSourceSchemaDialectV1::Rocprofv3JsonInstalled1_1_97f5574 => 1,
+            ReceiptSourceSchemaDialectV1::Rocprofv3JsonForward848868 => 2,
+            ReceiptSourceSchemaDialectV1::Rocprofv3CsvCurrent22ColumnStreamId => 3,
         }]);
         digest.update(self.collection_authorization.as_bytes());
         digest.update((self.source_relative.len() as u64).to_le_bytes());
@@ -496,19 +884,100 @@ impl ProfileDispatchImportReceiptV1 {
             self.environment,
             self.collector_tool,
             self.collector_configuration,
+            self.bundle,
+            self.capture,
         ] {
             update_content_identity(&mut digest, identity);
         }
-        for target in &self.targets {
-            digest.update(target.source_agent_id.to_le_bytes());
-            digest.update(target.kfd_node.to_le_bytes());
-            update_content_identity(&mut digest, target.stable_identity);
-            update_content_identity(&mut digest, target.target_profile_record);
-            digest.update(target.gfx_target_version.to_le_bytes());
-            digest.update(target.wave_width.to_le_bytes());
+        digest.update(self.run_identity.as_bytes());
+        digest.update(self.run_count.to_le_bytes());
+        digest.update(self.device_count.to_le_bytes());
+        digest.update(self.dispatch_count.to_le_bytes());
+        digest.update(
+            u64::try_from(self.devices.len())
+                .map_err(|_| ProfileDispatchImportErrorV1::SizeOverflow)?
+                .to_le_bytes(),
+        );
+        for device in &self.devices {
+            digest.update(device.kfd_node.to_le_bytes());
+            update_content_identity(&mut digest, device.stable_identity);
+            update_content_identity(&mut digest, device.target_profile_record);
+            digest.update([match device.family {
+                ObservedTargetFamilyV1::Gfx942 => 1,
+                ObservedTargetFamilyV1::Gfx950 => 2,
+            }]);
+            digest.update(device.gfx_target_version.to_le_bytes());
+            digest.update(device.wave_width.to_le_bytes());
+            digest.update([truth_origin_tag(device.exact_xnack_origin)]);
+            digest.update([unavailable_reason_tag(
+                device.exact_xnack_unavailable_reason,
+            )]);
+        }
+        digest.update(
+            u64::try_from(self.source_agent_mappings.len())
+                .map_err(|_| ProfileDispatchImportErrorV1::SizeOverflow)?
+                .to_le_bytes(),
+        );
+        for mapping in &self.source_agent_mappings {
+            digest.update(mapping.process_index.to_le_bytes());
+            match mapping.source_process_id {
+                Some(process_id) => {
+                    digest.update([1]);
+                    digest.update(process_id.to_le_bytes());
+                }
+                None => digest.update([0]),
+            }
+            digest.update(mapping.opaque_agent_handle.to_le_bytes());
+            digest.update(mapping.kfd_node.to_le_bytes());
+        }
+        digest.update(
+            u64::try_from(self.dispatch_identities.len())
+                .map_err(|_| ProfileDispatchImportErrorV1::SizeOverflow)?
+                .to_le_bytes(),
+        );
+        for dispatch in &self.dispatch_identities {
+            digest.update(dispatch.as_bytes());
+        }
+        for unavailable in [
+            self.artifact,
+            self.source_map,
+            self.characteristic_correlation,
+        ] {
+            digest.update([truth_origin_tag(unavailable.origin)]);
+            digest.update([unavailable_reason_tag(unavailable.reason)]);
         }
         CaptureIdentityV1::new(digest.finalize().into())
             .map_err(|_| ProfileDispatchImportErrorV1::InvalidReceipt)
+    }
+}
+
+fn valid_content_identity_with_scheme(
+    identity: ContentIdentityRecordV1,
+    scheme: ContentSchemeV1,
+    format_version: u16,
+) -> bool {
+    identity.scheme == scheme
+        && identity.format_version == format_version
+        && identity.canonical_len != 0
+}
+
+const fn truth_origin_tag(origin: TruthOriginV1) -> u8 {
+    match origin {
+        TruthOriginV1::Declared => 1,
+        TruthOriginV1::Proved => 2,
+        TruthOriginV1::Observed => 3,
+        TruthOriginV1::Inferred => 4,
+        TruthOriginV1::Unavailable => 5,
+    }
+}
+
+const fn unavailable_reason_tag(reason: CaptureUnavailableReasonV1) -> u8 {
+    match reason {
+        CaptureUnavailableReasonV1::NotRecorded => 1,
+        CaptureUnavailableReasonV1::NotProvided => 2,
+        CaptureUnavailableReasonV1::NotRepresented => 3,
+        CaptureUnavailableReasonV1::OutsideCaptureScope => 4,
+        CaptureUnavailableReasonV1::CollectorLossUnknown => 5,
     }
 }
 
@@ -536,8 +1005,8 @@ fn encode_profile_dispatch_import_receipt_v1(
     receipt: &ProfileDispatchImportReceiptV1,
 ) -> Result<Vec<u8>, ProfileDispatchImportErrorV1> {
     receipt.validate()?;
-    let bytes = serde_json::to_vec(receipt)
-        .map_err(|_| ProfileDispatchImportErrorV1::ReceiptEncode)?;
+    let bytes =
+        serde_json::to_vec(receipt).map_err(|_| ProfileDispatchImportErrorV1::ReceiptEncode)?;
     if bytes.is_empty()
         || u64::try_from(bytes.len()).map_err(|_| ProfileDispatchImportErrorV1::SizeOverflow)?
             > MAX_PROFILE_DISPATCH_RECEIPT_BYTES_V1
@@ -556,8 +1025,8 @@ fn decode_profile_dispatch_import_receipt_v1(
     {
         return Err(ProfileDispatchImportErrorV1::ReceiptTooLarge);
     }
-    let receipt: ProfileDispatchImportReceiptV1 = serde_json::from_slice(bytes)
-        .map_err(|_| ProfileDispatchImportErrorV1::ReceiptDecode)?;
+    let receipt: ProfileDispatchImportReceiptV1 =
+        serde_json::from_slice(bytes).map_err(|_| ProfileDispatchImportErrorV1::ReceiptDecode)?;
     receipt.validate()?;
     if serde_json::to_vec(&receipt).map_err(|_| ProfileDispatchImportErrorV1::ReceiptEncode)?
         != bytes
@@ -599,6 +1068,7 @@ pub(crate) enum ProfileDispatchImportErrorV1 {
     ReceiptDecode,
     ReceiptTooLarge,
     NonCanonicalReceipt,
+    TupleMismatch,
     SizeOverflow,
 }
 
@@ -613,7 +1083,7 @@ impl Error for ProfileDispatchImportErrorV1 {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fe2o3_semantic_import::{decode_profiler_bundle_v4, MAX_PROFILER_SOURCE_BYTES_V4};
+    use fe2o3_semantic_import::{decode_capture_v1, decode_profiler_bundle_v4};
 
     fn content(byte: u8, len: u64, scheme: ContentSchemeV1) -> ContentIdentityRecordV1 {
         ContentIdentityRecordV1 {
@@ -634,7 +1104,9 @@ mod tests {
     }
 
     fn source() -> &'static [u8] {
-        br#"{"rocprofiler-sdk-tool":[{"buffer_records":{"kernel_dispatch":[{"start_timestamp":100,"end_timestamp":180,"dispatch_info":{"agent_id":{"handle":7},"workgroup_size":{"x":64,"y":1,"z":1},"grid_size":{"x":256,"y":1,"z":1}}}]}}]}"#
+        include_bytes!(
+            "../../fe2o3-semantic-import/tests/fixtures/rocprofv3-installed-97f5574-kernel-dispatch-schema.json"
+        )
     }
 
     fn binding(source: &[u8]) -> DispatchImportBindingV1 {
@@ -647,20 +1119,37 @@ mod tests {
             collector_tool: content(3, 90, ContentSchemeV1::RawCanonicalSha256),
             collector_configuration: content(4, 100, ContentSchemeV1::RawCanonicalSha256),
             targets: vec![DispatchImportTargetBindingV1 {
-                source_agent_id: 7,
+                process_index: 0,
+                source_process_id: Some(100),
+                source_agent_id: 7001,
                 kfd_node: 7,
                 stable_identity: content(5, 110, ContentSchemeV1::RawCanonicalSha256),
-                target_profile_record: content(
-                    6,
-                    120,
-                    ContentSchemeV1::DomainSeparatedSha256,
-                ),
+                target_profile_record: content(6, 120, ContentSchemeV1::DomainSeparatedSha256),
                 family: ObservedTargetFamilyV1::Gfx942,
                 gfx_target_version: 90_402,
                 wave_width: 64,
             }],
             wave_width: WaveWidthV1::Wave64,
         }
+    }
+
+    fn reseal(receipt: &mut ProfileDispatchImportReceiptV1) -> Vec<u8> {
+        receipt.import_identity = receipt.derive_import_identity().unwrap();
+        serde_json::to_vec(receipt).unwrap()
+    }
+
+    fn assert_resealed_rejected(
+        product: &DispatchImportProductV1,
+        mutate: impl FnOnce(&mut ProfileDispatchImportReceiptV1),
+    ) {
+        let mut receipt =
+            decode_profile_dispatch_import_receipt_v1(&product.receipt_bytes).unwrap();
+        mutate(&mut receipt);
+        let bytes = reseal(&mut receipt);
+        assert_eq!(
+            decode_profile_dispatch_import_receipt_v1(&bytes).unwrap_err(),
+            ProfileDispatchImportErrorV1::InvalidReceipt
+        );
     }
 
     #[test]
@@ -675,11 +1164,28 @@ mod tests {
         let capture = decode_capture_v1(&product.capture_bytes).unwrap();
         assert_eq!(decoded, product.bundle);
         assert_eq!(capture, *decoded.dispatch_capture.as_ref().unwrap());
-        assert_eq!(capture.dispatches[0].kernel_ir.origin, TruthOriginV1::Declared);
-        assert_eq!(capture.dispatches[0].artifact.origin, TruthOriginV1::Unavailable);
-        assert_eq!(capture.dispatches[0].source_map.origin, TruthOriginV1::Unavailable);
+        assert_eq!(
+            capture.dispatches[0].kernel_ir.origin,
+            TruthOriginV1::Declared
+        );
+        assert_eq!(
+            capture.dispatches[0].artifact.origin,
+            TruthOriginV1::Unavailable
+        );
+        assert_eq!(
+            capture.dispatches[0].source_map.origin,
+            TruthOriginV1::Unavailable
+        );
         let receipt = decode_profile_dispatch_import_receipt_v1(&product.receipt_bytes).unwrap();
         assert!(receipt.authority.is_none());
+        assert_eq!(
+            receipt.source_schema_dialect,
+            ReceiptSourceSchemaDialectV1::Rocprofv3JsonInstalled1_1_97f5574
+        );
+        assert_eq!(
+            receipt.source_agent_mappings[0].source_process_id,
+            Some(100)
+        );
         assert_eq!(
             profile_dispatch_import_receipt_identity_v1(&product.receipt_bytes).unwrap(),
             product.receipt_identity
@@ -702,10 +1208,10 @@ mod tests {
 
         let remapped_source = String::from_utf8(source().to_vec())
             .unwrap()
-            .replace("\"handle\":7", "\"handle\":8")
+            .replace("\"handle\":7001", "\"handle\":8001")
             .into_bytes();
         let mut remapped = binding(&remapped_source);
-        remapped.targets[0].source_agent_id = 8;
+        remapped.targets[0].source_agent_id = 8001;
         let product = import_dispatch_v1(
             DispatchImportSourceKindV1::Rocprofv3KernelDispatchJson,
             &remapped_source,
@@ -713,14 +1219,12 @@ mod tests {
         )
         .unwrap();
         let receipt = decode_profile_dispatch_import_receipt_v1(&product.receipt_bytes).unwrap();
-        assert_eq!(receipt.targets[0].source_agent_id, 8);
-        assert_eq!(receipt.targets[0].kfd_node, 7);
+        assert_eq!(receipt.source_agent_mappings[0].opaque_agent_handle, 8001);
+        assert_eq!(receipt.source_agent_mappings[0].kfd_node, 7);
+        assert_eq!(receipt.devices[0].kfd_node, 7);
 
         let mut duplicate_node = binding(source());
-        let mut second = duplicate_node.targets[0];
-        second.source_agent_id = 8;
-        second.stable_identity.digest = CaptureIdentityV1::new([8; 32]).unwrap();
-        duplicate_node.targets.push(second);
+        duplicate_node.targets.push(duplicate_node.targets[0]);
         assert_eq!(
             import_dispatch_v1(
                 DispatchImportSourceKindV1::Rocprofv3KernelDispatchJson,
@@ -740,20 +1244,83 @@ mod tests {
             binding(source()),
         )
         .unwrap();
-        let mut receipt = decode_profile_dispatch_import_receipt_v1(&product.receipt_bytes).unwrap();
-        receipt.authority.runtime_authority = true;
-        assert_eq!(
-            decode_profile_dispatch_import_receipt_v1(&serde_json::to_vec(&receipt).unwrap())
-                .unwrap_err(),
-            ProfileDispatchImportErrorV1::InvalidReceipt
-        );
+        assert_resealed_rejected(&product, |receipt| {
+            receipt.authority.runtime_authority = true
+        });
+        assert_resealed_rejected(&product, |receipt| {
+            receipt.source_artifact.scheme = ContentSchemeV1::DomainSeparatedSha256
+        });
+        assert_resealed_rejected(&product, |receipt| receipt.bundle.format_version = 1);
+        assert_resealed_rejected(&product, |receipt| {
+            receipt.source_schema_dialect =
+                ReceiptSourceSchemaDialectV1::Rocprofv3CsvCurrent22ColumnStreamId
+        });
+        assert_resealed_rejected(&product, |receipt| {
+            receipt.source_agent_mappings[0].source_process_id = None
+        });
+        assert_resealed_rejected(&product, |receipt| {
+            receipt.source_agent_mappings[0].source_process_id = Some(0)
+        });
+        assert_resealed_rejected(&product, |receipt| {
+            receipt.source_agent_mappings[0].opaque_agent_handle = 0
+        });
+        assert_resealed_rejected(&product, |receipt| {
+            receipt.devices[0].exact_xnack_unavailable_reason =
+                CaptureUnavailableReasonV1::NotProvided
+        });
+        assert_resealed_rejected(&product, |receipt| receipt.source_agent_mappings.clear());
+        assert_resealed_rejected(&product, |receipt| {
+            let mut duplicate = receipt.source_agent_mappings[0];
+            duplicate.opaque_agent_handle = 8001;
+            receipt.source_agent_mappings.push(duplicate);
+        });
+    }
 
-        let mut receipt = decode_profile_dispatch_import_receipt_v1(&product.receipt_bytes).unwrap();
-        receipt.source_artifact.digest = CaptureIdentityV1::new([45; 32]).unwrap();
+    #[test]
+    fn receipt_rejects_impossible_process_pid_relations_and_tuple_substitution() {
+        let product = import_dispatch_v1(
+            DispatchImportSourceKindV1::Rocprofv3KernelDispatchJson,
+            source(),
+            binding(source()),
+        )
+        .unwrap();
+        for same_index in [true, false] {
+            assert_resealed_rejected(&product, |receipt| {
+                let mut device = receipt.devices[0];
+                device.kfd_node = 8;
+                device.stable_identity.digest = CaptureIdentityV1::new([51; 32]).unwrap();
+                device.target_profile_record.digest = CaptureIdentityV1::new([52; 32]).unwrap();
+                receipt.devices.push(device);
+                receipt.device_count = 2;
+                let mut mapping = receipt.source_agent_mappings[0];
+                mapping.process_index = if same_index { 0 } else { 1 };
+                mapping.source_process_id = Some(if same_index { 200 } else { 100 });
+                mapping.opaque_agent_handle = 8001;
+                mapping.kfd_node = 8;
+                receipt.source_agent_mappings.push(mapping);
+                receipt
+                    .dispatch_identities
+                    .push(CaptureIdentityV1::new([53; 32]).unwrap());
+                receipt.dispatch_count = 2;
+            });
+        }
+
+        let mut receipt =
+            decode_profile_dispatch_import_receipt_v1(&product.receipt_bytes).unwrap();
+        receipt.source_relative = "collector_results/other.json".to_owned();
+        let substituted = reseal(&mut receipt);
+        assert!(decode_profile_dispatch_import_receipt_v1(&substituted).is_ok());
         assert_eq!(
-            decode_profile_dispatch_import_receipt_v1(&serde_json::to_vec(&receipt).unwrap())
-                .unwrap_err(),
-            ProfileDispatchImportErrorV1::InvalidReceipt
+            readmit_dispatch_import_tuple_v1(
+                DispatchImportSourceKindV1::Rocprofv3KernelDispatchJson,
+                source(),
+                binding(source()),
+                &product.bundle_bytes,
+                &product.capture_bytes,
+                &substituted,
+            )
+            .unwrap_err(),
+            ProfileDispatchImportErrorV1::TupleMismatch
         );
     }
 
@@ -780,6 +1347,5 @@ mod tests {
             decode_profile_dispatch_import_receipt_v1(&oversized).unwrap_err(),
             ProfileDispatchImportErrorV1::ReceiptTooLarge
         );
-        assert!(MAX_PROFILE_DISPATCH_RECEIPT_BYTES_V1 < MAX_PROFILER_SOURCE_BYTES_V4);
     }
 }
