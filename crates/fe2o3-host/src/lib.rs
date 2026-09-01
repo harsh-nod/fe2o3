@@ -262,6 +262,7 @@ pub use worker_v3_verification_admission::{
     WorkerV3ProtectedRosterVerifierBackendV1, WorkerV3ProtectedVerificationEvidenceV1,
     WorkerV3ProtectedVerifierAdapterV1, WorkerV3ProtectedVerifierBackendV1,
     WorkerV3RosterEntryErrorV1, WorkerV3RosterVerificationAuthenticationErrorV1,
+    WorkerV3RosterVerificationAuthenticationFailureV1,
     WorkerV3RosterVerificationChallengeIdentityV1, WorkerV3RosterVerificationDecisionErrorV1,
     WorkerV3RosterVerificationDecisionV1, WorkerV3RosterVerificationRequestV1,
     WorkerV3SafetyPropertiesV1, WorkerV3SafetyPropertyV1, WorkerV3VerificationAuditErrorV1,
