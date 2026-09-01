@@ -280,8 +280,13 @@ and removes its owned directory after spawn, timeout, output, collector, or
 artifact-validation failure. Successful collection retains
 `fe2o3-profile-manifest-v1.txt` plus the bounded collector artifacts.
 
-`--kir-sha256`, `--kir-len`, and `--wave-width` make the dry run print the
-exact `fe2o3-profiler-import` Bundle V4 argument vector. With rocprof's
+`--kir-sha256`, `--kir-len`, and `--wave-width` are necessary but not
+sufficient for the dry run to print an exact `fe2o3-profiler-import` Bundle V4
+dispatch argument vector. Every selected direct-KFD device must also have an
+observed target profile, and the caller-supplied KIR wave width must equal
+every observed device wave width. Otherwise the plan emits a typed unavailable
+status and per-device reasons, with no importer program or arguments. This
+gate does not block raw collection. With rocprof's
 `--agent-index absolute` configuration, each device argument binds the emitted
 agent ID to the stable direct-KFD identity for that same KFD node; import joins
 by that ID and does not depend on device-vector or first-dispatch order. The
@@ -291,8 +296,10 @@ re-observed immediately before and after collection. Exact KFD values
 `90402` and `90500` map to `gfx942` and `gfx950` only for AMD vendor `4098`
 with wave width `64`. Unknown values and contradictory vendor or wave values
 remain explicit unavailable records: ordinary collection may proceed, but a
-future semantic association must reject them. Any remap observed by either
-check fails closed and the owned output is cleaned. ATT import
+dispatch Bundle V4 import recipe and any future semantic association must
+reject them. ATT retains its raw, deferred import recipe because it makes no
+source/IR/ISA association claim. Any remap observed by either check fails
+closed and the owned output is cleaned. ATT import
 is deferred until the output directory identifies the selected absolute agent
 and every manifest-relative artifact has been content-bound. The source
 manifest or dispatch file must also fit the importer's 8 MiB source limit;

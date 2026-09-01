@@ -1619,7 +1619,6 @@ fn render_import_plan(output: &mut String, plan: &Plan) {
     );
     let configuration =
         content_identity(&plan.configuration_digest, plan.configuration.len() as u64);
-    line(output, "next-import-program", "fe2o3-profiler-import");
     if plan.devices.is_empty() {
         line(
             output,
@@ -1635,82 +1634,20 @@ fn render_import_plan(output: &mut String, plan: &Plan) {
     }
     match plan.options.kind {
         ProfileKind::DispatchJson | ProfileKind::DispatchCsv => {
-            let Some(kir) = &plan.options.kir_binding else {
-                line(
-                    output,
-                    "next-import-status",
-                    "unavailable-missing-kir-identity-length-and-wave-width",
-                );
-                line(
-                    output,
-                    "next-query-status",
-                    "unavailable-until-bundle-v4-import",
-                );
-                return;
-            };
-            line(
+            if !render_dispatch_import_plan(
                 output,
-                "next-import-status",
-                "ready-after-collector-artifact-and-source-size-validation",
-            );
-            line(
-                output,
-                "next-import-source-byte-limit",
-                MAX_PROFILER_IMPORT_SOURCE_BYTES,
-            );
-            let command = if plan.options.kind == ProfileKind::DispatchJson {
-                "dispatch-json-v4"
-            } else {
-                "dispatch-csv-v4"
-            };
-            for (index, argument) in [
-                command.to_owned(),
-                "--environment".to_owned(),
+                plan.options.kind,
+                &plan.devices,
+                plan.options.kir_binding.as_ref(),
                 environment,
-                "--tool".to_owned(),
                 tool,
-                "--config".to_owned(),
                 configuration,
-                "--kir-sha256".to_owned(),
-                hex(&kir.digest),
-                "--kir-len".to_owned(),
-                kir.length.to_string(),
-                "--wave-width".to_owned(),
-                kir.wave_width.to_string(),
-            ]
-            .into_iter()
-            .chain(plan.devices.iter().flat_map(|device| {
-                [
-                    "--device-binding".to_owned(),
-                    format!("{}={}", device.node, device.content_identity()),
-                ]
-            }))
-            .enumerate()
-            {
-                line_debug(output, &format!("next-import-arg[{index}]"), &argument);
+            ) {
+                return;
             }
-            line(
-                output,
-                "next-import-stdin",
-                "validated-collected-json-or-csv-artifact",
-            );
-            line(
-                output,
-                "next-import-artifact-identity-origin",
-                "unavailable",
-            );
-            line(
-                output,
-                "next-import-artifact-identity-reason",
-                "profile-target-is-not-proof-of-executed-kernel-code-object",
-            );
-            line(
-                output,
-                "next-comparison-limitation",
-                "duration-deltas-require-a-separately-content-bound-kernel-artifact",
-            );
         }
         ProfileKind::Att => {
+            line(output, "next-import-program", "fe2o3-profiler-import");
             line(
                 output,
                 "next-import-status",
@@ -1760,6 +1697,166 @@ fn render_import_plan(output: &mut String, plan: &Plan) {
     line(output, "next-query-program", "fe2o3-profiler-query");
     line(output, "next-query-arg[0]", "capabilities");
     line(output, "next-query-stdin", "imported-fe2o3prof4-bundle");
+}
+
+fn render_dispatch_import_plan(
+    output: &mut String,
+    kind: ProfileKind,
+    devices: &[DeviceIdentity],
+    kir: Option<&KirBinding>,
+    environment: String,
+    tool: String,
+    configuration: String,
+) -> bool {
+    let Some(kir) = kir else {
+        line(
+            output,
+            "next-import-status",
+            "unavailable-missing-kir-identity-length-and-wave-width",
+        );
+        line(
+            output,
+            "next-query-status",
+            "unavailable-until-bundle-v4-import",
+        );
+        return false;
+    };
+    if devices.iter().any(|device| {
+        matches!(
+            device.target_profile.status,
+            ObservedGpuTargetProfileStatusV1::Unavailable(_)
+        )
+    }) {
+        line(
+            output,
+            "next-import-status",
+            "unavailable-observed-gpu-target-profile",
+        );
+        line(
+            output,
+            "next-import-unavailable-reason",
+            "one-or-more-direct-kfd-target-profiles-unavailable",
+        );
+        for (index, (device, reason)) in devices
+            .iter()
+            .filter_map(|device| match device.target_profile.status {
+                ObservedGpuTargetProfileStatusV1::Observed(_) => None,
+                ObservedGpuTargetProfileStatusV1::Unavailable(reason) => Some((device, reason)),
+            })
+            .enumerate()
+        {
+            line(
+                output,
+                &format!("next-import-unavailable-device[{index}]"),
+                format!("node={};reason={}", device.node, reason.name()),
+            );
+        }
+        line(
+            output,
+            "next-query-status",
+            "unavailable-until-bundle-v4-import",
+        );
+        return false;
+    }
+    if devices
+        .iter()
+        .any(|device| device.target_profile.wave_width != u64::from(kir.wave_width))
+    {
+        line(
+            output,
+            "next-import-status",
+            "unavailable-kir-wave-width-mismatch",
+        );
+        line(
+            output,
+            "next-import-unavailable-reason",
+            "caller-kir-wave-width-does-not-match-observed-direct-kfd-device",
+        );
+        for (index, device) in devices
+            .iter()
+            .filter(|device| device.target_profile.wave_width != u64::from(kir.wave_width))
+            .enumerate()
+        {
+            line(
+                output,
+                &format!("next-import-wave-mismatch-device[{index}]"),
+                format!(
+                    "node={};observed-wave-width={};kir-wave-width={}",
+                    device.node, device.target_profile.wave_width, kir.wave_width
+                ),
+            );
+        }
+        line(
+            output,
+            "next-query-status",
+            "unavailable-until-bundle-v4-import",
+        );
+        return false;
+    }
+
+    line(output, "next-import-program", "fe2o3-profiler-import");
+    line(
+        output,
+        "next-import-status",
+        "ready-after-collector-artifact-and-source-size-validation",
+    );
+    line(
+        output,
+        "next-import-source-byte-limit",
+        MAX_PROFILER_IMPORT_SOURCE_BYTES,
+    );
+    let command = if kind == ProfileKind::DispatchJson {
+        "dispatch-json-v4"
+    } else {
+        "dispatch-csv-v4"
+    };
+    for (index, argument) in [
+        command.to_owned(),
+        "--environment".to_owned(),
+        environment,
+        "--tool".to_owned(),
+        tool,
+        "--config".to_owned(),
+        configuration,
+        "--kir-sha256".to_owned(),
+        hex(&kir.digest),
+        "--kir-len".to_owned(),
+        kir.length.to_string(),
+        "--wave-width".to_owned(),
+        kir.wave_width.to_string(),
+    ]
+    .into_iter()
+    .chain(devices.iter().flat_map(|device| {
+        [
+            "--device-binding".to_owned(),
+            format!("{}={}", device.node, device.content_identity()),
+        ]
+    }))
+    .enumerate()
+    {
+        line_debug(output, &format!("next-import-arg[{index}]"), &argument);
+    }
+    line(
+        output,
+        "next-import-stdin",
+        "validated-collected-json-or-csv-artifact",
+    );
+    line(
+        output,
+        "next-import-artifact-identity-origin",
+        "unavailable",
+    );
+    line(
+        output,
+        "next-import-artifact-identity-reason",
+        "profile-target-is-not-proof-of-executed-kernel-code-object",
+    );
+    line(
+        output,
+        "next-comparison-limitation",
+        "duration-deltas-require-a-separately-content-bound-kernel-artifact",
+    );
+    true
 }
 
 fn collect(plan: Plan) -> Result<CommandReport, String> {
@@ -2511,6 +2608,43 @@ mod tests {
         )
     }
 
+    fn profile_device(node: u32, vendor: u64, target: u64, wave: u64) -> DeviceIdentity {
+        let bytes = format!("stable-device-{node}").into_bytes();
+        DeviceIdentity {
+            node,
+            digest: Sha256::digest(&bytes).into(),
+            bytes,
+            target_profile: ObservedGpuTargetProfileRecordV1::from_direct_kfd_properties(
+                vendor, target, wave,
+            ),
+        }
+    }
+
+    fn dispatch_import_output(devices: &[DeviceIdentity], kir_wave: Option<u8>) -> String {
+        let kir = kir_wave.map(|wave_width| KirBinding {
+            digest: [3; 32],
+            length: 17,
+            wave_width,
+        });
+        let mut output = String::new();
+        let _ = render_dispatch_import_plan(
+            &mut output,
+            ProfileKind::DispatchJson,
+            devices,
+            kir.as_ref(),
+            "environment".to_owned(),
+            "tool".to_owned(),
+            "configuration".to_owned(),
+        );
+        output
+    }
+
+    fn assert_no_dispatch_import_command(output: &str) {
+        assert!(!output.contains("next-import-program:"));
+        assert!(!output.contains("next-import-arg["));
+        assert!(!output.contains("ready-after-collector"));
+    }
+
     #[test]
     fn parser_is_closed_and_authorization_is_canonical() {
         let base = ["--output-dir", "/tmp/new-profile-output", "--", "/bin/true"];
@@ -2697,6 +2831,83 @@ mod tests {
                 .target_profile_record()
                 .ends_with("unavailable-reason=vendor-and-wave-width-contradict-target")
         );
+    }
+
+    #[test]
+    fn dispatch_import_rejects_every_typed_unavailable_target_profile() {
+        for (device, reason) in [
+            (
+                profile_device(1, EXPECTED_AMD_VENDOR_ID, 90_401, PRODUCTION_WAVE_WIDTH),
+                "unknown-gfx-target-version",
+            ),
+            (
+                profile_device(2, 0, GFX942_TARGET_VERSION, PRODUCTION_WAVE_WIDTH),
+                "vendor-contradicts-amd-target",
+            ),
+            (
+                profile_device(3, EXPECTED_AMD_VENDOR_ID, GFX950_TARGET_VERSION, 32),
+                "wave-width-contradicts-target",
+            ),
+        ] {
+            let output = dispatch_import_output(&[device], Some(64));
+            assert!(output.contains("next-import-status: unavailable-observed-gpu-target-profile"));
+            assert!(output.contains(&format!("reason={reason}")));
+            assert_no_dispatch_import_command(&output);
+        }
+    }
+
+    #[test]
+    fn dispatch_import_rejects_caller_wave_mismatch_without_emitting_arguments() {
+        let devices = [
+            profile_device(
+                1,
+                EXPECTED_AMD_VENDOR_ID,
+                GFX942_TARGET_VERSION,
+                PRODUCTION_WAVE_WIDTH,
+            ),
+            profile_device(
+                2,
+                EXPECTED_AMD_VENDOR_ID,
+                GFX950_TARGET_VERSION,
+                PRODUCTION_WAVE_WIDTH,
+            ),
+        ];
+        let output = dispatch_import_output(&devices, Some(32));
+        assert!(output.contains("next-import-status: unavailable-kir-wave-width-mismatch"));
+        assert!(output.contains("node=1;observed-wave-width=64;kir-wave-width=32"));
+        assert!(output.contains("node=2;observed-wave-width=64;kir-wave-width=32"));
+        assert_no_dispatch_import_command(&output);
+
+        let missing = dispatch_import_output(&devices, None);
+        assert!(missing.contains(
+            "next-import-status: unavailable-missing-kir-identity-length-and-wave-width"
+        ));
+        assert_no_dispatch_import_command(&missing);
+    }
+
+    #[test]
+    fn dispatch_import_is_ready_only_for_observed_wave_compatible_devices() {
+        let devices = [
+            profile_device(
+                1,
+                EXPECTED_AMD_VENDOR_ID,
+                GFX942_TARGET_VERSION,
+                PRODUCTION_WAVE_WIDTH,
+            ),
+            profile_device(
+                2,
+                EXPECTED_AMD_VENDOR_ID,
+                GFX950_TARGET_VERSION,
+                PRODUCTION_WAVE_WIDTH,
+            ),
+        ];
+        let output = dispatch_import_output(&devices, Some(64));
+        assert!(output.contains("next-import-program: fe2o3-profiler-import"));
+        assert!(output.contains(
+            "next-import-status: ready-after-collector-artifact-and-source-size-validation"
+        ));
+        assert!(output.contains("\"--device-binding\""));
+        assert!(output.contains("\"--wave-width\""));
     }
 
     #[test]

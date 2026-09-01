@@ -224,6 +224,51 @@ fn import_recipe_binds_absolute_agent_ids_instead_of_device_order() {
 }
 
 #[test]
+fn dispatch_import_recipe_withholds_commands_for_incompatible_caller_wave() {
+    let fixture = Fixture::new(false);
+    let output = fixture.plan_with_options(
+        &fixture.output("capture"),
+        &[
+            "--kir-sha256",
+            &"11".repeat(32),
+            "--kir-len",
+            "1",
+            "--wave-width",
+            "32",
+        ],
+        &[],
+    );
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(!stdout.contains("next-import-program:"));
+    assert!(!stdout.contains("next-import-arg["));
+    assert!(!stdout.contains("ready-after-collector-artifact"));
+    if stdout.contains("device[0]:") {
+        assert!(
+            stdout.contains("next-import-status: unavailable-kir-wave-width-mismatch")
+                || stdout.contains("next-import-status: unavailable-observed-gpu-target-profile")
+        );
+    }
+}
+
+#[test]
+fn att_import_recipe_remains_raw_and_deferred_for_visible_devices() {
+    let fixture = Fixture::new(false);
+    let output = fixture.plan_with_options(&fixture.output("capture"), &["--kind", "att"], &[]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    if stdout.contains("device[0]:") {
+        assert!(stdout.contains("next-import-program: fe2o3-profiler-import"));
+        assert!(stdout.contains(
+            "next-import-status: deferred-until-att-manifest-references-are-content-bound"
+        ));
+        assert!(stdout.contains("next-import-deferred-flag: --att-agent-id"));
+    } else {
+        assert!(stdout.contains("unavailable-no-stable-direct-kfd-device-identity"));
+    }
+}
+
+#[test]
 fn authorization_is_bound_to_exact_target_argv_and_output_path() {
     let fixture = Fixture::new(false);
     let output_directory = fixture.output("capture");

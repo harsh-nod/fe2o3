@@ -40,6 +40,21 @@ be used for source/IR/ISA association. Malformed, duplicate, missing, or
 out-of-range required KFD properties reject discovery rather than producing a
 record.
 
+## Dispatch Import Gate
+
+A dispatch-json or dispatch-csv Bundle V4 import recipe is emitted only when
+all selected devices have `availability=observed` and the supplied KIR wave
+width equals every observed `wave-width`. An unavailable target produces
+`next-import-status: unavailable-observed-gpu-target-profile`; a caller/device
+wave mismatch produces
+`next-import-status: unavailable-kir-wave-width-mismatch`. Both include
+bounded per-device diagnostics and emit no importer program or argument list.
+
+These failures do not prevent rocprof collection or retention of its bounded
+raw artifacts. ATT import remains deferred around content-bound ATT references
+and an observed absolute agent identifier; it makes no source/IR/ISA
+association claim at this stage.
+
 ## Authority Boundary
 
 This record says which target family the orchestrator observed for one stable
