@@ -3760,8 +3760,8 @@ mod tests {
         source_isa_collection_hex_length, validate_production_cargo_inputs,
         validate_production_compilation_environment,
     };
-    use crate::pinned_executable_test_directory::TestDirectory;
     use crate::observer_telemetry;
+    use crate::pinned_executable_test_directory::TestDirectory;
     use std::ffi::{OsStr, OsString};
     use std::io::{self, Write};
     use std::process::Command;
