@@ -9,6 +9,7 @@ use fe2o3_kernel_analysis::{
     MAX_RANKED_BOUNDS_FINDINGS, RankedBoundsFindingV1,
     require_pliron_ranked_bounds_before_lowering_v1, run_pliron_ranked_bounds_check_v1,
 };
+use fe2o3_proof_contracts::check_affine_bounds_certificate_v1;
 use pliron::{
     basic_block::BasicBlock,
     builtin::{
@@ -774,6 +775,69 @@ fn sparse_affine_expression_proves_the_exact_static_boundary() {
     append(context, entry, &ret);
 
     assert!(run_pliron_ranked_bounds_check_v1(context, &function).is_clean());
+}
+
+#[test]
+fn ranked_affine_access_emits_a_checked_box_bounds_certificate() {
+    let context = &mut setup();
+    let (function, _) = function(context, "affine_certificate", 0);
+    let entry = function.get_entry_block(context);
+    let view_type = RankedViewType::new(context, 32, false, vec![16]).unwrap();
+    let view = RankedViewOp::new(context, view_type, vec![]).unwrap();
+    let invocation = InvocationIndexOp::new(context, 0, 8);
+    let two = IndexConstantOp::new(context, 2);
+    let one = IndexConstantOp::new(context, 1);
+    let product = IndexBinaryOp::new(
+        context,
+        IndexBinaryKindAttr::Multiply,
+        invocation.result(context),
+        two.result(context),
+    );
+    let index = IndexBinaryOp::new(
+        context,
+        IndexBinaryKindAttr::Add,
+        product.result(context),
+        one.result(context),
+    );
+    let access = RankedAccessOp::new(
+        context,
+        AccessKindAttr::Read,
+        view.result(context),
+        vec![index.result(context)],
+    )
+    .unwrap();
+    let ret = ReturnOp::new(context);
+    for operation in [
+        view.get_operation(),
+        invocation.get_operation(),
+        two.get_operation(),
+        one.get_operation(),
+        product.get_operation(),
+        index.get_operation(),
+        access.get_operation(),
+        ret.get_operation(),
+    ] {
+        operation.insert_at_back(entry, context);
+    }
+
+    let report = run_pliron_ranked_bounds_check_v1(context, &function);
+    assert!(report.is_clean());
+    let [record] = report.affine_certificates() else {
+        panic!("expected exactly one affine bounds certificate")
+    };
+    assert_eq!(
+        (record.block(), record.operation(), record.dimension()),
+        (0, 6, 0)
+    );
+    assert!(!record.grants_lowering_or_launch_authority());
+    let certificate = record.certificate();
+    assert_eq!(certificate.query().lower(), &[0]);
+    assert_eq!(certificate.query().upper_exclusive(), &[8]);
+    assert_eq!(certificate.query().constant(), 1);
+    assert_eq!(certificate.query().coefficients(), &[2]);
+    assert_eq!(certificate.query().extent(), 16);
+    assert_eq!((certificate.minimum(), certificate.maximum()), (1, 15));
+    check_affine_bounds_certificate_v1(certificate).unwrap();
 }
 
 #[test]

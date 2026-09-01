@@ -12,6 +12,7 @@
 //! work, and neither path grants proof or GPU authority. The legacy planning path
 //! retains caller-supplied identities for compatibility.
 
+mod affine_bounds_certificate_v1;
 mod artifact_record;
 mod authenticated_execution;
 mod authenticated_proof_binding;
@@ -38,6 +39,10 @@ mod result;
 mod retained_functional_refinement_runtime_v1;
 mod static_view_proof;
 
+pub use affine_bounds_certificate_v1::{
+    CompilerAffineBoundsVerificationErrorV1, VerifiedCompilerAffineBoundsV1,
+    verify_compiler_affine_bounds_certificate_v1,
+};
 pub use artifact_record::{
     ArtifactProofEvidenceV1, ArtifactRecordConversionError, ReviewedInvocationIdentityV1,
     canonical_invocation_digest, convert_to_artifact_proof_record,

@@ -9,10 +9,16 @@
 
 extern crate alloc;
 
+mod affine_bounds_v1;
 mod identity;
 mod model;
 mod validation;
 
+pub use affine_bounds_v1::{
+    AffineBoundsCertificateErrorV1, AffineBoundsCertificateV1, AffineBoundsQueryV1,
+    CheckedAffineBoundsCertificateV1, MAX_AFFINE_BOUNDS_RANK_V1,
+    check_affine_bounds_certificate_v1,
+};
 pub use identity::{
     ArtifactIdentityV1, CorrespondenceIdentityV1, DIGEST_BYTES_V1, DigestV1, EvidenceIdentityV1,
     ExactInputIdentityV1, ExactModelIdentityV1, ExactToolIdentityV1, ObligationIdentityV1,

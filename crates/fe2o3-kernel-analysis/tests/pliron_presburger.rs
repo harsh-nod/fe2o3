@@ -6,6 +6,7 @@ use fe2o3_kernel_analysis::{
     PresburgerMapExprV1, PresburgerMapV1, PresburgerRangeDecisionV1, PresburgerSetDecisionV1,
     PresburgerSetV1,
 };
+use fe2o3_proof_contracts::check_affine_bounds_certificate_v1;
 
 fn affine(constant: i128, coefficients: &[i128]) -> PresburgerAffineExprV1 {
     PresburgerAffineExprV1::new(constant, coefficients.to_vec()).unwrap()
@@ -75,6 +76,66 @@ fn affine_bounds_query_returns_the_failing_invocation() {
             domain: vec![6],
             range: vec![13],
         }
+    );
+}
+
+#[test]
+fn affine_box_bounds_certificate_matches_exact_signed_extrema() {
+    let domain = PresburgerSetV1::box_only(PresburgerBoxV1::new(vec![-2, 1], vec![4, 5]).unwrap());
+    let access = PresburgerMapV1::new(
+        domain,
+        vec![PresburgerMapExprV1::Affine(affine(20, &[3, -2]))],
+    )
+    .unwrap();
+
+    let certificate = access
+        .checked_affine_box_bounds_certificate_v1(0, 28)
+        .unwrap()
+        .unwrap();
+    assert_eq!(certificate.minimum_coordinates(), &[-2, 4]);
+    assert_eq!(certificate.maximum_coordinates(), &[3, 1]);
+    assert_eq!(certificate.minimum(), 6);
+    assert_eq!(certificate.maximum(), 27);
+    check_affine_bounds_certificate_v1(&certificate).unwrap();
+
+    assert_eq!(
+        access
+            .checked_affine_box_bounds_certificate_v1(0, 27)
+            .unwrap(),
+        None
+    );
+}
+
+#[test]
+fn affine_box_certificate_rejects_unsupported_domain_and_output_forms() {
+    let constrained = PresburgerMapV1::new(
+        PresburgerSetV1::new(
+            PresburgerBoxV1::zero_based(&[8]).unwrap(),
+            vec![PresburgerConstraintV1::LessEqualZero(affine(-5, &[1]))],
+        )
+        .unwrap(),
+        vec![PresburgerMapExprV1::Affine(affine(1, &[2]))],
+    )
+    .unwrap();
+    assert_eq!(
+        constrained
+            .checked_affine_box_bounds_certificate_v1(0, 12)
+            .unwrap(),
+        None
+    );
+
+    let remainder = map(
+        &[8],
+        vec![PresburgerMapExprV1::Remainder {
+            dividend: affine(0, &[1]),
+            modulus: 4,
+        }],
+    );
+    assert_eq!(
+        remainder
+            .checked_affine_box_bounds_certificate_v1(0, 4)
+            .unwrap(),
+        None
     );
 }
 

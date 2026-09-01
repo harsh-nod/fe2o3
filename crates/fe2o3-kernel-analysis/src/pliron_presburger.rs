@@ -10,6 +10,11 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 
+use fe2o3_proof_contracts::{
+    AffineBoundsCertificateErrorV1, AffineBoundsCertificateV1, AffineBoundsQueryV1,
+    check_affine_bounds_certificate_v1,
+};
+
 use crate::{SparseIndexAnalysisV1, SparseIndexFactV1};
 
 pub const MAX_PRESBURGER_VARIABLES_V1: usize = 16;
@@ -540,6 +545,73 @@ impl PresburgerMapV1 {
             .iter()
             .map(|output| output.evaluate(point))
             .collect()
+    }
+
+    /// Constructs and checks the endpoint theorem certificate for one affine
+    /// output over an unconstrained rectangular domain.
+    ///
+    /// Constrained domains, remainder expressions, empty dimensions, and
+    /// unsafe extrema return `None`; arithmetic overflow fails closed.
+    pub fn checked_affine_box_bounds_certificate_v1(
+        &self,
+        output: usize,
+        extent: u64,
+    ) -> Result<Option<AffineBoundsCertificateV1>, PresburgerFailureV1> {
+        if extent == 0 || !self.domain.constraints().is_empty() {
+            return Ok(None);
+        }
+        let Some(PresburgerMapExprV1::Affine(expression)) = self.outputs.get(output) else {
+            return Ok(None);
+        };
+        let domain = self.domain.domain();
+        if domain
+            .lower()
+            .iter()
+            .zip(domain.upper_exclusive())
+            .any(|(lower, upper)| lower >= upper)
+        {
+            return Ok(None);
+        }
+
+        let mut minimum_coordinates = Vec::with_capacity(domain.rank());
+        let mut maximum_coordinates = Vec::with_capacity(domain.rank());
+        for dimension in 0..domain.rank() {
+            let last = domain.upper_exclusive()[dimension]
+                .checked_sub(1)
+                .ok_or(PresburgerFailureV1::ArithmeticOverflow)?;
+            if expression.coefficients()[dimension] >= 0 {
+                minimum_coordinates.push(domain.lower()[dimension]);
+                maximum_coordinates.push(last);
+            } else {
+                minimum_coordinates.push(last);
+                maximum_coordinates.push(domain.lower()[dimension]);
+            }
+        }
+        let minimum = expression.evaluate(&minimum_coordinates)?;
+        let maximum = expression.evaluate(&maximum_coordinates)?;
+        let certificate = AffineBoundsCertificateV1::new(
+            AffineBoundsQueryV1::new(
+                domain.lower().to_vec(),
+                domain.upper_exclusive().to_vec(),
+                expression.constant_term(),
+                expression.coefficients().to_vec(),
+                extent,
+            ),
+            minimum_coordinates,
+            maximum_coordinates,
+            minimum,
+            maximum,
+        );
+        match check_affine_bounds_certificate_v1(&certificate) {
+            Ok(_) => Ok(Some(certificate)),
+            Err(AffineBoundsCertificateErrorV1::BoundNotEstablished) => Ok(None),
+            Err(AffineBoundsCertificateErrorV1::ArithmeticOverflow) => {
+                Err(PresburgerFailureV1::ArithmeticOverflow)
+            }
+            Err(_) => Err(PresburgerFailureV1::InvalidModel {
+                detail: "generated affine endpoint certificate failed structural checking",
+            }),
+        }
     }
 
     /// Proves that every result is representable without target integer wrap,

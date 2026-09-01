@@ -29,6 +29,7 @@ use dialect_proof::{
     EvidenceRefOp, ObligationOp, RequireEffectRefinementOp, RequireNumericalRefinementOp,
     RequireRefinementOp, RequireTensorRefinementOp,
 };
+use fe2o3_proof_contracts::AffineBoundsCertificateV1;
 use pliron::{
     builtin::ops::FuncOp,
     common_traits::Named,
@@ -42,7 +43,7 @@ use pliron::{
 use crate::pliron_analysis_manager::PlironAnalysisManagerV1;
 use crate::{
     KernelCheckPassKindV1, KernelCheckStatusV1, PlironPresburgerAnalysisV1,
-    PresburgerRangeDecisionV1, SparseIndexAnalysisV1, SparseIndexFailureV1,
+    PresburgerRangeDecisionV1, SparseIndexAnalysisV1, SparseIndexFactV1, SparseIndexFailureV1,
 };
 
 pub const MAX_RANKED_BOUNDS_BLOCKS: usize = 1_024;
@@ -248,8 +249,44 @@ impl fmt::Display for RankedBoundsFindingV1 {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RankedAffineBoundsCertificateV1 {
+    block: usize,
+    operation: usize,
+    dimension: usize,
+    certificate: AffineBoundsCertificateV1,
+}
+
+impl RankedAffineBoundsCertificateV1 {
+    /// Zero-based basic-block coordinate of the admitted access.
+    pub const fn block(&self) -> usize {
+        self.block
+    }
+
+    /// Zero-based operation coordinate within the block.
+    pub const fn operation(&self) -> usize {
+        self.operation
+    }
+
+    /// Zero-based ranked-view dimension proved in bounds.
+    pub const fn dimension(&self) -> usize {
+        self.dimension
+    }
+
+    /// Exact query and checked endpoint certificate.
+    pub const fn certificate(&self) -> &AffineBoundsCertificateV1 {
+        &self.certificate
+    }
+
+    /// Returns false because analysis evidence grants no lowering or launch authority.
+    pub const fn grants_lowering_or_launch_authority(&self) -> bool {
+        false
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RankedBoundsReportV1 {
     findings: Vec<RankedBoundsFindingV1>,
+    affine_certificates: Vec<RankedAffineBoundsCertificateV1>,
 }
 
 impl RankedBoundsReportV1 {
@@ -267,6 +304,11 @@ impl RankedBoundsReportV1 {
 
     pub fn findings(&self) -> &[RankedBoundsFindingV1] {
         &self.findings
+    }
+
+    /// Exact affine-box certificates checked while admitting ranked accesses.
+    pub fn affine_certificates(&self) -> &[RankedAffineBoundsCertificateV1] {
+        &self.affine_certificates
     }
 
     pub fn is_clean(&self) -> bool {
@@ -814,6 +856,7 @@ pub(crate) fn run_pliron_ranked_bounds_check_with_analyses_v1(
     let mut successors = vec![Vec::new(); blocks.len()];
     let mut predecessors = vec![Vec::new(); blocks.len()];
     let mut findings = Vec::new();
+    let mut affine_certificates = Vec::new();
     let mut fact_indices = HashMap::new();
 
     for (block_index, block) in blocks.iter().enumerate() {
@@ -990,6 +1033,7 @@ pub(crate) fn run_pliron_ranked_bounds_check_with_analyses_v1(
                         sparse_indices,
                         presburger,
                         findings: &mut findings,
+                        affine_certificates: &mut affine_certificates,
                         budget: &mut budget,
                     },
                 )
@@ -999,7 +1043,10 @@ pub(crate) fn run_pliron_ranked_bounds_check_with_analyses_v1(
         }
     }
 
-    RankedBoundsReportV1 { findings }
+    RankedBoundsReportV1 {
+        findings,
+        affine_certificates,
+    }
 }
 
 /// Enforces the ranked-memory stage as a compile-time pre-lowering gate.
@@ -1047,6 +1094,7 @@ fn structural_failure() -> RankedBoundsReportV1 {
 fn finding_failure(finding: RankedBoundsFindingV1) -> RankedBoundsReportV1 {
     RankedBoundsReportV1 {
         findings: vec![finding],
+        affine_certificates: Vec::new(),
     }
 }
 
@@ -1127,11 +1175,16 @@ mod status_tests {
     fn rejected_bounds_finding_dominates_an_incomplete_finding() {
         let report = RankedBoundsReportV1 {
             findings: vec![unproved_bound(), static_out_of_bounds()],
+            affine_certificates: vec![],
         };
         assert_eq!(report.status(), KernelCheckStatusV1::Rejected);
         assert!(!report.is_clean());
         assert_eq!(
-            RankedBoundsReportV1 { findings: vec![] }.status(),
+            RankedBoundsReportV1 {
+                findings: vec![],
+                affine_certificates: vec![],
+            }
+            .status(),
             KernelCheckStatusV1::Clean
         );
     }
@@ -1199,6 +1252,7 @@ struct AccessCheck<'a> {
     sparse_indices: &'a SparseIndexAnalysisV1,
     presburger: &'a PlironPresburgerAnalysisV1,
     findings: &'a mut Vec<RankedBoundsFindingV1>,
+    affine_certificates: &'a mut Vec<RankedAffineBoundsCertificateV1>,
     budget: &'a mut RankedBoundsBudget,
 }
 
@@ -1252,7 +1306,6 @@ fn verify_access(
         let extent_expr = extent_expr(view, &view_type, dimension, check.context);
         if bound_is_proven(index_expr, extent_expr, check.facts, check.fact_indices)
             || remainder_bound_is_proven(index, extent_expr, check.context)
-            || sparse_bound_is_proven(index, extent_expr, check.sparse_indices)
         {
             continue;
         }
@@ -1279,6 +1332,28 @@ fn verify_access(
             }
             _ => {
                 let presburger_map = check.presburger.map_for_facts(&[sparse_fact]).ok();
+                if let Some((extent, map)) = static_extent.zip(presburger_map.as_ref())
+                    && let Ok(Some(certificate)) =
+                        map.checked_affine_box_bounds_certificate_v1(0, extent)
+                {
+                    let rank = certificate.query().coefficients().len();
+                    check.budget.work(rank.saturating_add(1))?;
+                    check
+                        .budget
+                        .storage(rank.saturating_mul(5).saturating_add(1))?;
+                    check
+                        .affine_certificates
+                        .push(RankedAffineBoundsCertificateV1 {
+                            block,
+                            operation,
+                            dimension,
+                            certificate,
+                        });
+                    continue;
+                }
+                if sparse_bound_is_proven(index, extent_expr, check.sparse_indices) {
+                    continue;
+                }
                 let presburger_decision = static_extent.zip(presburger_map).map(|(extent, map)| {
                     let decision = map.find_out_of_bounds(&[extent]);
                     (extent, decision)
@@ -1351,6 +1426,9 @@ fn sparse_bound_is_proven(
     extent: IndexExpr,
     sparse_indices: &SparseIndexAnalysisV1,
 ) -> bool {
+    if matches!(sparse_indices.fact(index), SparseIndexFactV1::Affine(_)) {
+        return false;
+    }
     let Some(index_maximum) = sparse_indices
         .fact(index)
         .maximum(sparse_indices.launch_extents())

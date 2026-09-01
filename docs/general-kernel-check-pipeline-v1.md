@@ -68,7 +68,11 @@ order:
    its exact runtime-shape operand), so a guard for another view cannot prove
    the access. A shared bounded Presburger query discharges finite affine and
    constant-modulus relations and reports the first unconditional invocation
-   witness for an affine violation as `FE2O3-BOUNDS-004`.
+   witness for an affine violation as `FE2O3-BOUNDS-004`. The production-used
+   unconstrained affine-box subcase emits a strictly checked endpoint
+   certificate covered by the narrow
+   [Formal Affine Bounds Soundness V1](formal-affine-bounds-soundness-v1.md)
+   theorem; other bounds decisions are outside that theorem.
 5. `kernel-race-freedom-v1` reuses the same formal-memory extraction to report
    alias requirements and possible inter-invocation write conflicts. It first
    uses sparse rank/injectivity rules, then the shared Presburger map engine to
