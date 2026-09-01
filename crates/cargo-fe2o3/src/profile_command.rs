@@ -2851,6 +2851,54 @@ struct BoundedCapture {
     overflow: bool,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CaptureStreamV1 {
+    Stdout,
+    Stderr,
+}
+
+impl CaptureStreamV1 {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Stdout => "stdout",
+            Self::Stderr => "stderr",
+        }
+    }
+}
+
+#[cfg(test)]
+#[derive(Clone)]
+struct CaptureThreadSpawnFailureInjectionV1 {
+    stream: CaptureStreamV1,
+    collector_ready: PathBuf,
+    active_workers: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+#[cfg(test)]
+thread_local! {
+    static CAPTURE_THREAD_SPAWN_FAILURE_INJECTION_V1: std::cell::RefCell<Option<CaptureThreadSpawnFailureInjectionV1>> = const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+struct CaptureThreadWorkerGuardV1 {
+    active_workers: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+#[cfg(test)]
+impl CaptureThreadWorkerGuardV1 {
+    fn start(active_workers: Arc<std::sync::atomic::AtomicUsize>) -> Self {
+        active_workers.fetch_add(1, Ordering::SeqCst);
+        Self { active_workers }
+    }
+}
+
+#[cfg(test)]
+impl Drop for CaptureThreadWorkerGuardV1 {
+    fn drop(&mut self) {
+        self.active_workers.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
 struct Supervised {
     status: Option<ExitStatus>,
     reason: StopReason,
@@ -2986,18 +3034,45 @@ fn supervise_with_sigchld_scope(
     }
     let overflow = Arc::new(AtomicBool::new(false));
     let capture_cancelled = Arc::new(AtomicBool::new(false));
-    let stdout_thread = capture_thread(
+    let stdout_thread = match capture_thread(
+        CaptureStreamV1::Stdout,
         stdout,
         stdout_limit,
         Arc::clone(&overflow),
         Arc::clone(&capture_cancelled),
-    );
-    let stderr_thread = capture_thread(
+    ) {
+        Ok(worker) => worker,
+        Err(error) => {
+            drop(stderr);
+            return Err(finalize_capture_thread_spawn_failure_v1(
+                child,
+                CaptureStreamV1::Stdout,
+                error,
+                &capture_cancelled,
+                None,
+                sigchld,
+            ));
+        }
+    };
+    let stderr_thread = match capture_thread(
+        CaptureStreamV1::Stderr,
         stderr,
         stderr_limit,
         Arc::clone(&overflow),
         Arc::clone(&capture_cancelled),
-    );
+    ) {
+        Ok(worker) => worker,
+        Err(error) => {
+            return Err(finalize_capture_thread_spawn_failure_v1(
+                child,
+                CaptureStreamV1::Stderr,
+                error,
+                &capture_cancelled,
+                Some(stdout_thread),
+                sigchld,
+            ));
+        }
+    };
     let started = Instant::now();
     let decision = loop {
         if overflow.load(Ordering::Acquire) {
@@ -3142,6 +3217,33 @@ fn finalize_capture_setup_failure_with<T, S>(
     )
 }
 
+fn finalize_capture_thread_spawn_failure_v1(
+    child: &mut Child,
+    stream: CaptureStreamV1,
+    spawn_error: io::Error,
+    capture_cancelled: &AtomicBool,
+    started_worker: Option<thread::JoinHandle<BoundedCapture>>,
+    sigchld: Option<&CollectorSigchldScopeV1>,
+) -> String {
+    let setup_error = format!(
+        "failed to spawn collector {} capture worker: {spawn_error}",
+        stream.name()
+    );
+    let ownership = sigchld.map_or(Ok(()), CollectorSigchldScopeV1::validate_owned);
+    let mut error = finalize_capture_setup_failure_with(
+        child,
+        setup_error,
+        ownership,
+        revoke_owned_child,
+        Child::wait,
+    );
+    capture_cancelled.store(true, Ordering::Release);
+    if started_worker.is_some_and(|worker| worker.join().is_err()) {
+        error.push_str("; collector stdout capture thread panicked during setup rollback");
+    }
+    error
+}
+
 fn finalize_collector_exit_with<T, S>(
     subject: &mut T,
     decision: CollectorExitDecision,
@@ -3166,53 +3268,90 @@ fn finalize_collector_exit_with<T, S>(
 }
 
 fn capture_thread(
+    stream: CaptureStreamV1,
     mut pipe: impl Read + Send + 'static,
     limit: usize,
     global_overflow: Arc<AtomicBool>,
     cancelled: Arc<AtomicBool>,
-) -> thread::JoinHandle<BoundedCapture> {
-    thread::spawn(move || {
-        let mut bytes = Vec::new();
-        let mut overflow = false;
-        let mut buffer = [0_u8; 8192];
-        let mut drain_deadline = None;
-        loop {
-            if cancelled.load(Ordering::Acquire) && drain_deadline.is_none() {
-                drain_deadline = Instant::now().checked_add(CAPTURE_DRAIN_TIMEOUT);
-            }
-            if drain_deadline.is_some_and(|deadline| Instant::now() >= deadline) {
-                break;
-            }
-            match pipe.read(&mut buffer) {
-                Ok(0) => break,
-                Ok(read) => {
-                    let remaining = limit.saturating_sub(bytes.len());
-                    bytes.extend_from_slice(&buffer[..read.min(remaining)]);
-                    if read > remaining {
+) -> io::Result<thread::JoinHandle<BoundedCapture>> {
+    #[cfg(test)]
+    let active_workers = capture_thread_spawn_test_control_v1(stream)?;
+    thread::Builder::new()
+        .name(format!("fe2o3-profile-{}-capture-v1", stream.name()))
+        .spawn(move || {
+            #[cfg(test)]
+            let _worker_guard = active_workers.map(CaptureThreadWorkerGuardV1::start);
+            let mut bytes = Vec::new();
+            let mut overflow = false;
+            let mut buffer = [0_u8; 8192];
+            let mut drain_deadline = None;
+            loop {
+                if cancelled.load(Ordering::Acquire) && drain_deadline.is_none() {
+                    drain_deadline = Instant::now().checked_add(CAPTURE_DRAIN_TIMEOUT);
+                }
+                if drain_deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+                    break;
+                }
+                match pipe.read(&mut buffer) {
+                    Ok(0) => break,
+                    Ok(read) => {
+                        let remaining = limit.saturating_sub(bytes.len());
+                        bytes.extend_from_slice(&buffer[..read.min(remaining)]);
+                        if read > remaining {
+                            overflow = true;
+                            global_overflow.store(true, Ordering::Release);
+                            break;
+                        }
+                        if cancelled.load(Ordering::Acquire) && drain_deadline.is_none() {
+                            drain_deadline = Instant::now().checked_add(CAPTURE_DRAIN_TIMEOUT);
+                        }
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                        if cancelled.load(Ordering::Acquire) {
+                            break;
+                        }
+                        thread::sleep(POLL_INTERVAL);
+                    }
+                    Err(_) => {
                         overflow = true;
                         global_overflow.store(true, Ordering::Release);
                         break;
                     }
-                    if cancelled.load(Ordering::Acquire) && drain_deadline.is_none() {
-                        drain_deadline = Instant::now().checked_add(CAPTURE_DRAIN_TIMEOUT);
-                    }
-                }
-                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
-                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                    if cancelled.load(Ordering::Acquire) {
-                        break;
-                    }
-                    thread::sleep(POLL_INTERVAL);
-                }
-                Err(_) => {
-                    overflow = true;
-                    global_overflow.store(true, Ordering::Release);
-                    break;
                 }
             }
+            BoundedCapture { bytes, overflow }
+        })
+}
+
+#[cfg(test)]
+fn capture_thread_spawn_test_control_v1(
+    stream: CaptureStreamV1,
+) -> io::Result<Option<Arc<std::sync::atomic::AtomicUsize>>> {
+    let injection =
+        CAPTURE_THREAD_SPAWN_FAILURE_INJECTION_V1.with(|current| current.borrow().clone());
+    let Some(injection) = injection else {
+        return Ok(None);
+    };
+    if injection.stream == stream {
+        for _ in 0..500 {
+            if injection.collector_ready.is_file() {
+                return Err(io::Error::other(format!(
+                    "injected {} capture worker creation failure",
+                    stream.name()
+                )));
+            }
+            thread::sleep(Duration::from_millis(5));
         }
-        BoundedCapture { bytes, overflow }
-    })
+        return Err(io::Error::new(
+            io::ErrorKind::TimedOut,
+            format!(
+                "collector did not reach the injected {} capture worker failure",
+                stream.name()
+            ),
+        ));
+    }
+    Ok(Some(injection.active_workers))
 }
 
 fn make_capture_pipe_nonblocking(pipe: &impl rustix::fd::AsFd) -> Result<(), String> {
@@ -5255,6 +5394,106 @@ mod tests {
         panic!("collector descendant {pid} survived process-group revoke");
     }
 
+    fn capture_worker_spawn_failure_collection_case(stream: CaptureStreamV1, mode: &str) {
+        let id = NEXT_TOPOLOGY_FIXTURE.fetch_add(1, AtomicOrdering::Relaxed);
+        let root = env::temp_dir().join(format!(
+            "cargo-fe2o3-profile-capture-spawn-failure-{mode}-{}-{id}",
+            std::process::id()
+        ));
+        fs::create_dir(&root).unwrap();
+        let descendant_file = root.join(format!("{}-descendant.pid", stream.name()));
+        let descendant_literal = serde_json::to_string(&descendant_file.to_string_lossy()).unwrap();
+        let tool = root.join("rocprofv3");
+        fs::write(
+            &tool,
+            format!(
+                "#!/usr/bin/env python3\n# --kernel-trace --advanced-thread-trace\nimport os,subprocess,time\nchild=subprocess.Popen(['/bin/sleep','30'])\nwith open({descendant_literal},'w',encoding='utf-8') as stream:\n stream.write(str(child.pid))\nwhile True:\n time.sleep(1)\n"
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&tool, fs::Permissions::from_mode(0o700)).unwrap();
+        let output = root.join("capture");
+        let python = discover_python().expect("test requires the reviewed native Python");
+        let args = [
+            "--kind".to_owned(),
+            "dispatch-json".to_owned(),
+            "--tool".to_owned(),
+            tool.to_string_lossy().into_owned(),
+            "--python".to_owned(),
+            python.to_string_lossy().into_owned(),
+            "--output-dir".to_owned(),
+            output.to_string_lossy().into_owned(),
+            "--".to_owned(),
+            "/bin/true".to_owned(),
+        ];
+        let plan = prepare_plan(parse_options(&args).unwrap()).unwrap();
+        let active_workers = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        CAPTURE_THREAD_SPAWN_FAILURE_INJECTION_V1.with(|current| {
+            assert!(
+                current
+                    .replace(Some(CaptureThreadSpawnFailureInjectionV1 {
+                        stream,
+                        collector_ready: descendant_file.clone(),
+                        active_workers: Arc::clone(&active_workers),
+                    }))
+                    .is_none(),
+                "nested capture worker spawn failure injection"
+            );
+        });
+        let result = collect_with_device_revalidator(plan, |_| Ok(()));
+        CAPTURE_THREAD_SPAWN_FAILURE_INJECTION_V1.with(|current| {
+            assert!(current.replace(None).is_some());
+        });
+        let error = result.unwrap_err();
+        assert!(
+            error.contains(&format!(
+                "failed to spawn collector {} capture worker",
+                stream.name()
+            )),
+            "{error}"
+        );
+        assert_eq!(active_workers.load(AtomicOrdering::SeqCst), 0);
+        assert!(
+            !output.exists(),
+            "capture worker setup failure left publication custody behind"
+        );
+        let descendant = fs::read_to_string(&descendant_file)
+            .unwrap()
+            .parse::<i32>()
+            .unwrap();
+        assert_test_descendant_is_gone(descendant);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn capture_worker_spawn_failures_revoke_join_and_prevent_publication() {
+        const MODE: &str = "FE2O3_CAPTURE_WORKER_SPAWN_FAILURE_TEST_V1";
+        if env::var_os(MODE).is_some() {
+            let inherited = inspect_sigchld_for_test();
+            for stream in [CaptureStreamV1::Stdout, CaptureStreamV1::Stderr] {
+                capture_worker_spawn_failure_collection_case(stream, "default");
+                let restored = inspect_sigchld_for_test();
+                assert_sigchld_action_restored(&restored, &inherited);
+            }
+            return;
+        }
+        let output = Command::new(env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "profile_command::tests::capture_worker_spawn_failures_revoke_join_and_prevent_publication",
+                "--nocapture",
+            ])
+            .env(MODE, "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "capture worker spawn failure child failed:\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
     fn hostile_sigchld_child_case(mode: &str) {
         let (handler, flags) = match mode {
             "ignore" => (libc::SIG_IGN, 0),
@@ -5330,6 +5569,12 @@ mod tests {
         assert_test_descendant_is_gone(descendant);
         let restored = inspect_sigchld_for_test();
         assert_sigchld_action_restored(&restored, &hostile);
+
+        for stream in [CaptureStreamV1::Stdout, CaptureStreamV1::Stderr] {
+            capture_worker_spawn_failure_collection_case(stream, mode);
+            let restored = inspect_sigchld_for_test();
+            assert_sigchld_action_restored(&restored, &hostile);
+        }
     }
 
     #[test]
