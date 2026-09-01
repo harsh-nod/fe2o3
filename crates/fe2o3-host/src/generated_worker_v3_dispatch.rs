@@ -6,12 +6,19 @@ use crate::{
     AliasAdmissionError, ArgumentAccess, ArgumentAccessMode, ArgumentAliasAdmission,
     CompilerGeneratedArgumentLayoutV1, CompilerGeneratedKernelExpectationV1,
     GeneratedArgumentLayoutError, GeneratedArgumentPackError, GeneratedArgumentPackingError,
-    GeneratedArgumentPackingPlanV1, GeneratedSliceArgumentPairV1, HsaCompletedWorkerV3DispatchV1,
-    HsaLaunchAuthorizationError, HsaLaunchGeometryV1, LoadedWorkerV3HsaExecutableV1,
-    ObservedContext, RecoveredWorkerV3AdmissionErrorV1, ReviewedHsaImplicitKernargAdapterV1,
-    WorkerV3GeneratedDispatchErrorV1,
+    GeneratedArgumentPackingPlanV1, GeneratedPackingComponentKindV1, GeneratedSliceArgumentPairV1,
+    HsaCompletedWorkerV3DispatchV1, HsaLaunchAuthorizationError, HsaLaunchGeometryV1,
+    LoadedWorkerV3HsaExecutableV1, ObservedContext, RecoveredWorkerV3AdmissionErrorV1,
+    ReviewedHsaImplicitKernargAdapterV1, WorkerV3GeneratedDispatchErrorV1,
 };
-use fe2o3_artifacts::Access;
+use fe2o3_artifacts::{AbiKind, Access, ArgumentOwnership};
+use fe2o3_runtime_model::{
+    FormalRuntimePreparationPhaseV1, FormalRuntimeResourceOwnerV1, FormalVecaddAbiComponentKindV1,
+    FormalVecaddAbiComponentV1, FormalVecaddArgumentOwnershipV1, FormalVecaddEffectV1,
+    FormalVecaddGeometryV1, FormalVecaddResourceV1, FormalVecaddRuntimeInputV1,
+    FormalVecaddRuntimePreparationErrorV1, FormalVecaddRuntimePreparationEvidenceV1,
+    admit_formal_vecadd_runtime_preparation_v1,
+};
 use std::alloc::{Layout, alloc_zeroed, dealloc, handle_alloc_error};
 use std::fmt;
 use std::ptr::NonNull;
@@ -100,6 +107,7 @@ pub struct GeneratedWorkerV3PreparedInvocationV1<
     arguments: Arguments,
     admission: ArgumentAliasAdmission<'allocation>,
     registration: InFlightRegionRegistration<'allocation>,
+    runtime_refinement: Option<FormalVecaddRuntimePreparationEvidenceV1>,
 }
 
 impl<K, A, Arguments> GeneratedWorkerV3PreparedInvocationV1<'_, '_, K, A, Arguments>
@@ -127,6 +135,16 @@ where
         self.kernarg.alignment()
     }
 
+    /// Mechanically checked preparation evidence for the exact formal vecadd profile.
+    ///
+    /// Other generated kernels return `None`; the absence never weakens their existing
+    /// admission checks or implies a formal runtime claim.
+    pub const fn formal_vecadd_runtime_refinement_v1(
+        &self,
+    ) -> Option<&FormalVecaddRuntimePreparationEvidenceV1> {
+        self.runtime_refinement.as_ref()
+    }
+
     /// Initializes the complete implicit suffix and synchronously dispatches exactly once.
     pub fn dispatch(
         self,
@@ -140,8 +158,9 @@ where
             arguments,
             admission,
             registration,
+            runtime_refinement,
         } = self;
-        let retained = (&arguments, &admission, &registration);
+        let retained = (&arguments, &admission, &registration, &runtime_refinement);
         // SAFETY: preparation matched the generated ABI to the independently admitted V3
         // descriptor, checked every capability/input pair, admitted all aliases, and allocated
         // exact aligned physical storage. The reviewed adapter is synchronous.
@@ -196,6 +215,8 @@ where
             .bind_arguments_v1(&plan)
             .map_err(GeneratedWorkerV3PrepareErrorV1::Bind)?;
         validate_memory_pairs(&binding).map_err(GeneratedWorkerV3PrepareErrorV1::Arguments)?;
+        let formal_runtime_input =
+            project_formal_vecadd_runtime_input_v1(self, &plan, &binding, geometry);
         let packed = plan
             .pack(binding.inputs)
             .map_err(GeneratedWorkerV3PrepareErrorV1::Bind)?;
@@ -209,6 +230,10 @@ where
             admit_and_register(observed.alias_registry(), observed, binding.accesses)
                 .map_err(GeneratedWorkerV3PrepareErrorV1::Alias)?;
         let (kernarg, implicit_byte_len) = prepare_physical_kernarg(self, &plan, &packed)?;
+        let runtime_refinement = formal_runtime_input
+            .map(admit_formal_vecadd_runtime_preparation_v1)
+            .transpose()
+            .map_err(GeneratedWorkerV3PrepareErrorV1::FormalRuntimeRefinement)?;
 
         Ok(GeneratedWorkerV3PreparedInvocationV1 {
             loaded: self,
@@ -219,7 +244,149 @@ where
             arguments,
             admission,
             registration,
+            runtime_refinement,
         })
+    }
+}
+
+fn project_formal_vecadd_runtime_input_v1<K, A>(
+    loaded: &LoadedWorkerV3HsaExecutableV1<K, A>,
+    plan: &GeneratedArgumentPackingPlanV1,
+    binding: &GeneratedWorkerV3ArgumentBindingV1<'_>,
+    geometry: HsaLaunchGeometryV1,
+) -> Option<FormalVecaddRuntimeInputV1>
+where
+    K: CompilerGeneratedKernelExpectationV1,
+    A: ReviewedHsaImplicitKernargAdapterV1,
+{
+    if loaded.descriptor().logical_name().as_str() != "vecadd"
+        || plan.argument_count() != 3
+        || plan.component_count() != 6
+        || binding.accesses.len() != 3
+    {
+        return None;
+    }
+    for index in 0..3 {
+        let field = plan.argument(index)?;
+        if !matches!(
+            field.kind(),
+            AbiKind::Slice {
+                element_size: 4,
+                element_alignment: 4
+            }
+        ) {
+            return None;
+        }
+    }
+
+    let components = core::array::from_fn(|index| {
+        let component = plan
+            .component(index)
+            .expect("the exact component count was checked");
+        let field = plan
+            .argument(component.argument_index())
+            .expect("a validated packing component names one argument");
+        FormalVecaddAbiComponentV1 {
+            argument_index: u8::try_from(component.argument_index()).unwrap_or(u8::MAX),
+            kind: match component.kind() {
+                GeneratedPackingComponentKindV1::SlicePointer => {
+                    FormalVecaddAbiComponentKindV1::SlicePointer
+                }
+                GeneratedPackingComponentKindV1::SliceLength => {
+                    FormalVecaddAbiComponentKindV1::SliceLength
+                }
+                _ => FormalVecaddAbiComponentKindV1::Unsupported,
+            },
+            offset: component.offset(),
+            size: component.size(),
+            alignment: component.alignment(),
+            effect: formal_effect_v1(field.access()),
+            argument_ownership: match field.ownership() {
+                ArgumentOwnership::SharedBorrow => FormalVecaddArgumentOwnershipV1::SharedBorrow,
+                ArgumentOwnership::UniqueBorrow => FormalVecaddArgumentOwnershipV1::UniqueBorrow,
+                _ => FormalVecaddArgumentOwnershipV1::Unsupported,
+            },
+        }
+    });
+
+    let mut slices = binding
+        .inputs
+        .iter()
+        .filter_map(GeneratedArgumentInputV1::slice_description_v1)
+        .collect::<Vec<_>>();
+    slices.sort_unstable_by_key(|slice| slice.argument_index);
+    let resources: [FormalVecaddResourceV1; 3] = slices
+        .into_iter()
+        .zip(&binding.accesses)
+        .map(|(slice, access)| {
+            let region = access.formal_runtime_region_v1();
+            FormalVecaddResourceV1 {
+                argument_index: u8::try_from(slice.argument_index).unwrap_or(u8::MAX),
+                allocation_context: region.map_or(0, |value| value.allocation_context),
+                allocation_identity: region.map_or(0, |value| value.allocation_identity),
+                allocation_base: region.map_or(0, |value| value.allocation_base),
+                byte_offset: region.map_or(0, |value| value.byte_offset),
+                byte_len: region.map_or(0, |value| value.byte_len),
+                encoded_address: slice.address,
+                element_count: slice.length,
+                effect: formal_effect_v1(slice.access),
+                owner: FormalRuntimeResourceOwnerV1::Caller,
+            }
+        })
+        .collect::<Vec<_>>()
+        .try_into()
+        .ok()?;
+
+    let descriptor = loaded.descriptor();
+    let descriptor_abi = descriptor.abi_layout();
+    let source = descriptor.launch();
+    let source_required_workgroup = match source.block_size() {
+        crate::BlockSizeV1::Exact(value) => [value.x(), value.y(), value.z()],
+        crate::BlockSizeV1::Any | crate::BlockSizeV1::AtMost(_) => [0, 0, 0],
+    };
+    let max_grid = source.max_grid();
+    let physical = loaded.physical_kernel();
+    let resolution = loaded.kernel_observation();
+    let verification = loaded.authenticated_verification_v1();
+    Some(FormalVecaddRuntimeInputV1 {
+        kernel_identity: *descriptor.kernel_id().as_bytes(),
+        generated_host_contract_identity: verification.generated_host_contract_identity(),
+        rust_layout_contract_identity: verification.rust_type_layout_contract_sha256(),
+        rust_effect_contract_identity: verification.rust_effect_contract_sha256(),
+        explicit_byte_len: u64::from(descriptor_abi.explicit_argument_size()),
+        implicit_byte_offset: physical.implicit_argument_offset().unwrap_or(u64::MAX),
+        implicit_byte_len: physical.implicit_argument_size(),
+        physical_byte_len: physical.kernarg_segment_size(),
+        descriptor_alignment: descriptor_abi.kernarg_segment_alignment(),
+        runtime_alignment: u32::try_from(resolution.kernarg_segment_alignment())
+            .unwrap_or(u32::MAX),
+        components,
+        geometry: FormalVecaddGeometryV1 {
+            grid: geometry.grid(),
+            workgroup: geometry.workgroup(),
+            dynamic_group_bytes: geometry.dynamic_shared_memory_bytes(),
+            source_max_grid: [max_grid.x(), max_grid.y(), max_grid.z()],
+            physical_max_grid: physical
+                .max_workgroups()
+                .map(|maximum| maximum.unwrap_or(u32::MAX)),
+            source_max_flat_workgroup: source.max_flat_workgroup_size(),
+            physical_max_flat_workgroup: physical.max_flat_workgroup_size(),
+            source_required_workgroup,
+            physical_required_workgroup: physical.required_workgroup_size(),
+            source_static_group_bytes: source.static_shared_memory_bytes(),
+            physical_static_group_bytes: physical.group_segment_fixed_size(),
+            physical_private_segment_bytes: physical.private_segment_fixed_size(),
+        },
+        resources,
+        source_phase: FormalRuntimePreparationPhaseV1::Loaded,
+    })
+}
+
+fn formal_effect_v1(access: Access) -> FormalVecaddEffectV1 {
+    match access {
+        Access::ReadOnly => FormalVecaddEffectV1::SharedRead,
+        Access::WriteOnly => FormalVecaddEffectV1::ExclusiveWrite,
+        Access::ByValue | Access::ReadWrite => FormalVecaddEffectV1::Unsupported,
     }
 }
 
@@ -380,6 +547,7 @@ pub enum GeneratedWorkerV3PrepareErrorV1 {
     PackedSubstitution,
     Alias(AliasAdmissionError),
     PhysicalKernarg,
+    FormalRuntimeRefinement(FormalVecaddRuntimePreparationErrorV1),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

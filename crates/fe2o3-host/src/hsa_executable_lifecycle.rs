@@ -989,6 +989,12 @@ impl<K: CompilerGeneratedKernelExpectationV1, A: ReviewedHsaExecutableLifecycleA
         self.authenticated.admission().physical_kernel()
     }
 
+    pub(crate) const fn authenticated_verification_v1(
+        &self,
+    ) -> &crate::WorkerV3VerificationDecisionV1 {
+        self.authenticated.verification()
+    }
+
     pub(crate) fn matches_observed_context(&self, observed: &crate::ObservedContext) -> bool {
         let admitted = &self.observed;
         observed.device() == admitted.device()

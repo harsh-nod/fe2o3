@@ -1196,6 +1196,21 @@ impl WorkerV3VerificationDecisionV1 {
         self.finalized_length
     }
 
+    /// Exact generated-host contract identity authenticated for this executable.
+    pub const fn generated_host_contract_identity(&self) -> [u8; 32] {
+        self.generated_host_contract
+    }
+
+    /// Exact generated Rust type/layout contract authenticated for this executable.
+    pub const fn rust_type_layout_contract_sha256(&self) -> [u8; 32] {
+        self.rust_type_layout_contract_sha256
+    }
+
+    /// Exact generated Rust effect contract authenticated for this executable.
+    pub const fn rust_effect_contract_sha256(&self) -> [u8; 32] {
+        self.rust_effect_contract_sha256
+    }
+
     pub const fn compiler_execution(&self) -> &WorkerV3CompilerExecutionVerificationV1 {
         &self.compiler_execution
     }

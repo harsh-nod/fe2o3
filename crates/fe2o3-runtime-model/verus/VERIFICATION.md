@@ -1,8 +1,9 @@
 # Runtime model verification
 
 This directory contains the initial issue #137 Verus specifications. The
-authenticated runner proves forty-eight obligations over finite abstract values
-and traces. The materialization input and image sequences are capped at 64 MiB
+authenticated runner proves the existing runtime obligations plus the formal
+ABI/runtime preparation obligation over finite abstract values and traces. The
+materialization input and image sequences are capped at 64 MiB
 and its phase trace has exactly four entries. The lifecycle-history sequence
 lengths are not bounded by these proofs.
 
@@ -173,6 +174,40 @@ The two-step theorem proves linearity only along one supplied mathematical
 successor chain. It does not establish uniqueness among independently
 constructed Rust values, counter truth, completion, liveness, or performance.
 
+`formal_abi_runtime_v1.rs` proves the first production-bound ABI/runtime
+preparation refinement. It is deliberately limited to the authenticated
+production-shaped `vecadd(&[f32], &[f32], DisjointSlice<f32>)` COV6 profile:
+
+1. the six explicit pointer/length components remain at offsets 0, 8, 16, 24,
+   32, and 40 in the 48-byte explicit prefix, followed by the exact 256-byte
+   implicit suffix in a 304-byte physical allocation with descriptor alignment
+   8 and runtime alignment 16;
+2. the one-dimensional 256-thread workgroup and exact ceiling-divided block
+   count cover the nonempty output without exceeding the canonical source and
+   per-axis physical resource limits, with zero dynamic group and private
+   segment requirements;
+3. kernel, generated-host, Rust layout, and Rust effect identities, ordered
+   read/read/write effects, argument ownership classes, allocation-relative
+   resource identities, and element counts are preserved exactly; and
+4. a `Loaded` input whose resources are held by the caller refines to a
+   `Prepared` value whose three resources are retained by the prepared
+   invocation.
+
+The exact theorem is `vecadd_runtime_preparation_refines_v1`. The production
+Worker V3 generated-host path projects the already authenticated descriptor,
+physical metadata, generated packing plan, verifier-bound identities, checked
+allocation regions, and launch geometry into the executable model. It retains
+the resulting non-cloneable evidence in the one-shot prepared invocation beside
+the Rust arguments, alias admission, and in-flight registration.
+
+This theorem stops before implicit-kernarg initialization, AQL publication, or
+machine execution. It contains no proposition about Kernel IR-to-LLVM
+lowering, LLVM optimization/code generation, LLD, HSA/KFD/ROCr behavior,
+firmware, hardware memory semantics, completion truth, functional output, or
+performance. The executable Rust-to-formal projection is tested and reviewed
+but is not itself verified by Verus in V1. Those boundaries remain contracts or
+trusted assumptions, not consequences of this theorem.
+
 Run the proofs and all expected-negative mutations with the exact Verus
 release whose executable, complete release closure, version, proof sources,
 source checker, transcript, and mutations are pinned under `verus/pins`:
@@ -207,7 +242,9 @@ production-shaped copy transition substituting another source byte, and the
 production-shaped zero-first transition omitting the first zero byte, an INVALID
 packet body changed to vendor type zero, setup substitution during the modeled
 release word, reservation replay without write advance, acceptance of a
-regressed read observation, and overwrite of a full ring. The launcher
+regressed read observation, overwrite of a full ring, a substituted vecadd
+kernarg offset, launch undercoverage, effect-identity drift, and failure to
+transfer prepared resource custody. The launcher
 rejects source substitution, lexically audits all proof files for trusted
 constructs, clears the environment, bounds execution time, pins Z3 through the
 authenticated Verus release closure, and rechecks the authenticated inputs after

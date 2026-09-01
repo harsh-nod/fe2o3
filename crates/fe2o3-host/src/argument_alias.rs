@@ -840,6 +840,19 @@ impl<'allocation> ArgumentAccess<'allocation> {
         self.mode
     }
 
+    pub(crate) fn formal_runtime_region_v1(&self) -> Option<FormalRuntimeRegionV1> {
+        let ArgumentRegion::Known(region) = &self.region else {
+            return None;
+        };
+        Some(FormalRuntimeRegionV1 {
+            allocation_context: u64::try_from(region.identity.context).ok()?,
+            allocation_identity: u64::try_from(region.identity.allocation).ok()?,
+            allocation_base: u64::try_from(region.identity.allocation).ok()?,
+            byte_offset: u64::try_from(region.byte_offset).ok()?,
+            byte_len: u64::try_from(region.byte_length).ok()?,
+        })
+    }
+
     pub(crate) fn matches_generated_slice_v1(
         &self,
         address: u64,
@@ -871,6 +884,15 @@ impl<'allocation> ArgumentAccess<'allocation> {
         };
         address == region_address && byte_length == region.byte_length
     }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct FormalRuntimeRegionV1 {
+    pub(crate) allocation_context: u64,
+    pub(crate) allocation_identity: u64,
+    pub(crate) allocation_base: u64,
+    pub(crate) byte_offset: u64,
+    pub(crate) byte_len: u64,
 }
 
 /// Inert evidence that one set of argument regions passed host alias checks.

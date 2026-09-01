@@ -11,6 +11,7 @@ queue_proof="$script_dir/queue_lifecycle_v1.rs"
 load_plan_proof="$script_dir/load_plan_v1.rs"
 materialization_proof="$script_dir/materialization_v1.rs"
 aql_proof="$script_dir/aql_publication_v1.rs"
+formal_abi_runtime_proof="$script_dir/formal_abi_runtime_v1.rs"
 negative_lifecycle="$script_dir/negative/runtime_lifecycle_v1_release_while_published.rs"
 negative_vm="$script_dir/negative/device_identity_generation_v1_vm_substitution.rs"
 negative_stale="$script_dir/negative/device_identity_generation_v1_stale_reuse.rs"
@@ -43,6 +44,10 @@ negative_aql_setup_substitution="$script_dir/negative/aql_publication_v1_setup_s
 negative_aql_replay="$script_dir/negative/aql_reservation_v1_replay.rs"
 negative_aql_read_regression="$script_dir/negative/aql_reservation_v1_read_regression.rs"
 negative_aql_full_overwrite="$script_dir/negative/aql_reservation_v1_full_overwrite.rs"
+negative_formal_kernarg_offset="$script_dir/negative/formal_abi_runtime_v1_kernarg_offset.rs"
+negative_formal_geometry="$script_dir/negative/formal_abi_runtime_v1_geometry.rs"
+negative_formal_effect_identity="$script_dir/negative/formal_abi_runtime_v1_effect_identity.rs"
+negative_formal_ownership="$script_dir/negative/formal_abi_runtime_v1_ownership.rs"
 pin_dir="$script_dir/pins"
 closure_manifest="$pin_dir/VERUS_CLOSURE_MANIFEST"
 closure_checker="$repo_root/examples/row_softmax_v1/verify-verus-closure.sh"
@@ -75,6 +80,7 @@ expected_load_plan=$(read_pin "$pin_dir/LOAD_PLAN_SHA256")
 expected_materialization=$(read_pin "$pin_dir/MATERIALIZATION_SHA256")
 expected_negative_lifecycle=$(read_pin "$pin_dir/NEGATIVE_SHA256")
 expected_aql=$(read_pin "$pin_dir/AQL_PUBLICATION_SHA256")
+expected_formal_abi_runtime=$(read_pin "$pin_dir/FORMAL_ABI_RUNTIME_SHA256")
 expected_negative_vm=$(read_pin "$pin_dir/NEGATIVE_VM_SUBSTITUTION_SHA256")
 expected_negative_stale=$(read_pin "$pin_dir/NEGATIVE_STALE_REUSE_SHA256")
 expected_negative_render=$(read_pin "$pin_dir/NEGATIVE_RENDER_SUBSTITUTION_SHA256")
@@ -107,6 +113,10 @@ expected_negative_aql_setup_substitution=$(read_pin "$pin_dir/NEGATIVE_AQL_SETUP
 expected_negative_aql_replay=$(read_pin "$pin_dir/NEGATIVE_AQL_REPLAY_SHA256")
 expected_negative_aql_read_regression=$(read_pin "$pin_dir/NEGATIVE_AQL_READ_REGRESSION_SHA256")
 expected_negative_aql_full_overwrite=$(read_pin "$pin_dir/NEGATIVE_AQL_FULL_OVERWRITE_SHA256")
+expected_negative_formal_kernarg_offset=$(read_pin "$pin_dir/NEGATIVE_FORMAL_ABI_KERNARG_OFFSET_SHA256")
+expected_negative_formal_geometry=$(read_pin "$pin_dir/NEGATIVE_FORMAL_ABI_GEOMETRY_SHA256")
+expected_negative_formal_effect_identity=$(read_pin "$pin_dir/NEGATIVE_FORMAL_ABI_EFFECT_IDENTITY_SHA256")
+expected_negative_formal_ownership=$(read_pin "$pin_dir/NEGATIVE_FORMAL_ABI_OWNERSHIP_SHA256")
 expected_closure=$(read_pin "$pin_dir/VERUS_CLOSURE_MANIFEST_SHA256")
 expected_source_checker=$(read_pin "$pin_dir/PROOF_SOURCE_CHECKER_SHA256")
 expected_transcript=$(read_pin "$pin_dir/TRANSCRIPT_SHA256")
@@ -142,6 +152,7 @@ check_sources() {
     check_digest "$expected_negative_lifecycle" "$negative_lifecycle"
     check_digest "$expected_negative_vm" "$negative_vm"
     check_digest "$expected_aql" "$aql_proof"
+    check_digest "$expected_formal_abi_runtime" "$formal_abi_runtime_proof"
     check_digest "$expected_negative_stale" "$negative_stale"
     check_digest "$expected_negative_render" "$negative_render"
     check_digest "$expected_negative_projection_schema" "$negative_projection_schema"
@@ -174,6 +185,10 @@ check_sources() {
     check_digest "$expected_negative_aql_replay" "$negative_aql_replay"
     check_digest "$expected_negative_aql_read_regression" "$negative_aql_read_regression"
     check_digest "$expected_negative_aql_full_overwrite" "$negative_aql_full_overwrite"
+    check_digest "$expected_negative_formal_kernarg_offset" "$negative_formal_kernarg_offset"
+    check_digest "$expected_negative_formal_geometry" "$negative_formal_geometry"
+    check_digest "$expected_negative_formal_effect_identity" "$negative_formal_effect_identity"
+    check_digest "$expected_negative_formal_ownership" "$negative_formal_ownership"
     check_digest "$expected_source_checker" "$source_checker"
 }
 
@@ -190,6 +205,7 @@ check_sources
     "$negative_vm" \
     "$negative_stale" \
     "$aql_proof" \
+    "$formal_abi_runtime_proof" \
     "$negative_render" \
     "$negative_projection_schema" \
     "$negative_projection_history" \
@@ -218,7 +234,11 @@ check_sources
     "$negative_aql_setup_substitution" \
     "$negative_aql_replay" \
     "$negative_aql_read_regression" \
-    "$negative_aql_full_overwrite"
+    "$negative_aql_full_overwrite" \
+    "$negative_formal_kernarg_offset" \
+    "$negative_formal_geometry" \
+    "$negative_formal_effect_identity" \
+    "$negative_formal_ownership"
 
 case "$verus_bin" in
     */*) [ -x "$verus_bin" ] && verus_path=$verus_bin || verus_path= ;;
@@ -325,6 +345,7 @@ check_positive "$queue_proof" 'verification results:: 11 verified, 0 errors' que
 check_positive "$load_plan_proof" 'verification results:: 3 verified, 0 errors' load-plan
 check_positive "$materialization_proof" 'verification results:: 8 verified, 0 errors' materialization
 check_positive "$aql_proof" 'verification results:: 11 verified, 0 errors' aql-publication
+check_positive "$formal_abi_runtime_proof" 'verification results:: 1 verified, 0 errors' formal-abi-runtime
 check_negative "$negative_lifecycle" mutated_release_while_published_is_safe_v1 release-while-published
 check_negative "$negative_vm" mutated_vm_generation_substitution_is_exact_v1 vm-generation-substitution
 check_negative "$negative_stale" mutated_stale_generation_reuse_advances_v1 stale-generation-reuse
@@ -357,13 +378,17 @@ check_negative "$negative_aql_setup_substitution" mutated_setup_substitution_pre
 check_negative "$negative_aql_replay" mutated_replay_advances_write_once_v1 aql-reservation-replay
 check_negative "$negative_aql_read_regression" mutated_read_regression_is_nondecreasing_v1 aql-read-regression
 check_negative "$negative_aql_full_overwrite" mutated_full_overwrite_is_rejected_v1 aql-full-overwrite
+check_negative "$negative_formal_kernarg_offset" mutated_vecadd_output_offset_refines_v1 formal-abi-kernarg-offset
+check_negative "$negative_formal_geometry" mutated_vecadd_undercoverage_refines_v1 formal-abi-geometry
+check_negative "$negative_formal_effect_identity" mutated_vecadd_effect_identity_is_preserved_v1 formal-abi-effect-identity
+check_negative "$negative_formal_ownership" mutated_vecadd_prepared_owner_is_retained_v1 formal-abi-ownership
 
 # Detect source, checker, closure, or executable replacement during the run.
 check_sources
 check_digest "$expected_verus" "$verus_path"
 "$closure_checker" "$verus_root" "$closure_manifest"
 
-transcript='FE2O3_RUNTIME_MODEL_VERUS_OK lifecycle_obligations=2 identity_obligations=4 projection_obligations=4 memory_obligations=6 queue_obligations=11 load_plan_obligations=3 materialization_obligations=8 aql_obligations=11 mutations=32'
+transcript='FE2O3_RUNTIME_MODEL_VERUS_OK lifecycle_obligations=2 identity_obligations=4 projection_obligations=4 memory_obligations=6 queue_obligations=11 load_plan_obligations=3 materialization_obligations=8 aql_obligations=11 formal_abi_runtime_obligations=1 mutations=36'
 actual_transcript=$(printf '%s\n' "$transcript" | "$sha256_path" | awk '{ print $1 }')
 if [ "$actual_transcript" != "$expected_transcript" ]; then
     printf 'FAIL: verification transcript does not match the pin\n' >&2
