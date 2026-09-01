@@ -40,6 +40,7 @@ mod production_semantic_fn_abi_v1;
 mod production_semantic_lineage_v3;
 mod production_semantic_terminal_v1;
 mod production_semantic_types_v1;
+mod production_source_mir_scalar_v1;
 mod production_target_v1;
 mod production_worker_handoff;
 mod protected_compiler_execution;

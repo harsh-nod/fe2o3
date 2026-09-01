@@ -339,6 +339,8 @@ struct ProtectedProductionPublicationCustody {
 struct AuthenticatedProductionBindings {
     rustc_identity_inventory: crate::collector::AuthenticatedRustcIdentityInventoryV3,
     rustc_preflight_plan: crate::collector::AuthenticatedRustcPreflightPlanV3,
+    source_mir_scalar:
+        crate::production_source_mir_scalar_v1::AuthenticatedSourceMirScalarEvidenceV1,
     rustc_target: crate::production_target_v1::AuthenticatedProductionTargetV1,
     reference_effect_bindings: crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
     debug_source_files: Box<[fe2o3_kernel_ir::DebugSourceMapFileV1]>,
@@ -848,12 +850,15 @@ impl TargetLoweredProductionCompilation {
         let _ = (
             &self.bindings.rustc_identity_inventory,
             &self.bindings.rustc_preflight_plan,
+            &self.bindings.source_mir_scalar,
+            self.bindings.source_mir_scalar.records().len(),
+            self.bindings.source_mir_scalar.grants_authority(),
             &self.bindings.typed_descriptor_roots,
             &self.bindings.transaction.producer,
             &self.bindings.transaction.output_dir,
             &self.bindings.transaction.compiler_ffi_envelope,
         );
-        6 + self
+        7 + self
             .bindings
             .transaction
             .compiler_custody
@@ -878,6 +883,7 @@ impl TargetLoweredProductionCompilation {
         let AuthenticatedProductionBindings {
             rustc_identity_inventory,
             rustc_preflight_plan,
+            source_mir_scalar,
             rustc_target,
             reference_effect_bindings: _,
             debug_source_files: _,
@@ -892,6 +898,11 @@ impl TargetLoweredProductionCompilation {
         {
             return Err(ProductionPipelineError::RustcLineageMismatch);
         }
+        source_mir_scalar.revalidate().map_err(|error| {
+            ProductionPipelineError::SemanticImport(
+                crate::collector::ProductionSemanticImportErrorV1::SourceMirScalar(error),
+            )
+        })?;
         if !transaction.compiler_custody.is_extraction_only() {
             return Err(ProductionPipelineError::WorkerHandoffExtractionRequiresExtractionCustody);
         }
@@ -928,6 +939,7 @@ impl TargetLoweredProductionCompilation {
         let AuthenticatedProductionBindings {
             rustc_identity_inventory,
             rustc_preflight_plan,
+            source_mir_scalar,
             rustc_target,
             reference_effect_bindings: _,
             debug_source_files,
@@ -942,6 +954,11 @@ impl TargetLoweredProductionCompilation {
         {
             return Err(ProductionPipelineError::RustcLineageMismatch);
         }
+        source_mir_scalar.revalidate().map_err(|error| {
+            ProductionPipelineError::SemanticImport(
+                crate::collector::ProductionSemanticImportErrorV1::SourceMirScalar(error),
+            )
+        })?;
         if !transaction.compiler_custody.is_extraction_only() {
             return Err(ProductionPipelineError::WorkerHandoffExtractionRequiresExtractionCustody);
         }
@@ -1019,6 +1036,7 @@ impl TargetLoweredProductionCompilation {
         let AuthenticatedProductionBindings {
             rustc_identity_inventory,
             rustc_preflight_plan,
+            source_mir_scalar,
             rustc_target,
             reference_effect_bindings,
             debug_source_files,
@@ -1039,6 +1057,11 @@ impl TargetLoweredProductionCompilation {
         {
             return Err(ProductionPipelineError::RustcLineageMismatch);
         }
+        source_mir_scalar.revalidate().map_err(|error| {
+            ProductionPipelineError::SemanticImport(
+                crate::collector::ProductionSemanticImportErrorV1::SourceMirScalar(error),
+            )
+        })?;
         let semantic_debug_inputs = prepare_production_semantic_debug_inputs_v1(
             admitted.semantic_kir(),
             &rustc_identity_inventory,
@@ -1840,12 +1863,15 @@ impl RankedVerifiedProductionCompilation {
         let _ = (
             &self.bindings.rustc_identity_inventory,
             &self.bindings.rustc_preflight_plan,
+            &self.bindings.source_mir_scalar,
+            self.bindings.source_mir_scalar.records().len(),
+            self.bindings.source_mir_scalar.grants_authority(),
             &self.bindings.typed_descriptor_roots,
             &self.bindings.transaction.producer,
             &self.bindings.transaction.output_dir,
             &self.bindings.transaction.compiler_ffi_envelope,
         );
-        6 + self
+        7 + self
             .bindings
             .transaction
             .compiler_custody
@@ -1956,6 +1982,7 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
         } = self.stage;
         let crate::collector::ConstructedProductionSemanticMirV1 {
             semantic_mir,
+            source_mir_scalar,
             rustc_identity_inventory,
             rustc_preflight_plan,
             rustc_target,
@@ -1982,6 +2009,7 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
                 bindings: AuthenticatedProductionBindings {
                     rustc_identity_inventory,
                     rustc_preflight_plan,
+                    source_mir_scalar,
                     rustc_target,
                     reference_effect_bindings,
                     debug_source_files,

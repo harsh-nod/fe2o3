@@ -92,6 +92,7 @@ pub(crate) enum ProductionSemanticImportErrorV1 {
     TypeConstruction(Box<ProductionSemanticTypeErrorV1>),
     FunctionAbiConstruction(Box<ProductionSemanticFnAbiErrorV1>),
     BodyConstruction(Box<ProductionSemanticBodyErrorV1>),
+    SourceMirScalar(crate::production_source_mir_scalar_v1::ProductionSourceMirScalarErrorV1),
     SemanticSchema(SemanticMirErrorV1),
     LineageTranscriptTooLarge {
         field: &'static str,
@@ -139,6 +140,9 @@ impl fmt::Display for ProductionSemanticImportErrorV1 {
             Self::BodyConstruction(error) => {
                 write!(formatter, "semantic importer rejected semantic body construction: {error}")
             }
+            Self::SourceMirScalar(error) => {
+                write!(formatter, "semantic importer rejected source-to-MIR scalar evidence: {error}")
+            }
             Self::SemanticSchema(error) => {
                 write!(formatter, "semantic importer rejected complete semantic MIR: {error}")
             }
@@ -176,6 +180,7 @@ impl std::error::Error for ProductionSemanticImportErrorV1 {
             Self::FunctionAbiConstruction(error) => Some(error.as_ref()),
             Self::BodyConstruction(error) => Some(error.as_ref()),
             Self::SemanticSchema(error) => Some(error),
+            Self::SourceMirScalar(_) => None,
             Self::RootCustodyMismatch
             | Self::LimitExceeded { .. }
             | Self::LineageTranscriptTooLarge { .. }
@@ -238,6 +243,8 @@ impl AuthenticatedRustcPreflightPlanV3 {
 /// substitution as the import surface grows.
 pub(crate) struct ConstructedProductionSemanticMirV1 {
     pub(crate) semantic_mir: AdmittedInertSemanticMirV1,
+    pub(crate) source_mir_scalar:
+        crate::production_source_mir_scalar_v1::AuthenticatedSourceMirScalarEvidenceV1,
     pub(crate) rustc_identity_inventory: AuthenticatedRustcIdentityInventoryV3,
     pub(crate) rustc_preflight_plan: AuthenticatedRustcPreflightPlanV3,
     pub(crate) rustc_target: crate::production_target_v1::AuthenticatedProductionTargetV1,
@@ -365,6 +372,13 @@ pub(crate) fn construct_production_semantic_mir_v1<'tcx>(
         semantic_function_abis,
         semantic_terminal_abis,
     )?;
+    let source_mir_scalar =
+        crate::production_source_mir_scalar_v1::derive_production_source_mir_scalar_evidence_v1(
+            tcx,
+            &plan,
+            &semantic_mir,
+        )
+        .map_err(ProductionSemanticImportErrorV1::SourceMirScalar)?;
     let (
         rustc_preflight_plan_sha256,
         rustc_preflight_plan_transcript,
@@ -378,6 +392,7 @@ pub(crate) fn construct_production_semantic_mir_v1<'tcx>(
     drop(collection);
     Ok(ConstructedProductionSemanticMirV1 {
         semantic_mir,
+        source_mir_scalar,
         rustc_identity_inventory: AuthenticatedRustcIdentityInventoryV3 {
             sha256: rustc_identity_inventory_sha256,
             canonical_transcript: rustc_identity_inventory_transcript,

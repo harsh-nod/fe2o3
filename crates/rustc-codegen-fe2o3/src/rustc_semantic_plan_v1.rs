@@ -119,6 +119,16 @@ pub(crate) struct RetainedSemanticSourceProducerV1 {
     expansion_chain_sha256: [u8; 32],
 }
 
+#[cfg(test)]
+impl RetainedSemanticSourceProducerV1 {
+    pub(crate) const fn from_test_provenance(provenance: SemanticSourceProvenanceV1) -> Self {
+        Self {
+            provenance,
+            expansion_chain_sha256: [0; 32],
+        }
+    }
+}
+
 #[derive(Debug)]
 struct RetainedRawBlockSourceProducerV1 {
     source: RetainedSemanticSourceProducerV1,

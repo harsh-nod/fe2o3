@@ -33,6 +33,9 @@ const MONOMORPHIZATION_DOMAIN_V1: &[u8] = b"fe2o3/semantic-mir/monomorphization/
 const TYPE_ARGUMENTS_DOMAIN_V1: &[u8] = b"fe2o3/semantic-mir/type-arguments/v1";
 const CONST_ARGUMENTS_DOMAIN_V1: &[u8] = b"fe2o3/semantic-mir/const-arguments/v1";
 const MIR_BODY_DOMAIN_V1: &[u8] = b"fe2o3/semantic-mir/rustc-mir-body/v1";
+const HIR_OWNER_DOMAIN_V1: &[u8] = b"fe2o3/source-mir/rustc-hir-owner/v1";
+const HIR_EXPRESSION_DOMAIN_V1: &[u8] = b"fe2o3/source-mir/rustc-hir-expression/v1";
+const HIR_BINDING_DOMAIN_V1: &[u8] = b"fe2o3/source-mir/rustc-hir-binding/v1";
 const TYPE_DOMAIN_V1: &[u8] = b"fe2o3/semantic-mir/rustc-type/v1";
 const LOCAL_DOMAIN_V1: &[u8] = b"fe2o3/semantic-mir/rustc-local/v1";
 const BLOCK_DOMAIN_V1: &[u8] = b"fe2o3/semantic-mir/rustc-basic-block/v1";
@@ -242,6 +245,34 @@ pub(crate) fn rustc_mir_body_sha256_v1<'tcx>(
             &stable_fingerprint!(tcx, body),
         ],
     )
+}
+
+/// Identifies the exact local HIR body observed in this rustc session.
+pub(crate) fn rustc_hir_owner_sha256_v1(
+    tcx: TyCtxt<'_>,
+    owner: rustc_hir::def_id::LocalDefId,
+) -> Option<[u8; 32]> {
+    let body = tcx.hir_maybe_body_owned_by(owner)?;
+    Some(domain_digest(
+        HIR_OWNER_DOMAIN_V1,
+        &[&stable_fingerprint!(tcx, body)],
+    ))
+}
+
+/// Identifies one exact HIR expression observed in this rustc session.
+pub(crate) fn rustc_hir_expression_sha256_v1(
+    tcx: TyCtxt<'_>,
+    expression: &rustc_hir::Expr<'_>,
+) -> [u8; 32] {
+    domain_digest(
+        HIR_EXPRESSION_DOMAIN_V1,
+        &[&stable_fingerprint!(tcx, expression)],
+    )
+}
+
+/// Identifies one exact HIR parameter binding observed in this rustc session.
+pub(crate) fn rustc_hir_binding_sha256_v1(tcx: TyCtxt<'_>, binding: rustc_hir::HirId) -> [u8; 32] {
+    domain_digest(HIR_BINDING_DOMAIN_V1, &[&stable_fingerprint!(tcx, binding)])
 }
 
 /// Identifies one normalized rustc type encountered during raw-MIR preflight.

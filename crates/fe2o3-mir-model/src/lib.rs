@@ -10,6 +10,7 @@ mod semantic_type;
 pub mod semantic_type_v2;
 mod semantic_u32_induction;
 mod semantic_u32_induction_evidence_v1;
+mod source_mir_scalar_refinement_v1;
 
 pub use control_flow::{
     MAX_MIR_CONTROL_FLOW_WORK_UNITS, MIR_CONTROL_FLOW_WORK_UNITS_PER_BLOCK, MirControlFlowAnalysis,
@@ -92,3 +93,4 @@ pub use semantic_u32_induction_evidence_v1::{
     SemanticU32InductionNoOverflowCertificateEvidenceV1, SemanticU32InductionPlaceEvidenceV1,
     SemanticU32InductionStatementSiteEvidenceV1,
 };
+pub use source_mir_scalar_refinement_v1::*;
