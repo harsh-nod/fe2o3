@@ -2,23 +2,22 @@
 
 use std::env;
 use std::ffi::OsString;
-use std::fs::{File, OpenOptions};
-use std::io::{Read as _, Write};
+use std::fs::OpenOptions;
+use std::io::Write;
 #[cfg(unix)]
-use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt};
-use std::path::Path;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::PathBuf;
 use std::process::{Command, ExitStatus};
 
 use fe2o3_rustc_invocation::{
-    CARGO_METADATA_BUILD_OBSERVATION_ENV_V2, CargoMetadataBuildObservationV2, RustcInvocationV2,
+    CARGO_METADATA_BUILD_OBSERVATION_ENV_V2, CargoMetadataBuildObservationV2,
+    PortablePackageIdentityV1, RustcInvocationV2, capture_cargo_package_identity_v1,
     classify_rustc_invocation_v2, derive_cargo_metadata_build_observation_v2,
-    ordered_rustc_codegen_metadata_v1,
+    ordered_rustc_codegen_metadata_v1, portable_rustc_metadata_v1,
 };
 use reserved_fe2o3_symbols::{
     CRATE_BINDING_ID_ENV_V1, CrateBindingIdV1, derive_crate_binding_id_v1,
 };
-use sha2::{Digest as _, Sha256};
 
 const EXTRACT_CRATE_ENV_V1: &str = "FE2O3_EXTRACT_CRATE_V1";
 const EXTRACT_RANKED_MEMORY_ENV_V1: &str = "FE2O3_EXTRACT_RANKED_MEMORY_V1";
@@ -32,26 +31,6 @@ const EXTRACT_SIMULATION_BUNDLE_PATH_ENV_V3: &str = "FE2O3_EXTRACT_SIMULATION_BU
 const EXTRACT_SIMULATION_BUNDLE_PATH_ENV_V4: &str = "FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V4";
 const EXTRACT_SIMULATION_BUNDLE_PATH_ENV_V5: &str = "FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V5";
 const EXTRACT_CRATE_BINDING_PATH_ENV_V1: &str = "FE2O3_EXTRACT_CRATE_BINDING_PATH_V1";
-const PORTABLE_SELECTED_METADATA_DOMAIN_V1: &[u8] = b"FE2O3/PORTABLE-SELECTED-RUSTC-METADATA/V1\0";
-const PORTABLE_CODEGEN_IDENTITY_KEYS_V1: &[&str] = &[
-    "code-model",
-    "codegen-units",
-    "debuginfo",
-    "debug-assertions",
-    "embed-bitcode",
-    "force-frame-pointers",
-    "instrument-coverage",
-    "lto",
-    "no-redzone",
-    "opt-level",
-    "panic",
-    "relocation-model",
-    "soft-float",
-    "strip",
-    "target-cpu",
-    "target-feature",
-];
-const MAX_PORTABLE_MANIFEST_BYTES_V1: u64 = 1024 * 1024;
 
 fn main() {
     let simulation_v1 = env::var_os(EXTRACT_SIMULATION_BUNDLE_PATH_ENV_V1);
@@ -112,134 +91,17 @@ struct SelectedExtractionV1 {
     mode: ExtractionModeV1,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct PortablePackageIdentityV1 {
-    package_name: String,
-    package_version: String,
-    manifest_sha256: [u8; 32],
+fn capture_selected_primary_package_identity_v1() -> Result<PortablePackageIdentityV1, String> {
+    require_exact_primary_package_marker_v1(env::var_os("CARGO_PRIMARY_PACKAGE").as_deref())?;
+    capture_cargo_package_identity_v1().map_err(|error| error.to_string())
 }
 
-impl PortablePackageIdentityV1 {
-    fn capture_selected_primary_package_v1() -> Result<Self, String> {
-        if env::var_os("CARGO_PRIMARY_PACKAGE").as_deref() != Some(std::ffi::OsStr::new("1")) {
-            return Err(
-                "selected terminal extraction requires Cargo's exact primary-package marker"
-                    .to_owned(),
-            );
-        }
-        let package_name = required_utf8_cargo_environment_v1("CARGO_PKG_NAME")?;
-        let package_version = required_utf8_cargo_environment_v1("CARGO_PKG_VERSION")?;
-        let manifest_dir = required_utf8_cargo_environment_v1("CARGO_MANIFEST_DIR")?;
-        let manifest_path = std::path::Path::new(&manifest_dir).join("Cargo.toml");
-        let manifest_file = open_portable_manifest_v1(&manifest_path)?;
-        let manifest_sha256 = hash_open_portable_manifest_v1(manifest_file, &manifest_path)?;
-        Ok(Self {
-            package_name,
-            package_version,
-            manifest_sha256,
-        })
+fn require_exact_primary_package_marker_v1(marker: Option<&std::ffi::OsStr>) -> Result<(), String> {
+    if marker == Some(std::ffi::OsStr::new("1")) {
+        Ok(())
+    } else {
+        Err("selected terminal extraction requires Cargo's exact primary-package marker".to_owned())
     }
-}
-
-#[cfg(unix)]
-fn open_portable_manifest_v1(path: &Path) -> Result<File, String> {
-    let mut options = OpenOptions::new();
-    options
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
-    options.open(path).map_err(|error| {
-        format!(
-            "cannot securely open selected package manifest `{}`: {error}",
-            path.display()
-        )
-    })
-}
-
-#[cfg(not(unix))]
-fn open_portable_manifest_v1(path: &Path) -> Result<File, String> {
-    Err(format!(
-        "selected package manifest `{}` requires Unix O_NOFOLLOW admission",
-        path.display()
-    ))
-}
-
-fn hash_open_portable_manifest_v1(mut file: File, path: &Path) -> Result<[u8; 32], String> {
-    let initial = file.metadata().map_err(|error| {
-        format!(
-            "cannot inspect opened selected package manifest `{}`: {error}",
-            path.display()
-        )
-    })?;
-    if !initial.is_file() || initial.len() > MAX_PORTABLE_MANIFEST_BYTES_V1 {
-        return Err(format!(
-            "selected package manifest `{}` must be a regular file of at most {MAX_PORTABLE_MANIFEST_BYTES_V1} bytes",
-            path.display()
-        ));
-    }
-    let capacity = usize::try_from(initial.len())
-        .map_err(|_| "selected package manifest size does not fit this host".to_owned())?;
-    let mut manifest = Vec::with_capacity(capacity);
-    (&mut file)
-        .take(MAX_PORTABLE_MANIFEST_BYTES_V1 + 1)
-        .read_to_end(&mut manifest)
-        .map_err(|error| {
-            format!(
-                "cannot read opened selected package manifest `{}`: {error}",
-                path.display()
-            )
-        })?;
-    let final_metadata = file.metadata().map_err(|error| {
-        format!(
-            "cannot re-inspect opened selected package manifest `{}`: {error}",
-            path.display()
-        )
-    })?;
-    if manifest.len() as u64 != initial.len()
-        || portable_manifest_metadata_identity_v1(&initial)
-            != portable_manifest_metadata_identity_v1(&final_metadata)
-    {
-        return Err(
-            "selected package manifest changed while deriving portable metadata".to_owned(),
-        );
-    }
-    Ok(Sha256::digest(manifest).into())
-}
-
-#[cfg(unix)]
-fn portable_manifest_metadata_identity_v1(
-    metadata: &std::fs::Metadata,
-) -> (u64, u64, u64, i64, i64, i64, i64) {
-    (
-        metadata.dev(),
-        metadata.ino(),
-        metadata.len(),
-        metadata.mtime(),
-        metadata.mtime_nsec(),
-        metadata.ctime(),
-        metadata.ctime_nsec(),
-    )
-}
-
-#[cfg(not(unix))]
-fn portable_manifest_metadata_identity_v1(
-    metadata: &std::fs::Metadata,
-) -> (u64, u64, u64, i64, i64, i64, i64) {
-    (0, 0, metadata.len(), 0, 0, 0, 0)
-}
-
-fn required_utf8_cargo_environment_v1(name: &'static str) -> Result<String, String> {
-    let value = env::var_os(name)
-        .ok_or_else(|| format!("selected terminal extraction requires Cargo environment {name}"))?
-        .into_string()
-        .map_err(|_| {
-            format!("selected terminal extraction requires UTF-8 Cargo environment {name}")
-        })?;
-    if value.is_empty() {
-        return Err(format!(
-            "selected terminal extraction requires nonempty Cargo environment {name}"
-        ));
-    }
-    Ok(value)
 }
 
 #[derive(Debug)]
@@ -374,10 +236,10 @@ fn prepare(
     let args = enforce_selected_overflow_checks_v1(args)?;
     let package_identity = match package_identity {
         Some(identity) => identity,
-        None => PortablePackageIdentityV1::capture_selected_primary_package_v1()?,
+        None => capture_selected_primary_package_identity_v1()?,
     };
-    let portable_metadata =
-        portable_selected_metadata_v1(compile.crate_name(), &package_identity, &args)?;
+    let portable_metadata = portable_rustc_metadata_v1(compile, &package_identity)
+        .map_err(|error| error.to_string())?;
     let args = replace_selected_codegen_metadata_v1(args, &portable_metadata)?;
     let crate_binding =
         derive_crate_binding_id_v1(compile.crate_name(), [portable_metadata.as_str()]);
@@ -507,158 +369,6 @@ fn require_overflow_checks_enabled_v1(value: &str) -> Result<(), String> {
             "selected production kernel requires `-Coverflow-checks=on`; observed `{value}`"
         ))
     }
-}
-
-/// Derives the sole synthetic `-C metadata` token for one terminal-selected
-/// primary root compile. It is never used for dependency passthrough or an
-/// artifact-producing rustc session; extraction callbacks stop after analysis.
-fn portable_selected_metadata_v1(
-    crate_name: &str,
-    package_identity: &PortablePackageIdentityV1,
-    args: &[String],
-) -> Result<String, String> {
-    let mut cfgs = Vec::new();
-    let mut crate_types = Vec::new();
-    let mut identity_fields = Vec::new();
-    let mut index = 1;
-    while index < args.len() {
-        let argument = &args[index];
-        if argument == "--" {
-            break;
-        }
-        if matches!(
-            argument.as_str(),
-            "--cfg" | "--crate-type" | "--edition" | "--target"
-        ) {
-            let value = args.get(index + 1).ok_or_else(|| {
-                format!("selected rustc option `{argument}` lost its validated value")
-            })?;
-            let key = match argument.as_str() {
-                "--cfg" => "cfg",
-                "--crate-type" => "crate-type",
-                "--edition" => "edition",
-                "--target" => "target",
-                _ => unreachable!("matched portable rustc option table is closed"),
-            };
-            record_portable_rustc_option_v1(
-                key,
-                value,
-                &mut cfgs,
-                &mut crate_types,
-                &mut identity_fields,
-            );
-            index += 2;
-            continue;
-        }
-        if argument == "-C" || argument == "--codegen" {
-            let value = args.get(index + 1).ok_or_else(|| {
-                format!("selected rustc option `{argument}` lost its validated value")
-            })?;
-            record_portable_codegen_option_v1(value, &mut identity_fields);
-            index += 2;
-            continue;
-        }
-        for (prefix, key) in [
-            ("--cfg=", "cfg"),
-            ("--crate-type=", "crate-type"),
-            ("--edition=", "edition"),
-            ("--target=", "target"),
-        ] {
-            if let Some(value) = argument.strip_prefix(prefix) {
-                record_portable_rustc_option_v1(
-                    key,
-                    value,
-                    &mut cfgs,
-                    &mut crate_types,
-                    &mut identity_fields,
-                );
-            }
-        }
-        if let Some(value) = argument.strip_prefix("-C") {
-            record_portable_codegen_option_v1(value, &mut identity_fields);
-        } else if let Some(value) = argument.strip_prefix("--codegen=") {
-            record_portable_codegen_option_v1(value, &mut identity_fields);
-        }
-        index += 1;
-    }
-
-    cfgs.sort_unstable();
-    cfgs.dedup();
-    crate_types.sort_unstable();
-    crate_types.dedup();
-
-    let mut digest = Sha256::new();
-    digest.update(PORTABLE_SELECTED_METADATA_DOMAIN_V1);
-    hash_portable_metadata_field_v1(&mut digest, "package-name", &package_identity.package_name);
-    hash_portable_metadata_field_v1(
-        &mut digest,
-        "package-version",
-        &package_identity.package_version,
-    );
-    hash_portable_metadata_field_v1(
-        &mut digest,
-        "manifest-sha256",
-        &lower_hex_v1(&package_identity.manifest_sha256),
-    );
-    hash_portable_metadata_field_v1(&mut digest, "crate-name", crate_name);
-    for cfg in cfgs {
-        hash_portable_metadata_field_v1(&mut digest, "cfg", cfg);
-    }
-    for crate_type in crate_types {
-        hash_portable_metadata_field_v1(&mut digest, "crate-type", crate_type);
-    }
-    for (key, value) in identity_fields {
-        hash_portable_metadata_field_v1(&mut digest, key, value);
-    }
-    Ok(lower_hex_v1(digest.finalize().as_slice()))
-}
-
-fn record_portable_rustc_option_v1<'a>(
-    key: &'static str,
-    value: &'a str,
-    cfgs: &mut Vec<&'a str>,
-    crate_types: &mut Vec<&'a str>,
-    identity_fields: &mut Vec<(&'static str, &'a str)>,
-) {
-    match key {
-        "cfg" => cfgs.push(value),
-        "crate-type" => crate_types.push(value),
-        "edition" | "target" => identity_fields.push((key, value)),
-        _ => unreachable!("portable rustc option table is closed"),
-    }
-}
-
-fn record_portable_codegen_option_v1<'a>(
-    value: &'a str,
-    identity_fields: &mut Vec<(&'static str, &'a str)>,
-) {
-    let Some((key, option_value)) = value.split_once('=') else {
-        return;
-    };
-    if let Some(canonical_key) = PORTABLE_CODEGEN_IDENTITY_KEYS_V1
-        .iter()
-        .copied()
-        .find(|candidate| *candidate == key)
-    {
-        identity_fields.push((canonical_key, option_value));
-    }
-}
-
-fn hash_portable_metadata_field_v1(digest: &mut Sha256, key: &str, value: &str) {
-    digest.update((key.len() as u64).to_le_bytes());
-    digest.update(key.as_bytes());
-    digest.update((value.len() as u64).to_le_bytes());
-    digest.update(value.as_bytes());
-}
-
-fn lower_hex_v1(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut encoded = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        encoded.push(HEX[usize::from(byte >> 4)] as char);
-        encoded.push(HEX[usize::from(byte & 0x0f)] as char);
-    }
-    encoded
 }
 
 fn replace_selected_codegen_metadata_v1(
@@ -922,11 +632,7 @@ mod tests {
     }
 
     fn package_identity(version: &str, manifest_byte: u8) -> PortablePackageIdentityV1 {
-        PortablePackageIdentityV1 {
-            package_name: "package".to_owned(),
-            package_version: version.to_owned(),
-            manifest_sha256: [manifest_byte; 32],
-        }
+        PortablePackageIdentityV1::new("package", version, [manifest_byte; 32]).unwrap()
     }
 
     fn compile_argv(crate_name: &str, metadata: &[&str]) -> Vec<OsString> {
@@ -1113,63 +819,20 @@ mod tests {
 
     #[test]
     fn portable_binding_separates_package_version_and_manifest_identity() {
-        let args = compile_argv("unit", &["cargo-salt"])
-            .into_iter()
-            .map(|argument| argument.into_string().unwrap())
-            .collect::<Vec<_>>();
-        let baseline =
-            portable_selected_metadata_v1("unit", &package_identity("1.0.0", 1), &args).unwrap();
+        let args = compile_argv("unit", &["cargo-salt"]);
+        let RustcInvocationV2::Compile(compile) = classify_rustc_invocation_v2(&args[1..]).unwrap()
+        else {
+            panic!("fixture must classify as a compile invocation");
+        };
+        let baseline = portable_rustc_metadata_v1(compile, &package_identity("1.0.0", 1)).unwrap();
         assert_ne!(
             baseline,
-            portable_selected_metadata_v1("unit", &package_identity("1.0.1", 1), &args).unwrap()
+            portable_rustc_metadata_v1(compile, &package_identity("1.0.1", 1)).unwrap()
         );
         assert_ne!(
             baseline,
-            portable_selected_metadata_v1("unit", &package_identity("1.0.0", 2), &args).unwrap()
+            portable_rustc_metadata_v1(compile, &package_identity("1.0.0", 2)).unwrap()
         );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn manifest_capture_rejects_symlinks_and_hashes_the_retained_descriptor() {
-        use std::os::unix::fs::symlink;
-
-        let root = std::env::temp_dir().join(format!(
-            "fe2o3-portable-manifest-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir(&root).unwrap();
-        let manifest = root.join("Cargo.toml");
-        let replacement = root.join("replacement.toml");
-        let link = root.join("linked.toml");
-        let original_bytes = b"[package]\nname='original'\n";
-        let replacement_bytes = b"[package]\nname='replaced'\n";
-        assert_eq!(original_bytes.len(), replacement_bytes.len());
-        std::fs::write(&manifest, original_bytes).unwrap();
-        symlink(&manifest, &link).unwrap();
-        assert!(
-            open_portable_manifest_v1(&link)
-                .unwrap_err()
-                .contains("cannot securely open")
-        );
-
-        let retained = open_portable_manifest_v1(&manifest).unwrap();
-        std::fs::write(&replacement, replacement_bytes).unwrap();
-        std::fs::rename(&replacement, &manifest).unwrap();
-        assert_eq!(
-            hash_open_portable_manifest_v1(retained, &manifest).unwrap(),
-            Sha256::digest(original_bytes).as_slice(),
-            "an atomic same-length path replacement must not replace the retained file",
-        );
-        assert_ne!(
-            Sha256::digest(original_bytes).as_slice(),
-            Sha256::digest(replacement_bytes).as_slice(),
-        );
-        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -1263,12 +926,38 @@ mod tests {
                 .count(),
             1
         );
+        let original = original.into_iter().map(OsString::from).collect::<Vec<_>>();
+        let normalized = normalized
+            .into_iter()
+            .map(OsString::from)
+            .collect::<Vec<_>>();
+        let RustcInvocationV2::Compile(original) = classify_rustc_invocation_v2(&original).unwrap()
+        else {
+            panic!("original fixture must classify as a compile invocation");
+        };
+        let RustcInvocationV2::Compile(normalized) =
+            classify_rustc_invocation_v2(&normalized).unwrap()
+        else {
+            panic!("normalized fixture must classify as a compile invocation");
+        };
+        let identity = package_identity("1.0.0", 1);
         assert_eq!(
-            portable_selected_metadata_v1("unit", &package_identity("1.0.0", 1), &original)
-                .unwrap(),
-            portable_selected_metadata_v1("unit", &package_identity("1.0.0", 1), &normalized)
-                .unwrap(),
+            portable_rustc_metadata_v1(original, &identity).unwrap(),
+            portable_rustc_metadata_v1(normalized, &identity).unwrap(),
         );
+    }
+
+    #[test]
+    fn selected_primary_package_marker_is_exact() {
+        assert!(require_exact_primary_package_marker_v1(Some(std::ffi::OsStr::new("1"))).is_ok());
+        for marker in [
+            None,
+            Some(std::ffi::OsStr::new("")),
+            Some(std::ffi::OsStr::new("true")),
+            Some(std::ffi::OsStr::new("01")),
+        ] {
+            assert!(require_exact_primary_package_marker_v1(marker).is_err());
+        }
     }
 
     #[test]
