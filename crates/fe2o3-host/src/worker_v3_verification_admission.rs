@@ -2054,6 +2054,31 @@ impl<R: CompilerGeneratedKernelExpectationRosterV1> AuthenticatedWorkerV3RosterV
         &self.verification
     }
 
+    /// Returns the exact compiler module content identity retained by the protected finalizer.
+    pub const fn compiler_module_identity(&self) -> fe2o3_hsaco_finalize::ContentIdentityV1 {
+        self.verification
+            .finalizer_derivation()
+            .compiler_module_identity()
+    }
+
+    /// Returns the exact nested V2 compiler handoff identity retained by roster admission.
+    pub const fn compiler_handoff_identity(
+        &self,
+    ) -> fe2o3_compiler_ffi::CompilerModuleHandoffIdentityV2 {
+        self.admission.outer_handoff().module_handoff().identity()
+    }
+
+    /// Returns the exact compiler symbol-manifest identity retained by roster admission.
+    pub const fn compiler_symbol_manifest_identity(
+        &self,
+    ) -> fe2o3_compiler_ffi::CompilerModuleSymbolManifestIdentityV1 {
+        self.admission
+            .outer_handoff()
+            .module_handoff()
+            .symbol_manifest()
+            .identity()
+    }
+
     pub fn entry_count(&self) -> usize {
         self.verification.entries.len()
     }
@@ -2099,6 +2124,14 @@ impl<R: CompilerGeneratedKernelExpectationRosterV1> AuthenticatedWorkerV3RosterV
     pub fn revalidate_currentness(&self) -> Result<(), RecoveredWorkerV3AdmissionErrorV1> {
         self.admission
             .revalidate_retained_currentness_token(&self.current)
+    }
+
+    pub(crate) fn exact_current_hsaco_bytes(&self) -> &[u8] {
+        self.current.exact_artifact_bytes()
+    }
+
+    pub(crate) const fn admitted_roster(&self) -> &RecoveredWorkerV3PinnedRosterV1<R> {
+        &self.admission
     }
 
     pub const fn authenticates_verification_authority(&self) -> bool {

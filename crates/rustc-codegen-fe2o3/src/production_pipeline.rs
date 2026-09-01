@@ -2467,8 +2467,35 @@ mod tests {
             "let invocation_",
             "descriptor = invocation.descriptor().clone()"
         )));
-        assert!(lineage.contains("invocation_custody: &FinishedProtectedRustcInvocationV3"));
-        assert!(!lineage.contains("invocation: RustcInvocationDescriptorV3"));
+        let protected_finish_start = lineage
+            .find(
+                "    pub(crate) fn finish(\n        self,\n        invocation_custody: &FinishedProtectedRustcInvocationV3,",
+            )
+            .expect("protected semantic-lineage finish requires live invocation custody");
+        let inert_extraction_start = lineage[protected_finish_start..]
+            .find("    pub(crate) fn finish_for_inert_extraction(\n")
+            .map(|offset| protected_finish_start + offset)
+            .expect("explicit inert extraction boundary remains present");
+        let inert_helper_start = lineage[inert_extraction_start..]
+            .find("    fn finish_with_inert_invocation(\n")
+            .map(|offset| inert_extraction_start + offset)
+            .expect("private authority-free lineage helper remains present");
+        let protected_finish = &lineage[protected_finish_start..inert_extraction_start];
+        assert!(protected_finish.contains(".revalidate_for_publication()"));
+        assert!(protected_finish.contains("invocation_custody.descriptor().clone()"));
+        assert!(!protected_finish.contains("invocation: RustcInvocationDescriptorV3"));
+
+        let inert_extraction = &lineage[inert_extraction_start..inert_helper_start];
+        assert!(inert_extraction.contains("invocation: RustcInvocationDescriptorV3"));
+        assert!(inert_extraction.contains("InertSemanticCompilerModuleHandoffV3"));
+        assert!(inert_extraction.contains("self.finish_with_inert_invocation("));
+        assert_eq!(
+            lineage
+                .matches("invocation: RustcInvocationDescriptorV3")
+                .count(),
+            2,
+            "raw invocation descriptors belong only to the explicit inert boundary and its private helper",
+        );
 
         let lineage_finish = pipeline
             .find(".semantic_lineage\n            .finish(\n                &invocation,")
