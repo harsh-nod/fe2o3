@@ -1996,6 +1996,55 @@ impl WorkerV3RosterVerificationDecisionV1 {
     }
 }
 
+/// Protected roster authentication rejection retaining the exact recovered owner.
+///
+/// The recovered roster remains inert and grants no verification, load, or launch authority. Any
+/// currentness token or rejected verifier evidence created by the failed attempt is discarded
+/// before this value is returned.
+#[must_use = "a rejected recovered roster owner must remain classified"]
+pub struct WorkerV3RosterVerificationAuthenticationFailureV1<R, E> {
+    error: Box<WorkerV3RosterVerificationAuthenticationErrorV1<E>>,
+    admission: Box<RecoveredWorkerV3PinnedRosterV1<R>>,
+}
+
+impl<R, E> WorkerV3RosterVerificationAuthenticationFailureV1<R, E> {
+    fn new(
+        error: WorkerV3RosterVerificationAuthenticationErrorV1<E>,
+        admission: RecoveredWorkerV3PinnedRosterV1<R>,
+    ) -> Self {
+        Self {
+            error: Box::new(error),
+            admission: Box::new(admission),
+        }
+    }
+
+    /// Returns the exact authentication error without discarding recovered custody.
+    pub const fn error(&self) -> &WorkerV3RosterVerificationAuthenticationErrorV1<E> {
+        &self.error
+    }
+
+    /// Returns the authentication error and exact recovered roster owner.
+    pub fn into_parts(
+        self,
+    ) -> (
+        WorkerV3RosterVerificationAuthenticationErrorV1<E>,
+        RecoveredWorkerV3PinnedRosterV1<R>,
+    ) {
+        (*self.error, *self.admission)
+    }
+}
+
+impl<R, E: fmt::Debug> fmt::Debug
+    for WorkerV3RosterVerificationAuthenticationFailureV1<R, E>
+{
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("WorkerV3RosterVerificationAuthenticationFailureV1")
+            .field("error", &self.error)
+            .finish_non_exhaustive()
+    }
+}
+
 /// Move-only authenticated custody for one complete recovered roster.
 ///
 /// The owner retains the sole recovered artifact, one current-publication token, one aggregate
@@ -2020,39 +2069,42 @@ impl<R> fmt::Debug for AuthenticatedWorkerV3RosterV1<R> {
 }
 
 impl<R: CompilerGeneratedKernelExpectationRosterV1> AuthenticatedWorkerV3RosterV1<R> {
+    /// Authenticates one complete recovered roster while retaining it on every rejection.
+    ///
+    /// # Errors
+    ///
+    /// Returns the exact inert recovered roster with the typed authentication error when current
+    /// publication acquisition, request preparation, protected verification, post-verification
+    /// currentness, or decision validation rejects.
     pub fn authenticate<B>(
         admission: RecoveredWorkerV3PinnedRosterV1<R>,
         verifier: &mut WorkerV3ProtectedRosterVerifierAdapterV1<B>,
-    ) -> Result<Self, WorkerV3RosterVerificationAuthenticationErrorV1<B::Error>>
+    ) -> Result<Self, WorkerV3RosterVerificationAuthenticationFailureV1<R, B::Error>>
     where
         B: WorkerV3ProtectedRosterVerifierBackendV1<R>,
     {
-        let current = admission
-            .acquire_retained_currentness_token()
-            .map_err(WorkerV3RosterVerificationAuthenticationErrorV1::CurrentPublication)?;
-        let request =
-            prepare_roster_request::<R>(&admission, &current).map_err(|error| {
-                match error {
-            WorkerV3RosterVerificationRequestPreparationErrorV1::Marker { ordinal, field } => {
-                WorkerV3RosterVerificationAuthenticationErrorV1::Marker { ordinal, field }
+        let current = match admission.acquire_retained_currentness_token() {
+            Ok(current) => current,
+            Err(error) => {
+                return Err(WorkerV3RosterVerificationAuthenticationFailureV1::new(
+                    WorkerV3RosterVerificationAuthenticationErrorV1::CurrentPublication(error),
+                    admission,
+                ));
             }
-            WorkerV3RosterVerificationRequestPreparationErrorV1::UnsupportedGeneratedProfile {
-                ordinal,
-            } => WorkerV3RosterVerificationAuthenticationErrorV1::UnsupportedGeneratedProfile {
-                ordinal,
-            },
-        }
-            })?;
-        // SAFETY: callers cannot bypass the crate-owned adapter. The unsafe backend owns all
-        // protected aggregate obligations and the result is fully revalidated below.
-        let verification = unsafe { verifier.verify(&request) };
-        admission
-            .revalidate_retained_currentness_token(&current)
-            .map_err(WorkerV3RosterVerificationAuthenticationErrorV1::CurrentPublication)?;
-        let verification =
-            verification.map_err(WorkerV3RosterVerificationAuthenticationErrorV1::Verifier)?;
-        validate_roster_decision::<R>(&request, &verification)
-            .map_err(WorkerV3RosterVerificationAuthenticationErrorV1::Decision)?;
+        };
+        let verification = match authenticate_roster_attempt::<R, B>(
+            &admission,
+            &current,
+            verifier,
+        ) {
+            Ok(verification) => verification,
+            Err(error) => {
+                drop(current);
+                return Err(WorkerV3RosterVerificationAuthenticationFailureV1::new(
+                    error, admission,
+                ));
+            }
+        };
         Ok(Self {
             admission,
             current,
@@ -2856,6 +2908,41 @@ fn validate_roster_decision_target_lineage<R: CompilerGeneratedKernelExpectation
         }
     }
     Ok(())
+}
+
+fn authenticate_roster_attempt<R, B>(
+    admission: &RecoveredWorkerV3PinnedRosterV1<R>,
+    current: &DurableCurrentLinkPublicationTokenV1,
+    verifier: &mut WorkerV3ProtectedRosterVerifierAdapterV1<B>,
+) -> Result<
+    WorkerV3RosterVerificationDecisionV1,
+    WorkerV3RosterVerificationAuthenticationErrorV1<B::Error>,
+>
+where
+    R: CompilerGeneratedKernelExpectationRosterV1,
+    B: WorkerV3ProtectedRosterVerifierBackendV1<R>,
+{
+    let request = prepare_roster_request::<R>(admission, current).map_err(|error| match error {
+        WorkerV3RosterVerificationRequestPreparationErrorV1::Marker { ordinal, field } => {
+            WorkerV3RosterVerificationAuthenticationErrorV1::Marker { ordinal, field }
+        }
+        WorkerV3RosterVerificationRequestPreparationErrorV1::UnsupportedGeneratedProfile {
+            ordinal,
+        } => WorkerV3RosterVerificationAuthenticationErrorV1::UnsupportedGeneratedProfile {
+            ordinal,
+        },
+    })?;
+    // SAFETY: callers cannot bypass the crate-owned adapter. The unsafe backend owns all protected
+    // aggregate obligations and the result is fully revalidated below.
+    let verification = unsafe { verifier.verify(&request) };
+    admission
+        .revalidate_retained_currentness_token(current)
+        .map_err(WorkerV3RosterVerificationAuthenticationErrorV1::CurrentPublication)?;
+    let verification =
+        verification.map_err(WorkerV3RosterVerificationAuthenticationErrorV1::Verifier)?;
+    validate_roster_decision::<R>(&request, &verification)
+        .map_err(WorkerV3RosterVerificationAuthenticationErrorV1::Decision)?;
+    Ok(verification)
 }
 
 enum WorkerV3RosterVerificationRequestPreparationErrorV1 {

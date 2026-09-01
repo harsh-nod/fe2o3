@@ -896,6 +896,29 @@ where
     }
 }
 
+#[derive(Default)]
+struct RejectingTestProtectedRosterVerifier {
+    calls: usize,
+}
+
+// SAFETY: this test-only backend never returns protected evidence. Its rejection exercises owner
+// recovery after the complete protected call and host-side currentness revalidation.
+unsafe impl<R> WorkerV3ProtectedRosterVerifierBackendV1<R>
+    for RejectingTestProtectedRosterVerifier
+where
+    R: CompilerGeneratedKernelExpectationRosterV1,
+{
+    type Error = &'static str;
+
+    unsafe fn verify_protected_roster(
+        &mut self,
+        _request: &WorkerV3RosterVerificationRequestV1<'_, R>,
+    ) -> Result<WorkerV3ProtectedRosterVerificationEvidenceV1, Self::Error> {
+        self.calls += 1;
+        Err("synthetic protected roster verifier rejection")
+    }
+}
+
 // SAFETY: this test-only protected backend probes the cooperative publication lock before
 // delegating to the complete protected-evidence fixture above.
 unsafe impl<K> WorkerV3ProtectedVerifierBackendV1<K> for CurrentnessProbingWorkerV3Verifier
@@ -2233,6 +2256,57 @@ fn protected_roster_verifier_authenticates_one_artifact_and_borrowed_typed_entri
 }
 
 #[test]
+fn protected_roster_verifier_rejection_retains_exact_owner_for_retry() {
+    let (_directory, recovered) = recovered_synthetic_two_kernel_host_fixture();
+    let admitted =
+        admit_recovered_worker_v3_roster_v1::<WorkerV3SyntheticTwoTransformRoster>(recovered)
+            .unwrap();
+    let admitted_lineage = admitted.lineage_identity();
+    let admitted_publication = admitted.published();
+    let admitted_entry_count = admitted.entrypoints().len();
+    let mut verifier = WorkerV3ProtectedRosterVerifierAdapterV1::new(
+        RejectingTestProtectedRosterVerifier::default(),
+    );
+
+    let failure =
+        AuthenticatedWorkerV3RosterV1::<WorkerV3SyntheticTwoTransformRoster>::authenticate(
+            admitted,
+            &mut verifier,
+        )
+        .unwrap_err();
+    let (error, admitted) = failure.into_parts();
+    assert!(matches!(
+        error,
+        WorkerV3RosterVerificationAuthenticationErrorV1::Verifier(
+            "synthetic protected roster verifier rejection"
+        )
+    ));
+    assert_eq!(admitted.lineage_identity(), admitted_lineage);
+    assert_eq!(admitted.published(), admitted_publication);
+    assert_eq!(admitted.entrypoints().len(), admitted_entry_count);
+    admitted.revalidate_currentness().unwrap();
+    assert_eq!(verifier.into_inner().calls, 1);
+
+    let mut retry_verifier =
+        WorkerV3ProtectedRosterVerifierAdapterV1::new(ReviewedTestProtectedRosterVerifier {
+            fault: ReviewedTestProtectedRosterVerifierFault::None,
+            calls: 0,
+            foreign_finalizer: None,
+        });
+    let authenticated =
+        AuthenticatedWorkerV3RosterV1::<WorkerV3SyntheticTwoTransformRoster>::authenticate(
+            admitted,
+            &mut retry_verifier,
+        )
+        .unwrap();
+    assert_eq!(
+        authenticated.verification().lineage_identity(),
+        admitted_lineage
+    );
+    assert_eq!(retry_verifier.into_inner().calls, 1);
+}
+
+#[test]
 fn protected_roster_verifier_rejects_same_hsaco_from_foreign_finalizer_derivation() {
     let (_primary_directory, primary) = recovered_synthetic_two_kernel_host_fixture();
     let (_foreign_directory, foreign) = recover_published_worker_v3_fixture(
@@ -2264,23 +2338,44 @@ fn protected_roster_verifier_rejects_same_hsaco_from_foreign_finalizer_derivatio
     let primary_admission =
         admit_recovered_worker_v3_roster_v1::<WorkerV3SyntheticTwoTransformRoster>(primary)
             .unwrap();
+    let primary_lineage = primary_admission.lineage_identity();
+    let primary_publication = primary_admission.published();
+    let primary_entry_count = primary_admission.entrypoints().len();
     let mut verifier =
         WorkerV3ProtectedRosterVerifierAdapterV1::new(ReviewedTestProtectedRosterVerifier {
             fault: ReviewedTestProtectedRosterVerifierFault::None,
             calls: 0,
             foreign_finalizer: Some(foreign_finalizer),
         });
-    let error = AuthenticatedWorkerV3RosterV1::<WorkerV3SyntheticTwoTransformRoster>::authenticate(
-        primary_admission,
-        &mut verifier,
-    )
-    .unwrap_err();
+    let failure =
+        AuthenticatedWorkerV3RosterV1::<WorkerV3SyntheticTwoTransformRoster>::authenticate(
+            primary_admission,
+            &mut verifier,
+        )
+        .unwrap_err();
+    let (error, primary_admission) = failure.into_parts();
     assert!(matches!(
         error,
         WorkerV3RosterVerificationAuthenticationErrorV1::Decision(
             WorkerV3RosterVerificationDecisionErrorV1::IdentityMismatch("finalizer derivation")
         )
     ));
+    assert_eq!(primary_admission.lineage_identity(), primary_lineage);
+    assert_eq!(primary_admission.published(), primary_publication);
+    assert_eq!(primary_admission.entrypoints().len(), primary_entry_count);
+    primary_admission.revalidate_currentness().unwrap();
+
+    let authenticated =
+        AuthenticatedWorkerV3RosterV1::<WorkerV3SyntheticTwoTransformRoster>::authenticate(
+            primary_admission,
+            &mut verifier,
+        )
+        .unwrap();
+    assert_eq!(
+        authenticated.verification().lineage_identity(),
+        primary_lineage
+    );
+    assert_eq!(verifier.into_inner().calls, 2);
 }
 
 #[test]
@@ -2372,17 +2467,19 @@ fn protected_roster_verifier_rejects_common_and_per_entry_substitution() {
                 calls: 0,
                 foreign_finalizer: None,
             });
-        let error =
+        let failure =
             AuthenticatedWorkerV3RosterV1::<WorkerV3SyntheticTwoTransformRoster>::authenticate(
                 admitted,
                 &mut verifier,
             )
             .unwrap_err();
+        let (error, admitted) = failure.into_parts();
         assert!(matches!(
             error,
             WorkerV3RosterVerificationAuthenticationErrorV1::Decision(actual)
                 if actual == expected
         ));
+        admitted.revalidate_currentness().unwrap();
         assert_eq!(verifier.into_inner().calls, 1);
     }
 }
