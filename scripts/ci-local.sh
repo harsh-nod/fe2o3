@@ -943,6 +943,9 @@ run_verus() {
   run_step target-binding-refinement-verus \
     env VERUS="${compiler_verus}" \
     "${REPO_ROOT}/scripts/test-target-binding-refinement-verus.sh"
+  run_step mir-kir-scalar-refinement-verus \
+    env VERUS="${compiler_verus}" \
+    "${REPO_ROOT}/scripts/test-mir-kir-scalar-refinement-verus-v1.sh"
 }
 
 run_authority_launcher_tests() {
