@@ -471,6 +471,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe2o3-middle-end-contracts"
+version = "0.1.0"
+dependencies = [
+ "sha2 0.11.0",
+]
+
+[[package]]
 name = "fe2o3-mir-kir-contracts"
 version = "0.1.0"
 dependencies = [
@@ -545,9 +552,9 @@ dependencies = [
  "fe2o3-contracts",
  "fe2o3-functional-proof",
  "fe2o3-kernel-ir",
+ "fe2o3-middle-end-contracts",
  "fe2o3-mir-kir-contracts",
  "fe2o3-mir-model",
- "fe2o3-pliron",
  "fe2o3-proof-contracts",
  "fe2o3-rustc-front",
  "fe2o3-rustc-invocation",
@@ -567,6 +574,7 @@ dependencies = [
  "fe2o3-functional-proof",
  "fe2o3-kernel-ir",
  "fe2o3-lower-mir-kernel",
+ "fe2o3-middle-end-contracts",
  "fe2o3-mir-model",
  "fe2o3-pliron",
  "fe2o3-proof-contracts",

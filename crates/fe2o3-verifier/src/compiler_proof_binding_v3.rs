@@ -24,15 +24,15 @@ use fe2o3_kernel_ir::{
     VerifiedCanonicalKernelIrErrorV5, VerifiedCanonicalKernelIrErrorV8,
     VerifiedCanonicalKernelIrV5, VerifiedCanonicalKernelIrV8,
 };
+use fe2o3_middle_end_contracts::{
+    InertProductionMiddleEndEvidenceV5, ProductionMiddleEndEvidenceCodecErrorV5,
+};
 use fe2o3_mir_kir_contracts::{
     InertCanonicalFormalMemoryAdmissionEvidenceV3, InertCanonicalFormalMemoryAdmissionEvidenceV4,
     InertCanonicalMirToKirCorrespondenceEvidenceV3, InertCanonicalMirToKirCorrespondenceEvidenceV4,
     MirToKirSyntheticRuleEvidenceV4, ProductionCanonicalKernelIrVersionV1,
     ProductionCorrespondenceEvidenceErrorV4, ProductionFormalMemoryEvidenceErrorV4,
     ProductionLineageEvidenceErrorV3,
-};
-use fe2o3_middle_end_contracts::{
-    InertProductionMiddleEndEvidenceV5, ProductionMiddleEndEvidenceCodecErrorV5,
 };
 use fe2o3_mir_model::semantic_mir_v1::{
     AdmittedInertSemanticMirV1, SemanticCheckedBinaryOpV1, SemanticFunctionDeclV1,

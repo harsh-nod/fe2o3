@@ -948,6 +948,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe2o3-compiler-proof-generation"
+version = "0.1.0"
+dependencies = [
+ "ed25519-dalek",
+ "fe2o3-functional-proof",
+ "fe2o3-pliron",
+ "fe2o3-proof-contracts",
+ "fe2o3-verifier",
+ "rand_core 0.6.4",
+ "sha2 0.11.0",
+]
+
+[[package]]
 name = "fe2o3-completion"
 version = "0.1.0"
 dependencies = [
@@ -1420,6 +1433,7 @@ dependencies = [
  "dialect-kernel",
  "fe2o3-artifacts",
  "fe2o3-compiler-api",
+ "fe2o3-compiler-proof-generation",
  "fe2o3-functional-proof",
  "fe2o3-kernel-analysis",
  "fe2o3-kernel-descriptor",
@@ -1429,6 +1443,13 @@ dependencies = [
  "fe2o3-pliron",
  "fe2o3-proof-contracts",
  "fe2o3-verifier",
+ "sha2 0.11.0",
+]
+
+[[package]]
+name = "fe2o3-middle-end-contracts"
+version = "0.1.0"
+dependencies = [
  "sha2 0.11.0",
 ]
 
@@ -1903,9 +1924,9 @@ dependencies = [
  "fe2o3-contracts",
  "fe2o3-functional-proof",
  "fe2o3-kernel-ir",
+ "fe2o3-middle-end-contracts",
  "fe2o3-mir-kir-contracts",
  "fe2o3-mir-model",
- "fe2o3-pliron",
  "fe2o3-proof-contracts",
  "fe2o3-rustc-front",
  "fe2o3-rustc-invocation",
@@ -2934,6 +2955,7 @@ dependencies = [
  "fe2o3-compiler-execution-protocol",
  "fe2o3-compiler-ffi",
  "fe2o3-compiler-lineage",
+ "fe2o3-compiler-proof-generation",
  "fe2o3-core",
  "fe2o3-functional-proof",
  "fe2o3-host",

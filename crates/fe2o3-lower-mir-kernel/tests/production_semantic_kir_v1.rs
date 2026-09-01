@@ -10,11 +10,11 @@ use fe2o3_kernel_ir::{
     gfx942_xnack_minus_target_capability, gfx950_xnack_minus_target_capability, verify_module,
 };
 use fe2o3_lower_mir_kernel::{
-    InertCanonicalFormalMemoryAdmissionEvidenceV3, PRODUCTION_FORMAL_MEMORY_WITNESS_EXTENT_V1,
-    ProductionFormalMemoryOwnerV1, ProductionRankedAccessSourceV1,
-    ProductionRankedSemanticProjectionReceiptV1, ProductionSemanticKirErrorV1,
-    ProductionSemanticKirLimitsV1, ProductionSemanticKirOwnerV1, ProductionSemanticKirResourceV1,
-    SemanticKirSyntheticOperationRuleV1, produce_formal_memory_admission_evidence_v3,
+    PRODUCTION_FORMAL_MEMORY_WITNESS_EXTENT_V1, ProductionFormalMemoryOwnerV1,
+    ProductionRankedAccessSourceV1, ProductionRankedSemanticProjectionReceiptV1,
+    ProductionSemanticKirErrorV1, ProductionSemanticKirLimitsV1, ProductionSemanticKirOwnerV1,
+    ProductionSemanticKirResourceV1, SemanticKirSyntheticOperationRuleV1,
+    produce_formal_memory_admission_evidence_v3,
     validate_borrowed_ranked_semantic_projection_candidate_v1,
 };
 use fe2o3_mir_model::semantic_mir_v1::*;
