@@ -4,8 +4,9 @@ use fe2o3_semantic_trace::*;
 use std::io::Write;
 use std::process::{Command, Stdio};
 
-const CSV: &[u8] =
-    include_bytes!("../../fe2o3-semantic-import/tests/fixtures/rocprofv3-1.1-kernel-dispatch.csv");
+const CSV: &[u8] = include_bytes!(
+    "../../fe2o3-semantic-import/tests/fixtures/rocprofv3-current-kernel-dispatch.csv"
+);
 const ATT: &[u8] =
     include_bytes!("../../fe2o3-semantic-import/tests/fixtures/rocprofv3-1.1-att-manifest.json");
 const COUNTERS: &[u8] = include_bytes!(
@@ -227,9 +228,12 @@ fn comparison_requires_exact_environment_and_emits_numeric_duration_delta() {
         Err(ProfilerQueryErrorV4::InvalidComparison)
     ));
 
-    let launch_mismatch_source = String::from_utf8(CSV.to_vec())
-        .unwrap()
-        .replace(",32,2,1,128,2,1,", ",64,1,1,128,1,1,");
+    let launch_mismatch_source = String::from_utf8(CSV.to_vec()).unwrap().replacen(
+        ",32,32,2,1,128,2,1\n",
+        ",32,64,1,1,128,1,1\n",
+        1,
+    );
+    assert_ne!(launch_mismatch_source.as_bytes(), CSV);
     let launch_mismatch = encode_profiler_bundle_v4(
         &import_rocprofv3_csv_profiler_bundle_v4(
             launch_mismatch_source.as_bytes(),

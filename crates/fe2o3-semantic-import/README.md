@@ -24,6 +24,35 @@ source-bound observations.
   domain-separated redacted device identities from recorded agent handles, and
   source-and-ordinal-derived dispatch identities. Raw process, device, queue,
   kernel, and dispatch handles never enter the capture.
+- Semantic Profiler Bundle V4 adds a closed dispatch-import surface. Current
+  rocprof JSON uses bounded process, agent, and dispatch sequences. Each opaque
+  dispatch agent handle is resolved only through the `agents[]` catalog in the
+  same process and projected to its absolute KFD `node_id`; handles are never
+  joined globally across processes, and unused visible agents do not become
+  device requirements. Raw source and canonical node projection retain
+  separate content identities. Fields used for dialect selection, device
+  binding, and dispatch projection are decoded as exact typed values. Required
+  but unused evolving record collections are bounded and shape-checked as
+  arrays; their nested values are not represented as semantic evidence.
+  The canonical library import computes this projection before interpreting
+  stable-device bindings. Custody-aware callers can retain
+  `RocprofJsonDispatchProjectionV4`, compare every agent field with their
+  independently observed KFD owner, and use the projected import; that import
+  rederives the projection from the raw bytes and rejects substitution. Both
+  entry points key stable devices by absolute KFD node. There is no Bundle V4
+  JSON API that binds a stable device directly to an opaque rocprof agent
+  handle.
+- Bundle V4 CSV import accepts only the exact reviewed current 22-column
+  kernel-dispatch header with `Stream_Id` and `Agent N` absolute agent syntax.
+  Header additions, omissions, reordering, `Process_Id` dialects, hybrid
+  headers, bare agent numbers, and noncanonical numeric spellings are rejected.
+  LDS, scratch, register-count, workgroup, and grid columns retain the
+  serializer's exact unsigned 32-bit bounds, as does the absolute agent node;
+  queue, stream, thread, dispatch, kernel, and correlation IDs plus timestamps
+  retain unsigned 64-bit bounds.
+  The checked-in JSON and CSV files are deterministic synthetic vocabulary
+  fixtures, not collector runs, hardware execution, or authenticated
+  observations; their manifest pins exact bytes and reviewed serializer files.
 - `rocprofv3-counter-capture` accepts the rocprofiler-sdk 1.1 dispatch-counter
   JSON shape. This contract was checked against ROCm 7.2.4 SDK revision
   `97f5574fe2fdc7bef44fb01545347912ee9f1779`, its installed
@@ -57,6 +86,12 @@ The CLI publishes only the canonical Trace V1 byte stream. Opaque dispatch and c
 hashes of that identity and the selected record ordinal. KIR, artifact, and
 source identities remain untrusted content claims; importing does not resolve
 or authenticate them.
+
+Bundle V4 dispatch import likewise leaves artifact, source-map,
+executed-code-object, kernel-symbol, characteristic, source/ISA, decoded ATT,
+runtime, and performance authority unavailable. Canonical hashes make the
+relations recomputable and detect substitution; they are not signatures or
+external provenance authentication.
 
 The report explicitly lists unavailable dispatch timing, invocation,
 workgroup, wave, lane, KIR-site, memory, and register/value facts as applicable.
@@ -178,10 +213,14 @@ and all integer conversions are independently checked.
 The stdin-only `fe2o3-profiler-import` additionally emits Bundle V4 from
 rocprofv3 kernel-dispatch JSON, kernel-dispatch CSV, or an ATT Compute Viewer
 manifest. Content claims use `SCHEME:FORMAT:SHA256:BYTES`, where `SCHEME` is
-`raw` or `domain`. Repeated `--device-binding`
-`ABSOLUTE_AGENT_ID=SCHEME:FORMAT:SHA256:BYTES` claims join rocprof's absolute
-agent index to a stable direct-KFD device identity; bindings are matched by ID,
-not position, and unused visible-device bindings are omitted from the bundle.
+`raw` or `domain`. For JSON, repeated `--device-binding`
+`ABSOLUTE_KFD_NODE_ID=SCHEME:FORMAT:SHA256:BYTES` claims join the exact
+process-local `agents[]` projection's absolute KFD node to a stable direct-KFD
+device identity; an opaque `agent_id.handle` is never a valid key. CSV `Agent
+N` is already an absolute node and uses the same key. Bindings are matched by
+node ID, not position, and unused visible-device bindings are omitted from the
+bundle. The CLI validates the catalog projection but does not independently
+observe KFD, so these stable-device identities remain caller declarations.
 ATT additionally requires an explicit `--att-agent-id` because the manifest
 does not authenticate its collection agent. ATT artifact claims use
 `REFERENCE=SCHEME:FORMAT:SHA256:BYTES`. The CLI accepts no paths and never
@@ -215,13 +254,13 @@ fe2o3-trace-import rocprofv3-att-manifest \
   --grid 1024,1,1 --grid-workgroups 4,1,1 --workgroup 256,1,1 \
   < ui_output_agent_N_dispatch_N/filenames.json > att.fe2o3tr1
 
-fe2o3-profiler-import dispatch-csv-v4 \
+fe2o3-profiler-import dispatch-json-v4 \
   --environment domain:1:ENV_SHA256:ENV_BYTES \
   --tool domain:1:TOOL_SHA256:TOOL_BYTES \
   --config domain:1:CONFIG_SHA256:CONFIG_BYTES \
-  --device-binding ABSOLUTE_AGENT_ID=domain:1:DEVICE_SHA256:DEVICE_BYTES \
+  --device-binding ABSOLUTE_KFD_NODE_ID=domain:1:DEVICE_SHA256:DEVICE_BYTES \
   --kir-sha256 KIR_SHA256 --kir-len KIR_BYTES --wave-width 64 \
-  < kernel_trace.csv > run.fe2o3prof4
+  < results.json > run.fe2o3prof4
 ```
 
 Bundle V4's strict CSV importer admits only the bounded rocprofv3

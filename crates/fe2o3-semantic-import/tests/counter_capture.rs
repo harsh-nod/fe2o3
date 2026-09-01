@@ -66,6 +66,19 @@ fn real_rocprofv3_1_1_shape_is_canonical_and_truth_preserving() {
 
 #[test]
 fn malformed_catalogs_and_collections_are_rejected() {
+    let oversized_name = String::from_utf8(SOURCE.to_vec()).unwrap().replacen(
+        "SQ_WAVES",
+        &"x".repeat(MAX_COUNTER_NAME_BYTES_V2 + 1),
+        1,
+    );
+    assert!(matches!(
+        import_rocprofv3_counter_capture_v2(
+            oversized_name.as_bytes(),
+            binding(),
+            ImportLimitsV1::default()
+        ),
+        Err(ImportErrorV1::InvalidRocprofJson)
+    ));
     let missing = String::from_utf8(SOURCE.to_vec()).unwrap().replace(
         "\"handle\":101},\"value\":1.5",
         "\"handle\":999},\"value\":1.5",

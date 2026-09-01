@@ -7,10 +7,17 @@ use fe2o3_semantic_query::*;
 use fe2o3_semantic_trace::*;
 use serde_json::{Value, json};
 
-const CSV: &[u8] =
-    include_bytes!("../../fe2o3-semantic-import/tests/fixtures/rocprofv3-1.1-kernel-dispatch.csv");
-const OTHER_CSV: &[u8] = b"Kind,Agent_Id,Queue_Id,Process_Id,Kernel_Name,Workgroup_Size_X,Workgroup_Size_Y,Workgroup_Size_Z,Grid_Size_X,Grid_Size_Y,Grid_Size_Z,Start_Timestamp,End_Timestamp\nKERNEL_DISPATCH,Agent 17,4,7,\"generic,kernel\",64,1,1,256,1,1,100,181\nKERNEL_DISPATCH,Agent 19,5,9,other,32,2,1,128,2,1,200,260\n";
+const CSV: &[u8] = include_bytes!(
+    "../../fe2o3-semantic-import/tests/fixtures/rocprofv3-current-kernel-dispatch.csv"
+);
 const ATT: &[u8] = br#"{"counter_names":[],"gfxip":9,"gfxv":"vega","global_begin_time":0,"is_pcs_stochastic":false,"pc_sampling":false,"thread_trace":true,"version":"3.0.0","wave_filenames":{"0":{"0":{"0":{"0":["waves/se0.json",10,20]}}}},"se_filenames":["se0.json"]}"#;
+
+fn other_csv() -> Vec<u8> {
+    String::from_utf8(CSV.to_vec())
+        .unwrap()
+        .replacen(",100,180,", ",100,181,", 1)
+        .into_bytes()
+}
 
 fn opaque(byte: u8) -> OpaqueIdentityV1 {
     OpaqueIdentityV1::new([byte; 32]).unwrap()
@@ -64,7 +71,8 @@ fn bundle_with_kernel(environment: u8, kernel: u8) -> Vec<u8> {
     let mut binding = binding(environment);
     binding.kernel_ir_claim =
         KernelIrIdentityClaimV1::canonical_v7_claim(opaque(kernel), 97).unwrap();
-    encode_profiler_bundle_v4(&import_rocprofv3_csv_profiler_bundle_v4(OTHER_CSV, binding).unwrap())
+    let source = other_csv();
+    encode_profiler_bundle_v4(&import_rocprofv3_csv_profiler_bundle_v4(&source, binding).unwrap())
         .unwrap()
 }
 

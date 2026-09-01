@@ -42,13 +42,27 @@ record.
 
 ## Dispatch Import Gate
 
-A dispatch-json or dispatch-csv Bundle V4 import recipe is emitted only when
-all selected devices have `availability=observed` and the supplied KIR wave
-width equals every observed `wave-width`. An unavailable target produces
-`next-import-status: unavailable-observed-gpu-target-profile`; a caller/device
-wave mismatch produces
-`next-import-status: unavailable-kir-wave-width-mismatch`. Both include
-bounded per-device diagnostics and emit no importer program or argument list.
+A dispatch-json or dispatch-csv Bundle V4 import recipe is emitted only after
+these gates, in this deterministic order:
+
+1. The request supplies exact verified canonical KIR V7. A missing KIR emits
+   `next-import-status: unavailable-missing-exact-canonical-kir-v7`; legacy
+   digest, length, and caller wave declarations instead emit
+   `next-import-status: unavailable-legacy-kir-declaration-is-not-admitted-canonical-kir`.
+2. At least one stable direct-KFD device identity is visible. Otherwise the
+   status is `unavailable-no-stable-direct-kfd-device-identity`.
+3. The admitted KIR exact-target and Wave64 capabilities match every observed
+   device. A mismatch emits
+   `next-import-status: unavailable-kir-v7-target-compatibility` plus one
+   `next-import-unavailable-reason`: `missing-exact-target-capability`,
+   `conflicting-exact-target-capabilities`, `unknown-exact-target-capability`,
+   `missing-wave64-capability`, `conflicting-wave-width-capabilities`,
+   `direct-kfd-target-profile-unavailable`, or
+   `kir-target-family-does-not-match-direct-kfd`.
+
+Every unavailable result includes the separate bounded device diagnostics and
+emits no importer program or argument list. A caller-provided legacy
+`--wave-width` is never target authority.
 
 These failures do not prevent rocprof collection or retention of its bounded
 raw artifacts. ATT import remains deferred around content-bound ATT references

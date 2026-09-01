@@ -253,6 +253,14 @@ Python interpreter, installed ROCProfiler SDK tool
 and core libraries where they use the reviewed ROCm layout, the native target
 ELF, the fixed semantic collector configuration, the cleared and bounded
 environment, and stable device records read directly from KFD sysfs topology.
+Every interpreter, script, target, and admitted collector entry library is
+copied into a byte-verified, read-only fully sealed memfd while the original
+descriptor and canonical path remain retained for provenance revalidation.
+The reviewed ROCm 7.2.4 script runs through a versioned, digest-allowlisted
+sealed adapter that supplies the sealed core before the sealed tool and removes
+all adapter role variables before target inheritance. Nonstandard test tools
+run their exact authorized sealed script image without claiming an installed
+SDK closure.
 Each GPU record also carries the bounded
 [observed GPU target profile V1](../../docs/observed-gpu-target-profile-v1.md)
 derived from those same KFD properties. The semantic configuration identity
@@ -280,41 +288,59 @@ and removes its owned directory after spawn, timeout, output, collector, or
 artifact-validation failure. Successful collection retains
 `fe2o3-profile-manifest-v1.txt` plus the bounded collector artifacts.
 
-`--kir-sha256`, `--kir-len`, and `--wave-width` are necessary but not
-sufficient for the dry run to print an exact `fe2o3-profiler-import` Bundle V4
-dispatch argument vector. Every selected direct-KFD device must also have an
-observed target profile, and the caller-supplied KIR wave width must equal
-every observed device wave width. Otherwise the plan emits a typed unavailable
-status and per-device reasons, with no importer program or arguments. This
-gate does not block raw collection. With rocprof's
-`--agent-index absolute` configuration, each device argument binds the emitted
-agent ID to the stable direct-KFD identity for that same KFD node; import joins
-by that ID and does not depend on device-vector or first-dispatch order. The
-collection authorization covers both the node number and stable identity, and
-the complete mapping, raw target inputs, and typed target availability are
-re-observed immediately before and after collection. Exact KFD values
+Dispatch import readiness requires `--kir-v7 /absolute/canonical.kir`. The
+file is admitted as exact canonical KIR V7, retained, and revalidated before
+collection, import, and manifest publication. Legacy `--kir-sha256`,
+`--kir-len`, and `--wave-width` declarations report typed unavailability and
+cannot authorize import. The union of module, effective-function, and
+kernel-required capabilities must name one supported gfx family and wave64;
+every direct-KFD device must independently report that family and wave64. KFD
+does not observe XNACK, so this is a weaker family compatibility check and
+never proves equality to an exact `xnack-` target.
+
+After collection, every size-eligible source is opened relative to the retained
+output root and checked by content. Exactly one strict schema-valid source is
+required; filename and KFD compatibility never disambiguate candidates.
+Current JSON resolves each process-local opaque agent handle through that
+process's `agents[]` catalog to an absolute KFD node. Current CSV accepts only
+the exact reviewed 22-column `Stream_Id` header with `Agent N` absolute syntax
+from `--agent-index absolute`. Import runs in-process and emits canonical
+Semantic Profiler Bundle V4 plus a custody receipt. Bundle, receipt, then
+manifest are committed durably with the manifest last, after the complete byte
+budget and final source/KIR/tool/KFD revalidation succeed.
+
+The JSON dialect decoder value-types the serializer fields used for dialect,
+process, device, and dispatch projection. Required unused record families are
+bounded and checked as arrays, but their opaque nested values are not promoted
+to profiler facts. A source identity always covers the complete raw bytes;
+the separately bound projection identity covers only admitted dispatch data.
+
+The collection authorization covers both KFD node and stable identity, and the
+complete mapping, raw target inputs, and typed target availability are
+re-observed around collection. Exact KFD values
 `90402` and `90500` map to `gfx942` and `gfx950` only for AMD vendor `4098`
 with wave width `64`. Unknown values and contradictory vendor or wave values
-remain explicit unavailable records: ordinary collection may proceed, but a
-dispatch Bundle V4 import recipe and any future semantic association must
-reject them. ATT retains its raw, deferred import recipe because it makes no
-source/IR/ISA association claim. Any remap observed by either check fails
-closed and the owned output is cleaned. ATT import
-is deferred until the output directory identifies the selected absolute agent
-and every manifest-relative artifact has been content-bound. The source
+remain explicit unavailable records: ordinary dispatch collection may proceed,
+but a dispatch Bundle V4 import recipe and any future semantic association must
+reject them. ATT planning is explicit unavailable and ATT collection fails
+closed: the current decoder API requires a directory namespace, and no
+mutation-proof sealed decoder route is implemented. Any remap observed by
+either dispatch check fails closed and the owned output is cleaned. The source
 manifest or dispatch file must also fit the importer's 8 MiB source limit;
 larger collected artifacts are retained but labeled non-importable. The
-profile target is not treated as proof of an executed kernel code object, so
-cross-run duration deltas remain unavailable until a separate kernel artifact
-identity is supplied. The resulting Bundle V4 is queried with
-`fe2o3-profiler-query`.
+profile target is not proof of an executed kernel code object. Artifact,
+source-map, kernel-symbol, characteristic/source-ISA, decoded ATT, runtime, and
+performance authority remain explicitly unavailable. The resulting Bundle V4
+is queried with `fe2o3-profiler-query`.
 
 The orchestrator itself has no HIP or HSA runtime dependency. `rocprofv3`
 injects ROCProfiler SDK into the target, however, and its installed option
 surface does not prove that it can observe dispatches submitted directly via
-KFD. The plan identifies the four direct collector entry objects above but
-labels their transitive dynamic-library closure unavailable; it does not call
-that record an authenticated complete installation closure. Collector success
+KFD. The plan binds the original paths and content identities of the four
+direct collector objects, the stable adapter mode, and the sealed execution
+images used for the interpreter, target, SDK core, and SDK tool. It still labels
+their transitive dynamic-library closure unavailable and does not call that
+record an authenticated complete installation closure. Collector success
 and JSON/CSV/ATT-looking filenames remain explicitly unvalidated. Only
 successful Bundle V4 import establishes the corresponding profiler record
 shape; it does not grant compiler, runtime, or performance authority.
@@ -331,6 +357,11 @@ authentication. Their random tokens correlate an interrupted creation with
 the directory completed by that operation, but every record is stored inside
 same-UID-writable filesystem state. A malicious process running as the same
 UID can forge or replace them and is outside this cleanup threat model.
+Supervision terminates the collector's original process group. Output pipes are
+nonblocking and cancellation-aware, so a descendant that escapes into a new
+session cannot hold command completion open indefinitely. The escaped process
+and its external effects remain outside containment even though capture return
+is bounded and publication is withheld when validation fails.
 
 ### Trust boundary
 

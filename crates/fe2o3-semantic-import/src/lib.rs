@@ -5,6 +5,7 @@
 //! device, resolve a KIR identity claim, or grant authority to source handles,
 //! addresses, artifact identities, or profiler identifiers.
 
+use std::cell::Cell;
 use std::error::Error;
 use std::fmt;
 
@@ -39,6 +40,94 @@ const SOURCE_FORMAT_VERSION_V1: u16 = 1;
 const IMPORT_EVENT_LIMIT_V1: u64 = 2;
 const IMPORT_EVIDENCE_LIMIT_V1: u16 = 2;
 const MAX_TOOL_VERSION_BYTES_V1: usize = 128;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RocprofJsonParseFailureV1 {
+    Allocation,
+}
+
+thread_local! {
+    static ROCPROF_JSON_PARSE_FAILURE_V1: Cell<Option<RocprofJsonParseFailureV1>> = const { Cell::new(None) };
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RocprofJsonAllocationInjectionSiteV1 {
+    Any,
+    CounterName,
+}
+
+#[cfg(test)]
+thread_local! {
+    static INJECT_ROCPROF_JSON_ALLOCATION_FAILURE_V1: Cell<Option<RocprofJsonAllocationInjectionSiteV1>> = const { Cell::new(None) };
+}
+
+fn parse_rocprof_json_document_v1<'de, T>(source: &'de [u8]) -> Result<T, ImportErrorV1>
+where
+    T: Deserialize<'de>,
+{
+    ROCPROF_JSON_PARSE_FAILURE_V1.with(|state| {
+        let prior = state.replace(None);
+        let parsed = serde_json::from_slice(source);
+        let failure = state.replace(prior);
+        match (parsed, failure) {
+            (_, Some(RocprofJsonParseFailureV1::Allocation)) => {
+                Err(ImportErrorV1::AllocationFailure)
+            }
+            (Ok(document), None) => Ok(document),
+            (Err(_), None) => Err(ImportErrorV1::InvalidRocprofJson),
+        }
+    })
+}
+
+fn rocprof_json_allocation_error_v1<E: serde::de::Error>() -> E {
+    ROCPROF_JSON_PARSE_FAILURE_V1.with(|state| {
+        state.set(Some(RocprofJsonParseFailureV1::Allocation));
+    });
+    E::custom("rocprof JSON allocation failed")
+}
+
+fn reserve_rocprof_json_vec_exact_v1<T, E: serde::de::Error>(
+    output: &mut Vec<T>,
+    additional: usize,
+) -> Result<(), E> {
+    #[cfg(test)]
+    if take_rocprof_json_allocation_injection_v1(RocprofJsonAllocationInjectionSiteV1::Any) {
+        return Err(rocprof_json_allocation_error_v1());
+    }
+    output
+        .try_reserve_exact(additional)
+        .map_err(|_| rocprof_json_allocation_error_v1())
+}
+
+#[cfg(test)]
+fn take_rocprof_json_allocation_injection_v1(site: RocprofJsonAllocationInjectionSiteV1) -> bool {
+    INJECT_ROCPROF_JSON_ALLOCATION_FAILURE_V1.with(|inject| match inject.get() {
+        Some(RocprofJsonAllocationInjectionSiteV1::Any) => {
+            inject.set(None);
+            true
+        }
+        Some(expected) if expected == site => {
+            inject.set(None);
+            true
+        }
+        _ => false,
+    })
+}
+
+fn reserve_rocprof_counter_name_v1<E: serde::de::Error>(
+    output: &mut String,
+    additional: usize,
+) -> Result<(), E> {
+    #[cfg(test)]
+    if take_rocprof_json_allocation_injection_v1(RocprofJsonAllocationInjectionSiteV1::CounterName)
+    {
+        return Err(rocprof_json_allocation_error_v1());
+    }
+    output
+        .try_reserve(additional)
+        .map_err(|_| rocprof_json_allocation_error_v1())
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ImportLimitsV1 {
@@ -137,8 +226,7 @@ pub fn import_rocprofv3_pc_sample_capture_v3(
         return Err(ImportErrorV1::InvalidPcSamplingConfiguration);
     }
     let source_identity = source_identity(ROCPROF_JSON_SOURCE_IDENTITY_DOMAIN_V1, source)?;
-    let document: RocprofPcDocument =
-        serde_json::from_slice(source).map_err(|_| ImportErrorV1::InvalidRocprofJson)?;
+    let document: RocprofPcDocument = parse_rocprof_json_document_v1(source)?;
     let source_record = ContentIdentityRecordV1::from(source_identity);
     let run_identity =
         capture::derive_identity(capture::RUN_IDENTITY_DOMAIN_V1, source_record.digest, 0)
@@ -302,7 +390,7 @@ pub fn import_rocprofv3_pc_sample_capture_v3(
         .try_reserve_exact(
             usize::try_from(source_sample_count).map_err(|_| ImportErrorV1::SizeOverflow)?,
         )
-        .map_err(|_| ImportErrorV1::SizeOverflow)?;
+        .map_err(|_| ImportErrorV1::AllocationFailure)?;
     let mut sample_ordinal = 0_u64;
     for (process_index, process) in document.processes.iter().enumerate() {
         for source_sample in process.buffer_records.pc_sample_stochastic.iter() {
@@ -454,8 +542,7 @@ pub fn import_rocprofv3_counter_capture_v2(
 ) -> Result<SemanticCounterCaptureV2, ImportErrorV1> {
     validate_source_size(source, limits)?;
     let source_identity = source_identity(ROCPROF_JSON_SOURCE_IDENTITY_DOMAIN_V1, source)?;
-    let document: RocprofDocument =
-        serde_json::from_slice(source).map_err(|_| ImportErrorV1::InvalidRocprofJson)?;
+    let document: RocprofDocument = parse_rocprof_json_document_v1(source)?;
     let source_record = ContentIdentityRecordV1::from(source_identity);
     let run_identity =
         capture::derive_identity(capture::RUN_IDENTITY_DOMAIN_V1, source_record.digest, 0)
@@ -532,7 +619,7 @@ pub fn import_rocprofv3_counter_capture_v2(
                 identity_origin: TruthOriginV1::Observed,
                 source_definition_ordinal: definition_ordinal,
                 device_identity,
-                name: definition.name.clone(),
+                name: definition.name.0.clone(),
                 name_origin: TruthOriginV1::Observed,
                 is_constant,
                 is_derived,
@@ -813,8 +900,7 @@ pub fn import_rocprofv3_json_v1(
 ) -> Result<ImportedTraceV1, ImportErrorV1> {
     validate_source_size(source, limits)?;
     let source_identity = source_identity(ROCPROF_JSON_SOURCE_IDENTITY_DOMAIN_V1, source)?;
-    let document: RocprofDocument =
-        serde_json::from_slice(source).map_err(|_| ImportErrorV1::InvalidRocprofJson)?;
+    let document: RocprofDocument = parse_rocprof_json_document_v1(source)?;
     let process = document
         .processes
         .get(binding.selection.process_index)
@@ -958,8 +1044,7 @@ pub(crate) fn import_rocprofv3_capture_with_agents_v1(
 ) -> Result<RocprofCaptureWithAgentsV1, ImportErrorV1> {
     validate_source_size(source, limits)?;
     let source_identity = source_identity(ROCPROF_JSON_SOURCE_IDENTITY_DOMAIN_V1, source)?;
-    let document: RocprofDocument =
-        serde_json::from_slice(source).map_err(|_| ImportErrorV1::InvalidRocprofJson)?;
+    let document: RocprofDocument = parse_rocprof_json_document_v1(source)?;
     let total_dispatch_count = document
         .processes
         .iter()
@@ -994,7 +1079,7 @@ pub(crate) fn import_rocprofv3_capture_with_agents_v1(
     let mut dispatches = Vec::new();
     dispatches
         .try_reserve_exact(total_dispatch_count)
-        .map_err(|_| ImportErrorV1::SizeOverflow)?;
+        .map_err(|_| ImportErrorV1::AllocationFailure)?;
     let mut ordinal = 0_u64;
     for (process_index, process) in document.processes.iter().enumerate() {
         for (dispatch_index, record) in process.buffer_records.kernel_dispatch.iter().enumerate() {
@@ -1363,7 +1448,59 @@ struct RocprofCounterDefinition {
     id: RocprofHandle,
     is_constant: u8,
     is_derived: u8,
-    name: String,
+    name: BoundedCounterNameV1,
+}
+
+struct BoundedCounterNameV1(String);
+
+impl std::ops::Deref for BoundedCounterNameV1 {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for BoundedCounterNameV1 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct CounterNameVisitorV1;
+
+        impl<'de> Visitor<'de> for CounterNameVisitorV1 {
+            type Value = BoundedCounterNameV1;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(
+                    formatter,
+                    "a counter name of at most {MAX_COUNTER_NAME_BYTES_V2} bytes"
+                )
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                if value.len() > MAX_COUNTER_NAME_BYTES_V2 {
+                    return Err(E::custom("rocprof counter name exceeds limit"));
+                }
+                let mut output = String::new();
+                reserve_rocprof_counter_name_v1(&mut output, value.len())?;
+                output.push_str(value);
+                Ok(BoundedCounterNameV1(output))
+            }
+
+            fn visit_borrowed_str<E>(self, value: &'de str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                self.visit_str(value)
+            }
+        }
+
+        deserializer.deserialize_str(CounterNameVisitorV1)
+    }
 }
 
 #[derive(Deserialize)]
@@ -1639,13 +1776,9 @@ where
             {
                 let initial = sequence.size_hint().unwrap_or(0).min(MAX);
                 let mut values = Vec::new();
-                values
-                    .try_reserve_exact(initial)
-                    .map_err(serde::de::Error::custom)?;
+                reserve_rocprof_json_vec_exact_v1(&mut values, initial)?;
                 if values.capacity() > MAX {
-                    return Err(serde::de::Error::custom(
-                        "JSON sequence allocation exceeded its item bound",
-                    ));
+                    return Err(rocprof_json_allocation_error_v1());
                 }
                 while let Some(value) = sequence.next_element()? {
                     if values.len() == MAX {
@@ -1658,13 +1791,10 @@ where
                             .saturating_mul(2)
                             .min(MAX)
                             .max(values.len() + 1);
-                        values
-                            .try_reserve_exact(target - values.capacity())
-                            .map_err(serde::de::Error::custom)?;
+                        let additional = target - values.capacity();
+                        reserve_rocprof_json_vec_exact_v1(&mut values, additional)?;
                         if values.capacity() > MAX {
-                            return Err(serde::de::Error::custom(
-                                "JSON sequence allocation exceeded its item bound",
-                            ));
+                            return Err(rocprof_json_allocation_error_v1());
                         }
                     }
                     values.push(value);
@@ -1762,6 +1892,7 @@ pub enum ImportErrorV1 {
     EmptySource,
     SourceTooLarge { actual: u64, max: u64 },
     SizeOverflow,
+    AllocationFailure,
     InvalidRocprofJson,
     ProcessNotFound,
     DispatchNotFound,
@@ -1802,6 +1933,9 @@ impl fmt::Display for ImportErrorV1 {
                 )
             }
             Self::SizeOverflow => formatter.write_str("import size arithmetic overflowed"),
+            Self::AllocationFailure => {
+                formatter.write_str("import allocation or resident-resource reservation failed")
+            }
             Self::InvalidRocprofJson => formatter.write_str("invalid rocprofv3 JSON evidence"),
             Self::ProcessNotFound => formatter.write_str("selected rocprofv3 process is absent"),
             Self::DispatchNotFound => formatter.write_str("selected rocprofv3 dispatch is absent"),
@@ -1875,5 +2009,160 @@ impl Error for ImportErrorV1 {
             Self::PcSampleCapture(error) => Some(error),
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod allocation_tests {
+    use super::*;
+    use std::sync::{Arc, Barrier};
+
+    const COUNTER_SOURCE: &[u8] =
+        include_bytes!("../tests/fixtures/rocprofv3-1.1-counter-collection.json");
+    const PC_SOURCE: &[u8] =
+        include_bytes!("../tests/fixtures/rocprofv3-1.1-stochastic-pc-sampling.json");
+
+    fn identity(byte: u8) -> OpaqueIdentityV1 {
+        OpaqueIdentityV1::new([byte; 32]).expect("nonzero test identity")
+    }
+
+    fn capture_binding() -> RocprofCaptureBindingV1 {
+        RocprofCaptureBindingV1 {
+            kernel_ir_claim: KernelIrIdentityClaimV1::canonical_v7_claim(identity(1), 1)
+                .expect("valid KIR claim"),
+            artifact: None,
+            source_map: None,
+            wave_width: WaveWidthV1::Wave64,
+        }
+    }
+
+    fn selected_binding() -> RocprofBindingV1 {
+        RocprofBindingV1 {
+            kernel_ir_claim: capture_binding().kernel_ir_claim,
+            artifact: None,
+            wave_width: WaveWidthV1::Wave64,
+            selection: RocprofDispatchSelectionV1 {
+                process_index: 0,
+                dispatch_index: 0,
+            },
+        }
+    }
+
+    fn pc_binding() -> RocprofPcSampleCaptureBindingV3 {
+        RocprofPcSampleCaptureBindingV3 {
+            capture: capture_binding(),
+            sampling_interval_cycles: 1,
+        }
+    }
+
+    fn with_injected_allocation_failure<T>(
+        site: RocprofJsonAllocationInjectionSiteV1,
+        operation: impl FnOnce() -> T,
+    ) -> T {
+        INJECT_ROCPROF_JSON_ALLOCATION_FAILURE_V1.with(|inject| {
+            assert!(
+                inject.replace(Some(site)).is_none(),
+                "nested allocation injection"
+            );
+        });
+        let result = operation();
+        INJECT_ROCPROF_JSON_ALLOCATION_FAILURE_V1.with(|inject| inject.set(None));
+        result
+    }
+
+    #[test]
+    fn every_legacy_public_rocprof_json_import_preserves_allocation_failure() {
+        assert!(matches!(
+            with_injected_allocation_failure(RocprofJsonAllocationInjectionSiteV1::Any, || {
+                import_rocprofv3_json_v1(
+                    COUNTER_SOURCE,
+                    selected_binding(),
+                    ImportLimitsV1::default(),
+                )
+            },),
+            Err(ImportErrorV1::AllocationFailure)
+        ));
+        assert!(matches!(
+            with_injected_allocation_failure(RocprofJsonAllocationInjectionSiteV1::Any, || {
+                import_rocprofv3_capture_v1(
+                    COUNTER_SOURCE,
+                    capture_binding(),
+                    ImportLimitsV1::default(),
+                )
+            },),
+            Err(ImportErrorV1::AllocationFailure)
+        ));
+        assert!(matches!(
+            with_injected_allocation_failure(RocprofJsonAllocationInjectionSiteV1::Any, || {
+                import_rocprofv3_counter_capture_v2(
+                    COUNTER_SOURCE,
+                    capture_binding(),
+                    ImportLimitsV1::default(),
+                )
+            },),
+            Err(ImportErrorV1::AllocationFailure)
+        ));
+        assert!(matches!(
+            with_injected_allocation_failure(RocprofJsonAllocationInjectionSiteV1::Any, || {
+                import_rocprofv3_pc_sample_capture_v3(
+                    PC_SOURCE,
+                    pc_binding(),
+                    ImportLimitsV1::default(),
+                )
+            },),
+            Err(ImportErrorV1::AllocationFailure)
+        ));
+    }
+
+    #[test]
+    fn allocation_failure_marker_is_thread_local() {
+        let barrier = Arc::new(Barrier::new(2));
+        let failing_barrier = Arc::clone(&barrier);
+        let failing = std::thread::spawn(move || {
+            INJECT_ROCPROF_JSON_ALLOCATION_FAILURE_V1.with(|inject| {
+                inject.set(Some(RocprofJsonAllocationInjectionSiteV1::Any));
+            });
+            failing_barrier.wait();
+            import_rocprofv3_counter_capture_v2(
+                COUNTER_SOURCE,
+                capture_binding(),
+                ImportLimitsV1::default(),
+            )
+        });
+        let succeeding = std::thread::spawn(move || {
+            barrier.wait();
+            import_rocprofv3_counter_capture_v2(
+                COUNTER_SOURCE,
+                capture_binding(),
+                ImportLimitsV1::default(),
+            )
+        });
+        assert!(matches!(
+            failing.join().expect("failing parser thread"),
+            Err(ImportErrorV1::AllocationFailure)
+        ));
+        assert!(
+            succeeding
+                .join()
+                .expect("independent parser thread")
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn counter_name_allocation_failure_reaches_public_counter_import() {
+        assert!(matches!(
+            with_injected_allocation_failure(
+                RocprofJsonAllocationInjectionSiteV1::CounterName,
+                || {
+                    import_rocprofv3_counter_capture_v2(
+                        COUNTER_SOURCE,
+                        capture_binding(),
+                        ImportLimitsV1::default(),
+                    )
+                },
+            ),
+            Err(ImportErrorV1::AllocationFailure)
+        ));
     }
 }
