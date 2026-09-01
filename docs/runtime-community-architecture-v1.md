@@ -72,6 +72,14 @@ kernel metadata at resolution, and shares those immutable bytes and descriptors
 across launch preparation. Staging-budget or host-allocation exhaustion is a
 pre-publication `Capacity` rejection.
 
+The feature-gated gfx942 qualification lane is intentionally outside production
+authority. It re-hashes and loader-validates one repository-owned COV6 object,
+then a private KFD gate accepts only that artifact's fixed typed ABI,
+metadata-declared effects, deterministic buffer images, and geometry. The gate does not implement
+`KfdRuntimeLaunchAuthorityV1` and supplies no compiler-lineage or Worker V3
+authentication. Its HSA lane relies separately on the reviewed backend's unsafe
+construction contract after admitting the same fixture.
+
 ## Asynchronous Operations
 
 Typed launches associate a Rust argument type with an application-supplied,
@@ -82,6 +90,15 @@ contract. The argument value produces an address-free kernarg image and
 allocation-relative memory effects. Launch dependencies name exact events from
 the same device. Submissions are nonblocking and may be polled or waited against
 a monotonic deadline.
+
+`RuntimeLaunchGeometryV1::grid` is the global work-item extent published in the
+AQL grid-size fields. `workgroup` is the per-group extent. For COV6 implicit
+arguments, each block count is `grid / workgroup` and the corresponding
+remainder is `grid % workgroup`; resource admission still uses the ceiling
+number of workgroups when accounting for a partial final group. The pure
+`fe2o3-aql` geometry value derives these implicit dispatch values once; KFD,
+the legacy runtime transition, and the HSA adapter only encode that shared
+result into their owned kernarg storage.
 
 Peer copies require two distinct peer-capable devices, an exact destination
 stream, equal nonempty source/destination ranges, and explicit event
@@ -110,6 +127,12 @@ dependencies. Each copy retains a model peer-transfer contract identity.
 
 Scale benchmarks cover the maximum completion graph and large lifecycle
 journals. Regressions in asymptotic behavior are release blockers.
+
+The gfx942 runtime qualification runner compares only like-named measurement
+scopes. KFD staging, HSA host-visible execution, HIP staging, synchronized
+launch/wait, and HIP device-event intervals are reported separately. Results
+from unlike scopes must not be converted into parity ratios; even the HSA/HIP
+synchronized rows retain different per-submission allocation and signal costs.
 
 ## Backend Selection
 

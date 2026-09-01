@@ -1195,6 +1195,7 @@ dependencies = [
  "cc",
  "dialect-amdgcn",
  "fe2o3-amd-target",
+ "fe2o3-aql",
  "fe2o3-artifact-transaction",
  "fe2o3-artifacts",
  "fe2o3-compiler-ffi",

@@ -157,6 +157,35 @@ pub unsafe trait KfdRuntimeLaunchAuthorityV1: fmt::Debug {
     fn authorize_launch_v1(&self, request: KfdRuntimeAuthorityRequestV1<'_>) -> bool;
 }
 
+enum KfdRuntimeLaunchGateV1 {
+    Production(Box<dyn KfdRuntimeLaunchAuthorityV1>),
+    #[cfg(feature = "hardware-qualification")]
+    ExactGfx942Vecadd(crate::qualification_gfx942_vecadd_v1::AdmittedGfx942VecaddQualificationV1),
+}
+
+impl fmt::Debug for KfdRuntimeLaunchGateV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Production(authority) => formatter
+                .debug_tuple("Production")
+                .field(authority)
+                .finish(),
+            #[cfg(feature = "hardware-qualification")]
+            Self::ExactGfx942Vecadd(_) => formatter.write_str("ExactGfx942Vecadd"),
+        }
+    }
+}
+
+impl KfdRuntimeLaunchGateV1 {
+    fn authorize_launch_v1(&self, request: KfdRuntimeAuthorityRequestV1<'_>) -> bool {
+        match self {
+            Self::Production(authority) => authority.authorize_launch_v1(request),
+            #[cfg(feature = "hardware-qualification")]
+            Self::ExactGfx942Vecadd(admitted) => admitted.authorizes_kfd_request_v1(request),
+        }
+    }
+}
+
 #[derive(Debug)]
 struct AllocationRecordV1 {
     device: u64,
@@ -325,7 +354,7 @@ pub struct KfdRuntimeBackendV1 {
     active: Option<ActiveSubmissionV1>,
     staging_budgets: StagingBudgetsV1,
     staged_context_bytes: u64,
-    authority: Box<dyn KfdRuntimeLaunchAuthorityV1>,
+    launch_gate: KfdRuntimeLaunchGateV1,
 }
 
 impl fmt::Debug for KfdRuntimeBackendV1 {
@@ -347,7 +376,7 @@ impl fmt::Debug for KfdRuntimeBackendV1 {
             .field("active", &self.active)
             .field("staged_context_bytes", &self.staged_context_bytes)
             .field("staging_budgets", &self.staging_budgets)
-            .field("authority", &self.authority)
+            .field("launch_gate", &self.launch_gate)
             .finish()
     }
 }
@@ -361,6 +390,40 @@ impl KfdRuntimeBackendV1 {
     where
         A: KfdRuntimeLaunchAuthorityV1 + 'static,
     {
+        Self::open_default_with_gate(
+            device_unique_id,
+            KfdRuntimeLaunchGateV1::Production(Box::new(authority)),
+        )
+    }
+
+    #[cfg(feature = "hardware-qualification")]
+    /// Opens the exact repository-owned gfx942 vecadd qualification backend.
+    ///
+    /// This constructor re-admits and retains the embedded fixture, then
+    /// accepts only its fixed ABI, metadata-declared effects, contents, and
+    /// launch geometry. It grants no production authority and cannot launch
+    /// another module or invocation.
+    pub fn open_gfx942_vecadd_qualification_v1(
+        device_unique_id: u64,
+    ) -> Result<Self, KfdRuntimeBackendErrorV1> {
+        let admitted = crate::qualification_gfx942_vecadd_v1::admit_gfx942_vecadd_qualification_v1(
+        )
+        .map_err(|error| {
+            KfdRuntimeBackendErrorV1::new(
+                KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+                error.to_string(),
+            )
+        })?;
+        Self::open_default_with_gate(
+            device_unique_id,
+            KfdRuntimeLaunchGateV1::ExactGfx942Vecadd(admitted),
+        )
+    }
+
+    fn open_default_with_gate(
+        device_unique_id: u64,
+        launch_gate: KfdRuntimeLaunchGateV1,
+    ) -> Result<Self, KfdRuntimeBackendErrorV1> {
         if device_unique_id == 0 {
             return Err(KfdRuntimeBackendErrorV1::new(
                 KfdRuntimeBackendErrorKindV1::InvalidLaunch,
@@ -381,7 +444,7 @@ impl KfdRuntimeBackendV1 {
                     error.to_string(),
                 )
             })?;
-        Ok(Self::from_checked_device(device, authority))
+        Ok(Self::from_checked_device_with_gate(device, launch_gate))
     }
 
     /// Wraps an already checked gfx942/XNACK-disabled device.
@@ -389,6 +452,16 @@ impl KfdRuntimeBackendV1 {
     where
         A: KfdRuntimeLaunchAuthorityV1 + 'static,
     {
+        Self::from_checked_device_with_gate(
+            device,
+            KfdRuntimeLaunchGateV1::Production(Box::new(authority)),
+        )
+    }
+
+    fn from_checked_device_with_gate(
+        device: CheckedGfx942XnackMinusDevice,
+        launch_gate: KfdRuntimeLaunchGateV1,
+    ) -> Self {
         let observation = device.observation();
         let unique_id = observation.unique_id();
         let name = device
@@ -409,19 +482,19 @@ impl KfdRuntimeBackendV1 {
                 capabilities: kfd_capabilities_v1(),
             },
             Some(device),
-            Box::new(authority),
+            launch_gate,
         )
     }
 
     fn new(
         description: BackendDeviceDescriptionV1,
         admitted_device: Option<CheckedGfx942XnackMinusDevice>,
-        authority: Box<dyn KfdRuntimeLaunchAuthorityV1>,
+        launch_gate: KfdRuntimeLaunchGateV1,
     ) -> Self {
         Self::new_with_staging_budgets(
             description,
             admitted_device,
-            authority,
+            launch_gate,
             StagingBudgetsV1 {
                 max_allocation_bytes: KFD_RUNTIME_MAX_STAGED_ALLOCATION_BYTES_V1,
                 max_context_bytes: KFD_RUNTIME_MAX_STAGED_CONTEXT_BYTES_V1,
@@ -432,7 +505,7 @@ impl KfdRuntimeBackendV1 {
     fn new_with_staging_budgets(
         description: BackendDeviceDescriptionV1,
         admitted_device: Option<CheckedGfx942XnackMinusDevice>,
-        authority: Box<dyn KfdRuntimeLaunchAuthorityV1>,
+        launch_gate: KfdRuntimeLaunchGateV1,
         staging_budgets: StagingBudgetsV1,
     ) -> Self {
         Self {
@@ -452,7 +525,7 @@ impl KfdRuntimeBackendV1 {
             active: None,
             staging_budgets,
             staged_context_bytes: 0,
-            authority,
+            launch_gate,
         }
     }
 
@@ -764,7 +837,7 @@ impl KfdRuntimeBackendV1 {
             });
         }
         if !self
-            .authority
+            .launch_gate
             .authorize_launch_v1(KfdRuntimeAuthorityRequestV1 {
                 module_image: module.validated.bytes(),
                 module_sha256: module.image_sha256,
@@ -1011,7 +1084,7 @@ impl KfdRuntimeBackendV1 {
                 capabilities: kfd_capabilities_v1(),
             },
             None,
-            Box::new(TestAuthorityV1),
+            KfdRuntimeLaunchGateV1::Production(Box::new(TestAuthorityV1)),
             staging_budgets,
         )
     }

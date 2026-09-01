@@ -55,11 +55,46 @@ This lane requires the ROCm HSA/HIP development headers and shared libraries
 described above, but it does not require a GPU or initialize HSA. It verifies
 barrier-AND fan-in above five signals, ring wrap, bounded capacity rejection,
 competing-producer rejection, and pre-publication no-mutation behavior. It is
-not kernel-execution evidence. The repository has no owned, trusted HSACO
-fixture for `ReviewedHsaRuntimeBackendV1`; the existing ignored hardware lanes
-consume caller-supplied digest-pinned artifacts through profile-specific raw
-adapters. Real cross-stream dependency execution through this backend therefore
-remains an explicitly external hardware-test obligation.
+not kernel-execution evidence.
+
+Feature `hardware-qualification` adds the repository-owned, source/policy/object
+digest-pinned gfx942 vecadd fixture. Its ignored hardware lane revalidates the
+COV6 target, kernel closure, explicit ABI, and metadata-declared
+read/read/write effects before retaining that admission across an unsafe
+`ReviewedHsaRuntimeBackendV1` and the complete `RuntimeContextV1` lifecycle. The lane verifies exact results,
+explicit teardown, a real six-event cross-stream fan-in, and more than 64
+sequential submissions through the reviewed 64-slot queue. It also reports
+host `host_visible_submit_wait_readback` and `synchronized_launch_wait` timing
+with 10 warmups, 30 samples, and 10 launches per sample by default. Both use
+persistent initialized host-visible allocations and exclude the exact output
+reset before each launch. The first timer includes submit, deadline wait,
+submission release, and full output readback; the second includes only submit,
+deadline wait, and submission release, with readback and exact validation after
+each sample. These boundaries differ from backends that stage inputs on every
+submit. The corresponding `FE2O3_RUNTIME_WARMUPS`, `FE2O3_RUNTIME_SAMPLES`, and
+`FE2O3_RUNTIME_LAUNCHES_PER_SAMPLE` variables accept positive overrides while
+still requiring enough launches to cover ring wrap.
+
+```text
+HIP_VISIBLE_DEVICES=0 \
+ROCR_VISIBLE_DEVICES=<physical-gpu-index> \
+FE2O3_RUN_GFX942_RUNTIME_HSA_QUALIFICATION=1 \
+cargo test --release --locked -p fe2o3-hsa-runtime \
+  --features hardware-qualification \
+  --test gfx942_runtime_context_hardware \
+  qualification::gfx942_runtime_context_exact_fixture_executes_dependencies_wraps_and_times \
+  -- --ignored --exact --nocapture --test-threads=1
+```
+
+`ROCR_VISIBLE_DEVICES` selects one decimal physical-device index;
+`HIP_VISIBLE_DEVICES=0` selects that device's post-isolation HIP ordinal. The
+process then opens visible ordinal zero and requires exactly one correlated
+runtime device. The lane rejects debug builds so its host timings remain
+comparable to the release-mode KFD and HIP runners. This bounded lane does not
+promote the fixture into general launch authority. Live capacity
+exhaustion/retry is not asserted because the qualified kernel cannot safely be
+held pending; deterministic capacity and no-mutation behavior remain covered
+by the native packet tests.
 
 Facade waits use nonblocking acquire polls with a monotonic caller deadline:
 32 short spins, 8 scheduler yields, then exponential sleeps starting at 50

@@ -1,5 +1,6 @@
 use crate::api::{ApiError, DirectRuntimeApi, DispatchApi, QueueHandle, SymbolFacts};
 use crate::environment::{AdapterCore, HsaRuntimeAdapterError, ReviewedHsaRuntimeAdapterV1};
+use fe2o3_aql::AqlDispatchGeometryV1;
 use fe2o3_core::GpuContext;
 use fe2o3_runtime::{
     BackendBindingV1, BackendDeviceDescriptionV1, BackendLaunchV1, BackendMemoryRegionV1,
@@ -24,6 +25,9 @@ const BLOCK_COUNT_Z: usize = 8;
 const GROUP_SIZE_X: usize = 12;
 const GROUP_SIZE_Y: usize = 14;
 const GROUP_SIZE_Z: usize = 16;
+const REMAINDER_X: usize = 18;
+const REMAINDER_Y: usize = 20;
+const REMAINDER_Z: usize = 22;
 const GRID_DIMS: usize = 64;
 const DYNAMIC_LDS_SIZE: usize = 120;
 const QUEUE_PTR: usize = 200;
@@ -1139,7 +1143,7 @@ impl<A: DispatchApi> BackendState<A> {
                 "explicit/implicit kernarg layout",
             ));
         }
-        let aql_grid = checked_aql_grid(launch.geometry.grid, launch.geometry.workgroup)?;
+        let aql_geometry = checked_aql_geometry(launch.geometry.grid, launch.geometry.workgroup)?;
         let group_segment_size = kernel
             .group_segment_size
             .checked_add(launch.geometry.dynamic_shared_bytes)
@@ -1156,8 +1160,7 @@ impl<A: DispatchApi> BackendState<A> {
             initialize_implicit_kernarg(
                 &mut kernarg,
                 launch.explicit_kernarg.len(),
-                launch.geometry.grid,
-                launch.geometry.workgroup,
+                aql_geometry,
                 launch.geometry.dynamic_shared_bytes,
                 queue_pointer,
             )?;
@@ -1230,7 +1233,7 @@ impl<A: DispatchApi> BackendState<A> {
         }
         if let Err(primary) = self.core.api.publish_dispatch(
             queue,
-            aql_grid,
+            aql_geometry.grid(),
             launch.geometry.workgroup,
             kernel.private_segment_size,
             group_segment_size,
@@ -1762,20 +1765,12 @@ fn reviewed_queue_size(minimum: u32, maximum: u32) -> BackendResult<u32> {
     Ok(64_u32.clamp(minimum, maximum))
 }
 
-fn checked_aql_grid(grid: [u32; 3], workgroup: [u32; 3]) -> BackendResult<[u32; 3]> {
-    if grid.contains(&0)
-        || workgroup.contains(&0)
-        || workgroup.iter().any(|value| u16::try_from(*value).is_err())
-    {
-        return Err(rejected_invalid_argument("launch geometry"));
-    }
-    let mut aql_grid = [0; 3];
-    for index in 0..3 {
-        aql_grid[index] = grid[index]
-            .checked_mul(workgroup[index])
-            .ok_or_else(|| rejected_invalid_argument("AQL grid overflow"))?;
-    }
-    Ok(aql_grid)
+fn checked_aql_geometry(
+    grid: [u32; 3],
+    workgroup: [u32; 3],
+) -> BackendResult<AqlDispatchGeometryV1> {
+    AqlDispatchGeometryV1::new(grid, workgroup)
+        .map_err(|_| rejected_invalid_argument("launch geometry"))
 }
 
 fn validate_symbol(symbol: &SymbolFacts, expected_name: &str) -> BackendResult<()> {
@@ -1804,33 +1799,33 @@ fn merge_order_frontier(target: &mut CausalFrontier, source: &CausalFrontier) {
 fn initialize_implicit_kernarg(
     kernarg: &mut [u8],
     implicit_offset: usize,
-    grid: [u32; 3],
-    workgroup: [u32; 3],
+    geometry: AqlDispatchGeometryV1,
     dynamic_shared_bytes: u32,
     queue_pointer: usize,
 ) -> BackendResult<()> {
     let queue_pointer =
         u64::try_from(queue_pointer).map_err(|_| rejected_invalid_argument("HSA queue pointer"))?;
-    put_u32(kernarg, implicit_offset + BLOCK_COUNT_X, grid[0]);
-    put_u32(kernarg, implicit_offset + BLOCK_COUNT_Y, grid[1]);
-    put_u32(kernarg, implicit_offset + BLOCK_COUNT_Z, grid[2]);
-    put_u16(kernarg, implicit_offset + GROUP_SIZE_X, workgroup[0] as u16);
-    put_u16(kernarg, implicit_offset + GROUP_SIZE_Y, workgroup[1] as u16);
-    put_u16(kernarg, implicit_offset + GROUP_SIZE_Z, workgroup[2] as u16);
-    let dimensions = if grid[2]
-        .checked_mul(workgroup[2])
-        .is_some_and(|size| size > 1)
+    let shape = geometry.cov6_implicit_dispatch_shape();
+    let block_count = shape.block_count();
+    let group_size = shape.group_size();
+    let remainder = shape.remainder();
+    for (axis, offset) in [BLOCK_COUNT_X, BLOCK_COUNT_Y, BLOCK_COUNT_Z]
+        .into_iter()
+        .enumerate()
     {
-        3
-    } else if grid[1]
-        .checked_mul(workgroup[1])
-        .is_some_and(|size| size > 1)
-    {
-        2
-    } else {
-        1
-    };
-    put_u16(kernarg, implicit_offset + GRID_DIMS, dimensions);
+        put_u32(kernarg, implicit_offset + offset, block_count[axis]);
+    }
+    put_u16(kernarg, implicit_offset + GROUP_SIZE_X, group_size[0]);
+    put_u16(kernarg, implicit_offset + GROUP_SIZE_Y, group_size[1]);
+    put_u16(kernarg, implicit_offset + GROUP_SIZE_Z, group_size[2]);
+    put_u16(kernarg, implicit_offset + REMAINDER_X, remainder[0]);
+    put_u16(kernarg, implicit_offset + REMAINDER_Y, remainder[1]);
+    put_u16(kernarg, implicit_offset + REMAINDER_Z, remainder[2]);
+    put_u16(
+        kernarg,
+        implicit_offset + GRID_DIMS,
+        shape.grid_dimensions(),
+    );
     put_u32(
         kernarg,
         implicit_offset + DYNAMIC_LDS_SIZE,
@@ -1867,6 +1862,7 @@ mod tests {
 
     #[derive(Debug)]
     struct PublishedDispatch {
+        grid: [u32; 3],
         kernarg: Vec<u8>,
         dependencies: Vec<u64>,
     }
@@ -2064,7 +2060,7 @@ mod tests {
         fn publish_dispatch(
             &mut self,
             _queue: &QueueHandle,
-            _grid: [u32; 3],
+            grid: [u32; 3],
             _workgroup: [u32; 3],
             _private_segment_size: u32,
             _group_segment_size: u32,
@@ -2081,6 +2077,7 @@ mod tests {
                 });
             }
             self.published.push(PublishedDispatch {
+                grid,
                 kernarg: self.memory[&kernarg].clone(),
                 dependencies: dependency_signals.to_vec(),
             });
@@ -2143,7 +2140,7 @@ mod tests {
             bindings: std::slice::from_ref(binding),
             dependencies,
             geometry: fe2o3_runtime::RuntimeLaunchGeometryV1 {
-                grid: [2, 1, 1],
+                grid: [65, 1, 1],
                 workgroup: [64, 1, 1],
                 dynamic_shared_bytes: 16,
             },
@@ -2384,6 +2381,9 @@ mod tests {
 
         let allocation_address = state.allocations[&allocation].address as u64;
         let first_dispatch = &state.core.api.published[0];
+        assert_eq!(first_dispatch.grid, [65, 1, 1]);
+        assert_eq!(&first_dispatch.kernarg[16..20], &1_u32.to_le_bytes());
+        assert_eq!(&first_dispatch.kernarg[34..36], &1_u16.to_le_bytes());
         assert_eq!(
             u64::from_le_bytes(first_dispatch.kernarg[0..8].try_into().unwrap()),
             allocation_address
@@ -2426,6 +2426,30 @@ mod tests {
         state.destroy_stream_v1(second_stream).unwrap();
         state.unload_module_v1(module).unwrap();
         state.release_allocation_v1(allocation).unwrap();
+    }
+
+    #[test]
+    fn global_grid_is_preserved_and_cov6_hidden_shape_matches_kfd_floor_counts_and_remainders() {
+        let geometry = checked_aql_geometry([65, 3, 2], [64, 2, 1]).unwrap();
+        assert_eq!(geometry.grid(), [65, 3, 2]);
+        let mut kernarg = [0_u8; IMPLICIT_KERNARG_BYTES];
+        initialize_implicit_kernarg(&mut kernarg, 0, geometry, 17, 0x1234).unwrap();
+        assert_eq!(
+            &kernarg[BLOCK_COUNT_X..BLOCK_COUNT_X + 4],
+            &1_u32.to_le_bytes()
+        );
+        assert_eq!(
+            &kernarg[BLOCK_COUNT_Y..BLOCK_COUNT_Y + 4],
+            &1_u32.to_le_bytes()
+        );
+        assert_eq!(
+            &kernarg[BLOCK_COUNT_Z..BLOCK_COUNT_Z + 4],
+            &2_u32.to_le_bytes()
+        );
+        assert_eq!(&kernarg[REMAINDER_X..REMAINDER_X + 2], &1_u16.to_le_bytes());
+        assert_eq!(&kernarg[REMAINDER_Y..REMAINDER_Y + 2], &1_u16.to_le_bytes());
+        assert_eq!(&kernarg[REMAINDER_Z..REMAINDER_Z + 2], &0_u16.to_le_bytes());
+        assert_eq!(&kernarg[GRID_DIMS..GRID_DIMS + 2], &3_u16.to_le_bytes());
     }
 
     #[test]

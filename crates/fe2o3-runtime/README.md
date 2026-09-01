@@ -59,6 +59,16 @@ currently advertises peer copy, multi-device operation, atomics, or collectives;
 atomics and collectives have no general V1 facade operation. This is not HIP/HSA parity. See
 [`docs/runtime-community-architecture-v1.md`](../../docs/runtime-community-architecture-v1.md).
 
+Feature `hardware-qualification` exposes a repository-owned, SHA-pinned gfx942
+vecadd fixture and an exact KFD qualification constructor. That constructor
+retains a private gate which accepts only the fixture's fixed artifact, typed
+ABI, metadata-declared read/read/write effects, deterministic allocation
+contents, and launch geometry. It does not implement or weaken
+`KfdRuntimeLaunchAuthorityV1`, so it cannot satisfy the production Worker V3
+transition. The companion HSA lane and HIP module oracle exercise the same
+HSACO and inputs through one clean-checkout MI300X runner; see
+[`benchmarks/runtime_gfx942/README.md`](../../benchmarks/runtime_gfx942/README.md).
+
 The legacy direct `gfx942:xnack-` layer remains available for the protected
 Worker V3 path. It joins the bounded AMDHSA COV6 loader, selected descriptor and
 resource facts, complete implicit kernarg initialization, and the

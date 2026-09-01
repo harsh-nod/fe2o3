@@ -203,7 +203,9 @@ impl<A> TypedRuntimeKernelV1<A> {
 /// Three-dimensional grid and workgroup geometry.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RuntimeLaunchGeometryV1 {
+    /// Global work-item extent published in the AQL grid-size fields.
     pub grid: [u32; 3],
+    /// Work-items in one workgroup along each active dimension.
     pub workgroup: [u32; 3],
     pub dynamic_shared_bytes: u32,
 }

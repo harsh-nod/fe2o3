@@ -12,9 +12,12 @@ description = "Reviewed direct-HSA runtime adapter for the fe2o3 production Work
 default = []
 native-hsa = []
 hardware-test-hooks = ["native-hsa", "fe2o3-host/hardware-test-hooks"]
+# Exact repository-owned gfx942 runtime fixture and opt-in facade qualification.
+hardware-qualification = ["hardware-test-hooks", "fe2o3-runtime/hardware-qualification"]
 
 [dependencies]
 fe2o3-amd-target.workspace = true
+fe2o3-aql.workspace = true
 fe2o3-artifacts.workspace = true
 fe2o3-core.workspace = true
 fe2o3-host.workspace = true
