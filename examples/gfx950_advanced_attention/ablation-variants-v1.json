@@ -9,29 +9,6 @@
   },
   "admitted": [
     {
-      "feature": "kernel-kda-decode-wave-tiled-v1",
-      "kernel_export": "gfx950_kda_gdn_decode",
-      "baseline_feature": "kernel-kda-decode",
-      "isolated_change": "repeat the 16-channel mapping in four wave16 groups and restrict writes to the first group",
-      "shape": "three history taps by 16 channels; one recurrent token",
-      "unique_compulsory_global_bytes": 460,
-      "lds_bytes": 0,
-      "lds_stages": 0,
-      "pipeline_assessment": "the recurrent state, two exponentials, wave16 square reduction, and square root form one serial decode chain"
-    },
-    {
-      "feature": "kernel-kda-prefill-channel-mask-v1",
-      "kernel_export": "gfx950_kda_gdn_prefill",
-      "baseline_feature": "kernel-kda-prefill",
-      "isolated_change": "replace channel = linear % 16 with channel = linear & 15",
-      "shape": "eight ordered recurrent tokens by 16 channels in two four-token output chunks",
-      "unique_compulsory_global_bytes": 1676,
-      "lds_bytes": 0,
-      "lds_stages": 0,
-      "pipeline_assessment": "each token consumes the preceding state, so only the lane-index strength reduction is independent",
-      "preliminary_result": "baseline and variant produced byte-identical gfx950 HSACO 58536eb9abf290821b3d85d39c262ed5b49ac8d835ee959b2c36fa9446998bfa"
-    },
-    {
       "feature": "kernel-content-sparse-attention-reciprocal-reuse-v1",
       "kernel_export": "gfx950_content_sparse_attention",
       "baseline_feature": "kernel-content-sparse-attention",
@@ -111,13 +88,6 @@
       "status": "structurally-inapplicable",
       "reason": "the fixed reduction depth is one native K=128 MFMA tile, so no future tile exists to prefetch while the current tile executes",
       "retained_conclusion": "a second 2048-byte LDS copy would be duplicate staging rather than software pipelining and would change no dependency overlap"
-    },
-    {
-      "variant": "kda-prefill-ping-pong-v1",
-      "kernel_export": "gfx950_kda_gdn_prefill",
-      "status": "structurally-inapplicable",
-      "reason": "each token consumes the preceding recurrent state and normalization result",
-      "retained_conclusion": "multi-buffering cannot overlap the serial token recurrence without changing semantics"
     },
     {
       "variant": "mixing-lds-staging-v1",

@@ -1,13 +1,13 @@
 //! Independent safe CPU references for the fixed teaching profiles.
 
 use crate::{
-    ATTENTION_TOKENS_V1, CHANNELS_V1, DEEPSEEK_SPARSE_TOP_K_V1, HEAD_DIMENSION_V1, KDA_TAPS_V1,
+    ATTENTION_TOKENS_V1, CHANNELS_V1, DEEPSEEK_SPARSE_TOP_K_V1, HEAD_DIMENSION_V1,
+    KDA_CHUNK_TOKENS_V1, KDA_KEY_DIMENSION_V1, KDA_STATE_ELEMENTS_V1, KDA_VALUE_DIMENSION_V1,
     MIXING_STREAMS_V1, PREFILL_TOKENS_V1, SELECTED_BLOCKS_V1, SELECTED_TOKENS_V1,
     SINKHORN_ITERATIONS_V1, TOKENS_PER_BLOCK_V1,
 };
 
 const ATTENTION_SCALE_V1: f32 = 0.088_388_346;
-const RMS_EPSILON_V1: f32 = 1.0e-5;
 
 /// Input-policy failures reported by the safe CPU references.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -20,24 +20,28 @@ pub enum ReferenceErrorV1 {
     DegenerateNormalization,
     /// The selected-token list is empty after masking or repeats a valid token.
     InvalidSparseIndices,
+    /// A preactivated KDA decay or step size is outside its documented domain.
+    InvalidGate,
 }
 
-/// State and normalized output produced by one decode step.
+/// Matrix state and value output produced by one KDA decode step.
 #[derive(Clone, Debug, PartialEq)]
 pub struct KdaDecodeOutputV1 {
-    /// Updated recurrent state.
+    /// Updated logical `[K,V]` matrix state.
     pub state: Vec<f32>,
-    /// RMS-normalized updated state.
-    pub normalized: Vec<f32>,
+    /// Value-vector result `S_next^T (q / sqrt(K))`.
+    pub output: Vec<f32>,
 }
 
-/// Final state and all token outputs produced by prefill.
+/// State carry and all token outputs produced by two KDA chunks.
 #[derive(Clone, Debug, PartialEq)]
 pub struct KdaPrefillOutputV1 {
+    /// Matrix state after the first four-token chunk.
+    pub chunk_state: Vec<f32>,
     /// State after token seven.
     pub final_state: Vec<f32>,
-    /// Token-major normalized outputs with shape `[8][16]`.
-    pub normalized: Vec<f32>,
+    /// Token-major value outputs with shape `[8][16]`.
+    pub output: Vec<f32>,
 }
 
 /// Selected token IDs and output from indexed sparse attention.
@@ -78,89 +82,131 @@ fn sigmoid_reference_v1(value: f32) -> Result<f32, ReferenceErrorV1> {
         .ok_or(ReferenceErrorV1::NonFinite)
 }
 
-fn kda_step_reference_v1(
-    history: &[f32],
-    gate_input: &[f32],
-    state: &[f32],
-    convolution_weights: &[f32],
-) -> Result<KdaDecodeOutputV1, ReferenceErrorV1> {
-    validate_finite_v1(history, KDA_TAPS_V1 * CHANNELS_V1)?;
-    validate_finite_v1(gate_input, CHANNELS_V1)?;
-    validate_finite_v1(state, CHANNELS_V1)?;
-    validate_finite_v1(convolution_weights, KDA_TAPS_V1)?;
-
-    let mut next = vec![0.0_f32; CHANNELS_V1];
-    for channel in 0..CHANNELS_V1 {
-        let convolution = (0..KDA_TAPS_V1)
-            .map(|tap| history[tap * CHANNELS_V1 + channel] * convolution_weights[tap])
-            .sum::<f32>();
-        let proposal = (convolution + 0.25 * state[channel]).tanh();
-        let gate = sigmoid_reference_v1(gate_input[channel])?;
-        next[channel] = gate * state[channel] + (1.0 - gate) * proposal;
+fn validate_kda_gates_v2(alpha: &[f32], beta: &[f32]) -> Result<(), ReferenceErrorV1> {
+    if alpha.iter().any(|gate| *gate <= 0.0 || *gate > 1.0)
+        || beta.iter().any(|step| *step < 0.0 || *step > 1.0)
+    {
+        return Err(ReferenceErrorV1::InvalidGate);
     }
-    if next.iter().any(|value| !value.is_finite()) {
+    Ok(())
+}
+
+fn kda_matrix_step_f64_v2(
+    query: &[f32],
+    key: &[f32],
+    value: &[f32],
+    alpha: &[f32],
+    beta: f32,
+    state: &[f64],
+) -> (Vec<f64>, Vec<f64>) {
+    let mut decayed = vec![0.0_f64; KDA_STATE_ELEMENTS_V1];
+    for key_index in 0..KDA_KEY_DIMENSION_V1 {
+        for value_index in 0..KDA_VALUE_DIMENSION_V1 {
+            let index = key_index * KDA_VALUE_DIMENSION_V1 + value_index;
+            decayed[index] = f64::from(alpha[key_index]) * state[index];
+        }
+    }
+    let mut next = vec![0.0_f64; KDA_STATE_ELEMENTS_V1];
+    let mut output = vec![0.0_f64; KDA_VALUE_DIMENSION_V1];
+    for value_index in 0..KDA_VALUE_DIMENSION_V1 {
+        let prediction = (0..KDA_KEY_DIMENSION_V1)
+            .map(|key_index| {
+                f64::from(key[key_index])
+                    * decayed[key_index * KDA_VALUE_DIMENSION_V1 + value_index]
+            })
+            .sum::<f64>();
+        let error = f64::from(value[value_index]) - prediction;
+        for key_index in 0..KDA_KEY_DIMENSION_V1 {
+            let index = key_index * KDA_VALUE_DIMENSION_V1 + value_index;
+            next[index] = decayed[index] + f64::from(beta) * f64::from(key[key_index]) * error;
+            output[value_index] += 0.25 * f64::from(query[key_index]) * next[index];
+        }
+    }
+    (next, output)
+}
+
+/// Evaluates one matrix-state KDA step with independent f64 scalar loops.
+pub fn kda_decode_reference_v2(
+    query: &[f32],
+    key: &[f32],
+    value: &[f32],
+    alpha: &[f32],
+    beta: &[f32],
+    initial_state: &[f32],
+) -> Result<KdaDecodeOutputV1, ReferenceErrorV1> {
+    validate_finite_v1(query, KDA_KEY_DIMENSION_V1)?;
+    validate_finite_v1(key, KDA_KEY_DIMENSION_V1)?;
+    validate_finite_v1(value, KDA_VALUE_DIMENSION_V1)?;
+    validate_finite_v1(alpha, KDA_KEY_DIMENSION_V1)?;
+    validate_finite_v1(beta, 1)?;
+    validate_finite_v1(initial_state, KDA_STATE_ELEMENTS_V1)?;
+    validate_kda_gates_v2(alpha, beta)?;
+    let initial = initial_state
+        .iter()
+        .map(|entry| f64::from(*entry))
+        .collect::<Vec<_>>();
+    let (state, output) = kda_matrix_step_f64_v2(query, key, value, alpha, beta[0], &initial);
+    if state.iter().chain(&output).any(|entry| !entry.is_finite()) {
         return Err(ReferenceErrorV1::NonFinite);
     }
-    let square_sum = next.iter().map(|value| value * value).sum::<f32>();
-    let root = (square_sum / CHANNELS_V1 as f32 + RMS_EPSILON_V1).sqrt();
-    if !root.is_finite() || root <= 0.0 {
-        return Err(ReferenceErrorV1::DegenerateNormalization);
-    }
-    let normalized = next.iter().map(|value| value / root).collect();
     Ok(KdaDecodeOutputV1 {
-        state: next,
-        normalized,
+        state: state.into_iter().map(|entry| entry as f32).collect(),
+        output: output.into_iter().map(|entry| entry as f32).collect(),
     })
 }
 
-/// Evaluates one fixed three-tap KDA/GDN decode step.
-pub fn kda_gdn_decode_reference_v1(
-    history: &[f32],
-    gate_input: &[f32],
-    state: &[f32],
-    convolution_weights: &[f32],
-) -> Result<KdaDecodeOutputV1, ReferenceErrorV1> {
-    kda_step_reference_v1(history, gate_input, state, convolution_weights)
-}
-
-/// Evaluates eight ordered KDA/GDN prefill steps in two four-token chunks.
-pub fn kda_gdn_prefill_reference_v1(
-    input: &[f32],
-    gate_input: &[f32],
+/// Evaluates eight scalar KDA steps, independently of the GPU WY/UT transform.
+pub fn kda_prefill_reference_v2(
+    query: &[f32],
+    key: &[f32],
+    value: &[f32],
+    alpha: &[f32],
+    beta: &[f32],
     initial_state: &[f32],
-    convolution_weights: &[f32],
 ) -> Result<KdaPrefillOutputV1, ReferenceErrorV1> {
-    validate_finite_v1(input, PREFILL_TOKENS_V1 * CHANNELS_V1)?;
-    validate_finite_v1(gate_input, PREFILL_TOKENS_V1 * CHANNELS_V1)?;
-    validate_finite_v1(initial_state, CHANNELS_V1)?;
-    validate_finite_v1(convolution_weights, KDA_TAPS_V1)?;
-    let mut state = initial_state.to_vec();
-    let mut normalized = vec![0.0_f32; PREFILL_TOKENS_V1 * CHANNELS_V1];
-    for chunk in 0..2 {
-        for offset in 0..4 {
-            let token = chunk * 4 + offset;
-            let mut history = vec![0.0_f32; KDA_TAPS_V1 * CHANNELS_V1];
-            for tap in 0..KDA_TAPS_V1 {
-                if token >= tap {
-                    history[tap * CHANNELS_V1..(tap + 1) * CHANNELS_V1].copy_from_slice(
-                        &input[(token - tap) * CHANNELS_V1..(token - tap + 1) * CHANNELS_V1],
-                    );
-                }
-            }
-            let step = kda_step_reference_v1(
-                &history,
-                &gate_input[token * CHANNELS_V1..(token + 1) * CHANNELS_V1],
-                &state,
-                convolution_weights,
-            )?;
-            state = step.state;
-            normalized[token * CHANNELS_V1..(token + 1) * CHANNELS_V1]
-                .copy_from_slice(&step.normalized);
+    validate_finite_v1(query, PREFILL_TOKENS_V1 * KDA_KEY_DIMENSION_V1)?;
+    validate_finite_v1(key, PREFILL_TOKENS_V1 * KDA_KEY_DIMENSION_V1)?;
+    validate_finite_v1(value, PREFILL_TOKENS_V1 * KDA_VALUE_DIMENSION_V1)?;
+    validate_finite_v1(alpha, PREFILL_TOKENS_V1 * KDA_KEY_DIMENSION_V1)?;
+    validate_finite_v1(beta, PREFILL_TOKENS_V1)?;
+    validate_finite_v1(initial_state, KDA_STATE_ELEMENTS_V1)?;
+    validate_kda_gates_v2(alpha, beta)?;
+    let mut state = initial_state
+        .iter()
+        .map(|entry| f64::from(*entry))
+        .collect::<Vec<_>>();
+    let mut output = vec![0.0_f32; PREFILL_TOKENS_V1 * KDA_VALUE_DIMENSION_V1];
+    let mut chunk_state = Vec::new();
+    for token in 0..PREFILL_TOKENS_V1 {
+        let key_start = token * KDA_KEY_DIMENSION_V1;
+        let value_start = token * KDA_VALUE_DIMENSION_V1;
+        let (next, token_output) = kda_matrix_step_f64_v2(
+            &query[key_start..key_start + KDA_KEY_DIMENSION_V1],
+            &key[key_start..key_start + KDA_KEY_DIMENSION_V1],
+            &value[value_start..value_start + KDA_VALUE_DIMENSION_V1],
+            &alpha[key_start..key_start + KDA_KEY_DIMENSION_V1],
+            beta[token],
+            &state,
+        );
+        state = next;
+        output[value_start..value_start + KDA_VALUE_DIMENSION_V1].copy_from_slice(
+            &token_output
+                .into_iter()
+                .map(|entry| entry as f32)
+                .collect::<Vec<_>>(),
+        );
+        if token + 1 == KDA_CHUNK_TOKENS_V1 {
+            chunk_state = state.iter().map(|entry| *entry as f32).collect();
         }
     }
+    if state.iter().any(|entry| !entry.is_finite()) || output.iter().any(|entry| !entry.is_finite())
+    {
+        return Err(ReferenceErrorV1::NonFinite);
+    }
     Ok(KdaPrefillOutputV1 {
-        final_state: state,
-        normalized,
+        chunk_state,
+        final_state: state.into_iter().map(|entry| entry as f32).collect(),
+        output,
     })
 }
 

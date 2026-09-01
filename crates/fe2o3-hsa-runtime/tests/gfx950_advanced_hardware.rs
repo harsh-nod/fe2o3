@@ -33,7 +33,13 @@ use std::io::Write;
 #[cfg(feature = "hardware-test-hooks")]
 const CHANNELS_V1: usize = 16;
 #[cfg(feature = "hardware-test-hooks")]
-const KDA_TAPS_V1: usize = 3;
+const KDA_KEY_DIMENSION_V1: usize = 16;
+#[cfg(feature = "hardware-test-hooks")]
+const KDA_VALUE_DIMENSION_V1: usize = 16;
+#[cfg(feature = "hardware-test-hooks")]
+const KDA_STATE_ELEMENTS_V1: usize = KDA_KEY_DIMENSION_V1 * KDA_VALUE_DIMENSION_V1;
+#[cfg(feature = "hardware-test-hooks")]
+const KDA_CHUNK_TOKENS_V1: usize = 4;
 #[cfg(feature = "hardware-test-hooks")]
 const PREFILL_TOKENS_V1: usize = 8;
 #[cfg(feature = "hardware-test-hooks")]
@@ -296,7 +302,9 @@ enum AbiArg {
 #[cfg(feature = "hardware-test-hooks")]
 const SIX_SLICES: &[AbiArg] = &[AbiArg::Slice; 6];
 #[cfg(feature = "hardware-test-hooks")]
-const SEVEN_SLICES: &[AbiArg] = &[AbiArg::Slice; 7];
+const EIGHT_SLICES: &[AbiArg] = &[AbiArg::Slice; 8];
+#[cfg(feature = "hardware-test-hooks")]
+const NINE_KDA_SLICES: &[AbiArg] = &[AbiArg::Slice; 9];
 #[cfg(feature = "hardware-test-hooks")]
 const FIVE_SLICES: &[AbiArg] = &[AbiArg::Slice; 5];
 #[cfg(feature = "hardware-test-hooks")]
@@ -352,21 +360,21 @@ struct AdvancedCase {
 
 #[cfg(feature = "hardware-test-hooks")]
 const KDA_DECODE: AdvancedCase = AdvancedCase {
-    label: "gfx950 KDA/GDN decode",
-    export: "gfx950_kda_gdn_decode",
-    descriptor: "gfx950_kda_gdn_decode.kd",
-    workgroup_x: 64,
+    label: "gfx950 Kimi Delta Attention decode",
+    export: "gfx950_kda_decode",
+    descriptor: "gfx950_kda_decode.kd",
+    workgroup_x: 256,
     static_lds_bytes: 0,
-    args: SIX_SLICES,
+    args: EIGHT_SLICES,
 };
 #[cfg(feature = "hardware-test-hooks")]
 const KDA_PREFILL: AdvancedCase = AdvancedCase {
-    label: "gfx950 KDA/GDN prefill",
-    export: "gfx950_kda_gdn_prefill",
-    descriptor: "gfx950_kda_gdn_prefill.kd",
-    workgroup_x: 64,
+    label: "gfx950 Kimi Delta Attention chunkwise prefill",
+    export: "gfx950_kda_chunkwise_prefill",
+    descriptor: "gfx950_kda_chunkwise_prefill.kd",
+    workgroup_x: 256,
     static_lds_bytes: 0,
-    args: SEVEN_SLICES,
+    args: NINE_KDA_SLICES,
 };
 #[cfg(feature = "hardware-test-hooks")]
 const SPARSE_ATTENTION: AdvancedCase = AdvancedCase {
@@ -851,6 +859,54 @@ fn deterministic_floats(count: usize, salt: usize, scale: f32) -> Vec<f32> {
 }
 
 #[cfg(feature = "hardware-test-hooks")]
+fn normalized_kda_rows(rows: usize, salt: usize) -> Vec<f32> {
+    let mut values = deterministic_floats(rows * KDA_KEY_DIMENSION_V1, salt, 0.8);
+    for row in values.chunks_mut(KDA_KEY_DIMENSION_V1) {
+        let norm = row.iter().map(|value| value * value).sum::<f32>().sqrt();
+        for value in row {
+            *value /= norm;
+        }
+    }
+    values
+}
+
+#[cfg(feature = "hardware-test-hooks")]
+fn kda_state_value_major(state: &[f32]) -> Vec<f32> {
+    let mut physical = vec![0.0; KDA_STATE_ELEMENTS_V1];
+    for value in 0..KDA_VALUE_DIMENSION_V1 {
+        for key in 0..KDA_KEY_DIMENSION_V1 {
+            physical[value * KDA_KEY_DIMENSION_V1 + key] =
+                state[key * KDA_VALUE_DIMENSION_V1 + value];
+        }
+    }
+    physical
+}
+
+#[cfg(feature = "hardware-test-hooks")]
+fn kda_replicated_decode_output(output: &[f32]) -> Vec<f32> {
+    let mut physical = vec![0.0; KDA_STATE_ELEMENTS_V1];
+    for value in 0..KDA_VALUE_DIMENSION_V1 {
+        for key in 0..KDA_KEY_DIMENSION_V1 {
+            physical[value * KDA_KEY_DIMENSION_V1 + key] = output[value];
+        }
+    }
+    physical
+}
+
+#[cfg(feature = "hardware-test-hooks")]
+fn kda_replicated_chunk_output(output: &[f32], chunk: usize) -> Vec<f32> {
+    let mut physical = vec![0.0; KDA_STATE_ELEMENTS_V1];
+    for value in 0..KDA_VALUE_DIMENSION_V1 {
+        for key in 0..KDA_KEY_DIMENSION_V1 {
+            let token = chunk * KDA_CHUNK_TOKENS_V1 + key / 4;
+            physical[value * KDA_KEY_DIMENSION_V1 + key] =
+                output[token * KDA_VALUE_DIMENSION_V1 + value];
+        }
+    }
+    physical
+}
+
+#[cfg(feature = "hardware-test-hooks")]
 fn deterministic_fp8(count: usize, salt: usize) -> Vec<u8> {
     const CODES: [u8; 5] = [0xb8, 0xb0, 0x00, 0x30, 0x38];
     (0..count)
@@ -871,72 +927,123 @@ fn repeated_attention_query() -> (Vec<u8>, Vec<u8>) {
 #[cfg(feature = "hardware-test-hooks")]
 fn attention_plans(case: AdvancedCase) -> Result<Vec<LaunchPlan>, BoxError> {
     let plan = match case.export {
-        "gfx950_kda_gdn_decode" => {
-            let history = deterministic_floats(KDA_TAPS_V1 * CHANNELS_V1, 1, 0.6);
-            let gates = deterministic_floats(CHANNELS_V1, 2, 0.8);
-            let state = deterministic_floats(CHANNELS_V1, 3, 0.5);
-            let weights = vec![0.5, -0.25, 0.125];
-            let expected = attention_reference::kda_gdn_decode_reference_v1(
-                &history, &gates, &state, &weights,
+        "gfx950_kda_decode" => {
+            let query = normalized_kda_rows(1, 1);
+            let key = normalized_kda_rows(1, 2);
+            let value = deterministic_floats(KDA_VALUE_DIMENSION_V1, 3, 0.5);
+            let alpha = deterministic_floats(KDA_KEY_DIMENSION_V1, 4, 0.2)
+                .into_iter()
+                .map(|entry| 0.75 + entry)
+                .collect::<Vec<_>>();
+            let beta = vec![0.6];
+            let initial_state = deterministic_floats(KDA_STATE_ELEMENTS_V1, 5, 0.25);
+            let physical_initial_state = kda_state_value_major(&initial_state);
+            let expected = attention_reference::kda_decode_reference_v2(
+                &query,
+                &key,
+                &value,
+                &alpha,
+                &beta,
+                &initial_state,
             )
             .map_err(|error| format!("KDA decode reference failed: {error:?}"))?;
+            let lengths = [
+                query.len(),
+                key.len(),
+                value.len(),
+                alpha.len(),
+                beta.len(),
+                physical_initial_state.len(),
+                KDA_STATE_ELEMENTS_V1,
+                KDA_STATE_ELEMENTS_V1,
+            ];
             LaunchPlan {
                 label: case.label.into(),
                 buffers: vec![
-                    input("history", &history),
-                    input("gate_input", &gates),
-                    input("state", &state),
-                    input("convolution_weights", &weights),
-                    f32_output("state_output", expected.state, 3.0e-3),
-                    f32_output("normalized_output", expected.normalized, 3.0e-3),
+                    input("query", &query),
+                    input("key", &key),
+                    input("value", &value),
+                    input("alpha", &alpha),
+                    input("beta", &beta),
+                    input("initial_state_value_major", &physical_initial_state),
+                    f32_output(
+                        "final_state_value_major",
+                        kda_state_value_major(&expected.state),
+                        2.0e-5,
+                    ),
+                    f32_output(
+                        "output_replicated",
+                        kda_replicated_decode_output(&expected.output),
+                        2.0e-5,
+                    ),
                 ],
-                args: (0..6)
+                args: (0..8)
                     .map(|buffer| PlannedArg::Slice {
-                        elements: [
-                            history.len(),
-                            gates.len(),
-                            state.len(),
-                            weights.len(),
-                            CHANNELS_V1,
-                            CHANNELS_V1,
-                        ][buffer],
+                        elements: lengths[buffer],
                         buffer,
                     })
                     .collect(),
             }
         }
-        "gfx950_kda_gdn_prefill" => {
-            let values = deterministic_floats(PREFILL_TOKENS_V1 * CHANNELS_V1, 4, 0.5);
-            let gates = deterministic_floats(PREFILL_TOKENS_V1 * CHANNELS_V1, 5, 0.7);
-            let state = deterministic_floats(CHANNELS_V1, 3, 0.5);
-            let weights = vec![0.5, -0.25, 0.125];
-            let expected = attention_reference::kda_gdn_prefill_reference_v1(
-                &values, &gates, &state, &weights,
+        "gfx950_kda_chunkwise_prefill" => {
+            let query = normalized_kda_rows(PREFILL_TOKENS_V1, 6);
+            let key = normalized_kda_rows(PREFILL_TOKENS_V1, 7);
+            let value = deterministic_floats(PREFILL_TOKENS_V1 * KDA_VALUE_DIMENSION_V1, 8, 0.5);
+            let alpha = deterministic_floats(PREFILL_TOKENS_V1 * KDA_KEY_DIMENSION_V1, 9, 0.2)
+                .into_iter()
+                .map(|entry| 0.75 + entry)
+                .collect::<Vec<_>>();
+            let beta = (0..PREFILL_TOKENS_V1)
+                .map(|token| 0.35 + 0.05 * token as f32)
+                .collect::<Vec<_>>();
+            let initial_state = deterministic_floats(KDA_STATE_ELEMENTS_V1, 10, 0.25);
+            let physical_initial_state = kda_state_value_major(&initial_state);
+            let expected = attention_reference::kda_prefill_reference_v2(
+                &query,
+                &key,
+                &value,
+                &alpha,
+                &beta,
+                &initial_state,
             )
             .map_err(|error| format!("KDA prefill reference failed: {error:?}"))?;
-            let normalized_first = expected.normalized[..4 * CHANNELS_V1].to_vec();
-            let normalized_second = expected.normalized[4 * CHANNELS_V1..].to_vec();
             let lengths = [
-                values.len(),
-                gates.len(),
-                state.len(),
-                weights.len(),
-                CHANNELS_V1,
-                4 * CHANNELS_V1,
-                4 * CHANNELS_V1,
+                query.len(),
+                key.len(),
+                value.len(),
+                alpha.len(),
+                beta.len(),
+                physical_initial_state.len(),
+                KDA_STATE_ELEMENTS_V1,
+                KDA_STATE_ELEMENTS_V1,
+                KDA_STATE_ELEMENTS_V1,
             ];
             LaunchPlan {
                 label: case.label.into(),
                 buffers: vec![
-                    input("input", &values),
-                    input("gate_input", &gates),
-                    input("initial_state", &state),
-                    input("convolution_weights", &weights),
-                    f32_output("final_state", expected.final_state, 3.0e-3),
-                    f32_output("normalized_output_first", normalized_first, 3.0e-3),
-                    f32_output("normalized_output_second", normalized_second, 3.0e-3),
+                    input("query", &query),
+                    input("key", &key),
+                    input("value", &value),
+                    input("alpha", &alpha),
+                    input("beta", &beta),
+                    input("initial_state_value_major", &physical_initial_state),
+                    f32_output(
+                        "final_state_value_major",
+                        kda_state_value_major(&expected.final_state),
+                        2.0e-4,
+                    ),
+                    f32_output(
+                        "output_chunk0_replicated",
+                        kda_replicated_chunk_output(&expected.output, 0),
+                        2.0e-4,
+                    ),
+                    f32_output(
+                        "output_chunk1_replicated",
+                        kda_replicated_chunk_output(&expected.output, 1),
+                        2.0e-4,
+                    ),
                 ],
-                args: (0..7)
+                args: (0..9)
                     .map(|buffer| PlannedArg::Slice {
                         buffer,
                         elements: lengths[buffer],
@@ -2531,12 +2638,12 @@ macro_rules! hardware_case {
 
 #[cfg(feature = "hardware-test-hooks")]
 hardware_case!(
-    gfx950_kda_gdn_decode_rust_cov6_matches_cpu_reference,
+    gfx950_kda_decode_rust_cov6_matches_cpu_reference,
     KDA_DECODE
 );
 #[cfg(feature = "hardware-test-hooks")]
 hardware_case!(
-    gfx950_kda_gdn_prefill_rust_cov6_matches_cpu_reference,
+    gfx950_kda_chunkwise_prefill_rust_cov6_matches_cpu_reference,
     KDA_PREFILL
 );
 #[cfg(feature = "hardware-test-hooks")]

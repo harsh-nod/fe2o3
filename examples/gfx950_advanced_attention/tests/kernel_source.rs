@@ -3,6 +3,7 @@ use std::collections::BTreeSet;
 use fe2o3_gfx950_advanced_attention::{
     GFX950_ADVANCED_ATTENTION_GRID_V1, GFX950_ADVANCED_ATTENTION_SOURCE_BLOCKER_V1,
     GFX950_ADVANCED_ATTENTION_SOURCE_LOWERING_SUPPORTED_V1, GFX950_ADVANCED_ATTENTION_WORKGROUP_V1,
+    GFX950_KDA_WORKGROUP_V2,
 };
 use syn::{Item, Visibility};
 
@@ -47,8 +48,8 @@ fn source_contains_the_eight_expected_typed_kernels() {
             "gfx950_content_sparse_attention".to_string(),
             "gfx950_deepseek_sparse_attention".to_string(),
             "gfx950_four_branch_residual".to_string(),
-            "gfx950_kda_gdn_decode".to_string(),
-            "gfx950_kda_gdn_prefill".to_string(),
+            "gfx950_kda_chunkwise_prefill".to_string(),
+            "gfx950_kda_decode".to_string(),
             "gfx950_mhc_sinkhorn_mix".to_string(),
         ])
     );
@@ -65,14 +66,16 @@ fn source_contains_the_eight_expected_typed_kernels() {
             .join(" ");
         assert!(attributes.contains("typed"));
         assert!(attributes.contains("namespace"));
-        assert!(attributes.contains("required = [64 , 1 , 1]"));
-        assert!(attributes.contains("max = [64 , 1 , 1]"));
+        let kda = function.sig.ident.to_string().starts_with("gfx950_kda_");
+        let workgroup = if kda { 256 } else { 64 };
+        assert!(attributes.contains(&format!("required = [{workgroup} , 1 , 1]")));
+        assert!(attributes.contains(&format!("max = [{workgroup} , 1 , 1]")));
         assert!(attributes.contains("max_grid = [1 , 1 , 1]"));
     }
 }
 
 #[test]
-fn source_contains_the_four_standalone_ablation_kernels() {
+fn source_contains_the_three_standalone_ablation_kernels() {
     let file = syn::parse_file(ABLATION_SOURCE).expect("ablation source parses as ordinary Rust");
     let kernels: Vec<_> = file
         .items
@@ -89,7 +92,7 @@ fn source_contains_the_four_standalone_ablation_kernels() {
             _ => None,
         })
         .collect();
-    assert_eq!(kernels.len(), 4);
+    assert_eq!(kernels.len(), 3);
     assert_eq!(
         kernels
             .iter()
@@ -98,7 +101,6 @@ fn source_contains_the_four_standalone_ablation_kernels() {
         BTreeSet::from([
             "gfx950_attnres_aggregate".to_string(),
             "gfx950_four_branch_residual".to_string(),
-            "gfx950_kda_gdn_decode".to_string(),
             "gfx950_mhc_sinkhorn_mix".to_string(),
         ])
     );
@@ -115,7 +117,7 @@ fn source_is_safe_fixed_shape_rust_without_hip_escape_hatches() {
     let lowercase = SOURCE.to_ascii_lowercase();
     assert!(!SOURCE.contains("unsafe"));
     assert!(!SOURCE.contains("include!"));
-    assert_eq!(SOURCE.matches("macro_rules!").count(), 2);
+    assert_eq!(SOURCE.matches("macro_rules!").count(), 5);
     assert!(
         SOURCE.contains(
             "#[cfg(any(target_arch = \"amdgpu\", test))]\nmacro_rules! decode_fp8_e4m3_v1"
@@ -130,7 +132,8 @@ fn source_is_safe_fixed_shape_rust_without_hip_escape_hatches() {
     assert!(!lowercase.contains("hiplaunchkernel"));
     assert!(!lowercase.contains("std::process"));
     for marker in [
-        "KDA_TAPS_V1",
+        "KDA_STATE_ELEMENTS_V1",
+        "KDA_CHUNK_TOKENS_V1",
         "PREFILL_TOKENS_V1",
         "ATTENTION_TOKENS_V1",
         "HEAD_DIMENSION_V1",
@@ -138,7 +141,6 @@ fn source_is_safe_fixed_shape_rust_without_hip_escape_hatches() {
         "SINKHORN_ITERATIONS_V1",
         "thread::grid_leader()",
         "get_mut_exclusive",
-        "math.exp_f32(-2.0 * value)",
         "exponent == 15 && mantissa == 7.0",
         "Gfx950Fp8MfmaAMatrix::row_major",
         "stage_k_transposed",
@@ -146,6 +148,9 @@ fn source_is_safe_fixed_shape_rust_without_hip_escape_hatches() {
         "multiply_accumulate_fp8",
         "reduce_sum_f32::<16>",
         "broadcast_f32::<16>",
+        "broadcast_f32::<64>",
+        "final_state.get_mut(thread::index_1d())",
+        "kda_chunk_wy_v3!",
     ] {
         assert!(
             SOURCE.contains(marker),
@@ -157,6 +162,7 @@ fn source_is_safe_fixed_shape_rust_without_hip_escape_hatches() {
 #[test]
 fn package_states_the_production_source_and_evidence_boundary() {
     assert_eq!(GFX950_ADVANCED_ATTENTION_WORKGROUP_V1, [64, 1, 1]);
+    assert_eq!(GFX950_KDA_WORKGROUP_V2, [256, 1, 1]);
     assert_eq!(GFX950_ADVANCED_ATTENTION_GRID_V1, [1, 1, 1]);
     assert!(GFX950_ADVANCED_ATTENTION_SOURCE_LOWERING_SUPPORTED_V1);
     assert!(
@@ -179,8 +185,6 @@ fn package_states_the_production_source_and_evidence_boundary() {
     }
 
     for variant in [
-        "kernel-kda-decode-wave-tiled-v1",
-        "kernel-kda-prefill-channel-mask-v1",
         "kernel-content-sparse-attention-reciprocal-reuse-v1",
         "kernel-compressed-hybrid-attention-division-baseline-v1",
         "kernel-attnres-aggregate-explicit-reuse-v1",
@@ -211,7 +215,6 @@ fn package_states_the_production_source_and_evidence_boundary() {
         "content-sparse-selected-score-scalar-v1",
         "compressed-hybrid-seven-score-scalar-v1",
         "attention-lds-double-buffer-v1",
-        "kda-prefill-ping-pong-v1",
         "mixing-lds-staging-v1",
     ] {
         assert!(

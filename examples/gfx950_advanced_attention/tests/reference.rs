@@ -1,12 +1,12 @@
 use fe2o3_gfx950_advanced_attention::{
-    ATTENTION_TOKENS_V1, CHANNELS_V1, DEEPSEEK_INVALID_TOKEN_V1, HEAD_DIMENSION_V1, KDA_TAPS_V1,
-    MIXING_STREAMS_V1, PREFILL_TOKENS_V1,
+    ATTENTION_TOKENS_V1, CHANNELS_V1, DEEPSEEK_INVALID_TOKEN_V1, HEAD_DIMENSION_V1,
+    KDA_KEY_DIMENSION_V1, KDA_STATE_ELEMENTS_V1, KDA_VALUE_DIMENSION_V1, MIXING_STREAMS_V1,
+    PREFILL_TOKENS_V1,
     reference::{
         ReferenceErrorV1, attnres_aggregate_reference_v1, compressed_hybrid_attention_reference_v1,
         content_sparse_attention_reference_v1, deepseek_sparse_attention_reference_v1,
-        four_branch_residual_reference_v1, kda_gdn_decode_reference_v1,
-        kda_gdn_prefill_reference_v1, mhc_sinkhorn_matrix_reference_v1,
-        mhc_sinkhorn_mix_reference_v1,
+        four_branch_residual_reference_v1, kda_decode_reference_v2, kda_prefill_reference_v2,
+        mhc_sinkhorn_matrix_reference_v1, mhc_sinkhorn_mix_reference_v1,
     },
 };
 
@@ -30,34 +30,99 @@ fn assert_finite(values: &[f32]) {
     assert!(values.iter().all(|value| value.is_finite()));
 }
 
-#[test]
-fn kda_decode_and_prefill_cover_the_exact_recurrence_shapes() {
-    let weights = [0.5_f32, -0.25, 0.125];
-    let initial = deterministic_floats(CHANNELS_V1, 3, 0.5);
-    let decode = kda_gdn_decode_reference_v1(
-        &deterministic_floats(KDA_TAPS_V1 * CHANNELS_V1, 1, 0.6),
-        &deterministic_floats(CHANNELS_V1, 2, 0.8),
-        &initial,
-        &weights,
-    )
-    .unwrap();
-    assert_eq!(decode.state.len(), CHANNELS_V1);
-    assert_eq!(decode.normalized.len(), CHANNELS_V1);
-    assert_finite(&decode.state);
-    assert_finite(&decode.normalized);
+fn normalized_rows(rows: usize, salt: usize) -> Vec<f32> {
+    let mut values = deterministic_floats(rows * KDA_KEY_DIMENSION_V1, salt, 0.8);
+    for row in values.chunks_mut(KDA_KEY_DIMENSION_V1) {
+        let norm = row.iter().map(|value| value * value).sum::<f32>().sqrt();
+        for value in row {
+            *value /= norm;
+        }
+    }
+    values
+}
 
-    let prefill = kda_gdn_prefill_reference_v1(
-        &deterministic_floats(PREFILL_TOKENS_V1 * CHANNELS_V1, 4, 0.5),
-        &deterministic_floats(PREFILL_TOKENS_V1 * CHANNELS_V1, 5, 0.7),
+#[test]
+fn kda_decode_and_prefill_cover_the_exact_matrix_state_shapes() {
+    let initial = deterministic_floats(KDA_STATE_ELEMENTS_V1, 3, 0.25);
+    let decode = kda_decode_reference_v2(
+        &normalized_rows(1, 1),
+        &normalized_rows(1, 2),
+        &deterministic_floats(KDA_VALUE_DIMENSION_V1, 4, 0.5),
+        &deterministic_floats(KDA_KEY_DIMENSION_V1, 5, 0.2)
+            .into_iter()
+            .map(|value| 0.75 + value)
+            .collect::<Vec<_>>(),
+        &[0.6],
         &initial,
-        &weights,
     )
     .unwrap();
-    assert_eq!(prefill.final_state.len(), CHANNELS_V1);
-    assert_eq!(prefill.normalized.len(), PREFILL_TOKENS_V1 * CHANNELS_V1);
+    assert_eq!(decode.state.len(), KDA_STATE_ELEMENTS_V1);
+    assert_eq!(decode.output.len(), KDA_VALUE_DIMENSION_V1);
+    assert_finite(&decode.state);
+    assert_finite(&decode.output);
+
+    let prefill = kda_prefill_reference_v2(
+        &normalized_rows(PREFILL_TOKENS_V1, 6),
+        &normalized_rows(PREFILL_TOKENS_V1, 7),
+        &deterministic_floats(PREFILL_TOKENS_V1 * KDA_VALUE_DIMENSION_V1, 8, 0.5),
+        &vec![0.8; PREFILL_TOKENS_V1 * KDA_KEY_DIMENSION_V1],
+        &vec![0.55; PREFILL_TOKENS_V1],
+        &initial,
+    )
+    .unwrap();
+    assert_eq!(prefill.chunk_state.len(), KDA_STATE_ELEMENTS_V1);
+    assert_eq!(prefill.final_state.len(), KDA_STATE_ELEMENTS_V1);
+    assert_eq!(
+        prefill.output.len(),
+        PREFILL_TOKENS_V1 * KDA_VALUE_DIMENSION_V1
+    );
+    assert_ne!(prefill.chunk_state, prefill.final_state);
     assert_finite(&prefill.final_state);
-    assert_finite(&prefill.normalized);
+    assert_finite(&prefill.output);
     assert_ne!(prefill.final_state, decode.state);
+}
+
+#[test]
+fn kda_reference_matches_a_hand_computable_rank_one_update() {
+    let mut query = vec![0.0; KDA_KEY_DIMENSION_V1];
+    let mut key = vec![0.0; KDA_KEY_DIMENSION_V1];
+    query[0] = 1.0;
+    key[0] = 1.0;
+    let mut value = vec![0.0; KDA_VALUE_DIMENSION_V1];
+    value[3] = 2.0;
+    let result = kda_decode_reference_v2(
+        &query,
+        &key,
+        &value,
+        &vec![1.0; KDA_KEY_DIMENSION_V1],
+        &[0.5],
+        &vec![0.0; KDA_STATE_ELEMENTS_V1],
+    )
+    .unwrap();
+    assert_eq!(result.state[3], 1.0);
+    assert_eq!(result.output[3], 0.25);
+    assert_eq!(
+        result.state.iter().filter(|entry| **entry != 0.0).count(),
+        1
+    );
+}
+
+#[test]
+fn kda_zero_beta_is_decay_only() {
+    let initial = deterministic_floats(KDA_STATE_ELEMENTS_V1, 9, 0.25);
+    let alpha = vec![0.75; KDA_KEY_DIMENSION_V1];
+    let result = kda_decode_reference_v2(
+        &normalized_rows(1, 10),
+        &normalized_rows(1, 11),
+        &vec![1.0; KDA_VALUE_DIMENSION_V1],
+        &alpha,
+        &[0.0],
+        &initial,
+    )
+    .unwrap();
+    for (actual, original) in result.state.iter().zip(initial) {
+        assert!((*actual - 0.75 * original).abs() < 1.0e-7);
+    }
 }
 
 #[test]
@@ -182,8 +247,19 @@ fn mhc_sinkhorn_matrix_and_stream_mix_are_finite_and_bounded() {
 #[test]
 fn references_reject_wrong_shapes_and_non_finite_inputs() {
     assert_eq!(
-        kda_gdn_decode_reference_v1(&[], &[], &[], &[]),
+        kda_decode_reference_v2(&[], &[], &[], &[], &[], &[]),
         Err(ReferenceErrorV1::Shape)
+    );
+    assert_eq!(
+        kda_decode_reference_v2(
+            &vec![0.0; KDA_KEY_DIMENSION_V1],
+            &vec![0.0; KDA_KEY_DIMENSION_V1],
+            &vec![0.0; KDA_VALUE_DIMENSION_V1],
+            &vec![1.1; KDA_KEY_DIMENSION_V1],
+            &[0.5],
+            &vec![0.0; KDA_STATE_ELEMENTS_V1],
+        ),
+        Err(ReferenceErrorV1::InvalidGate)
     );
     let mut logits = vec![0.0_f32; MIXING_STREAMS_V1 * MIXING_STREAMS_V1];
     logits[0] = f32::INFINITY;
