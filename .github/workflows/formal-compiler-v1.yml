@@ -1,0 +1,90 @@
+name: Formal Compiler V1
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/formal-compiler-v1.yml"
+      - "crates/fe2o3-amdgcn-model/**"
+      - "crates/fe2o3-host/**"
+      - "crates/fe2o3-kernel-analysis/**"
+      - "crates/fe2o3-lower-mir-kernel/**"
+      - "crates/fe2o3-mir-model/**"
+      - "crates/fe2o3-proof-contracts/**"
+      - "crates/fe2o3-runtime-model/**"
+      - "crates/fe2o3-verifier/**"
+      - "crates/rustc-codegen-fe2o3/**"
+      - "scripts/ci-local.sh"
+      - "scripts/test-*-verus*.sh"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/formal-compiler-v1.yml"
+      - "crates/fe2o3-amdgcn-model/**"
+      - "crates/fe2o3-host/**"
+      - "crates/fe2o3-kernel-analysis/**"
+      - "crates/fe2o3-lower-mir-kernel/**"
+      - "crates/fe2o3-mir-model/**"
+      - "crates/fe2o3-proof-contracts/**"
+      - "crates/fe2o3-runtime-model/**"
+      - "crates/fe2o3-verifier/**"
+      - "crates/rustc-codegen-fe2o3/**"
+      - "scripts/ci-local.sh"
+      - "scripts/test-*-verus*.sh"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: formal-compiler-v1-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  proof-ledger:
+    name: Pinned compiler and runtime proof closures
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Install Verus Rust toolchain
+        run: >-
+          rustup toolchain install 1.97.1-x86_64-unknown-linux-gnu
+          --profile minimal --no-self-update
+
+      - name: Install exact pinned Verus closures
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          readonly compiler_version="0.2026.08.02.b677dd5"
+          readonly compiler_archive_sha256="4c769256e888ee84bde85aae44d95c46bccbb8cf70e1d09f537b0d05fe965dee"
+          readonly runtime_version="0.2026.08.09.92f466f"
+          readonly runtime_archive_sha256="2f5a41c553f424aacdd732339e9d125563716a0b003c27730f75d6f81a282cef"
+          readonly compiler_archive="${RUNNER_TEMP}/verus-compiler.zip"
+          readonly runtime_archive="${RUNNER_TEMP}/verus-runtime.zip"
+          readonly compiler_root="${RUNNER_TEMP}/verus-compiler"
+          readonly runtime_root="${RUNNER_TEMP}/verus-runtime"
+
+          curl --proto '=https' --tlsv1.2 --fail --location --silent --show-error \
+            --output "${compiler_archive}" \
+            "https://github.com/verus-lang/verus/releases/download/release/${compiler_version}/verus-${compiler_version}-x86-linux.zip"
+          printf '%s  %s\n' "${compiler_archive_sha256}" "${compiler_archive}" \
+            | sha256sum --check --strict -
+          curl --proto '=https' --tlsv1.2 --fail --location --silent --show-error \
+            --output "${runtime_archive}" \
+            "https://github.com/verus-lang/verus/releases/download/release/${runtime_version}/verus-${runtime_version}-x86-linux.zip"
+          printf '%s  %s\n' "${runtime_archive_sha256}" "${runtime_archive}" \
+            | sha256sum --check --strict -
+
+          mkdir -- "${compiler_root}" "${runtime_root}"
+          unzip -q "${compiler_archive}" -d "${compiler_root}"
+          unzip -q "${runtime_archive}" -d "${runtime_root}"
+          printf 'VERUS_COMPILER=%s\n' \
+            "${compiler_root}/verus-x86-linux/verus" >> "${GITHUB_ENV}"
+          printf 'VERUS_RUNTIME=%s\n' \
+            "${runtime_root}/verus-x86-linux/verus" >> "${GITHUB_ENV}"
+
+      - name: Verify the complete bounded proof ledger
+        run: scripts/ci-local.sh verus

@@ -23,6 +23,7 @@ pub const TARGET_BINDING_REFINEMENT_MODEL_SHA256_V1: [u8; 32] = [
 pub struct ValidatedProductionTargetSemanticBindingV1 {
     profile: ProductionAmdTargetProfileV1,
     kernel_count: usize,
+    formal_model_sha256: [u8; 32],
 }
 
 impl ValidatedProductionTargetSemanticBindingV1 {
@@ -35,7 +36,7 @@ impl ValidatedProductionTargetSemanticBindingV1 {
     }
 
     pub const fn formal_model_sha256(&self) -> [u8; 32] {
-        TARGET_BINDING_REFINEMENT_MODEL_SHA256_V1
+        self.formal_model_sha256
     }
 
     /// The checked relation matches the input relation of the pinned Verus V1 theorem.
@@ -145,6 +146,7 @@ pub fn validate_production_target_semantic_binding_v1(
     Ok(ValidatedProductionTargetSemanticBindingV1 {
         profile,
         kernel_count: expected.kernels.len(),
+        formal_model_sha256: TARGET_BINDING_REFINEMENT_MODEL_SHA256_V1,
     })
 }
 

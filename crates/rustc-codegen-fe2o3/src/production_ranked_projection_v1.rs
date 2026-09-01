@@ -819,8 +819,17 @@ pub struct ProductionRankedSemanticProjectionRosterReceiptV1 {
 #[must_use = "dropping ranked verification abandons its production lineage"]
 pub(crate) struct AuthenticatedRankedVerificationV5 {
     middle_end_evidence: fe2o3_pliron::ProductionMiddleEndEvidenceV5,
+    affine_bounds: Box<[AuthenticatedRankedAffineBoundsV1]>,
     functional: Option<AuthenticatedFunctionalVerificationV1>,
     semantic_u32_induction: fe2o3_mir_model::SemanticU32InductionNoOverflowReportV1,
+}
+
+/// Independently checked affine theorem retained at its exact ranked-IR site.
+struct AuthenticatedRankedAffineBoundsV1 {
+    block: usize,
+    operation: usize,
+    dimension: usize,
+    verification: fe2o3_verifier::VerifiedCompilerAffineBoundsV1,
 }
 
 /// One canonically ordered ranked-verification owner bound to its exact root
@@ -939,6 +948,11 @@ impl AuthenticatedRankedVerificationV5 {
         self.functional.is_some()
     }
 
+    #[cfg(test)]
+    pub(crate) fn independently_checked_affine_bound_count(&self) -> usize {
+        self.affine_bounds.len()
+    }
+
     pub(crate) fn retained_functional_verification_is_coherent(&self) -> bool {
         self.functional.as_ref().is_none_or(|functional| {
             functional.aggregate.report().contract_identity()
@@ -973,6 +987,8 @@ pub(crate) enum ProductionRankedVerificationErrorV1 {
     SemanticU32Induction(fe2o3_mir_model::SemanticU32InductionAnalysisErrorV1),
     Custody(fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1),
     MiddleEndEvidence(fe2o3_pliron::ProductionMiddleEndEvidenceCodecErrorV5),
+    AffineBounds(fe2o3_verifier::CompilerAffineBoundsVerificationErrorV1),
+    AffineBoundsCustody,
     SemanticContract(fe2o3_pliron::ProductionMirPlironSemanticContractDerivationErrorV1),
     ParallelContract(fe2o3_pliron::ProductionParallelReferenceContractErrorV1),
     AggregateVerus(crate::production_mir_pliron_verus_join_v1::ProductionMirPlironVerusJoinErrorV1),
@@ -993,6 +1009,10 @@ impl fmt::Display for ProductionRankedVerificationErrorV1 {
             }
             Self::Custody(error) => write!(formatter, "ranked proof custody failed: {error}"),
             Self::MiddleEndEvidence(error) => error.fmt(formatter),
+            Self::AffineBounds(error) => error.fmt(formatter),
+            Self::AffineBoundsCustody => formatter.write_str(
+                "ranked affine-bounds verification no longer matches its exact report site",
+            ),
             Self::SemanticContract(error) => {
                 write!(
                     formatter,
@@ -1015,11 +1035,12 @@ impl fmt::Display for ProductionRankedVerificationErrorV1 {
 impl std::error::Error for ProductionRankedVerificationErrorV1 {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::RosterMetadata(_) | Self::RosterIdentity => None,
+            Self::RosterMetadata(_) | Self::RosterIdentity | Self::AffineBoundsCustody => None,
             Self::SemanticOwner(error) => Some(error),
             Self::SemanticU32Induction(error) => Some(error),
             Self::Custody(error) => Some(error),
             Self::MiddleEndEvidence(error) => Some(error),
+            Self::AffineBounds(error) => Some(error),
             Self::SemanticContract(error) => Some(error),
             Self::ParallelContract(error) => Some(error),
             Self::AggregateVerus(error) => Some(error),
@@ -1230,6 +1251,7 @@ fn authenticate_ranked_root_v5(
     let middle_end_evidence =
         fe2o3_pliron::ProductionMiddleEndEvidenceV5::try_new(semantic_owner, lowering, ranked_ir)
             .map_err(ProductionRankedVerificationErrorV1::MiddleEndEvidence)?;
+    let affine_bounds = independently_verify_affine_bounds_v1(lowering)?;
     let functional = if lowering.has_retained_policy_checked_refinement_staging() {
         let semantics = fe2o3_pliron::derive_and_reconcile_mir_pliron_semantic_contract_v1(
             lowering,
@@ -1265,9 +1287,60 @@ fn authenticate_ranked_root_v5(
     };
     Ok(AuthenticatedRankedVerificationV5 {
         middle_end_evidence,
+        affine_bounds,
         functional,
         semantic_u32_induction,
     })
+}
+
+fn independently_verify_affine_bounds_v1(
+    lowering: &ProductionRankedKernelLoweringInputV1,
+) -> Result<Box<[AuthenticatedRankedAffineBoundsV1]>, ProductionRankedVerificationErrorV1> {
+    lowering
+        .bounds_report()
+        .affine_certificates()
+        .iter()
+        .map(|record| {
+            let verification =
+                fe2o3_verifier::verify_compiler_affine_bounds_certificate_v1(record.certificate())
+                    .map_err(ProductionRankedVerificationErrorV1::AffineBounds)?;
+            Ok(AuthenticatedRankedAffineBoundsV1 {
+                block: record.block(),
+                operation: record.operation(),
+                dimension: record.dimension(),
+                verification,
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(Vec::into_boxed_slice)
+}
+
+fn revalidate_affine_bounds_custody_v1(
+    lowering: &ProductionRankedKernelLoweringInputV1,
+    retained: &[AuthenticatedRankedAffineBoundsV1],
+) -> Result<(), ProductionRankedVerificationErrorV1> {
+    let records = lowering.bounds_report().affine_certificates();
+    if records.len() != retained.len() {
+        return Err(ProductionRankedVerificationErrorV1::AffineBoundsCustody);
+    }
+    for (record, retained) in records.iter().zip(retained) {
+        if record.block() != retained.block
+            || record.operation() != retained.operation
+            || record.dimension() != retained.dimension
+            || record.certificate() != retained.verification.certificate()
+            || retained.verification.grants_compiler_refinement_authority()
+            || retained.verification.grants_artifact_or_launch_authority()
+        {
+            return Err(ProductionRankedVerificationErrorV1::AffineBoundsCustody);
+        }
+        let rechecked =
+            fe2o3_verifier::verify_compiler_affine_bounds_certificate_v1(record.certificate())
+                .map_err(ProductionRankedVerificationErrorV1::AffineBounds)?;
+        if rechecked.certificate() != retained.verification.certificate() {
+            return Err(ProductionRankedVerificationErrorV1::AffineBoundsCustody);
+        }
+    }
+    Ok(())
 }
 
 fn ranked_roster_identity_records_v1(
@@ -1383,6 +1456,7 @@ impl ProductionRankedSemanticProjectionRosterReceiptV1 {
                     "changed per-root ranked verification custody",
                 ));
             }
+            revalidate_affine_bounds_custody_v1(&root.lowering, &root.verification.affine_bounds)?;
             validate_ranked_root_induction_custody_v1(&self.semantic_owner, root)?;
         }
         let records = ranked_roster_identity_records_v1(&self.source_order_roots);
@@ -19970,7 +20044,13 @@ mod tests {
             &'a AuthenticatedRankedVerificationV5,
         ) -> &'a fe2o3_mir_model::SemanticU32InductionNoOverflowReportV1 =
             AuthenticatedRankedVerificationV5::semantic_u32_induction;
-        let _ = (middle_end_accessor, induction_accessor);
+        let affine_count_accessor: fn(&AuthenticatedRankedVerificationV5) -> usize =
+            AuthenticatedRankedVerificationV5::independently_checked_affine_bound_count;
+        let _ = (
+            middle_end_accessor,
+            induction_accessor,
+            affine_count_accessor,
+        );
     }
 
     #[test]
@@ -20013,6 +20093,7 @@ mod tests {
             .next()
             .expect("bounded ranked root verifier");
         assert!(verifier.contains("semantic_u32_induction,"));
+        assert!(verifier.contains("independently_verify_affine_bounds_v1(lowering)?"));
 
         let module = source
             .split("pub(crate) fn into_module_verified_receipt(")

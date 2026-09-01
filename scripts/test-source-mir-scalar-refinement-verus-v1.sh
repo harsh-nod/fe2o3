@@ -12,6 +12,8 @@ readonly expected_verus_sha=ad2669f579d898ede53f2bf84e80a1daf4e3578739b0f5807ef2
 readonly expected_proof_sha=d3eb7a0ee4182ac34d1b9324626243422420b9d43abbfdd63bbbe652ed44223d
 readonly proof="$root/crates/fe2o3-mir-model/verus/source_mir_scalar_refinement_v1.rs"
 readonly negative_dir="$root/crates/fe2o3-mir-model/verus/negative"
+readonly closure_checker="$root/examples/row_softmax_v1/verify-verus-closure.sh"
+readonly closure_manifest="$root/examples/row_softmax_v1/verus/VERUS_CLOSURE_MANIFEST"
 readonly timeout_seconds=${VERUS_TIMEOUT_SECONDS:-120}
 readonly tmp=$(mktemp -d "${TMPDIR:-/tmp}/fe2o3-source-mir-refinement.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT
@@ -29,6 +31,7 @@ printf '%s  %s\n' \
     9ce9714ed02ea46e7c69c064eb7917be95158d54c75d6b1286e1a1861d7f29a3 \
     "$negative_dir/source_mir_wrong_type_v1.rs" | sha256sum -c -
 "$verus" --version | grep -F "Version: $expected_version" >/dev/null
+"$closure_checker" "$(dirname -- "$(readlink -f -- "$verus")")" "$closure_manifest"
 
 for token in 'assume(' 'admit(' '#[verifier::external_body]' '#[verifier::external]'; do
     if grep -R -F "$token" "$proof" "$negative_dir" >/dev/null; then
@@ -39,7 +42,7 @@ done
 
 timeout "$timeout_seconds" "$verus" --crate-type lib --triggers-mode silent "$proof" \
     >"$tmp/proof.log" 2>&1
-grep -F '0 errors' "$tmp/proof.log" >/dev/null
+grep -F 'verification results:: 3 verified, 0 errors' "$tmp/proof.log" >/dev/null
 
 for name in source_mir_wrong_operator_v1 source_mir_wrong_type_v1 source_mir_wrong_effect_v1 source_mir_wrong_source_v1; do
     file="$negative_dir/$name.rs"

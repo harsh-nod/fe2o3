@@ -641,6 +641,7 @@ impl fmt::Display for MirKirScalarRefinementErrorV1 {
 
 impl Error for MirKirScalarRefinementErrorV1 {}
 
+#[cfg(test)]
 fn mapped_kir_binary_v1(operation: &Operation) -> Option<MirKirScalarOperatorV1> {
     let OperationKind::Binary { op, .. } = operation.kind else {
         return None;
