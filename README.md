@@ -1,6 +1,29 @@
 # fe2o3
 
-`fe2o3` is an experimental single-source Rust GPU stack for AMD GPUs.
+`fe2o3` is an experimental single-source Rust GPU stack for AMD GPUs. This
+repository contains the compiler, runtime, examples, proof models, and evidence
+records. The community learning path lives in `fe2o3-kernels`.
+
+## Start here
+
+If you are new to `fe2o3`, start with the kernel learning workbench:
+
+- Deployed guide: <https://harsh-nod.github.io/fe2o3-kernels/>
+- Source repo: <https://github.com/harsh-nod/fe2o3-kernels>
+
+`fe2o3-kernels` is the authoritative public guide for learning the project. It
+has launch tracks for running the first examples, writing bounded kernels,
+understanding evidence labels, and contributing new operator slices. Its
+operator cookbook covers Fill, Vecadd, row softmax, GEMM, FlashAttention, MoE,
+KDA/GDN, Kimi K3 KDA decode, and GPT-OSS-style layer-tile work with explicit
+source paths, runnable commands, and non-claims.
+
+Use this repository when you are ready to inspect or change the implementation:
+compiler passes, generated host APIs, runtime authority boundaries, examples,
+Verus models, parity evidence, debugger/profiler protocols, and hardware
+qualification lanes. When adding a kernel, keep the source, reference, runner,
+and evidence shape in `fe2o3-kernels` synchronized with the implementation and
+do not promote a status claim without the matching record in this repo.
 
 The current architecture keeps the working AMD runtime while incrementally
 replacing the elementwise MIR recognizer with a target-neutral compiler
