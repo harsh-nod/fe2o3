@@ -198,7 +198,8 @@ mod platform {
         fn collect(&self, frame: SourceIsaObservationFrameV1) -> io::Result<()> {
             let context = frame.context();
             if context.config() != self.config_identity
-                || context.attempt().session() != self.session
+                || context.attempt().session()
+                    != crate::source_isa_observation::inert_source_isa_session_v1(self.session)
                 || self.selected_units.binary_search(&context.unit()).is_err()
             {
                 return Err(io::Error::new(
@@ -265,7 +266,8 @@ mod platform {
             frame: SourceIsaObservationFrameV1,
         ) -> Result<(), SourceIsaObservationTransportFailureV1> {
             if frame.context().config() != self.config_identity
-                || frame.context().attempt().session() != self.session
+                || frame.context().attempt().session()
+                    != crate::source_isa_observation::inert_source_isa_session_v1(self.session)
             {
                 self.fail(SourceIsaObservationTransportFailureV1::RejectedFrame);
                 return Err(SourceIsaObservationTransportFailureV1::RejectedFrame);
@@ -1258,9 +1260,12 @@ mod platform {
     impl SourceIsaObservationSinkV1 {
         pub(crate) fn submit(mut self, frame: &SourceIsaObservationFrameV1) -> Result<(), String> {
             let context = frame.context();
+            let observation_attempt =
+                crate::source_isa_observation::inert_source_isa_attempt_v1(self.attempt)
+                    .map_err(|error| format!("invalid source/ISA observation attempt: {error}"))?;
             if context.config() != self.config_identity
                 || context.unit() != self.unit_identity
-                || context.attempt() != self.attempt
+                || context.attempt() != observation_attempt
             {
                 return Err(
                     "source/ISA observation frame differs from its authenticated sink".to_owned(),
@@ -1658,10 +1663,13 @@ mod platform {
         frame: &SourceIsaObservationFrameV1,
     ) -> io::Result<()> {
         let context = frame.context();
+        let observation_attempt =
+            crate::source_isa_observation::inert_source_isa_attempt_v1(request.attempt())
+                .map_err(|error| io::Error::other(error.to_string()))?;
         if request.attempt().session() != broker_session
             || context.config() != request.config_identity()
             || context.unit() != request.unit_identity()
-            || context.attempt() != request.attempt()
+            || context.attempt() != observation_attempt
         {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
