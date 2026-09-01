@@ -78,6 +78,18 @@ pub(crate) enum ProductionPipelineError {
     CompilerExecutionReceiptTransportBindingMismatch,
 }
 
+impl ProductionPipelineError {
+    pub(crate) fn structured_diagnostic(
+        &self,
+        sequence: u16,
+    ) -> Option<fe2o3_compiler_api::StructuredCompilerDiagnosticV1> {
+        match self {
+            Self::RankedProjection(error) => error.structured_diagnostic(sequence),
+            _ => None,
+        }
+    }
+}
+
 impl fmt::Display for ProductionPipelineError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

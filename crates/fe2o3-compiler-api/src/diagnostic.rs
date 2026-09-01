@@ -7,6 +7,13 @@ use crate::{CompilerStageV1, DiagnosticSubjectIdentityV1};
 /// Maximum UTF-8 byte length of a V1 diagnostic message.
 pub const MAX_DIAGNOSTIC_MESSAGE_BYTES_V1: usize = 4 * 1024;
 
+/// Maximum UTF-8 byte length of a presentation-only source name.
+pub const MAX_DIAGNOSTIC_SOURCE_NAME_BYTES_V1: usize = 4 * 1024;
+/// Maximum number of retained call frames in one presentation diagnostic.
+pub const MAX_DIAGNOSTIC_CALL_FRAMES_V1: usize = 64;
+/// Maximum number of retained notes in one presentation diagnostic.
+pub const MAX_DIAGNOSTIC_NOTES_V1: usize = 32;
+
 /// Why a diagnostic code was rejected.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DiagnosticCodeErrorV1 {
@@ -197,6 +204,259 @@ impl CanonicalDiagnosticV1 {
     }
 }
 
+/// A source coordinate used only for diagnostic presentation.
+///
+/// Lines are one-based. Columns are producer-defined and may be zero-based.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct DiagnosticSourcePositionV1 {
+    line: u32,
+    column: u32,
+}
+
+impl DiagnosticSourcePositionV1 {
+    /// Constructs a valid source coordinate.
+    pub const fn new(line: u32, column: u32) -> Option<Self> {
+        if line == 0 {
+            return None;
+        }
+        Some(Self { line, column })
+    }
+
+    /// Returns the one-based line.
+    pub const fn line(self) -> u32 {
+        self.line
+    }
+
+    /// Returns the producer-defined column.
+    pub const fn column(self) -> u32 {
+        self.column
+    }
+}
+
+/// Validation failure for presentation-only diagnostic context.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum StructuredDiagnosticErrorV1 {
+    /// The source name was empty.
+    EmptySourceName,
+    /// The source name exceeded its hard byte limit.
+    SourceNameTooLong {
+        /// Observed UTF-8 byte length.
+        actual: usize,
+        /// Maximum admitted UTF-8 byte length.
+        maximum: usize,
+    },
+    /// The source name contained a control character unsafe for presentation.
+    UnsupportedSourceNameCharacter,
+    /// The end coordinate preceded the start coordinate.
+    ReversedSourceSpan,
+    /// The call chain exceeded its hard frame limit.
+    TooManyCallFrames {
+        /// Observed frame count.
+        actual: usize,
+        /// Maximum admitted frame count.
+        maximum: usize,
+    },
+    /// The note collection exceeded its hard item limit.
+    TooManyNotes {
+        /// Observed note count.
+        actual: usize,
+        /// Maximum admitted note count.
+        maximum: usize,
+    },
+}
+
+impl fmt::Display for StructuredDiagnosticErrorV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::EmptySourceName => {
+                formatter.write_str("diagnostic source name must not be empty")
+            }
+            Self::SourceNameTooLong { actual, maximum } => write!(
+                formatter,
+                "diagnostic source name is {actual} bytes, exceeding the {maximum}-byte limit"
+            ),
+            Self::UnsupportedSourceNameCharacter => formatter
+                .write_str("diagnostic source name contains an unsupported control character"),
+            Self::ReversedSourceSpan => {
+                formatter.write_str("diagnostic source span ends before it starts")
+            }
+            Self::TooManyCallFrames { actual, maximum } => write!(
+                formatter,
+                "diagnostic has {actual} call frames, exceeding the {maximum}-frame limit"
+            ),
+            Self::TooManyNotes { actual, maximum } => write!(
+                formatter,
+                "diagnostic has {actual} notes, exceeding the {maximum}-note limit"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for StructuredDiagnosticErrorV1 {}
+
+/// A checked source span for local presentation. It is deliberately excluded
+/// from canonical artifact identities so builds remain location-independent.
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct DiagnosticSourceSpanV1 {
+    source_name: String,
+    start: DiagnosticSourcePositionV1,
+    end: DiagnosticSourcePositionV1,
+}
+
+impl DiagnosticSourceSpanV1 {
+    /// Validates and owns a presentation source name and ordered span.
+    pub fn new(
+        source_name: impl Into<String>,
+        start: DiagnosticSourcePositionV1,
+        end: DiagnosticSourcePositionV1,
+    ) -> Result<Self, StructuredDiagnosticErrorV1> {
+        let source_name = source_name.into();
+        if source_name.is_empty() {
+            return Err(StructuredDiagnosticErrorV1::EmptySourceName);
+        }
+        if source_name.len() > MAX_DIAGNOSTIC_SOURCE_NAME_BYTES_V1 {
+            return Err(StructuredDiagnosticErrorV1::SourceNameTooLong {
+                actual: source_name.len(),
+                maximum: MAX_DIAGNOSTIC_SOURCE_NAME_BYTES_V1,
+            });
+        }
+        if source_name.contains(['\0', '\r', '\n']) {
+            return Err(StructuredDiagnosticErrorV1::UnsupportedSourceNameCharacter);
+        }
+        if end < start {
+            return Err(StructuredDiagnosticErrorV1::ReversedSourceSpan);
+        }
+        Ok(Self {
+            source_name,
+            start,
+            end,
+        })
+    }
+
+    /// Borrows the presentation source name.
+    pub fn source_name(&self) -> &str {
+        &self.source_name
+    }
+
+    /// Returns the inclusive start coordinate.
+    pub const fn start(&self) -> DiagnosticSourcePositionV1 {
+        self.start
+    }
+
+    /// Returns the inclusive end coordinate.
+    pub const fn end(&self) -> DiagnosticSourcePositionV1 {
+        self.end
+    }
+}
+
+/// One bounded frame in a root-to-failure call chain.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DiagnosticCallFrameV1 {
+    function: DiagnosticMessageV1,
+    call_site: Option<DiagnosticSourceSpanV1>,
+}
+
+impl DiagnosticCallFrameV1 {
+    /// Constructs a checked function frame with an optional call-site span.
+    pub const fn new(
+        function: DiagnosticMessageV1,
+        call_site: Option<DiagnosticSourceSpanV1>,
+    ) -> Self {
+        Self {
+            function,
+            call_site,
+        }
+    }
+
+    /// Returns the function name.
+    pub const fn function(&self) -> &DiagnosticMessageV1 {
+        &self.function
+    }
+
+    /// Returns the call-site span when the caller supplied one.
+    pub const fn call_site(&self) -> Option<&DiagnosticSourceSpanV1> {
+        self.call_site.as_ref()
+    }
+}
+
+/// Rich local presentation for a canonical diagnostic.
+///
+/// This record is never hashed into compiler artifacts. It keeps filesystem
+/// names and call paths out of reproducible identities while exposing enough
+/// structure for a CLI, IDE, or JSON renderer to produce actionable errors.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StructuredCompilerDiagnosticV1 {
+    canonical: CanonicalDiagnosticV1,
+    kernel: Option<DiagnosticMessageV1>,
+    function: Option<DiagnosticMessageV1>,
+    source_span: Option<DiagnosticSourceSpanV1>,
+    call_chain: Box<[DiagnosticCallFrameV1]>,
+    notes: Box<[DiagnosticMessageV1]>,
+}
+
+impl StructuredCompilerDiagnosticV1 {
+    /// Constructs a bounded presentation diagnostic around a canonical record.
+    pub fn new(
+        canonical: CanonicalDiagnosticV1,
+        kernel: Option<DiagnosticMessageV1>,
+        function: Option<DiagnosticMessageV1>,
+        source_span: Option<DiagnosticSourceSpanV1>,
+        call_chain: Vec<DiagnosticCallFrameV1>,
+        notes: Vec<DiagnosticMessageV1>,
+    ) -> Result<Self, StructuredDiagnosticErrorV1> {
+        if call_chain.len() > MAX_DIAGNOSTIC_CALL_FRAMES_V1 {
+            return Err(StructuredDiagnosticErrorV1::TooManyCallFrames {
+                actual: call_chain.len(),
+                maximum: MAX_DIAGNOSTIC_CALL_FRAMES_V1,
+            });
+        }
+        if notes.len() > MAX_DIAGNOSTIC_NOTES_V1 {
+            return Err(StructuredDiagnosticErrorV1::TooManyNotes {
+                actual: notes.len(),
+                maximum: MAX_DIAGNOSTIC_NOTES_V1,
+            });
+        }
+        Ok(Self {
+            canonical,
+            kernel,
+            function,
+            source_span,
+            call_chain: call_chain.into_boxed_slice(),
+            notes: notes.into_boxed_slice(),
+        })
+    }
+
+    /// Returns the reproducible canonical diagnostic.
+    pub const fn canonical(&self) -> &CanonicalDiagnosticV1 {
+        &self.canonical
+    }
+
+    /// Returns the affected kernel name when known.
+    pub const fn kernel(&self) -> Option<&DiagnosticMessageV1> {
+        self.kernel.as_ref()
+    }
+
+    /// Returns the affected function name when known.
+    pub const fn function(&self) -> Option<&DiagnosticMessageV1> {
+        self.function.as_ref()
+    }
+
+    /// Returns the primary presentation span when known.
+    pub const fn source_span(&self) -> Option<&DiagnosticSourceSpanV1> {
+        self.source_span.as_ref()
+    }
+
+    /// Returns the root-to-failure call chain.
+    pub const fn call_chain(&self) -> &[DiagnosticCallFrameV1] {
+        &self.call_chain
+    }
+
+    /// Returns bounded supplemental notes.
+    pub const fn notes(&self) -> &[DiagnosticMessageV1] {
+        &self.notes
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -250,5 +510,59 @@ mod tests {
         assert_eq!(diagnostic.stage(), Some(CompilerStageV1::Kernel));
         assert_eq!(diagnostic.message().as_str(), "unsupported operation");
         assert!(diagnostic.is_error());
+    }
+
+    #[test]
+    fn structured_diagnostic_retains_bounded_local_context() {
+        let start = DiagnosticSourcePositionV1::new(12, 4).unwrap();
+        let end = DiagnosticSourcePositionV1::new(12, 17).unwrap();
+        let span = DiagnosticSourceSpanV1::new("src/kernel.rs", start, end).unwrap();
+        let canonical = CanonicalDiagnosticV1::new(
+            0,
+            DiagnosticCodeV1::new(4101).unwrap(),
+            DiagnosticSeverityV1::Error,
+            Some(CompilerStageV1::Kernel),
+            None,
+            DiagnosticMessageV1::new("unsupported operation").unwrap(),
+        );
+        let diagnostic = StructuredCompilerDiagnosticV1::new(
+            canonical,
+            Some(DiagnosticMessageV1::new("vector_add").unwrap()),
+            Some(DiagnosticMessageV1::new("helper").unwrap()),
+            Some(span.clone()),
+            vec![DiagnosticCallFrameV1::new(
+                DiagnosticMessageV1::new("vector_add").unwrap(),
+                Some(span),
+            )],
+            vec![DiagnosticMessageV1::new("replace the unsupported operation").unwrap()],
+        )
+        .unwrap();
+
+        assert_eq!(diagnostic.canonical().code().get(), 4101);
+        assert_eq!(diagnostic.kernel().unwrap().as_str(), "vector_add");
+        assert_eq!(diagnostic.function().unwrap().as_str(), "helper");
+        assert_eq!(
+            diagnostic.source_span().unwrap().source_name(),
+            "src/kernel.rs"
+        );
+        assert_eq!(diagnostic.call_chain().len(), 1);
+        assert_eq!(diagnostic.notes().len(), 1);
+    }
+
+    #[test]
+    fn structured_diagnostic_rejects_unbounded_or_invalid_context() {
+        let position = DiagnosticSourcePositionV1::new(1, 1).unwrap();
+        assert_eq!(
+            DiagnosticSourceSpanV1::new("", position, position),
+            Err(StructuredDiagnosticErrorV1::EmptySourceName)
+        );
+        assert_eq!(
+            DiagnosticSourceSpanV1::new(
+                "src/kernel.rs",
+                DiagnosticSourcePositionV1::new(2, 1).unwrap(),
+                position,
+            ),
+            Err(StructuredDiagnosticErrorV1::ReversedSourceSpan)
+        );
     }
 }

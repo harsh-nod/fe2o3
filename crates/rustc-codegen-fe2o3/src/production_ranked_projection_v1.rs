@@ -20,6 +20,11 @@ use dialect_kernel::{
     PipelineEventKindAttr, SUPPORTED_ELEMENT_WIDTHS, TensorConvergenceAttr,
 };
 use fe2o3_artifacts::{BlockSize, LaunchContract};
+use fe2o3_compiler_api::{
+    CanonicalDiagnosticV1, CompilerStageV1, DiagnosticCallFrameV1, DiagnosticCodeV1,
+    DiagnosticMessageV1, DiagnosticSeverityV1, DiagnosticSourcePositionV1, DiagnosticSourceSpanV1,
+    MAX_DIAGNOSTIC_MESSAGE_BYTES_V1, StructuredCompilerDiagnosticV1,
+};
 use fe2o3_kernel_analysis::{
     MAX_RANKED_BOUNDS_BLOCKS, MAX_RANKED_BOUNDS_EDGES, MAX_RANKED_BOUNDS_OPERATIONS,
 };
@@ -102,7 +107,7 @@ pub(crate) struct ProjectedAccessSourceV1 {
     semantic_site: Option<ProjectedSemanticAccessSiteV1>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 struct ProjectedSemanticAccessSiteV1 {
     block: usize,
     statement: Option<usize>,
@@ -1576,6 +1581,12 @@ impl ProductionRankedSemanticProgramV1 {
 
 #[derive(Debug)]
 pub(crate) enum ProductionRankedProjectionErrorV1 {
+    RootContext {
+        kernel: String,
+        function: String,
+        source: SemanticSourceProvenanceV1,
+        error: Box<ProductionRankedProjectionErrorV1>,
+    },
     SemanticOwner(ProductionSemanticMirErrorV1),
     SemanticU32Induction(fe2o3_mir_model::SemanticU32InductionAnalysisErrorV1),
     StructuralValidation(fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1),
@@ -1608,6 +1619,15 @@ pub(crate) enum ProductionRankedProjectionErrorV1 {
 impl fmt::Display for ProductionRankedProjectionErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::RootContext {
+                kernel,
+                function,
+                error,
+                ..
+            } => write!(
+                formatter,
+                "ranked projection for kernel `{kernel}` in function `{function}` failed: {error}"
+            ),
             Self::SemanticOwner(error) => {
                 write!(formatter, "exact semantic middle end failed: {error}")
             }
@@ -1705,9 +1725,113 @@ impl fmt::Display for ProductionRankedProjectionErrorV1 {
     }
 }
 
+impl ProductionRankedProjectionErrorV1 {
+    fn leaf(&self) -> &Self {
+        match self {
+            Self::RootContext { error, .. } => error.leaf(),
+            error => error,
+        }
+    }
+
+    fn diagnostic_code(&self) -> u32 {
+        match self.leaf() {
+            Self::Unsupported(_) => 4_101,
+            Self::Incomplete(_) | Self::MissingAllocationProvenance { .. } => 4_102,
+            Self::UnprovenAssert { .. } => 4_103,
+            Self::SemanticOwner(_) => 4_104,
+            Self::SemanticU32Induction(_) => 4_105,
+            Self::StructuralValidation(_) => 4_106,
+            Self::Recipe(_) | Self::Construction(_) | Self::Compile { .. } => 4_107,
+            Self::ReferenceEffectJoin(_) => 4_108,
+            Self::RootContext { .. } => unreachable!("leaf removes root context"),
+        }
+    }
+
+    fn primary_source(&self) -> Option<SemanticSourceProvenanceV1> {
+        match self.leaf() {
+            Self::UnprovenAssert { source, .. } => Some(*source),
+            _ => match self {
+                Self::RootContext { source, .. } => Some(*source),
+                _ => None,
+            },
+        }
+    }
+
+    pub(crate) fn structured_diagnostic(
+        &self,
+        sequence: u16,
+    ) -> Option<StructuredCompilerDiagnosticV1> {
+        let (kernel, function) = match self {
+            Self::RootContext {
+                kernel, function, ..
+            } => (Some(kernel.as_str()), Some(function.as_str())),
+            _ => (None, None),
+        };
+        let canonical = CanonicalDiagnosticV1::new(
+            sequence,
+            DiagnosticCodeV1::new(self.diagnostic_code()).ok()?,
+            DiagnosticSeverityV1::Error,
+            Some(CompilerStageV1::Kernel),
+            None,
+            bounded_projection_diagnostic_message(self.to_string())?,
+        );
+        let source_span = self.primary_source().and_then(diagnostic_source_span_v1);
+        let mut call_chain = Vec::with_capacity(2);
+        if let Some(kernel) = kernel {
+            call_chain.push(DiagnosticCallFrameV1::new(
+                bounded_projection_diagnostic_message(kernel.to_owned())?,
+                None,
+            ));
+        }
+        if let Some(function) = function {
+            call_chain.push(DiagnosticCallFrameV1::new(
+                bounded_projection_diagnostic_message(function.to_owned())?,
+                source_span.clone(),
+            ));
+        }
+        StructuredCompilerDiagnosticV1::new(
+            canonical,
+            kernel.and_then(|name| bounded_projection_diagnostic_message(name.to_owned())),
+            function.and_then(|name| bounded_projection_diagnostic_message(name.to_owned())),
+            source_span,
+            call_chain,
+            Vec::new(),
+        )
+        .ok()
+    }
+}
+
+fn bounded_projection_diagnostic_message(mut message: String) -> Option<DiagnosticMessageV1> {
+    if message.len() > MAX_DIAGNOSTIC_MESSAGE_BYTES_V1 {
+        let mut end = MAX_DIAGNOSTIC_MESSAGE_BYTES_V1.saturating_sub(3);
+        while !message.is_char_boundary(end) {
+            end = end.checked_sub(1)?;
+        }
+        message.truncate(end);
+        message.push_str("...");
+    }
+    DiagnosticMessageV1::new(message).ok()
+}
+
+fn diagnostic_source_span_v1(source: SemanticSourceProvenanceV1) -> Option<DiagnosticSourceSpanV1> {
+    let origin = source.call_site().or_else(|| source.expansion())?;
+    let (start_line, start_column) = origin.start_coordinate();
+    let (end_line, end_column) = origin.end_coordinate();
+    DiagnosticSourceSpanV1::new(
+        format!(
+            "semantic-source-sha256:{}",
+            crate::encode_hex(origin.file().as_bytes())
+        ),
+        DiagnosticSourcePositionV1::new(start_line, start_column)?,
+        DiagnosticSourcePositionV1::new(end_line, end_column)?,
+    )
+    .ok()
+}
+
 impl std::error::Error for ProductionRankedProjectionErrorV1 {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::RootContext { error, .. } => Some(error.as_ref()),
             Self::SemanticOwner(error) => Some(error),
             Self::SemanticU32Induction(error) => Some(error),
             Self::StructuralValidation(error) => Some(error),
@@ -2489,6 +2613,12 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
             .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
                 "a semantic KernelRoot without one direct body or transparent Result wrapper",
             ))?;
+        let function_context = format!("semantic-function-{}", selection.body().index());
+        let source_context = semantic
+            .functions()
+            .get(selection.body().index() as usize)
+            .map(SemanticFunctionDeclV1::source)
+            .unwrap_or_else(SemanticSourceProvenanceV1::unavailable);
         let root = project_and_verify_ranked_root_v1(
             semantic,
             &callable_effects,
@@ -2496,7 +2626,13 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
             &input.logical_name,
             &input.source_launch,
             root_references,
-        )?;
+        )
+        .map_err(|error| ProductionRankedProjectionErrorV1::RootContext {
+            kernel: input.logical_name.clone(),
+            function: function_context.clone(),
+            source: source_context,
+            error: Box::new(error),
+        })?;
         if root.kernel_binding != input.kernel_binding {
             return Err(ProductionRankedProjectionErrorV1::Unsupported(
                 "a projected ranked root with a substituted kernel binding",
@@ -2510,7 +2646,12 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
             &root.access_sources,
             &root.executable_effect_sources,
         )
-        .map_err(ProductionRankedProjectionErrorV1::StructuralValidation)?;
+        .map_err(|error| ProductionRankedProjectionErrorV1::RootContext {
+            kernel: input.logical_name.clone(),
+            function: function_context,
+            source: source_context,
+            error: Box::new(ProductionRankedProjectionErrorV1::StructuralValidation(error)),
+        })?;
         roots.push(root);
     }
     semantic_owner
@@ -3168,6 +3309,105 @@ fn semantic_rvalue_read_places_v2<'a>(
     }
 }
 
+#[derive(Clone, Copy)]
+struct IndexedSemanticReadV2<'a> {
+    place: &'a SemanticPlaceV1,
+    rvalue: &'a SemanticRvalueV1,
+}
+
+struct SemanticReadPlaceIndexV2<'a> {
+    by_source: Box<[Option<IndexedSemanticReadV2<'a>>]>,
+    #[cfg(test)]
+    work: SemanticReadPlaceIndexWorkV2,
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct SemanticReadPlaceIndexWorkV2 {
+    source_scan: usize,
+    site_source_scan: usize,
+    semantic_read_scan: usize,
+}
+
+fn semantic_read_place_index_v2<'a>(
+    function: &'a SemanticFunctionDeclV1,
+    sources: &[ProjectedAccessSourceV1],
+) -> Result<SemanticReadPlaceIndexV2<'a>, ProductionRankedProjectionErrorV1> {
+    if sources.len() > MAX_RANKED_BOUNDS_OPERATIONS {
+        return Err(ProductionRankedProjectionErrorV1::Unsupported(
+            "projected read correspondence exceeds the ranked operation limit",
+        ));
+    }
+
+    let mut sources_by_site = BTreeMap::<ProjectedSemanticAccessSiteV1, Vec<usize>>::new();
+    #[cfg(test)]
+    let mut work = SemanticReadPlaceIndexWorkV2::default();
+    for (source_index, source) in sources.iter().enumerate() {
+        #[cfg(test)]
+        {
+            work.source_scan += 1;
+        }
+        if source.access != AccessKindAttr::Read || source.memory_space != MemorySpaceAttr::Global {
+            continue;
+        }
+        let Some(site) = source.semantic_site.filter(|site| site.statement.is_some()) else {
+            continue;
+        };
+        sources_by_site.entry(site).or_default().push(source_index);
+    }
+
+    let mut by_source = vec![None; sources.len()];
+    for (site, source_indices) in sources_by_site {
+        #[cfg(test)]
+        {
+            work.site_source_scan += source_indices.len();
+        }
+        let Some(statement_index) = site.statement else {
+            continue;
+        };
+        let Some(SemanticStatementKindV1::Assign(assignment)) = function
+            .blocks()
+            .get(site.block)
+            .and_then(|block| block.statements().get(statement_index))
+            .map(|statement| statement.kind())
+        else {
+            continue;
+        };
+        let mut read_places = Vec::new();
+        semantic_rvalue_read_places_v2(assignment.value(), &mut read_places);
+        #[cfg(test)]
+        {
+            work.semantic_read_scan += read_places.len();
+        }
+        if read_places.len() != source_indices.len() {
+            continue;
+        }
+        for (source_index, place) in source_indices.into_iter().zip(read_places) {
+            let Some(binding) = by_source.get_mut(source_index) else {
+                return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                    "a projected read correspondence has a stale source ordinal",
+                ));
+            };
+            if binding
+                .replace(IndexedSemanticReadV2 {
+                    place,
+                    rvalue: assignment.value(),
+                })
+                .is_some()
+            {
+                return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                    "a projected read correspondence has a duplicate source ordinal",
+                ));
+            }
+        }
+    }
+    Ok(SemanticReadPlaceIndexV2 {
+        by_source: by_source.into_boxed_slice(),
+        #[cfg(test)]
+        work,
+    })
+}
+
 impl<'a> GpuSemanticExpressionResolverV2<'a> {
     fn new(types: &'a [SemanticTypeDeclV1], function: &'a SemanticFunctionDeclV1) -> Self {
         let mut definitions = HashMap::new();
@@ -3228,46 +3468,17 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
                 }
             }
         }
-        for source in sources.iter().filter(|source| source.access.reads_memory()) {
+        let read_index = semantic_read_place_index_v2(function, sources)?;
+        for (source_index, source) in sources.iter().enumerate() {
+            if !source.access.reads_memory() {
+                continue;
+            }
             if source.access != AccessKindAttr::Read
                 || source.memory_space != MemorySpaceAttr::Global
             {
                 continue;
             }
-            let Some(site) = source.semantic_site else {
-                continue;
-            };
-            let Some(statement_index) = site.statement else {
-                continue;
-            };
-            let Some(SemanticStatementKindV1::Assign(assignment)) = function
-                .blocks()
-                .get(site.block)
-                .and_then(|block| block.statements().get(statement_index))
-                .map(|statement| statement.kind())
-            else {
-                continue;
-            };
-            let mut read_places = Vec::new();
-            semantic_rvalue_read_places_v2(assignment.value(), &mut read_places);
-            let matching_sources = sources
-                .iter()
-                .filter(|candidate| {
-                    candidate.access == AccessKindAttr::Read
-                        && candidate.memory_space == MemorySpaceAttr::Global
-                        && candidate.semantic_site == source.semantic_site
-                })
-                .collect::<Vec<_>>();
-            let Some(ordinal) = matching_sources
-                .iter()
-                .position(|candidate| std::ptr::eq(*candidate, source))
-            else {
-                continue;
-            };
-            if read_places.len() != matching_sources.len() {
-                continue;
-            }
-            let Some(read_place) = read_places.get(ordinal).copied() else {
+            let Some(read) = read_index.by_source.get(source_index).copied().flatten() else {
                 continue;
             };
             let Some(operation) = blocks
@@ -3304,7 +3515,7 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
                 ),
             )?;
             let scalar = resolver
-                .scalar_v2(read_place.ty())
+                .scalar_v2(read.place.ty())
                 .map_err(ProductionRankedProjectionErrorV1::Incomplete)?;
             let load = ProductionSemanticLoadV2 {
                 block: u32::try_from(source.block).map_err(|_| {
@@ -3324,17 +3535,17 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
             };
             if resolver
                 .place_loads
-                .insert(read_place as *const SemanticPlaceV1, load.clone())
+                .insert(read.place as *const SemanticPlaceV1, load.clone())
                 .is_some()
             {
                 return Err(ProductionRankedProjectionErrorV1::Incomplete(
                     "one semantic scalar read place maps to multiple ranked reads",
                 ));
             }
-            if matches!(assignment.value().kind(), SemanticRvalueKindV1::Load(_))
+            if matches!(read.rvalue.kind(), SemanticRvalueKindV1::Load(_))
                 && resolver
                     .loads
-                    .insert(assignment.value() as *const SemanticRvalueV1, load)
+                    .insert(read.rvalue as *const SemanticRvalueV1, load)
                     .is_some()
             {
                 return Err(ProductionRankedProjectionErrorV1::Incomplete(
@@ -35019,6 +35230,149 @@ mod tests {
             MAX_PROJECTED_CAPABILITY_DATAFLOW_WORK_V1
                 .checked_add(1)
                 .is_some_and(|work| work > MAX_PROJECTED_CAPABILITY_DATAFLOW_WORK_V1)
+        );
+    }
+
+    fn semantic_load_statement() -> SemanticStatementV1 {
+        statement(SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+            scalar_place(),
+            SemanticRvalueV1::new(
+                SCALAR_TYPE,
+                SemanticRvalueKindV1::Load(SemanticMemoryLoadV1::new(
+                    dereferenced_place(),
+                    SemanticVolatilityV1::NonVolatile,
+                    None,
+                )),
+            ),
+        )))
+    }
+
+    #[test]
+    fn root_projection_errors_expose_structured_diagnostic_context() {
+        let error = ProductionRankedProjectionErrorV1::RootContext {
+            kernel: "vector_add".to_owned(),
+            function: "semantic-function-3".to_owned(),
+            source: SemanticSourceProvenanceV1::unavailable(),
+            error: Box::new(ProductionRankedProjectionErrorV1::Unsupported(
+                "a dynamic dispatch",
+            )),
+        };
+
+        let diagnostic = error.structured_diagnostic(2).unwrap();
+        assert_eq!(diagnostic.canonical().sequence(), 2);
+        assert_eq!(diagnostic.canonical().code().get(), 4_101);
+        assert_eq!(diagnostic.kernel().unwrap().as_str(), "vector_add");
+        assert_eq!(
+            diagnostic.function().unwrap().as_str(),
+            "semantic-function-3"
+        );
+        assert_eq!(diagnostic.call_chain().len(), 2);
+        assert!(diagnostic.source_span().is_none());
+    }
+
+    #[test]
+    fn semantic_read_index_preserves_source_ordinals_and_mismatch_behavior() {
+        let left = dereferenced_place();
+        let right = dereferenced_place();
+        let function = projection_function(vec![block(
+            228,
+            vec![statement(SemanticStatementKindV1::Assign(
+                SemanticAssignmentV1::new(
+                    scalar_place(),
+                    SemanticRvalueV1::new(
+                        SCALAR_TYPE,
+                        SemanticRvalueKindV1::Binary {
+                            operation: SemanticBinaryOpV1::Add,
+                            left: SemanticOperandV1::Copy(left),
+                            right: SemanticOperandV1::Move(right),
+                        },
+                    ),
+                ),
+            ))],
+            SemanticTerminatorKindV1::Return,
+        )]);
+        let site = Some(ProjectedSemanticAccessSiteV1 {
+            block: 0,
+            statement: Some(0),
+        });
+        let source = |operation, access| ProjectedAccessSourceV1 {
+            block: 0,
+            operation,
+            access,
+            memory_space: MemorySpaceAttr::Global,
+            source: SemanticSourceProvenanceV1::unavailable(),
+            semantic_site: site,
+        };
+        let sources = [
+            source(7, AccessKindAttr::Read),
+            source(8, AccessKindAttr::Write),
+            source(9, AccessKindAttr::Read),
+        ];
+
+        let index = semantic_read_place_index_v2(&function, &sources).unwrap();
+        let assignment = match function.blocks()[0].statements()[0].kind() {
+            SemanticStatementKindV1::Assign(assignment) => assignment,
+            _ => unreachable!(),
+        };
+        let mut expected = Vec::new();
+        semantic_rvalue_read_places_v2(assignment.value(), &mut expected);
+        assert!(std::ptr::eq(
+            index.by_source[0].expect("first read binding").place,
+            expected[0],
+        ));
+        assert!(index.by_source[1].is_none());
+        assert!(std::ptr::eq(
+            index.by_source[2].expect("second read binding").place,
+            expected[1],
+        ));
+        assert_eq!(
+            index.work,
+            SemanticReadPlaceIndexWorkV2 {
+                source_scan: 3,
+                site_source_scan: 2,
+                semantic_read_scan: 2,
+            },
+        );
+
+        let mismatched = semantic_read_place_index_v2(&function, &sources[..1]).unwrap();
+        assert!(mismatched.by_source[0].is_none());
+    }
+
+    #[test]
+    fn adversarial_semantic_read_index_work_is_linear_in_sources_and_reads() {
+        const READS: usize = 4_096;
+        let statements = (0..READS)
+            .map(|_| semantic_load_statement())
+            .collect::<Vec<_>>();
+        let function = projection_function(vec![block(
+            229,
+            statements,
+            SemanticTerminatorKindV1::Return,
+        )]);
+        let sources = (0..READS)
+            .map(|statement| ProjectedAccessSourceV1 {
+                block: 0,
+                operation: statement,
+                access: AccessKindAttr::Read,
+                memory_space: MemorySpaceAttr::Global,
+                source: SemanticSourceProvenanceV1::unavailable(),
+                semantic_site: Some(ProjectedSemanticAccessSiteV1 {
+                    block: 0,
+                    statement: Some(statement),
+                }),
+            })
+            .collect::<Vec<_>>();
+
+        let index = semantic_read_place_index_v2(&function, &sources).unwrap();
+
+        assert!(index.by_source.iter().all(Option::is_some));
+        assert_eq!(
+            index.work,
+            SemanticReadPlaceIndexWorkV2 {
+                source_scan: READS,
+                site_source_scan: READS,
+                semantic_read_scan: READS,
+            },
         );
     }
 

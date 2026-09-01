@@ -15,8 +15,11 @@ mod request;
 mod snapshot;
 
 pub use diagnostic::{
-    CanonicalDiagnosticV1, DiagnosticCodeErrorV1, DiagnosticCodeV1, DiagnosticMessageErrorV1,
-    DiagnosticMessageV1, DiagnosticSeverityV1, MAX_DIAGNOSTIC_MESSAGE_BYTES_V1,
+    CanonicalDiagnosticV1, DiagnosticCallFrameV1, DiagnosticCodeErrorV1, DiagnosticCodeV1,
+    DiagnosticMessageErrorV1, DiagnosticMessageV1, DiagnosticSeverityV1,
+    DiagnosticSourcePositionV1, DiagnosticSourceSpanV1, MAX_DIAGNOSTIC_CALL_FRAMES_V1,
+    MAX_DIAGNOSTIC_MESSAGE_BYTES_V1, MAX_DIAGNOSTIC_NOTES_V1, MAX_DIAGNOSTIC_SOURCE_NAME_BYTES_V1,
+    StructuredCompilerDiagnosticV1, StructuredDiagnosticErrorV1,
 };
 pub use identity::{
     CandidateFormatIdentityV1, CandidateIdentityV1, CompilerProfileIdentityV1,

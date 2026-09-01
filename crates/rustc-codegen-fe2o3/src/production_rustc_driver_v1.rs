@@ -118,13 +118,48 @@ fn extract_in_active_session_v1(tcx: TyCtxt<'_>) -> Result<(), String> {
     .to_string())
 }
 
+fn render_production_pipeline_error(
+    error: crate::production_pipeline::ProductionPipelineError,
+) -> String {
+    let Some(diagnostic) = error.structured_diagnostic(0) else {
+        return error.to_string();
+    };
+    let mut rendered = format!(
+        "FE2O3-{:04}: {}",
+        diagnostic.canonical().code().get(),
+        diagnostic.canonical().message().as_str(),
+    );
+    if let Some(span) = diagnostic.source_span() {
+        let start = span.start();
+        let end = span.end();
+        rendered.push_str(&format!(
+            "\n  --> {}:{}:{}-{}:{}",
+            span.source_name(),
+            start.line(),
+            start.column(),
+            end.line(),
+            end.column(),
+        ));
+    }
+    if !diagnostic.call_chain().is_empty() {
+        rendered.push_str("\n  = call chain: ");
+        for (index, frame) in diagnostic.call_chain().iter().enumerate() {
+            if index != 0 {
+                rendered.push_str(" -> ");
+            }
+            rendered.push_str(frame.function().as_str());
+        }
+    }
+    rendered
+}
+
 fn extract_ranked_memory_in_active_session_v1(tcx: TyCtxt<'_>) -> Result<(), String> {
     let ranked = transaction_in_active_session_v1(
         tcx,
         crate::rustc_semantic_plan_v1::DebugSourceCaptureRequestV2::Disabled,
     )?
     .verify_general_kernel_checks()
-    .map_err(|error| error.to_string())?;
+    .map_err(render_production_pipeline_error)?;
     if let [root] = ranked.ranked_roots() {
         eprintln!(
             "fe2o3 production extraction: Rust -> semantic MIR -> ranked PLIRON -> safety-verified lowering input for `{}`; {} semantic function(s), {} callable record(s), {} retained identity/transaction binding(s), artifact/launch authority {}, all mandatory kernel checks clean {}, bounds clean {}\n{}",
@@ -215,7 +250,7 @@ fn extract_amdgpu_llvm_in_active_session_v1(
         crate::rustc_semantic_plan_v1::DebugSourceCaptureRequestV2::Disabled,
     )?
     .lower_production_target()
-    .map_err(|error| error.to_string())?;
+    .map_err(render_production_pipeline_error)?;
     if let Some(expected_target) = expected_target
         && lowered.target_name() != expected_target
     {
@@ -268,7 +303,7 @@ fn extract_gfx942_compiler_handoff_in_active_session_v1(
         crate::rustc_semantic_plan_v1::DebugSourceCaptureRequestV2::Disabled,
     )?
     .lower_production_target()
-    .map_err(|error| error.to_string())?;
+    .map_err(render_production_pipeline_error)?;
     if lowered.target_name() != fe2o3_amd_target::PRODUCTION_GFX942_DEVICE_TARGET_V1 {
         return Err(format!(
             "production gfx942 compiler handoff expected live target {:?}; found {:?}",
@@ -280,7 +315,7 @@ fn extract_gfx942_compiler_handoff_in_active_session_v1(
     let guarded_store_count = lowered.guarded_store_count();
     let handoff = lowered
         .into_inert_worker_handoff_for_extraction()
-        .map_err(|error| error.to_string())?;
+        .map_err(render_production_pipeline_error)?;
     std::fs::write(output, handoff.canonical_bytes()).map_err(|error| {
         format!(
             "failed to write inert production compiler-module handoff extraction `{}`: {error}",
@@ -306,7 +341,7 @@ fn extract_gfx942_semantic_compiler_handoff_in_active_session_v3(
         crate::rustc_semantic_plan_v1::DebugSourceCaptureRequestV2::Disabled,
     )?
     .lower_production_target()
-    .map_err(|error| error.to_string())?;
+    .map_err(render_production_pipeline_error)?;
     if lowered.target_name() != fe2o3_amd_target::PRODUCTION_GFX942_DEVICE_TARGET_V1 {
         return Err(format!(
             "production gfx942 semantic compiler handoff expected live target {:?}; found {:?}",
@@ -318,7 +353,7 @@ fn extract_gfx942_semantic_compiler_handoff_in_active_session_v3(
     let guarded_store_count = lowered.guarded_store_count();
     let handoff = lowered
         .into_inert_semantic_worker_handoff_for_extraction(invocation)
-        .map_err(|error| error.to_string())?;
+        .map_err(render_production_pipeline_error)?;
     std::fs::write(output, handoff.canonical_bytes()).map_err(|error| {
         format!(
             "failed to write inert production semantic compiler-module handoff extraction `{}`: {error}",
@@ -386,7 +421,7 @@ fn extract_simulation_bundle_in_active_session_v1(
         crate::rustc_semantic_plan_v1::DebugSourceCaptureRequestV2::Disabled,
     )?
     .export_simulation_bundle_v1()
-    .map_err(|error| error.to_string())?;
+    .map_err(render_production_pipeline_error)?;
     publish_new_simulation_bundle_v1(output, bundle.canonical_bytes())?;
     eprintln!(
         "fe2o3 production extraction: ordinary Rust -> semantic MIR -> ranked PLIRON checks -> sole target-neutral Kernel IR lowering -> exact verified KIR V7 simulation bundle; target {}, {} kernel(s), simulation_bundle_subject {}, content {}, {} byte(s), compiler_execution_binding=extraction_only_unavailable, authenticates_compiler_execution=false, debug map {}, proof/artifact/compiler/hardware/load/launch authority false",
@@ -413,7 +448,7 @@ fn extract_simulation_bundle_in_active_session_v2(
         crate::rustc_semantic_plan_v1::DebugSourceCaptureRequestV2::SourceVariables,
     )?
     .export_simulation_bundle_v2()
-    .map_err(|error| error.to_string())?;
+    .map_err(render_production_pipeline_error)?;
     publish_new_simulation_bundle_v2(output, bundle.canonical_bytes())?;
     eprintln!(
         "fe2o3 production extraction: ordinary Rust -> semantic MIR -> ranked PLIRON checks -> sole target-neutral Kernel IR lowering -> explicit simulation bundle V2 with compiler-produced source variables; target {}, {} kernel(s), simulation_bundle_subject {}, content {}, {} byte(s), compiler_execution_binding=extraction_only_unavailable, authenticates_compiler_execution=false, debug map V2 present, proof/artifact/compiler/hardware/load/launch authority false",
