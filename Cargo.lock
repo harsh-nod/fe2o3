@@ -1873,6 +1873,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe2o3-worker-v3-verification-protocol"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-hsaco",
+ "fe2o3-kernel-descriptor",
+ "fe2o3-runtime-protocol",
+ "sha2 0.11.0",
+]
+
+[[package]]
 name = "fiat-crypto"
 version = "0.2.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"

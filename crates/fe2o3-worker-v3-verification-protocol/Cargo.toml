@@ -1,0 +1,21 @@
+[package]
+name = "fe2o3-worker-v3-verification-protocol"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Authority-free canonical Worker V3 roster-verification framing primitives for fe2o3."
+publish = false
+
+[dependencies]
+fe2o3-hsaco.workspace = true
+fe2o3-kernel-descriptor.workspace = true
+fe2o3-runtime-protocol.workspace = true
+sha2.workspace = true
+
+[lib]
+name = "fe2o3_worker_v3_verification_protocol"
+
+[lints.rust]
+unsafe_code = "forbid"
