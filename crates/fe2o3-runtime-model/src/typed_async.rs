@@ -112,6 +112,16 @@ pub struct ModelAsyncStreamV1 {
     registry: AsyncQueueRegistryV1,
     identity: ModelAsyncStreamIdentityV1,
     next_sequence: u64,
+    next_publication_sequence: u64,
+    next_completion_sequence: u64,
+    next_recycle_sequence: u64,
+    cancelled_sequences: Vec<CancelledStreamSequenceRangeV1>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct CancelledStreamSequenceRangeV1 {
+    first: u64,
+    last: u64,
 }
 
 impl core::fmt::Debug for ModelAsyncStreamV1 {
@@ -120,6 +130,10 @@ impl core::fmt::Debug for ModelAsyncStreamV1 {
             .debug_struct("ModelAsyncStreamV1")
             .field("identity", &self.identity)
             .field("next_sequence", &self.next_sequence)
+            .field("next_publication_sequence", &self.next_publication_sequence)
+            .field("next_completion_sequence", &self.next_completion_sequence)
+            .field("next_recycle_sequence", &self.next_recycle_sequence)
+            .field("cancelled_sequences", &self.cancelled_sequences)
             .field("registry", &self.registry)
             .finish()
     }
@@ -136,6 +150,12 @@ impl ModelAsyncStreamV1 {
                 registry: Box::new(registry),
             });
         }
+        if registry.retained_operation_count() != 0 {
+            return Err(ModelAsyncStreamCreateFailureV1 {
+                error: TypedAsyncErrorV1::Queue(AsyncQueueErrorV1::QueueAlreadyRetainsOperations),
+                registry: Box::new(registry),
+            });
+        }
         let identity = ModelAsyncStreamIdentityV1 {
             registry_incarnation: registry.registry_incarnation(),
             queue: registry.queue(),
@@ -145,6 +165,10 @@ impl ModelAsyncStreamV1 {
             registry,
             identity,
             next_sequence: 1,
+            next_publication_sequence: 1,
+            next_completion_sequence: 1,
+            next_recycle_sequence: 1,
+            cancelled_sequences: Vec::new(),
         })
     }
 
@@ -158,6 +182,18 @@ impl ModelAsyncStreamV1 {
 
     pub const fn next_sequence(&self) -> u64 {
         self.next_sequence
+    }
+
+    pub const fn next_publication_sequence(&self) -> u64 {
+        self.next_publication_sequence
+    }
+
+    pub const fn next_completion_sequence(&self) -> u64 {
+        self.next_completion_sequence
+    }
+
+    pub const fn next_recycle_sequence(&self) -> u64 {
+        self.next_recycle_sequence
     }
 
     pub fn retained_operation_count(&self) -> usize {
@@ -184,6 +220,10 @@ impl ModelAsyncStreamV1 {
             registry,
             identity,
             next_sequence,
+            next_publication_sequence,
+            next_completion_sequence,
+            next_recycle_sequence,
+            cancelled_sequences,
         } = self;
         match registry.into_runtime_state() {
             Ok(runtime) => Ok(runtime),
@@ -191,8 +231,66 @@ impl ModelAsyncStreamV1 {
                 registry: *registry,
                 identity,
                 next_sequence,
+                next_publication_sequence,
+                next_completion_sequence,
+                next_recycle_sequence,
+                cancelled_sequences,
             })),
         }
+    }
+
+    fn record_cancelled_sequence(&mut self, sequence: u64) {
+        if let Some(range) = self.cancelled_sequences.last_mut()
+            && range.last.checked_add(1) == Some(sequence)
+        {
+            range.last = sequence;
+        } else {
+            self.cancelled_sequences
+                .push(CancelledStreamSequenceRangeV1 {
+                    first: sequence,
+                    last: sequence,
+                });
+        }
+        self.next_completion_sequence =
+            self.advance_over_cancelled_sequences(self.next_completion_sequence);
+        self.next_recycle_sequence =
+            self.advance_over_cancelled_sequences(self.next_recycle_sequence);
+        self.discard_consumed_cancelled_sequences();
+    }
+
+    fn advance_completion_sequence(&mut self, completed: u64) {
+        self.next_completion_sequence =
+            self.advance_over_cancelled_sequences(completed.saturating_add(1));
+        self.discard_consumed_cancelled_sequences();
+    }
+
+    fn advance_recycle_sequence(&mut self, recycled: u64) {
+        self.next_recycle_sequence =
+            self.advance_over_cancelled_sequences(recycled.saturating_add(1));
+        self.discard_consumed_cancelled_sequences();
+    }
+
+    fn advance_over_cancelled_sequences(&self, mut sequence: u64) -> u64 {
+        for range in &self.cancelled_sequences {
+            if sequence < range.first {
+                break;
+            }
+            if sequence <= range.last {
+                sequence = range.last.saturating_add(1);
+            }
+        }
+        sequence
+    }
+
+    fn discard_consumed_cancelled_sequences(&mut self) {
+        let consumed_before =
+            core::cmp::min(self.next_completion_sequence, self.next_recycle_sequence);
+        let retained_from = self
+            .cancelled_sequences
+            .iter()
+            .position(|range| range.last >= consumed_before)
+            .unwrap_or(self.cancelled_sequences.len());
+        self.cancelled_sequences.drain(..retained_from);
     }
 }
 
@@ -286,6 +384,9 @@ pub enum TypedAsyncErrorV1 {
     DependencyContextMismatch,
     DependencyOrderingMismatch,
     StreamMismatch,
+    StreamPublicationOrderingMismatch,
+    StreamCompletionOrderingMismatch,
+    StreamRecycleOrderingMismatch,
     StreamSequenceExhausted,
     Queue(AsyncQueueErrorV1),
 }
@@ -492,15 +593,25 @@ impl<K> ReservedTypedAsyncOperationV1<K> {
         if self.metadata.identity.stream != stream.identity {
             return Err(typed_failure(TypedAsyncErrorV1::StreamMismatch, self));
         }
+        if self.metadata.identity.stream_sequence != stream.next_publication_sequence {
+            return Err(typed_failure(
+                TypedAsyncErrorV1::StreamPublicationOrderingMismatch,
+                self,
+            ));
+        }
+        let sequence = self.metadata.identity.stream_sequence;
         let Self {
             metadata,
             reservation,
         } = self;
         match reservation.publish_model_only(&mut stream.registry) {
-            Ok(submitted) => Ok(SubmittedTypedAsyncOperationV1 {
-                metadata,
-                submitted,
-            }),
+            Ok(submitted) => {
+                stream.next_publication_sequence = sequence.saturating_add(1);
+                Ok(SubmittedTypedAsyncOperationV1 {
+                    metadata,
+                    submitted,
+                })
+            }
             Err(failure) => Err(typed_failure(
                 TypedAsyncErrorV1::Queue(*failure.error()),
                 Self {
@@ -518,16 +629,27 @@ impl<K> ReservedTypedAsyncOperationV1<K> {
         if self.metadata.identity.stream != stream.identity {
             return Err(typed_failure(TypedAsyncErrorV1::StreamMismatch, self));
         }
+        if self.metadata.identity.stream_sequence != stream.next_publication_sequence {
+            return Err(typed_failure(
+                TypedAsyncErrorV1::StreamPublicationOrderingMismatch,
+                self,
+            ));
+        }
+        let sequence = self.metadata.identity.stream_sequence;
         let Self {
             metadata,
             reservation,
         } = self;
         match reservation.cancel_before_publication_model_only(&mut stream.registry) {
-            Ok(released) => Ok(TypedAsyncCancelledReceiptV1 {
-                identity: metadata.identity,
-                released,
-                marker: PhantomData,
-            }),
+            Ok(released) => {
+                stream.next_publication_sequence = sequence.saturating_add(1);
+                stream.record_cancelled_sequence(sequence);
+                Ok(TypedAsyncCancelledReceiptV1 {
+                    identity: metadata.identity,
+                    released,
+                    marker: PhantomData,
+                })
+            }
             Err(failure) => Err(typed_failure(
                 TypedAsyncErrorV1::Queue(*failure.error()),
                 Self {
@@ -570,6 +692,15 @@ impl<K> SubmittedTypedAsyncOperationV1<K> {
         if self.metadata.identity.stream != stream.identity {
             return Err(typed_failure(TypedAsyncErrorV1::StreamMismatch, self));
         }
+        if !matches!(observation, AsyncCompletionObservationV1::Pending)
+            && self.metadata.identity.stream_sequence != stream.next_completion_sequence
+        {
+            return Err(typed_failure(
+                TypedAsyncErrorV1::StreamCompletionOrderingMismatch,
+                self,
+            ));
+        }
+        let sequence = self.metadata.identity.stream_sequence;
         let Self {
             metadata,
             submitted,
@@ -581,12 +712,15 @@ impl<K> SubmittedTypedAsyncOperationV1<K> {
                     submitted,
                 }))
             }
-            Ok(AsyncOperationPollV1::Completed(completed)) => Ok(
-                TypedAsyncOperationPollV1::Completed(CompletedTypedAsyncOperationV1 {
-                    metadata,
-                    completed,
-                }),
-            ),
+            Ok(AsyncOperationPollV1::Completed(completed)) => {
+                stream.advance_completion_sequence(sequence);
+                Ok(TypedAsyncOperationPollV1::Completed(
+                    CompletedTypedAsyncOperationV1 {
+                        metadata,
+                        completed,
+                    },
+                ))
+            }
             Ok(AsyncOperationPollV1::Indeterminate(quarantined)) => Ok(
                 TypedAsyncOperationPollV1::Indeterminate(QuarantinedTypedAsyncOperationV1 {
                     metadata,
@@ -744,18 +878,28 @@ impl<K> CompletedTypedAsyncOperationV1<K> {
         if self.metadata.identity.stream != stream.identity {
             return Err(typed_failure(TypedAsyncErrorV1::StreamMismatch, self));
         }
+        if self.metadata.identity.stream_sequence != stream.next_recycle_sequence {
+            return Err(typed_failure(
+                TypedAsyncErrorV1::StreamRecycleOrderingMismatch,
+                self,
+            ));
+        }
+        let sequence = self.metadata.identity.stream_sequence;
         let Self {
             metadata,
             completed,
         } = self;
         match completed.recycle_model_only(&mut stream.registry) {
-            Ok(released) => Ok(TypedAsyncCompletionReceiptV1 {
-                event: TypedAsyncEventV1 {
-                    operation: metadata.identity,
-                    marker: PhantomData,
-                },
-                released,
-            }),
+            Ok(released) => {
+                stream.advance_recycle_sequence(sequence);
+                Ok(TypedAsyncCompletionReceiptV1 {
+                    event: TypedAsyncEventV1 {
+                        operation: metadata.identity,
+                        marker: PhantomData,
+                    },
+                    released,
+                })
+            }
             Err(failure) => Err(typed_failure(
                 TypedAsyncErrorV1::Queue(*failure.error()),
                 Self {

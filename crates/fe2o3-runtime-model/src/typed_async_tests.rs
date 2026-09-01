@@ -115,9 +115,12 @@ fn live_fixture(physical: u64) -> (RuntimeStateV1, Fixture) {
 }
 
 fn stream(state: RuntimeStateV1, fixture: Fixture, seed: u8) -> ModelAsyncStreamV1 {
-    let registry =
-        AsyncQueueRegistryV1::new_model_only(state, digest(seed), fixture.queue, 3).unwrap();
+    let registry = registry(state, fixture, seed);
     ModelAsyncStreamV1::new_model_only(registry, digest(seed.wrapping_add(1))).unwrap()
+}
+
+fn registry(state: RuntimeStateV1, fixture: Fixture, seed: u8) -> AsyncQueueRegistryV1 {
+    AsyncQueueRegistryV1::new_model_only(state, digest(seed), fixture.queue, 3).unwrap()
 }
 
 fn resources(
@@ -236,6 +239,116 @@ fn lazy_submission_event_dependency_and_completion_are_exactly_sequenced() {
         .unwrap();
     assert_eq!(stream.next_sequence(), 3);
     stream.validate_global_invariants().unwrap();
+}
+
+#[test]
+fn multiple_reservations_enforce_publication_completion_and_recycle_order() {
+    let (state, fixture) = live_fixture(1);
+    let mut stream = stream(state, fixture, 0x28);
+    let first = lazy::<Alpha>(&stream, fixture, 0, 15, Vec::new())
+        .reserve_model_only(&mut stream)
+        .unwrap();
+    let second = lazy::<Beta>(&stream, fixture, 1, 16, Vec::new())
+        .reserve_model_only(&mut stream)
+        .unwrap();
+    assert_eq!(first.identity().stream_sequence(), 1);
+    assert_eq!(second.identity().stream_sequence(), 2);
+    assert_eq!(stream.next_publication_sequence(), 1);
+
+    let failure = second.publish_model_only(&mut stream).unwrap_err();
+    assert_eq!(
+        failure.error(),
+        TypedAsyncErrorV1::StreamPublicationOrderingMismatch
+    );
+    let second = failure.into_retained();
+    assert_eq!(stream.next_publication_sequence(), 1);
+    let failure = second
+        .cancel_before_publication_model_only(&mut stream)
+        .unwrap_err();
+    assert_eq!(
+        failure.error(),
+        TypedAsyncErrorV1::StreamPublicationOrderingMismatch
+    );
+    let second = failure.into_retained();
+
+    let first = first.publish_model_only(&mut stream).unwrap();
+    let second = second.publish_model_only(&mut stream).unwrap();
+    assert_eq!(stream.next_publication_sequence(), 3);
+    let failure = second
+        .poll_model_only(&mut stream, AsyncCompletionObservationV1::Completed)
+        .unwrap_err();
+    assert_eq!(
+        failure.error(),
+        TypedAsyncErrorV1::StreamCompletionOrderingMismatch
+    );
+    let second = failure.into_retained();
+    assert_eq!(stream.next_completion_sequence(), 1);
+    let failure = second
+        .poll_model_only(
+            &mut stream,
+            AsyncCompletionObservationV1::Indeterminate(
+                AsyncIndeterminateReasonV1::ObservationUnavailable,
+            ),
+        )
+        .unwrap_err();
+    assert_eq!(
+        failure.error(),
+        TypedAsyncErrorV1::StreamCompletionOrderingMismatch
+    );
+    let second = failure.into_retained();
+
+    let first = complete(first, &mut stream);
+    let second = complete(second, &mut stream);
+    assert_eq!(stream.next_completion_sequence(), 3);
+    let failure = second.recycle_model_only(&mut stream).unwrap_err();
+    assert_eq!(
+        failure.error(),
+        TypedAsyncErrorV1::StreamRecycleOrderingMismatch
+    );
+    let second = failure.into_retained();
+    assert_eq!(stream.next_recycle_sequence(), 1);
+
+    first.recycle_model_only(&mut stream).unwrap();
+    second.recycle_model_only(&mut stream).unwrap();
+    assert_eq!(stream.next_recycle_sequence(), 3);
+    assert_eq!(stream.retained_operation_count(), 0);
+    stream.validate_global_invariants().unwrap();
+}
+
+#[test]
+fn prepublication_cancellation_is_skipped_by_later_ordering_frontiers() {
+    let (state, fixture) = live_fixture(1);
+    let mut stream = stream(state, fixture, 0x2c);
+    let first = lazy::<Alpha>(&stream, fixture, 0, 17, Vec::new())
+        .reserve_model_only(&mut stream)
+        .unwrap()
+        .publish_model_only(&mut stream)
+        .unwrap();
+    lazy::<Beta>(&stream, fixture, 1, 18, Vec::new())
+        .reserve_model_only(&mut stream)
+        .unwrap()
+        .cancel_before_publication_model_only(&mut stream)
+        .unwrap();
+    assert_eq!(stream.next_publication_sequence(), 3);
+    assert_eq!(stream.next_completion_sequence(), 1);
+    assert_eq!(stream.next_recycle_sequence(), 1);
+
+    let first = complete(first, &mut stream);
+    assert_eq!(stream.next_completion_sequence(), 3);
+    first.recycle_model_only(&mut stream).unwrap();
+    assert_eq!(stream.next_recycle_sequence(), 3);
+
+    complete(
+        lazy::<Alpha>(&stream, fixture, 2, 19, Vec::new())
+            .reserve_model_only(&mut stream)
+            .unwrap()
+            .publish_model_only(&mut stream)
+            .unwrap(),
+        &mut stream,
+    )
+    .recycle_model_only(&mut stream)
+    .unwrap();
+    assert_eq!(stream.next_recycle_sequence(), 4);
 }
 
 #[test]
@@ -419,4 +532,108 @@ fn invalid_stream_incarnation_returns_registry_without_mutation() {
     .unwrap_err();
     assert_eq!(error.error(), TypedAsyncErrorV1::InvalidStreamIncarnation);
     assert_eq!(error.into_registry().retained_operation_count(), 0);
+}
+
+#[test]
+fn stream_creation_rejects_reserved_raw_registry_and_returns_exact_custody() {
+    let (state, fixture) = live_fixture(1);
+    let mut registry = registry(state, fixture, 0x80);
+    let (dispatch, completion) = occurrence(fixture.queue, 80);
+    let reserved = registry
+        .reserve_model_only(
+            dispatch,
+            completion,
+            resources(fixture, 0, fixture.data[0], MemoryAccessV1::ReadWrite),
+        )
+        .unwrap();
+    let binding = reserved.binding();
+
+    let error = ModelAsyncStreamV1::new_model_only(registry, digest(0x81)).unwrap_err();
+    assert_eq!(
+        error.error(),
+        TypedAsyncErrorV1::Queue(AsyncQueueErrorV1::QueueAlreadyRetainsOperations)
+    );
+    let mut registry = error.into_registry();
+    assert_eq!(
+        registry.slots()[binding.slot_index() as usize].binding(),
+        Some(binding)
+    );
+    reserved
+        .cancel_before_publication_model_only(&mut registry)
+        .unwrap();
+    assert_eq!(registry.retained_operation_count(), 0);
+}
+
+#[test]
+fn stream_creation_rejects_submitted_raw_registry_and_returns_exact_custody() {
+    let (state, fixture) = live_fixture(1);
+    let mut registry = registry(state, fixture, 0x82);
+    let (dispatch, completion) = occurrence(fixture.queue, 81);
+    let submitted = registry
+        .reserve_model_only(
+            dispatch,
+            completion,
+            resources(fixture, 0, fixture.data[0], MemoryAccessV1::ReadWrite),
+        )
+        .unwrap()
+        .publish_model_only(&mut registry)
+        .unwrap();
+    let binding = submitted.binding();
+
+    let error = ModelAsyncStreamV1::new_model_only(registry, digest(0x83)).unwrap_err();
+    assert_eq!(
+        error.error(),
+        TypedAsyncErrorV1::Queue(AsyncQueueErrorV1::QueueAlreadyRetainsOperations)
+    );
+    let mut registry = error.into_registry();
+    assert_eq!(
+        registry.slots()[binding.slot_index() as usize].binding(),
+        Some(binding)
+    );
+    let completed = match submitted
+        .poll_model_only(&mut registry, AsyncCompletionObservationV1::Completed)
+        .unwrap()
+    {
+        AsyncOperationPollV1::Completed(completed) => completed,
+        other => panic!("unexpected raw poll result: {other:?}"),
+    };
+    completed.recycle_model_only(&mut registry).unwrap();
+    assert_eq!(registry.retained_operation_count(), 0);
+}
+
+#[test]
+fn stream_creation_rejects_completed_raw_registry_and_returns_exact_custody() {
+    let (state, fixture) = live_fixture(1);
+    let mut registry = registry(state, fixture, 0x84);
+    let (dispatch, completion) = occurrence(fixture.queue, 82);
+    let submitted = registry
+        .reserve_model_only(
+            dispatch,
+            completion,
+            resources(fixture, 0, fixture.data[0], MemoryAccessV1::ReadWrite),
+        )
+        .unwrap()
+        .publish_model_only(&mut registry)
+        .unwrap();
+    let completed = match submitted
+        .poll_model_only(&mut registry, AsyncCompletionObservationV1::Completed)
+        .unwrap()
+    {
+        AsyncOperationPollV1::Completed(completed) => completed,
+        other => panic!("unexpected raw poll result: {other:?}"),
+    };
+    let binding = completed.binding();
+
+    let error = ModelAsyncStreamV1::new_model_only(registry, digest(0x85)).unwrap_err();
+    assert_eq!(
+        error.error(),
+        TypedAsyncErrorV1::Queue(AsyncQueueErrorV1::QueueAlreadyRetainsOperations)
+    );
+    let mut registry = error.into_registry();
+    assert_eq!(
+        registry.slots()[binding.slot_index() as usize].binding(),
+        Some(binding)
+    );
+    completed.recycle_model_only(&mut registry).unwrap();
+    assert_eq!(registry.retained_operation_count(), 0);
 }
