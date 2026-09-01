@@ -2468,7 +2468,17 @@ mod tests {
             "descriptor = invocation.descriptor().clone()"
         )));
         assert!(lineage.contains("invocation_custody: &FinishedProtectedRustcInvocationV3"));
-        assert!(!lineage.contains("invocation: RustcInvocationDescriptorV3"));
+        let inert_lineage = lineage
+            .find("pub(crate) fn finish_for_inert_extraction(")
+            .expect("explicit inert extraction boundary");
+        assert!(!lineage[..inert_lineage].contains("invocation: RustcInvocationDescriptorV3"));
+        assert_eq!(
+            lineage[inert_lineage..]
+                .matches("invocation: RustcInvocationDescriptorV3")
+                .count(),
+            2,
+            "raw descriptors are confined to the inert extraction boundary and its helper",
+        );
 
         let lineage_finish = pipeline
             .find(".semantic_lineage\n            .finish(\n                &invocation,")
