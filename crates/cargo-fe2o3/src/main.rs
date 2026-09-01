@@ -30,6 +30,7 @@ mod pinned_executable_test_directory;
 mod process_execution;
 mod production_cargo_plan;
 mod profile_command;
+mod profile_dispatch_import_v1;
 mod project;
 mod protected_compiler_handoff_v3;
 #[path = "rustc_runtime.rs"]

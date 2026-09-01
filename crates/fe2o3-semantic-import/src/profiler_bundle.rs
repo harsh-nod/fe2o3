@@ -9,13 +9,15 @@ use std::error::Error;
 use std::fmt;
 
 use fe2o3_semantic_trace::{ContentIdentityV1, KernelIrIdentityClaimV1, WaveWidthV1};
+use serde::de::IgnoredAny;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::{
     ArtifactClaimV1, CaptureIdentityV1, CaptureUnavailableReasonV1, ContentIdentityRecordV1,
     ContentSchemeV1, ImportLimitsV1, LossStateV1, LossStatusV1, RocprofCaptureBindingV1,
-    SemanticCaptureV1, TruthOriginV1, import_rocprofv3_capture_with_agents_v1,
+    SemanticCaptureV1, TruthOriginV1, MAX_ROCPROF_PROCESSES_V1,
+    import_rocprofv3_capture_with_agents_v1,
 };
 
 pub const PROFILER_BUNDLE_SCHEMA_VERSION_V4: u16 = 4;
@@ -120,6 +122,24 @@ pub struct ProfilerEnvironmentBindingV4 {
 pub struct ProfilerDeviceBindingV4 {
     pub source_agent_id: u64,
     pub stable_identity: ContentIdentityRecordV1,
+}
+
+/// Exact rocprof JSON catalog fields required to map an opaque dispatch agent
+/// handle to one direct-KFD node. This record remains inert; the caller must
+/// compare every hardware field with an independently observed KFD owner.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct RocprofJsonGpuAgentBindingV4 {
+    pub source_agent_id: u64,
+    pub node_id: u32,
+    pub gpu_id: u64,
+    pub simd_count: u64,
+    pub vendor_id: u64,
+    pub device_id: u64,
+    pub location_id: u64,
+    pub domain: u64,
+    pub gfx_target_version: u64,
+    pub wave_front_size: u64,
+    pub num_xcc: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -387,6 +407,7 @@ pub fn import_rocprofv3_json_profiler_bundle_v4(
     binding: ProfilerDispatchBindingV4,
 ) -> Result<SemanticProfilerBundleV4, ProfilerBundleErrorV4> {
     validate_source(source)?;
+    validate_dispatch_json_protocol_v4(source)?;
     validate_environment(&binding.environment)?;
     let imported = import_rocprofv3_capture_with_agents_v1(
         source,
@@ -408,6 +429,307 @@ pub fn import_rocprofv3_json_profiler_bundle_v4(
         imported.source_agent_ids,
         binding.environment,
     )
+}
+
+fn validate_dispatch_json_protocol_v4(source: &[u8]) -> Result<(), ProfilerBundleErrorV4> {
+    let document: DispatchJsonDocumentV4 =
+        serde_json::from_slice(source).map_err(|_| ProfilerBundleErrorV4::InvalidRocprofJson)?;
+    if document.processes.is_empty() || document.processes.len() > MAX_ROCPROF_PROCESSES_V1 {
+        return Err(ProfilerBundleErrorV4::InvalidRocprofJson);
+    }
+    Ok(())
+}
+
+pub fn rocprofv3_json_gpu_agent_bindings_v4(
+    source: &[u8],
+) -> Result<Vec<RocprofJsonGpuAgentBindingV4>, ProfilerBundleErrorV4> {
+    validate_source(source)?;
+    let document: DispatchJsonDocumentV4 =
+        serde_json::from_slice(source).map_err(|_| ProfilerBundleErrorV4::InvalidRocprofJson)?;
+    if document.processes.is_empty() || document.processes.len() > MAX_ROCPROF_PROCESSES_V1 {
+        return Err(ProfilerBundleErrorV4::InvalidRocprofJson);
+    }
+    let mut by_handle = BTreeMap::new();
+    let mut by_node = BTreeMap::new();
+    for process in document.processes {
+        let dispatch_handles = process
+            .buffer_records
+            .kernel_dispatch
+            .iter()
+            .map(|record| {
+                record
+                    .dispatch_info
+                    .agent_id
+                    .as_ref()
+                    .map(|agent| agent.handle)
+                    .ok_or(ProfilerBundleErrorV4::MissingDeviceBinding)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let agents = process
+            .agents
+            .ok_or(ProfilerBundleErrorV4::MissingDeviceBinding)?;
+        let mut process_handles = BTreeSet::new();
+        let mut process_nodes = BTreeSet::new();
+        for agent in agents {
+            if agent.simd_count == 0 {
+                continue;
+            }
+            let binding = RocprofJsonGpuAgentBindingV4 {
+                source_agent_id: agent.id.handle,
+                node_id: u32::try_from(agent.node_id)
+                    .map_err(|_| ProfilerBundleErrorV4::InvalidDevice)?,
+                gpu_id: agent.gpu_id,
+                simd_count: agent.simd_count,
+                vendor_id: agent.vendor_id,
+                device_id: agent.device_id,
+                location_id: agent.location_id,
+                domain: agent.domain,
+                gfx_target_version: agent.gfx_target_version,
+                wave_front_size: agent.wave_front_size,
+                num_xcc: agent.num_xcc,
+            };
+            if binding.source_agent_id == 0
+                || binding.gpu_id == 0
+                || binding.wave_front_size == 0
+                || !process_handles.insert(binding.source_agent_id)
+                || !process_nodes.insert(binding.node_id)
+                || by_handle
+                    .insert(binding.source_agent_id, binding)
+                    .is_some_and(|prior| prior != binding)
+                || by_node
+                    .insert(binding.node_id, binding.source_agent_id)
+                    .is_some_and(|prior| prior != binding.source_agent_id)
+            {
+                return Err(ProfilerBundleErrorV4::InvalidDevice);
+            }
+        }
+        if dispatch_handles
+            .iter()
+            .any(|handle| !process_handles.contains(handle))
+        {
+            return Err(ProfilerBundleErrorV4::MissingDeviceBinding);
+        }
+    }
+    if by_handle.is_empty() || by_handle.len() > MAX_PROFILER_DEVICE_BINDINGS_V4 {
+        return Err(ProfilerBundleErrorV4::DeviceCountOutOfRange);
+    }
+    Ok(by_handle.into_values().collect())
+}
+
+// This is the closed rocprofv3 dispatch protocol admitted by Bundle V4. Fields
+// emitted by the reviewed rocprofv3 schema but not projected into the bundle
+// are named explicitly and discarded. A new field therefore requires an
+// intentional protocol update instead of being silently accepted by serde.
+#[allow(dead_code)]
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DispatchJsonDocumentV4 {
+    #[serde(rename = "rocprofiler-sdk-tool")]
+    processes: Vec<DispatchJsonProcessV4>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DispatchJsonProcessV4 {
+    buffer_records: DispatchJsonBufferRecordsV4,
+    #[serde(default)]
+    metadata: Option<IgnoredAny>,
+    #[serde(default)]
+    agents: Option<Vec<DispatchJsonAgentV4>>,
+    #[serde(default)]
+    callback_records: Option<IgnoredAny>,
+    #[serde(default)]
+    counters: Option<IgnoredAny>,
+    #[serde(default)]
+    code_objects: Option<IgnoredAny>,
+    #[serde(default)]
+    kernel_symbols: Option<IgnoredAny>,
+    #[serde(default)]
+    strings: Option<IgnoredAny>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DispatchJsonAgentV4 {
+    id: DispatchJsonHandleV4,
+    node_id: u64,
+    simd_count: u64,
+    gpu_id: u64,
+    vendor_id: u64,
+    device_id: u64,
+    location_id: u64,
+    domain: u64,
+    gfx_target_version: u64,
+    wave_front_size: u64,
+    num_xcc: u64,
+    #[serde(default)]
+    size: Option<IgnoredAny>,
+    #[serde(default, rename = "type")]
+    agent_type: Option<IgnoredAny>,
+    #[serde(default)]
+    logical_node_id: Option<IgnoredAny>,
+    #[serde(default)]
+    logical_node_type_id: Option<IgnoredAny>,
+    #[serde(default)]
+    cpu_cores_count: Option<IgnoredAny>,
+    #[serde(default)]
+    cpu_core_id_base: Option<IgnoredAny>,
+    #[serde(default)]
+    simd_id_base: Option<IgnoredAny>,
+    #[serde(default)]
+    max_waves_per_simd: Option<IgnoredAny>,
+    #[serde(default)]
+    lds_size_in_kb: Option<IgnoredAny>,
+    #[serde(default)]
+    gds_size_in_kb: Option<IgnoredAny>,
+    #[serde(default)]
+    num_gws: Option<IgnoredAny>,
+    #[serde(default)]
+    cu_count: Option<IgnoredAny>,
+    #[serde(default)]
+    array_count: Option<IgnoredAny>,
+    #[serde(default)]
+    num_shader_banks: Option<IgnoredAny>,
+    #[serde(default)]
+    simd_arrays_per_engine: Option<IgnoredAny>,
+    #[serde(default)]
+    cu_per_simd_array: Option<IgnoredAny>,
+    #[serde(default)]
+    simd_per_cu: Option<IgnoredAny>,
+    #[serde(default)]
+    max_slots_scratch_cu: Option<IgnoredAny>,
+    #[serde(default)]
+    drm_render_minor: Option<IgnoredAny>,
+    #[serde(default)]
+    num_sdma_engines: Option<IgnoredAny>,
+    #[serde(default)]
+    num_sdma_xgmi_engines: Option<IgnoredAny>,
+    #[serde(default)]
+    num_sdma_queues_per_engine: Option<IgnoredAny>,
+    #[serde(default)]
+    num_cp_queues: Option<IgnoredAny>,
+    #[serde(default)]
+    max_engine_clk_ccompute: Option<IgnoredAny>,
+    #[serde(default)]
+    max_engine_clk_fcompute: Option<IgnoredAny>,
+    #[serde(default)]
+    sdma_fw_version: Option<IgnoredAny>,
+    #[serde(default)]
+    fw_version: Option<IgnoredAny>,
+    #[serde(default)]
+    capability: Option<IgnoredAny>,
+    #[serde(default)]
+    cu_per_engine: Option<IgnoredAny>,
+    #[serde(default)]
+    max_waves_per_cu: Option<IgnoredAny>,
+    #[serde(default)]
+    family_id: Option<IgnoredAny>,
+    #[serde(default)]
+    workgroup_max_size: Option<IgnoredAny>,
+    #[serde(default)]
+    grid_max_size: Option<IgnoredAny>,
+    #[serde(default)]
+    local_mem_size: Option<IgnoredAny>,
+    #[serde(default)]
+    hive_id: Option<IgnoredAny>,
+    #[serde(default)]
+    workgroup_max_dim: Option<IgnoredAny>,
+    #[serde(default)]
+    grid_max_dim: Option<IgnoredAny>,
+    #[serde(default)]
+    name: Option<IgnoredAny>,
+    #[serde(default)]
+    vendor_name: Option<IgnoredAny>,
+    #[serde(default)]
+    product_name: Option<IgnoredAny>,
+    #[serde(default)]
+    model_name: Option<IgnoredAny>,
+    #[serde(default)]
+    uuid: Option<IgnoredAny>,
+    #[serde(default)]
+    mem_banks: Option<IgnoredAny>,
+    #[serde(default)]
+    caches: Option<IgnoredAny>,
+    #[serde(default)]
+    io_links: Option<IgnoredAny>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DispatchJsonBufferRecordsV4 {
+    #[serde(default)]
+    kernel_dispatch: Vec<DispatchJsonRecordV4>,
+    #[serde(default)]
+    hip_api: Option<IgnoredAny>,
+    #[serde(default)]
+    hsa_api: Option<IgnoredAny>,
+    #[serde(default)]
+    marker_api: Option<IgnoredAny>,
+    #[serde(default)]
+    memory_copy: Option<IgnoredAny>,
+    #[serde(default)]
+    memory_allocation: Option<IgnoredAny>,
+    #[serde(default)]
+    scratch_memory: Option<IgnoredAny>,
+    #[serde(default)]
+    page_migration: Option<IgnoredAny>,
+    #[serde(default)]
+    pc_sample_host_trap: Option<IgnoredAny>,
+    #[serde(default)]
+    pc_sample_stochastic: Option<IgnoredAny>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DispatchJsonRecordV4 {
+    start_timestamp: u64,
+    end_timestamp: u64,
+    dispatch_info: DispatchJsonInfoV4,
+    #[serde(default)]
+    size: Option<IgnoredAny>,
+    #[serde(default)]
+    kind: Option<IgnoredAny>,
+    #[serde(default)]
+    operation: Option<IgnoredAny>,
+    #[serde(default)]
+    thread_id: Option<IgnoredAny>,
+    #[serde(default)]
+    correlation_id: Option<IgnoredAny>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DispatchJsonInfoV4 {
+    #[serde(default)]
+    agent_id: Option<DispatchJsonHandleV4>,
+    #[serde(default)]
+    dispatch_id: Option<u64>,
+    workgroup_size: DispatchJsonDimensionsV4,
+    grid_size: DispatchJsonDimensionsV4,
+    #[serde(default)]
+    size: Option<IgnoredAny>,
+    #[serde(default)]
+    queue_id: Option<IgnoredAny>,
+    #[serde(default)]
+    kernel_id: Option<IgnoredAny>,
+    #[serde(default)]
+    private_segment_size: Option<IgnoredAny>,
+    #[serde(default)]
+    group_segment_size: Option<IgnoredAny>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DispatchJsonHandleV4 {
+    handle: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DispatchJsonDimensionsV4 {
+    x: u64,
+    y: u64,
+    z: u64,
 }
 
 pub fn import_rocprofv3_csv_profiler_bundle_v4(
@@ -775,11 +1097,35 @@ fn field<'a>(
 }
 
 fn parse_integer(value: &str) -> Result<u64, ProfilerBundleErrorV4> {
+    if let Some(digits) = value.strip_prefix("0x") {
+        if digits.is_empty()
+            || (digits.len() > 1 && digits.starts_with('0'))
+            || !digits
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err(ProfilerBundleErrorV4::InvalidRocprofCsv);
+        }
+        let parsed = u64::from_str_radix(digits, 16)
+            .map_err(|_| ProfilerBundleErrorV4::InvalidRocprofCsv)?;
+        if format!("{parsed:x}") != digits {
+            return Err(ProfilerBundleErrorV4::InvalidRocprofCsv);
+        }
+        return Ok(parsed);
+    }
+    if value.is_empty()
+        || (value.len() > 1 && value.starts_with('0'))
+        || !value.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return Err(ProfilerBundleErrorV4::InvalidRocprofCsv);
+    }
     let parsed = value
-        .strip_prefix("0x")
-        .map(|value| u64::from_str_radix(value, 16))
-        .unwrap_or_else(|| value.parse());
-    parsed.map_err(|_| ProfilerBundleErrorV4::InvalidRocprofCsv)
+        .parse::<u64>()
+        .map_err(|_| ProfilerBundleErrorV4::InvalidRocprofCsv)?;
+    if parsed.to_string() != value {
+        return Err(ProfilerBundleErrorV4::InvalidRocprofCsv);
+    }
+    Ok(parsed)
 }
 
 fn parse_agent_id(value: &str) -> Result<u64, ProfilerBundleErrorV4> {

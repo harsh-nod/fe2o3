@@ -8,6 +8,24 @@
 //! validation boundary.
 
 use sha2::{Digest, Sha256};
+use fe2o3_kernel_ir::{
+    AMDGPU_EXACT_TARGET_CAPABILITY_NAMESPACE, AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME,
+    AMDGPU_GFX950_XNACK_MINUS_TARGET_CAPABILITY_NAME, MAX_MODULE_BYTES_V1, Module,
+    TargetCapability, VerifiedCanonicalKernelIrV7, WaveWidth,
+};
+use fe2o3_artifact_transaction::{
+    NoRetainedDurableDirectoryHooksV1, RetainedDurableDirectoryV1,
+};
+use fe2o3_semantic_import::{
+    CaptureIdentityV1, ContentIdentityRecordV1, ContentSchemeV1,
+    RocprofJsonGpuAgentBindingV4, rocprofv3_json_gpu_agent_bindings_v4,
+};
+use fe2o3_semantic_trace::WaveWidthV1;
+use crate::profile_dispatch_import_v1::{
+    DispatchImportBindingV1, DispatchImportProductV1, DispatchImportSourceKindV1,
+    DispatchImportTargetBindingV1, ObservedTargetFamilyV1, PROFILE_DISPATCH_BUNDLE_FILE_V1,
+    PROFILE_DISPATCH_RECEIPT_FILE_V1, import_dispatch_v1,
+};
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::ffi::{OsStr, OsString};
@@ -46,6 +64,10 @@ const MAX_OBSERVED_GPU_TARGET_PROFILE_RECORD_BYTES_V1: usize = 512;
 const POLL_INTERVAL: Duration = Duration::from_millis(5);
 const OWNERSHIP_FILE: &str = ".fe2o3-profile-owned-v1";
 const MANIFEST_FILE: &str = "fe2o3-profile-manifest-v1.txt";
+const MANIFEST_REDO_FILE: &str = ".fe2o3-profile-manifest-v1.redo";
+const PROFILE_DISPATCH_BUNDLE_REDO_FILE_V1: &str = ".fe2o3-semantic-profiler-bundle-v4.redo";
+const PROFILE_DISPATCH_RECEIPT_REDO_FILE_V1: &str =
+    ".fe2o3-profile-dispatch-import-receipt-v1.redo";
 const KFD_TOPOLOGY_ROOT: &str = "/sys/class/kfd/kfd/topology/nodes";
 const EXPECTED_AMD_VENDOR_ID: u64 = 0x1002;
 const GFX942_TARGET_VERSION: u64 = 90_402;
@@ -122,6 +144,7 @@ struct Options {
     program: String,
     program_arguments: Vec<String>,
     kir_binding: Option<KirBinding>,
+    kir_v7_path: Option<PathBuf>,
 }
 
 #[derive(Debug)]
@@ -276,6 +299,36 @@ impl FilePin {
         Ok(())
     }
 
+    fn read_retained(&self, label: &str, maximum: u64) -> Result<Vec<u8>, String> {
+        self.validate(label)?;
+        if self.identity.size == 0 || self.identity.size > maximum {
+            return Err(format!("retained {label} exceeds the {maximum}-byte bound"));
+        }
+        let capacity = usize::try_from(self.identity.size)
+            .map_err(|_| format!("retained {label} size does not fit memory"))?;
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(capacity)
+            .map_err(|_| format!("failed to reserve retained {label} bytes"))?;
+        let mut clone = self
+            .file
+            .try_clone()
+            .map_err(|error| format!("failed to duplicate retained {label}: {error}"))?;
+        use std::io::{Seek as _, SeekFrom};
+        clone
+            .seek(SeekFrom::Start(0))
+            .map_err(|error| format!("failed to rewind retained {label}: {error}"))?;
+        clone
+            .take(maximum.saturating_add(1))
+            .read_to_end(&mut bytes)
+            .map_err(|error| format!("failed to read retained {label}: {error}"))?;
+        if bytes.len() != capacity || <[u8; 32]>::from(Sha256::digest(&bytes)) != self.digest {
+            return Err(format!("retained {label} changed while it was reread"));
+        }
+        self.validate(label)?;
+        Ok(bytes)
+    }
+
     fn execution_path(&self) -> PathBuf {
         PathBuf::from(format!("/proc/self/fd/{}", self.file.as_raw_fd()))
     }
@@ -302,9 +355,87 @@ struct EnvironmentEntry {
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct DeviceIdentity {
     node: u32,
+    hardware: KfdGpuHardwareV1,
     bytes: Vec<u8>,
     digest: [u8; 32],
     target_profile: ObservedGpuTargetProfileRecordV1,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct KfdGpuHardwareV1 {
+    gpu_id: u64,
+    simd_count: u64,
+    vendor_id: u64,
+    device_id: u64,
+    location_id: u64,
+    domain: u64,
+    gfx_target_version: u64,
+    wave_front_size: u64,
+    num_xcc: u64,
+}
+
+struct VerifiedKirInputV1 {
+    pin: FilePin,
+    owner: VerifiedCanonicalKernelIrV7,
+    compatibility: KirTargetCompatibilityV1,
+}
+
+impl VerifiedKirInputV1 {
+    fn revalidate(&self) -> Result<(), String> {
+        self.pin.validate("canonical Kernel IR V7")?;
+        let bytes = self
+            .pin
+            .read_retained("canonical Kernel IR V7", MAX_MODULE_BYTES_V1 as u64)?;
+        if bytes != self.owner.canonical_bytes() {
+            return Err("retained canonical Kernel IR V7 bytes changed".to_owned());
+        }
+        self.owner
+            .revalidate()
+            .map_err(|error| format!("canonical Kernel IR V7 revalidation failed: {error}"))
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum KirTargetCompatibilityV1 {
+    Ready(ObservedGpuTargetProfileV1),
+    Unavailable(KirTargetUnavailableReasonV1),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum KirTargetUnavailableReasonV1 {
+    MissingExactTarget,
+    ConflictingExactTargets,
+    UnknownExactTarget,
+    MissingWave64,
+    ConflictingWaveWidth,
+    KfdProfileUnavailable,
+    KfdFamilyMismatch,
+}
+
+impl KirTargetUnavailableReasonV1 {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::MissingExactTarget => "missing-exact-target-capability",
+            Self::ConflictingExactTargets => "conflicting-exact-target-capabilities",
+            Self::UnknownExactTarget => "unknown-exact-target-capability",
+            Self::MissingWave64 => "missing-wave64-capability",
+            Self::ConflictingWaveWidth => "conflicting-wave-width-capabilities",
+            Self::KfdProfileUnavailable => "direct-kfd-target-profile-unavailable",
+            Self::KfdFamilyMismatch => "kir-target-family-does-not-match-direct-kfd",
+        }
+    }
+
+    const fn tag(self) -> u8 {
+        match self {
+            Self::MissingExactTarget => 1,
+            Self::ConflictingExactTargets => 2,
+            Self::UnknownExactTarget => 3,
+            Self::MissingWave64 => 4,
+            Self::ConflictingWaveWidth => 5,
+            Self::KfdProfileUnavailable => 6,
+            Self::KfdFamilyMismatch => 7,
+        }
+    }
 }
 
 impl DeviceIdentity {
@@ -445,6 +576,7 @@ struct Plan {
     configuration_digest: [u8; 32],
     collector_arguments: Vec<String>,
     authorization: [u8; 32],
+    verified_kir_v7: Option<VerifiedKirInputV1>,
 }
 
 struct CollectorLibraries {
@@ -564,7 +696,7 @@ pub(crate) fn command(args: &[String]) -> Result<CommandReport, String> {
 }
 
 fn usage() -> &'static str {
-    "usage: cargo fe2o3 profile [--kind dispatch-json|dispatch-csv|att] [--tool /absolute/path/to/rocprofv3] [--python /absolute/path/to/python3] --output-dir /absolute/new/directory [--cwd /absolute/directory] [--timeout-ms N] [--stdout-limit N] [--stderr-limit N] [--storage-limit N] [--kir-sha256 HEX --kir-len N --wave-width 32|64] [--collect --authorize-collection HEX] -- <program> [arguments...]"
+    "usage: cargo fe2o3 profile [--kind dispatch-json|dispatch-csv|att] [--tool /absolute/path/to/rocprofv3] [--python /absolute/path/to/python3] --output-dir /absolute/new/directory [--cwd /absolute/directory] [--timeout-ms N] [--stdout-limit N] [--stderr-limit N] [--storage-limit N] [--kir-v7 /absolute/path/to/canonical.kir] [--collect --authorize-collection HEX] -- <program> [arguments...]"
 }
 
 fn parse_options(args: &[String]) -> Result<Options, String> {
@@ -600,6 +732,7 @@ fn parse_options(args: &[String]) -> Result<Options, String> {
     let mut kir_digest = None;
     let mut kir_length = None;
     let mut wave_width = None;
+    let mut kir_v7_path = None;
     let mut scalar_options = BTreeSet::new();
 
     let mut index = 0;
@@ -674,6 +807,8 @@ fn parse_options(args: &[String]) -> Result<Options, String> {
                 _ => return Err("--wave-width must be 32 or 64".to_owned()),
             };
             set_once(&mut wave_width, parsed, "--wave-width")?;
+        } else if let Some(value) = option_value(args, &mut index, separator, "--kir-v7")? {
+            set_once(&mut kir_v7_path, PathBuf::from(value), "--kir-v7")?;
         } else {
             return Err(format!("unknown profile option `{argument}`\n{}", usage()));
         }
@@ -709,6 +844,12 @@ fn parse_options(args: &[String]) -> Result<Options, String> {
     if kind == ProfileKind::Att && kir_binding.is_some() {
         return Err("KIR dispatch binding options are not valid for ATT collection".to_owned());
     }
+    if kir_v7_path.is_some() && kir_binding.is_some() {
+        return Err("--kir-v7 cannot be combined with legacy KIR declaration options".to_owned());
+    }
+    if kind == ProfileKind::Att && kir_v7_path.is_some() {
+        return Err("--kir-v7 is not valid for ATT collection".to_owned());
+    }
     Ok(Options {
         action,
         authorization,
@@ -724,6 +865,7 @@ fn parse_options(args: &[String]) -> Result<Options, String> {
         program,
         program_arguments: args[separator + 2..].to_vec(),
         kir_binding,
+        kir_v7_path,
     })
 }
 
@@ -851,6 +993,10 @@ fn prepare_plan(options: Options) -> Result<Plan, String> {
     let environment_bytes = canonical_environment(&environment);
     let environment_digest = Sha256::digest(&environment_bytes).into();
     let devices = discover_visible_devices()?;
+    let verified_kir_v7 = match options.kir_v7_path.as_deref() {
+        Some(path) => Some(admit_kir_v7(path, &devices)?),
+        None => None,
+    };
     let collector_arguments =
         collector_arguments(options.kind, &output_directory, &target, &options)?;
     let configuration = canonical_configuration(options.kind, &devices);
@@ -866,6 +1012,7 @@ fn prepare_plan(options: Options) -> Result<Plan, String> {
         devices: &devices,
         configuration: &configuration_digest,
         collector_tool: &collector_tool_digest,
+        verified_kir_v7: verified_kir_v7.as_ref(),
     });
     Ok(Plan {
         options,
@@ -885,7 +1032,109 @@ fn prepare_plan(options: Options) -> Result<Plan, String> {
         configuration_digest,
         collector_arguments,
         authorization,
+        verified_kir_v7,
     })
+}
+
+fn admit_kir_v7(path: &Path, devices: &[DeviceIdentity]) -> Result<VerifiedKirInputV1, String> {
+    require_absolute_named(path, "--kir-v7", "canonical Kernel IR V7")?;
+    let pin = FilePin::open(
+        path,
+        "canonical Kernel IR V7",
+        MAX_MODULE_BYTES_V1 as u64,
+        false,
+    )?;
+    let bytes = pin.read_retained("canonical Kernel IR V7", MAX_MODULE_BYTES_V1 as u64)?;
+    let (owner, module) = VerifiedCanonicalKernelIrV7::from_canonical_bytes_with_module(bytes)
+        .map_err(|error| format!("--kir-v7 is not exact verified canonical KIR V7: {error}"))?;
+    owner
+        .revalidate()
+        .map_err(|error| format!("retained canonical Kernel IR V7 failed revalidation: {error}"))?;
+    let compatibility = kir_target_compatibility_v1(&module, devices);
+    Ok(VerifiedKirInputV1 {
+        pin,
+        owner,
+        compatibility,
+    })
+}
+
+fn kir_target_compatibility_v1(
+    module: &Module,
+    devices: &[DeviceIdentity],
+) -> KirTargetCompatibilityV1 {
+    let capabilities = module
+        .effective_capabilities()
+        .into_iter()
+        .chain(
+            module
+                .functions
+                .iter()
+                .flat_map(|function| function.effective_capabilities()),
+        )
+        .chain(
+            module
+                .kernels
+                .iter()
+                .flat_map(|kernel| kernel.required_capabilities.iter().cloned()),
+        )
+        .collect::<BTreeSet<_>>();
+    let mut exact_target = None;
+    let mut saw_wave64 = false;
+    for capability in &capabilities {
+        match capability {
+            TargetCapability::Extension { namespace, name }
+                if namespace == AMDGPU_EXACT_TARGET_CAPABILITY_NAMESPACE =>
+            {
+                let target = match name.as_str() {
+                    AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME => {
+                        ObservedGpuTargetProfileV1::Gfx942
+                    }
+                    AMDGPU_GFX950_XNACK_MINUS_TARGET_CAPABILITY_NAME => {
+                        ObservedGpuTargetProfileV1::Gfx950
+                    }
+                    _ => {
+                        return KirTargetCompatibilityV1::Unavailable(
+                            KirTargetUnavailableReasonV1::UnknownExactTarget,
+                        );
+                    }
+                };
+                if exact_target.replace(target).is_some_and(|prior| prior != target) {
+                    return KirTargetCompatibilityV1::Unavailable(
+                        KirTargetUnavailableReasonV1::ConflictingExactTargets,
+                    );
+                }
+            }
+            TargetCapability::WaveWidth(WaveWidth::Wave64) => saw_wave64 = true,
+            TargetCapability::WaveWidth(_) => {
+                return KirTargetCompatibilityV1::Unavailable(
+                    KirTargetUnavailableReasonV1::ConflictingWaveWidth,
+                );
+            }
+            _ => {}
+        }
+    }
+    let Some(exact_target) = exact_target else {
+        return KirTargetCompatibilityV1::Unavailable(
+            KirTargetUnavailableReasonV1::MissingExactTarget,
+        );
+    };
+    if !saw_wave64 {
+        return KirTargetCompatibilityV1::Unavailable(KirTargetUnavailableReasonV1::MissingWave64);
+    }
+    for device in devices {
+        let ObservedGpuTargetProfileStatusV1::Observed(observed) = device.target_profile.status
+        else {
+            return KirTargetCompatibilityV1::Unavailable(
+                KirTargetUnavailableReasonV1::KfdProfileUnavailable,
+            );
+        };
+        if observed != exact_target || device.target_profile.wave_width != PRODUCTION_WAVE_WIDTH {
+            return KirTargetCompatibilityV1::Unavailable(
+                KirTargetUnavailableReasonV1::KfdFamilyMismatch,
+            );
+        }
+    }
+    KirTargetCompatibilityV1::Ready(exact_target)
 }
 
 fn default_tool_path() -> PathBuf {
@@ -1055,6 +1304,10 @@ fn discover_devices(root: &Path) -> io::Result<Vec<DeviceIdentity>> {
             ));
         }
         let properties_path = entry.path().join("properties");
+        let gpu_id = read_kfd_scalar(&entry.path().join("gpu_id"), node, "gpu_id")?;
+        if gpu_id == 0 {
+            continue;
+        }
         let metadata = fs::symlink_metadata(&properties_path).map_err(|error| {
             io::Error::new(
                 error.kind(),
@@ -1119,12 +1372,26 @@ fn discover_devices(root: &Path) -> io::Result<Vec<DeviceIdentity>> {
                 "GPU KFD topology has a missing or duplicate stable unique_id",
             ));
         }
+        let hardware = KfdGpuHardwareV1 {
+            gpu_id,
+            simd_count: required_u64_property(&parsed, node, "simd_count")?,
+            vendor_id: required_u64_property(&parsed, node, "vendor_id")?,
+            device_id: required_u64_property(&parsed, node, "device_id")?,
+            location_id: required_u64_property(&parsed, node, "location_id")?,
+            domain: required_u64_property(&parsed, node, "domain")?,
+            gfx_target_version: required_u64_property(&parsed, node, "gfx_target_version")?,
+            wave_front_size: required_u64_property(&parsed, node, "wave_front_size")?,
+            num_xcc: required_u64_property(&parsed, node, "num_xcc")?,
+        };
         let target_profile = ObservedGpuTargetProfileRecordV1::from_direct_kfd_properties(
-            required_u64_property(&parsed, node, "vendor_id")?,
-            required_u64_property(&parsed, node, "gfx_target_version")?,
-            required_u64_property(&parsed, node, "wave_front_size")?,
+            hardware.vendor_id,
+            hardware.gfx_target_version,
+            hardware.wave_front_size,
         );
         let mut bytes = b"fe2o3-kfd-stable-device-v1\n".to_vec();
+        bytes.extend_from_slice(b"gpu_id=");
+        bytes.extend_from_slice(gpu_id.to_string().as_bytes());
+        bytes.push(b'\n');
         for field in fields {
             let value = parsed
                 .get(field)
@@ -1136,6 +1403,7 @@ fn discover_devices(root: &Path) -> io::Result<Vec<DeviceIdentity>> {
         }
         devices.push(DeviceIdentity {
             node,
+            hardware,
             digest: Sha256::digest(&bytes).into(),
             bytes,
             target_profile,
@@ -1148,6 +1416,53 @@ fn discover_devices(root: &Path) -> io::Result<Vec<DeviceIdentity>> {
     }
     devices.sort_by_key(|device| device.digest);
     Ok(devices)
+}
+
+fn read_kfd_scalar(path: &Path, node: u32, field: &'static str) -> io::Result<u64> {
+    let metadata = fs::symlink_metadata(path).map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            format!("failed to inspect KFD node {node} {field}: {error}"),
+        )
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() > 32 {
+        return Err(invalid_data(format!(
+            "KFD node {node} {field} is not a bounded regular file"
+        )));
+    }
+    let bytes = fs::read(path).map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            format!("failed to read KFD node {node} {field}: {error}"),
+        )
+    })?;
+    let after = fs::symlink_metadata(path).map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            format!("failed to re-inspect KFD node {node} {field}: {error}"),
+        )
+    })?;
+    if ObjectIdentity::from_metadata(&metadata) != ObjectIdentity::from_metadata(&after) {
+        return Err(invalid_data(format!(
+            "KFD node {node} {field} changed while it was read"
+        )));
+    }
+    let text = std::str::from_utf8(&bytes)
+        .map_err(|_| invalid_data(format!("KFD node {node} {field} is not UTF-8")))?;
+    let value = text
+        .strip_suffix('\n')
+        .ok_or_else(|| invalid_data(format!("KFD node {node} {field} lacks newline")))?;
+    if value.is_empty()
+        || (value.len() > 1 && value.starts_with('0'))
+        || !value.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return Err(invalid_data(format!(
+            "KFD node {node} {field} is not canonical decimal"
+        )));
+    }
+    value
+        .parse()
+        .map_err(|_| invalid_data(format!("KFD node {node} {field} is out of range")))
 }
 
 fn required_u64_property(
@@ -1293,6 +1608,7 @@ struct AuthorizationInputs<'a> {
     devices: &'a [DeviceIdentity],
     configuration: &'a [u8; 32],
     collector_tool: &'a [u8; 32],
+    verified_kir_v7: Option<&'a VerifiedKirInputV1>,
 }
 
 fn authorization_digest(input: AuthorizationInputs<'_>) -> [u8; 32] {
@@ -1307,6 +1623,7 @@ fn authorization_digest(input: AuthorizationInputs<'_>) -> [u8; 32] {
         devices,
         configuration,
         collector_tool,
+        verified_kir_v7,
     } = input;
     let mut hasher = Sha256::new();
     hash_field(&mut hasher, b"fe2o3-profile-authorization-v1");
@@ -1340,6 +1657,23 @@ fn authorization_digest(input: AuthorizationInputs<'_>) -> [u8; 32] {
         hash_field(&mut hasher, &kir.digest);
         hash_field(&mut hasher, &kir.length.to_le_bytes());
         hash_field(&mut hasher, &[kir.wave_width]);
+    }
+    if let Some(kir) = verified_kir_v7 {
+        hash_field(&mut hasher, kir.owner.identity().digest());
+        hash_field(
+            &mut hasher,
+            &kir.owner.identity().canonical_length().to_le_bytes(),
+        );
+        hash_field(&mut hasher, &kir.pin.digest);
+        hash_field(&mut hasher, &kir.pin.identity.size.to_le_bytes());
+        hash_field(
+            &mut hasher,
+            &[match kir.compatibility {
+                KirTargetCompatibilityV1::Ready(ObservedGpuTargetProfileV1::Gfx942) => 1,
+                KirTargetCompatibilityV1::Ready(ObservedGpuTargetProfileV1::Gfx950) => 2,
+                KirTargetCompatibilityV1::Unavailable(reason) => 16 + reason.tag(),
+            }],
+        );
     }
     hasher.finalize().into()
 }
@@ -1636,12 +1970,8 @@ fn render_import_plan(output: &mut String, plan: &Plan) {
         ProfileKind::DispatchJson | ProfileKind::DispatchCsv => {
             if !render_dispatch_import_plan(
                 output,
-                plan.options.kind,
-                &plan.devices,
+                plan.verified_kir_v7.as_ref(),
                 plan.options.kir_binding.as_ref(),
-                environment,
-                tool,
-                configuration,
             ) {
                 return;
             }
@@ -1701,18 +2031,18 @@ fn render_import_plan(output: &mut String, plan: &Plan) {
 
 fn render_dispatch_import_plan(
     output: &mut String,
-    kind: ProfileKind,
-    devices: &[DeviceIdentity],
-    kir: Option<&KirBinding>,
-    environment: String,
-    tool: String,
-    configuration: String,
+    kir: Option<&VerifiedKirInputV1>,
+    legacy_kir: Option<&KirBinding>,
 ) -> bool {
     let Some(kir) = kir else {
         line(
             output,
             "next-import-status",
-            "unavailable-missing-kir-identity-length-and-wave-width",
+            if legacy_kir.is_some() {
+                "unavailable-legacy-kir-declaration-is-not-admitted-canonical-kir"
+            } else {
+                "unavailable-missing-exact-canonical-kir-v7"
+            },
         );
         line(
             output,
@@ -1721,71 +2051,17 @@ fn render_dispatch_import_plan(
         );
         return false;
     };
-    if devices.iter().any(|device| {
-        matches!(
-            device.target_profile.status,
-            ObservedGpuTargetProfileStatusV1::Unavailable(_)
-        )
-    }) {
+    if let KirTargetCompatibilityV1::Unavailable(reason) = kir.compatibility {
         line(
             output,
             "next-import-status",
-            "unavailable-observed-gpu-target-profile",
+            "unavailable-kir-v7-target-compatibility",
         );
         line(
             output,
             "next-import-unavailable-reason",
-            "one-or-more-direct-kfd-target-profiles-unavailable",
+            reason.name(),
         );
-        for (index, (device, reason)) in devices
-            .iter()
-            .filter_map(|device| match device.target_profile.status {
-                ObservedGpuTargetProfileStatusV1::Observed(_) => None,
-                ObservedGpuTargetProfileStatusV1::Unavailable(reason) => Some((device, reason)),
-            })
-            .enumerate()
-        {
-            line(
-                output,
-                &format!("next-import-unavailable-device[{index}]"),
-                format!("node={};reason={}", device.node, reason.name()),
-            );
-        }
-        line(
-            output,
-            "next-query-status",
-            "unavailable-until-bundle-v4-import",
-        );
-        return false;
-    }
-    if devices
-        .iter()
-        .any(|device| device.target_profile.wave_width != u64::from(kir.wave_width))
-    {
-        line(
-            output,
-            "next-import-status",
-            "unavailable-kir-wave-width-mismatch",
-        );
-        line(
-            output,
-            "next-import-unavailable-reason",
-            "caller-kir-wave-width-does-not-match-observed-direct-kfd-device",
-        );
-        for (index, device) in devices
-            .iter()
-            .filter(|device| device.target_profile.wave_width != u64::from(kir.wave_width))
-            .enumerate()
-        {
-            line(
-                output,
-                &format!("next-import-wave-mismatch-device[{index}]"),
-                format!(
-                    "node={};observed-wave-width={};kir-wave-width={}",
-                    device.node, device.target_profile.wave_width, kir.wave_width
-                ),
-            );
-        }
         line(
             output,
             "next-query-status",
@@ -1794,7 +2070,7 @@ fn render_dispatch_import_plan(
         return false;
     }
 
-    line(output, "next-import-program", "fe2o3-profiler-import");
+    line(output, "next-import-program", "cargo-fe2o3-in-process");
     line(
         output,
         "next-import-status",
@@ -1805,37 +2081,15 @@ fn render_dispatch_import_plan(
         "next-import-source-byte-limit",
         MAX_PROFILER_IMPORT_SOURCE_BYTES,
     );
-    let command = if kind == ProfileKind::DispatchJson {
-        "dispatch-json-v4"
-    } else {
-        "dispatch-csv-v4"
-    };
-    for (index, argument) in [
-        command.to_owned(),
-        "--environment".to_owned(),
-        environment,
-        "--tool".to_owned(),
-        tool,
-        "--config".to_owned(),
-        configuration,
-        "--kir-sha256".to_owned(),
-        hex(&kir.digest),
-        "--kir-len".to_owned(),
-        kir.length.to_string(),
-        "--wave-width".to_owned(),
-        kir.wave_width.to_string(),
-    ]
-    .into_iter()
-    .chain(devices.iter().flat_map(|device| {
-        [
-            "--device-binding".to_owned(),
-            format!("{}={}", device.node, device.content_identity()),
-        ]
-    }))
-    .enumerate()
-    {
-        line_debug(output, &format!("next-import-arg[{index}]"), &argument);
-    }
+    line(
+        output,
+        "next-import-kir-v7-policy-identity",
+        format!(
+            "sha256:{}:{}",
+            hex(kir.owner.identity().digest()),
+            kir.owner.identity().canonical_length()
+        ),
+    );
     line(
         output,
         "next-import-stdin",
@@ -1866,6 +2120,9 @@ fn collect(plan: Plan) -> Result<CommandReport, String> {
         libraries.validate()?;
     }
     plan.target.validate("profile target")?;
+    if let Some(kir) = &plan.verified_kir_v7 {
+        kir.revalidate()?;
+    }
     validate_device_bindings(&plan.devices)?;
     let custody = OutputCustody::create(&plan.output_directory, &plan.authorization)?;
     let result = run_collector(&plan);
@@ -1885,6 +2142,10 @@ fn collect(plan: Plan) -> Result<CommandReport, String> {
             None => Ok(()),
         })
         .and_then(|()| plan.target.validate("profile target"))
+        .and_then(|()| match &plan.verified_kir_v7 {
+            Some(kir) => kir.revalidate(),
+            None => Ok(()),
+        })
         .and_then(|()| validate_device_bindings(&plan.devices))
         .err();
     if supervised.reason != StopReason::Exited
@@ -1906,12 +2167,59 @@ fn collect(plan: Plan) -> Result<CommandReport, String> {
             return Err(format!("collector output rejected and cleaned: {error}"));
         }
     };
-    let manifest = render_manifest(&plan, &artifacts);
+    let dispatch_import = match select_dispatch_import_v1(&plan, &custody, &artifacts) {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            custody.cleanup()?;
+            return Err(format!("dispatch import custody failed and was cleaned: {error}"));
+        }
+    };
+    if let DispatchImportOutcomeV1::Imported { source, product } = &dispatch_import {
+        let persistence = (|| {
+            source.revalidate(&custody)?;
+            revalidate_collection_inputs_v1(&plan)?;
+            custody.commit_record(
+                PROFILE_DISPATCH_BUNDLE_FILE_V1,
+                PROFILE_DISPATCH_BUNDLE_REDO_FILE_V1,
+                &product.bundle_bytes,
+                product.bundle_bytes.len(),
+            )?;
+            source.revalidate(&custody)?;
+            revalidate_collection_inputs_v1(&plan)?;
+            custody.commit_record(
+                PROFILE_DISPATCH_RECEIPT_FILE_V1,
+                PROFILE_DISPATCH_RECEIPT_REDO_FILE_V1,
+                &product.receipt_bytes,
+                product.receipt_bytes.len(),
+            )?;
+            source.revalidate(&custody)?;
+            revalidate_collection_inputs_v1(&plan)
+        })();
+        if let Err(error) = persistence {
+            let cleanup = custody.cleanup().err();
+            return Err(match cleanup {
+                Some(cleanup) => format!(
+                    "dispatch import publication failed: {error}; cleanup also failed: {cleanup}"
+                ),
+                None => format!("dispatch import publication failed and was cleaned: {error}"),
+            });
+        }
+    }
+    let manifest = render_manifest(&plan, &artifacts, &dispatch_import);
+    let generated_bytes = match &dispatch_import {
+        DispatchImportOutcomeV1::Unavailable(_) => 0,
+        DispatchImportOutcomeV1::Imported { product, .. } => product
+            .bundle_bytes
+            .len()
+            .checked_add(product.receipt_bytes.len())
+            .ok_or("generated dispatch import byte count overflow")?,
+    };
     if manifest.len() as u64
         > plan
             .options
             .storage_limit
             .saturating_sub(artifacts.iter().map(|artifact| artifact.length).sum())
+            .saturating_sub(generated_bytes as u64)
     {
         custody.cleanup()?;
         return Err(
@@ -1927,7 +2235,26 @@ fn collect(plan: Plan) -> Result<CommandReport, String> {
             None => format!("{error}; owned output was cleaned"),
         });
     }
-    Ok(render_successful_collection(&plan, supervised, &artifacts))
+    Ok(render_successful_collection(
+        &plan,
+        supervised,
+        &artifacts,
+        &dispatch_import,
+    ))
+}
+
+fn revalidate_collection_inputs_v1(plan: &Plan) -> Result<(), String> {
+    plan.tool.validate("rocprofv3 script")?;
+    plan.interpreter
+        .validate("rocprofv3 Python interpreter")?;
+    if let Some(libraries) = &plan.collector_libraries {
+        libraries.validate()?;
+    }
+    plan.target.validate("profile target")?;
+    if let Some(kir) = &plan.verified_kir_v7 {
+        kir.revalidate()?;
+    }
+    validate_device_bindings(&plan.devices)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2074,6 +2401,8 @@ struct OutputCustody {
     path: PathBuf,
     identity: ObjectIdentity,
     guard: Vec<u8>,
+    root: rustix::fd::OwnedFd,
+    durable: RetainedDurableDirectoryV1,
 }
 
 impl OutputCustody {
@@ -2117,10 +2446,27 @@ impl OutputCustody {
             let _ = fs::remove_dir_all(path);
             return Err(format!("failed to persist output ownership guard: {error}"));
         }
+        let root = rustix::fs::open(
+            path,
+            rustix::fs::OFlags::RDONLY
+                | rustix::fs::OFlags::DIRECTORY
+                | rustix::fs::OFlags::NOFOLLOW
+                | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+        )
+        .map_err(|error| format!("failed to retain output directory: {error}"))?;
+        rustix::fs::fsync(&root)
+            .map_err(|error| format!("failed to persist output directory custody: {error}"))?;
+        let durable_root = rustix::io::fcntl_dupfd_cloexec(&root, 0)
+            .map_err(|error| format!("failed to duplicate output directory custody: {error}"))?;
+        let durable = RetainedDurableDirectoryV1::admit_service_owned(durable_root)
+            .map_err(|error| format!("failed to admit durable output custody: {error}"))?;
         Ok(Self {
             path: path.to_path_buf(),
             identity: ObjectIdentity::from_metadata(&metadata),
             guard,
+            root,
+            durable,
         })
     }
 
@@ -2152,15 +2498,21 @@ impl OutputCustody {
 
     fn write_manifest(&self, bytes: &[u8]) -> Result<(), String> {
         self.validate()?;
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(self.path.join(MANIFEST_FILE))
-            .map_err(|error| format!("failed to create collection manifest: {error}"))?;
-        file.write_all(bytes)
-            .and_then(|()| file.sync_all())
-            .map_err(|error| format!("failed to persist collection manifest: {error}"))
+        self.commit_record(MANIFEST_FILE, MANIFEST_REDO_FILE, bytes, bytes.len())
+    }
+
+    fn commit_record(
+        &self,
+        canonical: &str,
+        redo: &str,
+        bytes: &[u8],
+        maximum: usize,
+    ) -> Result<(), String> {
+        self.validate()?;
+        let mut hooks = NoRetainedDurableDirectoryHooksV1;
+        self.durable
+            .commit_record(canonical, redo, bytes, maximum, &mut hooks)
+            .map_err(|error| format!("failed to durably commit {canonical}: {error}"))
     }
 }
 
@@ -2169,6 +2521,326 @@ struct Artifact {
     relative: String,
     length: u64,
     digest: [u8; 32],
+    identity: ObjectIdentity,
+}
+
+struct RetainedDispatchSourceV1 {
+    relative: String,
+    file: File,
+    identity: ObjectIdentity,
+    bytes: Vec<u8>,
+    digest: [u8; 32],
+}
+
+impl RetainedDispatchSourceV1 {
+    fn open(custody: &OutputCustody, artifact: &Artifact) -> Result<Self, String> {
+        if artifact.length == 0 || artifact.length > MAX_PROFILER_IMPORT_SOURCE_BYTES {
+            return Err("dispatch source is outside the import byte bound".to_owned());
+        }
+        validate_relative(&artifact.relative)?;
+        let descriptor = rustix::fs::openat2(
+            &custody.root,
+            artifact.relative.as_str(),
+            rustix::fs::OFlags::RDONLY
+                | rustix::fs::OFlags::NOFOLLOW
+                | rustix::fs::OFlags::NONBLOCK
+                | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+            rustix::fs::ResolveFlags::BENEATH
+                | rustix::fs::ResolveFlags::NO_SYMLINKS
+                | rustix::fs::ResolveFlags::NO_MAGICLINKS
+                | rustix::fs::ResolveFlags::NO_XDEV,
+        )
+        .map_err(|error| format!("failed to retain dispatch source: {error}"))?;
+        let mut file = File::from(descriptor);
+        let metadata = file
+            .metadata()
+            .map_err(|error| format!("failed to inspect retained dispatch source: {error}"))?;
+        let identity = ObjectIdentity::from_metadata(&metadata);
+        if !metadata.is_file()
+            || metadata.nlink() != 1
+            || identity != artifact.identity
+            || metadata.len() != artifact.length
+        {
+            return Err("dispatch source changed before retention".to_owned());
+        }
+        let maximum = usize::try_from(MAX_PROFILER_IMPORT_SOURCE_BYTES)
+            .map_err(|_| "dispatch source bound does not fit memory".to_owned())?;
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(
+                usize::try_from(artifact.length)
+                    .map_err(|_| "dispatch source length does not fit memory".to_owned())?,
+            )
+            .map_err(|_| "failed to reserve dispatch source bytes".to_owned())?;
+        file.by_ref()
+            .take(MAX_PROFILER_IMPORT_SOURCE_BYTES + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|error| format!("failed to read retained dispatch source: {error}"))?;
+        if bytes.is_empty()
+            || bytes.len() > maximum
+            || bytes.len() as u64 != artifact.length
+            || <[u8; 32]>::from(Sha256::digest(&bytes)) != artifact.digest
+        {
+            return Err("dispatch source changed while it was retained".to_owned());
+        }
+        Ok(Self {
+            relative: artifact.relative.clone(),
+            file,
+            identity,
+            bytes,
+            digest: artifact.digest,
+        })
+    }
+
+    fn revalidate(&self, custody: &OutputCustody) -> Result<(), String> {
+        if ObjectIdentity::from_metadata(
+            &self
+                .file
+                .metadata()
+                .map_err(|error| format!("failed to re-inspect dispatch source: {error}"))?,
+        ) != self.identity
+        {
+            return Err("retained dispatch source descriptor changed".to_owned());
+        }
+        let reopened = rustix::fs::openat2(
+            &custody.root,
+            self.relative.as_str(),
+            rustix::fs::OFlags::RDONLY
+                | rustix::fs::OFlags::NOFOLLOW
+                | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+            rustix::fs::ResolveFlags::BENEATH
+                | rustix::fs::ResolveFlags::NO_SYMLINKS
+                | rustix::fs::ResolveFlags::NO_MAGICLINKS
+                | rustix::fs::ResolveFlags::NO_XDEV,
+        )
+        .map(File::from)
+        .map_err(|error| format!("failed to reopen retained dispatch source: {error}"))?;
+        if ObjectIdentity::from_metadata(
+            &reopened
+                .metadata()
+                .map_err(|error| format!("failed to inspect reopened dispatch source: {error}"))?,
+        ) != self.identity
+        {
+            return Err("dispatch source path was substituted".to_owned());
+        }
+        let mut bytes = Vec::new();
+        reopened
+            .take(MAX_PROFILER_IMPORT_SOURCE_BYTES + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|error| format!("failed to reread dispatch source: {error}"))?;
+        if bytes != self.bytes || <[u8; 32]>::from(Sha256::digest(&bytes)) != self.digest {
+            return Err("dispatch source bytes changed after import".to_owned());
+        }
+        Ok(())
+    }
+}
+
+enum DispatchImportOutcomeV1 {
+    Unavailable(&'static str),
+    Imported {
+        source: RetainedDispatchSourceV1,
+        product: DispatchImportProductV1,
+    },
+}
+
+fn select_dispatch_import_v1(
+    plan: &Plan,
+    custody: &OutputCustody,
+    artifacts: &[Artifact],
+) -> Result<DispatchImportOutcomeV1, String> {
+    if !matches!(
+        plan.options.kind,
+        ProfileKind::DispatchJson | ProfileKind::DispatchCsv
+    ) {
+        return Ok(DispatchImportOutcomeV1::Unavailable(
+            "att-decoding-remains-deferred",
+        ));
+    }
+    let Some(kir) = &plan.verified_kir_v7 else {
+        return Ok(DispatchImportOutcomeV1::Unavailable(
+            "exact-canonical-kir-v7-not-provided",
+        ));
+    };
+    if !matches!(kir.compatibility, KirTargetCompatibilityV1::Ready(_)) {
+        return Ok(DispatchImportOutcomeV1::Unavailable(
+            "kir-v7-and-direct-kfd-family-compatibility-unavailable",
+        ));
+    }
+    kir.revalidate()?;
+    let source_kind = match plan.options.kind {
+        ProfileKind::DispatchJson => DispatchImportSourceKindV1::Rocprofv3KernelDispatchJson,
+        ProfileKind::DispatchCsv => DispatchImportSourceKindV1::Rocprofv3KernelDispatchCsv,
+        ProfileKind::Att => {
+            return Ok(DispatchImportOutcomeV1::Unavailable(
+                "att-decoding-remains-deferred",
+            ));
+        }
+    };
+    let mut selected = None;
+    for artifact in artifacts
+        .iter()
+        .filter(|artifact| artifact.length > 0 && artifact.length <= MAX_PROFILER_IMPORT_SOURCE_BYTES)
+    {
+        let source = RetainedDispatchSourceV1::open(custody, artifact)?;
+        let targets = match source_kind {
+            DispatchImportSourceKindV1::Rocprofv3KernelDispatchJson => {
+                let catalog = match rocprofv3_json_gpu_agent_bindings_v4(&source.bytes) {
+                    Ok(catalog) => catalog,
+                    Err(_) => continue,
+                };
+                match json_dispatch_targets_v1(&catalog, &plan.devices) {
+                    Ok(targets) => targets,
+                    Err(_) => continue,
+                }
+            }
+            DispatchImportSourceKindV1::Rocprofv3KernelDispatchCsv => {
+                csv_dispatch_targets_v1(&plan.devices)?
+            }
+        };
+        let binding = DispatchImportBindingV1 {
+            collection_authorization: CaptureIdentityV1::new(plan.authorization)
+                .map_err(|_| "collection authorization identity is invalid".to_owned())?,
+            source_relative: source.relative.clone(),
+            source_artifact: raw_content_identity_v1(source.digest, artifact.length)?,
+            kernel_ir: ContentIdentityRecordV1 {
+                scheme: ContentSchemeV1::DomainSeparatedSha256,
+                format_version: 1,
+                digest: CaptureIdentityV1::new(*kir.owner.identity().digest())
+                    .map_err(|_| "canonical KIR V7 identity is invalid".to_owned())?,
+                canonical_len: kir.owner.identity().canonical_length(),
+            },
+            environment: raw_content_identity_v1(
+                plan.environment_digest,
+                plan.environment_bytes.len() as u64,
+            )?,
+            collector_tool: raw_content_identity_v1(
+                plan.collector_tool_digest,
+                plan.collector_tool_bytes.len() as u64,
+            )?,
+            collector_configuration: raw_content_identity_v1(
+                plan.configuration_digest,
+                plan.configuration.len() as u64,
+            )?,
+            targets,
+            wave_width: WaveWidthV1::Wave64,
+        };
+        let product = match import_dispatch_v1(source_kind, &source.bytes, binding) {
+            Ok(product) => product,
+            Err(_) => continue,
+        };
+        if selected.is_some() {
+            return Ok(DispatchImportOutcomeV1::Unavailable(
+                "multiple-schema-valid-dispatch-sources",
+            ));
+        }
+        selected = Some((source, product));
+    }
+    Ok(match selected {
+        Some((source, product)) => DispatchImportOutcomeV1::Imported { source, product },
+        None => DispatchImportOutcomeV1::Unavailable("no-schema-valid-dispatch-source"),
+    })
+}
+
+fn json_dispatch_targets_v1(
+    catalog: &[RocprofJsonGpuAgentBindingV4],
+    devices: &[DeviceIdentity],
+) -> Result<Vec<DispatchImportTargetBindingV1>, String> {
+    let mut targets = Vec::new();
+    targets
+        .try_reserve(catalog.len())
+        .map_err(|_| "failed to reserve JSON dispatch targets".to_owned())?;
+    for agent in catalog {
+        let device = devices
+            .iter()
+            .find(|device| device.node == agent.node_id)
+            .ok_or_else(|| "rocprof JSON agent node is absent from direct KFD".to_owned())?;
+        if agent.gpu_id != device.hardware.gpu_id
+            || agent.simd_count != device.hardware.simd_count
+            || agent.vendor_id != device.hardware.vendor_id
+            || agent.device_id != device.hardware.device_id
+            || agent.location_id != device.hardware.location_id
+            || agent.domain != device.hardware.domain
+            || agent.gfx_target_version != device.hardware.gfx_target_version
+            || agent.wave_front_size != device.hardware.wave_front_size
+            || agent.num_xcc != device.hardware.num_xcc
+        {
+            return Err("rocprof JSON agent contradicts direct KFD hardware fields".to_owned());
+        }
+        targets.push(dispatch_target_v1(agent.source_agent_id, device)?);
+    }
+    Ok(targets)
+}
+
+fn csv_dispatch_targets_v1(
+    devices: &[DeviceIdentity],
+) -> Result<Vec<DispatchImportTargetBindingV1>, String> {
+    devices
+        .iter()
+        .map(|device| dispatch_target_v1(u64::from(device.node), device))
+        .collect()
+}
+
+fn dispatch_target_v1(
+    source_agent_id: u64,
+    device: &DeviceIdentity,
+) -> Result<DispatchImportTargetBindingV1, String> {
+    let family = match device.target_profile.status {
+        ObservedGpuTargetProfileStatusV1::Observed(ObservedGpuTargetProfileV1::Gfx942) => {
+            ObservedTargetFamilyV1::Gfx942
+        }
+        ObservedGpuTargetProfileStatusV1::Observed(ObservedGpuTargetProfileV1::Gfx950) => {
+            ObservedTargetFamilyV1::Gfx950
+        }
+        ObservedGpuTargetProfileStatusV1::Unavailable(_) => {
+            return Err("direct KFD target profile is unavailable".to_owned());
+        }
+    };
+    let record = device.target_profile_record();
+    Ok(DispatchImportTargetBindingV1 {
+        source_agent_id,
+        kfd_node: device.node,
+        stable_identity: raw_content_identity_v1(device.digest, device.bytes.len() as u64)?,
+        target_profile_record: domain_content_identity_v1(
+            b"fe2o3.observed-gpu-target-profile.v1\0",
+            record.as_bytes(),
+        )?,
+        family,
+        gfx_target_version: device.hardware.gfx_target_version,
+        wave_width: u16::try_from(device.hardware.wave_front_size)
+            .map_err(|_| "direct KFD wave width is out of range".to_owned())?,
+    })
+}
+
+fn raw_content_identity_v1(
+    digest: [u8; 32],
+    length: u64,
+) -> Result<ContentIdentityRecordV1, String> {
+    Ok(ContentIdentityRecordV1 {
+        scheme: ContentSchemeV1::RawCanonicalSha256,
+        format_version: 1,
+        digest: CaptureIdentityV1::new(digest)
+            .map_err(|_| "raw content identity is invalid".to_owned())?,
+        canonical_len: length,
+    })
+}
+
+fn domain_content_identity_v1(
+    domain: &[u8],
+    bytes: &[u8],
+) -> Result<ContentIdentityRecordV1, String> {
+    let mut digest = Sha256::new();
+    digest.update(domain);
+    digest.update((bytes.len() as u64).to_le_bytes());
+    digest.update(bytes);
+    Ok(ContentIdentityRecordV1 {
+        scheme: ContentSchemeV1::DomainSeparatedSha256,
+        format_version: 1,
+        digest: CaptureIdentityV1::new(digest.finalize().into())
+            .map_err(|_| "domain content identity is invalid".to_owned())?,
+        canonical_len: bytes.len() as u64,
+    })
 }
 
 fn scan_artifacts(root: &Path, storage_limit: u64) -> Result<Vec<Artifact>, String> {
@@ -2193,8 +2865,22 @@ fn scan_artifacts(root: &Path, storage_limit: u64) -> Result<Vec<Artifact>, Stri
                 .to_str()
                 .ok_or("collector output path is not UTF-8")?
                 .replace('\\', "/");
-            if relative == OWNERSHIP_FILE || relative == MANIFEST_FILE {
+            if relative == OWNERSHIP_FILE {
                 continue;
+            }
+            if [
+                MANIFEST_FILE,
+                MANIFEST_REDO_FILE,
+                PROFILE_DISPATCH_BUNDLE_FILE_V1,
+                PROFILE_DISPATCH_BUNDLE_REDO_FILE_V1,
+                PROFILE_DISPATCH_RECEIPT_FILE_V1,
+                PROFILE_DISPATCH_RECEIPT_REDO_FILE_V1,
+            ]
+            .contains(&relative.as_str())
+            {
+                return Err(format!(
+                    "collector precreated reserved transaction entry {relative}"
+                ));
             }
             validate_relative(&relative)?;
             let metadata = fs::symlink_metadata(&path).map_err(|error| {
@@ -2233,6 +2919,7 @@ fn scan_artifacts(root: &Path, storage_limit: u64) -> Result<Vec<Artifact>, Stri
                 relative,
                 length,
                 digest,
+                identity: ObjectIdentity::from_metadata(&metadata),
             });
         }
     }
@@ -2308,7 +2995,11 @@ fn hash_file(path: &Path, expected: &Metadata) -> Result<([u8; 32], u64), String
     Ok((hasher.finalize().into(), length))
 }
 
-fn render_manifest(plan: &Plan, artifacts: &[Artifact]) -> String {
+fn render_manifest(
+    plan: &Plan,
+    artifacts: &[Artifact],
+    dispatch_import: &DispatchImportOutcomeV1,
+) -> String {
     let mut output = String::new();
     line(&mut output, "schema", "fe2o3-profile-artifact-manifest-v1");
     line(&mut output, "plan-sha256", hex(&plan.authorization));
@@ -2349,11 +3040,6 @@ fn render_manifest(plan: &Plan, artifacts: &[Artifact]) -> String {
     }
     for (index, artifact) in artifacts
         .iter()
-        .filter(|artifact| match plan.options.kind {
-            ProfileKind::DispatchJson => artifact.relative.ends_with(".json"),
-            ProfileKind::DispatchCsv => artifact.relative.ends_with(".csv"),
-            ProfileKind::Att => artifact.relative.ends_with(".json"),
-        })
         .enumerate()
     {
         line(
@@ -2364,7 +3050,7 @@ fn render_manifest(plan: &Plan, artifacts: &[Artifact]) -> String {
                 artifact.relative,
                 artifact.length,
                 if artifact.length <= MAX_PROFILER_IMPORT_SOURCE_BYTES {
-                    "size-eligible-requires-schema-validation"
+                    "content-schema-eligible-requires-admission"
                 } else {
                     "unavailable-exceeds-import-source-byte-limit"
                 }
@@ -2372,12 +3058,7 @@ fn render_manifest(plan: &Plan, artifacts: &[Artifact]) -> String {
         );
     }
     render_import_plan(&mut output, plan);
-    line(&mut output, "dispatch-observation-origin", "unavailable");
-    line(
-        &mut output,
-        "dispatch-observation-reason",
-        "bundle-v4-import-not-run",
-    );
+    render_dispatch_import_outcome_v1(&mut output, dispatch_import);
     line(&mut output, "att-observation-origin", "unavailable");
     line(
         &mut output,
@@ -2391,6 +3072,7 @@ fn render_successful_collection(
     plan: &Plan,
     result: Supervised,
     artifacts: &[Artifact],
+    dispatch_import: &DispatchImportOutcomeV1,
 ) -> CommandReport {
     let mut output = String::new();
     line(&mut output, "schema", "fe2o3-profile-collection-v1");
@@ -2425,12 +3107,7 @@ fn render_successful_collection(
             ),
         );
     }
-    line(&mut output, "dispatch-observability-origin", "unavailable");
-    line(
-        &mut output,
-        "dispatch-observability-reason",
-        "bundle-v4-import-not-run",
-    );
+    render_dispatch_import_outcome_v1(&mut output, dispatch_import);
     line(&mut output, "att-observability-origin", "unavailable");
     line(
         &mut output,
@@ -2447,6 +3124,75 @@ fn render_successful_collection(
     CommandReport {
         output,
         succeeded: true,
+    }
+}
+
+fn render_dispatch_import_outcome_v1(
+    output: &mut String,
+    outcome: &DispatchImportOutcomeV1,
+) {
+    match outcome {
+        DispatchImportOutcomeV1::Unavailable(reason) => {
+            line(output, "dispatch-observation-origin", "unavailable");
+            line(output, "dispatch-observation-reason", reason);
+        }
+        DispatchImportOutcomeV1::Imported { source, product } => {
+            line(output, "dispatch-observation-origin", "observed-rocprof-source");
+            line_debug(output, "dispatch-import-source", &source.relative);
+            line(
+                output,
+                "dispatch-import-source-identity",
+                content_identity(&source.digest, source.bytes.len() as u64),
+            );
+            line(output, "dispatch-import-bundle", PROFILE_DISPATCH_BUNDLE_FILE_V1);
+            line(
+                output,
+                "dispatch-import-bundle-identity",
+                content_record(&product.bundle_identity),
+            );
+            line(
+                output,
+                "dispatch-import-capture-identity",
+                content_record(&product.capture_identity),
+            );
+            line(
+                output,
+                "dispatch-import-receipt",
+                PROFILE_DISPATCH_RECEIPT_FILE_V1,
+            );
+            line(
+                output,
+                "dispatch-import-receipt-identity",
+                content_record(&product.receipt_identity),
+            );
+            line(
+                output,
+                "dispatch-import-run-identity",
+                hex(product.bundle.run_identity.as_bytes()),
+            );
+            line(
+                output,
+                "dispatch-import-count",
+                product.bundle.coverage.imported_dispatches,
+            );
+            for name in [
+                "compiler-authority",
+                "runtime-authority",
+                "executed-artifact-identity",
+                "source-map-identity",
+                "kernel-symbol-association",
+                "characteristic-correlation",
+                "decoded-att-events",
+                "performance-authority",
+            ] {
+                line(output, name, false);
+            }
+            line(
+                output,
+                "target-compatibility-scope",
+                "direct-kfd-gfx-family-and-wave64-only-xnack-unobserved",
+            );
+        }
     }
 }
 
@@ -2547,6 +3293,19 @@ fn content_identity(digest: &[u8; 32], length: u64) -> String {
     format!("raw:1:{}:{length}", hex(digest))
 }
 
+fn content_record(identity: &ContentIdentityRecordV1) -> String {
+    format!(
+        "{}:{}:{}:{}",
+        match identity.scheme {
+            ContentSchemeV1::RawCanonicalSha256 => "raw",
+            ContentSchemeV1::DomainSeparatedSha256 => "domain",
+        },
+        identity.format_version,
+        hex(identity.digest.as_bytes()),
+        identity.canonical_len,
+    )
+}
+
 fn hex(bytes: &[u8]) -> String {
     let mut output = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
@@ -2583,6 +3342,8 @@ mod tests {
             ));
             let node_root = root.join(node.to_string());
             fs::create_dir_all(&node_root).expect("create topology fixture");
+            fs::write(node_root.join("gpu_id"), format!("{}\n", u64::from(node) + 1_000))
+                .expect("write topology gpu id");
             fs::write(node_root.join("properties"), properties).expect("write topology properties");
             Self { root }
         }
@@ -2612,11 +3373,26 @@ mod tests {
         let bytes = format!("stable-device-{node}").into_bytes();
         DeviceIdentity {
             node,
+            hardware: test_hardware(node, vendor, target, wave),
             digest: Sha256::digest(&bytes).into(),
             bytes,
             target_profile: ObservedGpuTargetProfileRecordV1::from_direct_kfd_properties(
                 vendor, target, wave,
             ),
+        }
+    }
+
+    fn test_hardware(node: u32, vendor: u64, target: u64, wave: u64) -> KfdGpuHardwareV1 {
+        KfdGpuHardwareV1 {
+            gpu_id: u64::from(node) + 1_000,
+            simd_count: 304,
+            vendor_id: vendor,
+            device_id: 29_857,
+            location_id: 1,
+            domain: 0,
+            gfx_target_version: target,
+            wave_front_size: wave,
+            num_xcc: 8,
         }
     }
 
@@ -2712,6 +3488,12 @@ mod tests {
     fn absolute_node_mapping_is_authorized_and_revalidated() {
         let device = |node| DeviceIdentity {
             node,
+            hardware: test_hardware(
+                node,
+                EXPECTED_AMD_VENDOR_ID,
+                GFX942_TARGET_VERSION,
+                PRODUCTION_WAVE_WIDTH,
+            ),
             bytes: b"stable-device".to_vec(),
             digest: [7; 32],
             target_profile: ObservedGpuTargetProfileRecordV1::from_direct_kfd_properties(
@@ -2758,6 +3540,7 @@ mod tests {
         );
         let unknown = DeviceIdentity {
             node: 3,
+            hardware: test_hardware(3, EXPECTED_AMD_VENDOR_ID, 90_401, PRODUCTION_WAVE_WIDTH),
             bytes: b"unknown-target-device".to_vec(),
             digest: [9; 32],
             target_profile: observed(90_401),
@@ -2914,6 +3697,12 @@ mod tests {
     fn target_profile_record_is_canonical_bounded_and_authorized() {
         let mut device = DeviceIdentity {
             node: 7,
+            hardware: test_hardware(
+                7,
+                EXPECTED_AMD_VENDOR_ID,
+                GFX950_TARGET_VERSION,
+                PRODUCTION_WAVE_WIDTH,
+            ),
             bytes: b"stable-device".to_vec(),
             digest: [0x42; 32],
             target_profile: ObservedGpuTargetProfileRecordV1::from_direct_kfd_properties(
@@ -2974,6 +3763,12 @@ mod tests {
         );
         let device = |target| DeviceIdentity {
             node: 1,
+            hardware: test_hardware(
+                1,
+                EXPECTED_AMD_VENDOR_ID,
+                target,
+                PRODUCTION_WAVE_WIDTH,
+            ),
             bytes: b"stable-device".to_vec(),
             digest: [1; 32],
             target_profile: ObservedGpuTargetProfileRecordV1::from_direct_kfd_properties(

@@ -59,6 +59,36 @@ fn json_source() -> &'static [u8] {
     br#"{"rocprofiler-sdk-tool":[{"buffer_records":{"kernel_dispatch":[{"start_timestamp":100,"end_timestamp":180,"dispatch_info":{"agent_id":{"handle":17},"workgroup_size":{"x":64,"y":1,"z":1},"grid_size":{"x":256,"y":1,"z":1}}}]}},{"buffer_records":{"kernel_dispatch":[{"start_timestamp":200,"end_timestamp":260,"dispatch_info":{"agent_id":{"handle":19},"workgroup_size":{"x":32,"y":2,"z":1},"grid_size":{"x":128,"y":2,"z":1}}}]}}]}"#
 }
 
+fn json_source_with_agent_catalog() -> Vec<u8> {
+    serde_json::to_vec(&serde_json::json!({
+        "rocprofiler-sdk-tool": [{
+            "agents": [{
+                "id": {"handle": 7001},
+                "node_id": 7,
+                "simd_count": 304,
+                "gpu_id": 42,
+                "vendor_id": 4098,
+                "device_id": 29857,
+                "location_id": 1,
+                "domain": 0,
+                "gfx_target_version": 90402,
+                "wave_front_size": 64,
+                "num_xcc": 8
+            }],
+            "buffer_records": {"kernel_dispatch": [{
+                "start_timestamp": 100,
+                "end_timestamp": 180,
+                "dispatch_info": {
+                    "agent_id": {"handle": 7001},
+                    "workgroup_size": {"x": 64, "y": 1, "z": 1},
+                    "grid_size": {"x": 256, "y": 1, "z": 1}
+                }
+            }]}
+        }]
+    }))
+    .unwrap()
+}
+
 fn csv_source() -> &'static [u8] {
     include_bytes!("fixtures/rocprofv3-1.1-kernel-dispatch.csv")
 }
@@ -101,6 +131,53 @@ fn json_and_csv_bundles_are_canonical_bounded_and_identity_bound() {
 }
 
 #[test]
+fn json_dispatch_protocol_rejects_unknown_duplicate_and_trailing_input() {
+    let value: serde_json::Value = serde_json::from_slice(json_source()).unwrap();
+    for pointer in [
+        "/unknown",
+        "/rocprofiler-sdk-tool/0/unknown",
+        "/rocprofiler-sdk-tool/0/buffer_records/unknown",
+        "/rocprofiler-sdk-tool/0/buffer_records/kernel_dispatch/0/unknown",
+        "/rocprofiler-sdk-tool/0/buffer_records/kernel_dispatch/0/dispatch_info/unknown",
+        "/rocprofiler-sdk-tool/0/buffer_records/kernel_dispatch/0/dispatch_info/agent_id/unknown",
+        "/rocprofiler-sdk-tool/0/buffer_records/kernel_dispatch/0/dispatch_info/grid_size/unknown",
+    ] {
+        let mut hostile = value.clone();
+        let (parent, field) = pointer.rsplit_once('/').unwrap();
+        hostile.pointer_mut(parent).unwrap().as_object_mut().unwrap().insert(
+            field.to_owned(),
+            serde_json::json!(1),
+        );
+        assert!(matches!(
+            import_rocprofv3_json_profiler_bundle_v4(
+                &serde_json::to_vec(&hostile).unwrap(),
+                dispatch_binding(&[20, 21])
+            ),
+            Err(ProfilerBundleErrorV4::InvalidRocprofJson)
+        ));
+    }
+
+    let duplicate = json_source()
+        .strip_suffix(b"}")
+        .unwrap()
+        .iter()
+        .copied()
+        .chain(br#",\"rocprofiler-sdk-tool\":[]}"#.iter().copied())
+        .collect::<Vec<_>>();
+    assert!(matches!(
+        import_rocprofv3_json_profiler_bundle_v4(&duplicate, dispatch_binding(&[20, 21])),
+        Err(ProfilerBundleErrorV4::InvalidRocprofJson)
+    ));
+
+    let mut trailing = json_source().to_vec();
+    trailing.extend_from_slice(b"false");
+    assert!(matches!(
+        import_rocprofv3_json_profiler_bundle_v4(&trailing, dispatch_binding(&[20, 21])),
+        Err(ProfilerBundleErrorV4::InvalidRocprofJson)
+    ));
+}
+
+#[test]
 fn device_bindings_join_by_absolute_agent_id_not_position() {
     let mut binding = dispatch_binding(&[20, 21]);
     binding.environment.stable_device_bindings.reverse();
@@ -140,6 +217,64 @@ fn device_bindings_join_by_absolute_agent_id_not_position() {
 }
 
 #[test]
+fn json_agent_catalog_maps_opaque_handle_to_node_and_rejects_collisions() {
+    let source = json_source_with_agent_catalog();
+    let bindings = rocprofv3_json_gpu_agent_bindings_v4(&source).unwrap();
+    assert_eq!(bindings.len(), 1);
+    assert_eq!(bindings[0].source_agent_id, 7001);
+    assert_eq!(bindings[0].node_id, 7);
+    assert_ne!(bindings[0].source_agent_id, u64::from(bindings[0].node_id));
+
+    let base: serde_json::Value = serde_json::from_slice(&source).unwrap();
+    for (pointer, replacement, expected) in [
+        (
+            "/rocprofiler-sdk-tool/0/buffer_records/kernel_dispatch/0/dispatch_info/agent_id/handle",
+            serde_json::json!(8),
+            ProfilerBundleErrorV4::MissingDeviceBinding,
+        ),
+        (
+            "/rocprofiler-sdk-tool/0/agents/0/simd_count",
+            serde_json::json!(0),
+            ProfilerBundleErrorV4::MissingDeviceBinding,
+        ),
+    ] {
+        let mut hostile = base.clone();
+        *hostile.pointer_mut(pointer).unwrap() = replacement;
+        assert_eq!(
+            rocprofv3_json_gpu_agent_bindings_v4(&serde_json::to_vec(&hostile).unwrap())
+                .unwrap_err(),
+            expected
+        );
+    }
+
+    for field in ["id", "node_id"] {
+        let mut hostile = base.clone();
+        let mut duplicate = hostile["rocprofiler-sdk-tool"][0]["agents"][0].clone();
+        if field == "id" {
+            duplicate["node_id"] = serde_json::json!(8);
+        } else {
+            duplicate["id"]["handle"] = serde_json::json!(7002);
+        }
+        hostile["rocprofiler-sdk-tool"][0]["agents"]
+            .as_array_mut()
+            .unwrap()
+            .push(duplicate);
+        assert_eq!(
+            rocprofv3_json_gpu_agent_bindings_v4(&serde_json::to_vec(&hostile).unwrap())
+                .unwrap_err(),
+            ProfilerBundleErrorV4::InvalidDevice
+        );
+    }
+
+    let mut hostile = base;
+    hostile["rocprofiler-sdk-tool"][0]["agents"][0]["unknown"] = serde_json::json!(1);
+    assert_eq!(
+        rocprofv3_json_gpu_agent_bindings_v4(&serde_json::to_vec(&hostile).unwrap()).unwrap_err(),
+        ProfilerBundleErrorV4::InvalidRocprofJson
+    );
+}
+
+#[test]
 fn csv_import_is_strict_about_schema_values_and_resource_bounds() {
     let legacy_agent_ids = String::from_utf8(csv_source().to_vec())
         .unwrap()
@@ -162,6 +297,35 @@ fn csv_import_is_strict_about_schema_values_and_resource_bounds() {
             import_rocprofv3_csv_profiler_bundle_v4(source.as_bytes(), dispatch_binding(&[20, 21])),
             Err(ProfilerBundleErrorV4::InvalidRocprofCsv)
         ));
+    }
+
+    for (accepted, replacement) in [
+        (true, ",4,0,\"generic"),
+        (true, ",4,0x0,\"generic"),
+        (true, ",4,0x11,\"generic"),
+        (false, ",4,00,\"generic"),
+        (false, ",4,+0,\"generic"),
+        (false, ",4,-0,\"generic"),
+        (false, ",4, 0,\"generic"),
+        (false, ",4,0 ,\"generic"),
+        (false, ",4,0X0,\"generic"),
+        (false, ",4,0x00,\"generic"),
+        (false, ",4,0xA,\"generic"),
+        (false, ",4,18446744073709551616,\"generic"),
+        (false, ",4,0x10000000000000000,\"generic"),
+    ] {
+        let source = String::from_utf8(csv_source().to_vec())
+            .unwrap()
+            .replacen(",4,7,\"generic", replacement, 1);
+        assert_eq!(
+            import_rocprofv3_csv_profiler_bundle_v4(
+                source.as_bytes(),
+                dispatch_binding(&[20, 21])
+            )
+            .is_ok(),
+            accepted,
+            "CSV integer spelling {replacement}"
+        );
     }
 
     let unknown = String::from_utf8(csv_source().to_vec())
