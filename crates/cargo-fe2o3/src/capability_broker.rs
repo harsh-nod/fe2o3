@@ -59,7 +59,7 @@ mod platform {
     use crate::pinned_codegen_backend::PinnedCodegenBackend;
     use crate::pinned_executable::{PinExecutableError, PinnedExecutable};
     use crate::project::PinnedDirectory;
-    use crate::source_isa_observation::{
+    use fe2o3_source_isa_observation::wire_v1::{
         SOURCE_ISA_OBSERVATION_FRAME_BYTES_V1, SourceIsaObservationCollectionV1,
         SourceIsaObservationFrameV1, SourceIsaObservationTransportFailureV1,
     };
@@ -108,7 +108,7 @@ mod platform {
     const MAX_SOURCE_ISA_OBSERVATION_UNITS_V1: usize = 1024;
     const MAX_SOURCE_ISA_OBSERVATION_AGGREGATE_BYTES_V1: usize = 4 * 1024 * 1024;
     const _: () = assert!(
-        crate::source_isa_observation::MAX_SOURCE_ISA_OBSERVATION_COLLECTION_BYTES_V1
+        fe2o3_source_isa_observation::wire_v1::MAX_SOURCE_ISA_OBSERVATION_COLLECTION_BYTES_V1
             <= MAX_SOURCE_ISA_OBSERVATION_AGGREGATE_BYTES_V1
     );
     const BROKERED_INVOCATION_REQUEST_MAGIC_V1: &[u8; 8] = b"F2BRKIV1";
@@ -2063,7 +2063,7 @@ mod platform {
     #[cfg(test)]
     mod tests {
         use super::*;
-        use crate::source_isa_observation::{
+        use fe2o3_source_isa_observation::wire_v1::{
             MAX_SOURCE_ISA_OBSERVATION_COLLECTION_BYTES_V1,
             MAX_SOURCE_ISA_OBSERVATION_COLLECTION_HEX_BYTES_V1,
             SOURCE_ISA_COLLECTION_HEADER_BYTES_V1, SOURCE_ISA_COLLECTION_IDENTITY_BYTES_V1,
@@ -2697,7 +2697,7 @@ mod unsupported {
     use crate::pinned_codegen_backend::PinnedCodegenBackend;
     use crate::pinned_executable::PinnedExecutable;
     use crate::project::PinnedDirectory;
-    use crate::source_isa_observation::{
+    use fe2o3_source_isa_observation::wire_v1::{
         SourceIsaObservationCollectionV1, SourceIsaObservationFrameV1,
     };
     use fe2o3_compiler_closure_capability::{

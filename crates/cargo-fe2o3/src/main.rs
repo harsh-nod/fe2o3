@@ -72,7 +72,7 @@ const AUTHORITY_CARGO_BINDING_TRAMPOLINE_SHA256_ENV: &str =
 const SOURCE_ISA_COLLECTION_STDERR_PREFIX_V1: &str =
     "[cargo-fe2o3] source-isa-observation-collection-v1";
 const MAX_SOURCE_ISA_COLLECTION_STDERR_LINE_BYTES_V1: usize =
-    source_isa_observation::MAX_SOURCE_ISA_OBSERVATION_COLLECTION_HEX_BYTES_V1 + 256;
+    fe2o3_source_isa_observation::wire_v1::MAX_SOURCE_ISA_OBSERVATION_COLLECTION_HEX_BYTES_V1 + 256;
 const _: () = assert!(MAX_SOURCE_ISA_COLLECTION_STDERR_LINE_BYTES_V1 <= 2 * 1024 * 1024);
 const NON_PRODUCTION_AUTHORITY_VALIDATION_ENV: &str =
     "FE2O3_NON_PRODUCTION_UNPROTECTED_AUTHORITY_VALIDATION_V1";
@@ -1834,7 +1834,7 @@ fn finish_capability_broker_observations_to(
     match collection.encode_canonical() {
         Ok(encoded) => {
             let decoded =
-                match source_isa_observation::SourceIsaObservationCollectionV1::decode_canonical(
+                match fe2o3_source_isa_observation::wire_v1::SourceIsaObservationCollectionV1::decode_canonical(
                     &encoded,
                 ) {
                     Ok(decoded) => decoded,
@@ -1897,7 +1897,7 @@ fn source_isa_collection_hex_length(binary_len: usize) -> Result<usize, String> 
     binary_len
         .checked_mul(2)
         .filter(|bytes| {
-            *bytes <= source_isa_observation::MAX_SOURCE_ISA_OBSERVATION_COLLECTION_HEX_BYTES_V1
+            *bytes <= fe2o3_source_isa_observation::wire_v1::MAX_SOURCE_ISA_OBSERVATION_COLLECTION_HEX_BYTES_V1
         })
         .ok_or_else(|| "source/ISA collection hex exceeds its canonical bound".to_owned())
 }
@@ -4309,13 +4309,13 @@ Agent 2
         );
         assert_eq!(
             source_isa_collection_hex_length(
-                source_isa_observation::MAX_SOURCE_ISA_OBSERVATION_COLLECTION_HEX_BYTES_V1 / 2
+                fe2o3_source_isa_observation::wire_v1::MAX_SOURCE_ISA_OBSERVATION_COLLECTION_HEX_BYTES_V1 / 2
             ),
-            Ok(source_isa_observation::MAX_SOURCE_ISA_OBSERVATION_COLLECTION_HEX_BYTES_V1)
+            Ok(fe2o3_source_isa_observation::wire_v1::MAX_SOURCE_ISA_OBSERVATION_COLLECTION_HEX_BYTES_V1)
         );
         assert!(
             source_isa_collection_hex_length(
-                source_isa_observation::MAX_SOURCE_ISA_OBSERVATION_COLLECTION_HEX_BYTES_V1 / 2 + 1
+                fe2o3_source_isa_observation::wire_v1::MAX_SOURCE_ISA_OBSERVATION_COLLECTION_HEX_BYTES_V1 / 2 + 1
             )
             .is_err()
         );

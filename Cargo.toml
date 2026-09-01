@@ -128,6 +128,7 @@ fe2o3-runtime = { path = "crates/fe2o3-runtime" }
 fe2o3-service-host = { path = "crates/fe2o3-service-host" }
 fe2o3-service-model = { path = "crates/fe2o3-service-model" }
 fe2o3-static-preexec-manifest = { path = "crates/fe2o3-static-preexec-manifest" }
+fe2o3-source-isa-observation = { path = "crates/fe2o3-source-isa-observation" }
 fe2o3-verifier = { path = "crates/fe2o3-verifier" }
 reserved-fe2o3-symbols = { path = "crates/reserved-fe2o3-symbols" }
 rustc-codegen-fe2o3 = { path = "crates/rustc-codegen-fe2o3" }

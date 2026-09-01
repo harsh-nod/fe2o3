@@ -50,6 +50,39 @@ checkout:
 cargo fe2o3 inspect --format source-isa-observation observations.bin
 ```
 
+Agents must request the separate typed response rather than parse the human
+text:
+
+```text
+cargo fe2o3 inspect --format source-isa-observation --output agent-json-v1 observations.bin
+```
+
+That one-shot convenience emits request ID and response revision `1` and the
+first page. For capability discovery, submit one bounded JSONL request on
+stdin:
+
+```text
+printf '%s\n' '{"operation":"discover_capabilities","schema":"fe2o3-agent-source-isa-request-v1","request_id":1}' | cargo fe2o3 inspect --output agent-json-v1
+```
+
+The reusable `fe2o3-source-isa-observation` crate also exposes the
+line-at-a-time `run_agent_source_isa_jsonl_v1` service. Its
+`inspect_source_isa_collection` request carries `collection_hex` as strict
+lowercase hexadecimal plus `page: {"after": null, "limit": 64}`. Subsequent
+requests use the opaque `next_after` cursor returned by the prior page and a
+new nonzero request ID. Cursors are bound to the verified collection identity,
+canonical byte length, schema, operation, all-units filter, unit count,
+position, and preceding unit; cross-collection, forged, terminal, and
+out-of-range cursors fail closed.
+
+The typed response supplies SHA-256 collection and frame evidence identities,
+canonical byte lengths, typed generation/session/invocation attempts, typed
+target architecture/features, admitted/unavailable/error outcomes, and a
+collection-bound evidence identity for each missing unit. `completeness`
+describes observation transport only. `page_exhausted` describes pagination
+only. Both are separate from the explicit false authority, hardware-execution,
+complete-machine-coverage, and semantic-refinement fields.
+
 Auto-detection also recognizes the `F2SICOL1` magic. Inspection uses the same
 strict, versioned decoder as collection admission and reports the exact target,
 KIR version, structural and query counts, optional sparse round-trip witness,
@@ -89,9 +122,9 @@ without a failure, nonzero reserved truth claims, and collection-identity
 disagreement. Every frame must carry the header configuration and broker
 session, including collections where every selected unit is missing. It uses
 the same checked arithmetic and fallible bounded
-allocation as the encoder. The current inspect command emits deterministic
-human-readable text; it is not the issue #215 typed agent protocol and agents
-must not recover evidence by parsing that presentation.
+allocation as the encoder. The default inspect output remains deterministic
+human-readable text. Agents must use `agent-json-v1` and must not recover
+evidence by parsing that presentation.
 
 Frames and missing identities are disjoint members of one selected-unit set,
 so their combined count cannot exceed 1,024. The maximum binary record is

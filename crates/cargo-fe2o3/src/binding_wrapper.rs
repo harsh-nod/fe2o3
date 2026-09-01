@@ -1719,10 +1719,10 @@ fn emit_source_isa_observation_once<Sink, MappingError, SubmissionError>(
     expected_attempt: BuildAttempt,
     observed_attempt: BuildAttempt,
     map: impl FnOnce()
-        -> Result<crate::source_isa_observation::SourceIsaObservationFrameV1, MappingError>,
+        -> Result<fe2o3_source_isa_observation::wire_v1::SourceIsaObservationFrameV1, MappingError>,
     submit: impl FnOnce(
         Sink,
-        &crate::source_isa_observation::SourceIsaObservationFrameV1,
+        &fe2o3_source_isa_observation::wire_v1::SourceIsaObservationFrameV1,
     ) -> Result<(), SubmissionError>,
 ) -> SourceIsaObservationEmissionTelemetryV1
 where
@@ -2675,8 +2675,8 @@ mod lifecycle_tests {
                 assert_eq!(frame.context().attempt(), expected_attempt);
                 assert_eq!(
                     frame.outcome(),
-                    crate::source_isa_observation::SourceIsaObservationOutcomeV1::Unavailable(
-                        crate::source_isa_observation::SourceIsaObservationUnavailableReasonV1::FinalizedEvidenceUnavailableFromReadyState
+                    fe2o3_source_isa_observation::wire_v1::SourceIsaObservationOutcomeV1::Unavailable(
+                        fe2o3_source_isa_observation::wire_v1::SourceIsaObservationUnavailableReasonV1::FinalizedEvidenceUnavailableFromReadyState
                     )
                 );
                 submit_calls.set(submit_calls.get() + 1);
@@ -2735,7 +2735,7 @@ mod lifecycle_tests {
                 &mut mapping_sink,
                 expected_attempt,
                 expected_attempt,
-                || Err::<crate::source_isa_observation::SourceIsaObservationFrameV1, _>("map"),
+                || Err::<fe2o3_source_isa_observation::wire_v1::SourceIsaObservationFrameV1, _>("map"),
                 |_sink, _frame| Ok::<(), String>(()),
             ),
             SourceIsaObservationEmissionTelemetryV1::MappingFailed("map".to_owned())

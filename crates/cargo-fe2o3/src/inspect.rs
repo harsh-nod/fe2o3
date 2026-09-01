@@ -1,6 +1,6 @@
 use std::fmt::Write as _;
 use std::fs::File;
-use std::io::Read;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 use fe2o3_artifacts::{
@@ -9,14 +9,14 @@ use fe2o3_artifacts::{
     MAX_CONTAINER_BYTES, ManifestV1, PointerWidth, TargetIdentity,
 };
 
-use crate::source_isa_observation::{
-    AdmittedSourceIsaObservationV1, SourceIsaObservationCollectionV1,
-    SourceIsaObservationErrorCodeV1, SourceIsaObservationKirVersionV1,
-    SourceIsaObservationOutcomeV1, SourceIsaObservationTargetProfileV1,
-    SourceIsaObservationUnavailableReasonV1,
+use fe2o3_source_isa_observation::agent_v1::{
+    MAX_AGENT_SOURCE_ISA_REQUEST_BYTES_V1, SourceIsaAdmittedViewV1,
+    SourceIsaFrameOutcomeViewV1, SourceIsaInspectionV1,
+    execute_agent_source_isa_request_line_v1, inspect_source_isa_agent_json_v1,
 };
+use fe2o3_source_isa_observation::wire_v1::MAX_SOURCE_ISA_OBSERVATION_COLLECTION_BYTES_V1;
 
-const USAGE: &str = "usage: cargo fe2o3 inspect [--format auto|container|manifest|bundle|hsaco|source-isa-observation] <path>";
+const USAGE: &str = "usage: cargo fe2o3 inspect [--format auto|container|manifest|bundle|hsaco|source-isa-observation] [--output human|agent-json-v1] [<path>]";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum InspectFormat {
@@ -47,7 +47,26 @@ impl InspectFormat {
 #[derive(Debug, Eq, PartialEq)]
 struct Options {
     format: InspectFormat,
-    path: PathBuf,
+    output: InspectOutput,
+    path: Option<PathBuf>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum InspectOutput {
+    Human,
+    AgentJsonV1,
+}
+
+impl InspectOutput {
+    fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "human" => Ok(Self::Human),
+            "agent-json-v1" => Ok(Self::AgentJsonV1),
+            _ => Err(format!(
+                "unknown inspect output `{value}`; expected human or agent-json-v1"
+            )),
+        }
+    }
 }
 
 pub(crate) fn command(args: &[String]) -> Result<String, String> {
@@ -55,14 +74,45 @@ pub(crate) fn command(args: &[String]) -> Result<String, String> {
         return Ok(USAGE.to_string());
     }
     let options = parse_options(args)?;
-    let bytes = read_bounded(&options.path)?;
-    inspect_bytes(options.format, &bytes)
-        .map_err(|error| format!("failed to inspect {}: {error}", options.path.display()))
+    match (options.output, options.path) {
+        (InspectOutput::Human, Some(path)) => {
+            let bytes = read_bounded(&path, input_limit(&path, options.format)?)?;
+            inspect_bytes(options.format, &bytes)
+                .map_err(|error| format!("failed to inspect {}: {error}", path.display()))
+        }
+        (InspectOutput::AgentJsonV1, Some(path)) => {
+            if options.format != InspectFormat::SourceIsaObservation {
+                return Err(
+                    "agent-json-v1 path inspection requires --format source-isa-observation"
+                        .to_owned(),
+                );
+            }
+            let bytes = read_bounded(
+                &path,
+                MAX_SOURCE_ISA_OBSERVATION_COLLECTION_BYTES_V1,
+            )?;
+            inspect_source_isa_agent_json_v1(&bytes)
+                .map_err(|error| format!("failed to inspect {}: {error}", path.display()))
+        }
+        (InspectOutput::AgentJsonV1, None) => {
+            if options.format != InspectFormat::Auto {
+                return Err(
+                    "agent JSONL stdin mode does not accept --format; the request selects its operation"
+                        .to_owned(),
+                );
+            }
+            let request = read_stdin_bounded(MAX_AGENT_SOURCE_ISA_REQUEST_BYTES_V1)?;
+            Ok(execute_agent_source_isa_request_line_v1(&request))
+        }
+        (InspectOutput::Human, None) => Err(format!("inspect requires a path\n{USAGE}")),
+    }
 }
 
 fn parse_options(args: &[String]) -> Result<Options, String> {
     let mut format = InspectFormat::Auto;
     let mut format_seen = false;
+    let mut output = InspectOutput::Human;
+    let mut output_seen = false;
     let mut path = None;
     let mut positional_only = false;
     let mut index = 0;
@@ -87,6 +137,22 @@ fn parse_options(args: &[String]) -> Result<Options, String> {
             }
             format = InspectFormat::parse(&argument["--format=".len()..])?;
             format_seen = true;
+        } else if !positional_only && argument == "--output" {
+            if output_seen {
+                return Err("inspect output was specified more than once".to_string());
+            }
+            index += 1;
+            let value = args
+                .get(index)
+                .ok_or_else(|| "--output requires a value".to_string())?;
+            output = InspectOutput::parse(value)?;
+            output_seen = true;
+        } else if !positional_only && argument.starts_with("--output=") {
+            if output_seen {
+                return Err("inspect output was specified more than once".to_string());
+            }
+            output = InspectOutput::parse(&argument["--output=".len()..])?;
+            output_seen = true;
         } else if !positional_only && argument.starts_with('-') {
             return Err(format!("unknown inspect option `{argument}`\n{USAGE}"));
         } else if path.replace(PathBuf::from(argument)).is_some() {
@@ -95,11 +161,34 @@ fn parse_options(args: &[String]) -> Result<Options, String> {
         index += 1;
     }
 
-    let path = path.ok_or_else(|| format!("inspect requires a path\n{USAGE}"))?;
-    Ok(Options { format, path })
+    Ok(Options {
+        format,
+        output,
+        path,
+    })
 }
 
-fn read_bounded(path: &Path) -> Result<Vec<u8>, String> {
+fn input_limit(path: &Path, format: InspectFormat) -> Result<usize, String> {
+    match format {
+        InspectFormat::SourceIsaObservation => Ok(MAX_SOURCE_ISA_OBSERVATION_COLLECTION_BYTES_V1),
+        InspectFormat::Auto => {
+            let mut file = File::open(path)
+                .map_err(|error| format!("failed to open {}: {error}", path.display()))?;
+            let mut magic = [0_u8; 8];
+            let read = file
+                .read(&mut magic)
+                .map_err(|error| format!("failed to read {} magic: {error}", path.display()))?;
+            if read == magic.len() && &magic == b"F2SICOL1" {
+                Ok(MAX_SOURCE_ISA_OBSERVATION_COLLECTION_BYTES_V1)
+            } else {
+                Ok(MAX_CONTAINER_BYTES)
+            }
+        }
+        _ => Ok(MAX_CONTAINER_BYTES),
+    }
+}
+
+fn read_bounded(path: &Path, limit: usize) -> Result<Vec<u8>, String> {
     let file =
         File::open(path).map_err(|error| format!("failed to open {}: {error}", path.display()))?;
     let metadata = file
@@ -108,22 +197,34 @@ fn read_bounded(path: &Path) -> Result<Vec<u8>, String> {
     if !metadata.is_file() {
         return Err(format!("{} is not a regular file", path.display()));
     }
-    if metadata.len() > MAX_CONTAINER_BYTES as u64 {
+    if metadata.len() > limit as u64 {
         return Err(format!(
-            "{} exceeds the inspect input limit of {MAX_CONTAINER_BYTES} bytes",
+            "{} exceeds the inspect input limit of {limit} bytes",
             path.display()
         ));
     }
 
     let mut bytes = Vec::with_capacity(metadata.len() as usize);
-    file.take(MAX_CONTAINER_BYTES as u64 + 1)
+    file.take(limit as u64 + 1)
         .read_to_end(&mut bytes)
         .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
-    if bytes.len() > MAX_CONTAINER_BYTES {
+    if bytes.len() > limit {
         return Err(format!(
-            "{} grew beyond the inspect input limit of {MAX_CONTAINER_BYTES} bytes",
+            "{} grew beyond the inspect input limit of {limit} bytes",
             path.display()
         ));
+    }
+    Ok(bytes)
+}
+
+fn read_stdin_bounded(limit: usize) -> Result<Vec<u8>, String> {
+    let mut bytes = Vec::new();
+    io::stdin()
+        .take(limit as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("failed to read inspect agent JSONL request: {error}"))?;
+    if bytes.len() > limit {
+        return Ok(bytes);
     }
     Ok(bytes)
 }
@@ -149,8 +250,8 @@ fn inspect_bytes(format: InspectFormat, bytes: &[u8]) -> Result<String, String> 
             .map(|hsaco| render_hsaco(&hsaco))
             .map_err(|error| format!("invalid HSACO: {error}")),
         InspectFormat::SourceIsaObservation => {
-            SourceIsaObservationCollectionV1::decode_canonical(bytes)
-                .map(|collection| render_source_isa_observation(&collection))
+            SourceIsaInspectionV1::decode_canonical(bytes)
+                .map(|inspection| render_source_isa_observation(&inspection))
                 .map_err(|error| format!("invalid source/ISA observation collection: {error}"))
         }
     }
@@ -172,9 +273,10 @@ fn detect_format(bytes: &[u8]) -> Result<InspectFormat, String> {
     }
 }
 
-fn render_source_isa_observation(collection: &SourceIsaObservationCollectionV1) -> String {
+fn render_source_isa_observation(inspection: &SourceIsaInspectionV1) -> String {
+    let collection = &inspection.collection;
     let mut output = String::new();
-    writeln!(output, "format: fe2o3-source-isa-observation-collection-v1")
+    writeln!(output, "format: {}", collection.format)
         .expect("write to String");
     writeln!(output, "authority: observation-only").expect("write to String");
     writeln!(output, "compiler-authority: false").expect("write to String");
@@ -187,76 +289,79 @@ fn render_source_isa_observation(collection: &SourceIsaObservationCollectionV1) 
     writeln!(
         output,
         "configuration: {}",
-        hex_bytes(&collection.config_identity())
+        collection.configuration_identity
     )
     .expect("write to String");
-    writeln!(output, "session: {}", collection.session()).expect("write to String");
-    writeln!(output, "frames: {}", collection.frames().len()).expect("write to String");
+    writeln!(output, "session: {}", collection.session).expect("write to String");
+    writeln!(output, "frames: {}", collection.frame_count).expect("write to String");
     writeln!(
         output,
         "missing-units: {}",
-        collection.missing_units().len()
+        collection.missing_unit_count
     )
     .expect("write to String");
     writeln!(
         output,
         "transport-failure: {}",
-        collection.failure().map_or(0, |failure| failure.code())
+        collection
+            .transport_failure
+            .as_ref()
+            .map_or(0, |failure| failure.code)
     )
     .expect("write to String");
 
-    for (index, frame) in collection.frames().enumerate() {
-        let context = frame.context();
+    for (index, frame) in inspection.frames().enumerate() {
         writeln!(
             output,
             "frame[{index}].identity: {}",
-            hex_bytes(&frame.identity())
+        frame.frame_evidence.digest
         )
         .expect("write to String");
         writeln!(
             output,
             "frame[{index}].unit: {}",
-            hex_bytes(&context.unit())
+        frame.unit_identity
         )
         .expect("write to String");
         writeln!(
             output,
             "frame[{index}].attempt: {}",
-            context.attempt().to_env_value()
+        format!(
+            "{}:{}:{}",
+            frame.attempt.generation,
+            frame.attempt.session,
+            frame.attempt.invocation_identity
+        )
         )
         .expect("write to String");
         writeln!(
             output,
             "frame[{index}].finalization: {}",
-            hex_bytes(&context.finalization())
+        frame.finalization_identity
         )
         .expect("write to String");
-        match frame.outcome() {
-            SourceIsaObservationOutcomeV1::Admitted(admitted) => {
-                render_admitted_source_isa_observation(&mut output, index, admitted);
+        match &frame.outcome {
+            SourceIsaFrameOutcomeViewV1::Admitted { evidence } => {
+                render_admitted_source_isa_observation(&mut output, index, evidence);
             }
-            SourceIsaObservationOutcomeV1::Unavailable(reason) => {
+            SourceIsaFrameOutcomeViewV1::Unavailable { reason } => {
                 writeln!(output, "frame[{index}].outcome: unavailable").expect("write to String");
-                writeln!(output, "frame[{index}].reason-code: {}", reason as u16)
+                writeln!(output, "frame[{index}].reason-code: {}", reason.code)
                     .expect("write to String");
-                writeln!(
-                    output,
-                    "frame[{index}].reason: {}",
-                    source_isa_unavailable_reason(reason)
-                )
-                .expect("write to String");
+                writeln!(output, "frame[{index}].reason: {}", reason.label)
+                    .expect("write to String");
             }
-            SourceIsaObservationOutcomeV1::Error(code) => {
+            SourceIsaFrameOutcomeViewV1::Error { error } => {
                 writeln!(output, "frame[{index}].outcome: error").expect("write to String");
-                writeln!(output, "frame[{index}].error-code: {}", code as u16)
+                writeln!(output, "frame[{index}].error-code: {}", error.code)
                     .expect("write to String");
-                writeln!(output, "frame[{index}].error: {}", source_isa_error(code))
+                writeln!(output, "frame[{index}].error: {}", error.label)
                     .expect("write to String");
             }
         }
     }
-    for (index, unit) in collection.missing_units().iter().enumerate() {
-        writeln!(output, "missing-unit[{index}]: {}", hex_bytes(unit)).expect("write to String");
+    for (index, unit) in inspection.missing_units().enumerate() {
+        writeln!(output, "missing-unit[{index}]: {unit}").expect("write to String");
     }
     trim_final_newline(output)
 }
@@ -264,57 +369,60 @@ fn render_source_isa_observation(collection: &SourceIsaObservationCollectionV1) 
 fn render_admitted_source_isa_observation(
     output: &mut String,
     index: usize,
-    admitted: AdmittedSourceIsaObservationV1,
+    admitted: &SourceIsaAdmittedViewV1,
 ) {
-    let artifact = admitted.artifact();
-    let structural = admitted.structural();
-    let structural_counts = structural.counts();
-    let records = admitted.counts().records();
-    let queries = admitted.counts().queries();
+    let artifact = &admitted.artifact;
+    let structural = &admitted.structural;
+    let records = admitted.records;
+    let queries = admitted.queries;
     writeln!(output, "frame[{index}].outcome: admitted").expect("write to String");
     writeln!(
         output,
         "frame[{index}].correlation: {}",
-        hex_bytes(&admitted.correlation())
+        admitted.correlation_identity
     )
     .expect("write to String");
     writeln!(
         output,
         "frame[{index}].artifact: sha256={} bytes={}",
-        hex_bytes(&artifact.sha256()),
-        artifact.byte_len()
+        artifact.sha256,
+        artifact.byte_len
     )
     .expect("write to String");
     writeln!(
         output,
         "frame[{index}].target: {}",
-        source_isa_target(structural.target_profile())
+        format!(
+            "{}:{}",
+            structural.target.architecture,
+            structural.target.features[1]
+        )
     )
     .expect("write to String");
     writeln!(
         output,
         "frame[{index}].kir-version: {}",
-        source_isa_kir_version(structural.kir_version())
+        structural.kir_version
     )
     .expect("write to String");
     writeln!(
         output,
         "frame[{index}].structural: identity={} functions={} defined-bodies={} blocks={} operations={} neutral-kir-sha256={} neutral-kir-bytes={} target-kir-sha256={} target-kir-bytes={}",
-        hex_bytes(&structural.identity()),
-        structural_counts.functions,
-        structural_counts.defined_bodies,
-        structural_counts.blocks,
-        structural_counts.operations,
-        hex_bytes(&structural.neutral_kir().sha256()),
-        structural.neutral_kir().byte_len(),
-        hex_bytes(&structural.target_kir().sha256()),
-        structural.target_kir().byte_len(),
+        structural.identity,
+        structural.functions,
+        structural.defined_bodies,
+        structural.blocks,
+        structural.operations,
+        structural.neutral_kir.sha256,
+        structural.neutral_kir.byte_len,
+        structural.target_kir.sha256,
+        structural.target_kir.byte_len,
     )
     .expect("write to String");
     writeln!(
         output,
         "frame[{index}].records: total={} source-anchored={} eliminated={} no-source={} source-anchored-without-isa={} isa-references={}",
-        records.records,
+        records.total,
         records.source_anchored,
         records.eliminated,
         records.no_source,
@@ -333,24 +441,24 @@ fn render_admitted_source_isa_observation(
         queries.max_exact_pc_cardinality,
     )
     .expect("write to String");
-    match admitted.round_trip_witness() {
+    match &admitted.round_trip {
         Some(witness) => {
-            let span = witness.source_span();
-            let isa = witness.isa_point();
+            let span = &witness.source_span;
+            let isa = witness.isa_point;
             writeln!(
                 output,
                 "frame[{index}].round-trip: source-node={} file={} byte-start={} byte-end={} line={} column={} kernel-ordinal={} symbol-relative-pc={} source-node-matches={} source-span-matches={} isa-point-matches={}",
-                hex_bytes(&witness.source_node_identity()),
-                hex_bytes(&span.file_identity()),
-                span.byte_start(),
-                span.byte_end(),
-                span.line(),
-                span.column(),
-                isa.kernel_ordinal(),
-                isa.symbol_relative_pc(),
-                witness.source_node_query_matches(),
-                witness.source_span_query_matches(),
-                witness.isa_point_query_matches(),
+                witness.source_node_identity,
+                span.file_identity,
+                span.byte_start,
+                span.byte_end,
+                span.line,
+                span.column,
+                isa.kernel_ordinal,
+                isa.symbol_relative_pc,
+                witness.source_node_query_matches,
+                witness.source_span_query_matches,
+                witness.isa_point_query_matches,
             )
             .expect("write to String");
         }
@@ -358,30 +466,6 @@ fn render_admitted_source_isa_observation(
             writeln!(output, "frame[{index}].round-trip: unavailable").expect("write to String");
         }
     }
-}
-
-const fn source_isa_target(target: SourceIsaObservationTargetProfileV1) -> &'static str {
-    match target {
-        SourceIsaObservationTargetProfileV1::Gfx942 => "gfx942:xnack-",
-        SourceIsaObservationTargetProfileV1::Gfx950 => "gfx950:xnack-",
-    }
-}
-
-const fn source_isa_kir_version(version: SourceIsaObservationKirVersionV1) -> u16 {
-    match version {
-        SourceIsaObservationKirVersionV1::V8 => 8,
-        SourceIsaObservationKirVersionV1::V9 => 9,
-    }
-}
-
-const fn source_isa_unavailable_reason(
-    reason: SourceIsaObservationUnavailableReasonV1,
-) -> &'static str {
-    reason.label()
-}
-
-const fn source_isa_error(code: SourceIsaObservationErrorCodeV1) -> &'static str {
-    code.label()
 }
 
 fn render_container(container: &ArtifactContainerV1) -> String {
@@ -630,8 +714,8 @@ fn trim_final_newline(mut output: String) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{InspectFormat, Options, detect_format, inspect_bytes, parse_options};
-    use crate::source_isa_observation::{
+    use super::{InspectFormat, InspectOutput, Options, detect_format, inspect_bytes, parse_options};
+    use fe2o3_source_isa_observation::wire_v1::{
         AdmittedSourceIsaObservationV1, SourceIsaObservationContentIdentityV1,
         SourceIsaObservationContextV1, SourceIsaObservationCountsV1,
         SourceIsaObservationErrorCodeV1, SourceIsaObservationFrameV1,
@@ -772,7 +856,8 @@ mod tests {
             parse_options(&["--format=manifest".into(), "artifact.bin".into()]),
             Ok(Options {
                 format: InspectFormat::Manifest,
-                path: PathBuf::from("artifact.bin"),
+                output: InspectOutput::Human,
+                path: Some(PathBuf::from("artifact.bin")),
             })
         );
         assert_eq!(
@@ -782,14 +867,24 @@ mod tests {
             ]),
             Ok(Options {
                 format: InspectFormat::SourceIsaObservation,
-                path: PathBuf::from("observations.bin"),
+                output: InspectOutput::Human,
+                path: Some(PathBuf::from("observations.bin")),
             })
         );
         assert_eq!(
             parse_options(&["--".into(), "-artifact.bin".into()]),
             Ok(Options {
                 format: InspectFormat::Auto,
-                path: PathBuf::from("-artifact.bin"),
+                output: InspectOutput::Human,
+                path: Some(PathBuf::from("-artifact.bin")),
+            })
+        );
+        assert_eq!(
+            parse_options(&["--output=agent-json-v1".into()]),
+            Ok(Options {
+                format: InspectFormat::Auto,
+                output: InspectOutput::AgentJsonV1,
+                path: None,
             })
         );
     }
@@ -797,11 +892,15 @@ mod tests {
     #[test]
     fn rejects_missing_duplicate_and_unknown_options() {
         for args in [
-            vec![],
             vec!["one".into(), "two".into()],
             vec!["--unknown".into()],
             vec!["--format".into()],
             vec!["--format=raw".into(), "one".into()],
+            vec!["--output=raw".into()],
+            vec![
+                "--output=human".into(),
+                "--output=agent-json-v1".into(),
+            ],
             vec![
                 "--format=auto".into(),
                 "--format=hsaco".into(),

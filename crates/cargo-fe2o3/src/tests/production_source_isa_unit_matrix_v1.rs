@@ -12,7 +12,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::build_config::{PRODUCTION_BUILD_CONFIG_V2_ENV, PreparedProductionBuildConfig};
-use crate::source_isa_observation::{
+use fe2o3_source_isa_observation::wire_v1::{
     MAX_SOURCE_ISA_OBSERVATION_COLLECTION_HEX_BYTES_V1, SourceIsaObservationCollectionV1,
     SourceIsaObservationKirVersionV1, SourceIsaObservationOutcomeV1,
     SourceIsaObservationTargetProfileV1,

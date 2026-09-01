@@ -1,7 +1,8 @@
 use std::env;
 use std::fs;
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::process::{self, Command};
+use std::process::{self, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use fe2o3_artifacts::{
@@ -30,7 +31,6 @@ impl TempFile {
                 .open(&path)
             {
                 Ok(mut file) => {
-                    use std::io::Write as _;
                     file.write_all(bytes).expect("write inspect fixture");
                     return Self(path);
                 }
@@ -231,6 +231,50 @@ fn source_isa_collection_cli_supports_auto_explicit_and_hostile_inputs() {
         assert!(stdout.contains("missing-units: 1"));
         assert!(stdout.contains("transport-failure: 6"));
     }
+
+    let agent = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"))
+        .args([
+            "inspect",
+            "--format=source-isa-observation",
+            "--output=agent-json-v1",
+        ])
+        .arg(&fixture.0)
+        .output()
+        .expect("run typed source/ISA inspect");
+    assert!(
+        agent.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&agent.stderr)
+    );
+    let response: serde_json::Value = serde_json::from_slice(&agent.stdout).expect("typed JSON");
+    assert_eq!(response["status"], "ok");
+    assert_eq!(response["request_id"], 1);
+    assert_eq!(response["response_revision"], 1);
+    assert_eq!(response["result"]["result"], "collection_page");
+    assert_eq!(response["result"]["page"]["page_exhausted"], true);
+    assert_eq!(response["result"]["authority"]["runtime_authority"], false);
+
+    let mut discovery = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"))
+        .args(["inspect", "--output=agent-json-v1"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("spawn source/ISA discovery");
+    discovery
+        .stdin
+        .take()
+        .expect("discovery stdin")
+        .write_all(
+            br#"{"operation":"discover_capabilities","schema":"fe2o3-agent-source-isa-request-v1","request_id":9}
+"#,
+        )
+        .expect("write discovery request");
+    let discovery = discovery.wait_with_output().expect("wait for discovery");
+    assert!(discovery.status.success());
+    let response: serde_json::Value =
+        serde_json::from_slice(&discovery.stdout).expect("discovery JSON");
+    assert_eq!(response["request_id"], 9);
+    assert_eq!(response["result"]["result"], "capabilities");
 
     let mut trailing = bytes;
     trailing.push(0);
