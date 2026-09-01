@@ -7160,7 +7160,73 @@ mod tests {
     }
 
     #[test]
-    fn diagnosis_v2_marks_write_only_v9_access_unavailable_at_the_v7_v2_boundary() {
+    fn diagnosis_v2_rejects_post_admission_write_only_argument_substitution() {
+        #[derive(Clone, Copy, Debug)]
+        enum Case {
+            Direct,
+            SharedView,
+        }
+
+        for case in [Case::Direct, Case::SharedView] {
+            let mut input = fill_input();
+            let target = input.simulation_target();
+            let backing = fe2o3_kir_sim::BufferArgumentV1::new(
+                ScalarType::U32,
+                AccessMode::ReadWrite,
+                4,
+                vec![0; 16],
+                vec![true; 16],
+                target,
+            )
+            .unwrap();
+            input.request.arguments[0] = match case {
+                Case::Direct => SimulationArgumentV1::Buffer(
+                    fe2o3_kir_sim::BufferArgumentV1::new(
+                        ScalarType::U32,
+                        AccessMode::WriteOnly,
+                        4,
+                        vec![0; 16],
+                        vec![true; 16],
+                        target,
+                    )
+                    .unwrap(),
+                ),
+                Case::SharedView => {
+                    let id = fe2o3_kir_sim::BufferBackingIdV1(17);
+                    input
+                        .request
+                        .shared_buffers
+                        .push(fe2o3_kir_sim::SharedBufferV1 {
+                            id,
+                            buffer: backing,
+                        });
+                    SimulationArgumentV1::BufferView(
+                        fe2o3_kir_sim::BufferViewArgumentV1::new(
+                            id,
+                            ScalarType::U32,
+                            AccessMode::WriteOnly,
+                            4,
+                            0,
+                            4,
+                            target,
+                        )
+                        .unwrap(),
+                    )
+                }
+            };
+            let error = match SimulatorBackendV1::new(input, DebugWaveWidthV1::Wave64) {
+                Ok(_) => panic!("{case:?} write-only substitution was admitted"),
+                Err(error) => error,
+            };
+            assert_eq!(
+                error, "admitted diagnosis buffer access contract changed",
+                "{case:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn diagnosis_v2_marks_unreferenced_write_only_shared_allocation_unavailable() {
         let mut input = fill_input();
         let buffer = fe2o3_kir_sim::BufferArgumentV1::new(
             ScalarType::U32,

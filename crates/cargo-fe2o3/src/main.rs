@@ -3754,7 +3754,7 @@ fn print_help() {
     );
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
 #[path = "tests/production_source_isa_unit_matrix_v1.rs"]
 mod production_source_isa_unit_matrix_v1;
 

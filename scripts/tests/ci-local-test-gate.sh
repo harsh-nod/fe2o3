@@ -369,6 +369,32 @@ assert_source_isa_unit_matrix_gate() {
     printf -v "${name}" '%s' fixture
     export "${name}"
   done
+  if (
+    uname() {
+      case "$1" in
+        -s) printf '%s\n' Darwin ;;
+        -m) printf '%s\n' x86_64 ;;
+        *) return 2 ;;
+      esac
+    }
+    run_source_isa_unit_matrix
+  ) >/dev/null 2>&1; then
+    printf '%s\n' 'source/ISA unit matrix ran on a non-Linux host' >&2
+    exit 1
+  fi
+  if (
+    uname() {
+      case "$1" in
+        -s) printf '%s\n' Linux ;;
+        -m) printf '%s\n' aarch64 ;;
+        *) return 2 ;;
+      esac
+    }
+    run_source_isa_unit_matrix
+  ) >/dev/null 2>&1; then
+    printf '%s\n' 'source/ISA unit matrix ran on a non-x86_64 host' >&2
+    exit 1
+  fi
   for omitted in "${required_environment[@]}"; do
     if (unset "${omitted}"; run_source_isa_unit_matrix) >/dev/null 2>&1; then
       printf 'source/ISA unit matrix ran without %s\n' "${omitted}" >&2
@@ -519,9 +545,15 @@ STEP_COMMANDS=()
 run_workspace_tests
 assert_no_codegen_test_driver
 assert_equals \
-  "cargo test --locked --workspace --all-targets --exclude ${RUSTC_CODEGEN_TEST_PACKAGE}" \
+  "cargo test --locked --workspace --all-targets --exclude ${RUSTC_CODEGEN_TEST_PACKAGE} --exclude fe2o3-artifact-transaction" \
   "$(step_command workspace-tests)" \
-  'full workspace test command must exclude the backend'
+  'full workspace test command must isolate the backend and bounded artifact suite'
+assert_equals \
+  'env FE2O3_HIP_SYS_DISABLE=1 RUST_TEST_THREADS=8 cargo test --locked -p fe2o3-artifact-transaction' \
+  "$(step_command fe2o3-artifact-transaction-tests)" \
+  'full workspace tests did not retain the descriptor-safe artifact-transaction bound'
+assert_step_count fe2o3-artifact-transaction-tests 1 \
+  'full workspace tests did not run artifact-transaction tests exactly once'
 assert_equals \
   "cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --lib" \
   "$(step_command rustc-codegen-lib-tests)" \
@@ -709,6 +741,12 @@ reset_mock_production_driver
 run_cpu_tests
 assert_step_count wrapper-managed-cpu-tests 0 \
   'empty managed CPU intersection still invoked the binding test command'
+assert_equals \
+  'env FE2O3_HIP_SYS_DISABLE=1 RUST_TEST_THREADS=8 cargo test --locked -p fe2o3-artifact-transaction' \
+  "$(step_command fe2o3-artifact-transaction-tests)" \
+  'empty managed CPU intersection dropped the descriptor-safe artifact-transaction bound'
+assert_step_count fe2o3-artifact-transaction-tests 1 \
+  'empty managed CPU intersection did not run artifact-transaction tests exactly once'
 assert_equals \
   "env ${TIMEOUT_TEST_ROOT}/production-driver/cargo-fe2o3 examples check-cpu-test-partition fe2o3-ordinary --" \
   "$(step_command cpu-test-partition-revalidation)" \

@@ -627,6 +627,14 @@ run_check() {
       --manifest-path examples/flash_attention_general_v1/Cargo.toml
 }
 
+run_artifact_transaction_tests() {
+  # Artifact publication tests intentionally retain descriptor custody. Bound
+  # their libtest fanout below the common 1024-descriptor soft limit.
+  run_step fe2o3-artifact-transaction-tests \
+    env FE2O3_HIP_SYS_DISABLE=1 RUST_TEST_THREADS=8 \
+    cargo test --locked -p fe2o3-artifact-transaction
+}
+
 run_cpu_tests() {
   local cargo_args=(test --locked)
   local wrapper_cargo_args=(test --locked --all-targets)
@@ -670,11 +678,7 @@ run_cpu_tests() {
   run_step fe2o3-pliron-default-api-ui \
     cargo test --locked -p fe2o3-pliron --no-default-features \
       --test middle_end_evidence_ui default_api_cannot_self_authorize -- --exact
-  # Artifact publication tests intentionally retain descriptor custody. Bound
-  # their libtest fanout below the common 1024-descriptor soft limit.
-  run_step fe2o3-artifact-transaction-tests \
-    env FE2O3_HIP_SYS_DISABLE=1 RUST_TEST_THREADS=8 \
-    cargo test --locked -p fe2o3-artifact-transaction
+  run_artifact_transaction_tests
   run_step cpu-tests env FE2O3_HIP_SYS_DISABLE=1 cargo "${cargo_args[@]}"
   load_dynamic_loader_environment_removals loader_environment_removals
   if ((${#wrapper_cpu_examples[@]} > 0)); then
@@ -900,7 +904,9 @@ run_tests() {
 run_workspace_tests() {
   run_step workspace-tests \
     cargo test --locked --workspace --all-targets \
-      --exclude "${RUSTC_CODEGEN_TEST_PACKAGE}"
+      --exclude "${RUSTC_CODEGEN_TEST_PACKAGE}" \
+      --exclude fe2o3-artifact-transaction
+  run_artifact_transaction_tests
   run_rustc_codegen_tests
 }
 
@@ -933,7 +939,20 @@ run_source_isa_unit_matrix() {
       'protected source/ISA unit matrix requires FE2O3_RUN_SOURCE_ISA_UNIT_MATRIX=1' >&2
     return 2
   fi
-  local name
+  local name platform_architecture platform_kernel
+  platform_kernel="$(uname -s)" || {
+    printf '%s\n' 'protected source/ISA unit matrix could not identify the host kernel' >&2
+    return 2
+  }
+  platform_architecture="$(uname -m)" || {
+    printf '%s\n' 'protected source/ISA unit matrix could not identify the host architecture' >&2
+    return 2
+  }
+  if [[ "${platform_kernel}" != "Linux" || "${platform_architecture}" != "x86_64" ]]; then
+    printf 'protected source/ISA unit matrix requires Linux x86_64, found %s %s\n' \
+      "${platform_kernel}" "${platform_architecture}" >&2
+    return 2
+  fi
   local -a required_environment=(
     FE2O3_TEST_CARGO_FE2O3_BIN
     FE2O3_TEST_CARGO_FE2O3_SHA256

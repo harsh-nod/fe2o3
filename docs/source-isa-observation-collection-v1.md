@@ -38,7 +38,13 @@ non-authoritative observer file to the generation directory would include it
 in the authoritative artifact snapshot and make a nonfatal telemetry failure
 change or stale that snapshot.
 
-The decoded binary payload can be inspected without a source checkout:
+Production writes the collection only as the lowercase hexadecimal value after
+`encoding=hex:` on its bounded stderr record. A caller must strictly parse that
+single canonical record and hex-decode the value into a non-authoritative file;
+the compiler does not create `observations.bin`.
+
+That caller-created binary payload can then be inspected without a source
+checkout:
 
 ```text
 cargo fe2o3 inspect --format source-isa-observation observations.bin
@@ -83,8 +89,9 @@ without a failure, nonzero reserved truth claims, and collection-identity
 disagreement. Every frame must carry the header configuration and broker
 session, including collections where every selected unit is missing. It uses
 the same checked arithmetic and fallible bounded
-allocation as the encoder, so agents can consume the binary record directly
-without parsing terminal presentation text.
+allocation as the encoder. The current inspect command emits deterministic
+human-readable text; it is not the issue #215 typed agent protocol and agents
+must not recover evidence by parsing that presentation.
 
 Frames and missing identities are disjoint members of one selected-unit set,
 so their combined count cannot exceed 1,024. The maximum binary record is
