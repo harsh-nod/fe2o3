@@ -928,6 +928,8 @@ run_verus() {
     "${REPO_ROOT}/examples/scalar_gemm_v1/run-verus.sh" --require
   run_step mir-pliron-per-compilation-verus \
     "${REPO_ROOT}/scripts/test-mir-pliron-per-compilation-verus.sh"
+  run_step target-binding-refinement-verus \
+    "${REPO_ROOT}/scripts/test-target-binding-refinement-verus.sh"
 }
 
 run_authority_launcher_tests() {

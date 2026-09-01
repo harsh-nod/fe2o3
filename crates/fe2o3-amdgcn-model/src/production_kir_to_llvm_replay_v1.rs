@@ -12,7 +12,8 @@ use crate::{
     LoweringErrors, MAX_PRODUCTION_KIR_TO_LLVM_REPLAY_EVIDENCE_BYTES_V1,
     MAX_PRODUCTION_LEGACY_REPLAY_LLVM_TEXT_BYTES_V1, ProductionLlvmLayoutBindingErrorV1,
     ProductionSemanticAnchorKirIdentityV1, ProductionTargetBindingErrorV1,
-    ProductionTargetStructuralBindingV1, bind_historical_replay_llvm_layout_v1,
+    ProductionTargetSemanticValidationErrorV1, ProductionTargetStructuralBindingV1,
+    ValidatedProductionTargetSemanticBindingV1, bind_historical_replay_llvm_layout_v1,
     bind_production_llvm22_worker_layout_v1, bind_production_target_v1,
     lower_compiler_module_to_gfx942_xnack_minus_llvm_ir,
     lower_compiler_module_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1,
@@ -22,6 +23,7 @@ use crate::{
     lower_kernel_to_gfx942_xnack_minus_replay_llvm_ir_v1,
     lower_kernel_to_gfx950_xnack_minus_llvm_ir_with_semantic_anchors_v1,
     lower_kernel_to_gfx950_xnack_minus_replay_llvm_ir_v1,
+    validate_production_target_semantic_binding_v1,
 };
 
 const EVIDENCE_MAGIC_V1: &[u8] = b"FE2O3/KIR-TO-LLVM-REPLAY/V1\0";
@@ -295,6 +297,12 @@ impl CanonicalProductionKirToLlvmReplayEvidenceV1 {
             .map_err(|_| ProductionKirToLlvmReplayErrorV1::IdentityMismatch {
                 field: "target structural coordinate binding",
             })?;
+        let semantic_binding = validate_production_target_semantic_binding_v1(
+            &neutral_module,
+            &target_bound,
+            self.profile,
+        )
+        .map_err(ProductionKirToLlvmReplayErrorV1::TargetSemanticValidation)?;
         let (target_bound_module, _) = target_bound.into_parts();
         Ok(ValidatedProductionKirToLlvmReplayV1 {
             evidence: self,
@@ -303,6 +311,7 @@ impl CanonicalProductionKirToLlvmReplayEvidenceV1 {
             target_owner,
             target_bound_module,
             structural_binding,
+            semantic_binding,
         })
     }
 
@@ -350,6 +359,7 @@ pub struct ValidatedProductionKirToLlvmReplayV1 {
     target_owner: ExactKernelIrOwnerV1,
     target_bound_module: Module,
     structural_binding: ProductionTargetStructuralBindingV1,
+    semantic_binding: ValidatedProductionTargetSemanticBindingV1,
 }
 
 impl ValidatedProductionKirToLlvmReplayV1 {
@@ -375,6 +385,10 @@ impl ValidatedProductionKirToLlvmReplayV1 {
 
     pub const fn structural_binding(&self) -> ProductionTargetStructuralBindingV1 {
         self.structural_binding
+    }
+
+    pub const fn semantic_binding(&self) -> &ValidatedProductionTargetSemanticBindingV1 {
+        &self.semantic_binding
     }
 
     pub const fn has_exact_target_binding_replay(&self) -> bool {
@@ -822,6 +836,7 @@ pub enum ProductionKirToLlvmReplayErrorV1 {
     KernelIrV8(VerifiedCanonicalKernelIrErrorV8),
     KernelIrV9(VerifiedCanonicalKernelIrErrorV9),
     TargetBinding(ProductionTargetBindingErrorV1),
+    TargetSemanticValidation(ProductionTargetSemanticValidationErrorV1),
     TargetLowering(LoweringErrors),
     LayoutBinding(ProductionLlvmLayoutBindingErrorV1),
 }
@@ -872,6 +887,9 @@ impl fmt::Display for ProductionKirToLlvmReplayErrorV1 {
             Self::TargetBinding(error) => {
                 write!(formatter, "target-binding replay failed: {error}")
             }
+            Self::TargetSemanticValidation(error) => {
+                write!(formatter, "target semantic validation failed: {error}")
+            }
             Self::TargetLowering(error) => {
                 write!(formatter, "AMDGPU lowering replay failed: {error}")
             }
@@ -888,6 +906,7 @@ impl Error for ProductionKirToLlvmReplayErrorV1 {
             Self::KernelIrV8(error) => Some(error),
             Self::KernelIrV9(error) => Some(error),
             Self::TargetBinding(error) => Some(error),
+            Self::TargetSemanticValidation(error) => Some(error),
             Self::TargetLowering(error) => Some(error),
             Self::LayoutBinding(error) => Some(error),
             _ => None,
@@ -1140,6 +1159,12 @@ mod tests {
         assert!(structure.preserves_function_block_operation_coordinates());
         assert!(!structure.proves_semantic_refinement());
         assert!(!structure.grants_runtime_authority());
+        assert!(
+            validated
+                .semantic_binding()
+                .matches_formal_target_binding_relation_v1()
+        );
+        assert!(!validated.semantic_binding().grants_later_stage_authority());
         assert!(validated.has_exact_target_binding_replay());
         assert!(validated.has_exact_kir_to_llvm_replay());
         assert!(!validated.establishes_formal_semantic_refinement());

@@ -14,6 +14,7 @@ mod lowering;
 mod production_kir_to_llvm_replay_v1;
 mod production_limits_v1;
 mod production_refinement_v1;
+mod production_target_semantic_validation_v1;
 mod scalar_v2;
 
 pub use device_math::*;
@@ -22,6 +23,7 @@ pub use lowering::*;
 pub use production_kir_to_llvm_replay_v1::*;
 pub use production_limits_v1::*;
 pub use production_refinement_v1::*;
+pub use production_target_semantic_validation_v1::*;
 pub use scalar_v2::*;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
