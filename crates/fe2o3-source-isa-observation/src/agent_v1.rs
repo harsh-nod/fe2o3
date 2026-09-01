@@ -5,7 +5,8 @@ use std::error::Error;
 use std::fmt;
 use std::io::{BufRead, Write};
 
-use serde::{Deserialize, Serialize};
+use serde::de::{self, IgnoredAny, MapAccess, Visitor};
+use serde::{Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::wire_v1::{
@@ -755,6 +756,15 @@ impl AgentSourceIsaServiceV1 {
             Ok(request) => request,
             Err(error) => {
                 let (request_id, operation) = request_identity_hint(line);
+                if request_id.is_some_and(|request_id| !self.request_ids.insert(request_id)) {
+                    return AgentSourceIsaResponseV1::error(
+                        request_id,
+                        self.response_revision,
+                        operation,
+                        AgentSourceIsaErrorCodeV1::DuplicateRequestId,
+                        false,
+                    );
+                }
                 return AgentSourceIsaResponseV1::error(
                     request_id,
                     self.response_revision,
@@ -853,17 +863,11 @@ fn request_identity_hint(
     line: &[u8],
 ) -> (Option<u64>, Option<AgentSourceIsaOperationV1>) {
     let payload = line.strip_suffix(b"\n").unwrap_or(line);
-    let Ok(value) = serde_json::from_slice::<serde_json::Value>(payload) else {
+    let Ok(hint) = serde_json::from_slice::<RequestIdentityHintV1>(payload) else {
         return (None, None);
     };
-    let request_id = value
-        .get("request_id")
-        .and_then(serde_json::Value::as_u64)
-        .filter(|request_id| *request_id != 0);
-    let operation = match value
-        .get("operation")
-        .and_then(serde_json::Value::as_str)
-    {
+    let request_id = hint.request_id.filter(|request_id| *request_id != 0);
+    let operation = match hint.operation.as_deref() {
         Some("discover_capabilities") => Some(AgentSourceIsaOperationV1::DiscoverCapabilities),
         Some("inspect_source_isa_collection") => {
             Some(AgentSourceIsaOperationV1::InspectSourceIsaCollection)
@@ -871,6 +875,62 @@ fn request_identity_hint(
         _ => None,
     };
     (request_id, operation)
+}
+
+#[derive(Default)]
+struct RequestIdentityHintV1 {
+    request_id: Option<u64>,
+    operation: Option<String>,
+}
+
+impl<'de> Deserialize<'de> for RequestIdentityHintV1 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_map(RequestIdentityHintVisitorV1)
+    }
+}
+
+struct RequestIdentityHintVisitorV1;
+
+impl<'de> Visitor<'de> for RequestIdentityHintVisitorV1 {
+    type Value = RequestIdentityHintV1;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("a source/ISA agent request object with unique correlation keys")
+    }
+
+    fn visit_map<M>(self, mut map: M) -> Result<Self::Value, M::Error>
+    where
+        M: MapAccess<'de>,
+    {
+        let mut hint = RequestIdentityHintV1::default();
+        let mut request_id_seen = false;
+        let mut operation_seen = false;
+        while let Some(key) = map.next_key::<String>()? {
+            match key.as_str() {
+                "request_id" => {
+                    if request_id_seen {
+                        return Err(de::Error::duplicate_field("request_id"));
+                    }
+                    request_id_seen = true;
+                    hint.request_id = Some(map.next_value()?);
+                }
+                "operation" => {
+                    if operation_seen {
+                        return Err(de::Error::duplicate_field("operation"));
+                    }
+                    operation_seen = true;
+                    hint.operation = Some(map.next_value()?);
+                }
+                _ => {
+                    map.next_value::<IgnoredAny>()?;
+                }
+            }
+        }
+        Ok(hint)
+    }
 }
 
 fn execute_request(
@@ -1920,6 +1980,45 @@ mod tests {
         let unknown: Value =
             serde_json::from_str(&encode_response(service.handle_line(unknown))).unwrap();
         assert_eq!(unknown["error"], "invalid_request");
+        assert_eq!(unknown["request_id"], 9);
+        assert_eq!(unknown["operation"], "discover_capabilities");
+        let reused = br#"{"operation":"discover_capabilities","schema":"fe2o3-agent-source-isa-request-v1","request_id":9}
+"#;
+        let reused: Value =
+            serde_json::from_str(&encode_response(service.handle_line(reused))).unwrap();
+        assert_eq!(reused["error"], "duplicate_request_id");
+
+        for (ambiguous, reusable_id) in [
+            (
+                br#"{"operation":"discover_capabilities","schema":"fe2o3-agent-source-isa-request-v1","request_id":10,"request_id":11}
+"#
+                .as_slice(),
+                10,
+            ),
+            (
+                br#"{"operation":"discover_capabilities","operation":"inspect_source_isa_collection","schema":"fe2o3-agent-source-isa-request-v1","request_id":12}
+"#
+                .as_slice(),
+                12,
+            ),
+        ] {
+            let ambiguous: Value =
+                serde_json::from_str(&encode_response(service.handle_line(ambiguous))).unwrap();
+            assert_eq!(ambiguous["error"], "invalid_request");
+            assert!(ambiguous["request_id"].is_null());
+            assert!(ambiguous["operation"].is_null());
+
+            let reusable = format!(
+                "{{\"operation\":\"discover_capabilities\",\"schema\":\"{}\",\"request_id\":{reusable_id}}}\n",
+                AGENT_SOURCE_ISA_REQUEST_SCHEMA_V1
+            );
+            let reusable: Value = serde_json::from_str(&encode_response(
+                service.handle_line(reusable.as_bytes()),
+            ))
+            .unwrap();
+            assert_eq!(reusable["status"], "ok");
+            assert_eq!(reusable["request_id"], reusable_id);
+        }
     }
 
     #[test]

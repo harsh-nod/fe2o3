@@ -70,7 +70,9 @@ line-at-a-time `run_agent_source_isa_jsonl_v1` service. Its
 `inspect_source_isa_collection` request carries `collection_hex` as strict
 lowercase hexadecimal plus `page: {"cursor": null, "limit": 64}`. Subsequent
 requests use the structured `next_cursor` value returned by the prior page and
-a new nonzero request ID. The cursor carries a positive `position` and a
+a new nonzero request ID. An unambiguous nonzero ID on an invalid request is
+still consumed; duplicated `request_id` or `operation` keys suppress the
+correlation hint. The cursor carries a positive `position` and a
 lowercase `query_binding`. That public domain-separated digest binds the
 verified collection identity, canonical byte length, schema, operation,
 all-units filter, unit count, position, and preceding unit. Malformed,

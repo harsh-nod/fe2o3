@@ -27,7 +27,10 @@ Requests are limited to 2 MiB, responses including their newline are limited
 to 2 MiB, binary collections to 696,432 bytes, lowercase hexadecimal
 collections to 1,392,864 bytes, and collections to 1,024 units. Request IDs
 must be nonzero and unique within a service. Responses carry a monotonic
-revision. Structured cursors carry a positive position and a lowercase query
+revision. An unambiguous nonzero ID recovered from an otherwise invalid
+request is reserved before the error response; duplicated `request_id` or
+`operation` keys suppress all correlation hints. Structured cursors carry a
+positive position and a lowercase query
 binding over the verified collection digest, canonical byte length, operation,
 schema, filter, unit count, position, and preceding unit. Malformed,
 cross-collection, terminal, and out-of-range cursors are rejected. The binding
