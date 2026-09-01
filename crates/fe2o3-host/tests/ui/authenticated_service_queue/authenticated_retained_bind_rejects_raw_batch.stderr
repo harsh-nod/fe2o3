@@ -1,0 +1,15 @@
+error[E0308]: mismatched types
+ --> tests/ui/authenticated_service_queue/authenticated_retained_bind_rejects_raw_batch.rs:8:33
+  |
+8 |     let _ = queue.bind_retained(raw_batch);
+  |                   ------------- ^^^^^^^^^ expected `[ServiceFixedDispatchPacketV1; _]`, found `ServiceFixedBatchV1<'_, 1>`
+  |                   |
+  |                   arguments to this method are incorrect
+  |
+  = note: expected array `[ServiceFixedDispatchPacketV1; _]`
+            found struct `ServiceFixedBatchV1<'_, 1>`
+note: method defined here
+ --> src/authenticated_service_queue.rs
+  |
+  |     pub fn bind_retained<const N: usize>(
+  |            ^^^^^^^^^^^^^
