@@ -6115,10 +6115,9 @@ impl SimulatorBackendV1 {
             || argument.view_offset != view_offset
             || argument.view_bytes != view_bytes
             || argument.address_space != contract.address_space
-            || !diagnosis_access_satisfies_v2(argument.access, argument.supplied_access)
+            || !argument.supplied_access.satisfies(argument.access)
             || (argument.backing.is_none() && argument.supplied_access != contract.access)
-            || (argument.backing.is_some()
-                && !diagnosis_access_satisfies_v2(argument.supplied_access, contract.access))
+            || (argument.backing.is_some() && !contract.access.satisfies(argument.supplied_access))
         {
             return None;
         }
@@ -6719,7 +6718,7 @@ fn diagnosis_initial_allocations_v2(
             allocation,
             PendingDiagnosisAllocationV2 {
                 address_space: AddressSpaceV1::Global,
-                access: diagnosis_access_v2(shared.buffer.access())?,
+                access: diagnosis_access_v2(shared.buffer.access()),
                 alignment: shared.buffer.alignment(),
                 allocation_bytes: u64::try_from(shared.buffer.bytes().len())
                     .map_err(|_| "diagnosis allocation length does not fit u64".to_owned())?,
@@ -6749,7 +6748,7 @@ fn diagnosis_initial_allocations_v2(
                         allocation,
                         PendingDiagnosisAllocationV2 {
                             address_space: AddressSpaceV1::Global,
-                            access: diagnosis_access_v2(buffer.access())?,
+                            access: diagnosis_access_v2(buffer.access()),
                             alignment: buffer.alignment(),
                             allocation_bytes: bytes,
                             abi_arguments: Vec::new(),
@@ -6807,12 +6806,11 @@ fn diagnosis_initial_allocations_v2(
         let allocation_contract = pending
             .get_mut(&allocation)
             .ok_or_else(|| "diagnosis allocation contract is missing".to_owned())?;
-        let required_access = diagnosis_access_v2(abi_access)?;
-        let supplied_access = diagnosis_access_v2(argument_access)?;
-        if !diagnosis_access_satisfies_v2(required_access, supplied_access)
+        let required_access = diagnosis_access_v2(abi_access);
+        let supplied_access = diagnosis_access_v2(argument_access);
+        if !supplied_access.satisfies(required_access)
             || (backing.is_none() && supplied_access != allocation_contract.access)
-            || (backing.is_some()
-                && !diagnosis_access_satisfies_v2(supplied_access, allocation_contract.access))
+            || (backing.is_some() && !allocation_contract.access.satisfies(supplied_access))
         {
             return Err("admitted diagnosis buffer access contract changed".to_owned());
         }
@@ -6916,23 +6914,12 @@ const fn diagnosis_scalar_type_v2(
     }
 }
 
-fn diagnosis_access_v2(access: AccessMode) -> Result<DiagnosisAccessModeV2, String> {
+const fn diagnosis_access_v2(access: AccessMode) -> DiagnosisAccessModeV2 {
     match access {
-        AccessMode::ReadOnly => Ok(DiagnosisAccessModeV2::ReadOnly),
-        AccessMode::ReadWrite => Ok(DiagnosisAccessModeV2::ReadWrite),
-        AccessMode::WriteOnly => Err(
-            "diagnosis V2 cannot represent write-only buffer access; a newer diagnosis schema is required"
-                .to_owned(),
-        ),
+        AccessMode::ReadOnly => DiagnosisAccessModeV2::ReadOnly,
+        AccessMode::WriteOnly => DiagnosisAccessModeV2::WriteOnly,
+        AccessMode::ReadWrite => DiagnosisAccessModeV2::ReadWrite,
     }
-}
-
-const fn diagnosis_access_satisfies_v2(
-    required: DiagnosisAccessModeV2,
-    supplied: DiagnosisAccessModeV2,
-) -> bool {
-    matches!(required, DiagnosisAccessModeV2::ReadOnly)
-        || matches!(supplied, DiagnosisAccessModeV2::ReadWrite)
 }
 
 const fn diagnosis_address_space_v2(address_space: AddressSpace) -> AddressSpaceV1 {
@@ -7103,16 +7090,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn diagnosis_v2_access_conversion_rejects_unrepresentable_write_only_access() {
+    fn diagnosis_access_modes_preserve_each_kir_capability() {
         assert_eq!(
             diagnosis_access_v2(AccessMode::ReadOnly),
-            Ok(DiagnosisAccessModeV2::ReadOnly)
+            DiagnosisAccessModeV2::ReadOnly
+        );
+        assert_eq!(
+            diagnosis_access_v2(AccessMode::WriteOnly),
+            DiagnosisAccessModeV2::WriteOnly
         );
         assert_eq!(
             diagnosis_access_v2(AccessMode::ReadWrite),
-            Ok(DiagnosisAccessModeV2::ReadWrite)
+            DiagnosisAccessModeV2::ReadWrite
         );
-        assert!(diagnosis_access_v2(AccessMode::WriteOnly).is_err());
     }
 
     #[test]
