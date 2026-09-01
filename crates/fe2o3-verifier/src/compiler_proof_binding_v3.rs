@@ -24,7 +24,7 @@ use fe2o3_kernel_ir::{
     VerifiedCanonicalKernelIrErrorV5, VerifiedCanonicalKernelIrErrorV8,
     VerifiedCanonicalKernelIrV5, VerifiedCanonicalKernelIrV8,
 };
-use fe2o3_lower_mir_kernel::{
+use fe2o3_mir_kir_contracts::{
     InertCanonicalFormalMemoryAdmissionEvidenceV3, InertCanonicalFormalMemoryAdmissionEvidenceV4,
     InertCanonicalMirToKirCorrespondenceEvidenceV3, InertCanonicalMirToKirCorrespondenceEvidenceV4,
     MirToKirSyntheticRuleEvidenceV4, ProductionCanonicalKernelIrVersionV1,
@@ -1219,7 +1219,7 @@ fn find_statement_span_v4(
     block: u32,
     statement: u32,
 ) -> Result<
-    &fe2o3_lower_mir_kernel::MirToKirStatementSpanEvidenceV4,
+    &fe2o3_mir_kir_contracts::MirToKirStatementSpanEvidenceV4,
     CompilerProofInputValidationErrorV3,
 > {
     correspondence
@@ -1241,7 +1241,7 @@ fn find_terminator_span_v4(
     function: u32,
     block: u32,
 ) -> Result<
-    &fe2o3_lower_mir_kernel::MirToKirTerminatorSpanEvidenceV4,
+    &fe2o3_mir_kir_contracts::MirToKirTerminatorSpanEvidenceV4,
     CompilerProofInputValidationErrorV3,
 > {
     correspondence
@@ -1259,7 +1259,7 @@ fn find_parameter_binding_v4(
     function: u32,
     local: u32,
 ) -> Result<
-    &fe2o3_lower_mir_kernel::MirToKirParameterBindingEvidenceV4,
+    &fe2o3_mir_kir_contracts::MirToKirParameterBindingEvidenceV4,
     CompilerProofInputValidationErrorV3,
 > {
     correspondence

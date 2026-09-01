@@ -12,7 +12,7 @@ use fe2o3_kernel_ir::{
     SemanticDebugNodeV1, SemanticDebugTransformationV1, SemanticDebugUnavailableReasonV1,
     VerifiedCanonicalKernelIrV7, VerifiedCanonicalKernelIrV8,
 };
-use fe2o3_lower_mir_kernel::InertCanonicalMirToKirCorrespondenceEvidenceV4;
+use fe2o3_mir_kir_contracts::InertCanonicalMirToKirCorrespondenceEvidenceV4;
 use fe2o3_mir_model::semantic_mir_v1::{AdmittedInertSemanticMirV1, SemanticMirLimitsV1};
 use sha2::{Digest, Sha256};
 

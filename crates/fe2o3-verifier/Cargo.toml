@@ -18,7 +18,7 @@ fe2o3-contracts.workspace = true
 fe2o3-compiler-lineage.workspace = true
 fe2o3-functional-proof = { workspace = true, features = ["internal-proof-staging"] }
 fe2o3-kernel-ir.workspace = true
-fe2o3-lower-mir-kernel.workspace = true
+fe2o3-mir-kir-contracts.workspace = true
 fe2o3-mir-model.workspace = true
 fe2o3-pliron = { workspace = true, features = ["internal-proof-staging"] }
 fe2o3-proof-contracts.workspace = true

@@ -15,9 +15,8 @@ use fe2o3_kernel_ir::{
     SemanticDebugMappingOutputV1, SemanticDebugMappingV1, SemanticDebugNodeV1,
     SemanticDebugTransformationV1, SemanticDebugUnavailableReasonV1, VerifiedCanonicalKernelIrV7,
 };
-use fe2o3_lower_mir_kernel::{
-    InertCanonicalMirToKirCorrespondenceEvidenceV4, ProductionSemanticKirOwnerV1,
-};
+use fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1;
+use fe2o3_mir_kir_contracts::InertCanonicalMirToKirCorrespondenceEvidenceV4;
 use sha2::{Digest, Sha256};
 
 use crate::production_pipeline::ProductionPipelineError;

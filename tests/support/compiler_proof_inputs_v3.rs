@@ -8,9 +8,9 @@ use fe2o3_functional_proof::{
 };
 use fe2o3_kernel_ir::VerifiedCanonicalKernelIrV5;
 use fe2o3_lower_mir_kernel::{
-    InertCanonicalFormalMemoryAdmissionEvidenceV3, InertCanonicalFormalMemoryAdmissionEvidenceV4,
-    InertCanonicalMirToKirCorrespondenceEvidenceV3, InertCanonicalMirToKirCorrespondenceEvidenceV4,
     ProductionFormalMemoryOwnerV1, ProductionSemanticKirLimitsV1, ProductionSemanticKirOwnerV1,
+    produce_formal_memory_admission_evidence_v3, produce_formal_memory_admission_evidence_v4,
+    produce_mir_to_kir_correspondence_evidence_v3, produce_mir_to_kir_correspondence_evidence_v4,
 };
 use fe2o3_mir_model::analyze_semantic_u32_induction_no_overflow_v1;
 use fe2o3_mir_model::semantic_mir_v1::*;
@@ -126,11 +126,10 @@ fn canonical_compiler_proof_inputs(
             SemanticFunctionIdV1::from_index(0),
         )
         .unwrap();
-        let correspondence =
-            InertCanonicalMirToKirCorrespondenceEvidenceV4::from_live_owner(&semantic_kir, &report)
-                .unwrap()
-                .canonical_bytes()
-                .to_vec();
+        let correspondence = produce_mir_to_kir_correspondence_evidence_v4(&semantic_kir, &report)
+            .unwrap()
+            .canonical_bytes()
+            .to_vec();
         (
             semantic_kir
                 .canonical_kernel_ir_v8()
@@ -142,20 +141,19 @@ fn canonical_compiler_proof_inputs(
     } else {
         let kernel_ir =
             VerifiedCanonicalKernelIrV5::from_module(semantic_kir.module().clone()).unwrap();
-        let correspondence =
-            InertCanonicalMirToKirCorrespondenceEvidenceV3::from_live_owner(&semantic_kir)
-                .unwrap()
-                .canonical_bytes()
-                .to_vec();
+        let correspondence = produce_mir_to_kir_correspondence_evidence_v3(&semantic_kir)
+            .unwrap()
+            .canonical_bytes()
+            .to_vec();
         (kernel_ir.into_canonical_bytes(), correspondence)
     };
     let formal_owner = ProductionFormalMemoryOwnerV1::try_admit(semantic_kir).unwrap();
     let formal_memory = if lossless_correspondence {
-        InertCanonicalFormalMemoryAdmissionEvidenceV4::from_live_owner(&formal_owner)
+        produce_formal_memory_admission_evidence_v4(&formal_owner)
             .unwrap()
             .into_canonical_bytes()
     } else {
-        InertCanonicalFormalMemoryAdmissionEvidenceV3::from_live_owner(&formal_owner)
+        produce_formal_memory_admission_evidence_v3(&formal_owner)
             .unwrap()
             .into_canonical_bytes()
     };

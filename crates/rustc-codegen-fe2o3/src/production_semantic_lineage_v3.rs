@@ -36,10 +36,13 @@ use fe2o3_kernel_ir::{
     VerifiedCanonicalKernelIrV8, VerifiedCanonicalKernelIrV9,
 };
 use fe2o3_lower_mir_kernel::{
+    ProductionEvidenceConstructionErrorV1, ProductionFormalMemoryOwnerV1,
+    produce_formal_memory_admission_evidence_v4, produce_mir_to_kir_correspondence_evidence_v4,
+};
+use fe2o3_mir_kir_contracts::{
     InertCanonicalFormalMemoryAdmissionEvidenceV4, InertCanonicalMirToKirCorrespondenceEvidenceV4,
     ProductionCanonicalKernelIrIdentityV1, ProductionCanonicalKernelIrVersionV1,
     ProductionCorrespondenceEvidenceErrorV4, ProductionFormalMemoryEvidenceErrorV4,
-    ProductionFormalMemoryOwnerV1,
 };
 use fe2o3_mir_model::InertCanonicalSemanticU32InductionEvidenceV1;
 use fe2o3_pliron::InertProductionMiddleEndEvidenceV5;
@@ -321,11 +324,11 @@ fn prepare_lineage_evidence_v1(
                 "singleton lineage has no matching ranked root",
             ))?
             .verification();
-        let correspondence = InertCanonicalMirToKirCorrespondenceEvidenceV4::from_live_owner(
+        let correspondence = produce_mir_to_kir_correspondence_evidence_v4(
             admitted.semantic_kir(),
             verification.semantic_u32_induction(),
         )?;
-        let formal = InertCanonicalFormalMemoryAdmissionEvidenceV4::from_live_owner(admitted)?;
+        let formal = produce_formal_memory_admission_evidence_v4(admitted)?;
         if correspondence.canonical_kernel_ir_identity() != neutral_kir
             || formal.canonical_kernel_ir_identity() != neutral_kir
         {
@@ -1666,6 +1669,7 @@ pub(crate) enum ProductionSemanticLineageErrorV3 {
     LiveOwner(String),
     CanonicalKir(VerifiedCanonicalKernelIrErrorV8),
     CanonicalKirV9(VerifiedCanonicalKernelIrErrorV9),
+    EvidenceConstruction(ProductionEvidenceConstructionErrorV1),
     Correspondence(ProductionCorrespondenceEvidenceErrorV4),
     FormalMemory(ProductionFormalMemoryEvidenceErrorV4),
     VerusEvidence(ProductionMirPlironVerusExecutionEvidenceErrorV1),
@@ -1703,6 +1707,12 @@ impl fmt::Display for ProductionSemanticLineageErrorV3 {
             }
             Self::CanonicalKirV9(error) => {
                 write!(formatter, "production V3 canonical KIR V9 failed: {error}")
+            }
+            Self::EvidenceConstruction(error) => {
+                write!(
+                    formatter,
+                    "production evidence construction failed: {error}"
+                )
             }
             Self::Correspondence(error) => {
                 write!(
@@ -1778,6 +1788,12 @@ impl From<VerifiedCanonicalKernelIrErrorV9> for ProductionSemanticLineageErrorV3
 impl From<ProductionCorrespondenceEvidenceErrorV4> for ProductionSemanticLineageErrorV3 {
     fn from(error: ProductionCorrespondenceEvidenceErrorV4) -> Self {
         Self::Correspondence(error)
+    }
+}
+
+impl From<ProductionEvidenceConstructionErrorV1> for ProductionSemanticLineageErrorV3 {
+    fn from(error: ProductionEvidenceConstructionErrorV1) -> Self {
+        Self::EvidenceConstruction(error)
     }
 }
 

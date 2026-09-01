@@ -192,6 +192,10 @@ service with context-bound results. The detached KIR-envelope and
 kernel-to-GPU services were removed; ranked construction, bounds verification,
 semantic MIR projection, and generic ranked-memory lowering belong only to the
 production-owned transaction.
+Authority-free, versioned MIR-to-KIR correspondence and formal-memory evidence
+are owned by `fe2o3-mir-kir-contracts`. Lowering converts live owners into those
+contracts, while independent verifiers consume only canonical bytes and strict
+decoders from the canonical layer.
 
 The mandatory [general Kernel IR check pipeline](general-kernel-check-pipeline-v1.md)
 runs before Pliron projection or transformation. It is a closed target-neutral

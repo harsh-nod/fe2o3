@@ -723,6 +723,9 @@ run_auxiliary_tests() {
   run_step compiler-execution-qualification-base-contract \
     bash scripts/tests/compiler-execution-qualification-base.sh
   run_step s09-debug-checker bash scripts/tests/s09-debug.sh
+  run_step verifier-proof-input-integration \
+    cargo test --locked \
+      --manifest-path tests/fixtures/fe2o3-verifier-integration/Cargo.toml
 }
 
 run_shard_policy() {

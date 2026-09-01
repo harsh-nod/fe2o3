@@ -14,6 +14,7 @@ dialect-gpu.workspace = true
 dialect-kernel.workspace = true
 dialect-mir = { workspace = true, features = ["pliron"] }
 fe2o3-kernel-ir.workspace = true
+fe2o3-mir-kir-contracts.workspace = true
 fe2o3-mir-model.workspace = true
 fe2o3-pliron.workspace = true
 pliron.workspace = true

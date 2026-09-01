@@ -29,6 +29,7 @@
         "fe2o3-kernel-ir",
         "fe2o3-llvm-handoff",
         "fe2o3-loop-device",
+        "fe2o3-mir-kir-contracts",
         "fe2o3-mir-model",
         "fe2o3-process-identity",
         "fe2o3-proof-contracts",
@@ -157,13 +158,6 @@
       "to": "dialect-amdgcn",
       "kinds": [
         "dev"
-      ]
-    },
-    {
-      "from": "fe2o3-verifier",
-      "to": "fe2o3-lower-mir-kernel",
-      "kinds": [
-        "normal"
       ]
     },
     {

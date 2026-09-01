@@ -4,7 +4,7 @@ use fe2o3_compiler_lineage::{
     InertProofBindingAssociationInputsV3, InertProofBindingAssociationV3,
     InertProofBindingReceiptV3,
 };
-#[path = "../../../tests/support/compiler_proof_inputs_v3.rs"]
+#[path = "../../../support/compiler_proof_inputs_v3.rs"]
 mod compiler_proof_inputs_v3;
 
 use compiler_proof_inputs_v3::canonical_compiler_proof_inputs_v3;

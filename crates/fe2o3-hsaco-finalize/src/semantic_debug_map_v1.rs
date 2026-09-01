@@ -19,7 +19,7 @@ use fe2o3_kernel_ir::{
     SemanticDebugUnavailableReasonV1, VerifiedCanonicalKernelIrV8, decode_module_v7,
     semantic_debug_map_identity_v1,
 };
-use fe2o3_lower_mir_kernel::{
+use fe2o3_mir_kir_contracts::{
     InertCanonicalMirToKirCorrespondenceEvidenceV4, ProductionCanonicalKernelIrVersionV1,
 };
 use fe2o3_mir_model::semantic_mir_v1::{AdmittedInertSemanticMirV1, SemanticMirLimitsV1};
@@ -1240,7 +1240,7 @@ mod production_correspondence_tests {
         SemanticDebugMappingV1, SemanticDebugNodeV1, SemanticDebugTransformationV1,
         SemanticDebugUnavailableReasonV1, VerifiedCanonicalKernelIrV7, VerifiedCanonicalKernelIrV8,
     };
-    use fe2o3_lower_mir_kernel::InertCanonicalMirToKirCorrespondenceEvidenceV4;
+    use fe2o3_mir_kir_contracts::InertCanonicalMirToKirCorrespondenceEvidenceV4;
     use fe2o3_mir_model::semantic_mir_v1::{AdmittedInertSemanticMirV1, SemanticMirLimitsV1};
     use sha2::{Digest, Sha256};
 

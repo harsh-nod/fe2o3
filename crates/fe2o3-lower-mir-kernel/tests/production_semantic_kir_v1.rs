@@ -14,7 +14,8 @@ use fe2o3_lower_mir_kernel::{
     ProductionFormalMemoryOwnerV1, ProductionRankedAccessSourceV1,
     ProductionRankedSemanticProjectionReceiptV1, ProductionSemanticKirErrorV1,
     ProductionSemanticKirLimitsV1, ProductionSemanticKirOwnerV1, ProductionSemanticKirResourceV1,
-    SemanticKirSyntheticOperationRuleV1, validate_borrowed_ranked_semantic_projection_candidate_v1,
+    SemanticKirSyntheticOperationRuleV1, produce_formal_memory_admission_evidence_v3,
+    validate_borrowed_ranked_semantic_projection_candidate_v1,
 };
 use fe2o3_mir_model::semantic_mir_v1::*;
 use fe2o3_pliron::{
@@ -1960,8 +1961,7 @@ fn ranked_checks_remain_in_custody_through_kir_and_formal_memory() {
                 _ => unreachable!(),
             })
         );
-        let evidence =
-            InertCanonicalFormalMemoryAdmissionEvidenceV3::from_live_owner(&formal).unwrap();
+        let evidence = produce_formal_memory_admission_evidence_v3(&formal).unwrap();
         assert_eq!(evidence.witness_extent(), 1_u64 << rank);
         evidence.revalidate().unwrap();
     }

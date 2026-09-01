@@ -19,7 +19,7 @@ use fe2o3_verifier::{
     ValidatedCompilerProofInputsV4, validate_compiler_proof_inputs_v4,
 };
 
-#[path = "../../../tests/support/compiler_proof_inputs_v3.rs"]
+#[path = "../../../support/compiler_proof_inputs_v3.rs"]
 mod compiler_proof_inputs_v3;
 use compiler_proof_inputs_v3::{
     CanonicalCompilerProofInputsV3, canonical_compiler_proof_inputs_v4,
