@@ -229,19 +229,6 @@ fn with_utf8_args(args: &[OsString], command: impl FnOnce(&[String]) -> ExitCode
     command(&args)
 }
 
-fn report(result: Result<String, String>) -> ExitCode {
-    match result {
-        Ok(output) => {
-            println!("{output}");
-            ExitCode::SUCCESS
-        }
-        Err(error) => {
-            eprintln!("{error}");
-            ExitCode::FAILURE
-        }
-    }
-}
-
 fn tool_report(result: Result<tool_commands::CommandReport, String>) -> ExitCode {
     match result {
         Ok(report) => {
