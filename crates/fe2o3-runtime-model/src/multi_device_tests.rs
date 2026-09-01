@@ -438,11 +438,56 @@ fn retention(transfer: PeerTransferRequestV1, id: u64) -> PeerTransferRetentionV
     )
 }
 
+fn current_observation(fixture: &Fixture) -> UntrustedPeerTopologyObservationV1 {
+    peer_observation(
+        fixture.source,
+        fixture.destination,
+        fixture.source_vm,
+        fixture.destination_vm,
+    )
+}
+
+fn replacement_identity_and_observation(
+    fixture: &Fixture,
+) -> (DeviceIdentityStateV1, UntrustedPeerTopologyObservationV1) {
+    let identity = fixture
+        .identity
+        .retire_vm_model_only(fixture.source_vm)
+        .unwrap()
+        .retire_vm_model_only(fixture.destination_vm)
+        .unwrap()
+        .retire_device_model_only(fixture.source)
+        .unwrap()
+        .retire_device_model_only(fixture.destination)
+        .unwrap();
+    let (identity, source) = identity
+        .register_device_model_only(fixture.source.correlation(), DeviceGenerationV1(2))
+        .unwrap();
+    let (identity, destination) = identity
+        .register_device_model_only(fixture.destination.correlation(), DeviceGenerationV1(2))
+        .unwrap();
+    let (identity, source_vm) = identity
+        .register_vm_model_only(
+            source,
+            vm_observation(source, fixture.source_vm.model_key().id.0),
+        )
+        .unwrap();
+    let (identity, destination_vm) = identity
+        .register_vm_model_only(
+            destination,
+            vm_observation(destination, fixture.destination_vm.model_key().id.0),
+        )
+        .unwrap();
+    let observation = peer_observation(source, destination, source_vm, destination_vm);
+    (identity, observation)
+}
+
 fn registry(fixture: &Fixture, incarnation: u8) -> PeerTransferRegistryV1 {
     PeerTransferRegistryV1::new_model_only(
         fixture.identity.clone(),
         fixture.memory.clone(),
         fixture.topology,
+        current_observation(fixture),
         digest(incarnation),
     )
     .unwrap()
@@ -538,6 +583,7 @@ fn topology_binds_exact_devices_profiles_vms_and_generations() {
             substituted_identity,
             fixture.memory.clone(),
             fixture.topology,
+            current_observation(&fixture),
             digest(91),
         )
         .unwrap_err()
@@ -561,13 +607,31 @@ fn peer_transfer_retains_exact_regions_until_visibility_consumption() {
     let retained = retention(transfer, 1_000);
     let completion = completion(31);
     let reserved = registry
-        .reserve_model_only(transfer, completion, retained)
+        .reserve_model_only(
+            &fixture.identity,
+            current_observation(&fixture),
+            transfer,
+            completion,
+            retained,
+        )
         .unwrap();
+    let binding = reserved.binding();
     assert_eq!(registry.retained_transfer_count(), 1);
     for publication in [retained.source(), retained.destination()] {
         assert!(registry.memory_state().publications().iter().any(|record| {
-            record.key == publication && record.state == MemoryPublicationStateV1::Live
+            record.key == publication
+                && record.owner
+                    == MemoryPublicationOwnerV1::PeerTransfer(binding.publication_owner())
+                && record.state == MemoryPublicationStateV1::Live
         }));
+        assert_eq!(
+            registry
+                .memory_state()
+                .next(MemoryTransitionV1::ReleasePublication { key: publication }),
+            Err(MemoryTransitionErrorV1::ResourceInUse(
+                MemoryRecordRefV1::Publication(publication)
+            ))
+        );
     }
     assert_eq!(
         registry
@@ -579,10 +643,19 @@ fn peer_transfer_retains_exact_regions_until_visibility_consumption() {
             MemoryRecordRefV1::Mapping(transfer.destination().mapping())
         ))
     );
-    let published = reserved.publish_model_only(&mut registry, 40).unwrap();
+    let published = reserved
+        .publish_model_only(
+            &mut registry,
+            &fixture.identity,
+            current_observation(&fixture),
+            40,
+        )
+        .unwrap();
     let failure = published
         .poll_model_only(
             &mut registry,
+            &fixture.identity,
+            current_observation(&fixture),
             PeerTransferCompletionObservationV1::Completed {
                 completion,
                 acquire_sequence: 40,
@@ -594,6 +667,8 @@ fn peer_transfer_retains_exact_regions_until_visibility_consumption() {
     let visible = match published
         .poll_model_only(
             &mut registry,
+            &fixture.identity,
+            current_observation(&fixture),
             PeerTransferCompletionObservationV1::Completed {
                 completion,
                 acquire_sequence: 41,
@@ -608,7 +683,11 @@ fn peer_transfer_retains_exact_regions_until_visibility_consumption() {
     assert_eq!(visible.visible_device(), fixture.destination.model_key());
     assert_eq!(visible.acquire_sequence(), 41);
     let receipt = visible
-        .release_after_visibility_consumed_model_only(&mut registry)
+        .release_after_visibility_consumed_model_only(
+            &mut registry,
+            &fixture.identity,
+            current_observation(&fixture),
+        )
         .unwrap();
     assert_eq!(receipt.request(), transfer);
     assert_eq!(receipt.acquire_sequence(), Some(41));
@@ -616,6 +695,62 @@ fn peer_transfer_retains_exact_regions_until_visibility_consumption() {
     let (identity, memory) = registry.into_states().unwrap();
     identity.validate_global_invariants().unwrap();
     memory.validate_global_invariants().unwrap();
+}
+
+#[test]
+fn peer_publication_owner_rejects_different_transfer_release() {
+    let fixture = fixture();
+    let first_request = request(
+        &fixture,
+        1,
+        fixture.source_mapping,
+        fixture.destination_mapping,
+        0,
+        0,
+    );
+    let second_request = request(
+        &fixture,
+        2,
+        fixture.source_mapping,
+        fixture.destination_mapping,
+        0x800,
+        0x800,
+    );
+    let first_retention = retention(first_request, 1_050);
+    let mut registry = registry(&fixture, 31);
+    let first = registry
+        .reserve_model_only(
+            &fixture.identity,
+            current_observation(&fixture),
+            first_request,
+            completion(32),
+            first_retention,
+        )
+        .unwrap();
+    let second = registry
+        .reserve_model_only(
+            &fixture.identity,
+            current_observation(&fixture),
+            second_request,
+            completion(33),
+            retention(second_request, 1_060),
+        )
+        .unwrap();
+    assert_eq!(
+        registry
+            .memory_state()
+            .release_peer_transfer_publication(first_retention.source(), second.binding()),
+        Err(MemoryTransitionErrorV1::BindingMismatch(
+            MemoryRecordRefV1::Publication(first_retention.source())
+        ))
+    );
+    first
+        .cancel_before_publication_model_only(&mut registry)
+        .unwrap();
+    second
+        .cancel_before_publication_model_only(&mut registry)
+        .unwrap();
+    assert_eq!(registry.retained_transfer_count(), 0);
 }
 
 #[test]
@@ -631,7 +766,13 @@ fn peer_transfer_cancellation_and_ambiguity_have_distinct_custody() {
     );
     let mut cancelled_registry = registry(&fixture, 32);
     let cancelled = cancelled_registry
-        .reserve_model_only(transfer, completion(33), retention(transfer, 1_100))
+        .reserve_model_only(
+            &fixture.identity,
+            current_observation(&fixture),
+            transfer,
+            completion(33),
+            retention(transfer, 1_100),
+        )
         .unwrap()
         .cancel_before_publication_model_only(&mut cancelled_registry)
         .unwrap();
@@ -641,13 +782,26 @@ fn peer_transfer_cancellation_and_ambiguity_have_distinct_custody() {
     let mut ambiguous_registry = registry(&fixture, 34);
     let retained = retention(transfer, 1_200);
     let published = ambiguous_registry
-        .reserve_model_only(transfer, completion(35), retained)
+        .reserve_model_only(
+            &fixture.identity,
+            current_observation(&fixture),
+            transfer,
+            completion(35),
+            retained,
+        )
         .unwrap()
-        .publish_model_only(&mut ambiguous_registry, 50)
+        .publish_model_only(
+            &mut ambiguous_registry,
+            &fixture.identity,
+            current_observation(&fixture),
+            50,
+        )
         .unwrap();
     let quarantine = match published
         .poll_model_only(
             &mut ambiguous_registry,
+            &fixture.identity,
+            current_observation(&fixture),
             PeerTransferCompletionObservationV1::Indeterminate,
         )
         .unwrap()
@@ -658,6 +812,235 @@ fn peer_transfer_cancellation_and_ambiguity_have_distinct_custody() {
     assert_eq!(quarantine.request(), transfer);
     assert_eq!(ambiguous_registry.retained_transfer_count(), 1);
     assert!(ambiguous_registry.into_states().is_err());
+}
+
+#[test]
+fn publish_rejects_stale_replacement_and_lost_capability_observations() {
+    let fixture = fixture();
+    let transfer = request(
+        &fixture,
+        1,
+        fixture.source_mapping,
+        fixture.destination_mapping,
+        0,
+        0,
+    );
+
+    let stale_identity = fixture
+        .identity
+        .retire_vm_model_only(fixture.source_vm)
+        .unwrap();
+    let mut stale_registry = registry(&fixture, 70);
+    let reserved = stale_registry
+        .reserve_model_only(
+            &fixture.identity,
+            current_observation(&fixture),
+            transfer,
+            completion(71),
+            retention(transfer, 4_000),
+        )
+        .unwrap();
+    let failure = reserved
+        .publish_model_only(
+            &mut stale_registry,
+            &stale_identity,
+            current_observation(&fixture),
+            80,
+        )
+        .unwrap_err();
+    assert_eq!(
+        failure.error(),
+        PeerTransferErrorV1::Topology(PeerTopologyAdmissionErrorV1::VmNotCurrent)
+    );
+    failure
+        .into_retained()
+        .cancel_before_publication_model_only(&mut stale_registry)
+        .unwrap();
+
+    let (replacement_identity, replacement_observation) =
+        replacement_identity_and_observation(&fixture);
+    let mut replacement_registry = registry(&fixture, 72);
+    let reserved = replacement_registry
+        .reserve_model_only(
+            &fixture.identity,
+            current_observation(&fixture),
+            transfer,
+            completion(73),
+            retention(transfer, 4_100),
+        )
+        .unwrap();
+    let failure = reserved
+        .publish_model_only(
+            &mut replacement_registry,
+            &replacement_identity,
+            replacement_observation,
+            81,
+        )
+        .unwrap_err();
+    assert_eq!(
+        failure.error(),
+        PeerTransferErrorV1::Topology(PeerTopologyAdmissionErrorV1::MemoryVmMismatch)
+    );
+    failure
+        .into_retained()
+        .cancel_before_publication_model_only(&mut replacement_registry)
+        .unwrap();
+
+    for (offset, expected) in [
+        (0_u64, PeerTopologyAdmissionErrorV1::PeerAccessUnavailable),
+        (
+            100_u64,
+            PeerTopologyAdmissionErrorV1::VirtualMemoryManagementUnavailable,
+        ),
+    ] {
+        let mut lost_capability = current_observation(&fixture);
+        if offset == 0 {
+            lost_capability.peer_access_supported = false;
+        } else {
+            lost_capability.virtual_memory_management_supported = false;
+        }
+        let mut capability_registry = registry(&fixture, 74 + offset as u8);
+        let reserved = capability_registry
+            .reserve_model_only(
+                &fixture.identity,
+                current_observation(&fixture),
+                transfer,
+                completion(75 + offset as u8),
+                retention(transfer, 4_200 + offset),
+            )
+            .unwrap();
+        let failure = reserved
+            .publish_model_only(
+                &mut capability_registry,
+                &fixture.identity,
+                lost_capability,
+                82 + offset,
+            )
+            .unwrap_err();
+        assert_eq!(failure.error(), PeerTransferErrorV1::Topology(expected));
+        failure
+            .into_retained()
+            .cancel_before_publication_model_only(&mut capability_registry)
+            .unwrap();
+    }
+}
+
+#[test]
+fn submitted_currentness_loss_requires_explicit_quarantine() {
+    let fixture = fixture();
+    let transfer = request(
+        &fixture,
+        1,
+        fixture.source_mapping,
+        fixture.destination_mapping,
+        0,
+        0,
+    );
+    let retained = retention(transfer, 4_500);
+    let mut registry = registry(&fixture, 80);
+    let published = registry
+        .reserve_model_only(
+            &fixture.identity,
+            current_observation(&fixture),
+            transfer,
+            completion(81),
+            retained,
+        )
+        .unwrap()
+        .publish_model_only(
+            &mut registry,
+            &fixture.identity,
+            current_observation(&fixture),
+            90,
+        )
+        .unwrap();
+    let mut lost_capability = current_observation(&fixture);
+    lost_capability.peer_access_supported = false;
+    let failure = published
+        .poll_model_only(
+            &mut registry,
+            &fixture.identity,
+            lost_capability,
+            PeerTransferCompletionObservationV1::Pending,
+        )
+        .unwrap_err();
+    assert_eq!(
+        failure.error(),
+        PeerTransferErrorV1::Topology(PeerTopologyAdmissionErrorV1::PeerAccessUnavailable)
+    );
+    let quarantine = failure
+        .into_retained()
+        .quarantine_currentness_loss_model_only(&mut registry)
+        .unwrap();
+    assert_eq!(quarantine.request(), transfer);
+    assert_eq!(registry.retained_transfer_count(), 1);
+    assert!(registry.into_states().is_err());
+}
+
+#[test]
+fn visibility_release_revalidates_currentness_or_quarantines() {
+    let fixture = fixture();
+    let transfer = request(
+        &fixture,
+        1,
+        fixture.source_mapping,
+        fixture.destination_mapping,
+        0,
+        0,
+    );
+    let completion = completion(83);
+    let mut registry = registry(&fixture, 82);
+    let published = registry
+        .reserve_model_only(
+            &fixture.identity,
+            current_observation(&fixture),
+            transfer,
+            completion,
+            retention(transfer, 4_600),
+        )
+        .unwrap()
+        .publish_model_only(
+            &mut registry,
+            &fixture.identity,
+            current_observation(&fixture),
+            100,
+        )
+        .unwrap();
+    let visible = match published
+        .poll_model_only(
+            &mut registry,
+            &fixture.identity,
+            current_observation(&fixture),
+            PeerTransferCompletionObservationV1::Completed {
+                completion,
+                acquire_sequence: 101,
+            },
+        )
+        .unwrap()
+    {
+        PeerTransferPollV1::Completed(visible) => visible,
+        other => panic!("unexpected peer transfer poll: {other:?}"),
+    };
+    let (replacement_identity, replacement_observation) =
+        replacement_identity_and_observation(&fixture);
+    let failure = visible
+        .release_after_visibility_consumed_model_only(
+            &mut registry,
+            &replacement_identity,
+            replacement_observation,
+        )
+        .unwrap_err();
+    assert_eq!(
+        failure.error(),
+        PeerTransferErrorV1::Topology(PeerTopologyAdmissionErrorV1::MemoryVmMismatch)
+    );
+    let quarantine = failure
+        .into_retained()
+        .quarantine_currentness_loss_model_only(&mut registry)
+        .unwrap();
+    assert_eq!(quarantine.request(), transfer);
+    assert_eq!(registry.retained_transfer_count(), 1);
+    assert!(registry.into_states().is_err());
 }
 
 #[test]
@@ -825,6 +1208,8 @@ fn hostile_ranges_access_aliases_and_generation_substitution_reject() {
         assert_eq!(
             registry
                 .reserve_model_only(
+                    &fixture.identity,
+                    current_observation(&fixture),
                     request,
                     completion(50 + index as u8),
                     retention(request, 2_000 + 2 * index as u64),
@@ -857,6 +1242,8 @@ fn allocation_alias_conflicts_and_cross_registry_request_substitution_reject() {
     let mut conflict_registry = registry(&fixture, 60);
     let first = conflict_registry
         .reserve_model_only(
+            &fixture.identity,
+            current_observation(&fixture),
             first_request,
             completion(61),
             retention(first_request, 3_000),
@@ -865,6 +1252,8 @@ fn allocation_alias_conflicts_and_cross_registry_request_substitution_reject() {
     assert_eq!(
         conflict_registry
             .reserve_model_only(
+                &fixture.identity,
+                current_observation(&fixture),
                 alias_request,
                 completion(62),
                 retention(alias_request, 3_100)
@@ -889,13 +1278,30 @@ fn allocation_alias_conflicts_and_cross_registry_request_substitution_reject() {
     let mut first_registry = registry(&fixture, 64);
     let mut second_registry = registry(&fixture, 64);
     let first_token = first_registry
-        .reserve_model_only(first_request, shared_completion, shared_retention)
+        .reserve_model_only(
+            &fixture.identity,
+            current_observation(&fixture),
+            first_request,
+            shared_completion,
+            shared_retention,
+        )
         .unwrap();
     let second_token = second_registry
-        .reserve_model_only(second_request, shared_completion, shared_retention)
+        .reserve_model_only(
+            &fixture.identity,
+            current_observation(&fixture),
+            second_request,
+            shared_completion,
+            shared_retention,
+        )
         .unwrap();
     let failure = first_token
-        .publish_model_only(&mut second_registry, 70)
+        .publish_model_only(
+            &mut second_registry,
+            &fixture.identity,
+            current_observation(&fixture),
+            70,
+        )
         .unwrap_err();
     assert_eq!(failure.error(), PeerTransferErrorV1::TokenMismatch);
     failure
@@ -922,13 +1328,30 @@ fn allocation_alias_conflicts_and_cross_registry_request_substitution_reject() {
     let mut original_registry = registry(&fixture, 65);
     let mut substituted_registry = registry(&substituted_fixture, 65);
     let original_token = original_registry
-        .reserve_model_only(first_request, shared_completion, shared_retention)
+        .reserve_model_only(
+            &fixture.identity,
+            current_observation(&fixture),
+            first_request,
+            shared_completion,
+            shared_retention,
+        )
         .unwrap();
     let substituted_token = substituted_registry
-        .reserve_model_only(substituted_request, shared_completion, shared_retention)
+        .reserve_model_only(
+            &substituted_fixture.identity,
+            current_observation(&substituted_fixture),
+            substituted_request,
+            shared_completion,
+            shared_retention,
+        )
         .unwrap();
     let failure = original_token
-        .publish_model_only(&mut substituted_registry, 71)
+        .publish_model_only(
+            &mut substituted_registry,
+            &substituted_fixture.identity,
+            current_observation(&substituted_fixture),
+            71,
+        )
         .unwrap_err();
     assert_eq!(failure.error(), PeerTransferErrorV1::TokenMismatch);
     failure

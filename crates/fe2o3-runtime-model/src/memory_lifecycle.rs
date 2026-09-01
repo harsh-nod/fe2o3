@@ -144,6 +144,7 @@ pub enum MemoryPublicationStateV1 {
 pub enum MemoryPublicationOwnerV1 {
     Generic,
     ComputeAqlQueue(QueueKeyV1),
+    PeerTransfer(PeerTransferPublicationOwnerV1),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -567,6 +568,47 @@ impl MemoryLifecycleStateV1 {
             .map_err(MemoryTransitionErrorV1::SourceInvariant)?;
         let mut next = self.clone();
         next.release_queue_publication(key, queue)?;
+        next.validate_global_invariants()
+            .map_err(MemoryTransitionErrorV1::NextInvariant)?;
+        Ok(next)
+    }
+
+    pub(crate) fn publish_peer_transfer_mapping(
+        &self,
+        key: MemoryPublicationKeyV1,
+        binding: PeerTransferBindingV1,
+    ) -> Result<Self, MemoryTransitionErrorV1> {
+        self.validate_global_invariants()
+            .map_err(MemoryTransitionErrorV1::SourceInvariant)?;
+        if !binding.retains_publication(key) {
+            return Err(MemoryTransitionErrorV1::BindingMismatch(
+                MemoryRecordRefV1::Publication(key),
+            ));
+        }
+        let mut next = self.clone();
+        next.publish_mapping(
+            key,
+            MemoryPublicationOwnerV1::PeerTransfer(binding.publication_owner()),
+        )?;
+        next.validate_global_invariants()
+            .map_err(MemoryTransitionErrorV1::NextInvariant)?;
+        Ok(next)
+    }
+
+    pub(crate) fn release_peer_transfer_publication(
+        &self,
+        key: MemoryPublicationKeyV1,
+        binding: PeerTransferBindingV1,
+    ) -> Result<Self, MemoryTransitionErrorV1> {
+        self.validate_global_invariants()
+            .map_err(MemoryTransitionErrorV1::SourceInvariant)?;
+        if !binding.retains_publication(key) {
+            return Err(MemoryTransitionErrorV1::BindingMismatch(
+                MemoryRecordRefV1::Publication(key),
+            ));
+        }
+        let mut next = self.clone();
+        next.release_peer_publication(key, binding)?;
         next.validate_global_invariants()
             .map_err(MemoryTransitionErrorV1::NextInvariant)?;
         Ok(next)
@@ -1081,6 +1123,24 @@ impl MemoryLifecycleStateV1 {
         Ok(())
     }
 
+    fn release_peer_publication(
+        &mut self,
+        key: MemoryPublicationKeyV1,
+        binding: PeerTransferBindingV1,
+    ) -> Result<(), MemoryTransitionErrorV1> {
+        let reference = MemoryRecordRefV1::Publication(key);
+        let publication = self.publication(key)?;
+        if publication.owner != MemoryPublicationOwnerV1::PeerTransfer(binding.publication_owner())
+        {
+            return Err(MemoryTransitionErrorV1::BindingMismatch(reference));
+        }
+        if publication.state != MemoryPublicationStateV1::Live {
+            return Err(MemoryTransitionErrorV1::IllegalState(reference));
+        }
+        self.publication_mut(key)?.state = MemoryPublicationStateV1::Released;
+        Ok(())
+    }
+
     fn validate_capacities(&self) -> Result<(), MemoryInvariantViolationV1> {
         for (actual, maximum, kind) in [
             (self.vms.len(), MAX_MEMORY_VMS_V1, MemoryRecordKindV1::Vm),
@@ -1306,12 +1366,20 @@ impl MemoryLifecycleStateV1 {
             if publication.key.id.0 == 0 {
                 return Err(MemoryInvariantViolationV1::InvalidIdentity(reference));
             }
-            if let MemoryPublicationOwnerV1::ComputeAqlQueue(queue) = publication.owner
-                && (queue.vm != publication.key.mapping.allocation.vm
-                    || queue.id.0 == 0
-                    || queue.generation.0 == 0)
-            {
-                return Err(MemoryInvariantViolationV1::BindingMismatch(reference));
+            match publication.owner {
+                MemoryPublicationOwnerV1::Generic => {}
+                MemoryPublicationOwnerV1::ComputeAqlQueue(queue)
+                    if queue.vm != publication.key.mapping.allocation.vm
+                        || queue.id.0 == 0
+                        || queue.generation.0 == 0 =>
+                {
+                    return Err(MemoryInvariantViolationV1::BindingMismatch(reference));
+                }
+                MemoryPublicationOwnerV1::PeerTransfer(owner) if !owner.has_valid_identity() => {
+                    return Err(MemoryInvariantViolationV1::BindingMismatch(reference));
+                }
+                MemoryPublicationOwnerV1::ComputeAqlQueue(_)
+                | MemoryPublicationOwnerV1::PeerTransfer(_) => {}
             }
             if publication.state == MemoryPublicationStateV1::Live
                 && mapping.state != MemoryMappingStateV1::Mapped

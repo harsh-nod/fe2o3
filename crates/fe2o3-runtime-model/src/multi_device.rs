@@ -81,6 +81,7 @@ pub enum PeerTopologyAdmissionErrorV1 {
     InvalidMemoryState,
     MemoryVmMismatch,
     DeviceSetMismatch,
+    TopologyIdentityMismatch,
 }
 
 /// Exact directional peer relationship admitted by the executable model.
@@ -410,6 +411,43 @@ impl PeerTransferRetentionV1 {
     }
 }
 
+/// Structural memory-publication owner for one exact modeled peer transfer.
+///
+/// This identity prevents generic or different-transfer model transitions from
+/// discharging retained mappings. It grants no native memory or peer authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PeerTransferPublicationOwnerV1 {
+    registry_incarnation: IdentityDigestV1,
+    transfer_id: u64,
+    topology_id: PeerTopologyIdV1,
+    completion: PeerTransferCompletionIdV1,
+}
+
+impl PeerTransferPublicationOwnerV1 {
+    pub const fn registry_incarnation(self) -> IdentityDigestV1 {
+        self.registry_incarnation
+    }
+
+    pub const fn transfer_id(self) -> u64 {
+        self.transfer_id
+    }
+
+    pub const fn topology_id(self) -> PeerTopologyIdV1 {
+        self.topology_id
+    }
+
+    pub const fn completion(self) -> PeerTransferCompletionIdV1 {
+        self.completion
+    }
+
+    pub(crate) fn has_valid_identity(self) -> bool {
+        self.transfer_id != 0
+            && !digest_is_zero(self.registry_incarnation)
+            && !digest_is_zero(self.topology_id.digest())
+            && !digest_is_zero(self.completion.digest())
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PeerTransferBindingV1 {
     registry_incarnation: IdentityDigestV1,
@@ -442,6 +480,25 @@ impl PeerTransferBindingV1 {
 
     pub const fn retention(self) -> PeerTransferRetentionV1 {
         self.retention
+    }
+
+    pub const fn publication_owner(self) -> PeerTransferPublicationOwnerV1 {
+        PeerTransferPublicationOwnerV1 {
+            registry_incarnation: self.registry_incarnation,
+            transfer_id: self.transfer_id,
+            topology_id: self.topology.topology_id,
+            completion: self.completion,
+        }
+    }
+
+    pub(crate) fn retains_publication(self, key: MemoryPublicationKeyV1) -> bool {
+        (key.id.0 != 0)
+            && (key == self.retention.source || key == self.retention.destination)
+            && self.retention.source != self.retention.destination
+            && self.transfer_id != 0
+            && !digest_is_zero(self.registry_incarnation)
+            && !digest_is_zero(self.topology.topology_id.digest())
+            && !digest_is_zero(self.completion.digest())
     }
 }
 
@@ -532,12 +589,13 @@ impl PeerTransferRegistryV1 {
         identity: DeviceIdentityStateV1,
         memory: MemoryLifecycleStateV1,
         topology: ModelPeerTopologyV1,
+        current_observation: UntrustedPeerTopologyObservationV1,
         registry_incarnation: IdentityDigestV1,
     ) -> Result<Self, PeerTransferRegistryCreateFailureV1> {
         let error = if digest_is_zero(registry_incarnation) {
             Some(PeerTransferErrorV1::InvalidRegistryIncarnation)
         } else {
-            validate_peer_topology_current(&identity, &memory, topology)
+            validate_peer_topology_current(&identity, &memory, topology, current_observation)
                 .err()
                 .map(PeerTransferErrorV1::Topology)
         };
@@ -590,6 +648,8 @@ impl PeerTransferRegistryV1 {
 
     pub fn reserve_model_only(
         &mut self,
+        identity: &DeviceIdentityStateV1,
+        current_observation: UntrustedPeerTopologyObservationV1,
         request: PeerTransferRequestV1,
         completion: PeerTransferCompletionIdV1,
         retention: PeerTransferRetentionV1,
@@ -597,7 +657,7 @@ impl PeerTransferRegistryV1 {
         if self.records.len() >= MAX_PEER_TRANSFER_RECORDS_V1 {
             return Err(PeerTransferErrorV1::CapacityExceeded);
         }
-        self.validate_context()?;
+        self.validate_context(identity, current_observation)?;
         validate_peer_transfer_request(&self.memory, self.topology, request)
             .map_err(PeerTransferErrorV1::Admission)?;
         if digest_is_zero(completion.digest()) {
@@ -625,17 +685,6 @@ impl PeerTransferRegistryV1 {
         }) {
             return Err(PeerTransferErrorV1::ResourceConflict);
         }
-        let source_published = self
-            .memory
-            .next(MemoryTransitionV1::PublishMapping {
-                key: retention.source,
-            })
-            .map_err(PeerTransferErrorV1::Memory)?;
-        let retained = source_published
-            .next(MemoryTransitionV1::PublishMapping {
-                key: retention.destination,
-            })
-            .map_err(PeerTransferErrorV1::Memory)?;
         let binding = PeerTransferBindingV1 {
             registry_incarnation: self.registry_incarnation,
             transfer_id: request.transfer_id,
@@ -643,6 +692,14 @@ impl PeerTransferRegistryV1 {
             completion,
             retention,
         };
+        let source_published = self
+            .memory
+            .publish_peer_transfer_mapping(retention.source, binding)
+            .map_err(PeerTransferErrorV1::Memory)?;
+        let retained = source_published
+            .publish_peer_transfer_mapping(retention.destination, binding)
+            .map_err(PeerTransferErrorV1::Memory)?;
+        self.identity = identity.clone();
         self.memory = retained;
         self.records.push(PeerTransferRecordV1 {
             binding,
@@ -652,8 +709,12 @@ impl PeerTransferRegistryV1 {
         Ok(PeerTransferReservedTokenV1 { binding, request })
     }
 
-    fn validate_context(&self) -> Result<(), PeerTransferErrorV1> {
-        validate_peer_topology_current(&self.identity, &self.memory, self.topology)
+    fn validate_context(
+        &self,
+        identity: &DeviceIdentityStateV1,
+        current_observation: UntrustedPeerTopologyObservationV1,
+    ) -> Result<(), PeerTransferErrorV1> {
+        validate_peer_topology_current(identity, &self.memory, self.topology, current_observation)
             .map_err(PeerTransferErrorV1::Topology)
     }
 
@@ -676,32 +737,32 @@ impl PeerTransferRegistryV1 {
 
     fn release_retention(
         &self,
-        retention: PeerTransferRetentionV1,
+        binding: PeerTransferBindingV1,
     ) -> Result<MemoryLifecycleStateV1, PeerTransferErrorV1> {
+        let retention = binding.retention;
         let source_released = self
             .memory
-            .next(MemoryTransitionV1::ReleasePublication {
-                key: retention.source,
-            })
+            .release_peer_transfer_publication(retention.source, binding)
             .map_err(PeerTransferErrorV1::Memory)?;
         source_released
-            .next(MemoryTransitionV1::ReleasePublication {
-                key: retention.destination,
-            })
+            .release_peer_transfer_publication(retention.destination, binding)
             .map_err(PeerTransferErrorV1::Memory)
     }
 
     fn publish(
         &mut self,
+        identity: &DeviceIdentityStateV1,
+        current_observation: UntrustedPeerTopologyObservationV1,
         binding: PeerTransferBindingV1,
         request: PeerTransferRequestV1,
         submission_sequence: u64,
     ) -> Result<(), PeerTransferErrorV1> {
         let index = self.record_index(binding, request, PeerTransferPhaseV1::Reserved)?;
-        self.validate_context()?;
+        self.validate_context(identity, current_observation)?;
         if submission_sequence == 0 {
             return Err(PeerTransferErrorV1::InvalidOrdering);
         }
+        self.identity = identity.clone();
         self.records[index].phase = PeerTransferPhaseV1::Published {
             submission_sequence,
         };
@@ -714,7 +775,7 @@ impl PeerTransferRegistryV1 {
         request: PeerTransferRequestV1,
     ) -> Result<(), PeerTransferErrorV1> {
         let index = self.record_index(binding, request, PeerTransferPhaseV1::Reserved)?;
-        let memory = self.release_retention(binding.retention)?;
+        let memory = self.release_retention(binding)?;
         self.memory = memory;
         self.records[index].phase = PeerTransferPhaseV1::Released;
         Ok(())
@@ -722,6 +783,8 @@ impl PeerTransferRegistryV1 {
 
     fn poll(
         &mut self,
+        identity: &DeviceIdentityStateV1,
+        current_observation: UntrustedPeerTopologyObservationV1,
         binding: PeerTransferBindingV1,
         request: PeerTransferRequestV1,
         submission_sequence: u64,
@@ -736,20 +799,22 @@ impl PeerTransferRegistryV1 {
         )?;
         match observation {
             PeerTransferCompletionObservationV1::Pending => {
-                self.validate_context()?;
+                self.validate_context(identity, current_observation)?;
+                self.identity = identity.clone();
                 Ok(PeerTransferPollTransitionV1::Pending)
             }
             PeerTransferCompletionObservationV1::Completed {
                 completion,
                 acquire_sequence,
             } => {
-                self.validate_context()?;
+                self.validate_context(identity, current_observation)?;
                 if completion != binding.completion {
                     return Err(PeerTransferErrorV1::TokenMismatch);
                 }
                 if acquire_sequence <= submission_sequence {
                     return Err(PeerTransferErrorV1::InvalidOrdering);
                 }
+                self.identity = identity.clone();
                 self.records[index].phase =
                     PeerTransferPhaseV1::VisibilityObserved { acquire_sequence };
                 Ok(PeerTransferPollTransitionV1::Completed { acquire_sequence })
@@ -763,6 +828,8 @@ impl PeerTransferRegistryV1 {
 
     fn release_visibility(
         &mut self,
+        identity: &DeviceIdentityStateV1,
+        current_observation: UntrustedPeerTopologyObservationV1,
         binding: PeerTransferBindingV1,
         request: PeerTransferRequestV1,
         acquire_sequence: u64,
@@ -772,10 +839,22 @@ impl PeerTransferRegistryV1 {
             request,
             PeerTransferPhaseV1::VisibilityObserved { acquire_sequence },
         )?;
-        self.validate_context()?;
-        let memory = self.release_retention(binding.retention)?;
+        self.validate_context(identity, current_observation)?;
+        let memory = self.release_retention(binding)?;
+        self.identity = identity.clone();
         self.memory = memory;
         self.records[index].phase = PeerTransferPhaseV1::Released;
+        Ok(())
+    }
+
+    fn quarantine_currentness_loss(
+        &mut self,
+        binding: PeerTransferBindingV1,
+        request: PeerTransferRequestV1,
+        phase: PeerTransferPhaseV1,
+    ) -> Result<(), PeerTransferErrorV1> {
+        let index = self.record_index(binding, request, phase)?;
+        self.records[index].phase = PeerTransferPhaseV1::Indeterminate;
         Ok(())
     }
 }
@@ -825,9 +904,17 @@ impl PeerTransferReservedTokenV1 {
     pub fn publish_model_only(
         self,
         registry: &mut PeerTransferRegistryV1,
+        identity: &DeviceIdentityStateV1,
+        current_observation: UntrustedPeerTopologyObservationV1,
         submission_sequence: u64,
     ) -> Result<PeerTransferPublishedTokenV1, PeerTransferTokenFailureV1<Self>> {
-        match registry.publish(self.binding, self.request, submission_sequence) {
+        match registry.publish(
+            identity,
+            current_observation,
+            self.binding,
+            self.request,
+            submission_sequence,
+        ) {
             Ok(()) => Ok(PeerTransferPublishedTokenV1 {
                 binding: self.binding,
                 request: self.request,
@@ -888,9 +975,13 @@ impl PeerTransferPublishedTokenV1 {
     pub fn poll_model_only(
         self,
         registry: &mut PeerTransferRegistryV1,
+        identity: &DeviceIdentityStateV1,
+        current_observation: UntrustedPeerTopologyObservationV1,
         observation: PeerTransferCompletionObservationV1,
     ) -> Result<PeerTransferPollV1, PeerTransferTokenFailureV1<Self>> {
         match registry.poll(
+            identity,
+            current_observation,
             self.binding,
             self.request,
             self.submission_sequence,
@@ -910,6 +1001,27 @@ impl PeerTransferPublishedTokenV1 {
                     request: self.request,
                 }),
             ),
+            Err(error) => Err(PeerTransferTokenFailureV1 {
+                error,
+                retained: Box::new(self),
+            }),
+        }
+    }
+
+    /// Conservatively records that an already-published transfer can no
+    /// longer be related to a current device/topology observation.
+    pub fn quarantine_currentness_loss_model_only(
+        self,
+        registry: &mut PeerTransferRegistryV1,
+    ) -> Result<PeerTransferQuarantineV1, PeerTransferTokenFailureV1<Self>> {
+        let phase = PeerTransferPhaseV1::Published {
+            submission_sequence: self.submission_sequence,
+        };
+        match registry.quarantine_currentness_loss(self.binding, self.request, phase) {
+            Ok(()) => Ok(PeerTransferQuarantineV1 {
+                binding: self.binding,
+                request: self.request,
+            }),
             Err(error) => Err(PeerTransferTokenFailureV1 {
                 error,
                 retained: Box::new(self),
@@ -959,12 +1071,41 @@ impl PeerTransferVisibilityTokenV1 {
     pub fn release_after_visibility_consumed_model_only(
         self,
         registry: &mut PeerTransferRegistryV1,
+        identity: &DeviceIdentityStateV1,
+        current_observation: UntrustedPeerTopologyObservationV1,
     ) -> Result<PeerTransferReleasedReceiptV1, PeerTransferTokenFailureV1<Self>> {
-        match registry.release_visibility(self.binding, self.request, self.acquire_sequence) {
+        match registry.release_visibility(
+            identity,
+            current_observation,
+            self.binding,
+            self.request,
+            self.acquire_sequence,
+        ) {
             Ok(()) => Ok(PeerTransferReleasedReceiptV1 {
                 binding: self.binding,
                 request: self.request,
                 acquire_sequence: Some(self.acquire_sequence),
+            }),
+            Err(error) => Err(PeerTransferTokenFailureV1 {
+                error,
+                retained: Box::new(self),
+            }),
+        }
+    }
+
+    /// Conservatively retains both mappings when visibility was observed but
+    /// the current topology can no longer be revalidated before consumption.
+    pub fn quarantine_currentness_loss_model_only(
+        self,
+        registry: &mut PeerTransferRegistryV1,
+    ) -> Result<PeerTransferQuarantineV1, PeerTransferTokenFailureV1<Self>> {
+        let phase = PeerTransferPhaseV1::VisibilityObserved {
+            acquire_sequence: self.acquire_sequence,
+        };
+        match registry.quarantine_currentness_loss(self.binding, self.request, phase) {
+            Ok(()) => Ok(PeerTransferQuarantineV1 {
+                binding: self.binding,
+                request: self.request,
             }),
             Err(error) => Err(PeerTransferTokenFailureV1 {
                 error,
@@ -1016,30 +1157,11 @@ fn validate_peer_topology_current(
     identity: &DeviceIdentityStateV1,
     memory: &MemoryLifecycleStateV1,
     topology: ModelPeerTopologyV1,
+    current_observation: UntrustedPeerTopologyObservationV1,
 ) -> Result<(), PeerTopologyAdmissionErrorV1> {
-    let current = admit_peer_topology_model_only_v1(
-        identity,
-        memory,
-        UntrustedPeerTopologyObservationV1 {
-            schema_version: MULTI_DEVICE_MODEL_SCHEMA_VERSION_V1,
-            domain_id: topology.domain_id,
-            topology_id: topology.topology_id,
-            observation_epoch: topology.observation_epoch,
-            source_device: topology.source_device,
-            destination_device: topology.destination_device,
-            source_profile: topology.source_profile,
-            destination_profile: topology.destination_profile,
-            source_vm: topology.source_vm,
-            destination_vm: topology.destination_vm,
-            peer_access_supported: true,
-            virtual_memory_management_supported: true,
-        },
-    )?;
-    if current.source_correlation != topology.source_correlation {
-        return Err(PeerTopologyAdmissionErrorV1::SourceDeviceNotCurrent);
-    }
-    if current.destination_correlation != topology.destination_correlation {
-        return Err(PeerTopologyAdmissionErrorV1::DestinationDeviceNotCurrent);
+    let current = admit_peer_topology_model_only_v1(identity, memory, current_observation)?;
+    if current != topology {
+        return Err(PeerTopologyAdmissionErrorV1::TopologyIdentityMismatch);
     }
     Ok(())
 }
