@@ -350,10 +350,7 @@ pub struct SourceIsaObservationContentIdentityV1 {
 }
 
 impl SourceIsaObservationContentIdentityV1 {
-    pub fn new(
-        sha256: [u8; 32],
-        byte_len: u64,
-    ) -> Result<Self, SourceIsaObservationFrameErrorV1> {
+    pub fn new(sha256: [u8; 32], byte_len: u64) -> Result<Self, SourceIsaObservationFrameErrorV1> {
         if sha256 == [0; 32] || byte_len == 0 {
             return Err(SourceIsaObservationFrameErrorV1::InvalidClaim);
         }
@@ -1819,7 +1816,6 @@ mod tests {
         }
     }
 
-
     #[test]
     fn lossy_and_unassigned_error_codes_are_rejected() {
         let encoded = frame(SourceIsaObservationOutcomeV1::Error(
@@ -2181,7 +2177,6 @@ mod tests {
             assert!(SourceIsaObservationFrameV1::decode(&encoded).is_err());
         }
     }
-
 
     #[test]
     fn witness_presence_and_cardinalities_are_bound_to_counts() {

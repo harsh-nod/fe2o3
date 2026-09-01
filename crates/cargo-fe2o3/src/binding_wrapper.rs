@@ -1718,8 +1718,10 @@ fn emit_source_isa_observation_once<Sink, MappingError, SubmissionError>(
     sink: &mut Option<Sink>,
     expected_attempt: BuildAttempt,
     observed_attempt: BuildAttempt,
-    map: impl FnOnce()
-        -> Result<fe2o3_source_isa_observation::wire_v1::SourceIsaObservationFrameV1, MappingError>,
+    map: impl FnOnce() -> Result<
+        fe2o3_source_isa_observation::wire_v1::SourceIsaObservationFrameV1,
+        MappingError,
+    >,
     submit: impl FnOnce(
         Sink,
         &fe2o3_source_isa_observation::wire_v1::SourceIsaObservationFrameV1,
@@ -2735,7 +2737,9 @@ mod lifecycle_tests {
                 &mut mapping_sink,
                 expected_attempt,
                 expected_attempt,
-                || Err::<fe2o3_source_isa_observation::wire_v1::SourceIsaObservationFrameV1, _>("map"),
+                || Err::<fe2o3_source_isa_observation::wire_v1::SourceIsaObservationFrameV1, _>(
+                    "map"
+                ),
                 |_sink, _frame| Ok::<(), String>(()),
             ),
             SourceIsaObservationEmissionTelemetryV1::MappingFailed("map".to_owned())

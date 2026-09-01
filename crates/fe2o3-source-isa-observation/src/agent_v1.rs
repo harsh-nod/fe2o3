@@ -11,14 +11,11 @@ use crate::wire_v1::{
     MAX_SOURCE_ISA_OBSERVATION_COLLECTION_HEX_BYTES_V1, SourceIsaObservationCollectionV1,
     SourceIsaObservationErrorCodeV1, SourceIsaObservationKirVersionV1,
     SourceIsaObservationOutcomeV1, SourceIsaObservationTargetProfileV1,
-    SourceIsaObservationTransportFailureV1,
-    SourceIsaObservationUnavailableReasonV1,
+    SourceIsaObservationTransportFailureV1, SourceIsaObservationUnavailableReasonV1,
 };
 
-pub const AGENT_SOURCE_ISA_REQUEST_SCHEMA_V1: &str =
-    "fe2o3-agent-source-isa-request-v1";
-pub const AGENT_SOURCE_ISA_RESPONSE_SCHEMA_V1: &str =
-    "fe2o3-agent-source-isa-response-v1";
+pub const AGENT_SOURCE_ISA_REQUEST_SCHEMA_V1: &str = "fe2o3-agent-source-isa-request-v1";
+pub const AGENT_SOURCE_ISA_RESPONSE_SCHEMA_V1: &str = "fe2o3-agent-source-isa-response-v1";
 pub const MAX_AGENT_SOURCE_ISA_REQUEST_BYTES_V1: usize = 2 * 1024 * 1024;
 pub const MAX_AGENT_SOURCE_ISA_RESPONSE_BYTES_V1: usize = 2 * 1024 * 1024;
 pub const MAX_AGENT_SOURCE_ISA_PAGE_ITEMS_V1: u16 = 64;
@@ -221,7 +218,9 @@ pub struct SourceIsaPointViewV1 {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(tag = "unit_state", rename_all = "snake_case")]
 pub enum SourceIsaUnitViewV1 {
-    Observed { frame: SourceIsaFrameViewV1 },
+    Observed {
+        frame: SourceIsaFrameViewV1,
+    },
     Missing {
         missing_evidence_id: String,
         unit_identity: String,
@@ -325,7 +324,10 @@ impl SourceIsaInspectionV1 {
     }
 
     pub fn missing_units(&self) -> impl ExactSizeIterator<Item = String> + '_ {
-        self.admitted.missing_units().iter().map(|unit| hex_bytes(unit))
+        self.admitted
+            .missing_units()
+            .iter()
+            .map(|unit| hex_bytes(unit))
     }
 
     fn merged_units(&self) -> impl Iterator<Item = RawSourceIsaUnitV1<'_>> {
@@ -436,16 +438,16 @@ impl RawSourceIsaUnitV1<'_> {
     }
 }
 
-fn project_frame(
-    frame: &crate::wire_v1::SourceIsaObservationFrameV1,
-) -> SourceIsaFrameViewV1 {
+fn project_frame(frame: &crate::wire_v1::SourceIsaObservationFrameV1) -> SourceIsaFrameViewV1 {
     let context = frame.context();
     SourceIsaFrameViewV1 {
         frame_evidence: SourceIsaEvidenceIdentityV1 {
             scheme: "sha256",
             digest: hex_bytes(&frame.identity()),
-            canonical_byte_len: u64::try_from(crate::wire_v1::SOURCE_ISA_OBSERVATION_FRAME_BYTES_V1)
-                .expect("source/ISA frame byte bound fits u64"),
+            canonical_byte_len: u64::try_from(
+                crate::wire_v1::SOURCE_ISA_OBSERVATION_FRAME_BYTES_V1,
+            )
+            .expect("source/ISA frame byte bound fits u64"),
         },
         unit_identity: hex_bytes(&context.unit()),
         attempt: SourceIsaBuildAttemptViewV1 {
@@ -468,14 +470,12 @@ fn project_frame(
                     },
                 }
             }
-            SourceIsaObservationOutcomeV1::Error(error) => {
-                SourceIsaFrameOutcomeViewV1::Error {
-                    error: SourceIsaTypedCodeV1 {
-                        code: error as u16,
-                        label: observation_error(error),
-                    },
-                }
-            }
+            SourceIsaObservationOutcomeV1::Error(error) => SourceIsaFrameOutcomeViewV1::Error {
+                error: SourceIsaTypedCodeV1 {
+                    code: error as u16,
+                    label: observation_error(error),
+                },
+            },
         },
     }
 }
@@ -760,9 +760,7 @@ pub fn run_agent_source_isa_jsonl_v1<R: BufRead, W: Write>(
     }
 }
 
-pub fn inspect_source_isa_agent_json_v1(
-    encoded: &[u8],
-) -> Result<String, String> {
+pub fn inspect_source_isa_agent_json_v1(encoded: &[u8]) -> Result<String, String> {
     let inspection = SourceIsaInspectionV1::decode_canonical(encoded)?;
     let page = inspection
         .page(&AgentSourceIsaPageRequestV1 {
@@ -920,21 +918,19 @@ fn encode_response(response: AgentSourceIsaResponseV1) -> String {
         &response,
         MAX_AGENT_SOURCE_ISA_RESPONSE_BYTES_V1.saturating_sub(1),
     )
-    .unwrap_or_else(
-        || {
-            serialize_response_bounded(
-                &AgentSourceIsaResponseV1::error(
-                    None,
-                    revision,
-                    None,
-                    AgentSourceIsaErrorCodeV1::ResponseTooLarge,
-                    false,
-                ),
-                MAX_AGENT_SOURCE_ISA_RESPONSE_BYTES_V1.saturating_sub(1),
-            )
-            .expect("bounded source/ISA error response is serializable")
-        },
-    )
+    .unwrap_or_else(|| {
+        serialize_response_bounded(
+            &AgentSourceIsaResponseV1::error(
+                None,
+                revision,
+                None,
+                AgentSourceIsaErrorCodeV1::ResponseTooLarge,
+                false,
+            ),
+            MAX_AGENT_SOURCE_ISA_RESPONSE_BYTES_V1.saturating_sub(1),
+        )
+        .expect("bounded source/ISA error response is serializable")
+    })
 }
 
 impl AgentSourceIsaResponseV1 {
@@ -950,10 +946,7 @@ impl AgentSourceIsaResponseV1 {
     }
 }
 
-fn serialize_response_bounded(
-    response: &AgentSourceIsaResponseV1,
-    limit: usize,
-) -> Option<String> {
+fn serialize_response_bounded(response: &AgentSourceIsaResponseV1, limit: usize) -> Option<String> {
     let mut writer = BoundedWriter::new(limit);
     serde_json::to_writer(&mut writer, response).ok()?;
     String::from_utf8(writer.bytes).ok()
@@ -979,7 +972,11 @@ fn read_request_line<R: BufRead>(input: &mut R) -> Result<Option<Vec<u8>>, std::
     loop {
         let buffer = input.fill_buf()?;
         if buffer.is_empty() {
-            return if line.is_empty() { Ok(None) } else { Ok(Some(line)) };
+            return if line.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(line))
+            };
         }
         let newline = buffer.iter().position(|byte| *byte == b'\n');
         let available = newline.map_or(buffer.len(), |position| position + 1);
@@ -1108,12 +1105,8 @@ fn cursor_position(cursor: &str) -> Result<usize, AgentSourceIsaErrorCodeV1> {
     if parts.next() != Some("v1") {
         return Err(AgentSourceIsaErrorCodeV1::InvalidPage);
     }
-    let position_text = parts
-        .next()
-        .ok_or(AgentSourceIsaErrorCodeV1::InvalidPage)?;
-    let binding = parts
-        .next()
-        .ok_or(AgentSourceIsaErrorCodeV1::InvalidPage)?;
+    let position_text = parts.next().ok_or(AgentSourceIsaErrorCodeV1::InvalidPage)?;
+    let binding = parts.next().ok_or(AgentSourceIsaErrorCodeV1::InvalidPage)?;
     if parts.next().is_some()
         || position_text.is_empty()
         || (position_text.starts_with('0') && position_text != "0")
@@ -1185,9 +1178,13 @@ const fn observation_error(error: SourceIsaObservationErrorCodeV1) -> &'static s
     error.label()
 }
 
-const fn transport_failure(failure: SourceIsaObservationTransportFailureV1) -> SourceIsaTypedCodeV1 {
+const fn transport_failure(
+    failure: SourceIsaObservationTransportFailureV1,
+) -> SourceIsaTypedCodeV1 {
     let label = match failure {
-        SourceIsaObservationTransportFailureV1::CollectorAlreadyFailed => "collector_already_failed",
+        SourceIsaObservationTransportFailureV1::CollectorAlreadyFailed => {
+            "collector_already_failed"
+        }
         SourceIsaObservationTransportFailureV1::UnitBound => "unit_bound",
         SourceIsaObservationTransportFailureV1::AggregateByteBound => "aggregate_byte_bound",
         SourceIsaObservationTransportFailureV1::ConflictingDuplicate => "conflicting_duplicate",
@@ -1210,8 +1207,8 @@ mod tests {
 
     use super::*;
     use crate::wire_v1::{
-        SourceIsaObservationContextV1, SourceIsaObservationFrameV1,
-        SourceIsaObservationOutcomeV1, SourceIsaObservationUnavailableReasonV1,
+        SourceIsaObservationContextV1, SourceIsaObservationFrameV1, SourceIsaObservationOutcomeV1,
+        SourceIsaObservationUnavailableReasonV1,
     };
 
     fn attempt(session: BuildSession, invocation: u8) -> BuildAttempt {
@@ -1290,8 +1287,14 @@ mod tests {
         ] {
             assert_eq!(response["result"]["authority"][denied], false);
         }
-        assert_eq!(response["result"]["limits"]["max_collection_binary_bytes"], 696_432);
-        assert_eq!(response["result"]["limits"]["max_collection_hex_bytes"], 1_392_864);
+        assert_eq!(
+            response["result"]["limits"]["max_collection_binary_bytes"],
+            696_432
+        );
+        assert_eq!(
+            response["result"]["limits"]["max_collection_hex_bytes"],
+            1_392_864
+        );
         assert_eq!(response["result"]["limits"]["max_units"], 1_024);
         assert_eq!(response["result"]["limits"]["max_page_items"], 64);
     }
@@ -1330,12 +1333,14 @@ mod tests {
             }),
             Err(AgentSourceIsaErrorCodeV1::InvalidPage)
         );
-        assert!(first_inspection
-            .page(&AgentSourceIsaPageRequestV1 {
-                after: Some(format!("v1:999:{}", "0".repeat(64))),
-                limit: 1,
-            })
-            .is_err());
+        assert!(
+            first_inspection
+                .page(&AgentSourceIsaPageRequestV1 {
+                    after: Some(format!("v1:999:{}", "0".repeat(64))),
+                    limit: 1,
+                })
+                .is_err()
+        );
 
         let SourceIsaUnitViewV1::Missing {
             missing_evidence_id: first_missing,
@@ -1364,20 +1369,20 @@ mod tests {
     fn service_rejects_zero_duplicate_uppercase_and_unknown_fields() {
         let bytes = collection(0x41, &[0x20], &[]);
         let mut service = AgentSourceIsaServiceV1::new();
-        let zero: Value = serde_json::from_str(&encode_response(service.handle_line(&request(
-            0, &bytes, None, 1,
-        ))))
+        let zero: Value = serde_json::from_str(&encode_response(
+            service.handle_line(&request(0, &bytes, None, 1)),
+        ))
         .unwrap();
         assert_eq!(zero["error"], "invalid_request_id");
 
-        let first: Value = serde_json::from_str(&encode_response(service.handle_line(&request(
-            7, &bytes, None, 1,
-        ))))
+        let first: Value = serde_json::from_str(&encode_response(
+            service.handle_line(&request(7, &bytes, None, 1)),
+        ))
         .unwrap();
         assert_eq!(first["status"], "ok");
-        let duplicate: Value = serde_json::from_str(&encode_response(service.handle_line(
-            &request(7, &bytes, None, 1),
-        )))
+        let duplicate: Value = serde_json::from_str(&encode_response(
+            service.handle_line(&request(7, &bytes, None, 1)),
+        ))
         .unwrap();
         assert_eq!(duplicate["error"], "duplicate_request_id");
         assert_eq!(duplicate["response_revision"], 3);
@@ -1391,16 +1396,14 @@ mod tests {
         }))
         .unwrap();
         uppercase.push(b'\n');
-        let uppercase: Value = serde_json::from_str(&encode_response(
-            service.handle_line(&uppercase),
-        ))
-        .unwrap();
+        let uppercase: Value =
+            serde_json::from_str(&encode_response(service.handle_line(&uppercase))).unwrap();
         assert_eq!(uppercase["error"], "invalid_lowercase_hex");
 
         let unknown = br#"{"operation":"discover_capabilities","schema":"fe2o3-agent-source-isa-request-v1","request_id":9,"unknown":true}
 "#;
-        let unknown: Value = serde_json::from_str(&encode_response(service.handle_line(unknown)))
-            .unwrap();
+        let unknown: Value =
+            serde_json::from_str(&encode_response(service.handle_line(unknown))).unwrap();
         assert_eq!(unknown["error"], "invalid_request");
     }
 

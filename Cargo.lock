@@ -326,6 +326,7 @@ dependencies = [
  "fe2o3-proof-contracts",
  "fe2o3-runtime-protocol",
  "fe2o3-rustc-invocation",
+ "fe2o3-source-isa-observation",
  "fe2o3-verifier",
  "libc",
  "object 0.39.1",
@@ -1750,6 +1751,17 @@ name = "fe2o3-shift"
 version = "0.1.0"
 dependencies = [
  "fe2o3-device",
+]
+
+[[package]]
+name = "fe2o3-source-isa-observation"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-artifact-transaction",
+ "fe2o3-kernel-ir",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
 ]
 
 [[package]]

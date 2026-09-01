@@ -10,9 +10,9 @@ use fe2o3_artifacts::{
 };
 
 use fe2o3_source_isa_observation::agent_v1::{
-    MAX_AGENT_SOURCE_ISA_REQUEST_BYTES_V1, SourceIsaAdmittedViewV1,
-    SourceIsaFrameOutcomeViewV1, SourceIsaInspectionV1,
-    execute_agent_source_isa_request_line_v1, inspect_source_isa_agent_json_v1,
+    MAX_AGENT_SOURCE_ISA_REQUEST_BYTES_V1, SourceIsaAdmittedViewV1, SourceIsaFrameOutcomeViewV1,
+    SourceIsaInspectionV1, execute_agent_source_isa_request_line_v1,
+    inspect_source_isa_agent_json_v1,
 };
 use fe2o3_source_isa_observation::wire_v1::MAX_SOURCE_ISA_OBSERVATION_COLLECTION_BYTES_V1;
 
@@ -87,10 +87,7 @@ pub(crate) fn command(args: &[String]) -> Result<String, String> {
                         .to_owned(),
                 );
             }
-            let bytes = read_bounded(
-                &path,
-                MAX_SOURCE_ISA_OBSERVATION_COLLECTION_BYTES_V1,
-            )?;
+            let bytes = read_bounded(&path, MAX_SOURCE_ISA_OBSERVATION_COLLECTION_BYTES_V1)?;
             inspect_source_isa_agent_json_v1(&bytes)
                 .map_err(|error| format!("failed to inspect {}: {error}", path.display()))
         }
@@ -249,11 +246,9 @@ fn inspect_bytes(format: InspectFormat, bytes: &[u8]) -> Result<String, String> 
         InspectFormat::Hsaco => fe2o3_hsaco::inspect(bytes)
             .map(|hsaco| render_hsaco(&hsaco))
             .map_err(|error| format!("invalid HSACO: {error}")),
-        InspectFormat::SourceIsaObservation => {
-            SourceIsaInspectionV1::decode_canonical(bytes)
-                .map(|inspection| render_source_isa_observation(&inspection))
-                .map_err(|error| format!("invalid source/ISA observation collection: {error}"))
-        }
+        InspectFormat::SourceIsaObservation => SourceIsaInspectionV1::decode_canonical(bytes)
+            .map(|inspection| render_source_isa_observation(&inspection))
+            .map_err(|error| format!("invalid source/ISA observation collection: {error}")),
     }
 }
 
@@ -276,8 +271,7 @@ fn detect_format(bytes: &[u8]) -> Result<InspectFormat, String> {
 fn render_source_isa_observation(inspection: &SourceIsaInspectionV1) -> String {
     let collection = &inspection.collection;
     let mut output = String::new();
-    writeln!(output, "format: {}", collection.format)
-        .expect("write to String");
+    writeln!(output, "format: {}", collection.format).expect("write to String");
     writeln!(output, "authority: observation-only").expect("write to String");
     writeln!(output, "compiler-authority: false").expect("write to String");
     writeln!(output, "proof-authority: false").expect("write to String");
@@ -294,12 +288,7 @@ fn render_source_isa_observation(inspection: &SourceIsaInspectionV1) -> String {
     .expect("write to String");
     writeln!(output, "session: {}", collection.session).expect("write to String");
     writeln!(output, "frames: {}", collection.frame_count).expect("write to String");
-    writeln!(
-        output,
-        "missing-units: {}",
-        collection.missing_unit_count
-    )
-    .expect("write to String");
+    writeln!(output, "missing-units: {}", collection.missing_unit_count).expect("write to String");
     writeln!(
         output,
         "transport-failure: {}",
@@ -314,30 +303,23 @@ fn render_source_isa_observation(inspection: &SourceIsaInspectionV1) -> String {
         writeln!(
             output,
             "frame[{index}].identity: {}",
-        frame.frame_evidence.digest
+            frame.frame_evidence.digest
         )
         .expect("write to String");
-        writeln!(
-            output,
-            "frame[{index}].unit: {}",
-        frame.unit_identity
-        )
-        .expect("write to String");
+        writeln!(output, "frame[{index}].unit: {}", frame.unit_identity).expect("write to String");
         writeln!(
             output,
             "frame[{index}].attempt: {}",
-        format!(
-            "{}:{}:{}",
-            frame.attempt.generation,
-            frame.attempt.session,
-            frame.attempt.invocation_identity
-        )
+            format!(
+                "{}:{}:{}",
+                frame.attempt.generation, frame.attempt.session, frame.attempt.invocation_identity
+            )
         )
         .expect("write to String");
         writeln!(
             output,
             "frame[{index}].finalization: {}",
-        frame.finalization_identity
+            frame.finalization_identity
         )
         .expect("write to String");
         match &frame.outcome {
@@ -355,8 +337,7 @@ fn render_source_isa_observation(inspection: &SourceIsaInspectionV1) -> String {
                 writeln!(output, "frame[{index}].outcome: error").expect("write to String");
                 writeln!(output, "frame[{index}].error-code: {}", error.code)
                     .expect("write to String");
-                writeln!(output, "frame[{index}].error: {}", error.label)
-                    .expect("write to String");
+                writeln!(output, "frame[{index}].error: {}", error.label).expect("write to String");
             }
         }
     }
@@ -385,8 +366,7 @@ fn render_admitted_source_isa_observation(
     writeln!(
         output,
         "frame[{index}].artifact: sha256={} bytes={}",
-        artifact.sha256,
-        artifact.byte_len
+        artifact.sha256, artifact.byte_len
     )
     .expect("write to String");
     writeln!(
@@ -394,8 +374,7 @@ fn render_admitted_source_isa_observation(
         "frame[{index}].target: {}",
         format!(
             "{}:{}",
-            structural.target.architecture,
-            structural.target.features[1]
+            structural.target.architecture, structural.target.features[1]
         )
     )
     .expect("write to String");
@@ -714,7 +693,11 @@ fn trim_final_newline(mut output: String) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{InspectFormat, InspectOutput, Options, detect_format, inspect_bytes, parse_options};
+    use super::{
+        InspectFormat, InspectOutput, Options, detect_format, inspect_bytes, parse_options,
+    };
+    use fe2o3_artifact_transaction::{BuildAttempt, BuildInvocation, BuildSession};
+    use fe2o3_artifacts::{BUNDLE_INDEX_MAGIC, CONTAINER_MAGIC, MANIFEST_MAGIC};
     use fe2o3_source_isa_observation::wire_v1::{
         AdmittedSourceIsaObservationV1, SourceIsaObservationContentIdentityV1,
         SourceIsaObservationContextV1, SourceIsaObservationCountsV1,
@@ -726,8 +709,6 @@ mod tests {
         SourceIsaObservationStructuralCountsV1, SourceIsaObservationTargetProfileV1,
         SourceIsaObservationUnavailableReasonV1,
     };
-    use fe2o3_artifact_transaction::{BuildAttempt, BuildInvocation, BuildSession};
-    use fe2o3_artifacts::{BUNDLE_INDEX_MAGIC, CONTAINER_MAGIC, MANIFEST_MAGIC};
     use sha2::{Digest, Sha256};
     use std::path::PathBuf;
 
@@ -897,10 +878,7 @@ mod tests {
             vec!["--format".into()],
             vec!["--format=raw".into(), "one".into()],
             vec!["--output=raw".into()],
-            vec![
-                "--output=human".into(),
-                "--output=agent-json-v1".into(),
-            ],
+            vec!["--output=human".into(), "--output=agent-json-v1".into()],
             vec![
                 "--format=auto".into(),
                 "--format=hsaco".into(),

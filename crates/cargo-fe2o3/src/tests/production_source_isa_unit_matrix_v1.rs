@@ -12,13 +12,13 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::build_config::{PRODUCTION_BUILD_CONFIG_V2_ENV, PreparedProductionBuildConfig};
+use crate::{
+    MAX_SOURCE_ISA_COLLECTION_STDERR_LINE_BYTES_V1, SOURCE_ISA_COLLECTION_STDERR_PREFIX_V1,
+};
 use fe2o3_source_isa_observation::wire_v1::{
     MAX_SOURCE_ISA_OBSERVATION_COLLECTION_HEX_BYTES_V1, SourceIsaObservationCollectionV1,
     SourceIsaObservationKirVersionV1, SourceIsaObservationOutcomeV1,
     SourceIsaObservationTargetProfileV1,
-};
-use crate::{
-    MAX_SOURCE_ISA_COLLECTION_STDERR_LINE_BYTES_V1, SOURCE_ISA_COLLECTION_STDERR_PREFIX_V1,
 };
 use serde_json::{Value, json};
 

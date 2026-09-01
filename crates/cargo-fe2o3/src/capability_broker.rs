@@ -59,12 +59,12 @@ mod platform {
     use crate::pinned_codegen_backend::PinnedCodegenBackend;
     use crate::pinned_executable::{PinExecutableError, PinnedExecutable};
     use crate::project::PinnedDirectory;
+    use fe2o3_compiler_closure_capability::{
+        CompilerClosureCapabilityV1, CompilerExecutionClientProfileCapabilityV1,
+    };
     use fe2o3_source_isa_observation::wire_v1::{
         SOURCE_ISA_OBSERVATION_FRAME_BYTES_V1, SourceIsaObservationCollectionV1,
         SourceIsaObservationFrameV1, SourceIsaObservationTransportFailureV1,
-    };
-    use fe2o3_compiler_closure_capability::{
-        CompilerClosureCapabilityV1, CompilerExecutionClientProfileCapabilityV1,
     };
 
     pub(crate) const CAPABILITY_BROKER_ENV: &str = "FE2O3_CAPABILITY_BROKER_V1";
@@ -2063,6 +2063,7 @@ mod platform {
     #[cfg(test)]
     mod tests {
         use super::*;
+        use fe2o3_artifact_transaction::{BuildAttempt, BuildInvocation};
         use fe2o3_source_isa_observation::wire_v1::{
             MAX_SOURCE_ISA_OBSERVATION_COLLECTION_BYTES_V1,
             MAX_SOURCE_ISA_OBSERVATION_COLLECTION_HEX_BYTES_V1,
@@ -2072,7 +2073,6 @@ mod platform {
             SourceIsaObservationFrameV1, SourceIsaObservationOutcomeV1,
             SourceIsaObservationUnavailableReasonV1, source_isa_collection_encoded_length,
         };
-        use fe2o3_artifact_transaction::{BuildAttempt, BuildInvocation};
 
         fn liveness() -> InvocationLiveness {
             InvocationLiveness {
@@ -2697,11 +2697,11 @@ mod unsupported {
     use crate::pinned_codegen_backend::PinnedCodegenBackend;
     use crate::pinned_executable::PinnedExecutable;
     use crate::project::PinnedDirectory;
-    use fe2o3_source_isa_observation::wire_v1::{
-        SourceIsaObservationCollectionV1, SourceIsaObservationFrameV1,
-    };
     use fe2o3_compiler_closure_capability::{
         CompilerClosureCapabilityV1, CompilerExecutionClientProfileCapabilityV1,
+    };
+    use fe2o3_source_isa_observation::wire_v1::{
+        SourceIsaObservationCollectionV1, SourceIsaObservationFrameV1,
     };
 
     pub(crate) const CAPABILITY_BROKER_ENV: &str = "FE2O3_CAPABILITY_BROKER_V1";
