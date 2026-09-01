@@ -1041,77 +1041,80 @@ fn coordinated_oob_contract_substitutions_require_original_capture_binding() {
 }
 
 #[test]
-fn abi_view_and_backing_access_capabilities_use_monotonic_admission() {
-    for (required, supplied, backing) in [
-        (
-            DiagnosisAccessModeV2::ReadOnly,
-            DiagnosisAccessModeV2::ReadWrite,
-            DiagnosisAccessModeV2::ReadWrite,
-        ),
-        (
-            DiagnosisAccessModeV2::ReadOnly,
-            DiagnosisAccessModeV2::ReadOnly,
-            DiagnosisAccessModeV2::ReadWrite,
-        ),
-    ] {
-        let mut response = aliasing_view_out_of_bounds_response();
-        let DiagnosisResponseV2::Ok { diagnoses, .. } = &mut response else {
-            unreachable!()
-        };
-        let DiagnosisFactV2::Observed { value: region } = &mut diagnoses[0].memory_region else {
-            unreachable!()
-        };
-        let DiagnosisFactV2::Declared { value: contract } = &mut region.allocation_contract else {
-            unreachable!()
-        };
-        contract.access = backing;
-        contract.abi_arguments[0].access = required;
-        contract.abi_arguments[0].supplied_access = supplied;
-        let DiagnosisFactV2::Declared { value: argument } = &mut region.abi_argument else {
-            unreachable!()
-        };
-        *argument = contract.abi_arguments[0];
-        reseal_response(&mut response);
-        assert!(
-            decode_diagnosis_response_line_v2(&reencode(&response), ProtocolLimitsV1::default())
-                .is_ok()
-        );
-    }
+fn write_only_access_mode_has_an_exact_wire_spelling() {
+    assert_eq!(
+        serde_json::to_vec(&DiagnosisAccessModeV2::WriteOnly).unwrap(),
+        br#""write_only""#
+    );
+    assert_eq!(
+        serde_json::from_slice::<DiagnosisAccessModeV2>(br#""write_only""#).unwrap(),
+        DiagnosisAccessModeV2::WriteOnly
+    );
+    assert!(serde_json::from_slice::<DiagnosisAccessModeV2>(br#""write""#).is_err());
+}
 
-    for (required, supplied, backing) in [
-        (
-            DiagnosisAccessModeV2::ReadWrite,
-            DiagnosisAccessModeV2::ReadOnly,
-            DiagnosisAccessModeV2::ReadWrite,
-        ),
-        (
-            DiagnosisAccessModeV2::ReadOnly,
-            DiagnosisAccessModeV2::ReadWrite,
-            DiagnosisAccessModeV2::ReadOnly,
-        ),
-    ] {
-        let mut response = aliasing_view_out_of_bounds_response();
-        let DiagnosisResponseV2::Ok { diagnoses, .. } = &mut response else {
-            unreachable!()
-        };
-        let DiagnosisFactV2::Observed { value: region } = &mut diagnoses[0].memory_region else {
-            unreachable!()
-        };
-        let DiagnosisFactV2::Declared { value: contract } = &mut region.allocation_contract else {
-            unreachable!()
-        };
-        contract.access = backing;
-        contract.abi_arguments[0].access = required;
-        contract.abi_arguments[0].supplied_access = supplied;
-        let DiagnosisFactV2::Declared { value: argument } = &mut region.abi_argument else {
-            unreachable!()
-        };
-        *argument = contract.abi_arguments[0];
-        reseal_response(&mut response);
-        assert!(
-            decode_diagnosis_response_line_v2(&reencode(&response), ProtocolLimitsV1::default())
-                .is_err()
-        );
+#[test]
+fn abi_view_and_backing_access_capabilities_use_the_exact_lattice() {
+    let modes = [
+        DiagnosisAccessModeV2::ReadOnly,
+        DiagnosisAccessModeV2::WriteOnly,
+        DiagnosisAccessModeV2::ReadWrite,
+    ];
+    let satisfies = |supplied, required| {
+        matches!(
+            (required, supplied),
+            (
+                DiagnosisAccessModeV2::ReadOnly,
+                DiagnosisAccessModeV2::ReadOnly | DiagnosisAccessModeV2::ReadWrite
+            ) | (
+                DiagnosisAccessModeV2::WriteOnly,
+                DiagnosisAccessModeV2::WriteOnly | DiagnosisAccessModeV2::ReadWrite
+            ) | (
+                DiagnosisAccessModeV2::ReadWrite,
+                DiagnosisAccessModeV2::ReadWrite
+            )
+        )
+    };
+
+    for required in modes {
+        for supplied in modes {
+            assert_eq!(supplied.satisfies(required), satisfies(supplied, required));
+            for backing in modes {
+                let mut response = aliasing_view_out_of_bounds_response();
+                let DiagnosisResponseV2::Ok { diagnoses, .. } = &mut response else {
+                    unreachable!()
+                };
+                let DiagnosisFactV2::Observed { value: region } = &mut diagnoses[0].memory_region
+                else {
+                    unreachable!()
+                };
+                let DiagnosisFactV2::Declared { value: contract } = &mut region.allocation_contract
+                else {
+                    unreachable!()
+                };
+                contract.access = backing;
+                for argument in &mut contract.abi_arguments {
+                    argument.access = required;
+                    argument.supplied_access = supplied;
+                }
+                let DiagnosisFactV2::Declared { value: argument } = &mut region.abi_argument else {
+                    unreachable!()
+                };
+                *argument = contract.abi_arguments[0];
+                reseal_response(&mut response);
+
+                let admitted = decode_diagnosis_response_line_v2(
+                    &reencode(&response),
+                    ProtocolLimitsV1::default(),
+                )
+                .is_ok();
+                assert_eq!(
+                    admitted,
+                    satisfies(supplied, required) && satisfies(backing, supplied),
+                    "required={required:?}, supplied={supplied:?}, backing={backing:?}"
+                );
+            }
+        }
     }
 
     let mut ordinary = out_of_bounds_response();

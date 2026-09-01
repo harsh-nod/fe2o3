@@ -5477,8 +5477,10 @@ pub(crate) mod semantic_v3 {
             producer: &ProducerIdentity,
             receipt: CompilerModuleHandoffReceiptV3,
         ) -> CompilerModuleHandoffCurrentnessLeaseV3 {
-            acquire_compiler_module_handoff_currentness_lease_v3(output_dir, producer, receipt)
-                .expect("uncontended currentness acquisition failed")
+            retry_transient_currentness_busy(|| {
+                acquire_compiler_module_handoff_currentness_lease_v3(output_dir, producer, receipt)
+            })
+            .expect("uncontended currentness acquisition failed")
         }
 
         fn publish_in_slot_with_currentness(
@@ -5488,10 +5490,20 @@ pub(crate) mod semantic_v3 {
             slot: CompilerModuleHandoffSlotV3,
             handoff: &InertSemanticCompilerModuleHandoffV3,
         ) -> CompilerModuleHandoffPublicationV3 {
-            publish_compiler_module_handoff_in_slot_with_currentness_v3(
+            match publish_compiler_module_handoff_in_slot_with_currentness_v3(
                 output_dir, producer, attempt, slot, handoff,
-            )
-            .expect("uncontended currentness publication failed")
+            ) {
+                Ok(publication) => publication,
+                Err(CompilerModuleHandoffErrorV3::Busy) => {
+                    let receipt = recover_compiler_module_handoff_receipt_in_slot_v3(
+                        output_dir, producer, attempt, slot,
+                    )
+                    .expect("durable publication was not recoverable after transient lease busy");
+                    let lease = acquire_currentness(output_dir, producer, receipt);
+                    CompilerModuleHandoffPublicationV3 { receipt, lease }
+                }
+                Err(error) => panic!("uncontended currentness publication failed: {error}"),
+            }
         }
 
         fn publish_with_currentness(
@@ -5512,15 +5524,33 @@ pub(crate) mod semantic_v3 {
         fn acquire_token(
             lease: &CompilerModuleHandoffCurrentnessLeaseV3,
         ) -> CompilerModuleHandoffConsumptionTokenV3 {
-            lease
-                .acquire_current_token()
+            retry_transient_currentness_busy(|| lease.acquire_current_token())
                 .expect("uncontended current-token acquisition failed")
         }
 
         fn revalidate_currentness(lease: &CompilerModuleHandoffCurrentnessLeaseV3) {
-            lease
-                .revalidate()
+            retry_transient_currentness_busy(|| lease.revalidate())
                 .expect("uncontended currentness revalidation failed");
+        }
+
+        fn retry_transient_currentness_busy<T>(
+            mut operation: impl FnMut() -> Result<T, CompilerModuleHandoffErrorV3>,
+        ) -> Result<T, CompilerModuleHandoffErrorV3> {
+            const MAX_TRANSIENT_BUSY_RETRIES: usize = 50;
+
+            // The unit-test binary also exercises fork/exec lock inheritance in parallel. A
+            // short-lived child may truthfully retain an unrelated CLOEXEC alias between fork
+            // and exec. Tests that require intentional contention invoke the raw API directly;
+            // these helpers only absorb that transient fixture overlap.
+            for _ in 0..MAX_TRANSIENT_BUSY_RETRIES {
+                match operation() {
+                    Err(CompilerModuleHandoffErrorV3::Busy) => {
+                        std::thread::sleep(std::time::Duration::from_millis(1));
+                    }
+                    result => return result,
+                }
+            }
+            operation()
         }
 
         fn target() -> DeviceTargetV1 {
@@ -6505,7 +6535,7 @@ pub(crate) mod semantic_v3 {
             assert_eq!(consumed.bytes(), handoff.canonical_bytes());
             assert!(!consumed.grants_publication_authority());
             assert!(matches!(
-                lease.acquire_current_token(),
+                retry_transient_currentness_busy(|| lease.acquire_current_token()),
                 Err(CompilerModuleHandoffErrorV3::AlreadyConsumed)
             ));
             assert!(matches!(
@@ -6526,7 +6556,7 @@ pub(crate) mod semantic_v3 {
             let second_attempt = begin(&temp.0, &producer, 15);
             assert!(second_attempt.generation() > first_attempt.generation());
             assert!(matches!(
-                lease.acquire_current_token(),
+                retry_transient_currentness_busy(|| lease.acquire_current_token()),
                 Err(CompilerModuleHandoffErrorV3::Attempt { .. })
             ));
         }
@@ -6611,7 +6641,7 @@ pub(crate) mod semantic_v3 {
             assert!(contender.join().unwrap());
             consume_compiler_module_handoff_with_currentness_v3(&lease, winner).unwrap();
             assert!(matches!(
-                lease.acquire_current_token(),
+                retry_transient_currentness_busy(|| lease.acquire_current_token()),
                 Err(CompilerModuleHandoffErrorV3::AlreadyConsumed)
             ));
         }

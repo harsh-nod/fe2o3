@@ -89,7 +89,8 @@ The memory contract separates a pointer/slice legal view from its backing
 allocation and retains every aliased ABI argument without collapsing their
 ordinals or ranges. ABI-required, request-view, and backing-allocation access
 capabilities are separate facts joined by the simulator's monotonic admission
-rule. Barrier divergence retains complete bounded expected,
+rule: read-only and write-only are incomparable, while read-write supplies both
+capabilities. Barrier divergence retains complete bounded expected,
 arrived, waiting, and exited participant inventories. Expected local
 coordinates are launch-geometry inferences; arrived/waiting/exited local
 coordinates are simulator observations. The current LDS epoch is derived from

@@ -983,7 +983,21 @@ const fn diagnosis_scalar_bytes_v2(scalar: DiagnosisScalarTypeV2) -> u16 {
 #[serde(rename_all = "snake_case")]
 pub enum DiagnosisAccessModeV2 {
     ReadOnly,
+    WriteOnly,
     ReadWrite,
+}
+
+impl DiagnosisAccessModeV2 {
+    /// Reports whether this supplied capability includes every required effect.
+    #[must_use]
+    pub const fn satisfies(self, required: Self) -> bool {
+        matches!(
+            (required, self),
+            (Self::ReadOnly, Self::ReadOnly | Self::ReadWrite)
+                | (Self::WriteOnly, Self::WriteOnly | Self::ReadWrite)
+                | (Self::ReadWrite, Self::ReadWrite)
+        )
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1070,14 +1084,6 @@ impl DiagnosisAbiArgumentV2 {
     }
 }
 
-const fn diagnosis_access_satisfies_v2(
-    required: DiagnosisAccessModeV2,
-    supplied: DiagnosisAccessModeV2,
-) -> bool {
-    matches!(required, DiagnosisAccessModeV2::ReadOnly)
-        || matches!(supplied, DiagnosisAccessModeV2::ReadWrite)
-}
-
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct DiagnosisAllocationContractV2 {
@@ -1109,10 +1115,9 @@ impl DiagnosisAllocationContractV2 {
         for argument in &self.abi_arguments {
             argument.validate(self.allocation_bytes)?;
             if argument.address_space != self.address_space
-                || !diagnosis_access_satisfies_v2(argument.access, argument.supplied_access)
+                || !argument.supplied_access.satisfies(argument.access)
                 || (argument.backing.is_none() && argument.supplied_access != self.access)
-                || (argument.backing.is_some()
-                    && !diagnosis_access_satisfies_v2(argument.supplied_access, self.access))
+                || (argument.backing.is_some() && !self.access.satisfies(argument.supplied_access))
             {
                 return Err(ProtocolValidationErrorV1::IdentityMismatch(
                     "diagnosis ABI allocation contract",

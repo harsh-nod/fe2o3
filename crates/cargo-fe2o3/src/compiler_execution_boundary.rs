@@ -392,7 +392,31 @@ mod tests {
 
     use super::*;
 
+    const RESERVED_CHILD_FD_SUBPROCESS: &str =
+        "FE2O3_COMPILER_EXECUTION_BOUNDARY_RESERVED_FD_SUBPROCESS_V1";
     static RESERVED_CHILD_FD_LOCK: Mutex<()> = Mutex::new(());
+
+    fn run_reserved_child_fd_test_in_isolation(test_name: &str) -> bool {
+        if std::env::var_os(RESERVED_CHILD_FD_SUBPROCESS).is_some() {
+            return true;
+        }
+
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
+            .args(["--exact", test_name, "--nocapture", "--test-threads=1"])
+            .env(RESERVED_CHILD_FD_SUBPROCESS, "1");
+        // SAFETY: `close` is async-signal-safe. The isolated test child must
+        // start without descriptors inherited at either production-reserved FD.
+        unsafe {
+            command.pre_exec(|| {
+                libc::close(COMPILER_EXECUTION_SERVICE_CHILD_FD_V1);
+                libc::close(COMPILER_EXECUTION_POLICY_CHILD_FD_V1);
+                Ok(())
+            });
+        }
+        assert!(command.status().unwrap().success());
+        false
+    }
 
     fn policy(seed: u8) -> CompilerExecutionIssuerPolicyV1 {
         CompilerExecutionIssuerPolicyV1::new(
@@ -474,6 +498,11 @@ mod tests {
         let _guard = RESERVED_CHILD_FD_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !run_reserved_child_fd_test_in_isolation(
+            "compiler_execution_boundary::tests::preparation_installs_exact_policy_and_child_created_service_channel",
+        ) {
+            return;
+        }
         let source_profile = client_profile(7, 1_234);
         let mut command = Command::new("/bin/sh");
         command.arg("-c").arg(format!(
@@ -504,6 +533,11 @@ mod tests {
         let _guard = RESERVED_CHILD_FD_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !run_reserved_child_fd_test_in_isolation(
+            "compiler_execution_boundary::tests::application_verifier_gets_service_channel_without_policy_capability",
+        ) {
+            return;
+        }
         let source_profile = client_profile(8, 1_234);
         let mut command = Command::new("/bin/sh");
         command.arg("-c").arg(format!(
