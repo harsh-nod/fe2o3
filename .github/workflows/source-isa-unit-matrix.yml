@@ -1,0 +1,41 @@
+name: Protected source ISA ordinary-unit matrix
+
+# Manual-only until a protected authority service registers the qualified runner label below.
+# Generic CI still compiles the ignored Rust test and freezes this workflow through policy tests.
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_protected_runner:
+        description: Confirm the qualified runner authority service is available
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: source-isa-unit-matrix-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  protected-observer:
+    if: >-
+      github.repository == 'harsh-nod/fe2o3' &&
+      github.ref == 'refs/heads/main' &&
+      inputs.confirm_protected_runner
+    name: Observe three ordinary units on gfx942 and gfx950
+    runs-on: [self-hosted, linux, x64, fe2o3-source-isa-protected-v1]
+    timeout-minutes: 120
+    env:
+      FE2O3_RUN_SOURCE_ISA_UNIT_MATRIX: '1'
+
+    steps:
+      - name: Check out protected main
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      - name: Run protected ordinary-unit matrix
+        run: scripts/ci-local.sh source-isa-unit-matrix

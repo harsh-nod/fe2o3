@@ -832,7 +832,7 @@ mod tests {
     }
 
     #[test]
-    fn source_isa_observer_matrix_preserves_targets_structures_and_non_authority() {
+    fn synthetic_source_isa_six_frame_fixture_preserves_targets_structures_and_non_authority() {
         let frames = [
             admitted_frame(0x10, SourceIsaObservationTargetProfileV1::Gfx942, 4),
             admitted_frame(0x11, SourceIsaObservationTargetProfileV1::Gfx950, 4),

@@ -75,7 +75,6 @@ readonly CPU_TEST_PACKAGES=(
   fe2o3-amdgcn-model
   fe2o3-amdhsa-loader
   fe2o3-aql
-  fe2o3-artifact-transaction
   fe2o3-completion
   fe2o3-compiler-api
   fe2o3-artifacts
@@ -137,6 +136,7 @@ Commands:
   rustc-codegen-test  Run backend library and integration tests without dylib replacement
   backend         Build the rustc codegen backend dylib
   authority-launcher  Run bounded protected build-authority launcher tests
+  source-isa-unit-matrix  Run the opt-in protected source/ISA ordinary-unit matrix
   rustc-trampoline    Run non-integrated static rustc trampoline tests
   parity-evidence Run parity, signed-attestation, and queue shell tests
   parity-production-immutable  Run opt-in root ext4/XFS ingestion test
@@ -627,6 +627,14 @@ run_check() {
       --manifest-path examples/flash_attention_general_v1/Cargo.toml
 }
 
+run_artifact_transaction_tests() {
+  # Artifact publication tests intentionally retain descriptor custody. Bound
+  # their libtest fanout below the common 1024-descriptor soft limit.
+  run_step fe2o3-artifact-transaction-tests \
+    env FE2O3_HIP_SYS_DISABLE=1 RUST_TEST_THREADS=8 \
+    cargo test --locked -p fe2o3-artifact-transaction
+}
+
 run_cpu_tests() {
   local cargo_args=(test --locked)
   local wrapper_cargo_args=(test --locked --all-targets)
@@ -670,6 +678,7 @@ run_cpu_tests() {
   run_step fe2o3-pliron-default-api-ui \
     cargo test --locked -p fe2o3-pliron --no-default-features \
       --test middle_end_evidence_ui default_api_cannot_self_authorize -- --exact
+  run_artifact_transaction_tests
   run_step cpu-tests env FE2O3_HIP_SYS_DISABLE=1 cargo "${cargo_args[@]}"
   load_dynamic_loader_environment_removals loader_environment_removals
   if ((${#wrapper_cpu_examples[@]} > 0)); then
@@ -895,7 +904,9 @@ run_tests() {
 run_workspace_tests() {
   run_step workspace-tests \
     cargo test --locked --workspace --all-targets \
-      --exclude "${RUSTC_CODEGEN_TEST_PACKAGE}"
+      --exclude "${RUSTC_CODEGEN_TEST_PACKAGE}" \
+      --exclude fe2o3-artifact-transaction
+  run_artifact_transaction_tests
   run_rustc_codegen_tests
 }
 
@@ -920,6 +931,51 @@ run_verus() {
 run_authority_launcher_tests() {
   run_step authority-launcher-tests \
     bash scripts/tests/cargo-fe2o3-authority-launcher.sh
+}
+
+run_source_isa_unit_matrix() {
+  if [[ "${FE2O3_RUN_SOURCE_ISA_UNIT_MATRIX:-}" != "1" ]]; then
+    printf '%s\n' \
+      'protected source/ISA unit matrix requires FE2O3_RUN_SOURCE_ISA_UNIT_MATRIX=1' >&2
+    return 2
+  fi
+  local name platform_architecture platform_kernel
+  platform_kernel="$(uname -s)" || {
+    printf '%s\n' 'protected source/ISA unit matrix could not identify the host kernel' >&2
+    return 2
+  }
+  platform_architecture="$(uname -m)" || {
+    printf '%s\n' 'protected source/ISA unit matrix could not identify the host architecture' >&2
+    return 2
+  }
+  if [[ "${platform_kernel}" != "Linux" || "${platform_architecture}" != "x86_64" ]]; then
+    printf 'protected source/ISA unit matrix requires Linux x86_64, found %s %s\n' \
+      "${platform_kernel}" "${platform_architecture}" >&2
+    return 2
+  fi
+  local -a required_environment=(
+    FE2O3_TEST_CARGO_FE2O3_BIN
+    FE2O3_TEST_CARGO_FE2O3_SHA256
+    FE2O3_PRODUCTION_BUILD_CONFIG_V2
+    FE2O3_AUTHORITY_BACKEND_SHA256_V1
+    FE2O3_AUTHORITY_CARGO_SHA256_V1
+    FE2O3_AUTHORITY_CARGO_BINDING_TRAMPOLINE_PATH_V1
+    FE2O3_AUTHORITY_CARGO_BINDING_TRAMPOLINE_SHA256_V1
+    FE2O3_AUTHORITY_RUSTC_PATH_V1
+    FE2O3_AUTHORITY_RUSTC_RUNTIME_SHA256_V1
+    FE2O3_AUTHORITY_RUSTC_SHA256_V1
+    FE2O3_BACKEND
+  )
+  for name in "${required_environment[@]}"; do
+    if [[ -z "${!name:-}" ]]; then
+      printf 'protected source/ISA unit matrix requires %s\n' "${name}" >&2
+      return 2
+    fi
+  done
+  run_step source-isa-unit-matrix \
+    cargo test --locked -p cargo-fe2o3 --bin cargo-fe2o3 \
+      production_source_isa_unit_matrix_v1::ordinary_source_units_round_trip_through_the_production_observer_on_both_targets -- \
+      --ignored --exact --test-threads=1 --nocapture
 }
 
 run_rustc_trampoline_tests() {
@@ -1166,6 +1222,7 @@ main() {
     rustc-codegen-test) run_rustc_codegen_tests ;;
     backend) run_backend_build ;;
     authority-launcher) run_authority_launcher_tests ;;
+    source-isa-unit-matrix) run_source_isa_unit_matrix ;;
     rustc-trampoline) run_rustc_trampoline_tests ;;
     parity-evidence) run_parity_matrix_checks ;;
     parity-production-immutable) run_parity_production_immutable ;;

@@ -14,6 +14,7 @@ readonly SHARD_POLICY="${ROOT}/scripts/rustc-codegen-shards.py"
 readonly HARDWARE_WORKFLOW="${ROOT}/.github/workflows/hardware-smoke.yml"
 readonly ROCM_WORKFLOW="${ROOT}/.github/workflows/rocm-compile.yml"
 readonly ROW_SOFTMAX_WORKFLOW="${ROOT}/.github/workflows/row-softmax-v1.yml"
+readonly SOURCE_ISA_UNIT_WORKFLOW="${ROOT}/.github/workflows/source-isa-unit-matrix.yml"
 readonly CHANGE_POLICY="${ROOT}/scripts/parity-protected-change-policy.sh"
 readonly CODEOWNERS="${ROOT}/.github/CODEOWNERS"
 TEST_ROOT="$(mktemp -d)"
@@ -164,6 +165,7 @@ for path in \
   .github/workflows/ci.yml \
   .github/workflows/parity-promotion.yml \
   .github/workflows/parity-publisher-gate.yml \
+  .github/workflows/source-isa-unit-matrix.yml \
   .github/CODEOWNERS \
   .github/parity-trust-reviewers.txt; do
   require_text "${PROTECTED_WORKFLOW}" "- ${path}"
@@ -179,6 +181,7 @@ for ownership in \
   /scripts/parity-repository-rules.sh \
   /.github/workflows/parity-promotion.yml \
   /.github/workflows/parity-publisher-gate.yml \
+  /.github/workflows/source-isa-unit-matrix.yml \
   /.github/CODEOWNERS; do
   require_text "${CODEOWNERS}" "${ownership} @powderluv"
 done
@@ -263,6 +266,24 @@ require_text "${GENERIC_WORKFLOW}" 'missing or zero parity base SHA'
 require_text "${GENERIC_WORKFLOW}" 'actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683'
 require_text "${HARDWARE_WORKFLOW}" 'actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683'
 require_text "${ROCM_WORKFLOW}" 'actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683'
+require_text "${SOURCE_ISA_UNIT_WORKFLOW}" 'workflow_dispatch:'
+require_text "${SOURCE_ISA_UNIT_WORKFLOW}" "github.repository == 'harsh-nod/fe2o3'"
+require_text "${SOURCE_ISA_UNIT_WORKFLOW}" "github.ref == 'refs/heads/main'"
+require_text "${SOURCE_ISA_UNIT_WORKFLOW}" 'runs-on: [self-hosted, linux, x64, fe2o3-source-isa-protected-v1]'
+require_text "${SOURCE_ISA_UNIT_WORKFLOW}" "FE2O3_RUN_SOURCE_ISA_UNIT_MATRIX: '1'"
+require_text "${SOURCE_ISA_UNIT_WORKFLOW}" 'run: scripts/ci-local.sh source-isa-unit-matrix'
+require_text "${SOURCE_ISA_UNIT_WORKFLOW}" 'timeout-minutes: 120'
+require_text "${SOURCE_ISA_UNIT_WORKFLOW}" 'persist-credentials: false'
+if sed -n '/^on:/,/^permissions:/p' "${SOURCE_ISA_UNIT_WORKFLOW}" |
+  rg -n '^[[:space:]]+(push|pull_request|pull_request_target|merge_group|schedule|workflow_call):' \
+    >/dev/null; then
+  printf 'protected source/ISA unit workflow is not workflow_dispatch-only\n' >&2
+  exit 1
+fi
+if rg -n 'source-isa-unit-matrix|FE2O3_RUN_SOURCE_ISA_UNIT_MATRIX' "${GENERIC_WORKFLOW}"; then
+  printf 'generic hosted CI unexpectedly schedules the protected source/ISA unit matrix\n' >&2
+  exit 1
+fi
 if ! sed -n '/^  host-contract:/,$p' "${ROW_SOFTMAX_WORKFLOW}" \
   | grep -F -- 'fetch-depth: 0' >/dev/null; then
   printf 'row-softmax host contract checkout lacks complete lineage history\n' >&2
@@ -278,7 +299,8 @@ if rg -n 'BASE_SHA="\$\(git merge-base' "${GENERIC_WORKFLOW}"; then
 fi
 if rg -n 'actions/checkout@(v[0-9]+|main|master)' \
   "${GENERIC_WORKFLOW}" "${PROTECTED_WORKFLOW}" "${PUBLISHER_WORKFLOW}" \
-  "${HARDWARE_WORKFLOW}" "${ROCM_WORKFLOW}" "${ROW_SOFTMAX_WORKFLOW}"; then
+  "${HARDWARE_WORKFLOW}" "${ROCM_WORKFLOW}" "${ROW_SOFTMAX_WORKFLOW}" \
+  "${SOURCE_ISA_UNIT_WORKFLOW}"; then
   printf 'hosted CI uses a mutable checkout action reference\n' >&2
   exit 1
 fi

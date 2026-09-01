@@ -2316,6 +2316,14 @@ mod tests {
     }
 
     #[test]
+    fn extraction_custody_cannot_enter_protected_publication() {
+        assert!(matches!(
+            ProductionCompilerCustody::extraction_only().into_publication_custody(),
+            Err(ProductionPipelineError::ExtractionCannotPublish)
+        ));
+    }
+
+    #[test]
     fn production_layout_binding_uses_the_measured_worker_spelling() {
         let legacy = format!(
             "target triple = \"amdgcn-amd-amdhsa\"\ntarget datalayout = \"{}\"\n\ndefine void @body() {{ ret void }}\n",
@@ -2467,31 +2475,121 @@ mod tests {
             "let invocation_",
             "descriptor = invocation.descriptor().clone()"
         )));
+        let _: fn(
+            crate::production_semantic_lineage_v3::PreparedProductionSemanticLineageV3,
+            &crate::protected_rustc_invocation::FinishedProtectedRustcInvocationV3,
+            fe2o3_compiler_ffi::DeviceTargetV1,
+            &fe2o3_compiler_ffi::CompilerDescriptorSourceV1,
+            fe2o3_compiler_ffi::CompilerModuleHandoffV2,
+        ) -> Result<
+            fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffV3,
+            crate::production_semantic_lineage_v3::ProductionSemanticLineageErrorV3,
+        > = crate::production_semantic_lineage_v3::PreparedProductionSemanticLineageV3::finish;
+        let _: fn(
+            crate::production_semantic_lineage_v3::PreparedProductionSemanticLineageV3,
+            fe2o3_rustc_invocation::RustcInvocationDescriptorV3,
+            fe2o3_compiler_ffi::DeviceTargetV1,
+            &fe2o3_compiler_ffi::CompilerDescriptorSourceV1,
+            fe2o3_compiler_ffi::CompilerModuleHandoffV2,
+        ) -> Result<
+            fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffV3,
+            crate::production_semantic_lineage_v3::ProductionSemanticLineageErrorV3,
+        > = crate::production_semantic_lineage_v3::PreparedProductionSemanticLineageV3::finish_for_inert_extraction;
         assert!(lineage.contains("invocation_custody: &FinishedProtectedRustcInvocationV3"));
-        assert!(!lineage.contains("invocation: RustcInvocationDescriptorV3"));
+        let inert_lineage_boundary = lineage
+            .find("pub(crate) fn finish_for_inert_extraction(")
+            .expect("explicit inert extraction boundary");
+        assert!(
+            !lineage[..inert_lineage_boundary].contains("invocation: RustcInvocationDescriptorV3")
+        );
+        assert_eq!(
+            lineage[inert_lineage_boundary..]
+                .matches("invocation: RustcInvocationDescriptorV3")
+                .count(),
+            2,
+            "raw descriptors are confined to the inert extraction boundary and its helper",
+        );
 
-        let lineage_finish = pipeline
+        let protected_lineage = lineage
+            .find("pub(crate) fn finish(")
+            .expect("protected lineage finalizer remains explicit");
+        let inert_lineage = lineage[protected_lineage..]
+            .find("pub(crate) fn finish_for_inert_extraction(")
+            .map(|offset| protected_lineage + offset)
+            .expect("inert lineage finalizer remains explicit");
+        let protected_lineage = &lineage[protected_lineage..inert_lineage];
+        let lineage_revalidation = protected_lineage
+            .find(".revalidate_for_publication()")
+            .expect("protected lineage revalidates live invocation custody");
+        let lineage_descriptor = protected_lineage
+            .find(".descriptor().clone()")
+            .expect("protected lineage derives its descriptor from live custody");
+        assert!(lineage_revalidation < lineage_descriptor);
+        assert!(!protected_lineage.contains("invocation: RustcInvocationDescriptorV3"));
+        assert!(!protected_lineage.contains("finish_for_inert_extraction"));
+
+        let inert_pipeline = pipeline
+            .find("pub(crate) fn into_inert_semantic_worker_handoff_for_extraction(")
+            .expect("authority-free extraction path remains explicit");
+        let protected_prepare = pipeline[inert_pipeline..]
+            .find("fn prepare_worker_handoff(")
+            .map(|offset| inert_pipeline + offset)
+            .expect("protected publication path follows inert extraction");
+        let inert_pipeline = &pipeline[inert_pipeline..protected_prepare];
+        assert!(inert_pipeline.contains("if !transaction.compiler_custody.is_extraction_only()"));
+        assert!(inert_pipeline.contains(".finish_for_inert_extraction("));
+        for protected_operation in [
+            concat!("publish_compiler_module_handoff", "_v3"),
+            "InertCompilerExecutionSubjectV1::from_publication",
+            ".acquire(subject.clone())",
+            concat!("publish_compiler_execution_receipt_transport", "_v1"),
+        ] {
+            assert!(
+                !inert_pipeline.contains(protected_operation),
+                "inert extraction reached protected operation: {protected_operation}",
+            );
+        }
+        assert_eq!(
+            pipeline
+                .matches(concat!("publish_compiler_module_handoff", "_v3"))
+                .count(),
+            1,
+            "production retains one durable compiler-module publication path",
+        );
+
+        let protected_pipeline = pipeline[protected_prepare..]
+            .find("fn publish_worker_handoff(")
+            .map(|offset| protected_prepare + offset)
+            .expect("protected publication method remains explicit");
+        let protected_pipeline_end = pipeline[protected_pipeline..]
+            .find("\nfn sole_debug_map_body_v1(")
+            .map(|offset| protected_pipeline + offset)
+            .expect("protected publication method remains bounded");
+        let protected_pipeline = &pipeline[protected_pipeline..protected_pipeline_end];
+        assert!(!protected_pipeline.contains("finish_for_inert_extraction"));
+        assert!(!protected_pipeline.contains("RustcInvocationDescriptorV3"));
+        let lineage_finish = protected_pipeline
             .find(".semantic_lineage\n            .finish(\n                &invocation,")
             .expect("semantic lineage consumes live protected invocation custody");
-        let final_revalidation = pipeline[lineage_finish..]
+        let final_revalidation = protected_pipeline[lineage_finish..]
             .find("invocation\n            .revalidate_for_publication()")
             .map(|offset| lineage_finish + offset)
             .expect("protected invocation is revalidated after lineage construction");
-        let durable_publication = pipeline[lineage_finish..]
+        let durable_publication = protected_pipeline[lineage_finish..]
             .find(concat!("publish_compiler_module_handoff", "_v3"))
             .map(|offset| lineage_finish + offset)
             .expect("strict V3 handoff publication remains present");
-        let execution_subject = pipeline[lineage_finish..]
+        let execution_subject = protected_pipeline[lineage_finish..]
             .find("InertCompilerExecutionSubjectV1::from_publication")
             .map(|offset| lineage_finish + offset)
             .expect("strict publication derives one canonical compiler-execution subject");
         assert!(lineage_finish < final_revalidation && final_revalidation < durable_publication);
         assert!(durable_publication < execution_subject);
-        let receipt_acquisition = pipeline[execution_subject..]
+        let receipt_acquisition = protected_pipeline[execution_subject..]
             .find(".acquire(subject.clone())")
             .map(|offset| execution_subject + offset)
             .expect("exact execution subject is sent to the protected issuer");
-        let receipt_transport = pipeline[receipt_acquisition..]
+        let receipt_transport = protected_pipeline[receipt_acquisition..]
             .find(concat!(
                 "publish_compiler_execution_receipt_transport",
                 "_v1"

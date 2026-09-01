@@ -81,6 +81,13 @@ fn write_only_type_module() -> Module {
 fn write_only_nested_type_is_additive_v9_even_without_a_store() {
     let module = write_only_type_module();
     assert_eq!(
+        encode_module_v7(&module),
+        Err(KernelIrEncodeError::UnsupportedInVersion {
+            version: KERNEL_IR_VERSION_V7,
+            feature: "write-only pointer and slice types",
+        })
+    );
+    assert_eq!(
         encode_module_v8(&module),
         Err(KernelIrEncodeError::UnsupportedInVersion {
             version: KERNEL_IR_VERSION_V8,

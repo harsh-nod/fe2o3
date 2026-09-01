@@ -885,6 +885,29 @@ fn capture_binding_rejects_cursor_only_response_substitution() {
 }
 
 #[test]
+fn diagnosis_v2_access_tags_remain_closed_and_byte_stable() {
+    assert_eq!(
+        serde_json::to_vec(&DiagnosisAccessModeV2::ReadOnly).unwrap(),
+        br#""read_only""#
+    );
+    assert_eq!(
+        serde_json::to_vec(&DiagnosisAccessModeV2::ReadWrite).unwrap(),
+        br#""read_write""#
+    );
+
+    let encoded =
+        encode_diagnosis_response_line_v2(&out_of_bounds_response(), ProtocolLimitsV1::default())
+            .unwrap();
+    let text = std::str::from_utf8(&encoded).unwrap();
+    assert!(text.contains("\"access\":\"read_write\""));
+    let hostile = text.replacen("\"access\":\"read_write\"", "\"access\":\"write_only\"", 1);
+    assert!(matches!(
+        decode_diagnosis_response_line_v2(hostile.as_bytes(), ProtocolLimitsV1::default()),
+        Err(ProtocolCodecErrorV1::InvalidJson)
+    ));
+}
+
+#[test]
 fn capture_binding_rejects_request_id_only_response_substitution() {
     let original = bundle_and_source_mapped_out_of_bounds_response();
     let expected_capture = capture_binding(&original);
