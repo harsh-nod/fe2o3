@@ -542,6 +542,9 @@ mod tests {
         Module, Operation, OperationKind, ScalarType, Signature, SynchronizationScope, Terminator,
         Type, ValueDef, ValueId, VerifiedCanonicalKernelIrV8, WorkgroupBarrier,
     };
+    use fe2o3_source_isa_observation::characteristic_v1::{
+        SourceIsaCharacteristicQueryV1, SourceIsaCharacteristicTargetQueryV1,
+    };
 
     use crate::{
         ProductionSourceIsaCatalogRecordV1, ProductionSourceIsaCatalogStructuralCountsV1,
@@ -888,9 +891,80 @@ mod tests {
         assert!(released.scan().is_complete());
     }
 
+    #[test]
+    fn structural_target_without_catalog_correlation_admits_releases_and_queries_exactly() {
+        let verified = VerifiedCanonicalKernelIrV8::from_module(characteristic_module(false))
+            .expect("valid structural-only target KIR");
+        let counts = ProductionSourceIsaCatalogStructuralCountsV1::new_for_bridge_v1(1, 1, 1, 1);
+        let catalog = crate::production_source_isa_catalog_v1::characteristic_catalog_fixture_v1(
+            *verified.identity().digest(),
+            verified.identity().canonical_length(),
+            counts,
+            Vec::new(),
+        );
+        let bridge =
+            crate::production_kir_v7_structural_bridge_v1::characteristic_bridge_fixture_v1(
+                verified.canonical_bytes(),
+                &catalog,
+            )
+            .unwrap();
+        let ProductionSourceIsaCharacteristicAdmissionV1::Admitted(producer) =
+            admit_production_source_isa_characteristics_v1(
+                verified.canonical_bytes(),
+                &catalog,
+                &bridge,
+            )
+            .unwrap()
+        else {
+            panic!("bounded structural-only characteristic must be admitted")
+        };
+
+        assert_eq!(producer.catalog_record_count(), 0);
+        assert_eq!(producer.examined_target_operation_count(), 1);
+        assert_eq!(producer.classified_target_operation_count(), 1);
+        assert_eq!(producer.retained_correlation_count(), 0);
+        assert_eq!(producer.pre_kir_elimination_count(), 0);
+        assert_eq!(producer.characteristics().len(), 1);
+        assert_eq!(
+            producer.characteristics()[0].kind(),
+            ProductionSourceIsaCharacteristicKindV1::WorkgroupBarrier
+        );
+        assert_eq!(
+            producer.characteristics()[0].attribution(),
+            ProductionSourceIsaCharacteristicAttributionV1::StructuralOnly { record_count: 0 }
+        );
+        assert!(producer.characteristics()[0].correlations().is_empty());
+
+        let released = release_production_source_isa_characteristic_projection_v1(&producer)
+            .expect("exact structural-only observer release");
+        assert_eq!(released.scan().classified_target_count(), 1);
+        assert_eq!(released.scan().retained_target_correlation_count(), 0);
+        assert_eq!(released.scan().correlation_count(), 0);
+        assert_eq!(released.targets().len(), 1);
+        assert!(released.targets()[0].correlations().is_empty());
+
+        let target_page = released
+            .query_targets_page(&SourceIsaCharacteristicTargetQueryV1::All, None, 1)
+            .unwrap();
+        assert_eq!(target_page.total_matches(), 1);
+        assert_eq!(target_page.targets().len(), 1);
+        assert_eq!(target_page.targets()[0].correlation_count(), 0);
+        let fact_page = released
+            .query_page(&SourceIsaCharacteristicQueryV1::All, None, 1)
+            .unwrap();
+        assert_eq!(fact_page.total_matches(), 0);
+        assert!(fact_page.matches().is_empty());
+        assert_eq!(
+            released.interval_page(target_page.targets()[0].identity(), None, 1),
+            Err(SourceIsaCharacteristicErrorV1::InvalidClaim)
+        );
+    }
+
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     enum HostileMutation {
         KindAndMemoryForm,
+        CatalogRecordOrdinal,
+        CorrelationMultiplicity,
         RecordKind,
         Source,
         MirNode,
@@ -910,6 +984,7 @@ mod tests {
         StructuralIdentity,
         StructuralCounts,
         SourceMap,
+        ContentByteLength,
         NeutralKirContent,
         TargetKirContent,
         Artifact,
@@ -925,6 +1000,8 @@ mod tests {
         let exact = release_production_source_isa_characteristic_projection_v1(&producer).unwrap();
         for mutation in [
             HostileMutation::KindAndMemoryForm,
+            HostileMutation::CatalogRecordOrdinal,
+            HostileMutation::CorrelationMultiplicity,
             HostileMutation::RecordKind,
             HostileMutation::Source,
             HostileMutation::MirNode,
@@ -944,6 +1021,7 @@ mod tests {
             HostileMutation::StructuralIdentity,
             HostileMutation::StructuralCounts,
             HostileMutation::SourceMap,
+            HostileMutation::ContentByteLength,
             HostileMutation::NeutralKirContent,
             HostileMutation::TargetKirContent,
             HostileMutation::Artifact,
@@ -980,18 +1058,33 @@ mod tests {
         let binding = rebuilt_binding(exact.binding(), mutation);
         let original_scan = exact.scan();
         let extra_catalog_record = u64::from(matches!(mutation, HostileMutation::ScanCount));
+        let extra_correlation =
+            u64::from(matches!(mutation, HostileMutation::CorrelationMultiplicity));
         let scan = SourceIsaCharacteristicScanSummaryV1::new(
             original_scan.catalog_record_count() + extra_catalog_record,
             original_scan.catalog_records_scanned() + extra_catalog_record,
             original_scan.target_operation_count(),
             original_scan.target_operations_scanned(),
             original_scan.classified_target_count(),
-            original_scan.retained_target_correlation_count(),
+            original_scan.retained_target_correlation_count() + extra_correlation,
             original_scan.pre_kir_elimination_count(),
-            original_scan.correlation_count(),
+            original_scan.correlation_count() + extra_correlation,
             original_scan.state(),
         )
         .unwrap();
+        let unused_catalog_record_ordinal = (0..original_scan.catalog_record_count())
+            .find(|candidate| {
+                exact.targets().iter().all(|target| {
+                    target
+                        .correlations()
+                        .iter()
+                        .all(|correlation| correlation.catalog_record_ordinal() != *candidate)
+                }) && exact
+                    .pre_kir_eliminations()
+                    .iter()
+                    .all(|fact| fact.catalog_record_ordinal() != *candidate)
+            })
+            .expect("hostile fixture retains one unclassified catalog record");
 
         let mut mutated_correlation = false;
         let targets = exact
@@ -1010,7 +1103,8 @@ mod tests {
                 } else {
                     target.kind()
                 };
-                let correlations = target
+                let mut selected_original = None;
+                let mut correlations: Vec<_> = target
                     .correlations()
                     .iter()
                     .map(|correlation| {
@@ -1019,10 +1113,35 @@ mod tests {
                                 == SourceIsaCharacteristicRecordKindV1::SourceAnchored;
                         if selected {
                             mutated_correlation = true;
+                            selected_original = Some(correlation);
                         }
-                        rebuilt_correlation(correlation, target_kir, mutation, selected)
+                        let catalog_record_ordinal = if selected
+                            && matches!(mutation, HostileMutation::CatalogRecordOrdinal)
+                        {
+                            unused_catalog_record_ordinal
+                        } else {
+                            correlation.catalog_record_ordinal()
+                        };
+                        rebuilt_correlation(
+                            correlation,
+                            catalog_record_ordinal,
+                            target_kir,
+                            mutation,
+                            selected,
+                        )
                     })
                     .collect();
+                if matches!(mutation, HostileMutation::CorrelationMultiplicity) {
+                    if let Some(original) = selected_original {
+                        correlations.push(rebuilt_correlation(
+                            original,
+                            unused_catalog_record_ordinal,
+                            target_kir,
+                            mutation,
+                            false,
+                        ));
+                    }
+                }
                 SourceIsaCharacteristicTargetV1::new(kind, target_kir, correlations).unwrap()
             })
             .collect();
@@ -1117,10 +1236,18 @@ mod tests {
         mutation: HostileMutation,
         selected: HostileMutation,
     ) -> SourceIsaCharacteristicContentIdentityV1 {
-        if mutation == selected {
+        if mutation == selected
+            || matches!(mutation, HostileMutation::ContentByteLength)
+                && matches!(selected, HostileMutation::SourceMap)
+        {
             SourceIsaCharacteristicContentIdentityV1::new(
-                changed_id(content.sha256()),
-                content.byte_len(),
+                if mutation == selected {
+                    changed_id(content.sha256())
+                } else {
+                    content.sha256()
+                },
+                content.byte_len()
+                    + u64::from(matches!(mutation, HostileMutation::ContentByteLength)),
             )
             .unwrap()
         } else {
@@ -1130,6 +1257,7 @@ mod tests {
 
     fn rebuilt_correlation(
         original: &SourceIsaCharacteristicTargetCorrelationV1,
+        catalog_record_ordinal: u64,
         target_kir: SourceIsaCharacteristicKirCoordinateV1,
         mutation: HostileMutation,
         selected: bool,
@@ -1204,6 +1332,8 @@ mod tests {
                 }
                 HostileMutation::IsaMultiplicity => intervals.push(intervals[0]),
                 HostileMutation::KindAndMemoryForm
+                | HostileMutation::CatalogRecordOrdinal
+                | HostileMutation::CorrelationMultiplicity
                 | HostileMutation::TargetKirCoordinate
                 | HostileMutation::PreKir
                 | HostileMutation::ScanCount
@@ -1212,6 +1342,7 @@ mod tests {
                 | HostileMutation::StructuralIdentity
                 | HostileMutation::StructuralCounts
                 | HostileMutation::SourceMap
+                | HostileMutation::ContentByteLength
                 | HostileMutation::NeutralKirContent
                 | HostileMutation::TargetKirContent
                 | HostileMutation::Artifact
@@ -1222,7 +1353,7 @@ mod tests {
             }
         }
         SourceIsaCharacteristicTargetCorrelationV1::new(
-            original.catalog_record_ordinal(),
+            catalog_record_ordinal,
             kind,
             source,
             mir_node,

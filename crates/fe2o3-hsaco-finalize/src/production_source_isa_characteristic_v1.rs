@@ -14,9 +14,10 @@ use fe2o3_kernel_ir::{
 use crate::{
     ContentIdentityV1, ProductionKirV7BridgeSiteV1, ProductionKirV7StructuralBridgeV1,
     ProductionSourceIsaCatalogContentIdentityV1, ProductionSourceIsaCatalogKirVersionV1,
-    ProductionSourceIsaCatalogRecordKindV1, ProductionSourceIsaCatalogRecordV1,
-    ProductionSourceIsaCatalogStructuralCountsV1, ProductionSourceIsaCatalogTargetV1,
-    ProductionSourceIsaCatalogV1, ProductionSourceIsaKirCoordinateV1,
+    ProductionSourceIsaCatalogQueryUnavailableV1, ProductionSourceIsaCatalogRecordKindV1,
+    ProductionSourceIsaCatalogRecordV1, ProductionSourceIsaCatalogStructuralCountsV1,
+    ProductionSourceIsaCatalogTargetV1, ProductionSourceIsaCatalogV1,
+    ProductionSourceIsaKirCoordinateV1,
 };
 
 /// Maximum number of structurally characteristic target-KIR operations retained by V1.
@@ -649,10 +650,18 @@ fn collect_characteristics(
                     .map_err(|_| {
                         ProductionSourceIsaCharacteristicErrorV1::UnknownBridgeCoordinate
                     })?;
-                let mut matches = catalog.query_target_kir(coordinate).map_err(|_| {
-                    ProductionSourceIsaCharacteristicErrorV1::MissingCatalogCorrelation
-                })?;
-                let count = matches.len();
+                let mut matches = match catalog.query_target_kir(coordinate) {
+                    Ok(matches) => Some(matches),
+                    Err(
+                        ProductionSourceIsaCatalogQueryUnavailableV1::UnknownTargetKirCoordinate,
+                    ) => None,
+                    Err(_) => {
+                        return Err(
+                            ProductionSourceIsaCharacteristicErrorV1::MissingCatalogCorrelation,
+                        );
+                    }
+                };
+                let count = matches.as_ref().map_or(0, |matches| matches.len());
                 if count > MAX_PRODUCTION_SOURCE_ISA_CHARACTERISTIC_CORRELATIONS_PER_WITNESS_V1 {
                     return Ok(Err(
                         ProductionSourceIsaCharacteristicUnavailableV1::CorrelationPerWitnessLimit,
@@ -670,13 +679,16 @@ fn collect_characteristics(
                 correlations
                     .try_reserve_exact(count)
                     .map_err(|_| ProductionSourceIsaCharacteristicErrorV1::AllocationFailure)?;
-                while let Some((catalog_record_ordinal, record)) = matches.next_with_ordinal() {
-                    if record.target_kir() != Some(coordinate) || is_pre_kir_eliminated(record) {
-                        return Err(
-                            ProductionSourceIsaCharacteristicErrorV1::InvalidCatalogCorrelation,
-                        );
+                if let Some(matches) = &mut matches {
+                    while let Some((catalog_record_ordinal, record)) = matches.next_with_ordinal() {
+                        if record.target_kir() != Some(coordinate) || is_pre_kir_eliminated(record)
+                        {
+                            return Err(
+                                ProductionSourceIsaCharacteristicErrorV1::InvalidCatalogCorrelation,
+                            );
+                        }
+                        correlations.push(try_copy_correlation(catalog_record_ordinal, record)?);
                     }
-                    correlations.push(try_copy_correlation(catalog_record_ordinal, record)?);
                 }
                 let attribution = attribution(&correlations)?;
                 witnesses.push(ProductionSourceIsaCharacteristicWitnessV1 {
