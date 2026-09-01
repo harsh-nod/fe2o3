@@ -138,6 +138,8 @@ not a compiler, artifact, or publication authority boundary.
 Canonical contracts own versioned records, stable identities, wire encodings,
 public compiler/host interfaces, target descriptions, and Pliron-independent
 models. The current boundaries include `fe2o3-mir-model`,
+`fe2o3-middle-end-contracts`, which independently decodes the inert V5
+middle-end evidence wire without importing live Pliron objects,
 `fe2o3-compiler-api`, `fe2o3-proof-contracts`, `fe2o3-service-model`,
 `fe2o3-host-api`, `fe2o3-amd-target`, and the existing artifact, descriptor,
 completion, invocation, compiler-lineage, and authority contracts listed in
@@ -239,6 +241,12 @@ service/scheduler proof implementations. Proof code consumes canonical
 statements and admitted source semantics; it does not grant artifact or launch
 authority by dependency direction. It MUST NOT depend on target backend, host
 runtime, integration drivers, or fixtures.
+
+Live proof generation over ranked Pliron objects is compiler integration, not
+independent verification. `fe2o3-compiler-proof-generation` owns that generation
+and consumes the verifier's retained runtime and signed-evidence contracts. The
+verifier sees those executions only through an authority-free identity and
+receipt view.
 
 ### Host runtime
 

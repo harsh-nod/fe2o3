@@ -62,7 +62,8 @@ use fe2o3_pliron::{
     ProductionRankedKernelLoweringInputV1, ProductionRankedOperationV1, ProductionRankedValueIdV1,
     ProductionRankedValueV1, ProductionSemanticBinaryOpV2, ProductionSemanticCastV2,
     ProductionSemanticComparisonV2, ProductionSemanticExpressionV2, ProductionSemanticMirErrorV1,
-    ProductionSemanticMirOwnerV1, ProductionSemanticScalarTypeV2, ProductionSemanticUnaryOpV2,
+    ProductionSemanticMirLimitsV1, ProductionSemanticMirOwnerV1, ProductionSemanticScalarTypeV2,
+    ProductionSemanticUnaryOpV2,
 };
 use sha2::{Digest as _, Sha256};
 
@@ -1602,6 +1603,20 @@ impl fmt::Debug for ProductionSemanticKirOwnerV1 {
 }
 
 impl ProductionSemanticKirOwnerV1 {
+    /// Admits a canonical semantic MIR document and consumes it directly into
+    /// verified Kernel IR without exposing the middle-end's live owner type.
+    pub fn try_lower_admitted(
+        semantic: AdmittedInertSemanticMirV1,
+        limits: ProductionSemanticKirLimitsV1,
+    ) -> Result<Self, ProductionSemanticKirErrorV1> {
+        let semantic = ProductionSemanticMirOwnerV1::try_new(
+            semantic,
+            ProductionSemanticMirLimitsV1::default(),
+        )
+        .map_err(ProductionSemanticKirErrorV1::SemanticOwner)?;
+        Self::try_lower(semantic, limits)
+    }
+
     /// Consumes exact semantic ownership and constructs verified Kernel IR.
     pub fn try_lower(
         semantic: ProductionSemanticMirOwnerV1,

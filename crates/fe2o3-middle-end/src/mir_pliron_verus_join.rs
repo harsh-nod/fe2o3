@@ -2,18 +2,19 @@
 
 use std::{error::Error, fmt};
 
+use fe2o3_compiler_proof_generation::{
+    ProductionMirPlironPerCompilationVerusErrorV1,
+    ProductionMirPlironPerCompilationVerusExecutionV1,
+    ProductionMirPlironPerCompilationVerusReportV1,
+    execute_mir_pliron_semantic_contract_per_compilation_borrowed_v1,
+};
 use fe2o3_functional_proof::{MirPlironSemanticContractV1, ParallelReferenceContractV1};
 use fe2o3_pliron::{
     ProductionMiddleEndEvidenceV5, ProductionMirPlironSemanticContractReportV1,
     ProductionParallelReferenceContractReportV1, ProductionRankedKernelLoweringInputV1,
     ProductionRefinementStagingPolicyV2,
 };
-use fe2o3_verifier::{
-    FunctionalRefinementVerusRuntimeLeaseV1, ProductionMirPlironPerCompilationVerusErrorV1,
-    ProductionMirPlironPerCompilationVerusExecutionV1,
-    ProductionMirPlironPerCompilationVerusReportV1,
-    execute_mir_pliron_semantic_contract_per_compilation_borrowed_v1,
-};
+use fe2o3_verifier::FunctionalRefinementVerusRuntimeLeaseV1;
 
 const RETAINED_FUNCTIONAL_REFINEMENT_RUNTIME_ROOT_V1: &str =
     "/opt/fe2o3/verus-runtime-v2/functional-refinement-0.2026.08.02-b677dd5";

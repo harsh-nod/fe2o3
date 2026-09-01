@@ -24,6 +24,9 @@ use fe2o3_kernel_ir::{
     VerifiedCanonicalKernelIrErrorV8, VerifiedCanonicalKernelIrErrorV9,
     VerifiedCanonicalKernelIrV8, VerifiedCanonicalKernelIrV9,
 };
+use fe2o3_middle_end_contracts::{
+    InertProductionMiddleEndEvidenceV5, ProductionMiddleEndEvidenceCodecErrorV5,
+};
 use fe2o3_mir_model::semantic_mir_v1::{
     AdmittedInertSemanticMirV1, SemanticCheckedBinaryOpV1, SemanticFunctionDeclV1,
     SemanticFunctionIdV1, SemanticLocalRoleV1, SemanticMirDecodeErrorV1, SemanticMirLimitsV1,
@@ -33,7 +36,6 @@ use fe2o3_mir_model::{
     InertCanonicalSemanticU32InductionEvidenceV1, SemanticU32InductionAnalysisErrorV1,
     SemanticU32InductionEvidenceErrorV1, analyze_semantic_u32_induction_no_overflow_v1,
 };
-use fe2o3_pliron::{InertProductionMiddleEndEvidenceV5, ProductionMiddleEndEvidenceCodecErrorV5};
 use sha2::{Digest, Sha256};
 
 use crate::{

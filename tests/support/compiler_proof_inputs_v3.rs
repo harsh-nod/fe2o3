@@ -12,13 +12,12 @@ use fe2o3_lower_mir_kernel::{
     produce_formal_memory_admission_evidence_v3, produce_formal_memory_admission_evidence_v4,
     produce_mir_to_kir_correspondence_evidence_v3, produce_mir_to_kir_correspondence_evidence_v4,
 };
+use fe2o3_middle_end_contracts::{
+    InertProductionMiddleEndEvidenceV5, PRODUCTION_MIDDLE_END_EVIDENCE_DOMAIN_V5,
+    PRODUCTION_MIDDLE_END_EVIDENCE_POLICY_V5,
+};
 use fe2o3_mir_model::analyze_semantic_u32_induction_no_overflow_v1;
 use fe2o3_mir_model::semantic_mir_v1::*;
-use fe2o3_pliron::{
-    InertProductionMiddleEndEvidenceV5, PRODUCTION_MIDDLE_END_EVIDENCE_DOMAIN_V5,
-    PRODUCTION_MIDDLE_END_EVIDENCE_POLICY_V5, ProductionSemanticMirLimitsV1,
-    ProductionSemanticMirOwnerV1,
-};
 use fe2o3_proof_contracts::DigestV1;
 use fe2o3_verifier::{
     CanonicalProductionMirPlironVerusExecutionEvidenceV1, ProductionMirPlironVerusExecutionClaimsV1,
@@ -109,10 +108,10 @@ pub(crate) fn canonical_compiler_proof_inputs_v4_with_sourceful_induction(
 
 fn canonical_compiler_proof_inputs(
     seed: u8,
-    semantic_owner: ProductionSemanticMirOwnerV1,
+    semantic_owner: AdmittedInertSemanticMirV1,
     lossless_correspondence: bool,
 ) -> CanonicalCompilerProofInputsV3 {
-    let semantic_kir = ProductionSemanticKirOwnerV1::try_lower(
+    let semantic_kir = ProductionSemanticKirOwnerV1::try_lower_admitted(
         semantic_owner,
         ProductionSemanticKirLimitsV1::default(),
     )
@@ -287,7 +286,7 @@ fn block(
     .unwrap()
 }
 
-fn semantic_owner(seed: u8) -> ProductionSemanticMirOwnerV1 {
+fn semantic_owner(seed: u8) -> AdmittedInertSemanticMirV1 {
     let type_id = SemanticTypeIdV1::from_index(0);
     let layout = production_target_layout_identity();
     let abi = SemanticFunctionAbiV1::from_rustc(
@@ -356,15 +355,14 @@ fn semantic_owner(seed: u8) -> ProductionSemanticMirOwnerV1 {
     .unwrap()
     .admit_current_production(SemanticMirLimitsV1::default())
     .unwrap();
-    ProductionSemanticMirOwnerV1::try_new(admitted, ProductionSemanticMirLimitsV1::default())
-        .unwrap()
+    admitted
 }
 
 #[allow(
     dead_code,
     reason = "used only by the shared checked-induction V4 fixture"
 )]
-fn semantic_induction_owner(seed: u8, sourceful: bool) -> ProductionSemanticMirOwnerV1 {
+fn semantic_induction_owner(seed: u8, sourceful: bool) -> AdmittedInertSemanticMirV1 {
     let unit = SemanticTypeIdV1::from_index(0);
     let u32_ty = SemanticTypeIdV1::from_index(1);
     let bool_ty = SemanticTypeIdV1::from_index(2);
@@ -627,8 +625,7 @@ fn semantic_induction_owner(seed: u8, sourceful: bool) -> ProductionSemanticMirO
     .unwrap()
     .admit_current_production(SemanticMirLimitsV1::default())
     .unwrap();
-    ProductionSemanticMirOwnerV1::try_new(admitted, ProductionSemanticMirLimitsV1::default())
-        .unwrap()
+    admitted
 }
 
 fn middle_end_v5_bytes(source_semantic_identity: [u8; 32], seed: u8) -> Vec<u8> {

@@ -35,10 +35,11 @@ use fe2o3_proof_contracts::DigestV1;
 use rand_core::OsRng;
 use sha2::{Digest, Sha256};
 
-use crate::functional_refinement_runtime_v1::{
+use fe2o3_verifier::{
+    CanonicalGeneratedVerusProofInputV3, FunctionalRefinementRuntimeErrorV1,
     FunctionalRefinementRuntimeProcessOutputV1, FunctionalRefinementVerusRuntimeLeaseV1,
+    MAX_GENERATED_VERUS_PROOF_SOURCE_BYTES_V3,
 };
-use crate::{CanonicalGeneratedVerusProofInputV3, FunctionalRefinementRuntimeErrorV1};
 
 pub const MAX_FUNCTIONAL_REFINEMENT_VERUS_TIMEOUT_SECONDS_V2: u32 = 600;
 pub const MAX_FUNCTIONAL_REFINEMENT_VERUS_OUTPUT_BYTES_V2: usize = 16 * 1024;
@@ -1043,7 +1044,7 @@ fn render_bitvector_expression_v2(
             }
         }
     };
-    if rendered.len() > crate::MAX_GENERATED_VERUS_PROOF_SOURCE_BYTES_V3 {
+    if rendered.len() > MAX_GENERATED_VERUS_PROOF_SOURCE_BYTES_V3 {
         return Err(generated_source_limit());
     }
     Ok(rendered)
@@ -1132,7 +1133,7 @@ fn render_ieee_congruence_expression_v2(
             render_ieee_congruence_expression_v2(operand)?,
         ),
     };
-    if rendered.len() > crate::MAX_GENERATED_VERUS_PROOF_SOURCE_BYTES_V3 {
+    if rendered.len() > MAX_GENERATED_VERUS_PROOF_SOURCE_BYTES_V3 {
         return Err(generated_source_limit());
     }
     Ok(rendered)
@@ -1195,7 +1196,7 @@ impl fmt::Write for BoundedVerusSourceV2 {
             .len()
             .checked_add(text.len())
             .ok_or(fmt::Error)?;
-        if length > crate::MAX_GENERATED_VERUS_PROOF_SOURCE_BYTES_V3 {
+        if length > MAX_GENERATED_VERUS_PROOF_SOURCE_BYTES_V3 {
             return Err(fmt::Error);
         }
         self.source.push_str(text);
@@ -1251,7 +1252,7 @@ fn validate_proved_output(
     let prefix = b"verification results:: ";
     let suffix = b" verified, 0 errors\n";
     let count = observed
-        .stdout
+        .stdout()
         .strip_prefix(prefix)
         .and_then(|body| body.strip_suffix(suffix));
     let valid_count = count.is_some_and(|digits| {
@@ -1263,9 +1264,9 @@ fn validate_proved_output(
                 .and_then(|digits| digits.parse::<u32>().ok())
                 .is_some_and(|count| count != 0)
     });
-    if observed.exit_code != Some(0)
-        || observed.signal.is_some()
-        || !observed.stderr.is_empty()
+    if observed.exit_code() != Some(0)
+        || observed.signal().is_some()
+        || !observed.stderr().is_empty()
         || !valid_count
     {
         return Err(FunctionalRefinementVerusExecutionErrorV2::new(
@@ -1296,10 +1297,10 @@ fn execution_identity(
     ] {
         put_blob(&mut digest, value.as_bytes());
     }
-    digest.update(observed.exit_code.unwrap_or(-1).to_le_bytes());
-    digest.update(observed.signal.unwrap_or(0).to_le_bytes());
-    put_blob(&mut digest, &observed.stdout);
-    put_blob(&mut digest, &observed.stderr);
+    digest.update(observed.exit_code().unwrap_or(-1).to_le_bytes());
+    digest.update(observed.signal().unwrap_or(0).to_le_bytes());
+    put_blob(&mut digest, observed.stdout());
+    put_blob(&mut digest, observed.stderr());
     DigestV1::from_untrusted_bytes(digest.finalize().into())
 }
 
@@ -1390,12 +1391,12 @@ mod tests {
         stdout: &[u8],
         stderr: &[u8],
     ) -> FunctionalRefinementRuntimeProcessOutputV1 {
-        FunctionalRefinementRuntimeProcessOutputV1 {
-            exit_code: Some(exit_code),
-            signal: None,
-            stdout: stdout.to_vec(),
-            stderr: stderr.to_vec(),
-        }
+        FunctionalRefinementRuntimeProcessOutputV1::from_observed_process(
+            Some(exit_code),
+            None,
+            stdout.to_vec(),
+            stderr.to_vec(),
+        )
     }
 
     fn digest(value: u8) -> DigestV1 {

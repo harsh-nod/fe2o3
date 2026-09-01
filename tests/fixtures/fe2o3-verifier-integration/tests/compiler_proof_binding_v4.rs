@@ -11,7 +11,7 @@ use fe2o3_functional_proof::{
     FunctionalRefinementReceiptImporterV2, FunctionalRefinementResultV2, SafeReferenceKindV2,
     UnsignedFunctionalRefinementReceiptV2, VerusToolchainIdentityV2,
 };
-use fe2o3_pliron::InertProductionMiddleEndEvidenceV5;
+use fe2o3_middle_end_contracts::InertProductionMiddleEndEvidenceV5;
 use fe2o3_proof_contracts::DigestV1;
 use fe2o3_verifier::{
     CanonicalProductionMirPlironVerusExecutionEvidenceV1, CompilerProofInputValidationErrorV3,

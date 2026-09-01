@@ -29,13 +29,14 @@ use fe2o3_pliron::{
 use fe2o3_proof_contracts::DigestV1;
 use sha2::{Digest as _, Sha256};
 
+use crate::FunctionalRefinementVerusExecutionErrorV2;
 use crate::functional_refinement_receipt_v2::{
     RetainedImportedFunctionalRefinementReceiptV2,
     execute_and_import_generated_mir_pliron_composition_locally_v1,
 };
-use crate::{
-    CanonicalGeneratedVerusProofInputV3, FunctionalRefinementVerusExecutionErrorV2,
-    FunctionalRefinementVerusRuntimeLeaseV1,
+use fe2o3_verifier::{
+    CanonicalGeneratedVerusProofInputV3, FunctionalRefinementVerusRuntimeLeaseV1,
+    MAX_GENERATED_VERUS_PROOF_SOURCE_BYTES_V3,
 };
 
 const AGGREGATE_OBLIGATION_DOMAIN_V1: &[u8] =
@@ -164,7 +165,7 @@ impl ProductionMirPlironPerCompilationVerusExecutionV1 {
 /// Move-only owner admitted through both structural and executed Verus gates.
 ///
 /// ```compile_fail
-/// use fe2o3_verifier::ProductionVerusVerifiedMirPlironKernelV1;
+/// use fe2o3_compiler_proof_generation::ProductionVerusVerifiedMirPlironKernelV1;
 /// fn requires_clone<T: Clone>() {}
 /// requires_clone::<ProductionVerusVerifiedMirPlironKernelV1>();
 /// ```
@@ -672,7 +673,7 @@ fn append_contract_instantiations_v1(
         if source
             .len()
             .checked_add(replay.lemma().len())
-            .is_none_or(|length| length > crate::MAX_GENERATED_VERUS_PROOF_SOURCE_BYTES_V3)
+            .is_none_or(|length| length > MAX_GENERATED_VERUS_PROOF_SOURCE_BYTES_V3)
         {
             return Err(
                 ProductionMirPlironPerCompilationVerusErrorV1::GeneratedSource(
@@ -704,7 +705,7 @@ fn append_contract_instantiations_v1(
         source.push_str(");\n");
     }
     source.push_str("    }\n}\n\nfn fe2o3_contract_instantiations_v1() {}\n");
-    if source.len() > crate::MAX_GENERATED_VERUS_PROOF_SOURCE_BYTES_V3 {
+    if source.len() > MAX_GENERATED_VERUS_PROOF_SOURCE_BYTES_V3 {
         return Err(
             ProductionMirPlironPerCompilationVerusErrorV1::GeneratedSource(
                 "aggregate effect-formula replay exceeds the generated-source byte limit"

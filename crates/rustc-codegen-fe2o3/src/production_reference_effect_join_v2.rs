@@ -120,7 +120,7 @@ pub(crate) fn reserved_reference_output_ranks_v2(
         );
     }
     if binding.observable_output_writes.len()
-        > fe2o3_verifier::MAX_PRODUCTION_AGGREGATE_EFFECT_FORMULA_OUTPUTS_V1
+        > fe2o3_compiler_proof_generation::MAX_PRODUCTION_AGGREGATE_EFFECT_FORMULA_OUTPUTS_V1
     {
         return Err(
             crate::production_ranked_projection_v1::ProductionRankedProjectionErrorV1::Unsupported(
@@ -185,7 +185,7 @@ impl CompilerOwnedReferenceEffectRequestV2 {
         let mut toolchain = None;
         for request in &self.requests {
             let (binding, imported, _single_receipt_policy) =
-                fe2o3_verifier::execute_and_import_ranked_functional_refinement_locally_v2(
+                fe2o3_compiler_proof_generation::execute_and_import_ranked_functional_refinement_locally_v2(
                     &runtime,
                     &self.kernel,
                     request.block,
@@ -243,15 +243,18 @@ fn per_output_proof_timeout_v2(
     let output_count_u32 = u32::try_from(output_count).map_err(|_| {
         ProductionReferenceEffectJoinErrorV2::ProofOutputLimit {
             actual: output_count,
-            limit: fe2o3_verifier::MAX_PRODUCTION_AGGREGATE_EFFECT_FORMULA_OUTPUTS_V1,
+            limit:
+                fe2o3_compiler_proof_generation::MAX_PRODUCTION_AGGREGATE_EFFECT_FORMULA_OUTPUTS_V1,
         }
     })?;
     if output_count == 0
-        || output_count > fe2o3_verifier::MAX_PRODUCTION_AGGREGATE_EFFECT_FORMULA_OUTPUTS_V1
+        || output_count
+            > fe2o3_compiler_proof_generation::MAX_PRODUCTION_AGGREGATE_EFFECT_FORMULA_OUTPUTS_V1
     {
         return Err(ProductionReferenceEffectJoinErrorV2::ProofOutputLimit {
             actual: output_count,
-            limit: fe2o3_verifier::MAX_PRODUCTION_AGGREGATE_EFFECT_FORMULA_OUTPUTS_V1,
+            limit:
+                fe2o3_compiler_proof_generation::MAX_PRODUCTION_AGGREGATE_EFFECT_FORMULA_OUTPUTS_V1,
         });
     }
     Ok((WHOLE_COMPILE_PROOF_TIMEOUT_SECONDS_V2 / output_count_u32)
@@ -1644,7 +1647,8 @@ mod tests {
     #[test]
     fn prepare_rejects_output_limit_before_gpu_effect_extraction() {
         let (effect_ir, outputs) = bounds_discharge_fixture();
-        let output_count = fe2o3_verifier::MAX_PRODUCTION_AGGREGATE_EFFECT_FORMULA_OUTPUTS_V1 + 1;
+        let output_count =
+            fe2o3_compiler_proof_generation::MAX_PRODUCTION_AGGREGATE_EFFECT_FORMULA_OUTPUTS_V1 + 1;
         let identity = ReferenceFunctionIdentityV1 {
             def_path_hash: [1; 16],
             function_sha256: [2; 32],
@@ -1676,7 +1680,8 @@ mod tests {
                 actual,
                 limit
             } if actual == output_count
-                && limit == fe2o3_verifier::MAX_PRODUCTION_AGGREGATE_EFFECT_FORMULA_OUTPUTS_V1
+                && limit
+                    == fe2o3_compiler_proof_generation::MAX_PRODUCTION_AGGREGATE_EFFECT_FORMULA_OUTPUTS_V1
         ));
     }
 

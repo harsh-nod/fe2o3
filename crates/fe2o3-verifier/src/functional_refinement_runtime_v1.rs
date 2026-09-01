@@ -71,7 +71,11 @@ impl FunctionalRefinementVerusRuntimeLeaseV1 {
             .map_err(runtime_error_from_backend)
     }
 
-    pub(crate) fn execute_generated_rust_verify(
+    /// Executes one already-canonical generated proof through the retained runtime.
+    ///
+    /// The bounded process output is observational evidence only and grants no
+    /// compiler, artifact, publication, load, or launch authority.
+    pub fn execute_generated_rust_verify(
         &self,
         source: &CanonicalGeneratedVerusProofInputV3,
         deadline: Instant,
@@ -86,11 +90,48 @@ impl FunctionalRefinementVerusRuntimeLeaseV1 {
 }
 
 /// Bounded output from one retained generated-proof process.
-pub(crate) struct FunctionalRefinementRuntimeProcessOutputV1 {
-    pub(crate) exit_code: Option<i32>,
-    pub(crate) signal: Option<i32>,
-    pub(crate) stdout: Vec<u8>,
-    pub(crate) stderr: Vec<u8>,
+pub struct FunctionalRefinementRuntimeProcessOutputV1 {
+    exit_code: Option<i32>,
+    signal: Option<i32>,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+}
+
+impl FunctionalRefinementRuntimeProcessOutputV1 {
+    /// Constructs an authority-free observed process result.
+    pub fn from_observed_process(
+        exit_code: Option<i32>,
+        signal: Option<i32>,
+        stdout: Vec<u8>,
+        stderr: Vec<u8>,
+    ) -> Self {
+        Self {
+            exit_code,
+            signal,
+            stdout,
+            stderr,
+        }
+    }
+
+    /// Returns the process exit code when it exited normally.
+    pub const fn exit_code(&self) -> Option<i32> {
+        self.exit_code
+    }
+
+    /// Returns the terminating signal when the process was signalled.
+    pub const fn signal(&self) -> Option<i32> {
+        self.signal
+    }
+
+    /// Returns bounded standard output bytes.
+    pub fn stdout(&self) -> &[u8] {
+        &self.stdout
+    }
+
+    /// Returns bounded standard error bytes.
+    pub fn stderr(&self) -> &[u8] {
+        &self.stderr
+    }
 }
 
 impl From<RetainedFunctionalRefinementRuntimeOutputV1>

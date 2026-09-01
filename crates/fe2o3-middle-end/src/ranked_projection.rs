@@ -956,7 +956,8 @@ impl AuthenticatedRankedVerificationV5 {
 
     pub fn aggregate_verus_execution(
         &self,
-    ) -> Option<&fe2o3_verifier::ProductionMirPlironPerCompilationVerusExecutionV1> {
+    ) -> Option<&fe2o3_compiler_proof_generation::ProductionMirPlironPerCompilationVerusExecutionV1>
+    {
         self.functional
             .as_ref()
             .map(|functional| functional.aggregate.execution())

@@ -17,8 +17,6 @@ use fe2o3_functional_proof::{
 use fe2o3_proof_contracts::DigestV1;
 use sha2::{Digest as _, Sha256};
 
-use crate::ProductionMirPlironPerCompilationVerusExecutionV1;
-
 const MAGIC_V1: [u8; 8] = *b"F2MPVEV1";
 const VERSION_V1: u16 = 1;
 const FLAGS_V1: u16 = 0;
@@ -42,6 +40,28 @@ pub const PRODUCTION_MIR_PLIRON_VERUS_EXECUTION_EVIDENCE_BYTES_V1: usize = HEADE
     + VERIFYING_KEY_BYTES_V1
     + FUNCTIONAL_REFINEMENT_RECEIPT_WIRE_BYTES_V2
     + IDENTITY_BYTES_V1;
+
+/// Authority-free view of one compiler-owned MIR/Pliron proof execution.
+///
+/// Implementations expose only immutable identities and the exact signed
+/// receipt needed for independent import. The verifier does not depend on the
+/// live Pliron graph or the compiler-side proof generator.
+pub trait ProductionMirPlironVerusExecutionViewV1 {
+    fn contract_identity(&self) -> DigestV1;
+    fn parallel_contract_identity(&self) -> DigestV1;
+    fn pliron_evidence_identity(&self) -> DigestV1;
+    fn composition_template_identity(&self) -> DigestV1;
+    fn generated_source_identity(&self) -> DigestV1;
+    fn obligation_identity(&self) -> DigestV1;
+    fn binding(&self) -> FunctionalRefinementBindingV2;
+    fn signer_identity(&self) -> DigestV1;
+    fn toolchain(&self) -> VerusToolchainIdentityV2;
+    fn execution_identity(&self) -> DigestV1;
+    fn receipt_identity(&self) -> DigestV1;
+    fn retained_policy_checked_staging(&self) -> u64;
+    fn receipt_verifying_key(&self) -> &[u8; VERIFYING_KEY_BYTES_V1];
+    fn signed_receipt_wire(&self) -> &[u8];
+}
 
 /// Exact report claims retained beside the signed aggregate receipt.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -239,10 +259,11 @@ impl CanonicalProductionMirPlironVerusExecutionEvidenceV1 {
     }
 
     pub fn from_execution(
-        execution: &ProductionMirPlironPerCompilationVerusExecutionV1,
+        execution: &impl ProductionMirPlironVerusExecutionViewV1,
     ) -> Result<Self, ProductionMirPlironVerusExecutionEvidenceErrorV1> {
-        let report = execution.report();
-        if report.obligation_identity() != report.binding().normalized_obligation_effect_ir_hash() {
+        if execution.obligation_identity()
+            != execution.binding().normalized_obligation_effect_ir_hash()
+        {
             return Err(
                 ProductionMirPlironVerusExecutionEvidenceErrorV1::ReportMismatch(
                     "normalized obligation",
@@ -250,17 +271,17 @@ impl CanonicalProductionMirPlironVerusExecutionEvidenceV1 {
             );
         }
         let claims = ProductionMirPlironVerusExecutionClaimsV1::new(
-            report.contract_identity(),
-            report.parallel_contract_identity(),
-            report.pliron_evidence_identity(),
-            report.composition_template_identity(),
-            report.generated_source_identity(),
-            report.binding(),
-            report.signer_identity(),
-            report.toolchain(),
-            report.execution_identity(),
-            report.receipt_identity().digest(),
-            report.retained_policy_checked_staging(),
+            execution.contract_identity(),
+            execution.parallel_contract_identity(),
+            execution.pliron_evidence_identity(),
+            execution.composition_template_identity(),
+            execution.generated_source_identity(),
+            execution.binding(),
+            execution.signer_identity(),
+            execution.toolchain(),
+            execution.execution_identity(),
+            execution.receipt_identity(),
+            execution.retained_policy_checked_staging(),
         )?;
         let verifying_key = *execution.receipt_verifying_key();
         let signed_receipt = execution.signed_receipt_wire().try_into().map_err(|_| {

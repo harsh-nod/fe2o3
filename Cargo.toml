@@ -77,6 +77,7 @@ fe2o3-compiler-execution-protocol = { path = "crates/fe2o3-compiler-execution-pr
 fe2o3-compiler-execution-supervisor = { path = "crates/fe2o3-compiler-execution-supervisor" }
 fe2o3-compiler-ffi = { path = "crates/fe2o3-compiler-ffi" }
 fe2o3-compiler-lineage = { path = "crates/fe2o3-compiler-lineage" }
+fe2o3-compiler-proof-generation = { path = "crates/fe2o3-compiler-proof-generation" }
 fe2o3-artifacts = { path = "crates/fe2o3-artifacts" }
 fe2o3-contracts = { path = "crates/fe2o3-contracts" }
 fe2o3-core = { path = "crates/fe2o3-core" }
@@ -112,6 +113,7 @@ fe2o3-mir-kir-contracts = { path = "crates/fe2o3-mir-kir-contracts" }
 fe2o3-macros = { path = "crates/fe2o3-macros" }
 fe2o3-mir-model = { path = "crates/fe2o3-mir-model" }
 fe2o3-middle-end = { path = "crates/fe2o3-middle-end" }
+fe2o3-middle-end-contracts = { path = "crates/fe2o3-middle-end-contracts" }
 fe2o3-pliron = { path = "crates/fe2o3-pliron" }
 fe2o3-pliron-owner-core = { path = "crates/fe2o3-pliron-owner-core" }
 fe2o3-process-identity = { path = "crates/fe2o3-process-identity" }

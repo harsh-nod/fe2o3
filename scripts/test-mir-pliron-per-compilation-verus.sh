@@ -9,10 +9,10 @@ case "$verus_request" in
 esac
 readonly expected_version=0.2026.08.02.b677dd5
 readonly expected_verus_sha=ad2669f579d898ede53f2bf84e80a1daf4e3578739b0f5807ef209a0c9f382dd
-readonly template="$root/crates/fe2o3-verifier/verus/mir_pliron_per_compilation_template_v1.rs"
-readonly generated="$root/crates/fe2o3-verifier/verus/mir_pliron_per_compilation_generated_fixture_v1.rs"
-readonly generated_multi="$root/crates/fe2o3-verifier/verus/mir_pliron_per_compilation_generated_multi_output_fixture_v1.rs"
-readonly negative_dir="$root/crates/fe2o3-verifier/verus/negative"
+readonly template="$root/crates/fe2o3-compiler-proof-generation/verus/mir_pliron_per_compilation_template_v1.rs"
+readonly generated="$root/crates/fe2o3-compiler-proof-generation/verus/mir_pliron_per_compilation_generated_fixture_v1.rs"
+readonly generated_multi="$root/crates/fe2o3-compiler-proof-generation/verus/mir_pliron_per_compilation_generated_multi_output_fixture_v1.rs"
+readonly negative_dir="$root/crates/fe2o3-compiler-proof-generation/verus/negative"
 readonly timeout_seconds=${VERUS_TIMEOUT_SECONDS:-120}
 readonly tmp=$(mktemp -d "${TMPDIR:-/tmp}/fe2o3-per-compilation-verus.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT
