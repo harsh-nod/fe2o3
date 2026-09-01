@@ -12,11 +12,14 @@ use fe2o3_kernel_descriptor::{
     AccessMode, DeviceDescriptorTableV1, KernelDescriptorV1, PhysicalAbiComponentKind,
 };
 use fe2o3_service_host::{
-    QuarantinedServiceQueueV1, ServiceAllocationSessionV1, ServiceCompletedQueueSessionV1,
+    DeviceAllocationRoleMarkerV1, DeviceLocalAllocationV1, QuarantinedServiceQueueV1,
+    ServiceAllocationSessionV1, ServiceAllocationSubleaseSetV1, ServiceCompletedQueueSessionV1,
     ServiceCompletedReadRequestV1, ServiceCompletedReadbackV1, ServiceCompletedSnapshotRequestV1,
-    ServiceFixedBatchV1, ServiceFixedDispatchPacketV1, ServicePublishedQueueSessionV1,
-    ServiceQueueBindFailureV1, ServiceQueueCreateFailureV1, ServiceQueueErrorV1,
-    ServiceQueueOperationFailureV1, ServiceQueuePollV1, ServiceQueuePollWithProgressV1,
+    ServiceDeviceDispatchRangeV1, ServiceFixedBatchV1, ServiceFixedDispatchPacketV1,
+    ServiceHostDispatchRangeV1, ServiceHostDispatchSnapshotRangeV1, ServicePublishedQueueSessionV1,
+    ServiceQueueBindFailureV1, ServiceQueueCreateFailureV1, ServiceQueueDataUpdateFailureV1,
+    ServiceQueueErrorV1, ServiceQueueHostDataUpdateV1, ServiceQueueOperationFailureV1,
+    ServiceQueuePartitionedDataUpdateV1, ServiceQueuePollV1, ServiceQueuePollWithProgressV1,
     ServiceQueueProgressV1, ServiceQueueReleaseFailureV1, ServiceQueueReleaseObservationV1,
     ServiceQueueRolloverFailureV1, ServiceQueueRolloverSuccessV1, ServiceQueueSessionV1,
     ServiceQueueUnboundSessionV1, ServiceRecycledQueueSessionV1,
@@ -570,6 +573,18 @@ impl AuthenticatedProgramCustodyV1 {
         self.active = Some(programs);
     }
 
+    fn take_most_recent_retired(&mut self) -> AuthenticatedWorkerV3ProgramSetV1 {
+        debug_assert!(self.active.is_none());
+        self.retired
+            .pop()
+            .expect("unbound authenticated queue retains a detached program set")
+    }
+
+    fn restore_most_recent_retired(&mut self, programs: AuthenticatedWorkerV3ProgramSetV1) {
+        debug_assert!(self.active.is_none());
+        self.retired.push(programs);
+    }
+
     fn into_program_sets(mut self) -> Vec<AuthenticatedWorkerV3ProgramSetV1> {
         if let Some(active) = self.active.take() {
             self.retired.push(active);
@@ -1088,6 +1103,224 @@ impl fmt::Debug for AuthenticatedServiceQueueUnboundSessionV1 {
 }
 
 impl AuthenticatedServiceQueueUnboundSessionV1 {
+    /// Returns a redacted observation of the still-live native queue.
+    pub const fn observation(&self) -> fe2o3_kfd::ComputeAqlQueueObservationV1 {
+        self.queue.observation()
+    }
+
+    /// Returns the completed dispatch generation that authorized detachment.
+    pub const fn detached_dispatch_generation(&self) -> u64 {
+        self.queue.detached_dispatch_generation()
+    }
+
+    /// Replaces one retained partitioned device-local allocation without changing program custody.
+    pub fn replace_initialized_partitioned_device_local<R, const OLD_N: usize, const NEW_N: usize>(
+        self,
+        old: &ServiceAllocationSubleaseSetV1<R, DeviceLocalAllocationV1, OLD_N>,
+        bytes: Box<[u8]>,
+        alignment: u64,
+        content: fe2o3_kfd::Gfx942DeviceContentDescriptorV1,
+        new_members: [(u64, u64, u64); NEW_N],
+    ) -> Result<
+        AuthenticatedServiceQueuePartitionedDataUpdateV1<R, NEW_N>,
+        AuthenticatedServiceQueueDataUpdateFailureV1,
+    >
+    where
+        R: DeviceAllocationRoleMarkerV1,
+    {
+        let Self { queue, programs } = self;
+        match queue.replace_initialized_partitioned_device_local::<R, OLD_N, NEW_N>(
+            old,
+            bytes,
+            alignment,
+            content,
+            new_members,
+        ) {
+            Ok(inner) => Ok(AuthenticatedServiceQueuePartitionedDataUpdateV1 { inner, programs }),
+            Err(ServiceQueueDataUpdateFailureV1::Rejected { error, queue }) => {
+                Err(AuthenticatedServiceQueueDataUpdateFailureV1::Rejected {
+                    error: Box::new(error),
+                    queue: Box::new(Self {
+                        queue: *queue,
+                        programs,
+                    }),
+                })
+            }
+            Err(ServiceQueueDataUpdateFailureV1::Terminal { error, retained }) => {
+                Err(AuthenticatedServiceQueueDataUpdateFailureV1::Quarantined {
+                    error: Box::new(error),
+                    retained: Box::new(AuthenticatedQuarantinedServiceQueueV1 {
+                        queue: *retained,
+                        programs,
+                    }),
+                })
+            }
+        }
+    }
+
+    /// Replaces one retained host-visible allocation without changing program custody.
+    pub fn replace_initialized_host_visible<R>(
+        self,
+        old: ServiceHostDispatchRangeV1,
+        bytes: Box<[u8]>,
+    ) -> Result<
+        AuthenticatedServiceQueueHostDataUpdateV1,
+        AuthenticatedServiceQueueDataUpdateFailureV1,
+    >
+    where
+        R: fe2o3_service_host::HostAllocationRoleMarkerV1,
+    {
+        let Self { queue, programs } = self;
+        match queue.replace_initialized_host_visible::<R>(old, bytes) {
+            Ok(inner) => Ok(AuthenticatedServiceQueueHostDataUpdateV1 { inner, programs }),
+            Err(ServiceQueueDataUpdateFailureV1::Rejected { error, queue }) => {
+                Err(AuthenticatedServiceQueueDataUpdateFailureV1::Rejected {
+                    error: Box::new(error),
+                    queue: Box::new(Self {
+                        queue: *queue,
+                        programs,
+                    }),
+                })
+            }
+            Err(ServiceQueueDataUpdateFailureV1::Terminal { error, retained }) => {
+                Err(AuthenticatedServiceQueueDataUpdateFailureV1::Quarantined {
+                    error: Box::new(error),
+                    retained: Box::new(AuthenticatedQuarantinedServiceQueueV1 {
+                        queue: *retained,
+                        programs,
+                    }),
+                })
+            }
+        }
+    }
+
+    /// Revalidates and rebinds the retained active program set to the same native queue.
+    pub fn bind_retained<const N: usize>(
+        self,
+        packets: [ServiceFixedDispatchPacketV1; N],
+    ) -> Result<
+        AuthenticatedServiceQueueSessionV1<N>,
+        AuthenticatedServiceQueueRetainedBindFailureV1<N>,
+    > {
+        let Self {
+            queue,
+            mut programs,
+        } = self;
+        let retained = programs.take_most_recent_retired();
+        match (Self { queue, programs }).bind(retained, packets) {
+            Ok(queue) => Ok(queue),
+            Err(AuthenticatedServiceQueueBindFailureV1::Program {
+                error,
+                queue,
+                replacement,
+                packets,
+            }) => {
+                let Self {
+                    queue,
+                    mut programs,
+                } = *queue;
+                programs.restore_most_recent_retired(replacement);
+                Err(AuthenticatedServiceQueueRetainedBindFailureV1::Program {
+                    error,
+                    queue: Box::new(Self { queue, programs }),
+                    packets,
+                })
+            }
+            Err(AuthenticatedServiceQueueBindFailureV1::QueueRejected {
+                error,
+                queue,
+                replacement,
+                packets,
+            }) => {
+                let Self {
+                    queue,
+                    mut programs,
+                } = *queue;
+                programs.restore_most_recent_retired(replacement);
+                Err(
+                    AuthenticatedServiceQueueRetainedBindFailureV1::QueueRejected {
+                        error,
+                        queue: Box::new(Self { queue, programs }),
+                        packets,
+                    },
+                )
+            }
+            Err(AuthenticatedServiceQueueBindFailureV1::Quarantined { error, retained }) => {
+                Err(AuthenticatedServiceQueueRetainedBindFailureV1::Quarantined { error, retained })
+            }
+        }
+    }
+
+    /// Revalidates the retained active program set while replacing the native queue.
+    pub fn rollover_retained<const N: usize>(
+        self,
+        ring_bytes: u32,
+        packets: [ServiceFixedDispatchPacketV1; N],
+    ) -> Result<
+        AuthenticatedServiceQueueRolloverSuccessV1<N>,
+        AuthenticatedServiceQueueRetainedRolloverFailureV1<N>,
+    > {
+        let Self {
+            queue,
+            mut programs,
+        } = self;
+        let retained = programs.take_most_recent_retired();
+        match (Self { queue, programs }).rollover(ring_bytes, retained, packets) {
+            Ok(success) => Ok(success),
+            Err(AuthenticatedServiceQueueRolloverFailureV1::Program {
+                error,
+                queue,
+                replacement,
+                packets,
+            }) => {
+                let Self {
+                    queue,
+                    mut programs,
+                } = *queue;
+                programs.restore_most_recent_retired(replacement);
+                Err(
+                    AuthenticatedServiceQueueRetainedRolloverFailureV1::Program {
+                        error,
+                        queue: Box::new(Self { queue, programs }),
+                        packets,
+                    },
+                )
+            }
+            Err(AuthenticatedServiceQueueRolloverFailureV1::QueueRejected {
+                error,
+                queue,
+                replacement,
+                packets,
+            }) => {
+                let Self {
+                    queue,
+                    mut programs,
+                } = *queue;
+                programs.restore_most_recent_retired(replacement);
+                Err(
+                    AuthenticatedServiceQueueRetainedRolloverFailureV1::QueueRejected {
+                        error,
+                        queue: Box::new(Self { queue, programs }),
+                        packets,
+                    },
+                )
+            }
+            Err(AuthenticatedServiceQueueRolloverFailureV1::Terminal {
+                error,
+                previous_queue_destroyed,
+                previous_dispatch_generation,
+                retained,
+            }) => Err(
+                AuthenticatedServiceQueueRetainedRolloverFailureV1::Terminal {
+                    error,
+                    previous_queue_destroyed,
+                    previous_dispatch_generation,
+                    retained,
+                },
+            ),
+        }
+    }
+
     /// Rebinds authenticated replacement programs to the same native queue.
     pub fn bind<const N: usize>(
         self,
@@ -1214,6 +1447,235 @@ impl AuthenticatedServiceQueueUnboundSessionV1 {
     ) -> Result<AuthenticatedServiceQueueReleaseV1, AuthenticatedServiceQueueReleaseFailureV1> {
         let Self { queue, programs } = self;
         finish_release(queue.destroy_and_release(), programs)
+    }
+}
+
+/// Fresh authenticated queue and partition custody after detached replacement.
+#[must_use = "the authenticated queue and fresh partition custody must remain retained"]
+pub struct AuthenticatedServiceQueuePartitionedDataUpdateV1<R, const N: usize>
+where
+    R: DeviceAllocationRoleMarkerV1,
+{
+    inner: ServiceQueuePartitionedDataUpdateV1<R, N>,
+    programs: AuthenticatedProgramCustodyV1,
+}
+
+impl<R, const N: usize> AuthenticatedServiceQueuePartitionedDataUpdateV1<R, N>
+where
+    R: DeviceAllocationRoleMarkerV1,
+{
+    /// Separates the authenticated queue, fresh partition witness, and exact ranges.
+    pub fn into_parts(
+        self,
+    ) -> (
+        AuthenticatedServiceQueueUnboundSessionV1,
+        ServiceAllocationSubleaseSetV1<R, DeviceLocalAllocationV1, N>,
+        [ServiceDeviceDispatchRangeV1; N],
+    ) {
+        let (queue, subleases, ranges) = self.inner.into_parts();
+        (
+            AuthenticatedServiceQueueUnboundSessionV1 {
+                queue,
+                programs: self.programs,
+            },
+            subleases,
+            ranges,
+        )
+    }
+}
+
+impl<R, const N: usize> fmt::Debug for AuthenticatedServiceQueuePartitionedDataUpdateV1<R, N>
+where
+    R: DeviceAllocationRoleMarkerV1,
+{
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AuthenticatedServiceQueuePartitionedDataUpdateV1")
+            .field("inner", &self.inner)
+            .field("programs", &self.programs)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Fresh authenticated queue and host-visible range custody after replacement.
+#[must_use = "the authenticated queue and fresh host-visible range must remain retained"]
+pub struct AuthenticatedServiceQueueHostDataUpdateV1 {
+    inner: ServiceQueueHostDataUpdateV1,
+    programs: AuthenticatedProgramCustodyV1,
+}
+
+impl AuthenticatedServiceQueueHostDataUpdateV1 {
+    /// Separates the authenticated queue, fresh range, and initialized snapshot.
+    pub fn into_parts(
+        self,
+    ) -> (
+        AuthenticatedServiceQueueUnboundSessionV1,
+        ServiceHostDispatchRangeV1,
+        Option<ServiceHostDispatchSnapshotRangeV1>,
+    ) {
+        let (queue, range, snapshot) = self.inner.into_parts();
+        (
+            AuthenticatedServiceQueueUnboundSessionV1 {
+                queue,
+                programs: self.programs,
+            },
+            range,
+            snapshot,
+        )
+    }
+}
+
+impl fmt::Debug for AuthenticatedServiceQueueHostDataUpdateV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AuthenticatedServiceQueueHostDataUpdateV1")
+            .field("inner", &self.inner)
+            .field("programs", &self.programs)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Detached-data update rejection or terminal authenticated queue quarantine.
+#[must_use = "authenticated data-update failure preserves every available owner"]
+pub enum AuthenticatedServiceQueueDataUpdateFailureV1 {
+    /// Validation rejected the replacement before native mutation.
+    Rejected {
+        /// Exact lower rejection.
+        error: Box<ServiceQueueErrorV1>,
+        /// Unchanged unbound authenticated queue.
+        queue: Box<AuthenticatedServiceQueueUnboundSessionV1>,
+    },
+    /// Native replacement became ambiguous and retry is forbidden.
+    Quarantined {
+        /// Exact lower transition error.
+        error: Box<ServiceQueueErrorV1>,
+        /// Opaque queue plus every authenticated roster owner.
+        retained: Box<AuthenticatedQuarantinedServiceQueueV1>,
+    },
+}
+
+impl AuthenticatedServiceQueueDataUpdateFailureV1 {
+    /// Returns the exact failure without discarding retained custody.
+    pub const fn error(&self) -> &ServiceQueueErrorV1 {
+        match self {
+            Self::Rejected { error, .. } | Self::Quarantined { error, .. } => error,
+        }
+    }
+}
+
+impl fmt::Debug for AuthenticatedServiceQueueDataUpdateFailureV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Rejected { error, .. } => formatter
+                .debug_struct("Rejected")
+                .field("error", error)
+                .finish_non_exhaustive(),
+            Self::Quarantined { error, retained } => formatter
+                .debug_struct("Quarantined")
+                .field("error", error)
+                .field("retained", retained)
+                .finish(),
+        }
+    }
+}
+
+/// Retained-program rebind rejection or terminal native transition failure.
+#[must_use = "retained authenticated rebind failure preserves every available owner"]
+pub enum AuthenticatedServiceQueueRetainedBindFailureV1<const N: usize> {
+    /// Currentness or exact program derivation failed before KFD mutation.
+    Program {
+        /// Exact derivation error.
+        error: Box<AuthenticatedWorkerV3ProgramMaterializationErrorV1>,
+        /// Unchanged unbound authenticated queue.
+        queue: Box<AuthenticatedServiceQueueUnboundSessionV1>,
+        /// Unchanged addressless packets.
+        packets: Box<[ServiceFixedDispatchPacketV1; N]>,
+    },
+    /// Structural preflight rejected unchanged inputs.
+    QueueRejected {
+        /// Exact structural queue error.
+        error: Box<ServiceQueueErrorV1>,
+        /// Unchanged unbound authenticated queue.
+        queue: Box<AuthenticatedServiceQueueUnboundSessionV1>,
+        /// Unchanged addressless packets.
+        packets: Box<[ServiceFixedDispatchPacketV1; N]>,
+    },
+    /// Native replacement became ambiguous and all available custody is quarantined.
+    Quarantined {
+        /// Exact queue error.
+        error: Box<ServiceQueueErrorV1>,
+        /// Opaque queue plus every authenticated roster owner.
+        retained: Box<AuthenticatedQuarantinedServiceQueueV1>,
+    },
+}
+
+impl<const N: usize> fmt::Debug for AuthenticatedServiceQueueRetainedBindFailureV1<N> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Program { error, .. } => formatter.debug_tuple("Program").field(error).finish(),
+            Self::QueueRejected { error, .. } => {
+                formatter.debug_tuple("QueueRejected").field(error).finish()
+            }
+            Self::Quarantined { error, .. } => {
+                formatter.debug_tuple("Quarantined").field(error).finish()
+            }
+        }
+    }
+}
+
+/// Retained-program rollover rejection or terminal native replacement failure.
+#[must_use = "retained authenticated rollover failure preserves every available owner"]
+pub enum AuthenticatedServiceQueueRetainedRolloverFailureV1<const N: usize> {
+    /// Currentness or exact program derivation failed before native destruction.
+    Program {
+        /// Exact derivation error.
+        error: Box<AuthenticatedWorkerV3ProgramMaterializationErrorV1>,
+        /// Unchanged old unbound queue.
+        queue: Box<AuthenticatedServiceQueueUnboundSessionV1>,
+        /// Unchanged addressless packets.
+        packets: Box<[ServiceFixedDispatchPacketV1; N]>,
+    },
+    /// Structural preflight rejected unchanged inputs.
+    QueueRejected {
+        /// Exact structural error.
+        error: Box<ServiceQueueErrorV1>,
+        /// Unchanged old unbound queue.
+        queue: Box<AuthenticatedServiceQueueUnboundSessionV1>,
+        /// Unchanged addressless packets.
+        packets: Box<[ServiceFixedDispatchPacketV1; N]>,
+    },
+    /// Native rollover consumed the queue; program owners remain retained.
+    Terminal {
+        /// Exact native error.
+        error: Box<ServiceQueueErrorV1>,
+        /// Confirmed predecessor destruction, when observed.
+        previous_queue_destroyed: Option<fe2o3_kfd::ComputeAqlQueueDestroyedV1>,
+        /// Exact predecessor dispatch generation.
+        previous_dispatch_generation: u64,
+        /// Every retained authenticated program set.
+        retained: AuthenticatedServiceTerminalProgramCustodyV1,
+    },
+}
+
+impl<const N: usize> fmt::Debug for AuthenticatedServiceQueueRetainedRolloverFailureV1<N> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Program { error, .. } => formatter.debug_tuple("Program").field(error).finish(),
+            Self::QueueRejected { error, .. } => {
+                formatter.debug_tuple("QueueRejected").field(error).finish()
+            }
+            Self::Terminal {
+                error,
+                previous_queue_destroyed,
+                previous_dispatch_generation,
+                ..
+            } => formatter
+                .debug_struct("Terminal")
+                .field("error", error)
+                .field("previous_queue_destroyed", previous_queue_destroyed)
+                .field("previous_dispatch_generation", previous_dispatch_generation)
+                .finish_non_exhaustive(),
+        }
     }
 }
 
@@ -1620,6 +2082,73 @@ mod tests {
                 )
             )
         ));
+    }
+
+    #[test]
+    fn retained_program_selection_restores_exact_history_order() {
+        let gfx942 = target("gfx942:sramecc+:xnack-");
+        let set = |marker| AuthenticatedWorkerV3ProgramSetV1 {
+            rosters: vec![Box::new(TestErasedRosterV1 {
+                markers: vec![[marker; 32]],
+                is_current: true,
+            })],
+            target: gfx942,
+            marker_bindings: vec![[marker; 32]],
+        };
+        let mut custody = AuthenticatedProgramCustodyV1 {
+            active: Some(set(3)),
+            retired: vec![set(1), set(2)],
+        };
+
+        custody.retire_active();
+        let retained = custody.take_most_recent_retired();
+        assert_eq!(retained.marker_bindings, vec![[3; 32]]);
+        assert_eq!(custody.retired.len(), 2);
+
+        custody.restore_most_recent_retired(retained);
+        let restored = custody.into_program_sets();
+        assert_eq!(restored.len(), 3);
+        assert_eq!(restored[0].marker_bindings, vec![[1; 32]]);
+        assert_eq!(restored[1].marker_bindings, vec![[2; 32]]);
+        assert_eq!(restored[2].marker_bindings, vec![[3; 32]]);
+    }
+
+    #[test]
+    fn retained_currentness_ignores_older_stale_history_but_rejects_stale_newest() {
+        let gfx942 = target("gfx942:sramecc+:xnack-");
+        let set = |marker, is_current| AuthenticatedWorkerV3ProgramSetV1 {
+            rosters: vec![Box::new(TestErasedRosterV1 {
+                markers: vec![[marker; 32]],
+                is_current,
+            })],
+            target: gfx942,
+            marker_bindings: vec![[marker; 32]],
+        };
+        let mut current = AuthenticatedProgramCustodyV1 {
+            active: Some(set(2, true)),
+            retired: vec![set(1, false)],
+        };
+        current.retire_active();
+        let retained = current.take_most_recent_retired();
+        assert!(retained.revalidate_currentness().is_ok());
+        current.restore_most_recent_retired(retained);
+
+        let mut stale = AuthenticatedProgramCustodyV1 {
+            active: Some(set(4, false)),
+            retired: vec![set(3, true)],
+        };
+        stale.retire_active();
+        let retained = stale.take_most_recent_retired();
+        assert!(matches!(
+            retained.revalidate_currentness(),
+            Err(
+                AuthenticatedWorkerV3ProgramMaterializationErrorV1::CurrentPublication(
+                    RecoveredWorkerV3AdmissionErrorV1::InspectionChanged
+                )
+            )
+        ));
+        stale.restore_most_recent_retired(retained);
+        assert_eq!(stale.into_program_sets().len(), 2);
     }
 
     #[test]
