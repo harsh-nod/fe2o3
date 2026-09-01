@@ -1734,7 +1734,7 @@ const fn observation_error(error: SourceIsaObservationErrorCodeV1) -> &'static s
     error.label()
 }
 
-const fn transport_failure(
+fn transport_failure(
     failure: SourceIsaObservationTransportFailureV1,
 ) -> SourceIsaTypedCodeV1 {
     let label = match failure {
