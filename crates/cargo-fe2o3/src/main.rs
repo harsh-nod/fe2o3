@@ -3761,7 +3761,7 @@ mod tests {
         validate_production_compilation_environment,
     };
     use crate::pinned_executable_test_directory::TestDirectory;
-    use crate::{observer_telemetry, source_isa_observation};
+    use crate::observer_telemetry;
     use std::ffi::{OsStr, OsString};
     use std::io::{self, Write};
     use std::process::Command;

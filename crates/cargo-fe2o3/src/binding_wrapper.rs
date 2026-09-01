@@ -2656,6 +2656,8 @@ mod lifecycle_tests {
     #[test]
     fn observation_emission_is_one_shot_for_repeated_lifecycle_entries() {
         let expected_attempt = attempt(4);
+        let expected_observation_attempt =
+            crate::source_isa_observation::inert_source_isa_attempt_v1(expected_attempt).unwrap();
         let map_calls = Cell::new(0);
         let submit_calls = Cell::new(0);
         let mut sink = Some(17_u8);
@@ -2674,7 +2676,7 @@ mod lifecycle_tests {
             },
             |actual_sink, frame| {
                 assert_eq!(actual_sink, 17);
-                assert_eq!(frame.context().attempt(), expected_attempt);
+                assert_eq!(frame.context().attempt(), expected_observation_attempt);
                 assert_eq!(
                     frame.outcome(),
                     fe2o3_source_isa_observation::wire_v1::SourceIsaObservationOutcomeV1::Unavailable(
