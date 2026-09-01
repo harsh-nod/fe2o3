@@ -75,7 +75,6 @@ readonly CPU_TEST_PACKAGES=(
   fe2o3-amdgcn-model
   fe2o3-amdhsa-loader
   fe2o3-aql
-  fe2o3-artifact-transaction
   fe2o3-completion
   fe2o3-compiler-api
   fe2o3-artifacts
@@ -671,6 +670,11 @@ run_cpu_tests() {
   run_step fe2o3-pliron-default-api-ui \
     cargo test --locked -p fe2o3-pliron --no-default-features \
       --test middle_end_evidence_ui default_api_cannot_self_authorize -- --exact
+  # Artifact publication tests intentionally retain descriptor custody. Bound
+  # their libtest fanout below the common 1024-descriptor soft limit.
+  run_step fe2o3-artifact-transaction-tests \
+    env FE2O3_HIP_SYS_DISABLE=1 RUST_TEST_THREADS=8 \
+    cargo test --locked -p fe2o3-artifact-transaction
   run_step cpu-tests env FE2O3_HIP_SYS_DISABLE=1 cargo "${cargo_args[@]}"
   load_dynamic_loader_environment_removals loader_environment_removals
   if ((${#wrapper_cpu_examples[@]} > 0)); then

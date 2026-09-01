@@ -433,6 +433,11 @@ assert_equals \
   "$(step_command cpu-tests-cargo-fe2o3-bootstrap)" \
   'CPU tests did not retain the feature-free production driver'
 cpu_command="$(step_command cpu-tests)"
+if [[ " ${cpu_command} " == *" -p fe2o3-artifact-transaction "* ]]; then
+  printf '%s\n' \
+    'raw CPU aggregate duplicated the bounded artifact-transaction suite' >&2
+  exit 1
+fi
 if [[ " ${cpu_command} " == *" -p ${RUSTC_CODEGEN_TEST_PACKAGE} "* ]]; then
   printf 'generic CPU tests mixed %s into the shared Cargo process\n' \
     "${RUSTC_CODEGEN_TEST_PACKAGE}" >&2
@@ -453,6 +458,12 @@ if [[ " ${cpu_command} " == *" -p fe2o3-pliron-scalar-add-v1 "* ]]; then
   printf '%s\n' 'raw CPU tests restored the deleted scalar runtime lane' >&2
   exit 1
 fi
+assert_equals \
+  'env FE2O3_HIP_SYS_DISABLE=1 RUST_TEST_THREADS=8 cargo test --locked -p fe2o3-artifact-transaction' \
+  "$(step_command fe2o3-artifact-transaction-tests)" \
+  'artifact-transaction tests did not retain their descriptor-safe fanout bound'
+assert_step_count fe2o3-artifact-transaction-tests 1 \
+  'artifact-transaction tests did not run exactly once'
 assert_equals \
   "env FE2O3_HIP_SYS_DISABLE=1 ${TIMEOUT_TEST_ROOT}/production-driver/cargo-fe2o3 test --locked --all-targets -p fe2o3-managed-a -p fe2o3-managed-b" \
   "$(step_command wrapper-managed-cpu-tests)" \
@@ -582,6 +593,7 @@ for core_step in \
   cargo-fe2o3-tests \
   cargo-fe2o3-worker-v3-envelope-tests \
   fe2o3-pliron-default-api-ui \
+  fe2o3-artifact-transaction-tests \
   cpu-tests \
   wrapper-managed-cpu-tests \
   cpu-test-partition-revalidation \
@@ -608,6 +620,10 @@ assert_equals \
   'cargo test --locked -p fe2o3-pliron --no-default-features --test middle_end_evidence_ui default_api_cannot_self_authorize -- --exact' \
   "$(step_command fe2o3-pliron-default-api-ui)" \
   'generic core did not gate the feature-free Pliron public API'
+assert_equals \
+  'env FE2O3_HIP_SYS_DISABLE=1 RUST_TEST_THREADS=8 cargo test --locked -p fe2o3-artifact-transaction' \
+  "$(step_command fe2o3-artifact-transaction-tests)" \
+  'generic core did not retain the descriptor-safe artifact-transaction fanout bound'
 assert_equals \
   "python3 ${WORKSPACE_DEPENDENCY_POLICY_TESTS}" \
   "$(step_command workspace-dependency-policy-tests)" \
