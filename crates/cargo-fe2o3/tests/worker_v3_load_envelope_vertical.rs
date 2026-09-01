@@ -1358,6 +1358,35 @@ fn cargo_supervisor_and_static_host_consumer_complete_strict_v3_handoff() {
 }
 
 #[test]
+fn cargo_supervisor_and_static_host_consumer_complete_strict_v3_roster_handoff() {
+    let fixture = prepared_v3_application_fixture();
+    let report = fixture
+        .directory
+        .0
+        .join("v3-application-roster-report.json");
+    let completed = v3_application_runner_command(&fixture, &report)
+        .arg("--fe2o3-test-consume-roster")
+        .output()
+        .unwrap();
+    assert!(
+        completed.status.success(),
+        "strict V3 application roster handoff failed: {}; report: {}",
+        String::from_utf8_lossy(&completed.stderr),
+        fs::read_to_string(&report).unwrap_or_else(|error| format!("unavailable ({error})"))
+    );
+    let report: serde_json::Value = serde_json::from_slice(&fs::read(&report).unwrap()).unwrap();
+    assert_eq!(report["host_consumer"], true);
+    assert_eq!(report["loader_environment_clear"], true);
+    assert_eq!(report["admitted"], true);
+    assert_eq!(report["current"], true);
+    assert_eq!(report["roster"], true);
+
+    let recovered =
+        recover_worker_v3_load_envelope_v2(&fixture.directory.0, fixture.attempt).unwrap();
+    assert_eq!(recovered.receipt(), fixture.readiness);
+}
+
+#[test]
 fn strict_v3_host_consumer_rejects_substituted_commitment() {
     let fixture = prepared_v3_application_fixture();
     let report = fixture.directory.0.join("substituted-commitment.json");

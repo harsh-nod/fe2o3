@@ -6,14 +6,16 @@
 //! assumptions and must instead be isolated from authority by a separate broker.
 
 use crate::{
-    KernelId, RecoveredWorkerV3AdmissionErrorV1, RecoveredWorkerV3PinnedDescriptorV1,
-    admit_recovered_worker_v3_descriptor_v1,
+    CompilerGeneratedKernelExpectationRosterV1, KernelId, RecoveredWorkerV3AdmissionErrorV1,
+    RecoveredWorkerV3PinnedDescriptorV1, RecoveredWorkerV3PinnedRosterV1,
+    admit_recovered_worker_v3_descriptor_v1, admit_recovered_worker_v3_roster_v1,
 };
 use fe2o3_artifact_transaction::WorkerV3LoadReadinessReceiptV1;
 use fe2o3_runtime_protocol::{
     MAX_WORKER_V3_APPLICATION_OCCURRENCE_BYTES_V1, MAX_WORKER_V3_LOAD_ENVELOPE_BYTES_V2,
-    WORKER_V3_APPLICATION_ARTIFACT_DIR_FD_ENV_V1, WORKER_V3_APPLICATION_ENVELOPE_FD_ENV_V1,
-    WORKER_V3_APPLICATION_HANDOFF_ACK_FD_ENV_V1, WORKER_V3_APPLICATION_HANDOFF_CHALLENGE_BYTES_V1,
+    RecoveredWorkerV3LoadEnvelopeV2, WORKER_V3_APPLICATION_ARTIFACT_DIR_FD_ENV_V1,
+    WORKER_V3_APPLICATION_ENVELOPE_FD_ENV_V1, WORKER_V3_APPLICATION_HANDOFF_ACK_FD_ENV_V1,
+    WORKER_V3_APPLICATION_HANDOFF_CHALLENGE_BYTES_V1,
     WORKER_V3_APPLICATION_HANDOFF_CHALLENGE_ENV_V1,
     WORKER_V3_APPLICATION_HANDOFF_COMMITMENT_BYTES_V1,
     WORKER_V3_APPLICATION_HANDOFF_COMMITMENT_ENV_V1, WORKER_V3_APPLICATION_OCCURRENCE_ENV_V1,
@@ -166,6 +168,50 @@ impl RetainedWorkerV3ApplicationDescriptorsV1 {
     }
 }
 
+trait WorkerV3ApplicationHandoffAdmissionV1: Sized {
+    fn revalidate_currentness(&self) -> Result<(), RecoveredWorkerV3AdmissionErrorV1>;
+
+    fn retain_application_descriptors(
+        self,
+        descriptors: RetainedWorkerV3ApplicationDescriptorsV1,
+    ) -> Self;
+}
+
+impl WorkerV3ApplicationHandoffAdmissionV1 for RecoveredWorkerV3PinnedDescriptorV1 {
+    fn revalidate_currentness(&self) -> Result<(), RecoveredWorkerV3AdmissionErrorV1> {
+        RecoveredWorkerV3PinnedDescriptorV1::revalidate_currentness(self)
+    }
+
+    fn retain_application_descriptors(
+        self,
+        descriptors: RetainedWorkerV3ApplicationDescriptorsV1,
+    ) -> Self {
+        RecoveredWorkerV3PinnedDescriptorV1::retain_application_descriptors(self, descriptors)
+    }
+}
+
+impl<R> WorkerV3ApplicationHandoffAdmissionV1 for RecoveredWorkerV3PinnedRosterV1<R> {
+    fn revalidate_currentness(&self) -> Result<(), RecoveredWorkerV3AdmissionErrorV1> {
+        RecoveredWorkerV3PinnedRosterV1::revalidate_currentness(self)
+    }
+
+    fn retain_application_descriptors(
+        self,
+        descriptors: RetainedWorkerV3ApplicationDescriptorsV1,
+    ) -> Self {
+        RecoveredWorkerV3PinnedRosterV1::retain_application_descriptors(self, descriptors)
+    }
+}
+
+struct ClaimedInheritedWorkerV3ApplicationHandoffV1 {
+    envelope: OwnedFd,
+    directory: OwnedFd,
+    acknowledgment: OwnedFd,
+    occurrence: WorkerV3ApplicationOccurrenceV1,
+    commitment: WorkerV3ApplicationHandoffCommitmentV1,
+    challenge: WorkerV3ApplicationHandoffChallengeV1,
+}
+
 /// Consumes Cargo's strict Worker V3 descriptor handoff and recovers its exact publication.
 ///
 /// All V2 and V3 handoff environment values are removed atomically with respect to this
@@ -182,6 +228,58 @@ impl RetainedWorkerV3ApplicationDescriptorsV1 {
 pub unsafe fn consume_inherited_worker_v3_application_handoff_v1(
     kernel_id: KernelId,
 ) -> Result<RecoveredWorkerV3PinnedDescriptorV1, WorkerV3ApplicationDescriptorHandoffErrorV1> {
+    // SAFETY: this function exposes the same cooperative startup contract as the private claim.
+    let claimed = unsafe { claim_inherited_worker_v3_application_handoff_v1()? };
+    consume_worker_v3_application_handoff_descriptors_v1(
+        claimed.envelope,
+        claimed.directory,
+        claimed.acknowledgment,
+        claimed.occurrence,
+        claimed.commitment,
+        claimed.challenge,
+        kernel_id,
+    )
+}
+
+/// Consumes Cargo's strict Worker V3 descriptor handoff into one exact generated roster.
+///
+/// The complete marker roster is matched in canonical descriptor-table order. The returned roster
+/// retains the envelope and artifact-directory descriptors through HSA unload and grants neither
+/// verification nor launch authority. It exposes no raw inherited descriptor or envelope bytes.
+///
+/// ```compile_fail
+/// use fe2o3_host::RecoveredWorkerV3PinnedRosterV1;
+///
+/// fn extract_raw<R>(roster: RecoveredWorkerV3PinnedRosterV1<R>) {
+///     let _ = roster.into_raw_envelope();
+/// }
+/// ```
+///
+/// # Safety
+///
+/// The caller must invoke this operation before creating threads, installing signal handlers that
+/// can access the environment or descriptor table, spawning descendants, or allowing unrelated
+/// descriptor mutation. A hostile same-process caller violates this cooperative contract.
+pub unsafe fn consume_inherited_worker_v3_application_roster_handoff_v1<R>()
+-> Result<RecoveredWorkerV3PinnedRosterV1<R>, WorkerV3ApplicationDescriptorHandoffErrorV1>
+where
+    R: CompilerGeneratedKernelExpectationRosterV1,
+{
+    // SAFETY: this function exposes the same cooperative startup contract as the private claim.
+    let claimed = unsafe { claim_inherited_worker_v3_application_handoff_v1()? };
+    consume_worker_v3_application_roster_handoff_descriptors_v1::<R>(
+        claimed.envelope,
+        claimed.directory,
+        claimed.acknowledgment,
+        claimed.occurrence,
+        claimed.commitment,
+        claimed.challenge,
+    )
+}
+
+unsafe fn claim_inherited_worker_v3_application_handoff_v1()
+-> Result<ClaimedInheritedWorkerV3ApplicationHandoffV1, WorkerV3ApplicationDescriptorHandoffErrorV1>
+{
     let environment = take_inherited_environment();
     if INHERITED_HANDOFF_CLAIMED_V1
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -272,15 +370,14 @@ pub unsafe fn consume_inherited_worker_v3_application_handoff_v1(
             .map_err(WorkerV3ApplicationDescriptorHandoffErrorV1::Protocol)
     })?;
 
-    consume_worker_v3_application_handoff_descriptors_v1(
+    Ok(ClaimedInheritedWorkerV3ApplicationHandoffV1 {
         envelope,
         directory,
         acknowledgment,
         occurrence,
         commitment,
         challenge,
-        kernel_id,
-    )
+    })
 }
 
 /// Descriptor-level strict V3 application recovery used by the public startup boundary.
@@ -294,6 +391,55 @@ pub(crate) fn consume_worker_v3_application_handoff_descriptors_v1(
     challenge: WorkerV3ApplicationHandoffChallengeV1,
     kernel_id: KernelId,
 ) -> Result<RecoveredWorkerV3PinnedDescriptorV1, WorkerV3ApplicationDescriptorHandoffErrorV1> {
+    consume_worker_v3_application_handoff_with_admission_v1(
+        envelope,
+        artifact_directory,
+        acknowledgment,
+        occurrence,
+        commitment,
+        challenge,
+        |recovered| admit_recovered_worker_v3_descriptor_v1(recovered, kernel_id),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn consume_worker_v3_application_roster_handoff_descriptors_v1<R>(
+    envelope: OwnedFd,
+    artifact_directory: OwnedFd,
+    acknowledgment: OwnedFd,
+    occurrence: WorkerV3ApplicationOccurrenceV1,
+    commitment: WorkerV3ApplicationHandoffCommitmentV1,
+    challenge: WorkerV3ApplicationHandoffChallengeV1,
+) -> Result<RecoveredWorkerV3PinnedRosterV1<R>, WorkerV3ApplicationDescriptorHandoffErrorV1>
+where
+    R: CompilerGeneratedKernelExpectationRosterV1,
+{
+    consume_worker_v3_application_handoff_with_admission_v1(
+        envelope,
+        artifact_directory,
+        acknowledgment,
+        occurrence,
+        commitment,
+        challenge,
+        admit_recovered_worker_v3_roster_v1::<R>,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn consume_worker_v3_application_handoff_with_admission_v1<Admission>(
+    envelope: OwnedFd,
+    artifact_directory: OwnedFd,
+    acknowledgment: OwnedFd,
+    occurrence: WorkerV3ApplicationOccurrenceV1,
+    commitment: WorkerV3ApplicationHandoffCommitmentV1,
+    challenge: WorkerV3ApplicationHandoffChallengeV1,
+    admit: impl FnOnce(
+        RecoveredWorkerV3LoadEnvelopeV2,
+    ) -> Result<Admission, RecoveredWorkerV3AdmissionErrorV1>,
+) -> Result<Admission, WorkerV3ApplicationDescriptorHandoffErrorV1>
+where
+    Admission: WorkerV3ApplicationHandoffAdmissionV1,
+{
     set_close_on_exec(&envelope, "Worker V3 envelope")
         .map_err(WorkerV3ApplicationDescriptorHandoffErrorV1::Descriptor)?;
     set_close_on_exec(&artifact_directory, "Worker V3 artifact directory")
@@ -356,8 +502,8 @@ pub(crate) fn consume_worker_v3_application_handoff_descriptors_v1(
     if recovered_envelope.as_slice() != retained.exact_envelope_bytes.as_ref() {
         return Err(WorkerV3ApplicationDescriptorHandoffErrorV1::RecoveredEnvelopeMismatch);
     }
-    let recovered = admit_recovered_worker_v3_descriptor_v1(recovered, kernel_id)
-        .map_err(WorkerV3ApplicationDescriptorHandoffErrorV1::Admission)?;
+    let recovered =
+        admit(recovered).map_err(WorkerV3ApplicationDescriptorHandoffErrorV1::Admission)?;
     seal_descriptor_occurrences(&descriptor_identities)
         .map_err(WorkerV3ApplicationDescriptorHandoffErrorV1::Descriptor)?;
     retained.revalidate()?;

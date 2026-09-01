@@ -268,6 +268,16 @@ impl<R> RecoveredWorkerV3PinnedRosterV1<R> {
         Ok(())
     }
 
+    #[cfg(target_os = "linux")]
+    pub(crate) fn retain_application_descriptors(
+        mut self,
+        descriptors: RetainedWorkerV3ApplicationDescriptorsV1,
+    ) -> Self {
+        debug_assert!(self.artifact.application_descriptors.is_none());
+        self.artifact.application_descriptors = Some(descriptors);
+        self
+    }
+
     pub fn published(&self) -> PublishedLinkArtifactV1 {
         self.artifact.published()
     }
