@@ -142,7 +142,7 @@ Commands:
   rustc-trampoline    Run non-integrated static rustc trampoline tests
   parity-evidence Run parity, signed-attestation, and queue shell tests
   parity-production-immutable  Run opt-in root ext4/XFS ingestion test
-  verus           Run positive and negative Verus proof fixtures; requires Verus
+  verus           Run proof fixtures; set VERUS or closure-specific VERUS_COMPILER and VERUS_RUNTIME
   rocm-compile    Run bounded production ROCm compiler checks; requires ROCm
   hardware-smoke  Run guarded KFD hardware checks; requires MI300X and opt-in
 EOF
@@ -920,15 +920,28 @@ run_backend_build() {
 }
 
 run_verus() {
+  local default_verus="${VERUS:-}"
+  local compiler_verus="${VERUS_COMPILER:-${default_verus}}"
+  local runtime_verus="${VERUS_RUNTIME:-${default_verus}}"
+  if [[ -z "${compiler_verus}" || -z "${runtime_verus}" ]]; then
+    printf '%s\n' \
+      'verus requires VERUS, or both VERUS_COMPILER and VERUS_RUNTIME, to name pinned executables' >&2
+    return 2
+  fi
   run_step runtime-model-verus \
+    env VERUS="${runtime_verus}" \
     "${REPO_ROOT}/crates/fe2o3-runtime-model/verus/verify-verus.sh"
   run_step verus-fixtures \
+    env VERUS="${compiler_verus}" \
     "${REPO_ROOT}/examples/verus_vecadd/run-verus.sh" --require
   run_step scalar-gemm-verus \
+    env VERUS="${compiler_verus}" \
     "${REPO_ROOT}/examples/scalar_gemm_v1/run-verus.sh" --require
   run_step mir-pliron-per-compilation-verus \
+    env VERUS="${compiler_verus}" \
     "${REPO_ROOT}/scripts/test-mir-pliron-per-compilation-verus.sh"
   run_step target-binding-refinement-verus \
+    env VERUS="${compiler_verus}" \
     "${REPO_ROOT}/scripts/test-target-binding-refinement-verus.sh"
 }
 
