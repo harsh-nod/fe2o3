@@ -393,6 +393,53 @@ mod tests {
     use super::*;
 
     static RESERVED_CHILD_FD_LOCK: Mutex<()> = Mutex::new(());
+    const FIXED_FD_TEST_CHILD_ENV: &str =
+        "FE2O3_INTERNAL_TEST_COMPILER_EXECUTION_BOUNDARY_FIXED_FD_CHILD";
+    const PREPARATION_TEST: &str = concat!(
+        "compiler_execution_boundary::tests::",
+        "preparation_installs_exact_policy_and_child_created_service_channel"
+    );
+    const APPLICATION_VERIFIER_TEST: &str = concat!(
+        "compiler_execution_boundary::tests::",
+        "application_verifier_gets_service_channel_without_policy_capability"
+    );
+    const FIXED_FD_TEST_SUCCESS: i32 = 73;
+
+    fn run_fixed_fd_test_in_isolated_process(exact_test: &str, body: fn()) {
+        if std::env::var_os(FIXED_FD_TEST_CHILD_ENV).is_some() {
+            body();
+            std::process::exit(FIXED_FD_TEST_SUCCESS);
+        }
+
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
+            .args(["--exact", exact_test, "--nocapture"])
+            .env(FIXED_FD_TEST_CHILD_ENV, "1");
+        // SAFETY: the callback closes only the two reserved test descriptors before exec.
+        unsafe {
+            command.pre_exec(|| {
+                for descriptor in [
+                    COMPILER_EXECUTION_POLICY_CHILD_FD_V1,
+                    COMPILER_EXECUTION_SERVICE_CHILD_FD_V1,
+                ] {
+                    if libc::close(descriptor) == 0 {
+                        continue;
+                    }
+                    let error = std::io::Error::last_os_error();
+                    if error.raw_os_error() != Some(libc::EBADF) {
+                        return Err(error);
+                    }
+                }
+                Ok(())
+            });
+        }
+        let status = command.status().expect("relaunch isolated fixed-FD test");
+        assert_eq!(
+            status.code(),
+            Some(FIXED_FD_TEST_SUCCESS),
+            "isolated fixed-FD test failed or did not execute"
+        );
+    }
 
     fn policy(seed: u8) -> CompilerExecutionIssuerPolicyV1 {
         CompilerExecutionIssuerPolicyV1::new(
@@ -469,11 +516,7 @@ mod tests {
         assert_ne!(custody.profile_identity().as_bytes(), &[0; 32]);
     }
 
-    #[test]
-    fn preparation_installs_exact_policy_and_child_created_service_channel() {
-        let _guard = RESERVED_CHILD_FD_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+    fn preparation_installs_exact_policy_and_child_created_service_channel_body() {
         let source_profile = client_profile(7, 1_234);
         let mut command = Command::new("/bin/sh");
         command.arg("-c").arg(format!(
@@ -500,10 +543,17 @@ mod tests {
     }
 
     #[test]
-    fn application_verifier_gets_service_channel_without_policy_capability() {
+    fn preparation_installs_exact_policy_and_child_created_service_channel() {
         let _guard = RESERVED_CHILD_FD_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        run_fixed_fd_test_in_isolated_process(
+            PREPARATION_TEST,
+            preparation_installs_exact_policy_and_child_created_service_channel_body,
+        );
+    }
+
+    fn application_verifier_gets_service_channel_without_policy_capability_body() {
         let source_profile = client_profile(8, 1_234);
         let mut command = Command::new("/bin/sh");
         command.arg("-c").arg(format!(
@@ -538,6 +588,17 @@ mod tests {
         assert!(child.wait().unwrap().success());
         profile.revalidate().unwrap();
         policy.revalidate().unwrap();
+    }
+
+    #[test]
+    fn application_verifier_gets_service_channel_without_policy_capability() {
+        let _guard = RESERVED_CHILD_FD_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        run_fixed_fd_test_in_isolated_process(
+            APPLICATION_VERIFIER_TEST,
+            application_verifier_gets_service_channel_without_policy_capability_body,
+        );
     }
 
     #[test]
