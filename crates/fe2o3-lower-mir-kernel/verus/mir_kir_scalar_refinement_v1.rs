@@ -66,8 +66,24 @@ pub open spec fn kir_effects_v1(
     seq![left, right, destination, kir_u32_eval_v1(operator, left, right)]
 }
 
-/// For the closed operator set, equal selected-element inputs and destination
-/// refine to the same wrapping output and ordered abstract read/write trace.
+/// Input relation discharged by the V2 production certificate checker. The
+/// checker accepts constants only after matching their exact KIR definitions,
+/// and accepts locals only through an earlier certified local-to-SSA result map.
+pub open spec fn exact_scalar_operand_relation_v2(mir_value: int, kir_value: int) -> bool {
+    mir_value == kir_value
+}
+
+/// Destination relation discharged when the checker maps the unprojected MIR
+/// destination local to the exact KIR binary result.
+pub open spec fn exact_scalar_destination_relation_v2(
+    mir_destination: int,
+    kir_destination: int,
+) -> bool {
+    mir_destination == kir_destination
+}
+
+/// For the closed operator set and the exact certificate relation, a selected
+/// scalar step has the same wrapping output and ordered abstract effect trace.
 pub proof fn fe2o3_mir_kir_u32_element_refines_v1(
     mir_operator: nat,
     kir_operator: nat,
@@ -81,9 +97,9 @@ pub proof fn fe2o3_mir_kir_u32_element_refines_v1(
     requires
         1 <= mir_operator <= 6,
         kir_operator == mir_operator,
-        kir_left == mir_left,
-        kir_right == mir_right,
-        kir_destination == mir_destination,
+        exact_scalar_operand_relation_v2(mir_left, kir_left),
+        exact_scalar_operand_relation_v2(mir_right, kir_right),
+        exact_scalar_destination_relation_v2(mir_destination, kir_destination),
     ensures
         mir_u32_eval_v1(mir_operator, mir_left, mir_right)
             == kir_u32_eval_v1(kir_operator, kir_left, kir_right),

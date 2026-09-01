@@ -11,6 +11,8 @@ readonly expected_version=0.2026.08.02.b677dd5
 readonly expected_verus_sha=ad2669f579d898ede53f2bf84e80a1daf4e3578739b0f5807ef209a0c9f382dd
 readonly proof="$root/crates/fe2o3-lower-mir-kernel/verus/mir_kir_scalar_refinement_v1.rs"
 readonly negative_dir="$root/crates/fe2o3-lower-mir-kernel/verus/negative"
+readonly closure_manifest="$root/crates/fe2o3-lower-mir-kernel/verus/pins/VERUS_CLOSURE_MANIFEST"
+readonly closure_checker="$root/examples/row_softmax_v1/verify-verus-closure.sh"
 readonly timeout_seconds=${VERUS_TIMEOUT_SECONDS:-120}
 readonly tmp=$(mktemp -d "${TMPDIR:-/tmp}/fe2o3-mir-kir-refinement.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT
@@ -18,8 +20,10 @@ trap 'rm -rf "$tmp"' EXIT
 test -x "$verus"
 printf '%s  %s\n' "$expected_verus_sha" "$verus" | sha256sum -c -
 "$verus" --version | grep -F "Version: $expected_version" >/dev/null
+"$closure_checker" "$(dirname -- "$(readlink -f -- "$verus")")" "$closure_manifest" >/dev/null
 printf '%s  %s\n' \
-    c5dbf8bede7bfe3b4225ac381c4488fe77ca987ba2b4a76d16f3d74616fdd2be "$proof" \
+    d28df3fb5e0d747637543933dfc38cff45576da9b920d755b4b7e919e47a6019 "$closure_manifest" \
+    735c4c77f78a90385d200bb43db5e071bc1a641a5ae56190a09023bcb2f2fe8e "$proof" \
     d132841e3d4d2434dc2dc80083fdc876cf6c764966a65678f524b24c4430271a "$negative_dir/mir_kir_scalar_wrong_effect_v1.rs" \
     48f41d1506736dd4ca3c4fcecf09aa96deb0c2abcc33913b98f8d6d44e2ed99c "$negative_dir/mir_kir_scalar_wrong_operator_v1.rs" \
     | sha256sum -c -
@@ -33,7 +37,7 @@ done
 
 timeout "$timeout_seconds" "$verus" --crate-type lib --triggers-mode silent "$proof" \
     >"$tmp/proof.log" 2>&1
-grep -F '0 errors' "$tmp/proof.log" >/dev/null
+grep -F 'verification results:: 3 verified, 0 errors' "$tmp/proof.log" >/dev/null
 
 for name in mir_kir_scalar_wrong_operator_v1 mir_kir_scalar_wrong_effect_v1; do
     file="$negative_dir/$name.rs"

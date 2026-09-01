@@ -24066,6 +24066,8 @@ mod resource_tests {
             SemanticPlaceV1::new(SemanticLocalIdV1::from_index(1), vec![], f32_ty).unwrap();
         let integer_destination =
             SemanticPlaceV1::new(SemanticLocalIdV1::from_index(2), vec![], u32_ty).unwrap();
+        let chained_destination =
+            SemanticPlaceV1::new(SemanticLocalIdV1::from_index(3), vec![], u32_ty).unwrap();
         let integer_constant = |value| {
             SemanticOperandV1::Constant(SemanticConstantV1::new(
                 u32_ty,
@@ -24075,8 +24077,16 @@ mod resource_tests {
         let integer_value = SemanticRvalueV1::new(
             u32_ty,
             SemanticRvalueKindV1::Binary {
-                operation: SemanticBinaryOpV1::Add,
+                operation: SemanticBinaryOpV1::Subtract,
                 left: integer_constant(u128::from(1.0_f32.to_bits())),
+                right: integer_constant(0),
+            },
+        );
+        let chained_value = SemanticRvalueV1::new(
+            u32_ty,
+            SemanticRvalueKindV1::Binary {
+                operation: SemanticBinaryOpV1::Add,
+                left: SemanticOperandV1::Copy(integer_destination.clone()),
                 right: integer_constant(0),
             },
         );
@@ -24084,7 +24094,7 @@ mod resource_tests {
             f32_ty,
             SemanticRvalueKindV1::Cast {
                 kind: SemanticCastKindV1::Transmute,
-                operand: SemanticOperandV1::Copy(integer_destination.clone()),
+                operand: SemanticOperandV1::Copy(chained_destination.clone()),
             },
         );
         let block = SemanticBasicBlockV1::new(
@@ -24096,6 +24106,13 @@ mod resource_tests {
                     SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
                         integer_destination,
                         integer_value,
+                    )),
+                ),
+                SemanticStatementV1::new(
+                    source,
+                    SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+                        chained_destination,
+                        chained_value,
                     )),
                 ),
                 SemanticStatementV1::new(
@@ -24142,6 +24159,12 @@ mod resource_tests {
                 ),
                 SemanticLocalDeclV1::new(
                     SemanticLocalIdentityV1::from_sha256([148; 32]),
+                    u32_ty,
+                    SemanticLocalRoleV1::Temporary,
+                    source,
+                ),
+                SemanticLocalDeclV1::new(
+                    SemanticLocalIdentityV1::from_sha256([149; 32]),
                     u32_ty,
                     SemanticLocalRoleV1::Temporary,
                     source,
@@ -24236,12 +24259,30 @@ mod resource_tests {
         )
         .unwrap();
         let evidence = crate::InertMirKirScalarRefinementEvidenceV1::from_live_owner(&lowered)
-            .expect("the exact u32 MIR add and KIR add must be certified");
-        assert_eq!(evidence.candidate_count(), 1);
-        assert_eq!(evidence.certificates().len(), 1);
+            .expect("the exact constant-rooted u32 MIR/KIR chain must be certified");
+        assert_eq!(evidence.candidate_count(), 2);
+        assert_eq!(evidence.certificates().len(), 2);
         assert_eq!(
             evidence.certificates()[0].operator(),
+            crate::MirKirScalarOperatorV1::Subtract
+        );
+        assert_eq!(
+            evidence.certificates()[0].semantic_left(),
+            crate::MirKirScalarSemanticOperandV1::Constant(1.0_f32.to_bits())
+        );
+        assert_eq!(evidence.certificates()[0].semantic_destination(), 2);
+        assert_eq!(
+            evidence.certificates()[1].operator(),
             crate::MirKirScalarOperatorV1::Add
+        );
+        assert_eq!(
+            evidence.certificates()[1].semantic_left(),
+            crate::MirKirScalarSemanticOperandV1::Local(2)
+        );
+        assert_eq!(evidence.certificates()[1].semantic_destination(), 3);
+        assert_eq!(
+            evidence.certificates()[1].kernel_ir_left(),
+            evidence.certificates()[0].kernel_ir_result()
         );
         assert_eq!(
             evidence.semantic_sha256(),
