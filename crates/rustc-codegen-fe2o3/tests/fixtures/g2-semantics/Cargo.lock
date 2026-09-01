@@ -153,6 +153,7 @@ version = "0.1.0"
 dependencies = [
  "fe2o3-amd-target",
  "fe2o3-build-authority",
+ "libc",
  "sha2",
 ]
 
