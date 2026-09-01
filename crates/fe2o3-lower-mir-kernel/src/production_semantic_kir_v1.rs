@@ -24064,25 +24064,45 @@ mod resource_tests {
         let source = SemanticSourceProvenanceV1::unavailable();
         let destination =
             SemanticPlaceV1::new(SemanticLocalIdV1::from_index(1), vec![], f32_ty).unwrap();
+        let integer_destination =
+            SemanticPlaceV1::new(SemanticLocalIdV1::from_index(2), vec![], u32_ty).unwrap();
+        let integer_constant = |value| {
+            SemanticOperandV1::Constant(SemanticConstantV1::new(
+                u32_ty,
+                SemanticConstantValueV1::Scalar(SemanticScalarValueV1::new(value, 4).unwrap()),
+            ))
+        };
+        let integer_value = SemanticRvalueV1::new(
+            u32_ty,
+            SemanticRvalueKindV1::Binary {
+                operation: SemanticBinaryOpV1::Add,
+                left: integer_constant(u128::from(1.0_f32.to_bits())),
+                right: integer_constant(0),
+            },
+        );
         let value = SemanticRvalueV1::new(
             f32_ty,
             SemanticRvalueKindV1::Cast {
                 kind: SemanticCastKindV1::Transmute,
-                operand: SemanticOperandV1::Constant(SemanticConstantV1::new(
-                    u32_ty,
-                    SemanticConstantValueV1::Scalar(
-                        SemanticScalarValueV1::new(u128::from(1.0_f32.to_bits()), 4).unwrap(),
-                    ),
-                )),
+                operand: SemanticOperandV1::Copy(integer_destination.clone()),
             },
         );
         let block = SemanticBasicBlockV1::new(
             SemanticBlockIdentityV1::from_sha256([132; 32]),
             source,
-            vec![SemanticStatementV1::new(
-                source,
-                SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(destination, value)),
-            )],
+            vec![
+                SemanticStatementV1::new(
+                    source,
+                    SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+                        integer_destination,
+                        integer_value,
+                    )),
+                ),
+                SemanticStatementV1::new(
+                    source,
+                    SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(destination, value)),
+                ),
+            ],
             SemanticTerminatorV1::new(source, SemanticTerminatorKindV1::Return),
         )
         .unwrap();
@@ -24117,6 +24137,12 @@ mod resource_tests {
                 SemanticLocalDeclV1::new(
                     SemanticLocalIdentityV1::from_sha256([141; 32]),
                     f32_ty,
+                    SemanticLocalRoleV1::Temporary,
+                    source,
+                ),
+                SemanticLocalDeclV1::new(
+                    SemanticLocalIdentityV1::from_sha256([148; 32]),
+                    u32_ty,
                     SemanticLocalRoleV1::Temporary,
                     source,
                 ),
@@ -24200,6 +24226,33 @@ mod resource_tests {
             .count();
         assert_eq!(bitcasts, 1);
         lowered.verify_equivalence().unwrap();
+    }
+
+    #[test]
+    fn live_scalar_owner_derives_production_connected_refinement_evidence() {
+        let lowered = ProductionSemanticKirOwnerV1::try_lower(
+            scalar_transmute_semantic_owner(),
+            ProductionSemanticKirLimitsV1::default(),
+        )
+        .unwrap();
+        let evidence = crate::InertMirKirScalarRefinementEvidenceV1::from_live_owner(&lowered)
+            .expect("the exact u32 MIR add and KIR add must be certified");
+        assert_eq!(evidence.candidate_count(), 1);
+        assert_eq!(evidence.certificates().len(), 1);
+        assert_eq!(
+            evidence.certificates()[0].operator(),
+            crate::MirKirScalarOperatorV1::Add
+        );
+        assert_eq!(
+            evidence.semantic_sha256(),
+            lowered.semantic().semantic().semantic_sha256().as_bytes()
+        );
+        assert_eq!(
+            evidence.canonical_kernel_ir_identity(),
+            lowered.canonical_kernel_ir_identity()
+        );
+        assert!(!evidence.grants_authority());
+        evidence.revalidate().unwrap();
     }
 
     fn bool_type() -> SemanticTypeDeclV1 {
