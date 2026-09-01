@@ -31,6 +31,7 @@ use std::ffi::{OsStr, OsString};
 use std::fmt::Write as _;
 use std::fs::{self, File, Metadata, OpenOptions};
 use std::io::{self, Read, Write};
+use std::mem::MaybeUninit;
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
 use std::os::unix::process::CommandExt as _;
@@ -2743,6 +2744,17 @@ enum StopReason {
     WaitFailure,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CollectorLeaderExitObservation {
+    Running,
+    Exited,
+}
+
+enum CollectorExitDecision {
+    RevokeAndReap(StopReason),
+    AmbiguousWait(String),
+}
+
 struct BoundedCapture {
     bytes: Vec<u8>,
     overflow: bool,
@@ -2827,8 +2839,12 @@ fn supervise(
     if let Err(error) =
         make_capture_pipe_nonblocking(&stdout).and_then(|()| make_capture_pipe_nonblocking(&stderr))
     {
-        terminate(child);
-        let _ = child.wait();
+        let _ = revoke_then_reap_with(
+            child,
+            StopReason::WaitFailure,
+            revoke_owned_child,
+            Child::wait,
+        );
         return Err(error);
     }
     let overflow = Arc::new(AtomicBool::new(false));
@@ -2846,26 +2862,28 @@ fn supervise(
         Arc::clone(&capture_cancelled),
     );
     let started = Instant::now();
-    let (status, reason, wait_error) = loop {
+    let decision = loop {
         if overflow.load(Ordering::Acquire) {
-            terminate(child);
-            break (child.wait().ok(), StopReason::OutputOverflow, None);
+            break CollectorExitDecision::RevokeAndReap(StopReason::OutputOverflow);
         }
-        match child.try_wait() {
-            Ok(Some(status)) => break (Some(status), StopReason::Exited, None),
-            Ok(None) if started.elapsed() >= timeout => {
-                terminate(child);
-                break (child.wait().ok(), StopReason::Timeout, None);
+        match observe_collector_leader_exit_without_reaping(child) {
+            Ok(CollectorLeaderExitObservation::Exited) => {
+                break CollectorExitDecision::RevokeAndReap(StopReason::Exited);
             }
-            Ok(None) => thread::sleep(POLL_INTERVAL),
+            Ok(CollectorLeaderExitObservation::Running) if started.elapsed() >= timeout => {
+                break CollectorExitDecision::RevokeAndReap(StopReason::Timeout);
+            }
+            Ok(CollectorLeaderExitObservation::Running) => thread::sleep(POLL_INTERVAL),
             Err(error) => {
-                terminate(child);
-                let _ = child.wait();
-                break (None, StopReason::WaitFailure, Some(error.to_string()));
+                break CollectorExitDecision::AmbiguousWait(format!(
+                    "failed to inspect collector leader without reaping it: {error} (errno {:?})",
+                    error.raw_os_error()
+                ));
             }
         }
     };
-    terminate(child);
+    let (status, reason, wait_error) =
+        finalize_collector_exit_with(child, decision, revoke_owned_child, Child::wait);
     capture_cancelled.store(true, Ordering::Release);
     let stdout = stdout_thread
         .join()
@@ -2873,6 +2891,11 @@ fn supervise(
     let stderr = stderr_thread
         .join()
         .map_err(|_| "collector stderr capture thread panicked")?;
+    let reason = if stdout.overflow || stderr.overflow {
+        StopReason::OutputOverflow
+    } else {
+        reason
+    };
     Ok(Supervised {
         status,
         reason,
@@ -2880,6 +2903,78 @@ fn supervise(
         stderr,
         wait_error,
     })
+}
+
+fn observe_collector_leader_exit_without_reaping(
+    child: &Child,
+) -> io::Result<CollectorLeaderExitObservation> {
+    let leader = libc::pid_t::try_from(child.id()).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "collector leader PID does not fit pid_t",
+        )
+    })?;
+    loop {
+        let mut information = MaybeUninit::<libc::siginfo_t>::zeroed();
+        // SAFETY: `information` is writable, P_PID selects the owned collector leader, WNOHANG
+        // bounds the observation, and WNOWAIT retains an exited leader until its dedicated
+        // process group has been revoked.
+        let result = unsafe {
+            libc::waitid(
+                libc::P_PID,
+                leader as libc::id_t,
+                information.as_mut_ptr(),
+                libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+            )
+        };
+        if result == 0 {
+            // SAFETY: successful waitid initialized the siginfo record.
+            let observed = unsafe { information.assume_init().si_pid() };
+            return match observed {
+                0 => Ok(CollectorLeaderExitObservation::Running),
+                observed if observed == leader => Ok(CollectorLeaderExitObservation::Exited),
+                _ => Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "waitid returned an unexpected collector child",
+                )),
+            };
+        }
+        let error = io::Error::last_os_error();
+        if error.kind() != io::ErrorKind::Interrupted {
+            return Err(error);
+        }
+    }
+}
+
+fn revoke_then_reap_with<T, S>(
+    subject: &mut T,
+    reason: StopReason,
+    revoke: impl FnOnce(&mut T),
+    reap: impl FnOnce(&mut T) -> io::Result<S>,
+) -> (Option<S>, StopReason, Option<String>) {
+    revoke(subject);
+    match reap(subject) {
+        Ok(status) => (Some(status), reason, None),
+        Err(error) => (
+            None,
+            StopReason::WaitFailure,
+            Some(format!("failed to reap collector leader: {error}")),
+        ),
+    }
+}
+
+fn finalize_collector_exit_with<T, S>(
+    subject: &mut T,
+    decision: CollectorExitDecision,
+    revoke: impl FnOnce(&mut T),
+    reap: impl FnOnce(&mut T) -> io::Result<S>,
+) -> (Option<S>, StopReason, Option<String>) {
+    match decision {
+        CollectorExitDecision::RevokeAndReap(reason) => {
+            revoke_then_reap_with(subject, reason, revoke, reap)
+        }
+        CollectorExitDecision::AmbiguousWait(error) => (None, StopReason::WaitFailure, Some(error)),
+    }
 }
 
 fn capture_thread(
@@ -2939,9 +3034,12 @@ fn make_capture_pipe_nonblocking(pipe: &impl rustix::fd::AsFd) -> Result<(), Str
         .map_err(|error| format!("failed to make collector capture pipe nonblocking: {error}"))
 }
 
-fn terminate(child: &mut Child) {
-    let pid = i32::try_from(child.id()).unwrap_or(i32::MAX);
-    // SAFETY: a negative, positive process-group id targets the fresh child group created above.
+fn revoke_owned_child(child: &mut Child) {
+    let Ok(pid) = i32::try_from(child.id()) else {
+        return;
+    };
+    // SAFETY: this is called only while the owned leader is live or waitable-but-unreaped, so a
+    // negative, positive process-group id still identifies the fresh child group created above.
     let _ = unsafe { libc::kill(-pid, libc::SIGKILL) };
     let _ = child.kill();
 }
@@ -4915,6 +5013,81 @@ mod tests {
         assert_eq!(supervised.reason, StopReason::Exited);
         assert_eq!(supervised.stdout.bytes, payload.as_bytes());
         assert_eq!(supervised.stderr.bytes, b"final-stderr");
+    }
+
+    #[test]
+    fn owned_child_is_revoked_before_exactly_one_reap() {
+        #[derive(Default)]
+        struct InstrumentedChild {
+            events: Vec<&'static str>,
+        }
+
+        let mut child = InstrumentedChild::default();
+        let (status, reason, wait_error) = finalize_collector_exit_with(
+            &mut child,
+            CollectorExitDecision::RevokeAndReap(StopReason::Exited),
+            |child| child.events.push("revoke"),
+            |child| {
+                assert_eq!(child.events.as_slice(), ["revoke"]);
+                child.events.push("reap");
+                Ok(())
+            },
+        );
+        assert_eq!(child.events, ["revoke", "reap"]);
+        assert_eq!(status, Some(()));
+        assert_eq!(reason, StopReason::Exited);
+        assert_eq!(wait_error, None);
+
+        let mut ambiguous = InstrumentedChild::default();
+        let (status, reason, wait_error) = finalize_collector_exit_with(
+            &mut ambiguous,
+            CollectorExitDecision::AmbiguousWait("ECHILD".to_owned()),
+            |child| child.events.push("revoke"),
+            |child| {
+                child.events.push("reap");
+                Ok(())
+            },
+        );
+        assert!(ambiguous.events.is_empty());
+        assert_eq!(status, None);
+        assert_eq!(reason, StopReason::WaitFailure);
+        assert_eq!(wait_error.as_deref(), Some("ECHILD"));
+    }
+
+    #[test]
+    fn fast_exit_stdout_overflow_is_authoritative() {
+        let mut child = Command::new("/bin/sh")
+            .args(["-c", "head -c 65536 /dev/zero"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .process_group(0)
+            .spawn()
+            .unwrap();
+        let supervised = supervise(&mut child, Duration::from_secs(5), 1024, 1024).unwrap();
+        assert_eq!(supervised.reason, StopReason::OutputOverflow);
+        assert!(supervised.stdout.overflow);
+        assert_eq!(supervised.stdout.bytes.len(), 1024);
+        assert!(!supervised.stderr.overflow);
+        assert!(supervised.stderr.bytes.len() <= 1024);
+    }
+
+    #[test]
+    fn fast_exit_stderr_overflow_is_authoritative() {
+        let mut child = Command::new("/bin/sh")
+            .args(["-c", "head -c 65536 /dev/zero >&2"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .process_group(0)
+            .spawn()
+            .unwrap();
+        let supervised = supervise(&mut child, Duration::from_secs(5), 1024, 1024).unwrap();
+        assert_eq!(supervised.reason, StopReason::OutputOverflow);
+        assert!(!supervised.stdout.overflow);
+        assert!(supervised.stdout.bytes.len() <= 1024);
+        assert!(supervised.stderr.overflow);
+        assert_eq!(supervised.stderr.bytes.len(), 1024);
     }
 
     #[test]
