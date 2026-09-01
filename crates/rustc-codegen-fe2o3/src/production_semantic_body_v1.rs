@@ -968,13 +968,7 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
                     CastKind::PointerWithExposedProvenance => {
                         SemanticCastKindV1::PointerWithExposedProvenance
                     }
-                    CastKind::Transmute => {
-                        return Err(unsupported(
-                            "unsupported Transmute Cast rvalue",
-                            block,
-                            statement,
-                        ));
-                    }
+                    CastKind::Transmute => SemanticCastKindV1::Transmute,
                     CastKind::PointerCoercion(..) => {
                         return Err(unsupported(
                             "unsupported PointerCoercion Cast rvalue",

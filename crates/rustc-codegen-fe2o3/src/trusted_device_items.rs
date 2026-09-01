@@ -15,9 +15,11 @@
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
+use rustc_abi::ExternAbi;
+use rustc_hir::Safety;
 use rustc_hir::def_id::{DefId, LOCAL_CRATE};
 use rustc_hir::lang_items::LangItem;
-use rustc_middle::ty::{TyCtxt, TyKind};
+use rustc_middle::ty::{FloatTy, Instance, InstanceKind, TyCtxt, TyKind, UintTy};
 use rustc_span::{SourceFileHash, Symbol};
 use sha2::{Digest as _, Sha256};
 
@@ -2001,6 +2003,58 @@ pub(crate) fn authenticate_reviewed_safe_external_helper_v1(
     let definition = reviewed_provider_semantic_definition_v1(tcx, provider_definition)?;
     validate_safe_execution_provider_definition_v1(&definition)?;
     Ok(true)
+}
+
+/// Recognizes the pinned core scalar bit-conversion methods whose complete
+/// executable semantics are retained as a semantic-MIR transmute.
+pub(crate) fn authenticate_reviewed_safe_core_scalar_bitcast_helper_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+) -> bool {
+    let Some(core_lang_item) = tcx.lang_items().sized_trait() else {
+        return false;
+    };
+    if !matches!(instance.def, InstanceKind::Item(_))
+        || instance.def_id().krate != core_lang_item.krate
+        || tcx.crate_name(core_lang_item.krate).as_str() != "core"
+        || !instance.args.is_empty()
+        || !tcx.is_mir_available(instance.def_id())
+    {
+        return false;
+    }
+    let signature = tcx.instantiate_bound_regions_with_erased(
+        tcx.fn_sig(instance.def_id())
+            .instantiate(tcx, instance.args),
+    );
+    if signature.safety != Safety::Safe || signature.abi != ExternAbi::Rust || signature.c_variadic
+    {
+        return false;
+    }
+    let [input] = signature.inputs() else {
+        return false;
+    };
+    let input = input.kind();
+    let output = signature.output().kind();
+    matches!(
+        (tcx.def_path_str(instance.def_id()).as_str(), input, output),
+        (
+            "core::f32::<impl f32>::from_bits",
+            TyKind::Uint(UintTy::U32),
+            TyKind::Float(FloatTy::F32),
+        ) | (
+            "core::f32::<impl f32>::to_bits",
+            TyKind::Float(FloatTy::F32),
+            TyKind::Uint(UintTy::U32),
+        ) | (
+            "core::f64::<impl f64>::from_bits",
+            TyKind::Uint(UintTy::U64),
+            TyKind::Float(FloatTy::F64),
+        ) | (
+            "core::f64::<impl f64>::to_bits",
+            TyKind::Float(FloatTy::F64),
+            TyKind::Uint(UintTy::U64),
+        )
+    )
 }
 
 fn reviewed_provider_semantic_definition_from_source_v1(

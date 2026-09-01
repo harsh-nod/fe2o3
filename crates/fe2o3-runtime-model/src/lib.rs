@@ -22,7 +22,9 @@ mod device_projection;
 mod identity;
 mod memory_lifecycle;
 mod model;
+mod multi_device;
 mod queue_lifecycle;
+mod typed_async;
 
 pub use async_queue::*;
 pub use device_identity::*;
@@ -31,7 +33,9 @@ pub use device_projection::*;
 pub use identity::*;
 pub use memory_lifecycle::*;
 pub use model::*;
+pub use multi_device::*;
 pub use queue_lifecycle::*;
+pub use typed_async::*;
 
 #[cfg(test)]
 mod async_queue_tests;
@@ -44,6 +48,10 @@ mod device_projection_tests;
 #[cfg(test)]
 mod memory_lifecycle_tests;
 #[cfg(test)]
+mod multi_device_tests;
+#[cfg(test)]
 mod queue_lifecycle_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod typed_async_tests;

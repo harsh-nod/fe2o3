@@ -8,6 +8,7 @@ rust-version.workspace = true
 publish = false
 
 [features]
+atomic-rmw = []
 multi-root-ownership = []
 multi-root-target-lineage = []
 three-root-ownership = []
@@ -36,6 +37,7 @@ reference-two-output-positive = []
 reference-two-output-substitution = []
 reference-two-output-alias = []
 reference-two-output-schedule = []
+scalar-transmute = []
 
 [dependencies]
 fe2o3-device.workspace = true
