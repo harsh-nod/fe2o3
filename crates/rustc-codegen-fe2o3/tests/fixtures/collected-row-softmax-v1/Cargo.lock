@@ -612,6 +612,7 @@ dependencies = [
  "fe2o3-llvm-text",
  "fe2o3-lower-mir-kernel",
  "fe2o3-mir-model",
+ "fe2o3-source-isa-observation",
  "object",
  "reserved-fe2o3-symbols",
  "rustix",
@@ -798,6 +799,16 @@ version = "0.1.0"
 dependencies = [
  "fe2o3-amd-target",
  "fe2o3-build-authority",
+ "sha2 0.11.0",
+]
+
+[[package]]
+name = "fe2o3-source-isa-observation"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-kernel-ir",
+ "serde",
+ "serde_json",
  "sha2 0.11.0",
 ]
 
