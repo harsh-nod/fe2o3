@@ -13516,12 +13516,10 @@ fn validate_rvalue(
                     })
                 }
                 SemanticCastKindV1::Transmute => {
-                    input == output
-                        || type_size(context.request, input).is_some()
-                            && type_size(context.request, input)
-                                == type_size(context.request, output)
-                            && plain_bit_scalar(context.request, input)
-                            && plain_bit_scalar(context.request, output)
+                    type_size(context.request, input).is_some()
+                        && type_size(context.request, input) == type_size(context.request, output)
+                        && plain_bit_scalar(context.request, input)
+                        && plain_bit_scalar(context.request, output)
                 }
             };
             if !valid {
@@ -18925,6 +18923,7 @@ mod private_tests {
         let f32_ty = SemanticTypeIdV1::from_index(2);
         let u64_ty = SemanticTypeIdV1::from_index(3);
         let aggregate_ty = SemanticTypeIdV1::from_index(4);
+        let pointer_ty = SemanticTypeIdV1::from_index(5);
         let request = InertSemanticMirRequestV1::new(
             SemanticTargetDataLayoutV1::gfx942(SemanticLayoutIdentityV1::from_sha256([70; 32])),
             vec![
@@ -18964,6 +18963,29 @@ mod private_tests {
                     .unwrap(),
                     SemanticTypeShapeV1::Tuple(SemanticAggregateTypeV1::new(vec![u32_ty]).unwrap()),
                 ),
+                test_type(
+                    76,
+                    SemanticTypeLayoutV1::new_with_backend_repr(
+                        Some(8),
+                        8,
+                        SemanticBackendReprV1::scalar(SemanticBackendScalarV1::initialized(
+                            SemanticBackendPrimitiveV1::pointer(0, 8, 8),
+                            SemanticScalarValidityRangeV1::new(0, u128::from(u64::MAX)),
+                        )),
+                        false,
+                    )
+                    .unwrap(),
+                    SemanticTypeShapeV1::Pointer(
+                        SemanticPointerTypeV1::new(
+                            u32_ty,
+                            SemanticMutabilityV1::Mutable,
+                            0,
+                            64,
+                            SemanticPointerMetadataV1::None,
+                        )
+                        .unwrap(),
+                    ),
+                ),
             ],
             vec![],
             vec![],
@@ -19002,10 +19024,38 @@ mod private_tests {
             )
         };
 
+        assert_eq!(validate(&transmute(u32_ty, u32_ty, 4)), Ok(()));
         assert_eq!(validate(&transmute(u32_ty, f32_ty, 4)), Ok(()));
+        let aggregate_identity = SemanticRvalueV1::new(
+            aggregate_ty,
+            SemanticRvalueKindV1::Cast {
+                kind: SemanticCastKindV1::Transmute,
+                operand: SemanticOperandV1::Constant(SemanticConstantV1::new(
+                    aggregate_ty,
+                    SemanticConstantValueV1::Bytes(
+                        SemanticConstantBytesV1::new(vec![0; 4]).unwrap(),
+                    ),
+                )),
+            },
+        );
+        let pointer_identity = SemanticRvalueV1::new(
+            pointer_ty,
+            SemanticRvalueKindV1::Cast {
+                kind: SemanticCastKindV1::Transmute,
+                operand: SemanticOperandV1::Constant(SemanticConstantV1::new(
+                    pointer_ty,
+                    SemanticConstantValueV1::Pointer(SemanticPointerValueV1::new(
+                        0,
+                        SemanticPointerProvenanceV1::ExposedAddress,
+                    )),
+                )),
+            },
+        );
         for rejected in [
             transmute(u32_ty, u64_ty, 4),
             transmute(u32_ty, aggregate_ty, 4),
+            aggregate_identity,
+            pointer_identity,
         ] {
             assert!(matches!(
                 validate(&rejected),

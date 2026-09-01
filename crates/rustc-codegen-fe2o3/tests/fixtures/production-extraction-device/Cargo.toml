@@ -8,6 +8,7 @@ rust-version.workspace = true
 publish = false
 
 [features]
+atomic-rmw = []
 multi-root-ownership = []
 multi-root-target-lineage = []
 three-root-ownership = []

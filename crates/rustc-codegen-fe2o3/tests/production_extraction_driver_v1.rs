@@ -223,6 +223,38 @@ fn safe_scalar_from_bits_reaches_complete_semantic_import() {
 
 #[test]
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]
+fn core_atomic_rmw_set_reaches_complete_semantic_import() {
+    let target = ScratchTarget::new();
+    let output = run_extraction_command(&target, Some("atomic-rmw"), true);
+    let stderr = String::from_utf8(output.stderr).expect("rustc diagnostic is UTF-8");
+
+    assert!(
+        !output.status.success(),
+        "core atomics unexpectedly passed the pending target-neutral lowering boundary",
+    );
+    assert!(
+        stderr.contains("then admitted one complete semantic MIR request")
+            && stderr.contains("target-neutral lowering remains pending")
+            && stderr.contains("no fallback or artifact emission was entered"),
+        "core atomic RMWs did not reach complete semantic import:\n{stderr}",
+    );
+    for forbidden in [
+        "reaches unsafe function instance",
+        "cannot authenticate the absence of user-provided unsafe blocks",
+        "unsupported rustc compiler intrinsic",
+        "normalized atomic intrinsic with unexpected call arity",
+        "semantic importer rejected complete semantic MIR",
+        "semantic importer rejected semantic body construction",
+    ] {
+        assert!(
+            !stderr.contains(forbidden),
+            "core atomic RMWs entered forbidden path {forbidden:?}:\n{stderr}",
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires the pinned nightly rust-src component and AMD target"]
 fn two_and_three_kernel_collections_reach_one_exact_multi_entry_llvm_module() {
     for (features, expected_symbols, expected_kir_version, expected_guarded_stores) in [
         ("multi-root-ownership", &["alpha", "zeta"][..], 8, 0),

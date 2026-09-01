@@ -1,10 +1,15 @@
 #![no_std]
 
+#[cfg(feature = "atomic-rmw")]
+use fe2o3_device::DeviceGlobalMutPtr;
 #[cfg(any(feature = "write-only-output", feature = "write-only-disjoint-output"))]
 use fe2o3_device::WriteOnlyDisjointSlice;
+#[cfg(feature = "atomic-rmw")]
+use fe2o3_device::atomic::Ordering;
 use fe2o3_device::{DisjointSlice, kernel, thread};
 
 #[cfg(not(any(
+    feature = "atomic-rmw",
     feature = "multi-root-ownership",
     feature = "multi-root-target-lineage",
     feature = "three-root-ownership",
@@ -50,6 +55,27 @@ pub fn scalar_transmute(bits: u32, mut output: DisjointSlice<f32>) {
     if let Some(element) = output.get_mut(index) {
         *element = f32::from_bits(bits);
     }
+}
+
+#[cfg(feature = "atomic-rmw")]
+#[kernel(
+    typed,
+    launch(required = [64, 1, 1], max = [64, 1, 1])
+)]
+pub fn core_atomic_rmw_v1(unsigned: DeviceGlobalMutPtr<u32>, signed: DeviceGlobalMutPtr<i32>) {
+    let unsigned = unsigned.as_atomic();
+    let _ = unsigned.swap(1, Ordering::SeqCst);
+    let _ = unsigned.fetch_add(2, Ordering::Relaxed);
+    let _ = unsigned.fetch_sub(3, Ordering::Acquire);
+    let _ = unsigned.fetch_and(4, Ordering::Release);
+    let _ = unsigned.fetch_or(5, Ordering::AcqRel);
+    let _ = unsigned.fetch_xor(6, Ordering::SeqCst);
+    let _ = unsigned.fetch_min(7, Ordering::Relaxed);
+    let _ = unsigned.fetch_max(8, Ordering::Acquire);
+
+    let signed = signed.as_atomic();
+    let _ = signed.fetch_min(-9, Ordering::Release);
+    let _ = signed.fetch_max(10, Ordering::AcqRel);
 }
 
 #[cfg(feature = "write-only-output")]
