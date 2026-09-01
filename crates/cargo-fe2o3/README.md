@@ -253,11 +253,15 @@ Python interpreter, installed ROCProfiler SDK tool
 and core libraries where they use the reviewed ROCm layout, the native target
 ELF, the fixed semantic collector configuration, the cleared and bounded
 environment, and stable device records read directly from KFD sysfs topology.
-The semantic configuration identity excludes output routing and target launch
-authority so independently routed captures remain comparable; the collection
-authorization binds both. Planning creates no output directory and executes
-neither collector nor target. Collection requires `--collect` together with
-the exact lowercase digest printed as `collection-authorization`:
+Each GPU record also carries the bounded
+[observed GPU target profile V1](../../docs/observed-gpu-target-profile-v1.md)
+derived from those same KFD properties. The semantic configuration identity
+includes these observed device target records but excludes output routing and
+target launch authority so captures on the same re-observed devices remain
+comparable; the collection authorization binds both. Planning creates no
+output directory and executes neither collector nor target. Collection
+requires `--collect` together with the exact lowercase digest printed as
+`collection-authorization`:
 
 ```console
 cargo fe2o3 profile --kind dispatch-json \
@@ -282,9 +286,13 @@ exact `fe2o3-profiler-import` Bundle V4 argument vector. With rocprof's
 agent ID to the stable direct-KFD identity for that same KFD node; import joins
 by that ID and does not depend on device-vector or first-dispatch order. The
 collection authorization covers both the node number and stable identity, and
-the complete mapping is re-observed immediately before and after collection.
-Any remap observed by either check fails closed and the owned output is
-cleaned. ATT import
+the complete mapping, raw target inputs, and typed target availability are
+re-observed immediately before and after collection. Exact KFD values
+`90402` and `90500` map to `gfx942` and `gfx950` only for AMD vendor `4098`
+with wave width `64`. Unknown values and contradictory vendor or wave values
+remain explicit unavailable records: ordinary collection may proceed, but a
+future semantic association must reject them. Any remap observed by either
+check fails closed and the owned output is cleaned. ATT import
 is deferred until the output directory identifies the selected absolute agent
 and every manifest-relative artifact has been content-bound. The source
 manifest or dispatch file must also fit the importer's 8 MiB source limit;
