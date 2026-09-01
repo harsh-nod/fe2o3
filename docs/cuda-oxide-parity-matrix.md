@@ -328,8 +328,14 @@ The detailed dependencies and exit criteria are in
   advice, prefetch, location queries, and reclamation; VMM typestates cover
   reserve, map, per-device access, query, and reverse-order cleanup. Opt-in HIP
   tests exercise managed allocation lifecycle and two-`gfx942` VMM access.
-  Safe host-reference capture, coherent CPU/GPU access semantics, in-flight
-  launch retention, and broad topology evidence remain incomplete.
+  A separate authority-free runtime model now binds one exact directional
+  two-device peer/VMM topology to device generations, profiles, VMs, ranges,
+  access, aliases, publication custody, completion visibility, and fresh
+  currentness observations. Capability or identity loss quarantines both
+  endpoint mappings. There is no native KFD/VMM/copy adapter, topology is
+  limited to exactly two devices, and quarantined transfers have no release
+  transition. Safe host-reference capture, coherent CPU/GPU access semantics,
+  in-flight launch retention, and broad topology evidence remain incomplete.
 - Row 07: reachable collection now distinguishes concrete generic and
   const-generic helper instances, deduplicates them deterministically,
   terminates recursive graphs, and diagnoses unavailable cross-crate MIR with
@@ -502,10 +508,15 @@ The detailed dependencies and exit criteria are in
   ballot, vote, and bounded shuffle operations. AMD lowering for those bounded
   operations has compiled into `gfx1151`, `gfx942`, and, where recorded by the
   claim ledger, `gfx950` code objects. Branded dynamic-LDS views enforce
-  bounded disjoint typestates at the source API. Ordinary Rust frontend
-  integration, dynamic-LDS launch-byte admission, float and standard-library
-  atomics, broad wave types/tiles/collectives, and GPU semantic execution are
-  still absent.
+  bounded disjoint typestates at the source API. The production rustc importer
+  now authenticates and normalizes the representable 32/64-bit integer RMW
+  intrinsic set behind ordinary core atomics, including exchange, arithmetic,
+  bitwise, and signed/unsigned min/max operations and every Rust ordering.
+  The safe core call chain reaches complete semantic import, but authenticated
+  `as_atomic` provenance and effectful interprocedural ranked projection remain
+  pending. Dynamic-LDS launch-byte admission, float and end-to-end
+  standard-library atomics, broad wave types/tiles/collectives, and GPU semantic
+  execution are still absent.
 - Rows 57, 58, and 61: Kernel IR distinguishes static LDS from the one dynamic
   LDS base, derives required capabilities, validates extent/alignment/address
   space, and represents workgroup barriers with convergence, scope, ordering,
@@ -603,12 +614,15 @@ The detailed dependencies and exit criteria are in
 - Row 81 and supplemental row S03: the generated vecadd `launch_scoped` API
   retains typed resource borrows, loaded authority, alias admission, and packed
   parameters through event completion or stronger stream quiescence. Its
-  higher-ranked callback cannot return the in-flight operation. Generalized
-  returnable borrowed or owned generated async operations, cancellation, and
-  composition are incomplete. The linear Worker V3 HSA path prevents executable
-  unload while prepared calls retain borrows. It has synchronous generated
-  dispatch but no generated asynchronous
-  operations, so both rows remain Partial.
+  higher-ranked callback cannot return the in-flight operation. An
+  authority-free runtime model now supplies typed lazy, reserved, submitted,
+  completed, timed-out, cancellation-requested, and quarantined operations,
+  with ordered stream frontiers, typed completion-event dependencies, exact
+  resource retention, and failure-atomic custody recovery. It has no native
+  queue adapter, `Future` implementation, or Worker/generated-SPI authority.
+  The linear Worker V3 HSA path prevents executable unload while prepared calls
+  retain borrows. It has synchronous generated dispatch but no generated
+  asynchronous operations, so both rows remain Partial.
 - Supplemental rows S01 and S02: the V1 container, bundle index, direct-link
   evidence, descriptor finalization, transactional publication, and durable
   raw/finalized crash-recovery records form a canonical bounded artifact path.
