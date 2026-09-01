@@ -108,6 +108,7 @@ readonly CPU_TEST_PACKAGES=(
   fe2o3-rustc-invocation
   fe2o3-service-host
   fe2o3-service-model
+  fe2o3-source-isa-observation
   fe2o3-semantic-import
   fe2o3-semantic-query
   fe2o3-semantic-trace

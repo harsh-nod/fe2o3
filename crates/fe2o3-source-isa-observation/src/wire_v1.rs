@@ -3,7 +3,6 @@
 use std::error::Error;
 use std::fmt;
 
-use fe2o3_artifact_transaction::{BuildAttempt, BuildInvocation, BuildSession};
 use fe2o3_kernel_ir::MAX_FUNCTIONS_V1;
 use sha2::{Digest, Sha256};
 
@@ -18,6 +17,98 @@ const FRAME_IDENTITY_DOMAIN_V1: &[u8] = b"FE2O3/SOURCE-ISA-SUMMARY-FRAME/V1\0";
 const MAX_SOURCE_ISA_RECORDS_V1: u64 = 528_384;
 const MAX_SOURCE_ISA_REFERENCES_V1: u64 = 1_016_800;
 const MAX_PRODUCTION_STRUCTURAL_OPERATIONS_V1: u64 = 4 * 1024;
+
+/// Inert fixed-width identity for the producer session carried by an observation.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct SourceIsaObservationSessionV1([u8; 16]);
+
+impl SourceIsaObservationSessionV1 {
+    /// The all-zero value, which is never valid in an admitted observation.
+    pub const DIRECT: Self = Self([0; 16]);
+
+    pub const fn from_bytes(bytes: [u8; 16]) -> Self {
+        Self(bytes)
+    }
+
+    pub const fn as_bytes(&self) -> &[u8; 16] {
+        &self.0
+    }
+}
+
+impl fmt::Display for SourceIsaObservationSessionV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write_lower_hex(formatter, &self.0)
+    }
+}
+
+/// Inert fixed-width identity for the producer invocation carried by an observation.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct SourceIsaObservationInvocationV1([u8; 32]);
+
+impl SourceIsaObservationInvocationV1 {
+    pub const DIRECT: Self = Self([0; 32]);
+
+    pub const fn from_bytes(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
+
+    pub const fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+impl fmt::Display for SourceIsaObservationInvocationV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write_lower_hex(formatter, &self.0)
+    }
+}
+
+/// Inert attempt coordinates copied from a producer after authority release.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct SourceIsaObservationAttemptV1 {
+    generation: u64,
+    session: SourceIsaObservationSessionV1,
+    invocation: SourceIsaObservationInvocationV1,
+}
+
+impl SourceIsaObservationAttemptV1 {
+    pub fn new(
+        generation: u64,
+        session: SourceIsaObservationSessionV1,
+        invocation: SourceIsaObservationInvocationV1,
+    ) -> Result<Self, SourceIsaObservationFrameErrorV1> {
+        if generation == 0
+            || (session == SourceIsaObservationSessionV1::DIRECT)
+                != (invocation == SourceIsaObservationInvocationV1::DIRECT)
+        {
+            return Err(SourceIsaObservationFrameErrorV1::InvalidClaim);
+        }
+        Ok(Self {
+            generation,
+            session,
+            invocation,
+        })
+    }
+
+    pub const fn generation(self) -> u64 {
+        self.generation
+    }
+
+    pub const fn session(self) -> SourceIsaObservationSessionV1 {
+        self.session
+    }
+
+    pub const fn invocation(self) -> SourceIsaObservationInvocationV1 {
+        self.invocation
+    }
+}
+
+fn write_lower_hex(formatter: &mut fmt::Formatter<'_>, bytes: &[u8]) -> fmt::Result {
+    for byte in bytes {
+        write!(formatter, "{byte:02x}")?;
+    }
+    Ok(())
+}
 
 pub const SOURCE_ISA_OBSERVATION_FRAME_BYTES_V1: usize =
     FRAME_PREFIX_BYTES_V1 + FRAME_IDENTITY_BYTES_V1;
@@ -88,7 +179,7 @@ impl SourceIsaObservationTransportFailureV1 {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SourceIsaObservationCollectionV1 {
     config_identity: [u8; 32],
-    session: BuildSession,
+    session: SourceIsaObservationSessionV1,
     frames: Vec<([u8; 32], SourceIsaObservationFrameV1)>,
     missing_units: Vec<[u8; 32]>,
     failure: Option<SourceIsaObservationTransportFailureV1>,
@@ -97,7 +188,7 @@ pub struct SourceIsaObservationCollectionV1 {
 impl SourceIsaObservationCollectionV1 {
     pub fn from_collected(
         config_identity: [u8; 32],
-        session: BuildSession,
+        session: SourceIsaObservationSessionV1,
         frames: Vec<([u8; 32], SourceIsaObservationFrameV1)>,
         missing_units: Vec<[u8; 32]>,
         failure: Option<SourceIsaObservationTransportFailureV1>,
@@ -115,7 +206,7 @@ impl SourceIsaObservationCollectionV1 {
         self.config_identity
     }
 
-    pub const fn session(&self) -> BuildSession {
+    pub const fn session(&self) -> SourceIsaObservationSessionV1 {
         self.session
     }
 
@@ -226,7 +317,7 @@ impl SourceIsaObservationCollectionV1 {
         let config_identity = encoded[32..64]
             .try_into()
             .expect("fixed collection config field");
-        let session = BuildSession::from_bytes(
+        let session = SourceIsaObservationSessionV1::from_bytes(
             encoded[64..80]
                 .try_into()
                 .expect("fixed collection session field"),
@@ -284,7 +375,7 @@ impl SourceIsaObservationCollectionV1 {
 
     fn validate_canonical(&self) -> Result<(), String> {
         if self.config_identity == [0; 32]
-            || self.session == BuildSession::DIRECT
+            || self.session == SourceIsaObservationSessionV1::DIRECT
             || self.frames.windows(2).any(|pair| pair[0].0 >= pair[1].0)
             || self.frames.iter().any(|(unit, frame)| {
                 *unit != frame.context().unit()
@@ -832,6 +923,10 @@ impl SourceIsaObservationUnavailableReasonV1 {
             _ => Err(SourceIsaObservationFrameErrorV1::InvalidTag),
         }
     }
+
+    pub fn from_code(value: u16) -> Result<Self, SourceIsaObservationFrameErrorV1> {
+        Self::decode(value)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1128,6 +1223,10 @@ impl SourceIsaObservationErrorCodeV1 {
             _ => Err(SourceIsaObservationFrameErrorV1::InvalidTag),
         }
     }
+
+    pub fn from_code(value: u16) -> Result<Self, SourceIsaObservationFrameErrorV1> {
+        Self::decode(value)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1214,7 +1313,7 @@ pub enum SourceIsaObservationOutcomeV1 {
 pub struct SourceIsaObservationContextV1 {
     config: [u8; 32],
     unit: [u8; 32],
-    attempt: BuildAttempt,
+    attempt: SourceIsaObservationAttemptV1,
     finalization: [u8; 32],
 }
 
@@ -1222,12 +1321,12 @@ impl SourceIsaObservationContextV1 {
     pub fn new(
         config: [u8; 32],
         unit: [u8; 32],
-        attempt: BuildAttempt,
+        attempt: SourceIsaObservationAttemptV1,
         finalization: [u8; 32],
     ) -> Result<Self, SourceIsaObservationFrameErrorV1> {
         if config == [0; 32]
             || unit == [0; 32]
-            || attempt.session() == BuildSession::DIRECT
+            || attempt.session() == SourceIsaObservationSessionV1::DIRECT
             || finalization == [0; 32]
         {
             return Err(SourceIsaObservationFrameErrorV1::InvalidClaim);
@@ -1248,7 +1347,7 @@ impl SourceIsaObservationContextV1 {
         self.unit
     }
 
-    pub const fn attempt(self) -> BuildAttempt {
+    pub const fn attempt(self) -> SourceIsaObservationAttemptV1 {
         self.attempt
     }
 
@@ -1325,10 +1424,9 @@ impl SourceIsaObservationFrameV1 {
         let config = decoder.array()?;
         let unit = decoder.array()?;
         let generation = decoder.u64()?;
-        let session = BuildSession::from_bytes(decoder.array()?);
-        let invocation = BuildInvocation::from_bytes(decoder.array()?);
-        let attempt = BuildAttempt::from_env_value(&format!("{generation}:{session}:{invocation}"))
-            .map_err(|_| SourceIsaObservationFrameErrorV1::InvalidClaim)?;
+        let session = SourceIsaObservationSessionV1::from_bytes(decoder.array()?);
+        let invocation = SourceIsaObservationInvocationV1::from_bytes(decoder.array()?);
+        let attempt = SourceIsaObservationAttemptV1::new(generation, session, invocation)?;
         let finalization = decoder.array()?;
         let context = SourceIsaObservationContextV1::new(config, unit, attempt, finalization)?;
         let outcome_tag = decoder.u8()?;
@@ -1667,12 +1765,16 @@ impl<'encoded> FrameDecoder<'encoded> {
 mod tests {
     use super::*;
 
-    fn attempt(generation: u64, session: [u8; 16], invocation: [u8; 32]) -> BuildAttempt {
-        BuildAttempt::from_env_value(&format!(
-            "{generation}:{}:{}",
-            BuildSession::from_bytes(session),
-            BuildInvocation::from_bytes(invocation)
-        ))
+    fn attempt(
+        generation: u64,
+        session: [u8; 16],
+        invocation: [u8; 32],
+    ) -> SourceIsaObservationAttemptV1 {
+        SourceIsaObservationAttemptV1::new(
+            generation,
+            SourceIsaObservationSessionV1::from_bytes(session),
+            SourceIsaObservationInvocationV1::from_bytes(invocation),
+        )
         .unwrap()
     }
 
@@ -1814,6 +1916,67 @@ mod tests {
             }
             assert_eq!(SourceIsaObservationFrameV1::decode(&encoded), Ok(expected));
         }
+    }
+
+    #[test]
+    fn frozen_pre_extraction_frame_and_collection_identities_are_stable() {
+        // Captured from the frozen cargo-fe2o3 codec before it moved into this crate.
+        let hex = |bytes: &[u8]| {
+            bytes
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
+        };
+        let assert_frame = |frame: &SourceIsaObservationFrameV1,
+                            expected_identity: &str,
+                            expected_encoded_sha256: &str| {
+            let encoded = frame.encode();
+            assert_eq!(hex(&frame.identity()), expected_identity);
+            assert_eq!(hex(&Sha256::digest(encoded)), expected_encoded_sha256);
+        };
+        let admitted = frame(SourceIsaObservationOutcomeV1::Admitted(admitted()));
+        let unavailable = frame(SourceIsaObservationOutcomeV1::Unavailable(
+            SourceIsaObservationUnavailableReasonV1::SourceProjectionForKirV9,
+        ));
+        let error = frame(SourceIsaObservationOutcomeV1::Error(
+            SourceIsaObservationErrorCodeV1::AllocationFailure,
+        ));
+        assert_frame(
+            &admitted,
+            "ae1b38e52062cc4cc66e4cc44b64df7298f93aaba88d6c34a1d9d6fda481cfb1",
+            "95264c97f69e2ff8c89ef6d2d60d8772d89b0a4d3457fc608ee5a62cb9119335",
+        );
+        assert_frame(
+            &unavailable,
+            "161cfb07d06bd7c234ad154f994437cd8f386d1bfd2048964c649d6bee61f572",
+            "6d954a44306662fdc510a1b9a094d2cc81df3107ff0d92ff863ea7aa09d87d2c",
+        );
+        assert_frame(
+            &error,
+            "51862e25119fab532f4538ceaef92691c3fe380317f9d5a4ff81698551181c99",
+            "d360ecf588981e81212940b3ae59177a55a8755c6e6188b807c3062f4eacc9dc",
+        );
+
+        let collection = SourceIsaObservationCollectionV1::from_collected(
+            [0x11; 32],
+            SourceIsaObservationSessionV1::from_bytes([0x13; 16]),
+            vec![([0x12; 32], unavailable)],
+            vec![[0x16; 32]],
+            Some(SourceIsaObservationTransportFailureV1::MissingSelectedUnits),
+        );
+        let encoded = collection.encode_canonical().unwrap();
+        assert_eq!(
+            hex(&encoded[encoded.len() - SOURCE_ISA_COLLECTION_IDENTITY_BYTES_V1..]),
+            "fb07983f01b7d71f5d4ef9946747f50983892aea1009b5189b5cfaa0d03bfc1e"
+        );
+        assert_eq!(
+            hex(&Sha256::digest(&encoded)),
+            "ed4cfaad0c268c3d786ce3fa5bc6ee800c125e43b1c1e4c2c017f4252be25423"
+        );
+        assert_eq!(
+            SourceIsaObservationCollectionV1::decode_canonical(&encoded),
+            Ok(collection)
+        );
     }
 
     #[test]

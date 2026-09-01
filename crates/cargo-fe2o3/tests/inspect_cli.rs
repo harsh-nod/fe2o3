@@ -209,6 +209,28 @@ fn explicit_format_mismatch_fails_closed() {
 fn source_isa_collection_cli_supports_auto_explicit_and_hostile_inputs() {
     let bytes = source_isa_collection();
     let fixture = TempFile::with_bytes("source-isa", &bytes);
+    let expected_human = format!(
+        concat!(
+            "format: fe2o3-source-isa-observation-collection-v1\n",
+            "authority: observation-only\n",
+            "compiler-authority: false\n",
+            "proof-authority: false\n",
+            "artifact-authority: false\n",
+            "runtime-authority: false\n",
+            "hardware-execution-observed: false\n",
+            "complete-machine-coverage-proved: false\n",
+            "semantic-refinement-proved: false\n",
+            "configuration: {}\n",
+            "session: {}\n",
+            "frames: 0\n",
+            "missing-units: 1\n",
+            "transport-failure: 6\n",
+            "missing-unit[0]: {}\n"
+        ),
+        "41".repeat(32),
+        "42".repeat(16),
+        "43".repeat(32),
+    );
     for extra in [None, Some("--format=source-isa-observation")] {
         let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"));
         command.arg("inspect");
@@ -225,11 +247,7 @@ fn source_isa_collection_cli_supports_auto_explicit_and_hostile_inputs() {
             String::from_utf8_lossy(&output.stderr)
         );
         let stdout = String::from_utf8(output.stdout).expect("UTF-8 inspect output");
-        assert!(stdout.contains("format: fe2o3-source-isa-observation-collection-v1"));
-        assert!(stdout.contains("authority: observation-only"));
-        assert!(stdout.contains("frames: 0"));
-        assert!(stdout.contains("missing-units: 1"));
-        assert!(stdout.contains("transport-failure: 6"));
+        assert_eq!(stdout, expected_human);
     }
 
     let agent = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"))
@@ -265,16 +283,31 @@ fn source_isa_collection_cli_supports_auto_explicit_and_hostile_inputs() {
         .take()
         .expect("discovery stdin")
         .write_all(
-            br#"{"operation":"discover_capabilities","schema":"fe2o3-agent-source-isa-request-v1","request_id":9}
-"#,
+            concat!(
+                "{\"operation\":\"discover_capabilities\",\"schema\":\"fe2o3-agent-source-isa-request-v1\",\"request_id\":9}\n",
+                "{\"operation\":\"discover_capabilities\",\"schema\":\"fe2o3-agent-source-isa-request-v1\",\"request_id\":10}\n",
+                "{\"operation\":\"discover_capabilities\",\"schema\":\"fe2o3-agent-source-isa-request-v1\",\"request_id\":10}\n"
+            )
+            .as_bytes(),
         )
         .expect("write discovery request");
     let discovery = discovery.wait_with_output().expect("wait for discovery");
     assert!(discovery.status.success());
-    let response: serde_json::Value =
-        serde_json::from_slice(&discovery.stdout).expect("discovery JSON");
-    assert_eq!(response["request_id"], 9);
-    assert_eq!(response["result"]["result"], "capabilities");
+    let responses = discovery
+        .stdout
+        .split(|byte| *byte == b'\n')
+        .filter(|line| !line.is_empty())
+        .map(|line| serde_json::from_slice::<serde_json::Value>(line).expect("discovery JSON"))
+        .collect::<Vec<_>>();
+    assert_eq!(responses.len(), 3);
+    assert_eq!(responses[0]["request_id"], 9);
+    assert_eq!(responses[0]["response_revision"], 1);
+    assert_eq!(responses[0]["result"]["result"], "capabilities");
+    assert_eq!(responses[1]["request_id"], 10);
+    assert_eq!(responses[1]["response_revision"], 2);
+    assert_eq!(responses[2]["request_id"], 10);
+    assert_eq!(responses[2]["response_revision"], 3);
+    assert_eq!(responses[2]["error"], "duplicate_request_id");
 
     let mut trailing = bytes;
     trailing.push(0);
@@ -285,4 +318,22 @@ fn source_isa_collection_cli_supports_auto_explicit_and_hostile_inputs() {
         String::from_utf8_lossy(&output.stderr)
             .contains("invalid source/ISA observation collection")
     );
+
+    let typed_hostile = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"))
+        .args([
+            "inspect",
+            "--format=source-isa-observation",
+            "--output=agent-json-v1",
+        ])
+        .arg(&hostile.0)
+        .output()
+        .expect("run typed hostile source/ISA inspect");
+    assert!(typed_hostile.status.success());
+    assert!(typed_hostile.stderr.is_empty());
+    let typed_hostile: serde_json::Value =
+        serde_json::from_slice(&typed_hostile.stdout).expect("typed hostile JSON");
+    assert_eq!(typed_hostile["status"], "error");
+    assert_eq!(typed_hostile["request_id"], 1);
+    assert_eq!(typed_hostile["operation"], "inspect_source_isa_collection");
+    assert_eq!(typed_hostile["error"], "invalid_collection");
 }

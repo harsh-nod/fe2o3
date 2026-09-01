@@ -311,7 +311,7 @@ mod platform {
             }
             SourceIsaObservationCollectionV1::from_collected(
                 self.config_identity,
-                self.session,
+                crate::source_isa_observation::inert_source_isa_session_v1(self.session),
                 self.frames,
                 self.expected_units,
                 self.failure,
@@ -2106,7 +2106,13 @@ mod platform {
             outcome: SourceIsaObservationOutcomeV1,
         ) -> SourceIsaObservationFrameV1 {
             SourceIsaObservationFrameV1::new(
-                SourceIsaObservationContextV1::new(config, unit, attempt, [0x33; 32]).unwrap(),
+                SourceIsaObservationContextV1::new(
+                    config,
+                    unit,
+                    crate::source_isa_observation::inert_source_isa_attempt_v1(attempt).unwrap(),
+                    [0x33; 32],
+                )
+                .unwrap(),
                 outcome,
             )
         }
@@ -2555,7 +2561,12 @@ mod platform {
         fn all_missing_collection_retains_exact_config_and_session() {
             let collection = collector(&[[0x40; 32], [0x41; 32]]).finish();
             assert_eq!(collection.config_identity(), [0x30; 32]);
-            assert_eq!(collection.session(), BuildSession::from_bytes([0x31; 16]));
+            assert_eq!(
+                collection.session(),
+                crate::source_isa_observation::inert_source_isa_session_v1(
+                    BuildSession::from_bytes([0x31; 16])
+                )
+            );
             assert_eq!(collection.frames().len(), 0);
             assert_eq!(collection.missing_units(), &[[0x40; 32], [0x41; 32]]);
             assert_eq!(

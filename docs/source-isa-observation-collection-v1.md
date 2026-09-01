@@ -58,8 +58,8 @@ cargo fe2o3 inspect --format source-isa-observation --output agent-json-v1 obser
 ```
 
 That one-shot convenience emits request ID and response revision `1` and the
-first page. For capability discovery, submit one bounded JSONL request on
-stdin:
+first page. For capability discovery or a stateful inspection session, submit
+bounded JSONL requests on stdin:
 
 ```text
 printf '%s\n' '{"operation":"discover_capabilities","schema":"fe2o3-agent-source-isa-request-v1","request_id":1}' | cargo fe2o3 inspect --output agent-json-v1
@@ -68,12 +68,14 @@ printf '%s\n' '{"operation":"discover_capabilities","schema":"fe2o3-agent-source
 The reusable `fe2o3-source-isa-observation` crate also exposes the
 line-at-a-time `run_agent_source_isa_jsonl_v1` service. Its
 `inspect_source_isa_collection` request carries `collection_hex` as strict
-lowercase hexadecimal plus `page: {"after": null, "limit": 64}`. Subsequent
-requests use the opaque `next_after` cursor returned by the prior page and a
-new nonzero request ID. Cursors are bound to the verified collection identity,
-canonical byte length, schema, operation, all-units filter, unit count,
-position, and preceding unit; cross-collection, forged, terminal, and
-out-of-range cursors fail closed.
+lowercase hexadecimal plus `page: {"cursor": null, "limit": 64}`. Subsequent
+requests use the structured `next_cursor` value returned by the prior page and
+a new nonzero request ID. The cursor carries a positive `position` and a
+lowercase `query_binding`. That public domain-separated digest binds the
+verified collection identity, canonical byte length, schema, operation,
+all-units filter, unit count, position, and preceding unit. Malformed,
+cross-collection, terminal, and out-of-range cursors fail closed; the binding
+is an integrity check, not authentication.
 
 The typed response supplies SHA-256 collection and frame evidence identities,
 canonical byte lengths, typed generation/session/invocation attempts, typed

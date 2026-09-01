@@ -188,7 +188,7 @@ fn main() -> ExitCode {
         Some("run") => cargo_with_backend("run", &rest),
         Some("examples") => with_utf8_args(&rest, example_manifest::command),
         Some("clean") => clean_command(&rest),
-        Some("inspect") => with_utf8_args(&rest, |args| report(inspect::command(args))),
+        Some("inspect") => with_utf8_args(&rest, inspect::command),
         Some("sanitize") => with_utf8_args(&rest, |args| {
             tool_report(tool_commands::command(tool_commands::Mode::Sanitize, args))
         }),

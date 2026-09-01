@@ -1,7 +1,8 @@
 use std::fmt::Write as _;
 use std::fs::File;
-use std::io::{self, Read};
+use std::io::{self, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::process::ExitCode;
 
 use fe2o3_artifacts::{
     ArtifactContainerV1, BUNDLE_INDEX_MAGIC, BundleIndexV1, CONTAINER_MAGIC, Capability,
@@ -10,9 +11,8 @@ use fe2o3_artifacts::{
 };
 
 use fe2o3_source_isa_observation::agent_v1::{
-    MAX_AGENT_SOURCE_ISA_REQUEST_BYTES_V1, SourceIsaAdmittedViewV1, SourceIsaFrameOutcomeViewV1,
-    SourceIsaInspectionV1, execute_agent_source_isa_request_line_v1,
-    inspect_source_isa_agent_json_v1,
+    SourceIsaAdmittedViewV1, SourceIsaFrameOutcomeViewV1, SourceIsaInspectionV1,
+    inspect_source_isa_agent_json_v1, run_agent_source_isa_jsonl_v1,
 };
 use fe2o3_source_isa_observation::wire_v1::MAX_SOURCE_ISA_OBSERVATION_COLLECTION_BYTES_V1;
 
@@ -69,15 +69,45 @@ impl InspectOutput {
     }
 }
 
-pub(crate) fn command(args: &[String]) -> Result<String, String> {
+enum CommandAction {
+    Print(String),
+    AgentJsonl,
+}
+
+pub(crate) fn command(args: &[String]) -> ExitCode {
+    match prepare_command(args) {
+        Ok(CommandAction::Print(output)) => {
+            println!("{output}");
+            ExitCode::SUCCESS
+        }
+        Ok(CommandAction::AgentJsonl) => {
+            let stdin = io::stdin();
+            let stdout = io::stdout();
+            match run_agent_source_isa_jsonl_v1(&mut stdin.lock(), &mut stdout.lock()) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(error) => {
+                    eprintln!("failed to serve inspect agent JSONL: {error}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        Err(error) => {
+            eprintln!("{error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn prepare_command(args: &[String]) -> Result<CommandAction, String> {
     if matches!(args, [arg] if arg == "--help" || arg == "-h") {
-        return Ok(USAGE.to_string());
+        return Ok(CommandAction::Print(USAGE.to_string()));
     }
     let options = parse_options(args)?;
     match (options.output, options.path) {
         (InspectOutput::Human, Some(path)) => {
-            let bytes = read_bounded(&path, input_limit(&path, options.format)?)?;
+            let bytes = read_bounded_for_format(&path, options.format)?;
             inspect_bytes(options.format, &bytes)
+                .map(CommandAction::Print)
                 .map_err(|error| format!("failed to inspect {}: {error}", path.display()))
         }
         (InspectOutput::AgentJsonV1, Some(path)) => {
@@ -88,8 +118,9 @@ pub(crate) fn command(args: &[String]) -> Result<String, String> {
                 );
             }
             let bytes = read_bounded(&path, MAX_SOURCE_ISA_OBSERVATION_COLLECTION_BYTES_V1)?;
-            inspect_source_isa_agent_json_v1(&bytes)
-                .map_err(|error| format!("failed to inspect {}: {error}", path.display()))
+            Ok(CommandAction::Print(inspect_source_isa_agent_json_v1(
+                &bytes,
+            )))
         }
         (InspectOutput::AgentJsonV1, None) => {
             if options.format != InspectFormat::Auto {
@@ -98,8 +129,7 @@ pub(crate) fn command(args: &[String]) -> Result<String, String> {
                         .to_owned(),
                 );
             }
-            let request = read_stdin_bounded(MAX_AGENT_SOURCE_ISA_REQUEST_BYTES_V1)?;
-            Ok(execute_agent_source_isa_request_line_v1(&request))
+            Ok(CommandAction::AgentJsonl)
         }
         (InspectOutput::Human, None) => Err(format!("inspect requires a path\n{USAGE}")),
     }
@@ -165,35 +195,48 @@ fn parse_options(args: &[String]) -> Result<Options, String> {
     })
 }
 
-fn input_limit(path: &Path, format: InspectFormat) -> Result<usize, String> {
-    match format {
-        InspectFormat::SourceIsaObservation => Ok(MAX_SOURCE_ISA_OBSERVATION_COLLECTION_BYTES_V1),
+fn read_bounded_for_format(path: &Path, format: InspectFormat) -> Result<Vec<u8>, String> {
+    let mut file = open_regular_file(path)?;
+    let limit = match format {
+        InspectFormat::SourceIsaObservation => MAX_SOURCE_ISA_OBSERVATION_COLLECTION_BYTES_V1,
         InspectFormat::Auto => {
-            let mut file = File::open(path)
-                .map_err(|error| format!("failed to open {}: {error}", path.display()))?;
             let mut magic = [0_u8; 8];
             let read = file
                 .read(&mut magic)
                 .map_err(|error| format!("failed to read {} magic: {error}", path.display()))?;
             if read == magic.len() && &magic == b"F2SICOL1" {
-                Ok(MAX_SOURCE_ISA_OBSERVATION_COLLECTION_BYTES_V1)
+                MAX_SOURCE_ISA_OBSERVATION_COLLECTION_BYTES_V1
             } else {
-                Ok(MAX_CONTAINER_BYTES)
+                MAX_CONTAINER_BYTES
             }
         }
-        _ => Ok(MAX_CONTAINER_BYTES),
-    }
+        _ => MAX_CONTAINER_BYTES,
+    };
+    file.seek(SeekFrom::Start(0))
+        .map_err(|error| format!("failed to rewind {}: {error}", path.display()))?;
+    read_open_file_bounded(path, file, limit)
 }
 
 fn read_bounded(path: &Path, limit: usize) -> Result<Vec<u8>, String> {
-    let file =
-        File::open(path).map_err(|error| format!("failed to open {}: {error}", path.display()))?;
+    read_open_file_bounded(path, open_regular_file(path)?, limit)
+}
+
+fn open_regular_file(path: &Path) -> Result<File, String> {
+    let file = File::open(path)
+        .map_err(|error| format!("failed to open {}: {error}", path.display()))?;
     let metadata = file
         .metadata()
         .map_err(|error| format!("failed to stat {}: {error}", path.display()))?;
     if !metadata.is_file() {
         return Err(format!("{} is not a regular file", path.display()));
     }
+    Ok(file)
+}
+
+fn read_open_file_bounded(path: &Path, file: File, limit: usize) -> Result<Vec<u8>, String> {
+    let metadata = file
+        .metadata()
+        .map_err(|error| format!("failed to stat {}: {error}", path.display()))?;
     if metadata.len() > limit as u64 {
         return Err(format!(
             "{} exceeds the inspect input limit of {limit} bytes",
@@ -210,18 +253,6 @@ fn read_bounded(path: &Path, limit: usize) -> Result<Vec<u8>, String> {
             "{} grew beyond the inspect input limit of {limit} bytes",
             path.display()
         ));
-    }
-    Ok(bytes)
-}
-
-fn read_stdin_bounded(limit: usize) -> Result<Vec<u8>, String> {
-    let mut bytes = Vec::new();
-    io::stdin()
-        .take(limit as u64 + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|error| format!("failed to read inspect agent JSONL request: {error}"))?;
-    if bytes.len() > limit {
-        return Ok(bytes);
     }
     Ok(bytes)
 }
@@ -795,7 +826,11 @@ mod tests {
             SourceIsaObservationContextV1::new(
                 CONFIG,
                 [unit; 32],
-                attempt(u64::from(unit), unit.wrapping_add(1)),
+                crate::source_isa_observation::inert_source_isa_attempt_v1(attempt(
+                    u64::from(unit),
+                    unit.wrapping_add(1),
+                ))
+                .expect("valid inert observer attempt"),
                 [unit.wrapping_add(2); 32],
             )
             .expect("valid observer context"),

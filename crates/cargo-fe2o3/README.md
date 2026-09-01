@@ -509,6 +509,13 @@ neither loads code nor grants compiler, proof, artifact, launch, runtime, or
 hardware-observation authority. Auto-detection uses validated wire magic, and
 `--format` can require one exact decoder.
 
+`--format source-isa-observation --output agent-json-v1 <path>` emits a typed
+first-page response, including `invalid_collection` for malformed bounded
+input. Without a path, `--output agent-json-v1` serves a bounded, stateful
+JSONL stream with nonzero unique request IDs, monotonic response revisions,
+explicit pagination cursors, and a flush after every response. Agents consume
+this protocol rather than parsing the human presentation.
+
 Without `--execute`, `cargo fe2o3 sanitize -- <program>` and
 `cargo fe2o3 debug -- <program>` print normalized ROCgdb invocation plans.
 With `--execute`, both commands run an exact descriptor-pinned native ROCgdb

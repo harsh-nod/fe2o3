@@ -1,4 +1,5 @@
-//! Authority-free source/ISA observation formats and inspection protocols.
+#![forbid(unsafe_code)]
+#![doc = include_str!("../README.md")]
 
 pub mod agent_v1;
 pub mod wire_v1;

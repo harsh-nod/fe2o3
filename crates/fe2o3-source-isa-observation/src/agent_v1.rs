@@ -1,6 +1,8 @@
 //! Bounded, authority-free source/ISA inspection shared by humans and agents.
 
 use std::collections::BTreeSet;
+use std::error::Error;
+use std::fmt;
 use std::io::{BufRead, Write};
 
 use serde::{Deserialize, Serialize};
@@ -9,9 +11,12 @@ use sha2::{Digest, Sha256};
 use crate::wire_v1::{
     AdmittedSourceIsaObservationV1, MAX_SOURCE_ISA_OBSERVATION_COLLECTION_BYTES_V1,
     MAX_SOURCE_ISA_OBSERVATION_COLLECTION_HEX_BYTES_V1, SourceIsaObservationCollectionV1,
-    SourceIsaObservationErrorCodeV1, SourceIsaObservationKirVersionV1,
-    SourceIsaObservationOutcomeV1, SourceIsaObservationTargetProfileV1,
+    SourceIsaObservationAttemptV1, SourceIsaObservationErrorCodeV1,
+    SourceIsaObservationInvocationV1, SourceIsaObservationKirVersionV1,
+    SourceIsaObservationOutcomeV1, SourceIsaObservationSessionV1,
+    SourceIsaObservationTargetProfileV1,
     SourceIsaObservationTransportFailureV1, SourceIsaObservationUnavailableReasonV1,
+    SOURCE_ISA_COLLECTION_HEADER_BYTES_V1, SOURCE_ISA_COLLECTION_IDENTITY_BYTES_V1,
 };
 
 pub const AGENT_SOURCE_ISA_REQUEST_SCHEMA_V1: &str = "fe2o3-agent-source-isa-request-v1";
@@ -29,7 +34,7 @@ pub enum AgentSourceIsaOperationV1 {
     InspectSourceIsaCollection,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub enum AgentSourceIsaRequestV1 {
     DiscoverCapabilities {
@@ -44,14 +49,21 @@ pub enum AgentSourceIsaRequestV1 {
     },
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct AgentSourceIsaPageRequestV1 {
-    pub after: Option<String>,
+    pub cursor: Option<AgentSourceIsaPageCursorV1>,
     pub limit: u16,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentSourceIsaPageCursorV1 {
+    pub position: u32,
+    pub query_binding: String,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SourceIsaAuthorityViewV1 {
     pub observation_only: bool,
     pub compiler_authority: bool,
@@ -76,10 +88,10 @@ impl SourceIsaAuthorityViewV1 {
     };
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SourceIsaCollectionSummaryV1 {
     pub collection_evidence: SourceIsaEvidenceIdentityV1,
-    pub format: &'static str,
+    pub format: String,
     pub configuration_identity: String,
     pub session: String,
     pub frame_count: u16,
@@ -88,14 +100,14 @@ pub struct SourceIsaCollectionSummaryV1 {
     pub completeness: SourceIsaCollectionCompletenessV1,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SourceIsaEvidenceIdentityV1 {
-    pub scheme: &'static str,
+    pub scheme: String,
     pub digest: String,
     pub canonical_byte_len: u64,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum SourceIsaCollectionCompletenessV1 {
     Complete,
@@ -105,13 +117,13 @@ pub enum SourceIsaCollectionCompletenessV1 {
     },
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SourceIsaTypedCodeV1 {
     pub code: u16,
-    pub label: &'static str,
+    pub label: String,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SourceIsaFrameViewV1 {
     pub frame_evidence: SourceIsaEvidenceIdentityV1,
     pub unit_identity: String,
@@ -120,14 +132,14 @@ pub struct SourceIsaFrameViewV1 {
     pub outcome: SourceIsaFrameOutcomeViewV1,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SourceIsaBuildAttemptViewV1 {
     pub generation: u64,
     pub session: String,
     pub invocation_identity: String,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "outcome", rename_all = "snake_case")]
 pub enum SourceIsaFrameOutcomeViewV1 {
     Admitted { evidence: SourceIsaAdmittedViewV1 },
@@ -135,7 +147,7 @@ pub enum SourceIsaFrameOutcomeViewV1 {
     Error { error: SourceIsaTypedCodeV1 },
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SourceIsaAdmittedViewV1 {
     pub correlation_identity: String,
     pub artifact: SourceIsaContentViewV1,
@@ -145,13 +157,13 @@ pub struct SourceIsaAdmittedViewV1 {
     pub round_trip: Option<SourceIsaRoundTripViewV1>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SourceIsaContentViewV1 {
     pub sha256: String,
     pub byte_len: u64,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SourceIsaStructuralViewV1 {
     pub identity: String,
     pub target: SourceIsaTargetViewV1,
@@ -164,13 +176,13 @@ pub struct SourceIsaStructuralViewV1 {
     pub target_kir: SourceIsaContentViewV1,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SourceIsaTargetViewV1 {
-    pub architecture: &'static str,
-    pub features: [&'static str; 2],
+    pub architecture: String,
+    pub features: [String; 2],
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SourceIsaRecordCountsViewV1 {
     pub total: u64,
     pub source_anchored: u64,
@@ -180,7 +192,7 @@ pub struct SourceIsaRecordCountsViewV1 {
     pub isa_references: u64,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SourceIsaQueryCountsViewV1 {
     pub distinct_source_nodes: u64,
     pub distinct_source_spans: u64,
@@ -190,7 +202,7 @@ pub struct SourceIsaQueryCountsViewV1 {
     pub max_exact_pc_cardinality: u64,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SourceIsaRoundTripViewV1 {
     pub source_node_identity: String,
     pub source_span: SourceIsaSourceSpanViewV1,
@@ -200,7 +212,7 @@ pub struct SourceIsaRoundTripViewV1 {
     pub isa_point_query_matches: u64,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SourceIsaSourceSpanViewV1 {
     pub file_identity: String,
     pub byte_start: u64,
@@ -209,13 +221,13 @@ pub struct SourceIsaSourceSpanViewV1 {
     pub column: u32,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SourceIsaPointViewV1 {
     pub kernel_ordinal: u64,
     pub symbol_relative_pc: u64,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "unit_state", rename_all = "snake_case")]
 pub enum SourceIsaUnitViewV1 {
     Observed {
@@ -236,10 +248,10 @@ impl SourceIsaUnitViewV1 {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SourceIsaPageV1 {
-    pub after: Option<String>,
-    pub next_after: Option<String>,
+    pub cursor: Option<AgentSourceIsaPageCursorV1>,
+    pub next_cursor: Option<AgentSourceIsaPageCursorV1>,
     pub page_exhausted: bool,
     pub items: Vec<SourceIsaUnitViewV1>,
 }
@@ -301,11 +313,11 @@ impl SourceIsaInspectionV1 {
             authority: SourceIsaAuthorityViewV1::OBSERVATION_ONLY,
             collection: SourceIsaCollectionSummaryV1 {
                 collection_evidence: SourceIsaEvidenceIdentityV1 {
-                    scheme: "sha256",
+                    scheme: "sha256".to_owned(),
                     digest: hex_bytes(&collection_identity),
                     canonical_byte_len,
                 },
-                format: "fe2o3-source-isa-observation-collection-v1",
+                format: "fe2o3-source-isa-observation-collection-v1".to_owned(),
                 configuration_identity: hex_bytes(&collection.config_identity()),
                 session: collection.session().to_string(),
                 frame_count,
@@ -354,15 +366,15 @@ impl SourceIsaInspectionV1 {
         let unit_count = usize::from(self.collection.frame_count)
             .checked_add(usize::from(self.collection.missing_unit_count))
             .ok_or(AgentSourceIsaErrorCodeV1::InvalidPage)?;
-        let start = match &request.after {
+        let start = match &request.cursor {
             None => 0,
-            Some(after) => parse_page_cursor(
-                after,
+            Some(cursor) => parse_page_cursor(
+                cursor,
                 &self.collection_identity,
                 self.canonical_byte_len,
                 unit_count,
                 self.merged_units()
-                    .nth(cursor_position(after)?.saturating_sub(1))
+                    .nth(cursor_position(cursor)?.saturating_sub(1))
                     .ok_or(AgentSourceIsaErrorCodeV1::InvalidPage)?
                     .unit_identity(),
             )?,
@@ -371,14 +383,16 @@ impl SourceIsaInspectionV1 {
             .checked_add(usize::from(request.limit))
             .unwrap_or(usize::MAX)
             .min(unit_count);
-        let items = self
-            .merged_units()
-            .skip(start)
-            .take(end.saturating_sub(start))
-            .map(|unit| unit.project(&self.collection_identity, self.canonical_byte_len))
-            .collect::<Vec<_>>();
+        let page_len = end.saturating_sub(start);
+        let mut items = Vec::new();
+        items
+            .try_reserve_exact(page_len)
+            .map_err(|_| AgentSourceIsaErrorCodeV1::ResponseTooLarge)?;
+        for unit in self.merged_units().skip(start).take(page_len) {
+            items.push(unit.project(&self.collection_identity, self.canonical_byte_len));
+        }
         let page_exhausted = end == unit_count;
-        let next_after = if page_exhausted {
+        let next_cursor = if page_exhausted {
             None
         } else {
             Some(page_cursor(
@@ -393,8 +407,8 @@ impl SourceIsaInspectionV1 {
             ))
         };
         Ok(SourceIsaPageV1 {
-            after: request.after.clone(),
-            next_after,
+            cursor: request.cursor.clone(),
+            next_cursor,
             page_exhausted,
             items,
         })
@@ -442,7 +456,7 @@ fn project_frame(frame: &crate::wire_v1::SourceIsaObservationFrameV1) -> SourceI
     let context = frame.context();
     SourceIsaFrameViewV1 {
         frame_evidence: SourceIsaEvidenceIdentityV1 {
-            scheme: "sha256",
+            scheme: "sha256".to_owned(),
             digest: hex_bytes(&frame.identity()),
             canonical_byte_len: u64::try_from(
                 crate::wire_v1::SOURCE_ISA_OBSERVATION_FRAME_BYTES_V1,
@@ -466,14 +480,14 @@ fn project_frame(frame: &crate::wire_v1::SourceIsaObservationFrameV1) -> SourceI
                 SourceIsaFrameOutcomeViewV1::Unavailable {
                     reason: SourceIsaTypedCodeV1 {
                         code: reason as u16,
-                        label: unavailable_reason(reason),
+                        label: unavailable_reason(reason).to_owned(),
                     },
                 }
             }
             SourceIsaObservationOutcomeV1::Error(error) => SourceIsaFrameOutcomeViewV1::Error {
                 error: SourceIsaTypedCodeV1 {
                     code: error as u16,
-                    label: observation_error(error),
+                    label: observation_error(error).to_owned(),
                 },
             },
         },
@@ -549,7 +563,7 @@ fn project_admitted(admitted: AdmittedSourceIsaObservationV1) -> SourceIsaAdmitt
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentSourceIsaErrorCodeV1 {
     InvalidRequest,
@@ -565,7 +579,7 @@ pub enum AgentSourceIsaErrorCodeV1 {
     ResponseTooLarge,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct AgentSourceIsaLimitsV1 {
     pub max_request_bytes: usize,
     pub max_response_bytes: usize,
@@ -576,19 +590,19 @@ pub struct AgentSourceIsaLimitsV1 {
     pub max_requests: u32,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentSourceIsaCapabilityStateV1 {
     Available,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct AgentSourceIsaCapabilityV1 {
     pub operation: AgentSourceIsaOperationV1,
     pub state: AgentSourceIsaCapabilityStateV1,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "result", rename_all = "snake_case")]
 pub enum AgentSourceIsaResultV1 {
     Capabilities {
@@ -603,18 +617,18 @@ pub enum AgentSourceIsaResultV1 {
     },
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum AgentSourceIsaResponseV1 {
     Ok {
-        schema: &'static str,
+        schema: String,
         request_id: u64,
         response_revision: u64,
         operation: AgentSourceIsaOperationV1,
         result: AgentSourceIsaResultV1,
     },
     Error {
-        schema: &'static str,
+        schema: String,
         request_id: Option<u64>,
         response_revision: u64,
         operation: Option<AgentSourceIsaOperationV1>,
@@ -622,6 +636,23 @@ pub enum AgentSourceIsaResponseV1 {
         terminal: bool,
     },
 }
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AgentSourceIsaResponseDecodeErrorV1 {
+    ResponseTooLarge,
+    InvalidResponse,
+}
+
+impl fmt::Display for AgentSourceIsaResponseDecodeErrorV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::ResponseTooLarge => "source/ISA agent response exceeds its byte bound",
+            Self::InvalidResponse => "source/ISA agent response is not canonical JSONL",
+        })
+    }
+}
+
+impl Error for AgentSourceIsaResponseDecodeErrorV1 {}
 
 impl AgentSourceIsaResponseV1 {
     fn error(
@@ -632,7 +663,7 @@ impl AgentSourceIsaResponseV1 {
         terminal: bool,
     ) -> Self {
         Self::Error {
-            schema: AGENT_SOURCE_ISA_RESPONSE_SCHEMA_V1,
+            schema: AGENT_SOURCE_ISA_RESPONSE_SCHEMA_V1.to_owned(),
             request_id,
             response_revision,
             operation,
@@ -640,11 +671,38 @@ impl AgentSourceIsaResponseV1 {
             terminal,
         }
     }
+
+    pub const fn is_terminal(&self) -> bool {
+        matches!(self, Self::Error { terminal: true, .. })
+    }
 }
 
 pub fn execute_agent_source_isa_request_line_v1(line: &[u8]) -> String {
     let mut service = AgentSourceIsaServiceV1::new();
     encode_response(service.handle_line(line))
+}
+
+pub fn decode_agent_source_isa_response_line_v1(
+    line: &[u8],
+) -> Result<AgentSourceIsaResponseV1, AgentSourceIsaResponseDecodeErrorV1> {
+    if line.is_empty() || line.len() > MAX_AGENT_SOURCE_ISA_RESPONSE_BYTES_V1 {
+        return Err(AgentSourceIsaResponseDecodeErrorV1::ResponseTooLarge);
+    }
+    let payload = line.strip_suffix(b"\n").unwrap_or(line);
+    if payload.is_empty() || payload.contains(&b'\n') || payload.contains(&b'\r') {
+        return Err(AgentSourceIsaResponseDecodeErrorV1::InvalidResponse);
+    }
+    let response: AgentSourceIsaResponseV1 = serde_json::from_slice(payload)
+        .map_err(|_| AgentSourceIsaResponseDecodeErrorV1::InvalidResponse)?;
+    if !response.has_valid_envelope() {
+        return Err(AgentSourceIsaResponseDecodeErrorV1::InvalidResponse);
+    }
+    let canonical = serialize_response_bounded(&response, payload.len())
+        .ok_or(AgentSourceIsaResponseDecodeErrorV1::InvalidResponse)?;
+    if canonical.as_bytes() != payload {
+        return Err(AgentSourceIsaResponseDecodeErrorV1::InvalidResponse);
+    }
+    Ok(response)
 }
 
 pub struct AgentSourceIsaServiceV1 {
@@ -696,10 +754,11 @@ impl AgentSourceIsaServiceV1 {
         let request = match decode_request(line) {
             Ok(request) => request,
             Err(error) => {
+                let (request_id, operation) = request_identity_hint(line);
                 return AgentSourceIsaResponseV1::error(
-                    None,
+                    request_id,
                     self.response_revision,
-                    None,
+                    operation,
                     error,
                     false,
                 );
@@ -751,38 +810,32 @@ pub fn run_agent_source_isa_jsonl_v1<R: BufRead, W: Write>(
         let Some(line) = read_request_line(input)? else {
             return Ok(());
         };
-        let terminal_input = line.len() > MAX_AGENT_SOURCE_ISA_REQUEST_BYTES_V1;
         let response = service.handle_line(&line);
+        let terminal = response.is_terminal();
         write_response(output, response)?;
-        if terminal_input {
+        if terminal {
             return Ok(());
         }
     }
 }
 
-pub fn inspect_source_isa_agent_json_v1(encoded: &[u8]) -> Result<String, String> {
-    let inspection = SourceIsaInspectionV1::decode_canonical(encoded)?;
-    let page = inspection
-        .page(&AgentSourceIsaPageRequestV1 {
-            after: None,
+pub fn inspect_source_isa_agent_json_v1(encoded: &[u8]) -> String {
+    encode_response(execute_inspection(
+        1,
+        1,
+        encoded,
+        &AgentSourceIsaPageRequestV1 {
+            cursor: None,
             limit: MAX_AGENT_SOURCE_ISA_PAGE_ITEMS_V1,
-        })
-        .map_err(|_| "source/ISA first page is invalid".to_owned())?;
-    Ok(encode_response(AgentSourceIsaResponseV1::Ok {
-        schema: AGENT_SOURCE_ISA_RESPONSE_SCHEMA_V1,
-        request_id: 1,
-        response_revision: 1,
-        operation: AgentSourceIsaOperationV1::InspectSourceIsaCollection,
-        result: AgentSourceIsaResultV1::CollectionPage {
-            authority: inspection.authority,
-            collection: inspection.collection,
-            page,
         },
-    }))
+    ))
 }
 
 fn decode_request(line: &[u8]) -> Result<AgentSourceIsaRequestV1, AgentSourceIsaErrorCodeV1> {
-    if line.is_empty() || line.len() > MAX_AGENT_SOURCE_ISA_REQUEST_BYTES_V1 {
+    if line.is_empty() {
+        return Err(AgentSourceIsaErrorCodeV1::InvalidRequest);
+    }
+    if line.len() > MAX_AGENT_SOURCE_ISA_REQUEST_BYTES_V1 {
         return Err(AgentSourceIsaErrorCodeV1::RequestTooLarge);
     }
     let payload = line.strip_suffix(b"\n").unwrap_or(line);
@@ -794,6 +847,30 @@ fn decode_request(line: &[u8]) -> Result<AgentSourceIsaRequestV1, AgentSourceIsa
         return Err(AgentSourceIsaErrorCodeV1::InvalidRequest);
     }
     serde_json::from_slice(payload).map_err(|_| AgentSourceIsaErrorCodeV1::InvalidRequest)
+}
+
+fn request_identity_hint(
+    line: &[u8],
+) -> (Option<u64>, Option<AgentSourceIsaOperationV1>) {
+    let payload = line.strip_suffix(b"\n").unwrap_or(line);
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(payload) else {
+        return (None, None);
+    };
+    let request_id = value
+        .get("request_id")
+        .and_then(serde_json::Value::as_u64)
+        .filter(|request_id| *request_id != 0);
+    let operation = match value
+        .get("operation")
+        .and_then(serde_json::Value::as_str)
+    {
+        Some("discover_capabilities") => Some(AgentSourceIsaOperationV1::DiscoverCapabilities),
+        Some("inspect_source_isa_collection") => {
+            Some(AgentSourceIsaOperationV1::InspectSourceIsaCollection)
+        }
+        _ => None,
+    };
+    (request_id, operation)
 }
 
 fn execute_request(
@@ -813,7 +890,7 @@ fn execute_request(
                 );
             }
             AgentSourceIsaResponseV1::Ok {
-                schema: AGENT_SOURCE_ISA_RESPONSE_SCHEMA_V1,
+                schema: AGENT_SOURCE_ISA_RESPONSE_SCHEMA_V1.to_owned(),
                 request_id,
                 response_revision,
                 operation,
@@ -861,42 +938,52 @@ fn execute_request(
                     );
                 }
             };
-            let inspection = match SourceIsaInspectionV1::decode_canonical(&encoded) {
-                Ok(inspection) => inspection,
-                Err(_) => {
-                    return AgentSourceIsaResponseV1::error(
-                        Some(request_id),
-                        response_revision,
-                        Some(operation),
-                        AgentSourceIsaErrorCodeV1::InvalidCollection,
-                        false,
-                    );
-                }
-            };
-            let page = match inspection.page(&page) {
-                Ok(page) => page,
-                Err(error) => {
-                    return AgentSourceIsaResponseV1::error(
-                        Some(request_id),
-                        response_revision,
-                        Some(operation),
-                        error,
-                        false,
-                    );
-                }
-            };
-            AgentSourceIsaResponseV1::Ok {
-                schema: AGENT_SOURCE_ISA_RESPONSE_SCHEMA_V1,
-                request_id,
-                response_revision,
-                operation,
-                result: AgentSourceIsaResultV1::CollectionPage {
-                    authority: inspection.authority,
-                    collection: inspection.collection,
-                    page,
-                },
-            }
+            execute_inspection(request_id, response_revision, &encoded, &page)
         }
+    }
+}
+
+fn execute_inspection(
+    request_id: u64,
+    response_revision: u64,
+    encoded: &[u8],
+    page: &AgentSourceIsaPageRequestV1,
+) -> AgentSourceIsaResponseV1 {
+    let operation = AgentSourceIsaOperationV1::InspectSourceIsaCollection;
+    let inspection = match SourceIsaInspectionV1::decode_canonical(encoded) {
+        Ok(inspection) => inspection,
+        Err(_) => {
+            return AgentSourceIsaResponseV1::error(
+                Some(request_id),
+                response_revision,
+                Some(operation),
+                AgentSourceIsaErrorCodeV1::InvalidCollection,
+                false,
+            );
+        }
+    };
+    let page = match inspection.page(page) {
+        Ok(page) => page,
+        Err(error) => {
+            return AgentSourceIsaResponseV1::error(
+                Some(request_id),
+                response_revision,
+                Some(operation),
+                error,
+                false,
+            );
+        }
+    };
+    AgentSourceIsaResponseV1::Ok {
+        schema: AGENT_SOURCE_ISA_RESPONSE_SCHEMA_V1.to_owned(),
+        request_id,
+        response_revision,
+        operation,
+        result: AgentSourceIsaResultV1::CollectionPage {
+            authority: inspection.authority,
+            collection: inspection.collection,
+            page,
+        },
     }
 }
 
@@ -913,37 +1000,455 @@ fn limits() -> AgentSourceIsaLimitsV1 {
 }
 
 fn encode_response(response: AgentSourceIsaResponseV1) -> String {
-    let revision = response.revision();
-    serialize_response_bounded(
-        &response,
+    encode_response_with_limit(
+        response,
         MAX_AGENT_SOURCE_ISA_RESPONSE_BYTES_V1.saturating_sub(1),
     )
+}
+
+fn encode_response_with_limit(response: AgentSourceIsaResponseV1, limit: usize) -> String {
+    let (request_id, revision, operation) = response.context();
+    serialize_response_bounded(&response, limit)
     .unwrap_or_else(|| {
         serialize_response_bounded(
             &AgentSourceIsaResponseV1::error(
-                None,
+                request_id,
                 revision,
-                None,
+                operation,
                 AgentSourceIsaErrorCodeV1::ResponseTooLarge,
                 false,
             ),
-            MAX_AGENT_SOURCE_ISA_RESPONSE_BYTES_V1.saturating_sub(1),
+            limit,
         )
         .expect("bounded source/ISA error response is serializable")
     })
 }
 
 impl AgentSourceIsaResponseV1 {
-    fn revision(&self) -> u64 {
+    fn has_valid_envelope(&self) -> bool {
         match self {
             Self::Ok {
-                response_revision, ..
+                schema,
+                request_id,
+                response_revision,
+                operation,
+                result,
+            } => {
+                schema == AGENT_SOURCE_ISA_RESPONSE_SCHEMA_V1
+                    && *request_id != 0
+                    && *response_revision != 0
+                    && result.is_valid_for(*operation)
             }
-            | Self::Error {
-                response_revision, ..
-            } => *response_revision,
+            Self::Error {
+                schema,
+                request_id,
+                response_revision,
+                operation,
+                error,
+                terminal,
+            } => {
+                schema == AGENT_SOURCE_ISA_RESPONSE_SCHEMA_V1
+                    && request_id.is_none_or(|request_id| request_id != 0)
+                    && *response_revision != 0
+                    && *terminal
+                        == matches!(
+                            error,
+                            AgentSourceIsaErrorCodeV1::RequestTooLarge
+                                | AgentSourceIsaErrorCodeV1::RequestBudgetExhausted
+                        )
+                    && (!*terminal || (request_id.is_none() && operation.is_none()))
+            }
         }
     }
+
+    fn context(&self) -> (Option<u64>, u64, Option<AgentSourceIsaOperationV1>) {
+        match self {
+            Self::Ok {
+                request_id,
+                response_revision,
+                operation,
+                ..
+            } => (Some(*request_id), *response_revision, Some(*operation)),
+            Self::Error {
+                request_id,
+                response_revision,
+                operation,
+                ..
+            } => (*request_id, *response_revision, *operation),
+        }
+    }
+}
+
+impl AgentSourceIsaResultV1 {
+    fn is_valid_for(&self, operation: AgentSourceIsaOperationV1) -> bool {
+        match (operation, self) {
+            (
+                AgentSourceIsaOperationV1::DiscoverCapabilities,
+                Self::Capabilities {
+                    authority,
+                    limits: actual_limits,
+                    capabilities,
+                },
+            ) => {
+                *authority == SourceIsaAuthorityViewV1::OBSERVATION_ONLY
+                    && *actual_limits == limits()
+                    && capabilities
+                        == &[
+                            AgentSourceIsaCapabilityV1 {
+                                operation: AgentSourceIsaOperationV1::DiscoverCapabilities,
+                                state: AgentSourceIsaCapabilityStateV1::Available,
+                            },
+                            AgentSourceIsaCapabilityV1 {
+                                operation: AgentSourceIsaOperationV1::InspectSourceIsaCollection,
+                                state: AgentSourceIsaCapabilityStateV1::Available,
+                            },
+                        ]
+            }
+            (
+                AgentSourceIsaOperationV1::InspectSourceIsaCollection,
+                Self::CollectionPage {
+                    authority,
+                    collection,
+                    page,
+                },
+            ) => {
+                *authority == SourceIsaAuthorityViewV1::OBSERVATION_ONLY
+                    && collection.is_valid()
+                    && page.is_valid(collection)
+            }
+            _ => false,
+        }
+    }
+}
+
+impl SourceIsaCollectionSummaryV1 {
+    fn is_valid(&self) -> bool {
+        let unit_count = usize::from(self.frame_count) + usize::from(self.missing_unit_count);
+        let expected_len = SOURCE_ISA_COLLECTION_HEADER_BYTES_V1
+            .checked_add(
+                usize::from(self.frame_count)
+                    .checked_mul(crate::wire_v1::SOURCE_ISA_OBSERVATION_FRAME_BYTES_V1)
+                    .unwrap_or(usize::MAX),
+            )
+            .and_then(|length| {
+                length.checked_add(usize::from(self.missing_unit_count).saturating_mul(32))
+            })
+            .and_then(|length| length.checked_add(SOURCE_ISA_COLLECTION_IDENTITY_BYTES_V1));
+        self.format == "fe2o3-source-isa-observation-collection-v1"
+            && valid_nonzero_sha256_evidence(&self.collection_evidence)
+            && expected_len
+                == usize::try_from(self.collection_evidence.canonical_byte_len).ok()
+            && self.collection_evidence.canonical_byte_len
+                <= MAX_SOURCE_ISA_OBSERVATION_COLLECTION_BYTES_V1 as u64
+            && valid_nonzero_lower_hex(&self.configuration_identity, 64)
+            && valid_nonzero_lower_hex(&self.session, 32)
+            && unit_count <= MAX_AGENT_SOURCE_ISA_UNITS_V1
+            && self
+                .transport_failure
+                .as_ref()
+                .is_none_or(valid_transport_failure)
+            && match &self.completeness {
+                SourceIsaCollectionCompletenessV1::Complete => {
+                    self.missing_unit_count == 0 && self.transport_failure.is_none()
+                }
+                SourceIsaCollectionCompletenessV1::Incomplete {
+                    missing_unit_count,
+                    transport_failure,
+                } => {
+                    *missing_unit_count == self.missing_unit_count
+                        && *transport_failure == self.transport_failure
+                        && (*missing_unit_count != 0 || transport_failure.is_some())
+                }
+            }
+    }
+}
+
+impl SourceIsaPageV1 {
+    fn is_valid(&self, collection: &SourceIsaCollectionSummaryV1) -> bool {
+        let start = self.cursor.as_ref().map_or(0, |cursor| cursor.position);
+        let item_count = match u32::try_from(self.items.len()) {
+            Ok(count) => count,
+            Err(_) => return false,
+        };
+        let unit_count = u32::from(collection.frame_count) + u32::from(collection.missing_unit_count);
+        if self.items.len() > usize::from(MAX_AGENT_SOURCE_ISA_PAGE_ITEMS_V1)
+            || self.cursor.as_ref().is_some_and(|cursor| !cursor.is_well_formed())
+            || self
+                .next_cursor
+                .as_ref()
+                .is_some_and(|cursor| !cursor.is_well_formed())
+            || start >= unit_count && unit_count != 0
+            || start.saturating_add(item_count) > unit_count
+            || self.page_exhausted != self.next_cursor.is_none()
+            || (self.page_exhausted && start.saturating_add(item_count) != unit_count)
+            || (!self.page_exhausted && start.saturating_add(item_count) >= unit_count)
+            || self
+                .next_cursor
+                .as_ref()
+                .is_some_and(|cursor| cursor.position != start.saturating_add(item_count))
+            || (!self.page_exhausted && self.items.is_empty())
+        {
+            return false;
+        }
+        let mut preceding = None;
+        for item in &self.items {
+            let identity = item.unit_identity();
+            if !valid_nonzero_lower_hex(identity, 64)
+                || preceding.is_some_and(|prior: &str| prior >= identity)
+                || !item.is_valid(collection)
+            {
+                return false;
+            }
+            preceding = Some(identity);
+        }
+        if let Some(next_cursor) = &self.next_cursor {
+            let (Some(collection_identity), Some(last_identity)) = (
+                decode_fixed_hex(&collection.collection_evidence.digest),
+                self.items.last().map(SourceIsaUnitViewV1::unit_identity),
+            ) else {
+                return false;
+            };
+            let expected = page_cursor(
+                &collection_identity,
+                collection.collection_evidence.canonical_byte_len,
+                usize::try_from(unit_count).unwrap_or(usize::MAX),
+                usize::try_from(next_cursor.position).unwrap_or(usize::MAX),
+                last_identity,
+            );
+            if *next_cursor != expected {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+impl AgentSourceIsaPageCursorV1 {
+    fn is_well_formed(&self) -> bool {
+        self.position != 0 && valid_lower_hex(&self.query_binding, 64)
+    }
+}
+
+impl SourceIsaUnitViewV1 {
+    fn is_valid(&self, collection: &SourceIsaCollectionSummaryV1) -> bool {
+        match self {
+            Self::Missing {
+                missing_evidence_id: evidence_id,
+                unit_identity,
+            } => {
+                let Some(collection_identity) = decode_fixed_hex(&collection.collection_evidence.digest) else {
+                    return false;
+                };
+                valid_nonzero_lower_hex(evidence_id, 64)
+                    && *evidence_id
+                        == missing_evidence_id(
+                            &collection_identity,
+                            collection.collection_evidence.canonical_byte_len,
+                            unit_identity,
+                        )
+            }
+            Self::Observed { frame } => frame.is_valid(collection),
+        }
+    }
+}
+
+impl SourceIsaFrameViewV1 {
+    fn is_valid(&self, collection: &SourceIsaCollectionSummaryV1) -> bool {
+        if !valid_nonzero_sha256_evidence(&self.frame_evidence)
+            || self.frame_evidence.canonical_byte_len
+                != crate::wire_v1::SOURCE_ISA_OBSERVATION_FRAME_BYTES_V1 as u64
+            || self.attempt.generation == 0
+            || self.attempt.session != collection.session
+        {
+            return false;
+        }
+        let (Some(config), Some(unit), Some(session), Some(invocation), Some(finalization)) = (
+            decode_fixed_hex(&collection.configuration_identity),
+            decode_fixed_hex(&self.unit_identity),
+            decode_fixed_hex(&self.attempt.session),
+            decode_fixed_hex(&self.attempt.invocation_identity),
+            decode_fixed_hex(&self.finalization_identity),
+        ) else {
+            return false;
+        };
+        let Ok(attempt) = SourceIsaObservationAttemptV1::new(
+            self.attempt.generation,
+            SourceIsaObservationSessionV1::from_bytes(session),
+            SourceIsaObservationInvocationV1::from_bytes(invocation),
+        ) else {
+            return false;
+        };
+        let Ok(context) = crate::wire_v1::SourceIsaObservationContextV1::new(
+            config,
+            unit,
+            attempt,
+            finalization,
+        ) else {
+            return false;
+        };
+        let outcome = match &self.outcome {
+            SourceIsaFrameOutcomeViewV1::Admitted { evidence } => {
+                let Some(evidence) = evidence.to_wire() else {
+                    return false;
+                };
+                SourceIsaObservationOutcomeV1::Admitted(evidence)
+            }
+            SourceIsaFrameOutcomeViewV1::Unavailable { reason } => {
+                let Ok(reason_code) = SourceIsaObservationUnavailableReasonV1::from_code(reason.code)
+                else {
+                    return false;
+                };
+                if reason.label != reason_code.label() {
+                    return false;
+                }
+                SourceIsaObservationOutcomeV1::Unavailable(reason_code)
+            }
+            SourceIsaFrameOutcomeViewV1::Error { error } => {
+                let Ok(error_code) = SourceIsaObservationErrorCodeV1::from_code(error.code) else {
+                    return false;
+                };
+                if error.label != error_code.label() {
+                    return false;
+                }
+                SourceIsaObservationOutcomeV1::Error(error_code)
+            }
+        };
+        let frame = crate::wire_v1::SourceIsaObservationFrameV1::new(context, outcome);
+        decode_fixed_hex::<32>(&self.frame_evidence.digest) == Some(frame.identity())
+    }
+}
+
+impl SourceIsaAdmittedViewV1 {
+    fn to_wire(&self) -> Option<AdmittedSourceIsaObservationV1> {
+        let target = match self.structural.target.architecture.as_str() {
+            "gfx942" => SourceIsaObservationTargetProfileV1::Gfx942,
+            "gfx950" => SourceIsaObservationTargetProfileV1::Gfx950,
+            _ => return None,
+        };
+        if self.structural.target.features
+            != ["wavefrontsize64".to_owned(), "xnack-".to_owned()]
+        {
+            return None;
+        }
+        let kir_version = match self.structural.kir_version {
+            8 => SourceIsaObservationKirVersionV1::V8,
+            9 => SourceIsaObservationKirVersionV1::V9,
+            _ => return None,
+        };
+        let content = |content: &SourceIsaContentViewV1| {
+            crate::wire_v1::SourceIsaObservationContentIdentityV1::new(
+                decode_fixed_hex(&content.sha256)?,
+                content.byte_len,
+            )
+            .ok()
+        };
+        let structural = crate::wire_v1::SourceIsaObservationStructuralBindingV1::new(
+            decode_fixed_hex(&self.structural.identity)?,
+            target,
+            kir_version,
+            content(&self.structural.neutral_kir)?,
+            content(&self.structural.target_kir)?,
+            crate::wire_v1::SourceIsaObservationStructuralCountsV1 {
+                functions: self.structural.functions,
+                defined_bodies: self.structural.defined_bodies,
+                blocks: self.structural.blocks,
+                operations: self.structural.operations,
+            },
+        )
+        .ok()?;
+        let counts = crate::wire_v1::SourceIsaObservationCountsV1::new(
+            crate::wire_v1::SourceIsaObservationRecordCountsV1 {
+                records: self.records.total,
+                source_anchored: self.records.source_anchored,
+                eliminated: self.records.eliminated,
+                no_source: self.records.no_source,
+                source_anchored_without_isa: self.records.source_anchored_without_isa,
+                isa_references: self.records.isa_references,
+            },
+            crate::wire_v1::SourceIsaObservationQueryCountsV1 {
+                distinct_source_nodes: self.queries.distinct_source_nodes,
+                distinct_source_spans: self.queries.distinct_source_spans,
+                distinct_isa_points: self.queries.distinct_isa_points,
+                max_source_node_cardinality: self.queries.max_source_node_cardinality,
+                max_source_span_cardinality: self.queries.max_source_span_cardinality,
+                max_exact_pc_cardinality: self.queries.max_exact_pc_cardinality,
+            },
+        )
+        .ok()?;
+        let round_trip = match &self.round_trip {
+            None => None,
+            Some(witness) => Some(
+                crate::wire_v1::SourceIsaObservationRoundTripWitnessV1::new(
+                    decode_fixed_hex(&witness.source_node_identity)?,
+                    crate::wire_v1::SourceIsaObservationSourceSpanV1::new(
+                        decode_fixed_hex(&witness.source_span.file_identity)?,
+                        witness.source_span.byte_start,
+                        witness.source_span.byte_end,
+                        witness.source_span.line,
+                        witness.source_span.column,
+                    )
+                    .ok()?,
+                    crate::wire_v1::SourceIsaObservationIsaPointV1::new(
+                        witness.isa_point.kernel_ordinal,
+                        witness.isa_point.symbol_relative_pc,
+                    )
+                    .ok()?,
+                    witness.source_node_query_matches,
+                    witness.source_span_query_matches,
+                    witness.isa_point_query_matches,
+                )
+                .ok()?,
+            ),
+        };
+        AdmittedSourceIsaObservationV1::new(
+            decode_fixed_hex(&self.correlation_identity)?,
+            content(&self.artifact)?,
+            structural,
+            counts,
+            round_trip,
+        )
+        .ok()
+    }
+}
+
+fn valid_nonzero_sha256_evidence(evidence: &SourceIsaEvidenceIdentityV1) -> bool {
+    evidence.scheme == "sha256" && valid_nonzero_lower_hex(&evidence.digest, 64)
+}
+
+fn valid_transport_failure(failure: &SourceIsaTypedCodeV1) -> bool {
+    matches!(
+        (failure.code, failure.label.as_str()),
+        (1, "collector_already_failed")
+            | (2, "unit_bound")
+            | (3, "aggregate_byte_bound")
+            | (4, "conflicting_duplicate")
+            | (5, "rejected_frame")
+            | (6, "missing_selected_units")
+            | (7, "broker_worker_panic")
+    )
+}
+
+fn valid_nonzero_lower_hex(value: &str, length: usize) -> bool {
+    valid_lower_hex(value, length) && value.as_bytes().iter().any(|byte| *byte != b'0')
+}
+
+fn valid_lower_hex(value: &str, length: usize) -> bool {
+    value.len() == length
+        && value
+            .as_bytes()
+            .iter()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+fn decode_fixed_hex<const N: usize>(value: &str) -> Option<[u8; N]> {
+    if !valid_lower_hex(value, N.checked_mul(2)?) {
+        return None;
+    }
+    let mut decoded = [0; N];
+    for (index, pair) in value.as_bytes().chunks_exact(2).enumerate() {
+        decoded[index] = (lowercase_nibble(pair[0]).ok()? << 4) | lowercase_nibble(pair[1]).ok()?;
+    }
+    Some(decoded)
 }
 
 fn serialize_response_bounded(response: &AgentSourceIsaResponseV1, limit: usize) -> Option<String> {
@@ -964,7 +1469,8 @@ fn write_response<W: Write>(
         ));
     }
     output.write_all(encoded.as_bytes())?;
-    output.write_all(b"\n")
+    output.write_all(b"\n")?;
+    output.flush()
 }
 
 fn read_request_line<R: BufRead>(input: &mut R) -> Result<Option<Vec<u8>>, std::io::Error> {
@@ -1061,7 +1567,7 @@ fn page_cursor(
     unit_count: usize,
     position: usize,
     preceding_unit_identity: &str,
-) -> String {
+) -> AgentSourceIsaPageCursorV1 {
     debug_assert!(position > 0 && position < unit_count);
     let position_u32 = u32::try_from(position).expect("source/ISA unit bound fits u32");
     let unit_count = u32::try_from(unit_count).expect("source/ISA unit bound fits u32");
@@ -1074,11 +1580,14 @@ fn page_cursor(
     digest.update(unit_count.to_le_bytes());
     digest.update(position_u32.to_le_bytes());
     digest.update(preceding_unit_identity.as_bytes());
-    format!("v1:{position_u32}:{}", hex_bytes(&digest.finalize()))
+    AgentSourceIsaPageCursorV1 {
+        position: position_u32,
+        query_binding: hex_bytes(&digest.finalize()),
+    }
 }
 
 fn parse_page_cursor(
-    cursor: &str,
+    cursor: &AgentSourceIsaPageCursorV1,
     collection_identity: &[u8; 32],
     canonical_byte_len: u64,
     unit_count: usize,
@@ -1095,36 +1604,25 @@ fn parse_page_cursor(
         position,
         &preceding_unit_identity,
     );
-    (expected == cursor)
+    (expected == *cursor)
         .then_some(position)
         .ok_or(AgentSourceIsaErrorCodeV1::InvalidPage)
 }
 
-fn cursor_position(cursor: &str) -> Result<usize, AgentSourceIsaErrorCodeV1> {
-    let mut parts = cursor.split(':');
-    if parts.next() != Some("v1") {
-        return Err(AgentSourceIsaErrorCodeV1::InvalidPage);
-    }
-    let position_text = parts.next().ok_or(AgentSourceIsaErrorCodeV1::InvalidPage)?;
-    let binding = parts.next().ok_or(AgentSourceIsaErrorCodeV1::InvalidPage)?;
-    if parts.next().is_some()
-        || position_text.is_empty()
-        || (position_text.starts_with('0') && position_text != "0")
-        || binding.len() != 64
-        || !binding
+fn cursor_position(
+    cursor: &AgentSourceIsaPageCursorV1,
+) -> Result<usize, AgentSourceIsaErrorCodeV1> {
+    if cursor.position == 0
+        || cursor.query_binding.len() != 64
+        || !cursor
+            .query_binding
             .as_bytes()
             .iter()
             .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
     {
         return Err(AgentSourceIsaErrorCodeV1::InvalidPage);
     }
-    let position = position_text
-        .parse::<usize>()
-        .map_err(|_| AgentSourceIsaErrorCodeV1::InvalidPage)?;
-    if position == 0 {
-        return Err(AgentSourceIsaErrorCodeV1::InvalidPage);
-    }
-    Ok(position)
+    usize::try_from(cursor.position).map_err(|_| AgentSourceIsaErrorCodeV1::InvalidPage)
 }
 
 fn missing_evidence_id(
@@ -1150,15 +1648,15 @@ pub fn hex_bytes(value: &[u8]) -> String {
     output
 }
 
-const fn source_isa_target(target: SourceIsaObservationTargetProfileV1) -> SourceIsaTargetViewV1 {
+fn source_isa_target(target: SourceIsaObservationTargetProfileV1) -> SourceIsaTargetViewV1 {
     match target {
         SourceIsaObservationTargetProfileV1::Gfx942 => SourceIsaTargetViewV1 {
-            architecture: "gfx942",
-            features: ["wavefrontsize64", "xnack-"],
+            architecture: "gfx942".to_owned(),
+            features: ["wavefrontsize64".to_owned(), "xnack-".to_owned()],
         },
         SourceIsaObservationTargetProfileV1::Gfx950 => SourceIsaTargetViewV1 {
-            architecture: "gfx950",
-            features: ["wavefrontsize64", "xnack-"],
+            architecture: "gfx950".to_owned(),
+            features: ["wavefrontsize64".to_owned(), "xnack-".to_owned()],
         },
     }
 }
@@ -1194,15 +1692,14 @@ const fn transport_failure(
     };
     SourceIsaTypedCodeV1 {
         code: failure.code(),
-        label,
+        label: label.to_owned(),
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::io::Cursor;
+    use std::io::{Cursor, Write};
 
-    use fe2o3_artifact_transaction::{BuildAttempt, BuildInvocation, BuildSession};
     use serde_json::{Value, json};
 
     use super::*;
@@ -1211,17 +1708,17 @@ mod tests {
         SourceIsaObservationUnavailableReasonV1,
     };
 
-    fn attempt(session: BuildSession, invocation: u8) -> BuildAttempt {
-        BuildAttempt::new(
+    fn attempt(session: SourceIsaObservationSessionV1, invocation: u8) -> SourceIsaObservationAttemptV1 {
+        SourceIsaObservationAttemptV1::new(
             u64::from(invocation),
             session,
-            BuildInvocation::from_bytes([invocation; 32]),
+            SourceIsaObservationInvocationV1::from_bytes([invocation; 32]),
         )
         .expect("valid test attempt")
     }
 
     fn collection(config: u8, observed: &[u8], missing: &[u8]) -> Vec<u8> {
-        let session = BuildSession::from_bytes([0x77; 16]);
+        let session = SourceIsaObservationSessionV1::from_bytes([0x77; 16]);
         let frames = observed
             .iter()
             .map(|unit| {
@@ -1252,13 +1749,18 @@ mod tests {
         .expect("canonical test collection")
     }
 
-    fn request(id: u64, bytes: &[u8], after: Option<String>, limit: u16) -> Vec<u8> {
+    fn request(
+        id: u64,
+        bytes: &[u8],
+        cursor: Option<AgentSourceIsaPageCursorV1>,
+        limit: u16,
+    ) -> Vec<u8> {
         let mut line = serde_json::to_vec(&json!({
             "operation": "inspect_source_isa_collection",
             "schema": AGENT_SOURCE_ISA_REQUEST_SCHEMA_V1,
             "request_id": id,
             "collection_hex": hex_bytes(bytes),
-            "page": {"after": after, "limit": limit}
+            "page": {"cursor": cursor, "limit": limit}
         }))
         .expect("serialize request");
         line.push(b'\n');
@@ -1306,29 +1808,29 @@ mod tests {
         let first_inspection = SourceIsaInspectionV1::decode_canonical(&first).unwrap();
         let first_page = first_inspection
             .page(&AgentSourceIsaPageRequestV1 {
-                after: None,
+                cursor: None,
                 limit: 2,
             })
             .unwrap();
         assert!(!first_page.page_exhausted);
         assert_eq!(first_page.items[0].unit_identity(), hex_bytes(&[0x10; 32]));
         assert_eq!(first_page.items[1].unit_identity(), hex_bytes(&[0x20; 32]));
-        let cursor = first_page.next_after.expect("resumable page");
+        let cursor = first_page.next_cursor.expect("resumable page");
         let resumed = first_inspection
             .page(&AgentSourceIsaPageRequestV1 {
-                after: Some(cursor.clone()),
+                cursor: Some(cursor.clone()),
                 limit: 2,
             })
             .unwrap();
         assert!(resumed.page_exhausted);
         assert_eq!(resumed.items.len(), 1);
         assert_eq!(resumed.items[0].unit_identity(), hex_bytes(&[0x30; 32]));
-        assert!(resumed.next_after.is_none());
+        assert!(resumed.next_cursor.is_none());
 
         let second_inspection = SourceIsaInspectionV1::decode_canonical(&second).unwrap();
         assert_eq!(
             second_inspection.page(&AgentSourceIsaPageRequestV1 {
-                after: Some(cursor),
+                cursor: Some(cursor),
                 limit: 1,
             }),
             Err(AgentSourceIsaErrorCodeV1::InvalidPage)
@@ -1336,10 +1838,23 @@ mod tests {
         assert!(
             first_inspection
                 .page(&AgentSourceIsaPageRequestV1 {
-                    after: Some(format!("v1:999:{}", "0".repeat(64))),
+                    cursor: Some(AgentSourceIsaPageCursorV1 {
+                        position: 999,
+                        query_binding: "0".repeat(64),
+                    }),
                     limit: 1,
                 })
                 .is_err()
+        );
+        assert_eq!(
+            first_inspection.page(&AgentSourceIsaPageRequestV1 {
+                cursor: Some(AgentSourceIsaPageCursorV1 {
+                    position: 0,
+                    query_binding: "0".repeat(64),
+                }),
+                limit: 1,
+            }),
+            Err(AgentSourceIsaErrorCodeV1::InvalidPage)
         );
 
         let SourceIsaUnitViewV1::Missing {
@@ -1351,7 +1866,7 @@ mod tests {
         };
         let second_page = second_inspection
             .page(&AgentSourceIsaPageRequestV1 {
-                after: None,
+                cursor: None,
                 limit: 1,
             })
             .unwrap();
@@ -1392,7 +1907,7 @@ mod tests {
             "schema": AGENT_SOURCE_ISA_REQUEST_SCHEMA_V1,
             "request_id": 8,
             "collection_hex": hex_bytes(&bytes).to_uppercase(),
-            "page": {"after": null, "limit": 1}
+            "page": {"cursor": null, "limit": 1}
         }))
         .unwrap();
         uppercase.push(b'\n');
@@ -1405,6 +1920,116 @@ mod tests {
         let unknown: Value =
             serde_json::from_str(&encode_response(service.handle_line(unknown))).unwrap();
         assert_eq!(unknown["error"], "invalid_request");
+    }
+
+    #[test]
+    fn direct_and_service_inspection_are_byte_exact_and_invalid_input_is_typed() {
+        let bytes = collection(0x41, &[0x20], &[0x10]);
+        let direct = inspect_source_isa_agent_json_v1(&bytes);
+        let service = execute_agent_source_isa_request_line_v1(&request(1, &bytes, None, 64));
+        assert_eq!(direct, service);
+
+        let invalid: Value =
+            serde_json::from_str(&inspect_source_isa_agent_json_v1(b"not-a-collection")).unwrap();
+        assert_eq!(invalid["status"], "error");
+        assert_eq!(invalid["request_id"], 1);
+        assert_eq!(invalid["operation"], "inspect_source_isa_collection");
+        assert_eq!(invalid["error"], "invalid_collection");
+        assert_eq!(invalid["terminal"], false);
+    }
+
+    #[test]
+    fn response_codec_round_trips_and_fallback_preserves_request_context() {
+        let encoded = execute_agent_source_isa_request_line_v1(
+            br#"{"operation":"discover_capabilities","schema":"fe2o3-agent-source-isa-request-v1","request_id":73}
+"#,
+        );
+        let decoded = decode_agent_source_isa_response_line_v1(encoded.as_bytes()).unwrap();
+        let round_trip = serde_json::to_string(&decoded).unwrap();
+        assert_eq!(round_trip, encoded);
+        let elevated = encoded.replacen(
+            "\"compiler_authority\":false",
+            "\"compiler_authority\":true",
+            1,
+        );
+        assert_eq!(
+            decode_agent_source_isa_response_line_v1(elevated.as_bytes()),
+            Err(AgentSourceIsaResponseDecodeErrorV1::InvalidResponse)
+        );
+        for request in [
+            b"".as_slice(),
+            b"{}".as_slice(),
+            br#"{"operation":"discover_capabilities","schema":"wrong","request_id":1}"#
+                .as_slice(),
+            br#"{"operation":"discover_capabilities","schema":"fe2o3-agent-source-isa-request-v1","request_id":0}"#
+                .as_slice(),
+        ] {
+            let response = execute_agent_source_isa_request_line_v1(request);
+            decode_agent_source_isa_response_line_v1(response.as_bytes())
+                .expect("every producer error response is client-admissible");
+        }
+        let oversized = vec![b'x'; MAX_AGENT_SOURCE_ISA_REQUEST_BYTES_V1 + 1];
+        let oversized_response = execute_agent_source_isa_request_line_v1(&oversized);
+        decode_agent_source_isa_response_line_v1(oversized_response.as_bytes())
+            .expect("terminal producer error response is client-admissible");
+
+        let response = AgentSourceIsaResponseV1::Ok {
+            schema: AGENT_SOURCE_ISA_RESPONSE_SCHEMA_V1.to_owned(),
+            request_id: 73,
+            response_revision: 9,
+            operation: AgentSourceIsaOperationV1::DiscoverCapabilities,
+            result: AgentSourceIsaResultV1::Capabilities {
+                authority: SourceIsaAuthorityViewV1::OBSERVATION_ONLY,
+                limits: limits(),
+                capabilities: vec![AgentSourceIsaCapabilityV1 {
+                    operation: AgentSourceIsaOperationV1::DiscoverCapabilities,
+                    state: AgentSourceIsaCapabilityStateV1::Available,
+                }; 64],
+            },
+        };
+        let fallback = encode_response_with_limit(response, 256);
+        let fallback: Value = serde_json::from_str(&fallback).unwrap();
+        assert_eq!(fallback["error"], "response_too_large");
+        assert_eq!(fallback["request_id"], 73);
+        assert_eq!(fallback["response_revision"], 9);
+        assert_eq!(fallback["operation"], "discover_capabilities");
+
+        let page_response = inspect_source_isa_agent_json_v1(&collection(0x41, &[0x20], &[]));
+        let mut page_response: AgentSourceIsaResponseV1 =
+            serde_json::from_str(&page_response).unwrap();
+        let AgentSourceIsaResponseV1::Ok {
+            result: AgentSourceIsaResultV1::CollectionPage { page, .. },
+            ..
+        } = &mut page_response
+        else {
+            panic!("expected collection page")
+        };
+        page.page_exhausted = false;
+        page.next_cursor = Some(AgentSourceIsaPageCursorV1 {
+            position: 1,
+            query_binding: "0".repeat(64),
+        });
+        let page_response = serde_json::to_string(&page_response).unwrap();
+        assert_eq!(
+            decode_agent_source_isa_response_line_v1(page_response.as_bytes()),
+            Err(AgentSourceIsaResponseDecodeErrorV1::InvalidResponse)
+        );
+    }
+
+    #[test]
+    fn maximum_page_remains_inside_newline_inclusive_response_bound() {
+        let observed = (1..=64).collect::<Vec<u8>>();
+        let bytes = collection(0x41, &observed, &[]);
+        let mut output = Vec::new();
+        run_agent_source_isa_jsonl_v1(
+            &mut Cursor::new(request(1, &bytes, None, 64)),
+            &mut output,
+        )
+        .unwrap();
+        assert!(output.len() <= MAX_AGENT_SOURCE_ISA_RESPONSE_BYTES_V1);
+        assert_eq!(output.last(), Some(&b'\n'));
+        let response: Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(response["result"]["page"]["items"].as_array().unwrap().len(), 64);
     }
 
     #[test]
@@ -1423,5 +2048,77 @@ mod tests {
             assert_eq!(response["response_revision"], (index + 1) as u64);
         }
         assert!(lines[2].is_empty());
+    }
+
+    #[test]
+    fn jsonl_stream_stops_at_request_budget_without_consuming_tail() {
+        let mut input = "{}\n".repeat(MAX_AGENT_SOURCE_ISA_REQUESTS_V1 as usize + 1);
+        let tail = concat!(
+            "{\"operation\":\"discover_capabilities\",",
+            "\"schema\":\"fe2o3-agent-source-isa-request-v1\",",
+            "\"request_id\":9999}\n"
+        );
+        input.push_str(tail);
+        let mut input = Cursor::new(input.into_bytes());
+        let mut output = Vec::new();
+        run_agent_source_isa_jsonl_v1(&mut input, &mut output).unwrap();
+        let responses = output
+            .split(|byte| *byte == b'\n')
+            .filter(|line| !line.is_empty())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            responses.len(),
+            MAX_AGENT_SOURCE_ISA_REQUESTS_V1 as usize + 1
+        );
+        let terminal: Value = serde_json::from_slice(responses.last().unwrap()).unwrap();
+        assert_eq!(terminal["error"], "request_budget_exhausted");
+        assert_eq!(terminal["terminal"], true);
+        let position = usize::try_from(input.position()).unwrap();
+        assert_eq!(&input.get_ref()[position..], tail.as_bytes());
+    }
+
+    #[test]
+    fn jsonl_stream_flushes_every_response() {
+        #[derive(Default)]
+        struct FlushWriter {
+            bytes: Vec<u8>,
+            flushes: usize,
+        }
+
+        impl Write for FlushWriter {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.bytes.extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                self.flushes += 1;
+                Ok(())
+            }
+        }
+
+        let input = concat!(
+            "{\"operation\":\"discover_capabilities\",\"schema\":\"fe2o3-agent-source-isa-request-v1\",\"request_id\":1}\n",
+            "{\"operation\":\"discover_capabilities\",\"schema\":\"fe2o3-agent-source-isa-request-v1\",\"request_id\":2}\n"
+        );
+        let mut writer = FlushWriter::default();
+        run_agent_source_isa_jsonl_v1(&mut Cursor::new(input), &mut writer).unwrap();
+        assert_eq!(writer.flushes, 2);
+        assert_eq!(writer.bytes.iter().filter(|byte| **byte == b'\n').count(), 2);
+    }
+
+    #[test]
+    fn oversized_request_is_terminal_without_draining_the_stream() {
+        let mut input = vec![b'x'; MAX_AGENT_SOURCE_ISA_REQUEST_BYTES_V1 + 2];
+        input.push(b'\n');
+        input.extend_from_slice(b"unread-tail\n");
+        let mut input = Cursor::new(input);
+        let mut output = Vec::new();
+        run_agent_source_isa_jsonl_v1(&mut input, &mut output).unwrap();
+        let response: Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(response["error"], "request_too_large");
+        assert_eq!(response["terminal"], true);
+        let position = usize::try_from(input.position()).unwrap();
+        assert!(!input.get_ref()[position..].is_empty());
     }
 }
