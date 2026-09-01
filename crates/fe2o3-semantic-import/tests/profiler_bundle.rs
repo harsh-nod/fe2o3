@@ -16,6 +16,37 @@ fn sha256_hex(bytes: &[u8]) -> String {
         .collect()
 }
 
+fn replace_first_csv_field(source: &[u8], column: &str, replacement: &str) -> Vec<u8> {
+    let mut reader = csv::ReaderBuilder::new()
+        .has_headers(true)
+        .from_reader(source);
+    let headers = reader.headers().unwrap().clone();
+    let column = headers.iter().position(|header| header == column).unwrap();
+    let mut records = reader.records().collect::<Result<Vec<_>, _>>().unwrap();
+    let first = records.first_mut().unwrap();
+    *first = csv::StringRecord::from(
+        first
+            .iter()
+            .enumerate()
+            .map(|(index, value)| {
+                if index == column {
+                    replacement.to_owned()
+                } else {
+                    value.to_owned()
+                }
+            })
+            .collect::<Vec<_>>(),
+    );
+    let mut writer = csv::WriterBuilder::new()
+        .has_headers(false)
+        .from_writer(Vec::new());
+    writer.write_record(&headers).unwrap();
+    for record in records {
+        writer.write_record(&record).unwrap();
+    }
+    writer.into_inner().unwrap()
+}
+
 fn content(byte: u8, len: u64) -> ContentIdentityRecordV1 {
     ContentIdentityRecordV1 {
         scheme: ContentSchemeV1::DomainSeparatedSha256,
@@ -549,13 +580,19 @@ fn reviewed_json_dialects_are_distinct_and_remain_synthetic() {
         "forward_generate_json_len=10286",
         "forward_generate_json_sha256=7a0d2d5c9a148ba24b6b7f11c1e215a7b60c8d0a0d059c2aa2afa286257fa7a1",
         "forward_generate_csv_blob=92960a5ab7bf4758d240064a98d20d17d158ec02",
+        "forward_generate_csv_len=47386",
         "forward_generate_csv_sha256=605742ed44a9a9baaf0912e533605dcce000f22c1963ae15a710663ef75590d0",
         "forward_metadata_blob=5fc309a4d7d25eda75f96b2961d0ff23ec554898",
+        "forward_metadata_len=29982",
         "forward_metadata_sha256=9957618140d7b8bc65905fcc5e9dcda1093681dbc7e07e42154c445578d6a87b",
         "forward_stream_info_blob=bc93b710f99065c2f2cb7053dcfa6258ba0e5e58",
         "forward_stream_info_path=projects/rocprofiler-sdk/source/lib/output/stream_info.hpp",
         "forward_stream_info_len=8568",
         "forward_stream_info_sha256=2d66198e03e78dee0d20a78aaca906137335ec87ba38a1bc8eabaf2b29e1d9de",
+        "forward_save_blob=d39ac7c800ffd3f286864b08dcfbf00d94b206db",
+        "forward_save_path=projects/rocprofiler-sdk/source/include/rocprofiler-sdk/cxx/serialization/save.hpp",
+        "forward_save_len=48952",
+        "forward_save_sha256=dedb8fb50d09009f48c2b4d487dbcb55679d94eb5c35eebecc7c1d46029c7cd4",
         "fixture_note=closed synthetic serializer-shape fixtures and exact current 22-column CSV header; no collected result is represented",
     ];
     assert_eq!(
@@ -1029,6 +1066,36 @@ fn csv_import_is_strict_about_schema_values_and_resource_bounds() {
         ));
     }
 
+    let u32_overflow = u64::from(u32::MAX) + 1;
+    let hostile_agent =
+        replace_first_csv_field(csv_source(), "Agent_Id", &format!("Agent {u32_overflow}"));
+    assert!(matches!(
+        import_rocprofv3_csv_profiler_bundle_v4(&hostile_agent, dispatch_binding(&[20, 21])),
+        Err(ProfilerBundleErrorV4::InvalidRocprofCsv)
+    ));
+    for column in [
+        "LDS_Block_Size",
+        "Scratch_Size",
+        "VGPR_Count",
+        "Accum_VGPR_Count",
+        "SGPR_Count",
+        "Workgroup_Size_X",
+        "Workgroup_Size_Y",
+        "Workgroup_Size_Z",
+        "Grid_Size_X",
+        "Grid_Size_Y",
+        "Grid_Size_Z",
+    ] {
+        let hostile = replace_first_csv_field(csv_source(), column, &u32_overflow.to_string());
+        assert!(
+            matches!(
+                import_rocprofv3_csv_profiler_bundle_v4(&hostile, dispatch_binding(&[20, 21])),
+                Err(ProfilerBundleErrorV4::InvalidRocprofCsv)
+            ),
+            "accepted u32 overflow for {column}"
+        );
+    }
+
     for (accepted, replacement) in [
         (true, ",4,0,100,1,"),
         (false, ",4,0x0,100,1,"),
@@ -1256,6 +1323,32 @@ fn decoder_rejects_noncanonical_and_stale_bundle_claims() {
         decode_profiler_bundle_v4(&serde_json::to_vec(&stale).unwrap()),
         Err(ProfilerBundleErrorV4::StaleRunIdentity)
     ));
+
+    for role in [
+        "source",
+        "environment",
+        "collector_tool",
+        "collector_configuration",
+    ] {
+        let mut substituted =
+            import_rocprofv3_json_profiler_bundle_v4(json_source(), dispatch_binding(&[20, 21]))
+                .unwrap();
+        let fact = match role {
+            "source" => &mut substituted.source,
+            "environment" => &mut substituted.environment,
+            "collector_tool" => &mut substituted.collector_tool,
+            "collector_configuration" => &mut substituted.collector_configuration,
+            _ => unreachable!(),
+        };
+        fact.value.as_mut().unwrap().scheme = ContentSchemeV1::RawCanonicalSha256;
+        assert!(
+            matches!(
+                decode_profiler_bundle_v4(&serde_json::to_vec(&substituted).unwrap()),
+                Err(ProfilerBundleErrorV4::StaleRunIdentity)
+            ),
+            "run identity did not bind the {role} content-identity scheme"
+        );
+    }
 }
 
 #[test]

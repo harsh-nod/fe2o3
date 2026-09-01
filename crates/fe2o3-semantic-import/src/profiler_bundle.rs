@@ -1768,10 +1768,14 @@ fn csv_projection_v4(
         }
         for (name, index) in &positions {
             if !matches!(name.as_str(), "Kind" | "Agent_Id" | "Kernel_Name") {
-                parse_integer(
-                    row.get(*index)
-                        .ok_or(ProfilerBundleErrorV4::InvalidRocprofCsv)?,
-                )?;
+                let value = row
+                    .get(*index)
+                    .ok_or(ProfilerBundleErrorV4::InvalidRocprofCsv)?;
+                if CSV_CURRENT_U32_HEADERS_V4.contains(&name.as_str()) {
+                    parse_u32_integer(value)?;
+                } else {
+                    parse_integer(value)?;
+                }
             }
         }
         parse_integer(field(&row, &positions, "Stream_Id")?)?;
@@ -1784,7 +1788,7 @@ fn csv_projection_v4(
         let end = parse_integer(field(&row, &positions, "End_Timestamp")?)?;
         let dispatch_id = parse_integer(field(&row, &positions, "Dispatch_Id")?)?;
         let dimension = |prefix: &str, axis: &str| {
-            parse_integer(field(&row, &positions, &format!("{prefix}_{axis}"))?)
+            parse_u32_integer(field(&row, &positions, &format!("{prefix}_{axis}"))?)
         };
         let workgroup = [
             dimension("Workgroup_Size", "X")?,
@@ -1866,6 +1870,10 @@ fn parse_integer(value: &str) -> Result<u64, ProfilerBundleErrorV4> {
     Ok(parsed)
 }
 
+fn parse_u32_integer(value: &str) -> Result<u32, ProfilerBundleErrorV4> {
+    u32::try_from(parse_integer(value)?).map_err(|_| ProfilerBundleErrorV4::InvalidRocprofCsv)
+}
+
 fn parse_agent_id(value: &str) -> Result<u64, ProfilerBundleErrorV4> {
     let Some(agent) = value.strip_prefix("Agent ") else {
         return Err(ProfilerBundleErrorV4::InvalidRocprofCsv);
@@ -1891,6 +1899,20 @@ const CSV_CURRENT_HEADERS_V4: &[&str] = &[
     "Correlation_Id",
     "Start_Timestamp",
     "End_Timestamp",
+    "LDS_Block_Size",
+    "Scratch_Size",
+    "VGPR_Count",
+    "Accum_VGPR_Count",
+    "SGPR_Count",
+    "Workgroup_Size_X",
+    "Workgroup_Size_Y",
+    "Workgroup_Size_Z",
+    "Grid_Size_X",
+    "Grid_Size_Y",
+    "Grid_Size_Z",
+];
+
+const CSV_CURRENT_U32_HEADERS_V4: &[&str] = &[
     "LDS_Block_Size",
     "Scratch_Size",
     "VGPR_Count",
@@ -2111,6 +2133,10 @@ fn derive_run_identity(
     let mut hasher = Sha256::new();
     hasher.update(PROFILER_RUN_IDENTITY_DOMAIN_V4);
     for identity in [source, environment, tool, configuration] {
+        hasher.update([match identity.scheme {
+            ContentSchemeV1::RawCanonicalSha256 => 1,
+            ContentSchemeV1::DomainSeparatedSha256 => 2,
+        }]);
         hasher.update(identity.digest.as_bytes());
         hasher.update(identity.canonical_len.to_le_bytes());
         hasher.update(identity.format_version.to_le_bytes());

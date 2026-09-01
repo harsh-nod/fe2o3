@@ -63,6 +63,7 @@ const MAX_ARGUMENTS: usize = 256;
 const MAX_ARGUMENT_BYTES: usize = 4096;
 const MAX_OBSERVED_GPU_TARGET_PROFILE_RECORD_BYTES_V1: usize = 512;
 const POLL_INTERVAL: Duration = Duration::from_millis(5);
+const CAPTURE_DRAIN_TIMEOUT: Duration = Duration::from_millis(100);
 const OWNERSHIP_FILE: &str = ".fe2o3-profile-owned-v1";
 const MANIFEST_FILE: &str = "fe2o3-profile-manifest-v1.txt";
 const MANIFEST_REDO_FILE: &str = ".fe2o3-profile-manifest-v1.redo";
@@ -74,6 +75,30 @@ const EXPECTED_AMD_VENDOR_ID: u64 = 0x1002;
 const GFX942_TARGET_VERSION: u64 = 90_402;
 const GFX950_TARGET_VERSION: u64 = 90_500;
 const PRODUCTION_WAVE_WIDTH: u64 = 64;
+const SEALED_COLLECTOR_ADAPTER_SCHEMA_V1: &[u8] = b"fe2o3-rocprofv3-sealed-adapter-v1";
+const SEALED_TOOL_ENV_V1: &str = "FE2O3_ROCPROF_TOOL_IMAGE_V1";
+const SEALED_CORE_ENV_V1: &str = "FE2O3_ROCPROF_CORE_IMAGE_V1";
+const LOGICAL_ROCM_ROOT_ENV_V1: &str = "FE2O3_ROCPROF_LOGICAL_ROOT_V1";
+const SEALED_SCRIPT_ENV_V1: &str = "FE2O3_ROCPROF_SCRIPT_IMAGE_V1";
+const LOGICAL_SCRIPT_ENV_V1: &str = "FE2O3_ROCPROF_SCRIPT_LOGICAL_V1";
+const SEALED_COLLECTOR_BOOTSTRAP_V1: &str = r#"#!/usr/bin/env python3
+import os
+import sys
+source_path = os.environ.pop("FE2O3_ROCPROF_SCRIPT_IMAGE_V1")
+logical_path = os.environ.pop("FE2O3_ROCPROF_SCRIPT_LOGICAL_V1")
+with open(source_path, "rb") as stream:
+    source = stream.read(4194305)
+if not source or len(source) > 4194304:
+    raise RuntimeError("sealed rocprofv3 script is outside its byte bound")
+sys.argv[0] = logical_path
+scope = {"__name__": "__main__", "__file__": logical_path, "__package__": None, "__cached__": None}
+exec(compile(source, logical_path, "exec"), scope, scope)
+"#;
+const INSTALLED_ROCPROFV3_724_SCRIPT_SHA256_V1: [u8; 32] = [
+    0x19, 0x5f, 0xf5, 0xe6, 0xfa, 0xf4, 0x8a, 0x3a, 0xbb, 0xc6, 0xf4, 0xdb, 0x9f, 0x69, 0xdd, 0x59,
+    0x8f, 0xe7, 0x1f, 0xa9, 0xff, 0x69, 0x5b, 0xa2, 0x55, 0x6d, 0x65, 0xaf, 0x63, 0x6f, 0xdc, 0x48,
+];
+const INSTALLED_ROCPROFV3_724_SCRIPT_LENGTH_V1: u64 = 62_506;
 
 const ALLOWED_ENVIRONMENT: &[&str] = &[
     "GPU_DEVICE_ORDINAL",
@@ -193,10 +218,159 @@ impl ObjectIdentity {
 
 struct FilePin {
     file: File,
+    image: SealedImage,
     canonical_path: PathBuf,
     identity: ObjectIdentity,
     digest: [u8; 32],
     prefix: Vec<u8>,
+}
+
+struct SealedImage {
+    file: File,
+    identity: ObjectIdentity,
+    seals: rustix::fs::SealFlags,
+    digest: [u8; 32],
+}
+
+impl SealedImage {
+    fn writable(label: &str) -> Result<File, String> {
+        let descriptor = rustix::fs::memfd_create(
+            "fe2o3-profile-execution-v1",
+            rustix::fs::MemfdFlags::CLOEXEC | rustix::fs::MemfdFlags::ALLOW_SEALING,
+        )
+        .map_err(|error| format!("failed to create sealed {label} image: {error}"))?;
+        Ok(File::from(descriptor))
+    }
+
+    fn from_bytes(bytes: &[u8], executable: bool, label: &str) -> Result<Self, String> {
+        let mut writable = Self::writable(label)?;
+        writable
+            .write_all(bytes)
+            .map_err(|error| format!("failed to write sealed {label} image: {error}"))?;
+        Self::finish(
+            writable,
+            executable,
+            Sha256::digest(bytes).into(),
+            bytes.len() as u64,
+            label,
+        )
+    }
+
+    fn finish(
+        mut writable: File,
+        executable: bool,
+        digest: [u8; 32],
+        length: u64,
+        label: &str,
+    ) -> Result<Self, String> {
+        use std::io::{Seek as _, SeekFrom};
+        writable
+            .seek(SeekFrom::Start(0))
+            .map_err(|error| format!("failed to rewind sealed {label} image: {error}"))?;
+        let mut observed_digest = Sha256::new();
+        let mut observed_length = 0_u64;
+        let mut buffer = [0_u8; 16 * 1024];
+        loop {
+            let read = writable
+                .read(&mut buffer)
+                .map_err(|error| format!("failed to verify sealed {label} image: {error}"))?;
+            if read == 0 {
+                break;
+            }
+            observed_length = observed_length
+                .checked_add(read as u64)
+                .ok_or_else(|| format!("sealed {label} image length overflow"))?;
+            observed_digest.update(&buffer[..read]);
+        }
+        if observed_length != length || <[u8; 32]>::from(observed_digest.finalize()) != digest {
+            return Err(format!(
+                "sealed {label} image content does not match its source"
+            ));
+        }
+        rustix::fs::fchmod(
+            &writable,
+            rustix::fs::Mode::from_raw_mode(if executable { 0o500 } else { 0o400 }),
+        )
+        .map_err(|error| format!("failed to set sealed {label} image mode: {error}"))?;
+        let data_seals = rustix::fs::SealFlags::WRITE
+            | rustix::fs::SealFlags::GROW
+            | rustix::fs::SealFlags::SHRINK;
+        rustix::fs::fcntl_add_seals(&writable, data_seals)
+            .and_then(|()| rustix::fs::fcntl_add_seals(&writable, rustix::fs::SealFlags::SEAL))
+            .map_err(|error| format!("failed to seal {label} image: {error}"))?;
+        let seals = rustix::fs::fcntl_get_seals(&writable)
+            .map_err(|error| format!("failed to inspect sealed {label} image: {error}"))?;
+        let required = data_seals | rustix::fs::SealFlags::SEAL;
+        if seals != required && seals != required | rustix::fs::SealFlags::FUTURE_WRITE {
+            return Err(format!("sealed {label} image has an unexpected seal set"));
+        }
+        let writable_metadata = writable
+            .metadata()
+            .map_err(|error| format!("failed to inspect sealed {label} image: {error}"))?;
+        if !writable_metadata.is_file() || writable_metadata.len() != length {
+            return Err(format!("sealed {label} image has an invalid object shape"));
+        }
+        let read_path = format!("/proc/self/fd/{}", writable.as_raw_fd());
+        let read_only = rustix::fs::open(
+            read_path,
+            rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+        )
+        .map(File::from)
+        .map_err(|error| format!("failed to reopen sealed {label} image read-only: {error}"))?;
+        let metadata = read_only
+            .metadata()
+            .map_err(|error| format!("failed to inspect read-only {label} image: {error}"))?;
+        if metadata.dev() != writable_metadata.dev()
+            || metadata.ino() != writable_metadata.ino()
+            || rustix::fs::fcntl_getfl(&read_only)
+                .map_err(|error| format!("failed to inspect read-only {label} flags: {error}"))?
+                & rustix::fs::OFlags::ACCMODE
+                != rustix::fs::OFlags::RDONLY
+        {
+            return Err(format!(
+                "sealed {label} image read-only reopen changed identity"
+            ));
+        }
+        drop(writable);
+        Ok(Self {
+            file: read_only,
+            identity: ObjectIdentity::from_metadata(&metadata),
+            seals,
+            digest,
+        })
+    }
+
+    fn validate(&self, label: &str) -> Result<(), String> {
+        let metadata = self
+            .file
+            .metadata()
+            .map_err(|error| format!("failed to re-inspect sealed {label} image: {error}"))?;
+        let seals = rustix::fs::fcntl_get_seals(&self.file)
+            .map_err(|error| format!("failed to re-inspect sealed {label} seals: {error}"))?;
+        if ObjectIdentity::from_metadata(&metadata) != self.identity
+            || seals != self.seals
+            || rustix::fs::fcntl_getfl(&self.file)
+                .map_err(|error| format!("failed to re-inspect sealed {label} flags: {error}"))?
+                & rustix::fs::OFlags::ACCMODE
+                != rustix::fs::OFlags::RDONLY
+        {
+            return Err(format!("sealed {label} image changed after planning"));
+        }
+        Ok(())
+    }
+
+    fn execution_path(&self) -> PathBuf {
+        PathBuf::from(format!("/proc/self/fd/{}", self.file.as_raw_fd()))
+    }
+
+    fn external_path(&self) -> PathBuf {
+        PathBuf::from(format!(
+            "/proc/{}/fd/{}",
+            std::process::id(),
+            self.file.as_raw_fd()
+        ))
+    }
 }
 
 impl FilePin {
@@ -246,6 +420,7 @@ impl FilePin {
         }
         let mut hasher = Sha256::new();
         let mut prefix = Vec::new();
+        let mut image = SealedImage::writable(label)?;
         let mut read_total = 0_u64;
         let mut buffer = [0_u8; 16 * 1024];
         loop {
@@ -262,6 +437,9 @@ impl FilePin {
                 return Err(format!("{label} exceeds the {maximum}-byte bound"));
             }
             hasher.update(&buffer[..read]);
+            image
+                .write_all(&buffer[..read])
+                .map_err(|error| format!("failed to copy sealed {label} image: {error}"))?;
             let remaining = MAX_INSPECTION_PREFIX.saturating_sub(prefix.len());
             prefix.extend_from_slice(&buffer[..read.min(remaining)]);
         }
@@ -275,16 +453,25 @@ impl FilePin {
         if ObjectIdentity::from_metadata(&after) != identity {
             return Err(format!("{label} changed while it was measured"));
         }
+        let digest = hasher.finalize().into();
+        let image = SealedImage::finish(image, executable, digest, read_total, label)?;
         Ok(Self {
             file,
+            image,
             canonical_path,
             identity,
-            digest: hasher.finalize().into(),
+            digest,
             prefix,
         })
     }
 
     fn validate(&self, label: &str) -> Result<(), String> {
+        self.image.validate(label)?;
+        if self.image.digest != self.digest || self.image.identity.size != self.identity.size {
+            return Err(format!(
+                "sealed {label} image identity changed after planning"
+            ));
+        }
         let descriptor = self
             .file
             .metadata()
@@ -331,15 +518,11 @@ impl FilePin {
     }
 
     fn execution_path(&self) -> PathBuf {
-        PathBuf::from(format!("/proc/self/fd/{}", self.file.as_raw_fd()))
+        self.image.execution_path()
     }
 
     fn external_path(&self) -> PathBuf {
-        PathBuf::from(format!(
-            "/proc/{}/fd/{}",
-            std::process::id(),
-            self.file.as_raw_fd()
-        ))
+        self.image.external_path()
     }
 
     fn content_identity(&self) -> String {
@@ -566,6 +749,7 @@ struct Plan {
     tool: FilePin,
     interpreter: FilePin,
     collector_libraries: Option<CollectorLibraries>,
+    collector_execution: CollectorExecutionV1,
     collector_tool_bytes: Vec<u8>,
     collector_tool_digest: [u8; 32],
     target: FilePin,
@@ -585,6 +769,187 @@ struct CollectorLibraries {
     tool: FilePin,
     core_route: PathBuf,
     core: FilePin,
+}
+
+enum CollectorExecutionV1 {
+    ExactScript {
+        bootstrap: SealedImage,
+    },
+    InstalledAdapter {
+        bootstrap: SealedImage,
+        image: SealedImage,
+        digest: [u8; 32],
+        length: u64,
+    },
+}
+
+const ROCPROF_TOOL_ASSIGNMENT_V1: &str =
+    "    ROCPROF_TOOL_LIBRARY = f\"{ROCM_DIR}/lib/rocprofiler-sdk/librocprofiler-sdk-tool.so\"";
+const ROCPROF_CORE_ASSIGNMENT_V1: &str =
+    "    ROCPROF_SDK_LIBRARY = f\"{ROCM_DIR}/lib/librocprofiler-sdk.so\"";
+const ROCPROF_TOOL_RESOLUTION_V1: &str =
+    "    ROCPROF_TOOL_LIBRARY = resolve_library_path(ROCPROF_TOOL_LIBRARY, args)";
+const ROCPROF_CORE_RESOLUTION_V1: &str =
+    "    ROCPROF_SDK_LIBRARY = resolve_library_path(ROCPROF_SDK_LIBRARY, args)";
+const ROCPROF_PRELOAD_ORDER_V1: &str =
+    "    append_preload = [\n        ROCPROF_TOOL_LIBRARY,\n        ROCPROF_SDK_LIBRARY,\n    ]";
+const ROCPROF_RUN_ROOT_BLOCK_V1: &str = "    update_env(\"ROCPROFILER_LIBRARY_CTOR\", True)\n\n    ROCPROFV3_DIR = os.path.dirname(os.path.realpath(__file__))\n    ROCM_DIR = os.path.dirname(ROCPROFV3_DIR)\n    if args.rocm_root is not None:\n        ROCM_DIR = os.path.abspath(args.rocm_root)";
+
+fn derive_installed_collector_adapter_v1(source: &str) -> Result<Vec<u8>, String> {
+    for (symbol, first, second) in [
+        (
+            "ROCPROF_TOOL_LIBRARY",
+            ROCPROF_TOOL_ASSIGNMENT_V1,
+            ROCPROF_TOOL_RESOLUTION_V1,
+        ),
+        (
+            "ROCPROF_SDK_LIBRARY",
+            ROCPROF_CORE_ASSIGNMENT_V1,
+            ROCPROF_CORE_RESOLUTION_V1,
+        ),
+    ] {
+        let mut count = 0_usize;
+        let mut exact = true;
+        for line in source.lines().filter(|line| {
+            line.trim_start()
+                .strip_prefix(symbol)
+                .is_some_and(|tail| tail.trim_start().starts_with('='))
+        }) {
+            count = count
+                .checked_add(1)
+                .ok_or_else(|| format!("{symbol} assignment count overflow"))?;
+            exact &= match count {
+                1 => line == first,
+                2 => line == second,
+                _ => false,
+            };
+        }
+        if count != 2 || !exact {
+            return Err(format!(
+                "unsupported rocprofv3 script: expected one exact {symbol} source assignment followed by its exact resolver assignment"
+            ));
+        }
+    }
+    if source.matches(ROCPROF_PRELOAD_ORDER_V1).count() != 1 {
+        return Err(
+            "unsupported rocprofv3 script: expected one exact SDK preload order".to_owned(),
+        );
+    }
+    if source.matches(ROCPROF_RUN_ROOT_BLOCK_V1).count() != 1 {
+        return Err(
+            "unsupported rocprofv3 script: expected one exact run root-discovery block".to_owned(),
+        );
+    }
+    let adapted = source
+        .replacen(
+            ROCPROF_RUN_ROOT_BLOCK_V1,
+            &format!(
+                "    update_env(\"ROCPROFILER_LIBRARY_CTOR\", True)\n\n    ROCM_DIR = app_env.pop(\"{LOGICAL_ROCM_ROOT_ENV_V1}\")"
+            ),
+            1,
+        )
+        .replacen(
+            ROCPROF_TOOL_ASSIGNMENT_V1,
+            &format!("    ROCPROF_TOOL_LIBRARY = app_env.pop(\"{SEALED_TOOL_ENV_V1}\")"),
+            1,
+        )
+        .replacen(
+            ROCPROF_CORE_ASSIGNMENT_V1,
+            &format!("    ROCPROF_SDK_LIBRARY = app_env.pop(\"{SEALED_CORE_ENV_V1}\")"),
+            1,
+        )
+        .replacen(
+            ROCPROF_PRELOAD_ORDER_V1,
+            "    append_preload = [\n        ROCPROF_SDK_LIBRARY,\n        ROCPROF_TOOL_LIBRARY,\n    ]",
+            1,
+        )
+        .into_bytes();
+    if adapted.len() > MAX_TOOL_BYTES as usize {
+        return Err("sealed rocprofv3 adapter exceeds the script byte bound".to_owned());
+    }
+    Ok(adapted)
+}
+
+impl CollectorExecutionV1 {
+    fn prepare(script: &FilePin, libraries: Option<&CollectorLibraries>) -> Result<Self, String> {
+        let Some(libraries) = libraries else {
+            return Ok(Self::ExactScript {
+                bootstrap: SealedImage::from_bytes(
+                    SEALED_COLLECTOR_BOOTSTRAP_V1.as_bytes(),
+                    true,
+                    "rocprofv3 bootstrap",
+                )?,
+            });
+        };
+        if script.digest != INSTALLED_ROCPROFV3_724_SCRIPT_SHA256_V1
+            || script.identity.size != INSTALLED_ROCPROFV3_724_SCRIPT_LENGTH_V1
+        {
+            return Err(
+                "unsupported standard-layout rocprofv3 script identity; sealed adaptation is allowlisted only for ROCprofiler SDK 97f5574"
+                    .to_owned(),
+            );
+        }
+        let source = script.read_retained("rocprofv3 script", MAX_TOOL_BYTES)?;
+        let source = std::str::from_utf8(&source)
+            .map_err(|_| "installed rocprofv3 script is not UTF-8".to_owned())?;
+        let adapted = derive_installed_collector_adapter_v1(source)?;
+        let digest = Sha256::digest(&adapted).into();
+        let length = adapted.len() as u64;
+        let image = SealedImage::from_bytes(&adapted, true, "rocprofv3 adapter")?;
+        let bootstrap = SealedImage::from_bytes(
+            SEALED_COLLECTOR_BOOTSTRAP_V1.as_bytes(),
+            true,
+            "rocprofv3 bootstrap",
+        )?;
+        libraries.validate()?;
+        Ok(Self::InstalledAdapter {
+            bootstrap,
+            image,
+            digest,
+            length,
+        })
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        match self {
+            Self::ExactScript { bootstrap } => bootstrap.validate("rocprofv3 bootstrap"),
+            Self::InstalledAdapter {
+                bootstrap,
+                image,
+                digest,
+                length,
+            } => {
+                bootstrap.validate("rocprofv3 bootstrap")?;
+                image.validate("rocprofv3 adapter")?;
+                if image.digest != *digest || image.identity.size != *length {
+                    return Err("sealed rocprofv3 adapter identity changed".to_owned());
+                }
+                Ok(())
+            }
+        }
+    }
+
+    fn bootstrap_path(&self) -> PathBuf {
+        match self {
+            Self::ExactScript { bootstrap } | Self::InstalledAdapter { bootstrap, .. } => {
+                bootstrap.external_path()
+            }
+        }
+    }
+
+    fn source_path(&self, original: &FilePin) -> PathBuf {
+        match self {
+            Self::ExactScript { .. } => original.external_path(),
+            Self::InstalledAdapter { image, .. } => image.external_path(),
+        }
+    }
+
+    const fn mode_name(&self) -> &'static str {
+        match self {
+            Self::ExactScript { .. } => "sealed-exact-script-v1",
+            Self::InstalledAdapter { .. } => "sealed-installed-adapter-v1",
+        }
+    }
 }
 
 impl CollectorLibraries {
@@ -686,6 +1051,12 @@ pub(crate) fn command(args: &[String]) -> Result<CommandReport, String> {
             output: render_plan(&plan),
             succeeded: true,
         });
+    }
+    if plan.options.kind == ProfileKind::Att {
+        return Err(
+            "ATT collection is unavailable under sealed execution: the rocprofiler decoder API requires a mutable directory namespace and no mutation-proof sealed decoder route is implemented"
+                .to_owned(),
+        );
     }
     if supplied_authorization != Some(plan.authorization) {
         return Err(format!(
@@ -978,8 +1349,13 @@ fn prepare_plan(options: Options) -> Result<Plan, String> {
     )?;
     require_elf(&interpreter, "rocprofv3 Python interpreter")?;
     let collector_libraries = CollectorLibraries::maybe_open(&tool)?;
-    let collector_tool_bytes =
-        canonical_collector_tool(&tool, &interpreter, collector_libraries.as_ref());
+    let collector_execution = CollectorExecutionV1::prepare(&tool, collector_libraries.as_ref())?;
+    let collector_tool_bytes = canonical_collector_tool(
+        &tool,
+        &interpreter,
+        collector_libraries.as_ref(),
+        &collector_execution,
+    );
     let collector_tool_digest = Sha256::digest(&collector_tool_bytes).into();
 
     let requested_target = PathBuf::from(&options.program);
@@ -1022,6 +1398,7 @@ fn prepare_plan(options: Options) -> Result<Plan, String> {
         tool,
         interpreter,
         collector_libraries,
+        collector_execution,
         collector_tool_bytes,
         collector_tool_digest,
         target,
@@ -1607,17 +1984,44 @@ fn canonical_collector_tool(
     script: &FilePin,
     interpreter: &FilePin,
     libraries: Option<&CollectorLibraries>,
+    execution: &CollectorExecutionV1,
 ) -> Vec<u8> {
-    let mut bytes = b"fe2o3-rocprofv3-toolchain-v1\0".to_vec();
+    let mut bytes = b"fe2o3-rocprofv3-toolchain-v2\0".to_vec();
+    append_field(&mut bytes, SEALED_COLLECTOR_ADAPTER_SCHEMA_V1);
+    append_field(&mut bytes, execution.mode_name().as_bytes());
+    append_field(
+        &mut bytes,
+        &<[u8; 32]>::from(Sha256::digest(SEALED_COLLECTOR_BOOTSTRAP_V1.as_bytes())),
+    );
+    append_field(
+        &mut bytes,
+        &(SEALED_COLLECTOR_BOOTSTRAP_V1.len() as u64).to_le_bytes(),
+    );
     for pin in [script, interpreter] {
+        append_field(
+            &mut bytes,
+            pin.canonical_path.as_os_str().as_encoded_bytes(),
+        );
         append_field(&mut bytes, &pin.digest);
         append_field(&mut bytes, &pin.identity.size.to_le_bytes());
     }
     if let Some(libraries) = libraries {
-        for pin in [&libraries.tool, &libraries.core] {
+        for (route, pin) in [
+            (&libraries.core_route, &libraries.core),
+            (&libraries.tool_route, &libraries.tool),
+        ] {
+            append_field(&mut bytes, route.as_os_str().as_encoded_bytes());
+            append_field(
+                &mut bytes,
+                pin.canonical_path.as_os_str().as_encoded_bytes(),
+            );
             append_field(&mut bytes, &pin.digest);
             append_field(&mut bytes, &pin.identity.size.to_le_bytes());
         }
+    }
+    if let CollectorExecutionV1::InstalledAdapter { digest, length, .. } = execution {
+        append_field(&mut bytes, digest);
+        append_field(&mut bytes, &length.to_le_bytes());
     }
     bytes
 }
@@ -1655,10 +2059,22 @@ fn authorization_digest(input: AuthorizationInputs<'_>) -> [u8; 32] {
     hash_field(&mut hasher, options.kind.name().as_bytes());
     hash_field(&mut hasher, &tool.digest);
     hash_field(&mut hasher, &tool.identity.size.to_le_bytes());
+    hash_field(
+        &mut hasher,
+        tool.canonical_path.as_os_str().as_encoded_bytes(),
+    );
     hash_field(&mut hasher, &interpreter.digest);
     hash_field(&mut hasher, &interpreter.identity.size.to_le_bytes());
+    hash_field(
+        &mut hasher,
+        interpreter.canonical_path.as_os_str().as_encoded_bytes(),
+    );
     hash_field(&mut hasher, &target.digest);
     hash_field(&mut hasher, &target.identity.size.to_le_bytes());
+    hash_field(
+        &mut hasher,
+        target.canonical_path.as_os_str().as_encoded_bytes(),
+    );
     hash_field(
         &mut hasher,
         working_directory.as_os_str().as_encoded_bytes(),
@@ -1720,6 +2136,30 @@ fn render_plan(plan: &Plan) -> String {
     line(&mut output, "stateful-action", "not-executed");
     line(&mut output, "collector", "rocprofv3");
     line(&mut output, "profile-kind", plan.options.kind.name());
+    line(
+        &mut output,
+        "collector-execution-mode",
+        plan.collector_execution.mode_name(),
+    );
+    line(
+        &mut output,
+        "collector-execution-inputs",
+        "sealed-read-only-memfd-images-with-original-path-provenance",
+    );
+    if plan.options.kind == ProfileKind::Att {
+        line(&mut output, "collection-readiness", "unavailable");
+        line(
+            &mut output,
+            "collection-unavailable-reason",
+            "att-decoder-requires-mutable-directory-namespace-without-sealed-route",
+        );
+    } else {
+        line(
+            &mut output,
+            "collection-readiness",
+            "ready-after-authorization",
+        );
+    }
     line(
         &mut output,
         "collector-option-surface",
@@ -1969,16 +2409,19 @@ fn render_expected(output: &mut String, kind: ProfileKind) {
 }
 
 fn render_import_plan(output: &mut String, plan: &Plan) {
-    let environment = content_identity(
-        &plan.environment_digest,
-        plan.environment_bytes.len() as u64,
-    );
-    let tool = content_identity(
-        &plan.collector_tool_digest,
-        plan.collector_tool_bytes.len() as u64,
-    );
-    let configuration =
-        content_identity(&plan.configuration_digest, plan.configuration.len() as u64);
+    if plan.options.kind == ProfileKind::Att {
+        line(
+            output,
+            "next-import-status",
+            "unavailable-att-decoder-has-no-mutation-proof-sealed-directory-route",
+        );
+        line(
+            output,
+            "next-query-status",
+            "unavailable-until-sealed-att-collection-and-bundle-v4-import",
+        );
+        return;
+    }
     if plan.devices.is_empty() {
         line(
             output,
@@ -1992,63 +2435,12 @@ fn render_import_plan(output: &mut String, plan: &Plan) {
         );
         return;
     }
-    match plan.options.kind {
-        ProfileKind::DispatchJson | ProfileKind::DispatchCsv => {
-            if !render_dispatch_import_plan(
-                output,
-                plan.verified_kir_v7.as_ref(),
-                plan.options.kir_binding.as_ref(),
-            ) {
-                return;
-            }
-        }
-        ProfileKind::Att => {
-            line(output, "next-import-program", "fe2o3-profiler-import");
-            line(
-                output,
-                "next-import-status",
-                "deferred-until-att-manifest-references-are-content-bound",
-            );
-            for (index, argument) in [
-                "att-v4".to_owned(),
-                "--environment".to_owned(),
-                environment,
-                "--tool".to_owned(),
-                tool,
-                "--config".to_owned(),
-                configuration,
-            ]
-            .into_iter()
-            .enumerate()
-            {
-                line_debug(output, &format!("next-import-arg[{index}]"), &argument);
-            }
-            line(output, "next-import-deferred-flag", "--att-artifact");
-            line(
-                output,
-                "next-import-deferred-value-format",
-                "manifest-relative-reference=raw:1:sha256:length",
-            );
-            line(output, "next-import-deferred-flag", "--att-agent-id");
-            line(
-                output,
-                "next-import-deferred-value-format",
-                "absolute-kfd-node-id-from-validated-att-output-directory",
-            );
-            line(output, "next-import-deferred-flag", "--device-binding");
-            line(
-                output,
-                "next-import-deferred-value-format",
-                "absolute-kfd-node-id=domain:1:stable-device-sha256:length",
-            );
-            for (index, device) in plan.devices.iter().enumerate() {
-                line(
-                    output,
-                    &format!("next-import-att-device-candidate[{index}]"),
-                    format!("{}={}", device.node, device.content_identity()),
-                );
-            }
-        }
+    if !render_dispatch_import_plan(
+        output,
+        plan.verified_kir_v7.as_ref(),
+        plan.options.kir_binding.as_ref(),
+    ) {
+        return;
     }
     line(output, "next-query-program", "fe2o3-profiler-query");
     line(output, "next-query-arg[0]", "capabilities");
@@ -2148,6 +2540,7 @@ where
 {
     plan.tool.validate("rocprofv3 script")?;
     plan.interpreter.validate("rocprofv3 Python interpreter")?;
+    plan.collector_execution.validate()?;
     if let Some(libraries) = &plan.collector_libraries {
         libraries.validate()?;
     }
@@ -2331,6 +2724,7 @@ where
 {
     plan.tool.validate("rocprofv3 script")?;
     plan.interpreter.validate("rocprofv3 Python interpreter")?;
+    plan.collector_execution.validate()?;
     if let Some(libraries) = &plan.collector_libraries {
         libraries.validate()?;
     }
@@ -2363,10 +2757,17 @@ struct Supervised {
 }
 
 fn run_collector(plan: &Plan) -> Result<Supervised, String> {
+    plan.tool.validate("rocprofv3 script")?;
+    plan.interpreter.validate("rocprofv3 Python interpreter")?;
+    plan.target.validate("profile target")?;
+    plan.collector_execution.validate()?;
+    if let Some(libraries) = &plan.collector_libraries {
+        libraries.validate()?;
+    }
     let mut command = Command::new(plan.interpreter.execution_path());
     command
         .arg0(&plan.interpreter.canonical_path)
-        .arg(plan.tool.external_path())
+        .arg(plan.collector_execution.bootstrap_path())
         .args(&plan.collector_arguments)
         .current_dir(&plan.working_directory)
         .env_clear()
@@ -2379,6 +2780,26 @@ fn run_collector(plan: &Plan) -> Result<Supervised, String> {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .process_group(0);
+    command
+        .env(
+            SEALED_SCRIPT_ENV_V1,
+            plan.collector_execution.source_path(&plan.tool),
+        )
+        .env(LOGICAL_SCRIPT_ENV_V1, &plan.tool.canonical_path);
+    if let (CollectorExecutionV1::InstalledAdapter { .. }, Some(libraries)) =
+        (&plan.collector_execution, &plan.collector_libraries)
+    {
+        let logical_root = plan
+            .tool
+            .canonical_path
+            .parent()
+            .and_then(Path::parent)
+            .ok_or("installed rocprofv3 script has no logical ROCm root")?;
+        command
+            .env(LOGICAL_ROCM_ROOT_ENV_V1, logical_root)
+            .env(SEALED_CORE_ENV_V1, libraries.core.external_path())
+            .env(SEALED_TOOL_ENV_V1, libraries.tool.external_path());
+    }
     let mut child = crate::process_execution::spawn(&mut command)
         .map_err(|error| format!("failed to spawn pinned rocprofv3 collector: {error}"))?;
     supervise(
@@ -2403,9 +2824,27 @@ fn supervise(
         .stderr
         .take()
         .ok_or("collector stderr pipe was unavailable")?;
+    if let Err(error) =
+        make_capture_pipe_nonblocking(&stdout).and_then(|()| make_capture_pipe_nonblocking(&stderr))
+    {
+        terminate(child);
+        let _ = child.wait();
+        return Err(error);
+    }
     let overflow = Arc::new(AtomicBool::new(false));
-    let stdout_thread = capture_thread(stdout, stdout_limit, Arc::clone(&overflow));
-    let stderr_thread = capture_thread(stderr, stderr_limit, Arc::clone(&overflow));
+    let capture_cancelled = Arc::new(AtomicBool::new(false));
+    let stdout_thread = capture_thread(
+        stdout,
+        stdout_limit,
+        Arc::clone(&overflow),
+        Arc::clone(&capture_cancelled),
+    );
+    let stderr_thread = capture_thread(
+        stderr,
+        stderr_limit,
+        Arc::clone(&overflow),
+        Arc::clone(&capture_cancelled),
+    );
     let started = Instant::now();
     let (status, reason, wait_error) = loop {
         if overflow.load(Ordering::Acquire) {
@@ -2427,6 +2866,7 @@ fn supervise(
         }
     };
     terminate(child);
+    capture_cancelled.store(true, Ordering::Release);
     let stdout = stdout_thread
         .join()
         .map_err(|_| "collector stdout capture thread panicked")?;
@@ -2446,12 +2886,20 @@ fn capture_thread(
     mut pipe: impl Read + Send + 'static,
     limit: usize,
     global_overflow: Arc<AtomicBool>,
+    cancelled: Arc<AtomicBool>,
 ) -> thread::JoinHandle<BoundedCapture> {
     thread::spawn(move || {
         let mut bytes = Vec::new();
         let mut overflow = false;
         let mut buffer = [0_u8; 8192];
+        let mut drain_deadline = None;
         loop {
+            if cancelled.load(Ordering::Acquire) && drain_deadline.is_none() {
+                drain_deadline = Instant::now().checked_add(CAPTURE_DRAIN_TIMEOUT);
+            }
+            if drain_deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+                break;
+            }
             match pipe.read(&mut buffer) {
                 Ok(0) => break,
                 Ok(read) => {
@@ -2460,9 +2908,19 @@ fn capture_thread(
                     if read > remaining {
                         overflow = true;
                         global_overflow.store(true, Ordering::Release);
+                        break;
+                    }
+                    if cancelled.load(Ordering::Acquire) && drain_deadline.is_none() {
+                        drain_deadline = Instant::now().checked_add(CAPTURE_DRAIN_TIMEOUT);
                     }
                 }
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    if cancelled.load(Ordering::Acquire) {
+                        break;
+                    }
+                    thread::sleep(POLL_INTERVAL);
+                }
                 Err(_) => {
                     overflow = true;
                     global_overflow.store(true, Ordering::Release);
@@ -2472,6 +2930,13 @@ fn capture_thread(
         }
         BoundedCapture { bytes, overflow }
     })
+}
+
+fn make_capture_pipe_nonblocking(pipe: &impl rustix::fd::AsFd) -> Result<(), String> {
+    let flags = rustix::fs::fcntl_getfl(pipe)
+        .map_err(|error| format!("failed to inspect collector capture pipe: {error}"))?;
+    rustix::fs::fcntl_setfl(pipe, flags | rustix::fs::OFlags::NONBLOCK)
+        .map_err(|error| format!("failed to make collector capture pipe nonblocking: {error}"))
 }
 
 fn terminate(child: &mut Child) {
@@ -2485,6 +2950,8 @@ struct OutputCustody {
     path: PathBuf,
     identity: ObjectIdentity,
     guard: Vec<u8>,
+    guard_file: File,
+    guard_identity: ObjectIdentity,
     root: rustix::fd::OwnedFd,
     durable: RetainedDurableDirectoryV1,
 }
@@ -2530,6 +2997,20 @@ impl OutputCustody {
             let _ = fs::remove_dir_all(path);
             return Err(format!("failed to persist output ownership guard: {error}"));
         }
+        let guard_metadata = match file.metadata() {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                drop(file);
+                let _ = fs::remove_dir_all(path);
+                return Err(format!("failed to inspect output ownership guard: {error}"));
+            }
+        };
+        if !is_private_regular_file(&guard_metadata) {
+            drop(file);
+            let _ = fs::remove_dir_all(path);
+            return Err("output ownership guard is not a private regular file".to_owned());
+        }
+        let guard_identity = ObjectIdentity::from_metadata(&guard_metadata);
         let admitted = (|| {
             let root = rustix::fs::open(
                 path,
@@ -2561,6 +3042,8 @@ impl OutputCustody {
             path: path.to_path_buf(),
             identity: ObjectIdentity::from_metadata(&metadata),
             guard,
+            guard_file: file,
+            guard_identity,
             root,
             durable,
         })
@@ -2578,8 +3061,28 @@ impl OutputCustody {
         {
             return Err("output custody object was substituted".to_owned());
         }
-        let guard = fs::read(self.path.join(OWNERSHIP_FILE))
+        let retained_guard_metadata = self
+            .guard_file
+            .metadata()
             .map_err(|error| format!("output ownership guard unavailable: {error}"))?;
+        if !is_private_regular_file(&retained_guard_metadata)
+            || ObjectIdentity::from_metadata(&retained_guard_metadata) != self.guard_identity
+        {
+            return Err("retained output ownership guard changed".to_owned());
+        }
+        let (guard_file, guard_identity) = open_retained_leaf(
+            &self.root,
+            OWNERSHIP_FILE,
+            Some(self.guard_identity),
+            true,
+            "output ownership guard",
+        )?;
+        let guard = read_bounded_leaf(
+            guard_file,
+            guard_identity,
+            self.guard.len(),
+            "output ownership guard",
+        )?;
         if guard != self.guard {
             return Err("output ownership guard changed".to_owned());
         }
@@ -2613,40 +3116,101 @@ impl OutputCustody {
 
     fn read_record(&self, name: &str, maximum: usize) -> Result<Vec<u8>, String> {
         self.validate()?;
-        validate_relative(name)?;
-        let descriptor = rustix::fs::openat2(
+        let (descriptor, identity) =
+            open_retained_leaf(&self.root, name, None, true, &format!("durable {name}"))?;
+        let bytes = read_bounded_leaf(descriptor, identity, maximum, &format!("durable {name}"))?;
+        let _ = open_retained_leaf(
             &self.root,
             name,
-            rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::CLOEXEC,
-            rustix::fs::Mode::empty(),
-            rustix::fs::ResolveFlags::BENEATH
-                | rustix::fs::ResolveFlags::NO_SYMLINKS
-                | rustix::fs::ResolveFlags::NO_MAGICLINKS
-                | rustix::fs::ResolveFlags::NO_XDEV,
-        )
-        .map(File::from)
-        .map_err(|error| format!("failed to reopen durable {name}: {error}"))?;
-        let metadata = descriptor
-            .metadata()
-            .map_err(|error| format!("failed to inspect durable {name}: {error}"))?;
-        if !metadata.is_file() || metadata.nlink() != 1 {
-            return Err(format!("durable {name} is not a private regular file"));
-        }
-        let limit =
-            u64::try_from(maximum).map_err(|_| format!("durable {name} bound does not fit u64"))?;
-        let read_limit = limit
-            .checked_add(1)
-            .ok_or_else(|| format!("durable {name} bound overflow"))?;
-        let mut bytes = Vec::new();
-        descriptor
-            .take(read_limit)
-            .read_to_end(&mut bytes)
-            .map_err(|error| format!("failed to read durable {name}: {error}"))?;
-        if bytes.len() > maximum {
-            return Err(format!("durable {name} exceeds its byte bound"));
-        }
+            Some(identity),
+            true,
+            &format!("durable {name}"),
+        )?;
         Ok(bytes)
     }
+}
+
+fn is_private_regular_file(metadata: &Metadata) -> bool {
+    metadata.is_file()
+        && metadata.uid() == rustix::process::geteuid().as_raw()
+        && metadata.nlink() == 1
+        && metadata.permissions().mode() & 0o077 == 0
+}
+
+fn open_retained_leaf(
+    root: &rustix::fd::OwnedFd,
+    relative: &str,
+    expected: Option<ObjectIdentity>,
+    require_private_mode: bool,
+    label: &str,
+) -> Result<(File, ObjectIdentity), String> {
+    validate_relative(relative)?;
+    let descriptor = rustix::fs::openat2(
+        root,
+        relative,
+        rustix::fs::OFlags::RDONLY
+            | rustix::fs::OFlags::NOFOLLOW
+            | rustix::fs::OFlags::NONBLOCK
+            | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+        rustix::fs::ResolveFlags::BENEATH
+            | rustix::fs::ResolveFlags::NO_SYMLINKS
+            | rustix::fs::ResolveFlags::NO_MAGICLINKS
+            | rustix::fs::ResolveFlags::NO_XDEV,
+    )
+    .map(File::from)
+    .map_err(|error| format!("failed to open {label}: {error}"))?;
+    let metadata = descriptor
+        .metadata()
+        .map_err(|error| format!("failed to inspect {label}: {error}"))?;
+    let private_mode_is_valid = !require_private_mode || metadata.permissions().mode() & 0o077 == 0;
+    if !metadata.is_file()
+        || metadata.uid() != rustix::process::geteuid().as_raw()
+        || metadata.nlink() != 1
+        || !private_mode_is_valid
+    {
+        return Err(format!("{label} is not a private regular file"));
+    }
+    let identity = ObjectIdentity::from_metadata(&metadata);
+    if expected.is_some_and(|expected| identity != expected) {
+        return Err(format!("{label} object identity changed"));
+    }
+    Ok((descriptor, identity))
+}
+
+fn read_bounded_leaf(
+    mut file: File,
+    identity: ObjectIdentity,
+    maximum: usize,
+    label: &str,
+) -> Result<Vec<u8>, String> {
+    let length = usize::try_from(identity.size)
+        .map_err(|_| format!("{label} length does not fit memory"))?;
+    if length > maximum {
+        return Err(format!("{label} exceeds its byte bound"));
+    }
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(length)
+        .map_err(|_| format!("failed to reserve {label} bytes"))?;
+    let read_limit = u64::try_from(maximum)
+        .map_err(|_| format!("{label} bound does not fit u64"))?
+        .checked_add(1)
+        .ok_or_else(|| format!("{label} bound overflow"))?;
+    Read::by_ref(&mut file)
+        .take(read_limit)
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("failed to read {label}: {error}"))?;
+    if bytes.len() > maximum || bytes.len() != length {
+        return Err(format!("{label} changed while it was read"));
+    }
+    let after = file
+        .metadata()
+        .map_err(|error| format!("failed to re-inspect {label}: {error}"))?;
+    if ObjectIdentity::from_metadata(&after) != identity {
+        return Err(format!("{label} changed while it was read"));
+    }
+    Ok(bytes)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -2670,31 +3234,17 @@ impl RetainedDispatchSourceV1 {
         if artifact.length == 0 || artifact.length > MAX_PROFILER_IMPORT_SOURCE_BYTES {
             return Err("dispatch source is outside the import byte bound".to_owned());
         }
-        validate_relative(&artifact.relative)?;
-        let descriptor = rustix::fs::openat2(
+        let (mut file, identity) = open_retained_leaf(
             &custody.root,
             artifact.relative.as_str(),
-            rustix::fs::OFlags::RDONLY
-                | rustix::fs::OFlags::NOFOLLOW
-                | rustix::fs::OFlags::NONBLOCK
-                | rustix::fs::OFlags::CLOEXEC,
-            rustix::fs::Mode::empty(),
-            rustix::fs::ResolveFlags::BENEATH
-                | rustix::fs::ResolveFlags::NO_SYMLINKS
-                | rustix::fs::ResolveFlags::NO_MAGICLINKS
-                | rustix::fs::ResolveFlags::NO_XDEV,
-        )
-        .map_err(|error| format!("failed to retain dispatch source: {error}"))?;
-        let mut file = File::from(descriptor);
+            Some(artifact.identity),
+            false,
+            "dispatch source",
+        )?;
         let metadata = file
             .metadata()
             .map_err(|error| format!("failed to inspect retained dispatch source: {error}"))?;
-        let identity = ObjectIdentity::from_metadata(&metadata);
-        if !metadata.is_file()
-            || metadata.nlink() != 1
-            || identity != artifact.identity
-            || metadata.len() != artifact.length
-        {
+        if metadata.len() != artifact.length {
             return Err("dispatch source changed before retention".to_owned());
         }
         let maximum = usize::try_from(MAX_PROFILER_IMPORT_SOURCE_BYTES)
@@ -2736,31 +3286,21 @@ impl RetainedDispatchSourceV1 {
         {
             return Err("retained dispatch source descriptor changed".to_owned());
         }
-        let reopened = rustix::fs::openat2(
+        let (reopened, reopened_identity) = open_retained_leaf(
             &custody.root,
             self.relative.as_str(),
-            rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::CLOEXEC,
-            rustix::fs::Mode::empty(),
-            rustix::fs::ResolveFlags::BENEATH
-                | rustix::fs::ResolveFlags::NO_SYMLINKS
-                | rustix::fs::ResolveFlags::NO_MAGICLINKS
-                | rustix::fs::ResolveFlags::NO_XDEV,
-        )
-        .map(File::from)
-        .map_err(|error| format!("failed to reopen retained dispatch source: {error}"))?;
-        if ObjectIdentity::from_metadata(
-            &reopened
-                .metadata()
-                .map_err(|error| format!("failed to inspect reopened dispatch source: {error}"))?,
-        ) != self.identity
-        {
-            return Err("dispatch source path was substituted".to_owned());
-        }
-        let mut bytes = Vec::new();
-        reopened
-            .take(MAX_PROFILER_IMPORT_SOURCE_BYTES + 1)
-            .read_to_end(&mut bytes)
-            .map_err(|error| format!("failed to reread dispatch source: {error}"))?;
+            Some(self.identity),
+            false,
+            "retained dispatch source",
+        )?;
+        let maximum = usize::try_from(MAX_PROFILER_IMPORT_SOURCE_BYTES)
+            .map_err(|_| "dispatch source bound does not fit memory".to_owned())?;
+        let bytes = read_bounded_leaf(
+            reopened,
+            reopened_identity,
+            maximum,
+            "retained dispatch source",
+        )?;
         if bytes != self.bytes || <[u8; 32]>::from(Sha256::digest(&bytes)) != self.digest {
             return Err("dispatch source bytes changed after import".to_owned());
         }
@@ -3048,18 +3588,43 @@ fn domain_content_identity_v1(
 }
 
 fn scan_artifacts(custody: &OutputCustody, storage_limit: u64) -> Result<Vec<Artifact>, String> {
+    scan_artifacts_with_entry_limit(custody, storage_limit, MAX_ARTIFACTS)
+}
+
+fn scan_artifacts_with_entry_limit(
+    custody: &OutputCustody,
+    storage_limit: u64,
+    maximum_entries: usize,
+) -> Result<Vec<Artifact>, String> {
+    if maximum_entries == 0 || maximum_entries > MAX_ARTIFACTS {
+        return Err("collector output has an invalid entry-count bound".to_owned());
+    }
     let root = &custody.path;
     let mut pending = vec![(root.to_path_buf(), 0_usize)];
     let mut artifacts = Vec::new();
     let mut total = 0_u64;
+    let mut entry_count = 0_usize;
     while let Some((directory, depth)) = pending.pop() {
         if depth > MAX_ARTIFACT_DEPTH {
             return Err("collector output exceeds the directory-depth bound".to_owned());
         }
-        let mut entries = fs::read_dir(&directory)
-            .map_err(|error| format!("failed to enumerate collector output: {error}"))?
-            .collect::<Result<Vec<_>, _>>()
+        let directory_entries = fs::read_dir(&directory)
             .map_err(|error| format!("failed to enumerate collector output: {error}"))?;
+        let mut entries = Vec::new();
+        for entry in directory_entries {
+            entry_count = entry_count
+                .checked_add(1)
+                .ok_or("collector output entry count overflow")?;
+            if entry_count > maximum_entries {
+                return Err("collector output exceeds the global entry-count bound".to_owned());
+            }
+            entries
+                .try_reserve(1)
+                .map_err(|_| "failed to reserve collector output entry metadata".to_owned())?;
+            entries.push(
+                entry.map_err(|error| format!("failed to enumerate collector output: {error}"))?,
+            );
+        }
         entries.sort_by_key(|entry| entry.file_name());
         for entry in entries {
             let path = entry.path();
@@ -3097,6 +3662,9 @@ fn scan_artifacts(custody: &OutputCustody, storage_limit: u64) -> Result<Vec<Art
                 ));
             }
             if metadata.is_dir() {
+                pending
+                    .try_reserve(1)
+                    .map_err(|_| "failed to reserve collector directory traversal".to_owned())?;
                 pending.push((path, depth + 1));
                 continue;
             }
@@ -3120,6 +3688,9 @@ fn scan_artifacts(custody: &OutputCustody, storage_limit: u64) -> Result<Vec<Art
                 return Err("collector output exceeds the artifact-count bound".to_owned());
             }
             let (digest, length) = hash_file(custody, &relative, &metadata)?;
+            artifacts
+                .try_reserve(1)
+                .map_err(|_| "failed to reserve collector artifact metadata".to_owned())?;
             artifacts.push(Artifact {
                 relative,
                 length,
@@ -3151,30 +3722,24 @@ fn hash_file(
     relative: &str,
     expected: &Metadata,
 ) -> Result<([u8; 32], u64), String> {
-    let fd = rustix::fs::openat2(
+    hash_file_with_reopen_hook(custody, relative, expected, || {})
+}
+
+fn hash_file_with_reopen_hook(
+    custody: &OutputCustody,
+    relative: &str,
+    expected: &Metadata,
+    before_reopen: impl FnOnce(),
+) -> Result<([u8; 32], u64), String> {
+    let expected_identity = ObjectIdentity::from_metadata(expected);
+    let (mut file, opened_identity) = open_retained_leaf(
         &custody.root,
         relative,
-        rustix::fs::OFlags::RDONLY
-            | rustix::fs::OFlags::NOFOLLOW
-            | rustix::fs::OFlags::NONBLOCK
-            | rustix::fs::OFlags::CLOEXEC,
-        rustix::fs::Mode::empty(),
-        rustix::fs::ResolveFlags::BENEATH
-            | rustix::fs::ResolveFlags::NO_SYMLINKS
-            | rustix::fs::ResolveFlags::NO_MAGICLINKS
-            | rustix::fs::ResolveFlags::NO_XDEV,
-    )
-    .map_err(|error| format!("failed to retain collector artifact: {error}"))?;
-    let mut file = File::from(fd);
-    let expected_identity = ObjectIdentity::from_metadata(expected);
-    if ObjectIdentity::from_metadata(
-        &file
-            .metadata()
-            .map_err(|error| format!("failed to inspect collector artifact: {error}"))?,
-    ) != expected_identity
-    {
-        return Err("collector artifact was substituted before hashing".to_owned());
-    }
+        Some(expected_identity),
+        false,
+        "collector artifact",
+    )?;
+    debug_assert_eq!(opened_identity, expected_identity);
     let mut hasher = Sha256::new();
     let mut length = 0_u64;
     let mut buffer = [0_u8; 16 * 1024];
@@ -3193,31 +3758,21 @@ fn hash_file(
         }
         hasher.update(&buffer[..read]);
     }
+    before_reopen();
     if length != expected.len()
         || ObjectIdentity::from_metadata(
             &file
                 .metadata()
                 .map_err(|error| format!("failed to re-inspect collector artifact: {error}"))?,
         ) != expected_identity
-        || ObjectIdentity::from_metadata(
-            &File::from(
-                rustix::fs::openat2(
-                    &custody.root,
-                    relative,
-                    rustix::fs::OFlags::RDONLY
-                        | rustix::fs::OFlags::NOFOLLOW
-                        | rustix::fs::OFlags::CLOEXEC,
-                    rustix::fs::Mode::empty(),
-                    rustix::fs::ResolveFlags::BENEATH
-                        | rustix::fs::ResolveFlags::NO_SYMLINKS
-                        | rustix::fs::ResolveFlags::NO_MAGICLINKS
-                        | rustix::fs::ResolveFlags::NO_XDEV,
-                )
-                .map_err(|error| format!("collector artifact path changed: {error}"))?,
-            )
-            .metadata()
-            .map_err(|error| format!("collector artifact path changed: {error}"))?,
-        ) != expected_identity
+        || open_retained_leaf(
+            &custody.root,
+            relative,
+            Some(expected_identity),
+            false,
+            "collector artifact path",
+        )
+        .is_err()
     {
         return Err("collector artifact changed while hashing".to_owned());
     }
@@ -3560,9 +4115,101 @@ mod tests {
     use super::*;
     use fe2o3_semantic_import::decode_profiler_bundle_v4;
     use std::cell::Cell;
+    use std::sync::atomic::AtomicBool as TestAtomicBool;
     use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 
     static NEXT_TOPOLOGY_FIXTURE: AtomicU64 = AtomicU64::new(0);
+
+    struct DelayedFifoWriter {
+        stop: Arc<TestAtomicBool>,
+        thread: Option<thread::JoinHandle<()>>,
+    }
+
+    impl DelayedFifoWriter {
+        fn start(path: PathBuf) -> Self {
+            let stop = Arc::new(TestAtomicBool::new(false));
+            let worker_stop = Arc::clone(&stop);
+            let thread = thread::spawn(move || {
+                for _ in 0..75 {
+                    if worker_stop.load(Ordering::Acquire) {
+                        return;
+                    }
+                    thread::sleep(Duration::from_millis(10));
+                }
+                loop {
+                    if worker_stop.load(Ordering::Acquire) {
+                        return;
+                    }
+                    match OpenOptions::new()
+                        .write(true)
+                        .custom_flags(libc::O_NONBLOCK | libc::O_CLOEXEC)
+                        .open(&path)
+                    {
+                        Ok(mut fifo) => {
+                            let _ = fifo.write_all(b"substituted\n");
+                            return;
+                        }
+                        Err(error) if error.raw_os_error() == Some(libc::ENXIO) => {
+                            thread::sleep(Duration::from_millis(5));
+                        }
+                        Err(_) => return,
+                    }
+                }
+            });
+            Self {
+                stop,
+                thread: Some(thread),
+            }
+        }
+
+        fn finish(mut self) {
+            self.stop.store(true, Ordering::Release);
+            self.thread.take().unwrap().join().unwrap();
+        }
+    }
+
+    impl Drop for DelayedFifoWriter {
+        fn drop(&mut self) {
+            self.stop.store(true, Ordering::Release);
+            if let Some(thread) = self.thread.take() {
+                let _ = thread.join();
+            }
+        }
+    }
+
+    fn test_custody(label: &str) -> (PathBuf, OutputCustody) {
+        let id = NEXT_TOPOLOGY_FIXTURE.fetch_add(1, AtomicOrdering::Relaxed);
+        let output = env::temp_dir().join(format!(
+            "cargo-fe2o3-profile-{label}-{}-{id}",
+            std::process::id()
+        ));
+        let custody = OutputCustody::create(&output, &[0x42; 32]).unwrap();
+        (output, custody)
+    }
+
+    fn replace_with_fifo(path: &Path) {
+        fs::remove_file(path).unwrap();
+        rustix::fs::mkfifoat(
+            rustix::fs::CWD,
+            path,
+            rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+        )
+        .unwrap();
+    }
+
+    fn assert_fifo_rejection_is_bounded(
+        started: Instant,
+        result: Result<(), String>,
+        writer: DelayedFifoWriter,
+    ) {
+        let elapsed = started.elapsed();
+        writer.finish();
+        assert!(result.is_err());
+        assert!(
+            elapsed < Duration::from_millis(250),
+            "FIFO substitution blocked for {elapsed:?}"
+        );
+    }
 
     struct TopologyFixture {
         root: PathBuf,
@@ -3698,6 +4345,115 @@ mod tests {
     }
 
     #[test]
+    fn sealed_images_are_read_only_content_exact_and_distinct_from_provenance() {
+        let pin = FilePin::open(
+            Path::new("/bin/true"),
+            "test target",
+            MAX_TARGET_BYTES,
+            true,
+        )
+        .unwrap();
+        assert_ne!(pin.identity.inode, pin.image.identity.inode);
+        assert_eq!(pin.digest, pin.image.digest);
+        assert_eq!(pin.identity.size, pin.image.identity.size);
+        pin.validate("test target").unwrap();
+        assert!(
+            OpenOptions::new()
+                .write(true)
+                .open(pin.image.external_path())
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn installed_adapter_is_closed_stable_and_removes_role_environment() {
+        let source = format!(
+            "import os\ndef run():\n    app_env = dict(os.environ)\n{ROCPROF_RUN_ROOT_BLOCK_V1}\n{ROCPROF_TOOL_ASSIGNMENT_V1}\n{ROCPROF_CORE_ASSIGNMENT_V1}\n{ROCPROF_TOOL_RESOLUTION_V1}\n{ROCPROF_CORE_RESOLUTION_V1}\n{ROCPROF_PRELOAD_ORDER_V1}\n"
+        );
+        let adapted =
+            String::from_utf8(derive_installed_collector_adapter_v1(&source).unwrap()).unwrap();
+        assert!(adapted.contains(&format!(
+            "ROCPROF_TOOL_LIBRARY = app_env.pop(\"{SEALED_TOOL_ENV_V1}\")"
+        )));
+        assert!(adapted.contains(&format!(
+            "ROCPROF_SDK_LIBRARY = app_env.pop(\"{SEALED_CORE_ENV_V1}\")"
+        )));
+        assert!(!adapted.contains("os.environ.pop"));
+        assert!(adapted.contains(&format!(
+            "ROCM_DIR = app_env.pop(\"{LOGICAL_ROCM_ROOT_ENV_V1}\")"
+        )));
+        assert!(
+            adapted.find("ROCPROF_SDK_LIBRARY,\n").unwrap()
+                < adapted.find("ROCPROF_TOOL_LIBRARY,\n").unwrap()
+        );
+        for hostile in [
+            format!("{source}\n{ROCPROF_TOOL_ASSIGNMENT_V1}\n"),
+            source.replace(
+                ROCPROF_CORE_ASSIGNMENT_V1,
+                "    ROCPROF_SDK_LIBRARY = 'other'",
+            ),
+            source.replace(ROCPROF_PRELOAD_ORDER_V1, "    append_preload = []"),
+            source.replace(ROCPROF_RUN_ROOT_BLOCK_V1, "    ROCM_DIR = '/unsupported'"),
+        ] {
+            assert!(derive_installed_collector_adapter_v1(&hostile).is_err());
+        }
+    }
+
+    #[test]
+    fn att_plan_discloses_sealed_decoder_boundary_and_collection_fails_closed() {
+        let id = NEXT_TOPOLOGY_FIXTURE.fetch_add(1, AtomicOrdering::Relaxed);
+        let root = env::temp_dir().join(format!(
+            "cargo-fe2o3-profile-att-sealed-{}-{id}",
+            std::process::id()
+        ));
+        fs::create_dir(&root).unwrap();
+        let tool = root.join("rocprofv3");
+        fs::write(
+            &tool,
+            "#!/usr/bin/env python3\n# --kernel-trace --advanced-thread-trace\nraise SystemExit(99)\n",
+        )
+        .unwrap();
+        fs::set_permissions(&tool, fs::Permissions::from_mode(0o700)).unwrap();
+        let output = root.join("capture");
+        let python = discover_python().expect("test requires the reviewed native Python");
+        let base = vec![
+            "--kind".to_owned(),
+            "att".to_owned(),
+            "--tool".to_owned(),
+            tool.to_string_lossy().into_owned(),
+            "--python".to_owned(),
+            python.to_string_lossy().into_owned(),
+            "--output-dir".to_owned(),
+            output.to_string_lossy().into_owned(),
+            "--".to_owned(),
+            "/bin/true".to_owned(),
+        ];
+        let plan = command(&base).unwrap();
+        assert!(plan.output().contains("collection-readiness: unavailable"));
+        assert!(plan.output().contains(
+            "collection-unavailable-reason: att-decoder-requires-mutable-directory-namespace-without-sealed-route"
+        ));
+        let authorization = plan
+            .output()
+            .lines()
+            .find_map(|line| line.strip_prefix("collection-authorization: "))
+            .unwrap();
+        let mut collect = base;
+        collect.splice(
+            0..0,
+            [
+                "--collect".to_owned(),
+                "--authorize-collection".to_owned(),
+                authorization.to_owned(),
+            ],
+        );
+        let error = command(&collect).unwrap_err();
+        assert!(error.contains("ATT collection is unavailable under sealed execution"));
+        assert!(!output.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn dispatch_source_admission_propagates_internal_failures() {
         assert_eq!(classify_dispatch_source_admission_v1(Ok(())).unwrap(), true);
         assert_eq!(
@@ -3729,10 +4485,13 @@ mod tests {
         );
         let source_literal =
             serde_json::to_string(&String::from_utf8(source.to_vec()).unwrap()).unwrap();
+        let execution_evidence = root.join("exact-script-execution.txt");
+        let execution_evidence_literal =
+            serde_json::to_string(&execution_evidence.to_string_lossy()).unwrap();
         fs::write(
             &tool,
             format!(
-                "#!/usr/bin/env python3\n# --kernel-trace --advanced-thread-trace\nimport os, subprocess, sys\nargs=sys.argv[1:]\nout=args[args.index('--output-directory')+1]\nwith open(os.path.join(out, 'dispatch.json'), 'w', encoding='utf-8') as stream:\n    stream.write({source_literal})\ntarget=args[args.index('--')+1:]\nraise SystemExit(subprocess.run(target, check=False).returncode)\n"
+                "#!/usr/bin/env python3\n# --kernel-trace --advanced-thread-trace\nimport os, subprocess, sys\nwith open({execution_evidence_literal}, 'w', encoding='utf-8') as stream:\n    stream.write(__file__ + '\\n' + sys.argv[0] + '\\n' + str(any(key.startswith('FE2O3_ROCPROF_') for key in os.environ)))\nargs=sys.argv[1:]\nout=args[args.index('--output-directory')+1]\nwith open(os.path.join(out, 'dispatch.json'), 'w', encoding='utf-8') as stream:\n    stream.write({source_literal})\ntarget=args[args.index('--')+1:]\nraise SystemExit(subprocess.run(target, check=False).returncode)\n"
             ),
         )
         .unwrap();
@@ -3815,6 +4574,10 @@ mod tests {
         .unwrap();
         assert_eq!(revalidations.get(), 6);
         assert!(report.succeeded, "{}", report.output);
+        assert_eq!(
+            fs::read_to_string(execution_evidence).unwrap(),
+            format!("{}\n{}\nFalse", tool.display(), tool.display())
+        );
         let bundle = output.join(PROFILE_DISPATCH_BUNDLE_FILE_V1);
         let receipt = output.join(PROFILE_DISPATCH_RECEIPT_FILE_V1);
         let manifest = output.join(MANIFEST_FILE);
@@ -4113,6 +4876,163 @@ mod tests {
             assert!(validate_relative(path).is_err(), "{path}");
         }
         assert!(validate_relative("agent/capture_results.json").is_ok());
+    }
+
+    #[test]
+    fn artifact_enumeration_bound_counts_directories_and_zero_byte_files() {
+        let (output, custody) = test_custody("artifact-fanout");
+        fs::create_dir(output.join("nested")).unwrap();
+        fs::write(output.join("empty-root"), []).unwrap();
+        fs::write(output.join("nested/empty-child"), []).unwrap();
+        let artifacts = scan_artifacts_with_entry_limit(&custody, 1024, 4).unwrap();
+        assert_eq!(artifacts.len(), 2);
+        assert!(
+            scan_artifacts_with_entry_limit(&custody, 1024, 3)
+                .unwrap_err()
+                .contains("global entry-count bound")
+        );
+        custody.cleanup().unwrap();
+    }
+
+    #[test]
+    fn capture_retains_final_bytes_after_normal_leader_exit() {
+        let payload = "x".repeat(64 * 1024);
+        let mut child = Command::new("/bin/sh")
+            .args([
+                "-c",
+                "printf %s \"$1\"; printf final-stderr >&2",
+                "sh",
+                &payload,
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .process_group(0)
+            .spawn()
+            .unwrap();
+        let supervised =
+            supervise(&mut child, Duration::from_secs(5), payload.len(), 1024).unwrap();
+        assert_eq!(supervised.reason, StopReason::Exited);
+        assert_eq!(supervised.stdout.bytes, payload.as_bytes());
+        assert_eq!(supervised.stderr.bytes, b"final-stderr");
+    }
+
+    #[test]
+    fn escaped_pipe_holder_cannot_block_capture_completion() {
+        let python_path = discover_python().expect("test requires the reviewed native Python");
+        let python = FilePin::open(
+            &python_path,
+            "test Python interpreter",
+            MAX_INTERPRETER_BYTES,
+            true,
+        )
+        .unwrap();
+        let mut child = Command::new(python.execution_path())
+            .arg0(&python.canonical_path)
+            .args([
+                "-c",
+                "import os,time\npid=os.fork()\nif pid == 0:\n os.setsid()\n time.sleep(30)\n os._exit(0)\nprint(pid, flush=True)\n",
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .process_group(0)
+            .spawn()
+            .unwrap();
+        let started = Instant::now();
+        let supervised = supervise(&mut child, Duration::from_secs(5), 1024, 1024).unwrap();
+        let elapsed = started.elapsed();
+        let escaped_pid = std::str::from_utf8(&supervised.stdout.bytes)
+            .unwrap()
+            .trim()
+            .parse::<i32>()
+            .unwrap();
+        // SAFETY: the reported pid belongs to the test-only forked descendant.
+        let _ = unsafe { libc::kill(escaped_pid, libc::SIGKILL) };
+        let escaped_process = PathBuf::from(format!("/proc/{escaped_pid}"));
+        for _ in 0..100 {
+            if !escaped_process.exists() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(supervised.reason, StopReason::Exited);
+        assert!(
+            elapsed < Duration::from_secs(1),
+            "capture waited for escaped pipe holder for {elapsed:?}"
+        );
+        assert!(
+            !escaped_process.exists(),
+            "escaped test descendant survived cleanup"
+        );
+    }
+
+    #[test]
+    fn ownership_guard_fifo_substitution_is_rejected_without_blocking() {
+        let (output, custody) = test_custody("guard-fifo");
+        let guard = output.join(OWNERSHIP_FILE);
+        replace_with_fifo(&guard);
+        let writer = DelayedFifoWriter::start(guard.clone());
+        let started = Instant::now();
+        let result = custody.validate();
+        assert_fifo_rejection_is_bounded(started, result, writer);
+        fs::remove_file(guard).unwrap();
+        fs::remove_dir_all(output).unwrap();
+    }
+
+    #[test]
+    fn durable_record_fifo_substitution_is_rejected_without_blocking() {
+        let (output, custody) = test_custody("record-fifo");
+        custody
+            .commit_record("record.bin", ".record.redo", b"record", 64)
+            .unwrap();
+        let record = output.join("record.bin");
+        replace_with_fifo(&record);
+        let writer = DelayedFifoWriter::start(record);
+        let started = Instant::now();
+        let result = custody.read_record("record.bin", 64).map(|_| ());
+        assert_fifo_rejection_is_bounded(started, result, writer);
+        custody.cleanup().unwrap();
+    }
+
+    #[test]
+    fn retained_source_fifo_substitution_is_rejected_without_blocking() {
+        let (output, custody) = test_custody("source-fifo");
+        let source_path = output.join("dispatch.json");
+        let bytes = b"{}\n";
+        fs::write(&source_path, bytes).unwrap();
+        let metadata = fs::symlink_metadata(&source_path).unwrap();
+        let artifact = Artifact {
+            relative: "dispatch.json".to_owned(),
+            length: metadata.len(),
+            digest: Sha256::digest(bytes).into(),
+            identity: ObjectIdentity::from_metadata(&metadata),
+        };
+        let retained = RetainedDispatchSourceV1::open(&custody, &artifact).unwrap();
+        replace_with_fifo(&source_path);
+        let writer = DelayedFifoWriter::start(source_path);
+        let started = Instant::now();
+        let result = retained.revalidate(&custody);
+        assert_fifo_rejection_is_bounded(started, result, writer);
+        custody.cleanup().unwrap();
+    }
+
+    #[test]
+    fn artifact_final_reopen_fifo_substitution_is_rejected_without_blocking() {
+        let (output, custody) = test_custody("artifact-fifo");
+        let artifact_path = output.join("artifact.bin");
+        fs::write(&artifact_path, b"artifact").unwrap();
+        let metadata = fs::symlink_metadata(&artifact_path).unwrap();
+        let writer = std::cell::RefCell::new(None);
+        let started = Instant::now();
+        let result = hash_file_with_reopen_hook(&custody, "artifact.bin", &metadata, || {
+            replace_with_fifo(&artifact_path);
+            writer.replace(Some(DelayedFifoWriter::start(artifact_path.clone())));
+        })
+        .map(|_| ());
+        let writer = writer.into_inner().expect("reopen hook ran");
+        assert_fifo_rejection_is_bounded(started, result, writer);
+        custody.cleanup().unwrap();
     }
 
     #[test]

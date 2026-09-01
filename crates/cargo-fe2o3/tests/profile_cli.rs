@@ -212,6 +212,10 @@ fn gfx942_kfd_agent() -> Option<serde_json::Value> {
     agent
 }
 
+fn require_gfx942_profile_test() -> bool {
+    env::var("FE2O3_REQUIRE_GFX942_PROFILE_TEST").as_deref() == Ok("1")
+}
+
 fn exact_gfx942_kir(fixture: &Fixture) -> PathBuf {
     let mut module = Module::new("profile-cli-gfx942-v1");
     module
@@ -694,20 +698,17 @@ fn legacy_wave_declaration_cannot_bypass_canonical_kir_admission() {
 }
 
 #[test]
-fn att_import_recipe_remains_raw_and_deferred_for_visible_devices() {
+fn att_plan_is_unavailable_without_a_mutation_proof_sealed_decoder_route() {
     let fixture = Fixture::new(false);
     let output = fixture.plan_with_options(&fixture.output("capture"), &["--kind", "att"], &[]);
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    if stdout.contains("device[0]:") {
-        assert!(stdout.contains("next-import-program: fe2o3-profiler-import"));
-        assert!(stdout.contains(
-            "next-import-status: deferred-until-att-manifest-references-are-content-bound"
-        ));
-        assert!(stdout.contains("next-import-deferred-flag: --att-agent-id"));
-    } else {
-        assert!(stdout.contains("unavailable-no-stable-direct-kfd-device-identity"));
-    }
+    assert!(stdout.contains("collection-readiness: unavailable"));
+    assert!(stdout.contains(
+        "next-import-status: unavailable-att-decoder-has-no-mutation-proof-sealed-directory-route"
+    ));
+    assert!(!stdout.contains("next-import-program:"));
+    assert!(!stdout.contains("next-import-deferred-flag:"));
 }
 
 #[test]
@@ -843,6 +844,81 @@ raise SystemExit(0)
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
     panic!("collector descendant survived normal leader exit");
+}
+
+#[test]
+fn installed_collector_executes_sealed_entry_images_without_role_env_leakage() {
+    let tool = Path::new("/opt/rocm-7.2.4/bin/rocprofv3");
+    let python = Path::new("/usr/bin/python3.12");
+    if !tool.is_file() || !python.is_file() {
+        assert!(
+            !require_gfx942_profile_test(),
+            "required MI300X profile test lacks the reviewed ROCm 7.2.4 collector or Python 3.12"
+        );
+        return;
+    }
+    let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+    let root = env::temp_dir().join(format!(
+        "cargo-fe2o3-profile-sealed-installed-{}-{id}",
+        process::id()
+    ));
+    fs::create_dir(&root).unwrap();
+    let output = root.join("capture");
+    let evidence = root.join("target-evidence.txt");
+    let code = format!(
+        "import os; open({:?},'w').write('role='+str(any(k.startswith(\"FE2O3_ROCPROF_\") for k in os.environ))+'\\n'+open('/proc/self/maps').read())",
+        evidence
+    );
+    let invoke = |authorization: Option<&str>| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"));
+        command.args([
+            "profile",
+            "--kind",
+            "dispatch-json",
+            "--tool",
+            tool.to_str().unwrap(),
+            "--output-dir",
+            output.to_str().unwrap(),
+        ]);
+        if let Some(authorization) = authorization {
+            command.args(["--collect", "--authorize-collection", authorization]);
+        }
+        command
+            .args(["--", python.to_str().unwrap(), "-c", &code])
+            .output()
+            .unwrap()
+    };
+    let plan = invoke(None);
+    assert!(
+        plan.status.success(),
+        "{}",
+        String::from_utf8_lossy(&plan.stderr)
+    );
+    assert_eq!(
+        field(&plan, "collector-execution-mode"),
+        "sealed-installed-adapter-v1"
+    );
+    let authorization = authorization(&plan);
+    let collected = invoke(Some(&authorization));
+    assert!(
+        collected.status.success(),
+        "{}",
+        String::from_utf8_lossy(&collected.stderr)
+    );
+    let evidence = fs::read_to_string(&evidence).unwrap();
+    assert!(evidence.starts_with("role=False\n"));
+    assert!(!evidence.contains("/opt/rocm-7.2.4/lib/librocprofiler-sdk.so"));
+    assert!(!evidence.contains("/opt/rocm-7.2.4/lib/rocprofiler-sdk/librocprofiler-sdk-tool.so"));
+    let image_inodes = evidence
+        .lines()
+        .filter(|line| line.contains("/memfd:fe2o3-profile-execution-v1 (deleted)"))
+        .filter_map(|line| line.split_whitespace().nth(4))
+        .collect::<std::collections::BTreeSet<_>>();
+    assert!(
+        image_inodes.len() >= 3,
+        "expected sealed target, SDK core, and SDK tool mappings"
+    );
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

@@ -38,6 +38,10 @@ source-bound observations.
   kernel-dispatch header with `Stream_Id` and `Agent N` absolute agent syntax.
   Header additions, omissions, reordering, `Process_Id` dialects, hybrid
   headers, bare agent numbers, and noncanonical numeric spellings are rejected.
+  LDS, scratch, register-count, workgroup, and grid columns retain the
+  serializer's exact unsigned 32-bit bounds, as does the absolute agent node;
+  queue, stream, thread, dispatch, kernel, and correlation IDs plus timestamps
+  retain unsigned 64-bit bounds.
   The checked-in JSON and CSV files are deterministic synthetic vocabulary
   fixtures, not collector runs, hardware execution, or authenticated
   observations; their manifest pins exact bytes and reviewed serializer files.

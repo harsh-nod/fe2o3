@@ -198,8 +198,8 @@ if ! sed -n '/^  parity-policy:/,/^  generic-core:/p' "${GENERIC_WORKFLOW}" |
   exit 1
 fi
 if ! sed -n '/^  generic-core:/,/^  rustc-codegen-shards:/p' "${GENERIC_WORKFLOW}" |
-  rg -Fx '    timeout-minutes: 60' >/dev/null; then
-  printf 'generic core timeout is not exactly 60 minutes\n' >&2
+  rg -Fx '    timeout-minutes: 90' >/dev/null; then
+  printf 'generic core timeout is not exactly 90 minutes\n' >&2
   exit 1
 fi
 if ! sed -n '/^  rustc-codegen-shards:/,/^  generic-validation:/p' "${GENERIC_WORKFLOW}" |
