@@ -201,8 +201,19 @@ pub struct AgentSourceIsaLlvmCoordinateV1 {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentSourceIsaCharacteristicServiceProvenanceV1 {
+    PreloadedCollection,
+    CanonicalSelfClaimedArchive,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct AgentSourceIsaCharacteristicAuthorityV1 {
     pub observation_only: bool,
+    pub service_provenance: AgentSourceIsaCharacteristicServiceProvenanceV1,
+    pub canonical_self_claimed_archive: bool,
+    pub archive_authenticity_proved: bool,
+    pub producer_evidence_authenticated: bool,
     pub compiler_authority: bool,
     pub proof_authority: bool,
     pub publication_authority: bool,
@@ -218,9 +229,19 @@ pub struct AgentSourceIsaCharacteristicAuthorityV1 {
 }
 
 impl AgentSourceIsaCharacteristicAuthorityV1 {
-    fn for_collection(collection: &SourceIsaCharacteristicCollectionV1) -> Self {
+    fn for_collection(
+        collection: &SourceIsaCharacteristicCollectionV1,
+        provenance: AgentSourceIsaCharacteristicServiceProvenanceV1,
+    ) -> Self {
         Self {
             observation_only: true,
+            service_provenance: provenance,
+            canonical_self_claimed_archive: matches!(
+                provenance,
+                AgentSourceIsaCharacteristicServiceProvenanceV1::CanonicalSelfClaimedArchive
+            ),
+            archive_authenticity_proved: false,
+            producer_evidence_authenticated: false,
             compiler_authority: false,
             proof_authority: false,
             publication_authority: false,
@@ -238,6 +259,13 @@ impl AgentSourceIsaCharacteristicAuthorityV1 {
 
     fn has_valid_nonclaims(self) -> bool {
         self.observation_only
+            && self.canonical_self_claimed_archive
+                == matches!(
+                    self.service_provenance,
+                    AgentSourceIsaCharacteristicServiceProvenanceV1::CanonicalSelfClaimedArchive
+                )
+            && !self.archive_authenticity_proved
+            && !self.producer_evidence_authenticated
             && !self.compiler_authority
             && !self.proof_authority
             && !self.publication_authority
@@ -757,6 +785,7 @@ impl Error for AgentSourceIsaCharacteristicDecodeErrorV1 {}
 
 pub struct AgentSourceIsaCharacteristicServiceV1 {
     collection: SourceIsaCharacteristicCollectionV1,
+    provenance: AgentSourceIsaCharacteristicServiceProvenanceV1,
     request_ids: Vec<u64>,
     request_count: u32,
     response_revision: u64,
@@ -764,8 +793,42 @@ pub struct AgentSourceIsaCharacteristicServiceV1 {
 }
 
 impl AgentSourceIsaCharacteristicServiceV1 {
+    /// Builds a read-only service from a canonical, self-claimed archive.
+    ///
+    /// This verifies the archive's bounded canonical encoding and internal identity. It does not
+    /// authenticate its producer or independently project its claims, and the collection remains
+    /// inaccessible outside this service. Every response preserves those nonclaims explicitly.
+    pub fn from_canonical_observation_archive_v1(
+        encoded: &[u8],
+    ) -> Result<Self, AgentSourceIsaCharacteristicErrorCodeV1> {
+        let inert = InertSourceIsaCharacteristicCollectionV1::decode_canonical(encoded)
+            .map_err(map_collection_error)?;
+        let collection = inert.into_self_claimed_archive_for_agent_inspection_v1();
+        if collection
+            .encode_canonical()
+            .map_err(map_collection_error)?
+            != encoded
+        {
+            return Err(AgentSourceIsaCharacteristicErrorCodeV1::InvalidCollection);
+        }
+        Self::new_with_provenance(
+            collection,
+            AgentSourceIsaCharacteristicServiceProvenanceV1::CanonicalSelfClaimedArchive,
+        )
+    }
+
     pub fn new(
         collection: SourceIsaCharacteristicCollectionV1,
+    ) -> Result<Self, AgentSourceIsaCharacteristicErrorCodeV1> {
+        Self::new_with_provenance(
+            collection,
+            AgentSourceIsaCharacteristicServiceProvenanceV1::PreloadedCollection,
+        )
+    }
+
+    fn new_with_provenance(
+        collection: SourceIsaCharacteristicCollectionV1,
+        provenance: AgentSourceIsaCharacteristicServiceProvenanceV1,
     ) -> Result<Self, AgentSourceIsaCharacteristicErrorCodeV1> {
         collection
             .canonical_byte_len()
@@ -778,6 +841,7 @@ impl AgentSourceIsaCharacteristicServiceV1 {
             .map_err(|_| AgentSourceIsaCharacteristicErrorCodeV1::AllocationFailure)?;
         Ok(Self {
             collection,
+            provenance,
             request_ids,
             request_count: 0,
             response_revision: 0,
@@ -883,7 +947,7 @@ impl AgentSourceIsaCharacteristicServiceV1 {
                 false,
             );
         }
-        match execute_request(&self.collection, request) {
+        match execute_request(&self.collection, self.provenance, request) {
             Ok(result) => AgentSourceIsaCharacteristicResponseV1::Ok {
                 schema: AGENT_SOURCE_ISA_CHARACTERISTIC_RESPONSE_SCHEMA_V1.to_owned(),
                 request_id,
@@ -904,9 +968,10 @@ impl AgentSourceIsaCharacteristicServiceV1 {
 
 fn execute_request(
     collection: &SourceIsaCharacteristicCollectionV1,
+    provenance: AgentSourceIsaCharacteristicServiceProvenanceV1,
     request: AgentSourceIsaCharacteristicRequestV1,
 ) -> Result<AgentSourceIsaCharacteristicResultV1, AgentSourceIsaCharacteristicErrorCodeV1> {
-    let authority = AgentSourceIsaCharacteristicAuthorityV1::for_collection(collection);
+    let authority = AgentSourceIsaCharacteristicAuthorityV1::for_collection(collection, provenance);
     match request {
         AgentSourceIsaCharacteristicRequestV1::DiscoverCapabilities { .. } => {
             Ok(AgentSourceIsaCharacteristicResultV1::Capabilities {
@@ -2917,6 +2982,22 @@ mod tests {
         );
     }
 
+    fn assert_discovery_authority_mutation_is_rejected(
+        mutate: impl FnOnce(&mut AgentSourceIsaCharacteristicAuthorityV1),
+    ) {
+        let mut service = AgentSourceIsaCharacteristicServiceV1::new(collection()).unwrap();
+        let mut response = handle(&mut service, &discover(91));
+        let AgentSourceIsaCharacteristicResponseV1::Ok {
+            result: AgentSourceIsaCharacteristicResultV1::Capabilities { authority, .. },
+            ..
+        } = &mut response
+        else {
+            panic!("expected capabilities response");
+        };
+        mutate(authority);
+        assert_resealed_response_is_rejected(response);
+    }
+
     fn forged_cursor(
         collection: [u8; 32],
         query: [u8; 32],
@@ -2985,9 +3066,60 @@ mod tests {
         };
         assert_eq!(response_revision, 1);
         assert!(authority.has_valid_nonclaims());
+        assert_eq!(
+            authority.service_provenance,
+            AgentSourceIsaCharacteristicServiceProvenanceV1::PreloadedCollection
+        );
+        assert!(!authority.canonical_self_claimed_archive);
         assert!(authority.sparse_final_hsaco_anchors_present);
         assert_eq!(collection.identity, expected_identity);
         assert_eq!(capabilities, super::capabilities());
+    }
+
+    #[test]
+    fn canonical_archive_service_preserves_self_claim_and_authentication_nonclaims() {
+        let exact = collection();
+        let encoded = exact.encode_canonical().unwrap();
+        let mut service =
+            AgentSourceIsaCharacteristicServiceV1::from_canonical_observation_archive_v1(&encoded)
+                .unwrap();
+        let AgentSourceIsaCharacteristicResponseV1::Ok {
+            result:
+                AgentSourceIsaCharacteristicResultV1::Capabilities {
+                    authority,
+                    collection,
+                    ..
+                },
+            ..
+        } = handle(&mut service, &discover(71))
+        else {
+            panic!("expected archive capabilities response");
+        };
+        assert!(authority.observation_only);
+        assert_eq!(
+            authority.service_provenance,
+            AgentSourceIsaCharacteristicServiceProvenanceV1::CanonicalSelfClaimedArchive
+        );
+        assert!(authority.canonical_self_claimed_archive);
+        assert!(!authority.archive_authenticity_proved);
+        assert!(!authority.producer_evidence_authenticated);
+        assert!(authority.has_valid_nonclaims());
+        assert_eq!(collection.identity, identity_string(&exact));
+
+        let mut trailing = encoded.clone();
+        trailing.push(0);
+        assert!(matches!(
+            AgentSourceIsaCharacteristicServiceV1::from_canonical_observation_archive_v1(&trailing),
+            Err(AgentSourceIsaCharacteristicErrorCodeV1::InvalidCollection)
+        ));
+        let mut malformed = encoded;
+        malformed[0] ^= 1;
+        assert!(matches!(
+            AgentSourceIsaCharacteristicServiceV1::from_canonical_observation_archive_v1(
+                &malformed
+            ),
+            Err(AgentSourceIsaCharacteristicErrorCodeV1::InvalidCollection)
+        ));
     }
 
     #[test]
@@ -3773,6 +3905,23 @@ mod tests {
         assert!(
             decode_agent_source_isa_characteristic_response_line_v1(encoded.as_bytes()).is_err()
         );
+    }
+
+    #[test]
+    fn archive_provenance_and_authentication_reseals_are_independently_rejected() {
+        assert_discovery_authority_mutation_is_rejected(|authority| {
+            authority.service_provenance =
+                AgentSourceIsaCharacteristicServiceProvenanceV1::CanonicalSelfClaimedArchive;
+        });
+        assert_discovery_authority_mutation_is_rejected(|authority| {
+            authority.canonical_self_claimed_archive = true;
+        });
+        assert_discovery_authority_mutation_is_rejected(|authority| {
+            authority.archive_authenticity_proved = true;
+        });
+        assert_discovery_authority_mutation_is_rejected(|authority| {
+            authority.producer_evidence_authenticated = true;
+        });
     }
 
     #[test]

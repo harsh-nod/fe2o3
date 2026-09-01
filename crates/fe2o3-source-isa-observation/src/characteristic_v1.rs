@@ -3815,6 +3815,15 @@ impl InertSourceIsaCharacteristicCollectionV1 {
     pub const fn grants_hardware_observation_authority(&self) -> bool {
         false
     }
+    pub(crate) fn into_self_claimed_archive_for_agent_inspection_v1(
+        self,
+    ) -> SourceIsaCharacteristicCollectionV1 {
+        // Canonical decoding establishes the archive's internal structure and identity only.
+        // Keeping this conversion crate-private prevents a decoded archive from becoming a
+        // publicly admitted producer projection; the agent protocol separately emits explicit
+        // authority and archive-authentication nonclaims for every response.
+        self.claimed
+    }
     pub fn admit_exact_projection_v1(
         self,
         exact: &SourceIsaCharacteristicCollectionV1,
