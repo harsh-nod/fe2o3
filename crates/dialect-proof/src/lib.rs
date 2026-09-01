@@ -586,7 +586,7 @@ impl RequireTensorRefinementOp {
         let operation = self.get_operation().deref(context);
         let operand_count = operation.get_num_operands();
         if operand_count < 5
-            || (operand_count - 3) % 2 != 0
+            || !(operand_count - 3).is_multiple_of(2)
             || (operand_count - 3) / 2 > MAX_TENSOR_REFINEMENT_COMPONENTS_V1
         {
             return Vec::new();
@@ -607,7 +607,7 @@ impl Verify for RequireTensorRefinementOp {
     fn verify(&self, context: &Context) -> Result<()> {
         let operation = self.get_operation().deref(context);
         let operand_count = operation.get_num_operands();
-        if operand_count < 5 || (operand_count - 3) % 2 != 0 {
+        if operand_count < 5 || !(operand_count - 3).is_multiple_of(2) {
             return verify_err!(
                 self.loc(context),
                 "proof tensor refinement requires a view, an aggregate pair, and at least one complete component pair"
@@ -893,6 +893,7 @@ impl Verify for RelativeErrorF64BitsAttr {
 pub struct RequireNumericalRefinementOp;
 
 impl RequireNumericalRefinementOp {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         context: &mut Context,
         obligation_id: ProofIdAttr,

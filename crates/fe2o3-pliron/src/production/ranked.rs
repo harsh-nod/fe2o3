@@ -2192,34 +2192,29 @@ impl ProductionRankedKernelV1 {
                     noalias_class,
                     ..
                 } = operation
-                {
-                    if *noalias_class != 0 && *allocation_origin == 0
+                    && (*noalias_class != 0 && *allocation_origin == 0
                         || *allocation_origin != 0
                             && allocation_classes
                                 .insert(*allocation_origin, *noalias_class)
-                                .is_some_and(|previous| previous != *noalias_class)
-                    {
-                        return Err(ProductionRankedKernelErrorV1::InvalidAllocationContract);
-                    }
+                                .is_some_and(|previous| previous != *noalias_class))
+                {
+                    return Err(ProductionRankedKernelErrorV1::InvalidAllocationContract);
                 }
                 let result = validate_operation(operation, self.argument_count, &locals)?;
                 if let ProductionRankedOperationV1::Access { indices, .. }
                 | ProductionRankedOperationV1::ValueAccess { indices, .. }
                 | ProductionRankedOperationV1::AtomicAccess { indices, .. }
                 | ProductionRankedOperationV1::AtomicValueAccess { indices, .. } = operation
-                {
-                    if let Some(index) = indices.iter().find_map(|value| {
+                    && let Some(index) = indices.iter().find_map(|value| {
                         let ProductionRankedValueV1::Local(index) = value else {
                             return None;
                         };
                         predicated_indices.contains_key(index).then_some(*index)
-                    }) {
-                        return Err(
-                            ProductionRankedKernelErrorV1::InvalidPredicatedAccessIndexUse {
-                                index,
-                            },
-                        );
-                    }
+                    })
+                {
+                    return Err(
+                        ProductionRankedKernelErrorV1::InvalidPredicatedAccessIndexUse { index },
+                    );
                 }
                 if let ProductionRankedOperationV1::PredicatedAccess { success, .. } = operation {
                     let ProductionRankedValueV1::Local(success) = success else {
@@ -5872,7 +5867,7 @@ fn policy_checked_proof_ids(
         digest.update(input.as_bytes());
         digest_as_proof_id(DigestV1::from_untrusted_bytes(digest.finalize().into()))
     });
-    if identities.iter().any(|identity| *identity == [0; 4])
+    if identities.contains(&[0; 4])
         || identities
             .iter()
             .enumerate()

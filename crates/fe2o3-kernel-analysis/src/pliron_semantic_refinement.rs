@@ -1629,6 +1629,7 @@ fn tensor_element_scalar(element: MatrixElement) -> Option<SemanticTypedScalarV1
     }
 }
 
+#[allow(clippy::result_large_err)]
 pub(crate) fn require_pliron_semantic_refinement_with_analyses_v1(
     context: &Context,
     function: &FuncOp,
@@ -1642,6 +1643,7 @@ pub(crate) fn require_pliron_semantic_refinement_with_analyses_v1(
     }
 }
 
+#[allow(clippy::result_large_err)]
 pub fn require_pliron_semantic_refinement_before_lowering_v1(
     context: &Context,
     function: &FuncOp,

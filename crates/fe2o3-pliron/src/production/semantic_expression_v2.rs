@@ -322,14 +322,14 @@ impl ProductionSemanticExpressionV2 {
                 operand,
             } => {
                 operand.validate_static_domains()?;
-                if *operation == ProductionSemanticUnaryOpV2::Negate {
-                    if let ProductionSemanticScalarTypeV2::Integer { signed: true, bits } = scalar {
-                        let Some(value) = constant_bits(operand) else {
-                            return Err(ProductionSemanticExpressionErrorV2::IncompleteDomain);
-                        };
-                        if signed_value(value, *bits) == -(1_i128 << (bits - 1)) {
-                            return Err(ProductionSemanticExpressionErrorV2::IncompleteDomain);
-                        }
+                if *operation == ProductionSemanticUnaryOpV2::Negate
+                    && let ProductionSemanticScalarTypeV2::Integer { signed: true, bits } = scalar
+                {
+                    let Some(value) = constant_bits(operand) else {
+                        return Err(ProductionSemanticExpressionErrorV2::IncompleteDomain);
+                    };
+                    if signed_value(value, *bits) == -(1_i128 << (bits - 1)) {
+                        return Err(ProductionSemanticExpressionErrorV2::IncompleteDomain);
                     }
                 }
                 Ok(())

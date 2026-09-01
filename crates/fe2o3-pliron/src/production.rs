@@ -1,3 +1,6 @@
+// Production errors retain complete diagnostic evidence in their public variants.
+#![allow(clippy::result_large_err)]
+
 //! Closed, compiler-owned Pliron session for the production pipeline.
 //!
 //! It supports a closed builtin-module recipe and a bounded target-neutral

@@ -558,6 +558,7 @@ impl Error for ProductionPlironPreloweringErrorV2 {
     }
 }
 
+#[allow(clippy::result_large_err)]
 pub fn require_production_pliron_checks_before_lowering_v2(
     context: &Context,
     function: &FuncOp,
@@ -565,6 +566,7 @@ pub fn require_production_pliron_checks_before_lowering_v2(
     require_production_pliron_checks_v2(context, function, None, None)
 }
 
+#[allow(clippy::result_large_err)]
 pub fn require_production_pliron_checks_with_atomic_target_before_lowering_v2(
     context: &Context,
     function: &FuncOp,
@@ -575,6 +577,7 @@ pub fn require_production_pliron_checks_with_atomic_target_before_lowering_v2(
 
 /// Runs the same fixed nine-stage policy pipeline with compiler-supplied
 /// target and host-allocation preconditions checked before those stages.
+#[allow(clippy::result_large_err)]
 pub fn require_production_pliron_checks_with_target_before_lowering_v2(
     context: &Context,
     function: &FuncOp,
@@ -583,6 +586,7 @@ pub fn require_production_pliron_checks_with_target_before_lowering_v2(
     require_production_pliron_checks_v2(context, function, None, Some(target_contract))
 }
 
+#[allow(clippy::result_large_err)]
 pub fn require_production_pliron_checks_with_atomic_and_target_before_lowering_v2(
     context: &Context,
     function: &FuncOp,
@@ -597,6 +601,7 @@ pub fn require_production_pliron_checks_with_atomic_and_target_before_lowering_v
     )
 }
 
+#[allow(clippy::result_large_err)]
 fn run_and_record_production_analysis_stage_v1<T, E>(
     context: &Context,
     function: &FuncOp,
@@ -622,6 +627,7 @@ where
     Ok(result)
 }
 
+#[allow(clippy::result_large_err)]
 fn require_production_pliron_checks_v2(
     context: &Context,
     function: &FuncOp,
