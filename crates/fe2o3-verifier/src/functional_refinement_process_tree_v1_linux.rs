@@ -437,8 +437,7 @@ pub(super) fn execute(
         .saturating_duration_since(Instant::now())
         .as_secs()
         .saturating_add(1)
-        .min(CPU_LIMIT_MAX_SECONDS)
-        .max(1);
+        .clamp(1, CPU_LIMIT_MAX_SECONDS);
     let mut command = Command::new(format!("/proc/self/fd/{RUST_VERIFY_FD}"));
     command
         .arg(format!("/proc/self/fd/{GENERATED_PROOF_SOURCE_FD}"))
@@ -630,6 +629,7 @@ const fn jump(code: u16, value: u32, jump_true: u8, jump_false: u8) -> SockFilte
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn supervise(
     child: &mut Child,
     bindings: &[DescriptorBinding],

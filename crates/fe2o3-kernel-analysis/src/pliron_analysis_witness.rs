@@ -728,7 +728,7 @@ fn exhaustively_check_raw_index(
     operation: usize,
     dimension: usize,
 ) -> Result<(), RawBoundsReplayFailureV1> {
-    if extents.iter().any(|extent| *extent == 0) {
+    if extents.contains(&0) {
         return Ok(());
     }
     let mut invocation = vec![0u64; extents.len()];

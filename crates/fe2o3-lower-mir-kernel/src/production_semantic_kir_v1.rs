@@ -4766,6 +4766,7 @@ fn replay_neutral_workgroup_recipe_v1(
     Ok(events)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn validate_generated_executable_effect_relations_v1(
     semantic: Option<&AdmittedInertSemanticMirV1>,
     correspondence_owner: SemanticFunctionIdV1,
@@ -4969,6 +4970,7 @@ fn validate_mir_pliron_translation_v1(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn validate_mir_pliron_translation_with_semantic_v1(
     semantic: Option<&AdmittedInertSemanticMirV1>,
     module: &Module,
@@ -5330,10 +5332,10 @@ fn validate_mir_pliron_translation_with_semantic_v1(
     })
 }
 
-fn ranked_source_for_semantic_effect_v1<'index>(
-    ranked: &'index RankedCorrelationIndexV1,
+fn ranked_source_for_semantic_effect_v1(
+    ranked: &RankedCorrelationIndexV1,
     site: SemanticAccessSiteV1,
-) -> Option<(SemanticAccessSiteV1, &'index IndexedRankedAccessSourceV1)> {
+) -> Option<(SemanticAccessSiteV1, &IndexedRankedAccessSourceV1)> {
     if let Some(source) = ranked.sources_by_site.get(&site) {
         return Some((site, source));
     }
@@ -7700,6 +7702,7 @@ fn resolve_semantic_header_copy_alias_v1(
     None
 }
 
+#[allow(clippy::type_complexity)]
 fn semantic_cfg_graph_v1(
     function: &SemanticFunctionDeclV1,
 ) -> Result<(Vec<Vec<usize>>, Vec<Vec<usize>>, Vec<bool>), ProductionSemanticKirErrorV1> {
@@ -8236,7 +8239,7 @@ impl ReachableClosureBlockBudgetV1 {
     }
 
     fn charge(&mut self, blocks: usize) -> Result<(), ProductionSemanticKirErrorV1> {
-        let actual = self.consumed.checked_add(blocks).unwrap_or(usize::MAX);
+        let actual = self.consumed.saturating_add(blocks);
         if actual > self.limit {
             return Err(ProductionSemanticKirErrorV1::ResourceLimit {
                 resource: ProductionSemanticKirResourceV1::Blocks,
@@ -9160,10 +9163,7 @@ fn append_correspondence_records_v1<T>(
     resource: ProductionSemanticKirResourceV1,
     limit: usize,
 ) -> Result<(), ProductionSemanticKirErrorV1> {
-    let total = destination
-        .len()
-        .checked_add(source.len())
-        .unwrap_or(usize::MAX);
+    let total = destination.len().saturating_add(source.len());
     enforce_limit(resource, total, limit)?;
     destination.append(&mut source);
     Ok(())
@@ -16410,6 +16410,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn lower_checked_strided_read_view(
         &mut self,
         block: SemanticBlockIdV1,
@@ -20373,6 +20374,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             .map_err(|detail| unsupported(0, None, None, detail))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn coerce_transport_value_v1(
         &mut self,
         operations: &mut Vec<Operation>,
@@ -21303,6 +21305,7 @@ fn lower_workgroup_collective_scratch_transport_v1(
     ])
 }
 
+#[allow(clippy::type_complexity)]
 fn plan_enum_payload_storage_v1(
     types: &[SemanticTypeDeclV1],
     function: &SemanticFunctionDeclV1,

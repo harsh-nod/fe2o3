@@ -410,31 +410,29 @@ fn derive_admitted_obligations_for_kernel(
                     reasons: remaining_reasons.into_boxed_slice(),
                 });
             }
-            if !unsupported_indices.is_empty() {
-                if let Err(detail) = semantic_kir
+            if !unsupported_indices.is_empty()
+                && let Err(detail) = semantic_kir
                     .retained_generic_checks_discharge_unsupported_indices(
                         kernel.id.as_str(),
                         &unsupported_indices,
                     )
-                {
-                    return Err(ProductionFormalMemoryErrorV1::UnsupportedIndexDischarge {
-                        reasons: unsupported_indices.into_boxed_slice(),
-                        detail,
-                    });
-                }
+            {
+                return Err(ProductionFormalMemoryErrorV1::UnsupportedIndexDischarge {
+                    reasons: unsupported_indices.into_boxed_slice(),
+                    detail,
+                });
             }
-            if !guarded_locations.is_empty() {
-                if let Err(detail) = semantic_kir
+            if !guarded_locations.is_empty()
+                && let Err(detail) = semantic_kir
                     .retained_generic_checks_discharge_guarded_accesses(
                         kernel.id.as_str(),
                         &guarded_locations,
                     )
-                {
-                    return Err(ProductionFormalMemoryErrorV1::GuardedAccessDischarge {
-                        reasons: guarded_reasons.into_boxed_slice(),
-                        detail,
-                    });
-                }
+            {
+                return Err(ProductionFormalMemoryErrorV1::GuardedAccessDischarge {
+                    reasons: guarded_reasons.into_boxed_slice(),
+                    detail,
+                });
             }
             (
                 partial,

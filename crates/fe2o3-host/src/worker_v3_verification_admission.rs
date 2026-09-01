@@ -691,6 +691,7 @@ pub struct WorkerV3CompilerExecutionVerificationV1 {
 }
 
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
 enum WorkerV3CompilerExecutionEvidenceV1 {
     #[cfg(target_os = "linux")]
     CurrentRecord(WorkerV3CompilerCurrentRecordAuditV1),
@@ -1004,6 +1005,7 @@ pub struct WorkerV3VerificationDecisionV1 {
 }
 
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
 enum WorkerV3ProofInputEvidenceV1 {
     Validated(ValidatedCompilerProofInputsV4),
     #[cfg(feature = "worker-v3-verifier-test-support")]
@@ -1796,6 +1798,7 @@ impl WorkerV3ProtectedRosterVerificationEvidenceV1 {
     }
 }
 
+#[allow(clippy::large_enum_variant)]
 enum WorkerV3RosterProofInputEvidenceV1 {
     Validated(ValidatedCompilerMultiRootProofInputsV1),
     #[cfg(feature = "worker-v3-verifier-test-support")]

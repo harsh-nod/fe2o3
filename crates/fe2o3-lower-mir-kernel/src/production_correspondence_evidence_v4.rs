@@ -759,6 +759,7 @@ fn exact_record_bytes(
         .ok_or(ProductionCorrespondenceEvidenceErrorV4::Overflow)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn encode(
     semantic_sha256: [u8; 32],
     canonical_kernel_ir: ProductionCanonicalKernelIrIdentityV1,

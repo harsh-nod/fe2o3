@@ -1424,13 +1424,14 @@ fn tensor_instruction_sites(
             body.operations()
                 .iter()
                 .enumerate()
-                .filter_map(move |(operation, item)| {
-                    matches!(item, ProductionRankedOperationV1::TensorLayout { .. }).then(|| {
-                        super::ProductionTensorInstructionSiteV1::new(
-                            u32::try_from(block).unwrap_or(u32::MAX),
-                            u32::try_from(operation).unwrap_or(u32::MAX),
-                        )
-                    })
+                .filter(|(_, item)| {
+                    matches!(item, ProductionRankedOperationV1::TensorLayout { .. })
+                })
+                .map(move |(operation, _)| {
+                    super::ProductionTensorInstructionSiteV1::new(
+                        u32::try_from(block).unwrap_or(u32::MAX),
+                        u32::try_from(operation).unwrap_or(u32::MAX),
+                    )
                 })
         })
         .collect()

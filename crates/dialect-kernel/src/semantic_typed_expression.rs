@@ -230,10 +230,7 @@ impl SemanticTypedExpressionV1 {
         }
     }
 
-    pub fn canonical_transcript_sha256(
-        self: &Self,
-        contract: SemanticNumericalContractV1,
-    ) -> [u8; 32] {
+    pub fn canonical_transcript_sha256(&self, contract: SemanticNumericalContractV1) -> [u8; 32] {
         let mut expression_digest = Sha256::new();
         expression_digest.update(b"fe2o3/production-semantic-expression/v2\0");
         hash_expression(&mut expression_digest, self);

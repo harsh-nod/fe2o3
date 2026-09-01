@@ -734,23 +734,27 @@ pub(crate) fn run_pliron_effect_refinement_with_analyses_v1(
     report(contracts.len(), proved, findings)
 }
 
+type CollectedProofObligationV1 = (
+    [u64; 4],
+    Option<[u64; 4]>,
+    Option<[u64; 4]>,
+    Option<PropertyAttr>,
+);
+
+type CollectedEvidenceReferenceV1 = (
+    Option<[u64; 4]>,
+    Option<[u64; 4]>,
+    Option<PropertyAttr>,
+    Option<EvidenceStatusAttr>,
+    Option<CoveredBoundaryAttr>,
+);
+
 type CollectedV1 = (
     Vec<EffectContractV1>,
     Vec<WriteSiteV1>,
     HashSet<Value>,
-    Vec<(
-        [u64; 4],
-        Option<[u64; 4]>,
-        Option<[u64; 4]>,
-        Option<PropertyAttr>,
-    )>,
-    Vec<(
-        Option<[u64; 4]>,
-        Option<[u64; 4]>,
-        Option<PropertyAttr>,
-        Option<EvidenceStatusAttr>,
-        Option<CoveredBoundaryAttr>,
-    )>,
+    Vec<CollectedProofObligationV1>,
+    Vec<CollectedEvidenceReferenceV1>,
 );
 
 fn collect(
@@ -834,19 +838,8 @@ fn collect(
 
 fn validate_proof(
     contract: &EffectContractV1,
-    obligations: &[(
-        [u64; 4],
-        Option<[u64; 4]>,
-        Option<[u64; 4]>,
-        Option<PropertyAttr>,
-    )],
-    evidence: &[(
-        Option<[u64; 4]>,
-        Option<[u64; 4]>,
-        Option<PropertyAttr>,
-        Option<EvidenceStatusAttr>,
-        Option<CoveredBoundaryAttr>,
-    )],
+    obligations: &[CollectedProofObligationV1],
+    evidence: &[CollectedEvidenceReferenceV1],
     findings: &mut Vec<PlironEffectRefinementFindingV1>,
 ) -> bool {
     let matching = obligations
