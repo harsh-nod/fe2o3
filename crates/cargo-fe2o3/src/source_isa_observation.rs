@@ -513,7 +513,6 @@ const fn map_semantic_anchor_error(
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -920,7 +919,6 @@ mod tests {
         }
     }
 
-
     #[test]
     fn ready_state_has_a_typed_canonical_unavailable_frame() {
         let attempt = attempt(7, [0x31; 16], [0x32; 32]);
@@ -1002,6 +1000,4 @@ mod tests {
             SourceIsaObservationUnavailableReasonV1::SourceProjectionForKirV9
         );
     }
-
-
 }

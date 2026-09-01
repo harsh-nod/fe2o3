@@ -222,8 +222,8 @@ fn read_bounded(path: &Path, limit: usize) -> Result<Vec<u8>, String> {
 }
 
 fn open_regular_file(path: &Path) -> Result<File, String> {
-    let file = File::open(path)
-        .map_err(|error| format!("failed to open {}: {error}", path.display()))?;
+    let file =
+        File::open(path).map_err(|error| format!("failed to open {}: {error}", path.display()))?;
     let metadata = file
         .metadata()
         .map_err(|error| format!("failed to stat {}: {error}", path.display()))?;

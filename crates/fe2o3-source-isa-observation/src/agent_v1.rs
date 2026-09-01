@@ -11,13 +11,13 @@ use sha2::{Digest, Sha256};
 
 use crate::wire_v1::{
     AdmittedSourceIsaObservationV1, MAX_SOURCE_ISA_OBSERVATION_COLLECTION_BYTES_V1,
-    MAX_SOURCE_ISA_OBSERVATION_COLLECTION_HEX_BYTES_V1, SourceIsaObservationCollectionV1,
-    SourceIsaObservationAttemptV1, SourceIsaObservationErrorCodeV1,
+    MAX_SOURCE_ISA_OBSERVATION_COLLECTION_HEX_BYTES_V1, SOURCE_ISA_COLLECTION_HEADER_BYTES_V1,
+    SOURCE_ISA_COLLECTION_IDENTITY_BYTES_V1, SourceIsaObservationAttemptV1,
+    SourceIsaObservationCollectionV1, SourceIsaObservationErrorCodeV1,
     SourceIsaObservationInvocationV1, SourceIsaObservationKirVersionV1,
     SourceIsaObservationOutcomeV1, SourceIsaObservationSessionV1,
-    SourceIsaObservationTargetProfileV1,
-    SourceIsaObservationTransportFailureV1, SourceIsaObservationUnavailableReasonV1,
-    SOURCE_ISA_COLLECTION_HEADER_BYTES_V1, SOURCE_ISA_COLLECTION_IDENTITY_BYTES_V1,
+    SourceIsaObservationTargetProfileV1, SourceIsaObservationTransportFailureV1,
+    SourceIsaObservationUnavailableReasonV1,
 };
 
 pub const AGENT_SOURCE_ISA_REQUEST_SCHEMA_V1: &str = "fe2o3-agent-source-isa-request-v1";
@@ -859,9 +859,7 @@ fn decode_request(line: &[u8]) -> Result<AgentSourceIsaRequestV1, AgentSourceIsa
     serde_json::from_slice(payload).map_err(|_| AgentSourceIsaErrorCodeV1::InvalidRequest)
 }
 
-fn request_identity_hint(
-    line: &[u8],
-) -> (Option<u64>, Option<AgentSourceIsaOperationV1>) {
+fn request_identity_hint(line: &[u8]) -> (Option<u64>, Option<AgentSourceIsaOperationV1>) {
     let payload = line.strip_suffix(b"\n").unwrap_or(line);
     let Ok(hint) = serde_json::from_slice::<RequestIdentityHintV1>(payload) else {
         return (None, None);
@@ -1068,8 +1066,7 @@ fn encode_response(response: AgentSourceIsaResponseV1) -> String {
 
 fn encode_response_with_limit(response: AgentSourceIsaResponseV1, limit: usize) -> String {
     let (request_id, revision, operation) = response.context();
-    serialize_response_bounded(&response, limit)
-    .unwrap_or_else(|| {
+    serialize_response_bounded(&response, limit).unwrap_or_else(|| {
         serialize_response_bounded(
             &AgentSourceIsaResponseV1::error(
                 request_id,
@@ -1196,8 +1193,7 @@ impl SourceIsaCollectionSummaryV1 {
             .and_then(|length| length.checked_add(SOURCE_ISA_COLLECTION_IDENTITY_BYTES_V1));
         self.format == "fe2o3-source-isa-observation-collection-v1"
             && valid_nonzero_sha256_evidence(&self.collection_evidence)
-            && expected_len
-                == usize::try_from(self.collection_evidence.canonical_byte_len).ok()
+            && expected_len == usize::try_from(self.collection_evidence.canonical_byte_len).ok()
             && self.collection_evidence.canonical_byte_len
                 <= MAX_SOURCE_ISA_OBSERVATION_COLLECTION_BYTES_V1 as u64
             && valid_nonzero_lower_hex(&self.configuration_identity, 64)
@@ -1230,9 +1226,13 @@ impl SourceIsaPageV1 {
             Ok(count) => count,
             Err(_) => return false,
         };
-        let unit_count = u32::from(collection.frame_count) + u32::from(collection.missing_unit_count);
+        let unit_count =
+            u32::from(collection.frame_count) + u32::from(collection.missing_unit_count);
         if self.items.len() > usize::from(MAX_AGENT_SOURCE_ISA_PAGE_ITEMS_V1)
-            || self.cursor.as_ref().is_some_and(|cursor| !cursor.is_well_formed())
+            || self
+                .cursor
+                .as_ref()
+                .is_some_and(|cursor| !cursor.is_well_formed())
             || self
                 .next_cursor
                 .as_ref()
@@ -1296,7 +1296,9 @@ impl SourceIsaUnitViewV1 {
                 missing_evidence_id: evidence_id,
                 unit_identity,
             } => {
-                let Some(collection_identity) = decode_fixed_hex(&collection.collection_evidence.digest) else {
+                let Some(collection_identity) =
+                    decode_fixed_hex(&collection.collection_evidence.digest)
+                else {
                     return false;
                 };
                 valid_nonzero_lower_hex(evidence_id, 64)
@@ -1338,12 +1340,9 @@ impl SourceIsaFrameViewV1 {
         ) else {
             return false;
         };
-        let Ok(context) = crate::wire_v1::SourceIsaObservationContextV1::new(
-            config,
-            unit,
-            attempt,
-            finalization,
-        ) else {
+        let Ok(context) =
+            crate::wire_v1::SourceIsaObservationContextV1::new(config, unit, attempt, finalization)
+        else {
             return false;
         };
         let outcome = match &self.outcome {
@@ -1354,7 +1353,8 @@ impl SourceIsaFrameViewV1 {
                 SourceIsaObservationOutcomeV1::Admitted(evidence)
             }
             SourceIsaFrameOutcomeViewV1::Unavailable { reason } => {
-                let Ok(reason_code) = SourceIsaObservationUnavailableReasonV1::from_code(reason.code)
+                let Ok(reason_code) =
+                    SourceIsaObservationUnavailableReasonV1::from_code(reason.code)
                 else {
                     return false;
                 };
@@ -1385,9 +1385,7 @@ impl SourceIsaAdmittedViewV1 {
             "gfx950" => SourceIsaObservationTargetProfileV1::Gfx950,
             _ => return None,
         };
-        if self.structural.target.features
-            != ["wavefrontsize64".to_owned(), "xnack-".to_owned()]
-        {
+        if self.structural.target.features != ["wavefrontsize64".to_owned(), "xnack-".to_owned()] {
             return None;
         }
         let kir_version = match self.structural.kir_version {
@@ -1768,7 +1766,10 @@ mod tests {
         SourceIsaObservationUnavailableReasonV1,
     };
 
-    fn attempt(session: SourceIsaObservationSessionV1, invocation: u8) -> SourceIsaObservationAttemptV1 {
+    fn attempt(
+        session: SourceIsaObservationSessionV1,
+        invocation: u8,
+    ) -> SourceIsaObservationAttemptV1 {
         SourceIsaObservationAttemptV1::new(
             u64::from(invocation),
             session,
@@ -2080,10 +2081,13 @@ mod tests {
             result: AgentSourceIsaResultV1::Capabilities {
                 authority: SourceIsaAuthorityViewV1::OBSERVATION_ONLY,
                 limits: limits(),
-                capabilities: vec![AgentSourceIsaCapabilityV1 {
-                    operation: AgentSourceIsaOperationV1::DiscoverCapabilities,
-                    state: AgentSourceIsaCapabilityStateV1::Available,
-                }; 64],
+                capabilities: vec![
+                    AgentSourceIsaCapabilityV1 {
+                        operation: AgentSourceIsaOperationV1::DiscoverCapabilities,
+                        state: AgentSourceIsaCapabilityStateV1::Available,
+                    };
+                    64
+                ],
             },
         };
         let fallback = encode_response_with_limit(response, 256);
@@ -2120,15 +2124,18 @@ mod tests {
         let observed = (1..=64).collect::<Vec<u8>>();
         let bytes = collection(0x41, &observed, &[]);
         let mut output = Vec::new();
-        run_agent_source_isa_jsonl_v1(
-            &mut Cursor::new(request(1, &bytes, None, 64)),
-            &mut output,
-        )
-        .unwrap();
+        run_agent_source_isa_jsonl_v1(&mut Cursor::new(request(1, &bytes, None, 64)), &mut output)
+            .unwrap();
         assert!(output.len() <= MAX_AGENT_SOURCE_ISA_RESPONSE_BYTES_V1);
         assert_eq!(output.last(), Some(&b'\n'));
         let response: Value = serde_json::from_slice(&output).unwrap();
-        assert_eq!(response["result"]["page"]["items"].as_array().unwrap().len(), 64);
+        assert_eq!(
+            response["result"]["page"]["items"]
+                .as_array()
+                .unwrap()
+                .len(),
+            64
+        );
     }
 
     #[test]
@@ -2203,7 +2210,10 @@ mod tests {
         let mut writer = FlushWriter::default();
         run_agent_source_isa_jsonl_v1(&mut Cursor::new(input), &mut writer).unwrap();
         assert_eq!(writer.flushes, 2);
-        assert_eq!(writer.bytes.iter().filter(|byte| **byte == b'\n').count(), 2);
+        assert_eq!(
+            writer.bytes.iter().filter(|byte| **byte == b'\n').count(),
+            2
+        );
     }
 
     #[test]

@@ -1757,7 +1757,6 @@ dependencies = [
 name = "fe2o3-source-isa-observation"
 version = "0.1.0"
 dependencies = [
- "fe2o3-artifact-transaction",
  "fe2o3-kernel-ir",
  "serde",
  "serde_json",
