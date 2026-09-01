@@ -110,7 +110,10 @@
         "fe2o3-protected-static-executable",
         "fe2o3-runtime",
         "fe2o3-runtime-protocol",
-        "fe2o3-service-host"
+        "fe2o3-service-host",
+        "fe2o3-worker-v3-verification-client",
+        "fe2o3-worker-v3-verification-protocol",
+        "fe2o3-worker-v3-verification-service"
       ]
     },
     {
