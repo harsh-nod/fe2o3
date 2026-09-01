@@ -2423,23 +2423,11 @@ fn render_import_plan(output: &mut String, plan: &Plan) {
         );
         return;
     }
-    if plan.devices.is_empty() {
-        line(
-            output,
-            "next-import-status",
-            "unavailable-no-stable-direct-kfd-device-identity",
-        );
-        line(
-            output,
-            "next-query-status",
-            "unavailable-until-bundle-v4-import",
-        );
-        return;
-    }
     if !render_dispatch_import_plan(
         output,
         plan.verified_kir_v7.as_ref(),
         plan.options.kir_binding.as_ref(),
+        plan.devices.is_empty(),
     ) {
         return;
     }
@@ -2452,6 +2440,7 @@ fn render_dispatch_import_plan(
     output: &mut String,
     kir: Option<&VerifiedKirInputV1>,
     legacy_kir: Option<&KirBinding>,
+    devices_empty: bool,
 ) -> bool {
     let Some(kir) = kir else {
         line(
@@ -2470,6 +2459,19 @@ fn render_dispatch_import_plan(
         );
         return false;
     };
+    if devices_empty {
+        line(
+            output,
+            "next-import-status",
+            "unavailable-no-stable-direct-kfd-device-identity",
+        );
+        line(
+            output,
+            "next-query-status",
+            "unavailable-until-bundle-v4-import",
+        );
+        return false;
+    }
     if let KirTargetCompatibilityV1::Unavailable(reason) = kir.compatibility {
         line(
             output,
@@ -5247,6 +5249,97 @@ mod tests {
             ),
             KirTargetCompatibilityV1::Ready(ObservedGpuTargetProfileV1::Gfx942)
         );
+    }
+
+    #[test]
+    fn dispatch_import_readiness_prioritizes_kir_admission_before_hardware() {
+        let legacy = KirBinding {
+            digest: [0x11; 32],
+            length: 1,
+            wave_width: 64,
+        };
+        for (legacy_kir, expected) in [
+            (None, "unavailable-missing-exact-canonical-kir-v7"),
+            (
+                Some(&legacy),
+                "unavailable-legacy-kir-declaration-is-not-admitted-canonical-kir",
+            ),
+        ] {
+            for devices_empty in [false, true] {
+                let mut output = String::new();
+                assert!(!render_dispatch_import_plan(
+                    &mut output,
+                    None,
+                    legacy_kir,
+                    devices_empty,
+                ));
+                let statuses = output
+                    .lines()
+                    .filter(|line| line.starts_with("next-import-status: "))
+                    .collect::<Vec<_>>();
+                assert_eq!(statuses.len(), 1);
+                assert_eq!(statuses[0], format!("next-import-status: {expected}"));
+                assert!(!output.contains("next-import-program:"));
+                assert!(!output.contains("next-import-arg["));
+            }
+        }
+
+        let fixture = TopologyFixture::new(
+            7,
+            &topology_properties(
+                EXPECTED_AMD_VENDOR_ID,
+                GFX942_TARGET_VERSION,
+                PRODUCTION_WAVE_WIDTH,
+            ),
+        );
+        let kir_path = fixture.root.join("readiness.kir");
+        let owner = VerifiedCanonicalKernelIrV7::from_module(target_module(
+            AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME,
+            WaveWidth::Wave64,
+        ))
+        .unwrap();
+        fs::write(&kir_path, owner.canonical_bytes()).unwrap();
+
+        let no_device_kir = admit_kir_v7(&kir_path, &[]).unwrap();
+        let mut output = String::new();
+        assert!(!render_dispatch_import_plan(
+            &mut output,
+            Some(&no_device_kir),
+            None,
+            true,
+        ));
+        assert_eq!(
+            output
+                .lines()
+                .filter(|line| line.starts_with("next-import-status: "))
+                .collect::<Vec<_>>(),
+            ["next-import-status: unavailable-no-stable-direct-kfd-device-identity"]
+        );
+        assert!(!output.contains("next-import-program:"));
+        assert!(!output.contains("next-import-arg["));
+
+        let devices = [profile_device(
+            7,
+            EXPECTED_AMD_VENDOR_ID,
+            GFX942_TARGET_VERSION,
+            PRODUCTION_WAVE_WIDTH,
+        )];
+        let ready_kir = admit_kir_v7(&kir_path, &devices).unwrap();
+        let mut output = String::new();
+        assert!(render_dispatch_import_plan(
+            &mut output,
+            Some(&ready_kir),
+            None,
+            false,
+        ));
+        assert_eq!(
+            output
+                .lines()
+                .filter(|line| line.starts_with("next-import-status: "))
+                .collect::<Vec<_>>(),
+            ["next-import-status: ready-after-collector-artifact-and-source-size-validation"]
+        );
+        assert!(output.contains("next-import-program: cargo-fe2o3-in-process"));
     }
 
     #[test]

@@ -635,6 +635,8 @@ fn dry_run_is_inert_and_reports_capabilities_without_claiming_observation() {
     assert!(stdout.contains("stateful-action: not-executed"));
     assert!(stdout.contains("dispatch-observability-origin: unavailable"));
     assert!(stdout.contains("collector-runtime-limitation:"));
+    assert!(stdout.contains("next-import-status: unavailable-missing-exact-canonical-kir-v7"));
+    assert!(!stdout.contains("next-import-program:"));
     assert!(!output_directory.exists());
 }
 
