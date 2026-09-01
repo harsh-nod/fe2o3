@@ -89,6 +89,14 @@ stderr with prefix `source-isa-observation-collection-v1`, explicit
 the generated artifact directory because every file there participates in the
 authoritative generation snapshot. See
 [the frozen collection schema](../../docs/source-isa-observation-collection-v1.md).
+The additive
+[characteristic V2 acceptance contract](../../docs/source-isa-characteristic-acceptance-v2.md)
+specifies the family-specific 3x2 matrix, lossless source-anchored, no-source,
+backend-eliminated, and pre-KIR facts, complete zero-result scans, exact
+occurrence-preserving bidirectional queries, resealed hostile substitutions,
+and a config/unit/target-bound Broker V3. Its production adapter and protected
+matrix run are not yet available; contract tests are not protected acceptance
+evidence.
 
 The rustc wrapper owns all device work directly as a mandatory
 `ManagedProductionBuild` transaction. No route enum, optional work slot, or

@@ -138,6 +138,7 @@ Commands:
   backend         Build the rustc codegen backend dylib
   authority-launcher  Run bounded protected build-authority launcher tests
   source-isa-unit-matrix  Run the opt-in protected source/ISA ordinary-unit matrix
+  source-isa-characteristic-contract-v2  Validate the opt-in, unexecuted characteristic matrix contract
   rustc-trampoline    Run non-integrated static rustc trampoline tests
   parity-evidence Run parity, signed-attestation, and queue shell tests
   parity-production-immutable  Run opt-in root ext4/XFS ingestion test
@@ -979,6 +980,32 @@ run_source_isa_unit_matrix() {
       --ignored --exact --test-threads=1 --nocapture
 }
 
+run_source_isa_characteristic_contract_v2() {
+  if [[ "${FE2O3_RUN_SOURCE_ISA_CHARACTERISTIC_CONTRACT_V2:-}" != "1" ]]; then
+    printf '%s\n' \
+      'source/ISA characteristic V2 contract requires FE2O3_RUN_SOURCE_ISA_CHARACTERISTIC_CONTRACT_V2=1' >&2
+    return 2
+  fi
+  local platform_architecture platform_kernel
+  platform_kernel="$(uname -s)" || {
+    printf '%s\n' 'source/ISA characteristic V2 contract could not identify the host kernel' >&2
+    return 2
+  }
+  platform_architecture="$(uname -m)" || {
+    printf '%s\n' 'source/ISA characteristic V2 contract could not identify the host architecture' >&2
+    return 2
+  }
+  if [[ "${platform_kernel}" != "Linux" || "${platform_architecture}" != "x86_64" ]]; then
+    printf 'source/ISA characteristic V2 contract requires Linux x86_64, found %s %s\n' \
+      "${platform_kernel}" "${platform_architecture}" >&2
+    return 2
+  fi
+  run_step source-isa-characteristic-contract-v2 \
+    cargo test --locked -p cargo-fe2o3 --bin cargo-fe2o3 \
+      production_source_isa_characteristic_matrix_v2:: -- \
+      --test-threads=1
+}
+
 run_rustc_trampoline_tests() {
   run_step rustc-trampoline-tests \
     bash scripts/tests/fe2o3-rustc-trampoline.sh
@@ -1224,6 +1251,7 @@ main() {
     backend) run_backend_build ;;
     authority-launcher) run_authority_launcher_tests ;;
     source-isa-unit-matrix) run_source_isa_unit_matrix ;;
+    source-isa-characteristic-contract-v2) run_source_isa_characteristic_contract_v2 ;;
     rustc-trampoline) run_rustc_trampoline_tests ;;
     parity-evidence) run_parity_matrix_checks ;;
     parity-production-immutable) run_parity_production_immutable ;;

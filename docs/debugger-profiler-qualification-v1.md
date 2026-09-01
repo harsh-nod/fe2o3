@@ -101,7 +101,8 @@ other measured modes must use treatment evidence distinct from both the raw
 and no-capture evidence identities. An unavailable comparator with unavailable
 modes remains a valid, explicit qualification state.
 
-T0 still needs an authenticated producer and archived query acceptance without
-a source checkout. T6 still needs approved budgets, real measurements, broader
-target/reset/loss qualification, and committed task-based usability studies.
-CPU performance prediction remains outside scope.
+T0 has archived query acceptance without a source checkout. It still needs an
+authenticated producer or collector path for the archived evidence; canonical
+self-consistency alone is not authenticity. T6 still needs approved budgets,
+real measurements, broader target/reset/loss qualification, and committed
+task-based usability studies. CPU performance prediction remains outside scope.
