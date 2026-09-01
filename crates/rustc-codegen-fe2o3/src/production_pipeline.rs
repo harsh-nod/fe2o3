@@ -2495,6 +2495,20 @@ mod tests {
             fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffV3,
             crate::production_semantic_lineage_v3::ProductionSemanticLineageErrorV3,
         > = crate::production_semantic_lineage_v3::PreparedProductionSemanticLineageV3::finish_for_inert_extraction;
+        assert!(lineage.contains("invocation_custody: &FinishedProtectedRustcInvocationV3"));
+        let inert_lineage_boundary = lineage
+            .find("pub(crate) fn finish_for_inert_extraction(")
+            .expect("explicit inert extraction boundary");
+        assert!(
+            !lineage[..inert_lineage_boundary].contains("invocation: RustcInvocationDescriptorV3")
+        );
+        assert_eq!(
+            lineage[inert_lineage_boundary..]
+                .matches("invocation: RustcInvocationDescriptorV3")
+                .count(),
+            2,
+            "raw descriptors are confined to the inert extraction boundary and its helper",
+        );
 
         let protected_lineage = lineage
             .find("pub(crate) fn finish(")
