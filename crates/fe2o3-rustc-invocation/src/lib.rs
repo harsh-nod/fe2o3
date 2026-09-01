@@ -16,6 +16,7 @@ mod error;
 mod model;
 mod model_v2;
 mod model_v3;
+mod portable_metadata_v1;
 mod rustc_args_v2;
 
 pub use codegen_metadata_v1::{
@@ -54,6 +55,10 @@ pub use model_v2::{
     RustcUnitV2,
 };
 pub use model_v3::{MAX_DESCRIPTOR_BYTES_V3, RustcInvocationDescriptorV3};
+pub use portable_metadata_v1::{
+    PORTABLE_SELECTED_METADATA_DOMAIN_V1, PortableMetadataErrorV1, PortablePackageIdentityV1,
+    capture_cargo_package_identity_v1, portable_rustc_metadata_v1,
+};
 pub use rustc_args_v2::{
     RUSTC_SEPARATE_VALUE_OPTIONS_V2, RustcArgsErrorV2, RustcCompileInvocationV2, RustcInvocationV2,
     RustcPassthroughInvocationV2, classify_rustc_invocation_v2,

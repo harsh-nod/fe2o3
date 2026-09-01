@@ -94,6 +94,10 @@ mod tests {
         if let Some(marker) = std::env::var_os("BINDING_TEST_EXECUTION_MARKER") {
             std::fs::write(marker, b"executed").expect("write host-test execution marker");
         }
+        if let Some(output) = std::env::var_os("BINDING_TEST_VALUE_OUTPUT") {
+            std::fs::write(output, env!("FE2O3_CRATE_BINDING_ID_V1"))
+                .expect("write embedded crate-binding value");
+        }
         for (name, value) in std::env::vars_os() {
             let name = name.to_string_lossy();
             assert!(!name.starts_with("FE2O3_"), "protected variable {name}");
@@ -265,6 +269,33 @@ fn literal_binding_host_test_executes_only_through_the_pinned_runner() {
         String::from_utf8_lossy(&output.stdout)
     );
     assert!(!rustdoc_marker.exists(), "hostile rustdoc executed");
+}
+
+#[test]
+fn binding_is_portable_across_absolute_workspace_roots() {
+    let first = fixture();
+    let relocated = fixture();
+    let first_output = first.0.join("embedded-binding");
+    let relocated_output = relocated.0.join("embedded-binding");
+
+    for (workspace, output) in [(&first, &first_output), (&relocated, &relocated_output)] {
+        let result = binding_test(workspace)
+            .env("CARGO_TARGET_DIR", workspace.0.join("target-binding-host"))
+            .env("BINDING_TEST_VALUE_OUTPUT", output)
+            .output()
+            .expect("run portable binding-only host test");
+        assert!(
+            result.status.success(),
+            "binding-only host test failed: {}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+    }
+
+    let first_binding = std::fs::read_to_string(first_output).expect("read first binding");
+    let relocated_binding =
+        std::fs::read_to_string(relocated_output).expect("read relocated binding");
+    assert_eq!(first_binding.len(), 64);
+    assert_eq!(first_binding, relocated_binding);
 }
 
 #[test]
