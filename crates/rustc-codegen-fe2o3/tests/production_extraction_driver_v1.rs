@@ -3,9 +3,8 @@ use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffV3;
-use fe2o3_verifier::{
-    validate_compiler_multi_root_proof_inputs_v1, validate_compiler_multi_root_target_lineage_v1,
-};
+use fe2o3_target_lineage::validate_compiler_multi_root_target_lineage_v1;
+use fe2o3_verifier::validate_compiler_multi_root_proof_inputs_v1;
 
 #[path = "support/inert_invocation_v3.rs"]
 mod inert_invocation_v3;

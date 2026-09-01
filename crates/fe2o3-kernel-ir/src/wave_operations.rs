@@ -35,7 +35,7 @@ impl Gfx950LdsTransposeFormatV1 {
     }
 }
 
-/// One state transition in the workload-neutral gfx950 LDS transpose protocol.
+/// One state transition in the exact gfx950 LDS transpose target extension.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum Gfx950LdsTransposeOperationKindV1 {
     Current {

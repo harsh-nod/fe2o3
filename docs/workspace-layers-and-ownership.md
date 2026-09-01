@@ -222,6 +222,12 @@ capabilities remain in `fe2o3-amd-target`. The production-directed finalizer
 continues to use one pinned upstream LLVM build, target-machine object emission,
 and in-process LLD linking in the isolated worker.
 
+`fe2o3-target-lineage` owns the target-aware adapter that replays exact
+KIR-to-LLVM lowering and associates that replay with singleton or multi-root
+compiler lineage. It consumes authority-free source-proof owners from
+`fe2o3-verifier`, but the verification layer does not depend on this adapter or
+the AMDGPU lowering implementation.
+
 ### Verification
 
 Verification owns proof checking, proof-package validation, Verus adapters, and

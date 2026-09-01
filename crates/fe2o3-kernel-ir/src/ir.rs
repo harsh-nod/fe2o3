@@ -2,9 +2,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use crate::{
-    AccessMode, AddressSpace, Axis, BarrierSemantics, Gfx950LdsTransposeOperationV1, LaunchDomain,
-    MatrixOperation, MemoryIntrinsicOperation, MemoryOrdering, ScalarType, SemanticOperation,
-    SynchronizationScope, TargetCapability, Type, WaveF32ReductionKindV1, WaveWidth, WorkgroupSize,
+    AccessMode, AddressSpace, Axis, BarrierSemantics, LaunchDomain, MatrixOperation,
+    MemoryIntrinsicOperation, MemoryOrdering, ScalarType, SemanticOperation, SynchronizationScope,
+    TargetCapability, TargetExtensionOperation, Type, WaveF32ReductionKindV1, WaveWidth,
+    WorkgroupSize,
 };
 
 macro_rules! string_id {
@@ -92,6 +93,13 @@ impl Module {
 
     pub fn function(&self, id: &FunctionId) -> Option<&Function> {
         self.functions.iter().find(|function| &function.id == id)
+    }
+
+    /// Builds a validated deterministic view for repeated function lookup.
+    pub fn function_index(
+        &self,
+    ) -> Result<crate::ModuleFunctionIndex<'_>, crate::ModuleFunctionIndexError> {
+        crate::ModuleFunctionIndex::try_new(self)
     }
 
     /// Capabilities implied by operations in the module's defined functions.
@@ -443,7 +451,7 @@ impl Operation {
                 vec![MemoryEffect::Allocate(AddressSpace::Workgroup)]
             }
             OperationKind::Matrix(matrix) => matrix.memory_effects(),
-            OperationKind::Gfx950LdsTranspose(transpose) => transpose.memory_effects(),
+            OperationKind::TargetExtension(extension) => extension.memory_effects(),
             OperationKind::InlineAssembly(assembly) => assembly.memory_effects(),
             OperationKind::Wave(_) => Vec::new(),
             _ => Vec::new(),
@@ -527,7 +535,7 @@ impl Operation {
                 capabilities
             }
             OperationKind::Matrix(matrix) => matrix.required_capabilities(),
-            OperationKind::Gfx950LdsTranspose(transpose) => transpose.required_capabilities(),
+            OperationKind::TargetExtension(extension) => extension.required_capabilities(),
             OperationKind::Wave(wave) => wave.required_capabilities(),
             OperationKind::InlineAssembly(assembly) => assembly.required_capabilities(),
             OperationKind::Call { callee, arguments } => {
@@ -641,8 +649,8 @@ pub enum OperationKind {
     WorkgroupMemory(WorkgroupMemory),
     /// A target-neutral cooperative matrix or matrix-tile operation.
     Matrix(MatrixOperation),
-    /// Exact gfx950 low-precision LDS transpose state transition.
-    Gfx950LdsTranspose(Gfx950LdsTransposeOperationV1),
+    /// A sealed target operation introduced after exact target binding.
+    TargetExtension(TargetExtensionOperation),
     /// A width-bound, convergent operation over one physical AMD-style wave.
     Wave(WaveOperation),
     /// Source-bound target assembly whose authority was established by the frontend.
@@ -673,7 +681,7 @@ impl OperationKind {
             }) => Vec::new(),
             Self::MemoryIntrinsic(intrinsic) => intrinsic.operands(),
             Self::Matrix(matrix) => matrix.operands(),
-            Self::Gfx950LdsTranspose(transpose) => transpose.operands(),
+            Self::TargetExtension(extension) => extension.operands(),
             Self::Unary { operand, .. } => vec![*operand],
             Self::Binary { lhs, rhs, .. } | Self::Compare { lhs, rhs, .. } => vec![*lhs, *rhs],
             Self::Cast { value, .. } => vec![*value],

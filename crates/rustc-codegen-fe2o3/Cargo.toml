@@ -37,6 +37,7 @@ fe2o3-proof-contracts.workspace = true
 fe2o3-process-identity.workspace = true
 fe2o3-rustc-front.workspace = true
 fe2o3-rustc-invocation.workspace = true
+fe2o3-target-lineage.workspace = true
 fe2o3-verifier.workspace = true
 libc.workspace = true
 reserved-fe2o3-symbols.workspace = true

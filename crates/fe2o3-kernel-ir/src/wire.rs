@@ -13,11 +13,12 @@ use crate::{
     LaunchExtent, MatrixElement, MatrixLayout, MatrixLdsProfile, MatrixMultiplyProfile,
     MatrixOperation, MatrixOperationKind, MemoryAccess, MemoryOrdering, Module, ModuleId,
     Operation, OperationKind, PointerType, ScalarType, Signature, SliceType, SwitchCase,
-    SynchronizationScope, TargetCapability, TensorCoordinateExprV1, TensorElementPackingV1,
-    TensorFragmentLayoutV1, TensorInstructionProfileV1, TensorLayoutContractV1, TensorLdsSwizzleV1,
-    TensorMultiplicityV1, TensorOperandRoleV1, TensorSymbolicMapV1, TensorTailMaskV1, Terminator,
-    Type, UnaryOp, ValueDef, ValueId, WaveF32ReductionKindV1, WaveOperation, WaveOperationKind,
-    WaveWidth, WorkgroupBarrier, WorkgroupMemory, WorkgroupMemoryExtent, WorkgroupSize,
+    SynchronizationScope, TargetCapability, TargetExtensionOperation, TensorCoordinateExprV1,
+    TensorElementPackingV1, TensorFragmentLayoutV1, TensorInstructionProfileV1,
+    TensorLayoutContractV1, TensorLdsSwizzleV1, TensorMultiplicityV1, TensorOperandRoleV1,
+    TensorSymbolicMapV1, TensorTailMaskV1, Terminator, Type, UnaryOp, ValueDef, ValueId,
+    WaveF32ReductionKindV1, WaveOperation, WaveOperationKind, WaveWidth, WorkgroupBarrier,
+    WorkgroupMemory, WorkgroupMemoryExtent, WorkgroupSize,
 };
 
 /// Fixed magic at the start of every canonical kernel IR module.
@@ -832,9 +833,12 @@ fn encode_operation_kind(
             writer.u8(22)?;
             encode_matrix_operation(writer, matrix)?;
         }
-        OperationKind::Gfx950LdsTranspose(transpose) => {
+        OperationKind::TargetExtension(extension) => {
             require_v9(writer, "gfx950 LDS transpose operation")?;
             writer.u8(24)?;
+            let transpose = extension
+                .as_amdgcn_gfx950_lds_transpose()
+                .expect("the sealed target-extension set has one V9 operation");
             encode_gfx950_lds_transpose_operation(writer, transpose)?;
         }
         OperationKind::InlineAssembly(assembly) => {
@@ -931,7 +935,9 @@ fn decode_operation_kind(reader: &mut Reader<'_>) -> Result<OperationKind, Kerne
             access: decode_memory_access(reader)?,
         },
         24 if reader.version >= KERNEL_IR_VERSION_V9 => {
-            OperationKind::Gfx950LdsTranspose(decode_gfx950_lds_transpose_operation(reader)?)
+            OperationKind::TargetExtension(TargetExtensionOperation::amdgcn_gfx950_lds_transpose(
+                decode_gfx950_lds_transpose_operation(reader)?,
+            ))
         }
         25 if reader.version >= KERNEL_IR_VERSION_V9 => OperationKind::GuardedStore {
             pointer: ValueId(reader.u32()?),

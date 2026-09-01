@@ -1,4 +1,4 @@
-//! Independent replay of the exact production Kernel IR to LLVM derivation.
+//! Target-backend replay of the exact production Kernel IR to LLVM derivation.
 
 use std::error::Error;
 use std::fmt;
@@ -25,34 +25,42 @@ pub struct ValidatedCompilerKirToLlvmReplayV1 {
 }
 
 impl ValidatedCompilerKirToLlvmReplayV1 {
+    /// Returns the identity of the exact neutral Kernel IR receipt.
     pub const fn kernel_ir_receipt_identity(&self) -> InertKernelIrReceiptIdentityV3 {
         self.kernel_ir_receipt_identity
     }
 
+    /// Returns the identity of the exact AMDGPU lowering receipt.
     pub const fn amdgpu_lowering_receipt_identity(&self) -> InertAmdgpuLoweringReceiptIdentityV3 {
         self.amdgpu_lowering_receipt_identity
     }
 
+    /// Returns the retained target-backend replay result.
     pub const fn replay(&self) -> &ValidatedProductionKirToLlvmReplayV1 {
         &self.replay
     }
 
+    /// Reports whether replay retained the exact configured target binding.
     pub const fn has_exact_target_binding_replay(&self) -> bool {
         self.replay.has_exact_target_binding_replay()
     }
 
+    /// Reports whether replay reproduced the exact KIR-to-LLVM derivation.
     pub const fn has_exact_kir_to_llvm_replay(&self) -> bool {
         self.replay.has_exact_kir_to_llvm_replay()
     }
 
+    /// Returns false because deterministic replay does not authenticate its producer.
     pub const fn authenticates_compiler_origin(&self) -> bool {
         false
     }
 
+    /// Returns false because replay stops before LLVM-to-machine refinement.
     pub const fn establishes_llvm_to_machine_refinement(&self) -> bool {
         false
     }
 
+    /// Returns false because replay never grants load or launch authority.
     pub const fn grants_runtime_authority(&self) -> bool {
         false
     }
@@ -76,8 +84,10 @@ pub fn validate_compiler_kir_to_llvm_replay_v1(
     })
 }
 
+/// Failure while decoding or replaying compiler KIR-to-LLVM evidence.
 #[derive(Debug)]
 pub enum CompilerKirToLlvmReplayValidationErrorV1 {
+    /// The target-backend replay record was invalid or did not reproduce the claimed result.
     Replay(ProductionKirToLlvmReplayErrorV1),
 }
 

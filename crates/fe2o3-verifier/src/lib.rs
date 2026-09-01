@@ -17,9 +17,7 @@ mod authenticated_execution;
 mod authenticated_proof_binding;
 mod authenticated_verus_execution_v2;
 mod compiler_multi_root_proof_v1;
-mod compiler_multi_root_target_lineage_v1;
 mod compiler_proof_binding_v3;
-mod compiler_target_lineage_v1;
 mod control_flow_binding;
 mod executor;
 mod functional_refinement_receipt_v2;
@@ -32,7 +30,6 @@ mod monomorphization_dead_binding;
 mod multi_kernel_proof;
 mod persistent_freshness;
 mod plan;
-mod production_kir_to_llvm_replay_v1;
 mod proof_capsule;
 mod result;
 mod retained_functional_refinement_runtime_v1;
@@ -61,9 +58,6 @@ pub use compiler_multi_root_proof_v1::{
     ValidatedCompilerMultiRootProofInputsV1, ValidatedCompilerMultiRootProofRootV1,
     validate_compiler_multi_root_proof_inputs_v1,
 };
-pub use compiler_multi_root_target_lineage_v1::{
-    ValidatedCompilerMultiRootTargetLineageV1, validate_compiler_multi_root_target_lineage_v1,
-};
 pub use compiler_proof_binding_v3::{
     CompilerProofInputValidationErrorV3, CompilerProofInputValidationErrorV4,
     ValidatedCompilerProofInputsV3, ValidatedCompilerProofInputsV4,
@@ -87,10 +81,6 @@ pub use authenticated_proof_binding::{
     PERSISTENT_AUTHENTICATED_PROOF_EXECUTABLE_BINDING_DOMAIN_V1,
     PersistentlyFreshProofExecutableBindingV1, PersistentlyFreshProofExecutableIdentityV1,
     bind_authenticated_proof_executable_persistent_v1, bind_authenticated_proof_executable_v1,
-};
-pub use compiler_target_lineage_v1::{
-    CompilerTargetLineageValidationErrorV1, ValidatedCompilerTargetLineageV1,
-    validate_compiler_target_lineage_v1,
 };
 pub use control_flow_binding::{
     AUTHENTICATED_CONTROL_FLOW_EXECUTABLE_BINDING_DOMAIN_V1,
@@ -176,10 +166,6 @@ pub use persistent_freshness::{
 pub use plan::{
     CommandSpec, InvocationPaths, InvocationPlan, MAX_PATH_BYTES, MAX_TIMEOUT_SECONDS, PlanError,
     VerifierPolicy, build_invocation_plan,
-};
-pub use production_kir_to_llvm_replay_v1::{
-    CompilerKirToLlvmReplayValidationErrorV1, ValidatedCompilerKirToLlvmReplayV1,
-    validate_compiler_kir_to_llvm_replay_v1,
 };
 pub use proof_capsule::{
     MAX_PROCESS_LOCAL_PROOF_CAPSULE_RECORDS_V1, MAX_PROOF_CAPSULE_BYTES_V1,

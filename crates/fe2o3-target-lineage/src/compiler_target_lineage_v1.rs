@@ -15,9 +15,11 @@ use fe2o3_kernel_ir::{
 };
 use fe2o3_rustc_invocation::{ValidationError, encode_descriptor_v3};
 
+use fe2o3_verifier::ValidatedCompilerProofInputsV4;
+
 use crate::{
     CompilerKirToLlvmReplayValidationErrorV1, ValidatedCompilerKirToLlvmReplayV1,
-    ValidatedCompilerProofInputsV4, validate_compiler_kir_to_llvm_replay_v1,
+    validate_compiler_kir_to_llvm_replay_v1,
 };
 
 /// Move-only ownership of independently decoded target lineage and exact KIR-to-LLVM replay.
@@ -27,7 +29,7 @@ use crate::{
 /// producer authenticity, publication authority, or runtime safety.
 ///
 /// ```compile_fail
-/// use fe2o3_verifier::ValidatedCompilerTargetLineageV1;
+/// use fe2o3_target_lineage::ValidatedCompilerTargetLineageV1;
 /// fn requires_clone<T: Clone>() {}
 /// requires_clone::<ValidatedCompilerTargetLineageV1>();
 /// ```

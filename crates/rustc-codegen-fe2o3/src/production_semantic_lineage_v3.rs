@@ -46,11 +46,13 @@ use fe2o3_pliron::InertProductionMiddleEndEvidenceV5;
 use fe2o3_rustc_invocation::{
     InvocationDigestV3, RustcInvocationDescriptorV3, encode_descriptor_v3,
 };
+use fe2o3_target_lineage::{
+    CompilerKirToLlvmReplayValidationErrorV1, CompilerTargetLineageValidationErrorV1,
+    validate_compiler_kir_to_llvm_replay_v1, validate_compiler_multi_root_target_lineage_v1,
+};
 use fe2o3_verifier::{
-    CanonicalProductionMirPlironVerusExecutionEvidenceV1, CompilerKirToLlvmReplayValidationErrorV1,
-    CompilerMultiRootProofValidationErrorV1, CompilerTargetLineageValidationErrorV1,
+    CanonicalProductionMirPlironVerusExecutionEvidenceV1, CompilerMultiRootProofValidationErrorV1,
     ProductionMirPlironVerusExecutionEvidenceErrorV1, validate_compiler_multi_root_proof_inputs_v1,
-    validate_compiler_multi_root_target_lineage_v1,
 };
 use sha2::{Digest, Sha256};
 
@@ -1295,10 +1297,8 @@ impl PreparedProductionSemanticLineageV3 {
         let amdgpu_lowering = InertAmdgpuLoweringReceiptV3::from_canonical_preimage(
             self.amdgpu_lowering_replay.canonical_bytes(),
         )?;
-        let validated_lowering = fe2o3_verifier::validate_compiler_kir_to_llvm_replay_v1(
-            &self.kernel_ir,
-            &amdgpu_lowering,
-        )?;
+        let validated_lowering =
+            validate_compiler_kir_to_llvm_replay_v1(&self.kernel_ir, &amdgpu_lowering)?;
         let replay_evidence = validated_lowering.replay().evidence();
         let replay_target_identity = TargetLineageIdentityV3::new(
             replay_evidence.target_bound_kernel_ir_identity().sha256(),

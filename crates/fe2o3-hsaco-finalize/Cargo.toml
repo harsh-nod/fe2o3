@@ -50,6 +50,7 @@ fe2o3-compiler-api.workspace = true
 fe2o3-functional-proof.workspace = true
 fe2o3-pliron.workspace = true
 fe2o3-proof-contracts.workspace = true
+fe2o3-target-lineage.workspace = true
 fe2o3-verifier.workspace = true
 rmpv = { version = "1.3.1", default-features = false }
 trybuild = "1"

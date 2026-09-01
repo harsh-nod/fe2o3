@@ -280,7 +280,7 @@ fn collect_uniform_helper_candidate(
                 | OperationKind::Atomic(_)
                 | OperationKind::Barrier(_)
                 | OperationKind::Fence(_)
-                | OperationKind::Gfx950LdsTranspose(_)
+                | OperationKind::TargetExtension(_)
                 | OperationKind::InlineAssembly(_)
                 | OperationKind::Matrix(_)
                 | OperationKind::Wave(_)
@@ -772,7 +772,11 @@ impl<'a> Analyzer<'a> {
             OperationKind::MemoryIntrinsic(_) => Variation::Varying,
             OperationKind::InlineAssembly(_) => Variation::Varying,
             OperationKind::Matrix(_) => Variation::Varying,
-            OperationKind::Gfx950LdsTranspose(transpose) => match transpose.kind {
+            OperationKind::TargetExtension(extension) => match extension
+                .as_amdgcn_gfx950_lds_transpose()
+                .expect("the sealed target-extension set has one AMDGPU operation")
+                .kind
+            {
                 fe2o3_kernel_ir::Gfx950LdsTransposeOperationKindV1::Current { .. }
                 | fe2o3_kernel_ir::Gfx950LdsTransposeOperationKindV1::Stage { .. }
                 | fe2o3_kernel_ir::Gfx950LdsTransposeOperationKindV1::Publish { .. } => {

@@ -134,6 +134,7 @@ fn canonical_compiler_proof_inputs(
         (
             semantic_kir
                 .canonical_kernel_ir_v8()
+                .expect("the V3 compiler-proof fixture constructs canonical Kernel IR V8")
                 .canonical_bytes()
                 .to_vec(),
             correspondence,

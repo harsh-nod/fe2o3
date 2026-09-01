@@ -10,13 +10,15 @@ use fe2o3_hsaco_finalize::{
 };
 use fe2o3_kernel_descriptor::{BlockSizeV1, DeviceDescriptorTableV1, KernelDescriptorV1, KernelId};
 use fe2o3_runtime_protocol::{CompilerExecutionReceiptCarriageV1, WorkerV3LoadEnvelopeWireV1};
+use fe2o3_target_lineage::{
+    CompilerTargetLineageValidationErrorV1, ValidatedCompilerMultiRootTargetLineageV1,
+    ValidatedCompilerTargetLineageV1, validate_compiler_multi_root_target_lineage_v1,
+    validate_compiler_target_lineage_v1,
+};
 use fe2o3_verifier::{
     CompilerMultiRootProofValidationErrorV1, CompilerProofInputValidationErrorV4,
-    CompilerTargetLineageValidationErrorV1, ValidatedCompilerMultiRootProofInputsV1,
-    ValidatedCompilerMultiRootTargetLineageV1, ValidatedCompilerProofInputsV4,
-    ValidatedCompilerTargetLineageV1, validate_compiler_multi_root_proof_inputs_v1,
-    validate_compiler_multi_root_target_lineage_v1, validate_compiler_proof_inputs_v4,
-    validate_compiler_target_lineage_v1,
+    ValidatedCompilerMultiRootProofInputsV1, ValidatedCompilerProofInputsV4,
+    validate_compiler_multi_root_proof_inputs_v1, validate_compiler_proof_inputs_v4,
 };
 use sha2::{Digest, Sha256};
 

@@ -5723,7 +5723,7 @@ fn execute_operation(
         | OperationKind::WorkgroupBarrier(_)
         | OperationKind::Matrix(_)
         | OperationKind::Wave(_)
-        | OperationKind::Gfx950LdsTranspose(_)
+        | OperationKind::TargetExtension(_)
         | OperationKind::InlineAssembly(_) => Err(engine.at(
             site,
             SimulationExecutionErrorKindV1::InternalInvariant(

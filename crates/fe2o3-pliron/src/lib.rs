@@ -3,6 +3,13 @@
 
 mod production;
 
+// These attributes are part of the ranked semantic record consumed by proof
+// generation. Re-exporting them keeps consumers on the production semantic
+// API instead of coupling them to the dialect implementation crate.
+pub use dialect_kernel::{
+    AccessKindAttr, OwnershipCoverageAttr, OwnershipPartitionAttr, SemanticBinaryKindAttr,
+};
+
 pub use production::{
     ConstructedGraphStageV1, ConstructionRegisteredStageV1, HARD_MAX_PRODUCTION_CONSTRUCTIONS,
     HARD_MAX_PRODUCTION_RANKED_ARGUMENTS, InertProductionMiddleEndEvidenceV4,

@@ -265,7 +265,7 @@ fn add_operation(resident: &mut ResidentLedger, operation: &Operation) -> Option
         | OperationKind::Store { .. }
         | OperationKind::GuardedStore { .. }
         | OperationKind::Atomic(_)
-        | OperationKind::Gfx950LdsTranspose(_)
+        | OperationKind::TargetExtension(_)
         | OperationKind::Wave(_) => Some(()),
     }
 }
@@ -514,7 +514,11 @@ mod tests {
         for kind in kinds {
             let operation = Operation::new(
                 Vec::new(),
-                OperationKind::Gfx950LdsTranspose(Gfx950LdsTransposeOperationV1::full(kind)),
+                OperationKind::TargetExtension(
+                    fe2o3_kernel_ir::TargetExtensionOperation::amdgcn_gfx950_lds_transpose(
+                        Gfx950LdsTransposeOperationV1::full(kind),
+                    ),
+                ),
             );
             let mut resident = ResidentLedger::new(0);
             add_operation(&mut resident, &operation).unwrap();

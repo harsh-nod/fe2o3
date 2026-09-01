@@ -96,10 +96,11 @@ use fe2o3_kernel_ir::{
     SemanticDebugTransformationV1, SemanticDebugUnavailableReasonV1, VerifiedCanonicalKernelIrV7,
     VerifiedCanonicalKernelIrV8, VerifiedCanonicalKernelIrV9,
 };
-use fe2o3_verifier::{
+use fe2o3_target_lineage::{
     CompilerTargetLineageValidationErrorV1, ValidatedCompilerTargetLineageV1,
-    validate_compiler_proof_inputs_v4, validate_compiler_target_lineage_v1,
+    validate_compiler_target_lineage_v1,
 };
+use fe2o3_verifier::validate_compiler_proof_inputs_v4;
 use object::{Object as _, ObjectSection as _};
 use sha2::{Digest, Sha256};
 

@@ -856,7 +856,6 @@ const GENERATED_COMPOSITION_THEOREM_V1: &str =
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dialect_kernel::{AccessKindAttr, OwnershipCoverageAttr, OwnershipPartitionAttr};
     use ed25519_dalek::{Signer as _, SigningKey};
     use fe2o3_functional_proof::{
         COMPLETE_GPU_HIERARCHY_V1, FunctionalRefinementBoundaryV2,
@@ -869,6 +868,7 @@ mod tests {
         SemanticScalarTypeV1, SemanticTypedRootV1, UnsignedFunctionalRefinementReceiptV2,
     };
     use fe2o3_pliron::{
+        AccessKindAttr, OwnershipCoverageAttr, OwnershipPartitionAttr,
         ProductionEffectRefinementContractV2, ProductionGpuWriteSiteV2,
         ProductionNumericalContractV2, ProductionRankedBlockV1, ProductionRankedKernelV1,
         ProductionRankedOperationV1, ProductionRankedTerminatorV1, ProductionRankedValueIdV1,

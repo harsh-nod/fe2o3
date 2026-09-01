@@ -27,7 +27,7 @@ use fe2o3_functional_proof::{
 };
 use fe2o3_pliron::{
     ProductionRankedKernelV1, ProductionRankedOperationV1, ProductionRankedValueIdV1,
-    ProductionRankedValueV1, ProductionRefinementStagingPolicyV2,
+    ProductionRankedValueV1, ProductionRefinementStagingPolicyV2, SemanticBinaryKindAttr,
     normalized_effect_refinement_hash_for_kernel_v2,
     normalized_functional_refinement_formula_hash_for_kernel_v2,
 };
@@ -472,7 +472,7 @@ enum SemanticDefinitionV2 {
     Symbol(u32),
     Constant(i128),
     Binary(
-        dialect_kernel::SemanticBinaryKindAttr,
+        SemanticBinaryKindAttr,
         ProductionRankedValueV1,
         ProductionRankedValueV1,
     ),
@@ -734,8 +734,8 @@ impl SemanticFormulaProgramV2 {
                         return Err(invalid_ranked_recipe());
                     };
                     let operator = match kind {
-                        dialect_kernel::SemanticBinaryKindAttr::Add => "+",
-                        dialect_kernel::SemanticBinaryKindAttr::Multiply => "*",
+                        SemanticBinaryKindAttr::Add => "+",
+                        SemanticBinaryKindAttr::Multiply => "*",
                     };
                     writeln!(
                         source,
@@ -1377,7 +1377,6 @@ impl Error for FunctionalRefinementVerusExecutionErrorV2 {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dialect_kernel::SemanticBinaryKindAttr;
     use fe2o3_functional_proof::SafeReferenceKindV2;
     use fe2o3_pliron::{
         ProductionNumericalContractV2, ProductionNumericalRefinementContractV2,

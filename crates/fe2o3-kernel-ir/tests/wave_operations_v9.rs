@@ -30,7 +30,9 @@ fn wave_operation_module() -> Module {
     let transpose = |result: u32, kind| {
         Operation::new(
             vec![ValueDef::new(ValueId(result), storage_type())],
-            OperationKind::Gfx950LdsTranspose(Gfx950LdsTransposeOperationV1::full(kind)),
+            OperationKind::TargetExtension(TargetExtensionOperation::amdgcn_gfx950_lds_transpose(
+                Gfx950LdsTransposeOperationV1::full(kind),
+            )),
         )
     };
     let operations = vec![
@@ -60,11 +62,11 @@ fn wave_operation_module() -> Module {
             (11..19)
                 .map(|id| ValueDef::new(ValueId(id), Type::Scalar(ScalarType::U32)))
                 .collect(),
-            OperationKind::Gfx950LdsTranspose(Gfx950LdsTransposeOperationV1::full(
-                Gfx950LdsTransposeOperationKindV1::Read {
+            OperationKind::TargetExtension(TargetExtensionOperation::amdgcn_gfx950_lds_transpose(
+                Gfx950LdsTransposeOperationV1::full(Gfx950LdsTransposeOperationKindV1::Read {
                     format,
                     storage: ValueId(10),
-                },
+                }),
             )),
         ),
         Operation::effect_free(
@@ -187,11 +189,14 @@ fn transpose_rejects_wrong_workgroup_and_bypassed_publish() {
     );
 
     let mut bypassed = wave_operation_module();
-    let OperationKind::Gfx950LdsTranspose(read) =
+    let OperationKind::TargetExtension(extension) =
         &mut bypassed.functions[0].body.as_mut().unwrap().blocks[0].operations[3].kind
     else {
         panic!("expected transpose read")
     };
+    let read = extension
+        .as_amdgcn_gfx950_lds_transpose_mut()
+        .expect("expected gfx950 transpose extension");
     read.kind = Gfx950LdsTransposeOperationKindV1::Read {
         format: Gfx950LdsTransposeFormatV1::Fp8E4M3,
         storage: ValueId(9),

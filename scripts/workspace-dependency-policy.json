@@ -75,7 +75,8 @@
         "fe2o3-amdgcn-model",
         "fe2o3-hsaco-finalize",
         "fe2o3-llvm-text",
-        "fe2o3-lower-gpu-amdgcn"
+        "fe2o3-lower-gpu-amdgcn",
+        "fe2o3-target-lineage"
       ]
     },
     {
@@ -155,20 +156,6 @@
       "to": "dialect-amdgcn",
       "kinds": [
         "dev"
-      ]
-    },
-    {
-      "from": "fe2o3-verifier",
-      "to": "dialect-kernel",
-      "kinds": [
-        "normal"
-      ]
-    },
-    {
-      "from": "fe2o3-verifier",
-      "to": "dialect-amdgcn",
-      "kinds": [
-        "normal"
       ]
     },
     {

@@ -1162,6 +1162,7 @@ dependencies = [
  "fe2o3-runtime",
  "fe2o3-runtime-protocol",
  "fe2o3-rustc-invocation",
+ "fe2o3-target-lineage",
  "fe2o3-verifier",
  "libc",
  "reserved-fe2o3-symbols",
@@ -1245,6 +1246,7 @@ dependencies = [
  "fe2o3-pliron",
  "fe2o3-proof-contracts",
  "fe2o3-source-isa-observation",
+ "fe2o3-target-lineage",
  "fe2o3-verifier",
  "object 0.39.1",
  "reserved-fe2o3-symbols",
@@ -1779,6 +1781,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe2o3-target-lineage"
+version = "0.1.0"
+dependencies = [
+ "dialect-amdgcn",
+ "fe2o3-amd-target",
+ "fe2o3-compiler-lineage",
+ "fe2o3-kernel-ir",
+ "fe2o3-rustc-invocation",
+ "fe2o3-verifier",
+]
+
+[[package]]
 name = "fe2o3-trusted-item-external-spoof"
 version = "0.0.0"
 dependencies = [
@@ -1851,10 +1865,7 @@ dependencies = [
 name = "fe2o3-verifier"
 version = "0.1.0"
 dependencies = [
- "dialect-amdgcn",
- "dialect-kernel",
  "ed25519-dalek",
- "fe2o3-amd-target",
  "fe2o3-artifact-transaction",
  "fe2o3-artifacts",
  "fe2o3-compiler-lineage",
@@ -2909,6 +2920,7 @@ dependencies = [
  "fe2o3-proof-contracts",
  "fe2o3-rustc-front",
  "fe2o3-rustc-invocation",
+ "fe2o3-target-lineage",
  "fe2o3-verifier",
  "libc",
  "object 0.39.1",

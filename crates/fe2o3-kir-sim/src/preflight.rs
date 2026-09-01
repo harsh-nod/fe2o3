@@ -1605,7 +1605,7 @@ fn scan_operation(
                 reject!(UnsupportedFeatureV1::Wave);
             }
         }
-        OperationKind::Gfx950LdsTranspose(_) => {
+        OperationKind::TargetExtension(_) => {
             reject!(UnsupportedFeatureV1::Gfx950LdsTranspose)
         }
         OperationKind::InlineAssembly(_) => reject!(UnsupportedFeatureV1::InlineAssembly),
@@ -2160,11 +2160,13 @@ mod tests {
                     AccessMode::ReadWrite,
                 ),
             )],
-            OperationKind::Gfx950LdsTranspose(
-                fe2o3_kernel_ir::Gfx950LdsTransposeOperationV1::full(
-                    fe2o3_kernel_ir::Gfx950LdsTransposeOperationKindV1::Current {
-                        format: fe2o3_kernel_ir::Gfx950LdsTransposeFormatV1::Fp8E4M3,
-                    },
+            OperationKind::TargetExtension(
+                fe2o3_kernel_ir::TargetExtensionOperation::amdgcn_gfx950_lds_transpose(
+                    fe2o3_kernel_ir::Gfx950LdsTransposeOperationV1::full(
+                        fe2o3_kernel_ir::Gfx950LdsTransposeOperationKindV1::Current {
+                            format: fe2o3_kernel_ir::Gfx950LdsTransposeFormatV1::Fp8E4M3,
+                        },
+                    ),
                 ),
             ),
         );

@@ -189,15 +189,13 @@ impl ProductionFormalMemoryOwnerV1 {
         semantic_kir: ProductionSemanticKirOwnerV1,
     ) -> Result<Self, ProductionFormalMemoryErrorV1> {
         semantic_kir
-            .verify_equivalence()
+            .verify_retained_integrity()
             .map_err(ProductionFormalMemoryErrorV1::SemanticKir)?;
         let kernels = derive_admitted_obligations(&semantic_kir)?;
-        let owner = Self {
+        Ok(Self {
             semantic_kir,
             kernels,
-        };
-        owner.verify_equivalence()?;
-        Ok(owner)
+        })
     }
 
     /// Re-verifies exact semantic KIR and deterministically re-derives the

@@ -1160,7 +1160,10 @@ impl<'a, 'module> FunctionVerifier<'a, 'module> {
                 }
                 self.verify_matrix_lds_allocation(matrix, location);
             }
-            OperationKind::Gfx950LdsTranspose(transpose) => {
+            OperationKind::TargetExtension(extension) => {
+                let transpose = extension
+                    .as_amdgcn_gfx950_lds_transpose()
+                    .expect("the sealed target-extension set has one verified operation");
                 self.verify_gfx950_lds_transpose(operation, transpose, location)
             }
             OperationKind::Wave(wave) => self.verify_wave(operation, wave, location),
@@ -1391,9 +1394,10 @@ impl<'a, 'module> FunctionVerifier<'a, 'module> {
         };
         let block = self.blocks.get(&block)?;
         let operation = block.operations.get(operation_index)?;
-        let OperationKind::Gfx950LdsTranspose(transpose) = &operation.kind else {
+        let OperationKind::TargetExtension(extension) = &operation.kind else {
             return None;
         };
+        let transpose = extension.as_amdgcn_gfx950_lds_transpose()?;
         operation
             .results
             .iter()

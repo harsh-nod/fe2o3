@@ -22,9 +22,9 @@ use fe2o3_kernel_ir::{
     MATRIX_CAPABILITY_NAMESPACE, MATRIX_PROJECTED_KERNARG_POLICY_NAMESPACE_V1,
     MATRIX_SOURCE_ABI_OBSERVATION_NAMESPACE_V2, MatrixElement, MatrixFrontendBindingV2,
     MatrixMultiplyProfile, MatrixOperation, MatrixOperationKind, MatrixProjectedKernargPolicyV1,
-    MemoryElementType, MemoryIntrinsicOperation, MemoryOrdering, Module, ModuleId,
-    NarrowFloatFormat, Operation, OperationKind, PointerDistanceContract, PointerDistanceKind,
-    PointerDistanceUnit, SCALED_FP4_E2M1_F32_M16N16K128_CAPABILITY,
+    MemoryElementType, MemoryIntrinsicOperation, MemoryOrdering, Module, ModuleFunctionIndex,
+    ModuleId, NarrowFloatFormat, Operation, OperationKind, PointerDistanceContract,
+    PointerDistanceKind, PointerDistanceUnit, SCALED_FP4_E2M1_F32_M16N16K128_CAPABILITY,
     SCALED_FP4_E2M1_FP8_E4M3_F32_M16N16K128_CAPABILITY, SCALED_FP8_E4M3_F32_M16N16K128_CAPABILITY,
     ScalarType, Signature, SynchronizationScope, TargetCapability, TensorInstructionProfileV1,
     Terminator, Type, UnaryOp, ValueId, VerificationErrors, VerifiedCanonicalKernelIrV8,
@@ -590,6 +590,8 @@ fn lower_kernel_to_llvm_ir_for_target(
     max_text_bytes: usize,
 ) -> Result<String, LoweringErrors> {
     verify_module(module).map_err(LoweringErrors::verification)?;
+    let function_index = ModuleFunctionIndex::try_new(module)
+        .expect("verify_module established unique function identities");
 
     let matches = module
         .kernels
@@ -643,10 +645,8 @@ fn lower_kernel_to_llvm_ir_for_target(
     )?;
 
     let workgroup_size = validate_launch(module, kernel, target)?;
-    let entry = module
-        .functions
-        .iter()
-        .find(|function| function.id == kernel.entry)
+    let entry = function_index
+        .get(&kernel.entry)
         .expect("verify_module established the kernel entry");
     entry.body.as_ref().ok_or_else(|| {
         LoweringErrors::one(
@@ -694,6 +694,7 @@ fn lower_kernel_to_llvm_ir_for_target(
         .unwrap_or(SemanticAnchorEmissionV1::Disabled);
     let mut lowerer = FunctionLowerer::new(
         module,
+        &function_index,
         kernel,
         entry,
         workgroup_size,
@@ -1002,13 +1003,13 @@ fn lower_compiler_module_to_llvm_ir_for_target(
         ));
     }
     verify_module(module).map_err(LoweringErrors::verification)?;
+    let function_index = ModuleFunctionIndex::try_new(module)
+        .expect("verify_module established unique function identities");
 
     if let Some(exact_target) = target.exact_target_binding() {
         for kernel in &module.kernels {
-            let entry = module
-                .functions
-                .iter()
-                .find(|function| function.id == kernel.entry)
+            let entry = function_index
+                .get(&kernel.entry)
                 .expect("verify_module established every kernel entry");
             require_exact_kernel_binding(module, kernel, entry, exact_target)?;
         }
@@ -1033,8 +1034,8 @@ fn lower_compiler_module_to_llvm_ir_for_target(
                     "semantic-anchor compiler-module lowering requires a kernel entry",
                 )
             })?;
-            let entry = module
-                .function(&kernel.entry)
+            let entry = function_index
+                .get(&kernel.entry)
                 .expect("verify_module established the semantic-anchor kernel entry");
             let emission =
                 prepare_semantic_anchor_emission_v1(module, kernel, entry, target, identity)?;
@@ -1042,8 +1043,8 @@ fn lower_compiler_module_to_llvm_ir_for_target(
         })
         .transpose()?;
     for kernel in &kernels {
-        let entry = module
-            .function(&kernel.entry)
+        let entry = function_index
+            .get(&kernel.entry)
             .expect("verify_module established the kernel entry");
         validate_matrix_frontend_abi_binding(module, kernel, entry, target)?;
     }
@@ -1085,8 +1086,8 @@ fn lower_compiler_module_to_llvm_ir_for_target(
         )?;
     }
     for kernel in &kernels {
-        let entry = module
-            .function(&kernel.entry)
+        let entry = function_index
+            .get(&kernel.entry)
             .expect("verify_module established the kernel entry");
         let body = entry.body.as_ref().expect("verified kernel entry body");
         for block in &body.blocks {
@@ -1176,8 +1177,14 @@ fn lower_compiler_module_to_llvm_ir_for_target(
         }
     }
 
-    let wave_plan =
-        infer_effective_wave_widths(module, module_wave, &kernels, &helper_definitions, target)?;
+    let wave_plan = infer_effective_wave_widths(
+        module,
+        &function_index,
+        module_wave,
+        &kernels,
+        &helper_definitions,
+        target,
+    )?;
 
     let mut kernel_lowerers = Vec::with_capacity(kernels.len());
     for kernel in &kernels {
@@ -1199,12 +1206,13 @@ fn lower_compiler_module_to_llvm_ir_for_target(
                 ),
             ));
         }
-        let entry = module
-            .function(&kernel.entry)
+        let entry = function_index
+            .get(&kernel.entry)
             .expect("verify_module established the kernel entry");
         let wave_width = wave_plan.kernels[&kernel.id];
         let mut lowerer = FunctionLowerer::compiler_module_kernel(
             module,
+            &function_index,
             kernel,
             entry,
             workgroup_size,
@@ -1228,6 +1236,7 @@ fn lower_compiler_module_to_llvm_ir_for_target(
         let wave_width = wave_plan.helpers[&function.id];
         let mut lowerer = FunctionLowerer::compiler_module_device_function(
             module,
+            &function_index,
             function,
             wave_width,
             &call_symbols,
@@ -1381,6 +1390,7 @@ struct EffectiveWavePlan {
 
 fn infer_effective_wave_widths(
     module: &Module,
+    function_index: &ModuleFunctionIndex<'_>,
     module_wave: Option<WaveWidth>,
     kernels: &[&Kernel],
     helpers: &[&Function],
@@ -1446,8 +1456,8 @@ fn infer_effective_wave_widths(
     let mut kernel_reachable = vec![false; components.len()];
     let mut kernel_modes = BTreeMap::new();
     for kernel in kernels {
-        let entry = module
-            .function(&kernel.entry)
+        let entry = function_index
+            .get(&kernel.entry)
             .expect("verified kernel entry");
         let kernel_wave = validate_capabilities(
             LoweringLocation::kernel(module, kernel),
@@ -1795,7 +1805,7 @@ fn validate_convergent_cfg(lowerer: &FunctionLowerer<'_>) -> Result<(), Lowering
                         OperationKind::WorkgroupBarrier(_)
                             | OperationKind::Wave(_)
                             | OperationKind::Matrix(_)
-                            | OperationKind::Gfx950LdsTranspose(_)
+                            | OperationKind::TargetExtension(_)
                     )
                     .then_some((block.id, operation))
                 })
@@ -1826,7 +1836,11 @@ fn validate_convergent_cfg(lowerer: &FunctionLowerer<'_>) -> Result<(), Lowering
             OperationKind::WorkgroupBarrier(barrier) => barrier.convergence.scope(),
             OperationKind::Wave(wave) => wave.convergence.scope(),
             OperationKind::Matrix(matrix) => matrix.convergence.scope(),
-            OperationKind::Gfx950LdsTranspose(transpose) => transpose.convergence.scope(),
+            OperationKind::TargetExtension(extension) => extension
+                .as_amdgcn_gfx950_lds_transpose()
+                .expect("the sealed target-extension set has one AMDGPU operation")
+                .convergence
+                .scope(),
             _ => unreachable!("convergent operation inventory is exact"),
         };
         let control = report.block_control(block);
@@ -2826,7 +2840,11 @@ fn collect_intrinsic_declarations<'a>(
                         );
                     }
                 }
-                OperationKind::Gfx950LdsTranspose(transpose) => match transpose.kind {
+                OperationKind::TargetExtension(extension) => match extension
+                    .as_amdgcn_gfx950_lds_transpose()
+                    .expect("the sealed target-extension set has one AMDGPU operation")
+                    .kind
+                {
                     Gfx950LdsTransposeOperationKindV1::Current { .. }
                     | Gfx950LdsTransposeOperationKindV1::Publish { .. } => {}
                     Gfx950LdsTransposeOperationKindV1::Stage { .. } => {
@@ -3332,6 +3350,7 @@ fn control_flow_emission_plan(function: &Function) -> (IndexedControlFlow, Vec<b
 
 struct FunctionLowerer<'a> {
     module: &'a Module,
+    function_index: &'a ModuleFunctionIndex<'a>,
     kernel: Option<&'a Kernel>,
     function: &'a Function,
     symbol: &'a str,
@@ -3634,6 +3653,7 @@ impl<'a> FunctionLowerer<'a> {
 
     fn new(
         module: &'a Module,
+        function_index: &'a ModuleFunctionIndex<'a>,
         kernel: &'a Kernel,
         function: &'a Function,
         workgroup_size: WorkgroupSize,
@@ -3644,6 +3664,7 @@ impl<'a> FunctionLowerer<'a> {
         let (control_flow, split_edges) = control_flow_emission_plan(function);
         Self {
             module,
+            function_index,
             kernel: Some(kernel),
             function,
             symbol: kernel.id.as_str(),
@@ -3662,6 +3683,7 @@ impl<'a> FunctionLowerer<'a> {
     #[allow(clippy::too_many_arguments)]
     fn compiler_module_kernel(
         module: &'a Module,
+        function_index: &'a ModuleFunctionIndex<'a>,
         kernel: &'a Kernel,
         function: &'a Function,
         workgroup_size: WorkgroupSize,
@@ -3674,6 +3696,7 @@ impl<'a> FunctionLowerer<'a> {
         let (control_flow, split_edges) = control_flow_emission_plan(function);
         Self {
             module,
+            function_index,
             kernel: Some(kernel),
             function,
             symbol: kernel.id.as_str(),
@@ -3691,6 +3714,7 @@ impl<'a> FunctionLowerer<'a> {
 
     fn compiler_module_device_function(
         module: &'a Module,
+        function_index: &'a ModuleFunctionIndex<'a>,
         function: &'a Function,
         wave_width: Option<WaveWidth>,
         call_symbols: &'a BTreeMap<FunctionId, String>,
@@ -3699,6 +3723,7 @@ impl<'a> FunctionLowerer<'a> {
         let (control_flow, split_edges) = control_flow_emission_plan(function);
         Self {
             module,
+            function_index,
             kernel: None,
             function,
             symbol: function.id.as_str(),
@@ -3809,7 +3834,7 @@ impl<'a> FunctionLowerer<'a> {
         let is_matrix = matches!(operation.kind, OperationKind::Matrix(_));
         let is_gfx950_collective_or_lds_transpose = matches!(
             operation.kind,
-            OperationKind::Gfx950LdsTranspose(_)
+            OperationKind::TargetExtension(_)
                 | OperationKind::Wave(WaveOperation {
                     kind: WaveOperationKind::ReduceF32 { .. }
                         | WaveOperationKind::BroadcastF32 { .. },
@@ -3897,12 +3922,16 @@ impl<'a> FunctionLowerer<'a> {
                         };
                         (u64::from(memory.alignment), bytes)
                     }
-                    OperationKind::Gfx950LdsTranspose(transpose)
-                        if let Gfx950LdsTransposeOperationKindV1::Current { format } =
-                            transpose.kind =>
+                    OperationKind::TargetExtension(extension) => match extension
+                        .as_amdgcn_gfx950_lds_transpose()
+                        .expect("the sealed target-extension set has one AMDGPU operation")
+                        .kind
                     {
-                        (64, Some(u64::from(format.lds_bytes())))
-                    }
+                        Gfx950LdsTransposeOperationKindV1::Current { format } => {
+                            (64, Some(u64::from(format.lds_bytes())))
+                        }
+                        _ => continue,
+                    },
                     _ => continue,
                 };
                 let padding = (alignment - static_end % alignment) % alignment;
@@ -4409,7 +4438,10 @@ impl<'a> FunctionLowerer<'a> {
             OperationKind::Matrix(matrix) => {
                 self.validate_matrix(matrix, &location)?;
             }
-            OperationKind::Gfx950LdsTranspose(transpose) => {
+            OperationKind::TargetExtension(extension) => {
+                let transpose = extension
+                    .as_amdgcn_gfx950_lds_transpose()
+                    .expect("the sealed target-extension set has one AMDGPU operation");
                 self.validate_gfx950_lds_transpose(transpose, &location)?;
             }
             OperationKind::Wave(wave) => self.validate_wave(wave, &location)?,
@@ -4957,9 +4989,14 @@ impl<'a> FunctionLowerer<'a> {
                         OperationKind::GuardedStore { .. } => {
                             Some(guarded_store_merge_label(block.id, operation_index))
                         }
-                        OperationKind::Gfx950LdsTranspose(transpose)
+                        OperationKind::TargetExtension(extension)
                             if matches!(
-                                transpose.kind,
+                                extension
+                                    .as_amdgcn_gfx950_lds_transpose()
+                                    .expect(
+                                        "the sealed target-extension set has one AMDGPU operation"
+                                    )
+                                    .kind,
                                 Gfx950LdsTransposeOperationKindV1::Stage { .. }
                             ) =>
                         {
@@ -5616,11 +5653,12 @@ impl<'a> FunctionLowerer<'a> {
             .flat_map(|body| &body.blocks)
             .flat_map(|block| &block.operations)
             .any(|operation| {
-                matches!(
-                    &operation.kind,
-                    OperationKind::Gfx950LdsTranspose(transpose)
-                        if predicate(&transpose.kind)
-                )
+                let OperationKind::TargetExtension(extension) = &operation.kind else {
+                    return false;
+                };
+                extension
+                    .as_amdgcn_gfx950_lds_transpose()
+                    .is_some_and(|transpose| predicate(&transpose.kind))
             })
     }
 
@@ -5628,14 +5666,19 @@ impl<'a> FunctionLowerer<'a> {
         let mut emitted = false;
         let body = self.function.body.as_ref().expect("definition required");
         for operation in body.blocks.iter().flat_map(|block| &block.operations) {
-            if !matches!(
-                operation.kind,
-                OperationKind::WorkgroupMemory(_)
-                    | OperationKind::Gfx950LdsTranspose(Gfx950LdsTransposeOperationV1 {
-                        kind: Gfx950LdsTransposeOperationKindV1::Current { .. },
-                        ..
-                    })
-            ) {
+            let is_transpose_current = matches!(
+                &operation.kind,
+                OperationKind::TargetExtension(extension)
+                    if matches!(
+                        extension
+                            .as_amdgcn_gfx950_lds_transpose()
+                            .expect("the sealed target-extension set has one AMDGPU operation")
+                            .kind,
+                        Gfx950LdsTransposeOperationKindV1::Current { .. }
+                    )
+            );
+            if !matches!(operation.kind, OperationKind::WorkgroupMemory(_)) && !is_transpose_current
+            {
                 continue;
             }
             emitted = true;
@@ -5664,10 +5707,14 @@ impl<'a> FunctionLowerer<'a> {
                         .unwrap(),
                     }
                 }
-                OperationKind::Gfx950LdsTranspose(transpose)
-                    if let Gfx950LdsTransposeOperationKindV1::Current { format } =
-                        transpose.kind =>
-                {
+                OperationKind::TargetExtension(extension) => {
+                    let transpose = extension
+                        .as_amdgcn_gfx950_lds_transpose()
+                        .expect("the sealed target-extension set has one AMDGPU operation");
+                    let Gfx950LdsTransposeOperationKindV1::Current { format } = transpose.kind
+                    else {
+                        unreachable!("declaration inventory admitted only transpose Current")
+                    };
                     let bytes = format.lds_bytes();
                     writeln!(
                         output,
@@ -6213,8 +6260,8 @@ impl<'a> FunctionLowerer<'a> {
                     return Ok(());
                 }
                 let callee_function = self
-                    .module
-                    .function(callee)
+                    .function_index
+                    .get(callee)
                     .expect("verify_module checked the callee");
                 let symbol = self
                     .call_symbols
@@ -6316,7 +6363,10 @@ impl<'a> FunctionLowerer<'a> {
             OperationKind::Matrix(matrix) => {
                 self.emit_matrix(output, block, operation_index, operation, matrix);
             }
-            OperationKind::Gfx950LdsTranspose(transpose) => {
+            OperationKind::TargetExtension(extension) => {
+                let transpose = extension
+                    .as_amdgcn_gfx950_lds_transpose()
+                    .expect("the sealed target-extension set has one AMDGPU operation");
                 self.emit_gfx950_lds_transpose(output, operation, transpose);
             }
             OperationKind::Wave(wave) => {

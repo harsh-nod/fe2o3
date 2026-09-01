@@ -9,6 +9,12 @@ use fe2o3_amdgcn_model::{
 };
 use fe2o3_kernel_ir::*;
 
+fn gfx950_transpose(kind: Gfx950LdsTransposeOperationKindV1) -> OperationKind {
+    OperationKind::TargetExtension(TargetExtensionOperation::amdgcn_gfx950_lds_transpose(
+        Gfx950LdsTransposeOperationV1::full(kind),
+    ))
+}
+
 fn collective_and_lds_transpose_module(format: Gfx950LdsTransposeFormatV1) -> Module {
     let source = Type::slice(
         Type::Scalar(ScalarType::U8),
@@ -36,45 +42,37 @@ fn collective_and_lds_transpose_module(format: Gfx950LdsTransposeFormatV1) -> Mo
     let mut operations = vec![
         Operation::new(
             vec![ValueDef::new(ValueId(10), storage.clone())],
-            OperationKind::Gfx950LdsTranspose(Gfx950LdsTransposeOperationV1::full(
-                Gfx950LdsTransposeOperationKindV1::Current { format },
-            )),
+            gfx950_transpose(Gfx950LdsTransposeOperationKindV1::Current { format }),
         ),
         Operation::new(
             vec![ValueDef::new(ValueId(11), storage.clone())],
-            OperationKind::Gfx950LdsTranspose(Gfx950LdsTransposeOperationV1::full(
-                Gfx950LdsTransposeOperationKindV1::Stage {
-                    format,
-                    storage: ValueId(10),
-                    source_slice: ValueId(0),
-                    offset: ValueId(1),
-                    rows: ValueId(2),
-                    columns: ValueId(3),
-                    stride: ValueId(4),
-                    token_base: ValueId(5),
-                    reduction_base: ValueId(6),
-                },
-            )),
+            gfx950_transpose(Gfx950LdsTransposeOperationKindV1::Stage {
+                format,
+                storage: ValueId(10),
+                source_slice: ValueId(0),
+                offset: ValueId(1),
+                rows: ValueId(2),
+                columns: ValueId(3),
+                stride: ValueId(4),
+                token_base: ValueId(5),
+                reduction_base: ValueId(6),
+            }),
         ),
         Operation::new(
             vec![ValueDef::new(ValueId(12), storage)],
-            OperationKind::Gfx950LdsTranspose(Gfx950LdsTransposeOperationV1::full(
-                Gfx950LdsTransposeOperationKindV1::Publish {
-                    format,
-                    storage: ValueId(11),
-                },
-            )),
+            gfx950_transpose(Gfx950LdsTransposeOperationKindV1::Publish {
+                format,
+                storage: ValueId(11),
+            }),
         ),
         Operation::new(
             (13..21)
                 .map(|id| ValueDef::new(ValueId(id), Type::Scalar(ScalarType::U32)))
                 .collect(),
-            OperationKind::Gfx950LdsTranspose(Gfx950LdsTransposeOperationV1::full(
-                Gfx950LdsTransposeOperationKindV1::Read {
-                    format,
-                    storage: ValueId(12),
-                },
-            )),
+            gfx950_transpose(Gfx950LdsTransposeOperationKindV1::Read {
+                format,
+                storage: ValueId(12),
+            }),
         ),
         Operation::new(
             vec![ValueDef::new(ValueId(21), Type::Scalar(ScalarType::U32))],

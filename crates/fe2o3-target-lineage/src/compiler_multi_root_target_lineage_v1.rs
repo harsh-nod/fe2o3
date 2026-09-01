@@ -7,11 +7,12 @@ use fe2o3_compiler_lineage::{
 };
 use fe2o3_kernel_ir::Kernel;
 use fe2o3_rustc_invocation::encode_descriptor_v3;
+use fe2o3_verifier::ValidatedCompilerMultiRootProofInputsV1;
 
 use crate::compiler_target_lineage_v1::{receipt_identity, require_identity_match};
 use crate::{
     CompilerTargetLineageValidationErrorV1, ValidatedCompilerKirToLlvmReplayV1,
-    ValidatedCompilerMultiRootProofInputsV1, validate_compiler_kir_to_llvm_replay_v1,
+    validate_compiler_kir_to_llvm_replay_v1,
 };
 
 /// Move-only ownership of independently decoded multi-root target lineage and exact LLVM replay.
@@ -21,7 +22,7 @@ use crate::{
 /// producer authenticity, publication authority, or runtime safety.
 ///
 /// ```compile_fail
-/// use fe2o3_verifier::ValidatedCompilerMultiRootTargetLineageV1;
+/// use fe2o3_target_lineage::ValidatedCompilerMultiRootTargetLineageV1;
 /// fn requires_clone<T: Clone>() {}
 /// requires_clone::<ValidatedCompilerMultiRootTargetLineageV1>();
 /// ```
