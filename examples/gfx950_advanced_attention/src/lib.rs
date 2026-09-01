@@ -12,6 +12,7 @@
         feature = "kernel-kda-decode",
         feature = "kernel-kda-prefill",
         feature = "kernel-content-sparse-attention",
+        feature = "kernel-deepseek-sparse-attention",
         feature = "kernel-compressed-hybrid-attention",
         feature = "kernel-attnres-aggregate",
         feature = "kernel-four-branch-residual",
@@ -30,6 +31,10 @@ compile_error!("an AMDGPU build must select exactly one advanced-attention kerne
         ),
         all(
             feature = "kernel-kda-decode",
+            feature = "kernel-deepseek-sparse-attention"
+        ),
+        all(
+            feature = "kernel-kda-decode",
             feature = "kernel-compressed-hybrid-attention"
         ),
         all(feature = "kernel-kda-decode", feature = "kernel-attnres-aggregate"),
@@ -41,6 +46,10 @@ compile_error!("an AMDGPU build must select exactly one advanced-attention kerne
         ),
         all(
             feature = "kernel-kda-prefill",
+            feature = "kernel-deepseek-sparse-attention"
+        ),
+        all(
+            feature = "kernel-kda-prefill",
             feature = "kernel-compressed-hybrid-attention"
         ),
         all(feature = "kernel-kda-prefill", feature = "kernel-attnres-aggregate"),
@@ -49,6 +58,10 @@ compile_error!("an AMDGPU build must select exactly one advanced-attention kerne
             feature = "kernel-four-branch-residual"
         ),
         all(feature = "kernel-kda-prefill", feature = "kernel-mhc-sinkhorn-mix"),
+        all(
+            feature = "kernel-content-sparse-attention",
+            feature = "kernel-deepseek-sparse-attention"
+        ),
         all(
             feature = "kernel-content-sparse-attention",
             feature = "kernel-compressed-hybrid-attention"
@@ -63,6 +76,22 @@ compile_error!("an AMDGPU build must select exactly one advanced-attention kerne
         ),
         all(
             feature = "kernel-content-sparse-attention",
+            feature = "kernel-mhc-sinkhorn-mix"
+        ),
+        all(
+            feature = "kernel-deepseek-sparse-attention",
+            feature = "kernel-compressed-hybrid-attention"
+        ),
+        all(
+            feature = "kernel-deepseek-sparse-attention",
+            feature = "kernel-attnres-aggregate"
+        ),
+        all(
+            feature = "kernel-deepseek-sparse-attention",
+            feature = "kernel-four-branch-residual"
+        ),
+        all(
+            feature = "kernel-deepseek-sparse-attention",
             feature = "kernel-mhc-sinkhorn-mix"
         ),
         all(
@@ -128,6 +157,10 @@ pub const TOKENS_PER_BLOCK_V1: usize = 4;
 pub const SELECTED_BLOCKS_V1: usize = 2;
 /// Tokens retained after block and token ranking.
 pub const SELECTED_TOKENS_V1: usize = 3;
+/// Top-k token indices supplied by the DeepSeek Lightning Indexer boundary.
+pub const DEEPSEEK_SPARSE_TOP_K_V1: usize = 4;
+/// Invalid token sentinel accepted by the DeepSeek sparse-attention contract.
+pub const DEEPSEEK_INVALID_TOKEN_V1: u32 = u32::MAX;
 /// Residual depths, branches, and streams in the bounded mixing profiles.
 pub const MIXING_STREAMS_V1: usize = 4;
 /// Sinkhorn row/column normalization iterations.
@@ -137,7 +170,7 @@ pub const SINKHORN_ITERATIONS_V1: usize = 3;
 pub const GFX950_ADVANCED_ATTENTION_WORKGROUP_V1: [u32; 3] = [64, 1, 1];
 /// Exact grid dimensions declared by every teaching kernel.
 pub const GFX950_ADVANCED_ATTENTION_GRID_V1: [u32; 3] = [1, 1, 1];
-/// Whether the seven source roots use the production semantic lowering surface.
+/// Whether the eight source roots use the production semantic lowering surface.
 pub const GFX950_ADVANCED_ATTENTION_SOURCE_LOWERING_SUPPORTED_V1: bool = true;
 /// Boundary not established by the production source-lowering and runtime suite.
 pub const GFX950_ADVANCED_ATTENTION_SOURCE_BLOCKER_V1: &str = "the retained production extraction, finalization, ISA inspection, and gfx950 numerical runs do not establish formal compiler refinement, protected publication authority, performance, or full-model behavior";

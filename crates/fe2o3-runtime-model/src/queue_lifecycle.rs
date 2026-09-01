@@ -26,6 +26,7 @@ pub enum ComputeAqlResourceRoleV1 {
     Control,
     EndOfPipe,
     ContextSave,
+    PrivateScratch,
 }
 
 /// One exact mapped resource and the memory publication that retains it.
@@ -46,16 +47,21 @@ pub struct ComputeAqlQueueResourcesV1 {
     pub control: ComputeAqlResourceBindingV1,
     pub eop: ComputeAqlResourceBindingV1,
     pub context_save: ComputeAqlResourceBindingV1,
+    pub private_scratch: Option<ComputeAqlResourceBindingV1>,
 }
 
 impl ComputeAqlQueueResourcesV1 {
-    pub const fn ordered(self) -> [(ComputeAqlResourceRoleV1, ComputeAqlResourceBindingV1); 4] {
-        [
+    pub fn ordered(self) -> Vec<(ComputeAqlResourceRoleV1, ComputeAqlResourceBindingV1)> {
+        let mut resources = alloc::vec![
             (ComputeAqlResourceRoleV1::Ring, self.ring),
             (ComputeAqlResourceRoleV1::Control, self.control),
             (ComputeAqlResourceRoleV1::EndOfPipe, self.eop),
             (ComputeAqlResourceRoleV1::ContextSave, self.context_save),
-        ]
+        ];
+        if let Some(scratch) = self.private_scratch {
+            resources.push((ComputeAqlResourceRoleV1::PrivateScratch, scratch));
+        }
+        resources
     }
 
     pub fn contains_mapping(self, mapping: MemoryMappingKeyV1) -> bool {
@@ -66,10 +72,9 @@ impl ComputeAqlQueueResourcesV1 {
 
     fn shares_mapping_with(self, other: Self) -> bool {
         self.ordered().iter().any(|(_, left)| {
-            other
-                .ordered()
-                .iter()
-                .any(|(_, right)| left.mapping == right.mapping)
+            other.ordered().iter().any(|(_, right)| {
+                left.mapping == right.mapping || left.mapping.allocation == right.mapping.allocation
+            })
         })
     }
 }
@@ -633,7 +638,7 @@ impl QueueLifecycleStateV1 {
             return Err(QueueInvariantViolationV1::InvalidIdentity(queue));
         }
         let resources = plan.resources.ordered();
-        for (role, resource) in resources {
+        for &(role, resource) in &resources {
             if resource.mapping.allocation.vm != queue.vm
                 || resource.mapping.id.0 == 0
                 || resource.publication.mapping != resource.mapping

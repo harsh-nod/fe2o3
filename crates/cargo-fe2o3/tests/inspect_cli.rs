@@ -10,6 +10,7 @@ use fe2o3_artifacts::{
     IdentityText, KernelEntry, LaunchContract, ManifestV1, Name, PointerWidth, TargetIdentity,
     ToolIdentity,
 };
+use sha2::{Digest, Sha256};
 
 static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -108,6 +109,31 @@ fn run_inspect(path: &Path) -> std::process::Output {
         .expect("run inspect")
 }
 
+fn source_isa_collection() -> Vec<u8> {
+    const HEADER_BYTES: usize = 80;
+    const TOTAL_BYTES: usize = HEADER_BYTES + 32 + 32;
+    const DOMAIN: &[u8] = b"FE2O3/SOURCE-ISA-OBSERVATION-COLLECTION/V1\0";
+    let mut bytes = Vec::with_capacity(TOTAL_BYTES);
+    bytes.extend_from_slice(b"F2SICOL1");
+    bytes.extend_from_slice(&1_u16.to_le_bytes());
+    bytes.extend_from_slice(&(HEADER_BYTES as u16).to_le_bytes());
+    bytes.extend_from_slice(&(TOTAL_BYTES as u32).to_le_bytes());
+    bytes.extend_from_slice(&0_u32.to_le_bytes());
+    bytes.extend_from_slice(&1_u32.to_le_bytes());
+    bytes.extend_from_slice(&6_u16.to_le_bytes());
+    bytes.extend_from_slice(&0_u16.to_le_bytes());
+    bytes.extend_from_slice(&0_u32.to_le_bytes());
+    bytes.extend_from_slice(&[0x41; 32]);
+    bytes.extend_from_slice(&[0x42; 16]);
+    bytes.extend_from_slice(&[0x43; 32]);
+    let mut digest = Sha256::new();
+    digest.update(DOMAIN);
+    digest.update(&bytes);
+    bytes.extend_from_slice(&digest.finalize());
+    assert_eq!(bytes.len(), TOTAL_BYTES);
+    bytes
+}
+
 #[test]
 fn auto_inspects_manifest_container_and_bundle_fixtures() {
     let payload = b"not-an-executable-fixture";
@@ -177,4 +203,42 @@ fn explicit_format_mismatch_fails_closed() {
         .expect("run inspect");
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("invalid HSACO"));
+}
+
+#[test]
+fn source_isa_collection_cli_supports_auto_explicit_and_hostile_inputs() {
+    let bytes = source_isa_collection();
+    let fixture = TempFile::with_bytes("source-isa", &bytes);
+    for extra in [None, Some("--format=source-isa-observation")] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"));
+        command.arg("inspect");
+        if let Some(extra) = extra {
+            command.arg(extra);
+        }
+        let output = command
+            .arg(&fixture.0)
+            .output()
+            .expect("run source/ISA inspect");
+        assert!(
+            output.status.success(),
+            "stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8(output.stdout).expect("UTF-8 inspect output");
+        assert!(stdout.contains("format: fe2o3-source-isa-observation-collection-v1"));
+        assert!(stdout.contains("authority: observation-only"));
+        assert!(stdout.contains("frames: 0"));
+        assert!(stdout.contains("missing-units: 1"));
+        assert!(stdout.contains("transport-failure: 6"));
+    }
+
+    let mut trailing = bytes;
+    trailing.push(0);
+    let hostile = TempFile::with_bytes("source-isa-trailing", &trailing);
+    let output = run_inspect(&hostile.0);
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("invalid source/ISA observation collection")
+    );
 }

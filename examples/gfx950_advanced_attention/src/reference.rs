@@ -1,9 +1,9 @@
 //! Independent safe CPU references for the fixed teaching profiles.
 
 use crate::{
-    ATTENTION_TOKENS_V1, CHANNELS_V1, HEAD_DIMENSION_V1, KDA_TAPS_V1, MIXING_STREAMS_V1,
-    PREFILL_TOKENS_V1, SELECTED_BLOCKS_V1, SELECTED_TOKENS_V1, SINKHORN_ITERATIONS_V1,
-    TOKENS_PER_BLOCK_V1,
+    ATTENTION_TOKENS_V1, CHANNELS_V1, DEEPSEEK_SPARSE_TOP_K_V1, HEAD_DIMENSION_V1, KDA_TAPS_V1,
+    MIXING_STREAMS_V1, PREFILL_TOKENS_V1, SELECTED_BLOCKS_V1, SELECTED_TOKENS_V1,
+    SINKHORN_ITERATIONS_V1, TOKENS_PER_BLOCK_V1,
 };
 
 const ATTENTION_SCALE_V1: f32 = 0.088_388_346;
@@ -18,6 +18,8 @@ pub enum ReferenceErrorV1 {
     NonFinite,
     /// A normalization denominator is not finite and strictly positive.
     DegenerateNormalization,
+    /// The selected-token list is empty after masking or repeats a valid token.
+    InvalidSparseIndices,
 }
 
 /// State and normalized output produced by one decode step.
@@ -45,6 +47,17 @@ pub struct SparseAttentionOutputV1 {
     pub selected: [u32; SELECTED_TOKENS_V1],
     /// One 16-channel attention output.
     pub output: Vec<f32>,
+}
+
+/// Output and stable-softmax state from the bounded DeepSeek DSA contract.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DeepSeekSparseAttentionOutputV1 {
+    /// One 16-channel attention output over only the valid selected tokens.
+    pub output: Vec<f32>,
+    /// Maximum selected-token logit used by stable softmax.
+    pub softmax_maximum: f32,
+    /// Sum of exponentials after subtracting `softmax_maximum`.
+    pub softmax_normalizer: f32,
 }
 
 fn validate_finite_v1(values: &[f32], expected: usize) -> Result<(), ReferenceErrorV1> {
@@ -268,6 +281,88 @@ pub fn content_sparse_attention_reference_v1(
     Ok(SparseAttentionOutputV1 {
         selected: selected.map(|token| token as u32),
         output,
+    })
+}
+
+/// Evaluates the token-indexed attention stage of DeepSeek sparse attention.
+///
+/// The learned Lightning Indexer is the producer of `indices`; values greater
+/// than or equal to the KV-cache token count are masked like FlashMLA's `-1`
+/// sentinel. Valid entries must be unique and at least one must remain.
+pub fn deepseek_sparse_attention_reference_v1(
+    q: &[f32],
+    k: &[f32],
+    v: &[f32],
+    indices: &[u32],
+) -> Result<DeepSeekSparseAttentionOutputV1, ReferenceErrorV1> {
+    validate_finite_v1(q, HEAD_DIMENSION_V1)?;
+    validate_finite_v1(k, ATTENTION_TOKENS_V1 * HEAD_DIMENSION_V1)?;
+    validate_finite_v1(v, ATTENTION_TOKENS_V1 * CHANNELS_V1)?;
+    if indices.len() != DEEPSEEK_SPARSE_TOP_K_V1 {
+        return Err(ReferenceErrorV1::Shape);
+    }
+
+    let mut valid = [false; DEEPSEEK_SPARSE_TOP_K_V1];
+    let mut tokens = [0_usize; DEEPSEEK_SPARSE_TOP_K_V1];
+    let mut valid_count = 0;
+    for rank in 0..DEEPSEEK_SPARSE_TOP_K_V1 {
+        let token = indices[rank] as usize;
+        if token >= ATTENTION_TOKENS_V1 {
+            continue;
+        }
+        for previous in 0..rank {
+            if valid[previous] && tokens[previous] == token {
+                return Err(ReferenceErrorV1::InvalidSparseIndices);
+            }
+        }
+        valid[rank] = true;
+        tokens[rank] = token;
+        valid_count += 1;
+    }
+    if valid_count == 0 {
+        return Err(ReferenceErrorV1::InvalidSparseIndices);
+    }
+
+    let mut scores = [f32::NEG_INFINITY; DEEPSEEK_SPARSE_TOP_K_V1];
+    for rank in 0..DEEPSEEK_SPARSE_TOP_K_V1 {
+        if valid[rank] {
+            let dot = (0..HEAD_DIMENSION_V1)
+                .map(|depth| q[depth] * k[tokens[rank] * HEAD_DIMENSION_V1 + depth])
+                .sum::<f32>();
+            scores[rank] = dot * ATTENTION_SCALE_V1;
+            if !scores[rank].is_finite() {
+                return Err(ReferenceErrorV1::NonFinite);
+            }
+        }
+    }
+    let softmax_maximum = scores.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+    let mut weights = [0.0_f32; DEEPSEEK_SPARSE_TOP_K_V1];
+    for rank in 0..DEEPSEEK_SPARSE_TOP_K_V1 {
+        if valid[rank] {
+            weights[rank] = (scores[rank] - softmax_maximum).exp();
+        }
+    }
+    let softmax_normalizer = weights.iter().sum::<f32>();
+    if !softmax_normalizer.is_finite() || softmax_normalizer <= 0.0 {
+        return Err(ReferenceErrorV1::DegenerateNormalization);
+    }
+
+    let mut output = vec![0.0_f32; CHANNELS_V1];
+    for channel in 0..CHANNELS_V1 {
+        for rank in 0..DEEPSEEK_SPARSE_TOP_K_V1 {
+            if valid[rank] {
+                output[channel] += weights[rank] * v[tokens[rank] * CHANNELS_V1 + channel];
+            }
+        }
+        output[channel] /= softmax_normalizer;
+        if !output[channel].is_finite() {
+            return Err(ReferenceErrorV1::NonFinite);
+        }
+    }
+    Ok(DeepSeekSparseAttentionOutputV1 {
+        output,
+        softmax_maximum,
+        softmax_normalizer,
     })
 }
 

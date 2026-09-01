@@ -13,9 +13,9 @@ use fe2o3_device::{
 use fe2o3_device::{GridExclusive, GridLeader};
 
 use crate::{
-    ATTENTION_TOKENS_V1, CHANNELS_V1, HEAD_DIMENSION_V1, KDA_TAPS_V1, MIXING_STREAMS_V1,
-    PREFILL_TOKENS_V1, SELECTED_BLOCKS_V1, SELECTED_TOKENS_V1, SINKHORN_ITERATIONS_V1,
-    SPARSE_BLOCKS_V1, TOKENS_PER_BLOCK_V1,
+    ATTENTION_TOKENS_V1, CHANNELS_V1, DEEPSEEK_SPARSE_TOP_K_V1, HEAD_DIMENSION_V1, KDA_TAPS_V1,
+    MIXING_STREAMS_V1, PREFILL_TOKENS_V1, SELECTED_BLOCKS_V1, SELECTED_TOKENS_V1,
+    SINKHORN_ITERATIONS_V1, SPARSE_BLOCKS_V1, TOKENS_PER_BLOCK_V1,
 };
 
 const ATTENTION_SCALE_V1: f32 = 0.088_388_346;
@@ -624,6 +624,21 @@ fn attention_score_v1(q: &[u8], k: &[u8], token: usize) -> Option<f32> {
     score.is_finite().then_some(score)
 }
 
+#[cfg(not(target_arch = "amdgpu"))]
+fn deepseek_attention_score_v1(q: &[f32], k: &[f32], token: usize) -> Option<f32> {
+    let mut dot = 0.0_f32;
+    let mut depth = 0;
+    while depth < HEAD_DIMENSION_V1 {
+        dot += q[depth] * k[token * HEAD_DIMENSION_V1 + depth];
+        if !dot.is_finite() {
+            return None;
+        }
+        depth += 1;
+    }
+    let score = dot * ATTENTION_SCALE_V1;
+    score.is_finite().then_some(score)
+}
+
 /// Selects two content blocks, retains three tokens, and computes one 16-value output.
 #[cfg(all(target_arch = "amdgpu", feature = "kernel-content-sparse-attention"))]
 #[cfg_attr(
@@ -1177,6 +1192,315 @@ pub fn gfx950_content_sparse_attention(
         write_f32_v1(&mut output, &leader, channel, value * output_gate);
         channel += 1;
     }
+}
+
+/// Consumes Lightning Indexer top-k token IDs and evaluates only those KV rows.
+#[cfg(all(target_arch = "amdgpu", feature = "kernel-deepseek-sparse-attention"))]
+#[kernel(
+    typed,
+    namespace = "62a1ee5804a9926ebb929061195f2229630ebdaf5a13a19d17ce7ddb4fcbbbe3",
+    launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
+)]
+pub fn gfx950_deepseek_sparse_attention(
+    q: &[f32],
+    k: &[f32],
+    v: &[f32],
+    index0: u32,
+    index1: u32,
+    index2: u32,
+    index3: u32,
+    mut output: DisjointSlice<f32, Index1D>,
+    mut softmax_maximum_output: DisjointSlice<f32, Index1D>,
+    mut softmax_normalizer_output: DisjointSlice<f32, Index1D>,
+) {
+    if q.len() != HEAD_DIMENSION_V1
+        || k.len() != ATTENTION_TOKENS_V1 * HEAD_DIMENSION_V1
+        || v.len() != ATTENTION_TOKENS_V1 * CHANNELS_V1
+        || output.len() != CHANNELS_V1
+        || softmax_maximum_output.len() != 1
+        || softmax_normalizer_output.len() != 1
+    {
+        fe2o3_device::trap();
+    }
+
+    let raw0 = index0;
+    let raw1 = index1;
+    let raw2 = index2;
+    let raw3 = index3;
+    let valid0 = raw0 < ATTENTION_TOKENS_V1 as u32;
+    let valid1 = raw1 < ATTENTION_TOKENS_V1 as u32;
+    let valid2 = raw2 < ATTENTION_TOKENS_V1 as u32;
+    let valid3 = raw3 < ATTENTION_TOKENS_V1 as u32;
+    if !(valid0 || valid1 || valid2 || valid3)
+        || (valid0 && valid1 && raw0 == raw1)
+        || (valid0 && valid2 && raw0 == raw2)
+        || (valid0 && valid3 && raw0 == raw3)
+        || (valid1 && valid2 && raw1 == raw2)
+        || (valid1 && valid3 && raw1 == raw3)
+        || (valid2 && valid3 && raw2 == raw3)
+    {
+        fe2o3_device::trap();
+    }
+    let token0 = if valid0 { raw0 as usize } else { 0 };
+    let token1 = if valid1 { raw1 as usize } else { 0 };
+    let token2 = if valid2 { raw2 as usize } else { 0 };
+    let token3 = if valid3 { raw3 as usize } else { 0 };
+    let Ok(query_view) =
+        StridedReadView2D::from_shared_slice(q, 0, 1, HEAD_DIMENSION_V1, HEAD_DIMENSION_V1)
+    else {
+        fe2o3_device::trap();
+    };
+    let Ok(key_view) = StridedReadView2D::from_shared_slice(
+        k,
+        0,
+        ATTENTION_TOKENS_V1,
+        HEAD_DIMENSION_V1,
+        HEAD_DIMENSION_V1,
+    ) else {
+        fe2o3_device::trap();
+    };
+    let Ok(value_view) =
+        StridedReadView2D::from_shared_slice(v, 0, ATTENTION_TOKENS_V1, CHANNELS_V1, CHANNELS_V1)
+    else {
+        fe2o3_device::trap();
+    };
+
+    let linear_index = thread::index_1d().get();
+    let column = linear_index % CHANNELS_V1;
+    let depth0 = column;
+    let depth1 = column + CHANNELS_V1;
+    let depth2 = column + 2 * CHANNELS_V1;
+    let depth3 = column + 3 * CHANNELS_V1;
+    let depth4 = column + 4 * CHANNELS_V1;
+    let depth5 = column + 5 * CHANNELS_V1;
+    let depth6 = column + 6 * CHANNELS_V1;
+    let depth7 = column + 7 * CHANNELS_V1;
+    let query0 = query_view.load_or(0, depth0, 0.0);
+    let query1 = query_view.load_or(0, depth1, 0.0);
+    let query2 = query_view.load_or(0, depth2, 0.0);
+    let query3 = query_view.load_or(0, depth3, 0.0);
+    let query4 = query_view.load_or(0, depth4, 0.0);
+    let query5 = query_view.load_or(0, depth5, 0.0);
+    let query6 = query_view.load_or(0, depth6, 0.0);
+    let query7 = query_view.load_or(0, depth7, 0.0);
+    let mut partial0 = 0.0_f32;
+    let mut partial1 = 0.0_f32;
+    let mut partial2 = 0.0_f32;
+    let mut partial3 = 0.0_f32;
+    if valid0 {
+        partial0 = query0 * key_view.load_or(token0, depth0, 0.0)
+            + query1 * key_view.load_or(token0, depth1, 0.0)
+            + query2 * key_view.load_or(token0, depth2, 0.0)
+            + query3 * key_view.load_or(token0, depth3, 0.0)
+            + query4 * key_view.load_or(token0, depth4, 0.0)
+            + query5 * key_view.load_or(token0, depth5, 0.0)
+            + query6 * key_view.load_or(token0, depth6, 0.0)
+            + query7 * key_view.load_or(token0, depth7, 0.0);
+    }
+    if valid1 {
+        partial1 = query0 * key_view.load_or(token1, depth0, 0.0)
+            + query1 * key_view.load_or(token1, depth1, 0.0)
+            + query2 * key_view.load_or(token1, depth2, 0.0)
+            + query3 * key_view.load_or(token1, depth3, 0.0)
+            + query4 * key_view.load_or(token1, depth4, 0.0)
+            + query5 * key_view.load_or(token1, depth5, 0.0)
+            + query6 * key_view.load_or(token1, depth6, 0.0)
+            + query7 * key_view.load_or(token1, depth7, 0.0);
+    }
+    if valid2 {
+        partial2 = query0 * key_view.load_or(token2, depth0, 0.0)
+            + query1 * key_view.load_or(token2, depth1, 0.0)
+            + query2 * key_view.load_or(token2, depth2, 0.0)
+            + query3 * key_view.load_or(token2, depth3, 0.0)
+            + query4 * key_view.load_or(token2, depth4, 0.0)
+            + query5 * key_view.load_or(token2, depth5, 0.0)
+            + query6 * key_view.load_or(token2, depth6, 0.0)
+            + query7 * key_view.load_or(token2, depth7, 0.0);
+    }
+    if valid3 {
+        partial3 = query0 * key_view.load_or(token3, depth0, 0.0)
+            + query1 * key_view.load_or(token3, depth1, 0.0)
+            + query2 * key_view.load_or(token3, depth2, 0.0)
+            + query3 * key_view.load_or(token3, depth3, 0.0)
+            + query4 * key_view.load_or(token3, depth4, 0.0)
+            + query5 * key_view.load_or(token3, depth5, 0.0)
+            + query6 * key_view.load_or(token3, depth6, 0.0)
+            + query7 * key_view.load_or(token3, depth7, 0.0);
+    }
+
+    let subgroup = Gfx950Subgroup::current();
+    let score0 = if valid0 {
+        subgroup.reduce_sum_f32::<16>(partial0) * ATTENTION_SCALE_V1
+    } else {
+        f32::NEG_INFINITY
+    };
+    let score1 = if valid1 {
+        subgroup.reduce_sum_f32::<16>(partial1) * ATTENTION_SCALE_V1
+    } else {
+        f32::NEG_INFINITY
+    };
+    let score2 = if valid2 {
+        subgroup.reduce_sum_f32::<16>(partial2) * ATTENTION_SCALE_V1
+    } else {
+        f32::NEG_INFINITY
+    };
+    let score3 = if valid3 {
+        subgroup.reduce_sum_f32::<16>(partial3) * ATTENTION_SCALE_V1
+    } else {
+        f32::NEG_INFINITY
+    };
+    let mut maximum = score0;
+    if score1 > maximum {
+        maximum = score1;
+    }
+    if score2 > maximum {
+        maximum = score2;
+    }
+    if score3 > maximum {
+        maximum = score3;
+    }
+
+    let math = DeviceMath::current();
+    let weight0 = if valid0 {
+        math.exp_f32(score0 - maximum)
+    } else {
+        0.0
+    };
+    let weight1 = if valid1 {
+        math.exp_f32(score1 - maximum)
+    } else {
+        0.0
+    };
+    let weight2 = if valid2 {
+        math.exp_f32(score2 - maximum)
+    } else {
+        0.0
+    };
+    let weight3 = if valid3 {
+        math.exp_f32(score3 - maximum)
+    } else {
+        0.0
+    };
+    let normalizer = weight0 + weight1 + weight2 + weight3;
+    let mut numerator = 0.0_f32;
+    if valid0 {
+        numerator += weight0 * value_view.load_or(token0, column, 0.0);
+    }
+    if valid1 {
+        numerator += weight1 * value_view.load_or(token1, column, 0.0);
+    }
+    if valid2 {
+        numerator += weight2 * value_view.load_or(token2, column, 0.0);
+    }
+    if valid3 {
+        numerator += weight3 * value_view.load_or(token3, column, 0.0);
+    }
+    if linear_index < CHANNELS_V1 {
+        if let Some(slot) = output.get_mut(thread::index_1d()) {
+            *slot = numerator / normalizer;
+        }
+    }
+    if linear_index == 0 {
+        if let Some(slot) = softmax_maximum_output.get_mut(thread::index_1d()) {
+            *slot = maximum;
+        }
+        if let Some(slot) = softmax_normalizer_output.get_mut(thread::index_1d()) {
+            *slot = normalizer;
+        }
+    }
+}
+
+#[cfg(not(target_arch = "amdgpu"))]
+pub fn gfx950_deepseek_sparse_attention(
+    q: &[f32],
+    k: &[f32],
+    v: &[f32],
+    indices: &[u32],
+    mut output: DisjointSlice<f32, GridExclusive>,
+    mut softmax_maximum_output: DisjointSlice<f32, GridExclusive>,
+    mut softmax_normalizer_output: DisjointSlice<f32, GridExclusive>,
+) {
+    let Some(leader) = thread::grid_leader() else {
+        return;
+    };
+    if q.len() != HEAD_DIMENSION_V1
+        || k.len() != ATTENTION_TOKENS_V1 * HEAD_DIMENSION_V1
+        || v.len() != ATTENTION_TOKENS_V1 * CHANNELS_V1
+        || indices.len() != DEEPSEEK_SPARSE_TOP_K_V1
+        || output.len() != CHANNELS_V1
+        || softmax_maximum_output.len() != 1
+        || softmax_normalizer_output.len() != 1
+    {
+        fe2o3_device::trap();
+    }
+    let mut valid = [false; DEEPSEEK_SPARSE_TOP_K_V1];
+    let mut tokens = [0_usize; DEEPSEEK_SPARSE_TOP_K_V1];
+    let mut valid_count = 0;
+    let mut rank = 0;
+    while rank < DEEPSEEK_SPARSE_TOP_K_V1 {
+        let token = indices[rank] as usize;
+        if token < ATTENTION_TOKENS_V1 {
+            let mut previous = 0;
+            while previous < rank {
+                if valid[previous] && tokens[previous] == token {
+                    fe2o3_device::trap();
+                }
+                previous += 1;
+            }
+            valid[rank] = true;
+            tokens[rank] = token;
+            valid_count += 1;
+        }
+        rank += 1;
+    }
+    if valid_count == 0 {
+        fe2o3_device::trap();
+    }
+
+    let mut scores = [f32::NEG_INFINITY; DEEPSEEK_SPARSE_TOP_K_V1];
+    let mut maximum = f32::NEG_INFINITY;
+    rank = 0;
+    while rank < DEEPSEEK_SPARSE_TOP_K_V1 {
+        if valid[rank] {
+            let Some(score) = deepseek_attention_score_v1(q, k, tokens[rank]) else {
+                fe2o3_device::trap();
+            };
+            scores[rank] = score;
+            if score > maximum {
+                maximum = score;
+            }
+        }
+        rank += 1;
+    }
+    let math = DeviceMath::current();
+    let mut weights = [0.0_f32; DEEPSEEK_SPARSE_TOP_K_V1];
+    let mut normalizer = 0.0_f32;
+    rank = 0;
+    while rank < DEEPSEEK_SPARSE_TOP_K_V1 {
+        if valid[rank] {
+            weights[rank] = math.exp_f32(scores[rank] - maximum);
+            normalizer += weights[rank];
+        }
+        rank += 1;
+    }
+    if !normalizer.is_finite() || normalizer <= 0.0 {
+        fe2o3_device::trap();
+    }
+    let mut channel = 0;
+    while channel < CHANNELS_V1 {
+        let mut numerator = 0.0_f32;
+        rank = 0;
+        while rank < DEEPSEEK_SPARSE_TOP_K_V1 {
+            if valid[rank] {
+                numerator += weights[rank] * v[tokens[rank] * CHANNELS_V1 + channel];
+            }
+            rank += 1;
+        }
+        write_f32_v1(&mut output, &leader, channel, numerator / normalizer);
+        channel += 1;
+    }
+    write_f32_v1(&mut softmax_maximum_output, &leader, 0, maximum);
+    write_f32_v1(&mut softmax_normalizer_output, &leader, 0, normalizer);
 }
 
 /// Mixes a four-token local window with three four-token compressed global blocks.

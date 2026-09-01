@@ -14,7 +14,7 @@ const ABLATION_REGISTRY: &str = include_str!("../ablation-variants-v1.json");
 const RUNNER_SOURCE: &str = include_str!("../run-gfx950.sh");
 
 #[test]
-fn source_contains_the_seven_expected_typed_kernels() {
+fn source_contains_the_eight_expected_typed_kernels() {
     let file = syn::parse_file(SOURCE).expect("kernel source parses as ordinary Rust");
     let kernels: Vec<_> = file
         .items
@@ -45,13 +45,14 @@ fn source_contains_the_seven_expected_typed_kernels() {
             "gfx950_attnres_aggregate".to_string(),
             "gfx950_compressed_hybrid_attention".to_string(),
             "gfx950_content_sparse_attention".to_string(),
+            "gfx950_deepseek_sparse_attention".to_string(),
             "gfx950_four_branch_residual".to_string(),
             "gfx950_kda_gdn_decode".to_string(),
             "gfx950_kda_gdn_prefill".to_string(),
             "gfx950_mhc_sinkhorn_mix".to_string(),
         ])
     );
-    assert_eq!(kernels.len(), 7);
+    assert_eq!(kernels.len(), 8);
     for function in kernels {
         assert!(matches!(function.vis, Visibility::Public(_)));
         assert!(function.sig.unsafety.is_none());
@@ -168,6 +169,7 @@ fn package_states_the_production_source_and_evidence_boundary() {
         "kernel-kda-decode",
         "kernel-kda-prefill",
         "kernel-content-sparse-attention",
+        "kernel-deepseek-sparse-attention",
         "kernel-compressed-hybrid-attention",
         "kernel-attnres-aggregate",
         "kernel-four-branch-residual",

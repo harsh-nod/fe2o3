@@ -72,7 +72,7 @@ const AUTHORITY_CARGO_BINDING_TRAMPOLINE_SHA256_ENV: &str =
 const SOURCE_ISA_COLLECTION_STDERR_PREFIX_V1: &str =
     "[cargo-fe2o3] source-isa-observation-collection-v1";
 const MAX_SOURCE_ISA_COLLECTION_STDERR_LINE_BYTES_V1: usize =
-    capability_broker::MAX_SOURCE_ISA_OBSERVATION_COLLECTION_HEX_BYTES_V1 + 256;
+    source_isa_observation::MAX_SOURCE_ISA_OBSERVATION_COLLECTION_HEX_BYTES_V1 + 256;
 const _: () = assert!(MAX_SOURCE_ISA_COLLECTION_STDERR_LINE_BYTES_V1 <= 2 * 1024 * 1024);
 const NON_PRODUCTION_AUTHORITY_VALIDATION_ENV: &str =
     "FE2O3_NON_PRODUCTION_UNPROTECTED_AUTHORITY_VALIDATION_V1";
@@ -1834,7 +1834,7 @@ fn finish_capability_broker_observations_to(
     match collection.encode_canonical() {
         Ok(encoded) => {
             let decoded =
-                match capability_broker::SourceIsaObservationCollectionV1::decode_canonical(
+                match source_isa_observation::SourceIsaObservationCollectionV1::decode_canonical(
                     &encoded,
                 ) {
                     Ok(decoded) => decoded,
@@ -1897,7 +1897,7 @@ fn source_isa_collection_hex_length(binary_len: usize) -> Result<usize, String> 
     binary_len
         .checked_mul(2)
         .filter(|bytes| {
-            *bytes <= capability_broker::MAX_SOURCE_ISA_OBSERVATION_COLLECTION_HEX_BYTES_V1
+            *bytes <= source_isa_observation::MAX_SOURCE_ISA_OBSERVATION_COLLECTION_HEX_BYTES_V1
         })
         .ok_or_else(|| "source/ISA collection hex exceeds its canonical bound".to_owned())
 }
@@ -3750,7 +3750,7 @@ fn is_gfx_target(candidate: &str) -> bool {
 
 fn print_help() {
     eprintln!(
-        "usage: cargo fe2o3 <command>\n\ncommands:\n  authority release   run an authority build through the protected self-launch boundary\n  doctor              check ROCm/HIP toolchain discovery\n  check               check host targets with compiler-derived binding only\n  test --all-targets  run trusted binding-only host tests; no artifact/GPU authority\n  build               build with the fe2o3 rustc backend\n  run                 run with the fe2o3 rustc backend\n  examples            validate or query the example regression manifest\n  clean [--dry-run]   remove guarded fe2o3-owned target artifacts\n  inspect             inspect bounded artifact or HSACO metadata without execution\n  sanitize            plan or execute bounded ROCgdb precise-memory diagnostics\n  debug               plan or execute bounded batch/interactive ROCgdb sessions\n  profile             plan or authorize bounded rocprofv3 collection",
+        "usage: cargo fe2o3 <command>\n\ncommands:\n  authority release   run an authority build through the protected self-launch boundary\n  doctor              check ROCm/HIP toolchain discovery\n  check               check host targets with compiler-derived binding only\n  test --all-targets  run trusted binding-only host tests; no artifact/GPU authority\n  build               build with the fe2o3 rustc backend\n  run                 run with the fe2o3 rustc backend\n  examples            validate or query the example regression manifest\n  clean [--dry-run]   remove guarded fe2o3-owned target artifacts\n  inspect             inspect bounded artifact, HSACO, or observation metadata\n  sanitize            plan or execute bounded ROCgdb precise-memory diagnostics\n  debug               plan or execute bounded batch/interactive ROCgdb sessions\n  profile             plan or authorize bounded rocprofv3 collection",
     );
 }
 
@@ -3774,7 +3774,7 @@ mod tests {
         validate_production_compilation_environment,
     };
     use crate::pinned_executable_test_directory::TestDirectory;
-    use crate::{capability_broker, observer_telemetry};
+    use crate::{observer_telemetry, source_isa_observation};
     use std::ffi::{OsStr, OsString};
     use std::io::{self, Write};
     use std::process::Command;
@@ -4309,13 +4309,13 @@ Agent 2
         );
         assert_eq!(
             source_isa_collection_hex_length(
-                capability_broker::MAX_SOURCE_ISA_OBSERVATION_COLLECTION_HEX_BYTES_V1 / 2
+                source_isa_observation::MAX_SOURCE_ISA_OBSERVATION_COLLECTION_HEX_BYTES_V1 / 2
             ),
-            Ok(capability_broker::MAX_SOURCE_ISA_OBSERVATION_COLLECTION_HEX_BYTES_V1)
+            Ok(source_isa_observation::MAX_SOURCE_ISA_OBSERVATION_COLLECTION_HEX_BYTES_V1)
         );
         assert!(
             source_isa_collection_hex_length(
-                capability_broker::MAX_SOURCE_ISA_OBSERVATION_COLLECTION_HEX_BYTES_V1 / 2 + 1
+                source_isa_observation::MAX_SOURCE_ISA_OBSERVATION_COLLECTION_HEX_BYTES_V1 / 2 + 1
             )
             .is_err()
         );

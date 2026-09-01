@@ -36,6 +36,324 @@ pub(crate) const MAX_SOURCE_ISA_OBSERVATION_FRAME_BYTES_V1: usize = 4096;
 const _: () =
     assert!(SOURCE_ISA_OBSERVATION_FRAME_BYTES_V1 <= MAX_SOURCE_ISA_OBSERVATION_FRAME_BYTES_V1);
 
+const MAX_SOURCE_ISA_OBSERVATION_UNITS_V1: usize = 1024;
+pub(crate) const SOURCE_ISA_COLLECTION_MAGIC_V1: &[u8; 8] = b"F2SICOL1";
+const SOURCE_ISA_COLLECTION_VERSION_V1: u16 = 1;
+pub(crate) const SOURCE_ISA_COLLECTION_HEADER_BYTES_V1: usize = 80;
+pub(crate) const SOURCE_ISA_COLLECTION_IDENTITY_BYTES_V1: usize = 32;
+pub(crate) const SOURCE_ISA_COLLECTION_IDENTITY_DOMAIN_V1: &[u8] =
+    b"FE2O3/SOURCE-ISA-OBSERVATION-COLLECTION/V1\0";
+pub(crate) const MAX_SOURCE_ISA_OBSERVATION_COLLECTION_BYTES_V1: usize =
+    SOURCE_ISA_COLLECTION_HEADER_BYTES_V1
+        + MAX_SOURCE_ISA_OBSERVATION_UNITS_V1 * SOURCE_ISA_OBSERVATION_FRAME_BYTES_V1
+        + SOURCE_ISA_COLLECTION_IDENTITY_BYTES_V1;
+pub(crate) const MAX_SOURCE_ISA_OBSERVATION_COLLECTION_HEX_BYTES_V1: usize =
+    MAX_SOURCE_ISA_OBSERVATION_COLLECTION_BYTES_V1 * 2;
+const _: () = assert!(MAX_SOURCE_ISA_OBSERVATION_COLLECTION_BYTES_V1 == 696_432);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u16)]
+pub(crate) enum SourceIsaObservationTransportFailureV1 {
+    #[allow(dead_code)]
+    CollectorAlreadyFailed = 1,
+    UnitBound = 2,
+    AggregateByteBound = 3,
+    ConflictingDuplicate = 4,
+    RejectedFrame = 5,
+    MissingSelectedUnits = 6,
+    BrokerWorkerPanic = 7,
+}
+
+impl fmt::Display for SourceIsaObservationTransportFailureV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "source/ISA observation transport failure code {}",
+            *self as u16
+        )
+    }
+}
+
+impl Error for SourceIsaObservationTransportFailureV1 {}
+
+impl SourceIsaObservationTransportFailureV1 {
+    pub(crate) const fn code(self) -> u16 {
+        self as u16
+    }
+
+    fn from_code(code: u16) -> Result<Option<Self>, String> {
+        match code {
+            0 => Ok(None),
+            1 => Ok(Some(Self::CollectorAlreadyFailed)),
+            2 => Ok(Some(Self::UnitBound)),
+            3 => Ok(Some(Self::AggregateByteBound)),
+            4 => Ok(Some(Self::ConflictingDuplicate)),
+            5 => Ok(Some(Self::RejectedFrame)),
+            6 => Ok(Some(Self::MissingSelectedUnits)),
+            7 => Ok(Some(Self::BrokerWorkerPanic)),
+            _ => Err("source/ISA collection has an unknown failure code".to_owned()),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct SourceIsaObservationCollectionV1 {
+    config_identity: [u8; 32],
+    session: BuildSession,
+    frames: Vec<([u8; 32], SourceIsaObservationFrameV1)>,
+    missing_units: Vec<[u8; 32]>,
+    failure: Option<SourceIsaObservationTransportFailureV1>,
+}
+
+impl SourceIsaObservationCollectionV1 {
+    pub(crate) fn from_collected(
+        config_identity: [u8; 32],
+        session: BuildSession,
+        frames: Vec<([u8; 32], SourceIsaObservationFrameV1)>,
+        missing_units: Vec<[u8; 32]>,
+        failure: Option<SourceIsaObservationTransportFailureV1>,
+    ) -> Self {
+        Self {
+            config_identity,
+            session,
+            frames,
+            missing_units,
+            failure,
+        }
+    }
+
+    pub(crate) const fn config_identity(&self) -> [u8; 32] {
+        self.config_identity
+    }
+
+    pub(crate) const fn session(&self) -> BuildSession {
+        self.session
+    }
+
+    pub(crate) fn frames(&self) -> impl ExactSizeIterator<Item = &SourceIsaObservationFrameV1> {
+        self.frames.iter().map(|(_, frame)| frame)
+    }
+
+    pub(crate) fn missing_units(&self) -> &[[u8; 32]] {
+        &self.missing_units
+    }
+
+    pub(crate) const fn failure(&self) -> Option<SourceIsaObservationTransportFailureV1> {
+        self.failure
+    }
+
+    pub(crate) fn encode_canonical(&self) -> Result<Vec<u8>, String> {
+        self.validate_canonical()?;
+        let total =
+            source_isa_collection_encoded_length(self.frames.len(), self.missing_units.len())?;
+        let total_u32 = u32::try_from(total)
+            .map_err(|_| "source/ISA collection length is not representable".to_owned())?;
+        let frame_count = u32::try_from(self.frames.len())
+            .map_err(|_| "source/ISA collection frame count is not representable".to_owned())?;
+        let missing_count = u32::try_from(self.missing_units.len()).map_err(|_| {
+            "source/ISA collection missing-unit count is not representable".to_owned()
+        })?;
+        let mut encoded = Vec::new();
+        encoded
+            .try_reserve_exact(total)
+            .map_err(|_| "cannot allocate bounded source/ISA collection bytes".to_owned())?;
+        encoded.extend_from_slice(SOURCE_ISA_COLLECTION_MAGIC_V1);
+        encoded.extend_from_slice(&SOURCE_ISA_COLLECTION_VERSION_V1.to_le_bytes());
+        encoded.extend_from_slice(&(SOURCE_ISA_COLLECTION_HEADER_BYTES_V1 as u16).to_le_bytes());
+        encoded.extend_from_slice(&total_u32.to_le_bytes());
+        encoded.extend_from_slice(&frame_count.to_le_bytes());
+        encoded.extend_from_slice(&missing_count.to_le_bytes());
+        encoded.extend_from_slice(
+            &self
+                .failure
+                .map_or(0, |failure| failure.code())
+                .to_le_bytes(),
+        );
+        encoded.extend_from_slice(&0_u16.to_le_bytes());
+        encoded.extend_from_slice(&0_u32.to_le_bytes());
+        encoded.extend_from_slice(&self.config_identity());
+        encoded.extend_from_slice(self.session().as_bytes());
+        for (_, frame) in &self.frames {
+            encoded.extend_from_slice(&frame.encode());
+        }
+        for unit in &self.missing_units {
+            encoded.extend_from_slice(unit);
+        }
+        let mut digest = Sha256::new();
+        digest.update(SOURCE_ISA_COLLECTION_IDENTITY_DOMAIN_V1);
+        digest.update(&encoded);
+        encoded.extend_from_slice(&digest.finalize());
+        debug_assert_eq!(encoded.len(), total);
+        Ok(encoded)
+    }
+
+    pub(crate) fn decode_canonical(encoded: &[u8]) -> Result<Self, String> {
+        let minimum =
+            SOURCE_ISA_COLLECTION_HEADER_BYTES_V1 + SOURCE_ISA_COLLECTION_IDENTITY_BYTES_V1;
+        if encoded.len() < minimum
+            || encoded.len() > MAX_SOURCE_ISA_OBSERVATION_COLLECTION_BYTES_V1
+            || &encoded[..8] != SOURCE_ISA_COLLECTION_MAGIC_V1
+            || u16::from_le_bytes(
+                encoded[8..10]
+                    .try_into()
+                    .expect("fixed collection version field"),
+            ) != SOURCE_ISA_COLLECTION_VERSION_V1
+            || usize::from(u16::from_le_bytes(
+                encoded[10..12]
+                    .try_into()
+                    .expect("fixed collection header field"),
+            )) != SOURCE_ISA_COLLECTION_HEADER_BYTES_V1
+            || usize::try_from(u32::from_le_bytes(
+                encoded[12..16]
+                    .try_into()
+                    .expect("fixed collection length field"),
+            ))
+            .ok()
+                != Some(encoded.len())
+        {
+            return Err("source/ISA collection has malformed framing".to_owned());
+        }
+        let frame_count = usize::try_from(u32::from_le_bytes(
+            encoded[16..20]
+                .try_into()
+                .expect("fixed collection frame-count field"),
+        ))
+        .map_err(|_| "source/ISA collection frame count is not representable".to_owned())?;
+        let missing_count = usize::try_from(u32::from_le_bytes(
+            encoded[20..24]
+                .try_into()
+                .expect("fixed collection missing-count field"),
+        ))
+        .map_err(|_| "source/ISA collection missing count is not representable".to_owned())?;
+        let expected = source_isa_collection_encoded_length(frame_count, missing_count)?;
+        if expected != encoded.len() || encoded[26..32].iter().any(|byte| *byte != 0) {
+            return Err("source/ISA collection has noncanonical bounds or truth claims".to_owned());
+        }
+        let failure = SourceIsaObservationTransportFailureV1::from_code(u16::from_le_bytes(
+            encoded[24..26]
+                .try_into()
+                .expect("fixed collection failure field"),
+        ))?;
+        let config_identity = encoded[32..64]
+            .try_into()
+            .expect("fixed collection config field");
+        let session = BuildSession::from_bytes(
+            encoded[64..80]
+                .try_into()
+                .expect("fixed collection session field"),
+        );
+        let identity_start = encoded.len() - SOURCE_ISA_COLLECTION_IDENTITY_BYTES_V1;
+        let mut digest = Sha256::new();
+        digest.update(SOURCE_ISA_COLLECTION_IDENTITY_DOMAIN_V1);
+        digest.update(&encoded[..identity_start]);
+        let identity: [u8; 32] = digest.finalize().into();
+        let retained_identity: [u8; 32] = encoded[identity_start..]
+            .try_into()
+            .expect("fixed collection identity field");
+        if retained_identity == [0; 32] || identity != retained_identity {
+            return Err("source/ISA collection identity differs from its bytes".to_owned());
+        }
+
+        let mut frames = Vec::new();
+        frames
+            .try_reserve_exact(frame_count)
+            .map_err(|_| "cannot allocate decoded source/ISA frames".to_owned())?;
+        let mut cursor = SOURCE_ISA_COLLECTION_HEADER_BYTES_V1;
+        for _ in 0..frame_count {
+            let end = cursor + SOURCE_ISA_OBSERVATION_FRAME_BYTES_V1;
+            let frame = SourceIsaObservationFrameV1::decode(&encoded[cursor..end])
+                .map_err(|error| format!("invalid source/ISA collection frame: {error}"))?;
+            frames.push((frame.context().unit(), frame));
+            cursor = end;
+        }
+        let mut missing_units = Vec::new();
+        missing_units
+            .try_reserve_exact(missing_count)
+            .map_err(|_| "cannot allocate decoded source/ISA missing units".to_owned())?;
+        for _ in 0..missing_count {
+            let end = cursor + 32;
+            missing_units.push(
+                encoded[cursor..end]
+                    .try_into()
+                    .expect("bounded missing-unit field"),
+            );
+            cursor = end;
+        }
+        if cursor != identity_start {
+            return Err("source/ISA collection has trailing payload bytes".to_owned());
+        }
+        let collection = Self {
+            config_identity,
+            session,
+            frames,
+            missing_units,
+            failure,
+        };
+        collection.validate_canonical()?;
+        Ok(collection)
+    }
+
+    fn validate_canonical(&self) -> Result<(), String> {
+        if self.config_identity == [0; 32]
+            || self.session == BuildSession::DIRECT
+            || self.frames.windows(2).any(|pair| pair[0].0 >= pair[1].0)
+            || self.frames.iter().any(|(unit, frame)| {
+                *unit != frame.context().unit()
+                    || frame.context().config() != self.config_identity
+                    || frame.context().attempt().session() != self.session
+            })
+            || self.missing_units.contains(&[0; 32])
+            || self.missing_units.windows(2).any(|pair| pair[0] >= pair[1])
+            || self.missing_units.iter().any(|unit| {
+                self.frames
+                    .binary_search_by_key(unit, |(observed, _)| *observed)
+                    .is_ok()
+            })
+            || (!self.missing_units.is_empty() && self.failure.is_none())
+        {
+            return Err("source/ISA collection is not canonical".to_owned());
+        }
+        source_isa_collection_encoded_length(self.frames.len(), self.missing_units.len())?;
+        Ok(())
+    }
+
+    pub(crate) const fn grants_compiler_authority(&self) -> bool {
+        false
+    }
+
+    pub(crate) const fn grants_publication_authority(&self) -> bool {
+        false
+    }
+
+    pub(crate) const fn grants_runtime_authority(&self) -> bool {
+        false
+    }
+}
+
+pub(crate) fn source_isa_collection_encoded_length(
+    frame_count: usize,
+    missing_count: usize,
+) -> Result<usize, String> {
+    let unit_count = frame_count
+        .checked_add(missing_count)
+        .ok_or_else(|| "source/ISA collection unit count overflowed".to_owned())?;
+    if unit_count > MAX_SOURCE_ISA_OBSERVATION_UNITS_V1 {
+        return Err("source/ISA collection exceeds its unit bound".to_owned());
+    }
+    let frame_bytes = frame_count
+        .checked_mul(SOURCE_ISA_OBSERVATION_FRAME_BYTES_V1)
+        .ok_or_else(|| "source/ISA collection frame length overflowed".to_owned())?;
+    let missing_bytes = missing_count
+        .checked_mul(32)
+        .ok_or_else(|| "source/ISA collection missing-unit length overflowed".to_owned())?;
+    SOURCE_ISA_COLLECTION_HEADER_BYTES_V1
+        .checked_add(frame_bytes)
+        .and_then(|bytes| bytes.checked_add(missing_bytes))
+        .and_then(|bytes| bytes.checked_add(SOURCE_ISA_COLLECTION_IDENTITY_BYTES_V1))
+        .filter(|bytes| *bytes <= MAX_SOURCE_ISA_OBSERVATION_COLLECTION_BYTES_V1)
+        .ok_or_else(|| "source/ISA collection exceeds its canonical bound".to_owned())
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct SourceIsaObservationContentIdentityV1 {
     sha256: [u8; 32],
@@ -458,6 +776,50 @@ pub(crate) enum SourceIsaObservationUnavailableReasonV1 {
 }
 
 impl SourceIsaObservationUnavailableReasonV1 {
+    pub(crate) const fn label(self) -> &'static str {
+        match self {
+            Self::CarrierMultipleKirFunctionBodies => "carrier-multiple-kir-function-bodies",
+            Self::CarrierNoStatementCorrespondence => "carrier-no-statement-correspondence",
+            Self::CarrierSourceMapUnavailable => "carrier-source-map-unavailable",
+            Self::CarrierResourceLimit => "carrier-resource-limit",
+            Self::CarrierCanonicalKirV7ProjectionUnavailable => {
+                "carrier-canonical-kir-v7-projection-unavailable"
+            }
+            Self::CarrierSourceObservationUnrepresentable => {
+                "carrier-source-observation-unrepresentable"
+            }
+            Self::CarrierSemanticMapConstructionUnavailable => {
+                "carrier-semantic-map-construction-unavailable"
+            }
+            Self::CarrierSemanticMapEncodingUnavailable => {
+                "carrier-semantic-map-encoding-unavailable"
+            }
+            Self::CarrierFragmentConstructionUnavailable => {
+                "carrier-fragment-construction-unavailable"
+            }
+            Self::CarrierConstructionUnavailable => "carrier-construction-unavailable",
+            Self::CarrierReceiptExtensionConstructionUnavailable => {
+                "carrier-receipt-extension-construction-unavailable"
+            }
+            Self::CarrierCorrespondenceValidationUnavailable => {
+                "carrier-correspondence-validation-unavailable"
+            }
+            Self::CarrierCanonicalKirModuleMismatch => "carrier-canonical-kir-module-mismatch",
+            Self::CarrierLegacyBareAssociationNoAttachment => {
+                "carrier-legacy-bare-association-no-attachment"
+            }
+            Self::AnchorLegacySemanticAttachment => "anchor-legacy-semantic-attachment",
+            Self::AnchorLegacyUninstrumentedReplay => "anchor-legacy-uninstrumented-replay",
+            Self::AnchorNoOperations => "anchor-no-operations",
+            Self::AnchorMultipleDefinedBodies => "anchor-multiple-defined-bodies",
+            Self::AnchorCompilerInstrumentationAbsent => "anchor-compiler-instrumentation-absent",
+            Self::SourceProjectionForKirV9 => "source-projection-for-kir-v9",
+            Self::FinalizedEvidenceUnavailableFromReadyState => {
+                "finalized-evidence-unavailable-from-ready-state"
+            }
+        }
+    }
+
     fn decode(value: u16) -> Result<Self, SourceIsaObservationFrameErrorV1> {
         match value {
             1 => Ok(Self::CarrierMultipleKirFunctionBodies),
@@ -572,6 +934,129 @@ pub(crate) enum SourceIsaObservationErrorCodeV1 {
 }
 
 impl SourceIsaObservationErrorCodeV1 {
+    pub(crate) const fn label(self) -> &'static str {
+        match self {
+            Self::InvalidKirToLlvmReplay => "invalid-kir-to-llvm-replay",
+            Self::NonExactSemanticMap => "non-exact-semantic-map",
+            Self::ArtifactIdentityMismatch => "artifact-identity-mismatch",
+            Self::TargetKirIdentityMismatch => "target-kir-identity-mismatch",
+            Self::CoordinateShapeMismatch => "coordinate-shape-mismatch",
+            Self::InvalidSourceGraph => "invalid-source-graph",
+            Self::ResourceLimit => "resource-limit",
+            Self::AllocationFailure => "allocation-failure",
+            Self::FinalizedMapProductionAssociation => "finalized-map-production-association",
+            Self::FinalizedMapProductionAssociationMismatch => {
+                "finalized-map-production-association-mismatch"
+            }
+            Self::FinalizedMapInvalidKirToLlvmReplay => "finalized-map-invalid-kir-to-llvm-replay",
+            Self::FinalizedMapKirToLlvmReplayTargetMismatch => {
+                "finalized-map-kir-to-llvm-replay-target-mismatch"
+            }
+            Self::FinalizedMapInvalidLlvmToHsacoCustody => {
+                "finalized-map-invalid-llvm-to-hsaco-custody"
+            }
+            Self::FinalizedMapInvalidBoundSourceMap => "finalized-map-invalid-bound-source-map",
+            Self::FinalizedMapInvalidBoundSemanticMir => "finalized-map-invalid-bound-semantic-mir",
+            Self::FinalizedMapInvalidBoundCorrespondenceV4 => {
+                "finalized-map-invalid-bound-correspondence-v4"
+            }
+            Self::FinalizedMapInvalidBoundCanonicalKirV8 => {
+                "finalized-map-invalid-bound-canonical-kir-v8"
+            }
+            Self::FinalizedMapInvalidBoundCanonicalKirV7 => {
+                "finalized-map-invalid-bound-canonical-kir-v7"
+            }
+            Self::FinalizedMapCanonicalKirProjectionMismatch => {
+                "finalized-map-canonical-kir-projection-mismatch"
+            }
+            Self::FinalizedMapCorrespondenceIdentityMismatch => {
+                "finalized-map-correspondence-identity-mismatch"
+            }
+            Self::FinalizedMapInvalidSemanticCorrespondence => {
+                "finalized-map-invalid-semantic-correspondence"
+            }
+            Self::FinalizedMapArtifactInspection => "finalized-map-artifact-inspection",
+            Self::FinalizedMapAllocationFailure => "finalized-map-allocation-failure",
+            Self::SemanticMapInvalidLength => "semantic-map-invalid-length",
+            Self::SemanticMapInvalidJson => "semantic-map-invalid-json",
+            Self::SemanticMapNonCanonicalEncoding => "semantic-map-noncanonical-encoding",
+            Self::SemanticMapEncoding => "semantic-map-encoding",
+            Self::SemanticMapInvalidBinding => "semantic-map-invalid-binding",
+            Self::SemanticMapInvalidKernelOrdinalBasis => {
+                "semantic-map-invalid-kernel-ordinal-basis"
+            }
+            Self::SemanticMapInvalidNode => "semantic-map-invalid-node",
+            Self::SemanticMapInvalidMapping => "semantic-map-invalid-mapping",
+            Self::SemanticMapDuplicateNode => "semantic-map-duplicate-node",
+            Self::SemanticMapDuplicateMapping => "semantic-map-duplicate-mapping",
+            Self::SemanticMapDuplicateReference => "semantic-map-duplicate-reference",
+            Self::SemanticMapUnknownNode => "semantic-map-unknown-node",
+            Self::SemanticMapLayerMismatch => "semantic-map-layer-mismatch",
+            Self::SemanticMapContradictoryMapping => "semantic-map-contradictory-mapping",
+            Self::SemanticMapOrphanNode => "semantic-map-orphan-node",
+            Self::SemanticMapInvalidBoundary => "semantic-map-invalid-boundary",
+            Self::SemanticMapUntypedBoundary => "semantic-map-untyped-boundary",
+            Self::SemanticMapResourceLimit => "semantic-map-resource-limit",
+            Self::SemanticMapAllocationFailure => "semantic-map-allocation-failure",
+            Self::SemanticMapContentBindingMismatch => "semantic-map-content-binding-mismatch",
+            Self::SemanticMapArtifactBindingMismatch => "semantic-map-artifact-binding-mismatch",
+            Self::SemanticMapInvalidBoundSourceMap => "semantic-map-invalid-bound-source-map",
+            Self::SemanticMapInvalidBoundCanonicalKir => "semantic-map-invalid-bound-canonical-kir",
+            Self::SemanticMapSourceMapKirBindingMismatch => {
+                "semantic-map-source-map-kir-binding-mismatch"
+            }
+            Self::SemanticMapInvalidSourceLocation => "semantic-map-invalid-source-location",
+            Self::SemanticMapInvalidMirLocation => "semantic-map-invalid-mir-location",
+            Self::SemanticMapInvalidKirLocation => "semantic-map-invalid-kir-location",
+            Self::SemanticMapInvalidIsaInterval => "semantic-map-invalid-isa-interval",
+            Self::ProductionFragmentInvalidEncoding => "production-fragment-invalid-encoding",
+            Self::ProductionFragmentInvalidAssociation => "production-fragment-invalid-association",
+            Self::ProductionFragmentInvalidGap => "production-fragment-invalid-gap",
+            Self::ProductionFragmentInvalidScheduleStatus => {
+                "production-fragment-invalid-schedule-status"
+            }
+            Self::ProductionFragmentInvalidSourceMap => "production-fragment-invalid-source-map",
+            Self::ProductionFragmentInvalidCanonicalKir => {
+                "production-fragment-invalid-canonical-kir"
+            }
+            Self::ProductionFragmentInvalidSemanticMap => {
+                "production-fragment-invalid-semantic-map"
+            }
+            Self::ProductionFragmentAxisMismatch => "production-fragment-axis-mismatch",
+            Self::ProductionFragmentResourceLimit => "production-fragment-resource-limit",
+            Self::ProductionFragmentAllocationFailure => "production-fragment-allocation-failure",
+            Self::SemanticAnchorInvalidCompilerAttachment => {
+                "semantic-anchor-invalid-compiler-attachment"
+            }
+            Self::SemanticAnchorInvalidProductionAssociation => {
+                "semantic-anchor-invalid-production-association"
+            }
+            Self::SemanticAnchorInvalidKirToLlvmReplay => {
+                "semantic-anchor-invalid-kir-to-llvm-replay"
+            }
+            Self::SemanticAnchorTargetMismatch => "semantic-anchor-target-mismatch",
+            Self::SemanticAnchorInvalidLlvm => "semantic-anchor-invalid-llvm",
+            Self::SemanticAnchorContradictoryLlvm => "semantic-anchor-contradictory-llvm",
+            Self::SemanticAnchorBindingMismatch => "semantic-anchor-binding-mismatch",
+            Self::SemanticAnchorKirCoordinateMismatch => "semantic-anchor-kir-coordinate-mismatch",
+            Self::SemanticAnchorKirToLlvmAnchorMismatch => {
+                "semantic-anchor-kir-to-llvm-anchor-mismatch"
+            }
+            Self::SemanticAnchorInvalidArtifact => "semantic-anchor-invalid-artifact",
+            Self::SemanticAnchorMissingProbeSection => "semantic-anchor-missing-probe-section",
+            Self::SemanticAnchorAmbiguousProbeSection => "semantic-anchor-ambiguous-probe-section",
+            Self::SemanticAnchorInvalidProbeEncoding => "semantic-anchor-invalid-probe-encoding",
+            Self::SemanticAnchorProbeDescriptorMismatch => {
+                "semantic-anchor-probe-descriptor-mismatch"
+            }
+            Self::SemanticAnchorAmbiguousEntrySymbol => "semantic-anchor-ambiguous-entry-symbol",
+            Self::SemanticAnchorUnexpectedProbe => "semantic-anchor-unexpected-probe",
+            Self::SemanticAnchorProbeOutsideKernel => "semantic-anchor-probe-outside-kernel",
+            Self::SemanticAnchorResourceLimit => "semantic-anchor-resource-limit",
+            Self::SemanticAnchorAllocationFailure => "semantic-anchor-allocation-failure",
+        }
+    }
+
     fn decode(value: u16) -> Result<Self, SourceIsaObservationFrameErrorV1> {
         match value {
             3 => Ok(Self::InvalidKirToLlvmReplay),

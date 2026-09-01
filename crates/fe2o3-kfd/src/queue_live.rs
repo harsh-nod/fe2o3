@@ -4007,6 +4007,7 @@ fn build_resource_authority(
             control: binding(cf, MemoryKindV1::HostVisibleCoherent),
             eop: binding(ef, MemoryKindV1::Executable),
             context_save: binding(sf, MemoryKindV1::Executable),
+            private_scratch: None,
         },
     };
     let view = NativeQueueResourceViewV1 {
