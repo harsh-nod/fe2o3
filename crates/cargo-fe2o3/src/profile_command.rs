@@ -37,8 +37,8 @@ use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as
 use std::os::unix::process::CommandExt as _;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -2752,7 +2752,98 @@ enum CollectorLeaderExitObservation {
 
 enum CollectorExitDecision {
     RevokeAndReap(StopReason),
+    RevokeAndReapAfterWaitFailure(String),
     AmbiguousWait(String),
+}
+
+// SIGCHLD disposition is process-global. cargo-fe2o3 profile exclusively owns this direct child;
+// no unrelated thread may wait on it or change SIGCHLD while this scope is active, and the capture
+// readers do neither. This mutex serializes cooperating in-process profile calls through spawn,
+// revoke, and reap; it cannot serialize arbitrary signal or wait code outside this module.
+static COLLECTOR_SIGCHLD_SCOPE_LOCK_V1: OnceLock<Mutex<()>> = OnceLock::new();
+
+struct CollectorSigchldScopeV1 {
+    _lock: MutexGuard<'static, ()>,
+    previous: libc::sigaction,
+    restored: bool,
+}
+
+impl CollectorSigchldScopeV1 {
+    fn enter() -> Result<Self, String> {
+        let lock = COLLECTOR_SIGCHLD_SCOPE_LOCK_V1
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .map_err(|_| "collector SIGCHLD scope lock was poisoned".to_owned())?;
+        let mut owned = MaybeUninit::<libc::sigaction>::zeroed();
+        // SAFETY: a zeroed sigaction is initialized below before it is installed.
+        let owned = unsafe {
+            let pointer = owned.as_mut_ptr();
+            (*pointer).sa_sigaction = libc::SIG_DFL;
+            (*pointer).sa_flags = 0;
+            if libc::sigemptyset(&mut (*pointer).sa_mask) != 0 {
+                return Err(format!(
+                    "failed to initialize collector SIGCHLD mask: {}",
+                    io::Error::last_os_error()
+                ));
+            }
+            owned.assume_init()
+        };
+        let mut previous = MaybeUninit::<libc::sigaction>::zeroed();
+        // SAFETY: `owned` is fully initialized and `previous` is writable. Passing both makes the
+        // disposition replacement and prior-action capture one kernel operation.
+        if unsafe { libc::sigaction(libc::SIGCHLD, &owned, previous.as_mut_ptr()) } != 0 {
+            return Err(format!(
+                "failed to establish collector SIGCHLD ownership: {}",
+                io::Error::last_os_error()
+            ));
+        }
+        Ok(Self {
+            _lock: lock,
+            // SAFETY: the successful query initialized `previous`.
+            previous: unsafe { previous.assume_init() },
+            restored: false,
+        })
+    }
+
+    fn validate_owned(&self) -> Result<(), String> {
+        let mut current = MaybeUninit::<libc::sigaction>::zeroed();
+        // SAFETY: `current` is writable and a null action requests the current disposition.
+        if unsafe { libc::sigaction(libc::SIGCHLD, std::ptr::null(), current.as_mut_ptr()) } != 0 {
+            return Err(format!(
+                "failed to revalidate collector SIGCHLD ownership: {}",
+                io::Error::last_os_error()
+            ));
+        }
+        // SAFETY: the successful query initialized `current`.
+        let current = unsafe { current.assume_init() };
+        if current.sa_sigaction != libc::SIG_DFL || current.sa_flags & libc::SA_NOCLDWAIT != 0 {
+            return Err(
+                "collector SIGCHLD ownership changed before process-group revoke".to_owned(),
+            );
+        }
+        Ok(())
+    }
+
+    fn restore(&mut self) -> Result<(), String> {
+        if self.restored {
+            return Ok(());
+        }
+        // SAFETY: the saved action was initialized by sigaction and remains live for the call.
+        if unsafe { libc::sigaction(libc::SIGCHLD, &self.previous, std::ptr::null_mut()) } != 0 {
+            return Err(format!(
+                "failed to restore SIGCHLD disposition: {}",
+                io::Error::last_os_error()
+            ));
+        }
+        self.restored = true;
+        Ok(())
+    }
+}
+
+impl Drop for CollectorSigchldScopeV1 {
+    fn drop(&mut self) {
+        let _ = self.restore();
+    }
 }
 
 struct BoundedCapture {
@@ -2812,40 +2903,86 @@ fn run_collector(plan: &Plan) -> Result<Supervised, String> {
             .env(SEALED_CORE_ENV_V1, libraries.core.external_path())
             .env(SEALED_TOOL_ENV_V1, libraries.tool.external_path());
     }
-    let mut child = crate::process_execution::spawn(&mut command)
-        .map_err(|error| format!("failed to spawn pinned rocprofv3 collector: {error}"))?;
-    supervise(
-        &mut child,
+    spawn_and_supervise_collector_v1(
+        &mut command,
         plan.options.timeout,
         plan.options.stdout_limit,
         plan.options.stderr_limit,
     )
 }
 
+fn spawn_and_supervise_collector_v1(
+    command: &mut Command,
+    timeout: Duration,
+    stdout_limit: usize,
+    stderr_limit: usize,
+) -> Result<Supervised, String> {
+    let mut sigchld = CollectorSigchldScopeV1::enter()?;
+    let result = (|| {
+        let mut child = crate::process_execution::spawn(command)
+            .map_err(|error| format!("failed to spawn pinned rocprofv3 collector: {error}"))?;
+        supervise_with_sigchld_scope(
+            &mut child,
+            timeout,
+            stdout_limit,
+            stderr_limit,
+            Some(&sigchld),
+        )
+    })();
+    let restoration = sigchld.restore();
+    match (result, restoration) {
+        (Ok(supervised), Ok(())) => Ok(supervised),
+        (Err(error), Ok(())) => Err(error),
+        (Ok(_), Err(error)) => Err(error),
+        (Err(error), Err(restoration)) => Err(format!(
+            "{error}; collector SIGCHLD restoration also failed: {restoration}"
+        )),
+    }
+}
+
+#[cfg(test)]
 fn supervise(
     child: &mut Child,
     timeout: Duration,
     stdout_limit: usize,
     stderr_limit: usize,
 ) -> Result<Supervised, String> {
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or("collector stdout pipe was unavailable")?;
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or("collector stderr pipe was unavailable")?;
+    supervise_with_sigchld_scope(child, timeout, stdout_limit, stderr_limit, None)
+}
+
+fn supervise_with_sigchld_scope(
+    child: &mut Child,
+    timeout: Duration,
+    stdout_limit: usize,
+    stderr_limit: usize,
+    sigchld: Option<&CollectorSigchldScopeV1>,
+) -> Result<Supervised, String> {
+    let (stdout, stderr) = match (child.stdout.take(), child.stderr.take()) {
+        (Some(stdout), Some(stderr)) => (stdout, stderr),
+        (stdout, stderr) => {
+            drop(stdout);
+            drop(stderr);
+            let ownership = sigchld.map_or(Ok(()), CollectorSigchldScopeV1::validate_owned);
+            return Err(finalize_capture_setup_failure_with(
+                child,
+                "collector stdout or stderr pipe was unavailable".to_owned(),
+                ownership,
+                revoke_owned_child,
+                Child::wait,
+            ));
+        }
+    };
     if let Err(error) =
         make_capture_pipe_nonblocking(&stdout).and_then(|()| make_capture_pipe_nonblocking(&stderr))
     {
-        let _ = revoke_then_reap_with(
+        let ownership = sigchld.map_or(Ok(()), CollectorSigchldScopeV1::validate_owned);
+        return Err(finalize_capture_setup_failure_with(
             child,
-            StopReason::WaitFailure,
+            format!("failed to configure bounded collector output capture: {error}"),
+            ownership,
             revoke_owned_child,
             Child::wait,
-        );
-        return Err(error);
+        ));
     }
     let overflow = Arc::new(AtomicBool::new(false));
     let capture_cancelled = Arc::new(AtomicBool::new(false));
@@ -2875,12 +3012,34 @@ fn supervise(
             }
             Ok(CollectorLeaderExitObservation::Running) => thread::sleep(POLL_INTERVAL),
             Err(error) => {
-                break CollectorExitDecision::AmbiguousWait(format!(
+                let message = format!(
                     "failed to inspect collector leader without reaping it: {error} (errno {:?})",
                     error.raw_os_error()
-                ));
+                );
+                break if error.raw_os_error() == Some(libc::ECHILD) {
+                    CollectorExitDecision::AmbiguousWait(message)
+                } else {
+                    CollectorExitDecision::RevokeAndReapAfterWaitFailure(message)
+                };
             }
         }
+    };
+    let decision = if matches!(
+        &decision,
+        CollectorExitDecision::RevokeAndReap(_)
+            | CollectorExitDecision::RevokeAndReapAfterWaitFailure(_)
+    ) {
+        if let Some(sigchld) = sigchld {
+            if let Err(error) = sigchld.validate_owned() {
+                CollectorExitDecision::AmbiguousWait(error)
+            } else {
+                decision
+            }
+        } else {
+            decision
+        }
+    } else {
+        decision
     };
     let (status, reason, wait_error) =
         finalize_collector_exit_with(child, decision, revoke_owned_child, Child::wait);
@@ -2963,6 +3122,26 @@ fn revoke_then_reap_with<T, S>(
     }
 }
 
+fn finalize_capture_setup_failure_with<T, S>(
+    subject: &mut T,
+    setup_error: String,
+    ownership: Result<(), String>,
+    revoke: impl FnOnce(&mut T),
+    reap: impl FnOnce(&mut T) -> io::Result<S>,
+) -> String {
+    let Err(ownership_error) = ownership else {
+        let (_, _, wait_error) =
+            revoke_then_reap_with(subject, StopReason::WaitFailure, revoke, reap);
+        return match wait_error {
+            Some(wait_error) => format!("{setup_error}; {wait_error}"),
+            None => setup_error,
+        };
+    };
+    format!(
+        "{setup_error}; {ownership_error}; collector numeric identity was not signaled after ownership became ambiguous"
+    )
+}
+
 fn finalize_collector_exit_with<T, S>(
     subject: &mut T,
     decision: CollectorExitDecision,
@@ -2972,6 +3151,15 @@ fn finalize_collector_exit_with<T, S>(
     match decision {
         CollectorExitDecision::RevokeAndReap(reason) => {
             revoke_then_reap_with(subject, reason, revoke, reap)
+        }
+        CollectorExitDecision::RevokeAndReapAfterWaitFailure(error) => {
+            let (status, _, reap_error) =
+                revoke_then_reap_with(subject, StopReason::WaitFailure, revoke, reap);
+            let wait_error = match reap_error {
+                Some(reap_error) => Some(format!("{error}; {reap_error}")),
+                None => Some(error),
+            };
+            (status, StopReason::WaitFailure, wait_error)
         }
         CollectorExitDecision::AmbiguousWait(error) => (None, StopReason::WaitFailure, Some(error)),
     }
@@ -5015,6 +5203,178 @@ mod tests {
         assert_eq!(supervised.stderr.bytes, b"final-stderr");
     }
 
+    fn inspect_sigchld_for_test() -> libc::sigaction {
+        let mut action = MaybeUninit::<libc::sigaction>::zeroed();
+        // SAFETY: `action` is writable and a null action requests the current disposition.
+        assert_eq!(
+            unsafe { libc::sigaction(libc::SIGCHLD, std::ptr::null(), action.as_mut_ptr()) },
+            0
+        );
+        // SAFETY: the successful query initialized `action`.
+        unsafe { action.assume_init() }
+    }
+
+    fn install_sigchld_for_test(handler: libc::sighandler_t, flags: libc::c_int) {
+        let mut action = MaybeUninit::<libc::sigaction>::zeroed();
+        // SAFETY: the zeroed action is fully initialized below before installation.
+        let action = unsafe {
+            let pointer = action.as_mut_ptr();
+            (*pointer).sa_sigaction = handler;
+            (*pointer).sa_flags = flags;
+            assert_eq!(libc::sigemptyset(&mut (*pointer).sa_mask), 0);
+            action.assume_init()
+        };
+        // SAFETY: `action` is fully initialized and remains live for the call.
+        assert_eq!(
+            unsafe { libc::sigaction(libc::SIGCHLD, &action, std::ptr::null_mut()) },
+            0
+        );
+    }
+
+    fn assert_sigchld_action_restored(restored: &libc::sigaction, expected: &libc::sigaction) {
+        // The libc sigaction wrapper may synthesize Linux's private SA_RESTORER bit when an
+        // otherwise identical saved action is reinstalled. Compare every caller-controlled bit.
+        const LINUX_SA_RESTORER: libc::c_int = 0x0400_0000;
+        assert_eq!(restored.sa_sigaction, expected.sa_sigaction);
+        assert_eq!(
+            restored.sa_flags & !LINUX_SA_RESTORER,
+            expected.sa_flags & !LINUX_SA_RESTORER
+        );
+    }
+
+    fn assert_test_descendant_is_gone(pid: i32) {
+        let process = PathBuf::from(format!("/proc/{pid}"));
+        for _ in 0..100 {
+            if !process.exists() {
+                return;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        // SAFETY: this is a final cleanup attempt for the test-only descendant.
+        let _ = unsafe { libc::kill(pid, libc::SIGKILL) };
+        panic!("collector descendant {pid} survived process-group revoke");
+    }
+
+    fn hostile_sigchld_child_case(mode: &str) {
+        let (handler, flags) = match mode {
+            "ignore" => (libc::SIG_IGN, 0),
+            "no-cldwait" => (libc::SIG_DFL, libc::SA_NOCLDWAIT),
+            _ => panic!("unknown hostile SIGCHLD test mode"),
+        };
+        if mode == "no-cldwait" {
+            install_sigchld_for_test(handler, flags);
+        }
+        let hostile = inspect_sigchld_for_test();
+        assert_eq!(hostile.sa_sigaction, handler);
+        assert_eq!(hostile.sa_flags & libc::SA_NOCLDWAIT, flags);
+
+        let mut missing = Command::new("/fe2o3-test-missing-collector");
+        let error = match spawn_and_supervise_collector_v1(
+            &mut missing,
+            Duration::from_secs(5),
+            1024,
+            1024,
+        ) {
+            Ok(_) => panic!("missing collector unexpectedly spawned"),
+            Err(error) => error,
+        };
+        assert!(error.contains("failed to spawn pinned rocprofv3 collector"));
+        let restored = inspect_sigchld_for_test();
+        assert_sigchld_action_restored(&restored, &hostile);
+
+        let mut normal = Command::new("/usr/bin/python3");
+        normal
+            .args([
+                "-c",
+                "import os,subprocess\nchild=subprocess.Popen(['/bin/sleep','30'])\nprint(child.pid,flush=True)\nos._exit(0)\n",
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .process_group(0);
+        let supervised =
+            spawn_and_supervise_collector_v1(&mut normal, Duration::from_secs(5), 1024, 1024)
+                .unwrap();
+        assert_eq!(supervised.reason, StopReason::Exited);
+        assert!(supervised.status.is_some_and(|status| status.success()));
+        let descendant = std::str::from_utf8(&supervised.stdout.bytes)
+            .unwrap()
+            .trim()
+            .parse::<i32>()
+            .unwrap();
+        assert_test_descendant_is_gone(descendant);
+        let restored = inspect_sigchld_for_test();
+        assert_sigchld_action_restored(&restored, &hostile);
+
+        let mut overflow = Command::new("/usr/bin/python3");
+        overflow
+            .args([
+                "-c",
+                "import os,subprocess,sys\nchild=subprocess.Popen(['/bin/sleep','30'])\nprint(child.pid,file=sys.stderr,flush=True)\nos.write(1,b'x'*65536)\nos._exit(0)\n",
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .process_group(0);
+        let supervised =
+            spawn_and_supervise_collector_v1(&mut overflow, Duration::from_secs(5), 1024, 1024)
+                .unwrap();
+        assert_eq!(supervised.reason, StopReason::OutputOverflow);
+        assert!(supervised.stdout.overflow);
+        assert_eq!(supervised.stdout.bytes.len(), 1024);
+        let descendant = std::str::from_utf8(&supervised.stderr.bytes)
+            .unwrap()
+            .trim()
+            .parse::<i32>()
+            .unwrap();
+        assert_test_descendant_is_gone(descendant);
+        let restored = inspect_sigchld_for_test();
+        assert_sigchld_action_restored(&restored, &hostile);
+    }
+
+    #[test]
+    fn inherited_sigchld_dispositions_preserve_collector_ownership() {
+        const MODE: &str = "FE2O3_SIGCHLD_HOSTILE_TEST_V1";
+        if let Ok(mode) = env::var(MODE) {
+            hostile_sigchld_child_case(&mode);
+            return;
+        }
+        for mode in ["ignore", "no-cldwait"] {
+            let mut command = Command::new(env::current_exe().unwrap());
+            command
+                .args([
+                    "--exact",
+                    "profile_command::tests::inherited_sigchld_dispositions_preserve_collector_ownership",
+                    "--nocapture",
+                ])
+                .env(MODE, mode);
+            if mode == "ignore" {
+                // SAFETY: the closure performs only async-signal-safe sigemptyset/sigaction calls
+                // between fork and exec, without allocation or shared-state access. SIG_IGN is
+                // preserved across exec; SA_NOCLDWAIT is installed inside its isolated test.
+                unsafe {
+                    command.pre_exec(|| {
+                        let mut action = std::mem::zeroed::<libc::sigaction>();
+                        action.sa_sigaction = libc::SIG_IGN;
+                        if libc::sigemptyset(&mut action.sa_mask) != 0
+                            || libc::sigaction(libc::SIGCHLD, &action, std::ptr::null_mut()) != 0
+                        {
+                            return Err(io::Error::last_os_error());
+                        }
+                        Ok(())
+                    });
+                }
+            }
+            let output = command.output().unwrap();
+            assert!(
+                output.status.success(),
+                "hostile SIGCHLD mode {mode} failed:\nstdout:\n{}\nstderr:\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+    }
+
     #[test]
     fn owned_child_is_revoked_before_exactly_one_reap() {
         #[derive(Default)]
@@ -5037,6 +5397,51 @@ mod tests {
         assert_eq!(status, Some(()));
         assert_eq!(reason, StopReason::Exited);
         assert_eq!(wait_error, None);
+
+        let mut wait_failure = InstrumentedChild::default();
+        let (status, reason, wait_error) = finalize_collector_exit_with(
+            &mut wait_failure,
+            CollectorExitDecision::RevokeAndReapAfterWaitFailure("EIO".to_owned()),
+            |child| child.events.push("revoke"),
+            |child| {
+                assert_eq!(child.events.as_slice(), ["revoke"]);
+                child.events.push("reap");
+                Ok(())
+            },
+        );
+        assert_eq!(wait_failure.events, ["revoke", "reap"]);
+        assert_eq!(status, Some(()));
+        assert_eq!(reason, StopReason::WaitFailure);
+        assert_eq!(wait_error.as_deref(), Some("EIO"));
+
+        let mut setup_failure = InstrumentedChild::default();
+        let error = finalize_capture_setup_failure_with(
+            &mut setup_failure,
+            "capture setup failed".to_owned(),
+            Ok(()),
+            |child| child.events.push("revoke"),
+            |child| {
+                assert_eq!(child.events.as_slice(), ["revoke"]);
+                child.events.push("reap");
+                Ok(())
+            },
+        );
+        assert_eq!(setup_failure.events, ["revoke", "reap"]);
+        assert_eq!(error, "capture setup failed");
+
+        let mut lost_setup_ownership = InstrumentedChild::default();
+        let error = finalize_capture_setup_failure_with(
+            &mut lost_setup_ownership,
+            "capture setup failed".to_owned(),
+            Err("SIGCHLD changed".to_owned()),
+            |child| child.events.push("revoke"),
+            |child| {
+                child.events.push("reap");
+                Ok(())
+            },
+        );
+        assert!(lost_setup_ownership.events.is_empty());
+        assert!(error.contains("numeric identity was not signaled"));
 
         let mut ambiguous = InstrumentedChild::default();
         let (status, reason, wait_error) = finalize_collector_exit_with(
