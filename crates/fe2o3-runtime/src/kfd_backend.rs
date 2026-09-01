@@ -7,6 +7,8 @@
 
 use core::fmt;
 use std::collections::{HashMap, HashSet};
+use std::ops::Range;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use fe2o3_amdhsa_loader::{
@@ -20,8 +22,8 @@ use fe2o3_kfd::{
     GFX942_MAX_FIXED_DISPATCH_DATA_V1, Gfx942CompletedDispatchReadRequestV1,
     Gfx942DeviceContentDescriptorV1, Gfx942DeviceContentRoleV1, Gfx942DispatchBatchV1,
     Gfx942DispatchBufferBindingV1, Gfx942DispatchPollV1, Gfx942FixedDispatchDataV1,
-    Gfx942FixedDispatchPacketV1, HOST_VISIBLE_MEMORY_PAGE_BYTES_V1, OpenedKfd,
-    SharedGttMemorySessionV1,
+    Gfx942FixedDispatchPacketV1, Gfx942RecycledDispatchWriteRequestV1,
+    HOST_VISIBLE_MEMORY_PAGE_BYTES_V1, OpenedKfd, SharedGttMemorySessionV1,
 };
 use sha2::{Digest, Sha256};
 
@@ -92,6 +94,57 @@ impl fmt::Display for KfdRuntimeBackendErrorV1 {
 
 impl std::error::Error for KfdRuntimeBackendErrorV1 {}
 
+/// Host-side phase durations for the most recently completed direct-KFD launch.
+///
+/// `publish_to_completion` begins after the doorbell publication call returns
+/// and ends when completion is first observed. It is the nearest available KFD
+/// counterpart to a synchronized launch/wait interval; it is not a device clock.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct KfdRuntimeLaunchPerformanceV1 {
+    preparation: Duration,
+    bound_snapshot: Duration,
+    authority: Duration,
+    native_binding: Duration,
+    publication: Duration,
+    publish_to_completion: Duration,
+    completed_readback: Duration,
+    recycle: Duration,
+}
+
+impl KfdRuntimeLaunchPerformanceV1 {
+    pub const fn preparation(self) -> Duration {
+        self.preparation
+    }
+
+    pub const fn bound_snapshot(self) -> Duration {
+        self.bound_snapshot
+    }
+
+    pub const fn authority(self) -> Duration {
+        self.authority
+    }
+
+    pub const fn native_binding(self) -> Duration {
+        self.native_binding
+    }
+
+    pub const fn publication(self) -> Duration {
+        self.publication
+    }
+
+    pub const fn publish_to_completion(self) -> Duration {
+        self.publish_to_completion
+    }
+
+    pub const fn completed_readback(self) -> Duration {
+        self.completed_readback
+    }
+
+    pub const fn recycle(self) -> Duration {
+        self.recycle
+    }
+}
+
 /// One exact staged allocation window presented to direct-launch authority.
 #[derive(Clone, Copy, Debug)]
 pub struct KfdRuntimeAuthorityAllocationV1<'a> {
@@ -101,6 +154,9 @@ pub struct KfdRuntimeAuthorityAllocationV1<'a> {
     /// Offset in the logical allocation represented by `bytes`.
     pub byte_offset: u64,
     pub bytes: &'a [u8],
+    /// Whole-allocation digest retained from the last complete host write.
+    /// Partial host writes and device writeback clear this evidence.
+    pub content_sha256: Option<[u8; 32]>,
 }
 
 /// Reconciled source/physical global-buffer row used by fixed dispatch.
@@ -191,7 +247,18 @@ struct AllocationRecordV1 {
     device: u64,
     kind: RuntimeMemoryKindV1,
     alignment: u64,
-    bytes: Vec<u8>,
+    bytes: Arc<[u8]>,
+    content_sha256: Option<[u8; 32]>,
+    last_full_host_write: Option<(Arc<[u8]>, [u8; 32])>,
+    native_dirty: Vec<NativeDirtyExtentV1>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct NativeDirtyExtentV1 {
+    data_index: usize,
+    allocation_offset: usize,
+    data_offset: u64,
+    byte_len: u64,
 }
 
 struct ModuleRecordV1 {
@@ -254,6 +321,10 @@ struct ActiveSubmissionV1 {
     kernel: u64,
     allocations: HashSet<u64>,
     writebacks: Vec<WritebackV1>,
+    resident_descriptors: Vec<ResidentDataDescriptorV1>,
+    dispatch_shape_sha256: [u8; 32],
+    published_at: Instant,
+    performance: KfdRuntimeLaunchPerformanceV1,
     batch: Option<Gfx942DispatchBatchV1<1>>,
 }
 
@@ -276,7 +347,25 @@ struct DataSpecV1 {
     kind: RuntimeMemoryKindV1,
     alignment: u64,
     allocation_offset: u64,
-    bytes: Box<[u8]>,
+    bytes: Arc<[u8]>,
+    byte_range: Range<usize>,
+    content_sha256: Option<[u8; 32]>,
+}
+
+impl DataSpecV1 {
+    fn bytes(&self) -> &[u8] {
+        &self.bytes[self.byte_range.clone()]
+    }
+
+    fn try_owned_bytes(&self) -> Result<Box<[u8]>, String> {
+        let source = self.bytes();
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(source.len())
+            .map_err(|_| "KFD native-data content allocation failed".to_owned())?;
+        bytes.extend_from_slice(source);
+        Ok(bytes.into_boxed_slice())
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -289,6 +378,28 @@ struct StagedPlacementV1 {
 struct StagedDataRosterV1 {
     data: Vec<DataSpecV1>,
     placements: HashMap<u64, StagedPlacementV1>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ResidentDataDescriptorV1 {
+    allocation: u64,
+    kind: RuntimeMemoryKindV1,
+    alignment: u64,
+    allocation_offset: u64,
+    byte_len: u64,
+    host_content_sha256: Option<[u8; 32]>,
+    device_may_have_modified: bool,
+}
+
+struct ResidentDataRosterV1 {
+    descriptors: Vec<ResidentDataDescriptorV1>,
+    data: Vec<Gfx942FixedDispatchDataV1>,
+}
+
+struct RecycledDispatchV1 {
+    kernel: u64,
+    dispatch_shape_sha256: [u8; 32],
+    descriptors: Vec<ResidentDataDescriptorV1>,
 }
 
 struct PreparedLaunchV1 {
@@ -304,6 +415,8 @@ struct PreparedLaunchV1 {
     data: Vec<DataSpecV1>,
     allocations: HashSet<u64>,
     writebacks: Vec<WritebackV1>,
+    dispatch_shape_sha256: [u8; 32],
+    performance: KfdRuntimeLaunchPerformanceV1,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -352,6 +465,9 @@ pub struct KfdRuntimeBackendV1 {
     submissions: HashMap<u64, SubmissionRecordV1>,
     events: HashMap<u64, EventRecordV1>,
     active: Option<ActiveSubmissionV1>,
+    resident_data: Option<ResidentDataRosterV1>,
+    recycled_dispatch: Option<RecycledDispatchV1>,
+    last_launch_performance: Option<KfdRuntimeLaunchPerformanceV1>,
     staging_budgets: StagingBudgetsV1,
     staged_context_bytes: u64,
     launch_gate: KfdRuntimeLaunchGateV1,
@@ -374,6 +490,21 @@ impl fmt::Debug for KfdRuntimeBackendV1 {
             .field("submissions", &self.submissions.len())
             .field("events", &self.events.len())
             .field("active", &self.active)
+            .field(
+                "resident_data",
+                &self
+                    .resident_data
+                    .as_ref()
+                    .map(|resident| resident.data.len()),
+            )
+            .field("last_launch_performance", &self.last_launch_performance)
+            .field(
+                "recycled_dispatch",
+                &self
+                    .recycled_dispatch
+                    .as_ref()
+                    .map(|recycled| recycled.kernel),
+            )
             .field("staged_context_bytes", &self.staged_context_bytes)
             .field("staging_budgets", &self.staging_budgets)
             .field("launch_gate", &self.launch_gate)
@@ -523,6 +654,9 @@ impl KfdRuntimeBackendV1 {
             submissions: HashMap::new(),
             events: HashMap::new(),
             active: None,
+            resident_data: None,
+            recycled_dispatch: None,
+            last_launch_performance: None,
             staging_budgets,
             staged_context_bytes: 0,
             launch_gate,
@@ -643,15 +777,23 @@ impl KfdRuntimeBackendV1 {
     }
 
     fn prepare_launch(
-        &self,
+        &mut self,
         launch: BackendLaunchV1<'_>,
     ) -> Result<PreparedLaunchV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        let preparation_started = Instant::now();
+        let dispatch_shape_sha256 = dispatch_shape_sha256_v1(&launch);
         let stream_device = *self.streams.get(&launch.stream).ok_or_else(|| {
             Self::rejected(
                 KfdRuntimeBackendErrorKindV1::UnknownHandle,
                 "unknown KFD stream",
             )
         })?;
+        let mut synchronized = HashSet::new();
+        for binding in launch.bindings {
+            if synchronized.insert(binding.region.allocation) {
+                self.synchronize_native_allocation_v1(binding.region.allocation)?;
+            }
+        }
         let kernel = self.kernels.get(&launch.kernel).ok_or_else(|| {
             Self::rejected(
                 KfdRuntimeBackendErrorKindV1::UnknownHandle,
@@ -691,7 +833,9 @@ impl KfdRuntimeBackendV1 {
             ));
         }
 
+        let snapshot_started = Instant::now();
         let staged = snapshot_bound_data_v1(&self.allocations, launch.bindings, stream_device)?;
+        let bound_snapshot = snapshot_started.elapsed();
         let mut buffer_bindings = Vec::new();
         let mut abi_rows = Vec::new();
         let mut allocations = HashSet::new();
@@ -817,7 +961,8 @@ impl KfdRuntimeBackendV1 {
                 kind: spec.kind,
                 alignment: spec.alignment,
                 byte_offset: spec.allocation_offset,
-                bytes: &spec.bytes,
+                bytes: spec.bytes(),
+                content_sha256: spec.content_sha256,
             });
         }
         let mut authority_abi = Vec::new();
@@ -836,7 +981,8 @@ impl KfdRuntimeBackendV1 {
                 access: row.access,
             });
         }
-        if !self
+        let authority_started = Instant::now();
+        let authorized = self
             .launch_gate
             .authorize_launch_v1(KfdRuntimeAuthorityRequestV1 {
                 module_image: module.validated.bytes(),
@@ -849,14 +995,16 @@ impl KfdRuntimeBackendV1 {
                 dispatch_abi: &authority_abi,
                 allocations: &authority_allocations,
                 geometry: launch.geometry,
-            })
-        {
+            });
+        let authority = authority_started.elapsed();
+        if !authorized {
             return Err(Self::rejected(
                 KfdRuntimeBackendErrorKindV1::Unsupported,
                 "direct KFD launch authority denied the exact invocation",
             ));
         }
 
+        let preparation = preparation_started.elapsed();
         Ok(PreparedLaunchV1 {
             stream: launch.stream,
             kernel: launch.kernel,
@@ -870,6 +1018,13 @@ impl KfdRuntimeBackendV1 {
             data: staged.data,
             allocations,
             writebacks,
+            dispatch_shape_sha256,
+            performance: KfdRuntimeLaunchPerformanceV1 {
+                preparation,
+                bound_snapshot,
+                authority,
+                ..KfdRuntimeLaunchPerformanceV1::default()
+            },
         })
     }
 
@@ -890,79 +1045,191 @@ impl KfdRuntimeBackendV1 {
             data,
             allocations,
             writebacks,
+            dispatch_shape_sha256,
+            mut performance,
         } = prepared;
-        let validated_program = build_program_v1(&program, signature, &abi_rows)?;
-        let mut programs = Vec::new();
-        programs
-            .try_reserve_exact(1)
-            .map_err(|_| Self::capacity("KFD program roster allocation failed"))?;
-        programs.push(validated_program);
         self.submissions
             .try_reserve(1)
             .map_err(|_| Self::capacity("KFD submission-table growth failed"))?;
-        // Reserve the symbolic identity before native publication. Exhaustion
-        // after a doorbell write could not be reported as a retry-safe reject.
         let id = self.next_id()?;
-        let packet = Gfx942FixedDispatchPacketV1::new(
-            0,
-            geometry,
-            dynamic_shared_bytes,
-            kernarg,
-            buffer_bindings,
-        );
+        let resident_descriptors = resident_descriptors_v1(&data)?;
 
-        if self.queue.is_none() {
-            let device = self.admitted_device.take().ok_or_else(|| {
-                Self::rejected(
-                    KfdRuntimeBackendErrorKindV1::Unsupported,
-                    "the admitted KFD queue lifecycle has already retired",
-                )
-            })?;
-            let mut memory = device
-                .acquire_shared_gtt_memory_session()
-                .map_err(|error| self.terminal_error(format!("KFD VM acquisition: {error}")))?;
-            let native_data = match materialize_initial_data_v1(&mut memory, data, signature) {
-                Ok(data) => data,
-                Err(detail) => {
-                    self.terminal_memory = Some(memory);
+        let native_binding_started = Instant::now();
+        let mut reused_attached = false;
+        if let Some(recycled) = self.recycled_dispatch.take() {
+            if recycled.dispatch_shape_sha256 == dispatch_shape_sha256
+                && same_resident_storage_shape_v1(&recycled.descriptors, &resident_descriptors)
+                && data
+                    .iter()
+                    .all(|spec| spec.kind == RuntimeMemoryKindV1::HostVisible)
+            {
+                let overwrite = {
+                    let queue = self
+                        .queue
+                        .as_mut()
+                        .expect("recycled dispatch retains queue");
+                    queue
+                        .recycled_fixed_dispatch_generation()
+                        .map_err(|error| format!("KFD recycled generation: {error}"))
+                        .and_then(|generation| {
+                            recycled
+                                .descriptors
+                                .iter()
+                                .zip(&data)
+                                .enumerate()
+                                .try_for_each(|(index, (prior, spec))| {
+                                    if !prior.device_may_have_modified
+                                        && prior.host_content_sha256.is_some()
+                                        && prior.host_content_sha256 == spec.content_sha256
+                                    {
+                                        return Ok(());
+                                    }
+                                    queue
+                                        .overwrite_recycled_fixed_dispatch_host_data(
+                                            Gfx942RecycledDispatchWriteRequestV1::new(
+                                                generation, index, 0,
+                                            ),
+                                            spec.bytes(),
+                                        )
+                                        .map_err(|error| {
+                                            format!("KFD recycled-data overwrite: {error}")
+                                        })
+                                })
+                        })
+                };
+                if let Err(detail) = overwrite {
                     return Err(self.terminal_error(detail));
                 }
-            };
-            let queue = memory
-                .create_compute_aql_queue_with_fixed_dispatch(
-                    KFD_RUNTIME_RING_BYTES_V1,
-                    programs,
-                    [packet],
-                    native_data,
-                )
-                .map_err(|error| self.terminal_error(format!("KFD queue creation: {error}")))?;
-            self.queue = Some(queue);
-        } else {
-            let rebound = {
-                let queue = self.queue.as_mut().expect("checked queue");
-                materialize_rebound_data_v1(queue, data, signature).and_then(|native_data| {
-                    queue
-                        .bind_fixed_dispatch(programs, [packet], native_data)
-                        .map_err(|error| format!("KFD dispatch rebind: {error}"))
-                })
-            };
-            if let Err(detail) = rebound {
-                return Err(self.terminal_error(detail));
+                reused_attached = true;
+            } else {
+                let detached = self
+                    .queue
+                    .as_mut()
+                    .expect("recycled dispatch retains queue")
+                    .detach_recycled_fixed_dispatch()
+                    .map_err(|error| {
+                        self.terminal_error(format!("KFD dispatch detach for rebind: {error}"))
+                    })?;
+                self.resident_data = Some(ResidentDataRosterV1 {
+                    descriptors: recycled.descriptors,
+                    data: detached.into_data(),
+                });
             }
         }
 
+        if !reused_attached {
+            let validated_program = build_program_v1(&program, signature, &abi_rows)?;
+            let mut programs = Vec::new();
+            programs
+                .try_reserve_exact(1)
+                .map_err(|_| Self::capacity("KFD program roster allocation failed"))?;
+            programs.push(validated_program);
+            let packet = Gfx942FixedDispatchPacketV1::new(
+                0,
+                geometry,
+                dynamic_shared_bytes,
+                kernarg,
+                buffer_bindings,
+            );
+            if self.queue.is_none() {
+                let device = self.admitted_device.take().ok_or_else(|| {
+                    Self::rejected(
+                        KfdRuntimeBackendErrorKindV1::Unsupported,
+                        "the admitted KFD queue lifecycle has already retired",
+                    )
+                })?;
+                let mut memory = device
+                    .acquire_shared_gtt_memory_session()
+                    .map_err(|error| self.terminal_error(format!("KFD VM acquisition: {error}")))?;
+                let native_data = match materialize_initial_data_v1(&mut memory, data, signature) {
+                    Ok(data) => data,
+                    Err(detail) => {
+                        self.terminal_memory = Some(memory);
+                        return Err(self.terminal_error(detail));
+                    }
+                };
+                let queue = memory
+                    .create_compute_aql_queue_with_fixed_dispatch(
+                        KFD_RUNTIME_RING_BYTES_V1,
+                        programs,
+                        [packet],
+                        native_data,
+                    )
+                    .map_err(|error| self.terminal_error(format!("KFD queue creation: {error}")))?;
+                self.queue = Some(queue);
+            } else {
+                let rebound = {
+                    let queue = self.queue.as_mut().expect("checked queue");
+                    let native_data = match self.resident_data.take() {
+                        Some(mut resident)
+                            if same_resident_storage_shape_v1(
+                                &resident.descriptors,
+                                &resident_descriptors,
+                            ) && data
+                                .iter()
+                                .all(|spec| spec.kind == RuntimeMemoryKindV1::HostVisible) =>
+                        {
+                            let overwrite = resident
+                                .data
+                                .iter_mut()
+                                .zip(resident.descriptors.iter().zip(&data))
+                                .enumerate()
+                                .try_for_each(|(index, (native, (prior, spec)))| {
+                                    if !prior.device_may_have_modified
+                                        && prior.host_content_sha256.is_some()
+                                        && prior.host_content_sha256 == spec.content_sha256
+                                    {
+                                        return Ok(());
+                                    }
+                                    queue
+                                        .overwrite_detached_initialized_host_visible_fixed_dispatch_data(
+                                            index,
+                                            native,
+                                            0,
+                                            spec.bytes(),
+                                        )
+                                        .map_err(|error| {
+                                            format!("KFD resident-data overwrite: {error}")
+                                        })
+                                });
+                            overwrite.map(|()| resident.data)
+                        }
+                        Some(resident) => release_resident_data_v1(queue, resident)
+                            .and_then(|()| materialize_rebound_data_v1(queue, data, signature)),
+                        None => materialize_rebound_data_v1(queue, data, signature),
+                    };
+                    native_data.and_then(|native_data| {
+                        queue
+                            .bind_fixed_dispatch(programs, [packet], native_data)
+                            .map_err(|error| format!("KFD dispatch rebind: {error}"))
+                    })
+                };
+                if let Err(detail) = rebound {
+                    return Err(self.terminal_error(detail));
+                }
+            }
+        }
+        performance.native_binding = native_binding_started.elapsed();
+
+        let publication_started = Instant::now();
         let batch = self
             .queue
             .as_mut()
             .expect("queue was created or rebound")
             .submit_fixed_dispatch::<1>()
             .map_err(|error| self.terminal_error(format!("KFD dispatch publication: {error}")))?;
+        performance.publication = publication_started.elapsed();
+        let published_at = Instant::now();
         self.active = Some(ActiveSubmissionV1 {
             id,
             stream,
             kernel,
             allocations,
             writebacks,
+            resident_descriptors,
+            dispatch_shape_sha256,
+            published_at,
+            performance,
             batch: Some(batch),
         });
         Ok(id)
@@ -973,55 +1240,47 @@ impl KfdRuntimeBackendV1 {
         mut active: ActiveSubmissionV1,
         completed: fe2o3_kfd::Gfx942CompletedDispatchBatchV1<1>,
     ) -> Result<BackendPollV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
-        let native_result = (|| -> Result<Vec<(u64, usize, Vec<u8>)>, String> {
+        active.performance.publish_to_completion = active.published_at.elapsed();
+        let native_result = (|| -> Result<_, String> {
             let queue = self
                 .queue
                 .as_mut()
                 .expect("active submission retains queue");
+            let recycle_started = Instant::now();
             queue
                 .recycle_fixed_dispatch(completed)
                 .map_err(|error| format!("KFD completion recycle: {error}"))?;
-            let generation = queue
-                .recycled_fixed_dispatch_generation()
-                .map_err(|error| format!("KFD recycled generation observation: {error}"))?;
-            let mut updates = Vec::with_capacity(active.writebacks.len());
-            for writeback in &active.writebacks {
-                let readback = queue
-                    .read_recycled_fixed_dispatch_data(Gfx942CompletedDispatchReadRequestV1::new(
-                        generation,
-                        writeback.data_index,
-                        writeback.data_offset,
-                        writeback.byte_len,
-                    ))
-                    .map_err(|error| format!("KFD coherent readback: {error}"))?;
-                updates.push((
-                    writeback.allocation,
-                    writeback.allocation_offset,
-                    readback.bytes().to_vec(),
-                ));
-            }
-            let detached = queue
-                .detach_recycled_fixed_dispatch()
-                .map_err(|error| format!("KFD dispatch detach: {error}"))?;
-            for data in detached.into_data() {
-                queue
-                    .release_detached_fixed_dispatch_data(data)
-                    .map_err(|error| format!("KFD dispatch-data release: {error}"))?;
-            }
-            Ok(updates)
+            let initial_recycle = recycle_started.elapsed();
+            Ok(initial_recycle)
         })();
-        let updates = match native_result {
-            Ok(updates) => updates,
+        let recycle = match native_result {
+            Ok(result) => result,
             Err(detail) => return Err(self.terminal_error(detail)),
         };
-        for (allocation, offset, bytes) in updates {
+        active.performance.completed_readback = Duration::ZERO;
+        active.performance.recycle = recycle;
+        for writeback in &active.writebacks {
             let record = self
                 .allocations
-                .get_mut(&allocation)
+                .get_mut(&writeback.allocation)
                 .expect("active allocation remains retained");
-            let end = offset + bytes.len();
-            record.bytes[offset..end].copy_from_slice(&bytes);
+            record.content_sha256 = None;
+            record.native_dirty.push(NativeDirtyExtentV1 {
+                data_index: writeback.data_index,
+                allocation_offset: writeback.allocation_offset,
+                data_offset: writeback.data_offset,
+                byte_len: writeback.byte_len,
+            });
+            if let Some(descriptor) = active.resident_descriptors.get_mut(writeback.data_index) {
+                descriptor.device_may_have_modified = true;
+                descriptor.host_content_sha256 = None;
+            }
         }
+        self.recycled_dispatch = Some(RecycledDispatchV1 {
+            kernel: active.kernel,
+            dispatch_shape_sha256: active.dispatch_shape_sha256,
+            descriptors: core::mem::take(&mut active.resident_descriptors),
+        });
         let status = BackendPollV1::Succeeded;
         self.submissions.insert(
             active.id,
@@ -1030,8 +1289,14 @@ impl KfdRuntimeBackendV1 {
                 status,
             },
         );
+        self.last_launch_performance = Some(active.performance);
         active.batch = None;
         Ok(status)
+    }
+
+    /// Returns phase timings for the latest successfully completed launch.
+    pub const fn last_launch_performance_v1(&self) -> Option<KfdRuntimeLaunchPerformanceV1> {
+        self.last_launch_performance
     }
 
     /// Explicitly tears down the retained native queue after logical cleanup.
@@ -1055,6 +1320,8 @@ impl KfdRuntimeBackendV1 {
                 "logical runtime resources remain live",
             ));
         }
+        self.detach_recycled_dispatch()?;
+        self.release_resident_data()?;
         if let Some(queue) = self.queue.take() {
             queue.destroy().map_err(|error| {
                 self.terminal_error(format!("explicit KFD queue teardown: {error}"))
@@ -1063,6 +1330,228 @@ impl KfdRuntimeBackendV1 {
         self.admitted_device.take();
         self.queue_retired = true;
         Ok(())
+    }
+
+    fn detach_recycled_dispatch(
+        &mut self,
+    ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        if self.recycled_dispatch.is_some() {
+            self.synchronize_all_native_allocations_v1()?;
+        }
+        let Some(recycled) = self.recycled_dispatch.take() else {
+            return Ok(());
+        };
+        let result = self
+            .queue
+            .as_mut()
+            .ok_or_else(|| "KFD recycled dispatch exists without a native queue".to_owned())
+            .and_then(|queue| {
+                queue
+                    .detach_recycled_fixed_dispatch()
+                    .map_err(|error| format!("KFD recycled dispatch detach: {error}"))
+            });
+        match result {
+            Ok(detached) => {
+                self.resident_data = Some(ResidentDataRosterV1 {
+                    descriptors: recycled.descriptors,
+                    data: detached.into_data(),
+                });
+                Ok(())
+            }
+            Err(detail) => Err(self.terminal_error(detail)),
+        }
+    }
+
+    fn synchronize_all_native_allocations_v1(
+        &mut self,
+    ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        let mut dirty = Vec::new();
+        dirty
+            .try_reserve_exact(self.allocations.len())
+            .map_err(|_| Self::capacity("KFD native-dirty synchronization roster failed"))?;
+        dirty.extend(self.allocations.iter().filter_map(|(allocation, record)| {
+            (!record.native_dirty.is_empty()).then_some(*allocation)
+        }));
+        for allocation in dirty {
+            self.synchronize_native_allocation_v1(allocation)?;
+        }
+        Ok(())
+    }
+
+    fn release_resident_data(
+        &mut self,
+    ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        let Some(resident) = self.resident_data.take() else {
+            return Ok(());
+        };
+        let result = self
+            .queue
+            .as_mut()
+            .ok_or_else(|| "KFD resident data exists without a native queue".to_owned())
+            .and_then(|queue| release_resident_data_v1(queue, resident));
+        match result {
+            Ok(()) => Ok(()),
+            Err(detail) => Err(self.terminal_error(detail)),
+        }
+    }
+
+    fn synchronize_native_allocation_v1(
+        &mut self,
+        allocation: u64,
+    ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        let dirty = self
+            .allocations
+            .get(&allocation)
+            .ok_or_else(|| {
+                Self::rejected(
+                    KfdRuntimeBackendErrorKindV1::UnknownHandle,
+                    "unknown KFD allocation",
+                )
+            })?
+            .native_dirty
+            .clone();
+        if dirty.is_empty() {
+            return Ok(());
+        }
+        let descriptors = &self
+            .recycled_dispatch
+            .as_ref()
+            .ok_or_else(|| {
+                Self::rejected(
+                    KfdRuntimeBackendErrorKindV1::Terminal,
+                    "native-dirty allocation has no recycled dispatch",
+                )
+            })?
+            .descriptors;
+        if dirty.iter().any(|extent| {
+            descriptors
+                .get(extent.data_index)
+                .is_none_or(|descriptor| descriptor.allocation != allocation)
+        }) {
+            return Err(
+                self.terminal_error("KFD native-dirty allocation descriptor mismatch".to_owned())
+            );
+        }
+        let native_result = {
+            let queue = self
+                .queue
+                .as_mut()
+                .expect("native-dirty allocation retains its queue");
+            queue
+                .recycled_fixed_dispatch_generation()
+                .map_err(|error| format!("KFD recycled generation before readback: {error}"))
+                .and_then(|generation| {
+                    dirty
+                        .iter()
+                        .map(|extent| {
+                            queue
+                                .read_recycled_fixed_dispatch_data(
+                                    Gfx942CompletedDispatchReadRequestV1::new(
+                                        generation,
+                                        extent.data_index,
+                                        extent.data_offset,
+                                        extent.byte_len,
+                                    ),
+                                )
+                                .map(|readback| (extent.allocation_offset, readback.into_bytes()))
+                                .map_err(|error| format!("KFD coherent readback: {error}"))
+                        })
+                        .collect::<Result<Vec<_>, _>>()
+                })
+        };
+        let updates = match native_result {
+            Ok(updates) => updates,
+            Err(detail) => return Err(self.terminal_error(detail)),
+        };
+        let record = self
+            .allocations
+            .get_mut(&allocation)
+            .expect("native-dirty allocation remains retained");
+        for (offset, bytes) in updates {
+            let end = offset
+                .checked_add(bytes.len())
+                .expect("validated native readback range fits host address space");
+            if offset == 0 && end == record.bytes.len() {
+                record.bytes = Arc::from(bytes);
+            } else {
+                Arc::make_mut(&mut record.bytes)[offset..end].copy_from_slice(&bytes);
+            }
+        }
+        record.native_dirty.clear();
+        record.content_sha256 = None;
+        Ok(())
+    }
+
+    fn read_native_allocation_into_v1(
+        &mut self,
+        allocation: u64,
+        byte_offset: u64,
+        destination: &mut [u8],
+    ) -> Result<bool, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        if destination.is_empty() {
+            return Ok(false);
+        }
+        let requested_start = usize::try_from(byte_offset).map_err(|_| {
+            Self::rejected(
+                KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+                "allocation offset does not fit host address space",
+            )
+        })?;
+        let requested_end = requested_start
+            .checked_add(destination.len())
+            .ok_or_else(|| {
+                Self::rejected(
+                    KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+                    "allocation read range overflow",
+                )
+            })?;
+        let extent = self
+            .allocations
+            .get(&allocation)
+            .and_then(|record| {
+                record.native_dirty.iter().find(|extent| {
+                    let extent_len = usize::try_from(extent.byte_len).ok();
+                    let extent_end =
+                        extent_len.and_then(|len| extent.allocation_offset.checked_add(len));
+                    requested_start >= extent.allocation_offset
+                        && extent_end.is_some_and(|end| requested_end <= end)
+                })
+            })
+            .copied();
+        let Some(extent) = extent else {
+            return Ok(false);
+        };
+        let delta = requested_start - extent.allocation_offset;
+        let data_offset = extent
+            .data_offset
+            .checked_add(delta as u64)
+            .expect("contained native-dirty read offset does not overflow");
+        let native_result = {
+            let queue = self
+                .queue
+                .as_mut()
+                .expect("native-dirty allocation retains its queue");
+            queue
+                .recycled_fixed_dispatch_generation()
+                .map_err(|error| format!("KFD recycled generation before direct read: {error}"))
+                .and_then(|generation| {
+                    queue
+                        .read_recycled_fixed_dispatch_data_into(
+                            Gfx942CompletedDispatchReadRequestV1::new(
+                                generation,
+                                extent.data_index,
+                                data_offset,
+                                destination.len() as u64,
+                            ),
+                            destination,
+                        )
+                        .map_err(|error| format!("KFD direct coherent readback: {error}"))
+                })
+        };
+        match native_result {
+            Ok(()) => Ok(true),
+            Err(detail) => Err(self.terminal_error(detail)),
+        }
     }
 
     #[cfg(test)]
@@ -1128,16 +1617,32 @@ fn map_access_v1(access: RuntimeAccessV1) -> ArgumentAccess {
     }
 }
 
-fn try_copy_boxed_slice_v1(
-    source: &[u8],
-    detail: &'static str,
-) -> Result<Box<[u8]>, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
-    let mut bytes = Vec::new();
-    bytes
-        .try_reserve_exact(source.len())
-        .map_err(|_| KfdRuntimeBackendV1::capacity(detail))?;
-    bytes.extend_from_slice(source);
-    Ok(bytes.into_boxed_slice())
+fn dispatch_shape_sha256_v1(launch: &BackendLaunchV1<'_>) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update(b"fe2o3.runtime.kfd.recycled-dispatch-shape.v1\0");
+    digest.update(launch.kernel.to_le_bytes());
+    for value in launch.geometry.grid {
+        digest.update(value.to_le_bytes());
+    }
+    for value in launch.geometry.workgroup {
+        digest.update(value.to_le_bytes());
+    }
+    digest.update(launch.geometry.dynamic_shared_bytes.to_le_bytes());
+    digest.update((launch.explicit_kernarg.len() as u64).to_le_bytes());
+    digest.update(launch.explicit_kernarg);
+    digest.update((launch.bindings.len() as u64).to_le_bytes());
+    for binding in launch.bindings {
+        digest.update(binding.region.allocation.to_le_bytes());
+        digest.update([match binding.region.access {
+            RuntimeAccessV1::Read => 1,
+            RuntimeAccessV1::Write => 2,
+            RuntimeAccessV1::ReadWrite => 3,
+        }]);
+        digest.update(binding.region.byte_offset.to_le_bytes());
+        digest.update(binding.region.byte_len.to_le_bytes());
+        digest.update(binding.kernarg_byte_offset.to_le_bytes());
+    }
+    digest.finalize().into()
 }
 
 fn try_copy_vec_v1(
@@ -1251,18 +1756,17 @@ fn snapshot_bound_data_v1(
                 "staged allocation end does not fit host address space",
             )
         })?;
-        let source = allocation
-            .bytes
-            .get(start_index..end_index)
-            .expect("validated staged range remains inside retained allocation");
-        let bytes = try_copy_boxed_slice_v1(source, "KFD bound-range snapshot allocation failed")?;
         let data_index = data.len();
         data.push(DataSpecV1 {
             allocation: allocation_id,
             kind: allocation.kind,
             alignment: allocation.alignment,
             allocation_offset: start,
-            bytes,
+            bytes: Arc::clone(&allocation.bytes),
+            byte_range: start_index..end_index,
+            content_sha256: (start_index == 0 && end_index == allocation.bytes.len())
+                .then_some(allocation.content_sha256)
+                .flatten(),
         });
         placements.insert(
             allocation_id,
@@ -1317,9 +1821,10 @@ fn materialize_initial_data_v1(
     data.try_reserve_exact(specs.len())
         .map_err(|_| "KFD native-data roster allocation failed".to_owned())?;
     for (index, spec) in specs.into_iter().enumerate() {
+        let owned_bytes = spec.try_owned_bytes()?;
         let item = match spec.kind {
             RuntimeMemoryKindV1::HostVisible => memory
-                .initialize_host_visible_coherent(spec.bytes)
+                .initialize_host_visible_coherent(owned_bytes)
                 .map(Gfx942FixedDispatchDataV1::host_visible_initialized)
                 .map_err(|error| format!("KFD host-visible initialization: {error}"))?,
             RuntimeMemoryKindV1::DeviceLocal => {
@@ -1327,10 +1832,10 @@ fn materialize_initial_data_v1(
                     .map_err(|_| "KFD device-content ordinal does not fit u32".to_owned())?;
                 let role = Gfx942DeviceContentRoleV1::new(role_identity, ordinal)
                     .map_err(|error| format!("KFD device-content role: {error}"))?;
-                let content = Gfx942DeviceContentDescriptorV1::from_bytes(role, &spec.bytes)
+                let content = Gfx942DeviceContentDescriptorV1::from_bytes(role, &owned_bytes)
                     .map_err(|error| format!("KFD device-content descriptor: {error}"))?;
                 memory
-                    .initialize_gfx942_device_memory(spec.bytes, spec.alignment, content)
+                    .initialize_gfx942_device_memory(owned_bytes, spec.alignment, content)
                     .map(Gfx942FixedDispatchDataV1::initialized)
                     .map_err(|error| format!("KFD device-local initialization: {error}"))?
             }
@@ -1338,6 +1843,55 @@ fn materialize_initial_data_v1(
         data.push(item);
     }
     Ok(data)
+}
+
+fn resident_descriptors_v1(
+    specs: &[DataSpecV1],
+) -> Result<Vec<ResidentDataDescriptorV1>, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+    let mut descriptors = Vec::new();
+    descriptors
+        .try_reserve_exact(specs.len())
+        .map_err(|_| KfdRuntimeBackendV1::capacity("KFD resident-data roster allocation failed"))?;
+    for spec in specs {
+        descriptors.push(ResidentDataDescriptorV1 {
+            allocation: spec.allocation,
+            kind: spec.kind,
+            alignment: spec.alignment,
+            allocation_offset: spec.allocation_offset,
+            byte_len: u64::try_from(spec.bytes().len()).map_err(|_| {
+                KfdRuntimeBackendV1::capacity("KFD resident-data extent does not fit u64")
+            })?,
+            host_content_sha256: spec.content_sha256,
+            device_may_have_modified: false,
+        });
+    }
+    Ok(descriptors)
+}
+
+fn same_resident_storage_shape_v1(
+    left: &[ResidentDataDescriptorV1],
+    right: &[ResidentDataDescriptorV1],
+) -> bool {
+    left.len() == right.len()
+        && left.iter().zip(right).all(|(left, right)| {
+            left.allocation == right.allocation
+                && left.kind == right.kind
+                && left.alignment == right.alignment
+                && left.allocation_offset == right.allocation_offset
+                && left.byte_len == right.byte_len
+        })
+}
+
+fn release_resident_data_v1(
+    queue: &mut ComputeAqlQueueSessionV1,
+    resident: ResidentDataRosterV1,
+) -> Result<(), String> {
+    for data in resident.data {
+        queue
+            .release_detached_fixed_dispatch_data(data)
+            .map_err(|error| format!("KFD resident-data release: {error}"))?;
+    }
+    Ok(())
 }
 
 fn materialize_rebound_data_v1(
@@ -1352,21 +1906,22 @@ fn materialize_rebound_data_v1(
         queue
             .preflight_fixed_dispatch_data_insertion(index)
             .map_err(|error| format!("KFD dispatch-data insertion preflight: {error}"))?;
+        let owned_bytes = spec.try_owned_bytes()?;
         let item = match spec.kind {
             RuntimeMemoryKindV1::HostVisible => queue
-                .insert_initialized_host_visible_fixed_dispatch_data(index, spec.bytes)
+                .insert_initialized_host_visible_fixed_dispatch_data(index, owned_bytes)
                 .map_err(|error| format!("KFD host-visible insertion: {error}"))?,
             RuntimeMemoryKindV1::DeviceLocal => {
                 let ordinal = u32::try_from(index)
                     .map_err(|_| "KFD device-content ordinal does not fit u32".to_owned())?;
                 let role = Gfx942DeviceContentRoleV1::new(role_identity, ordinal)
                     .map_err(|error| format!("KFD device-content role: {error}"))?;
-                let content = Gfx942DeviceContentDescriptorV1::from_bytes(role, &spec.bytes)
+                let content = Gfx942DeviceContentDescriptorV1::from_bytes(role, &owned_bytes)
                     .map_err(|error| format!("KFD device-content descriptor: {error}"))?;
                 queue
                     .insert_initialized_fixed_dispatch_data(
                         index,
-                        spec.bytes,
+                        owned_bytes,
                         spec.alignment,
                         content,
                     )
@@ -1511,7 +2066,10 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
                 device,
                 kind,
                 alignment,
-                bytes,
+                bytes: bytes.into(),
+                content_sha256: None,
+                last_full_host_write: None,
+                native_dirty: Vec::new(),
             },
         );
         self.staged_context_bytes = next_staged_context_bytes;
@@ -1528,6 +2086,22 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
                 KfdRuntimeBackendErrorKindV1::Busy,
                 "allocation is retained by a pending KFD dispatch",
             ));
+        }
+        if self.recycled_dispatch.as_ref().is_some_and(|recycled| {
+            recycled
+                .descriptors
+                .iter()
+                .any(|descriptor| descriptor.allocation == allocation)
+        }) {
+            self.detach_recycled_dispatch()?;
+        }
+        if self.resident_data.as_ref().is_some_and(|resident| {
+            resident
+                .descriptors
+                .iter()
+                .any(|descriptor| descriptor.allocation == allocation)
+        }) {
+            self.release_resident_data()?;
         }
         let removed = self.allocations.remove(&allocation).ok_or_else(|| {
             Self::rejected(
@@ -1555,7 +2129,7 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
                 "allocation is retained by a pending KFD dispatch",
             ));
         }
-        let record = self.allocations.get_mut(&allocation).ok_or_else(|| {
+        let record = self.allocations.get(&allocation).ok_or_else(|| {
             Self::rejected(
                 KfdRuntimeBackendErrorKindV1::UnknownHandle,
                 "unknown KFD allocation",
@@ -1573,13 +2147,104 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
                 "allocation write range overflow",
             )
         })?;
-        let destination = record.bytes.get_mut(offset..end).ok_or_else(|| {
-            Self::rejected(
+        if record.bytes.get(offset..end).is_none() {
+            return Err(Self::rejected(
                 KfdRuntimeBackendErrorKindV1::InvalidLaunch,
                 "allocation write is out of bounds",
-            )
-        })?;
-        destination.copy_from_slice(bytes);
+            ));
+        }
+        let full_write = offset == 0 && end == record.bytes.len();
+        let full_image = if full_write {
+            if let Some((image, digest)) = record
+                .last_full_host_write
+                .as_ref()
+                .filter(|(image, _)| image.as_ref() == bytes)
+            {
+                Some((Arc::clone(image), *digest))
+            } else {
+                let image: Arc<[u8]> =
+                    try_copy_vec_v1(bytes, "KFD complete host-write image allocation failed")?
+                        .into();
+                let digest = Sha256::digest(bytes).into();
+                Some((image, digest))
+            }
+        } else {
+            None
+        };
+
+        let attached_index = self.recycled_dispatch.as_ref().and_then(|recycled| {
+            recycled
+                .descriptors
+                .iter()
+                .enumerate()
+                .find(|(_, descriptor)| {
+                    descriptor.allocation == allocation
+                        && descriptor.kind == RuntimeMemoryKindV1::HostVisible
+                        && descriptor.allocation_offset == byte_offset
+                        && descriptor.byte_len == bytes.len() as u64
+                })
+                .map(|(index, _)| index)
+        });
+        if attached_index.is_none() && !record.native_dirty.is_empty() {
+            self.synchronize_native_allocation_v1(allocation)?;
+        }
+        if let Some(data_index) = attached_index {
+            let native_write = {
+                let queue = self
+                    .queue
+                    .as_mut()
+                    .expect("recycled dispatch retains its queue");
+                queue
+                    .recycled_fixed_dispatch_generation()
+                    .map_err(|error| format!("KFD recycled generation before host write: {error}"))
+                    .and_then(|generation| {
+                        queue
+                            .overwrite_recycled_fixed_dispatch_host_data(
+                                Gfx942RecycledDispatchWriteRequestV1::new(
+                                    generation, data_index, 0,
+                                ),
+                                bytes,
+                            )
+                            .map_err(|error| {
+                                format!("KFD attached host-visible allocation write: {error}")
+                            })
+                    })
+            };
+            if let Err(detail) = native_write {
+                return Err(self.terminal_error(detail));
+            }
+        }
+
+        let record = self
+            .allocations
+            .get_mut(&allocation)
+            .expect("validated allocation remains retained");
+        if let Some((image, digest)) = full_image {
+            record.bytes = Arc::clone(&image);
+            record.content_sha256 = Some(digest);
+            record.last_full_host_write = Some((image, digest));
+        } else {
+            let destination = Arc::make_mut(&mut record.bytes)
+                .get_mut(offset..end)
+                .ok_or_else(|| {
+                    Self::rejected(
+                        KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+                        "allocation write is out of bounds",
+                    )
+                })?;
+            destination.copy_from_slice(bytes);
+            record.content_sha256 = None;
+        }
+        if let Some(data_index) = attached_index {
+            record.native_dirty.clear();
+            let descriptor = &mut self
+                .recycled_dispatch
+                .as_mut()
+                .expect("attached write retained recycled dispatch")
+                .descriptors[data_index];
+            descriptor.device_may_have_modified = false;
+            descriptor.host_content_sha256 = record.content_sha256;
+        }
         Ok(())
     }
 
@@ -1596,6 +2261,10 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
                 "allocation is retained by a pending KFD dispatch",
             ));
         }
+        if self.read_native_allocation_into_v1(allocation, byte_offset, destination)? {
+            return Ok(());
+        }
+        self.synchronize_native_allocation_v1(allocation)?;
         let record = self.allocations.get(&allocation).ok_or_else(|| {
             Self::rejected(
                 KfdRuntimeBackendErrorKindV1::UnknownHandle,
@@ -1660,6 +2329,12 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
         module: u64,
     ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
         self.require_live()?;
+        if !self.modules.contains_key(&module) {
+            return Err(Self::rejected(
+                KfdRuntimeBackendErrorKindV1::UnknownHandle,
+                "unknown KFD module",
+            ));
+        }
         if self.active.as_ref().is_some_and(|active| {
             self.kernels
                 .get(&active.kernel)
@@ -1670,12 +2345,14 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
                 "module is retained by a pending KFD dispatch",
             ));
         }
-        if self.modules.remove(&module).is_none() {
-            return Err(Self::rejected(
-                KfdRuntimeBackendErrorKindV1::UnknownHandle,
-                "unknown KFD module",
-            ));
+        if self.recycled_dispatch.as_ref().is_some_and(|recycled| {
+            self.kernels
+                .get(&recycled.kernel)
+                .is_some_and(|kernel| kernel.module == module)
+        }) {
+            self.detach_recycled_dispatch()?;
         }
+        self.modules.remove(&module);
         self.kernels.retain(|_, kernel| kernel.module != module);
         Ok(())
     }
@@ -1934,6 +2611,52 @@ mod tests {
     }
 
     #[test]
+    fn complete_writes_cache_content_evidence_and_partial_writes_invalidate_it() {
+        let mut backend = KfdRuntimeBackendV1::mock();
+        let allocation = backend
+            .allocate_v1(7, RuntimeMemoryKindV1::HostVisible, 8, 8)
+            .unwrap();
+        let complete = [1_u8, 2, 3, 4, 5, 6, 7, 8];
+        backend
+            .write_allocation_v1(allocation, 0, &complete)
+            .unwrap();
+        assert_eq!(
+            backend.allocations[&allocation].content_sha256,
+            Some(Sha256::digest(complete).into())
+        );
+        let first_image = Arc::clone(&backend.allocations[&allocation].bytes);
+        backend
+            .write_allocation_v1(allocation, 0, &complete)
+            .unwrap();
+        assert!(Arc::ptr_eq(
+            &first_image,
+            &backend.allocations[&allocation].bytes
+        ));
+
+        let full = snapshot_bound_data_v1(
+            &backend.allocations,
+            &[BackendBindingV1 {
+                region: BackendMemoryRegionV1 {
+                    allocation,
+                    access: RuntimeAccessV1::Read,
+                    byte_offset: 0,
+                    byte_len: 8,
+                },
+                kernarg_byte_offset: 0,
+            }],
+            7,
+        )
+        .unwrap();
+        assert_eq!(
+            full.data[0].content_sha256,
+            backend.allocations[&allocation].content_sha256
+        );
+
+        backend.write_allocation_v1(allocation, 3, &[9]).unwrap();
+        assert_eq!(backend.allocations[&allocation].content_sha256, None);
+    }
+
+    #[test]
     fn staging_budgets_reject_before_allocation_and_release_exact_accounting() {
         let mut backend = KfdRuntimeBackendV1::mock_with_staging_budgets(StagingBudgetsV1 {
             max_allocation_bytes: 8,
@@ -1985,7 +2708,10 @@ mod tests {
                 device: 7,
                 kind: RuntimeMemoryKindV1::HostVisible,
                 alignment: 8,
-                bytes,
+                bytes: bytes.into(),
+                content_sha256: None,
+                last_full_host_write: None,
+                native_dirty: Vec::new(),
             },
         );
         let bindings = [
@@ -2012,7 +2738,8 @@ mod tests {
         let staged = snapshot_bound_data_v1(&allocations, &bindings, 7).unwrap();
         assert_eq!(staged.data.len(), 1);
         assert_eq!(staged.data[0].allocation_offset, 16);
-        assert_eq!(&*staged.data[0].bytes, &allocations[&9].bytes[16..44]);
+        assert_eq!(staged.data[0].content_sha256, None);
+        assert_eq!(staged.data[0].bytes(), &allocations[&9].bytes[16..44]);
         assert_eq!(
             staged.placements[&9],
             StagedPlacementV1 {
@@ -2020,7 +2747,7 @@ mod tests {
                 allocation_offset: 16,
             }
         );
-        assert!(staged.data[0].bytes.len() < allocations[&9].bytes.len());
+        assert!(staged.data[0].bytes().len() < allocations[&9].bytes.len());
     }
 
     #[test]
@@ -2073,7 +2800,7 @@ mod tests {
             .unwrap();
         assert_eq!(prepared.data.len(), 1);
         assert_eq!(prepared.data[0].allocation_offset, 8);
-        assert_eq!(&*prepared.data[0].bytes, &initial[8..24]);
+        assert_eq!(prepared.data[0].bytes(), &initial[8..24]);
         let reconciled =
             build_program_v1(&prepared.program, prepared.signature, &prepared.abi_rows).unwrap();
         assert!(reconciled.dispatch_abi_identity().is_some());

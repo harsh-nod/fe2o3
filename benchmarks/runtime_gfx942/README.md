@@ -30,7 +30,11 @@ per-sample average microseconds.
 
 | Metric | Included work | Comparable use |
 | --- | --- | --- |
-| KFD `qualified_materialize_submit_wait_readback` | Exact output reset, typed `RuntimeContextV1` launch admission, qualification-gate content scan, three-buffer GTT materialization, AQL submit/wait, submission release, native writeback, and facade readback | Direct-KFD end-to-end qualification cost only |
+| KFD `qualified_persistent_submit_wait_readback` | Exact output reset into retained coherent storage, typed `RuntimeContextV1` launch admission, persistent dispatch submit/wait/recycle, and generation-checked direct facade readback | Direct-KFD end-to-end qualification cost; compare cautiously with HIP staged end to end |
+| KFD `host_output_reset` | Repeated complete host-image validation/reuse and attached coherent output update before launch | KFD buffer-update policy only |
+| KFD `synchronized_launch_wait` | Typed launch preparation, retained native binding, AQL publication, completion wait, and recycle; lazy facade readback is excluded | Host launch/wait comparison with persistent-buffer runtimes |
+| KFD `facade_readback` | Generation- and effect-checked coherent copy directly into the caller-owned output buffer | KFD lazy readback policy only |
+| KFD `phase_*` | Internal preparation, snapshot, authority, native-binding, publication, publication-to-completion, eager-readback, and recycle scopes | Diagnostic attribution; not a cross-backend parity metric |
 | HSA `host_visible_submit_wait_readback` | Exact output reset outside timing, typed `RuntimeContextV1` launch, persistent host-visible buffers, host wait, submission release, and facade readback | Reviewed-HSA end-to-end host-visible path; not equivalent to KFD or HIP staging |
 | HSA `synchronized_launch_wait` | Persistent host-visible buffers and facade launch/wait/release; exact output reset occurs before timing | Compare cautiously with the HIP row: HSA creates and releases a kernarg allocation and completion signal per submission |
 | HIP `staged_submit_wait_readback` | Exact output reset, three host-to-device copies, module launch, output device-to-host copy, and stream synchronization | Staged end-to-end oracle; not equivalent to KFD allocation policy |
@@ -53,8 +57,8 @@ the native KFD queue.
 
 Record GPU load and competing processes with the results. Measurements taken
 under unrelated device load are diagnostic observations, not release numbers.
-Only the HSA/HIP `synchronized_launch_wait` rows have similar timing boundaries,
-and their allocation/signal policies still differ. Do not compute ratios across
-the other metric names. These rows do not establish general HIP/HSA parity:
-they cover one artifact, one geometry, one device, and the exact software stack
-printed by the runner.
+Only the KFD/HSA/HIP `synchronized_launch_wait` rows have similar timing
+boundaries, and their currentness, allocation, signal, and lazy-readback
+policies still differ. Do not compute ratios across the other metric names.
+These rows do not establish general HIP/HSA parity: they cover one artifact,
+one geometry, one device, and the exact software stack printed by the runner.

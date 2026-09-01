@@ -299,6 +299,9 @@ pub(super) trait MemoryBackend {
     fn gpuvm_aperture(&self) -> InclusiveAperture;
     fn page_size(&self) -> usize;
     fn check_currentness(&mut self) -> Result<(), MemorySessionError>;
+    fn check_operational_currentness(&mut self) -> Result<(), MemorySessionError> {
+        self.check_currentness()
+    }
     fn acquire_vm(&mut self) -> Result<(), MemorySessionError>;
     fn reserve_va(&mut self, bytes: usize) -> Result<Self::Reservation, MemorySessionError>;
     fn reservation_address(reservation: &Self::Reservation) -> u64;

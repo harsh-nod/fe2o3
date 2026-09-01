@@ -411,6 +411,16 @@ impl Gfx942FixedDispatchDataV1 {
         }
     }
 
+    pub(crate) fn initialized_host_visible_token_mut(
+        &mut self,
+    ) -> Option<&mut SharedGttAllocationV1<HostVisibleCoherentGttV1, GttGpuAccessibleMutableV1>>
+    {
+        match &mut self.storage {
+            DispatchDataStorageV1::HostVisibleInitialized(memory) => Some(memory.token_mut()),
+            _ => None,
+        }
+    }
+
     /// Returns whether the complete requested extent has initialized bytes.
     ///
     /// This observation does not identify their current content after any
@@ -498,6 +508,24 @@ pub struct Gfx942CompletedDispatchReadRequestV1 {
     byte_len: u64,
 }
 
+/// Inert request to overwrite an initialized coherent range after exact recycle.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Gfx942RecycledDispatchWriteRequestV1 {
+    dispatch_generation: u64,
+    data_index: usize,
+    offset: u64,
+}
+
+impl Gfx942RecycledDispatchWriteRequestV1 {
+    pub const fn new(dispatch_generation: u64, data_index: usize, offset: u64) -> Self {
+        Self {
+            dispatch_generation,
+            data_index,
+            offset,
+        }
+    }
+}
+
 /// Inert request for one exact admitted enclosing snapshot after recycle.
 ///
 /// The request contains no address or allocation authority. The retained
@@ -568,6 +596,11 @@ impl Gfx942CompletedDispatchReadbackV1 {
 
     pub fn bytes(&self) -> &[u8] {
         &self.bytes
+    }
+
+    /// Consumes the readback and returns its owned bytes.
+    pub fn into_bytes(self) -> Box<[u8]> {
+        self.bytes
     }
 }
 
@@ -1201,6 +1234,40 @@ impl DispatchResourceOwnerV1 {
         })
     }
 
+    pub(super) fn read_completed_host_visible_into(
+        &self,
+        memory: &mut SharedGttMemorySessionV1,
+        request: Gfx942CompletedDispatchReadRequestV1,
+        destination: &mut [u8],
+    ) -> Result<(), Gfx942DispatchBindingErrorV1> {
+        validate_completed_read_request(&self.generation, &self.data_premises, request)?;
+        if u64::try_from(destination.len()).ok() != Some(request.byte_len) {
+            return Err(Gfx942DispatchBindingErrorV1::InvalidData {
+                index: request.data_index,
+                detail: "completed read destination length",
+            });
+        }
+        let authority =
+            self.data
+                .get(request.data_index)
+                .ok_or(Gfx942DispatchBindingErrorV1::InvalidData {
+                    index: request.data_index,
+                    detail: "completed read authority ordinal",
+                })?;
+        let DispatchDataAuthorityV1::HostVisible(authority) = authority else {
+            return Err(Gfx942DispatchBindingErrorV1::InvalidData {
+                index: request.data_index,
+                detail: "completed read requires coherent host-visible storage",
+            });
+        };
+        memory.copy_completed_dispatch_host_data_subrange_into(
+            authority,
+            request.offset,
+            destination,
+        )?;
+        Ok(())
+    }
+
     pub(super) fn read_completed_host_visible_snapshot(
         &self,
         memory: &mut SharedGttMemorySessionV1,
@@ -1235,6 +1302,55 @@ impl DispatchResourceOwnerV1 {
             offset: request.offset,
             bytes,
         })
+    }
+
+    pub(super) fn overwrite_recycled_host_visible(
+        &mut self,
+        memory: &mut SharedGttMemorySessionV1,
+        request: Gfx942RecycledDispatchWriteRequestV1,
+        source: &[u8],
+    ) -> Result<(), Gfx942DispatchBindingErrorV1> {
+        let generation = self.generation.returned_generation()?;
+        if request.dispatch_generation != generation {
+            return Err(Gfx942DispatchBindingErrorV1::StaleDispatchGeneration);
+        }
+        let premise = self.data_premises.get(request.data_index).ok_or(
+            Gfx942DispatchBindingErrorV1::InvalidData {
+                index: request.data_index,
+                detail: "recycled overwrite premise ordinal",
+            },
+        )?;
+        let source_len =
+            u64::try_from(source.len()).map_err(|_| Gfx942DispatchBindingErrorV1::InvalidData {
+                index: request.data_index,
+                detail: "recycled overwrite source length",
+            })?;
+        let end = request.offset.checked_add(source_len).ok_or(
+            Gfx942DispatchBindingErrorV1::InvalidData {
+                index: request.data_index,
+                detail: "recycled overwrite range overflow",
+            },
+        )?;
+        if source.is_empty() || end > premise.valid_bytes || !premise.fully_initialized {
+            return Err(Gfx942DispatchBindingErrorV1::InvalidData {
+                index: request.data_index,
+                detail: "recycled overwrite range or initialization",
+            });
+        }
+        let authority = self.data.get_mut(request.data_index).ok_or(
+            Gfx942DispatchBindingErrorV1::InvalidData {
+                index: request.data_index,
+                detail: "recycled overwrite authority ordinal",
+            },
+        )?;
+        let DispatchDataAuthorityV1::HostVisible(authority) = authority else {
+            return Err(Gfx942DispatchBindingErrorV1::InvalidData {
+                index: request.data_index,
+                detail: "recycled overwrite requires coherent host-visible storage",
+            });
+        };
+        memory.overwrite_recycled_dispatch_host_data_subrange(authority, request.offset, source)?;
+        Ok(())
     }
 
     pub(super) fn release(

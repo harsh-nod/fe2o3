@@ -120,6 +120,7 @@ impl std::error::Error for Gfx942VecaddQualificationAdmissionErrorV1 {}
 /// metadata effect declarations.
 #[derive(Debug)]
 pub struct AdmittedGfx942VecaddQualificationV1 {
+    initial_buffer_sha256: [[u8; 32]; 3],
     _private: (),
 }
 
@@ -165,7 +166,7 @@ impl AdmittedGfx942VecaddQualificationV1 {
     ) -> bool {
         exact_artifact_v1(&request)
             && exact_kernarg_and_geometry_v1(&request)
-            && exact_abi_and_allocations_v1(&request)
+            && exact_abi_and_allocations_v1(&request, &self.initial_buffer_sha256)
     }
 }
 
@@ -229,7 +230,17 @@ pub fn admit_gfx942_vecadd_qualification_v1()
     if !resource_match || !abi_match {
         return Err(Gfx942VecaddQualificationAdmissionErrorV1::AbiOrEffects);
     }
-    Ok(AdmittedGfx942VecaddQualificationV1 { _private: () })
+    let buffers = gfx942_vecadd_qualification_host_buffers_v1()
+        .map_err(|_| Gfx942VecaddQualificationAdmissionErrorV1::AbiOrEffects)?;
+    let initial_buffer_sha256 = [
+        Sha256::digest(buffers.left()).into(),
+        Sha256::digest(buffers.right()).into(),
+        Sha256::digest(buffers.output()).into(),
+    ];
+    Ok(AdmittedGfx942VecaddQualificationV1 {
+        initial_buffer_sha256,
+        _private: (),
+    })
 }
 
 /// One exact global-buffer argument in the qualified explicit ABI.
@@ -455,7 +466,10 @@ fn exact_kernarg_and_geometry_v1(request: &KfdRuntimeAuthorityRequestV1<'_>) -> 
         && request.geometry == GFX942_VECADD_QUALIFICATION_GEOMETRY_V1
 }
 
-fn exact_abi_and_allocations_v1(request: &KfdRuntimeAuthorityRequestV1<'_>) -> bool {
+fn exact_abi_and_allocations_v1(
+    request: &KfdRuntimeAuthorityRequestV1<'_>,
+    initial_buffer_sha256: &[[u8; 32]; 3],
+) -> bool {
     if request.bindings.len() != 3
         || request.dispatch_abi.len() != 3
         || request.allocations.len() != 3
@@ -497,21 +511,9 @@ fn exact_abi_and_allocations_v1(request: &KfdRuntimeAuthorityRequestV1<'_>) -> b
                     && allocation.alignment >= GFX942_VECADD_QUALIFICATION_BUFFER_ALIGNMENT_V1
                     && allocation.byte_offset == 0
                     && allocation.bytes.len() == GFX942_VECADD_QUALIFICATION_BUFFER_BYTES_V1
-                    && exact_initial_buffer_v1(index, allocation.bytes)
+                    && allocation.content_sha256 == Some(initial_buffer_sha256[index])
             })
     })
-}
-
-fn exact_initial_buffer_v1(index: usize, bytes: &[u8]) -> bool {
-    bytes
-        .chunks_exact(size_of::<f32>())
-        .enumerate()
-        .all(|(element, encoded)| match index {
-            0 => encoded == qualification_left_v1(element).to_bits().to_le_bytes(),
-            1 => encoded == qualification_right_v1(element).to_bits().to_le_bytes(),
-            2 => encoded == GFX942_VECADD_QUALIFICATION_OUTPUT_INITIAL_BITS_V1.to_le_bytes(),
-            _ => false,
-        })
 }
 
 const fn argument_access_v1(access: RuntimeAccessV1) -> ArgumentAccess {
@@ -703,6 +705,7 @@ mod tests {
             alignment: GFX942_VECADD_QUALIFICATION_BUFFER_ALIGNMENT_V1,
             byte_offset: 0,
             bytes,
+            content_sha256: Some(Sha256::digest(bytes).into()),
         }
     }
 
@@ -761,6 +764,7 @@ mod tests {
                     alignment: self.alignments[index],
                     byte_offset: self.byte_offsets[index],
                     bytes: bytes[index],
+                    content_sha256: Some(Sha256::digest(bytes[index]).into()),
                 });
             admit_gfx942_vecadd_qualification_v1()
                 .unwrap()

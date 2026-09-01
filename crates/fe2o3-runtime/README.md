@@ -48,12 +48,17 @@ Direct KFD/HSA backend drop may abort when live or ambiguous native custody
 remains, so explicit shutdown is required for predictable teardown.
 
 The current KFD adapter admits one gfx942 device and serializes logical streams
-over one native queue. Its device-local input is host-staged, materialized per
-launch, and read-only. KFD module validation is cached at load, kernel metadata
-is cached at resolution, and launches snapshot only the alignment-preserving
-allocation windows covering their bindings. Logical KFD allocations are capped
-at 256 MiB each and 1 GiB per backend context; budget and allocator exhaustion
-return `Capacity` before native publication. The HSA adapter admits one
+over one native queue. Same-shape launches retain native host-visible storage,
+code, kernarg, and dispatch state across completion generations. Logical host
+images use shared immutable snapshots; exact repeated full writes reuse their
+validated digest and update attached coherent storage before launch. GPU-written
+extents stay native-authoritative until `read_allocation` or a later launch
+requires the host image, and facade reads can copy directly into the caller's
+destination. Device-local input is still host-staged, materialized per launch,
+and read-only. KFD module validation is cached at load and kernel metadata is
+cached at resolution. Logical KFD allocations are capped at 256 MiB each and 1
+GiB per backend context; budget and allocator exhaustion return `Capacity`
+before native publication. The HSA adapter admits one
 correlated gfx942 or gfx950 device and host-visible memory. Neither adapter
 currently advertises peer copy, multi-device operation, atomics, or collectives;
 atomics and collectives have no general V1 facade operation. This is not HIP/HSA parity. See

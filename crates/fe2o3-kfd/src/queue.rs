@@ -54,7 +54,7 @@ pub use dispatch_binding::{
     Gfx942CompletedDispatchSnapshotRequestV1, Gfx942DispatchBatchV1, Gfx942DispatchBindingErrorV1,
     Gfx942DispatchBufferBindingV1, Gfx942DispatchPollV1, Gfx942DispatchPollWithProgressV1,
     Gfx942DispatchProgressV1, Gfx942FixedDispatchDataKindV1, Gfx942FixedDispatchDataLayoutV1,
-    Gfx942FixedDispatchDataV1, Gfx942FixedDispatchPacketV1,
+    Gfx942FixedDispatchDataV1, Gfx942FixedDispatchPacketV1, Gfx942RecycledDispatchWriteRequestV1,
     preflight_gfx942_fixed_dispatch_replacement,
 };
 
@@ -83,8 +83,8 @@ pub use live::{
 
 /// Canonical claim boundary for the executable native-queue foundation.
 pub const NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-gfx942-native-queue-adapter-foundation-r20-v1\n",
-    "compute_session_sha256=bf0c780bac86050e0e8bc478f37905f153c204bb5ae5f9f144f312cf28d65357\n",
+    "profile=fe2o3-mi300x-gfx942-native-queue-adapter-foundation-r22-v1\n",
+    "compute_session_sha256=d4c599f03c2e7bad0ea15dfd3a64cdde5ed387c7945f32d03b6b8ea59753491d\n",
     "operations=create,update,disable,destroy\n",
     "projection=existing-bounded-queue-lifecycle-model,pending-before-ioctl,append-only-history\n",
     "resources=backend-specific-private-capability,linearly-retained,exact-ring-control-eop-cwsr-mappings-required\n",
@@ -106,7 +106,7 @@ pub const NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_V1`].
 pub const NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_SHA256_V1: &str =
-    "2c9d6d1dba0a54a1ff4b9edf92718d39c60f2f2327f9a5207d002a0f052df957";
+    "3b5f1af3cc95f60a27d448cec690cbb8988ec80c5459bd0c0c4794f0743250f6";
 
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

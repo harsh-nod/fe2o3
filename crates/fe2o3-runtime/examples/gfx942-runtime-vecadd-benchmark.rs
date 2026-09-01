@@ -19,8 +19,9 @@ mod enabled {
         Gfx942VecaddQualificationArgumentsV1, admit_gfx942_vecadd_qualification_v1,
     };
     use fe2o3_runtime::{
-        KfdRuntimeBackendV1, RuntimeAllocationIdV1, RuntimeContextV1, RuntimeMemoryKindV1,
-        RuntimeModuleIdV1, RuntimePollV1, RuntimeStreamIdV1, TypedRuntimeKernelV1,
+        KfdRuntimeBackendV1, KfdRuntimeLaunchPerformanceV1, RuntimeAllocationIdV1,
+        RuntimeContextV1, RuntimeMemoryKindV1, RuntimeModuleIdV1, RuntimePollV1, RuntimeStreamIdV1,
+        TypedRuntimeKernelV1,
     };
 
     const USAGE: &str =
@@ -85,12 +86,13 @@ mod enabled {
         sorted[(sorted.len() - 1) * percentile / 100]
     }
 
-    fn report(samples: &[f64], launches_per_sample: usize) {
+    fn report(metric: &str, samples: &[f64], launches_per_sample: usize) {
         let mut sorted = samples.to_vec();
         sorted.sort_by(f64::total_cmp);
         let mean = sorted.iter().sum::<f64>() / sorted.len() as f64;
         println!(
-            "backend=kfd metric=qualified_materialize_submit_wait_readback n={} samples={} launches_per_sample={} min_us={:.3} p50_us={:.3} mean_us={:.3} p90_us={:.3} max_us={:.3}",
+            "backend=kfd metric={} n={} samples={} launches_per_sample={} min_us={:.3} p50_us={:.3} mean_us={:.3} p90_us={:.3} max_us={:.3}",
+            metric,
             GFX942_VECADD_QUALIFICATION_ELEMENTS_V1,
             sorted.len(),
             launches_per_sample,
@@ -100,6 +102,52 @@ mod enabled {
             percentile(&sorted, 90),
             sorted[sorted.len() - 1],
         );
+    }
+
+    #[derive(Clone, Copy, Debug, Default)]
+    struct IterationTimingV1 {
+        total: Duration,
+        output_reset: Duration,
+        synchronized_launch_wait: Duration,
+        facade_readback: Duration,
+        backend: KfdRuntimeLaunchPerformanceV1,
+    }
+
+    #[derive(Debug, Default)]
+    struct SampleTimingV1 {
+        total: Duration,
+        output_reset: Duration,
+        synchronized_launch_wait: Duration,
+        facade_readback: Duration,
+        preparation: Duration,
+        bound_snapshot: Duration,
+        authority: Duration,
+        native_binding: Duration,
+        publication: Duration,
+        publish_to_completion: Duration,
+        completed_readback: Duration,
+        recycle: Duration,
+    }
+
+    impl SampleTimingV1 {
+        fn add(&mut self, timing: IterationTimingV1) {
+            self.total += timing.total;
+            self.output_reset += timing.output_reset;
+            self.synchronized_launch_wait += timing.synchronized_launch_wait;
+            self.facade_readback += timing.facade_readback;
+            self.preparation += timing.backend.preparation();
+            self.bound_snapshot += timing.backend.bound_snapshot();
+            self.authority += timing.backend.authority();
+            self.native_binding += timing.backend.native_binding();
+            self.publication += timing.backend.publication();
+            self.publish_to_completion += timing.backend.publish_to_completion();
+            self.completed_readback += timing.backend.completed_readback();
+            self.recycle += timing.backend.recycle();
+        }
+    }
+
+    fn per_launch_us(duration: Duration, launches_per_sample: usize) -> f64 {
+        duration.as_secs_f64() * 1_000_000.0 / launches_per_sample as f64
     }
 
     struct QualifiedRunV1 {
@@ -199,10 +247,14 @@ mod enabled {
             })
         }
 
-        fn iteration(&mut self, record_event: bool) -> Result<(), String> {
+        fn iteration(&mut self, record_event: bool) -> Result<IterationTimingV1, String> {
+            let total_started = Instant::now();
+            let reset_started = Instant::now();
             self.context
                 .write_allocation(self.allocations[2], 0, &self.initial_output)
                 .map_err(backend_error)?;
+            let output_reset = reset_started.elapsed();
+            let synchronized_started = Instant::now();
             let mut submission = self
                 .context
                 .launch(
@@ -232,10 +284,24 @@ mod enabled {
             self.context
                 .release_submission(submission)
                 .map_err(backend_error)?;
+            let synchronized_launch_wait = synchronized_started.elapsed();
+            let readback_started = Instant::now();
             self.context
                 .read_allocation(self.allocations[2], 0, &mut self.observed_output)
                 .map_err(backend_error)?;
-            Ok(())
+            let facade_readback = readback_started.elapsed();
+            let backend = self
+                .context
+                .backend()
+                .last_launch_performance_v1()
+                .ok_or_else(|| "KFD launch completed without phase timings".to_owned())?;
+            Ok(IterationTimingV1 {
+                total: total_started.elapsed(),
+                output_reset,
+                synchronized_launch_wait,
+                facade_readback,
+                backend,
+            })
         }
 
         fn validate(&self) -> Result<(), String> {
@@ -279,17 +345,74 @@ mod enabled {
         }
         run.validate()?;
 
-        let mut timings = Vec::new();
-        timings.try_reserve_exact(samples)?;
+        let mut total = Vec::new();
+        let mut output_reset = Vec::new();
+        let mut synchronized_launch_wait = Vec::new();
+        let mut facade_readback = Vec::new();
+        let mut preparation = Vec::new();
+        let mut bound_snapshot = Vec::new();
+        let mut authority = Vec::new();
+        let mut native_binding = Vec::new();
+        let mut publication = Vec::new();
+        let mut publish_to_completion = Vec::new();
+        let mut completed_readback = Vec::new();
+        let mut recycle = Vec::new();
         for _ in 0..samples {
-            let start = Instant::now();
+            let mut sample = SampleTimingV1::default();
             for _ in 0..launches_per_sample {
-                run.iteration(false)?;
+                sample.add(run.iteration(false)?);
             }
-            timings.push(start.elapsed().as_secs_f64() * 1_000_000.0 / launches_per_sample as f64);
+            total.push(per_launch_us(sample.total, launches_per_sample));
+            output_reset.push(per_launch_us(sample.output_reset, launches_per_sample));
+            synchronized_launch_wait.push(per_launch_us(
+                sample.synchronized_launch_wait,
+                launches_per_sample,
+            ));
+            facade_readback.push(per_launch_us(sample.facade_readback, launches_per_sample));
+            preparation.push(per_launch_us(sample.preparation, launches_per_sample));
+            bound_snapshot.push(per_launch_us(sample.bound_snapshot, launches_per_sample));
+            authority.push(per_launch_us(sample.authority, launches_per_sample));
+            native_binding.push(per_launch_us(sample.native_binding, launches_per_sample));
+            publication.push(per_launch_us(sample.publication, launches_per_sample));
+            publish_to_completion.push(per_launch_us(
+                sample.publish_to_completion,
+                launches_per_sample,
+            ));
+            completed_readback.push(per_launch_us(
+                sample.completed_readback,
+                launches_per_sample,
+            ));
+            recycle.push(per_launch_us(sample.recycle, launches_per_sample));
             run.validate()?;
         }
-        report(&timings, launches_per_sample);
+        report(
+            "qualified_persistent_submit_wait_readback",
+            &total,
+            launches_per_sample,
+        );
+        report("host_output_reset", &output_reset, launches_per_sample);
+        report(
+            "synchronized_launch_wait",
+            &synchronized_launch_wait,
+            launches_per_sample,
+        );
+        report("facade_readback", &facade_readback, launches_per_sample);
+        report("phase_preparation", &preparation, launches_per_sample);
+        report("phase_bound_snapshot", &bound_snapshot, launches_per_sample);
+        report("phase_authority", &authority, launches_per_sample);
+        report("phase_native_binding", &native_binding, launches_per_sample);
+        report("phase_publication", &publication, launches_per_sample);
+        report(
+            "phase_publish_to_completion",
+            &publish_to_completion,
+            launches_per_sample,
+        );
+        report(
+            "phase_completed_readback",
+            &completed_readback,
+            launches_per_sample,
+        );
+        report("phase_recycle", &recycle, launches_per_sample);
         println!(
             "backend=kfd validation=exact status=passed n={}",
             GFX942_VECADD_QUALIFICATION_ELEMENTS_V1

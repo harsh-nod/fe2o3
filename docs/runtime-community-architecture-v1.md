@@ -60,7 +60,7 @@ frames, and worker abort as terminal backend loss.
 
 | Backend | Devices and queues | Memory | Unsupported |
 | --- | --- | --- | --- |
-| KFD | One admitted `gfx942:xnack-` device, one reusable native queue, multiple serialized logical streams, and one pending launch | Host-staged buffers capped at 256 MiB each and 1 GiB per context; launches snapshot only alignment-preserving bound windows; `DeviceLocal` is materialized per launch and is read-only because no reviewed writeback path exists | Peer copy, multi-device, atomics, collectives |
+| KFD | One admitted `gfx942:xnack-` device, one reusable native queue, multiple serialized logical streams, and one pending launch | Host-visible native storage, code, kernarg, and dispatch state persist across same-shape launches; logical host images use shared immutable snapshots and exact full-write digest reuse; device writeback is synchronized lazily on facade read or before a launch that needs host authority; `DeviceLocal` remains per-launch and read-only | Peer copy, multi-device, atomics, collectives |
 | HSA | One HIP-correlated gfx942 or gfx950 HSA device with persistent per-stream queues | Host-visible allocations only | Device-local allocation, peer copy, multi-device, atomics, collectives |
 
 The V1 facade has a peer-copy operation, but neither shipped adapter advertises
@@ -69,7 +69,11 @@ general atomic or collective operation. These rows are not HIP/HSA parity.
 
 The KFD adapter validates and owns a module once at load, caches selected
 kernel metadata at resolution, and shares those immutable bytes and descriptors
-across launch preparation. Staging-budget or host-allocation exhaustion is a
+across launch preparation. A completed and recycled same-shape dispatch can be
+resubmitted without detaching or rebuilding code, kernarg, or data storage.
+Host writes update an attached coherent allocation before launch, and exact
+native-dirty extents remain authoritative until facade readback or a later
+host-authority requirement. Staging-budget or host-allocation exhaustion is a
 pre-publication `Capacity` rejection.
 
 The feature-gated gfx942 qualification lane is intentionally outside production
@@ -114,6 +118,11 @@ dependencies. Each copy retains a model peer-transfer contract identity.
   operations, not hot transitions.
 - Completion waits use deadlines and a bounded spin/backoff policy. Poll counts
   are not timeout units.
+- KFD device, VM, allocation, mapping, and queue lifecycle transitions use the
+  full contracted topology/aperture currentness composite. Active mapped-memory
+  and queue operations use the retained process, reset-event, descriptor, UAPI,
+  XNACK, and DRM-loss operational fence. Packet atomics execute within explicit
+  owner pre/post fence scopes rather than recursively rescanning host topology.
 - `fe2o3-host` alias admission uses allocation-aware interval indexes. It must
   not scan all arguments of all in-flight launches for every new argument.
 - `fe2o3-hsa-runtime` indexes pending accesses by allocation, stream, and byte
@@ -129,10 +138,11 @@ Scale benchmarks cover the maximum completion graph and large lifecycle
 journals. Regressions in asymptotic behavior are release blockers.
 
 The gfx942 runtime qualification runner compares only like-named measurement
-scopes. KFD staging, HSA host-visible execution, HIP staging, synchronized
-launch/wait, and HIP device-event intervals are reported separately. Results
-from unlike scopes must not be converted into parity ratios; even the HSA/HIP
-synchronized rows retain different per-submission allocation and signal costs.
+scopes. KFD persistent execution, HSA host-visible execution, HIP staging,
+synchronized launch/wait, and HIP device-event intervals are reported
+separately. Results from unlike scopes must not be converted into parity
+ratios; even the KFD/HSA/HIP synchronized rows retain different currentness,
+allocation, signal, and readback policies.
 
 ## Backend Selection
 

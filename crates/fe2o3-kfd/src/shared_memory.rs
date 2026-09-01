@@ -88,7 +88,7 @@ pub const GFX942_DEVICE_MEMORY_INITIALIZATION_MANIFEST_SHA256_V1: &str =
 
 /// Canonical contract for the bounded multi-allocation R2 adapter.
 pub const SHARED_GTT_MEMORY_PROFILE_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-shared-gtt-memory-r11-v1\n",
+    "profile=fe2o3-mi300x-shared-gtt-memory-r12-v1\n",
     "base_memory_profile_sha256=9623a22bfb2686afa9e4d99dcec0a352c7fd7c6514b84ff714c40cfb9095d2b8\n",
     "kfd_memory_schema_sha256=5c210c3d7ada17794b10cde6f48a28f105a6e79dd8dce77c66b14dca6074eea8\n",
     "kfd_userptr_memory_schema_sha256=c1cee09bdf884d2c14a5dbb89c1f6f7885962c75b1457caf412821490919ee9e\n",
@@ -104,8 +104,9 @@ pub const SHARED_GTT_MEMORY_PROFILE_MANIFEST_V1: &str = concat!(
     "queue-bridge=crate-private-role-marked-linear-mapped-capabilities,ring-control-eop-cwsr-completion-signal-dispatch-code-dispatch-kernarg-and-dispatch-host-data-roles,private-va-mapping-publication-facts,no-public-mint,live-queue-model-foundation-restored-before-every-allocation-lifecycle-mutation-and-reclaimed-afterward\n",
     "device-dispatch-bridge=exact-complete-distinct-set-of-every-live-mapped-c3-lease-required-before-model-transfer,actual-linear-lease-retained,private-address-facts\n",
     "queue-gtt-policy=reusable-and-dispatch-ring:gfx942-host-visible-executable-single-span,diagnostic-barrier-ring:plain-executable-gtt-or-selected-gpu-userptr-with-exact-final-rocr-derived-flags-and-no-full-rocr-allocation-or-map-order-parity,control:exact-same-va-userptr-writable-coherent,completion-signals:host-visible-coherent-gtt,eop-and-cwsr:executable\n",
-    "cpu_views=closure-scoped-before-map;mapped-queue-diagnostic-access-only-through-private-packet-id-and-signal-slot-bounded-acquire-or-volatile-observation;mapped-completion-access-only-through-slot-bounded-acquire-observe-and-release-reset;mapped-dispatch-data-copy-is-crate-private-bounded-owned-and-generation-gated-by-the-retaining-queue,no-safe-mapped-borrow-escape\n",
+    "cpu_views=closure-scoped-before-map;mapped-queue-diagnostic-access-only-through-private-packet-id-and-signal-slot-bounded-acquire-or-volatile-observation;mapped-completion-access-only-through-slot-bounded-acquire-observe-and-release-reset;mapped-dispatch-data-copy-is-crate-private-bounded-owned-or-caller-destination-and-generation-gated-by-the-retaining-queue,no-safe-mapped-borrow-escape\n",
     "completion-bridge=exact-retained-ring-and-host-coherent-mappings,private-packet-id-and-64-byte-signal-slot-index,backend-atomic-u32-header-and-atomic-i64-value-acquire-observe,immutable-kind-volatile-observe,and-release-reset,currentness-sandwiched\n",
+    "currentness=lifecycle-transitions-use-full-contracted-device-topology-aperture-composite;active-mapped-memory-submission-and-completion-use-process-reset-event-retained-descriptor-uapi-xnack-and-drm-vram-loss-operational-fence;packet-atomics-execute-inside-explicit-owner-pre-post-scopes\n",
     "executable=ordinary-ExecutableGttV1-only:cpu-construction-rw-to-vma-read-only-before-gpu-map,gpu-writable-flag-remains-contracted;diagnostic-ExecutableAqlQueueProbeGttV1-remains-cpu-mutable-after-gpu-map-for-aql-publication\n",
     "userptr-lifecycle=reserve-vma,anonymous-dontfork-read-write-pages,register-same-cpu-and-gpu-address,map-gpu,unmap-gpu,free-bo-before-cpu-vma-unmap,no-separate-reservation-unmap\n",
     "failure=global-quarantine-after-started-or-ambiguous-native-transaction,no-drop-cleanup-or-retry\n",
@@ -116,11 +117,11 @@ pub const SHARED_GTT_MEMORY_PROFILE_MANIFEST_V1: &str = concat!(
 );
 
 pub const SHARED_GTT_MEMORY_PROFILE_SHA256_V1: &str =
-    "965ff9f903665a15a26dd37695413d8621a5019bae99e5f2be464777de34ce79";
+    "fb01d099eedfb39a60a1763897691684b547c51610b5e62529f2a6ff0eb27f83";
 
 pub const SHARED_GTT_MEMORY_PROFILE_SHA256_BYTES_V1: [u8; 32] = [
-    0x96, 0x5f, 0xf9, 0xf9, 0x03, 0x66, 0x5a, 0x15, 0xa2, 0x6d, 0xd3, 0x76, 0x95, 0x41, 0x3d, 0x86,
-    0x21, 0xa5, 0x01, 0x9b, 0xae, 0x99, 0xe5, 0xf2, 0xbe, 0x46, 0x47, 0x77, 0xde, 0x34, 0xce, 0x79,
+    0xfb, 0x01, 0xd0, 0x99, 0xee, 0xdf, 0xb3, 0x9a, 0x60, 0xa1, 0x76, 0x38, 0x97, 0x69, 0x16, 0x84,
+    0xb5, 0x47, 0xc5, 0x16, 0x10, 0xb5, 0xe6, 0x25, 0x29, 0xf2, 0xa6, 0xff, 0x0e, 0xb2, 0x7f, 0x83,
 ];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -280,6 +281,12 @@ impl Gfx942InitializedHostVisibleMemoryV1 {
         self,
     ) -> SharedGttAllocationV1<HostVisibleCoherentGttV1, GttGpuAccessibleMutableV1> {
         self.token
+    }
+
+    pub(crate) fn token_mut(
+        &mut self,
+    ) -> &mut SharedGttAllocationV1<HostVisibleCoherentGttV1, GttGpuAccessibleMutableV1> {
+        &mut self.token
     }
 }
 
@@ -932,6 +939,16 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
             return self.quarantine(MemorySessionError::ProcessChanged);
         }
         if let Err(error) = self.backend.check_currentness() {
+            return self.quarantine(error);
+        }
+        Ok(())
+    }
+
+    fn check_operational_currentness(&mut self) -> Result<(), MemorySessionError> {
+        if self.backend.opener_pid() != std::process::id() {
+            return self.quarantine(MemorySessionError::ProcessChanged);
+        }
+        if let Err(error) = self.backend.check_operational_currentness() {
             return self.quarantine(error);
         }
         Ok(())
@@ -1664,16 +1681,23 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
         &mut self,
         token: &mut SharedGttAllocationV1<P, GttGpuAccessibleMutableV1>,
     ) -> Result<(u64, u64), MemorySessionError> {
-        self.check_currentness()?;
+        self.check_operational_currentness()?;
+        let value = self.observe_aql_counters_in_current_scope(token)?;
+        self.check_operational_currentness()?;
+        Ok(value)
+    }
+
+    fn observe_aql_counters_in_current_scope<P: MutableGpuGttProfileV1>(
+        &mut self,
+        token: &mut SharedGttAllocationV1<P, GttGpuAccessibleMutableV1>,
+    ) -> Result<(u64, u64), MemorySessionError> {
         let index = self.index(token, SharedAllocationPhaseV1::GpuAccessibleMutable)?;
         let requested = self.allocations[index].layout.requested_bytes;
         let mapping = self.allocations[index]
             .mapping
             .as_mut()
             .ok_or(MemorySessionError::InvalidAllocationAuthority)?;
-        let value = B::observe_aql_counters(mapping, requested)?;
-        self.check_currentness()?;
-        Ok(value)
+        B::observe_aql_counters(mapping, requested)
     }
 
     fn fetch_add_aql_write<P: MutableGpuGttProfileV1>(
@@ -1681,16 +1705,24 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
         token: &mut SharedGttAllocationV1<P, GttGpuAccessibleMutableV1>,
         increment: u64,
     ) -> Result<u64, MemorySessionError> {
-        self.check_currentness()?;
+        self.check_operational_currentness()?;
+        let value = self.fetch_add_aql_write_in_current_scope(token, increment)?;
+        self.check_operational_currentness()?;
+        Ok(value)
+    }
+
+    fn fetch_add_aql_write_in_current_scope<P: MutableGpuGttProfileV1>(
+        &mut self,
+        token: &mut SharedGttAllocationV1<P, GttGpuAccessibleMutableV1>,
+        increment: u64,
+    ) -> Result<u64, MemorySessionError> {
         let index = self.index(token, SharedAllocationPhaseV1::GpuAccessibleMutable)?;
         let requested = self.allocations[index].layout.requested_bytes;
         let mapping = self.allocations[index]
             .mapping
             .as_mut()
             .ok_or(MemorySessionError::InvalidAllocationAuthority)?;
-        let value = B::fetch_add_aql_write(mapping, requested, increment)?;
-        self.check_currentness()?;
-        Ok(value)
+        B::fetch_add_aql_write(mapping, requested, increment)
     }
 
     fn write_aql_slot<P: MutableGpuGttProfileV1>(
@@ -1699,15 +1731,24 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
         slot_index: u32,
         packet: &[u8; 64],
     ) -> Result<(), MemorySessionError> {
-        self.check_currentness()?;
+        self.check_operational_currentness()?;
+        self.write_aql_slot_in_current_scope(token, slot_index, packet)?;
+        self.check_operational_currentness()
+    }
+
+    fn write_aql_slot_in_current_scope<P: MutableGpuGttProfileV1>(
+        &mut self,
+        token: &mut SharedGttAllocationV1<P, GttGpuAccessibleMutableV1>,
+        slot_index: u32,
+        packet: &[u8; 64],
+    ) -> Result<(), MemorySessionError> {
         let index = self.index(token, SharedAllocationPhaseV1::GpuAccessibleMutable)?;
         let requested = self.allocations[index].layout.requested_bytes;
         let mapping = self.allocations[index]
             .mapping
             .as_mut()
             .ok_or(MemorySessionError::InvalidAllocationAuthority)?;
-        B::write_aql_slot(mapping, requested, slot_index, packet)?;
-        self.check_currentness()
+        B::write_aql_slot(mapping, requested, slot_index, packet)
     }
 
     fn publish_aql_header<P: MutableGpuGttProfileV1>(
@@ -1716,15 +1757,24 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
         slot_index: u32,
         header: u16,
     ) -> Result<(), MemorySessionError> {
-        self.check_currentness()?;
+        self.check_operational_currentness()?;
+        self.publish_aql_header_in_current_scope(token, slot_index, header)?;
+        self.check_operational_currentness()
+    }
+
+    fn publish_aql_header_in_current_scope<P: MutableGpuGttProfileV1>(
+        &mut self,
+        token: &mut SharedGttAllocationV1<P, GttGpuAccessibleMutableV1>,
+        slot_index: u32,
+        header: u16,
+    ) -> Result<(), MemorySessionError> {
         let index = self.index(token, SharedAllocationPhaseV1::GpuAccessibleMutable)?;
         let requested = self.allocations[index].layout.requested_bytes;
         let mapping = self.allocations[index]
             .mapping
             .as_mut()
             .ok_or(MemorySessionError::InvalidAllocationAuthority)?;
-        B::publish_aql_header(mapping, requested, slot_index, header)?;
-        self.check_currentness()
+        B::publish_aql_header(mapping, requested, slot_index, header)
     }
 
     fn observe_i64_acquire<P: MutableGpuGttProfileV1>(
@@ -1823,15 +1873,23 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
         token: &mut SharedGttAllocationV1<HostVisibleCoherentGttV1, GttGpuAccessibleMutableV1>,
         slot_index: u32,
     ) -> Result<(), MemorySessionError> {
-        self.check_currentness()?;
+        self.check_operational_currentness()?;
+        self.reset_completion_signal_in_current_scope(token, slot_index)?;
+        self.check_operational_currentness()
+    }
+
+    fn reset_completion_signal_in_current_scope(
+        &mut self,
+        token: &mut SharedGttAllocationV1<HostVisibleCoherentGttV1, GttGpuAccessibleMutableV1>,
+        slot_index: u32,
+    ) -> Result<(), MemorySessionError> {
         let index = self.index(token, SharedAllocationPhaseV1::GpuAccessibleMutable)?;
         let requested = self.allocations[index].layout.requested_bytes;
         let mapping = self.allocations[index]
             .mapping
             .as_mut()
             .ok_or(MemorySessionError::InvalidAllocationAuthority)?;
-        B::reset_completion_signal_release(mapping, requested, slot_index)?;
-        self.check_currentness()
+        B::reset_completion_signal_release(mapping, requested, slot_index)
     }
 
     fn copy_mapped_host_visible_subrange(
@@ -1840,7 +1898,7 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
         offset: u64,
         byte_len: u64,
     ) -> Result<Box<[u8]>, MemorySessionError> {
-        self.check_currentness()?;
+        self.check_operational_currentness()?;
         let index = self.index(token, SharedAllocationPhaseV1::GpuAccessibleMutable)?;
         let requested = self.allocations[index].layout.requested_bytes;
         let start = usize::try_from(offset).map_err(|_| MemorySessionError::SizeOverflow)?;
@@ -1862,12 +1920,86 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
                 })
             }))
         };
-        let post = self.check_currentness();
+        let post = self.check_operational_currentness();
         match outcome {
             Ok(bytes) => {
                 post?;
                 Ok(bytes)
             }
+            Err(payload) => {
+                let _ = post;
+                std::panic::resume_unwind(payload)
+            }
+        }
+    }
+
+    fn copy_mapped_host_visible_subrange_into(
+        &mut self,
+        token: &SharedGttAllocationV1<HostVisibleCoherentGttV1, GttGpuAccessibleMutableV1>,
+        offset: u64,
+        destination: &mut [u8],
+    ) -> Result<(), MemorySessionError> {
+        self.check_operational_currentness()?;
+        let index = self.index(token, SharedAllocationPhaseV1::GpuAccessibleMutable)?;
+        let requested = self.allocations[index].layout.requested_bytes;
+        let start = usize::try_from(offset).map_err(|_| MemorySessionError::SizeOverflow)?;
+        let end = start
+            .checked_add(destination.len())
+            .ok_or(MemorySessionError::SizeOverflow)?;
+        if destination.is_empty() || end > requested {
+            return Err(MemorySessionError::InvalidAllocationAuthority);
+        }
+        let outcome = {
+            let mapping = self.allocations[index]
+                .mapping
+                .as_ref()
+                .ok_or(MemorySessionError::InvalidAllocationAuthority)?;
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                B::with_bytes(mapping, requested, |bytes| {
+                    destination.copy_from_slice(&bytes[start..end]);
+                })
+            }))
+        };
+        let post = self.check_operational_currentness();
+        match outcome {
+            Ok(()) => post,
+            Err(payload) => {
+                let _ = post;
+                std::panic::resume_unwind(payload)
+            }
+        }
+    }
+
+    fn overwrite_mapped_host_visible_subrange(
+        &mut self,
+        token: &mut SharedGttAllocationV1<HostVisibleCoherentGttV1, GttGpuAccessibleMutableV1>,
+        offset: u64,
+        source: &[u8],
+    ) -> Result<(), MemorySessionError> {
+        self.check_operational_currentness()?;
+        let index = self.index(token, SharedAllocationPhaseV1::GpuAccessibleMutable)?;
+        let requested = self.allocations[index].layout.requested_bytes;
+        let start = usize::try_from(offset).map_err(|_| MemorySessionError::SizeOverflow)?;
+        let end = start
+            .checked_add(source.len())
+            .ok_or(MemorySessionError::SizeOverflow)?;
+        if source.is_empty() || end > requested {
+            return Err(MemorySessionError::InvalidAllocationAuthority);
+        }
+        let outcome = {
+            let mapping = self.allocations[index]
+                .mapping
+                .as_mut()
+                .ok_or(MemorySessionError::InvalidAllocationAuthority)?;
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                B::with_bytes_mut(mapping, requested, |bytes| {
+                    bytes[start..end].copy_from_slice(source);
+                })
+            }))
+        };
+        let post = self.check_operational_currentness();
+        match outcome {
+            Ok(()) => post,
             Err(payload) => {
                 let _ = post;
                 std::panic::resume_unwind(payload)
@@ -2636,6 +2768,11 @@ impl SharedGttMemorySessionV1 {
         self.engine.check_currentness()
     }
 
+    pub(crate) fn check_queue_operational_currentness(&mut self) -> Result<(), MemorySessionError> {
+        self.engine.require_active()?;
+        self.engine.check_operational_currentness()
+    }
+
     pub(crate) fn quarantine_queue_composition(
         &mut self,
         detail: &'static str,
@@ -3007,6 +3144,34 @@ impl SharedGttMemorySessionV1 {
             .copy_mapped_host_visible_subrange(&authority.token, offset, byte_len)
     }
 
+    pub(crate) fn copy_completed_dispatch_host_data_subrange_into(
+        &mut self,
+        authority: &SharedGttQueueResourceAuthorityV1<
+            AqlDispatchHostDataResourceRoleV1,
+            HostVisibleCoherentGttV1,
+            GttGpuAccessibleMutableV1,
+        >,
+        offset: u64,
+        destination: &mut [u8],
+    ) -> Result<(), MemorySessionError> {
+        self.engine
+            .copy_mapped_host_visible_subrange_into(&authority.token, offset, destination)
+    }
+
+    pub(crate) fn overwrite_recycled_dispatch_host_data_subrange(
+        &mut self,
+        authority: &mut SharedGttQueueResourceAuthorityV1<
+            AqlDispatchHostDataResourceRoleV1,
+            HostVisibleCoherentGttV1,
+            GttGpuAccessibleMutableV1,
+        >,
+        offset: u64,
+        source: &[u8],
+    ) -> Result<(), MemorySessionError> {
+        self.engine
+            .overwrite_mapped_host_visible_subrange(&mut authority.token, offset, source)
+    }
+
     pub(crate) fn retain_gfx942_device_memory_for_dispatch(
         &self,
         lease: Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>,
@@ -3225,6 +3390,16 @@ impl SharedGttMemorySessionV1 {
         self.engine.with_bytes_mut(token, f)
     }
 
+    pub(crate) fn overwrite_mapped_host_visible_subrange(
+        &mut self,
+        token: &mut SharedGttAllocationV1<HostVisibleCoherentGttV1, GttGpuAccessibleMutableV1>,
+        offset: u64,
+        source: &[u8],
+    ) -> Result<(), MemorySessionError> {
+        self.engine
+            .overwrite_mapped_host_visible_subrange(token, offset, source)
+    }
+
     #[allow(dead_code)]
     pub(crate) fn observe_aql_control_counters(
         &mut self,
@@ -3235,6 +3410,18 @@ impl SharedGttMemorySessionV1 {
         >,
     ) -> Result<(u64, u64), MemorySessionError> {
         self.engine.observe_aql_counters(&mut authority.token)
+    }
+
+    pub(crate) fn observe_aql_control_counters_in_current_scope(
+        &mut self,
+        authority: &mut SharedGttQueueResourceAuthorityV1<
+            AqlControlResourceRoleV1,
+            UserptrAqlControlGttV1,
+            GttGpuAccessibleMutableV1,
+        >,
+    ) -> Result<(u64, u64), MemorySessionError> {
+        self.engine
+            .observe_aql_counters_in_current_scope(&mut authority.token)
     }
 
     #[allow(dead_code)]
@@ -3249,6 +3436,19 @@ impl SharedGttMemorySessionV1 {
     ) -> Result<u64, MemorySessionError> {
         self.engine
             .fetch_add_aql_write(&mut authority.token, increment)
+    }
+
+    pub(crate) fn fetch_add_aql_control_write_in_current_scope(
+        &mut self,
+        authority: &mut SharedGttQueueResourceAuthorityV1<
+            AqlControlResourceRoleV1,
+            UserptrAqlControlGttV1,
+            GttGpuAccessibleMutableV1,
+        >,
+        increment: u64,
+    ) -> Result<u64, MemorySessionError> {
+        self.engine
+            .fetch_add_aql_write_in_current_scope(&mut authority.token, increment)
     }
 
     #[allow(dead_code)]
@@ -3266,6 +3466,20 @@ impl SharedGttMemorySessionV1 {
             .write_aql_slot(&mut authority.token, slot_index, packet)
     }
 
+    pub(crate) fn write_aql_ring_slot_in_current_scope<P: MutableGpuGttProfileV1>(
+        &mut self,
+        authority: &mut SharedGttQueueResourceAuthorityV1<
+            AqlRingResourceRoleV1,
+            P,
+            GttGpuAccessibleMutableV1,
+        >,
+        slot_index: u32,
+        packet: &[u8; 64],
+    ) -> Result<(), MemorySessionError> {
+        self.engine
+            .write_aql_slot_in_current_scope(&mut authority.token, slot_index, packet)
+    }
+
     #[allow(dead_code)]
     pub(crate) fn publish_aql_ring_header<P: MutableGpuGttProfileV1>(
         &mut self,
@@ -3279,6 +3493,20 @@ impl SharedGttMemorySessionV1 {
     ) -> Result<(), MemorySessionError> {
         self.engine
             .publish_aql_header(&mut authority.token, slot_index, header)
+    }
+
+    pub(crate) fn publish_aql_ring_header_in_current_scope<P: MutableGpuGttProfileV1>(
+        &mut self,
+        authority: &mut SharedGttQueueResourceAuthorityV1<
+            AqlRingResourceRoleV1,
+            P,
+            GttGpuAccessibleMutableV1,
+        >,
+        slot_index: u32,
+        header: u16,
+    ) -> Result<(), MemorySessionError> {
+        self.engine
+            .publish_aql_header_in_current_scope(&mut authority.token, slot_index, header)
     }
 
     pub(crate) fn observe_aql_ring_packet_header<P: MutableGpuGttProfileV1>(
@@ -3381,6 +3609,19 @@ impl SharedGttMemorySessionV1 {
     ) -> Result<(), MemorySessionError> {
         self.engine
             .reset_completion_signal(&mut authority.token, slot_index)
+    }
+
+    pub(crate) fn reset_aql_completion_signal_in_current_scope(
+        &mut self,
+        authority: &mut SharedGttQueueResourceAuthorityV1<
+            AqlCompletionSignalResourceRoleV1,
+            HostVisibleCoherentGttV1,
+            GttGpuAccessibleMutableV1,
+        >,
+        slot_index: u32,
+    ) -> Result<(), MemorySessionError> {
+        self.engine
+            .reset_completion_signal_in_current_scope(&mut authority.token, slot_index)
     }
 
     pub fn seal_executable(
@@ -4117,8 +4358,8 @@ mod tests {
             digest_hex.push(char::from(HEX[usize::from(byte >> 4)]));
             digest_hex.push(char::from(HEX[usize::from(byte & 0x0f)]));
         }
-        assert_eq!(digest.as_slice(), SHARED_GTT_MEMORY_PROFILE_SHA256_BYTES_V1);
         assert_eq!(digest_hex, SHARED_GTT_MEMORY_PROFILE_SHA256_V1);
+        assert_eq!(digest.as_slice(), SHARED_GTT_MEMORY_PROFILE_SHA256_BYTES_V1);
         assert!(
             SHARED_GTT_MEMORY_PROFILE_MANIFEST_V1
                 .contains(fe2o3_kfd_uapi::KFD_USERPTR_MEMORY_SCHEMA_MANIFEST_SHA256)
@@ -4333,11 +4574,23 @@ mod tests {
                 }
             })
             .unwrap();
-        let token = engine.map_mutable(token).unwrap();
+        let mut token = engine.map_mutable(token).unwrap();
         let copied = engine
             .copy_mapped_host_visible_subrange(&token, 64, 32)
             .unwrap();
         assert_eq!(copied.as_ref(), &(64_u8..96).collect::<Vec<_>>());
+        let mut copied_into = [0_u8; 32];
+        engine
+            .copy_mapped_host_visible_subrange_into(&token, 64, &mut copied_into)
+            .unwrap();
+        assert_eq!(copied_into, (64_u8..96).collect::<Vec<_>>().as_slice());
+        engine
+            .overwrite_mapped_host_visible_subrange(&mut token, 80, &[9, 8, 7, 6])
+            .unwrap();
+        let overwritten = engine
+            .copy_mapped_host_visible_subrange(&token, 78, 8)
+            .unwrap();
+        assert_eq!(overwritten.as_ref(), &[78, 79, 9, 8, 7, 6, 84, 85]);
         assert!(
             engine
                 .copy_mapped_host_visible_subrange(&token, 0, 0)
@@ -4346,6 +4599,16 @@ mod tests {
         assert!(
             engine
                 .copy_mapped_host_visible_subrange(&token, 250, 16)
+                .is_err()
+        );
+        assert!(
+            engine
+                .copy_mapped_host_visible_subrange_into(&token, 250, &mut copied_into)
+                .is_err()
+        );
+        assert!(
+            engine
+                .overwrite_mapped_host_visible_subrange(&mut token, 250, &[0; 16])
                 .is_err()
         );
 
