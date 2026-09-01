@@ -2400,14 +2400,14 @@ mod tests {
             .expect("target-neutral lowering");
         assert!(verify < lower, "lowering ran before general PLIRON checks");
         assert!(
-            include_str!("production_ranked_projection_v1.rs")
-                .contains("prepare_reference_effect_request_v2")
+            include_str!("../../fe2o3-middle-end/src/ranked_projection.rs")
+                .contains(".prove_and_compile(kernel, &reference_writes")
         );
     }
 
     #[test]
     fn referenced_kernels_complete_all_functional_gates_before_kir_lowering() {
-        let projection = include_str!("production_ranked_projection_v1.rs");
+        let projection = include_str!("../../fe2o3-middle-end/src/ranked_projection.rs");
         let semantic = projection
             .find("derive_and_reconcile_mir_pliron_semantic_contract_v1")
             .expect("compiler-owned semantic-contract derivation");

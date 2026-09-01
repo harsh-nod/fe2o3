@@ -268,7 +268,16 @@ Integration owns CLI composition, rustc codegen integration, qualification
 comparison, and end-to-end differential orchestration. Integration may compose
 any production layer but MUST NOT depend on examples or test fixtures.
 
-`fe2o3-compiler-api` defines one inert production request contract. `cargo-fe2o3` and `rustc-codegen-fe2o3` own the sole managed production composition. No workload oracle is compiled; the legacy selector is rejected.
+`fe2o3-middle-end` owns the frontend-neutral admitted-semantic-MIR to ranked
+PLIRON projection, its generic pass orchestration, and ranked verification
+custody. Frontends cross that boundary with admitted semantic MIR and a narrow
+authenticated-reference-effect interface; rustc-private types remain in
+`rustc-codegen-fe2o3`. The rustc codegen crate owns collection, import, and
+composition around that middle-end boundary rather than the projection engine.
+
+`fe2o3-compiler-api` defines one inert production request contract. `cargo-fe2o3`
+and `rustc-codegen-fe2o3` own the sole managed production composition. No
+workload oracle is compiled; the legacy selector is rejected.
 
 The retired scalar-add fixture join was never a general frontend or backend and has been removed. The qualifying runtime historically observed `gfx942:sramecc+:xnack-`, a COV6
 descriptor kernarg alignment of 8, and a runtime storage alignment of 16.

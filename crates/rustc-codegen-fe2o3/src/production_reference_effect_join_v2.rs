@@ -40,29 +40,66 @@ const WHOLE_COMPILE_PROOF_TIMEOUT_SECONDS_V2: u32 = 120;
 const RETAINED_FUNCTIONAL_REFINEMENT_RUNTIME_ROOT_V1: &str =
     "/opt/fe2o3/verus-runtime-v2/functional-refinement-0.2026.08.02-b677dd5";
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct RankedGpuWriteV2 {
-    pub(crate) block: usize,
-    pub(crate) operation: usize,
-    pub(crate) allocation_origin: u64,
-    pub(crate) view: ProductionRankedValueV1,
-    pub(crate) indices: Vec<ProductionRankedValueV1>,
-    pub(crate) value: Result<ProductionSemanticExpressionV2, &'static str>,
-}
+pub(crate) use fe2o3_middle_end::RankedGpuWriteV2;
 
-pub(crate) fn reserved_reference_value_count_v2(
-    bindings: &AuthenticatedReferenceEffectBindingsV1,
-) -> Result<usize, crate::production_ranked_projection_v1::ProductionRankedProjectionErrorV1> {
-    reserved_reference_output_ranks_v2(bindings)?
-        .into_iter()
-        .try_fold(0_usize, |total, coordinate_count| {
-            total.checked_add(3)?.checked_add(coordinate_count)
+impl fe2o3_middle_end::AuthenticatedReferenceEffectsV1 for AuthenticatedReferenceEffectBindingsV1 {
+    fn logical_kernel_names(&self) -> Box<[&str]> {
+        self.as_slice()
+            .iter()
+            .map(|binding| binding.logical_kernel_name.as_str())
+            .collect::<Vec<_>>()
+            .into_boxed_slice()
+    }
+
+    fn select(
+        &self,
+        indices: &[usize],
+    ) -> Result<
+        Box<dyn fe2o3_middle_end::AuthenticatedReferenceEffectsV1>,
+        fe2o3_middle_end::ProductionReferenceEffectErrorV1,
+    > {
+        let selected = indices
+            .iter()
+            .map(|&index| {
+                self.as_slice().get(index).cloned().ok_or_else(|| {
+                    fe2o3_middle_end::ProductionReferenceEffectErrorV1::new(
+                        "reference-effect root assignment produced an out-of-range binding",
+                    )
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Box::new(AuthenticatedReferenceEffectBindingsV1::new(
+            selected,
+        )))
+    }
+
+    fn is_empty(&self) -> bool {
+        self.as_slice().is_empty()
+    }
+
+    fn reserved_output_ranks(
+        &self,
+    ) -> Result<Vec<usize>, fe2o3_middle_end::ProductionReferenceEffectErrorV1> {
+        reserved_reference_output_ranks_v2(self).map_err(|error| {
+            fe2o3_middle_end::ProductionReferenceEffectErrorV1::new(error.to_string())
         })
-        .ok_or(
-            crate::production_ranked_projection_v1::ProductionRankedProjectionErrorV1::Unsupported(
-                "reference-effect scalar reservation count overflowed",
-            ),
-        )
+    }
+
+    fn prove_and_compile(
+        &self,
+        kernel: ProductionRankedKernelV1,
+        writes: &[RankedGpuWriteV2],
+        reserved_values: Vec<ProductionRankedValueIdV1>,
+    ) -> Result<
+        ProductionRankedKernelLoweringInputV1,
+        fe2o3_middle_end::ProductionReferenceEffectErrorV1,
+    > {
+        prepare_reference_effect_request_v2(kernel, self, writes, reserved_values)
+            .and_then(CompilerOwnedReferenceEffectRequestV2::prove_and_compile)
+            .map_err(|error| {
+                fe2o3_middle_end::ProductionReferenceEffectErrorV1::new(error.to_string())
+            })
+    }
 }
 
 pub(crate) fn reserved_reference_output_ranks_v2(

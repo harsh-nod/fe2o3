@@ -74,7 +74,7 @@ pub(crate) fn authenticate_mir_pliron_contract_per_compilation_v1(
 }
 
 #[derive(Debug)]
-pub(crate) enum ProductionMirPlironVerusJoinErrorV1 {
+pub enum ProductionMirPlironVerusJoinErrorV1 {
     RuntimeUnavailable { root: &'static str, detail: String },
     Verification(ProductionMirPlironPerCompilationVerusErrorV1),
 }

@@ -25,7 +25,6 @@ mod monomorphization_dead;
 #[cfg(test)]
 mod process_execution;
 mod production_geometry_v1;
-mod production_mir_pliron_verus_join_v1;
 mod production_pipeline;
 mod production_policy;
 mod production_ranked_projection_v1;
