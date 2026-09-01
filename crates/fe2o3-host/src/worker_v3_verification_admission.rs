@@ -2035,9 +2035,7 @@ impl<R, E> WorkerV3RosterVerificationAuthenticationFailureV1<R, E> {
     }
 }
 
-impl<R, E: fmt::Debug> fmt::Debug
-    for WorkerV3RosterVerificationAuthenticationFailureV1<R, E>
-{
+impl<R, E: fmt::Debug> fmt::Debug for WorkerV3RosterVerificationAuthenticationFailureV1<R, E> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("WorkerV3RosterVerificationAuthenticationFailureV1")
@@ -2093,11 +2091,8 @@ impl<R: CompilerGeneratedKernelExpectationRosterV1> AuthenticatedWorkerV3RosterV
                 ));
             }
         };
-        let verification = match authenticate_roster_attempt::<R, B>(
-            &admission,
-            &current,
-            verifier,
-        ) {
+        let verification = match authenticate_roster_attempt::<R, B>(&admission, &current, verifier)
+        {
             Ok(verification) => verification,
             Err(error) => {
                 drop(current);
@@ -2929,9 +2924,9 @@ where
         }
         WorkerV3RosterVerificationRequestPreparationErrorV1::UnsupportedGeneratedProfile {
             ordinal,
-        } => WorkerV3RosterVerificationAuthenticationErrorV1::UnsupportedGeneratedProfile {
-            ordinal,
-        },
+        } => {
+            WorkerV3RosterVerificationAuthenticationErrorV1::UnsupportedGeneratedProfile { ordinal }
+        }
     })?;
     // SAFETY: callers cannot bypass the crate-owned adapter. The unsafe backend owns all protected
     // aggregate obligations and the result is fully revalidated below.

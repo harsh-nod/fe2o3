@@ -901,8 +901,7 @@ struct RejectingTestProtectedRosterVerifier {
 
 // SAFETY: this test-only backend never returns protected evidence. Its rejection exercises owner
 // recovery after the complete protected call and host-side currentness revalidation.
-unsafe impl<R> WorkerV3ProtectedRosterVerifierBackendV1<R>
-    for RejectingTestProtectedRosterVerifier
+unsafe impl<R> WorkerV3ProtectedRosterVerifierBackendV1<R> for RejectingTestProtectedRosterVerifier
 where
     R: CompilerGeneratedKernelExpectationRosterV1,
 {
