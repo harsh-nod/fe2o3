@@ -961,6 +961,14 @@ impl WorkerV3CompilerExecutionVerificationV1 {
         }
     }
 
+    /// Reports whether this lane proves protected current-record service custody.
+    ///
+    /// Signed canonical evidence alone cannot establish measured service deployment or protected
+    /// key custody. The reviewed unsafe backend must join those properties separately.
+    pub const fn authenticates_protected_current_record(&self) -> bool {
+        false
+    }
+
     pub const fn grants_verification_authority(&self) -> bool {
         false
     }
