@@ -36,6 +36,7 @@ reference-two-output-positive = []
 reference-two-output-substitution = []
 reference-two-output-alias = []
 reference-two-output-schedule = []
+scalar-transmute = []
 
 [dependencies]
 fe2o3-device.workspace = true

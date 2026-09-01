@@ -193,6 +193,36 @@ fn attributed_kernel_is_recollected_inside_a_real_amdgcn_dependency_graph() {
 
 #[test]
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]
+fn safe_scalar_from_bits_reaches_complete_semantic_import() {
+    let target = ScratchTarget::new();
+    let output = run_extraction_command(&target, Some("scalar-transmute"), true);
+    let stderr = String::from_utf8(output.stderr).expect("rustc diagnostic is UTF-8");
+
+    assert!(
+        !output.status.success(),
+        "scalar-transmute unexpectedly passed the pending target-neutral lowering boundary",
+    );
+    assert!(
+        stderr.contains("then admitted one complete semantic MIR request")
+            && stderr.contains("target-neutral lowering remains pending")
+            && stderr.contains("no fallback or artifact emission was entered"),
+        "safe f32::from_bits did not reach complete semantic import:\n{stderr}",
+    );
+    for forbidden in [
+        "unsupported Transmute Cast rvalue",
+        "semantic import target rejection",
+        "semantic importer rejected complete semantic MIR",
+        "semantic importer rejected semantic body construction",
+    ] {
+        assert!(
+            !stderr.contains(forbidden),
+            "scalar-transmute entered forbidden path {forbidden:?}:\n{stderr}",
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires the pinned nightly rust-src component and AMD target"]
 fn two_and_three_kernel_collections_reach_one_exact_multi_entry_llvm_module() {
     for (features, expected_symbols, expected_kir_version, expected_guarded_stores) in [
         ("multi-root-ownership", &["alpha", "zeta"][..], 8, 0),
@@ -405,42 +435,7 @@ fn proof_carrying_two_kernel_collection_reaches_exact_multi_root_target_lineage(
 }
 
 fn run_extraction(target: &ScratchTarget) -> String {
-    let output = Command::new(env!("CARGO"))
-        .current_dir(workspace())
-        .env(
-            "RUSTC_WORKSPACE_WRAPPER",
-            env!("CARGO_BIN_EXE_fe2o3-rustc-extract"),
-        )
-        .env(
-            "FE2O3_EXTRACT_CRATE_V1",
-            "fe2o3_production_extraction_fixture",
-        )
-        // A caller-supplied observation has no authority. The selected
-        // extractor must replace this stale value from exact rustc metadata.
-        .env(
-            "FE2O3_CARGO_METADATA_BUILD_OBSERVATION_V2",
-            "55".repeat(32),
-        )
-        .env("FE2O3_CRATE_BINDING_ID_V1", "77".repeat(32))
-        .env_remove("RUSTFLAGS")
-        .env_remove("CARGO_ENCODED_RUSTFLAGS")
-        .env(
-            "CARGO_TARGET_AMDGCN_AMD_AMDHSA_RUSTFLAGS",
-            "-Zalways-encode-mir -Ctarget-cpu=gfx942 -Ctarget-feature=-xnack,+wavefrontsize64,-wavefrontsize32",
-        )
-        .args([
-            "check",
-            "--locked",
-            "-Zbuild-std=core",
-            "-p",
-            "fe2o3-production-extraction-fixture",
-            "--target",
-            "amdgcn-amd-amdhsa",
-            "--target-dir",
-        ])
-        .arg(&target.path)
-        .output()
-        .expect("run AMD extraction fixture");
+    let output = run_extraction_command(target, None, false);
     let stderr = String::from_utf8(output.stderr).expect("rustc diagnostic is UTF-8");
 
     assert!(
@@ -473,6 +468,51 @@ fn run_extraction(target: &ScratchTarget) -> String {
         );
     }
     stderr
+}
+
+fn run_extraction_command(
+    target: &ScratchTarget,
+    features: Option<&str>,
+    optimize: bool,
+) -> std::process::Output {
+    let target_rustflags = if optimize {
+        "-Zalways-encode-mir -Copt-level=3 -Ctarget-cpu=gfx942 -Ctarget-feature=-xnack,+wavefrontsize64,-wavefrontsize32"
+    } else {
+        "-Zalways-encode-mir -Ctarget-cpu=gfx942 -Ctarget-feature=-xnack,+wavefrontsize64,-wavefrontsize32"
+    };
+    let mut command = Command::new(env!("CARGO"));
+    command
+        .current_dir(workspace())
+        .env(
+            "RUSTC_WORKSPACE_WRAPPER",
+            env!("CARGO_BIN_EXE_fe2o3-rustc-extract"),
+        )
+        .env(
+            "FE2O3_EXTRACT_CRATE_V1",
+            "fe2o3_production_extraction_fixture",
+        )
+        // A caller-supplied observation has no authority. The selected
+        // extractor must replace this stale value from exact rustc metadata.
+        .env("FE2O3_CARGO_METADATA_BUILD_OBSERVATION_V2", "55".repeat(32))
+        .env("FE2O3_CRATE_BINDING_ID_V1", "77".repeat(32))
+        .env_remove("RUSTFLAGS")
+        .env_remove("CARGO_ENCODED_RUSTFLAGS")
+        .env("CARGO_TARGET_AMDGCN_AMD_AMDHSA_RUSTFLAGS", target_rustflags)
+        .args([
+            "check",
+            "--locked",
+            "-Zbuild-std=core",
+            "-p",
+            "fe2o3-production-extraction-fixture",
+        ]);
+    if let Some(features) = features {
+        command.args(["--features", features]);
+    }
+    command
+        .args(["--target", "amdgcn-amd-amdhsa", "--target-dir"])
+        .arg(&target.path)
+        .output()
+        .expect("run AMD extraction fixture")
 }
 
 fn identity_inventory_sha256(stderr: &str) -> &str {

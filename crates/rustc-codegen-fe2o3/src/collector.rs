@@ -2896,6 +2896,12 @@ impl<'tcx> DeviceCollector<'tcx> {
                     continue;
                 }
                 let Some(local_def_id) = function.instance.def_id().as_local() else {
+                    if crate::trusted_device_items::authenticate_reviewed_safe_core_scalar_bitcast_helper_v1(
+                        self.tcx,
+                        function.instance,
+                    ) {
+                        continue;
+                    }
                     if crate::production_rustc_intrinsic_v1::is_reviewed_core_atomic_function_v1(
                         self.tcx,
                         function.instance,

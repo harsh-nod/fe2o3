@@ -368,8 +368,13 @@ The detailed dependencies and exit criteria are in
   verification, AMD lowering, transactional publication, and hardware
   execution. The Worker V2 profile additionally lowers exact alpha multiply and
   zeta add/bias expressions from MIR through Kernel IR and executes them on
-  `gfx942:xnack-`. Complete signed/unsigned operations, casts, overflow forms,
-  architecture breadth, and general source lowering remain absent.
+  `gfx942:xnack-`. The production semantic path also admits the pinned safe
+  `f32`/`f64` `from_bits` and `to_bits` methods as equal-width plain-bit scalar
+  transmutes and lowers them to verified Kernel IR bitcasts. Unequal-width and
+  aggregate transmutes reject at semantic admission; pointer/provenance
+  transmutes, coercions, complete signed/unsigned operations, overflow forms,
+  architecture breadth, artifact qualification, and general source lowering
+  remain absent.
 - Rows 26 and 40 and supplemental row S11: authenticated device identities and
   Kernel IR float contracts cover f16/BF16 conversion, packed BF16x2 fused
   multiply-add, strict divide, and selected math calls. Exact `gfx942` golden

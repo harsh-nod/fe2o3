@@ -1146,13 +1146,11 @@ impl<'a, 'tcx> BodyPreflightV1<'a, 'tcx> {
                 | rustc_middle::mir::CastKind::PtrToPtr
                 | rustc_middle::mir::CastKind::FnPtrToPtr
                 | rustc_middle::mir::CastKind::PointerExposeProvenance
-                | rustc_middle::mir::CastKind::PointerWithExposedProvenance,
+                | rustc_middle::mir::CastKind::PointerWithExposedProvenance
+                | rustc_middle::mir::CastKind::Transmute,
                 operand,
                 _,
             ) => self.inspect_operand(operand, site),
-            Rvalue::Cast(rustc_middle::mir::CastKind::Transmute, ..) => {
-                Err(reject("unsupported Transmute Cast rvalue", site))
-            }
             Rvalue::Cast(rustc_middle::mir::CastKind::PointerCoercion(..), ..) => {
                 Err(reject("unsupported PointerCoercion Cast rvalue", site))
             }

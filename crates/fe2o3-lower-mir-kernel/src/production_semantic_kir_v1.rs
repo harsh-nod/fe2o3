@@ -22901,22 +22901,24 @@ mod resource_tests {
     use fe2o3_mir_model::semantic_mir_v1::{
         SemanticAbiArgumentV1, SemanticAbiIdentityV1, SemanticAbiPassModeV1, SemanticAbiValueV1,
         SemanticAggregateLayoutV1, SemanticAggregateTypeV1, SemanticAssignmentV1,
-        SemanticBackendReprV1, SemanticBasicBlockV1, SemanticBlockIdentityV1,
-        SemanticCallDestinationV1, SemanticCallableIdV1, SemanticCanonAbiV1,
-        SemanticCompilerIntrinsicIdentityV1, SemanticConstGenericArgumentsIdentityV1,
-        SemanticConstantV1, SemanticControlFlowEdgeV1, SemanticDirectCallV1, SemanticEdgeRoleV1,
-        SemanticExternAbiV1, SemanticFieldsShapeV1, SemanticFunctionAbiV1,
-        SemanticFunctionIdentityV1, SemanticFunctionRoleV1, SemanticGenericTypeArgumentsIdentityV1,
-        SemanticItemDefinitionIdentityV1, SemanticKernelBindingIdentityV1, SemanticKernelEntryV1,
-        SemanticKernelLaunchBoundsV1, SemanticKernelSourceContractV1, SemanticLayoutIdentityV1,
-        SemanticLinkSymbolV1, SemanticLocalDeclV1, SemanticLocalIdV1, SemanticLocalIdentityV1,
+        SemanticBackendReprV1, SemanticBackendScalarV1, SemanticBasicBlockV1,
+        SemanticBlockIdentityV1, SemanticCallDestinationV1, SemanticCallableIdV1,
+        SemanticCanonAbiV1, SemanticCompilerIntrinsicIdentityV1,
+        SemanticConstGenericArgumentsIdentityV1, SemanticConstantV1, SemanticControlFlowEdgeV1,
+        SemanticDirectCallV1, SemanticEdgeRoleV1, SemanticExternAbiV1, SemanticFieldsShapeV1,
+        SemanticFunctionAbiV1, SemanticFunctionIdentityV1, SemanticFunctionRoleV1,
+        SemanticGenericTypeArgumentsIdentityV1, SemanticItemDefinitionIdentityV1,
+        SemanticKernelBindingIdentityV1, SemanticKernelEntryV1, SemanticKernelLaunchBoundsV1,
+        SemanticKernelSourceContractV1, SemanticLayoutIdentityV1, SemanticLinkSymbolV1,
+        SemanticLocalDeclV1, SemanticLocalIdV1, SemanticLocalIdentityV1,
         SemanticMfmaAccumulatorDistributionV1, SemanticMfmaOperandRoleV1,
         SemanticMfmaRegisterDistributionV1, SemanticMonomorphizationIdentityV1,
         SemanticNonBodyCallableBindingV1, SemanticProjectionV1, SemanticRustcVariantsV1,
-        SemanticRvalueV1, SemanticSourceProvenanceV1, SemanticStatementV1, SemanticSwitchTargetV1,
-        SemanticSwitchTargetsV1, SemanticTargetDataLayoutV1, SemanticTerminatorV1,
-        SemanticTypeIdentityV1, SemanticTypeLayoutDetailsV1, SemanticTypeLayoutV1,
-        SemanticUnwindActionV1, SemanticWorkgroupDimensionsV1,
+        SemanticRvalueV1, SemanticScalarValidityRangeV1, SemanticSourceProvenanceV1,
+        SemanticStatementV1, SemanticSwitchTargetV1, SemanticSwitchTargetsV1,
+        SemanticTargetDataLayoutV1, SemanticTerminatorV1, SemanticTypeIdentityV1,
+        SemanticTypeLayoutDetailsV1, SemanticTypeLayoutV1, SemanticUnwindActionV1,
+        SemanticWorkgroupDimensionsV1,
     };
     use fe2o3_pliron::{
         ProductionConstructionV1, ProductionRankedBlockV1, ProductionRankedKernelV1,
@@ -23425,6 +23427,23 @@ mod resource_tests {
             ),
             Some([Some((CastKind::ZeroExtend, ScalarType::U64)), None])
         );
+        assert_eq!(
+            lower_cast_path(
+                SemanticCastKindV1::Transmute,
+                &Type::Scalar(ScalarType::U32),
+                &Type::Scalar(ScalarType::F32),
+            ),
+            Some([Some((CastKind::Bitcast, ScalarType::F32)), None])
+        );
+        for (from, to) in [
+            (Type::Scalar(ScalarType::U32), Type::Scalar(ScalarType::U64)),
+            (Type::Scalar(ScalarType::U32), Type::Unit),
+        ] {
+            assert_eq!(
+                lower_cast_path(SemanticCastKindV1::Transmute, &from, &to),
+                None
+            );
+        }
     }
 
     #[test]
@@ -24008,6 +24027,179 @@ mod resource_tests {
                 bits,
             }),
         )
+    }
+
+    fn plain_bit_scalar_type(
+        tag: u8,
+        primitive: SemanticBackendPrimitiveV1,
+        shape: SemanticScalarTypeV1,
+    ) -> SemanticTypeDeclV1 {
+        let size = primitive.size_bytes().unwrap();
+        let maximum = if size == 16 {
+            u128::MAX
+        } else {
+            (1_u128 << (size * 8)) - 1
+        };
+        SemanticTypeDeclV1::new(
+            SemanticTypeIdentityV1::from_sha256([tag; 32]),
+            SemanticLayoutIdentityV1::from_sha256([tag.wrapping_add(1); 32]),
+            SemanticTypeLayoutV1::new_with_backend_repr(
+                Some(size),
+                primitive.alignment_bytes(),
+                SemanticBackendReprV1::scalar(SemanticBackendScalarV1::initialized(
+                    primitive,
+                    SemanticScalarValidityRangeV1::new(0, maximum),
+                )),
+                false,
+            )
+            .unwrap(),
+            SemanticTypeShapeV1::Scalar(shape),
+        )
+    }
+
+    fn scalar_transmute_semantic_owner() -> ProductionSemanticMirOwnerV1 {
+        let unit = SemanticTypeIdV1::from_index(0);
+        let u32_ty = SemanticTypeIdV1::from_index(1);
+        let f32_ty = SemanticTypeIdV1::from_index(2);
+        let source = SemanticSourceProvenanceV1::unavailable();
+        let destination =
+            SemanticPlaceV1::new(SemanticLocalIdV1::from_index(1), vec![], f32_ty).unwrap();
+        let value = SemanticRvalueV1::new(
+            f32_ty,
+            SemanticRvalueKindV1::Cast {
+                kind: SemanticCastKindV1::Transmute,
+                operand: SemanticOperandV1::Constant(SemanticConstantV1::new(
+                    u32_ty,
+                    SemanticConstantValueV1::Scalar(
+                        SemanticScalarValueV1::new(u128::from(1.0_f32.to_bits()), 4).unwrap(),
+                    ),
+                )),
+            },
+        );
+        let block = SemanticBasicBlockV1::new(
+            SemanticBlockIdentityV1::from_sha256([132; 32]),
+            source,
+            vec![SemanticStatementV1::new(
+                source,
+                SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(destination, value)),
+            )],
+            SemanticTerminatorV1::new(source, SemanticTerminatorKindV1::Return),
+        )
+        .unwrap();
+        let abi = SemanticFunctionAbiV1::from_rustc(
+            SemanticAbiIdentityV1::from_sha256([133; 32]),
+            SemanticLayoutIdentityV1::from_sha256([134; 32]),
+            SemanticCanonAbiV1::GpuKernel,
+            SemanticExternAbiV1::GpuKernel,
+            false,
+            false,
+            0,
+            vec![],
+            SemanticAbiValueV1::new(unit, SemanticAbiPassModeV1::Ignore),
+        )
+        .unwrap();
+        let function = SemanticFunctionDeclV1::new(
+            SemanticFunctionIdentityV1::from_sha256([135; 32]),
+            SemanticFunctionRoleV1::KernelRoot,
+            SemanticItemDefinitionIdentityV1::from_sha256([136; 32]),
+            SemanticMonomorphizationIdentityV1::from_sha256([137; 32]),
+            SemanticGenericTypeArgumentsIdentityV1::from_sha256([138; 32]),
+            SemanticConstGenericArgumentsIdentityV1::from_sha256([139; 32]),
+            source,
+            abi,
+            vec![
+                SemanticLocalDeclV1::new(
+                    SemanticLocalIdentityV1::from_sha256([140; 32]),
+                    unit,
+                    SemanticLocalRoleV1::Return,
+                    source,
+                ),
+                SemanticLocalDeclV1::new(
+                    SemanticLocalIdentityV1::from_sha256([141; 32]),
+                    f32_ty,
+                    SemanticLocalRoleV1::Temporary,
+                    source,
+                ),
+            ],
+            SemanticBlockIdV1::from_index(0),
+            vec![block],
+        )
+        .unwrap()
+        .with_kernel_entry(SemanticKernelEntryV1::new(
+            SemanticLinkSymbolV1::new(b"scalar_transmute".to_vec()).unwrap(),
+            SemanticKernelBindingIdentityV1::from_sha256([142; 32]),
+            SemanticKernelSourceContractV1::new(
+                Some(
+                    SemanticKernelLaunchBoundsV1::new(
+                        Some(SemanticWorkgroupDimensionsV1::new([64, 1, 1]).unwrap()),
+                        Some(SemanticWorkgroupDimensionsV1::new([64, 1, 1]).unwrap()),
+                        None,
+                    )
+                    .unwrap(),
+                ),
+                None,
+                None,
+            )
+            .unwrap(),
+        ));
+        let semantic = InertSemanticMirRequestV1::new(
+            SemanticTargetDataLayoutV1::gfx942(SemanticLayoutIdentityV1::from_sha256([143; 32])),
+            vec![
+                unit_type(),
+                plain_bit_scalar_type(
+                    144,
+                    SemanticBackendPrimitiveV1::integer(false, 32, 4),
+                    SemanticScalarTypeV1::Integer {
+                        signed: false,
+                        bits: 32,
+                    },
+                ),
+                plain_bit_scalar_type(
+                    146,
+                    SemanticBackendPrimitiveV1::float(32, 4),
+                    SemanticScalarTypeV1::Float { bits: 32 },
+                ),
+            ],
+            vec![],
+            vec![],
+            vec![],
+            vec![function],
+            vec![SemanticFunctionIdV1::from_index(0)],
+        )
+        .unwrap()
+        .admit(SemanticMirLimitsV1::default())
+        .unwrap();
+        ProductionSemanticMirOwnerV1::try_new(semantic, ProductionSemanticMirLimitsV1::default())
+            .unwrap()
+    }
+
+    #[test]
+    fn plain_scalar_transmute_lowers_to_one_verified_kernel_ir_bitcast() {
+        let lowered = ProductionSemanticKirOwnerV1::try_lower(
+            scalar_transmute_semantic_owner(),
+            ProductionSemanticKirLimitsV1::default(),
+        )
+        .unwrap();
+        let bitcasts = lowered
+            .module()
+            .functions
+            .iter()
+            .flat_map(|function| function.body.iter())
+            .flat_map(|body| &body.blocks)
+            .flat_map(|block| &block.operations)
+            .filter(|operation| {
+                matches!(
+                    operation.kind,
+                    OperationKind::Cast {
+                        kind: CastKind::Bitcast,
+                        to: Type::Scalar(ScalarType::F32),
+                        ..
+                    }
+                )
+            })
+            .count();
+        assert_eq!(bitcasts, 1);
+        lowered.verify_equivalence().unwrap();
     }
 
     fn bool_type() -> SemanticTypeDeclV1 {

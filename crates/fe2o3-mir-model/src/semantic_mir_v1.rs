@@ -18891,6 +18891,132 @@ mod private_tests {
         )
     }
 
+    fn full_range_scalar_type(
+        tag: u8,
+        primitive: SemanticBackendPrimitiveV1,
+        shape: SemanticScalarTypeV1,
+    ) -> SemanticTypeDeclV1 {
+        let size = primitive.size_bytes().unwrap();
+        let maximum = if size == 16 {
+            u128::MAX
+        } else {
+            (1_u128 << (size * 8)) - 1
+        };
+        test_type(
+            tag,
+            SemanticTypeLayoutV1::new_with_backend_repr(
+                Some(size),
+                primitive.alignment_bytes(),
+                SemanticBackendReprV1::scalar(SemanticBackendScalarV1::initialized(
+                    primitive,
+                    SemanticScalarValidityRangeV1::new(0, maximum),
+                )),
+                false,
+            )
+            .unwrap(),
+            SemanticTypeShapeV1::Scalar(shape),
+        )
+    }
+
+    #[test]
+    fn transmute_accepts_only_equal_width_plain_bit_scalars() {
+        let unit = SemanticTypeIdV1::from_index(0);
+        let u32_ty = SemanticTypeIdV1::from_index(1);
+        let f32_ty = SemanticTypeIdV1::from_index(2);
+        let u64_ty = SemanticTypeIdV1::from_index(3);
+        let aggregate_ty = SemanticTypeIdV1::from_index(4);
+        let request = InertSemanticMirRequestV1::new(
+            SemanticTargetDataLayoutV1::gfx942(SemanticLayoutIdentityV1::from_sha256([70; 32])),
+            vec![
+                test_type(
+                    71,
+                    SemanticTypeLayoutV1::new(Some(0), 1).unwrap(),
+                    SemanticTypeShapeV1::Unit,
+                ),
+                full_range_scalar_type(
+                    72,
+                    SemanticBackendPrimitiveV1::integer(false, 32, 4),
+                    SemanticScalarTypeV1::Integer {
+                        signed: false,
+                        bits: 32,
+                    },
+                ),
+                full_range_scalar_type(
+                    73,
+                    SemanticBackendPrimitiveV1::float(32, 4),
+                    SemanticScalarTypeV1::Float { bits: 32 },
+                ),
+                full_range_scalar_type(
+                    74,
+                    SemanticBackendPrimitiveV1::integer(false, 64, 8),
+                    SemanticScalarTypeV1::Integer {
+                        signed: false,
+                        bits: 64,
+                    },
+                ),
+                test_type(
+                    75,
+                    SemanticTypeLayoutV1::aggregate(
+                        Some(4),
+                        4,
+                        SemanticAggregateLayoutV1::new(vec![0], vec![]).unwrap(),
+                    )
+                    .unwrap(),
+                    SemanticTypeShapeV1::Tuple(SemanticAggregateTypeV1::new(vec![u32_ty]).unwrap()),
+                ),
+            ],
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+        )
+        .unwrap();
+        let function = direct_selection_root(76, unit);
+        let transmute = |input, output, size_bytes| {
+            SemanticRvalueV1::new(
+                output,
+                SemanticRvalueKindV1::Cast {
+                    kind: SemanticCastKindV1::Transmute,
+                    operand: SemanticOperandV1::Constant(SemanticConstantV1::new(
+                        input,
+                        SemanticConstantValueV1::Scalar(
+                            SemanticScalarValueV1::new(0, size_bytes).unwrap(),
+                        ),
+                    )),
+                },
+            )
+        };
+        let validate = |rvalue: &SemanticRvalueV1| {
+            let mut context = ValidationContextV1 {
+                request: &request,
+                limits: SemanticMirLimitsV1::default(),
+                totals: ValidationTotalsV1::default(),
+                work: 0,
+            };
+            validate_rvalue(
+                &mut context,
+                &function,
+                SemanticMirLocationV1::Module,
+                rvalue,
+            )
+        };
+
+        assert_eq!(validate(&transmute(u32_ty, f32_ty, 4)), Ok(()));
+        for rejected in [
+            transmute(u32_ty, u64_ty, 4),
+            transmute(u32_ty, aggregate_ty, 4),
+        ] {
+            assert!(matches!(
+                validate(&rejected),
+                Err(SemanticMirErrorV1::InvalidTypeOperation {
+                    operation: SemanticTypeOperationV1::Cast,
+                    location: SemanticMirLocationV1::Module,
+                })
+            ));
+        }
+    }
+
     fn direct_selection_root(tag: u8, unit: SemanticTypeIdV1) -> SemanticFunctionDeclV1 {
         let abi = SemanticFunctionAbiV1::new(
             SemanticAbiIdentityV1::from_sha256([tag; 32]),

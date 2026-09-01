@@ -33,12 +33,22 @@ use fe2o3_device::{DisjointSlice, kernel, thread};
     feature = "reference-two-output-substitution",
     feature = "reference-two-output-alias",
     feature = "reference-two-output-schedule",
+    feature = "scalar-transmute",
 )))]
 #[kernel(typed)]
 pub fn fill(mut output: DisjointSlice<u32>) {
     let index = thread::index_1d();
     if let Some(element) = output.get_mut(index) {
         *element = 17;
+    }
+}
+
+#[cfg(feature = "scalar-transmute")]
+#[kernel(typed)]
+pub fn scalar_transmute(bits: u32, mut output: DisjointSlice<f32>) {
+    let index = thread::index_1d();
+    if let Some(element) = output.get_mut(index) {
+        *element = f32::from_bits(bits);
     }
 }
 
