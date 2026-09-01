@@ -16,6 +16,26 @@ trap cleanup_timeout_test_root EXIT
 bash "${TEST_SCRIPT_DIR}/rustc-codegen-shards.sh"
 python3 "${TEST_SCRIPT_DIR}/bounded-moe-ci-dispatch.py"
 
+VERUS_DISPATCH_LOG="${TIMEOUT_TEST_ROOT}/verus-dispatch.log"
+(
+  run_step() {
+    printf '%s\t' "$1" >>"${VERUS_DISPATCH_LOG}"
+    shift
+    printf '%q ' "$@" >>"${VERUS_DISPATCH_LOG}"
+    printf '\n' >>"${VERUS_DISPATCH_LOG}"
+  }
+  FE2O3_RUNTIME_MODEL_VERUS=/opt/verus/runtime-model \
+    VERUS=/opt/verus/mir-pliron \
+    run_verus
+)
+[[ "$(wc -l <"${VERUS_DISPATCH_LOG}")" -eq 4 ]]
+rg -F $'runtime-model-verus\tenv VERUS=/opt/verus/runtime-model ' \
+  "${VERUS_DISPATCH_LOG}" >/dev/null
+for step in verus-fixtures scalar-gemm-verus mir-pliron-per-compilation-verus; do
+  rg -F "${step}"$'\tenv VERUS=/opt/verus/mir-pliron ' \
+    "${VERUS_DISPATCH_LOG}" >/dev/null
+done
+
 OWNED_TMP_TARGET="${TIMEOUT_TEST_ROOT}/owned-tmp-target"
 mkdir -m 700 -- "${OWNED_TMP_TARGET}"
 OWNED_TMP_PATH="$(
@@ -1029,7 +1049,7 @@ assert_equals \
   "$(step_command rocm-cargo-fe2o3-bootstrap)" \
   'ROCm compile did not build the feature-invariant shared driver once'
 assert_equals \
-  "env ${TIMEOUT_TEST_ROOT}/rocm-driver/cargo-fe2o3 doctor" \
+  "env ${TIMEOUT_TEST_ROOT}/rocm-driver/cargo-fe2o3 doctor --require-gfx942-and-tools-present" \
   "$(step_command rocm-doctor)" \
   'ROCm compile did not invoke the resolved driver directly for doctor'
 for production_step in \

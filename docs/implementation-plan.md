@@ -247,7 +247,9 @@ Status: implemented.
 
 - Workspace exists with core crates.
 - HIP runtime compiles and links.
-- `cargo-fe2o3 doctor` validates ROCm toolchain discovery.
+- Historical M0 behavior: `cargo-fe2o3 doctor` validated ROCm toolchain
+  discovery. The current doctor admits direct KFD first and reports compiler
+  tools and optional debugger/profiler tools independently.
 - Vecadd example type-checks against the intended public API.
 
 ### M1: Backend Entry Point

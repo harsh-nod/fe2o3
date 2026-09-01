@@ -11,7 +11,7 @@ use fe2o3_runtime::{
 };
 
 use crate::KernelId;
-use crate::argument_alias::GeneratedArgumentBorrowV1;
+use crate::generated_argument_borrow::GeneratedArgumentBorrowV1;
 use crate::generated_argument_plan::{
     CompilerGeneratedArgumentLayoutV1, GeneratedArgumentInputV1, GeneratedArgumentLayoutError,
     GeneratedArgumentPackError, GeneratedArgumentPackingError, GeneratedArgumentPackingPlanV1,

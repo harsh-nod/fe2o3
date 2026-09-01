@@ -78,8 +78,8 @@ scripts/run-parity-snapshot.sh list
 
 Every other mode requires an existing archive outside a clean detached
 checkout. With no `--shard`, the seven Q shards are selected in order. Q7 also
-requires an exact Verus executable. Optional gfx942 lanes are never selected
-implicitly.
+requires the exact runtime-model and MIR/PLIRON Verus executables. Optional
+gfx942 lanes are never selected implicitly.
 
 ```bash
 mkdir -p /evidence/snapshot-001
@@ -88,12 +88,14 @@ git switch --detach <commit>
 scripts/run-parity-snapshot.sh dry-run \
   --repo "$PWD" \
   --archive-root /evidence/snapshot-001 \
-  --verus /absolute/path/to/verus
+  --runtime-model-verus /absolute/path/to/runtime-model/verus \
+  --verus /absolute/path/to/mir-pliron/verus
 
 scripts/run-parity-snapshot.sh run \
   --repo "$PWD" \
   --archive-root /evidence/snapshot-001 \
-  --verus /absolute/path/to/verus
+  --runtime-model-verus /absolute/path/to/runtime-model/verus \
+  --verus /absolute/path/to/mir-pliron/verus
 ```
 
 `dry-run` emits a deterministic canonical plan containing the commit, archive

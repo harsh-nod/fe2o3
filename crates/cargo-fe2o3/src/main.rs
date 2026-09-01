@@ -14,6 +14,7 @@ mod cargo_invocation_boundary;
 mod clean;
 mod compiler_execution_boundary;
 mod compiler_toolchain;
+mod doctor;
 mod example_manifest;
 mod generation;
 mod inert_rustc_invocation_capture;
@@ -52,7 +53,6 @@ const TARGET_ENV: &str = "FE2O3_TARGET";
 const BACKEND_ENV: &str = "FE2O3_BACKEND";
 const HSACO_DIR_ENV: &str = "FE2O3_HSACO_DIR";
 const OBSOLETE_CODEGEN_PIPELINE_ENV: &str = "FE2O3_CODEGEN_PIPELINE";
-const DEFAULT_TARGET: &str = "gfx1100";
 const BINDING_WRAPPER_MODE_ENV: &str = "FE2O3_BINDING_WRAPPER_MODE_V1";
 const MANAGED_RUSTC_ARGS_ENV: &str = "FE2O3_MANAGED_RUSTC_ARGS_V1";
 const BUILD_SESSION_ENV: &str = "FE2O3_BUILD_SESSION_V1";
@@ -182,7 +182,7 @@ fn main() -> ExitCode {
 
     match command.to_str() {
         Some("authority") => authority_release::command(&rest),
-        Some("doctor") => doctor(),
+        Some("doctor") => with_utf8_args(&rest, doctor::command),
         Some("check") => binding_host_command(BindingHostMode::Check, &rest),
         Some("test") => binding_host_command(BindingHostMode::Test, &rest),
         Some("build") => cargo_with_backend("build", &rest),
@@ -914,32 +914,6 @@ fn clear_cargo_unit_identity_names(
             || name.as_encoded_bytes().starts_with(b"CARGO_PKG_")
         {
             command.env_remove(name);
-        }
-    }
-}
-
-fn doctor() -> ExitCode {
-    let target = amd_gpu_target(false);
-    println!("fe2o3 diagnostics");
-    println!("target: {target}");
-
-    match detect_rocm_toolchain() {
-        Ok(toolchain) => {
-            println!("ROCm: {}", toolchain.rocm_path.display());
-            println!("clang: {}", toolchain.clang.display());
-            println!("ld.lld: {}", toolchain.ld_lld.display());
-            if let Some(llc) = toolchain.llc {
-                println!("llc: {}", llc.display());
-            }
-            if let Some(llvm_readobj) = toolchain.llvm_readobj {
-                println!("llvm-readobj: {}", llvm_readobj.display());
-            }
-            println!("HIP: {}", toolchain.hip_library.display());
-            ExitCode::SUCCESS
-        }
-        Err(error) => {
-            eprintln!("ROCm toolchain: {error}");
-            ExitCode::FAILURE
         }
     }
 }
@@ -3601,144 +3575,9 @@ fn find_workspace_root() -> Result<PathBuf, String> {
         .map_err(|error| format!("failed to resolve Cargo project/workspace root: {error}"))
 }
 
-#[derive(Debug)]
-struct RocmToolchain {
-    rocm_path: PathBuf,
-    clang: PathBuf,
-    ld_lld: PathBuf,
-    llc: Option<PathBuf>,
-    llvm_readobj: Option<PathBuf>,
-    hip_library: PathBuf,
-}
-
-fn detect_rocm_toolchain() -> Result<RocmToolchain, String> {
-    let rocm_path =
-        find_rocm_path().ok_or_else(|| "could not find ROCm; set ROCM_PATH".to_string())?;
-    let llvm_bin = rocm_path.join("lib/llvm/bin");
-    let clang = require_tool(&llvm_bin, "clang")?;
-    let ld_lld = require_tool(&llvm_bin, "ld.lld")?;
-    let hip_library = rocm_path.join("lib/libamdhip64.so");
-    if !hip_library.is_file() {
-        return Err(format!(
-            "required ROCm path does not exist: {}",
-            hip_library.display()
-        ));
-    }
-
-    Ok(RocmToolchain {
-        rocm_path,
-        clang,
-        ld_lld,
-        llc: optional_tool(&llvm_bin, "llc"),
-        llvm_readobj: optional_tool(&llvm_bin, "llvm-readobj"),
-        hip_library,
-    })
-}
-
-fn find_rocm_path() -> Option<PathBuf> {
-    for var in ["ROCM_PATH", "HIP_PATH"] {
-        if let Ok(value) = env::var(var) {
-            let path = PathBuf::from(value);
-            if path.join("lib/libamdhip64.so").is_file() {
-                return Some(path);
-            }
-        }
-    }
-
-    ["/opt/rocm", "/opt/rocm-7.2.0", "/opt/rocm-7.1.0"]
-        .into_iter()
-        .map(PathBuf::from)
-        .find(|path| path.join("lib/libamdhip64.so").is_file())
-}
-
-fn require_tool(llvm_bin: &Path, name: &str) -> Result<PathBuf, String> {
-    let path = llvm_bin.join(name);
-    if path.is_file() {
-        Ok(path)
-    } else {
-        Err(format!(
-            "required ROCm path does not exist: {}",
-            path.display()
-        ))
-    }
-}
-
-fn optional_tool(llvm_bin: &Path, name: &str) -> Option<PathBuf> {
-    let path = llvm_bin.join(name);
-    path.is_file().then_some(path)
-}
-
-fn amd_gpu_target(simulation: bool) -> String {
-    resolve_amd_gpu_target(
-        simulation,
-        env::var(TARGET_ENV)
-            .ok()
-            .filter(|value| !value.trim().is_empty()),
-        detect_amd_gpu_target,
-    )
-}
-
-fn resolve_amd_gpu_target(
-    simulation: bool,
-    declared: Option<String>,
-    detect: impl FnOnce() -> Option<String>,
-) -> String {
-    declared
-        .or_else(|| (!simulation).then(detect).flatten())
-        .unwrap_or_else(|| DEFAULT_TARGET.to_string())
-}
-
-fn detect_amd_gpu_target() -> Option<String> {
-    let output = process_execution::capture_output(&mut Command::new("rocminfo")).ok()?;
-    if !output.status.success() {
-        return None;
-    }
-
-    let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
-    if !output.stderr.is_empty() {
-        text.push('\n');
-        text.push_str(&String::from_utf8_lossy(&output.stderr));
-    }
-
-    parse_rocminfo_target(&text)
-}
-
-fn parse_rocminfo_target(text: &str) -> Option<String> {
-    let mut generic = None;
-
-    for raw in text.split_whitespace() {
-        let token = raw.trim_matches(|c: char| {
-            !(c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == ':')
-        });
-        let candidate = token.rsplit("--").next().unwrap_or(token);
-        let candidate = candidate.trim_end_matches(':');
-
-        if !is_gfx_target(candidate) {
-            continue;
-        }
-
-        if candidate.contains("generic") {
-            generic.get_or_insert_with(|| candidate.to_string());
-        } else {
-            return Some(candidate.to_string());
-        }
-    }
-
-    generic
-}
-
-fn is_gfx_target(candidate: &str) -> bool {
-    candidate.starts_with("gfx")
-        && candidate.len() > 3
-        && candidate.chars().any(|c| c.is_ascii_digit())
-        && candidate
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
-}
-
 fn print_help() {
     eprintln!(
-        "usage: cargo fe2o3 <command>\n\ncommands:\n  authority release   run an authority build through the protected self-launch boundary\n  doctor              check ROCm/HIP toolchain discovery\n  check               check host targets with compiler-derived binding only\n  test --all-targets  run trusted binding-only host tests; no artifact/GPU authority\n  build               build with the fe2o3 rustc backend\n  run                 run with the fe2o3 rustc backend\n  examples            validate or query the example regression manifest\n  clean [--dry-run]   remove guarded fe2o3-owned target artifacts\n  inspect             inspect bounded artifact, HSACO, or observation metadata\n  sanitize            plan or execute bounded ROCgdb precise-memory diagnostics\n  debug               plan or execute bounded batch/interactive ROCgdb sessions\n  profile             plan or authorize bounded rocprofv3 collection",
+        "usage: cargo fe2o3 <command>\n\ncommands:\n  authority release   run an authority build through the protected self-launch boundary\n  doctor              report direct-KFD runtime, compiler, and optional tool readiness\n  check               check host targets with compiler-derived binding only\n  test --all-targets  run trusted binding-only host tests; no artifact/GPU authority\n  build               build with the fe2o3 rustc backend\n  run                 run with the fe2o3 rustc backend\n  examples            validate or query the example regression manifest\n  clean [--dry-run]   remove guarded fe2o3-owned target artifacts\n  inspect             inspect bounded artifact, HSACO, or observation metadata\n  sanitize            plan or execute bounded ROCgdb precise-memory diagnostics\n  debug               plan or execute bounded batch/interactive ROCgdb sessions\n  profile             plan or authorize bounded rocprofv3 collection",
     );
 }
 
@@ -3758,12 +3597,11 @@ mod tests {
         append_compiler_execution_profile_semantic_configuration, binding_host_target_key,
         clear_cargo_unit_identity_names, configure_production_cargo_tool_environment,
         configure_production_target_environment, inject_binding_host_test_custody,
-        is_cargo_target_runner_environment_name, normalize_invocation, parse_rocminfo_target,
-        parse_rustup_tool_path, reject_authority_configured_environment,
-        reject_authority_rustup_proxy, reject_binding_test_invocation_config,
-        reject_obsolete_codegen_pipeline, selected_run_target, source_isa_collection_hex,
-        source_isa_collection_hex_length, validate_production_cargo_inputs,
-        validate_production_compilation_environment,
+        is_cargo_target_runner_environment_name, normalize_invocation, parse_rustup_tool_path,
+        reject_authority_configured_environment, reject_authority_rustup_proxy,
+        reject_binding_test_invocation_config, reject_obsolete_codegen_pipeline,
+        selected_run_target, source_isa_collection_hex, source_isa_collection_hex_length,
+        validate_production_cargo_inputs, validate_production_compilation_environment,
     };
     use crate::observer_telemetry;
     use crate::pinned_executable_test_directory::TestDirectory;
@@ -4218,35 +4056,6 @@ mod tests {
         assert!(validate_production_cargo_inputs(&[], Some(OsStr::new("gfx942:xnack-"))).is_err());
         assert!(validate_production_cargo_inputs(&[], Some(OsStr::new("gfx950:xnack-"))).is_err());
         assert!(validate_production_cargo_inputs(&[], Some(OsStr::new("GFX950"))).is_err());
-    }
-
-    #[test]
-    fn parses_agent_target_before_isa_generic() {
-        let text = r#"
-Agent 2
-  Name:                    gfx1201
-  ISA Info:
-    Name:                    amdgcn-amd-amdhsa--gfx12-generic
-"#;
-
-        assert_eq!(parse_rocminfo_target(text).as_deref(), Some("gfx1201"));
-    }
-
-    #[test]
-    fn parses_isa_target_when_agent_name_is_missing() {
-        let text = "Name: amdgcn-amd-amdhsa--gfx942";
-
-        assert_eq!(parse_rocminfo_target(text).as_deref(), Some("gfx942"));
-    }
-
-    #[test]
-    fn falls_back_to_generic_target() {
-        let text = "Name: amdgcn-amd-amdhsa--gfx12-generic";
-
-        assert_eq!(
-            parse_rocminfo_target(text).as_deref(),
-            Some("gfx12-generic")
-        );
     }
 
     #[test]

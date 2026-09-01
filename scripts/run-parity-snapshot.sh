@@ -24,7 +24,9 @@ Options:
   --shard NAME             Select one Q1-Q7 shard; repeat to select several
   --gfx942-compile         Add the optional gfx942 compile shard
   --gfx942-hardware        Fail closed: the Worker V2 hardware shard is retired
-  --verus PATH             Absolute Verus executable for Q7
+  --verus PATH             Absolute MIR/PLIRON Verus executable for Q7
+  --runtime-model-verus PATH
+                           Absolute runtime-model Verus executable for Q7
   --timeout-seconds N      Per-shard bound, 1..86400 (default: 7200)
   --path PATH              Exact absolute-only PATH recorded for commands
   --home PATH              Exact HOME recorded for commands
@@ -244,6 +246,7 @@ main() {
   local cargo_home="${CARGO_HOME:-${recorded_home}/.cargo}"
   local rustup_home="${RUSTUP_HOME:-${recorded_home}/.rustup}"
   local verus=""
+  local runtime_model_verus=""
   local explicit_selection=false
   local want_gfx942_compile=false
   local want_gfx942_hardware=false
@@ -267,7 +270,7 @@ main() {
 
   while (($# > 0)); do
     case "$1" in
-      --repo | --archive-root | --timeout-seconds | --path | --home | --cargo-home | --rustup-home | --verus | --shard)
+      --repo | --archive-root | --timeout-seconds | --path | --home | --cargo-home | --rustup-home | --verus | --runtime-model-verus | --shard)
         (($# >= 2)) || die "$1 requires a value"
         case "$1" in
           --repo) repo="$2" ;;
@@ -278,6 +281,7 @@ main() {
           --cargo-home) cargo_home="$2" ;;
           --rustup-home) rustup_home="$2" ;;
           --verus) verus="$2" ;;
+          --runtime-model-verus) runtime_model_verus="$2" ;;
           --shard)
             valid_shard "$2" || die "unknown shard: $2"
             [[ "$2" == Q[1-7] ]] || die '--shard accepts only Q1 through Q7'
@@ -338,6 +342,9 @@ main() {
   if [[ -v 'seen[Q7]' ]]; then
     valid_path_value "${verus}" && [[ -f "${verus}" && -x "${verus}" ]] ||
       die 'Q7 requires --verus with an absolute executable path'
+    valid_path_value "${runtime_model_verus}" &&
+      [[ -f "${runtime_model_verus}" && -x "${runtime_model_verus}" ]] ||
+      die 'Q7 requires --runtime-model-verus with an absolute executable path'
   fi
   if [[ "${mode}" == dry-run ]]; then
     printf 'snapshot_plan_schema_version\t1\n'
@@ -388,13 +395,21 @@ main() {
       printf 'environment\t%s\tPATH\t%s\n' "${shard}" "$(hex_encode "${recorded_path}")"
       printf 'environment\t%s\tRUSTUP_HOME\t%s\n' "${shard}" "$(hex_encode "${rustup_home}")"
       printf 'environment\t%s\tTMPDIR\t%s\n' "${shard}" "$(hex_encode "${tmp_dir}")"
-      [[ "${shard}" != Q7 ]] || printf 'environment\t%s\tVERUS\t%s\n' "${shard}" "$(hex_encode "${verus}")"
+      if [[ "${shard}" == Q7 ]]; then
+        printf 'environment\t%s\tFE2O3_RUNTIME_MODEL_VERUS\t%s\n' \
+          "${shard}" "$(hex_encode "${runtime_model_verus}")"
+        printf 'environment\t%s\tVERUS\t%s\n' "${shard}" "$(hex_encode "${verus}")"
+      fi
       [[ "${shard}" != GFX942-COMPILE ]] ||
         printf 'environment\t%s\tFE2O3_TARGET\t%s\n' "${shard}" "$(hex_encode gfx942)"
       printf 'tool\t%s\tbash\t%s\n' "${shard}" "${bash_bin}"
       shard_uses_cargo "${shard}" && printf 'tool\t%s\tcargo\t%s\n' "${shard}" "${cargo_bin}"
       printf 'tool\t%s\tcommand\t%s\n' "${shard}" "${timeout_bin}"
-      [[ "${shard}" != Q7 ]] || printf 'tool\t%s\tverus\t%s\n' "${shard}" "${verus}"
+      if [[ "${shard}" == Q7 ]]; then
+        printf 'tool\t%s\truntime-model-verus\t%s\n' \
+          "${shard}" "${runtime_model_verus}"
+        printf 'tool\t%s\tverus\t%s\n' "${shard}" "${verus}"
+      fi
       for index in "${!outer_argv[@]}"; do
         printf 'argv\t%s\t%04d\t%s\n' \
           "${shard}" "${index}" "$(hex_encode "${outer_argv[${index}]}")"
@@ -421,7 +436,12 @@ main() {
       record_args+=(--tool "cargo=${cargo_bin}")
     fi
     if [[ "${shard}" == Q7 ]]; then
-      record_args+=(--env "VERUS=${verus}" --tool "verus=${verus}")
+      record_args+=(
+        --env "FE2O3_RUNTIME_MODEL_VERUS=${runtime_model_verus}"
+        --env "VERUS=${verus}"
+        --tool "runtime-model-verus=${runtime_model_verus}"
+        --tool "verus=${verus}"
+      )
     fi
     if [[ "${shard}" == GFX942-COMPILE ]]; then
       record_args+=(--env FE2O3_TARGET=gfx942)

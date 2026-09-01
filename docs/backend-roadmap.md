@@ -46,7 +46,9 @@ compiler enters one unselected production transaction inside
 - `#[kernel]` emits strict V1 registration metadata with a direct function
   pointer. The collector rejects malformed, duplicate, inconsistent, or
   unregistered prefix-only candidates transactionally.
-- `cargo-fe2o3 doctor` validates ROCm/HIP toolchain discovery.
+- Historical scaffold note: `cargo-fe2o3 doctor` originally validated
+  ROCm/HIP discovery. The current command is KFD-first, keeps compiler tools
+  separate, and treats ROCgdb/rocprofv3 as optional observation tools.
 - `cargo-fe2o3 build` builds and loads `librustc_codegen_fe2o3.so`.
 - `rustc-codegen-fe2o3` wraps `rustc_codegen_llvm` for host codegen and detects
   kernel candidates in rustc codegen units.

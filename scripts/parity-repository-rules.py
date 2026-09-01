@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render and verify the repository rules required by parity promotion."""
+"""Render and verify the organization-only rules required by parity promotion."""
 
 from __future__ import annotations
 
@@ -12,14 +12,17 @@ from typing import Any
 
 
 RULESET_NAME = "fe2o3-production-parity"
+MERGE_QUEUE_CHECK_TIMEOUT_MINUTES = 120
 CHECK_CONTEXTS = (
+    "Fork-safe preflight",
     "Generic parity policy gate",
     "Generic validation",
-    "Protected signed-evidence gate",
+    "Protected signed-evidence gate / Protected publisher authorization",
 )
 WORKFLOW_PATHS = (
     ".github/workflows/ci.yml",
     ".github/workflows/parity-promotion.yml",
+    ".github/workflows/pr-preflight.yml",
 )
 
 
@@ -82,7 +85,7 @@ def expected_ruleset(
             {
                 "type": "merge_queue",
                 "parameters": {
-                    "check_response_timeout_minutes": 30,
+                    "check_response_timeout_minutes": MERGE_QUEUE_CHECK_TIMEOUT_MINUTES,
                     "grouping_strategy": "ALLGREEN",
                     "max_entries_to_build": 5,
                     "max_entries_to_merge": 1,
@@ -197,7 +200,9 @@ def verify_ruleset(
         rules["merge_queue"].get("parameters"), "merge-queue parameters"
     )
     if (
-        merge_queue.get("grouping_strategy") != "ALLGREEN"
+        merge_queue.get("check_response_timeout_minutes")
+        != MERGE_QUEUE_CHECK_TIMEOUT_MINUTES
+        or merge_queue.get("grouping_strategy") != "ALLGREEN"
         or merge_queue.get("max_entries_to_merge") != 1
         or merge_queue.get("merge_method") != "SQUASH"
         or merge_queue.get("min_entries_to_merge") != 1

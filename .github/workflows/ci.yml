@@ -4,6 +4,8 @@ on:
   merge_group:
     types: [checks_requested]
   push:
+    branches:
+      - "**"
   pull_request:
 
 permissions:
@@ -89,11 +91,9 @@ jobs:
             docs/cuda-oxide-parity-status.tsv; then
             exit 0
           fi
-          if [[ "${EVENT_NAME}" == push && "${REF_NAME}" == "${DEFAULT_BRANCH}" ]]; then
-            printf 'direct default-branch parity promotion is forbidden; repository rules must prevent this push\n' >&2
-            exit 2
-          fi
-          printf 'parity promotion is authorized only by the protected merge-group reusable workflow\n'
+          printf '%s\n' \
+            'parity status changes are unavailable: no protected merge-queue authority is deployed for this repository' >&2
+          exit 2
 
           # Candidate-controlled pull-request and generic CI jobs never receive
           # id-token permission or invoke the production publisher service.

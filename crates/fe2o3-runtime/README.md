@@ -9,17 +9,19 @@ mutation rather than being inferred from the build host.
 
 `RuntimeBackendV1` is the backend SPI. It carries only numeric sealed handles,
 address-free argument images, allocation-relative bindings, explicit event
-dependencies, and monotonic deadlines. KFD, HSA, and worker-backed adapters can
-implement the same contract without exposing raw addresses or native resource
-types. Typed kernels pair the application signature with the pure
+dependencies, and monotonic deadlines. The direct-KFD and worker-backed
+adapters implement that contract without exposing raw addresses or native
+resource types. The deprecated HSA adapter exercises the same SPI only in
+explicit qualification builds. Typed kernels pair the application signature
+with the pure
 `fe2o3-runtime-model` kernel identity; peer copies similarly retain a model
 contract identity alongside the concrete backend submission.
 
 The application-supplied typed signature is an identity association, not proof
 that a Rust type matches a native kernarg ABI or that declared regions cover all
-memory effects. Direct KFD execution requires an unsafe launch authority, and
-direct HSA construction requires the caller to uphold its unsafe artifact, ABI,
-and effect contract.
+memory effects. Direct KFD execution requires an unsafe launch authority. The
+deprecated HSA qualification adapter separately requires its caller to uphold
+an unsafe artifact, ABI, and effect contract; it is not a production fallback.
 
 `RuntimeWorkerTransportV1` is the preferred community-facing deployment for
 native GPU backends. It verifies protocol compatibility with a fixed handshake,
@@ -31,21 +33,23 @@ epoch is assumed. An already-expired wait returns `Pending` without publishing
 a request. The handshake does not authenticate or attest the worker executable,
 loaded module, or host. Callers must select a trusted child and provide any
 required artifact authority, sandbox, or operating-system isolation. Native
-KFD/HSA code may preserve its fail-closed abort policy inside that child; the
+KFD code, or deprecated HSA qualification code, may preserve its fail-closed
+abort policy inside that child; the
 application receives terminal backend loss without being terminated itself.
 
 The parent uses `RuntimeWorkerBackendV1<RuntimeBinaryCodecV1>` and the child
 calls `serve_runtime_backend_worker_v1` with its concrete backend. The repository
 provides the transport, canonical codec, and server loop, but does not yet ship
-a standalone KFD or HSA worker executable. Shut down the context first, then
+a standalone KFD worker executable. Shut down the context first, then
 shut down the returned worker backend so the transport can send its empty-frame
 termination and reap the child.
 
 Observe each submission to `Succeeded` or `Failed`, release events retaining
 that submission, consume `release_submission`, destroy streams, and call
 `RuntimeContextV1::shutdown`. Cleanup failures retain their handles for retry.
-Direct KFD/HSA backend drop may abort when live or ambiguous native custody
-remains, so explicit shutdown is required for predictable teardown.
+Direct KFD backend drop may abort when live or ambiguous native custody remains,
+so explicit shutdown is required for predictable teardown. The deprecated HSA
+qualification adapter retains the same conservative cleanup rule.
 
 The current KFD adapter admits one gfx942 device and serializes logical streams
 over one native queue. Same-shape launches retain native host-visible storage,
@@ -58,10 +62,11 @@ destination. Device-local input is still host-staged, materialized per launch,
 and read-only. KFD module validation is cached at load and kernel metadata is
 cached at resolution. Logical KFD allocations are capped at 256 MiB each and 1
 GiB per backend context; budget and allocator exhaustion return `Capacity`
-before native publication. The HSA adapter admits one
-correlated gfx942 or gfx950 device and host-visible memory. Neither adapter
-currently advertises peer copy, multi-device operation, atomics, or collectives;
-atomics and collectives have no general V1 facade operation. This is not HIP/HSA parity. See
+before native publication. The deprecated HSA qualification adapter admits one
+correlated gfx942 or gfx950 device and host-visible memory when its explicit
+legacy features are enabled. Neither adapter currently advertises peer copy,
+multi-device operation, atomics, or collectives; atomics and collectives have no
+general V1 facade operation. This is not HIP/HSA parity. See
 [`docs/runtime-community-architecture-v1.md`](../../docs/runtime-community-architecture-v1.md).
 
 Feature `hardware-qualification` exposes a repository-owned, SHA-pinned gfx942
@@ -70,11 +75,11 @@ retains a private gate which accepts only the fixture's fixed artifact, typed
 ABI, metadata-declared read/read/write effects, deterministic allocation
 contents, and launch geometry. It does not implement or weaken
 `KfdRuntimeLaunchAuthorityV1`, so it cannot satisfy the production Worker V3
-transition. The companion HSA lane and HIP module oracle exercise the same
+transition. Deprecated HSA and HIP qualification oracles exercise the same
 HSACO and inputs through one clean-checkout MI300X runner; see
 [`benchmarks/runtime_gfx942/README.md`](../../benchmarks/runtime_gfx942/README.md).
 
-The legacy direct `gfx942:xnack-` layer remains available for the protected
+The bounded direct `gfx942:xnack-` layer remains available for the protected
 Worker V3 path. It joins the bounded AMDHSA COV6 loader, selected descriptor and
 resource facts, complete implicit kernarg initialization, and the
 address-sealed KFD request.
@@ -136,5 +141,5 @@ publication, completion, and teardown. Its manually asserted authority bypasses
 the absent production Worker V3 verifier and is therefore neither a safe
 application path nor parity evidence.
 
-The legacy pure-Rust KFD/Worker V3 production dependency closure contains no
+The direct-KFD/Worker V3 production dependency closure contains no
 HIP, ROCr/HSA runtime, COMGR, `libdrm`, native shim, or runtime dynamic loader.

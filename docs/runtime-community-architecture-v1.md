@@ -3,8 +3,9 @@
 ## Status
 
 This document defines the community-facing runtime ownership boundaries. The
-legacy protected Worker V3 dispatch remains supported, but it is no longer the
-shape applications or backend adapters should extend.
+bounded protected Worker V3 dispatch remains an internal production direction,
+but it is not yet a supported public application path. New backend work extends
+the direct-KFD boundary; HIP/HSA paths are deprecated qualification-only code.
 
 ## Dependency Direction
 
@@ -12,8 +13,11 @@ The runtime stack has one inward dependency direction:
 
 1. `fe2o3-runtime-model` owns pure executable specifications, invariant
    vocabulary, and model-only identities. It owns no native authority.
-2. `fe2o3-kfd-uapi`, `fe2o3-aql`, and native HSA bindings own wire mechanisms.
-3. KFD and HSA adapters own native resources and refine model transitions.
+2. `fe2o3-kfd-uapi` and `fe2o3-aql` own production wire mechanisms. Native HSA
+   bindings are retained only for deprecated qualification.
+3. The KFD adapter owns production native resources and refines model
+   transitions. The HSA adapter exercises the same SPI only in explicit legacy
+   qualification builds.
 4. `fe2o3-runtime` owns the public context, capability, handle, stream, memory,
    module, typed launch, event, completion, peer-copy, and backend-error API.
 5. `fe2o3-service-host` composes persistent services above the public runtime
@@ -48,8 +52,10 @@ An error is classified as one of:
 - `Terminal`: native state or quiescence is ambiguous; resources remain retained
   and the backend context cannot be used again.
 
-Community applications should host KFD/HSA backends in
-`RuntimeWorkerBackendV1`. Its public handshake verifies protocol compatibility;
+Community applications should host native KFD backends in
+`RuntimeWorkerBackendV1`. The same isolation can contain deprecated HSA
+qualification code, but that is not a public runtime route. Its public
+handshake verifies protocol compatibility;
 it does not authenticate the executable, module, or host. The caller must
 select a trusted worker and provide any required artifact authority, sandbox,
 or operating-system isolation. The worker may abort for terminal ambiguity
@@ -61,7 +67,7 @@ frames, and worker abort as terminal backend loss.
 | Backend | Devices and queues | Memory | Unsupported |
 | --- | --- | --- | --- |
 | KFD | One admitted `gfx942:xnack-` device, one reusable native queue, multiple serialized logical streams, and one pending launch | Host-visible native storage, code, kernarg, and dispatch state persist across same-shape launches; logical host images use shared immutable snapshots and exact full-write digest reuse; device writeback is synchronized lazily on facade read or before a launch that needs host authority; `DeviceLocal` remains per-launch and read-only | Peer copy, multi-device, atomics, collectives |
-| HSA | One HIP-correlated gfx942 or gfx950 HSA device with persistent per-stream queues | Host-visible allocations only | Device-local allocation, peer copy, multi-device, atomics, collectives |
+| HSA, deprecated qualification only | One HIP-correlated gfx942 or gfx950 HSA device with persistent per-stream queues | Host-visible allocations only | Production use, device-local allocation, peer copy, multi-device, atomics, collectives |
 
 The V1 facade has a peer-copy operation, but neither shipped adapter advertises
 it. Atomics and collectives are capability vocabulary only; V1 defines no
@@ -81,16 +87,17 @@ authority. It re-hashes and loader-validates one repository-owned COV6 object,
 then a private KFD gate accepts only that artifact's fixed typed ABI,
 metadata-declared effects, deterministic buffer images, and geometry. The gate does not implement
 `KfdRuntimeLaunchAuthorityV1` and supplies no compiler-lineage or Worker V3
-authentication. Its HSA lane relies separately on the reviewed backend's unsafe
-construction contract after admitting the same fixture.
+authentication. Its deprecated HSA oracle relies separately on the legacy
+backend's unsafe construction contract after admitting the same fixture.
 
 ## Asynchronous Operations
 
 Typed launches associate a Rust argument type with an application-supplied,
 nonzero 32-byte signature. This creates a stable identity; it does not prove the
 native kernarg ABI or the completeness of declared memory effects. Assurance
-comes from the KFD launch authority or the HSA backend's unsafe-construction
-contract. The argument value produces an address-free kernarg image and
+comes from the KFD launch authority. Deprecated HSA qualification separately
+relies on that adapter's unsafe-construction contract. The argument value
+produces an address-free kernarg image and
 allocation-relative memory effects. Launch dependencies name exact events from
 the same device. Submissions are nonblocking and may be polled or waited against
 a monotonic deadline.
@@ -100,9 +107,9 @@ AQL grid-size fields. `workgroup` is the per-group extent. For COV6 implicit
 arguments, each block count is `grid / workgroup` and the corresponding
 remainder is `grid % workgroup`; resource admission still uses the ceiling
 number of workgroups when accounting for a partial final group. The pure
-`fe2o3-aql` geometry value derives these implicit dispatch values once; KFD,
-the legacy runtime transition, and the HSA adapter only encode that shared
-result into their owned kernarg storage.
+`fe2o3-aql` geometry value derives these implicit dispatch values once. The KFD
+adapter, protected KFD transition, and deprecated HSA qualification adapter
+only encode that shared result into their owned kernarg storage.
 
 Peer copies require two distinct peer-capable devices, an exact destination
 stream, equal nonempty source/destination ranges, and explicit event
@@ -125,9 +132,10 @@ dependencies. Each copy retains a model peer-transfer contract identity.
   owner pre/post fence scopes rather than recursively rescanning host topology.
 - `fe2o3-host` alias admission uses allocation-aware interval indexes. It must
   not scan all arguments of all in-flight launches for every new argument.
-- `fe2o3-hsa-runtime` indexes pending accesses by allocation, stream, and byte
-  interval and carries sparse causal frontiers. Admission must not scan every
-  pending submission or walk transitive event ancestry.
+- The deprecated `fe2o3-hsa-runtime` qualification adapter indexes pending
+  accesses by allocation, stream, and byte interval and carries sparse causal
+  frontiers. Qualification admission must not scan every pending submission or
+  walk transitive event ancestry.
 - Worker request writes and response reads share one parent-process deadline. A
   dedicated writer owns child stdin so a worker that stops reading cannot block
   the runtime thread past that deadline. Worker-backed completion waits encode
@@ -138,15 +146,17 @@ Scale benchmarks cover the maximum completion graph and large lifecycle
 journals. Regressions in asymptotic behavior are release blockers.
 
 The gfx942 runtime qualification runner compares only like-named measurement
-scopes. KFD persistent execution, HSA host-visible execution, HIP staging,
-synchronized launch/wait, and HIP device-event intervals are reported
-separately. Results from unlike scopes must not be converted into parity
+scopes. KFD persistent execution, deprecated HSA host-visible qualification,
+deprecated HIP staging oracles, synchronized launch/wait, and HIP device-event
+intervals are reported separately. Results from unlike scopes must not be converted into parity
 ratios; even the KFD/HSA/HIP synchronized rows retain different currentness,
 allocation, signal, and readback policies.
 
-## Backend Selection
+## Deprecated Qualification Backend
 
-Native HSA support is selected explicitly by Cargo feature. A stub build is
-deterministic and has no ROCm link dependency. Enabling the native feature
-requires a configured ROCm development installation and fails the build when
-the required headers or libraries are absent.
+The default `fe2o3-hsa-runtime` crate is an inert compatibility marker with no
+ROCm link dependency. Its API is restored only by the explicit
+`qualification-legacy-hsa-runtime` feature; `native-hsa` additionally enables
+the native legacy implementation. That implementation requires a configured
+ROCm development installation and fails the build when required headers or
+libraries are absent. Neither feature creates a production runtime fallback.

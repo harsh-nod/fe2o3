@@ -1325,6 +1325,7 @@ impl<K: CompilerGeneratedKernelExpectationV1> AuthenticatedWorkerV3ExecutableV1<
             .revalidate_retained_currentness_token(&self.current)
     }
 
+    #[cfg(feature = "qualification-legacy-hip-hsa")]
     pub fn authorize_hsa_load<A: crate::ReviewedHsaExecutableLifecycleAdapterV1>(
         self,
         observed: crate::ObservedContext,

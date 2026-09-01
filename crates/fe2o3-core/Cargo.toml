@@ -1,19 +1,29 @@
 [package]
 name = "fe2o3-core"
 version = "0.1.0"
+publish = false
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "HIP-backed host runtime for fe2o3."
+description = "Device representation contracts and deprecated HIP qualification APIs for fe2o3."
 
 [features]
-qualification-unsafe-launch = []
+default = []
+# Retains the deprecated HIP runtime surface for qualification only. Production
+# applications use fe2o3-host's direct-KFD path.
+qualification-legacy-hip-runtime = [
+    "dep:fe2o3-amd-target",
+    "dep:fe2o3-completion",
+    "dep:fe2o3-hip-sys",
+    "fe2o3-hip-sys/qualification-legacy-native-hip",
+]
+qualification-unsafe-launch = ["qualification-legacy-hip-runtime"]
 
 [dependencies]
-fe2o3-amd-target.workspace = true
-fe2o3-completion.workspace = true
-fe2o3-hip-sys.workspace = true
+fe2o3-amd-target = { workspace = true, optional = true }
+fe2o3-completion = { workspace = true, optional = true }
+fe2o3-hip-sys = { workspace = true, optional = true }
 fe2o3-macros.workspace = true
 
 [dev-dependencies]
@@ -22,6 +32,46 @@ trybuild = "1"
 [[test]]
 name = "production_runtime_surface_ui"
 path = "tests/production_runtime_surface_ui.rs"
+
+[[test]]
+name = "cooperative_peer_hardware"
+path = "tests/cooperative_peer_hardware.rs"
+required-features = ["qualification-legacy-hip-runtime"]
+
+[[test]]
+name = "cooperative_peer_ui"
+path = "tests/cooperative_peer_ui.rs"
+required-features = ["qualification-legacy-hip-runtime"]
+
+[[test]]
+name = "device_buffer_view_ui"
+path = "tests/device_buffer_view_ui.rs"
+required-features = ["qualification-legacy-hip-runtime"]
+
+[[test]]
+name = "device_copy_derive_hardware"
+path = "tests/device_copy_derive_hardware.rs"
+required-features = ["qualification-legacy-hip-runtime"]
+
+[[test]]
+name = "managed_memory_hardware"
+path = "tests/managed_memory_hardware.rs"
+required-features = ["qualification-legacy-hip-runtime"]
+
+[[test]]
+name = "operation_scoped_ui"
+path = "tests/operation_scoped_ui.rs"
+required-features = ["qualification-legacy-hip-runtime"]
+
+[[test]]
+name = "vmm_hardware"
+path = "tests/vmm_hardware.rs"
+required-features = ["qualification-legacy-hip-runtime"]
+
+[[test]]
+name = "vmm_typestate_ui"
+path = "tests/vmm_typestate_ui.rs"
+required-features = ["qualification-legacy-hip-runtime"]
 
 [lib]
 name = "fe2o3_core"

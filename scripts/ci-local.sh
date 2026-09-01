@@ -112,6 +112,7 @@ readonly CPU_TEST_PACKAGES=(
   fe2o3-semantic-import
   fe2o3-semantic-query
   fe2o3-semantic-trace
+  fe2o3-runtime
   fe2o3-runtime-model
   fe2o3-verifier
   reserved-fe2o3-symbols
@@ -705,7 +706,8 @@ run_cpu_tests() {
 }
 
 run_auxiliary_tests() {
-  # fe2o3-core unit tests link HIP, but its compile-fail doctests do not.
+  # The default core is a DeviceCopy-only contract crate. Deprecated HIP/HSA
+  # compatibility is qualified separately and never enters default resolution.
   run_step core-doc-tests cargo test --locked --doc -p fe2o3-core
   run_step device-copy-renamed-dependency \
     cargo check --locked -p device-copy-renamed-dependency
@@ -716,6 +718,20 @@ run_auxiliary_tests() {
   run_step core-production-runtime-surface-ui \
     env FE2O3_HIP_SYS_DISABLE=1 \
       cargo test --locked -p fe2o3-core --test production_runtime_surface_ui
+  run_step kfd-default-dependency-closure \
+    cargo test --locked -p cargo-fe2o3 --test production_dependency_closure
+  run_step deprecated-hip-core-qualification \
+    env FE2O3_HIP_SYS_DISABLE=1 \
+      cargo test --locked -p fe2o3-core \
+        --features qualification-legacy-hip-runtime
+  run_step deprecated-hip-hsa-host-qualification \
+    env FE2O3_HIP_SYS_DISABLE=1 FE2O3_HSA_RUNTIME_DISABLE=1 \
+      cargo test --locked -p fe2o3-host \
+        --features qualification-legacy-hip-hsa
+  run_step deprecated-hsa-runtime-qualification \
+    env FE2O3_HIP_SYS_DISABLE=1 FE2O3_HSA_RUNTIME_DISABLE=1 \
+      cargo test --locked -p fe2o3-hsa-runtime \
+        --features qualification-legacy-hsa-runtime
   run_step compiler-execution-systemd-contract \
     bash scripts/tests/compiler-execution-systemd.sh
   run_step compiler-execution-deployment-bundle-contract \
@@ -920,14 +936,20 @@ run_backend_build() {
 }
 
 run_verus() {
+  local default_verus="${VERUS:-verus}"
+  local runtime_model_verus="${FE2O3_RUNTIME_MODEL_VERUS:-${default_verus}}"
   run_step runtime-model-verus \
-    "${REPO_ROOT}/crates/fe2o3-runtime-model/verus/verify-verus.sh"
+    env VERUS="${runtime_model_verus}" \
+      "${REPO_ROOT}/crates/fe2o3-runtime-model/verus/verify-verus.sh"
   run_step verus-fixtures \
-    "${REPO_ROOT}/examples/verus_vecadd/run-verus.sh" --require
+    env VERUS="${default_verus}" \
+      "${REPO_ROOT}/examples/verus_vecadd/run-verus.sh" --require
   run_step scalar-gemm-verus \
-    "${REPO_ROOT}/examples/scalar_gemm_v1/run-verus.sh" --require
+    env VERUS="${default_verus}" \
+      "${REPO_ROOT}/examples/scalar_gemm_v1/run-verus.sh" --require
   run_step mir-pliron-per-compilation-verus \
-    "${REPO_ROOT}/scripts/test-mir-pliron-per-compilation-verus.sh"
+    env VERUS="${default_verus}" \
+      "${REPO_ROOT}/scripts/test-mir-pliron-per-compilation-verus.sh"
 }
 
 run_authority_launcher_tests() {
@@ -1017,6 +1039,7 @@ run_parity_matrix_checks() {
   run_step parity-matrix-check bash scripts/parity-matrix.sh check
   run_step parity-matrix-tests bash scripts/tests/parity-matrix.sh
   run_step parity-evidence-tests bash scripts/tests/parity-evidence.sh
+  run_step parity-snapshot-tests bash scripts/tests/run-parity-snapshot.sh
   run_step parity-oci-executor-tests \
     bash scripts/tests/parity-oci-executor.sh
   run_step parity-oci-operator-tests \
@@ -1031,6 +1054,11 @@ run_parity_matrix_checks() {
     python3 scripts/tests/parity-signed-evidence-fd.py
   run_step parity-repository-rules-tests \
     bash scripts/tests/parity-repository-rules.sh
+  run_step canonical-repository-rules-tests \
+    bash scripts/tests/canonical-repository-rules.sh
+  run_step canonical-release-controls-tests \
+    bash scripts/tests/canonical-release-controls.sh
+  run_step dco-range-tests bash scripts/tests/check-dco-range.sh
   run_step mi300x-evidence-queue-tests \
     bash scripts/tests/mi300x-evidence-queue.sh
   run_step hosted-parity-ci-tests \
@@ -1050,6 +1078,8 @@ run_generic_core() {
   run_format
   run_check
   run_backend_build
+  run_step quickstart-shell-tests bash scripts/tests/quickstart.sh
+  run_step no-gpu-source-quickstart bash scripts/quickstart.sh no-gpu
   run_step ci-local-test-gate bash scripts/tests/ci-local-test-gate.sh
   run_cpu_tests
   run_rustc_codegen_lib_tests
@@ -1082,7 +1112,7 @@ run_rocm_compile() {
   validate_cargo_fe2o3_driver
   run_step rocm-doctor \
     env "${loader_environment_removals[@]}" \
-      "${CARGO_FE2O3_BINARY}" doctor
+      "${CARGO_FE2O3_BINARY}" doctor --require-gfx942-and-tools-present
   run_step rocm-production-extraction-safe-kernel \
     env "${loader_environment_removals[@]}" \
       cargo test --locked -p rustc-codegen-fe2o3 \

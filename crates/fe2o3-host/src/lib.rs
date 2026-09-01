@@ -1,22 +1,35 @@
 #[cfg(target_os = "linux")]
 mod application_descriptor_handoff;
+#[cfg(feature = "qualification-legacy-hip-hsa")]
 mod argument_alias;
+#[cfg(feature = "qualification-legacy-hip-hsa")]
 mod artifact_binding;
 #[cfg(target_os = "linux")]
 mod compiler_execution_current_record_audit;
+mod compiler_generated_contract;
+mod generated_argument_borrow;
 mod generated_argument_plan;
 mod generated_kfd_arguments;
 mod generated_kfd_invocation;
+#[cfg(feature = "qualification-legacy-hip-hsa")]
 mod generated_worker_v3_dispatch;
+#[cfg(feature = "qualification-legacy-hip-hsa")]
 mod hsa_executable_lifecycle;
+#[cfg(feature = "qualification-legacy-hip-hsa")]
 mod prepared_launch;
 #[cfg(target_os = "linux")]
 mod production_application;
+#[cfg(feature = "qualification-legacy-hip-hsa")]
 mod published_direct_link;
+#[cfg(feature = "qualification-legacy-hip-hsa")]
 mod published_hsaco_inspection;
 mod recovered_worker_v3_admission;
-#[cfg(any(test, feature = "hardware-test-hooks"))]
+#[cfg(all(
+    feature = "qualification-legacy-hip-hsa",
+    any(test, feature = "hardware-test-hooks")
+))]
 mod test_currentness_retry;
+#[cfg(feature = "qualification-legacy-hip-hsa")]
 mod tile_interop;
 mod worker_v3_verification_admission;
 
@@ -85,33 +98,38 @@ pub use application_descriptor_handoff::consume_inherited_worker_v3_application_
 pub use application_descriptor_handoff::{
     ApplicationDescriptorHandoffErrorV1, WorkerV3ApplicationDescriptorHandoffErrorV1,
 };
+#[cfg(feature = "qualification-legacy-hip-hsa")]
+#[doc(hidden)]
+pub use argument_alias::GeneratedSliceArgumentPairV1;
+#[cfg(feature = "qualification-legacy-hip-hsa")]
 pub use argument_alias::{
     AliasAdmissionError, AllocationIdentity, AllocationProvenance, ArgumentAccess,
     ArgumentAccessMode, ArgumentAliasAdmission, ArgumentAliasValidator, AtomicAccess,
     AtomicOperation, AtomicOrdering, AtomicScope, CheckedByteRegion, ConflictSource,
     InvalidAtomicOrdering, RegionError,
 };
+#[cfg(feature = "qualification-legacy-hip-hsa")]
 #[doc(hidden)]
 pub use argument_alias::{
-    GeneratedReadDeviceSlice, GeneratedReadWriteDeviceSlice, GeneratedSliceArgumentPairV1,
-    GeneratedWriteDeviceSlice,
+    GeneratedReadDeviceSlice, GeneratedReadWriteDeviceSlice, GeneratedWriteDeviceSlice,
 };
+#[cfg(feature = "qualification-legacy-hip-hsa")]
 pub use artifact_binding::{
     ARTIFACT_KERNEL_IDENTITY_VERSION, ArtifactBindingError, ArtifactKernelIdentityV1,
     ArtifactLaunchContractError, ArtifactRevalidationError, ValidatedArtifactSelectionV1,
-};
-#[doc(hidden)]
-pub use artifact_binding::{
-    CompilerGeneratedKernelExpectationRosterEntryV1, CompilerGeneratedKernelExpectationRosterV1,
-    CompilerGeneratedKernelExpectationV1, CompilerGeneratedKernelProfileV1,
-    CompilerGeneratedSemanticWitnessErrorV1, ValidatedCompilerGeneratedSemanticWitnessV1,
-    semantic_witness_from_backend_v1, validate_compiler_generated_semantic_witness_v1,
 };
 #[cfg(target_os = "linux")]
 pub use compiler_execution_current_record_audit::{
     InheritedWorkerV3CompilerCurrentRecordAuditorV1,
     WORKER_V3_COMPILER_CURRENT_RECORD_AUDIT_TIMEOUT_V1, WorkerV3CompilerCurrentRecordAuditErrorV1,
     WorkerV3CompilerCurrentRecordAuditV1,
+};
+#[doc(hidden)]
+pub use compiler_generated_contract::{
+    CompilerGeneratedKernelExpectationRosterEntryV1, CompilerGeneratedKernelExpectationRosterV1,
+    CompilerGeneratedKernelExpectationV1, CompilerGeneratedKernelProfileV1,
+    CompilerGeneratedSemanticWitnessErrorV1, ValidatedCompilerGeneratedSemanticWitnessV1,
+    semantic_witness_from_backend_v1, validate_compiler_generated_semantic_witness_v1,
 };
 pub use fe2o3_aql::{AqlDispatchGeometryV1, AqlGeometryError};
 pub use fe2o3_kernel_descriptor::{BlockSizeV1, DimensionsV1, KernelId, LaunchConstraintsV1};
@@ -138,11 +156,13 @@ pub use generated_kfd_invocation::{
     GeneratedWorkerV3KfdInvocationError,
 };
 #[doc(hidden)]
+#[cfg(feature = "qualification-legacy-hip-hsa")]
 pub use generated_worker_v3_dispatch::{
     CompilerGeneratedWorkerV3ArgumentsV1, GeneratedWorkerV3ArgumentBindingV1,
     GeneratedWorkerV3ArgumentErrorV1, GeneratedWorkerV3PrepareErrorV1,
     GeneratedWorkerV3PreparedInvocationV1,
 };
+#[cfg(feature = "qualification-legacy-hip-hsa")]
 pub use hsa_executable_lifecycle::{
     AuthorizedWorkerV3HsaLoadV1, HsaAgentIdentityV1, HsaCodeObjectLoadObservationV1,
     HsaCompletedDispatchV1, HsaCompletedWorkerV3DispatchV1, HsaDispatchObservationV1,
@@ -154,20 +174,26 @@ pub use hsa_executable_lifecycle::{
     ReviewedHsaImplicitKernargAdapterV1, UnloadedHsaExecutableV1, WorkerV3GeneratedDispatchErrorV1,
     WorkerV3HsaExecutableLoadErrorV1, WorkerV3HsaLoadAuthorizationErrorV1,
 };
+#[cfg(feature = "qualification-legacy-hip-hsa")]
 pub use prepared_launch::{
     ArgumentAdmittedLaunch, CheckedDimensions, DeviceIdentity, KernelBrand, LaunchAxis,
     LaunchDimension, ObservedContext, PrepareLaunchError, PreparedGeometry, PreparedLaunch,
     PreparedResources, UntrustedKernelDeclaration, UntrustedLaunchRequest,
 };
+#[cfg(all(target_os = "linux", feature = "qualification-legacy-hip-hsa"))]
+pub use production_application::{
+    ProductionWorkerV3ApplicationLoadErrorV1, load_inherited_worker_v3_application_v1,
+};
 #[cfg(target_os = "linux")]
 pub use production_application::{
-    ProductionWorkerV3ApplicationLoadErrorV1, ProductionWorkerV3KfdApplicationErrorV1,
-    ProductionWorkerV3KfdPreparationErrorV1, load_inherited_worker_v3_application_v1,
+    ProductionWorkerV3KfdApplicationErrorV1, ProductionWorkerV3KfdPreparationErrorV1,
     prepare_inherited_worker_v3_kfd_application_v1,
 };
+#[cfg(feature = "qualification-legacy-hip-hsa")]
 pub use published_direct_link::{
     PublishedDirectLinkAdmissionError, ValidatedPublishedDirectLinkSelectionV1,
 };
+#[cfg(feature = "qualification-legacy-hip-hsa")]
 pub use published_hsaco_inspection::{
     AMDHSA_KERNEL_IDENTITY_RULE_V1, CurrentPendingPublishedDirectLinkLoadAdmissionV1,
     InspectedPublishedDirectLinkPhysicalLayoutV1, MissingPublishedDirectLinkLoadPrerequisiteV1,
@@ -182,6 +208,7 @@ pub use recovered_worker_v3_admission::{
     WorkerV3HostLineageIdentityV1, admit_recovered_worker_v3_descriptor_v1,
     admit_recovered_worker_v3_roster_v1,
 };
+#[cfg(feature = "qualification-legacy-hip-hsa")]
 pub use tile_interop::{
     GFX942_XOR4_BF16_TILE_COLUMNS_V1, GFX942_XOR4_BF16_TILE_ELEMENTS_V1,
     GFX942_XOR4_BF16_TILE_ROWS_V1, GFX942_XOR4_BF16_TILE_WAVE_LANES_V1, Gfx942TileInteropErrorV1,
@@ -214,29 +241,33 @@ pub use worker_v3_verification_admission::{
 /// not an application extension point.
 #[doc(hidden)]
 pub mod __generated {
+    #[cfg(all(target_os = "linux", feature = "qualification-legacy-hip-hsa"))]
+    pub use crate::production_application::load_admitted_worker_v3_application_v1;
     #[cfg(target_os = "linux")]
-    pub use crate::production_application::{
-        load_admitted_worker_v3_application_v1, prepare_admitted_worker_v3_kfd_application_v1,
-    };
+    pub use crate::production_application::prepare_admitted_worker_v3_kfd_application_v1;
 
     pub use crate::{
         CompilerGeneratedArgumentLayoutV1, CompilerGeneratedKernelExpectationRosterEntryV1,
         CompilerGeneratedKernelExpectationRosterV1, CompilerGeneratedKernelExpectationV1,
         CompilerGeneratedKernelProfileV1, CompilerGeneratedKfdArguments,
-        CompilerGeneratedSemanticWitnessErrorV1, CompilerGeneratedWorkerV3ArgumentsV1,
-        GeneratedArgumentFieldProperty, GeneratedArgumentLayoutError, GeneratedArgumentPackError,
-        GeneratedArgumentPackingError, GeneratedArgumentPackingPlanV1, GeneratedDeviceScalarV1,
-        GeneratedKfdArgumentBinding, GeneratedKfdArgumentError, GeneratedKfdCompletion,
-        GeneratedKfdCompletionError, GeneratedKfdPackedArguments, GeneratedKfdPrepareError,
-        GeneratedKfdReadSlice, GeneratedKfdReadWriteSlice, GeneratedKfdSliceBinding,
-        GeneratedKfdWriteSlice, GeneratedPackingComponentKindV1, GeneratedPackingComponentV1,
-        GeneratedReadDeviceSlice, GeneratedReadWriteDeviceSlice, GeneratedSliceArgumentPairV1,
-        GeneratedWorkerV3ArgumentBindingV1, GeneratedWorkerV3ArgumentErrorV1,
+        CompilerGeneratedSemanticWitnessErrorV1, GeneratedArgumentFieldProperty,
+        GeneratedArgumentLayoutError, GeneratedArgumentPackError, GeneratedArgumentPackingError,
+        GeneratedArgumentPackingPlanV1, GeneratedDeviceScalarV1, GeneratedKfdArgumentBinding,
+        GeneratedKfdArgumentError, GeneratedKfdCompletion, GeneratedKfdCompletionError,
+        GeneratedKfdPackedArguments, GeneratedKfdPrepareError, GeneratedKfdReadSlice,
+        GeneratedKfdReadWriteSlice, GeneratedKfdSliceBinding, GeneratedKfdWriteSlice,
+        GeneratedPackingComponentKindV1, GeneratedPackingComponentV1,
         GeneratedWorkerV3KfdExecutionError, GeneratedWorkerV3KfdInvocation,
-        GeneratedWorkerV3KfdInvocationError, GeneratedWorkerV3PrepareErrorV1,
-        GeneratedWorkerV3PreparedInvocationV1, GeneratedWriteDeviceSlice,
-        ValidatedCompilerGeneratedSemanticWitnessV1, semantic_witness_from_backend_v1,
-        validate_compiler_generated_semantic_witness_v1,
+        GeneratedWorkerV3KfdInvocationError, ValidatedCompilerGeneratedSemanticWitnessV1,
+        semantic_witness_from_backend_v1, validate_compiler_generated_semantic_witness_v1,
+    };
+    #[cfg(feature = "qualification-legacy-hip-hsa")]
+    pub use crate::{
+        CompilerGeneratedWorkerV3ArgumentsV1, GeneratedReadDeviceSlice,
+        GeneratedReadWriteDeviceSlice, GeneratedSliceArgumentPairV1,
+        GeneratedWorkerV3ArgumentBindingV1, GeneratedWorkerV3ArgumentErrorV1,
+        GeneratedWorkerV3PrepareErrorV1, GeneratedWorkerV3PreparedInvocationV1,
+        GeneratedWriteDeviceSlice,
     };
     pub use fe2o3_artifacts::{
         AbiField, AbiKind, Access, AddressSpace, AliasClass, ArgumentOwnership, Mutability, Name,

@@ -3,7 +3,7 @@ name = "fe2o3-tiled-gemm-general-v1"
 version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0 OR MIT"
-repository = "https://github.com/fe2o3-gpu/fe2o3"
+repository = "https://github.com/harsh-nod/fe2o3"
 rust-version = "1.94"
 publish = false
 

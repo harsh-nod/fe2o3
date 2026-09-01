@@ -34,6 +34,16 @@ ruleset was installed as part of this work. An administrator must install it
 out of band and run authenticated remote verification before production
 activation.
 
+As of 2026-09-01, `harsh-nod/fe2o3` and `powderluv/fe2o3` are public
+user-owned repositories. GitHub merge queues are unavailable to user-owned
+repositories, neither repository has this ruleset or a protected publisher
+environment, and the production route is therefore undeployed. Generic CI
+rejects every parity-status change. `scripts/parity-repository-rules.sh`
+refuses to bootstrap or verify merge-queue rules on a user-owned repository.
+Deployment requires an organization-owned repository plus a qualified real
+merge-group run; the design's repository-bound names must be migrated and
+reviewed as part of that deployment.
+
 This repository intentionally contains no active production trust policy and
 no production public or private key. Production promotion therefore fails
 closed until an operator installs protected public-key configuration and
@@ -102,9 +112,11 @@ custody, enrollment, recovery, hardware evidence, or parity requirements.
          --actions-integration-id ACTIONS_INTEGRATION_ID \
          --default-branch main
 
-   `bootstrap` requires repository Administration write permission and refuses
-   to update or replace an existing ruleset. `verify` requires sufficient
-   access for GitHub to return `bypass_actors`; an omitted field fails closed.
+   `bootstrap` requires repository Administration write permission, requires an
+   organization-owned repository, and refuses to update or replace an existing
+   ruleset. `verify` applies the same organization-owner admission and requires
+   sufficient access for GitHub to return `bypass_actors`; an omitted field
+   fails closed.
    The generated policy allows no bypass, pins both workflows to protected
    `main`, requires strict GitHub-Actions-sourced status checks, stale-review
    dismissal, code-owner and last-push review, and an `ALLGREEN` squash merge

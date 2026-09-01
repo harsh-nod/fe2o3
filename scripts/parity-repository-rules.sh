@@ -25,7 +25,9 @@ Usage:
 
 bootstrap requires an authenticated gh token with repository Administration
 write permission. verify requires enough access for bypass_actors to be returned.
-The tool never updates or replaces an existing ruleset.
+The tool never updates or replaces an existing ruleset. Merge-queue rules are
+admitted only for organization-owned repositories because GitHub does not offer
+merge queues to repositories owned by personal accounts.
 EOF
 }
 
@@ -80,6 +82,15 @@ case "${COMMAND}" in
   bootstrap | verify)
     [[ "${REPO}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || die 'invalid --repo'
     command -v gh >/dev/null || die 'gh is required'
+    owner="${REPO%%/*}"
+    owner_type="$(
+      gh api \
+        -H 'Accept: application/vnd.github+json' \
+        -H 'X-GitHub-Api-Version: 2026-03-10' \
+        "users/${owner}" --jq .type
+    )"
+    [[ "${owner_type}" == Organization ]] ||
+      die 'merge-queue rules require an organization-owned repository'
     ;;
   *) die "unknown command: ${COMMAND}" ;;
 esac

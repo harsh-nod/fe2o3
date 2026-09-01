@@ -1,9 +1,20 @@
 # Testing fe2o3
 
 The test matrix separates target-independent checks, Verus proofs, code-object
-compilation, and hardware execution. Every pull request should run the generic
-lane. Proof, compiler, and runtime changes should also run their applicable
-lanes.
+compilation, and hardware execution. Every pull request should run the bounded
+fork-safe preflight:
+
+```text
+cargo fmt --all -- --check
+bash scripts/tests/quickstart.sh
+bash scripts/quickstart.sh source-check examples/vecadd/Cargo.toml
+```
+
+Proof, compiler, runtime, and trust-policy changes should also run their
+applicable broader lanes. GitHub reports the bounded preflight first, then runs
+the full generic core and codegen shards before merge and again on protected
+push. The full matrix is intentionally hour-scale; the preflight provides the
+fast feedback path without weakening the required generic qualification.
 
 ## Generic validation
 
@@ -231,14 +242,19 @@ use KFD rather than the historical HSA harness.
 
 ## Verus proof coverage
 
-Run the two positive vecadd and fill proof harnesses plus all twelve
-expected-rejection mutations with an explicit Verus installation:
+Run the proof harnesses and expected-rejection mutations with the two exact
+Verus installations pinned by the runtime-model and MIR/PLIRON suites:
 
 ```text
-VERUS=/absolute/path/to/verus scripts/ci-local.sh verus
+FE2O3_RUNTIME_MODEL_VERUS=/absolute/path/to/runtime-model/verus \
+VERUS=/absolute/path/to/mir-pliron/verus \
+  scripts/ci-local.sh verus
 ```
 
-This lane requires Verus; an unavailable binary is a failure rather than a
+`FE2O3_RUNTIME_MODEL_VERUS` defaults to `VERUS` for snapshots whose pin-owning
+harnesses use one release. The runtime-model and MIR/PLIRON harnesses verify
+their executable digest and version; the fixture harnesses reuse the latter
+installation. An unavailable or substituted binary is a failure rather than a
 skip. The production `f32` vecadd and Verus expand the exact same control,
 index, guarded memory-access, and write body. The three real-body mutations
 require exactly one primary Verus error, one verification result reporting one

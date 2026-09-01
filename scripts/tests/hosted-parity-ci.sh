@@ -187,8 +187,10 @@ for ownership in \
 done
 
 
-require_text "${GENERIC_WORKFLOW}" 'direct default-branch parity promotion is forbidden; repository rules must prevent this push'
+require_text "${GENERIC_WORKFLOW}" 'no protected merge-queue authority is deployed for this repository'
 require_text "${GENERIC_WORKFLOW}" 'name: Generic parity policy gate'
+require_text "${GENERIC_WORKFLOW}" '    branches:'
+require_text "${GENERIC_WORKFLOW}" '      - "**"'
 require_text "${GENERIC_WORKFLOW}" 'name: Generic validation'
 require_text "${GENERIC_WORKFLOW}" 'name: Generic core'
 require_text "${GENERIC_WORKFLOW}" 'name: Rustc codegen shard (${{ matrix.shard }})'
@@ -252,7 +254,7 @@ fi
 require_text "${GENERIC_WORKFLOW}" 'merge_group:'
 require_text "${GENERIC_WORKFLOW}" 'MERGE_BASE_SHA: ${{ github.event.merge_group.base_sha }}'
 require_text "${GENERIC_WORKFLOW}" 'MERGE_HEAD_SHA: ${{ github.event.merge_group.head_sha }}'
-require_text "${GENERIC_WORKFLOW}" 'authorized only by the protected merge-group reusable workflow'
+require_text "${GENERIC_WORKFLOW}" 'no protected merge-queue authority is deployed for this repository'
 require_text "${GENERIC_WORKFLOW}" 'EVENT_NAME: ${{ github.event_name }}'
 require_text "${GENERIC_WORKFLOW}" 'PUSH_BEFORE_SHA: ${{ github.event.before }}'
 require_text "${GENERIC_WORKFLOW}" 'EVENT_HEAD_SHA: ${{ github.sha }}'

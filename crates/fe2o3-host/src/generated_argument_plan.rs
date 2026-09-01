@@ -1,4 +1,4 @@
-use crate::{KernelId, argument_alias::GeneratedArgumentBorrowV1};
+use crate::{KernelId, generated_argument_borrow::GeneratedArgumentBorrowV1};
 use fe2o3_artifacts::{
     AbiField, AbiKind, AbiLayout, Access, AddressSpace, AliasClass, ArgumentOwnership,
     MAX_ABI_BYTES, Mutability, PointerWidth, RustDisjointIndexSpaceV1, RustLayoutEvidenceV1,
@@ -6,7 +6,6 @@ use fe2o3_artifacts::{
     RustScalarElementTypeV1, RustSourceTypeShapeV1, RustTypeEvidenceV1, RustcAbiClassV1,
     ScalarType, TypeIdentity, ValidationError,
 };
-use fe2o3_core::DeviceCopy;
 use fe2o3_kernel_descriptor::{
     AccessMode as DescriptorAccessMode, AliasSemantics as DescriptorAliasSemantics,
     DeviceDescriptorTableV1, KernelDescriptorV1, LogicalArgumentV1,
@@ -24,7 +23,9 @@ mod generated_device_scalar_seal {
 /// layout identities. Its methods derive identities from the shared canonical
 /// `RustLayoutEvidenceV1` schema rather than from byte width alone.
 #[doc(hidden)]
-pub trait GeneratedDeviceScalarV1: generated_device_scalar_seal::Sealed + DeviceCopy {
+pub trait GeneratedDeviceScalarV1:
+    generated_device_scalar_seal::Sealed + Copy + Send + Sync + 'static
+{
     #[doc(hidden)]
     const ABI_SCALAR_TYPE: ScalarType;
     #[doc(hidden)]
@@ -416,6 +417,7 @@ pub struct GeneratedArgumentInputV1<'allocation> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg(feature = "qualification-legacy-hip-hsa")]
 pub(crate) struct GeneratedSliceInputDescriptionV1 {
     pub(crate) argument_index: usize,
     pub(crate) address: u64,
@@ -425,6 +427,7 @@ pub(crate) struct GeneratedSliceInputDescriptionV1 {
 }
 
 impl GeneratedArgumentInputV1<'_> {
+    #[cfg(feature = "qualification-legacy-hip-hsa")]
     pub(crate) fn slice_description_v1(&self) -> Option<GeneratedSliceInputDescriptionV1> {
         let GeneratedArgumentValueV1::Slice {
             address,
@@ -733,6 +736,7 @@ impl GeneratedArgumentPackingPlanV1 {
         )
     }
 
+    #[cfg(feature = "qualification-legacy-hip-hsa")]
     pub(crate) fn bind_generated_read_slice_v1<'allocation, T: GeneratedDeviceScalarV1>(
         &self,
         argument_index: usize,
@@ -749,6 +753,7 @@ impl GeneratedArgumentPackingPlanV1 {
         )
     }
 
+    #[cfg(feature = "qualification-legacy-hip-hsa")]
     pub(crate) fn bind_generated_read_write_slice_v1<'allocation, T: GeneratedDeviceScalarV1>(
         &self,
         argument_index: usize,
@@ -765,6 +770,7 @@ impl GeneratedArgumentPackingPlanV1 {
         )
     }
 
+    #[cfg(feature = "qualification-legacy-hip-hsa")]
     pub(crate) fn bind_generated_write_slice_v1<'allocation, T: GeneratedDeviceScalarV1>(
         &self,
         argument_index: usize,
@@ -959,6 +965,7 @@ impl GeneratedArgumentPackingPlanV1 {
         )
     }
 
+    #[cfg(feature = "qualification-legacy-hip-hsa")]
     fn bind_generated_slice_v1<'allocation, T: GeneratedDeviceScalarV1>(
         &self,
         argument_index: usize,
@@ -2567,14 +2574,17 @@ fn packing_components(layout: &AbiLayout) -> Vec<GeneratedPackingComponentV1> {
 mod tests {
     use std::num::NonZeroU64;
 
+    #[cfg(feature = "qualification-legacy-hip-hsa")]
+    use super::GeneratedArgumentBorrowV1;
     use super::{
-        CompilerGeneratedArgumentLayoutV1, GeneratedArgumentBorrowV1,
-        GeneratedArgumentFieldProperty, GeneratedArgumentLayoutError, GeneratedArgumentPackError,
-        GeneratedArgumentPackingError, GeneratedArgumentValueV1, GeneratedDeviceScalarV1,
-        GeneratedPackingComponentKindV1, validate_argument_packing,
-        validate_worker_v3_argument_packing,
+        CompilerGeneratedArgumentLayoutV1, GeneratedArgumentFieldProperty,
+        GeneratedArgumentLayoutError, GeneratedArgumentPackError, GeneratedArgumentPackingError,
+        GeneratedArgumentValueV1, GeneratedDeviceScalarV1, GeneratedPackingComponentKindV1,
+        validate_argument_packing, validate_worker_v3_argument_packing,
     };
-    use crate::{KernelId, argument_alias::generated_argument_borrow_for_test};
+    use crate::KernelId;
+    #[cfg(feature = "qualification-legacy-hip-hsa")]
+    use crate::generated_argument_borrow::generated_argument_borrow_for_test;
     use fe2o3_amd_target::AmdTargetId;
     use fe2o3_artifacts::{
         AbiField, AbiKind, AbiLayout, Access, AddressSpace, AliasClass, ArgumentOwnership,
@@ -2601,6 +2611,7 @@ mod tests {
         )
     }
 
+    #[cfg(feature = "qualification-legacy-hip-hsa")]
     fn borrow() -> GeneratedArgumentBorrowV1<'static> {
         generated_argument_borrow_for_test()
     }
@@ -3345,6 +3356,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "qualification-legacy-hip-hsa")]
     fn type_safe_binding_rejects_same_size_scalar_and_slice_substitutions() {
         let scalar_field = canonical_scalar::<f32>("value");
         let scalar_manifest = layout(vec![scalar_field.clone()], 4, 4);
@@ -3372,6 +3384,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "qualification-legacy-hip-hsa")]
     fn safe_slice_binding_checks_canonical_effects_and_seals_values_to_the_plan() {
         let shared = canonical_slice::<f32>("input", false, Access::ReadOnly);
         let shared_manifest = layout(vec![shared.clone()], 16, 8);
@@ -3425,6 +3438,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "qualification-legacy-hip-hsa")]
     fn assert_read_slice_field_mismatch(field: AbiField, property: GeneratedArgumentFieldProperty) {
         let manifest = layout(vec![field.clone()], 16, 8);
         let plan = validate(&manifest, &generated(vec![field], 16, 8)).unwrap();
@@ -3439,6 +3453,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "qualification-legacy-hip-hsa")]
     fn safe_slice_binding_checks_element_address_ownership_and_alias_facts() {
         let identity =
             <f32 as GeneratedDeviceScalarV1>::shared_slice_type_identity_v1(PointerWidth::Bits64);

@@ -6,11 +6,14 @@ use crate::{
     AqlDispatchGeometryV1, AuthenticatedWorkerV3ExecutableV1, CheckedGfx942XnackMinusDevice,
     CompilerGeneratedKernelExpectationV1, CompilerGeneratedKfdArguments,
     GeneratedWorkerV3KfdInvocation, GeneratedWorkerV3KfdInvocationError,
-    LoadedWorkerV3HsaExecutableV1, ObservedContext, RecoveredWorkerV3PinnedDescriptorV1,
-    ReviewedHsaExecutableLifecycleAdapterV1, WorkerV3ApplicationDescriptorHandoffErrorV1,
-    WorkerV3HsaExecutableLoadErrorV1, WorkerV3HsaLoadAuthorizationErrorV1,
+    RecoveredWorkerV3PinnedDescriptorV1, WorkerV3ApplicationDescriptorHandoffErrorV1,
     WorkerV3VerificationAuthenticationErrorV1, WorkerV3VerifierV1,
     consume_inherited_worker_v3_application_handoff_v1,
+};
+#[cfg(feature = "qualification-legacy-hip-hsa")]
+use crate::{
+    LoadedWorkerV3HsaExecutableV1, ObservedContext, ReviewedHsaExecutableLifecycleAdapterV1,
+    WorkerV3HsaExecutableLoadErrorV1, WorkerV3HsaLoadAuthorizationErrorV1,
 };
 
 /// Failure while authenticating and preparing one generated pure-KFD invocation.
@@ -154,6 +157,7 @@ where
 }
 
 /// Failure at one mandatory stage of the HSA-backed application migration transaction.
+#[cfg(feature = "qualification-legacy-hip-hsa")]
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum ProductionWorkerV3ApplicationLoadErrorV1<VE, AE> {
@@ -163,6 +167,7 @@ pub enum ProductionWorkerV3ApplicationLoadErrorV1<VE, AE> {
     ExecutableLoad(WorkerV3HsaExecutableLoadErrorV1<AE>),
 }
 
+#[cfg(feature = "qualification-legacy-hip-hsa")]
 impl<VE: fmt::Display, AE: fmt::Display> fmt::Display
     for ProductionWorkerV3ApplicationLoadErrorV1<VE, AE>
 {
@@ -182,6 +187,7 @@ impl<VE: fmt::Display, AE: fmt::Display> fmt::Display
     }
 }
 
+#[cfg(feature = "qualification-legacy-hip-hsa")]
 impl<VE, AE> Error for ProductionWorkerV3ApplicationLoadErrorV1<VE, AE>
 where
     VE: Error + 'static,
@@ -209,6 +215,7 @@ where
 /// The caller must invoke this operation before creating threads, installing signal handlers that
 /// can access the environment or descriptor table, spawning descendants, or allowing unrelated
 /// descriptor mutation. A hostile same-process caller violates this cooperative startup contract.
+#[cfg(feature = "qualification-legacy-hip-hsa")]
 pub unsafe fn load_inherited_worker_v3_application_v1<K, V, A>(
     kernel_id: KernelId,
     observed: &ObservedContext,
@@ -231,10 +238,10 @@ where
 
 /// Loads an already-admitted descriptor through the HSA migration boundary.
 ///
-/// This lower-level operation supports generated application glue and tests that obtain descriptor
-/// custody independently. Applications launched by `cargo fe2o3` should use
-/// [`load_inherited_worker_v3_application_v1`].
+/// This lower-level operation exists only for the deprecated HSA qualification surface. Production
+/// applications use the direct-KFD preparation boundary.
 #[doc(hidden)]
+#[cfg(feature = "qualification-legacy-hip-hsa")]
 pub fn load_admitted_worker_v3_application_v1<K, V, A>(
     admission: RecoveredWorkerV3PinnedDescriptorV1,
     observed: &ObservedContext,

@@ -7,6 +7,11 @@
 //! only C-layout data, request encodings, and fail-closed version admission for
 //! a later syscall adapter. The admitted schema is pinned to KFD UAPI 1.18 as
 //! shipped by the active AMDGPU 6.16.13 DKMS driver on the MI300X test host.
+//!
+//! Source provenance is frozen in the schema manifests and crate README.
+//! Third-party notices cover the transcribed AMD KFD records and constants.
+//! The fe2o3-authored encoder implements reviewed Linux `_IOC` ABI facts;
+//! its provenance is recorded separately in `THIRD_PARTY_LICENSES.md`.
 
 mod debug_trap;
 mod event;

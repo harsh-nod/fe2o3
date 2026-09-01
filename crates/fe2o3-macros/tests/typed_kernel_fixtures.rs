@@ -80,8 +80,8 @@ fn generated_global_mut_arguments_reject_forgery_and_substitution() {
         (
             "global_mut_wrong_mutability",
             &[
-                "expected `GeneratedReadWriteDeviceSlice",
-                "found `GeneratedReadDeviceSlice",
+                "expected `GeneratedKfdReadWriteSlice",
+                "found `GeneratedKfdReadSlice",
             ],
         ),
         ("global_mut_raw_escape", &["no method named `as_raw`"]),
@@ -146,7 +146,7 @@ fn generated_worker_v3_adapter_rejects_unsafe_escape_hatches() {
             "multi_abi_substitution",
             &[
                 "error[E0277]",
-                "CompilerGeneratedWorkerV3ArgumentsV1",
+                "CompilerGeneratedKfdArguments",
                 "is not implemented",
             ],
         ),
@@ -157,34 +157,6 @@ fn generated_worker_v3_adapter_rejects_unsafe_escape_hatches() {
         (
             "kfd_mutable_alias",
             &["cannot borrow `*output` as mutable more than once"],
-        ),
-        (
-            "hsa_arguments_reject_kfd_route",
-            &[
-                "error[E0277]",
-                "CompilerGeneratedKfdArguments",
-                "is not implemented",
-            ],
-        ),
-        (
-            "kfd_arguments_reject_hsa_route",
-            &[
-                "error[E0277]",
-                "CompilerGeneratedWorkerV3ArgumentsV1",
-                "is not implemented",
-            ],
-        ),
-        (
-            "mapped_hsa_route_rejected",
-            &[
-                "error[E0277]",
-                "CompilerGeneratedWorkerV3ArgumentsV1",
-                "is not implemented",
-            ],
-        ),
-        (
-            "multi_double_launch",
-            &["error[E0382]", "use of moved value: `prepared`"],
         ),
     ];
 

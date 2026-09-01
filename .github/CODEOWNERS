@@ -12,3 +12,38 @@
 /.github/workflows/source-isa-unit-matrix.yml @powderluv
 /.github/CODEOWNERS @powderluv
 /.github/parity-trust-reviewers.txt @powderluv
+
+# Community and release policy.
+/README.md @harsh-nod @powderluv
+/LICENSE-APACHE @harsh-nod @powderluv
+/LICENSE-MIT @harsh-nod @powderluv
+/CHANGELOG.md @harsh-nod @powderluv
+/CODE_OF_CONDUCT.md @harsh-nod @powderluv
+/CONTRIBUTING.md @harsh-nod @powderluv
+/MAINTAINERS.md @harsh-nod @powderluv
+/SECURITY.md @harsh-nod @powderluv
+/SUPPORT.md @harsh-nod @powderluv
+/THIRD_PARTY_LICENSES.md @harsh-nod @powderluv
+/.github/ISSUE_TEMPLATE/ @harsh-nod @powderluv
+/.github/pull_request_template.md @harsh-nod @powderluv
+/.github/dependabot.yml @harsh-nod @powderluv
+/.github/workflows/pr-preflight.yml @harsh-nod @powderluv
+/.github/workflows/release.yml @harsh-nod @powderluv
+/docs/release-process.md @harsh-nod @powderluv
+/scripts/canonical-repository-rules.py @harsh-nod @powderluv
+/scripts/canonical-repository-rules.sh @harsh-nod @powderluv
+/scripts/tests/canonical-repository-rules.sh @harsh-nod @powderluv
+/scripts/canonical-release-controls.py @harsh-nod @powderluv
+/scripts/canonical-release-controls.sh @harsh-nod @powderluv
+/scripts/tests/canonical-release-controls.sh @harsh-nod @powderluv
+/scripts/quickstart.sh @harsh-nod @powderluv
+/scripts/tests/quickstart.sh @harsh-nod @powderluv
+/scripts/tests/community-release-metadata.sh @harsh-nod @powderluv
+/scripts/check-release-archive-attributes.sh @harsh-nod @powderluv
+/scripts/tests/release-archive-attributes.sh @harsh-nod @powderluv
+/scripts/check-release-mirror.sh @harsh-nod @powderluv
+/scripts/tests/release-mirror.sh @harsh-nod @powderluv
+/scripts/check-dco-range.py @harsh-nod @powderluv
+/scripts/tests/check-dco-range.sh @harsh-nod @powderluv
+/Cargo.toml @harsh-nod @powderluv
+**/Cargo.toml @harsh-nod @powderluv

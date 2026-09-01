@@ -10,6 +10,3 @@ publish = false
 [dependencies]
 fe2o3-device.workspace = true
 fe2o3-host.workspace = true
-
-[dev-dependencies]
-fe2o3-core.workspace = true

@@ -14,42 +14,62 @@ error[E0432]: unresolved imports `fe2o3_core::GpuFunction`, `fe2o3_core::GpuModu
 note: found an item that was configured out
  --> src/lib.rs
   |
-  | #[cfg(any(test, feature = "qualification-unsafe-launch"))]
-  |          ----------------------------------------------- the item is gated here
-  | pub use module::{GpuFunction, GpuModule};
-  |                  ^^^^^^^^^^^
+  |   #[cfg(any(
+  |  __________-
+  | |     feature = "qualification-unsafe-launch",
+  | |     all(test, feature = "qualification-legacy-hip-runtime")
+  | | ))]
+  | |_- the item is gated here
+  |   pub use module::{GpuFunction, GpuModule};
+  |                    ^^^^^^^^^^^
 note: found an item that was configured out
  --> src/lib.rs
   |
-  | #[cfg(any(test, feature = "qualification-unsafe-launch"))]
-  |          ----------------------------------------------- the item is gated here
-  | pub use module::{GpuFunction, GpuModule};
-  |                               ^^^^^^^^^
+  |   #[cfg(any(
+  |  __________-
+  | |     feature = "qualification-unsafe-launch",
+  | |     all(test, feature = "qualification-legacy-hip-runtime")
+  | | ))]
+  | |_- the item is gated here
+  |   pub use module::{GpuFunction, GpuModule};
+  |                                 ^^^^^^^^^
 note: found an item that was configured out
  --> src/lib.rs
   |
-  | #[cfg(any(test, feature = "qualification-unsafe-launch"))]
-  |          ----------------------------------------------- the item is gated here
-  | pub use launch::{KernelParams, LaunchConfig, launch_kernel_on_stream};
-  |                  ^^^^^^^^^^^^
+  |   #[cfg(any(
+  |  __________-
+  | |     feature = "qualification-unsafe-launch",
+  | |     all(test, feature = "qualification-legacy-hip-runtime")
+  | | ))]
+  | |_- the item is gated here
+  |   pub use launch::{KernelParams, LaunchConfig, launch_kernel_on_stream};
+  |                    ^^^^^^^^^^^^
 note: found an item that was configured out
  --> src/lib.rs
   |
-  | #[cfg(any(test, feature = "qualification-unsafe-launch"))]
-  |          ----------------------------------------------- the item is gated here
-  | pub use launch::{KernelParams, LaunchConfig, launch_kernel_on_stream};
-  |                                ^^^^^^^^^^^^
+  |   #[cfg(any(
+  |  __________-
+  | |     feature = "qualification-unsafe-launch",
+  | |     all(test, feature = "qualification-legacy-hip-runtime")
+  | | ))]
+  | |_- the item is gated here
+  |   pub use launch::{KernelParams, LaunchConfig, launch_kernel_on_stream};
+  |                                  ^^^^^^^^^^^^
 note: found an item that was configured out
  --> src/lib.rs
   |
-  | #[cfg(test)]
-  |       ---- the item is gated here
+  | #[cfg(all(test, feature = "qualification-legacy-hip-runtime"))]
+  |           ---- the item is gated here
   | pub use cooperative::launch_cooperative_kernel_on_stream;
   |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 note: found an item that was configured out
  --> src/lib.rs
   |
-  | #[cfg(any(test, feature = "qualification-unsafe-launch"))]
-  |          ----------------------------------------------- the item is gated here
-  | pub use launch::{KernelParams, LaunchConfig, launch_kernel_on_stream};
-  |                                              ^^^^^^^^^^^^^^^^^^^^^^^
+  |   #[cfg(any(
+  |  __________-
+  | |     feature = "qualification-unsafe-launch",
+  | |     all(test, feature = "qualification-legacy-hip-runtime")
+  | | ))]
+  | |_- the item is gated here
+  |   pub use launch::{KernelParams, LaunchConfig, launch_kernel_on_stream};
+  |                                                ^^^^^^^^^^^^^^^^^^^^^^^
