@@ -10,6 +10,7 @@ fn worker_v3_verification_typestate_is_closed() {
             "authenticated_roster_entry_cannot_clone.rs",
             "authenticated_roster_entry_cannot_escape.rs",
             "authenticated_roster_load_and_launch_are_unavailable.rs",
+            "compiler_execution_canonical_bridge_is_unavailable.rs",
             "compiler_execution_receipt_cannot_clone.rs",
             "currentness_token_is_unavailable.rs",
             "decision_cannot_clone.rs",
