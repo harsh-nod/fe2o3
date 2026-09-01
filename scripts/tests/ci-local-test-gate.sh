@@ -417,6 +417,54 @@ assert_source_isa_unit_matrix_gate() {
   STEP_COMMANDS=()
 }
 
+assert_source_isa_characteristic_contract_v2_gate() {
+  if (
+    unset FE2O3_RUN_SOURCE_ISA_CHARACTERISTIC_CONTRACT_V2
+    run_source_isa_characteristic_contract_v2
+  ) >/dev/null 2>&1; then
+    printf '%s\n' 'source/ISA characteristic V2 contract ran without its explicit opt-in' >&2
+    exit 1
+  fi
+  export FE2O3_RUN_SOURCE_ISA_CHARACTERISTIC_CONTRACT_V2=1
+  if (
+    uname() {
+      case "$1" in
+        -s) printf '%s\n' Darwin ;;
+        -m) printf '%s\n' x86_64 ;;
+        *) return 2 ;;
+      esac
+    }
+    run_source_isa_characteristic_contract_v2
+  ) >/dev/null 2>&1; then
+    printf '%s\n' 'source/ISA characteristic V2 contract ran on a non-Linux host' >&2
+    exit 1
+  fi
+  if (
+    uname() {
+      case "$1" in
+        -s) printf '%s\n' Linux ;;
+        -m) printf '%s\n' aarch64 ;;
+        *) return 2 ;;
+      esac
+    }
+    run_source_isa_characteristic_contract_v2
+  ) >/dev/null 2>&1; then
+    printf '%s\n' 'source/ISA characteristic V2 contract ran on a non-x86_64 host' >&2
+    exit 1
+  fi
+
+  STEP_NAMES=()
+  STEP_COMMANDS=()
+  run_source_isa_characteristic_contract_v2
+  assert_equals \
+    'cargo test --locked -p cargo-fe2o3 --bin cargo-fe2o3 production_source_isa_characteristic_matrix_v2:: -- --test-threads=1' \
+    "$(step_command source-isa-characteristic-contract-v2)" \
+    'source/ISA characteristic V2 contract did not retain its exact test command'
+  unset FE2O3_RUN_SOURCE_ISA_CHARACTERISTIC_CONTRACT_V2
+  STEP_NAMES=()
+  STEP_COMMANDS=()
+}
+
 codegen_target_prefix() {
   printf 'env CARGO_PROFILE_DEV_DEBUG=1 cargo test --locked -p %s --test ' \
     "${RUSTC_CODEGEN_TEST_PACKAGE}"
@@ -452,6 +500,7 @@ assert_all_codegen_targets_once() {
 }
 
 assert_source_isa_unit_matrix_gate
+assert_source_isa_characteristic_contract_v2_gate
 run_tests
 assert_no_codegen_test_driver
 assert_equals \
@@ -597,6 +646,8 @@ retire_cargo_fe2o3_driver
 run_generic_core
 assert_step_count source-isa-unit-matrix 0 \
   'generic core unexpectedly ran the protected source/ISA unit matrix'
+assert_step_count source-isa-characteristic-contract-v2 0 \
+  'generic core unexpectedly ran the protected source/ISA characteristic V2 contract'
 for core_step in \
   workspace-dependency-policy-tests \
   workspace-dependency-policy \

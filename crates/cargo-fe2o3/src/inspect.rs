@@ -1,6 +1,8 @@
 use std::fmt::Write as _;
-use std::fs::File;
+use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom};
+#[cfg(unix)]
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -14,9 +16,13 @@ use fe2o3_source_isa_observation::agent_v1::{
     SourceIsaAdmittedViewV1, SourceIsaFrameOutcomeViewV1, SourceIsaInspectionV1,
     inspect_source_isa_agent_json_v1, run_agent_source_isa_jsonl_v1,
 };
+use fe2o3_source_isa_observation::characteristic_agent_v1::{
+    AgentSourceIsaCharacteristicServiceV1, run_agent_source_isa_characteristic_jsonl_v1,
+};
+use fe2o3_source_isa_observation::characteristic_v1::MAX_SOURCE_ISA_CHARACTERISTIC_COLLECTION_BYTES_V1;
 use fe2o3_source_isa_observation::wire_v1::MAX_SOURCE_ISA_OBSERVATION_COLLECTION_BYTES_V1;
 
-const USAGE: &str = "usage: cargo fe2o3 inspect [--format auto|container|manifest|bundle|hsaco|source-isa-observation] [--output human|agent-json-v1] [<path>]";
+const USAGE: &str = "usage: cargo fe2o3 inspect [--format auto|container|manifest|bundle|hsaco|source-isa-observation|source-isa-characteristic-v1] [--output human|agent-json-v1] [<path>]";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum InspectFormat {
@@ -26,6 +32,7 @@ enum InspectFormat {
     Bundle,
     Hsaco,
     SourceIsaObservation,
+    SourceIsaCharacteristicV1,
 }
 
 impl InspectFormat {
@@ -37,8 +44,9 @@ impl InspectFormat {
             "bundle" => Ok(Self::Bundle),
             "hsaco" => Ok(Self::Hsaco),
             "source-isa-observation" => Ok(Self::SourceIsaObservation),
+            "source-isa-characteristic-v1" => Ok(Self::SourceIsaCharacteristicV1),
             _ => Err(format!(
-                "unknown inspect format `{value}`; expected auto, container, manifest, bundle, hsaco, or source-isa-observation"
+                "unknown inspect format `{value}`; expected auto, container, manifest, bundle, hsaco, source-isa-observation, or source-isa-characteristic-v1"
             )),
         }
     }
@@ -72,6 +80,7 @@ impl InspectOutput {
 enum CommandAction {
     Print(String),
     AgentJsonl,
+    CharacteristicAgentJsonl(Box<AgentSourceIsaCharacteristicServiceV1>),
 }
 
 pub(crate) fn command(args: &[String]) -> ExitCode {
@@ -91,6 +100,21 @@ pub(crate) fn command(args: &[String]) -> ExitCode {
                 }
             }
         }
+        Ok(CommandAction::CharacteristicAgentJsonl(mut service)) => {
+            let stdin = io::stdin();
+            let stdout = io::stdout();
+            match run_agent_source_isa_characteristic_jsonl_v1(
+                &mut service,
+                &mut stdin.lock(),
+                &mut stdout.lock(),
+            ) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(error) => {
+                    eprintln!("failed to serve characteristic inspect agent JSONL: {error}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
         Err(error) => {
             eprintln!("{error}");
             ExitCode::FAILURE
@@ -105,22 +129,39 @@ fn prepare_command(args: &[String]) -> Result<CommandAction, String> {
     let options = parse_options(args)?;
     match (options.output, options.path) {
         (InspectOutput::Human, Some(path)) => {
+            if options.format == InspectFormat::SourceIsaCharacteristicV1 {
+                return Err(
+                    "source-isa-characteristic-v1 is a versioned agent-json-v1 service; human output is unavailable"
+                        .to_owned(),
+                );
+            }
             let bytes = read_bounded_for_format(&path, options.format)?;
             inspect_bytes(options.format, &bytes)
                 .map(CommandAction::Print)
                 .map_err(|error| format!("failed to inspect {}: {error}", path.display()))
         }
         (InspectOutput::AgentJsonV1, Some(path)) => {
-            if options.format != InspectFormat::SourceIsaObservation {
-                return Err(
-                    "agent-json-v1 path inspection requires --format source-isa-observation"
-                        .to_owned(),
-                );
+            if options.format == InspectFormat::SourceIsaCharacteristicV1 {
+                let bytes = read_stable_characteristic_archive(&path)?;
+                let service =
+                    AgentSourceIsaCharacteristicServiceV1::from_canonical_observation_archive_v1(
+                        &bytes,
+                    )
+                    .map_err(|error| {
+                        format!(
+                            "failed to validate canonical self-claimed characteristic archive {}: {error}",
+                            path.display()
+                        )
+                    })?;
+                return Ok(CommandAction::CharacteristicAgentJsonl(Box::new(service)));
             }
-            let bytes = read_bounded(&path, MAX_SOURCE_ISA_OBSERVATION_COLLECTION_BYTES_V1)?;
-            Ok(CommandAction::Print(inspect_source_isa_agent_json_v1(
-                &bytes,
-            )))
+            if options.format == InspectFormat::SourceIsaObservation {
+                let bytes = read_bounded(&path, MAX_SOURCE_ISA_OBSERVATION_COLLECTION_BYTES_V1)?;
+                return Ok(CommandAction::Print(inspect_source_isa_agent_json_v1(
+                    &bytes,
+                )));
+            }
+            Err("agent-json-v1 path inspection requires --format source-isa-observation or --format source-isa-characteristic-v1".to_owned())
         }
         (InspectOutput::AgentJsonV1, None) => {
             if options.format != InspectFormat::Auto {
@@ -199,6 +240,9 @@ fn read_bounded_for_format(path: &Path, format: InspectFormat) -> Result<Vec<u8>
     let mut file = open_regular_file(path)?;
     let limit = match format {
         InspectFormat::SourceIsaObservation => MAX_SOURCE_ISA_OBSERVATION_COLLECTION_BYTES_V1,
+        InspectFormat::SourceIsaCharacteristicV1 => {
+            MAX_SOURCE_ISA_CHARACTERISTIC_COLLECTION_BYTES_V1
+        }
         InspectFormat::Auto => {
             let mut magic = [0_u8; 8];
             let read = file
@@ -215,6 +259,187 @@ fn read_bounded_for_format(path: &Path, format: InspectFormat) -> Result<Vec<u8>
     file.seek(SeekFrom::Start(0))
         .map_err(|error| format!("failed to rewind {}: {error}", path.display()))?;
     read_open_file_bounded(path, file, limit)
+}
+
+#[cfg(unix)]
+fn read_stable_characteristic_archive(path: &Path) -> Result<Vec<u8>, String> {
+    let mut options = OpenOptions::new();
+    options
+        .read(true)
+        .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    let mut file = options.open(path).map_err(|error| {
+        format!(
+            "failed to open characteristic archive {} without following symlinks: {error}",
+            path.display()
+        )
+    })?;
+    let opened = file.metadata().map_err(|error| {
+        format!(
+            "failed to inspect opened characteristic archive {}: {error}",
+            path.display()
+        )
+    })?;
+    validate_characteristic_archive_metadata(path, &opened)?;
+
+    let size = usize::try_from(opened.len()).map_err(|_| {
+        format!(
+            "characteristic archive {} has an unrepresentable length",
+            path.display()
+        )
+    })?;
+    let first = read_exact_characteristic_archive(path, &mut file, size)?;
+    let after_first = file.metadata().map_err(|error| {
+        format!(
+            "failed to re-inspect characteristic archive {}: {error}",
+            path.display()
+        )
+    })?;
+    if !same_characteristic_archive_object(&opened, &after_first) {
+        return Err(format!(
+            "characteristic archive {} changed during its first read",
+            path.display()
+        ));
+    }
+
+    file.seek(SeekFrom::Start(0)).map_err(|error| {
+        format!(
+            "failed to rewind characteristic archive {}: {error}",
+            path.display()
+        )
+    })?;
+    verify_exact_characteristic_archive(path, &mut file, &first)?;
+    let after_second = file.metadata().map_err(|error| {
+        format!(
+            "failed to re-inspect characteristic archive {}: {error}",
+            path.display()
+        )
+    })?;
+    if !same_characteristic_archive_object(&opened, &after_second) {
+        return Err(format!(
+            "characteristic archive {} changed while it was admitted",
+            path.display()
+        ));
+    }
+    Ok(first)
+}
+
+#[cfg(not(unix))]
+fn read_stable_characteristic_archive(path: &Path) -> Result<Vec<u8>, String> {
+    Err(format!(
+        "strict characteristic archive admission is unavailable on this platform: {}",
+        path.display()
+    ))
+}
+
+#[cfg(unix)]
+fn validate_characteristic_archive_metadata(
+    path: &Path,
+    metadata: &fs::Metadata,
+) -> Result<(), String> {
+    let length = usize::try_from(metadata.len()).ok();
+    if metadata.file_type().is_symlink()
+        || !metadata.is_file()
+        || length.is_none_or(|value| {
+            value == 0 || value > MAX_SOURCE_ISA_CHARACTERISTIC_COLLECTION_BYTES_V1
+        })
+    {
+        return Err(format!(
+            "characteristic archive {} must be a non-symlink regular file containing 1..={} bytes",
+            path.display(),
+            MAX_SOURCE_ISA_CHARACTERISTIC_COLLECTION_BYTES_V1
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn read_exact_characteristic_archive(
+    path: &Path,
+    file: &mut File,
+    size: usize,
+) -> Result<Vec<u8>, String> {
+    let mut bytes = Vec::new();
+    bytes.try_reserve_exact(size).map_err(|_| {
+        format!(
+            "failed to reserve {size} bytes for characteristic archive {}",
+            path.display()
+        )
+    })?;
+    bytes.resize(size, 0);
+    file.read_exact(&mut bytes).map_err(|error| {
+        format!(
+            "failed to read exact characteristic archive {}: {error}",
+            path.display()
+        )
+    })?;
+    let mut trailing = [0_u8; 1];
+    if file.read(&mut trailing).map_err(|error| {
+        format!(
+            "failed to verify characteristic archive {} EOF: {error}",
+            path.display()
+        )
+    })? != 0
+    {
+        return Err(format!(
+            "characteristic archive {} grew beyond its admitted length",
+            path.display()
+        ));
+    }
+    Ok(bytes)
+}
+
+#[cfg(unix)]
+fn verify_exact_characteristic_archive(
+    path: &Path,
+    file: &mut File,
+    expected: &[u8],
+) -> Result<(), String> {
+    let mut buffer = [0_u8; 64 * 1024];
+    let mut offset = 0;
+    while offset < expected.len() {
+        let end = offset.saturating_add(buffer.len()).min(expected.len());
+        let chunk = &mut buffer[..end - offset];
+        file.read_exact(chunk).map_err(|error| {
+            format!(
+                "failed to re-read exact characteristic archive {}: {error}",
+                path.display()
+            )
+        })?;
+        if chunk != &expected[offset..end] {
+            return Err(format!(
+                "characteristic archive {} changed between stable reads",
+                path.display()
+            ));
+        }
+        offset = end;
+    }
+    let mut trailing = [0_u8; 1];
+    if file.read(&mut trailing).map_err(|error| {
+        format!(
+            "failed to verify characteristic archive {} EOF after re-read: {error}",
+            path.display()
+        )
+    })? != 0
+    {
+        return Err(format!(
+            "characteristic archive {} grew during its stable re-read",
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn same_characteristic_archive_object(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    left.dev() == right.dev()
+        && left.ino() == right.ino()
+        && left.mode() == right.mode()
+        && left.nlink() == right.nlink()
+        && left.len() == right.len()
+        && left.mtime() == right.mtime()
+        && left.mtime_nsec() == right.mtime_nsec()
+        && left.ctime() == right.ctime()
+        && left.ctime_nsec() == right.ctime_nsec()
 }
 
 fn read_bounded(path: &Path, limit: usize) -> Result<Vec<u8>, String> {
@@ -280,6 +505,9 @@ fn inspect_bytes(format: InspectFormat, bytes: &[u8]) -> Result<String, String> 
         InspectFormat::SourceIsaObservation => SourceIsaInspectionV1::decode_canonical(bytes)
             .map(|inspection| render_source_isa_observation(&inspection))
             .map_err(|error| format!("invalid source/ISA observation collection: {error}")),
+        InspectFormat::SourceIsaCharacteristicV1 => unreachable!(
+            "source-isa-characteristic-v1 is admitted only by its versioned agent service"
+        ),
     }
 }
 
@@ -341,7 +569,7 @@ fn render_source_isa_observation(inspection: &SourceIsaInspectionV1) -> String {
         writeln!(
             output,
             "frame[{index}].attempt: {}",
-            format!(
+            format_args!(
                 "{}:{}:{}",
                 frame.attempt.generation, frame.attempt.session, frame.attempt.invocation_identity
             )
@@ -403,7 +631,7 @@ fn render_admitted_source_isa_observation(
     writeln!(
         output,
         "frame[{index}].target: {}",
-        format!(
+        format_args!(
             "{}:{}",
             structural.target.architecture, structural.target.features[1]
         )
@@ -885,6 +1113,18 @@ mod tests {
                 format: InspectFormat::SourceIsaObservation,
                 output: InspectOutput::Human,
                 path: Some(PathBuf::from("observations.bin")),
+            })
+        );
+        assert_eq!(
+            parse_options(&[
+                "--format=source-isa-characteristic-v1".into(),
+                "--output=agent-json-v1".into(),
+                "characteristics.bin".into(),
+            ]),
+            Ok(Options {
+                format: InspectFormat::SourceIsaCharacteristicV1,
+                output: InspectOutput::AgentJsonV1,
+                path: Some(PathBuf::from("characteristics.bin")),
             })
         );
         assert_eq!(

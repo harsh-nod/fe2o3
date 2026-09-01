@@ -229,3 +229,31 @@ profiler, publication, load, launch, or runtime authority.
 
 The frozen bridge wire, admission, query, and nonauthority contract is documented in
 `../../docs/production-kir-v7-structural-bridge-v1.md`.
+
+`ProductionSourceIsaCharacteristicCollectionV1` is an additive, bounded producer-side projection
+over an admitted catalog and bridge. It independently verifies the exact target-bound KIR V8 bytes
+and classifies operations only by structure: global plain/guarded stores, workgroup
+plain/guarded/matrix-tile loads and stores, workgroup barriers, and the exact
+BF16-to-F32 M16N16K16 wave64 matrix multiply-accumulate profile. It retains every exact catalog
+record for each matching coordinate, reports source ambiguity without selecting a best match, and
+keeps pre-KIR eliminations as separate facts rather than attributing them to a survivor. A
+target-KIR record whose backend anchor was eliminated remains attached to its characteristic with
+an empty sparse-anchor list; it is not recast as a pre-KIR elimination. Stable catalog ordinals
+preserve exact duplicate records and multiplicity.
+Explicit per-witness, aggregate-correlation, characteristic, and elimination budgets return typed
+unavailability.
+
+This collection is the producer-to-observer conversion boundary, not an observer wire format.
+`release_production_source_isa_characteristic_projection_v1` fallibly copies its exact bindings,
+structural kinds and memory forms, coordinates, stable catalog ordinals, duplicate sparse anchors,
+and separate pre-KIR facts into `fe2o3-source-isa-observation`. The observer binding includes the
+literal KIR version and the catalog and structural-bridge canonical byte lengths. The adapter
+recomputes producer-only attribution and count summaries before release.
+
+`readmit_exact_production_source_isa_characteristic_projection_v1` accepts a decoded inert claim
+only when it equals a fresh projection of independently admitted producer evidence. This equality
+does not return compiler or runtime authority. No workload or kernel name, fixed operation
+ordinal, debugger authority, profiler authority, complete machine coverage, schedule, or live GPU
+state is inferred by either direction. Compiler-handoff LLVM coordinates and sparse final-HSACO
+anchors do not prove optimized/final LLVM custody, decoded ISA opcode semantics, instruction
+scheduling, execution, or performance.

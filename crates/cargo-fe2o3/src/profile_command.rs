@@ -42,10 +42,15 @@ const MAX_ARTIFACT_DEPTH: usize = 8;
 const MAX_PROFILER_IMPORT_SOURCE_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_ARGUMENTS: usize = 256;
 const MAX_ARGUMENT_BYTES: usize = 4096;
+const MAX_OBSERVED_GPU_TARGET_PROFILE_RECORD_BYTES_V1: usize = 512;
 const POLL_INTERVAL: Duration = Duration::from_millis(5);
 const OWNERSHIP_FILE: &str = ".fe2o3-profile-owned-v1";
 const MANIFEST_FILE: &str = "fe2o3-profile-manifest-v1.txt";
 const KFD_TOPOLOGY_ROOT: &str = "/sys/class/kfd/kfd/topology/nodes";
+const EXPECTED_AMD_VENDOR_ID: u64 = 0x1002;
+const GFX942_TARGET_VERSION: u64 = 90_402;
+const GFX950_TARGET_VERSION: u64 = 90_500;
+const PRODUCTION_WAVE_WIDTH: u64 = 64;
 
 const ALLOWED_ENVIRONMENT: &[&str] = &[
     "GPU_DEVICE_ORDINAL",
@@ -299,11 +304,126 @@ struct DeviceIdentity {
     node: u32,
     bytes: Vec<u8>,
     digest: [u8; 32],
+    target_profile: ObservedGpuTargetProfileRecordV1,
 }
 
 impl DeviceIdentity {
     fn content_identity(&self) -> String {
         content_identity(&self.digest, self.bytes.len() as u64)
+    }
+
+    fn target_profile_record(&self) -> String {
+        let (availability, profile, reason) = self.target_profile.status.fields();
+        let record = format!(
+            "schema=fe2o3-observed-gpu-target-profile-v1;origin=direct-kfd-properties;node={};stable-device-identity={};vendor-id={};gfx-target-version={};wave-width={};availability={availability};profile={profile};unavailable-reason={reason}",
+            self.node,
+            self.content_identity(),
+            self.target_profile.vendor_id,
+            self.target_profile.gfx_target_version,
+            self.target_profile.wave_width,
+        );
+        debug_assert!(record.len() <= MAX_OBSERVED_GPU_TARGET_PROFILE_RECORD_BYTES_V1);
+        record
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ObservedGpuTargetProfileRecordV1 {
+    vendor_id: u64,
+    gfx_target_version: u64,
+    wave_width: u64,
+    status: ObservedGpuTargetProfileStatusV1,
+}
+
+impl ObservedGpuTargetProfileRecordV1 {
+    const fn from_direct_kfd_properties(
+        vendor_id: u64,
+        gfx_target_version: u64,
+        wave_width: u64,
+    ) -> Self {
+        let candidate = match gfx_target_version {
+            GFX942_TARGET_VERSION => Some(ObservedGpuTargetProfileV1::Gfx942),
+            GFX950_TARGET_VERSION => Some(ObservedGpuTargetProfileV1::Gfx950),
+            _ => None,
+        };
+        let status = match candidate {
+            None => ObservedGpuTargetProfileStatusV1::Unavailable(
+                ObservedGpuTargetProfileUnavailableReasonV1::UnknownGfxTargetVersion,
+            ),
+            Some(_)
+                if vendor_id != EXPECTED_AMD_VENDOR_ID && wave_width != PRODUCTION_WAVE_WIDTH =>
+            {
+                ObservedGpuTargetProfileStatusV1::Unavailable(
+                    ObservedGpuTargetProfileUnavailableReasonV1::VendorAndWaveWidthContradiction,
+                )
+            }
+            Some(_) if vendor_id != EXPECTED_AMD_VENDOR_ID => {
+                ObservedGpuTargetProfileStatusV1::Unavailable(
+                    ObservedGpuTargetProfileUnavailableReasonV1::VendorContradiction,
+                )
+            }
+            Some(_) if wave_width != PRODUCTION_WAVE_WIDTH => {
+                ObservedGpuTargetProfileStatusV1::Unavailable(
+                    ObservedGpuTargetProfileUnavailableReasonV1::WaveWidthContradiction,
+                )
+            }
+            Some(profile) => ObservedGpuTargetProfileStatusV1::Observed(profile),
+        };
+        Self {
+            vendor_id,
+            gfx_target_version,
+            wave_width,
+            status,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ObservedGpuTargetProfileV1 {
+    Gfx942,
+    Gfx950,
+}
+
+impl ObservedGpuTargetProfileV1 {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Gfx942 => "gfx942",
+            Self::Gfx950 => "gfx950",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ObservedGpuTargetProfileStatusV1 {
+    Observed(ObservedGpuTargetProfileV1),
+    Unavailable(ObservedGpuTargetProfileUnavailableReasonV1),
+}
+
+impl ObservedGpuTargetProfileStatusV1 {
+    const fn fields(self) -> (&'static str, &'static str, &'static str) {
+        match self {
+            Self::Observed(profile) => ("observed", profile.name(), "none"),
+            Self::Unavailable(reason) => ("unavailable", "unavailable", reason.name()),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ObservedGpuTargetProfileUnavailableReasonV1 {
+    UnknownGfxTargetVersion,
+    VendorContradiction,
+    WaveWidthContradiction,
+    VendorAndWaveWidthContradiction,
+}
+
+impl ObservedGpuTargetProfileUnavailableReasonV1 {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::UnknownGfxTargetVersion => "unknown-gfx-target-version",
+            Self::VendorContradiction => "vendor-contradicts-amd-target",
+            Self::WaveWidthContradiction => "wave-width-contradicts-target",
+            Self::VendorAndWaveWidthContradiction => "vendor-and-wave-width-contradict-target",
+        }
     }
 }
 
@@ -733,7 +853,7 @@ fn prepare_plan(options: Options) -> Result<Plan, String> {
     let devices = discover_visible_devices()?;
     let collector_arguments =
         collector_arguments(options.kind, &output_directory, &target, &options)?;
-    let configuration = canonical_configuration(options.kind);
+    let configuration = canonical_configuration(options.kind, &devices);
     let configuration_digest = Sha256::digest(&configuration).into();
     let authorization = authorization_digest(AuthorizationInputs {
         options: &options,
@@ -999,6 +1119,11 @@ fn discover_devices(root: &Path) -> io::Result<Vec<DeviceIdentity>> {
                 "GPU KFD topology has a missing or duplicate stable unique_id",
             ));
         }
+        let target_profile = ObservedGpuTargetProfileRecordV1::from_direct_kfd_properties(
+            required_u64_property(&parsed, node, "vendor_id")?,
+            required_u64_property(&parsed, node, "gfx_target_version")?,
+            required_u64_property(&parsed, node, "wave_front_size")?,
+        );
         let mut bytes = b"fe2o3-kfd-stable-device-v1\n".to_vec();
         for field in fields {
             let value = parsed
@@ -1013,6 +1138,7 @@ fn discover_devices(root: &Path) -> io::Result<Vec<DeviceIdentity>> {
             node,
             digest: Sha256::digest(&bytes).into(),
             bytes,
+            target_profile,
         });
         if devices.len() > MAX_DEVICES {
             return Err(invalid_data(
@@ -1022,6 +1148,18 @@ fn discover_devices(root: &Path) -> io::Result<Vec<DeviceIdentity>> {
     }
     devices.sort_by_key(|device| device.digest);
     Ok(devices)
+}
+
+fn required_u64_property(
+    properties: &BTreeMap<String, String>,
+    node: u32,
+    field: &'static str,
+) -> io::Result<u64> {
+    properties
+        .get(field)
+        .ok_or_else(|| invalid_data(format!("GPU KFD node {node} lacks {field}")))?
+        .parse::<u64>()
+        .map_err(|_| invalid_data(format!("GPU KFD node {node} has an out-of-range {field}")))
 }
 
 fn discover_visible_devices() -> Result<Vec<DeviceIdentity>, String> {
@@ -1107,8 +1245,8 @@ fn collector_arguments(
     Ok(arguments)
 }
 
-fn canonical_configuration(kind: ProfileKind) -> Vec<u8> {
-    let mut bytes = b"fe2o3-rocprofv3-configuration-v1\0".to_vec();
+fn canonical_configuration(kind: ProfileKind, devices: &[DeviceIdentity]) -> Vec<u8> {
+    let mut bytes = b"fe2o3-rocprofv3-configuration-v2\0".to_vec();
     append_field(&mut bytes, kind.name().as_bytes());
     for argument in [
         kind.collector_flag(),
@@ -1118,6 +1256,9 @@ fn canonical_configuration(kind: ProfileKind) -> Vec<u8> {
         kind.output_format(),
     ] {
         append_field(&mut bytes, argument.as_bytes());
+    }
+    for device in devices {
+        append_field(&mut bytes, device.target_profile_record().as_bytes());
     }
     bytes
 }
@@ -1208,6 +1349,7 @@ fn hash_device_bindings(hasher: &mut Sha256, devices: &[DeviceIdentity]) {
         hash_field(hasher, &device.node.to_le_bytes());
         hash_field(hasher, &device.digest);
         hash_field(hasher, &(device.bytes.len() as u64).to_le_bytes());
+        hash_field(hasher, device.target_profile_record().as_bytes());
     }
 }
 
@@ -1387,6 +1529,7 @@ fn render_plan(plan: &Plan) -> String {
             ),
         );
     }
+    render_target_profile_observations(&mut output, &plan.devices);
     render_expected(&mut output, plan.options.kind);
     render_import_plan(&mut output, plan);
     line(
@@ -1421,6 +1564,16 @@ fn identity_lines(output: &mut String, prefix: &str, pin: &FilePin) {
             pin.identity.device, pin.identity.inode, pin.identity.mode
         ),
     );
+}
+
+fn render_target_profile_observations(output: &mut String, devices: &[DeviceIdentity]) {
+    for (index, device) in devices.iter().enumerate() {
+        line(
+            output,
+            &format!("observed-gpu-target-profile-v1[{index}]"),
+            device.target_profile_record(),
+        );
+    }
 }
 
 fn render_expected(output: &mut String, kind: ProfileKind) {
@@ -1466,7 +1619,6 @@ fn render_import_plan(output: &mut String, plan: &Plan) {
     );
     let configuration =
         content_identity(&plan.configuration_digest, plan.configuration.len() as u64);
-    line(output, "next-import-program", "fe2o3-profiler-import");
     if plan.devices.is_empty() {
         line(
             output,
@@ -1482,82 +1634,20 @@ fn render_import_plan(output: &mut String, plan: &Plan) {
     }
     match plan.options.kind {
         ProfileKind::DispatchJson | ProfileKind::DispatchCsv => {
-            let Some(kir) = &plan.options.kir_binding else {
-                line(
-                    output,
-                    "next-import-status",
-                    "unavailable-missing-kir-identity-length-and-wave-width",
-                );
-                line(
-                    output,
-                    "next-query-status",
-                    "unavailable-until-bundle-v4-import",
-                );
-                return;
-            };
-            line(
+            if !render_dispatch_import_plan(
                 output,
-                "next-import-status",
-                "ready-after-collector-artifact-and-source-size-validation",
-            );
-            line(
-                output,
-                "next-import-source-byte-limit",
-                MAX_PROFILER_IMPORT_SOURCE_BYTES,
-            );
-            let command = if plan.options.kind == ProfileKind::DispatchJson {
-                "dispatch-json-v4"
-            } else {
-                "dispatch-csv-v4"
-            };
-            for (index, argument) in [
-                command.to_owned(),
-                "--environment".to_owned(),
+                plan.options.kind,
+                &plan.devices,
+                plan.options.kir_binding.as_ref(),
                 environment,
-                "--tool".to_owned(),
                 tool,
-                "--config".to_owned(),
                 configuration,
-                "--kir-sha256".to_owned(),
-                hex(&kir.digest),
-                "--kir-len".to_owned(),
-                kir.length.to_string(),
-                "--wave-width".to_owned(),
-                kir.wave_width.to_string(),
-            ]
-            .into_iter()
-            .chain(plan.devices.iter().flat_map(|device| {
-                [
-                    "--device-binding".to_owned(),
-                    format!("{}={}", device.node, device.content_identity()),
-                ]
-            }))
-            .enumerate()
-            {
-                line_debug(output, &format!("next-import-arg[{index}]"), &argument);
+            ) {
+                return;
             }
-            line(
-                output,
-                "next-import-stdin",
-                "validated-collected-json-or-csv-artifact",
-            );
-            line(
-                output,
-                "next-import-artifact-identity-origin",
-                "unavailable",
-            );
-            line(
-                output,
-                "next-import-artifact-identity-reason",
-                "profile-target-is-not-proof-of-executed-kernel-code-object",
-            );
-            line(
-                output,
-                "next-comparison-limitation",
-                "duration-deltas-require-a-separately-content-bound-kernel-artifact",
-            );
         }
         ProfileKind::Att => {
+            line(output, "next-import-program", "fe2o3-profiler-import");
             line(
                 output,
                 "next-import-status",
@@ -1607,6 +1697,166 @@ fn render_import_plan(output: &mut String, plan: &Plan) {
     line(output, "next-query-program", "fe2o3-profiler-query");
     line(output, "next-query-arg[0]", "capabilities");
     line(output, "next-query-stdin", "imported-fe2o3prof4-bundle");
+}
+
+fn render_dispatch_import_plan(
+    output: &mut String,
+    kind: ProfileKind,
+    devices: &[DeviceIdentity],
+    kir: Option<&KirBinding>,
+    environment: String,
+    tool: String,
+    configuration: String,
+) -> bool {
+    let Some(kir) = kir else {
+        line(
+            output,
+            "next-import-status",
+            "unavailable-missing-kir-identity-length-and-wave-width",
+        );
+        line(
+            output,
+            "next-query-status",
+            "unavailable-until-bundle-v4-import",
+        );
+        return false;
+    };
+    if devices.iter().any(|device| {
+        matches!(
+            device.target_profile.status,
+            ObservedGpuTargetProfileStatusV1::Unavailable(_)
+        )
+    }) {
+        line(
+            output,
+            "next-import-status",
+            "unavailable-observed-gpu-target-profile",
+        );
+        line(
+            output,
+            "next-import-unavailable-reason",
+            "one-or-more-direct-kfd-target-profiles-unavailable",
+        );
+        for (index, (device, reason)) in devices
+            .iter()
+            .filter_map(|device| match device.target_profile.status {
+                ObservedGpuTargetProfileStatusV1::Observed(_) => None,
+                ObservedGpuTargetProfileStatusV1::Unavailable(reason) => Some((device, reason)),
+            })
+            .enumerate()
+        {
+            line(
+                output,
+                &format!("next-import-unavailable-device[{index}]"),
+                format!("node={};reason={}", device.node, reason.name()),
+            );
+        }
+        line(
+            output,
+            "next-query-status",
+            "unavailable-until-bundle-v4-import",
+        );
+        return false;
+    }
+    if devices
+        .iter()
+        .any(|device| device.target_profile.wave_width != u64::from(kir.wave_width))
+    {
+        line(
+            output,
+            "next-import-status",
+            "unavailable-kir-wave-width-mismatch",
+        );
+        line(
+            output,
+            "next-import-unavailable-reason",
+            "caller-kir-wave-width-does-not-match-observed-direct-kfd-device",
+        );
+        for (index, device) in devices
+            .iter()
+            .filter(|device| device.target_profile.wave_width != u64::from(kir.wave_width))
+            .enumerate()
+        {
+            line(
+                output,
+                &format!("next-import-wave-mismatch-device[{index}]"),
+                format!(
+                    "node={};observed-wave-width={};kir-wave-width={}",
+                    device.node, device.target_profile.wave_width, kir.wave_width
+                ),
+            );
+        }
+        line(
+            output,
+            "next-query-status",
+            "unavailable-until-bundle-v4-import",
+        );
+        return false;
+    }
+
+    line(output, "next-import-program", "fe2o3-profiler-import");
+    line(
+        output,
+        "next-import-status",
+        "ready-after-collector-artifact-and-source-size-validation",
+    );
+    line(
+        output,
+        "next-import-source-byte-limit",
+        MAX_PROFILER_IMPORT_SOURCE_BYTES,
+    );
+    let command = if kind == ProfileKind::DispatchJson {
+        "dispatch-json-v4"
+    } else {
+        "dispatch-csv-v4"
+    };
+    for (index, argument) in [
+        command.to_owned(),
+        "--environment".to_owned(),
+        environment,
+        "--tool".to_owned(),
+        tool,
+        "--config".to_owned(),
+        configuration,
+        "--kir-sha256".to_owned(),
+        hex(&kir.digest),
+        "--kir-len".to_owned(),
+        kir.length.to_string(),
+        "--wave-width".to_owned(),
+        kir.wave_width.to_string(),
+    ]
+    .into_iter()
+    .chain(devices.iter().flat_map(|device| {
+        [
+            "--device-binding".to_owned(),
+            format!("{}={}", device.node, device.content_identity()),
+        ]
+    }))
+    .enumerate()
+    {
+        line_debug(output, &format!("next-import-arg[{index}]"), &argument);
+    }
+    line(
+        output,
+        "next-import-stdin",
+        "validated-collected-json-or-csv-artifact",
+    );
+    line(
+        output,
+        "next-import-artifact-identity-origin",
+        "unavailable",
+    );
+    line(
+        output,
+        "next-import-artifact-identity-reason",
+        "profile-target-is-not-proof-of-executed-kernel-code-object",
+    );
+    line(
+        output,
+        "next-comparison-limitation",
+        "duration-deltas-require-a-separately-content-bound-kernel-artifact",
+    );
+    true
 }
 
 fn collect(plan: Plan) -> Result<CommandReport, String> {
@@ -2084,6 +2334,7 @@ fn render_manifest(plan: &Plan, artifacts: &[Artifact]) -> String {
         "configuration-identity",
         content_identity(&plan.configuration_digest, plan.configuration.len() as u64),
     );
+    render_target_profile_observations(&mut output, &plan.devices);
     render_expected(&mut output, plan.options.kind);
     for (index, artifact) in artifacts.iter().enumerate() {
         line(
@@ -2315,6 +2566,84 @@ fn line_debug(output: &mut String, name: &str, value: impl std::fmt::Debug) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+
+    static NEXT_TOPOLOGY_FIXTURE: AtomicU64 = AtomicU64::new(0);
+
+    struct TopologyFixture {
+        root: PathBuf,
+    }
+
+    impl TopologyFixture {
+        fn new(node: u32, properties: &str) -> Self {
+            let id = NEXT_TOPOLOGY_FIXTURE.fetch_add(1, AtomicOrdering::Relaxed);
+            let root = env::temp_dir().join(format!(
+                "cargo-fe2o3-profile-topology-{}-{id}",
+                std::process::id()
+            ));
+            let node_root = root.join(node.to_string());
+            fs::create_dir_all(&node_root).expect("create topology fixture");
+            fs::write(node_root.join("properties"), properties).expect("write topology properties");
+            Self { root }
+        }
+
+        fn replace(&self, node: u32, properties: &str) {
+            fs::write(
+                self.root.join(node.to_string()).join("properties"),
+                properties,
+            )
+            .expect("replace topology properties");
+        }
+    }
+
+    impl Drop for TopologyFixture {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.root);
+        }
+    }
+
+    fn topology_properties(vendor: u64, target: u64, wave: u64) -> String {
+        format!(
+            "simd_count 1\nunique_id 42\nvendor_id {vendor}\ndevice_id 29857\ndomain 0\nlocation_id 1\ngfx_target_version {target}\nwave_front_size {wave}\nnum_xcc 8\n"
+        )
+    }
+
+    fn profile_device(node: u32, vendor: u64, target: u64, wave: u64) -> DeviceIdentity {
+        let bytes = format!("stable-device-{node}").into_bytes();
+        DeviceIdentity {
+            node,
+            digest: Sha256::digest(&bytes).into(),
+            bytes,
+            target_profile: ObservedGpuTargetProfileRecordV1::from_direct_kfd_properties(
+                vendor, target, wave,
+            ),
+        }
+    }
+
+    fn dispatch_import_output(devices: &[DeviceIdentity], kir_wave: Option<u8>) -> String {
+        let kir = kir_wave.map(|wave_width| KirBinding {
+            digest: [3; 32],
+            length: 17,
+            wave_width,
+        });
+        let mut output = String::new();
+        let _ = render_dispatch_import_plan(
+            &mut output,
+            ProfileKind::DispatchJson,
+            devices,
+            kir.as_ref(),
+            "environment".to_owned(),
+            "tool".to_owned(),
+            "configuration".to_owned(),
+        );
+        output
+    }
+
+    fn assert_no_dispatch_import_command(output: &str) {
+        assert!(!output.contains("next-import-program:"));
+        assert!(!output.contains("next-import-arg["));
+        assert!(!output.contains("ready-after-collector"));
+    }
 
     #[test]
     fn parser_is_closed_and_authorization_is_canonical() {
@@ -2385,6 +2714,11 @@ mod tests {
             node,
             bytes: b"stable-device".to_vec(),
             digest: [7; 32],
+            target_profile: ObservedGpuTargetProfileRecordV1::from_direct_kfd_properties(
+                EXPECTED_AMD_VENDOR_ID,
+                GFX942_TARGET_VERSION,
+                PRODUCTION_WAVE_WIDTH,
+            ),
         };
         let planned = vec![device(2)];
         let remapped = vec![device(7)];
@@ -2400,6 +2734,223 @@ mod tests {
     }
 
     #[test]
+    fn direct_kfd_target_profile_mapping_is_exact_and_typed() {
+        let observed = |target| {
+            ObservedGpuTargetProfileRecordV1::from_direct_kfd_properties(
+                EXPECTED_AMD_VENDOR_ID,
+                target,
+                PRODUCTION_WAVE_WIDTH,
+            )
+        };
+        assert_eq!(
+            observed(GFX942_TARGET_VERSION).status,
+            ObservedGpuTargetProfileStatusV1::Observed(ObservedGpuTargetProfileV1::Gfx942)
+        );
+        assert_eq!(
+            observed(GFX950_TARGET_VERSION).status,
+            ObservedGpuTargetProfileStatusV1::Observed(ObservedGpuTargetProfileV1::Gfx950)
+        );
+        assert_eq!(
+            observed(90_401).status,
+            ObservedGpuTargetProfileStatusV1::Unavailable(
+                ObservedGpuTargetProfileUnavailableReasonV1::UnknownGfxTargetVersion
+            )
+        );
+        let unknown = DeviceIdentity {
+            node: 3,
+            bytes: b"unknown-target-device".to_vec(),
+            digest: [9; 32],
+            target_profile: observed(90_401),
+        }
+        .target_profile_record();
+        assert!(unknown.contains("availability=unavailable;profile=unavailable"));
+        assert!(unknown.ends_with("unavailable-reason=unknown-gfx-target-version"));
+
+        for (vendor, wave, reason) in [
+            (
+                0,
+                PRODUCTION_WAVE_WIDTH,
+                ObservedGpuTargetProfileUnavailableReasonV1::VendorContradiction,
+            ),
+            (
+                EXPECTED_AMD_VENDOR_ID,
+                32,
+                ObservedGpuTargetProfileUnavailableReasonV1::WaveWidthContradiction,
+            ),
+            (
+                0,
+                32,
+                ObservedGpuTargetProfileUnavailableReasonV1::VendorAndWaveWidthContradiction,
+            ),
+        ] {
+            assert_eq!(
+                ObservedGpuTargetProfileRecordV1::from_direct_kfd_properties(
+                    vendor,
+                    GFX942_TARGET_VERSION,
+                    wave,
+                )
+                .status,
+                ObservedGpuTargetProfileStatusV1::Unavailable(reason)
+            );
+        }
+    }
+
+    #[test]
+    fn topology_discovery_reobserves_target_profile_substitutions() {
+        let fixture = TopologyFixture::new(
+            7,
+            &topology_properties(
+                EXPECTED_AMD_VENDOR_ID,
+                GFX942_TARGET_VERSION,
+                PRODUCTION_WAVE_WIDTH,
+            ),
+        );
+        let gfx942 = discover_devices(&fixture.root).expect("discover gfx942");
+        assert_eq!(gfx942.len(), 1);
+        assert!(gfx942[0].target_profile_record().contains(
+            "gfx-target-version=90402;wave-width=64;availability=observed;profile=gfx942"
+        ));
+
+        fixture.replace(
+            7,
+            &topology_properties(EXPECTED_AMD_VENDOR_ID, 90_401, PRODUCTION_WAVE_WIDTH),
+        );
+        let unknown = discover_devices(&fixture.root).expect("discover unknown target");
+        assert_ne!(gfx942, unknown);
+        assert!(
+            unknown[0]
+                .target_profile_record()
+                .ends_with("unavailable-reason=unknown-gfx-target-version")
+        );
+
+        fixture.replace(7, &topology_properties(0, GFX950_TARGET_VERSION, 32));
+        let contradictory = discover_devices(&fixture.root).expect("discover contradiction");
+        assert_ne!(unknown, contradictory);
+        assert!(
+            contradictory[0]
+                .target_profile_record()
+                .ends_with("unavailable-reason=vendor-and-wave-width-contradict-target")
+        );
+    }
+
+    #[test]
+    fn dispatch_import_rejects_every_typed_unavailable_target_profile() {
+        for (device, reason) in [
+            (
+                profile_device(1, EXPECTED_AMD_VENDOR_ID, 90_401, PRODUCTION_WAVE_WIDTH),
+                "unknown-gfx-target-version",
+            ),
+            (
+                profile_device(2, 0, GFX942_TARGET_VERSION, PRODUCTION_WAVE_WIDTH),
+                "vendor-contradicts-amd-target",
+            ),
+            (
+                profile_device(3, EXPECTED_AMD_VENDOR_ID, GFX950_TARGET_VERSION, 32),
+                "wave-width-contradicts-target",
+            ),
+        ] {
+            let output = dispatch_import_output(&[device], Some(64));
+            assert!(output.contains("next-import-status: unavailable-observed-gpu-target-profile"));
+            assert!(output.contains(&format!("reason={reason}")));
+            assert_no_dispatch_import_command(&output);
+        }
+    }
+
+    #[test]
+    fn dispatch_import_rejects_caller_wave_mismatch_without_emitting_arguments() {
+        let devices = [
+            profile_device(
+                1,
+                EXPECTED_AMD_VENDOR_ID,
+                GFX942_TARGET_VERSION,
+                PRODUCTION_WAVE_WIDTH,
+            ),
+            profile_device(
+                2,
+                EXPECTED_AMD_VENDOR_ID,
+                GFX950_TARGET_VERSION,
+                PRODUCTION_WAVE_WIDTH,
+            ),
+        ];
+        let output = dispatch_import_output(&devices, Some(32));
+        assert!(output.contains("next-import-status: unavailable-kir-wave-width-mismatch"));
+        assert!(output.contains("node=1;observed-wave-width=64;kir-wave-width=32"));
+        assert!(output.contains("node=2;observed-wave-width=64;kir-wave-width=32"));
+        assert_no_dispatch_import_command(&output);
+
+        let missing = dispatch_import_output(&devices, None);
+        assert!(missing.contains(
+            "next-import-status: unavailable-missing-kir-identity-length-and-wave-width"
+        ));
+        assert_no_dispatch_import_command(&missing);
+    }
+
+    #[test]
+    fn dispatch_import_is_ready_only_for_observed_wave_compatible_devices() {
+        let devices = [
+            profile_device(
+                1,
+                EXPECTED_AMD_VENDOR_ID,
+                GFX942_TARGET_VERSION,
+                PRODUCTION_WAVE_WIDTH,
+            ),
+            profile_device(
+                2,
+                EXPECTED_AMD_VENDOR_ID,
+                GFX950_TARGET_VERSION,
+                PRODUCTION_WAVE_WIDTH,
+            ),
+        ];
+        let output = dispatch_import_output(&devices, Some(64));
+        assert!(output.contains("next-import-program: fe2o3-profiler-import"));
+        assert!(output.contains(
+            "next-import-status: ready-after-collector-artifact-and-source-size-validation"
+        ));
+        assert!(output.contains("\"--device-binding\""));
+        assert!(output.contains("\"--wave-width\""));
+    }
+
+    #[test]
+    fn target_profile_record_is_canonical_bounded_and_authorized() {
+        let mut device = DeviceIdentity {
+            node: 7,
+            bytes: b"stable-device".to_vec(),
+            digest: [0x42; 32],
+            target_profile: ObservedGpuTargetProfileRecordV1::from_direct_kfd_properties(
+                EXPECTED_AMD_VENDOR_ID,
+                GFX950_TARGET_VERSION,
+                PRODUCTION_WAVE_WIDTH,
+            ),
+        };
+        let record = device.target_profile_record();
+        assert_eq!(
+            record,
+            format!(
+                "schema=fe2o3-observed-gpu-target-profile-v1;origin=direct-kfd-properties;node=7;stable-device-identity={};vendor-id=4098;gfx-target-version=90500;wave-width=64;availability=observed;profile=gfx950;unavailable-reason=none",
+                device.content_identity()
+            )
+        );
+        assert!(record.len() <= MAX_OBSERVED_GPU_TARGET_PROFILE_RECORD_BYTES_V1);
+
+        let digest = |device: &DeviceIdentity| {
+            let mut hasher = Sha256::new();
+            hash_device_bindings(&mut hasher, std::slice::from_ref(device));
+            <[u8; 32]>::from(hasher.finalize())
+        };
+        let authorized = digest(&device);
+        device.target_profile = ObservedGpuTargetProfileRecordV1::from_direct_kfd_properties(
+            EXPECTED_AMD_VENDOR_ID,
+            GFX942_TARGET_VERSION,
+            PRODUCTION_WAVE_WIDTH,
+        );
+        assert_ne!(authorized, digest(&device));
+
+        let mut rendered = String::new();
+        render_target_profile_observations(&mut rendered, &[device]);
+        assert!(rendered.starts_with("observed-gpu-target-profile-v1[0]: schema="));
+    }
+
+    #[test]
     fn relative_artifact_paths_are_closed() {
         for path in ["../escape", "/absolute", "a/../b", "", "a//b"] {
             assert!(validate_relative(path).is_err(), "{path}");
@@ -2408,18 +2959,32 @@ mod tests {
     }
 
     #[test]
-    fn semantic_configuration_identity_changes_only_with_measurement_kind() {
+    fn semantic_configuration_identity_binds_measurement_kind_and_target_records() {
         assert_eq!(
-            canonical_configuration(ProfileKind::DispatchJson),
-            canonical_configuration(ProfileKind::DispatchJson)
+            canonical_configuration(ProfileKind::DispatchJson, &[]),
+            canonical_configuration(ProfileKind::DispatchJson, &[])
         );
         assert_ne!(
-            canonical_configuration(ProfileKind::DispatchJson),
-            canonical_configuration(ProfileKind::DispatchCsv)
+            canonical_configuration(ProfileKind::DispatchJson, &[]),
+            canonical_configuration(ProfileKind::DispatchCsv, &[])
         );
         assert_ne!(
-            canonical_configuration(ProfileKind::DispatchJson),
-            canonical_configuration(ProfileKind::Att)
+            canonical_configuration(ProfileKind::DispatchJson, &[]),
+            canonical_configuration(ProfileKind::Att, &[])
+        );
+        let device = |target| DeviceIdentity {
+            node: 1,
+            bytes: b"stable-device".to_vec(),
+            digest: [1; 32],
+            target_profile: ObservedGpuTargetProfileRecordV1::from_direct_kfd_properties(
+                EXPECTED_AMD_VENDOR_ID,
+                target,
+                PRODUCTION_WAVE_WIDTH,
+            ),
+        };
+        assert_ne!(
+            canonical_configuration(ProfileKind::DispatchJson, &[device(GFX942_TARGET_VERSION)]),
+            canonical_configuration(ProfileKind::DispatchJson, &[device(GFX950_TARGET_VERSION)])
         );
     }
 }

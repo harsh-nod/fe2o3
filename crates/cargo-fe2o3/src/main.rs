@@ -3745,6 +3745,10 @@ fn print_help() {
 #[path = "tests/production_source_isa_unit_matrix_v1.rs"]
 mod production_source_isa_unit_matrix_v1;
 
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+#[path = "tests/production_source_isa_characteristic_matrix_v2.rs"]
+mod production_source_isa_characteristic_matrix_v2;
+
 #[cfg(test)]
 mod tests {
     use super::{
