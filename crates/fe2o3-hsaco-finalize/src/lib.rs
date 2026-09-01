@@ -26,6 +26,7 @@ mod link_plan;
 mod production_kir_v7_structural_bridge_v1;
 mod production_semantic_anchor_v1;
 mod production_source_isa_catalog_v1;
+mod production_source_isa_characteristic_observer_v1;
 mod production_source_isa_characteristic_v1;
 mod production_source_isa_correlation_v1;
 mod request_construction;
@@ -119,6 +120,11 @@ pub use production_source_isa_catalog_v1::{
     ProductionSourceIsaCatalogTransformationV1, ProductionSourceIsaCatalogV1,
     ProductionSourceIsaKirCoordinateV1, ProductionSourceIsaLlvmCoordinateV1,
     ProductionSourceIsaMirCoordinateV1,
+};
+pub use production_source_isa_characteristic_observer_v1::{
+    ProductionSourceIsaCharacteristicProjectionErrorV1,
+    readmit_exact_production_source_isa_characteristic_projection_v1,
+    release_production_source_isa_characteristic_projection_v1,
 };
 pub use production_source_isa_characteristic_v1::{
     MAX_PRODUCTION_SOURCE_ISA_CHARACTERISTIC_CORRELATIONS_PER_WITNESS_V1,

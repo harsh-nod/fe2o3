@@ -547,6 +547,34 @@ impl ProductionSourceIsaCatalogRecordV1 {
             transformation,
         }
     }
+
+    #[cfg(test)]
+    pub(crate) fn characteristic_fixture_with_duplicate_isa_v1(
+        source_node_identity: [u8; 32],
+        target_kir: ProductionSourceIsaKirCoordinateV1,
+        transformation: ProductionSourceIsaCatalogTransformationV1,
+    ) -> Self {
+        let mut record = Self::characteristic_fixture_v1(
+            Some(source_node_identity),
+            Some(target_kir),
+            Some(transformation),
+        );
+        let interval = record.isa[0];
+        record.isa.push(interval);
+        record
+    }
+
+    #[cfg(test)]
+    pub(crate) fn characteristic_pre_kir_empty_span_fixture_v1(
+        source_node_identity: [u8; 32],
+    ) -> Self {
+        let mut record = Self::characteristic_fixture_v1(Some(source_node_identity), None, None);
+        record.source_span = Some(
+            DebugSourceMapSpanV1::new_eliminated(source_node_identity, 0, 0, 1, 1)
+                .expect("bounded eliminated characteristic fixture span"),
+        );
+        record
+    }
 }
 
 #[cfg(test)]

@@ -243,12 +243,17 @@ preserve exact duplicate records and multiplicity.
 Explicit per-witness, aggregate-correlation, characteristic, and elimination budgets return typed
 unavailability.
 
-This collection is the producer-to-observer conversion boundary, not an observer wire format. An
-adapter may copy its inert identities, structural kinds, coordinates, and exact correlations into
-an authority-free observer schema. It must bind the observer unit to the collection's target-KIR,
-Source Map V2, artifact, catalog, correlation, semantic-map, and structural-bridge identities, and
-must not admit observer input back into compiler or runtime authority. No workload or kernel name,
-fixed operation ordinal, debugger authority, profiler authority, complete coverage, schedule, or
-live GPU state is inferred by this projection. Compiler-handoff LLVM coordinates and sparse
-final-HSACO anchors do not prove optimized/final LLVM custody, decoded ISA opcode semantics,
-instruction scheduling, execution, or performance.
+This collection is the producer-to-observer conversion boundary, not an observer wire format.
+`release_production_source_isa_characteristic_projection_v1` fallibly copies its exact bindings,
+structural kinds and memory forms, coordinates, stable catalog ordinals, duplicate sparse anchors,
+and separate pre-KIR facts into `fe2o3-source-isa-observation`. The observer binding includes the
+literal KIR version and the catalog and structural-bridge canonical byte lengths. The adapter
+recomputes producer-only attribution and count summaries before release.
+
+`readmit_exact_production_source_isa_characteristic_projection_v1` accepts a decoded inert claim
+only when it equals a fresh projection of independently admitted producer evidence. This equality
+does not return compiler or runtime authority. No workload or kernel name, fixed operation
+ordinal, debugger authority, profiler authority, complete machine coverage, schedule, or live GPU
+state is inferred by either direction. Compiler-handoff LLVM coordinates and sparse final-HSACO
+anchors do not prove optimized/final LLVM custody, decoded ISA opcode semantics, instruction
+scheduling, execution, or performance.
