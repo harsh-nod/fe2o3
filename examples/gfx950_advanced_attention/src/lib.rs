@@ -125,7 +125,6 @@ compile_error!("an AMDGPU build must not select more than one advanced-attention
 #[cfg(all(
     target_arch = "amdgpu",
     any(
-        feature = "kernel-kda-decode-wave-tiled-v1",
         feature = "kernel-content-sparse-attention-reciprocal-reuse-v1",
         feature = "kernel-compressed-hybrid-attention-division-baseline-v1",
         feature = "kernel-attnres-aggregate-explicit-reuse-v1",
@@ -139,11 +138,17 @@ pub mod kernel;
 #[cfg(not(target_arch = "amdgpu"))]
 pub mod reference;
 
-/// Channels written by the recurrent and residual-mixing profiles.
+/// Value channels written by the attention and residual-mixing profiles.
 pub const CHANNELS_V1: usize = 16;
-/// History taps consumed by each KDA/GDN recurrence step.
-pub const KDA_TAPS_V1: usize = 3;
-/// Tokens in the fixed prefill recurrence.
+/// Key dimension of the fixed Kimi Delta Attention profile.
+pub const KDA_KEY_DIMENSION_V1: usize = 16;
+/// Value dimension of the fixed Kimi Delta Attention profile.
+pub const KDA_VALUE_DIMENSION_V1: usize = 16;
+/// FP32 elements in the logical `[K,V]` matrix state.
+pub const KDA_STATE_ELEMENTS_V1: usize = KDA_KEY_DIMENSION_V1 * KDA_VALUE_DIMENSION_V1;
+/// Tokens solved together by each fixed WY/UT prefill chunk.
+pub const KDA_CHUNK_TOKENS_V1: usize = 4;
+/// Tokens in the fixed two-chunk prefill profile.
 pub const PREFILL_TOKENS_V1: usize = 8;
 /// Tokens in the sparse and compressed-hybrid attention fixtures.
 pub const ATTENTION_TOKENS_V1: usize = 16;
@@ -166,8 +171,10 @@ pub const MIXING_STREAMS_V1: usize = 4;
 /// Sinkhorn row/column normalization iterations.
 pub const SINKHORN_ITERATIONS_V1: usize = 3;
 
-/// Exact workgroup dimensions declared by every teaching kernel.
+/// Exact workgroup dimensions declared by the non-KDA teaching kernels.
 pub const GFX950_ADVANCED_ATTENTION_WORKGROUP_V1: [u32; 3] = [64, 1, 1];
+/// Exact workgroup dimensions declared by both matrix-state KDA kernels.
+pub const GFX950_KDA_WORKGROUP_V2: [u32; 3] = [256, 1, 1];
 /// Exact grid dimensions declared by every teaching kernel.
 pub const GFX950_ADVANCED_ATTENTION_GRID_V1: [u32; 3] = [1, 1, 1];
 /// Whether the eight source roots use the production semantic lowering surface.

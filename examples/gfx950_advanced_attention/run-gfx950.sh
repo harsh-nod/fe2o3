@@ -41,17 +41,11 @@ BUILD_FEATURES=$FEATURE${EXTRA_FEATURE:+,$EXTRA_FEATURE}
 
 case "$SUITE:$FEATURE" in
     attention:kernel-kda-decode)
-        SYMBOL=gfx950_kda_gdn_decode; KERNARG=96; WG=64; LDS=0; OCML=1
-        TEST=gfx950_kda_gdn_decode_rust_cov6_matches_cpu_reference; ISA=scalar ;;
-    attention:kernel-kda-decode-wave-tiled-v1)
-        SYMBOL=gfx950_kda_gdn_decode; KERNARG=96; WG=64; LDS=0; OCML=1
-        TEST=gfx950_kda_gdn_decode_rust_cov6_matches_cpu_reference; ISA=scalar ;;
+        SYMBOL=gfx950_kda_decode; KERNARG=128; WG=256; LDS=0; OCML=0
+        TEST=gfx950_kda_decode_rust_cov6_matches_cpu_reference; ISA=kda_matrix ;;
     attention:kernel-kda-prefill)
-        SYMBOL=gfx950_kda_gdn_prefill; KERNARG=112; WG=64; LDS=0; OCML=1
-        TEST=gfx950_kda_gdn_prefill_rust_cov6_matches_cpu_reference; ISA=scalar ;;
-    attention:kernel-kda-prefill-channel-mask-v1)
-        SYMBOL=gfx950_kda_gdn_prefill; KERNARG=112; WG=64; LDS=0; OCML=1
-        TEST=gfx950_kda_gdn_prefill_rust_cov6_matches_cpu_reference; ISA=scalar ;;
+        SYMBOL=gfx950_kda_chunkwise_prefill; KERNARG=144; WG=256; LDS=0; OCML=0
+        TEST=gfx950_kda_chunkwise_prefill_rust_cov6_matches_cpu_reference; ISA=kda_matrix ;;
     attention:kernel-content-sparse-attention)
         SYMBOL=gfx950_content_sparse_attention; KERNARG=96; WG=64; LDS=2048; OCML=1
         TEST=gfx950_content_sparse_attention_rust_cov6_matches_cpu_reference; ISA=fp8_attention ;;
@@ -288,6 +282,10 @@ elif [[ $ISA == gpt_oss_expert ]]; then
     require_count "$LLVM_IR" 'call <4 x float> @llvm.amdgcn.mfma.scale.f32.16x16x128.f8f6f4.v8i32.v8i32(' 4 'FP4 MFMA calls'
     require_count "$LLVM_IR" 'i32 4, i32 4, i32 0, i32 0, i32 0, i32 0)' 4 'FP4 selectors and disabled scaling controls'
     require_count "$LLVM_IR" '@llvm.amdgcn.ds.read.tr' 0 'unexpected transpose references'
+elif [[ $ISA == kda_matrix ]]; then
+    grep -Fq -- 'call i32 @llvm.amdgcn.ds.bpermute' "$LLVM_IR" || { printf 'LLVM validation failed: KDA Wave16 exchange is absent\n' >&2; exit 1; }
+    require_count "$LLVM_IR" '@llvm.amdgcn.mfma' 0 'unexpected KDA MFMA references'
+    require_count "$LLVM_IR" '@llvm.amdgcn.ds.read.tr' 0 'unexpected KDA transpose references'
 elif [[ $ISA == fp8_attention ]]; then
     require_count "$LLVM_IR" 'call <4 x float> @llvm.amdgcn.mfma.scale.f32.16x16x128.f8f6f4.v8i32.v8i32(' 1 'FP8 MFMA call'
     require_count "$LLVM_IR" 'i32 0, i32 0, i32 0, i32 0, i32 0, i32 0)' 1 'FP8 selectors and disabled scaling controls'
@@ -393,6 +391,9 @@ elif [[ $ISA == gpt_oss_expert ]]; then
 ' >&2; exit 1; }
     [[ $(grep -Fc -- 'cbsz:4' <<< "$KERNEL_ISA" || true) -eq 4 ]] || { printf 'ISA validation failed: expected cbsz:4 on all FP4 MFMAs
 ' >&2; exit 1; }
+elif [[ $ISA == kda_matrix ]]; then
+    [[ $(grep -Fc -- 'ds_bpermute_b32' <<< "$KERNEL_ISA" || true) -gt 0 ]] || { printf 'ISA validation failed: KDA Wave16 exchange is absent\n' >&2; exit 1; }
+    ! grep -Eq -- 'v_mfma_|ds_read_b64_tr_b[[:digit:]]+' <<< "$KERNEL_ISA" || { printf 'ISA validation failed: KDA unexpectedly emitted tensor/transpose instructions\n' >&2; exit 1; }
 elif [[ $ISA == fp8_attention ]]; then
     [[ $(grep -Fc -- 'ds_read_b64_tr_b8' <<< "$KERNEL_ISA" || true) -eq 4 ]] || { printf 'ISA validation failed: expected exactly four B8 transpose instructions\n' >&2; exit 1; }
     [[ $(grep -Ec -- 'ds_read_b64_tr_b[[:digit:]]+' <<< "$KERNEL_ISA" || true) -eq 4 ]] || { printf 'ISA validation failed: expected exactly four total transpose instructions\n' >&2; exit 1; }

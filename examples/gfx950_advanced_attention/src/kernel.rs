@@ -12,14 +12,16 @@ use fe2o3_device::{
 #[cfg(not(target_arch = "amdgpu"))]
 use fe2o3_device::{GridExclusive, GridLeader};
 
+#[cfg(target_arch = "amdgpu")]
+use crate::KDA_KEY_DIMENSION_V1;
 use crate::{
-    ATTENTION_TOKENS_V1, CHANNELS_V1, DEEPSEEK_SPARSE_TOP_K_V1, HEAD_DIMENSION_V1, KDA_TAPS_V1,
-    MIXING_STREAMS_V1, PREFILL_TOKENS_V1, SELECTED_BLOCKS_V1, SELECTED_TOKENS_V1,
-    SINKHORN_ITERATIONS_V1, SPARSE_BLOCKS_V1, TOKENS_PER_BLOCK_V1,
+    ATTENTION_TOKENS_V1, CHANNELS_V1, DEEPSEEK_SPARSE_TOP_K_V1, HEAD_DIMENSION_V1,
+    KDA_STATE_ELEMENTS_V1, KDA_VALUE_DIMENSION_V1, MIXING_STREAMS_V1, PREFILL_TOKENS_V1,
+    SELECTED_BLOCKS_V1, SELECTED_TOKENS_V1, SINKHORN_ITERATIONS_V1, SPARSE_BLOCKS_V1,
+    TOKENS_PER_BLOCK_V1,
 };
 
 const ATTENTION_SCALE_V1: f32 = 0.088_388_346;
-const RMS_EPSILON_V1: f32 = 1.0e-5;
 
 #[cfg(not(target_arch = "amdgpu"))]
 fn finite_slice_v1(values: &[f32], expected: usize) -> bool {
@@ -40,13 +42,6 @@ fn finite_slice_v1(values: &[f32], expected: usize) -> bool {
 fn sigmoid_v1(math: &DeviceMath, value: f32) -> Option<f32> {
     let exponential = math.exp_f32(-value);
     let result = 1.0 / (1.0 + exponential);
-    result.is_finite().then_some(result)
-}
-
-#[cfg(not(target_arch = "amdgpu"))]
-fn tanh_v1(math: &DeviceMath, value: f32) -> Option<f32> {
-    let sigmoid = 1.0 / (1.0 + math.exp_f32(-2.0 * value));
-    let result = 2.0 * sigmoid - 1.0;
     result.is_finite().then_some(result)
 }
 
@@ -176,378 +171,610 @@ fn write_u32_v1(
     *slot = value;
 }
 
-#[cfg(not(target_arch = "amdgpu"))]
-fn kda_update_v1(
-    math: &DeviceMath,
-    history: &[f32],
-    gate_input: &[f32],
-    state: &[f32; CHANNELS_V1],
-    weights: &[f32],
-) -> Option<([f32; CHANNELS_V1], [f32; CHANNELS_V1])> {
-    let mut next = [0.0_f32; CHANNELS_V1];
-    let mut square_sum = 0.0_f32;
-    let mut channel = 0;
-    while channel < CHANNELS_V1 {
-        let mut convolution = 0.0_f32;
-        let mut tap = 0;
-        while tap < KDA_TAPS_V1 {
-            convolution += history[tap * CHANNELS_V1 + channel] * weights[tap];
-            tap += 1;
-        }
-        let proposal = tanh_v1(math, convolution + 0.25 * state[channel])?;
-        let gate = sigmoid_v1(math, gate_input[channel])?;
-        next[channel] = gate * state[channel] + (1.0 - gate) * proposal;
-        square_sum += next[channel] * next[channel];
-        if !next[channel].is_finite() || !square_sum.is_finite() {
-            return None;
-        }
-        channel += 1;
-    }
-    let root = math.sqrt_f32(square_sum / CHANNELS_V1 as f32 + RMS_EPSILON_V1);
-    if !root.is_finite() || root <= 0.0 {
-        return None;
-    }
-    let mut normalized = [0.0_f32; CHANNELS_V1];
-    channel = 0;
-    while channel < CHANNELS_V1 {
-        normalized[channel] = next[channel] / root;
-        channel += 1;
-    }
-    Some((next, normalized))
+#[cfg(target_arch = "amdgpu")]
+macro_rules! kda_sum_key_groups_v2 {
+    ($subgroup:expr, $value_column:expr, $partial:expr) => {{
+        let local_partial = $partial;
+        let source = $value_column as u32;
+        $subgroup.broadcast_f32::<64>(local_partial, source)
+            + $subgroup.broadcast_f32::<64>(local_partial, source.wrapping_add(16))
+            + $subgroup.broadcast_f32::<64>(local_partial, source.wrapping_add(32))
+            + $subgroup.broadcast_f32::<64>(local_partial, source.wrapping_add(48))
+    }};
 }
 
-/// Applies one three-tap gated recurrence and RMS-normalizes its 16-channel state.
-#[cfg(all(
-    target_arch = "amdgpu",
-    feature = "kernel-kda-decode",
-    not(feature = "kernel-kda-decode-wave-tiled-v1")
-))]
+// Specializes Kimi Linear's C=4 WY/UT chunk equations. Q/K and alpha/beta are
+// already normalized/activated at the kernel boundary, so every alpha product
+// below is a stable exp(G_r-G_j) without division.
+#[cfg(target_arch = "amdgpu")]
+macro_rules! kda_chunk_wy_v2 {
+    ($base:expr, $query:ident, $key:ident, $value:ident, $alpha:ident, $beta:ident,
+     $subgroup:ident, $value_column:ident, $key0:ident, $key1:ident, $key2:ident, $key3:ident,
+     $state0:ident, $state1:ident, $state2:ident, $state3:ident,
+     $output0:ident, $output1:ident, $output2:ident, $output3:ident) => {{
+        let token0 = $base;
+        let token1 = $base + 1;
+        let token2 = $base + 2;
+        let token3 = $base + 3;
+
+        let q00 = 0.25 * $query.load_or(token0, $key0, 0.0);
+        let q01 = 0.25 * $query.load_or(token0, $key1, 0.0);
+        let q02 = 0.25 * $query.load_or(token0, $key2, 0.0);
+        let q03 = 0.25 * $query.load_or(token0, $key3, 0.0);
+        let q10 = 0.25 * $query.load_or(token1, $key0, 0.0);
+        let q11 = 0.25 * $query.load_or(token1, $key1, 0.0);
+        let q12 = 0.25 * $query.load_or(token1, $key2, 0.0);
+        let q13 = 0.25 * $query.load_or(token1, $key3, 0.0);
+        let q20 = 0.25 * $query.load_or(token2, $key0, 0.0);
+        let q21 = 0.25 * $query.load_or(token2, $key1, 0.0);
+        let q22 = 0.25 * $query.load_or(token2, $key2, 0.0);
+        let q23 = 0.25 * $query.load_or(token2, $key3, 0.0);
+        let q30 = 0.25 * $query.load_or(token3, $key0, 0.0);
+        let q31 = 0.25 * $query.load_or(token3, $key1, 0.0);
+        let q32 = 0.25 * $query.load_or(token3, $key2, 0.0);
+        let q33 = 0.25 * $query.load_or(token3, $key3, 0.0);
+
+        let k00 = $key.load_or(token0, $key0, 0.0);
+        let k01 = $key.load_or(token0, $key1, 0.0);
+        let k02 = $key.load_or(token0, $key2, 0.0);
+        let k03 = $key.load_or(token0, $key3, 0.0);
+        let k10 = $key.load_or(token1, $key0, 0.0);
+        let k11 = $key.load_or(token1, $key1, 0.0);
+        let k12 = $key.load_or(token1, $key2, 0.0);
+        let k13 = $key.load_or(token1, $key3, 0.0);
+        let k20 = $key.load_or(token2, $key0, 0.0);
+        let k21 = $key.load_or(token2, $key1, 0.0);
+        let k22 = $key.load_or(token2, $key2, 0.0);
+        let k23 = $key.load_or(token2, $key3, 0.0);
+        let k30 = $key.load_or(token3, $key0, 0.0);
+        let k31 = $key.load_or(token3, $key1, 0.0);
+        let k32 = $key.load_or(token3, $key2, 0.0);
+        let k33 = $key.load_or(token3, $key3, 0.0);
+
+        let a00 = $alpha.load_or(token0, $key0, 0.0);
+        let a01 = $alpha.load_or(token0, $key1, 0.0);
+        let a02 = $alpha.load_or(token0, $key2, 0.0);
+        let a03 = $alpha.load_or(token0, $key3, 0.0);
+        let a10 = $alpha.load_or(token1, $key0, 0.0);
+        let a11 = $alpha.load_or(token1, $key1, 0.0);
+        let a12 = $alpha.load_or(token1, $key2, 0.0);
+        let a13 = $alpha.load_or(token1, $key3, 0.0);
+        let a20 = $alpha.load_or(token2, $key0, 0.0);
+        let a21 = $alpha.load_or(token2, $key1, 0.0);
+        let a22 = $alpha.load_or(token2, $key2, 0.0);
+        let a23 = $alpha.load_or(token2, $key3, 0.0);
+        let a30 = $alpha.load_or(token3, $key0, 0.0);
+        let a31 = $alpha.load_or(token3, $key1, 0.0);
+        let a32 = $alpha.load_or(token3, $key2, 0.0);
+        let a33 = $alpha.load_or(token3, $key3, 0.0);
+
+        let c00 = a00;
+        let c01 = a01;
+        let c02 = a02;
+        let c03 = a03;
+        let c10 = a00 * a10;
+        let c11 = a01 * a11;
+        let c12 = a02 * a12;
+        let c13 = a03 * a13;
+        let c20 = c10 * a20;
+        let c21 = c11 * a21;
+        let c22 = c12 * a22;
+        let c23 = c13 * a23;
+        let c30 = c20 * a30;
+        let c31 = c21 * a31;
+        let c32 = c22 * a32;
+        let c33 = c23 * a33;
+
+        let h0 = kda_sum_key_groups_v2!(
+            $subgroup,
+            $value_column,
+            c00 * k00 * $state0 + c01 * k01 * $state1 + c02 * k02 * $state2 + c03 * k03 * $state3
+        );
+        let h1 = kda_sum_key_groups_v2!(
+            $subgroup,
+            $value_column,
+            c10 * k10 * $state0 + c11 * k11 * $state1 + c12 * k12 * $state2 + c13 * k13 * $state3
+        );
+        let h2 = kda_sum_key_groups_v2!(
+            $subgroup,
+            $value_column,
+            c20 * k20 * $state0 + c21 * k21 * $state1 + c22 * k22 * $state2 + c23 * k23 * $state3
+        );
+        let h3 = kda_sum_key_groups_v2!(
+            $subgroup,
+            $value_column,
+            c30 * k30 * $state0 + c31 * k31 * $state1 + c32 * k32 * $state2 + c33 * k33 * $state3
+        );
+
+        let beta0 = $beta.load_or(0, token0, 0.0);
+        let beta1 = $beta.load_or(0, token1, 0.0);
+        let beta2 = $beta.load_or(0, token2, 0.0);
+        let beta3 = $beta.load_or(0, token3, 0.0);
+        let l10 = beta1
+            * kda_sum_key_groups_v2!(
+                $subgroup,
+                $value_column,
+                a10 * k10 * k00 + a11 * k11 * k01 + a12 * k12 * k02 + a13 * k13 * k03
+            );
+        let l20 = beta2
+            * kda_sum_key_groups_v2!(
+                $subgroup,
+                $value_column,
+                a10 * a20 * k20 * k00
+                    + a11 * a21 * k21 * k01
+                    + a12 * a22 * k22 * k02
+                    + a13 * a23 * k23 * k03
+            );
+        let l21 = beta2
+            * kda_sum_key_groups_v2!(
+                $subgroup,
+                $value_column,
+                a20 * k20 * k10 + a21 * k21 * k11 + a22 * k22 * k12 + a23 * k23 * k13
+            );
+        let l30 = beta3
+            * kda_sum_key_groups_v2!(
+                $subgroup,
+                $value_column,
+                a10 * a20 * a30 * k30 * k00
+                    + a11 * a21 * a31 * k31 * k01
+                    + a12 * a22 * a32 * k32 * k02
+                    + a13 * a23 * a33 * k33 * k03
+            );
+        let l31 = beta3
+            * kda_sum_key_groups_v2!(
+                $subgroup,
+                $value_column,
+                a20 * a30 * k30 * k10
+                    + a21 * a31 * k31 * k11
+                    + a22 * a32 * k32 * k12
+                    + a23 * a33 * k33 * k13
+            );
+        let l32 = beta3
+            * kda_sum_key_groups_v2!(
+                $subgroup,
+                $value_column,
+                a30 * k30 * k20 + a31 * k31 * k21 + a32 * k32 * k22 + a33 * k33 * k23
+            );
+
+        let z0 = beta0 * ($value.load_or(token0, $value_column, 0.0) - h0);
+        let z1 = beta1 * ($value.load_or(token1, $value_column, 0.0) - h1) - l10 * z0;
+        let z2 = beta2 * ($value.load_or(token2, $value_column, 0.0) - h2) - l20 * z0 - l21 * z1;
+        let z3 = beta3 * ($value.load_or(token3, $value_column, 0.0) - h3)
+            - l30 * z0
+            - l31 * z1
+            - l32 * z2;
+
+        let base0 = kda_sum_key_groups_v2!(
+            $subgroup,
+            $value_column,
+            c00 * q00 * $state0 + c01 * q01 * $state1 + c02 * q02 * $state2 + c03 * q03 * $state3
+        );
+        let base1 = kda_sum_key_groups_v2!(
+            $subgroup,
+            $value_column,
+            c10 * q10 * $state0 + c11 * q11 * $state1 + c12 * q12 * $state2 + c13 * q13 * $state3
+        );
+        let base2 = kda_sum_key_groups_v2!(
+            $subgroup,
+            $value_column,
+            c20 * q20 * $state0 + c21 * q21 * $state1 + c22 * q22 * $state2 + c23 * q23 * $state3
+        );
+        let base3 = kda_sum_key_groups_v2!(
+            $subgroup,
+            $value_column,
+            c30 * q30 * $state0 + c31 * q31 * $state1 + c32 * q32 * $state2 + c33 * q33 * $state3
+        );
+
+        let r00 = kda_sum_key_groups_v2!(
+            $subgroup,
+            $value_column,
+            q00 * k00 + q01 * k01 + q02 * k02 + q03 * k03
+        );
+        let r10 = kda_sum_key_groups_v2!(
+            $subgroup,
+            $value_column,
+            a10 * q10 * k00 + a11 * q11 * k01 + a12 * q12 * k02 + a13 * q13 * k03
+        );
+        let r11 = kda_sum_key_groups_v2!(
+            $subgroup,
+            $value_column,
+            q10 * k10 + q11 * k11 + q12 * k12 + q13 * k13
+        );
+        let r20 = kda_sum_key_groups_v2!(
+            $subgroup,
+            $value_column,
+            a10 * a20 * q20 * k00
+                + a11 * a21 * q21 * k01
+                + a12 * a22 * q22 * k02
+                + a13 * a23 * q23 * k03
+        );
+        let r21 = kda_sum_key_groups_v2!(
+            $subgroup,
+            $value_column,
+            a20 * q20 * k10 + a21 * q21 * k11 + a22 * q22 * k12 + a23 * q23 * k13
+        );
+        let r22 = kda_sum_key_groups_v2!(
+            $subgroup,
+            $value_column,
+            q20 * k20 + q21 * k21 + q22 * k22 + q23 * k23
+        );
+        let r30 = kda_sum_key_groups_v2!(
+            $subgroup,
+            $value_column,
+            a10 * a20 * a30 * q30 * k00
+                + a11 * a21 * a31 * q31 * k01
+                + a12 * a22 * a32 * q32 * k02
+                + a13 * a23 * a33 * q33 * k03
+        );
+        let r31 = kda_sum_key_groups_v2!(
+            $subgroup,
+            $value_column,
+            a20 * a30 * q30 * k10
+                + a21 * a31 * q31 * k11
+                + a22 * a32 * q32 * k12
+                + a23 * a33 * q33 * k13
+        );
+        let r32 = kda_sum_key_groups_v2!(
+            $subgroup,
+            $value_column,
+            a30 * q30 * k20 + a31 * q31 * k21 + a32 * q32 * k22 + a33 * q33 * k23
+        );
+        let r33 = kda_sum_key_groups_v2!(
+            $subgroup,
+            $value_column,
+            q30 * k30 + q31 * k31 + q32 * k32 + q33 * k33
+        );
+
+        $output0 = base0 + r00 * z0;
+        $output1 = base1 + r10 * z0 + r11 * z1;
+        $output2 = base2 + r20 * z0 + r21 * z1 + r22 * z2;
+        $output3 = base3 + r30 * z0 + r31 * z1 + r32 * z2 + r33 * z3;
+
+        $state0 = c30 * $state0
+            + a10 * a20 * a30 * k00 * z0
+            + a20 * a30 * k10 * z1
+            + a30 * k20 * z2
+            + k30 * z3;
+        $state1 = c31 * $state1
+            + a11 * a21 * a31 * k01 * z0
+            + a21 * a31 * k11 * z1
+            + a31 * k21 * z2
+            + k31 * z3;
+        $state2 = c32 * $state2
+            + a12 * a22 * a32 * k02 * z0
+            + a22 * a32 * k12 * z1
+            + a32 * k22 * z2
+            + k32 * z3;
+        $state3 = c33 * $state3
+            + a13 * a23 * a33 * k03 * z0
+            + a23 * a33 * k13 * z1
+            + a33 * k23 * z2
+            + k33 * z3;
+    }};
+}
+
+#[cfg(target_arch = "amdgpu")]
+macro_rules! kda_chunk_wy_v3 {
+    ($base:expr, $query:ident, $key:ident, $value:ident, $alpha:ident, $beta:ident,
+     $subgroup:ident, $key_index:ident, $value_column:ident, $state:ident,
+     $output0:ident, $output1:ident, $output2:ident, $output3:ident) => {{
+        let token0 = $base;
+        let token1 = $base + 1;
+        let token2 = $base + 2;
+        let token3 = $base + 3;
+        let q0 = 0.25 * $query.load_or(token0, $key_index, 0.0);
+        let q1 = 0.25 * $query.load_or(token1, $key_index, 0.0);
+        let q2 = 0.25 * $query.load_or(token2, $key_index, 0.0);
+        let q3 = 0.25 * $query.load_or(token3, $key_index, 0.0);
+        let k0 = $key.load_or(token0, $key_index, 0.0);
+        let k1 = $key.load_or(token1, $key_index, 0.0);
+        let k2 = $key.load_or(token2, $key_index, 0.0);
+        let k3 = $key.load_or(token3, $key_index, 0.0);
+        let a0 = $alpha.load_or(token0, $key_index, 0.0);
+        let a1 = $alpha.load_or(token1, $key_index, 0.0);
+        let a2 = $alpha.load_or(token2, $key_index, 0.0);
+        let a3 = $alpha.load_or(token3, $key_index, 0.0);
+        let c0 = a0;
+        let c1 = a0 * a1;
+        let c2 = c1 * a2;
+        let c3 = c2 * a3;
+        let h0 = $subgroup.reduce_sum_f32::<16>(c0 * k0 * $state);
+        let h1 = $subgroup.reduce_sum_f32::<16>(c1 * k1 * $state);
+        let h2 = $subgroup.reduce_sum_f32::<16>(c2 * k2 * $state);
+        let h3 = $subgroup.reduce_sum_f32::<16>(c3 * k3 * $state);
+        let beta0 = $beta.load_or(0, token0, 0.0);
+        let beta1 = $beta.load_or(0, token1, 0.0);
+        let beta2 = $beta.load_or(0, token2, 0.0);
+        let beta3 = $beta.load_or(0, token3, 0.0);
+        let l10 = beta1 * $subgroup.reduce_sum_f32::<16>(a1 * k1 * k0);
+        let l20 = beta2 * $subgroup.reduce_sum_f32::<16>(a1 * a2 * k2 * k0);
+        let l21 = beta2 * $subgroup.reduce_sum_f32::<16>(a2 * k2 * k1);
+        let l30 = beta3 * $subgroup.reduce_sum_f32::<16>(a1 * a2 * a3 * k3 * k0);
+        let l31 = beta3 * $subgroup.reduce_sum_f32::<16>(a2 * a3 * k3 * k1);
+        let l32 = beta3 * $subgroup.reduce_sum_f32::<16>(a3 * k3 * k2);
+        let z0 = beta0 * ($value.load_or(token0, $value_column, 0.0) - h0);
+        let z1 = beta1 * ($value.load_or(token1, $value_column, 0.0) - h1) - l10 * z0;
+        let z2 = beta2 * ($value.load_or(token2, $value_column, 0.0) - h2) - l20 * z0 - l21 * z1;
+        let z3 = beta3 * ($value.load_or(token3, $value_column, 0.0) - h3)
+            - l30 * z0
+            - l31 * z1
+            - l32 * z2;
+        let base0 = $subgroup.reduce_sum_f32::<16>(c0 * q0 * $state);
+        let base1 = $subgroup.reduce_sum_f32::<16>(c1 * q1 * $state);
+        let base2 = $subgroup.reduce_sum_f32::<16>(c2 * q2 * $state);
+        let base3 = $subgroup.reduce_sum_f32::<16>(c3 * q3 * $state);
+        let r00 = $subgroup.reduce_sum_f32::<16>(q0 * k0);
+        let r10 = $subgroup.reduce_sum_f32::<16>(a1 * q1 * k0);
+        let r11 = $subgroup.reduce_sum_f32::<16>(q1 * k1);
+        let r20 = $subgroup.reduce_sum_f32::<16>(a1 * a2 * q2 * k0);
+        let r21 = $subgroup.reduce_sum_f32::<16>(a2 * q2 * k1);
+        let r22 = $subgroup.reduce_sum_f32::<16>(q2 * k2);
+        let r30 = $subgroup.reduce_sum_f32::<16>(a1 * a2 * a3 * q3 * k0);
+        let r31 = $subgroup.reduce_sum_f32::<16>(a2 * a3 * q3 * k1);
+        let r32 = $subgroup.reduce_sum_f32::<16>(a3 * q3 * k2);
+        let r33 = $subgroup.reduce_sum_f32::<16>(q3 * k3);
+        $output0 = base0 + r00 * z0;
+        $output1 = base1 + r10 * z0 + r11 * z1;
+        $output2 = base2 + r20 * z0 + r21 * z1 + r22 * z2;
+        $output3 = base3 + r30 * z0 + r31 * z1 + r32 * z2 + r33 * z3;
+        $state = c3 * $state + a1 * a2 * a3 * k0 * z0 + a2 * a3 * k1 * z1 + a3 * k2 * z2 + k3 * z3;
+    }};
+}
+
+/// Evaluates one exact matrix-state Kimi Delta Attention decode step.
+#[cfg(all(target_arch = "amdgpu", feature = "kernel-kda-decode"))]
 #[kernel(
     typed,
-    namespace = "1bb95ea1c1a6dba00f16cefba570323638c550b4df1192d82c45817088520f10",
-    launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
+    namespace = "d1782f1adc5ab27a123e99a81db150a6062c28f6404804282ed7210b350c8498",
+    launch(required = [256, 1, 1], max = [256, 1, 1], max_grid = [1, 1, 1])
 )]
-pub fn gfx950_kda_gdn_decode(
-    history: &[f32],
-    gate_input: &[f32],
-    state: &[f32],
-    convolution_weights: &[f32],
-    mut state_output: DisjointSlice<f32, Index1D>,
-    mut normalized_output: DisjointSlice<f32, Index1D>,
-) {
-    if history.len() != KDA_TAPS_V1 * CHANNELS_V1
-        || gate_input.len() != CHANNELS_V1
-        || state.len() != CHANNELS_V1
-        || convolution_weights.len() != KDA_TAPS_V1
-        || state_output.len() != CHANNELS_V1
-        || normalized_output.len() != CHANNELS_V1
-    {
-        return;
-    }
-    let Ok(weights) = StridedReadView2D::from_shared_slice(convolution_weights, 0, 1, 3, 3) else {
-        return;
-    };
-    let Ok(history) = StridedReadView2D::from_shared_slice(history, 0, 3, 16, 16) else {
-        return;
-    };
-    let Ok(gates) = StridedReadView2D::from_shared_slice(gate_input, 0, 1, 16, 16) else {
-        return;
-    };
-    let Ok(state) = StridedReadView2D::from_shared_slice(state, 0, 1, 16, 16) else {
-        return;
-    };
-    let index = thread::index_1d();
-    let channel = index.get();
-    let math = DeviceMath::current();
-    let current_state = state.load_or(0, channel, 0.0);
-    let convolution = history.load_or(0, channel, 0.0) * weights.load_or(0, 0, 0.0)
-        + history.load_or(1, channel, 0.0) * weights.load_or(0, 1, 0.0)
-        + history.load_or(2, channel, 0.0) * weights.load_or(0, 2, 0.0);
-    let proposal_input = convolution + 0.25 * current_state;
-    let proposal = 2.0 / (1.0 + math.exp_f32(-2.0 * proposal_input)) - 1.0;
-    let gate = 1.0 / (1.0 + math.exp_f32(-gates.load_or(0, channel, 0.0)));
-    let updated = gate * current_state + (1.0 - gate) * proposal;
-    let square_sum = Gfx950Subgroup::current().reduce_sum_f32::<16>(updated * updated);
-    let root = math.sqrt_f32(square_sum / CHANNELS_V1 as f32 + RMS_EPSILON_V1);
-    if channel < CHANNELS_V1 {
-        if let Some(slot) = state_output.get_mut(thread::index_1d()) {
-            *slot = updated;
-        }
-        if let Some(slot) = normalized_output.get_mut(thread::index_1d()) {
-            *slot = updated / root;
-        }
-    }
-}
-
-#[cfg(not(target_arch = "amdgpu"))]
-pub fn gfx950_kda_gdn_decode(
-    history: &[f32],
-    gate_input: &[f32],
-    state: &[f32],
-    convolution_weights: &[f32],
-    mut state_output: DisjointSlice<f32, GridExclusive>,
-    mut normalized_output: DisjointSlice<f32, GridExclusive>,
-) {
-    let Some(leader) = thread::grid_leader() else {
-        return;
-    };
-    if !finite_slice_v1(history, KDA_TAPS_V1 * CHANNELS_V1)
-        || !finite_slice_v1(gate_input, CHANNELS_V1)
-        || !finite_slice_v1(state, CHANNELS_V1)
-        || !finite_slice_v1(convolution_weights, KDA_TAPS_V1)
-        || state_output.len() != CHANNELS_V1
-        || normalized_output.len() != CHANNELS_V1
-    {
-        fe2o3_device::trap();
-    }
-    let mut initial = [0.0_f32; CHANNELS_V1];
-    initial.copy_from_slice(state);
-    let math = DeviceMath::current();
-    let Some((next, normalized)) =
-        kda_update_v1(&math, history, gate_input, &initial, convolution_weights)
-    else {
-        fe2o3_device::trap();
-    };
-    let mut channel = 0;
-    while channel < CHANNELS_V1 {
-        write_f32_v1(&mut state_output, &leader, channel, next[channel]);
-        write_f32_v1(
-            &mut normalized_output,
-            &leader,
-            channel,
-            normalized[channel],
-        );
-        channel += 1;
-    }
-}
-
-/// Applies the same recurrence to eight ordered tokens in two four-token chunks.
-#[cfg(all(target_arch = "amdgpu", feature = "kernel-kda-prefill"))]
-#[cfg_attr(
-    not(feature = "kernel-kda-prefill-channel-mask-v1"),
-    kernel(
-        typed,
-        namespace = "65c813046838ac237dbc845ddb78d0b61db8c031914908a6a0a1304a338e68c0",
-        launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
-    )
-)]
-#[cfg_attr(
-    feature = "kernel-kda-prefill-channel-mask-v1",
-    kernel(
-        typed,
-        namespace = "a615c0a65c792796355f0c284c3964ec7f3a5485546a907d5b6e1876ec240a9f",
-        launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
-    )
-)]
-pub fn gfx950_kda_gdn_prefill(
-    input: &[f32],
-    gate_input: &[f32],
+pub fn gfx950_kda_decode(
+    query: &[f32],
+    key: &[f32],
+    value: &[f32],
+    alpha: &[f32],
+    beta: &[f32],
     initial_state: &[f32],
-    convolution_weights: &[f32],
     mut final_state: DisjointSlice<f32, Index1D>,
-    mut normalized_output_first: DisjointSlice<f32, Index1D>,
-    mut normalized_output_second: DisjointSlice<f32, Index1D>,
+    mut output: DisjointSlice<f32, Index1D>,
 ) {
-    if input.len() != PREFILL_TOKENS_V1 * CHANNELS_V1
-        || gate_input.len() != PREFILL_TOKENS_V1 * CHANNELS_V1
-        || initial_state.len() != CHANNELS_V1
-        || convolution_weights.len() != KDA_TAPS_V1
-        || final_state.len() != CHANNELS_V1
-        || normalized_output_first.len() != 4 * CHANNELS_V1
-        || normalized_output_second.len() != 4 * CHANNELS_V1
+    if query.len() != KDA_KEY_DIMENSION_V1
+        || key.len() != KDA_KEY_DIMENSION_V1
+        || value.len() != KDA_VALUE_DIMENSION_V1
+        || alpha.len() != KDA_KEY_DIMENSION_V1
+        || beta.len() != 1
+        || initial_state.len() != KDA_STATE_ELEMENTS_V1
+        || final_state.len() != KDA_STATE_ELEMENTS_V1
+        || output.len() != KDA_STATE_ELEMENTS_V1
     {
         return;
     }
-    let Ok(weights) = StridedReadView2D::from_shared_slice(convolution_weights, 0, 1, 3, 3) else {
+    let Ok(query) = StridedReadView2D::from_shared_slice(query, 0, 1, 16, 16) else {
         return;
     };
-    let Ok(input) = StridedReadView2D::from_shared_slice(input, 0, 8, 16, 16) else {
+    let Ok(key) = StridedReadView2D::from_shared_slice(key, 0, 1, 16, 16) else {
         return;
     };
-    let Ok(gates) = StridedReadView2D::from_shared_slice(gate_input, 0, 8, 16, 16) else {
+    let Ok(value) = StridedReadView2D::from_shared_slice(value, 0, 1, 16, 16) else {
         return;
     };
-    let Ok(initial_state) = StridedReadView2D::from_shared_slice(initial_state, 0, 1, 16, 16)
-    else {
+    let Ok(alpha) = StridedReadView2D::from_shared_slice(alpha, 0, 1, 16, 16) else {
         return;
     };
-    let index = thread::index_1d();
-    let linear = index.get();
-    #[cfg(not(feature = "kernel-kda-prefill-channel-mask-v1"))]
-    let channel = linear % CHANNELS_V1;
-    #[cfg(feature = "kernel-kda-prefill-channel-mask-v1")]
-    let channel = linear & (CHANNELS_V1 - 1);
-    let math = DeviceMath::current();
+    let Ok(beta) = StridedReadView2D::from_shared_slice(beta, 0, 1, 1, 1) else {
+        return;
+    };
+    let Ok(state) = StridedReadView2D::from_shared_slice(initial_state, 0, 16, 16, 16) else {
+        return;
+    };
+    let linear = thread::index_1d().get();
+    let key_index = linear & 15;
+    let value_column = linear >> 4;
     let subgroup = Gfx950Subgroup::current();
-    let mut state = initial_state.load_or(0, channel, 0.0);
-    let convolution0 = input.load_or(0, channel, 0.0) * weights.load_or(0, 0, 0.0);
-    let proposal0 = 2.0 / (1.0 + math.exp_f32(-2.0 * (convolution0 + 0.25 * state))) - 1.0;
-    let gate0 = 1.0 / (1.0 + math.exp_f32(-gates.load_or(0, channel, 0.0)));
-    state = gate0 * state + (1.0 - gate0) * proposal0;
-    let square_sum0 = subgroup.reduce_sum_f32::<16>(state * state);
-    let normalized0 = state / math.sqrt_f32(square_sum0 / 16.0 + RMS_EPSILON_V1);
-
-    let convolution1 = input.load_or(1, channel, 0.0) * weights.load_or(0, 0, 0.0)
-        + input.load_or(0, channel, 0.0) * weights.load_or(0, 1, 0.0);
-    let proposal1 = 2.0 / (1.0 + math.exp_f32(-2.0 * (convolution1 + 0.25 * state))) - 1.0;
-    let gate1 = 1.0 / (1.0 + math.exp_f32(-gates.load_or(1, channel, 0.0)));
-    state = gate1 * state + (1.0 - gate1) * proposal1;
-    let square_sum1 = subgroup.reduce_sum_f32::<16>(state * state);
-    let normalized1 = state / math.sqrt_f32(square_sum1 / 16.0 + RMS_EPSILON_V1);
-
-    let convolution2 = input.load_or(2, channel, 0.0) * weights.load_or(0, 0, 0.0)
-        + input.load_or(1, channel, 0.0) * weights.load_or(0, 1, 0.0)
-        + input.load_or(0, channel, 0.0) * weights.load_or(0, 2, 0.0);
-    let proposal2 = 2.0 / (1.0 + math.exp_f32(-2.0 * (convolution2 + 0.25 * state))) - 1.0;
-    let gate2 = 1.0 / (1.0 + math.exp_f32(-gates.load_or(2, channel, 0.0)));
-    state = gate2 * state + (1.0 - gate2) * proposal2;
-    let square_sum2 = subgroup.reduce_sum_f32::<16>(state * state);
-    let normalized2 = state / math.sqrt_f32(square_sum2 / 16.0 + RMS_EPSILON_V1);
-
-    let convolution3 = input.load_or(3, channel, 0.0) * weights.load_or(0, 0, 0.0)
-        + input.load_or(2, channel, 0.0) * weights.load_or(0, 1, 0.0)
-        + input.load_or(1, channel, 0.0) * weights.load_or(0, 2, 0.0);
-    let proposal3 = 2.0 / (1.0 + math.exp_f32(-2.0 * (convolution3 + 0.25 * state))) - 1.0;
-    let gate3 = 1.0 / (1.0 + math.exp_f32(-gates.load_or(3, channel, 0.0)));
-    state = gate3 * state + (1.0 - gate3) * proposal3;
-    let square_sum3 = subgroup.reduce_sum_f32::<16>(state * state);
-    let normalized3 = state / math.sqrt_f32(square_sum3 / 16.0 + RMS_EPSILON_V1);
-
-    let convolution4 = input.load_or(4, channel, 0.0) * weights.load_or(0, 0, 0.0)
-        + input.load_or(3, channel, 0.0) * weights.load_or(0, 1, 0.0)
-        + input.load_or(2, channel, 0.0) * weights.load_or(0, 2, 0.0);
-    let proposal4 = 2.0 / (1.0 + math.exp_f32(-2.0 * (convolution4 + 0.25 * state))) - 1.0;
-    let gate4 = 1.0 / (1.0 + math.exp_f32(-gates.load_or(4, channel, 0.0)));
-    state = gate4 * state + (1.0 - gate4) * proposal4;
-    let square_sum4 = subgroup.reduce_sum_f32::<16>(state * state);
-    let normalized4 = state / math.sqrt_f32(square_sum4 / 16.0 + RMS_EPSILON_V1);
-
-    let convolution5 = input.load_or(5, channel, 0.0) * weights.load_or(0, 0, 0.0)
-        + input.load_or(4, channel, 0.0) * weights.load_or(0, 1, 0.0)
-        + input.load_or(3, channel, 0.0) * weights.load_or(0, 2, 0.0);
-    let proposal5 = 2.0 / (1.0 + math.exp_f32(-2.0 * (convolution5 + 0.25 * state))) - 1.0;
-    let gate5 = 1.0 / (1.0 + math.exp_f32(-gates.load_or(5, channel, 0.0)));
-    state = gate5 * state + (1.0 - gate5) * proposal5;
-    let square_sum5 = subgroup.reduce_sum_f32::<16>(state * state);
-    let normalized5 = state / math.sqrt_f32(square_sum5 / 16.0 + RMS_EPSILON_V1);
-
-    let convolution6 = input.load_or(6, channel, 0.0) * weights.load_or(0, 0, 0.0)
-        + input.load_or(5, channel, 0.0) * weights.load_or(0, 1, 0.0)
-        + input.load_or(4, channel, 0.0) * weights.load_or(0, 2, 0.0);
-    let proposal6 = 2.0 / (1.0 + math.exp_f32(-2.0 * (convolution6 + 0.25 * state))) - 1.0;
-    let gate6 = 1.0 / (1.0 + math.exp_f32(-gates.load_or(6, channel, 0.0)));
-    state = gate6 * state + (1.0 - gate6) * proposal6;
-    let square_sum6 = subgroup.reduce_sum_f32::<16>(state * state);
-    let normalized6 = state / math.sqrt_f32(square_sum6 / 16.0 + RMS_EPSILON_V1);
-
-    let convolution7 = input.load_or(7, channel, 0.0) * weights.load_or(0, 0, 0.0)
-        + input.load_or(6, channel, 0.0) * weights.load_or(0, 1, 0.0)
-        + input.load_or(5, channel, 0.0) * weights.load_or(0, 2, 0.0);
-    let proposal7 = 2.0 / (1.0 + math.exp_f32(-2.0 * (convolution7 + 0.25 * state))) - 1.0;
-    let gate7 = 1.0 / (1.0 + math.exp_f32(-gates.load_or(7, channel, 0.0)));
-    state = gate7 * state + (1.0 - gate7) * proposal7;
-    let square_sum7 = subgroup.reduce_sum_f32::<16>(state * state);
-    let normalized7 = state / math.sqrt_f32(square_sum7 / 16.0 + RMS_EPSILON_V1);
-
-    let first_normalized = if linear < CHANNELS_V1 {
-        normalized0
-    } else if linear < 2 * CHANNELS_V1 {
-        normalized1
-    } else if linear < 3 * CHANNELS_V1 {
-        normalized2
-    } else {
-        normalized3
-    };
-    let second_normalized = if linear < CHANNELS_V1 {
-        normalized4
-    } else if linear < 2 * CHANNELS_V1 {
-        normalized5
-    } else if linear < 3 * CHANNELS_V1 {
-        normalized6
-    } else {
-        normalized7
-    };
-    if let Some(slot) = normalized_output_first.get_mut(thread::index_1d()) {
-        *slot = first_normalized;
+    let decay = alpha.load_or(0, key_index, 0.0) * state.load_or(value_column, key_index, 0.0);
+    let prediction = subgroup.reduce_sum_f32::<16>(key.load_or(0, key_index, 0.0) * decay);
+    let error = value.load_or(0, value_column, 0.0) - prediction;
+    let step = beta.load_or(0, 0, 0.0);
+    let updated = decay + step * key.load_or(0, key_index, 0.0) * error;
+    let result = subgroup.reduce_sum_f32::<16>(0.25 * query.load_or(0, key_index, 0.0) * updated);
+    if let Some(slot) = final_state.get_mut(thread::index_1d()) {
+        *slot = updated;
     }
-    if let Some(slot) = normalized_output_second.get_mut(thread::index_1d()) {
-        *slot = second_normalized;
-    }
-    if linear < CHANNELS_V1 {
-        if let Some(slot) = final_state.get_mut(thread::index_1d()) {
-            *slot = state;
-        }
+    if let Some(slot) = output.get_mut(thread::index_1d()) {
+        *slot = result;
     }
 }
 
 #[cfg(not(target_arch = "amdgpu"))]
-pub fn gfx950_kda_gdn_prefill(
-    input: &[f32],
-    gate_input: &[f32],
+pub fn gfx950_kda_decode(
+    query: &[f32],
+    key: &[f32],
+    value: &[f32],
+    alpha: &[f32],
+    beta: &[f32],
     initial_state: &[f32],
-    convolution_weights: &[f32],
     mut final_state: DisjointSlice<f32, GridExclusive>,
-    mut normalized_output: DisjointSlice<f32, GridExclusive>,
+    mut output: DisjointSlice<f32, GridExclusive>,
 ) {
     let Some(leader) = thread::grid_leader() else {
         return;
     };
-    if !finite_slice_v1(input, PREFILL_TOKENS_V1 * CHANNELS_V1)
-        || !finite_slice_v1(gate_input, PREFILL_TOKENS_V1 * CHANNELS_V1)
-        || !finite_slice_v1(initial_state, CHANNELS_V1)
-        || !finite_slice_v1(convolution_weights, KDA_TAPS_V1)
-        || final_state.len() != CHANNELS_V1
-        || normalized_output.len() != PREFILL_TOKENS_V1 * CHANNELS_V1
+    let Ok(result) =
+        crate::reference::kda_decode_reference_v2(query, key, value, alpha, beta, initial_state)
+    else {
+        fe2o3_device::trap();
+    };
+    if final_state.len() != KDA_STATE_ELEMENTS_V1 || output.len() != KDA_VALUE_DIMENSION_V1 {
+        fe2o3_device::trap();
+    }
+    let mut index = 0;
+    while index < KDA_STATE_ELEMENTS_V1 {
+        write_f32_v1(&mut final_state, &leader, index, result.state[index]);
+        index += 1;
+    }
+    index = 0;
+    while index < KDA_VALUE_DIMENSION_V1 {
+        write_f32_v1(&mut output, &leader, index, result.output[index]);
+        index += 1;
+    }
+}
+
+/// Evaluates two exact four-token WY/UT KDA chunks with one state carry.
+#[cfg(all(target_arch = "amdgpu", feature = "kernel-kda-prefill"))]
+#[kernel(
+    typed,
+    namespace = "4888a0b175bcc5b2897ba0594f0641acd700468c5302376a24463ba56eb49a56",
+    launch(required = [256, 1, 1], max = [256, 1, 1], max_grid = [1, 1, 1])
+)]
+pub fn gfx950_kda_chunkwise_prefill(
+    query: &[f32],
+    key: &[f32],
+    value: &[f32],
+    alpha: &[f32],
+    beta: &[f32],
+    initial_state: &[f32],
+    mut final_state: DisjointSlice<f32, Index1D>,
+    mut output_chunk0: DisjointSlice<f32, Index1D>,
+    mut output_chunk1: DisjointSlice<f32, Index1D>,
+) {
+    if query.len() != PREFILL_TOKENS_V1 * KDA_KEY_DIMENSION_V1
+        || key.len() != PREFILL_TOKENS_V1 * KDA_KEY_DIMENSION_V1
+        || value.len() != PREFILL_TOKENS_V1 * KDA_VALUE_DIMENSION_V1
+        || alpha.len() != PREFILL_TOKENS_V1 * KDA_KEY_DIMENSION_V1
+        || beta.len() != PREFILL_TOKENS_V1
+        || initial_state.len() != KDA_STATE_ELEMENTS_V1
+        || final_state.len() != KDA_STATE_ELEMENTS_V1
+        || output_chunk0.len() != KDA_STATE_ELEMENTS_V1
+        || output_chunk1.len() != KDA_STATE_ELEMENTS_V1
+    {
+        return;
+    }
+    let Ok(query) = StridedReadView2D::from_shared_slice(query, 0, 8, 16, 16) else {
+        return;
+    };
+    let Ok(key) = StridedReadView2D::from_shared_slice(key, 0, 8, 16, 16) else {
+        return;
+    };
+    let Ok(value) = StridedReadView2D::from_shared_slice(value, 0, 8, 16, 16) else {
+        return;
+    };
+    let Ok(alpha) = StridedReadView2D::from_shared_slice(alpha, 0, 8, 16, 16) else {
+        return;
+    };
+    let Ok(beta) = StridedReadView2D::from_shared_slice(beta, 0, 1, 8, 8) else {
+        return;
+    };
+    let Ok(initial_state) = StridedReadView2D::from_shared_slice(initial_state, 0, 16, 16, 16)
+    else {
+        return;
+    };
+    let linear = thread::index_1d().get();
+    let key_index = linear & 15;
+    let value_column = linear >> 4;
+    let subgroup = Gfx950Subgroup::current();
+    let mut state = initial_state.load_or(value_column, key_index, 0.0);
+    let mut chunk0_output0 = 0.0;
+    let mut chunk0_output1 = 0.0;
+    let mut chunk0_output2 = 0.0;
+    let mut chunk0_output3 = 0.0;
+    kda_chunk_wy_v3!(
+        0,
+        query,
+        key,
+        value,
+        alpha,
+        beta,
+        subgroup,
+        key_index,
+        value_column,
+        state,
+        chunk0_output0,
+        chunk0_output1,
+        chunk0_output2,
+        chunk0_output3
+    );
+    let mut chunk1_output0 = 0.0;
+    let mut chunk1_output1 = 0.0;
+    let mut chunk1_output2 = 0.0;
+    let mut chunk1_output3 = 0.0;
+    kda_chunk_wy_v3!(
+        4,
+        query,
+        key,
+        value,
+        alpha,
+        beta,
+        subgroup,
+        key_index,
+        value_column,
+        state,
+        chunk1_output0,
+        chunk1_output1,
+        chunk1_output2,
+        chunk1_output3
+    );
+    let selected_chunk0 = if key_index < 4 {
+        chunk0_output0
+    } else if key_index < 8 {
+        chunk0_output1
+    } else if key_index < 12 {
+        chunk0_output2
+    } else {
+        chunk0_output3
+    };
+    let selected_chunk1 = if key_index < 4 {
+        chunk1_output0
+    } else if key_index < 8 {
+        chunk1_output1
+    } else if key_index < 12 {
+        chunk1_output2
+    } else {
+        chunk1_output3
+    };
+    if let Some(slot) = output_chunk0.get_mut(thread::index_1d()) {
+        *slot = selected_chunk0;
+    }
+    if let Some(slot) = output_chunk1.get_mut(thread::index_1d()) {
+        *slot = selected_chunk1;
+    }
+    if let Some(slot) = final_state.get_mut(thread::index_1d()) {
+        *slot = state;
+    }
+}
+
+#[cfg(not(target_arch = "amdgpu"))]
+pub fn gfx950_kda_chunkwise_prefill(
+    query: &[f32],
+    key: &[f32],
+    value: &[f32],
+    alpha: &[f32],
+    beta: &[f32],
+    initial_state: &[f32],
+    mut final_state: DisjointSlice<f32, GridExclusive>,
+    mut output: DisjointSlice<f32, GridExclusive>,
+) {
+    let Some(leader) = thread::grid_leader() else {
+        return;
+    };
+    let Ok(result) =
+        crate::reference::kda_prefill_reference_v2(query, key, value, alpha, beta, initial_state)
+    else {
+        fe2o3_device::trap();
+    };
+    if final_state.len() != KDA_STATE_ELEMENTS_V1
+        || output.len() != PREFILL_TOKENS_V1 * KDA_VALUE_DIMENSION_V1
     {
         fe2o3_device::trap();
     }
-    let math = DeviceMath::current();
-    let mut state = [0.0_f32; CHANNELS_V1];
-    state.copy_from_slice(initial_state);
-    let mut history = [0.0_f32; KDA_TAPS_V1 * CHANNELS_V1];
-    let mut chunk = 0;
-    while chunk < 2 {
-        let mut offset = 0;
-        while offset < 4 {
-            let token = chunk * 4 + offset;
-            let mut tap = 0;
-            while tap < KDA_TAPS_V1 {
-                let mut channel = 0;
-                while channel < CHANNELS_V1 {
-                    history[tap * CHANNELS_V1 + channel] = if token >= tap {
-                        input[(token - tap) * CHANNELS_V1 + channel]
-                    } else {
-                        0.0
-                    };
-                    channel += 1;
-                }
-                tap += 1;
-            }
-            let gates = &gate_input[token * CHANNELS_V1..(token + 1) * CHANNELS_V1];
-            let Some((next, normalized)) =
-                kda_update_v1(&math, &history, gates, &state, convolution_weights)
-            else {
-                fe2o3_device::trap();
-            };
-            state = next;
-            let mut channel = 0;
-            while channel < CHANNELS_V1 {
-                write_f32_v1(
-                    &mut normalized_output,
-                    &leader,
-                    token * CHANNELS_V1 + channel,
-                    normalized[channel],
-                );
-                channel += 1;
-            }
-            offset += 1;
-        }
-        chunk += 1;
+    let mut index = 0;
+    while index < KDA_STATE_ELEMENTS_V1 {
+        write_f32_v1(&mut final_state, &leader, index, result.final_state[index]);
+        index += 1;
     }
-    let mut channel = 0;
-    while channel < CHANNELS_V1 {
-        write_f32_v1(&mut final_state, &leader, channel, state[channel]);
-        channel += 1;
+    index = 0;
+    while index < PREFILL_TOKENS_V1 * KDA_VALUE_DIMENSION_V1 {
+        write_f32_v1(&mut output, &leader, index, result.output[index]);
+        index += 1;
     }
 }
 

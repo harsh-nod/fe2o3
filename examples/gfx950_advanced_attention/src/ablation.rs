@@ -1,77 +1,15 @@
 //! Exact-semantics gfx950 attention ablations selected one feature at a time.
 
 use fe2o3_device::{
-    DeviceMath, DisjointSlice, Gfx950Subgroup, Index1D, KernelError, KernelResult,
-    StridedReadView2D, kernel, thread,
+    DeviceMath, DisjointSlice, Index1D, KernelError, KernelResult, StridedReadView2D, kernel,
+    thread,
 };
 
 use crate::{
-    ATTENTION_TOKENS_V1, CHANNELS_V1, HEAD_DIMENSION_V1, KDA_TAPS_V1, MIXING_STREAMS_V1,
-    SELECTED_TOKENS_V1,
+    ATTENTION_TOKENS_V1, CHANNELS_V1, HEAD_DIMENSION_V1, MIXING_STREAMS_V1, SELECTED_TOKENS_V1,
 };
 
 const ATTENTION_SCALE_V1: f32 = 0.088_388_346;
-const RMS_EPSILON_V1: f32 = 1.0e-5;
-
-/// Repeats the 16-channel KDA tile in each wave16 group to isolate lane mapping.
-#[cfg(feature = "kernel-kda-decode-wave-tiled-v1")]
-#[kernel(
-    typed,
-    namespace = "8694f5eade82ca24253b385db2193a3828e5be457049e9ebfd6cc05e300abf00",
-    launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
-)]
-pub fn gfx950_kda_gdn_decode(
-    history: &[f32],
-    gate_input: &[f32],
-    state: &[f32],
-    convolution_weights: &[f32],
-    mut state_output: DisjointSlice<f32, Index1D>,
-    mut normalized_output: DisjointSlice<f32, Index1D>,
-) {
-    if history.len() != KDA_TAPS_V1 * CHANNELS_V1
-        || gate_input.len() != CHANNELS_V1
-        || state.len() != CHANNELS_V1
-        || convolution_weights.len() != KDA_TAPS_V1
-        || state_output.len() != CHANNELS_V1
-        || normalized_output.len() != CHANNELS_V1
-    {
-        return;
-    }
-    let Ok(weights) = StridedReadView2D::from_shared_slice(convolution_weights, 0, 1, 3, 3) else {
-        return;
-    };
-    let Ok(history) = StridedReadView2D::from_shared_slice(history, 0, 3, 16, 16) else {
-        return;
-    };
-    let Ok(gates) = StridedReadView2D::from_shared_slice(gate_input, 0, 1, 16, 16) else {
-        return;
-    };
-    let Ok(state) = StridedReadView2D::from_shared_slice(state, 0, 1, 16, 16) else {
-        return;
-    };
-    let index = thread::index_1d();
-    let linear = index.get();
-    let channel = linear & (CHANNELS_V1 - 1);
-    let math = DeviceMath::current();
-    let current_state = state.load_or(0, channel, 0.0);
-    let convolution = history.load_or(0, channel, 0.0) * weights.load_or(0, 0, 0.0)
-        + history.load_or(1, channel, 0.0) * weights.load_or(0, 1, 0.0)
-        + history.load_or(2, channel, 0.0) * weights.load_or(0, 2, 0.0);
-    let proposal_input = convolution + 0.25 * current_state;
-    let proposal = 2.0 / (1.0 + math.exp_f32(-2.0 * proposal_input)) - 1.0;
-    let gate = 1.0 / (1.0 + math.exp_f32(-gates.load_or(0, channel, 0.0)));
-    let updated = gate * current_state + (1.0 - gate) * proposal;
-    let square_sum = Gfx950Subgroup::current().reduce_sum_f32::<16>(updated * updated);
-    let root = math.sqrt_f32(square_sum / CHANNELS_V1 as f32 + RMS_EPSILON_V1);
-    if linear < CHANNELS_V1 {
-        if let Some(slot) = state_output.get_mut(thread::index_1d()) {
-            *slot = updated;
-        }
-        if let Some(slot) = normalized_output.get_mut(thread::index_1d()) {
-            *slot = updated / root;
-        }
-    }
-}
 
 /// The scalar selected-score attention experiments are retained in the ablation manifest.
 /// The V1 control-flow sidecar rejects their bounded loop plus selection macro.

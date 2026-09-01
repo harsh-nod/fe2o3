@@ -13,9 +13,7 @@ resolver = "3"
 
 [features]
 kernel-kda-decode = []
-kernel-kda-decode-wave-tiled-v1 = ["kernel-kda-decode"]
 kernel-kda-prefill = []
-kernel-kda-prefill-channel-mask-v1 = ["kernel-kda-prefill"]
 kernel-content-sparse-attention = []
 kernel-content-sparse-attention-reciprocal-reuse-v1 = ["kernel-content-sparse-attention"]
 kernel-deepseek-sparse-attention = []
