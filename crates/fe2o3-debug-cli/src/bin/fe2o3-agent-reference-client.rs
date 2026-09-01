@@ -3326,13 +3326,19 @@ mod tests {
     fn sealed_debug_input_rejects_alias_and_closes_without_named_cleanup() {
         let input = SealedInputV1::new("test input", b"exact input bytes").unwrap();
         let descriptor = input.file.as_raw_fd();
+        let retained = input.file.try_clone().unwrap();
+        let object = input.object;
         assert!(fs::symlink_metadata(format!("/proc/self/fd/{descriptor}")).is_ok());
         assert!(input.file.write_all_at(b"x", 0).is_err());
         assert!(input.file.set_len(0).is_err());
         let mut command = Command::new("/bin/false");
         assert!(inherit_sealed_inputs_v1(&mut command, &input, &input).is_err());
         drop(input);
-        assert!(fs::symlink_metadata(format!("/proc/self/fd/{descriptor}")).is_err());
+        match fs::metadata(format!("/proc/self/fd/{descriptor}")) {
+            Ok(metadata) => assert_ne!((metadata.dev(), metadata.ino(), metadata.len()), object),
+            Err(error) => assert_eq!(error.kind(), io::ErrorKind::NotFound),
+        }
+        drop(retained);
     }
 
     #[test]
