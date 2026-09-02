@@ -25,3 +25,23 @@ custody, enforce the required file type and immutability policy, read exactly th
 reject trailing payload bytes, and compare the SHA-256 digest. The caller owns cryptographically
 fresh challenge generation and replay exclusion. A later theorem-record contract must separately
 define authenticated verifier output and the only reviewed promotion into host authority.
+
+## Multi-phase protected-verification transport V2
+
+V2 is additive and leaves every V1 frame and semantic unchanged. Its Begin phase uses the complete
+canonical V1 request and the same two ordered descriptors, including V1's caller-owned nonce and
+external replay policy. After Begin admission, a protected service can return a fixed-size challenge
+frame containing a distinct nonzero service-owned compiler-current-record challenge and a nonzero
+opaque reservation identity. The provider, not this protocol crate, owns entropy, atomic
+reservation, durable replay exclusion across restarts, and expiry.
+
+The client later returns one fixed-size V2 frame containing the exact canonical
+`CompilerExecutionCurrentRecordVerificationV3` and
+`CompilerExecutionCurrentRecordAttestationV3` arrays. Canonical decoding requires exact nested
+verification byte equality and requires the signed attestation to bind the service challenge. The
+transport additionally correlates the Begin request identity and opaque reservation identity.
+
+The only final frame is either an empty generic rejection or at most 64 KiB of opaque
+application-owned response bytes. Those bytes are hashed and session-bound, but the protocol does
+not interpret or authenticate them. No V2 frame is verification evidence by itself, and no frame
+grants theorem, load, launch, currentness, key-custody, or application authority.

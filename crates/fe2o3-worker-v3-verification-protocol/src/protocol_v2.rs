@@ -24,8 +24,7 @@ const CURRENT_RECORD_MAGIC: [u8; 8] = *b"F3WV2CR\0";
 const TERMINAL_MAGIC: [u8; 8] = *b"F3WV2TR\0";
 const VERSION: u16 = 2;
 const CHALLENGE_IDENTITY_DOMAIN: &[u8] = b"FE2O3/WORKER-V3/VERIFICATION-CHALLENGE/V2\0";
-const CURRENT_RECORD_IDENTITY_DOMAIN: &[u8] =
-    b"FE2O3/WORKER-V3/VERIFICATION-CURRENT-RECORD/V2\0";
+const CURRENT_RECORD_IDENTITY_DOMAIN: &[u8] = b"FE2O3/WORKER-V3/VERIFICATION-CURRENT-RECORD/V2\0";
 const TERMINAL_IDENTITY_DOMAIN: &[u8] = b"FE2O3/WORKER-V3/VERIFICATION-TERMINAL/V2\0";
 
 /// Exact byte length of one V2 service-challenge frame.
@@ -171,9 +170,7 @@ impl WorkerV3VerificationChallengeFrameV2 {
     }
 
     /// Strictly decodes one complete canonical challenge frame.
-    pub fn decode_canonical(
-        bytes: &[u8],
-    ) -> Result<Self, WorkerV3VerificationProtocolErrorV2> {
+    pub fn decode_canonical(bytes: &[u8]) -> Result<Self, WorkerV3VerificationProtocolErrorV2> {
         if bytes.len() != WORKER_V3_VERIFICATION_CHALLENGE_BYTES_V2 {
             return Err(WorkerV3VerificationProtocolErrorV2::InvalidLength {
                 frame: "challenge",
@@ -183,11 +180,13 @@ impl WorkerV3VerificationChallengeFrameV2 {
         let mut reader = Reader::new(bytes);
         require_header(&mut reader, CHALLENGE_MAGIC, bytes.len())?;
         let disposition_tag = reader.u16()?;
-        let disposition = WorkerV3VerificationChallengeDispositionV2::from_wire_tag(disposition_tag)
-            .ok_or(WorkerV3VerificationProtocolErrorV2::UnknownDisposition {
-                frame: "challenge",
-                actual: disposition_tag,
-            })?;
+        let disposition = WorkerV3VerificationChallengeDispositionV2::from_wire_tag(
+            disposition_tag,
+        )
+        .ok_or(WorkerV3VerificationProtocolErrorV2::UnknownDisposition {
+            frame: "challenge",
+            actual: disposition_tag,
+        })?;
         if reader.fixed::<6>()? != [0; 6] {
             return Err(WorkerV3VerificationProtocolErrorV2::NoncanonicalReservedBytes);
         }
@@ -198,6 +197,23 @@ impl WorkerV3VerificationChallengeFrameV2 {
         if !reader.is_empty() {
             return Err(WorkerV3VerificationProtocolErrorV2::TrailingBytes);
         }
+        match disposition {
+            WorkerV3VerificationChallengeDispositionV2::Reserved
+                if challenge == [0; SHA256_BYTES] || reservation_identity == [0; SHA256_BYTES] =>
+            {
+                return Err(if challenge == [0; SHA256_BYTES] {
+                    WorkerV3VerificationProtocolErrorV2::ZeroChallenge
+                } else {
+                    WorkerV3VerificationProtocolErrorV2::ZeroReservationIdentity
+                });
+            }
+            WorkerV3VerificationChallengeDispositionV2::Rejected
+                if challenge != [0; SHA256_BYTES] || reservation_identity != [0; SHA256_BYTES] =>
+            {
+                return Err(WorkerV3VerificationProtocolErrorV2::RejectedChallengeCoordinates);
+            }
+            _ => {}
+        }
         let decoded = Self::encode(
             disposition,
             request_identity,
@@ -205,10 +221,14 @@ impl WorkerV3VerificationChallengeFrameV2 {
             reservation_identity,
         );
         if decoded.canonical_bytes.as_slice() != bytes
-            || derive_identity(CHALLENGE_IDENTITY_DOMAIN, &bytes[..CHALLENGE_PREIMAGE_BYTES])
-                != declared_identity
+            || derive_identity(
+                CHALLENGE_IDENTITY_DOMAIN,
+                &bytes[..CHALLENGE_PREIMAGE_BYTES],
+            ) != declared_identity
         {
-            return Err(WorkerV3VerificationProtocolErrorV2::IdentityMismatch("challenge"));
+            return Err(WorkerV3VerificationProtocolErrorV2::IdentityMismatch(
+                "challenge",
+            ));
         }
         Ok(decoded)
     }
@@ -378,9 +398,7 @@ impl WorkerV3VerificationCurrentRecordFrameV2 {
     }
 
     /// Strictly decodes one exact fixed-size submission.
-    pub fn decode_canonical(
-        bytes: &[u8],
-    ) -> Result<Self, WorkerV3VerificationProtocolErrorV2> {
+    pub fn decode_canonical(bytes: &[u8]) -> Result<Self, WorkerV3VerificationProtocolErrorV2> {
         if bytes.len() != WORKER_V3_VERIFICATION_CURRENT_RECORD_BYTES_V2 {
             return Err(WorkerV3VerificationProtocolErrorV2::InvalidLength {
                 frame: "current record",
@@ -425,9 +443,7 @@ impl WorkerV3VerificationCurrentRecordFrameV2 {
     }
 
     /// Returns the exact canonical submission bytes.
-    pub const fn encode_canonical(
-        &self,
-    ) -> &[u8; WORKER_V3_VERIFICATION_CURRENT_RECORD_BYTES_V2] {
+    pub const fn encode_canonical(&self) -> &[u8; WORKER_V3_VERIFICATION_CURRENT_RECORD_BYTES_V2] {
         &self.canonical_bytes
     }
 
@@ -540,9 +556,7 @@ impl WorkerV3VerificationTerminalFrameV2 {
     }
 
     /// Strictly decodes one complete bounded terminal frame.
-    pub fn decode_canonical(
-        bytes: &[u8],
-    ) -> Result<Self, WorkerV3VerificationProtocolErrorV2> {
+    pub fn decode_canonical(bytes: &[u8]) -> Result<Self, WorkerV3VerificationProtocolErrorV2> {
         if !(MIN_WORKER_V3_VERIFICATION_TERMINAL_BYTES_V2
             ..=MAX_WORKER_V3_VERIFICATION_TERMINAL_BYTES_V2)
             .contains(&bytes.len())
@@ -588,10 +602,14 @@ impl WorkerV3VerificationTerminalFrameV2 {
         };
         if response_digest != expected_digest
             || decoded.canonical_bytes.as_slice() != bytes
-            || derive_identity(TERMINAL_IDENTITY_DOMAIN, &bytes[..bytes.len() - SHA256_BYTES])
-                != declared_identity
+            || derive_identity(
+                TERMINAL_IDENTITY_DOMAIN,
+                &bytes[..bytes.len() - SHA256_BYTES],
+            ) != declared_identity
         {
-            return Err(WorkerV3VerificationProtocolErrorV2::IdentityMismatch("terminal"));
+            return Err(WorkerV3VerificationProtocolErrorV2::IdentityMismatch(
+                "terminal",
+            ));
         }
         Ok(decoded)
     }
@@ -610,10 +628,12 @@ impl WorkerV3VerificationTerminalFrameV2 {
             return Err(WorkerV3VerificationProtocolErrorV2::ZeroReservationIdentity);
         }
         if application_response.len() > MAX_WORKER_V3_VERIFICATION_APPLICATION_RESPONSE_BYTES_V2 {
-            return Err(WorkerV3VerificationProtocolErrorV2::ApplicationResponseTooLarge {
-                actual: application_response.len(),
-                maximum: MAX_WORKER_V3_VERIFICATION_APPLICATION_RESPONSE_BYTES_V2,
-            });
+            return Err(
+                WorkerV3VerificationProtocolErrorV2::ApplicationResponseTooLarge {
+                    actual: application_response.len(),
+                    maximum: MAX_WORKER_V3_VERIFICATION_APPLICATION_RESPONSE_BYTES_V2,
+                },
+            );
         }
         if disposition == WorkerV3VerificationTerminalDispositionV2::Rejected
             && !application_response.is_empty()
@@ -751,6 +771,8 @@ pub enum WorkerV3VerificationProtocolErrorV2 {
     },
     /// A rejection illegally carried application-owned response bytes.
     RejectionHasPayload,
+    /// A rejected challenge frame illegally carried reservation coordinates.
+    RejectedChallengeCoordinates,
     /// Length arithmetic overflowed.
     LengthOverflow,
     /// A bounded allocation failed.
@@ -771,18 +793,19 @@ impl fmt::Display for WorkerV3VerificationProtocolErrorV2 {
             Self::UnknownDisposition { frame, actual } => {
                 write!(formatter, "unknown {frame} disposition {actual}")
             }
-            Self::NoncanonicalReservedBytes => {
-                formatter.write_str("noncanonical reserved bytes")
-            }
+            Self::NoncanonicalReservedBytes => formatter.write_str("noncanonical reserved bytes"),
             Self::Truncated => formatter.write_str("phase frame is truncated"),
             Self::TrailingBytes => formatter.write_str("phase frame has trailing bytes"),
             Self::IdentityMismatch(frame) => write!(formatter, "{frame} frame identity mismatch"),
-            Self::CurrentRecord(source) => write!(formatter, "current-record frame failed: {source}"),
+            Self::CurrentRecord(source) => {
+                write!(formatter, "current-record frame failed: {source}")
+            }
             Self::ChallengeMismatch => {
                 formatter.write_str("current-record attestation challenge mismatch")
             }
-            Self::VerificationAttestationMismatch => formatter
-                .write_str("current-record verification and nested attestation mismatch"),
+            Self::VerificationAttestationMismatch => {
+                formatter.write_str("current-record verification and nested attestation mismatch")
+            }
             Self::ApplicationResponseTooLarge { actual, maximum } => write!(
                 formatter,
                 "application response length {actual} exceeds {maximum} bytes"
@@ -790,9 +813,14 @@ impl fmt::Display for WorkerV3VerificationProtocolErrorV2 {
             Self::RejectionHasPayload => {
                 formatter.write_str("terminal rejection carries forbidden payload bytes")
             }
+            Self::RejectedChallengeCoordinates => formatter
+                .write_str("rejected challenge frame carries forbidden reservation coordinates"),
             Self::LengthOverflow => formatter.write_str("phase frame length overflowed"),
             Self::AllocationFailed(bytes) => {
-                write!(formatter, "could not allocate bounded {bytes}-byte phase frame")
+                write!(
+                    formatter,
+                    "could not allocate bounded {bytes}-byte phase frame"
+                )
             }
         }
     }
@@ -896,5 +924,136 @@ impl<'a> Reader<'a> {
 
     fn is_empty(&self) -> bool {
         self.offset == self.bytes.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        WorkerV3VerificationEntryCoordinateV1, WorkerV3VerificationFdPayloadDescriptorV1,
+        WorkerV3VerificationFreshChallengeV1, WorkerV3VerificationMeasurementIdentityV1,
+        WorkerV3VerificationPolicyIdentityV1, WorkerV3VerificationRosterIdentityV1,
+    };
+
+    fn verification_request(seed: u8) -> WorkerV3VerificationRequestV1 {
+        WorkerV3VerificationRequestV1::new(
+            WorkerV3VerificationFreshChallengeV1::new([seed; 32]).unwrap(),
+            WorkerV3VerificationRosterIdentityV1::new([2; 32]).unwrap(),
+            WorkerV3VerificationPolicyIdentityV1::new([3; 32]).unwrap(),
+            WorkerV3VerificationMeasurementIdentityV1::new([4; 32]).unwrap(),
+            WorkerV3VerificationFdPayloadDescriptorV1::load_envelope_v2(1, [5; 32]).unwrap(),
+            WorkerV3VerificationFdPayloadDescriptorV1::finalized_hsaco(1, [6; 32]).unwrap(),
+            vec![
+                WorkerV3VerificationEntryCoordinateV1::new(
+                    0,
+                    "kernel",
+                    "kernel_export",
+                    [7; 32],
+                    [8; 32],
+                    [9; 32],
+                )
+                .unwrap(),
+            ],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn reservation_requires_two_nonzero_coordinates_and_is_move_only() {
+        assert!(matches!(
+            WorkerV3VerificationChallengeReservationV2::new([0; 32], [1; 32]),
+            Err(WorkerV3VerificationProtocolErrorV2::ZeroChallenge)
+        ));
+        assert!(matches!(
+            WorkerV3VerificationChallengeReservationV2::new([1; 32], [0; 32]),
+            Err(WorkerV3VerificationProtocolErrorV2::ZeroReservationIdentity)
+        ));
+        let reservation =
+            WorkerV3VerificationChallengeReservationV2::new([1; 32], [2; 32]).unwrap();
+        assert_eq!(reservation.into_bytes(), ([1; 32], [2; 32]));
+    }
+
+    #[test]
+    fn challenge_frames_are_exact_canonical_and_request_bound() {
+        let request = verification_request(1);
+        let other = verification_request(2);
+        let reservation =
+            WorkerV3VerificationChallengeReservationV2::new([10; 32], [11; 32]).unwrap();
+        let frame = WorkerV3VerificationChallengeFrameV2::reserved(&request, &reservation);
+        assert_eq!(
+            frame.encode_canonical().len(),
+            WORKER_V3_VERIFICATION_CHALLENGE_BYTES_V2
+        );
+        let decoded =
+            WorkerV3VerificationChallengeFrameV2::decode_canonical(frame.encode_canonical())
+                .unwrap();
+        assert!(decoded.matches_request(&request));
+        assert!(!decoded.matches_request(&other));
+        assert_eq!(decoded.reservation().unwrap().challenge_bytes(), &[10; 32]);
+        assert!(!decoded.grants_authority());
+
+        let rejected = WorkerV3VerificationChallengeFrameV2::rejected(&request);
+        let mut illegal = *rejected.encode_canonical();
+        illegal[HEADER_BYTES + 8 + SHA256_BYTES] = 1;
+        assert!(matches!(
+            WorkerV3VerificationChallengeFrameV2::decode_canonical(&illegal),
+            Err(WorkerV3VerificationProtocolErrorV2::RejectedChallengeCoordinates)
+        ));
+        let mut mutated = *frame.encode_canonical();
+        *mutated.last_mut().unwrap() ^= 1;
+        assert!(matches!(
+            WorkerV3VerificationChallengeFrameV2::decode_canonical(&mutated),
+            Err(WorkerV3VerificationProtocolErrorV2::IdentityMismatch(
+                "challenge"
+            ))
+        ));
+    }
+
+    #[test]
+    fn terminal_frames_enforce_bound_disposition_digest_and_session() {
+        let request = verification_request(3);
+        let other = verification_request(4);
+        let reservation =
+            WorkerV3VerificationChallengeReservationV2::new([12; 32], [13; 32]).unwrap();
+        let frame = WorkerV3VerificationTerminalFrameV2::application_response(
+            &request,
+            &reservation,
+            b"opaque".to_vec(),
+        )
+        .unwrap();
+        let decoded =
+            WorkerV3VerificationTerminalFrameV2::decode_canonical(frame.encode_canonical())
+                .unwrap();
+        assert_eq!(decoded.application_response_bytes(), b"opaque");
+        assert!(decoded.matches_session(&request, &reservation));
+        assert!(!decoded.matches_session(&other, &reservation));
+        assert!(!decoded.grants_authority());
+
+        let rejected = WorkerV3VerificationTerminalFrameV2::rejected(&request, &reservation);
+        assert_eq!(
+            rejected.encode_canonical().len(),
+            MIN_WORKER_V3_VERIFICATION_TERMINAL_BYTES_V2
+        );
+        assert_eq!(
+            WorkerV3VerificationTerminalFrameV2::decode_canonical(rejected.encode_canonical())
+                .unwrap()
+                .disposition(),
+            WorkerV3VerificationTerminalDispositionV2::Rejected
+        );
+        assert!(matches!(
+            WorkerV3VerificationTerminalFrameV2::application_response(
+                &request,
+                &reservation,
+                vec![0; MAX_WORKER_V3_VERIFICATION_APPLICATION_RESPONSE_BYTES_V2 + 1]
+            ),
+            Err(WorkerV3VerificationProtocolErrorV2::ApplicationResponseTooLarge { .. })
+        ));
+
+        let mut mutated = frame.encode_canonical().to_vec();
+        mutated[TERMINAL_FIXED_PREIMAGE_BYTES] ^= 1;
+        assert!(WorkerV3VerificationTerminalFrameV2::decode_canonical(&mutated).is_err());
+        mutated.push(0);
+        assert!(WorkerV3VerificationTerminalFrameV2::decode_canonical(&mutated).is_err());
     }
 }

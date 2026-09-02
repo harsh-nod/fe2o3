@@ -1889,6 +1889,8 @@ dependencies = [
 name = "fe2o3-worker-v3-verification-client"
 version = "0.1.0"
 dependencies = [
+ "fe2o3-compiler-execution-client",
+ "fe2o3-runtime-protocol",
  "fe2o3-worker-v3-verification-protocol",
  "rustix",
  "sha2 0.11.0",
@@ -1909,6 +1911,11 @@ dependencies = [
 name = "fe2o3-worker-v3-verification-service"
 version = "0.1.0"
 dependencies = [
+ "ed25519-dalek",
+ "fe2o3-artifact-transaction",
+ "fe2o3-compiler-execution-protocol",
+ "fe2o3-external-anchor-protocol",
+ "fe2o3-worker-v3-verification-client",
  "fe2o3-worker-v3-verification-protocol",
  "rustix",
  "sha2 0.11.0",
