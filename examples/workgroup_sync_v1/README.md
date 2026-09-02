@@ -2,8 +2,8 @@
 
 This standalone package defines two fixed `64x1x1` kernels with CPU oracles
 and formal contracts. The LDS reduction is target-neutral through semantic MIR
-and Kernel IR, then binds independently to the production gfx942 or gfx950
-profile.
+and Kernel IR, then binds independently to the production compiler profile for
+gfx942 or gfx950.
 
 ## LDS publish/read reduction
 
@@ -77,10 +77,11 @@ profile is outside this neutral-reduction driver.
 This is bounded source-to-code-object evidence, not a compiler-refinement proof
 or a claim of generalized memory safety, race freedom, reduction coverage, or
 GPU execution. The closed target-neutral V1 reduction contract is supported
-only on the pinned gfx942 and gfx950 production profiles. Current execution
-must enter through Worker V3 and the pure-Rust KFD runtime. The finalizer uses
-no COMGR and no shell linker; it does not shell out to `clang`, `llc`, or
-`ld.lld`.
+only on the pinned gfx942 and gfx950 production compiler profiles. This is
+compiler-target evidence for both targets, not gfx950 execution evidence. The
+currently qualified direct-KFD execution path is gfx942 only and must enter
+through Worker V3 and the pure-Rust KFD runtime. The finalizer uses no COMGR and
+no shell linker; it does not shell out to `clang`, `llc`, or `ld.lld`.
 
 ## Validation
 

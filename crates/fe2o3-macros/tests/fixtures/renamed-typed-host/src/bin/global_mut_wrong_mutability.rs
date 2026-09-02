@@ -1,5 +1,5 @@
 use gpu_device::{DeviceGlobalMutPtr, kernel};
-use gpu_host::__generated::{DeviceBuffer, GeneratedReadDeviceSlice, ObservedContext};
+use gpu_host::__generated::GeneratedKfdReadSlice;
 
 #[kernel(
     typed,
@@ -10,8 +10,8 @@ pub fn atomic(target: DeviceGlobalMutPtr<u32>) {
     let _ = target;
 }
 
-fn wrong<'a>(observed: &ObservedContext, target: &'a DeviceBuffer<u32>) {
-    let target = GeneratedReadDeviceSlice::new(observed, target).unwrap();
+fn wrong<'a>(target: &'a [u32]) {
+    let target = GeneratedKfdReadSlice::new(target);
     let _ = atomic_gpu::GlobalMut::new(target);
 }
 

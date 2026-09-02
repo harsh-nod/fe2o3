@@ -1,5 +1,5 @@
 use gpu_device::{DisjointSlice, kernel};
-use gpu_host::__generated::{DeviceBuffer, GeneratedReadWriteDeviceSlice, ObservedContext};
+use gpu_host::__generated::GeneratedKfdReadWriteSlice;
 
 #[kernel(
     typed,
@@ -9,9 +9,9 @@ pub fn two_outputs(left: DisjointSlice<f32>, right: DisjointSlice<f32>) {
     let _ = (left, right);
 }
 
-fn alias<'allocation>(observed: &ObservedContext, output: &'allocation mut DeviceBuffer<f32>) {
-    let left = GeneratedReadWriteDeviceSlice::new(observed, output).unwrap();
-    let right = GeneratedReadWriteDeviceSlice::new(observed, output).unwrap();
+fn alias<'allocation>(output: &'allocation mut [f32]) {
+    let left = GeneratedKfdReadWriteSlice::new(output);
+    let right = GeneratedKfdReadWriteSlice::new(output);
     let _arguments: two_outputs_gpu::Arguments<'allocation> =
         two_outputs_gpu::Arguments::new(left, right);
 }

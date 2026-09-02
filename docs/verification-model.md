@@ -354,17 +354,22 @@ source plus dependency hash.
 
 ## Trust Boundary
 
-The initial trusted computing base includes:
+The production trusted computing base includes:
 
 - Verus, its translation, SMT solver, and fe2o3 model axioms;
 - proof erasure and the executable/proof identity binder;
 - rustc and the pinned nightly interfaces;
 - the fe2o3 frontend, IR verifiers, transformations, and lowerings;
-- LLVM and ROCm code-object tools;
-- HIP/HSA runtime, driver, firmware, and GPU hardware;
+- LLVM/LLD and the admitted AMDGPU code-object tooling;
+- the checked direct-KFD and AMDGPU DRM UAPI bindings, Linux kernel and driver,
+  scheduler firmware, AQL hardware ABI, and GPU hardware;
 - contracts for unsafe Rust, FFI, inline assembly, and external device
   libraries;
 - host code that uses raw or unchecked APIs.
+
+Explicit qualification oracles may additionally trust HIP or ROCr/HSA. That
+trust is scoped to the qualification result and does not add either runtime to
+the production dependency closure or create a fallback execution path.
 
 Verus reduces uncertainty in the source program. It does not remove any item
 above merely because the build produced a proof record.

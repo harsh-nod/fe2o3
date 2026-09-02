@@ -31,6 +31,9 @@ reserved-fe2o3-symbols.workspace = true
 rustix = { workspace = true, features = ["process"] }
 sha2.workspace = true
 
+[target.'cfg(target_os = "linux")'.dependencies]
+fe2o3-process-identity.workspace = true
+
 [[bin]]
 name = "fe2o3-worker-executor-fixture"
 path = "tests/fixtures/worker_executor_fixture.rs"

@@ -1,6 +1,7 @@
 [package]
 name = "fe2o3-fill"
 version = "0.1.0"
+publish = false
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -8,6 +9,12 @@ rust-version.workspace = true
 
 [dependencies]
 fe2o3-device.workspace = true
+
+[target.'cfg(not(target_arch = "amdgpu"))'.dependencies]
+fe2o3-host.workspace = true
+
+[lib]
+name = "fe2o3_fill"
 
 [[bin]]
 name = "fe2o3-fill"

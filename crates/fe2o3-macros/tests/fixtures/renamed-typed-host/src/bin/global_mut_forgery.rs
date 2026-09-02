@@ -9,7 +9,7 @@ pub fn atomic(target: DeviceGlobalMutPtr<u32>) {
     let _ = target;
 }
 
-fn forge<'a>(region: gpu_host::__generated::GeneratedReadWriteDeviceSlice<'a, u32>) {
+fn forge<'a>(region: gpu_host::__generated::GeneratedKfdReadWriteSlice<'a, u32>) {
     let _ = atomic_gpu::GlobalMut { region };
 }
 

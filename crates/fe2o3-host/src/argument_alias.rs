@@ -1,10 +1,12 @@
 use crate::{
     ObservedContext,
+    generated_argument_borrow::GeneratedArgumentBorrowV1,
     generated_argument_plan::{
         GeneratedArgumentInputV1, GeneratedArgumentPackError, GeneratedArgumentPackingPlanV1,
         GeneratedDeviceScalarV1,
     },
 };
+#[cfg(feature = "qualification-legacy-hip-hsa")]
 use fe2o3_core::{
     DeviceBuffer, DeviceBufferIdentity, DeviceBufferRegion, DeviceBufferView, DeviceBufferViewMut,
     DeviceCopy, DevicePtr,
@@ -33,8 +35,8 @@ impl fmt::Debug for AllocationIdentity {
 
 /// Provenance and extent for a live device allocation.
 ///
-/// A value borrowed from a [`DeviceBuffer`] cannot outlive that buffer. Creating
-/// this value does not grant permission to launch or to access the allocation.
+/// A value borrowed from an owning allocation cannot outlive that allocation.
+/// Creating this value does not grant permission to launch or access it.
 pub struct AllocationProvenance<'allocation> {
     identity: AllocationIdentity,
     context: ObservedContext,
@@ -53,8 +55,8 @@ impl fmt::Debug for AllocationProvenance<'_> {
 }
 
 impl<'allocation> AllocationProvenance<'allocation> {
-    /// Derives provenance from a live, owning `DeviceBuffer` in the observed
-    /// context.
+    /// Derives provenance from a live legacy HIP buffer in the observed context.
+    #[cfg(feature = "qualification-legacy-hip-hsa")]
     pub fn from_device_buffer<T: DeviceCopy>(
         observed: &ObservedContext,
         buffer: &'allocation DeviceBuffer<T>,
@@ -195,6 +197,7 @@ impl CheckedByteRegion<'_> {
     }
 }
 
+#[cfg(feature = "qualification-legacy-hip-hsa")]
 pub(super) struct GeneratedDeviceSliceMetadata {
     identity: AllocationIdentity,
     _device_buffer_identity: DeviceBufferIdentity,
@@ -203,21 +206,7 @@ pub(super) struct GeneratedDeviceSliceMetadata {
     byte_length: usize,
 }
 
-/// Crate-private proof that a generated argument remains tied to an original
-/// allocation borrow even after its capability wrapper is dropped.
-pub(super) struct GeneratedArgumentBorrowV1<'allocation>(PhantomData<&'allocation ()>);
-
-impl GeneratedArgumentBorrowV1<'_> {
-    pub(crate) const fn new() -> Self {
-        Self(PhantomData)
-    }
-}
-
-#[cfg(test)]
-pub(super) const fn generated_argument_borrow_for_test() -> GeneratedArgumentBorrowV1<'static> {
-    GeneratedArgumentBorrowV1::new()
-}
-
+#[cfg(feature = "qualification-legacy-hip-hsa")]
 impl GeneratedDeviceSliceMetadata {
     fn from_region<T: DeviceCopy, R: DeviceBufferRegion<T> + ?Sized>(
         observed: &ObservedContext,
@@ -376,6 +365,7 @@ fn checked_device_region_impl<T>(
 /// emits the pointer and element count from that same retained buffer. Empty
 /// regions retain their allocation provenance and describe no memory effects.
 #[doc(hidden)]
+#[cfg(feature = "qualification-legacy-hip-hsa")]
 pub struct GeneratedReadDeviceSlice<'allocation, T: DeviceCopy> {
     pointer: DevicePtr<T>,
     len: usize,
@@ -383,6 +373,7 @@ pub struct GeneratedReadDeviceSlice<'allocation, T: DeviceCopy> {
     marker: PhantomData<&'allocation T>,
 }
 
+#[cfg(feature = "qualification-legacy-hip-hsa")]
 impl<'allocation, T: DeviceCopy> GeneratedReadDeviceSlice<'allocation, T> {
     pub fn new(
         observed: &ObservedContext,
@@ -473,6 +464,7 @@ impl<'allocation, T: DeviceCopy> GeneratedReadDeviceSlice<'allocation, T> {
 /// all agree that the source argument is write-only. This move-only capability exposes neither its
 /// pointer nor an initialized-input route.
 #[doc(hidden)]
+#[cfg(feature = "qualification-legacy-hip-hsa")]
 pub struct GeneratedWriteDeviceSlice<'allocation, T: DeviceCopy> {
     pointer: DevicePtr<T>,
     len: usize,
@@ -480,6 +472,7 @@ pub struct GeneratedWriteDeviceSlice<'allocation, T: DeviceCopy> {
     marker: PhantomData<&'allocation mut T>,
 }
 
+#[cfg(feature = "qualification-legacy-hip-hsa")]
 impl<'allocation, T: DeviceCopy> GeneratedWriteDeviceSlice<'allocation, T> {
     pub fn new(
         observed: &ObservedContext,
@@ -562,6 +555,7 @@ impl<'allocation, T: DeviceCopy> GeneratedWriteDeviceSlice<'allocation, T> {
 /// argument. Empty regions retain their allocation provenance and describe no
 /// memory effects.
 #[doc(hidden)]
+#[cfg(feature = "qualification-legacy-hip-hsa")]
 pub struct GeneratedReadWriteDeviceSlice<'allocation, T: DeviceCopy> {
     pointer: DevicePtr<T>,
     len: usize,
@@ -569,6 +563,7 @@ pub struct GeneratedReadWriteDeviceSlice<'allocation, T: DeviceCopy> {
     marker: PhantomData<&'allocation mut T>,
 }
 
+#[cfg(feature = "qualification-legacy-hip-hsa")]
 impl<'allocation, T: DeviceCopy> GeneratedReadWriteDeviceSlice<'allocation, T> {
     pub fn new(
         observed: &ObservedContext,

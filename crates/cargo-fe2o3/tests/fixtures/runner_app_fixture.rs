@@ -528,6 +528,8 @@ fn validate_handoff(controls: &FixtureControls) -> Result<ValidatedHandoff, Stri
                 .write_all(&[1])
                 .map_err(|error| format!("write test ACK readiness: {error}"))?;
         }
+        // This is a fail-safe for the hostile fixture, not the ACK deadline under test.
+        // A valid runner uses the private readiness signal above and rejects after two seconds.
         thread::sleep(Duration::from_secs(30));
     }
     let process_creation = controls

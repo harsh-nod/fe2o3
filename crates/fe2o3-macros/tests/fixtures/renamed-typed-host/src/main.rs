@@ -43,36 +43,31 @@ pub fn renamed_result(
 fn assert_expectation<T: gpu_host::__generated::CompilerGeneratedKernelExpectationV1>() {}
 
 fn assert_general_arguments<'allocation>(
-    observed: &gpu_host::__generated::ObservedContext,
-    input: &'allocation gpu_host::__generated::DeviceBuffer<f32>,
-    output: &'allocation mut gpu_host::__generated::DeviceBuffer<f32>,
+    input: &'allocation [f32],
+    output: &'allocation mut [f32],
 ) {
-    let input = gpu_host::__generated::GeneratedReadDeviceSlice::new(observed, input).unwrap();
-    let output =
-        gpu_host::__generated::GeneratedReadWriteDeviceSlice::new(observed, output).unwrap();
+    let input = gpu_host::__generated::GeneratedKfdReadSlice::new(input);
+    let output = gpu_host::__generated::GeneratedKfdReadWriteSlice::new(output);
     let _arguments: renamed_general_gpu::Arguments<'allocation> =
         renamed_general_gpu::Arguments::new(2.0_f32, input, output);
 }
 
 fn assert_vecadd_arguments<'allocation>(
-    observed: &gpu_host::__generated::ObservedContext,
-    a: &'allocation gpu_host::__generated::DeviceBuffer<f32>,
-    b: &'allocation gpu_host::__generated::DeviceBuffer<f32>,
-    c: &'allocation mut gpu_host::__generated::DeviceBuffer<f32>,
+    a: &'allocation [f32],
+    b: &'allocation [f32],
+    c: &'allocation mut [f32],
 ) {
-    let a = gpu_host::__generated::GeneratedReadDeviceSlice::new(observed, a).unwrap();
-    let b = gpu_host::__generated::GeneratedReadDeviceSlice::new(observed, b).unwrap();
-    let c = gpu_host::__generated::GeneratedReadWriteDeviceSlice::new(observed, c).unwrap();
+    let a = gpu_host::__generated::GeneratedKfdReadSlice::new(a);
+    let b = gpu_host::__generated::GeneratedKfdReadSlice::new(b);
+    let c = gpu_host::__generated::GeneratedKfdReadWriteSlice::new(c);
     let _arguments: renamed_typed_gpu::Arguments<'allocation> =
         renamed_typed_gpu::Arguments::new(a, b, c);
 }
 
 fn assert_global_mut_argument<'allocation>(
-    observed: &gpu_host::__generated::ObservedContext,
-    target: &'allocation mut gpu_host::__generated::DeviceBuffer<u32>,
+    target: &'allocation mut [u32],
 ) {
-    let target = gpu_host::__generated::GeneratedReadWriteDeviceSlice::new(observed, target)
-        .unwrap();
+    let target = gpu_host::__generated::GeneratedKfdReadWriteSlice::new(target);
     let target = renamed_global_mut_gpu::GlobalMut::new(target).unwrap();
     assert_eq!(target.len(), 1);
     assert!(!target.is_empty());

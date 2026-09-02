@@ -46,7 +46,9 @@ compiler enters one unselected production transaction inside
 - `#[kernel]` emits strict V1 registration metadata with a direct function
   pointer. The collector rejects malformed, duplicate, inconsistent, or
   unregistered prefix-only candidates transactionally.
-- `cargo-fe2o3 doctor` validates ROCm/HIP toolchain discovery.
+- Historical scaffold note: `cargo-fe2o3 doctor` originally validated
+  ROCm/HIP discovery. The current command is KFD-first, keeps compiler tools
+  separate, and treats ROCgdb/rocprofv3 as optional observation tools.
 - `cargo-fe2o3 build` builds and loads `librustc_codegen_fe2o3.so`.
 - `rustc-codegen-fe2o3` wraps `rustc_codegen_llvm` for host codegen and detects
   kernel candidates in rustc codegen units.
@@ -179,8 +181,14 @@ compiler enters one unselected production transaction inside
 6. Broaden the repeatable protected hardware gates beyond the current exact
    target and kernel profiles.
 
-## Runtime ABI Assumption
+## Historical Runtime ABI Assumption
 
-The launch macro currently packs slice-like values as two HIP kernel arguments:
-device pointer then `usize` length. The compiler backend should generate matching
+The original HIP launch macro packed slice-like values as two kernel arguments:
+device pointer then `usize` length. The compiler backend generated matching
 kernel entry signatures.
+
+Current generated bindings implement the address-free
+`CompilerGeneratedKfdArguments` contract. They retain borrowed host allocations
+until the authenticated Worker V3 and direct-KFD runtime boundary materializes
+the admitted device allocation and kernarg projection. HIP/HSA argument routes
+remain qualification-only and cannot substitute for that production path.

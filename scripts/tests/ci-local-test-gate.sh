@@ -16,6 +16,26 @@ trap cleanup_timeout_test_root EXIT
 bash "${TEST_SCRIPT_DIR}/rustc-codegen-shards.sh"
 python3 "${TEST_SCRIPT_DIR}/bounded-moe-ci-dispatch.py"
 
+VERUS_DISPATCH_LOG="${TIMEOUT_TEST_ROOT}/verus-dispatch.log"
+(
+  run_step() {
+    printf '%s\t' "$1" >>"${VERUS_DISPATCH_LOG}"
+    shift
+    printf '%q ' "$@" >>"${VERUS_DISPATCH_LOG}"
+    printf '\n' >>"${VERUS_DISPATCH_LOG}"
+  }
+  FE2O3_RUNTIME_MODEL_VERUS=/opt/verus/runtime-model \
+    VERUS=/opt/verus/mir-pliron \
+    run_verus
+)
+[[ "$(wc -l <"${VERUS_DISPATCH_LOG}")" -eq 4 ]]
+rg -F $'runtime-model-verus\tenv VERUS=/opt/verus/runtime-model ' \
+  "${VERUS_DISPATCH_LOG}" >/dev/null
+for step in verus-fixtures scalar-gemm-verus mir-pliron-per-compilation-verus; do
+  rg -F "${step}"$'\tenv VERUS=/opt/verus/mir-pliron ' \
+    "${VERUS_DISPATCH_LOG}" >/dev/null
+done
+
 OWNED_TMP_TARGET="${TIMEOUT_TEST_ROOT}/owned-tmp-target"
 mkdir -m 700 -- "${OWNED_TMP_TARGET}"
 OWNED_TMP_PATH="$(
@@ -516,6 +536,11 @@ fi
 [[ " ${cpu_command} " == *" -p fe2o3-source-isa-observation "* ]] || {
   printf '%s\n' \
     'raw CPU tests omitted the reusable source/ISA observation protocol suite' >&2
+  exit 1
+}
+[[ " ${cpu_command} " == *" -p fe2o3-process-identity "* ]] || {
+  printf '%s\n' \
+    'raw CPU tests omitted the process-identity and immutable-memfd suite' >&2
   exit 1
 }
 if [[ " ${cpu_command} " == *" -p ${RUSTC_CODEGEN_TEST_PACKAGE} "* ]]; then
@@ -1029,7 +1054,7 @@ assert_equals \
   "$(step_command rocm-cargo-fe2o3-bootstrap)" \
   'ROCm compile did not build the feature-invariant shared driver once'
 assert_equals \
-  "env ${TIMEOUT_TEST_ROOT}/rocm-driver/cargo-fe2o3 doctor" \
+  "env ${TIMEOUT_TEST_ROOT}/rocm-driver/cargo-fe2o3 doctor --require-gfx942-and-tools-present" \
   "$(step_command rocm-doctor)" \
   'ROCm compile did not invoke the resolved driver directly for doctor'
 for production_step in \
@@ -1122,6 +1147,10 @@ assert_equals \
   'cargo run --locked -p fe2o3-kfd --features live-validation --example kfd-compute-aql-queue -- --all' \
   "$(step_command hardware-kfd-compute-aql-queue)" \
   'hardware smoke did not exercise KFD AQL queue ownership on every device'
+assert_equals \
+  'cargo test --locked -p fe2o3-kfd --features live-validation --test kfd_debug_trap_live -- --exact mi300x_ptrace_runtime_handshake_and_typed_gate --nocapture --test-threads=1' \
+  "$(step_command hardware-kfd-debug-trap-live)" \
+  'hardware smoke did not exercise explicit KFD debugger target teardown'
 assert_equals \
   'cargo test --locked -p fe2o3-debug-cli --features live-validation --test hardware_v2_live -- --test-threads=1' \
   "$(step_command hardware-kfd-debug-protocol-v2)" \

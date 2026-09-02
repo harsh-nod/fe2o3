@@ -107,7 +107,9 @@ sha256sum --check --status "${SOURCE_DIGESTS}"
 awk -F '\t' '
   ($1 == "normative" || $1 == "supplemental") && NF != 13 { exit 1 }
   $2 == "59" && !($4 == "N/A" && $6 == "N/A" && $7 == "n/a") { exit 1 }
-  $2 == "53" && !($7 ~ /compile-code-object/ && $8 ~ /gfx1151/ && $8 ~ /gfx942/ && $8 ~ /gfx950/) { exit 1 }
+  $2 == "53" && !($7 ~ /compile-code-object/ && $8 == "generic,gfx942" &&
+                    $11 ~ /FE2O3_TARGET=gfx942 scripts\/ci-local.sh rocm-compile/ &&
+                    $11 !~ /FE2O3_TARGET=(gfx1151|gfx950)/) { exit 1 }
   END { if (NR != 114) exit 1 }
 ' "${OUT_A}/dashboard.tsv"
 grep -F '| Local hardware execution | 0 |' "${OUT_A}/dashboard.md" >/dev/null
@@ -165,6 +167,15 @@ mutate_claim_field "${CLAIMS}" "${TEST_ROOT}/stale-command.tsv" \
 expect_failure stale_command 'references a stale test command: scripts/removed-ci.sh' \
   "${DASHBOARD_SCRIPT}" validate --status "${STATUS}" --matrix "${MATRIX}" \
   --claims "${TEST_ROOT}/stale-command.tsv" --repo "${REPO_ROOT}"
+
+for target in gfx1151 gfx950; do
+  mutate_claim_field "${CLAIMS}" "${TEST_ROOT}/unsupported-rocm-${target}.tsv" \
+    evidence atomics 4 "FE2O3_TARGET=${target} scripts/ci-local.sh rocm-compile"
+  expect_failure "unsupported_rocm_${target}" \
+    'names an unsupported production rocm-compile target' \
+    "${DASHBOARD_SCRIPT}" validate --status "${STATUS}" --matrix "${MATRIX}" \
+    --claims "${TEST_ROOT}/unsupported-rocm-${target}.tsv" --repo "${REPO_ROOT}"
+done
 
 mutate_claim_field "${CLAIMS}" "${TEST_ROOT}/generic-compile.tsv" \
   evidence atomics 6 generic

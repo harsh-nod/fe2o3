@@ -565,7 +565,6 @@ dependencies = [
  "fe2o3-artifacts",
  "fe2o3-compiler-execution-client",
  "fe2o3-compiler-ffi",
- "fe2o3-core",
  "fe2o3-device",
  "fe2o3-hsaco",
  "fe2o3-hsaco-finalize",
@@ -580,6 +579,10 @@ dependencies = [
  "rustix",
  "sha2 0.11.0",
 ]
+
+[[package]]
+name = "fe2o3-host-api"
+version = "0.1.0"
 
 [[package]]
 name = "fe2o3-hsaco"
@@ -605,6 +608,7 @@ dependencies = [
  "fe2o3-llvm-text",
  "fe2o3-lower-mir-kernel",
  "fe2o3-mir-model",
+ "fe2o3-process-identity",
  "fe2o3-source-isa-observation",
  "object",
  "reserved-fe2o3-symbols",
@@ -739,6 +743,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe2o3-process-identity"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-amd-target",
+ "fe2o3-rustc-invocation",
+ "libc",
+ "rustix",
+ "sha2 0.11.0",
+]
+
+[[package]]
 name = "fe2o3-proof-contracts"
 version = "0.1.0"
 
@@ -748,14 +763,19 @@ version = "0.1.0"
 dependencies = [
  "fe2o3-amdhsa-loader",
  "fe2o3-aql",
+ "fe2o3-host-api",
  "fe2o3-hsaco",
  "fe2o3-kfd",
+ "fe2o3-runtime-model",
  "sha2 0.11.0",
 ]
 
 [[package]]
 name = "fe2o3-runtime-model"
 version = "0.1.0"
+dependencies = [
+ "spin",
+]
 
 [[package]]
 name = "fe2o3-runtime-protocol"

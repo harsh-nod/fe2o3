@@ -207,7 +207,7 @@ fn mi300x_live_kfd_v3_binds_observes_controls_and_terminates() {
         .args(["--exact", "live_kfd_v3_live_target", "--nocapture"])
         .env(TARGET_ENV, "1")
         .env(TARGET_HSACO_ENV, &inputs.hsaco)
-        .env("RUST_MIN_STACK", "33554432")
+        .env_remove("RUST_MIN_STACK")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
@@ -367,9 +367,67 @@ fn mi300x_live_kfd_v3_binds_observes_controls_and_terminates() {
         }
     ));
 
-    let mut queue = None;
-    let mut device_capable = false;
-    for request_id in 510..540 {
+    let discovery_deadline = Instant::now() + RESPONSE_TIMEOUT;
+    let mut request_id = 510;
+    let (queue, suspended) = loop {
+        assert!(
+            Instant::now() < discovery_deadline,
+            "debugger did not observe one complete target queue snapshot"
+        );
+        let queues = exchange(
+            &mut input,
+            &receiver,
+            LiveGpuDebugRequestV3::InspectHardwareQueues {
+                schema: LiveGpuRequestSchemaV3::V3,
+                request_id,
+                expected_revision: 0,
+                page: hardware_page(0),
+            },
+        );
+        request_id += 1;
+        let candidate = match queues {
+            LiveGpuDebugResponseV3::Ok {
+                session:
+                    LiveGpuSessionViewV3 {
+                        state: LiveGpuSessionStateV3::Running,
+                        runtime_enabled: true,
+                        ..
+                    },
+                result,
+                ..
+            } => match *result {
+                LiveGpuDebugResultV3::Hardware {
+                    hardware:
+                        HardwareDebugResultV2::Queues {
+                            generation,
+                            items,
+                            next_start: 0,
+                        },
+                } if items.len() == 1
+                    && items[0].ring_bytes == 4096
+                    && items[0].context_save_area_bytes > 0
+                    && !items[0].suspended_by_session =>
+                {
+                    Some((generation, items[0]))
+                }
+                _ => None,
+            },
+            LiveGpuDebugResponseV3::Error {
+                session:
+                    LiveGpuSessionViewV3 {
+                        state: LiveGpuSessionStateV3::Poisoned | LiveGpuSessionStateV3::Terminated,
+                        ..
+                    },
+                error,
+                ..
+            } => panic!("debugger became terminal during queue discovery: {error:?}"),
+            _ => None,
+        };
+        let Some((generation, candidate)) = candidate else {
+            thread::sleep(Duration::from_millis(10));
+            continue;
+        };
+
         let devices = exchange(
             &mut input,
             &receiver,
@@ -377,69 +435,105 @@ fn mi300x_live_kfd_v3_binds_observes_controls_and_terminates() {
                 schema: LiveGpuRequestSchemaV3::V3,
                 request_id,
                 expected_revision: 0,
-                page: hardware_page(),
+                page: hardware_page(generation),
             },
         );
-        if let LiveGpuDebugResponseV3::Ok { result, .. } = devices
-            && let LiveGpuDebugResultV3::Hardware {
-                hardware: HardwareDebugResultV2::Devices { items, .. },
-            } = *result
-        {
-            device_capable = items.iter().any(|device| device.trap_debug_supported);
+        request_id += 1;
+        let device = match devices {
+            LiveGpuDebugResponseV3::Ok {
+                session:
+                    LiveGpuSessionViewV3 {
+                        state: LiveGpuSessionStateV3::Running,
+                        runtime_enabled: true,
+                        ..
+                    },
+                result,
+                ..
+            } => match *result {
+                LiveGpuDebugResultV3::Hardware {
+                    hardware:
+                        HardwareDebugResultV2::Devices {
+                            generation: device_generation,
+                            items,
+                            next_start: 0,
+                        },
+                } if device_generation == generation => items
+                    .into_iter()
+                    .find(|device| device.id == candidate.device),
+                _ => None,
+            },
+            LiveGpuDebugResponseV3::Error {
+                session:
+                    LiveGpuSessionViewV3 {
+                        state: LiveGpuSessionStateV3::Poisoned | LiveGpuSessionStateV3::Terminated,
+                        ..
+                    },
+                error,
+                ..
+            } => panic!("debugger became terminal during device discovery: {error:?}"),
+            _ => None,
+        };
+        let Some(device) = device else {
+            thread::sleep(Duration::from_millis(10));
+            continue;
+        };
+        assert_eq!(device.gfx_target_version, 90_402);
+        assert_eq!(device.xcc_count, 8);
+        if !device.trap_debug_supported {
+            eprintln!("SKIP[device_capability_absent]: KFD reports no trap-debug device");
+            terminate(&mut input, &receiver, request_id, 0);
+            drop(input);
+            child.finish();
+            return;
         }
-        let queues = exchange(
+
+        let suspended = exchange(
             &mut input,
             &receiver,
-            LiveGpuDebugRequestV3::InspectHardwareQueues {
+            LiveGpuDebugRequestV3::SuspendQueues {
                 schema: LiveGpuRequestSchemaV3::V3,
-                request_id: request_id + 100,
+                request_id,
                 expected_revision: 0,
-                page: hardware_page(),
+                queues: vec![candidate.id],
+                grace_period: 0,
             },
         );
-        if let LiveGpuDebugResponseV3::Ok { result, .. } = queues
-            && let LiveGpuDebugResultV3::Hardware {
-                hardware: HardwareDebugResultV2::Queues { items, .. },
-            } = *result
-        {
-            queue = items.first().map(|item| item.id);
+        request_id += 1;
+        if matches!(
+            suspended,
+            LiveGpuDebugResponseV3::Error {
+                session: LiveGpuSessionViewV3 {
+                    state: LiveGpuSessionStateV3::Running,
+                    revision: 0,
+                    runtime_enabled: true,
+                    ..
+                },
+                error: LiveGpuErrorV3 {
+                    stage: LiveGpuErrorStageV3::Query,
+                    code: LiveGpuErrorCodeV3::UnknownLogicalIdentity,
+                    effect: HardwareEffectV2::None,
+                    terminal: false,
+                },
+                ..
+            }
+        ) {
+            thread::sleep(Duration::from_millis(10));
+            continue;
         }
-        if queue.is_some() {
-            break;
-        }
-        thread::sleep(Duration::from_millis(10));
-    }
-    let queue = queue.expect("debugger did not observe the real target queue");
-    if !device_capable {
-        eprintln!("SKIP[device_capability_absent]: KFD reports no trap-debug device");
-        terminate(&mut input, &receiver, 700, 0);
-        drop(input);
-        child.finish();
-        return;
-    }
-
-    let suspended = exchange(
-        &mut input,
-        &receiver,
-        LiveGpuDebugRequestV3::SuspendQueues {
-            schema: LiveGpuRequestSchemaV3::V3,
-            request_id: 701,
-            expected_revision: 0,
-            queues: vec![queue],
-            grace_period: 0,
-        },
-    );
+        break (candidate.id, suspended);
+    };
     assert_control_committed(suspended, 1);
     let captured = exchange(
         &mut input,
         &receiver,
         LiveGpuDebugRequestV3::CaptureStoppedQueueEnvelope {
             schema: LiveGpuRequestSchemaV3::V3,
-            request_id: 702,
+            request_id,
             expected_revision: 1,
             queue,
         },
     );
+    request_id += 1;
     assert!(matches!(
         captured,
         LiveGpuDebugResponseV3::Ok {
@@ -496,21 +590,22 @@ fn mi300x_live_kfd_v3_binds_observes_controls_and_terminates() {
         &receiver,
         LiveGpuDebugRequestV3::ResumeQueues {
             schema: LiveGpuRequestSchemaV3::V3,
-            request_id: 703,
+            request_id,
             expected_revision: 1,
             queues: vec![queue],
         },
     );
+    request_id += 1;
     assert_control_committed(resumed, 2);
 
-    terminate(&mut input, &receiver, 704, 2);
+    terminate(&mut input, &receiver, request_id, 2);
     drop(input);
     child.finish();
 }
 
-fn hardware_page() -> HardwarePageRequestV2 {
+fn hardware_page(expected_generation: u64) -> HardwarePageRequestV2 {
     HardwarePageRequestV2 {
-        expected_generation: 0,
+        expected_generation,
         start: 0,
         limit: 16,
     }

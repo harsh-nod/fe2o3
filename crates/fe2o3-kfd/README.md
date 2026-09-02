@@ -625,9 +625,10 @@ queue or launch implementation.
 The serial live validation ptrace-attaches a child, acknowledges target runtime
 enable, observes the real 4 KiB KFD queue through the bounded debugger snapshot,
 observes its removal after queue/event destruction, acknowledges runtime
-disable, and completes bounded detach/reap. It does not qualify wave/register
-state, source debugging, target-memory access, kernel execution under the
-debugger, timing, or performance.
+disable, and completes bounded detach/reap of that direct child leader. The
+test does not establish descendant containment. It does not qualify
+wave/register state, source debugging, target-memory access, kernel execution
+under the debugger, timing, or performance.
 
 The cooperative target-telemetry channel is a separate authority-free
 observation aid for `fe2o3-debug live-kfd`. It uses a private Unix
