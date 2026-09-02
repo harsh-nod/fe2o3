@@ -379,7 +379,6 @@ impl Error for CompilerExecutionBoundaryErrorV1 {
 #[cfg(test)]
 mod tests {
     use std::os::unix::process::CommandExt;
-    use std::sync::Mutex;
 
     use ed25519_dalek::SigningKey;
     use fe2o3_compiler_closure_capability::COMPILER_EXECUTION_POLICY_CHILD_FD_V1;
@@ -392,7 +391,35 @@ mod tests {
 
     use super::*;
 
-    static RESERVED_CHILD_FD_LOCK: Mutex<()> = Mutex::new(());
+    const ISOLATED_BOUNDARY_TEST_ENV: &str = "FE2O3_COMPILER_EXECUTION_BOUNDARY_ISOLATED_TEST_V1";
+
+    fn run_in_isolated_boundary_test_process(test_name: &str) -> bool {
+        match std::env::var_os(ISOLATED_BOUNDARY_TEST_ENV) {
+            None => {}
+            Some(value) if value == std::ffi::OsStr::new(test_name) => return false,
+            Some(value) => {
+                panic!("mismatched isolated compiler-execution boundary test sentinel: {value:?}")
+            }
+        }
+
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
+            .args(["--exact", test_name, "--nocapture", "--test-threads=1"])
+            .env(ISOLATED_BOUNDARY_TEST_ENV, test_name);
+        // SAFETY: the helper uses close_range with CLOEXEC, which is async-signal-safe and leaves
+        // every descriptor available until the isolated test binary replaces this child image.
+        unsafe {
+            command.pre_exec(crate::application_exec::protect_all_nonstdio_descriptors);
+        }
+        let output = command.output().unwrap();
+        assert!(
+            output.status.success(),
+            "isolated compiler-execution boundary test failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+        true
+    }
 
     fn policy(seed: u8) -> CompilerExecutionIssuerPolicyV1 {
         CompilerExecutionIssuerPolicyV1::new(
@@ -471,9 +498,11 @@ mod tests {
 
     #[test]
     fn preparation_installs_exact_policy_and_child_created_service_channel() {
-        let _guard = RESERVED_CHILD_FD_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if run_in_isolated_boundary_test_process(
+            "compiler_execution_boundary::tests::preparation_installs_exact_policy_and_child_created_service_channel",
+        ) {
+            return;
+        }
         let source_profile = client_profile(7, 1_234);
         let mut command = Command::new("/bin/sh");
         command.arg("-c").arg(format!(
@@ -501,9 +530,11 @@ mod tests {
 
     #[test]
     fn application_verifier_gets_service_channel_without_policy_capability() {
-        let _guard = RESERVED_CHILD_FD_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if run_in_isolated_boundary_test_process(
+            "compiler_execution_boundary::tests::application_verifier_gets_service_channel_without_policy_capability",
+        ) {
+            return;
+        }
         let source_profile = client_profile(8, 1_234);
         let mut command = Command::new("/bin/sh");
         command.arg("-c").arg(format!(
