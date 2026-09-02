@@ -1,12 +1,12 @@
 use std::collections::HashSet;
 use std::fs::File;
-use std::io::{IoSlice, Write};
+use std::io::{IoSlice, IoSliceMut, Write};
 use std::mem::MaybeUninit;
 use std::os::fd::{AsFd, AsRawFd, OwnedFd};
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use ed25519_dalek::{Signer, SigningKey};
 use fe2o3_artifact_transaction::{
@@ -45,13 +45,14 @@ use fe2o3_worker_v3_verification_service::{
     WorkerV3VerificationCurrentRecordOutcomeV2, WorkerV3VerificationMeasurementResolverV1,
     WorkerV3VerificationPolicyResolverV1, WorkerV3VerificationRejectionReasonV1,
     WorkerV3VerificationRejectionReasonV2, WorkerV3VerificationServiceErrorV1,
-    WorkerV3VerificationServiceErrorV2, begin_worker_v3_verification_session_v2,
-    prepare_worker_v3_verification_receiver_v1,
+    WorkerV3VerificationServiceErrorV2, begin_worker_v3_verification_session_until_v2,
+    begin_worker_v3_verification_session_v2, prepare_worker_v3_verification_receiver_v1,
 };
 use rustix::fs::{MemfdFlags, Mode, OFlags, SealFlags};
 use rustix::net::{
-    AddressFamily, RecvFlags, SendAncillaryBuffer, SendAncillaryMessage, SendFlags, Shutdown,
-    SocketFlags, SocketType, recv, send, sendmsg, shutdown, socketpair,
+    AddressFamily, RecvAncillaryBuffer, RecvAncillaryMessage, RecvFlags, SendAncillaryBuffer,
+    SendAncillaryMessage, SendFlags, Shutdown, SocketFlags, SocketType, recv, recvmsg, send,
+    sendmsg, shutdown, socketpair,
 };
 use sha2::{Digest, Sha256};
 
@@ -389,14 +390,17 @@ fn exact_two_phase_session_returns_only_opaque_authority_free_application_bytes(
     let client_request = request.clone();
     let client_fixture = fixture.clone();
     let client_thread = thread::spawn(move || {
-        let outcome = WorkerV3VerificationClientV2::admit(client, Duration::from_secs(2))
-            .unwrap()
+        let deadline = Instant::now().checked_add(Duration::from_secs(2)).unwrap();
+        let client = WorkerV3VerificationClientV2::admit_until(client, deadline).unwrap();
+        assert_eq!(client.deadline(), deadline);
+        let outcome = client
             .begin(client_request.clone(), snapshots(&client_request))
             .unwrap();
         let ClientBeginOutcomeV2::Reserved(begin) = outcome else {
             panic!("valid Begin was rejected");
         };
         let (challenge, pending) = begin.into_parts();
+        assert_eq!(pending.deadline(), deadline);
         assert_eq!(challenge.reservation_identity(), &[0x82; 32]);
         let compiler_challenge = challenge.into_compiler_execution_challenge().unwrap();
         let challenge = *compiler_challenge.as_bytes();
@@ -410,9 +414,10 @@ fn exact_two_phase_session_returns_only_opaque_authority_free_application_bytes(
     });
     let (mut policy, mut measurement, mut replay) = admission_state(&request);
     let mut reservations = FixedReservations::available(0x81, 0x82);
-    let begin = begin_worker_v3_verification_session_v2(
+    let deadline = Instant::now().checked_add(Duration::from_secs(2)).unwrap();
+    let begin = begin_worker_v3_verification_session_until_v2(
         service,
-        Duration::from_secs(2),
+        deadline,
         &mut policy,
         &mut measurement,
         &mut replay,
@@ -422,11 +427,13 @@ fn exact_two_phase_session_returns_only_opaque_authority_free_application_bytes(
     let WorkerV3VerificationBeginOutcomeV2::Reserved(pending) = begin else {
         panic!("valid Begin was rejected");
     };
+    assert_eq!(pending.deadline(), deadline);
     assert_eq!(pending.reservation().challenge_bytes(), &[0x81; 32]);
     let current = pending.receive_current_record().unwrap();
     let WorkerV3VerificationCurrentRecordOutcomeV2::Ready(terminal) = current else {
         panic!("valid current record was rejected");
     };
+    assert_eq!(terminal.deadline(), deadline);
     assert!(!terminal.grants_authority());
     assert_eq!(
         terminal
@@ -449,6 +456,71 @@ fn exact_two_phase_session_returns_only_opaque_authority_free_application_bytes(
         b"opaque-application-decision"
     );
     assert!(!terminal.grants_authority());
+}
+
+#[test]
+fn preexpired_absolute_deadlines_fail_before_any_descriptor_transfer() {
+    let (service, client) = pair();
+    assert!(matches!(
+        WorkerV3VerificationClientV2::admit_until(client, Instant::now()),
+        Err(WorkerV3VerificationClientErrorV2::Timeout)
+    ));
+    assert_eq!(
+        recv(&service, &mut [0_u8; 1], RecvFlags::DONTWAIT)
+            .unwrap()
+            .0,
+        0
+    );
+
+    let request = verification_request(36);
+    let envelope = sealed_read_only(ENVELOPE);
+    let hsaco = sealed_read_only(HSACO);
+    let (service, peer) = pair();
+    let retained_service = rustix::io::fcntl_dupfd_cloexec(&service, 0).unwrap();
+    send_begin_raw(&peer, &request, &envelope, &hsaco);
+    let (mut policy, mut measurement, mut replay) = admission_state(&request);
+    let mut reservations = FixedReservations::available(0x9d, 0x9e);
+    assert!(matches!(
+        begin_worker_v3_verification_session_until_v2(
+            service,
+            Instant::now(),
+            &mut policy,
+            &mut measurement,
+            &mut replay,
+            &mut reservations,
+        ),
+        Err(WorkerV3VerificationServiceErrorV2::V1(
+            WorkerV3VerificationServiceErrorV1::Timeout
+        ))
+    ));
+    assert!(replay.0.is_empty());
+    assert!(reservations.available);
+
+    let expected = request.encode_canonical();
+    let mut bytes = vec![0_u8; expected.len()];
+    let mut space = AlignedAncillaryStorage(
+        [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(2), ScmCredentials(1))],
+    );
+    let mut ancillary = RecvAncillaryBuffer::new(&mut space.0);
+    let received = {
+        let mut vectors = [IoSliceMut::new(&mut bytes)];
+        recvmsg(
+            &retained_service,
+            &mut vectors,
+            &mut ancillary,
+            RecvFlags::CMSG_CLOEXEC | RecvFlags::TRUNC,
+        )
+        .unwrap()
+    };
+    assert_eq!(received.bytes, expected.len());
+    assert_eq!(bytes.as_slice(), expected);
+    let mut transferred_descriptors = Vec::new();
+    for message in ancillary.drain() {
+        if let RecvAncillaryMessage::ScmRights(descriptors) = message {
+            transferred_descriptors.extend(descriptors);
+        }
+    }
+    assert_eq!(transferred_descriptors.len(), 2);
 }
 
 #[test]

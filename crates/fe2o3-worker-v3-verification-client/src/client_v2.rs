@@ -51,7 +51,7 @@ impl fmt::Debug for WorkerV3VerificationClientV2 {
 }
 
 impl WorkerV3VerificationClientV2 {
-    /// Admits one connected unnamed Unix `SOCK_SEQPACKET` peer under one absolute deadline.
+    /// Admits one connected unnamed Unix `SOCK_SEQPACKET` peer for one bounded timeout.
     pub fn admit(
         peer: OwnedFd,
         timeout: Duration,
@@ -59,12 +59,28 @@ impl WorkerV3VerificationClientV2 {
         if timeout.is_zero() {
             return Err(WorkerV3VerificationClientErrorV2::InvalidTimeout);
         }
-        set_close_on_exec(&peer)?;
-        validate_peer(&peer)?;
         let deadline = Instant::now()
             .checked_add(timeout)
             .ok_or(WorkerV3VerificationClientErrorV2::DeadlineOverflow)?;
+        Self::admit_until(peer, deadline)
+    }
+
+    /// Admits one connected unnamed Unix `SOCK_SEQPACKET` peer until an exact deadline.
+    ///
+    /// The caller-supplied monotonic deadline is retained unchanged across every V2 phase.
+    pub fn admit_until(
+        peer: OwnedFd,
+        deadline: Instant,
+    ) -> Result<Self, WorkerV3VerificationClientErrorV2> {
+        require_deadline(deadline)?;
+        set_close_on_exec(&peer)?;
+        validate_peer(&peer)?;
         Ok(Self { peer, deadline })
+    }
+
+    /// Returns the exact caller-supplied monotonic deadline retained by this session.
+    pub fn deadline(&self) -> Instant {
+        self.deadline
     }
 
     /// Sends the canonical Begin request and exactly two immutable payload descriptors.
@@ -341,6 +357,11 @@ impl PendingWorkerV3VerificationClientV2 {
     /// Returns the exact Begin request retained for response correlation.
     pub const fn request(&self) -> &WorkerV3VerificationRequestV1 {
         &self.request
+    }
+
+    /// Returns the exact admission deadline retained across all remaining phases.
+    pub fn deadline(&self) -> Instant {
+        self.deadline
     }
 
     /// Reports that pending transport state grants no authority.
@@ -686,6 +707,16 @@ fn wait_for_peer(
             Err(source) => return Err(WorkerV3VerificationClientErrorV2::Poll(source.into())),
         }
     }
+}
+
+fn require_deadline(deadline: Instant) -> Result<(), WorkerV3VerificationClientErrorV2> {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if remaining.is_zero() {
+        return Err(WorkerV3VerificationClientErrorV2::Timeout);
+    }
+    Timespec::try_from(remaining)
+        .map(|_| ())
+        .map_err(|_| WorkerV3VerificationClientErrorV2::DeadlineOverflow)
 }
 
 fn descriptor_error(
