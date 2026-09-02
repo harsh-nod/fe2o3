@@ -70,10 +70,8 @@ struct CompletionSlotRecordV1 {
     phase: CompletionSlotPhaseV1,
 }
 
-fn allocate_completion_slot_records_v1() -> Result<
-    Box<[CompletionSlotRecordV1; COMPLETION_SIGNAL_CAPACITY_V1]>,
-    Gfx942CompletionErrorV1,
-> {
+fn allocate_completion_slot_records_v1()
+-> Result<Box<[CompletionSlotRecordV1; COMPLETION_SIGNAL_CAPACITY_V1]>, Gfx942CompletionErrorV1> {
     let mut slots = Vec::new();
     slots
         .try_reserve_exact(COMPLETION_SIGNAL_CAPACITY_V1)
