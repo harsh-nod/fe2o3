@@ -517,11 +517,13 @@ nonzero dispatch generation advances from prepared to in-flight to completed to
 recycled in lockstep with C4. Ordinary pre-publication ring occupancy can cancel
 the inert binding. Any generation divergence, currentness loss, publication or
 observation ambiguity, timeout, fault, partial recycle, or teardown ambiguity
-poisons the session and requires process teardown. Explicit release occurs only
-after every signal was recycled. A recycled-only detach releases code and
-kernarg while keeping the same native queue, ring, completion arena, event,
-runtime, and doorbell alive. Its exact detached-lease ledger must be consumed by
-a later `bind_fixed_dispatch` or explicit release. The later batch may have a
+poisons the session and requires process teardown. A never-published prepared
+batch may be destroyed and returned with generation zero; after publication,
+explicit returning release requires every signal to be recycled. A
+recycled-only detach releases code and kernarg while keeping the same native
+queue, ring, completion arena, event, runtime, and doorbell alive. Its exact
+detached-lease ledger must be consumed by a later `bind_fixed_dispatch` or
+explicit release. The later batch may have a
 different program count, packet count, geometry, scalar bytes, and dispatch-data
 set. Live memory mutations run only while the authoritative memory model is
 restored to the shared session; the queue engine reclaims it before any later
@@ -578,9 +580,10 @@ nor a boolean can mint initialized memory.
 
 This is a prerequisite state machine, not a device-copy implementation. The
 pinned KFD UAPI exposes no admitted memcpy or SDMA submission operation. The
-queue can now return its real mapped C3 set only after exact C4 recycle and
-confirmed destruction, but that return path is deliberately not connected to
-the content state machine. The next integration must authenticate an exact
+queue can return a never-published mapped C3 set with generation zero, or a
+published set only after exact C4 recycle and confirmed destruction. That
+return path is deliberately not connected to the content state machine. The
+next integration must authenticate an exact
 copy-kernel artifact and semantics and consume its exact C2 publication and C4
 completed batch to construct the opaque tokens above. Until those are
 composed, C6 provides no Linux copy backend, actual copy, or

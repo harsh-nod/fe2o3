@@ -772,6 +772,26 @@ impl<const N: usize> AuthenticatedServiceQueueSessionV1<N> {
             ))),
         }
     }
+
+    /// Destroys the unpublished prepared queue and returns released program custody.
+    ///
+    /// This transition never publishes a packet. It is therefore valid for the
+    /// unchanged owner returned by a submit-currentness rejection.
+    ///
+    /// ```compile_fail
+    /// use fe2o3_host::AuthenticatedServiceQueueSessionV1;
+    ///
+    /// fn destroy_twice(queue: AuthenticatedServiceQueueSessionV1<1>) {
+    ///     let _first = queue.destroy_and_release();
+    ///     let _second = queue.destroy_and_release();
+    /// }
+    /// ```
+    pub fn destroy_and_release(
+        self,
+    ) -> Result<AuthenticatedServiceQueueReleaseV1, AuthenticatedServiceQueueReleaseFailureV1> {
+        let Self { queue, programs } = self;
+        finish_release(queue.destroy_and_release(), programs)
+    }
 }
 
 /// Publication failure retaining either retryable prepared or quarantined custody.
@@ -1954,15 +1974,25 @@ fn finish_release(
     result: Result<ServiceQueueReleaseObservationV1, ServiceQueueReleaseFailureV1>,
     programs: AuthenticatedProgramCustodyV1,
 ) -> Result<AuthenticatedServiceQueueReleaseV1, AuthenticatedServiceQueueReleaseFailureV1> {
-    match result {
-        Ok(observation) => Ok(AuthenticatedServiceQueueReleaseV1 {
+    match route_release_custody(result, programs) {
+        Ok((observation, programs)) => Ok(AuthenticatedServiceQueueReleaseV1 {
             observation,
-            programs: programs.into_program_sets(),
+            programs,
         }),
-        Err(inner) => Err(AuthenticatedServiceQueueReleaseFailureV1 {
+        Err((inner, programs)) => Err(AuthenticatedServiceQueueReleaseFailureV1 {
             inner: Box::new(inner),
             programs,
         }),
+    }
+}
+
+fn route_release_custody<T, E>(
+    result: Result<T, E>,
+    programs: AuthenticatedProgramCustodyV1,
+) -> Result<(T, Vec<AuthenticatedWorkerV3ProgramSetV1>), (E, AuthenticatedProgramCustodyV1)> {
+    match result {
+        Ok(value) => Ok((value, programs.into_program_sets())),
+        Err(error) => Err((error, programs)),
     }
 }
 
@@ -2111,6 +2141,57 @@ mod tests {
         assert_eq!(restored[0].marker_bindings, vec![[1; 32]]);
         assert_eq!(restored[1].marker_bindings, vec![[2; 32]]);
         assert_eq!(restored[2].marker_bindings, vec![[3; 32]]);
+    }
+
+    #[test]
+    fn release_success_returns_every_program_owner_in_history_order() {
+        let gfx942 = target("gfx942:sramecc+:xnack-");
+        let set = |marker| AuthenticatedWorkerV3ProgramSetV1 {
+            rosters: vec![Box::new(TestErasedRosterV1 {
+                markers: vec![[marker; 32]],
+                is_current: true,
+            })],
+            target: gfx942,
+            marker_bindings: vec![[marker; 32]],
+        };
+        let custody = AuthenticatedProgramCustodyV1 {
+            active: Some(set(3)),
+            retired: vec![set(1), set(2)],
+        };
+
+        let (observation, programs) = route_release_custody::<_, ()>(Ok(17_u64), custody).unwrap();
+
+        assert_eq!(observation, 17);
+        assert_eq!(programs.len(), 3);
+        assert_eq!(programs[0].marker_bindings, vec![[1; 32]]);
+        assert_eq!(programs[1].marker_bindings, vec![[2; 32]]);
+        assert_eq!(programs[2].marker_bindings, vec![[3; 32]]);
+    }
+
+    #[test]
+    fn release_failure_retains_every_program_owner_with_the_exact_error() {
+        let gfx942 = target("gfx942:sramecc+:xnack-");
+        let set = |marker| AuthenticatedWorkerV3ProgramSetV1 {
+            rosters: vec![Box::new(TestErasedRosterV1 {
+                markers: vec![[marker; 32]],
+                is_current: true,
+            })],
+            target: gfx942,
+            marker_bindings: vec![[marker; 32]],
+        };
+        let custody = AuthenticatedProgramCustodyV1 {
+            active: Some(set(3)),
+            retired: vec![set(1), set(2)],
+        };
+
+        let (error, custody) = route_release_custody::<(), _>(Err(23_u64), custody).unwrap_err();
+        let programs = custody.into_program_sets();
+
+        assert_eq!(error, 23);
+        assert_eq!(programs.len(), 3);
+        assert_eq!(programs[0].marker_bindings, vec![[1; 32]]);
+        assert_eq!(programs[1].marker_bindings, vec![[2; 32]]);
+        assert_eq!(programs[2].marker_bindings, vec![[3; 32]]);
     }
 
     #[test]

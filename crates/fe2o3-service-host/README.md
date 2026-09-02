@@ -36,10 +36,12 @@ also consume inspected executable envelopes, complete kernarg byte images, and
 checked addressless device-local or host-visible coherent ranges into a fixed
 batch. Native addresses are
 substituted only inside KFD. A batch of 1 through 8192 packets uses one ring
-reservation and one final doorbell publication. Exact completion and signal
-recycle are required before the same native queue can detach its current batch,
-replace a complete initialized allocation, bind a different fixed batch, or
-return allocation custody for explicit release. Rebinding seeds the replacement
+reservation and one final doorbell publication. A never-published prepared
+queue can be destroyed and return allocation custody without a doorbell store.
+After publication, exact completion and signal recycle are required before the
+same native queue can detach its current batch, replace a complete initialized
+allocation, bind a different fixed batch, or return allocation custody for
+explicit release. Rebinding seeds the replacement
 from the exact detached predecessor and strictly advances the dispatch
 generation. The lower queue owner restores its authoritative memory-model
 foundation around each live allocation-lifecycle mutation and reclaims the
